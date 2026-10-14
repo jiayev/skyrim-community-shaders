@@ -10,6 +10,8 @@ namespace DCLF::Scene
 		constexpr std::uint32_t kProjectedSourceTag = 32;
 		constexpr std::uint32_t kMaskSourceTag = 48;
 		constexpr std::uint32_t kShadowSourceTag = 192;
+		// The masks' change-set parity's pass offset (Diagnostics::ParityDue).
+		constexpr std::uint32_t kMaskParityOffset = 41;
 	}
 
 	void Coordinator::UpdateSharedBindings()
@@ -96,11 +98,65 @@ namespace DCLF::Scene
 			sb.masks.resize(tables.pipelines.size());
 		if (lookups.pipelines.size() < tables.pipelines.size())
 			lookups.pipelines.resize(tables.pipelines.size());
+		// Only the masks that may have moved: every used one when a technique row's bindings or the texture generation moved, else the
+		// pipelines made (AccumulatePhase marks them) or newly used since the last pass, and those still asked for or held.
 		auto* frameMask = FrameGlobals::Current().shadowMaskHeld.get();
-		Tables::ForEachBit(tables.usedPipelineBits, [&](std::uint32_t a_slot) {
-			if (a_slot < tables.pipelines.size() && tables.TechniqueConstantsValid(a_slot))
-				ResolveMaskBinding(a_slot, frameMask);
-		});
+		{
+			auto& w = sb.work;
+			const std::uint32_t textureGeneration = GpuTextures::Get().Generation();
+			bool sweep = textureGeneration != sb.textureGenerationSeen;
+			sb.textureGenerationSeen = textureGeneration;
+			// A row made since (with its pipeline, marked) is only recorded; a row whose bindings moved moves every mask that reads it.
+			const std::size_t rowsSeen = sb.techniqueSeen.size();
+			sb.techniqueSeen.resize(tables.techniqueConstants.size(), 0);
+			for (std::size_t r = 0; r < tables.techniqueConstants.size(); ++r) {
+				const std::uint32_t version = tables.techniqueConstants[r].valid ? tables.techniqueConstants[r].bindingVersion : 0u;
+				sweep |= r < rowsSeen && sb.techniqueSeen[r] != version;
+				sb.techniqueSeen[r] = version;
+			}
+			const auto& used = tables.usedPipelineBits;
+			sb.usedSeen.resize(used.size(), 0);
+			for (std::size_t word = 0; word < used.size(); ++word) {
+				for (std::uint64_t added = used[word] & ~sb.usedSeen[word]; added; added &= added - 1)
+					sb.MarkMask(static_cast<std::uint32_t>(word * 64 + std::countr_zero(added)));
+				sb.usedSeen[word] = used[word];
+			}
+			// What ResolveMaskBinding keeps without a look-up: the entry resolved for the row's view, in this generation, settled.
+			auto stands = [&](std::uint32_t a_slot) {
+				const auto& mask = sb.masks[a_slot];
+				const auto& technique = tables.TechniqueOf(a_slot).value;
+				auto* view = technique.shadowMask ? technique.shadowMaskTexture : nullptr;
+				const auto& entry = lookups.pipelines[a_slot];
+				return mask.settled && mask.wanted == technique.shadowMask && entry.shadowMaskView == view && entry.shadowMaskTextureGeneration == textureGeneration;
+			};
+			auto resolve = [&](std::uint32_t a_slot) {
+				if (a_slot >= tables.pipelines.size() || !tables.PipelineUsed(a_slot) || !tables.TechniqueConstantsValid(a_slot))
+					return;  // marked again when used (the used set) or valid (its row's version moves)
+				++w.masksChecked;
+				w.masksResolved += ResolveMaskBinding(a_slot, frameMask) ? 1 : 0;
+				if (!stands(a_slot))
+					sb.MarkMask(a_slot);  // asked for, or held on its previous view: looked up again next pass
+			};
+			const auto dirty = std::exchange(sb.dirty, {});
+			for (const std::uint32_t slot : dirty)
+				if (slot < sb.masks.size())
+					sb.masks[slot].listed = false;
+			if (sweep) {
+				++w.maskSweeps;
+				Tables::ForEachBit(tables.usedPipelineBits, resolve);
+			} else {
+				for (const std::uint32_t slot : dirty)
+					resolve(slot);
+			}
+			// The parity: every used mask the change set left stands as a full look-up would find it, or is looked up next pass.
+			if (Diagnostics::Observe().scene && Diagnostics::ParityDue(passSerial, kMaskParityOffset))
+				Tables::ForEachBit(tables.usedPipelineBits, [&](std::uint32_t a_slot) {
+					if (a_slot >= tables.pipelines.size() || a_slot >= sb.masks.size() || !tables.TechniqueConstantsValid(a_slot))
+						return;
+					w.parity.Check(sb.masks[a_slot].listed || stands(a_slot),
+						[&] { return fmt::format("pipeline {}: its technique mask moved outside the change set", a_slot); });
+				});
+		}
 		// The shadow textures the dependency index added or removed since the last pass (RefreshShadowSets, the walk's).
 		std::vector<std::pair<ID3D11ShaderResourceView*, bool>> changes;
 		tables.TakeShadowTextureChanges(changes);
@@ -207,7 +263,7 @@ namespace DCLF::Scene
 		}
 	}
 
-	void Coordinator::ResolveMaskBinding(std::uint32_t a_slot, ID3D11ShaderResourceView* a_frameMask)
+	bool Coordinator::ResolveMaskBinding(std::uint32_t a_slot, ID3D11ShaderResourceView* a_frameMask)
 	{
 		auto& sb = sharedBindings;
 		auto& mask = sb.masks[a_slot];
@@ -218,7 +274,7 @@ namespace DCLF::Scene
 		const std::uint32_t textureGeneration = GpuTextures::Get().Generation();
 		// Unchanged and settled (resolved, rejected, or binding none): kept. One still asked for is looked up again until it is answered.
 		if (mask.wanted == wanted && entry.shadowMaskView == view && entry.shadowMaskTextureGeneration == textureGeneration && mask.settled)
-			return;
+			return false;
 		GpuTextures::Binding binding{ Lookups::kNone, {} };
 		if (wanted && view) {
 			// The rows' views are the frame sample's (RefreshTechniqueRows), held by its capture; one that is not is counted (an observer).
@@ -235,7 +291,7 @@ namespace DCLF::Scene
 		// Held while the new view is asked for, as a material's textures are (the set's members draw with it).
 		if (binding.pending && entry.shadowMaskOwner && entry.shadowMaskIndex != Lookups::kNone && entry.shadowMaskTextureGeneration == textureGeneration) {
 			++sb.stats.masksHeld;
-			return;
+			return true;
 		}
 		mask.settled = !binding.pending;
 		mask.wanted = wanted;
@@ -247,7 +303,7 @@ namespace DCLF::Scene
 		const bool ownerChanged = written.shadowMaskOwner.get() != binding.owner.get();
 		const bool indexChanged = written.shadowMaskIndex != binding.index;
 		if (!ownerChanged && !indexChanged)
-			return;
+			return true;
 		if (ownerChanged) {
 			++lookups.generation;
 			written.shadowMaskOwner = std::move(binding.owner);
@@ -257,6 +313,7 @@ namespace DCLF::Scene
 		written.shadowMaskIndex = binding.index;
 		written.version = lookups.NextVersion();
 		++sb.stats.writtenMasks;
+		return true;
 	}
 
 	void Coordinator::ResolveShadowTextureBinding(ID3D11ShaderResourceView* a_view)
@@ -324,6 +381,10 @@ namespace DCLF::Scene
 		sb.fixed.reset();
 		sb.sharedChanged = false;
 		sb.masks.clear();
+		sb.dirty.clear();
+		sb.usedSeen.clear();
+		sb.techniqueSeen.clear();
+		sb.textureGenerationSeen = ~0u;
 		sb.shadowTextures.clear();
 		sb.shadowPending = 0;
 		sb.inFlight.clear();

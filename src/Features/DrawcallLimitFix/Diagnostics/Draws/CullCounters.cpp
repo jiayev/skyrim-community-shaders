@@ -23,7 +23,7 @@ namespace DCLF::Diagnostics
 		 */
 		struct CpuSide
 		{
-			std::shared_ptr<const std::vector<Draws::DrawInput>> resident;  // the payload's resident region (immutable)
+			decltype(KeptView<Draws::DrawInput>::elements) resident;  // the payload's resident region (immutable)
 			std::vector<Draws::DrawInput> inputs;                           // its input list, copied
 			std::shared_ptr<const SceneTables> tables;                      // the frame's (the geometries' owners)
 			std::vector<SunAccumulation::GpuCascade> cascades;

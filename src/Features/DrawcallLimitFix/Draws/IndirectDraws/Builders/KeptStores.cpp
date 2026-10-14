@@ -7,6 +7,23 @@
 
 namespace DCLF::Draws
 {
+	namespace
+	{
+		// A resync's records on the pool past this many slots (each record reads only the immutable tables).
+		constexpr std::size_t kRecordsFanoutMin = 4096;
+		constexpr std::size_t kRecordsGrain = 1024;
+
+		/** @brief A kept array's elements made writable for pool chunks (the chunked copy-on-write's PrepareWrites when it has one). */
+		template <class Kept>
+		void PrepareKeptWrites(Kept& a_kept, std::size_t a_first, std::size_t a_count)
+		{
+			if constexpr (requires { a_kept.PrepareWrites(a_first, a_count); })
+				a_kept.PrepareWrites(a_first, a_count);
+			else
+				(void)a_kept.Mutable();
+		}
+	}
+
 	void UpdateExtras(ExtrasStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation, ExtrasOut& a_out)
 	{
 		ZoneScopedN("CS.DCLF.Build.UpdateExtras");
@@ -56,8 +73,17 @@ namespace DCLF::Draws
 			// Every record again: the first build, new tables, or a log this store fell behind.
 			auto& records = s.records.Mutable();
 			records.resize(count);
-			for (std::size_t r = 0; r < count; ++r)
-				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), GeometryPort::kMainPassRenderFlags, records[r]);
+			if (count >= kRecordsFanoutMin && !Policy::SerialFanout()) {
+				PrepareKeptWrites(s.records, 0, count);
+				SceneScheduler::Executor().ParallelFor("CS.DCLF.Build.Objects.Resync", count, kRecordsGrain, [&](std::size_t a_begin, std::size_t a_end) {
+					ZoneScopedN("CS.DCLF.Build.Objects.ResyncShards");
+					for (std::size_t r = a_begin; r < a_end; ++r)
+						BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), GeometryPort::kMainPassRenderFlags, records[r]);
+				});
+			} else {
+				for (std::size_t r = 0; r < count; ++r)
+					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), GeometryPort::kMainPassRenderFlags, records[r]);
+			}
 			s.records.Resync();
 			s.cursor.Restart(a_generation);
 			++s.resyncs;

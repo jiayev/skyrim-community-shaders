@@ -22,6 +22,9 @@ namespace DCLF::Reports
 			c.frames, c.sampled / n, c.settled / n, c.seeded / n, c.rowsChanged / n, c.skins / n, c.paletteRowsChanged / n, c.shadingSampled / n, c.shadingChanged / n,
 			c.wetnessChanged / n, c.runs / n, c.bytes / n / 1024.0, c.sampleUs / n, c.uploadUs / n, c.maxTotalUs, c.refused, c.defects,
 			c.failures);
+		// The placement plans (deltas) the producers applied onto their kept set.
+		if (c.plans)
+			line += fmt::format("; {} placement plans applied ({} resets, {:.1f} items a plan)", c.plans, c.planResets, static_cast<double>(c.planItems) / static_cast<double>(c.plans));
 		if (auto& s = Diagnostics::DrawsState::Get().frameValues; s.checks) {
 			line += fmt::format("; parity against the engine: {} rows checked, {} differ{}{} ({} written this frame, the next frame's); {} palettes checked, {} differ{}{}",
 				s.checks, s.differs, s.differs ? " <- DIFFER; first: " : " <- OK", s.differs ? s.first : std::string(), s.fresh, s.paletteChecks, s.paletteDiffers,

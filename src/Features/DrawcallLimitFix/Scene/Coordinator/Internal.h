@@ -25,6 +25,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/VertexInput.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 #include <bit>
+#include <cassert>
 #include <xbyak/xbyak.h>
 #include <chrono>
 #include <exception>
@@ -94,6 +95,48 @@ namespace DCLF
 			if (const auto at = std::find(list.begin(), list.end(), a_geometry); at != list.end()) {
 				*at = list.back();
 				list.pop_back();
+			}
+			if (list.empty()) {
+				a_map.erase(it);
+				return false;
+			}
+			return true;
+		}
+
+		/** @brief Puts a geometry on a dependents list whose positions a_at keeps (Coordinator::DependentsAt). */
+		template <class Map, class At, class Key>
+		void List(Map& a_map, At& a_at, Key a_key, RE::BSGeometry* a_geometry)
+		{
+			auto& list = a_map[a_key];
+			// One position a (key, geometry): a geometry is listed once under a key (its keys are distinct objects).
+			assert(!a_at.contains(std::pair<const void*, const RE::BSGeometry*>{ a_key, a_geometry }));
+			a_at.insert_or_assign(std::pair<const void*, const RE::BSGeometry*>{ a_key, a_geometry }, static_cast<std::uint32_t>(list.size()));
+			list.push_back(a_geometry);
+		}
+
+		/** @brief Unlist by a_at's position (the last swapped into it, its position kept); true when others remain under the key. */
+		template <class Map, class At, class Key>
+		bool Unlist(Map& a_map, At& a_at, Key a_key, RE::BSGeometry* a_geometry)
+		{
+			const auto at = a_at.find(std::pair<const void*, const RE::BSGeometry*>{ a_key, a_geometry });
+			const auto it = a_map.find(a_key);
+			if (it == a_map.end()) {
+				if (at != a_at.end())
+					a_at.erase(at);
+				return false;
+			}
+			auto& list = it->second;
+			if (at != a_at.end()) {
+				const std::uint32_t index = at->second;
+				a_at.erase(at);
+				assert(index < list.size() && list[index] == a_geometry);
+				if (index < list.size()) {
+					if (index + 1 != list.size()) {
+						list[index] = list.back();
+						a_at.insert_or_assign(std::pair<const void*, const RE::BSGeometry*>{ a_key, list[index] }, index);
+					}
+					list.pop_back();
+				}
 			}
 			if (list.empty()) {
 				a_map.erase(it);

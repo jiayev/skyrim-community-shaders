@@ -5,27 +5,40 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #	include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
+#	include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+
+#	include <algorithm>
+#	include <iterator>
 
 namespace DCLF::Draws
 {
-	void ResolvePipelineLookups(const SceneTables& a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups)
+	namespace
 	{
-		ZoneScopedN("CS.DCLF.Scene.PipelineLookups");
-		auto& pipelines = DrawPipelines::Get();
-		const std::uint32_t setGeneration = a_catalog ? a_catalog->generation : 0u;
-		if (a_lookups.pipelineSetGeneration != setGeneration) {
-			// The set was recreated (a target change): every index a build may hold is stale.
-			a_lookups.pipelineSetGeneration = setGeneration;
-			++a_lookups.generation;
-			++a_lookups.shadowGeneration;
-		}
-		if (a_lookups.pipelines.size() != a_tables.pipelines.size())
-			a_lookups.pipelines.resize(a_tables.pipelines.size());
-		auto sameUsage = [](const Lookups::RegisterUsageBits& a_bits, const auto& a_usage) {
+		// The witnessed resolution's parity offset (Diagnostics::ParityDue, by ResolveLookups calls).
+		constexpr std::uint32_t kPipelineParityOffset = 43;
+
+		bool SameUsage(const Lookups::RegisterUsageBits& a_bits, const RegisterUsage& a_usage)
+		{
 			return a_bits.vertexConstants == a_usage.vertexConstants && a_bits.pixelConstants == a_usage.pixelConstants && a_bits.textures == a_usage.textures &&
 			       a_bits.samplers == a_usage.samplers;
-		};
-		for (std::size_t p = 0; p < a_tables.pipelines.size(); ++p) {
+		}
+
+		/** @brief The set was recreated (a target change): every index a build may hold is stale. And the entries as many as the slots. */
+		void BeginPipelineLookups(const SceneTables& a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups)
+		{
+			const std::uint32_t setGeneration = a_catalog ? a_catalog->generation : 0u;
+			if (a_lookups.pipelineSetGeneration != setGeneration) {
+				a_lookups.pipelineSetGeneration = setGeneration;
+				++a_lookups.generation;
+				++a_lookups.shadowGeneration;
+			}
+			if (a_lookups.pipelines.size() != a_tables.pipelines.size())
+				a_lookups.pipelines.resize(a_tables.pipelines.size());
+		}
+
+		/** @brief One slot's entry from a_catalog, written only where it differs. */
+		void ResolvePipelineSlot(const SceneTables& a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups, std::size_t p)
+		{
 			// Read first: a write copies the entry's chunk when a publication shares it (SharedChunks), so an unchanged entry is not written.
 			const auto& current = a_lookups.pipelines[p];
 			if (!a_tables.PipelineUsed(p)) {
@@ -34,17 +47,17 @@ namespace DCLF::Draws
 					entry.version = a_lookups.NextVersion();
 					entry.setIndex = Lookups::kNone;
 				}
-				continue;
+				return;
 			}
 			const auto& key = a_tables.pipelines[p];
 			const auto* built = a_catalog ? a_catalog->Find(key) : nullptr;
 			const std::uint32_t resolved = built ? built->setIndex : Lookups::kNone;
 			bool same = current.key == key && current.requested && current.setIndex == resolved;
 			if (same && resolved != Lookups::kNone)
-				same = current.vsTable == built->tables->vs && current.psTable == built->tables->ps && sameUsage(current.usage[0], built->usage[0]) &&
-				       sameUsage(current.usage[1], built->usage[1]);
+				same = current.vsTable == built->tables->vs && current.psTable == built->tables->ps && SameUsage(current.usage[0], built->usage[0]) &&
+				       SameUsage(current.usage[1], built->usage[1]);
 			if (same)
-				continue;
+				return;
 			auto& entry = a_lookups.pipelines.Mutable(p);
 			// Written only where it differs, so an entry's version is new only when it changed. A re-keyed entry keeps its technique mask:
 			// that is the shared bindings' (ResolveMaskBinding, by the slot's technique row; a retired slot's dropped: RetireMaskBinding).
@@ -57,7 +70,7 @@ namespace DCLF::Draws
 			}
 			// Asked of the lane once per key: it keeps every key, and builds them again after a target change.
 			if (!entry.requested) {
-				pipelines.RequestLighting(key, static_cast<std::uint32_t>(p));
+				DrawPipelines::Get().RequestLighting(key, static_cast<std::uint32_t>(p));
 				entry.requested = true;
 			}
 			if (entry.setIndex != Lookups::kNone && entry.setIndex != resolved)
@@ -78,7 +91,7 @@ namespace DCLF::Draws
 				for (std::uint32_t variant = 0; variant < 2; ++variant) {
 					const auto& usage = built->usage[variant];
 					auto& bits = entry.usage[variant];
-					changed |= !sameUsage(bits, usage);
+					changed |= !SameUsage(bits, usage);
 					bits.vertexConstants = usage.vertexConstants;
 					bits.pixelConstants = usage.pixelConstants;
 					bits.textures = usage.textures;
@@ -88,6 +101,47 @@ namespace DCLF::Draws
 			if (changed)
 				entry.version = a_lookups.NextVersion();
 		}
+
+		/**
+		 * @brief ResolvePipelineLookups for the slots whose witness moved (LookupsResolveState): every slot when the catalog or the lookups
+		 * instance is another, else those whose key's binding version or used bit moved since they were resolved.
+		 */
+		void ResolveChangedPipelineLookups(const SceneTables& a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups, LookupsResolveState& a_state)
+		{
+			ZoneScopedN("CS.DCLF.Scene.PipelineLookups");
+			BeginPipelineLookups(a_tables, a_catalog, a_lookups);
+			const std::uint64_t revision = a_catalog ? a_catalog->revision : 0;
+			const std::uint32_t generation = a_catalog ? a_catalog->generation : ~0u;
+			if (a_state.pipelineCatalog != a_catalog || a_state.pipelineCatalogRevision != revision || a_state.pipelineCatalogGeneration != generation ||
+				a_state.pipelineInstance != a_lookups.instance) {
+				a_state.pipelineCatalog = a_catalog;
+				a_state.pipelineCatalogRevision = revision;
+				a_state.pipelineCatalogGeneration = generation;
+				a_state.pipelineInstance = a_lookups.instance;
+				a_state.pipelineWitness.assign(a_tables.pipelines.size(), ~0ull);
+				++a_state.pipelineSweeps;
+			}
+			a_state.pipelineWitness.resize(a_tables.pipelines.size(), ~0ull);
+			a_state.pipelinesChecked += a_tables.pipelines.size();
+			for (std::size_t p = 0; p < a_tables.pipelines.size(); ++p) {
+				const std::uint32_t binding = p < a_tables.pipelineBindingVersion.size() ? a_tables.pipelineBindingVersion[p] : 0u;
+				const std::uint64_t witness = (std::uint64_t(binding) << 1) | (a_tables.PipelineUsed(p) ? 1u : 0u);
+				if (a_state.pipelineWitness[p] == witness)
+					continue;
+				ResolvePipelineSlot(a_tables, a_catalog, a_lookups, p);
+				a_state.pipelineWitness[p] = witness;
+				++a_state.pipelinesResolved;
+			}
+		}
+	}
+
+	void ResolvePipelineLookups(const SceneTables& a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups)
+	{
+		// Every slot (the witnessed resolution's reference: its parity).
+		ZoneScopedN("CS.DCLF.Scene.PipelineLookupsFull");
+		BeginPipelineLookups(a_tables, a_catalog, a_lookups);
+		for (std::size_t p = 0; p < a_tables.pipelines.size(); ++p)
+			ResolvePipelineSlot(a_tables, a_catalog, a_lookups, p);
 	}
 
 	void ResolveShadowLookups(const SceneTables& a_tables, const PipelineCatalog* a_catalog, const ShadowLookupInputs& a_inputs, LookupsResolveState& a_state,
@@ -109,14 +163,19 @@ namespace DCLF::Draws
 					std::ranges::fill(row, Lookups::kNone);
 			++a_lookups.shadowGeneration;
 		}
-		// Every state of each mode's views, either caster class.
-		std::array<std::vector<std::uint32_t>, kShadowModeCount> modeStates;
-		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-			modeStates[m] = a_inputs.rasterStates[m].All();
+		// Every state of each mode's views, either caster class (ModeRasterStates::All, into the kept scratch).
+		static_assert(std::tuple_size_v<decltype(a_state.shadowModeStates)> == kShadowModeCount);
+		auto& modeStates = a_state.shadowModeStates;
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+			const auto& states = a_inputs.rasterStates[m];
+			modeStates[m].clear();
+			std::set_union(states.casters.begin(), states.casters.end(), states.volumetric.begin(), states.volumetric.end(), std::back_inserter(modeStates[m]));
+		}
 		// What the pipelines are found for: the lookups instance, the shadow set and its format, each used mode's keys, states and format.
 		// A resolution for the same as the last one, which found every pipeline, would find the same ones again (a found pipeline stays in
 		// the set until the set is recreated, a new generation): it is skipped, and a pass pays only when a key, a state or the set changes.
-		std::vector<std::uint64_t> resolvedFor;
+		auto& resolvedFor = a_state.shadowResolvedScratch;
+		resolvedFor.clear();
 		resolvedFor.push_back(a_lookups.instance);
 		resolvedFor.push_back((std::uint64_t(a_catalog->shadowGeneration) << 32) | a_catalog->shadowFormat);
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
@@ -132,8 +191,11 @@ namespace DCLF::Draws
 			for (const std::uint32_t state : modeStates[m])
 				resolvedFor.push_back(state);
 		}
-		if (resolvedFor == a_state.shadowPipelinesResolvedFor)
+		if (resolvedFor == a_state.shadowPipelinesResolvedFor) {
+			++a_state.shadowSkipped;
 			return;
+		}
+		++a_state.shadowResolved;
 		bool resolved = true;
 		auto& pipelines = DrawPipelines::Get();
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
@@ -193,8 +255,12 @@ namespace DCLF::Draws
 				}
 			}
 		}
-		// A pipeline not in the catalog yet (its program or its build still pending) is looked up again next pass.
-		a_state.shadowPipelinesResolvedFor = resolved ? std::move(resolvedFor) : std::vector<std::uint64_t>{};
+		// A pipeline not in the catalog yet (its program or its build still pending) is looked up again next pass. Swapped, so the scratch
+		// keeps a buffer.
+		if (resolved)
+			std::swap(a_state.shadowPipelinesResolvedFor, resolvedFor);
+		else
+			a_state.shadowPipelinesResolvedFor.clear();
 	}
 }
 
@@ -205,9 +271,20 @@ namespace DCLF
 		if (!impl || failed)
 			return;
 		const auto& tables = *static_cast<const SceneTables*>(a_tables);
-		// The Lighting pipelines once their programs can be built (the Lighting shader known: EngineShaders::Lighting, set once).
-		if (EngineShaders::Lighting() && ShaderPrograms::Get().Enabled())
-			ResolvePipelineLookups(tables, a_catalog, a_lookups);
+		// The Lighting pipelines once their programs can be built (the Lighting shader known: EngineShaders::Lighting, set once): the slots
+		// whose witness moved. The parity resolves every slot after, which must write nothing.
+		++a_state.calls;
+		if (EngineShaders::Lighting() && ShaderPrograms::Get().Enabled()) {
+			Draws::ResolveChangedPipelineLookups(tables, a_catalog, a_lookups, a_state);
+			if (Diagnostics::Observe().scene && Diagnostics::ParityDue(a_state.calls, Draws::kPipelineParityOffset)) {
+				const std::uint64_t writes = a_lookups.pipelines.Writes();
+				const std::uint32_t versions = a_lookups.versionCounter;
+				Draws::ResolvePipelineLookups(tables, a_catalog, a_lookups);
+				a_state.pipelineParity.Check(writes == a_lookups.pipelines.Writes() && versions == a_lookups.versionCounter, [&] {
+					return fmt::format("{} pipeline entries written by a full resolution after the witnessed one", a_lookups.pipelines.Writes() - writes);
+				});
+			}
+		}
 		// The shadow pipelines for the views the frame's start last posted, once the walk has classified the casters.
 		auto inputs = impl->shadowLookupInputs.load(std::memory_order_acquire);
 		if (inputs && !inputs->enabled)

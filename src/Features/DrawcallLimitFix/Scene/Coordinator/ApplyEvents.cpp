@@ -123,6 +123,8 @@ namespace DCLF::Scene
 	void Coordinator::DrainMaterialCaptures()
 	{
 		auto& s = materialSnapshotStats;
+		// The parity's passes keep the deduplicated materials, which RewriteCapturedMaterials evaluates as every capture once was.
+		const bool parity = Diagnostics::Observe().scene && Diagnostics::ParityDue(passSerial, kMaterialDedupParityOffset);
 		MaterialPort::captures.Drain([&](std::unique_ptr<MaterialPort::HeldSnapshot>&& a_held) {
 			++s.captured;
 			const RE::BSShaderMaterial* material = a_held->reference;
@@ -132,12 +134,34 @@ namespace DCLF::Scene
 				HandBackHeld(std::move(a_held));
 				return;
 			}
+			// A capture equal to the held one (every attached leaf captures its shared material; a controller rewrites the same value)
+			// changes no record: the newer is kept, nothing is rewritten. One whose transform buffers alone moved goes to the watch, the
+			// one writer of TexcoordOffset (a rewrite keeps the slots' own).
+			auto change = MaterialPort::SnapshotChange::Fields;
+			if (entry.held)
+				change = MaterialPort::SnapshotChangeOf(entry.held->snapshot, a_held->snapshot);
 			if (entry.held) {
 				++s.replaced;
 				HandBackHeld(std::move(entry.held));
 			}
 			entry.held = std::move(a_held);
 			entry.frame = sceneFrame;
+			if (change != MaterialPort::SnapshotChange::Fields) {
+				++s.deduped;
+				if (change == MaterialPort::SnapshotChange::Transforms) {
+					++s.transformsOnly;
+					if (materialDependents.contains(material))
+						WatchMaterialTransforms(material, entry.held->snapshot);
+				}
+				if (parity && !entry.listed)
+					materialsDeduped.push_back(material);
+				return;
+			}
+			if (entry.listed) {
+				++s.relisted;
+				return;
+			}
+			entry.listed = true;
 			materialsCaptured.push_back(material);
 		});
 		// Answers to the joins' requests (a served capture was pushed before its answer): the join may ask again.
@@ -248,6 +272,10 @@ namespace DCLF::Scene
 			propertyDependents.clear();
 			rootDependents.clear();
 			lightDependents.clear();
+			propertyDependentsAt.clear();
+			rootDependentsAt.clear();
+			lightDependentsAt.clear();
+			hiddenDependentsAt.clear();
 			lightEntryChanges.push_back({ nullptr, 0 });
 			ReleaseRootOwners();
 			rootReference.clear();
@@ -655,7 +683,7 @@ namespace DCLF::Scene
 		for (const void* key = a_geometry; key && key != a_tracked.categoryNode; key = mirror.Parent(key)) {
 			const auto* object = static_cast<const RE::NiAVObject*>(key);
 			a_tracked.hiddenChain.push_back(object);
-			hiddenDependents[object].push_back(a_geometry);
+			List(hiddenDependents, hiddenDependentsAt, object, a_geometry);
 		}
 		Diagnostics::Notify(Diagnostics::HiddenChainRead{ *this, a_geometry, a_tracked.categoryNode, a_tracked.hiddenChain });
 	}
@@ -663,7 +691,7 @@ namespace DCLF::Scene
 	void Coordinator::UnlistHiddenChain(RE::BSGeometry* a_geometry, Tracked& a_tracked)
 	{
 		for (const auto* object : a_tracked.hiddenChain)
-			Unlist(hiddenDependents, object, a_geometry);
+			Unlist(hiddenDependents, hiddenDependentsAt, object, a_geometry);
 		a_tracked.hiddenChain.clear();
 	}
 

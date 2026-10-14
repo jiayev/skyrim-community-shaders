@@ -33,6 +33,8 @@ namespace DCLF::Scene
 			}
 			++mb.stats.answered;
 			if (const auto it = mb.inFlight.find(a_reply.view); it != mb.inFlight.end()) {
+				for (const std::uint32_t slot : it->second)
+					mb.waiting.erase(std::pair{ a_reply.view, slot });
 				waiting.insert(waiting.end(), it->second.begin(), it->second.end());
 				mb.inFlight.erase(it);
 			}
@@ -115,43 +117,54 @@ namespace DCLF::Scene
 		// entry whose view changed keeps drawing with the previous view, whose import its owner still holds, until the new one is answered.
 		const bool wasResolved = entry.resolved && sameGeneration;
 		bool held = false, pending = false, ownersChanged = false;
+		// The owners held now (the entry's block, immutable); those that change are collected and sealed into a new block after.
+		const Lookups::MaterialOwners* owners = entry.bindingBlock.get();
+		Lookups::MaterialOwners next;
+		std::uint32_t texturesMoved = 0, featuresMoved = 0;
 		// One texture: kept while its view and binding stand; held while a resolved entry's new view is asked for; else what is known.
-		auto bind = [&](ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, std::uint32_t& a_index, std::shared_ptr<const void>& a_owner,
+		auto bind = [&](ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, std::uint32_t& a_index, bool a_feature, std::uint32_t a_at,
 						ID3D11ShaderResourceView*& a_seen) {
-			if (sameGeneration && a_seen == a_view && a_owner && a_index != Lookups::kNone)
+			const void* owner = owners ? (a_feature ? owners->features[a_at] : owners->textures[a_at]).get() : nullptr;
+			if (sameGeneration && a_seen == a_view && owner && a_index != Lookups::kNone)
 				return;
 			auto binding = MaterialViewBinding(a_view, a_sourceTag, a_slot);
-			if (binding.pending && wasResolved && a_owner && a_index != Lookups::kNone) {
+			if (binding.pending && wasResolved && owner && a_index != Lookups::kNone) {
 				held = true;
 				return;
 			}
 			pending |= binding.pending;
-			const bool ownerChanged = a_owner.get() != binding.owner.get();
+			const bool ownerChanged = owner != binding.owner.get();
 			changed |= ownerChanged || a_index != binding.index;
-			ownersChanged |= ownerChanged;
+			if (ownerChanged) {
+				ownersChanged = true;
+				(a_feature ? featuresMoved : texturesMoved) |= 1u << a_at;
+				(a_feature ? next.features[a_at] : next.textures[a_at]) = std::move(binding.owner);
+			}
 			a_index = binding.index;
-			a_owner = std::move(binding.owner);
 			a_seen = a_view;
 		};
-		auto clear = [&](std::uint32_t& a_index, std::shared_ptr<const void>& a_owner, ID3D11ShaderResourceView*& a_seen) {
-			changed |= a_index != Lookups::kNone || a_owner;
-			ownersChanged |= static_cast<bool>(a_owner);
+		auto clear = [&](std::uint32_t& a_index, bool a_feature, std::uint32_t a_at, ID3D11ShaderResourceView*& a_seen) {
+			const bool owner = owners && (a_feature ? owners->features[a_at] : owners->textures[a_at]);
+			changed |= a_index != Lookups::kNone || owner;
+			if (owner) {
+				ownersChanged = true;
+				(a_feature ? featuresMoved : texturesMoved) |= 1u << a_at;
+			}
 			a_index = Lookups::kNone;
-			a_owner.reset();
 			a_seen = nullptr;
 		};
 		const std::uint32_t textureWritten = material.textureWritten & ~(MaterialSources::FrameCharacterLight(key.second) ? 1u << kCharacterLightTexture : 0u);
 		for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
 			if ((textureWritten >> t) & 1)
-				bind(material.textures[t], t, entry.textureIndex[t], entry.textureOwners[t], entry.views[t]);  // a null view: the null descriptor
+				bind(material.textures[t], t, entry.textureIndex[t], false, t, entry.views[t]);  // a null view: the null descriptor
 			else
-				clear(entry.textureIndex[t], entry.textureOwners[t], entry.views[t]);
+				clear(entry.textureIndex[t], false, t, entry.views[t]);
 		}
 		for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
 			if (material.featureTextures[f])
-				bind(material.featureTextures[f], kFeatureSourceTag + f, entry.featureIndex[f], entry.featureOwners[f], entry.featureViews[f]);
+				bind(material.featureTextures[f], kFeatureSourceTag + f, entry.featureIndex[f], true, f, entry.featureViews[f]);
 			else
-				clear(entry.featureIndex[f], entry.featureOwners[f], entry.featureViews[f]);
+				clear(entry.featureIndex[f], true, f, entry.featureViews[f]);
 		}
 		// A texture still asked for leaves the slot unresolved: its draws defer (they stay the engine's) until the answer resolves it.
 		if (entry.resolved == pending) {
@@ -164,15 +177,51 @@ namespace DCLF::Scene
 		entry.texturesGeneration = textureGeneration;
 		entry.recordVersion = tables.materialVersion[a_slot];
 		mb.held[a_slot] = held ? 1 : 0;
-		if (ownersChanged) {
-			std::vector<std::shared_ptr<const void>> owners;
-			owners.reserve(entry.textureOwners.size() + entry.featureOwners.size());
-			owners.insert(owners.end(), entry.textureOwners.begin(), entry.textureOwners.end());
-			owners.insert(owners.end(), entry.featureOwners.begin(), entry.featureOwners.end());
-			entry.bindingBlock = GpuTextures::Get().Seal(std::move(owners));
-		}
+		if (ownersChanged)
+			entry.bindingBlock = SealMaterialOwners(key.first, owners, next, texturesMoved, featuresMoved);
 		if (changed)
 			mb.MarkChanged(a_slot);
+	}
+
+	std::shared_ptr<const Lookups::MaterialOwners> Coordinator::SealMaterialOwners(const RE::BSShaderMaterial* a_material, const Lookups::MaterialOwners* a_held,
+		Lookups::MaterialOwners& a_next, std::uint32_t a_texturesMoved, std::uint32_t a_featuresMoved)
+	{
+		auto& mb = materialBindings;
+		// The unmoved owners kept from the held block; none at all holds nothing.
+		bool any = false;
+		for (std::uint32_t t = 0; t < a_next.textures.size(); ++t) {
+			if (!((a_texturesMoved >> t) & 1) && a_held)
+				a_next.textures[t] = a_held->textures[t];
+			any |= static_cast<bool>(a_next.textures[t]);
+		}
+		for (std::uint32_t f = 0; f < a_next.features.size(); ++f) {
+			if (!((a_featuresMoved >> f) & 1) && a_held)
+				a_next.features[f] = a_held->features[f];
+			any |= static_cast<bool>(a_next.features[f]);
+		}
+		if (!any)
+			return nullptr;
+		// Another slot of the material sealed the same owners (its other passes name the same textures): one block for both.
+		auto& shared = mb.sealed[a_material];
+		if (auto block = shared.lock(); block && block->textures == a_next.textures && block->features == a_next.features) {
+			++mb.work.sealShared;
+			return block;
+		}
+		std::vector<std::shared_ptr<const void>> list;
+		list.reserve(a_next.textures.size() + a_next.features.size());
+		list.insert(list.end(), a_next.textures.begin(), a_next.textures.end());
+		list.insert(list.end(), a_next.features.begin(), a_next.features.end());
+		a_next.lease = GpuTextures::Get().Seal(std::move(list));
+		auto block = std::make_shared<const Lookups::MaterialOwners>(std::move(a_next));
+		shared = block;
+		++mb.work.sealed;
+		// Amortized: each block sealed looks at two other materials' and drops one nobody holds any more.
+		for (std::uint32_t i = 0; i < 2 && !mb.sealed.empty(); ++i) {
+			mb.sealedSweep = (mb.sealedSweep + 1) % mb.sealed.size();
+			if (const auto swept = mb.sealed.begin() + static_cast<std::ptrdiff_t>(mb.sealedSweep); swept->second.expired())
+				mb.sealed.erase(swept);
+		}
+		return block;
 	}
 
 	GpuTextures::Binding Coordinator::MaterialViewBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, std::uint32_t a_slot)
@@ -194,7 +243,11 @@ namespace DCLF::Scene
 			GpuTextures::Get().Request(a_view, a_sourceTag, mb.replies, mb.cookie);
 			++mb.stats.requested;
 		}
-		waiters->second.push_back(a_slot);
+		// Once per (view, slot): a slot resolved again while it waits (a held view, a record rewritten meanwhile) is listed already.
+		if (mb.waiting.emplace(a_view, a_slot).second)
+			waiters->second.push_back(a_slot);
+		else
+			++mb.work.waitersDeduped;
 		return { Lookups::kNone, {}, true };
 	}
 
@@ -220,6 +273,9 @@ namespace DCLF::Scene
 		mb.changed.clear();
 		mb.changedMark.clear();
 		mb.inFlight.clear();
+		mb.waiting.clear();
+		mb.sealed.clear();
+		mb.sealedSweep = 0;
 		mb.cache.clear();
 		mb.arrived.clear();
 		mb.usedSeen.clear();

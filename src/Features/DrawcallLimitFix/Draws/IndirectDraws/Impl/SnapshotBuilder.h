@@ -88,6 +88,9 @@ namespace DCLF
 		};
 		LatestSlot<SnapshotWork> snapshotWorkSlot;  // the coordinator -> the builder
 		LatestSlot<SceneSnapshot> snapshotSlot;     // the builder -> the frame's start
+		// Publication pacing (SnapshotWorkTaken): the sequence of the newest publication the builder took from snapshotWorkSlot (the
+		// builder's store, release; the coordinator's load, acquire).
+		std::atomic<std::uint64_t> snapshotWorkTaken{ 0 };
 		// What gates a payload's publication (PublishPayload: only for a snapshot the frame will adopt). The frame's (AdoptSnapshot):
 		// the serial of the last snapshot it took from the slot (adopted or stale) and the frame that took it (the frame first, then the
 		// serial, both release). The coordinator's (NoteScenePassDone): the frame of the last scene pass that ended.

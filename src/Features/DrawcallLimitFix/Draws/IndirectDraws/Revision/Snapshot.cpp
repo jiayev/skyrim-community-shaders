@@ -109,6 +109,8 @@ namespace DCLF
 		if (failed) {
 			// No draws and no revision: the publication alone (its tables and claims; DCLF draws nothing, DecideCoverage).
 			auto snapshot = std::make_unique<Impl::SceneSnapshot>();
+			// Nothing to build: taken at once (publication pacing waits on nothing).
+			s.snapshotWorkTaken.store(publication->sequence, std::memory_order_release);
 			snapshot->publication = std::move(publication);
 			snapshot->drawsComplete = true;
 			s.snapshotSlot.Post(std::move(snapshot));
@@ -220,20 +222,18 @@ namespace DCLF
 		const auto oldest = [this](PayloadPart a_part) { return payloadBuilder.OldestContentEpoch(a_part).value_or(~std::uint64_t{ 0 }); };
 		// The publication's stream views: the stores are this task's alone (no build in the frame updates them).
 		const TablesContentEpochs oldestTables{ oldest(PayloadPart::Objects), oldest(PayloadPart::Extras), oldest(PayloadPart::Geometries) };
-		out->streams = MakeStreamViews(objectStore, extrasStore, geometryStore, oldestTables, a_tables, *a_tables, a_generation, a_frame);
-		// CS_DCLF_PERSISTENT_PARITY: the extras rows are checked by each backing that holds them, as it is caught up (PayloadBuilder).
 		const auto& c = a_context;
-		if (!c.valid || !c.target || !c.target->scene)
-			return out;
+		const bool buildMain = c.valid && c.target && c.target->scene;
 		// The scene list: the main build's region, into which the shadow build writes its words; its journal's build begins once a
 		// publication, with whichever writes first.
-		mainCache.region.begun = false;
+		if (buildMain)
+			mainCache.region.begun = false;
 		// Both segments in one build: one list, read by each through its view bits.
 		std::array<MainInputs, 2> inputs;
 		std::array<const MainInputs*, 2> segmentIn{};
 		std::array<MainPayload*, 2> segmentOut{};
 		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
-			if (!c.build[j])
+			if (!buildMain || !c.build[j])
 				continue;
 			MainInputs& in = inputs[j];
 			in = c.inputs[j];
@@ -249,7 +249,44 @@ namespace DCLF
 			segmentIn[j] = &in;
 			segmentOut[j] = out->payloads[j].get();
 		}
-		BuildMainPayloads(segmentIn, *a_tables, Scene::FrameView::Get().GetFrameTables(), a_lookups, segmentOut, mainRows, &mainCache, out->streams);
+		// The publication's stream views (the stores are this task's alone: no build in the frame updates them) beside the main build, which
+		// reads them only in its Finish: two pool tasks, unless the parity keeps the fan-outs on this thread (Policy::SerialFanout).
+		auto& pairStats = mainRows.pairStats;
+		const auto msSince = [](std::chrono::steady_clock::time_point a_start) {
+			return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a_start).count();
+		};
+		const auto stagesStart = std::chrono::steady_clock::now();
+		Draws::MainBuildStages mainBuild(segmentIn, *a_tables, Scene::FrameView::Get().GetFrameTables(), a_lookups, segmentOut, mainRows, &mainCache);
+		const auto stage = [&](std::size_t a_stage) {
+			const auto start = std::chrono::steady_clock::now();
+			if (a_stage == 0) {
+				out->streams = MakeStreamViews(objectStore, extrasStore, geometryStore, oldestTables, a_tables, *a_tables, a_generation, a_frame);
+				pairStats.streamsMs += msSince(start);
+			} else {
+				mainBuild.Run();
+				pairStats.mainMs += msSince(start);
+			}
+		};
+		if (buildMain && !Policy::SerialFanout()) {
+			SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildAhead.Stages", 2, 1, [&](std::size_t a_begin, std::size_t a_end) {
+				ZoneScopedN("CS.DCLF.BuildAhead.StagesShards");
+				for (std::size_t s = a_begin; s < a_end; ++s)
+					stage(s);
+			});
+			++pairStats.overlapped;
+		} else {
+			stage(0);
+			if (buildMain)
+				stage(1);
+		}
+		++pairStats.aheads;
+		// CS_DCLF_PERSISTENT_PARITY: the extras rows are checked by each backing that holds them, as it is caught up (PayloadBuilder).
+		if (!buildMain) {
+			pairStats.stagesMs += msSince(stagesStart);
+			return out;
+		}
+		mainBuild.Finish(out->streams);
+		pairStats.stagesMs += msSince(stagesStart);
 		// The shadow payload, from the same tables, stream views and lookups, with the publication's candidates, and the
 		// next frame's exclusions from it.
 		if (c.shadow && c.shadowTarget && c.shadowTarget->scene) {
@@ -264,15 +301,33 @@ namespace DCLF
 			in.materialRowsOldestContentEpoch = oldest(PayloadPart::ShadowRows);
 			in.inputsOldestContentEpoch = oldest(PayloadPart::Inputs);  // the scene list's region
 			auto payload = AcquireShadowPayload();
+			const auto shadowStart = std::chrono::steady_clock::now();
 			BuildShadowPayload(in, *a_tables, a_lookups, *payload, out->streams, ShadowKeptState(), Policy::ReuseResidentRegion() ? &mainCache.region : nullptr);
+			pairStats.shadowMs += msSince(shadowStart);
 			// The publication holds the views; the payload, which the epochs may hold past it, does not.
 			payload->streams.reset();
 			if (PassCapture::ShadowWithholdingEnabled()) {
 				ZoneScopedN("CS.DCLF.BuildShadow.Exclusions");
-				if (in.modeUsed[kSunShadowMode])
-					payload->sunExclusion = BuildSunExclusion(in.sunCandidates, *payload, kSunShadowMode, *a_tables, &sunExclusionCache);
-				if (in.modeUsed[kParabolicShadowMode])
-					payload->parabolicExclusion = BuildSunExclusion(in.lightCandidates, *payload, kParabolicShadowMode, *a_tables, &parabolicExclusionCache);
+				const auto exclusionsStart = std::chrono::steady_clock::now();
+				// The sun's and the paraboloid lights' exclusions read the payload and each its own cache: two pool tasks.
+				const bool sun = in.modeUsed[kSunShadowMode], parabolic = in.modeUsed[kParabolicShadowMode];
+				const auto exclusion = [&](std::size_t a_which) {
+					if (a_which == 0 && sun)
+						payload->sunExclusion = BuildSunExclusion(in.sunCandidates, *payload, kSunShadowMode, *a_tables, &sunExclusionCache);
+					else if (a_which == 1 && parabolic)
+						payload->parabolicExclusion = BuildSunExclusion(in.lightCandidates, *payload, kParabolicShadowMode, *a_tables, &parabolicExclusionCache);
+				};
+				if (sun && parabolic && !Policy::SerialFanout()) {
+					SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildShadow.Exclusions", 2, 1, [&](std::size_t a_begin, std::size_t a_end) {
+						ZoneScopedN("CS.DCLF.BuildShadow.ExclusionsShards");
+						for (std::size_t x = a_begin; x < a_end; ++x)
+							exclusion(x);
+					});
+				} else {
+					exclusion(0);
+					exclusion(1);
+				}
+				pairStats.exclusionsMs += msSince(exclusionsStart);
 			}
 			out->shadow = std::move(payload);
 		}
@@ -343,6 +398,8 @@ namespace DCLF
 			if (b.lastPublication && sequence > b.lastPublication + 1)
 				snapshotsCoalesced.fetch_add(sequence - b.lastPublication - 1, std::memory_order_relaxed);
 			b.lastPublication = sequence;
+			// The coordinator publishes again once this one is taken (SnapshotWorkTaken: publication pacing).
+			snapshotWorkTaken.store(sequence, std::memory_order_release);
 			b.work = std::move(a_next);
 			b.draws.reset();
 			b.timing = {};
@@ -598,6 +655,11 @@ namespace DCLF
 		// A builder holding a sealed snapshot's publication for this frame's pass publishes now (or has taken the pass's publication).
 		impl->scenePassDoneFrame.store(a_frame, std::memory_order_release);
 		WakeSnapshotBuilder();
+	}
+
+	std::uint64_t IndirectDraws::SnapshotWorkTaken() const
+	{
+		return impl ? impl->snapshotWorkTaken.load(std::memory_order_acquire) : ~0ull;
 	}
 
 	void IndirectDraws::BindAdopted()

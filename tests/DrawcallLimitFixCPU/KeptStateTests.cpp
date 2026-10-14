@@ -6,6 +6,7 @@
 #include <map>
 #include <random>
 #include <set>
+#include <thread>
 
 namespace
 {
@@ -84,12 +85,13 @@ namespace
     }
     // Rows journalled by part (KeptArray::SetParts, the material rows): holders at different content epochs catch up only the parts that moved,
     // and each holder's mirror equals the array after its replay, with untouched parts left as the holder had them.
+    template <std::size_t kChunk>
     void TestPartHolders()
     {
         constexpr std::size_t kParts = 4, kHolders = 5;
         using Row = std::array<std::uint32_t, 8>;  // two words a part
         constexpr std::size_t kPartWords = Row{}.size() / kParts;
-        DCLF::KeptArray<Row> rows;
+        DCLF::KeptArray<Row, kChunk> rows;
         std::array<std::uint64_t, kHolders> contentEpochs{};
         std::array<std::vector<Row>, kHolders> mirrors;
         std::mt19937 random(4242);
@@ -125,10 +127,11 @@ namespace
     }
     // Pooled backings (D6): each brought up to date from its own content epoch, the journal trimmed to the oldest; every
     // holder's mirror equals the array after its replay, whatever the order and gaps of the replays.
+    template <std::size_t kChunk>
     void TestPooledHolders()
     {
         constexpr std::size_t kHolders = 4;
-        DCLF::KeptArray<std::uint32_t> values;
+        DCLF::KeptArray<std::uint32_t, kChunk> values;
         std::array<std::uint64_t, kHolders> contentEpochs{};  // each holder's (a pooled backing's contentEpoch)
         std::array<std::vector<std::uint32_t>, kHolders> mirrors;
         std::mt19937 random(911);
@@ -164,6 +167,9 @@ namespace
             auto& mirror = mirrors[r];
             mirror.resize(view.Count());
             view.Emit(contentEpochs[r], [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+                // A chunked view's spans stay within a chunk.
+                const std::size_t first = a_offset / sizeof(std::uint32_t), last = first + a_bytes / sizeof(std::uint32_t) - 1;
+                assert(a_bytes && first / view.elements->ChunkElements() == last / view.elements->ChunkElements());
                 std::memcpy(reinterpret_cast<std::byte*>(mirror.data()) + a_offset, a_data, a_bytes);
             });
             contentEpochs[r] = view.ContentEpoch();
@@ -266,46 +272,350 @@ namespace
     }
 }
 
+namespace
+{
+    // Holders uploading at different content epochs with outstanding views: each view stays what it was, and the uploads replay the
+    // array exactly.
+    template <std::size_t kChunk>
+    void TestUploadedEpochs()
+    {
+        DCLF::KeptArray<unsigned, kChunk> values;
+        std::vector<DCLF::KeptView<unsigned>> held;
+        std::vector<std::vector<unsigned>> expected;
+        std::vector<unsigned> gpu(2048);
+        std::uint64_t uploadedEpoch = 0;
+        std::mt19937 random(1234);
+        for (unsigned frame = 0; frame < 1000; ++frame) {
+            values.BeginBuild(uploadedEpoch);
+            if (!frame) { values.Mutable().resize(2048); values.Resync(); }
+            for (unsigned n = 0; n < 173; ++n) {
+                const auto index = random() % 2048;
+                values.Set(index, random());
+            }
+            auto snapshot = values.View();
+            snapshot.Emit(uploadedEpoch, [&](const void* data, std::size_t bytes, std::size_t offset) {
+                std::memcpy(reinterpret_cast<std::byte*>(gpu.data()) + offset, data, bytes);
+            });
+            assert(gpu == values.Get());
+            if (frame % 3 == 0) uploadedEpoch = snapshot.ContentEpoch();
+            for (std::size_t i = 0; i < held.size(); ++i) assert(*held[i].elements == expected[i]);
+            held.push_back(snapshot);
+            expected.push_back(*snapshot.elements);
+            // Exercise both recycled storage and exhaustion with outstanding readers.
+            if (held.size() > (frame % 13 < 7 ? 1u : 6u)) { held.erase(held.begin()); expected.erase(expected.begin()); }
+        }
+        // An outstanding view is immutable even when the coordinator writes its next content epoch.
+        held.clear();
+        auto patch = values.View();
+        const std::vector<unsigned> before = *patch.elements;
+        values.BeginBuild(uploadedEpoch);
+        values.Set(0, 0x12345678);
+        assert(*patch.elements == before);
+        assert(values.Get()[0] == 0x12345678);
+    }
+
+    constexpr std::size_t kSmallChunk = 64;
+    using Small = DCLF::KeptArray<std::uint32_t, kSmallChunk>;
+
+    void Fill(Small& a_values, std::size_t a_count)
+    {
+        auto& elements = a_values.Mutable();
+        elements.resize(a_count);
+        for (std::size_t i = 0; i < a_count; ++i)
+            elements[i] = static_cast<std::uint32_t>(i);
+        a_values.Resync();
+    }
+
+    // A write after a view copies only the chunk it touches (and the chunk table once a build); the view keeps the rest shared and
+    // stays what it was.
+    void TestChunkCopyOnWrite()
+    {
+        Small values;
+        values.BeginBuild(0);
+        Fill(values, kSmallChunk * 10);
+        values.BeginBuild(~0ull);
+        auto view = values.View();
+        const std::vector<std::uint32_t> seen = *view.elements;
+        const auto before = values.CopyStats();
+        assert(values.Set(130, 7));  // chunk 2
+        auto stats = values.CopyStats();
+        assert(stats.tableCopies == before.tableCopies + 1 && stats.chunkCopies == before.chunkCopies + 1);
+        assert(stats.bytesCopied == before.bytesCopied + kSmallChunk * sizeof(std::uint32_t));
+        assert(values.Set(140, 8));  // the same chunk: already the array's own
+        assert(values.CopyStats().chunkCopies == stats.chunkCopies && values.CopyStats().tableCopies == stats.tableCopies);
+        assert(values.Set(5, 9));  // chunk 0
+        assert(values.CopyStats().chunkCopies == stats.chunkCopies + 1);
+        assert(!values.Set(300, 300));  // equal bytes: nothing written, nothing copied
+        assert(values.CopyStats().chunkCopies == stats.chunkCopies + 1);
+        // The view: unchanged, its untouched chunks the very same memory as the array's, the written ones not.
+        assert(*view.elements == seen);
+        assert(&(*view.elements)[300] == &values.Get()[300] && &(*view.elements)[639] == &values.Get()[639]);
+        assert(&(*view.elements)[130] != &values.Get()[130] && &(*view.elements)[5] != &values.Get()[5]);
+        assert(values.Get()[130] == 7 && values.Get()[140] == 8 && values.Get()[5] == 9 && (*view.elements)[130] == 130);
+        // No view: writes in place.
+        view.Reset();
+        values.BeginBuild(~0ull);
+        const auto quiet = values.CopyStats();
+        values.Set(600, 1);
+        assert(values.CopyStats().chunkCopies == quiet.chunkCopies && values.CopyStats().tableCopies == quiet.tableCopies);
+    }
+
+    // Views stay what they were through every kind of write: element writes, growth, shrinking, push/pop across chunk ends, Clear.
+    void TestViewsImmutable()
+    {
+        Small values;
+        std::vector<std::pair<DCLF::KeptView<std::uint32_t>, std::vector<std::uint32_t>>> held;
+        std::mt19937 random(77);
+        for (unsigned frame = 0; frame < 600; ++frame) {
+            values.BeginBuild(~0ull);
+            auto& elements = values.Mutable();
+            for (unsigned op = random() % 12; op > 0; --op) {
+                switch (random() % 6) {
+                case 0:
+                    elements.resize(random() % 700, static_cast<std::uint32_t>(random()));
+                    break;
+                case 1:
+                    elements.push_back(static_cast<std::uint32_t>(random()));
+                    break;
+                case 2:
+                    if (!elements.empty())
+                        elements.pop_back();
+                    break;
+                case 3:
+                    if (random() % 20 == 0)
+                        values.Clear();
+                    break;
+                default:
+                    if (!elements.empty())
+                        values.Set(random() % elements.size(), static_cast<std::uint32_t>(random()));
+                    break;
+                }
+            }
+            for (const auto& [view, seen] : held)
+                assert(*view.elements == seen);
+            held.emplace_back(values.View(), static_cast<std::vector<std::uint32_t>>(values.Get()));
+            if (held.size() > 1 + random() % 6)
+                held.erase(held.begin() + static_cast<std::ptrdiff_t>(random() % held.size()));
+        }
+    }
+
+    // Resizing across chunk ends behaves as std::vector's: kept elements kept, new ones the fill value (never an earlier shrink's slack).
+    void TestResizeAcrossChunks()
+    {
+        Small values;
+        std::vector<std::uint32_t> reference;
+        std::mt19937 random(5150);
+        DCLF::KeptView<std::uint32_t> held;
+        for (unsigned step = 0; step < 3000; ++step) {
+            values.BeginBuild(~0ull);
+            const std::size_t count = random() % 4 == 0 ? random() % 8 : random() % (kSmallChunk * 6 + 3);
+            const auto fill = static_cast<std::uint32_t>(random());
+            if (random() % 2) {
+                values.Mutable().resize(count, fill);
+                reference.resize(count, fill);
+            } else {
+                values.Mutable().resize(count);
+                reference.resize(count);
+            }
+            for (unsigned n = random() % 5; n > 0 && count; --n) {
+                const std::size_t i = random() % count;
+                values.Mutable()[i] = reference[i] = static_cast<std::uint32_t>(random());
+            }
+            assert(values.Size() == reference.size() && values.Get() == reference);
+            assert(std::equal(values.Get().begin(), values.Get().end(), reference.begin()));
+            if (random() % 3 == 0)
+                held = values.View();  // a view outstanding across the next resize
+        }
+    }
+
+    // ForEachRun's runs are exactly what was marked, and the chunked spans (KeptView::ForEachSpan/Emit) cover exactly those runs, each
+    // within one chunk.
+    void TestRunsMatchMarks()
+    {
+        Small values;
+        std::mt19937 random(31337);
+        values.BeginBuild(0);
+        Fill(values, 1000);
+        std::uint64_t holder = values.View().ContentEpoch();
+        for (unsigned frame = 0; frame < 500; ++frame) {
+            values.BeginBuild(holder);
+            std::set<std::size_t> marked;
+            for (unsigned n = random() % 60; n > 0; --n) {
+                const std::size_t i = random() % values.Size();
+                if (random() % 4 == 0) {
+                    const std::size_t count = std::min<std::size_t>(1 + random() % 150, values.Size() - i);
+                    values.MarkRange(i, count);
+                    for (std::size_t k = i; k < i + count; ++k)
+                        marked.insert(k);
+                } else if (values.Set(i, values.Get()[i] + 1)) {
+                    marked.insert(i);
+                }
+            }
+            const auto view = values.View();
+            std::set<std::size_t> runs, spans;
+            view.changes.ForEachRun(holder, view.Count(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+                for (auto k = a_first; k < a_first + a_count; ++k)
+                    runs.insert(static_cast<std::size_t>(k));
+            });
+            const std::size_t sent = view.ForEachSpan(holder, [&](const std::uint32_t* a_data, std::size_t a_count, std::size_t a_first) {
+                assert(a_count && a_first / kSmallChunk == (a_first + a_count - 1) / kSmallChunk);
+                for (std::size_t k = 0; k < a_count; ++k) {
+                    assert(a_data[k] == values.Get()[a_first + k]);
+                    spans.insert(a_first + k);
+                }
+            });
+            assert(runs == marked && spans == marked && sent == marked.size());
+            holder = view.ContentEpoch();
+        }
+    }
+
+    // Chunks a view held come back once every view has released them: the next write after a view reuses one instead of allocating.
+    void TestSpareReuse()
+    {
+        Small values;
+        values.BeginBuild(0);
+        Fill(values, kSmallChunk * 4);
+        values.BeginBuild(~0ull);
+        const auto* original = &values.Get()[0];
+        auto view = values.View();
+        values.Set(0, 100);  // chunk 0 copied: the original retired, the view still holding it
+        const auto first = values.CopyStats();
+        assert(&values.Get()[0] != original && &(*view.elements)[0] == original);
+        values.BeginBuild(~0ull);  // the view still holds it: nothing to reuse
+        view = values.View();
+        values.Set(1, 101);
+        assert(values.CopyStats().chunkReuses == first.chunkReuses && values.CopyStats().chunkAllocations == first.chunkAllocations + 1);
+        // Every view gone: the next build's write after a view takes a released chunk (the original's memory) instead of allocating.
+        view.Reset();
+        values.BeginBuild(~0ull);
+        view = values.View();
+        const auto second = values.CopyStats();
+        values.Set(2, 102);
+        assert(values.CopyStats().chunkReuses == second.chunkReuses + 1 && values.CopyStats().chunkAllocations == second.chunkAllocations);
+        assert(values.Get()[0] == 100 && values.Get()[1] == 101 && values.Get()[2] == 102 && (*view.elements)[2] == 2);
+        // Shrinking and growing again reuses the dropped chunks (no view holds them).
+        view.Reset();
+        values.BeginBuild(~0ull);
+        const auto third = values.CopyStats();
+        values.Mutable().resize(kSmallChunk);
+        values.Mutable().resize(kSmallChunk * 4, 5);
+        assert(values.CopyStats().chunkAllocations == third.chunkAllocations && values.CopyStats().chunkReuses == third.chunkReuses + 3);
+        assert(values.Get()[kSmallChunk] == 5 && values.Get()[kSmallChunk * 4 - 1] == 5 && values.Get()[0] == 100);
+        // Storage reuse off (the comparison against fresh storage): every copy allocates.
+        DCLF::reuseKeptStorage = false;
+        values.BeginBuild(~0ull);
+        view = values.View();
+        const auto fourth = values.CopyStats();
+        values.Set(3, 103);
+        assert(values.CopyStats().chunkAllocations == fourth.chunkAllocations + 1 && values.CopyStats().chunkReuses == fourth.chunkReuses);
+        DCLF::reuseKeptStorage = true;
+    }
+
+    // Parallel writers into distinct elements after PrepareWrites (W4's Pairs.Resolve): the result equals a serial write, the marks
+    // applied afterwards on one thread are the serial marks, and an outstanding view is untouched.
+    void TestConcurrentDisjointWrites()
+    {
+        using Row = std::array<std::uint32_t, 8>;
+        constexpr std::size_t kParts = 4, kRows = 1000, kThreads = 4;
+        DCLF::KeptArray<Row, 16> parallel, serial;
+        for (auto* rows : { &parallel, &serial }) {
+            rows->BeginBuild(0);
+            rows->Mutable().resize(kRows);
+            rows->Resync();
+        }
+        std::mt19937 random(2024);
+        for (unsigned frame = 0; frame < 50; ++frame) {
+            std::vector<Row> next(kRows);
+            for (std::size_t r = 0; r < kRows; ++r) {
+                next[r] = parallel.Get()[r];
+                if (random() % 3 == 0)
+                    next[r][random() % next[r].size()] = static_cast<std::uint32_t>(random());
+            }
+            const auto parallelHolder = parallel.ContentEpoch(), serialHolder = serial.ContentEpoch();
+            parallel.BeginBuild(parallelHolder);
+            serial.BeginBuild(serialHolder);
+            const auto view = parallel.View();
+            const std::vector<Row> seen = *view.elements;
+            const std::size_t first = random() % 100;  // rows below it are not written this frame
+            parallel.PrepareWrites(first, kRows - first);
+            std::array<std::vector<std::pair<std::size_t, std::uint64_t>>, kThreads> masks;
+            std::vector<std::thread> threads;
+            for (std::size_t t = 0; t < kThreads; ++t)
+                threads.emplace_back([&, t] {
+                    for (std::size_t r = first + t; r < kRows; r += kThreads)  // interleaved: threads share every chunk
+                        if (const auto mask = parallel.WriteParts(r, next[r], kParts))
+                            masks[t].emplace_back(r, mask);
+                });
+            for (auto& thread : threads)
+                thread.join();
+            std::vector<std::pair<std::size_t, std::uint64_t>> merged;
+            for (const auto& mine : masks)
+                merged.insert(merged.end(), mine.begin(), mine.end());
+            std::sort(merged.begin(), merged.end());
+            for (const auto& [r, mask] : merged)
+                parallel.MarkParts(r, mask, kParts);
+            for (std::size_t r = first; r < kRows; ++r)
+                serial.SetParts(r, next[r], kParts);
+            assert(parallel.Get() == static_cast<std::vector<Row>>(serial.Get()));
+            assert(*view.elements == seen);
+            std::vector<std::pair<std::uint64_t, std::uint64_t>> parallelRuns, serialRuns;
+            parallel.View().changes.ForEachRun(parallelHolder, kRows * kParts, [&](auto a_first, auto a_count) { parallelRuns.emplace_back(a_first, a_count); });
+            serial.View().changes.ForEachRun(serialHolder, kRows * kParts, [&](auto a_first, auto a_count) { serialRuns.emplace_back(a_first, a_count); });
+            assert(parallelRuns == serialRuns);
+        }
+    }
+
+    // Views of elements of one's own (not a kept array's) adopt the vector as one chunk; a whole array's views are one chunk too.
+    void TestAdoptedAndWhole()
+    {
+        auto flat = std::make_shared<std::vector<std::uint32_t>>(std::vector<std::uint32_t>{ 1, 2, 3, 4, 5 });
+        DCLF::KeptView<std::uint32_t> own;
+        own.elements = flat;
+        assert(own.Count() == 5 && &(*own.elements)[0] == flat->data() && *own.elements == *flat);
+        std::size_t emits = 0;
+        own.Emit(0, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+            ++emits;
+            assert(a_data == flat->data() && a_bytes == 5 * sizeof(std::uint32_t) && a_offset == 0);
+        });
+        assert(emits == 1);
+        DCLF::KeptView<std::uint32_t> constOwn{ std::shared_ptr<const std::vector<std::uint32_t>>(flat), {} };
+        assert(constOwn.Count() == 5);
+        DCLF::KeptWholeArray<std::uint32_t> whole;
+        whole.BeginBuild(0);
+        std::vector<std::uint32_t>& elements = whole.Mutable();
+        elements.assign(10000, 3);
+        whole.Resync();
+        const auto view = whole.View();
+        assert(&(*view.elements)[0] == whole.Get().data());
+        whole.BeginBuild(~0ull);
+        whole.Set(9999, 4);  // the first write of a build with a view out: the whole array copied
+        assert(&(*view.elements)[0] != whole.Get().data() && (*view.elements)[9999] == 3 && whole.Get()[9999] == 4);
+        assert(whole.CopyStats().bytesCopied == 10000 * sizeof(std::uint32_t));
+    }
+}
+
 int main()
 {
-    DCLF::KeptArray<unsigned> values;
-    std::vector<DCLF::KeptView<unsigned>> held;
-    std::vector<std::vector<unsigned>> expected;
-    std::vector<unsigned> gpu(2048);
-    std::uint64_t uploadedEpoch = 0;
-    std::mt19937 random(1234);
-    for (unsigned frame = 0; frame < 1000; ++frame) {
-        values.BeginBuild(uploadedEpoch);
-        if (!frame) { values.Mutable().resize(2048); values.Resync(); }
-        for (unsigned n = 0; n < 173; ++n) {
-            const auto index = random() % 2048;
-            values.Set(index, random());
-        }
-        auto snapshot = values.View();
-        snapshot.Emit(uploadedEpoch, [&](const void* data, std::size_t bytes, std::size_t offset) {
-            std::memcpy(reinterpret_cast<std::byte*>(gpu.data()) + offset, data, bytes);
-        });
-        assert(gpu == values.Get());
-        if (frame % 3 == 0) uploadedEpoch = snapshot.ContentEpoch();
-        for (std::size_t i = 0; i < held.size(); ++i) assert(*held[i].elements == expected[i]);
-        held.push_back(snapshot);
-        expected.push_back(*snapshot.elements);
-        // Exercise both recycled storage and exhaustion with outstanding readers.
-        if (held.size() > (frame % 13 < 7 ? 1u : 6u)) { held.erase(held.begin()); expected.erase(expected.begin()); }
-    }
-    // An outstanding view is immutable even when the coordinator writes its next content epoch.
-    held.clear();
-    auto patch = values.View();
-    const auto before = *patch.elements;
-    values.BeginBuild(uploadedEpoch);
-    values.Set(0, 0x12345678);
-    assert(*patch.elements == before);
-    assert(values.Get()[0] == 0x12345678);
+    TestUploadedEpochs<DCLF::kKeptChunkBySize>();
+    TestUploadedEpochs<kSmallChunk>();
+    TestUploadedEpochs<DCLF::kKeptWhole>();
+    TestChunkCopyOnWrite();
+    TestViewsImmutable();
+    TestResizeAcrossChunks();
+    TestRunsMatchMarks();
+    TestSpareReuse();
+    TestConcurrentDisjointWrites();
+    TestAdoptedAndWhole();
     TestReferenceDrivenMaterialRetirement();
     TestActorValueMembership();
-    TestPooledHolders();
-    TestPartHolders();
+    TestPooledHolders<DCLF::kKeptChunkBySize>();
+    TestPooledHolders<16>();
+    TestPooledHolders<DCLF::kKeptWhole>();
+    TestPartHolders<DCLF::kKeptChunkBySize>();
+    TestPartHolders<4>();
+    TestPartHolders<DCLF::kKeptWhole>();
     TestRetirementChain();
+    std::mt19937 random(1234);
     for (unsigned trial = 0; trial < 1000; ++trial) {
         DCLF::ChangeJournal::Snapshot changes{10, 1, {}};
         const std::uint64_t count = 1 + random() % 8192;

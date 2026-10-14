@@ -351,6 +351,8 @@ namespace DCLF::Scene
 					}
 					tables.permutations[slot] = permutation;
 					tables.pipelineBindingVersion[slot] = tables.NextVersion();
+					// Its technique mask is looked up with the next bindings update (a slot keyed again may keep its used bit).
+					sharedBindings.MarkMask(slot);
 					pipelineIt = pipelineIndex.emplace(key, slot).first;
 					timer.Add(BuildPart::PipelineEval);
 				}
@@ -382,12 +384,22 @@ namespace DCLF::Scene
 						return;
 					}
 					held->second.frame = sceneFrame;
-					MaterialRecord record;
-					if (!MaterialPort::Evaluate(held->second.held->snapshot, descriptors.pass, FrameGlobals::Current().material, record)) {
+					// Evaluated before the merges (PrepareJoinMaterials), else here (a join classified only in its merge, or no fan-out).
+					const MaterialEvaluation* evaluation = nullptr;
+					std::optional<MaterialEvaluation> here;
+					if (const auto prepared = joinMaterialPrepared.find(std::pair{ material, descriptors.pass }); prepared != joinMaterialPrepared.end()) {
+						evaluation = &joinMaterialResults[prepared->second];
+						++materialRecordStats.joinPrepared;
+					} else {
+						EvaluateMaterial(held->second.held->snapshot, descriptors.pass, FrameGlobals::Current().material, kNoMaterialSlot, here.emplace());
+						evaluation = &*here;
+						++materialRecordStats.joinInline;
+					}
+					if (evaluation->outcome != MaterialEvaluation::Outcome::Made) {
 						// An input the frame lacks yet (e.g. Advanced Skin's textures): retry later. Else a class the port does not cover:
 						// native, counted.
 						derived.valid = false;
-						if (!MaterialPort::FeatureHooksCovered(held->second.held->snapshot, FrameGlobals::Current().material.feature)) {
+						if (evaluation->outcome == MaterialEvaluation::Outcome::Retry) {
 							bindRetry.push_back(objectId);
 							++residentStats.materialWaits;
 							return;
@@ -396,8 +408,8 @@ namespace DCLF::Scene
 						return;
 					}
 					++ms.made;
-					// The character light's t11 view is the frame's, never the record's.
-					MaterialSources::StripFrameViews(record, descriptors.pass);
+					// As records hold it: the character light's t11 view is the frame's, never the record's (EvaluateMaterial).
+					const MaterialRecord& record = evaluation->record;
 					const std::uint32_t slot = AllocateMaterialSlot();
 					materialOwners.resize(tables.materials.size());
 					// A second count on the material (alive: the capture holds one).
@@ -411,6 +423,8 @@ namespace DCLF::Scene
 					materialIt = materialIndex.emplace(std::pair{ material, descriptors.pass }, slot).first;
 					ListMaterialDependent(material, slot);
 					NoteMaterialRecord(slot, held->second.held->snapshot);
+					// Made from this frame's buffer: watched only while the buffers disagree (or another slot's watch runs).
+					WatchMaterialTransforms(material, held->second.held->snapshot, true);
 					timer.Add(BuildPart::MaterialEval);
 				}
 				materialSlot = materialIt->second;
@@ -505,6 +519,7 @@ namespace DCLF::Scene
 			++f.joinRounds;
 			f.joinEntries += count;
 			const std::uint32_t mode = FanoutMode(count);
+			joinMaterialPrepared.clear();
 			if (mode == 0) {
 				for (const auto& entry : accumulateOrder) {
 					JoinResult result;
@@ -519,6 +534,10 @@ namespace DCLF::Scene
 				{
 					DCLF_SCENE_PART(JoinsFanout, "CS.DCLF.Accumulate.JoinsFanout");
 					EvaluateJoins(count, mode == 2, joinResults, [&](std::size_t a_index, JoinResult& a_out) { EvaluateJoin(accumulateOrder[a_index], false, a_out); });
+				}
+				{
+					DCLF_SCENE_PART(JoinsFanout, "CS.DCLF.Accumulate.JoinMaterials");
+					PrepareJoinMaterials(count);
 				}
 				DCLF_SCENE_PART(JoinsMerge, "CS.DCLF.Accumulate.JoinsMerge");
 				for (std::size_t i = 0; i < count; ++i)
@@ -584,6 +603,42 @@ namespace DCLF::Scene
 		stats.materialCacheEntries = static_cast<std::uint32_t>(tables.materialSlots.AliveCount());
 		TracyCZoneEnd(statsZone);
 		Diagnostics::Notify<Diagnostics::ScenePoint::JoinsEnd>();
+	}
+
+	void Coordinator::PrepareJoinMaterials(std::size_t a_count)
+	{
+		// Each (material, pass) a classified join keys that no slot holds, once, from its held capture (drained at the pass's start, stable
+		// over it): evaluated here, on the pool for a burst, so the merges only allocate and store. Read-only over materialIndex; a merge
+		// that keys one first leaves its evaluation unread.
+		auto& r = materialRecordStats;
+		auto& items = joinMaterialItems;
+		items.clear();
+		joinMaterialPrepared.clear();
+		for (std::size_t i = 0; i < a_count && i < joinResults.size(); ++i) {
+			const auto& result = joinResults[i];
+			if (result.kind != JoinResult::Kind::Joined || !result.classified || !result.material)
+				continue;
+			const std::pair key{ result.material, result.descriptors.pass };
+			if (materialIndex.contains(key))
+				continue;
+			const auto held = materialSnapshots.find(result.material);
+			if (held == materialSnapshots.end() || !held->second.held)
+				continue;  // the merge requests it
+			if (joinMaterialPrepared.try_emplace(key, static_cast<std::uint32_t>(items.size())).second)
+				items.push_back({ result.material, &held->second.held->snapshot, result.descriptors.pass });
+		}
+		if (items.empty())
+			return;
+		auto& results = joinMaterialResults;
+		results.resize(items.size());
+		const auto& sources = FrameGlobals::Current().material;
+		if (PrepareMaterials("CS.DCLF.Accumulate.JoinMaterialsShards", items.size(), [&](std::size_t a_begin, std::size_t a_end) {
+				for (std::size_t i = a_begin; i < a_end; ++i)
+					EvaluateMaterial(*items[i].snapshot, items[i].pass, sources, kNoMaterialSlot, results[i]);
+			})) {
+			r.evaluationsPooled += items.size();
+			++r.poolRounds;
+		}
 	}
 
 	void Coordinator::BindByMembership()
@@ -856,11 +911,10 @@ namespace DCLF::Scene
 	void Coordinator::RefreshShadowSets(bool a_forceRebuild)
 	{
 		ZoneScopedN("CS.DCLF.Capture.ShadowSets");
-		// ClearFrame rebuilds the public lists every walk; the dependency index holds membership across frames.
-		ankerl::unordered_dense::set<ID3D11ShaderResourceView*> previousTextures;
-		previousTextures.reserve(shadowTextureMembers.size());
-		for (const auto& entry : shadowTextureMembers)
-			previousTextures.insert(entry.first);
+		// ClearFrame rebuilds the public lists every walk; the dependency index holds membership across frames. Each index keeps its keys
+		// ordered by their lowest member (the order the sets are emitted in), and the textures that appear or go are noted as they do.
+		auto& net = shadowTextureNet;
+		net.clear();
 		bool rebuild = a_forceRebuild || shadowIndexNeedsRebuild;
 		std::vector<std::uint32_t> changed = std::move(shadowDirtySlots);
 		shadowDirtySlots.clear();
@@ -871,12 +925,19 @@ namespace DCLF::Scene
 				rebuild = true;  // an unjournaled invalidation must still rebuild the index
 		}
 		if (rebuild) {
+			// Every texture held goes, and comes back as the slots are indexed again: only the difference is noted.
+			for (const auto& entry : shadowTextureMembers)
+				--net[entry.first];
 			shadowIndexedInputs.clear();
 			shadowIndexedLive.clear();
 			shadowTextureMembers.clear();
 			shadowKeyMembers.clear();
 			for (auto& members : occlusionKeyMembers)
 				members.clear();
+			shadowTextureOrder.clear();
+			shadowKeyOrder.clear();
+			for (auto& keyOrder : occlusionKeyOrder)
+				keyOrder.clear();
 			stats.shadowCasters = 0;
 			stats.shadowRejects = {};
 			changed.clear();
@@ -889,14 +950,37 @@ namespace DCLF::Scene
 		shadowIndexedLive.resize(tables.objects.size(), 0);
 		std::sort(changed.begin(), changed.end());
 		changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
-		auto member = [](auto& a_index, const auto& a_key, std::uint32_t a_slot, bool a_add) {
+		// A member in or out of its key's set, the key's place in the order moved with its lowest member; +1 / -1 when the key appears or goes.
+		auto member = [](auto& a_index, auto& a_order, const auto& a_key, std::uint32_t a_slot, bool a_add) -> std::int32_t {
+			constexpr std::uint32_t kNoMember = ~0u;
 			if (a_add) {
-				a_index[a_key].insert(a_slot);
-			} else if (auto it = a_index.find(a_key); it != a_index.end()) {
-				it->second.erase(a_slot);
-				if (it->second.empty())
-					a_index.erase(it);
+				auto [it, fresh] = a_index.try_emplace(a_key);
+				auto& slots = it->second;
+				const std::uint32_t before = slots.empty() ? kNoMember : *slots.begin();
+				slots.insert(a_slot);
+				if (const std::uint32_t after = *slots.begin(); after != before) {
+					if (before != kNoMember)
+						a_order.erase(before);
+					a_order.insert_or_assign(after, a_key);
+				}
+				return fresh ? 1 : 0;
 			}
+			const auto it = a_index.find(a_key);
+			if (it == a_index.end())
+				return 0;
+			auto& slots = it->second;
+			const std::uint32_t before = slots.empty() ? kNoMember : *slots.begin();
+			slots.erase(a_slot);
+			if (slots.empty()) {
+				a_order.erase(before);
+				a_index.erase(it);
+				return -1;
+			}
+			if (const std::uint32_t after = *slots.begin(); after != before) {
+				a_order.erase(before);
+				a_order.insert_or_assign(after, a_key);
+			}
+			return 0;
 		};
 		auto apply = [&](std::uint32_t a_slot, const ShadowInputs& a_inputs, bool a_live, bool a_add) {
 			if (!a_live)
@@ -908,14 +992,15 @@ namespace DCLF::Scene
 				a_add ? ++stats.shadowCasters : --stats.shadowCasters;
 			const bool occluder = std::any_of(a_inputs.occlusionTechnique.begin(), a_inputs.occlusionTechnique.end(), [](std::uint32_t a_t) { return a_t != 0; });
 			if (a_inputs.diffuse && (caster || occluder))
-				member(shadowTextureMembers, a_inputs.diffuse, a_slot, a_add);
+				if (const std::int32_t moved = member(shadowTextureMembers, shadowTextureOrder, a_inputs.diffuse, a_slot, a_add))
+					net[a_inputs.diffuse] += moved;
 			const auto raster = (a_inputs.flags & kObjectTwoSided) ? kRasterTwoSided : 0u;
 			const auto vertex = VertexLayoutOf(a_inputs.vertexDesc);
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 				if (a_inputs.occlusionTechnique[v])
-					member(occlusionKeyMembers[v], ShadowPipelineKey{ a_inputs.occlusionTechnique[v], raster, vertex }, a_slot, a_add);
+					member(occlusionKeyMembers[v], occlusionKeyOrder[v], ShadowPipelineKey{ a_inputs.occlusionTechnique[v], raster, vertex }, a_slot, a_add);
 			if (caster)
-				member(shadowKeyMembers, ShadowPipelineKey{ a_inputs.technique, raster, vertex }, a_slot, a_add);
+				member(shadowKeyMembers, shadowKeyOrder, ShadowPipelineKey{ a_inputs.technique, raster, vertex }, a_slot, a_add);
 		};
 		for (const auto slot : changed) {
 			if (slot >= tables.objects.size())
@@ -930,32 +1015,28 @@ namespace DCLF::Scene
 			shadowIndexedLive[slot] = live;
 		}
 		shadowSetsDirty = false;
+		// The public lists (the walk's merges started them again), in the kept order: no sort.
 		tables.shadowTextureSet.clear();
 		tables.shadowTextureSeen.clear();
 		tables.shadowKeysUsed.clear();
 		for (auto& keys : tables.occlusionKeysUsed)
 			keys.clear();
-		auto emit = [](const auto& a_index, auto& a_out) {
-			using Key = typename std::decay_t<decltype(a_index)>::key_type;
-			std::vector<std::pair<std::uint32_t, Key>> ordered;
-			ordered.reserve(a_index.size());
-			for (const auto& [key, slots] : a_index)
-				ordered.emplace_back(*slots.begin(), key);
-			std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-			for (const auto& [slot, key] : ordered)
-				a_out.push_back(key);
-		};
-		emit(shadowTextureMembers, tables.shadowTextureSet);
-		for (auto* texture : tables.shadowTextureSet)
+		tables.shadowTextureSet.reserve(shadowTextureOrder.size());
+		for (const auto& [slot, texture] : shadowTextureOrder) {
+			tables.shadowTextureSet.push_back(texture);
 			tables.shadowTextureSeen.insert(texture);
-		for (auto* texture : previousTextures)
-			if (!shadowTextureMembers.contains(texture))
-				tables.shadowTextureChanges.emplace_back(texture, false);
-		for (const auto& entry : shadowTextureMembers)
-			if (!previousTextures.contains(entry.first))
-				tables.shadowTextureChanges.emplace_back(entry.first, true);
-		emit(shadowKeyMembers, tables.shadowKeysUsed);
+		}
+		for (const auto& [slot, key] : shadowKeyOrder)
+			tables.shadowKeysUsed.push_back(key);
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-			emit(occlusionKeyMembers[v], tables.occlusionKeysUsed[v]);
+			for (const auto& [slot, key] : occlusionKeyOrder[v])
+				tables.occlusionKeysUsed[v].push_back(key);
+		// Only what appeared or went (a texture that went and came back is no change), the releases first.
+		for (const auto& [texture, moved] : net)
+			if (moved < 0)
+				tables.shadowTextureChanges.emplace_back(texture, false);
+		for (const auto& [texture, moved] : net)
+			if (moved > 0)
+				tables.shadowTextureChanges.emplace_back(texture, true);
 	}
 }

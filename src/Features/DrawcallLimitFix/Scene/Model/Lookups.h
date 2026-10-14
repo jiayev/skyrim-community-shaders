@@ -17,6 +17,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
 
 struct ID3D11ShaderResourceView;
 
@@ -153,21 +154,34 @@ namespace DCLF
 		};
 
 		/**
+		 * @brief The owners a material entry's indices hold, sealed together and never written after: the exact imports of its textures and
+		 * feature textures, and their ORG execution lease (GpuTextures::Seal), whose last release runs on the cleanup queue. Shared by a
+		 * material's slots whose owners are the same (Coordinator::ResolveMaterialBinding).
+		 */
+		struct MaterialOwners
+		{
+			std::array<std::shared_ptr<const void>, kTextureSlots> textures{};
+			std::array<std::shared_ptr<const void>, kFeatureMaterialTextures> features{};
+			std::shared_ptr<const void> lease;
+		};
+
+		/**
 		 * @brief Per material slot (parallel to SceneTables::materials). Written by Coordinator::ResolveMaterialBinding, versioned
-		 * and logged before the next commit or publication (Coordinator::VersionMaterialBindings).
+		 * and logged before the next commit or publication (Coordinator::VersionMaterialBindings). Plain values and one owner, so a
+		 * publication's chunk copy (SharedChunks) moves one reference count per entry.
 		 */
 		struct Material
 		{
 			std::pair<const RE::BSShaderMaterial*, std::uint32_t> key{};
 			std::array<std::uint32_t, kTextureSlots> textureIndex{};  // descriptor heap indices; kNone where unresolvable
-			std::array<std::shared_ptr<const void>, kTextureSlots> textureOwners{};  // pins exact imports through this slot incarnation
-			std::shared_ptr<const void> bindingBlock;  // immutable ORG ownership root for this record version
+			// Pins the exact imports of every index here through this slot incarnation (null: none held); a new block whenever an owner
+			// changes, so its identity names this owner set.
+			std::shared_ptr<const MaterialOwners> bindingBlock;
 			bool resolved = false;
 			// What textureIndex was resolved from, so an unchanged material is not resolved again.
 			std::array<ID3D11ShaderResourceView*, kTextureSlots> views{};
 			// The feature textures (MaterialRecord::featureTextures, kFeatureMaterialRegisters): indices and views.
 			std::array<std::uint32_t, kFeatureMaterialTextures> featureIndex{};
-			std::array<std::shared_ptr<const void>, kFeatureMaterialTextures> featureOwners{};
 			std::array<ID3D11ShaderResourceView*, kFeatureMaterialTextures> featureViews{};
 			std::uint32_t written = 0;
 			std::uint32_t texturesGeneration = 0;
@@ -286,5 +300,20 @@ namespace DCLF
 	{
 		ankerl::unordered_dense::set<ShadowPipelineKey, ShadowPipelineKeyHash> shadowRequested;
 		std::vector<std::uint64_t> shadowPipelinesResolvedFor;
+		// The Lighting pipelines' witnesses: the catalog (its identity, revision and generation) and the lookups instance every slot was
+		// resolved against, and per slot its key's binding version and used bit then (~0: not resolved). A slot whose witness stands would
+		// resolve to what it holds: a key changes only with a new binding version, and a catalog is immutable.
+		const void* pipelineCatalog = nullptr;
+		std::uint64_t pipelineCatalogRevision = 0;
+		std::uint32_t pipelineCatalogGeneration = ~0u;
+		std::uint64_t pipelineInstance = 0;
+		std::vector<std::uint64_t> pipelineWitness;
+		// The shadow resolution's scratch, kept so an unchanged pass allocates nothing (by mode: kShadowModeCount).
+		std::vector<std::uint64_t> shadowResolvedScratch;
+		std::array<std::vector<std::uint32_t>, 5> shadowModeStates;
+		// The work the witnesses saved, and their parity (a full resolution after the witnessed one writes nothing; CS_DCLF_PERSISTENT_PARITY),
+		// for the material records' line.
+		std::uint64_t calls = 0, pipelinesChecked = 0, pipelinesResolved = 0, pipelineSweeps = 0, shadowSkipped = 0, shadowResolved = 0;
+		Diagnostics::ParityCounter pipelineParity;
 	};
 }

@@ -79,4 +79,25 @@ namespace DCLF::Policy
 
 	/** @brief The accumulate phase checks every bound record's slots after a pass that freed one (a_slotsFreed) or on pass a_pass, and neutralise a record naming a slot no member holds. Normal path: false. */
 	bool NeutraliseDanglingSlots(bool a_slotsFreed, std::uint64_t a_pass);
+
+	// ---- W4 (the snapshot builder's main build).
+	/** @brief Main build a_build checks its narrowed pair checks (and their resolution on the pool) against every pair resolved again serially, and a parallel region resync against a serial one. Normal path: false. */
+	bool CheckBuilderPairs(std::uint64_t a_build);
+
+	/** @brief Main build a_build checks that every pipeline of a material packs its one row alike (MainRows' row per material). Normal path: false. */
+	bool CheckRowPacking(std::uint64_t a_build);
+
+	/** @brief A main build's parallel region resync is checked slot by slot against the serial path's verdicts (resyncs are rare: each one). Normal path: false. */
+	bool CheckRegionResync();
+
+	// ---- W3 (publication pacing).
+	/** @brief Publication a_publication, made after deferred passes, checks its tables and claims against the coordinator's whole (an every-pass publication's). Normal path: false. */
+	bool CheckPacedPublication(std::uint64_t a_publication);
+
+	// ---- W1 (placement deltas and walk scheduling).
+	/** @brief Pass a_pass also schedules a dirty root's dependents that kept its motion verdict, each merge checked to change nothing (ScheduleRoot's witnesses). Normal path: false. */
+	bool WitnessRootSchedule(std::uint64_t a_pass);
+
+	/** @brief A geometry scan with stale or refreshed slots also scans every object slot, against the index's (GeometryScan). Normal path: false. */
+	bool CheckGeometryScan();
 }

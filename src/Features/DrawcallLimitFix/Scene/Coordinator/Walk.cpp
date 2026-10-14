@@ -681,6 +681,7 @@ namespace DCLF::Scene
 					tables.geometries[previous].nextPartition = slot;
 					tables.NoteGeometry(previous);
 				}
+				IndexLink(previous, slot);
 				previous = slot;
 			}
 			if (unstable) {
@@ -828,6 +829,7 @@ namespace DCLF::Scene
 		}
 
 		tables.draws[objectId] = DrawTemplateOf(tables.geometries[geometrySlot], keepHalf ? keptPipeline : 0);
+		IndexObjectHead(objectId, geometrySlot);
 		timer.Add(BuildPart::Record);
 		WriteLayer(geometry, leaf, *trackedEntry, objectId, a_bucket == Ineligible::None && !shadowOnly, keepHalf, timer);
 		return true;
@@ -909,6 +911,7 @@ namespace DCLF::Scene
 		tables.skinPartitions[slot] = 0;
 		tables.skinLodPartitions[slot] = 0;
 		tables.draws[slot] = DrawTemplateOf(tables.geometries[geometrySlot], keepMember ? keptPipeline : 0);
+		IndexObjectHead(slot, geometrySlot);
 		if (denseWalk)
 			return;
 		if (same)
@@ -979,9 +982,12 @@ namespace DCLF::Scene
 				return Tables::kSlotFree;
 			if (previous == Tables::kSlotFree) {
 				first = slot;
-			} else if (tables.geometries[previous].nextPartition != slot) {
-				tables.geometries[previous].nextPartition = slot;
-				tables.NoteGeometry(previous);
+			} else {
+				if (tables.geometries[previous].nextPartition != slot) {
+					tables.geometries[previous].nextPartition = slot;
+					tables.NoteGeometry(previous);
+				}
+				IndexLink(previous, slot);
 			}
 			previous = slot;
 		}
@@ -1118,6 +1124,69 @@ namespace DCLF::Scene
 		return geometryIt->second;
 	}
 
+	void Coordinator::IndexObjectHead(std::uint32_t a_object, std::uint32_t a_head)
+	{
+		if (denseWalk)
+			return;
+		if (objectHead.size() <= a_object) {
+			objectHead.resize(std::size_t(a_object) + 1, kNoPartition);
+			objectHeadAt.resize(std::size_t(a_object) + 1, 0);
+		}
+		const std::uint32_t old = objectHead[a_object];
+		if (old == a_head)
+			return;
+		// Off its last head's list (swap-remove, the moved one's index kept), onto the new one's.
+		if (old != kNoPartition)
+			if (const auto it = headObjects.find(old); it != headObjects.end()) {
+				auto& list = it->second;
+				const std::uint32_t at = objectHeadAt[a_object];
+				if (at < list.size() && list[at] == a_object) {
+					list[at] = list.back();
+					objectHeadAt[list[at]] = at;
+					list.pop_back();
+				}
+				if (list.empty())
+					headObjects.erase(it);
+			}
+		auto& list = headObjects[a_head];
+		objectHead[a_object] = a_head;
+		objectHeadAt[a_object] = static_cast<std::uint32_t>(list.size());
+		list.push_back(a_object);
+	}
+
+	void Coordinator::IndexLink(std::uint32_t a_from, std::uint32_t a_to)
+	{
+		if (denseWalk || a_to == kNoPartition)
+			return;
+		auto& from = linkedFrom[a_to];
+		if (std::find(from.begin(), from.end(), a_from) == from.end())
+			from.push_back(a_from);
+	}
+
+	void Coordinator::ObjectsUnder(const std::vector<std::uint32_t>& a_slots, bool a_chains, std::vector<std::uint32_t>& a_out) const
+	{
+		// The heads whose chain reaches a slot: back along the links still pointing at it (an entry whose link moved on is skipped).
+		std::vector<std::uint32_t> heads(a_slots.begin(), a_slots.end());
+		if (a_chains) {
+			ankerl::unordered_dense::set<std::uint32_t> seen(a_slots.begin(), a_slots.end());
+			for (std::size_t i = 0; i < heads.size(); ++i) {
+				const std::uint32_t g = heads[i];
+				const auto it = linkedFrom.find(g);
+				if (it == linkedFrom.end())
+					continue;
+				for (const std::uint32_t from : it->second)
+					if (from < tables.geometries.size() && tables.geometries[from].nextPartition == g && seen.insert(from).second)
+						heads.push_back(from);
+			}
+		}
+		a_out.clear();
+		for (const std::uint32_t head : heads)
+			if (const auto it = headObjects.find(head); it != headObjects.end())
+				a_out.insert(a_out.end(), it->second.begin(), it->second.end());
+		std::sort(a_out.begin(), a_out.end());
+		a_out.erase(std::unique(a_out.begin(), a_out.end()), a_out.end());
+	}
+
 	void Coordinator::BuildFullOrder()
 	{
 		order.clear();
@@ -1188,7 +1257,7 @@ namespace DCLF::Scene
 			motion->second = a_now ? *a_now : RootMovesNow(a_root);
 			// The root pass (QueueRoots) takes its bound, keyed by its reference's move events.
 			if (motion->second && movingRoots.try_emplace(a_root, MovingRoot{ static_cast<const RE::TESObjectREFR*>(record->userData), FindCategoryNode(const_cast<RE::NiAVObject*>(a_root), nullptr) }).second)
-				placementDirty = true;
+				placementRootsTouched.push_back(a_root);
 		}
 		return motion->second;
 	}
@@ -1219,16 +1288,16 @@ namespace DCLF::Scene
 		const void* alpha = leaf.geometry ? leaf.geometry->alpha : nullptr;
 		if (property != a_tracked.listedProperty) {
 			if (a_tracked.listedProperty)
-				Unlist(propertyDependents, a_tracked.listedProperty, a_geometry);
+				Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedProperty, a_geometry);
 			if (property)
-				propertyDependents[property].push_back(a_geometry);
+				List(propertyDependents, propertyDependentsAt, property, a_geometry);
 			a_tracked.listedProperty = property;
 		}
 		if (alpha != a_tracked.listedAlpha) {
 			if (a_tracked.listedAlpha)
-				Unlist(propertyDependents, a_tracked.listedAlpha, a_geometry);
+				Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedAlpha, a_geometry);
 			if (alpha)
-				propertyDependents[alpha].push_back(a_geometry);
+				List(propertyDependents, propertyDependentsAt, alpha, a_geometry);
 			a_tracked.listedAlpha = alpha;
 		}
 		// External emittance: the shared colour (a light's, region's or the sky's) the weather rewrites in place (emittanceEvents); its
@@ -1240,18 +1309,18 @@ namespace DCLF::Scene
 		                                                                                                                                          nullptr;
 		if (emittance != a_tracked.listedEmittance) {
 			if (a_tracked.listedEmittance)
-				Unlist(propertyDependents, a_tracked.listedEmittance, a_geometry);
+				Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedEmittance, a_geometry);
 			if (emittance)
-				propertyDependents[emittance].push_back(a_geometry);
+				List(propertyDependents, propertyDependentsAt, emittance, a_geometry);
 			a_tracked.listedEmittance = emittance;
 		}
 		// A multi-index shape's layer property.
 		const void* layer = leaf.geometry ? leaf.geometry->Layer() : nullptr;
 		if (layer != a_tracked.listedLayerProperty) {
 			if (a_tracked.listedLayerProperty)
-				Unlist(propertyDependents, a_tracked.listedLayerProperty, a_geometry);
+				Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedLayerProperty, a_geometry);
 			if (layer)
-				propertyDependents[layer].push_back(a_geometry);
+				List(propertyDependents, propertyDependentsAt, layer, a_geometry);
 			a_tracked.listedLayerProperty = layer;
 		}
 	}
@@ -1259,13 +1328,13 @@ namespace DCLF::Scene
 	void Coordinator::UnlistDependents(RE::BSGeometry* a_geometry, Tracked& a_tracked, bool a_root)
 	{
 		if (a_tracked.listedProperty)
-			Unlist(propertyDependents, a_tracked.listedProperty, a_geometry);
+			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedProperty, a_geometry);
 		if (a_tracked.listedAlpha)
-			Unlist(propertyDependents, a_tracked.listedAlpha, a_geometry);
+			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedAlpha, a_geometry);
 		if (a_tracked.listedEmittance)
-			Unlist(propertyDependents, a_tracked.listedEmittance, a_geometry);
+			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedEmittance, a_geometry);
 		if (a_tracked.listedLayerProperty)
-			Unlist(propertyDependents, a_tracked.listedLayerProperty, a_geometry);
+			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedLayerProperty, a_geometry);
 		a_tracked.listedProperty = nullptr;
 		a_tracked.listedAlpha = nullptr;
 		a_tracked.listedEmittance = nullptr;
@@ -1276,23 +1345,22 @@ namespace DCLF::Scene
 			// Rewritten at the candidates update; until then the snapshots naming it hold its node.
 			MarkLightEntryDirty(a_tracked.lightRoot);
 			// Last dependent gone: out of the frame's light entries.
-			if (!Unlist(lightDependents, a_tracked.lightRoot, a_geometry))
+			if (!Unlist(lightDependents, lightDependentsAt, a_tracked.lightRoot, a_geometry))
 				lightEntryChanges.push_back({ a_tracked.lightRoot, -1 });
 			ReleaseRootOwner(a_tracked.lightRoot);
 			a_tracked.lightRoot = nullptr;
 		}
 		if (a_root && a_tracked.listedRoot) {
 			MarkSunEntryDirty(a_tracked.listedRoot);
-			// A listed root's dependents are a plan's.
-			if (movingRoots.contains(a_tracked.listedRoot) || stillRoots.contains(a_tracked.listedRoot))
-				placementDirty = true;
+			// A listed root's dependents are a plan's: this one leaves it at the next plan.
+			TouchPlacedDependent(a_tracked.listedRoot, a_geometry);
 			// The root's bound drops this one. The node is only a key here; it may be gone.
-			if (Unlist(rootDependents, a_tracked.listedRoot, a_geometry)) {
+			if (Unlist(rootDependents, rootDependentsAt, a_tracked.listedRoot, a_geometry)) {
 				dirtyRoots.push_back(a_tracked.listedRoot);
 			} else {
 				rootMotion.erase(a_tracked.listedRoot);
-				movingRoots.erase(a_tracked.listedRoot);
-				stillRoots.erase(a_tracked.listedRoot);
+				if (movingRoots.erase(a_tracked.listedRoot) + stillRoots.erase(a_tracked.listedRoot))
+					placementRootsTouched.push_back(a_tracked.listedRoot);
 				if (const auto reference = rootReference.find(a_tracked.listedRoot); reference != rootReference.end()) {
 					if (const auto back = referenceRoot.find(reference->second); back != referenceRoot.end() && back->second == a_tracked.listedRoot)
 						referenceRoot.erase(back);
@@ -1362,17 +1430,43 @@ namespace DCLF::Scene
 		       reason == Ineligible::Switch || reason == Ineligible::Actor;
 	}
 
-	void Coordinator::ScheduleRoot(const RE::NiAVObject* a_root)
+	void Coordinator::ScheduleRoot(const RE::NiAVObject* a_root, bool a_whole)
 	{
+		const auto it = rootDependents.find(a_root);
+		auto& d = placementDeltaStats;
+		if (!a_whole) {
+			// A dependent attached (pending already) or detached. The others read only the root's motion of it (PerFrameMerge, RootMoves),
+			// which the attach or detach may have changed (a skin, a controller or a body joined or left the subtree): read again now (the
+			// mirror the evaluations read), and only a changed verdict reclassifies them. None kept: no dependent read one.
+			++d.dirtyRoots;
+			d.rootDependentsListed += it != rootDependents.end() ? it->second.size() : 0;
+			const auto motion = rootMotion.find(a_root);
+			if (motion == rootMotion.end() || RootMovesNow(a_root) == motion->second) {
+				// Parity (Policy::WitnessRootSchedule): the rest scheduled too, each merge checked to change nothing (MergeEntry).
+				if (it != rootDependents.end() && Policy::WitnessRootSchedule(passSerial))
+					for (auto* geometry : it->second) {
+						const auto entry = tracked.find(geometry);
+						if (entry == tracked.end() || !PlacementMatters(entry->second) || entry->second.scheduledWalk == walkSerial) {
+							++d.rootWitnessSkipped;
+							continue;
+						}
+						Reclassify(entry->first, entry->second);
+						rootWitness.insert(geometry);
+					}
+				return;
+			}
+			++d.dirtyRootsWhole;
+		}
 		rootMotion.erase(a_root);
 		if (movingRoots.erase(a_root))
-			placementDirty = true;
-		const auto it = rootDependents.find(a_root);
+			placementRootsTouched.push_back(a_root);
 		if (it == rootDependents.end())
 			return;
 		for (auto* geometry : it->second)
-			if (const auto entry = tracked.find(geometry); entry != tracked.end() && PlacementMatters(entry->second))
+			if (const auto entry = tracked.find(geometry); entry != tracked.end() && PlacementMatters(entry->second)) {
 				Reclassify(entry->first, entry->second);
+				d.rootDependentsScheduled += a_whole ? 0u : 1u;
+			}
 	}
 
 	void Coordinator::MoveBucket(Tracked& a_tracked, Ineligible a_bucket)
@@ -1670,7 +1764,7 @@ namespace DCLF::Scene
 					++delta.kept;
 				}
 				entry.movedWalk = walkSerial;  // not written in full: a later round may still write it
-				witness(NoteMover(geometry, entry));
+				witness(NoteMover(geometry, entry, false));
 				return;
 			}
 			if (witnessed)
@@ -1693,6 +1787,10 @@ namespace DCLF::Scene
 		const std::uint32_t slotBefore = entry.slot;
 		const Tables::Columns columnsBefore = hadSlot ? tables.ColumnsOf(slotBefore) : Tables::Columns{};
 		const Ineligible reasonBefore = entry.candidateReason;
+		// ScheduleRoot's parity: a dependent only its witness scheduled must come out as it went in.
+		const bool rootWitnessed = !rootWitness.empty() && rootWitness.contains(geometry);
+		const bool perFrameBefore = entry.perFrame;
+		const std::uint32_t traitsBefore = entry.lightTraits;
 		Ineligible bucket = Ineligible::Count;
 		const bool written = MergeWrite(geometry, entry, r, a_timer, bucket);
 		MoveBucket(entry, bucket);
@@ -1733,6 +1831,21 @@ namespace DCLF::Scene
 			entry.perFrameListed = true;
 			perFrameSet.push_back({ geometry, &entry });
 		}
+		if (rootWitnessed) {
+			auto& d = placementDeltaStats;
+			++d.rootWitnessChecks;
+			const std::uint32_t causes = written && entry.slot == slotBefore && hadSlot ? tables.CausesBetween(columnsBefore, tables.ColumnsOf(entry.slot)) : 0u;
+			if (entry.slot != slotBefore || entry.perFrame != perFrameBefore || entry.lightTraits != traitsBefore || entry.candidateReason != reasonBefore || causes) {
+				++d.rootWitnessDiffer;
+				if (d.rootWitnessFirst.empty())
+					d.rootWitnessFirst = fmt::format("'{}' (root {}): slot {} -> {}, per frame {} -> {}, traits {:X} -> {:X}, verdict {} -> {}, causes {:X}",
+						entry.geometry && entry.geometry->name.c_str() ? entry.geometry->name.c_str() : "?", static_cast<const void*>(entry.listedRoot), slotBefore, entry.slot,
+						perFrameBefore, entry.perFrame, traitsBefore, entry.lightTraits, kIneligibleNames[static_cast<std::size_t>(reasonBefore)],
+						kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], causes);
+			}
+		}
+		// A listed root's dependent written: its slot or layer may have changed what the plan names.
+		TouchPlacedDependent(entry.listedRoot, geometry);
 		// Into or out of the placement set (a new record, a slot released, traits gained or lost).
 		witness(NoteMover(geometry, entry));
 	}
@@ -1933,6 +2046,7 @@ namespace DCLF::Scene
 			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::Schedule)]);
 		TracyCZoneN(scheduleZone, "CS.DCLF.Scene.Schedule", true);
 		const bool full = fullEvaluation;
+		rootWitness.clear();
 		// Per-frame entries are walked once per frame input: a second pass of the same frame would rewrite the same records. Such a pass
 		// takes only what its events schedule. The movers are the placement set's either way (moverSet, PublishPlacementPlan).
 		perFrameWalked = full || perFrameFrame != sceneFrame;
@@ -1971,6 +2085,7 @@ namespace DCLF::Scene
 			HandBack(nodeChanged);
 			dirtyRoots.clear();
 			propertyDependents.clear();
+			propertyDependentsAt.clear();
 			rootMotion.clear();
 			movingRoots.clear();
 			// The placement set is the full walk's anew; the mirror's trait updates are its too.
@@ -1980,6 +2095,7 @@ namespace DCLF::Scene
 			mirrorMotionNodes.clear();
 			mirrorSkinGeometries.clear();
 			hiddenDependents.clear();
+			hiddenDependentsAt.clear();
 			tables.InvalidateChangeLog();
 			buckets = {};
 			for (auto& [geometry, entry] : tracked) {
@@ -2084,7 +2200,7 @@ namespace DCLF::Scene
 			std::sort(dirtyRoots.begin(), dirtyRoots.end());
 			dirtyRoots.erase(std::unique(dirtyRoots.begin(), dirtyRoots.end()), dirtyRoots.end());
 			for (const auto* root : dirtyRoots)
-				ScheduleRoot(root);
+				ScheduleRoot(root, false);
 			dirtyRoots.clear();
 			count(delta.roots);
 		}
@@ -2155,16 +2271,26 @@ namespace DCLF::Scene
 					staleGeometrySlots.push_back(g);
 			}
 		}
+		// The graph back: every unresolved slot is stale, so every object is checked; else only those the index lists under the stale
+		// slots' chains (GeometryScan's index: a superset, each checked as the whole scan checks it).
+		const bool whole = !staleGeometrySlots.empty();
 		geometryResolvedLastWalk = resolveBuffers;
 		staleGeometrySlots.insert(staleGeometrySlots.end(), freedGeometry.begin(), freedGeometry.end());
 		freedGeometry.clear();
 		if (!staleGeometrySlots.empty()) {
 			std::sort(staleGeometrySlots.begin(), staleGeometrySlots.end());
 			staleGeometrySlots.erase(std::unique(staleGeometrySlots.begin(), staleGeometrySlots.end()), staleGeometrySlots.end());
-			for (std::uint32_t s = 0; s < tables.objects.size(); ++s) {
+			auto& d = placementDeltaStats;
+			++d.scans;
+			d.scansWhole += whole ? 1u : 0u;
+			d.staleSlots += staleGeometrySlots.size();
+			d.scanObjects += tables.objects.size();
+			const auto staleObject = [&](std::uint32_t s) {
+				if (s >= tables.objects.size())
+					return false;
 				const auto& object = tables.objects[s];
 				if ((object.flags & kObjectFree) || tables.objectSeen[s] == walkSerial)
-					continue;
+					return false;
 				// A multi-partition skin draws the slot chain linked from its first.
 				bool stale = false;
 				std::uint32_t g = object.geometryIndex;
@@ -2175,9 +2301,35 @@ namespace DCLF::Scene
 						break;
 					g = stale ? g : tables.geometries[g].nextPartition;
 				}
-				if (!stale)
-					continue;
+				return stale;
+			};
+			std::vector<std::uint32_t> candidates, hits;
+			if (whole) {
+				candidates.resize(tables.objects.size());
+				for (std::uint32_t s = 0; s < candidates.size(); ++s)
+					candidates[s] = s;
+			} else {
+				ObjectsUnder(staleGeometrySlots, true, candidates);
+			}
+			d.scanChecked += candidates.size();
+			for (const std::uint32_t s : candidates)
+				if (staleObject(s))
+					hits.push_back(s);
+			// Parity (Policy::CheckGeometryScan): the whole scan finds the same objects.
+			if (!whole && Policy::CheckGeometryScan()) {
+				++d.scanParityChecks;
+				std::size_t found = 0;
+				bool missed = false;
+				for (std::uint32_t s = 0; s < tables.objects.size(); ++s)
+					if (staleObject(s)) {
+						missed = missed || !std::binary_search(hits.begin(), hits.end(), s);
+						++found;
+					}
+				d.scanParityDiffer += missed || found != hits.size() ? 1u : 0u;
+			}
+			for (const std::uint32_t s : hits) {
 				++delta.geometryDirty;
+				++d.scanScheduled;
 				if (const auto it = tracked.find(tables.objectGeometry[s]); it != tracked.end()) {
 					Schedule(it->first, it->second);
 				} else {
@@ -2194,20 +2346,48 @@ namespace DCLF::Scene
 		std::optional<ScenePartScope> roundsScope(std::in_place, stats.scenePartMs[static_cast<std::size_t>(ScenePart::LaterRounds)],
 			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::LaterRounds)]);
 		TracyCZoneN(roundsZone, "CS.DCLF.Scene.LaterRounds", true);
+		PrefetchGeometryBuffers(second);
 		EvaluateRound(a_timer, second);
-		// A geometry slot re-resolved in place for one object: every kept object drawing it copied the old record.
+		// A geometry slot re-resolved in place for one object: every kept object drawing it copied the old record (the index's objects
+		// under it, each checked as the whole scan checks it).
 		if (!refreshedGeometry.empty()) {
 			std::sort(refreshedGeometry.begin(), refreshedGeometry.end());
+			refreshedGeometry.erase(std::unique(refreshedGeometry.begin(), refreshedGeometry.end()), refreshedGeometry.end());
 			const std::size_t third = order.size();
-			for (std::uint32_t s = 0; s < tables.objects.size(); ++s) {
+			const auto refreshedObject = [&](std::uint32_t s) {
+				if (s >= tables.objects.size())
+					return false;
 				const auto& object = tables.objects[s];
-				if ((object.flags & kObjectFree) || tables.objectSeen[s] == walkSerial ||
-					!std::binary_search(refreshedGeometry.begin(), refreshedGeometry.end(), object.geometryIndex))
-					continue;
+				return !(object.flags & kObjectFree) && tables.objectSeen[s] != walkSerial &&
+				       std::binary_search(refreshedGeometry.begin(), refreshedGeometry.end(), object.geometryIndex);
+			};
+			auto& d = placementDeltaStats;
+			std::vector<std::uint32_t> candidates, hits;
+			ObjectsUnder(refreshedGeometry, false, candidates);
+			++d.scans;
+			d.staleSlots += refreshedGeometry.size();
+			d.scanObjects += tables.objects.size();
+			d.scanChecked += candidates.size();
+			for (const std::uint32_t s : candidates)
+				if (refreshedObject(s))
+					hits.push_back(s);
+			if (Policy::CheckGeometryScan()) {
+				++d.scanParityChecks;
+				std::size_t found = 0;
+				bool missed = false;
+				for (std::uint32_t s = 0; s < tables.objects.size(); ++s)
+					if (refreshedObject(s)) {
+						missed = missed || !std::binary_search(hits.begin(), hits.end(), s);
+						++found;
+					}
+				d.scanParityDiffer += missed || found != hits.size() ? 1u : 0u;
+			}
+			for (const std::uint32_t s : hits)
 				if (const auto it = tracked.find(tables.objectGeometry[s]); it != tracked.end())
 					Schedule(it->first, it->second);
-			}
 			delta.geometryDirty += order.size() - third;
+			d.scanScheduled += order.size() - third;
+			PrefetchGeometryBuffers(third);
 			EvaluateRound(a_timer, third);
 			refreshedGeometry.clear();
 		}

@@ -562,7 +562,7 @@ namespace DCLF::Scene
 			if (entry.sunEntryNode && !OwnRoot(entry.sunEntryNode, a_live))
 				entry.sunEntryNode = nullptr;
 			if (entry.sunEntryNode) {
-				rootDependents[entry.sunEntryNode].push_back(a_geometry);
+				List(rootDependents, rootDependentsAt, entry.sunEntryNode, a_geometry);
 				const auto* rootRecord = mirror.Node(entry.sunEntryNode);
 				if (const auto* rootRef = rootRecord ? static_cast<const RE::TESObjectREFR*>(rootRecord->userData) : nullptr;
 					rootRef && rootReference.try_emplace(entry.sunEntryNode, rootRef).second)
@@ -585,7 +585,7 @@ namespace DCLF::Scene
 				lightEntriesAppeared += dependents.empty() ? 1 : 0;
 				if (dependents.empty())
 					lightEntryChanges.push_back({ lightEntry, 1 });  // a light entry new to the frame's set (IsLightEntry, through the log)
-				dependents.push_back(a_geometry);
+				List(lightDependents, lightDependentsAt, lightEntry, a_geometry);
 				entry.lightRoot = lightEntry;
 				MarkLightEntryDirty(lightEntry);
 			}

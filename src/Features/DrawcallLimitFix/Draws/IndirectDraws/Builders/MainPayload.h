@@ -61,7 +61,37 @@ namespace DCLF::Draws
 		// technique bindings, projected, constant tables (two words).
 		std::array<std::uint64_t, 8> keyMoved{};
 		std::atomic<std::uint32_t> busy{ 0 };
+		// Per pipeline slot: its constant tables' hash (TablesHash) and the lookup entry it was taken from (the lookups' instance and the
+		// entry's version, which moves with the tables), so a build hashes only the entries that changed.
+		struct TablesHashOf
+		{
+			std::uint64_t instance = 0;
+			std::uint32_t version = 0;
+			std::uint64_t hash = 0;
+		};
+		std::vector<TablesHashOf> tablesHashes;
+		// The region's pair work and the builder's stages (MainBuild::UpdateRegionPairs, RunAhead), since the last report (MainPairsReport).
+		struct PairStats
+		{
+			std::uint64_t builds = 0;          // builds that updated the region's pairs
+			std::uint64_t checked = 0;         // pairs the events named (the check list)
+			std::uint64_t resolved = 0;        // of those, resolved again (their witness moved)
+			std::uint64_t everyPair = 0;       // builds that checked every pair (frame witness moved, a log lost)
+			std::uint64_t pipelinesMoved = 0;  // pipelines whose witness moved (their pairs checked)
+			std::uint64_t fannedOut = 0, chunks = 0;  // builds that resolved on the pool, and their chunks
+			std::uint64_t entriesRewritten = 0;       // region entries Pairs.Inputs rewrote
+			std::uint64_t bundles = 0;                // owner bundles made again
+			std::uint64_t resyncs = 0, resyncsFannedOut = 0;
+			double resolveMs = 0, resolveMaxMs = 0, inputsMs = 0, bundleMs = 0;
+			// RunAhead: the stages, and the builds whose stream views and main build overlapped on the pool.
+			std::uint64_t aheads = 0, overlapped = 0;
+			double streamsMs = 0, mainMs = 0, stagesMs = 0, shadowMs = 0, exclusionsMs = 0;
+			// Parity observers (Policy::CheckBuilderPairs, Policy::CheckRowPacking).
+			std::uint64_t parityChecks = 0, parityMismatches = 0, packingChecks = 0, packingConflicts = 0;
+		} pairStats;
 	};
+	/** @brief The `[DCLF] main pairs` report line from a_rows.pairStats, which it resets (the snapshot builder's, with StoresReport). */
+	std::string MainPairsReport(MainRows& a_rows);
 
 	/**
 	 * @brief Rows a table at a_contentEpoch lacks, each with its header's addresses made absolute (a_base plus the row's offset):

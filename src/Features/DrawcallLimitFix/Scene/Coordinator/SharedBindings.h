@@ -14,6 +14,7 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
 #include "Features/DrawcallLimitFix/Draws/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
@@ -60,6 +61,7 @@ namespace DCLF
 		{
 			bool wanted = false;   // the technique binds a mask
 			bool settled = false;  // answered (resolved or rejected: a rejection is permanent) or binding none: not looked up again
+			bool listed = false;   // on `dirty`
 		};
 		/** @brief A shadow texture in the dependency index: asked for (pending), or answered (in the lookups' shadowTextures, permanent). */
 		struct ShadowTexture
@@ -91,6 +93,27 @@ namespace DCLF
 		bool sharedChanged = false;  // a shared entry's owner changed since the binding block was sealed
 		// Parallel to Tables::pipelines.
 		std::vector<Mask> masks;
+		// The masks to look up this pass (UpdateSharedBindings), each once: a pipeline made or newly used, one not settled. Everything
+		// else stands while the technique rows' bindings, the texture generation and the used set stand (the witnesses below).
+		std::vector<std::uint32_t> dirty;
+		std::vector<std::uint64_t> usedSeen;          // the used pipelines as the last pass saw them
+		std::vector<std::uint32_t> techniqueSeen;     // each technique row's bindingVersion then
+		std::uint32_t textureGenerationSeen = ~0u;    // GpuTextures::Generation then
+		void MarkMask(std::uint32_t a_slot)
+		{
+			if (masks.size() <= a_slot)
+				masks.resize(std::size_t(a_slot) + 1);
+			if (!masks[a_slot].listed) {
+				masks[a_slot].listed = true;
+				dirty.push_back(a_slot);
+			}
+		}
+		/** @brief The work the masks' change set saved, and its parity (every used mask checked; CS_DCLF_PERSISTENT_PARITY), for the material records' line. */
+		struct Work
+		{
+			std::uint64_t masksChecked = 0, masksResolved = 0, maskSweeps = 0;
+			Diagnostics::ParityCounter parity;
+		} work;
 		// The dependency index's shadow textures.
 		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, ShadowTexture> shadowTextures;
 		std::uint32_t shadowPending = 0;
