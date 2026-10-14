@@ -87,7 +87,7 @@ public:
 
 	struct Sky_Update
 	{
-		static void thunk(RE::Sky* sky);
+		static void thunk(RE::Sky* sky, float deltaTime);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
