@@ -8,9 +8,9 @@
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
@@ -21,8 +21,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include <Tracy/Tracy.hpp>
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 
 #include <algorithm>

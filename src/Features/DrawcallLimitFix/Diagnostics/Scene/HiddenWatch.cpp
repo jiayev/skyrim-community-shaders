@@ -3,7 +3,7 @@
 
 #include "HiddenWatch.h"
 
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 #include <TlHelp32.h>
 

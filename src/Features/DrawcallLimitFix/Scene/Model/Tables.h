@@ -14,8 +14,8 @@
 
 #include <ankerl/unordered_dense.h>
 
-#include "Features/DrawcallLimitFix/Runtime/KeptState.h"
-#include "Features/DrawcallLimitFix/Runtime/SlotTable.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 #include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"

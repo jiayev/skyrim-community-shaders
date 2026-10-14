@@ -5,7 +5,7 @@
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 
 namespace DCLF::Scene
 {

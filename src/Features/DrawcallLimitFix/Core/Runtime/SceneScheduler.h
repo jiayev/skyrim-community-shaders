@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Features/DrawcallLimitFix/Runtime/SceneExecutor.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneGraph.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneGraph.h"
 
 #include <functional>
 #include <string_view>

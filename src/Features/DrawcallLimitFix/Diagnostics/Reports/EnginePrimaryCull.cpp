@@ -1,7 +1,7 @@
 #include "Engine.h"
 
 #include "Schedule.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/CutObservers.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/LightCulls.h"

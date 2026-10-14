@@ -3,7 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 
 #include <algorithm>

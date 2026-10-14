@@ -3,8 +3,8 @@
 
 #include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include <ORGModuleServices/Async/LeasedArraySlots.h>
 
 #include <array>

@@ -24,7 +24,7 @@ namespace DCLF::SceneCapture
 
 #include <ankerl/unordered_dense.h>
 
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"

@@ -1,5 +1,5 @@
 // Toggles: the flag table (seed, menu entry, dependencies), packing the active set, and the per-frame apply (render thread).
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 #include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 #include "Features/Skylighting.h"

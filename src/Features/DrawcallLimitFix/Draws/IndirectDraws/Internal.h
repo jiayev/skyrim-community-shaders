@@ -6,12 +6,12 @@
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
-#include "Features/DrawcallLimitFix/Runtime/RenderThreadBudget.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ConstantMirror.h"
 #include "Features/DrawcallLimitFix/Draws/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Draws/Pipelines/DrawPipelinesRhi.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Draws/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
@@ -36,16 +36,16 @@
 #include "RE/B/BSShadowDirectionalLight.h"
 #include "RE/B/BSCullingProcess.h"
 #include "RE/N/NiCamera.h"
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include <ORGModuleServices/Async/RevisionAssembly.h>
 #include <ORGModuleServices/Async/SerializedTaskPump.h>
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Draws.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/VertexInput.h"
 #include "Deferred.h"
 #include "Features/LinearLighting.h"
@@ -90,9 +90,9 @@
 #include <optional>
 #include <cstring>
 
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Runtime/FrameRetirement.h"
-#include "Features/DrawcallLimitFix/Runtime/LatestSlot.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Core/GpuLayouts.h"
 #include "Core/Versioned.h"
 #include "Core/SceneBufferSet.h"

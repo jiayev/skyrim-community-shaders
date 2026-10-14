@@ -1,6 +1,6 @@
-#include "Features/DrawcallLimitFix/Runtime/KeptState.h"
-#include "Features/DrawcallLimitFix/Runtime/Retirement.h"
-#include "Features/DrawcallLimitFix/Runtime/SlotTable.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/Retirement.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
 #include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include <cassert>
 #include <map>

@@ -6,9 +6,9 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
-#include "Features/DrawcallLimitFix/Runtime/RenderThreadBudget.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"

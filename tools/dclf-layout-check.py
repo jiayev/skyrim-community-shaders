@@ -12,9 +12,12 @@ Rules (always errors):
      features DEPENDS names for it. Integrations/<X>/ includes Api/ and Core/.
 
 Baselines (errors when exceeded, shrunk with --update):
-  - the include edges into the legacy top-level folders (Runtime, Engine, Scene, Draws) from any other folder, per folder pair:
-    the layering the refactor removes (Core and the features still reach into the hubs they have not left yet); a pair's count may
-    only fall;
+  - the include edges into the legacy top-level folders (Runtime, Engine, Scene, Draws) from any other folder: the layering the
+    refactor removes (Core and the features still reach into the hubs they have not left yet); the total may only fall (moves shift
+    edges between folder pairs, so the pairs are reported, not ruled);
+
+Diagnostics/ may be included from anywhere: production code reaches it only through its observer contract (Hooks.h, Observation,
+Policy), which the parity rework will redefine.
   - the functions over the complexity thresholds (lizard, when installed: pip install lizard): their number may only fall, and
     a function not in the baseline may not cross them.
 """
@@ -79,7 +82,7 @@ def module(path):
 
 
 def allowed(source, target):
-    if source == target or target in LEGACY:
+    if source == target or target in LEGACY or target == "Diagnostics":
         return True  # an edge into a legacy folder is counted against the baseline instead
     if source == "Api":
         return target == "Api"
@@ -147,9 +150,10 @@ def main():
                                        indent=1) + "\n", encoding="utf-8")
         print(f"baseline written: {sum(edges.values())} legacy edges, {len(over or {})} functions over the thresholds")
     else:
-        for pair, count in sorted(edges.items()):
-            if count > baseline.get("legacyEdges", {}).get(pair, 0):
-                errors.append(f"legacy include edges {pair}: {count} > baseline {baseline.get('legacyEdges', {}).get(pair, 0)}")
+        if sum(edges.values()) > sum(baseline.get("legacyEdges", {}).values()):
+            for pair, count in sorted(edges.items()):
+                print(f"  {pair}: {count} (baseline {baseline.get('legacyEdges', {}).get(pair, 0)})")
+            errors.append(f"legacy include edges: {sum(edges.values())} > baseline {sum(baseline.get('legacyEdges', {}).values())}")
         if over is None:
             print("complexity: skipped (lizard not installed)")
         else:

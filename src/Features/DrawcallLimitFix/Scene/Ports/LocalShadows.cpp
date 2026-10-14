@@ -2,7 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Scene/Ports/LocalShadows.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
 #include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"

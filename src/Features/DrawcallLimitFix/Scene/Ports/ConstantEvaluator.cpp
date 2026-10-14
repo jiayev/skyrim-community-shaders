@@ -2,11 +2,11 @@
 // EvaluateTechnique.
 
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 
-#include "Features/DrawcallLimitFix/Runtime/RenderThreadBudget.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 

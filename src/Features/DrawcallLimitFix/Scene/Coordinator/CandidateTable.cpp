@@ -3,8 +3,8 @@
 #include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-#include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 
 #include <algorithm>
 #include <atomic>

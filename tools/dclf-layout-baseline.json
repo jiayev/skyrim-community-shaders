@@ -1,16 +1,12 @@
 {
  "legacyEdges": {
-  "Draws -> Engine": 42,
-  "Draws -> Runtime": 31,
+  "Core -> Scene": 1,
+  "Draws -> Engine": 32,
   "Draws -> Scene": 47,
   "Engine -> Draws": 3,
-  "Engine -> Runtime": 36,
   "Engine -> Scene": 33,
-  "Runtime -> Engine": 1,
-  "Runtime -> Scene": 1,
   "Scene -> Draws": 15,
-  "Scene -> Engine": 70,
-  "Scene -> Runtime": 62
+  "Scene -> Engine": 41
  },
  "overThresholds": {
   "Features/DrawcallLimitFix/Diagnostics/Draws/BuildParity.cpp::DCLF::Diagnostics::CheckBuildParity": [

@@ -1305,7 +1305,7 @@ resident-draw, set and fade parity; motion m28/m29).
     (SelectPublication, IndirectDraws::SetApplicable) - its tables, claims and PrimaryCull notes together - or keeps the installed
     one whole (13-29% of frames in motion: the revision's recordings a frame late). Withdrawal is the frame's alone.
     Keeping an older publication needs what it names to stay valid: BasicRenderer's rule, nothing logically freed while a version
-    that names it lives. `RetirementChain` (Runtime/Retirement.h): each publication holds the chain node opened with it, a node
+    that names it lives. `RetirementChain` (Core/Runtime/Retirement.h): each publication holds the chain node opened with it, a node
     holds the newer one, and a node's batch - object, tree, fade-root, extras, bone, face-stream slots, the SlotTables' slots, the
     material/pipeline lookups' retirements, the geometry buffers' owners, the material references, every engine reference handed
     back - returns to the coordinator's free lists (RecycleRetired) once no publication up to it lives. CPU test
@@ -1921,7 +1921,7 @@ resident-draw, set and fade parity; motion m28/m29).
     the publication. The kicks and joins stay (T6b3c removes them); behaviour is meant to be the same, with the differences named.
     - **The publication.** `ScenePublication` (public, immutable) carries the tables, lookups, catalog, claims, draws, lacking counts,
       the sun and light candidates with their generations, the category nodes (copied again only when they changed), `tablesGeneration`, the toggles generation its commit was made under, a `RevisionRequest` and a `sequence`.
-      `PublishScene` posts it to a `LatestSlot` (`Runtime/LatestSlot.h`, promoted from `DrawPipelines.cpp`; a raw pointer exchange).
+      `PublishScene` posts it to a `LatestSlot` (`Core/Runtime/LatestSlot.h`, promoted from `DrawPipelines.cpp`; a raw pointer exchange).
       The render thread is its only taker: `MakeRevisionForNewest`, at Present and the frame's start, takes what was posted and makes a
       revision from the newest whenever it is new (joined or not: the request is immutable), else once a frame, so every publication
       pending has had its revision. The render thread keeps the pending ones (oldest first) and the installed one; `SelectPublication` installs the
@@ -1931,7 +1931,7 @@ resident-draw, set and fade parity; motion m28/m29).
       as a candidate (its notes are not: the log). The render thread's republish is gone: the coordinator publishes at a scene pass's
       start when its tables moved since its last publication or a pass left frame inputs unpublished (`tables published`' count,
       now not a render-thread cost), so a change Present applied (menus) is selectable a frame later than before.
-    - **The publication log** (`Runtime/PublicationLog.h`, forward-linked, one producer, one consumer). Each publication's node
+    - **The publication log** (`Core/Runtime/PublicationLog.h`, forward-linked, one producer, one consumer). Each publication's node
       carries its claims' changes (joined, left) and the frame inputs its passes made: the placement plans, the shading names, the
       fade and tree seed requests, the switches applied (`kMaxSwitchChanges` gone: no cap), the retired imports and the actors'
       wetness membership changes, and the light entries' changes (a key of `lightDependents` gaining its first geometry or losing its
@@ -2172,7 +2172,7 @@ resident-draw, set and fade parity; motion m28/m29).
       lane is the scene work's alone (step 6c), so a long pass never holds up the coordinator's jobs (AsyncWorker's, the frame's builds),
       and its thread is above the engine's job threads as the scene work's was. One pass at a time, level-triggered, lock-free; a wake
       while a pass runs queues exactly one more (the pump's epoch).
-    - **Wakes, by source** (`Runtime/SceneWake.h`: `WakeScenePass(SceneWake)`, any thread, after the push it announces; a bit per source
+    - **Wakes, by source** (`Core/Scene/SceneWake.h`: `WakeScenePass(SceneWake)`, any thread, after the push it announces; a bit per source
       the pass takes at its start, with a fence pair, so a producer whose bit is set does no atomic RMW). The frame-input pass is the
       backbone (`FrameInput`, once a frame; the frame's start folds its posts into one wake: `ScenePassWakeBatch`). Besides it a pass runs
       only for an input wanted before it: from the tracker's stack `Attach` (in the world alone: its capture), `Detach`, `Hidden`, `Leaf`
@@ -2700,7 +2700,7 @@ retired.
 - **GrowableBufferSet growth** allocates from a pool, and each version owns its lease. A frame binds the adopted set after its
   last submission (`BindAdopted`, `SubmittedRetirementPoint()`).
 - **Deleted:** `TransportBuffer` (`EnsureTransport`, `ReplaceTransport`) and ORG's `Ownership::RetiredFrameRegion`.
-- **DCLF's clock** (`Runtime/FrameRetirement.h`) is advanced by the graph host's completed-frame callback, so retirement is
+- **DCLF's clock** (`Core/Runtime/FrameRetirement.h`) is advanced by the graph host's completed-frame callback, so retirement is
   exact GPU completion.
 - **The DCLF payload** (`Core/PayloadVersions.{h,cpp}`).
   - **Deleted:** the ring (`Core/PayloadRing.cpp`; `RingEntry`, `RingLatch`, `ShadowRingLatch`, `ringShadow`,

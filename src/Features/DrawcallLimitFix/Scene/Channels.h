@@ -8,11 +8,11 @@
 #include <memory>
 #include <vector>
 
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Runtime/LatestSlot.h"
-#include "Features/DrawcallLimitFix/Runtime/PublicationLog.h"
-#include "Features/DrawcallLimitFix/Runtime/Retirement.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/PublicationLog.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/Retirement.h"
+#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/GeometryPort.h"

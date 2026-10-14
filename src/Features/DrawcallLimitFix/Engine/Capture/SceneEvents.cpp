@@ -3,7 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Draws/Gpu/FrameValueMoves.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"

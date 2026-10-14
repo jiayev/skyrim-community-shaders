@@ -2,10 +2,10 @@
 // on any thread), and the tree list's multibound results around its loop (main thread). TreeAnimation.h describes it.
 #include "Features/DrawcallLimitFix/Engine/Cull/TreeAnimation.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 
 #include <ankerl/unordered_dense.h>

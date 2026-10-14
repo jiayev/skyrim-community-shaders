@@ -3,7 +3,7 @@
 #include "Engine.h"
 #include "Schedule.h"
 #include "Spread.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneObservers.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"

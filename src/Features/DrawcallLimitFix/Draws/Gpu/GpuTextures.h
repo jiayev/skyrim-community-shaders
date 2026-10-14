@@ -6,7 +6,7 @@
 #include <memory>
 #include <vector>
 
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 
 struct ID3D11ShaderResourceView;
 

@@ -2,7 +2,7 @@
 // (evaluate, then merge in order), the object records and their geometry slots, face shapes' regions, and the per-frame traits.
 
 #include "Internal.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 
 #include <atomic>

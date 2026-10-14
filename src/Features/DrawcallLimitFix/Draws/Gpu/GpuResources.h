@@ -10,7 +10,7 @@
 
 #include <winrt/base.h>
 
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 
 namespace DCLF
 {

@@ -1,7 +1,7 @@
 // ReflectionFaces: the water reflection update, add-root and face render hooks (render thread).
 
 #include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 

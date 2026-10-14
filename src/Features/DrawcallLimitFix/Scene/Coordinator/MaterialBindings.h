@@ -9,8 +9,8 @@
 
 #include <ankerl/unordered_dense.h>
 
-#include "Features/DrawcallLimitFix/Runtime/KeptState.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Draws/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
 
