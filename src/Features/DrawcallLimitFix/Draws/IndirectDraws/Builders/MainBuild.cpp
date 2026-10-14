@@ -153,7 +153,8 @@ namespace DCLF::Draws
 		{
 			return a_left.written == a_right.written && a_left.texturesOk == a_right.texturesOk && a_left.deferred == a_right.deferred &&
 			       a_left.missingTexture == a_right.missingTexture && a_left.textures == a_right.textures && a_left.samplers == a_right.samplers &&
-			       a_left.features == a_right.features && a_left.tables == a_right.tables && a_left.blocksOk == a_right.blocksOk;
+			       a_left.features == a_right.features && a_left.tables == a_right.tables && a_left.blocksOk == a_right.blocksOk &&
+			       a_left.texcoordDword == a_right.texcoordDword && a_left.texcoordMask == a_right.texcoordMask;
 		}
 
 		/**
@@ -805,6 +806,23 @@ namespace DCLF::Draws
 		if (state.blocksOk) {
 			PackConstantGroup(material.vs, vsLayout, blocks.vsTable, vsGroup, vsFirst, std::span(row.bytes.data() + kMaterialRowVS, kMaterialRowVSBytes));
 			PackConstantGroup(material.ps, psLayout, blocks.psTable, psGroup, psFirst, std::span(row.bytes.data() + kMaterialRowPS, kMaterialRowPSBytes));
+			// TexcoordOffset's place: the row holds the record's (capture-time) value, which the frame's patch overwrites with the buffer
+			// the frame's shaders read (TextureTransformList, TextureTransformsCS).
+			constexpr std::uint32_t kLightingVSTexcoordOffset = 11;
+			const std::uint32_t variable = effect ? kEffectVSTexcoordOffset : kLightingVSTexcoordOffset;
+			if (variable < vsLayout.count && ((vsGroup >> variable) & 1)) {
+				const std::uint32_t first = vsLayout.offset[variable];
+				const std::uint32_t dword = PackedPositionOf(vsLayout, blocks.vsTable, vsGroup, vsFirst, first);
+				std::uint8_t mask = 0;
+				for (std::uint32_t c = 0; dword != ~0u && c < vsLayout.size[variable] && c < 4; ++c)
+					if (material.vs.Written(first + c) && PackedPositionOf(vsLayout, blocks.vsTable, vsGroup, vsFirst, first + c) == dword + c &&
+						(dword + c) * 4 + 4 <= kMaterialRowVSBytes)
+						mask |= static_cast<std::uint8_t>(1u << c);
+				if (mask) {
+					state.texcoordDword = dword;
+					state.texcoordMask = mask;
+				}
+			}
 		}
 		auto& header = HeaderOf(row);
 		header.vsMaterial = kMaterialRowVS;
@@ -1922,6 +1940,45 @@ namespace DCLF::Draws
 			out.faceStreams = tables.faceStreams;
 		out.materialRows = rows.material.View();
 		out.pipelineRows = rows.pipeline.View();
+		// The rows the frame patches TexcoordOffset into (TextureTransformList): every kept row (MainRows::materials, whatever build packed
+		// it) packed from its slot's current record that places it, its slot keyed (its material held while the publication lives). All of
+		// them, scrolling or not: a backing's bytes are then the frame's value whatever patches its history holds. A slot's liveness is its
+		// key (cleared when freed: Slots.cpp): the slot tables' allocation state is the coordinator's alone, never published.
+		{
+			ZoneScopedN("CS.DCLF.BuildMain.TextureTransforms");
+			auto list = std::make_shared<TextureTransformList>();
+			const std::size_t slots = std::min({ rows.materials.size(), tables.materials.size(), tables.materialSlotKey.size(), tables.materialVersion.size() });
+			std::uint64_t unpacked = 0, noTexcoord = 0, freeSlot = 0, stale = 0;
+			for (std::uint32_t m = 0; m < slots; ++m) {
+				const auto& state = rows.materials[m];
+				if (!state.written || !state.blocksOk) {
+					++unpacked;
+					continue;
+				}
+				if (!state.texcoordMask) {
+					++noTexcoord;
+					continue;
+				}
+				if (!tables.materialSlotKey[m].first) {
+					++freeSlot;
+					continue;
+				}
+				if (state.key[0] != tables.materialVersion[m]) {
+					++stale;
+					continue;
+				}
+				list->entries.push_back({ tables.materialSlotKey[m].first,
+					static_cast<std::uint32_t>(std::uint64_t(m) * kMaterialRowBytes + kMaterialRowVS + std::uint64_t(state.texcoordDword) * 4), state.texcoordMask });
+			}
+			namespace stats = TextureTransformStats;
+			stats::built.fetch_add(1, std::memory_order_relaxed);
+			stats::builtEntries.fetch_add(list->entries.size(), std::memory_order_relaxed);
+			stats::rowsUnpacked.fetch_add(unpacked, std::memory_order_relaxed);
+			stats::rowsNoTexcoord.fetch_add(noTexcoord, std::memory_order_relaxed);
+			stats::rowsFreeSlot.fetch_add(freeSlot, std::memory_order_relaxed);
+			stats::rowsStale.fetch_add(stale, std::memory_order_relaxed);
+			out.textureTransforms = std::move(list);
+		}
 		Mark(5);
 		// The other segment's payload: the same list, rows and templates with its own inputs. One-off counts stay the primary's;
 		// the depth variant resolves no frame textures.

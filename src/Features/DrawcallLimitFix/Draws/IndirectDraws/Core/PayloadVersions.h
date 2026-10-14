@@ -4,6 +4,8 @@
 // PayloadBuilder from the publication's payloads, installed with the draws and read by the epochs by value. Included by Internal.h,
 // after Builders/ShadowPayload.h.
 
+#include "Features/DrawcallLimitFix/Draws/Gpu/TextureTransforms.h"
+
 namespace DCLF::Draws
 {
 	/** @brief The payload's buffers: one pool each (org::services::JournaledBufferSet's parts, in this order). */
@@ -46,6 +48,9 @@ namespace DCLF::Draws
 		// what the frames that read it bound.
 		std::array<org::services::BackingLease, kPayloadParts> leases;
 		std::uint64_t serial = 0;  // process-unique per payload made (a kept publication keeps its payload, and its serial)
+		// The main material rows that carry TexcoordOffset (MainPayload::textureTransforms): installed with the payload, the frame's
+		// values patch them (FrameValues::SetTextureTransforms, TextureTransformsCS). Null without main parts.
+		std::shared_ptr<const TextureTransformList> textureTransforms;
 		// Every part's uploads (null: nothing was sent). The snapshot posts its Recordings stage only once this completed.
 		std::shared_ptr<const org::async::GpuSubmissionSet> ready;
 		// What the publication sent, per part (diagnostics: catch-up bytes and runs, whether a backing was made).

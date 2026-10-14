@@ -251,9 +251,13 @@ namespace DCLF::Scene
 		}
 		ps.maxPassesInFrame = (std::max)(ps.maxPassesInFrame, ++ps.passesThisFrame);
 		TracyPlot("CS.DCLF.ScenePassMs", ms);
-		// The pass of sceneFrame's inputs is done, its publication (if any) posted: the snapshot builder may publish for the frame now.
-		IndirectDraws::Get().NoteScenePassDone(sceneFrame);
+		{
+			// The pass of sceneFrame's inputs is done, its publication (if any) posted: the snapshot builder may publish for the frame now.
+			ZoneScopedN("CS.DCLF.Scene.NoteScenePassDone");
+			IndirectDraws::Get().NoteScenePassDone(sceneFrame);
+		}
 		// The coordinator's report lines, when its frame crossed into a new window.
+		ZoneNamedN(passReportsZone, "CS.DCLF.Scene.PassReports", true);
 		Reports::ScenePassEnd(*this, sceneFrame);
 		ReportMoverGate();
 		ReportPublicationPacing();
@@ -280,6 +284,16 @@ namespace DCLF::Scene
 				p.claimsReplayed, static_cast<double>(p.claimsKeys) / static_cast<double>((std::max)(p.claimsReplayed, std::uint64_t(1))), p.claimsWhole,
 				p.claimsShared, p.claimsRevoked, p.restMs / publications, p.parityChecks, p.parityTables, p.parityClaims,
 				!p.parityChecks ? "" : (p.parityTables || p.parityClaims) ? " <- PACED PUBLICATION DIFFERS; first: " : " <- OK", p.parityFirst);
+			const double columns = static_cast<double>(p.replayColumns + p.replaySkipped);
+			logger::info("[DCLF] publication replay (W6: the logs collected once, the columns and records by jobs, the nearest pooled snapshot): per publication {:.1f} "
+						 "log entries for {:.1f} object slots, {:.1f} material-log entries for {:.1f} records; slot columns {:.1f} copied in {:.1f} runs, {:.1f}% skipped (no "
+						 "cause covers them); {} of {} replays on the pool, {} snapshots nearer than the first free; replay {:.3f} ms a publication; pass fixed cost: forward "
+						 "pipelines counted {} times ({} kept), waiting slots compacted {} times ({} kept)",
+				static_cast<double>(p.replayLogEntries) / publications, static_cast<double>(p.replaySlots) / publications,
+				static_cast<double>(p.replayMaterialEntries) / publications, static_cast<double>(p.replayMaterials) / publications,
+				static_cast<double>(p.replayColumns) / publications, static_cast<double>(p.replayRuns) / publications,
+				columns > 0.0 ? 100.0 * static_cast<double>(p.replaySkipped) / columns : 0.0, p.replayPooled, p.published, p.replayNearer, p.replayMs / publications,
+				p.forwardCounted, p.forwardKept, p.waitingCompacted, p.waitingKept);
 		}
 		const std::uint32_t lastFrame = p.lastFrame;
 		p = {};

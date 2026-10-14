@@ -57,6 +57,13 @@ namespace DCLF::Draws
 		std::array<org::services::JournaledPartRequest, kPayloadParts> requests{};
 		auto out = std::make_shared<PayloadVersions>();
 		out->main = a_main != nullptr;
+		out->textureTransforms = a_main ? a_main->textureTransforms : nullptr;
+		if (out->textureTransforms) {
+			TextureTransformStats::published.fetch_add(1, std::memory_order_relaxed);
+			TextureTransformStats::publishedEntries.fetch_add(out->textureTransforms->entries.size(), std::memory_order_relaxed);
+		} else if (a_main) {
+			TextureTransformStats::publishedNone.fetch_add(1, std::memory_order_relaxed);  // a main payload without its list: a defect
+		}
 		out->shadow = a_shadow != nullptr;
 		std::array<std::uint64_t, kPayloadParts> units{};  // each part's elements (PayloadBuffer::units)
 

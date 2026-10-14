@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace DCLF
 {
@@ -32,10 +34,35 @@ namespace DCLF
 			std::array<std::size_t, kDomains> queued{}, active{}, highWater{};
 		};
 
+		/**
+		 * @brief Per ParallelFor name, cumulative since start (a reporter takes deltas). blockedNanoseconds is the time callers spent
+		 * blocked on chunks a helper had claimed and not finished: the wait ParallelFor exists to keep small.
+		 */
+		struct ParallelForStatistics
+		{
+			std::string name;
+			std::uint64_t calls = 0;                  // calls with work (a_count > 0)
+			std::uint64_t chunks = 0, helperChunks = 0;  // every chunk, and those a helper ran
+			std::uint64_t blocked = 0;                // calls whose caller had to wait for a helper's chunk
+			std::uint64_t blockedNanoseconds = 0, maxBlockedNanoseconds = 0;  // max: since start, or since the last take
+			std::uint64_t boosts = 0;                 // helpers raised to their caller's priority
+			std::uint64_t idleHelpers = 0;            // helpers that started once every chunk was taken
+		};
+
 		// Called on each worker thread before it takes work (a name, a priority): its class, and its index within the class.
 		using ThreadStart = std::function<void(org::async::TaskClass, unsigned)>;
+		/**
+		 * @brief The calling thread's scheduling priority, higher more urgent (Windows' THREAD_PRIORITY_* values): get reads it, set
+		 * changes it. Given both, a helper running a ParallelFor caller's chunks runs at least at the caller's priority and is restored
+		 * afterwards. Each worker reads its own once, after ThreadStart; nothing else may change a worker's priority.
+		 */
+		struct ThreadPriority
+		{
+			std::function<int()> get;
+			std::function<void(int)> set;
+		};
 
-		explicit SceneExecutor(unsigned preparationWorkers = 2, ThreadStart onThreadStart = {});
+		explicit SceneExecutor(unsigned preparationWorkers = 2, ThreadStart onThreadStart = {}, ThreadPriority priority = {});
 		~SceneExecutor() override;
 		SceneExecutor(const SceneExecutor&) = delete;
 		SceneExecutor& operator=(const SceneExecutor&) = delete;
@@ -50,9 +77,14 @@ namespace DCLF
 		 * itself and waits only for chunks a worker is running, never for queued work: a helper that starts once the chunks are
 		 * gone does nothing, and a helper that never starts leaves its chunks to the others. The first exception a chunk throws is
 		 * rethrown here once every claimed chunk finished. For worker threads: it waits, so never on the render thread.
+		 * Chunks are exactly [k * grain, min(count, (k + 1) * grain)) (callers index per-chunk results by a_begin / grain), so what
+		 * the caller can wait for is one grain per helper; a helper holding one runs at least at the caller's priority (ThreadPriority),
+		 * so the engine's normal-priority threads do not preempt it while an above-normal caller waits.
 		 */
 		void ParallelFor(std::string_view a_name, std::size_t a_count, std::size_t a_grain, const std::function<void(std::size_t, std::size_t)>& a_body);
 		Statistics GetStatistics() const;
+		/** @brief Every ParallelFor name seen so far, in no particular order; a_takePeaks resets each maxBlockedNanoseconds once read. */
+		std::vector<ParallelForStatistics> GetParallelForStatistics(bool a_takePeaks = false) const;
 		// Owner must outlive its callbacks. Calling Shutdown/Wait on its workers is an error.
 		void Shutdown();
 

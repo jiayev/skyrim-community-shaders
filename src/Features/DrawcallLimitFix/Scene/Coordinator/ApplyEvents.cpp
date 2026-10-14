@@ -5,9 +5,17 @@
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
+#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
 
 namespace DCLF::Scene
 {
+	struct Coordinator::BatchIndex
+	{
+		std::vector<SceneTracker::Event*> structural;      // head's attach and detach events, not mirror-only, in order
+		std::vector<const SceneCapture::Records*> leaves;  // both heads' captures and leaf updates' records, in order
+		bool sawDetach = false;                            // one of structural is a detach
+	};
+
 	std::shared_ptr<Coordinator::EventBatch> Coordinator::CollectEvents()
 	{
 		ZoneScopedN("CS.DCLF.Scene.CollectEvents");
@@ -169,6 +177,9 @@ namespace DCLF::Scene
 			materialRequested.erase(a_answer.material);
 			++(a_answer.captured ? residentStats.materialsServed : residentStats.materialsStale);
 		});
+		// Aged by frame, so once a frame: a later pass of the same frame would find nothing older (frames only move forward).
+		if (std::exchange(materialSnapshotsAgedFrame, sceneFrame) == sceneFrame)
+			return;
 		for (auto it = materialSnapshots.begin(); it != materialSnapshots.end();) {
 			if (sceneFrame - it->second.frame > kMaterialSnapshotFrames) {
 				++s.aged;
@@ -243,11 +254,15 @@ namespace DCLF::Scene
 	void Coordinator::ApplyBatch(std::shared_ptr<EventBatch> a_batch)
 	{
 		// Material captures first: an attach names materials whose captures were pushed before it.
-		DrainMaterialCaptures();
+		{
+			ZoneScopedN("CS.DCLF.Scene.MaterialCaptures");
+			DrainMaterialCaptures();
+		}
 		auto batch = std::move(a_batch);
 		BatchUnwindGuard unwindGuard(*this, batch);
 		const bool rescanned = rescanPending;
 		if (rescanPending) {
+			ZoneScopedN("CS.DCLF.Scene.Rescan");
 			// With everything cleared, RefreshCategoryNodes walks every category node as new: the full rescan.
 			rescanPending = false;
 			for (auto& [geometry, entry] : tracked) {
@@ -263,6 +278,8 @@ namespace DCLF::Scene
 			++trackedLayout;
 			sceneIdentity.Reset();
 			categoryNodes.clear();
+			categoryMembers.clear();
+			categoryMembersAt.clear();
 			nodeSetsDirty = true;
 			for (auto& [root, entry] : alwaysRenderRoots)
 				HandBack(std::move(entry.root));
@@ -296,16 +313,14 @@ namespace DCLF::Scene
 			ResetGateTags();
 		}
 
-		ApplyMirrorEvents(*batch);
+		BatchIndex index;
+		ApplyMirrorEvents(*batch, index);
 
 		// A detach forces the category refresh: it can take a category node the signature cannot see go until the cell does.
 		{
 			DCLF_SCENE_PART(CategoryNodes, "CS.DCLF.Scene.CategoryNodes");
-			bool sawDetach = false;
-			for (const auto* event = batch->head; event && !sawDetach; event = event->next)
-				sawDetach = event->type == SceneTracker::EventType::Detached && !event->mirrorOnly;
 			addSource = rescanned ? TrackSource::Rescan : TrackSource::AttachEvent;
-			RefreshCategoryNodes(sawDetach || rescanned);
+			RefreshCategoryNodes(index.sawDetach || rescanned);
 			addSource = TrackSource::AttachEvent;
 			// Subtrees the mirror lacked last time, since captured by the render thread. Their references are handed back first (the
 			// list may be a root's last holder; never released on the pump); the retirement chain holds them while AddSubtrees walks keys.
@@ -326,10 +341,13 @@ namespace DCLF::Scene
 			std::vector<RE::BSGeometry*> detached;
 			// Prepare the attaches' subtrees first (pure; the mirror already holds the whole batch, detaches apply after the loop), then
 			// merge each at its event: event order matters only to the merges, which keep it. Serial mode prepares and merges per event.
+			// The batch's attach and detach events alone (ApplyMirrorEvents indexed them): never the updates, which outnumber them.
+			auto& a = attachStats;
+			a.structuralEvents += index.structural.size();
 			std::vector<std::pair<RE::NiAVObject*, SubtreeSource>> attached;
 			if (!categoryNodes.empty())
-				for (const auto* event = batch->head; event; event = event->next)
-					if (!event->mirrorOnly && event->type == SceneTracker::EventType::Attached)
+				for (const auto* event : index.structural)
+					if (event->type == SceneTracker::EventType::Attached)
 						attached.emplace_back(event->node.get(), SubtreeSource::AttachEvent);
 			const std::uint32_t subtreeMode = attached.empty() ? 0 : FanoutMode(attached.size(), kSubtreeFanoutMin);
 			if (!attached.empty()) {
@@ -341,26 +359,32 @@ namespace DCLF::Scene
 				PrepareSubtrees(attached, subtreeMode, subtreePreps);
 			std::size_t nextPrep = 0;
 			double mergeMs = 0.0;
-			for (auto* event = batch->head; event; event = event->next) {
-				// The render thread's captures are the mirror's alone.
-				if (event->mirrorOnly)
-					continue;
+			double ancestorMs = 0.0, serialMs = 0.0;
+			for (auto* event : index.structural) {
 				// A sun candidate above it: its subtree changed, which its primary-cut plan reads (PlanOf).
-				for (const void* ancestor : event->ancestors)
-					if (const auto it = sunTable.index.find(static_cast<const RE::NiAVObject*>(ancestor)); it != sunTable.index.end()) {
-						sunEntriesForced.insert(it->first);
-						sunEntriesDirty.push_back(it->first);
-					}
+				if (!event->ancestors.empty() && !sunTable.index.empty()) {
+					const auto ancestorStart = std::chrono::steady_clock::now();
+					for (const void* ancestor : event->ancestors)
+						if (const auto it = sunTable.index.find(static_cast<const RE::NiAVObject*>(ancestor)); it != sunTable.index.end()) {
+							sunEntriesForced.insert(it->first);
+							sunEntriesDirty.push_back(it->first);
+						}
+					ancestorMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ancestorStart).count();
+				}
 				if (event->type == SceneTracker::EventType::Attached) {
 					++stats.attachedEvents;
 					if (!categoryNodes.empty()) {
-						if (subtreeMode == 0) {
+						ZoneScopedN("CS.DCLF.Scene.SubtreesMerge");
+						const auto mergeStart = std::chrono::steady_clock::now();
+						if (subtreeMode == 0)
 							AddSubtree(event->node.get());
-						} else {
-							const auto mergeStart = std::chrono::steady_clock::now();
+						else
 							MergeSubtree(subtreePreps[nextPrep++]);
-							mergeMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mergeStart).count();
-						}
+						const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mergeStart).count();
+						if (subtreeMode == 0)
+							serialMs += ms;
+						else
+							mergeMs += ms;
 					}
 				} else if (event->type == SceneTracker::EventType::Detached) {
 					++stats.detachedEvents;
@@ -372,14 +396,28 @@ namespace DCLF::Scene
 				AddScenePartMs(ScenePart::SubtreesMerge, mergeMs);
 				fanoutStats.subtreeMergeMs += mergeMs;
 			}
-			for (auto* geometry : detached) {
-				// Only a tracked geometry is known alive (its entry holds it), so safe to walk up from.
-				if (tracked.contains(geometry) && FindCategoryNode(geometry, nullptr)) {
-					++stats.detachMoves;
-					continue;
+			a.ancestorMs += ancestorMs;
+			a.mergeMs += mergeMs + serialMs;
+			{
+				ZoneScopedN("CS.DCLF.Scene.Detaches");
+				const auto detachStart = std::chrono::steady_clock::now();
+				a.detachedGeometries += detached.size();
+				for (auto* geometry : detached) {
+					// Only a tracked geometry is known alive (its entry holds it), so safe to walk up from.
+					if (!tracked.contains(geometry))
+						continue;
+					if (FindCategoryNode(geometry, nullptr)) {
+						++stats.detachMoves;
+						continue;
+					}
+					++a.detachedErased;
+					EraseTracked(geometry);
 				}
-				EraseTracked(geometry);
+				a.detachMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - detachStart).count();
 			}
+			// Parity: the category members' index against the tracked entries, on a schedule.
+			if (Policy::CheckCategoryMembers(false, passSerial))
+				CheckCategoryMembers("the attach/detach merge");
 		}
 
 		{
@@ -412,24 +450,27 @@ namespace DCLF::Scene
 
 		stats.tracked = static_cast<std::uint32_t>(tracked.size());
 		stats.categoryNodes = static_cast<std::uint32_t>(categoryNodes.size());
-		// Tracked geometries the captures and leaf updates named: hold their current properties from the pins.
-		for (const auto* head : { batch->mirrorHead, batch->head })
-			for (const auto* event = head; event; event = event->next) {
-				const SceneCapture::Records* records = event->type == SceneTracker::EventType::Attached ? event->captured.get() :
-				                                       event->type == SceneTracker::EventType::Updated ? event->update.leaf.get() :
-				                                                                                         nullptr;
-				if (records)
-					for (const auto& geometry : records->geometries)
-						if (const auto it = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(geometry.key))); it != tracked.end()) {
-							HoldProperties(it->second);
-							// Waited for its records: write it now.
-							if (std::exchange(it->second.leafWaiting, false)) {
-								it->second.candidateFrame = 0;
-								pendingEvaluation.push_back(it->first);
-								++leafStats.rescheduled;
-							}
+		// Tracked geometries the captures and leaf updates named (ApplyMirrorEvents indexed them): hold their current properties from
+		// the pins.
+		{
+			ZoneScopedN("CS.DCLF.Scene.LeafHolds");
+			const auto leafStart = std::chrono::steady_clock::now();
+			for (const auto* records : index.leaves) {
+				attachStats.leafKeys += records->geometries.size();
+				for (const auto& geometry : records->geometries)
+					if (const auto it = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(geometry.key))); it != tracked.end()) {
+						++attachStats.leafHolds;
+						HoldProperties(it->second);
+						// Waited for its records: write it now.
+						if (std::exchange(it->second.leafWaiting, false)) {
+							it->second.candidateFrame = 0;
+							pendingEvaluation.push_back(it->first);
+							++leafStats.rescheduled;
 						}
+					}
 			}
+			attachStats.leafMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - leafStart).count();
+		}
 		// For the event-to-publication latency.
 		if (batch->oldestNs && (!unpublishedNs || batch->oldestNs < unpublishedNs)) {
 			unpublishedNs = batch->oldestNs;
@@ -439,8 +480,8 @@ namespace DCLF::Scene
 		// empty batch is dropped here, or its return would wake the pump and every pass would keep the next going.
 		if (batch->head || batch->mirrorHead || !batch->switches.empty())
 			retirement.Open().events.push_back(std::move(batch));
-		// No reference is made from the pins after the apply.
-		batchPins.clear();
+		// No reference is made from the pins after the apply. Let go, not cleared: a burst's buckets would be cleared again by every pass.
+		batchPins = {};
 	}
 
 	void Coordinator::SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event)
@@ -467,20 +508,110 @@ namespace DCLF::Scene
 		Diagnostics::Notify<Diagnostics::ScenePoint::LodSegmentsApplied>();
 	}
 
-	void Coordinator::ApplyMirrorEvents(const EventBatch& a_batch)
+	void Coordinator::PrepareMirrorCaptures(const std::vector<const SceneCapture::Records*>& a_captures, std::size_t a_records)
+	{
+		// Each capture ApplyMirrorEvents applies whole (not a fill, which reads the mirror), in its apply order, copied and stamped here so
+		// the serial apply only moves records into the maps. Pure: the events' own records; a job per capture and record kind.
+		const auto& captures = a_captures;
+		const std::size_t records = a_records;
+		mirrorPreps.clear();
+		if (captures.empty())
+			return;
+		auto& a = attachStats;
+		++a.mirrorBatches;
+		a.mirrorCaptures += captures.size();
+		a.mirrorRecords += records;
+		mirrorPreps.resize(captures.size());
+		const std::uint32_t frame = SceneCapture::Frame();
+		const std::size_t jobs = captures.size() * SceneMirror::kTypes;
+		auto body = [&](std::size_t a_begin, std::size_t a_end) {
+			ZoneScopedN("CS.DCLF.Scene.Mirror.PrepareShards");
+			for (std::size_t j = a_begin; j < a_end; ++j)
+				SceneMirror::Prepare(*captures[j / SceneMirror::kTypes], static_cast<std::uint32_t>(j % SceneMirror::kTypes), frame, mirrorPreps[j / SceneMirror::kTypes]);
+		};
+		ZoneScopedN("CS.DCLF.Scene.Mirror.Prepare");
+		const auto start = std::chrono::steady_clock::now();
+		// The serial modes prepare here too: the parity runs apply what the normal path does (moved, not copied).
+		if (FanoutMode(records, kMirrorFanoutRecords) == 2) {
+			++a.mirrorPooled;
+			SceneScheduler::Executor().ParallelFor("CS.DCLF.Scene.Mirror.Prepare", jobs, 2, body);
+		} else {
+			body(0, jobs);
+		}
+		a.mirrorPrepareMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+	}
+
+	void Coordinator::ApplyMirrorEvents(const EventBatch& a_batch, BatchIndex& a_index)
 	{
 		ZoneScopedN("CS.DCLF.Scene.Mirror");
+		mirror.SetChecking(Policy::CheckMirrorApply());
 		mirror.BeginBatch();
-		// The batch's pins by key: the only source of references while it applies.
-		batchPins.clear();
-		for (const auto* head : { a_batch.mirrorHead, a_batch.head })
-			for (const auto* event = head; event; event = event->next) {
-				if (event->type == SceneTracker::EventType::Attached && event->captured)
-					PinBatch(event->captured->pins);
-				PinBatch(event->pins);
-			}
-		auto apply = [&](const SceneTracker::Event* a_head) {
-			for (const auto* event = a_head; event; event = event->next) {
+		std::vector<const SceneCapture::Records*> captures;
+		std::size_t records = 0;
+		{
+			ZoneScopedN("CS.DCLF.Scene.Mirror.Pins");
+			// One walk for the pins and the captures to prepare; the pins from the events that carry any. The batch's pins by key: the
+			// only source of references while it applies.
+			std::vector<const std::vector<RE::NiPointer<RE::NiRefObject>>*> pinned;
+			std::size_t pins = 0;
+			for (const auto* head : { a_batch.mirrorHead, a_batch.head })
+				for (const auto* event = head; event; event = event->next) {
+					if (event->type == SceneTracker::EventType::Attached && event->captured) {
+						const auto& captured = *event->captured;
+						if (!captured.pins.empty()) {
+							pinned.push_back(&captured.pins);
+							pins += captured.pins.size();
+						}
+						if (!event->mirrorFill) {
+							captures.push_back(&captured);
+							records += captured.nodes.size() + captured.geometries.size() + captured.properties.size() + captured.alphas.size();
+						}
+					}
+					if (!event->pins.empty()) {
+						pinned.push_back(&event->pins);
+						pins += event->pins.size();
+					}
+				}
+			batchPins.clear();
+			batchPins.reserve(pins);
+			for (const auto* list : pinned)
+				PinBatch(*list);
+		}
+		PrepareMirrorCaptures(captures, records);
+		ZoneNamedN(mirrorApplyZone, "CS.DCLF.Scene.Mirror.Apply", true);
+		const auto applyStart = std::chrono::steady_clock::now();
+		std::size_t nextPrep = 0;
+		// The apply's time by event kind (AttachStats::mirrorKindMs), taken where the kind changes: runs of one kind cost one clock read.
+		auto& attach = attachStats;
+		std::size_t kind = AttachStats::kMirrorKinds;
+		auto runStart = applyStart;
+		auto enter = [&](std::size_t a_kind) {
+			++attach.mirrorKindEvents[a_kind];
+			if (a_kind == kind)
+				return;
+			const auto now = std::chrono::steady_clock::now();
+			if (kind != AttachStats::kMirrorKinds)
+				attach.mirrorKindMs[kind] += std::chrono::duration<double, std::milli>(now - runStart).count();
+			kind = a_kind;
+			runStart = now;
+		};
+		auto apply = [&](SceneTracker::Event* a_head, bool a_tracker) {
+			for (auto* event = a_head; event; event = event->next) {
+				// The later steps' index (BatchIndex), from this one walk.
+				if (event->type == SceneTracker::EventType::Attached || event->type == SceneTracker::EventType::Detached) {
+					if (event->type == SceneTracker::EventType::Attached && event->captured)
+						a_index.leaves.push_back(event->captured.get());
+					if (a_tracker && !event->mirrorOnly) {
+						a_index.structural.push_back(event);
+						a_index.sawDetach |= event->type == SceneTracker::EventType::Detached;
+					}
+				} else if (event->type == SceneTracker::EventType::Updated && event->update.leaf) {
+					a_index.leaves.push_back(event->update.leaf.get());
+				}
+				enter(static_cast<std::size_t>(event->type == SceneTracker::EventType::Attached ? (event->captured ? (event->mirrorFill ? 1 : 0) : 2) :
+											   event->type == SceneTracker::EventType::Detached ? 3 :
+											   event->type == SceneTracker::EventType::Gate     ? 4 :
+											                                                      5));
 				if (event->type == SceneTracker::EventType::Attached) {
 					if (event->captured && event->mirrorFill) {
 						// A mirror request's capture fills only what the mirror lacks.
@@ -501,8 +632,10 @@ namespace DCLF::Scene
 								fill.alphas.push_back(a);
 						if (!fill.nodes.empty() || !fill.geometries.empty() || !fill.properties.empty() || !fill.alphas.empty())
 							mirror.Apply(fill);
-					} else if (event->captured)
-						mirror.Apply(*event->captured);
+					} else if (event->captured) {
+						assert(nextPrep < mirrorPreps.size());
+						mirror.Apply(*event->captured, &mirrorPreps[nextPrep++]);
+					}
 					else if (event->node && mirror.Node(event->node.get()))
 						// Attached out of the world: its record is stale (the event holds the object, so its name is safe).
 						mirror.Evict(event->node.get(), fmt::format("'{}' {}", event->node->name.c_str() ? event->node->name.c_str() : "",
@@ -517,7 +650,10 @@ namespace DCLF::Scene
 					// Ordered after its incoming blocks' attaches.
 					ApplyGateEvent(event->gateToken, event->gateIncoming, event->gateOutgoing, event->stampNs, event->stampFrame);
 				} else {
-					const auto [type, key] = mirror.Update(event->update);
+					// The update's record is the mirror's to keep from here (moved; the event's fields, leaf, sequence and site stay).
+					const auto* hidden = event->update.hiddenSite != ~0u ? std::get_if<SceneCapture::NodeRecord>(&event->update.record) : nullptr;
+					const BatchHidden hiddenEvent = hidden ? BatchHidden{ hidden->key, event->update.hiddenSite, (hidden->flags & 1u) != 0, event->update.sequence } : BatchHidden{};
+					const auto [type, key] = mirror.UpdateTaking(event->update);
 					Diagnostics::Notify(Diagnostics::MirrorUpdateApplied{ type, key, event->update.fields });
 					// A trait's input (a node's controllers or rigid body) or a skin's (its instance, its dismember partitions' shown flags):
 					// the entries it names are classified again at the next delta walk (keys only), not polled every frame.
@@ -526,14 +662,42 @@ namespace DCLF::Scene
 					else if (key && type == 1 && (event->update.fields & (SceneCapture::GeometryRecord::kDismember | SceneCapture::GeometryRecord::kSkin)))
 						mirrorSkinGeometries.insert(key);
 					// A hidden store, for DrainHiddenEvents (same batch as the mirror's bit).
-					if (event->update.hiddenSite != ~0u)
-						if (const auto* record = std::get_if<SceneCapture::NodeRecord>(&event->update.record))
-							batchHidden.push_back({ record->key, event->update.hiddenSite, (record->flags & 1u) != 0, event->update.sequence });
+					if (hidden)
+						batchHidden.push_back(hiddenEvent);
 				}
 			}
 		};
-		apply(a_batch.mirrorHead);
-		apply(a_batch.head);
+		apply(a_batch.mirrorHead, false);
+		apply(a_batch.head, true);
+		if (kind != AttachStats::kMirrorKinds)
+			attach.mirrorKindMs[kind] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - runStart).count();
+		{
+			const auto work = mirror.TakeWork();
+			attach.replaysSkipped += work.replaysSkipped;
+			attach.replaysWalked += work.replaysWalked;
+			attach.updatesKept += work.remembered;
+			attach.updatesForgotten += work.forgotten;
+			attach.applyChecks += work.skipsChecked + work.preparedChecked + work.logsChecked;
+			const std::uint64_t wrong = work.skipsWrong + work.preparedWrong + work.logsWrong;
+			if (wrong && attach.applyWrong == 0)
+				logger::warn("[DCLF] scene mirror apply (W8) at pass {}: {} skipped replays that had updates to apply, {} prepared captures unlike their records, {} update logs "
+							 "unlike their chains <- MIRROR APPLY",
+					passSerial, work.skipsWrong, work.preparedWrong, work.logsWrong);
+			attach.applyWrong += wrong;
+		}
+		assert(nextPrep == mirrorPreps.size());
+		// Moved-from records: their memory goes now, not with the next burst.
+		mirrorPreps.clear();
+		attachStats.mirrorApplyMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - applyStart).count();
+		if (Policy::CheckMirrorUses(passSerial)) {
+			// Parity: a capture drops only its own keys' uncounted records; none may be left elsewhere.
+			++attachStats.usesChecks;
+			if (const std::size_t unused = mirror.UnusedRecords()) {
+				if (attachStats.usesUnused == 0)
+					logger::warn("[DCLF] scene mirror: {} property or alpha records no geometry counts after pass {}'s captures <- MIRROR USES", unused, passSerial);
+				attachStats.usesUnused += unused;
+			}
+		}
 		RecheckDeferredReads();
 		Diagnostics::Notify(Diagnostics::MirrorEventsApplied{ *this, a_batch.lodSegments, a_batch.mirrorNamed });
 	}
@@ -754,11 +918,12 @@ namespace DCLF::Scene
 				primary.NoteHiddenKey(a_key);
 			announceKey(a_key);
 		}
-		// A category node's event announces every entry under it (rare).
-		if (!categoryEvents.empty())
-			for (auto& [geometry, entry] : tracked)
-				if (categoryEvents.contains(entry.categoryNode))
-					announce(geometry, entry);
+		// A category node's event announces every entry under it (rare): its members.
+		for (const void* key : categoryEvents)
+			if (const auto members = categoryMembers.find(static_cast<const RE::NiNode*>(key)); members != categoryMembers.end())
+				for (auto* geometry : members->second)
+					if (const auto entry = tracked.find(geometry); entry != tracked.end() && entry->second.categoryNode == key)
+						announce(entry->first, entry->second);
 		for (auto* geometry : retake)
 			if (const auto entry = tracked.find(geometry); entry != tracked.end()) {
 				entry->second.candidateFrame = 0;  // Reclassify, scheduled with the pending ones (DeltaWalk)

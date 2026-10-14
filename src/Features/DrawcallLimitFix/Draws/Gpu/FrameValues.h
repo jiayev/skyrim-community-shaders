@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Features/DrawcallLimitFix/Draws/Gpu/TextureTransforms.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include <array>
 #include <atomic>
@@ -36,7 +37,7 @@ namespace DCLF
 	 * - send the frame's buffers the runs they lack on the dedicated upload queue, then signal the frame-wait timeline to the frame's
 	 *   sequence number (always, also after a failure), which every batch of the frame waits for (PersistentGraphHost's frame wait).
 	 *
-	 * Each of the five row sets (placements, palettes, shading, fade seeds, tree seeds) is a pooled version (D6,
+	 * Each of the six row sets (placements, palettes, shading, fade seeds, tree seeds, texture transforms) is a pooled version (D6,
 	 * org::services::BackingPool on DCLF's retirement clock, the render thread its one acquirer): Kick leases a backing holding every
 	 * row, preferring the one that holds the most (its contentEpoch), and the producer sends it the journal's runs since then. The
 	 * frame's draws read those backings (the frame record's t123, t122 and t121, and the culling's latches); EndFrame binds them to the
@@ -82,6 +83,21 @@ namespace DCLF
 		 */
 		void SetFirstPersonClaims(std::shared_ptr<const SetSnapshot> a_claims) { firstPersonClaims = std::move(a_claims); }
 		/**
+		 * @brief Render thread, when a payload is installed (before Kick): the main material rows that carry TexcoordOffset (its
+		 * TextureTransformList; null: none). From the next Kick each producer samples every entry's material at the frame's buffer into
+		 * the texture-transforms rows, which TextureTransformsCS stores into the installed payload's rows before the frame's draws.
+		 */
+		void SetTextureTransforms(std::shared_ptr<const TextureTransformList> a_list)
+		{
+			if (a_list) {
+				TextureTransformStats::adopted.fetch_add(1, std::memory_order_relaxed);
+				TextureTransformStats::adoptedEntries.fetch_add(a_list->entries.size(), std::memory_order_relaxed);
+			} else {
+				TextureTransformStats::adoptedNone.fetch_add(1, std::memory_order_relaxed);
+			}
+			textureTransforms = std::move(a_list);
+		}
+		/**
 		 * @brief The first-person report: the first-person particle members' expansions since the last call, their
 		 * particles, and the farthest a snapshot's bound centre was from the first-person eye it was faced to (a snapshot taken while
 		 * Main::Draw had the skeleton in its root's space would be far from it).
@@ -109,6 +125,12 @@ namespace DCLF
 		std::uint32_t FadeSeedsIndex() const { return seedsIndex; }
 		/** @brief Render thread: the tree seeds likewise (StructuredBuffer<TreeStatic>, two rows a tree slot: MergeTreeSeed). */
 		std::uint32_t TreeSeedsIndex() const { return treeSeedsIndex; }
+		/**
+		 * @brief Render thread: the texture transform rows the current frame patches the material rows with (StructuredBuffer<
+		 * TextureTransformRow>: the header, then an entry per TextureTransformList entry; 0 before the first frame), the depth segment's
+		 * BuildDrawsLatch::textureTransformsIndex.
+		 */
+		std::uint32_t TextureTransformsIndex() const { return transformsIndex; }
 		const std::vector<TreeStatic>* TreeSeedsIfDone(bool a_wait = false) const;
 		/** @brief Render thread: the seed rows as the frame's producer left them, once it is done; a_wait (diagnostics frames): waits for it. */
 		const std::vector<FadeRootStatic>* FadeSeedsIfDone(bool a_wait = false) const;
@@ -133,6 +155,8 @@ namespace DCLF
 			std::uint64_t movers = 0, moversDue = 0, roots = 0, rootsDue = 0, moveKeys = 0, moveNodes = 0;
 			// The placement plans applied onto the kept set, those that reset it, and their items (joined, changed and left).
 			std::uint64_t plans = 0, planResets = 0, planItems = 0;
+			// The texture transforms: entries sampled, rows that changed (a scroll), entries a refused lease left unpatched.
+			std::uint64_t transformsSampled = 0, transformsChanged = 0, transformsRefused = 0;
 		};
 		/** @brief The report's take (Reports/DrawsFrameValues.cpp): the counters, reset. */
 		Counters TakeCounters();
@@ -147,7 +171,7 @@ namespace DCLF
 			// The journal's trim floor at the last Kick (the oldest content any backing holds; 0: none holds any).
 			std::uint64_t floor = 0;
 		};
-		static constexpr std::size_t kPools = 5;  // placements, palettes, shading, fade-seeds, tree-seeds
+		static constexpr std::size_t kPools = 6;  // placements, palettes, shading, fade-seeds, tree-seeds, texture-transforms
 		/** @brief Any thread (the report): the pools' stats, the since-last-take counts reset. */
 		std::array<PoolStats, kPools> TakePoolStats();
 
@@ -156,7 +180,8 @@ namespace DCLF
 		~FrameValues();
 		struct Impl;
 		std::unique_ptr<Impl> impl;
-		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0, treeSeedsIndex = 0;
+		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0, treeSeedsIndex = 0, transformsIndex = 0;
 		std::shared_ptr<const SetSnapshot> firstPersonClaims;  // SetFirstPersonClaims
+		std::shared_ptr<const TextureTransformList> textureTransforms;  // SetTextureTransforms: the installed payload's
 	};
 }

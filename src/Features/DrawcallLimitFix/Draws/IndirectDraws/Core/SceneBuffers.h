@@ -43,6 +43,9 @@ namespace DCLF::Draws
 		std::uint64_t previousTreesContentEpoch = ~0ull;  // the tree rows that frame's pass read
 		std::uint64_t frameTreesContentEpoch = ~0ull;     // this frame's
 		std::shared_ptr<const ComputeProgram> treeWind;
+		// TexcoordOffset into the installed payload's material rows (TextureTransformsCS), from the frame values' rows; null: the program
+		// could not be made (the rows keep their records' values).
+		std::shared_ptr<const ComputeProgram> textureTransforms;
 		// Fade roots (FadeStateCS): static rows by root slot, GPU state rows, the frame's inputs, and CS_DCLF_FADE_PARITY's log.
 		Versioned fadeRoots, fadeStates;
 		std::shared_ptr<org::Buffer> fadeFrameBuffer, fadeLog;

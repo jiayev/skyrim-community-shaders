@@ -24,6 +24,18 @@ namespace DCLF
 		return workers;
 	}
 
+	namespace
+	{
+		// A worker running an above-normal caller's ParallelFor chunk is raised to it for that chunk, so the engine's job threads do
+		// not preempt work the scene lane or coordinator waits on. CS_DCLF_ASYNC_PRIORITY=noboost leaves workers where they are (A/B).
+		SceneExecutor::ThreadPriority WorkerBoost()
+		{
+			if (SwitchValue(Switch::AsyncPriority) == "noboost")
+				return {};
+			return { [] { return GetThreadPriority(GetCurrentThread()); }, [](int a_priority) { SetThreadPriority(GetCurrentThread(), a_priority); } };
+		}
+	}
+
 	SceneExecutor& SceneScheduler::Executor()
 	{
 		// Never destroyed: joining threads in a DLL's static destruction (under the loader lock, after ExitProcess has ended
@@ -48,7 +60,7 @@ namespace DCLF
 			}
 			SetThreadDescription(GetCurrentThread(), (L"CS DCLF worker " + std::to_wstring(a_index)).c_str());
 			SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-		});
+		}, WorkerBoost());
 		return *executor;
 	}
 

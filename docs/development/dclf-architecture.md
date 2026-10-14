@@ -40,7 +40,7 @@ it ([dclf-async-publication.md](./dclf-async-publication.md)).
 
 | Point in the frame | Render thread | Coordinator and pool | GPU |
 | --- | --- | --- | --- |
-| `Main::Draw`, before the main cull (`FrameDriver::BeginFrame`) | Applies the toggles, adopts the newest complete snapshot the snapshot builder posted (`IndirectDraws::AdoptSnapshot`: its revision, its draws and its publication, installed by `FrameView::HandOverAtFrameStart`), then installs its claims, list filter and sun exclusion (the builder's, followed along its forward links: `ForwardExclusion`), or withdraws the set (below). Serves the coordinator's requests (the switch catch-ups; the mirror's portal-root captures and capture requests; the pins walk and the fade nodes' answers go to a leased pool job, `FrameStartJob`) and kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, fade and tree seeds, each into a backing leased from its pool; the render thread copies the fade nodes' bytes and samples the tree seeds, the producer the rest) | **Scene pass** (`Coordinator::RunSceneWork`, whenever its producers wake the pump): the events applied, the walk, the set's commit; then the publication (`PublishScene`), handed to the **snapshot builder** on the pool (`IndirectDraws::PostSnapshotWork`: the payloads built ahead, the revision made and sealed, the payload's pooled versions published) | The frame values' uploads, on the copy queue; the payload's catch-up, on the uploader |
+| `Main::Draw`, before the main cull (`FrameDriver::BeginFrame`) | Applies the toggles, adopts the newest complete snapshot the snapshot builder posted (`IndirectDraws::AdoptSnapshot`: its revision, its draws and its publication, installed by `FrameView::HandOverAtFrameStart`), then installs its claims, list filter and sun exclusion (the builder's, followed along its forward links: `ForwardExclusion`), or withdraws the set (below). Serves the coordinator's requests (the switch catch-ups; the mirror's portal-root captures and capture requests; the pins walk and the fade nodes' answers go to a leased pool job, `FrameStartJob`) and kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, fade and tree seeds, texture transforms, each into a backing leased from its pool; the render thread copies the fade nodes' bytes and samples the tree seeds, the producer the rest) | **Scene pass** (`Coordinator::RunSceneWork`, whenever its producers wake the pump): the events applied, the walk, the set's commit; then, at the snapshot builder's pace, the publication (`PublishScene`), handed to the **snapshot builder** on the pool (`IndirectDraws::PostSnapshotWork`: the payloads built ahead, the revision made and sealed, the payload's pooled versions published) | The frame values' uploads, on the copy queue; the payload's catch-up, on the uploader |
 | The engine's cull jobs | The engine registers the passes it keeps. `PassCapture` withholds DCLF's objects, `PrimaryCull` stands in for DCLF's references inside the list jobs, and the sun's cascades skip DCLF's entries | | |
 | `BeforeShadowMaps` | The frame's shadow views (`ShadowViews`), their coverage by the selected revision (`DecideShadowCoverage`) | | |
 | Each shadow view's `FinishAccumulating` | `CaptureShadowView`: where the engine drew, and with which constants | | The engine's own shadow draws |
@@ -119,16 +119,18 @@ elsewhere (2026-10-14; the record is dclf-async-publication.md, "Polls become ev
 -   **Movers.** A per-frame entry is evaluated only when one of its move keys moved this frame or the last
     (`Tracked::moveKey`, `moveKeyOuter`; `Coordinator::MoverDue`); a particle system pushes its own key on a new
     snapshot. A mirror update of a node's body or controllers, or of a geometry's dismember or skin, reclassifies its
-    dependents (`ApplyMotionUpdate`). The placement plan is the complete mover and root set, emitted only when that set
-    changes (`Placements.cpp`), so motion alone publishes nothing.
--   **Frame values.** The producer samples only the kept plan's movers and roots whose keys moved (particles every
+    dependents (`ApplyMotionUpdate`). A placement plan is a delta of the mover and root set, emitted only when that set
+    changes (`Placements.cpp`; "The scene lane", below), so motion alone publishes nothing.
+-   **Frame values.** The producer samples only the kept set's movers and roots whose keys moved (particles every
     frame), and calls `UpdateSkin` only for those skins.
 -   **Materials and residents.** `RefreshMaterialSignatures` evaluates every signature only when the frame's material
     witness (`FrameComponentsWitness`) changes; `KeepResidentsAlive` refreshes the geometry template only for the
-    pipelines whose membership changed.
+    pipelines whose membership changed. A texture transform is no record's: the frame values patch the rows on the GPU
+    ("Pooled versions and the retirement clock"), and a controller write that moved only the transforms is not captured.
 -   **Publication.** Each candidate snapshot carries its change log (`CandidateChanges`; readers call
     `ChangedEntriesByLog`). `PublishTables` replays the per-object columns by slot (`SceneTables::publicationLog`,
-    `NotePublished`) and copies the pipeline family only when `pipelinesStamp` moves.
+    `NotePublished`, and the change log's causes) and the material records by the material log, and copies the pipeline
+    family only when `pipelinesStamp` moves.
 -   **Exclusions.** The builder republishes the same sun exclusion while nothing it was judged from moved, and links each
     one forward to later candidates (`ForwardExclusion`). The full-frustum entry exclusion is a veto at insertion
     (`BSGeometryListCullingProcess::AppendNonAccum`, vtable slot 0x19), not a walk after the cull.
@@ -147,6 +149,77 @@ elsewhere (2026-10-14; the record is dclf-async-publication.md, "Polls become ev
 -   **Stats.** The colour and shadow cull counters are read back asynchronously (`CounterReadback`), with no D3D11 `Map`.
 
 What still polls is in [dclf-open-defects.md](./dclf-open-defects.md), "Polls and render-thread work left (2026-10-14)".
+
+### The scene lane
+
+The scene pass runs on the coordinator's serialized lane, above normal priority, and its per-item work on the preparation
+pool (`SceneScheduler::Executor().ParallelFor`). The lane does O(changed) bookkeeping: it drains events, applies what the
+pool prepared and publishes (2026-10-14; the record is dclf-async-publication.md, "The scene lane as bookkeeping").
+
+**Prepare on the pool, apply on the lane.** Each phase is a pure prepare over frozen inputs (the mirror, `Tracked` read
+only, the pass's snapshot) that writes only its chunk's results, then a serial apply, in chunk order, that stores slots,
+logs and counters. Journals stay single-threaded: the chunks collect their marks and the apply makes them. A fan-out needs
+a minimum count (`FanoutMode`); `Policy::SerialFanout()` runs every one on the lane for the parities.
+-   **Mirror.** `SceneMirror::Prepare` copies an attach capture's records, by kind, on the pool; `Apply` moves them into the
+    maps. A capture's replays of the updates numbered after it walk an update log (`SceneMirror::Recent`, chained per
+    key), and a capture numbered after every kept update looks nothing up. One walk of the batch indexes it for the steps
+    after the mirror (`BatchIndex`: the structural events, the leaf captures, whether one detached).
+-   **Attach merge.** `PrepareGeometry` (pool) takes everything a geometry's merge needs (`GeometryPrep`: pins, held
+    property keys, the sun entry, the gate token, LOD segments); `AddGeometry` only inserts, appends and attaches its
+    identity. Tracked entries are indexed by category node (`categoryMembers`, `categoryMembersAt`), so a cell going away
+    drops its members without a scan of `tracked`.
+-   **Walk scheduling.** The delta walk's dirty roots are scheduled light (`ScheduleRoot(root, false)`): the root's motion is
+    read again and its dependents reclassified only if that verdict moved. The dependents lists are indexed (`*DependentsAt`,
+    `List`/`Unlist` in `Internal.h`).
+-   **Placements.** A `PlacementPlan` is a delta: `movers` and `roots` joined or changed, `moversLeft`, `rootsLeft`,
+    `dependentsLeft`, and `reset` for a set made anew (`placementDirty`). FrameValues applies every plan, in order, to its
+    kept set; a coalesced delivery concatenates plans, never keeps the newest alone.
+-   **Materials.** A material captured several times in a pass is held once (`HeldMaterial::listed`). Its evaluation
+    (`EvaluateMaterial`, `PrepareMaterials`, `PrepareJoinMaterials`) runs on the pool. A material lookup holds its texture
+    and feature owners and its ORG lease in one immutable owner block (`Lookups::MaterialOwners`, `bindingBlock`), whose
+    identity moves exactly when an owner does. `ResolvePipelineLookups` is witness-driven on the normal path. The held
+    snapshots age once a frame.
+-   **Shading.** `NameShadingKeys` is prepared by chunks of keys on the pool and applied in key order.
+-   **Candidates.** The candidate tables' pooled snapshots (`CandidateTable::pool`) are spares a pool job catches up from the
+    published snapshot's log; the lane runs one itself only when it finds it unstarted.
+-   **Shadow sets.** `RefreshShadowSets` applies the journaled slots. The index is rebuilt only when forced or when
+    `shadowIndexNeedsRebuild` is set (a table reset, a full walk); an empty journal (a slotless entry's detach) re-emits the
+    lists.
+-   **Buffer descriptions.** `GpuResources::Prefetch` returns at once: DXVK's batched describe (`dxvkGetInteropResourceInfos`,
+    callable from any thread) runs on the pool. The first `Acquire` that needs an answer runs the batch if no worker has
+    started it, or waits for it (`CS.DCLF.Scene.PrefetchBuffers.Wait`). Answers last through one more `BeginFrame`.
+
+**Publication pacing.** A pass with something to publish publishes only when it runs inline, took new frame inputs (the
+frame's backbone pass), finds the snapshot builder has taken the previous publication (`IndirectDraws::SnapshotWorkTaken()`),
+or nothing was published yet. Otherwise it defers: `CommitSet` runs every pass, and `ApplySet`, the claims, the deltas,
+`PublishTables` and `PublishLookups` run in the next publishing pass. The claims snapshot (`publicationClaims`) is pooled and
+replayed from the phases log (`setPhaseLog`). The bindings are made once a pass, after the joins, and the lookups resolved
+once, before `CommitSet`.
+
+**PublishTables.** The replay is collected once on the lane (the object slots the logs name, with their causes; the
+material slots the material log names) and copied into the pooled snapshot nearest the tables as `ParallelFor` jobs over
+disjoint columns and record ranges, by contiguous runs. A column a change cause covers (lights, tree animation, extras, skin,
+shadow) is copied for a slot only when a note of the slot carries that cause, so every writer of such a column notes its
+cause. The geometry columns stay on the lane (an import lease the snapshot drops is let go there).
+
+**The executor.** `ParallelFor`'s chunks are fixed (`[k * grain, min(count, (k + 1) * grain))`; callers index results by
+`a_begin / grain`). A helper running an above-normal caller's chunk runs at the caller's priority and is restored after
+(`SceneExecutor::ThreadPriority`), so the engine's normal-priority threads do not preempt work the lane waits on
+(`CS_DCLF_ASYNC_PRIORITY=noboost` turns it off). `GetParallelForStatistics` gives, per name, the time callers were blocked on
+chunks a helper had claimed (`[DCLF] parallel-for waits`).
+
+**The snapshot builder.**
+-   **Pairs.** The resident region checks only the pairs the events name and those of a pipeline whose witness moved
+    (`pipelinePairs`), and resolves a pair again only when what it read (its pipeline's witness, its material row's state)
+    moved. Each pair knows its objects, so a moved verdict rewrites only their entries. `Pairs.Resolve` runs on the pool
+    (`KeptArray::PrepareWrites`, `WriteParts` in the chunks, `MarkParts` in order on the builder).
+-   **Bundle and hashes.** The binding owners' bundle is kept by count (`ownerCounts`, `frameRegisterCounts`) and made again
+    only when an owner joins or leaves; a pipeline's constant-table hash is kept per lookup entry version (`tablesHashes`).
+-   **Stages.** `MainBuildStages` splits the main build so the stream views are made beside it (`RunAhead`); the shadow
+    build's exclusions and `CountModeDraws` run on the pool.
+-   **Kept arrays.** A `KeptArray` keeps its elements in copy-on-write chunks of about 16 KB: the first write to a chunk a
+    view still holds copies that chunk alone. `KeptWholeArray` keeps one vector, for FrameValues' arrays, which need
+    contiguity and are written from many threads after one `Mutable()`.
 
 ## Growable tables
 
@@ -255,8 +328,8 @@ binds it, and the draws embed none of it.
 
 ### Pooled versions and the retirement clock
 
-The payload's parts, the frame values' five row sets (placements, palettes, shading, fade seeds, tree seeds) and the set's
-growth all lease their backings from ORGModuleServices `BackingPool`s:
+The payload's parts, the frame values' six row sets (placements, palettes, shading, fade seeds, tree seeds, texture
+transforms) and the set's growth all lease their backings from ORGModuleServices `BackingPool`s:
 -   **The clock.** DCLF has one `RetirementClock` (`Runtime/FrameRetirement.h`), advanced from the graph host's
     completed-frame callback: the exact GPU completion of each host frame, not a frames-in-flight window. A frame binds
     what it read after its last submission (`SubmittedRetirementPoint()`); `BackingLease::Bind` keeps the latest point.
@@ -265,8 +338,16 @@ growth all lease their backings from ORGModuleServices `BackingPool`s:
     a cap. Each keeps one warm spare per game frame in flight, less one (`PooledBackings::PerFrameSpares`).
 -   **Release.** A released backing is destroyed on the graph host's resource cleanup lane (`PooledBackings::Retire`),
     never on the thread that let it go: the render thread is the frame values' pools' acquirer.
--   **Frame values.** `FrameValues::Kick` leases the frame's five backings on the render thread. The producer catches each
+-   **Frame values.** `FrameValues::Kick` leases the frame's six backings on the render thread. The producer catches each
     up from its journal on the pool, without a GPU wait, and `FrameValues::EndFrame` binds them.
+-   **Texture transforms.** A material's `TexcoordOffset` (offset and scale) is not its record's: the record keeps the
+    capture-time value. At `Finish` the main build lists every packed material row that carries one (`TextureTransformList`:
+    the material, the row's byte offset, the component mask; `MainPayload::textureTransforms`, carried by `PayloadVersions`),
+    and `AdoptSnapshot` hands the installed payload's list to FrameValues (`SetTextureTransforms`). Each frame the producer
+    reads every entry's current buffer (`textureTransformBuffer`, the one the frame's shaders read) under a lease into the
+    `texture-transforms` pool, sending only the rows that moved, and `cs.dclf.z.texture-transforms` (`TextureTransformsCS`),
+    first in the Z-prepass epoch, stores them into the installed payload's material rows. Every such row is written every
+    frame, so a pooled backing holds the frame's value whatever its journal sent it.
 
 The readback staging is not pooled: it is GPU-to-host and rewritten whole every frame, one host buffer per frame slot for
 each list capacity a sealed set names (`HostEventRing::AddSet`). What else could move into the pools is in
@@ -313,8 +394,9 @@ draw's max count is its epoch's own draws, grown as a power of two so the record
 -   **per pass:** the frame push: the frame slots' addresses and the frame record (`DrawBindings`: the frame textures
     from t16, and the payload's object and extras tables).
 
-The rows are kept across frames (`MainRows`, a `KeptArray` each): a row is written again only when its key changes (a
-material row by part), and a backing is sent what changed since its `contentEpoch`. Each row's header holds its blocks'
+The rows are kept across frames (`MainRows`, a chunked `KeptArray` each): a row is written again only when its key changes (a
+material row by part), and a backing is sent what changed since its `contentEpoch`. A material row's `TexcoordOffset` is
+overwritten on the GPU each frame ("Texture transforms", above). Each row's header holds its blocks'
 offsets until the publication adds the address of the row in the backing it goes to (`EmitMainRowParts`,
 `PatchRowAddresses`). Both tables are payload parts (material rows, pipeline rows). Whether a (material, pipeline) pair
 can draw - a texture, sampler or constant block the pipeline reads that the row lacks - is checked per build, from what
@@ -476,6 +558,12 @@ normal run draws.
 | `<- COMMIT` | `CS_DCLF_SET_PARITY` | The set's incremental commit against a full evaluation |
 | `<- DETACH` | `CS_DCLF_PERSISTENT_PARITY` | The tables' slots against the tracked set (`CheckObjectSlots`, `ValidateSlice`) |
 | `<- SUN EXCLUSION` | `CS_DCLF_PERSISTENT_PARITY` | A caster the cascades skipped under an excluded entry that DCLF does not draw |
+| `<- CATEGORY INDEX` | `CS_DCLF_PERSISTENT_PARITY` | The category members' index against the tracked entries |
+| `<- PLACEMENT DELTAS DIFFER` | `CS_DCLF_PERSISTENT_PARITY` | FrameValues' kept set, after a plan, against the coordinator's whole set (`PlacementPlan::check`) |
+| `<- REPLAY DIFFERS` | `CS_DCLF_PERSISTENT_PARITY` | `PublishTables`' replayed snapshot against the tables |
+| `<- PAIRS NARROWED` | `CS_DCLF_PERSISTENT_PARITY` | The region's narrowed pair checks against every pair resolved again serially |
+| `<- PACED PUBLICATION DIFFERS` | `CS_DCLF_SET_PARITY` | A publication that folded deferred passes in, against the coordinator's tables and the claims copied whole (the persistent parity's passes run inline, so they never defer) |
+| `<- ROW PACKING CONFLICT` | `CS_DCLF_PERSISTENT_PARITY`, `CS_DCLF_BUILD_PARITY` | Two live pairs of one material row with different packing keys (`MainBuild::CheckRegionPacking`; dclf-open-defects.md) |
 
 ## Switches
 
@@ -513,4 +601,5 @@ The standard validation is two 60-second runs on the same save:
 1.  The first six rows together.
 2.  Capture parity with ownership off.
 
-The CPU tests in `tests/DrawcallLimitFixCPU` cover the kept state and the publication foundation.
+The CPU tests in `tests/DrawcallLimitFixCPU` cover the kept state (the chunked `KeptArray` included), the scene executor
+(`ParallelFor`'s chunks, priority boost and restore) and the publication foundation.

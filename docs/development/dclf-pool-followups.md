@@ -10,8 +10,9 @@ Each item has three parts:
 -   **Where**: the code involved, at the line numbers of 2026-10-14.
 -   **Sketch**: a direction, not a design.
 
-Status (2026-10-14, after the polls-to-events pass, dclf-async-publication.md, "Polls become events"): §2 is partly done
-(per-publication latch bytes held per frame slot); §4 and §5 are not started, and wait on their readers; the rest is not
+Status (2026-10-14, after the scene-lane pass, dclf-async-publication.md, "The scene lane as bookkeeping"): §1 is done for
+`TexcoordOffset` (a sixth FrameValues pool and a GPU patch of the rows), not for the effect materials' values; §2 is partly
+done (per-publication latch bytes held per frame slot); §4 and §5 are not started, and wait on their readers; the rest is not
 started. Measure before moving anything:
 -   the payload pools' report lines (catch-up per part; `Diagnostics/Reports/DrawsProducer.cpp`);
 -   `frame data through the render thread`, which counts the latched and staged bytes by target
@@ -19,9 +20,9 @@ started. Measure before moving anything:
 
 ## 1. Animated material values: a per-frame FrameValues pool by material slot
 
-**Why.** Every value an engine controller animates goes through the coordinator and the payload:
--   effect materials: `FalloffData` and `BaseColor`;
--   Lighting and effect materials: `TexcoordOffset`.
+**Why.** Every value an engine controller animates went through the coordinator and the payload:
+-   effect materials: `FalloffData` and `BaseColor` (still so);
+-   Lighting and effect materials: `TexcoordOffset` (no longer: below).
 
 Each change is a new material record (`Tables::materialFrameVersion`), a rewritten material row and a publication. The
 four-part journal (`kMaterialRowParts`) already limits each catch-up to the part that moved: V3 measured the VS part.
@@ -29,17 +30,57 @@ Even so, material catch-up is still about 300 KB a publication while such materi
 GPU a publication late, while FrameValues' shading reaches it in the same frame. Since motion stopped publishing
 (2026-10-14), these items are why publications are still about 1.7 a frame.
 
-**Where.**
--   The capture and refresh: `Scene/Ports/MaterialSources.{h,cpp}` (TexcoordOffset's two buffers);
-    `Scene/Coordinator/FrameConstants.cpp` (`RefreshMaterialTransforms` ~146, `RefreshMaterialSignatures`); and
-    `Scene/Ports/MaterialPortEffect.cpp` (`kFalloff` 0x38, `kBaseColor` 0x48, ~103-109).
--   The row: `Builders/MainBuild.cpp` ~602 (`SetParts`) and `Builders/MainPayload.h` ~92-98 (`kMaterialRowParts`).
--   The pools: `Draws/Gpu/FrameValues.{h,cpp}` (five pools today, `kPools`).
+**Done for `TexcoordOffset` (2026-10-14), another way.** The sketch below adds a row the draws read; that changes
+`package/Shaders`. Instead the texture transforms are patched into the material rows themselves
+(dclf-architecture.md, "Texture transforms"):
+-   the main build lists every packed row carrying one (`TextureTransformList`, `Draws/Gpu/TextureTransforms.h`), and the
+    payload carries it;
+-   FrameValues' sixth pool (`texture-transforms`) samples each entry's current buffer every frame and sends the rows that
+    moved;
+-   `cs.dclf.z.texture-transforms` (`TextureTransformsCS.hlsl`) stores them into the installed payload's rows, first in the
+    Z-prepass epoch.
 
-**Sketch.**
--   **The pool.** Add a sixth FrameValues row set, the material frame values: one row per material slot holding only the
-    animated floats. The producer samples the watched materials (`transformWatch` and the effect materials whose controllers
-    run) at the frame's start, as it samples shading, and catches its backing up from a journal by material slot.
+The record keeps its capture-time value, `RefreshMaterialTransforms` and the transform watch are gone, and the controllers
+no longer capture a transform-only write. The cost is a pool read of 16 bytes per carrying row per frame and a dispatch over
+them (0.30 ms a frame on the pool in the motion run). Left: the effect materials' `FalloffData` and `BaseColor` still go
+through the records, and the epochs that read the rows before the Z-prepass epoch read last frame's transform
+(dclf-open-defects.md, "The scene lane and the snapshot builder: work left").
+
+**Next: compute the scroll on the GPU, no per-frame update at all.** The engine's float controller advances `TexcoordOffset`
+from its own state (the interpolator's key, the controller's frequency, phase and time) once a frame. With some reverse
+engineering of `BSLightingShaderPropertyFloatController::Update` (0x14150DDE0) and the effect controllers' updates, the
+patch pass could evaluate the scroll itself from per-material constants captured once (the controller's parameters and the
+start value) and the frame's time, the way the engine does. FrameValues' `texture-transforms` pool and its per-frame reads would
+then go. To work out first:
+-   what the update reads (a keyframe interpolator, a linear rate, or both) and whether every controller kind that writes
+    the texture transforms can be expressed as a closed form of time;
+-   what makes a controller stop or restart (activation, `kActive`, a cell unloading), so the captured constants change only
+    on events;
+-   the clock: the engine's controller time against the frame's, so the GPU value matches `[cur]` on the same frame.
+
+**Epoch order (check first).** The patch runs first in the Z-prepass epoch. Any epoch recorded before it that reads the main
+material rows sees last frame's offset (or, right after a new payload is installed, the capture-time value). W10 named the
+water reflection and Skylighting's occlusion views, but dclf-architecture.md's frame table puts the reflection epoch after the
+depth commit, so confirm which epochs really read the rows first. Then either run the patch in the earliest of them
+(`ViewEpoch.cpp`'s latch would carry `textureTransformsIndex`), or, with the GPU-computed scroll above, have each epoch's
+pass compute its own value.
+
+**Also left: the frame-sourced components.** `RefreshMaterialSignatures` writes the frame-sourced floats into every slot of a
+signature whenever the frame's sources move (most frames), so `PublishTables` still replays hundreds of 2.4 KB material
+records a publication (540-950 in the e6 run, before the texture transforms left). Two directions: a per-signature row the main
+build packs with the record (a frame's move writes one row per signature), or copy-on-write chunks for
+`SceneTables::materials`, so a publication shares the chunks nothing wrote.
+
+**Where.**
+-   The capture and refresh: `Scene/Ports/MaterialSources.{h,cpp}`; `Scene/Coordinator/FrameConstants.cpp`
+    (`RefreshMaterialSignatures`); and `Scene/Ports/MaterialPortEffect.cpp` (`kFalloff` 0x38, `kBaseColor` 0x48).
+-   The row: `Builders/MainBuild.cpp` (`WriteMaterialRow`) and `Builders/MainPayload.h` (`kMaterialRowParts`).
+-   The pools: `Draws/Gpu/FrameValues.{h,cpp}` (six pools, `kPools`).
+
+**Sketch** (for the effect values; the texture transforms' patch is the other way, and needs no shader change).
+-   **The pool.** Add a FrameValues row set, the material frame values: one row per material slot holding only the
+    animated floats. The producer samples the effect materials whose controllers run at the frame's start, as it samples
+    shading, and catches its backing up from a journal by material slot.
 -   **The read.** The draws read the row through a frame record register, as they read t121-t123. The material slot is
     already known: it is the input's `y` (low 20 bits), or the material row's offset from the table base divided by
     `kMaterialRowBytes`.
@@ -91,7 +132,7 @@ the payload and the pooled rare values are not done.
 
 **Also on the commit, not done.**
 -   `FrameView::InstallClaims` after a withdrawal still builds the main-claim vector from the claims' phases (O(claims),
-    only after a withdrawal). The coordinator could carry it in the set snapshot.
+    only after a withdrawal). The coordinator could carry it in the pooled claims snapshot (`publicationClaims`).
 -   `RefreshFrameConstants` is not split: the lighting merge and technique fog read the same Prepass engine state as the
     camera-dependent part.
 -   `FrameData::Note` builds a string and does a map lookup per staged or latched write (about 150-170 a frame); an

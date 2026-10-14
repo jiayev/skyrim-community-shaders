@@ -6,8 +6,10 @@
 #include <ankerl/unordered_dense.h>
 
 #include <array>
+#include <deque>
 #include <span>
 #include <string>
+#include <utility>
 
 namespace DCLF
 {
@@ -36,8 +38,26 @@ namespace DCLF
 		/** @brief The record type (node 0, geometry 1, property 2, alpha 3) and key of an update. */
 		static std::pair<std::uint8_t, const void*> TypeOf(const SceneCapture::Update& a_update);
 
-		/** @brief A capture's records, newest wins. */
-		void Apply(const SceneCapture::Records& a_records);
+		/**
+		 * @brief A capture's records copied off the lane, each stamped as Apply takes it (Prepare); Apply moves them in instead of copying.
+		 * One record kind each, in the capture's order.
+		 */
+		struct Prepared
+		{
+			std::vector<SceneCapture::NodeRecord> nodes;
+			std::vector<SceneCapture::GeometryRecord> geometries;
+			std::vector<SceneCapture::PropertyRecord> properties;
+			std::vector<SceneCapture::AlphaRecord> alphas;
+		};
+		/**
+		 * @brief One record kind (a_kind: node 0, geometry 1, property 2, alpha 3) of a capture into a_out, stamped with its sequence and
+		 * a_frame. Pure: reads the capture alone, so any thread, any order (ApplyMirrorEvents' pool prepare).
+		 */
+		static void Prepare(const SceneCapture::Records& a_records, std::uint32_t a_kind, std::uint32_t a_frame, Prepared& a_out);
+		/** @brief A capture's records, newest wins; with a_prepared (Prepare's of the same capture, every kind) its records are moved in. */
+		void Apply(const SceneCapture::Records& a_records, Prepared* a_prepared = nullptr);
+		/** @brief Property and alpha records no geometry counts (none should be kept: parity only, a walk over both maps). */
+		std::size_t UnusedRecords() const;
 		/** @brief A detached subtree: its root (taken off its parent's children) and every object under it. */
 		void Detach(const void* a_root, std::span<RE::BSGeometry* const> a_geometries, std::span<const void* const> a_nodes);
 		/**
@@ -50,6 +70,28 @@ namespace DCLF
 		 * record's type and key (a geometry named by its skin resolved), the key null when the mirror holds none.
 		 */
 		std::pair<std::uint8_t, const void*> Update(const SceneCapture::Update& a_update);
+		/**
+		 * @brief Update, keeping a_update's record for the replays by move (no copy): a_update's record is moved from after, its fields,
+		 * leaf, sequence and hidden site stay (the event's other readers read those).
+		 */
+		std::pair<std::uint8_t, const void*> UpdateTaking(SceneCapture::Update& a_update);
+		/** @brief The apply's work since the last call (the coordinator's attach report). */
+		struct Work
+		{
+			std::uint64_t replaysSkipped = 0;  // captures numbered at or after every kept update: no key looked up
+			std::uint64_t replaysWalked = 0;   // captures whose keys were looked up in the kept updates
+			std::uint64_t remembered = 0;      // updates kept for the replays
+			std::uint64_t forgotten = 0;       // updates two batches old let go
+			// The checks (SetChecking): skipped replays walked anyway (and kept updates they would have applied), prepared records
+			// compared with their capture's (and those that differ), batches whose log was checked against its chains (and those wrong).
+			std::uint64_t skipsChecked = 0, skipsWrong = 0, preparedChecked = 0, preparedWrong = 0, logsChecked = 0, logsWrong = 0;
+		};
+		Work TakeWork() { return std::exchange(work, {}); }
+		/**
+		 * @brief Parity (Policy::CheckMirrorApply): each skipped replay is walked as before the skip and must find nothing, each
+		 * prepared record is compared with its capture's before it is moved in, and each batch's update log with its key chains.
+		 */
+		void SetChecking(bool a_checking) { checking = a_checking; }
 		/** @brief A new batch: the recent updates older than two batches go. */
 		void BeginBatch();
 		void Clear();
@@ -111,20 +153,33 @@ namespace DCLF
 			std::uint32_t uses = 0;
 		};
 		void Use(const void* a_property, const void* a_layer, const void* a_alpha, int a_delta);
-		void ApplyCapture(const SceneCapture::Records& a_records);
+		void ApplyCapture(const SceneCapture::Records& a_records, Prepared* a_prepared);
 
 		ankerl::unordered_dense::map<const void*, SceneCapture::NodeRecord> nodes;
 		ankerl::unordered_dense::map<const void*, SceneCapture::GeometryRecord> geometries;
 		ankerl::unordered_dense::map<const void*, Counted<SceneCapture::PropertyRecord>> properties;
 		ankerl::unordered_dense::map<const void*, Counted<SceneCapture::AlphaRecord>> alphas;
 		ankerl::unordered_dense::map<const void*, const void*> geometryBySkin;  // a skinned geometry record's skin instance -> its key
-		// The last two batches' updates by object and record type (Key), for the captures numbered before them (Apply).
+		// The last two batches' updates, for the captures numbered before them (Apply): a log in push order (the oldest batch's leave
+		// from the front at BeginBatch), each entry chained to the one before it of its object and record type (Key). recentLast is a
+		// key's newest entry; indices count from the log's first entry ever (recentBase: the front's). recentNewest: the highest
+		// sequence kept (0: none), so a capture numbered at or after it replays nothing and looks nothing up.
 		struct Recent
 		{
 			std::uint64_t batch = 0;
+			std::uintptr_t key = 0;
+			std::uint64_t previous = ~0ull;
 			SceneCapture::Update update;
 		};
-		ankerl::unordered_dense::map<std::uintptr_t, std::vector<Recent>> recent;
+		std::deque<Recent> recent;
+		std::uint64_t recentBase = 0;
+		std::uint64_t recentNewest = 0;
+		ankerl::unordered_dense::map<std::uintptr_t, std::uint64_t> recentLast;
+		void Remember(std::uintptr_t a_key, SceneCapture::Update&& a_update);
+		/** @brief The kept updates of a_key numbered after a_after (the replay's), newest first. */
+		void Later(std::uintptr_t a_key, std::uint64_t a_after, std::vector<const SceneCapture::Update*>& a_out) const;
+		Work work;
+		bool checking = false;
 		std::uint64_t batch = 0;
 		std::uint64_t writes = 0;  // Writes()
 		KeySet gated;              // SetGated

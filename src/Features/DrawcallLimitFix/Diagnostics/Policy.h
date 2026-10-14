@@ -100,4 +100,14 @@ namespace DCLF::Policy
 
 	/** @brief A geometry scan with stale or refreshed slots also scans every object slot, against the index's (GeometryScan). Normal path: false. */
 	bool CheckGeometryScan();
+
+	// ---- W8 (the attach burst: mirror, subtrees, category nodes).
+	/** @brief Pass a_pass counts the mirror's property and alpha records no geometry counts (a capture drops only its own keys' uncounted records, not a walk over the maps). Normal path: false. */
+	bool CheckMirrorUses(std::uint64_t a_pass);
+
+	/** @brief The category members' index is checked against the tracked entries: on every refresh that drops a cell or portal root (a_removal; the dropped set against the whole scan too) and on pass a_pass. Normal path: false. */
+	bool CheckCategoryMembers(bool a_removal, std::uint64_t a_pass);
+
+	/** @brief The mirror checks its own apply every batch: skipped replays walked anyway, prepared captures against their records, the update log against its chains. Normal path: false. */
+	bool CheckMirrorApply();
 }
