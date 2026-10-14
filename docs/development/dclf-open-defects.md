@@ -189,6 +189,108 @@ Left open by the polls-to-events pass (dclf-async-publication.md, "Polls become 
 -   **BasicRHI's present still holds `timelinesMutex`.** `q_submit` no longer does, but `sc_present` holds it across the
     present (SARP and BasicRenderer only). CS's upload queue may not need DXVK's `LockSubmissionQueue` either.
 
+## The scene lane and the snapshot builder: work left (2026-10-14)
+
+Left open by the scene-lane pass (dclf-async-publication.md, "The scene lane as bookkeeping"; plan `hazy-percolating-canyon.md`).
+The motion run after it: the average pass 559 us (target 0.4 ms), the worst 30 passes 6.1 ms (target 3 ms).
+
+-   **The lane's cost in burst passes.** In the worst 30 passes (motion r2g): `Scene.Detaches` 1.02 ms, `Mirror.Apply` 0.62,
+    `Capture.ShadowSets.Index` 0.46, `SunCandidates` 0.42 (and its `.Snapshot` 0.26), `EvaluateStream` 0.39, `PrefetchBuffers.Wait` 0.32. On an average pass
+    `MaterialCaptures` is still about 60 us, the largest single step.
+-   **`Scene.Joins` reads 0.22 ms a frame (0.09 at W0), but the joins did not grow.** The bindings now run once a pass, after the
+    joins and inside the `Joins` part, so the zone holds `MaterialBindings` (0.145 ms a frame), which W0 counted outside it (twice a
+    pass, before and after the joins). Net of it the joins are about 0.075 ms a frame; the `[DCLF] parallel-for waits` line shows
+    their blocked time at about 0.001 ms a frame.
+-   **Not split into prepare and apply:**
+    -   `ResolveMaterialBinding` still resolves on the lane.
+    -   The walk merge's `geometryIndex` lookup cannot move into the evaluation without an index frozen per round.
+    -   The shadow build's pre-phase (records, material rows, mode evaluation) does not overlap the main build: it needs a
+        two-stage `ShadowBuildStages` in `Builders/ShadowBuild.h`, as `MainBuildStages`.
+-   **The builder's O(whole) left.** The main build's last stage copies the primary segment's payload whole into the other
+    segment's (`other = out`) before giving it its own inputs; `PackPipelines` still compares every pipeline (O(P)).
+-   **Texture transforms before the Z-prepass epoch.** `cs.dclf.z.texture-transforms` runs first in the Z-prepass epoch, so an
+    epoch that reads the main material rows before it (the reflection, Skylighting's occlusion) draws with the previous
+    frame's `TexcoordOffset`. A scrolling material is a frame behind there. No GPU readback checks the patched bytes either;
+    the parity checks are the producer's re-read and the builder's packing position.
+-   **Capture parity's `CompareMaterial` must leave out VS variable 11.** A record now keeps its capture-time `TexcoordOffset`
+    (the GPU patches the rows), so under `CS_DCLF_CAPTURE_PARITY` every scrolling material mismatches there. Leave out the
+    variable in that `CompareBlock`, or compare it with FrameValues' entry for the slot (`TextureTransformList`). Comments
+    still naming `RefreshMaterialTransforms` or the transform watch: `Scene/Model/Tables.h`, `Scene/Ports/MaterialPortFrame.h`.
+-   **Mirror parity under lane mode flags late or missed node fields with movement.** Likely asynchronous timing rather than a
+    missed writer; not attributed. The parity system is to be reworked for the asynchronous scene.
+-   **A material row is keyed per material but packed per pair (latent).** `MainRows::materials[m]` is one row per material slot,
+    packed against the pair's pipeline: its key holds the technique's `bindingVersion`, `projected` and `TablesHash(p)`. Every
+    pipeline of one slot has the same technique row and pass descriptor by construction, but not the same constant tables: two
+    shader permutations of one pass, or a `ModifyShaderLookup` that changed between them, could differ in their `PerMaterial`
+    offsets. The row then keeps the last pair's packing, and the other pair draws it with an unchanged witness. `ResolvePair`'s
+    `material.tables != blocks.tables` guard can never fire. No evidence it occurs. Guarded by a parity assertion
+    (`Policy::CheckRowPacking`: `CS_DCLF_PERSISTENT_PARITY` on a schedule of region builds, `CS_DCLF_BUILD_PARITY` every build;
+    `<- ROW PACKING CONFLICT` in the `[DCLF] main pairs` line). If it fires: key rows per (material, packing), extra packings in
+    slots past `tables.materials.size()` from a free list, refcounted by their pairs.
+-   **Worst frames are not the lane's.** The worst frames of the run were single stalls of 17-56 ms in
+    `CS.ORG.FlushNativeProducer` (DXVK's flush, above), `RHI.Vulkan.QueueAccess` and Upscaling. Not investigated.
+
+## What the engine still draws and does on the render thread (survey, 2026-10-14)
+
+Measured with CS_DCLF_CENSUS (30 s moving run) and a 60 s motion run with SkyrimEngineTelemetry's zones merged into CS's capture.
+SkyrimEngineTelemetry has its own Tracy client, so it listens on port 8087 beside CS's 8086. Capture both and align them on the
+paired `Main_RenderDepth` hooks: the CS thunk wraps the engine's `Main::RenderDepth`, and the two clocks agree to about 3 us.
+Times are inclusive ms a frame, median frame (9.4 ms) / worst 30 frames (30.7 ms).
+
+**Draws the engine still makes, per frame (census):**
+-   **The water reflection's cube faces: about 440 passes on one face and 340 on the other.**
+    -   **DistantTree:** about 400 passes over 559 geometries under "LOD Trees". These are the distant-tree draws in
+        `PerformanceOverlay`'s DistantTree count.
+    -   **Lighting:** about 140 passes the reflection phase doesn't cover ("eligible, bound, not a member of the view's phase").
+    -   **Sky:** about 30 passes.
+-   **Main: about 67 passes.**
+    -   Sky (16), water (20) and grass (12, plus 12 more in main depth).
+    -   About 14 Lighting passes that aren't members of the main phase or have no record.
+    -   Particle effects (3).
+    -   DistantTree (about 2, plus about 2 each in two unnamed views).
+-   **Sun cascades: about 12 passes, about 4.6 of them DCLF members the engine still draws.** The census flags these
+    `<- DEFECT`, and point shadows the same way (0.7 a frame).
+-   **Occlusion, Skylighting occlusion, precipitation occlusion and first person:** a few passes each.
+
+**Engine work on the render thread:**
+-   **The water reflection: 1.66 / 5.3 ms** (`TESWaterReflections::Update`, two `BSCubeMapCamera::RenderFace` a frame).
+    -   The engine culls the scene for both faces: 0.75 / 4.1 ms of `BSCullingProcess`. Most of it is
+        `BSFaceGenNiNode::OnVisible` re-culling actors' heads, about 1,100 `ProcessObject` calls a frame.
+    -   Then it builds batches (`BuildJob`, about 425 a frame) and draws them (`RenderBatches` 0.6 / 0.76 ms).
+    -   **Todo:** DCLF draws the faces whole: the LOD trees through DCLF's tree LOD, the uncovered Lighting passes through the
+        reflection phase, and the engine's culling for the reflection camera filtered out, as the main camera's scene lists are.
+-   **Engine job waits: about 0.5 / 2.6 ms.** `JobList::WaitForCompletion` under `NiCamera::CalculateAndDrawShadowCasterLights`
+    and `Main::PreparePlayerView`, plus `CS.DCLF.ListJobsWait`.
+-   **The engine's own depth work: about 0.3 / 1.6 ms.** `Main::RenderDepth` self and its `NiCamera::RenderScene`, and the
+    face-gen culling under the terrain depth.
+-   **Scaleform UI and decal node updates:** about 0.17 / 0.35 ms.
+
+**CS work on the render thread (outside DCLF):**
+-   `TerrainShadows::UpdateShadow`: 0.40 / 0.46 ms every frame. **Todo:** off the render thread, or event-driven.
+-   Upscaling: 0.19 / 1.9 ms.
+-   `GrassOptimizations::ApplyPending`: about 0.6 ms on the frames it runs.
+
+**The worst frames' unzoned main-thread time (about 6.7 ms in `Main::Update`): synchronous file reads, not an SKSE plugin.**
+-   **What the sampler shows.** SkyrimEngineTelemetry's sampler (`[Sampler] bEnable=1`) attributes `Main::Update`'s uncovered
+    time to `skse64+0x108B0`. That is only SKSE's call-site hook in `Main::Update`. The samples under it run game code, as do
+    the blocked ones.
+-   **The blocked samples read a file on the main thread.** The chain:
+    -   `Main::Update` → `35641` → `35642` → `35652`. The last of these ends the frame's world update, and its last call drains
+        `BGSDynamicPersistenceManager`'s queue (`15338`).
+    -   → `QueuedPromoteReferencesTask::Func2` (`15319`; the large-reference task `QueuedPromoteLargeReferencesTask` doesn't
+        override it) → `15328` → `15360` → a `TESWorldSpace` function (`20456`) → `13972`/`13977` → `Archive`/`NiFile` →
+        ucrt `fread` → `ReadFile`.
+-   **What that means.** While cells attach, promoting references reads worldspace records from the plugin files
+    synchronously on the main thread. No SKSE plugin's code is on these stacks.
+-   **Still to do:** confirm, in the merged Tracy capture, that these are the worst frames' stalls, by zoning `15338`/`15319`.
+    This session's attempt failed: that run's two captures started one anchor apart, and `mergert.py` paired the anchors off
+    by one. Then decide whether the read can move to the loading thread, or the records be read ahead.
+-   **Tools.**
+    -   The plugin doesn't create its report folder (`Documents/My Games/Skyrim Special Edition/SKSE/SkyrimEngineTelemetry`),
+        so without it no report is written.
+    -   The sampler counts a blocked thread once per wait, not for how long it waits, so its blocked counts understate long
+        waits.
+
 ## Unattributed visual defects seen in first person (2026-10-11/12; not investigated)
 
 -   **Flickering fog-coloured bands** (user report): full-width horizontal bands of broken geometry, flickering all over the

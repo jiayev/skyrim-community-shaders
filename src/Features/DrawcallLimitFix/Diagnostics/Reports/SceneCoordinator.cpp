@@ -37,6 +37,23 @@ namespace DCLF::Reports
 			return line;
 		}
 
+		std::string ParallelForLine()
+		{
+			// Cumulative per name in the executor: the differences since the last report (this one's alone), the peaks taken.
+			static std::unordered_map<std::string, SceneExecutor::ParallelForStatistics> last;
+			std::string line;
+			for (const auto& now : SceneScheduler::Executor().GetParallelForStatistics(true)) {
+				auto& before = last[now.name];
+				if (now.calls != before.calls)
+					line += fmt::format("{}{}: {} calls, {} chunks ({} by helpers), {} blocked {:.3f} ms/frame (peak {:.0f} us), {} boosts, {} idle helpers",
+						line.empty() ? "" : "; ", now.name, now.calls - before.calls, now.chunks - before.chunks, now.helperChunks - before.helperChunks,
+						now.blocked - before.blocked, double(now.blockedNanoseconds - before.blockedNanoseconds) / 1e6 / kInterval,
+						double(now.maxBlockedNanoseconds) / 1e3, now.boosts - before.boosts, now.idleHelpers - before.idleHelpers);
+				before = now;
+			}
+			return line.empty() ? line : "[DCLF] parallel-for waits (W7: callers blocked on claimed chunks): " + line;
+		}
+
 		std::string GateLine(Scene::Coordinator& a_store)
 		{
 			auto& s = V::gateStats(a_store);
@@ -392,6 +409,12 @@ namespace DCLF::Reports
 				// The walk's rounds and the joins evaluated on the pool.
 				if (const auto fanout = FanoutLine(s); !fanout.empty())
 					logger::info("{}", fanout);
+				// The attach burst's mirror prepares, subtree geometries and category index (W8).
+				if (const auto attach = V::attachLine(s); !attach.empty())
+					logger::info("{}", attach);
+				// The executor's ParallelFors: what their callers waited for chunks a helper had claimed.
+				if (const auto parallel = ParallelForLine(); !parallel.empty())
+					logger::info("{}", parallel);
 				// CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads (any is a defect).
 				if (const auto releases = ReleaseGuardLine(); !releases.empty())
 					logger::info("{}", releases);

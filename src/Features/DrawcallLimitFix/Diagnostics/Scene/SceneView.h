@@ -115,6 +115,7 @@ namespace DCLF::Diagnostics
 			return Eligibility::PrimaryVerdict(Store::VerdictOf(a_tracked), [&] { return s.mirror.Leaf(&a_geometry); });
 		}
 		static auto& fanoutStats(Store& s) { return s.fanoutStats; }
+		static std::string attachLine(Store& s) { return s.TakeAttachLine(); }
 		static auto& placementStats(Store& s) { return s.placementStats; }
 		static auto& gateStats(Store& s) { return s.gateStats; }
 		static const auto& lodGates(const Store& s) { return s.lodGates; }

@@ -24,7 +24,11 @@ namespace DCLF
 	 * the last lease's release queues it for removal. Buffers the game can map cannot be made stable; they are
 	 * not remembered (the object's verdict is, Coordinator's UnstableBuffer).
 	 *
-	 * One instance per thread domain, each its maps' only user (no lock): Scene() is the scene work's - the pass's thread (the scene
+	 * Prefetch describes on the preparation pool: the batch is dispatched, and the Acquire that first needs one of its answers runs it
+ * itself if no worker has started it, else waits for the worker (DXVK's batched description synchronizes with its worker thread, which
+ * may be busy for a while: the wait then overlaps the pass's evaluation instead of stalling the lane). The job touches only its batch.
+ *
+ * One instance per thread domain, each its maps' only user (no lock): Scene() is the scene work's - the pass's thread (the scene
 	 * lane, or the render thread for an inline pass): the walk's prologue, prefetch and merges (ResolveGeometrySource); Frame() is the
 	 * render thread's - tree LOD's meshes, at the depth commit (TreeLod::Mirror::TakeChanges). A buffer both lease is resolved by each
 	 * under a reference of its own (a description is idempotent; DXVK's interop is callable from any thread). A lease may be released on any thread (its removal queued, lock-free); GetStats may be read on any thread.
@@ -61,6 +65,9 @@ namespace DCLF
 			// Under the claims or scene observers (Diagnostics::Observe): prefetched descriptions taken by Acquire, and those whose buffer
 			// the game had released by then (Prefetch's reference the last one): without it, a freed buffer's address.
 			std::uint64_t prefetchTaken = 0, prefetchReleased = 0;
+			// Prefetch batches the owner found unstarted (and described itself) or running (and waited for), and the time it waited.
+			std::uint64_t prefetchRunByOwner = 0, prefetchWaited = 0;
+			double prefetchWaitMs = 0.0;
 		};
 
 		/** @brief The scene work's: the geometry slots' buffers, on the pass's thread. */
@@ -78,8 +85,9 @@ namespace DCLF
 		std::optional<LeasedBuffer> Acquire(ID3D11Buffer* a_buffer);
 		/**
 		 * @brief Resolves the buffers no lease holds, all in one synchronization with DXVK's worker thread
-		 * (RenderGraphRuntime::DescribeResources), for the Acquire calls that follow: one per buffer otherwise. The
-		 * results are kept until BeginFrame; a buffer named twice, or already held, costs nothing.
+		 * (RenderGraphRuntime::DescribeResources), for the Acquire calls that follow: one per buffer otherwise. Returns at once:
+		 * the description runs on the preparation pool (Acquire finishes it). The results are kept through the next BeginFrame (a
+		 * prefetch made ahead of a pass's prologue serves that pass); a buffer named twice, or already held, costs nothing.
 		 */
 		void Prefetch(std::span<ID3D11Buffer* const> a_buffers);
 
@@ -109,7 +117,8 @@ namespace DCLF
 		{
 			std::atomic<std::uint32_t> cached{ 0 }, rejected{ 0 };
 			std::atomic<std::uint64_t> resolvedTotal{ 0 }, prefetchBatches{ 0 }, prefetched{ 0 }, prefetchTaken{ 0 }, prefetchReleased{ 0 };
-			std::atomic<double> resolveMsTotal{ 0.0 }, resolveMsMax{ 0.0 };
+			std::atomic<std::uint64_t> prefetchRunByOwner{ 0 }, prefetchWaited{ 0 };
+			std::atomic<double> resolveMsTotal{ 0.0 }, resolveMsMax{ 0.0 }, prefetchWaitMs{ 0.0 };
 		};
 
 		/** @brief A new entry for a resolved buffer, held by a_reference (a reference on a_buffer), and its first lease. */
@@ -117,14 +126,17 @@ namespace DCLF
 		/** @brief One resolution's time, into the totals and the slowest. */
 		void NoteResolve(double a_ms, std::uint64_t a_buffers);
 		ankerl::unordered_dense::map<ID3D11Buffer*, Entry> entries;
-		// Prefetch's results until BeginFrame: the buffer as resolved (nullopt when it cannot be made stable), under the reference
-		// Prefetch took before describing it.
+		// One Prefetch's description, shared with its job on the pool (GpuResources.cpp).
+		struct Batch;
+		/** @brief a_batch described: by the owner if no worker took it, else waited for; then counted once. The owner's thread. */
+		void Finish(Batch& a_batch);
+		// Prefetch's batches, by buffer, until the BeginFrame after next: the current pass's and the one before (prefetchedBefore).
 		struct Prefetched
 		{
-			winrt::com_ptr<ID3D11Buffer> reference;
-			std::optional<Buffer> buffer;
+			std::shared_ptr<Batch> batch;
+			std::uint32_t index = 0;
 		};
-		ankerl::unordered_dense::map<ID3D11Buffer*, Prefetched> prefetched;
+		ankerl::unordered_dense::map<ID3D11Buffer*, Prefetched> prefetched, prefetchedBefore;
 		std::shared_ptr<Released> released = std::make_shared<Released>();
 		Counters counters;
 	};

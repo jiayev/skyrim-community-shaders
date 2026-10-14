@@ -164,4 +164,23 @@ namespace DCLF::Policy
 		// The persistent parity's: stale and refreshed slots are rare, so every scan that has any.
 		return Diagnostics::Observe().scene;
 	}
+
+	// ---- W8 (the attach burst: mirror, subtrees, category nodes).
+	bool CheckMirrorUses(std::uint64_t a_pass)
+	{
+		// The persistent or mirror parity's: a walk over two maps, on a schedule.
+		return (Diagnostics::Observe().scene || Diagnostics::Observe().mirror) && Diagnostics::ParityDue(a_pass, 41);
+	}
+
+	bool CheckCategoryMembers(bool a_removal, std::uint64_t a_pass)
+	{
+		// The persistent parity's: removals are rare (each one), the whole index on a schedule.
+		return Diagnostics::Observe().scene && (a_removal || Diagnostics::ParityDue(a_pass, 43));
+	}
+
+	bool CheckMirrorApply()
+	{
+		// The mirror or persistent parity's: every batch (a skipped replay or a dropped update is a one-time loss).
+		return Diagnostics::Observe().mirror || Diagnostics::Observe().scene;
+	}
 }

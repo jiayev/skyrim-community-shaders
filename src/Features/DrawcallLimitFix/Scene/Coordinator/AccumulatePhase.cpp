@@ -918,13 +918,22 @@ namespace DCLF::Scene
 		bool rebuild = a_forceRebuild || shadowIndexNeedsRebuild;
 		std::vector<std::uint32_t> changed = std::move(shadowDirtySlots);
 		shadowDirtySlots.clear();
+		auto& counters = shadowSetStats;
+		++counters.refreshes;
+		counters.unjournaled += !rebuild && changed.empty() ? 1u : 0u;
+		// The journal is complete: every input write pushes its slot, and the invalidations no slot names (a table reset, a full walk)
+		// set shadowIndexNeedsRebuild. Dirty with nothing journaled (a slotless entry released) changes no membership: the lists are
+		// emitted again (the walk dropped them), the index is not made again. The parity rebuild (Policy::RebuildShadowSets) is the check.
 		if (!rebuild) {
 			stats.shadowCasters = keptShadowCasters;
 			stats.shadowRejects = keptShadowRejects;
-			if (changed.empty())
-				rebuild = true;  // an unjournaled invalidation must still rebuild the index
 		}
+		// Which emitted lists to make again from their order (texture, key, then one bit per occlusion view): every one after a rebuild.
+		std::uint32_t moved = rebuild ? ~0u : 0u;
+		constexpr std::uint32_t kTextureOrder = 1u, kKeyOrder = 2u, kOcclusionOrder = 4u;
 		if (rebuild) {
+			ZoneScopedN("CS.DCLF.Capture.ShadowSets.Rebuild");
+			++counters.rebuilds;
 			// Every texture held goes, and comes back as the slots are indexed again: only the difference is noted.
 			for (const auto& entry : shadowTextureMembers)
 				--net[entry.first];
@@ -950,8 +959,9 @@ namespace DCLF::Scene
 		shadowIndexedLive.resize(tables.objects.size(), 0);
 		std::sort(changed.begin(), changed.end());
 		changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
+		counters.journaled += rebuild ? 0u : changed.size();
 		// A member in or out of its key's set, the key's place in the order moved with its lowest member; +1 / -1 when the key appears or goes.
-		auto member = [](auto& a_index, auto& a_order, const auto& a_key, std::uint32_t a_slot, bool a_add) -> std::int32_t {
+		auto member = [&moved](auto& a_index, auto& a_order, const auto& a_key, std::uint32_t a_slot, bool a_add, std::uint32_t a_bit) -> std::int32_t {
 			constexpr std::uint32_t kNoMember = ~0u;
 			if (a_add) {
 				auto [it, fresh] = a_index.try_emplace(a_key);
@@ -962,6 +972,7 @@ namespace DCLF::Scene
 					if (before != kNoMember)
 						a_order.erase(before);
 					a_order.insert_or_assign(after, a_key);
+					moved |= a_bit;
 				}
 				return fresh ? 1 : 0;
 			}
@@ -974,11 +985,13 @@ namespace DCLF::Scene
 			if (slots.empty()) {
 				a_order.erase(before);
 				a_index.erase(it);
+				moved |= a_bit;
 				return -1;
 			}
 			if (const std::uint32_t after = *slots.begin(); after != before) {
 				a_order.erase(before);
 				a_order.insert_or_assign(after, a_key);
+				moved |= a_bit;
 			}
 			return 0;
 		};
@@ -992,16 +1005,17 @@ namespace DCLF::Scene
 				a_add ? ++stats.shadowCasters : --stats.shadowCasters;
 			const bool occluder = std::any_of(a_inputs.occlusionTechnique.begin(), a_inputs.occlusionTechnique.end(), [](std::uint32_t a_t) { return a_t != 0; });
 			if (a_inputs.diffuse && (caster || occluder))
-				if (const std::int32_t moved = member(shadowTextureMembers, shadowTextureOrder, a_inputs.diffuse, a_slot, a_add))
-					net[a_inputs.diffuse] += moved;
+				if (const std::int32_t membership = member(shadowTextureMembers, shadowTextureOrder, a_inputs.diffuse, a_slot, a_add, kTextureOrder))
+					net[a_inputs.diffuse] += membership;
 			const auto raster = (a_inputs.flags & kObjectTwoSided) ? kRasterTwoSided : 0u;
 			const auto vertex = VertexLayoutOf(a_inputs.vertexDesc);
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 				if (a_inputs.occlusionTechnique[v])
-					member(occlusionKeyMembers[v], occlusionKeyOrder[v], ShadowPipelineKey{ a_inputs.occlusionTechnique[v], raster, vertex }, a_slot, a_add);
+					member(occlusionKeyMembers[v], occlusionKeyOrder[v], ShadowPipelineKey{ a_inputs.occlusionTechnique[v], raster, vertex }, a_slot, a_add, kOcclusionOrder << v);
 			if (caster)
-				member(shadowKeyMembers, shadowKeyOrder, ShadowPipelineKey{ a_inputs.technique, raster, vertex }, a_slot, a_add);
+				member(shadowKeyMembers, shadowKeyOrder, ShadowPipelineKey{ a_inputs.technique, raster, vertex }, a_slot, a_add, kKeyOrder);
 		};
+		TracyCZoneN(indexZone, "CS.DCLF.Capture.ShadowSets.Index", true);
 		for (const auto slot : changed) {
 			if (slot >= tables.objects.size())
 				continue;
@@ -1009,34 +1023,61 @@ namespace DCLF::Scene
 			const auto inputs = ShadowInputsOf(slot);
 			if ((shadowIndexedLive[slot] != 0) == live && shadowIndexedInputs[slot] == inputs)
 				continue;
+			++counters.applied;
 			apply(slot, shadowIndexedInputs[slot], shadowIndexedLive[slot] != 0, false);
 			apply(slot, inputs, live, true);
 			shadowIndexedInputs[slot] = inputs;
 			shadowIndexedLive[slot] = live;
 		}
+		TracyCZoneEnd(indexZone);
 		shadowSetsDirty = false;
-		// The public lists (the walk's merges started them again), in the kept order: no sort.
-		tables.shadowTextureSet.clear();
-		tables.shadowTextureSeen.clear();
-		tables.shadowKeysUsed.clear();
-		for (auto& keys : tables.occlusionKeysUsed)
-			keys.clear();
-		tables.shadowTextureSet.reserve(shadowTextureOrder.size());
-		for (const auto& [slot, texture] : shadowTextureOrder) {
-			tables.shadowTextureSet.push_back(texture);
-			tables.shadowTextureSeen.insert(texture);
+		TracyCZoneN(emitZone, "CS.DCLF.Capture.ShadowSets.Emit", true);
+		// The public lists (the walk's merges started them again), in the kept order: no sort. Each emitted list is made again only when
+		// its order moved; the seen set follows the net changes (whole again after a rebuild, which can drop members unnoted). The
+		// tables take copies, flat copies of what the sets would rebuild by inserting every texture.
+		if (moved & kTextureOrder) {
+			shadowEmittedTextures.clear();
+			shadowEmittedTextures.reserve(shadowTextureOrder.size());
+			for (const auto& [slot, texture] : shadowTextureOrder)
+				shadowEmittedTextures.push_back(texture);
+			++counters.listsEmitted;
 		}
-		for (const auto& [slot, key] : shadowKeyOrder)
-			tables.shadowKeysUsed.push_back(key);
-		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+		if (rebuild) {
+			shadowEmittedSeen.clear();
+			shadowEmittedSeen.insert(shadowEmittedTextures.begin(), shadowEmittedTextures.end());
+		} else {
+			for (const auto& [texture, change] : net) {
+				if (change < 0)
+					shadowEmittedSeen.erase(texture);
+				else if (change > 0)
+					shadowEmittedSeen.insert(texture);
+			}
+		}
+		if (moved & kKeyOrder) {
+			shadowEmittedKeys.clear();
+			for (const auto& [slot, key] : shadowKeyOrder)
+				shadowEmittedKeys.push_back(key);
+			++counters.listsEmitted;
+		}
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
+			if (!(moved & (kOcclusionOrder << v)))
+				continue;
+			shadowEmittedOcclusionKeys[v].clear();
 			for (const auto& [slot, key] : occlusionKeyOrder[v])
-				tables.occlusionKeysUsed[v].push_back(key);
+				shadowEmittedOcclusionKeys[v].push_back(key);
+			++counters.listsEmitted;
+		}
+		tables.shadowTextureSet = shadowEmittedTextures;
+		tables.shadowTextureSeen = shadowEmittedSeen;
+		tables.shadowKeysUsed = shadowEmittedKeys;
+		tables.occlusionKeysUsed = shadowEmittedOcclusionKeys;
 		// Only what appeared or went (a texture that went and came back is no change), the releases first.
-		for (const auto& [texture, moved] : net)
-			if (moved < 0)
+		for (const auto& [texture, change] : net)
+			if (change < 0)
 				tables.shadowTextureChanges.emplace_back(texture, false);
-		for (const auto& [texture, moved] : net)
-			if (moved > 0)
+		for (const auto& [texture, change] : net)
+			if (change > 0)
 				tables.shadowTextureChanges.emplace_back(texture, true);
+		TracyCZoneEnd(emitZone);
 	}
 }

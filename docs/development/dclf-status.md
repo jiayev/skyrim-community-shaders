@@ -52,6 +52,13 @@ normal run is about 1.06-1.14 ms a frame (was 1.19-1.28), and the scene evaluate
 The rows above predate that pass. What still polls or stays on the render thread is in
 [dclf-open-defects.md](./dclf-open-defects.md), "Polls and render-thread work left (2026-10-14)".
 
+Since the scene lane became bookkeeping (2026-10-14, dclf-architecture.md, "The scene lane"), the scene pass prepares on the
+pool and applies on its lane, publishes at the snapshot builder's pace, and the builder works by changed pairs, in parallel.
+In traversal (the motion run): the scene lane's busy time 1.74 ms a frame, p99 8.2 (was 2.77 and 11.3); the snapshot
+builder's 1.61 ms (was 2.34); frame time unchanged. Texture transforms no longer publish: the frame values patch the material
+rows on the GPU. What is left is in [dclf-open-defects.md](./dclf-open-defects.md), "The scene lane and the snapshot
+builder: work left (2026-10-14)".
+
 ## Decals and the primary's stand-in
 
 Decals are scene members like every other eligible object, stood in with their entries (drawcall-limit-fix.md, "Every

@@ -951,11 +951,25 @@ namespace DCLF
 		 * (counted).
 		 */
 		struct GeometryPrep;
-		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live, const GeometryPrep& a_prep);
+		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live, GeometryPrep& a_prep);
 		// AddSubtree as a prepare (pure over the batch's frozen mirror, any thread under a ShardScope) and a merge in event order.
 		/**
-		 * @brief What AddGeometry reads of the mirror for one geometry (keys only). The sun entry and actor root are left to the merge
-		 * under the mirror-read parity.
+		 * @brief HoldProperties' reads: the mirror's property, layer and fade node keys for a geometry, and the batch's pins of each (null:
+		 * none). Pure (the mirror and batchPins, frozen while a batch's adds prepare).
+		 */
+		struct HeldKeys
+		{
+			const void* property = nullptr;
+			const void* layer = nullptr;
+			const void* fadeNode = nullptr;
+			RE::NiRefObject* propertyPin = nullptr;
+			RE::NiRefObject* layerPin = nullptr;
+			RE::NiRefObject* fadeNodePin = nullptr;
+		};
+		HeldKeys HeldKeysOf(const void* a_geometry) const;
+		/**
+		 * @brief What AddGeometry reads of the mirror and the batch's frozen state for one geometry (keys and pins): the merge only stores.
+		 * The sun entry and actor root are left to the merge under the mirror-read parity (resolved false).
 		 */
 		struct GeometryPrep
 		{
@@ -969,6 +983,18 @@ namespace DCLF
 			bool resolved = false;
 			const void* sunEntry = nullptr;
 			const RE::NiAVObject* lightActorRoot = nullptr;
+			// The batch's pins of the geometry and its face head (null: none).
+			RE::NiRefObject* geometryPin = nullptr;
+			RE::NiRefObject* faceHeadPin = nullptr;
+			HeldKeys held;
+			// Of the sun entry (when resolved): its record's reference, and whether a category node owns it (CategoryNodeOwn).
+			const RE::TESObjectREFR* sunEntryReference = nullptr;
+			bool sunEntryCategory = false;
+			// A LOD gate root up its chain to the category node (TagGateAbove's), and an object LOD's drawn ranges (SampleLodRanges').
+			bool gated = false;
+			std::uint8_t gateSide = 0;
+			std::uint64_t gateToken = 0;
+			std::vector<LodSegments::Range> segments;
 		};
 		/** @brief One subtree's prepare (PrepareSubtree): its category node (none: nothing tracked), and its geometries in walk order. */
 		struct SubtreePrep
@@ -981,6 +1007,8 @@ namespace DCLF
 		};
 		/** @brief a_root's prepare: FindCategoryNode, MirrorSubtree (and its mirror-read parity check), each geometry's. Const. */
 		void PrepareSubtree(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const;
+		/** @brief PrepareSubtree's walk alone: the category node and the geometries found (geometry and reason), not their prepares. Const. */
+		void PrepareSubtreeWalk(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const;
 		/** @brief One geometry's prepare under a_category (PrepareSubtree's, and AddSubtree's). Const. */
 		void PrepareGeometry(RE::BSGeometry* a_geometry, Ineligible a_reason, const RE::NiNode* a_category, GeometryPrep& a_out) const;
 		/** @brief A prepared subtree's merge (the pending retry, capture requests, AddGeometry for each), in event order. */
@@ -998,7 +1026,49 @@ namespace DCLF
 		// A subtree's prepare is a whole walk (one root to hundreds of geometries): chunks of a few roots, the pool from 16.
 		static constexpr std::size_t kSubtreeGrain = 4;
 		static constexpr std::size_t kSubtreeFanoutMin = 16;
+		// The geometries' prepares (several chain walks each) across all the round's subtrees: the pool from 64, chunks of 32. A few
+		// large attaches go to the pool though their roots stay under kSubtreeFanoutMin.
+		static constexpr std::size_t kGeometryGrain = 32;
+		static constexpr std::size_t kGeometryFanoutMin = 64;
 		std::vector<SubtreePrep> subtreePreps;
+		std::vector<std::pair<std::uint32_t, std::uint32_t>> subtreeGeometryIndex;  // PrepareSubtrees' scratch: (prep, geometry) flattened
+		/**
+		 * @brief The attach burst's work since the report (W8): the mirror's captures prepared (copied off the lane, on the pool, records)
+		 * and its apply; the geometries prepared (on the pool); category members indexed and the parity checks of the index.
+		 */
+		struct AttachStats
+		{
+			std::uint64_t mirrorBatches = 0, mirrorCaptures = 0, mirrorPooled = 0, mirrorRecords = 0;
+			double mirrorPrepareMs = 0.0, mirrorApplyMs = 0.0;
+			std::uint64_t usesChecks = 0, usesUnused = 0;  // UnusedRecords' parity (CheckMirrorUses)
+			std::uint64_t geometryRounds = 0, geometryPooled = 0, geometries = 0, geometriesPooled = 0;
+			std::uint64_t categoriesLeft = 0, categoryMembersDropped = 0, rootsLeftScanned = 0;
+			std::uint64_t categoryChecks = 0, categoryDiffer = 0;  // CheckCategoryMembers' checks, and those that differed
+			std::string categoryFirst;
+			// The mirror's apply by event kind (capture, fill, eviction, detach, gate, update): events and ms (timed where the kind changes).
+			static constexpr std::size_t kMirrorKinds = 6;
+			std::array<std::uint64_t, kMirrorKinds> mirrorKindEvents{};
+			std::array<double, kMirrorKinds> mirrorKindMs{};
+			// SceneMirror::Work: captures that looked nothing up (numbered after every kept update) and those that did; updates kept, let go.
+			std::uint64_t replaysSkipped = 0, replaysWalked = 0, updatesKept = 0, updatesForgotten = 0;
+			std::uint64_t applyChecks = 0, applyWrong = 0;  // SceneMirror's own checks (Policy::CheckMirrorApply), and those that failed
+			// The attach/detach merge outside the merges: the events walked, the sun candidates above them (ms), the detached geometries
+			// (moves kept, erased) and the detach loop (ms); the leaf holds after (geometries named, tracked ones held, ms).
+			std::uint64_t structuralEvents = 0, detachedGeometries = 0, detachedErased = 0, leafKeys = 0, leafHolds = 0;
+			double ancestorMs = 0.0, detachMs = 0.0, mergeMs = 0.0, leafMs = 0.0;
+		} attachStats;
+		/**
+		 * @brief The batch walked once (ApplyMirrorEvents' apply loop) for the later steps: the tracker's attach and detach events (not
+		 * mirror-only) in order, whether one was a detach, and the records of the captures and leaf updates in order (both heads).
+		 */
+		struct BatchIndex;
+		/** @brief The attach burst's report line (AttachStats), the counters reset; empty when nothing happened. */
+		std::string TakeAttachLine();
+		// ApplyMirrorEvents' prepares: one per capture it applies (not a fill), in apply order; the pool from kMirrorFanoutRecords records.
+		std::vector<SceneMirror::Prepared> mirrorPreps;
+		static constexpr std::size_t kMirrorFanoutRecords = 256;
+		/** @brief The batch's captures copied into mirrorPreps (the pool, or here), for ApplyMirrorEvents' serial apply. */
+		void PrepareMirrorCaptures(const std::vector<const SceneCapture::Records*>& a_captures, std::size_t a_records);
 		/** @brief Adds hand-timed ms to a nested scene part's sums (since ResetTimes, and this pass's). */
 		void AddScenePartMs(ScenePart a_part, double a_ms)
 		{
@@ -1026,6 +1096,20 @@ namespace DCLF
 			}
 			return nullptr;
 		}
+		/** @brief Pinned's lookup alone (null: no pin), pure: a prepare's read of the batch's frozen pins; FromPin makes the reference. */
+		RE::NiRefObject* PinOf(const void* a_key) const
+		{
+			const auto it = a_key ? batchPins.find(a_key) : batchPins.end();
+			return it != batchPins.end() ? it->second : nullptr;
+		}
+		template <class T>
+		RE::NiPointer<T> FromPin(RE::NiRefObject* a_pin)
+		{
+			if (!a_pin)
+				return nullptr;
+			++referenceStats.pinned;
+			return RE::NiPointer<T>(static_cast<T*>(a_pin));
+		}
 		struct ReferenceStats
 		{
 			std::uint64_t pins = 0, pinned = 0, live = 0, refused = 0;
@@ -1039,7 +1123,9 @@ namespace DCLF
 			std::string firstPropertyRefused;
 		} referenceStats;
 		/** @brief Holds a_entry's properties anew from the batch's pins, as the mirror's geometry record names them. */
-		void HoldProperties(Tracked& a_entry);
+		void HoldProperties(Tracked& a_entry) { HoldProperties(a_entry, HeldKeysOf(a_entry.geometry.get())); }
+		/** @brief HoldProperties from a_keys (HeldKeysOf's, maybe a prepare's): stores only. */
+		void HoldProperties(Tracked& a_entry, const HeldKeys& a_keys);
 		/** @brief Light Limit Fix's room node for an object (GetParentRoomNode), from the mirror's chain. */
 		const RE::NiNode* RoomNodeOf(const void* a_object) const;
 		/** @brief Records written without the mirror's leaf, and those evaluated again when a capture named it. */
@@ -1135,6 +1221,7 @@ namespace DCLF
 		};
 		static constexpr std::uint32_t kMaterialSnapshotFrames = 8;
 		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, HeldMaterial> materialSnapshots;
+		std::uint32_t materialSnapshotsAgedFrame = ~0u;  // the frame the held snapshots were last aged (once a frame, not a pass)
 		struct MaterialSnapshotStats
 		{
 			std::uint64_t captured = 0, replaced = 0, stale = 0, aged = 0, made = 0, uncovered = 0, requested = 0;
@@ -1152,18 +1239,17 @@ namespace DCLF
 		void HandBackHeld(std::unique_ptr<MaterialPort::HeldSnapshot>&& a_held);
 		/**
 		 * @brief Keeps the material records from the frame's sources each pass, with no engine read: newly captured materials' slots
-		 * evaluated again (RewriteCapturedMaterials), frame-sourced components per signature (RefreshMaterialSignatures), TexcoordOffset of
-		 * watched materials (RefreshMaterialTransforms).
+		 * evaluated again (RewriteCapturedMaterials), frame-sourced components per signature (RefreshMaterialSignatures). TexcoordOffset is
+		 * no record's: a record keeps its capture's, and the frame values patch every material row with the frame's (TextureTransformList).
 		 */
 		void RefreshMaterialRecords();
 		void RewriteCapturedMaterials();
 		void RefreshMaterialSignatures();
-		void RefreshMaterialTransforms();
-		/** @brief A slot's record made (a join) or written from a_snapshot: listed under its signature, its material watched. */
+		/** @brief A slot's record made (a join) or written from a_snapshot: listed under its signature. */
 		void NoteMaterialRecord(std::uint32_t a_slot, const MaterialPort::MaterialSnapshot& a_snapshot);
 		/**
-		 * @brief Once per material: watched while its records may lack this capture's TexcoordOffset (a_recordsCurrent false: a rewrite or
-		 * a transform-only capture keeps the slots' own) or its two buffers disagree (the frame's flip moves it); else nothing to follow.
+		 * @brief A capture's texture transforms, once per material: nothing to follow (the frame values read the material's frame buffer
+		 * and the GPU patches its rows), counted only (MaterialRecordStats::transformsWatched).
 		 */
 		void WatchMaterialTransforms(const RE::BSShaderMaterial* a_material, const MaterialPort::MaterialSnapshot& a_snapshot, bool a_recordsCurrent = false);
 		/** @brief A rewrite's or a join's port evaluation and what it gave. */
@@ -1214,15 +1300,15 @@ namespace DCLF
 		ankerl::unordered_dense::map<std::pair<const RE::BSShaderMaterial*, std::uint32_t>, std::uint32_t> joinMaterialPrepared;  // -> item
 		/** @brief The joins' material evaluations, after their EvaluateJoin and before their merges. */
 		void PrepareJoinMaterials(std::size_t a_count);
-		// The signatures' and the transform watch's applications, written in place by chunks (disjoint slots) and versioned after, in order.
+		// The signatures' applications, written in place by chunks (disjoint slots) and versioned after, in order.
 		struct MaterialApplyItem
 		{
 			std::uint32_t slot = 0;
-			std::uint32_t signature = 0;  // the signature's (its applied record), or the watch's material index
+			std::uint32_t signature = 0;  // the signature's (its applied record)
 			std::uint8_t changed = 0;     // bit 0: the record (its textures), bit 1: frame floats
 		};
 		std::vector<MaterialApplyItem> materialApplyItems;
-		/** @brief The tables reset (ResetSlotTables): the signatures' slot lists, the watch and the retries dropped. */
+		/** @brief The tables reset (ResetSlotTables): the signatures' slot lists and the retries dropped. */
 		void ResetMaterialRecords();
 		// Materials DrainMaterialCaptures kept since the last RefreshMaterialRecords, and those a rewrite could not evaluate yet (an
 		// Advanced Skin key not set up: retried while the capture is held).
@@ -1240,18 +1326,14 @@ namespace DCLF
 		};
 		ankerl::unordered_dense::map<std::uint32_t, MaterialSignature> materialSignatures;
 		std::vector<std::uint32_t> materialSignatureListed;  // per material slot: its signature + 1, 0 when unlisted
-		struct TransformWatch
-		{
-			MaterialSources::TextureTransforms transforms;  // the newest capture's
-			std::uint32_t frame = 0;                         // the frame it was captured or keyed (a frame, not a pass)
-		};
-		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, TransformWatch> transformWatch;
 		struct MaterialRecordStats
 		{
+			// transformsWatched: captures whose texture transforms reached WatchMaterialTransforms (nothing followed: the frame values'),
+			// transformsWritten: records the scene lane wrote for them (none).
 			std::uint64_t passes = 0, captured = 0, rewritten = 0, retried = 0, uncovered = 0, samples = 0, applications = 0, slotsApplied = 0,
 						  transformsWatched = 0, transformsWritten = 0;
 			// Evaluations on the pool (rewrites, the joins' materials) and the rounds that fanned out, the joins' material evaluations left to
-			// the merge, watches skipped (records current, buffers agreeing) and dropped once applied, applications written by chunks.
+			// the merge, applications written by chunks. watchesSkipped / watchesDropped: no longer moved (the transform watch is gone).
 			std::uint64_t evaluationsPooled = 0, poolRounds = 0, joinPrepared = 0, joinInline = 0, watchesSkipped = 0, watchesDropped = 0,
 						  appliedPooled = 0;
 		} materialRecordStats;
@@ -1329,7 +1411,7 @@ namespace DCLF
 		std::uint64_t roomMapGeneration = ~0ull;
 		/** @brief The scene mirror: the hooks' records, applied in event order (ApplyMirrorEvents); checked by CS_DCLF_MIRROR_PARITY. */
 		SceneMirror mirror;
-		void ApplyMirrorEvents(const EventBatch& a_batch);
+		void ApplyMirrorEvents(const EventBatch& a_batch, BatchIndex& a_index);
 		// A load screen's attach and detach events for the mirror (taken by the first pass after the load).
 		std::shared_ptr<EventBatch> loadingCarry;
 
@@ -1339,7 +1421,16 @@ namespace DCLF
 		// Per pool entry: whether it equals the tables at its change log's end (brought up to date by replay); a new snapshot is copied
 		// whole once.
 		std::vector<std::uint8_t> tablesPoolReplayable;
-		std::vector<std::uint8_t> replaySlotMarks;  // scratch: the object slots a replay copied
+		// A replay's scratch (PublishTables), collected once and read by its column jobs: the object slots the logs name (sorted) with the
+		// causes each gathered (0: not named), the material slots the material log names (sorted), and the geometry slots' marks.
+		std::vector<std::uint32_t> replaySlots;
+		std::vector<std::uint32_t> replaySlotCauses;
+		std::vector<std::uint32_t> replayMaterialSlots;
+		std::vector<std::uint8_t> replayMaterialMarks, replayGeometryMarks;
+		// The replay's object slots and material records by pool chunks from these counts (FanoutMode; smaller replays run on the lane).
+		static constexpr std::size_t kReplayMinSlots = 96, kReplayMinMaterials = 24;
+		// Material records a replay chunk copies (2.4 KB each).
+		static constexpr std::size_t kReplayMaterialGrain = 32;
 		// The last published snapshot.
 		std::shared_ptr<Tables> publishedTables;
 	public:
@@ -1951,6 +2042,21 @@ namespace DCLF
 		std::array<std::map<std::uint32_t, ShadowPipelineKey>, kOcclusionViews> occlusionKeyOrder;
 		// RefreshShadowSets' scratch: each texture's membership change over the call (+1 appeared, -1 gone).
 		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, std::int32_t> shadowTextureNet;
+		// RefreshShadowSets' public lists as last emitted: a list is made again from its order only when that order moved, the seen set
+		// patched by the net changes (made again with a rebuild), and the tables take copies (the walk drops theirs each dirty pass).
+		std::vector<ID3D11ShaderResourceView*> shadowEmittedTextures;
+		ankerl::unordered_dense::set<ID3D11ShaderResourceView*> shadowEmittedSeen;
+		std::vector<ShadowPipelineKey> shadowEmittedKeys;
+		std::array<std::vector<ShadowPipelineKey>, kOcclusionViews> shadowEmittedOcclusionKeys;
+		/** @brief RefreshShadowSets' counters since the last report (CS_DCLF_STATS). */
+		struct ShadowSetStats
+		{
+			std::uint64_t refreshes = 0, rebuilds = 0;  // calls; of them index rebuilds (an explicit invalidation, or parity's)
+			std::uint64_t journaled = 0, applied = 0;   // slots the journal named (deduplicated); of them with inputs or liveness moved
+			std::uint64_t unjournaled = 0;              // dirty with nothing journaled: the lists emitted again, the index untouched
+			std::uint64_t listsEmitted = 0;             // public lists made again from their order (texture, key, per occlusion view)
+		};
+		ShadowSetStats shadowSetStats;
 		std::uint32_t keptShadowCasters = 0;
 		std::array<std::uint32_t, 16> keptShadowRejects{};
 		bool fullEvaluation = true;  // a reset, a load or a live toggle: the next delta walk evaluates everything
@@ -2092,6 +2198,16 @@ namespace DCLF
 			// The claims (PublishClaims): replayed from the phases log (keys replayed), copied whole, or the last shared again.
 			std::uint64_t claimsReplayed = 0, claimsKeys = 0, claimsWhole = 0, claimsShared = 0, claimsRevoked = 0;
 			double restMs = 0.0;  // PublishTables' whole-copied rest, per publication summed
+			// The replay (W6): change- and publication-log entries read, material-log entries read, the object slots and material records
+			// copied, slot columns copied and skipped (no cause of the slot's covers the column), contiguous runs copied, replays whose
+			// columns and records went to the pool, pool entries chosen nearer the tables than the first free one would have been, and the
+			// replay's time (objects, materials) per publication summed.
+			std::uint64_t replayLogEntries = 0, replayMaterialEntries = 0, replaySlots = 0, replayMaterials = 0, replayColumns = 0, replaySkipped = 0, replayRuns = 0,
+						  replayPooled = 0, replayNearer = 0;
+			double replayMs = 0.0;
+			// The pass's fixed cost (W6): commits whose forward-pipeline count was taken from the last catalog's, waiting lists compacted
+			// (a mark moved), and commits that left them as they were.
+			std::uint64_t forwardCounted = 0, forwardKept = 0, waitingCompacted = 0, waitingKept = 0;
 			// The paced parity (CheckPacedPublication): publications checked, tables and claims that differ.
 			std::uint64_t parityChecks = 0, parityTables = 0, parityClaims = 0;
 			std::string parityFirst;
@@ -2423,6 +2539,10 @@ namespace DCLF
 		// Forward views' pipelines ready in the catalog (reason 8): no source above moves with them, so a count change retakes the
 		// kWaitOther slots.
 		std::uint64_t setForwardReadiness = ~0ull;
+		// The catalog setForwardReadiness was counted in (immutable: the count holds while it is the lookups'); held, so no other takes
+		// its address.
+		std::shared_ptr<const PipelineCatalog> setForwardCatalog;
+		std::uint64_t setForwardCount = 0;
 		std::vector<std::uint8_t> setWaitCause;  // per slot: what it waits on
 		std::vector<std::uint8_t> setWaitWhy;    // per slot: the first reason of its last wait
 		std::uint64_t setShadowModes = ~0ull;      // the shadow modes and states caster readiness was last taken under
@@ -2501,6 +2621,16 @@ namespace DCLF
 		// rootDependents', lightDependents' and hiddenDependents': used once their insertions (Classification.cpp, ApplyEvents.cpp) go
 		// through List (requests-w1.md R1, R2); until then those lists' Unlist searches.
 		DependentsAt rootDependentsAt, lightDependentsAt, hiddenDependentsAt;
+		/**
+		 * @brief The tracked entries by category node (Tracked::categoryNode, set by AddGeometry alone; off at EraseTracked): a cell that
+		 * goes away, or a category node's hidden event, takes its members, not a walk over every tracked entry.
+		 */
+		ankerl::unordered_dense::map<const RE::NiNode*, std::vector<RE::BSGeometry*>> categoryMembers;
+		DependentsAt categoryMembersAt;
+		/** @brief Off its category node's members (EraseTracked; AddGeometry before it lists the entry anew). */
+		void UnlistCategoryMember(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		/** @brief Parity (CheckCategoryMembers): the index against the tracked entries, every member each way; logs the first difference. */
+		void CheckCategoryMembers(const char* a_where);
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::vector<RE::BSGeometry*>> rootDependents;
 		/**
 		 * @brief A reference to every root a dependents list names, taken when first listed, handed back when none does. What the scene

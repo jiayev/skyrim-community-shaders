@@ -1017,8 +1017,9 @@ namespace DCLF::Scene
 
 	void Coordinator::PrefetchGeometryBuffers(std::size_t a_first)
 	{
-		// Names the round's buffers to GpuResources at once: one sync with DXVK's worker per round, not per new buffer (cell loads).
-		// A buffer this misses still resolves, alone.
+		// Names the round's buffers to GpuResources at once: one sync with DXVK's worker per round, not per new buffer (cell loads),
+		// and on the preparation pool while the round evaluates (the merge's Acquire takes the answers, finishing the batch if no
+		// worker started it). A buffer this misses still resolves, alone.
 		if (!frameResolveBuffers)
 			return;
 		ZoneScopedN("CS.DCLF.Scene.PrefetchBuffers");

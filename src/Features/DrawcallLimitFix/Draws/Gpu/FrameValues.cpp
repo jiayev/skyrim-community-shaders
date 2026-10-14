@@ -14,6 +14,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include <bit>
 #include <cmath>
@@ -288,11 +289,12 @@ namespace DCLF
 			kPalettes,
 			kShading,
 			kFadeSeeds,
-			kTreeSeeds
+			kTreeSeeds,
+			kTextureTransforms
 		};
-		static constexpr std::array<const char*, kPools> kPartNames{ "placements", "palettes", "shading", "fade-seeds", "tree-seeds" };
+		static constexpr std::array<const char*, kPools> kPartNames{ "placements", "palettes", "shading", "fade-seeds", "tree-seeds", "texture-transforms" };
 		static constexpr std::array<std::uint32_t, kPools> kStrides{ sizeof(BindlessPlacement), sizeof(PaletteRow), sizeof(BindlessShading),
-			sizeof(FadeRootStatic), sizeof(TreeStatic) };
+			sizeof(FadeRootStatic), sizeof(TreeStatic), sizeof(TextureTransformRow) };
 
 		/**
 		 * @brief A fade root's node as the frame's start had it: its bytes (FadeState::NodeBytes), copied by the render thread before the
@@ -341,6 +343,7 @@ namespace DCLF
 		std::uint32_t seedRows = 0;         // highest named FadeSeedRow + 1
 		std::vector<std::pair<std::uint32_t, TreeStatic>> unsentTreeSeeds;
 		std::uint32_t treeSeedRows = 0;
+		std::uint64_t transformRows = 1;  // the most texture transform rows a list named (the header and its entries): the rows never shrink
 		std::deque<std::pair<std::uint64_t, std::shared_ptr<const Plan>>> plans;  // held per kicked producer's sequence
 		std::uint64_t seq = 0;                                          // the last kicked
 		bool kicked = false;                                            // this frame
@@ -352,6 +355,20 @@ namespace DCLF
 		KeptWholeArray<BindlessShading> shading;
 		KeptWholeArray<FadeRootStatic> seeds;  // by FadeSeedRow
 		KeptWholeArray<TreeStatic> treeSeeds;  // by 2 * tree slot + seedOdd
+		// The texture transforms (TextureTransformRow: the header, then entry i at i + 1), and per entry the material its values were
+		// last read from (a refused read keeps them only for the same material).
+		KeptWholeArray<TextureTransformRow> transforms;
+		std::vector<const RE::BSShaderMaterial*> transformMaterials;
+		// The newest Kick's sequence (render thread's store): a producer reads a list's materials only while it is the newest, so within
+		// the window its frame's publication (which holds them) is installed or was until this frame's start.
+		std::atomic<std::uint64_t> kickedSeq{ 0 };
+		// The texture transforms' parity (Policy::SampleEveryMover's frames), and the line's counts, since its last line.
+		struct TransformParity
+		{
+			std::uint64_t checks = 0, entries = 0, differ = 0;
+			std::string first;
+		} transformParity;
+		std::uint64_t transformLineFrames = 0, transformLineEntries = 0, transformLineChanged = 0, transformLineRefused = 0;
 		std::vector<std::uint8_t> listed;                       // dedup marks while listing items: per slot
 		std::vector<std::uint8_t> blockListed;                  // per palette block
 		std::vector<std::uint8_t> shadingListed;                // per slot, shading items
@@ -434,6 +451,7 @@ namespace DCLF
 			wetnessChanged{ 0 }, defects{ 0 }, runs{ 0 }, bytes{ 0 }, refused{ 0 }, failures{ 0 }, settled{ 0 }, seeded{ 0 };
 		std::atomic<std::uint64_t> movers{ 0 }, moversDue{ 0 }, roots{ 0 }, rootsDue{ 0 }, moveKeys{ 0 }, moveNodes{ 0 };
 		std::atomic<std::uint64_t> sampleUs{ 0 }, uploadUs{ 0 }, maxTotalUs{ 0 };
+		std::atomic<std::uint64_t> transformsSampled{ 0 }, transformsChanged{ 0 }, transformsRefused{ 0 };
 
 		/**
 		 * @brief A first-person member's rows and palettes, sampled by the render thread at Kick, before Main::Draw moves the
@@ -460,6 +478,10 @@ namespace DCLF
 			std::vector<std::pair<std::uint32_t, TreeStatic>> treeSeedValues;
 			std::uint32_t treeSeedRows = 0;
 			std::shared_ptr<const FrameGlobals> globals;  // the frame's engine globals (shading rows' tree wind)
+			// The installed payload's rows carrying TexcoordOffset, and the texture-transform buffer the frame's shaders read (flipped by
+			// Main::Update before the frame's start; the controllers write the other one).
+			std::shared_ptr<const TextureTransformList> textureTransforms;
+			std::uint32_t transformBuffer = 0;
 			// Per part: the backing the frame's draws read (leased until the producer is done), and the journal's trim floor (the
 			// oldest content a backing in circulation held at Kick; nullopt: none holds any, the journal keeps nothing).
 			FrameLeases leases;
@@ -481,6 +503,7 @@ namespace DCLF
 		void CheckEveryMover(const Job& a_job);
 		void SampleShadingRows(const Job& a_job, std::size_t a_slots);
 		void SampleFadeSeeds(const Job& a_job);
+		void SampleTextureTransforms(const Job& a_job);
 		void Upload(const Job& a_job);
 		template <class T>
 		void Send(const Job& a_job, Part a_part, const KeptWholeArray<T>& a_rows);
@@ -1280,6 +1303,7 @@ namespace DCLF
 		listedBlocks.clear();
 		SampleShadingRows(a_job, work.slots);
 		SampleFadeSeeds(a_job);
+		SampleTextureTransforms(a_job);
 	}
 
 	void FrameValues::Impl::CheckEveryMover(const Job& a_job)
@@ -1475,6 +1499,138 @@ namespace DCLF
 		}
 	}
 
+	void FrameValues::Impl::SampleTextureTransforms(const Job& a_job)
+	{
+		// Every installed material row's TexcoordOffset as this frame's shaders read it: the buffer Main::Update made current, which the
+		// controllers leave alone until the next flip (they write the other), so a read anywhere in the window is the frame's value.
+		// TextureTransformsCS stores the entries into the payload's rows before the frame's draws.
+		ZoneScopedN("CS.DCLF.FrameValues.TextureTransforms");
+		BeginBuild(a_job, kTextureTransforms, transforms);
+		auto& out = transforms.Mutable();
+		const auto* list = a_job.textureTransforms.get();
+		const std::size_t count = list ? list->entries.size() : 0;
+		if (out.size() < count + 1) {
+			const std::size_t first = out.size();
+			out.resize(count + 1, TextureTransformRow{});
+			transforms.MarkRange(first, count + 1 - first);
+		}
+		if (transformMaterials.size() < count)
+			transformMaterials.resize(count, nullptr);
+		if (out[0].rowOffset != count) {
+			out[0] = TextureTransformRow{};
+			out[0].rowOffset = static_cast<std::uint32_t>(count);
+			transforms.Mark(0);
+		}
+		const std::size_t buffer = a_job.transformBuffer & 1u;
+		// A read only while this producer's Kick is the newest: its list's materials are held by the publication its frame installed, which
+		// is let go no earlier than the next frame's start (released at that frame's Present, after the window closed).
+		const auto readable = [&](EngineReadWindow::Lease& a_lease) { return a_lease && kickedSeq.load(std::memory_order_acquire) == a_job.seq; };
+		const auto read = [&](const TextureTransformList::Entry& a_entry, float (&a_values)[4]) {
+			const auto* material = a_entry.material;
+			a_values[0] = material->texCoordOffset[buffer].x;
+			a_values[1] = material->texCoordOffset[buffer].y;
+			a_values[2] = material->texCoordScale[buffer].x;
+			a_values[3] = material->texCoordScale[buffer].y;
+		};
+		constexpr std::size_t kGrain = 256;
+		struct Chunk
+		{
+			std::vector<std::uint32_t> changed;
+			std::uint64_t refused = 0;
+		};
+		std::vector<Chunk> chunks((count + kGrain - 1) / kGrain);
+		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.TextureTransforms", count, kGrain, [&](std::size_t a_begin, std::size_t a_end) {
+			ZoneScopedN("CS.DCLF.FrameValues.TextureTransformsShards");
+			auto& mine = chunks[a_begin / kGrain];
+			for (std::size_t i = a_begin; i < a_end; ++i) {
+				const auto& entry = list->entries[i];
+				auto& row = out[i + 1];
+				TextureTransformRow next = row;
+				next.rowOffset = entry.rowOffset;
+				next.mask = entry.mask;
+				EngineReadWindow::Lease lease;
+				if (readable(lease)) {
+					read(entry, next.values);
+					transformMaterials[i] = entry.material;
+				} else {
+					// Unread: the values stand for the material they were read from, else the row keeps its own (no component patched).
+					++mine.refused;
+					if (transformMaterials[i] != entry.material)
+						next.mask = 0;
+				}
+				if (std::memcmp(&next, &row, sizeof(row)) != 0) {
+					row = next;
+					mine.changed.push_back(static_cast<std::uint32_t>(i + 1));
+				}
+			}
+		});
+		std::uint64_t changed = 0, refusedHere = 0;
+		for (const auto& chunk : chunks) {
+			for (const auto at : chunk.changed)
+				transforms.Mark(at);
+			changed += chunk.changed.size();
+			refusedHere += chunk.refused;
+		}
+		transformsSampled += count;
+		transformsChanged += changed;
+		transformsRefused += refusedHere;
+		// Parity (CS_DCLF_PERSISTENT_PARITY, the moved-only parity's frames): every entry read again at the producer's end against what it
+		// sends. The frame's buffer stands all frame (the controllers write the other), so a difference is a write to the buffer the
+		// frame's shaders read, or a sampling defect.
+		if (a_job.parity) {
+			ZoneScopedN("CS.DCLF.FrameValues.TextureTransformsParity");
+			auto& p = transformParity;
+			++p.checks;
+			for (std::size_t i = 0; i < count; ++i) {
+				const auto& entry = list->entries[i];
+				const auto& row = out[i + 1];
+				EngineReadWindow::Lease lease;
+				if (!readable(lease) || transformMaterials[i] != entry.material)
+					continue;
+				float values[4];
+				read(entry, values);
+				++p.entries;
+				if (row.rowOffset == entry.rowOffset && row.mask == entry.mask && std::memcmp(values, row.values, sizeof(values)) == 0)
+					continue;
+				++p.differ;
+				if (p.first.empty())
+					p.first = fmt::format("entry {} (material {}, row byte {}): sent ({}, {}, {}, {}) mask {:x}, now ({}, {}, {}, {}) in buffer {}", i,
+						static_cast<const void*>(entry.material), entry.rowOffset, row.values[0], row.values[1], row.values[2], row.values[3], row.mask, values[0],
+						values[1], values[2], values[3], buffer);
+			}
+			if (p.checks >= 5 || p.differ) {
+				logger::info("[DCLF] frame values' texture transforms (parity): {} checks, {} entries read again, {} differ{}{}", p.checks, p.entries, p.differ,
+					p.differ ? " <- DIFFER; first: " : " <- OK", p.first);
+				p = {};
+			}
+		}
+		// The line (CS_DCLF_STATS): what the rows carrying TexcoordOffset cost a frame and how many scrolled.
+		++transformLineFrames;
+		transformLineEntries += count;
+		transformLineChanged += changed;
+		transformLineRefused += refusedHere;
+		if (transformLineFrames >= 300) {
+			if (Diagnostics::Observe().stats) {
+				const double n = static_cast<double>(transformLineFrames);
+				// The list's stages since the last line: built by the builder (rows left out by reason), carried by a payload, installed.
+				namespace stats = TextureTransformStats;
+				const auto take = [](std::atomic<std::uint64_t>& a_counter) { return a_counter.exchange(0, std::memory_order_relaxed); };
+				const auto built = take(stats::built), builtEntries = take(stats::builtEntries), unpacked = take(stats::rowsUnpacked),
+						   noTexcoord = take(stats::rowsNoTexcoord), freeSlot = take(stats::rowsFreeSlot), stale = take(stats::rowsStale);
+				const auto published = take(stats::published), publishedEntries = take(stats::publishedEntries), publishedNone = take(stats::publishedNone);
+				const auto adopted = take(stats::adopted), adoptedEntries = take(stats::adoptedEntries), adoptedNone = take(stats::adoptedNone);
+				const auto per = [](std::uint64_t a_sum, std::uint64_t a_count) { return a_count ? static_cast<double>(a_sum) / static_cast<double>(a_count) : 0.0; };
+				logger::info("[DCLF] frame values' texture transforms: {} frames; a frame {:.0f} material rows sampled, {:.1f} changed (scrolled) and sent, {} unread "
+							 "(refused leases, a producer a frame behind); lists built {} ({:.0f} entries; a build left out {:.0f} unpacked, {:.0f} without TexcoordOffset, "
+							 "{:.0f} free slots, {:.0f} stale), carried {} ({:.0f} entries, {} main payloads without one{}), installed {} ({:.0f} entries, {} none)",
+					transformLineFrames, transformLineEntries / n, transformLineChanged / n, transformLineRefused, built, per(builtEntries, built), per(unpacked, built),
+					per(noTexcoord, built), per(freeSlot, built), per(stale, built), published, per(publishedEntries, published), publishedNone,
+					publishedNone ? " <- LIST LOST" : "", adopted, per(adoptedEntries, adopted), adoptedNone);
+			}
+			transformLineFrames = transformLineEntries = transformLineChanged = transformLineRefused = 0;
+		}
+	}
+
 	void FrameValues::Impl::SampleShadingRows(const Job& a_job, std::size_t a_slots)
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.Shading");
@@ -1574,6 +1730,7 @@ namespace DCLF
 		Send(a_job, kShading, shading);
 		Send(a_job, kFadeSeeds, seeds);
 		Send(a_job, kTreeSeeds, treeSeeds);
+		Send(a_job, kTextureTransforms, transforms);
 	}
 
 	FrameValues::FrameValues() :
@@ -1680,7 +1837,7 @@ namespace DCLF
 			if (host)
 				host->SetFrameWaitValue(0);
 			// No backing is leased for the frame: its draws have no rows (no index names a backing the pool may release).
-			frameIndex = paletteIndex = shadingIndex = seedsIndex = treeSeedsIndex = 0;
+			frameIndex = paletteIndex = shadingIndex = seedsIndex = treeSeedsIndex = transformsIndex = 0;
 			if (!s.unavailableLogged && s.seq) {
 				s.unavailableLogged = true;
 				logger::error("[DCLF] frame values unavailable ({}): DCLF's draws have no placements", !host ? "no render graph" : "no dedicated upload queue");
@@ -1700,6 +1857,7 @@ namespace DCLF
 			s.plans.pop_front();
 		static const Plan kEmpty{};
 		const std::uint64_t seq = ++s.seq;
+		s.kickedSeq.store(seq, std::memory_order_release);
 		Impl::Job job;
 		job.seq = seq;
 		job.plan = s.plan ? s.plan.get() : &kEmpty;
@@ -1718,11 +1876,16 @@ namespace DCLF
 		job.treeSeedValues = std::exchange(s.unsentTreeSeeds, {});
 		job.treeSeedRows = s.treeSeedRows;
 		job.globals = a_globals;
+		// The installed payload's TexcoordOffset rows and the buffer this frame's shaders read (the frame's capture of it, after Main::Update's
+		// flip).
+		job.textureTransforms = textureTransforms;
+		s.transformRows = std::max<std::uint64_t>(s.transformRows, (textureTransforms ? textureTransforms->entries.size() : 0u) + 1u);
+		job.transformBuffer = a_globals ? a_globals->material.vanilla.textureTransformBuffer & 1u : 0u;
 		// Each part's backing, holding every row the producer leaves (a class of GrowthPolicy::Doubling(1024)), the one that holds
 		// most of the journal preferred; the floor (the oldest content in circulation, this lease's included) is what the
 		// producer's journal keeps.
 		const std::array<std::uint64_t, kPools> needed{ s.plan ? s.plan->slots : 0u, s.plan ? 2ull * s.plan->boneCapacity : 0u,
-			s.plan ? s.plan->slots : 0u, s.seedRows, s.treeSeedRows };
+			s.plan ? s.plan->slots : 0u, s.seedRows, s.treeSeedRows, s.transformRows };
 		for (std::size_t part = 0; part < kPools; ++part) {
 			auto& pool = s.pools[part];
 			pool.capacity = org::services::GrowthPolicy::Doubling(1024).Next(pool.capacity, needed[part]);
@@ -1792,6 +1955,7 @@ namespace DCLF
 		shadingIndex = s.frameLeases[Impl::kShading]->srvIndex;
 		seedsIndex = s.frameLeases[Impl::kFadeSeeds]->srvIndex;
 		treeSeedsIndex = s.frameLeases[Impl::kTreeSeeds]->srvIndex;
+		transformsIndex = s.frameLeases[Impl::kTextureTransforms]->srvIndex;
 		// Batches submitted from here wait for the frame's values; the producer always signals.
 		host->SetFrameWaitValue(seq);
 		s.kicked = true;
@@ -1920,6 +2084,9 @@ namespace DCLF
 		c.rootsDue = s.rootsDue.exchange(0);
 		c.moveKeys = s.moveKeys.exchange(0);
 		c.moveNodes = s.moveNodes.exchange(0);
+		c.transformsSampled = s.transformsSampled.exchange(0);
+		c.transformsChanged = s.transformsChanged.exchange(0);
+		c.transformsRefused = s.transformsRefused.exchange(0);
 		return c;
 	}
 

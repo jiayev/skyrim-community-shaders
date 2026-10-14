@@ -529,6 +529,10 @@ namespace DCLF
 		for (std::uint32_t h = 0; h < 2; ++h)
 			buffers->treeWindRows[h] = MakeVersioned(StructuredBuffer((trees + 1) * kTreeWindEntryRows, 16, h ? "cs.dclf.tree-wind1" : "cs.dclf.tree-wind0", unused, true),
 				{ .extent = { kTreeWindEntryRows * 16, kTreeWindEntryRows * 16, 16 }, .contents = GrowableContents::Zero });
+		// The frame's texture transforms into the material rows (the scene lane no longer writes them into records).
+		buffers->textureTransforms = ComputeProgram::Load(a_device, { .source = kTextureTransformsShader, .constantWords = kTextureTransformsConstantWords });
+		if (!buffers->textureTransforms)
+			logger::warn("[DCLF] The texture transforms program could not be created; DCLF's draws keep their materials' captured TexcoordOffset");
 		// Without the fade state program, fades stay the CPU's.
 		buffers->fadeState = ComputeProgram::Load(a_device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
 		if (buffers->fadeState) {

@@ -375,6 +375,7 @@ namespace DCLF::Scene
 			ReleaseObjectSlot(it->second);
 			MoveBucket(it->second, Ineligible::Count);
 			UnlistDependents(it->first, it->second, true);
+			UnlistCategoryMember(it->first, it->second);
 			UnlistFaceShape(it->first, it->second);
 			// Off its LOD gate (an outgoing block's geometries leave here, by their detach after the flip).
 			if (it->second.gate || it->second.gateHeldOut)

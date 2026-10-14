@@ -505,6 +505,8 @@ namespace DCLF
 		BuildDrawsLatch latch{};
 		latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 		latch.fadeSeedsIndex = FrameValues::Get().FadeSeedsIndex();
+		// The depth segment: the frame's TexcoordOffset rows, which TextureTransformsCS stores into the payload's material rows first.
+		latch.textureTransformsIndex = depthOnly ? FrameValues::Get().TextureTransformsIndex() : 0u;
 		PayloadLatch(parts, latch);
 		latch.dispatch[0] = (inputCount + 63) / 64;
 		latch.dispatch[1] = 1;

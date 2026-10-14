@@ -114,6 +114,9 @@ namespace DCLF::Draws
 			// Its write-back events, to the host.
 			if (resources->scene->fadeState && resources->scene->fadeRoots && resources->scene->fadeEvents && resources->scene->fadeWriteBack)
 				AddPass(a_out, PassKind::Copy, "cs.dclf.z.fade-events", MakeEventReadbackPass(resources->scene, resources->scene->fadeEvents, resources->scene->fadeWriteBack), depth, PassQueue::None);
+			// The frame's texture transforms into the payload's material rows, before anything of the frame draws from them.
+			if (resources->scene->textureTransforms)
+				AddPass(a_out, PassKind::Compute, "cs.dclf.z.texture-transforms", MakeTextureTransformsPass(resources), depth);
 			AddPass(a_out, PassKind::Compute, "cs.dclf.z.build-draws", MakeBuildDrawsPass(resources, depthSegment), depth);
 			// The pool copies the depth commit gave out (when the shadow epoch has not), before the draws read them.
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.index-pool",

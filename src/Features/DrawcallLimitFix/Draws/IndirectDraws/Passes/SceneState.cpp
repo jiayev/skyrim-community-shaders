@@ -1,4 +1,5 @@
-// Next frame's scene state, on the compute queue beside the depth epoch: tree wind and fade states.
+// Next frame's scene state, on the compute queue beside the depth epoch: tree wind and fade states; and this frame's texture transforms
+// into the material rows, first in the depth epoch.
 
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
@@ -200,6 +201,81 @@ namespace DCLF::Draws
 	std::shared_ptr<org::RenderPass> MakeFadeStatePass(std::shared_ptr<Resources> a_resources)
 	{
 		return std::make_shared<FadeStatePass>(std::move(a_resources));
+	}
+
+	struct TextureTransformsBindings
+	{};
+
+	struct TextureTransformsPrepared
+	{
+		std::shared_ptr<const ComputeProgram> program;
+		std::shared_ptr<const org::LatchBlock> latch;
+	};
+
+	/**
+	 * @brief The frame's TexcoordOffset into the installed payload's material rows (TextureTransformsCS.hlsl), first in the depth segment:
+	 * the frame values' entries (the material's buffer the frame's shaders read) stored at their rows' addresses, which every DCLF draw of
+	 * the frame then reads. The rows are read by address and declared by no pass, so the pass orders itself: full memory barriers around
+	 * its dispatch, on the graphics queue the draws run on (before it, the earlier frames' draws reading the same payload backing; after
+	 * it, this frame's). It declares the sequences as written (no view) so the graph keeps it before the depth build and its draws.
+	 */
+	class TextureTransformsPass final : public org::TypedRenderGraphPass<TextureTransformsPass, TextureTransformsPrepared, TextureTransformsBindings>
+	{
+	public:
+		explicit TextureTransformsPass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		TextureTransformsBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const std::span<const org::UavView> noViews{};
+			(void)a_builder.UnorderedAccess(*resources->sequences, noViews);
+			return {};
+		}
+
+		// The recording depends on the depth shape (its latch); the rows, the entries and their count are the latch's and the entries'.
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
+			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass) ? 1u : 0u);
+		}
+
+		TextureTransformsPrepared Prepare(const TextureTransformsBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		{
+			TextureTransformsPrepared prepared{};
+			// Where the depth build runs: its commit wrote the latch (the payload's rows, the frame values' entries) in the frame slot.
+			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
+			if (!resources->scene->textureTransforms || !frame || !frame->latch || !BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass))
+				return prepared;
+			prepared.program = resources->scene->textureTransforms;
+			prepared.latch = frame->latch;
+			return prepared;
+		}
+
+		static void Record(const TextureTransformsBindings&, const TextureTransformsPrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.program || !a_frame.latch)
+				return;
+			TextureTransformsConstants constants{};
+			constants.latchIndex = a_frame.latch->SrvIndex();
+			// The depth segment's BuildDrawsLatch in this frame slot.
+			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
+			auto& commands = a_recording.Commands();
+			const rhi::GlobalBarrier global = rhi::FullMemoryBarrier();
+			const rhi::BarrierBatch batch{ {}, {}, { &global, 1 } };
+			commands.Barriers(batch);
+			RecordDispatch(commands, *a_frame.program, constants, kTextureTransformsGroups);
+			commands.Barriers(batch);
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
+
+	std::shared_ptr<org::RenderPass> MakeTextureTransformsPass(std::shared_ptr<Resources> a_resources)
+	{
+		return std::make_shared<TextureTransformsPass>(std::move(a_resources));
 	}
 }
 

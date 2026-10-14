@@ -20,7 +20,8 @@ namespace DCLF
 	 *   priority unless CS_DCLF_ASYNC_PRIORITY=normal.
 	 * - The scene lane: one thread, serialized, for the scene pump's passes (SceneLaneScope); above normal priority as the coordinator.
 	 * - The preparation pool: hardware_concurrency - 2 threads (at least one), below normal priority, beside the engine's own
-	 *   job threads; CS_DCLF_WORKERS sets the count.
+	 *   job threads; CS_DCLF_WORKERS sets the count. A worker running a ParallelFor chunk for a higher-priority caller runs it at the
+	 *   caller's priority, restored afterwards (CS_DCLF_ASYNC_PRIORITY=noboost: never).
 	 *
 	 * Started on first use and never torn down: the process ends it.
 	 */

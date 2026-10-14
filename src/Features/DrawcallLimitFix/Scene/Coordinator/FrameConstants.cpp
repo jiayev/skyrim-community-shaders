@@ -76,8 +76,8 @@ namespace DCLF::Scene
 		MaterialSources::StripFrameViews(a_out.record, a_pass);
 		if (a_slot == kNoMaterialSlot)
 			return;
-		// A rewrite: its frame parts (the frame components, TexcoordOffset) are kept by the signature's and the transform watch's writes,
-		// so only the material's own values are compared and rewritten.
+		// A rewrite: its frame parts are kept (the frame components are the signature's writes; TexcoordOffset stays the slot's: the frame
+		// values patch the rows with the frame's), so only the material's own values are compared and rewritten.
 		const auto& held = tables.materials[a_slot];
 		MaterialSources::CopyFrameComponents(held, a_out.record, a_pass);
 		MaterialSources::KeepUnreadFloats(held, a_out.record);
@@ -86,15 +86,14 @@ namespace DCLF::Scene
 
 	void Coordinator::RefreshMaterialRecords()
 	{
-		// The scene work, its frame's FrameGlobals bound, the captures drained (ApplyEvents): the written materials' records,
-		// the frame components, the texture transforms, in that order (a rewrite keeps the slot's frame parts, which the two after bring
-		// to this frame's sources). No engine read: the captures and the frame's sample are the inputs.
+		// The scene work, its frame's FrameGlobals bound, the captures drained (ApplyEvents): the written materials' records, then the
+		// frame components (a rewrite keeps the slot's frame parts, which the signatures bring to this frame's sources). The texture
+		// transforms are no record's (TextureTransformList). No engine read: the captures and the frame's sample are the inputs.
 		ZoneScopedN("CS.DCLF.Scene.MaterialRecords");
 		++materialRecordStats.passes;
 		stats.materialWrites = stats.materialsRewritten = stats.materialsHeld = stats.frameMaterialSamples = 0;
 		RewriteCapturedMaterials();
 		RefreshMaterialSignatures();
-		RefreshMaterialTransforms();
 		// The captures' deduplication and the pool's share (CS_DCLF_STATS), with the parities where they ran: once per report window (the
 		// pass's frame in a later one; the coordinator's clock may skip frame numbers), whatever the passes a frame.
 		auto& r = materialRecordStats;
@@ -104,9 +103,9 @@ namespace DCLF::Scene
 		if (window != materialReportWindow && (Diagnostics::Observe().stats || parityRan)) {
 			materialReportWindow = window;
 			logger::info("[DCLF] material captures: {} deduplicated ({} transforms only), {} relisted; evaluations pooled {} in {} rounds, joins' {} prepared "
-						 "{} inline; watches skipped {} dropped {}; applications pooled {}; dedup parity {} checks, {} differ{}",
-				s.deduped, s.transformsOnly, s.relisted, r.evaluationsPooled, r.poolRounds, r.joinPrepared, r.joinInline, r.watchesSkipped, r.watchesDropped,
-				r.appliedPooled, materialDedupParity.checks, materialDedupParity.mismatches, materialDedupParity.Verdict(true));
+						 "{} inline; transform captures left to the frame values {}; applications pooled {}; dedup parity {} checks, {} differ{}",
+				s.deduped, s.transformsOnly, s.relisted, r.evaluationsPooled, r.poolRounds, r.joinPrepared, r.joinInline, r.transformsWatched, r.appliedPooled,
+				materialDedupParity.checks, materialDedupParity.mismatches, materialDedupParity.Verdict(true));
 			// The bindings' and lookups' change sets: owner blocks sealed or shared, waiters deduplicated, masks looked up of those checked
 			// (and full sweeps), Lighting pipeline entries resolved of those witnessed, shadow resolutions skipped; their parities.
 			auto& mw = materialBindings.work;
@@ -157,10 +156,8 @@ namespace DCLF::Scene
 			if (held == materialSnapshots.end() || !held->second.held)
 				return;  // let go: no slot has used it for kMaterialSnapshotFrames, and its next capture comes with its next write
 			const auto& snapshot = held->second.held->snapshot;
-			if (!a_parity) {
+			if (!a_parity)
 				held->second.frame = sceneFrame;
-				WatchMaterialTransforms(a_material, snapshot);
-			}
 			for (const std::uint32_t slot : dependents->second)
 				if (slot < tables.materials.size() && tables.materialSlots.Alive(slot) && tables.materialSlotKey[slot].first == a_material)
 					items.push_back({ a_material, &snapshot, slot, a_parity });
@@ -335,62 +332,16 @@ namespace DCLF::Scene
 		}
 	}
 
-	void Coordinator::RefreshMaterialTransforms()
-	{
-		// TexcoordOffset: the frame reads one of a material's two buffers (FrameGlobals' textureTransformBuffer, flipped every frame by
-		// Main::Update), and a controller's write captures it (MaterialSources). A material is watched from a capture its records may lack
-		// (WatchMaterialTransforms); meanwhile its slots take the frame's buffer. Once both buffers agree, the flip moves nothing: after this
-		// application every slot holds the value, and the watch lets it go (a later capture watches it again).
-		auto& r = materialRecordStats;
-		const std::uint32_t buffer = FrameGlobals::Current().material.vanilla.textureTransformBuffer & 1;
-		r.transformsWatched += transformWatch.size();
-		if (transformWatch.empty())
-			return;
-		// Each watched material's slots (disjoint: a slot is one material's), written in place by chunks and versioned after, in order.
-		auto& items = materialApplyItems;
-		items.clear();
-		std::vector<const RE::BSShaderMaterial*> dropped;
-		for (std::uint32_t w = 0; w < transformWatch.size(); ++w) {
-			const auto& [material, watch] = *(transformWatch.begin() + w);
-			const auto dependents = materialDependents.find(material);
-			if (dependents == materialDependents.end()) {
-				dropped.push_back(material);
-				continue;
-			}
-			for (const std::uint32_t slot : dependents->second)
-				if (slot < tables.materials.size() && tables.materialSlots.Alive(slot) && tables.materialSlotKey[slot].first == material)
-					items.push_back({ slot, w, 0 });
-			if (watch.transforms.Agree())
-				dropped.push_back(material);
-		}
-		if (PrepareMaterials("CS.DCLF.Scene.MaterialTransformsShards", items.size(), [&](std::size_t a_begin, std::size_t a_end) {
-				for (std::size_t i = a_begin; i < a_end; ++i) {
-					const auto& watch = (transformWatch.begin() + items[i].signature)->second;
-					items[i].changed = static_cast<std::uint8_t>(MaterialSources::ApplyTextureTransform(watch.transforms, buffer, tables.materials[items[i].slot]) ? 2u : 0u);
-				}
-			}))
-			r.appliedPooled += items.size();
-		for (const auto& item : items)
-			if (item.changed) {
-				tables.materialFrameVersion[item.slot] = ++materialVersions;
-				tables.NoteMaterial(item.slot);
-				++r.transformsWritten;
-			}
-		for (const auto* material : dropped)
-			transformWatch.erase(material);
-		r.watchesDropped += dropped.size();
-	}
-
 	void Coordinator::NoteMaterialRecord(std::uint32_t a_slot, const MaterialPort::MaterialSnapshot& a_snapshot)
 	{
-		// The material's transforms are its writer's (WatchMaterialTransforms, once per material).
+		// The material's texture transforms are no record's (the frame values patch the rows: TextureTransformList).
 		if (a_slot >= tables.materialSlotKey.size())
 			return;
 		const auto [material, pass] = tables.materialSlotKey[a_slot];
 		if (!material)
 			return;
-		// The Effect port: an effect record has no signature-sourced component (its pass descriptor's bits are not Lighting's), only its
-		// texture transforms.
+		// The Effect port: an effect record has no signature-sourced component (its pass descriptor's bits are not Lighting's); its texture
+		// transforms are the frame values'.
 		if (a_slot < tables.materials.size() && tables.materials[a_slot].kind == kMaterialKindEffect)
 			return;
 		const std::uint32_t signature = MaterialSources::Signature(pass);
@@ -419,19 +370,11 @@ namespace DCLF::Scene
 		}
 	}
 
-	void Coordinator::WatchMaterialTransforms(const RE::BSShaderMaterial* a_material, const MaterialPort::MaterialSnapshot& a_snapshot, bool a_recordsCurrent)
+	void Coordinator::WatchMaterialTransforms(const RE::BSShaderMaterial*, const MaterialPort::MaterialSnapshot&, bool)
 	{
-		const auto transforms = MaterialSources::TextureTransformsOf(a_snapshot);
-		auto it = transformWatch.find(a_material);
-		// A join's new record holds this frame's buffer, and with the two agreeing the flip never moves it: nothing to follow.
-		if (it == transformWatch.end() && a_recordsCurrent && transforms.Agree()) {
-			++materialRecordStats.watchesSkipped;
-			return;
-		}
-		if (it == transformWatch.end())
-			it = transformWatch.try_emplace(a_material).first;
-		it->second.transforms = transforms;
-		it->second.frame = sceneFrame;
+		// The texture transforms are no record's: the frame values read every material row's TexcoordOffset from the buffer the frame's
+		// shaders read, and the GPU patches the rows (TextureTransformList, TextureTransformsCS). No version moves, nothing is logged.
+		++materialRecordStats.transformsWatched;
 	}
 
 	void Coordinator::ResetMaterialRecords()
@@ -441,7 +384,6 @@ namespace DCLF::Scene
 			item.second.appliedValid = false;
 		}
 		materialSignatureListed.clear();
-		transformWatch.clear();
 		materialRewritesPending.clear();
 	}
 
@@ -478,27 +420,72 @@ namespace DCLF::Scene
 
 	void Coordinator::NameShadingKeys(const std::vector<const void*>& a_keys, std::vector<std::uint32_t>* a_slots)
 	{
-		for (const void* key : a_keys) {
-			const auto dependents = propertyDependents.find(key);
-			if (dependents == propertyDependents.end())
-				continue;
-			for (auto* geometry : dependents->second) {
-				const auto it = tracked.find(geometry);
-				if (it == tracked.end() || it->second.slot == kNoObjectSlot || it->second.objectStamp != objectStamp)
+		// Prepared by chunks of keys (across the pool when they are many: FanoutMode), pure: each key's dependents, their slots and
+		// what NameShading would name, read from the frozen index and tables. Applied on the pass's thread in key order: the items
+		// with their references, the extras' rows, the counters (as the serial loop did, slot by slot).
+		struct Named
+		{
+			std::uint32_t slot = kNoObjectSlot;
+			RE::BSShaderProperty* property = nullptr;  // none: NameShading names nothing (free, unbound or propertyless)
+			std::uint32_t pass = 0;
+			bool member = false, actor = false;
+		};
+		constexpr std::size_t kGrain = 64;
+		std::vector<std::vector<Named>> prepared((a_keys.size() + kGrain - 1) / kGrain);
+		auto prepare = [&](std::size_t a_begin, std::size_t a_end) {
+			auto& out = prepared[a_begin / kGrain];
+			for (std::size_t k = a_begin; k < a_end; ++k) {
+				const auto dependents = propertyDependents.find(a_keys[k]);
+				if (dependents == propertyDependents.end())
 					continue;
-				for (const std::uint32_t slot : { it->second.slot, it->second.layerSlot }) {
-					if (slot == kNoObjectSlot || slot >= tables.objects.size())
+				for (auto* geometry : dependents->second) {
+					const auto it = tracked.find(geometry);
+					if (it == tracked.end() || it->second.slot == kNoObjectSlot || it->second.objectStamp != objectStamp)
 						continue;
-					NameShading(slot, IsResidentSlot(slot));
-					// The extras' static rows read the same property fields (ProjectedUV's parameters and colour).
-					if ((tables.objects[slot].flags & (kObjectProjectedUV | kObjectLandBlend)) && WriteObjectExtras(slot))
-						tables.NoteChange(slot, kChangeExtras);
-					++shadingStats.resampled;
-					if (a_slots)
-						a_slots->push_back(slot);
+					for (const std::uint32_t slot : { it->second.slot, it->second.layerSlot }) {
+						if (slot == kNoObjectSlot || slot >= tables.objects.size())
+							continue;
+						auto& named = out.emplace_back();
+						named.slot = slot;
+						if (slot >= tables.objectGeometry.size() || (tables.objects[slot].flags & (kObjectNoBindings | kObjectFree)))
+							continue;
+						if ((named.property = SlotProperty(slot))) {
+							named.pass = tables.pipelines[tables.objects[slot].pipelineIndex].passDescriptor;
+							named.member = IsResidentSlot(slot);
+							named.actor = tables.actorWetness.Grouped(slot);
+						}
+					}
 				}
 			}
+		};
+		if (FanoutMode(a_keys.size()) == 2) {
+			SceneScheduler::Executor().ParallelFor("CS.DCLF.Scene.ShadingShards", a_keys.size(), kGrain, [&](std::size_t a_begin, std::size_t a_end) {
+				ZoneScopedN("CS.DCLF.Scene.ShadingShards");
+				const auto scope = ShardScope(*this, true);
+				prepare(a_begin, a_end);
+			});
+		} else {
+			for (std::size_t k = 0; k < a_keys.size(); k += kGrain)
+				prepare(k, std::min(k + kGrain, a_keys.size()));
 		}
+		for (const auto& chunk : prepared)
+			for (const auto& named : chunk) {
+				const std::uint32_t slot = named.slot;
+				if (named.property) {
+					auto& item = shadingNamed.emplace_back();
+					item.property.reset(named.property);
+					item.slot = slot;
+					item.pass = named.pass;
+					item.member = named.member;
+					item.actor = named.actor;
+				}
+				// The extras' static rows read the same property fields (ProjectedUV's parameters and colour).
+				if ((tables.objects[slot].flags & (kObjectProjectedUV | kObjectLandBlend)) && WriteObjectExtras(slot))
+					tables.NoteChange(slot, kChangeExtras);
+				++shadingStats.resampled;
+				if (a_slots)
+					a_slots->push_back(slot);
+			}
 	}
 
 	void Coordinator::NameShadingEvents(std::vector<std::uint32_t>* a_slots)

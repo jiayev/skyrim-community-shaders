@@ -2761,7 +2761,7 @@ stats buffers. In the worst frames the epochs' submission (`ORG.Frame.SubmitPack
 **What changed.**
 - **Scene lane and publication.**
   - Movers by move event (`Tracked::moveKey`, `moveKeyOuter`, `Coordinator::MoverDue`); the placement plan is the complete
-    mover and root set, emitted only when the set changes. Mirror updates of `NodeRecord::kBody`/`kControllers` and
+    mover and root set, emitted only when the set changes (now a delta: "The scene lane as bookkeeping", below). Mirror updates of `NodeRecord::kBody`/`kControllers` and
     `GeometryRecord::kDismember`/`kSkin` reclassify the dependents (`ApplyMotionUpdate`), replacing the per-frame skin poll.
     `kTraitAnimatedShading` no longer keeps an entry per frame; `kTraitSwitch` is gone. Particle systems push their key on
     a new snapshot.
@@ -2810,6 +2810,104 @@ stats buffers. In the worst frames the epochs' submission (`ORG.Frame.SubmitPack
 
 **Open:** dclf-open-defects.md, "Polls and render-thread work left (2026-10-14)"; the commit's parts not done are in
 dclf-pool-followups.md.
+
+## The scene lane as bookkeeping (2026-10-14)
+
+dclf-architecture.md, "The scene lane", is the present; this is the record. Plan: `hazy-percolating-canyon.md`. Round 1
+(W1-W5) is commit 6715e140; round 2 (W6-W10) followed it.
+
+**Why.** In traversal (cells attaching every frame) `CS.DCLF.ScenePass` saturated the scene lane: `Scene.Placements` took
+up to 3 ms, `MaterialRecords` and `MaterialBindings` about 1 ms each, and the snapshot builder ran serially on one worker,
+mostly in `BuildMain.Pairs.Resolve`. One shape was behind all of it:
+-   the pump is level-triggered (a wake during a pass runs another, 18-121 passes a frame in a load), and every pass that wrote
+    anything published;
+-   each pass paid costs proportional to the whole set, not to what changed;
+-   only the evaluate halves of the walk, the subtrees and the joins went to the pool; their merges were heavy and serial;
+-   the builder's pair test was triggered and witnessed far too broadly.
+
+**Round 1.**
+-   **W1, placement plans as deltas.** `PlacementPlan` carries `movers`/`roots` joined or changed, `moversLeft`, `rootsLeft`,
+    `dependentsLeft` and `reset`; FrameValues applies every plan in order to its kept set (parity: the plan's `check`, the
+    coordinator's whole set, `<- PLACEMENT DELTAS DIFFER`). The delta walk schedules dirty roots light
+    (`ScheduleRoot(root, false)`), and the dependents lists are indexed (`*DependentsAt`, `List`/`Unlist`).
+-   **W2, materials.** Captures of one material in a pass are held once (`HeldMaterial::listed`); evaluations
+    (`EvaluateMaterial`, `PrepareMaterials`, `PrepareJoinMaterials`) run on the pool. `Lookups::Material` holds one immutable
+    owner block (`MaterialOwners`: 16 texture and 14 feature owners and the sealed ORG lease) instead of two owner arrays.
+    `ResolvePipelineLookups` is witness-driven (the full one is the parity reference), `ResolveShadowLookups` allocation-free,
+    and the shadow texture index refcounted (`shadowTextureNet`).
+-   **W3, publication pacing.** A pass publishes only when it runs inline, took frame inputs, finds the builder has taken the
+    previous publication (`IndirectDraws::SnapshotWorkTaken()`, stored in the builder's `takeWork`), or nothing was published;
+    otherwise the apply, the claims, the deltas and the tables wait for the next publishing pass. The claims are replayed
+    into a pooled snapshot from `setPhaseLog`; `setSnapshot` and `RefreshSetSnapshot` are gone. The pre-join
+    `UpdateMaterialBindings`/`UpdateSharedBindings` and `PublishScene`'s second `ResolveLookups` are gone. Parity:
+    `Policy::CheckPacedPublication` (`CS_DCLF_SET_PARITY`). Report: `[DCLF] publication pacing`.
+-   **W4, the snapshot builder.** Pair checks narrowed to the pairs the events name and those of pipelines whose witness moved
+    (`pipelinePairs`), resolved again only when their witness moved; each pair keeps its objects for the entries to rewrite.
+    The owner bundle is kept by count and remade only when an owner joins or leaves; tables hashes are cached per lookup
+    entry (`tablesHashes`). `Pairs.Resolve` and the region resync run on the pool; `MainBuildStages` overlaps the stream views
+    with the main build; the shadow exclusions and `CountModeDraws` run on the pool. Parity: `CheckBuilderPairs`
+    (`<- PAIRS NARROWED`), `CheckRowPacking`, `CheckRegionResync`. Report: `[DCLF] main pairs`.
+-   **W5, chunked `KeptArray`.** Copy-on-write chunks of about 16 KB (16 material rows), with retired chunks reused once no view
+    holds them; `PrepareWrites`/`Write`/`WriteParts` from many threads, then `Mark*` on the owner. `KeptWholeArray` keeps the
+    old whole-vector behaviour for FrameValues' arrays. `KeptView::elements` is `KeptElements<T>` (no `data()`: `Emit` and
+    `ForEachSpan` give chunk-bounded spans).
+
+**Round 2.**
+-   **W6, publication replay and the pass's own time.** Every step of `RunSceneWork` has a zone, so ScenePass's self time is
+    what no step covers (it was 27% of an average pass). `PublishTables`' replay is collected once and run as `ParallelFor` jobs
+    over disjoint columns and material-record ranges, by contiguous runs, into the pooled snapshot nearest the tables; a
+    logged column a cause covers is copied only for slots noted with that cause (parity: `<- REPLAY DIFFERS`). Fixed per-pass
+    costs skipped when nothing moved (the technique rows' witness, the waiting list's compaction, the catalog counted once).
+-   **W7, the executor.** A helper holding an above-normal caller's chunk runs at the caller's priority, restored after
+    (`SceneExecutor::ThreadPriority`; `CS_DCLF_ASYNC_PRIORITY=noboost` for the A/B). Chunks stay `[k * grain, ...)` (no guided
+    chunking: callers index results by `a_begin / grain`). Per-name wait statistics (`GetParallelForStatistics`, the
+    `[DCLF] parallel-for waits` line). CPU tests: coverage, priority restore, late helpers.
+-   **W8, the attach burst.** `SceneMirror::Prepare` on the pool and `Apply` by move; the replays walk an update log chained per
+    key and skip a capture numbered after every kept update; `BatchIndex` from one walk of the batch. `PrepareGeometry` takes
+    the pins, held keys, sun entry, gate token and LOD segments, so `AddGeometry` only inserts. Tracked entries indexed by
+    category node (`categoryMembers`, unlisted at `EraseTracked`). Parity: `CheckMirrorApply`, `CheckMirrorUses`,
+    `CheckCategoryMembers` (`<- CATEGORY INDEX`). Report: `[DCLF] attach burst`. The material snapshots age once a frame.
+-   **W9, candidates, shadow sets, prefetch, shading.** The candidate tables' pooled snapshots are spares caught up on the pool
+    from the published snapshot (`CandidateTable::pool`; `CS.DCLF.Scene.SunCandidates.Spare`). The shadow index is no longer
+    rebuilt on an empty journal: a slotless entry's detach, common in traversal, had forced an O(objects) rebuild (the likely
+    source of `Capture.ShadowSets`' 2.5 ms p99); only a reset or a full walk rebuilds it. `GpuResources::Prefetch` describes
+    on the pool (DXVK's describe touches no context state); the lane runs a batch it finds unstarted, waits for one running.
+    `NameShadingKeys` is prepared on the pool.
+-   **W10, texture transforms out of `MaterialRecord`.** About 1,240 materials scroll their `TexcoordOffset`; each move was a
+    record write, a material row and a publication, and `RefreshMaterialTransforms` reapplied every watched slot on every
+    pass. Now a record keeps its capture-time value; the main build lists every packed row carrying one
+    (`TextureTransformList`), FrameValues' `texture-transforms` pool samples each entry's current value every frame (only
+    moved rows uploaded), and `cs.dclf.z.texture-transforms` patches the installed payload's rows first in the Z-prepass
+    epoch. Every carrying row is patched, not only the scrolling ones: a backing leased again sends only the parts its journal
+    marked, so a row left out would keep a stale patch. `RefreshMaterialTransforms` and the transform watch are gone. The
+    Lighting float controller and the effect controllers no longer capture a write that moved only the transforms (about 1,490
+    of 3,700 captures a frame). Parity, under `CS_DCLF_PERSISTENT_PARITY`: the producer reads every entry again at its end,
+    and the builder checks each entry against a fresh packing's position. A first build listed nothing: `Finish` tested
+    the unpublished slot allocation; a slot's liveness is now its key.
+
+**Measured** (motion timing run, about 3,600 frames, Tracy; W0 baseline against round 2, with round 1 where it was the
+measure):
+
+| | W0 | after round 1 | after round 2 |
+| --- | --- | --- | --- |
+| ScenePass busy a frame, mean / p99 | 2.77 / 11.3 ms | 2.53 / 10.2 ms | 1.74 / 8.2 ms |
+| Average pass | | 915 us | 559 us |
+| Worst 30 passes, mean | | 7.3 ms | 6.1 ms |
+| `Scene.Placements` p99 | 566 us | 59 us | 51 us |
+| `BuildMain.Pairs.Resolve` a frame | 0.88 ms | 0.38 ms | 0.26 ms |
+| `BuildMainPayload` a frame | 1.11 ms | | 0.35 ms |
+| SnapshotBuilder busy a frame | 2.34 ms | 1.83 ms | 1.61 ms |
+
+-   Passes a frame rose (mean 2.5 to 3.1, max 58 to 116): pacing defers the publication, not the pass.
+-   Frame time is unchanged (mean 9.71 against 9.72 ms, p99 22.0 against 22.2). The worst frames are outside the lane:
+    `CS.ORG.FlushNativeProducer`, `RHI.Vulkan.QueueAccess` and Upscaling stalls of 17-56 ms.
+-   The texture transforms cost 0.30 ms a frame on the pool (`FrameValues.TextureTransformsShards`), 0.08 on the producer and
+    0.05 in the builder.
+-   Targets missed: the average pass under 0.4 ms (559 us) and the worst 30 under 3 ms (6.1 ms). `Scene.Joins` reads 0.22 ms a frame
+    against 0.09 at W0 only because the one bindings call now sits inside it (`MaterialBindings`, 0.145 ms a frame); the joins
+    themselves are about 0.075 ms a frame.
+
+**Open:** dclf-open-defects.md, "The scene lane and the snapshot builder: work left (2026-10-14)".
 
 ## Implemented foundations
 

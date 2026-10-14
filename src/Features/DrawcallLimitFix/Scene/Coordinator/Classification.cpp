@@ -209,24 +209,64 @@ namespace DCLF::Scene
 			}
 		}
 		if (removedAny || removedRoot) {
+			// The members of the cells that went away, and of the category nodes a changed portal root was filed under (only those can
+			// hold an entry whose chain tops out at that root): the index's, not a walk over every tracked entry.
+			auto& a = attachStats;
 			std::vector<RE::BSGeometry*> stale;
-			for (auto& [geometry, entry] : tracked) {
-				if (!current.contains(entry.categoryNode)) {
-					stale.push_back(geometry);
+			// Filed under a portal root: stale when the root left.
+			auto portalStale = [&](RE::BSGeometry* a_geometry, const RE::NiNode* a_category) {
+				const void* top = a_geometry;
+				const void* parent = mirror.Parent(top);
+				for (; parent && parent != a_category; parent = mirror.Parent(top))
+					top = parent;
+				if (parent || !alwaysRenderRoots.contains(static_cast<const RE::NiAVObject*>(top)))
+					return false;
+				const auto it = currentRoots.find(static_cast<const RE::NiAVObject*>(top));
+				return it == currentRoots.end() || it->second.category != a_category;
+			};
+			// Every category node entries are filed under that the capture lacks (a portal category too, not a category node itself).
+			std::vector<const RE::NiNode*> scanned;
+			for (const auto& [node, members] : categoryMembers)
+				if (!current.contains(const_cast<RE::NiNode*>(node))) {
+					++a.categoriesLeft;
+					scanned.push_back(node);
+				}
+			const std::size_t gone = scanned.size();
+			if (removedRoot)
+				for (const auto& [root, entry] : alwaysRenderRoots)
+					if (const auto it = currentRoots.find(root); (it == currentRoots.end() || it->second.category != entry.category) && current.contains(const_cast<RE::NiNode*>(entry.category)) &&
+																 std::find(scanned.begin(), scanned.end(), entry.category) == scanned.end())
+						scanned.push_back(entry.category);
+			for (std::size_t i = 0; i < scanned.size(); ++i) {
+				const auto members = categoryMembers.find(scanned[i]);
+				if (members == categoryMembers.end())
 					continue;
+				for (auto* geometry : members->second) {
+					const auto entry = tracked.find(geometry);
+					if (entry == tracked.end() || entry->second.categoryNode != scanned[i])
+						continue;
+					a.rootsLeftScanned += i >= gone ? 1 : 0;
+					if (i < gone || portalStale(geometry, scanned[i]))
+						stale.push_back(geometry);
 				}
-				// Filed under a portal root: stale when the root left.
-				if (removedRoot && alwaysRenderRoots.size()) {
-					const void* top = geometry;
-					const void* parent = mirror.Parent(top);
-					for (; parent && parent != entry.categoryNode; parent = mirror.Parent(top))
-						top = parent;
-					if (!parent && alwaysRenderRoots.contains(static_cast<const RE::NiAVObject*>(top))) {
-						const auto it = currentRoots.find(static_cast<const RE::NiAVObject*>(top));
-						if (it == currentRoots.end() || it->second.category != entry.categoryNode)
-							stale.push_back(geometry);
-					}
+			}
+			a.categoryMembersDropped += stale.size();
+			if (Policy::CheckCategoryMembers(true, passSerial)) {
+				// Parity: the whole scan's stale set (the walk the index replaced) against the index's.
+				std::vector<RE::BSGeometry*> whole;
+				for (auto& [geometry, entry] : tracked)
+					if (!current.contains(entry.categoryNode) || (removedRoot && alwaysRenderRoots.size() && portalStale(geometry, entry.categoryNode)))
+						whole.push_back(geometry);
+				std::vector<RE::BSGeometry*> indexed = stale;
+				std::ranges::sort(whole);
+				std::ranges::sort(indexed);
+				++a.categoryChecks;
+				if (whole != indexed) {
+					if (a.categoryDiffer++ == 0)
+						a.categoryFirst = fmt::format("a refresh dropped {} entries by the index, {} by the whole scan ({} cells gone, {} portal categories scanned)", indexed.size(),
+							whole.size(), gone, scanned.size() - gone);
 				}
+				CheckCategoryMembers("a refresh's removal");
 			}
 			for (auto* geometry : stale)
 				EraseTracked(geometry);
@@ -276,6 +316,73 @@ namespace DCLF::Scene
 			walked.emplace_back(root, SubtreeSource::CategoryWalk);
 		AddSubtrees(walked);
 		addSource = previousSource;
+	}
+
+	void Coordinator::UnlistCategoryMember(RE::BSGeometry* a_geometry, Tracked& a_tracked)
+	{
+		if (a_tracked.categoryNode)
+			Unlist(categoryMembers, categoryMembersAt, static_cast<const RE::NiNode*>(a_tracked.categoryNode), a_geometry);
+	}
+
+	void Coordinator::CheckCategoryMembers(const char* a_where)
+	{
+		// Every tracked entry listed under its category node at its position, and every listed one tracked under that node.
+		auto& a = attachStats;
+		++a.categoryChecks;
+		std::size_t missing = 0, stray = 0, misplaced = 0;
+		std::string first;
+		for (const auto& [geometry, entry] : tracked)
+			if (!categoryMembersAt.contains(std::pair<const void*, const RE::BSGeometry*>{ entry.categoryNode, geometry }) && missing++ == 0)
+				first = fmt::format("geometry {} filed under {} is not listed", static_cast<const void*>(geometry), static_cast<const void*>(entry.categoryNode));
+		for (const auto& [node, members] : categoryMembers)
+			for (std::uint32_t i = 0; i < members.size(); ++i) {
+				const auto entry = tracked.find(members[i]);
+				if (entry == tracked.end() || entry->second.categoryNode != node) {
+					if (stray++ == 0 && first.empty())
+						first = fmt::format("geometry {} listed under {} is {}", static_cast<const void*>(members[i]), static_cast<const void*>(node),
+							entry == tracked.end() ? "not tracked" : fmt::format("filed under {}", static_cast<const void*>(entry->second.categoryNode)));
+					continue;
+				}
+				const auto at = categoryMembersAt.find(std::pair<const void*, const RE::BSGeometry*>{ node, members[i] });
+				if ((at == categoryMembersAt.end() || at->second != i) && misplaced++ == 0 && first.empty())
+					first = fmt::format("geometry {} at {} under {}, its position {}", static_cast<const void*>(members[i]), i, static_cast<const void*>(node),
+						at == categoryMembersAt.end() ? std::string("none") : fmt::format("{}", at->second));
+			}
+		if (!missing && !stray && !misplaced)
+			return;
+		if (a.categoryDiffer++ == 0)
+			a.categoryFirst = fmt::format("at {}: {} tracked entries unlisted, {} listed entries stray, {} misplaced; first: {}", a_where, missing, stray, misplaced, first);
+	}
+
+	std::string Coordinator::TakeAttachLine()
+	{
+		auto& a = attachStats;
+		if (!a.mirrorBatches && !a.geometryRounds && !a.categoriesLeft && !a.usesChecks && !a.categoryChecks && !a.mirrorKindEvents[5] && !a.structuralEvents && !a.applyChecks)
+			return {};
+		std::string line = fmt::format(
+			"[DCLF] attach burst (W8): mirror {} batches, {} captures prepared ({} batches on the pool), {} records, prepare {:.2f} ms, apply {:.2f} ms; subtree geometries "
+			"{} rounds ({} on the pool), {} prepared ({} on the pool); category nodes left {}, members dropped {}, portal-category members scanned {}",
+			a.mirrorBatches, a.mirrorCaptures, a.mirrorPooled, a.mirrorRecords, a.mirrorPrepareMs, a.mirrorApplyMs, a.geometryRounds, a.geometryPooled, a.geometries,
+			a.geometriesPooled, a.categoriesLeft, a.categoryMembersDropped, a.rootsLeftScanned);
+		// The mirror's apply by event kind, and its replays.
+		std::string kinds;
+		static constexpr std::array<const char*, AttachStats::kMirrorKinds> kKindNames{ "captures", "fills", "evictions", "detaches", "gates", "updates" };
+		for (std::size_t k = 0; k < AttachStats::kMirrorKinds; ++k)
+			if (a.mirrorKindEvents[k])
+				kinds += fmt::format("{}{} {} {:.2f} ms", kinds.empty() ? "" : ", ", kKindNames[k], a.mirrorKindEvents[k], a.mirrorKindMs[k]);
+		line += fmt::format("; mirror apply by kind: {}; replays skipped {}, walked {}; updates kept {}, let go {}", kinds.empty() ? "none" : kinds, a.replaysSkipped,
+			a.replaysWalked, a.updatesKept, a.updatesForgotten);
+		line += fmt::format("; attach/detach: {} events, sun ancestors {:.2f} ms, merges {:.2f} ms, detached geometries {} ({} erased) {:.2f} ms; leaf holds {} of {} keys {:.2f} ms",
+			a.structuralEvents, a.ancestorMs, a.mergeMs, a.detachedGeometries, a.detachedErased, a.detachMs, a.leafHolds, a.leafKeys, a.leafMs);
+		if (a.applyChecks)
+			line += fmt::format("; mirror apply parity {} checks, {} wrong{}", a.applyChecks, a.applyWrong, a.applyWrong ? " <- MIRROR APPLY" : " <- OK");
+		if (a.usesChecks)
+			line += fmt::format("; mirror uses parity {} checks, {} unused records{}", a.usesChecks, a.usesUnused, a.usesUnused ? " <- MIRROR USES" : " <- OK");
+		if (a.categoryChecks)
+			line += fmt::format("; category index parity {} checks, {} differ{}{}", a.categoryChecks, a.categoryDiffer, a.categoryDiffer ? " <- CATEGORY INDEX" : " <- OK",
+				a.categoryFirst.empty() ? "" : "; first: " + a.categoryFirst);
+		a = {};
+		return line;
 	}
 
 	const void* Coordinator::MirrorSunEntry(const void* a_geometry) const
@@ -412,17 +519,37 @@ namespace DCLF::Scene
 		return nullptr;
 	}
 
-	void Coordinator::HoldProperties(Tracked& a_entry)
+	Coordinator::HeldKeys Coordinator::HeldKeysOf(const void* a_geometry) const
 	{
-		const auto* record = mirror.Geometry(a_entry.geometry.get());
-		auto hold = [&](RE::NiPointer<RE::BSShaderProperty>& a_held, const void* a_key, std::uint32_t a_slot) {
+		HeldKeys keys;
+		const auto* record = mirror.Geometry(a_geometry);
+		if (!record)
+			return keys;
+		keys.property = record->property;
+		keys.layer = record->Layer();
+		// The property's fade node, for the tree and fade-root owners (an attach's capture pins every ancestor).
+		const auto* property = record->property ? mirror.Property(record->property) : nullptr;
+		keys.fadeNode = property ? property->fadeNode : nullptr;
+		// The engine's "no fade node" sentinel is no root.
+		static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
+		if (emptyIsNone && keys.fadeNode == Engine::EmptyFadeNode())
+			keys.fadeNode = nullptr;
+		keys.propertyPin = PinOf(keys.property);
+		keys.layerPin = PinOf(keys.layer);
+		keys.fadeNodePin = PinOf(keys.fadeNode);
+		return keys;
+	}
+
+	void Coordinator::HoldProperties(Tracked& a_entry, const HeldKeys& a_keys)
+	{
+		auto hold = [&](RE::NiPointer<RE::BSShaderProperty>& a_held, const void* a_key, RE::NiRefObject* a_pin, std::uint32_t a_slot) {
 			if (a_held.get() == a_key)
 				return;
 			// A resident's pipeline template is its first member's held property (KeepResidentsAlive): recounted, so it takes the new one.
 			if (a_slot != kNoObjectSlot)
 				NoteResidentTouched(a_slot);
 			// The batch's pin, from the event that named it.
-			auto next = a_key ? Pinned(static_cast<const RE::BSShaderProperty*>(a_key)) : nullptr;
+			auto next = FromPin<RE::BSShaderProperty>(a_pin);
 			if (a_key && !next) {
 				++referenceStats.propertiesRefused;
 				if (referenceStats.firstPropertyRefused.empty())
@@ -433,18 +560,15 @@ namespace DCLF::Scene
 			HandBack(std::move(a_held));
 			a_held = std::move(next);
 		};
-		hold(a_entry.property, record ? record->property : nullptr, a_entry.slot);
-		hold(a_entry.layerProperty, record ? record->Layer() : nullptr, a_entry.layerSlot);
-		// The property's fade node, for the tree and fade-root owners (an attach's capture pins every ancestor).
-		const auto* property = record && record->property ? mirror.Property(record->property) : nullptr;
-		const void* fadeNode = property ? property->fadeNode : nullptr;
-		// The engine's "no fade node" sentinel is no root.
-		static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
-		if (emptyIsNone && fadeNode == Engine::EmptyFadeNode())
-			fadeNode = nullptr;
+		hold(a_entry.property, a_keys.property, a_keys.propertyPin, a_entry.slot);
+		hold(a_entry.layerProperty, a_keys.layer, a_keys.layerPin, a_entry.layerSlot);
+		const void* fadeNode = a_keys.fadeNode;
 		if (a_entry.fadeNodeRef.get() != fadeNode) {
 			HandBack(std::move(a_entry.fadeNodeRef));
-			if (fadeNode)
+			// Its pin as AcquireFadeNode's first step takes it; without one, AcquireFadeNode's other ways.
+			if (fadeNode && (a_entry.fadeNodeRef = FromPin<RE::NiAVObject>(a_keys.fadeNodePin)))
+				++referenceStats.fadeNodes;
+			else if (fadeNode)
 				AcquireFadeNode(a_entry, fadeNode, "a capture");
 		}
 	}
@@ -486,14 +610,15 @@ namespace DCLF::Scene
 		return false;
 	}
 
-	void Coordinator::AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live, const GeometryPrep& a_prep)
+	void Coordinator::AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live, GeometryPrep& a_prep)
 	{
-		// The mirror reads are a_prep's (maybe from the pool); here the writes, in event order. Reference: the entry's, else the batch's
-		// pin, else (a live walk) the pointer.
+		// The reads are a_prep's (maybe from the pool: the mirror, the batch's pins, category nodes, gate roots); here the stores, in event
+		// order. Reference: the entry's, else the batch's pin, else (a live walk) the pointer.
 		RE::NiPointer<RE::BSGeometry> reference;
-		if (const auto known = tracked.find(a_geometry); known != tracked.end() && known->second.geometry.get() == a_geometry)
-			reference = known->second.geometry;
-		else if (!(reference = Pinned(a_geometry)) && a_live) {
+		auto it = tracked.find(a_geometry);
+		if (it != tracked.end() && it->second.geometry.get() == a_geometry)
+			reference = it->second.geometry;
+		else if (!(reference = FromPin<RE::BSGeometry>(a_prep.geometryPin)) && a_live) {
 			++referenceStats.live;
 			reference.reset(a_geometry);
 		}
@@ -509,7 +634,9 @@ namespace DCLF::Scene
 				});
 			return;
 		}
-		const auto [it, inserted] = tracked.try_emplace(a_geometry);
+		const bool inserted = it == tracked.end();
+		if (inserted)
+			it = tracked.try_emplace(a_geometry).first;
 		trackedLayout += inserted ? 1 : 0;
 		auto& entry = it->second;
 		const auto* actorOwner = a_prep.actorOwner;
@@ -529,15 +656,21 @@ namespace DCLF::Scene
 		entry.roomNode = a_prep.roomNode;
 		entry.roomMapGeneration = 0;
 		entry.geometry = std::move(reference);
-		HoldProperties(entry);
+		HoldProperties(entry, a_prep.held);
 		// A face shape's head, held from the batch's pins.
 		{
 			const auto* head = a_prep.faceHead;
 			if (entry.faceHeadRef.get() != head) {
 				HandBack(std::move(entry.faceHeadRef));
-				if (head && !(entry.faceHeadRef = Pinned(head)))
+				if (head && !(entry.faceHeadRef = FromPin<RE::BSFaceGenNiNode>(a_prep.faceHeadPin)))
 					++referenceStats.refused;
 			}
+		}
+		// Its category node's members (RefreshCategoryNodes, DrainHiddenEvents).
+		if (entry.categoryNode != a_categoryNode) {
+			if (entry.categoryNode)
+				Unlist(categoryMembers, categoryMembersAt, static_cast<const RE::NiNode*>(entry.categoryNode), a_geometry);
+			List(categoryMembers, categoryMembersAt, static_cast<const RE::NiNode*>(a_categoryNode), a_geometry);
 		}
 		entry.categoryNode = a_categoryNode;
 		// No mirror record (an uncaptured attach): the render thread captures it at the next frame's start.
@@ -563,8 +696,9 @@ namespace DCLF::Scene
 				entry.sunEntryNode = nullptr;
 			if (entry.sunEntryNode) {
 				List(rootDependents, rootDependentsAt, entry.sunEntryNode, a_geometry);
-				const auto* rootRecord = mirror.Node(entry.sunEntryNode);
-				if (const auto* rootRef = rootRecord ? static_cast<const RE::TESObjectREFR*>(rootRecord->userData) : nullptr;
+				// The root's reference: the prepare's read, or the mirror's.
+				const auto* rootRecord = prepared ? nullptr : mirror.Node(entry.sunEntryNode);
+				if (const auto* rootRef = prepared ? a_prep.sunEntryReference : rootRecord ? static_cast<const RE::TESObjectREFR*>(rootRecord->userData) : nullptr;
 					rootRef && rootReference.try_emplace(entry.sunEntryNode, rootRef).second)
 					referenceRoot[rootRef] = entry.sunEntryNode;
 				entry.listedRoot = entry.sunEntryNode;
@@ -578,7 +712,7 @@ namespace DCLF::Scene
 			} else {
 				if (entry.categoryNode)
 					++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::LightEntry)];
-				lightEntry = a_prep.lightActorRoot ? a_prep.lightActorRoot : entry.sunEntryNode && !CategoryNodeOwn(entry.sunEntryNode) ? entry.sunEntryNode : nullptr;
+				lightEntry = a_prep.lightActorRoot ? a_prep.lightActorRoot : entry.sunEntryNode && !a_prep.sunEntryCategory ? entry.sunEntryNode : nullptr;
 			}
 			if (lightEntry && OwnRoot(lightEntry, a_live)) {
 				auto& dependents = lightDependents[lightEntry];
@@ -590,13 +724,13 @@ namespace DCLF::Scene
 				MarkLightEntryDirty(lightEntry);
 			}
 		}
-		// Object LOD: drawn ranges from here on follow its segment events.
+		// Object LOD: drawn ranges from here on follow its segment events (the prepare's copy, as SampleLodRanges takes it).
 		if (a_prep.subIndex)
-			SampleLodRanges(*a_geometry, false);
+			lodRanges[a_geometry] = std::move(a_prep.segments);
 		pendingEvaluation.push_back(a_geometry);
-		// Under a LOD gate's root applied earlier: tag it.
-		if (!gateOfRoot.empty())
-			TagGateAbove(a_geometry, entry);
+		// Under a LOD gate's root applied earlier: tag it (the prepare found the nearest, as TagGateAbove).
+		if (a_prep.gated)
+			TagGate(a_geometry, entry, a_prep.gateToken, a_prep.gateSide);
 	}
 
 	const RE::NiAVObject* Coordinator::LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_live) const
@@ -647,6 +781,13 @@ namespace DCLF::Scene
 
 	void Coordinator::PrepareSubtree(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const
 	{
+		PrepareSubtreeWalk(a_root, a_source, a_out);
+		for (auto& geometry : a_out.geometries)
+			PrepareGeometry(geometry.geometry, geometry.reason, a_out.category, geometry);
+	}
+
+	void Coordinator::PrepareSubtreeWalk(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const
+	{
 		// Pure over the mirror, category nodes and portal roots, none of which tracking writes: any thread under a ShardScope. No engine
 		// memory (the root is a key), except the mirror-read parity's live check, which runs serially on the pass's thread.
 		a_out.root = a_root;
@@ -671,9 +812,12 @@ namespace DCLF::Scene
 		if (lacking)
 			++MirrorReads().unmirrored[static_cast<std::size_t>(MirrorRead::Subtree)];
 		Diagnostics::Notify(Diagnostics::SubtreeRead{ *this, a_root, reasonAbove, found, lacking });
+		// Each geometry's prepare is PrepareGeometry's (PrepareSubtree's, or PrepareSubtrees' across the round's subtrees).
 		a_out.geometries.resize(found.size());
-		for (std::size_t i = 0; i < found.size(); ++i)
-			PrepareGeometry(found[i].first, found[i].second, a_out.category, a_out.geometries[i]);
+		for (std::size_t i = 0; i < found.size(); ++i) {
+			a_out.geometries[i].geometry = found[i].first;
+			a_out.geometries[i].reason = found[i].second;
+		}
 	}
 
 	void Coordinator::PrepareGeometry(RE::BSGeometry* a_geometry, Ineligible a_reason, const RE::NiNode* a_category, GeometryPrep& a_out) const
@@ -694,11 +838,37 @@ namespace DCLF::Scene
 		const bool face = parent && (parent->kind & SceneCapture::kKindFaceGen) && g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kDynamicTriShape);
 		a_out.faceHead = face ? static_cast<const RE::BSFaceGenNiNode*>(record->parent) : nullptr;
 		a_out.subIndex = g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape);
+		// The batch's pins (frozen while the batch's adds prepare and merge), HoldProperties' reads, an object LOD's ranges.
+		a_out.geometryPin = PinOf(a_geometry);
+		a_out.faceHeadPin = a_out.faceHead ? PinOf(a_out.faceHead) : nullptr;
+		a_out.held = HeldKeysOf(a_geometry);
+		if (a_out.subIndex && g)
+			a_out.segments = g->segments;
+		// TagGateAbove's walk: the mirror's chain up to the category node, the nearest gate root on it (gate roots change only with the
+		// mirror's events, before the adds).
+		if (!gateOfRoot.empty())
+			for (const void* key = record ? record->parent : nullptr; key;) {
+				if (const auto at = gateOfRoot.find(key); at != gateOfRoot.end()) {
+					a_out.gated = true;
+					a_out.gateToken = at->second.token;
+					a_out.gateSide = at->second.side;
+					break;
+				}
+				if (key == a_category)
+					break;
+				const auto* node = mirror.Node(key);
+				key = node ? node->parent : nullptr;
+			}
 		// While an observer checks these reads against the live chain, the merge resolves both.
 		if (Diagnostics::Armed<Diagnostics::SunEntryRead>())
 			return;
 		a_out.resolved = true;
 		a_out.sunEntry = MirrorSunEntry(a_geometry);
+		if (a_out.sunEntry) {
+			const auto* rootRecord = mirror.Node(a_out.sunEntry);
+			a_out.sunEntryReference = rootRecord ? static_cast<const RE::TESObjectREFR*>(rootRecord->userData) : nullptr;
+			a_out.sunEntryCategory = CategoryNodeOwn(static_cast<const RE::NiAVObject*>(a_out.sunEntry));
+		}
 		// LightEntryOf's mirror walk.
 		if (a_category) {
 			const void* root = a_geometry;
@@ -730,7 +900,7 @@ namespace DCLF::Scene
 			}
 			return;
 		}
-		for (const auto& geometry : a_prep.geometries)
+		for (auto& geometry : a_prep.geometries)
 			AddGeometry(geometry.geometry, a_prep.category, geometry.reason, false, geometry);
 	}
 
@@ -744,11 +914,13 @@ namespace DCLF::Scene
 		f.subtreeParallelRounds += parallel ? 1 : 0;
 		f.subtreeParallelRoots += parallel ? count : 0;
 		a_out.resize(count);
-		auto prepare = [&](std::vector<SubtreePrep>& a_into, std::vector<MirrorReadStats>& a_counters, bool a_pool) {
+		// The walks by roots, then every geometry's prepare across the round's subtrees by its own chunks: a few large attaches (a cell's
+		// root, hundreds of geometries) reach the pool though their roots are few.
+		auto walk = [&](std::vector<SubtreePrep>& a_into, std::vector<MirrorReadStats>& a_counters, bool a_pool) {
 			auto body = [&](std::size_t a_begin, std::size_t a_end) {
 				ShardScope scope(*this, a_pool, &a_counters[a_begin / kSubtreeGrain]);
 				for (std::size_t i = a_begin; i < a_end; ++i)
-					PrepareSubtree(a_roots[i].first, a_roots[i].second, a_into[i]);
+					PrepareSubtreeWalk(a_roots[i].first, a_roots[i].second, a_into[i]);
 			};
 			if (a_pool) {
 				SceneScheduler::Executor().ParallelFor("CS.DCLF.Scene.Subtrees", count, kSubtreeGrain, body);
@@ -758,15 +930,47 @@ namespace DCLF::Scene
 			}
 		};
 		std::vector<MirrorReadStats> counters(chunks);
+		std::vector<MirrorReadStats> geometryCounters;
 		{
 			ZoneScopedN("CS.DCLF.Scene.SubtreesFanout");
 			const auto start = std::chrono::steady_clock::now();
-			prepare(a_out, counters, parallel);
+			walk(a_out, counters, parallel);
+			auto& index = subtreeGeometryIndex;
+			index.clear();
+			for (std::uint32_t p = 0; p < a_out.size(); ++p)
+				if (a_out[p].category)
+					for (std::uint32_t g = 0; g < a_out[p].geometries.size(); ++g)
+						index.emplace_back(p, g);
+			const std::size_t geometries = index.size();
+			const bool pool = geometries && FanoutMode(geometries, kGeometryFanoutMin) == 2;
+			auto& a = attachStats;
+			a.geometryRounds += geometries ? 1 : 0;
+			a.geometryPooled += pool ? 1 : 0;
+			a.geometries += geometries;
+			a.geometriesPooled += pool ? geometries : 0;
+			geometryCounters.resize((geometries + kGeometryGrain - 1) / kGeometryGrain);
+			auto body = [&](std::size_t a_begin, std::size_t a_end) {
+				ZoneScopedN("CS.DCLF.Scene.SubtreeGeometriesShards");
+				ShardScope scope(*this, pool, &geometryCounters[a_begin / kGeometryGrain]);
+				for (std::size_t i = a_begin; i < a_end; ++i) {
+					auto& prep = a_out[index[i].first];
+					auto& geometry = prep.geometries[index[i].second];
+					PrepareGeometry(geometry.geometry, geometry.reason, prep.category, geometry);
+				}
+			};
+			if (pool) {
+				SceneScheduler::Executor().ParallelFor("CS.DCLF.Scene.SubtreeGeometries", geometries, kGeometryGrain, body);
+			} else {
+				for (std::size_t begin = 0; begin < geometries; begin += kGeometryGrain)
+					body(begin, std::min(geometries, begin + kGeometryGrain));
+			}
 			const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 			AddScenePartMs(ScenePart::SubtreesFanout, ms);
 			f.subtreePrepareMs += ms;
 		}
 		for (auto& chunk : counters)
+			MergeMirrorReads(chunk);
+		for (auto& chunk : geometryCounters)
 			MergeMirrorReads(chunk);
 		for (const auto& prep : a_out)
 			f.subtreeGeometries += prep.geometries.size();

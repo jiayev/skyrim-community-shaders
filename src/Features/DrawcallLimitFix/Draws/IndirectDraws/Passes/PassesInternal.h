@@ -26,6 +26,8 @@ namespace DCLF::Draws
 	// SceneState.cpp: next frame's tree wind and fade states.
 	std::shared_ptr<org::RenderPass> MakeTreeWindPass(std::shared_ptr<SceneBuffers> a_scene);
 	std::shared_ptr<org::RenderPass> MakeFadeStatePass(std::shared_ptr<Resources> a_resources);
+	// SceneState.cpp: this frame's TexcoordOffset into the installed payload's material rows (TextureTransformsCS), before the depth build.
+	std::shared_ptr<org::RenderPass> MakeTextureTransformsPass(std::shared_ptr<Resources> a_resources);
 
 	// Readbacks.cpp: tree LOD's counts and an event ring's copy to the host.
 	std::shared_ptr<org::RenderPass> MakeTreeLodReadbackPass(std::shared_ptr<SceneBuffers> a_scene);

@@ -76,7 +76,10 @@ namespace DCLF::MaterialWrites
 
 		// BSLightingShaderPropertyFloatController::Update (AE 14150dde0, vtable slot 0x27). Type 0xb writes the
 		// property's emissive multiplier (per-object shading, resampled every frame at Prepass) and types above
-		// 0x13 the texture-transform buffers (captured for the scene work's transform watch); every other type a material field.
+		// 0x13 the texture-transform buffers; every other type a material field.
+		// The texture transforms are no record's: the frame values read every material row's TexcoordOffset from the buffer the frame
+		// reads and the GPU patches the rows (TextureTransformList), so a write that moved only them captures nothing; the kept shadow
+		// build still hears of it (its rows read the transform themselves).
 		struct FloatControllerUpdate
 		{
 			static void thunk(RE::NiTimeController* a_this, void* a_data)
@@ -93,14 +96,12 @@ namespace DCLF::MaterialWrites
 					const auto offset0 = material->texCoordOffset[0], offset1 = material->texCoordOffset[1];
 					const auto scale0 = material->texCoordScale[0], scale1 = material->texCoordScale[1];
 					func(a_this, a_data);
-					if (property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
-						scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1]) {
-						// The buffers as written, for the scene work's records (its transform watch). The property's current material:
-						// alive, the property holding it (a swap during the update may have let `material` go; its slots follow the swap's
-						// event).
+					// A swap during the update is the property's: its current material (alive, the property holding it) is captured.
+					if (property->material != material && property->material)
 						MaterialPort::PushCapture(property->material);
+					if (property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
+						scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1])
 						ShadowTransformQueue().Push(material);
-					}
 				} else if (type <= 0x13 && type != 0xb && property && property->material && ControllerDestinationTablesKnown()) {
 					auto* material = property->material;
 					const auto offset = std::size_t(FloatDestinations()[type]) * sizeof(float);
@@ -160,6 +161,7 @@ namespace DCLF::MaterialWrites
 		// texture-transform buffers (+0x0c..+0x2c: UV scroll, types 6 and up), the falloff (+0x38..+0x44, types 0-4) and the base colour
 		// (+0x48..+0x54: the colour, type 5's alpha through SetMaterialAlpha).
 		constexpr std::size_t kEffectWrittenFirst = 0x0c, kEffectWrittenEnd = 0x58;
+		constexpr std::size_t kEffectTransformsEnd = 0x2c;  // the texture-transform buffers lead the written span
 		using EffectWritten = std::array<std::byte, kEffectWrittenEnd - kEffectWrittenFirst>;
 		EffectWritten EffectWrittenOf(const RE::BSShaderMaterial* a_material)
 		{
@@ -185,7 +187,13 @@ namespace DCLF::MaterialWrites
 			a_func(a_this, a_data);
 			if (!property)
 				return;
-			if (property->material != material || (material && EffectWrittenOf(material) != before)) {
+			// The texture transforms alone (a UV scroll) are the frame values' (TextureTransformList): neither the record nor the shading
+			// reads them, so such a write captures nothing.
+			const auto after = material ? EffectWrittenOf(material) : EffectWritten{};
+			constexpr std::size_t kTransforms = kEffectTransformsEnd - kEffectWrittenFirst;
+			const bool fields = property->material != material ||
+			                    (material && std::memcmp(after.data() + kTransforms, before.data() + kTransforms, after.size() - kTransforms) != 0);
+			if (fields) {
 				if (property->material)
 					NoteWritten(property->material);
 				ShadingQueue().Push(property);
