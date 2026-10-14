@@ -570,7 +570,7 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Dump Shaders"] = shaderCache->IsDump();
 	advanced["Log Level"] = logLevel;
 	advanced["Developer Mode"] = enableDeveloperMode;
-	advanced["Shader Defines"] = shaderDefinesString;
+	advanced["Shader Defines"] = GetDefinesString();
 	advanced["Compiler Threads"] = shaderCache->compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
@@ -771,7 +771,7 @@ spdlog::level::level_enum State::GetLogLevel()
 void State::SetDefines(std::string a_defines)
 {
 	std::vector<std::pair<std::string, std::string>> parsedDefines;
-	shaderDefinesString = "";
+	std::string definesString;
 	auto defines = pystring::split(a_defines, ";");
 	for (const auto& define : defines) {
 		auto cleanedDefine = pystring::strip(define);
@@ -784,15 +784,22 @@ void State::SetDefines(std::string a_defines)
 		}
 		std::string name = pystring::strip(token[0]);
 		std::string definition = token.size() == 2 ? pystring::strip(token[1]) : std::string{};
-		shaderDefinesString += pystring::strip(define) + ";";
+		definesString += pystring::strip(define) + ";";
 		parsedDefines.emplace_back(std::move(name), std::move(definition));
 	}
-	shaderDefinesString = shaderDefinesString.substr(0, shaderDefinesString.size() - 1);
+	definesString = definesString.substr(0, definesString.size() - 1);
+	logger::debug("Shader Defines set to {}", definesString);
 	{
 		std::scoped_lock lock(shaderDefinesMutex);
+		shaderDefinesString = std::move(definesString);
 		shaderDefines = std::make_shared<const std::vector<std::pair<std::string, std::string>>>(std::move(parsedDefines));
 	}
-	logger::debug("Shader Defines set to {}", shaderDefinesString);
+}
+
+std::string State::GetDefinesString()
+{
+	std::scoped_lock lock(shaderDefinesMutex);
+	return shaderDefinesString;
 }
 
 std::shared_ptr<const std::vector<std::pair<std::string, std::string>>> State::GetDefines()
