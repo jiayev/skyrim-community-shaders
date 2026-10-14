@@ -81,6 +81,9 @@ namespace DCLF::Draws
 		std::shared_ptr<const StreamViews> streams;  // the frame's stream views the build read
 		ConstantArena arena;  // the view slots' head and the frame record are reserved; the commit writes the views into it
 		DrawBindings frameRecord{};  // every view's textures and samplers but the diffuse (kShadowFrameRecordOffset)
+		// Process-unique per build (Reset): the arena's bytes past the frame record are this build's, which a commit stages only into a
+		// constants buffer that does not hold them yet.
+		std::uint64_t arenaSerial = 0;
 		// The rows the inputs name: the kept state's (journalled), or the build's own (content epoch 0: sent whole).
 		KeptView<ShadowMaterialRow> materialRows;
 		// Per mode, the draws its inputs can produce (a skin draws once per partition): its views' max count.
@@ -152,6 +155,8 @@ namespace DCLF::Draws
 			parabolicExclusion.reset();
 			arena.Reset(kShadowConstantBytes);
 			frameRecord = {};
+			static std::atomic<std::uint64_t> arenaSerials{ 0 };
+			arenaSerial = arenaSerials.fetch_add(1, std::memory_order_relaxed) + 1;
 			materialRows.Reset();
 			modeDraws = {};
 			for (auto& slots : keySlotDraws)

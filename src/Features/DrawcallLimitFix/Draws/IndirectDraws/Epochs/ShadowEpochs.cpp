@@ -32,24 +32,42 @@ namespace DCLF
 			return latch;
 		}
 
-		/** @brief Writes a view's bucket table into its slot's latch region and points a_latch at it. */
+		/**
+		 * @brief Points a_latch at a view's bucket table in its slot's latch region, writing the table when a_write (the region does not
+		 * hold this revision's yet: LatchRegionsHeld).
+		 */
 		void WriteBucketTable(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, std::uint32_t a_latchSlot, std::uint32_t a_slot,
-			std::span<const ShadowBucket> a_buckets, BuildDrawsLatch& a_latch)
+			std::span<const ShadowBucket> a_buckets, bool a_write, BuildDrawsLatch& a_latch)
 		{
 			// At most a bucket per key slot, which the layout reserves (ReserveShadowLatch).
 			if (a_buckets.size() > a_layout.keySlots)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow buckets past the latch's {} key slots", a_buckets.size(), a_layout.keySlots));
+			const std::uint32_t offset = a_layout.BucketOffset(a_slot);
+			a_latch.bucketTableOffset = static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + offset;
+			if (!a_write || a_buckets.empty())
+				return;
 			std::vector<std::uint32_t> table;
 			table.reserve(a_buckets.size() * 2);
 			for (const auto& bucket : a_buckets) {
 				table.push_back(bucket.first);
 				table.push_back(bucket.capacity);
 			}
-			const std::uint32_t offset = a_layout.BucketOffset(a_slot);
-			if (!table.empty())
-				LatchWrite(a_latchBlock, "shadow bucket tables", a_latchSlot, offset, std::as_bytes(std::span(table)));
-			a_latch.bucketTableOffset = static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + offset;
+			LatchWrite(a_latchBlock, "shadow bucket tables", a_latchSlot, offset, std::as_bytes(std::span(table)));
 		}
+
+		// The shadow latch's regions the shadow commits wrote their revision's bucket tables and map rows into (render thread).
+		// Parts: 2 * view slot (its bucket table), 2 * map row + 1 (the row). The occlusion epoch's slots and modes are its own.
+		LatchRegionsHeld shadowLatchRegions;
+		// What the shadow constants buffer holds of the arena past the frame record, as staged (render thread): the build it was last
+		// brought up to, and its bytes. Only these commits write that part of the buffer.
+		struct ShadowArenaHeld
+		{
+			std::weak_ptr<const void> target;
+			std::uint64_t serial = 0;
+			std::vector<std::byte> bytes;  // from the record's end
+		} shadowArenaHeld;
+		// A new build's arena mostly repeats the last one's: it is compared in chunks of this many bytes, and only differing runs staged.
+		constexpr std::size_t kArenaChunk = 256;
 
 		/**
 		 * @brief Points a_latch at its rasterizer state's pipeline-map row (each key slot's bucket), writing the row when a_write
@@ -203,7 +221,7 @@ namespace DCLF
 				latch.fadeStatesIndex = scene.FadeStatesReadIndex(impl->Adopted(), frameNumber);
 				ShadowPayloadLatch(*impl->InstalledPayload(), latch);
 				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, mode, view.rasterState, true, latch);
-				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, latch);
+				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, true, latch);
 				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				shadowStats.occlusionInputs[v] = inputCount;
 				++shadowStats.occlusionDrawn[v];
@@ -375,7 +393,8 @@ namespace DCLF
 				UpdateIndexPool(adopted, *resources->pool, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetTablesGeneration(), latchBlock, latchSlot,
 					latchLayout.PoolOffset(), uploads);
 			}
-			std::vector<bool> mapRowsWritten(latchLayout.MapRows());  // per mode and state (MapRowOf): its row is in the latch
+			// The revision's bucket tables and map rows: written into this frame slot's region only where it does not hold them yet.
+			auto& held = Draws::shadowLatchRegions.Of(latchSlot, target.latch, revisionShape, 0);
 			std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
 			std::vector<bool> slotDrawn(layouts.size());
 			for (const auto& view : pending) {
@@ -409,11 +428,9 @@ namespace DCLF
 					latch.sunEntryOffset = sunEntryOffset;
 				}
 				const std::uint32_t mapRow = view.rasterState ? latchLayout.MapRowOf(view.modeIndex, view.rasterState) : ~0u;
-				const bool rowWritten = mapRow < mapRowsWritten.size() && mapRowsWritten[mapRow];
-				if (mapRow < mapRowsWritten.size())
-					mapRowsWritten[mapRow] = true;
-				UseShadowMapRow(latchBlock, latchLayout, (*target.rows)[index], latchSlot, view.modeIndex, view.rasterState, !rowWritten, latch);
-				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, target.views[index].buckets, latch);
+				const bool rowHeld = mapRow < latchLayout.MapRows() && Draws::LatchRegionsHeld::Hold(held, std::size_t(mapRow) * 2 + 1);
+				UseShadowMapRow(latchBlock, latchLayout, (*target.rows)[index], latchSlot, view.modeIndex, view.rasterState, !rowHeld, latch);
+				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, target.views[index].buckets, !Draws::LatchRegionsHeld::Hold(held, std::size_t(slot) * 2), latch);
 				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				Diagnostics::Notify(Diagnostics::ShadowViewLatched{ view, latch, frameNumber, payload, shadowStats });
 				resources->labels.push_back({ view.viewId, view.renderMode, slot });
@@ -438,11 +455,40 @@ namespace DCLF
 				constexpr std::size_t recordEnd = kShadowFrameRecordOffset + sizeof(DrawBindings);
 				if (bytes.size() < recordEnd)
 					stl::report_and_fail("Drawcall Limit Fix: a shadow arena without its frame record");
-				if (kShadowFrameRecordOffset)
+				// The arena around the record is the build's: nothing is staged while the buffer holds this build's (a kept publication
+				// commits the same build every frame), and of a new build only the chunks that differ from what the buffer holds. The
+				// record is the frame's.
+				auto& staged = Draws::shadowArenaHeld;
+				const std::shared_ptr<const void> arenaTarget = resources->constants;
+				const bool sameTarget = Draws::LatchRegionsHeld::Same(staged.target, arenaTarget);
+				const bool arenaHeld = sameTarget && staged.serial == payload.arenaSerial;
+				if (kShadowFrameRecordOffset && !arenaHeld)
 					uploads(resources->constants, bytes.data(), kShadowFrameRecordOffset, 0);
 				uploads(resources->constants, &record, sizeof(record), kShadowFrameRecordOffset);
-				if (bytes.size() > recordEnd)
-					uploads(resources->constants, bytes.data() + recordEnd, bytes.size() - recordEnd, recordEnd);
+				if (!arenaHeld) {
+					const auto tail = std::span<const std::byte>(bytes).subspan(recordEnd);
+					if (!sameTarget)
+						staged.bytes.clear();
+					const std::size_t compared = std::min(staged.bytes.size(), tail.size());
+					std::size_t run = 0;  // the first differing chunk's start, while in a run
+					bool inRun = false;
+					for (std::size_t at = 0; at < tail.size(); at += Draws::kArenaChunk) {
+						const std::size_t size = std::min(Draws::kArenaChunk, tail.size() - at);
+						const bool differs = at + size > compared || std::memcmp(tail.data() + at, staged.bytes.data() + at, size) != 0;
+						if (differs && !inRun) {
+							run = at;
+							inRun = true;
+						} else if (!differs && inRun) {
+							uploads(resources->constants, tail.data() + run, at - run, recordEnd + run);
+							inRun = false;
+						}
+					}
+					if (inRun)
+						uploads(resources->constants, tail.data() + run, tail.size() - run, recordEnd + run);
+					staged.bytes.assign(tail.begin(), tail.end());
+					staged.target = arenaTarget;
+					staged.serial = payload.arenaSerial;
+				}
 			}
 			// CS's SharedData and FeatureData as of now (the water reflection prepasses refreshed them after the build), latched: the
 			// epoch's first pass copies them after the arena.
@@ -573,51 +619,49 @@ namespace DCLF
 
 	void IndirectDraws::Impl::ReadShadowCullCounters(std::uint32_t a_frame, IndirectDraws::ShadowStats& a_stats)
 	{
-		auto* context = globals::d3d::context;
-		if (shadowCullReadback) {
-			// Frames, not epochs: the GPU has finished the sampled epoch three Presents later.
-			if (a_frame - shadowCullReadback->copiedFrame < 3)
-				return;
-			D3D11_MAPPED_SUBRESOURCE mapped{};
-			if (SUCCEEDED(context->Map(shadowCullReadback->count.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-				const auto* words = static_cast<const std::uint32_t*>(mapped.pData);
-				a_stats.cullDrawn = words[0];
-				a_stats.cullRejected = words[1];
-				a_stats.cullTested = words[2];
-				a_stats.cullSunEntryOut = words[3];
-				a_stats.cullMinRadius = words[4];
-				a_stats.cullRootFading = words[5];
-				a_stats.cullClass = words[16];
-				a_stats.cullSampledView = shadowCullReadback->view;
-				a_stats.cullSampledMode = shadowCullReadback->mode;
-				context->Unmap(shadowCullReadback->count.get(), 0);
-			}
-			shadowCullReadback.reset();
+		// Right after the epoch's submission: its counters are copied each execution into the frame slot's host buffer
+		// (CounterReadback, the cs.dclf.shadow.cull-counters pass). A sample is read once its execution's GPU point is reached,
+		// provided no later shadow execution took its slot: every execution passes here, its slot still the host's current one.
+		auto* host = RenderGraphRuntime::Get().Host();
+		const auto readback = CullCounterReadback(CullCounterView::kShadow);
+		if (!host || !readback)
 			return;
-		}
-		// One epoch in 127, cycling through the views.
+		auto& armed = readback->armed;
+		const std::uint32_t frameSlot = host->CurrentFrameSlot();
 		const auto epoch = shadowCullEpochs++;
-		if ((epoch % 127) != 0 || !shadow || shadow->labels.empty())
+		bool lost = false;
+		if (armed.armed) {
+			if (frameSlot == armed.frameSlot) {
+				// This execution writes the slot the sample was in before it was read: lost, and sampled again now.
+				armed.armed = false;
+				++readback->missed;
+				lost = true;
+			} else if (!armed.done.Reached()) {
+				return;
+			} else {
+				armed.armed = false;
+				const bool read = readback->Read(armed.frameSlot, armed.source, armed.stamp, [&](const std::uint32_t* a_words) {
+					a_stats.cullDrawn = a_words[0];
+					a_stats.cullRejected = a_words[1];
+					a_stats.cullTested = a_words[2];
+					a_stats.cullSunEntryOut = a_words[3];
+					a_stats.cullMinRadius = a_words[4];
+					a_stats.cullRootFading = a_words[5];
+					a_stats.cullClass = a_words[16];
+					a_stats.cullSampledView = armed.view;
+					a_stats.cullSampledMode = armed.mode;
+				});
+				++(read ? readback->harvested : readback->missed);
+				return;
+			}
+		}
+		// One epoch in 127 (or the one after a lost sample), cycling through the views.
+		if (((epoch % 127) != 0 && !lost) || !shadow || shadow->labels.empty())
 			return;
 		const auto& view = shadow->labels[(epoch / 127) % shadow->labels.size()];
-		if (view.slot >= shadow->countD3D11.size() || !shadow->countD3D11[view.slot])
+		if (view.slot >= readback->sources)
 			return;
-		D3D11_BUFFER_DESC desc{};
-		shadow->countD3D11[view.slot]->GetDesc(&desc);
-		desc.Usage = D3D11_USAGE_STAGING;
-		desc.BindFlags = 0;
-		desc.MiscFlags = 0;
-		desc.StructureByteStride = 0;
-		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		ShadowCullReadback readback;
-		if (FAILED(globals::d3d::device->CreateBuffer(&desc, nullptr, readback.count.put())))
-			return;
-		ScopedPerfEvent event("CS DCLF: shadow culling readback");
-		context->CopyResource(readback.count.get(), shadow->countD3D11[view.slot].get());
-		readback.copiedFrame = a_frame;
-		readback.view = view.viewId;
-		readback.mode = view.renderMode;
-		shadowCullReadback = std::move(readback);
+		armed = { true, frameSlot, view.slot, CounterReadback::StampOf(a_frame), view.viewId, view.renderMode, host->SubmittedPoint() };
 	}
 
 	void IndirectDraws::Impl::ShadowsNotDrawn(IndirectDraws::ShadowStats& a_stats)

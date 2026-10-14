@@ -748,7 +748,11 @@ struct RenderGraphRuntime::Impl
 			return VK_SUCCESS;
 		}
 		if (a_queue == self->uploadQueue) {
-			self->interop->LockSubmissionQueue();
+			{
+				// DXVK's submission lock covers every queue of its device: a long hold by DXVK shows here, on the upload thread only.
+				ZoneScopedN("CS.ORG.UploadQueue.LockSubmissionQueue");
+				self->interop->LockSubmissionQueue();
+			}
 			const VkResult result = self->queueSubmit2(a_queue, 1, &a_submit, VK_NULL_HANDLE);
 			self->interop->ReleaseSubmissionQueue();
 			return result;

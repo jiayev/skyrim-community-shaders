@@ -56,7 +56,7 @@ namespace DCLF::Scene
 			MergeFrameFog(fog, frameFog, fogWritten);
 		}
 		Diagnostics::Notify<Diagnostics::ScenePoint::PipelineConstantsBegin>();
-		frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, frameTablesGeneration);
+		frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, frameTablesGeneration, view.pipelinesStamp);
 		TracyCZoneN(pipelinesZone, "CS.DCLF.FrameConstants.Pipelines", true);
 		std::int64_t pipelinesVisited = 0;
 		for (std::size_t word = 0; word < view.usedPipelineBits.size(); ++word) {

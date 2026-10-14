@@ -32,6 +32,7 @@ namespace DCLF::Diagnostics::CutObservers
 	struct Counts
 	{
 		std::uint64_t cutChecks = 0, cutMismatches = 0;
+		std::uint64_t cutLagging = 0;  // entries that differed at one check only (the snapshot behind the engine)
 		std::uint64_t walkMissed = 0;
 		std::string walkMissedFirst;
 		std::uint64_t maskChecked = 0, maskSun = 0, maskOther = 0;
@@ -39,6 +40,9 @@ namespace DCLF::Diagnostics::CutObservers
 		std::uint64_t filterChecked = 0, filterMissed = 0;
 		std::uint64_t listChecks = 0, listMissing = 0, listExtra = 0;  // missing: the engine's not in DCLF's; extra: DCLF's, not hidden, not the engine's
 		std::string listFirst;
+		// The kept lists against a rebuild's (KeptSceneListsBuilt): missing, a root a rebuild lists; extra, one it does not.
+		std::uint64_t keptChecks = 0, keptMissing = 0, keptExtra = 0;
+		std::string keptFirst;
 		FadeState::PortCheck fadePort;
 	};
 	Counts Take();

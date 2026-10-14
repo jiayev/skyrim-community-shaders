@@ -40,17 +40,17 @@ it ([dclf-async-publication.md](./dclf-async-publication.md)).
 
 | Point in the frame | Render thread | Coordinator and pool | GPU |
 | --- | --- | --- | --- |
-| `Main::Draw`, before the main cull (`FrameDriver::BeginFrame`) | Applies the toggles, adopts the newest complete snapshot the snapshot builder posted (`IndirectDraws::AdoptSnapshot`: its revision, its draws and its publication, installed by `FrameView::HandOverAtFrameStart`), then installs its claims, list filter and sun exclusion, or withdraws the set (below). Serves the coordinator's requests and kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, fade and tree seeds, each into a backing leased from its pool) | **Scene pass** (`Coordinator::RunSceneWork`, whenever its producers wake the pump): the events applied, the walk, the set's commit; then the publication (`PublishScene`), handed to the **snapshot builder** on the pool (`IndirectDraws::PostSnapshotWork`: the payloads built ahead, the revision made and sealed, the payload's pooled versions published) | The frame values' uploads, on the copy queue; the payload's catch-up, on the uploader |
+| `Main::Draw`, before the main cull (`FrameDriver::BeginFrame`) | Applies the toggles, adopts the newest complete snapshot the snapshot builder posted (`IndirectDraws::AdoptSnapshot`: its revision, its draws and its publication, installed by `FrameView::HandOverAtFrameStart`), then installs its claims, list filter and sun exclusion (the builder's, followed along its forward links: `ForwardExclusion`), or withdraws the set (below). Serves the coordinator's requests (the switch catch-ups; the mirror's portal-root captures and capture requests; the pins walk and the fade nodes' answers go to a leased pool job, `FrameStartJob`) and kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, fade and tree seeds, each into a backing leased from its pool; the render thread copies the fade nodes' bytes and samples the tree seeds, the producer the rest) | **Scene pass** (`Coordinator::RunSceneWork`, whenever its producers wake the pump): the events applied, the walk, the set's commit; then the publication (`PublishScene`), handed to the **snapshot builder** on the pool (`IndirectDraws::PostSnapshotWork`: the payloads built ahead, the revision made and sealed, the payload's pooled versions published) | The frame values' uploads, on the copy queue; the payload's catch-up, on the uploader |
 | The engine's cull jobs | The engine registers the passes it keeps. `PassCapture` withholds DCLF's objects, `PrimaryCull` stands in for DCLF's references inside the list jobs, and the sun's cascades skip DCLF's entries | | |
-| `BeforeShadowMaps` | The **reflection epoch**; the frame's shadow views (`ShadowViews`), their coverage by the selected revision (`DecideShadowCoverage`) | | The water reflection's faces |
+| `BeforeShadowMaps` | The frame's shadow views (`ShadowViews`), their coverage by the selected revision (`DecideShadowCoverage`) | | |
 | Each shadow view's `FinishAccumulating` | `CaptureShadowView`: where the engine drew, and with which constants | | The engine's own shadow draws |
 | `AfterShadowMaps` | The **shadow epoch**: the installed shadow payload committed into the revision's shape | | Every placement's casters, culled per view |
 | Skylighting's `RenderOcclusion` | The **occlusion epoch** | | The occlusion maps |
 | `EarlyPrepass` | Kicks the **accumulate work**; requests the shadow pipelines for the keys in use | **Accumulate work**: what the main camera's registrations decided | |
-| `Main_RenderDepth`, world drawn | `CaptureDepthPass`: the **Z-prepass epoch** | | DCLF's depth, the HZB, two-phase occlusion culling |
+| `Main_RenderDepth`, world drawn | `CaptureDepthPass`: the **Z-prepass epoch**; then the **reflection epoch** (`ExecuteReflection`, after every reflection update of the frame; it must follow the depth commit, which brings the index pool and the scene's buffers to the publication whose scene list the faces draw) | | DCLF's depth, the HZB, two-phase occlusion culling; the water reflection's faces |
 | `Prepass` | Latches the accumulator and refreshes the camera-dependent constants | | |
 | The main pass's opaque batches (`BeforeOpaquePass`, `AfterOpaquePass`) | `CaptureMainPass`, then the **colour epoch** | | The drawn set into the G-buffer, depth-tested EQUAL, then decals |
-| `Present` (`Reset`) | Joins the scene work, closes the engine-read window, binds what the frame read to its last submission (`BindAdopted`: the adopted set and the installed payload; `FrameValues::EndFrame`), applies the events no scene work took, releases what it let go of, writes the report, handles the menu toggle | | |
+| `Present` (`Reset`) | Closes the engine-read window, binds what the frame read to its last submission (`BindAdopted`: the adopted set and the installed payload; `FrameValues::EndFrame`), writes the report, releases what the scene work let go of (`EngineReleases`), handles the menu toggle. Only under `Policy::ScenePassInline` (the parities) does a Present with no frame since the last apply the events itself (`ApplyEventsInline`) | | |
 
 Each epoch is submitted from the selected scene revision's recording (ORG's revision-driven epochs): the commit writes the
 frame's values into the revision's shape (its latch, bucket plan and latched copies) and hands the epoch the installed
@@ -77,10 +77,13 @@ engine writers ──events──▶ Coordinator tables ──change log──�
     -   a fade stepped, or a property's flags or material set;
     -   a controller added, or Havok moving a node;
     -   a switch node's index changed;
-    -   a material's value changed (`MaterialSources`).
+    -   a material's value changed (`MaterialSources`);
+    -   a reference or node moved (`Scene::moveEvents`; `PushMoved` in `SceneEvents.cpp` feeds FrameValues' own queues,
+        `FrameValueMoves`, as well).
 
-    The render thread drains them into a batch (`EventQueue`), and the scene work applies it. Nothing about an object
-    is re-read on a schedule: a change the events miss is a defect, and the walk and mirror parity checks find it.
+    The coordinator's scene lane drains them (`EventQueue`, `SceneTracker`) in each scene pass, which their pushes wake;
+    the render thread drains none. Nothing about an object is re-read on a schedule: a change the events miss is a
+    defect, and the walk and mirror parity checks find it ("Events, not polls", below).
 2.  **Tables.** `Scene::Coordinator` holds a record per object, and shared tables of geometries, pipelines and materials
     (`SlotTable`: slots with generations and reference counts). Every change a write makes to the tables is appended
     to the change log (`Tables::changeLog`), with its causes.
@@ -108,6 +111,42 @@ engine writers ──events──▶ Coordinator tables ──change log──�
         indirect draw sequences;
     -   the draw passes execute them;
     -   the colour epoch draws exactly the set the Z-prepass decided (the per-object visibility words).
+
+### Events, not polls
+
+Every per-frame poll with an engine event behind it follows the event, and what the render thread need not do runs
+elsewhere (2026-10-14; the record is dclf-async-publication.md, "Polls become events"):
+-   **Movers.** A per-frame entry is evaluated only when one of its move keys moved this frame or the last
+    (`Tracked::moveKey`, `moveKeyOuter`; `Coordinator::MoverDue`); a particle system pushes its own key on a new
+    snapshot. A mirror update of a node's body or controllers, or of a geometry's dismember or skin, reclassifies its
+    dependents (`ApplyMotionUpdate`). The placement plan is the complete mover and root set, emitted only when that set
+    changes (`Placements.cpp`), so motion alone publishes nothing.
+-   **Frame values.** The producer samples only the kept plan's movers and roots whose keys moved (particles every
+    frame), and calls `UpdateSkin` only for those skins.
+-   **Materials and residents.** `RefreshMaterialSignatures` evaluates every signature only when the frame's material
+    witness (`FrameComponentsWitness`) changes; `KeepResidentsAlive` refreshes the geometry template only for the
+    pipelines whose membership changed.
+-   **Publication.** Each candidate snapshot carries its change log (`CandidateChanges`; readers call
+    `ChangedEntriesByLog`). `PublishTables` replays the per-object columns by slot (`SceneTables::publicationLog`,
+    `NotePublished`) and copies the pipeline family only when `pipelinesStamp` moves.
+-   **Exclusions.** The builder republishes the same sun exclusion while nothing it was judged from moved, and links each
+    one forward to later candidates (`ForwardExclusion`). The full-frustum entry exclusion is a veto at insertion
+    (`BSGeometryListCullingProcess::AppendNonAccum`, vtable slot 0x19), not a walk after the cull.
+-   **Visibility decode.** `PrepareWrites` visits only the slots an event, the expiry list, the change log, the fade-root
+    journal or the candidate log names (`VisibilityDecode`).
+-   **Frame-start captures.** The category signature is recomputed only on a watched edit
+    (`SceneTracker::WatchCategoryNodes`, `CategoryEdits`). The first-person hidden bits follow `SubtreeEvents`, looked up
+    in a published member set (`WatchSubtreeMembers`), so the hooks never walk parents.
+-   **Cull bookkeeping.** The animated fade roots go through an `EventQueue` (`PrimaryCull::AnimatedFadeRoot`), with no
+    mutex. The scene-list filter is applied as a delta (`ApplyFilterDelta`), fade and tree ownership take joined/left
+    deltas (`TreeAnimation::UpdateOwned`), and the cut's planning (`PlanEntry`) and the local lights' filter builds run
+    on the pool.
+-   **Commit.** `SyncPipelines` skips an unchanged `pipelinesStamp`. The per-publication latch bytes are written once per
+    frame slot until their key moves (`LatchRegionsHeld`), and the shadow arena is staged only in the 256-byte chunks
+    that differ.
+-   **Stats.** The colour and shadow cull counters are read back asynchronously (`CounterReadback`), with no D3D11 `Map`.
+
+What still polls is in [dclf-open-defects.md](./dclf-open-defects.md), "Polls and render-thread work left (2026-10-14)".
 
 ## Growable tables
 
@@ -371,8 +410,9 @@ a frame happens to have.
     group insertions the registration makes without `RegisterPass`.
 -   **The sun's registrations.** `SunAccumulation` skips the registration of a claimed caster in the sun's
     `Accumulate`, reproducing its mask write, so no pass is built only to be withheld.
--   **The sun's culls.** The sun entry exclusion removes entries whose every object is DCLF's from the cascade culls'
-    object arrays. The GPU applies the same entry rule to DCLF's inputs (`kCullSunEntry`).
+-   **The sun's culls.** The sun entry exclusion keeps entries whose every object is DCLF's out of the cascade culls'
+    object arrays: a veto as the full-frustum processes insert them (`AppendNonAccum`), armed for the light's processes
+    only. The GPU applies the same entry rule to DCLF's inputs (`kCullSunEntry`).
 -   **The main camera's cull.** `PrimaryCull` stands in for DCLF's references inside the engine's list jobs. It keeps
     the per-object state the cull maintains (fades, LOD, the tree clock's bit), so the engine never traverses those
     references. The cut it stands in with is kept per candidate entry, planned again only for the entries that moved.
@@ -413,7 +453,8 @@ normal run draws.
     shape covers every view slot, a slot without a view doing no work. A view not drawn while casters are withheld
     from it is `<- HOLES`. Focus views (one actor's casters) are the engine's by design.
 3.  **Incremental only.** Every per-frame update is bounded by what changed: the candidate tables keep stable indices and
-    per-entry versions, and their consumers (the cut, the exclusions, the light filter) follow by version difference;
+    per-entry versions, and their consumers (the cut, the exclusions, the light filter, the visibility decode) follow
+    their change log (`ChangedEntriesByLog`);
     the set's commit evaluates only the slots an event or a readiness source named; the shapes are made again only when
     what they are made from moves (`RevisionShapesKey`). Each has a parity counterpart that evaluates in full.
 4.  **No overflow fallbacks.** Event queues and logs grow; there are no caps.
@@ -458,7 +499,7 @@ fails on the baseline is listed in [dclf-open-defects.md](./dclf-open-defects.md
 
 | Switch | What it compares |
 | --- | --- |
-| `CS_DCLF_PERSISTENT_PARITY` | Every kept store (object records, bindings, bones, geometry, shadow state, shading resample, sun exclusion and sun entry) against a rebuild |
+| `CS_DCLF_PERSISTENT_PARITY` | Every kept store (object records, bindings, bones, geometry, shadow state, shading resample, sun exclusion and sun entry) against a rebuild; each event-driven path against its full evaluation (the gated movers, the candidate log, the visibility writes, FrameValues' moved-only sampling, the frame-start captures and first-person bits) |
 | `CS_DCLF_WALK_PARITY` | The tables, as the events left them, against a dense walk of the scene |
 | `CS_DCLF_CHANGE_LOG_PARITY` | The change log against a diff of the tables |
 | `CS_DCLF_RESIDENT_PARITY` | Resident records against their passes built again |

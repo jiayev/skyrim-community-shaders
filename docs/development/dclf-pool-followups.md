@@ -10,7 +10,9 @@ Each item has three parts:
 -   **Where**: the code involved, at the line numbers of 2026-10-14.
 -   **Sketch**: a direction, not a design.
 
-None is started. Measure before moving anything:
+Status (2026-10-14, after the polls-to-events pass, dclf-async-publication.md, "Polls become events"): §2 is partly done
+(per-publication latch bytes held per frame slot); §4 and §5 are not started, and wait on their readers; the rest is not
+started. Measure before moving anything:
 -   the payload pools' report lines (catch-up per part; `Diagnostics/Reports/DrawsProducer.cpp`);
 -   `frame data through the render thread`, which counts the latched and staged bytes by target
     (`Diagnostics/Reports/DrawsFrameValues.cpp`, `FrameData`).
@@ -24,7 +26,8 @@ None is started. Measure before moving anything:
 Each change is a new material record (`Tables::materialFrameVersion`), a rewritten material row and a publication. The
 four-part journal (`kMaterialRowParts`) already limits each catch-up to the part that moved: V3 measured the VS part.
 Even so, material catch-up is still about 300 KB a publication while such materials are in view. The values also reach the
-GPU a publication late, while FrameValues' shading reaches it in the same frame.
+GPU a publication late, while FrameValues' shading reaches it in the same frame. Since motion stopped publishing
+(2026-10-14), these items are why publications are still about 1.7 a frame.
 
 **Where.**
 -   The capture and refresh: `Scene/Ports/MaterialSources.{h,cpp}` (TexcoordOffset's two buffers);
@@ -79,6 +82,21 @@ truly per frame; others are transport of data that changes rarely.
 -   **What stays.** The recordings are fixed per revision, so every pooled value must still reach the GPU by value through
     the latch, as the payload does; nothing can be bound in a recording. The latch shrinks to the truly per-frame part.
 
+**Done (2026-10-14).** The per-publication bytes are written once per frame slot, and again only when their key moves (the
+latch block, the source, the installed pipeline slots): `LatchRegionsHeld` (`Core/Latched.h`), used by the main commit
+(the bucket map and tables) and the shadow commit (the shadow map rows). The shadow arena is staged only in the 256-byte
+chunks that differ from what the buffer holds (`ShadowEpochs.cpp`, `kArenaChunk`). Staged shadow constants fell from 4.0 to
+1.5 KB a frame, and the main commit's payload uploads from about 90-100 to 37 us an epoch. The per-publication block in
+the payload and the pooled rare values are not done.
+
+**Also on the commit, not done.**
+-   `FrameView::InstallClaims` after a withdrawal still builds the main-claim vector from the claims' phases (O(claims),
+    only after a withdrawal). The coordinator could carry it in the set snapshot.
+-   `RefreshFrameConstants` is not split: the lighting merge and technique fog read the same Prepass engine state as the
+    camera-dependent part.
+-   `FrameData::Note` builds a string and does a map lookup per staged or latched write (about 150-170 a frame); an
+    interned key per target would remove the allocations.
+
 ## 3. LightLimitFix's light array in its latch
 
 **Why.** `ORGLightCulling` copies the whole light array into its latch block every frame. The block is sized for
@@ -123,6 +141,13 @@ breaks the rule that a version is immutable once named.
 -   **The index pool's copy list** becomes the publication's too: the pool's update is a pure function of the geometry log.
 -   **What stays.** Zeroings stay latched. Once no write is left, `CommitUploads` and its batch pool go.
 
+**Not started (2026-10-14): the readers come first.** The recordings bind the versioned buffers these writes target
+(`ShaderResource(*scene->fadeRoots)`, `VertexBuffer(*scene.facePositions)`, ...) in `Passes/Build.cpp`,
+`Passes/SceneState.cpp`, `Epochs/ViewEpochRecord.cpp` and `Core/Resources.cpp`. A part needs those passes to read it by value
+(an SRV index or address through the latch) and the draws' face stream addresses patched at emit time, as
+`PatchRowAddresses` does for rows. Until then the builder cannot write them without writing into a named version a frame in
+flight reads. The index pool is the same: its copy list is render-thread state against the adopted versions.
+
 ## 5. Tree wind values
 
 **Why.** Tree wind takes its data two ways:
@@ -145,6 +170,11 @@ The buffers are made in `Core/Resources.cpp` (~525 tree frame, ~545 fade frame).
 -   **The frame rows** (tree and fade) are per frame and belong in the latch, through a latched copy, as the other frame
     values do; the plain buffers then go.
 -   **What stays.** The GPU-only state (`treeClocks`, `treeWindRows`, `fadeStates`) stays in the set.
+
+**Not started (2026-10-14).** The frame rows' latched copies need the depth shape's `MainLatchedLayout`
+(`Revision/Producer.cpp`) to list a `LatchedCopy` for each buffer and `MainLatchedTargets` (`Passes/MainExtension.cpp`) to
+declare both; the commit's two staged writes then become `latched(...)` writes (`LatchedUploads` already stages a write
+whose copy is missing).
 
 ## 6. Readback staging stays a frame-slot ring
 

@@ -495,132 +495,402 @@ namespace DCLF::Draws
 		a_out.materialRows = k.rows.View();
 	}
 
+	/**
+	 * @brief What BuildSunExclusion keeps in a SunExclusionCache (its index) to update its verdicts by what moved instead of judging every
+	 * object again: the objects indexed by their geometry (an entry's verdict is read from the objects of its geometries), the mode's
+	 * inputs, the exclusion the verdicts were published in (published again while nothing moved), the stamped words every version
+	 * shares (SunExclusion), and the ends of the forward chains (ForwardExclusion). The snapshot builder's thread only (one build
+	 * at a time).
+	 */
+	struct SunExclusionIndex
+	{
+		static constexpr std::uint32_t kNone = ~0u;
+		std::shared_ptr<SunExclusion> last;
+		// Per object: the geometry it is indexed under (null: free, or none) and the next object indexed under it.
+		std::vector<const RE::BSGeometry*> objectGeometry;
+		std::vector<std::uint32_t> nextObject;
+		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> firstObject;
+		// The mode's inputs as of the last build: per object bit 0 (bit 1: a build's scratch), and the list of them.
+		std::vector<std::uint8_t> inputMark;
+		std::vector<std::uint32_t> inputs;
+		std::uint32_t modeBits = 0;
+		// A build's scratch: the objects it looks at again, the entries it judges again.
+		std::vector<std::uint8_t> objectMark, entryMark;
+		std::vector<std::uint32_t> objects, entries, changed;
+		// The stamped words, grown by replacing them (the versions made before hold theirs).
+		std::shared_ptr<std::atomic<std::uint32_t>[]> removed, cleared;
+		std::shared_ptr<std::atomic<std::uint64_t>[]> lightReach;
+		std::uint32_t removedCount = 0, clearedCount = 0;
+		// Every exclusion made for the last candidates the mode was built for whose chain is still held (each link is held by the one
+		// before it; the first by whoever holds the built exclusion): translated to the next candidates when they move.
+		std::vector<std::weak_ptr<SunExclusion>> ends;
+		bool valid = false;
+
+		void Link(std::uint32_t a_object, const RE::BSGeometry* a_geometry)
+		{
+			objectGeometry[a_object] = a_geometry;
+			if (!a_geometry)
+				return;
+			auto [it, fresh] = firstObject.try_emplace(a_geometry, a_object);
+			nextObject[a_object] = fresh ? kNone : std::exchange(it->second, a_object);
+		}
+		void Unlink(std::uint32_t a_object)
+		{
+			const auto* geometry = std::exchange(objectGeometry[a_object], nullptr);
+			if (!geometry)
+				return;
+			const auto it = firstObject.find(geometry);
+			if (it == firstObject.end())
+				return;
+			if (it->second == a_object) {
+				if (nextObject[a_object] == kNone)
+					firstObject.erase(it);
+				else
+					it->second = nextObject[a_object];
+				return;
+			}
+			for (std::uint32_t o = it->second; nextObject[o] != kNone; o = nextObject[o])
+				if (nextObject[o] == a_object) {
+					nextObject[o] = nextObject[a_object];
+					return;
+				}
+		}
+		/** @brief Every object indexed again from the tables. */
+		void Reindex(const SceneTables& a_tables)
+		{
+			const std::size_t count = a_tables.objects.size();
+			firstObject.clear();
+			objectGeometry.assign(count, nullptr);
+			nextObject.assign(count, kNone);
+			for (std::uint32_t o = 0; o < count; ++o)
+				if (!(a_tables.objects[o].flags & kObjectFree))
+					Link(o, a_tables.objectGeometry[o]);
+		}
+		void Grow(std::size_t a_objects, std::size_t a_entries)
+		{
+			if (objectGeometry.size() < a_objects) {
+				objectGeometry.resize(a_objects, nullptr);
+				nextObject.resize(a_objects, kNone);
+			}
+			if (inputMark.size() < a_objects)
+				inputMark.resize(a_objects, 0);
+			if (objectMark.size() < a_objects)
+				objectMark.resize(a_objects, 0);
+			if (entryMark.size() < a_entries)
+				entryMark.resize(a_entries, 0);
+		}
+		/** @brief The stamped words for a_entries entries and a_geometries geometries (a_reach: with the reach words). */
+		void EnsureStamps(std::uint32_t a_entries, std::uint32_t a_geometries, bool a_reach)
+		{
+			if (!removed || removedCount < a_entries || (a_reach && !lightReach)) {
+				const std::uint32_t n = std::max(a_entries, removedCount + removedCount / 2);
+				removed = std::make_shared<std::atomic<std::uint32_t>[]>(n);
+				lightReach = a_reach ? std::make_shared<std::atomic<std::uint64_t>[]>(std::size_t(n) * 3) : nullptr;
+				removedCount = n;
+			}
+			if (!cleared || clearedCount < a_geometries) {
+				const std::uint32_t n = std::max(a_geometries, clearedCount + clearedCount / 2);
+				cleared = std::make_shared<std::atomic<std::uint32_t>[]>(n);
+				clearedCount = n;
+			}
+		}
+		void GiveStamps(SunExclusion& a_exclusion) const
+		{
+			a_exclusion.removed = removed;
+			a_exclusion.cleared = cleared;
+			a_exclusion.lightReach = lightReach;
+			a_exclusion.removedCount = removedCount;
+			a_exclusion.clearedCount = clearedCount;
+		}
+	};
+
+	namespace
+	{
+		/** @brief The cache's index, made with its first build. */
+		SunExclusionIndex& IndexOf(SunExclusionCache& a_cache)
+		{
+			if (!a_cache.index)
+				a_cache.index = std::make_shared<SunExclusionIndex>();
+			return *a_cache.index;
+		}
+
+		/**
+		 * @brief An object blocks its entry when the engine would cast it here and this build does not draw it (volumetric-only too: a
+		 * paraboloid light registers them). A point light's registration also sets its activeLightMask bit on every geometry its
+		 * cull reaches; LocalLightCull writes those for a skipped entry itself. A fading object (ShadowReject::Faded) counts as a
+		 * caster: the exclusion is used a frame later and the culls update the fade themselves (BSFadeNode::OnVisible).
+		 */
+		bool EngineCaster(const SceneTables& a_tables, std::size_t a_object)
+		{
+			return !(a_tables.objects[a_object].flags & kObjectNoShadow) ||
+			       (a_object < a_tables.shadowReject.size() && a_tables.shadowReject[a_object] == static_cast<std::uint8_t>(ShadowReject::Faded));
+		}
+
+		/** @brief The mode's inputs: a_mark |= a_bit for each (a_list: each once). */
+		void CollectInputs(const ShadowPayload& a_payload, std::uint32_t a_mode, std::vector<std::uint8_t>& a_mark, std::uint8_t a_bit, std::vector<std::uint32_t>& a_list)
+		{
+			a_payload.ForEachInput(a_mode, [&](const DrawInput& a_input) {
+				const std::uint32_t o = a_input.objectIndex;
+				if (o < a_mark.size() && !(a_mark[o] & a_bit)) {
+					a_mark[o] |= a_bit;
+					a_list.push_back(o);
+				}
+			});
+		}
+
+		/** @brief Every entry judged from every object (the reference the kept verdicts are checked against). a_isInput: per object. */
+		void JudgeAll(const SunCandidates& a_candidates, const SceneTables& a_tables, const std::vector<std::uint8_t>& a_isInput, std::uint8_t a_bit,
+			std::vector<std::uint8_t>& a_out)
+		{
+			// Every live entry excluded unless a caster under it is not drawn; a free index never.
+			const std::size_t count = a_candidates.Capacity();
+			a_out.assign(count, 0);
+			for (std::size_t e = 0; e < count; ++e)
+				a_out[e] = a_candidates.entryNodes[e] ? 1 : 0;
+			for (std::size_t o = 0; o < a_tables.objects.size(); ++o) {
+				if (a_tables.objects[o].flags & kObjectFree)
+					continue;
+				if ((o < a_isInput.size() && (a_isInput[o] & a_bit)) || !EngineCaster(a_tables, o))
+					continue;
+				if (const auto it = a_candidates.geometries.find(a_tables.objectGeometry[o]); it != a_candidates.geometries.end())
+					a_out[a_candidates.geometryEntry[it->second]] = 0;
+			}
+		}
+
+		/**
+		 * @brief The forward links: every chain end made for other candidates translated to a_built's (TranslateExclusion, sharing its
+		 * stamped words), so a reader holding an older verdict takes the one for its frame's candidates by following links
+		 * (ForwardExclusion) instead of translating. The ends whose chain nobody holds any more are dropped.
+		 */
+		void ForwardEnds(SunExclusionIndex& a_index, const std::shared_ptr<SunExclusion>& a_built, bool a_paraboloid)
+		{
+			std::vector<std::weak_ptr<SunExclusion>> ends;
+			ends.reserve(a_index.ends.size() + 1);
+			bool listed = false;
+			for (const auto& weak : a_index.ends) {
+				auto end = weak.lock();
+				if (!end || end->forward.load(std::memory_order_relaxed))
+					continue;
+				listed |= end == a_built;
+				if (end->candidates == a_built->candidates) {
+					ends.push_back(end);
+					continue;
+				}
+				// The paraboloid's translation keeps the version (LocalLightCull's filter stands); the sun's takes a new one when an
+				// entry leaves (the scene lists' filter is judged again), as the frame's translation did.
+				auto next = TranslateExclusion(end, a_built->candidates, !a_paraboloid, a_paraboloid, &a_index.changed, a_built.get());
+				next->forwardChanged = a_index.changed;
+				end->forwardOwned = next;
+				end->forward.store(next.get(), std::memory_order_release);
+				ends.push_back(next);
+			}
+			if (!listed)
+				ends.push_back(a_built);
+			a_index.ends = std::move(ends);
+		}
+
+		/** @brief The builds' versions (translated copies count apart: TranslateExclusion). */
+		std::uint64_t NextExclusionVersion()
+		{
+			static std::atomic<std::uint64_t> versions{ 0 };
+			return versions.fetch_add(1, std::memory_order_relaxed) + 1;
+		}
+	}
+
 	std::shared_ptr<SunExclusion> BuildSunExclusion(const std::shared_ptr<const SunCandidates>& a_candidates, const ShadowPayload& a_payload, std::uint32_t a_mode,
 		const SceneTables& a_tables, SunExclusionCache* a_cache)
 	{
 		ZoneScopedN("CS.DCLF.BuildSunExclusion");
 		if (!a_candidates || !a_candidates->Count())
 			return nullptr;
-		auto exclusion = std::make_shared<SunExclusion>();
-		exclusion->candidates = a_candidates;
-		exclusion->builtFrame = a_payload.inputs.frameNumber;
-		const std::size_t count = a_candidates->Capacity();
+		const auto& candidates = *a_candidates;
+		const std::uint32_t count = candidates.Capacity();
+		const std::uint32_t geometryCount = candidates.GeometryCapacity();
+		const bool paraboloid = a_mode == kParabolicShadowMode;
+		const std::size_t objects = a_tables.objects.size();
+		if (!a_cache) {
+			// No cache: judged whole, with words of its own.
+			auto exclusion = std::make_shared<SunExclusion>();
+			exclusion->candidates = a_candidates;
+			exclusion->builtFrame = a_payload.inputs.frameNumber;
+			std::vector<std::uint8_t> isInput(objects, 0);
+			std::vector<std::uint32_t> list;
+			CollectInputs(a_payload, a_mode, isInput, 1, list);
+			JudgeAll(candidates, a_tables, isInput, 1, exclusion->excluded);
+			exclusion->excludedCount = static_cast<std::uint32_t>(std::count(exclusion->excluded.begin(), exclusion->excluded.end(), std::uint8_t(1)));
+			exclusion->version = NextExclusionVersion();
+			exclusion->removed = std::make_shared<std::atomic<std::uint32_t>[]>(count);
+			exclusion->cleared = std::make_shared<std::atomic<std::uint32_t>[]>(geometryCount);
+			if (paraboloid)
+				exclusion->lightReach = std::make_shared<std::atomic<std::uint64_t>[]>(std::size_t(count) * 3);
+			exclusion->removedCount = count;
+			exclusion->clearedCount = geometryCount;
+			return exclusion;
+		}
+		auto& c = *a_cache;
+		auto& x = IndexOf(c);
+		++c.builds;
+		const auto buildStart = std::chrono::steady_clock::now();
 		const std::uint64_t membership = a_payload.kept ? a_payload.membership[a_mode] : 0;
-		bool wouldReuse = false;
-		if (a_cache) {
-			auto& c = *a_cache;
-			++c.builds;
-			bool reuse = c.valid && membership && c.candidates && c.membership == membership && c.cursor.Continues(a_tables.changeLog, a_payload.inputs.tablesGeneration);
-			const std::uint32_t causes = kChangeBindings | kChangeGeometry;
-			if (reuse)
-				for (const auto& change : c.cursor.Unread(a_tables.changeLog))
-					if (change.causes & causes) {
-						reuse = false;
-						break;
-					}
-			c.cursor.Advance(a_tables.changeLog);
-			if (reuse && c.candidates != a_candidates) {
-				// Only the candidates moved: keep cached verdicts for stable entries, rejudge each moved entry from its geometries.
-				std::vector<std::uint32_t> changed;
-				ChangedEntries(c.candidates.get(), *a_candidates, changed);
-				std::vector<std::uint8_t> isInput(a_tables.objects.size(), 0);
-				a_payload.ForEachInput(a_mode, [&](const DrawInput& a_input) {
-					if (a_input.objectIndex < isInput.size())
-						isInput[a_input.objectIndex] = 1;
-				});
-				auto excluded = c.excluded;
-				excluded.resize(count, 0);
-				bool moved = false;
-				for (const std::uint32_t e : changed) {
-					std::uint8_t verdict = 0;
-					if (e < count && a_candidates->entryNodes[e]) {
-						verdict = 1;
-						for (const std::uint32_t g : a_candidates->entryGeometries[e]) {
-							const std::int32_t o = a_candidates->geometrySlot[g];
-							if (o >= 0 && std::size_t(o) < a_tables.objects.size() && !(a_tables.objects[o].flags & kObjectFree) && !isInput[o] &&
-								(!(a_tables.objects[o].flags & kObjectNoShadow) ||
-									(std::size_t(o) < a_tables.shadowReject.size() && a_tables.shadowReject[o] == static_cast<std::uint8_t>(ShadowReject::Faded)))) {
-								verdict = 0;
-								break;
-							}
-						}
-					}
-					moved |= e < excluded.size() && excluded[e] != verdict;
-					if (e < excluded.size())
-						excluded[e] = verdict;
+		const std::uint32_t modeBits = a_payload.modeBits[a_mode];
+		const auto isBlocking = [&](std::uint32_t a_object) {
+			return a_object < objects && !(a_tables.objects[a_object].flags & kObjectFree) && !(x.inputMark[a_object] & 1) && EngineCaster(a_tables, a_object);
+		};
+		// The kept verdicts follow what moved: the tables' change log (an object's flags, shadow reject or geometry: kChangeBindings,
+		// kChangeShadow, kChangeGeometry), the mode's inputs (the objects that joined or left them) and the candidates (the entries
+		// whose versions moved: ChangedEntriesByLog). Each entry any of them touches is judged again from the objects of its
+		// geometries; the rest keep theirs. Whole only for a new cache or tables generation, or a reader behind the log's trim.
+		bool kept = c.valid && x.valid && c.candidates && c.cursor.Continues(a_tables.changeLog, a_payload.inputs.tablesGeneration);
+		bool flipped = false;
+		const bool candidatesMoved = c.candidates != a_candidates;
+		if (kept) {
+			x.Grow(objects, count);
+			const auto noteEntry = [&](std::uint32_t a_entry) {
+				if (a_entry < count && !x.entryMark[a_entry]) {
+					x.entryMark[a_entry] = 1;
+					x.entries.push_back(a_entry);
 				}
-				++c.translated;
-				c.candidates = a_candidates;
-				c.excluded = std::move(excluded);
-				c.excludedCount = static_cast<std::uint32_t>(std::count(c.excluded.begin(), c.excluded.end(), std::uint8_t(1)));
-				if (moved) {
-					static std::atomic<std::uint64_t> translatedVersions{ 0 };
-					c.version = (1ull << 62) | (translatedVersions.fetch_add(1, std::memory_order_relaxed) + 1);
+			};
+			const auto noteGeometry = [&](const RE::BSGeometry* a_geometry) {
+				if (!a_geometry)
+					return;
+				if (const auto it = candidates.geometries.find(a_geometry); it != candidates.geometries.end())
+					noteEntry(candidates.geometryEntry[it->second]);
+			};
+			constexpr std::uint32_t causes = kChangeBindings | kChangeShadow | kChangeGeometry;
+			for (const auto& change : c.cursor.Unread(a_tables.changeLog))
+				if ((change.causes & causes) && change.slot < objects && !x.objectMark[change.slot]) {
+					x.objectMark[change.slot] = 1;
+					x.objects.push_back(change.slot);
+				}
+			for (const std::uint32_t o : x.objects) {
+				x.objectMark[o] = 0;
+				const RE::BSGeometry* geometry = (a_tables.objects[o].flags & kObjectFree) ? nullptr : a_tables.objectGeometry[o];
+				noteGeometry(x.objectGeometry[o]);
+				if (geometry != x.objectGeometry[o]) {
+					x.Unlink(o);
+					x.Link(o, geometry);
+				}
+				noteGeometry(geometry);
+			}
+			x.objects.clear();
+			// The inputs, when an object may have joined or left them (the mode's membership version moved, or none is kept).
+			if (!membership || membership != c.membership || modeBits != x.modeBits) {
+				std::vector<std::uint32_t> inputs;
+				inputs.reserve(x.inputs.size());
+				CollectInputs(a_payload, a_mode, x.inputMark, 2, inputs);
+				for (const std::uint32_t o : x.inputs)
+					if (!(x.inputMark[o] & 2)) {
+						x.inputMark[o] = 0;  // left
+						noteGeometry(x.objectGeometry[o]);
+					}
+				for (const std::uint32_t o : inputs) {
+					if (!(x.inputMark[o] & 1))
+						noteGeometry(x.objectGeometry[o]);  // joined
+					x.inputMark[o] = 1;
+				}
+				x.inputs = std::move(inputs);
+				x.modeBits = modeBits;
+			}
+			if (candidatesMoved) {
+				x.changed.clear();
+				ChangedEntriesByLog(c.candidates.get(), candidates, x.changed);
+				for (const std::uint32_t e : x.changed)
+					noteEntry(e);
+				if (c.excluded.size() > count)
+					c.excludedCount -= static_cast<std::uint32_t>(std::count(c.excluded.begin() + count, c.excluded.end(), std::uint8_t(1)));
+				c.excluded.resize(count, 0);
+			}
+			for (const std::uint32_t e : x.entries) {
+				x.entryMark[e] = 0;
+				std::uint8_t verdict = candidates.entryNodes[e] ? 1 : 0;
+				for (std::size_t i = 0; verdict && i < candidates.entryGeometries[e].size(); ++i) {
+					const auto* geometry = candidates.geometryNodes[candidates.entryGeometries[e][i]];
+					const auto it = geometry ? x.firstObject.find(geometry) : x.firstObject.end();
+					for (std::uint32_t o = it != x.firstObject.end() ? it->second : SunExclusionIndex::kNone; o != SunExclusionIndex::kNone; o = x.nextObject[o])
+						if (isBlocking(o)) {
+							verdict = 0;
+							break;
+						}
+				}
+				if (c.excluded[e] != verdict) {
+					c.excluded[e] = verdict;
+					c.excludedCount = verdict ? c.excludedCount + 1 : c.excludedCount - 1;
+					flipped = true;
 				}
 			}
-			// Policy::ReuseShadowExclusion may force a full build to compare against the reuse.
-			wouldReuse = reuse;
-			if (reuse && !Policy::ReuseShadowExclusion(a_payload.inputs.frameNumber))
-				reuse = false;
-			if (reuse) {
-				++c.reused;
+			x.entries.clear();
+		}
+		c.cursor.Advance(a_tables.changeLog);
+		c.membership = membership;
+		// Policy::ReuseShadowExclusion may judge every object to compare against the kept verdicts.
+		std::vector<std::uint8_t> whole;
+		bool judgedWhole = false;
+		if (kept && !Policy::ReuseShadowExclusion(a_payload.inputs.frameNumber)) {
+			std::vector<std::uint8_t> isInput(objects, 0);
+			std::vector<std::uint32_t> list;
+			CollectInputs(a_payload, a_mode, isInput, 1, list);
+			JudgeAll(candidates, a_tables, isInput, 1, whole);
+			judgedWhole = true;
+			const bool same = whole == c.excluded;
+			if (Diagnostics::Armed<Diagnostics::ExclusionRebuilt>())
+				Diagnostics::Notify(Diagnostics::ExclusionRebuilt{ paraboloid, same });
+			kept = same;  // a difference is judged whole from here (and reported)
+		}
+		std::shared_ptr<SunExclusion> exclusion;
+		if (kept) {
+			++c.reused;
+			c.translated += candidatesMoved ? 1 : 0;
+			if (!flipped && !candidatesMoved && x.last && x.last->candidates == a_candidates) {
+				// Nothing it was judged from moved: the same exclusion again.
+				exclusion = x.last;
+				++c.same;
+			} else {
+				exclusion = std::make_shared<SunExclusion>();
+				exclusion->candidates = a_candidates;
+				exclusion->builtFrame = a_payload.inputs.frameNumber;
 				exclusion->reused = true;
 				exclusion->excluded = c.excluded;
 				exclusion->excludedCount = c.excludedCount;
-				exclusion->version = c.version;
-				exclusion->removed = std::make_unique<std::atomic<std::uint32_t>[]>(count);
-				exclusion->cleared = std::make_unique<std::atomic<std::uint32_t>[]>(a_candidates->geometryEntry.size());
-				if (a_mode == kParabolicShadowMode)
-					exclusion->lightReach = std::make_unique<std::atomic<std::uint64_t>[]>(count * 3);
-				return exclusion;
+				exclusion->version = flipped ? NextExclusionVersion() : c.version;
 			}
-		}
-		// Every live entry excluded unless a caster under it is not drawn; a free index never.
-		exclusion->excluded.assign(count, 0);
-		for (std::size_t e = 0; e < count; ++e)
-			exclusion->excluded[e] = a_candidates->entryNodes[e] ? 1 : 0;
-		std::vector<std::uint8_t> isInput(a_tables.objects.size(), 0);
-		a_payload.ForEachInput(a_mode, [&](const DrawInput& a_input) {
-			if (a_input.objectIndex < isInput.size())
-				isInput[a_input.objectIndex] = 1;
-		});
-		// An object blocks its entry when the engine would cast it here and this build does not draw it (volumetric-only too: a
-		// paraboloid light registers them). A point light's registration also sets its activeLightMask bit on every geometry its
-		// cull reaches; LocalLightCull writes those for a skipped entry itself. A fading object (ShadowReject::Faded) counts as a
-		// caster: the exclusion is used a frame later and the culls update the fade themselves (BSFadeNode::OnVisible).
-		auto engineCaster = [&](std::size_t o) {
-			return !(a_tables.objects[o].flags & kObjectNoShadow) ||
-			       (o < a_tables.shadowReject.size() && a_tables.shadowReject[o] == static_cast<std::uint8_t>(ShadowReject::Faded));
-		};
-		for (std::size_t o = 0; o < a_tables.objects.size(); ++o) {
-			if (a_tables.objects[o].flags & kObjectFree)
-				continue;
-			if (isInput[o] || !engineCaster(o))
-				continue;
-			if (const auto it = a_candidates->geometries.find(a_tables.objectGeometry[o]); it != a_candidates->geometries.end())
-				exclusion->excluded[a_candidates->geometryEntry[it->second]] = 0;
-		}
-		exclusion->excludedCount = static_cast<std::uint32_t>(std::count(exclusion->excluded.begin(), exclusion->excluded.end(), std::uint8_t(1)));
-		// A full build matching the cache keeps its version.
-		static std::atomic<std::uint64_t> versions{ 0 };
-		const bool same = a_cache && a_cache->valid && a_cache->candidates == a_candidates && a_cache->excluded == exclusion->excluded;
-		exclusion->version = same ? a_cache->version : versions.fetch_add(1, std::memory_order_relaxed) + 1;
-		if (a_cache) {
-			auto& c = *a_cache;
-			c.version = exclusion->version;
-			if (wouldReuse && Diagnostics::Armed<Diagnostics::ExclusionRebuilt>())
-				Diagnostics::Notify(Diagnostics::ExclusionRebuilt{ a_mode == kParabolicShadowMode, c.excluded == exclusion->excluded });
-			c.candidates = a_candidates;
-			c.cursor.Restart(a_payload.inputs.tablesGeneration);
-			c.membership = membership;
-			c.excluded = exclusion->excluded;
+		} else {
+			// Whole: the index, the inputs and every verdict again.
+			x.Grow(objects, count);
+			x.Reindex(a_tables);
+			for (const std::uint32_t o : x.inputs)
+				if (o < x.inputMark.size())
+					x.inputMark[o] = 0;
+			x.inputs.clear();
+			CollectInputs(a_payload, a_mode, x.inputMark, 1, x.inputs);
+			x.modeBits = modeBits;
+			if (!judgedWhole)
+				JudgeAll(candidates, a_tables, x.inputMark, 1, whole);
+			exclusion = std::make_shared<SunExclusion>();
+			exclusion->candidates = a_candidates;
+			exclusion->builtFrame = a_payload.inputs.frameNumber;
+			exclusion->excludedCount = static_cast<std::uint32_t>(std::count(whole.begin(), whole.end(), std::uint8_t(1)));
+			// A whole build matching the cache keeps its version.
+			const bool same = c.valid && c.candidates == a_candidates && c.excluded == whole;
+			exclusion->version = same ? c.version : NextExclusionVersion();
+			exclusion->excluded = whole;
+			c.excluded = std::move(whole);
 			c.excludedCount = exclusion->excludedCount;
+			c.cursor.Restart(a_payload.inputs.tablesGeneration);
 			c.valid = true;
+			x.valid = true;
 		}
-		exclusion->removed = std::make_unique<std::atomic<std::uint32_t>[]>(count);
-		exclusion->cleared = std::make_unique<std::atomic<std::uint32_t>[]>(a_candidates->geometryEntry.size());
-		if (a_mode == kParabolicShadowMode)
-			exclusion->lightReach = std::make_unique<std::atomic<std::uint64_t>[]>(count * 3);
+		if (exclusion != x.last) {
+			x.EnsureStamps(count, geometryCount, paraboloid);
+			x.GiveStamps(*exclusion);
+		}
+		c.candidates = a_candidates;
+		c.version = exclusion->version;
+		x.last = exclusion;
+		ForwardEnds(x, exclusion, paraboloid);
+		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
+		c.buildMs += ms;
+		c.buildMaxMs = std::max(c.buildMaxMs, ms);
 		return exclusion;
 	}
 

@@ -45,6 +45,12 @@ Submissions from any other thread (none in steady state) first wait until everyt
 stream has reached the queue, then submit directly under DXVK's queue lock, so the graph's own order
 is preserved.
 
+BasicRHI's Vulkan `q_submit` serialises a submission only on its queue's `accessMutex`; it no longer holds the device-wide
+`timelinesMutex` across the submit and the host hook. Before (2026-10-14), the render thread's epoch submission
+(`ORG.Frame.SubmitPackets`) waited 20-40 ms behind a copy-queue upload (`CopyQueueUploadService`, which reaches the queue
+through DXVK's `LockSubmissionQueue`); it is now at most 0.88 ms. `sc_present` still holds `timelinesMutex` across the
+present (SARP and BasicRenderer only).
+
 With a DXVK build that lacks the export (or `CS_ORG_SUBMIT=flush`), each epoch instead flushes and
 waits for DXVK, then submits under the queue lock. This is undesirable, and will likely be downgraded 
 to a failure in the future.

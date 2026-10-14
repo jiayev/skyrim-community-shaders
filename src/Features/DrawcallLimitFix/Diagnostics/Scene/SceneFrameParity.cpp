@@ -120,6 +120,13 @@ namespace DCLF::Diagnostics
 				land[3] = frameInputs.landBlend[1] - geometry->world.translate.y;
 			}
 			if (object.flags & kObjectProjectedUV) {
+				// How the draw makes TextureProj, which a slot without a land blend keeps in its land blend row (WriteObjectExtras): a
+				// multi-index shape's own projection, the projection alone (Envmap), or the projection onto the world matrix.
+				if (!(object.flags & kObjectLandBlend)) {
+					const bool multiIndex = const_cast<RE::BSGeometry*>(geometry)->GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape;
+					const std::uint32_t technique = (tables.pipelines[object.pipelineIndex].passDescriptor >> 24) & 0x3f;
+					a_out[kExtraRowLandBlend * 4] = multiIndex ? kTextureProjShape : technique == 1 ? kTextureProjProjection : kTextureProjWorld;
+				}
 				// The texture matrix as SetupGeometry builds it for a ProjectedUV pass (engine notes), through the engine's own routines:
 				// for every technique but Envmap the projection multiplied onto the geometry's world matrix, converted the same way and with
 				// posAdjust added back.
@@ -200,14 +207,18 @@ namespace DCLF::Diagnostics
 					CompleteExtras(held, tables.objects[o].flags, placement.world, frameInputs, completed.data());
 					++ep.objects;
 					float worst = 0.0f;
+					std::size_t worstAt = 0;
 					for (std::size_t c = 0; c < completed.size(); ++c)
-						worst = std::max(worst, std::abs(completed[c] - reference[c]));
+						if (const float d = std::abs(completed[c] - reference[c]); d > worst)
+							worst = d, worstAt = c;
 					ep.maxDifference = std::max(ep.maxDifference, worst);
 					// TextureProj's translation column: the engine subtracts the eye and adds it back, the draw does not (an ulp of the
 					// world position).
 					if (worst > 0.05f && ep.differ++ == 0) {
 						const auto* geometry = tables.objectGeometry[o];
-						ep.first = fmt::format("slot {} '{}' (flags {:#x}): differs by {}", o, geometry->name.c_str() ? geometry->name.c_str() : "?", tables.objects[o].flags, worst);
+						ep.first = fmt::format("slot {} '{}' (flags {:#x}): differs by {} at component {} (completed {}, reference {}; mode {}, technique {})", o,
+							geometry->name.c_str() ? geometry->name.c_str() : "?", tables.objects[o].flags, worst, worstAt, completed[worstAt], reference[worstAt],
+							held[kExtraRowLandBlend * 4], (tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor >> 24) & 0x3f);
 					}
 				}
 			}

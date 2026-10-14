@@ -19,17 +19,29 @@ namespace DCLF::Reports
 {
 	namespace
 	{
+		/** @brief The scene lists' line's filter part: why entries stay in the lists, and the filter's deltas. */
+		std::string ListReasons(const PrimaryCull::ListCounters& a_l)
+		{
+			const double frames = std::max<double>(static_cast<double>(a_l.reasonFrames), 1.0);
+			std::string reasons;
+			for (std::size_t r = 1; r < a_l.keptBy.size(); ++r)
+				reasons += fmt::format("{}{:.0f} {}", reasons.empty() ? "" : ", ", a_l.keptBy[r] / frames, PrimaryCull::kListReasonNames[r]);
+			return fmt::format("entries per filtered frame: {:.0f} left out, kept in the lists: {}; filter deltas: {} entries judged, {} roots inserted, {} erased; kept frames applying "
+							   "a delta {} ({} roots taken out, {} put back), {} rebuilt instead",
+				a_l.keptBy[0] / frames, reasons, a_l.filterJudged, a_l.filterInserted, a_l.filterErased, a_l.deltaKept, a_l.deltaOut, a_l.deltaIn, a_l.deltaRebuilt);
+		}
+
 		/** @brief The scene lists' line (a_diagnostics: the dry runs' stand-in counts and the engine's lists against DCLF's). */
 		void SceneListsLine(const Diagnostics::CutObservers::Counts& a_diagnostics)
 		{
 			const auto l = PrimaryCull::Get().TakeListCounters();
 			const double toMs = MsPerTick();
 			const auto& d = a_diagnostics;
-			const bool bad = l.unexcluded || d.filterMissed || d.listMissing || d.listExtra;
+			const bool bad = l.unexcluded || d.filterMissed || d.listMissing || d.listExtra || d.keptMissing || d.keptExtra;
 			logger::info("[DCLF] scene lists: {} frames: {} kept, {} built by DCLF ({} late; by cause: {} structure or hidden ({}), {} filter, {} globals, {} not DCLF's), {} the engine's ({} not keepable: {}; {} filtered); "
 						 "per DCLF build {:.0f} entries ({:.3f} ms), {:.0f} DCLF roots left out a build or filtered frame; filter sets built {} (not published: {} toggled off, {} occlusion maps native, {} snapshot not current, {} no exclusion); "
 						 "dry runs {}: {} roots, {} stand-in disagreements; DCLF's lists against the engine's: {} checks, {} of the engine's missing, {} of DCLF's not hidden extra; "
-						 "put back for an occlusion map the engine drew on {} frames ({} detached roots left out); filtered frames without the sun's exclusion {}, members lost while out {}{}{}",
+						 "put back for an occlusion map the engine drew on {} frames ({} detached roots left out); filtered frames without the sun's exclusion {}, members lost while out {}; {}{}{}",
 				l.frames, l.kept, l.rebuilt, l.lateRebuilds, l.rebuildStructure,
 				fmt::format("events: {} object root children, {} category nodes, {} roots ({} applied: {} added, {} removed, {} rebuilt), {} hidden bits", l.structureBy[0],
 					l.structureBy[1], l.structureBy[2], l.eventsApplied, l.eventsAdded, l.eventsRemoved, l.eventsRebuilt, l.structureBy[3]),
@@ -39,7 +51,11 @@ namespace DCLF::Reports
 				l.filtered, l.rebuilt ? double(l.rebuildEntries) / l.rebuilt : 0.0, l.rebuilt ? l.rebuildTicks * toMs / l.rebuilt : 0.0,
 				(l.rebuilt + l.filtered) ? double(l.removed) / double(l.rebuilt + l.filtered) : 0.0, l.built, l.notToggled, l.noOcclusion, l.notCurrent,
 				l.noExclusion, l.dryRuns, d.filterChecked, d.filterMissed, d.listChecks, d.listMissing, d.listExtra, l.restored, l.restoreDetached, l.unexcluded,
-				l.lostWhileOut, bad ? " <- LIST FILTER" : " <- OK", d.listFirst.empty() ? "" : "; first: " + d.listFirst);
+				l.lostWhileOut,
+				ListReasons(l) + (d.keptChecks ? fmt::format("; kept lists against a rebuild: {} checks, {} missing, {} extra{}", d.keptChecks, d.keptMissing, d.keptExtra,
+														  d.keptFirst.empty() ? "" : " (first: " + d.keptFirst + ")") :
+				                                   ""),
+				bad ? " <- LIST FILTER" : " <- OK", d.listFirst.empty() ? "" : "; first: " + d.listFirst);
 		}
 
 		/**
@@ -136,10 +152,10 @@ namespace DCLF::Reports
 			std::string list;
 			if (c.filterInstalled) {
 				const double filtered = static_cast<double>(c.filtered);
-				list = fmt::format("\n[DCLF] point lights' category filter: {} lights, {} filtered, {} walked whole (frames without it); {:.1f} filtered nodes a light ({} now), {:.0f} children culled and {:.0f} cut a light, {} dirty nodes walked; {} builds ({} nodes, {:.3f} ms each); parity {} casters under a filtered node checked, {} not under a child it keeps{}{}",
+				list = fmt::format("\n[DCLF] point lights' category filter: {} lights, {} filtered, {} walked whole (frames without it); {:.1f} filtered nodes a light ({} now), {:.0f} children culled and {:.0f} cut a light, {} dirty nodes walked; {} builds on the pool ({} nodes, {:.3f} ms each; {} for an older verdict, {} refused a lease); parity {} casters under a filtered node checked, {} not under a child it keeps{}{}",
 					c.lights, c.filtered, c.walkedNotLive, c.filtered ? static_cast<double>(c.nodes) / filtered : 0.0, c.filterNodes,
 					c.filtered ? static_cast<double>(c.children) / filtered : 0.0, c.filtered ? static_cast<double>(c.cut) / filtered : 0.0, c.dirtyNodes, c.builds,
-					c.nodesRebuilt, c.builds ? static_cast<double>(c.buildTicks) * MsPerTick() / static_cast<double>(c.builds) : 0.0,
+					c.nodesRebuilt, c.builds ? static_cast<double>(c.buildTicks) * MsPerTick() / static_cast<double>(c.builds) : 0.0, c.buildsStale, c.buildsRefused,
 					p.filterChecked, p.filterMissed, p.filterChecked || p.filterMissed ? (p.filterMissed ? " <- LIGHT FILTER" : " <- OK") : "",
 					p.filterFirstMissed.empty() ? "" : "; first:" + p.filterFirstMissed);
 			}
@@ -170,14 +186,15 @@ namespace DCLF::Reports
 		const auto d = Diagnostics::CutObservers::Take();
 		const double toMs = MsPerTick();
 		const double applied = std::max<double>(static_cast<double>(s.appliedFrames), 1.0);
-		logger::info("[DCLF] primary exclusion: applied on {} of {} frames ({} without candidates, {} preconditions), {:.1f} entries planned again a frame as their candidates moved ({} pool gatherings; parity {} checks, {} differ); per frame {:.0f} eligible entries reached, "
+		logger::info("[DCLF] primary exclusion: applied on {} of {} frames ({} without candidates, {} preconditions), {:.1f} entries planned again a frame as their candidates moved ({} pool gatherings; parity {} checks, {} differ, {} entries differing once); per frame {:.0f} eligible entries reached, "
 					 "{:.0f} stood in for ({:.0f} walked, {:.0f} of them in view), {:.1f} cross-fading LOD (stood in), {:.1f} not yet admitted ({:.1f} admitted); {:.0f} members in view, {:.1f} not bound yet (the engine's), "
 					 "{:.1f} bound but not in the set (the engine's), {:.1f} hidden;  {:.1f} owned geometries left out of the engine's registration; "
-					 "{:.0f} of the engine's members in view registered by it; switches: {:.1f} entries culled by the engine (stale child), {:.0f} members unselected, selection read from every switch on {} frames and from {} events' entries; render thread: prepare {:.3f} ms, after the jobs {:.3f} ms",
-			s.appliedFrames, s.frames, s.skippedStale, s.skippedPreconditions, double(s.entriesPlanned) / applied, s.compactions, d.cutChecks, d.cutMismatches, s.seen / applied, s.skipped / applied, s.walked / applied, s.visibleEntries / applied,
+					 "{:.0f} of the engine's members in view registered by it; switches: {:.1f} entries culled by the engine (stale child), {:.0f} members unselected, selection read from every switch on {} frames and from {} events' entries; render thread: prepare {:.3f} ms, after the jobs {:.3f} ms; plans on the pool: {} kicked, {} spliced, {} stale, {} refused a lease, {:.1f} entries waiting a frame",
+			s.appliedFrames, s.frames, s.skippedStale, s.skippedPreconditions, double(s.entriesPlanned) / applied, s.compactions, d.cutChecks, d.cutMismatches, d.cutLagging, s.seen / applied, s.skipped / applied, s.walked / applied, s.visibleEntries / applied,
 			s.notSettled / applied, s.notAdmitted / applied, s.admittedNow / applied, s.members / applied, s.unbound / applied,
 			s.undrawable / applied, s.hiddenSkipped / applied, s.excluded / applied,
-			s.engineMembers / applied, s.switchStale / applied, s.unselected / applied, s.liveAll, s.liveEntries, s.prepareTicks * toMs / applied, s.afterTicks * toMs / applied);
+			s.engineMembers / applied, s.switchStale / applied, s.unselected / applied, s.liveAll, s.liveEntries, s.prepareTicks * toMs / applied, s.afterTicks * toMs / applied,
+			s.plansKicked, s.plansSpliced, s.plansStale, s.plansRefused, s.awaiting / applied);
 		// The scene membership, registration and resident lines are the coordinator's (from its pass: the joins' statistics are its own).
 		SceneListsLine(d);
 		CullsOffLine();

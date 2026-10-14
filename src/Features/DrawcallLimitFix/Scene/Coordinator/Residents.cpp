@@ -6,8 +6,20 @@
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 
+#include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
+
 namespace DCLF::Scene
 {
+	namespace
+	{
+		// The pipeline templates' parity (KeepResidentsAlive; scene lane only, the coordinator is one): its counters, reported every
+		// kTemplateReportChecks checks.
+		Diagnostics::ParityCounter templateParity;
+		std::uint64_t templateParityPasses = 0;
+		constexpr std::uint32_t kTemplateParityOffset = 37;
+		constexpr std::uint64_t kTemplateReportChecks = 10;
+	}
+
 	void Coordinator::MarkResidentSlot(std::uint32_t a_slot, const ResidentPatch& a_patch)
 	{
 		NoteResidentTouched(a_slot);
@@ -188,11 +200,35 @@ namespace DCLF::Scene
 				tables.NoteTreesWrite();
 			}
 		}
-		// A member's property is its pipeline's lighting template, read again every frame: the property is the engine's, and a
-		// swap of it rewrites the member only when an event names it.
-		for (std::uint32_t p = 0; p < pipelineMembers.lists.size(); ++p)
-			if (const std::uint32_t slot = pipelineMembers.First(p); slot != ~0u && p < tables.geometryTemplate.size())
-				tables.geometryTemplate[p] = SlotProperty(slot);
+		// A pipeline's lighting template is its first member's held property (SlotProperty). It moves where the first member may
+		// change, a pipeline whose membership changed (pipelinesTouched), and where that member's entry takes another property: a leaf
+		// update's swap (HoldProperties, on PushLeafUpdate) rewrites no slot, so it notes the slot (NoteResidentTouched), whose recount
+		// touches its pipeline. The old reference goes to the retirement chain, so the template takes the new one this pass.
+		auto templateOf = [&](std::uint32_t a_pipeline) {
+			const std::uint32_t slot = pipelineMembers.First(a_pipeline);
+			return slot != ~0u ? SlotProperty(slot) : nullptr;
+		};
+		for (const std::uint32_t p : pipelinesTouched)
+			if (pipelineMembers.Count(p) && p < tables.geometryTemplate.size())
+				tables.geometryTemplate[p] = templateOf(p);
+		// The parity (CS_DCLF_PERSISTENT_PARITY, every 60 passes): every pipeline's template against its first member's property now;
+		// a difference is a held property that moved with no recount of its slot.
+		if (Diagnostics::Observe().scene && Diagnostics::ParityDue(passSerial, kTemplateParityOffset)) {
+			auto& tp = templateParity;
+			for (std::uint32_t p = 0; p < pipelineMembers.lists.size() && p < tables.geometryTemplate.size(); ++p)
+				if (pipelineMembers.Count(p)) {
+					const auto* now = templateOf(p);
+					tp.Check(tables.geometryTemplate[p] == now, [&] {
+						return fmt::format("pipeline {} (first member slot {}): template {} where the member holds {}", p, pipelineMembers.First(p),
+							static_cast<const void*>(tables.geometryTemplate[p]), static_cast<const void*>(now));
+					});
+				}
+			if (++templateParityPasses % kTemplateReportChecks == 0) {
+				logger::info("[DCLF] pipeline template parity (the touched refresh against every pipeline's first member): {} checks, {} differ{}",
+					tp.checks, tp.mismatches, tp.Verdict(true));
+				tp.Reset();
+			}
+		}
 		// A tree's wind is TreeWindCS's from here (Records.h, TreeStatic): nothing is taken from the tree nodes per frame.
 	}
 

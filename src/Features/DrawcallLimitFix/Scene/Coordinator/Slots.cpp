@@ -22,6 +22,8 @@ namespace DCLF::Scene
 			tables.PipelineColumns(kGrowColumn);
 			tables.NoteConstantsWrite();
 		}
+		// The caller writes the slot's pipeline family next (before the publication).
+		tables.NotePipelinesWrite();
 		return allocation.slot;
 	}
 

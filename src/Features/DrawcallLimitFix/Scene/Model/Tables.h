@@ -82,6 +82,19 @@ namespace DCLF
 		// What MainBuild's kept bindings key on, new (NextVersion) whenever a covered value changes: a pipeline's PerGeometry
 		// floats and what its pairs' records read of it (key, permutation; the technique's are its TechniqueRow's).
 		std::vector<std::uint32_t> pipelineBindingVersion;    // parallel to pipelines
+		// Write stamp of the pipeline family (PipelineFamily), bumped by every write of it (sizes included): the publication copies
+		// the family only when it moved. Pipeline slots are written right after their allocation (AllocatePipelineSlot notes it).
+		std::uint64_t pipelinesStamp = 0;
+		void NotePipelinesWrite() { ++pipelinesStamp; }
+		/** @brief The pipeline family's members of two tables, each pair to a_member (the publication's copy, its checks). */
+		template <class T, class F>
+		static void PipelineFamily(T& a_left, T& a_right, F&& a_member)
+		{
+			a_member(a_left.pipelines, a_right.pipelines);
+			a_member(a_left.pipelineBindingVersion, a_right.pipelineBindingVersion);
+			a_member(a_left.pipelineTechnique, a_right.pipelineTechnique);
+			a_member(a_left.permutations, a_right.permutations);
+		}
 		std::uint32_t versionCounter = 0;
 		std::uint32_t NextVersion() { return ++versionCounter; }
 		// No shading (MaterialData, EmitColor, SSRParams.w, emissive multiplier, wetness): FrameValues' rows (BindlessShading),
@@ -178,7 +191,7 @@ namespace DCLF
 		// never the node's (+0x152, which GetRenderPasses reads), so the record is written once.
 		std::vector<std::uint32_t> skinLodPartitions;         // parallel to objects
 		// The property that supplied each pipeline's per-frame constants, for RefreshFrameConstants to re-evaluate. (Frame globals
-		// are FrameCapture's.)
+		// are FrameCapture's.) The coordinator's alone: not published (a publication's is empty).
 		std::vector<RE::BSShaderProperty*> geometryTemplate;  // parallel to pipelines
 		// PerTechnique values (plus filter modes and shadow mask), one row per TechniqueKey, shared by its pipelines. Evaluated
 		// when made (TechniqueRowFor) and when TechniqueInputs move (RefreshTechniqueRows). Never freed: a few dozen.
@@ -229,8 +242,8 @@ namespace DCLF
 		std::vector<DrawSequence> draws;  // one per object (templates: pipelineIndex is the table index)
 		// Decals: each decal's slot in its group's range, in the engine's draw order (group, technique bucket, batch list, chain
 		// position). The colour epoch writes the draw, or a zero-count one, to that fixed slot so overlapping decals keep their
-		// order (an atomic append would not). ~0u for non-decals.
-		std::vector<std::uint32_t> decalOrdinal;  // parallel to objects
+		// order (an atomic append would not). ~0u for non-decals. Every changed ordinal notes its slot (Coordinator::OrderDecals).
+		std::vector<std::uint32_t> decalOrdinal;  // parallel to objects (sized by OrderDecals)
 		std::array<std::uint32_t, 3> decalCount{};
 		// Skinning (CS_DCLF_SKINNED): each skinned object's block in FrameValues' palettes (NiSkinInstance::boneMatrices and
 		// prevBoneMatrices, three float4 rows a bone) and its row count. A block stays the slot's while the palette size holds
@@ -304,7 +317,8 @@ namespace DCLF
 		// Which slots hold a resident record (PrimaryCull's).
 		std::vector<std::uint8_t> residentSlot;  // parallel to objects
 		// Each slot's DCLF set phases (SetPhase bits, 0: not a member), written by CommitSet alone; every build selects by them
-		// (kObjectMember is the main phase's copy for the GPU).
+		// (kObjectMember is the main phase's copy for the GPU). Every write notes the slot (the change log with the record's
+		// kObjectMember, else publicationLog).
 		std::vector<std::uint8_t> setPhases;  // parallel to objects
 		// The change log (drawcall-limit-fix.md, "Persistent draw state"): each write that changes a slot's columns appends the
 		// slot and causes. Consumers read from their own LogCursor; one behind the trim, or on a new tables generation, rereads all.
@@ -326,15 +340,21 @@ namespace DCLF
 		// Every write of a geometry slot's columns, which the published tables replay and GeometryStore repacks by.
 		EventLog<std::uint32_t> geometryLog;
 		void NoteGeometry(std::uint32_t a_slot) { geometryLog.Push(a_slot); }
-		// Material slots whose versions changed, for MainBuild::UpdateRegionPairs.
+		// Material slots whose versions changed (every write of a record), for MainBuild::UpdateRegionPairs and the publication's replay.
 		EventLog<std::uint32_t> materialLog;
 		void NoteMaterial(std::uint32_t a_slot) { materialLog.Push(a_slot); }
+		// Object slots whose published columns changed with no change-log note: the columns no change-log consumer reads (setPhases,
+		// layerBase and layerOf of a link's other end, decalOrdinal) where the write notes nothing. The publication replays them with
+		// the logged slots; nothing else reads it.
+		EventLog<std::uint32_t> publicationLog;
+		void NotePublished(std::uint32_t a_slot) { publicationLog.Push(a_slot); }
 		/** @brief Every reader of the change log resyncs. */
 		void InvalidateChangeLog()
 		{
 			changeLog.Invalidate();
 			materialLog.Invalidate();
 			extrasBlockLog.Invalidate();
+			publicationLog.Invalidate();
 		}
 		/** @brief A slot's columns, everything a persistent consumer builds from, for the writers to compare against. */
 		struct Columns
@@ -492,7 +512,9 @@ namespace DCLF
 
 		// Object slots persist while the object has a record; a free slot holds FreeObjectRecord(), and a walk sweeps the slots it
 		// did not write. Walk parity's reference build (denseWalk) writes densely instead.
-		std::vector<std::uint32_t> objectSeen;  // parallel to objects: the walk (walkSerial) that last wrote the slot
+		// Parallel to objects: the walk (walkSerial) that last wrote the slot. The coordinator's alone: not published (a
+		// publication's holds zeros).
+		std::vector<std::uint32_t> objectSeen;
 		// New on every tracked insertion, including detach/reattach and pointer reuse.
 		std::vector<std::uint64_t> objectIdentity;  // parallel to objects; zero for a free slot
 		std::vector<std::uint64_t> objectGroup;  // actor siblings share this ID
@@ -500,7 +522,9 @@ namespace DCLF
 		// walk restores each patched slot's scene half from here.
 		std::vector<std::uint32_t> sceneFlags;
 		// A multi-index shape's main-pass layer (Coordinator::Tracked::layerSlot, drawn from its second index list) is an object
-		// of its own: layerBase maps layer slot -> base slot, layerOf base -> layer, else kNoObjectSlot. Parallel to objects.
+		// of its own: layerBase maps layer slot -> base slot, layerOf base -> layer, else kNoObjectSlot. Parallel to objects. The
+		// publication replays both ends of a link with either's change-log note (the layer's write notes it); a write that changes
+		// one end with no note of either notes it on publicationLog (ResetObject).
 		std::vector<std::uint32_t> layerBase;
 		std::vector<std::uint32_t> layerOf;
 		bool IsLayer(std::uint32_t a_slot) const { return a_slot < layerBase.size() && layerBase[a_slot] != kNoObjectSlot; }

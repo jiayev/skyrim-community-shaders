@@ -160,8 +160,10 @@ namespace DCLF
 		objectGeometry[a_slot] = nullptr;
 		// Out of the frame's set with its record: the set is applied once a frame (ApplySet), and a slot freed after it must draw
 		// in no phase (the shadow builds read setPhases).
-		if (a_slot < setPhases.size())
+		if (a_slot < setPhases.size() && setPhases[a_slot]) {
 			setPhases[a_slot] = 0;
+			NotePublished(a_slot);
+		}
 		objectIdentity[a_slot] = 0;
 		objectGroup[a_slot] = 0;
 		lights[a_slot] = ObjectLights{};
@@ -182,11 +184,17 @@ namespace DCLF
 		shadowMaterial[a_slot] = nullptr;
 		objectSeen[a_slot] = 0;
 		sceneFlags[a_slot] = FreeObjectRecord().flags;
-		// The link between a layer and its base goes with either.
-		if (const auto base = layerBase[a_slot]; base < layerOf.size() && layerOf[base] == a_slot)
+		// The link between a layer and its base goes with either (both ends noted for the publication: the other has no note).
+		if (const auto base = layerBase[a_slot]; base < layerOf.size() && layerOf[base] == a_slot) {
 			layerOf[base] = kNoObjectSlot;
-		if (const auto layer = layerOf[a_slot]; layer < layerBase.size() && layerBase[layer] == a_slot)
+			NotePublished(base);
+		}
+		if (const auto layer = layerOf[a_slot]; layer < layerBase.size() && layerBase[layer] == a_slot) {
 			layerBase[layer] = kNoObjectSlot;
+			NotePublished(layer);
+		}
+		if (layerBase[a_slot] != kNoObjectSlot || layerOf[a_slot] != kNoObjectSlot)
+			NotePublished(a_slot);
 		layerBase[a_slot] = kNoObjectSlot;
 		layerOf[a_slot] = kNoObjectSlot;
 		NoteWrite(a_slot, before);
@@ -338,6 +346,7 @@ namespace DCLF
 		techniqueConstants.clear();
 		NoteConstantsWrite();
 		permutations.clear();
+		NotePipelinesWrite();
 		draws.clear();
 		decalOrdinal.clear();
 		decalCount = {};

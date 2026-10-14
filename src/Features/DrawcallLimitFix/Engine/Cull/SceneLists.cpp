@@ -17,6 +17,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/PrimaryCullView.h"
 
 namespace DCLF
 {
@@ -136,6 +137,11 @@ namespace DCLF
 
 	std::shared_ptr<const PrimaryCull::ListFilter> PrimaryCull::CurrentListFilter()
 	{
+		// Entries to judge again pile up while no filter is made: past the index space, all are.
+		if (filterDirty.size() > std::max<std::size_t>(cut.plans.size(), 1024)) {
+			filterDirty.clear();
+			filterDirtyAll = true;
+		}
 		const auto toggles = ActiveToggles();
 		if (!Policy::WithholdFromEngine() || !toggles.excludePrimaryEntries) {
 			++listStats.notToggled;
@@ -147,12 +153,13 @@ namespace DCLF
 			return nullptr;
 		}
 		// The cut as the last frame left it, brought up to the frame's candidates (it plans again only the entries that moved).
+		TakePlans();
 		if (const auto candidates = Scene::FrameView::Get().GetSunCandidates(); !candidates) {
 			++listStats.notCurrent;
 			return nullptr;
 		} else if (candidates != cut.candidates) {
 			std::vector<std::uint32_t> changed;
-			ChangedEntries(cut.candidates.get(), *candidates, changed);
+			ChangedEntriesByLog(cut.candidates.get(), *candidates, changed);
 			SyncCut(candidates, changed);
 			cutStats.entriesPlanned += changed.size();
 		}
@@ -160,36 +167,117 @@ namespace DCLF
 		// the sun's cascades only when that exclusion takes it out too. With the sun off (an interior) no full-frustum cull
 		// reads the lists, and no exclusion is needed.
 		const bool sunOff = Global<std::uint8_t>(Engine::Address::kSunOff) != 0;
-		const auto exclusion = sunOff ? nullptr : SunAccumulation::Get().PendingExclusion();
+		auto exclusion = sunOff ? nullptr : SunAccumulation::Get().PendingExclusion();
 		if (!sunOff && (!exclusion || exclusion->candidates != cut.candidates || exclusion->excluded.size() != cut.plans.size())) {
 			++listStats.noExclusion;
 			return nullptr;
 		}
-		const std::uint64_t exclusionVersion = sunOff ? ~0ull : exclusion->version;
-		// Built again only when an entry's verdict may have moved: the cut's admissions and walks, or the exclusion's content.
 		const auto entries = static_cast<std::uint32_t>(cut.plans.size());
-		if (listFilterBuilt && listFilterBuilt->candidates == cut.candidates && filterCutVersion == cutVersion && filterExclusionVersion == exclusionVersion &&
-			listRemovable.size() == entries)
-			return listFilterBuilt;
-		filterCutVersion = cutVersion;
-		filterExclusionVersion = exclusionVersion;
-		bool changed = !listFilterBuilt || listFilterBuilt->candidates != cut.candidates || listRemovable.size() != entries;
-		listRemovable.resize(entries, 0);
-		for (std::uint32_t e = 0; e < entries; ++e) {
-			const std::uint8_t removable =
-				cut.plans[e] != EntryPlan::Rejected && cut.admitted[e] && !cut.walk[e] && !cut.mixed[e] && (sunOff || (e < exclusion->excluded.size() && exclusion->excluded[e])) ? 1 : 0;
-			changed |= removable != listRemovable[e];
-			listRemovable[e] = removable;
-		}
-		if (changed) {
-			auto filter = std::make_shared<ListFilter>();
-			filter->candidates = cut.candidates;
+		// Judged again: the entries the cut changed (NoteFilterEntry) and those whose exclusion bit moved; all for a first filter.
+		bool all = filterDirtyAll || !listFilterBuilt || sunOff != filterSunOff || (!sunOff && !filterExclusion);
+		if (!all && !sunOff && exclusion != filterExclusion) {
+			const auto& was = filterExclusion->excluded;
+			const auto& now = exclusion->excluded;
 			for (std::uint32_t e = 0; e < entries; ++e)
-				if (listRemovable[e])
-					filter->roots.insert(cut.roots[e]);
-			listFilterBuilt = std::move(filter);
+				if (e >= was.size() || was[e] != now[e])
+					filterDirty.push_back(e);
+		}
+		// Entries past a shrunk index space leave the filter.
+		if (!all)
+			for (std::uint32_t e = entries; e < listReason.size(); ++e)
+				filterDirty.push_back(e);
+		filterDirtyAll = false;
+		filterSunOff = sunOff;
+		filterExclusion = std::move(exclusion);
+		const auto reasonOf = [&](std::uint32_t a_e) -> std::uint8_t {
+			if (a_e >= entries || !cut.roots[a_e] || cut.plans[a_e] == EntryPlan::Rejected)
+				return kNoEntry;
+			if (!cut.admitted[a_e])
+				return kNotAdmitted;
+			if (cut.mixed[a_e])
+				return kMixed;
+			if (cut.walk[a_e])
+				return kWalked;
+			if (!sunOff && !filterExclusion->excluded[a_e])
+				return kNotExcluded;
+			return kRemovable;
+		};
+		std::shared_ptr<ListFilter> next;
+		const auto edit = [&]() -> ListFilter& {
+			if (!next) {
+				next = std::make_shared<ListFilter>();
+				if (listFilterBuilt && !all) {
+					next->roots = listFilterBuilt->roots;
+					next->base = listFilterBuilt->version;
+				}
+			}
+			return *next;
+		};
+		if (all) {
+			edit();
+			listReason.assign(entries, kNoEntry);
+			listReasonRoot.assign(entries, nullptr);
+			listReasonCount = {};
+			listReasonCount[kNoEntry] = entries;
+			for (std::uint32_t e = 0; e < entries; ++e)
+				filterDirty.push_back(e);
+		}
+		if (listReason.size() < entries) {
+			listReasonCount[kNoEntry] += entries - listReason.size();
+			listReason.resize(entries, kNoEntry);
+			listReasonRoot.resize(entries, nullptr);
+		}
+		// Erased first, then inserted: a root that moved to another index within the delta stays in.
+		std::vector<std::pair<std::uint32_t, std::uint8_t>> judged;
+		judged.reserve(filterDirty.size());
+		for (const std::uint32_t e : filterDirty) {
+			if (e >= listReason.size())
+				continue;
+			const std::uint8_t reason = reasonOf(e);
+			const auto* root = e < entries ? cut.roots[e] : nullptr;
+			++listStats.filterJudged;
+			if (reason == listReason[e] && root == listReasonRoot[e])
+				continue;
+			if (listReason[e] == kRemovable && listReasonRoot[e]) {
+				auto& filter = edit();
+				if (filter.roots.erase(listReasonRoot[e])) {
+					filter.erased.push_back(listReasonRoot[e]);
+					++listStats.filterErased;
+				}
+			}
+			--listReasonCount[listReason[e]];
+			++listReasonCount[reason];
+			listReason[e] = reason;
+			listReasonRoot[e] = root;
+			if (reason == kRemovable)
+				judged.emplace_back(e, reason);
+		}
+		filterDirty.clear();
+		for (const auto& [e, reason] : judged) {
+			auto& filter = edit();
+			if (filter.roots.insert(listReasonRoot[e]).second) {
+				filter.inserted.push_back(listReasonRoot[e]);
+				++listStats.filterInserted;
+			}
+		}
+		// Entries past the index space are gone from it.
+		if (listReason.size() > entries) {
+			for (std::uint32_t e = entries; e < listReason.size(); ++e)
+				--listReasonCount[listReason[e]];
+			listReason.resize(entries);
+			listReasonRoot.resize(entries);
+		}
+		// Every root a version lists is its entry's root in that version's candidates, which hold it; one erased is held by the base's.
+		// No root moved: the last version stands (its candidates hold the same roots), whatever snapshot is current.
+		if (next) {
+			next->candidates = cut.candidates;
+			next->version = ++listFilterVersion;
+			listFilterBuilt = std::move(next);
 			++listStats.built;
 		}
+		++listStats.reasonFrames;
+		for (std::size_t r = 0; r < listReasonCount.size(); ++r)
+			listStats.keptBy[r] += listReasonCount[r];
 		return listFilterBuilt;
 	}
 
@@ -222,7 +310,8 @@ namespace DCLF
 			const bool dirty = listsDirty.load(std::memory_order_relaxed);
 			const bool structure = listStructure.load(std::memory_order_acquire) != listStructureBuilt;
 			const bool witnessMoved = witness != listWitnessBuilt;
-			const bool filterMoved = filter != listFilterKept;
+			// A new filter whose delta is from the kept lists' is applied to them (ApplyFilterDelta); any other rebuilds them.
+			const bool filterMoved = filter != listFilterKept && !(filter && listFilterKept && filter->base && filter->base == listFilterKept->version);
 			mode = dirty || structure || witnessMoved || filterMoved ? ListMode::Rebuild : ListMode::Keep;
 			listStats.rebuildDirty += dirty ? 1 : 0;
 			listStats.rebuildStructure += !dirty && structure ? 1 : 0;
@@ -414,6 +503,58 @@ namespace DCLF
 		return !rebuild;
 	}
 
+	bool PrimaryCull::ApplyFilterDelta(const ListFilter& a_filter)
+	{
+		const std::uint32_t count = Global<std::uint32_t>(Engine::Address::kSceneListCount);
+		auto* lists = Global<SceneList*>(Engine::Address::kSceneLists);
+		if (!lists || !count)
+			return false;
+		// Put back: the roots the filter no longer leaves out, where the build lists them (under a kept category node, in the round
+		// robin). Each is alive: the kept lists' filter (the delta's base) holds it. One detached since has left the scene; one under
+		// anything else than a kept category node is the build's to place.
+		std::uint64_t in = 0, out = 0;
+		for (const auto* root : a_filter.erased) {
+			if (listPositions.contains(root))
+				continue;
+			const auto* parent = root->parent;
+			if (!parent)
+				continue;
+			const auto category = listCategories.find(parent);
+			if (category == listCategories.end())
+				return false;
+			// Category node 6's first child is not listed (the build starts at 1).
+			if (category->second == 6 && parent->GetChildren().free_idx() && parent->GetChildren()[0].get() == root)
+				continue;
+			const std::uint32_t l = listNext++ % count;
+			listPositions.emplace(root, std::pair<std::uint32_t, std::uint32_t>(l, listKeptSize[l]));
+			lists[l].push_back(RE::NiPointer<RE::NiAVObject>(const_cast<RE::NiAVObject*>(root)));
+			++listKeptSize[l];
+			++in;
+		}
+		// Take out: the roots it now leaves out (as a detach event).
+		for (const auto* root : a_filter.inserted) {
+			const auto it = listPositions.find(root);
+			if (it == listPositions.end())
+				continue;
+			const auto [l, position] = it->second;
+			if (l >= count || !listKeptSize[l] || position > listKeptSize[l] - 1 || lists[l][position].get() != root)
+				return false;
+			const std::uint32_t last = listKeptSize[l] - 1;
+			listGraveyard.push_back(std::move(lists[l][position]));
+			if (position != last) {
+				lists[l][position] = std::move(lists[l][last]);
+				listPositions[lists[l][position].get()].second = position;
+			}
+			lists[l].resize(last);
+			listKeptSize[l] = last;
+			listPositions.erase(it);
+			++out;
+		}
+		listStats.deltaIn.fetch_add(in, std::memory_order_relaxed);
+		listStats.deltaOut.fetch_add(out, std::memory_order_relaxed);
+		return true;
+	}
+
 	void PrimaryCull::BuryLists()
 	{
 		const std::uint32_t count = Global<std::uint32_t>(Engine::Address::kSceneListCount);
@@ -550,8 +691,20 @@ namespace DCLF
 					// detached since.
 					for (std::uint32_t l = 0; l < count && l < self.listKeptSize.size(); ++l)
 						lists[l].resize(self.listKeptSize[l]);
-					if (self.ApplyListEvents(self.listFilterKept.get())) {
+					// The events against the filter the kept lists were made with, then the new filter's delta from it.
+					const auto filter = self.listFilter.load(std::memory_order_acquire);
+					bool kept = self.ApplyListEvents(self.listFilterKept.get());
+					if (kept && filter != self.listFilterKept) {
+						kept = filter && self.listFilterKept && filter->base == self.listFilterKept->version && self.ApplyFilterDelta(*filter);
+						self.listStats.deltaKept.fetch_add(kept ? 1 : 0, std::memory_order_relaxed);
+						self.listStats.deltaRebuilt.fetch_add(kept ? 0 : 1, std::memory_order_relaxed);
+						if (kept)
+							self.listFilterKept = filter;
+					}
+					if (kept) {
 						self.listStats.kept.fetch_add(1, std::memory_order_relaxed);
+						if (Diagnostics::Armed<Diagnostics::KeptSceneListsBuilt>())
+							Diagnostics::Notify(Diagnostics::KeptSceneListsBuilt{ self.listFilterKept ? &self.listFilterKept->roots : nullptr, self.listKeptSize.data(), count });
 					} else {
 						self.listStats.lateRebuilds.fetch_add(1, std::memory_order_relaxed);
 						self.RebuildSceneLists(self.listFilter.load(std::memory_order_acquire).get());
@@ -629,6 +782,11 @@ namespace DCLF
 			c.structureBy[i] = l.structureBy[i].exchange(0);
 		c.eventsApplied = l.eventsApplied.exchange(0), c.eventsAdded = l.eventsAdded.exchange(0), c.eventsRemoved = l.eventsRemoved.exchange(0);
 		c.eventsRebuilt = l.eventsRebuilt.exchange(0);
+		c.deltaKept = l.deltaKept.exchange(0), c.deltaOut = l.deltaOut.exchange(0), c.deltaIn = l.deltaIn.exchange(0), c.deltaRebuilt = l.deltaRebuilt.exchange(0);
+		c.filterJudged = l.filterJudged, c.filterInserted = l.filterInserted, c.filterErased = l.filterErased;
+		c.reasonFrames = l.reasonFrames, c.keptBy = l.keptBy;
+		l.filterJudged = l.filterInserted = l.filterErased = l.reasonFrames = 0;
+		l.keptBy = {};
 		c.frames = l.frames, c.published = l.published, c.built = l.built, c.dryRuns = l.dryRuns, c.notToggled = l.notToggled, c.notCurrent = l.notCurrent;
 		c.noExclusion = l.noExclusion, c.noOcclusion = l.noOcclusion;
 		c.restored = l.restored, c.restoreDetached = l.restoreDetached, c.unexcluded = l.unexcluded, c.lostWhileOut = l.lostWhileOut;

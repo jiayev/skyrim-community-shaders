@@ -125,10 +125,13 @@ namespace DCLF::Draws
 		return techniques;
 	}
 
+	struct SunExclusionIndex;  // ShadowBuild.cpp
+
 	/**
-	 * @brief The last sun exclusion's inputs and verdicts: reused while the candidates, the tables, the mode's membership
-	 * (ShadowKept::Mode::membership) and every object's flags and geometry (the change log's bindings and geometry causes)
-	 * are what it was built from.
+	 * @brief The last sun exclusion's inputs and verdicts, kept up to date by what moved (BuildSunExclusion): the candidates (the
+	 * entries whose versions moved), the change log (an object's flags, shadow reject or geometry) and the mode's inputs (the objects
+	 * that joined or left them, while ShadowKept::Mode::membership moves). Judged whole only for a new cache or tables generation,
+	 * or behind the log's trim.
 	 */
 	struct SunExclusionCache
 	{
@@ -139,7 +142,13 @@ namespace DCLF::Draws
 		std::uint32_t excludedCount = 0;
 		std::uint64_t version = 0;  // SunExclusion::version of excluded
 		bool valid = false;
-		std::uint64_t builds = 0, reused = 0, translated = 0;  // since the last report (translated: reused for newer candidates)
+		// What the verdicts are updated by: the objects by geometry, the inputs, the published exclusion, the stamped words and the
+		// forward chains (shared_ptr: the type is the builder's own).
+		std::shared_ptr<SunExclusionIndex> index;
+		// Since the last report: builds; of them kept (updated by what moved; translated: for newer candidates) and, of those, the
+		// same exclusion published again (nothing moved); the rest judged whole. And the builds' time.
+		std::uint64_t builds = 0, reused = 0, translated = 0, same = 0;
+		double buildMs = 0.0, buildMaxMs = 0.0;
 	};
 
 	/**

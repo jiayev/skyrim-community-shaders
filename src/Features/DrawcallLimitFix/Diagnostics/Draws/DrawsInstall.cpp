@@ -13,6 +13,7 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Events.h"
+#	include "CullCounters.h"
 #	include "Observers.h"
 #endif
 
@@ -36,6 +37,7 @@ namespace DCLF::Diagnostics
 			Subscribe<MainEpochDone>(&CheckBuildParity);
 		Subscribe<CullLatchWritten>(&NoteCullLatch);
 		Subscribe<MainEpochDone>(&ReadCullCounters);
+		Subscribe<MainGraphPasses>(&AppendCullCounterPass);
 		Subscribe<FrameTextureUnresolved>(&DescribeUnresolvedFrameTexture);
 		Subscribe<FrameBufferUnfilled>(&LogUnfilledFrameBuffer);
 		Subscribe<TreeLodMissed>(&LogTreeLodMissed);

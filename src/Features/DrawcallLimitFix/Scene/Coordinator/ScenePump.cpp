@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 
 #include <ORGModuleServices/Async/SerializedTaskPump.h>
 
@@ -249,6 +250,30 @@ namespace DCLF::Scene
 		IndirectDraws::Get().NoteScenePassDone(sceneFrame);
 		// The coordinator's report lines, when its frame crossed into a new window.
 		Reports::ScenePassEnd(*this, sceneFrame);
+		ReportMoverGate();
+	}
+
+	void Coordinator::ReportMoverGate()
+	{
+		// Once the pass's frame is in a later report window (the coordinator's clock may skip frame numbers).
+		const std::uint32_t window = sceneFrame / Reports::kInterval;
+		if (window == moverGateWindow)
+			return;
+		moverGateWindow = window;
+		auto& g = moverGateStats;
+		if (g.perFrameWalks) {
+			const double walks = static_cast<double>(g.perFrameWalks);
+			const bool witnessed = g.witnessChecks != 0;
+			logger::info("[DCLF] mover gate (A1: the light path by event, the plan as a delta): {} per-frame walks ({} ungated); per walk {:.1f} per-frame entries taken "
+						 "({:.1f} moved, {:.1f} hidden event owed, {:.1f} first person, {:.1f} with no light path), {:.1f} left for want of an event; placement set {} movers, "
+						 "{} roots ({} still); {} plans ({} with written slots, {} with the set changed; {} candidates the same as the last), {} per-frame walks made none; "
+						 "mirror updates classifying again {} nodes, {} geometries; gate parity {} checks, {} would differ{}{}",
+				g.perFrameWalks, g.ungatedWalks, static_cast<double>(g.due) / walks, static_cast<double>(g.moved) / walks, static_cast<double>(g.owed) / walks,
+				static_cast<double>(g.firstPerson) / walks, static_cast<double>(g.fullEveryFrame) / walks, static_cast<double>(g.skipped) / walks, moverSet.size(),
+				movingRoots.size() + stillRoots.size(), stillRoots.size(), g.plans, g.plansWritten, g.plansChanged, g.candidatesSame, g.perFrameWithoutPlan, g.mirrorNodes,
+				g.mirrorGeometries, g.witnessChecks, g.witnessDiffer, !witnessed ? "" : g.witnessDiffer ? " <- GATE MISSED; first: " : " <- OK", g.firstDiffer);
+		}
+		g = {};
 	}
 
 	bool Coordinator::DeltasPending() const

@@ -289,6 +289,8 @@ namespace DCLF::Draws
 		const SunCandidates* entryCandidates = nullptr;
 		std::vector<std::uint32_t> objectEntry;
 		std::vector<const void*> objectEntryGeometry;
+		// The decoder's alone: PrepareWrites' incremental state (Visibility.cpp's VisibilityDecode).
+		std::shared_ptr<void> decodeState;
 		// Any thread: a full write asked for (the engine culled the stood-in roots itself, or writes were dropped), and the scene
 		// frame of the last camera cut (every stood-in root visible until a batch of that frame or later is decoded).
 		std::atomic<bool> refreshWanted{ true };
@@ -344,4 +346,88 @@ namespace DCLF::Draws
 			}
 		}
 	};
+
+	/**
+	 * @brief The culling's counters read back without a stall: each execution of its epoch, a fixed copy (CounterReadbackPass) of
+	 * each drawn source's count words and of the stamp its culling latch carried (BuildDrawsLatch::visibilityStamp, the frame) into
+	 * the frame slot's host buffer. The render thread arms one source after an execution and reads it once that slot's copy is the
+	 * armed execution's and done (the host has waited, or the execution's GPU point is reached and no later one took the slot);
+	 * the stamp names the frame the words are of. Made by the pass at its graph build, held by the pass; the epochs find it by
+	 * CullCounterReadback.
+	 */
+	struct CounterReadback
+	{
+		static constexpr std::uint32_t kSourceWords = kCountWords + 1;  // the count words, then the latch's stamp
+		CounterReadback(std::uint32_t a_frameSlots, std::uint32_t a_sources) :
+			sources(a_sources)
+		{
+			for (std::uint32_t i = 0; i < a_frameSlots; ++i)
+				buffers.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(std::max(a_sources, 1u)) * kSourceWords * sizeof(std::uint32_t)));
+		}
+		static constexpr std::uint32_t StampOf(std::uint32_t a_frame) { return a_frame & 0x0FFFFFFFu; }  // as the commits write it
+		std::uint32_t sources = 0;
+		std::vector<std::shared_ptr<org::Buffer>> buffers;  // by frame slot: sources x kSourceWords words
+		/** @brief Render thread: the armed sample (the slot and source its words land in, the stamp they must carry). */
+		struct Armed
+		{
+			bool armed = false;
+			std::uint32_t frameSlot = 0, source = 0, stamp = 0;
+			std::uint32_t view = 0, mode = 0;              // a shadow view's labels, for the report
+			org::PersistentGraphHost::GpuPoint done;       // when the slot is not read inside its next commit: the execution's end
+		} armed;
+		std::uint64_t harvested = 0, missed = 0;  // render thread, since the readback was made
+
+		/**
+		 * @brief a_take(the source's kCountWords words) when the slot's host buffer holds the source as of a_stamp; false otherwise.
+		 * The caller knows the slot's copy is done and no later execution writes it.
+		 */
+		template <class Take>
+		bool Read(std::uint32_t a_frameSlot, std::uint32_t a_source, std::uint32_t a_stamp, Take&& a_take) const
+		{
+			if (a_frameSlot >= buffers.size() || a_source >= sources)
+				return false;
+			auto resource = buffers[a_frameSlot]->GetAPIResource();
+			void* mapped = nullptr;
+			resource.Map(&mapped);
+			if (!mapped)
+				return false;
+			const auto* words = static_cast<const std::uint32_t*>(mapped) + std::size_t(a_source) * kSourceWords;
+			const bool held = words[kCountWords] == a_stamp;
+			if (held)
+				a_take(words);
+			resource.Unmap(0, 0);
+			return held;
+		}
+	};
+
+	/** @brief What a counter readback copies in an execution: per drawn source (its count buffer), its culling latch's offset in the slot's region. */
+	struct CounterSource
+	{
+		std::uint64_t generation = 0;  // the shape's (the pass's invocation revision)
+		std::shared_ptr<const org::LatchBlock> latch;
+		struct Copy
+		{
+			std::uint32_t source = 0, latchOffset = 0;
+		};
+		std::vector<Copy> copies;
+	};
+
+	/** @brief The epochs whose culling counters are read back. */
+	enum class CullCounterView : std::uint8_t
+	{
+		kColour,
+		kShadow,
+		kCount,
+	};
+	/** @brief The view's counter readback as its graph's pass last declared it; null before, or once that pass is gone. */
+	std::shared_ptr<CounterReadback> CullCounterReadback(CullCounterView a_view);
+	/**
+	 * @brief The fixed copy of a_counts' words (by source index) and their latches' stamps into a new CounterReadback, published for
+	 * a_view at its declaration (Passes/Readbacks.cpp).
+	 */
+	std::shared_ptr<org::RenderPass> MakeCounterReadbackPass(CullCounterView a_view, std::vector<std::shared_ptr<org::Buffer>> a_counts,
+		std::function<CounterSource(const org::PassPrepareContext&)> a_source);
+	struct ShadowResources;
+	/** @brief The shadow epoch's counter readback pass: every drawn view's counters, by view slot (Passes/Readbacks.cpp). */
+	std::shared_ptr<org::RenderPass> MakeShadowCullCounterPass(std::shared_ptr<ShadowResources> a_resources);
 }

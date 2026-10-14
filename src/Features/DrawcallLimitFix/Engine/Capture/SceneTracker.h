@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
 
 #include <atomic>
 #include <memory>
@@ -101,8 +102,64 @@ namespace DCLF
 
 		static void CollectGeometry(RE::NiAVObject* a_root, std::vector<RE::BSGeometry*>& a_out, std::vector<const void*>* a_nodes = nullptr);
 
+		/**
+		 * @brief An edit under the watched subtree (WatchSubtree), pushed by the hooks in order with each other: a hidden store's new
+		 * bit, a detach's nodes and geometry (their keys leave the subtree: an address the engine frees and reuses is a new node) and an
+		 * attach (the subtree's membership changed). The node is an identity, never dereferenced by the consumer.
+		 */
+		struct SubtreeEvent
+		{
+			enum class Kind : std::uint8_t
+			{
+				Hidden,
+				Shown,
+				Removed,
+				Attached,
+			};
+			const RE::NiAVObject* node = nullptr;
+			Kind kind = Kind::Hidden;
+		};
+		/**
+		 * @brief Render thread: the root whose subtree's edits the hooks push onto SubtreeEvents from now on (FrameGlobals' first-person
+		 * cull bits; null: none). The root itself is not of its subtree: its own hidden stores are not pushed.
+		 */
+		static void WatchSubtree(const RE::NiAVObject* a_root);
+		/**
+		 * @brief Render thread: the watched subtree's members as its consumer last walked them (keys, never dereferenced). A hidden store
+		 * is pushed onto SubtreeEvents only for a member: the store's object may be under construction (its parent not yet written), so
+		 * the hook looks it up instead of walking its parents. A node attached since the walk has no event; the walk the attach triggers
+		 * reads its bit. Replaced sets are freed by RetireCategoryNodes.
+		 */
+		static void WatchSubtreeMembers(std::vector<const void*> a_members);
+		/** @brief The watched subtree's edits, for their one consumer (FrameGlobals, render thread). */
+		static EventQueue<SubtreeEvent>& SubtreeEvents();
+
+		/**
+		 * @brief Render thread: the nodes the category capture finds its category nodes through (FrameView::CategorySignature: TES's object
+		 * root, the cells' 3D and their parents, the portal graphs' shared nodes and parentless roots). An attach or detach of one of them,
+		 * or of a child of one, counts an edit (CategoryEdits), so the frame's start re-reads the signature only after one.
+		 */
+		static void WatchCategoryNodes(std::vector<const void*> a_nodes);
+		/** @brief Any thread: the edits of watched category nodes since the start. */
+		static std::uint64_t CategoryEdits();
+		/** @brief Render thread, once at the frame's start (before any read of the watched set it replaces is retired): frees replaced sets no reader holds. */
+		static void RetireCategoryNodes();
+
+		/**
+		 * @brief The ordering premise of the frame start's leased captures (FrameView::ServeFrameRequests): no attach or detach in the world
+		 * while EngineReadWindow is open. What the hooks pushed against it since the last call: by the render thread and by others, and
+		 * the first one's thread id.
+		 */
+		struct WindowEdits
+		{
+			std::uint64_t renderThread = 0, otherThreads = 0;
+			std::uint32_t firstThread = 0;
+		};
+		static WindowEdits TakeWindowEdits();
+
 	private:
 		void Push(Event* a_event);
+		static void NoteEdit(const RE::NiAVObject* a_child, bool a_inWorld);
 
 		std::atomic<Event*> head{ nullptr };
 		std::atomic<bool> stopped{ false };

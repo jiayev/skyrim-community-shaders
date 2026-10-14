@@ -231,9 +231,12 @@ namespace DCLF
 		for (auto* cache : { &sunExclusionCache, &parabolicExclusionCache }) {
 			if (auto& c = *cache; c.builds) {
 				auto& parity = cache == &sunExclusionCache ? kept.sunExclusion : kept.parabolicExclusion;
-				text += fmt::format("[DCLF] {} exclusion: {} builds, {} reused ({} of them for newer candidates, the entries that moved judged again); parity {} checked, {} differ{}\n", cache == &sunExclusionCache ? "sun" : "paraboloid",
-					c.builds, c.reused, c.translated, parity.checks, parity.mismatches, parity.Verdict());
-				c.builds = c.reused = c.translated = 0;
+				text += fmt::format("[DCLF] {} exclusion: {} builds: {} the same exclusion again (nothing moved), {} updated by what moved ({} for newer candidates), {} judged whole; "
+									"{:.4f} ms a build (max {:.3f}); parity {} checked, {} differ{}\n",
+					cache == &sunExclusionCache ? "sun" : "paraboloid", c.builds, c.same, c.reused - c.same, c.translated, c.builds - c.reused, c.buildMs / c.builds,
+					c.buildMaxMs, parity.checks, parity.mismatches, parity.Verdict());
+				c.builds = c.reused = c.translated = c.same = 0;
+				c.buildMs = c.buildMaxMs = 0.0;
 				parity.Reset();
 			}
 		}

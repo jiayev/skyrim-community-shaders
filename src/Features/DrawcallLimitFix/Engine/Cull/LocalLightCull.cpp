@@ -4,6 +4,8 @@
 #include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
@@ -16,7 +18,7 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
-#include <mutex>
+#include <Tracy/Tracy.hpp>
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/LocalLightCullView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -75,7 +77,7 @@ namespace DCLF::LocalLightCull
 			// The point lights whose cull reached the node's children this frame, by reach kind (stamped words: NoteReach).
 			mutable std::array<std::atomic<std::uint64_t>, 3> reach{};
 		};
-		/** @brief A snapshot: built on the render thread at a selection, read by the light culls and the detours until retired. */
+		/** @brief A snapshot: built on DCLF's pool for a selection, read by the light culls and the detours until retired. */
 		struct Filter
 		{
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::shared_ptr<CategoryFilter>> nodes;
@@ -96,7 +98,7 @@ namespace DCLF::LocalLightCull
 		{
 			std::atomic<std::uint64_t> lights{ 0 }, filtered{ 0 }, walkedOwn{ 0 }, walkedNotLive{ 0 };
 			std::atomic<std::uint64_t> nodes{ 0 }, children{ 0 }, cut{ 0 }, dirtyNodes{ 0 };
-			std::uint64_t builds = 0, nodesRebuilt = 0;
+			std::uint64_t builds = 0, nodesRebuilt = 0, stale = 0, refused = 0;
 			std::int64_t buildTicks = 0;
 		};
 		FilterStats filterStats;
@@ -245,12 +247,92 @@ namespace DCLF::LocalLightCull
 			return filter;
 		}
 
-		/**
-		 * @brief Render thread, at the selection: the filter for this exclusion. Built whole for a new exclusion (every category
-		 * node that is the parent of an excluded entry); otherwise only the nodes a detour made dirty are built again.
-		 */
-		void UpdateFilter(const SunExclusion* a_exclusion)
+		/** @brief A filter build on the pool and what it was made from; its result goes back to the render thread whole. */
+		struct FilterBuild
 		{
+			std::shared_ptr<SunExclusion> exclusion;  // held for the build, dropped on the render thread
+			std::shared_ptr<const Filter> base;       // the nodes a partial build shares; null for a whole one
+			std::uint64_t appeared = 0, dirtied = 0;
+			bool appearedNow = false;
+			std::shared_ptr<const Filter> built;      // null: a lease was refused (the window closed); built again
+			std::uint64_t nodesRebuilt = 0;
+			std::int64_t ticks = 0;
+		};
+		std::atomic<FilterBuild*> filterReady{ nullptr };  // the pool's result, taken at the next selection
+		bool filterInFlight = false;                        // render thread: a build is on the pool
+
+		/**
+		 * @brief The pool: the filter a_build asks for. Whole for a new verdict (every category node that is the parent of an excluded
+		 * entry); otherwise the base's nodes, those a detour made dirty built again. A lease per entry or node read.
+		 */
+		void BuildFilter(FilterBuild& a_build)
+		{
+			ZoneScopedN("CS.DCLF.LightCullFilter");
+			LARGE_INTEGER start{}, end{};
+			QueryPerformanceCounter(&start);
+			const auto& exclusion = *a_build.exclusion;
+			auto next = std::make_shared<Filter>();
+			next->candidates = exclusion.candidates.get();
+			next->exclusionVersion = exclusion.version;
+			next->entriesAppeared = a_build.appeared;
+			if (!a_build.base) {
+				for (const auto& [entry, index] : exclusion.candidates->entries) {
+					if (!exclusion.excluded[index])
+						continue;
+					const EngineReadWindow::Lease lease;
+					if (!lease)
+						return;
+					// The parent read once: a loader thread may detach the entry meanwhile.
+					auto* parent = entry->parent;
+					if (!parent || !ExactNiNode(parent) || next->nodes.contains(parent))
+						continue;
+					next->nodes.emplace(parent, BuildCategory(*parent, exclusion));
+					++a_build.nodesRebuilt;
+				}
+			} else {
+				next->nodes = a_build.base->nodes;
+				for (auto& [node, category] : next->nodes)
+					if (category->dirty.load(std::memory_order_acquire) || (a_build.appearedNow && category->empty)) {
+						const EngineReadWindow::Lease lease;
+						if (!lease)
+							return;
+						category = BuildCategory(*category->node, exclusion);
+						++a_build.nodesRebuilt;
+					}
+			}
+			a_build.built = std::move(next);
+			QueryPerformanceCounter(&end);
+			a_build.ticks = end.QuadPart - start.QuadPart;
+		}
+
+		/**
+		 * @brief Render thread, at the selection: the filter for this exclusion. A finished build is installed if it is still for the
+		 * frame's verdict; a new one goes to the pool when the verdict, an entry's appearance or a dirty node moved (one at a time). The
+		 * frame's light culls use the installed filter only when it is for the frame's verdict (its dirty nodes walked natively);
+		 * otherwise they walk every category node natively until the build lands.
+		 */
+		void UpdateFilter(const std::shared_ptr<SunExclusion>& a_exclusion)
+		{
+			if (std::unique_ptr<FilterBuild> done{ filterReady.exchange(nullptr, std::memory_order_acq_rel) }) {
+				filterInFlight = false;
+				filterStats.nodesRebuilt += done->nodesRebuilt;
+				if (!done->built) {
+					++filterStats.refused;
+				} else if (a_exclusion && done->built->exclusionVersion == a_exclusion->version) {
+					dirtiedSeen = done->dirtied;
+					if (filterBuilt)
+						retired[0].push_back(std::move(filterBuilt));
+					filterBuilt = std::move(done->built);
+					++filterStats.builds;
+					filterStats.buildTicks += done->ticks;
+				} else {
+					++filterStats.stale;
+					retired[0].push_back(std::move(done->built));
+				}
+				// The exclusion and base (engine references through the snapshot) go here, on the render thread.
+				if (done->base)
+					retired[0].push_back(std::move(done->base));
+			}
 			if (!a_exclusion) {
 				filterCurrent.store(nullptr, std::memory_order_release);
 				if (filterBuilt)
@@ -260,46 +342,26 @@ namespace DCLF::LocalLightCull
 			const std::uint64_t appeared = Scene::FrameView::Get().GetLightEntriesAppeared();
 			// Whole for a new verdict; for one translated to newer candidates (the same version) the nodes of the entries that moved were
 			// made dirty (SelectFrame), and the rest stand.
-			const bool whole = !filterBuilt || filterBuilt->exclusionVersion != a_exclusion->version;
+			const bool current = filterBuilt && filterBuilt->exclusionVersion == a_exclusion->version;
 			// An entry appeared: the nodes that cut a child for holding no geometry judge it again (it may hold one now).
-			const bool appearedNow = filterBuilt && filterBuilt->entriesAppeared != appeared;
+			const bool appearedNow = current && filterBuilt->entriesAppeared != appeared;
 			const std::uint64_t dirtyNow = dirtied.load(std::memory_order_acquire);
-			if (!whole && !appearedNow && dirtyNow == dirtiedSeen)
+			filterCurrent.store(current ? filterBuilt.get() : nullptr, std::memory_order_release);
+			if ((current && !appearedNow && dirtyNow == dirtiedSeen) || filterInFlight)
 				return;
-			LARGE_INTEGER start{}, end{};
-			QueryPerformanceCounter(&start);
-			auto next = std::make_shared<Filter>();
-			next->candidates = a_exclusion->candidates.get();
-			next->exclusionVersion = a_exclusion->version;
-			next->entriesAppeared = appeared;
-			if (whole) {
-				for (const auto& [entry, index] : a_exclusion->candidates->entries) {
-					// The parent read once: a loader thread may detach the entry meanwhile.
-					auto* parent = a_exclusion->excluded[index] ? entry->parent : nullptr;
-					if (!parent || !ExactNiNode(parent))
-						continue;
-					if (!next->nodes.contains(parent)) {
-						next->nodes.emplace(parent, BuildCategory(*parent, *a_exclusion));
-						++filterStats.nodesRebuilt;
-					}
-				}
-			} else {
-				// The nodes shared with the last snapshot, the dirty ones built again.
-				next->nodes = filterBuilt->nodes;
-				for (auto& [node, category] : next->nodes)
-					if (category->dirty.load(std::memory_order_acquire) || (appearedNow && category->empty)) {
-						category = BuildCategory(*category->node, *a_exclusion);
-						++filterStats.nodesRebuilt;
-					}
-			}
-			dirtiedSeen = dirtyNow;
-			if (filterBuilt)
-				retired[0].push_back(std::move(filterBuilt));
-			filterBuilt = std::move(next);
-			filterCurrent.store(filterBuilt.get(), std::memory_order_release);
-			QueryPerformanceCounter(&end);
-			++filterStats.builds;
-			filterStats.buildTicks += end.QuadPart - start.QuadPart;
+			auto build = std::make_unique<FilterBuild>();
+			build->exclusion = a_exclusion;
+			build->base = current ? filterBuilt : nullptr;
+			build->appeared = appeared;
+			build->dirtied = dirtyNow;
+			build->appearedNow = appearedNow;
+			filterInFlight = true;
+			if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "CS.DCLF.LightCullFilter",
+					[build = build.release()](const auto&) {
+						BuildFilter(*build);
+						filterReady.store(build, std::memory_order_release);
+					}))
+				stl::report_and_fail("Drawcall Limit Fix: the point lights' category filter was refused by DCLF's executor");
 		}
 
 		/**
@@ -512,12 +574,15 @@ namespace DCLF::LocalLightCull
 		else if (const auto candidates = Scene::FrameView::Get().GetLightCandidates(); !candidates)
 			++stats.stale, next.reset();  // no candidates this frame (a load, a reset)
 		else if (next->candidates != candidates) {
-			// A verdict on the frame's candidates (TranslateExclusion): the entries changed since its snapshot are the engine's (the lights
-			// cull them natively), the rest stand. The filter's nodes holding a changed entry are walked natively until they are built
-			// again (dirty: UpdateFilter); the version is kept, so the rest of the filter stands.
+			// A verdict on the frame's candidates, as the builder translated it (ForwardExclusion): the entries changed since its snapshot
+			// are the engine's (the lights cull them natively), the rest stand. The filter's nodes holding a changed entry are walked
+			// natively until they are built again (dirty: UpdateFilter); the version is kept, so the rest of the filter stands. None made
+			// for these candidates: no exclusion this frame.
 			std::vector<std::uint32_t> changed;
-			auto translated = TranslateExclusion(next, candidates, false, true, &changed);
-			if (filterInstalled && filterBuilt)
+			auto translated = ForwardExclusion(next, candidates, &changed);
+			if (!translated)
+				++stats.stale;
+			else if (filterInstalled && filterBuilt)
 				for (const std::uint32_t e : changed)
 					for (const auto* snapshot : { next->candidates.get(), candidates.get() }) {
 						// The parent as a key only (the entry is held by its snapshot; its parent may be detached meanwhile).
@@ -526,8 +591,9 @@ namespace DCLF::LocalLightCull
 							node != filterBuilt->nodes.end() && !node->second->dirty.exchange(true, std::memory_order_acq_rel))
 							dirtied.fetch_add(1, std::memory_order_release);
 					}
+			if (translated)
+				++stats.masked;
 			next = std::move(translated);
-			++stats.masked;
 		}
 		const bool whole = next && !Policy::FilterLightCulls(a_frame);
 		cullsWhole.store(whole, std::memory_order_relaxed);
@@ -535,8 +601,8 @@ namespace DCLF::LocalLightCull
 		stats.live += next ? 1 : 0;
 		frameExclusion.store(next.get(), std::memory_order_release);
 		if (filterInstalled) {
-			UpdateFilter(next.get());
-			frameFilter.store(next && !whole ? filterBuilt.get() : nullptr, std::memory_order_release);
+			UpdateFilter(next);
+			frameFilter.store(next && !whole ? filterCurrent.load(std::memory_order_relaxed) : nullptr, std::memory_order_release);
 		}
 		frameHeld = std::move(next);
 	}
@@ -613,7 +679,8 @@ namespace DCLF::LocalLightCull
 			c.children = f.children.exchange(0), c.cut = f.cut.exchange(0), c.dirtyNodes = f.dirtyNodes.exchange(0);
 			c.builds = f.builds, c.nodesRebuilt = f.nodesRebuilt, c.buildTicks = f.buildTicks;
 			f.filtered = 0;
-			f.builds = f.nodesRebuilt = 0;
+			c.buildsStale = f.stale, c.buildsRefused = f.refused;
+			f.builds = f.nodesRebuilt = f.stale = f.refused = 0;
 			f.buildTicks = 0;
 		}
 		auto& b = bitStats;

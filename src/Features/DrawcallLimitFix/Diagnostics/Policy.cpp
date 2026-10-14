@@ -114,6 +114,12 @@ namespace DCLF::Policy
 		return Diagnostics::Observe().scene;
 	}
 
+	bool SampleEveryMover(std::uint64_t a_serial)
+	{
+		// The persistent parity's check of the frame values' moved-only sampling.
+		return Diagnostics::Observe().scene && Diagnostics::ParityDue(a_serial, 30);
+	}
+
 	bool NeutraliseDanglingSlots(bool a_slotsFreed, std::uint64_t a_pass)
 	{
 		// The persistent parity's slot check (the normal path trusts the reference counts).

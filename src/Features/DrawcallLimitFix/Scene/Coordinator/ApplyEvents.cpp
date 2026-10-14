@@ -255,6 +255,11 @@ namespace DCLF::Scene
 			dirtyRoots.clear();
 			rootMotion.clear();
 			movingRoots.clear();
+			stillRoots.clear();
+			moverSet.clear();
+			placementDirty = true;
+			mirrorMotionNodes.clear();
+			mirrorSkinGeometries.clear();
 			hiddenDependents.clear();
 			hiddenAhead.clear();
 			DropSunCandidates();
@@ -486,6 +491,12 @@ namespace DCLF::Scene
 				} else {
 					const auto [type, key] = mirror.Update(event->update);
 					Diagnostics::Notify(Diagnostics::MirrorUpdateApplied{ type, key, event->update.fields });
+					// A trait's input (a node's controllers or rigid body) or a skin's (its instance, its dismember partitions' shown flags):
+					// the entries it names are classified again at the next delta walk (keys only), not polled every frame.
+					if (key && type == 0 && (event->update.fields & (SceneCapture::NodeRecord::kControllers | SceneCapture::NodeRecord::kBody)))
+						mirrorMotionNodes.insert(key);
+					else if (key && type == 1 && (event->update.fields & (SceneCapture::GeometryRecord::kDismember | SceneCapture::GeometryRecord::kSkin)))
+						mirrorSkinGeometries.insert(key);
 					// A hidden store, for DrainHiddenEvents (same batch as the mirror's bit).
 					if (event->update.hiddenSite != ~0u)
 						if (const auto* record = std::get_if<SceneCapture::NodeRecord>(&event->update.record))
@@ -543,12 +554,12 @@ namespace DCLF::Scene
 			return;
 		// Non-null: FindCategoryNode found it.
 		const auto* record = mirror.Node(a_node);
-		// An actor's entries are evaluated every frame, and its sun entry is never tested.
+		// An actor's entries are per frame (its placement the plan's, its verdict its hidden events'), and its sun entry is never tested.
 		if (record->IsActorCharacter())
 			return;
 		++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::NodeEvent)];
 		Diagnostics::Notify(Diagnostics::TrackedBelowRead{ *this, MirrorRead::NodeEvent, a_node });
-		// Already placed every frame (written in full, or moved by the light path).
+		// Already placed every frame (written in full, or a mover: the plan's, FrameValues').
 		auto placedEveryFrame = [](const Tracked& a_tracked) {
 			return a_tracked.perFrame && (!a_tracked.lightTraits || (a_tracked.lightTraits & (kTraitMoves | kTraitRootMoves)));
 		};
@@ -568,6 +579,34 @@ namespace DCLF::Scene
 			if (a_record.kind & SceneCapture::kKindGeometry)
 				if (const auto entry = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_key)));
 					entry != tracked.end() && !placedEveryFrame(entry->second) && PlacementMatters(entry->second))
+					Reclassify(entry->first, entry->second);
+			return true;
+		}, kMaxEventNodes);
+	}
+
+	void Coordinator::ApplyMotionUpdate(const void* a_node)
+	{
+		// Keys only: the mirror's records (a node the mirror no longer holds was detached, its entries erased with it).
+		const auto* record = mirror.Node(a_node);
+		Ineligible reason = Ineligible::None;
+		bool unmirrored = false;
+		if (!record || !MirrorCategoryNode(a_node, reason, unmirrored))
+			return;
+		// An actor's entries are per frame whatever their traits (kTraitActor).
+		if (record->IsActorCharacter())
+			return;
+		// Roots above it: their motion (RootMoves) is judged again with their dependents.
+		for (const void* key = a_node; key;) {
+			const auto* at = mirror.Node(key);
+			const auto* object = static_cast<const RE::NiAVObject*>(key);
+			key = at ? at->parent : nullptr;
+			if (rootDependents.contains(object))
+				ScheduleRoot(object);
+		}
+		// Entries below it: their traits (kTraitMoves) and so whether they are per frame, movers and in the plan.
+		ForEachMirror(mirror, a_node, [&](const void* a_key, const SceneCapture::NodeRecord& a_record) {
+			if (a_record.kind & SceneCapture::kKindGeometry)
+				if (const auto entry = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_key))); entry != tracked.end())
 					Reclassify(entry->first, entry->second);
 			return true;
 		}, kMaxEventNodes);

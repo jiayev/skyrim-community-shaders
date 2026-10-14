@@ -158,13 +158,12 @@ namespace DCLF::Draws
 		Versioned visibility;
 		// The views' inputs, geometries and material rows (ShadowMaterialRow) are the installed payload's (PayloadVersions).
 		std::shared_ptr<SceneBuffers> scene;
-		// Per view slot (occlusion views, then shadow views): sequence and count buffers, and the counters' readback view.
+		// Per view slot (occlusion views, then shadow views): sequence and count buffers.
 		std::vector<Versioned> sequences;
 		std::vector<std::shared_ptr<org::Buffer>> count;
 		// Per view slot, one count word per bucket.
 		std::vector<Versioned> bucketCounts;
 		std::shared_ptr<IndexPool> pool;
-		std::vector<winrt::com_ptr<ID3D11Buffer>> countD3D11;
 		// The view slots' blocks (kShadowViewSlotBytes a row: b0, b12), written by each epoch's commit.
 		GrowableRows viewBlocks;
 		std::uint64_t constantsAddress = 0;

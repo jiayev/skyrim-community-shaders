@@ -151,7 +151,7 @@ namespace DCLF::Draws
 
 		/**
 		 * @brief Adds shadow view slot buffers up to a_slots at the sizes the revision code asked for (their requirements grow them with
-		 * the other slots'). Render thread: the passes declare them (a graph build) and the counters' readback views are D3D11's.
+		 * the other slots'). Render thread: the passes declare them (a graph build).
 		 */
 		void AddShadowViewSlots(ShadowResources& a_state, std::uint32_t a_slots, std::uint32_t a_draws, std::uint32_t a_words)
 		{
@@ -161,7 +161,6 @@ namespace DCLF::Draws
 				a_state.sequences.push_back(MakeVersioned(CreateWords(kShadowClasses * std::uint64_t(draws) * sizeof(DrawSequence) / 4, true,
 					fmt::format("cs.dclf.shadow.sequences{}", s).c_str()), { .extent = { 0, kShadowClasses * sizeof(DrawSequence), 4 } }));
 				a_state.count.push_back(CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str()));
-				a_state.countD3D11.push_back(WrapWords(*a_state.count.back(), kCountWords * sizeof(std::uint32_t)));
 				// A word per key slot: the latch layout's key slots exactly (doubled there).
 				a_state.bucketCounts.push_back(MakeVersioned(CreateWords(std::max(a_words, 64u), true, fmt::format("cs.dclf.shadow.bucket-counts{}", s).c_str()),
 					{ .extent = { 0, 4, 4 }, .policy = org::services::GrowthPolicy::Headroom(0) }));

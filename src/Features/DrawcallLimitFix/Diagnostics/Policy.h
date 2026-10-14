@@ -74,6 +74,9 @@ namespace DCLF::Policy
 	/** @brief The scene pass checks a slice of the tracked set against the live scene graph and drops the entries whose detach the events missed. Normal path: false. */
 	bool ValidateTrackedSlice();
 
+	/** @brief The frame values' producer a_serial also samples every mover and root of its plan, against the rows its moved-only sampling left (nothing written). Normal path: false. */
+	bool SampleEveryMover(std::uint64_t a_serial);
+
 	/** @brief The accumulate phase checks every bound record's slots after a pass that freed one (a_slotsFreed) or on pass a_pass, and neutralise a record naming a slot no member holds. Normal path: false. */
 	bool NeutraliseDanglingSlots(bool a_slotsFreed, std::uint64_t a_pass);
 }

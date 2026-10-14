@@ -2746,6 +2746,71 @@ retired.
 **Open:** dclf-open-defects.md, "Pooled payload: open items". What could move into the pools next is in
 [dclf-pool-followups.md](./dclf-pool-followups.md).
 
+## Polls become events (2026-10-14)
+
+dclf-architecture.md, "Events, not polls", is the present; this is the record.
+
+**Why.** The 2026-10-14 motion run found the scene lane re-evaluating every actor, skin, controller, Havok, particle and
+animated-shading entry every frame (about 550), and each per-frame walk building a placement plan, so the scene published
+every frame. FrameValues re-read every mover and called `UpdateSkin` for each. The render thread walked the category
+nodes, the first-person subtree (with string copies) and the sun's full-frustum arrays every frame, rescanned all entries
+on each change (`SyncFadeOwnership`, `TranslateExclusion`, the local lights' filter, `SyncPipelines`), and mapped two
+stats buffers. In the worst frames the epochs' submission (`ORG.Frame.SubmitPackets`) waited 20-40 ms behind
+`CopyQueueUploadService::RecordAndSubmit`.
+
+**What changed.**
+- **Scene lane and publication.**
+  - Movers by move event (`Tracked::moveKey`, `moveKeyOuter`, `Coordinator::MoverDue`); the placement plan is the complete
+    mover and root set, emitted only when the set changes. Mirror updates of `NodeRecord::kBody`/`kControllers` and
+    `GeometryRecord::kDismember`/`kSkin` reclassify the dependents (`ApplyMotionUpdate`), replacing the per-frame skin poll.
+    `kTraitAnimatedShading` no longer keeps an entry per frame; `kTraitSwitch` is gone. Particle systems push their key on
+    a new snapshot.
+  - `RefreshMaterialSignatures` runs in full only when `MaterialFrame::components` (`FrameComponentsWitness`) changes;
+    `KeepResidentsAlive` refreshes `geometryTemplate` only for touched pipelines.
+  - The candidate table's change log (`CandidateChanges`, `ChangedEntriesByLog`; `ChangedEntriesByScan` is the parity
+    reference). `PublishTables` replays `setPhases`, `decalOrdinal`, `layerBase` and `layerOf` by slot
+    (`publicationLog`, `NotePublished`), copies the pipeline family only when `pipelinesStamp` moves, and drives the
+    materials from the material log. `objectSeen` and `geometryTemplate` are no longer published.
+  - `BuildSunExclusion` republishes the same exclusion while nothing moved, works by logged slots and candidates, and
+    shares pooled stamp arrays; the builder translates its exclusions forward (`ForwardExclusion`), so the render thread
+    only follows links. The full-frustum entry exclusion became a veto hook on `AppendNonAccum` (vtable 0x19).
+  - The visibility decode's `PrepareWrites` visits only named slots (`VisibilityReadback::decodeState`).
+- **FrameValues** samples only the movers and roots whose keys moved (`FrameValueMoves`, pushed by every move writer through
+  `PushMoved`; the key index is built per plan), runs `UpdateSkin` only for moved skins, samples once more to settle, and
+  makes the fade seeds on the producer from the nodes' byte copies.
+- **Render thread.**
+  - The cull counters' readbacks are asynchronous (`CounterReadback`, per frame slot, stamp-checked); the CPU sun and
+    terrain tests are a task.
+  - The category signature is recomputed only on watched edits (`WatchCategoryNodes`, `CategoryEdits`); the pins walk and
+    the fade nodes' answers run in a leased job (`FrameStartJob`). The first-person hidden bits follow `SubtreeEvents`
+    against a published member set (`WatchSubtreeMembers`): a stored object may be under construction, so the hooks
+    never walk parents.
+  - `animatedMutex` is gone (an `EventQueue` of `AnimatedFadeRoot`; the inputs a single-writer record). The scene-list
+    filter is a delta (`ApplyFilterDelta`, in Keep mode); fade and tree ownership take joined/left deltas; the cut's
+    planning (`PlanEntry`) and the local lights' filter builds run on the pool with leases and tickets; `BeforeListLoop`
+    visits only owned trees; `frameVisible` is collected only for parity; counters say why entries stay in the lists.
+  - `SyncPipelines` skips an unchanged `pipelinesStamp`; `LatchRegionsHeld` writes the per-publication latch bytes (the
+    bucket map and tables, the shadow map rows) once per frame slot until their key moves; the shadow arena is staged
+    only in differing 256-byte chunks; the animated fade batch is counted by root slot; portal programs are recomputed
+    only for the roots the journal marks.
+- **BasicRHI.** Vulkan `q_submit` no longer holds the device-wide `timelinesMutex` across the submit and its host hook; a
+  per-`VkQueue` `accessMutex` serialises the submit alone. That removed the `SubmitPackets` stalls behind the copy service
+  (which reached the queue through DXVK's `LockSubmissionQueue`).
+- **Left as they were.** Wetness (about 1 us a frame; an event version would cost the game threads more). The mirror's
+  portal-root pushes and `CaptureMirrorRequests` stay on the render thread, because other threads attach and detach inside
+  the read window and a pool job's pushes could not be ordered with theirs.
+
+**Measured.**
+- Motion profile, 60 s, before and after: mean 9.77 against 9.61 ms; p99 25.5 against 22.2; p99.9 63.4 against 30.0; max
+  69.7 against 31.3; worst-30 mean 38.9 against 25.9. `SubmitPackets` at most 0.88 ms (was 40).
+- Normal run: the scene delta evaluated 245-303 entries a frame (was 620-820); frame globals' capture 18 us a frame (was
+  40); the main commit's payload uploads 37 us an epoch (was about 90-100); staged shadow constants 1.5 KB a frame (was
+  4.0); DCLF on the render thread about 1.06-1.14 ms a frame (was 1.19-1.28).
+- Publications are still about 1.7 a frame: animated shading items publish every frame ([dclf-pool-followups.md](./dclf-pool-followups.md), §1).
+
+**Open:** dclf-open-defects.md, "Polls and render-thread work left (2026-10-14)"; the commit's parts not done are in
+dclf-pool-followups.md.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.
