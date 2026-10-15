@@ -71,8 +71,8 @@ struct DrawcallLimitFix : Feature
 	 */
 	enum OcclusionMap : std::uint32_t
 	{
-		kSkyOcclusion = 0,            // DCLF::kOcclusionSky
-		kPrecipitationOcclusion = 1,  // DCLF::kOcclusionPrecipitation
+		kSkyOcclusion = 0,            // DCLF::Api::OcclusionMap::Sky
+		kPrecipitationOcclusion = 1,  // DCLF::Api::OcclusionMap::Precipitation
 	};
 	bool OcclusionReady(OcclusionMap a_map);
 	/**

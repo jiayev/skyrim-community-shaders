@@ -40,13 +40,8 @@ namespace DCLF
 			{ &S::excludePrimaryEntries, Switch::PrimaryExclude, kOn, "exclude primary entries", {}, "Take DCLF's objects out of the engine's main camera cull (CS_DCLF_PRIMARY_EXCLUDE)",
 				"The main camera's cull and registration skip every reference DCLF draws entirely; DCLF builds their main passes itself and runs their fade updates.", false,
 				{ &S::excludeSunEntries } },
-			{ &S::skyOcclusion, Switch::Skylight, kOn, "sky occlusion", {}, "Draw Skylighting's occlusion map (CS_DCLF_SKYLIGHT)",
-				"With Skylighting loaded, DCLF draws its sky occlusion height map from its own tables on the GPU, and the engine no longer culls or registers the scene for it.", true,
-				{ &S::shadows } },
-			{ &S::precipitationOcclusion, Switch::Precipitation, kOn, "precipitation occlusion", {}, "Draw the precipitation occlusion mask (CS_DCLF_PRECIPITATION)",
-				"With Skylighting loaded, DCLF draws the precipitation occlusion mask (where rain and snow stop) from its own tables on the GPU, and the engine no longer culls or registers the scene for it.", true,
-				{ &S::shadows } },
-			// (Features/Reflection's "reflections" follows here: the first feature toggle registered, its bit right after these.)
+			// (Features/OcclusionMaps' "sky occlusion" and "precipitation occlusion" follow here: the first feature toggles registered, their
+			// bits right after these; then Features/Reflection's "reflections" and Features/FirstPerson's "first person".)
 		};
 
 		// The packed word: cullMode in the low two bits, then each flag in kToggles order, then the features' by their bits.

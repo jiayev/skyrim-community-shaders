@@ -80,8 +80,8 @@ namespace DCLF
 			{ SunSkip, "CS_DCLF_SUN_SKIP", F, Reduced::UnlessOne, false, "0: the engine keeps culling and registering the sun's casters (live toggle's seed)" },
 			{ SunExclude, "CS_DCLF_SUN_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the sun's culls (live toggle's seed)" },
 			{ PrimaryExclude, "CS_DCLF_PRIMARY_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the main camera's cull (live toggle's seed)" },
-			{ Skylight, "CS_DCLF_SKYLIGHT", F, Reduced::UnlessOne, false, "0: Skylighting's occlusion map stays native (live toggle's seed)" },
-			{ Precipitation, "CS_DCLF_PRECIPITATION", F, Reduced::UnlessOne, false, "0: the precipitation occlusion mask stays native (live toggle's seed)" },
+			// (Features/OcclusionMaps' CS_DCLF_SKYLIGHT and CS_DCLF_PRECIPITATION, Features/Reflection's and Features/FirstPerson's switches
+			// are listed here, before CS_DCLF_OPAQUE_EFFECTS.)
 			{ OpaqueEffects, "CS_DCLF_OPAQUE_EFFECTS", F, Reduced::Zero, false,
 				"default on (T7f item 7): opaque BSEffectShaderProperty meshes (hint 0: no blending alpha property, no Falloff, depth tested and written; forge coals, slag) drawn by DCLF in the G-buffer with the DEFERRED effect variant, through the opaque decal group's fixed slots and its decal depth pass without the bias (needs CS_DCLF_EFFECTS and CS_DCLF_DECALS); 0 they stay the engine's (effect-opaque)" },
 			{ EmptyFadeNode, "CS_DCLF_EMPTY_FADE_NODE", F, Reduced::Zero, false,
@@ -190,11 +190,11 @@ namespace DCLF
 			return values;
 		}
 
-		// The features' switches (RegisterSwitch), each read as it registered, listed right after the Core row its after names. Written
-		// at install alone (the main thread, before DCLF's threads start), read-only after.
+		// The features' switches (RegisterSwitch), each read as it registered, listed right after the Core row its after names or right
+		// before the one its before names. Written at install alone (the main thread, before DCLF's threads start), read-only after.
 		struct Registered
 		{
-			std::string name, description, after;
+			std::string name, description, after, before;
 			Kind kind = Kind::Feature;
 			Reduced reduced = Reduced::Never;
 			std::string value;
@@ -206,22 +206,26 @@ namespace DCLF
 			return registered;
 		}
 
-		/** @brief Every switch row in listing order (each Core row, then the features' after it; the rest last): a_row(name, kind, reduced, value). */
+		/**
+		 * @brief Every switch row in listing order (each Core row, the features' before it first and after it next; the rest last):
+		 * a_row(name, kind, reduced, value).
+		 */
 		template <class Row>
 		void ForEachRow(Row&& a_row)
 		{
 			const auto& registered = RegisteredSwitches();
 			std::vector<std::uint8_t> listed(registered.size(), 0);
-			const auto after = [&](std::string_view a_name) {
+			const auto at = [&](std::string Registered::*a_anchor, std::string_view a_name) {
 				for (std::size_t i = 0; i < registered.size(); ++i)
-					if (!listed[i] && registered[i].after == a_name) {
+					if (!listed[i] && registered[i].*a_anchor == a_name) {
 						listed[i] = 1;
 						a_row(std::string_view(registered[i].name), registered[i].kind, registered[i].reduced, registered[i].value);
 					}
 			};
 			for (const auto& entry : kRegistry) {
+				at(&Registered::before, entry.name);
 				a_row(entry.name, entry.kind, entry.reduced, SwitchValue(entry.id));
-				after(entry.name);
+				at(&Registered::after, entry.name);
 			}
 			for (std::size_t i = 0; i < registered.size(); ++i)
 				if (!listed[i])
@@ -271,10 +275,14 @@ namespace DCLF
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered the switch {} twice", a_feature, a_switch.name));
 		if (!a_switch.after.empty() && !known(a_switch.after))
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s switch {} is listed after {}, which Core does not have", a_feature, a_switch.name, a_switch.after));
+		if (!a_switch.before.empty() && (!known(a_switch.before) || !a_switch.after.empty()))
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s switch {} is listed before {}, which Core does not have (or after one too)", a_feature,
+				a_switch.name, a_switch.before));
 		auto& entry = registered.emplace_back();
 		entry.name = a_switch.name;
 		entry.description = a_switch.description;
 		entry.after = a_switch.after;
+		entry.before = a_switch.before;
 		entry.kind = static_cast<Kind>(a_switch.kind);
 		entry.reduced = a_switch.reduced == Api::SwitchReduced::UnlessOne ? Reduced::UnlessOne : a_switch.reduced == Api::SwitchReduced::Zero ? Reduced::Zero : Reduced::Never;
 		entry.value = Util::SwitchFile::Value(entry.name, false);

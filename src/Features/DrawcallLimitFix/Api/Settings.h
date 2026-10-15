@@ -35,7 +35,9 @@ namespace DCLF::Api
 
 	/**
 	 * @brief A switch: read once, from the environment or the switches file (Switches.h), when it is registered. Listed in the startup
-	 * summary and the reduced-featureset line right after the Core switch named by after (empty: last).
+	 * summary and the reduced-featureset line right after the Core switch named by after, or right before the one named by before (after
+	 * the features' listed after the Core switch before it); empty both: last. Features' switches at one place are listed in their
+	 * registration order.
 	 */
 	struct FeatureSwitch
 	{
@@ -44,6 +46,7 @@ namespace DCLF::Api
 		SwitchReduced reduced = SwitchReduced::Never;
 		std::string_view description;
 		std::string_view after;
+		std::string_view before;  // or empty (one of after and before)
 	};
 
 	/** @brief A registered toggle (RegisterToggle's result): ToggleSet::On reads it by this. */

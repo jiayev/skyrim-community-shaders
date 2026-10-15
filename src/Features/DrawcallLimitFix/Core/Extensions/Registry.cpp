@@ -268,7 +268,7 @@ namespace DCLF::Extensions
 			void RegisterOcclusionMap(const Api::OcclusionMapContribution& a_map) override
 			{
 				// Its toggle, flag and bits always, the import for an ImportedTexture map. Its bits are checked against Core's and the other
-				// views' once all are in (ResolveViewBits); a map Core still fills, as the maps are resolved (ResolveShadowViews).
+				// views' once all are in (ResolveViewBits).
 				if (a_map.map >= Api::OcclusionMap::Count || !a_map.toggle || !a_map.available || !a_map.bits.phase || !a_map.bits.viewBit ||
 					(a_map.target == Api::OcclusionTarget::ImportedTexture && !a_map.importTarget))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete occlusion map contribution", feature));

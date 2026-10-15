@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
+#include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
 #include "Features/DrawcallLimitFix/Features/SwitchNodes/SwitchNodes.h"
@@ -20,10 +21,12 @@ namespace DCLF::Features
 {
 	std::span<const Api::Feature> List()
 	{
-		// Reflection first: its early hooks (the water reflection's update, add-roots and face render) run before every other feature's and
-		// Core's observers, where the shell installed them; its toggle is the first registered, so its bit in the packed toggle word is
-		// where Core's was (right after Core's flags); its switch and toggle are listed after the precipitation mask's, before the first
-		// person's (which follow them there); it registers no pool, stage or product. Actors next: its switch is listed after the skin
+		// The occlusion maps first: their toggles are the first registered, so their bits in the packed toggle word are where Core's were
+		// (right after Core's flags), and their switches and toggles are listed before the reflection's and the first person's (which follow
+		// them there); no early hooks, no pool, stage or product. Reflection next: its early hooks (the water reflection's update, add-roots
+		// and face render) run before every other feature's and Core's observers, where the shell installed them; its toggle's bit follows
+		// the maps', where Core's was; its switch and toggle are listed after the precipitation mask's, before the first person's (which
+		// follow them there); it registers no pool, stage or product. Actors next: its switch is listed after the skin
 		// partitions', before tree wind's and the decals' (which follow it there); it registers no pool, stage or product. Tree wind next:
 		// its seeds' pool runs right after the frame values' built-in parts, before the texture transforms' pool.
 		// Particles before billboards, then switch nodes: their toggles are listed after the refraction's in this order (the first two's
@@ -33,6 +36,7 @@ namespace DCLF::Features
 		// actors (its toggle needs theirs) and after billboards (its report lines follow theirs at the draws' async work); its switches and toggle
 		// are listed after the reflection's.
 		static const std::array kFeatures{
+			OcclusionMaps::Feature(),
 			Reflection::Feature(),
 			Actors::Feature(),
 			TreeWind::Feature(),

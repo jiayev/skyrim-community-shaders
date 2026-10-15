@@ -25,12 +25,12 @@ namespace DCLF::Extensions
 
 		/**
 		 * @brief Each registered view's and occlusion map's phase and view bit: one bit, none Core's (its phases and view bits) nor another
-		 * view's, of either family. The maps' constants are still Core's while Core fills their entries: their entries carry them.
+		 * view's, of either family.
 		 */
 		void CheckViewBits(const ViewSet& a_views, const ShadowViewSet& a_shadow)
 		{
-			std::uint32_t phases = kCoreSetPhases & ~static_cast<std::uint32_t>(kSetOccluderSky | kSetOccluderPrecipitation);
-			std::uint32_t viewBits = Draws::kCoreViewBits & ~(Draws::kViewSkyOccluder | Draws::kViewPrecipOccluder);
+			std::uint32_t phases = kCoreSetPhases;
+			std::uint32_t viewBits = Draws::kCoreViewBits;
 			for (std::size_t v = 0; v < a_views.views.size(); ++v)
 				if (const auto& entry = a_views.views[v]; entry.registered)
 					TakeViewBits("view", v, entry.phase, entry.viewBit, phases, viewBits);

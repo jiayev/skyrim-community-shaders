@@ -3,7 +3,8 @@
 // table families' references are carried in, and the views' set phases and view bits. A feature with a frame binding (Api::FrameBinding)
 // lists its register; the install checks the registrations the same way (InstallContext::RegisterFrameBinding). One with a technique
 // contribution (Api::TechniqueContribution) lists its flags, one whose family the record carries (Api::TableFamily::recordWord) its word,
-// and one with a view contribution (Api::ViewContribution) its phase and view bit (the install checks those too: Extensions::ResolveViews).
+// and one with a view contribution (Api::ViewContribution, Api::OcclusionMapContribution) its phase and view bit (the install checks those
+// too: Extensions::ResolveViewBits).
 // The contributions' keys (a technique, a geometry type, a Core class's value: Api/ObjectContributors.h) are not listed here: the install
 // fails a key two features claim.
 
@@ -11,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
+#include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
@@ -64,12 +66,16 @@ namespace DCLF::Features
 		};
 
 		// Every view's set phase (SceneSet.h's SetPhase bits: one bit of the eight, none Core's: kCoreSetPhases) and view bit at the GPU cull
-		// (GpuLayouts.h's kView*: one bit, none Core's: kCoreViewBits), none another view's.
+		// (GpuLayouts.h's kView*: one bit, none Core's: kCoreViewBits), none another view's, of either family (the occlusion maps too).
 		constexpr std::uint32_t kViewPhases[] = {
+			OcclusionMaps::kSetOccluderSky,
+			OcclusionMaps::kSetOccluderPrecipitation,
 			Reflection::kSetReflection,
 			FirstPerson::kSetFirstPerson,
 		};
 		constexpr std::uint32_t kViewBits[] = {
+			OcclusionMaps::kViewSkyOccluder,
+			OcclusionMaps::kViewPrecipOccluder,
 			Reflection::kViewReflection,
 			FirstPerson::kViewFirstPerson,
 		};
@@ -105,8 +111,8 @@ namespace DCLF::Features
 	static_assert(RecordWordsValid(), "a family's record words are past the object record or another family's");
 	static_assert(ViewBitsValid(kViewPhases, std::size(kViewPhases), kCoreSetPhases, 0xFFu), "a view's set phase is not one bit of the eight, or is Core's or another view's");
 	static_assert(ViewBitsValid(kViewBits, std::size(kViewBits), Draws::kCoreViewBits, 0xFFFFFFFFu), "a view's view bit is not one bit, or is Core's or another view's");
-	// FirstPerson's view bit: BuildDrawsCS.hlsl's kViewFirstPerson (the first-person forward range's cull). Reflection's has no HLSL
-	// mirror (the faces' cull reads their latch's view bits as data).
+	// FirstPerson's view bit: BuildDrawsCS.hlsl's kViewFirstPerson (the first-person forward range's cull). Reflection's and the
+	// occlusion maps' have no HLSL mirror (the faces' and the maps' culls read their latch's view bits as data).
 	static_assert(FirstPerson::kViewFirstPerson == 1u << 11, "FirstPerson's view bit is not BuildDrawsCS's kViewFirstPerson");
 	// The reflection's faces: Core's per-view capacity (ViewEpoch.h).
 	static_assert(Reflection::kFaces <= Draws::kMaxViewFaces, "the reflection's faces are past Core's kMaxViewFaces");
