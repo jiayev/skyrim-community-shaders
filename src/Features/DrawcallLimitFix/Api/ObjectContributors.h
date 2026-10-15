@@ -52,6 +52,7 @@ namespace DCLF::Api
 	{
 		Billboard,  // NiBillboardNode (Ineligible::Billboard): its OnVisible turns it to each culling camera
 		Switch,     // NiSwitchNode (Ineligible::Switch): its OnVisible culls the selected child alone
+		Actor,      // a node whose reference is an actor (the mirror's NodeRecord::actor; Ineligible::Actor): the actor's own 3D
 		Count,
 	};
 
@@ -66,6 +67,8 @@ namespace DCLF::Api
 		// Every leaf under any number of them, in the frames each selects the branch it lies on: the classification's chain test
 		// (Coordinator::SwitchSelects), on the selections Core follows by event for the primary cull (SwitchEvents).
 		SelectedLeaves,
+		// Every leaf under any number of them, whatever its class: the classification's chain test.
+		AllLeaves,
 		Count,
 	};
 

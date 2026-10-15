@@ -53,8 +53,6 @@ namespace DCLF
 		bool lodTrees = false;
 		// skins of several partitions (LOD trees, actor bodies), one draw per partition the engine would draw;
 		bool skinPartitions = false;
-		// geometry under an actor's 3D, and the FacegenRGBTint technique;
-		bool actors = false;
 
 		// The shadow views are drawn by the render graph.
 		bool shadows = false;
@@ -76,7 +74,7 @@ namespace DCLF
 		bool excludePrimaryEntries = false;
 
 		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees;
-		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals: theirs), ...
+		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs), ...
 		std::uint32_t registered = 0;
 		/** @brief Whether a feature's toggle is on (false for none). */
 		bool On(Api::ToggleId a_toggle) const { return a_toggle && ((registered >> a_toggle.bit) & 1u) != 0; }

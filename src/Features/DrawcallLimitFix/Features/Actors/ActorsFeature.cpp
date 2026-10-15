@@ -1,0 +1,38 @@
+// Actors: the geometry under an actor's 3D and the actor techniques DCLF draws. Their switch and the actors toggle, the actor parent's
+// contribution and the actor techniques'.
+
+#include "Features/DrawcallLimitFix/Features/Actors/Actors.h"
+
+#include "ShaderCache.h"
+
+#include <cstdint>
+
+namespace DCLF::Features::Actors
+{
+	namespace
+	{
+		using Technique = SIE::ShaderCache::LightingShaderTechniques;
+
+		void Install(Api::InstallContext& a_context)
+		{
+			// Where Core's were listed: after the skin partitions' (before Features/TreeWind's and Features/Decals', which register after
+			// this feature).
+			const auto actorsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_ACTORS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
+				.description = "0: actors stay native (live toggle's seed)", .after = "CS_DCLF_SKIN_PARTITIONS" });
+			// Geometry under an actor's 3D, and the actor techniques: an object class. The first person needs it (the player's skeleton).
+			const auto actors = a_context.RegisterToggle({ .name = "actors", .label = "Actors (CS_DCLF_ACTORS)", .seed = actorsSwitch, .entersClassification = true,
+				.after = "skin partitions", .neededBy = "first person" });
+			// Every leaf under an actor's 3D (Coordinator::ClassifyFrame's chain test: Ineligible::Actor while the toggle is off).
+			a_context.RegisterParent({ .parent = Api::EngineParent::Actor, .leaves = Api::ParentLeaves::AllLeaves, .toggle = actors });
+			// Actor skin (SKIN path, TintColor), faces (Facegen: tint and detail maps at t3/t4), hair (TintColor) and eyes (eye centres,
+			// material VS constants): all written by SetupMaterial. A face part's positions are its head's snapshots' (Features/Faces).
+			for (const auto technique : { Technique::FacegenRGBTint, Technique::Facegen, Technique::Hair, Technique::Eye })
+				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = actors });
+		}
+	}
+
+	Api::Feature Feature()
+	{
+		return { "actors", &Install };
+	}
+}

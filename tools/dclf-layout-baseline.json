@@ -1,14 +1,17 @@
 {
  "legacyEdges": {
-  "Core -> Engine": 27,
-  "Core -> Scene": 34,
+  "Core -> Engine": 26,
+  "Core -> Scene": 32,
   "Engine -> Scene": 33,
   "Features/Billboards -> Engine": 1,
   "Features/Billboards -> Scene": 3,
+  "Features/Decals -> Scene": 2,
+  "Features/Faces -> Scene": 2,
+  "Features/HiddenNodes -> Engine": 2,
   "Features/Particles -> Engine": 1,
   "Features/Particles -> Scene": 2,
   "Features/TextureTransforms -> Scene": 1,
-  "Scene -> Engine": 41
+  "Scene -> Engine": 35
  },
  "overThresholds": {
   "DCLF::AuditTreeLod": [
@@ -91,6 +94,10 @@
    89,
    58
   ],
+  "DCLF::Features::HiddenNodes::HiddenStoreSites": [
+   470,
+   1
+  ],
   "DCLF::IndirectDraws::CaptureShadowView": [
    164,
    60
@@ -140,8 +147,8 @@
    79
   ],
   "DCLF::Reports::Stats": [
-   229,
-   95
+   225,
+   93
   ],
   "DCLF::Scene::Coordinator::ApplyBatch": [
    202,
@@ -164,7 +171,7 @@
    94
   ],
   "DCLF::Scene::Coordinator::DeltaWalk": [
-   198,
+   197,
    54
   ],
   "DCLF::Scene::Coordinator::EvaluateJoin": [
@@ -188,8 +195,8 @@
    61
   ],
   "DCLF::Scene::Coordinator::MergeWrite": [
-   204,
-   68
+   200,
+   65
   ],
   "DCLF::Scene::Coordinator::PublishTables": [
    377,
@@ -222,10 +229,6 @@
   "DCLF::Scene::FrameView::CaptureCategories": [
    134,
    62
-  ],
-  "DCLF::Features::HiddenNodes::HiddenStoreSites": [
-   470,
-   1
   ],
   "DCLF::SceneMirror::ApplyCapture": [
    78,
