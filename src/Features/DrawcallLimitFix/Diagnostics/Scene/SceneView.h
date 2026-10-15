@@ -55,9 +55,9 @@ namespace DCLF::Diagnostics
 		static auto& materialBindings(Store& s) { return s.materialBindings; }
 		static auto& sharedBindings(Store& s) { return s.sharedBindings; }
 		static const auto& lookups(const Store& s) { return s.lookups; }
-		static auto& lodSegmentStats(Store& s) { return s.lodSegmentStats; }
-		static const auto& lodRanges(const Store& s) { return s.lodRanges; }
 		static auto& reportedChangeCounts(Store& s) { return s.reportedChangeCounts; }
+		// The features' and the components' text lines at a coordinator report point (Coordinator::ComponentsReportText).
+		static void componentsReportText(Store& s, Api::ReportPoint a_point, std::string& a_text) { s.ComponentsReportText(a_point, a_text); }
 		static auto& referenceStats(Store& s) { return s.referenceStats; }
 		static auto& leafStats(Store& s) { return s.leafStats; }
 		static auto& subtreesPended(Store& s) { return s.subtreesPended; }

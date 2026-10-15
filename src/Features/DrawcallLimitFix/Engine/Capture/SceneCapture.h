@@ -11,7 +11,7 @@
 #include <variant>
 #include <vector>
 
-#include "Features/DrawcallLimitFix/Scene/Model/LodSegments.h"
+#include "Features/DrawcallLimitFix/Core/Engine/LodSegments.h"
 
 struct ID3D11Buffer;
 

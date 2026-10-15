@@ -57,7 +57,7 @@ namespace DCLF::Scene
 			// Of the sun entry (when resolved): its record's reference, and whether a category node owns it (CategoryNodeOwn).
 			const RE::TESObjectREFR* sunEntryReference = nullptr;
 			bool sunEntryCategory = false;
-			// A LOD gate root up its chain to the category node (TagGateAbove's), and an object LOD's drawn ranges (SampleLodRanges').
+			// A LOD gate root up its chain to the category node (TagGateAbove's), and an object LOD's drawn ranges (as its events' component takes them).
 			bool gated = false;
 			std::uint8_t gateSide = 0;
 			std::uint64_t gateToken = 0;

@@ -3,13 +3,15 @@
 // The coordinator component contract (Api::InstallContext::RegisterCoordinatorComponent): a feature's state kept by the scene
 // coordinator beside its residents, and the hooks the coordinator calls at its points - what a feature lists for the scene's members (its
 // table family's rows, the engine nodes it owns, the seeds it asks the frame for) follows the members. The hooks come in sets, one per
-// concern of the coordinator's: residency, the accumulate phase, the walk, the walk parity's dense walk, retirement, and the writes of the
-// entry class the component follows (Api::EntryClass, Api/ObjectContributors.h).
+// concern of the coordinator's: residency, the accumulate phase, the walk, the walk parity's dense walk, retirement, the writes of the
+// entry class the component follows (Api::EntryClass, Api/ObjectContributors.h), and the engine channels' events (Api/EngineEvents.h).
 
+#include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string_view>
 
 namespace DCLF::Api
@@ -153,6 +155,18 @@ namespace DCLF::Api
 			void (*streamed)(const CoordinatorComponentContext& a_context, std::uint32_t a_slot, EntryWrite& a_write) = nullptr;
 		};
 
+		/**
+		 * @brief The engine channels' events (ApplyEvents.cpp, ApplyBatch's structural events; Api::EngineChannel).
+		 *
+		 * - keys: a pass applies a_channel's keys at the channel's point (ChannelApply), the channels at a point in registration order:
+		 *   the keys its queue held at the pass's drain, oldest first (possibly none: called every pass that applies a batch, a load
+		 *   screen's empty one too). The keys are never dereferenced: an entry the coordinator tracks is the only one known alive.
+		 */
+		struct Events
+		{
+			void (*keys)(const CoordinatorComponentContext& a_context, EngineChannelId a_channel, std::span<const void* const> a_keys) = nullptr;
+		};
+
 		std::string_view name;
 		std::shared_ptr<void> (*make)() = nullptr;
 		Residency residency;
@@ -161,5 +175,6 @@ namespace DCLF::Api
 		DenseWalk dense;
 		Retirement retirement;
 		EntryClassHooks entryClass;
+		Events events;
 	};
 }

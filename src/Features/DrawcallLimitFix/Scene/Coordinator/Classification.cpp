@@ -728,7 +728,7 @@ namespace DCLF::Scene
 				MarkLightEntryDirty(lightEntry);
 			}
 		}
-		// Object LOD: drawn ranges from here on follow its segment events (the prepare's copy, as SampleLodRanges takes it).
+		// Object LOD: drawn ranges from here on follow its segment events (the prepare's copy, as their component takes it).
 		if (a_prep.subIndex)
 			lodRanges[a_geometry] = std::move(a_prep.segments);
 		pendingEvaluation.push_back(a_geometry);

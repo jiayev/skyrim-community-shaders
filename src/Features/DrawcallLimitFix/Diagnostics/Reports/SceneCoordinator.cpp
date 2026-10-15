@@ -313,21 +313,8 @@ namespace DCLF::Reports
 					sb.shadowPending, ss.stale, ss.writtenShared, ss.writtenMasks, ss.writtenShadow, byKind);
 				sb.stats = {};
 			}
-			// The features' lines here, where the object LOD segments' line follows.
-			Extensions::ReportTextAt(Api::ReportPoint::SceneCoordinatorSegments, text);
-			auto& lp = Diagnostics::SceneDiagnostics().lodSegments;
-			if (auto& l = V::lodSegmentStats(s); l.events || lp.checks || !V::lodRanges(s).empty()) {
-				std::size_t partial = 0;
-				for (const auto& [shape, ranges] : V::lodRanges(s)) {
-					const std::uint32_t whole = LodSegments::At<std::uint16_t>(shape, LodSegments::kTriangleCount) * 3u;
-					partial += ranges.size() != 1 || ranges[0].firstIndex != 0 || ranges[0].indexCount != whole ? 1 : 0;
-				}
-				text += fmt::format("[DCLF] object LOD segments: {} shapes ({} partly hidden){}; {} segment events, {} drawn-range changes; parity {} checks, {} shapes compared, {} differ{}{}\n",
-					V::lodRanges(s).size(), partial, Scene::lodSegmentEventsInstalled ? "" : ", events not installed", l.events, l.changed, lp.checks, lp.shapes, lp.differ,
-					lp.checks ? (lp.differ ? " <- LOD SEGMENTS; first: " : " <- OK") : "", lp.first);
-				l = {};
-				lp = { .pass = lp.pass };
-			}
+			// The features' lines here (Features/Lod's object LOD segments), the components' with their context.
+			V::componentsReportText(s, Api::ReportPoint::SceneCoordinatorSegments, text);
 			if (auto& c = Diagnostics::SceneDiagnostics().changeLog; c.checks || c.skipped) {
 				text += fmt::format("[DCLF] change log parity: {} checks ({} skipped), {} slots compared, {} changed, {} changed with no log entry{}{}\n", c.checks, c.skipped, c.slots,
 					c.changed, c.missing, c.missing ? " <- MISSING; first: " : " <- OK", c.first);

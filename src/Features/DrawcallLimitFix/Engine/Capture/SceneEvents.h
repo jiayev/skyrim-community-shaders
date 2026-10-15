@@ -145,15 +145,6 @@ namespace DCLF::Scene
 	// Per-frame: no wake, the next frame input's pass drains it.
 	inline EventQueue<const void*> emittanceEvents;
 
-	/**
-	 * @brief Object LOD segment events (dclf-lod.md): BSSubIndexTriShapes a segment write touched, as keys, pushed after the write
-	 * by the patched terrain manager calls (InstallLodSegmentHooks).
-	 */
-	// No wake: written as the camera moves, mostly unchanged ranges; the next pass takes them.
-	inline EventQueue<const void*> lodSegmentEvents;
-	inline bool lodSegmentEventsInstalled = false;
-	bool InstallLodSegmentHooks();
-
 	inline void DrainEmittanceEvents(std::vector<const void*>& a_out)
 	{
 		emittanceEvents.Drain([&](const void* a_key) { a_out.push_back(a_key); });

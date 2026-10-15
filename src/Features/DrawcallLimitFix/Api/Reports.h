@@ -3,6 +3,8 @@
 // The report lines contract (Api::InstallContext::RegisterReportLines): a feature's lines in DCLF's periodic report (CS_DCLF_STATS,
 // Diagnostics/Reports), at a named point of it.
 
+#include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -36,8 +38,8 @@ namespace DCLF::Api
 		// The coordinator's lines (Reports' scene pass report: the scene lane, not the render thread), after the LOD gates' line, at the
 		// end of the pump's lines: logged lines, handed the scene frame.
 		SceneCoordinatorGates,
-		// The coordinator's scene lines (the scene lane), after the shared bindings', where the object LOD segments' line is (before it
-		// while Core prints it), before the change log parity's. Text lines.
+		// The coordinator's scene lines (the scene lane), after the shared bindings', where the object LOD segments' line was (Features/Lod's
+		// now), before the change log parity's. Text lines, or a coordinator component's (ReportLines::componentText).
 		SceneCoordinatorSegments,
 		// The frame report's statistics (Reports::Stats), last, after the scene publications' line: on a report frame with CS_DCLF_STATS.
 		Statistics,
@@ -52,6 +54,8 @@ namespace DCLF::Api
 	 * - text: the same, at a point that composes its lines into the report's text (AsyncWorkViews, AsyncWorkForward, AsyncWork, AsyncWorkFamilies,
 	 *   SceneFrame, SceneCoordinatorSegments): appends them to a_text, each ending in a newline. One of the two, as the point asks.
 	 *   The SceneCoordinator points run on the scene lane, in the coordinator's report pass.
+	 * - componentText (with component): at SceneCoordinatorSegments, in text's place: the lines of a coordinator component's (what it
+	 *   keeps, and what the coordinator keeps for it), handed the component's context. Registered after the component.
 	 */
 	struct ReportLines
 	{
@@ -59,5 +63,7 @@ namespace DCLF::Api
 		ReportPoint point = ReportPoint::PrimaryCull;
 		void (*lines)(std::uint32_t a_frame) = nullptr;
 		void (*text)(std::string& a_text) = nullptr;
+		CoordinatorComponentId component;
+		void (*componentText)(const CoordinatorComponentContext& a_context, std::string& a_text) = nullptr;
 	};
 }

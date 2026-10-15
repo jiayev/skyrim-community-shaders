@@ -21,7 +21,6 @@ namespace DCLF::Diagnostics
 	{
 		AccumulateInputsTaken,   // the coordinator, first in its pass: the frame inputs posted since its last pass taken
 		ScenePhaseBegin,         // the scene phase begins (the change log trimmed), before anything of the pass writes
-		LodSegmentsApplied,      // the pass's object LOD segment events applied (the shapes' drawn ranges sampled again)
 		ShadowSetsKept,          // the shadow sets updated by changes, about to be made whole again (Policy::RebuildShadowSets)
 		ShadowSetsRebuilt,       // ... made whole again from the same tables
 		WalkDone,                // the walk done (the shading named, the placement plan published), before the joins
@@ -171,11 +170,14 @@ namespace DCLF::Diagnostics
 		bool loading;
 	};
 
-	/** @brief The coordinator: a batch applied to the mirror; the objects its events without values named (the LOD segments' shapes, a load screen's named keys). */
+	/**
+	 * @brief The coordinator: a batch applied to the mirror; the objects its events without values named (the engine channels' keys, by
+	 * channel: those whose channel names its keys, Api::EngineChannel::namesKeys; a load screen's named keys).
+	 */
 	struct MirrorEventsApplied
 	{
 		Scene::Coordinator& store;
-		std::span<const void* const> lodSegments;
+		std::span<const std::vector<const void*>> channelKeys;
 		std::span<const void* const> named;
 	};
 

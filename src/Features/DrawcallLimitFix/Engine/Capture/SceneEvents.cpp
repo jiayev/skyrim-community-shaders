@@ -869,70 +869,6 @@ namespace DCLF::Scene
 		return hiddenEventsInstalled;
 	}
 
-	namespace
-	{
-		// Object LOD's segment writers (LodSegments.h): each patched call makes the write, then names the shape.
-		struct LodSegmentShow
-		{
-			static void thunk(RE::BSGeometry* a_shape, std::uint64_t a_segment)
-			{
-				func(a_shape, a_segment);
-				lodSegmentEvents.Push(a_shape);
-				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-		struct LodSegmentHide
-		{
-			static void thunk(RE::BSGeometry* a_shape, std::uint64_t a_segment)
-			{
-				func(a_shape, a_segment);
-				lodSegmentEvents.Push(a_shape);
-				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-		struct LodSegmentShowAll
-		{
-			static void thunk(RE::BSGeometry* a_shape)
-			{
-				func(a_shape);
-				lodSegmentEvents.Push(a_shape);
-				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-	}
-
-	bool InstallLodSegmentHooks()
-	{
-		// Every xref of the three writers (AE 1.6.1170): the active and large-reference grids' segment updates (FUN_1405110b0,
-		// FUN_1405112f0), two show-all callers (FUN_1404fdcf0, FUN_140509550), the LOD block builder (FUN_140e55790). All or none.
-		constexpr std::uintptr_t kShow = 0xe31130, kHide = 0xe31160, kShowAll = 0xe310b0;
-		constexpr std::uintptr_t kShowSites[] = { 0x511550, 0x511269 };
-		constexpr std::uintptr_t kHideSites[] = { 0x511544, 0x51125c };
-		constexpr std::uintptr_t kShowAllSites[] = { 0x4fde80, 0x509691, 0x511402, 0x5112b4, 0xe55ba3 };
-		auto at = [](std::uintptr_t a_offset) { return REL::Offset(a_offset).address(); };
-		bool ok = true;
-		for (const auto site : kShowSites)
-			ok = ok && Engine::CallsTo(at(site), at(kShow));
-		for (const auto site : kHideSites)
-			ok = ok && Engine::CallsTo(at(site), at(kHide));
-		for (const auto site : kShowAllSites)
-			ok = ok && Engine::CallsTo(at(site), at(kShowAll));
-		if (!ok) {
-			logger::warn("[DCLF] object LOD: a segment writer's call site differs; object LOD stays native");
-			return false;
-		}
-		for (const auto site : kShowSites)
-			stl::write_thunk_call<LodSegmentShow>(at(site));
-		for (const auto site : kHideSites)
-			stl::write_thunk_call<LodSegmentHide>(at(site));
-		for (const auto site : kShowAllSites)
-			stl::write_thunk_call<LodSegmentShowAll>(at(site));
-		return true;
-	}
-
 	void InstallMoveEvents()
 	{
 		// Both update passes patched at `call qword ptr [rax + 0x168]` (FF 90 68 01 00 00), checked first; either missing places
@@ -1058,8 +994,8 @@ namespace DCLF::Scene
 		logger::info("[DCLF] scene events installed (fades, property flags, materials and material alpha, LOD fades, emittance, Havok node transforms, controllers): OnVisible at {:#x}",
 			onVisible - REL::Module::get().base() + 0x140000000);
 		InstallMoveEvents();
-		// The hidden stores are Features/HiddenNodes' (its early hooks, right after these).
-		lodSegmentEventsInstalled = InstallLodSegmentHooks();
+		// The hidden stores are Features/HiddenNodes' (its early hooks, right after these). Object LOD's segment writers are Features/Lod's
+		// engine channel's source (its early hooks, before tree LOD's and the hidden nodes').
 		// Tree LOD's channel's source is Features/TreeLod's (its early hooks, right after these).
 	}
 }
