@@ -98,7 +98,7 @@ namespace DCLF::Scene
 			bool streamWaiting = false;
 			// Its entry class's source node, the parent its rule holds (EntryRule::holdsParent: a face shape's head), held from the batch's pins
 			// at its attach (the component's record's reference is a copy).
-			RE::NiPointer<RE::NiNode> faceHeadRef;
+			RE::NiPointer<RE::NiNode> sourceRef;
 			// Its property's fade node, held from the naming event's pins: fade-root owners (and the components': Features/TreeWind's tree
 			// owners) are copied from it, never made from a key.
 			RE::NiPointer<RE::NiAVObject> fadeNodeRef;

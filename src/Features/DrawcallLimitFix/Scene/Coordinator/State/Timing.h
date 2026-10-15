@@ -87,7 +87,7 @@ namespace DCLF
 		LightMissed,  // the light path tried and fell through to the full write
 		Actor,        // written in full: an actor's (kTraitActor) whose verdict lets it have a record
 		ActorNoRecord,  // written in full: an actor's whose verdict gives it none (hidden, fading, ...)
-		Face,         // written in full: a face shape
+		EntryClass,   // written in full: an entry class's (a face shape; the report's "face")
 		PerFrame,     // written in full: any other per-frame entry
 		Event,        // written in full: scheduled by an event, a pending evaluation or a full walk
 		Count

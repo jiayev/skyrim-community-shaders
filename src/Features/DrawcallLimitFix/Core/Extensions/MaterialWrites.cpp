@@ -1,4 +1,4 @@
-// The frame VS variable's patch registration (see the header). The sink's writes are the material write hooks' (Engine/Capture/MaterialWrites.cpp).
+// The frame VS variable's patch flag (see the header). The sink's writes are the material write hooks' (Engine/Capture/MaterialWrites.cpp).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 
@@ -14,9 +14,6 @@ namespace DCLF::Extensions
 	}
 
 	bool FrameVSVariablePatched() { return frameVSVariablePatched.load(std::memory_order_relaxed); }
-}
 
-namespace DCLF::Api
-{
-	void RegisterFrameVSVariablePatch() { Extensions::frameVSVariablePatched.store(true, std::memory_order_relaxed); }
+	void NoteFrameVSVariablePatch() { frameVSVariablePatched.store(true, std::memory_order_relaxed); }
 }

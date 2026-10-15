@@ -26,7 +26,7 @@ namespace DCLF::Scene
 			return a_leaf.parent ? Extensions::EntryClassOf(a_leaf.Type(), a_leaf.parent->kind) : Api::EntryClass::None;
 		}
 
-		/** @brief Whether an entry of a_class carries the per-frame entry-class trait (its rule's perFrame: a face shape's kTraitFace). */
+		/** @brief Whether an entry of a_class carries the per-frame entry-class trait (its rule's perFrame: a face shape's kTraitEntryClass). */
 		bool PerFrameEntryClass(Api::EntryClass a_class)
 		{
 			return a_class != Api::EntryClass::None && Extensions::EntryClassRuleOf(a_class).perFrame;
@@ -244,12 +244,12 @@ namespace DCLF::Scene
 		// classifies again before binding); one stale the other way would leave an accumulated object without a record, so that phase
 		// clears the cache for it.
 		// Its entry class (its geometry type's rule: Features/Faces' face shape), resolved once: a tracked geometry's type and parent do not
-		// change. The merge stores the class (EntryClassOfLeaf again, from the delta's match).
+		// change. The merge stores the delta's class.
 		Api::EntryClass entryClassOf = entry.entryClass;
 		if (!entry.entryClassResolved) {
-			d.faceShapeSet = true;
-			entryClassOf = EntryClassOfLeaf(leaf);
-			d.faceShape = entryClassOf != Api::EntryClass::None;
+			d.entryClassSet = true;
+			d.entryClass = EntryClassOfLeaf(leaf);
+			entryClassOf = d.entryClass;
 		}
 		const bool entryTaken = entryClassOf != Api::EntryClass::None && Extensions::EntryClassTaken(entryClassOf);
 		// A taken class whose records follow its component's per-frame state is classified every frame (Features/Faces: a face shape's head's
@@ -345,7 +345,7 @@ namespace DCLF::Scene
 
 		// The record's slot-free inputs (the face's stream is the merge's: its component's state is shared).
 		a_out.write = EvalResult::Write::Record;
-		a_out.faceShape = entryTaken;
+		a_out.entryTaken = entryTaken;
 		const auto& g = *leaf.geometry;
 		// The skin partitions the engine draws: every LOD level's for a LOD skin (the draw narrows to its root's level); none at any
 		// level is a member that draws nothing (kNoPartitions).
@@ -436,9 +436,9 @@ namespace DCLF::Scene
 		if (wasMember)
 			++residentStats.rewritten;
 		// The evaluation resolved its entry class from a leaf (a match: the class its rule names).
-		if (d.faceShapeSet) {
+		if (d.entryClassSet) {
 			trackedEntry->entryClassResolved = true;
-			trackedEntry->entryClass = d.faceShape ? EntryClassOfLeaf(r.leaf) : Api::EntryClass::None;
+			trackedEntry->entryClass = d.entryClass;
 		}
 		// The component that follows its entry class lists it (Features/Faces: a face shape under its head).
 		if (trackedEntry->entryClass != Api::EntryClass::None)
@@ -464,8 +464,8 @@ namespace DCLF::Scene
 		const bool shadowOnly = r.shadowOnly;
 		// A taken entry class's positions (a face shape's head's snapshot) and its region of the positions buffer, whatever its verdict: its
 		// component's (Features/Faces). Without a snapshot it gets no record and waits for the component's publication, which writes it again.
-		Api::EntryWrite face{ *geometry, trackedEntry->faceHeadRef.get() };
-		trackedEntry->streamWaiting = r.faceShape && !ComponentsResolve(face, trackedEntry->entryClass);
+		Api::EntryWrite face{ *geometry, trackedEntry->sourceRef.get() };
+		trackedEntry->streamWaiting = r.entryTaken && !ComponentsResolve(face, trackedEntry->entryClass);
 		if (trackedEntry->streamWaiting)
 			return false;
 		// Geometry slots are shared by every object drawing the same TriShape; a skinned shape draws each partition's buffers.
@@ -1304,14 +1304,14 @@ namespace DCLF::Scene
 		return PerFrameTraitsOf(PerFrameEntryClass(a_tracked.entryClass), a_tracked.actorOwned, a_tracked.categoryNode, a_geometry);
 	}
 
-	std::uint32_t Coordinator::PerFrameTraitsOf(bool a_faceShape, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const
+	std::uint32_t Coordinator::PerFrameTraitsOf(bool a_entryClassTrait, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const
 	{
 		// The movable set (dclf-event-driven-tables.md): a static reference never moves in place, so what moves is actor-owned,
 		// controller-animated or Havok-simulated. Skin palettes and face snapshots change without moving. A controller on the shader or
 		// alpha property animates the material alpha the shadow verdict reads (kTraitAnimatedShading: its events name it, never per frame).
-		// a_faceShape: a per-frame entry class's entry (PerFrameEntryClass: a face shape), its trait kTraitFace.
+		// a_entryClassTrait: a per-frame entry class's entry (PerFrameEntryClass: a face shape), its trait kTraitEntryClass.
 		std::uint32_t traits = 0;
-		traits |= a_faceShape ? kTraitFace : 0u;
+		traits |= a_entryClassTrait ? kTraitEntryClass : 0u;
 		traits |= a_actorOwned ? kTraitActor : 0u;
 		const auto leaf = mirror.Leaf(&a_geometry);
 		traits |= leaf.Skinned() ? kTraitSkin : 0u;
@@ -1342,7 +1342,7 @@ namespace DCLF::Scene
 		// An unselected switch child gets a record by event when selected (ApplySwitchEvents).
 		const bool mayRecord = a_reason == Ineligible::None || Eligibility::DeferredToAccumulate(a_reason) || Eligibility::ShadowOnlyCaster(a_reason, mirror.Leaf(&a_geometry));
 		std::uint32_t traits = PerFrameTraits(a_tracked, a_geometry);
-		if (mayRecord && !(traits & (kTraitFace | kTraitActor)) && a_tracked.sunEntryNode) {
+		if (mayRecord && !(traits & (kTraitEntryClass | kTraitActor)) && a_tracked.sunEntryNode) {
 			bool moves = false;
 			if (a_freshMotion) {
 				const auto [motion, inserted] = a_freshMotion->try_emplace(a_tracked.sunEntryNode, false);
@@ -1367,13 +1367,13 @@ namespace DCLF::Scene
 		const std::uint32_t traits = a_traits;
 		const std::uint32_t moving = traits & ~kTraitAnimatedShading;
 		const bool frameVerdict = a_reason == Ineligible::Hidden || a_reason == Ineligible::Switch || a_reason == Ineligible::Actor;
-		const bool perFrame = (a_mayRecord && moving && moving != kTraitRootMoves && moving != kTraitFace) || (traits & kTraitActor) ||
+		const bool perFrame = (a_mayRecord && moving && moving != kTraitRootMoves && moving != kTraitEntryClass) || (traits & kTraitActor) ||
 		                      (frameVerdict && (traits & kTraitMoves));
 		// The light path takes only an actor's verdict recheck (ActorRecordKept) and a skin's partitions (KeepSkin), when an event names
 		// the entry (MoverDue); placement and palette are the plan's (moverSet), face positions follow the head's publications. An entry
 		// that cannot have a record is written in full.
 		const std::uint32_t light = perFrame && a_mayRecord &&
-		                                    !(traits & ~(kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin | kTraitActor | kTraitFace)) ?
+		                                    !(traits & ~(kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin | kTraitActor | kTraitEntryClass)) ?
 		                                traits :
 		                                0u;
 		return { perFrame, light };
@@ -1383,7 +1383,7 @@ namespace DCLF::Scene
 	{
 		// PerFrameOf from the evaluation's traits; root motion from rootMotion, else the evaluation's fresh read (inserted here).
 		std::uint32_t traits = a_result.traits;
-		if (a_result.mayRecord && !(traits & (kTraitFace | kTraitActor)) && a_tracked.sunEntryNode) {
+		if (a_result.mayRecord && !(traits & (kTraitEntryClass | kTraitActor)) && a_tracked.sunEntryNode) {
 			const bool* now = a_tracked.sunEntryNode == a_result.rootCandidate ? &a_result.rootMovesNow : nullptr;
 			if (RootMoves(a_tracked.sunEntryNode, now))
 				traits |= kTraitRootMoves;
@@ -1448,7 +1448,7 @@ namespace DCLF::Scene
 		// Profiling bucket.
 		r.kind = entry.lightTraits && entry.perFrame       ? EvaluateKind::Light :
 		         !entry.perFrame                           ? EvaluateKind::Event :
-		         entry.entryClass != Api::EntryClass::None ? EvaluateKind::Face :
+		         entry.entryClass != Api::EntryClass::None ? EvaluateKind::EntryClass :
 		         entry.actorOwned                          ? (entry.candidateReason == Ineligible::None ? EvaluateKind::Actor : EvaluateKind::ActorNoRecord) :
 		                                                     EvaluateKind::PerFrame;
 		const bool profileKinds = a_light && Diagnostics::Observe().profile;
@@ -1507,10 +1507,10 @@ namespace DCLF::Scene
 		a_out.classified = candidateFrame == PassStamp();
 		if (a_out.classified) {
 			// PerFrameOf's inputs as the merge will see them; root motion is read fresh here, PerFrameMerge prefers rootMotion.
-			const Api::EntryClass entryClass = d.faceShapeSet ? (d.faceShape ? EntryClassOfLeaf(a_out.leaf) : Api::EntryClass::None) : entry.entryClass;
+			const Api::EntryClass entryClass = d.entryClassSet ? d.entryClass : entry.entryClass;
 			a_out.traits = PerFrameTraitsOf(PerFrameEntryClass(entryClass), d.actorOwnedSet ? d.actorOwned : entry.actorOwned, entry.categoryNode, *geometry);
 			a_out.mayRecord = reason == Ineligible::None || Eligibility::DeferredToAccumulate(reason) || Eligibility::ShadowOnlyCaster(reason, a_out.leaf);
-			if (a_out.mayRecord && !(a_out.traits & (kTraitFace | kTraitActor))) {
+			if (a_out.mayRecord && !(a_out.traits & (kTraitEntryClass | kTraitActor))) {
 				// The resolved sun entry, or the one ResolveSunEntry will resolve at the write.
 				a_out.rootCandidate = entry.sunEntryResolved ? entry.sunEntryNode : static_cast<const RE::NiAVObject*>(MirrorSunEntry(geometry));
 				if (a_out.rootCandidate) {

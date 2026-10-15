@@ -4,6 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Features/Particles/ParticleSnapshots.h"
 
+#include "Features/DrawcallLimitFix/Api/Feature.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -237,7 +238,7 @@ namespace DCLF::Features::Particles
 		return &quadSlotKeys[std::min<std::uint32_t>(std::countr_zero(QuadsOf(a_quads)), kBuckets - 1)];
 	}
 
-	void ParticleSnapshots::Install()
+	void ParticleSnapshots::Install(Api::InstallContext& a_context)
 	{
 		if (installed)
 			return;
@@ -248,7 +249,7 @@ namespace DCLF::Features::Particles
 			return;
 		}
 		// Its move writer, the report's "particle update" (the slot after Features/Actors' three, as Core's table had it).
-		moveWriter = Extensions::ReserveMoveWriter("particle update");
+		moveWriter = a_context.ReserveMoveWriter("particle update");
 		stl::write_vfunc<kUpdateDownwardSlot, UpdateHook>(RE::VTABLE_NiParticleSystem[0]);
 		stl::write_vfunc<kUpdateSelectedSlot, SelectedHook>(RE::VTABLE_NiParticleSystem[0]);
 		Extensions::MoveWriterInstalled(moveWriter);

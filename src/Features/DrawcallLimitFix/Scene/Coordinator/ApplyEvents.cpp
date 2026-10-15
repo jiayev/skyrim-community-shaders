@@ -4,7 +4,6 @@
 
 #include "Internal.h"
 
-#include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 
@@ -313,7 +312,7 @@ namespace DCLF::Scene
 				HandBack(std::move(entry.geometry));
 				HandBack(std::move(entry.property));
 				HandBack(std::move(entry.layerProperty));
-				HandBack(std::move(entry.faceHeadRef));
+				HandBack(std::move(entry.sourceRef));
 				HandBack(std::move(entry.fadeNodeRef));
 			}
 			tracked.clear();

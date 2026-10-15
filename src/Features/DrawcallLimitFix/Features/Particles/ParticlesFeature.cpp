@@ -31,7 +31,7 @@ namespace DCLF::Features::Particles
 				.itemClass = Api::FrameValueItemClass::ParticleSystem, .moves = true });
 			a_context.RegisterGeometryType({ .geometryType = static_cast<std::uint8_t>(RE::BSGeometry::Type::kStripParticles), .toggle = particlesToggle });
 			// The particle systems' snapshots, taken after the engine's update of each (ParticleSnapshots; the systems DCLF follows alone).
-			ParticleSnapshots::Get().Install();
+			ParticleSnapshots::Get().Install(a_context);
 			// Their palette rows: the members' blocks and placements, from the snapshots, every frame.
 			RegisterRows(a_context);
 			RegisterReport(a_context);

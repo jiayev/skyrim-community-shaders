@@ -187,8 +187,9 @@ namespace DCLF::SceneCapture
 		// kSegments: what the engine's sub-index draw draws (compared by triangles: its rebuild moves run starts, not triangles).
 		std::vector<LodSegments::Range> segments;
 		/**
-		 * @brief kRenderer: a particle geometry's (NiParticles, types 1 and 2) inputs to ParticleSystemTaken; the particles are
-		 * ParticleSnapshots'. vertexDesc is the geometry's own (+0x148: position and colour on stream 1, quad UVs on stream 0).
+		 * @brief kRenderer: a particle geometry's (NiParticles, types 1 and 2) inputs to PaletteItemClassOf
+		 * (Scene/Ports/LightingDescriptors.h); the particles are ParticleSnapshots'. vertexDesc is the geometry's own
+		 * (+0x148: position and colour on stream 1, quad UVs on stream 0).
 		 */
 		struct Particles
 		{

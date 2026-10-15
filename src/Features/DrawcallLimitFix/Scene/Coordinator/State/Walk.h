@@ -27,12 +27,12 @@ namespace DCLF::Scene
 		/** @brief Why an entry's inputs change every frame (Tracked::perFrame); 0 when they do not. */
 		enum PerFrameTrait : std::uint32_t
 		{
-			kTraitFace = 1u << 0,
+			kTraitEntryClass = 1u << 0,  // a per-frame entry class's entry (a face shape; the report's "face")
 			kTraitActor = 1u << 1,
 			// 1u << 2 unused (the report names the bits).
 			kTraitSkin = 1u << 3,
 			kTraitAnimatedShading = 1u << 4,  // a controller on its shader or alpha property: its shading is named by events, never per frame
-			kTraitMoves = 1u << 5,            // a controller or a non-fixed rigid body on its chain, or a particle system (the toggle on)
+			kTraitMoves = 1u << 5,            // a controller or a non-fixed rigid body on its chain, or a geometry type contribution's mover (its toggle on)
 			kTraitRootMoves = 1u << 6,        // its reference root's subtree moves (RootMoves)
 		};
 		// Entries per fan-out chunk (one EvalCounters each), and the fewest a round fans out for.
@@ -59,7 +59,8 @@ namespace DCLF::Scene
 		/** @brief What an evaluation decided for its entry's Tracked, applied by its merge. */
 		struct TrackedDelta
 		{
-			bool faceShapeSet = false, faceShape = false;      // resolved once
+			bool entryClassSet = false;                        // resolved once
+			Api::EntryClass entryClass = Api::EntryClass::None;
 			bool actorOwnedSet = false, actorOwned = false;    // resolved once
 			bool verdictSet = false;
 			CoordinatorTracked::Tracked::StaticVerdict verdict;
@@ -94,7 +95,7 @@ namespace DCLF::Scene
 			SceneCapture::LeafView leaf;
 			Ineligible reason = Ineligible::None;  // its bucket
 			bool shadowOnly = false;
-			bool faceShape = false;        // its snapshot is the merge's (ComponentsResolve)
+			bool entryTaken = false;       // a taken entry class's: its snapshot is the merge's (ComponentsResolve)
 			bool referenceReason = false;  // the dense walk's: reason into referenceReasons
 			// Slot-free record inputs.
 			std::uint16_t partitionMask = 0;

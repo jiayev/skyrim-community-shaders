@@ -118,7 +118,8 @@ namespace DCLF::Api
 	 * - covered (required): render thread, at the frame's start (DecideCoverage), once a frame, the views in EngineView order: whether its
 	 *   epochs draw its members this frame (then the engine's registrations of them are withheld).
 	 * - captureRoot (CategoryRoot, required): render thread, once a frame while the toggle is on (the category capture and its
-	 *   signatures): the view's root, a category node filed under itself, and the engine pointers it is found from.
+	 *   signatures, and FrameGlobals' capture of the view's subtree, Scene/Ports/FrameGlobals.cpp): the view's root, a category node filed
+	 *   under itself, and the engine pointers it is found from.
 	 * - accumulators (InMainRenderers, required): render thread, once a frame (PassCapture::RefreshMainRenderers): the engine accumulators
 	 *   its members register into.
 	 * - residueDue (OwnRenderers, optional): render thread, once per render of the view that would leave its LOD roots to DCLF

@@ -629,10 +629,10 @@ namespace DCLF::Scene
 		HoldProperties(entry, a_prep.held);
 		// Its entry class's held parent (a face shape's head), held from the batch's pins.
 		{
-			const auto* head = a_prep.faceHead;
-			if (entry.faceHeadRef.get() != head) {
-				HandBack(std::move(entry.faceHeadRef));
-				if (head && !(entry.faceHeadRef = FromPin<RE::NiNode>(a_prep.faceHeadPin)))
+			const auto* head = a_prep.source;
+			if (entry.sourceRef.get() != head) {
+				HandBack(std::move(entry.sourceRef));
+				if (head && !(entry.sourceRef = FromPin<RE::NiNode>(a_prep.sourcePin)))
 					++referenceStats.refused;
 			}
 		}
@@ -808,11 +808,11 @@ namespace DCLF::Scene
 		const auto* parent = record && record->parent ? mirror.Node(record->parent) : nullptr;
 		const auto entryClass = parent && g ? Extensions::EntryClassOf(g->type, parent->kind) : Api::EntryClass::None;
 		const bool held = entryClass != Api::EntryClass::None && Extensions::EntryClassRuleOf(entryClass).holdsParent;
-		a_out.faceHead = held ? static_cast<const RE::NiNode*>(record->parent) : nullptr;
+		a_out.source = held ? static_cast<const RE::NiNode*>(record->parent) : nullptr;
 		a_out.subIndex = g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape);
 		// The batch's pins (frozen while the batch's adds prepare and merge), HoldProperties' reads, an object LOD's ranges.
 		a_out.geometryPin = PinOf(a_geometry);
-		a_out.faceHeadPin = a_out.faceHead ? PinOf(a_out.faceHead) : nullptr;
+		a_out.sourcePin = a_out.source ? PinOf(a_out.source) : nullptr;
 		a_out.held = HeldKeysOf(a_geometry);
 		if (a_out.subIndex && g)
 			a_out.segments = g->segments;
@@ -1014,16 +1014,15 @@ namespace DCLF::Scene
 
 	std::int32_t Coordinator::BillboardModeOf(const Tracked& a_tracked) const
 	{
-		// The parent contribution's (Features/Billboards: the billboards toggle).
-		if (!Extensions::ParentAdmits(ActiveToggles(), Api::EngineParent::Billboard, Api::ParentLeaves::TurnedEffectShapes) ||
-			a_tracked.parentReason != Ineligible::Billboard)
+		if (a_tracked.parentReason != Ineligible::Billboard)
 			return -1;
 		// First-person entries too (magic hand glows): the first-person forward part's b12 block (Features/FirstPerson's depth epoch) is world
 		// space throughout (c0-c2 the camera rotation, c40 the eye at GetFirstPersonNodePosition), sampled before the shift.
-		// The turned shapes: a skinless BSTriShape with the property of a port the billboards turn (the Effect port's).
+		// The turned shapes (the census's rule too): the parent contribution admits them (Features/Billboards: the billboards toggle), a
+		// skinless BSTriShape with the property of a port the billboards turn (the Effect port's).
 		const auto leaf = mirror.Leaf(a_tracked.geometry.get());
 		const auto* port = leaf ? SceneCapture::LeafView::Port(leaf.property) : nullptr;
-		if (!port || !Extensions::PortRules(port->port).turnedByBillboards || leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) || leaf.Skinned())
+		if (!leaf || !Extensions::BillboardTurnedLeaf(ActiveToggles(), port ? port->port : std::uint8_t{ 0 }, leaf.Type(), leaf.Skinned()))
 			return -1;
 		std::int32_t mode = -1;
 		std::uint32_t billboards = 0;

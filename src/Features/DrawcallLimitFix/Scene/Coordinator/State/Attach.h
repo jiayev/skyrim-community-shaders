@@ -44,7 +44,7 @@ namespace DCLF::Scene
 			Ineligible reason = Ineligible::None;  // what the nodes between the category node and it make of it (MirrorSubtree's)
 			const RE::TESObjectREFR* actorOwner = nullptr;
 			const RE::NiNode* roomNode = nullptr;
-			const RE::NiNode* faceHead = nullptr;  // its entry class's held parent (EntryRule::holdsParent: a face shape's head)
+			const RE::NiNode* source = nullptr;  // its entry class's held parent (EntryRule::holdsParent: a face shape's head)
 			bool mirrored = false;
 			bool subIndex = false;
 			bool resolved = false;
@@ -52,7 +52,7 @@ namespace DCLF::Scene
 			const RE::NiAVObject* lightActorRoot = nullptr;
 			// The batch's pins of the geometry and its held parent (null: none).
 			RE::NiRefObject* geometryPin = nullptr;
-			RE::NiRefObject* faceHeadPin = nullptr;
+			RE::NiRefObject* sourcePin = nullptr;
 			HeldKeys held;
 			// Of the sun entry (when resolved): its record's reference, and whether a category node owns it (CategoryNodeOwn).
 			const RE::TESObjectREFR* sunEntryReference = nullptr;

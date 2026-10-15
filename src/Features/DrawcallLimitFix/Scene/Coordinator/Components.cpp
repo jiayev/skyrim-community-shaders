@@ -655,7 +655,7 @@ namespace DCLF::Scene
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
 			if (registered[c].entryClass.follows == a_class && registered[c].entryClass.listed) {
-				const Api::EntryWrite write{ a_geometry, a_tracked.faceHeadRef.get() };
+				const Api::EntryWrite write{ a_geometry, a_tracked.sourceRef.get() };
 				registered[c].entryClass.listed({ tables, ComponentState(c), *this, c }, write);
 			}
 	}
