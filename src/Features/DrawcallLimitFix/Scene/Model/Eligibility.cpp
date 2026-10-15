@@ -67,7 +67,7 @@ namespace DCLF::Eligibility
 			// data of its own: its draw is the renderer's quads, its vertices ParticleSnapshots' (Coordinator::ResolveGeometrySlot).
 			if (ParticleGeometryType(g.type) && Extensions::GeometryTypeOn(ActiveToggles(), g.type)) {
 				const auto* effect = SceneCapture::LeafView::Effect(a_leaf.property);
-				if (!effect || !ActiveToggles().effects)
+				if (!effect || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect))
 					return Ineligible::NotLightingShader;
 				LightingDescriptors descriptors;
 				const Ineligible reason = DeriveEffectDescriptors(*effect, a_leaf, descriptors);
@@ -118,10 +118,10 @@ namespace DCLF::Eligibility
 
 		const auto* property = SceneCapture::LeafView::Lighting(a_leaf.property);
 		if (!property) {
-			// The Effect port (CS_DCLF_EFFECTS): a BSEffectShaderProperty on a BSTriShape, drawn by the forward epoch when its pass is the
+			// The Effect port (Api::ObjectClass::Effect): a BSEffectShaderProperty on a BSTriShape, drawn by the forward epoch when its pass is the
 			// static blended mesh's (DeriveEffectDescriptors). Any other shape of one keeps the effect's own reason.
 			const auto* effect = SceneCapture::LeafView::Effect(a_leaf.property);
-			if (!effect || !ActiveToggles().effects)
+			if (!effect || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect))
 				return Ineligible::NotLightingShader;
 			if (type != RE::BSGeometry::Type::kTriShape)
 				return Ineligible::EffectVariant;

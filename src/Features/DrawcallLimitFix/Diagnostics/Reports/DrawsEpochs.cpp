@@ -1,11 +1,10 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
 #include "Engine.h"
 
-// The views' epochs' report lines (taken by IndirectDraws::AsyncReport): the forward epoch and the effects, the accumulated visibility,
-// the shadow capability. (The reflection's and the first-person view's: Features/Reflection, Features/FirstPerson.)
+// The views' epochs' report lines (taken by IndirectDraws::AsyncReport): the forward epoch, the accumulated visibility, the shadow
+// capability. (The reflection's and the first-person view's: Features/Reflection, Features/FirstPerson; the effects': Features/Effects.)
 
 namespace DCLF
 {
@@ -24,47 +23,8 @@ namespace DCLF
 			text += fmt::format("[DCLF] refraction (T7d, CS_DCLF_REFRACTION {}): {} forward epochs drew the refraction normals, {} with refraction slots could not "
 								"(no refraction pipeline yet, or no refraction normals){}\n",
 				ActiveToggles().refraction ? "on" : "off", f.refractionDrawn, f.refractionNotReady, f.refractionNotReady && !f.refractionDrawn ? " <- NO REFRACTION DRAW" : "");
-		// The Effect port: its members in the installed tables (objects of an effect key: forward ones, decals in the decal groups, and
-		// skinned ones), its material records, its pipelines.
-		{
-			const auto& tables = Scene::FrameView::Get().GetTables();
-			std::uint32_t members = 0, forwardMembers = 0, materials = 0, lit = 0, decals = 0, skinned = 0, opaque = 0;
-			std::string firstOpaque;
-			for (std::size_t o = 0; o < tables.objects.size(); ++o) {
-				const auto& object = tables.objects[o];
-				if ((object.flags & (kObjectFree | kObjectNoBindings)) || !(object.flags & kObjectMember))
-					continue;
-				forwardMembers += (object.flags & kObjectForward) ? 1u : 0u;
-				if (object.pipelineIndex < tables.pipelines.size() && RasterEffect(tables.pipelines[object.pipelineIndex].rasterFlags)) {
-					++members;
-					lit += (tables.pipelines[object.pipelineIndex].passDescriptor & EffectFlag::Lighting) ? 1u : 0u;  // the Lighting variant
-					decals += ObjectDecalGroup(object.flags) ? 1u : 0u;
-					// An opaque effect (CS_DCLF_OPAQUE_EFFECTS) is decal group 1's with the opaque write mode, 1 (a decal's is 10 or 11).
-					const auto rasterFlags = tables.pipelines[object.pipelineIndex].rasterFlags;
-					if (RasterDecalGroup(rasterFlags) == 1 && RasterWriteMode(rasterFlags) == 1 && opaque++ == 0 && o < tables.objectGeometry.size() && tables.objectGeometry[o]) {
-						const auto* geometry = tables.objectGeometry[o];
-						firstOpaque = fmt::format("; first opaque: '{}' at ({:.0f}, {:.0f}, {:.0f}), raster flags {:#x}, pass {:#x}", geometry->name.c_str() ? geometry->name.c_str() : "",
-							geometry->world.translate.x, geometry->world.translate.y, geometry->world.translate.z, rasterFlags,
-							tables.pipelines[object.pipelineIndex].passDescriptor);
-					}
-					// A particle member's block is its quads', not a skin's palette.
-					skinned += (object.flags & kObjectSkinned) && !(tables.pipelines[object.pipelineIndex].passDescriptor & EffectFlag::Particles) ? 1u : 0u;
-				}
-			}
-			for (std::uint32_t m = 0; m < tables.materials.size(); ++m)
-				materials += tables.MaterialUsed(m) && tables.materials[m].kind == kMaterialKindEffect ? 1u : 0u;
-			const auto pipelines = DrawPipelines::Get().GetStats();
-			if (members || materials || pipelines.effectRequested || ActiveToggles().effects)
-				text += fmt::format("[DCLF] effects (T7d's Effect port, CS_DCLF_EFFECTS {}): {} members bound ({} the Lighting variant, {} decals, {} skinned; {} forward "
-									"members in all; {} opaque, hint 0, in decal group 1), {} effect materials in use; pipelines {} requested, {} ready, {} failed{}{}\n",
-					ActiveToggles().effects ? "on" : "off", members, lit, decals, skinned, forwardMembers, opaque, materials, pipelines.effectRequested, pipelines.effectReady,
-					pipelines.effectFailed, pipelines.effectFailed ? " <- EFFECT PIPELINE FAILED" : "", firstOpaque);
-			// CS_DCLF_SET_PARITY: the members' Lighting-variant passes the engine registered, against the sun light the port reads as their light 0.
-			if (const auto [checked, other] = Diagnostics::Registrations::TakeEffectLight(); checked)
-				text += fmt::format("[DCLF] effects' Lighting variant (CS_DCLF_SET_PARITY): {} engine passes of members checked, {} with a light 0 other than the sun "
-									"light{}\n",
-					checked, other, other ? " <- EFFECT LIGHT" : " <- OK");
-		}
+		// The forward epoch's features' lines here (Features/Effects: the Effect port's members and its Lighting variant's parity).
+		Extensions::ReportTextAt(Api::ReportPoint::AsyncWorkForward, text);
 		const std::uint32_t submitted = f.submittedFrame;
 		const std::uint32_t refractionFrame = f.refractionFrame;
 		f = {};

@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -177,7 +178,7 @@ namespace DCLF::MaterialWrites
 		{
 			// Nothing is captured while the toggle is off: no effect record exists then (the scene work asks for a material it lacks:
 			// FrameView::ServeMaterialRequests).
-			if (!ActiveToggles().effects) {
+			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect)) {
 				a_func(a_this, a_data);
 				return;
 			}

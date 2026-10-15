@@ -18,6 +18,9 @@ namespace DCLF::Api
 		// The views' lines in the draws' async work (IndirectDraws::AsyncReport), after the visibility lines and the reflection's, before
 		// the forward epoch's: every report. Text lines (ReportLines::text).
 		AsyncWorkViews,
+		// The forward epoch's lines (IndirectDraws::ForwardReport), after its own and the refraction's, before AsyncWork's: on a report
+		// that prints the forward epoch's (it reached a frame since the last, or its toggle is on). Text lines.
+		AsyncWorkForward,
 		// The draws' async work lines (IndirectDraws::AsyncReport), after the forward epoch's lines, before the tree LOD draws': every
 		// report. Text lines (ReportLines::text), printed with the rest of that report.
 		AsyncWork,
@@ -46,7 +49,7 @@ namespace DCLF::Api
 	 * - lines: render thread, at its point of a report (the report's own schedule and conditions), handed the report's frame (FrameView's
 	 *   number): logs the feature's lines, taking its counters since the last report. A parity it runs there is gated as any other
 	 *   (Diagnostics::Observe). For a point that logs.
-	 * - text: the same, at a point that composes its lines into the report's text (AsyncWorkViews, AsyncWork, AsyncWorkFamilies,
+	 * - text: the same, at a point that composes its lines into the report's text (AsyncWorkViews, AsyncWorkForward, AsyncWork, AsyncWorkFamilies,
 	 *   SceneFrame, SceneCoordinatorSegments): appends them to a_text, each ending in a newline. One of the two, as the point asks.
 	 *   The SceneCoordinator points run on the scene lane, in the coordinator's report pass.
 	 */

@@ -128,13 +128,22 @@ namespace DCLF::Api
 		// records as the TreeInstances draw family (Api/DrawFamilies.h: its tables, its cull and draws in the depth segment and in a trees
 		// view's faces; its decision) instead of the engine's passes (Features/TreeLod): the class gates the family.
 		TreeLod,
+		// An effect: a BSEffectShaderProperty object, the Effect port's (DeriveEffectDescriptors, Effect.hlsl): a blended mesh in the forward
+		// epoch's sort, a decal in the decal groups, a skinned one through the skin palette, a particle system with its geometry type's
+		// contribution (Ineligible::NotLightingShader without the class), and the effect controllers' material captures (Features/Effects).
+		Effect,
+		// An opaque effect (hint 0: no blending alpha property, no Falloff, depth tested and written) drawn through the opaque decal group
+		// without its bias (Ineligible::EffectOpaque without the class, or while Decal is off). Read whether it is taken, whatever its toggle
+		// (Extensions::ObjectClassTaken): the Effect port is reached only while Effect is on (Features/Effects).
+		OpaqueEffect,
 		Count,
 	};
 
 	/**
 	 * @brief An object class contribution: the class's objects are DCLF's while the toggle is on. Read where the objects are classified
-	 * (the Lighting and Effect ports' eligibility, the primary entries, the category nodes listed), and by the paths that draw a class
-	 * (tree LOD's decision and pipelines, a view's LOD roots), as data (no call per object).
+	 * (the Lighting and Effect ports' eligibility, the primary entries and membership passes, the category nodes listed, the material
+	 * captures), and by the paths that draw a class (tree LOD's decision and pipelines, a view's LOD roots), as data (no call per object).
+	 * A class standing for a load-time switch is read as taken, whatever the toggle (Extensions::ObjectClassTaken).
 	 *
 	 * - objectClass: the class, one feature's.
 	 * - toggle: a registered toggle.

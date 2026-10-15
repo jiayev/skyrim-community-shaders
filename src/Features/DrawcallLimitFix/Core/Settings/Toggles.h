@@ -38,9 +38,6 @@ namespace DCLF
 		// blended Lighting geometry (alpha-blended, or a material alpha below one), drawn by the forward epoch: a GPU depth sort of
 		// the visible set, back to front, before the engine's own blended draws (on by default: CS_DCLF_FORWARD=0 seeds it off);
 		bool forward = false;
-		// static blended BSEffectShaderProperty meshes, drawn by the forward epoch in the same GPU sort (needs forward;
-		// on by default: CS_DCLF_EFFECTS=0 seeds it off);
-		bool effects = false;
 		// refraction: Lighting geometry with kRefraction or kTempRefraction, whose one main pass is a Utility RENDER_NORMAL pass into
 		// the refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward;
 		// on by default: CS_DCLF_REFRACTION=0 seeds it off);
@@ -58,7 +55,7 @@ namespace DCLF
 		bool excludePrimaryEntries = false;
 
 		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees;
-		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs; Features/Lod: object and
+		// Features/Effects, Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs; Features/Lod: object and
 		// terrain LOD; Features/TreeLod: tree LOD; Features/FirstPerson: a view; Features/OcclusionMaps: its maps), ...
 		std::uint32_t registered = 0;
 		/** @brief Whether a feature's toggle is on (false for none). */

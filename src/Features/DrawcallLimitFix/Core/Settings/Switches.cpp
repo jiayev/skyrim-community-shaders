@@ -66,8 +66,7 @@ namespace DCLF
 				"0: terrain under Terrain Blending, and the meshes that feature redraws after it, stay native (T7c1; live toggle's seed)" },
 			{ Forward, "CS_DCLF_FORWARD", F, Reduced::UnlessOne, false,
 				"1: blended Lighting geometry drawn by DCLF's forward epoch (T7d: a GPU depth sort, back to front, before the engine's blended draws); 0 it stays native (live toggle's seed)" },
-			{ Effects, "CS_DCLF_EFFECTS", F, Reduced::UnlessOne, false,
-				"1: static blended BSEffectShaderProperty meshes drawn by DCLF's forward epoch, sorted with blended Lighting (T7d's Effect port; needs CS_DCLF_FORWARD); 0 they stay native (live toggle's seed)" },
+			// (Features/Effects' CS_DCLF_EFFECTS is listed here, after CS_DCLF_FORWARD.)
 			{ Refraction, "CS_DCLF_REFRACTION", F, Reduced::UnlessOne, false,
 				"1: refraction (kRefraction, kTempRefraction Lighting geometry: heat haze, invisibility) drawn by DCLF into the refraction normals in the forward epoch (T7d; needs CS_DCLF_FORWARD); 0 it stays native (live toggle's seed)" },
 			{ ProjectedUv, "CS_DCLF_PROJECTED_UV", F, Reduced::UnlessOne, false, "0: projected-UV objects stay native (live toggle's seed)" },
@@ -79,10 +78,9 @@ namespace DCLF
 			{ SunSkip, "CS_DCLF_SUN_SKIP", F, Reduced::UnlessOne, false, "0: the engine keeps culling and registering the sun's casters (live toggle's seed)" },
 			{ SunExclude, "CS_DCLF_SUN_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the sun's culls (live toggle's seed)" },
 			{ PrimaryExclude, "CS_DCLF_PRIMARY_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the main camera's cull (live toggle's seed)" },
-			// (Features/OcclusionMaps' CS_DCLF_SKYLIGHT and CS_DCLF_PRECIPITATION, Features/Reflection's and Features/FirstPerson's switches
-			// are listed here, before CS_DCLF_OPAQUE_EFFECTS.)
-			{ OpaqueEffects, "CS_DCLF_OPAQUE_EFFECTS", F, Reduced::Zero, false,
-				"default on (T7f item 7): opaque BSEffectShaderProperty meshes (hint 0: no blending alpha property, no Falloff, depth tested and written; forge coals, slag) drawn by DCLF in the G-buffer with the DEFERRED effect variant, through the opaque decal group's fixed slots and its decal depth pass without the bias (needs CS_DCLF_EFFECTS and CS_DCLF_DECALS); 0 they stay the engine's (effect-opaque)" },
+			// (Features/TreeWind's CS_DCLF_TREE_LIST_ALL, then Features/Effects' CS_DCLF_OPAQUE_EFFECTS, are listed here, after
+			// CS_DCLF_PRIMARY_EXCLUDE: Features/OcclusionMaps' CS_DCLF_SKYLIGHT and CS_DCLF_PRECIPITATION, Features/Reflection's and
+			// Features/FirstPerson's switches before CS_DCLF_OPAQUE_EFFECTS, Features/Billboards' CS_DCLF_BILLBOARD_PARTICLES after it.)
 			{ EmptyFadeNode, "CS_DCLF_EMPTY_FADE_NODE", F, Reduced::Zero, false,
 				"default on (T7f item 7): the engine's empty fade node (the BSFadeNode 0x14332a2a0 holds, which every BSShaderProperty starts with and the engine reads as none) is no fade root: such geometry (terrain, object LOD, some clutter) takes its entry's root; 0: it is listed as one fade root of all of them, outside the scene graph" },
 			{ OrgEpochs, "CS_ORG_EPOCHS", F, Reduced::Zero, true, "0: the render graph runs without epochs, and DCLF does not install" },
@@ -189,8 +187,9 @@ namespace DCLF
 			return values;
 		}
 
-		// The features' switches (RegisterSwitch), each read as it registered, listed right after the Core row its after names or right
-		// before the one its before names. Written at install alone (the main thread, before DCLF's threads start), read-only after.
+		// The features' switches (RegisterSwitch), each read as it registered, listed right after the row its after names or right
+		// before the one its before names (Core's, or a feature's). Written at install alone (the main thread, before DCLF's threads
+		// start), read-only after.
 		struct Registered
 		{
 			std::string name, description, after, before;
@@ -206,25 +205,36 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Every switch row in listing order (each Core row, the features' before it first and after it next; the rest last):
-		 * a_row(name, kind, reduced, value).
+		 * @brief The features' rows whose a_anchor names a_name, in registration order, each with the rows anchored at it around it
+		 * (those before it first, those after it next): a_row(name, kind, reduced, value). a_listed marks the rows listed.
+		 */
+		template <class Row>
+		void ListAnchoredAt(Row& a_row, std::vector<std::uint8_t>& a_listed, std::string Registered::*a_anchor, std::string_view a_name)
+		{
+			const auto& registered = RegisteredSwitches();
+			for (std::size_t i = 0; i < registered.size(); ++i)
+				if (!a_listed[i] && registered[i].*a_anchor == a_name) {
+					a_listed[i] = 1;
+					const auto& entry = registered[i];
+					ListAnchoredAt(a_row, a_listed, &Registered::before, entry.name);
+					a_row(std::string_view(entry.name), entry.kind, entry.reduced, entry.value);
+					ListAnchoredAt(a_row, a_listed, &Registered::after, entry.name);
+				}
+		}
+
+		/**
+		 * @brief Every switch row in listing order (each Core row, the features' before it first and after it next, each with the rows
+		 * anchored at it around it; the rest last): a_row(name, kind, reduced, value).
 		 */
 		template <class Row>
 		void ForEachRow(Row&& a_row)
 		{
 			const auto& registered = RegisteredSwitches();
 			std::vector<std::uint8_t> listed(registered.size(), 0);
-			const auto at = [&](std::string Registered::*a_anchor, std::string_view a_name) {
-				for (std::size_t i = 0; i < registered.size(); ++i)
-					if (!listed[i] && registered[i].*a_anchor == a_name) {
-						listed[i] = 1;
-						a_row(std::string_view(registered[i].name), registered[i].kind, registered[i].reduced, registered[i].value);
-					}
-			};
 			for (const auto& entry : kRegistry) {
-				at(&Registered::before, entry.name);
+				ListAnchoredAt(a_row, listed, &Registered::before, entry.name);
 				a_row(entry.name, entry.kind, entry.reduced, SwitchValue(entry.id));
-				at(&Registered::after, entry.name);
+				ListAnchoredAt(a_row, listed, &Registered::after, entry.name);
 			}
 			for (std::size_t i = 0; i < registered.size(); ++i)
 				if (!listed[i])
@@ -272,11 +282,10 @@ namespace DCLF
 		for (const auto& entry : registered)
 			if (entry.name == a_switch.name)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered the switch {} twice", a_feature, a_switch.name));
-		if (!a_switch.after.empty() && !known(a_switch.after))
-			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s switch {} is listed after {}, which Core does not have", a_feature, a_switch.name, a_switch.after));
-		if (!a_switch.before.empty() && (!known(a_switch.before) || !a_switch.after.empty()))
-			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s switch {} is listed before {}, which Core does not have (or after one too)", a_feature,
-				a_switch.name, a_switch.before));
+		// Its anchor may be a feature's switch registered after it: CheckSwitchAnchors checks it once every feature registered.
+		if (!a_switch.before.empty() && !a_switch.after.empty())
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s switch {} is listed before {} and after {}", a_feature, a_switch.name, a_switch.before,
+				a_switch.after));
 		auto& entry = registered.emplace_back();
 		entry.name = a_switch.name;
 		entry.description = a_switch.description;
@@ -287,6 +296,24 @@ namespace DCLF
 		entry.value = Util::SwitchFile::Value(entry.name, false);
 		entry.enabled = entry.value == "1";
 		return { static_cast<std::uint32_t>(registered.size() - 1) };
+	}
+
+	void CheckSwitchAnchors()
+	{
+		// A row no Core row lists has an anchor that names no switch, or anchors that loop back to it.
+		const auto& registered = RegisteredSwitches();
+		std::vector<std::uint8_t> listed(registered.size(), 0);
+		auto none = [](std::string_view, Kind, Reduced, const std::string&) {};
+		for (const auto& entry : kRegistry) {
+			ListAnchoredAt(none, listed, &Registered::before, entry.name);
+			ListAnchoredAt(none, listed, &Registered::after, entry.name);
+		}
+		for (std::size_t i = 0; i < registered.size(); ++i) {
+			const auto& entry = registered[i];
+			if (!listed[i] && (!entry.after.empty() || !entry.before.empty()))
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the switch {} is listed {} {}, which no switch is (or its anchors loop)", entry.name,
+					entry.after.empty() ? "before" : "after", entry.after.empty() ? entry.before : entry.after));
+		}
 	}
 
 	const std::string& SwitchValue(Api::SwitchId a_switch)

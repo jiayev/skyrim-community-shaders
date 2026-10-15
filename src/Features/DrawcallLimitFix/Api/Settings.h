@@ -35,9 +35,10 @@ namespace DCLF::Api
 
 	/**
 	 * @brief A switch: read once, from the environment or the switches file (Switches.h), when it is registered. Listed in the startup
-	 * summary and the reduced-featureset line right after the Core switch named by after, or right before the one named by before (after
-	 * the features' listed after the Core switch before it); empty both: last. Features' switches at one place are listed in their
-	 * registration order.
+	 * summary and the reduced-featureset line right after the switch named by after, or right before the one named by before (after
+	 * the features' listed after the switch before it); empty both: last. The switch named is Core's or a feature's (registered before
+	 * this one or after: the install checks it once every feature registered), so a feature's switch listed where Core's was keeps the
+	 * features' switches listed around it. Features' switches at one place are listed in their registration order.
 	 */
 	struct FeatureSwitch
 	{

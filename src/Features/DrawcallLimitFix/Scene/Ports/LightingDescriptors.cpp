@@ -578,11 +578,12 @@ namespace DCLF
 		// them in geometry groups 3 and 4, the engine's opaque and blended decal groups (DCLF's 1 and 2).
 		const bool decal = (f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) != 0;
 		const bool blending = a_leaf.AlphaBlending();
-		// CS_DCLF_OPAQUE_EFFECTS: hint 0 (G-buffer opaque batches, DEFERRED: forge coals, slag) drawn through decal group 1: depth by
+		// The opaque effects (Api::ObjectClass::OpaqueEffect, taken at install: CS_DCLF_OPAQUE_EFFECTS): hint 0 (G-buffer opaque batches,
+		// DEFERRED: forge coals, slag) drawn through decal group 1: depth by
 		// the decal depth pass (LESS_EQUAL, no bias), colour with write mode 1 and no blending. Only a pass that is hint 0 every frame:
 		// no Falloff, depth tested and written (SetupGeometry's mode 3). A property alpha below one makes the engine's pass hint 1,
 		// blended by the frame's alpha: DCLF keeps it opaque (drawcall-limit-fix.md, "Opaque effects").
-		static const bool opaqueEffects = SwitchOnUnlessZero(Switch::OpaqueEffects);
+		const bool opaqueEffects = Extensions::ObjectClassTaken(Api::ObjectClass::OpaqueEffect);
 		const bool opaque = !blending && !decal;
 		if (opaque && (!opaqueEffects || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal) || (f & Bit(Flag::kFalloff)) || !(f & Bit(Flag::kZBufferTest)) || !(f & Bit(Flag::kZBufferWrite)) ||
 						  ParticleGeometryType(a_leaf.Type())))

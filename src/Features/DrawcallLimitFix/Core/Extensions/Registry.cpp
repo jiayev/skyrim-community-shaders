@@ -178,7 +178,8 @@ namespace DCLF::Extensions
 			{
 				// A point composing its text takes text lines; the others, logged lines.
 				const auto point = a_lines.point;
-				const bool text = point == Api::ReportPoint::AsyncWorkViews || point == Api::ReportPoint::AsyncWork || point == Api::ReportPoint::AsyncWorkFamilies ||
+				const bool text = point == Api::ReportPoint::AsyncWorkViews || point == Api::ReportPoint::AsyncWorkForward || point == Api::ReportPoint::AsyncWork ||
+				                  point == Api::ReportPoint::AsyncWorkFamilies ||
 				                  point == Api::ReportPoint::SceneFrame || point == Api::ReportPoint::SceneCoordinatorSegments;
 				if (a_lines.name.empty() || (text ? !a_lines.text || a_lines.lines : !a_lines.lines || a_lines.text))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete report lines", feature));
@@ -411,6 +412,8 @@ namespace DCLF::Extensions
 			if (feature.install)
 				feature.install(context);
 		}
+		// The features' switches' anchors, which may name a switch a later feature registered.
+		CheckSwitchAnchors();
 		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
 		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the palette rows classes'.

@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/Actors/Actors.h"
 #include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
+#include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
@@ -36,6 +37,9 @@ namespace DCLF::Features
 		// follow them there); it registers no pool, stage or product. Actors next: its switch is listed after the skin
 		// partitions', before tree wind's and the decals' (which follow it there); it registers no pool, stage or product. Tree wind next:
 		// its seeds' pool runs right after the frame values' built-in parts, before the texture transforms' pool.
+		// Effects before particles and billboards: their toggles need its toggle, listed before theirs (after the forward epoch's); its
+		// opaque effects' switch is listed after tree wind's list-all (both after the primary exclusion's); its report lines are alone among
+		// the forward epoch's; no early hook, pool, stage or product.
 		// Particles before billboards, then switch nodes: their toggles are listed after the refraction's in this order (the first two's
 		// switches too), and the first two's report lines. LOD then tree LOD after switch nodes: their toggles follow the switch nodes'
 		// after the refraction's, in this order, and their switches are listed before the LOD gates' in this order; tree LOD's early hooks
@@ -54,6 +58,7 @@ namespace DCLF::Features
 			Actors::Feature(),
 			TreeWind::Feature(),
 			TextureTransforms::Feature(),
+			Effects::Feature(),
 			Particles::Feature(),
 			Billboards::Feature(),
 			SwitchNodes::Feature(),
