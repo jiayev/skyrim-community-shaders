@@ -374,7 +374,7 @@ namespace DCLF
 			const std::size_t v = ViewIndex(kind);
 			const auto& traits = TraitsOf(kind);
 			const auto& view = inputs.views[v];
-			const bool toggle = kind == ViewKind::Reflection ? inputs.toggles.reflections : inputs.toggles.firstPerson;
+			const bool toggle = kind == ViewKind::Reflection ? inputs.toggles.reflections : Extensions::ViewOn(inputs.toggles, Api::EngineView::FirstPerson);
 			viewOn[v] = view.targets.colour != DXGI_FORMAT_UNKNOWN && toggle && inputs.claims;
 			ViewPipelinesOf(kind, a_make.catalog, tables, view.targets, viewOn[v], viewRevisionPipelines[v]);
 			if (traits.forwardPart)
@@ -700,7 +700,7 @@ namespace DCLF
 			mix(sceneState->treeLodCull ? 1u : 0u);
 		}
 		group = kKeyFirstPerson;
-		mix(inputs.toggles.firstPerson);
+		mix(Extensions::ViewOn(inputs.toggles, Api::EngineView::FirstPerson));
 		return key;
 	}
 

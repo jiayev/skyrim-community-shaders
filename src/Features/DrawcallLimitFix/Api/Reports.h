@@ -15,7 +15,7 @@ namespace DCLF::Api
 		// The primary cull's lines (Reports::PrimaryCullLines), after its scene lists' and culls-off lines, before the point lights':
 		// only on a report frame whose window had cut frames, with the primary cull installed.
 		PrimaryCull,
-		// The draws' async work lines (IndirectDraws::AsyncReport), after the forward epoch's lines, before the first-person view's: every
+		// The draws' async work lines (IndirectDraws::AsyncReport), after the forward epoch's lines, before the tree LOD draws': every
 		// report. Text lines (ReportLines::text), printed with the rest of that report.
 		AsyncWork,
 		// The frame report's statistics (Reports::Stats), last, after the scene publications' line: on a report frame with CS_DCLF_STATS.

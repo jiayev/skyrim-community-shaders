@@ -1,8 +1,8 @@
 #pragma once
 
 // Actors (CS_DCLF_ACTORS; drawcall-limit-fix.md, "Trees and actors"): the geometry under an actor's 3D (bodies, armour, heads) and the actor
-// techniques (actor skin, faces, hair, eyes), DCLF's while its toggle is on. The feature registers their switch and live toggle (which the
-// first person's needs: Api::FeatureToggle::neededBy), the actor parent's contribution (Api::EngineParent::Actor: the classification's chain
+// techniques (actor skin, faces, hair, eyes), DCLF's while its toggle is on. The feature registers their switch and live toggle (which
+// Features/FirstPerson's needs), the actor parent's contribution (Api::EngineParent::Actor: the classification's chain
 // test reads it as data) and the actor techniques' contributions (the Lighting port's eligibility reads them as data).
 //
 // Core keeps the path an actor's objects take whatever the toggle:

@@ -42,8 +42,6 @@ namespace DCLF
 		Skylight,
 		Precipitation,
 		Reflections,
-		FirstPerson,
-		FirstPersonDecals,
 		OpaqueEffects,
 		EmptyFadeNode,
 		OrgEpochs,

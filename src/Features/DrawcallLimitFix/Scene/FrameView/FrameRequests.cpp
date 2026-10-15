@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/Hash.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -163,7 +164,7 @@ namespace DCLF::Scene
 		std::uint64_t CategoryInputs()
 		{
 			Fnv1a hash;
-			hash.Mix((ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u) | (ActiveToggles().firstPerson ? 4u : 0u));
+			hash.Mix((ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u) | (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) ? 4u : 0u));
 			if (auto* tes = RE::TES::GetSingleton()) {
 				hash.Mix(tes->objRoot);
 				hash.Mix(tes->lodLandRoot);
@@ -176,7 +177,7 @@ namespace DCLF::Scene
 					hash.Mix(grid->cells);
 				}
 			}
-			if (ActiveToggles().firstPerson)
+			if (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson))
 				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 					hash.Mix(player->Get3D(true));
 					hash.Mix(player->Get3D(false));
@@ -232,7 +233,7 @@ namespace DCLF::Scene
 				mix(ActiveToggles().lodObjects || ActiveToggles().lodTerrain ? tes->lodLandRoot : nullptr);
 				hash.Mix((ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u));
 				// The first-person root while the toggle tracks it.
-				if (ActiveToggles().firstPerson)
+				if (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson))
 					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 						mix(player->Get3D(true));
 						mix(player->Get3D(false));
@@ -529,7 +530,7 @@ namespace DCLF::Scene
 		// RenderDepth cull it alone). Its root is a category node and a parentless root filed under itself, so the mirror counts it
 		// in the world (SetDrawnRoots) and its equipment attaches reach the tracker as events. Its kHidden is view-scoped:
 		// ClassifyFrame stops at it.
-		if (ActiveToggles().firstPerson)
+		if (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson))
 			if (auto* player = RE::PlayerCharacter::GetSingleton())
 				if (auto* firstPerson = player->Get3D(true); firstPerson && firstPerson != player->Get3D(false))
 					if (auto* node = firstPerson->AsNode()) {

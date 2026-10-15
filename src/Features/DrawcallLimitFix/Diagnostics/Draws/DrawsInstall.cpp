@@ -82,8 +82,6 @@ namespace DCLF::Diagnostics
 			Subscribe<MainCullViewProj>(&ProbeTarget);
 		if (o.claimsOrScene)
 			Subscribe<ReflectionFaceDrawn>(&CheckReflectionFace);
-		if (o.claims)
-			Subscribe<FirstPersonSkeletonWalked>(&NoteFirstPersonSkeleton);
 		// The frame values' rows and palettes against the engine's now.
 		if (o.scene)
 			Subscribe<FramePoint::ShadowViewsBegin>([](const On<FramePoint::ShadowViewsBegin>&) {

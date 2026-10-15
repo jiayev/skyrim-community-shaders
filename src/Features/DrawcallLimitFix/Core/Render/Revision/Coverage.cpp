@@ -200,7 +200,7 @@ namespace DCLF
 		// The first-person members are withheld from the engine (PassCapture) and drawn by the first-person epochs on a frame the engine
 		// draws first person (the latch), whose claims stand, both epochs' recordings in the revision and the depth copy imported into the
 		// graph as built. Its members need no frame before's inputs: both epochs draw this frame's scene list with this frame's camera.
-		fp.covered = a_main && ActiveToggles().firstPerson && fp.latch && fp.latchFrame == a_frame && rv.covered[Epoch::FirstPersonDepth] && rv.covered[Epoch::FirstPersonColour] &&
+		fp.covered = a_main && Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) && fp.latch && fp.latchFrame == a_frame && rv.covered[Epoch::FirstPersonDepth] && rv.covered[Epoch::FirstPersonColour] &&
 		             fp.resources && fp.resources->target && !fp.resources->rebuildPending && fp.resources->main && fp.resources->main == resources &&
 		             fp.resources->main->native[1] && !a_host->RebuildRequested();
 		PassCapture::Get().SetFirstPersonCovered(fp.covered);

@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
@@ -380,7 +381,7 @@ namespace DCLF
 				const RE::NiAVObject* firstPerson = player->Get3D(true);
 				if (firstPerson && firstPerson != thirdPerson)
 					g->cullHidden.emplace_back(firstPerson, true);
-				if (firstPerson && firstPerson != thirdPerson && ActiveToggles().firstPerson)
+				if (firstPerson && firstPerson != thirdPerson && Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson))
 					subtreeRoot = firstPerson;
 			}
 			// The water objects' shapes as they are now: TESWaterReflections::Update hides them around the cube map's faces too, and

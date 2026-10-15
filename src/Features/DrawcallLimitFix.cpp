@@ -7,6 +7,7 @@
 #	include "Deferred.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #	include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#	include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #	include "Features/DrawcallLimitFix/Features/FeatureList.h"
 #	include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #	include "DrawcallLimitFix/Engine/Capture/SceneEvents.h"
@@ -377,7 +378,7 @@ void DrawcallLimitFix::Hooks::RenderDepth_FirstPersonDraw::thunk(void* a_camera,
 		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ZPrepass);
 		// The first-person subtree's hidden bits as the engine's first-person culls (unk_FPCulling, this block's) saw them: the next
 		// frame's members' chains read these (FrameGlobals::NoteFirstPersonCulled).
-		if (DCLF::ActiveToggles().firstPerson)
+		if (DCLF::Extensions::ViewOn(DCLF::ActiveToggles(), DCLF::Api::EngineView::FirstPerson))
 			if (auto* player = RE::PlayerCharacter::GetSingleton())
 				DCLF::FrameGlobals::NoteFirstPersonCulled(player->Get3D(true));
 		DCLF::IndirectDraws::Get().ExecuteFirstPersonDepth(feature.depthControlDriven);

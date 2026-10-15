@@ -55,11 +55,12 @@ the shell runs after Core's scene events and before DCLF's own engine hooks and 
 | Scene resources | `Api/SceneResources.h` | state held with the scene's tables: versioned buffers registered with the scene's set, their graph registration, each revision's requirement, and the slots they hold of the objects (`SceneFit`) |
 | Commit hook | `Api/Commits.h` | its part of each commit's frame data (depth, colour, shadow), staged into the adopted versions on the render thread |
 | Frame binding | `Api/FrameBindings.h` | a buffer every draw reads at a declared texture register, given by the frame records (main, shadow, the builds' embedded addresses) and checked by the named-address parity |
-| Switches and toggles | `Api/Settings.h` | its `CS_DCLF_*` switches, listed where it says beside Core's, and its live toggles, in the menu and the packed word (a toggle may need Core's or an earlier feature toggle, and a later Core toggle may need it: `neededBy`) |
+| Switches and toggles | `Api/Settings.h` | its `CS_DCLF_*` switches, listed where it says beside Core's, and its live toggles, in the menu and the packed word (a toggle may need Core's or an earlier feature's) |
 | Report lines | `Api/Reports.h` | its lines at a named point of the periodic report: logged, handed the report's frame (`PrimaryCull`; `Statistics`, the statistics' last), or appended to the report's text (`AsyncWork`, the draws' async work) |
 | Stand-in observer | `Api/EngineEvents.h` | the primary cull's stood-in roots as they change, and Main::Update's entry; whether the primary cull is installed |
 | Table family | `Api/TableFamilies.h` | columns of its own in every `SceneTables` (`Extensions::TableFamilies`), read through a typed handle; Core keeps beside them the write stamp (the publication copies a family only when it moved), the objects' references into it (bounded by its scene resources' fit, carried in the record at a declared word) and its rows' tags, and recycles its retired rows |
 | Coordinator component | `Api/CoordinatorComponents.h` | state the coordinator keeps for it, and hooks at the coordinator's residency points (a slot resident, left, every residency ended, the residents recounted, the slot tables reset), at its writes (a patch accumulated with its draw chain, a slot rewritten by the walk or its skin partitions refreshed), when the joins are done, at the walk's phases (begun, the delta walk's scheduling with its counts, ended, the dense walk's save and restore), as tracked entries are erased, and as ranges it retired come free (`RetireRange`); the writes of an entry class it follows (`EntryClass`: listed, its record's second vertex stream resolved or waiting, the stream's slot), and whether it takes the class (`Extensions::EntryClassTaken`, read as data); with a narrow context: the live tables, the scene mirror and its fade node, the pass serial, the entry's reference, a tracked entry's slot and write state, its write scheduled, seeds the next frame takes (`FrameView::TakeComponentSeeds`) |
+| View contribution | `Api/Views.h` | an engine view Core's view machinery draws in the engine's place once a feature takes it (`EngineView`: the first person), under its toggle, and whether a decal on the view's entries is a forward object of its forward part; read as data by the view's epochs, revisions, frame requests and classification (`Extensions::ViewOn`) |
 | Object contributor | `Api/ObjectContributors.h` | a technique it ports (its eligibility under a toggle, its objects' record flags, read as data), a geometry type it ports (its objects a class under a toggle, read as data by the eligibility, the walk and the captures), the leaves it admits under an engine parent Core rejects them under (`EngineParent`: a billboard, a switch node or an actor; `ParentLeaves`; under a toggle, read as data by the classification and the sun and light candidates), an object class Core's ports derive but leave native until it is taken (`ObjectClass`: a decal, a multi-index layer; under a toggle, read as data by the ports' eligibility), the shading values it derives for a property flag of its own, and engine globals captured with the frame's (`FrameGlobals::features`) |
 
 Each contract's thread, timing and lifetime is documented in its header. A feature's install also installs its engine
@@ -68,7 +69,7 @@ hooks and subscribes its observers (`Diagnostics::Subscribe`, under Core's `Obse
 The headers in `Api/` name only standard and ORG types. The contexts their callbacks receive are opaque there. Core
 defines them in companions under `Core/Extensions/` (`FrameValuePools.h`, `GpuStages.h`, `PayloadProducts.h`,
 `SceneResources.h`, `Commits.h`, `FrameBindings.h`, `Reports.h`, `EngineEvents.h`, `TableFamilies.h`,
-`CoordinatorComponents.h`, `ObjectContributors.h`), which features inside DCLF include for typed access to Core's types.
+`CoordinatorComponents.h`, `ObjectContributors.h`, `Views.h`), which features inside DCLF include for typed access to Core's types.
 
 Residency changes are events, so a coordinator component's hooks are function pointers called per changed slot. The loops
 that run every frame over every object (the walk's evaluate, the builds' packing, the commit) never call a feature: they read
@@ -108,7 +109,7 @@ shape's classification (`Tracked::faceShape`, its head held from the attach's pi
 the reports). Moving the first needs a per-object vertex stream contract (a feature's rows in a buffer of its scene resources that the
 builds, the commits and the passes read as data, and the second stream's slot in the draws); the second, an entry-class contribution
 to the classification and the attach.
-`Features/Actors` followed: its switch and toggle (which Core's first person needs, declared by the feature: `FeatureToggle::neededBy`), the
+`Features/Actors` followed: its switch and toggle (which the first person's needs), the
 actor parent's contribution (`EngineParent::Actor`, `ParentLeaves::AllLeaves`: the classification's chain test) and the actor techniques'
 (actor skin, faces, hair, eyes). What it leaves Core is the path an actor's objects take whatever the toggle: the skinned geometry, which is
 any NiSkinInstance's and not the actors' alone (the bone palettes in FrameValues' palette part, the skin partitions in the tables and the walk,
@@ -120,6 +121,19 @@ Advanced Skin's coupling stays too, for `Integrations/AdvancedSkin` once its con
 published to the render thread's index, captured at the frame's start and fanned out by FrameValues into the shading rows' SkinPerGeometry)
 needs a frame-value contributor into a built-in part and a published membership; its material textures (t71/t74, `MaterialPortFeature`) need a
 material contributor; its capture-parity checks follow them.
+`Features/FirstPerson` followed: its switches and toggle (which needs the skinned and the actors), the first-person view's contribution
+(`EngineView::FirstPerson`: its toggle, and the first-person decals as forward objects, read once), its report lines at the draws' async work
+and the skeleton's parity. What it leaves Core is the view machinery the reflection, the occlusion maps, the portals, the local lights and
+the shadows share: the epochs (`Epochs/FirstPerson.cpp`: the latch, targets, pipelines and the two epochs, whole-epoch segments of
+`RenderGraphRuntime` rather than GPU stages; `ViewEpoch*.cpp`: the view's passes and forward part), their revisions (`ViewKind`, `Epoch::
+FirstPersonDepth`/`FirstPersonColour`, the shape, key group and coverage), the view's state and the counters its report takes
+(`ImplViews::FirstPersonState`, `IndirectDraws::FirstPersonReport`); the scene's side (the first-person root as a category node, the
+classification's category stop and `NoteFirstPersonHidden` and its misfiled observer, `kSetFirstPerson` and the set's first-person decisions
+and their parity, `kViewFirstPerson`, the placements' per-frame chains, the decals' forward keys, the frame requests' root, the frame globals'
+culled bits); FrameValues' first-person rows, palettes and particles; `PassCapture`'s withholding of the members' registrations and the
+census's view; and the shell's two engine hooks that run the epochs (they read the shell's `Running()` and the depth pass's control-driven
+range). Moving them needs a view-kind contract: a view's scene set and view bit, its category root, its epochs at engine points with their
+segments, its revision shape and coverage, its state and report counters, its frame-value rows and the engine registrations it withholds.
 The particles' and billboards' per-object paths stay Core's for now: the particle snapshot store and the
 expansion FrameValues' producer runs per particle member into the palette part it shares with the skins (`Engine/Capture/
 ParticleSnapshots`), and the billboard placement row it samples per moving object (`Engine/Capture/Billboards`, Effect.hlsl's
@@ -130,7 +144,7 @@ layout). The extension points still to come, as the next features need them:
   layout of `DCLFObjectRecord`);
 - more engine event channels (the stand-in change still names the BSTreeNodes among its roots);
 - material contributors;
-- view kinds;
+- view kinds (the first person's view machinery, see above; `Api/Views.h` holds only the views' toggles);
 - the shared-bit manifest (object and record flags);
 - ordered fixed-slot ranges of the main pass: a feature's ranges in the sequence buffer, their count words and draws in the colour
   segment's second pass (the decal groups, interleaved there with Terrain Blending's groups).

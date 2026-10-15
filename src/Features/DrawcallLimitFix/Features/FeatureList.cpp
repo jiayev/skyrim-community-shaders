@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
+#include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
 #include "Features/DrawcallLimitFix/Features/SwitchNodes/SwitchNodes.h"
@@ -23,8 +24,10 @@ namespace DCLF::Features
 		// the texture transforms' pool.
 		// Particles before billboards, then switch nodes: their toggles are listed after the refraction's in this order (the first two's
 		// switches too), and the first two's report lines. Hidden nodes' early hooks after billboards' (no order between them). Decals
-		// after tree wind: its switches and toggles are listed after the trees' (after the actors' and the skinned). Faces last: its
-		// coordinator component's hooks after the others' at the points they share (the slot tables' reset).
+		// after tree wind: its switches and toggles are listed after the trees' (after the actors' and the skinned). Faces after them: its
+		// coordinator component's hooks after the others' at the points they share (the slot tables' reset). First person last, after the
+		// actors (its toggle needs theirs) and after billboards (its report lines follow theirs at the draws' async work); its switches and toggle
+		// are listed after the reflections', where no other feature's are.
 		static const std::array kFeatures{
 			Actors::Feature(),
 			TreeWind::Feature(),
@@ -35,6 +38,7 @@ namespace DCLF::Features
 			HiddenNodes::Feature(),
 			Decals::Feature(),
 			Faces::Feature(),
+			FirstPerson::Feature(),
 		};
 		return kFeatures;
 	}

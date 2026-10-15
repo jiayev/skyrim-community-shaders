@@ -265,6 +265,7 @@ namespace DCLF
 		bool FirstPersonDrawable() const;
 		bool FirstPersonSlotReady(const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot, std::uint32_t* a_why = nullptr) const;
 		bool FirstPersonCovered() const;
+		/** @brief The view's report lines, taking its counters (Features/FirstPerson's lines at the draws' async work). */
 		std::string FirstPersonReport();
 
 		/**
