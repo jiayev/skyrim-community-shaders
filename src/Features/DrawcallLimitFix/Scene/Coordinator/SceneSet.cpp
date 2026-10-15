@@ -103,7 +103,7 @@ namespace DCLF::Scene
 			return a_why = 10, false;
 		// A decal needs its ordered slots in its group's range (OrderDecals; one a partition for blood decals).
 		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
-			if (a_slot >= tables.decalOrdinal.size() || tables.decalOrdinal[a_slot] >= tables.decalCount[group - 1])
+			if (a_slot >= tables.rangeOrdinal.size() || tables.rangeOrdinal[a_slot] >= tables.rangeCount[group - 1])
 				return a_why = 5, false;
 		return true;
 	}
@@ -1282,7 +1282,7 @@ namespace DCLF::Scene
 		// Logged per-object columns sized apart from the objects (resized to the tables', then replayed by slot).
 		auto sidedColumns = [](Tables& a_left, Tables& a_right, auto&& a_column) {
 			a_column(a_left.setPhases, a_right.setPhases, std::uint8_t{ 0 });
-			a_column(a_left.decalOrdinal, a_right.decalOrdinal, ~0u);
+			a_column(a_left.rangeOrdinal, a_right.rangeOrdinal, ~0u);
 			a_column(a_left.layerBase, a_right.layerBase, kNoObjectSlot);
 			a_column(a_left.layerOf, a_right.layerOf, kNoObjectSlot);
 		};
@@ -1645,7 +1645,7 @@ namespace DCLF::Scene
 			for (std::uint32_t slot = 0; slot < t.objects.size() && first.empty(); ++slot)
 				if (const auto causes = SceneTables::CausesBetween(a_published.ColumnsOf(slot), t.ColumnsOf(slot)))
 					differ(fmt::format("object slot {} (causes {:#x})", slot, causes));
-		if (a_published.setPhases != t.setPhases || a_published.decalOrdinal != t.decalOrdinal || a_published.layerBase != t.layerBase || a_published.layerOf != t.layerOf)
+		if (a_published.setPhases != t.setPhases || a_published.rangeOrdinal != t.rangeOrdinal || a_published.layerBase != t.layerBase || a_published.layerOf != t.layerOf)
 			differ("a column replayed by slot (set phases, decal ordinals, layer links)");
 		if (a_published.materials.size() != t.materials.size() || a_published.materialVersion != t.materialVersion || a_published.materialFrameVersion != t.materialFrameVersion)
 			differ("the material versions");

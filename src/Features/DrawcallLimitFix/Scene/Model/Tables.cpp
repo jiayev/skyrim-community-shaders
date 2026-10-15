@@ -279,9 +279,9 @@ namespace DCLF
 			retiring.clear();
 			objectsRetiring = 0;
 			++slotEpoch;
-			// The decals' ordinals are the member decals' (Features/Decals: OrderDecals), kept with the objects.
-			decalOrdinal.clear();
-			decalCount = {};
+			// The main ranges' ordinals are the member objects' (Features/Decals: OrderDecals), kept with the objects.
+			rangeOrdinal.clear();
+			rangeCount = {};
 		}
 		// The per-frame lists: every walk refills them, and the slots' offsets into them are rewritten with them.
 		actorObjects.clear();
@@ -339,8 +339,8 @@ namespace DCLF
 		permutations.clear();
 		NotePipelinesWrite();
 		draws.clear();
-		decalOrdinal.clear();
-		decalCount = {};
+		rangeOrdinal.clear();
+		rangeCount = {};
 		boneOffset.clear();
 		boneRows.clear();
 		boneFree = {};

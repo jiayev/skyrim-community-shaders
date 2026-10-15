@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
@@ -52,8 +53,31 @@ namespace DCLF::Extensions
 			std::array<Api::ShadowSourceContribution, kShadowSources> shadowSources{};
 			// By family: its contribution (Count: none). Resolved at the end (ResolveDrawFamilies).
 			std::array<Api::DrawFamilyContribution, kDrawFamilies> drawFamilies{};
+			// By slot: its range (Count: none), Core's built-ins first. Resolved at the end (ResolveMainRanges).
+			std::array<Api::MainRangeContribution, kMainRangeSlots> mainRanges{};
 			bool installed = false;
 		};
+
+		/**
+		 * @brief Adds a_range by its slot, refused (a_who's) for a slot or order already registered, no name, a depth prepass on an
+		 * appended slot, or a feature's class with no registered toggle (Core's built-ins have none: Count).
+		 */
+		void AddMainRange(Lists& a_lists, std::string_view a_who, const Api::MainRangeContribution& a_range, bool a_builtIn)
+		{
+			const bool classValid = a_builtIn ? a_range.objectClass == Api::ObjectClass::Count :
+			                                    a_range.objectClass < Api::ObjectClass::Count && a_lists.objectClasses[static_cast<std::size_t>(a_range.objectClass)];
+			if (a_range.slot >= Api::MainRangeSlot::Count || a_range.name.empty() || !classValid ||
+				(a_range.depthPrepass && a_range.slot >= Api::MainRangeSlot::Appended0))
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete main range", a_who));
+			for (const auto& other : a_lists.mainRanges)
+				if (other.slot != Api::MainRangeSlot::Count && other.order == a_range.order)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s main range {} takes order {}, which {} has", a_who, a_range.name, static_cast<std::uint32_t>(a_range.order), other.name));
+			auto& entry = a_lists.mainRanges[static_cast<std::size_t>(a_range.slot)];
+			if (entry.slot != Api::MainRangeSlot::Count)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes main range slot {}, which another registration has", a_who,
+					static_cast<std::uint32_t>(a_range.slot)));
+			entry = a_range;
+		}
 
 		Lists& Registered()
 		{
@@ -320,6 +344,8 @@ namespace DCLF::Extensions
 				entry = a_family;
 			}
 
+			void RegisterMainRange(const Api::MainRangeContribution& a_range) override { AddMainRange(lists, feature, a_range, false); }
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -342,6 +368,9 @@ namespace DCLF::Extensions
 		auto& lists = Registered();
 		if (std::exchange(lists.installed, true))
 			stl::report_and_fail("Drawcall Limit Fix: the features were installed twice");
+		// Core's own main ranges first: a feature's on their slots or orders is refused.
+		for (const auto& range : CoreMainRanges())
+			AddMainRange(lists, "Core", range, true);
 		Context context(lists);
 		for (const auto& feature : a_features) {
 			context.feature = feature.name;
@@ -349,11 +378,13 @@ namespace DCLF::Extensions
 				feature.install(context);
 		}
 		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
-		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations.
+		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
+		// ranges' draw order.
 		ResolveViews(lists.views, lists.viewWork);
 		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
 		ResolveViewBits();
 		ResolveDrawFamilies(lists.drawFamilies);
+		ResolveMainRanges(lists.mainRanges);
 		// The features' toggles seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
 	}

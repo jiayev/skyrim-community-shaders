@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 
 namespace DCLF::Draws
 {
@@ -114,34 +115,42 @@ namespace DCLF::Draws
 			rhi::PassBeginInfo decalBegin;
 			rhi::PassBeginInfo decalDepthBegin;
 			rhi::CommandSignatureHandle colourSignature;
-			bool anyDecals = false;
+			bool anyDecals = false;  // any range of the second pass drawn
+			bool anyDecalDepth = false;  // any depth-prepass range drawn
 
 			std::uint64_t DecalArguments(std::uint32_t a_group) const
 			{
 				return (2 * std::uint64_t(frame.sequenceDraws) + std::uint64_t(a_group) * frame.sequenceDecals) * sizeof(DrawSequence);
 			}
-			static std::uint64_t DecalCount(std::uint32_t a_group) { return std::uint64_t(DecalCountWord(a_group)) * sizeof(std::uint32_t); }
-			// The terrain groups' ranges (kTerrainGroups), within phase 2's, and their count words.
+			// The terrain groups' ranges (kTerrainGroups), within phase 2's.
 			std::uint64_t TerrainArguments(std::uint32_t a_group) const
 			{
 				return (std::uint64_t(frame.sequenceDraws) + (a_group == 0 ? 0u : frame.terrainCapacity[0])) * sizeof(DrawSequence);
 			}
-			static std::uint64_t TerrainCount(std::uint32_t a_group) { return std::uint64_t(kCountTerrainGroupWord + a_group) * sizeof(std::uint32_t); }
-			// The second pass's calls in order: opaque decals and multi-index layers, Terrain Blending's terrain and the meshes it
-			// redraws (its replay follows the engine's opaque groups), then blended decals.
+			// A main range slot's arguments, count word and capacity (GpuLayouts.h: the fixed slots the decal groups', the appended the
+			// terrain groups').
+			std::uint64_t RangeArguments(std::uint32_t a_slot) const { return MainRangeFixed(a_slot) ? DecalArguments(a_slot) : TerrainArguments(a_slot - kDecalGroups); }
+			static std::uint64_t RangeCount(std::uint32_t a_slot) { return std::uint64_t(MainRangeCountWord(a_slot)) * sizeof(std::uint32_t); }
+			std::uint32_t RangeCapacity(std::uint32_t a_slot) const
+			{
+				return MainRangeFixed(a_slot) ? frame.decalCapacity[a_slot] : frame.terrainCapacity[a_slot - kDecalGroups];
+			}
+			// The second pass's calls in the ranges' order (Extensions::MainRanges: opaque decals and multi-index layers, Terrain
+			// Blending's terrain and the meshes it redraws - its replay follows the engine's opaque groups - then blended decals).
 			template <class Call>
 			void SecondPass(Call&& a_call) const
 			{
-				for (const std::uint32_t group : kDecalDrawOrder) {
-					if (group == 1)
-						for (std::uint32_t terrain = 0; terrain < kTerrainGroups; ++terrain)
-							if (frame.terrainCapacity[terrain])
-								a_call(TerrainArguments(terrain), TerrainCount(terrain), frame.terrainCapacity[terrain],
-									terrain == 0 ? "cs.dclf.colour.terrain" : "cs.dclf.colour.terrain-no-blend");
-					if (frame.decalCapacity[group])
-						a_call(DecalArguments(group), DecalCount(group), frame.decalCapacity[group],
-							group == 0 ? "cs.dclf.colour.decals-opaque" : group == 2 ? "cs.dclf.colour.decals-layers" : "cs.dclf.colour.decals-blended");
-				}
+				for (const auto& range : Extensions::MainRanges().drawn)
+					if (const std::uint32_t capacity = RangeCapacity(range.slot))
+						a_call(RangeArguments(range.slot), RangeCount(range.slot), capacity, range.colourRange.c_str());
+			}
+			// The depth prepass's calls, in the same order: the ranges that draw one (opaque decals).
+			template <class Call>
+			void DepthPrepass(Call&& a_call) const
+			{
+				for (const auto& range : Extensions::MainRanges().drawn)
+					if (const std::uint32_t capacity = range.depthPrepass ? RangeCapacity(range.slot) : 0u)
+						a_call(RangeArguments(range.slot), RangeCount(range.slot), capacity);
 			}
 		};
 
@@ -161,9 +170,11 @@ namespace DCLF::Draws
 			// The frame slot's preprocess state list.
 			auto& state = a_prepared.preprocess->Begin(a_pass.statsSlot);
 			state.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
-			if (frame.decalCapacity[0]) {
+			if (a_passes.anyDecalDepth) {
 				BeginDrawPass(state, a_passes.decalDepthBegin, frame, a_prepared);
-				commands.PreprocessIndirect(state, frame.indirect.signatures[kDepthVariant], sequences, a_passes.DecalArguments(0), count, ColourPasses::DecalCount(0), frame.decalCapacity[0]);
+				a_passes.DepthPrepass([&](std::uint64_t a_arguments, std::uint64_t a_count, std::uint32_t a_capacity) {
+					commands.PreprocessIndirect(state, frame.indirect.signatures[kDepthVariant], sequences, a_arguments, count, a_count, a_capacity);
+				});
 				state.EndPass();
 			}
 			BeginDrawPass(state, a_passes.mainBegin, frame, a_prepared);
@@ -192,10 +203,12 @@ namespace DCLF::Draws
 			const std::uint32_t statsSlot = a_pass.statsSlot;
 			auto subRange = [&](const char* a_name) { return a_nvCommands && NvPerfBridge::PushPassRange(a_nvCommands, a_name); };
 			auto endSubRange = [&](bool a_pushed) { if (a_nvCommands) NvPerfBridge::PopPassRange(a_nvCommands, a_pushed); };
-			if (frame.decalCapacity[0]) {
+			if (a_passes.anyDecalDepth) {
 				const bool part = subRange("cs.dclf.colour.decal-depth");
 				BeginDrawPass(commands, a_passes.decalDepthBegin, frame, a_prepared);
-				commands.ExecuteIndirect(frame.indirect.signatures[kDepthVariant], sequences, a_passes.DecalArguments(0), count, ColourPasses::DecalCount(0), frame.decalCapacity[0]);
+				a_passes.DepthPrepass([&](std::uint64_t a_arguments, std::uint64_t a_count, std::uint32_t a_capacity) {
+					commands.ExecuteIndirect(frame.indirect.signatures[kDepthVariant], sequences, a_arguments, count, a_count, a_capacity);
+				});
 				commands.EndPass();
 				endSubRange(part);
 			}
@@ -264,8 +277,12 @@ namespace DCLF::Draws
 			passes.decalBegin.colors = { a_colors.data(), a_prepared.targetCount };
 			passes.decalBegin.debugName = "DCLF decals";
 			passes.decalDepthBegin.debugName = "DCLF decal depth";  // depth only
-			const bool anyTerrain = frame.terrainCapacity[0] || frame.terrainCapacity[1];
-			passes.anyDecals = frame.decalCapacity[0] || frame.decalCapacity[1] || frame.decalCapacity[2] || anyTerrain;
+			// The second pass's ranges (Extensions::MainRanges) with any capacity, and those of them with a depth prepass.
+			for (const auto& range : Extensions::MainRanges().drawn)
+				if (passes.RangeCapacity(range.slot)) {
+					passes.anyDecals = true;
+					passes.anyDecalDepth = passes.anyDecalDepth || range.depthPrepass;
+				}
 
 			RecordColourPreprocess(a_prepared, a_pass, passes);
 			RecordColourExecution(a_bindings, a_prepared, a_recording, a_pass, passes, nvCommands);

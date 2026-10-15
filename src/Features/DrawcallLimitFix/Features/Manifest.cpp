@@ -4,13 +4,15 @@
 // lists its register; the install checks the registrations the same way (InstallContext::RegisterFrameBinding). One with a technique
 // contribution (Api::TechniqueContribution) lists its flags, one whose family the record carries (Api::TableFamily::recordWord) its word,
 // and one with a view contribution (Api::ViewContribution, Api::OcclusionMapContribution) its phase and view bit (the install checks those
-// too: Extensions::ResolveViewBits).
+// too: Extensions::ResolveViewBits). One with a main range (Api::MainRangeContribution) checks its slot against the GPU layout its objects'
+// flags select (BuildDrawsCS's group bits and count words: GpuLayouts.h's MainRangeCountWord).
 // The contributions' keys (a technique, a geometry type, a Core class's value: Api/ObjectContributors.h) are not listed here: the install
 // fails a key two features claim.
 
 // TreeWindScene.h first: volk must precede every Vulkan header of the translation unit (the record layout).
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
@@ -119,4 +121,18 @@ namespace DCLF::Features
 	// TreeWind's: DCLFObjectRecord's DCLFWindTimers.zw (the record's TreeParams and WindTimers, xy the record's own).
 	static_assert(offsetof(BindlessObject, tree) + offsetof(ObjectTreeAnim, windTimers) + 2 * sizeof(float) == TreeWind::kTreeRecordWord * 4,
 		"TreeWind's record word is not DCLFWindTimers.z");
+	// The main range slots (Api::MainRangeSlot) are BuildDrawsCS's ranges: the fixed ones the decal groups' (count words 19, 20 and 27),
+	// the appended ones the terrain groups' (28, 29).
+	static_assert(Draws::kMainRangeSlotCount == static_cast<std::uint32_t>(Api::MainRangeSlot::Count) && Draws::kDecalGroups == Api::kFixedMainRanges,
+		"Api::MainRangeSlot is not GpuLayouts.h's range slots");
+	static_assert(Draws::MainRangeCountWord(static_cast<std::uint32_t>(Api::MainRangeSlot::Fixed0)) == Draws::kCountDecalGroupWord &&
+	                  Draws::MainRangeCountWord(static_cast<std::uint32_t>(Api::MainRangeSlot::Fixed1)) == Draws::kCountDecalGroupWord + 1 &&
+	                  Draws::MainRangeCountWord(static_cast<std::uint32_t>(Api::MainRangeSlot::Fixed2)) == Draws::kCountDecalLayerWord &&
+	                  Draws::MainRangeCountWord(static_cast<std::uint32_t>(Api::MainRangeSlot::Appended0)) == Draws::kCountTerrainGroupWord &&
+	                  Draws::MainRangeCountWord(static_cast<std::uint32_t>(Api::MainRangeSlot::Appended1)) == Draws::kCountTerrainGroupWord + 1,
+		"a main range slot does not read BuildDrawsCS's count word for it");
+	// Decals' slots: group bits g (Records.h, kObjectDecalGroupShift) draw in slot Fixed(g - 1); opaque 1, blended 2, layers 3.
+	static_assert(static_cast<std::uint32_t>(Decals::kOpaqueRange) == 1 - 1 && static_cast<std::uint32_t>(Decals::kBlendedRange) == 2 - 1 &&
+	                  static_cast<std::uint32_t>(Decals::kLayerRange) == 3 - 1,
+		"Decals' range slots are not its groups' (ObjectDecalGroup - 1)");
 }

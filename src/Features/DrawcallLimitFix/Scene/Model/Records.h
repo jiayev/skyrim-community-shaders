@@ -41,7 +41,8 @@ namespace DCLF
 		// 1u << 6: a feature's (kFeatureObjectFlags).
 		// CS_DCLF_DECALS. Never an occluder: not in the depth segment, drawn by the colour segment's second pass after the opaque
 		// draws. Group (bits 20-21): 1 = accumulation hint 2 (opaque, geometry group 3, first), 3 = multi-index layer (hint 12,
-		// group 2, second), 2 = hint 3 (blended, group 4, last); see kDecalDrawOrder.
+		// group 2, second), 2 = hint 3 (blended, group 4, last); the group's range is main range slot Fixed(group - 1)
+		// (Api/MainRanges.h; Features/Decals registers their order).
 		kObjectDecal = 1u << 7,
 		kObjectAlphaThresholdShift = 8,
 		// Alpha-tested and blended: the depth pass uses its own reference (BSUtilityShader::SetupGeometry's AlphaTestRef;

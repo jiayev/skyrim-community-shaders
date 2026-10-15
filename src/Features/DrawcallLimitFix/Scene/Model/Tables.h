@@ -16,6 +16,7 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Api/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
@@ -222,11 +223,12 @@ namespace DCLF
 		bool TechniqueShadowMask(std::size_t a_pipeline) const { return (techniqueKeys[pipelineTechnique[a_pipeline]] & 1u) != 0; }
 		std::vector<PipelinePermutation> permutations;        // parallel to pipelines
 		std::vector<DrawSequence> draws;  // one per object (templates: pipelineIndex is the table index)
-		// Decals: each decal's slot in its group's range, in the engine's draw order (group, technique bucket, batch list, chain
-		// position). The colour epoch writes the draw, or a zero-count one, to that fixed slot so overlapping decals keep their
-		// order (an atomic append would not). ~0u for non-decals. Every changed ordinal notes its slot (Features/Decals: OrderDecals).
-		std::vector<std::uint32_t> decalOrdinal;  // parallel to objects (sized by OrderDecals)
-		std::array<std::uint32_t, 3> decalCount{};
+		// The fixed main ranges (Api/MainRanges.h): each object's slot in its range of the colour segment's second pass, in the order the
+		// range's feature gives (Features/Decals: the decals', in the engine's draw order - group, technique bucket, batch list, chain
+		// position), and each range's slots. The colour epoch writes the draw, or a zero-count one, to that fixed slot so overlapping
+		// objects keep their order (an atomic append would not). ~0u for objects in none. Every changed ordinal notes its slot.
+		std::vector<std::uint32_t> rangeOrdinal;  // parallel to objects (sized by the writer: Features/Decals' OrderDecals)
+		std::array<std::uint32_t, Api::kFixedMainRanges> rangeCount{};
 		// Skinning (CS_DCLF_SKINNED): each skinned object's block in FrameValues' palettes (NiSkinInstance::boneMatrices and
 		// prevBoneMatrices, three float4 rows a bone) and its row count. A block stays the slot's while the palette size holds
 		// (PlaceBones / FreeBones); capacity grows in kBoneGrowRows steps, moving no block.
@@ -326,7 +328,7 @@ namespace DCLF
 		EventLog<std::uint32_t> materialLog;
 		void NoteMaterial(std::uint32_t a_slot) { materialLog.Push(a_slot); }
 		// Object slots whose published columns changed with no change-log note: the columns no change-log consumer reads (setPhases,
-		// layerBase and layerOf of a link's other end, decalOrdinal) where the write notes nothing. The publication replays them with
+		// layerBase and layerOf of a link's other end, rangeOrdinal) where the write notes nothing. The publication replays them with
 		// the logged slots; nothing else reads it.
 		EventLog<std::uint32_t> publicationLog;
 		void NotePublished(std::uint32_t a_slot) { publicationLog.Push(a_slot); }
