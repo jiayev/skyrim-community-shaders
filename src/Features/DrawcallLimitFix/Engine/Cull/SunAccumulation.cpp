@@ -6,7 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -340,12 +340,12 @@ namespace DCLF
 		// run for the sun this frame (the sun does not draw: an interior), when the engine gives no pass the sun's bits either. Each
 		// cascade's planes are those Accumulate's hook copies from the same views (the bits' cascades), in descriptor order.
 		a_out.clear();
-		const auto& views = SunViews::Get().Current();
+		const auto& views = ShadowCameras::Sun();
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		if (!views.valid || views.sceneFrame != frame)
 			return;
 		for (std::uint32_t d = 0; d < views.count && d < views.cascades.size(); ++d) {
-			const auto* cascade = SunViews::Get().CascadeOf(d, frame);
+			const auto* cascade = ShadowCameras::Sun().CascadeOf(d, frame);
 			if (!cascade)
 				continue;
 			auto& out = a_out.emplace_back();
@@ -444,7 +444,7 @@ namespace DCLF
 				for (std::uint32_t i = 0; i < call.count; ++i) {
 					auto& cascade = self.frameState.cascades[i];
 					cascade = {};
-					if (const auto* mine = SunViews::Get().CascadeOf(call.descriptors[i], frame)) {
+					if (const auto* mine = ShadowCameras::Sun().CascadeOf(call.descriptors[i], frame)) {
 						cascade.planes = mine->cull.plane;
 						cascade.planeMask = mine->cull.mask;
 						cascade.customPlanes = mine->caster.plane;

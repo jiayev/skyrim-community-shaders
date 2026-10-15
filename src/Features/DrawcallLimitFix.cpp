@@ -8,6 +8,7 @@
 #	include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #	include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#	include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #	include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #	include "Features/DrawcallLimitFix/Features/FeatureList.h"
 #	include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
@@ -20,10 +21,7 @@
 #	include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #	include "DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
-#	include "DrawcallLimitFix/Engine/Views/SunViews.h"
-#	include "DrawcallLimitFix/Engine/Views/FocusViews.h"
 #	include "DrawcallLimitFix/Engine/Cull/LodGates.h"
-#	include "DrawcallLimitFix/Engine/Views/LightSelection.h"
 #	include "DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #	include "DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
 #	include "Features/Skylighting.h"
@@ -79,9 +77,9 @@ void DrawcallLimitFix::PostPostLoad()
 	(void)DCLF::MaterialSources::FramePSFloats();
 	(void)DCLF::MaterialSources::FrameVSFloats();
 	DCLF::SunAccumulation::Get().Install();
-	DCLF::SunViews::Get().Install();
-	DCLF::LightSelection::Get().Install();
-	DCLF::FocusViews::Get().Install();
+	// The shadow cameras' hooks: Core's (the sun's UpdateCamera, the light selection, the focus cameras, in that order), then the
+	// features' (Api::Feature::cameraHooks).
+	DCLF::Extensions::InstallCameraHooks(DCLF::Features::List());
 	DCLF::PrimaryCull::Get().Install();
 	// Main::IsRoomVisible answered from PortalViews' VisibleSet while DCLF runs.
 	DCLF::RoomVisibility::Install();
@@ -253,7 +251,9 @@ bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap a_map)
 
 bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap a_map)
 {
-	const bool due = DCLF::Policy::RenderOcclusionReference(a_map);
+	// The map's own parity's (its entry's referenceDue: Policy::RenderOcclusionReference for Core's maps).
+	const auto& map = DCLF::Extensions::OcclusionMapOf(a_map);
+	const bool due = map.referenceDue && map.referenceDue();
 	// The engine's reference map registers every occluder, from the whole scene lists.
 	if (due) {
 		DCLF::PrimaryCull::Get().RestoreSceneLists();

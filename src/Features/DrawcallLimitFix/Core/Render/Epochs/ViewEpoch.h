@@ -216,7 +216,7 @@ namespace DCLF::Draws
 		RE::NiPoint3 eye;
 	};
 	/**
-	 * @brief VS_PerFrame (b12) for a camera, SunViews::kBlockBytes at a_out, as the engine's SetCameraData builds it: the frame's
+	 * @brief VS_PerFrame (b12) for a camera, ShadowCameras::kBlockBytes at a_out, as the engine's SetCameraData builds it: the frame's
 	 * registers (a_frame, the renderer's last upload) with the camera's over them - CameraView, CameraProj, CameraViewProj and
 	 * CameraViewProjUnjittered; c20 the projection's inverse and c24 the projection (the engine's order: FrameBuffer.hlsli names them
 	 * the other way), c28 the view's inverse, c32 the view-projection's, c36 the projection's; CameraPosAdjust. a_jitter: the TAA /
@@ -224,7 +224,7 @@ namespace DCLF::Draws
 	 * (c16) and CameraPreviousPosAdjust (c41); none, both zero (with fDRClampOffset in c41's w) and the dynamic resolution registers
 	 * (c43, c44) from the renderer state, as for a reflection face.
 	 */
-	void PerFrameBlock(const SunViews::Cascade& a_camera, std::span<const std::byte> a_frame, bool a_jitter, const PreviousCamera* a_previous, std::byte* a_out);
+	void PerFrameBlock(const ShadowCameras::Camera& a_camera, std::span<const std::byte> a_frame, bool a_jitter, const PreviousCamera* a_previous, std::byte* a_out);
 	/** @brief The renderer's last VS_PerFrame upload: the mirror's, or Community Shaders' copy of it until the mirror has seen a write. */
 	std::span<const std::byte> FrameBlockNow();
 	/** @brief The inverse of a row-major 4x4 (cofactors, in double); zero when singular. */

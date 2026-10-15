@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -53,10 +54,12 @@ namespace DCLF::Scene
 			phases |= Extensions::Views().lodPhases;
 		if (!(flags & kObjectNoShadow))
 			phases |= kSetCaster | kSetCasterPoint;
+		// Each occlusion map's phase (its entry's: 0 for a map none takes) for a slot with its technique.
+		const auto& maps = Extensions::ShadowViewsSet().maps;
 		if (a_slot < tables.occlusionTechnique[kOcclusionSky].size() && tables.occlusionTechnique[kOcclusionSky][a_slot])
-			phases |= kSetOccluderSky;
+			phases |= maps[kOcclusionSky].phase;
 		if (a_slot < tables.occlusionTechnique[kOcclusionPrecipitation].size() && tables.occlusionTechnique[kOcclusionPrecipitation][a_slot])
-			phases |= kSetOccluderPrecipitation;
+			phases |= maps[kOcclusionPrecipitation].phase;
 		return static_cast<std::uint8_t>(phases & a_drawn);
 	}
 
@@ -359,11 +362,15 @@ namespace DCLF::Scene
 				phases &= static_cast<std::uint8_t>(~entry.phase);
 			}
 		}
-		for (const std::uint8_t phase : { kSetCaster, kSetCasterPoint, kSetOccluderSky, kSetOccluderPrecipitation })
+		// The casters' phases, then the occlusion maps' (Extensions::ShadowViewSet::readinessOrder).
+		const auto& shadowViews = Extensions::ShadowViewsSet();
+		for (std::uint32_t r = 0; r < shadowViews.readinessCount; ++r) {
+			const std::uint8_t phase = shadowViews.readinessOrder[r];
 			if (std::uint32_t why = 7; (phases & phase) && !IndirectDraws::Get().PhaseReady(&tables, lookups, a_slot, phase, &why)) {
 				waiting(why);
 				phases &= ~phase;
 			}
+		}
 		if (phases == participation) {
 			d.phases = phases;
 			return d;
@@ -520,7 +527,7 @@ namespace DCLF::Scene
 				markApply(a_slot);
 			// Occluder and LodTechniques view phases (the reflection's) it participates in but misses.
 			const std::uint8_t lacking =
-				live ? static_cast<std::uint8_t>(SetParticipation(a_slot, drawn) & ~a_phases & (kSetOccluderSky | kSetOccluderPrecipitation | Extensions::Views().lodPhases)) : 0;
+				live ? static_cast<std::uint8_t>(SetParticipation(a_slot, drawn) & ~a_phases & Extensions::ResolvedViewBits().lackingMask) : 0;
 			if (lacking != setLackingNext[a_slot]) {
 				setLackingNext[a_slot] = lacking;
 				markApply(a_slot);
@@ -674,7 +681,7 @@ namespace DCLF::Scene
 			}
 			if (lacking != setLacking[slot]) {
 				for (std::uint32_t v = 0; v < 3; ++v) {
-					const std::uint8_t bit = v == 2 ? Extensions::Views().lodPhases : v ? kSetOccluderPrecipitation : kSetOccluderSky;
+					const std::uint8_t bit = Extensions::ResolvedViewBits().lackingPhases[v];
 					setLackingCount[v] += ((lacking & bit) ? 1u : 0u) - ((setLacking[slot] & bit) ? 1u : 0u);
 				}
 				setLacking[slot] = lacking;

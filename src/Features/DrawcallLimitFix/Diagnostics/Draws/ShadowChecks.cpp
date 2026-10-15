@@ -77,7 +77,7 @@ namespace DCLF::Diagnostics
 		const auto& a_view = a_own.view;
 		D3D11_TEXTURE2D_DESC desc{};
 		texture->GetDesc(&desc);
-		const auto port = SunViews::Viewport(a_own.cascade->port, desc.Width, desc.Height);
+		const auto port = ShadowCameras::Viewport(a_own.cascade->port, desc.Width, desc.Height);
 		const RE::NiPoint3 eye{ a_own.cascade->eye[0], a_own.cascade->eye[1], a_own.cascade->eye[2] };
 		// The depth range against the camera state's (0x14202b130, FUN_140e57e10), which every draw's state flush starts from
 		// (FUN_140e4b5b0): the renderer's viewport holds the last draw's, less its depth bias's step (0x143286a80[bias]) when it had
@@ -89,7 +89,7 @@ namespace DCLF::Diagnostics
 			p.Note("viewport", 1.0f, fmt::format("descriptor {}: ({} {}) {}x{}, the engine's ({} {}) {}x{} camera depth range {}-{}", a_own.descriptor, port[0], port[1],
 				port[2], port[3], a_view.x, a_view.y, a_view.width, a_view.height, engineMin, engineMax));
 		}
-		if (!SunViews::Close(eye.x, a_view.eye.x) || !SunViews::Close(eye.y, a_view.eye.y) || !SunViews::Close(eye.z, a_view.eye.z)) {
+		if (!ShadowCameras::Close(eye.x, a_view.eye.x) || !ShadowCameras::Close(eye.y, a_view.eye.y) || !ShadowCameras::Close(eye.z, a_view.eye.z)) {
 			++p.eye;
 			p.Note("eye", (eye - a_view.eye).Length(),
 				fmt::format("descriptor {}: ({} {} {}), the engine's ({} {} {})", a_own.descriptor, eye.x, eye.y, eye.z, a_view.eye.x, a_view.eye.y, a_view.eye.z));
@@ -103,14 +103,14 @@ namespace DCLF::Diagnostics
 		auto& p = ShadowViewTally(a_own.kind);
 		const auto& a_view = a_own.view;
 		const auto& a_cascade = a_own.cascade;
-		std::array<std::byte, SunViews::kBlockBytes> block{};
-		SunViews::Block(a_cascade, block.data());
+		std::array<std::byte, ShadowCameras::kBlockBytes> block{};
+		ShadowCameras::Block(a_cascade, block.data());
 		const auto* mine = reinterpret_cast<const float*>(block.data());
 		const auto* theirs = reinterpret_cast<const float*>(a_view.perFrame.data());
 		float largest = 0.0f;
 		std::int32_t first = -1;
 		for (std::uint32_t i = 0; i < 48; ++i) {
-			if (!SunViews::Close(mine[i], theirs[i]) && first < 0)
+			if (!ShadowCameras::Close(mine[i], theirs[i]) && first < 0)
 				first = static_cast<std::int32_t>(i);
 			largest = std::max(largest, std::abs(mine[i] - theirs[i]));
 		}
@@ -120,12 +120,12 @@ namespace DCLF::Diagnostics
 			p.Note("matrices", largest, fmt::format("descriptor {}: c{} ({} {} {} {}), the engine's ({} {} {} {})", a_own.descriptor, row / 4, mine[row], mine[row + 1],
 				mine[row + 2], mine[row + 3], theirs[row], theirs[row + 1], theirs[row + 2], theirs[row + 3]));
 		}
-		SunViews::Planes captured;
+		ShadowCameras::Planes captured;
 		for (std::uint32_t q = 0; q < 6; ++q)
 			for (std::uint32_t i = 0; i < 4; ++i)
 				captured.plane[q][i] = a_view.cullPlanes[q][i];
 		captured.mask = a_view.cullPlaneMask;
-		if (!SunViews::SamePlanes(a_cascade.caster, captured)) {
+		if (!ShadowCameras::SamePlanes(a_cascade.caster, captured)) {
 			++p.casters;
 			p.Note("caster volume", 1.0f, fmt::format("descriptor {}: mask {:#x}, the engine's {:#x}", a_own.descriptor, a_cascade.caster.mask, captured.mask));
 		}
@@ -135,7 +135,7 @@ namespace DCLF::Diagnostics
 	{
 		// The processes' own planes after the full-frustum cull against DCLF's (SunViews), which the entry rule tests.
 		auto& tally = ShadowViewTally(ShadowView::Sun);
-		const auto& sunViews = SunViews::Get().Current();
+		const auto& sunViews = ShadowCameras::Sun();
 		if (!a_taken.taken) {
 			++tally.missing;
 			tally.Note("missing full frustum", 0.0f, fmt::format("inputs of frame {}, DCLF's views of frame {} (valid {}, {} processes)", a_taken.frame,
@@ -150,7 +150,7 @@ namespace DCLF::Diagnostics
 		for (const auto& process : sun->GetShadowDirectionalLightRuntimeData().fullFrustumCullingProcessArray) {
 			if (!process)
 				continue;
-			SunViews::Planes engine;
+			ShadowCameras::Planes engine;
 			for (std::uint32_t p = 0; p < 6; ++p)
 				engine.plane[p] = { process->planes.cullingPlanes[p].normal.x, process->planes.cullingPlanes[p].normal.y, process->planes.cullingPlanes[p].normal.z,
 					process->planes.cullingPlanes[p].constant };
@@ -159,9 +159,9 @@ namespace DCLF::Diagnostics
 			if (index >= sunViews.fullFrusta.size()) {
 				++tally.fullFrustumPlanes;
 				tally.Note("full-frustum planes", 1.0f, fmt::format("process {}: DCLF has {} processes", index, sunViews.fullFrusta.size()));
-			} else if (!SunViews::SamePlanes(sunViews.fullFrusta[index], engine)) {
+			} else if (!ShadowCameras::SamePlanes(sunViews.fullFrusta[index], engine)) {
 				++tally.fullFrustumPlanes;
-				tally.Note("full-frustum planes", 1.0f, fmt::format("process {}: {}", index, SunViews::DescribePlanes(sunViews.fullFrusta[index], engine)));
+				tally.Note("full-frustum planes", 1.0f, fmt::format("process {}: {}", index, ShadowCameras::DescribePlanes(sunViews.fullFrusta[index], engine)));
 			}
 			++index;
 		}
@@ -174,7 +174,7 @@ namespace DCLF::Diagnostics
 		// whatever came before when nothing drew; the cull mode is the Utility shader's per pass, so only the fill, bias and scissor modes
 		// are compared.
 		const std::uint32_t a_view = a_captured.view;
-		if (a_view >= kOcclusionViews || !ActiveToggles().shadows || IndirectDraws::Get().Failed() || !OcclusionEnabled(a_view))
+		if (a_view >= kOcclusionViews || !ActiveToggles().shadows || IndirectDraws::Get().Failed() || !Extensions::OcclusionOn(ActiveToggles(), a_view))
 			return;
 		const auto& occlusion = DrawsView::Get().occlusion[a_view];
 		if (occlusion.capturedFrame != Scene::Coordinator::Get().GetFrame())
@@ -212,12 +212,12 @@ namespace DCLF::Diagnostics
 			const auto* b = reinterpret_cast<const float*>(theirs.perFrame.data());
 			std::int32_t first = -1;
 			for (std::uint32_t i = 0; i < 48; ++i) {
-				if (!SunViews::Close(a[i], b[i]) && first < 0)
+				if (!ShadowCameras::Close(a[i], b[i]) && first < 0)
 					first = static_cast<std::int32_t>(i);
 				largest = std::max(largest, std::abs(a[i] - b[i]));
 			}
 			for (std::uint32_t i = 160; i < 163; ++i) {
-				if (!SunViews::Close(a[i], b[i]) && first < 0)
+				if (!ShadowCameras::Close(a[i], b[i]) && first < 0)
 					first = static_cast<std::int32_t>(i);
 				largest = std::max(largest, std::abs(a[i] - b[i]));
 			}

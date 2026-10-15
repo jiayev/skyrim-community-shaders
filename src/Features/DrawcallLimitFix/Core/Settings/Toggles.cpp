@@ -1,9 +1,6 @@
 // Toggles: the flag table (seed, menu entry, dependencies), packing the active set, and the per-frame apply (render thread).
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
-#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
-#include "Features/Skylighting.h"
-
 #include <deque>
 #include <string>
 #include <vector>
@@ -252,13 +249,5 @@ namespace DCLF
 		active.store(Pack(next), std::memory_order_relaxed);
 		generation.fetch_add(1, std::memory_order_relaxed);
 		return EntersClassification(current, next);
-	}
-
-	bool OcclusionEnabled(std::uint32_t a_view)
-	{
-		// Skylighting's RenderOcclusion drives both maps (its hook of the engine's precipitation mask, then its own map).
-		if (!globals::features::skylighting.loaded)
-			return false;
-		return a_view == kOcclusionSky ? ActiveToggles().skyOcclusion : a_view == kOcclusionPrecipitation && ActiveToggles().precipitationOcclusion;
 	}
 }

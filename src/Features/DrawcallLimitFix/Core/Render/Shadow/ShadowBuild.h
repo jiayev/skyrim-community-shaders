@@ -32,12 +32,13 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief The view types a set phase mask takes part in (kView*): Core's phases' (main, casters, occluders) and the views' (their
-	 * entries' phase and view bit), resolved once into a table by mask (Extensions::ViewSet::viewBitsOfPhases).
+	 * @brief The view types a set phase mask takes part in (kView*): Core's phases' (main, casters) and the feature views' of both families
+	 * (the occlusion maps' and the views' entries' phase and view bit), resolved once into a table by mask
+	 * (Extensions::ViewBitTable::viewBitsOfPhases).
 	 */
 	inline std::uint32_t ViewBitsOf(std::uint8_t a_phases)
 	{
-		return Extensions::Views().viewBitsOfPhases[a_phases];
+		return Extensions::ResolvedViewBits().viewBitsOfPhases[a_phases];
 	}
 	/**
 	 * @brief An input's view mask (DrawInput::ViewWords::mask): the view types of the object's applied phases (SceneTables::setPhases),
@@ -77,11 +78,14 @@ namespace DCLF::Draws
 		// The main build's bits of a scene entry alone (MainSideBits): the shadow views' are the shadow build's.
 		return (ViewMaskOf(a_tables, a_object, true) & MainSideBits() & ~kViewMain) | ((flags & kObjectMember) ? kViewMain : 0u);
 	}
-	/** @brief The view bits a shadow or occlusion view draws: its mode's, a clamped view's split by whether it is the sun's. */
+	/**
+	 * @brief The view bits a shadow or occlusion view draws: its mode's, a clamped view's split by whether it is the sun's, an occlusion
+	 * map's its entry's (Extensions::OcclusionMapOf).
+	 */
 	inline std::uint32_t ShadowViewBits(std::uint32_t a_mode, bool a_sun)
 	{
 		if (IsOcclusionMode(a_mode))
-			return OcclusionOfMode(a_mode) == kOcclusionSky ? kViewSkyOccluder : kViewPrecipOccluder;
+			return Extensions::OcclusionMapOf(OcclusionOfMode(a_mode)).viewBit;
 		if (a_mode == kParabolicShadowMode)
 			return kViewPointCaster;
 		return a_sun ? kViewSunCaster : kViewSpotCaster;

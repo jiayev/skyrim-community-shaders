@@ -123,7 +123,7 @@ namespace DCLF
 	bool IndirectDraws::OcclusionReady(std::uint32_t a_view) const
 	{
 		// Ready when this frame's shadow commit uploaded the occluders and the map's target is imported.
-		if (a_view >= kOcclusionViews || failed || !ActiveToggles().shadows || !OcclusionEnabled(a_view) || !impl->shadow)
+		if (a_view >= kOcclusionViews || failed || !ActiveToggles().shadows || !Extensions::OcclusionOn(ActiveToggles(), a_view) || !impl->shadow)
 			return false;
 		const auto& occlusion = impl->occlusion[a_view];
 		// Not while the built graph lacks the map's import, nor without the selected revision's recorded shape for the maps' layout
@@ -287,7 +287,7 @@ namespace DCLF
 		}
 		// The occlusion epoch draws later from this build, whether or not the engine draws the map this frame.
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-			if (OcclusionEnabled(v) && impl->readyModes[OcclusionModeOf(v)] && impl->occlusion[v].dsvFormat != DXGI_FORMAT_UNKNOWN)
+			if (Extensions::OcclusionOn(ActiveToggles(), v) && impl->readyModes[OcclusionModeOf(v)] && impl->occlusion[v].dsvFormat != DXGI_FORMAT_UNKNOWN)
 				modeUsed[OcclusionModeOf(v)] = true;
 		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
@@ -568,9 +568,9 @@ namespace DCLF
 		in.frameNumber = Scene::FrameView::Get().GetFrame();
 		in.modeUsed = a_modeUsed;
 		in.modeRasterStates = a_modeRasterStates;
-		// The sun's full-frustum planes (kCullSunEntry), DCLF's as UpdateCamera set up each process (SunViews): this frame's at the
+		// The sun's full-frustum planes (kCullSunEntry), DCLF's as UpdateCamera set up each process (ShadowCameras::Sun): this frame's at the
 		// shadow epoch, last frame's for the build ahead (posted before this frame's UpdateCamera), as the engine held them there.
-		if (const auto& sunViews = SunViews::Get().Current();
+		if (const auto& sunViews = ShadowCameras::Sun();
 			sunViews.valid && (sunViews.sceneFrame == in.frameNumber || sunViews.sceneFrame + 1 == in.frameNumber) && !sunViews.fullFrusta.empty()) {
 			for (const auto& mine : sunViews.fullFrusta) {
 				auto& out = in.sunEntryProcesses.emplace_back();

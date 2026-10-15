@@ -45,7 +45,10 @@ that shows what DCLF does. The shell's `PostPostLoad` calls `Extensions::Install
 Install registers the feature's parts through `Api::InstallContext`. The registry (`Core/Extensions/Registry`) is
 read-only after that. A feature may also name early hooks (`Api::Feature::earlyHooks`): engine hooks Core's engine side must
 find in place when it installs (a vtable slot the primary cull takes, or the source of an engine event channel Core follows), which
-the shell runs after Core's scene events and before DCLF's own engine hooks and observers (`Extensions::InstallEarlyHooks`).
+the shell runs after Core's scene events and before DCLF's own engine hooks and observers (`Extensions::InstallEarlyHooks`). And it
+may name camera hooks (`Api::Feature::cameraHooks`): the engine hooks that write a shadow source's cameras into Core's boards
+(`Core/Render/Shadow/ShadowCameras.h`), which the shell runs where the shadow cameras' hooks install, after Core's own
+(`Extensions::InstallCameraHooks`: the sun's UpdateCamera, the light selection and the focus cameras, while Core holds those sources).
 
 | Contract | Header | What a feature gets |
 | --- | --- | --- |
@@ -60,7 +63,8 @@ the shell runs after Core's scene events and before DCLF's own engine hooks and 
 | Stand-in observer | `Api/EngineEvents.h` | the primary cull's stood-in roots as they change, and Main::Update's entry; whether the primary cull is installed |
 | Table family | `Api/TableFamilies.h` | columns of its own in every `SceneTables` (`Extensions::TableFamilies`), read through a typed handle; Core keeps beside them the write stamp (the publication copies a family only when it moved), the objects' references into it (bounded by its scene resources' fit, carried in the record at a declared word) and its rows' tags, and recycles its retired rows |
 | Coordinator component | `Api/CoordinatorComponents.h` | state the coordinator keeps for it (`make`), and hook sets, one per concern of the coordinator's, each called on the scene lane per event (a changed slot, an erased entry, a freed range, a phase), never per object per frame: `residency` (a slot resident, left, every residency ended, the residents recounted), `accumulate` (a patch accumulated with its draw chain, the joins done), `walk` (begun, the delta walk's scheduling with its counts, a slot rewritten or its skin partitions refreshed, ended), `dense` (the walk parity's dense walk: save and restore), `retirement` (the slot tables reset, a tracked entry erased, every entry gone, a range it retired come free: `RetireRange`) and `entryClass` (the class it follows, `EntryClass`: whether it takes it, `Extensions::EntryClassTaken`, read as data; its writes listed, the record's second vertex stream resolved or waiting, the stream's slot); with a narrow context: the live tables, the scene mirror and its fade node, the pass serial, the entry's reference, a tracked entry's slot and write state, its write scheduled, seeds the next frame takes (`FrameView::TakeComponentSeeds`) |
-| View contribution | `Api/Views.h` | an engine view Core's view machinery draws in the engine's place once a feature takes it (`EngineView`, in Core's slot order: the reflection, then the first person; see "The view contract" below), under its toggle: its set phase and view bit (the feature's own bits, checked by the manifest and the install), its membership (`CategoryRoot`: the entries under a root the feature captures, an exclusive phase; `LodTechniques`), its forward key rule and shape (faces, trees, forward part, depth pass, names, initial depth range), its shape's life, render area, where its members' engine registrations are withheld (`InMainRenderers`, with the accumulators the feature names, or `OwnRenderers`, the renderers its engine hooks name to `PassCapture`), its target import, its coverage before the first frame and on a failed graph, whether a decal on its entries is a forward object of its forward part, and its once-a-frame callbacks (`covered` over Core's precomputed `ViewCoverage`, `captureRoot`, `accumulators`); its work at the view's engine points (`RegisterViewWork`, `ViewPoint`: the frame's start before the coverage, after tree LOD, and the depth commit), run once a frame in view order. Core keeps a fixed slot per view (`Core/Render/Views/ViewSlots.h`: its epochs, segments, revision key group and graph extension) and resolves each view's entry once at install (`Extensions::Views`), which the per-view loops and the per-object paths read as data (`Extensions::ViewOn`, the set's phases and view bits, `ViewBitsOf`'s table by phase mask, the root views, the set decision's order, the InMainRenderers and OwnRenderers views); a view no feature takes has no entry, and every per-view loop skips it. The feature's work and epochs run on the view engine's calls (`IndirectDraws.h`, "The view engine", `Core/Render/Views/ViewEngine.cpp`: the slot's state, targets, depth range, pipelines, resources and target import, its epochs' inputs and submission; `ViewTreeLod.cpp`: a trees view's tree LOD per face) |
+| View contribution | `Api/Views.h` | an engine view Core's view machinery draws in the engine's place once a feature takes it (`EngineView`, in Core's slot order: the reflection, then the first person; see "The view contract" below), under its toggle: its set phase and view bit (the feature's own bits, checked by the manifest and the install), its membership (`CategoryRoot`: the entries under a root the feature captures, an exclusive phase; `LodTechniques`), its forward key rule and shape (faces, trees, forward part, depth pass, names, initial depth range), its shape's life, render area, where its members' engine registrations are withheld (`InMainRenderers`, with the accumulators the feature names, or `OwnRenderers`, the renderers its engine hooks name to `PassCapture`), its target import, its coverage before the first frame and on a failed graph, whether a decal on its entries is a forward object of its forward part, and its once-a-frame callbacks (`covered` over Core's precomputed `ViewCoverage`, `captureRoot`, `accumulators`); its work at the view's engine points (`RegisterViewWork`, `ViewPoint`: the frame's start before the coverage, after tree LOD, and the depth commit), run once a frame in view order. Core keeps a fixed slot per view (`Core/Render/Views/ViewSlots.h`: its epochs, segments, revision key group and graph extension) and resolves each view's entry once at install (`Extensions::Views`), which the per-view loops and the per-object paths read as data (`Extensions::ViewOn`, the set's phases and view bits, `ViewBitsOf`'s table by phase mask: both families', `Extensions::ResolvedViewBits`, the root views, the set decision's order, the InMainRenderers and OwnRenderers views); a view no feature takes has no entry, and every per-view loop skips it. The feature's work and epochs run on the view engine's calls (`IndirectDraws.h`, "The view engine", `Core/Render/Views/ViewEngine.cpp`: the slot's state, targets, depth range, pipelines, resources and target import, its epochs' inputs and submission; `ViewTreeLod.cpp`: a trees view's tree LOD per face) |
+| Shadow-view contribution | `Api/ShadowViews.h` | the view contract's sibling for Core's one shadow engine (see "The shadow-view contract" below): an occlusion map (`OcclusionMap`, in Core's slot order: the sky map, then the precipitation mask) under its toggle and a load-time `available` flag, with its set phase and view bit (the feature's own, `Api/ViewCommon.h`'s `ViewBits`), Core's occluder rule it is classified by, its target (the engine's mask, or a texture it imports: `importTarget`), its labels and its optional reference parity (`referenceDue`); a shadow source (`ShadowSource`: sun, spot, point, focus), whose cameras its `cameraHooks` write into Core's boards, and, for the spot and point sources, each light the selection keeps (`lightKept`). Core resolves each entry once at install (`Extensions::ShadowViewsSet`: each mode's phase, the set decision's readiness order, each engine view kind's source, the maps' import order; `Extensions::OcclusionOn`), read as data |
 | Object contributor | `Api/ObjectContributors.h` | three kinds, read as data where Core decides: membership by an engine key (a technique it ports: its eligibility under a toggle and its objects' record flags; a geometry type it ports: a class under a toggle, read by the eligibility, the walk and the captures); membership by a Core class, one enum value per class a feature takes (`EngineParent` and `ParentLeaves`: the leaves under a billboard, a switch node or an actor, read by the classification and the sun and light candidates; `ObjectClass`: a decal or a multi-index layer Core's ports derive but leave native, read by the ports' eligibility; `EntryClass`: a face shape whose records wait on the coordinator component that follows it); and derivations (the shading values it derives for a property flag of its own, and engine globals captured with the frame's: `FrameGlobals::features`). Adding a Core class is the same three steps for every enum: the value in the header, Core's test of it through its `Extensions` query, the feature's registration (the install fails a second claim) |
 
 Each contract's thread, timing and lifetime is documented in its header. A feature's install also installs its engine
@@ -72,7 +76,8 @@ Main::RenderDepth thunk writes.
 The headers in `Api/` name only standard and ORG types. The contexts their callbacks receive are opaque there. Core
 defines them in companions under `Core/Extensions/` (`FrameValuePools.h`, `GpuStages.h`, `PayloadProducts.h`,
 `SceneResources.h`, `Commits.h`, `FrameBindings.h`, `Reports.h`, `EngineEvents.h`, `TableFamilies.h`,
-`CoordinatorComponents.h`, `ObjectContributors.h`, `Views.h`), which features inside DCLF include for typed access to Core's types.
+`CoordinatorComponents.h`, `ObjectContributors.h`, `ViewCommon.h`, `Views.h`, `ShadowViews.h`), which features inside DCLF include for typed
+access to Core's types.
 
 Residency changes are events, so a coordinator component's hooks are function pointers called per changed slot. The loops
 that run every frame over every object (the walk's evaluate, the builds' packing, the commit) never call a feature: they read
@@ -179,8 +184,9 @@ layout). The extension points still to come, as the next features need them:
 The engine views Core's bucketed view machinery draws (`ViewTraits`, `ViewFrame`, `ViewResources`, `ViewLatchLayout`, `PlanViewBuckets`,
 `MakeViewShape`, `CommitView`, `ViewExtension`) are taken by features through one contract: `Api/Views.h` (`RegisterView`,
 `RegisterViewWork`), with its Core companion `Core/Extensions/Views.h`. The reflection's faces and the first person are on it. The
-occlusion maps and the shadow views are another family (`ShadowFrame`) and get a sibling contract that reuses the outer layer; the
-portals, local lights, GPU occlusion and forward epochs are not views.
+occlusion maps and the shadow views are another family (`ShadowFrame`), on the sibling contract below; what both families share is
+`Api/ViewCommon.h` (`ViewPoint`, a feature view's `ViewBits`) and its companion `Core/Extensions/ViewCommon.h`. The portals, local
+lights, GPU occlusion and forward epochs are not views.
 
 - **Core's fixed slot per view.** `Api::EngineView` is Core's slot order (`Reflection`, `FirstPerson`): the epochs' indices, the latches,
   the revision key groups, the coverage and the setup run in it. `Core/Render/Views/ViewSlots.h`'s `kViewSlots[v]` reserves the view's
@@ -201,11 +207,13 @@ portals, local lights, GPU occlusion and forward epochs are not views.
   thread, the views in slot order and a view's work in registration order, whatever the toggle (the work reads it).
 - **Resolved once, read as data.** `Extensions::ResolveViews` (the end of `InstallFeatures`) makes each view's `ViewEntry` (none for a view
   no feature takes: every per-view loop skips it) and derives what the per-object paths read: the set's phases, `rootPhases` and
-  `lodPhases`, the view bits, `ViewBitsOf`'s table by phase mask, the root views, the set decision's order (the CategoryRoot views first),
+  `lodPhases`, the view bits, the root views, the set decision's order (the CategoryRoot views first),
   and the InMainRenderers and OwnRenderers views. Classification, the set decisions (`SetParticipation`, `DecideSlot`, the slot
   readiness by membership: `IndirectDraws::ViewSlotReady`, a LodTechniques view's phase readiness: `PhaseReady`), the lacking phases
   (`lodPhases`: FrameView's third count), the builds' masks, the frame requests' roots, the revisions (traits, forward keys, key groups,
-  `DropWhenOff`) and `PassCapture` read the entries; no per-object loop calls a feature.
+  `DropWhenOff`) and `PassCapture` read the entries; no per-object loop calls a feature. Then `Extensions::ResolveViewBits` checks
+  both families' phases and view bits (one bit each, none Core's nor another view's) and makes `ViewBitsOf`'s table by phase mask and
+  the lacking counts' phases (`Extensions::ResolvedViewBits`: the occlusion maps', then `lodPhases`).
 - **The view engine.** A feature's work and epochs reproduce Core's own over the view's slot (`IndirectDraws.h`, "The view engine"):
   `ViewState`, `MainTargetFormats`, `SetViewTargets` (published for the scene lane), `PostViewInputs`, `SetViewDepthRange`,
   `ExchangeViewForwardCompatible`, `ResolveViewPipelines` (wanted slots or every slot; with the programs and waits counted on request),
@@ -225,6 +233,37 @@ portals, local lights, GPU occlusion and forward epochs are not views.
   world-drawn point runs `FrameDriver::DepthCommitted` (the depth commit, then the `DepthCommitted` work).
 - **Reports.** A view's lines go at `ReportPoint::AsyncWorkViews` (after the visibility lines, before the forward epoch's) or
   `AsyncWork` (after it).
+
+## The shadow-view contract
+
+Every caster view (sun, spot, point, focus) is drawn by one shadow engine: one execution (`ExecuteShadowFrame`), one `ShadowPayload`,
+one set of resources and index pool, one latch block and one key group (`kKeyShadow`); the occlusion epoch (`ExecuteOcclusion`) draws
+from the same commit. Casters are keyed by the engine's render mode, not by source, so the sources own no phase or view bit. The
+features take the parts that are theirs through `Api/ShadowViews.h` (`RegisterOcclusionMap`, `RegisterShadowSource`), with its Core
+companion `Core/Extensions/ShadowViews.h`; the engine itself, its capability and captures, both epochs, the light selection, the camera
+boards and their math, the sun's accumulation, the caster phases and modes, and the shadow toggles stay Core's.
+
+- **The occlusion maps.** `OcclusionMapContribution`: the map (Core's slot order, `kOcclusionSky`, `kOcclusionPrecipitation`: its mode,
+  view slot, depth target and technique column), its toggle and `available` flag, its `ViewBits` (the feature's own), the occluder rule
+  Core's classification applies per object (`OccluderRule`, read as data), its target (`EngineMask`, or `ImportedTexture` with
+  `importTarget`, called once as the capability sets the maps up, in Core's import order: the precipitation mask, then the sky map), its
+  labels (the view-mask parity's list, the report lines', the imported target's) and its optional `referenceDue` (the engine's
+  reference frame for the map's parity, asked by the shell's `OcclusionReferenceFrame`). `Extensions::OcclusionOn` is whether DCLF
+  draws a map (taken, available, its toggle on); a map's phase and view bit reach the set decisions, the classification, the builds'
+  masks, both epochs and the reports through its entry.
+- **The shadow sources.** `ShadowSourceContribution`: the source (`Sun`, `Spot`, `Point`, `Focus`), and for a spot or point source
+  `lightKept`, called at the end of the light selection for each kept light of its kind, in the selection's order. Its cameras are
+  the feature's to compute, from its `Api::Feature::cameraHooks`, into Core's boards (`Core/Render/Shadow/ShadowCameras.h`: `Sun`,
+  `Lights`, `Focus`, render thread, read in place by the capture, the inputs' preparation, the sun's accumulation after its
+  `bitsReady`, the local shadows and the actors' rate). The view list covers a view only while its kind's source is taken
+  (`ShadowViewSet::sourceOf`), and the capture reads its camera from that source's board.
+- **Resolved once.** `Extensions::ResolveShadowViews` (in `InstallFeatures`, after the views) makes each entry and derives each mode's
+  phase (`phaseOfMode`), the set decision's readiness order (the casters', then the maps'), each engine view kind's source and the
+  import order. A map or source Core still fills itself fails the install when a feature registers it.
+- **Where it stands.** Core fills every entry itself (the maps with Core's toggles and Skylighting's flag, texture and reference parity;
+  the sources with its own hooks and `LightViews`), and installs the cameras' hooks it holds through `InstallCameraHooks`; the occlusion
+  maps move to `Features/OcclusionMaps`, the sun to `Features/Shadows/Sun` and the spot, point and focus sources to
+  `Features/Shadows/Local`.
 
 ## The rules
 

@@ -913,9 +913,10 @@ namespace DCLF
 		desc.channels = 1;
 		desc.hasDSV = true;
 		desc.dsvFormat = desc.format;
-		static constexpr const char* kNames[kShadowDepthTargets] = { "DCLF shadow maps (ESRAM)", "DCLF shadow maps", "DCLF volumetric shadow maps (ESRAM)",
-			"DCLF Skylighting occlusion map", "DCLF precipitation occlusion mask" };
-		auto imported = ImportImage(host->GetDesc().device, info.image, desc, kNames[a_index]);
+		// The shadow maps', then each occlusion map's (its entry's target label).
+		static constexpr const char* kNames[kFirstOcclusionTarget] = { "DCLF shadow maps (ESRAM)", "DCLF shadow maps", "DCLF volumetric shadow maps (ESRAM)" };
+		const char* name = IsOcclusionTarget(a_index) ? Extensions::OcclusionMapOf(a_index - kFirstOcclusionTarget).targetName.c_str() : kNames[a_index];
+		auto imported = ImportImage(host->GetDesc().device, info.image, desc, name);
 		if (!imported)
 			return ShadowNotReady(5, "the shadow map could not be imported (not in the general layout?)");
 		shadow->depth[a_index] = std::move(imported);

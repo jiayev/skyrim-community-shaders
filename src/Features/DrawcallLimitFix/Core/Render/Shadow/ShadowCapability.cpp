@@ -4,7 +4,6 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
-#include "Features/Skylighting.h"
 
 namespace DCLF
 {
@@ -151,7 +150,8 @@ namespace DCLF
 						}
 					// Caster modes: sun and spot (clamped) and point (paraboloid). No view uses the plain mode.
 					i.readyModes[kSunShadowMode] = i.readyModes[kParabolicShadowMode] = true;
-					// Both occlusion maps draw into the precipitation occlusion target (Skylighting swaps its own map in), in its format.
+					// Both occlusion maps draw into the precipitation occlusion target (an ImportedTexture map's own texture swapped in), in
+					// its format.
 					if (auto* renderer = globals::game::renderer)
 						if (auto* view = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP].views[0]) {
 							D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
@@ -160,11 +160,22 @@ namespace DCLF
 								i.occlusion[v].dsvFormat = desc.Format;
 								i.readyModes[OcclusionModeOf(v)] = true;
 							}
-							// Imported now: a later import would rebuild the graph mid-play.
+							// Imported now, in the maps' import order: a later import would rebuild the graph mid-play.
 							using T = RE::RENDER_TARGETS_DEPTHSTENCIL;
-							(void)i.ImportShadowDepth(OcclusionDepthTarget(kOcclusionPrecipitation), T::kPRECIPITATION_OCCLUSION_MAP);
-							if (auto* sky = globals::features::skylighting.texOcclusion)
-								(void)i.ImportDepthTexture(OcclusionDepthTarget(kOcclusionSky), sky->resource.get(), sky->dsv.get(), T::kPRECIPITATION_OCCLUSION_MAP);
+							for (const auto map : Extensions::ShadowViewsSet().importOrder) {
+								const auto v = static_cast<std::uint32_t>(map);
+								const auto& entry = Extensions::OcclusionMapOf(v);
+								if (!entry.registered)
+									continue;
+								if (entry.target == Api::OcclusionTarget::EngineMask) {
+									(void)i.ImportShadowDepth(OcclusionDepthTarget(v), T::kPRECIPITATION_OCCLUSION_MAP);
+									continue;
+								}
+								Api::OcclusionTargetImport request;
+								entry.importTarget(request);
+								if (request.supplied)
+									(void)i.ImportDepthTexture(OcclusionDepthTarget(v), request.texture, request.view, T::kPRECIPITATION_OCCLUSION_MAP);
+							}
 						}
 					i.NoteCapability(false, "the casters' and occlusion maps' modes and the catalog set up");
 				}
@@ -172,11 +183,12 @@ namespace DCLF
 			if (i.shadowCatalogBuilt && i.shadowPlacements.empty() && i.BuildShadowPlacements())
 				i.NoteCapability(false, fmt::format("{} shadow view placements set up", i.shadowPlacements.size()));
 			if (i.shadowCatalogBuilt && !i.shadowPlacements.empty() && i.shadowTargetFormat != DXGI_FORMAT_UNKNOWN) {
+				const auto& phaseOfMode = Extensions::ShadowViewsSet().phaseOfMode;
 				for (std::uint32_t m = 0; m < kFirstOcclusionMode; ++m)
-					phases |= i.readyModes[m] ? SetPhaseOfMode(m) : 0;
+					phases |= i.readyModes[m] ? phaseOfMode[m] : 0;
 				for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-					phases |= i.readyModes[OcclusionModeOf(v)] && i.occlusion[v].dsvFormat != DXGI_FORMAT_UNKNOWN && OcclusionEnabled(v) ?
-					              SetPhaseOfMode(OcclusionModeOf(v)) :
+					phases |= i.readyModes[OcclusionModeOf(v)] && i.occlusion[v].dsvFormat != DXGI_FORMAT_UNKNOWN && Extensions::OcclusionOn(ActiveToggles(), v) ?
+					              phaseOfMode[OcclusionModeOf(v)] :
 					              0;
 			}
 		}
@@ -184,7 +196,7 @@ namespace DCLF
 		auto& views = i.lastShadow;
 		views.known = phases != 0;
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-			views.modes[m] = phases && i.readyModes[m] && (!IsOcclusionMode(m) || OcclusionEnabled(OcclusionOfMode(m)));
+			views.modes[m] = phases && i.readyModes[m] && (!IsOcclusionMode(m) || Extensions::OcclusionOn(ActiveToggles(), OcclusionOfMode(m)));
 			views.rasterStates[m] = views.modes[m] ? i.readyStates[m] : ModeRasterStates{};
 		}
 		views.dsvFormat = i.shadowTargetFormat;
@@ -224,7 +236,7 @@ namespace DCLF
 		// Fade is culled on the GPU (FadedOutOfOcclusion), so nothing of the engine's cull is waited for. As BuildKeptShadow: every
 		// state of the object's class in the phase's modes has its pipeline, and an alpha-tested technique's diffuse is imported.
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-			if (SetPhaseOfMode(m) != a_phase || !inputs->modes[m])
+			if (Extensions::ShadowViewsSet().phaseOfMode[m] != a_phase || !inputs->modes[m])
 				continue;
 			const std::uint32_t technique = ModeTechnique(tables, m, a_slot);
 			if (!technique)

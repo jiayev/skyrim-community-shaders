@@ -14,6 +14,7 @@
 #include "Features/DrawcallLimitFix/Api/Reports.h"
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
+#include "Features/DrawcallLimitFix/Api/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Api/Views.h"
 
@@ -70,6 +71,13 @@ namespace DCLF::Api
 		virtual void RegisterView(const ViewContribution& a_view) = 0;
 		/** @brief Fails the install for no view, no point or no function, or a view no feature contributes. */
 		virtual void RegisterViewWork(const ViewWork& a_work) = 0;
+		/**
+		 * @brief Fails the install for a map another feature (or Core) has, without a registered toggle or its available flag, with a phase
+		 * or view bit Core or another view has (or none, checked once all are in), or an ImportedTexture map without importTarget.
+		 */
+		virtual void RegisterOcclusionMap(const OcclusionMapContribution& a_map) = 0;
+		/** @brief Fails the install for a source another feature (or Core) has, or a Spot or Point source without lightKept. */
+		virtual void RegisterShadowSource(const ShadowSourceContribution& a_source) = 0;
 
 	protected:
 		~InstallContext() = default;
@@ -83,11 +91,15 @@ namespace DCLF::Api
 	 *   Extensions::InstallEarlyHooks, in the list's order): engine hooks that must be in before Core's engine side reads what they
 	 *   change (a vtable slot the primary cull takes at its install; the source of an engine event channel Core follows, after Core's
 	 *   own scene events are in). Registers nothing; Core's switches and Diagnostics::Observe are readable.
+	 * - cameraHooks (optional): the main thread at PostPostLoad, where the shadow cameras' hooks install (the shell's
+	 *   Extensions::InstallCameraHooks, after SunAccumulation's, in the list's order after Core's own): the engine hooks that write a
+	 *   shadow source's cameras into Core's boards (Core/Render/Shadow/ShadowCameras.h). Registers nothing.
 	 */
 	struct Feature
 	{
 		std::string_view name;
 		void (*install)(InstallContext& a_context) = nullptr;
 		void (*earlyHooks)() = nullptr;
+		void (*cameraHooks)() = nullptr;
 	};
 }

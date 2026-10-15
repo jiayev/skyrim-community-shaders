@@ -8,9 +8,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Engine.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Engine/Views/FocusViews.h"
-#include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
 
 #include <array>
 #include <atomic>
@@ -85,7 +84,7 @@ namespace DCLF::Diagnostics
 		{
 			auto& tally = tallies[static_cast<std::size_t>(ShadowView::Sun)];
 			++tally.missing;
-			const auto& sun = SunViews::Get().Current();
+			const auto& sun = ShadowCameras::Sun();
 			tally.Note("missing cascade", 0.0f, fmt::format("Accumulate of frame {}, descriptor {}, DCLF's views of frame {} ({} cascades)", a_event.frame, a_event.descriptor,
 				sun.sceneFrame, sun.count));
 		}
@@ -102,20 +101,20 @@ namespace DCLF::Diagnostics
 			const auto& cascade = SunAccumulationView::Cascade(a_event.cascade);
 			auto& p = tallies[static_cast<std::size_t>(ShadowView::Sun)];
 			++p.cascades;
-			SunViews::Planes engine, mine;
+			ShadowCameras::Planes engine, mine;
 			CopyPlanes(a_event.process->planes, engine.plane, engine.mask);
 			mine.plane = cascade.planes;
 			mine.mask = cascade.planeMask;
-			if (!cascade.captured || !SunViews::SamePlanes(mine, engine)) {
+			if (!cascade.captured || !ShadowCameras::SamePlanes(mine, engine)) {
 				++p.cascadePlanes;
-				p.Note("cascade planes", 1.0f, fmt::format("cascade {}: {}", a_event.cascade, SunViews::DescribePlanes(mine, engine)));
+				p.Note("cascade planes", 1.0f, fmt::format("cascade {}: {}", a_event.cascade, ShadowCameras::DescribePlanes(mine, engine)));
 			}
-			SunViews::Planes engineCaster, mineCaster;
+			ShadowCameras::Planes engineCaster, mineCaster;
 			if (a_event.process->doCustomCullPlanes)
 				CopyPlanes(a_event.process->customCullPlanes, engineCaster.plane, engineCaster.mask);
 			mineCaster.plane = cascade.customPlanes;
 			mineCaster.mask = cascade.customMask;
-			if (!SunViews::SamePlanes(mineCaster, engineCaster)) {
+			if (!ShadowCameras::SamePlanes(mineCaster, engineCaster)) {
 				++p.cascadeCasters;
 				p.Note("cascade caster planes", 1.0f, fmt::format("cascade {}: masks {:#x} {:#x}", a_event.cascade, mineCaster.mask, engineCaster.mask));
 			}

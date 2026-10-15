@@ -285,7 +285,7 @@ namespace DCLF
 		std::vector<std::uint32_t> shadowTechnique;  // parallel to objects
 		std::vector<std::uint8_t> shadowReject;      // parallel to objects (ShadowReject)
 		// Per occlusion view, parallel to objects: the Utility technique the map draws it with (Skylighting::OcclusionTechnique),
-		// 0 when none or the map is off (OcclusionEnabled). Alpha-tested ones use shadowDiffuse / shadowMaterial.
+		// 0 when none or the map is off (Extensions::OcclusionOn). Alpha-tested ones use shadowDiffuse / shadowMaterial.
 		std::array<std::vector<std::uint32_t>, kOcclusionViews> occlusionTechnique;
 		// The object's entry in the sun's full-frustum culling processes' objectArray (Coordinator::ResolveSunEntry), null when
 		// never tested (an actor's: its cell's container). Bound: BindlessPlacement::sunEntry; the node is for diagnostics.

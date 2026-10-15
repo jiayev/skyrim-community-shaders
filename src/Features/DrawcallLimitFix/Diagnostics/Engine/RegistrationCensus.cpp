@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -236,8 +237,13 @@ namespace DCLF::RegistrationCensus
 
 		std::uint16_t ViewOf(const Noted& a_noted, const Frame& a_frame)
 		{
-			if (a_noted.site == Site::Occlusion)
-				return a_noted.occlusionPhase == kSetOccluderSky ? kOcclusionSky : a_noted.occlusionPhase == kSetOccluderPrecipitation ? kOcclusionPrecipitation : kOcclusion;
+			if (a_noted.site == Site::Occlusion) {
+				// The occlusion maps' phases (their entries'), in slot order.
+				const std::uint8_t phase = a_noted.occlusionPhase;
+				if (phase && phase == Extensions::OcclusionMapOf(DCLF::kOcclusionSky).phase)
+					return kOcclusionSky;
+				return phase && phase == Extensions::OcclusionMapOf(DCLF::kOcclusionPrecipitation).phase ? kOcclusionPrecipitation : kOcclusion;
+			}
 			if (const auto it = census.accumulatorViews.find(a_noted.batch); it != census.accumulatorViews.end())
 				return it->second;
 			if (const auto it = a_frame.shadowViews.find(a_noted.batch); it != a_frame.shadowViews.end())

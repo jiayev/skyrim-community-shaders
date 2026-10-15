@@ -29,13 +29,14 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "RE/B/BSShadowLight.h"
 #include "RE/B/BSLightingShaderMaterialBase.h"
 #include "RE/B/BSShadowDirectionalLight.h"
 #include "RE/B/BSCullingProcess.h"
 #include "RE/N/NiCamera.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include <ORGModuleServices/Async/RevisionAssembly.h>
 #include <ORGModuleServices/Async/SerializedTaskPump.h>
