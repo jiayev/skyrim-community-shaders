@@ -20,6 +20,7 @@ namespace DCLF::Scene
 		using PublishKey = DCLF::PublishKey;
 		PublishKey publishedKey;
 		bool publishedKeyValid = false;
+		Extensions::AdoptionGenerations publishedAdoptionGuards{};  // the adoption guards' generations of the last publication (NotePublished)
 		bool publishForced = false;  // an input TakeCoordinatorInputs took publishes
 		// Publication pacing: a pass that needs a publication makes it only when the snapshot builder took the last one, for the frame's
 		// own pass (new frame inputs or a FrameInput wake: NoteScenePassDone's gate), inline, or for the first; else it defers, and its

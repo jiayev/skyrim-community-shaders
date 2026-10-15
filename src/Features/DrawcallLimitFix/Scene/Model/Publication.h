@@ -45,11 +45,9 @@ namespace DCLF
 		std::uint64_t sequence = 0;
 		std::uint32_t commitFrame = 0;        // the scene frame of the commit it applies (CommitSet's; stats and the install delay)
 		std::uint32_t togglesGeneration = 0;  // the toggles that commit was made under (FrameInputs): the toggle reinstall waits for one
-		// The LOD gates' forced releases its pass's events were complete for (FrameInputs::lodForcedGeneration): an older one may
-		// claim the outgoing blocks a forced release detached, and the frames withdraw until one built after it is installed.
-		std::uint64_t lodForcedGeneration = 0;
 		// The adoption guards' generations its pass's events were complete for (FrameInputs::adoptionGuards): a frame whose own are newer
-		// withdraws until one built after them is installed (Extensions::AdoptionGuarded).
+		// withdraws until one built after them is installed (Extensions::AdoptionGuarded). The LOD gates': an older publication may claim
+		// the outgoing blocks a forced release detached.
 		Extensions::AdoptionGenerations adoptionGuards{};
 		std::uint32_t tablesGeneration = 0;   // the tables' generation (GetTablesGeneration while it is the frame's)
 		std::shared_ptr<const SceneTables> tables;
@@ -188,7 +186,10 @@ namespace DCLF
 		std::int8_t kind = 0;  // 1 added, -1 removed, 0 every entry cleared
 	};
 
-	/** @brief A LOD gate flipped by a commit (UpdateGates), released by the frame installing its publication (ReleaseGates). */
+	/**
+	 * @brief A LOD gate flipped by a commit (UpdateGates), published as the gates' component's delta and released by the frame installing
+	 * its publication (GateAdoption::Adopt).
+	 */
 	struct GateFlip
 	{
 		std::uint64_t token = 0;
@@ -223,7 +224,6 @@ namespace DCLF
 		std::vector<std::shared_ptr<const void>> retiredImports;
 		std::vector<SceneTables::ActorWetnessChange> actorWetness;
 		std::vector<LightEntryChange> lightEntries;
-		std::vector<GateFlip> gateFlips;  // the LOD gates its commits flipped (ReleaseGates)
 		// By coordinator component (Api::CoordinatorComponentId): the deltas its passes published (CoordinatorComponentContext::PublishDelta),
 		// handed to its adoption.
 		std::vector<std::vector<std::shared_ptr<const void>>> componentDeltas;

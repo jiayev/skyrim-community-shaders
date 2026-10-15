@@ -101,6 +101,7 @@ namespace DCLF
 	namespace Scene
 	{
 		class Coordinator;
+		struct GateComponentAccess;
 	}
 
 	/**
@@ -142,6 +143,7 @@ namespace DCLF
 		friend struct Diagnostics::SceneView;
 		// The features' coordinator components reach its services through their context (Components.cpp).
 		friend class Api::CoordinatorComponentContext;
+		friend struct Scene::GateComponentAccess;
 
 	public:
 		using Tables = SceneTables;
@@ -1315,7 +1317,7 @@ namespace DCLF
 		bool GateGeometryReady(const RE::BSGeometry* a_geometry, const Tracked& a_entry) const;
 		/**
 		 * @brief CommitSet after its queue: flips the open gates that are ready (roots mirrored, incoming ready, a live scene) into a_apply
-		 * and gateFlipsMade.
+		 * and the gates' component's deltas (PublishDelta: each flip a GateFlip, published by this commit's publication).
 		 */
 		void UpdateGates(bool a_live, std::vector<std::pair<std::uint32_t, std::uint8_t>>& a_apply);
 		/** @brief Before CollectEvents: holds LodGates' outcomes posted so far. */

@@ -343,7 +343,7 @@ namespace DCLF::Scene
 	{
 		return !publicationJoined.empty() || !publicationLeft.empty() || placementPlanReady || !placementPlansHeld.empty() || !shadingNamed.empty() ||
 		       !fadeSeedRequests.empty() || !componentSeedRequests.empty() || !switchesApplied.empty() || switchResync || !retiredImports.empty() ||
-		       !tables.actorWetnessChanges.empty() || !lightEntryChanges.empty() || !gateFlipsMade.empty();
+		       !tables.actorWetnessChanges.empty() || !lightEntryChanges.empty() || !componentDeltaRequests.empty();
 	}
 
 	Coordinator::PublishKey Coordinator::CurrentPublishKey() const
@@ -363,10 +363,10 @@ namespace DCLF::Scene
 		// A pass publishes only what changed since the last publication - the tables (their logs, stamps and sizes), the lookups and their
 		// catalog, the candidates, the claims (the commit's applications and its snapshot), the deltas the frame takes (plans, shading,
 		// seeds, switches, imports, wetness, light entries), the category nodes, the toggles its commit was made under, an input the
-		// coordinator took for the frame, or a LOD gate's forced release the last publication was not built for (the frames withdraw until
-		// one is). A pass that changed none publishes nothing: the snapshot of the last publication stands.
+		// coordinator took for the frame, or an adoption guard's generation (a LOD gate's forced release) the last publication was not built
+		// for (the frames withdraw until one is). A pass that changed none publishes nothing: the snapshot of the last publication stands.
 		const bool needed = !publishedKeyValid || publishForced || !setApply.empty() || setSnapshotDirty || nodeSetsDirty || DeltasPending() ||
-		                    sceneInputs.lodForcedGeneration != publishedLodForced || !(CurrentPublishKey() == publishedKey);
+		                    sceneInputs.adoptionGuards != publishedAdoptionGuards || !(CurrentPublishKey() == publishedKey);
 		if (!needed)
 			++pumpStats.unchanged;
 		return needed;
@@ -377,7 +377,7 @@ namespace DCLF::Scene
 		publishedKey = CurrentPublishKey();
 		publishedKeyValid = true;
 		publishForced = false;
-		publishedLodForced = sceneInputs.lodForcedGeneration;
+		publishedAdoptionGuards = sceneInputs.adoptionGuards;
 	}
 
 }

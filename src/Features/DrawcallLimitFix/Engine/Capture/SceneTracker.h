@@ -11,7 +11,8 @@
 namespace DCLF
 {
 	/**
-	 * @brief The scene's event stack: scene graph attaches and detaches, the hooks' value updates and LOD gates, from any thread.
+	 * @brief The scene's event stack: scene graph attaches and detaches, the hooks' value updates and SceneStack channels' events, from
+	 * any thread.
 	 *
 	 * The NiNode child-management functions are detoured once. An attach becomes an event holding a reference to the attached subtree
 	 * and, in the world, its records (SceneCapture::CaptureAttached); a detach becomes an event holding the subtree's BSGeometry leaves
@@ -27,7 +28,7 @@ namespace DCLF
 			Attached,
 			Detached,
 			Updated,  // a hook's values for the mirror (update), in the same order as the attaches and detaches
-			Gate,     // a LOD swap's gate (LodGates::CaptureGate), after the incoming blocks' attaches on the swapping thread
+			Stacked,  // a SceneStack channel's event (Extensions::PushStacked), after what its thread pushed before it
 		};
 
 		struct Event
@@ -46,7 +47,7 @@ namespace DCLF
 			std::vector<const void*> ancestors;
 			SceneCapture::Update update;
 			// An update's own references (a leaf update's new properties: what the scene work holds its geometry's by), taken on the
-			// writer's thread, or a Gate's incoming roots. The event's, not the update's: the mirror keeps copies of updates, whose last
+			// writer's thread, or a Stacked event's pinned roots. The event's, not the update's: the mirror keeps copies of updates, whose last
 			// release would be the scene work's. Released with the batch, on the render thread.
 			std::vector<RE::NiPointer<RE::NiRefObject>> pins;
 			// The render thread's captures at the frame's start (the category capture's portal roots, the mirror's requests:
@@ -61,11 +62,13 @@ namespace DCLF
 			// (SceneCapture::Frame): the event-to-publication and event-to-adoption latencies.
 			std::uint64_t stampNs = 0;
 			std::uint32_t stampFrame = 0;
-			// A Gate's: its token (LodGates', from 1), the incoming roots (the blocks' nodes: keys, each held by a pin in `pins` until
-			// the batch is released on the render thread) and the outgoing roots (keys: attached and shown until the flip, held by the engine
-			// side's stolen handles).
-			std::uint64_t gateToken = 0;
-			std::vector<const void*> gateIncoming, gateOutgoing;
+			// A Stacked event's (Api::Stacked): its channel, whether it wakes the pass (the channel's Api::WakeSource), its token (from 1),
+			// the pinned roots (keys, each held by a pin in `pins` until the batch is released on the render thread) and the named roots
+			// (keys alone: the pushing side holds them).
+			std::uint32_t stackedChannel = ~0u;
+			bool stackedWakes = false;
+			std::uint64_t stackedToken = 0;
+			std::vector<const void*> stackedPinned, stackedNamed;
 		};
 
 		static SceneTracker& Get();
@@ -95,10 +98,11 @@ namespace DCLF
 		 */
 		void PushCaptured(Event* a_event, bool a_fillOnly = false);
 		/**
-		 * @brief LodGates::CaptureGate: a LOD swap's gate, on the swapping thread under the terrain manager's lock, after the incoming
-		 * blocks' attaches (one stack with them: the gate is applied after their captures). The incoming roots are pinned by the event.
+		 * @brief Extensions::PushStacked: a SceneStack channel's event, on the pushing thread after what it pushed before (one stack with
+		 * the attaches: applied after their captures). The pinned roots are pinned by the event; a_wakes: it stamps and wakes the pass.
 		 */
-		void PushGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing);
+		void PushStacked(std::uint32_t a_channel, std::uint64_t a_token, std::span<RE::NiAVObject* const> a_pinned, std::span<RE::NiAVObject* const> a_named,
+			bool a_wakes);
 
 		static void CollectGeometry(RE::NiAVObject* a_root, std::vector<RE::BSGeometry*>& a_out, std::vector<const void*>* a_nodes = nullptr);
 

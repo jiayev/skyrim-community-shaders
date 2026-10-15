@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace RE
@@ -74,6 +75,21 @@ namespace DCLF::Extensions
 	 */
 	void NoteHiddenSourceSites(std::uint32_t a_sites);
 	std::uint32_t HiddenSourceSites();
+
+	// The features' engine hooks' pushes (Engine/Capture/SceneEvents.cpp), any thread, after InstallFeatures.
+	/**
+	 * @brief A SceneStack channel's event (Api::Stacked) onto the scene's event stack, after what this thread pushed before it: a_pinned
+	 * pinned by the event until its batch is released (render thread), a_named keys alone (nulls dropped from both); stamped and the pass
+	 * woken when the channel's wake is Pass. Nothing for token 0 or once the tracker stopped.
+	 */
+	void PushStacked(Api::EngineChannelId a_channel, std::uint64_t a_token, std::span<RE::NiAVObject* const> a_pinned, std::span<RE::NiAVObject* const> a_named);
+	/** @brief a_channel's wake (Api::EngineChannel::wake): a scene pass for Pass (SceneWake::Channel), nothing for None. */
+	void WakeChannel(Api::EngineChannelId a_channel);
+	/**
+	 * @brief A store of the feature's own to a_object's kHidden bit, as a hidden event on a_site (InstallContext::ReserveHiddenSite), on
+	 * the storing thread after the store. Nothing while the hidden-node source is not installed.
+	 */
+	void PushReservedHidden(const RE::NiAVObject* a_object, std::uint32_t a_site);
 
 	/** @brief Main thread (PrimaryCull::Install): the primary cull installed, so the stand-in observers will be called. */
 	void NoteStandInInstalled();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Features/DrawcallLimitFix/Api/EngineEvents.h"
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -21,13 +23,13 @@ namespace DCLF::LodGates
 	 * InitialLoad Func2s attach a node's first level where nothing above it is loaded (a gate with no outgoing; under a load screen
 	 * they pass through: the full rebuild flushed every gate and DCLF withdraws). A gate:
 	 * - the incoming blocks are hidden (app-cull) before their attach (when not attached already), and kept hidden by vetoing the
-	 *   engine's show stores (HiddenStores' stubs, Vetoes);
+	 *   engine's show stores (the gates' show veto, Api::ShowVeto: the hidden-node source's stubs call Vetoes);
 	 * - the outgoing blocks' handles are taken from their quadtree nodes inside FUN_140510a10 (its detour, in the swap's retirement
 	 *   call), so it skips their detach and release: they stay attached and shown, and DCLF owns the references;
-	 * - the gate is captured as a SceneTracker event (CaptureGate) on the swapping thread at the swap's last retirement call, in order
-	 *   after the attaches;
+	 * - the gate is captured as an event on the scene's stack (CaptureGate: the gates' SceneStack channel) on the swapping thread at the
+	 *   swap's last retirement call, in order after the attaches;
 	 * - the scene coordinator publishes the post-swap claims once every geometry under the incoming roots is a member or ineligible,
-	 *   with a flip for the gate (PublicationDeltas::gateFlips);
+	 *   with a flip for the gate (the gates' component's deltas: GateAdoption);
 	 * - the render thread, adopting that publication (FrameView, at the frame's start before the culls), calls Flip: the incoming shown and the
 	 *   outgoing hidden through app-cull, with their hidden events, in the frame whose claims are post-swap;
 	 * - the next LOD drain, under the manager's lock, detaches and releases the outgoing through the engine's own functions.
@@ -41,11 +43,17 @@ namespace DCLF::LodGates
 	 */
 
 	/**
-	 * @brief The gate event, implemented by the scene side (SceneTracker, EventType::Gate): called by the swap thunks on the swapping
-	 * thread, under the manager's lock, after the incoming blocks' attaches. Pins the incoming roots (the blocks' NiNodes) and names
-	 * the outgoing roots (keys; still attached and shown until Flip). One token per gate, from 1.
+	 * @brief The gate event (Extensions::PushStacked on the gates' channel): called by the swap thunks on the swapping thread, under the
+	 * manager's lock, after the incoming blocks' attaches. Pins the incoming roots (the blocks' NiNodes) and names the outgoing roots
+	 * (keys; still attached and shown until Flip). One token per gate, from 1.
 	 */
 	void CaptureGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing);
+	/**
+	 * @brief Core's registration of the gates (Scene::RegisterCoreGates, InstallFeatures, while Enabled): the SceneStack channel their
+	 * events go on and their outcome posts wake (Extensions::WakeChannel), and the hidden site their own stores carry
+	 * (Extensions::PushReservedHidden). Before any gate opens (none does before DCLF runs).
+	 */
+	void NoteRegistered(Api::EngineChannelId a_channel, std::uint32_t a_hiddenSite);
 
 	/**
 	 * @brief The thunks and detours (CS_DCLF_LOD_GATES, by default on). Once, at DCLF's install. a_running: whether DCLF runs
@@ -62,18 +70,21 @@ namespace DCLF::LodGates
 	void InstallDetours();
 
 	/**
-	 * @brief HiddenStores' veto stubs on the engine's LOD show stores (0x510697, 0x509b59, 0x509b69, 0x5117d0), any thread: the gates
-	 * open (their fast test, a dword compare in the stub), and whether a_object is a pending incoming node of an open gate (its show is
-	 * skipped, and no hidden event pushed). Lock-free: an open-addressing table read without writes.
+	 * @brief The gates' show veto (Api::ShowVeto: open, vetoes), which the hidden-node source's stubs on the engine's LOD show stores
+	 * (0x510697, 0x509b59, 0x509b69, 0x5117d0) call, any thread: the gates open (their fast test, a dword compare in the stub), and
+	 * whether a_object is a pending incoming node of an open gate (its show is skipped, and no hidden event pushed). Lock-free: an
+	 * open-addressing table read without writes.
 	 */
 	const std::atomic<std::uint32_t>& OpenGates();
 	bool Vetoes(const void* a_object);
 	/**
-	 * @brief HiddenStores (PushHidden), any thread: an engine LOD hide store (0x1405106a4, 0x140509b29, 0x140509b39) just hid a_object.
-	 * Under the parity switches it marks a flipped gate's incoming node as hidden again by the engine (the coverage observer's
-	 * evidence: LOD under the loaded cells); otherwise nothing.
+	 * @brief The show veto's engineHid (the hidden-node source's PushHidden), any thread: an engine LOD hide store (kEngineHideSites:
+	 * 0x1405106a4, 0x140509b29, 0x140509b39) just hid a_object. Under the parity switches it marks a flipped gate's incoming node as
+	 * hidden again by the engine (the coverage observer's evidence: LOD under the loaded cells); otherwise nothing.
 	 */
 	void NoteEngineHide(const void* a_object, std::uint32_t a_siteOffset);
+	/** @brief The engine's LOD hide stores NoteEngineHide is told of (the show veto's hideSites): object update, a terrain block's two nodes. */
+	inline constexpr std::array<std::uint32_t, 3> kEngineHideSites{ 0x5106a4, 0x509b29, 0x509b39 };
 
 	/**
 	 * @brief The render thread, adopting a publication that carries a gate's flip: shows the incoming blocks and hides the outgoing
@@ -83,7 +94,7 @@ namespace DCLF::LodGates
 	bool Flip(std::uint64_t a_token);
 
 	/**
-	 * @brief What became of a gate, for the coordinator (SceneWake::Gate wakes it), or of one of its held outgoing blocks: kept names a
+	 * @brief What became of a gate, for the coordinator (its channel's wake, Extensions::WakeChannel), or of one of its held outgoing blocks: kept names a
 	 * block the engine reused (a quadtree node references its handle again: reattached while its gate lived, or found so at its release)
 	 * by its root keys (the object block's NiNode; the terrain block's land and water nodes), with the gate that held it. The block stays
 	 * attached as the node's current one, so the scene stops holding its geometries out (Tracked::gateHeldOut) and commits them again.

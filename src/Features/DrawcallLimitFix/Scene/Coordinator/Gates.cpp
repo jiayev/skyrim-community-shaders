@@ -4,8 +4,10 @@
 
 #include "Internal.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/GateAdoption.h"
 
 #include <algorithm>
 #include <type_traits>
@@ -317,7 +319,9 @@ namespace DCLF::Scene
 			++gateStats.flipped;
 			gateStats.requestToFlipMs.push_back(GateMs(gate.stampNs, gate.flipNs));
 			gateStats.requestToFlipFrames.push_back(gate.flipFrame >= gate.stampFrame ? gate.flipFrame - gate.stampFrame : 0u);
-			gateFlipsMade.push_back(std::move(flip));
+			// Published by this commit's publication, as the gates' component's delta (released by the frame installing it: GateAdoption).
+			const std::uint32_t component = GateAdoption::component.index;
+			Api::CoordinatorComponentContext{ tables, ComponentState(component), *this, component }.PublishDelta(std::make_shared<const GateFlip>(std::move(flip)));
 		}
 	}
 

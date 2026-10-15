@@ -21,8 +21,6 @@ namespace DCLF::Scene
 	void InstallSceneEvents();
 	/** @brief The hidden events' source is installed (hiddenEventsInstalled: Features/HiddenNodes' patched stores). */
 	bool HiddenStoresLive();
-	/** @brief LodGates' own stores (a flip, a forced release's unhide), pushed as a hidden event. */
-	void PushGateHidden(const RE::NiAVObject* a_object);
 
 	/**
 	 * @brief The mirror's updates: values a hooked writer changed, captured after the write on its thread and pushed to
@@ -191,8 +189,9 @@ namespace DCLF::Scene
 	 * (Coordinator::hiddenDependents), and for all on witness frames (Policy::HiddenWitness).
 	 *
 	 * The channel is Core's; its source is a feature's (Features/HiddenNodes: every engine store that can change the bit, patched at its
-	 * early hooks), which sets hiddenEventsInstalled and hiddenGateSite before DCLF's threads start. Without it the walk retakes every
-	 * frame verdict (hiddenGating off), and neither the LOD gates nor the kept scene lists engage.
+	 * early hooks), which sets hiddenEventsInstalled and notes its sites (Extensions::NoteHiddenSourceSites: the reserved sites follow
+	 * them) before DCLF's threads start. Without it the walk retakes every frame verdict (hiddenGating off), and neither the LOD gates
+	 * nor the kept scene lists engage.
 	 */
 	struct HiddenEvent
 	{
@@ -201,11 +200,9 @@ namespace DCLF::Scene
 		bool hidden = false;     // the bit's value after the store
 	};
 	inline bool hiddenEventsInstalled = false;
-	/** @brief The site LodGates' own stores carry (PushGateHidden): one past the source's sites. */
-	inline std::uint32_t hiddenGateSite = 0;
 	/**
-	 * @brief A hidden store's event, on the storing thread after the store (a_site: the source's store, or hiddenGateSite): the mirror's
-	 * bit and the hidden event in one update, so both land in the same batch.
+	 * @brief A hidden store's event, on the storing thread after the store (a_site: the source's store, or a reserved site:
+	 * Extensions::PushReservedHidden): the mirror's bit and the hidden event in one update, so both land in the same batch.
 	 */
 	void PushHiddenUpdate(const void* a_object, std::uint32_t a_site);
 

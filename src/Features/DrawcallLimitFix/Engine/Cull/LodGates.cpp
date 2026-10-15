@@ -5,7 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
-#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 #include <Tracy/Tracy.hpp>
@@ -333,6 +333,10 @@ namespace DCLF::LodGates
 		std::atomic<std::uint32_t> flipActive{ 0 };  // the render thread between a flip's exchange and its Flipped
 		std::atomic<std::uint32_t> engineWork{ 0 };  // open + pending + deferred: the hooks' fast test (no lock taken at 0)
 		std::atomic<std::uint64_t> forcedGeneration{ 0 };
+		// Core's registration (NoteRegistered, InstallFeatures: before any gate opens): the gates' SceneStack channel and their stores'
+		// hidden site.
+		Api::EngineChannelId gatesChannel;
+		std::uint32_t gatesHiddenSite = 0;
 
 		// Counters, since the last report.
 		enum class Flush : std::uint8_t
@@ -397,7 +401,7 @@ namespace DCLF::LodGates
 				return;
 			PostOutcome({ a_token, false, { a_nodes[0], a_nodes[1] } });
 			counters.kept.fetch_add(1, std::memory_order_relaxed);
-			WakeSceneGate();
+			Extensions::WakeChannel(gatesChannel);
 		}
 
 		struct OpenedNode
@@ -573,7 +577,7 @@ namespace DCLF::LodGates
 		{
 			for (auto* node : a_nodes)
 				if (node && SetHidden(node, false))
-					Scene::PushGateHidden(node);
+					Extensions::PushReservedHidden(node, gatesHiddenSite);
 		}
 
 		void EraseIfHeldBy(EngineSide& a_side, std::uintptr_t a_block, std::uint64_t a_token)
@@ -684,7 +688,7 @@ namespace DCLF::LodGates
 			counters.superseded.fetch_add(1, std::memory_order_relaxed);
 			NoteForced(a_gate);
 			Recycle(a_side, &a_gate);
-			WakeSceneGate();
+			Extensions::WakeChannel(gatesChannel);
 		}
 
 		/** @brief A held block stolen again by a later swap: the earlier gate's copy only drops its reference. */
@@ -821,7 +825,7 @@ namespace DCLF::LodGates
 			counters.flushes[static_cast<std::size_t>(a_reason)].fetch_add(1, std::memory_order_relaxed);
 			Publish(side);
 			if (!forced.empty())
-				WakeSceneGate();
+				Extensions::WakeChannel(gatesChannel);
 		}
 
 		// The swap: attaches (pre-hide), the retirement (steal), the gate (Emit).
@@ -1270,6 +1274,19 @@ namespace DCLF::LodGates
 		return installed;
 	}
 
+	void CaptureGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing)
+	{
+		// The scene side of the gate: an event on the swapping thread's stack, ordered after the attaches it follows; the coordinator
+		// opens the gate when it applies it (the gates' component's stacked hook).
+		Extensions::PushStacked(gatesChannel, a_token, a_incoming, a_outgoing);
+	}
+
+	void NoteRegistered(Api::EngineChannelId a_channel, std::uint32_t a_hiddenSite)
+	{
+		gatesChannel = a_channel;
+		gatesHiddenSite = a_hiddenSite;
+	}
+
 	const std::atomic<std::uint32_t>& OpenGates()
 	{
 		return openGates;
@@ -1355,7 +1372,7 @@ namespace DCLF::LodGates
 				continue;
 			for (auto* node : block.nodes)
 				if (node && SetHidden(node, true))
-					Scene::PushGateHidden(node);
+					Extensions::PushReservedHidden(node, gatesHiddenSite);
 		}
 		gate->flippedTicks = Ticks();
 		gate->flippedFrame = SceneCapture::Frame();

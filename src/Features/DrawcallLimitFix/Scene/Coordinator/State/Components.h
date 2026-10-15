@@ -14,5 +14,8 @@ namespace DCLF::Scene
 		std::vector<std::shared_ptr<void>> components;
 		// Their seed requests (into the deltas: PublicationDeltas::componentSeeds), by registration; empty while none asked.
 		std::vector<std::vector<FadeSeedItem>> componentSeedRequests;
+		// Their deltas for the next publication (PublicationDeltas::componentDeltas: CoordinatorComponentContext::PublishDelta), by
+		// registration; empty while none published.
+		std::vector<std::vector<std::shared_ptr<const void>>> componentDeltaRequests;
 	};
 }
