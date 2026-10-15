@@ -32,8 +32,8 @@ namespace DCLF
 	 * - what moved is what the move writers pushed (FrameValueMoves, the producer the queues' one consumer), looked up in an index from
 	 *   move key to the kept movers and roots, patched as plans add, change and remove them: a mover or root is sampled when one of its
 	 *   keys moved this frame or the last, when a plan added or changed it, and on the frame after a sample of it changed a row or palette
-	 *   (so a skin's previous palette and a placement's previous world settle once its motion stops); particle systems every frame (their
-	 *   quads face the camera);
+	 *   (so a skin's previous palette and a placement's previous world settle once its motion stops); a palette rows class's items every
+	 *   frame, their blocks the class's registration's (Api::PaletteRowsContribution: particle quads face the camera);
 	 * - send the frame's buffers the runs they lack on the dedicated upload queue, then signal the frame-wait timeline to the frame's
 	 *   sequence number (always, also after a failure), which every batch of the frame waits for (PersistentGraphHost's frame wait).
 	 *
@@ -86,16 +86,17 @@ namespace DCLF
 		 */
 		void SetRootViewClaims(std::shared_ptr<const SetSnapshot> a_claims) { rootViewClaims = std::move(a_claims); }
 		/**
-		 * @brief The first-person report: the first-person particle members' expansions since the last call, their
-		 * particles, and the farthest a snapshot's bound centre was from the first-person eye it was faced to (a snapshot taken while
+		 * @brief The first-person report: the palette rows classes' first-person writes since the last call that gave their placement
+		 * (Api::PaletteRowsChunk::NoteFirstPerson; Features/Particles: the first-person particle members' expansions), their units (the
+		 * particles), and the farthest a written placement's bound centre was from the first-person eye (a particle snapshot taken while
 		 * Main::Draw had the skeleton in its root's space would be far from it).
 		 */
-		struct FirstPersonParticleStats
+		struct FirstPersonPaletteStats
 		{
-			std::uint64_t expansions = 0, particles = 0;
+			std::uint64_t writes = 0, units = 0;
 			float farthest = 0.0f;
 		};
-		static FirstPersonParticleStats TakeFirstPersonParticleStats();
+		static FirstPersonPaletteStats TakeFirstPersonPaletteStats();
 		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */
 		void Skip();
 		/** @brief Render thread, after the frame's last submission: binds the frame's backings to it (SubmittedRetirementPoint). */

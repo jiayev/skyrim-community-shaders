@@ -1,5 +1,6 @@
 // Particles: the effect-shader particle systems DCLF draws from the snapshots of the engine's particle update. Its switch and the
-// particles toggle, the particle geometry types' contributions, the snapshots' engine hooks, the report lines and the parity.
+// particles toggle, the particle geometry types' contributions, the snapshots' engine hooks, their palette rows, the report lines and the
+// parity.
 
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -28,6 +29,8 @@ namespace DCLF::Features::Particles
 				a_context.RegisterGeometryType({ .geometryType = static_cast<std::uint8_t>(type), .toggle = particlesToggle });
 			// The particle systems' snapshots, taken after the engine's update of each (ParticleSnapshots; the systems DCLF follows alone).
 			ParticleSnapshots::Get().Install();
+			// Their palette rows: the members' blocks and placements, from the snapshots, every frame.
+			RegisterRows(a_context);
 			RegisterReport(a_context);
 			// CS_DCLF_SET_PARITY: the members' withheld particle passes.
 			if (Diagnostics::Observe().claims)

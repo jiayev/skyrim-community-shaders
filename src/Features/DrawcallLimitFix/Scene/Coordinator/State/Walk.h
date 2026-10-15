@@ -101,7 +101,7 @@ namespace DCLF::Scene
 			bool lodChain = false;
 			bool skinCandidate = false;  // in this walk's skinnedObjects
 			std::uint32_t boneRows = 0;  // 0 without a palette (or past 240)
-			std::uint32_t particleRows = 0;  // a particle member's block of the frame's palettes (ParticleSnapshots::RowsOf)
+			std::uint32_t particleRows = 0;  // a particle member's block of the frame's palettes (its palette rows class's rule)
 			std::uint8_t shadowReject = 0;
 			std::uint32_t shadowTechnique = 0;
 			const RE::BSShaderMaterial* shadowMaterial = nullptr;  // the alpha-tested techniques' diffuse

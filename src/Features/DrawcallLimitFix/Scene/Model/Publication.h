@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneSet.h"
@@ -96,9 +97,10 @@ namespace DCLF
 			// producer never samples it, and the render thread takes a claimed one's row and palette at the frame's start, before
 			// the shift (FrameValues::Kick).
 			bool firstPerson = false;
-			// A particle system's (its block, boneOffset and boneRows, is its quads': ParticleSnapshots, five rows a particle): the
-			// producer expands its newest snapshot there, and its placement row is the snapshot's.
-			bool particles = false;
+			// Its palette rows class (Api::PaletteRowsContribution; None: a skin's block, or none): a class's block (boneOffset and
+			// boneRows) is filled by the class's registration every frame, which may give its placement row (Features/Particles: a particle
+			// system's quads, five rows a particle, and its snapshot's world).
+			Api::FrameValueItemClass itemClass = Api::FrameValueItemClass::None;
 		};
 		/** @brief An item as compared (raw pointers, never dereferenced): the coordinator's planned set, the parity's, FrameValues' kept one. */
 		struct Key
@@ -106,12 +108,13 @@ namespace DCLF
 			const void* object = nullptr;
 			std::uint32_t slot = kNoObjectSlot, layerSlot = kNoObjectSlot, boneOffset = 0, boneRows = 0;
 			const void* sunEntry = nullptr;
-			bool firstPerson = false, particles = false;
+			bool firstPerson = false;
+			Api::FrameValueItemClass itemClass = Api::FrameValueItemClass::None;
 			bool operator==(const Key&) const = default;
 			static Key Of(const Item& a_item)
 			{
 				return { a_item.geometry.get(), a_item.slot, a_item.layerSlot, a_item.boneOffset, a_item.boneRows, a_item.sunEntryNode.get(), a_item.firstPerson,
-					a_item.particles };
+					a_item.itemClass };
 			}
 		};
 		struct Root

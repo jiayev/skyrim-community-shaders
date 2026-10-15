@@ -12,9 +12,9 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
@@ -116,8 +116,9 @@ namespace DCLF
 		}
 		// The frame's camera duties (FadeEye, the camera cut, the tree height test) from the main camera, under the frame's number.
 		PrimaryCull::Get().BeginFrameCamera();
-		// The main camera the frame's particle quads face (FrameValues' producer expands them), and the renderer's quads once.
-		ParticleSnapshots::Get().BeginFrame();
+		// The palette rows classes' frame start (Features/Particles: the main camera the frame's particle quads face, which FrameValues'
+		// producer expands them for, and the renderer's quads once).
+		Extensions::PaletteRowsFrameStart();
 		auto& draws = IndirectDraws::Get();
 		{
 			// The newest complete snapshot the builder posted, adopted whole - its revision, its draws and its publication (installed here

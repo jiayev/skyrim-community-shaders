@@ -1,8 +1,8 @@
 {
  "legacyEdges": {
-  "Core -> Engine": 22,
+  "Core -> Engine": 20,
   "Core -> Scene": 29,
-  "Engine -> Scene": 28,
+  "Engine -> Scene": 27,
   "Features/Billboards -> Engine": 1,
   "Features/Billboards -> Scene": 3,
   "Features/Decals -> Scene": 2,
@@ -15,7 +15,7 @@
   "Features/Shadows/Local -> Scene": 2,
   "Features/Shadows/Sun -> Scene": 1,
   "Features/TextureTransforms -> Scene": 1,
-  "Scene -> Engine": 34
+  "Scene -> Engine": 33
  },
  "overThresholds": {
   "DCLF::CaptureParity::OnNativeLightingDraw": [
@@ -109,10 +109,6 @@
   "DCLF::MaterialPort::EvaluateVanilla": [
    212,
    60
-  ],
-  "DCLF::ParticleSnapshots::Expand": [
-   127,
-   30
   ],
   "DCLF::PrepareWrites": [
    145,

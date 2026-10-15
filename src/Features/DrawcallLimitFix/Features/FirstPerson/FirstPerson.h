@@ -20,7 +20,8 @@
 //   misfiled observer, ViewMisfiled), the set's decisions (SetParticipation, the slot readiness, the first-person decals' forward keys:
 //   Coordinator::ViewDecalForward), the placements' per-frame chains (Placements.cpp, Walk.cpp), the frame requests' root and the frame
 //   globals' culled bits (FrameGlobals::NoteFirstPersonCulled);
-// - FrameValues' root-view rows and palettes (taken at the frame's start, the palette marks) and its particles faced to the view's eye;
+// - FrameValues' root-view rows and palettes (taken at the frame's start, the palette marks), and its counters of the palette rows
+//   classes' first-person writes (Features/Particles faces their quads to the view's eye), which the report reads with no Particles include;
 // - PassCapture's withholding of the members' engine registrations (InMainRenderers), and the census's first-person view.
 // Included by the feature's sources only (and Features/Manifest.cpp, for the constants).
 

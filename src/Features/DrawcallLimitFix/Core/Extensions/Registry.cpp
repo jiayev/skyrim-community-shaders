@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
@@ -58,6 +59,8 @@ namespace DCLF::Extensions
 			std::array<Api::MainRangeContribution, kMainRangeSlots> mainRanges{};
 			// The vertex stream (entry class Count: none). Resolved at the end (ResolveVertexStream).
 			Api::VertexStreamContribution vertexStream{};
+			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
+			std::array<Api::PaletteRowsContribution, Api::kPaletteRowsClasses> paletteRows{};
 			bool installed = false;
 		};
 
@@ -363,6 +366,20 @@ namespace DCLF::Extensions
 				lists.vertexStream = a_stream;
 			}
 
+			void RegisterPaletteRows(const Api::PaletteRowsContribution& a_rows) override
+			{
+				const auto& rule = a_rows.rule;
+				const bool ruleValid = rule.rowsPerUnit && rule.minUnits && rule.minUnits <= rule.maxUnits && (!rule.pow2 || std::has_single_bit(rule.maxUnits));
+				if (a_rows.itemClass == Api::FrameValueItemClass::None || a_rows.itemClass >= Api::FrameValueItemClass::Count || a_rows.name.empty() || !ruleValid ||
+					!a_rows.geometrySource || !a_rows.beginRun || !a_rows.sampleChunk || !a_rows.endRun)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete palette rows class", feature));
+				auto& entry = lists.paletteRows[static_cast<std::size_t>(a_rows.itemClass) - 1];
+				if (entry.itemClass != Api::FrameValueItemClass::Count)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes palette rows class {}, which {} has", feature,
+						static_cast<std::uint32_t>(a_rows.itemClass), entry.name));
+				entry = a_rows;
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -396,13 +413,14 @@ namespace DCLF::Extensions
 		}
 		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
-		// ranges' draw order; the vertex stream's (and the scene resources' order: its first).
+		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the palette rows classes'.
 		ResolveViews(lists.views, lists.viewWork);
 		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
 		ResolveViewBits();
 		ResolveDrawFamilies(lists.drawFamilies);
 		ResolveMainRanges(lists.mainRanges);
 		ResolveVertexStream(lists.vertexStream);
+		ResolvePaletteRows(lists.paletteRows);
 		// The features' toggles seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
 	}
