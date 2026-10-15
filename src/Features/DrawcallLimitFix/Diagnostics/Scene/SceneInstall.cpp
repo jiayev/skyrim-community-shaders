@@ -30,7 +30,6 @@ namespace DCLF::Diagnostics
 			InstallTreeLodParity();
 			InstallSlotDrainCheck();
 			InstallCandidateParity();
-			InstallDecalOrderParity();
 			InstallLodSegmentParity();
 			InstallShadowSetParity();
 			InstallReplayParity();

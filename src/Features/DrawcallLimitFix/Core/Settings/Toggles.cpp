@@ -17,8 +17,6 @@ namespace DCLF
 
 		constexpr ToggleInfo kToggles[] = {
 			{ &S::skinned, Switch::Skinned, kOn, "skinned", "Object classes", "Skinned (CS_DCLF_SKINNED)", nullptr, true, {} },
-			{ &S::decals, Switch::Decals, kOn, "decals", {}, "Decals (CS_DCLF_DECALS)", nullptr, true, {} },
-			{ &S::layers, Switch::Layers, kOn, "multi-index layers", {}, "Multi-index shapes: cave walls with an ice or snow layer (CS_DCLF_LAYERS)", nullptr, true, { &S::decals } },
 			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV (CS_DCLF_PROJECTED_UV)", nullptr, true, {} },
 			{ &S::mtLand, Switch::MtLand, kOn, "terrain", {}, "Terrain (CS_DCLF_MTLAND)", nullptr, true, {} },
 			{ &S::tbTerrain, Switch::TbTerrain, kOn, "terrain under TB", {}, "Terrain under Terrain Blending (CS_DCLF_TB_TERRAIN)",
@@ -91,6 +89,9 @@ namespace DCLF
 			for (const auto need : a_info.needs)
 				if (need && !(a_set.*need))
 					return false;
+			for (const auto need : a_info.registeredNeeds)
+				if (need && !a_set.On(need))
+					return false;
 			return true;
 		}
 
@@ -136,6 +137,16 @@ namespace DCLF
 					return static_cast<std::ptrdiff_t>(i);
 			return -1;
 		}
+
+		/** @brief The toggle named a_name, Core's or a feature's already registered, by its index in the table (none: -1). */
+		std::ptrdiff_t ToggleAt(std::string_view a_name)
+		{
+			const auto& table = Table();
+			for (std::size_t i = 0; i < table.size(); ++i)
+				if (table[i].name == a_name)
+					return static_cast<std::ptrdiff_t>(i);
+			return -1;
+		}
 	}
 
 	std::span<const ToggleInfo> ToggleTable()
@@ -171,10 +182,15 @@ namespace DCLF
 		for (std::size_t n = 0; n < std::size(a_toggle.needs); ++n) {
 			if (a_toggle.needs[n].empty())
 				continue;
-			const auto need = CoreToggleAt(a_toggle.needs[n]);
+			// Core's, or a feature's registered before it (Features/Decals: the layers need the decals).
+			const auto need = ToggleAt(a_toggle.needs[n]);
 			if (need < 0 || static_cast<std::size_t>(need) >= at)
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s toggle {} needs {}, which Core does not have before it", a_feature, a_toggle.name, a_toggle.needs[n]));
-			info.needs[n] = table[static_cast<std::size_t>(need)].member;
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s toggle {} needs {}, which is not listed before it", a_feature, a_toggle.name, a_toggle.needs[n]));
+			const auto& needed = table[static_cast<std::size_t>(need)];
+			if (needed.member)
+				info.needs[n] = needed.member;
+			else
+				info.registeredNeeds[n] = needed.registered;
 		}
 		table.insert(table.begin() + static_cast<std::ptrdiff_t>(at), info);
 		registeredCount.store(bit + 1, std::memory_order_relaxed);

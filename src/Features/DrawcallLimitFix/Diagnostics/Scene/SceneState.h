@@ -119,7 +119,7 @@ namespace DCLF::Diagnostics
 		std::uint64_t checks = 0, mismatches = 0;
 	};
 
-	/** @brief CS_DCLF_PERSISTENT_PARITY: the kept decal order against one made whole, the coordinator's. */
+	/** @brief CS_DCLF_PERSISTENT_PARITY: the kept decal order against one made whole (Features/Decals' parity), the scene lane's. */
 	struct DecalOrderParityState
 	{
 		std::uint64_t checks = 0, decals = 0, differ = 0, staleKeys = 0, unordered = 0;

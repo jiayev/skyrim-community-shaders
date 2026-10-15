@@ -1,8 +1,8 @@
 #pragma once
 
 // The object contributor contracts' Core side (Api/ObjectContributors.h): the technique contributions by technique (the Lighting port's
-// eligibility and the joins' record flags read them as data), the geometry type and parent contributions' toggles (the eligibility, the
-// walk, the captures and the classification read them as data), what a shading contribution is handed, and the calls the Lighting port's
+// eligibility and the joins' record flags read them as data), the geometry type, parent and object class contributions' toggles (the
+// eligibility, the walk, the captures and the classification read them as data), what a shading contribution is handed, and the calls the Lighting port's
 // shading sample and the frame globals' capture make.
 
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
@@ -83,6 +83,17 @@ namespace DCLF::Extensions
 	inline bool ParentAdmits(const ToggleSet& a_toggles, Api::EngineParent a_parent, Api::ParentLeaves a_leaves)
 	{
 		return a_toggles.On(RegisteredParents()[static_cast<std::size_t>(a_parent)][static_cast<std::size_t>(a_leaves)]);
+	}
+
+	/** @brief The object class contributions' toggles, by class (none: no contribution). */
+	using ObjectClassToggles = std::array<Api::ToggleId, static_cast<std::size_t>(Api::ObjectClass::Count)>;
+	/** @brief Any thread, after InstallFeatures (all none before): the object class contributions' toggles. */
+	const ObjectClassToggles& RegisteredObjectClasses();
+
+	/** @brief Whether a_class's objects are DCLF's under a_toggles (its contribution's toggle on; false for none). */
+	inline bool ObjectClassOn(const ToggleSet& a_toggles, Api::ObjectClass a_class)
+	{
+		return a_toggles.On(RegisteredObjectClasses()[static_cast<std::size_t>(a_class)]);
 	}
 
 	/**

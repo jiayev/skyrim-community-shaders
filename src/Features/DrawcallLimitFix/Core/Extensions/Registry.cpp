@@ -31,6 +31,7 @@ namespace DCLF::Extensions
 			TechniqueEntries techniques{};
 			GeometryTypeToggles geometryTypes{};
 			ParentToggles parents{};
+			ObjectClassToggles objectClasses{};
 			std::vector<ShadingContributionEntry> shadingContributions;
 			std::vector<FrameGlobalsEntry> frameGlobals;
 			std::uint32_t frameGlobalsFloats = 0;
@@ -156,7 +157,8 @@ namespace DCLF::Extensions
 				if (a_component.name.empty() || !a_component.make)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete coordinator component", feature));
 				lists.coordinatorComponents.push_back(
-					{ std::string(a_component.name), a_component.make, a_component.resident, a_component.left, a_component.recount, a_component.reset });
+					{ std::string(a_component.name), a_component.make, a_component.resident, a_component.left, a_component.recount, a_component.reset,
+						a_component.allLeft, a_component.accumulated, a_component.rewritten, a_component.joinsDone });
 				return { static_cast<std::uint32_t>(lists.coordinatorComponents.size() - 1) };
 			}
 
@@ -189,6 +191,17 @@ namespace DCLF::Extensions
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes parent {} leaves {}, which another feature has", feature,
 						static_cast<std::uint32_t>(a_parent.parent), static_cast<std::uint32_t>(a_parent.leaves)));
 				toggle = a_parent.toggle;
+			}
+
+			void RegisterObjectClass(const Api::ObjectClassContribution& a_class) override
+			{
+				if (a_class.objectClass >= Api::ObjectClass::Count || !a_class.toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete object class contribution", feature));
+				auto& toggle = lists.objectClasses[static_cast<std::size_t>(a_class.objectClass)];
+				if (toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes object class {}, which another feature has", feature,
+						static_cast<std::uint32_t>(a_class.objectClass)));
+				toggle = a_class.toggle;
 			}
 
 			void RegisterShading(const Api::ShadingContribution& a_shading) override
@@ -255,6 +268,7 @@ namespace DCLF::Extensions
 	const TechniqueEntries& RegisteredTechniques() { return Registered().techniques; }
 	const GeometryTypeToggles& RegisteredGeometryTypes() { return Registered().geometryTypes; }
 	const ParentToggles& RegisteredParents() { return Registered().parents; }
+	const ObjectClassToggles& RegisteredObjectClasses() { return Registered().objectClasses; }
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions() { return Registered().shadingContributions; }
 	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals() { return Registered().frameGlobals; }
 }

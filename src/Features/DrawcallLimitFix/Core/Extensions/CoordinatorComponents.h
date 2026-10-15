@@ -15,6 +15,7 @@ namespace DCLF
 {
 	struct SceneTables;
 	struct FadeSeedItem;
+	class SceneMirror;
 	namespace Scene
 	{
 		class Coordinator;
@@ -60,10 +61,35 @@ namespace DCLF::Api
 		void RequestSeed(FadeSeedItem&& a_seed) const;
 		/** @brief Whether KeepResidentsAlive counted a_slot (a resident with a pipeline: what the residents keep alive). */
 		bool Counted(std::uint32_t a_slot) const;
+		/** @brief The coordinator's scene mirror, as the pass's events left it (the parent chains, the nodes' kinds; no engine memory). */
+		const SceneMirror& Mirror() const;
+		/** @brief The coordinator's pass serial (the observers' ParityDue). */
+		std::uint64_t PassSerial() const;
 
 	private:
 		Scene::Coordinator& coordinator;  // the services above, not the component's
 		std::uint32_t component;          // its registration
+	};
+
+	/**
+	 * @brief An accumulated patch's values a component lists by (ApplyAccumulatePatch): the draw chain the Lighting port derived for an
+	 * object drawn in a kept order (a decal's group, pass and sub-pass: AccumulatePatch::decalKey; 0 for none).
+	 */
+	class AccumulatedPatch
+	{
+	public:
+		std::uint64_t chain;
+	};
+
+	/**
+	 * @brief A walk's rewrite of a slot (Coordinator::WriteObject, WriteLayer, or a skin's refresh in place): whether its scene half was
+	 * rewritten (it may have moved in the scene graph), and its skin partitions before and now (equal when they did not change).
+	 */
+	class SlotRewrite
+	{
+	public:
+		bool written;
+		std::uint32_t partitionsBefore, partitionsNow;
 	};
 
 	/**

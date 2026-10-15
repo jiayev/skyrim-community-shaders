@@ -53,7 +53,7 @@ namespace DCLF
 			// A multi-index shape's ice or snow layer (kMultiIndexSnow with kProjectedUV): SparkleParams is SetupMaterial's; SetupGeometry's
 			// projected textures replace the slot-10 texture SetupTechnique binds.
 			case Technique::MultiIndexSparkle:
-				return ActiveToggles().layers;
+				return Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Layer);
 			// Actor skin (SKIN path, TintColor), faces (Facegen: tint and detail maps at t3/t4), hair (TintColor) and eyes (eye
 			// centres, material VS constants): all written by SetupMaterial. A face part's positions are FaceSnapshots'.
 			case Technique::FacegenRGBTint:
@@ -312,7 +312,7 @@ namespace DCLF
 			// A multi-index shape's layer (engine notes, "The main modes' registration"): every pass goes into geometry group 2 with
 			// hint 12, and FUN_1414b3bb0 draws it after the opaque decals with their state (depth test+write, bias mode 8 + b, no
 			// blending, write mode 10, render flags 0x41: alpha property not applied). DCLF's decal group 3, between opaque and blended.
-			if (!ActiveToggles().decals)
+			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal))
 				return Ineligible::Decal;
 			a_out.decalGroup = 3;
 			a_out.decalBlendMode = 0;
@@ -324,7 +324,7 @@ namespace DCLF
 			//           alpha test from its flag), write mode 1 with kZBufferWrite (SetupGeometry forces it), else 11 (the group's).
 			// Neither occludes anything its host does not, so DCLF draws them in a second pass without depth writes. Without an
 			// accumulated pass the hint is GetRenderPasses' for the settled object: 2 + (material alpha < 1 or blending).
-			if (!ActiveToggles().decals || !(f & Bit(Flag::kZBufferTest)))
+			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal) || !(f & Bit(Flag::kZBufferTest)))
 				return Ineligible::Decal;
 			const std::uint32_t hint = a_accumulated ? a_accumulated->hint : (a_property.materialAlpha < 1.0f || blending) ? 3u : 2u;
 			if (hint == 2) {
@@ -545,7 +545,7 @@ namespace DCLF
 		// Effect decals (hints 2 and 3) go to DCLF's decal groups (G-buffer pass, DEFERRED). kTempRefraction with kDynamicDecal
 		// registers no pass at all (GetRenderPasses), so it stays a variant.
 		if ((f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) &&
-			(!ActiveToggles().decals || ((f & Bit(Flag::kTempRefraction)) && (f & Bit(Flag::kDynamicDecal)))))
+			(!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal) || ((f & Bit(Flag::kTempRefraction)) && (f & Bit(Flag::kDynamicDecal)))))
 			variants |= kEffectVariantDecal;
 		if (f & Bit(Flag::kBillboard))
 			variants |= kEffectVariantSkyObject;
@@ -590,7 +590,7 @@ namespace DCLF
 		// blended by the frame's alpha: DCLF keeps it opaque (drawcall-limit-fix.md, "Opaque effects").
 		static const bool opaqueEffects = SwitchOnUnlessZero(Switch::OpaqueEffects);
 		const bool opaque = !blending && !decal;
-		if (opaque && (!opaqueEffects || !ActiveToggles().decals || (f & Bit(Flag::kFalloff)) || !(f & Bit(Flag::kZBufferTest)) || !(f & Bit(Flag::kZBufferWrite)) ||
+		if (opaque && (!opaqueEffects || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal) || (f & Bit(Flag::kFalloff)) || !(f & Bit(Flag::kZBufferTest)) || !(f & Bit(Flag::kZBufferWrite)) ||
 						  ParticleGeometryType(a_leaf.Type())))
 			return Ineligible::EffectOpaque;
 		// A taken particle system: hint 1, the forward epoch's.

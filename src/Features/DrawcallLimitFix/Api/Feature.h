@@ -40,7 +40,7 @@ namespace DCLF::Api
 		/** @brief Fails the install for a register Core or another binding has, or past Extensions::kFrameBindingSlots bindings. */
 		virtual void RegisterFrameBinding(const FrameBinding& a_binding) = 0;
 		virtual SwitchId RegisterSwitch(const FeatureSwitch& a_switch) = 0;
-		/** @brief Fails the install past the toggle word's bits, or for a toggle after or needing one Core does not have. */
+		/** @brief Fails the install past the toggle word's bits, for a toggle after one Core does not have, or needing one not listed before it. */
 		virtual ToggleId RegisterToggle(const FeatureToggle& a_toggle) = 0;
 		virtual void RegisterReportLines(const ReportLines& a_lines) = 0;
 		/** @brief Whether the primary cull is installed: false, and the observer is never called, without it (its engine hooks failed). */
@@ -54,6 +54,8 @@ namespace DCLF::Api
 		virtual void RegisterGeometryType(const GeometryTypeContribution& a_type) = 0;
 		/** @brief Fails the install for a parent and leaves another feature has, or without a registered toggle. */
 		virtual void RegisterParent(const ParentContribution& a_parent) = 0;
+		/** @brief Fails the install for a class another feature has, or without a registered toggle. */
+		virtual void RegisterObjectClass(const ObjectClassContribution& a_class) = 0;
 		virtual void RegisterShading(const ShadingContribution& a_shading) = 0;
 		/** @brief Fails the install past Extensions::kFrameGlobalsFloats floats in all. */
 		virtual FrameGlobalsSlot RegisterFrameGlobals(const FrameGlobalsContribution& a_globals) = 0;

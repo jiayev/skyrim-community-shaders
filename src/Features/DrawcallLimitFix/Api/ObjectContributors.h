@@ -1,7 +1,8 @@
 #pragma once
 
-// The object contributor contracts (Api::InstallContext::RegisterTechnique, RegisterGeometryType, RegisterParent, RegisterShading,
-// RegisterFrameGlobals): what a feature adds to the objects DCLF draws of an engine technique, geometry type or parent class it ports -
+// The object contributor contracts (Api::InstallContext::RegisterTechnique, RegisterGeometryType, RegisterParent, RegisterObjectClass,
+// RegisterShading, RegisterFrameGlobals): what a feature adds to the objects DCLF draws of an engine technique, geometry type, parent
+// class or object class it ports -
 // their eligibility and record flags, the per-object values the Lighting port derives from their properties, and the engine globals that
 // derivation reads, captured with the frame's. The records' layouts
 // stay compile-time: a feature declares its flag bits in its own header (Features/Manifest.cpp checks them against Core's and each
@@ -79,6 +80,34 @@ namespace DCLF::Api
 	{
 		EngineParent parent = EngineParent::Billboard;
 		ParentLeaves leaves = ParentLeaves::TurnedEffectShapes;
+		ToggleId toggle;
+	};
+
+	/**
+	 * @brief An object class Core's ports recognize and derive (its draw state, its range of the main pass) but leave native until a
+	 * feature takes it.
+	 */
+	enum class ObjectClass : std::uint8_t
+	{
+		// A decal (kDecal, kDynamicDecal: accumulation hints 2 and 3), Lighting's or the Effect port's, and the opaque effects drawn through
+		// the opaque decal group (Ineligible::Decal, kEffectVariantDecal, Ineligible::EffectOpaque).
+		Decal,
+		// A multi-index shape's layer (the additional property's passes, hint 12: the decal group 3) and the MultiIndexSparkle technique
+		// (Ineligible::MultiIndex).
+		Layer,
+		Count,
+	};
+
+	/**
+	 * @brief An object class contribution: the class's objects are DCLF's while the toggle is on. Read where the objects are classified
+	 * (the Lighting and Effect ports' eligibility, the primary entries), as data (no call per object).
+	 *
+	 * - objectClass: the class, one feature's.
+	 * - toggle: a registered toggle.
+	 */
+	struct ObjectClassContribution
+	{
+		ObjectClass objectClass = ObjectClass::Count;
 		ToggleId toggle;
 	};
 

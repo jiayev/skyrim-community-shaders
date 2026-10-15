@@ -1,0 +1,38 @@
+// Decals: the decals and multi-index layers DCLF draws in its decal groups. Its switches and the decals and layers toggles, the object
+// classes' contributions, the member decals' order (a coordinator component) and its parity.
+
+#include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+
+namespace DCLF::Features::Decals
+{
+	namespace
+	{
+		void Install(Api::InstallContext& a_context)
+		{
+			// Where Core's were listed: after the actors' (and Features/TreeWind's, which registers before this feature).
+			const auto decalsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_DECALS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
+				.description = "0: decals stay native (live toggle's seed)", .after = "CS_DCLF_ACTORS" });
+			const auto layersSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LAYERS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
+				.description = "0: multi-index shapes' main passes stay native (live toggle's seed)", .after = "CS_DCLF_ACTORS" });
+			// Decals (accumulation hints 2 and 3), drawn by the second pass: an object class. After the skinned (and the trees, registered
+			// before), the layers after it.
+			const auto decals = a_context.RegisterToggle({ .name = "decals", .label = "Decals (CS_DCLF_DECALS)", .seed = decalsSwitch,
+				.entersClassification = true, .after = "skinned" });
+			// Multi-index shapes' main passes: the shape, and its layer (the additional property's passes, hint 12) as decal group 3.
+			const auto layers = a_context.RegisterToggle({ .name = "multi-index layers", .label = "Multi-index shapes: cave walls with an ice or snow layer (CS_DCLF_LAYERS)",
+				.seed = layersSwitch, .entersClassification = true, .after = "skinned", .needs = { "decals" } });
+			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Decal, .toggle = decals });
+			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Layer, .toggle = layers });
+			RegisterOrder(a_context);
+			// CS_DCLF_PERSISTENT_PARITY: the kept order against one made whole.
+			if (Diagnostics::Observe().scene)
+				SubscribeOrderParity();
+		}
+	}
+
+	Api::Feature Feature()
+	{
+		return { "decals", &Install };
+	}
+}

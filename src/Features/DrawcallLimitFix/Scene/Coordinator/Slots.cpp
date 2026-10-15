@@ -97,8 +97,6 @@ namespace DCLF::Scene
 		shadowDirtySlots.clear();
 		++tablesGeneration;
 		fullEvaluation = true;
-		memberDecals.clear();
-		NoteDecalsCleared();
 	}
 
 	void Coordinator::CheckObjectSlots(bool a_resolveBuffers)

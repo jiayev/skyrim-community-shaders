@@ -796,9 +796,6 @@ namespace DCLF::Scene
 		ListFadeRoot(objectId);
 		tables.objectIdentity[objectId] = trackedEntry->identity;
 		tables.objectGroup[objectId] = trackedEntry->groupIdentity;
-		// A rewritten member decal may have moved in the scene graph: reorder it.
-		if (memberDecals.contains(objectId))
-			NoteDecalChanged(objectId);
 		const std::uint32_t keptPipeline = tables.draws[objectId].pipelineIndex;
 		if (keepHalf) {
 			// The scene bits the accumulate phase keeps are this write's; everything else is the patch's.
@@ -819,8 +816,9 @@ namespace DCLF::Scene
 			trackedEntry->identity);
 		if (trackedEntry->actorOwned)
 			tables.actorObjects.push_back(objectId);
-		if (DecalSpanOf(tables.skinPartitions[objectId]) != DecalSpanOf(partitionMask))
-			NoteDecalChanged(objectId);  // blood decals: its slots follow its partitions (DecalSpanOf)
+		// The features' components follow the rewrite (Features/Decals: a member decal may have moved in the scene graph, and its slots
+		// follow its partitions).
+		ComponentsRewritten(objectId, true, tables.skinPartitions[objectId], partitionMask);
 		tables.skinPartitions[objectId] = partitionMask;
 		tables.skinLodPartitions[objectId] = r.skinLodWord;
 		if (!denseWalk) {
@@ -889,8 +887,7 @@ namespace DCLF::Scene
 		ListFadeRoot(slot);
 		tables.objectIdentity[slot] = a_tracked.identity;
 		tables.objectGroup[slot] = a_tracked.groupIdentity;
-		if (memberDecals.contains(slot))
-			NoteDecalChanged(slot);
+		ComponentsRewritten(slot, true, 0u, 0u);  // a layer's partitions are not rewritten here
 		tables.layerBase[slot] = a_base;
 		// The base's own column: replayed by slot only when noted (the base's write may note no change).
 		if (std::exchange(tables.layerOf[a_base], slot) != slot)
@@ -1237,9 +1234,9 @@ namespace DCLF::Scene
 		++stats.lightSkins;
 		if (tables.skinPartitions[slot] != a_result.skinPartitions || tables.skinLodPartitions[slot] != a_result.skinLodPartitions)
 			tables.NoteChange(slot, kChangeSkin | kChangeStructure);
-		// Blood decals' slots follow the partitions: reorder when the span moves.
-		if (DecalSpanOf(tables.skinPartitions[slot]) != DecalSpanOf(a_result.skinPartitions))
-			NoteDecalChanged(slot);
+		// The features' components follow a partition change (Features/Decals: blood decals' slots follow the partitions).
+		if (tables.skinPartitions[slot] != a_result.skinPartitions)
+			ComponentsRewritten(slot, false, tables.skinPartitions[slot], a_result.skinPartitions);
 		tables.skinPartitions[slot] = a_result.skinPartitions;
 		tables.skinLodPartitions[slot] = a_result.skinLodPartitions;
 		++stats.skinned;
