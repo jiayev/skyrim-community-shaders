@@ -2,6 +2,7 @@
 // the resident region, the object loop). Pure; run by the snapshot builder on DCLF's pool, one build at a time.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
@@ -801,25 +802,27 @@ namespace DCLF::Draws
 
 	void MainBuild::PackMaterialBlocks(std::uint32_t p, const MaterialRecord& material, const PipelineBlocks& blocks, MainRows::MaterialState& state, MaterialRow& row) const
 	{
-		// PerMaterial blocks, packed through the technique's tables in the record's shader's variable space (an effect record is
-		// BSEffectShader's, its tables Effect.hlsl's). A record of another shader than its key's gets no row.
-		const bool effect = RasterEffect(tables.pipelines[p].rasterFlags);
-		const auto& vsLayout = MaterialVSLayout(material.kind);
-		const auto& psLayout = MaterialPSLayout(material.kind);
-		const std::uint64_t vsGroup = effect ? kEffectVSGroups[kPerMaterial] : kVSGroups[kPerMaterial];
-		const std::uint64_t psGroup = effect ? kEffectPSGroups[kPerMaterial] : kPSGroups[kPerMaterial];
-		const std::uint32_t vsFirst = effect ? kEffectVSFirstVariable[kPerMaterial] : kVSFirstVariable[kPerMaterial];
-		const std::uint32_t psFirst = effect ? kEffectPSFirstVariable[kPerMaterial] : kPSFirstVariable[kPerMaterial];
+		// PerMaterial blocks, packed through the technique's tables in the record's shader's variable space (a port's record is its shader's,
+		// the Effect port's BSEffectShader's, its tables Effect.hlsl's), the groups the key's shader's. A record of another shader than its
+		// key's gets no row.
+		const std::uint8_t keyKind = RasterEffect(tables.pipelines[p].rasterFlags) ? kMaterialKindEffect : kMaterialKindLighting;
+		const auto& recordSpace = Extensions::MaterialSpaceOf(material.kind);
+		const auto& keySpace = Extensions::MaterialSpaceOf(keyKind);
+		const auto& vsLayout = recordSpace.vs.layout;
+		const auto& psLayout = recordSpace.ps.layout;
+		const std::uint64_t vsGroup = keySpace.vs.groups[kPerMaterial];
+		const std::uint64_t psGroup = keySpace.ps.groups[kPerMaterial];
+		const std::uint32_t vsFirst = keySpace.vs.first[kPerMaterial];
+		const std::uint32_t psFirst = keySpace.ps.first[kPerMaterial];
 		const auto vsSize = ConstantGroupSize(vsLayout, blocks.vsTable, vsGroup, vsFirst);
 		const auto psSize = ConstantGroupSize(psLayout, blocks.psTable, psGroup, psFirst);
-		state.blocksOk = vsSize <= kMaterialRowVSBytes && psSize <= kMaterialRowPSBytes && effect == (material.kind == kMaterialKindEffect);
+		state.blocksOk = vsSize <= kMaterialRowVSBytes && psSize <= kMaterialRowPSBytes && keyKind == material.kind;
 		if (state.blocksOk) {
 			PackConstantGroup(material.vs, vsLayout, blocks.vsTable, vsGroup, vsFirst, std::span(row.bytes.data() + kMaterialRowVS, kMaterialRowVSBytes));
 			PackConstantGroup(material.ps, psLayout, blocks.psTable, psGroup, psFirst, std::span(row.bytes.data() + kMaterialRowPS, kMaterialRowPSBytes));
 			// TexcoordOffset's place: the row holds the record's (capture-time) value, which a feature's frame patch overwrites with the
 			// buffer the frame's shaders read (a payload product names the place: texcoordDword, texcoordMask).
-			constexpr std::uint32_t kLightingVSTexcoordOffset = 11;
-			const std::uint32_t variable = effect ? kEffectVSTexcoordOffset : kLightingVSTexcoordOffset;
+			const std::uint32_t variable = Extensions::PortRules(keyKind).frameVSVariable;
 			if (variable < vsLayout.count && ((vsGroup >> variable) & 1)) {
 				const std::uint32_t first = vsLayout.offset[variable];
 				const std::uint32_t dword = PackedPositionOf(vsLayout, blocks.vsTable, vsGroup, vsFirst, first);

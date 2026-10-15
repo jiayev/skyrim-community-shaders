@@ -88,8 +88,8 @@ namespace DCLF
 		std::uint32_t decalGroup = 0;
 		std::uint32_t decalBlendMode = 0;
 		std::uint32_t decalWriteMode = 0;
-		// CS_DCLF_OPAQUE_EFFECTS: an opaque effect (hint 0, not 2) drawn through decal group 1 without depth bias.
-		bool opaqueEffect = false;
+		// An opaque object (hint 0, not 2) drawn through decal group 1 without depth bias (CS_DCLF_OPAQUE_EFFECTS: an opaque effect).
+		bool opaqueInDecalGroup = false;
 		// CS_DCLF_TB_TERRAIN under Terrain Blending: 0, or the terrain group (1 kMultiTextureLandscape, 2 kNoTransparencyMultiSample),
 		// as TerrainBlending.cpp's BSBatchRenderer__RenderPassImmediately hook sorts them.
 		std::uint32_t terrainGroup = 0;
@@ -103,8 +103,9 @@ namespace DCLF
 		// (kRefractionFalloff, bit 16) and RENDER_NORMAL_CLAMP (kNonProjectiveShadows, bit 13). Its Lighting descriptors are never drawn.
 		bool refraction = false;
 		bool refractionFalloff = false, refractionClamp = false;
-		// CS_DCLF_EFFECTS: an effect object; pass and descriptors are the Effect shader's (EffectFlag), technique 0.
-		bool effect = false;
+		// A material port's object (its kind, Extensions::MaterialPorts; 0: Lighting's): pass and descriptors are its shader's, technique 0
+		// (CS_DCLF_EFFECTS: the Effect port's, EffectFlag).
+		std::uint8_t port = 0;
 		// ProjectedUV (CS_DCLF_PROJECTED_UV): needs the per-object texture matrix, pixel parameters and projected textures.
 		bool projectedUV = false;
 	};
@@ -325,7 +326,7 @@ namespace DCLF
 	 * @brief A BSEffectShaderProperty geometry's pass as its GetRenderPasses (0x1414bd890) and descriptor function (FUN_1414bde90)
 	 * make it in the main modes, with its shader descriptors: the blended mesh (hint 1: a_out.forward) or the decal (hints 2 and 3:
 	 * a_out.decalGroup, the DEFERRED pixel stage), either skinned through the palette path. EffectOpaque for a mesh without a blending
-	 * alpha property, EffectVariant for a variant not ported. Sets a_out.effect on success.
+	 * alpha property, EffectVariant for a variant not ported. Sets a_out.port (kMaterialKindEffect) on success: the Effect port's derive.
 	 */
 	Ineligible DeriveEffectDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, LightingDescriptors& a_out);
 

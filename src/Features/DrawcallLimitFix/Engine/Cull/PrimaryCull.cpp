@@ -15,6 +15,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
@@ -119,24 +120,25 @@ namespace DCLF
 	namespace
 	{
 		/**
-		 * @brief An effect member's main pass as BSEffectShaderProperty::GetRenderPasses (0x1414bd890) would register it (hint,
-		 * effect pass enum, LOD row). Not cached: MembershipDerived's witnesses miss the alpha property and texture paths; it is cheap.
+		 * @brief A material port member's main pass as its property's GetRenderPasses would register it (hint, the port's pass enum, LOD row;
+		 * the Effect port's: BSEffectShaderProperty::GetRenderPasses, 0x1414bd890). Not cached: MembershipDerived's witnesses miss the alpha
+		 * property and texture paths; it is cheap.
 		 */
-		bool EffectMembershipPass(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord& a_effect, AccumulatedPass& a_out, std::uint32_t* a_derived)
+		bool PortMembershipPass(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord& a_port, AccumulatedPass& a_out, std::uint32_t* a_derived)
 		{
 			LightingDescriptors descriptors;
-			const bool derived = DeriveEffectDescriptors(a_effect, a_leaf, descriptors) == Ineligible::None;
+			const bool derived = Extensions::DerivePort(a_port.port, a_port, a_leaf, descriptors) == Ineligible::None;
 			if (a_derived)
 				*a_derived = derived ? descriptors.derivedPass : kNotDerived;
 			if (!derived)
 				return false;
 			a_out = {};
-			a_out.subPass = PassCapture::SubPassOf(a_leaf.AlphaTesting(), a_effect.flags);
+			a_out.subPass = PassCapture::SubPassOf(a_leaf.AlphaTesting(), a_port.flags);
 			a_out.technique = descriptors.derivedPass;
-			a_out.passEnum = EffectPassEnum(descriptors.derivedPass);
+			a_out.passEnum = descriptors.derivedPass + Extensions::PortRules(a_port.port).passEnumBase;
 			// GetRenderPasses' hint: 0 opaque, 2 or 3 decal (by whether its alpha blends), 1 blended.
-			a_out.hint = descriptors.opaqueEffect ? 0u : descriptors.decalGroup ? descriptors.decalGroup + 1 : 1u;
-			a_out.lodRow = SceneCapture::LodRowOf(a_leaf, &a_effect);
+			a_out.hint = descriptors.opaqueInDecalGroup ? 0u : descriptors.decalGroup ? descriptors.decalGroup + 1 : 1u;
+			a_out.lodRow = SceneCapture::LodRowOf(a_leaf, &a_port);
 			return true;
 		}
 	}
@@ -144,8 +146,8 @@ namespace DCLF
 	bool PrimaryCull::FreshSyntheticPass(const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out)
 	{
 		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
-		if (const auto* effect = lighting ? nullptr : SceneCapture::LeafView::Effect(a_leaf.property); effect && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect)) {
-			if (!EffectMembershipPass(a_leaf, *effect, a_out, nullptr))
+		if (const auto* port = lighting ? nullptr : SceneCapture::LeafView::Port(a_leaf.property); port && Extensions::PortOn(ActiveToggles(), port->port)) {
+			if (!PortMembershipPass(a_leaf, *port, a_out, nullptr))
 				return false;
 			a_out.resident = true;
 			return true;
@@ -208,10 +210,10 @@ namespace DCLF
 		answer.derived = a_cached;
 		answer.fail = 2;  // not lighting (SyntheticPass's index)
 		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
-		if (const auto* effect = lighting ? nullptr : SceneCapture::LeafView::Effect(a_leaf.property); effect && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect)) {
+		if (const auto* port = lighting ? nullptr : SceneCapture::LeafView::Port(a_leaf.property); port && Extensions::PortOn(ActiveToggles(), port->port)) {
 			std::uint32_t derived = kNotDerived;
-			answer.ok = EffectMembershipPass(a_leaf, *effect, answer.pass, &derived);
-			answer.derived = { effect->key, effect->material, effect->flags, 0, derived };
+			answer.ok = PortMembershipPass(a_leaf, *port, answer.pass, &derived);
+			answer.derived = { port->key, port->material, port->flags, 0, derived };
 			answer.fail = answer.ok ? 0 : 1;  // derived, or not (SyntheticPass's indices)
 			if (answer.ok)
 				answer.pass.resident = true;

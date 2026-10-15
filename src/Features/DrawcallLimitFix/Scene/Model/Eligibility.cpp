@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Scene/Model/Eligibility.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -62,15 +63,16 @@ namespace DCLF::Eligibility
 			}
 		}
 		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex && !lodObject) {
-			// Its geometry type's contribution (Features/Particles): a particle geometry with an effect property is the Effect port's to
-			// classify (DeriveEffectDescriptors: a particle system DCLF's particle path draws, or the particle variant). It has no renderer
-			// data of its own: its draw is the renderer's quads, its vertices ParticleSnapshots' (Coordinator::ResolveGeometrySlot).
+			// Its geometry type's contribution (Features/Particles): a particle geometry with a material port's property is that port's to
+			// classify when it takes the particle geometries (the Effect port's DeriveEffectDescriptors: a particle system DCLF's particle path
+			// draws, or the particle variant). It has no renderer data of its own: its draw is the renderer's quads, its vertices
+			// ParticleSnapshots' (Coordinator::ResolveGeometrySlot).
 			if (ParticleGeometryType(g.type) && Extensions::GeometryTypeOn(ActiveToggles(), g.type)) {
-				const auto* effect = SceneCapture::LeafView::Effect(a_leaf.property);
-				if (!effect || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect))
+				const auto* port = SceneCapture::LeafView::Port(a_leaf.property);
+				if (!port || !Extensions::PortTakesParticles(ActiveToggles(), port->port))
 					return Ineligible::NotLightingShader;
 				LightingDescriptors descriptors;
-				const Ineligible reason = DeriveEffectDescriptors(*effect, a_leaf, descriptors);
+				const Ineligible reason = Extensions::DerivePort(port->port, *port, a_leaf, descriptors);
 				if (a_descriptors && reason == Ineligible::None)
 					*a_descriptors = descriptors;
 				return reason;
@@ -118,15 +120,16 @@ namespace DCLF::Eligibility
 
 		const auto* property = SceneCapture::LeafView::Lighting(a_leaf.property);
 		if (!property) {
-			// The Effect port (Api::ObjectClass::Effect): a BSEffectShaderProperty on a BSTriShape, drawn by the forward epoch when its pass is the
-			// static blended mesh's (DeriveEffectDescriptors). Any other shape of one keeps the effect's own reason.
-			const auto* effect = SceneCapture::LeafView::Effect(a_leaf.property);
-			if (!effect || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect))
+			// A material port while its class is on (the Effect port, Api::ObjectClass::Effect: a BSEffectShaderProperty on a BSTriShape, drawn
+			// by the forward epoch when its pass is the static blended mesh's: DeriveEffectDescriptors). Any other shape of one keeps the port's
+			// own variant reason.
+			const auto* port = SceneCapture::LeafView::Port(a_leaf.property);
+			if (!port || !Extensions::PortOn(ActiveToggles(), port->port))
 				return Ineligible::NotLightingShader;
 			if (type != RE::BSGeometry::Type::kTriShape)
 				return Ineligible::EffectVariant;
 			LightingDescriptors descriptors;
-			const Ineligible reason = DeriveEffectDescriptors(*effect, a_leaf, descriptors);
+			const Ineligible reason = Extensions::DerivePort(port->port, *port, a_leaf, descriptors);
 			if (a_descriptors && reason == Ineligible::None)
 				*a_descriptors = descriptors;
 			return reason;

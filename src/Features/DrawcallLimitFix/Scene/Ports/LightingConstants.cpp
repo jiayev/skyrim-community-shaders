@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Globals.h"
 #include "ShaderCache.h"
@@ -432,27 +433,32 @@ namespace DCLF
 			a_out.recordFlags |= RefractionRecordFlagsOf(a_tables.pipelines[object.pipelineIndex]) | EffectRecordFlagsOf(a_tables.pipelines[object.pipelineIndex], object.flags);
 	}
 
+	void SampleEffectShading(const RE::BSShaderProperty& a_base, bool a_member, BindlessShading& a_out)
+	{
+		// Effect port: PropertyColor (SetupGeometry 0x1414eab10): the emittance colour or white, and the property's alpha, which
+		// GetRenderPasses leaves as the material's (the base colour's) times the fade node's currentFade; a member's is the material's.
+		const auto& effect = static_cast<const RE::BSEffectShaderProperty&>(a_base);
+		const auto* material = static_cast<const RE::BSEffectShaderMaterial*>(effect.material);
+		auto& shading = a_out.shading;
+		shading.materialData[0] = shading.materialData[1] = shading.materialData[3] = 0.0f;
+		shading.materialData[2] = a_member && material ? material->baseColor.alpha : effect.alpha;
+		const auto* emittance = effect.emittanceColor;
+		shading.emitColor[0] = emittance ? emittance->red : 1.0f;
+		shading.emitColor[1] = emittance ? emittance->green : 1.0f;
+		shading.emitColor[2] = emittance ? emittance->blue : 1.0f;
+		shading.ssrSpecular = 0.0f;
+		a_out.emissiveMult = 1.0f;
+		a_out.written = 4u | 0x70u;
+		a_out.padding[0] = a_out.padding[1] = 0u;
+		std::fill(std::begin(a_out.treeParams), std::end(a_out.treeParams), 0.0f);
+		std::fill(std::begin(a_out.windTimers), std::end(a_out.windTimers), 0.0f);
+	}
+
 	void SampleShading(const RE::BSShaderProperty& a_base, std::uint32_t a_pass, bool a_member, BindlessShading& a_out)
 	{
-		static const REL::Relocation<const RE::NiRTTI*> effectRtti{ RE::BSEffectShaderProperty::Ni_RTTI };
-		if (a_base.GetRTTI() == effectRtti.get()) {
-			// Effect port: PropertyColor (SetupGeometry 0x1414eab10): the emittance colour or white, and the property's alpha, which
-			// GetRenderPasses leaves as the material's (the base colour's) times the fade node's currentFade; a member's is the material's.
-			const auto& effect = static_cast<const RE::BSEffectShaderProperty&>(a_base);
-			const auto* material = static_cast<const RE::BSEffectShaderMaterial*>(effect.material);
-			auto& shading = a_out.shading;
-			shading.materialData[0] = shading.materialData[1] = shading.materialData[3] = 0.0f;
-			shading.materialData[2] = a_member && material ? material->baseColor.alpha : effect.alpha;
-			const auto* emittance = effect.emittanceColor;
-			shading.emitColor[0] = emittance ? emittance->red : 1.0f;
-			shading.emitColor[1] = emittance ? emittance->green : 1.0f;
-			shading.emitColor[2] = emittance ? emittance->blue : 1.0f;
-			shading.ssrSpecular = 0.0f;
-			a_out.emissiveMult = 1.0f;
-			a_out.written = 4u | 0x70u;
-			a_out.padding[0] = a_out.padding[1] = 0u;
-			std::fill(std::begin(a_out.treeParams), std::end(a_out.treeParams), 0.0f);
-			std::fill(std::begin(a_out.windTimers), std::end(a_out.windTimers), 0.0f);
+		// A material port's property (its exact RTTI, resolved at install): the port's shading row.
+		if (const std::uint8_t port = Extensions::PortOfRtti(a_base.GetRTTI())) {
+			Extensions::SamplePortShading(port, a_base, a_pass, a_member, a_out);
 			return;
 		}
 		const auto& a_property = static_cast<const RE::BSLightingShaderProperty&>(a_base);

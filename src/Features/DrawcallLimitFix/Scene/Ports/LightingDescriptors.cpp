@@ -644,7 +644,7 @@ namespace DCLF
 		// Deferred on the pixel stage only in the deferred pass (decals, opaque effects), never for forward objects.
 		constexpr std::uint32_t kPermutationBits = GrayscaleToColor | GrayscaleToAlpha | IgnoreTexAlpha;
 		a_out = {};
-		a_out.effect = true;
+		a_out.port = kMaterialKindEffect;
 		a_out.technique = 0;
 		a_out.pass = d;
 		a_out.derivedPass = d;
@@ -653,7 +653,7 @@ namespace DCLF
 		a_out.vertex = a_out.rawVertex & ~kPermutationBits;
 		a_out.pixel = (a_out.rawPixel & ~kPermutationBits) | ((decal || opaque) ? Deferred : 0u);
 		if (opaque) {
-			a_out.opaqueEffect = true;
+			a_out.opaqueInDecalGroup = true;
 			a_out.decalGroup = 1u;
 			a_out.decalBlendMode = 0u;
 			a_out.decalWriteMode = 1u;

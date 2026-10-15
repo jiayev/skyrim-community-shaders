@@ -9,9 +9,9 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 #include "Features/SubsurfaceScattering.h"
@@ -291,7 +291,7 @@ namespace DCLF::SceneCapture
 		if (a_f & kRtti) {
 			rtti = a_o.rtti;
 			lighting = a_o.lighting;
-			effect = a_o.effect;
+			port = a_o.port;
 		}
 		if (a_f & kFlags)
 			flags = a_o.flags;
@@ -568,7 +568,6 @@ namespace DCLF::SceneCapture
 		r.material = a_property.material;
 		r.fadeNode = a_property.fadeNode;
 		r.controllers = property.GetControllers() != nullptr;
-		static const REL::Relocation<const RE::NiRTTI*> effectRtti{ RE::BSEffectShaderProperty::Ni_RTTI };
 		if (const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(&a_property)) {
 			r.lighting = true;
 			r.shadowPasses = lighting->shadowMapOrMaskPasses.head != nullptr;
@@ -594,17 +593,11 @@ namespace DCLF::SceneCapture
 					r.landBlend = { blend.red, blend.green, blend.blue, blend.alpha };
 				}
 			}
-		} else if (r.rtti == effectRtti.get()) {
-			// The Effect port: what the effect's descriptor (FUN_1414bde90) and PropertyColor read of the property and its material,
-			// taken here where the property holds the material. GetRenderPasses tests a texture path by its string's pointer
-			// (FUN_140cec900 against null), not by the texture.
-			r.effect = true;
-			r.emissive = static_cast<const RE::BSEffectShaderProperty&>(a_property).emittanceColor;
-			if (const auto* material = a_property.material) {
-				const auto* bytes = reinterpret_cast<const std::byte*>(material);
-				const auto pathAt = [&](std::size_t a_offset) { return *reinterpret_cast<const char* const*>(bytes + a_offset) != nullptr; };
-				r.feature = (pathAt(0x70) ? kEffectHasSourcePath : 0u) | (pathAt(0x78) ? kEffectHasGreyscalePath : 0u);
-			}
+		} else if (const std::uint8_t port = Extensions::PortOfRtti(r.rtti)) {
+			// A material port's property (the Effect port's: what its descriptor and PropertyColor read of the property and its material,
+			// taken here where the property holds the material).
+			r.port = port;
+			Extensions::CapturePort(port, a_property, r.emissive, r.feature);
 		}
 		return r;
 	}
@@ -640,10 +633,10 @@ namespace DCLF::SceneCapture
 						a_pins->emplace_back(const_cast<RE::NiAVObject*>(at));
 						break;
 					}
-		// A Lighting (or an effect) property's material, for the scene work's records (the property holds it here): an attach's or a swap's
-		// (a_pins). A material shared by several leaves is pushed by each; the scene work keeps the newest.
+		// A Lighting (or an on material port's) property's material, for the scene work's records (the property holds it here): an attach's
+		// or a swap's (a_pins). A material shared by several leaves is pushed by each; the scene work keeps the newest.
 		auto pushMaterial = [&](const PropertyRecord& a_property) {
-			if (a_pins && (a_property.lighting || (a_property.effect && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect))) && a_property.material)
+			if (a_pins && (a_property.lighting || Extensions::PortOn(ActiveToggles(), a_property.port)) && a_property.material)
 				MaterialPort::PushCapture(static_cast<const RE::BSShaderMaterial*>(a_property.material));
 		};
 		if (g.property) {

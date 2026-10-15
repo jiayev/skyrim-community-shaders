@@ -253,10 +253,14 @@ namespace DCLF
 	/**
 	 * @brief An object's shading from its property now (SetupGeometry's MaterialData, EmitColor, SSRParams.w for a_pass, and Linear
 	 * Lighting's multiplier); wetness left as is. a_member: fades are DCLF's (FadeStateCS), so not in its alpha. Any thread inside the
-	 * engine-read window. An effect property's is its PropertyColor: EmitColor the emittance colour (white without one), MaterialData.z
-	 * the material's alpha for a member, else the property's alpha; the rest zero.
+	 * engine-read window. A material port's property (Extensions::PortOfRtti) is its port's (SamplePortShading).
 	 */
 	void SampleShading(const RE::BSShaderProperty& a_property, std::uint32_t a_pass, bool a_member, BindlessShading& a_out);
+	/**
+	 * @brief The Effect port's shading (its material port's shading): an effect property's PropertyColor, EmitColor the emittance colour
+	 * (white without one), MaterialData.z the material's alpha for a member, else the property's alpha; the rest zero.
+	 */
+	void SampleEffectShading(const RE::BSShaderProperty& a_base, bool a_member, BindlessShading& a_out);
 	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): Subsurface Scattering's IsBeastRace (kObjectBeastRace).
 	inline constexpr std::uint32_t kRecordBeastRace = 1u << 0;
 	// ... and an alpha-tested object whose alpha property blends (kObjectAlphaBlended): the depth pass's reference (Utility.hlsl).

@@ -3,6 +3,7 @@
 
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
@@ -1079,11 +1080,12 @@ namespace DCLF::Scene
 			a_tracked.listedAlpha = alpha;
 		}
 		// External emittance: the shared colour (a light's, region's or the sky's) the weather rewrites in place (emittanceEvents); its
-		// re-point is a property event (SetExternalEmittance). An effect property's emittanceColor is pointed the same way, any flags.
+		// re-point is a property event (SetExternalEmittance). A port's property whose emissive colour is always listed (the Effect port's
+		// emittanceColor) is pointed the same way, any flags.
 		const auto* lighting = SceneCapture::LeafView::Lighting(leaf.property);
-		const auto* effect = SceneCapture::LeafView::Effect(leaf.property);
+		const auto* port = SceneCapture::LeafView::Port(leaf.property);
 		const void* emittance = lighting && (lighting->flags & static_cast<std::uint64_t>(RE::BSShaderProperty::EShaderPropertyFlag::kExternalEmittance)) ? lighting->emissive :
-		                        effect                                                                                                          ? effect->emissive :
+		                        port && Extensions::PortRules(port->port).emissiveAlwaysListed                                                  ? port->emissive :
 		                                                                                                                                          nullptr;
 		if (emittance != a_tracked.listedEmittance) {
 			if (a_tracked.listedEmittance)

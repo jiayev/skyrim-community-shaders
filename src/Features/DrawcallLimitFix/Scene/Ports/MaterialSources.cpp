@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -73,21 +74,14 @@ namespace DCLF::MaterialSources
 			return out;
 		}
 
-		// An effect record's TexcoordOffset (BSEffectShader's VS variable 9), the only frame part it has.
-		const std::vector<std::uint32_t>& EffectVSPositions()
+		// A port's record's TexcoordOffset (its rules' frame VS variable: BSEffectShader's VS variable 9), the only frame part it has.
+		const std::vector<std::uint32_t>& PortVSPositions(std::uint8_t a_kind)
 		{
-			static const std::vector<std::uint32_t> positions = [] {
-				const auto& layout = EffectVSLayout();
-				std::vector<std::uint32_t> out;
-				for (std::uint32_t c = 0; c < layout.size[kEffectVSTexcoordOffset] && c < 4; ++c)
-					out.push_back(layout.offset[kEffectVSTexcoordOffset] + c);
-				return out;
-			}();
-			return positions;
+			return Extensions::MaterialSpaceOf(a_kind).frameVSFloats;
 		}
 		const std::vector<std::uint32_t>& TexcoordPositionsOf(const MaterialRecord& a_record)
 		{
-			return a_record.kind == kMaterialKindEffect ? EffectVSPositions() : FrameVSFloats();
+			return a_record.kind != kMaterialKindLighting ? PortVSPositions(a_record.kind) : FrameVSFloats();
 		}
 	}
 
@@ -116,10 +110,10 @@ namespace DCLF::MaterialSources
 
 	void CopyFrameComponents(const MaterialRecord& a_from, MaterialRecord& a_to, std::uint32_t a_passDescriptor)
 	{
-		if (a_to.kind == kMaterialKindEffect || a_from.kind == kMaterialKindEffect) {
-			// An effect record's one frame part is TexcoordOffset (the transform watch's); its pass descriptor's bits are not Lighting's.
+		if (a_to.kind != kMaterialKindLighting || a_from.kind != kMaterialKindLighting) {
+			// A port's record's one frame part is TexcoordOffset (the transform watch's); its pass descriptor's bits are not Lighting's.
 			if (a_to.kind == a_from.kind)
-				for (const auto position : EffectVSPositions())
+				for (const auto position : PortVSPositions(a_to.kind))
 					if (a_to.vs.Written(position) && a_from.vs.Written(position))
 						a_to.vs.floats[position] = a_from.vs.floats[position];
 			return;
@@ -142,8 +136,8 @@ namespace DCLF::MaterialSources
 
 	bool ApplyFrameComponents(const MaterialRecord& a_live, MaterialRecord& a_record, std::uint32_t a_passDescriptor, bool* a_floatsChanged)
 	{
-		// An effect record has no signature-sourced component (NoteMaterialRecord lists none).
-		if (a_live.kind == kMaterialKindEffect || a_record.kind == kMaterialKindEffect)
+		// A port's record without signature components (the Effect port's) has none to apply (NoteMaterialRecord lists none).
+		if (!Extensions::PortRules(a_live.kind).signatureComponents || !Extensions::PortRules(a_record.kind).signatureComponents)
 			return false;
 		for (const auto position : FramePSFloats())
 			if (a_record.ps.Written(position) && a_live.ps.Written(position)) {

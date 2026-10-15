@@ -3,6 +3,7 @@
 // shadow dependency index refreshed.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
@@ -332,8 +333,10 @@ namespace DCLF::Scene
 					// PerGeometry values (the engine's SetupGeometry) are evaluated per frame from the template (FrameTables).
 					tables.geometryTemplate[slot] = property;
 
-					// An effect key reads no Lighting technique row (Effect.hlsl); it holds the plain technique's (no shadow mask).
-					tables.pipelineTechnique[slot] = TechniqueRowFor(descriptors.effect ? 0u : descriptors.pass);
+					// A port's key without technique rows reads no Lighting technique row (the Effect port's: Effect.hlsl); it holds the plain
+					// technique's (no shadow mask).
+					const auto& rules = Extensions::PortRules(descriptors.port);
+					tables.pipelineTechnique[slot] = TechniqueRowFor(rules.techniqueRows ? descriptors.pass : 0u);
 					stats.shadowMaskPipelines += tables.TechniqueShadowMask(slot) ? 1 : 0;
 
 					PipelinePermutation permutation;
@@ -350,9 +353,9 @@ namespace DCLF::Scene
 					                                         (ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ RasterTranslucency(key.rasterFlags))
 					                                             << ExtendedTranslucency::ExtraFeatureDescriptorShift :
 					                                         0u;
-					// Effect pass, as BSShader_BeginTechnique sets it: raw vertex descriptor (Effect.hlsl tests SkyObject), the raw pixel
-					// bits the lookup dropped (GrayscaleToColor/ToAlpha, IgnoreTexAlpha), InWorld, no feature bits.
-					if (descriptors.effect) {
+					// A raw-permutation port's pass, as BSShader_BeginTechnique sets it (the Effect port's): raw vertex descriptor (Effect.hlsl
+					// tests SkyObject), the raw pixel bits the lookup dropped (GrayscaleToColor/ToAlpha, IgnoreTexAlpha), InWorld, no feature bits.
+					if (rules.rawPermutation) {
 						permutation.vertexShaderDescriptor = descriptors.rawVertex;
 						permutation.pixelShaderDescriptor = descriptors.rawPixel & ~descriptors.pixel;
 						permutation.extraShaderDescriptor = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::InWorld);
@@ -505,10 +508,11 @@ namespace DCLF::Scene
 					++stats.fadingFrames;
 				++stats.fadingDrawn;
 			}
-			// A member decal's order key (Features/Decals/DecalOrder.cpp): group, pass enum (Lighting descriptor + 0x4800002D, effect + 0x4000002C:
-			// EffectPassEnum), sub-pass. The engine draws a group's buckets in ascending enum, so effect decals precede Lighting ones.
+			// A member decal's order key (Features/Decals/DecalOrder.cpp): group, pass enum (the descriptor + its kind's base: Lighting's
+			// 0x4800002D, the Effect port's 0x4000002C), sub-pass. The engine draws a group's buckets in ascending enum, so effect decals precede
+			// Lighting ones.
 			if (descriptors.decalGroup) {
-				const std::uint32_t passEnum = descriptors.effect ? EffectPassEnum(accumulated->technique) : accumulated->technique + 0x4800002Du;
+				const std::uint32_t passEnum = accumulated->technique + Extensions::PortRules(descriptors.port).passEnumBase;
 				patch.decalKey = (std::uint64_t(descriptors.decalGroup) << 60) | (std::uint64_t(passEnum) << 27) | (std::uint64_t(accumulated->subPass & 7) << 24);
 			}
 			timer.Add(BuildPart::Record);
@@ -837,7 +841,7 @@ namespace DCLF::Scene
 			// property's blend and write modes.
 			std::uint32_t rasterFlags = twoSided ? kRasterTwoSided : 0u;
 			if (descriptors.decalGroup)
-				rasterFlags |= PackDecalRasterFlags(descriptors.decalGroup, descriptors.opaqueEffect ? 0u : decalBiasMode[descriptors.decalGroup & 3], descriptors.decalBlendMode,
+				rasterFlags |= PackDecalRasterFlags(descriptors.decalGroup, descriptors.opaqueInDecalGroup ? 0u : decalBiasMode[descriptors.decalGroup & 3], descriptors.decalBlendMode,
 					descriptors.decalWriteMode);  // an opaque effect in decal group 1 has no bias (DeriveEffectDescriptors)
 			// As Terrain Blending's replay sets it: blend 1 / write 1 for terrain, blend off / write 1 for the no-blend meshes after it.
 			if (descriptors.terrainGroup)
@@ -850,12 +854,12 @@ namespace DCLF::Scene
 				rasterFlags |= (decalBiasMode[descriptors.forwardDecalGroup & 3] & 15u) << kRasterDepthBiasShift;
 			if (descriptors.refraction)
 				rasterFlags |= PackRefractionRasterFlags(descriptors.refractionFalloff, descriptors.refractionClamp);
-			if (globals::features::extendedTranslucency.loaded && !descriptors.effect)
+			if (globals::features::extendedTranslucency.loaded && !descriptors.port)
 				rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ TranslucencyModelOf(r.leaf)) & 7u) << kRasterTranslucencyShift;
-			if (descriptors.effect)
+			if (descriptors.port == kMaterialKindEffect)
 				rasterFlags |= kRasterEffect;
 			// A billboard leaf's mode + 1, so the vertex stage turns it (ClassifyFrame admits it only with a mode).
-			if (descriptors.effect && entry.parentReason == Ineligible::Billboard)
+			if (descriptors.port == kMaterialKindEffect && entry.parentReason == Ineligible::Billboard)
 				if (const std::int32_t mode = BillboardModeOf(entry); mode >= 0)
 					rasterFlags |= static_cast<std::uint32_t>(mode + 1) << kRasterEffectBillboardShift;
 			r.key = PipelineKey{ descriptors.vertex, descriptors.pixel, rasterFlags, descriptors.pass,
@@ -866,15 +870,15 @@ namespace DCLF::Scene
 			                (suppress ? kObjectSuppressExternalEmittance : 0u) |
 			                TechniqueFlags(descriptors.technique) |
 			                // A Blood effect keeps its threshold too (AlphaTestRefOf: SetupGeometry's AlphaTestRef.x, tested or not).
-			                ((alphaTest || (alpha && descriptors.effect && (descriptors.pass & EffectFlag::Blood))) ?
+			                ((alphaTest || (alpha && descriptors.port == kMaterialKindEffect && (descriptors.pass & EffectFlag::Blood))) ?
 			                        static_cast<std::uint32_t>(alpha->threshold) << kObjectAlphaThresholdShift :
 			                        0u) |
 			                (alphaTest && alphaBlending ? kObjectAlphaBlended : 0u) |
 			                (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
 			                (descriptors.terrainGroup << kObjectTerrainGroupShift) |
 			                (descriptors.forward ? kObjectForward : 0u) |
-			                (!descriptors.effect && (propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
-			                (!descriptors.effect && BeastRaceFace(*propertyRecord, r.leaf) ? kObjectBeastRace : 0u);
+			                (!descriptors.port && (propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
+			                (!descriptors.port && BeastRaceFace(*propertyRecord, r.leaf) ? kObjectBeastRace : 0u);
 		}
 		// Light Limit Fix's room, when the room map moved on (read-only here).
 		if (globals::features::lightLimitFix.loaded && entry.roomMapGeneration != roomMapGeneration) {

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <string_view>
+#include <utility>
 
 namespace DCLF
 {
@@ -48,6 +49,13 @@ namespace DCLF
 	inline constexpr std::array<std::string_view, kEffectPSVariables> kEffectPSNames{ "PropertyColor", "AlphaTestRef", "MembraneRimColor", "MembraneVars",
 		"PLightPositionX", "PLightPositionY", "PLightPositionZ", "PLightingRadiusInverseSquared", "PLightColorR", "PLightColorG", "PLightColorB", "DLightColor",
 		"VPOSOffset", "CameraDataEffect", "FilteringParam", "BaseColor", "BaseColorScale", "LightingInfluence", "ExtendedFlags" };
+
+	/**
+	 * @brief The variables of more than 4 floats (World, PreviousWorld and MatProj are float3x4, MatProj a float4[3]) and the ones nothing
+	 * reads (Bones, skinned only, never needs real storage): EffectVSLayout's, the Effect port's space (MakeStageLayout).
+	 */
+	inline constexpr std::pair<std::uint32_t, std::uint32_t> kEffectVSSized[] = { { kEffectVSWorld, 12 }, { kEffectVSPreviousWorld, 12 }, { kEffectVSMatProj, 12 } };
+	inline constexpr std::uint32_t kEffectVSScratch[] = { kEffectVSBones };
 
 	/** @brief Which constant group (PerTechnique, PerMaterial, PerGeometry: b0-b2) each effect variable belongs to, and each group's first. */
 	inline constexpr std::uint64_t kEffectVSGroups[3] = { 0x70ull, 0x380ull, 0x3C0Full };
