@@ -6,7 +6,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/RegistrationCensus.h"
 
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
-#include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
 
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -92,8 +91,12 @@ namespace DCLF
 		stats.directWithheld = directWithheld.exchange(0, std::memory_order_relaxed);
 		stats.mainWithheld = mainWithheld.exchange(0, std::memory_order_relaxed);
 		stats.treeLodWithheld = treeLodWithheld.exchange(0, std::memory_order_relaxed);
-		stats.reflectionWithheld = reflectionWithheld.exchange(0, std::memory_order_relaxed);
-		stats.reflectionTreeLodWithheld = reflectionTreeLodWithheld.exchange(0, std::memory_order_relaxed);
+		const auto& views = Extensions::Views();
+		for (std::uint32_t i = 0; i < views.ownRendererCount; ++i) {
+			const auto v = static_cast<std::size_t>(views.ownRendererViews[i]);
+			stats.viewWithheld[v] = viewRenderers[v].ownWithheld.exchange(0, std::memory_order_relaxed);
+			stats.viewTreeLodWithheld[v] = viewRenderers[v].ownTreeLodWithheld.exchange(0, std::memory_order_relaxed);
+		}
 		stats.occlusionWithheld = occlusionWithheld.exchange(0, std::memory_order_relaxed);
 		lastDrain = { entries.data(), count };
 		return lastDrain;
@@ -115,14 +118,14 @@ namespace DCLF
 		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i) {
 			const auto v = static_cast<std::size_t>(views.mainRendererViews[i]);
 			views.views[v].accumulators(viewAccumulators[v]);
-			same = same && viewAccumulators[v] == mainViews[v].accumulators;
+			same = same && viewAccumulators[v] == viewRenderers[v].accumulators;
 		}
 		if (same && std::atomic_load(&mainRenderers))
 			return;
 		mainAccumulators = accumulators;
 		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i) {
 			const auto v = static_cast<std::size_t>(views.mainRendererViews[i]);
-			mainViews[v].accumulators = viewAccumulators[v];
+			viewRenderers[v].accumulators = viewAccumulators[v];
 		}
 		auto renderers = std::make_shared<RendererSet>();
 		auto add = [](RendererSet& a_set, RE::BSGraphics::BSShaderAccumulator* a_accumulator) {
@@ -143,7 +146,7 @@ namespace DCLF
 			for (std::uint32_t a = 0; a < viewAccumulator.count; ++a)
 				add(*viewSet, static_cast<RE::BSGraphics::BSShaderAccumulator*>(const_cast<void*>(viewAccumulator.accumulators[a])));
 			renderers->insert(viewSet->begin(), viewSet->end());
-			std::atomic_store(&mainViews[v].renderers, std::shared_ptr<const RendererSet>(std::move(viewSet)));
+			std::atomic_store(&viewRenderers[v].renderers, std::shared_ptr<const RendererSet>(std::move(viewSet)));
 		}
 		logger::info("[DCLF] the main camera's views: {} batch renderers (Z-prepass accumulator {}, main {})", renderers->size(), accumulators[0], accumulators[1]);
 		std::atomic_store(&mainRenderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
@@ -165,7 +168,7 @@ namespace DCLF
 		const auto& views = Extensions::Views();
 		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i)
 			if (IsViewRenderer(views.mainRendererViews[i], a_batch))
-				mainViews[static_cast<std::size_t>(views.mainRendererViews[i])].registered.fetch_add(1, std::memory_order_relaxed);
+				viewRenderers[static_cast<std::size_t>(views.mainRendererViews[i])].registered.fetch_add(1, std::memory_order_relaxed);
 		// An InMainRenderers view's member (the first person's: kSetFirstPerson alone, no world view registers it, its root hidden there):
 		// its passes into the view's accumulators and into the main views' (the first person's RenderDepth block culls into the
 		// Z-prepass's) are the view's epochs' while they draw this frame (SetViewCovered); every fade of the skeleton is the engine's
@@ -175,8 +178,8 @@ namespace DCLF
 			const std::uint8_t phase = views.views[v].phase;
 			if (!(phases & phase))
 				continue;
-			auto& view = mainViews[v];
-			if (view.covered.load(std::memory_order_acquire) && (set->drawn & phase)) {
+			auto& view = viewRenderers[v];
+			if (ViewCovered(views.mainRendererViews[i]) && (set->drawn & phase)) {
 				view.withheld.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
@@ -191,20 +194,19 @@ namespace DCLF
 		return true;
 	}
 
-	void PassCapture::SetReflectionCamera(const RE::NiCamera* a_camera)
+	void PassCapture::SetViewRenderers(Api::EngineView a_view, const Api::ViewAccumulators& a_accumulators)
 	{
-		// BSCubeMapCamera's two accumulators (+0x1A0, +0x1A8; skyrim-engine-notes.md, "Water reflections: the cube map"): the faces
-		// cull into the first.
-		if (!a_camera)
+		// The view's accumulators (the reflection's: BSCubeMapCamera's two, the faces cull into the first): their batch renderers and their
+		// geometry groups'.
+		auto& view = viewRenderers[static_cast<std::size_t>(a_view)];
+		if (a_accumulators == view.accumulators && std::atomic_load(&view.renderers))
 			return;
-		const auto* bytes = reinterpret_cast<const std::byte*>(a_camera);
-		const std::array<const void*, 2> accumulators{ *reinterpret_cast<void* const*>(bytes + 0x1A0), *reinterpret_cast<void* const*>(bytes + 0x1A8) };
-		if (accumulators == reflectionAccumulators && std::atomic_load(&reflectionRenderers))
-			return;
-		reflectionAccumulators = accumulators;
+		view.accumulators = a_accumulators;
 		auto renderers = std::make_shared<RendererSet>();
-		for (const void* entry : accumulators) {
-			const auto* accumulator = static_cast<const RE::BSGraphics::BSShaderAccumulator*>(entry);
+		std::string sources;
+		for (std::uint32_t a = 0; a < a_accumulators.count; ++a) {
+			sources += fmt::format("{}{}", a ? ", " : "", a_accumulators.accumulators[a]);
+			const auto* accumulator = static_cast<const RE::BSGraphics::BSShaderAccumulator*>(a_accumulators.accumulators[a]);
 			auto* batch = accumulator ? accumulator->GetRuntimeData().batchRenderer : nullptr;
 			if (!batch)
 				continue;
@@ -213,31 +215,58 @@ namespace DCLF
 				if (group && group->batchRenderer)
 					renderers->insert(group->batchRenderer);
 		}
-		logger::info("[DCLF] the reflection faces: {} batch renderers (accumulators {}, {})", renderers->size(), accumulators[0], accumulators[1]);
-		std::atomic_store(&reflectionRenderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
+		logger::info("[DCLF] the {} faces: {} batch renderers (accumulators {})", Extensions::ViewEntryOf(a_view).name, renderers->size(), sources);
+		std::atomic_store(&view.renderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
 	}
 
-	bool PassCapture::WithholdReflection(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass)
+	bool PassCapture::OwnViewRendering() const
 	{
-		if (!a_pass || !a_pass->geometry || !Policy::WithholdFromEngine() || !reflectionFace.load(std::memory_order_acquire) || !reflectionCovered.load(std::memory_order_acquire))
+		const auto& views = Extensions::Views();
+		for (std::uint32_t i = 0; i < views.ownRendererCount; ++i)
+			if (viewRenderers[static_cast<std::size_t>(views.ownRendererViews[i])].rendering.load(std::memory_order_acquire))
+				return true;
+		return false;
+	}
+
+	bool PassCapture::OwnViewWithholding() const
+	{
+		const auto& views = Extensions::Views();
+		for (std::uint32_t i = 0; i < views.ownRendererCount; ++i)
+			if (viewRenderers[static_cast<std::size_t>(views.ownRendererViews[i])].withholdActive.load(std::memory_order_acquire) && ViewCovered(views.ownRendererViews[i]))
+				return true;
+		return false;
+	}
+
+	bool PassCapture::WithholdOwn(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass)
+	{
+		if (!a_pass || !a_pass->geometry || !Policy::WithholdFromEngine())
 			return false;
-		const auto renderers = std::atomic_load(&reflectionRenderers);
-		if (!renderers || !renderers->contains(a_batch))
-			return false;
-		const bool treeLod = TreeLod::IsTreeLodShape(a_pass->geometry);
-		if (treeLod && reflectionTreeLodOwned.load(std::memory_order_acquire)) {
-			reflectionTreeLodWithheld.fetch_add(1, std::memory_order_relaxed);
+		const auto& views = Extensions::Views();
+		for (std::uint32_t i = 0; i < views.ownRendererCount; ++i) {
+			const auto v = static_cast<std::size_t>(views.ownRendererViews[i]);
+			auto& view = viewRenderers[v];
+			if (!view.withholdActive.load(std::memory_order_acquire) || !ViewCovered(views.ownRendererViews[i]))
+				continue;
+			const auto renderers = std::atomic_load(&view.renderers);
+			if (!renderers || !renderers->contains(a_batch))
+				continue;
+			const bool treeLod = TreeLod::IsTreeLodShape(a_pass->geometry);
+			if (treeLod && view.treeLodOwned.load(std::memory_order_acquire)) {
+				view.ownTreeLodWithheld.fetch_add(1, std::memory_order_relaxed);
+				return true;
+			}
+			const auto set = std::atomic_load(&frameSet);
+			const std::uint8_t phase = views.views[v].phase;
+			if (!set || !(set->drawn & phase) || !(set->PhasesOf(a_pass->geometry) & phase)) {
+				// The residue watch: tree LOD under the tree root, anything else but the sky under the LOD land and objects roots.
+				if (const auto watch = reflectionResidueWatch.load(std::memory_order_acquire); watch & (treeLod ? kTreeRoot : kLodRoots))
+					NoteReflectionResidue(a_pass, treeLod);
+				return false;
+			}
+			view.ownWithheld.fetch_add(1, std::memory_order_relaxed);
 			return true;
 		}
-		const auto set = std::atomic_load(&frameSet);
-		if (!set || !(set->drawn & kSetReflection) || !(set->PhasesOf(a_pass->geometry) & kSetReflection)) {
-			// The residue watch: tree LOD under the tree root, anything else but the sky under the LOD land and objects roots.
-			if (const auto watch = reflectionResidueWatch.load(std::memory_order_acquire); watch & (treeLod ? ReflectionFaces::kTreeRoot : ReflectionFaces::kLodRoots))
-				NoteReflectionResidue(a_pass, treeLod);
-			return false;
-		}
-		reflectionWithheld.fetch_add(1, std::memory_order_relaxed);
-		return true;
+		return false;
 	}
 
 	void PassCapture::NoteReflectionResidue(const RE::BSRenderPass* a_pass, bool a_treeLod)
@@ -328,7 +357,7 @@ namespace DCLF
 		if (!a_pass || !a_pass->geometry)
 			return false;
 		// A shadow view's renderers (the focus views' among them): the set's casters. A pass into any other renderer
-		// (reflections, cubemaps) is never withheld; the main camera's are WithholdMain's.
+		// (reflections, cubemaps) is never withheld here; the main camera's are WithholdMain's, an OwnRenderers view's WithholdOwn's.
 		// What the engine registers into a covered focus view, for its observer (Diagnostics::ShadowViewTally: against its target's fade root).
 		if (Diagnostics::Armed<Diagnostics::FocusRegistration>())
 			if (const auto focus = std::atomic_load(&focusRenderers); focus && !focus->empty())
@@ -346,8 +375,8 @@ namespace DCLF
 	void PassCapture::NoteKept(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint8_t a_site, std::uint8_t a_occlusionPhase) const
 	{
 		// The census's per-pass values, read here as the pass registers (the frame's end has neither the pass, a pooled object, nor
-		// these states): whether the reflection faces withhold now (WithholdReflection's own gates).
-		const bool face = reflectionFace.load(std::memory_order_acquire) && reflectionCovered.load(std::memory_order_acquire);
+		// these states): whether the reflection faces withhold now (WithholdOwn's own gates).
+		const bool face = OwnViewWithholding();
 		Diagnostics::Notify(Diagnostics::PassKept{ a_batch, a_pass, static_cast<RegistrationCensus::Site>(a_site), face, a_occlusionPhase });
 	}
 
@@ -374,7 +403,7 @@ namespace DCLF
 			}
 			// Withholding is the whole of ownership: the pass is built, lit and shadowed as the engine would - only the batch
 			// renderer never receives it, so the native loop has nothing to draw. Record notes it for the observers.
-			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdReflection(a_this, a_pass) || capture.Withhold(a_this, a_pass);
+			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdOwn(a_this, a_pass) || capture.Withhold(a_this, a_pass);
 			capture.Record(a_this, a_pass, a_techniqueID, withheld);
 			Diagnostics::Notify(Diagnostics::PointLightPass{ a_this, a_pass, withheld, 0 });
 			if (withheld)
@@ -466,7 +495,7 @@ namespace DCLF
 					Diagnostics::Notify(Diagnostics::MemberGroup5PassWithheld{ a_pass });
 				return;
 			}
-			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdReflection(a_batch, a_pass))
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdOwn(a_batch, a_pass))
 				return;
 			if (Diagnostics::Armed<Diagnostics::PassKept>() && !capture.bypassed.load(std::memory_order_acquire))
 				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainGroup));
@@ -486,7 +515,7 @@ namespace DCLF
 				Diagnostics::Notify(Diagnostics::MemberListPassWithheld{ a_pass });
 				return;
 			}
-			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdReflection(a_batch, a_pass))
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdOwn(a_batch, a_pass))
 				return;
 			if (Diagnostics::Armed<Diagnostics::PassKept>() && !capture.bypassed.load(std::memory_order_acquire))
 				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainList));

@@ -6,7 +6,7 @@
 namespace DCLF::Draws
 {
 	/*
-	 * The views (ViewEpoch.cpp and ViewEpochRecord.cpp, with their captures in Reflection.cpp and Features/FirstPerson): epochs that
+	 * The views (ViewEpoch.cpp and ViewEpochRecord.cpp, with their captures in Features/Reflection and Features/FirstPerson): epochs that
 	 * cull the frame's scene list through BuildDraws' bucket path, frustum only, for faces with a camera of their own, and draw the
 	 * buckets into the view's targets. Each face's VS_PerFrame (b12) is its camera's (PerFrameBlock); the colour segment's frame
 	 * constants otherwise.
@@ -21,8 +21,8 @@ namespace DCLF::Draws
 	 *   vectors, tested against kPOST_ZPREPASS_COPY, then its forward range (sorted back to front by the depth epoch). Both with the
 	 *   viewport depth range [0, f1stPersonFarDepthRange].
 	 */
-	constexpr std::uint32_t kReflectionFaces = 6;
-	constexpr std::uint32_t kMaxViewFaces = kReflectionFaces;
+	// The faces a view's epoch draws at most (Api::ViewShape::faces; the reflection's six).
+	constexpr std::uint32_t kMaxViewFaces = 6;
 	// A face's VS_PerFrame (b12, VS and PS) as the engine writes it for the view's camera: at most a D3D11 block's worth.
 	constexpr std::uint32_t kViewBlockBytes = 1024;
 

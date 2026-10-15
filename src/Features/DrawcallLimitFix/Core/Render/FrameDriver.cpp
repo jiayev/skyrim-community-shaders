@@ -166,8 +166,8 @@ namespace DCLF
 		}
 		LocalLightCull::SelectFrame(view.GetFrame());
 		PassCapture::Get().RefreshMainRenderers();
-		// Tree LOD's for the frame, before the main camera's cull registers its passes; the views' work after it (the water reflection's
-		// forward pipelines).
+		// Tree LOD's for the frame, before the main camera's cull registers its passes; the views' work after it (Features/Reflection's:
+		// the water reflection's forward pipelines).
 		draws.DecideTreeLod();
 		RunViewWork(Api::ViewPoint::FrameStartAfterTreeLod);
 		PrimaryCull::Get().PublishListFilter();
@@ -186,8 +186,9 @@ namespace DCLF
 	void FrameDriver::DepthCommitted()
 	{
 		IndirectDraws::Get().CaptureDepthPass();
-		// The frame's reflection faces (every TESWaterReflections::Update of the frame has run: two a frame, a face each), drawn by DCLF
-		// in one epoch, before the water reads the cube (dclf-lod.md, "Water reflections"). It must follow the depth commit, which brings
+		// The views' work at the depth commit (Features/Reflection's: the frame's reflection faces, every TESWaterReflections::Update of the
+		// frame having run, two a frame, a face each, drawn by DCLF in one epoch before the water reads the cube; dclf-lod.md, "Water
+		// reflections"). It must follow the depth commit, which brings
 		// the index pool and the scene's buffers to the frame's publication whose scene list the faces draw: against the frame before's
 		// pool, a slot the publication gave another geometry would draw its old indices against its new vertices (a device fault).
 		RunViewWork(Api::ViewPoint::DepthCommitted);

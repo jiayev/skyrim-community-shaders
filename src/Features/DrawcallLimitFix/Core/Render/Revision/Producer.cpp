@@ -192,7 +192,10 @@ namespace DCLF
 			handles.shadow = buffers.RegisterLatch("cs.dclf.shadow.latch", slots);
 			handles.shadowZeros = buffers.RegisterLatch("cs.dclf.shadow.zeros", 1);
 			handles.shadowLatched = buffers.RegisterLatch("cs.dclf.latched-copies", slots, latched);
+			// A latch for each view a feature took (one none took draws nothing).
 			for (const auto& slot : kViewSlots) {
+				if (!Extensions::ViewRegistered(slot.view))
+					continue;
 				const std::size_t v = ViewIndex(slot.view);
 				handles.views[v] = buffers.RegisterLatch(fmt::format("{}.latch", TraitsOf(slot.view).prefix), slots);
 				handles.viewZeros[v] = buffers.RegisterLatch(fmt::format("{}.zeros", TraitsOf(slot.view).prefix), 1);
@@ -372,6 +375,8 @@ namespace DCLF
 		auto& viewOn = a_make.viewOn;
 		for (const auto& slot : kViewSlots) {
 			const auto kind = slot.view;
+			if (!Extensions::ViewRegistered(kind))
+				continue;
 			const std::size_t v = ViewIndex(kind);
 			const auto& traits = TraitsOf(kind);
 			const auto& view = inputs.views[v];

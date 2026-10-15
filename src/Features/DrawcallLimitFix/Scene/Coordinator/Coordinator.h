@@ -1359,7 +1359,7 @@ namespace DCLF
 		/** @brief Marks a slot whose phases changed for the next ApplySet, with its current geometry. */
 		void MarkSetApply(std::uint32_t a_slot);
 		/**
-		 * @brief The phases DCLF can draw (toggles, ShadowCapability, ReflectionDrawable): a capability that changes only on a toggle,
+		 * @brief The phases DCLF can draw (toggles, ShadowCapability, IndirectDraws::ViewDrawable): a capability that changes only on a toggle,
 		 * load, failure or setup, so the views the engine asks for never change the set.
 		 */
 		static std::uint32_t SetCapability();

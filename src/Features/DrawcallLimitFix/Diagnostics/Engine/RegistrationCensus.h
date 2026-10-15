@@ -43,7 +43,7 @@ namespace DCLF::RegistrationCensus
 
 	enum NoteFlags : std::uint8_t
 	{
-		kReflectionFace = 1u << 1,  // inside a face render in the plain mode (PassCapture::SetReflectionFace): the faces withhold then
+		kReflectionFace = 1u << 1,  // inside a face render in the plain mode (PassCapture::SetViewWithholdActive): the faces withhold then
 	};
 
 	/**

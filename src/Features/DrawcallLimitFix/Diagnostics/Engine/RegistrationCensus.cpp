@@ -242,7 +242,7 @@ namespace DCLF::RegistrationCensus
 				return it->second;
 			if (const auto it = a_frame.shadowViews.find(a_noted.batch); it != a_frame.shadowViews.end())
 				return it->second;
-			if (PassCapture::Get().IsReflectionRenderer(a_noted.batch))
+			if (PassCapture::Get().IsOwnViewRenderer(Api::EngineView::Reflection, a_noted.batch))
 				return kReflection;
 			return census.others.try_emplace(a_noted.batch, static_cast<std::uint16_t>(kFirstOther + census.others.size())).first->second;
 		}
@@ -262,8 +262,11 @@ namespace DCLF::RegistrationCensus
 				const std::uint8_t phase = Extensions::ViewEntryOf(Api::EngineView::FirstPerson).phase;
 				return PassCapture::Get().ViewCovered(Api::EngineView::FirstPerson) && (set->drawn & phase) ? phase : 0;
 			}
-			case kReflection:
-				return (a_noted.flags & kReflectionFace) && (set->drawn & kSetReflection) ? kSetReflection : 0;
+			case kReflection: {
+				// The reflection's phase (its feature's: Extensions::Views), withheld inside a plain face render (PassCapture::SetViewWithholdActive).
+				const std::uint8_t phase = Extensions::ViewEntryOf(Api::EngineView::Reflection).phase;
+				return (a_noted.flags & kReflectionFace) && (set->drawn & phase) ? phase : 0;
+			}
 			case kOcclusionSky:
 			case kOcclusionPrecipitation:
 				return (set->drawn & a_noted.occlusionPhase) ? a_noted.occlusionPhase : 0;

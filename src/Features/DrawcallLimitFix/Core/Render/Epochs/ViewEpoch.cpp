@@ -1,6 +1,6 @@
 // The views' epochs (ViewEpoch.h): their traits, forward keys, bucket plans and shapes, their cameras' VS_PerFrame and their
-// commits (render thread). Their passes and graph extension are ViewEpochRecord.cpp's, their captures and coverage
-// Reflection.cpp's and the view features' (Features/FirstPerson), on the view engine's calls (ViewEngine.cpp).
+// commits (render thread). Their passes and graph extension are ViewEpochRecord.cpp's, their captures and coverage the view
+// features' (Features/Reflection, Features/FirstPerson), on the view engine's calls (ViewEngine.cpp).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
@@ -13,7 +13,7 @@ namespace DCLF
 	{
 		const ViewTraits& TraitsOf(ViewKind a_kind)
 		{
-			// The view's resolved shape (Extensions::Views: Core's for a view it keeps, else the feature's registration) with its slot's
+			// The view's resolved shape (Extensions::Views: the feature's registration; none for a view no feature took) with its slot's
 			// epochs and segments (kViewSlots); made once, the first time a view's traits are read (after InstallFeatures).
 			static const auto kTraits = [] {
 				std::array<ViewTraits, kViews> traits{};

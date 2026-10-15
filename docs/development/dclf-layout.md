@@ -60,7 +60,7 @@ the shell runs after Core's scene events and before DCLF's own engine hooks and 
 | Stand-in observer | `Api/EngineEvents.h` | the primary cull's stood-in roots as they change, and Main::Update's entry; whether the primary cull is installed |
 | Table family | `Api/TableFamilies.h` | columns of its own in every `SceneTables` (`Extensions::TableFamilies`), read through a typed handle; Core keeps beside them the write stamp (the publication copies a family only when it moved), the objects' references into it (bounded by its scene resources' fit, carried in the record at a declared word) and its rows' tags, and recycles its retired rows |
 | Coordinator component | `Api/CoordinatorComponents.h` | state the coordinator keeps for it (`make`), and hook sets, one per concern of the coordinator's, each called on the scene lane per event (a changed slot, an erased entry, a freed range, a phase), never per object per frame: `residency` (a slot resident, left, every residency ended, the residents recounted), `accumulate` (a patch accumulated with its draw chain, the joins done), `walk` (begun, the delta walk's scheduling with its counts, a slot rewritten or its skin partitions refreshed, ended), `dense` (the walk parity's dense walk: save and restore), `retirement` (the slot tables reset, a tracked entry erased, every entry gone, a range it retired come free: `RetireRange`) and `entryClass` (the class it follows, `EntryClass`: whether it takes it, `Extensions::EntryClassTaken`, read as data; its writes listed, the record's second vertex stream resolved or waiting, the stream's slot); with a narrow context: the live tables, the scene mirror and its fade node, the pass serial, the entry's reference, a tracked entry's slot and write state, its write scheduled, seeds the next frame takes (`FrameView::TakeComponentSeeds`) |
-| View contribution | `Api/Views.h` | an engine view Core's view machinery draws in the engine's place once a feature takes it (`EngineView`, in Core's slot order: the reflection, still Core's, then the first person), under its toggle: its set phase and view bit (the feature's own bits, checked by the manifest and the install), its membership (`CategoryRoot`: the entries under a root the feature captures, an exclusive phase; `LodTechniques`), its forward key rule and shape (faces, trees, forward part, depth pass, names, initial depth range), its shape's life, render area, where its members' engine registrations are withheld (`InMainRenderers`, with the accumulators the feature names, or its own renderers), its target import, its coverage before the first frame and on a failed graph, whether a decal on its entries is a forward object of its forward part, and its once-a-frame callbacks (`covered` over Core's precomputed `ViewCoverage`, `captureRoot`, `accumulators`); its work at the view's engine points (`RegisterViewWork`, `ViewPoint`: the frame's start before the coverage, after tree LOD, and the depth commit), run once a frame in view order after Core's own. Core keeps a fixed slot per view (`Core/Render/Views/ViewSlots.h`: its epochs, segments, revision key group and graph extension) and resolves each view's entry once at install (`Extensions::Views`), which the per-view loops and the per-object paths read as data (`Extensions::ViewOn`, the set's phases and view bits, `ViewBitsOf`'s table by phase mask, the root views, the set decision's order, the InMainRenderers views). The feature's work and epochs run on the view engine's calls (`IndirectDraws.h`, "The view engine", `Core/Render/Views/ViewEngine.cpp`: the slot's state, targets, depth range, pipelines, resources and target import, its epochs' inputs and submission) |
+| View contribution | `Api/Views.h` | an engine view Core's view machinery draws in the engine's place once a feature takes it (`EngineView`, in Core's slot order: the reflection, then the first person; see "The view contract" below), under its toggle: its set phase and view bit (the feature's own bits, checked by the manifest and the install), its membership (`CategoryRoot`: the entries under a root the feature captures, an exclusive phase; `LodTechniques`), its forward key rule and shape (faces, trees, forward part, depth pass, names, initial depth range), its shape's life, render area, where its members' engine registrations are withheld (`InMainRenderers`, with the accumulators the feature names, or `OwnRenderers`, the renderers its engine hooks name to `PassCapture`), its target import, its coverage before the first frame and on a failed graph, whether a decal on its entries is a forward object of its forward part, and its once-a-frame callbacks (`covered` over Core's precomputed `ViewCoverage`, `captureRoot`, `accumulators`); its work at the view's engine points (`RegisterViewWork`, `ViewPoint`: the frame's start before the coverage, after tree LOD, and the depth commit), run once a frame in view order. Core keeps a fixed slot per view (`Core/Render/Views/ViewSlots.h`: its epochs, segments, revision key group and graph extension) and resolves each view's entry once at install (`Extensions::Views`), which the per-view loops and the per-object paths read as data (`Extensions::ViewOn`, the set's phases and view bits, `ViewBitsOf`'s table by phase mask, the root views, the set decision's order, the InMainRenderers and OwnRenderers views); a view no feature takes has no entry, and every per-view loop skips it. The feature's work and epochs run on the view engine's calls (`IndirectDraws.h`, "The view engine", `Core/Render/Views/ViewEngine.cpp`: the slot's state, targets, depth range, pipelines, resources and target import, its epochs' inputs and submission; `ViewTreeLod.cpp`: a trees view's tree LOD per face) |
 | Object contributor | `Api/ObjectContributors.h` | three kinds, read as data where Core decides: membership by an engine key (a technique it ports: its eligibility under a toggle and its objects' record flags; a geometry type it ports: a class under a toggle, read by the eligibility, the walk and the captures); membership by a Core class, one enum value per class a feature takes (`EngineParent` and `ParentLeaves`: the leaves under a billboard, a switch node or an actor, read by the classification and the sun and light candidates; `ObjectClass`: a decal or a multi-index layer Core's ports derive but leave native, read by the ports' eligibility; `EntryClass`: a face shape whose records wait on the coordinator component that follows it); and derivations (the shading values it derives for a property flag of its own, and engine globals captured with the frame's: `FrameGlobals::features`). Adding a Core class is the same three steps for every enum: the value in the header, Core's test of it through its `Extensions` query, the feature's registration (the install fails a second claim) |
 
 Each contract's thread, timing and lifetime is documented in its header. A feature's install also installs its engine
@@ -138,6 +138,23 @@ a CategoryRoot view's scene side (the root as a category node, the classificatio
 observer, the set's decisions and their parity, the decals' forward keys, the placements' per-frame chains, the frame requests' root, the
 frame globals' culled bits); FrameValues' root-view rows, palettes and particles; `PassCapture`'s withholding (InMainRenderers) and the
 census's view. BuildDrawsCS mirrors `kViewFirstPerson` (the manifest checks it).
+`Features/Reflection` followed, the second view on the contract: its switch and toggle (listed where Core's were, after the precipitation
+mask's, and registered first, so the toggle's bit in the packed word is where Core's was), its set phase and view bit (`kSetReflection`,
+`kViewReflection`; no HLSL mirror), its contribution (the LOD techniques of the main set, a LOD Lighting technique's slots only; six faces
+with tree LOD; its last shape kept while off; its imported target's area; withheld in renderers of its own; drawn into the engine's cube
+with DCLF's own depth; covered before its first coverage and on a failed graph), its coverage callback, its work after tree LOD's decision
+(the faces' targets, the LOD slots' forward pipelines, its resources) and at the depth commit (the frame's faces in one epoch,
+`CS.DCLF.ExecuteReflection`, with the same skip causes and log lines), its state and report counters (`ReflectionFrame`, its lines at
+`AsyncWorkViews`), the faces' camera parity, and the water reflection's engine hooks (`ReflectionFaces`: the update, its LOD add-roots, the
+face render with its orientation and draws; the feature's early hooks, first of them, gated by `ShellState::Running`; the face render names
+the cube camera's accumulators as the view's renderers, `PassCapture::SetViewRenderers`, and its plain mode as their withholding,
+`SetViewWithholdActive`). What it leaves Core is what every bucketed view shares (the epoch's passes, its revisions, the slot's state, a
+LodTechniques view's slot and phase readiness, the colour target's import, `PassCapture`'s OwnRenderers withholding and the census's view)
+and what belongs to tree LOD and the LOD gates until those features move: the tree LOD drawn per face (its pipeline, ownership and row:
+`IndirectDraws::ResolveViewTreeLod`, `DecideViewTreeLod`, `SubmitViewEpoch`'s row), the cube camera's LOD roots its faces draw in the
+engine's place (`IndirectDraws::ViewLodRootsOwned`, with `LodGates` and `PassCapture::kLodRoots`/`kTreeRoot`), the residue watch under
+them (`PassCapture::WatchReflectionResidue`, `Policy::KeepReflectionRoots`, the residue classes), and the forward targets the faces'
+pipelines are built for (`DrawPipelines::SetForwardTargets`).
 The particles' and billboards' per-object paths stay Core's for now: the particle snapshot store and the
 expansion FrameValues' producer runs per particle member into the palette part it shares with the skins (`Engine/Capture/
 ParticleSnapshots`), and the billboard placement row it samples per moving object (`Engine/Capture/Billboards`, Effect.hlsl's
@@ -148,14 +165,66 @@ layout). The extension points still to come, as the next features need them:
   layout of `DCLFObjectRecord`);
 - more engine event channels (the stand-in change still names the BSTreeNodes among its roots);
 - material contributors;
-- view kinds: the first person is on the contract (see above); the reflection is still Core's (its entry Core-filled, its work, coverage,
-  slot readiness, target import and tree LOD Core's) until its feature takes it;
+- the shadow views' sibling of the view contract (`Api/ShadowViews.h`): the occlusion maps and the shadow views on the outer layer the
+  bucketed views share (view points, the running query, the phase and view-bit manifest, coverage callback, withholding, reports);
 - the shared-bit manifest (object and record flags);
 - ordered fixed-slot ranges of the main pass: a feature's ranges in the sequence buffer, their count words and draws in the colour
   segment's second pass (the decal groups, interleaved there with Terrain Blending's groups).
 - a per-object vertex stream: a feature's rows in a versioned buffer of its scene resources, which the builds' second-stream geometry
   draws, the commits' uploads and the passes' bindings read as data (Features/Faces' face streams and positions);
 - entry-class contributions to the walk's classification and the attach (a face shape's head pin, its per-frame trait).
+
+## The view contract
+
+The engine views Core's bucketed view machinery draws (`ViewTraits`, `ViewFrame`, `ViewResources`, `ViewLatchLayout`, `PlanViewBuckets`,
+`MakeViewShape`, `CommitView`, `ViewExtension`) are taken by features through one contract: `Api/Views.h` (`RegisterView`,
+`RegisterViewWork`), with its Core companion `Core/Extensions/Views.h`. The reflection's faces and the first person are on it. The
+occlusion maps and the shadow views are another family (`ShadowFrame`) and get a sibling contract that reuses the outer layer; the
+portals, local lights, GPU occlusion and forward epochs are not views.
+
+- **Core's fixed slot per view.** `Api::EngineView` is Core's slot order (`Reflection`, `FirstPerson`): the epochs' indices, the latches,
+  the revision key groups, the coverage and the setup run in it. `Core/Render/Views/ViewSlots.h`'s `kViewSlots[v]` reserves the view's
+  epochs (`Epoch::*`, whose `kEpochTraits` order is load-bearing), its `RenderGraphRuntime::Segment`s, its key group (the shapes-made
+  report's names, "reflection" and "first person") and its graph extension's id. A new view is the enum value, a CS segment, its slot
+  row, then the feature's registration.
+- **The feature supplies data and per-frame callbacks.** `ViewContribution`: the view, its toggle, its set phase (one bit, the feature's)
+  and its shape's view bit (one bit, the feature's: both checked against Core's and each other's by the install and by
+  `Features/Manifest.cpp`), its membership (`CategoryRoot`: the entries under the root `captureRoot` names, an exclusive phase whose main
+  mask is the view bit alone; `LodTechniques`: a main-eligible slot whose pipeline is a LOD Lighting technique, beside the main phase),
+  its key rule (`lodTechniquesOnly`, `forwardRasterToForwardPart`, `keyFlags`), its shape (`faces` up to `kMaxViewFaces`, `trees`,
+  `forwardPart`, `depthPass`, `viewBits`, names and latch labels, the initial `depthRange`), its life (`KeepLast`, `DropWhenOff`: dropped
+  from the revision while off), its area (`Target`, `MainColourViewport`), its withholding (`InMainRenderers` with the `accumulators`
+  callback; `OwnRenderers`, whose renderers its engine hooks name), its target import (`ColourWithOwnDepth`, `DepthTarget`), its coverage
+  before the first decision and on a failed graph, its decals as forward objects, and its `covered` callback (required; render thread,
+  once a frame at `DecideCoverage`, the views in slot order, over Core's precomputed, side-effect-free `ViewCoverage`). `ViewWork` runs
+  the feature's work at a `ViewPoint` (`FrameStartBeforeCoverage`, `FrameStartAfterTreeLod`, `DepthCommitted`), once a frame on the render
+  thread, the views in slot order and a view's work in registration order, whatever the toggle (the work reads it).
+- **Resolved once, read as data.** `Extensions::ResolveViews` (the end of `InstallFeatures`) makes each view's `ViewEntry` (none for a view
+  no feature takes: every per-view loop skips it) and derives what the per-object paths read: the set's phases, `rootPhases` and
+  `lodPhases`, the view bits, `ViewBitsOf`'s table by phase mask, the root views, the set decision's order (the CategoryRoot views first),
+  and the InMainRenderers and OwnRenderers views. Classification, the set decisions (`SetParticipation`, `DecideSlot`, the slot
+  readiness by membership: `IndirectDraws::ViewSlotReady`, a LodTechniques view's phase readiness: `PhaseReady`), the lacking phases
+  (`lodPhases`: FrameView's third count), the builds' masks, the frame requests' roots, the revisions (traits, forward keys, key groups,
+  `DropWhenOff`) and `PassCapture` read the entries; no per-object loop calls a feature.
+- **The view engine.** A feature's work and epochs reproduce Core's own over the view's slot (`IndirectDraws.h`, "The view engine"):
+  `ViewState`, `MainTargetFormats`, `SetViewTargets` (published for the scene lane), `PostViewInputs`, `SetViewDepthRange`,
+  `ExchangeViewForwardCompatible`, `ResolveViewPipelines` (wanted slots or every slot; with the programs and waits counted on request),
+  `DropViewPipelines`, `SetUpView`, `ImportViewTarget` (by its target import), `TakeViewInputs` (`DepthThisFrame`,
+  `DepthThisFrameColourBefore`: the frame before's colour frame record, the target imported after; `ColourThisFrame`), `SubmitViewEpoch`
+  (the revision's recording and shape, the payloads held, the faces committed: `Submitted`, `NoRevision`, `NoOwners`, `Failed`, which the
+  feature maps onto its own skip causes and log lines), `ViewCovered`, `ViewDrawable`. A trees view's tree LOD per face is Core's while
+  TreeLod is (`ResolveViewTreeLod`, `DecideViewTreeLod`, the row `SubmitViewEpoch` commits), as is the cube camera's LOD roots' ownership
+  (`ViewLodRootsOwned`, with the LOD gates).
+- **Withholding.** `PassCapture` keeps each view's renderers and coverage (before the first decision, its `coveredInitially`). An
+  InMainRenderers view's member is tested inside `WithholdMain`, before the main phase's; an OwnRenderers view's after it
+  (`WithholdOwn`): its member's pass into the renderers its hooks named (`SetViewRenderers`) while its render withholds
+  (`SetViewWithholdActive`) and its epochs draw, or tree LOD's while its tree LOD per face is DCLF's (`SetViewTreeLodOwned`).
+  `SetViewRendering` marks its render for the observers.
+- **Hooks and shell state.** A view feature's engine hooks are its own (from its install, or its early hooks when Core's engine side and
+  observers must find them in place); they read `Core/Engine/ShellState.h` (`Running`, `Passes`). The shell's `Main_RenderDepth`
+  world-drawn point runs `FrameDriver::DepthCommitted` (the depth commit, then the `DepthCommitted` work).
+- **Reports.** A view's lines go at `ReportPoint::AsyncWorkViews` (after the visibility lines, before the forward epoch's) or
+  `AsyncWork` (after it).
 
 ## The rules
 

@@ -797,19 +797,21 @@ namespace DCLF
 		return true;
 	}
 
-	bool IndirectDraws::Impl::ImportReflectionCube(ID3D11Texture2D* a_texture)
+	bool IndirectDraws::Impl::ImportViewColourTarget(ViewKind a_kind, ID3D11Texture2D* a_texture)
 	{
+		// The reflection's: the engine's cube target, its faces the epoch's (its log lines name it).
 		auto* host = RenderGraphRuntime::Get().Host();
-		if (!reflection.resources || !host || !a_texture)
+		auto& view = View(a_kind);
+		if (!view.resources || !host || !a_texture)
 			return false;
-		auto& r = *reflection.resources;
+		auto& r = *view.resources;
 		if (r.target && r.targetTexture == a_texture)
 			return true;
 		DxvkOrgInteropResourceInfo info{};
 		if (!RenderGraphRuntime::Get().DescribeResource(a_texture, info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
 			return false;
 		org::TextureDescription desc{};
-		desc.format = rhi::helpers::ToRHI(reflection.targets.colour);
+		desc.format = rhi::helpers::ToRHI(view.targets.colour);
 		desc.channels = 4;
 		desc.hasRTV = true;
 		desc.rtvFormat = desc.format;
@@ -823,7 +825,7 @@ namespace DCLF
 		// DCLF's own depth for the faces, at the engine's precision (its depth target 6 is R24G8).
 		org::TextureDescription depthDesc{};
 		depthDesc.imageDimensions.push_back({ info.image.extent.width, info.image.extent.height, 0, 0 });
-		depthDesc.format = rhi::helpers::ToRHI(reflection.targets.depth);
+		depthDesc.format = rhi::helpers::ToRHI(view.targets.depth);
 		depthDesc.channels = 1;
 		depthDesc.hasDSV = true;
 		depthDesc.dsvFormat = depthDesc.format;
@@ -833,8 +835,8 @@ namespace DCLF
 		r.targetTexture = a_texture;
 		r.width = info.image.extent.width;
 		r.height = info.image.extent.height;
-		host->AddExtension(kViewSlots[ViewIndex(ViewKind::Reflection)].extensionId, [state = reflection.resources] { return MakeViewExtension(state); });
-		logger::info("[DCLF] reflection cube imported: {}x{}, {} faces, format {}", r.width, r.height, info.image.arrayLayers, static_cast<int>(reflection.targets.colour));
+		host->AddExtension(kViewSlots[ViewIndex(a_kind)].extensionId, [state = view.resources] { return MakeViewExtension(state); });
+		logger::info("[DCLF] reflection cube imported: {}x{}, {} faces, format {}", r.width, r.height, info.image.arrayLayers, static_cast<int>(view.targets.colour));
 		PostRevisionInputs();
 		return true;
 	}

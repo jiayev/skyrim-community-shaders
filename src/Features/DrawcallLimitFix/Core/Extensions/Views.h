@@ -1,8 +1,8 @@
 #pragma once
 
-// The view contributions' Core side (Api/Views.h): each engine view's entry, resolved once at InstallFeatures (ResolveViews) from Core's
-// own slot and the feature's registration, and what Core derives from them for its per-object paths (the set's phases, the view bits by
-// phase, the root views, the decision and withholding orders). The view machinery's epochs, revisions, frame requests, classification,
+// The view contributions' Core side (Api/Views.h): each engine view's entry, resolved once at InstallFeatures (ResolveViews) from the
+// feature's registration (a view no feature takes has none: every per-view loop skips it), and what Core derives from them for its
+// per-object paths (the set's phases, the view bits by phase, the root views, the decision and withholding orders). The view machinery's epochs, revisions, frame requests, classification,
 // set decisions, pass capture and the builds read them as data; the contexts the views' callbacks and work are handed are defined here.
 // The view engine's calls for a feature's work and epochs (its state, targets, pipelines, inputs and epoch submission) are
 // IndirectDraws' (Core/Render/IndirectDraws.h, "The view engine").
@@ -96,18 +96,14 @@ namespace DCLF::Extensions
 	inline constexpr std::size_t kEngineViews = static_cast<std::size_t>(Api::EngineView::Count);
 	inline constexpr std::size_t kViewPoints = static_cast<std::size_t>(Api::ViewPoint::Count);
 
-	/**
-	 * @brief A view's resolved entry. Core fills what it still keeps of a view (the reflection whole), a feature's registration the rest
-	 * (the first person's).
-	 */
+	/** @brief A view's resolved entry: its feature's registration (none: registered false, every field its default). */
 	struct ViewEntry
 	{
-		bool registered = false;               // a feature's registration filled it
-		Api::ToggleId toggle;                  // a feature's toggle
-		bool ToggleSet::*coreToggle = nullptr;  // a toggle Core keeps (the reflections'), read in place of toggle
+		bool registered = false;  // a feature's registration filled it
+		Api::ToggleId toggle;     // the feature's toggle
 		bool forwardDecals = false;
-		std::uint8_t phase = 0;      // its set phase (kSet*: a feature's own bit, or Core's)
-		std::uint32_t viewBit = 0;   // its view bit at the GPU cull (kView*: likewise)
+		std::uint8_t phase = 0;      // its set phase (the feature's own SetPhase bit)
+		std::uint32_t viewBit = 0;   // its view bit at the GPU cull (the feature's own kView*)
 		Api::ViewMembership membership = Api::ViewMembership::LodTechniques;
 		Api::ViewKeyRule keys;
 		// Its shape, the strings owned here (shape's views point into them; Core's ViewTraits too, TraitsOf).
@@ -119,11 +115,11 @@ namespace DCLF::Extensions
 		Api::ViewWithholding withholding = Api::ViewWithholding::OwnRenderers;
 		Api::ViewTargetImport targetImport = Api::ViewTargetImport::ColourWithOwnDepth;
 		bool coveredInitially = false, coveredOnFailedGraph = false;
-		// The feature's callbacks (none for a view Core keeps: Core decides its coverage itself).
+		// The feature's callbacks.
 		bool (*covered)(const Api::ViewCoverage&) = nullptr;
 		void (*captureRoot)(Api::ViewRootCapture&) = nullptr;
 		void (*accumulators)(Api::ViewAccumulators&) = nullptr;
-		// By ViewPoint: Core's work while it keeps the view's, then the features' (RegisterViewWork), in order.
+		// By ViewPoint: the features' work (RegisterViewWork), in order.
 		std::array<std::vector<void (*)(const Api::ViewPointContext&)>, kViewPoints> work;
 	};
 	/** @brief Every view's entry, and what Core's per-object paths read of them. */
@@ -145,6 +141,9 @@ namespace DCLF::Extensions
 		// The InMainRenderers views, in slot order (PassCapture: their accumulators' renderers, tested inside WithholdMain).
 		std::array<Api::EngineView, kEngineViews> mainRendererViews{};
 		std::uint32_t mainRendererCount = 0;
+		// The OwnRenderers views, in slot order (PassCapture: the renderers their features name, tested after WithholdMain).
+		std::array<Api::EngineView, kEngineViews> ownRendererViews{};
+		std::uint32_t ownRendererCount = 0;
 		// The view bits a set phase bit takes part in (Core's main and shadow phases filled by Core, the views' by their entries), and the
 		// same by phase mask: ViewBitsOf's one read.
 		std::array<std::uint32_t, 8> viewBitsOfPhaseBit{};
@@ -162,20 +161,19 @@ namespace DCLF::Extensions
 	inline const ViewSet& Views() { return Detail::resolvedViews; }
 	/** @brief Any thread, after InstallFeatures: a_view's entry. */
 	inline const ViewEntry& ViewEntryOf(Api::EngineView a_view) { return Views().views[static_cast<std::size_t>(a_view)]; }
+	/** @brief Any thread, after InstallFeatures: whether a feature took a_view (the per-view loops skip one none took). */
+	inline bool ViewRegistered(Api::EngineView a_view) { return ViewEntryOf(a_view).registered; }
 	/**
-	 * @brief Main thread, at the end of InstallFeatures (Registry): the entries resolved from Core's slots, the registered contributions
-	 * (by view; EngineView::Count: none) and the registered work. Fails the install for a phase or view bit a contribution shares with
-	 * Core's or another view's. Once.
+	 * @brief Main thread, at the end of InstallFeatures (Registry): the entries resolved from the registered contributions (by view;
+	 * EngineView::Count: none) and the registered work. Fails the install for a phase or view bit a contribution shares with Core's or
+	 * another view's, and for work on a view no feature took. Once.
 	 */
 	void ResolveViews(std::span<const Api::ViewContribution, kEngineViews> a_views, std::span<const Api::ViewWork> a_work);
-	/** @brief Whether Core keeps a_view whole (no feature may register it): the reflection, until its feature takes it. */
-	bool CoreKeepsView(Api::EngineView a_view);
 
-	/** @brief Whether DCLF draws a_view under a_toggles (its toggle on; false for none). */
+	/** @brief Whether DCLF draws a_view under a_toggles (its toggle on; false for a view no feature took). */
 	inline bool ViewOn(const ToggleSet& a_toggles, Api::EngineView a_view)
 	{
-		const auto& entry = ViewEntryOf(a_view);
-		return entry.coreToggle ? a_toggles.*entry.coreToggle : a_toggles.On(entry.toggle);
+		return a_toggles.On(ViewEntryOf(a_view).toggle);
 	}
 
 	/** @brief Whether a decal on a_view's entries is a forward object of its forward part (its contribution's; false for none). */

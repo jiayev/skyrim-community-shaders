@@ -1,8 +1,15 @@
 #pragma once
 
+// The water reflection's engine hooks (Features/Reflection's early hooks): render thread. Included by the feature's sources only.
+
 #include <cstdint>
 
-namespace DCLF::ReflectionFaces
+namespace RE
+{
+	class NiCamera;
+}
+
+namespace DCLF::Features::Reflection::ReflectionFaces
 {
 	/*
 	 * The water reflection's cube map faces (AE 1.6.1170; skyrim-engine-notes.md, "Water reflections: the cube map";
@@ -13,7 +20,11 @@ namespace DCLF::ReflectionFaces
 	 * (FUN_1414ed500, at 0x1414eda00), culls the camera's roots into its accumulator (+0x1A0) and renders it.
 	 */
 
-	/** @brief Hooks the update, the LOD add-roots and the face render (always: what is drawn inside them is decided per frame). */
+	/**
+	 * @brief Hooks the update, the LOD add-roots and the face render (always: what is drawn inside them is decided per frame). The face
+	 * render names the cube camera's accumulators as the view's renderers and its plain mode as their withholding
+	 * (PassCapture::SetViewRenderers, SetViewWithholdActive).
+	 */
 	void Install();
 
 	/** @brief Render thread: whether a face render is running, and its face mask. */
@@ -24,14 +35,14 @@ namespace DCLF::ReflectionFaces
 
 	/**
 	 * @brief Called on the render thread once the engine has oriented the camera to a face (FUN_1414ed500), before the face's cull
-	 * and draws: DCLF's view of the face (IndirectDraws::ReflectionFaceCamera).
+	 * and draws: DCLF's view of the face (Reflection::FaceOriented).
 	 */
 	using FaceOriented = void (*)(const RE::NiCamera& a_camera, std::uint32_t a_face);
 	void SetFaceOriented(FaceOriented a_callback);
 
 	/**
 	 * @brief Called on the render thread after the engine's draws of each face (its accumulator's render, FUN_1414a90f0 at
-	 * 0x1414edbf8), with the face's targets still bound: the observers' capture of the face (IndirectDraws::CaptureReflectionFace).
+	 * 0x1414edbf8), with the face's targets still bound: the observers' capture of the face (Reflection::FaceDrawn).
 	 */
 	using AfterFaceDraws = void (*)();
 	void SetAfterFaceDraws(AfterFaceDraws a_callback);
@@ -39,7 +50,8 @@ namespace DCLF::ReflectionFaces
 	/**
 	 * @brief The cube camera's LOD roots DCLF draws in this update's faces (no face cull of them), asked once an update before
 	 * the add-roots with whether its face renders are plain: kLodRoots (LOD land and LOD objects: the reflection phase), kTreeRoot
-	 * (LOD trees: the faces' tree LOD). Their add-root calls are skipped; the sky's stays.
+	 * (LOD trees: the faces' tree LOD). Their add-root calls are skipped; the sky's stays. The values are PassCapture's kLodRoots and
+	 * kTreeRoot (Core's: IndirectDraws::ViewLodRootsOwned and the residue watch name them).
 	 */
 	enum RootBits : std::uint32_t
 	{

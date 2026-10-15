@@ -23,8 +23,8 @@ namespace DCLF::Api
 	 */
 	enum class EngineView : std::uint8_t
 	{
-		// The water reflection's cube faces: the LOD techniques of the main set (kSetReflection), the view bit kViewReflection at the GPU
-		// cull, one epoch per reflection update after the engine's face loop. Core's for now (its toggle "reflections").
+		// The water reflection's cube faces: the LOD techniques of the main set, one epoch a frame after the engine's face loop drawing them
+		// into the engine's cube, and tree LOD per face (Features/Reflection: its set phase and view bit, renderers and engine hooks).
 		Reflection,
 		// The player's first-person skeleton (arms, weapons, shield, magic hands): a depth epoch in RenderDepth and a colour epoch at
 		// Main::RenderFirstPersonView, and their forward part (Features/FirstPerson: its set phase, view bit and engine hooks).
@@ -106,8 +106,9 @@ namespace DCLF::Api
 	 * - membership: how entries join the phase. CategoryRoot: the entries under the root captureRoot names, the phase exclusive (their
 	 *   main mask the view bit alone; the classification's hidden chain stops at the root, whose kHidden is the view's).
 	 * - keys, shape: the view's forward keys and its epochs' shape. life: whether its shape stands while the toggle is off.
-	 * - area, withholding, targetImport: its render area, where the engine's registrations of its members are withheld, and what it
-	 *   draws into.
+	 * - area, withholding, targetImport: its render area, where the engine's registrations of its members are withheld (InMainRenderers:
+	 *   the accumulators the callback names; OwnRenderers: the renderers the feature's engine hooks name as the engine renders the view,
+	 *   while they say its members are withheld there: PassCapture::SetViewRenderers, SetViewWithholdActive), and what it draws into.
 	 * - coveredOnFailedGraph: whether its members are withheld on a failed graph. coveredInitially: before the first coverage.
 	 * - covered (required): render thread, at the frame's start (DecideCoverage), once a frame, the views in EngineView order: whether its
 	 *   epochs draw its members this frame (then the engine's registrations of them are withheld).
@@ -145,7 +146,7 @@ namespace DCLF::Api
 	};
 	/**
 	 * @brief A feature's work for a view at an engine point: run there once a frame, render thread, the views in EngineView order and a
-	 * view's work in registration order (after Core's own, while Core keeps a view's). Runs whatever the view's toggle: the work reads it.
+	 * view's work in registration order (the view's feature's). Runs whatever the view's toggle: the work reads it.
 	 */
 	struct ViewWork
 	{

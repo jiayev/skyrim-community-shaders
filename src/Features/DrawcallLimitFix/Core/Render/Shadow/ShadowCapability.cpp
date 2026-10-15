@@ -205,8 +205,9 @@ namespace DCLF
 		};
 		const auto& tables = *static_cast<const SceneTables*>(a_tables);
 		const auto& lookups = a_lookups;
-		if (a_phase == kSetReflection)
-			return impl->ReflectionPhaseReady(tables, a_slot) || no(8);
+		// A LodTechniques view's phase (the reflection's): its slot's forward pipeline.
+		if (a_phase & Extensions::Views().lodPhases)
+			return impl->LodPhaseReady(a_phase, tables, a_slot) || no(8);
 		if (a_slot >= tables.objects.size() || a_slot >= tables.shadowTechnique.size())
 			return no(7);
 		const auto& object = tables.objects[a_slot];

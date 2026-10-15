@@ -41,7 +41,6 @@ namespace DCLF
 		PrimaryExclude,
 		Skylight,
 		Precipitation,
-		Reflections,
 		OpaqueEffects,
 		EmptyFadeNode,
 		OrgEpochs,

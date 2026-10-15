@@ -25,7 +25,7 @@ namespace DCLF::Draws
 	/**
 	 * @brief What a scene revision reads of the frame, as the render thread last posted it (Impl::PostRevisionInputs, at each place a
 	 * value is captured: BuildPoint, Setup, BeforeShadowMaps, the occlusion views, the shadow placements, the main epochs' captures,
-	 * PrepareReflection; and, while the revision is made on the render thread, before each make). Immutable once posted, latest wins
+	 * the views' work (IndirectDraws::PostViewInputs); and, while the revision is made on the render thread, before each make). Immutable once posted, latest wins
 	 * (Impl::revisionInputsSlot); the revision code reads its copy and its request alone, never the frame's state. generation moves with
 	 * every post; the generations it carries (the graph's build, the targets, the shadow format, the toggles, the main resources) are
 	 * what a snapshot's adoption compares.

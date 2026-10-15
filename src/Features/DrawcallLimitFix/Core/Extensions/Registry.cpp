@@ -247,8 +247,6 @@ namespace DCLF::Extensions
 					(a_view.membership == Api::ViewMembership::CategoryRoot && !a_view.captureRoot) ||
 					(a_view.withholding == Api::ViewWithholding::InMainRenderers && !a_view.accumulators))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete view contribution", feature));
-				if (CoreKeepsView(a_view.view))
-					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes view {}, which Core keeps", feature, static_cast<std::uint32_t>(a_view.view)));
 				auto& entry = lists.views[static_cast<std::size_t>(a_view.view)];
 				if (entry.view != Api::EngineView::Count)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes view {}, which another feature has", feature, static_cast<std::uint32_t>(a_view.view)));

@@ -86,7 +86,7 @@ namespace DCLF::Features::FirstPerson
 			break;
 		}
 		const std::array<ViewFace, 1> faces{ ViewFace{ true, std::span<const std::byte>(f.perFrame.data(), f.perFrame.size()), f.viewProj, f.eye } };
-		switch (draws.SubmitViewEpoch(kView, 0, listed, faces, nullptr)) {
+		switch (draws.SubmitViewEpoch(kView, 0, listed, faces)) {
 		case ViewSubmit::NoRevision:
 			return skip(1);
 		case ViewSubmit::NoOwners:
@@ -119,7 +119,7 @@ namespace DCLF::Features::FirstPerson
 		IndirectDraws::ViewListed listed;
 		if (draws.TakeViewInputs(kView, IndirectDraws::ViewInputsFrom::ColourThisFrame, listed) != IndirectDraws::ViewInputsTaken::Taken)
 			return skip(3);
-		switch (draws.SubmitViewEpoch(kView, 1, listed, {}, nullptr)) {
+		switch (draws.SubmitViewEpoch(kView, 1, listed, {})) {
 		case ViewSubmit::NoRevision:
 			return skip(1);
 		case ViewSubmit::NoOwners:

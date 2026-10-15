@@ -145,6 +145,24 @@ Core validation at `coc RiverwoodSleepingGiantInn` (FP on), every run (i12vk, i1
 The sequences overrun and the invalid DGC address found with them are resolved (below: "Resolved: first-person and reflection
 draws read past their sequences").
 
+## Intermittent crash: a freed child detached during cell streaming (found 2026-10-15 in motion run v3; not investigated)
+
+It happened about 70 s into a motion run (`CS_DCLF_TEST_MOVE`, cells streaming). The exception was 0xc0000005 with rip at a heap
+address (`0x1d059189840`), on an engine job thread. The stack (cdb on `CommunityShaders.dmp`):
+-   `DCLF::DetachChild2At<0>::thunk+0x65`
+-   then the engine's detach (`SkyrimSE+0xd1d334`), whose virtual call lands in the heap.
+
+So the child being detached had a freed or overwritten vtable: a use-after-free of a scene object. A rerun of the same build (v3b)
+did not crash. Earlier motion runs in other sessions crashed now and then at other addresses (m100, w18, w36/w76, w143, w181);
+they were not analysed and may or may not be the same thing. The change under test (the view contract, V3) does not touch detach
+events.
+
+Next steps:
+-   Check whether DCLF releases or drops a reference to a child that the engine still detaches later. Engine references are
+    meant to be released only via `EngineReleases` at Present.
+-   Check whether the `DetachChild2At` thunk reads the child after the original call.
+-   The dump is kept as scratch `refactor2/v3-motion.dmp`.
+
 ## Accumulated writes parity (A5): an intermittent entry write the incremental pass skips (found 2026-10-15; not investigated)
 
 In one `CS_DCLF_PERSISTENT_PARITY` run (v2-pp), 2 of the 5 compared frames differed. Both were the same entry root (4466): the
