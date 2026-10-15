@@ -44,7 +44,7 @@ namespace DCLF
 		// Whether the main set's forward pipelines can draw into the view's forward part (its depth format the main pass's), published
 		// for the slot readiness (IndirectDraws::ViewSlotReady).
 		std::atomic<bool> forwardCompatible{ false };
-		// A trees view's tree LOD per face (Api::ViewShape::trees; Core's while TreeLod is: IndirectDraws::ResolveViewTreeLod,
+		// A trees view's tree LOD per face (Api::ViewShape::trees, the view engine's: IndirectDraws::ResolveViewTreeLod,
 		// DecideViewTreeLod): its forward pipeline for the view's targets, and whether the faces' tree LOD is DCLF's this frame
 		// (PassCapture::SetViewTreeLodOwned).
 		rhi::PipelineHandle treePipeline{};

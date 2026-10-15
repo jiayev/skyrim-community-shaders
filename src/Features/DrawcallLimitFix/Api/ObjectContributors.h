@@ -118,12 +118,23 @@ namespace DCLF::Api
 		// A multi-index shape's layer (the additional property's passes, hint 12: the decal group 3) and the MultiIndexSparkle technique
 		// (Ineligible::MultiIndex).
 		Layer,
+		// Object LOD: a BSSubIndexTriShape with the LOD object flags under TES::lodLandRoot, drawn by its visible segments (the LODObjects
+		// and LODObjectHD techniques; Ineligible::Lod), and the LOD root listed as a category node (Features/Lod).
+		LodObjects,
+		// Terrain LOD: a land block's shape under TES::lodLandRoot (the LODLand and LODLandNoise techniques; Ineligible::Lod), and the LOD
+		// root listed as a category node (Features/Lod).
+		LodTerrain,
+		// Tree LOD: the instance groups under the LOD trees root (BSDistantTreeShaderProperty shapes), drawn by Core's tree LOD path from
+		// the mirrored instance records (its tables, its cull and draws in the depth segment and in a trees view's faces; DecideTreeLod)
+		// instead of the engine's passes (Features/TreeLod).
+		TreeLod,
 		Count,
 	};
 
 	/**
 	 * @brief An object class contribution: the class's objects are DCLF's while the toggle is on. Read where the objects are classified
-	 * (the Lighting and Effect ports' eligibility, the primary entries), as data (no call per object).
+	 * (the Lighting and Effect ports' eligibility, the primary entries, the category nodes listed), and by the paths that draw a class
+	 * (tree LOD's decision and pipelines, a view's LOD roots), as data (no call per object).
 	 *
 	 * - objectClass: the class, one feature's.
 	 * - toggle: a registered toggle.

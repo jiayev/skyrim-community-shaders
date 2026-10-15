@@ -4,13 +4,7 @@ namespace DCLF
 {
 	// The probes of the open defects (docs/development/dclf-open-defects.md). DrawcallLimitFix::ProbeOpaqueTarget is
 	// defined with them.
-	/**
-	 * @brief CS_DCLF_TREE_LOD_AUDIT=1, main thread at the scene frame's start, with or without DCLF: the attached tree LOD
-	 * blocks' instances (BGSDistantTreeBlock) against their references. An instance shown while its reference's full tree is
-	 * loaded and visible is drawn over it (counted apart while the tree's fade is above 0: the engine crossfades the two, the
-	 * instance's alpha 1 - the fade); one hidden without a visible full tree leaves a hole (dclf-lod.md, "Tree instance hiding").
-	 */
-	void AuditTreeLod();
+	// (The tree LOD audit, CS_DCLF_TREE_LOD_AUDIT, is Features/TreeLod's.)
 	/**
 	 * @brief CS_DCLF_SET_PARITY, render thread at the scene frame's start after the frame's claims are installed: the player's skeletons
 	 * against them. The third-person skeleton while it is hidden (first person: FUN_140736150's store) and the first-person one (hidden

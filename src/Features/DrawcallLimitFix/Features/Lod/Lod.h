@@ -1,0 +1,22 @@
+#pragma once
+
+// Lod (CS_DCLF_LOD_OBJECTS, CS_DCLF_LOD_TERRAIN; dclf-lod.md): the terrain manager's LOD blocks under TES::lodLandRoot DCLF draws, object
+// LOD (a BSSubIndexTriShape with the LOD object flags, drawn by its visible segments: the LODObjects and LODObjectHD techniques) and terrain
+// LOD (a land block's shape: the LODLand and LODLandNoise techniques). The feature registers their switches and live toggles, and the two
+// object classes' contributions (Api::ObjectClass::LodObjects, LodTerrain, Api/ObjectContributors.h), which Core reads as data: the Lighting
+// port's techniques and its LOD flags' eligibility (Ineligible::Lod), the sub-index shapes' eligibility, the LOD root listed as a category
+// node, and a view's LOD roots drawn in the engine's place (IndirectDraws::ViewLodRootsOwned: the cube camera's LOD land and objects roots,
+// while both classes are on and the swaps gated).
+//
+// Core keeps the LOD gates (CS_DCLF_LOD_GATES: Engine/Cull/LodGates, their install in the shell, the gate events, the coordinator's gates and
+// the publication's flips, FrameView's flip at adoption, the hidden stores' veto, their report lines and observers), the segment events and
+// the walk's drawn ranges (Engine/Capture/SceneEvents' LodSegment hooks, the coordinator's lodRanges, their parity and report line), the LOD
+// fades, and the LOD classification's predicates (IsLodLand, IsLodObject). Included by the feature's sources only.
+
+#include "Features/DrawcallLimitFix/Api/Feature.h"
+
+namespace DCLF::Features::Lod
+{
+	// LodFeature.cpp: the feature's entry (Features/FeatureList.cpp).
+	Api::Feature Feature();
+}

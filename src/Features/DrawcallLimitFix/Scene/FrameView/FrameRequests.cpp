@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/Hash.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
@@ -31,6 +32,13 @@ namespace DCLF::Scene
 		// Cell 3D category nodes DCLF draws from (engine notes: cell 3D category nodes). The Actor node holds an exterior's actors
 		// (an interior moves them into its rooms); walked whatever the actors' toggle says (Features/Actors), since its parent contribution is ClassifyFrame's and live.
 		constexpr std::array<std::uint32_t, 4> kDrawnCategories{ 0 /*Actor*/, 3 /*Static*/, 4 /*Dynamic*/, 5 /*MultiBound*/ };
+
+		/** @brief The LOD classes that list TES::lodLandRoot (object LOD 1, terrain LOD 2; 0: the root is not listed). */
+		std::uint32_t LodListing(const ToggleSet& a_toggles)
+		{
+			return (Extensions::ObjectClassOn(a_toggles, Api::ObjectClass::LodObjects) ? 1u : 0u) |
+			       (Extensions::ObjectClassOn(a_toggles, Api::ObjectClass::LodTerrain) ? 2u : 0u);
+		}
 
 		/**
 		 * @brief The frame start's engine reads that need no fixed engine moment and push nothing onto the tracker's stack, done on
@@ -184,7 +192,7 @@ namespace DCLF::Scene
 		{
 			Fnv1a hash;
 			const auto& views = Extensions::Views();
-			std::uint32_t listing = (ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u);
+			std::uint32_t listing = LodListing(ActiveToggles());
 			for (std::uint32_t i = 0; i < views.rootCount; ++i)
 				listing |= Extensions::ViewOn(ActiveToggles(), views.rootViews[i]) ? 4u << i : 0u;
 			hash.Mix(listing);
@@ -248,9 +256,10 @@ namespace DCLF::Scene
 					hash.Mix(objRoot->GetChildren().size());
 				mix(tes->objRoot);
 				watch(tes->objRoot);
-				// The LOD root, with the toggles that list it.
-				mix(ActiveToggles().lodObjects || ActiveToggles().lodTerrain ? tes->lodLandRoot : nullptr);
-				hash.Mix((ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u));
+				// The LOD root, with the classes that list it.
+				const std::uint32_t lodListing = LodListing(ActiveToggles());
+				mix(lodListing ? tes->lodLandRoot : nullptr);
+				hash.Mix(lodListing);
 				// The CategoryRoot views' roots' inputs while their toggles track them (the first-person root).
 				MixViewRootInputs(mix);
 				mix(tes->interiorCell);
@@ -535,9 +544,9 @@ namespace DCLF::Scene
 			}
 			// Object and terrain LOD: TES::lodLandRoot holds the terrain manager's LOD blocks (a BSMultiBoundNode each: object LOD's
 			// BSSubIndexTriShapes, one segment per cell, and the land's BSTriShapes), attached and detached as the camera moves
-			// (dclf-lod.md). It is the category node; its content is tracked by the usual structural events. A class whose toggle is
-			// off classifies as Lod.
-			if ((ActiveToggles().lodObjects || ActiveToggles().lodTerrain) && tes->lodLandRoot)
+			// (dclf-lod.md). It is the category node; its content is tracked by the usual structural events. A class not taken, or whose
+			// toggle is off, classifies as Lod.
+			if (LodListing(ActiveToggles()) && tes->lodLandRoot)
 				current.insert(tes->lodLandRoot);
 			Engine::ForEachLoadedCell(*tes, addCell);
 		}

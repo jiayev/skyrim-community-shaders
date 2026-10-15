@@ -60,11 +60,11 @@ namespace DCLF
 			// Object LOD (dclf-lod.md), drawn by visible segment ranges; only a BSSubIndexTriShape with the LOD object flags.
 			case Technique::LODObjects:
 			case Technique::LODObjectHD:
-				return ActiveToggles().lodObjects;
+				return Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodObjects);
 			// Terrain LOD (dclf-lod.md): only a land block's shape under the LOD root (IsLodLand).
 			case Technique::LODLand:
 			case Technique::LODLandNoise:
-				return ActiveToggles().lodTerrain;
+				return Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodTerrain);
 			// The features' (Features/Actors: actor skin, faces, hair and eyes; Features/TreeWind: TreeAnim).
 			default:
 				return ContributedTechniqueOn(a_technique);
@@ -295,10 +295,10 @@ namespace DCLF
 	{
 		std::uint64_t f = a_property.flags;
 
-		// Terrain LOD (a land block's BSTriShape) and object LOD (a BSSubIndexTriShape, drawn by LodSegments' ranges) each by toggle.
-		if ((f & Bit(Flag::kLODLandscape)) && !(ActiveToggles().lodTerrain && IsLodLand(a_property.flags, a_leaf.Type())))
+		// Terrain LOD (a land block's BSTriShape) and object LOD (a BSSubIndexTriShape, drawn by LodSegments' ranges) each by its class.
+		if ((f & Bit(Flag::kLODLandscape)) && !(Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodTerrain) && IsLodLand(a_property.flags, a_leaf.Type())))
 			return Ineligible::Lod;
-		if ((f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects))) && !(ActiveToggles().lodObjects && IsLodObject(a_property.flags, a_leaf.Type())))
+		if ((f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects))) && !(Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodObjects) && IsLodObject(a_property.flags, a_leaf.Type())))
 			return Ineligible::Lod;
 		const auto* alpha = a_leaf.alpha;
 		const bool blending = a_leaf.AlphaBlending();

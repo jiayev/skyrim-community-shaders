@@ -78,12 +78,16 @@ namespace DCLF::TreeLod
 		MeshSource mesh;
 	};
 
-	/** @brief The engine's tree LOD groups by events: pushed by the hooks (any thread), drained by the render thread. */
+	/**
+	 * @brief The engine's tree LOD groups by events: pushed by the hooks (any thread: Push), drained by the render thread. The hooks
+	 * (the refill's two calls, the block update's call, the shape's AddGroup and RemoveGroup slots) are the source of this channel, the
+	 * tree LOD class's feature's early hooks (Features/TreeLod), which set installed once they are in.
+	 */
 	inline EventQueue<Event> events;
 	inline bool installed = false;
 
-	/** @brief Patches the refill's two calls, the block update's call, and the shape's AddGroup and RemoveGroup slots. */
-	bool Install();
+	/** @brief The hooks' push, any thread: a_event onto events, counted when pushed off the drain's thread (TakeOffThread). */
+	void Push(Event&& a_event);
 
 	/** @brief Whether a geometry is a tree LOD shape: its shader property is a BSDistantTreeShaderProperty. Any thread. */
 	bool IsTreeLodShape(const RE::BSGeometry* a_shape);

@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/TerrainBlending.h"
@@ -789,8 +790,8 @@ namespace DCLF
 	{
 		bool owned = false;
 		auto* buffers = impl->scene.get();
-		// A frame without claims is the engine's whole, tree LOD included.
-		if (buffers && buffers->treeLodCull && ActiveToggles().lodTrees && Scene::FrameView::Get().TreeLodMirror().Size() && !Scene::FrameView::Get().SetWithdrawn()) {
+		// A frame without claims is the engine's whole, tree LOD included; so is one whose tree LOD class is not taken or off.
+		if (buffers && buffers->treeLodCull && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::TreeLod) && Scene::FrameView::Get().TreeLodMirror().Size() && !Scene::FrameView::Get().SetWithdrawn()) {
 			// The pipeline lane builds its pipelines (the DistantTree shader as input); until the frame's catalog has them the
 			// engine draws tree LOD.
 			auto& drawPipelines = DrawPipelines::Get();

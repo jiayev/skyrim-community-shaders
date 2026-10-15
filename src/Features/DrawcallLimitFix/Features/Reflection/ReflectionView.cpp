@@ -122,7 +122,8 @@ namespace DCLF::Features::Reflection
 			pipelines = draws.ResolveViewPipelines(kView, *a_context.tables, a_context.catalog, {}, true);
 		else
 			draws.DropViewPipelines(kView);
-		// Tree LOD's forward pipeline (its program is built of the DistantTree shader DecideTreeLod posts): Core's, until TreeLod moves.
+		// Tree LOD's forward pipeline (its program is built of the DistantTree shader DecideTreeLod posts): the view engine's, under the tree
+		// LOD class.
 		const bool treeWaited = draws.ResolveViewTreeLod(kView, on, a_context.catalog);
 		drawPipelines.NoteFrameWaits(false, pipelines.waited || treeWaited);
 		reflection.lodSlots = pipelines.slots;
