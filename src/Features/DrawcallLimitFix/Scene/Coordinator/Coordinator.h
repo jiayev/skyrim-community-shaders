@@ -4,6 +4,8 @@
 // (SceneTables) and their change log, the membership joins, the DCLF set and the publications the render thread installs. Scene lane only:
 // passes run one at a time, woken by producers (SceneWake), fanning pure reads out to the preparation pool; under the render-thread
 // parities a pass runs inline. The render thread reaches it only through Scene::Channels and the publications.
+// Its state is split by concern into private bases, one per header of State/ (each says which phases use it); the functions
+// over it are declared here, grouped the same way.
 
 #include <array>
 #include <atomic>
@@ -65,98 +67,38 @@ namespace DCLF
 	struct PartTimer;
 	struct SunCandidates;
 	struct PipelineCatalog;
+}
 
-	/** @brief The parts of Coordinator::BuildFrame, timed separately under CS_DCLF_PROFILE. */
-	enum class BuildPart : std::uint32_t
-	{
-		Walk,            // the setup before the loop (the walk's prologue, the joins' BindByMembership)
-		PassLookup,      // the loop's order built (the joins' passes looked up)
-		ClassifyStatic,  // type, skin, property, material alpha, DeriveLightingDescriptors
-		ClassifyFrame,   // the parent chain (hidden, actor) and the fade
-		Resolve,         // GpuResources::Resolve for the vertex and index buffers
-		Dedup,           // the geometry, pipeline and material map probes
-		PipelineEval,    // the new-pipeline body: its technique row and constants
-		MaterialEval,    // the new-material body: the material port
-		Record,          // the record's writes, and the joins' patch bookkeeping
-		CapturePatch,    // the joins' room index and tree wind
-		ApplyPatch,      // the joins' patch into the tables (ApplyAccumulatePatch)
-		DedupHit,   // the three map probes on the HIT path (Dedup measures the misses)
-		LoopTail,   // per tracked object: a rejected one's continue path, and the iteration itself
-		Skinning,   // skinned objects: their palette rows counted
-		Count
-	};
+// The scene passes' timed parts, and the coordinator's state: one private base per concern (State/), dependencies first.
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Timing.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Tracked.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Mirror.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Dependents.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Categories.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Attach.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Candidates.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Placements.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Hidden.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Events.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Shading.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Frame.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Slots.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Materials.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Bindings.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Decals.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Faces.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Walk.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Joins.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Residents.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Fades.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/ShadowSets.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/LodGates.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Set.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Publication.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Pump.h"
 
-	inline constexpr std::array<const char*, static_cast<std::size_t>(BuildPart::Count)> kBuildPartNames{
-		"walk", "pass-lookup", "classify-static", "classify-frame",
-		"resolve", "dedup", "pipeline-eval", "material-eval", "record", "capture-patch", "apply-patch",
-		"dedup-hit", "loop-tail", "skinning"
-	};
-
-	/** @brief The sub-zones of a scene pass, each a Tracy zone and a Stats::scenePartMs sum (CS_DCLF_STATS). */
-	enum class ScenePart : std::uint32_t
-	{
-		CategoryNodes,     // the attach queue's drain and RefreshCategoryNodes
-		AttachDetach,      // AddSubtree per attach, EraseTracked per detach
-		Validate,          // ValidateSlice
-		StructuralEvents,  // the fade, property, node and switch queues' drains
-		Prologue,          // used sets, change log trim, LOD fade settings, GpuResources::BeginFrame
-		SweepSlots,        // UpdateSlotReferences and the slot expiry
-		CullHiddenBits,    // CaptureCullHiddenBits
-		Schedule,          // BeginWalk and the order: the per-frame set and the events' dependents
-		SwitchEvents,      // ApplySwitchEvents
-		Evaluate,          // the first round: per-frame entries and those the events scheduled
-		GeometryScan,      // FinishDeltaWalk's geometry slot touches and the stale-slot object scan
-		LaterRounds,       // the rounds for stale and refreshed geometry slots
-		ShadowSets,        // RefreshShadowSets and its parity
-		ObjectSweep,       // SweepObjectSlots (a full walk only)
-		SunCandidates,     // UpdateSunCandidates
-		FaceWalk,          // EndFaceWalk
-		WalkReference,     // the walk's observers' dense reference (DenseReference)
-		Shading,           // NameShadingEvents: the shading events' slots named for FrameValues
-		Placements,        // PublishPlacementPlan: the roots taken, and the walk's plan for FrameValues
-		Joins,             // BuildAccumulatePhase, new pipelines' blocks, bindings, lookups
-		Commit,            // CommitSet, after the joins
-		Publish,           // PublishScene: set applied, claims revoked, tables and lookups published
-		// Nested in the parts above (ScenePartNested): the two halves of each fan-out.
-		EvaluateFanout,    // EvaluateEntry over the round (the pool from 128 entries)
-		EvaluateMerge,     // MergeEntry over the round, in order
-		JoinsFanout,       // EvaluateJoinPre and EvaluateJoin
-		JoinsMerge,        // their merges, in order
-		SubtreesFanout,    // PrepareSubtrees (the pool from 16 roots)
-		SubtreesMerge,     // MergeSubtree, in event order
-		Count
-	};
-
-	inline constexpr std::array<const char*, static_cast<std::size_t>(ScenePart::Count)> kScenePartNames{
-		"category nodes", "attach/detach", "validate", "structural events", "prologue", "sweep slots", "cull hidden bits",
-		"schedule", "switch events", "evaluate", "geometry scan", "later rounds", "shadow sets",
-		"object sweep", "sun candidates", "face walk", "walk parity", "shading", "placement plan", "joins", "commit", "publish",
-		"evaluate (fan-out)", "evaluate merge", "joins (fan-out)", "joins merge", "subtrees (fan-out)", "subtrees merge"
-	};
-
-	/** @brief A part measured inside another (the fan-outs' halves), left out of the parts' sum. */
-	inline constexpr bool ScenePartNested(std::size_t a_part)
-	{
-		return a_part >= static_cast<std::size_t>(ScenePart::EvaluateFanout);
-	}
-
-	/** @brief What the first evaluation round did with an entry, for its timing (CS_DCLF_PROFILE). */
-	enum class EvaluateKind : std::uint32_t
-	{
-		Light,        // the light path kept or moved it
-		LightMissed,  // the light path tried and fell through to the full write
-		Actor,        // written in full: an actor's (kTraitActor) whose verdict lets it have a record
-		ActorNoRecord,  // written in full: an actor's whose verdict gives it none (hidden, fading, ...)
-		Face,         // written in full: a face shape
-		PerFrame,     // written in full: any other per-frame entry
-		Event,        // written in full: scheduled by an event, a pending evaluation or a full walk
-		Count
-	};
-
-	inline constexpr std::array<const char*, static_cast<std::size_t>(EvaluateKind::Count)> kEvaluateKindNames{
-		"light path", "light path missed", "actor", "actor without a record", "face", "other per-frame", "event"
-	};
-
+namespace DCLF
+{
 	namespace Scene
 	{
 		class Coordinator;
@@ -171,7 +113,32 @@ namespace DCLF
 	 * chain, never on its threads. Tracked content: everything under attached cells' Static, Dynamic, MultiBound and Actor category nodes
 	 * (terrain, markers and water are not).
 	 */
-	class Scene::Coordinator
+	class Scene::Coordinator :
+		private CoordinatorTracked,
+		private CoordinatorMirror,
+		private CoordinatorDependents,
+		private CoordinatorCategories,
+		private CoordinatorAttach,
+		private CoordinatorCandidates,
+		private CoordinatorPlacements,
+		private CoordinatorHidden,
+		private CoordinatorEvents,
+		private CoordinatorShading,
+		private CoordinatorFrame,
+		private CoordinatorSlots,
+		private CoordinatorMaterials,
+		private CoordinatorBindings,
+		private CoordinatorDecals,
+		private CoordinatorFaces,
+		private CoordinatorWalk,
+		private CoordinatorJoins,
+		private CoordinatorResidents,
+		private CoordinatorFades,
+		private CoordinatorShadowSets,
+		private CoordinatorLodGates,
+		private CoordinatorSet,
+		private CoordinatorPublication,
+		private CoordinatorPump
 	{
 		// Diagnostics/Scene and the scene reports read the private state through it.
 		friend struct Diagnostics::SceneView;
@@ -488,13 +455,8 @@ namespace DCLF
 			return it != lodRanges.end() ? &it->second : nullptr;
 		}
 
-		/** @brief How a tracked geometry came to be tracked (diagnostics). */
-		enum class TrackSource : std::uint8_t
-		{
-			AttachEvent,       // an attach event's subtree walk
-			CategoryAppeared,  // the walk of a category node RefreshCategoryNodes found new
-			Rescan,            // the full rescan after a load
-		};
+		/** @brief How a tracked geometry came to be tracked (diagnostics; State/Tracked.h). */
+		using TrackSource = CoordinatorTracked::TrackSource;
 		/** @brief The frame a tracked geometry was added, and how; false when it is not tracked. */
 		bool GetTrackInfo(const RE::BSGeometry* a_geometry, std::uint32_t& a_frame, TrackSource& a_source) const;
 		/** @brief The category node an object hangs under, or null (diagnostics). */
@@ -522,276 +484,225 @@ namespace DCLF
 		/** @brief Diagnostics (inline passes): the plan the last walk made, not yet published. */
 		const PlacementPlan* PeekPlacementPlan() const { return placementPlanReady.get(); }
 
+
+		/** @brief A thread running scene work (the lane or a fan-out chunk): GetFrame is the coordinator's there. */
+		static inline thread_local bool sceneWorkThread = false;
+
 	private:
-		std::vector<std::shared_ptr<const void>> retiredImports;  // into the next publication's deltas (TakeDeltas)
-		// Slots named for the next frame's shading sample, into the next deltas.
-		std::vector<ShadingItem> shadingNamed;
-		/** @brief A slot's ShadingItem into shadingNamed (none for a free, unbound or propertyless slot). */
-		void NameShading(std::uint32_t a_slot, bool a_member);
+		// Declared here, defined in Internal.h and the phases' files (their definitions name them as Coordinator's).
+		struct EventBatch;
+		struct BatchUnwindGuard;  // a batch back to the render thread on a throw (Internal.h)
 		/**
-		 * @brief The walk: drains the shading events and names their dependents (their extras' static rows rewritten); every slot while the
-		 * events are not installed.
+		 * @brief The batch walked once (ApplyMirrorEvents' apply loop) for the later steps: the tracker's attach and detach events (not
+		 * mirror-only) in order, whether one was a detach, and the records of the captures and leaf updates in order (both heads).
 		 */
-		void NameShadingEvents(std::vector<std::uint32_t>* a_slots = nullptr);
-		/** @brief The dependents of shading event keys (properties, emittance colours) named; their slots into a_slots when given. */
-		void NameShadingKeys(const std::vector<const void*>& a_keys, std::vector<std::uint32_t>* a_slots);
-		// The walk's placement plan: filled by its rounds and PublishPlacementPlan, ready once the walk is done.
-		std::shared_ptr<PlacementPlan> placementPlan, placementPlanReady;
-		// Plans no publication took yet, oldest first; the next publication carries them all.
-		std::vector<std::shared_ptr<PlacementPlan>> placementPlansHeld;
-		// Per-frame entries are walked once per frame input: the last such frame, and whether this walk took them.
-		std::uint32_t perFrameFrame = ~0u;
-		bool perFrameWalked = true;
+		struct BatchIndex;
+		struct ShardScope;
+
+		// State whose types are the coordinator's own (public, or declared here): the report counters, the kept decal order, the
+		// load screen's carry, the material owners and the retirement chain. The rest of the state is in the bases (State/).
+		// Pipeline blocks the render thread posted (Channels::pipelineConstantsPosted), applied where the slot still holds the key.
+		ConstantsPostStats constantsPostStats;
+		TablesPublication tablesPublication;
+		ResidentStats residentStats;
+		SetStats setStats;
+		Stats stats;
+		// The member decals in draw order with their keys, kept so a change re-keys only the decals it names.
+		struct KeptDecalOrder;
+		std::shared_ptr<KeptDecalOrder> keptDecals;
+		// A load screen's attach and detach events for the mirror (taken by the first pass after the load).
+		std::shared_ptr<EventBatch> loadingCarry;
 		/**
-		 * @brief The placement set the plans carry (PublishPlacementPlan): every recorded per-frame mover (IsPlacedMover), every moving
-		 * root (movingRoots) and every still root that had a move event since it was listed (stillRoots, until its last dependent goes).
-		 * Keys only: a held reference dropped by a later pass would be released on the lane, so the references are copied from the
-		 * entries and the root owners when a plan is made.
+		 * @brief A BSShaderMaterial reference taken and dropped the engine's way (AE): the material database (manager 0x143187758) shares
+		 * one material among equal properties, and its release (FUN_1414f7a40, used by BSShaderProperty::SetMaterial) decrements under the
+		 * database's lock and at zero removes it from the database before deleting it. A BSTSmartPointer would delete it directly.
 		 */
-		ankerl::unordered_dense::set<RE::BSGeometry*> moverSet;
-		ankerl::unordered_dense::set<const RE::NiAVObject*> stillRoots;
-		// The set must be made anew (a clear, a full walk, the change log lost, the object indices invalidated): the next plan is a reset.
-		bool placementDirty = true;
-		/** @brief One plan row as compared (PlacementPlan::Key): movers by geometry, a root's dependents by geometry. */
-		using PlannedKey = PlacementPlan::Key;
-		/**
-		 * @brief The set as the plans so far left it (what FrameValues' kept set holds, the same deltas applied): each plan carries what
-		 * the touched keys below changed against it, so a plan costs what changed, never the set.
-		 */
-		ankerl::unordered_dense::map<const void*, PlannedKey> plannedMovers;                                                   // by geometry
-		ankerl::unordered_dense::map<const RE::NiAVObject*, ankerl::unordered_dense::map<const void*, PlannedKey>> plannedRoots;  // by node: dependents
-		// The planned slots and layer slots, each with the items naming it (root null: a mover's): a change-log entry on one touches them.
-		struct PlannedOwner
+		class MaterialReference
 		{
-			const void* geometry = nullptr;
-			const RE::NiAVObject* root = nullptr;
-			bool operator==(const PlannedOwner&) const = default;
+		public:
+			MaterialReference() = default;
+			MaterialReference(const MaterialReference&) = delete;
+			MaterialReference& operator=(const MaterialReference&) = delete;
+			MaterialReference(MaterialReference&& a_other) noexcept :
+				material(std::exchange(a_other.material, nullptr)) {}
+			MaterialReference& operator=(MaterialReference&& a_other) noexcept
+			{
+				if (this != &a_other) {
+					reset();
+					material = std::exchange(a_other.material, nullptr);
+				}
+				return *this;
+			}
+			~MaterialReference() { reset(); }
+			/** @brief Takes a reference on a_material (null: none), then drops the one held. */
+			void reset(RE::BSShaderMaterial* a_material = nullptr);
+			/** @brief Takes over a count already taken (a HeldSnapshot's). */
+			void Adopt(RE::BSShaderMaterial* a_material) { material = a_material; }
+			explicit operator bool() const { return material != nullptr; }
+
+		private:
+			RE::BSShaderMaterial* material = nullptr;
 		};
-		ankerl::unordered_dense::map<std::uint32_t, std::vector<PlannedOwner>> plannedSlots;
-		std::uint32_t plannedObjectSlots = 0, plannedBoneCapacity = 0, plannedObjectStamp = 0;
-		LogCursor placementCursor;  // the change log, read for the planned slots
-		// What may differ from the planned set since the last plan, keys only (the membership points: NoteMover, the root lists, the
-		// dependents lists, the change log's planned slots), compared against it at the next plan. Duplicates compare equal the second time.
-		std::vector<RE::BSGeometry*> placementMoversTouched;
-		std::vector<const RE::NiAVObject*> placementRootsTouched;
-		std::vector<std::pair<const RE::NiAVObject*, const void*>> placementDependentsTouched;
-		/** @brief A listed root's dependent may have changed (its root planned): compared at the next plan. */
-		void TouchPlacedDependent(const RE::NiAVObject* a_root, const void* a_geometry)
+		// Per material slot: its engine reference on the material, so the pointer is not reused while live; retired via
+		// RetiredBatch::materials.
+		std::vector<MaterialReference> materialOwners;
+		/**
+		 * @brief What the coordinator let go of that a published table version may still name. Each publication holds the chain node opened
+		 * with it; once none up to it lives, RecycleRetired frees the slots and sends engine references to EngineReleases (released at
+		 * Present).
+		 */
+		struct RetiredBatch
 		{
-			if (a_root && plannedRoots.contains(a_root))
-				placementDependentsTouched.emplace_back(a_root, a_geometry);
+			std::vector<Tables::RetiredSlot> slots;
+			std::vector<std::shared_ptr<const void>> imports;
+			std::vector<MaterialReference> materials;
+			std::vector<RE::NiPointer<RE::NiRefObject>> references;
+			std::vector<std::shared_ptr<EventBatch>> events;  // tracker events hold detached subtrees
+			bool Empty() const { return slots.empty() && imports.empty() && materials.empty() && references.empty() && events.empty(); }
+		};
+		RetirementChain<RetiredBatch> retirement;
+		struct RetirementStats
+		{
+			std::uint64_t retired = 0, recycled = 0, dropped = 0, batches = 0;
+		} retirementStats;
+
+		// The mirror's reads and the batch's pins: State/Mirror.h (CoordinatorMirror).
+		/** @brief Counts a mirror read's check; a difference (a_describe()) is checked again after the next batch (DeferredRead). */
+		template <class Describe, class Recheck>
+		void NoteMirrorRead(MirrorRead a_read, bool a_differ, Describe&& a_describe, Recheck&& a_recheck) const
+		{
+			++MirrorReads().checked[static_cast<std::size_t>(a_read)];
+			if (a_differ)
+				deferredReads.push_back({ a_read, a_describe(), std::function<bool()>(std::forward<Recheck>(a_recheck)) });
 		}
-		/** @brief A mover's planned key now (none: not in the set); a_prune drops a stale member from moverSet (never the parity's). */
-		std::optional<PlannedKey> PlannedMoverNow(RE::BSGeometry* a_geometry, bool a_prune);
-		/** @brief Whether a root is listed now (moving or still, with dependents and an owner); a_prune forgets a still root that is not. */
-		bool PlannedRootNow(const RE::NiAVObject* a_root, bool a_prune);
-		/** @brief A listed root's dependent's planned key now (none: not listed under it, or no record). */
-		std::optional<PlannedKey> PlannedDependentNow(const RE::NiAVObject* a_root, const void* a_geometry) const;
-		void AddPlannedSlots(const PlannedKey& a_key, const PlannedOwner& a_owner);
-		void RemovePlannedSlots(const PlannedKey& a_key, const PlannedOwner& a_owner);
-		/** @brief Into a_plan: what the touched keys changed against the planned set (a_reset: the whole set, the planned one cleared). */
-		void DiffPlacementSet(PlacementPlan& a_plan, bool a_reset);
-		/** @brief Parity: the set rebuilt whole from the coordinator's state, sorted (PlacementPlan::Check). */
-		PlacementPlan::Check RebuildPlacementSet();
-		/** @brief The plans' deltas and the parity (Policy::HiddenWitness passes) since the last report. */
-		struct PlacementDeltaStats
+		/** @brief The geometries under a_root by the mirror's children, each with its parent reasons below a_reason, in walk order. */
+		void MirrorSubtree(const void* a_root, Ineligible a_reason, std::vector<std::pair<RE::BSGeometry*, Ineligible>>& a_out, bool& a_unmirrored) const;
+		/** @brief A live check's lease (EngineReadWindow): refused while the engine's update may run, the check is skipped and counted. */
+		EngineReadWindow::Lease LiveCheckLease(MirrorRead a_read) const
 		{
-			std::uint64_t plans = 0, resets = 0, sized = 0;
-			std::uint64_t moversJoined = 0, moversChanged = 0, moversLeft = 0, rootsListed = 0, rootsLeft = 0, dependentsJoined = 0, dependentsChanged = 0,
-						  dependentsLeft = 0;
-			std::uint64_t moversTouched = 0, rootsTouched = 0, dependentsTouched = 0, logSlots = 0;
-			std::uint64_t parityChecks = 0, parityDiffer = 0;
-			std::string parityFirst;
-			// ScheduleRoot: dirty roots (attach or detach under them), those whose motion verdict changed (every dependent scheduled), the
-			// dependents scheduled against those listed; the parity's witnesses (dependents scheduled only by it) and those it changed.
-			std::uint64_t dirtyRoots = 0, dirtyRootsWhole = 0, rootDependentsScheduled = 0, rootDependentsListed = 0;
-			std::uint64_t rootWitnessChecks = 0, rootWitnessDiffer = 0, rootWitnessSkipped = 0;  // skipped: scheduled already, or no placement matters
-			std::string rootWitnessFirst;
-			// GeometryScan: scans, stale slots, object slots checked (indexed) against those a whole scan checks, scheduled.
-			std::uint64_t scans = 0, scansWhole = 0, staleSlots = 0, scanChecked = 0, scanObjects = 0, scanScheduled = 0;
-			std::uint64_t scanParityChecks = 0, scanParityDiffer = 0;
-		} placementDeltaStats;
-		/** @brief The placement deltas' report line, once its window turned (PublishPlacementPlan; CS_DCLF_STATS or a parity finding). */
-		void ReportPlacementDeltas();
-		std::uint32_t placementDeltaWindow = 0;
-		// Mirror updates that change an entry's traits or skin (a node's kBody or kControllers, a geometry's kDismember or kSkin), keys
-		// only, for the next delta walk (ApplyMotionUpdate, Reclassify).
-		ankerl::unordered_dense::set<const void*> mirrorMotionNodes, mirrorSkinGeometries;
-		/** @brief A node whose controllers or rigid body changed: every entry under it reclassified, every root above it scheduled. A key. */
-		void ApplyMotionUpdate(const void* a_node);
-		struct Tracked
+			EngineReadWindow::Lease lease;
+			if (!lease)
+				++MirrorReads().refused[static_cast<std::size_t>(a_read)];
+			return lease;
+		}
+		MirrorReadStats& MirrorReads() const { return mirrorReadSink ? *mirrorReadSink : mirrorReads; }
+		void RecheckDeferredReads();
+		/** @brief FindCategoryNode's chain, the mirror's alone (no counting, no check). */
+		RE::NiNode* MirrorCategoryNode(const void* a_object, Ineligible& a_reason, bool& a_unmirrored) const;
+		/** @brief The batch's captures copied into mirrorPreps (the pool, or here), for ApplyMirrorEvents' serial apply. */
+		void PrepareMirrorCaptures(const std::vector<const SceneCapture::Records*>& a_captures, std::size_t a_records);
+		void PinBatch(const std::vector<RE::NiPointer<RE::NiRefObject>>& a_pins)
 		{
-			RE::NiPointer<RE::BSGeometry> geometry;
-			// Its shader and layer properties, held from the naming event's pins (HoldProperties): the scene work's references are copies
-			// of these.
-			RE::NiPointer<RE::BSShaderProperty> property, layerProperty;
-			RE::BSShaderProperty* HeldProperty(bool a_layer) const { return (a_layer ? layerProperty : property).get(); }
-			// Written while the mirror held no record of it (WriteObject): evaluated again when a capture names it.
-			bool leafWaiting = false;
-			std::uint64_t identity = 0;
-			std::uint64_t groupIdentity = 0;
-			const RE::TESObjectREFR* actorOwner = nullptr;  // lookup only, never published
-			const RE::NiNode* roomNode = nullptr;  // lookup key, refreshed on structural attachment
-			std::uint64_t roomMapGeneration = 0;
-			int roomIndex = -1;
-			RE::NiNode* categoryNode = nullptr;
-			// UnsupportedParent, Billboard or Switch (decided per frame) for what lies between the leaf and its category node; else None.
-			Ineligible parentReason = Ineligible::None;
-			// When and how it was added (GetTrackInfo).
-			std::uint32_t trackedFrame = 0;
-			TrackSource trackedBy = TrackSource::AttachEvent;
+			for (const auto& pin : a_pins) {
+				batchPins.insert_or_assign(pin.get(), pin.get());
+				++referenceStats.pins;
+			}
+		}
+		template <class T>
+		RE::NiPointer<T> Pinned(const T* a_key)
+		{
+			if (const auto it = batchPins.find(a_key); it != batchPins.end()) {
+				++referenceStats.pinned;
+				return RE::NiPointer<T>(static_cast<T*>(it->second));
+			}
+			return nullptr;
+		}
+		/** @brief Pinned's lookup alone (null: no pin), pure: a prepare's read of the batch's frozen pins; FromPin makes the reference. */
+		RE::NiRefObject* PinOf(const void* a_key) const
+		{
+			const auto it = a_key ? batchPins.find(a_key) : batchPins.end();
+			return it != batchPins.end() ? it->second : nullptr;
+		}
+		template <class T>
+		RE::NiPointer<T> FromPin(RE::NiRefObject* a_pin)
+		{
+			if (!a_pin)
+				return nullptr;
+			++referenceStats.pinned;
+			return RE::NiPointer<T>(static_cast<T*>(a_pin));
+		}
+		/** @brief Light Limit Fix's room node for an object (GetParentRoomNode), from the mirror's chain. */
+		const RE::NiNode* RoomNodeOf(const void* a_object) const;
+		void ApplyMirrorEvents(const EventBatch& a_batch, BatchIndex& a_index);
 
-			/**
-			 * @brief A cached negative verdict (positives are Derived's), checked in full against its witnesses each evaluation
-			 * (rendererData too: a stale negative would leave an object native forever); ValidateSlice covers what has no cheap witness.
-			 */
-			struct StaticVerdict
-			{
-				bool cached = false;
-				Ineligible reason = Ineligible::None;
-				const RE::BSGraphics::TriShape* rendererData = nullptr;
-				const RE::BSShaderProperty* property = nullptr;
-				const RE::BSShaderMaterial* material = nullptr;
-				std::uint8_t fadeState = 0;
-			};
-			StaticVerdict verdict;
+		// The dependents lists and the root owners: State/Dependents.h (CoordinatorDependents).
+		/** @brief Lists an evaluated entry under its properties; UnlistDependents takes it off every list. */
+		void ListDependents(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		void UnlistDependents(RE::BSGeometry* a_geometry, Tracked& a_tracked, bool a_root);
+		/** @brief Off its category node's members (EraseTracked; AddGeometry before it lists the entry anew). */
+		void UnlistCategoryMember(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		/** @brief Parity (CheckCategoryMembers): the index against the tracked entries, every member each way; logs the first difference. */
+		void CheckCategoryMembers(const char* a_where);
+		/** @brief Owns a_root from the batch's pin (a_live: a live walk's pointer) while a dependents list names it. */
+		bool OwnRoot(const RE::NiAVObject* a_root, bool a_live);
+		void ReleaseRootOwner(const RE::NiAVObject* a_root);
+		void ReleaseRootOwners();
+		/** @brief The listed root's reference (a copy); null and counted for an unlisted root. */
+		RE::NiPointer<RE::NiAVObject> OwnedRoot(const RE::NiAVObject* a_root);
 
-			/**
-			 * @brief The cached positive derivation (descriptors, static flags, pipeline key, slots), valid while its witnesses hold; slots
-			 * are checked against their keys before use, so a reused slot is never handed back.
-			 */
-			struct Derived
-			{
-				bool valid = false;
-				std::uint32_t generation = 0;  // the slot tables' generation the slots belong to
-				const RE::BSGraphics::TriShape* triShape = nullptr;
-				const RE::BSShaderProperty* property = nullptr;
-				const RE::BSShaderMaterial* material = nullptr;
-				std::uint8_t fadeState = 0;
-				bool interior = false;
-				bool alphaBelowOne = false;
-				std::uint32_t technique = 0;
-				std::uint32_t subPass = 0;
-				std::uint32_t hint = 0;
-				std::uint32_t biasWitness = 0;
-				LightingDescriptors descriptors;
-				std::uint32_t staticFlags = 0;
-				PipelineKey key{};
-				std::uint32_t geometrySlot = ~0u;
-				std::uint32_t pipelineSlot = ~0u;
-				std::uint32_t materialSlot = ~0u;
-			};
-			Derived derived;
-
-			/**
-			 * @brief The cull-only verdict (a culling candidate when the engine did not keep it) and the pass that took it; stands until a
-			 * delta walk event retakes it.
-			 */
-			std::uint32_t candidateFrame = 0;  // the pass that classified it (PassStamp); 0: never classified
-			Ineligible candidateReason = Ineligible::None;
-			// An NPC face shape (a BSDynamicTriShape under a BSFaceGenNiNode, positions from FaceSnapshots); resolved once by the walk.
-			bool faceShape = false;
-			bool faceShapeResolved = false;
-			// Its head (a key) while listed in faceHeads, and whether its last write found no head snapshot (the head's next publication
-			// rewrites it).
-			const RE::BSFaceGenNiNode* faceHead = nullptr;
-			bool faceWaiting = false;
-			// A face shape's head, held from the batch's pins at its attach (the face snapshot record's reference is a copy).
-			RE::NiPointer<RE::BSFaceGenNiNode> faceHeadRef;
-			// Its property's fade node, held from the naming event's pins: tree and fade-root owners are copied from it, never made from a
-			// key.
-			RE::NiPointer<RE::NiAVObject> fadeNodeRef;
-			const void* fadeNodeRequested = nullptr;  // the fade node key asked of the render thread (FadeNodeRequest), until answered
-			// Its LOD gate (token; 0: none) and side; held out after its gate flipped (until its detach); whether any gate ever tagged it.
-			std::uint64_t gate = 0;
-			std::uint8_t gateSide = 0;
-			bool gateHeldOut = false;
-			bool gateSeen = false;
-			// Owned by an actor (GetUserData is an ActorCharacter): Advanced Skin gives its draws the actor's wetness
-			// (Tables::skinWetness). Resolved once by the walk.
-			bool actorOwned = false;
-			bool actorOwnedResolved = false;
-			// The joins' verdict when they left it unbound (Diagnostics::CensusVerdictOf reads this frame's).
-			Ineligible accumulateReason = Ineligible::None;
-			std::uint32_t accumulateReasonFrame = 0;  // the frame it was taken
-			std::uint64_t accumulateReasonPass = 0;   // the pass (a join failed for a verdict of this pass)
-			// Its index in this walk's tables, valid while objectStamp equals the coordinator's.
-			std::uint32_t objectStamp = 0;
-			std::uint32_t objectId = 0;
-			// Its persistent object slot (objectId's value while it keeps a record), kNoObjectSlot while it has none.
-			std::uint32_t slot = kNoObjectSlot;
-			// The node whose bound decides sun caster candidacy, resolved once (the graph above a tracked geometry is fixed).
-			const RE::NiAVObject* sunEntryNode = nullptr;
-			bool sunEntryResolved = false;
-			// Its light entry (LightEntryOf), listed in lightDependents while tracked; null: none.
-			const RE::NiAVObject* lightRoot = nullptr;
-			// Its main-pass layer's slot (LayerPropertyOf: a multi-index shape's additional property, second index list, decal group 3), or
-			// kNoObjectSlot; it lives and dies with the base (WriteLayer).
-			std::uint32_t layerSlot = kNoObjectSlot;
-			Derived layerDerived;
-			const void* listedLayerProperty = nullptr;  // the layer's property in propertyDependents
-			// Its membership passes' derived descriptors, base and layer (BindByMembership stores them): they go with the entry.
-			MembershipDerived membershipDerived, membershipLayerDerived;
-			// The delta walk's. perFrame: inputs change every frame (PerFrameTraits), set by a classifying evaluation and kept.
-			// scheduledWalk: the walk that last scheduled it. bucket: its histogram bucket (kNoBucket: none).
-			bool perFrame = false;
-			bool perFrameListed = false;
-			// lightTraits: per frame only because it moves, is skinned or is an actor's: while its classification stands the light path
-			// retakes only an actor's verdict and a skin's partitions, and only when an event names it (MoverDue); its placement is the
-			// plan's (moverSet). 0 otherwise. movedWalk: the walk that took this path.
-			std::uint32_t lightTraits = 0;
-			std::uint32_t movedWalk = 0;
-			// Its move events' keys (MoveKeysOf): the one reference on its chain (MoveKeyOf); with several, the innermost here and the
-			// outermost in moveKeyOuter; with none, its category node. The light path takes it when one of them moved (MoverDue).
-			const void* moveKey = nullptr;
-			const void* moveKeyOuter = nullptr;
-			// The witness walk that evaluated it though no event named it (parity: the gate's check, MergeEntry).
-			std::uint32_t gateWitnessWalk = 0;
-			// An actor's light-path entry: the nodes up to its category node (in hiddenDependents), and whether one had a hidden event
-			// since its last evaluation. Owed to the next per-frame walk, not the draining event walk, which skips per-frame entries (else
-			// the first-person switch's hide of the third-person skeleton is lost).
-			std::vector<const RE::NiAVObject*> hiddenChain;
-			bool hiddenEventOwed = false;
-			// The keys it is listed under: its shader and alpha properties in propertyDependents (the last evaluation's), its sun entry
-			// node in rootDependents (while tracked).
-			const void* listedProperty = nullptr;
-			const void* listedAlpha = nullptr;
-			const void* listedEmittance = nullptr;  // external emittance's shared colour (emittanceEvents)
-			const RE::NiAVObject* listedRoot = nullptr;
-			std::uint32_t fullWalk = 0;  // the walk that must write it in full (an event, not the per-frame set)
-			std::uint8_t bucket = kNoBucket;
-			std::uint32_t scheduledWalk = 0;
-			static constexpr std::uint8_t kNoBucket = 0xFF;
-		};
-		/** @brief Whether an entry is a recorded per-frame mover (moverSet's: every plan lists it, FrameValues samples it every frame). */
-		bool IsPlacedMover(const Tracked& a_tracked) const;
+		// The category nodes and first person: State/Categories.h (CoordinatorCategories).
+		/** @brief Diffs the category nodes and portal roots against the taken capture when it is new or a_force (the post-load rescan). */
+		void RefreshCategoryNodes(bool a_force = false);
+		/** @brief First in the pass, before the drains: takes the newest category capture posted. */
+		void TakeCategoryCapture();
 		/**
-		 * @brief After an entry's merge: it joins or leaves moverSet as IsPlacedMover says; true when that changed the set. a_written: a
-		 * write that may have changed its plan key (slot, layer, palette block), so a member is compared at the next plan.
+		 * @brief The category node a_object hangs under (null: none) and the strongest parent reason, from the mirror's chain; the pointer
+		 * is a key. CS_DCLF_MIRROR_PARITY checks it against the live chain.
 		 */
-		bool NoteMover(RE::BSGeometry* a_geometry, const Tracked& a_tracked, bool a_written = true);
-		/** @brief Before the plan: the change log's entries naming planned slots, and the tables' sizes against the last plan's. */
-		void SyncPlacementSet();
-		/**
-		 * @brief Whether a per-frame walk takes a per-frame entry (the light path's gate): an event names it (one of its move keys or its
-		 * geometry moved this frame or the last; a hidden event is owed), or it has none to wait on (no light path; a first-person actor's).
-		 * a_why: 1 moved, 2 hidden event owed, 3 first person, 4 no light path.
-		 */
-		bool MoverDue(const Tracked& a_tracked, const RE::BSGeometry* a_geometry, std::uint32_t& a_why) const;
-		/** @brief The light path's gate and the plans since the last report (the mover gate line, from ScenePass). */
-		struct MoverGateStats
+		RE::NiNode* FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason, bool* a_unmirrored = nullptr) const;
+		/** @brief The same from the live chain (the parities and diagnostics; the object alive). */
+		RE::NiNode* FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const;
+		/** @brief Diagnostics: the node that hid a first-person skeleton entry (ClassifyFrame), the first 16. */
+		void NoteFirstPersonHidden(const Tracked& a_tracked, const void* a_key, const SceneCapture::NodeRecord& a_record, std::uint32_t a_depth) const;
+		/** @brief Whether a tracked entry is a first-person one (its category node the first-person root). */
+		bool FirstPersonEntry(const RE::NiNode* a_categoryNode) const { return a_categoryNode && a_categoryNode == firstPersonCategory; }
+		/** @brief Whether a node is one of the coordinator's category nodes (the frame reads IsCategoryNode). */
+		bool CategoryNodeOwn(const RE::NiAVObject* a_node) const
 		{
-			std::uint64_t perFrameWalks = 0, ungatedWalks = 0, due = 0, moved = 0, owed = 0, firstPerson = 0, fullEveryFrame = 0, skipped = 0;
-			std::uint64_t plans = 0, plansWritten = 0, plansChanged = 0, candidatesSame = 0, perFrameWithoutPlan = 0;
-			std::uint64_t mirrorNodes = 0, mirrorGeometries = 0;
-			// Parity (witness walks, Policy::HiddenWitness): per-frame entries no event named, evaluated anyway, and those whose
-			// evaluation changed something the gate would have left (the light path missed, a skin's partitions, the mover set).
-			std::uint64_t witnessChecks = 0, witnessDiffer = 0;
-			std::string firstDiffer;
-		} moverGateStats;
-		/** @brief The mover gate's report line, once its window turned (ScenePass). */
-		void ReportMoverGate();
-		std::uint32_t moverGateWindow = 0;
+			return categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<RE::NiAVObject*>(a_node)));
+		}
+
+		// Attach and detach: State/Attach.h (CoordinatorAttach).
+		/**
+		 * @brief Tracks the geometries under a_root. A root with no mirror chain is captured by the render thread at the next frame start
+		 * and retried once (pendingSubtrees); an attach event's root without one was out of the world (its world attach brings its own
+		 * event).
+		 */
+		void AddSubtree(RE::NiAVObject* a_root, SubtreeSource a_source = SubtreeSource::AttachEvent);
+		/**
+		 * @brief Tracks a_geometry under a_categoryNode from the batch's pin or (a_live) a live pointer; with neither it is left out
+		 * (counted).
+		 */
+		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live, GeometryPrep& a_prep);
+		HeldKeys HeldKeysOf(const void* a_geometry) const;
+		/** @brief a_root's prepare: FindCategoryNode, MirrorSubtree (and its mirror-read parity check), each geometry's. Const. */
+		void PrepareSubtree(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const;
+		/** @brief PrepareSubtree's walk alone: the category node and the geometries found (geometry and reason), not their prepares. Const. */
+		void PrepareSubtreeWalk(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const;
+		/** @brief One geometry's prepare under a_category (PrepareSubtree's, and AddSubtree's). Const. */
+		void PrepareGeometry(RE::BSGeometry* a_geometry, Ineligible a_reason, const RE::NiNode* a_category, GeometryPrep& a_out) const;
+		/** @brief A prepared subtree's merge (the pending retry, capture requests, AddGeometry for each), in event order. */
+		void MergeSubtree(SubtreePrep& a_prep);
+		/**
+		 * @brief a_roots' prepares (CS_DCLF_FANOUT 1: this thread, 2: the pool); the caller merges them in order, and nothing in between
+		 * may write the mirror, category nodes or portal roots.
+		 */
+		void PrepareSubtrees(const std::vector<std::pair<RE::NiAVObject*, SubtreeSource>>& a_roots, std::uint32_t a_mode, std::vector<SubtreePrep>& a_out);
+		/**
+		 * @brief Tracks a_roots in order: prepared and merged each in turn (CS_DCLF_FANOUT 0, the mirror-read parity), else all prepared,
+		 * then merged.
+		 */
+		void AddSubtrees(const std::vector<std::pair<RE::NiAVObject*, SubtreeSource>>& a_roots);
+		/** @brief The attach burst's report line (AttachStats), the counters reset; empty when nothing happened. */
+		std::string TakeAttachLine();
+		/** @brief Holds a_entry's properties anew from the batch's pins, as the mirror's geometry record names them. */
+		void HoldProperties(Tracked& a_entry) { HoldProperties(a_entry, HeldKeysOf(a_entry.geometry.get())); }
+		/** @brief HoldProperties from a_keys (HeldKeysOf's, maybe a prepare's): stores only. */
+		void HoldProperties(Tracked& a_entry, const HeldKeys& a_keys);
+		void ValidateSlice();
+		void EraseTracked(RE::BSGeometry* a_geometry);
+
+		// The sun and light candidates: State/Candidates.h (CoordinatorCandidates).
 		/**
 		 * @brief The object's entry bound for the sun's cascade culls: the cascade cull (FUN_140e305c0) walks only the objectArray entries
 		 * the full-frustum cull (FUN_141511f30) passed. A static reference's is its reference root (the topmost ancestor with the
@@ -837,311 +748,324 @@ namespace DCLF
 		 * under it).
 		 */
 		const std::vector<RE::BSGeometry*>* LightDependentsOf(const RE::NiAVObject* a_root) const;
-		ankerl::unordered_dense::map<const RE::NiAVObject*, std::vector<RE::BSGeometry*>> lightDependents;  // by light entry
-		ankerl::unordered_dense::set<const RE::NiAVObject*> lightCandidateSet;
-		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> lightSignature;  // its geometries, as a set
-		std::vector<const RE::NiAVObject*> lightEntriesDirty;
-		std::shared_ptr<const SunCandidates> lightCandidates;
-		std::uint32_t lightCandidatesGeneration = 0;
-		std::uint64_t lightEntriesAppeared = 0;
-		ankerl::unordered_dense::set<const RE::NiAVObject*> sunCandidateSet;
-		// Per sun candidate, a signature of its geometries' PrimaryEntryAllows verdicts: a change bumps the generation.
-		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> primarySignature;
-		std::vector<const RE::NiAVObject*> sunEntriesDirty;
-		ankerl::unordered_dense::set<const RE::NiAVObject*> sunEntriesForced;  // candidates whose subtree an attach or detach changed
-		std::shared_ptr<const SunCandidates> sunCandidates;
-		std::uint32_t sunCandidatesGeneration = 0;
-		// The sun's and the point lights' candidate index spaces (CandidateTable.h), one version counter for both.
-		CandidateTable sunTable, lightTable;
-		std::uint32_t candidateVersions = 0;
 
-		/** @brief Diffs the category nodes and portal roots against the taken capture when it is new or a_force (the post-load rescan). */
-		void RefreshCategoryNodes(bool a_force = false);
-		struct EventBatch;
-		struct BatchUnwindGuard;  // a batch back to the render thread on a throw (Internal.h)
-		/** @brief First in the pass, before the drains: takes the newest category capture posted. */
-		void TakeCategoryCapture();
-		std::shared_ptr<const CategoryCapture> categoryTaken;
-		/** @brief ApplyBatch: the fade node answers into their entries (Tracked::fadeNodeRef), each entry rewritten. */
-		void ApplyFadeNodeAnswers();
-		// The signature the category set was last rebuilt for.
-		std::uint64_t categorySignature = 0;
-		/**
-		 * @brief The category node a_object hangs under (null: none) and the strongest parent reason, from the mirror's chain; the pointer
-		 * is a key. CS_DCLF_MIRROR_PARITY checks it against the live chain.
-		 */
-		RE::NiNode* FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason, bool* a_unmirrored = nullptr) const;
-		/** @brief The same from the live chain (the parities and diagnostics; the object alive). */
-		RE::NiNode* FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const;
-		/** @brief The lane's mirror reads, checked against live reads under CS_DCLF_MIRROR_PARITY; counted per kind. */
-		enum class MirrorRead : std::uint8_t
+		// Placements, moves and root motion: State/Placements.h (CoordinatorPlacements).
+		/** @brief A listed root's dependent may have changed (its root planned): compared at the next plan. */
+		void TouchPlacedDependent(const RE::NiAVObject* a_root, const void* a_geometry)
 		{
-			CategoryNode,
-			Subtree,
-			SwitchEvent,
-			NodeEvent,
-			HiddenChain,
-			MoveKey,
-			LightEntry,
-			SunEntry,
-			Reference,  // a geometry the mirror's walk found with no pin (lagged: the live scene no longer has it there)
-			kCount
-		};
-		static constexpr std::array<const char*, static_cast<std::size_t>(MirrorRead::kCount)> kMirrorReadNames{ "category node", "subtree", "switch event", "node event",
-			"hidden chain", "move key", "light entry", "sun entry", "unpinned geometry" };
-		/** @brief Counts a mirror read's check; a difference (a_describe()) is checked again after the next batch (DeferredRead). */
-		template <class Describe, class Recheck>
-		void NoteMirrorRead(MirrorRead a_read, bool a_differ, Describe&& a_describe, Recheck&& a_recheck) const
-		{
-			++MirrorReads().checked[static_cast<std::size_t>(a_read)];
-			if (a_differ)
-				deferredReads.push_back({ a_read, a_describe(), std::function<bool()>(std::forward<Recheck>(a_recheck)) });
+			if (a_root && plannedRoots.contains(a_root))
+				placementDependentsTouched.emplace_back(a_root, a_geometry);
 		}
-		/** @brief The geometries under a_root by the mirror's children, each with its parent reasons below a_reason, in walk order. */
-		void MirrorSubtree(const void* a_root, Ineligible a_reason, std::vector<std::pair<RE::BSGeometry*, Ineligible>>& a_out, bool& a_unmirrored) const;
-		/** @brief A live check's lease (EngineReadWindow): refused while the engine's update may run, the check is skipped and counted. */
-		EngineReadWindow::Lease LiveCheckLease(MirrorRead a_read) const
+		/** @brief A mover's planned key now (none: not in the set); a_prune drops a stale member from moverSet (never the parity's). */
+		std::optional<PlannedKey> PlannedMoverNow(RE::BSGeometry* a_geometry, bool a_prune);
+		/** @brief Whether a root is listed now (moving or still, with dependents and an owner); a_prune forgets a still root that is not. */
+		bool PlannedRootNow(const RE::NiAVObject* a_root, bool a_prune);
+		/** @brief A listed root's dependent's planned key now (none: not listed under it, or no record). */
+		std::optional<PlannedKey> PlannedDependentNow(const RE::NiAVObject* a_root, const void* a_geometry) const;
+		void AddPlannedSlots(const PlannedKey& a_key, const PlannedOwner& a_owner);
+		void RemovePlannedSlots(const PlannedKey& a_key, const PlannedOwner& a_owner);
+		/** @brief Into a_plan: what the touched keys changed against the planned set (a_reset: the whole set, the planned one cleared). */
+		void DiffPlacementSet(PlacementPlan& a_plan, bool a_reset);
+		/** @brief Parity: the set rebuilt whole from the coordinator's state, sorted (PlacementPlan::Check). */
+		PlacementPlan::Check RebuildPlacementSet();
+		/** @brief The placement deltas' report line, once its window turned (PublishPlacementPlan; CS_DCLF_STATS or a parity finding). */
+		void ReportPlacementDeltas();
+		/** @brief A node whose controllers or rigid body changed: every entry under it reclassified, every root above it scheduled. A key. */
+		void ApplyMotionUpdate(const void* a_node);
+		/** @brief Whether an entry is a recorded per-frame mover (moverSet's: every plan lists it, FrameValues samples it every frame). */
+		bool IsPlacedMover(const Tracked& a_tracked) const;
+		/**
+		 * @brief After an entry's merge: it joins or leaves moverSet as IsPlacedMover says; true when that changed the set. a_written: a
+		 * write that may have changed its plan key (slot, layer, palette block), so a member is compared at the next plan.
+		 */
+		bool NoteMover(RE::BSGeometry* a_geometry, const Tracked& a_tracked, bool a_written = true);
+		/** @brief Before the plan: the change log's entries naming planned slots, and the tables' sizes against the last plan's. */
+		void SyncPlacementSet();
+		/**
+		 * @brief Whether a per-frame walk takes a per-frame entry (the light path's gate): an event names it (one of its move keys or its
+		 * geometry moved this frame or the last; a hidden event is owed), or it has none to wait on (no light path; a first-person actor's).
+		 * a_why: 1 moved, 2 hidden event owed, 3 first person, 4 no light path.
+		 */
+		bool MoverDue(const Tracked& a_tracked, const RE::BSGeometry* a_geometry, std::uint32_t& a_why) const;
+		/** @brief The mover gate's report line, once its window turned (ScenePass). */
+		void ReportMoverGate();
+		/** @brief The still roots this frame's move keys name (movedKeys[0] from movedKeysQueued on), into stillRoots. */
+		void QueueRoots();
+		/** @brief The walk's plan item for a recorded entry (slot, layer row, sun entry, palette block). */
+		PlacementPlan::Item PlanItemOf(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		/** @brief PlanItemOf's key, no reference taken. */
+		PlannedKey PlacedKeyOf(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		/** @brief The walk's plan, opened by its first write (or by PublishPlacementPlan when the placement set changed). */
+		PlacementPlan& WalkPlan();
+		/** @brief After the walk: the still roots it lists (QueueRoots), and a plan made ready when the placement set changed or a slot was written. */
+		void PublishPlacementPlan();
+		void DrainMoveEvents(bool a_full);
+		bool MovedRecently(const void* a_key) const
 		{
-			EngineReadWindow::Lease lease;
-			if (!lease)
-				++MirrorReads().refused[static_cast<std::size_t>(a_read)];
-			return lease;
+			const auto it = movedFrame.find(a_key);
+			return it != movedFrame.end() && sceneFrame - it->second <= 1;
 		}
-		struct MirrorReadStats
+		const void* MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const;
+		/**
+		 * @brief Whether a reference root's subtree holds anything that moves (controller, non-fixed rigid body, skin), so its bound, the
+		 * sun entry under it, is not fixed. Walked once per root, again after an event under it.
+		 */
+		bool RootMoves(const RE::NiAVObject* a_root, const bool* a_now = nullptr);
+		bool RootMovesNow(const RE::NiAVObject* a_root) const;
+		/**
+		 * @brief Whether a placement event can change the entry's tables: it has a record or a frame verdict (None, Hidden, Switch, Actor).
+		 */
+		static bool PlacementMatters(const Tracked& a_tracked);
+		/**
+		 * @brief Reclassifies a sun entry node's dependents and forgets its motion; a key, never dereferenced. a_whole false (a dirty root:
+		 * a dependent attached or detached, the attached one already pending): its motion is read again, and only a changed verdict
+		 * reclassifies the dependents (the parity's witness passes schedule the rest and check them, rootWitness).
+		 */
+		void ScheduleRoot(const RE::NiAVObject* a_root, bool a_whole = true);
+		/** @brief A node Havok moved or gave a controller: the entries under it and the dependents of every node above it. */
+		void ApplyNodeEvent(RE::NiAVObject* a_node);
+		/** @brief MoveKeyOf, else its fallbacks (Tracked::moveKey, moveKeyOuter): the innermost and outermost references, or the category node. */
+		std::pair<const void*, const void*> MoveKeysOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const;
+
+		// The hidden events: State/Hidden.h (CoordinatorHidden).
+		void ListHiddenChain(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		void UnlistHiddenChain(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		void DrainHiddenEvents();
+
+		// The structural events, switches and object LOD: State/Events.h (CoordinatorEvents).
+		/** @brief Whether the switch's record selects a_child, and is current. */
+		static bool SwitchSelects(const SceneCapture::NodeRecord& a_switch, const void* a_child)
 		{
-			std::array<std::uint64_t, static_cast<std::size_t>(MirrorRead::kCount)> reads{}, checked{}, lagged{}, differ{}, unmirrored{}, refused{};
-			std::array<std::string, static_cast<std::size_t>(MirrorRead::kCount)> first;
-		};
-		mutable MirrorReadStats mirrorReads;
-		/** @brief Where this thread counts mirror reads: its chunk's counters under a ShardScope, else the coordinator's. */
-		static inline thread_local MirrorReadStats* mirrorReadSink = nullptr;
-		MirrorReadStats& MirrorReads() const { return mirrorReadSink ? *mirrorReadSink : mirrorReads; }
-		/**
-		 * @brief A differing read, checked again after the next batch from the mirror alone: agreeing, the mirror lagged; still differing,
-		 * it is counted.
-		 */
-		struct DeferredRead
-		{
-			MirrorRead read;
-			std::string what;
-			std::function<bool()> recheck;
-		};
-		mutable std::vector<DeferredRead> deferredReads;
-		void RecheckDeferredReads();
-		/** @brief FindCategoryNode's chain, the mirror's alone (no counting, no check). */
-		RE::NiNode* MirrorCategoryNode(const void* a_object, Ineligible& a_reason, bool& a_unmirrored) const;
-		/**
-		 * @brief Tracks the geometries under a_root. A root with no mirror chain is captured by the render thread at the next frame start
-		 * and retried once (pendingSubtrees); an attach event's root without one was out of the world (its world attach brings its own
-		 * event).
-		 */
-		enum class SubtreeSource : std::uint8_t
-		{
-			AttachEvent,
-			CategoryWalk,
-			Retry,
-		};
-		void AddSubtree(RE::NiAVObject* a_root, SubtreeSource a_source = SubtreeSource::AttachEvent);
-		std::vector<RE::NiPointer<RE::NiAVObject>> pendingSubtrees;
-		std::vector<RE::BSGeometry*> validationSuspects;  // ValidateSlice's: keys, checked again only while tracked
-		std::uint64_t subtreesPended = 0, subtreesDropped = 0;  // since the last report: waiting for the mirror, and still without a chain after
-		std::uint64_t categoryChildrenMissing = 0;  // a new category node the capture listed no children of (should not happen)
-		/**
-		 * @brief Tracks a_geometry under a_categoryNode from the batch's pin or (a_live) a live pointer; with neither it is left out
-		 * (counted).
-		 */
-		struct GeometryPrep;
-		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live, GeometryPrep& a_prep);
-		// AddSubtree as a prepare (pure over the batch's frozen mirror, any thread under a ShardScope) and a merge in event order.
-		/**
-		 * @brief HoldProperties' reads: the mirror's property, layer and fade node keys for a geometry, and the batch's pins of each (null:
-		 * none). Pure (the mirror and batchPins, frozen while a batch's adds prepare).
-		 */
-		struct HeldKeys
-		{
-			const void* property = nullptr;
-			const void* layer = nullptr;
-			const void* fadeNode = nullptr;
-			RE::NiRefObject* propertyPin = nullptr;
-			RE::NiRefObject* layerPin = nullptr;
-			RE::NiRefObject* fadeNodePin = nullptr;
-		};
-		HeldKeys HeldKeysOf(const void* a_geometry) const;
-		/**
-		 * @brief What AddGeometry reads of the mirror and the batch's frozen state for one geometry (keys and pins): the merge only stores.
-		 * The sun entry and actor root are left to the merge under the mirror-read parity (resolved false).
-		 */
-		struct GeometryPrep
-		{
-			RE::BSGeometry* geometry = nullptr;
-			Ineligible reason = Ineligible::None;  // what the nodes between the category node and it make of it (MirrorSubtree's)
-			const RE::TESObjectREFR* actorOwner = nullptr;
-			const RE::NiNode* roomNode = nullptr;
-			const RE::BSFaceGenNiNode* faceHead = nullptr;
-			bool mirrored = false;
-			bool subIndex = false;
-			bool resolved = false;
-			const void* sunEntry = nullptr;
-			const RE::NiAVObject* lightActorRoot = nullptr;
-			// The batch's pins of the geometry and its face head (null: none).
-			RE::NiRefObject* geometryPin = nullptr;
-			RE::NiRefObject* faceHeadPin = nullptr;
-			HeldKeys held;
-			// Of the sun entry (when resolved): its record's reference, and whether a category node owns it (CategoryNodeOwn).
-			const RE::TESObjectREFR* sunEntryReference = nullptr;
-			bool sunEntryCategory = false;
-			// A LOD gate root up its chain to the category node (TagGateAbove's), and an object LOD's drawn ranges (SampleLodRanges').
-			bool gated = false;
-			std::uint8_t gateSide = 0;
-			std::uint64_t gateToken = 0;
-			std::vector<LodSegments::Range> segments;
-		};
-		/** @brief One subtree's prepare (PrepareSubtree): its category node (none: nothing tracked), and its geometries in walk order. */
-		struct SubtreePrep
-		{
-			RE::NiAVObject* root = nullptr;
-			SubtreeSource source = SubtreeSource::AttachEvent;
-			RE::NiNode* category = nullptr;
-			bool unmirrored = false;  // FindCategoryNode found a record missing on the way up
-			std::vector<GeometryPrep> geometries;
-		};
-		/** @brief a_root's prepare: FindCategoryNode, MirrorSubtree (and its mirror-read parity check), each geometry's. Const. */
-		void PrepareSubtree(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const;
-		/** @brief PrepareSubtree's walk alone: the category node and the geometries found (geometry and reason), not their prepares. Const. */
-		void PrepareSubtreeWalk(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const;
-		/** @brief One geometry's prepare under a_category (PrepareSubtree's, and AddSubtree's). Const. */
-		void PrepareGeometry(RE::BSGeometry* a_geometry, Ineligible a_reason, const RE::NiNode* a_category, GeometryPrep& a_out) const;
-		/** @brief A prepared subtree's merge (the pending retry, capture requests, AddGeometry for each), in event order. */
-		void MergeSubtree(SubtreePrep& a_prep);
-		/**
-		 * @brief a_roots' prepares (CS_DCLF_FANOUT 1: this thread, 2: the pool); the caller merges them in order, and nothing in between
-		 * may write the mirror, category nodes or portal roots.
-		 */
-		void PrepareSubtrees(const std::vector<std::pair<RE::NiAVObject*, SubtreeSource>>& a_roots, std::uint32_t a_mode, std::vector<SubtreePrep>& a_out);
-		/**
-		 * @brief Tracks a_roots in order: prepared and merged each in turn (CS_DCLF_FANOUT 0, the mirror-read parity), else all prepared,
-		 * then merged.
-		 */
-		void AddSubtrees(const std::vector<std::pair<RE::NiAVObject*, SubtreeSource>>& a_roots);
-		// A subtree's prepare is a whole walk (one root to hundreds of geometries): chunks of a few roots, the pool from 16.
-		static constexpr std::size_t kSubtreeGrain = 4;
-		static constexpr std::size_t kSubtreeFanoutMin = 16;
-		// The geometries' prepares (several chain walks each) across all the round's subtrees: the pool from 64, chunks of 32. A few
-		// large attaches go to the pool though their roots stay under kSubtreeFanoutMin.
-		static constexpr std::size_t kGeometryGrain = 32;
-		static constexpr std::size_t kGeometryFanoutMin = 64;
-		std::vector<SubtreePrep> subtreePreps;
-		std::vector<std::pair<std::uint32_t, std::uint32_t>> subtreeGeometryIndex;  // PrepareSubtrees' scratch: (prep, geometry) flattened
-		/**
-		 * @brief The attach burst's work since the report (W8): the mirror's captures prepared (copied off the lane, on the pool, records)
-		 * and its apply; the geometries prepared (on the pool); category members indexed and the parity checks of the index.
-		 */
-		struct AttachStats
-		{
-			std::uint64_t mirrorBatches = 0, mirrorCaptures = 0, mirrorPooled = 0, mirrorRecords = 0;
-			double mirrorPrepareMs = 0.0, mirrorApplyMs = 0.0;
-			std::uint64_t usesChecks = 0, usesUnused = 0;  // UnusedRecords' parity (CheckMirrorUses)
-			std::uint64_t geometryRounds = 0, geometryPooled = 0, geometries = 0, geometriesPooled = 0;
-			std::uint64_t categoriesLeft = 0, categoryMembersDropped = 0, rootsLeftScanned = 0;
-			std::uint64_t categoryChecks = 0, categoryDiffer = 0;  // CheckCategoryMembers' checks, and those that differed
-			std::string categoryFirst;
-			// The mirror's apply by event kind (capture, fill, eviction, detach, gate, update): events and ms (timed where the kind changes).
-			static constexpr std::size_t kMirrorKinds = 6;
-			std::array<std::uint64_t, kMirrorKinds> mirrorKindEvents{};
-			std::array<double, kMirrorKinds> mirrorKindMs{};
-			// SceneMirror::Work: captures that looked nothing up (numbered after every kept update) and those that did; updates kept, let go.
-			std::uint64_t replaysSkipped = 0, replaysWalked = 0, updatesKept = 0, updatesForgotten = 0;
-			std::uint64_t applyChecks = 0, applyWrong = 0;  // SceneMirror's own checks (Policy::CheckMirrorApply), and those that failed
-			// The attach/detach merge outside the merges: the events walked, the sun candidates above them (ms), the detached geometries
-			// (moves kept, erased) and the detach loop (ms); the leaf holds after (geometries named, tracked ones held, ms).
-			std::uint64_t structuralEvents = 0, detachedGeometries = 0, detachedErased = 0, leafKeys = 0, leafHolds = 0;
-			double ancestorMs = 0.0, detachMs = 0.0, mergeMs = 0.0, leafMs = 0.0;
-		} attachStats;
-		/**
-		 * @brief The batch walked once (ApplyMirrorEvents' apply loop) for the later steps: the tracker's attach and detach events (not
-		 * mirror-only) in order, whether one was a detach, and the records of the captures and leaf updates in order (both heads).
-		 */
-		struct BatchIndex;
-		/** @brief The attach burst's report line (AttachStats), the counters reset; empty when nothing happened. */
-		std::string TakeAttachLine();
-		// ApplyMirrorEvents' prepares: one per capture it applies (not a fill), in apply order; the pool from kMirrorFanoutRecords records.
-		std::vector<SceneMirror::Prepared> mirrorPreps;
-		static constexpr std::size_t kMirrorFanoutRecords = 256;
-		/** @brief The batch's captures copied into mirrorPreps (the pool, or here), for ApplyMirrorEvents' serial apply. */
-		void PrepareMirrorCaptures(const std::vector<const SceneCapture::Records*>& a_captures, std::size_t a_records);
-		/** @brief Adds hand-timed ms to a nested scene part's sums (since ResetTimes, and this pass's). */
-		void AddScenePartMs(ScenePart a_part, double a_ms)
-		{
-			stats.scenePartMs[static_cast<std::size_t>(a_part)] += a_ms;
-			stats.scenePartFrameMs[static_cast<std::size_t>(a_part)] += a_ms;
+			return (a_switch.kind & SceneCapture::kKindSwitch) && a_switch.switchChild && a_switch.switchChild == a_child && a_switch.switchCurrent;
 		}
 		/**
-		 * @brief The applied batch's pins by key, valid while it is applied; Pinned makes a reference from one (null: none). Counted:
-		 * references from pins, from live pointers, refused.
+		 * @brief Before the first round: drained switch events whose selection changed, each caught up (CatchUpSwitch) and, in a delta
+		 * walk, its entries reclassified.
 		 */
-		ankerl::unordered_dense::map<const void*, RE::NiRefObject*> batchPins;
-		void PinBatch(const std::vector<RE::NiPointer<RE::NiRefObject>>& a_pins)
-		{
-			for (const auto& pin : a_pins) {
-				batchPins.insert_or_assign(pin.get(), pin.get());
-				++referenceStats.pins;
-			}
-		}
-		template <class T>
-		RE::NiPointer<T> Pinned(const T* a_key)
-		{
-			if (const auto it = batchPins.find(a_key); it != batchPins.end()) {
-				++referenceStats.pinned;
-				return RE::NiPointer<T>(static_cast<T*>(it->second));
-			}
-			return nullptr;
-		}
-		/** @brief Pinned's lookup alone (null: no pin), pure: a prepare's read of the batch's frozen pins; FromPin makes the reference. */
-		RE::NiRefObject* PinOf(const void* a_key) const
-		{
-			const auto it = a_key ? batchPins.find(a_key) : batchPins.end();
-			return it != batchPins.end() ? it->second : nullptr;
-		}
-		template <class T>
-		RE::NiPointer<T> FromPin(RE::NiRefObject* a_pin)
-		{
-			if (!a_pin)
-				return nullptr;
-			++referenceStats.pinned;
-			return RE::NiPointer<T>(static_cast<T*>(a_pin));
-		}
-		struct ReferenceStats
-		{
-			std::uint64_t pins = 0, pinned = 0, live = 0, refused = 0;
-			std::uint64_t properties = 0, propertiesRefused = 0;  // a tracked geometry's properties held anew, and with no pin
-			std::uint64_t fadeNodes = 0, fadeNodesRefused = 0;   // their fade nodes held anew, and with no pin
-			// Of the refused: copied from a root owner, requested, and the answers (held or none); the first few named.
-			std::uint64_t fadeNodesFromRoots = 0, fadeNodesRequested = 0, fadeNodesAnswered = 0, fadeNodesAnsweredNone = 0;
-			std::uint32_t fadeNodeNamed = 0;
-			std::string fadeNodeFirst;
-			std::uint64_t fadeRootsUnowned = 0;                  // a tree or fade root left unlisted for want of its entry's reference
-			std::string firstPropertyRefused;
-		} referenceStats;
-		/** @brief Holds a_entry's properties anew from the batch's pins, as the mirror's geometry record names them. */
-		void HoldProperties(Tracked& a_entry) { HoldProperties(a_entry, HeldKeysOf(a_entry.geometry.get())); }
-		/** @brief HoldProperties from a_keys (HeldKeysOf's, maybe a prepare's): stores only. */
-		void HoldProperties(Tracked& a_entry, const HeldKeys& a_keys);
-		/** @brief Light Limit Fix's room node for an object (GetParentRoomNode), from the mirror's chain. */
-		const RE::NiNode* RoomNodeOf(const void* a_object) const;
-		/** @brief Records written without the mirror's leaf, and those evaluated again when a capture named it. */
-		struct LeafStats
-		{
-			std::uint64_t missing = 0, rescheduled = 0;
-		} leafStats;
-		/** @brief Skylighting::OcclusionTechnique from the records: the nearest fade node above the leaf's BSX flags. */
-		std::uint32_t OcclusionTechniqueOf(const SceneCapture::LeafView& a_leaf, bool a_skylighting) const;
-		void ValidateSlice();
+		void ApplySwitchEvents(bool a_full);
+		void SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event);
+		void ApplyLodSegmentEvents(const std::vector<const void*>& a_shapes);
+		/**
+		 * @brief Drains each engine queue up to where it stood (tracker stack, fades, property, node and switch events, LOD segments) into
+		 * the pass's batch (under a load screen: the carry), with the mirror probe; posts the switch catch-ups.
+		 */
+		std::shared_ptr<EventBatch> CollectEvents();
+		/**
+		 * @brief Applies the load markers (ApplyLoading), then a_batch: category refresh, attaches, detaches, validation slice, structural
+		 * events.
+		 */
+		void ApplyEvents(std::shared_ptr<EventBatch> a_batch);
+		/** @brief Drops what a load screen invalidated (NoteLoadingScreen's marker). */
+		void ApplyLoading();
+		void ApplyBatch(std::shared_ptr<EventBatch> a_batch);
+
+		// The shading events: State/Shading.h (CoordinatorShading).
+		/** @brief A slot's ShadingItem into shadingNamed (none for a free, unbound or propertyless slot). */
+		void NameShading(std::uint32_t a_slot, bool a_member);
+		/**
+		 * @brief The walk: drains the shading events and names their dependents (their extras' static rows rewritten); every slot while the
+		 * events are not installed.
+		 */
+		void NameShadingEvents(std::vector<std::uint32_t>* a_slots = nullptr);
+		/** @brief The dependents of shading event keys (properties, emittance colours) named; their slots into a_slots when given. */
+		void NameShadingKeys(const std::vector<const void*>& a_keys, std::vector<std::uint32_t>* a_slots);
+
+		// The frame inputs and the technique rows: State/Frame.h (CoordinatorFrame).
 		/** @brief The scene pass, before the walk: the frame inputs posted since its last pass (room map, pipeline frame). */
 		void TakeAccumulateInputs();
 		/** @brief The scene pass, after the joins: a used pipeline without a current PerGeometry block made from the pipeline frame. */
 		void MakeNewPipelineConstants();
-		std::shared_ptr<const GeometryPort::PipelineFrame> scenePipelineFrame;  // the scene lane's: the newest taken
+		/** @brief First in each pass: the newest frame inputs taken (sceneInputs, sceneFrame); the verdicts dropped when asked. */
+		void TakeFrameInputs();
+		void ApplyConstantsPosts();
+		/** @brief Each full pass before the walk: every technique row evaluated again when the inputs differ from the witness. */
+		void RefreshTechniqueRows();
+		/** @brief A technique row from its frame's sample, written and versioned where it differs. */
+		void EvaluateTechniqueRow(std::uint32_t a_row);
+		/** @brief The technique row of a pass descriptor's TechniqueKey, made and evaluated when new. */
+		std::uint32_t TechniqueRowFor(std::uint32_t a_passDescriptor);
 
+		// The slot tables: State/Slots.h (CoordinatorSlots).
+		void InvalidateObjectIndices() { ++objectStamp; }
+		/** @brief The slot the walk writes this object at: its own, a free one, or a new one. */
+		std::uint32_t AcquireObjectSlot(Tracked& a_tracked, RE::BSGeometry* a_geometry);
+		/** @brief After a walk: frees every slot it did not write and sorts the per-frame index lists. */
+		void SweepObjectSlots();
+		/**
+		 * @brief Frees an entry's slot as it leaves the tracked set (outside the walk), so a rescan's entries reuse slots instead of
+		 * growing the arrays.
+		 */
+		void ReleaseObjectSlot(Tracked& a_entry);
+		/** @brief The entry's layer slot for base slot a_base: its own or a new one. */
+		std::uint32_t AcquireLayerSlot(Tracked& a_tracked, RE::BSGeometry* a_geometry, std::uint32_t a_base);
+		void ReleaseLayerSlot(Tracked& a_entry);
+		/** @brief The property a slot's record draws: its entry's held one, or its layer's for a layer slot. */
+		RE::BSShaderProperty* SlotProperty(std::uint32_t a_slot) const;
+		void ListMaterialDependent(const RE::BSShaderMaterial* a_material, std::uint32_t a_slot);
+		void UnlistMaterialDependent(const RE::BSShaderMaterial* a_material, std::uint32_t a_slot);
+		/** @brief The slot reference counts, from the change and geometry logs since the last call. */
+		void UpdateSlotReferences();
+		/** @brief Drops a geometry slot's contents: its reference on the next partition, map entry and buffer leases. */
+		void ClearGeometrySlot(std::uint32_t a_slot);
+		/** @brief ClearGeometrySlot, then back to the free list. */
+		void FreeGeometrySlot(std::uint32_t a_slot);
+		/**
+		 * @brief Drops a material slot's contents (map entry, dependents, owner) and lists it retired. The slot table's state is the
+		 * caller's.
+		 */
+		void ClearMaterialSlot(std::uint32_t a_slot);
+		void IndexObjectHead(std::uint32_t a_object, std::uint32_t a_head);
+		void IndexLink(std::uint32_t a_from, std::uint32_t a_to);
+		/** @brief The object slots the index lists under a_slots (a_chains: and under every head whose chain reaches one), sorted, unchecked. */
+		void ObjectsUnder(const std::vector<std::uint32_t>& a_slots, bool a_chains, std::vector<std::uint32_t>& a_out) const;
+		std::uint32_t AllocateGeometrySlot();
+		std::uint32_t AllocatePipelineSlot();
+		std::uint32_t AllocateMaterialSlot();
+		/** @brief Prefetches the buffers order[a_first...]'s geometry slots will resolve (GpuResources::Prefetch). */
+		void PrefetchGeometryBuffers(std::size_t a_first);
+		/**
+		 * @brief The geometry slot for a source: found, refreshed in place, or newly resolved.
+		 * @return the slot, or Tables::kSlotFree when the buffers cannot be made stable for the graph.
+		 */
+		std::uint32_t ResolveGeometrySource(const GeometrySource& a_source, PartTimer& a_timer);
+		/** @brief The geometry slot of a multi-index shape's second index list, or Tables::kSlotFree. */
+		std::uint32_t ResolveLayerGeometrySlot(const SceneCapture::GeometryRecord& a_geometry, PartTimer& a_timer);
+		/** @brief The geometry slot of a geometry's TriShape, or of skin partition a_partition. */
+		std::uint32_t ResolveGeometrySlot(const SceneCapture::GeometryRecord& a_geometry, const SceneCapture::GeometryRecord::Partition* a_partition, PartTimer& a_timer);
+		/**
+		 * @brief Object LOD: geometry slots for a partly hidden shape's visible ranges, linked by nextPartition from the returned first
+		 * (Tables::kSlotFree if one fails), each keyed by its range's first segment record.
+		 */
+		std::uint32_t ResolveLodRangeSlots(const SceneCapture::GeometryRecord& a_geometry, const std::vector<LodSegments::Range>& a_ranges, PartTimer& a_timer);
+
+		/** @brief The walk's prologue: reference changes counted, unused materials retired, idle geometry and pipeline slots expired. */
+		void SweepSlots();
+		/**
+		 * @brief Drops the slot tables, their maps and every cached derivation (by generation), so teardown leaves nothing pointing at dead
+		 * slots.
+		 */
+		void ResetSlotTables();
+		/** @brief After the joins: every bound object names live slots of this frame, or is neutralised. */
+		void CheckObjectSlots(bool a_resolveBuffers);
+
+		// The material records: State/Materials.h (CoordinatorMaterials).
+		/** @brief ApplyEvents: the captures pushed since the last call (the newest kept), and the render thread's answers to requests. */
+		void DrainMaterialCaptures();
+		/** @brief A capture's reference, to EngineReleases (released at Present). */
+		void HandBackHeld(std::unique_ptr<MaterialPort::HeldSnapshot>&& a_held);
+		/**
+		 * @brief Keeps the material records from the frame's sources each pass, with no engine read: newly captured materials' slots
+		 * evaluated again (RewriteCapturedMaterials), frame-sourced components per signature (RefreshMaterialSignatures). TexcoordOffset is
+		 * no record's: a record keeps its capture's, and the frame values patch every material row with the frame's (TextureTransformList).
+		 */
+		void RefreshMaterialRecords();
+		void RewriteCapturedMaterials();
+		void RefreshMaterialSignatures();
+		/** @brief A slot's record made (a join) or written from a_snapshot: listed under its signature. */
+		void NoteMaterialRecord(std::uint32_t a_slot, const MaterialPort::MaterialSnapshot& a_snapshot);
+		/**
+		 * @brief A capture's texture transforms, once per material: nothing to follow (the frame values read the material's frame buffer
+		 * and the GPU patches its rows), counted only (MaterialRecordStats::transformsWatched).
+		 */
+		void WatchMaterialTransforms(const RE::BSShaderMaterial* a_material, const MaterialPort::MaterialSnapshot& a_snapshot, bool a_recordsCurrent = false);
+		/**
+		 * @brief Pure (any thread; the pass's sources passed in): a_snapshot's record for a_pass as records hold it (no frame view). For a
+		 * rewrite (a_slot != kNoMaterialSlot) the slot's frame parts and unread floats are kept, and `same` tells an unchanged record.
+		 */
+		void EvaluateMaterial(const MaterialPort::MaterialSnapshot& a_snapshot, std::uint32_t a_pass, const MaterialPort::MaterialFrame& a_sources, std::uint32_t a_slot,
+			MaterialEvaluation& a_out) const;
+		/**
+		 * @brief a_count prepare items by chunks of kFanoutGrain (FanoutMode's minimum count before the pool), each chunk under a ShardScope;
+		 * a_body(begin, end) is pure. Whether the pool ran.
+		 */
+		bool PrepareMaterials(std::string_view a_zone, std::size_t a_count, const std::function<void(std::size_t, std::size_t)>& a_body);
+		/** @brief The joins' material evaluations, after their EvaluateJoin and before their merges. */
+		void PrepareJoinMaterials(std::size_t a_count);
+		/** @brief The tables reset (ResetSlotTables): the signatures' slot lists and the retries dropped. */
+		void ResetMaterialRecords();
+
+		// The bindings and the lookups: State/Bindings.h (CoordinatorBindings).
+		/** @brief After the records' writers: drains the answers, then resolves the changed (material log) and newly used slots. */
+		void UpdateMaterialBindings();
+		/** @brief A used slot's entry written from its record; bindings requested for views with none known. */
+		void ResolveMaterialBinding(std::uint32_t a_slot);
+		/**
+		 * @brief An entry's new owner block: a_next's moved owners (bits of a_texturesMoved / a_featuresMoved) with a_held's others, sealed,
+		 * or the block another slot of a_material sealed for the same owners; null when none is held.
+		 */
+		std::shared_ptr<const Lookups::MaterialOwners> SealMaterialOwners(const RE::BSShaderMaterial* a_material, const Lookups::MaterialOwners* a_held,
+			Lookups::MaterialOwners& a_next, std::uint32_t a_texturesMoved, std::uint32_t a_featuresMoved);
+		/** @brief The scene lane, before a commit or publication: entries written since the last call, each versioned and logged. */
+		void VersionMaterialBindings();
+		/** @brief A view's binding: answered in this drain, cached from an earlier answer, else asked for (pending; a_slot waits on it). */
+		GpuTextures::Binding MaterialViewBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, std::uint32_t a_slot);
+		/** @brief A material slot's retirement came back (no publication names it): its entry dropped. */
+		void RetireMaterialBinding(std::uint32_t a_slot);
+		/** @brief The tables reset (ResetSlotTables): every entry and request dropped; an answer to an earlier request is stale. */
+		void ResetMaterialBindings();
+		/**
+		 * @brief After the technique rows' refresh: answers drained, fixed and projected bindings taken, technique masks resolved, shadow
+		 * textures requested or released.
+		 */
+		void UpdateSharedBindings();
+		/** @brief A view's binding: answered in this drain, cached (here or in the material bindings), else requested. */
+		GpuTextures::Binding SharedViewBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, SharedBindings::Kind a_kind);
+		/** @brief The projected entries from their capture; pending ones requested. */
+		void ResolveProjectedBindings(std::uint32_t a_textures);
+		/** @brief A used pipeline's technique mask entry from its row. False: it stood (nothing looked up). */
+		bool ResolveMaskBinding(std::uint32_t a_slot, ID3D11ShaderResourceView* a_frameMask);
+		/** @brief A shadow texture's entry from an answer or a known binding, else requested. */
+		void ResolveShadowTextureBinding(ID3D11ShaderResourceView* a_view);
+		/** @brief A pipeline slot's lookups retirement came back (no publication names it): its mask entry dropped. */
+		void RetireMaskBinding(std::uint32_t a_slot);
+		/** @brief The tables reset (ResetSlotTables): every entry and request dropped, except the render thread's posted capture. */
+		void ResetSharedBindings();
+		/**
+		 * @brief Before a commit or publication: material entries versioned, then pipeline and shadow-pipeline entries resolved against the
+		 * pipeline lane's newest catalog.
+		 */
+		void ResolveLookups();
+		/** @brief The lookups as an immutable copy with their catalog (the last copy again if unchanged). */
+		void PublishLookups();
+		/** @brief New lookups (tables reset): generations past the last, versions continuing. */
+		void ResetLookups();
+
+		// The member decals: State/Decals.h (CoordinatorDecals).
+		void NoteDecalChanged(std::uint32_t a_object) { decalsChanged.push_back(a_object); }
+		void NoteDecalsCleared()
+		{
+			decalsChanged.clear();
+			decalsRebuild = true;
+		}
+		/** @brief Tables::decalOrdinal and decalCount: the member decals, in the engine's draw order. */
+		void OrderDecals();
+		DecalOrderComparison CompareDecalOrder() const;
+
+		// The face shapes: State/Faces.h (CoordinatorFaces).
+		/** @brief A face shape's snapshot and region this walk; false without one. */
+		bool ResolveFace(RE::BSGeometry& a_geometry, const Tracked& a_tracked, FaceSnapshots::ShapeView& a_face, std::uint32_t& a_region);
+		/** @brief Appends a face shape's stream to this walk's faceStreams and points its slot at it. */
+		void PushFaceStream(RE::BSGeometry& a_geometry, const Tracked& a_tracked, std::uint32_t a_slot, const FaceSnapshots::ShapeView& a_face, std::uint32_t a_region);
+		/**
+		 * @brief The heads' publications: kept face streams take the new snapshot in place; waiting, missing or stale-head shapes are
+		 * rewritten.
+		 */
+		void ApplyFacePublications();
+		/** @brief A tracked face shape joins or leaves its head's list; the head's last one releases its record. */
+		void ListFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		void UnlistFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		void ClearFaceShapes();
+		/**
+		 * @brief A face shape's region of the positions buffer, held while a stream uses it; EndFaceWalk frees released streams' regions.
+		 * Walk thread only.
+		 */
+		std::uint32_t FaceRegionOf(const RE::BSGeometry* a_geometry, std::uint32_t a_vertexCount);
+		void EndFaceWalk();
+		void ClearFaceRegions();
+
+		// The walk: State/Walk.h (CoordinatorWalk).
+		/** @brief Skylighting::OcclusionTechnique from the records: the nearest fade node above the leaf's BSX flags. */
+		std::uint32_t OcclusionTechniqueOf(const SceneCapture::LeafView& a_leaf, bool a_skylighting) const;
 		Ineligible ClassifyFrame(const Tracked& a_tracked) const;
 		/**
 		 * @brief CS_DCLF_BILLBOARDS: the face mode (0-5) of the one NiBillboardNode above a Billboard-parented leaf when DCLF turns it on
@@ -1164,435 +1088,14 @@ namespace DCLF
 		bool HiddenForWalk(const RE::NiAVObject* a_object) const;
 		/** @brief HiddenForWalk from a_object's record (the mirror's hidden bit where the frame's capture has none). */
 		bool HiddenForWalk(const void* a_object, const SceneCapture::NodeRecord& a_record) const;
-		/** @brief Whether the switch's record selects a_child, and is current. */
-		static bool SwitchSelects(const SceneCapture::NodeRecord& a_switch, const void* a_child)
-		{
-			return (a_switch.kind & SceneCapture::kKindSwitch) && a_switch.switchChild && a_switch.switchChild == a_child && a_switch.switchCurrent;
-		}
-
-		ankerl::unordered_dense::map<RE::BSGeometry*, Tracked> tracked;
-		SceneIdentity sceneIdentity;
-		/** @brief The walk's iteration order, a member to keep its capacity; a join's entry carries its membership pass. */
-		struct OrderEntry
-		{
-			RE::BSGeometry* geometry;
-			Tracked* tracked;  // mutable: BuildFrame updates the cached verdict through it
-			const AccumulatedPass* accumulated;
-			bool layer = false;  // the joins': the entry's layer (Tracked::layerSlot) rather than its base
-		};
-		std::vector<OrderEntry> order;
-		// Keys valid for this walk only; the captured recordId is durable.
-		ankerl::unordered_dense::map<const RE::BSFaceGenNiNode*, std::shared_ptr<const FaceSnapshots::HeadView>> capturedFaceHeads;
-		// The joins' iteration (the pass's membership joins); a member for its capacity.
-		std::vector<OrderEntry> accumulateOrder;
-		// Member decals (DecalOrder.cpp): object -> its chain, group, technique and sub-pass; joined and left with the membership.
-		ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> memberDecals;
-		// Decals changed since the last OrderDecals, and whether to rebuild the order whole.
-		std::vector<std::uint32_t> decalsChanged;
-		bool decalsRebuild = true;
-		void NoteDecalChanged(std::uint32_t a_object) { decalsChanged.push_back(a_object); }
-		void NoteDecalsCleared()
-		{
-			decalsChanged.clear();
-			decalsRebuild = true;
-		}
-		// The member decals in draw order with their keys, kept so a change re-keys only the decals it names.
-		struct KeptDecalOrder;
-		std::shared_ptr<KeptDecalOrder> keptDecals;
-		/** @brief Tables::decalOrdinal and decalCount: the member decals, in the engine's draw order. */
-		void OrderDecals();
-		/** @brief The kept decal order against one rebuilt whole (keys retaken): the observers' reference (DecalsOrdered). */
-		struct DecalOrderComparison
-		{
-			std::uint64_t decals = 0, staleKeys = 0, unordered = 0;
-			bool differ = false;
-			std::string first, staleFirst;  // the first difference, the first stale key
-		};
-		DecalOrderComparison CompareDecalOrder() const;
-		/**
-		 * @brief The scene work's material captures, newest per material, let go after kMaterialSnapshotFrames unused frames. A join makes
-		 * a record from one (MaterialPort::Evaluate); a material with none is requested (Channels::materialRequests).
-		 */
-		struct HeldMaterial
-		{
-			std::unique_ptr<MaterialPort::HeldSnapshot> held;
-			std::uint32_t frame = 0;  // taken or used
-			bool listed = false;      // on materialsCaptured since the last RewriteCapturedMaterials (each material once)
-		};
-		static constexpr std::uint32_t kMaterialSnapshotFrames = 8;
-		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, HeldMaterial> materialSnapshots;
-		std::uint32_t materialSnapshotsAgedFrame = ~0u;  // the frame the held snapshots were last aged (once a frame, not a pass)
-		struct MaterialSnapshotStats
-		{
-			std::uint64_t captured = 0, replaced = 0, stale = 0, aged = 0, made = 0, uncovered = 0, requested = 0;
-			// Captures equal to the held one (no rewrite), those of which only the transform buffers moved (the watch alone), and captures
-			// of a material already listed since the last rewrite.
-			std::uint64_t deduped = 0, transformsOnly = 0, relisted = 0;
-		} materialSnapshotStats;
-		// The parity's (CS_DCLF_PERSISTENT_PARITY, its passes): materials whose captures DrainMaterialCaptures deduplicated, evaluated as
-		// a rewrite would and compared with their slots' records (RewriteCapturedMaterials). Empty otherwise.
-		std::vector<const RE::BSShaderMaterial*> materialsDeduped;
-		static constexpr std::uint32_t kMaterialDedupParityOffset = 37;
-		/** @brief ApplyEvents: the captures pushed since the last call (the newest kept), and the render thread's answers to requests. */
-		void DrainMaterialCaptures();
-		/** @brief A capture's reference, to EngineReleases (released at Present). */
-		void HandBackHeld(std::unique_ptr<MaterialPort::HeldSnapshot>&& a_held);
-		/**
-		 * @brief Keeps the material records from the frame's sources each pass, with no engine read: newly captured materials' slots
-		 * evaluated again (RewriteCapturedMaterials), frame-sourced components per signature (RefreshMaterialSignatures). TexcoordOffset is
-		 * no record's: a record keeps its capture's, and the frame values patch every material row with the frame's (TextureTransformList).
-		 */
-		void RefreshMaterialRecords();
-		void RewriteCapturedMaterials();
-		void RefreshMaterialSignatures();
-		/** @brief A slot's record made (a join) or written from a_snapshot: listed under its signature. */
-		void NoteMaterialRecord(std::uint32_t a_slot, const MaterialPort::MaterialSnapshot& a_snapshot);
-		/**
-		 * @brief A capture's texture transforms, once per material: nothing to follow (the frame values read the material's frame buffer
-		 * and the GPU patches its rows), counted only (MaterialRecordStats::transformsWatched).
-		 */
-		void WatchMaterialTransforms(const RE::BSShaderMaterial* a_material, const MaterialPort::MaterialSnapshot& a_snapshot, bool a_recordsCurrent = false);
-		/** @brief A rewrite's or a join's port evaluation and what it gave. */
-		struct MaterialEvaluation
-		{
-			enum class Outcome : std::uint8_t
-			{
-				Made,       // record holds it
-				Retry,      // an input the frame lacks yet (Advanced Skin's textures): again later
-				Uncovered,  // a class the port does not cover
-			};
-			MaterialRecord record;
-			Outcome outcome = Outcome::Made;
-			bool same = false;  // a rewrite's: equal to the slot's record
-		};
-		/**
-		 * @brief Pure (any thread; the pass's sources passed in): a_snapshot's record for a_pass as records hold it (no frame view). For a
-		 * rewrite (a_slot != kNoMaterialSlot) the slot's frame parts and unread floats are kept, and `same` tells an unchanged record.
-		 */
-		static constexpr std::uint32_t kNoMaterialSlot = ~0u;
-		void EvaluateMaterial(const MaterialPort::MaterialSnapshot& a_snapshot, std::uint32_t a_pass, const MaterialPort::MaterialFrame& a_sources, std::uint32_t a_slot,
-			MaterialEvaluation& a_out) const;
-		/**
-		 * @brief a_count prepare items by chunks of kFanoutGrain (FanoutMode's minimum count before the pool), each chunk under a ShardScope;
-		 * a_body(begin, end) is pure. Whether the pool ran.
-		 */
-		bool PrepareMaterials(std::string_view a_zone, std::size_t a_count, const std::function<void(std::size_t, std::size_t)>& a_body);
-		// RewriteCapturedMaterials' prepare: one item per slot to evaluate (its snapshot is the held capture, stable over the pass), its result.
-		struct MaterialRewriteItem
-		{
-			const RE::BSShaderMaterial* material = nullptr;
-			const MaterialPort::MaterialSnapshot* snapshot = nullptr;
-			std::uint32_t slot = 0;
-			bool parity = false;  // a deduplicated capture's, evaluated for the parity only
-		};
-		std::vector<MaterialRewriteItem> materialRewriteItems;
-		std::vector<MaterialEvaluation> materialRewriteResults;
-		// The joins' prepare (BuildAccumulatePhase): each (material, pass) a join keys that no slot holds, evaluated once before the merges,
-		// which store the records.
-		struct JoinMaterialItem
-		{
-			const RE::BSShaderMaterial* material = nullptr;
-			const MaterialPort::MaterialSnapshot* snapshot = nullptr;
-			std::uint32_t pass = 0;
-		};
-		std::vector<JoinMaterialItem> joinMaterialItems;
-		std::vector<MaterialEvaluation> joinMaterialResults;
-		ankerl::unordered_dense::map<std::pair<const RE::BSShaderMaterial*, std::uint32_t>, std::uint32_t> joinMaterialPrepared;  // -> item
-		/** @brief The joins' material evaluations, after their EvaluateJoin and before their merges. */
-		void PrepareJoinMaterials(std::size_t a_count);
-		// The signatures' applications, written in place by chunks (disjoint slots) and versioned after, in order.
-		struct MaterialApplyItem
-		{
-			std::uint32_t slot = 0;
-			std::uint32_t signature = 0;  // the signature's (its applied record)
-			std::uint8_t changed = 0;     // bit 0: the record (its textures), bit 1: frame floats
-		};
-		std::vector<MaterialApplyItem> materialApplyItems;
-		/** @brief The tables reset (ResetSlotTables): the signatures' slot lists and the retries dropped. */
-		void ResetMaterialRecords();
-		// Materials DrainMaterialCaptures kept since the last RefreshMaterialRecords, and those a rewrite could not evaluate yet (an
-		// Advanced Skin key not set up: retried while the capture is held).
-		std::vector<const RE::BSShaderMaterial*> materialsCaptured;
-		std::vector<const RE::BSShaderMaterial*> materialRewritesPending;
-		struct MaterialSignature
-		{
-			std::vector<std::uint32_t> slots;      // listed when keyed (materialSignatureListed), dropped as the list is walked
-			MaterialPort::MaterialSnapshot probe;  // a capture of one of its materials (pure data: no pointer in it is followed)
-			std::uint32_t probePass = 0;
-			bool probeValid = false;
-			bool probeFailed = false;  // its last evaluation failed (an Advanced Skin key not set up): the next slot noted replaces it
-			MaterialRecord applied;  // the frame components last written into its slots
-			bool appliedValid = false;
-		};
-		ankerl::unordered_dense::map<std::uint32_t, MaterialSignature> materialSignatures;
-		std::vector<std::uint32_t> materialSignatureListed;  // per material slot: its signature + 1, 0 when unlisted
-		struct MaterialRecordStats
-		{
-			// transformsWatched: captures whose texture transforms reached WatchMaterialTransforms (nothing followed: the frame values'),
-			// transformsWritten: records the scene lane wrote for them (none).
-			std::uint64_t passes = 0, captured = 0, rewritten = 0, retried = 0, uncovered = 0, samples = 0, applications = 0, slotsApplied = 0,
-						  transformsWatched = 0, transformsWritten = 0;
-			// Evaluations on the pool (rewrites, the joins' materials) and the rounds that fanned out, the joins' material evaluations left to
-			// the merge, applications written by chunks. watchesSkipped / watchesDropped: no longer moved (the transform watch is gone).
-			std::uint64_t evaluationsPooled = 0, poolRounds = 0, joinPrepared = 0, joinInline = 0, watchesSkipped = 0, watchesDropped = 0,
-						  appliedPooled = 0;
-		} materialRecordStats;
-		std::uint32_t materialReportWindow = ~0u;  // the report window (sceneFrame / Reports::kInterval) the material lines last printed in
-		// The material slots' texture bindings (MaterialBindings; Coordinator/MaterialBindings.cpp).
-		MaterialBindings materialBindings;
-		/** @brief After the records' writers: drains the answers, then resolves the changed (material log) and newly used slots. */
-		void UpdateMaterialBindings();
-		/** @brief A used slot's entry written from its record; bindings requested for views with none known. */
-		void ResolveMaterialBinding(std::uint32_t a_slot);
-		/**
-		 * @brief An entry's new owner block: a_next's moved owners (bits of a_texturesMoved / a_featuresMoved) with a_held's others, sealed,
-		 * or the block another slot of a_material sealed for the same owners; null when none is held.
-		 */
-		std::shared_ptr<const Lookups::MaterialOwners> SealMaterialOwners(const RE::BSShaderMaterial* a_material, const Lookups::MaterialOwners* a_held,
-			Lookups::MaterialOwners& a_next, std::uint32_t a_texturesMoved, std::uint32_t a_featuresMoved);
-		/** @brief The scene lane, before a commit or publication: entries written since the last call, each versioned and logged. */
-		void VersionMaterialBindings();
-		/** @brief A view's binding: answered in this drain, cached from an earlier answer, else asked for (pending; a_slot waits on it). */
-		GpuTextures::Binding MaterialViewBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, std::uint32_t a_slot);
-		/** @brief A material slot's retirement came back (no publication names it): its entry dropped. */
-		void RetireMaterialBinding(std::uint32_t a_slot);
-		/** @brief The tables reset (ResetSlotTables): every entry and request dropped; an answer to an earlier request is stale. */
-		void ResetMaterialBindings();
-		// The shared, projected, shadow mask and shadow texture bindings (SharedBindings; Coordinator/SharedBindings.cpp).
-		SharedBindings sharedBindings;
-		/**
-		 * @brief After the technique rows' refresh: answers drained, fixed and projected bindings taken, technique masks resolved, shadow
-		 * textures requested or released.
-		 */
-		void UpdateSharedBindings();
-		/** @brief A view's binding: answered in this drain, cached (here or in the material bindings), else requested. */
-		GpuTextures::Binding SharedViewBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, SharedBindings::Kind a_kind);
-		/** @brief The projected entries from their capture; pending ones requested. */
-		void ResolveProjectedBindings(std::uint32_t a_textures);
-		/** @brief A used pipeline's technique mask entry from its row. False: it stood (nothing looked up). */
-		bool ResolveMaskBinding(std::uint32_t a_slot, ID3D11ShaderResourceView* a_frameMask);
-		/** @brief A shadow texture's entry from an answer or a known binding, else requested. */
-		void ResolveShadowTextureBinding(ID3D11ShaderResourceView* a_view);
-		/** @brief A pipeline slot's lookups retirement came back (no publication names it): its mask entry dropped. */
-		void RetireMaskBinding(std::uint32_t a_slot);
-		/** @brief The tables reset (ResetSlotTables): every entry and request dropped, except the render thread's posted capture. */
-		void ResetSharedBindings();
-		ankerl::unordered_dense::set<RE::NiNode*> categoryNodes;
-		// The portal graphs' parentless roots (alwaysRenderChildren), each filed under its graph's shared portal node, a category node
-		// (FindCategoryNode, RefreshCategoryNodes); held while listed.
-		struct AlwaysRenderRoot
-		{
-			RE::NiPointer<RE::NiAVObject> root;
-			RE::NiNode* category = nullptr;
-		};
-		ankerl::unordered_dense::map<const RE::NiAVObject*, AlwaysRenderRoot> alwaysRenderRoots;
-		// The first-person members' category node (CategoryCapture::firstPersonRoot). Its kHidden is view-scoped (Main::Draw shows it only
-		// for first person): ClassifyFrame stops at it before the hidden test, and its hidden events announce nothing.
-		const RE::NiNode* firstPersonCategory = nullptr;
-		/** @brief Diagnostics: the node that hid a first-person skeleton entry (ClassifyFrame), the first 16. */
-		void NoteFirstPersonHidden(const Tracked& a_tracked, const void* a_key, const SceneCapture::NodeRecord& a_record, std::uint32_t a_depth) const;
-		/** @brief Whether a tracked entry is a first-person one (its category node the first-person root). */
-		bool FirstPersonEntry(const RE::NiNode* a_categoryNode) const { return a_categoryNode && a_categoryNode == firstPersonCategory; }
-		// Diagnostics: the frame each category node was found and why (GetCategoryInfo), and the source AddGeometry stamps on new entries.
-		ankerl::unordered_dense::map<const RE::NiNode*, std::pair<std::uint32_t, std::uint8_t>> categoryFound;
-		TrackSource addSource = TrackSource::AttachEvent;
-		std::size_t validationCursor = 0;
-		// Set by a load screen's marker: the next batch rebuilds the tracked set from scratch.
-		bool rescanPending = false;
-		std::uint64_t publishedLodForced = 0; // the LOD gates' forced generation of the last publication (NotePublished)
-		FrameInputs sceneInputs;              // the newest taken
-		std::uint32_t verdictsApplied = 0;    // the verdicts generation last applied (InvalidateVerdicts)
-		/** @brief First in each pass: the newest frame inputs taken (sceneInputs, sceneFrame); the verdicts dropped when asked. */
-		void TakeFrameInputs();
-		// The coordinator's frame (from its last frame inputs; GetFrame on a scene work thread) and pass count (PassStamp).
-		std::uint32_t sceneFrame = 0;
-		std::uint64_t passSerial = 0;
-		std::shared_ptr<const ankerl::unordered_dense::map<const RE::NiNode*, int>> roomMap;
-		std::uint64_t roomMapGeneration = ~0ull;
-		/** @brief The scene mirror: the hooks' records, applied in event order (ApplyMirrorEvents); checked by CS_DCLF_MIRROR_PARITY. */
-		SceneMirror mirror;
-		void ApplyMirrorEvents(const EventBatch& a_batch, BatchIndex& a_index);
-		// A load screen's attach and detach events for the mirror (taken by the first pass after the load).
-		std::shared_ptr<EventBatch> loadingCarry;
-
-		Tables tables;
-		// The published table snapshots (PublishTables), pooled: one no publication holds any more is written again.
-		std::vector<std::shared_ptr<Tables>> tablesPool;
-		// Per pool entry: whether it equals the tables at its change log's end (brought up to date by replay); a new snapshot is copied
-		// whole once.
-		std::vector<std::uint8_t> tablesPoolReplayable;
-		// A replay's scratch (PublishTables), collected once and read by its column jobs: the object slots the logs name (sorted) with the
-		// causes each gathered (0: not named), the material slots the material log names (sorted), and the geometry slots' marks.
-		std::vector<std::uint32_t> replaySlots;
-		std::vector<std::uint32_t> replaySlotCauses;
-		std::vector<std::uint32_t> replayMaterialSlots;
-		std::vector<std::uint8_t> replayMaterialMarks, replayGeometryMarks;
-		// The replay's object slots and material records by pool chunks from these counts (FanoutMode; smaller replays run on the lane).
-		static constexpr std::size_t kReplayMinSlots = 96, kReplayMinMaterials = 24;
-		// Material records a replay chunk copies (2.4 KB each).
-		static constexpr std::size_t kReplayMaterialGrain = 32;
-		// The last published snapshot.
-		std::shared_ptr<Tables> publishedTables;
-	public:
-		/** @brief A thread running scene work (the lane or a fan-out chunk): GetFrame is the coordinator's there. */
-		static inline thread_local bool sceneWorkThread = false;
-
-	private:
-		Channels& channels = Channels::Get();
-		// The last copy of the category nodes, and whether the set changed since (copied again at the next publication).
-		std::shared_ptr<const ankerl::unordered_dense::set<RE::NiNode*>> publishedCategoryNodes;
-		bool nodeSetsDirty = true;  // the category nodes changed
-		using LightEntryChange = DCLF::LightEntryChange;
-		std::vector<LightEntryChange> lightEntryChanges;               // since the last publication
-		/** @brief Whether a node is one of the coordinator's category nodes (the frame reads IsCategoryNode). */
-		bool CategoryNodeOwn(const RE::NiAVObject* a_node) const
-		{
-			return categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<RE::NiAVObject*>(a_node)));
-		}
-		/** @brief Early in a full pass: applies the fade root posts (Channels::fadeRootsSentPosted, fadeOwnedPosted). */
-		void TakeCoordinatorInputs();
-		// Pipeline blocks the render thread posted (Channels::pipelineConstantsPosted), applied where the slot still holds the key.
-		ConstantsPostStats constantsPostStats;
-		void ApplyConstantsPosts();
-		// The frame inputs the technique rows were last evaluated against; fog left out (a row keeps its fog: KeepTechniqueFog).
-		struct TechniqueWitness
-		{
-			TechniqueInputs inputs{};
-			std::uint8_t byte12 = 0, byte7 = 0;
-			bool valid = false;
-		} techniqueWitness;
-		/** @brief Each full pass before the walk: every technique row evaluated again when the inputs differ from the witness. */
-		void RefreshTechniqueRows();
-		/** @brief A technique row from its frame's sample, written and versioned where it differs. */
-		void EvaluateTechniqueRow(std::uint32_t a_row);
-		// The change log position at the last commit, which the applied set's revocation checks from.
-		LogCursor setCommitCursor;
-		TablesPublication tablesPublication;
-		void PublishTables();
-		// The walk the entries' objectStamp must match; a new walk or a teardown bumps it, invalidating every index at once.
-		std::uint32_t objectStamp = 1;
-		void InvalidateObjectIndices() { ++objectStamp; }
-		// Only for CS_DCLF_WALK_PARITY's dense rebuild: objects laid out densely, the entries' slots and indices left alone.
-		bool denseWalk = false;
-		/** @brief The slot the walk writes this object at: its own, a free one, or a new one. */
-		std::uint32_t AcquireObjectSlot(Tracked& a_tracked, RE::BSGeometry* a_geometry);
-		/** @brief After a walk: frees every slot it did not write and sorts the per-frame index lists. */
-		void SweepObjectSlots();
-		/**
-		 * @brief Frees an entry's slot as it leaves the tracked set (outside the walk), so a rescan's entries reuse slots instead of
-		 * growing the arrays.
-		 */
-		void ReleaseObjectSlot(Tracked& a_entry);
-		/** @brief The entry's layer slot for base slot a_base: its own or a new one. */
-		std::uint32_t AcquireLayerSlot(Tracked& a_tracked, RE::BSGeometry* a_geometry, std::uint32_t a_base);
-		void ReleaseLayerSlot(Tracked& a_entry);
-		/** @brief The property a slot's record draws: its entry's held one, or its layer's for a layer slot. */
-		RE::BSShaderProperty* SlotProperty(std::uint32_t a_slot) const;
-		/** @brief Whether a member's binding still holds for its object (the derivation cache's witnesses). */
-		bool MemberBindingStands(std::uint32_t a_slot, const Tracked& a_entry) const;
-		void EraseTracked(RE::BSGeometry* a_geometry);
 		/**
 		 * @brief CS_DCLF_WALK_PARITY's reference: every entry rewritten from scratch into dense tables and classified without caches, the
 		 * coordinator left unchanged.
 		 */
 		void DenseReference(Tables& a_dense, ankerl::unordered_dense::map<const RE::BSGeometry*, Ineligible>& a_reasons);
-		// The dense rebuild's verdicts, classified without the caches: what walk parity checks the kept ones against.
-		ankerl::unordered_dense::map<const RE::BSGeometry*, Ineligible> referenceReasons;
-		// The slots by key, and each material's slots.
-		ankerl::unordered_dense::map<const RE::BSGraphics::TriShape*, std::uint32_t> geometryIndex;
-		ankerl::unordered_dense::map<PipelineKey, std::uint32_t, PipelineKeyHash> pipelineIndex;
-		ankerl::unordered_dense::map<std::pair<const RE::BSShaderMaterial*, std::uint32_t>, std::uint32_t> materialIndex;
-		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, std::vector<std::uint32_t>> materialDependents;
-		void ListMaterialDependent(const RE::BSShaderMaterial* a_material, std::uint32_t a_slot);
-		void UnlistMaterialDependent(const RE::BSShaderMaterial* a_material, std::uint32_t a_slot);
-		// The pass's membership passes (BindByMembership) by geometry, and its layers' (PrimaryCull::MembershipLayerPass).
-		ankerl::unordered_dense::map<const RE::BSGeometry*, AccumulatedPass> accumulatedPasses;
-		ankerl::unordered_dense::map<const RE::BSGeometry*, AccumulatedPass> accumulatedLayerPasses;
-		/**
-		 * @brief A BSShaderMaterial reference taken and dropped the engine's way (AE): the material database (manager 0x143187758) shares
-		 * one material among equal properties, and its release (FUN_1414f7a40, used by BSShaderProperty::SetMaterial) decrements under the
-		 * database's lock and at zero removes it from the database before deleting it. A BSTSmartPointer would delete it directly.
-		 */
-		class MaterialReference
-		{
-		public:
-			MaterialReference() = default;
-			MaterialReference(const MaterialReference&) = delete;
-			MaterialReference& operator=(const MaterialReference&) = delete;
-			MaterialReference(MaterialReference&& a_other) noexcept :
-				material(std::exchange(a_other.material, nullptr)) {}
-			MaterialReference& operator=(MaterialReference&& a_other) noexcept
-			{
-				if (this != &a_other) {
-					reset();
-					material = std::exchange(a_other.material, nullptr);
-				}
-				return *this;
-			}
-			~MaterialReference() { reset(); }
-			/** @brief Takes a reference on a_material (null: none), then drops the one held. */
-			void reset(RE::BSShaderMaterial* a_material = nullptr);
-			/** @brief Takes over a count already taken (a HeldSnapshot's). */
-			void Adopt(RE::BSShaderMaterial* a_material) { material = a_material; }
-			explicit operator bool() const { return material != nullptr; }
-
-		private:
-			RE::BSShaderMaterial* material = nullptr;
-		};
-		// Per material slot: its engine reference on the material, so the pointer is not reused while live; retired via
-		// RetiredBatch::materials.
-		std::vector<MaterialReference> materialOwners;
-		// Fade and tree root seed requests (into the deltas); the mirror gives a row's coordinator half, the seed the rest.
-		std::vector<FadeSeedItem> fadeSeedRequests;
-		std::vector<FadeSeedItem> treeSeedRequests;
-		FadeRootStatic FadeRootFromMirror(const void* a_node);
-		/** @brief A new generation for a root's row, its seed row toggled and requested. */
-		void RequestFadeSeed(std::uint32_t a_root, FadeRootStatic& a_row);
-		/** @brief The coordinator's residency of a slot (IsMember is the frame's). */
-		bool ResidentObject(std::int32_t a_object) const { return a_object >= 0 && IsResidentSlot(static_cast<std::uint32_t>(a_object)); }
-		std::uint32_t tablesGeneration = 0;
-		std::uint32_t materialVersions = 0;  // the last Tables::materialVersion handed out
-
-		// The lookups (Lookups.h): written by the bindings, resolved against the newest catalog before each commit and publication; each
-		// publication carries an immutable copy, the render thread's only view.
-		Lookups lookups;
-		LookupsResolveState lookupsResolve;
-		std::shared_ptr<const PipelineCatalog> lookupsCatalog;  // the catalog they were last resolved against
-		// The last publication's lookups (shared again while unchanged: Lookups::ChangeKey) and catalog; chunk copies counted.
-		std::shared_ptr<const Lookups> publishedLookups;
-		std::shared_ptr<const PipelineCatalog> publishedCatalog;
-		std::array<std::uint64_t, 6> publishedLookupsKey{};
-		std::uint64_t lookupsChunkCopies = 0;
-		/**
-		 * @brief Before a commit or publication: material entries versioned, then pipeline and shadow-pipeline entries resolved against the
-		 * pipeline lane's newest catalog.
-		 */
-		void ResolveLookups();
-		/** @brief The lookups as an immutable copy with their catalog (the last copy again if unchanged). */
-		void PublishLookups();
-		/** @brief New lookups (tables reset): generations past the last, versions continuing. */
-		void ResetLookups();
-		// Frame state the walk reads once and the joins reuse, so both halves agree.
-		bool sceneBuilt = false;  // the walk ran: the records are this frame's
-		bool frameResolveBuffers = false;
-		bool frameInterior = false;
-		std::array<std::uint32_t, 4> frameDecalBias{};
-		bool graphWasActive = false;  // the previous BuildFrame's resolveBuffers, to log the flip
 		/** @brief An object's extras rows' static parts from its property and geometry; true when changed. */
 		bool WriteObjectExtras(std::uint32_t a_object);
 		void BuildScenePhase();
-		void BuildAccumulatePhase();
-		// A join's result: values only, applied without dereferencing a geometry, material, property or render pass.
-		struct AccumulatePatch
-		{
-			std::uint32_t object = 0, material = 0, pipeline = 0, flags = 0;
-			float fadeDistance = 0.0f;
-			ObjectLights lights{};
-			ObjectTreeAnim tree{};
-			bool projectedUV = false, landBlend = false;
-			std::uint64_t decalKey = 0;
-		};
-		void ApplyAccumulatePatch(const AccumulatePatch& a_patch);
 		/** @brief Walk parity's reference: every entry of `order` written from scratch into dense tables. */
 		void DenseWalk();
 		/** @brief Clears the per-frame tables and the walk's counters; a_keepIndices: a delta walk's, keeping object indices. */
@@ -1606,9 +1109,6 @@ namespace DCLF
 		void DeltaWalk();
 		/** @brief The whole tracked set into `order` (a full evaluation, the dense walk). */
 		void BuildFullOrder();
-		struct EvalCounters;
-		struct TrackedDelta;
-		struct EvalResult;
 		/**
 		 * @brief One walk entry: writes its record at its slot; false when it gets none. EvaluateWrite then MergeWrite in turn (the dense
 		 * walk).
@@ -1620,17 +1120,6 @@ namespace DCLF
 		 */
 		void WriteLayer(RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, Tracked& a_tracked, std::uint32_t a_base, bool a_member, bool a_keepMember,
 			PartTimer& a_timer);
-		/** @brief Why an entry's inputs change every frame (Tracked::perFrame); 0 when they do not. */
-		enum PerFrameTrait : std::uint32_t
-		{
-			kTraitFace = 1u << 0,
-			kTraitActor = 1u << 1,
-			// 1u << 2 unused (the report names the bits).
-			kTraitSkin = 1u << 3,
-			kTraitAnimatedShading = 1u << 4,  // a controller on its shader or alpha property: its shading is named by events, never per frame
-			kTraitMoves = 1u << 5,            // a controller or a non-fixed rigid body on its chain, or a particle system (the toggle on)
-			kTraitRootMoves = 1u << 6,        // its reference root's subtree moves (RootMoves)
-		};
 		std::uint32_t PerFrameTraits(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const;
 		/** @brief PerFrameTraits from what the entry's evaluation has. */
 		std::uint32_t PerFrameTraitsOf(bool a_faceShape, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const;
@@ -1652,234 +1141,9 @@ namespace DCLF
 		 * stands).
 		 */
 		bool ActorRecordKept(const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const;
-		/** @brief A face shape's snapshot and region this walk; false without one. */
-		bool ResolveFace(RE::BSGeometry& a_geometry, const Tracked& a_tracked, FaceSnapshots::ShapeView& a_face, std::uint32_t& a_region);
-		/** @brief Appends a face shape's stream to this walk's faceStreams and points its slot at it. */
-		void PushFaceStream(RE::BSGeometry& a_geometry, const Tracked& a_tracked, std::uint32_t a_slot, const FaceSnapshots::ShapeView& a_face, std::uint32_t a_region);
-		/**
-		 * @brief The heads' publications: kept face streams take the new snapshot in place; waiting, missing or stale-head shapes are
-		 * rewritten.
-		 */
-		void ApplyFacePublications();
-		/** @brief A tracked face shape joins or leaves its head's list; the head's last one releases its record. */
-		void ListFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		void UnlistFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		void ClearFaceShapes();
-		/**
-		 * @brief A root whose bound is an entry's only motion (kTraitRootMoves alone) is listed in the placement plan instead of the entry:
-		 * every moving root, and a still root once its reference had a move event (QueueRoots, stillRoots).
-		 */
-		struct MovingRoot
-		{
-			const void* key = nullptr;  // its reference
-			const RE::NiNode* categoryNode = nullptr;
-		};
-		// Every root RootMoves found moving, until ScheduleRoot or its last dependent forgets it (each change marks the plan dirty).
-		ankerl::unordered_dense::map<const RE::NiAVObject*, MovingRoot> movingRoots;
-		/** @brief The still roots this frame's move keys name (movedKeys[0] from movedKeysQueued on), into stillRoots. */
-		void QueueRoots();
-		std::size_t movedKeysQueued = 0;
-		struct PlacementStats
-		{
-			std::uint64_t roots = 0, stillRoots = 0, rootsGated = 0;
-			std::uint64_t fadeRootsUnmirrored = 0;  // listed with no mirror record (FadeRootFromMirror)
-		} placementStats;
-		/** @brief The walk's plan item for a recorded entry (slot, layer row, sun entry, palette block). */
-		PlacementPlan::Item PlanItemOf(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		/** @brief PlanItemOf's key, no reference taken. */
-		PlannedKey PlacedKeyOf(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		const RE::NiNode* plannedFirstPerson = nullptr;  // firstPersonCategory as the planned keys took it (a change makes the set anew)
-		/** @brief The walk's plan, opened by its first write (or by PublishPlacementPlan when the placement set changed). */
-		PlacementPlan& WalkPlan();
-		/** @brief After the walk: the still roots it lists (QueueRoots), and a plan made ready when the placement set changed or a slot was written. */
-		void PublishPlacementPlan();
-		/** @brief The frame each key last had a move event (drained at the delta walk). */
-		ankerl::unordered_dense::map<const void*, std::uint32_t> movedFrame;
-		// Keys with a move event this frame and the last: QueueRoots lists those references' roots whatever RootMoves says (cell updates
-		// recompute a still root's bound).
-		std::array<std::vector<const void*>, 2> movedKeys;
-		// movedKeys turn over once a frame (a burst's passes add to this frame's); movedFrame is pruned every 256 frames.
-		std::uint32_t movedKeysFrame = 0, movedPruneFrame = 0;
-		bool moveGating = false;
-		std::uint32_t moveUngatedThrough = 0;
-		void DrainMoveEvents(bool a_full);
-		// Actor entries by the nodes on their chain, for the hidden events.
-		ankerl::unordered_dense::map<const void*, std::vector<RE::BSGeometry*>> hiddenDependents;
-		bool hiddenGating = false;
-		bool hiddenWitness = false;
-		void ListHiddenChain(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		void UnlistHiddenChain(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		void DrainHiddenEvents();
-		/** @brief The applied batches' hidden stores (mirror updates with a site), taken by DrainHiddenEvents. */
-		struct BatchHidden
-		{
-			const void* key = nullptr;
-			std::uint32_t site = 0;
-			bool hidden = false;
-			std::uint64_t sequence = 0;  // SceneCapture::NextSequence after the store
-		};
-		std::vector<BatchHidden> batchHidden;
-		/**
-		 * @brief Hidden events newer than the capture the pass judged by (cullHidden) that differed: announced again at the first pass with
-		 * a later capture (cullHiddenSequence). Keys only.
-		 */
-		ankerl::unordered_dense::map<const void*, std::uint64_t> hiddenAhead;
-		bool MovedRecently(const void* a_key) const
-		{
-			const auto it = movedFrame.find(a_key);
-			return it != movedFrame.end() && sceneFrame - it->second <= 1;
-		}
-		const void* MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const;
-		/**
-		 * @brief Whether a reference root's subtree holds anything that moves (controller, non-fixed rigid body, skin), so its bound, the
-		 * sun entry under it, is not fixed. Walked once per root, again after an event under it.
-		 */
-		bool RootMoves(const RE::NiAVObject* a_root, const bool* a_now = nullptr);
-		bool RootMovesNow(const RE::NiAVObject* a_root) const;
-		ankerl::unordered_dense::map<const RE::NiAVObject*, bool> rootMotion;
-		/** @brief Lists an evaluated entry under its properties; UnlistDependents takes it off every list. */
-		void ListDependents(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		void UnlistDependents(RE::BSGeometry* a_geometry, Tracked& a_tracked, bool a_root);
 		/** @brief Evaluates the entry this walk with its classification retaken. */
 		void Reclassify(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		/**
-		 * @brief Whether a placement event can change the entry's tables: it has a record or a frame verdict (None, Hidden, Switch, Actor).
-		 */
-		static bool PlacementMatters(const Tracked& a_tracked);
-		/**
-		 * @brief Reclassifies a sun entry node's dependents and forgets its motion; a key, never dereferenced. a_whole false (a dirty root:
-		 * a dependent attached or detached, the attached one already pending): its motion is read again, and only a changed verdict
-		 * reclassifies the dependents (the parity's witness passes schedule the rest and check them, rootWitness).
-		 */
-		void ScheduleRoot(const RE::NiAVObject* a_root, bool a_whole = true);
-		// Dependents a witness pass scheduled only for ScheduleRoot's parity: their merge must change nothing (MergeEntry).
-		ankerl::unordered_dense::set<const RE::BSGeometry*> rootWitness;
-		/** @brief A node Havok moved or gave a controller: the entries under it and the dependents of every node above it. */
-		void ApplyNodeEvent(RE::NiAVObject* a_node);
-		/** @brief MoveKeyOf, else its fallbacks (Tracked::moveKey, moveKeyOuter): the innermost and outermost references, or the category node. */
-		std::pair<const void*, const void*> MoveKeysOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const;
-		/**
-		 * @brief Before the first round: drained switch events whose selection changed, each caught up (CatchUpSwitch) and, in a delta
-		 * walk, its entries reclassified.
-		 */
-		void ApplySwitchEvents(bool a_full);
-		// Scene members' records.
-		struct ResidentPatch
-		{
-			AccumulatedPass pass;
-			std::uint32_t pipeline = 0, material = 0;
-		};
-		static constexpr std::uint32_t kNotResident = ~0u;
-		bool IsResidentSlot(std::uint32_t a_slot) const { return a_slot < residentPos.size() && residentPos[a_slot] != kNotResident; }
-		void MarkResidentSlot(std::uint32_t a_slot, const ResidentPatch& a_patch);
-		/** @brief Ends a slot's membership; a_restore resets its accumulated half now. */
-		void DropResidentSlot(std::uint32_t a_slot, bool a_restore);
-		/** @brief A slot's accumulated half back as the walk wrote it. */
-		void ResetAccumulatedHalf(std::uint32_t a_slot);
-		/** @brief The residents' pipeline and material slots used this frame, and a template when none was. */
-		void KeepResidentsAlive();
-		/** @brief A member's tree slot (Tables::objectTree): taken for a tree member, given back otherwise or when it leaves. */
-		void ListTree(std::uint32_t a_slot);
-		void UnlistTree(std::uint32_t a_slot);
-		/** @brief A member's fade root (Tables::fadeRoots): listed when it joins, released with its last member. */
-		void ListFadeRoot(std::uint32_t a_slot);
-		void UnlistFadeRoot(std::uint32_t a_slot);
-		/**
-		 * @brief The reference a newly listed tree or fade root owner is copied from: the slot's entry's fade node if it is a_node, else
-		 * null (not listed: fadeRootsUnowned).
-		 */
-		RE::NiPointer<RE::NiAVObject> HeldFadeNode(std::uint32_t a_slot, const void* a_node);
-		/**
-		 * @brief a_entry's fade node reference for a_node: the batch's pin, a root owner's copy, or requested from the render thread (once
-		 * per key). True when held now.
-		 */
-		bool AcquireFadeNode(Tracked& a_entry, const void* a_node, const char* a_path);
-		/** @brief A switch event on a tree root's LOD switch: its kFadeRootTreeLod retaken. */
-		void RefreshFadeRootSwitch(const RE::NiAVObject* a_switch);
-		/** @brief A fadeAmount event (Actor::SetAlpha): a listed root's fadeAmount retaken from its node, its state row kept. */
-		void RefreshFadeAmount(const void* a_node);
 		void MoveBucket(Tracked& a_tracked, Ineligible a_bucket);
-		/**
-		 * @brief Binds the bind queue's records as residents from membership passes (PrimaryCull::MembershipPass), kept until rewritten.
-		 */
-		void BindByMembership();
-		/**
-		 * @brief One bind queue element's evaluation (pure): skip, binding stands, or its membership pass. The merge, in queue order,
-		 * stores the cache entry, leaves the set, drops a failed member and queues the join.
-		 */
-		struct JoinPre
-		{
-			enum class Kind : std::uint8_t
-			{
-				Skip,    // not a record to bind (free, shadow only, another entry's slot, not this walk's, verdict not None)
-				Kept,    // a member whose binding stands (MemberBindingStands)
-				Failed,  // no membership pass (PrimaryCull::LastSyntheticFail's reason in fail)
-				Pass,    // a membership pass: joined by BuildAccumulatePhase
-			};
-			Kind kind = Kind::Skip;
-			RE::BSGeometry* geometry = nullptr;
-			bool layer = false;
-			SceneCapture::LeafView leaf;
-			MembershipDerived derived;  // the cache entry the pass leaves
-			AccumulatedPass pass;
-			std::uint8_t fail = 0;
-		};
-		void EvaluateJoinPre(std::uint32_t a_slot, JoinPre& a_out) const;
-		/**
-		 * @brief One membership join's evaluation (pure): the held property check, the derivation cache's witnesses (its slots are the
-		 * merge's), classification, pipeline key, static flags, room index. a_classify: classify even where the witnesses hold.
-		 */
-		struct JoinResult
-		{
-			enum class Kind : std::uint8_t
-			{
-				Skip,      // the mirror's property is not the held one (a swap not applied yet)
-				Rejected,  // a verdict of this frame (the classification or ClassifyFrame) leaves it without bindings
-				Joined,    // bound: the merge patches it
-			};
-			Kind kind = Kind::Skip;
-			SceneCapture::LeafView leaf;
-			RE::BSShaderProperty* property = nullptr;        // the entry's held property
-			const RE::BSShaderMaterial* material = nullptr;  // the witness, the material slot's key
-			std::uint8_t fadeState = 0;
-			bool alphaBelowOne = false;
-			std::uint32_t geometrySlot = 0;
-			bool derivedWitness = false;  // the derivation cache's witnesses hold
-			bool classified = false;      // descriptors, key and static flags are this join's
-			Ineligible reason = Ineligible::None;
-			LightingDescriptors descriptors;
-			PipelineKey key{};
-			std::uint32_t staticFlags = 0;
-			bool roomSet = false;  // Light Limit Fix's room index retaken (the room map moved on)
-			int roomIndex = -1;
-		};
-		void EvaluateJoin(const OrderEntry& a_entry, bool a_classify, JoinResult& a_out) const;
-		/**
-		 * @brief a_count evaluations into a_results, in chunks of kFanoutGrain on the pool (a_pool) or on this thread. In
-		 * AccumulatePhase.cpp.
-		 */
-		template <class Result, class Evaluate>
-		void EvaluateJoins(std::size_t a_count, bool a_pool, std::vector<Result>& a_results, Evaluate&& a_evaluate);
-		std::vector<JoinPre> joinPres;
-		std::vector<JoinResult> joinResults;
-		/** @brief The technique row of a pass descriptor's TechniqueKey, made and evaluated when new. */
-		std::uint32_t TechniqueRowFor(std::uint32_t a_passDescriptor);
-		bool shadingNamedAll = false;  // NameShadingEvents named every slot once
-		// The shading events: slots resampled, LOD fade and emittance events.
-		struct ShadingStats
-		{
-			std::uint64_t resampled = 0, lodFadeEvents = 0, emittanceEvents = 0;
-		} shadingStats;
-		std::vector<const void*> lodFadeChanged;
-		// Object LOD (dclf-lod.md): each tracked BSSubIndexTriShape's drawn index ranges, taken again at its segment events.
-		ankerl::unordered_dense::map<const RE::BSGeometry*, std::vector<LodSegments::Range>> lodRanges;
-		struct LodSegmentStats
-		{
-			std::uint64_t events = 0, changed = 0;
-		} lodSegmentStats;
-		void SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event);
-		void ApplyLodSegmentEvents(const std::vector<const void*>& a_shapes);
-		std::array<std::uint64_t, kChangeCauseCount> reportedChangeCounts{};
 		/** @brief After the delta walk's evaluations: the kept slots' geometry slots, and the shadow sets. */
 		void FinishDeltaWalk(PartTimer& a_timer);
 		/**
@@ -1888,90 +1152,6 @@ namespace DCLF
 		 * ready.
 		 */
 		void EvaluateRound(PartTimer& a_timer, std::size_t a_first);
-
-		// Entries per fan-out chunk (one EvalCounters each), and the fewest a round fans out for.
-		static constexpr std::size_t kFanoutGrain = 64;
-		static constexpr std::size_t kFanoutMinEntries = 128;
-		/**
-		 * @brief An evaluation chunk's counters, merged in chunk order before the round's merges, so first-named strings match the serial
-		 * walk.
-		 */
-		struct EvalCounters
-		{
-			std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> ineligible{};
-			std::array<std::uint32_t, 64> techniqueRejects{};
-			std::uint32_t classifyHits = 0, classifyChecked = 0, classifyDiffers = 0;
-			std::string classifyDiffersFirst;
-			std::uint64_t verdictsChecked = 0, verdictsSkipped = 0, verdictsMissed = 0;
-			std::string firstVerdictMissed;
-			std::uint64_t leafMissing = 0;  // leafStats.missing
-			std::array<double, static_cast<std::size_t>(BuildPart::Count)> partMs{};  // the chunk's PartTimer (CS_DCLF_PROFILE)
-			std::array<double, static_cast<std::size_t>(EvaluateKind::Count)> evaluateKindMs{};
-			MirrorReadStats mirror;  // mirrorReadSink
-			ankerl::unordered_dense::map<const RE::NiAVObject*, bool> rootMotion;  // RootMovesNow's answers
-		};
-		/** @brief What an evaluation decided for its entry's Tracked, applied by its merge. */
-		struct TrackedDelta
-		{
-			bool faceShapeSet = false, faceShape = false;      // resolved once
-			bool actorOwnedSet = false, actorOwned = false;    // resolved once
-			bool verdictSet = false;
-			Tracked::StaticVerdict verdict;
-			bool candidateSet = false;                         // classified, or its frame verdict changed
-			std::uint32_t candidateFrame = 0;
-			Ineligible candidateReason = Ineligible::None;
-		};
-		/**
-		 * @brief One entry's evaluation for its merge: reads only the frozen mirror, the entry's own Tracked and the pass snapshot, never a
-		 * table, slot or other entry.
-		 */
-		struct EvalResult
-		{
-			enum class Write : std::uint8_t
-			{
-				None,      // kept by the light path
-				NoLeaf,    // leafWaiting
-				Rejected,  // its verdict gives it no record
-				Record,    // the merge resolves the face, the geometry and the slots
-			};
-			EvaluateKind kind = EvaluateKind::Event;
-			// The light path (first round): kept, recorded, and KeepSkin's table half left to the merge.
-			bool light = false;
-			bool lightRecorded = false;
-			bool lightSkin = false;
-			std::uint32_t skinRows = 0;
-			std::uint16_t skinPartitions = 0;
-			std::uint32_t skinLodPartitions = 0;
-			bool verdictUnannounced = false;  // the frame verdict changed with no hidden event
-			Write write = Write::None;
-			TrackedDelta delta;
-			SceneCapture::LeafView leaf;
-			Ineligible reason = Ineligible::None;  // its bucket
-			bool shadowOnly = false;
-			bool faceShape = false;        // its snapshot is the merge's (ResolveFace)
-			bool referenceReason = false;  // the dense walk's: reason into referenceReasons
-			// Slot-free record inputs.
-			std::uint16_t partitionMask = 0;
-			bool lodChain = false;
-			bool skinCandidate = false;  // in this walk's skinnedObjects
-			std::uint32_t boneRows = 0;  // 0 without a palette (or past 240)
-			std::uint32_t particleRows = 0;  // a particle member's block of the frame's palettes (ParticleSnapshots::RowsOf)
-			std::uint8_t shadowReject = 0;
-			std::uint32_t shadowTechnique = 0;
-			const RE::BSShaderMaterial* shadowMaterial = nullptr;  // the alpha-tested techniques' diffuse
-			ID3D11ShaderResourceView* shadowDiffuse = nullptr;
-			std::array<std::uint32_t, kOcclusionViews> occlusion{};
-			std::uint32_t skinLodWord = 0;  // SkinLodPartitionsOf (0 for a LOD chain)
-			// A classified entry: traits without root motion (PerFrameFrom's input), whether it may get a record, its sun entry and that
-			// root's motion now, its move key.
-			bool classified = false;
-			std::uint32_t traits = 0;
-			bool mayRecord = false;
-			const RE::NiAVObject* rootCandidate = nullptr;
-			bool rootMovesNow = false;
-			const void* moveKey = nullptr;
-			const void* moveKeyOuter = nullptr;
-		};
 		/** @brief Entry a_index evaluated (a_light: the first round, trying the light path). Pure. */
 		void EvaluateEntry(std::size_t a_index, bool a_light, EvalCounters& a_counters, EvalResult& a_out, PartTimer& a_timer) const;
 		/** @brief WriteObject's evaluation half: the classification and the slot-free record inputs. */
@@ -1992,419 +1172,82 @@ namespace DCLF
 		void MergeMirrorReads(MirrorReadStats& a_counts);
 		/** @brief The mode a round of a_count entries runs in (CS_DCLF_FANOUT, the parities, the thread); the pool from a_least entries. */
 		std::uint32_t FanoutMode(std::size_t a_count, std::size_t a_least = kFanoutMinEntries) const;
-		/** @brief What a pass's evaluations read in place of the live toggles and Terrain Blending. */
-		struct PassSnapshot
-		{
-			ToggleSet toggles;
-			bool terrainDefers = false;
-		};
-		PassSnapshot passSnapshot;
-		std::shared_ptr<const FrameGlobals> passGlobals;  // the frame globals the pass binds, on the pool too
-		struct ShardScope;
-		std::vector<EvalResult> evalResults;
-		std::vector<EvalCounters> evalCounters;
-		/** @brief The fan-out since the report. */
-		struct FanoutStats
-		{
-			std::uint64_t rounds = 0, parallelRounds = 0, entries = 0, parallelEntries = 0, chunks = 0;
-			std::uint64_t joinRounds = 0, joinParallelRounds = 0, joinEntries = 0;
-			std::uint64_t lightMissed = 0;  // light-path entries rewritten in full at the merge
-			// AddSubtrees' calls, roots and geometries, those prepared on the pool, and prepare / merge times (modes 1 and 2).
-			std::uint64_t subtreeRounds = 0, subtreeParallelRounds = 0, subtreeRoots = 0, subtreeParallelRoots = 0, subtreeGeometries = 0;
-			double subtreePrepareMs = 0.0, subtreeMergeMs = 0.0;
-		} fanoutStats;
-		/** @brief A slot's inputs to the frame's shadow sets. */
-		struct ShadowInputs
-		{
-			ID3D11ShaderResourceView* diffuse = nullptr;
-			std::uint64_t vertexDesc = 0;
-			std::uint32_t technique = 0;
-			std::uint32_t flags = 0;
-			std::uint32_t reject = 0;
-			std::array<std::uint32_t, kOcclusionViews> occlusionTechnique{};
-			bool operator==(const ShadowInputs&) const = default;
-		};
-		ShadowInputs ShadowInputsOf(std::uint32_t a_slot) const;
-		void RefreshShadowSets(bool a_forceRebuild);
-		// Only slots whose shadow inputs changed this walk update their contributions.
-		bool shadowSetsDirty = true;
-		bool shadowIndexNeedsRebuild = true;
-		std::vector<std::uint32_t> shadowDirtySlots;
-		std::vector<ShadowInputs> shadowIndexedInputs;
-		std::vector<std::uint8_t> shadowIndexedLive;
-		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, std::set<std::uint32_t>> shadowTextureMembers;
-		ankerl::unordered_dense::map<ShadowPipelineKey, std::set<std::uint32_t>, ShadowPipelineKeyHash> shadowKeyMembers;
-		std::array<ankerl::unordered_dense::map<ShadowPipelineKey, std::set<std::uint32_t>, ShadowPipelineKeyHash>, kOcclusionViews> occlusionKeyMembers;
-		// Each index's keys by their lowest member slot (unique within an index: a slot names one texture, one key per view), the sets'
-		// order, kept as members come and go (RefreshShadowSets); made again with a rebuild.
-		std::map<std::uint32_t, ID3D11ShaderResourceView*> shadowTextureOrder;
-		std::map<std::uint32_t, ShadowPipelineKey> shadowKeyOrder;
-		std::array<std::map<std::uint32_t, ShadowPipelineKey>, kOcclusionViews> occlusionKeyOrder;
-		// RefreshShadowSets' scratch: each texture's membership change over the call (+1 appeared, -1 gone).
-		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, std::int32_t> shadowTextureNet;
-		// RefreshShadowSets' public lists as last emitted: a list is made again from its order only when that order moved, the seen set
-		// patched by the net changes (made again with a rebuild), and the tables take copies (the walk drops theirs each dirty pass).
-		std::vector<ID3D11ShaderResourceView*> shadowEmittedTextures;
-		ankerl::unordered_dense::set<ID3D11ShaderResourceView*> shadowEmittedSeen;
-		std::vector<ShadowPipelineKey> shadowEmittedKeys;
-		std::array<std::vector<ShadowPipelineKey>, kOcclusionViews> shadowEmittedOcclusionKeys;
-		/** @brief RefreshShadowSets' counters since the last report (CS_DCLF_STATS). */
-		struct ShadowSetStats
-		{
-			std::uint64_t refreshes = 0, rebuilds = 0;  // calls; of them index rebuilds (an explicit invalidation, or parity's)
-			std::uint64_t journaled = 0, applied = 0;   // slots the journal named (deduplicated); of them with inputs or liveness moved
-			std::uint64_t unjournaled = 0;              // dirty with nothing journaled: the lists emitted again, the index untouched
-			std::uint64_t listsEmitted = 0;             // public lists made again from their order (texture, key, per occlusion view)
-		};
-		ShadowSetStats shadowSetStats;
-		std::uint32_t keptShadowCasters = 0;
-		std::array<std::uint32_t, 16> keptShadowRejects{};
-		bool fullEvaluation = true;  // a reset, a load or a live toggle: the next delta walk evaluates everything
-		std::uint32_t walkSerial = 0;
 		/**
-		 * @brief The per-frame entries with their addresses, trusted only while trackedLayout (bumped when `tracked` may move its values)
-		 * equals perFrameLayout.
+		 * @brief Drops every cached verdict and derivation when a live toggle the classification reads changed (Toggles.h): the caches
+		 * witness the object, not the switches.
 		 */
-		struct PerFrameItem
-		{
-			RE::BSGeometry* geometry = nullptr;
-			Tracked* tracked = nullptr;
-		};
-		std::vector<PerFrameItem> perFrameSet;
-		std::uint64_t trackedLayout = 0;
-		std::uint64_t perFrameLayout = ~0ull;
-		std::uint32_t validatedFrame = ~0u;  // the pass that ran the validation slice: once a pass
-		std::vector<RE::BSGeometry*> pendingEvaluation;
-		// Eligible records the walk wrote this pass, bound by the joins and kept as residents until rewritten or released.
-		std::vector<std::uint32_t> bindQueue;
-		std::vector<std::uint8_t> materialMember;  // per material slot: a resident was bound to it (diagnostic)
-		std::uint32_t membershipWitness = ~0u;  // PrimaryCull::MembershipWitness at the residents' binding
-		std::vector<std::uint32_t> refreshedGeometry;  // geometry slots re-resolved in place this walk
-		// Slot liveness, counted from the logs: each object slot's references (slot, generation) and each geometry slot's next skin
-		// partition. A geometry slot goes stale by event; objects drawing it are rewritten (FinishDeltaWalk).
-		struct SlotReferences
-		{
-			static constexpr std::uint32_t kNone = ~0u;
-			struct Reference
-			{
-				std::uint32_t slot = kNone, generation = 0;
-				bool operator==(const Reference&) const = default;
-			};
-			struct Counted
-			{
-				Reference geometry, pipeline, material;
-			};
-			LogCursor objects, links;
-			std::vector<Counted> object;  // per object slot
-			std::vector<Reference> link;  // per geometry slot
-		} slotReferences;
-		/** @brief The slot reference counts, from the change and geometry logs since the last call. */
-		void UpdateSlotReferences();
-		/** @brief Drops a geometry slot's contents: its reference on the next partition, map entry and buffer leases. */
-		void ClearGeometrySlot(std::uint32_t a_slot);
-		/** @brief ClearGeometrySlot, then back to the free list. */
-		void FreeGeometrySlot(std::uint32_t a_slot);
+		void InvalidateVerdicts();
+
+		// The membership joins: State/Joins.h (CoordinatorJoins).
+		void BuildAccumulatePhase();
+		void ApplyAccumulatePatch(const AccumulatePatch& a_patch);
 		/**
-		 * @brief Drops a material slot's contents (map entry, dependents, owner) and lists it retired. The slot table's state is the
-		 * caller's.
+		 * @brief Binds the bind queue's records as residents from membership passes (PrimaryCull::MembershipPass), kept until rewritten.
 		 */
-		void ClearMaterialSlot(std::uint32_t a_slot);
-		std::vector<std::uint32_t> freedGeometry;
-		std::vector<std::uint32_t> staleGeometrySlots;
+		void BindByMembership();
+		void EvaluateJoinPre(std::uint32_t a_slot, JoinPre& a_out) const;
+		void EvaluateJoin(const OrderEntry& a_entry, bool a_classify, JoinResult& a_out) const;
 		/**
-		 * @brief GeometryScan's index (geometry slot to object slots), keys only and checked again at the scan: an entry may go stale, none
-		 * is missing. Every object slot under the head geometry slot its last write gave it (MergeWrite, WriteLayer), and every geometry
-		 * slot under each slot its nextPartition link was ever written to name (MergeWrite's partitions, ResolveLodRangeSlots): a stale
-		 * slot's objects are those under the heads its links lead back to. The dense walk's tables are put back, so it indexes nothing.
+		 * @brief a_count evaluations into a_results, in chunks of kFanoutGrain on the pool (a_pool) or on this thread. In
+		 * AccumulatePhase.cpp.
 		 */
-		ankerl::unordered_dense::map<std::uint32_t, std::vector<std::uint32_t>> headObjects;
-		std::vector<std::uint32_t> objectHead, objectHeadAt;  // per object slot: its head (kNoPartition: none) and its index under it
-		ankerl::unordered_dense::map<std::uint32_t, std::vector<std::uint32_t>> linkedFrom;  // geometry slot: the slots linked to it
-		void IndexObjectHead(std::uint32_t a_object, std::uint32_t a_head);
-		void IndexLink(std::uint32_t a_from, std::uint32_t a_to);
-		/** @brief The object slots the index lists under a_slots (a_chains: and under every head whose chain reaches one), sorted, unchecked. */
-		void ObjectsUnder(const std::vector<std::uint32_t>& a_slots, bool a_chains, std::vector<std::uint32_t>& a_out) const;
-		bool geometryResolvedLastWalk = false;
-		// CheckObjectSlots runs only after a slot was freed (or under parity): only then can a bound object reference a dead slot.
-		bool slotsFreedThisFrame = true;
-		// The decals the last OrderDecals ordered, whose ordinals the next one resets.
-		std::vector<std::uint32_t> decalOrdered;
-		// ApplyFadeRootsOwned's set (kFadeRootOwned), by node: whether each is stood in (kFadeRootStoodIn).
-		ankerl::unordered_dense::map<const void*, bool> fadeRootOwned;
+		template <class Result, class Evaluate>
+		void EvaluateJoins(std::size_t a_count, bool a_pool, std::vector<Result>& a_results, Evaluate&& a_evaluate);
+
+		// The residents: State/Residents.h (CoordinatorResidents).
+		/** @brief Whether a member's binding still holds for its object (the derivation cache's witnesses). */
+		bool MemberBindingStands(std::uint32_t a_slot, const Tracked& a_entry) const;
+		/** @brief The coordinator's residency of a slot (IsMember is the frame's). */
+		bool ResidentObject(std::int32_t a_object) const { return a_object >= 0 && IsResidentSlot(static_cast<std::uint32_t>(a_object)); }
+		bool IsResidentSlot(std::uint32_t a_slot) const { return a_slot < residentPos.size() && residentPos[a_slot] != kNotResident; }
+		void MarkResidentSlot(std::uint32_t a_slot, const ResidentPatch& a_patch);
+		/** @brief Ends a slot's membership; a_restore resets its accumulated half now. */
+		void DropResidentSlot(std::uint32_t a_slot, bool a_restore);
+		/** @brief A slot's accumulated half back as the walk wrote it. */
+		void ResetAccumulatedHalf(std::uint32_t a_slot);
+		/** @brief The residents' pipeline and material slots used this frame, and a template when none was. */
+		void KeepResidentsAlive();
+		void NoteResidentTouched(std::uint32_t a_slot) { residentsTouched.push_back(a_slot); }
+
+		// The fade and tree roots: State/Fades.h (CoordinatorFades).
+		/** @brief ApplyBatch: the fade node answers into their entries (Tracked::fadeNodeRef), each entry rewritten. */
+		void ApplyFadeNodeAnswers();
+		/** @brief Early in a full pass: applies the fade root posts (Channels::fadeRootsSentPosted, fadeOwnedPosted). */
+		void TakeCoordinatorInputs();
+		FadeRootStatic FadeRootFromMirror(const void* a_node);
+		/** @brief A new generation for a root's row, its seed row toggled and requested. */
+		void RequestFadeSeed(std::uint32_t a_root, FadeRootStatic& a_row);
+		/** @brief A member's tree slot (Tables::objectTree): taken for a tree member, given back otherwise or when it leaves. */
+		void ListTree(std::uint32_t a_slot);
+		void UnlistTree(std::uint32_t a_slot);
+		/** @brief A member's fade root (Tables::fadeRoots): listed when it joins, released with its last member. */
+		void ListFadeRoot(std::uint32_t a_slot);
+		void UnlistFadeRoot(std::uint32_t a_slot);
+		/**
+		 * @brief The reference a newly listed tree or fade root owner is copied from: the slot's entry's fade node if it is a_node, else
+		 * null (not listed: fadeRootsUnowned).
+		 */
+		RE::NiPointer<RE::NiAVObject> HeldFadeNode(std::uint32_t a_slot, const void* a_node);
+		/**
+		 * @brief a_entry's fade node reference for a_node: the batch's pin, a root owner's copy, or requested from the render thread (once
+		 * per key). True when held now.
+		 */
+		bool AcquireFadeNode(Tracked& a_entry, const void* a_node, const char* a_path);
+		/** @brief A switch event on a tree root's LOD switch: its kFadeRootTreeLod retaken. */
+		void RefreshFadeRootSwitch(const RE::NiAVObject* a_switch);
+		/** @brief A fadeAmount event (Actor::SetAlpha): a listed root's fadeAmount retaken from its node, its state row kept. */
+		void RefreshFadeAmount(const void* a_node);
 		/**
 		 * @brief Marks a root's row owned or not; a newly owned root is reseeded from its node. A change of stood-in state goes to the fade
 		 * watch: its dependents' shadow verdicts read its fade from elsewhere.
 		 */
 		void MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn);
-		// The structural events (SceneEvents) ApplyEvents applies: properties by key, nodes held.
-		std::vector<const void*> propertyChanged;
-		std::vector<RE::NiPointer<RE::NiAVObject>> nodeChanged;
-		/**
-		 * @brief Drains each engine queue up to where it stood (tracker stack, fades, property, node and switch events, LOD segments) into
-		 * the pass's batch (under a load screen: the carry), with the mirror probe; posts the switch catch-ups.
-		 */
-		std::shared_ptr<EventBatch> CollectEvents();
-		/**
-		 * @brief Applies the load markers (ApplyLoading), then a_batch: category refresh, attaches, detaches, validation slice, structural
-		 * events.
-		 */
-		void ApplyEvents(std::shared_ptr<EventBatch> a_batch);
-		/** @brief Drops what a load screen invalidated (NoteLoadingScreen's marker). */
-		void ApplyLoading();
-		void ApplyBatch(std::shared_ptr<EventBatch> a_batch);
-		/**
-		 * @brief The scene pump: passesFull (SetScenePassMode, render thread); the oldest unpublished stamp and the last publication's key
-		 * (unchanged passes publish nothing); report samples.
-		 */
-		std::atomic<bool> passesFull{ false };
-		std::uint64_t unpublishedNs = 0;
-		std::uint32_t unpublishedFrame = 0;
-		using PublishKey = DCLF::PublishKey;
-		PublishKey publishedKey;
-		bool publishedKeyValid = false;
-		bool publishForced = false;  // an input TakeCoordinatorInputs took publishes
-		/** @brief What a publication would be made from now. */
-		PublishKey CurrentPublishKey() const;
-		/** @brief Whether the next publication would carry deltas. */
-		bool DeltasPending() const;
-		/** @brief Whether anything changed since the last publication (else none is made). */
-		bool PublicationNeeded();
-		void NotePublished();
-		// Publication pacing: a pass that needs a publication makes it only when the snapshot builder took the last one, for the frame's
-		// own pass (new frame inputs or a FrameInput wake: NoteScenePassDone's gate), inline, or for the first; else it defers, and its
-		// commit's applications, deltas and log entries ride the next one (PublicationDue).
-		std::uint32_t passSources = 0;      // the SceneWake bits the running pass took
-		bool passTookFrameInputs = false;   // the running pass took new frame inputs (TakeFrameInputs)
-		bool passDeferred = false;          // the running pass needed a publication and deferred it
-		std::uint32_t passesDeferred = 0;   // passes deferred since the last publication (folded into the next)
-		std::uint64_t pacedPublications = 0;  // publications that folded deferred passes in (the paced parity's schedule)
-		bool pacedCheckDue = false;           // this publication is the paced parity's (Policy::CheckPacedPublication)
-		std::shared_ptr<SetSnapshot> claimsReference;  // its claims made whole (PublishClaims, RevokeFromClaims), compared after
-		enum class PublishReason : std::uint8_t
-		{
-			First,   // nothing published yet
-			Inline,  // the parities' inline pass
-			Frame,   // the frame's own pass
-			Taken,   // the builder took the last publication
-			Count
-		};
-		/** @brief Whether this pass publishes now (PublicationNeeded holds), and why; false: it defers. */
-		bool PublicationDue(bool a_task, PublishReason& a_why) const;
-		struct PaceStats
-		{
-			std::uint64_t passes = 0, published = 0, deferred = 0, folded = 0;  // full passes, publications, deferred passes, of them folded
-			std::array<std::uint64_t, static_cast<std::size_t>(PublishReason::Count)> byReason{};
-			std::uint32_t frames = 0, lastFrame = ~0u, passesThisFrame = 0, maxPasses = 0, publishedThisFrame = 0, maxPublished = 0;
-			// The claims (PublishClaims): replayed from the phases log (keys replayed), copied whole, or the last shared again.
-			std::uint64_t claimsReplayed = 0, claimsKeys = 0, claimsWhole = 0, claimsShared = 0, claimsRevoked = 0;
-			double restMs = 0.0;  // PublishTables' whole-copied rest, per publication summed
-			// The replay (W6): change- and publication-log entries read, material-log entries read, the object slots and material records
-			// copied, slot columns copied and skipped (no cause of the slot's covers the column), contiguous runs copied, replays whose
-			// columns and records went to the pool, pool entries chosen nearer the tables than the first free one would have been, and the
-			// replay's time (objects, materials) per publication summed.
-			std::uint64_t replayLogEntries = 0, replayMaterialEntries = 0, replaySlots = 0, replayMaterials = 0, replayColumns = 0, replaySkipped = 0, replayRuns = 0,
-						  replayPooled = 0, replayNearer = 0;
-			double replayMs = 0.0;
-			// The pass's fixed cost (W6): commits whose forward-pipeline count was taken from the last catalog's, waiting lists compacted
-			// (a mark moved), and commits that left them as they were.
-			std::uint64_t forwardCounted = 0, forwardKept = 0, waitingCompacted = 0, waitingKept = 0;
-			// The paced parity (CheckPacedPublication): publications checked, tables and claims that differ.
-			std::uint64_t parityChecks = 0, parityTables = 0, parityClaims = 0;
-			std::string parityFirst;
-		} paceStats;
-		std::uint32_t paceWindow = ~0u;
-		/** @brief Once a report window: the pacing line (passes and publications a frame, deferrals, the claims' replay, the paced parity). */
-		void ReportPublicationPacing();
-		/** @brief CS_DCLF_SET_PARITY (Policy::CheckPacedPublication): the publication just made against the coordinator's whole state. */
-		void CheckPacedPublication(const Tables& a_published, const SetSnapshot& a_claims);
-		struct PumpStats
-		{
-			std::vector<double> passMs;                // each pass's whole time
-			std::vector<std::uint32_t> passEvents;     // tracker events and queue entries drained
-			std::vector<double> publishMs;             // oldest unpublished event to its publication
-			std::vector<std::uint32_t> publishFrames;  // the same in render-thread frames
-			std::uint64_t passes = 0, eventsOnly = 0, loading = 0, unchanged = 0, published = 0, inlinePasses = 0, failed = 0;
-			// Passes by what woke them (each source it took; last: none, an inline pass or a burst's continuation) and those that published
-			// nothing; walks that took the per-frame entries (once a frame) and those that did not.
-			std::array<std::uint64_t, static_cast<std::size_t>(SceneWake::Count) + 1> bySource{}, unchangedBySource{};
-			std::uint64_t perFrameWalks = 0, eventWalks = 0;
-			double fullMs = 0.0, fullMaxMs = 0.0;  // whole passes (not events alone)
-			// The sceneFrames seen since the report (first, last), frames with a pass, the most passes in one frame.
-			std::uint32_t firstFrame = 0, lastFrame = 0, framesWithPass = 0, passesThisFrame = 0, maxPassesInFrame = 0;
-			bool any = false;
-		} pumpStats;
-		/** @brief The pump's drain (the lane or RunScenePassInline): marks the thread, binds the frame's globals, runs RunSceneWork. */
-		void ScenePass(bool a_inline);
-		// Engine references the scene work lets go of go through the retirement chain to EngineReleases (released at Present), since a kept
-		// publication may still name them.
-		std::vector<RE::NiPointer<RE::NiAVObject>> treeOwners, fadeRootOwners;
-		template <class T>
-		void HandBack(RE::NiPointer<T>&& a_reference)
-		{
-			if (a_reference)
-				retirement.Open().references.emplace_back(std::move(a_reference));
-		}
-		template <class T>
-		void HandBack(std::vector<RE::NiPointer<T>>& a_references)
-		{
-			for (auto& reference : a_references)
-				HandBack(std::move(reference));
-			a_references.clear();
-		}
-		// Drained switch events, one per node: the index before its oldest event and whether a child changed; applied by the next walk.
-		struct SwitchPending
-		{
-			RE::NiPointer<RE::NiAVObject> node;
-			std::int32_t before = -1;
-			bool structural = false;
-		};
-		std::vector<SwitchPending> switchPending;
-		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> switchPendingIndex;
-		// Switches the walks applied, for PrimaryCull via the deltas (FrameView::TakeSwitchChanges); switchResync: it must read them all.
-		std::vector<const RE::NiAVObject*> switchesApplied;
-		bool switchResync = true;
-		// Resident slots, each one's list position, and its patch.
-		std::vector<std::uint32_t> residents;
-		std::vector<std::uint32_t> residentPos;
-		std::vector<ResidentPatch> residentPatches;
-		// What the residents keep (KeepResidentsAlive), kept by changes: only slots NoteResidentTouched names are recounted; rebuilt whole
-		// when every residency ended or the tables reset.
-		bool residentMaintenanceDirty = true;
-		void NoteResidentTouched(std::uint32_t a_slot) { residentsTouched.push_back(a_slot); }
-		/** @brief Slots by key (a pipeline, a fade root, the trees), each in one list at a time: swap-removed, the first kept. */
-		struct SlotMembers
-		{
-			std::vector<std::vector<std::uint32_t>> lists;
-			std::vector<std::uint32_t> position;
-			void Add(std::uint32_t a_key, std::uint32_t a_slot)
-			{
-				if (lists.size() <= a_key)
-					lists.resize(std::size_t(a_key) + 1);
-				if (position.size() <= a_slot)
-					position.resize(std::size_t(a_slot) + 1, ~0u);
-				position[a_slot] = static_cast<std::uint32_t>(lists[a_key].size());
-				lists[a_key].push_back(a_slot);
-			}
-			void Remove(std::uint32_t a_key, std::uint32_t a_slot)
-			{
-				auto& list = lists[a_key];
-				const std::uint32_t at = position[a_slot];
-				const std::uint32_t moved = list.back();
-				list[at] = moved;
-				position[moved] = at;
-				list.pop_back();
-				position[a_slot] = ~0u;
-			}
-			std::uint32_t First(std::uint32_t a_key) const { return a_key < lists.size() && !lists[a_key].empty() ? lists[a_key].front() : ~0u; }
-			std::size_t Count(std::uint32_t a_key) const { return a_key < lists.size() ? lists[a_key].size() : 0; }
-			void Clear()
-			{
-				lists.clear();
-				position.clear();
-			}
-			/** @brief Whether a_slot is listed under a_key (Remove's precondition). */
-			bool Has(std::uint32_t a_key, std::uint32_t a_slot) const
-			{
-				return a_key < lists.size() && a_slot < position.size() && position[a_slot] < lists[a_key].size() && lists[a_key][position[a_slot]] == a_slot;
-			}
-		};
-		// What each resident slot was counted under (kNone: not counted).
-		struct ResidentCounted
-		{
-			static constexpr std::uint32_t kNone = ~0u;
-			std::uint32_t pipeline = kNone, material = kNone;
-			bool tree = false;
-		};
-		std::vector<ResidentCounted> residentCounted;
-		std::vector<std::uint32_t> residentsTouched;   // since the last KeepResidentsAlive
-		SlotMembers pipelineMembers, fadeRootMembers, treeMembers;  // trees under key 0
-		std::vector<std::uint32_t> materialMembers;    // by material slot: resident count
-		// Pipelines and materials the joins marked used this pass, cleared again where no resident holds them.
-		std::vector<std::uint32_t> joinMarkedPipelines, joinMarkedMaterials;
-		ankerl::unordered_dense::set<const RE::BSGeometry*> residentJoining;  // this pass's resident passes, until patched
-		ankerl::unordered_dense::set<const RE::BSGeometry*> residentLayerJoining;  // the layers'
-		ResidentStats residentStats;
-		// The DCLF set (CommitSet): bound slots waiting for readiness and the commit queue. The commit reads the change log from its own
-		// cursor, and the waiting slots again when a readiness source moved.
-		std::vector<std::uint32_t> setWaiting;
-		std::vector<std::uint8_t> setWaitingMark;  // per slot: in setWaiting
-		std::vector<std::uint32_t> setQueue;
-		// Joined the main phase at the last commit and take part in the reflection's: re-evaluated at this one.
-		std::vector<std::uint8_t> setQueueMark;    // per slot: in setQueue
-		std::vector<std::uint8_t> setLacking;      // per slot: occluder and reflection phases it takes part in but is not a member of
-		std::array<std::uint32_t, 3> setLackingCount{};  // per occlusion map, then the reflection
-		std::vector<std::uint8_t> setPartialMark;  // per slot: out of the set with some phases ready
-		std::uint32_t setPartialCount = 0;
-		// The last commit's decision for the next ApplySet: phases, lacking phases, and the changed slots with their geometry (a slot
-		// holding another geometry by then takes nothing).
-		std::vector<std::uint8_t> setPhasesNext, setLackingNext;
-		std::vector<std::pair<std::uint32_t, const RE::BSGeometry*>> setApply;
-		// Per slot: the geometry the last deciding commit decided for.
-		std::vector<const RE::BSGeometry*> setGeometryNext;
-		using GateFlip = DCLF::GateFlip;
-		using PublicationDeltas = DCLF::PublicationDeltas;
 
-		/**
-		 * @brief The LOD gates, coordinator side (Engine/Cull/LodGates.h; dclf-async-publication.md). A gate tags the geometries under its
-		 * roots (ApplyGateEvent); the commit withholds its incoming slots (GateWithhold) until all are whole members or ineligible and
-		 * mirrored, then flips it (UpdateGates): held phases applied, outgoing blocks held out until their detach, the flip published. It
-		 * retires with its outcome (ApplyGateOutcomes).
-		 */
-		static constexpr std::uint8_t kGateIncoming = 1, kGateOutgoing = 2;
-		struct LodGate
-		{
-			enum class State : std::uint8_t
-			{
-				Open,     // the incoming withheld, the outgoing members
-				Flipped,  // the incoming applied, the outgoing held out (Tracked::gateHeldOut), awaiting the outcome
-			};
-			State state = State::Open;
-			std::vector<const void*> incoming, outgoing;  // the roots (keys), less those detached since
-			ankerl::unordered_dense::set<RE::BSGeometry*> incomingGeometries, outgoingGeometries;  // the tracked ones tagged
-			std::uint32_t pending = 0;     // incoming geometries neither whole members nor ineligible
-			std::uint32_t unmirrored = 0;  // incoming roots or nodes under them without a mirror record
-			std::uint64_t stampNs = 0;     // its event's push, steady clock
-			std::uint32_t stampFrame = 0;
-			std::uint64_t flipNs = 0;
-			std::uint32_t flipFrame = 0;
-		};
-		struct GateSlot
-		{
-			const RE::BSGeometry* geometry = nullptr;  // the gated geometry the commit last evaluated
-			std::uint8_t phases = 0;                   // its phases then (held while the gate is open)
-			bool ready = false;                        // all its phases, not waiting
-		};
-		struct GateOutcome
-		{
-			std::uint64_t token = 0;
-			bool forced = false;
-			std::array<const void*, 2> kept{};  // a held block the engine reused (LodGates::Outcome::kept), by its roots
-		};
-		struct GateStats
-		{
-			std::uint64_t opened = 0, flipped = 0, retiredFlipped = 0, retiredForced = 0, forcedOpen = 0, unknownOutcomes = 0, superseded = 0;
-			std::uint64_t rootsDetached = 0, taggedIncoming = 0, taggedOutgoing = 0, heldOut = 0, emptyIncoming = 0;
-			// Kept notices (ApplyGateKept): taken, geometries released from hold-out, outgoing tags dropped before a flip.
-			std::uint64_t keptNotices = 0, keptCleared = 0, keptUntagged = 0;
-			// Flips deferred for an incoming record the next publication claims first.
-			std::uint64_t structureDeferred = 0;
-			std::vector<double> requestToFlipMs;
-			std::vector<std::uint32_t> requestToFlipFrames;
-		};
-		ankerl::unordered_dense::map<std::uint64_t, LodGate> lodGates;
-		struct GateRoot
-		{
-			std::uint64_t token = 0;
-			std::uint8_t side = 0;  // kGateIncoming, kGateOutgoing
-		};
-		ankerl::unordered_dense::map<const void*, GateRoot> gateOfRoot;
-		std::vector<GateSlot> gateSlots;                                     // by object slot
-		std::vector<GateFlip> gateFlipsMade;                                 // since the last publication
-		std::vector<GateOutcome> gateOutcomesHeld;                           // taken, not applied yet
-		std::uint32_t gateHeldOutCount = 0;                                  // entries with Tracked::gateHeldOut
-		// Slots a gate's tag or retirement wants evaluated again, queued at the next commit's start.
-		std::vector<std::uint32_t> gateQueued;
-		GateStats gateStats;
+		// The shadow sets: State/ShadowSets.h (CoordinatorShadowSets).
+		ShadowInputs ShadowInputsOf(std::uint32_t a_slot) const;
+		void RefreshShadowSets(bool a_forceRebuild);
+
+		// The LOD gates: State/LodGates.h (CoordinatorLodGates).
 		/** @brief A Gate event (ApplyMirrorEvents, in batch order) opens its gate: token, roots (keys), push stamp. */
 		void ApplyGateEvent(std::uint64_t a_token, std::span<const void* const> a_incoming, std::span<const void* const> a_outgoing, std::uint64_t a_stampNs,
 			std::uint32_t a_stampFrame);
@@ -2443,33 +1286,8 @@ namespace DCLF
 		 * hold-out (recommitted via gateQueued).
 		 */
 		void ApplyGateKept(std::uint64_t a_token, const std::array<const void*, 2>& a_roots);
-		/**
-		 * @brief The pass's publication: ApplySet, PublishClaims, RevokeUndrawnClaims, PublishTables, then the deltas onto the log before the publication
-		 * goes to the snapshot builder, so whoever adopts it finds its node.
-		 */
-		void PublishScene();
-		/** @brief The frame's products since the last publication, moved into a_deltas. */
-		void TakeDeltas(PublicationDeltas& a_deltas);
-		/** @brief Drops the publications the render thread gave back (Channels::retiredPublications). */
-		void DropReturnedPublications();
-		std::uint64_t publicationSequence = 0;
-		std::uint32_t publicationCommitFrame = 0;    // the commit the next publication applies
-		std::uint32_t publicationCommitToggles = 0;  // the toggles generation that commit was made under
-		std::shared_ptr<const SetSnapshot> publicationClaims;
-		std::vector<const RE::BSGeometry*> publicationJoined, publicationLeft;
-		std::vector<std::uint32_t> setApplyMark;  // per slot: its index in setApply + 1, 0 when absent
-		std::uint32_t setCommitFrame = 0;
-		std::uint32_t setCommitToggles = 0;  // the toggles generation the last commit was made under
-		// The claims as applied (a freed slot clears Tables::setPhases): what RevokeUndrawnClaims checks against, with each base slot's
-		// geometry.
-		std::vector<std::uint8_t> setPhasesApplied;
-		std::vector<const RE::BSGeometry*> setGeometryApplied;
-		LogCursor revokeCursor;
-		std::uint64_t revokedGeometries = 0, revokedMain = 0;
-		// Slots whose structure (kStructureCauses) changed since the selected revision's join: a claim among them is revoked at the join
-		// (its shapes predate the change) until a later revision is selected.
-		std::vector<std::uint32_t> structureChanged;
-		std::uint64_t revokedStructureGeometries = 0;
+
+		// The DCLF set and the claims: State/Set.h (CoordinatorSet).
 		/** @brief The structural changes revokeCursor has not read, into structureChanged. */
 		void NoteStructureChanges();
 		/**
@@ -2477,43 +1295,6 @@ namespace DCLF
 		 * them.
 		 */
 		void RevokeUndrawnClaims();
-		bool holdLostMembers = false;  // from the joins on: members RunSceneWork drops are held for PrimaryCull
-		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> materialRequested;  // asked, not answered yet
-		/**
-		 * @brief What the coordinator let go of that a published table version may still name. Each publication holds the chain node opened
-		 * with it; once none up to it lives, RecycleRetired frees the slots and sends engine references to EngineReleases (released at
-		 * Present).
-		 */
-		struct RetiredBatch
-		{
-			std::vector<Tables::RetiredSlot> slots;
-			std::vector<std::shared_ptr<const void>> imports;
-			std::vector<MaterialReference> materials;
-			std::vector<RE::NiPointer<RE::NiRefObject>> references;
-			std::vector<std::shared_ptr<EventBatch>> events;  // tracker events hold detached subtrees
-			bool Empty() const { return slots.empty() && imports.empty() && materials.empty() && references.empty() && events.empty(); }
-		};
-		RetirementChain<RetiredBatch> retirement;
-		struct RetirementStats
-		{
-			std::uint64_t retired = 0, recycled = 0, dropped = 0, batches = 0;
-		} retirementStats;
-		/** @brief The tables' retiring slots into the chain's open node (before a publication). */
-		void RetireIntoChain();
-		/** @brief Each pass's start: batches no publication names any more, back on the free lists. */
-		void RecycleRetired();
-		std::vector<std::uint32_t> bindRetry;                // joins that waited for a material, bound by the next joins
-
-		// What a scene pass holds for the render thread while it runs.
-		bool inSceneTask = false;       // on the lane, not inline
-		bool holdPrimaryNotes = false;  // PrimaryCull's notes held (primaryNotes)
-		std::vector<const RE::BSGeometry*> setGeometry;  // per slot: the geometry a base member is published under
-		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> setMemberSlot;  // published geometry -> its slot
-		LogCursor setCursor;
-		// Readiness sources a waiting slot may wait on (SetWaitCause bits) and their stamps at the last check.
-		static constexpr std::uint32_t kWaitSources = 4;
-		static constexpr std::uint8_t kWaitLookups = 1, kWaitShadow = 2, kWaitConstants = 4, kWaitFit = 8;
-		static constexpr std::uint8_t kWaitOther = 16;  // any source moving retakes it (geometry, decal slot, reflection, layer partner)
 		/** @brief The readiness source that releases a waiting reason (SetStats::waitingBy's index). */
 		static constexpr std::uint8_t WaitCauseOf(std::uint32_t a_why)
 		{
@@ -2535,45 +1316,14 @@ namespace DCLF
 				return kWaitOther;
 			}
 		}
-		std::array<std::uint64_t, kWaitSources> setReadiness{ ~0ull, ~0ull, ~0ull, ~0ull };
-		// Forward views' pipelines ready in the catalog (reason 8): no source above moves with them, so a count change retakes the
-		// kWaitOther slots.
-		std::uint64_t setForwardReadiness = ~0ull;
-		// The catalog setForwardReadiness was counted in (immutable: the count holds while it is the lookups'); held, so no other takes
-		// its address.
-		std::shared_ptr<const PipelineCatalog> setForwardCatalog;
-		std::uint64_t setForwardCount = 0;
-		std::vector<std::uint8_t> setWaitCause;  // per slot: what it waits on
-		std::vector<std::uint8_t> setWaitWhy;    // per slot: the first reason of its last wait
-		std::uint64_t setShadowModes = ~0ull;      // the shadow modes and states caster readiness was last taken under
-		std::uint32_t setPhaseMask = ~0u;          // the phases DCLF draws at the last commit
-		std::shared_ptr<SetSnapshot> setBuilding;  // the next publication, kept current by each commit
-		// Every key written in setBuilding's phases (inserted, reassigned or erased; invalidated when it is cleared): the pooled claims
-		// replay from it (PublishClaims).
-		EventLog<const RE::BSGeometry*> setPhaseLog;
 		/** @brief A write of setBuilding's phases at a_geometry, for the claims' replay. */
 		void NoteSetPhases(const RE::BSGeometry* a_geometry) { setPhaseLog.Push(a_geometry); }
-		// The published claims, pooled as the tables are: an entry nothing else holds any more is brought up to setBuilding by the phases
-		// log (its cursor), plus the keys its last publication's revocations edited; one the log no longer reaches is copied whole.
-		struct ClaimsEntry
-		{
-			std::shared_ptr<SetSnapshot> snapshot;
-			LogCursor cursor;
-			std::vector<const RE::BSGeometry*> edited;  // keys the revocations changed: not setBuilding's
-		};
-		std::vector<ClaimsEntry> claimsPool;
-		std::size_t claimsPublished = ~std::size_t(0);  // publicationClaims' entry
-		bool claimsFresh = false;                       // made by this publication (else shared from the last: held, never written)
-		// The claims this publication's revocation takes back (RevokeUndrawnClaims), applied to its claims alone.
-		std::vector<std::pair<const RE::BSGeometry*, std::uint8_t>> claimsRevoked;
 		/** @brief A pool entry nothing else holds (a new one when none). */
 		std::size_t TakeClaimsEntry();
 		/** @brief PublishScene, after ApplySet: publicationClaims brought up to setBuilding (or the last shared when it did not change). */
 		void PublishClaims();
 		/** @brief The end of RevokeUndrawnClaims: claimsRevoked out of publicationClaims (a copy first when they were shared). */
 		void RevokeFromClaims();
-		bool setSnapshotDirty = true;  // setBuilding changed since the last published claims
-		SetStats setStats;
 		void QueueSet(std::uint32_t a_slot);
 		/**
 		 * @brief Takes a slot out of the applied set's phases after its commit (rebound by the joins, a claim revoked): out of the commit's
@@ -2590,143 +1340,65 @@ namespace DCLF
 		static std::uint32_t SetCapability();
 		/** @brief The phases an object takes part in among a_drawn, from its record (no readiness). */
 		std::uint8_t SetParticipation(std::uint32_t a_slot, std::uint32_t a_drawn) const;
-		/** @brief One slot's decision: phases, whether and why it waits, and the observers' first-person notes. */
-		struct SlotDecision
-		{
-			std::uint8_t phases = 0;  // every phase it takes part in if ready for all, else 0
-			bool wait = false;        // takes part in a phase it is not ready for
-			bool partial = false;
-			std::array<std::uint8_t, 8> whys{};  // waiting reasons in order (waitingBy's index)
-			std::uint8_t whyCount = 0;
-			bool firstPersonExcluded = false;    // observed runs: a first-person slot its view takes no part in
-			bool firstPersonHeld = false;        // a first-person slot held out of its view
-			std::uint8_t heldWhyCount = 0;       // the reasons noted before it was held out
-			std::uint32_t firstPersonSlotWhy = 0;  // IndirectDraws::FirstPersonSlotReady's cause
-		};
 		/** @brief What the commit decides for a_slot now. Pure: CommitSet applies the side effects; its observers re-decide every slot. */
 		SlotDecision DecideSlot(std::uint32_t a_slot, bool a_live, std::uint32_t a_drawn) const;
 		/** @brief Whether everything the main phase draws with is ready; a_why: waitingBy's index when not. */
 		bool MainReady(std::uint32_t a_slot, std::uint32_t& a_why) const;
 		/** @brief Whether a slot's geometry is a first-person entry's. */
 		bool FirstPersonSlot(std::uint32_t a_slot) const;
-		// Sun entry nodes something was attached under or detached from since the last walk (keys).
-		std::vector<const RE::NiAVObject*> dirtyRoots;
-		ankerl::unordered_dense::map<const void*, std::vector<RE::BSGeometry*>> propertyDependents;
-		/**
-		 * @brief A dependents list's positions ((key, geometry) to its index in the key's list), for List/Unlist (Internal.h): a removal
-		 * swaps the last into its place, no search. One per list whose every insertion goes through List.
-		 */
-		using DependentsAt = ankerl::unordered_dense::map<std::pair<const void*, const RE::BSGeometry*>, std::uint32_t>;
-		DependentsAt propertyDependentsAt;
-		// rootDependents', lightDependents' and hiddenDependents': used once their insertions (Classification.cpp, ApplyEvents.cpp) go
-		// through List (requests-w1.md R1, R2); until then those lists' Unlist searches.
-		DependentsAt rootDependentsAt, lightDependentsAt, hiddenDependentsAt;
-		/**
-		 * @brief The tracked entries by category node (Tracked::categoryNode, set by AddGeometry alone; off at EraseTracked): a cell that
-		 * goes away, or a category node's hidden event, takes its members, not a walk over every tracked entry.
-		 */
-		ankerl::unordered_dense::map<const RE::NiNode*, std::vector<RE::BSGeometry*>> categoryMembers;
-		DependentsAt categoryMembersAt;
-		/** @brief Off its category node's members (EraseTracked; AddGeometry before it lists the entry anew). */
-		void UnlistCategoryMember(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		/** @brief Parity (CheckCategoryMembers): the index against the tracked entries, every member each way; logs the first difference. */
-		void CheckCategoryMembers(const char* a_where);
-		ankerl::unordered_dense::map<const RE::NiAVObject*, std::vector<RE::BSGeometry*>> rootDependents;
-		/**
-		 * @brief A reference to every root a dependents list names, taken when first listed, handed back when none does. What the scene
-		 * work hands out of a root is a copy: no reference is made from a key, which may name a dead node.
-		 */
-		ankerl::unordered_dense::map<const RE::NiAVObject*, RE::NiPointer<RE::NiAVObject>> rootOwners;
-		/** @brief Owns a_root from the batch's pin (a_live: a live walk's pointer) while a dependents list names it. */
-		bool OwnRoot(const RE::NiAVObject* a_root, bool a_live);
-		void ReleaseRootOwner(const RE::NiAVObject* a_root);
-		void ReleaseRootOwners();
-		/** @brief The listed root's reference (a copy); null and counted for an unlisted root. */
-		RE::NiPointer<RE::NiAVObject> OwnedRoot(const RE::NiAVObject* a_root);
-		std::uint64_t unownedRoots = 0;  // since the last report: roots handed out unlisted (a defect)
-		// A listed root's reference, and back (once its last dependent leaves, the root is a key that may be gone).
-		ankerl::unordered_dense::map<const RE::NiAVObject*, const void*> rootReference;
-		ankerl::unordered_dense::map<const void*, const RE::NiAVObject*> referenceRoot;
-		std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> buckets{};
-		struct DeltaStats
+
+		// The publication and the retirement chain: State/Publication.h (CoordinatorPublication).
+		void PublishTables();
+		// Engine references the scene work lets go of go through the retirement chain to EngineReleases (released at Present), since a kept
+		// publication may still name them.
+		template <class T>
+		void HandBack(RE::NiPointer<T>&& a_reference)
 		{
-			std::uint32_t walks = 0, full = 0;
-			std::uint64_t evaluated = 0, perFrame = 0, pending = 0, property = 0, node = 0, roots = 0, geometryDirty = 0, restored = 0, moved = 0, kept = 0;
-			std::uint64_t propertyEvents = 0, nodeEvents = 0;
-			std::uint64_t facePublished = 0, faceUpdated = 0, faceWritten = 0;
-			std::uint64_t switchEvents = 0, switchChanges = 0, switchCatchUps = 0, switchReclassified = 0, attachCatchUps = 0;
-			std::uint64_t live = 0;
-			std::uint32_t evaluatedMax = 0;
-		} delta;
-		/**
-		 * @brief A face shape's region of the positions buffer, held while a stream uses it; EndFaceWalk frees released streams' regions.
-		 * Walk thread only.
-		 */
-		std::uint32_t FaceRegionOf(const RE::BSGeometry* a_geometry, std::uint32_t a_vertexCount);
-		void EndFaceWalk();
-		void ClearFaceRegions();
-		struct FaceRegion
+			if (a_reference)
+				retirement.Open().references.emplace_back(std::move(a_reference));
+		}
+		template <class T>
+		void HandBack(std::vector<RE::NiPointer<T>>& a_references)
 		{
-			std::uint32_t first = 0, count = 0;
-		};
-		ankerl::unordered_dense::map<const RE::BSGeometry*, FaceRegion> faceRegions;
-		std::vector<std::pair<std::uint32_t, std::uint32_t>> faceRegionFree;  // (first, count), sorted, coalesced
-		std::uint32_t faceRegionTop = 0;
-		// Tracked face shapes by head, and the heads' publications this walk.
-		ankerl::unordered_dense::map<const RE::BSFaceGenNiNode*, std::vector<RE::BSGeometry*>> faceHeads;
-		std::vector<const RE::BSFaceGenNiNode*> facePublished, faceStale;
-		std::vector<RE::BSGeometry*> skinnedObjects;  // this walk's, in object order
-		std::uint32_t AllocateGeometrySlot();
-		std::uint32_t AllocatePipelineSlot();
-		std::uint32_t AllocateMaterialSlot();
-		/** @brief What a geometry slot is resolved from. */
-		struct GeometrySource
+			for (auto& reference : a_references)
+				HandBack(std::move(reference));
+			a_references.clear();
+		}
+		/**
+		 * @brief The pass's publication: ApplySet, PublishClaims, RevokeUndrawnClaims, PublishTables, then the deltas onto the log before the publication
+		 * goes to the snapshot builder, so whoever adopts it finds its node.
+		 */
+		void PublishScene();
+		/** @brief The frame's products since the last publication, moved into a_deltas. */
+		void TakeDeltas(PublicationDeltas& a_deltas);
+		/** @brief Drops the publications the render thread gave back (Channels::retiredPublications). */
+		void DropReturnedPublications();
+		/** @brief The tables' retiring slots into the chain's open node (before a publication). */
+		void RetireIntoChain();
+		/** @brief Each pass's start: batches no publication names any more, back on the free lists. */
+		void RecycleRetired();
+
+		// The scene pump and the publication pacing: State/Pump.h (CoordinatorPump).
+		/** @brief Adds hand-timed ms to a nested scene part's sums (since ResetTimes, and this pass's). */
+		void AddScenePartMs(ScenePart a_part, double a_ms)
 		{
-			const RE::BSGraphics::TriShape* key = nullptr;
-			ID3D11Buffer* vertexBuffer = nullptr;
-			ID3D11Buffer* indexBuffer = nullptr;
-			std::uint64_t vertexDesc = 0;
-			std::uint32_t vertexCount = 0;
-			std::uint32_t indexCount = 0;
-			std::uint32_t firstIndex = 0;  // an index range (object LOD's visible ranges); 0: the whole
-			bool layer = false;            // a non-TriShape key (Tables::geometryLayerKey): a layer's second index list, particle quads
-		};
-		/** @brief Prefetches the buffers order[a_first...]'s geometry slots will resolve (GpuResources::Prefetch). */
-		void PrefetchGeometryBuffers(std::size_t a_first);
-		/**
-		 * @brief The geometry slot for a source: found, refreshed in place, or newly resolved.
-		 * @return the slot, or Tables::kSlotFree when the buffers cannot be made stable for the graph.
-		 */
-		std::uint32_t ResolveGeometrySource(const GeometrySource& a_source, PartTimer& a_timer);
-		/** @brief The geometry slot of a multi-index shape's second index list, or Tables::kSlotFree. */
-		std::uint32_t ResolveLayerGeometrySlot(const SceneCapture::GeometryRecord& a_geometry, PartTimer& a_timer);
-		/** @brief The geometry slot of a geometry's TriShape, or of skin partition a_partition. */
-		std::uint32_t ResolveGeometrySlot(const SceneCapture::GeometryRecord& a_geometry, const SceneCapture::GeometryRecord::Partition* a_partition, PartTimer& a_timer);
-		/**
-		 * @brief Object LOD: geometry slots for a partly hidden shape's visible ranges, linked by nextPartition from the returned first
-		 * (Tables::kSlotFree if one fails), each keyed by its range's first segment record.
-		 */
-		std::uint32_t ResolveLodRangeSlots(const SceneCapture::GeometryRecord& a_geometry, const std::vector<LodSegments::Range>& a_ranges, PartTimer& a_timer);
-
-		/** @brief The walk's prologue: reference changes counted, unused materials retired, idle geometry and pipeline slots expired. */
-		void SweepSlots();
-		/**
-		 * @brief Drops the slot tables, their maps and every cached derivation (by generation), so teardown leaves nothing pointing at dead
-		 * slots.
-		 */
-		void ResetSlotTables();
-
-	public:
-
-	private:
-		/**
-		 * @brief Drops every cached verdict and derivation when a live toggle the classification reads changed (Toggles.h): the caches
-		 * witness the object, not the switches.
-		 */
-		void InvalidateVerdicts();
-
-		/** @brief After the joins: every bound object names live slots of this frame, or is neutralised. */
-		void CheckObjectSlots(bool a_resolveBuffers);
-		Stats stats;
+			stats.scenePartMs[static_cast<std::size_t>(a_part)] += a_ms;
+			stats.scenePartFrameMs[static_cast<std::size_t>(a_part)] += a_ms;
+		}
+		/** @brief What a publication would be made from now. */
+		PublishKey CurrentPublishKey() const;
+		/** @brief Whether the next publication would carry deltas. */
+		bool DeltasPending() const;
+		/** @brief Whether anything changed since the last publication (else none is made). */
+		bool PublicationNeeded();
+		void NotePublished();
+		/** @brief Whether this pass publishes now (PublicationNeeded holds), and why; false: it defers. */
+		bool PublicationDue(bool a_task, PublishReason& a_why) const;
+		/** @brief Once a report window: the pacing line (passes and publications a frame, deferrals, the claims' replay, the paced parity). */
+		void ReportPublicationPacing();
+		/** @brief CS_DCLF_SET_PARITY (Policy::CheckPacedPublication): the publication just made against the coordinator's whole state. */
+		void CheckPacedPublication(const Tables& a_published, const SetSnapshot& a_claims);
+		/** @brief The pump's drain (the lane or RunScenePassInline): marks the thread, binds the frame's globals, runs RunSceneWork. */
+		void ScenePass(bool a_inline);
 	};
 }
