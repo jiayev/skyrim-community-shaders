@@ -3,7 +3,9 @@
 
 #include "Features/DrawcallLimitFix/Features/FeatureList.h"
 #include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
+#include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
+#include "Features/DrawcallLimitFix/Features/SwitchNodes/SwitchNodes.h"
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
@@ -14,13 +16,15 @@ namespace DCLF::Features
 	std::span<const Api::Feature> List()
 	{
 		// Tree wind first: its seeds' pool runs right after the frame values' built-in parts, before the texture transforms' pool.
-		// Particles before billboards: their switches and toggles are listed after the refraction's in this order, and their report lines
-		// too.
+		// Particles before billboards, then switch nodes: their toggles are listed after the refraction's in this order (the first two's
+		// switches too), and the first two's report lines. Hidden nodes' early hooks after billboards' (no order between them).
 		static const std::array kFeatures{
 			TreeWind::Feature(),
 			TextureTransforms::Feature(),
 			Particles::Feature(),
 			Billboards::Feature(),
+			SwitchNodes::Feature(),
+			HiddenNodes::Feature(),
 		};
 		return kFeatures;
 	}

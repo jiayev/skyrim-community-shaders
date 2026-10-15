@@ -50,6 +50,7 @@ namespace DCLF::Api
 	enum class EngineParent : std::uint8_t
 	{
 		Billboard,  // NiBillboardNode (Ineligible::Billboard): its OnVisible turns it to each culling camera
+		Switch,     // NiSwitchNode (Ineligible::Switch): its OnVisible culls the selected child alone
 		Count,
 	};
 
@@ -61,6 +62,9 @@ namespace DCLF::Api
 		TurnedEffectShapes,
 		// A particle system (ParticleGeometryType) under any number of them.
 		ParticleSystems,
+		// Every leaf under any number of them, in the frames each selects the branch it lies on: the classification's chain test
+		// (Coordinator::SwitchSelects), on the selections Core follows by event for the primary cull (SwitchEvents).
+		SelectedLeaves,
 		Count,
 	};
 

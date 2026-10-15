@@ -31,7 +31,7 @@ namespace DCLF::Features::TreeWind
 			return text + wideText;
 		}
 
-		void Lines()
+		void Lines(std::uint32_t)
 		{
 			std::uint64_t treeChecks = 0, treeOnList = 0;
 			if (TreeAnimation::Installed() && Diagnostics::Observe().scene)

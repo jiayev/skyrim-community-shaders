@@ -29,7 +29,6 @@ namespace DCLF::Diagnostics
 	void InstallShadowVolumeParity();
 	void InstallTreeLodParity();
 	void InstallFirstPersonFiling();
-	void InstallHiddenWatchArming();
 	void InstallCommitParity();
 	void InstallMirrorWatchPlacement();
 

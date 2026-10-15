@@ -178,7 +178,7 @@ namespace DCLF::Reports
 		SceneListsLine(d);
 		CullsOffLine();
 		// The features' lines here (Features/TreeWind: the tree animation list's).
-		Extensions::ReportLinesAt(Api::ReportPoint::PrimaryCull);
+		Extensions::ReportLinesAt(Api::ReportPoint::PrimaryCull, a_frame);
 		for (const auto& line : std::views::split(LocalLightLines(), '\n'))
 			if (const std::string text(line.begin(), line.end()); !text.empty())
 				logger::info("{}", text);

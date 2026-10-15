@@ -49,8 +49,6 @@ namespace DCLF
 		// the refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward;
 		// on by default: CS_DCLF_REFRACTION=0 seeds it off);
 		bool refraction = false;
-		// a leaf under an NiSwitchNode, in the frames every switch on its path selects it (trees, harvestables);
-		bool switchNodes = false;
 		// object LOD (TES::lodLandRoot's BSSubIndexTriShape blocks): tracked under the LOD root, drawn by their visible segments;
 		bool lodObjects = false;
 		// terrain LOD (TES::lodLandRoot's land blocks, the LODLand and LODLandNoise techniques): tracked under the LOD root;
@@ -82,7 +80,7 @@ namespace DCLF
 		bool excludePrimaryEntries = false;
 
 		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees;
-		// Features/Particles, Features/Billboards: theirs), ...
+		// Features/Particles, Features/Billboards, Features/SwitchNodes: theirs), ...
 		std::uint32_t registered = 0;
 		/** @brief Whether a feature's toggle is on (false for none). */
 		bool On(Api::ToggleId a_toggle) const { return a_toggle && ((registered >> a_toggle.bit) & 1u) != 0; }

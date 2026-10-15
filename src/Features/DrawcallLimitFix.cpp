@@ -82,8 +82,8 @@ void DrawcallLimitFix::PostPostLoad()
 		return globals::features::drawcallLimitFix.Running() ? DCLF::IndirectDraws::Get().ReflectionRootsOwned(a_plain) : 0u;
 	});
 	// The features' engine hooks that must precede DCLF's own engine side (Features/Billboards: its parity's NiBillboardNode::OnVisible
-	// thunk, before the primary cull takes the slot), then the observers this run's switches ask for, and the engine hooks only they use
-	// (before DCLF's threads start).
+	// thunk, before the primary cull takes the slot; Features/HiddenNodes: the hidden stores, right after the scene events as before),
+	// then the observers this run's switches ask for, and the engine hooks only they use (before DCLF's threads start).
 	DCLF::Extensions::InstallEarlyHooks(DCLF::Features::List());
 	DCLF::Diagnostics::Install();
 	DCLF::MaterialWrites::Install();

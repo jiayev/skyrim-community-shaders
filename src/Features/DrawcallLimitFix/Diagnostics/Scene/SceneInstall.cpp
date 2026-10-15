@@ -4,7 +4,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Install.h"
 
 #include "CaptureParity.h"
-#include "HiddenWatch.h"
 #include "MirrorWatch.h"
 #include "Events.h"
 #include "SceneObservers.h"
@@ -55,8 +54,6 @@ namespace DCLF::Diagnostics
 			Subscribe<ScenePoint::AccumulatePrepared>([](const On<ScenePoint::AccumulatePrepared>&) { CaptureParity::Get().DrainWrittenMaterials(); });
 		if (MirrorWatch::Enabled())
 			InstallMirrorWatchPlacement();
-		if (HiddenWatch::Enabled())
-			InstallHiddenWatchArming();
 		if (SwitchEnabled(Switch::Census))
 			InstallCensus();
 	}

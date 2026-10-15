@@ -6,7 +6,7 @@
 #include "Draws.h"
 
 #include "Features/DrawcallLimitFix/Core/Render/FrameDriver.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Scene/HiddenWatch.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/RegistrationCensus.h"
 
 #include "Deferred.h"
@@ -287,12 +287,8 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 						 "no newer one",
 				installs.installed, installs.skipped, installs.kept);
 		}
-		// CS_DCLF_HIDDEN_WATCH: the render thread's watch of the hidden bit stores.
-		if (const auto watch = DCLF::HiddenWatch::TakeReport(frame); !watch.empty()) {
-			std::istringstream watchLines(watch);
-			for (std::string line; std::getline(watchLines, line);)
-				logger::info("{}", line);
-		}
+		// The features' lines here (Features/HiddenNodes: CS_DCLF_HIDDEN_WATCH's watch of the hidden bit stores).
+		DCLF::Extensions::ReportLinesAt(DCLF::Api::ReportPoint::Statistics, frame);
 		timing = {};
 	}
 }

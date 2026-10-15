@@ -5,7 +5,6 @@
 #include "SceneObservers.h"
 #include "SceneState.h"
 
-#include "HiddenWatch.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 
@@ -166,20 +165,6 @@ namespace DCLF::Diagnostics
 			fp.misfiledGeometry.store(a_event.geometry, std::memory_order_relaxed);
 			fp.misfiledCategory.store(a_event.category, std::memory_order_relaxed);
 		}
-
-		void OnVerdictUnannounced(const ActorVerdictUnannounced& a_event)
-		{
-			// CS_DCLF_HIDDEN_WATCH: the chain's nearest four nodes, for the store that flips them next.
-			std::array<const RE::NiAVObject*, 4> nodes{};
-			for (std::size_t i = 0; i < nodes.size() && i < a_event.chain.size(); ++i)
-				nodes[i] = a_event.chain[i];
-			HiddenWatch::Arm(nodes);
-		}
-	}
-
-	void InstallHiddenWatchArming()
-	{
-		Subscribe<ActorVerdictUnannounced>(OnVerdictUnannounced);
 	}
 
 	void InstallFirstPersonFiling()
