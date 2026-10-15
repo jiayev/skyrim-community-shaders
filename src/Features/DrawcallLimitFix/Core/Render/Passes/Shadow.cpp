@@ -170,8 +170,9 @@ namespace DCLF::Draws
 			}
 			bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
 			bindings.viewBlocks = a_builder.ShaderResource(*resources->viewBlocks.buffer, noViews).Resource();
-			// Face positions, read by address after the commit's uploads.
-			a_builder.ShaderResource(*resources->scene->facePositions, noViews);
+			// The vertex stream (face positions), read by address after the commit's uploads.
+			if (resources->scene->vertexStream)
+				a_builder.ShaderResource(*resources->scene->vertexStream, noViews);
 			bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
 			return bindings;
 		}

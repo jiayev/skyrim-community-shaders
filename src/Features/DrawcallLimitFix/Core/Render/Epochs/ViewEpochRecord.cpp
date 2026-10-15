@@ -177,7 +177,8 @@ namespace DCLF
 						bindings.bucketCounts[f] = a_builder.IndirectArguments(*resources->bucketCounts[f]).Resource();
 					// Read through device addresses; declared so the graph orders them after their uploads.
 					a_builder.ShaderResource(main.frameConstants, noViews);  // the colour segment's frame slots, by address
-					a_builder.ShaderResource(*scene.facePositions, noViews);
+					if (scene.vertexStream)
+						a_builder.ShaderResource(*scene.vertexStream, noViews);
 					a_builder.ShaderResource(resources->blocks, noViews);
 					if (mode == DrawMode::Colour)
 						DeclareFrameBuffers(a_builder, main);
@@ -333,7 +334,8 @@ namespace DCLF
 					bindings.depth = a_builder.DepthReadWrite(resources->target).View();
 					bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
 					bindings.counts = a_builder.IndirectArguments(*resources->bucketCounts[0]).Resource();
-					a_builder.VertexBuffer(*scene.facePositions);
+					if (scene.vertexStream)
+						a_builder.VertexBuffer(*scene.vertexStream);
 					a_builder.ShaderResource(resources->blocks, noViews);
 					DeclareFrameBuffers(a_builder, main);
 					a_builder.ShaderResource(main.frameConstants, noViews);

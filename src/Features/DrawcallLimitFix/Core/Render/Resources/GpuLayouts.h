@@ -57,7 +57,6 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kInitialObjects = 32768;
 	constexpr std::uint32_t kInitialGeometries = 16384;
 	constexpr std::uint32_t kInitialPoolIndices = 1u << 23;  // the shadow views' index pool (IndexPool): 16 MB
-	constexpr std::uint32_t kInitialFaceVertices = 1u << 18;
 	constexpr std::uint32_t kNoRecord = ~0u;
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
@@ -242,7 +241,7 @@ namespace DCLF::Draws
 		std::uint32_t decalOrdinal;  // decals only: the slot in the group's range
 		// Skins: bit i draws partition i; 0 draws the one geometry, kNoPartitions nothing. lodPartitions narrows a LOD skin's.
 		std::uint32_t partitions;
-		// A face shape's second vertex stream: the GeometryDraw holding its positions (FaceStreamGeometry), or ~0u.
+		// A stream object's second vertex stream (a face shape's positions): the GeometryDraw holding its row (StreamGeometry), or ~0u.
 		std::uint32_t streamIndex = ~0u;
 		// The fade root slot (FadeStateCS's state row), ~0u when none: depth phase 1 drops it while its root's OnVisible stops, a
 		// shadow view while its root fades.

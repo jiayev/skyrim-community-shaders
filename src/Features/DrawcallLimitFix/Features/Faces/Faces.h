@@ -5,12 +5,14 @@
 // shape. The feature installs the face morphing's thunks (FaceSnapshots: the heads' snapshots, published by the engine's own writer) and
 // registers the coordinator component that follows the face shapes' writes (FaceShapes.cpp; Api::EntryClass::FaceShape, taken while
 // the thunks are in): their heads' lists and publications, each written shape's snapshot, its region of the positions buffer and its
-// stream in the tables, and the regions freed as their streams go.
+// vertex stream row in the tables, and the regions freed as their rows go. And it registers the vertex stream (FacePositions.cpp:
+// Api::VertexStreamContribution): the positions buffer as scene resources (its graph registration, requirement and fit) and the commits'
+// uploads into it.
 //
-// Core keeps what every draw reads: the face streams in the scene's tables (SceneTables::faceStreams, the objects' faceStream), the
-// positions buffer (SceneBuffers::facePositions) and the commits' uploads into it, the builds' second-stream geometry draws and the
-// passes' bindings; and the walk's classification of a face shape (Tracked::faceShape, its head held from the attach's pins, the per-frame
-// face trait). Included by the feature's sources only.
+// Core keeps what every draw of the stream reads, generic: the stream rows in the scene's tables (SceneTables::streamRows, the objects'
+// streamRow, kRetiredStreamRow) and the payloads' copies of them, the builds' second-stream geometry draws (StreamGeometry,
+// AppendStreamRows) and the passes' bindings of the buffer (SceneBuffers::vertexStream); and the walk's classification of a face shape
+// (Tracked::faceShape, its head held from the attach's pins, the per-frame face trait). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 
@@ -20,4 +22,6 @@ namespace DCLF::Features::Faces
 	Api::Feature Feature();
 	// FaceShapes.cpp: the coordinator component that follows the face shapes' writes (a_taken: whether their objects are DCLF's).
 	void RegisterShapes(Api::InstallContext& a_context, bool a_taken);
+	// FacePositions.cpp: the vertex stream (the positions buffer's scene resources and uploads), after the component.
+	void RegisterPositions(Api::InstallContext& a_context);
 }

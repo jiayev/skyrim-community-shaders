@@ -17,6 +17,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include "Features/DrawcallLimitFix/Api/MainRanges.h"
+#include "Features/DrawcallLimitFix/Api/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
@@ -355,7 +356,7 @@ namespace DCLF
 			ID3D11ShaderResourceView* shadowDiffuse = nullptr;
 			const RE::BSShaderMaterial* shadowMaterial = nullptr;
 			float fadeDistance = 0.0f;
-			std::uint32_t boneOffset = 0, boneRows = 0, extraOffset = kNoExtraRows, shadowTechnique = 0, faceStream = kNoFaceStream;
+			std::uint32_t boneOffset = 0, boneRows = 0, extraOffset = kNoExtraRows, shadowTechnique = 0, streamRow = kNoStreamRow;
 			std::array<std::uint32_t, kOcclusionViews> occlusionTechnique{};
 			std::uint32_t sceneFlags = 0;
 			std::uint16_t skinPartitions = 0;
@@ -367,33 +368,18 @@ namespace DCLF
 		static std::uint32_t CausesBetween(const Columns& a_before, const Columns& a_after);
 		/** @brief Notes what a write changed, against the snapshot taken before it. */
 		void NoteWrite(std::uint32_t a_slot, const Columns& a_before) { NoteChange(a_slot, CausesBetween(a_before, ColumnsOf(a_slot))); }
-		// NPC face shapes: per face object, its positions in the head's snapshot (Features/Faces' FaceSnapshots, leased) and its region
-		// of the positions buffer, uploaded on a new generation. Written and updated in place by Features/Faces' component (its heads'
-		// publications).
-		static constexpr std::uint32_t kNoFaceObject = ~0u;
-		struct FaceStream
-		{
-			std::uint32_t object = kNoFaceObject;
-			std::uint32_t region = kNoFaceRegion;  // first vertex in the positions buffer
-			std::uint32_t vertexCount = 0;
-			std::uint64_t generation = 0;
-			const float* positions = nullptr;
-			std::shared_ptr<const std::vector<float>> owner;
-			// Complete sibling set for a future consistency-group publication (the feature's FaceSnapshots::HeadView; Core reads none).
-			std::shared_ptr<const void> headView;
-			// The shape and its head, as keys: a publication finds the stream's positions by them (the feature's FaceSnapshots::View).
-			const RE::BSGeometry* geometry = nullptr;
-			const RE::BSFaceGenNiNode* head = nullptr;
-		};
-		std::vector<FaceStream> faceStreams;
-		std::vector<std::uint32_t> faceStream;  // parallel to objects: index in faceStreams, or kNoFaceStream
-		std::vector<std::uint32_t> faceStreamFree;
-		// The (shape, region) of every stream freed since the walk's end took them (Features/Faces' component frees the region
-		// once no stream of the shape holds it).
-		std::vector<std::pair<const RE::BSGeometry*, std::uint32_t>> faceStreamsReleased;
-		/** @brief Writes a slot's face stream: in place when it has one, else at a free index. */
-		void SetFaceStream(std::uint32_t a_slot, FaceStream a_stream);
-		void ClearFaceStream(std::uint32_t a_slot);
+		// The vertex stream (Api/VertexStreams.h): per stream object (an NPC face shape, Features/Faces') its row - its vertices (its head's
+		// snapshot, leased) and their range of the stream's buffer, uploaded on a new generation. Written and updated in place by the
+		// component that follows the stream's entry class (Features/Faces': its heads' publications); read as data by the builds.
+		std::vector<Api::VertexStreamRow> streamRows;
+		std::vector<std::uint32_t> streamRow;  // parallel to objects: index in streamRows, or kNoStreamRow
+		std::vector<std::uint32_t> streamRowFree;
+		// The (source, first) of every row freed since the walk's end took them (Features/Faces' component frees the range once no row
+		// of the shape holds it).
+		std::vector<std::pair<const void*, std::uint32_t>> streamRowsReleased;
+		/** @brief Writes a slot's stream row: in place when it has one, else at a free index. */
+		void SetStreamRow(std::uint32_t a_slot, Api::VertexStreamRow a_row);
+		void ClearStreamRow(std::uint32_t a_slot);
 		// An alpha-tested caster's diffuse view and material (its binding key); null otherwise. The shadow build reads only the
 		// material's texture transform, which BSLightingShaderPropertyFloatController moves between Main::Draw and BeforeShadowMaps.
 		std::vector<ID3D11ShaderResourceView*> shadowDiffuse;    // parallel to objects
@@ -527,7 +513,7 @@ namespace DCLF
 			kRetiredFadeRoot,
 			kRetiredExtras,     // slot: the block's row offset
 			kRetiredBones,      // slot: the block's offset, extra: its rows
-			kRetiredFaceStream,
+			kRetiredStreamRow,  // a vertex stream row (streamRows)
 			kRetiredMaterialLookup,  // a material slot's bindings to drop (Coordinator::RetireMaterialBinding)
 			kRetiredPipelineLookup,  // a pipeline slot's lookups to drop (its mask binding: Coordinator::RetireMaskBinding)
 			kRetiredGeometrySlot,    // a SlotTable's slot; extra: its generation when freed

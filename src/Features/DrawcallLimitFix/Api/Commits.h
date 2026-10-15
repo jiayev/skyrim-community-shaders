@@ -22,10 +22,10 @@ namespace DCLF::Api
 	/**
 	 * @brief A commit hook.
 	 *
-	 * - commit: render thread, in each commit (depth, colour, shadow), with the scene's streams (after the face positions' uploads), in
-	 *   registration order: stages its rows into the versions the adopted set names (CommitContext::uploads), and in a main commit its
-	 *   per-frame values into the commit's latched copies (CommitContext::latched: its scene resources' latched buffers). Each commit's
-	 *   hooks run once; a frame commits each kind at most once.
+	 * - commit: render thread, in each commit (depth, colour, shadow), with the scene's streams (after the vertex stream's uploads:
+	 *   Api/VertexStreams.h), in registration order: stages its rows into the versions the adopted set names (CommitContext::uploads),
+	 *   and in a main commit its per-frame values into the commit's latched copies (CommitContext::latched: its scene resources' latched
+	 *   buffers). Each commit's hooks run once; a frame commits each kind at most once.
 	 */
 	struct CommitHook
 	{

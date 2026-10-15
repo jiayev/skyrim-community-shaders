@@ -95,12 +95,12 @@ namespace DCLF::Diagnostics
 					what = "the fade node";
 				else if (slots.shadowDiffuse[s] != dense.shadowDiffuse[d] || slots.shadowMaterial[s] != dense.shadowMaterial[d])
 					what = "the shadow material";
-				else if ((slots.faceStream[s] == kNoFaceStream) != (dense.faceStream[d] == kNoFaceStream))
+				else if ((slots.streamRow[s] == kNoStreamRow) != (dense.streamRow[d] == kNoStreamRow))
 					what = "the face stream";
-				else if (slots.faceStream[s] != kNoFaceStream) {
-					const auto& a = slots.faceStreams[slots.faceStream[s]];
-					const auto& b = dense.faceStreams[dense.faceStream[d]];
-					if (a.object != s || b.object != d || a.region != b.region || a.vertexCount != b.vertexCount || a.generation != b.generation || a.positions != b.positions)
+				else if (slots.streamRow[s] != kNoStreamRow) {
+					const auto& a = slots.streamRows[slots.streamRow[s]];
+					const auto& b = dense.streamRows[dense.streamRow[d]];
+					if (a.object != s || b.object != d || a.first != b.first || a.count != b.count || a.generation != b.generation || a.vertices != b.vertices)
 						what = "the face stream";
 				}
 				if (what) {

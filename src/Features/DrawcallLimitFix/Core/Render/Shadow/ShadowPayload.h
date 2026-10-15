@@ -137,7 +137,7 @@ namespace DCLF::Draws
 			return out;
 		}
 		GeometryDrawsOut geometries;
-		std::vector<SceneTables::FaceStream> faceStreams;  // the tables', for the commit's uploads
+		std::vector<Api::VertexStreamRow> streamRows;  // the tables' vertex stream rows, for the commit's uploads
 		std::uint32_t skippedTexture = 0, skippedPipeline = 0, deferredTextures = 0, deferredPipelines = 0;
 		// Set members a mode could not draw (waiting on a pipeline or a texture): a defect, the engine having withheld them.
 		std::uint32_t setWaiting = 0;
@@ -172,7 +172,7 @@ namespace DCLF::Draws
 			membership = {};
 			geometries.Reset();
 			streams.reset();
-			faceStreams.clear();
+			streamRows.clear();
 			skippedTexture = skippedPipeline = deferredTextures = deferredPipelines = 0;
 		}
 	};

@@ -18,6 +18,7 @@
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 #include "Features/DrawcallLimitFix/Api/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Api/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Api/Views.h"
 
 #include <string_view>
@@ -90,6 +91,11 @@ namespace DCLF::Api
 		 * name, a depth prepass on an appended slot, or a class with no registered toggle.
 		 */
 		virtual void RegisterMainRange(const MainRangeContribution& a_range) = 0;
+		/**
+		 * @brief Fails the install for a second stream (Core's draws have one second-stream slot), no name, select or upload, scene resources
+		 * not registered before, or an entry class no component follows.
+		 */
+		virtual void RegisterVertexStream(const VertexStreamContribution& a_stream) = 0;
 
 	protected:
 		~InstallContext() = default;

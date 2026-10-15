@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -529,14 +530,16 @@ namespace DCLF
 		const bool smallStart = SwitchValue(Switch::TableStart) == "small";
 		using org::services::GrowableContents;
 		const std::uint32_t objects = InitialObjectUnits();
-		// Face positions are a vertex buffer; its address and capacity are the sealed set's. Every table grows by doubling
-		// (RequireSceneTables). The object records, extras and geometry table are the payload's (PayloadVersions).
+		// Every table grows by doubling (RequireSceneTables). The object records, extras and geometry table are the payload's
+		// (PayloadVersions).
 		std::uint32_t unused = 0;
-		buffers->facePositions = MakeVersioned(DeviceBuffer(std::uint64_t(smallStart ? 1024u : kInitialFaceVertices) * 16, "cs.dclf.face-positions"), { .extent = { 0, 16, 0 } });
-		if (!AddressOf(a_device, *buffers->facePositions->Get()))
-			return false;
-		// The features' scene resources (Api::SceneResources::setup: their programs and buffers, registered with the set in this order).
+		// The features' scene resources (Api::SceneResources::setup: their programs and buffers, registered with the set in this order),
+		// the vertex stream's first: its buffer is the second vertex stream, whose address and capacity are the sealed set's. Without it
+		// (its setup gave none: no device address) the tables are not made.
 		buffers->sceneResources = Extensions::SetUpSceneResources(a_device, smallStart);
+		buffers->vertexStream = Extensions::SelectVertexStream(buffers->sceneResources);
+		if (Extensions::VertexStream().registered && !buffers->vertexStream)
+			return false;
 		// Without the fade state program, fades stay the CPU's.
 		buffers->fadeState = ComputeProgram::Load(a_device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
 		if (buffers->fadeState) {

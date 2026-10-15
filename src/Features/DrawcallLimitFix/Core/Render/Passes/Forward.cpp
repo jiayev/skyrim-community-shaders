@@ -95,7 +95,8 @@ namespace DCLF::Draws
 			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
 			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
 			bindings.count = a_builder.IndirectArguments(resources->count);
-			a_builder.VertexBuffer(*resources->scene->facePositions);
+			if (resources->scene->vertexStream)
+				a_builder.VertexBuffer(*resources->scene->vertexStream);
 			DeclareFrameBuffers(a_builder, *resources);
 			a_builder.ShaderResource(resources->frameConstants, noViews);
 			return bindings;
@@ -195,8 +196,9 @@ namespace DCLF::Draws
 			a_builder.ShaderResource(*resources->sequences, noViews);
 			bindings.count = a_builder.IndirectArguments(resources->count);
 			bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
-			// Face positions, read by address.
-			a_builder.ShaderResource(*resources->scene->facePositions, noViews);
+			// The vertex stream (face positions), read by address.
+			if (resources->scene->vertexStream)
+				a_builder.ShaderResource(*resources->scene->vertexStream, noViews);
 			DeclareFrameBuffers(a_builder, *resources, false);
 			a_builder.ShaderResource(resources->frameConstants, noViews);
 			return bindings;

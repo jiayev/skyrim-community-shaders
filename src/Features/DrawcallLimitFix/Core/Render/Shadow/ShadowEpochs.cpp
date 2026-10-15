@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -364,7 +365,7 @@ namespace DCLF
 			TracyCZoneN(shadowCommitZone, "CS.DCLF.ShadowInputs.CommitShared", true);
 			const auto inputsStart = std::chrono::steady_clock::now();
 			auto& scene = *resources->scene;
-			shadowStats.faceUploads += UploadFaceStreams(adopted, payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads);
+			shadowStats.faceUploads += Extensions::UploadVertexStream(adopted, payload.streamRows, scene, uploads);
 			Extensions::RunCommitHooks({ Api::CommitKind::Shadow, adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), scene, uploads, nullptr,
 				*frameOwners });
 			shadowStats.records = static_cast<std::uint32_t>(payload.materialRows.Count());

@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/TerrainBlending.h"
@@ -564,13 +565,14 @@ namespace DCLF
 		}
 	}
 
-	// Uploads run ahead of every pass of this epoch: face streams and the features' commit hooks (Features/TreeLod's tables among them).
+	// Uploads run ahead of every pass of this epoch: the vertex stream's rows and the features' commit hooks (Features/TreeLod's tables
+	// among them).
 	void IndirectDraws::Impl::UploadSceneStreams(const MainCommit& a_commit)
 	{
 		const auto& adopted = a_commit.adopted;
 		const auto& epochResources = a_commit.resources;
 		const bool depthOnly = a_commit.depthOnly;
-		UploadFaceStreams(adopted, a_commit.payload.faceStreams, epochResources->scene->facePositions, epochResources->scene->faceUploaded, a_commit.uploads);
+		Extensions::UploadVertexStream(adopted, a_commit.payload.streamRows, *epochResources->scene, a_commit.uploads);
 		Extensions::RunCommitHooks({ depthOnly ? Api::CommitKind::Depth : Api::CommitKind::Colour, adopted, Scene::FrameView::Get().GetTables(),
 			Scene::FrameView::Get().GetFrame(), *epochResources->scene, a_commit.uploads, &a_commit.latched, a_commit.bindingOwners });
 	}

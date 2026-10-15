@@ -307,17 +307,19 @@ namespace DCLF::Draws
 			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
 			bindings.count = a_builder.IndirectArguments(resources->count);
 			if (segment == RenderGraphRuntime::Segment::ZPrepass) {
-				// The plain draws (DCLF_PULLED) read sequences and face positions by address and index the pool.
+				// The plain draws (DCLF_PULLED) read sequences and the vertex stream (face positions) by address and index the pool.
 				a_builder.ShaderResource(*resources->sequences, noViews);
-				a_builder.ShaderResource(*resources->scene->facePositions, noViews);
+				if (resources->scene->vertexStream)
+					a_builder.ShaderResource(*resources->scene->vertexStream, noViews);
 				bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
 				bindings.bucketCounts = a_builder.IndirectArguments(*resources->zBucketCounts[phaseTwo ? 1 : 0]).Resource();
 				// Terrain Blending's terrain depth, drawn by the near terrain blocks' twin buckets.
 				if (resources->terrainDepth)
 					bindings.terrainDepth = a_builder.DepthReadWrite(resources->terrainDepth).View();
 			} else {
-				// The face draws' second vertex stream.
-				a_builder.VertexBuffer(*resources->scene->facePositions);
+				// The stream objects' (face shapes') second vertex stream.
+				if (resources->scene->vertexStream)
+					a_builder.VertexBuffer(*resources->scene->vertexStream);
 				// The foliage record (Policy::RecordFoliagePixels): alpha-tested draws write per-pixel ids by address.
 				if (const auto& foliage = resources->foliage) {
 					const std::span<const org::UavView> noUavs{};

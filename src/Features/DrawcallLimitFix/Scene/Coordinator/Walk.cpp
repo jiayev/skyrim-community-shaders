@@ -565,7 +565,7 @@ namespace DCLF::Scene
 		if (face.positions)
 			ComponentsStreamed(objectId, face, Api::EntryClass::FaceShape);
 		else
-			tables.ClearFaceStream(objectId);
+			tables.ClearStreamRow(objectId);
 		tables.shadowDiffuse[objectId] = r.shadowDiffuse;
 		tables.shadowMaterial[objectId] = r.shadowMaterial;
 		tables.sceneFlags[objectId] = object.flags;
@@ -656,7 +656,7 @@ namespace DCLF::Scene
 			tables.occlusionTechnique[v][slot] = 0;
 		tables.sunEntryNode[slot] = tables.sunEntryNode[a_base];
 		tables.hasFadeNode[slot] = property->fadeNode ? 1 : 0;
-		tables.ClearFaceStream(slot);
+		tables.ClearStreamRow(slot);
 		tables.shadowDiffuse[slot] = nullptr;
 		tables.shadowMaterial[slot] = nullptr;
 		tables.sceneFlags[slot] = object.flags;

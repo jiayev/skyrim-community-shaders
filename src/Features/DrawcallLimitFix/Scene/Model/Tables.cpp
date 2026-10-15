@@ -34,7 +34,7 @@ namespace DCLF
 		hasFadeNode.resize(a_count, 0);
 		fadeDistance.resize(a_count, 0.0f);
 		residentSlot.resize(a_count, 0);
-		faceStream.resize(a_count, kNoFaceStream);
+		streamRow.resize(a_count, kNoStreamRow);
 		shadowDiffuse.resize(a_count, nullptr);
 		shadowMaterial.resize(a_count, nullptr);
 		objectSeen.resize(a_count, 0);
@@ -68,7 +68,7 @@ namespace DCLF
 		columns.shadowTechnique = shadowTechnique[a_slot];
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 			columns.occlusionTechnique[v] = occlusionTechnique[v][a_slot];
-		columns.faceStream = faceStream[a_slot];
+		columns.streamRow = streamRow[a_slot];
 		columns.sceneFlags = sceneFlags[a_slot];
 		columns.skinPartitions = skinPartitions[a_slot];
 		columns.skinLodPartitions = skinLodPartitions[a_slot];
@@ -103,7 +103,7 @@ namespace DCLF
 			a_draw.pipelineIndex = 0;
 			return a_draw;
 		};
-		if (x.geometryIndex != y.geometryIndex || !same(geometryHalf(a.draw), geometryHalf(b.draw)) || a.faceStream != b.faceStream || a.geometry != b.geometry ||
+		if (x.geometryIndex != y.geometryIndex || !same(geometryHalf(a.draw), geometryHalf(b.draw)) || a.streamRow != b.streamRow || a.geometry != b.geometry ||
 			a.identity != b.identity)
 			causes |= kChangeGeometry;
 		// A recycled slot is a new object even if its numeric columns happen to match.
@@ -179,7 +179,7 @@ namespace DCLF
 		hasFadeNode[a_slot] = 0;
 		fadeDistance[a_slot] = 0.0f;
 		residentSlot[a_slot] = 0;
-		ClearFaceStream(a_slot);
+		ClearStreamRow(a_slot);
 		shadowDiffuse[a_slot] = nullptr;
 		shadowMaterial[a_slot] = nullptr;
 		objectSeen[a_slot] = 0;
@@ -200,34 +200,34 @@ namespace DCLF
 		NoteWrite(a_slot, before);
 	}
 
-	void SceneTables::SetFaceStream(std::uint32_t a_slot, FaceStream a_stream)
+	void SceneTables::SetStreamRow(std::uint32_t a_slot, Api::VertexStreamRow a_row)
 	{
-		a_stream.object = a_slot;
-		auto& index = faceStream[a_slot];
-		if (index == kNoFaceStream) {
-			if (!faceStreamFree.empty()) {
-				index = faceStreamFree.back();
-				faceStreamFree.pop_back();
+		a_row.object = a_slot;
+		auto& index = streamRow[a_slot];
+		if (index == kNoStreamRow) {
+			if (!streamRowFree.empty()) {
+				index = streamRowFree.back();
+				streamRowFree.pop_back();
 			} else {
-				index = static_cast<std::uint32_t>(faceStreams.size());
-				faceStreams.emplace_back();
+				index = static_cast<std::uint32_t>(streamRows.size());
+				streamRows.emplace_back();
 			}
-		} else if (const auto& held = faceStreams[index]; held.geometry != a_stream.geometry || held.region != a_stream.region) {
-			faceStreamsReleased.emplace_back(held.geometry, held.region);
+		} else if (const auto& held = streamRows[index]; held.source != a_row.source || held.first != a_row.first) {
+			streamRowsReleased.emplace_back(held.source, held.first);
 		}
-		faceStreams[index] = std::move(a_stream);
+		streamRows[index] = std::move(a_row);
 	}
 
-	void SceneTables::ClearFaceStream(std::uint32_t a_slot)
+	void SceneTables::ClearStreamRow(std::uint32_t a_slot)
 	{
-		auto& index = faceStream[a_slot];
-		if (index == kNoFaceStream)
+		auto& index = streamRow[a_slot];
+		if (index == kNoStreamRow)
 			return;
-		auto& stream = faceStreams[index];
-		faceStreamsReleased.emplace_back(stream.geometry, stream.region);
-		stream = {};
-		Retire(kRetiredFaceStream, index);
-		index = kNoFaceStream;
+		auto& row = streamRows[index];
+		streamRowsReleased.emplace_back(row.source, row.first);
+		row = {};
+		Retire(kRetiredStreamRow, index);
+		index = kNoStreamRow;
 	}
 
 	void SceneTables::ClearFrame(bool a_keepObjects)
@@ -262,12 +262,12 @@ namespace DCLF
 			residentSlot.clear();
 			// Every slot is gone: the log's readers read them all again.
 			InvalidateChangeLog();
-			for (const auto& stream : faceStreams)
-				if (stream.object != kNoFaceObject)
-					faceStreamsReleased.emplace_back(stream.geometry, stream.region);
-			faceStreams.clear();
-			faceStreamFree.clear();
-			faceStream.clear();
+			for (const auto& row : streamRows)
+				if (row.object != Api::VertexStreamRow::kNoObject)
+					streamRowsReleased.emplace_back(row.source, row.first);
+			streamRows.clear();
+			streamRowFree.clear();
+			streamRow.clear();
 			shadowDiffuse.clear();
 			shadowMaterial.clear();
 			objectSeen.clear();
@@ -359,10 +359,10 @@ namespace DCLF
 		fadeDistance.clear();
 		residentSlot.clear();
 		InvalidateChangeLog();
-		faceStreams.clear();
-		faceStreamFree.clear();
-		faceStreamsReleased.clear();
-		faceStream.clear();
+		streamRows.clear();
+		streamRowFree.clear();
+		streamRowsReleased.clear();
+		streamRow.clear();
 		shadowDiffuse.clear();
 		shadowMaterial.clear();
 		shadowTextureSet.clear();
