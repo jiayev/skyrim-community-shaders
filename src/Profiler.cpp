@@ -261,9 +261,6 @@ std::vector<Profiler::TimerResult> Profiler::GetStatistics(std::string_view time
 		result.cpuAvgMs = known.cpu.GetAverage();
 		result.cpuP95Ms = known.cpu.GetPercentile(95.0f);
 		result.cpuP99Ms = known.cpu.GetPercentile(99.0f);
-		result.historyBuffer = known.gpu.history;
-		result.historyHead = known.gpu.head;
-		result.historyCount = known.gpu.count;
 		snapshot.push_back(std::move(result));
 	}
 	return snapshot;
