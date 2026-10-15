@@ -304,7 +304,7 @@ namespace DCLF
 		 * @brief Render thread, at a cube camera update's start (Features/Reflection's update hook): the camera's LOD roots a_view's faces
 		 * draw in the engine's place (PassCapture::kLodRoots, kTreeRoot), whose add-roots are skipped so the engine neither culls nor
 		 * registers them, read of the classes' contributions and the LOD gates: the tree root while the faces' tree LOD is DCLF's, the LOD
-		 * land and objects roots while the LOD swaps are gated (LodGates) and both are DCLF's (Api::ObjectClass::LodObjects and LodTerrain
+		 * land and objects roots while the LOD swaps are gated (a show veto registered: Features/Lod's LOD gates) and both are DCLF's (Api::ObjectClass::LodObjects and LodTerrain
 		 * on); none on a non-plain update, while the view is not
 		 * drawable or covered, or on an update that keeps them for the residue watch (Policy::KeepReflectionRoots).
 		 */

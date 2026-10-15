@@ -30,7 +30,6 @@ namespace DCLF
 		Forward,
 		Refraction,
 		ProjectedUv,
-		LodGates,
 		Shadows,
 		SunSkip,
 		SunExclude,

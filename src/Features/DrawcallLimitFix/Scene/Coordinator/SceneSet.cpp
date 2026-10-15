@@ -613,7 +613,7 @@ namespace DCLF::Scene
 			apply(slot, phases, wait);
 		}
 		// The components settle: gates whose incoming geometries are all settled flip here and ride the publication (the gates' component
-		// deltas: Scene::Gates::Adopt). The vetoes they drop or set apply here, before the set's change is noted and the claims are snapshotted.
+		// deltas: Features::Lod::Gates::Adopt). The vetoes they drop or set apply here, before the set's change is noted and the claims are snapshotted.
 		if (gatesLive) {
 			restructuredTaken = false;
 			settleApply.clear();

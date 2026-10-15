@@ -12,9 +12,6 @@
 
 namespace DCLF::Diagnostics
 {
-	// SceneGateParity.cpp.
-	void InstallGateParity();
-
 	void InstallScene()
 	{
 		const auto& o = Observe();
@@ -40,18 +37,14 @@ namespace DCLF::Diagnostics
 		// After the joins: the resident parity.
 		if (o.residents)
 			InstallResidentParity();
-		// The LOD gates' flips against the claims (the set or persistent parity).
+		// (Features/Lod's LOD gate observers, the flips against the claims, follow under either parity, and their parity, after the commit
+		// parity, under the persistent one: the feature's install.)
 		if (o.claims) {
 			InstallFirstPersonFiling();
 			InstallCommitParity();
 		}
-		if (o.claimsOrScene) {
-			InstallGateObservers();
+		if (o.claimsOrScene)
 			InstallShadowVolumeParity();
-		}
-		// The LOD gates' state after each commit (the persistent parity).
-		if (o.scene)
-			InstallGateParity();
 		// CS_DCLF_CAPTURE_PARITY: the materials written each frame, for its follow-ups.
 		if (o.capture)
 			Subscribe<ScenePoint::AccumulatePrepared>([](const On<ScenePoint::AccumulatePrepared>&) { CaptureParity::Get().DrainWrittenMaterials(); });

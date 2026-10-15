@@ -2,7 +2,7 @@
 
 // The scene mirror and its reads (CoordinatorMirror): the mirror itself, the mirror-read parity's counters and deferred
 // rechecks, the batch's pins and the references made from them, the mirror's capture prepares. Applied in ApplyEvents.cpp, read
-// by every lane phase (Classification.cpp, Walk.cpp, Residents.cpp, Gates.cpp, Placements.cpp).
+// by every lane phase (Classification.cpp, Walk.cpp, Residents.cpp, Components.cpp, Placements.cpp).
 //
 // A private base of Scene::Coordinator, included by Coordinator.h: names, types and initialisers are the coordinator's own,
 // and the functions over them are declared there.

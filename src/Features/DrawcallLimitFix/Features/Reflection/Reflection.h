@@ -17,7 +17,7 @@
 // view's own renderers. It keeps a trees view's tree LOD per face, the view engine's under the tree LOD class (Api::ObjectClass::TreeLod,
 // Features/TreeLod's): its pipeline, ownership and row (IndirectDraws::ResolveViewTreeLod, DecideViewTreeLod and SubmitViewEpoch's row);
 // the cube camera's LOD roots the faces draw in the engine's place (IndirectDraws::ViewLodRootsOwned: the tree root by the faces' tree LOD,
-// the LOD land and objects roots by the LOD classes, Features/Lod's, and Core's LodGates) and the residue watch under them (PassCapture);
+// the LOD land and objects roots by the LOD classes and the LOD gates' show veto, Features/Lod's) and the residue watch under them (PassCapture);
 // and the forward targets the faces' pipelines are built for (DrawPipelines::SetForwardTargets). The feature reaches them through the view
 // engine's calls alone, never a LOD feature's headers.
 // Included by the feature's sources only (and Features/Manifest.cpp, for the constants).

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Api/Settings.h"
 
 #include <array>
 #include <atomic>
@@ -13,7 +14,7 @@ namespace RE
 	class NiAVObject;
 }
 
-namespace DCLF::LodGates
+namespace DCLF::Features::Lod::LodGates
 {
 	/**
 	 * @brief The engine's LOD swaps gated on DCLF's readiness (CS_DCLF_LOD_GATES, on by default).
@@ -29,7 +30,7 @@ namespace DCLF::LodGates
 	 * - the gate is captured as an event on the scene's stack (CaptureGate: the gates' SceneStack channel) on the swapping thread at the
 	 *   swap's last retirement call, in order after the attaches;
 	 * - the scene coordinator publishes the post-swap claims once every geometry under the incoming roots is a member or ineligible,
-	 *   with a flip for the gate (the gates' component's deltas: Scene/Coordinator/Gates.h);
+	 *   with a flip for the gate (the gates' component's deltas: LodGateComponent.h);
 	 * - the render thread, adopting that publication (FrameView, at the frame's start before the culls), calls Flip: the incoming shown and the
 	 *   outgoing hidden through app-cull, with their hidden events, in the frame whose claims are post-swap;
 	 * - the next LOD drain, under the manager's lock, detaches and releases the outgoing through the engine's own functions.
@@ -49,18 +50,18 @@ namespace DCLF::LodGates
 	 */
 	void CaptureGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing);
 	/**
-	 * @brief Core's registration of the gates (Scene::RegisterCoreGates, InstallFeatures, while Enabled): the SceneStack channel their
+	 * @brief The feature's registration of the gates (Gates::RegisterGates, its install, while Enabled): the SceneStack channel their
 	 * events go on and their outcome posts wake (Extensions::WakeChannel), and the hidden site their own stores carry
 	 * (Extensions::PushReservedHidden). Before any gate opens (none does before DCLF runs).
 	 */
 	void NoteRegistered(Api::EngineChannelId a_channel, std::uint32_t a_hiddenSite);
 
 	/**
-	 * @brief The thunks and detours (CS_DCLF_LOD_GATES, by default on). Once, at DCLF's install. a_running: whether DCLF runs
-	 * (DrawcallLimitFix::Running, read on the engine's threads): no gate opens while it does not, and the next LOD drain flushes every
+	 * @brief The thunks and detours (a_switch: CS_DCLF_LOD_GATES, by default on). Once, at the feature's install. a_running: whether DCLF
+	 * runs (ShellState::Running, read on the engine's threads): no gate opens while it does not, and the next LOD drain flushes every
 	 * gate (forced) once it stops, as no flip will come. Null: always.
 	 */
-	void Install(bool (*a_running)() = nullptr);
+	void Install(Api::SwitchId a_switch, bool (*a_running)() = nullptr);
 	/** @brief The switch is on and Install patched every site. */
 	bool Enabled();
 	/**
@@ -119,7 +120,7 @@ namespace DCLF::LodGates
 	 */
 	std::uint64_t ForcedGeneration();
 
-	/** @brief The engine side's counters since the last Take (gates opened, flipped, forced, held blocks released, vetoes, the oldest open gate's age), reset (the gates' release lines: Scene::Gates::ReleaseLines). Empty (installed false) while not installed. */
+	/** @brief The engine side's counters since the last Take (gates opened, flipped, forced, held blocks released, vetoes, the oldest open gate's age), reset (the gates' release lines: Gates::ReleaseLines). Empty (installed false) while not installed. */
 	inline constexpr std::size_t kFlushKinds = 9;
 	struct Totals
 	{

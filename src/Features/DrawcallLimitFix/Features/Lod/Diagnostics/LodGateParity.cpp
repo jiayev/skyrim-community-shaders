@@ -1,26 +1,27 @@
-// CS_DCLF_PERSISTENT_PARITY: the LOD gates' state (Scene/Coordinator/Gates.cpp) against what it is derived from, at each commit while gates
+// CS_DCLF_PERSISTENT_PARITY: the LOD gates' state (LodGateComponent.cpp) against what it is derived from, at each commit while gates
 // live (SetCommitted: after the gates' settle, before the publication takes the commit's flips): the root map and the mirror's
 // gated roots, the tags, the withheld slots, the open gates' readiness taken again, the commit's flips. Every 60th pass a sweep of the
 // tracked set: the tags and the vetoes (hold-outs, observed incoming), the marks a walk of the mirror gives now, and the open gates'
 // incoming roots hidden. Gate roots are keys: nothing
 // engine is dereferenced. Reported with the gates' line (GATE PARITY).
 
-#include "SceneObservers.h"
-#include "SceneState.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Gates.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneView.h"
 
 #include <algorithm>
 #include <utility>
 #include <vector>
 
-namespace DCLF::Diagnostics
+namespace DCLF::Features::Lod
 {
 	namespace
 	{
-		using V = SceneView;
-		namespace G = Scene::Gates;
+		using V = Diagnostics::SceneView;
+		namespace G = Gates;
 		using Parity = G::ObserverState::Parity;
 
 		/** @brief The commit checked: its store and decision inputs (SetCommitted's), the gates' state, and the counts. */
@@ -430,7 +431,7 @@ namespace DCLF::Diagnostics
 			CheckVetoes(a_commit);
 		}
 
-		void OnCommitted(const SetCommitted& a_event)
+		void OnCommitted(const Diagnostics::SetCommitted& a_event)
 		{
 			if (!a_event.gatesLive)
 				return;
@@ -450,13 +451,13 @@ namespace DCLF::Diagnostics
 					CheckOpen(commit, token, gate, retagged);
 			}
 			CheckFlips(commit, retagged);
-			if (ParityDue(V::passSerial(store), 37) && std::exchange(p.pass, store.PassStamp()) != store.PassStamp())
+			if (Diagnostics::ParityDue(V::passSerial(store), 37) && std::exchange(p.pass, store.PassStamp()) != store.PassStamp())
 				Sweep(commit);
 		}
 	}
 
-	void InstallGateParity()
+	void Gates::SubscribeGateParity()
 	{
-		Subscribe<SetCommitted>(OnCommitted);
+		Diagnostics::Subscribe<Diagnostics::SetCommitted>(OnCommitted);
 	}
 }

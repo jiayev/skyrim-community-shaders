@@ -119,6 +119,8 @@ namespace DCLF::Api
 		void SetEntryVeto(const void* a_entry, std::uint8_t a_veto) const;
 		/** @brief What the commit recorded of a_slot while Observe withheld it (none past the slots). */
 		ObservedState ObservedSlot(std::uint32_t a_slot) const;
+		/** @brief Whether a_slot is a layer's (the tables' IsLayer): a publication claims it with its base geometry. */
+		bool LayerSlot(std::uint32_t a_slot) const;
 		/** @brief How many entries hold a_veto (Api::kVetoHold or kVetoObserve; every component's), as the coordinator counts them. */
 		std::uint32_t VetoCount(std::uint8_t a_veto) const;
 		/** @brief Whether the component needs the commit live (settle called with a_live) whatever the vetoes. */

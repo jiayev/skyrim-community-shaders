@@ -571,9 +571,6 @@ namespace DCLF::Extensions
 		// they write name (RegisterMaterialPort returns it).
 		lists.materialPorts[lists.materialPortCount++] = CoreLightingPort();
 		Context context(lists);
-		// Core's built-in gates, as Core, before any feature: their registrations come first in every list they are in.
-		context.feature = "Core";
-		Scene::RegisterCoreGates(context);
 		for (const auto& feature : a_features) {
 			context.feature = feature.name;
 			if (feature.install)

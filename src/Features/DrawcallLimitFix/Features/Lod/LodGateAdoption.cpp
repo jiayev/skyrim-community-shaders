@@ -1,15 +1,15 @@
 // The LOD gates' publication and adoption: their adoption guard, the flips' publication (scene lane) and their release by the frame
 // installing them (render thread).
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Gates.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Publication.h"
 
-namespace DCLF::Scene::Gates
+namespace DCLF::Features::Lod::Gates
 {
 	namespace
 	{

@@ -174,7 +174,7 @@ LodTechniques view's slot and phase readiness, the colour target's import, `Pass
 and the view engine's parts that read tree LOD and the LOD gates (the classes' contributions as data once `Features/Lod` and `Features/TreeLod`
 moved; the feature includes neither): the tree LOD drawn per face (its pipeline, ownership and row: `IndirectDraws::ResolveViewTreeLod`,
 `DecideViewTreeLod`, `SubmitViewEpoch`'s row), the cube camera's LOD roots its faces draw in the engine's place (`IndirectDraws::ViewLodRootsOwned`,
-with `LodGates` and `PassCapture::kLodRoots`/`kTreeRoot`), the residue watch under them (`PassCapture::WatchReflectionResidue`,
+with the LOD gates' show veto, `Extensions::ShowVetoRegistered`, and `PassCapture::kLodRoots`/`kTreeRoot`), the residue watch under them (`PassCapture::WatchReflectionResidue`,
 `Policy::KeepReflectionRoots`, the residue classes), and the forward targets the faces' pipelines are built for (`DrawPipelines::SetForwardTargets`).
 `Features/OcclusionMaps` followed, the first feature on the shadow-view contract: its switches (`CS_DCLF_SKYLIGHT`, `CS_DCLF_PRECIPITATION`,
 listed where Core's were: before `CS_DCLF_OPAQUE_EFFECTS`, after the trees' list-all switch, with the reflection's and the first person's
@@ -206,9 +206,8 @@ after the texture paths' trace) and toggle (after Lod's), the tree LOD class (`O
 pipeline, a trees view's `ResolveViewTreeLod`), the source of Core's tree LOD channel at its early hooks (the refill, block update, AddGroup
 and RemoveGroup hooks, pushing through `Push`, where Core's scene events installed them; between the billboards' early hooks and
 the hidden nodes') and the tree LOD audit. Both are listed after SwitchNodes, Lod first, so the toggles' and switches' order is Core's.
-What they leave Core: the LOD gates whole (`CS_DCLF_LOD_GATES` and the shell's install, `Engine/Cull/LodGates`, the gate event, the
-coordinator's gates and the publication's flips, `FrameView`'s flip at adoption, the hidden stores' veto, their reports and observers),
-which need an engine event channel contract for a gated swap (its capture, flip, outcomes and veto). Object LOD's segment events followed
+What they left Core then: the LOD gates whole, which needed an engine event channel contract for a gated swap (its capture, flip, outcomes
+and veto); they followed (below). Object LOD's segment events followed
 on the engine channel contract (`Api/EngineEvents.h`, `RegisterEngineChannel`): the writers' hooks at Lod's early hooks (between the billboards'
 and tree LOD's; `LodSegmentHooks.cpp`), its keyed channel ("object LOD segments": `AfterSwitches`, drained after the switch events as Core's
 queue was; `KeepKeys`; `namesKeys`, as the mirror parity counted them), its coordinator component (`events.keys`: each named tracked shape's
@@ -216,6 +215,19 @@ ranges taken again from the mirror into Core's kept ranges, `SetEntryRanges`, th
 `SceneCoordinatorSegments` (`componentText`) and its parity (`Diagnostics/LodSegmentParity.cpp`). What it leaves Core is what the walk reads:
 the kept ranges (`lodRanges`, from the attach's capture, erased with the entry), the segments' layout and capture (`Core/Engine/LodSegments.h`,
 `GeometryRecord::segments`) and the range slots (`ResolveLodRangeSlots`).
+The LOD gates followed into Features/Lod, once the generic structures they use existed (`Api/EngineEvents.h`: the `SceneStack` channel kind,
+the show veto, adoption guards, reserved hidden sites; `Api/CoordinatorComponents.h`: root marks, entry vetoes and observed slots, the
+commit's settle, take and publication hooks, the adoption hook). The feature now registers their switch (`CS_DCLF_LOD_GATES`, listed where
+Core's was: before `CS_DCLF_SHADOWS`, after Lod's two and TreeLod's, which name it), installs their engine hooks at its install
+(`LodGates.cpp`: the swaps' thunks, the LOD drain's and retirement's detours, the forced paths; `ShellState::Running` for the running
+query; no other hook shares their sites, so the move from the shell, right before the features, changed no patch), and registers, while
+they are installed and first of its registrations (where Core registered them, before every feature), their SceneStack channel, show
+veto, reserved hidden site, adoption guard, coordinator component (`LodGateComponent.cpp`, `LodGateAdoption.cpp`; after tree wind's,
+which shares no hook with it, and before the segments') and report lines (`LodGateReports.cpp`: `SceneCoordinatorGates`, `GateReleases`,
+alone at both), all in `LodGateChannel.cpp`; their observers and parity (`Diagnostics/LodGateObservers.cpp`, `LodGateParity.cpp`) are
+subscribed under the switches Core's observer install used. What they leave Core is the generic structures, the show veto's cells the
+hidden-node source's stubs load, the view engine's read of the gates through the show veto (`ViewLodRootsOwned`), and the Diagnostics
+events their observers take (`ScenePoint::GateFlipsPublished`, `GateReleasing`, `SetCommitted::gatesLive`).
 Tree LOD's renderer followed, on the draw family contract (`Api/DrawFamilies.h`): Features/TreeLod takes the `TreeInstances` family. It keeps
 the channel and the render thread's mirror (`TreeLodMirror`, drained by the family's `serve`, running or not), its tables as scene resources
 (the mirror's shape and mesh slots posted with the revision's inputs, `postInputs`; the draw row and list header the depth commit latches,
@@ -259,8 +271,7 @@ extension points still to come, as the next features need them:
   rows);
 - per-object record columns (the record's TreeParams and WindTimers block, `treeAnim`, is still Core's: the Lighting port's
   layout of `DCLFObjectRecord`);
-- more engine event channels: the scene-stack kind, root marks, entry vetoes and the commit's settle (the LOD gates); the stand-in change
-  still names the BSTreeNodes among its roots;
+- more engine event channels: the stand-in change still names the BSTreeNodes among its roots;
 - material contributors;
 - the shadow views' sibling of the view contract (`Api/ShadowViews.h`): the occlusion maps and the shadow views on the outer layer the
   bucketed views share (view points, the running query, the phase and view-bit manifest, coverage callback, withholding, reports);
@@ -311,7 +322,7 @@ lights, GPU occlusion and forward epochs are not views.
   feature maps onto its own skip causes and log lines), `ViewCovered`, `ViewDrawable`. A trees view's tree LOD per face is the view engine's
   (`ResolveViewTreeLod`, `DecideViewTreeLod`, the row `SubmitViewEpoch` commits), drawn by the `TreeInstances` draw family's faces while
   the family is on (Features/TreeLod's, under `ObjectClass::TreeLod`), as is the cube camera's LOD roots' ownership (`ViewLodRootsOwned`: the tree
-  root by the faces' tree LOD, the LOD land and objects roots by the LOD classes, Features/Lod's, and Core's LOD gates); a view feature
+  root by the faces' tree LOD, the LOD land and objects roots by the LOD classes and the LOD gates' show veto, Features/Lod's); a view feature
   reaches them through these calls, never a LOD feature's headers.
 - **Withholding.** `PassCapture` keeps each view's renderers and coverage (before the first decision, its `coveredInitially`). An
   InMainRenderers view's member is tested inside `WithholdMain`, before the main phase's; an OwnRenderers view's after it

@@ -1,12 +1,14 @@
 #pragma once
 
-// The LOD gates' coordinator component (Engine/Cull/LodGates.h has the engine side; dclf-async-publication.md, "T6b5, the scene side"):
-// its state (made by its make hook, held by the coordinator), its hooks (Gates.cpp: the gate events, the root marks' events, the commit's
-// settle, the outcomes; GateAdoption.cpp: the flips' publication and release, the adoption guard; GateReports.cpp: its report lines), and
-// what its observers read of it (Diagnostics/Scene/SceneGateParity.cpp, SceneGateObservers.cpp). Registered by Core's built-in gates
-// (GateComponent.cpp). Reaches the coordinator only through its context (Api::CoordinatorComponentContext).
+// The LOD gates' coordinator component (LodGates.h has the engine side; dclf-async-publication.md, "T6b5, the scene side"): its state
+// (made by its make hook, held by the coordinator), its hooks (LodGateComponent.cpp: the gate events, the root marks' events, the commit's
+// settle, the outcomes; LodGateAdoption.cpp: the flips' publication and release, the adoption guard; LodGateReports.cpp: its report lines),
+// and what its observers read of it (Diagnostics/LodGateParity.cpp, LodGateObservers.cpp). Registered by the feature's install
+// (LodGateChannel.cpp). Reaches the coordinator only through its context (Api::CoordinatorComponentContext). Included by the feature's
+// sources only.
 
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Api/Feature.h"
 
 #include <ankerl/unordered_dense.h>
 
@@ -19,11 +21,11 @@
 #include <utility>
 #include <vector>
 
-namespace DCLF::Scene::Gates
+namespace DCLF::Features::Lod::Gates
 {
-	/** @brief The gates' coordinator component (GateComponent.cpp's registration, at InstallFeatures; none while they are disabled). */
+	/** @brief The gates' coordinator component (LodGateChannel.cpp's registration, at the feature's install; none while they are disabled). */
 	inline Api::CoordinatorComponentId component;
-	/** @brief The gates' SceneStack channel (GateComponent.cpp's registration): the adoption wakes it for the outcomes the flips posted. */
+	/** @brief The gates' SceneStack channel (LodGateChannel.cpp's registration): the adoption wakes it for the outcomes the flips posted. */
 	inline Api::EngineChannelId channel;
 
 	/** @brief The LOD gates' clock (steady, ns) and a span on it in ms (0 without a start). */
@@ -73,6 +75,8 @@ namespace DCLF::Scene::Gates
 		std::uint64_t flipNs = 0;
 		std::uint32_t flipFrame = 0;
 	};
+	/** @brief An Api::TrackedState slot's none (Core's kNoObjectSlot). */
+	inline constexpr std::uint32_t kNoSlot = ~0u;
 	/** @brief A tracked geometry's tag: its gate (token) and side (kGateIncoming, kGateOutgoing). */
 	struct GateTag
 	{
@@ -102,7 +106,7 @@ namespace DCLF::Scene::Gates
 	{
 		std::uint64_t publishHoles = 0;
 		std::string firstPublishHole;
-		// CS_DCLF_PERSISTENT_PARITY: the gates' state against what it is derived from (SceneGateParity.cpp), since the last report.
+		// CS_DCLF_PERSISTENT_PARITY: the gates' state against what it is derived from (LodGateParity.cpp), since the last report.
 		struct Parity
 		{
 			std::uint64_t checks = 0, gates = 0, sweeps = 0, entries = 0, differ = 0, unmarked = 0;
@@ -138,17 +142,16 @@ namespace DCLF::Scene::Gates
 	template <class ObservedOf>
 	bool GeometryReady(const void* a_geometry, const Api::TrackedState& a_entry, ObservedOf&& a_observedOf)
 	{
-		constexpr std::uint32_t none = ~0u;  // kNoObjectSlot
 		// Classified since it was tagged (its tag took its verdict again), with its leaf's records.
 		if (a_entry.leafWaiting || !a_entry.classified)
 			return false;
 		// No record: ineligible for a recorded verdict (a hide still counts here when it is not the gate's: HiddenForWalk), or not written
 		// yet (Ineligible::None, 0).
-		if (a_entry.slot == none && a_entry.layerSlot == none)
+		if (a_entry.slot == kNoSlot && a_entry.layerSlot == kNoSlot)
 			return a_entry.reason != 0;
 		// Each slot of it whole at its last evaluation by the commit (its Observe's record).
 		for (const std::uint32_t slot : { a_entry.slot, a_entry.layerSlot })
-			if (slot != none)
+			if (slot != kNoSlot)
 				if (const Api::ObservedState observed = a_observedOf(slot); observed.geometry != a_geometry || !observed.ready)
 					return false;
 		return true;
@@ -165,7 +168,14 @@ namespace DCLF::Scene::Gates
 		return a_deltas | std::views::transform([](const std::shared_ptr<const void>& a_delta) -> const GateFlip& { return *static_cast<const GateFlip*>(a_delta.get()); });
 	}
 
-	// Gates.cpp: the component's hooks (Api::CoordinatorComponent).
+	// LodGateChannel.cpp.
+	/**
+	 * @brief The feature's install: the engine side's hooks (LodGates::Install, a_switch: CS_DCLF_LOD_GATES), then, while they are
+	 * installed, the gates' channel, show veto, hidden site, adoption guard, component and report lines.
+	 */
+	void RegisterGates(Api::InstallContext& a_context, Api::SwitchId a_switch);
+
+	// LodGateComponent.cpp: the component's hooks (Api::CoordinatorComponent).
 	/** @brief make: the component's state (GateState). */
 	std::shared_ptr<void> MakeState();
 	/** @brief Events::stacked: a gate event (in stack order, after its incoming blocks' attaches) opens its gate (a_event's pinned incoming, named outgoing). */
@@ -193,7 +203,7 @@ namespace DCLF::Scene::Gates
 	/** @brief Retirement::forgotAll: the tracked set cleared (the rescan), every tag with it. */
 	void ForgotAll(const Api::CoordinatorComponentContext& a_context);
 
-	// GateAdoption.cpp: the publication and the adoption.
+	// LodGateAdoption.cpp: the publication and the adoption.
 	/** @brief The gates' adoption guard (Api::AdoptionGuard::generation): LodGates::ForcedGeneration. */
 	std::uint64_t ForcedGeneration();
 	/** @brief Commit::published: the GateFlipsPublished observers, against the publication's claims. */
@@ -212,7 +222,7 @@ namespace DCLF::Scene::Gates
 		std::vector<double> flipToReleaseMs, requestToReleaseMs;
 		std::vector<std::uint32_t> flipToReleaseFrames;
 		bool any = false;
-		// The observers at the release (SceneGateObservers.cpp): the flips checked against the installed claims.
+		// The observers at the release (LodGateObservers.cpp): the flips checked against the installed claims.
 		struct Observed
 		{
 			std::uint64_t checked = 0, holes = 0, refusedHoles = 0, coverage = 0;
@@ -221,7 +231,7 @@ namespace DCLF::Scene::Gates
 	};
 	ReleaseStats& Releases();
 
-	// GateReports.cpp: the component's report lines.
+	// LodGateReports.cpp: the component's report lines.
 	/**
 	 * @brief ReportLines::componentText at SceneCoordinatorGates (logged as one line): opened, flipped, retired; the open ones' age and
 	 * what they wait for; the observers' holes and the parity. Empty while nothing happened.
@@ -229,4 +239,10 @@ namespace DCLF::Scene::Gates
 	void GateLines(const Api::CoordinatorComponentContext& a_context, std::string& a_text);
 	/** @brief ReportLines::lines at GateReleases (render thread, once a report window): the releases' line, then the engine side's. */
 	void ReleaseLines(std::uint32_t a_frame);
+
+	// Diagnostics/LodGateObservers.cpp, Diagnostics/LodGateParity.cpp.
+	/** @brief CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY (Diagnostics::Observe().claimsOrScene): the flips against the claims. */
+	void SubscribeGateObservers();
+	/** @brief CS_DCLF_PERSISTENT_PARITY (Diagnostics::Observe().scene): the gates' state after each commit. */
+	void SubscribeGateParity();
 }

@@ -2,20 +2,20 @@
 // geometries claimed with the flip's phases and no outgoing one claimed - in the publication its commit made (the coordinator's side of
 // <- GATE HOLE) and in the claims the frame that releases it installed.
 
-#include "SceneObservers.h"
-#include "SceneState.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Gates.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneView.h"
 
-namespace DCLF::Diagnostics
+namespace DCLF::Features::Lod
 {
 	namespace
 	{
-		using V = SceneView;
-		namespace G = Scene::Gates;
+		using V = Diagnostics::SceneView;
+		namespace G = Gates;
 
-		void OnFlipsPublished(const On<ScenePoint::GateFlipsPublished>&)
+		void OnFlipsPublished(const Diagnostics::On<Diagnostics::ScenePoint::GateFlipsPublished>&)
 		{
 			// A hole here is the commit's or the revocation's, one only at the release the hand-over's.
 			const auto& store = Scene::Coordinator::Get();
@@ -33,7 +33,7 @@ namespace DCLF::Diagnostics
 					}
 		}
 
-		void OnReleasing(const GateReleasing& a_event)
+		void OnReleasing(const Diagnostics::GateReleasing& a_event)
 		{
 			// Every incoming geometry claimed with the flip's phases, no outgoing claimed. A later publication's legitimate change of an
 			// incoming member reads as a hole here too.
@@ -60,9 +60,9 @@ namespace DCLF::Diagnostics
 		}
 	}
 
-	void InstallGateObservers()
+	void Gates::SubscribeGateObservers()
 	{
-		Subscribe<ScenePoint::GateFlipsPublished>(OnFlipsPublished);
-		Subscribe<GateReleasing>(OnReleasing);
+		Diagnostics::Subscribe<Diagnostics::ScenePoint::GateFlipsPublished>(OnFlipsPublished);
+		Diagnostics::Subscribe<Diagnostics::GateReleasing>(OnReleasing);
 	}
 }

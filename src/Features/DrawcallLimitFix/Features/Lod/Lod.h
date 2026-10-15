@@ -8,11 +8,13 @@
 // contributions (Api::ObjectClass::LodObjects, LodTerrain, Api/ObjectContributors.h), which Core reads as data: the Lighting
 // port's techniques and its LOD flags' eligibility (Ineligible::Lod), the sub-index shapes' eligibility, the LOD root listed as a category
 // node, and a view's LOD roots drawn in the engine's place (IndirectDraws::ViewLodRootsOwned: the cube camera's LOD land and objects roots,
-// while both classes are on and the swaps gated).
+// while both classes are on and the swaps gated). And the LOD gates (CS_DCLF_LOD_GATES): the engine's LOD swaps held until DCLF's claims
+// cover the incoming level (LodGates.h: the swap thunks and detours, installed by the feature's install, the show veto, the render thread's
+// flip; LodGateComponent.h: the gate events on a SceneStack channel, the coordinator component's marks, vetoes, settle, publication and
+// adoption, its report lines, observers and parity).
 //
-// Core keeps the LOD gates (CS_DCLF_LOD_GATES: Engine/Cull/LodGates, their install in the shell, the gate events, the coordinator's gates and
-// the publication's flips, FrameView's flip at adoption, the hidden stores' veto, their report lines and observers), the drawn ranges the
-// walk reads (the coordinator's lodRanges: the attach's capture, Core/Engine/LodSegments.h, the range slots), the LOD fades, and the LOD
+// Core keeps the drawn ranges the walk reads (the coordinator's lodRanges: the attach's capture, Core/Engine/LodSegments.h, the range
+// slots), the generic structures the gates use (Api/EngineEvents.h, Api/CoordinatorComponents.h), the LOD fades, and the LOD
 // classification's predicates (IsLodLand, IsLodObject). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"

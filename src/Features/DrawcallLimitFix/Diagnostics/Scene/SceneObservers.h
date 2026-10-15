@@ -21,7 +21,6 @@ namespace DCLF::Diagnostics
 	void InstallCandidateParity();
 	void InstallShadowSetParity();
 	void InstallReplayParity();
-	void InstallGateObservers();
 	void InstallMirrorReads();
 	void InstallMirrorParity();
 	void InstallShadowVolumeParity();

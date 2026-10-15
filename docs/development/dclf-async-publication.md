@@ -2489,25 +2489,25 @@ resident-draw, set and fade parity; motion m28/m29).
       the same as in a `CS_DCLF_FANOUT=0` run; the mirror reads line's `subtree`, `sun entry` and `light entry` counts unchanged against
       mode 0.
   - *T6b5, the scene side: objects ready before the engine shows its LOD swaps* (2026-10-11; written, not built or run yet; the engine
-    side, `Engine/Cull/LodGates.cpp`, by its own change). The interface is `Engine/Cull/LodGates.h`. The engine side hides a swap's incoming blocks
-    before their attach and vetoes the engine's shows, keeps the outgoing attached and shown, and calls `LodGates::CaptureGate` after the
-    attaches. The scene side holds the swap until every geometry under the incoming roots is a whole member or ineligible, then publishes
+    side, `Features/Lod/LodGates.cpp`, by its own change; both now Features/Lod's, `dclf-layout.md`). The interface is
+    `Features/Lod/LodGates.h`. The engine side hides a swap's incoming blocks before their attach and vetoes the engine's shows, keeps the
+    outgoing attached and shown, and calls `LodGates::CaptureGate` after the attaches. The scene side holds the swap until every geometry under the incoming roots is a whole member or ineligible, then publishes
     the post-swap claims with a flip, which the frame adopting them releases.
     - **Producer.** `CaptureGate` -> `Extensions::PushStacked` on the gates' `ChannelKind::SceneStack` channel: a stacked event on the
       swapping thread's stack. It is ordered after the incoming blocks' attaches, carries the token and the outgoing root keys (named),
       and pins the incoming roots (released with the batch on the render thread). The channel wakes a pass (`WakeSource::Pass`), always,
       like an attach in the world.
-    - **Registration.** Core's built-in gates (`Scene::RegisterCoreGates`, `Scene/Coordinator/GateComponent.cpp`) register, while
-      `LodGates::Enabled()`, the channel (`ChannelApply::AfterBatch`), the show veto (`Api::ShowVeto`: the open word, `Vetoes` and
+    - **Registration.** Features/Lod's install (`Gates::RegisterGates`, `Features/Lod/LodGateChannel.cpp`) installs the engine side's
+      hooks, then registers, while `LodGates::Enabled()`, the channel (`ChannelApply::AfterBatch`), the show veto (`Api::ShowVeto`: the open word, `Vetoes` and
       `NoteEngineHide`, kept in Core's install-resolved cells, which the hidden-node source's stubs load), a reserved hidden site
       (`ReserveHiddenSite`, for the gates' own stores' `Extensions::PushReservedHidden`), the adoption guard, the coordinator component
-      and its report lines. The component's state (`Scene::Gates::GateState`, `Scene/Coordinator/Gates.h`) is made by its `make` hook;
-      it reaches the coordinator only through its context.
+      and its report lines. The component's state (`Features::Lod::Gates::GateState`, `Features/Lod/LodGateComponent.h`) is made by its
+      `make` hook; it reaches the coordinator only through its context.
     - **Mirror.** `ApplyMirrorEvents` applies the event in order (the component's `Events.stacked`). Each incoming root is gated in the
       mirror (`SceneMirror::SetGated`, as its root mark owns its hide), a key set beside the records: a capture replaces a record whole,
       and the mirror parity compares records alone. `HiddenForWalk(key, record)` ignores a gated node's own kHidden, and every other hide
       still counts. So a gated block's geometries are classified, written, bound and joined while the engine keeps the block hidden.
-    - **Gates** (`Gates::LodGate`, `lodGates` by token; their roots are Core's root marks; `Scene/Coordinator/Gates.cpp`).
+    - **Gates** (`Gates::LodGate`, `lodGates` by token; their roots are Core's root marks; `Features/Lod/LodGateComponent.cpp`).
       - The event marks each root (`MarkRoot` with the token and side; the incoming own their hide; a mark it displaces leaves the
         other gate), walks the mirror once per root (`SubtreeEntries`) and tags the tracked geometries (the component's `gateTags`). The
         prepare's mark walk finds the nearest mark on a later arrival's mirror chain (`MarkOf` reads one), and `Events.underMark` tags it.
