@@ -1,14 +1,14 @@
 // ParticleSnapshots: the update-slot thunks (the writer, on whichever thread updates the system), the followed-record table and the
-// producer's expansion into the frame's palettes (FrameValues, on DCLF's pool), FUN_140e51320's port.
+// producer's expansion into the frame's palettes (FrameValues, on DCLF's pool, through the feature's palette rows class), FUN_140e51320's
+// port.
 
-#include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
+#include "Features/DrawcallLimitFix/Features/Particles/ParticleSnapshots.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 
 #include <algorithm>
 #include <bit>
@@ -17,7 +17,7 @@
 #include <limits>
 #include <numeric>
 
-namespace DCLF
+namespace DCLF::Features::Particles
 {
 	using Engine::At;
 	using Engine::Global;
@@ -415,6 +415,162 @@ namespace DCLF
 		return record.get();
 	}
 
+	namespace
+	{
+		using Slot = ParticleSnapshots::Record::Slot;
+		using Particle = ParticleSnapshots::Record::Particle;
+
+		/**
+		 * @brief The camera in a system's model space and its quads' axes (FUN_140e51320's): the camera's up and right (the world rotation's
+		 * transpose times the view data's), the plain quads' corner directions, and for aligned quads (its aspect flags, without rotations)
+		 * the quad's axes A (first the camera's up) and B (its right), which the velocity alignment replaces particle by particle and the next
+		 * particle starts from (as the engine's registers carry them), the view normal E = B x A, and the aspect, which the speed's aspect
+		 * replaces and the next particle keeps likewise.
+		 */
+		struct QuadFrame
+		{
+			float up[3], right[3];
+			float plainX[3], plainY[3];
+			float axisA[3], axisB[3], normal[3];
+			float aspect = 0.0f;
+		};
+
+		void FrameOf(const Slot& a_slot, const ParticleSnapshots::Camera& a_camera, QuadFrame& a_frame)
+		{
+			const auto& r = a_slot.world.rotate.entry;
+			auto& up = a_frame.up;
+			auto& right = a_frame.right;
+			for (int j = 0; j < 3; ++j) {
+				up[j] = r[1][j] * a_camera.up[1] + a_camera.up[0] * r[0][j] + r[2][j] * a_camera.up[2];
+				right[j] = a_camera.right[0] * r[0][j] + a_camera.right[1] * r[1][j] + a_camera.right[2] * r[2][j];
+			}
+			for (int j = 0; j < 3; ++j) {
+				a_frame.plainX[j] = up[j] + right[j];
+				a_frame.plainY[j] = up[j] - right[j];
+				a_frame.axisA[j] = up[j];
+				a_frame.axisB[j] = right[j];
+			}
+			a_frame.normal[0] = up[2] * right[1] - right[2] * up[1];
+			a_frame.normal[1] = up[0] * right[2] - right[0] * up[2];
+			a_frame.normal[2] = up[1] * right[0] - right[1] * up[0];
+			a_frame.aspect = a_slot.aspect[0];
+		}
+
+		// Back to front: the model-space positions' distance along the camera's forward (FUN_140d4fcb0, then FUN_140d4ff00's sort).
+		void OrderBackToFront(ParticleSnapshots::Record& a_record, const Slot& a_slot, const ParticleSnapshots::Camera& a_camera, std::uint32_t a_count)
+		{
+			auto& order = a_record.order;
+			auto& depth = a_record.depth;
+			order.resize(a_count);
+			std::iota(order.begin(), order.end(), std::uint16_t{ 0 });
+			if (a_count >= 2) {
+				depth.resize(a_count);
+				for (std::uint32_t i = 0; i < a_count; ++i) {
+					const auto& p = a_slot.particles[i].position;
+					depth[i] = p[1] * a_camera.forward[1] + p[0] * a_camera.forward[0] + a_camera.forward[2] * p[2];
+				}
+				SortByDepth(order.data(), depth.data(), 0, static_cast<int>(a_count) - 1);
+			}
+		}
+
+		// An aligned quad's half-diagonals, the frame's axes and aspect carried on to the next particle.
+		void AlignedAxes(const Slot& a_slot, const Particle& a_particle, QuadFrame& a_frame, float (&a_x)[3], float (&a_y)[3])
+		{
+			auto& axisA = a_frame.axisA;
+			auto& axisB = a_frame.axisB;
+			const auto& normal = a_frame.normal;
+			const auto& v = a_particle.velocity;
+			if (a_slot.speedAspect) {
+				// The velocity projected on the view plane; its length clamped to the two speeds picks the aspect between the two.
+				const float onB = v[0] * axisB[0] + v[1] * axisB[1] + v[2] * axisB[2];
+				const float onA = v[0] * axisA[0] + v[1] * axisA[1] + v[2] * axisA[2];
+				const float p0 = onA * axisA[0] + onB * axisB[0], p1 = onA * axisA[1] + onB * axisB[1], p2 = onA * axisA[2] + onB * axisB[2];
+				const float speed = std::sqrt(p0 * p0 + p2 * p2 + p1 * p1);
+				float clamped = a_slot.aspect[3];
+				if (speed <= clamped) {
+					clamped = speed;
+					if (speed <= a_slot.aspect[2])
+						clamped = a_slot.aspect[2];
+				}
+				a_frame.aspect = ((clamped - a_slot.aspect[2]) / (a_slot.aspect[3] - a_slot.aspect[2])) * (a_slot.aspect[1] - a_slot.aspect[0]) + a_slot.aspect[0];
+			}
+			if (a_slot.alignVelocity) {
+				// A along the projected velocity (XMVector3Normalize: zero for a zero one), B = A x E, both carried to the next particle.
+				const float onB = v[0] * axisB[0] + v[1] * axisB[1] + v[2] * axisB[2];
+				const float onA = v[0] * axisA[0] + v[1] * axisA[1] + v[2] * axisA[2];
+				float a[3]{ axisA[0] * onA + onB * axisB[0], axisA[1] * onA + onB * axisB[1], axisA[2] * onA + onB * axisB[2] };
+				const float lengthSq = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
+				const float length = std::sqrt(lengthSq);
+				for (int j = 0; j < 3; ++j)
+					a[j] = lengthSq == std::numeric_limits<float>::infinity() ? std::numeric_limits<float>::quiet_NaN() : length != 0.0f ? a[j] / length : 0.0f;
+				axisA[0] = a[0];
+				axisA[1] = a[1];
+				axisA[2] = a[2];
+				axisB[0] = normal[2] * a[1] - a[2] * normal[1];
+				axisB[1] = normal[0] * a[2] - a[0] * normal[2];
+				axisB[2] = normal[1] * a[0] - a[1] * normal[0];
+			}
+			const float stretch = 1.0f / a_frame.aspect;
+			for (int j = 0; j < 3; ++j) {
+				a_x[j] = (stretch * axisA[j] + axisB[j]) * a_particle.size;
+				a_y[j] = (stretch * axisA[j] - axisB[j]) * a_particle.size;
+			}
+		}
+
+		// A particle's quad half-diagonals: rotated, aligned or plain.
+		void QuadAxes(const Slot& a_slot, const Particle& a_particle, float a_fade, bool a_alignedQuads, QuadFrame& a_frame, float (&a_x)[3], float (&a_y)[3])
+		{
+			if (a_slot.rotations) {
+				const float size = a_fade * a_particle.colour[3] <= kRotatedAlphaCut ? 0.0f : a_particle.size;
+				const float sine = std::sin(a_particle.angle), cosine = std::cos(a_particle.angle);
+				const float a = (cosine + sine) * size, b = (cosine - sine) * size;
+				for (int j = 0; j < 3; ++j) {
+					a_x[j] = a * a_frame.right[j] + b * a_frame.up[j];
+					a_y[j] = a * a_frame.up[j] - b * a_frame.right[j];
+				}
+			} else if (a_alignedQuads) {
+				AlignedAxes(a_slot, a_particle, a_frame, a_x, a_y);
+			} else {
+				for (int j = 0; j < 3; ++j) {
+					a_x[j] = a_frame.plainX[j] * a_particle.size;
+					a_y[j] = a_frame.plainY[j] * a_particle.size;
+				}
+			}
+		}
+
+		// A quad's rows: its four corners relative to the model bound's centre, which the placement's translation carries (the engine's
+		// vertices and World alike), the packed colour as w's bits; then its subtexture rect.
+		void WriteQuad(const Slot& a_slot, const Particle& a_particle, const float (&a_x)[3], const float (&a_y)[3], float a_colour, float* a_out)
+		{
+			const auto& p = a_particle.position;
+			const float centre[3]{ p[0] - a_slot.modelCentre[0], p[1] - a_slot.modelCentre[1], p[2] - a_slot.modelCentre[2] };
+			const float signs[4][2]{ { -1.0f, 0.0f }, { 0.0f, -1.0f }, { 1.0f, 0.0f }, { 0.0f, 1.0f } };  // v0 -X, v1 -Y, v2 +X, v3 +Y
+			for (int c = 0; c < 4; ++c) {
+				for (int j = 0; j < 3; ++j)
+					a_out[c * 4 + j] = signs[c][0] != 0.0f ? centre[j] + signs[c][0] * a_x[j] : centre[j] + signs[c][1] * a_y[j];
+				a_out[c * 4 + 3] = a_colour;
+			}
+			std::copy_n(a_particle.rect, 4, a_out + 16);
+		}
+
+		// The placement: the world rotation and scale, the model bound's centre folded into the translation (BSEffectShader::SetupGeometry
+		// for particles, 0x1414eab10), the previous transform the same; the world bound the update left.
+		void PlacementOf(const Slot& a_slot, ParticleSnapshots::Expanded& a_out)
+		{
+			const auto& r = a_slot.world.rotate.entry;
+			const float scale = a_slot.world.scale;
+			const float t[3]{ a_slot.world.translate.x, a_slot.world.translate.y, a_slot.world.translate.z };
+			const auto& c = a_slot.modelCentre;
+			for (int row = 0; row < 3; ++row) {
+				a_out.world[row * 4 + 0] = r[row][0] * scale;
+				a_out.world[row * 4 + 1] = r[row][1] * scale;
+				a_out.world[row * 4 + 2] = r[row][2] * scale;
+				a_out.world[row * 4 + 3] = (r[row][0] * c[0] + r[row][1] * c[1] + r[row][2] * c[2]) * scale + t[row];
+			}
+			std::copy_n(a_slot.worldBound, 4, a_out.bound);
+		}
+	}
+
 	void ParticleSnapshots::Expand(Record& a_record, const Camera& a_camera, std::uint32_t a_quads, float* a_rows, Expanded& a_out)
 	{
 		a_out = {};
@@ -432,36 +588,12 @@ namespace DCLF
 		const auto& r = slot.world.rotate.entry;
 		const float scale = slot.world.scale;
 		const float t[3]{ slot.world.translate.x, slot.world.translate.y, slot.world.translate.z };
-		// The camera's up and right in the system's model space (FUN_140e51320's: the world rotation's transpose times the view data's).
-		float up[3], right[3];
-		for (int j = 0; j < 3; ++j) {
-			up[j] = r[1][j] * a_camera.up[1] + a_camera.up[0] * r[0][j] + r[2][j] * a_camera.up[2];
-			right[j] = a_camera.right[0] * r[0][j] + a_camera.right[1] * r[1][j] + a_camera.right[2] * r[2][j];
-		}
-		// Back to front: the model-space positions' distance along the camera's forward (FUN_140d4fcb0, then FUN_140d4ff00's sort).
-		auto& order = a_record.order;
-		auto& depth = a_record.depth;
-		order.resize(count);
-		std::iota(order.begin(), order.end(), std::uint16_t{ 0 });
-		if (count >= 2) {
-			depth.resize(count);
-			for (std::uint32_t i = 0; i < count; ++i) {
-				const auto& p = slot.particles[i].position;
-				depth[i] = p[1] * a_camera.forward[1] + p[0] * a_camera.forward[0] + a_camera.forward[2] * p[2];
-			}
-			SortByDepth(order.data(), depth.data(), 0, static_cast<int>(count) - 1);
-		}
-		const float plainX[3]{ up[0] + right[0], up[1] + right[1], up[2] + right[2] };
-		const float plainY[3]{ up[0] - right[0], up[1] - right[1], up[2] - right[2] };
-		// Aligned quads (FUN_140e51320's aspect flags, without rotations): the quad's axes A (first the camera's up) and B (its right),
-		// which the velocity alignment replaces particle by particle and the next particle starts from (as the engine's registers carry
-		// them), the view normal E = B x A, and the aspect, which the speed's aspect replaces and the next particle keeps likewise.
+		QuadFrame frame;
+		FrameOf(slot, a_camera, frame);
+		OrderBackToFront(a_record, slot, a_camera, count);
 		const bool alignedQuads = !slot.rotations && (slot.alignVelocity || slot.speedAspect);
-		float axisA[3]{ up[0], up[1], up[2] }, axisB[3]{ right[0], right[1], right[2] };
-		const float normal[3]{ up[2] * right[1] - right[2] * up[1], up[0] * right[2] - right[0] * up[2], up[1] * right[0] - right[1] * up[0] };
-		float aspect = slot.aspect[0];
 		for (std::uint32_t k = 0; k < count; ++k) {
-			const auto& particle = slot.particles[order[k]];
+			const auto& particle = slot.particles[a_record.order[k]];
 			const auto& p = particle.position;
 			// The particle's world position, for its distance fade.
 			const float world[3]{ (p[0] * r[0][0] + p[1] * r[0][1] + p[2] * r[0][2]) * scale + t[0], (p[0] * r[1][0] + p[1] * r[1][1] + p[2] * r[1][2]) * scale + t[1],
@@ -469,79 +601,11 @@ namespace DCLF
 			const float fade = DistanceFade(slot.fadeDistances, a_camera.eye, world);
 			const float colour = std::bit_cast<float>(PackColour(particle.colour, fade));
 			float x[3], y[3];
-			if (slot.rotations) {
-				const float size = fade * particle.colour[3] <= kRotatedAlphaCut ? 0.0f : particle.size;
-				const float sine = std::sin(particle.angle), cosine = std::cos(particle.angle);
-				const float a = (cosine + sine) * size, b = (cosine - sine) * size;
-				for (int j = 0; j < 3; ++j) {
-					x[j] = a * right[j] + b * up[j];
-					y[j] = a * up[j] - b * right[j];
-				}
-			} else if (alignedQuads) {
-				const auto& v = particle.velocity;
-				if (slot.speedAspect) {
-					// The velocity projected on the view plane; its length clamped to the two speeds picks the aspect between the two.
-					const float onB = v[0] * axisB[0] + v[1] * axisB[1] + v[2] * axisB[2];
-					const float onA = v[0] * axisA[0] + v[1] * axisA[1] + v[2] * axisA[2];
-					const float p0 = onA * axisA[0] + onB * axisB[0], p1 = onA * axisA[1] + onB * axisB[1], p2 = onA * axisA[2] + onB * axisB[2];
-					const float speed = std::sqrt(p0 * p0 + p2 * p2 + p1 * p1);
-					float clamped = slot.aspect[3];
-					if (speed <= clamped) {
-						clamped = speed;
-						if (speed <= slot.aspect[2])
-							clamped = slot.aspect[2];
-					}
-					aspect = ((clamped - slot.aspect[2]) / (slot.aspect[3] - slot.aspect[2])) * (slot.aspect[1] - slot.aspect[0]) + slot.aspect[0];
-				}
-				if (slot.alignVelocity) {
-					// A along the projected velocity (XMVector3Normalize: zero for a zero one), B = A x E, both carried to the next particle.
-					const float onB = v[0] * axisB[0] + v[1] * axisB[1] + v[2] * axisB[2];
-					const float onA = v[0] * axisA[0] + v[1] * axisA[1] + v[2] * axisA[2];
-					float a[3]{ axisA[0] * onA + onB * axisB[0], axisA[1] * onA + onB * axisB[1], axisA[2] * onA + onB * axisB[2] };
-					const float lengthSq = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
-					const float length = std::sqrt(lengthSq);
-					for (int j = 0; j < 3; ++j)
-						a[j] = lengthSq == std::numeric_limits<float>::infinity() ? std::numeric_limits<float>::quiet_NaN() : length != 0.0f ? a[j] / length : 0.0f;
-					axisA[0] = a[0];
-					axisA[1] = a[1];
-					axisA[2] = a[2];
-					axisB[0] = normal[2] * a[1] - a[2] * normal[1];
-					axisB[1] = normal[0] * a[2] - a[0] * normal[2];
-					axisB[2] = normal[1] * a[0] - a[1] * normal[0];
-				}
-				const float stretch = 1.0f / aspect;
-				for (int j = 0; j < 3; ++j) {
-					x[j] = (stretch * axisA[j] + axisB[j]) * particle.size;
-					y[j] = (stretch * axisA[j] - axisB[j]) * particle.size;
-				}
-			} else {
-				for (int j = 0; j < 3; ++j) {
-					x[j] = plainX[j] * particle.size;
-					y[j] = plainY[j] * particle.size;
-				}
-			}
-			// Relative to the model bound's centre, which the placement's translation carries (the engine's vertices and World alike).
-			const float centre[3]{ p[0] - slot.modelCentre[0], p[1] - slot.modelCentre[1], p[2] - slot.modelCentre[2] };
-			float* out = a_rows + std::size_t(k) * kRowsPerParticle * 4;
-			const float signs[4][2]{ { -1.0f, 0.0f }, { 0.0f, -1.0f }, { 1.0f, 0.0f }, { 0.0f, 1.0f } };  // v0 -X, v1 -Y, v2 +X, v3 +Y
-			for (int c = 0; c < 4; ++c) {
-				for (int j = 0; j < 3; ++j)
-					out[c * 4 + j] = signs[c][0] != 0.0f ? centre[j] + signs[c][0] * x[j] : centre[j] + signs[c][1] * y[j];
-				out[c * 4 + 3] = colour;
-			}
-			std::copy_n(particle.rect, 4, out + 16);
+			QuadAxes(slot, particle, fade, alignedQuads, frame, x, y);
+			WriteQuad(slot, particle, x, y, colour, a_rows + std::size_t(k) * kRowsPerParticle * 4);
 		}
 		std::fill(a_rows + std::size_t(count) * kRowsPerParticle * 4, a_rows + rows * 4, 0.0f);
-		// The placement: the world rotation and scale, the model bound's centre folded into the translation (BSEffectShader::SetupGeometry
-		// for particles, 0x1414eab10), the previous transform the same; the world bound the update left.
-		const auto& c = slot.modelCentre;
-		for (int row = 0; row < 3; ++row) {
-			a_out.world[row * 4 + 0] = r[row][0] * scale;
-			a_out.world[row * 4 + 1] = r[row][1] * scale;
-			a_out.world[row * 4 + 2] = r[row][2] * scale;
-			a_out.world[row * 4 + 3] = (r[row][0] * c[0] + r[row][1] * c[1] + r[row][2] * c[2]) * scale + t[row];
-		}
-		std::copy_n(slot.worldBound, 4, a_out.bound);
+		PlacementOf(slot, a_out);
 		a_out.particles = count;
 		a_out.snapshot = true;
 		a_record.expandedRun.store(runs.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);

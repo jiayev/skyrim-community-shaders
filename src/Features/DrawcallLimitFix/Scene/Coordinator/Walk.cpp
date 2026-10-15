@@ -4,9 +4,9 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 
 #include <atomic>
 #include <cassert>
@@ -345,9 +345,10 @@ namespace DCLF::Scene
 			if (rows && rows <= 240)
 				a_out.boneRows = rows;
 		}
-		// A particle member's palette block: five rows a particle of its capacity bucket, filled by FrameValues every frame.
+		// A particle member's palette block: its class's rule (Api::PaletteRowsContribution: five rows a particle of its capacity bucket),
+		// filled by FrameValues every frame.
 		if (a_out.reason == Ineligible::None && ParticleSystemTaken(leaf))
-			a_out.particleRows = ParticleSnapshots::RowsOf(leaf.geometry->particles.capacity);
+			a_out.particleRows = Extensions::PaletteRowsOf(Api::FrameValueItemClass::ParticleSystem, leaf.geometry->particles.capacity);
 		// Whether the engine would draw this object into a shadow map, and with which Utility technique.
 		using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
 		const auto* shadowProperty = leaf.property;
@@ -709,18 +710,18 @@ namespace DCLF::Scene
 	{
 		// A particle system draws the renderer's own quads (FUN_1414f2ad0 type 1: FUN_140e4d280's quad index list and texcoord stream,
 		// one quad a particle), vertices pulled from its palette block: one slot per capacity bucket, keyed by a DCLF address.
+		// The slot is the class's (Api::PaletteRowsContribution::geometrySource: Features/Particles' quad buckets).
 		if (!a_partition && a_geometry.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) && a_geometry.particles.system) {
-			const auto quads = ParticleSnapshots::QuadsOf(a_geometry.particles.capacity);
-			const auto engineQuads = ParticleSnapshots::Get().EngineQuads();
-			if (!engineQuads.vertices || !engineQuads.indices)
+			Api::PaletteGeometrySource palette;
+			if (!Extensions::PaletteGeometryOf(Api::FrameValueItemClass::ParticleSystem, a_geometry.particles.capacity, palette))
 				return Tables::kSlotFree;
 			GeometrySource source;
-			source.key = static_cast<const RE::BSGraphics::TriShape*>(ParticleSnapshots::QuadSlotKey(quads));
-			source.vertexBuffer = engineQuads.vertices;
-			source.indexBuffer = engineQuads.indices;
-			source.vertexDesc = ParticleSnapshots::kSlotVertexDesc;
-			source.vertexCount = quads * 4;
-			source.indexCount = quads * 6;
+			source.key = static_cast<const RE::BSGraphics::TriShape*>(palette.key);
+			source.vertexBuffer = palette.vertexBuffer;
+			source.indexBuffer = palette.indexBuffer;
+			source.vertexDesc = palette.vertexDesc;
+			source.vertexCount = palette.vertexCount;
+			source.indexCount = palette.indexCount;
 			source.layer = true;  // its key is no TriShape (Tables::geometryLayerKey: never read as one)
 			return ResolveGeometrySource(source, a_timer);
 		}
@@ -1274,7 +1275,7 @@ namespace DCLF::Scene
 		const auto leaf = mirror.Leaf(&a_geometry);
 		traits |= leaf.Skinned() ? kTraitSkin : 0u;
 		// A particle system's bound and quads change with each update, invisibly to the walk: a mover (FrameValues places it every frame),
-		// its own update its move event (ParticleSnapshots' capture pushes it).
+		// its own update its move event (Features/Particles' snapshot capture pushes it).
 		constexpr auto kParticles = static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles);
 		if (Extensions::GeometryTypeOn(ActiveToggles(), kParticles) && leaf.geometry && leaf.geometry->type == kParticles)
 			traits |= kTraitMoves;

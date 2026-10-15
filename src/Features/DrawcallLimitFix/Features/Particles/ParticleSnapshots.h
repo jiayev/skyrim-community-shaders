@@ -1,5 +1,8 @@
 #pragma once
 
+// The particle snapshots (Features/Particles): the writer's engine hooks, the followed records and the expansion the feature's palette
+// rows class runs (ParticleRows.cpp). Included by the feature's sources only.
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -16,7 +19,7 @@ namespace RE
 	class NiParticleSystem;
 }
 
-namespace DCLF
+namespace DCLF::Features::Particles
 {
 	/**
 	 * @brief The particle systems DCLF draws (CS_DCLF_PARTICLES; drawcall-limit-fix.md, "Particles"; engine notes, "Particle systems"),
@@ -32,11 +35,13 @@ namespace DCLF
 	 *   particle's subtexture rect; the system's world transform, world bound, model bound centre and fade distances) into the system's
 	 *   record, a triple buffer: the writer fills its slot and exchanges it into `latest`. A record the producer does not follow is not
 	 *   copied (one lookup in an immutable table);
-	 * - the reader: FrameValues' producer (one at a time, on DCLF's pool), for every particle member of the frame's plan, takes the newest
-	 *   snapshot and expands it with the frame's main camera (BeginFrame, at FrameDriver::BeginFrame) exactly as FUN_140e51320 does, into the
-	 *   member's block of the frame's palettes (five rows a particle: four corners, then the subtexture rect), which Effect.hlsl's DCLF
-	 *   particle permutation pulls by vertex index; and gives the member's placement row the snapshot's world (the model bound centre folded
-	 *   into the translation, as BSEffectShader::SetupGeometry does for particles) and world bound (the GPU cull's).
+	 * - the reader: FrameValues' producer (one at a time, on DCLF's pool), through the feature's palette rows class (ParticleRows.cpp,
+	 *   Api::PaletteRowsContribution: Follow at the run's start, Expand in each chunk), for every particle member of the frame's plan, takes
+	 *   the newest snapshot and expands it with the frame's main camera (BeginFrame, the class's frame start at FrameDriver::BeginFrame)
+	 *   exactly as FUN_140e51320 does, into the member's block of the frame's palettes (five rows a particle: four corners, then the
+	 *   subtexture rect), which Effect.hlsl's DCLF particle permutation pulls by vertex index; and gives the member's placement row the
+	 *   snapshot's world (the model bound centre folded into the translation, as BSEffectShader::SetupGeometry does for particles) and world
+	 *   bound (the GPU cull's).
 	 *
 	 * The table of followed records is the producer's: a record is added the first time a plan names its system, and pruned when no plan has
 	 * named it for kPruneRuns runs; every change publishes a new immutable table. A writer counts itself in (writersInside) before it reads
@@ -64,10 +69,11 @@ namespace DCLF
 		 * (0x0840200004000051) puts the position and colour on stream 1, which DCLF's draws reserve for face streams.
 		 */
 		static constexpr std::uint64_t kSlotVertexDesc = 0x0000200000000001ull;
-		/** @brief The quads a system of a_capacity particles is drawn with: its capacity rounded up to a power of two, within the engine's. */
+		/**
+		 * @brief The quads a system of a_capacity particles is drawn with: its capacity rounded up to a power of two, within the engine's
+		 * (the palette rows class's rule, which the walk sizes its block by: ParticleRows.cpp).
+		 */
 		static std::uint32_t QuadsOf(std::uint32_t a_capacity);
-		/** @brief Its block's rows in the frame's palettes. */
-		static std::uint32_t RowsOf(std::uint32_t a_capacity) { return QuadsOf(a_capacity) * kRowsPerParticle; }
 		/** @brief The geometry slot key of a_quads quads (one slot a bucket): an address of DCLF's own, never an engine object's. */
 		static const void* QuadSlotKey(std::uint32_t a_quads);
 
@@ -85,13 +91,16 @@ namespace DCLF
 			float up[3]{}, right[3]{}, forward[3]{}, eye[3]{};
 			bool valid = false;
 		};
-		/** @brief Render thread, FrameDriver::BeginFrame: the frame's main camera (the world scene graph's), and the renderer's quads once. */
+		/**
+		 * @brief Render thread, FrameDriver::BeginFrame (the palette rows class's frame start): the frame's main camera (the world scene
+		 * graph's), and the renderer's quads once.
+		 */
 		void BeginFrame();
-		/** @brief Render thread (FrameValues::Kick): BeginFrame's camera. */
+		/** @brief Render thread (the palette rows class's kick, at FrameValues::Kick): BeginFrame's camera. */
 		Camera FrameCamera() const { return frameCamera; }
 
 		class Record;
-		/** @brief The producer (FrameValues, one at a time): a_geometry's record, followed from now on (added when new). */
+		/** @brief The producer (the palette rows class's run start, one at a time): a_geometry's record, followed from now on (added when new). */
 		Record* Follow(const void* a_geometry);
 		/** @brief What Expand made of a record's newest snapshot: the placement's world (row-major 3x4) and bound, its particles. */
 		struct Expanded
@@ -102,11 +111,11 @@ namespace DCLF
 			bool snapshot = false;  // false: no snapshot yet (the block is all degenerate quads, the placement the engine's)
 		};
 		/**
-		 * @brief The producer, one thread a record: the record's newest snapshot faced to a_camera into a_rows (a_quads * kRowsPerParticle
-		 * float4 rows: the particles back to front, the rest degenerate). FUN_140e51320's port.
+		 * @brief The producer (the palette rows class's chunks), one thread a record: the record's newest snapshot faced to a_camera into
+		 * a_rows (a_quads * kRowsPerParticle float4 rows: the particles back to front, the rest degenerate). FUN_140e51320's port.
 		 */
 		void Expand(Record& a_record, const Camera& a_camera, std::uint32_t a_quads, float* a_rows, Expanded& a_out);
-		/** @brief The producer, after its items: prunes, publishes a changed table, frees what no writer can hold. */
+		/** @brief The producer, after its items (the palette rows class's run end): prunes, publishes a changed table, frees what no writer can hold. */
 		void EndRun();
 
 		/**

@@ -151,11 +151,12 @@ namespace DCLF::Features::FirstPerson
 			on ? "on" : "off", f.frames, f.latched, f.depthEpochs, f.colourEpochs, s[0], s[1], s[2], s[3], s[4], s[5], s[5] ? " <- EPOCH FAILED" : "", s[6],
 			s[6] ? " <- NO DEPTH EPOCH" : "", static_cast<int>(state->targets.colour), static_cast<int>(state->targets.colour2), static_cast<int>(state->targets.depth), f.slots,
 			f.pipelinesReady, draws.ViewDepthRange(kView));
-		const auto particles = FrameValues::TakeFirstPersonParticleStats();
+		// The palette rows classes' first-person writes (Features/Particles' particle members), counted by Core's FrameValues.
+		const auto particles = FrameValues::TakeFirstPersonPaletteStats();
 		text += fmt::format("[DCLF] first person's forward part (T7e): {:.1f} forward members a frame (blended Lighting, effects, particles; the main set's pipelines "
 							"through the colour signature, sorted back to front); particle members: {} expansions of {} particles faced to the first-person eye, "
 							"their snapshots' bound at most {:.0f} units from it{}{}\n",
-			f.frames ? static_cast<double>(f.forwardMembers) / static_cast<double>(f.frames) : 0.0, particles.expansions, particles.particles, particles.farthest,
+			f.frames ? static_cast<double>(f.forwardMembers) / static_cast<double>(f.frames) : 0.0, particles.writes, particles.units, particles.farthest,
 			particles.farthest > 2000.0f ? " <- FIRST-PERSON PARTICLE SPACE" : "",
 			state->forwardCompatible.load(std::memory_order_acquire) ? "" : "; the main depth format is not kPOST_ZPREPASS_COPY's: forward members stay the engine's");
 		// The <- FIRST PERSON observer (CS_DCLF_SET_PARITY; PassCapture): the engine's first-person registrations of members, withheld, and

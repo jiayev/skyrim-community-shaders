@@ -96,6 +96,11 @@ namespace DCLF::Api
 		 * not registered before, or an entry class no component follows.
 		 */
 		virtual void RegisterVertexStream(const VertexStreamContribution& a_stream) = 0;
+		/**
+		 * @brief Fails the install for a class another registration has (or None), no name, geometrySource, beginRun, sampleChunk or endRun,
+		 * or a rule without rows or units (minUnits past maxUnits; maxUnits not a power of two for a pow2 rule).
+		 */
+		virtual void RegisterPaletteRows(const PaletteRowsContribution& a_rows) = 0;
 
 	protected:
 		~InstallContext() = default;

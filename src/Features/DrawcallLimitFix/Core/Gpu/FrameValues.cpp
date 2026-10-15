@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 
@@ -10,7 +11,6 @@
 
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
@@ -48,9 +48,8 @@ namespace DCLF
 {
 	namespace
 	{
-		// First-person particle expansion counters, for the first-person report.
-		std::atomic<std::uint64_t> firstPersonParticleExpansions{ 0 }, firstPersonParticleCount{ 0 };
-		std::atomic<std::uint32_t> firstPersonParticleFarthest{ 0 };  // non-negative float bits (ordered as the float)
+		// The palette rows classes' first-person writes (Api::PaletteRowsChunk::NoteFirstPerson), for the first-person report.
+		Api::PaletteRowsFirstPerson firstPersonPalette;
 
 		// Row-major 3x4, as the shaders read a transform.
 		void StoreTransform(const RE::NiTransform& a_transform, float (&a_out)[12])
@@ -139,12 +138,12 @@ namespace DCLF
 		}
 	}
 
-	FrameValues::FirstPersonParticleStats FrameValues::TakeFirstPersonParticleStats()
+	FrameValues::FirstPersonPaletteStats FrameValues::TakeFirstPersonPaletteStats()
 	{
-		FirstPersonParticleStats out;
-		out.expansions = firstPersonParticleExpansions.exchange(0, std::memory_order_relaxed);
-		out.particles = firstPersonParticleCount.exchange(0, std::memory_order_relaxed);
-		out.farthest = std::bit_cast<float>(firstPersonParticleFarthest.exchange(0, std::memory_order_relaxed));
+		FirstPersonPaletteStats out;
+		out.writes = firstPersonPalette.writes.exchange(0, std::memory_order_relaxed);
+		out.units = firstPersonPalette.units.exchange(0, std::memory_order_relaxed);
+		out.farthest = std::bit_cast<float>(firstPersonPalette.farthest.exchange(0, std::memory_order_relaxed));
 		return out;
 	}
 
@@ -391,7 +390,7 @@ namespace DCLF
 		{
 			Plan::Item item;
 			std::vector<const void*> keys;  // its entries in keyIndex
-			bool live = false, keyed = false, particle = false;
+			bool live = false, keyed = false, everyFrame = false;
 		};
 		struct KeptRoot
 		{
@@ -412,8 +411,9 @@ namespace DCLF
 		};
 		ankerl::unordered_dense::map<const void*, Keyed> keyIndex;
 		ankerl::unordered_dense::map<std::uint32_t, std::vector<std::uint32_t>> slotRoots;  // a dependent's slot (and its layer's): its roots
-		// Movers and roots whose keys a refused lease left unread (checked live and unkeyed when taken), and particle systems: due every frame.
-		std::vector<std::uint32_t> unkeyedMovers, unkeyedRoots, particleMovers;
+		// Movers and roots whose keys a refused lease left unread (checked live and unkeyed when taken), and a palette rows class's items:
+		// due every frame.
+		std::vector<std::uint32_t> unkeyedMovers, unkeyedRoots, everyFrameMovers;
 		std::vector<std::uint32_t> newMovers, newRoots;  // what the applied plans added or changed: due once
 		// The plans applied since the last take, their resets and items; the kept set's parity (a plan's check) since its last line.
 		std::atomic<std::uint64_t> plansApplied{ 0 }, planResets{ 0 }, planItems{ 0 };
@@ -498,10 +498,8 @@ namespace DCLF
 			std::shared_ptr<rhi::TimelinePtr> timeline;
 			std::shared_ptr<org::runtime::IUploadService> uploads;
 			std::vector<FirstPersonSample> firstPerson;  // the render thread's samples (Kick)
-			ParticleSnapshots::Camera particleCamera;    // the main camera particle quads face
-			// The camera first-person particle quads face: the main camera's rotation (the first-person camera's, FUN_1414cb020)
-			// at the first-person eye (DrawWorld +0x00).
-			ParticleSnapshots::Camera firstPersonParticleCamera;
+			// The palette rows classes' frame inputs (their kicks'; by class index - 1).
+			std::array<Api::PaletteRowsInput, Api::kPaletteRowsClasses> paletteInputs{};
 		};
 		// Sample's stages.
 		struct Listed
@@ -527,21 +525,54 @@ namespace DCLF
 			std::vector<BindlessPlacement>& out;
 			std::vector<PaletteRow>& paletteOut;
 		};
+		// The palette rows classes' runs (Api::PaletteRowsContribution), by class index - 1: the entry (null: none registered) and the
+		// run's items of the class with a block, in the run's order.
+		struct PaletteRun
+		{
+			const Extensions::PaletteRowsEntry* entry = nullptr;
+			std::vector<Api::PaletteRowsItem> items;
+		};
+		using PaletteRuns = std::array<PaletteRun, Api::kPaletteRowsClasses>;
+		// A class's item in a chunk, sampled and waiting for the class's write: where its marks go in the chunk's lists (its place among
+		// the chunk's items), whether its layer changed, its row as sampled, its class, and its write and block in the chunk's.
+		struct Deferred
+		{
+			const Listed* listed = nullptr;
+			std::size_t slotsAt = 0, paletteRunsAt = 0, owedAt = 0;
+			std::uint32_t paletteClass = 0, write = 0, paletteAt = 0;
+			void* state = nullptr;  // its class's (Api::PaletteRowsItem::state)
+			bool layerChanged = false;
+			BindlessPlacement row{};
+		};
+		// A chunk's deferred items in the run's order, their writes (each class's together, in the run's order) and blocks.
+		struct DeferredChunk
+		{
+			std::array<Deferred, kSampleGrain> items;
+			std::array<Api::PaletteRowsWrite, kSampleGrain> writes;
+			std::uint32_t count = 0, rowCount = 0;
+			std::vector<PaletteRow> rows;
+		};
 		// A chunk's scratch (SampleListed).
 		struct ItemScratch
 		{
 			BindlessPlacement row, layer;
-			std::vector<PaletteRow> particleRows;
+			std::unique_ptr<DeferredChunk> deferred;  // made at the chunk's first deferred item
+			std::array<std::size_t, Api::kPaletteRowsClasses> cursors{};  // per class: its next item in the run's
 		};
 		void ListItem(const Plan::Item& a_item, bool a_settles, bool a_mover, std::size_t a_rows, std::size_t a_blocks, std::vector<Listed>& a_items);
 		void MarkSampledRoots();
 		void ApplyFirstPersonSamples(const Job& a_job, const SampleOut& a_out, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked);
 		void SampleItems(const Job& a_job, const std::vector<Listed>& a_items, const SampleOut& a_out, std::vector<Changed>& a_changed,
 			std::atomic<std::uint64_t>& a_refused);
-		void SampleListed(const Job& a_job, const Listed& a_listed, ParticleSnapshots::Record* a_particles, const SampleOut& a_out, Changed& a_mine,
-			ItemScratch& a_scratch, std::atomic<std::uint64_t>& a_refused);
-		static void ExpandParticles(const Job& a_job, const Plan::Item& a_item, ParticleSnapshots::Record& a_particles, ItemScratch& a_scratch);
-		static bool SamplePalette(const Plan::Item& a_item, bool a_particles, const SampleOut& a_out, Changed& a_mine, const ItemScratch& a_scratch);
+		static void BeginPaletteRuns(const Job& a_job, const std::vector<Listed>& a_items, PaletteRuns& a_runs);
+		static void SampleChunk(const Job& a_job, const std::vector<Listed>& a_items, const PaletteRuns& a_runs, std::size_t a_begin, std::size_t a_end,
+			const SampleOut& a_out, Changed& a_mine, std::atomic<std::uint64_t>& a_refused);
+		static void SampleListed(const Listed& a_listed, const PaletteRuns& a_runs, const SampleOut& a_out, Changed& a_mine, ItemScratch& a_scratch,
+			std::atomic<std::uint64_t>& a_refused);
+		static Deferred& Defer(const Listed& a_listed, std::uint32_t a_class, const Api::PaletteRowsItem& a_classItem, ItemScratch& a_scratch);
+		static void WriteDeferred(const Job& a_job, const PaletteRuns& a_runs, DeferredChunk& a_deferred);
+		static void FinishDeferred(const SampleOut& a_out, Changed& a_mine, DeferredChunk& a_deferred);
+		static bool SamplePalette(const Plan::Item& a_item, const SampleOut& a_out, Changed& a_mine);
 		void SampleRoots(const SampleOut& a_out, std::vector<std::vector<std::uint32_t>>& a_rootChanged, std::vector<std::uint8_t>& a_rootRefused,
 			std::atomic<std::uint64_t>& a_refused);
 		void MarkSampled(const std::vector<Changed>& a_changed, const std::vector<std::vector<std::uint32_t>>& a_rootChanged,
@@ -691,7 +722,7 @@ namespace DCLF
 		slotRoots.clear();
 		unkeyedMovers.clear();
 		unkeyedRoots.clear();
-		particleMovers.clear();
+		everyFrameMovers.clear();
 		newMovers.clear();
 		newRoots.clear();
 	}
@@ -699,10 +730,11 @@ namespace DCLF
 	void FrameValues::Impl::KeyMover(std::uint32_t a_mover)
 	{
 		auto& mover = keptMovers[a_mover];
-		// Particle quads face the camera: due every frame, no keys. A first-person member is the render thread's (Kick).
-		if (mover.item.particles) {
-			mover.particle = true;
-			particleMovers.push_back(a_mover);
+		// A palette rows class's item (particle quads face the camera): due every frame, no keys. A first-person member is the render
+		// thread's (Kick).
+		if (mover.item.itemClass != Api::FrameValueItemClass::None) {
+			mover.everyFrame = true;
+			everyFrameMovers.push_back(a_mover);
 			return;
 		}
 		if (mover.item.firstPerson)
@@ -721,8 +753,8 @@ namespace DCLF
 	void FrameValues::Impl::UnkeyMover(std::uint32_t a_mover)
 	{
 		auto& mover = keptMovers[a_mover];
-		if (std::exchange(mover.particle, false))
-			EraseIndex(particleMovers, a_mover);
+		if (std::exchange(mover.everyFrame, false))
+			EraseIndex(everyFrameMovers, a_mover);
 		if (std::exchange(mover.keyed, false))
 			for (const void* key : mover.keys)
 				if (const auto it = keyIndex.find(key); it != keyIndex.end()) {
@@ -1068,8 +1100,8 @@ namespace DCLF
 			root.keyed = true;
 			return true;
 		});
-		// Particle quads face the camera: every frame.
-		for (const auto m : particleMovers)
+		// A palette rows class's items (particle quads face the camera): every frame.
+		for (const auto m : everyFrameMovers)
 			MarkMover(m);
 		// Without the move writers' hooks (not installed, or their install failed) nothing says what moved: everything is due.
 		if (!Scene::MoveEventsLive()) {
@@ -1170,10 +1202,11 @@ namespace DCLF
 		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) { a_entry.sample(a_producer); });
 	}
 
-	// First-person items are the render thread's (FirstPersonSample), except particle members (expanded from snapshots).
+	// First-person items are the render thread's (FirstPersonSample), except a palette rows class's (particle members, expanded from
+	// snapshots).
 	void FrameValues::Impl::ListItem(const Plan::Item& a_item, bool a_settles, bool a_mover, std::size_t a_rows, std::size_t a_blocks, std::vector<Listed>& a_items)
 	{
-		if ((a_item.firstPerson && !a_item.particles) || a_item.slot >= a_rows || !a_item.geometry || listed[a_item.slot])
+		if ((a_item.firstPerson && a_item.itemClass == Api::FrameValueItemClass::None) || a_item.slot >= a_rows || !a_item.geometry || listed[a_item.slot])
 			return;
 		listed[a_item.slot] = 1;
 		listedSlots.push_back(a_item.slot);
@@ -1231,30 +1264,77 @@ namespace DCLF
 		std::atomic<std::uint64_t>& a_refused)
 	{
 		auto& executor = SceneScheduler::Executor();
-		// Particle records, before the parallel loop (ParticleSnapshots::Follow is producer-only).
-		std::vector<ParticleSnapshots::Record*> particleRecords(a_items.size(), nullptr);
-		for (std::size_t i = 0; i < a_items.size(); ++i)
-			if (a_items[i].palette && a_items[i].item->particles)
-				particleRecords[i] = ParticleSnapshots::Get().Follow(a_items[i].item->geometry.get());
+		// The palette rows classes' runs, before the parallel loop (a class's beginRun is the producer's alone: Features/Particles follows
+		// each particle member's snapshot record).
+		PaletteRuns paletteRuns;
+		BeginPaletteRuns(a_job, a_items, paletteRuns);
 		executor.ParallelFor("CS.DCLF.FrameValues.Items", a_items.size(), kSampleGrain, [&](std::size_t a_begin, std::size_t a_end) {
 			ZoneScopedN("CS.DCLF.FrameValues.Items");
-			auto& mine = a_changed[a_begin / kSampleGrain];
-			ItemScratch scratch;
-			for (std::size_t i = a_begin; i < a_end; ++i)
-				SampleListed(a_job, a_items[i], particleRecords[i], a_out, mine, scratch, a_refused);
+			SampleChunk(a_job, a_items, paletteRuns, a_begin, a_end, a_out, a_changed[a_begin / kSampleGrain], a_refused);
 		});
-		ParticleSnapshots::Get().EndRun();
+		for (std::size_t c = 0; c < paletteRuns.size(); ++c)
+			if (paletteRuns[c].entry)
+				paletteRuns[c].entry->contribution.endRun({ a_job.paletteInputs[c], paletteRuns[c].items });
 	}
 
-	void FrameValues::Impl::SampleListed(const Job& a_job, const Listed& a_listed, ParticleSnapshots::Record* a_particles, const SampleOut& a_out, Changed& a_mine,
-		ItemScratch& a_scratch, std::atomic<std::uint64_t>& a_refused)
+	// Each registered class's items with a block, in the run's order, handed to its beginRun.
+	void FrameValues::Impl::BeginPaletteRuns(const Job& a_job, const std::vector<Listed>& a_items, PaletteRuns& a_runs)
+	{
+		std::array<std::size_t, Api::kPaletteRowsClasses> counts{};
+		for (std::size_t c = 0; c < a_runs.size(); ++c)
+			a_runs[c].entry = Extensions::PaletteRows(static_cast<Api::FrameValueItemClass>(c + 1));
+		const auto classOf = [&](const Listed& a_listed) -> std::size_t {
+			const auto c = static_cast<std::size_t>(a_listed.item->itemClass);
+			return a_listed.palette && c != 0 && c <= a_runs.size() && a_runs[c - 1].entry ? c : 0;
+		};
+		for (const auto& listed : a_items)
+			if (const auto c = classOf(listed))
+				++counts[c - 1];
+		for (std::size_t c = 0; c < a_runs.size(); ++c)
+			a_runs[c].items.reserve(counts[c]);
+		for (std::uint32_t i = 0; i < a_items.size(); ++i)
+			if (const auto c = classOf(a_items[i]))
+				a_runs[c - 1].items.push_back({ a_items[i].item->geometry.get(), nullptr, i });
+		for (std::size_t c = 0; c < a_runs.size(); ++c)
+			if (a_runs[c].entry)
+				a_runs[c].entry->contribution.beginRun({ a_job.paletteInputs[c], a_runs[c].items });
+	}
+
+	// A chunk of the run's items: each sampled in order (a palette rows class's item deferred), then each class's write of its deferred
+	// items (its sampleChunk, once), then those finished where each stood, so the chunk's lists keep the run's order.
+	void FrameValues::Impl::SampleChunk(const Job& a_job, const std::vector<Listed>& a_items, const PaletteRuns& a_runs, std::size_t a_begin, std::size_t a_end,
+		const SampleOut& a_out, Changed& a_mine, std::atomic<std::uint64_t>& a_refused)
+	{
+		ItemScratch scratch;
+		// Each class's first item in the chunk (its items are in the run's order).
+		for (std::size_t c = 0; c < a_runs.size(); ++c) {
+			const auto& items = a_runs[c].items;
+			const auto first = std::lower_bound(items.begin(), items.end(), a_begin,
+				[](const Api::PaletteRowsItem& a_item, std::size_t a_listed) { return a_item.listed < a_listed; });
+			scratch.cursors[c] = static_cast<std::size_t>(first - items.begin());
+		}
+		for (std::size_t i = a_begin; i < a_end; ++i)
+			SampleListed(a_items[i], a_runs, a_out, a_mine, scratch, a_refused);
+		if (!scratch.deferred)
+			return;
+		WriteDeferred(a_job, a_runs, *scratch.deferred);
+		FinishDeferred(a_out, a_mine, *scratch.deferred);
+	}
+
+	void FrameValues::Impl::SampleListed(const Listed& a_listed, const PaletteRuns& a_runs, const SampleOut& a_out, Changed& a_mine, ItemScratch& a_scratch,
+		std::atomic<std::uint64_t>& a_refused)
 	{
 		auto& out = a_out.out;
 		auto& row = a_scratch.row;
 		auto& layer = a_scratch.layer;
 		const auto& [itemPointer, palette, settles, mover] = a_listed;
 		const auto& item = *itemPointer;
-		// A first-person particle member reads no engine memory here: no lease, never settling.
+		// A palette rows class's item with a block (a particle member): its block and placement are its class's write, after the chunk's
+		// samples (Defer); its class's run listed it, refused or not.
+		const auto paletteClass = static_cast<std::uint32_t>(item.itemClass);
+		const bool deferred = palette && paletteClass != 0 && paletteClass <= a_runs.size() && a_runs[paletteClass - 1].entry;
+		const Api::PaletteRowsItem* classItem = deferred ? &a_runs[paletteClass - 1].items[a_scratch.cursors[paletteClass - 1]++] : nullptr;
+		// A first-person class item reads no engine memory here: no lease, never settling.
 		const bool firstPerson = item.firstPerson;
 		std::optional<EngineReadWindow::Lease> lease;
 		if (!firstPerson)
@@ -1272,12 +1352,14 @@ namespace DCLF
 			row = out[item.slot];
 		else
 			SampleItem(item, row, layer);
-		// Particle quads, transforms and bound from the newest snapshot (particle data is never read here).
-		if (a_particles)
-			ExpandParticles(a_job, item, *a_particles, a_scratch);
 		if (settles && !firstPerson && std::memcmp(&item.geometry->world, &DrawnPreviousWorld(*item.geometry), sizeof(RE::NiTransform)) != 0)
 			a_mine.settling.push_back(&item);
-		if (std::memcmp(&out[item.slot], &row, sizeof(row)) != 0) {
+		// A deferred item's row waits for its class's placement (a particle snapshot's transforms and bound: its data is never read here).
+		Deferred* waiting = classItem ? &Defer(a_listed, paletteClass - 1, *classItem, a_scratch) : nullptr;
+		if (waiting) {
+			waiting->row = row;
+			waiting->slotsAt = a_mine.slots.size();
+		} else if (std::memcmp(&out[item.slot], &row, sizeof(row)) != 0) {
 			out[item.slot] = row;
 			a_mine.slots.push_back(item.slot);
 			changes = true;
@@ -1287,7 +1369,13 @@ namespace DCLF
 			a_mine.slots.push_back(item.layerSlot);
 			changes = true;
 		}
-		if (palette && SamplePalette(item, a_particles != nullptr, a_out, a_mine, a_scratch))
+		if (waiting) {
+			waiting->layerChanged = changes;
+			waiting->paletteRunsAt = a_mine.paletteRuns.size();
+			waiting->owedAt = a_mine.owed.size();
+			return;
+		}
+		if (palette && SamplePalette(item, a_out, a_mine))
 			changes = true;
 		// A mover whose sample changed something is sampled again next frame, until a sample changes nothing: its previous world
 		// and previous palette settle on the current ones the frame after its motion stops.
@@ -1295,47 +1383,83 @@ namespace DCLF
 			a_mine.owed.push_back(item.geometry.get());
 	}
 
-	void FrameValues::Impl::ExpandParticles(const Job& a_job, const Plan::Item& a_item, ParticleSnapshots::Record& a_particles, ItemScratch& a_scratch)
+	// A deferred item's place in the chunk's: its class, its class's state for it, and its block in the chunk's rows.
+	FrameValues::Impl::Deferred& FrameValues::Impl::Defer(const Listed& a_listed, std::uint32_t a_class, const Api::PaletteRowsItem& a_classItem, ItemScratch& a_scratch)
 	{
-		auto& row = a_scratch.row;
-		auto& particleRows = a_scratch.particleRows;
-		const bool firstPerson = a_item.firstPerson;
-		particleRows.resize(a_item.boneRows);
-		ParticleSnapshots::Expanded expanded;
-		ParticleSnapshots::Get().Expand(a_particles, firstPerson ? a_job.firstPersonParticleCamera : a_job.particleCamera,
-			a_item.boneRows / ParticleSnapshots::kRowsPerParticle, particleRows.data()->v, expanded);
-		if (!expanded.snapshot)
-			return;
-		std::memcpy(row.world, expanded.world, sizeof(row.world));
-		std::memcpy(row.previousWorld, expanded.world, sizeof(row.previousWorld));
-		std::memcpy(row.bound, expanded.bound, sizeof(row.bound));
-		if (firstPerson) {
-			const auto& eye = a_job.firstPersonParticleCamera.eye;
-			const float dx = expanded.bound[0] - eye[0], dy = expanded.bound[1] - eye[1], dz = expanded.bound[2] - eye[2];
-			const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-			firstPersonParticleExpansions.fetch_add(1, std::memory_order_relaxed);
-			firstPersonParticleCount.fetch_add(expanded.particles, std::memory_order_relaxed);
-			const std::uint32_t bits = std::bit_cast<std::uint32_t>(distance);
-			for (std::uint32_t seen = firstPersonParticleFarthest.load(std::memory_order_relaxed);
-				bits > seen && !firstPersonParticleFarthest.compare_exchange_weak(seen, bits, std::memory_order_relaxed);) {}
+		if (!a_scratch.deferred)
+			a_scratch.deferred = std::make_unique<DeferredChunk>();
+		auto& chunk = *a_scratch.deferred;
+		auto& deferred = chunk.items[chunk.count++];
+		deferred.listed = &a_listed;
+		deferred.paletteClass = a_class;
+		deferred.state = a_classItem.state;
+		deferred.paletteAt = chunk.rowCount;
+		chunk.rowCount += a_listed.item->boneRows;
+		return deferred;
+	}
+
+	// The chunk's blocks, then each class's writes (its items together, in the run's order), handed to its sampleChunk once.
+	void FrameValues::Impl::WriteDeferred(const Job& a_job, const PaletteRuns& a_runs, DeferredChunk& a_deferred)
+	{
+		auto& chunk = a_deferred;
+		chunk.rows.resize(chunk.rowCount);
+		std::uint32_t next = 0;
+		for (std::uint32_t c = 0; c < a_runs.size(); ++c) {
+			const std::uint32_t first = next;
+			for (std::uint32_t k = 0; k < chunk.count; ++k) {
+				auto& deferred = chunk.items[k];
+				if (deferred.paletteClass != c)
+					continue;
+				const auto& item = *deferred.listed->item;
+				deferred.write = next;
+				chunk.writes[next++] = { deferred.state, item.firstPerson, item.boneRows, chunk.rows[deferred.paletteAt].v };
+			}
+			if (next != first)
+				a_runs[c].entry->contribution.sampleChunk({ a_job.paletteInputs[c], std::span(chunk.writes).subspan(first, next - first), firstPersonPalette });
 		}
 	}
 
-	// A listed palette block's rows (true when any changed).
-	bool FrameValues::Impl::SamplePalette(const Plan::Item& a_item, bool a_particles, const SampleOut& a_out, Changed& a_mine, const ItemScratch& a_scratch)
+	// The deferred items in reverse, each compared and marked where it stood among the chunk's items: an insertion at a later place first
+	// leaves every earlier place as it was, so the chunk's lists hold what sampling the items one by one in order gave.
+	void FrameValues::Impl::FinishDeferred(const SampleOut& a_out, Changed& a_mine, DeferredChunk& a_deferred)
+	{
+		auto& out = a_out.out;
+		auto& paletteOut = a_out.paletteOut;
+		for (std::uint32_t k = a_deferred.count; k-- > 0;) {
+			auto& deferred = a_deferred.items[k];
+			const auto& write = a_deferred.writes[deferred.write];
+			const auto& item = *deferred.listed->item;
+			auto& row = deferred.row;
+			// The class's placement (a particle snapshot's: its world, the previous the same, and its bound).
+			if (write.placed) {
+				std::memcpy(row.world, write.world, sizeof(row.world));
+				std::memcpy(row.previousWorld, write.world, sizeof(row.previousWorld));
+				std::memcpy(row.bound, write.bound, sizeof(row.bound));
+			}
+			bool changes = deferred.layerChanged;
+			if (std::memcmp(&out[item.slot], &row, sizeof(row)) != 0) {
+				out[item.slot] = row;
+				a_mine.slots.insert(a_mine.slots.begin() + static_cast<std::ptrdiff_t>(deferred.slotsAt), item.slot);
+				changes = true;
+			}
+			// Its block's current rows (a class's block has no previous rows).
+			const auto at = PaletteRowsOf(item.boneOffset, item.boneRows);
+			const std::size_t bytes = std::size_t(item.boneRows) * sizeof(PaletteRow);
+			if (std::memcmp(&paletteOut[at.current], write.palette, bytes) != 0) {
+				std::memcpy(&paletteOut[at.current], write.palette, bytes);
+				a_mine.paletteRuns.emplace(a_mine.paletteRuns.begin() + static_cast<std::ptrdiff_t>(deferred.paletteRunsAt), at.current, item.boneRows);
+				changes = true;
+			}
+			if (deferred.listed->mover && changes)
+				a_mine.owed.insert(a_mine.owed.begin() + static_cast<std::ptrdiff_t>(deferred.owedAt), item.geometry.get());
+		}
+	}
+
+	// A listed skin's palette block (true when any row changed).
+	bool FrameValues::Impl::SamplePalette(const Plan::Item& a_item, const SampleOut& a_out, Changed& a_mine)
 	{
 		const auto& item = a_item;
 		auto& paletteOut = a_out.paletteOut;
-		if (a_particles) {
-			const auto at = PaletteRowsOf(item.boneOffset, item.boneRows);
-			const std::size_t bytes = std::size_t(item.boneRows) * sizeof(PaletteRow);
-			if (std::memcmp(&paletteOut[at.current], a_scratch.particleRows.data(), bytes) != 0) {
-				std::memcpy(&paletteOut[at.current], a_scratch.particleRows.data(), bytes);
-				a_mine.paletteRuns.emplace_back(at.current, item.boneRows);
-				return true;
-			}
-			return false;
-		}
 		// Run the engine's palette update, then copy rows that differ (the frame after its motion stops, the update copies the
 		// current palette to the previous: the change that keeps the skin due once more, so its motion vectors settle).
 		auto& geometry = *item.geometry;
@@ -1430,16 +1554,17 @@ namespace DCLF
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.MovedParity");
 		// The persistent parity's check of the moved-only sampling (dclf B): every mover's and root's rows as sampling them all now gives
-		// them (nothing written), against the rows the producers left. A difference is a move no event named (a frozen row). Particle
-		// systems (sampled every frame) and first-person members (the render thread's) are not checked. A skin's palette update is
-		// idempotent per frame (a due skin's runs again for nothing); a skin not due runs it here as the native bone setter would.
+		// them (nothing written), against the rows the producers left. A difference is a move no event named (a frozen row). A palette
+		// rows class's items (sampled every frame: particle systems) and first-person members (the render thread's) are not checked. A
+		// skin's palette update is idempotent per frame (a due skin's runs again for nothing); a skin not due runs it here as the native
+		// bone setter would.
 		(void)a_job;
 		const auto& out = rows.Get();
 		std::vector<Fresh> fresh(keptMovers.size());
 		ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> slotMover;  // a checked mover's slot and its layer's: its index
 		for (std::uint32_t m = 0; m < keptMovers.size(); ++m) {
 			const auto& item = keptMovers[m].item;
-			if (!keptMovers[m].live || item.firstPerson || item.particles || !item.geometry || item.slot >= out.size())
+			if (!keptMovers[m].live || item.firstPerson || item.itemClass != Api::FrameValueItemClass::None || !item.geometry || item.slot >= out.size())
 				continue;
 			slotMover.insert_or_assign(item.slot, m);
 			if (item.layerSlot != kNoObjectSlot && item.layerSlot < out.size())
@@ -1466,7 +1591,7 @@ namespace DCLF
 		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.MovedParity", keptMovers.size(), 64, [&](std::size_t a_begin, std::size_t a_end) {
 			for (std::size_t m = a_begin; m < a_end; ++m) {
 				const auto& item = keptMovers[m].item;
-				if (!keptMovers[m].live || item.firstPerson || item.particles || !item.geometry || item.slot >= out.size())
+				if (!keptMovers[m].live || item.firstPerson || item.itemClass != Api::FrameValueItemClass::None || !item.geometry || item.slot >= out.size())
 					continue;
 				EngineReadWindow::Lease lease;
 				if (!lease)
@@ -2034,12 +2159,10 @@ namespace DCLF
 		s.LeaseBackings(job);
 		job.timeline = std::move(timeline);
 		job.uploads = std::move(uploads);
-		job.particleCamera = ParticleSnapshots::Get().FrameCamera();
-		// The first-person eye (DrawWorld +0x00, filled by FUN_1406452c0 before FrameDriver::BeginFrame): where FUN_1414cb020 places
-		// the first-person camera, with the world camera's rotation.
-		job.firstPersonParticleCamera = job.particleCamera;
-		if (const auto* eye = REL::Relocation<const float*>{ REL::Offset(Engine::Address::kDrawWorldEye) }.get(); eye && job.particleCamera.valid)
-			std::memcpy(job.firstPersonParticleCamera.eye, eye, sizeof(job.firstPersonParticleCamera.eye));
+		// The palette rows classes' frame inputs (Features/Particles: the cameras its quads face, the main one and the first person's).
+		for (std::size_t c = 0; c < job.paletteInputs.size(); ++c)
+			if (const auto* entry = Extensions::PaletteRows(static_cast<Api::FrameValueItemClass>(c + 1)); entry && entry->contribution.kick)
+				entry->contribution.kick({ seq, job.paletteInputs[c] });
 		// Claimed first-person members, sampled after the engine's update and before Main::Draw's first-person shift
 		// (FUN_1414cb020), palettes included: the engine draws none of them, so none of its reads see a world-space palette.
 		if (const auto claims = std::exchange(rootViewClaims, nullptr))

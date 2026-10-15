@@ -237,7 +237,7 @@ namespace DCLF
 		std::vector<std::uint32_t> boneOffset;  // parallel to objects, in rows
 		std::vector<std::uint32_t> boneRows;    // parallel to objects
 		std::array<std::vector<std::uint32_t>, 81> boneFree{};  // freed blocks' offsets, by bones (rows / 3; at most 80)
-		// Freed blocks of any other size (a particle member's quads: ParticleSnapshots::RowsOf), by their rows.
+		// Freed blocks of any other size (a palette rows class's block: a particle member's quads, by its rule), by their rows.
 		std::map<std::uint32_t, std::vector<std::uint32_t>> boneFreeOther;
 		/** @brief The free list of a_rows-row blocks: a skin's palette by its bones, any other block by its rows. */
 		std::vector<std::uint32_t>& BoneFreeList(std::uint32_t a_rows)
