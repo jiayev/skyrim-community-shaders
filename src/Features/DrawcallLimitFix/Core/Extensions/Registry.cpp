@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ViewCommon.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -55,6 +56,8 @@ namespace DCLF::Extensions
 			std::array<Api::DrawFamilyContribution, kDrawFamilies> drawFamilies{};
 			// By slot: its range (Count: none), Core's built-ins first. Resolved at the end (ResolveMainRanges).
 			std::array<Api::MainRangeContribution, kMainRangeSlots> mainRanges{};
+			// The vertex stream (entry class Count: none). Resolved at the end (ResolveVertexStream).
+			Api::VertexStreamContribution vertexStream{};
 			bool installed = false;
 		};
 
@@ -346,6 +349,20 @@ namespace DCLF::Extensions
 
 			void RegisterMainRange(const Api::MainRangeContribution& a_range) override { AddMainRange(lists, feature, a_range, false); }
 
+			void RegisterVertexStream(const Api::VertexStreamContribution& a_stream) override
+			{
+				// Its scene resources (registered before) hold its buffer; a component follows its entry class (registered before).
+				bool followed = false;
+				for (const auto& component : lists.coordinatorComponents)
+					followed = followed || (a_stream.entryClass != Api::EntryClass::None && component.entryClass.follows == a_stream.entryClass);
+				if (a_stream.name.empty() || !a_stream.select || !a_stream.upload || a_stream.resources.index >= lists.sceneResources.size() || !followed)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete vertex stream", feature));
+				if (lists.vertexStream.entryClass != Api::EntryClass::Count)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes vertex stream {}, which {} has: Core's draws have one second stream", feature,
+						a_stream.name, lists.vertexStream.name));
+				lists.vertexStream = a_stream;
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -379,12 +396,13 @@ namespace DCLF::Extensions
 		}
 		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
-		// ranges' draw order.
+		// ranges' draw order; the vertex stream's (and the scene resources' order: its first).
 		ResolveViews(lists.views, lists.viewWork);
 		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
 		ResolveViewBits();
 		ResolveDrawFamilies(lists.drawFamilies);
 		ResolveMainRanges(lists.mainRanges);
+		ResolveVertexStream(lists.vertexStream);
 		// The features' toggles seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
 	}

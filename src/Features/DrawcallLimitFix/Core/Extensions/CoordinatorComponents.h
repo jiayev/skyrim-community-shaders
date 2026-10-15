@@ -151,7 +151,7 @@ namespace DCLF::Api
 		std::uint32_t vertexCount = 0;
 		std::uint64_t generation = 0;
 		std::shared_ptr<const std::vector<float>> owner;
-		std::uint32_t region = ~0u;  // kNoFaceRegion: none
+		std::uint32_t region = ~0u;  // Api::VertexStreamRow::kNoFirst: none
 	};
 }
 

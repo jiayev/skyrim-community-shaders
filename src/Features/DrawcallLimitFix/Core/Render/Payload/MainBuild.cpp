@@ -977,9 +977,9 @@ namespace DCLF::Draws
 		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
 			if (o >= tables.rangeOrdinal.size() || tables.rangeOrdinal[o] >= decalCount[group - 1])
 				return false;
-		// A face shape, or a second-stream position, needs its positions' stream.
-		const bool needsStream = IsFaceObject(tables, o) || (tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream);
-		return !needsStream || FaceStreamGeometry(tables, o, in.addresses.facePositions) != ~0u;
+		// A stream object (a face shape), or a second-stream position, needs its vertex stream row.
+		const bool needsStream = IsStreamObject(tables, o) || (tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream);
+		return !needsStream || StreamGeometry(tables, o, in.addresses.streamBuffer) != ~0u;
 	}
 
 	std::uint8_t MainBuild::RegionEntry(std::uint32_t o, DrawInput& a_input) const
@@ -1004,7 +1004,7 @@ namespace DCLF::Draws
 		const std::uint32_t partitions = PartitionsOf(tables, o);
 		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok;
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
-			{ MainMaskOf(tables, o) }, o, ordinal, partitions, FaceStreamGeometry(tables, o, in.addresses.facePositions) };
+			{ MainMaskOf(tables, o) }, o, ordinal, partitions, StreamGeometry(tables, o, in.addresses.streamBuffer) };
 		SetFadeRow(a_input, tables, o);
 		if (!drawable)
 			return 0;
@@ -1273,11 +1273,11 @@ namespace DCLF::Draws
 			for (const auto& change : r.cursor.Unread(tables.changeLog))
 				if (change.causes & kInputCauses)
 					RegionTake(change.slot);
-			// Face stream indices count from the geometry slots: when that count or the positions buffer changes, retake every face.
-			if (const std::size_t base = in.addresses.facePositions ? tables.geometries.size() : 0; base != r.faceBase) {
-				for (const auto& stream : tables.faceStreams)
-					if (stream.object != SceneTables::kNoFaceObject && stream.object < tables.objects.size())
-						RegionTake(stream.object);
+			// Stream row indices count from the geometry slots: when that count or the stream buffer changes, retake every stream object.
+			if (const std::size_t base = in.addresses.streamBuffer ? tables.geometries.size() : 0; base != r.streamBase) {
+				for (const auto& row : tables.streamRows)
+					if (row.object != Api::VertexStreamRow::kNoObject && row.object < tables.objects.size())
+						RegionTake(row.object);
 			}
 			// A decal group's capped count moved: retake the decals between the old and new counts (changed ordinals are in the log).
 			if (r.decalCount != decalCount) {
@@ -1292,7 +1292,7 @@ namespace DCLF::Draws
 				r.decalCount = decalCount;
 			}
 		}
-		r.faceBase = in.addresses.facePositions ? tables.geometries.size() : 0;
+		r.streamBase = in.addresses.streamBuffer ? tables.geometries.size() : 0;
 		r.cursor.Advance(tables.changeLog);
 	}
 
@@ -1953,9 +1953,10 @@ namespace DCLF::Draws
 		}
 		// A multi-partition skin writes a sequence per drawn partition; a skinned decal (blood) one per slot of its span.
 		const std::uint32_t partitions = PartitionsOf(tables, o);
-		// A face shape or second-stream position needs its positions stream, else the geometry's other attributes draw as positions.
-		const std::uint32_t streamIndex = FaceStreamGeometry(tables, o, in.addresses.facePositions);
-		if (streamIndex == ~0u && (IsFaceObject(tables, o) || (tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream))) {
+		// A stream object (a face shape) or second-stream position needs its stream row, else the geometry's other attributes draw as
+		// positions.
+		const std::uint32_t streamIndex = StreamGeometry(tables, o, in.addresses.streamBuffer);
+		if (streamIndex == ~0u && (IsStreamObject(tables, o) || (tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream))) {
 			Skipped(Skip::Geometry);
 			return;
 		}
@@ -1972,7 +1973,7 @@ namespace DCLF::Draws
 		sequence.pipelineRowAddress = std::uint64_t(recordIndex >> kRowPipelineShift) * kPipelineRowBytes;
 		sequence.materialRowAddress = std::uint64_t(recordIndex & kRowMaterialMask) * kMaterialRowBytes;
 		if (streamIndex != ~0u)
-			SetSequenceStream(sequence, tables, o, in.addresses.facePositions);
+			SetSequenceStream(sequence, tables, o, in.addresses.streamBuffer);
 		if (decalGroup) {
 			const std::uint32_t ordinal = tables.rangeOrdinal[o];
 			decalSlot.inputs = nullptr;  // drawn: the blank is not needed
@@ -2016,9 +2017,9 @@ namespace DCLF::Draws
 		streams = std::move(a_streams);
 		TakeGeometryDraws(streams.get(), tables, in.tablesGeneration, frameNumber, out.geometryDraws);
 		out.streams = streams;
-		AppendFaceStreams(tables, in.addresses.facePositions, out.geometryDraws);
-		if (in.addresses.facePositions)
-			out.faceStreams = tables.faceStreams;
+		AppendStreamRows(tables, in.addresses.streamBuffer, out.geometryDraws);
+		if (in.addresses.streamBuffer)
+			out.streamRows = tables.streamRows;
 		out.materialRows = rows.material.View();
 		out.pipelineRows = rows.pipeline.View();
 		// The features' payload products, from the rows and tables as this build left them (Api::PayloadProduct).

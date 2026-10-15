@@ -216,7 +216,7 @@ namespace DCLF::Draws
 		std::array<std::vector<DrawSequence>, kDecalGroups> decalTemplates;  // by group and slot
 		std::vector<DrawInput> inputList;
 		GeometryDrawsOut geometryDraws;
-		std::vector<SceneTables::FaceStream> faceStreams;  // the tables', for the commit's uploads
+		std::vector<Api::VertexStreamRow> streamRows;  // the tables' vertex stream rows, for the commit's uploads
 		// The rows (MainRows), kept across frames and shared by both segments: uploaded as the rows changed since the content epoch
 		// the tables hold.
 		KeptView<MaterialRow> materialRows;
@@ -267,7 +267,7 @@ namespace DCLF::Draws
 			inputList.clear();
 			geometryDraws.Reset();
 			streams.reset();
-			faceStreams.clear();
+			streamRows.clear();
 			frameRegisters = {};
 			objectState.clear();
 			materialRows.Reset();

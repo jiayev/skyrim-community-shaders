@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 
 namespace DCLF::Api
 {
@@ -25,16 +26,20 @@ namespace DCLF::Extensions
 		const auto registered = RegisteredSceneResources();
 		SceneResourceStates states(registered.size());
 		const Api::SceneResourcesSetup setup{ a_device, a_smallStart };
-		for (std::size_t i = 0; i < registered.size(); ++i)
+		// The vertex stream's first (SceneResourcesOrder): without its buffer the scene's tables are not made, and nothing else is set up.
+		for (const std::uint32_t i : SceneResourcesOrder()) {
 			states[i] = registered[i].setup(setup);
+			if (!states[i] && VertexStreamResources(i))
+				break;
+		}
 		return states;
 	}
 
 	void RegisterSceneResources(org::RenderGraph& a_graph, const SceneResourceStates& a_states)
 	{
 		const auto registered = RegisteredSceneResources();
-		for (std::size_t i = 0; i < registered.size() && i < a_states.size(); ++i)
-			if (a_states[i] && registered[i].registerGraph)
+		for (const std::uint32_t i : SceneResourcesOrder())
+			if (i < a_states.size() && a_states[i] && registered[i].registerGraph)
 				registered[i].registerGraph({ a_graph, a_states[i] });
 	}
 
@@ -42,8 +47,8 @@ namespace DCLF::Extensions
 		const SceneResourceInputs& a_inputs)
 	{
 		const auto registered = RegisteredSceneResources();
-		for (std::size_t i = 0; i < registered.size() && i < a_states.size(); ++i)
-			if (a_states[i] && registered[i].require)
+		for (const std::uint32_t i : SceneResourcesOrder())
+			if (i < a_states.size() && a_states[i] && registered[i].require)
 				registered[i].require({ a_build, a_tables, a_states[i], std::span(a_inputs).subspan(registered[i].firstInput, registered[i].inputWords) });
 	}
 
@@ -67,8 +72,8 @@ namespace DCLF::Extensions
 		void (*a_sink)(void*, const std::shared_ptr<org::Buffer>&, const std::shared_ptr<org::VersionedBuffer>&, std::size_t), void* a_context)
 	{
 		const auto registered = RegisteredSceneResources();
-		for (std::size_t i = 0; i < registered.size() && i < a_states.size(); ++i)
-			if (a_states[i] && registered[i].latched) {
+		for (const std::uint32_t i : SceneResourcesOrder())
+			if (i < a_states.size() && a_states[i] && registered[i].latched) {
 				Api::SceneResourcesLatch latch{ a_states[i], a_sink, a_context };
 				registered[i].latched(latch);
 			}
@@ -77,8 +82,8 @@ namespace DCLF::Extensions
 	void FitSceneResources(const org::services::NamedVersions& a_sealed, const SceneResourceStates& a_states, Draws::SceneFit& a_fit)
 	{
 		const auto registered = RegisteredSceneResources();
-		for (std::size_t i = 0; i < registered.size() && i < a_states.size(); ++i)
-			if (a_states[i] && registered[i].fit) {
+		for (const std::uint32_t i : SceneResourcesOrder())
+			if (i < a_states.size() && a_states[i] && registered[i].fit) {
 				Api::SceneResourcesFit fit{ a_sealed, a_states[i], a_fit };
 				registered[i].fit(fit);
 			}

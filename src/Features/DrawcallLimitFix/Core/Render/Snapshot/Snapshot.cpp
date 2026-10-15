@@ -3,7 +3,7 @@
 // the newest one (AdoptSnapshot). PostSnapshotWork and the fits (FitsScene) are the coordinator's.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -143,8 +143,9 @@ namespace DCLF
 			if constexpr (requires { a_resources.frustum; })
 				objects = std::min(objects, a_sealed.Of(a_resources.frustum).units);
 			Extensions::FrameBindingValuesOf(a_sealed, scene, a_frame, a_out.frameBindings);
-			// The face positions while face shapes are DCLF's (Features/Faces takes them once its engine side is in).
-			a_out.facePositions = Extensions::EntryClassTaken(Api::EntryClass::FaceShape) ? a_sealed.Of(scene.facePositions).deviceAddress : 0;
+			// The vertex stream's buffer while its entry class's objects are DCLF's (Features/Faces' face positions: it takes the face shapes
+			// once its engine side is in).
+			a_out.streamBuffer = Extensions::VertexStreamTaken() ? a_sealed.Of(scene.vertexStream).deviceAddress : 0;
 			a_out.fit = SceneFitOf(a_sealed, scene, objects);
 		}
 

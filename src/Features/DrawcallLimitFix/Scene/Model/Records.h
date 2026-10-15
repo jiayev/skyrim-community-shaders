@@ -104,11 +104,11 @@ namespace DCLF
 	inline constexpr std::uint32_t kObjectIndexMask = (1u << kObjectLocalShadowShift) - 1;
 
 	/**
-	 * @brief The face positions buffer (Features/Faces' snapshots): a float4 per vertex of each drawn face shape, in a per-shape region, bound
-	 * as the second vertex stream (where the engine puts BSDynamicTriShape::dynamicData). kNoFaceRegion: no region yet.
+	 * @brief An object's row of the vertex stream (Api/VertexStreams.h: SceneTables::streamRow), none: the buffer of its feature's scene
+	 * resources (Features/Faces' face positions) holds a float4 per vertex of each stream object, in a range per row, bound as the second
+	 * vertex stream (where the engine puts BSDynamicTriShape::dynamicData).
 	 */
-	inline constexpr std::uint32_t kNoFaceRegion = ~0u;
-	inline constexpr std::uint32_t kNoFaceStream = ~0u;
+	inline constexpr std::uint32_t kNoStreamRow = ~0u;
 
 	/** @brief Rows of per-object extras in the row buffer: LandBlendParams, TextureProj x3, ProjectedUVParams x3. */
 	inline constexpr std::uint32_t kExtraRows = 7;

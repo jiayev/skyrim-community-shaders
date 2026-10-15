@@ -248,7 +248,7 @@ namespace DCLF::Draws
 			for (const std::uint32_t state : classStates)
 				if (a_lookups.ShadowMapPipeline(m, state, slot) == Lookups::kNone)
 					return wait("no pipeline under state", state);
-			if (IsFaceObject(a_tables, o) || (VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) & kPositionInSecondStream))
+			if (IsStreamObject(a_tables, o) || (VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) & kPositionInSecondStream))
 				return 3;
 			return 1;
 		};
@@ -483,7 +483,7 @@ namespace DCLF::Draws
 				a_out.setWaiting += o < mode.waitingMark.size() && mode.waitingMark[o] ? 1 : 0;
 		}
 		for (const std::uint32_t o : faceObjects) {
-			const std::uint32_t streamIndex = FaceStreamGeometry(a_tables, o, a_in.addresses.facePositions);
+			const std::uint32_t streamIndex = StreamGeometry(a_tables, o, a_in.addresses.streamBuffer);
 			if (streamIndex == ~0u)
 				continue;  // no positions this walk: left to the engine
 			a_out.inputList.push_back(ShadowEntry(a_tables, a_lookups, o, k.objectRecord[o], faceModes[o], streamIndex));
@@ -992,9 +992,9 @@ namespace DCLF::Draws
 		// in the payload by PayloadBuilder; palettes are FrameValues').
 		TakeGeometryDraws(a_streams.get(), a_tables, a_in.tablesGeneration, a_in.frameNumber, a_out.geometries);
 		a_out.streams = std::move(a_streams);
-		AppendFaceStreams(a_tables, a_in.addresses.facePositions, a_out.geometries);
-		if (a_in.addresses.facePositions)
-			a_out.faceStreams = a_tables.faceStreams;
+		AppendStreamRows(a_tables, a_in.addresses.streamBuffer, a_out.geometries);
+		if (a_in.addresses.streamBuffer)
+			a_out.streamRows = a_tables.streamRows;
 		// The frame record heads the arena, then the shared blocks. No register the Utility shaders declare may be at address
 		// zero (a late-compiled pipeline reading one would lose the device); unsupplied ones read zeros. CS's SharedData (b5;
 		// alpha testing uses MipBias) and FeatureData (b6) sit at fixed places, filled by the commit's latched copies.
@@ -1143,8 +1143,8 @@ namespace DCLF::Draws
 					continue;
 				}
 				// Faces and second-stream-position casters need this walk's positions, else they stay the engine's.
-				const std::uint32_t streamIndex = FaceStreamGeometry(a_tables, o, a_in.addresses.facePositions);
-				if (streamIndex == ~0u && (IsFaceObject(a_tables, o) || (key.vertexLayout & kPositionInSecondStream))) {
+				const std::uint32_t streamIndex = StreamGeometry(a_tables, o, a_in.addresses.streamBuffer);
+				if (streamIndex == ~0u && (IsStreamObject(a_tables, o) || (key.vertexLayout & kPositionInSecondStream))) {
 					continue;
 				}
 				// Sun entry rule (kCullSunEntry): BuildDraws tests the entry sphere against the latch, so inputs ignore the planes.

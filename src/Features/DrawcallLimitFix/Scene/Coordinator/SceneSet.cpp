@@ -1167,8 +1167,8 @@ namespace DCLF::Scene
 				case Tables::kRetiredBones:
 					tables.BoneFreeList(retired.extra).push_back(slot);
 					break;
-				case Tables::kRetiredFaceStream:
-					tables.faceStreamFree.push_back(slot);
+				case Tables::kRetiredStreamRow:
+					tables.streamRowFree.push_back(slot);
 					break;
 				case Tables::kRetiredMaterialLookup:
 					RetireMaterialBinding(slot);
@@ -1271,7 +1271,7 @@ namespace DCLF::Scene
 			a_column(a_left.shadowTechnique, a_right.shadowTechnique, kChangeShadow);
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 				a_column(a_left.occlusionTechnique[v], a_right.occlusionTechnique[v], kChangeShadow);
-			a_column(a_left.faceStream, a_right.faceStream, kChangeAll);
+			a_column(a_left.streamRow, a_right.streamRow, kChangeAll);
 			a_column(a_left.sceneFlags, a_right.sceneFlags, kChangeAll);
 			a_column(a_left.skinPartitions, a_right.skinPartitions, kChangeSkin);
 			a_column(a_left.skinLodPartitions, a_right.skinLodPartitions, kChangeSkin);
@@ -1287,7 +1287,7 @@ namespace DCLF::Scene
 			a_column(a_left.layerOf, a_right.layerOf, kNoObjectSlot);
 		};
 		// Not published: the coordinator's alone - its walk stamps and templates, the slot tables' reference counts and free lists, the
-		// writers' scratch (shadow texture transitions, freed face streams, the wetness index the frame keeps from the log's changes), and
+		// writers' scratch (shadow texture transitions, freed stream rows, the wetness index the frame keeps from the log's changes), and
 		// what is retiring. No reader of a publication reads them; a publication's stay as they were made (empty).
 		auto unpublished = [](Tables& a_left, Tables& a_right, auto&& a_column) {
 			a_column(a_left.objectSeen, a_right.objectSeen);
@@ -1300,8 +1300,8 @@ namespace DCLF::Scene
 			a_column(a_left.boneFree, a_right.boneFree);
 			a_column(a_left.boneFreeOther, a_right.boneFreeOther);
 			a_column(a_left.extraFree, a_right.extraFree);
-			a_column(a_left.faceStreamFree, a_right.faceStreamFree);
-			a_column(a_left.faceStreamsReleased, a_right.faceStreamsReleased);
+			a_column(a_left.streamRowFree, a_right.streamRowFree);
+			a_column(a_left.streamRowsReleased, a_right.streamRowsReleased);
 			a_column(a_left.actorWetness, a_right.actorWetness);
 			a_column(a_left.actorWetnessChanges, a_right.actorWetnessChanges);
 			a_column(a_left.shadowTextureSeen, a_right.shadowTextureSeen);

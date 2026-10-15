@@ -14,12 +14,14 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief What the named versions of the scene's buffers hold (the per-object buffers' objects): an object past them - its per-object
-	 * rows, its table families' or fade root rows, its face positions - waits for the requirement that grows them, drawing nothing and
+	 * rows, its table families' or fade root rows, its vertex stream row's vertices - waits for the requirement that grows them, drawing nothing and
 	 * culling nothing (ObjectFits). The payload's parts are not among them: it holds every row of its publication.
 	 */
 	struct SceneFit
 	{
-		std::uint32_t objects = ~0u, faceVertices = ~0u;
+		std::uint32_t objects = ~0u;
+		// The vertex stream's vertices (its scene resources' fit: Features/Faces' face positions), unbounded without one.
+		std::uint32_t streamVertices = ~0u;
 		// The fade root rows a draw reads by its slot (none: unbounded).
 		std::uint32_t fadeRoots = ~0u;
 		// The table families' rows a draw reads by its reference, by registration (Extensions::TableFamilyColumns::objectRow): what the
@@ -34,7 +36,7 @@ namespace DCLF::Draws
 	{
 		// The payload's tables (records, rows, extras) are none of these: the epochs take them from the installed payload.
 		std::uint64_t constants = 0, frameConstants = 0;
-		std::uint64_t facePositions = 0;  // the face positions buffer (SceneBuffers::facePositions)
+		std::uint64_t streamBuffer = 0;  // the vertex stream's buffer (SceneBuffers::vertexStream) while its entry class is taken
 		std::uint32_t placementsIndex = 0;  // the frame's placement rows (FrameValues::PlacementsIndex)
 		std::uint32_t palettesIndex = 0;    // the frame's palettes (FrameValues::PalettesIndex)
 		std::uint32_t shadingIndex = 0;     // the frame's shading rows (FrameValues::ShadingIndex)
@@ -192,21 +194,21 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief A build's view of the geometry table: the geometry slots' draws (the store's, or a set of its own without one)
-	 * and the face streams' after them, which are the frame's and sent whole every build.
+	 * and the vertex stream rows' after them, which are the frame's and sent whole every build.
 	 */
 	struct GeometryDrawsOut
 	{
 		KeptView<GeometryDraw> slots;
-		std::vector<GeometryDraw> faces;
+		std::vector<GeometryDraw> streamRows;
 		std::size_t SlotCount() const { return slots.Count(); }
-		std::size_t Count() const { return SlotCount() + faces.size(); }
+		std::size_t Count() const { return SlotCount() + streamRows.size(); }
 		std::uint64_t ContentEpoch() const { return slots.ContentEpoch(); }
 		std::vector<GeometryDraw> Flat() const
 		{
 			std::vector<GeometryDraw> flat;
 			if (slots.elements)
 				flat = *slots.elements;
-			flat.insert(flat.end(), faces.begin(), faces.end());
+			flat.insert(flat.end(), streamRows.begin(), streamRows.end());
 			return flat;
 		}
 		void Reset() { *this = {}; }

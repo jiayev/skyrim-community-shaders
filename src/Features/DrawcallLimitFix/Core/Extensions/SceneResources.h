@@ -127,7 +127,10 @@ namespace DCLF::Extensions
 	/** @brief The words the registrations' postInputs post with the revision's inputs (Registry.h's kSceneResourceInputWords). */
 	using SceneResourceInputs = std::array<std::uint32_t, kSceneResourceInputWords>;
 
-	/** @brief Render thread (EnsureSceneBuffers): every registration's setup, in order. */
+	// Every call below but PostSceneResourceInputs runs the registrations in SceneResourcesOrder (Extensions/VertexStreams.h): the vertex
+	// stream's first, the others in registration order.
+
+	/** @brief Render thread (EnsureSceneBuffers): every registration's setup, in order (none after the vertex stream's giving no state). */
 	SceneResourceStates SetUpSceneResources(rhi::Device a_device, bool a_smallStart);
 	/** @brief Render thread (RegisterSceneBuffers): every state's buffers registered with a_graph, in order. */
 	void RegisterSceneResources(org::RenderGraph& a_graph, const SceneResourceStates& a_states);

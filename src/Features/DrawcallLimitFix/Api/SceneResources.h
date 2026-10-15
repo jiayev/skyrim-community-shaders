@@ -29,12 +29,12 @@ namespace DCLF::Api
 	 * @brief A feature's scene resources.
 	 *
 	 * - setup: render thread, once, where the scene's tables are made (the first frame with a device; IndirectDraws' EnsureSceneBuffers),
-	 *   in registration order, after the face positions and before the GPU stages' setups: makes the feature's programs and buffers (a
+	 *   in registration order (the vertex stream's first: Api/VertexStreams.h) and before the GPU stages' setups: makes the feature's programs and buffers (a
 	 *   versioned one through SceneResourcesSetup::MakeVersioned, which registers it with the scene's set in this order). Its result is
 	 *   the state, held with the scene's tables until they go; null: none, and the other callbacks are not called.
-	 * - registerGraph (optional): render thread, when a graph extension registers the scene's buffers (RegisterSceneBuffers), after the
-	 *   face positions: the buffers its passes declare, each under its name.
-	 * - require (optional): the snapshot builder, each revision's requirements (RequireSceneTables), after the face positions: the
+	 * - registerGraph (optional): render thread, when a graph extension registers the scene's buffers (RegisterSceneBuffers), in the same
+	 *   order: the buffers its passes declare, each under its name.
+	 * - require (optional): the snapshot builder, each revision's requirements (RequireSceneTables), in the same order: the
 	 *   units its versioned buffers must hold for the publication's tables (and the words postInputs posted for the revision:
 	 *   SceneResourcesRequirements::inputs). A set is sealed only once they hold them.
 	 * - fit (optional): the snapshot builder or the render thread, wherever a SceneFit is made from the versions a set names: what its

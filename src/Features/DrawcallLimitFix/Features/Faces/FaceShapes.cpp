@@ -1,6 +1,6 @@
 // Faces' coordinator component (scene lane): the face shapes listed under their heads, the heads' publications taken as each walk begins
-// and applied as the delta walk schedules, each written shape's snapshot, region of the positions buffer and stream, and the regions
-// freed as the walk ends.
+// and applied as the delta walk schedules, each written shape's snapshot, region of the positions buffer and vertex stream row
+// (SceneTables::streamRows), and the regions freed as the walk ends.
 
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 #include "Features/DrawcallLimitFix/Features/Faces/FaceSnapshots.h"
@@ -20,6 +20,9 @@ namespace DCLF::Features::Faces
 {
 	namespace
 	{
+		// A face shape without a region of the positions buffer (its stream row's first vertex: none).
+		constexpr std::uint32_t kNoFaceRegion = Api::VertexStreamRow::kNoFirst;
+
 		/**
 		 * @brief The component's state: the face shapes' regions of the positions buffer, the tracked shapes by head and the heads'
 		 * publications this walk.
@@ -111,8 +114,8 @@ namespace DCLF::Features::Faces
 		}
 
 		/**
-		 * @brief The heads' publications: kept face streams take the new snapshot in place; waiting, missing or stale-head shapes are
-		 * rewritten.
+		 * @brief The heads' publications: kept face streams (their stream rows) take the new snapshot in place; waiting, missing or
+		 * stale-head shapes are rewritten.
 		 */
 		void ApplyFacePublications(const Api::CoordinatorComponentContext& a_context, FaceShapes& a_state, Api::WalkScheduling& a_scheduling)
 		{
@@ -141,17 +144,17 @@ namespace DCLF::Features::Faces
 					if (!entry.tracked)
 						continue;
 					const std::uint32_t slot = entry.slot;
-					const std::uint32_t index = slot != kNoObjectSlot && slot < tables.faceStream.size() ? tables.faceStream[slot] : kNoFaceStream;
-					if (index == kNoFaceStream) {
+					const std::uint32_t index = slot != kNoObjectSlot && slot < tables.streamRow.size() ? tables.streamRow[slot] : kNoStreamRow;
+					if (index == kNoStreamRow) {
 						if (entry.streamWaiting) {
 							a_context.ScheduleWrite(geometry);
 							++a_scheduling.written;
 						}
 						continue;
 					}
-					auto& stream = tables.faceStreams[index];
+					auto& stream = tables.streamRows[index];
 					auto view = snapshots.View(geometry, head);
-					if (!view.positions || view.vertexCount != stream.vertexCount) {
+					if (!view.positions || view.vertexCount != stream.count) {
 						a_context.ScheduleWrite(geometry);
 						++a_scheduling.written;
 						continue;
@@ -161,9 +164,9 @@ namespace DCLF::Features::Faces
 						if (auto snapshot = snapshots.HeadSnapshot(*head); snapshot.recordId && snapshot.generation && snapshot.owner)
 							headView = std::make_shared<const FaceSnapshots::HeadView>(std::move(snapshot));
 					}
-					stream.positions = view.positions;
+					stream.vertices = view.positions;
 					stream.generation = view.generation;
-					stream.headView = headView && headView->generation == view.generation && headView->owner == view.owner ? headView : nullptr;
+					stream.group = headView && headView->generation == view.generation && headView->owner == view.owner ? headView : nullptr;
 					stream.owner = std::move(view.owner);
 					++a_scheduling.updated;
 				}
@@ -208,20 +211,21 @@ namespace DCLF::Features::Faces
 			auto& state = a_context.State<FaceShapes>();
 			auto& tables = a_context.tables;
 			// Freed streams' regions retire once no stream of the shape holds them. The dense walk's tables are put back, so skip it.
-			for (const auto& [geometry, first] : a_context.DenseWalk() ? decltype(tables.faceStreamsReleased){} : tables.faceStreamsReleased) {
+			for (const auto& [source, first] : a_context.DenseWalk() ? decltype(tables.streamRowsReleased){} : tables.streamRowsReleased) {
+				const auto* geometry = static_cast<const RE::BSGeometry*>(source);  // the row's (Streamed)
 				const auto it = state.faceRegions.find(geometry);
 				if (it == state.faceRegions.end() || it->second.first != first)
 					continue;
 				if (const auto entry = a_context.TrackedWriteOf(geometry); entry.tracked) {
 					const std::uint32_t slot = entry.slot;
-					if (slot != kNoObjectSlot && slot < tables.faceStream.size() && tables.faceStream[slot] != kNoFaceStream &&
-						tables.faceStreams[tables.faceStream[slot]].region == first)
+					if (slot != kNoObjectSlot && slot < tables.streamRow.size() && tables.streamRow[slot] != kNoStreamRow &&
+						tables.streamRows[tables.streamRow[slot]].first == first)
 						continue;
 				}
 				a_context.RetireRange(it->second.first, it->second.count);
 				state.faceRegions.erase(it);
 			}
-			tables.faceStreamsReleased.clear();
+			tables.streamRowsReleased.clear();
 			// Coalesce the free ranges (Recycled returns them).
 			auto& faceRegionFree = state.faceRegionFree;
 			std::sort(faceRegionFree.begin(), faceRegionFree.end());
@@ -263,7 +267,7 @@ namespace DCLF::Features::Faces
 			state.faceRegions.clear();
 			state.faceRegionFree.clear();
 			state.faceRegionTop = 0;
-			a_context.tables.faceStreamsReleased.clear();
+			a_context.tables.streamRowsReleased.clear();
 		}
 
 		void Forgot(const Api::CoordinatorComponentContext& a_context, const void* a_entry)
@@ -335,7 +339,7 @@ namespace DCLF::Features::Faces
 			return region != kNoFaceRegion;
 		}
 
-		// The shape's stream at its slot (in place when it has one, else at a free index), with its head's complete capture.
+		// The shape's stream row at its slot (in place when it has one, else at a free index), with its head's complete capture.
 		void Streamed(const Api::CoordinatorComponentContext& a_context, std::uint32_t a_slot, Api::EntryWrite& a_write)
 		{
 			auto& state = a_context.State<FaceShapes>();
@@ -352,8 +356,14 @@ namespace DCLF::Features::Faces
 			}
 			if (headView && (headView->generation != a_write.generation || headView->owner != a_write.owner))
 				headView.reset();
-			a_context.tables.SetFaceStream(a_slot, { a_slot, a_write.region, a_write.vertexCount, a_write.generation, a_write.positions, a_write.owner, std::move(headView),
-				&a_write.geometry, head });
+			a_context.tables.SetStreamRow(a_slot, { .object = a_slot,
+				.first = a_write.region,
+				.count = a_write.vertexCount,
+				.generation = a_write.generation,
+				.vertices = a_write.positions,
+				.owner = a_write.owner,
+				.group = std::move(headView),
+				.source = &a_write.geometry });
 		}
 	}
 

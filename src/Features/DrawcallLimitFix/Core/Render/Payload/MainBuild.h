@@ -228,9 +228,9 @@ namespace DCLF::Draws
 		std::size_t draws = 0;
 		std::size_t decals = 0;               // drawable decal entries
 		std::size_t undrawable = 0;           // entries with no draw this frame
-		// What every face shape's stream index is relative to (the geometry slots' count; FaceStreamGeometry) and whether the
-		// positions buffer exists: when either moves, every face entry is taken again. ~0: not yet read.
-		std::size_t faceBase = ~std::size_t(0);
+		// What every stream object's stream index is relative to (the geometry slots' count; StreamGeometry) and whether the
+		// stream buffer exists: when either moves, every stream object's entry is taken again. ~0: not yet read.
+		std::size_t streamBase = ~std::size_t(0);
 		SceneFit fit;  // what the scene's buffers held at its last build: their growth reads every slot again
 		std::array<std::uint32_t, kDecalGroups> decalCount{};  // the decal ranges it was built for (MainBuild::decalCount)
 		std::vector<std::uint32_t> touched;  // this build: the slots whose entry it wrote or removed, or whose log entry it read

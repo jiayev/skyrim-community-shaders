@@ -1,17 +1,10 @@
 #pragma once
 
-// The scene's GPU tables shared by every epoch (SceneBuffers: face positions, the features' scene resources, fade roots and states,
+// The scene's GPU tables shared by every epoch (SceneBuffers: the vertex stream, the features' scene resources, fade roots and states,
 // readback lists, the draw families' published pipelines), and the commits' uploads into them (render thread). Included by Internal.h.
 
 namespace DCLF::Draws
 {
-	/** @brief The face regions a face positions version holds (render thread): region -> snapshot generation, for the version filled. */
-	struct FaceUploads
-	{
-		org::services::FilledVersion version;
-		ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> regions;
-	};
-
 	/**
 	 * @brief The scene's tables, each a buffer of the scene's set (SceneBufferSet): every capacity a commit, build or pass reads is
 	 * its named version's units, which the revision producer requires to hold the tables (RequireSceneTables).
@@ -19,12 +12,13 @@ namespace DCLF::Draws
 	struct SceneBuffers
 	{
 		// The object records, extras and geometry table are the installed payload's (PayloadVersions).
-		Versioned facePositions;
+		// The vertex stream's buffer (Api::VertexStreamContribution::select: Features/Faces' face positions), of its scene resources'
+		// state, resolved once at setup: the second vertex stream the passes bind. Null without a stream.
+		Versioned vertexStream;
 		// The index pool every plain indexed draw binds; kept current by every commit that draws from it (UpdateIndexPool).
 		std::shared_ptr<IndexPool> pool;
-		FaceUploads faceUploaded;
 		// The features' scene resources' states (Api::SceneResources::setup, by registration: Extensions::RegisteredSceneResources;
-		// Extensions::SceneResourcesOf), made with these tables, after the face positions, and held until they go.
+		// Extensions::SceneResourcesOf), made with these tables, the vertex stream's first, and held until they go.
 		std::vector<std::shared_ptr<void>> sceneResources;
 		// The features' GPU stages' states (Api::GpuStage::setup, by registration: Extensions::RegisteredStages); null: out of the graph.
 		std::vector<std::shared_ptr<const void>> stages;

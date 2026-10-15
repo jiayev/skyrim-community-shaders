@@ -4,8 +4,8 @@
 // recordings' resolves of buffers their set does not name (render thread).
 
 #include "DrawsState.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Events.h"
 #include "Observers.h"
 
@@ -66,8 +66,9 @@ namespace DCLF::Diagnostics
 					logger::warn("[DCLF] snapshot draws (set {}): the {} payload's {} is {:#x}, the sealed set names {:#x} <- NAMED ADDRESS", a_sealed.Serial(), a_payload,
 						a_field, a_value, a_expected);
 			};
-			if (a_embedded.facePositions || Extensions::EntryClassTaken(Api::EntryClass::FaceShape))
-				check("face positions", scene.facePositions, a_embedded.facePositions, entry(scene.facePositions).deviceAddress);
+			// The vertex stream's buffer (Features/Faces' "face positions").
+			if (a_embedded.streamBuffer || Extensions::VertexStreamTaken())
+				check(Extensions::VertexStream().name.c_str(), scene.vertexStream, a_embedded.streamBuffer, entry(scene.vertexStream).deviceAddress);
 			// The features' frame bindings (Api::FrameBinding), each read by the frame the context was posted at: the frame's buffer or the
 			// next one's (one alternating by frame: either parity's).
 			const auto bindings = Extensions::RegisteredFrameBindings();
