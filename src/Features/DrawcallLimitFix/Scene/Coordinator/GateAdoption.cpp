@@ -1,7 +1,7 @@
 // The LOD gates' publication and adoption: their adoption guard, the flips' publication (scene lane) and their release by the frame
 // installing them (render thread).
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/GateAdoption.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/Gates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -9,7 +9,7 @@
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Publication.h"
 
-namespace DCLF::Scene::GateAdoption
+namespace DCLF::Scene::Gates
 {
 	namespace
 	{
@@ -18,13 +18,11 @@ namespace DCLF::Scene::GateAdoption
 
 	std::uint64_t ForcedGeneration() { return LodGates::ForcedGeneration(); }
 
-	std::shared_ptr<void> MakeState() { return std::make_shared<std::uint8_t>(); }
-
 	ReleaseStats& Releases() { return releaseStats; }
 
 	void Published([[maybe_unused]] const Api::CoordinatorComponentContext& a_context)
 	{
-		// Before the deltas are taken: the observers read the flips pending (SceneView::gateFlipsMade; none, nothing to check).
+		// Before the deltas are taken: the observers read the flips pending (the component's deltas pending, Flips; none, nothing to check).
 		Diagnostics::Notify<Diagnostics::ScenePoint::GateFlipsPublished>();
 	}
 

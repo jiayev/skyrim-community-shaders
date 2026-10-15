@@ -6,11 +6,10 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 
 // The render thread's scene lines: what it keeps of the scene (the pipeline constants, the shading and extras checks, tree LOD's mirror,
-// the frame capture), and the LOD gates' releases.
+// the frame capture), and the lines at the gate releases' point.
 
 namespace DCLF::Reports
 {
@@ -71,26 +70,10 @@ namespace DCLF::Reports
 
 	void GateReleases(std::uint32_t a_frame)
 	{
-		// The releases' lines (the render thread's: the flip to its release), with the engine side's, once a report window. The frame
-		// numbers are the render thread's, each once.
-		auto& rs = V::gateReleaseStats();
-		auto& observed = Diagnostics::SceneDiagnostics().gateReleases;
+		// The lines at the gate releases' point (the LOD gates' releases and engine side's first: their component's), once a report window.
+		// The frame numbers are the render thread's, each once.
 		static Crossing crossing;
-		if (crossing.Due(a_frame)) {
-			if (rs.any)
-				logger::info("[DCLF] LOD gate releases (T6b5): {} released, {} refused (forced or unknown by then), {} in a withdrawn frame; flip to release: ms "
-							 "(p50/p95/max) {}, frames (p50/p95/max) {}; request to release ms (p50/p95/max) {}; checked {} (the set or persistent parity): "
-							 "{} incoming not claimed as flipped{}{}{} ({} in refused flips), {} outgoing still claimed{}{}{}",
-					rs.released, rs.refused, rs.withdrawn, Percentiles(rs.flipToReleaseMs), Percentiles(rs.flipToReleaseFrames),
-					Percentiles(rs.requestToReleaseMs), observed.checked, observed.holes, observed.firstHole.empty() ? "" : ", first ", observed.firstHole,
-					observed.holes ? " <- GATE HOLE" : "", observed.refusedHoles, observed.coverage, observed.firstCoverage.empty() ? "" : ", first ", observed.firstCoverage,
-					observed.coverage ? " <- GATE COVERAGE" : "");
-			if (LodGates::Enabled())
-				if (const auto engine = LodGatesLine(kInterval); !engine.empty())
-					logger::info("{}", engine);
+		if (crossing.Due(a_frame))
 			Extensions::ReportLinesAt(Api::ReportPoint::GateReleases, a_frame);
-			rs = {};
-			observed = {};
-		}
 	}
 }

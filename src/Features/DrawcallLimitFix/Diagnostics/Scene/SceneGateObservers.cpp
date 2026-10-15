@@ -5,6 +5,7 @@
 #include "SceneObservers.h"
 #include "SceneState.h"
 
+#include "Features/DrawcallLimitFix/Scene/Coordinator/Gates.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 
 namespace DCLF::Diagnostics
@@ -12,13 +13,18 @@ namespace DCLF::Diagnostics
 	namespace
 	{
 		using V = SceneView;
+		namespace G = Scene::Gates;
 
 		void OnFlipsPublished(const On<ScenePoint::GateFlipsPublished>&)
 		{
 			// A hole here is the commit's or the revocation's, one only at the release the hand-over's.
-			auto& g = SceneDiagnostics().gates;
-			const auto* claims = V::publicationClaims(Scene::Coordinator::Get());
-			for (const auto& flip : V::gateFlipsMade(Scene::Coordinator::Get()))
+			const auto& store = Scene::Coordinator::Get();
+			auto* gates = G::StateOf(V::componentState(store, G::component));
+			if (!gates)
+				return;
+			auto& g = gates->observed;
+			const auto* claims = V::publicationClaims(store);
+			for (const auto& flip : G::Flips(V::componentDeltas(store, G::component)))
 				for (const auto& [geometry, phases] : flip.incoming)
 					if (const std::uint8_t claimed = claims ? claims->PhasesOf(geometry) : std::uint8_t{ 0 }; claimed != phases) {
 						++g.publishHoles;
@@ -31,7 +37,7 @@ namespace DCLF::Diagnostics
 		{
 			// Every incoming geometry claimed with the flip's phases, no outgoing claimed. A later publication's legitimate change of an
 			// incoming member reads as a hole here too.
-			auto& rs = SceneDiagnostics().gateReleases;
+			auto& rs = G::Releases().observed;
 			++rs.checked;
 			for (const auto& [geometry, phases] : a_event.incoming)
 				if (const std::uint8_t installedPhases = a_event.claims.PhasesOf(geometry); installedPhases != phases) {

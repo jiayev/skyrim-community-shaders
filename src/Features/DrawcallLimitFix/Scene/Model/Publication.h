@@ -187,19 +187,6 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief A LOD gate flipped by a commit (UpdateGates), published as the gates' component's delta and released by the frame installing
-	 * its publication (GateAdoption::Adopt).
-	 */
-	struct GateFlip
-	{
-		std::uint64_t token = 0;
-		std::vector<std::pair<const RE::BSGeometry*, std::uint8_t>> incoming;  // the incoming base geometries claimed, with the flip's phases
-		std::vector<const RE::BSGeometry*> outgoing;                          // the outgoing base geometries dropped
-		std::uint64_t requestNs = 0, flipNs = 0;                              // its event's push, the flip (steady clock)
-		std::uint32_t requestFrame = 0, flipFrame = 0;                        // the render thread's frames then (SceneCapture::Frame)
-	};
-
-	/**
 	 * @brief What one publication's passes made for the frame and the frame's start takes, carried by the publication log in
 	 * the publication's order: the main claims' changes against the publication before it (taken up to the installed one), and the
 	 * frame inputs (taken up to the newest one taken): the walks' placement plans, the slots named for their shading, the fade and
@@ -239,15 +226,6 @@ namespace DCLF
 	};
 	namespace Scene
 	{
-		/** @brief The LOD gates' clock (steady, ns) and a span on it in ms (0 without a start). */
-		inline std::uint64_t GateNowNs()
-		{
-			return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
-		}
-		inline double GateMs(std::uint64_t a_from, std::uint64_t a_to)
-		{
-			return a_from && a_to > a_from ? static_cast<double>(a_to - a_from) / 1.0e6 : 0.0;
-		}
 		/** @brief The latency histograms' buckets (frames): 0, 1, 2, 3, 4-7, 8-15, 16-63, 64+. */
 		inline constexpr std::size_t kAgeBuckets = 8;
 		inline constexpr std::array<const char*, kAgeBuckets> kAgeBucketNames{ "0", "1", "2", "3", "4-7", "8-15", "16-63", "64+" };

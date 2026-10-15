@@ -134,33 +134,6 @@ namespace DCLF::Diagnostics
 		std::uint64_t parityGeometries = 0, parityGeometriesDiffer = 0, parityFamiliesDiffer = 0;
 	};
 
-	/** @brief The LOD gates' observers: the flipped incoming geometries the flip's own publication does not claim (the coordinator's). */
-	struct GateObserverState
-	{
-		std::uint64_t publishHoles = 0;
-		std::string firstPublishHole;
-		// CS_DCLF_PERSISTENT_PARITY: the gates' state against what it is derived from (SceneGateParity.cpp), since the last report.
-		struct Parity
-		{
-			std::uint64_t checks = 0, gates = 0, sweeps = 0, entries = 0, differ = 0, unmarked = 0;
-			std::string first;  // its invariant's tag first (roots, tags, withheld, ready, stuck, early, flip, marks, veto)
-			std::uint32_t pass = 0;  // the pass (PassStamp) that ran the sweep: once a pass
-			// Kept across reports: the newest flip checked (each by the commit that made it; tokens are unique), and the open
-			// gates' incoming roots the last sweep found shown in the mirror.
-			std::uint64_t lastFlip = 0;
-			std::vector<std::pair<std::uint64_t, const void*>> shown;
-			// And the outgoing-tagged entries the last sweep found under no gate root.
-			std::vector<std::pair<std::uint64_t, const void*>> unmarkedOutgoing;
-		} parity;
-	};
-
-	/** @brief The LOD gates' observers at the release (render thread): the flips checked against the installed claims. */
-	struct GateReleaseObserverState
-	{
-		std::uint64_t checked = 0, holes = 0, refusedHoles = 0, coverage = 0;
-		std::string firstHole, firstCoverage;
-	};
-
 	/** @brief CS_DCLF_MIRROR_PARITY, the records: the probe's slice, the coordinator -> the render thread (each geometry held: the render thread drops them). */
 	struct MirrorProbeRequest
 	{
@@ -237,8 +210,6 @@ namespace DCLF::Diagnostics
 		CommitParityState commit;
 		FirstPersonObserverState firstPerson;
 		MirrorParityState mirror;
-		GateObserverState gates;
-		GateReleaseObserverState gateReleases;
 		ReplayParityState replay;
 		DecalOrderParityState decalOrder;
 		CandidateParityState candidates;

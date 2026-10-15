@@ -8,7 +8,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 
 namespace DCLF
 {
@@ -67,16 +67,16 @@ namespace DCLF
 	{
 		// The roots whose members DCLF's faces draw, in a plain update of a frame whose faces are DCLF's (DecideCoverage):
 		// - LOD trees while the faces' tree LOD is DCLF's (DecideViewTreeLod): drawn from DCLF's mirror, no registration needed.
-		// - LOD land and objects while the engine's LOD swaps are gated (LodGates) and both are DCLF's (their classes): a
-		//   swap's incoming blocks are shown only by the frame whose claims hold them, so the faces never need the engine's
-		//   registrations of them. Ungated, the LOD chunks and objects the engine shows or attaches in motion take DCLF a few frames
+		// - LOD land and objects while the engine's LOD swaps are gated (a show veto registered: the LOD gates') and both are DCLF's
+		//   (their classes): a swap's incoming blocks are shown only by the frame whose claims hold them, so the faces never need the
+		//   engine's registrations of them. Ungated, the LOD chunks and objects the engine shows or attaches in motion take DCLF a few frames
 		//   to bind (ClassifyResidue) and their roots stay, the members withheld (PassCapture).
 		auto& capture = PassCapture::Get();
 		capture.WatchReflectionResidue(0);
 		if (!a_plain || !ViewDrawable(a_view) || !impl->ViewCovered(a_view) || !Policy::WithholdFromEngine())
 			return 0;
 		const auto toggles = ActiveToggles();
-		const bool lodOwned = LodGates::Enabled() && Extensions::ObjectClassOn(toggles, Api::ObjectClass::LodObjects) &&
+		const bool lodOwned = Extensions::ShowVetoRegistered() && Extensions::ObjectClassOn(toggles, Api::ObjectClass::LodObjects) &&
 		                      Extensions::ObjectClassOn(toggles, Api::ObjectClass::LodTerrain);
 		const std::uint32_t owned = (impl->View(a_view).treeOwned ? FamilySlotOf(Api::DrawFamily::TreeInstances).lodRoot : 0u) | (lodOwned ? PassCapture::kLodRoots : 0u);
 		// The updates that keep the roots (Policy::KeepReflectionRoots): what the engine registers into the faces and DCLF does not

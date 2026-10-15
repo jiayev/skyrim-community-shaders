@@ -2493,48 +2493,60 @@ resident-draw, set and fade parity; motion m28/m29).
     before their attach and vetoes the engine's shows, keeps the outgoing attached and shown, and calls `LodGates::CaptureGate` after the
     attaches. The scene side holds the swap until every geometry under the incoming roots is a whole member or ineligible, then publishes
     the post-swap claims with a flip, which the frame adopting them releases.
-    - **Producer.** `CaptureGate` -> `SceneTracker::PushGate`: an `EventType::Gate` on the swapping thread's stack. It is ordered after
-      the incoming blocks' attaches, carries the token and the outgoing root keys, and pins the incoming roots in `Event::pins` (released
-      with the batch on the render thread). It wakes the pump as `SceneWake::Gate`, always, like an attach in the world.
-    - **Mirror.** `ApplyMirrorEvents` applies the event in order (`ApplyGateEvent`). Each incoming root is gated in the mirror
-      (`SceneMirror::SetGated`), a key set beside the records: a capture replaces a record whole, and the mirror parity compares records
-      alone. `HiddenForWalk(key, record)` ignores a gated node's own kHidden, and every other hide still counts. So a gated block's
-      geometries are classified, written, bound and joined while the engine keeps the block hidden.
-    - **Gates** (`SceneStore::LodGate`, `lodGates` by token, `gateOfRoot` by root with its side; `Scene/Coordinator/Gates.cpp`).
-      - The event walks the mirror once per root (`TagGateRoot`, `MirrorSubtree`) and tags the tracked geometries (`Tracked::gate`,
-        `gateSide`). `AddGeometry` tags later arrivals by the nearest gate root on their mirror chain (`TagGateAbove`).
-      - An incoming tag reclassifies the geometry. Its slots are queued for the next commit (`gateQueued`), with their earlier gate
-        record cleared.
-      - A root the mirror lacks counts as `unmirrored` and is walked again at each commit until it has a record.
-      - A detached root leaves its gate (`NoteGateRootsDetached`), and `EraseTracked` untags. An open gate left with no incoming root
-        never flips (the engine side's forced release retires it).
+    - **Producer.** `CaptureGate` -> `Extensions::PushStacked` on the gates' `ChannelKind::SceneStack` channel: a stacked event on the
+      swapping thread's stack. It is ordered after the incoming blocks' attaches, carries the token and the outgoing root keys (named),
+      and pins the incoming roots (released with the batch on the render thread). The channel wakes a pass (`WakeSource::Pass`), always,
+      like an attach in the world.
+    - **Registration.** Core's built-in gates (`Scene::RegisterCoreGates`, `Scene/Coordinator/GateComponent.cpp`) register, while
+      `LodGates::Enabled()`, the channel (`ChannelApply::AfterBatch`), the show veto (`Api::ShowVeto`: the open word, `Vetoes` and
+      `NoteEngineHide`, kept in Core's install-resolved cells, which the hidden-node source's stubs load), a reserved hidden site
+      (`ReserveHiddenSite`, for the gates' own stores' `Extensions::PushReservedHidden`), the adoption guard, the coordinator component
+      and its report lines. The component's state (`Scene::Gates::GateState`, `Scene/Coordinator/Gates.h`) is made by its `make` hook;
+      it reaches the coordinator only through its context.
+    - **Mirror.** `ApplyMirrorEvents` applies the event in order (the component's `Events.stacked`). Each incoming root is gated in the
+      mirror (`SceneMirror::SetGated`, as its root mark owns its hide), a key set beside the records: a capture replaces a record whole,
+      and the mirror parity compares records alone. `HiddenForWalk(key, record)` ignores a gated node's own kHidden, and every other hide
+      still counts. So a gated block's geometries are classified, written, bound and joined while the engine keeps the block hidden.
+    - **Gates** (`Gates::LodGate`, `lodGates` by token; their roots are Core's root marks; `Scene/Coordinator/Gates.cpp`).
+      - The event marks each root (`MarkRoot` with the token and side; the incoming own their hide; a mark it displaces leaves the
+        other gate), walks the mirror once per root (`SubtreeEntries`) and tags the tracked geometries (the component's `gateTags`). The
+        prepare's mark walk finds the nearest mark on a later arrival's mirror chain (`MarkOf` reads one), and `Events.underMark` tags it.
+      - An incoming tag sets the entry's Observe veto (`kVetoObserve`, resetting its observed slots) and requeues it (`Requeue`: its
+        verdict taken again, its slots committed again).
+      - A root the mirror lacks counts as `unmirrored` and is walked again at each settle until it has a record.
+      - A detached root's mark is erased (`UnmarkDetached`), then the gate is told (`Events.detached`); the entries' erasure untags them
+        (`Retirement.forgot`). An open gate left with no incoming root never flips (the engine side's forced release retires it).
     - **Withholding and the flip** (`CommitSet`).
-      - A gated incoming slot's phases, as the commit decided them (partner rule included), are stored with their readiness in
-        `gateSlots` (`GateWithhold`), and the commit applies 0 while the gate is open. Ready means whole: the phases equal the
-        participation, and the slot is not waiting.
-      - After the queue, `UpdateGates` recounts each open gate's `pending`: a geometry is ready when it was classified since its tag
-        with its leaf's records, and is either ineligible with no record or has every slot ready.
-      - A gate flips when `pending` and `unmirrored` are both 0, it has an incoming root, and the scene is live:
-        - the incoming slots get their stored phases;
-        - the outgoing slots get 0 and are held out (`Tracked::gateHeldOut`) until their detach erases them;
-        - a `GateFlip` (incoming base geometries with their phases, outgoing geometries, the stamps) goes onto `PublicationDeltas::gateFlips`.
+      - The commit reads each entry's veto byte as data. An observed slot's phases, as the commit decided them (partner rule included),
+        are recorded with their readiness (`ObservedSlot`), and the commit applies 0 while the Observe stands; Hold applies 0. Ready
+        means whole: the phases equal the participation, and the slot is not waiting.
+      - After the queue, the component's `Commit.settle` recounts each open gate's `pending`: a geometry is ready when it was classified
+        since its tag with its leaf's records, and is either ineligible with no record or has every observed slot ready.
+      - A gate flips when `pending` and `unmirrored` are both 0, it has an incoming root, and the scene is live. The vetoes the settle
+        changes apply in the same commit, before the set's change is noted and the claims are snapshotted:
+        - the incoming drop their Observe, so their slots get the observed phases;
+        - the outgoing get Hold (`kVetoHold`: their slots 0) until their detach erases them;
+        - a `GateFlip` (incoming base geometries with their phases, outgoing geometries, the stamps) is the component's delta
+          (`PublishDelta`, into `PublicationDeltas::componentDeltas`).
       - A ready gate whose incoming records were written since the last publication waits one more commit (w152 fix). That
         publication revokes structurally changed slots' claims whole (`RevokeUndrawnClaims`, R3b) and claims them only at the next one,
         so a flip in the pass that wrote the records was released with every incoming geometry unclaimed (`<- GATE HOLE`, claimed 0x0
-        against flipped 0x21). `UpdateGates` reads `revokeCursor`'s unread `kStructureCauses` once, when a gate is otherwise ready.
-        Under the parities, `TakeDeltas` checks each flip against its own publication's claims (`<- GATE HOLE (publication)`), which
-        separates a coordinator-side loss from a hand-over one.
-      - `DeltasPending` counts the flips, so a flip always publishes. With no gate and nothing held out, the commit does no gate work
-        (`gatesLive`). The set commit parity applies the same withholding (`GateWithholds`).
-    - **Release.** `HandOverAtFrameStart` collects the flips of the publications it installs into `frameGateReleases`.
-      `SceneStore::ReleaseGates` runs in `BeginSceneFrame` right after `InstallClaims`/`WithdrawSet`, before the culls, and in a withdrawn
-      frame too (every later publication is post-swap). It calls `LodGates::Flip` for each flip, then wakes the pump (`SceneWake::Gate`).
-    - **Outcomes.** The coordinator takes `LodGates::DrainOutcomes` before `CollectEvents`, so an outcome's gate events are in that
-      batch or an earlier one, and applies them after the batch. A load screen's pass (its events carried) holds them for the next pass.
-      - A flipped outcome retires the gate: its roots are ungated (the engine's show arrived as the root's hidden event first) and its
-        tags cleared. The outgoing stay held out.
+        against flipped 0x21). The settle asks `RestructuredSincePublication`, which Core reads from `revokeCursor` once a commit.
+        Under the parities, the component's `Commit.published` checks each flip against its own publication's claims (`<- GATE HOLE
+        (publication)`), which separates a coordinator-side loss from a hand-over one.
+      - `DeltasPending` counts the component's deltas, so a flip always publishes. With no component live (`SetCommitLive`) and nothing
+        vetoed, the commit calls no settle (`gatesLive`). The set commit parity reads the same veto byte (`EntryVetoed`).
+    - **Release.** The frame start hands the component the deltas of the publications it installs (`Adoption.adopt`, through
+      `Extensions::ComponentsAdopt`), right after `InstallClaims`/`WithdrawSet`, before the culls, and in a withdrawn frame too (every
+      later publication is post-swap). `Gates::Adopt` calls `LodGates::Flip` for each flip, then wakes the channel
+      (`Extensions::WakeChannel`).
+    - **Outcomes.** The component's `Commit.take` takes `LodGates::DrainOutcomes` before `CollectEvents`, so an outcome's gate events
+      are in that batch or an earlier one, and the channel's keys hook applies them after the batch (`ChannelApply::AfterBatch`). A load
+      screen's pass (its events carried) holds them for the next pass.
+      - A flipped outcome retires the gate: its roots are unmarked (`UnmarkRoot`; the engine's show arrived as the root's hidden event
+        first) and its tags cleared. The outgoing stay held out.
       - A forced outcome on an open gate also reclassifies the incoming and re-commits them with their own phases.
-      - The engine side's forced releases call `WakeSceneGate()` after posting.
+      - The engine side's forced releases wake the channel (`Extensions::WakeChannel`) after posting.
     - **Reused held blocks** (2026-10-11; written, not built or run yet). The engine attaches a held outgoing block again when a swap
       back finds its cached handle; it stays attached as the node's current block and no detach ever erases its entries, so a hold-out
       left on it kept its geometries drawn natively for good (the LOD residue rise, w154).
@@ -2547,7 +2559,7 @@ resident-draw, set and fade parity; motion m28/m29).
       - The notice is `LodGates::Outcome::kept` (the block's root keys, with the gate that held it) on the outcome stack, posted after
         the gate's event, so in order with the retirements. `ApplyGateKept` takes the roots off the gate's outgoing (an open gate's
         flip no longer holds them out) and, in one mirror walk per notice, untags each tracked geometry under them that the gate tags
-        as outgoing or that a retirement left held out with no gate; the held-out ones' slots go to `gateQueued` for the next commit.
+        as outgoing or that a retirement left held out with no gate; the held-out ones lose their Hold and are requeued for the next commit.
         A later gate's tag is that gate's. Idempotent (a reattach and its release may both post).
       - Forced and superseded gates, audited: an open gate forced reclassifies and re-commits its incoming and never held out its
         outgoing; a gate flipped on the scene side but forced on the engine side (its flip never ran) leaves its outgoing held out
@@ -2558,19 +2570,22 @@ resident-draw, set and fade parity; motion m28/m29).
       an area comes into LOD range. Outside a load screen (`DAT_14315b6a0`) their attaches are gated like the swaps' (pre-hidden,
       vetoed) and the gate, with no outgoing, is emitted right after the attach. Under a load screen they pass through: its last LOD
       update is a full rebuild, which flushes every gate before that drain, and DCLF withdraws there.
-    - **Forced generation.** `BeginFrame` reads `LodGates::ForcedGeneration()` once a frame into `FrameInputs::lodForcedGeneration`. The
-      coordinator stamps each publication with the generation of the inputs its pass took before its drains (`ScenePublication::lodForcedGeneration`).
-      A generation the last publication was not built for forces one (`PublicationNeeded`). `BeginSceneFrame` withdraws while
-      `InstalledLodForced() < FrameLodForced()`, beside the toggles compare.
+    - **Forced generation.** The gates' adoption guard (`Api::AdoptionGuard`: `LodGates::ForcedGeneration`). The frame start samples
+      each registered guard once a frame into the frame inputs' slots (`Extensions::kAdoptionGuardSlots`). The coordinator stamps each
+      publication with the generations of the inputs its pass took before its drains. A generation the last publication was not built
+      for forces one (`PublicationNeeded`). The frame withdraws while an installed guard is older than the frame's
+      (`Extensions::AdoptionGuarded`), beside the toggles compare.
     - **Observers.**
-      - Under `CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`, `ReleaseGates` checks the installed claims against each flip:
+      - Under `CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`, the adoption checks the installed claims against each flip:
         an incoming geometry not claimed with the flip's phases is `<- GATE HOLE` (a later publication's legitimate change reads as
         one too); an outgoing geometry still claimed is `<- GATE COVERAGE`.
       - The coordinator's line `[DCLF] LOD gates (T6b5): N opened, N flipped, N retired flipped, N forced (N before their flip), ...;
         request to flip: ms, frames; now N open (oldest X ms), N flipped awaiting their release's outcome; blockers: unmirrored roots N,
         unclassified N, no record N, not bound N, waiting (by the set's waiting-for index) ..., a phase short or its layer partner N`.
       - The render thread's line `[DCLF] LOD gate releases (T6b5): N released, N refused, N in a withdrawn frame; flip to release: ms,
-        frames; request to release ms; checked N: ...`, followed by `LodGates::TakeReport` once a report interval.
+        frames; request to release ms; checked N: ...`, followed by the engine side's (`LodGates::Take`) once a report interval. The
+        component registers both: the coordinator's at `ReportPoint::SceneCoordinatorGates` (`componentText`, logged as one line), the
+        render thread's at `ReportPoint::GateReleases` (`lines`), each first at its point.
       - Residue stage `shown with no gate` (`kStageUngated`, `CS_DCLF_TIMELINE`): a LOD residue geometry no gate ever tagged that is
         hidden-stale, unrecorded, unbound or waiting.
     - **To watch in a run:** the engine line's "N reattached before their flip, N kept notices" and the coordinator's "reused

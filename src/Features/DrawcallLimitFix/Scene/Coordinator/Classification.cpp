@@ -732,7 +732,7 @@ namespace DCLF::Scene
 		if (a_prep.subIndex)
 			lodRanges[a_geometry] = std::move(a_prep.segments);
 		pendingEvaluation.push_back(a_geometry);
-		// Under a root marked earlier (a LOD gate's): the marking component's (the prepare found the nearest, as TagGateAbove).
+		// Under a root marked earlier (a LOD gate's): the marking component's (the nearest, found by the prepare's mark walk).
 		if (a_prep.mark)
 			ComponentsUnderMark(a_geometry, a_prep.mark);
 	}
@@ -848,7 +848,7 @@ namespace DCLF::Scene
 		a_out.held = HeldKeysOf(a_geometry);
 		if (a_out.subIndex && g)
 			a_out.segments = g->segments;
-		// TagGateAbove's walk: the mirror's chain up to the category node, the nearest marked root on it (the marks change only with the
+		// The prepare's mark walk: the mirror's chain up to the category node, the nearest marked root on it (the marks change only with the
 		// mirror's events, before the adds: the parallel prepares read them as data).
 		if (!rootMarks.empty())
 			for (const void* key = record ? record->parent : nullptr; key;) {

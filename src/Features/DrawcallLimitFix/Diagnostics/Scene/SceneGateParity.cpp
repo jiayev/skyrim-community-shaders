@@ -1,5 +1,5 @@
 // CS_DCLF_PERSISTENT_PARITY: the LOD gates' state (Scene/Coordinator/Gates.cpp) against what it is derived from, at each commit while gates
-// live (SetCommitted: after the gates' settle, UpdateGates, before the publication takes the commit's flips): the root map and the mirror's
+// live (SetCommitted: after the gates' settle, before the publication takes the commit's flips): the root map and the mirror's
 // gated roots, the tags, the withheld slots, the open gates' readiness taken again, the commit's flips. Every 60th pass a sweep of the
 // tracked set: the tags and the vetoes (hold-outs, observed incoming), the marks a walk of the mirror gives now, and the open gates'
 // incoming roots hidden. Gate roots are keys: nothing
@@ -8,6 +8,7 @@
 #include "SceneObservers.h"
 #include "SceneState.h"
 
+#include "Features/DrawcallLimitFix/Scene/Coordinator/Gates.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 
 #include <algorithm>
@@ -19,16 +20,25 @@ namespace DCLF::Diagnostics
 	namespace
 	{
 		using V = SceneView;
-		using Parity = GateObserverState::Parity;
+		namespace G = Scene::Gates;
+		using Parity = G::ObserverState::Parity;
 
-		/** @brief The commit checked: its store and decision inputs (SetCommitted's), and the counts. */
+		/** @brief The commit checked: its store and decision inputs (SetCommitted's), the gates' state, and the counts. */
 		struct Commit
 		{
 			const Scene::Coordinator& store;
 			bool live;
 			std::uint32_t drawn;
+			const G::GateState& gates;
 			Parity& parity;
 		};
+
+		/** @brief a_geometry's gate tag (token 0: none). */
+		G::GateTag GateTagOf(const G::GateState& a_gates, const RE::BSGeometry* a_geometry)
+		{
+			const auto at = a_gates.gateTags.find(a_geometry);
+			return at != a_gates.gateTags.end() ? at->second : G::GateTag{};
+		}
 
 		/** @brief A difference: counted, the first described (a_describe: its text, the invariant's tag first). */
 		template <class Describe>
@@ -40,7 +50,7 @@ namespace DCLF::Diagnostics
 
 		const char* SideName(std::uint8_t a_side)
 		{
-			return a_side == V::kGateIncoming ? "incoming" : a_side == V::kGateOutgoing ? "outgoing" : "no side";
+			return a_side == G::kGateIncoming ? "incoming" : a_side == G::kGateOutgoing ? "outgoing" : "no side";
 		}
 
 		/**
@@ -63,7 +73,7 @@ namespace DCLF::Diagnostics
 		}
 
 		/**
-		 * @brief GateGeometryReady with each slot's readiness decided now instead of as the commit recorded it. A slot not evaluated under
+		 * @brief GeometryReady with each slot's readiness decided now instead of as the commit recorded it. A slot not evaluated under
 		 * its gate yet (no record of the geometry: TagGate cleared it) is not ready either way: the gate waits for that evaluation.
 		 */
 		bool ReadyNow(const Commit& a_commit, const RE::BSGeometry* a_geometry, const V::Tracked& a_entry)
@@ -80,7 +90,7 @@ namespace DCLF::Diagnostics
 
 		/**
 		 * @brief G3: a withheld geometry's slots out of the commit's decision and its base geometry out of the next claims. a_open: an open
-		 * gate's incoming, whose slots are withheld from their first evaluation under the gate (one tagged since, by UpdateGates' walk, is
+		 * gate's incoming, whose slots are withheld from their first evaluation under the gate (one tagged since, by the settle's walk, is
 		 * the next commit's); else held out, whose slots the flip applied 0 to and every evaluation since withholds.
 		 */
 		void CheckWithheld(const Commit& a_commit, const RE::BSGeometry* a_geometry, const V::Tracked& a_entry, std::uint64_t a_token, bool a_open)
@@ -108,36 +118,36 @@ namespace DCLF::Diagnostics
 		/** @brief G1: the gates' root lists, the root map and the mirror's gated roots agree. */
 		void CheckRoots(const Commit& a_commit)
 		{
-			const auto& lodGates = V::lodGates(a_commit.store);
+			const auto& lodGates = a_commit.gates.lodGates;
 			const auto& rootMarks = V::rootMarks(a_commit.store);
 			const auto& mirror = V::mirror(a_commit.store);
 			for (const auto& [token, gate] : lodGates)
-				for (const std::uint8_t side : { V::kGateIncoming, V::kGateOutgoing })
-					for (const void* root : side == V::kGateIncoming ? gate.incoming : gate.outgoing)
+				for (const std::uint8_t side : { G::kGateIncoming, G::kGateOutgoing })
+					for (const void* root : side == G::kGateIncoming ? gate.incoming : gate.outgoing)
 						if (const auto at = rootMarks.find(root);
-							at == rootMarks.end() || !V::gateMark(at->second.mark) || at->second.mark.token != token || at->second.mark.side != side)
+							at == rootMarks.end() || !G::IsGateMark(at->second.mark) || at->second.mark.token != token || at->second.mark.side != side)
 							Differ(a_commit.parity, [&] {
-								return at == rootMarks.end() || !V::gateMark(at->second.mark) ?
+								return at == rootMarks.end() || !G::IsGateMark(at->second.mark) ?
 								           fmt::format("roots: gate {} lists {} root {}, the root map has none", token, SideName(side), root) :
 								           fmt::format("roots: gate {} lists {} root {}, the root map names gate {} ({})", token, SideName(side), root,
 											   at->second.mark.token, SideName(at->second.mark.side));
 							});
 			std::size_t incoming = 0;
 			for (const auto& [root, marked] : rootMarks) {
-				if (!V::gateMark(marked.mark))
+				if (!G::IsGateMark(marked.mark))
 					continue;
 				const auto& owner = marked.mark;
 				const auto gate = lodGates.find(owner.token);
 				const auto* roots = gate == lodGates.end()          ? nullptr :
-				                    owner.side == V::kGateIncoming ? &gate->second.incoming :
-				                    owner.side == V::kGateOutgoing ? &gate->second.outgoing :
+				                    owner.side == G::kGateIncoming ? &gate->second.incoming :
+				                    owner.side == G::kGateOutgoing ? &gate->second.outgoing :
 				                                                     nullptr;
 				if (!roots || std::ranges::find(*roots, root) == roots->end())
 					Differ(a_commit.parity, [&] {
 						return fmt::format("roots: root {} mapped to gate {} ({}), {}", root, owner.token, SideName(owner.side), gate == lodGates.end() ? "no such gate" : "not listed by it");
 					});
-				incoming += owner.side == V::kGateIncoming ? 1u : 0u;
-				if (mirror.Gated(root) != (owner.side == V::kGateIncoming))
+				incoming += owner.side == G::kGateIncoming ? 1u : 0u;
+				if (mirror.Gated(root) != (owner.side == G::kGateIncoming))
 					Differ(a_commit.parity, [&] { return fmt::format("roots: root {} of gate {} ({}) gated {} in the mirror", root, owner.token, SideName(owner.side), mirror.Gated(root)); });
 			}
 			if (mirror.GatedCount() != incoming)
@@ -145,13 +155,13 @@ namespace DCLF::Diagnostics
 		}
 
 		/** @brief G2 (a gate's sets): each tagged geometry tracked with the gate's token and side. G3 for its held-out outgoing. */
-		void CheckTags(const Commit& a_commit, std::uint64_t a_token, const V::LodGate& a_gate)
+		void CheckTags(const Commit& a_commit, std::uint64_t a_token, const G::LodGate& a_gate)
 		{
 			const auto& tracked = V::tracked(a_commit.store);
-			for (const std::uint8_t side : { V::kGateIncoming, V::kGateOutgoing })
-				for (auto* geometry : side == V::kGateIncoming ? a_gate.incomingGeometries : a_gate.outgoingGeometries) {
+			for (const std::uint8_t side : { G::kGateIncoming, G::kGateOutgoing })
+				for (auto* geometry : side == G::kGateIncoming ? a_gate.incomingGeometries : a_gate.outgoingGeometries) {
 					const auto it = tracked.find(geometry);
-					const auto tag = V::gateTagOf(a_commit.store, geometry);
+					const auto tag = GateTagOf(a_commit.gates, geometry);
 					if (it == tracked.end() || tag.token != a_token || tag.side != side) {
 						Differ(a_commit.parity, [&] {
 							return it == tracked.end() ? fmt::format("tags: gate {} {} geometry {} not tracked", a_token, SideName(side), static_cast<const void*>(geometry)) :
@@ -167,9 +177,9 @@ namespace DCLF::Diagnostics
 
 		/**
 		 * @brief G3 and G4 for an open gate: its incoming withheld, each incoming geometry's readiness as recorded against a fresh decision,
-		 * the not-ready count against pending, and a gate UpdateGates should have flipped.
+		 * the not-ready count against pending, and a gate the settle should have flipped.
 		 */
-		void CheckOpen(const Commit& a_commit, std::uint64_t a_token, const V::LodGate& a_gate, bool a_retagged)
+		void CheckOpen(const Commit& a_commit, std::uint64_t a_token, const G::LodGate& a_gate, bool a_retagged)
 		{
 			const auto& store = a_commit.store;
 			const auto& tracked = V::tracked(store);
@@ -184,7 +194,7 @@ namespace DCLF::Diagnostics
 					continue;
 				}
 				CheckWithheld(a_commit, geometry, it->second, a_token, true);
-				const bool wasReady = V::GateGeometryReady(store, geometry);
+				const bool wasReady = G::GeometryReady(geometry, V::TrackedStateOf(store, geometry), [&](std::uint32_t a_slot) { return V::ObservedSlot(store, a_slot); });
 				const bool readyNow = ReadyNow(a_commit, geometry, it->second);
 				recorded += wasReady ? 0u : 1u;
 				fresh += readyNow ? 0u : 1u;
@@ -193,13 +203,13 @@ namespace DCLF::Diagnostics
 					differsRecorded = wasReady;
 				}
 			}
-			// Nothing pending, every root mirrored, roots left and the scene built: UpdateGates flips such a gate, or defers it with its
+			// Nothing pending, every root mirrored, roots left and the scene built: the settle flips such a gate, or defers it with its
 			// unpublished records as pending.
 			const bool flippable = a_commit.live && !a_gate.unmirrored && !a_gate.incoming.empty();
 			if (flippable && !a_gate.pending)
 				Differ(a_commit.parity, [&] { return fmt::format("stuck: gate {} open with nothing pending ({} incoming geometries, {} roots)", a_token, a_gate.incomingGeometries.size(), a_gate.incoming.size()); });
 			// The count: not for a gate the structure check deferred (every geometry ready by the commit's records; pending then counts the
-			// records not published yet), nor after a tag in UpdateGates' walks (an unmirrored gate's walk may take a geometry of a gate
+			// records not published yet), nor after a tag in the settle's walks (an unmirrored gate's walk may take a geometry of a gate
 			// counted before it; each such tag of a geometry with slots requeues them, and the requeued slots are none after the commit's
 			// start otherwise). A geometry with neither slots nor a verdict queues nothing: taking it needs a root nested under another gate's,
 			// which the marks (G6) flag.
@@ -216,17 +226,17 @@ namespace DCLF::Diagnostics
 
 		/**
 		 * @brief G5 and G4's early flips, for the flips this commit made: incoming the base geometries the commit holds with phases (the flip
-		 * applied them), each ready by a fresh decision; outgoing the gate's tracked outgoing. Not compared after a tag in UpdateGates' walks
+		 * applied them), each ready by a fresh decision; outgoing the gate's tracked outgoing. Not compared after a tag in the settle's walks
 		 * (CheckOpen): a later gate's walk may take a flipped gate's geometry after its flip.
 		 */
 		void CheckFlips(const Commit& a_commit, bool a_retagged)
 		{
 			const auto& store = a_commit.store;
-			const auto& lodGates = V::lodGates(store);
+			const auto& lodGates = a_commit.gates.lodGates;
 			const auto& tracked = V::tracked(store);
 			const auto& tables = V::tables(store);
 			const auto& setPhases = V::setPhasesNext(store);
-			const auto& flips = V::gateFlipsMade(store);
+			const auto& flips = G::Flips(V::componentDeltas(store, G::component));
 			auto& p = a_commit.parity;
 			// This commit's: those after the newest an earlier commit checked (the publication empties the list).
 			std::size_t from = 0;
@@ -241,7 +251,7 @@ namespace DCLF::Diagnostics
 			for (std::size_t f = from; f < flips.size(); ++f) {
 				const auto& flip = flips[f];
 				const auto found = lodGates.find(flip.token);
-				if (found == lodGates.end() || found->second.state != V::LodGate::State::Flipped) {
+				if (found == lodGates.end() || found->second.state != G::LodGate::State::Flipped) {
 					Differ(p, [&] { return fmt::format("flip: gate {} flipped by this commit is {}", flip.token, found == lodGates.end() ? "gone" : "open"); });
 					continue;
 				}
@@ -281,9 +291,9 @@ namespace DCLF::Diagnostics
 		}
 
 		/**
-		 * @brief The gate root TagGateAbove gives an entry now: the nearest key of the root map on its mirror chain, up to its category node.
-		 * a_resolved false: the chain meets a key the mirror holds no record of (TagGateAbove stops there; the gate's own walk does not
-		 * reach past it either), or runs past any depth a scene has.
+		 * @brief The gate root the prepare's mark walk gives an entry now: the nearest key of the root map on its mirror chain, up to its
+		 * category node. a_resolved false: the chain meets a key the mirror holds no record of (the prepare's mark walk stops there; the
+		 * gate's own walk does not reach past it either), or runs past any depth a scene has.
 		 */
 		const Api::Mark* GateAbove(const Scene::Coordinator& a_store, const RE::BSGeometry* a_geometry, const V::Tracked& a_entry, bool& a_resolved)
 		{
@@ -298,7 +308,7 @@ namespace DCLF::Diagnostics
 			for (const void* key = record->parent; key;) {
 				// The nearest mark decides (the prepare's walk): another component's is no gate root.
 				if (const auto at = rootMarks.find(key); at != rootMarks.end())
-					return V::gateMark(at->second.mark) ? &at->second.mark : nullptr;
+					return G::IsGateMark(at->second.mark) ? &at->second.mark : nullptr;
 				if (key == a_entry.categoryNode)
 					return nullptr;
 				const auto* node = mirror.Node(key);
@@ -322,8 +332,8 @@ namespace DCLF::Diagnostics
 			const auto& mirror = V::mirror(a_commit.store);
 			auto& p = a_commit.parity;
 			std::vector<std::pair<std::uint64_t, const void*>> shown;
-			for (const auto& [token, gate] : V::lodGates(a_commit.store)) {
-				if (gate.state != V::LodGate::State::Open)
+			for (const auto& [token, gate] : a_commit.gates.lodGates) {
+				if (gate.state != G::LodGate::State::Open)
 					continue;
 				for (const void* root : gate.incoming) {
 					const auto* record = mirror.Node(root);
@@ -339,13 +349,13 @@ namespace DCLF::Diagnostics
 
 		/**
 		 * @brief The sweep: G2 over the tracked set (each tagged entry in its gate's set, its veto as its tag and gate give it, the held-out
-		 * and observed counts), G3 for the held-out entries no gate's set covered, G6 (each entry's tag against TagGateAbove's rule now),
+		 * and observed counts), G3 for the held-out entries no gate's set covered, G6 (each entry's tag against the prepare's mark walk now),
 		 * then G7.
 		 */
 		void Sweep(const Commit& a_commit)
 		{
 			const auto& store = a_commit.store;
-			const auto& lodGates = V::lodGates(store);
+			const auto& lodGates = a_commit.gates.lodGates;
 			auto& p = a_commit.parity;
 			++p.sweeps;
 			std::uint32_t heldOut = 0, observed = 0;
@@ -353,17 +363,17 @@ namespace DCLF::Diagnostics
 			for (const auto& [geometry, entry] : V::tracked(store)) {
 				++p.entries;
 				bool covered = false;
-				const auto tag = V::gateTagOf(store, geometry);
+				const auto tag = GateTagOf(a_commit.gates, geometry);
 				// Observed exactly while an open gate's incoming (the withholding its tag and gate give).
 				bool open = false;
 				if (tag.token) {
 					const auto gate = lodGates.find(tag.token);
 					const auto* set = gate == lodGates.end()          ? nullptr :
-					                  tag.side == V::kGateIncoming ? &gate->second.incomingGeometries :
-					                  tag.side == V::kGateOutgoing ? &gate->second.outgoingGeometries :
+					                  tag.side == G::kGateIncoming ? &gate->second.incomingGeometries :
+					                  tag.side == G::kGateOutgoing ? &gate->second.outgoingGeometries :
 					                                                 nullptr;
 					covered = set && set->contains(geometry);
-					open = tag.side == V::kGateIncoming && gate != lodGates.end() && gate->second.state == V::LodGate::State::Open;
+					open = tag.side == G::kGateIncoming && gate != lodGates.end() && gate->second.state == G::LodGate::State::Open;
 					if (!covered)
 						Differ(p, [&] {
 							return fmt::format("tags: geometry {} tagged gate {} ({}), {}", static_cast<const void*>(geometry), tag.token, SideName(tag.side),
@@ -391,7 +401,7 @@ namespace DCLF::Diagnostics
 					continue;
 				const std::uint64_t token = above ? above->token : 0;
 				const std::uint8_t side = above ? above->side : 0;
-				if (!above && tag.token && tag.side == V::kGateOutgoing) {
+				if (!above && tag.token && tag.side == G::kGateOutgoing) {
 					// An outgoing tag under no gate root: the root detached (or a held block reattached) ahead of its entries' erasure or
 					// the kept notice, which untag them. Flagged only when still so at the next sweep.
 					++p.unmarked;
@@ -401,7 +411,7 @@ namespace DCLF::Diagnostics
 							const auto gate = lodGates.find(tag.token);
 							return fmt::format("marks: geometry {} tagged gate {} (outgoing) under no gate root at two sweeps; gate {}, {} outgoing roots left, {}held out",
 								static_cast<const void*>(geometry), tag.token,
-								gate == lodGates.end() ? "retired" : gate->second.state == V::LodGate::State::Open ? "open" : "flipped",
+								gate == lodGates.end() ? "retired" : gate->second.state == G::LodGate::State::Open ? "open" : "flipped",
 								gate == lodGates.end() ? 0 : gate->second.outgoing.size(), entry.veto == Api::kVetoHold ? "" : "not ");
 						});
 					continue;
@@ -413,8 +423,8 @@ namespace DCLF::Diagnostics
 					});
 			}
 			p.unmarkedOutgoing = std::move(unmarkedOutgoing);
-			if (heldOut != V::gateHeldOutCount(store))
-				Differ(p, [&] { return fmt::format("tags: {} entries held out, {} counted", heldOut, V::gateHeldOutCount(store)); });
+			if (heldOut != V::vetoHeldCount(store))
+				Differ(p, [&] { return fmt::format("tags: {} entries held out, {} counted", heldOut, V::vetoHeldCount(store)); });
 			if (observed != V::vetoObservedCount(store))
 				Differ(p, [&] { return fmt::format("tags: {} entries observed, {} counted", observed, V::vetoObservedCount(store)); });
 			CheckVetoes(a_commit);
@@ -425,15 +435,18 @@ namespace DCLF::Diagnostics
 			if (!a_event.gatesLive)
 				return;
 			const auto& store = a_event.store;
-			Commit commit{ store, a_event.live, a_event.drawn, SceneDiagnostics().gates.parity };
+			auto* gates = G::StateOf(V::componentState(store, G::component));
+			if (!gates)
+				return;
+			Commit commit{ store, a_event.live, a_event.drawn, *gates, gates->observed.parity };
 			auto& p = commit.parity;
 			++p.checks;
 			CheckRoots(commit);
 			const bool retagged = !V::requeued(store).empty();
-			for (const auto& [token, gate] : V::lodGates(store)) {
+			for (const auto& [token, gate] : commit.gates.lodGates) {
 				++p.gates;
 				CheckTags(commit, token, gate);
-				if (gate.state == V::LodGate::State::Open)
+				if (gate.state == G::LodGate::State::Open)
 					CheckOpen(commit, token, gate, retagged);
 			}
 			CheckFlips(commit, retagged);

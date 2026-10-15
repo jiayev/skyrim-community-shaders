@@ -193,6 +193,11 @@ namespace DCLF::Api
 		return coordinator.ObservedSlotOf(a_slot);
 	}
 
+	std::uint32_t CoordinatorComponentContext::VetoCount(std::uint8_t a_veto) const
+	{
+		return a_veto == kVetoHold ? coordinator.vetoHeld : a_veto == kVetoObserve ? coordinator.vetoObserved : 0u;
+	}
+
 	void CoordinatorComponentContext::SetCommitLive(bool a_live) const
 	{
 		auto& live = coordinator.componentCommitLive;
@@ -575,6 +580,23 @@ namespace DCLF::Scene
 				reportLines.text(a_text);
 			else if (reportLines.componentText)
 				reportLines.componentText({ tables, ComponentState(reportLines.component.index), *this, reportLines.component.index }, a_text);
+		}
+	}
+
+	void Coordinator::ComponentsReportLines(Api::ReportPoint a_point, std::uint32_t a_frame)
+	{
+		// The features' logged lines and the components' (their text logged as one line when not empty), in registration order.
+		for (const auto& reportLines : Extensions::RegisteredReportLines()) {
+			if (reportLines.point != a_point)
+				continue;
+			if (reportLines.lines)
+				reportLines.lines(a_frame);
+			else if (reportLines.componentText) {
+				std::string text;
+				reportLines.componentText({ tables, ComponentState(reportLines.component.index), *this, reportLines.component.index }, text);
+				if (!text.empty())
+					logger::info("{}", text);
+			}
 		}
 	}
 

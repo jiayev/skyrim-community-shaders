@@ -115,7 +115,7 @@ namespace DCLF
 		std::uint64_t Writes() const { return writes; }
 
 		/**
-		 * @brief A LOD gate's incoming root (Coordinator::ApplyGateEvent; cleared at the gate's outcome or its root's detach). Its own
+		 * @brief A LOD gate's incoming root (its root mark's own hide: CoordinatorComponentContext::MarkRoot; cleared at the gate's outcome or its root's detach). Its own
 		 * kHidden is the gate's - the engine side hides the block before its attach and vetoes the engine's shows until the flip - so the
 		 * scene's hidden test ignores that one bit (Coordinator::HiddenForWalk): the blocks are classified, written, bound and committed
 		 * while hidden. Kept beside the records, not in them: a capture replaces a record whole, and the parity compares records alone.

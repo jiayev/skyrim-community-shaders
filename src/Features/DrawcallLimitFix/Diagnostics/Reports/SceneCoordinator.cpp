@@ -66,80 +66,6 @@ namespace DCLF::Reports
 			return line.empty() ? line : "[DCLF] parallel-for waits (W7: callers blocked on claimed chunks): " + line;
 		}
 
-		std::string GateLine(Scene::Coordinator& a_store)
-		{
-			auto& s = V::gateStats(a_store);
-			const auto& lodGates = V::lodGates(a_store);
-			const std::uint32_t gateHeldOutCount = V::gateHeldOutCount(a_store);
-			const auto& parity = Diagnostics::SceneDiagnostics().gates.parity;
-			if (!s.opened && !s.retiredFlipped && !s.retiredForced && lodGates.empty() && !gateHeldOutCount && !s.unknownOutcomes && !s.keptNotices && !parity.checks)
-				return {};
-			// The open gates: their oldest request, and what their pending incoming geometries wait for (the blockers).
-			const std::uint64_t now = GateNowNs();
-			std::uint64_t oldestNs = 0;
-			std::uint32_t open = 0, flipped = 0, unmirrored = 0, noIncoming = 0;
-			std::uint64_t unclassified = 0, noRecord = 0, unbound = 0, partial = 0;
-			std::array<std::uint64_t, 16> waitingBy{};
-			for (const auto& [token, gate] : lodGates) {
-				if (gate.state != V::LodGate::State::Open) {
-					++flipped;
-					continue;
-				}
-				++open;
-				if (!oldestNs || gate.stampNs < oldestNs)
-					oldestNs = gate.stampNs;
-				unmirrored += gate.unmirrored;
-				noIncoming += gate.incoming.empty() ? 1u : 0u;
-				for (auto* geometry : gate.incomingGeometries) {
-					// Its tracked state (its slot's commit state: the base's, else the layer's).
-					const Api::TrackedState entry = V::TrackedStateOf(a_store, geometry);
-					if (!entry.tracked || V::GateGeometryReady(a_store, geometry))
-						continue;
-					const std::uint32_t slot = entry.slot != kNoObjectSlot ? entry.slot : entry.layerSlot;
-					if (entry.leafWaiting || !entry.classified)
-						++unclassified;
-					else if (slot == kNoObjectSlot)
-						++noRecord;
-					else if (entry.waitCause)
-						++waitingBy[(std::min<std::size_t>)(entry.waitWhy, waitingBy.size() - 1)];
-					else if (!entry.resident)
-						++unbound;
-					else
-						++partial;
-				}
-			}
-			std::string waiting;
-			for (std::size_t why = 0; why < waitingBy.size(); ++why)
-				if (waitingBy[why])
-					waiting += fmt::format("{}{} {}", waiting.empty() ? "" : ", ", why, waitingBy[why]);
-			auto text = fmt::format("[DCLF] LOD gates (T6b5): {} opened, {} flipped, {} retired flipped, {} forced ({} before their flip), {} outcomes for no gate, {} roots taken "
-									 "by a later gate, {} roots detached, {} with no incoming root; {} incoming and {} outgoing geometries tagged, {} held out at flips ({} held "
-									 "out now); request to flip: ms (p50/p95/max) {}, frames (p50/p95/max) {}; now {} open (oldest {:.1f} ms), {} flipped awaiting their "
-									 "release's outcome; blockers: unmirrored roots {}, unclassified {}, no record {}, not bound {}, waiting (by the set's waiting-for index) {}, "
-									 "a phase short or its layer partner {}",
-				s.opened, s.flipped, s.retiredFlipped, s.retiredForced, s.forcedOpen, s.unknownOutcomes, s.superseded, s.rootsDetached, s.emptyIncoming, s.taggedIncoming,
-				s.taggedOutgoing, s.heldOut, gateHeldOutCount, Percentiles(s.requestToFlipMs), Percentiles(s.requestToFlipFrames), open, GateMs(oldestNs, now), flipped,
-				unmirrored, unclassified, noRecord, unbound, waiting.empty() ? "-" : waiting, partial);
-			if (noIncoming)
-				text += fmt::format("; {} open gates lost every incoming root (waiting for a forced release)", noIncoming);
-			text += fmt::format("; {} flips deferred for an incoming record not published yet; reused blocks: {} kept notices, {} geometries released from their "
-								"hold-out (committed again), {} outgoing tags dropped before their flip",
-				s.structureDeferred, s.keptNotices, s.keptCleared, s.keptUntagged);
-			auto& observed = Diagnostics::SceneDiagnostics().gates;
-			if (observed.publishHoles)
-				text += fmt::format("; {} flipped incoming geometries not claimed by the flip's own publication, first {} <- GATE HOLE (publication)", observed.publishHoles,
-					observed.firstPublishHole);
-			if (const auto& p = observed.parity; p.checks)
-				text += fmt::format("; parity {} checks, {} gates compared ({} full sweeps, {} entries, {} outgoing tags under no root for a sweep), {} differ{}", p.checks, p.gates,
-					p.sweeps, p.entries, p.unmarked, p.differ,
-					p.differ ? " <- GATE PARITY; first: " + p.first : std::string(" <- OK"));
-			s = {};
-			// The parity's flip and shown roots stay: they are the next commit's and sweep's.
-			observed = { .parity = { .pass = observed.parity.pass, .lastFlip = observed.parity.lastFlip, .shown = std::move(observed.parity.shown),
-				.unmarkedOutgoing = std::move(observed.parity.unmarkedOutgoing) } };
-			return text;
-		}
-
 		std::string PlacementLine(Scene::Coordinator& s)
 		{
 			auto& p = V::placementStats(s);
@@ -423,10 +349,9 @@ namespace DCLF::Reports
 				// CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads (any is a defect).
 				if (const auto releases = ReleaseGuardLine(); !releases.empty())
 					logger::info("{}", releases);
-				// The LOD gates (opened, flipped, retired; the open ones' age and what they wait for).
-				if (const auto gates = GateLine(s); !gates.empty())
-					logger::info("{}", gates);
-				Extensions::ReportLinesAt(Api::ReportPoint::SceneCoordinatorGates, a_sceneFrame);
+				// The LOD gates' line (opened, flipped, retired; the open ones' age and what they wait for: their component's, registered first)
+				// and the features' lines here.
+				V::componentsReportLines(s, Api::ReportPoint::SceneCoordinatorGates, a_sceneFrame);
 			}
 			const std::uint64_t wholePasses = ps.passes - ps.eventsOnly;
 			const double fullPasses = std::max<double>(1.0, static_cast<double>(wholePasses));
