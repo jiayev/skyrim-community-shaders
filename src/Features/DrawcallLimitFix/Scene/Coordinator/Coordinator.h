@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Api/Reports.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/MaterialBindings.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/SharedBindings.h"
@@ -28,7 +29,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/GeometryPort.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneMirror.h"
-#include "Features/DrawcallLimitFix/Scene/Model/LodSegments.h"
+#include "Features/DrawcallLimitFix/Core/Engine/LodSegments.h"
 #include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneIdentity.h"
@@ -847,7 +848,7 @@ namespace DCLF
 		void UnlistHiddenChain(RE::BSGeometry* a_geometry, Tracked& a_tracked);
 		void DrainHiddenEvents();
 
-		// The structural events, switches and object LOD: State/Events.h (CoordinatorEvents).
+		// The structural events, switches and the entries' drawn ranges: State/Events.h (CoordinatorEvents).
 		/** @brief Whether the switch's record selects a_child, and is current. */
 		static bool SwitchSelects(const SceneCapture::NodeRecord& a_switch, const void* a_child)
 		{
@@ -858,11 +859,9 @@ namespace DCLF
 		 * walk, its entries reclassified.
 		 */
 		void ApplySwitchEvents(bool a_full);
-		void SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event);
-		void ApplyLodSegmentEvents(const std::vector<const void*>& a_shapes);
 		/**
-		 * @brief Drains each engine queue up to where it stood (tracker stack, fades, property, node and switch events, LOD segments) into
-		 * the pass's batch (under a load screen: the carry), with the mirror probe; posts the switch catch-ups.
+		 * @brief Drains each engine queue up to where it stood (tracker stack, fades, property, node and switch events, the features' engine
+		 * channels) into the pass's batch (under a load screen: the carry), with the mirror probe; posts the switch catch-ups.
 		 */
 		std::shared_ptr<EventBatch> CollectEvents();
 		/**
@@ -1264,6 +1263,16 @@ namespace DCLF
 		void ComponentsListed(RE::BSGeometry& a_geometry, const Tracked& a_tracked, Api::EntryClass a_class);
 		bool ComponentsResolve(Api::EntryWrite& a_write, Api::EntryClass a_class);
 		void ComponentsStreamed(std::uint32_t a_slot, Api::EntryWrite& a_write, Api::EntryClass a_class);
+		/**
+		 * @brief ApplyBatch's structural events at a_apply: each engine channel applied there (registration order), its keys in a_batch
+		 * handed to every component's keys hook (Api::CoordinatorComponent::Events).
+		 */
+		void ComponentsChannelKeys(Api::ChannelApply a_apply, const EventBatch& a_batch);
+		/**
+		 * @brief The coordinator's report pass at a text point (Api::ReportPoint::SceneCoordinatorSegments): the features' text lines and the
+		 * components' (Api::ReportLines::componentText, with the component's context) there, in registration order.
+		 */
+		void ComponentsReportText(Api::ReportPoint a_point, std::string& a_text);
 		/** @brief Component a_component's state, the components made first when they are not (scene lane). */
 		const std::shared_ptr<void>& ComponentState(std::uint32_t a_component);
 

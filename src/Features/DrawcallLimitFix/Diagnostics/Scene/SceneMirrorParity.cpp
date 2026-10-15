@@ -10,6 +10,7 @@
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 
 #include <fmt/ranges.h>
@@ -222,8 +223,11 @@ namespace DCLF::Diagnostics
 			// The objects the batch's events without values named: a field the probe finds different on one of them has a hook that carries
 			// no value. The fade, property, node and hidden events' values are updates.
 			auto& m = SceneDiagnostics().mirror;
-			for (const void* key : a_event.lodSegments)
-				m.eventKeys.insert(key);
+			const auto engineChannels = Extensions::RegisteredEngineChannels();
+			for (std::size_t k = 0; k < a_event.channelKeys.size(); ++k)
+				if (engineChannels[k].namesKeys)
+					for (const void* key : a_event.channelKeys[k])
+						m.eventKeys.insert(key);
 			for (const void* key : a_event.named)
 				m.eventKeys.insert(key);
 			if (m.batchProbe)

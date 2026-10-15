@@ -109,6 +109,18 @@ namespace DCLF::Extensions
 		Api::ReportPoint point = Api::ReportPoint::PrimaryCull;
 		decltype(Api::ReportLines::lines) lines = nullptr;
 		decltype(Api::ReportLines::text) text = nullptr;
+		Api::CoordinatorComponentId component;
+		decltype(Api::ReportLines::componentText) componentText = nullptr;
+	};
+	/** @brief A registered engine channel (its descriptor, the name owned). */
+	struct EngineChannelEntry
+	{
+		std::string name;
+		Api::ChannelKind kind = Api::ChannelKind::Keys;
+		Api::ChannelApply apply = Api::ChannelApply::AfterSwitches;
+		Api::ChannelLoading loading = Api::ChannelLoading::KeepKeys;
+		bool namesKeys = false;
+		decltype(Api::EngineChannel::drain) drain = nullptr;
 	};
 
 	/** @brief A registered table family. */
@@ -134,6 +146,7 @@ namespace DCLF::Extensions
 		Api::CoordinatorComponent::DenseWalk dense;
 		Api::CoordinatorComponent::Retirement retirement;
 		Api::CoordinatorComponent::EntryClassHooks entryClass;
+		Api::CoordinatorComponent::Events events;
 	};
 	/** @brief A registered shading contribution. */
 	struct ShadingContributionEntry
@@ -151,8 +164,8 @@ namespace DCLF::Extensions
 	};
 
 	// Any thread, after InstallFeatures (empty before): the registrations, in order. An index is the extension's id
-	// (Api::FrameValuePoolId::index, Api::SceneResourcesId::index, Api::TableFamilyId::index, Api::CoordinatorComponentId::index; the
-	// stage states', products' and bindings' slots). The technique contributions are by technique (Extensions/ObjectContributors.h).
+	// (Api::FrameValuePoolId::index, Api::SceneResourcesId::index, Api::TableFamilyId::index, Api::CoordinatorComponentId::index,
+	// Api::EngineChannelId::index; the stage states', products' and bindings' slots). The technique contributions are by technique (Extensions/ObjectContributors.h).
 	std::span<const FrameValuePoolEntry> RegisteredPools();
 	std::span<const GpuStageEntry> RegisteredStages();
 	std::span<const PayloadProductEntry> RegisteredProducts();
@@ -165,6 +178,7 @@ namespace DCLF::Extensions
 	std::span<const FrameTextureEntry> RegisteredFrameTextures();
 	std::span<const ReportLinesEntry> RegisteredReportLines();
 	std::span<const Api::StandInObserver> RegisteredStandInObservers();
+	std::span<const EngineChannelEntry> RegisteredEngineChannels();
 	std::span<const TableFamilyEntry> RegisteredTableFamilies();
 	std::span<const CoordinatorComponentEntry> RegisteredCoordinatorComponents();
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions();

@@ -1,14 +1,49 @@
 // The coordinator's event intake (scene lane): CollectEvents drains every queue into the pass's batch, ApplyEvents applies it (the
-// mirror first, then attaches, detaches, structural, switch, hidden and LOD segment events), and the retired batch goes back through
-// the retirement chain. Also the load screen's discard and the detach safety net.
+// mirror first, then attaches, detaches, structural, switch, hidden and the features' engine channels' events), and the retired batch
+// goes back through the retirement chain. Also the load screen's discard and the detach safety net.
 
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 
 namespace DCLF::Scene
 {
+	namespace
+	{
+		using ChannelKeys = std::array<std::vector<const void*>, Extensions::kEngineChannelSlots>;
+
+		// The engine channels a pass applies at a_apply, each drained into its slot (in registration order), where Core's own queues of
+		// that point drain.
+		void DrainChannels(Api::ChannelApply a_apply, ChannelKeys& a_keys)
+		{
+			const auto engineChannels = Extensions::RegisteredEngineChannels();
+			for (std::size_t k = 0; k < engineChannels.size(); ++k)
+				if (engineChannels[k].apply == a_apply) {
+					Api::KeySink sink(&a_keys[k]);
+					engineChannels[k].drain(sink);
+				}
+		}
+
+		// A load screen's drain of every engine channel, in registration order: its keys kept as named (ChannelLoading::KeepKeys) or dropped.
+		void DrainChannelsLoading(std::vector<const void*>& a_named)
+		{
+			for (const auto& channel : Extensions::RegisteredEngineChannels()) {
+				Api::KeySink sink(channel.loading == Api::ChannelLoading::KeepKeys ? &a_named : nullptr);
+				channel.drain(sink);
+			}
+		}
+
+		std::size_t ChannelKeyCount(const ChannelKeys& a_keys)
+		{
+			std::size_t count = 0;
+			for (const auto& keys : a_keys)
+				count += keys.size();
+			return count;
+		}
+	}
+
 	struct Coordinator::BatchIndex
 	{
 		std::vector<SceneTracker::Event*> structural;      // head's attach and detach events, not mirror-only, in order
@@ -41,7 +76,7 @@ namespace DCLF::Scene
 			DrainNodeEvents(discarded->nodes);
 			fadeSnapEvents.Drain(keep);
 			fadeAmountEvents.Drain(keep);
-			lodSegmentEvents.Drain(keep);
+			DrainChannelsLoading(named);
 			switchEvents.Drain([&](SwitchEvent&& a_event) {
 				keep(a_event.node.get());
 				discarded->switches.push_back(std::move(a_event));
@@ -64,10 +99,11 @@ namespace DCLF::Scene
 		batch->Append(drained);
 		fadeSnapEvents.Drain([&](const void* a_node) { batch->fadeSnaps.push_back(a_node); });
 		fadeAmountEvents.Drain([&](const void* a_node) { batch->fadeAmounts.push_back(a_node); });
+		DrainChannels(Api::ChannelApply::BeforeStructural, batch->channelKeys);
 		DrainPropertyEvents(batch->properties);
 		DrainNodeEvents(batch->nodes);
 		switchEvents.Drain([&](SwitchEvent&& a_event) { batch->switches.push_back(std::move(a_event)); });
-		lodSegmentEvents.Drain([&](const void* a_key) { batch->lodSegments.push_back(a_key); });
+		DrainChannels(Api::ChannelApply::AfterSwitches, batch->channelKeys);
 		// The oldest stamp; whether a detach came (forces the next category capture: a detach can take a category node before the
 		// signature sees its cell go); and the switch catch-ups, engine code that writes, run by the render thread at frame start with
 		// reference copies dropped there.
@@ -114,7 +150,7 @@ namespace DCLF::Scene
 		if (catchUp)
 			channels.switchCatchUps.Push(std::move(catchUp));
 		events += static_cast<std::uint32_t>(batch->fadeSnaps.size() + batch->fadeAmounts.size() + batch->properties.size() +
-											 batch->nodes.size() + batch->switches.size() + batch->lodSegments.size());
+											 batch->nodes.size() + batch->switches.size() + ChannelKeyCount(batch->channelKeys));
 		pumpStats.passEvents.push_back(events);
 		return batch;
 	}
@@ -432,6 +468,7 @@ namespace DCLF::Scene
 		// Actors' fadeAmount: the rows' input (the GPU's fade state stands).
 		for (const void* node : batch->fadeAmounts)
 			RefreshFadeAmount(node);
+		ComponentsChannelKeys(Api::ChannelApply::BeforeStructural, *batch);
 		// Structural events: property flag/material/controller changes, and nodes Havok moved or gave a controller.
 		propertyChanged.insert(propertyChanged.end(), batch->properties.begin(), batch->properties.end());
 		for (auto& node : batch->nodes)
@@ -446,7 +483,7 @@ namespace DCLF::Scene
 			else
 				switchPending[at->second].structural |= event.structural;
 		}
-		ApplyLodSegmentEvents(batch->lodSegments);
+		ComponentsChannelKeys(Api::ChannelApply::AfterSwitches, *batch);
 
 		stats.tracked = static_cast<std::uint32_t>(tracked.size());
 		stats.categoryNodes = static_cast<std::uint32_t>(categoryNodes.size());
@@ -482,30 +519,6 @@ namespace DCLF::Scene
 			retirement.Open().events.push_back(std::move(batch));
 		// No reference is made from the pins after the apply. Let go, not cleared: a burst's buckets would be cleared again by every pass.
 		batchPins = {};
-	}
-
-	void Coordinator::SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event)
-	{
-		const auto* record = mirror.Geometry(&a_shape);
-		std::vector<LodSegments::Range> next = record ? record->segments : std::vector<LodSegments::Range>{};
-		auto& ranges = lodRanges[&a_shape];
-		// Changed by an event: rewrite the record (its range slot chain) this frame.
-		if (a_event && next != ranges) {
-			++lodSegmentStats.changed;
-			pendingEvaluation.push_back(const_cast<RE::BSGeometry*>(&a_shape));
-		}
-		ranges = std::move(next);
-	}
-
-	void Coordinator::ApplyLodSegmentEvents(const std::vector<const void*>& a_shapes)
-	{
-		for (const void* key : a_shapes) {
-			++lodSegmentStats.events;
-			// Only a tracked shape is known to be alive (its entry holds it).
-			if (const auto it = lodRanges.find(static_cast<const RE::BSGeometry*>(key)); it != lodRanges.end())
-				SampleLodRanges(*it->first, true);
-		}
-		Diagnostics::Notify<Diagnostics::ScenePoint::LodSegmentsApplied>();
 	}
 
 	void Coordinator::PrepareMirrorCaptures(const std::vector<const SceneCapture::Records*>& a_captures, std::size_t a_records)
@@ -699,7 +712,7 @@ namespace DCLF::Scene
 			}
 		}
 		RecheckDeferredReads();
-		Diagnostics::Notify(Diagnostics::MirrorEventsApplied{ *this, a_batch.lodSegments, a_batch.mirrorNamed });
+		Diagnostics::Notify(Diagnostics::MirrorEventsApplied{ *this, std::span(a_batch.channelKeys).first(Extensions::RegisteredEngineChannels().size()), a_batch.mirrorNamed });
 	}
 
 	void Coordinator::ApplySwitchEvents(bool a_full)

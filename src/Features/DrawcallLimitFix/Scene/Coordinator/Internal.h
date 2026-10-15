@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -293,7 +294,8 @@ namespace DCLF
 		std::vector<const void*> properties;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
 		std::vector<SwitchEvent> switches;
-		std::vector<const void*> lodSegments;
+		// The features' engine channels' keys, by channel (Extensions::RegisteredEngineChannels' order).
+		std::array<std::vector<const void*>, Extensions::kEngineChannelSlots> channelKeys;
 		// The attach and detach events a load screen's passes carried, for the mirror alone (oldest first, applied before the batch's own).
 		SceneTracker::Event* mirrorHead = nullptr;
 		SceneTracker::Event* mirrorTail = nullptr;

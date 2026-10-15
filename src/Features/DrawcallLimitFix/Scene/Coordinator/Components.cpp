@@ -100,6 +100,35 @@ namespace DCLF::Api
 	{
 		return coordinator.passSerial;
 	}
+
+	std::uint32_t CoordinatorComponentContext::PassStamp() const
+	{
+		return coordinator.PassStamp();
+	}
+
+	const CoordinatorComponentContext::EntryRangesMap& CoordinatorComponentContext::EntryRanges() const
+	{
+		return coordinator.lodRanges;
+	}
+
+	const std::vector<LodSegments::Range>* CoordinatorComponentContext::EntryRangesOf(const void* a_entry) const
+	{
+		return coordinator.LodRangesOf(static_cast<const RE::BSGeometry*>(a_entry));
+	}
+
+	const std::vector<LodSegments::Range>* CoordinatorComponentContext::MirroredRanges(const void* a_entry) const
+	{
+		const auto* record = coordinator.mirror.Geometry(a_entry);
+		return record ? &record->segments : nullptr;
+	}
+
+	void CoordinatorComponentContext::SetEntryRanges(const void* a_entry, std::vector<LodSegments::Range>&& a_ranges, bool a_rewrite) const
+	{
+		auto* geometry = static_cast<RE::BSGeometry*>(const_cast<void*>(a_entry));
+		if (a_rewrite)
+			coordinator.pendingEvaluation.push_back(geometry);
+		coordinator.lodRanges[geometry] = std::move(a_ranges);
+	}
 }
 
 namespace DCLF::Scene
@@ -242,6 +271,33 @@ namespace DCLF::Scene
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		if (a_component < registered.size() && registered[a_component].retirement.recycled)
 			registered[a_component].retirement.recycled({ tables, ComponentState(a_component), *this, a_component }, a_first, a_count);
+	}
+
+	void Coordinator::ComponentsChannelKeys(Api::ChannelApply a_apply, const EventBatch& a_batch)
+	{
+		const auto engineChannels = Extensions::RegisteredEngineChannels();
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t k = 0; k < engineChannels.size(); ++k) {
+			if (engineChannels[k].apply != a_apply)
+				continue;
+			const std::span<const void* const> channelKeys = a_batch.channelKeys[k];
+			for (std::uint32_t c = 0; c < registered.size(); ++c)
+				if (registered[c].events.keys)
+					registered[c].events.keys({ tables, ComponentState(c), *this, c }, Api::EngineChannelId{ k }, channelKeys);
+		}
+	}
+
+	void Coordinator::ComponentsReportText(Api::ReportPoint a_point, std::string& a_text)
+	{
+		// The features' text lines and the components', in registration order.
+		for (const auto& reportLines : Extensions::RegisteredReportLines()) {
+			if (reportLines.point != a_point)
+				continue;
+			if (reportLines.text)
+				reportLines.text(a_text);
+			else if (reportLines.componentText)
+				reportLines.componentText({ tables, ComponentState(reportLines.component.index), *this, reportLines.component.index }, a_text);
+		}
 	}
 
 	void Coordinator::ComponentsListed(RE::BSGeometry& a_geometry, const Tracked& a_tracked, Api::EntryClass a_class)

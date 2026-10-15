@@ -68,7 +68,8 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::ShellState::InstallRunningQuery([] { return globals::features::drawcallLimitFix.Running(); });
 	// The features' engine hooks that must precede DCLF's own engine side (Features/Reflection: the water reflection's update, add-roots
 	// and face render, first, right after the pass capture; Features/Billboards: its parity's NiBillboardNode::OnVisible thunk, before the
-	// primary cull takes the slot; Features/TreeLod: tree LOD's channel's source, the refill's, block update's and group slots' hooks;
+	// primary cull takes the slot; Features/Lod: object LOD's segment writers, its engine channel's source; Features/TreeLod: tree LOD's
+	// channel's source, the refill's, block update's and group slots' hooks;
 	// Features/HiddenNodes: the hidden stores, right after the scene events as before), then the observers
 	// this run's switches ask for, and the engine hooks only they use (before DCLF's threads start).
 	DCLF::Extensions::InstallEarlyHooks(DCLF::Features::List());

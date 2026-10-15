@@ -11,6 +11,10 @@ namespace DCLF::Extensions
 {
 	/** @brief Render thread (the report of a_frame, at a_point): every registered feature's lines there, in order. */
 	void ReportLinesAt(Api::ReportPoint a_point, std::uint32_t a_frame);
-	/** @brief Render thread (the report, at a_point, composing its text): every registered feature's text lines there, in order, onto a_text. */
+	/**
+	 * @brief Render thread (the report, at a_point, composing its text): every registered feature's text lines there, in order, onto a_text.
+	 * A coordinator component's lines (Api::ReportLines::componentText) are the coordinator's to call, with the component's context
+	 * (Scene::Coordinator::ComponentsReportText, which calls both kinds at its point in order).
+	 */
 	void ReportTextAt(Api::ReportPoint a_point, std::string& a_text);
 }

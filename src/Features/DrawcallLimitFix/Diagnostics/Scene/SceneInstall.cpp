@@ -29,7 +29,6 @@ namespace DCLF::Diagnostics
 			InstallFrameParity();
 			InstallSlotDrainCheck();
 			InstallCandidateParity();
-			InstallLodSegmentParity();
 			InstallShadowSetParity();
 			InstallReplayParity();
 		}

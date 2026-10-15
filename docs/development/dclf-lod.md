@@ -536,10 +536,13 @@ skyrim-engine-notes.md has the details: "Object LOD: segments and where LOD is d
 `CategorySignature`). Everything under it is tracked through the same attach and detach events as a cell's content.
 Terrain LOD under it stays `Lod`.
 
-**Segments by events (`LodSegments.h`).**
-- **Hooks.** The nine call sites of the three writers are patched (`InstallLodSegmentHooks`). Each makes the write, then
-  pushes the shape onto `lodSegmentEvents`, a lock-free queue, from whichever thread runs the terrain manager's update.
-- **The mirror.** `ProcessEvents` drains the queue and re-reads each tracked shape's drawn ranges (`DrawnRanges`):
+**Segments by events (`Core/Engine/LodSegments.h`; `Features/Lod/LodSegmentEvents.h`).**
+- **Hooks.** The nine call sites of the three writers are patched (`Features/Lod`'s early hooks, `InstallSegmentHooks`). Each makes the
+  write, then pushes the shape onto the feature's engine channel (a lock-free queue, `Api::EngineChannel`), from whichever thread runs the
+  terrain manager's update.
+- **The mirror.** Each scene pass drains the channel after the switch events and hands the shapes to the feature's coordinator
+  component, which takes each tracked shape's drawn ranges again (the mirror's, captured by `DrawnRanges`) into the coordinator's kept
+  ranges (`SetEntryRanges`):
   - the runs when clean;
   - the enabled segments when dirty, which covers the same triangles the rebuild will merge;
   - the whole shape when non-segmented.

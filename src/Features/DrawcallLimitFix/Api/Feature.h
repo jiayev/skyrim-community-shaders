@@ -56,6 +56,10 @@ namespace DCLF::Api
 		virtual void RegisterReportLines(const ReportLines& a_lines) = 0;
 		/** @brief Whether the primary cull is installed: false, and the observer is never called, without it (its engine hooks failed). */
 		virtual bool RegisterStandInObserver(const StandInObserver& a_observer) = 0;
+		/** @brief Fails the install for a name another channel has, no name or drain, or past Extensions::kEngineChannelSlots channels. */
+		virtual EngineChannelId RegisterEngineChannel(const EngineChannel& a_channel) = 0;
+		/** @brief The channel registered (by this feature or an earlier one) under a_name; none when no channel has it. */
+		virtual EngineChannelId FindEngineChannel(std::string_view a_name) const = 0;
 		/** @brief Fails the install past Extensions::kTableFamilySlots families. */
 		virtual TableFamilyId RegisterTableFamily(const TableFamily& a_family) = 0;
 		virtual CoordinatorComponentId RegisterCoordinatorComponent(const CoordinatorComponent& a_component) = 0;

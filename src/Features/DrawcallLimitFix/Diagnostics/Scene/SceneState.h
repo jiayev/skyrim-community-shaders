@@ -126,14 +126,6 @@ namespace DCLF::Diagnostics
 		std::string first, staleFirst;
 	};
 
-	/** @brief CS_DCLF_PERSISTENT_PARITY: the object LOD shapes' kept ranges against their live state, the coordinator's. */
-	struct LodSegmentParityState
-	{
-		std::uint64_t checks = 0, shapes = 0, differ = 0;
-		std::string first;
-		std::uint32_t pass = 0;  // the pass (PassStamp) that ran the check: once a pass
-	};
-
 	/** @brief CS_DCLF_PERSISTENT_PARITY: the replayed publications against the tables, every 60th (reported with the tables' replay). */
 	struct ReplayParityState
 	{
@@ -235,7 +227,6 @@ namespace DCLF::Diagnostics
 		GateObserverState gates;
 		GateReleaseObserverState gateReleases;
 		ReplayParityState replay;
-		LodSegmentParityState lodSegments;
 		DecalOrderParityState decalOrder;
 		CandidateParityState candidates;
 		ResidentParityState residents;

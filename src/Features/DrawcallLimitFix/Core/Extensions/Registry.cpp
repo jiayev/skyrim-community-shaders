@@ -40,6 +40,7 @@ namespace DCLF::Extensions
 			std::vector<FrameBindingEntry> frameBindings;
 			std::vector<ReportLinesEntry> reportLines;
 			std::vector<Api::StandInObserver> standInObservers;
+			std::vector<EngineChannelEntry> engineChannels;
 			std::vector<TableFamilyEntry> tableFamilies;
 			std::vector<CoordinatorComponentEntry> coordinatorComponents;
 			// By entry class: whether the component that follows it takes it (EntryClassTaken).
@@ -275,9 +276,14 @@ namespace DCLF::Extensions
 				const bool text = point == Api::ReportPoint::AsyncWorkViews || point == Api::ReportPoint::AsyncWorkForward || point == Api::ReportPoint::AsyncWork ||
 				                  point == Api::ReportPoint::AsyncWorkFamilies ||
 				                  point == Api::ReportPoint::SceneFrame || point == Api::ReportPoint::SceneCoordinatorSegments;
-				if (a_lines.name.empty() || (text ? !a_lines.text || a_lines.lines : !a_lines.lines || a_lines.text))
+				// A coordinator component's lines in text's place, at the coordinator's text point, after the component.
+				const bool component = point == Api::ReportPoint::SceneCoordinatorSegments && a_lines.componentText;
+				if (component && (!a_lines.component || a_lines.component.index >= lists.coordinatorComponents.size()))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s report lines {} name no registered component", feature, a_lines.name));
+				if (a_lines.name.empty() || (component ? a_lines.text || a_lines.lines :
+				                                        text ? !a_lines.text || a_lines.lines || a_lines.componentText : !a_lines.lines || a_lines.text || a_lines.componentText))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete report lines", feature));
-				lists.reportLines.push_back({ std::string(a_lines.name), a_lines.point, a_lines.lines, a_lines.text });
+				lists.reportLines.push_back({ std::string(a_lines.name), a_lines.point, a_lines.lines, a_lines.text, a_lines.component, a_lines.componentText });
 			}
 
 			bool RegisterStandInObserver(const Api::StandInObserver& a_observer) override
@@ -287,6 +293,27 @@ namespace DCLF::Extensions
 					return false;
 				lists.standInObservers.push_back(a_observer);
 				return true;
+			}
+
+			Api::EngineChannelId RegisterEngineChannel(const Api::EngineChannel& a_channel) override
+			{
+				if (a_channel.name.empty() || !a_channel.drain)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete engine channel", feature));
+				if (FindEngineChannel(a_channel.name))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s engine channel {} has a name another channel has", feature, a_channel.name));
+				// A batch holds each channel's keys in a slot of its own (Coordinator::EventBatch::channelKeys).
+				if (lists.engineChannels.size() >= kEngineChannelSlots)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s engine channel {} is one past kEngineChannelSlots: grow it first", feature, a_channel.name));
+				lists.engineChannels.push_back({ std::string(a_channel.name), a_channel.kind, a_channel.apply, a_channel.loading, a_channel.namesKeys, a_channel.drain });
+				return { static_cast<std::uint32_t>(lists.engineChannels.size() - 1) };
+			}
+
+			Api::EngineChannelId FindEngineChannel(std::string_view a_name) const override
+			{
+				for (std::uint32_t c = 0; c < lists.engineChannels.size(); ++c)
+					if (lists.engineChannels[c].name == a_name)
+						return { c };
+				return {};
 			}
 
 			Api::TableFamilyId RegisterTableFamily(const Api::TableFamily& a_family) override
@@ -313,7 +340,7 @@ namespace DCLF::Extensions
 							stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s component {} follows entry class {}, which {} follows", feature, a_component.name,
 								static_cast<std::uint32_t>(followed.follows), component.name));
 				lists.coordinatorComponents.push_back({ std::string(a_component.name), a_component.make, a_component.residency, a_component.accumulate, a_component.walk,
-					a_component.dense, a_component.retirement, followed });
+					a_component.dense, a_component.retirement, followed, a_component.events });
 				if (followed.follows != Api::EntryClass::None)
 					lists.entryClassesTaken[static_cast<std::size_t>(followed.follows)] = followed.takes;
 				return { static_cast<std::uint32_t>(lists.coordinatorComponents.size() - 1) };
@@ -545,6 +572,7 @@ namespace DCLF::Extensions
 	std::span<const std::uint8_t> FrameTextureIndices() { return Registered().frameTextureIndices; }
 	std::span<const ReportLinesEntry> RegisteredReportLines() { return Registered().reportLines; }
 	std::span<const Api::StandInObserver> RegisteredStandInObservers() { return Registered().standInObservers; }
+	std::span<const EngineChannelEntry> RegisteredEngineChannels() { return Registered().engineChannels; }
 	std::span<const TableFamilyEntry> RegisteredTableFamilies() { return Registered().tableFamilies; }
 	std::span<const CoordinatorComponentEntry> RegisteredCoordinatorComponents() { return Registered().coordinatorComponents; }
 	const TechniqueEntries& RegisteredTechniques() { return Registered().techniques; }
