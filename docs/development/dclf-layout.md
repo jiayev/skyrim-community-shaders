@@ -69,7 +69,7 @@ Each step is a move-only commit, then a commit that extracts the code. It is ver
 The steps:
 1. Put the dependency guard in one place, and add the layout check. *Done.*
 2. `Core/Runtime`, `Core/Engine`, `Core/Settings`, `Core/Scene/SceneWake`. *Done.*
-3. Split `IndirectDraws` into `Core/Render`.
-4. Split `Coordinator.h` into the coordinator's core plus one component per concern.
+3. Split `IndirectDraws` into `Core/Render`. *Done.*
+4. Split `Coordinator.h` into the coordinator's core plus one component per concern. *Done (Scene/Coordinator/State/).*
 5. Two pilot features, `TextureTransforms` then `TreeWind`. Together they define the first extension points.
 6. The other features, least entangled first and `Fades` last. Then the integrations, then `Main` with what remains of Core.
