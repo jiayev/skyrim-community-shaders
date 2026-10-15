@@ -15,7 +15,7 @@ namespace DCLF::Draws
 	struct TreeLodCullPrepared
 	{
 		std::shared_ptr<const ComputeProgram> program;
-		TreeLodCullConstants constants{};
+		Features::TreeLod::TreeLodCullConstants constants{};
 		std::shared_ptr<const org::LatchBlock> latch;
 		std::uint32_t groups = 0;
 	};
@@ -94,7 +94,7 @@ namespace DCLF::Draws
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
-			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::TreeLod::kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.Dispatch(a_frame.groups, 1, 1);
 		}
 

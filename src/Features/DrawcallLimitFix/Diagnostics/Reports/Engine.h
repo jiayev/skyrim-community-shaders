@@ -15,12 +15,6 @@ namespace DCLF::Reports
 	/** @brief Render thread, Present (Reports::RenderThread): the sun accumulation's and the sun entry exclusion's lines. */
 	void SunAccumulationLines(std::uint32_t a_frame);
 
-	/** @brief The shadow views' parity lines (CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY), logged, their tallies reset: every 300 frames with such views. */
-	void SunViewsLines();
-	void LightViewsLines();
-	/** @brief ... with the focus views' membership line. */
-	void FocusViewsLines();
-
 	/** @brief The portal views' parity line, logged (every 300 builds with CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY). */
 	void PortalViewsLine();
 	/** @brief Main::IsRoomVisible's answers, logged (every 300 published VisibleSets). */

@@ -5,7 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Engine/FrameClock.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
 
 #include <algorithm>
@@ -306,7 +306,7 @@ namespace DCLF::Features::Lod::Gates
 			flip.requestNs = gate.stampNs;
 			flip.requestFrame = gate.stampFrame;
 			gate.flipNs = GateNowNs();
-			gate.flipFrame = SceneCapture::Frame();
+			gate.flipFrame = FrameClock::Frame();
 			flip.flipNs = gate.flipNs;
 			flip.flipFrame = gate.flipFrame;
 			for (auto* geometry : gate.incomingGeometries) {

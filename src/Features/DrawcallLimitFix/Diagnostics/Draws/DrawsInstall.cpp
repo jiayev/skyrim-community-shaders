@@ -38,7 +38,6 @@ namespace DCLF::Diagnostics
 		Subscribe<MainGraphPasses>(&AppendCullCounterPass);
 		Subscribe<FrameTextureUnresolved>(&DescribeUnresolvedFrameTexture);
 		Subscribe<FrameBufferUnfilled>(&LogUnfilledFrameBuffer);
-		Subscribe<TreeLodMissed>(&LogTreeLodMissed);
 		Subscribe<FadeInputsVaried>(&LogFadeInputsVaried);
 		Subscribe<ShortBuffersDrawn>(&LogShortBuffers);
 		Subscribe<MainCullingSetup>(&LogCullingSetup);
@@ -68,8 +67,6 @@ namespace DCLF::Diagnostics
 			Subscribe<ShadowTargetPredicted>(&CheckShadowTarget);
 			Subscribe<OwnShadowViewport>(&CheckOwnViewport);
 			Subscribe<OwnShadowCamera>(&CheckOwnCamera);
-			Subscribe<SunEntryPlanesTaken>(&CheckSunEntryPlanes);
-			Subscribe<OcclusionCaptured>(&CheckOcclusionView);
 		}
 		if (o.scene)
 			Subscribe<ShadowViewLatched>(&CheckSunEntry);

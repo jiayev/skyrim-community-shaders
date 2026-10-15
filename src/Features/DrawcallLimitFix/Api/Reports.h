@@ -41,9 +41,38 @@ namespace DCLF::Api
 		// The coordinator's scene lines (the scene lane), after the shared bindings', where the object LOD segments' line was (Features/Lod's
 		// now), before the change log parity's. Text lines, or a coordinator component's (ReportLines::componentText).
 		SceneCoordinatorSegments,
+		// The coordinator's scene lines (the scene lane), after the material records' line, before the material captures' (Features/Decals'
+		// order parity). Text lines, or a coordinator component's.
+		SceneCoordinatorMaterials,
+		// Inside the coordinator's scene delta line (the scene lane), at its end, before its newline (Features/Faces' publications): text
+		// fragments, each beginning "; " and ending in no newline, or a coordinator component's; only when the line prints (a walk since).
+		SceneCoordinatorDelta,
+		// The coordinator's statistics of its last pass (the scene lane, under CS_DCLF_STATS), after the skinned line, before the derived
+		// cache's (Features/Decals' candidates): logged lines, handed the scene frame, or a coordinator component's (logged as one line).
+		SceneCoordinatorLastPass,
+		// The shadow views' lines in the frame report's statistics (Reports::Stats, with the shadows' toggle on), after the shadow views'
+		// "by the set" line, before the shadow counters' reset (IndirectDraws::ResetShadowStats): on a report frame with CS_DCLF_STATS.
+		// Logged lines, handed the frame.
+		ShadowViews,
 		// The frame report's statistics (Reports::Stats), last, after the scene publications' line: on a report frame with CS_DCLF_STATS.
 		Statistics,
 	};
+
+	/** @brief Whether a_point composes its lines into the report's text (ReportLines::text), not logs them (ReportLines::lines). */
+	constexpr bool ReportPointComposesText(ReportPoint a_point)
+	{
+		return a_point == ReportPoint::AsyncWorkViews || a_point == ReportPoint::AsyncWorkForward || a_point == ReportPoint::AsyncWork ||
+		       a_point == ReportPoint::AsyncWorkFamilies || a_point == ReportPoint::SceneFrame || a_point == ReportPoint::SceneCoordinatorSegments ||
+		       a_point == ReportPoint::SceneCoordinatorMaterials || a_point == ReportPoint::SceneCoordinatorDelta;
+	}
+
+	/** @brief Whether a_point is the coordinator's, where a coordinator component's lines go (ReportLines::componentText). */
+	constexpr bool ReportPointTakesComponents(ReportPoint a_point)
+	{
+		return a_point == ReportPoint::SceneCoordinatorGates || a_point == ReportPoint::SceneCoordinatorSegments ||
+		       a_point == ReportPoint::SceneCoordinatorMaterials || a_point == ReportPoint::SceneCoordinatorDelta ||
+		       a_point == ReportPoint::SceneCoordinatorLastPass;
+	}
 
 	/**
 	 * @brief A feature's report lines.
@@ -51,11 +80,12 @@ namespace DCLF::Api
 	 * - lines: render thread, at its point of a report (the report's own schedule and conditions), handed the report's frame (FrameView's
 	 *   number): logs the feature's lines, taking its counters since the last report. A parity it runs there is gated as any other
 	 *   (Diagnostics::Observe). For a point that logs.
-	 * - text: the same, at a point that composes its lines into the report's text (AsyncWorkViews, AsyncWorkForward, AsyncWork, AsyncWorkFamilies,
-	 *   SceneFrame, SceneCoordinatorSegments): appends them to a_text, each ending in a newline. One of the two, as the point asks.
+	 * - text: the same, at a point that composes its lines into the report's text (ReportPointComposesText): appends them to a_text, each
+	 *   ending in a newline (SceneCoordinatorDelta's: fragments of its line, as it says). One of the two, as the point asks.
 	 *   The SceneCoordinator points run on the scene lane, in the coordinator's report pass.
-	 * - componentText (with component): at SceneCoordinatorSegments or SceneCoordinatorGates, in text's (or lines') place: the lines of a coordinator component's (what it
-	 *   keeps, and what the coordinator keeps for it), handed the component's context. Registered after the component.
+	 * - componentText (with component): at a coordinator point (ReportPointTakesComponents), in text's (or lines') place: the lines of a
+	 *   coordinator component's (what it keeps, and what the coordinator keeps for it), handed the component's context. Registered after
+	 *   the component.
 	 */
 	struct ReportLines
 	{

@@ -23,7 +23,6 @@ namespace DCLF::Diagnostics
 			o.capture = SwitchEnabled(Switch::CaptureParity);
 			o.engineDrawsAll = SwitchEnabled(Switch::ParityBoth);
 			o.capturePoint = SwitchEnabled(Switch::CapturePointParity);
-			o.skylight = SwitchEnabled(Switch::SkylightParity);
 			o.accumulated = SwitchEnabled(Switch::AccumulatedParity);
 			const auto& foliage = SwitchValue(Switch::FoliageParity);
 			o.foliage = foliage == "1" || foliage == "wind" || foliage == "land";

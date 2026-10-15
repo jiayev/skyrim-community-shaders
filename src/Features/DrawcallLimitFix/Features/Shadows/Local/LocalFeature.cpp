@@ -1,9 +1,12 @@
-// Shadows/Local: the Spot, Point and Focus sources, the kept lights' views (LightViews) and the focus cameras' hook (FocusViews).
+// Shadows/Local: the Spot, Point and Focus sources, the kept lights' views (LightViews) and the focus cameras' hook (FocusViews), and
+// their parity (Diagnostics/).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/FocusViews.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LightViews.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/Local.h"
+
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 namespace DCLF::Features::Shadows::Local
 {
@@ -26,6 +29,13 @@ namespace DCLF::Features::Shadows::Local
 			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Spot, .lightKept = &LightKept });
 			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Point, .lightKept = &LightKept });
 			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Focus });
+			// CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the light and focus views' lines, the focus views' membership and the local
+			// shadow volumes against the engine's.
+			if (Diagnostics::Observe().claimsOrScene) {
+				SubscribeLightParity();
+				SubscribeFocusParity();
+				SubscribeShadowVolumeParity();
+			}
 		}
 	}
 

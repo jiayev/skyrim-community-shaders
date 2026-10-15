@@ -1,8 +1,11 @@
 #pragma once
 
+#include <cstdint>
+
 namespace RE
 {
 	class BSShadowLight;
+	class NiAVObject;
 }
 
 namespace DCLF::Features::Shadows::Local
@@ -16,7 +19,7 @@ namespace DCLF::Features::Shadows::Local
 	 *
 	 * Render thread: written in the detour (from CalculateAndDrawShadowCasterLights and CalculateActiveShadowCasterLights), read by
 	 * the shadow views' capture later in the frame. Installed from the feature's camera hooks, for the Focus source
-	 * (Api::Feature::cameraHooks); the targets are read through ShadowCameras::EngineFocusTarget.
+	 * (Api::Feature::cameraHooks); the targets are read through EngineFocusTarget.
 	 */
 	class FocusViews
 	{
@@ -32,4 +35,12 @@ namespace DCLF::Features::Shadows::Local
 
 		bool installed = false;
 	};
+
+	/**
+	 * @brief The engine's current focus targets (0x14332a488: {float distance; NiAVObject* node} x the count at 0x14332a498): target
+	 * a_index's node, or null past the count. What the focus camera hook records (FocusFrame::targets) and the focus parity compares
+	 * the registrations with (Diagnostics/FocusParity.cpp). Any thread that reads the engine's focus state.
+	 */
+	const RE::NiAVObject* EngineFocusTarget(std::uint32_t a_index);
+	std::uint32_t EngineFocusTargetCount();
 }

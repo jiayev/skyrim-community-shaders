@@ -6,12 +6,13 @@
 // on. The feature registers its switches and live toggles (which need the shadows) and each map's contribution
 // (Api::OcclusionMapContribution, Api/ShadowViews.h): its set phase and view bit (kSetOccluderSky / kViewSkyOccluder,
 // kSetOccluderPrecipitation / kViewPrecipOccluder), Core's occluder rule (Skylighting's, the precipitation mask's), its target (the sky map
-// imports Skylighting's own occlusion texture; the mask is the engine's), its labels and its reference parity (Policy's).
+// imports Skylighting's own occlusion texture; the mask is the engine's), its labels and its reference parity (CS_DCLF_SKYLIGHT_PARITY's,
+// Diagnostics/SkylightParity.cpp, with its switches and compare). Its report lines (Diagnostics/OcclusionReport.cpp) go at the shadow views'.
 //
 // Core keeps the occlusion epoch (ExecuteOcclusion, on the shadow commit), the maps' modes, view slots, depth targets and technique
-// columns, the occluder rules' bodies (Coordinator::OcclusionTechniqueOf), the set decisions and the reports (Core/Extensions/ShadowViews.h:
-// the maps' entries, read as data). Skylighting calls the shell's occlusion methods (DrawcallLimitFix::OcclusionReady and its siblings),
-// and the shell's 0x1C capture; CS_DCLF_SKYLIGHT_PARITY's compare (Diagnostics/Feature/Skylight) stays with the diagnostics.
+// columns, the occluder rules' bodies (Coordinator::OcclusionTechniqueOf), the set decisions and the reports' other lines
+// (Core/Extensions/ShadowViews.h: the maps' entries, read as data). Skylighting calls the shell's occlusion methods
+// (DrawcallLimitFix::OcclusionReady and its siblings), and the shell's 0x1C capture.
 // Included by the feature's sources only (and Features/Manifest.cpp, for the constants).
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
@@ -29,4 +30,17 @@ namespace DCLF::Features::OcclusionMaps
 
 	// OcclusionMapsFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
+
+	// Diagnostics/OcclusionReport.cpp: the maps' report lines (ReportPoint::ShadowViews).
+	void RegisterReport(Api::InstallContext& a_context);
+
+	// Diagnostics/SkylightParity.cpp: CS_DCLF_SKYLIGHT_PARITY (CS_DCLF_SKYLIGHT_DUMP_DIR: where it writes the maps it compares): every
+	// 120th frame a map (0 the sky map, 1 the precipitation mask) is rendered both ways, the engine's first, and the two compared texel
+	// by texel. Its switches, and its observers of the maps' events when it is on.
+	void RegisterParity(Api::InstallContext& a_context);
+	// Render thread (the maps' referenceDue): whether this frame renders a_map's reference. Off: false.
+	bool ReferenceDue(std::uint32_t a_map);
+
+	/** @brief The occlusion views' check (T4: a capture against its map's own camera), with the claims or scene observers. */
+	void SubscribeOcclusionViewCheck();
 }

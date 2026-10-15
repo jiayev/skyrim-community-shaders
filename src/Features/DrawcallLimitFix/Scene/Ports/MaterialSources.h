@@ -13,17 +13,11 @@
 
 struct ID3D11ShaderResourceView;
 
-namespace RE
-{
-	class BSShaderMaterial;
-}
-
 namespace DCLF
 {
 	struct MaterialRecord;
 	namespace MaterialPort
 	{
-		struct MaterialSnapshot;
 		struct MaterialFrame;
 	}
 
@@ -43,7 +37,7 @@ namespace DCLF
 	 * - TexcoordOffset (VS 11): the material's two texture-transform buffers, read at the index the engine
 	 *   flips every frame (Main::Update). A controller's write captures the material; the scene work watches it
 	 *   across the buffer flip, writing the frame's buffer (FrameGlobals' textureTransformBuffer) from the
-	 *   capture's two (TextureTransforms) until they agree.
+	 *   capture's two until they agree.
 	 * - The shader object and engine globals: PS 6, SnowRimLightParameters, CharacterLightParams,
 	 *   LODTexParams.z, LandscapeTexture5to6IsSnow.zw. The same for every material that writes them, so the scene
 	 *   work takes them from one port evaluation per signature against the frame's sources (Signature,
@@ -60,9 +54,9 @@ namespace DCLF
 		 */
 		std::uint32_t Signature(std::uint32_t a_passDescriptor);
 
-		/** @brief The frame-sourced PS floats (positions in the PS layout), for the build to repack. */
+		/** @brief The frame-sourced PS floats (positions in the PS layout): what the frame components' copies take. */
 		const std::vector<std::uint32_t>& FramePSFloats();
-		/** @brief TexcoordOffset's floats (positions in the VS layout), for the build to repack. */
+		/** @brief TexcoordOffset's floats (positions in the VS layout): what the frame components' copies take. */
 		const std::vector<std::uint32_t>& FrameVSFloats();
 
 		/**
@@ -80,20 +74,6 @@ namespace DCLF
 		/** @brief The character light's view a live evaluation of a character-light pass bound at t11, or null. */
 		ID3D11ShaderResourceView* CharacterLightView(const MaterialRecord& a_live, std::uint32_t a_passDescriptor);
 
-		/** @brief The capture check's (the render thread, the material read now): this frame's TexcoordOffset from its fields into the record. */
-		bool ApplyTextureTransform(const RE::BSShaderMaterial* a_material, MaterialRecord& a_record);
-
-		/** @brief A material's two texture-transform buffers as a capture read them: per buffer offset.xy, scale.xy (TexcoordOffset's order). */
-		struct TextureTransforms
-		{
-			std::array<std::array<float, 4>, 2> buffers{};
-			/** @brief Both buffers hold the same values: the buffer flip moves nothing. */
-			bool Agree() const { return buffers[0] == buffers[1]; }
-		};
-		/** @brief Pure: a capture's two buffers (the fields SetupMaterial reads, vanilla and TruePBR alike). */
-		TextureTransforms TextureTransformsOf(const MaterialPort::MaterialSnapshot& a_snapshot);
-		/** @brief Pure: buffer a_buffer's TexcoordOffset (the frame's textureTransformBuffer) into the record's written floats; whether one changed. */
-		bool ApplyTextureTransform(const TextureTransforms& a_transforms, std::uint32_t a_buffer, MaterialRecord& a_record);
 		/**
 		 * @brief Pure: the character light's view (a character-light pass's t11) the frame's sources give: the render target vanilla
 		 * SetupMaterial binds, else TruePBR's; null while neither has one (-1 while a cell loads).

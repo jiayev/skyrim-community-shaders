@@ -3,8 +3,7 @@
 #include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Engine/FrameClock.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
@@ -551,7 +550,7 @@ namespace DCLF::Features::Lod::LodGates
 
 		bool Active()
 		{
-			return installed && Scene::HiddenStoresLive() && (!running || running());
+			return installed && Extensions::HiddenEventsLive() && (!running || running());
 		}
 
 		Gate* AllocateGate(EngineSide& a_side)
@@ -984,7 +983,7 @@ namespace DCLF::Features::Lod::LodGates
 						gate->outgoingNodes.push_back(node);
 			}
 			gate->openedTicks = Ticks();
-			gate->openedFrame = SceneCapture::Frame();
+			gate->openedFrame = FrameClock::Frame();
 			gate->word.store(Word(gate->token, kOpen), std::memory_order_release);
 			openGates.fetch_add(1, std::memory_order_acq_rel);
 			for (const auto& block : gate->incoming) {
@@ -1040,7 +1039,7 @@ namespace DCLF::Features::Lod::LodGates
 			std::uint32_t openNow = 0, oldestFrames = 0;
 			std::int64_t oldestTicks = 0;
 			const auto now = Ticks();
-			const auto frame = SceneCapture::Frame();
+			const auto frame = FrameClock::Frame();
 			for (const auto* gate : side.open)
 				if ((gate->word.load(std::memory_order_acquire) & 7) == kOpen) {
 					++openNow;
@@ -1375,7 +1374,7 @@ namespace DCLF::Features::Lod::LodGates
 					Extensions::PushReservedHidden(node, gatesHiddenSite);
 		}
 		gate->flippedTicks = Ticks();
-		gate->flippedFrame = SceneCapture::Frame();
+		gate->flippedFrame = FrameClock::Frame();
 		const auto ticks = gate->flippedTicks - gate->openedTicks;
 		counters.flipTicks.fetch_add(ticks, std::memory_order_relaxed);
 		NoteMax(counters.flipTicksMax, ticks);

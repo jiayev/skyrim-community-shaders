@@ -8,7 +8,6 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 
 #include <ankerl/unordered_dense.h>
 
@@ -246,19 +245,20 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 		owned = std::move(next);
 	}
 
-	void UpdateOwned(const std::vector<const RE::NiAVObject*>& a_left, const std::vector<const RE::NiAVObject*>& a_joined,
-		const std::vector<const RE::NiAVObject*>& a_treesLeft, const std::vector<const RE::NiAVObject*>& a_treesJoined)
+	void UpdateOwned(const std::vector<const RE::NiAVObject*>& a_left, const std::vector<const RE::NiAVObject*>& a_joined)
 	{
 		if (!installed)
 			return;
-		for (const auto* tree : a_treesLeft)
-			if (const auto it = ownedTrees.find(tree); it != ownedTrees.end()) {
+		// The trees among them: a leaving root by key alone (only a tree joined ownedTrees), a joining one by its class.
+		for (const auto* root : a_left)
+			if (const auto it = ownedTrees.find(root); it != ownedTrees.end()) {
 				ReleaseTree(it->second);
 				ownedTrees.erase(it);
 			}
 		// A joining root is alive: the cut's snapshot holds it.
-		for (const auto* tree : a_treesJoined)
-			ownedTrees.try_emplace(tree, RE::NiPointer<RE::NiAVObject>(const_cast<RE::NiAVObject*>(tree)));
+		for (const auto* root : a_joined)
+			if (Engine::RttiIs(root, "BSTreeNode"))
+				ownedTrees.try_emplace(root, RE::NiPointer<RE::NiAVObject>(const_cast<RE::NiAVObject*>(root)));
 		for (const auto* root : a_left)
 			owned.erase(root);
 		for (const auto* root : a_joined)
@@ -295,14 +295,13 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 
 	void BeforeListLoop(std::byte* a_manager)
 	{
-		// CS_DCLF_TREE_LIST_ALL gives the loop DCLF's verdict for every BSTreeNode DCLF lists (IndirectDraws::
-		// AccumulatedVerdictOf: the root's kAccumulated as written at Main::Update's entry).
+		// CS_DCLF_TREE_LIST_ALL gives the loop DCLF's verdict for every BSTreeNode DCLF lists (Extensions::ListedVerdictOf: the root's
+		// kAccumulated as written at Main::Update's entry).
 		static const bool all = ListAll();
 		if (!installed || !running || !a_manager || !written.empty() || (ownedTrees.empty() && !all))
 			return;
 		using FirstMultiBound = std::byte* (*)(const void*);
 		static const auto firstMultiBound = reinterpret_cast<FirstMultiBound>(REL::Module::get().base() + TreeWind::Address::kTreeFirstMultiBound);
-		auto& draws = IndirectDraws::Get();
 		// The list holds each tree: a stood-in one on it is alive while the lock is held, and the reference taken keeps it so until
 		// AfterListLoop, whatever another thread removes meanwhile.
 		auto& lock = Lock(a_manager, kTreeLock);
@@ -310,8 +309,8 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 		const auto write = [&](RE::NiAVObject* a_tree, bool a_stoodIn) {
 			bool visible = true;
 			if (a_stoodIn) {
-				visible = draws.AccumulatedVerdict(a_tree);
-			} else if (!draws.AccumulatedVerdictOf(a_tree, visible)) {
+				visible = Extensions::StandInVerdict(a_tree);
+			} else if (!Extensions::ListedVerdictOf(a_tree, visible)) {
 				++stats.wideNoVerdict;
 				return;
 			}
@@ -415,7 +414,7 @@ namespace DCLF::Features::TreeWind
 		// answers, and whether DCLF runs this frame.
 		void RootsChanged(const Api::StandInRootsChange& a_change)
 		{
-			TreeAnimation::UpdateOwned(a_change.left, a_change.joined, a_change.treesLeft, a_change.treesJoined);
+			TreeAnimation::UpdateOwned(a_change.left, a_change.joined);
 		}
 
 		void RootsCleared()

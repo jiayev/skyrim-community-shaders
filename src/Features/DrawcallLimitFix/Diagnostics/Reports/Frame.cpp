@@ -47,8 +47,6 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 	auto& store = DCLF::Scene::Coordinator::Get();
 	auto& leaks = Leaks();
 	auto& timing = c.timing;
-	auto& occlusionNativeFrames = c.occlusionNativeFrames;
-	auto& occlusionEngineFrames = c.occlusionEngineFrames;
 	const bool due = Due(frame);
 	// CS_DCLF_CENSUS: the passes the engine kept since the last frame, classified here (Present), reported every interval.
 	if (DCLF::RegistrationCensus::Enabled()) {
@@ -209,17 +207,8 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 					captured.shadowWithheld[0], captured.shadowWithheld[1], captured.shadowWithheld[2], captured.volumetricWithheld, captured.directWithheld, shadow.casters[0], shadow.casters[1],
 					shadow.casters[2], shadow.setWaiting, shadow.setWaiting ? " <- SET SHADOW" : "", shadow.setWaitingFirst.empty() ? "" : " (first: " + shadow.setWaitingFirst + ")", shadow.faceUploads, shadow.notReady, shadow.notReadyWithheld, shadow.notReadyWithheld ? " <- HOLES" : "");
 			}
-			for (std::uint32_t v = 0; v < DCLF::kOcclusionViews; ++v)
-				if (shadow.occlusionDrawn[v] || shadow.occlusionNotReady[v] || occlusionNativeFrames[v])
-					logger::info("[DCLF] {} occlusion: DCLF drew {} maps ({} of the set's occluders, last), {} it could not draw, {} left to the engine whole; the engine "
-								 "registered the map's other occluders on {} frames ({} not members now); {} member passes withheld (last frame)",
-						DCLF::Extensions::OcclusionMapOf(v).report, shadow.occlusionDrawn[v], shadow.occlusionInputs[v], shadow.occlusionNotReady[v],
-						occlusionNativeFrames[v], occlusionEngineFrames[v], DCLF::Scene::FrameView::Get().SetLacking(DCLF::Extensions::OcclusionMapOf(v).phase),
-						DCLF::PassCapture::Get().GetStats().occlusionWithheld);
-			if (shadow.occlusionEpochs)
-				logger::info("[DCLF] occlusion maps: {} epochs, render thread {:.3f} ms per epoch", shadow.occlusionEpochs, shadow.occlusionMs / shadow.occlusionEpochs);
-			occlusionNativeFrames = {};
-			occlusionEngineFrames = {};
+			// The features' lines here (Features/OcclusionMaps: the occlusion maps'), before the shadow counters' reset.
+			DCLF::Extensions::ReportLinesAt(DCLF::Api::ReportPoint::ShadowViews, frame);
 			DCLF::IndirectDraws::Get().ResetShadowStats();
 		}
 		if (draws.decalsDrawn || draws.decalsTested)

@@ -18,6 +18,8 @@
 #include <utility>
 #include <vector>
 
+struct ID3D11ShaderResourceView;
+
 namespace RE
 {
 	class BSShaderProperty;
@@ -79,7 +81,11 @@ namespace DCLF::Api
 		Ineligible reason;
 	};
 
-	/** @brief A port's evaluate: the material's snapshot, the pass descriptor and the frame's sources; the record it writes. */
+	/**
+	 * @brief A port's evaluate: the material's snapshot, the pass descriptor and the frame's sources; the record it writes. The port reads
+	 * and writes them through the calls below (MaterialSnapshot's reads, the vanilla frame's sources, the record's fields), never their
+	 * types.
+	 */
 	class MaterialPortEvaluation
 	{
 	public:
@@ -87,6 +93,34 @@ namespace DCLF::Api
 		std::uint32_t passDescriptor;
 		const MaterialPort::MaterialFrame& frame;
 		MaterialRecord& out;
+
+		// The snapshot: its port's kind (PortOfVtable), its bytes taken, the value at a_offset (zero past them), whether the texture field
+		// at a_offset holds a texture and the view resolved for it (null: none).
+		std::uint8_t Port() const;
+		std::uint32_t Size() const;
+		template <class T>
+		T At(std::size_t a_offset) const
+		{
+			T value{};
+			Read(a_offset, &value, sizeof(T));
+			return value;
+		}
+		bool HasTexture(std::uint16_t a_offset) const { return At<const void*>(a_offset) != nullptr; }
+		ID3D11ShaderResourceView* View(std::uint16_t a_offset) const;
+		// The vanilla frame's sources: whether they were sampled, and the texture-transform buffer the frame reads.
+		bool FrameSampled() const;
+		std::uint32_t TextureTransformBuffer() const;
+		// The record: cleared to kind a_kind (constants unwritten, no textures, address modes 0, filter modes unwritten); each stage's
+		// floats (StageLayout order); a pixel slot's filter mode, and its texture with its address mode (written).
+		void ResetRecord(std::uint8_t a_kind);
+		float* VSFloats();
+		float* PSFloats();
+		void SetFilterMode(std::uint32_t a_slot, std::uint32_t a_mode);
+		void BindTexture(std::uint32_t a_slot, ID3D11ShaderResourceView* a_view, std::uint32_t a_addressMode);
+
+	private:
+		// a_bytes at a_offset into a_out when the snapshot has them (MaterialSnapshot::At's test), a_out left as it is otherwise.
+		void Read(std::size_t a_offset, void* a_out, std::size_t a_bytes) const;
 	};
 
 	/** @brief A port's shading: the property sampled, its pass descriptor and whether it is a member's; the shading row it writes. */
@@ -125,6 +159,7 @@ namespace DCLF::Extensions
 	/** @brief A kind's entry: its contribution's, with the RTTI, vtable and space resolved (kind 0's: Lighting's space and rules alone). */
 	struct MaterialPortEntry
 	{
+		std::string_view name;
 		std::uint8_t shaderType = 0xFF;
 		Api::ObjectClass objectClass = Api::ObjectClass::Count;
 		const void* rtti = nullptr;
@@ -139,6 +174,7 @@ namespace DCLF::Extensions
 		decltype(Api::MaterialPortContribution::shading) shading = nullptr;
 		decltype(Api::MaterialPortContribution::variants) variants = nullptr;
 		std::span<const std::string_view> variantNames;
+		decltype(Api::MaterialPortContribution::emissiveOf) emissiveOf = nullptr;
 	};
 	using MaterialPortEntries = std::array<MaterialPortEntry, kMaterialKinds>;
 
@@ -176,6 +212,17 @@ namespace DCLF::Extensions
 	inline bool PortTakesParticles(const ToggleSet& a_toggles, std::uint8_t a_kind)
 	{
 		return PortOn(a_toggles, a_kind) && MaterialPorts()[a_kind].rules.particleGeometry;
+	}
+	/**
+	 * @brief Whether a leaf of port a_kind (0: none) of geometry type a_type, skinned or not, is a shape the billboards turn under
+	 * a_toggles: the parent contribution admits the turned shapes (Api::ParentLeaves::TurnedEffectShapes), its port's rules say the
+	 * billboards turn its properties, and it is a skinless BSTriShape. The classification's rule (Coordinator::BillboardModeOf) and the
+	 * census's; under exactly one billboard node such a leaf is DCLF's.
+	 */
+	inline bool BillboardTurnedLeaf(const ToggleSet& a_toggles, std::uint8_t a_kind, std::uint8_t a_type, bool a_skinned)
+	{
+		return ParentAdmits(a_toggles, Api::EngineParent::Billboard, Api::ParentLeaves::TurnedEffectShapes) && a_kind != 0 &&
+		       MaterialPorts()[a_kind].rules.turnedByBillboards && a_type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) && !a_skinned;
 	}
 	/** @brief Kind a_kind's rules (0: Lighting's). */
 	inline const Api::MaterialPortRules& PortRules(std::uint8_t a_kind) { return MaterialPorts()[a_kind].rules; }

@@ -58,6 +58,12 @@ namespace DCLF::Api
 	 */
 	inline constexpr std::uint8_t kRequeueSlots = 1, kRequeueReevaluate = 2, kRequeueReevaluateAlways = 4;
 
+	/**
+	 * @brief The mirrored node kind bits a component may test (CoordinatorComponentContext::MirroredFadeNode's a_kind, the mirror's capture
+	 * kind as is; Core checks they match it). Tree: a BSTreeNode.
+	 */
+	inline constexpr std::uint32_t kMirroredKindTree = 1u << 8;
+
 	/** @brief A tracked entry's state as the coordinator keeps it (CoordinatorComponentContext::TrackedStateOf; tracked false: none). */
 	struct TrackedState
 	{

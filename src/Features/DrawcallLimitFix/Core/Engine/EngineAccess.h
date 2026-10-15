@@ -104,10 +104,8 @@ namespace DCLF::Engine
 		inline constexpr std::uintptr_t kShadowSceneNode = 0x2033060;  // ShadowSceneNode*: the main one (BSShaderManager::State's first; its +0x304 the wind magnitude)
 		inline constexpr std::uintptr_t kFocusTargetCount = 0x332a498;  // the focus targets' count
 		inline constexpr std::uintptr_t kReflectSky = 0x20104e8;  // bool: the water reflection draws the sky
-		inline constexpr std::uintptr_t kTreeLodAtlas = 0x33dcd18;  // NiSourceTexture*: tree LOD's atlas
 		inline constexpr std::uintptr_t kTransformToMatrix = 0x14aaf10;  // FUN_1414aaf10: an NiTransform as the shaders' row-major matrix
 		inline constexpr std::uintptr_t kLightingShader = 0x338ca00;  // BSLightingShader*: the instance its constructor writes
-		inline constexpr std::uintptr_t kEffectShader = 0x33dcce8;    // BSEffectShader*: the instance GetRenderPasses makes passes of
 		inline constexpr std::uintptr_t kClearGroup = 0x14b4ae0;      // FUN_1414b4ae0(accumulator, group): a group's pass list cleared, undrawn
 		inline constexpr std::uintptr_t kImageSpaceManager = 0x332a6a0;  // ImageSpaceManager*; the HDR multiplier at +0xe0
 		inline constexpr std::uintptr_t kFrameSeconds = 0x31cc288;  // float: the frame's seconds (GetSecondsPassed)
@@ -116,8 +114,6 @@ namespace DCLF::Engine
 		inline constexpr std::uintptr_t kProjectedTiling = 0x2035560;  // float: ProjectedUV's first tiling (FUN_1414e00c0)
 		inline constexpr std::uintptr_t kProjectedTiling2 = 0x2035578;  // float: its second tiling
 		inline constexpr std::uintptr_t kProjectedNormals = 0x2035518;  // byte: the projected-normals switch
-		inline constexpr std::uintptr_t kEffectCamera = 0x332a328;  // NiCamera*: BSEffectShader's camera (its near and far at +0x160, +0x164)
-		inline constexpr std::uintptr_t kEffectBlood = 0x33dccf0;  // float[2]: BSEffectShader's blood globals
 		inline constexpr std::uintptr_t kSwitchSetRevision = 0xd29990;  // FUN_140d29990(revisions, index, revID): a switch child's revision marked current
 		inline constexpr std::uintptr_t kMaterialRelease = 0x14f7a40;  // FUN_1414f7a40(manager, material): a material reference dropped (AE ID 107720)
 		inline constexpr std::uintptr_t kMaterialManager = 0x3187758;  // the material database (AE ID 403555)
@@ -148,8 +144,6 @@ namespace DCLF::Engine
 		inline constexpr std::uintptr_t kRefractionCheck = 0x644d20;         // Main::Draw's refraction point
 		inline constexpr std::uintptr_t kGroupFiveCount = 0x14b4840;         // what it calls: the accumulator's group 5 count (FUN_1414b4840)
 		inline constexpr std::uintptr_t kAccumulatorRender = 0x14a90f0;      // the accumulator render (FUN_1414a90f0)
-		inline constexpr std::uintptr_t kDepthFirstPersonDraw = 0x14cd47e;   // its call at RenderDepth's first-person draw
-		inline constexpr std::uintptr_t kFirstPersonViewDraw = 0x14cb7d1;    // its call in FUN_1414cb6d0 (the first-person view)
 		inline constexpr std::uintptr_t kUpdateSkinInstance = 0xe4ff90;      // FUN_140e4ff90(skin, world): a skin instance's palette update
 		inline constexpr std::uintptr_t kRefractionNormalsBegun = 0x35ef130;  // byte: the refraction normals were cleared this frame
 		inline constexpr std::uintptr_t kRefractionNormalsDrawn = 0x35ef131;  // byte: drawn (ISRefraction's IsActive reads it)

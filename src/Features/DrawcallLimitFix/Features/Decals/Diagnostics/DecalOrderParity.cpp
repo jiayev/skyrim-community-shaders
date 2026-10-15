@@ -1,12 +1,13 @@
 // CS_DCLF_PERSISTENT_PARITY: every 60 passes the kept decal order against one made whole (every key taken again: CompareDecalOrder),
-// after the order's upkeep. Reported with the scene's lines (Diagnostics/Reports/SceneCoordinator.cpp, SceneState's decalOrder).
+// after the order's upkeep, summed in the component's state. Reported with the coordinator's scene lines (OrderParityLines, at
+// Api::ReportPoint::SceneCoordinatorMaterials).
 
 #include "Features/DrawcallLimitFix/Features/Decals/DecalOrder.h"
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
 
 namespace DCLF::Features::Decals
 {
@@ -19,7 +20,7 @@ namespace DCLF::Features::Decals
 
 		void OnOrdered(const Ordered& a_event)
 		{
-			auto& dp = Diagnostics::SceneDiagnostics().decalOrder;
+			auto& dp = a_event.parity;
 			const auto result = CompareDecalOrder(a_event.order, a_event.tables, a_event.mirror);
 			++dp.checks;
 			dp.decals += result.decals;
@@ -29,6 +30,17 @@ namespace DCLF::Features::Decals
 			dp.unordered += result.unordered;
 			if (result.differ && dp.differ++ == 0)
 				dp.first = result.first;
+		}
+	}
+
+	void OrderParityLines(const Api::CoordinatorComponentContext& a_context, std::string& a_text)
+	{
+		if (auto& dp = a_context.State<DecalOrder>().parity; dp.checks) {
+			a_text += fmt::format("[DCLF] decal order parity (the kept order against one made whole): {} checks, {} decals, {} differ{}{}; {} kept keys stale, "
+								  "{} neighbours the whole order does not hold{}{}\n",
+				dp.checks, dp.decals, dp.differ, dp.differ ? " <- DIFFER; first: " : " <- OK", dp.first, dp.staleKeys, dp.unordered,
+				dp.staleKeys ? "; first stale: " : "", dp.staleFirst);
+			dp = {};
 		}
 	}
 

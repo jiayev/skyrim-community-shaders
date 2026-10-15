@@ -1,11 +1,11 @@
 // OcclusionMaps: Skylighting's sky occlusion map and the precipitation occlusion mask drawn by Core's shadow engine. Their switches and
-// toggles, and each map's contribution (its bits, occluder rule, target, labels and reference parity).
+// toggles, each map's contribution (its bits, occluder rule, target, labels and reference parity), their report lines and parity.
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/Skylighting.h"
 
 namespace DCLF::Features::OcclusionMaps
@@ -24,8 +24,8 @@ namespace DCLF::Features::OcclusionMaps
 				a_import.view = sky->dsv.get();
 			}
 		}
-		bool SkyReferenceDue() { return Policy::RenderOcclusionReference(kSky); }
-		bool PrecipitationReferenceDue() { return Policy::RenderOcclusionReference(kPrecipitation); }
+		bool SkyReferenceDue() { return ReferenceDue(kSky); }
+		bool PrecipitationReferenceDue() { return ReferenceDue(kPrecipitation); }
 
 		/**
 		 * @brief The maps' contributions: Skylighting's sky map and the precipitation mask, both available while Skylighting is loaded (its
@@ -70,6 +70,11 @@ namespace DCLF::Features::OcclusionMaps
 				.seed = precipitationSwitch, .entersClassification = true, .after = "exclude primary entries", .needs = { "shadows" } });
 			// The maps (Core's shadow engine: the occlusion epoch, the set decisions, the classification and the reports read them as data).
 			RegisterMaps(a_context, sky, precipitation);
+			// Their report lines, and CS_DCLF_SKYLIGHT_PARITY's switches and compare.
+			RegisterReport(a_context);
+			RegisterParity(a_context);
+			if (Diagnostics::Observe().claimsOrScene)
+				SubscribeOcclusionViewCheck();
 		}
 	}
 

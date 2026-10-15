@@ -8,9 +8,10 @@ namespace DCLF::Diagnostics
 	/**
 	 * @brief The shadow views' parity (CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY): DCLF's views (the boards, ShadowCameras' Sun, Lights, Focus:
 	 * from the cameras the engine's UpdateCamera set up) against the engine's captures - the view-projection, eye, viewport and caster
-	 * volume at each view's draw (the shadow epochs), the sun's cascade planes at each cascade cull, the full-frustum processes - and
-	 * what the engine registers into a covered focus view against its target's fade root. One tally per kind of view; each kind's line
-	 * every 300 frames that had such views (Reports: SunViewsLines, LightViewsLines, FocusViewsLines).
+	 * volume at each view's draw (the shadow epochs' checks, Diagnostics/Draws/ShadowChecks.cpp), the sun's cascade planes at each cascade
+	 * cull, the full-frustum processes (the sun source's observers). One tally per kind of view; each kind's line every 300 frames that
+	 * had such views, by its source's observers (Features/Shadows/Sun/Diagnostics/SunViewParity.cpp, Features/Shadows/Local/Diagnostics/
+	 * LightParity.cpp, FocusParity.cpp).
 	 */
 	struct ViewTally
 	{
@@ -33,15 +34,4 @@ namespace DCLF::Diagnostics
 
 	/** @brief The tally of a_view's kind (render thread). */
 	ViewTally& ShadowViewTally(ShadowView a_view);
-
-	/** @brief The observers: the views' report windows, the cascade planes, the missing cascades, the focus views' membership. */
-	void InstallShadowViews();
-
-	/** @brief The focus views' membership check since the last Take: registrations into a covered focus view, those under another fade root, the first named. */
-	struct FocusMembers
-	{
-		std::uint64_t registrations = 0, outside = 0;
-		std::string first;
-	};
-	FocusMembers TakeFocusMembers();
 }

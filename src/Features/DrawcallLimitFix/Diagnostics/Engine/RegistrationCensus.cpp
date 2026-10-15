@@ -84,11 +84,11 @@ namespace DCLF::RegistrationCensus
 		// for the geometry yet); any other shader's its type and the geometry's RTTI (static data).
 		constexpr std::uint64_t kLightingKey = 1ull << 63;
 		constexpr std::uint64_t kApproximateKey = 1ull << 62;
-		// An effect geometry classified as a Lighting one (Api::ObjectClass::Effect on): its classes are named "effect: ...". The one material
-		// port the key's bit names (the Effect port's kind), whose variants split its variant class.
-		constexpr std::uint64_t kEffectKey = 1ull << 61;
-		constexpr std::uint8_t kEffectKeyPort = 1;
-		static_assert(Extensions::kMaterialKinds == 2, "one port bit in the class key: give each port its own before adding one");
+		// A material port's geometry classified as a Lighting one (its class on: the Effect port's with Api::ObjectClass::Effect): its kind
+		// in the key's bits 56-61, its classes named by the port ("effect: ..."), its variants splitting its variant class.
+		constexpr unsigned kPortKeyShift = 56;
+		constexpr std::uint64_t kPortKeyMask = 0x3F;
+		static_assert(Extensions::kMaterialKinds <= kPortKeyMask + 1, "a port's kind in the class key's port bits");
 		constexpr std::uint64_t kRttiMask = (1ull << 48) - 1;
 
 		constexpr std::array<const char*, RE::BSShader::Type::Total> kShaderNames{ "no shader", "Grass", "Sky", "Water", "BloodSplatter", "ImageSpace",
@@ -326,9 +326,7 @@ namespace DCLF::RegistrationCensus
 			const bool particlesTaken = Extensions::ParentAdmits(toggles, Api::EngineParent::Billboard, Api::ParentLeaves::ParticleSystems) &&
 			                            ParticleGeometryType(leaf.view.Type());
 			const auto* port = SceneCapture::LeafView::Port(leaf.view.property);
-			const bool billboardTaken = Extensions::ParentAdmits(toggles, Api::EngineParent::Billboard, Api::ParentLeaves::TurnedEffectShapes) && port &&
-			                            Extensions::PortRules(port->port).turnedByBillboards &&
-			                            leaf.view.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) && !leaf.view.Skinned();
+			const bool billboardTaken = Extensions::BillboardTurnedLeaf(toggles, port ? port->port : std::uint8_t{ 0 }, leaf.view.Type(), leaf.view.Skinned());
 			std::uint32_t billboards = 0;
 			for (const RE::NiNode* node = a_geometry.parent; node; node = node->parent) {
 				if (Scene::FrameView::Get().IsCategoryNode(node)) {
@@ -377,11 +375,11 @@ namespace DCLF::RegistrationCensus
 		 * @brief A port geometry's variant class split by its port's variants (Extensions::PortVariants on the live leaf: the render thread's
 		 * read, at Collect; the Effect port's EffectVariantsOf), in the class key's bits 8-23; any other class as it is.
 		 */
-		std::uint64_t WithEffectVariants(std::uint64_t a_class, bool a_effect, const RE::BSGeometry& a_geometry)
+		std::uint64_t WithPortVariants(std::uint64_t a_class, bool a_ported, const RE::BSGeometry& a_geometry)
 		{
 			constexpr auto kVariant = static_cast<std::uint8_t>(Ineligible::EffectVariant);
 			const auto reason = static_cast<std::uint8_t>(a_class & 0xFF);
-			if (!a_effect || (reason != kVariant && reason != kUntracked + kVariant))
+			if (!a_ported || (reason != kVariant && reason != kUntracked + kVariant))
 				return a_class;
 			const SceneCapture::LiveLeaf leaf(a_geometry);
 			const auto* property = SceneCapture::LeafView::Port(leaf.view.property);
@@ -408,11 +406,14 @@ namespace DCLF::RegistrationCensus
 			const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
 			// A Lighting geometry is DCLF's to classify whichever shader its pass has (the shadow views' passes are Utility's).
 			const bool lighting = property && netimmerse_cast<RE::BSLightingShaderProperty*>(const_cast<RE::BSShaderProperty*>(property));
-			// With the effects (Api::ObjectClass::Effect) an effect geometry is DCLF's to classify too (its verdict: a member, effect-opaque, ...):
-			// the census's port's property (its RTTI) while the port is on.
-			const bool effect = !lighting && property && Extensions::PortOn(ActiveToggles(), kEffectKeyPort) &&
-			                    Extensions::PortOfRtti(property->GetRTTI()) == kEffectKeyPort;
-			if (lighting || effect) {
+			// With a port's class on (the effects: Api::ObjectClass::Effect) its geometry is DCLF's to classify too (its verdict: a member,
+			// effect-opaque, ...): a port's property (its RTTI) while the port is on.
+			std::uint8_t port = 0;
+			if (!lighting && property)
+				if (const std::uint8_t kind = Extensions::PortOfRtti(property->GetRTTI()); Extensions::PortOn(ActiveToggles(), kind))
+					port = kind;
+			const bool ported = port != 0;
+			if (lighting || ported) {
 				std::uint64_t cls;
 				if (const auto phase = WithheldPhase(a_noted, view, a_frame); phase && (a_frame.set->PhasesOf(geometry) & phase)) {
 					// Kept by the hooks although its view withholds the phase: a defect.
@@ -421,11 +422,11 @@ namespace DCLF::RegistrationCensus
 					if (const auto it = a_frame.verdicts.find(geometry); it != a_frame.verdicts.end())
 						cls = it->second;
 					else
-						cls = a_frame.verdicts.emplace(geometry, WithEffectVariants(NonMemberClass(a_noted, a_frame), effect, *geometry)).first->second;
+						cls = a_frame.verdicts.emplace(geometry, WithPortVariants(NonMemberClass(a_noted, a_frame), ported, *geometry)).first->second;
 					++census.nonMemberPasses;
 					census.approximatePasses += (cls & kApproximateKey) ? 1 : 0;
 				}
-				key = kLightingKey | (effect ? kEffectKey : 0ull) | cls;
+				key = kLightingKey | (static_cast<std::uint64_t>(port) << kPortKeyShift) | cls;
 				if (cls == kMemberDefect && census.defects++ == 0)
 					census.firstDefect = fmt::format("{} in {}", Describe(*geometry, true),
 						view < kFirstOther ? std::string(kViewNames[view]) : fmt::format("other #{}", view - kFirstOther));
@@ -458,9 +459,9 @@ namespace DCLF::RegistrationCensus
 			++cls.views[view];
 			const auto [it, added] = cls.geometries.try_emplace(geometry);
 			if (added) {
-				it->second.name = Describe(*geometry, lighting || effect);
+				it->second.name = Describe(*geometry, lighting || ported);
 				// An untracked geometry's chain top (no category node above it): the three highest nodes, root first, and the depth.
-				if (const std::uint64_t c = key & 0xFF; (lighting || effect) && c >= kUntracked && c < kUntracked + kReasons) {
+				if (const std::uint64_t c = key & 0xFF; (lighting || ported) && c >= kUntracked && c < kUntracked + kReasons) {
 					std::vector<const RE::NiAVObject*> chain;
 					for (const RE::NiAVObject* at = geometry->parent; at; at = at->parent)
 						chain.push_back(at);
@@ -484,12 +485,14 @@ namespace DCLF::RegistrationCensus
 		{
 			if (a_key & kLightingKey) {
 				auto name = LightingClassName(static_cast<std::uint8_t>(a_key & 0xFF)) + ((a_key & kApproximateKey) ? " (live approximation)" : "");
-				if ((a_key & kEffectKey) && name.starts_with("lighting:"))
-					name = "effect:" + name.substr(9);
-				// The effect-variant class's variants (WithEffectVariants), joined.
+				const auto kind = static_cast<std::uint8_t>((a_key >> kPortKeyShift) & kPortKeyMask);
+				const auto& port = Extensions::MaterialPorts()[kind];
+				if (kind && name.starts_with("lighting:"))
+					name = fmt::format("{}:{}", port.name, name.substr(9));
+				// The port's variant class's variants (WithPortVariants), joined.
 				if (const auto variants = static_cast<std::uint32_t>((a_key >> 8) & 0xFFFF)) {
 					std::string joined;
-					const auto names = Extensions::MaterialPorts()[kEffectKeyPort].variantNames;
+					const auto names = port.variantNames;
 					for (std::uint32_t v = 0; v < names.size(); ++v)
 						if ((variants >> v) & 1)
 							joined += fmt::format("{}{}", joined.empty() ? "" : "+", names[v]);

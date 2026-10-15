@@ -26,7 +26,7 @@ namespace DCLF::Features::Billboards
 				.tooltip = "DCLF draws effect-shader meshes under a billboard node, turning each to the drawing camera on the GPU as the engine's cull turns the node. On by default.",
 				.seed = billboards, .entersClassification = true, .after = "refraction", .needs = { "effects" } });
 			// The leaves under a billboard node DCLF takes while the toggle is on (Coordinator::ClassifyFrame, BillboardModeOf): an effect
-			// shape under exactly one, turned by the vertex stage; with CS_DCLF_BILLBOARD_PARTICLES (read once, here) a particle system
+			// shape under exactly one (Extensions::BillboardTurnedLeaf), turned by the vertex stage; with CS_DCLF_BILLBOARD_PARTICLES (read once, here) a particle system
 			// under any, whose world and particles are its last update's (0x140d3e650 runs each child's UpdateDownwardPass, after which
 			// ParticleSnapshots snapshots it).
 			a_context.RegisterParent({ .parent = Api::EngineParent::Billboard, .leaves = Api::ParentLeaves::TurnedEffectShapes, .toggle = billboardsToggle });

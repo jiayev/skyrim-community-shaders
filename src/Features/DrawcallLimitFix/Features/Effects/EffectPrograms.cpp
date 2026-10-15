@@ -1,7 +1,6 @@
 // The Effect port's program family (Api::ProgramFamilyContribution): its keys' programs are Effect.hlsl's, of the engine's BSEffectShader.
 
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
-#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
 
 namespace DCLF::Features::Effects
@@ -14,7 +13,7 @@ namespace DCLF::Features::Effects
 		 */
 		const void* EffectShader()
 		{
-			static const REL::Relocation<RE::BSShader**> instance{ REL::Offset(Engine::Address::kEffectShader) };
+			static const REL::Relocation<RE::BSShader**> instance{ REL::Offset(Address::kEffectShader) };
 			auto* shader = *instance.get();
 			return shader && shader->shaderType.get() == RE::BSShader::Type::Effect ? shader : nullptr;
 		}

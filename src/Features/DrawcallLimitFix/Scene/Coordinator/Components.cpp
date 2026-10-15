@@ -7,6 +7,8 @@
 
 namespace DCLF::Api
 {
+	static_assert(kMirroredKindTree == SceneCapture::kKindTree, "the Api's mirrored kind bits are the capture's");
+
 	bool CoordinatorComponentContext::DenseWalk() const
 	{
 		return coordinator.denseWalk;
@@ -349,9 +351,6 @@ namespace DCLF::Scene
 				continue;
 			Api::WalkScheduling scheduling{ a_full };
 			registered[c].walk.scheduling({ tables, ComponentState(c), *this, c }, scheduling);
-			delta.facePublished += scheduling.events;
-			delta.faceUpdated += scheduling.updated;
-			delta.faceWritten += scheduling.written;
 		}
 	}
 

@@ -27,7 +27,6 @@ namespace DCLF::Diagnostics
 		JoinsBegin,              // the joins begin (the walk done, nothing bound yet)
 		ResidentsKept,           // the joins' residents kept (KeepResidentsAlive), before the slot check
 		JoinsEnd,                // the joins done (the verdicts and the residency this pass leaves)
-		GateFlipsPublished,      // taking a publication's deltas (the gates' published hook): the gates its commits flipped (the gates' component's deltas pending: Features::Lod::Gates::Flips), against its claims
 		MirrorCheckPoint,        // at a pass's end (its events all drained)
 		MirrorProbePoint,        // render thread, the frame's start (ServeFrameRequests): the live scene is captured for the mirror's observers
 		AccumulatePrepared,      // render thread, EarlyPrepass: the accumulate phase's frame inputs prepared (the material captures served)
@@ -70,16 +69,6 @@ namespace DCLF::Diagnostics
 		std::uint64_t position, geometryPosition;  // the snapshot's change and geometry logs' ends before the replay
 		std::uint32_t keptFamilies;  // the table families the replay kept (their stamps stood), a bit by registration
 		bool keepFadeRoots, keepConstants;  // the other families the replay kept
-	};
-
-	/** @brief Render thread, the frame's start (the gates' adoption, Features::Lod::Gates::Adopt): a LOD gate flipped by an installed publication, about to be released, and the claims the frame installed. */
-	struct GateReleasing
-	{
-		const SetSnapshot& claims;
-		std::uint64_t token;
-		std::span<const std::pair<const RE::BSGeometry*, std::uint8_t>> incoming;  // the incoming base geometries claimed, with the flip's phases
-		std::span<const RE::BSGeometry* const> outgoing;                          // the outgoing base geometries dropped
-		bool released;                                                            // false: refused (forced or unknown by then; the engine moved on)
 	};
 
 	// The mirror's reads (the lane reads the scene from the mirror), announced for the observers that check them against the live scene:

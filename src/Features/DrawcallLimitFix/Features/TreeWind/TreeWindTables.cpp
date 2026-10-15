@@ -145,7 +145,7 @@ namespace DCLF::Features::TreeWind
 			const void* node = nullptr;
 			if (tree && geometry) {
 				std::uint32_t kind = 0;
-				if (const void* fadeNode = a_context.MirroredFadeNode(a_slot, kind); fadeNode && (kind & SceneCapture::kKindTree))
+				if (const void* fadeNode = a_context.MirroredFadeNode(a_slot, kind); fadeNode && (kind & Api::kMirroredKindTree))
 					node = fadeNode;
 			}
 			// A node not listed yet is owned from the entry's reference (pins), never from the key; without one, nodeless.

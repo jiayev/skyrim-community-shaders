@@ -24,6 +24,13 @@ namespace DCLF::Features::Effects
 		}
 	}
 
+	const void* EffectEmissive(const RE::BSShaderProperty& a_property)
+	{
+		// An effect property's emittanceColor is its PropertyColor (the record's emissive, CaptureEffectProperty's): FUN_141480fc0
+		// re-points it as it does a Lighting property's emissiveColor.
+		return static_cast<const RE::BSEffectShaderProperty&>(a_property).emittanceColor;
+	}
+
 	void SampleEffectShading(Api::MaterialPortShading& a_shading)
 	{
 		// Effect port: PropertyColor (SetupGeometry 0x1414eab10): the emittance colour or white, and the property's alpha, which

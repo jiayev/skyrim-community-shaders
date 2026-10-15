@@ -1,7 +1,7 @@
 #pragma once
 
 // The Effect port's constants: BSEffectShader's variable space, the pass descriptor's bits, its frame constant rows and soft-depth
-// register (Features/Manifest.cpp lists them), and its record bits. Included by the feature's sources and the manifest only.
+// register (Features/Manifest.cpp lists them), its record bits and BSEffectShader's engine addresses. Included by the feature's sources and the manifest only.
 
 #include <array>
 #include <cstdint>
@@ -137,4 +137,12 @@ namespace DCLF::Features::Effects
 	/** @brief The effect material's texture-path bits a PropertyRecord holds in `feature` (the port's capture: EffectProperty.cpp). */
 	inline constexpr std::uint32_t kEffectHasSourcePath = 1u << 0;
 	inline constexpr std::uint32_t kEffectHasGreyscalePath = 1u << 1;
+
+	// AE 1.6.1170 (module offsets) of BSEffectShader's state the port reads (EffectPrograms.cpp, EffectFrame.cpp).
+	namespace Address
+	{
+		inline constexpr std::uintptr_t kEffectShader = 0x33dcce8;    // BSEffectShader*: the instance GetRenderPasses makes passes of
+		inline constexpr std::uintptr_t kEffectCamera = 0x332a328;  // NiCamera*: BSEffectShader's camera (its near and far at +0x160, +0x164)
+		inline constexpr std::uintptr_t kEffectBlood = 0x33dccf0;  // float[2]: BSEffectShader's blood globals
+	}
 }

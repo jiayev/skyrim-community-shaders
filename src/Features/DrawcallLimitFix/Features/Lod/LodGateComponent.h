@@ -48,7 +48,7 @@ namespace DCLF::Features::Lod::Gates
 		std::vector<std::pair<const RE::BSGeometry*, std::uint8_t>> incoming;  // the incoming base geometries claimed, with the flip's phases
 		std::vector<const RE::BSGeometry*> outgoing;                          // the outgoing base geometries dropped
 		std::uint64_t requestNs = 0, flipNs = 0;                              // its event's push, the flip (steady clock)
-		std::uint32_t requestFrame = 0, flipFrame = 0;                        // the render thread's frames then (SceneCapture::Frame)
+		std::uint32_t requestFrame = 0, flipFrame = 0;                        // the render thread's frames then (FrameClock::Frame)
 	};
 
 	/**

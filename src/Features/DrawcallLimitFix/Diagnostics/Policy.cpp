@@ -2,7 +2,6 @@
 #include "Policy.h"
 
 #include "Observation.h"
-#include "Feature/Skylight.h"
 
 namespace DCLF::Policy
 {
@@ -36,12 +35,6 @@ namespace DCLF::Policy
 	{
 		// The scene lists' check compares the engine's whole lists against DCLF's enumeration on its frames.
 		return !(Diagnostics::Observe().scene && Diagnostics::ParityDue(a_frame));
-	}
-
-	bool RenderOcclusionReference(std::uint32_t a_map)
-	{
-		// The occlusion maps' check compares the engine's render with DCLF's, texel by texel.
-		return Diagnostics::Skylight::ReferenceDue(a_map);
 	}
 
 	bool CaptureEngineShadowBlock()

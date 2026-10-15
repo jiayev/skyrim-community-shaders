@@ -481,8 +481,6 @@ namespace DCLF
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = Scene::FrameView::Get().GetTablesGeneration();
 		in.lookupGeneration = Scene::FrameView::Get().GetLookups().generation;
-		in.materialPatchedFloats = MaterialSources::FramePSFloats();
-		in.materialPatchedVSFloats = MaterialSources::FrameVSFloats();
 		return in;
 	}
 }

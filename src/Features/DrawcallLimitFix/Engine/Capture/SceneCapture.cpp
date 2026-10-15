@@ -2,6 +2,7 @@
 // start), inside the engine-read window or under the engine call that holds the objects; the drawn-roots set and the counters.
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Engine/FrameClock.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 #include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
@@ -34,7 +35,6 @@ namespace DCLF::SceneCapture
 
 		std::atomic<std::uint64_t> attaches{ 0 }, records{ 0 }, ns{ 0 }, mainThreadCaptures{ 0 }, mainThreadNs{ 0 }, outOfWorld{ 0 };
 		std::atomic<std::uint32_t> mainThread{ 0 };
-		std::atomic<std::uint32_t> currentFrame{ 0 };
 		std::atomic<std::uint64_t> sequence{ 0 };
 
 		bool NonFixedBody(const RE::NiAVObject& a_object)
@@ -756,12 +756,12 @@ namespace DCLF::SceneCapture
 
 	void SetFrame(std::uint32_t a_frame)
 	{
-		currentFrame.store(a_frame, std::memory_order_relaxed);
+		FrameClock::Set(a_frame);
 	}
 
 	std::uint32_t Frame()
 	{
-		return currentFrame.load(std::memory_order_relaxed);
+		return FrameClock::Frame();
 	}
 
 	void SetMainThread(std::uint32_t a_thread)

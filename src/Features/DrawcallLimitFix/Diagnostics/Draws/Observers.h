@@ -10,7 +10,6 @@ namespace DCLF::Diagnostics
 	struct CullLatchWritten;
 	struct FrameTextureUnresolved;
 	struct FrameBufferUnfilled;
-	struct TreeLodMissed;
 	struct FadeInputsVaried;
 	struct ShortBuffersDrawn;
 	struct MainCullingSetup;
@@ -29,8 +28,6 @@ namespace DCLF::Diagnostics
 	struct ShadowTargetPredicted;
 	struct OwnShadowViewport;
 	struct OwnShadowCamera;
-	struct SunEntryPlanesTaken;
-	struct OcclusionCaptured;
 	struct ShadowViewLatched;
 	struct MainCullViewProj;
 	struct FoliageRecordMade;
@@ -43,7 +40,6 @@ namespace DCLF::Diagnostics
 	void DescribeUnresolvedFrameTexture(const FrameTextureUnresolved& a_unresolved);
 	// The main commits' warnings and setup log, every run (CommitLog.cpp).
 	void LogUnfilledFrameBuffer(const FrameBufferUnfilled& a_unfilled);
-	void LogTreeLodMissed(const TreeLodMissed& a_missed);
 	void LogFadeInputsVaried(const FadeInputsVaried& a_varied);
 	void LogShortBuffers(const ShortBuffersDrawn& a_drawn);
 	void LogCullingSetup(const MainCullingSetup& a_setup);
@@ -81,8 +77,6 @@ namespace DCLF::Diagnostics
 	void CheckShadowTarget(const ShadowTargetPredicted& a_predicted);
 	void CheckOwnViewport(const OwnShadowViewport& a_own);
 	void CheckOwnCamera(const OwnShadowCamera& a_own);
-	void CheckSunEntryPlanes(const SunEntryPlanesTaken& a_taken);
-	void CheckOcclusionView(const OcclusionCaptured& a_captured);
 	void CheckSunEntry(const ShadowViewLatched& a_latched);
 	// CS_DCLF_TARGET_PROBE: the objects whose bound covers the pixel (ColourProbes.cpp).
 	void ProbeTarget(const MainCullViewProj& a_cull);

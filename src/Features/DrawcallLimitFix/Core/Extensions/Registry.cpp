@@ -283,11 +283,9 @@ namespace DCLF::Extensions
 			{
 				// A point composing its text takes text lines; the others, logged lines.
 				const auto point = a_lines.point;
-				const bool text = point == Api::ReportPoint::AsyncWorkViews || point == Api::ReportPoint::AsyncWorkForward || point == Api::ReportPoint::AsyncWork ||
-				                  point == Api::ReportPoint::AsyncWorkFamilies ||
-				                  point == Api::ReportPoint::SceneFrame || point == Api::ReportPoint::SceneCoordinatorSegments;
+				const bool text = Api::ReportPointComposesText(point);
 				// A coordinator component's lines in text's (or lines') place, at the coordinator's points, after the component.
-				const bool component = (point == Api::ReportPoint::SceneCoordinatorSegments || point == Api::ReportPoint::SceneCoordinatorGates) && a_lines.componentText;
+				const bool component = Api::ReportPointTakesComponents(point) && a_lines.componentText;
 				if (component && (!a_lines.component || a_lines.component.index >= lists.coordinatorComponents.size()))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s report lines {} name no registered component", feature, a_lines.name));
 				if (a_lines.name.empty() || (component ? a_lines.text || a_lines.lines :

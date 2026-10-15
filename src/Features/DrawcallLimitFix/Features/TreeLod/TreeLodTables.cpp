@@ -5,7 +5,8 @@
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodEvents.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
 namespace DCLF::Features::TreeLod
 {
@@ -41,7 +42,7 @@ namespace DCLF::Features::TreeLod
 		{
 			// Without the tree LOD cull program, tree LOD stays the engine's.
 			auto tables = std::make_shared<TreeLodTables>();
-			tables->cull = ComputeProgram::Load(a_setup.device, { .source = Draws::kTreeLodCullShader, .constantWords = Draws::kTreeLodCullConstantWords });
+			tables->cull = ComputeProgram::Load(a_setup.device, { .source = kTreeLodCullShader, .constantWords = kTreeLodCullConstantWords });
 			if (!tables->cull) {
 				logger::warn("[DCLF] The tree LOD cull program could not be created; tree LOD stays native");
 				return nullptr;
@@ -189,7 +190,7 @@ namespace DCLF::Features::TreeLod
 			UploadTreeLod(a_commit.adopted, mirror, *tables, *a_commit.latched, a_commit.bindingOwners, owned);
 			// The engine's passes were withheld: a commit that cannot draw leaves a hole.
 			if (owned && !tables->ready.load(std::memory_order_acquire))
-				Diagnostics::Notify(Diagnostics::TreeLodMissed{ a_commit.frame, mirror.ShapeSlots(), a_commit.adopted.Of(tables->shapes).units });
+				Diagnostics::Notify(TreeLodMissed{ a_commit.frame, mirror.ShapeSlots(), a_commit.adopted.Of(tables->shapes).units });
 		}
 	}
 
@@ -210,7 +211,7 @@ namespace DCLF::Features::TreeLod
 
 	bool TreeLodTextureBinding(TreeInstances::DrawRow& a_row, std::vector<std::shared_ptr<const void>>& a_owners)
 	{
-		const auto* texture = Engine::Global<RE::NiSourceTexture*>(Engine::Address::kTreeLodAtlas);
+		const auto* texture = Engine::Global<RE::NiSourceTexture*>(Address::kTreeLodAtlas);
 		auto* view = texture && texture->rendererTexture ? texture->rendererTexture->resourceView : nullptr;
 		if (!view)
 			return false;
@@ -228,7 +229,7 @@ namespace DCLF::Features::TreeLod
 
 	bool TreeLodAtlasReady()
 	{
-		const auto* texture = Engine::Global<RE::NiSourceTexture*>(Engine::Address::kTreeLodAtlas);
+		const auto* texture = Engine::Global<RE::NiSourceTexture*>(Address::kTreeLodAtlas);
 		return texture && texture->rendererTexture && texture->rendererTexture->resourceView;
 	}
 

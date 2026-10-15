@@ -1,7 +1,7 @@
 #pragma once
 
 // Helpers shared by the shadow epochs' files (ShadowEpochs.cpp, ShadowCapture.cpp, ShadowShape.cpp, ShadowCapability.cpp).
-// Internal to them and to Diagnostics/Draws/ShadowChecks.cpp; included after Internal.h.
+// Internal to them, to Diagnostics/Draws/ShadowChecks.cpp and to Features/OcclusionMaps/Diagnostics/OcclusionViewCheck.cpp; included after Internal.h.
 
 namespace DCLF::Draws
 {

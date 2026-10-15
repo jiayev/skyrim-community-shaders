@@ -138,6 +138,11 @@ namespace DCLF::Diagnostics
 			return a_component.index < s.componentDeltaRequests.size() ? s.componentDeltaRequests[a_component.index] : none;
 		}
 		static const SetSnapshot* publicationClaims(const Store& s) { return s.publicationClaims.get(); }
+		// Claims handed out opaque (Api::AdoptionContext::claims, a feature's events): a geometry's claimed phases in them (0: none).
+		static std::uint8_t ClaimedPhases(const void* a_claims, const RE::BSGeometry* a_geometry)
+		{
+			return static_cast<const SetSnapshot*>(a_claims)->PhasesOf(a_geometry);
+		}
 		// The components' observers' reads (the LOD gates' parity): the coordinator's root marks, the observed slots' readiness as the
 		// commit recorded it, the slots requeued for the next commit, the next publication's claims, and a slot's participation (DecideSlot's).
 		static const auto& rootMarks(const Store& s) { return s.rootMarks; }

@@ -33,7 +33,7 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 	 * the loop's stores are what DCLF follows for them (the LOD switch by event, the near list's bones that DCLF's skinned draws read) -
 	 * but around the loop's call (TreeList's detour of 0x140437df1, Main::Update, main thread, the manager's update: no list cull or
 	 * cell animation runs) each one's multibound result is DCLF's verdict, the root's kAccumulated as DCLF wrote it at Main::Update's
-	 * entry (IndirectDraws::AccumulatedVerdict: 1 in view, 2 out), and the engine's value is put back right after: the loop decides
+	 * entry (Extensions::StandInVerdict: 1 in view, 2 out), and the engine's value is put back right after: the loop decides
 	 * from DCLF's visibility, and no other reader of the cache sees DCLF's value. Written under the tree list's lock (+0x10), each
 	 * written tree held by a reference until the value is put back (released on the main thread).
 	 *
@@ -49,17 +49,16 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 	 */
 	void SetOwned(const std::vector<const RE::NiAVObject*>& a_roots, const std::vector<const RE::NiAVObject*>& a_trees);
 	/**
-	 * @brief SetOwned by delta: the roots that left and joined the owned set, and the BSTreeNodes among them. Left first, then joined (a
-	 * root in both stays owned). Render (main) thread; the animation list is scanned only when a root joined.
+	 * @brief SetOwned by delta: the roots that left and joined the owned set (the BSTreeNodes among them the tree list's). Left first, then
+	 * joined (a root in both stays owned). Render (main) thread; the animation list is scanned only when a root joined.
 	 */
-	void UpdateOwned(const std::vector<const RE::NiAVObject*>& a_left, const std::vector<const RE::NiAVObject*>& a_joined,
-		const std::vector<const RE::NiAVObject*>& a_treesLeft, const std::vector<const RE::NiAVObject*>& a_treesJoined);
+	void UpdateOwned(const std::vector<const RE::NiAVObject*>& a_left, const std::vector<const RE::NiAVObject*>& a_joined);
 	/** @brief The main thread at Main::Update's entry (PrimaryCull::AtUpdateEntry): whether DCLF runs this frame (off: no tree is written). */
 	void AtUpdateEntry(bool a_running);
 	/**
 	 * @brief The main thread around the tree list's loop (TreeList's detour; nothing installed off AE): before, the stood-in trees'
 	 * multibound results written from DCLF's verdicts; after, the engine's put back. CS_DCLF_TREE_LIST_ALL writes every
-	 * BSTreeNode on the list that DCLF lists, from IndirectDraws::AccumulatedVerdictOf (the wide writes' verdicts).
+	 * BSTreeNode on the list that DCLF lists, from Extensions::ListedVerdictOf (the wide writes' verdicts).
 	 */
 	void BeforeListLoop(std::byte* a_manager);
 	void AfterListLoop();

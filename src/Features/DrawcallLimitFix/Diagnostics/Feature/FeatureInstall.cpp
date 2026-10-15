@@ -2,7 +2,6 @@
 // target dump. Each runs on the render thread at its hook point.
 #include "Features/DrawcallLimitFix/Diagnostics/Install.h"
 
-#include "Skylight.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/CaptureParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -96,8 +95,7 @@ namespace DCLF::Diagnostics
 		// (Main::Draw's early hook: Features/TreeLod's audit subscribes from its install.)
 		if (o.claims)
 			Subscribe<FramePoint::ClaimsInstalled>([](const On<FramePoint::ClaimsInstalled>&) { ObservePlayerClaims(); });
-		// Prepass: the occlusion maps' compare (Skylight).
-		Skylight::Install();
+		// (Prepass: the occlusion maps' compare subscribes from Features/OcclusionMaps' install.)
 		if (o.capture)
 			Subscribe<FramePoint::PrepassEnd>([](const On<FramePoint::PrepassEnd>&) { CaptureParity::Get().Report(Scene::FrameView::Get().GetFrame(), 300); });
 		// The native lighting draws: the capture parity (the capture point's is the draws area's).

@@ -5,9 +5,8 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
+#include "Features/DrawcallLimitFix/Features/Lod/Diagnostics/LodGateEvents.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Publication.h"
 
 namespace DCLF::Features::Lod::Gates
 {
@@ -23,7 +22,7 @@ namespace DCLF::Features::Lod::Gates
 	void Published([[maybe_unused]] const Api::CoordinatorComponentContext& a_context)
 	{
 		// Before the deltas are taken: the observers read the flips pending (the component's deltas pending, Flips; none, nothing to check).
-		Diagnostics::Notify<Diagnostics::ScenePoint::GateFlipsPublished>();
+		Diagnostics::Notify(GateFlipsPublished{});
 	}
 
 	void Adopt(const Api::AdoptionContext& a_context)
@@ -33,7 +32,7 @@ namespace DCLF::Features::Lod::Gates
 			return;
 		rs.any = true;
 		// The claims the frame installed (none when withdrawn: the frame is the engine's, and every later publication is post-swap).
-		const auto* claims = static_cast<const SetSnapshot*>(a_context.claims);
+		const void* claims = a_context.claims;
 		const std::uint64_t now = GateNowNs();
 		for (const auto& delta : a_context.deltas) {
 			const auto& flip = *static_cast<const GateFlip*>(delta.get());
@@ -41,7 +40,7 @@ namespace DCLF::Features::Lod::Gates
 			if (!claims)
 				++rs.withdrawn;
 			else
-				Diagnostics::Notify(Diagnostics::GateReleasing{ *claims, flip.token, flip.incoming, flip.outgoing, released });
+				Diagnostics::Notify(GateReleasing{ claims, flip.token, flip.incoming, flip.outgoing, released });
 			rs.flipToReleaseMs.push_back(GateMs(flip.flipNs, now));
 			rs.requestToReleaseMs.push_back(GateMs(flip.requestNs, now));
 			rs.flipToReleaseFrames.push_back(a_context.frame >= flip.flipFrame ? a_context.frame - flip.flipFrame : 0u);

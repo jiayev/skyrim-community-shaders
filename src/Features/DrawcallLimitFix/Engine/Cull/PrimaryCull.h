@@ -647,7 +647,7 @@ namespace DCLF
 			kOwnPlain,      // a stood-in plain entry: standInRoots
 			kOwnMixedFade,  // an admitted fade root with engine-drawn parts: ownedFade (not stood in)
 			kOwnFade,       // a stood-in fade root: standInRoots, ownedFade, standInList, the stand-in observers' (off TreeAnimation's animation list)
-			kOwnTree,       // ... a BSTreeNode: also the observers' trees (on TreeAnimation's tree list)
+			kOwnTree,       // ... a BSTreeNode: TreeWind's tree list takes it from the stand-in's roots
 		};
 		std::vector<std::uint8_t> ownState;
 		std::vector<const RE::NiAVObject*> ownRoot;

@@ -87,7 +87,7 @@ namespace DCLF::MaterialPort
 	SnapshotChange SnapshotChangeOf(const MaterialSnapshot& a_held, const MaterialSnapshot& a_new)
 	{
 		// BSIntrusiveRefCounted's count (+0x8, 4 bytes), then BSShaderMaterial's texCoordOffset/texCoordScale (+0xc, two buffers of 8 bytes
-		// each: +0xc..+0x2c, MaterialSources::TextureTransformsOf).
+		// each: +0xc..+0x2c, the texture transforms' fields).
 		constexpr std::size_t kCount = 0x8, kTransforms = 0xc, kTransformsEnd = 0x2c;
 		if (a_held.key != a_new.key || a_held.vtable != a_new.vtable || a_held.feature != a_new.feature || a_held.pbr != a_new.pbr ||
 			a_held.port != a_new.port || a_held.size != a_new.size || a_held.textureCount != a_new.textureCount)

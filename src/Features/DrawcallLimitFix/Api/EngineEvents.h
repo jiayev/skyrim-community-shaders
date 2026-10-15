@@ -18,8 +18,7 @@ namespace DCLF::Api
 
 	/**
 	 * @brief An observer of the primary cull's stood-in roots: the fade roots DCLF stands in for whole (state on the GPU alone; no engine
-	 * cull visits them), and the BSTreeNodes among them. Called per change, never per root; the roots are alive during the call (the
-	 * cut's snapshot holds them).
+	 * cull visits them). Called per change, never per root; the roots are alive during the call (the cut's snapshot holds them).
 	 *
 	 * - changed: render thread (the main thread), when the admitted entries' ownership moved (PrimaryCull::SyncFadeOwnership): the roots
 	 *   that left and joined, left first (a root in both stays). Optional.

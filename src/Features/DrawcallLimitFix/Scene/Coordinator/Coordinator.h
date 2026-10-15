@@ -158,8 +158,6 @@ namespace DCLF
 			std::uint64_t detachMoves = 0;  // detached geometries attached again in the same batch (kept, not erased)
 			std::uint64_t validationDrops = 0;
 			std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> ineligible{};
-			// Decal candidates this frame, by group (ObjectDecalGroup - 1).
-			std::array<std::uint32_t, 3> decals{};
 			// Objects bound with the screen-door fade (AdditionalAlphaMask), summed until TakeFadingDrawn (fades are brief).
 			std::uint32_t fadingDrawn = 0;
 			std::uint32_t fadingFrames = 0;  // frames in that sum with at least one
@@ -1278,12 +1276,12 @@ namespace DCLF
 		/** @brief Whether the commit runs live: a component asked (SetCommitLive) or an entry is vetoed. */
 		bool CommitLive() const;
 		/**
-		 * @brief The coordinator's report pass at a text point (Api::ReportPoint::SceneCoordinatorSegments): the features' text lines and the
+		 * @brief The coordinator's report pass at a text point (Api::ReportPoint::SceneCoordinatorSegments, ...Materials, ...Delta): the features' text lines and the
 		 * components' (Api::ReportLines::componentText, with the component's context) there, in registration order.
 		 */
 		void ComponentsReportText(Api::ReportPoint a_point, std::string& a_text);
 		/**
-		 * @brief The coordinator's report pass at a logged point (Api::ReportPoint::SceneCoordinatorGates): the features' lines (handed
+		 * @brief The coordinator's report pass at a logged point (Api::ReportPoint::SceneCoordinatorGates, ...LastPass): the features' lines (handed
 		 * a_frame) and the components' text (with the component's context), each logged as one line when not empty, in registration order.
 		 */
 		void ComponentsReportLines(Api::ReportPoint a_point, std::uint32_t a_frame);

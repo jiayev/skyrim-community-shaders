@@ -42,9 +42,11 @@ namespace DCLF::Features::Effects
 
 	// EffectMaterial.cpp: the material port's registration (kind 1: kMaterialKindEffect, checked).
 	void RegisterPort(Api::InstallContext& a_context);
-	// EffectProperty.cpp: the port's capture (in the read window) and shading (per shading item) callbacks.
+	// EffectProperty.cpp: the port's capture (in the read window), shading (per shading item) and emissive (per external emittance
+	// re-point) callbacks.
 	void CaptureEffectProperty(const Api::MaterialPortCapture& a_capture);
 	void SampleEffectShading(Api::MaterialPortShading& a_shading);
+	const void* EffectEmissive(const RE::BSShaderProperty& a_property);
 	// EffectPrograms.cpp: the program family's registration.
 	void RegisterPrograms(Api::InstallContext& a_context);
 	// EffectFrame.cpp: the frame constant rows' and the frame texture's registrations.

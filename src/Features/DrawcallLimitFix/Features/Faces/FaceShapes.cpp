@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,11 @@ namespace DCLF::Features::Faces
 			std::vector<const RE::BSFaceGenNiNode*> facePublished, faceStale;
 			// Each listed shape's head (a key) while it is listed in faceHeads; its entry goes with the tracked entry.
 			ankerl::unordered_dense::map<const RE::BSGeometry*, const RE::BSFaceGenNiNode*> listedHeads;
+			// The delta walks since the last report and their publications (WalkScheduling's counts), for the scene delta line.
+			struct Counts
+			{
+				std::uint64_t walks = 0, published = 0, updated = 0, written = 0;
+			} counts;
 			// The regions as they were before the walk parity's dense walk, put back after it (the dense walk writes them).
 			struct Saved
 			{
@@ -198,12 +204,26 @@ namespace DCLF::Features::Faces
 		void Scheduling(const Api::CoordinatorComponentContext& a_context, Api::WalkScheduling& a_scheduling)
 		{
 			auto& state = a_context.State<FaceShapes>();
+			++state.counts.walks;
 			if (a_scheduling.full) {
 				state.facePublished.clear();
 				state.faceStale.clear();
 				return;
 			}
 			ApplyFacePublications(a_context, state, a_scheduling);
+			state.counts.published += a_scheduling.events;
+			state.counts.updated += a_scheduling.updated;
+			state.counts.written += a_scheduling.written;
+		}
+
+		// Its fragment of the scene delta line (Api::ReportPoint::SceneCoordinatorDelta), a frame being a delta walk, as the line's.
+		void DeltaLine(const Api::CoordinatorComponentContext& a_context, std::string& a_text)
+		{
+			auto& c = a_context.State<FaceShapes>().counts;
+			const double n = static_cast<double>(std::max<std::uint64_t>(c.walks, 1));
+			a_text += fmt::format("; face publications {:.1f}/frame: {:.1f} streams updated in place, {:.2f} shapes written", c.published / n, c.updated / n,
+				c.written / n);
+			c = {};
 		}
 
 		void WalkEnded(const Api::CoordinatorComponentContext& a_context)
@@ -369,11 +389,13 @@ namespace DCLF::Features::Faces
 
 	void RegisterShapes(Api::InstallContext& a_context, bool a_taken)
 	{
-		a_context.RegisterCoordinatorComponent({ .name = "faces",
+		const auto component = a_context.RegisterCoordinatorComponent({ .name = "faces",
 			.make = &Make,
 			.walk = { .begun = &WalkBegun, .scheduling = &Scheduling, .ended = &WalkEnded },
 			.dense = { .begun = &DenseBegun, .ended = &DenseEnded },
 			.retirement = { .reset = &Reset, .forgot = &Forgot, .forgotAll = &ForgotAll, .recycled = &Recycled },
 			.entryClass = { .follows = Api::EntryClass::FaceShape, .takes = a_taken, .listed = &Listed, .resolve = &Resolve, .streamed = &Streamed } });
+		// The heads' publications, in the coordinator's scene delta line.
+		a_context.RegisterReportLines({ .name = "face publications", .point = Api::ReportPoint::SceneCoordinatorDelta, .component = component, .componentText = &DeltaLine });
 	}
 }
