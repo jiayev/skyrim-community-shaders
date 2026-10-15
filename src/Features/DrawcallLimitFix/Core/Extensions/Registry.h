@@ -13,8 +13,8 @@ namespace DCLF::Extensions
 {
 	/**
 	 * @brief Main thread, at PostPostLoad, before DCLF's threads start (the shell, after DCLF's own engine hooks, before
-	 * SceneScheduler::Graph and the shell's hooks): every feature's install, in a_features' order, then the draw families Core still
-	 * registers itself (Draws::InstallCoreDrawFamilies), then the resolutions. Once; a second call fails.
+	 * SceneScheduler::Graph and the shell's hooks): every feature's install, in a_features' order, then the resolutions. Once; a second
+	 * call fails.
 	 */
 	void InstallFeatures(std::span<const Api::Feature> a_features);
 	/**

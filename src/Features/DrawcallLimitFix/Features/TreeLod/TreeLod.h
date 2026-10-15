@@ -1,16 +1,21 @@
 #pragma once
 
-// TreeLod (CS_DCLF_LOD_TREES): the tree LOD instances (the BSDistantTreeShaderProperty shapes under the LOD trees root) drawn by Core's
-// tree LOD path in the engine's place, from the mirrored instance records. The feature registers its switches (CS_DCLF_LOD_TREES, the
-// audit's CS_DCLF_TREE_LOD_AUDIT), its live toggle and the tree LOD class's contribution (Api::ObjectClass::TreeLod, Api/ObjectContributors.h:
-// DecideTreeLod, the revisions' trees pipelines and a trees view's tree LOD per face read it as data), installs the source of Core's tree
-// LOD channel at its early hooks (TreeLodHooks.cpp: the refill, block update, AddGroup and RemoveGroup, pushing onto TreeLod::events),
-// and runs the audit of the open defect it probes (Diagnostics/TreeLodAudit.cpp).
+// TreeLod (CS_DCLF_LOD_TREES): the tree LOD instances (the BSDistantTreeShaderProperty shapes under the LOD trees root) drawn in the
+// engine's place, from the mirrored instance records, as the TreeInstances draw family (Api/DrawFamilies.h). The feature registers its
+// switches (CS_DCLF_LOD_TREES, the audit's CS_DCLF_TREE_LOD_AUDIT), its live toggle and the tree LOD class's contribution
+// (Api::ObjectClass::TreeLod, which gates the family), installs the source of its channel at its early hooks (TreeLodHooks.cpp: the refill,
+// block update, AddGroup and RemoveGroup, pushing onto events) and keeps the render thread's mirror (TreeLodMirror.h, drained by the
+// family's serve). It draws it: the tables as scene resources, with what they post with the revision's inputs and latch in the depth
+// commit, and the depth commit's uploads as a commit hook (TreeLodTables.cpp); TreeLodCullCS in the depth segment's two phases and the
+// counts' readback as GPU stages (TreeLodPasses.cpp); the family - its frame's decision and program source, its depth and colour draws
+// (TreeLodDraws.cpp) and a trees view's faces (TreeLodFaces.cpp: the per-face cull, draw and row, the lists' units). Its report lines
+// (Diagnostics/TreeLodReport.cpp), the mirror's parity (Diagnostics/TreeLodParity.cpp) and the audit of the open defect it probes
+// (Diagnostics/TreeLodAudit.cpp) are its own.
 //
-// Core keeps the channel and the mirror (Scene/Ports/TreeLod.h, drained by FrameView), the GPU path that draws it (the tables and their
-// uploads, TreeLodCullCS in the depth segment's two phases, the depth and colour draws, its pipelines in DrawPipelines, the revisions'
-// parts, DecideTreeLod), a trees view's tree LOD per face (the view engine's: Core/Render/Views/ViewTreeLod.cpp, the views' epochs),
-// PassCapture's withholding of the engine's tree LOD passes, the mirror's parity and the report lines of all of these.
+// Core keeps the family's slot (Core/Render/DrawFamilies/FamilySlots.h): its pipelines on the lane (DrawPipelines' tree LOD family,
+// ForwardPipelineKey::kForwardTreeLod) from the program source, the ownership it publishes from the decision (PassCapture's withholding of
+// the engine's tree LOD passes), the shapes key's part, a trees view's lists, rows and latch, the GPU layout the shaders mirror
+// (TreeInstancesLayout.h) and TreeLodCullCS.hlsl's place.
 // Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
@@ -20,8 +25,21 @@ namespace DCLF::Features::TreeLod
 	// TreeLodFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
 
-	// TreeLodHooks.cpp: the channel's source (the feature's early hooks), patched once at PostPostLoad; sets TreeLod::installed.
+	// TreeLodHooks.cpp: the channel's source (the feature's early hooks), patched once at PostPostLoad; sets installed (TreeLodMirror.h).
 	void InstallHooks();
+
+	// TreeLodTables.cpp: the tables (scene resources) and the depth commit's uploads (commit hook).
+	void RegisterTables(Api::InstallContext& a_context);
+	// TreeLodPasses.cpp: the cull in the depth segment's two phases and the counts' readback (GPU stages).
+	void RegisterStages(Api::InstallContext& a_context);
+	// TreeLodDraws.cpp: the TreeInstances draw family (after the tables: its resources).
+	void RegisterFamily(Api::InstallContext& a_context);
+	// TreeLodFaces.cpp: the family's part in a trees view's faces.
+	Api::DrawFamilyContribution::Faces FacesContribution();
+	// Diagnostics/TreeLodReport.cpp: the draws' and the mirror's report lines.
+	void RegisterReport(Api::InstallContext& a_context);
+	// Diagnostics/TreeLodParity.cpp: CS_DCLF_PERSISTENT_PARITY's mirror check (Diagnostics::Observe().scene).
+	void SubscribeParity();
 
 	// Diagnostics/TreeLodAudit.cpp: CS_DCLF_TREE_LOD_AUDIT=1 (a_switch), main thread at the scene frame's start (FrameBegin), with or
 	// without DCLF: the attached tree LOD blocks' instances (BGSDistantTreeBlock) against their references. An instance shown while its

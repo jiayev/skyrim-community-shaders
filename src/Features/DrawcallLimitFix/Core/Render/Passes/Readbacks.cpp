@@ -1,78 +1,10 @@
-// The GPU-to-host copies: tree LOD's list counts and the fade and visibility event rings.
+// The GPU-to-host copies: the fade and visibility event rings.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
 
 namespace DCLF::Draws
 {
-	struct TreeLodReadbackBindings
-	{
-		org::ResourceBindingToken visible;
-	};
-
-	struct TreeLodReadbackPrepared
-	{
-		std::shared_ptr<SceneBuffers::TreeLodCounts> counts;
-	};
-
-	/** @brief Copies tree LOD's list header to the frame slot's host buffer after phase 2, first summing what the slot held. */
-	class TreeLodReadbackPass final : public org::TypedRenderGraphPass<TreeLodReadbackPass, TreeLodReadbackPrepared, TreeLodReadbackBindings>
-	{
-	public:
-		explicit TreeLodReadbackPass(std::shared_ptr<SceneBuffers> a_scene) :
-			scene(std::move(a_scene)) {}
-
-		TreeLodReadbackBindings Declare(org::PassBuilder& a_builder)
-		{
-			return { a_builder.CopySource(*scene->treeLodVisible) };
-		}
-
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			a_out.push_back(NamedSerial(a_preparation, scene->treeLodVisible));
-		}
-
-		TreeLodReadbackPrepared Prepare(const TreeLodReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
-		{
-			return { scene->treeLodCounts };
-		}
-
-		static void Record(const TreeLodReadbackBindings& a_bindings, const TreeLodReadbackPrepared& a_frame, org::PassRecordContext& a_recording)
-		{
-			if (!a_frame.counts)
-				return;
-			auto& counts = *a_frame.counts;
-			const std::uint32_t slot = a_recording.FrameSlot();
-			if (slot >= counts.readback.size())
-				return;
-			if (counts.filled[slot]) {
-				auto resource = counts.readback[slot]->GetAPIResource();
-				void* mapped = nullptr;
-				resource.Map(&mapped);
-				if (mapped) {
-					TreeLod::VisibleHeader header;
-					std::memcpy(&header, mapped, sizeof(header));
-					counts.frames.fetch_add(1, std::memory_order_relaxed);
-					counts.phaseOne.fetch_add(header.phaseOne[1], std::memory_order_relaxed);
-					counts.retests.fetch_add(header.retests, std::memory_order_relaxed);
-					counts.phaseTwo.fetch_add(header.phaseTwo[1], std::memory_order_relaxed);
-					resource.Unmap(0, 0);
-				}
-			}
-			a_recording.Commands().CopyBufferRegion(counts.readback[slot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.visible).GetHandle(), 0,
-				sizeof(TreeLod::VisibleHeader));
-			counts.filled[slot] = 1;
-		}
-
-	private:
-		std::shared_ptr<SceneBuffers> scene;
-	};
-
-	std::shared_ptr<org::RenderPass> MakeTreeLodReadbackPass(std::shared_ptr<SceneBuffers> a_scene)
-	{
-		return std::make_shared<TreeLodReadbackPass>(std::move(a_scene));
-	}
-
 	struct EventReadbackBindings
 	{
 		org::ResourceBindingToken events;

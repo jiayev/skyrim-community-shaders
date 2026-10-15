@@ -79,13 +79,6 @@ namespace DCLF::Draws
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-object-reported"), a_scene.visibilityObjectReported);
 			}
 		}
-		if (a_scene.treeLodCull) {
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-shapes"), a_scene.treeLodShapes);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-instances"), a_scene.treeLodInstances);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-meshes"), a_scene.treeLodMeshes);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-draw"), a_scene.treeLodDraw);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-visible"), a_scene.treeLodVisible);
-		}
 	}
 
 	namespace

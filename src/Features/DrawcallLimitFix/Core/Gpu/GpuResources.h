@@ -30,7 +30,7 @@ namespace DCLF
  *
  * One instance per thread domain, each its maps' only user (no lock): Scene() is the scene work's - the pass's thread (the scene
 	 * lane, or the render thread for an inline pass): the walk's prologue, prefetch and merges (ResolveGeometrySource); Frame() is the
-	 * render thread's - tree LOD's meshes, at the depth commit (TreeLod::Mirror::TakeChanges). A buffer both lease is resolved by each
+	 * render thread's - tree LOD's meshes, at the depth commit (Features/TreeLod's Mirror::TakeChanges). A buffer both lease is resolved by each
 	 * under a reference of its own (a description is idempotent; DXVK's interop is callable from any thread). A lease may be released on any thread (its removal queued, lock-free); GetStats may be read on any thread.
 	 *
 	 * Every description is taken under a reference on the buffer, held until a lease takes it over: a description is only the

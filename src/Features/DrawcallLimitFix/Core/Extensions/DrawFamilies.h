@@ -2,8 +2,9 @@
 
 // The draw family contract's Core side (Api/DrawFamilies.h): each family's entry, resolved once at InstallFeatures (ResolveDrawFamilies)
 // from its registration (a family no feature takes has none: its passes and requirements are left out), the contexts its callbacks are
-// handed, and the calls Core makes at the frame's start. Core's slot per family (its pipelines, pass names and ownership) is
-// Core/Render/DrawFamilies/FamilySlots.h; the main passes and a trees view's faces call the entries' callbacks there.
+// handed (their Core service: DrawFamilyFrame::Pipelines, Core/Render/DrawFamilies/FamilyDecisions.cpp), and the serve Core makes at the
+// frame requests. Core's slot per family (its pipelines, pass names and ownership) is Core/Render/DrawFamilies/FamilySlots.h; the frame's
+// decisions are IndirectDraws::DecideDrawFamilies'; the main passes and a trees view's faces call the entries' callbacks there.
 
 #include "Features/DrawcallLimitFix/Api/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -31,8 +32,9 @@ namespace DCLF
 	{
 		struct SceneBuffers;
 		struct ViewResources;
+		struct UnitGroup;
 	}
-	namespace TreeLod
+	namespace TreeInstances
 	{
 		struct DrawRow;
 	}
@@ -40,13 +42,23 @@ namespace DCLF
 
 namespace DCLF::Api
 {
-	class InstallContext;
-
-	/** @brief The frame a family's frame callbacks run in (render thread): FrameView's number. */
+	/**
+	 * @brief The frame a family's frame callbacks run in (render thread): FrameView's number; for decide, the scene's tables (null at
+	 * serve) and the family.
+	 */
 	class DrawFamilyFrame
 	{
 	public:
 		std::uint32_t frame = 0;
+		Draws::SceneBuffers* scene = nullptr;
+		DrawFamily family = DrawFamily::Count;
+
+		/**
+		 * @brief decide's: Core's pipeline lane for the family's slot - posts its program source (frame.programSource) and asks for its
+		 * pipelines, counting the frame's wait for them; true once the frame's catalog has them and a_drawable (what else its draws need,
+		 * the feature's), and then they are the slot's for the passes (published: Draws::FamilyPipelinesOf).
+		 */
+		bool Pipelines(bool a_drawable) const;
 	};
 
 	/**
@@ -60,19 +72,19 @@ namespace DCLF::Api
 		const Draws::SceneBuffers& scene;
 		const Draws::ViewResources* view;
 		std::span<org::ResourceBindingToken> arguments;
+		std::uint64_t row = 0;  // the main pass's (out): the draw row's address its records read, fixed with the family's tables
 	};
 
 	/**
-	 * @brief A main pass execution's preparation: its revision (what moves it) and its prepare (out: what its record draws with, null
-	 * for nothing this execution, and the draw row's address).
+	 * @brief A main pass execution's revision (each preparation): the preparation, the scene's tables, and the slot's pipelines as the
+	 * lane published them (null: none yet), which the execution draws with.
 	 */
-	class DrawFamilyPrepare
+	class DrawFamilyRevision
 	{
 	public:
 		const org::FramePreparationContext& preparation;
 		const Draws::SceneBuffers& scene;
-		std::shared_ptr<const void> drawn;
-		std::uint64_t row = 0;
+		const std::shared_ptr<const void>& pipelines;
 	};
 
 	/** @brief Which execution a family's draw is recorded in. */
@@ -85,8 +97,9 @@ namespace DCLF::Api
 	};
 
 	/**
-	 * @brief A family's draw (the pass's recording, inside its render pass): the commands, the execution, what prepare gave (main), the
-	 * draw row's address, the declared arguments resolved, and for a face the view's forward pipeline and the family's draw signature.
+	 * @brief A family's draw (the pass's recording, inside its render pass): the commands, the execution, the slot's pipelines it draws
+	 * with (main), the draw row's address, the declared arguments resolved, and for a face the view's forward pipeline and the family's
+	 * draw signature.
 	 */
 	class DrawFamilyRecord
 	{
@@ -99,7 +112,7 @@ namespace DCLF::Api
 		rhi::PipelineHandle pipeline;
 		rhi::CommandSignatureHandle signature;
 
-		/** @brief What prepare gave, as the family's type. */
+		/** @brief The slot's pipelines (main), as the lane's type (TreeLodPipelines). */
 		template <class T>
 		const T& Drawn() const
 		{
@@ -117,15 +130,33 @@ namespace DCLF::Api
 	/**
 	 * @brief A trees view's epoch commit (render thread): the scene's tables, whether the view draws the family this execution (its
 	 * shape's pipeline, its own pipeline and the faces' ownership: DecideViewTreeLod), the row the faces' latch takes (out), and what
-	 * the execution holds (a texture the row binds).
+	 * the execution holds (a texture the row binds). Without owners, the faces' decision (DecideViewTreeLod, viewDraws true): only
+	 * whether the last depth commit's row draws, nothing bound.
 	 */
 	class DrawFamilyFaceRow
 	{
 	public:
 		const Draws::SceneBuffers& scene;
 		bool viewDraws;
-		TreeLod::DrawRow& row;
-		std::vector<std::shared_ptr<const void>>& owners;
+		TreeInstances::DrawRow& row;
+		std::vector<std::shared_ptr<const void>>* owners;
+	};
+
+	/**
+	 * @brief A trees view's faces' lists (Core's ViewResources, one per face), whose units are the family's tables' (render thread or the
+	 * snapshot builder): the scene's tables and the words the family's scene resources posted with the revision's inputs (the
+	 * requirement's; empty elsewhere); out: the tables the lists hold units with (into tables, the producer's: the shapes are made at the
+	 * least any of them holds), the units the revision requires of the lists (from inputs) and what the tables' current versions hold (a
+	 * new list's first units).
+	 */
+	class DrawFamilyLists
+	{
+	public:
+		const Draws::SceneBuffers& scene;
+		std::span<const std::uint32_t> inputs;
+		Draws::UnitGroup* tables = nullptr;
+		std::uint64_t required = 0;
+		std::uint32_t current = 0;
 	};
 }
 
@@ -150,17 +181,9 @@ namespace DCLF::Extensions
 	/** @brief Whether a_family is DCLF's under a_toggles: taken, its class's toggle on. */
 	bool DrawFamilyOn(const ToggleSet& a_toggles, Api::DrawFamily a_family);
 
-	/** @brief Render thread, FrameView's frame requests (running or not): every taken family's serve, in family order. */
-	void ServeDrawFamilies(std::uint32_t a_frame);
-	/** @brief Render thread, the frame's start before the main camera's cull: every taken family's decide, in family order. */
-	void DecideDrawFamilies(std::uint32_t a_frame);
-}
-
-namespace DCLF::Draws
-{
 	/**
-	 * @brief Main thread, InstallFeatures, after the features' installs: the families Core draws itself until their features take them
-	 * (Core/Render/DrawFamilies/TreeInstances.cpp: tree LOD's instances, with its stages), each only while its class has a toggle.
+	 * @brief Render thread, FrameView's frame requests (running or not): every taken family's serve, in family order. (Their decide is
+	 * IndirectDraws::DecideDrawFamilies', which publishes its result.)
 	 */
-	void InstallCoreDrawFamilies(Api::InstallContext& a_context);
+	void ServeDrawFamilies(std::uint32_t a_frame);
 }

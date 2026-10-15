@@ -4,26 +4,26 @@
 // refilled between a drain and the check: a shape that differs counts as late when its Add arrives at the next drain, and as differing
 // only when it does not.
 
-#include "SceneObservers.h"
-#include "SceneState.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodEvents.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodParity.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
-#include "TreeLodEvents.h"
-
-namespace DCLF::Diagnostics
+namespace DCLF::Features::TreeLod
 {
 	namespace
 	{
-		using V = SceneView;
-
-		void CheckParity(const TreeLod::Mirror& a_mirror)
+		void CheckParity(const Mirror& a_mirror)
 		{
-			auto& stats = SceneDiagnostics().treeLod;
+			auto& stats = ParityState();
 			auto& suspects = stats.suspects;
-			const auto& groups = V::treeLodGroups(a_mirror);
+			const auto& groups = a_mirror.MirroredGroups();
 			++stats.checks;
-			auto* root = TreeLod::LodTreesRoot();
+			auto* root = LodTreesRoot();
 			ankerl::unordered_dense::set<const void*> live;
-			std::vector<TreeLod::Instance> packed;
+			std::vector<TreeInstances::Instance> packed;
 			auto note = [&](std::string&& a_text) {
 				if (stats.first.empty())
 					stats.first = std::move(a_text);
@@ -31,7 +31,7 @@ namespace DCLF::Diagnostics
 			if (root) {
 				for (const auto& child : root->GetChildren()) {
 					auto* shape = child ? child->AsGeometry() : nullptr;
-					if (!TreeLod::IsTreeLodShape(shape))
+					if (!TreeInstances::IsEngineShape(shape))
 						continue;
 					live.insert(shape);
 					++stats.shapes;
@@ -47,7 +47,7 @@ namespace DCLF::Diagnostics
 						++stats.unsettled;
 						continue;
 					}
-					TreeLod::PackGroup(block.allVisible, group, packed);
+					PackGroup(block.allVisible, group, packed);
 					if (packed == it->second.instances)
 						continue;
 					std::size_t at = 0;
@@ -55,7 +55,7 @@ namespace DCLF::Diagnostics
 						++at;
 					std::string fields;
 					if (at < packed.size() && at < it->second.instances.size())
-						for (std::size_t f = 0; f < TreeLod::kInstanceShorts; ++f)
+						for (std::size_t f = 0; f < TreeInstances::kInstanceShorts; ++f)
 							if (packed[at].shorts[f] != it->second.instances[at].shorts[f])
 								fields += fmt::format(" [{}] {:#06x} mirrored, {:#06x} packed", f, it->second.instances[at].shorts[f], packed[at].shorts[f]);
 					suspects[shape] = fmt::format("{} records mirrored, {} packed now; record {}:{}", it->second.instances.size(), packed.size(), at, fields);
@@ -71,7 +71,7 @@ namespace DCLF::Diagnostics
 
 		void OnEventDrained(const TreeLodEventDrained& a_event)
 		{
-			auto& stats = SceneDiagnostics().treeLod;
+			auto& stats = ParityState();
 			if (!stats.suspects.empty() && stats.suspects.erase(a_event.shape))
 				++stats.late;
 		}
@@ -79,21 +79,27 @@ namespace DCLF::Diagnostics
 		void OnDrained(const TreeLodDrained& a_event)
 		{
 			// Suspects with no event since the check: the mirror missed a refill.
-			auto& stats = SceneDiagnostics().treeLod;
+			auto& stats = ParityState();
 			for (auto& [shape, text] : stats.suspects) {
 				++stats.differ;
 				if (stats.first.empty())
 					stats.first = std::move(text);
 			}
 			stats.suspects.clear();
-			if (ParityDue(a_event.frame) && std::exchange(stats.frame, a_event.frame) != a_event.frame)
+			if (Diagnostics::ParityDue(a_event.frame) && std::exchange(stats.frame, a_event.frame) != a_event.frame)
 				CheckParity(a_event.mirror);
 		}
 	}
 
-	void InstallTreeLodParity()
+	TreeLodParityState& ParityState()
 	{
-		Subscribe<TreeLodEventDrained>(OnEventDrained);
-		Subscribe<TreeLodDrained>(OnDrained);
+		static TreeLodParityState state;
+		return state;
+	}
+
+	void SubscribeParity()
+	{
+		Diagnostics::Subscribe<TreeLodEventDrained>(OnEventDrained);
+		Diagnostics::Subscribe<TreeLodDrained>(OnDrained);
 	}
 }

@@ -304,13 +304,14 @@ namespace DCLF::Extensions
 
 			void RegisterDrawFamily(const Api::DrawFamilyContribution& a_family) override
 			{
-				// Its class's toggle gates it; its frame and main callbacks always, its faces' all or none.
+				// Its class's toggle gates it, its scene resources (registered before) are its tables; its frame and main callbacks always,
+				// its faces' all or none.
 				const auto& main = a_family.main;
 				const auto& faces = a_family.faces;
-				const int facesSet = (faces.makeCull ? 1 : 0) + (faces.declare ? 1 : 0) + (faces.record ? 1 : 0) + (faces.row ? 1 : 0);
+				const int facesSet = (faces.makeCull ? 1 : 0) + (faces.declare ? 1 : 0) + (faces.record ? 1 : 0) + (faces.row ? 1 : 0) + (faces.lists ? 1 : 0);
 				if (a_family.family >= Api::DrawFamily::Count || a_family.objectClass >= Api::ObjectClass::Count ||
-					!lists.objectClasses[static_cast<std::size_t>(a_family.objectClass)] || !a_family.frame.decide || !a_family.frame.programSource ||
-					!main.declare || !main.revision || !main.prepare || !main.record || (facesSet != 0 && facesSet != 4))
+					!lists.objectClasses[static_cast<std::size_t>(a_family.objectClass)] || a_family.resources.index >= lists.sceneResources.size() ||
+					!a_family.frame.decide || !a_family.frame.programSource || !main.declare || !main.revision || !main.record || (facesSet != 0 && facesSet != 5))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete draw family contribution", feature));
 				auto& entry = lists.drawFamilies[static_cast<std::size_t>(a_family.family)];
 				if (entry.family != Api::DrawFamily::Count)
@@ -347,10 +348,6 @@ namespace DCLF::Extensions
 			if (feature.install)
 				feature.install(context);
 		}
-		// The draw families Core still draws itself, after the features (their classes' toggles registered; their stages after the
-		// features' at the slots they share).
-		context.feature = "Core";
-		Draws::InstallCoreDrawFamilies(context);
 		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations.
 		ResolveViews(lists.views, lists.viewWork);

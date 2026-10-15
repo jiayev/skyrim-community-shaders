@@ -1,5 +1,5 @@
 // CS_DCLF_TREE_LOD_AUDIT: the open defect's probe (dclf-open-defects.md, "Tree LOD instances the engine leaves hidden after allVisible"),
-// main thread at the scene frame's start, with or without DCLF: the attached tree LOD blocks' instances against their references (TreeLod.h).
+// main thread at the scene frame's start, with or without DCLF: the attached tree LOD blocks' instances against their references (TreeLodMirror.h).
 
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"

@@ -28,7 +28,7 @@ namespace DCLF::Diagnostics
 		static const auto& perFrameSet(const Store& s) { return s.perFrameSet; }
 		static const RE::NiNode* firstViewRoot(const Store& s) { return s.FirstViewRoot(); }
 
-		// The render thread's (Scene::FrameView): its frame, its captures' and constants' counters, tree LOD's mirror.
+		// The render thread's (Scene::FrameView): its frame, its captures' and constants' counters.
 		using Frame = Scene::FrameView;
 		static std::uint32_t frame() { return Frame::Get().frame; }
 		static const auto& projectedTextures() { return Frame::Get().projectedTextures; }
@@ -36,7 +36,6 @@ namespace DCLF::Diagnostics
 		static auto& geometryStats() { return Frame::Get().geometryStats; }
 		static auto& pipelinesPosted() { return Frame::Get().pipelinesPosted; }
 		static auto& shadingFrames() { return Frame::Get().shadingFrames; }
-		static auto& treeLod() { return Frame::Get().treeLod; }
 		static auto& captureNs() { return Frame::Get().captureNs; }
 		static auto& categoryCaptureNs() { return Frame::Get().categoryCaptureNs; }
 		static auto& categoryCapturesMade() { return Frame::Get().categoryCapturesMade; }
@@ -129,9 +128,6 @@ namespace DCLF::Diagnostics
 		using LodGate = Scene::Coordinator::LodGate;
 		static const auto& gateFlipsMade(const Store& s) { return s.gateFlipsMade; }
 		static const SetSnapshot* publicationClaims(const Store& s) { return s.publicationClaims.get(); }
-
-		// Tree LOD's mirror.
-		static const auto& treeLodGroups(const TreeLod::Mirror& m) { return m.groups; }
 
 		// The mirror's records and its report's counters.
 		static const auto& mirrorNodes(const SceneMirror& m) { return m.nodes; }

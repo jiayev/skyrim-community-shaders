@@ -45,12 +45,4 @@ namespace DCLF::Extensions
 			if (entry.taken && entry.contribution.frame.serve)
 				entry.contribution.frame.serve(frame);
 	}
-
-	void DecideDrawFamilies(std::uint32_t a_frame)
-	{
-		const Api::DrawFamilyFrame frame{ a_frame };
-		for (const auto& entry : Entries())
-			if (entry.taken)
-				(void)entry.contribution.frame.decide(frame);
-	}
 }

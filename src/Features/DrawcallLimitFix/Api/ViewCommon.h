@@ -15,7 +15,7 @@ namespace DCLF::Api
 	enum class ViewPoint : std::uint8_t
 	{
 		FrameStartBeforeCoverage,  // FrameDriver::BeginFrame, after SyncFrameTables, before SunAccumulation::BeginFrame and DecideCoverage
-		FrameStartAfterTreeLod,    // FrameDriver::BeginFrame, after DecideTreeLod, before PublishListFilter and FrameValues::Kick
+		FrameStartAfterTreeLod,    // FrameDriver::BeginFrame, after DecideDrawFamilies (tree LOD's), before PublishListFilter and FrameValues::Kick
 		DepthCommitted,            // Main::RenderDepth's world-drawn point, right after the depth commit (FrameDriver::DepthCommitted)
 		Count,
 	};

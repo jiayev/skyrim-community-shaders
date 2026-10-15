@@ -1,23 +1,24 @@
 #pragma once
 
+// Tree LOD's channel and mirror: the engine's tree LOD groups by events (pushed by the feature's hooks, TreeLodHooks.cpp), and the render
+// thread's mirror of them in slots for the TreeInstances family's tables (Core/Render/DrawFamilies/TreeInstancesLayout.h), drained at the
+// frame requests (the family's serve) and uploaded by the depth commit (TreeLodTables.cpp). Included by the feature's sources only.
+
 #include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <winrt/base.h>
 
+#include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/TreeInstancesLayout.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 
 struct ID3D11Buffer;
 
-namespace DCLF::Diagnostics
-{
-	struct SceneView;
-}
-
-namespace DCLF::TreeLod
+namespace DCLF::Features::TreeLod
 {
 	/*
 	 * Tree LOD (AE 1.6.1170; dclf-lod.md, "Tree LOD: what the engine does").
@@ -30,21 +31,6 @@ namespace DCLF::TreeLod
 	 * (FUN_1405033d0) before it detaches the shape. So the records the engine draws exist at those two calls only: the mirror
 	 * takes them there, as events, and never reads the blocks per frame.
 	 */
-	inline constexpr std::uint32_t kMaxGroupInstances = 75;  // the refill's cap (0x4B), and the property's (+0x88)
-	inline constexpr std::uint32_t kInstanceShorts = 16;     // shorts per instance record (AddGroup's p2)
-
-	/**
-	 * @brief One instance record, as the refill packs it (FUN_140504a40), halfs unless noted:
-	 * [0..2] position (InstanceData x, y, z, block-relative); [3] scale, 0 when hidden (the block's allVisible ignores hidden);
-	 * [4] cos and [5] sin of rotZ; [6] alpha (InstanceData::alpha, copied); [7] 1.0; [8..15] zero.
-	 * DistantTree.hlsl reads it as TEXCOORD4 (position, scale) and TEXCOORD5 (cos, sin, alpha, 1).
-	 */
-	struct Instance
-	{
-		std::array<std::uint16_t, kInstanceShorts> shorts{};
-		bool operator==(const Instance&) const = default;
-	};
-	static_assert(sizeof(Instance) == 32);
 
 	/** @brief A shape's mesh (its tree type's base shape's renderer data), as AddGroup's shape holds it. */
 	struct MeshSource
@@ -69,9 +55,9 @@ namespace DCLF::TreeLod
 		const void* shape = nullptr;  // a key: never dereferenced by the drain
 		const void* block = nullptr;  // BGSDistantTreeBlock and TreeGroup, for the parity's repack (Add)
 		const void* group = nullptr;
-		std::vector<Instance> instances;
+		std::vector<TreeInstances::Instance> instances;
 		Kind kind = Kind::Add;
-		bool intended = false;  // packed by the rule after a block update, not given to AddGroup (TreeLod.cpp, BlockUpdate)
+		bool intended = false;  // packed by the rule after a block update, not given to AddGroup (TreeLodMirror.cpp, BlockUpdate)
 		// An AddGroup's: the shape's placement, mesh and its type's extent (the larger of the type's width and height).
 		std::array<float, 3> translate{};
 		float extent = 0.0f;
@@ -81,7 +67,7 @@ namespace DCLF::TreeLod
 	/**
 	 * @brief The engine's tree LOD groups by events: pushed by the hooks (any thread: Push), drained by the render thread. The hooks
 	 * (the refill's two calls, the block update's call, the shape's AddGroup and RemoveGroup slots) are the source of this channel, the
-	 * tree LOD class's feature's early hooks (Features/TreeLod), which set installed once they are in.
+	 * feature's early hooks, which set installed once they are in.
 	 */
 	inline EventQueue<Event> events;
 	inline bool installed = false;
@@ -89,67 +75,12 @@ namespace DCLF::TreeLod
 	/** @brief The hooks' push, any thread: a_event onto events, counted when pushed off the drain's thread (TakeOffThread). */
 	void Push(Event&& a_event);
 
-	/** @brief Whether a geometry is a tree LOD shape: its shader property is a BSDistantTreeShaderProperty. Any thread. */
-	bool IsTreeLodShape(const RE::BSGeometry* a_shape);
 	/** @brief A group's records packed by the refill's rule (FUN_140504a40), with the engine's own conversions. */
-	void PackGroup(bool a_allVisible, const RE::BGSDistantTreeBlock::TreeGroup& a_group, std::vector<Instance>& a_out);
+	void PackGroup(bool a_allVisible, const RE::BGSDistantTreeBlock::TreeGroup& a_group, std::vector<TreeInstances::Instance>& a_out);
 	/** @brief The LOD trees root, the shapes' parent (0x14315b880). */
 	RE::NiNode* LodTreesRoot();
 	/** @brief The events the hooks pushed from another thread than the drain's since the last call (the report's). */
 	std::uint64_t TakeOffThread();
-
-	/*
-	 * The GPU's tables (TreeLodCullCS.hlsl, DistantTree.hlsl's DCLF_PULLED path), all read through device addresses:
-	 * - a shape row per shape slot, and kMaxGroupInstances instance records per shape slot (slot * 75 + i);
-	 * - a mesh row per mesh slot;
-	 * - the draw row, one, every depth commit's: the tables' addresses and the frame's texture, sampler and alpha reference;
-	 * - the visible list (VisibleHeader): the draws' arguments and the retest count, then the visible instances' indices, which
-	 *   the cull appends and the draws' vertex stage reads by its instance, then the retest list (phase 1's occluded instances,
-	 *   which phase 2 tests again against the rebuilt HZB), each a word per instance record the tables hold.
-	 */
-	struct ShapeRow
-	{
-		float translate[3]{};
-		std::uint32_t mesh = 0;
-		std::uint32_t count = 0;  // the slot's records; 0 for a free slot
-		float extent = 0.0f;      // the type's: an instance's bound is its scale times this, about its position
-		std::uint32_t pad[2]{};
-	};
-	static_assert(sizeof(ShapeRow) == 32);
-
-	struct MeshRow
-	{
-		std::uint64_t vertexAddress = 0;
-		std::uint64_t indexAddress = 0;  // R16 indices
-		std::uint32_t vertexStride = 0;
-		std::uint32_t indexCount = 0;
-		std::uint32_t texcoordOffset = 0;  // TEXCOORD0's, a half2; the position is a float4 at 0 (VertexInput.cpp)
-		std::uint32_t pad = 0;
-	};
-	static_assert(sizeof(MeshRow) == 32);
-
-	struct DrawRow
-	{
-		std::uint64_t instances = 0, shapes = 0, meshes = 0, visible = 0;  // visible: the list's indices (past the arguments)
-		std::uint32_t textureIndex = 0, samplerIndex = 0;
-		float alphaRef = 0.0f;
-		std::uint32_t shapeSlots = 0;
-		std::uint32_t maxIndices = 0;
-		std::uint32_t pad[3]{};
-	};
-	static_assert(sizeof(DrawRow) == 64);
-	/**
-	 * @brief The visible list's header (TreeLodCullCS.hlsl): three non-indexed DrawInstanced's arguments (the meshes' largest index
-	 * count, the instances, 0, 0) - phase 1's depth draw, phase 2's (its instances follow phase 1's in the list), the colour
-	 * pass's (both) - and the retest list's count. The depth commit writes it with no instances.
-	 */
-	struct VisibleHeader
-	{
-		std::uint32_t phaseOne[4]{}, phaseTwo[4]{}, colour[4]{};
-		std::uint32_t retests = 0, pad[3]{};
-	};
-	static_assert(sizeof(VisibleHeader) == 64);
-	inline constexpr std::uint32_t kVisibleHeaderWords = sizeof(VisibleHeader) / 4;
 
 	/**
 	 * @brief A mirrored group: its shape's records by the refill's rule, the block and group they were packed from, and its slot.
@@ -160,10 +91,10 @@ namespace DCLF::TreeLod
 	{
 		const void* block = nullptr;
 		const void* group = nullptr;
-		std::vector<Instance> instances;
+		std::vector<TreeInstances::Instance> instances;
 		std::uint32_t slot = 0;
 		const void* mesh = nullptr;
-		ShapeRow row;
+		TreeInstances::ShapeRow row;
 	};
 
 	/** @brief A mesh shared by the shapes of its tree type: its slot, its users, and its buffers' leases once resolved. */
@@ -172,7 +103,7 @@ namespace DCLF::TreeLod
 		std::uint32_t slot = 0;
 		std::uint32_t users = 0;
 		MeshSource source;
-		MeshRow row;
+		TreeInstances::MeshRow row;
 		std::shared_ptr<const void> vertexOwner, indexOwner;  // GpuResources leases
 		bool resolved = false, failed = false;
 	};
@@ -186,7 +117,8 @@ namespace DCLF::TreeLod
 	 * @brief The tree LOD mirror: every tree LOD shape the engine has, with the records it draws, in slots for the GPU's tables.
 	 * Render thread.
 	 *
-	 * Drain applies the events in push order (CS_DCLF_PERSISTENT_PARITY compares it with the LOD trees root's shapes: Diagnostics/Scene).
+	 * Drain applies the events in push order (CS_DCLF_PERSISTENT_PARITY compares it with the LOD trees root's shapes:
+	 * Diagnostics/TreeLodParity.cpp).
 	 *
 	 * The slots a drain changed (a shape's records or placement, a slot freed) and the meshes it added wait for the depth commit
 	 * (TakeChanges), which uploads them.
@@ -194,11 +126,15 @@ namespace DCLF::TreeLod
 	class Mirror
 	{
 	public:
+		using Groups = ankerl::unordered_dense::map<const void*, Group>;
+
 		void Drain(std::uint32_t a_frame);
 		std::size_t Size() const { return groups.size(); }
 		std::size_t InstanceCount() const;
 		/** @brief The adds, removes and rule writes since the last call (the report's). */
 		Stats TakeStats() { return std::exchange(stats, {}); }
+		/** @brief The mirrored groups by shape (the parity's). */
+		const Groups& MirroredGroups() const { return groups; }
 
 		/** @brief The shape slots' and mesh slots' high-water marks: what the GPU's tables must hold. */
 		std::uint32_t ShapeSlots() const { return static_cast<std::uint32_t>(slotGroups.size()); }
@@ -211,23 +147,22 @@ namespace DCLF::TreeLod
 		 */
 		void TakeChanges(std::vector<std::uint32_t>& a_slots, std::vector<std::uint32_t>& a_meshes);
 		/** @brief A shape slot's row (count 0 when free) and records. */
-		const ShapeRow& SlotRow(std::uint32_t a_slot) const;
-		const std::vector<Instance>* SlotInstances(std::uint32_t a_slot) const;
-		const MeshRow& MeshSlotRow(std::uint32_t a_slot) const;
+		const TreeInstances::ShapeRow& SlotRow(std::uint32_t a_slot) const;
+		const std::vector<TreeInstances::Instance>* SlotInstances(std::uint32_t a_slot) const;
+		const TreeInstances::MeshRow& MeshSlotRow(std::uint32_t a_slot) const;
 		/** @brief The largest index count of the meshes (the draw's vertices per instance). */
 		std::uint32_t MaxIndices() const { return maxIndices; }
 		/** @brief The leases of the meshes no shape draws any more, for the next execution to hold until it retires. */
 		std::vector<std::shared_ptr<const void>> TakeRetired() { return std::exchange(retired, {}); }
 
 	private:
-		friend struct Diagnostics::SceneView;  // the mirror's check (Diagnostics/Scene) reads the groups
 		std::uint32_t AcquireSlot();
 		void ReleaseSlot(std::uint32_t a_slot);
 		void MarkSlot(std::uint32_t a_slot);
 		const void* AddMeshUser(MeshSource&& a_source);
 		void RemoveMeshUser(const void* a_key);
 
-		ankerl::unordered_dense::map<const void*, Group> groups;
+		Groups groups;
 		// Slots: each slot's shape (null when free), the free ones, and the changed ones waiting for the commit.
 		std::vector<const void*> slotGroups;
 		std::vector<std::uint32_t> freeSlots;
@@ -241,4 +176,10 @@ namespace DCLF::TreeLod
 		std::uint32_t maxIndices = 0;
 		Stats stats;
 	};
+
+	/**
+	 * @brief The render thread's mirror (dclf-lod.md): the engine's tree LOD groups and their instance records, by events. Drained at the
+	 * frame requests, running or not (the family's serve); the depth commit uploads what it changed.
+	 */
+	Mirror& RenderMirror();
 }

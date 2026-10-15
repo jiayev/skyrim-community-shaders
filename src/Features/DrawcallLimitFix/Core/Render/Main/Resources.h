@@ -117,6 +117,7 @@ namespace DCLF::Draws
 		org::ResourceBindingToken sequences, count;
 		org::ResourceBindingToken pool, bucketCounts;  // the depth segment's plain draws
 		std::array<org::ResourceBindingToken, Extensions::kDrawFamilies> familyArguments;  // each draw family's arguments (DrawFamilyDeclare)
+		std::array<std::uint64_t, Extensions::kDrawFamilies> familyRows{};                // and its draw row's address (DrawFamilyDeclare::row)
 	};
 
 	/*
@@ -260,7 +261,7 @@ namespace DCLF::Draws
 	// Frame push: the pass-wide constant buffers' addresses, as the layout's push address ranges read them.
 	inline std::array<std::uint32_t, kFramePushWords> FramePushWords(std::uint64_t a_frameConstants);
 
-	/** @brief What a main pass execution draws of a draw family (DrawFamilyPrepare's out: null for nothing) and its row's address. */
+	/** @brief What a main pass execution draws a draw family with (its slot's pipelines while it is set up: null for nothing) and its row's address. */
 	struct FamilyPrepared
 	{
 		std::shared_ptr<const void> drawn;

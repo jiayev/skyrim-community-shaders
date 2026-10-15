@@ -39,7 +39,8 @@ namespace DCLF::Features
 		// Particles before billboards, then switch nodes: their toggles are listed after the refraction's in this order (the first two's
 		// switches too), and the first two's report lines. LOD then tree LOD after switch nodes: their toggles follow the switch nodes'
 		// after the refraction's, in this order, and their switches are listed before the LOD gates' in this order; tree LOD's early hooks
-		// (its channel's source) after billboards', before hidden nodes' (no order between them); no pool, stage or product.
+		// (its channel's source) after billboards', before hidden nodes' (no order between them); tree LOD's scene resources and commit hook
+		// after tree wind's (its tables' uploads after the trees'), its stages alone at the depth segment's draw-family slots; no pool or product.
 		// Hidden nodes' early hooks after billboards' and tree LOD's (no order between them). Decals
 		// after tree wind: its switches and toggles are listed after the trees' (after the actors' and the skinned). Faces after them: its
 		// coordinator component's hooks after the others' at the points they share (the slot tables' reset). First person last, after the

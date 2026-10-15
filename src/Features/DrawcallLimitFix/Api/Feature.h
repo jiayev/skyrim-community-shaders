@@ -80,8 +80,8 @@ namespace DCLF::Api
 		/** @brief Fails the install for a source another feature has, or a Spot or Point source without lightKept. */
 		virtual void RegisterShadowSource(const ShadowSourceContribution& a_source) = 0;
 		/**
-		 * @brief Fails the install for a family another registration has, a class with no registered toggle, or without its frame and
-		 * main callbacks (decide, programSource, main's four) or with only some of its faces' four.
+		 * @brief Fails the install for a family another registration has, a class with no registered toggle, or without its scene
+		 * resources, its frame and main callbacks (decide, programSource, main's three) or with only some of its faces' five.
 		 */
 		virtual void RegisterDrawFamily(const DrawFamilyContribution& a_family) = 0;
 

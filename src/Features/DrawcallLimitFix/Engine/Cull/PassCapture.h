@@ -12,6 +12,7 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Api/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
@@ -66,9 +67,12 @@ namespace DCLF
 			std::array<std::uint32_t, Extensions::kEngineViews> viewWithheld{}, viewTreeLodWithheld{};
 		};
 
-		/** @brief Render thread, before the main cull: whether DCLF draws tree LOD this frame (then its main-view passes are withheld). */
-		void SetTreeLodOwned(bool a_owned) { treeLodOwned.store(a_owned, std::memory_order_release); }
-		bool TreeLodOwned() const { return treeLodOwned.load(std::memory_order_acquire); }
+		/**
+		 * @brief Render thread, before the main cull (IndirectDraws::DecideDrawFamilies): whether DCLF draws a draw family this frame (then
+		 * the engine's main-view passes its draws replace are withheld: TreeInstances', tree LOD's shapes).
+		 */
+		void SetFamilyOwned(Api::DrawFamily a_family, bool a_owned) { familyOwned[static_cast<std::size_t>(a_family)].store(a_owned, std::memory_order_release); }
+		bool FamilyOwned(Api::DrawFamily a_family) const { return familyOwned[static_cast<std::size_t>(a_family)].load(std::memory_order_acquire); }
 
 		/**
 		 * @brief Render thread, BeginSceneFrame: whether a view's epochs draw its members (its coverage; before the first, its
@@ -235,7 +239,7 @@ namespace DCLF
 		std::atomic<std::uint32_t> directWithheld{ 0 };
 		std::atomic<std::uint32_t> mainWithheld{ 0 }, occlusionWithheld{ 0 };
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
-		std::atomic<bool> treeLodOwned{ false };
+		std::array<std::atomic<bool>, static_cast<std::size_t>(Api::DrawFamily::Count)> familyOwned{};
 		std::atomic<std::uint32_t> reflectionResidueWatch{ 0 }, reflectionResidueLod{ 0 }, reflectionResidueTree{ 0 };
 		std::mutex reflectionResidueLock;
 		std::string reflectionResidueFirst;  // under reflectionResidueLock

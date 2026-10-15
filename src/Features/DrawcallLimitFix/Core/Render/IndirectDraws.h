@@ -41,9 +41,13 @@ namespace DCLF
 		struct MainPayload;
 		struct ViewFace;
 	}
-	namespace TreeLod
+	namespace TreeInstances
 	{
 		struct DrawRow;
+	}
+	namespace Api
+	{
+		enum class DrawFamily : std::uint8_t;
 	}
 
 	/**
@@ -240,11 +244,14 @@ namespace DCLF
 		/** @brief The visibility readback's line, and the <- ACCUMULATED and <- ANIM RATE observers' since the last call. */
 		std::string VisibilityReport();
 		/**
-		 * @brief Render thread, the frame's first DCLF point, before the main camera's cull (the TreeInstances draw family's decide:
-		 * Extensions::DecideDrawFamilies): whether DCLF draws tree LOD this frame (the family on: its class, Api::ObjectClass::TreeLod;
-		 * pipelines from its program source, tables, the engine's tree LOD texture). If so PassCapture withholds the engine's tree LOD passes.
+		 * @brief Render thread, the frame's first DCLF point, before the main camera's cull (FrameDriver): each taken draw family's decide
+		 * (Api/DrawFamilies.h: while it is set up, on and the frame's set not withdrawn; tree LOD's, with its pipelines from its program
+		 * source on the lane, DrawFamilyFrame::Pipelines), published: DrawFamilyOwned, and PassCapture withholds the engine's passes the
+		 * family's draws replace (SetFamilyOwned).
 		 */
-		bool DecideTreeLod();
+		void DecideDrawFamilies(std::uint32_t a_frame);
+		/** @brief Render thread: whether a_family's draws are DCLF's this frame (DecideDrawFamilies; false before the implementation). */
+		bool DrawFamilyOwned(Api::DrawFamily a_family) const;
 		/**
 		 * @brief The view engine (Views/ViewEngine.cpp): Core's calls for the features that take an engine view (Api/Views.h,
 		 * Extensions::Views) - their state, targets, pipelines and resources at their frame's start, and their epochs' inputs and
@@ -284,11 +291,11 @@ namespace DCLF
 		void DropViewPipelines(Api::EngineView a_view);
 		/**
 		 * @brief Tree LOD drawn per face by a trees view (Api::ViewShape::trees: the view engine's, from Core's tree LOD tables), render
-		 * thread, once a frame after DecideTreeLod. ResolveViewTreeLod: its forward pipeline asked of the pipeline lane and read from a_catalog
+		 * thread, once a frame after DecideDrawFamilies. ResolveViewTreeLod: its forward pipeline asked of the pipeline lane and read from a_catalog
 		 * for the view's targets while a_on and the TreeInstances draw family are (Extensions::DrawFamilyOn; none otherwise); true while it is still to
 		 * come and the main view's tree LOD is DCLF's.
 		 * DecideViewTreeLod: whether the faces' tree LOD is DCLF's this frame (the view drawable and covered, its pipeline ready, the main
-		 * view's tree LOD DCLF's, the last depth commit's row and tree LOD's pipelines there), published to PassCapture
+		 * view's tree LOD DCLF's, the last depth commit's row and tree LOD's pipelines there: the family's faces.row), published to PassCapture
 		 * (SetViewTreeLodOwned). SubmitViewEpoch draws its row then.
 		 */
 		bool ResolveViewTreeLod(Api::EngineView a_view, bool a_on, const PipelineCatalog* a_catalog);

@@ -107,103 +107,6 @@ namespace DCLF
 				std::shared_ptr<ViewResources> resources;
 			};
 
-			struct TreeBindings
-			{
-				org::DeclaredViewToken shapes, instances;
-				std::array<org::DeclaredViewToken, kMaxViewFaces> rows, visible;
-			};
-
-			struct TreePrepared
-			{
-				std::shared_ptr<const ComputeProgram> program;
-				std::shared_ptr<const org::LatchBlock> latch;
-				TreeLodCullConstants constants{};
-				std::uint32_t faces = 0;
-				std::array<std::uint32_t, kMaxViewFaces> rowIndex{}, visibleIndex{};
-				std::uint32_t groups = 0;
-			};
-
-			/**
-			 * @brief A view's tree LOD: TreeLodCullCS's phase 1 per face, against the face's latch entry (cull mode 1: no occlusion), into
-			 * the face's list; a face's row names no shape slot when it is not drawn.
-			 */
-			class TreeCullPass final : public org::TypedRenderGraphPass<TreeCullPass, TreePrepared, TreeBindings>
-			{
-			public:
-				explicit TreeCullPass(std::shared_ptr<ViewResources> a_resources) :
-					resources(std::move(a_resources)) {}
-
-				TreeBindings Declare(org::PassBuilder& a_builder)
-				{
-					a_builder.PreferQueue(org::QueueKind::Graphics);
-					const auto& scene = *resources->main->scene;
-					TreeBindings bindings{};
-					bindings.shapes = a_builder.ShaderResource(*scene.treeLodShapes).View();
-					bindings.instances = a_builder.ShaderResource(*scene.treeLodInstances).View();
-					for (std::uint32_t f = 0; f < resources->traits->faces; ++f) {
-						bindings.rows[f] = a_builder.ShaderResource(resources->treeRows[f]).View();
-						bindings.visible[f] = a_builder.UnorderedAccess(*resources->treeVisible[f]).View();
-					}
-					return bindings;
-				}
-
-				void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-				{
-					const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
-					a_out.push_back(frame ? frame->generation : 0);
-					const auto& scene = *resources->main->scene;
-					a_out.push_back(NamedSerial(a_preparation, scene.treeLodShapes));
-					a_out.push_back(NamedSerial(a_preparation, scene.treeLodInstances));
-					for (std::uint32_t f = 0; f < resources->traits->faces; ++f)
-						a_out.push_back(NamedSerial(a_preparation, resources->treeVisible[f]));
-				}
-
-				TreePrepared Prepare(const TreeBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
-				{
-					TreePrepared prepared{};
-					const auto& scene = *resources->main->scene;
-					const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
-					if (!frame || !frame->latch || !frame->treeGroups || !scene.treeLodCull)
-						return prepared;
-					prepared.program = scene.treeLodCull;
-					prepared.latch = frame->latch;
-					prepared.groups = frame->treeGroups;
-					prepared.faces = resources->traits->faces;
-					auto& constants = prepared.constants;
-					constants.shapesIndex = CaptureViewIndex(a_preparation, a_bindings.shapes);
-					constants.instancesIndex = CaptureViewIndex(a_preparation, a_bindings.instances);
-					constants.latchIndex = frame->latch->SrvIndex();
-					constants.phase = 1;
-					constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeLod::VisibleHeader));  // never written: no occlusion test
-					for (std::uint32_t f = 0; f < prepared.faces; ++f) {
-						prepared.rowIndex[f] = CaptureViewIndex(a_preparation, a_bindings.rows[f]);
-						prepared.visibleIndex[f] = CaptureViewIndex(a_preparation, a_bindings.visible[f]);
-					}
-					return prepared;
-				}
-
-				static void Record(const TreeBindings&, const TreePrepared& a_prepared, org::PassRecordContext& a_recording)
-				{
-					if (!a_prepared.program || !a_prepared.groups || !a_prepared.latch)
-						return;
-					auto& commands = a_recording.Commands();
-					commands.BindLayout(a_prepared.program->layout->GetHandle());
-					commands.BindPipeline(a_prepared.program->pipeline->GetHandle());
-					const auto region = static_cast<std::uint32_t>(a_prepared.latch->Offset(a_recording.FrameSlot()));
-					for (std::uint32_t f = 0; f < a_prepared.faces; ++f) {
-						auto constants = a_prepared.constants;
-						constants.latchOffset = region + f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
-						constants.drawIndex = a_prepared.rowIndex[f];
-						constants.visibleIndex = a_prepared.visibleIndex[f];
-						commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
-						commands.Dispatch(a_prepared.groups, 1, 1);
-					}
-				}
-
-			private:
-				std::shared_ptr<ViewResources> resources;
-			};
-
 			/** @brief What a view's draw pass draws into: the reflection's faces, first person's main depth, first person's colour. */
 			enum class DrawMode : std::uint8_t
 			{
@@ -557,7 +460,7 @@ namespace DCLF
 				{
 					return [resources = std::move(a_resources)] {
 						std::vector<LatchedTarget> out{ { resources->count, nullptr }, { resources->blocks, nullptr } };
-						const bool trees = resources->main->scene->treeLodCull && resources->treeVisible[0];
+						const bool trees = FamilySetUp(*resources->main->scene, Api::DrawFamily::TreeInstances) && resources->treeVisible[0];
 						for (std::uint32_t f = 0; f < resources->traits->faces; ++f) {
 							out.push_back({ nullptr, resources->bucketCounts[f] });
 							if (trees) {
@@ -571,11 +474,6 @@ namespace DCLF
 
 				std::shared_ptr<ViewResources> resources;
 			};
-		}
-
-		std::shared_ptr<org::RenderPass> MakeViewTreeCullPass(std::shared_ptr<ViewResources> a_resources)
-		{
-			return std::make_shared<TreeCullPass>(std::move(a_resources));
 		}
 
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeViewExtension(std::shared_ptr<ViewResources> a_resources)

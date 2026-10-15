@@ -124,9 +124,9 @@ namespace DCLF::Api
 		// Terrain LOD: a land block's shape under TES::lodLandRoot (the LODLand and LODLandNoise techniques; Ineligible::Lod), and the LOD
 		// root listed as a category node (Features/Lod).
 		LodTerrain,
-		// Tree LOD: the instance groups under the LOD trees root (BSDistantTreeShaderProperty shapes), drawn by Core's tree LOD path from
-		// the mirrored instance records (its tables, its cull and draws in the depth segment and in a trees view's faces; DecideTreeLod)
-		// instead of the engine's passes (Features/TreeLod).
+		// Tree LOD: the instance groups under the LOD trees root (BSDistantTreeShaderProperty shapes), drawn from the mirrored instance
+		// records as the TreeInstances draw family (Api/DrawFamilies.h: its tables, its cull and draws in the depth segment and in a trees
+		// view's faces; its decision) instead of the engine's passes (Features/TreeLod): the class gates the family.
 		TreeLod,
 		Count,
 	};

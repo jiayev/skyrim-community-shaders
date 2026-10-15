@@ -27,7 +27,6 @@ namespace DCLF::Diagnostics
 		// Prepass, the render thread: the used sets, the technique rows, the extras rows, the shading.
 		if (o.scene) {
 			InstallFrameParity();
-			InstallTreeLodParity();
 			InstallSlotDrainCheck();
 			InstallCandidateParity();
 			InstallLodSegmentParity();

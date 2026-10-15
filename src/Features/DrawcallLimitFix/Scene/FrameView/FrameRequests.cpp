@@ -366,7 +366,7 @@ namespace DCLF::Scene
 			Diagnostics::Notify<Diagnostics::ScenePoint::MirrorProbePoint>();
 			ReportCategoryWatch();
 		}
-		// The draw families' mirrors are the render thread's (tree LOD's: DecideTreeLod reads it at frame start).
+		// The draw families' mirrors are the render thread's (Features/TreeLod's: its decision reads it at the frame's start).
 		Extensions::ServeDrawFamilies(frame);
 	}
 

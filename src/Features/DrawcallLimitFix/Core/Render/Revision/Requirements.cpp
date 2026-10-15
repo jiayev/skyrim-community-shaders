@@ -78,16 +78,18 @@ namespace DCLF
 			buffers.Require(a_build, s.fadeEvents, s.fadeWriteBack->wanted.load(std::memory_order_acquire));
 		if (s.visibilityEvents && s.visibilityReadback)
 			buffers.Require(a_build, s.visibilityEvents, s.visibilityReadback->wanted.load(std::memory_order_acquire));
-		// Tree LOD's tables by the mirror's posted shape and mesh slots; the views' faces' tree lists hold the same shape slots.
-		if (s.treeLodCull) {
-			UnitGroup shapes;
-			shapes.Add(s.treeLodShapes).Add(s.treeLodInstances).Add(s.treeLodVisible);
+		// The views' faces' tree lists hold the TreeInstances family's units, as its scene resources posted them (its faces.lists: tree
+		// LOD's shape slots; its tables are required by its scene resources, Api::SceneResources::require).
+		const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances);
+		if (trees.contribution.faces.lists && FamilySetUp(s, Api::DrawFamily::TreeInstances)) {
+			Api::DrawFamilyLists lists{ s, Extensions::SceneResourceInputsOf(inputs.resourceInputs, trees.contribution.resources) };
+			trees.contribution.faces.lists(lists);
+			UnitGroup faces;
 			for (const auto& view : inputs.views)
 				if (view.resources)
 					for (const auto& visible : view.resources->treeVisible)
-						shapes.Add(visible);
-			shapes.Require(a_build, inputs.treeLodShapeSlots);
-			buffers.Require(a_build, s.treeLodMeshes, inputs.treeLodMeshSlots);
+						faces.Add(visible);
+			faces.Require(a_build, lists.required);
 		}
 	}
 

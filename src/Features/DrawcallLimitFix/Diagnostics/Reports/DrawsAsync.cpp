@@ -42,29 +42,8 @@ namespace DCLF
 		text += ForwardReport();
 		// The features' lines here (Features/Particles, Features/Billboards, Features/FirstPerson: the first-person view's).
 		Extensions::ReportTextAt(Api::ReportPoint::AsyncWork, text);
-		// The draw families' lines here, where tree LOD's draws' follow.
+		// The draw families' lines here (Features/TreeLod's draws and cull).
 		Extensions::ReportTextAt(Api::ReportPoint::AsyncWorkFamilies, text);
-		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
-			auto& scene = *impl->scene;
-			text += fmt::format("[DCLF] tree LOD draws: {} ({} depth commits, {} shape slots sent; tables {} shape and {} mesh slots; {} commits that could not draw a "
-								"withheld frame){}\n",
-				impl->treeLodOwned ? "DCLF's" : "the engine's", scene.treeLodUploads, scene.treeLodSlotsSent, NamedUnits(impl->Adopted(), scene.treeLodShapes),
-				NamedUnits(impl->Adopted(), scene.treeLodMeshes),
-				Diagnostics::DrawsState::Get().treeLodMissed, Diagnostics::DrawsState::Get().treeLodMissed ? " <- TREE LOD HOLES" : "");
-			scene.treeLodUploads = scene.treeLodSlotsSent = 0;
-			// Its two-phase cull: in view, drawn by phase 1, occluded by the last frame's HZB, brought back by the rebuilt one.
-			if (auto& counts = scene.treeLodCounts) {
-				if (const auto frames = counts->frames.exchange(0, std::memory_order_relaxed)) {
-					const double phaseOne = double(counts->phaseOne.exchange(0, std::memory_order_relaxed)) / frames;
-					const double retests = double(counts->retests.exchange(0, std::memory_order_relaxed)) / frames;
-					const double phaseTwo = double(counts->phaseTwo.exchange(0, std::memory_order_relaxed)) / frames;
-					text += fmt::format("[DCLF] tree LOD cull over {} frames: per frame {:.0f} instances in view, {:.0f} drawn by phase 1, {:.0f} occluded by the last "
-										"frame's HZB, {:.0f} of them brought back by phase 2 ({:.0f} drawn, {:.1f}% occluded)\n",
-						frames, phaseOne + retests, phaseOne, retests, phaseTwo, phaseOne + phaseTwo,
-						phaseOne + retests > 0.0 ? 100.0 * (retests - phaseTwo) / (phaseOne + retests) : 0.0);
-				}
-			}
-		}
 		// The builds' stores (main rows, object records, shadow state, extras rows, geometry table, exclusions) are the snapshot builder's:
 		// their lines are composed in its pass (Impl::StoresReport, with the producer's report) and printed with it, a report behind.
 		if (auto line = Reports::FrameValuesLine(); !line.empty())
