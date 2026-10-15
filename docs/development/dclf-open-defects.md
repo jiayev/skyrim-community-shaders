@@ -145,23 +145,6 @@ Core validation at `coc RiverwoodSleepingGiantInn` (FP on), every run (i12vk, i1
 The sequences overrun and the invalid DGC address found with them are resolved (below: "Resolved: first-person and reflection
 draws read past their sequences").
 
-## The first-person weapon and hands are not drawn (found 2026-10-15; pre-existing, not investigated)
-
-With `CS_DCLF_FIRST_PERSON` on (the default), a readied weapon and the first-person hands are missing from the frame. With
-`CS_DCLF_FIRST_PERSON=0` (the engine draws first person) the sword shows. Seen at the bridge save, sword readied, in screenshot runs
-`shot2-fps-on` / `shot2-fps-off` (the run script's `-Shots 5 -ReadyWeaponAt 3`). It is present at a737c27f, and per the user also
-before the modular-layout refactor.
-
-The counters see no fault:
--   The first-person epochs run on every latched frame (`epochs: 300 depth, 300 colour`, nothing skipped).
--   Both pipeline slots are ready.
--   The C3 first-person bits parity reports 0 membership and 0 bit differences.
--   The set parity's player-3D check reports OK.
-
-So the members are filed and their epochs record, but nothing visible reaches the colour target. Parity does not cover what the
-epochs draw. Next: a target dump of the first-person colour and depth around `ExecuteFirstPersonColour`, and the first-person
-build-draws' sequence count.
-
 ## Accumulated writes parity (A5): an intermittent entry write the incremental pass skips (found 2026-10-15; not investigated)
 
 In one `CS_DCLF_PERSISTENT_PARITY` run (v2-pp), 2 of the 5 compared frames differed. Both were the same entry root (4466): the
@@ -562,6 +545,20 @@ The canonical rule, the symptom signature and the tests are in `render-graph.md`
     -   The graph's last command buffer re-binding or resetting the descriptor-heap state.
     -   A capture with a tool that supports descriptor heaps.
     -   A standalone repro to report to NVIDIA.
+
+## Resolved: the first-person weapon and hands were not drawn (found 2026-10-15; fixed 2026-10-15)
+
+**Symptom.** With `CS_DCLF_FIRST_PERSON` on, a readied sword and the first-person hands were missing; with `=0` (the engine
+draws them) they showed. The counters were clean throughout: epochs ran on every latched frame, pipelines were ready, and the
+C3 bits parity and the set parity's player-3D check reported OK. Parity does not cover what the epochs draw.
+
+**Cause.** The first-person epochs' `VS_PerFrame` used the first-person camera's `world.translate` as `CameraPosAdjust`
+(b12 c40), but that translate is in the first-person root's space. The rows are world space (FrameValues samples them before
+the engine's first-person shift), so the vertex stage subtracted the wrong eye and the geometry landed off screen. The world
+eye (DrawWorld+0x00) was only used for the cull's face eye and the motion vectors' previous camera.
+
+**Fix.** `Features/FirstPerson/FirstPersonEpochs.cpp` `CaptureCamera` sets `view.eye` to the world eye before `PerFrameBlock`.
+Confirmed with screenshot runs (`run_game.ps1 -Shots 5 -ReadyWeaponAt 3`; sw-eye against sw-v2). The parity round is clean.
 
 ## Resolved: BuildDraws parity row-address MISMATCH (pre-existing; resolved 2026-10-14 with the pooled payload)
 
