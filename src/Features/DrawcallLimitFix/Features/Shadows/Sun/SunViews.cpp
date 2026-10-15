@@ -1,6 +1,6 @@
 // SunViews: the UpdateCamera hook (render thread), which writes the sun's board (ShadowCameras::Sun) from the cameras it set up.
 
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -12,7 +12,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
-namespace DCLF
+namespace DCLF::Features::Shadows::Sun
 {
 	SunViews& SunViews::Get()
 	{

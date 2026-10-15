@@ -40,8 +40,8 @@ BASELINE = ROOT / "tools" / "dclf-layout-baseline.json"
 LEGACY = {"Runtime", "Engine", "Scene", "Draws"}
 # Features/<X> -> the other features it may include.
 DEPENDS = {
-    "Shadows/Sun": {"Shadows/Common"},
-    "Shadows/Local": {"Shadows/Common"},
+    "Shadows/Sun": set(),
+    "Shadows/Local": set(),
 }
 MAX_NLOC = 120
 MAX_CCN = 40

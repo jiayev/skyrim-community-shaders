@@ -1337,7 +1337,7 @@ namespace DCLF
 			return;
 		}
 		// The light's room process camera (+0x128 -> +0x18): a shadow light's own, set up with the light (an orthographic frustum,
-		// near 0.1; its world-to-camera matrix and viewport as set up), read as a camera, as SunViews and LightViews read theirs. Before the
+		// near 0.1; its world-to-camera matrix and viewport as set up), read as a camera, as the shadow sources read theirs. Before the
 		// engine has made one, the one FUN_1414a6400 would: the NiCamera constructor's (FUN_140d2afa0, then FUN_140d2c910 at the
 		// identity). The walk puts the light's rotation and position on it.
 		{

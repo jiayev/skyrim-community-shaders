@@ -6,7 +6,7 @@
 namespace DCLF::Diagnostics
 {
 	/**
-	 * @brief The shadow views' parity (CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY): DCLF's views (SunViews, LightViews, FocusViews:
+	 * @brief The shadow views' parity (CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY): DCLF's views (the boards, ShadowCameras' Sun, Lights, Focus:
 	 * from the cameras the engine's UpdateCamera set up) against the engine's captures - the view-projection, eye, viewport and caster
 	 * volume at each view's draw (the shadow epochs), the sun's cascade planes at each cascade cull, the full-frustum processes - and
 	 * what the engine registers into a covered focus view against its target's fade root. One tally per kind of view; each kind's line

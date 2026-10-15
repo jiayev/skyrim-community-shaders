@@ -226,7 +226,7 @@ namespace DCLF
 			};
 			for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d)
 				add(data.shadowmapDescriptors[d], d, false);
-			// A focus host's focus views (FocusViews: DCLF's hosts and target count: Render draws descriptors 0..count-1), once per light.
+			// A focus host's focus views (the Focus board: DCLF's hosts and target count: Render draws descriptors 0..count-1), once per light.
 			if (std::find(selection->focusHosts.begin(), selection->focusHosts.end(), light) != selection->focusHosts.end() &&
 				std::find(focusAdded.begin(), focusAdded.end(), light) == focusAdded.end()) {
 				focusAdded.push_back(light);

@@ -1,6 +1,6 @@
 // SunAccumulation: the sun's entry exclusion (render thread, after the full-frustum cull), the registration-free accumulation's
 // thunks on the sun's Accumulate and its registrations (the render thread and the registration jobs), the sun's bits for removed
-// entries, and the cascades BuildDraws tests (from SunViews).
+// entries, and the cascades BuildDraws tests (from the Sun board, ShadowCameras::Sun).
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -335,7 +335,7 @@ namespace DCLF
 	void SunAccumulation::GpuCascades(std::vector<GpuCascade>& a_out) const
 	{
 		// This frame's cascades, whether or not the entry exclusion ran: the colour pass's sun test needs them every frame (without them
-		// every pass with the sun's bits would miss, and draw unshadowed). From DCLF's own views (SunViews, from the cameras UpdateCamera
+		// every pass with the sun's bits would miss, and draw unshadowed). From DCLF's own views (the Sun board, from the cameras UpdateCamera
 		// set up for the sun this frame), so the test does not depend on the engine's Accumulate running. None when UpdateCamera did not
 		// run for the sun this frame (the sun does not draw: an interior), when the engine gives no pass the sun's bits either. Each
 		// cascade's planes are those Accumulate's hook copies from the same views (the bits' cascades), in descriptor order.
@@ -439,7 +439,7 @@ namespace DCLF
 					self.frameState.cascades.resize(call.count);
 				const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 				Diagnostics::Notify<Diagnostics::EnginePoint::SunAccumulateBegin>();
-				// Each cascade's volume is DCLF's (SunViews, from the camera UpdateCamera set up). A cascade without DCLF's stays unknown,
+				// Each cascade's volume is DCLF's (the Sun board, from the camera UpdateCamera set up). A cascade without DCLF's stays unknown,
 				// its bit unset.
 				for (std::uint32_t i = 0; i < call.count; ++i) {
 					auto& cascade = self.frameState.cascades[i];

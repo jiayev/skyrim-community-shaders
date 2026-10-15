@@ -133,7 +133,7 @@ namespace DCLF::Diagnostics
 
 	void CheckSunEntryPlanes(const SunEntryPlanesTaken& a_taken)
 	{
-		// The processes' own planes after the full-frustum cull against DCLF's (SunViews), which the entry rule tests.
+		// The processes' own planes after the full-frustum cull against DCLF's (the Sun board, ShadowCameras::Sun), which the entry rule tests.
 		auto& tally = ShadowViewTally(ShadowView::Sun);
 		const auto& sunViews = ShadowCameras::Sun();
 		if (!a_taken.taken) {

@@ -180,7 +180,7 @@ namespace DCLF
 			std::uint32_t pad[2]{};
 			float planes[12][4]{};
 		};
-		/** @brief This frame's cascades from DCLF's views (SunViews). Render thread, after the sun's UpdateCamera; empty without views. */
+		/** @brief This frame's cascades from DCLF's views (the Sun board). Render thread, after the sun's UpdateCamera; empty without views. */
 		void GpuCascades(std::vector<GpuCascade>& a_out) const;
 		/** @brief Whether this frame's full-frustum cull applied the entry exclusion. */
 		bool ExclusionLive() const { return exclusionLive.load(std::memory_order_acquire); }
@@ -294,7 +294,7 @@ namespace DCLF
 			std::array<std::array<float, 4>, 6> customPlanes{};
 			std::uint32_t customMask = 0;  // 0: no custom planes
 			std::uint32_t bit = 0;         // the accumulator's +0x164
-			bool captured = false;         // DCLF's volume is known (SunViews)
+			bool captured = false;         // DCLF's volume is known (the Sun board)
 		};
 
 		/** @brief The frame's exclusion, as the registration thunks read it. */

@@ -2,6 +2,8 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -25,6 +27,24 @@ namespace DCLF::ShadowCameras
 	{
 		static FocusFrame frame;
 		return frame;
+	}
+
+	namespace
+	{
+		constexpr std::uintptr_t kFocusTargets = 0x332a488;  // the focus targets: {float distance; NiAVObject* node} x count
+	}
+
+	std::uint32_t EngineFocusTargetCount()
+	{
+		return Engine::Global<std::uint32_t>(Engine::Address::kFocusTargetCount);
+	}
+
+	const RE::NiAVObject* EngineFocusTarget(std::uint32_t a_index)
+	{
+		const auto* targets = Engine::Global<const std::byte*>(kFocusTargets);
+		if (!targets || a_index >= EngineFocusTargetCount())
+			return nullptr;
+		return Engine::At<const RE::NiAVObject*>(targets, std::size_t(a_index) * 16 + 8);
 	}
 
 	void FrustumPlanes(const RE::NiFrustum& a_frustum, const RE::NiTransform& a_world, Planes& a_out)

@@ -11,6 +11,8 @@
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/Local.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
 #include "Features/DrawcallLimitFix/Features/SwitchNodes/SwitchNodes.h"
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
@@ -23,8 +25,11 @@ namespace DCLF::Features
 	{
 		// The occlusion maps first: their toggles are the first registered, so their bits in the packed toggle word are where Core's were
 		// (right after Core's flags), and their switches and toggles are listed before the reflection's and the first person's (which follow
-		// them there); no early hooks, no pool, stage or product. Reflection next: its early hooks (the water reflection's update, add-roots
-		// and face render) run before every other feature's and Core's observers, where the shell installed them; its toggle's bit follows
+		// them there); no early hooks, no pool, stage or product. The shadow sources next, sun then local (Shadows/Sun, Shadows/Local): they
+		// register only their sources (resolved by source, whatever the order) and camera hooks (installed by source, the sun's, Core's light
+		// selection, then the focus cameras, whatever the list's order); no switch, toggle, early hook, pool, stage or product.
+		// Reflection next: its early hooks (the water reflection's update, add-roots and face render) run before every other feature's and
+		// Core's observers, where the shell installed them; its toggle's bit follows
 		// the maps', where Core's was; its switch and toggle are listed after the precipitation mask's, before the first person's (which
 		// follow them there); it registers no pool, stage or product. Actors next: its switch is listed after the skin
 		// partitions', before tree wind's and the decals' (which follow it there); it registers no pool, stage or product. Tree wind next:
@@ -37,6 +42,8 @@ namespace DCLF::Features
 		// are listed after the reflection's.
 		static const std::array kFeatures{
 			OcclusionMaps::Feature(),
+			Shadows::Sun::Feature(),
+			Shadows::Local::Feature(),
 			Reflection::Feature(),
 			Actors::Feature(),
 			TreeWind::Feature(),

@@ -77,8 +77,8 @@ void DrawcallLimitFix::PostPostLoad()
 	(void)DCLF::MaterialSources::FramePSFloats();
 	(void)DCLF::MaterialSources::FrameVSFloats();
 	DCLF::SunAccumulation::Get().Install();
-	// The shadow cameras' hooks: Core's (the sun's UpdateCamera, the light selection, the focus cameras, in that order), then the
-	// features' (Api::Feature::cameraHooks).
+	// The shadow cameras' hooks, by source (Api::Feature::cameraHooks): Features/Shadows/Sun's UpdateCamera, Core's light selection, then
+	// Features/Shadows/Local's focus cameras, in that order.
 	DCLF::Extensions::InstallCameraHooks(DCLF::Features::List());
 	DCLF::PrimaryCull::Get().Install();
 	// Main::IsRoomVisible answered from PortalViews' VisibleSet while DCLF runs.

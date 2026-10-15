@@ -1,14 +1,11 @@
 #pragma once
 
-#include <cstdint>
-
 namespace RE
 {
 	class BSShadowLight;
-	class NiAVObject;
 }
 
-namespace DCLF
+namespace DCLF::Features::Shadows::Local
 {
 	/**
 	 * @brief The focus shadows' camera hook: BSShadowDirectionalLight::sub (0x1414f0480), which writes the focus views into Core's board
@@ -18,17 +15,14 @@ namespace DCLF
 	 * And target i's node (0x14332a488: {distance, node}), whose subtree the engine registers whole.
 	 *
 	 * Render thread: written in the detour (from CalculateAndDrawShadowCasterLights and CalculateActiveShadowCasterLights), read by
-	 * the shadow views' capture later in the frame.
+	 * the shadow views' capture later in the frame. Installed from the feature's camera hooks, for the Focus source
+	 * (Api::Feature::cameraHooks); the targets are read through ShadowCameras::EngineFocusTarget.
 	 */
 	class FocusViews
 	{
 	public:
 		static FocusViews& Get();
 		void Install();
-
-		/** @brief The engine's current focus targets (0x14332a488): target a_index's node, or null. */
-		static const RE::NiAVObject* EngineTarget(std::uint32_t a_index);
-		static std::uint32_t EngineTargetCount();
 
 	private:
 		FocusViews() = default;

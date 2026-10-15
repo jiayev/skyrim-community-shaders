@@ -33,13 +33,13 @@ namespace DCLF
 	 *   entries as their last walks left them (a light's: when it was last kept, or moved as a dynamic light); those, sampled at
 	 *   the function's entry, are the observer's (`<- LIGHT ROOMS`), a light moved since its engine walk tallied apart.
 	 *   Also the lights, their NiLights (hidden flag, position, radius), the world camera, and each
-	 *   spot light's camera as its UpdateCamera set it up (as SunViews and LightViews read cameras). The visibility tests are DCLF's:
+	 *   spot light's camera as its UpdateCamera set it up (as the sources' camera reads do). The visibility tests are DCLF's:
 	 *   FUN_14150aba0's frustum intersection for a spot light, BSMultiBoundSphere::Func41's sphere test for a point light, the
 	 *   lodFade cutoff (0x1433dcfac), each in the engine's operation order.
 	 * The engine's results (shadowLightsAccum, maskIndex, the light count 0x14338c900, frustrumCull) are the observer's alone
 	 * (`<- LIGHT SELECTION`). The scissor rectangle (+0x544..) stays the engine's: DCLF does not read it.
 	 *
-	 * The focus shadows' host (FocusViews): a light whose drawFocusShadows (+0x558) is set draws focus views 0..count-1 (0x14332a498 targets).
+	 * The focus shadows' host (the Focus board's): a light whose drawFocusShadows (+0x558) is set draws focus views 0..count-1 (0x14332a498 targets).
 	 * The sun when it draws and the focus shadows are on (0x142032fd0 and a target); else last frame's host (0x1433dcfb8) if it is
 	 * still a candidate, else the first kept light whose vfunc 0x20 is true (a directional or spot light). The flag persists across
 	 * frames, so DCLF keeps its own per light, written where the engine writes +0x558; the engine's is the observer's.

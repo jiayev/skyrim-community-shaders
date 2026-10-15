@@ -86,7 +86,7 @@ namespace DCLF::Api
 	/**
 	 * @brief A shadow source contribution: the source's views are drawn while it is registered (a view of a source none registered stays
 	 * the engine's). Its cameras are the feature's to compute, into Core's boards (Core/Render/Shadow/ShadowCameras.h), from its
-	 * Feature::cameraHooks.
+	 * Feature::cameraHooks (called with the source, in ShadowSource order: the Sun's, Core's light selection, then the others').
 	 *
 	 * - lightKept (Spot and Point, required): render thread, at the end of the light selection, once per kept light of the source's kind,
 	 *   in the selection's order.

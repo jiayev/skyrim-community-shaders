@@ -179,7 +179,7 @@ namespace DCLF::Diagnostics
 		std::span<const void* const> named;
 	};
 
-	/** @brief LocalShadowLights::Sample: a local shadow descriptor's volume as LightViews has it, and its culling process after the cull. */
+	/** @brief LocalShadowLights::Sample: a local shadow descriptor's volume as the Lights board has it, and its culling process after the cull. */
 	struct ShadowVolumeSampled
 	{
 		const ShadowCameras::Camera& view;

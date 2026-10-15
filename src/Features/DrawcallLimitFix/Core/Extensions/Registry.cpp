@@ -320,7 +320,7 @@ namespace DCLF::Extensions
 				feature.install(context);
 		}
 		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
-		// the features' contributions and Core's own; then both families' phases and view bits.
+		// the features' contributions; then both families' phases and view bits.
 		ResolveViews(lists.views, lists.viewWork);
 		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
 		ResolveViewBits();

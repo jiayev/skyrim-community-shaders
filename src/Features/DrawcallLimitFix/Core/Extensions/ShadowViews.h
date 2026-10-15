@@ -1,11 +1,10 @@
 #pragma once
 
 // The shadow-view contributions' Core side (Api/ShadowViews.h): each occlusion map's and shadow source's entry, resolved once at
-// InstallFeatures (ResolveShadowViews) from the features' registrations (the maps') or Core's own (a source Core still fills itself, until
-// its feature takes it), and what the shadow engine derives from them for its per-object and per-frame paths (each mode's set phase, the
-// set decision's readiness order, the source of each engine view kind, the maps' import order). The shadow capability, the captures,
-// both shadow epochs, the set decisions, the classification and the reports read them as data; the contexts the callbacks are handed
-// are defined here.
+// InstallFeatures (ResolveShadowViews) from the features' registrations, and what the shadow engine derives from them for its
+// per-object and per-frame paths (each mode's set phase, the set decision's readiness order, the source of each engine view kind, the
+// maps' import order). The shadow capability, the captures, both shadow epochs, the set decisions, the classification and the reports
+// read them as data; the contexts the callbacks are handed are defined here.
 
 #include "Features/DrawcallLimitFix/Api/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -111,7 +110,7 @@ namespace DCLF::Extensions
 	inline const ShadowSourceEntry& ShadowSourceOf(Api::ShadowSource a_source) { return ShadowViewsSet().sources[static_cast<std::size_t>(a_source)]; }
 	/**
 	 * @brief Main thread, in InstallFeatures (Registry), after the features' installs: the entries from the registered contributions (by
-	 * map and source; Count: none) and Core's own sources. Fails the install for a source a feature registered that Core still fills. Once.
+	 * map and source; Count: none). Once.
 	 */
 	void ResolveShadowViews(std::span<const Api::OcclusionMapContribution, kOcclusionMaps> a_maps,
 		std::span<const Api::ShadowSourceContribution, kShadowSources> a_sources);
