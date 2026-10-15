@@ -5,11 +5,11 @@
 
 namespace DCLF::Extensions
 {
-	void ReportLinesAt(Api::ReportPoint a_point)
+	void ReportLinesAt(Api::ReportPoint a_point, std::uint32_t a_frame)
 	{
 		for (const auto& lines : RegisteredReportLines())
 			if (lines.point == a_point && lines.lines)
-				lines.lines();
+				lines.lines(a_frame);
 	}
 
 	void ReportTextAt(Api::ReportPoint a_point, std::string& a_text)

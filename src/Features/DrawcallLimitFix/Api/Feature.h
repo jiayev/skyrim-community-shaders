@@ -68,8 +68,8 @@ namespace DCLF::Api
 	 * - install: see InstallContext.
 	 * - earlyHooks (optional): the main thread at PostPostLoad, before DCLF's own engine side and observers install (the shell's
 	 *   Extensions::InstallEarlyHooks, in the list's order): engine hooks that must be in before Core's engine side reads what they
-	 *   change (a vtable slot the primary cull takes at its install). Registers nothing; Core's switches and Diagnostics::Observe are
-	 *   readable.
+	 *   change (a vtable slot the primary cull takes at its install; the source of an engine event channel Core follows, after Core's
+	 *   own scene events are in). Registers nothing; Core's switches and Diagnostics::Observe are readable.
 	 */
 	struct Feature
 	{

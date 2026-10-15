@@ -1117,8 +1117,10 @@ namespace DCLF::Scene
 
 	Ineligible Coordinator::ClassifyFrame(const Tracked& a_tracked) const
 	{
+		// The leaves under switch nodes are the parent contribution's (Features/SwitchNodes: CS_DCLF_SWITCH_NODES and its toggle).
+		const auto switchLeaves = [] { return Extensions::ParentAdmits(ActiveToggles(), Api::EngineParent::Switch, Api::ParentLeaves::SelectedLeaves); };
 		const bool underSwitch = a_tracked.parentReason == Ineligible::Switch;
-		if (underSwitch && !ActiveToggles().switchNodes)
+		if (underSwitch && !switchLeaves())
 			return Ineligible::Switch;
 		// An effect leaf under one billboard node is DCLF's, turned by its vertex stage (Billboards.h). Billboard outranks switch and
 		// ordered in parentReason, so the chain walk below applies their tests too.
@@ -1170,7 +1172,7 @@ namespace DCLF::Scene
 			}
 			if (key == a_tracked.categoryNode)
 				break;
-			if (underBillboard && (record->kind & SceneCapture::kKindSwitch) && !ActiveToggles().switchNodes)
+			if (underBillboard && (record->kind & SceneCapture::kKindSwitch) && !switchLeaves())
 				return Ineligible::Switch;
 			if (chainTests && child && (record->kind & SceneCapture::kKindSwitch) && !SwitchSelects(*record, child))
 				return Ineligible::Switch;

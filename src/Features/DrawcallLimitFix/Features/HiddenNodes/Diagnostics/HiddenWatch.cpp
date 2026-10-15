@@ -1,21 +1,22 @@
-// HiddenWatch (CS_DCLF_HIDDEN_WATCH): the debug-register watchpoints, set on every thread by a helper thread, and the vectored exception
-// handler that records the flips. Armed by the coordinator's actor observer (SceneRegistrations.cpp); reported on the render thread.
+// The hidden watch (CS_DCLF_HIDDEN_WATCH): the debug-register watchpoints, set on every thread by a helper thread, and the vectored
+// exception handler that records the flips. Armed by its observer of the coordinator's actor verdicts (below); reported on the render
+// thread, among the frame report's statistics.
 
-#include "HiddenWatch.h"
-
+#include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 
 #include <TlHelp32.h>
 
-namespace DCLF::Scene
-{
-	std::uintptr_t HiddenStoreSiteOf(std::uintptr_t a_address);
-}
+#include <sstream>
 
-namespace DCLF::HiddenWatch
+namespace DCLF::Features::HiddenNodes
 {
 	namespace
 	{
+		Api::SwitchId watchSwitch;  // install
+
 		constexpr std::uint32_t kSlots = 4;
 		constexpr std::uint32_t kMaxHits = 16;
 		constexpr std::uintptr_t kFlagsOffset = 0xF4;
@@ -116,7 +117,7 @@ namespace DCLF::HiddenWatch
 
 	bool Enabled()
 	{
-		static const bool enabled = SwitchEnabled(Switch::HiddenWatch);
+		static const bool enabled = SwitchEnabled(watchSwitch);
 		return enabled;
 	}
 
@@ -158,7 +159,7 @@ namespace DCLF::HiddenWatch
 			text = fmt::format("[DCLF] hidden watch (arming {}): {} kHidden flips recorded", armings, hitCount.load(std::memory_order_relaxed));
 			for (std::uint32_t i = 0; i < count; ++i) {
 				const auto& hit = hits[i];
-				const auto site = Scene::HiddenStoreSiteOf(hit.rip);
+				const auto site = StoreSiteOf(hit.rip);
 				const double sinceMs = i ? 1000.0 * double(hit.ticks - hits[i - 1].ticks) / double(frequency.QuadPart) : 0.0;
 				text += fmt::format("\n[DCLF]   {} on {} -> {:08X} (thread {}, {:.3f} ms after the last), {}", (hit.value & 1) ? "hidden" : "shown", names[hit.slot], hit.value,
 					hit.thread, sinceMs, site ? fmt::format("by the patched store at {:#x} (announced)", site) : fmt::format("after {:#x} (no patched store)", hit.rip - base + 0x140000000));
@@ -172,5 +173,38 @@ namespace DCLF::HiddenWatch
 			text += text.empty() ? "[DCLF] hidden watch disarmed: nothing flipped" : "\n[DCLF] hidden watch disarmed";
 		}
 		return text;
+	}
+
+	namespace
+	{
+		void OnVerdictUnannounced(const Diagnostics::ActorVerdictUnannounced& a_event)
+		{
+			// CS_DCLF_HIDDEN_WATCH: the chain's nearest four nodes, for the store that flips them next.
+			std::array<const RE::NiAVObject*, 4> nodes{};
+			for (std::size_t i = 0; i < nodes.size() && i < a_event.chain.size(); ++i)
+				nodes[i] = a_event.chain[i];
+			Arm(nodes);
+		}
+
+		void Lines(std::uint32_t a_frame)
+		{
+			// The render thread's watch of the hidden bit stores.
+			if (const auto watch = TakeReport(a_frame); !watch.empty()) {
+				std::istringstream watchLines(watch);
+				for (std::string line; std::getline(watchLines, line);)
+					logger::info("{}", line);
+			}
+		}
+	}
+
+	void RegisterWatch(Api::InstallContext& a_context)
+	{
+		// Where Core's was listed: after the census.
+		watchSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_HIDDEN_WATCH", .kind = Api::SwitchKind::Diagnostic,
+			.description = "1: hardware watchpoints name the store behind a hidden change no event announced (with walk parity)", .after = "CS_DCLF_CENSUS" });
+		if (!Enabled())
+			return;
+		Diagnostics::Subscribe<Diagnostics::ActorVerdictUnannounced>(OnVerdictUnannounced);
+		a_context.RegisterReportLines({ .name = "hidden-watch", .point = Api::ReportPoint::Statistics, .lines = &Lines });
 	}
 }

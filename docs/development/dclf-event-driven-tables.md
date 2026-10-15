@@ -562,7 +562,7 @@ entry was added or erased since they were taken (`trackedLayout`); otherwise it 
 frames standing, 19-59 in the flight). `ValidateSlice` runs once a frame instead of in both `ProcessEvents` calls.
 
 **Hidden bits by event.** Every store that can change `kHidden` (bit 0 of `NiAVObject::flags`, `+0xF4`) is patched
-with a call to a stub (`Engine/Capture/HiddenStores.cpp`, 464 sites, `CS_DCLF_HIDDEN_EVENTS=0` turns them off):
+with a call to a stub (`Features/HiddenNodes/HiddenStores.cpp`, 464 sites, `CS_DCLF_HIDDEN_EVENTS=0` turns them off):
 
 - every `or` whose operand may set bit 0 (111);
 - every `and` whose operand may clear it (100);

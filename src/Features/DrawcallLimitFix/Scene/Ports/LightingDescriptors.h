@@ -39,7 +39,7 @@ namespace DCLF
 		UnstableBuffer,      // a buffer DXVK cannot make stable (the game can map it)
 		SkinShape,           // a skin the skinned path does not take: dismember instance, several partitions, too many bones
 		Billboard,           // under an NiBillboardNode (the main cull turns it to the camera)
-		Switch,              // under an NiSwitchNode not selecting it (or CS_DCLF_SWITCH_NODES off)
+		Switch,              // under an NiSwitchNode not selecting it (or its leaves not admitted: Features/SwitchNodes)
 		TerrainNoBlend,      // Terrain Blending redraws it after its terrain: CS_DCLF_TB_TERRAIN off, or a decal
 		MultiIndex,          // BSMultiIndexTriShape: its main pass is the engine's (the snow layer), its shadow a tri-shape's
 		EffectOpaque,        // CS_DCLF_EFFECTS: an effect without a blending alpha property

@@ -359,7 +359,7 @@ namespace DCLF::SceneCapture
 		std::shared_ptr<const Records> leaf;
 		// NextSequence after the write (SceneTracker::PushUpdate takes it): an update numbered before a capture's start is in it.
 		std::uint64_t sequence = 0;
-		// A patched hidden store's index in HiddenStoreSites() (the hidden event rides here), else ~0u.
+		// A hidden store's site, the source's index of it (Features/HiddenNodes; the hidden event rides here), else ~0u.
 		std::uint32_t hiddenSite = ~0u;
 	};
 

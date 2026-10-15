@@ -1,7 +1,8 @@
 #pragma once
 
-// The scene capture's events: pushed by the hooked engine writers (SceneEvents.cpp, HiddenStores.cpp) on any thread, drained by the
-// coordinator's scene passes (keys, or held references) and the mirror (SceneTracker's updates).
+// The scene capture's events: pushed by the hooked engine writers (SceneEvents.cpp; the hidden stores' are a feature's:
+// Features/HiddenNodes) on any thread, drained by the coordinator's scene passes (keys, or held references) and the mirror (SceneTracker's
+// updates).
 
 #include <array>
 #include <atomic>
@@ -18,7 +19,7 @@ namespace DCLF::Scene
 {
 	/** @brief Installs every scene event hook below (render thread, PostPostLoad). */
 	void InstallSceneEvents();
-	/** @brief The hidden-bit stores are patched (HiddenStores.cpp). */
+	/** @brief The hidden events' source is installed (hiddenEventsInstalled: Features/HiddenNodes' patched stores). */
 	bool HiddenStoresLive();
 	/** @brief LodGates' own stores (a flip, a forced release's unhide), pushed as a hidden event. */
 	void PushGateHidden(const RE::NiAVObject* a_object);
@@ -197,17 +198,25 @@ namespace DCLF::Scene
 	 * @brief HiddenEvents: a node whose kHidden bit (flags bit 0) a patched store changed, as a key, riding in its mirror update
 	 * (Update::hiddenSite). An actor entry's verdict is retaken only when a node on its chain had one
 	 * (Coordinator::hiddenDependents), and for all on witness frames (Policy::HiddenWitness).
+	 *
+	 * The channel is Core's; its source is a feature's (Features/HiddenNodes: every engine store that can change the bit, patched at its
+	 * early hooks), which sets hiddenEventsInstalled and hiddenGateSite before DCLF's threads start. Without it the walk retakes every
+	 * frame verdict (hiddenGating off), and neither the LOD gates nor the kept scene lists engage.
 	 */
 	struct HiddenEvent
 	{
 		const void* key = nullptr;
-		std::uint32_t site = 0;  // the patched store's index (HiddenStoreSites())
+		std::uint32_t site = 0;  // the patched store's index (the source's: Features/HiddenNodes)
 		bool hidden = false;     // the bit's value after the store
 	};
 	inline bool hiddenEventsInstalled = false;
-	bool InstallHiddenStores();
-	/** @brief The patched store (its address in the image) whose stub holds a_address, or 0 (HiddenWatch's report). */
-	std::uintptr_t HiddenStoreSiteOf(std::uintptr_t a_address);
+	/** @brief The site LodGates' own stores carry (PushGateHidden): one past the source's sites. */
+	inline std::uint32_t hiddenGateSite = 0;
+	/**
+	 * @brief A hidden store's event, on the storing thread after the store (a_site: the source's store, or hiddenGateSite): the mirror's
+	 * bit and the hidden event in one update, so both land in the same batch.
+	 */
+	void PushHiddenUpdate(const void* a_object, std::uint32_t a_site);
 
 	inline void PushMove(const void* a_key)
 	{

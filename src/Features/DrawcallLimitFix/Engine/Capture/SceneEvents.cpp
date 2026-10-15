@@ -850,6 +850,26 @@ namespace DCLF::Scene
 		return PatchStores(sites, reinterpret_cast<std::uintptr_t>(&SwitchIndexStore), "switch events");
 	}
 
+	void PushHiddenUpdate(const void* a_object, std::uint32_t a_site)
+	{
+		// The mirror's bit and the hidden event in one update, so both land in the same batch.
+		SceneCapture::Update update{ SceneCapture::NodeRecord::kHidden, SceneCapture::CaptureNodeFields(*static_cast<const RE::NiAVObject*>(a_object), SceneCapture::NodeRecord::kHidden) };
+		update.hiddenSite = a_site;
+		SceneTracker::Get().PushUpdate(std::move(update));
+	}
+
+	void PushGateHidden(const RE::NiAVObject* a_object)
+	{
+		// LodGates' own stores (a flip, a forced release's unhide) as events: the site index past the source's.
+		if (hiddenEventsInstalled && a_object)
+			PushHiddenUpdate(a_object, hiddenGateSite);
+	}
+
+	bool HiddenStoresLive()
+	{
+		return hiddenEventsInstalled;
+	}
+
 	namespace
 	{
 		// Object LOD's segment writers (LodSegments.h): each patched call makes the write, then names the shape.
@@ -1039,7 +1059,7 @@ namespace DCLF::Scene
 		logger::info("[DCLF] scene events installed (fades, property flags, materials and material alpha, LOD fades, emittance, Havok node transforms, controllers): OnVisible at {:#x}",
 			onVisible - REL::Module::get().base() + 0x140000000);
 		InstallMoveEvents();
-		hiddenEventsInstalled = InstallHiddenStores();
+		// The hidden stores are Features/HiddenNodes' (its early hooks, right after these).
 		lodSegmentEventsInstalled = InstallLodSegmentHooks();
 		TreeLod::Install();
 	}

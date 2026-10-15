@@ -1,11 +1,13 @@
-// The hidden events: every engine store that can change NiAVObject::flags' kHidden bit calls a stub that pushes the node's mirror
-// update on the storing thread when the bit changed; LOD show stores also take LodGates' veto. Installed on the render thread.
+// The hidden events' source: every engine store that can change NiAVObject::flags' kHidden bit calls a stub that pushes the node's
+// mirror update on the storing thread when the bit changed (Core's channel: Scene::PushHiddenUpdate); LOD show stores also take LodGates'
+// veto. Installed on the render thread, at the feature's early hooks.
 
+#include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include <xbyak/xbyak.h>
 
-namespace DCLF::Scene
+namespace DCLF::Features::HiddenNodes
 {
 	namespace
 	{
@@ -514,10 +516,7 @@ namespace DCLF::Scene
 			if (hidden && a_site < HiddenStoreSites().size())
 				if (const auto offset = HiddenStoreSites()[a_site].offset; offset == 0x5106a4 || offset == 0x509b29 || offset == 0x509b39)
 					LodGates::NoteEngineHide(a_object, offset);
-			// The mirror's bit and the hidden event in one update, so both land in the same batch.
-			SceneCapture::Update update{ SceneCapture::NodeRecord::kHidden, SceneCapture::CaptureNodeFields(*static_cast<const RE::NiAVObject*>(a_object), SceneCapture::NodeRecord::kHidden) };
-			update.hiddenSite = a_site;
-			SceneTracker::Get().PushUpdate(std::move(update));
+			Scene::PushHiddenUpdate(a_object, a_site);
 		}
 
 		/**
@@ -656,21 +655,66 @@ namespace DCLF::Scene
 	{
 		std::uintptr_t stubCode = 0;
 		std::vector<std::size_t> stubEntries;
+
+		/** @brief Patches every store, after checking every site's bytes (none is patched when one differs). */
+		bool PatchStores()
+		{
+			const auto& sites = HiddenStoreSites();
+			const auto base = REL::Module::get().base();
+			for (const auto& site : sites) {
+				if (std::memcmp(reinterpret_cast<const void*>(base + site.offset), site.bytes.data(), site.length) != 0) {
+					logger::warn("[DCLF] hidden events not installed: the store at {:#x} is not the expected instruction", 0x140000000 + site.offset);
+					return false;
+				}
+			}
+			std::vector<std::size_t> entries;
+			HiddenStoreStubs stubs(sites, entries);
+			// Its own block just past the image: the shared trampoline is too small, and every `call rel32` must reach it.
+			const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+			const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+			const std::uintptr_t imageEnd = base + nt->OptionalHeader.SizeOfImage;
+			SYSTEM_INFO system{};
+			::GetSystemInfo(&system);
+			const std::uintptr_t granularity = system.dwAllocationGranularity;
+			std::uint8_t* code = nullptr;
+			for (std::uintptr_t at = (imageEnd + granularity - 1) & ~(granularity - 1); !code && at < imageEnd + 0x10000000; at += granularity)
+				code = static_cast<std::uint8_t*>(::VirtualAlloc(reinterpret_cast<void*>(at), stubs.getSize(), MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+			if (!code) {
+				logger::warn("[DCLF] hidden events not installed: no memory within reach of the module for the stubs");
+				return false;
+			}
+			for (std::size_t i = 0; i < sites.size(); ++i) {
+				const auto distance = reinterpret_cast<std::intptr_t>(code + entries[i]) - static_cast<std::intptr_t>(base + sites[i].offset + 5);
+				if (distance != static_cast<std::int32_t>(distance)) {
+					::VirtualFree(code, 0, MEM_RELEASE);
+					logger::warn("[DCLF] hidden events not installed: the stubs at {:p} are out of reach of the store at {:#x}", static_cast<void*>(code), 0x140000000 + sites[i].offset);
+					return false;
+				}
+			}
+			std::memcpy(code, stubs.getCode(), stubs.getSize());
+			::FlushInstructionCache(::GetCurrentProcess(), code, stubs.getSize());
+			stubCode = reinterpret_cast<std::uintptr_t>(code);
+			stubEntries = entries;
+			for (std::size_t i = 0; i < sites.size(); ++i) {
+				const std::uintptr_t at = base + sites[i].offset;
+				std::array<std::uint8_t, 12> patch{ 0xE8, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
+				const auto displacement = static_cast<std::int32_t>(reinterpret_cast<std::intptr_t>(code + entries[i]) - static_cast<std::intptr_t>(at + 5));
+				std::memcpy(patch.data() + 1, &displacement, sizeof(displacement));
+				REL::safe_write(at, patch.data(), sites[i].length);
+			}
+			logger::info("[DCLF] hidden events: {} stores to NiAVObject::flags patched ({} bytes of stubs)", sites.size(), stubs.getSize());
+			return true;
+		}
 	}
 
-	void PushGateHidden(const RE::NiAVObject* a_object)
+	void InstallStores()
 	{
-		// LodGates' own stores (a flip, a forced release's unhide) as events: the site index past the table.
-		if (hiddenEventsInstalled && a_object)
-			PushHidden(a_object, static_cast<std::uint32_t>(HiddenStoreSites().size()));
+		// Core's channel: LodGates' own stores carry the site past the table; the walk gates its verdicts on the events once installed.
+		Scene::hiddenGateSite = static_cast<std::uint32_t>(HiddenStoreSites().size());
+		Scene::hiddenEventsInstalled = PatchStores();
 	}
 
-	bool HiddenStoresLive()
-	{
-		return hiddenEventsInstalled;
-	}
-
-	std::uintptr_t HiddenStoreSiteOf(std::uintptr_t a_address)
+	std::uintptr_t StoreSiteOf(std::uintptr_t a_address)
 	{
 		if (!stubCode || a_address < stubCode || stubEntries.empty())
 			return 0;
@@ -680,54 +724,5 @@ namespace DCLF::Scene
 			return 0;
 		const auto index = static_cast<std::size_t>(it - stubEntries.begin()) - 1;
 		return index < HiddenStoreSites().size() ? 0x140000000 + HiddenStoreSites()[index].offset : 0;
-	}
-
-	bool InstallHiddenStores()
-	{
-		const auto& sites = HiddenStoreSites();
-		const auto base = REL::Module::get().base();
-		for (const auto& site : sites) {
-			if (std::memcmp(reinterpret_cast<const void*>(base + site.offset), site.bytes.data(), site.length) != 0) {
-				logger::warn("[DCLF] hidden events not installed: the store at {:#x} is not the expected instruction", 0x140000000 + site.offset);
-				return false;
-			}
-		}
-		std::vector<std::size_t> entries;
-		HiddenStoreStubs stubs(sites, entries);
-		// Its own block just past the image: the shared trampoline is too small, and every `call rel32` must reach it.
-		const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-		const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-		const std::uintptr_t imageEnd = base + nt->OptionalHeader.SizeOfImage;
-		SYSTEM_INFO system{};
-		::GetSystemInfo(&system);
-		const std::uintptr_t granularity = system.dwAllocationGranularity;
-		std::uint8_t* code = nullptr;
-		for (std::uintptr_t at = (imageEnd + granularity - 1) & ~(granularity - 1); !code && at < imageEnd + 0x10000000; at += granularity)
-			code = static_cast<std::uint8_t*>(::VirtualAlloc(reinterpret_cast<void*>(at), stubs.getSize(), MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
-		if (!code) {
-			logger::warn("[DCLF] hidden events not installed: no memory within reach of the module for the stubs");
-			return false;
-		}
-		for (std::size_t i = 0; i < sites.size(); ++i) {
-			const auto distance = reinterpret_cast<std::intptr_t>(code + entries[i]) - static_cast<std::intptr_t>(base + sites[i].offset + 5);
-			if (distance != static_cast<std::int32_t>(distance)) {
-				::VirtualFree(code, 0, MEM_RELEASE);
-				logger::warn("[DCLF] hidden events not installed: the stubs at {:p} are out of reach of the store at {:#x}", static_cast<void*>(code), 0x140000000 + sites[i].offset);
-				return false;
-			}
-		}
-		std::memcpy(code, stubs.getCode(), stubs.getSize());
-		::FlushInstructionCache(::GetCurrentProcess(), code, stubs.getSize());
-		stubCode = reinterpret_cast<std::uintptr_t>(code);
-		stubEntries = entries;
-		for (std::size_t i = 0; i < sites.size(); ++i) {
-			const std::uintptr_t at = base + sites[i].offset;
-			std::array<std::uint8_t, 12> patch{ 0xE8, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
-			const auto displacement = static_cast<std::int32_t>(reinterpret_cast<std::intptr_t>(code + entries[i]) - static_cast<std::intptr_t>(at + 5));
-			std::memcpy(patch.data() + 1, &displacement, sizeof(displacement));
-			REL::safe_write(at, patch.data(), sites[i].length);
-		}
-		logger::info("[DCLF] hidden events: {} stores to NiAVObject::flags patched ({} bytes of stubs)", sites.size(), stubs.getSize());
-		return true;
 	}
 }

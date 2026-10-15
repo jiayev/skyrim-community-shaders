@@ -3,8 +3,8 @@
 
 #include "Internal.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 
 #include <map>
 #include <numeric>
@@ -79,7 +79,7 @@ namespace DCLF::Scene
 		if (!lightEntriesDirty.empty()) {
 			std::sort(lightEntriesDirty.begin(), lightEntriesDirty.end());
 			lightEntriesDirty.erase(std::unique(lightEntriesDirty.begin(), lightEntriesDirty.end()), lightEntriesDirty.end());
-			const bool switchNodes = ActiveToggles().switchNodes;
+			const bool switchNodes = Extensions::ParentAdmits(ActiveToggles(), Api::EngineParent::Switch, Api::ParentLeaves::SelectedLeaves);
 			std::vector<std::pair<bool, std::uint64_t>> verdicts;
 			DirtyVerdicts(inSceneTask, lightEntriesDirty.size(), verdicts, [this] { return ShardScope(*this, true); }, [&](std::size_t a_index) {
 				const auto* dependents = LightDependentsOf(lightEntriesDirty[a_index]);
@@ -156,7 +156,7 @@ namespace DCLF::Scene
 		if (!sunEntriesDirty.empty()) {
 			std::sort(sunEntriesDirty.begin(), sunEntriesDirty.end());
 			sunEntriesDirty.erase(std::unique(sunEntriesDirty.begin(), sunEntriesDirty.end()), sunEntriesDirty.end());
-			const bool switchNodes = ActiveToggles().switchNodes;
+			const bool switchNodes = Extensions::ParentAdmits(ActiveToggles(), Api::EngineParent::Switch, Api::ParentLeaves::SelectedLeaves);
 			std::vector<std::pair<bool, std::uint64_t>> verdicts;
 			DirtyVerdicts(inSceneTask, sunEntriesDirty.size(), verdicts, [this] { return ShardScope(*this, true); }, [&](std::size_t a_index) {
 				bool candidate = false;
