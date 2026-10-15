@@ -39,8 +39,6 @@ namespace DCLF
 		SunSkip,
 		SunExclude,
 		PrimaryExclude,
-		Skylight,
-		Precipitation,
 		OpaqueEffects,
 		EmptyFadeNode,
 		OrgEpochs,
@@ -121,7 +119,7 @@ namespace DCLF
 
 	/**
 	 * @brief Main thread, at install (Extensions::InstallFeatures, for a_feature): a feature's switch, read now, as Core's were. Fails
-	 * the install for a name Core or another feature has, or an after naming no Core switch.
+	 * the install for a name Core or another feature has, an after or a before naming no Core switch, or both.
 	 */
 	Api::SwitchId RegisterSwitch(const Api::FeatureSwitch& a_switch, std::string_view a_feature);
 	/** @brief A feature's switch's value (empty: unset, or no such switch); any thread after its registration. */

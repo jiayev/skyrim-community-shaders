@@ -223,7 +223,8 @@ void DrawcallLimitFix::EarlyPrepass()
 bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 {
 	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
-	static_assert(kSkyOcclusion == DCLF::kOcclusionSky && kPrecipitationOcclusion == DCLF::kOcclusionPrecipitation);
+	static_assert(kSkyOcclusion == static_cast<std::uint32_t>(DCLF::Api::OcclusionMap::Sky) &&
+				  kPrecipitationOcclusion == static_cast<std::uint32_t>(DCLF::Api::OcclusionMap::Precipitation));
 	return DCLF::FrameDriver::Get().OcclusionReady(a_map, Running());
 }
 
@@ -251,7 +252,7 @@ bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap a_map)
 
 bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap a_map)
 {
-	// The map's own parity's (its entry's referenceDue: Policy::RenderOcclusionReference for Core's maps).
+	// The map's own parity's (its entry's referenceDue: Policy::RenderOcclusionReference for Features/OcclusionMaps' maps).
 	const auto& map = DCLF::Extensions::OcclusionMapOf(a_map);
 	const bool due = map.referenceDue && map.referenceDue();
 	// The engine's reference map registers every occluder, from the whole scene lists.

@@ -1,5 +1,5 @@
-// The shadow-view entries (see the header): the features' contributions and Core's own, what the shadow engine reads of them, and the
-// shadow cameras' hooks.
+// The shadow-view entries (see the header): the features' contributions and Core's own sources, what the shadow engine reads of them,
+// and the shadow cameras' hooks.
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
@@ -9,7 +9,6 @@
 #include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
 #include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
 #include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
-#include "Features/Skylighting.h"
 
 namespace DCLF::Extensions
 {
@@ -24,62 +23,12 @@ namespace DCLF::Extensions
 		constexpr auto kPoint = static_cast<std::size_t>(Api::ShadowSource::Point);
 		constexpr auto kFocus = static_cast<std::size_t>(Api::ShadowSource::Focus);
 
-		// Core's own entries, until their features take them: the occlusion maps (Features/OcclusionMaps), the sun (Features/Shadows/Sun),
-		// the spot, point and focus sources (Features/Shadows/Local). A feature registering one of them fails the install.
-		constexpr bool kCoreMaps[kOcclusionMaps] = { true, true };
+		// Core's own entries, until their features take them: the sun (Features/Shadows/Sun), the spot, point and focus sources
+		// (Features/Shadows/Local). A feature registering one of them fails the install. (The occlusion maps are Features/OcclusionMaps'.)
 		constexpr bool kCoreSources[kShadowSources] = { true, true, true, true };
-
-		// The sky map's target: Skylighting's own occlusion texture, which it swaps in for the precipitation occlusion target.
-		void ImportSkyTarget(Api::OcclusionTargetImport& a_import)
-		{
-			if (auto* sky = globals::features::skylighting.texOcclusion) {
-				a_import.supplied = true;
-				a_import.texture = sky->resource.get();
-				a_import.view = sky->dsv.get();
-			}
-		}
-		bool SkyReferenceDue() { return Policy::RenderOcclusionReference(kOcclusionSky); }
-		bool PrecipitationReferenceDue() { return Policy::RenderOcclusionReference(kOcclusionPrecipitation); }
 
 		/** @brief A kept spot or point light's views, from its cameras (LightViews: the Lights board). */
 		void LightKept(const Api::ShadowLightKept& a_light) { LightViews::Get().Update(a_light.light); }
-
-		/**
-		 * @brief Core's own maps: Skylighting's sky map and the precipitation mask, both available while Skylighting is loaded: its
-		 * RenderOcclusion drives both maps (its hook of the engine's precipitation mask, then its own map).
-		 */
-		void FillCoreMaps(ShadowViewSet& a_set)
-		{
-			auto& sky = a_set.maps[kOcclusionSky];
-			if (kCoreMaps[kOcclusionSky]) {
-				sky.registered = true;
-				sky.coreToggle = &ToggleSet::skyOcclusion;
-				sky.available = &globals::features::skylighting.loaded;
-				sky.phase = kSetOccluderSky;
-				sky.viewBit = Draws::kViewSkyOccluder;
-				sky.rule = Api::OccluderRule::Skylighting;
-				sky.target = Api::OcclusionTarget::ImportedTexture;
-				sky.list = "sky occlusion";
-				sky.report = "Skylighting";
-				sky.targetName = "DCLF Skylighting occlusion map";
-				sky.importTarget = &ImportSkyTarget;
-				sky.referenceDue = &SkyReferenceDue;
-			}
-			auto& precipitation = a_set.maps[kOcclusionPrecipitation];
-			if (kCoreMaps[kOcclusionPrecipitation]) {
-				precipitation.registered = true;
-				precipitation.coreToggle = &ToggleSet::precipitationOcclusion;
-				precipitation.available = &globals::features::skylighting.loaded;
-				precipitation.phase = kSetOccluderPrecipitation;
-				precipitation.viewBit = Draws::kViewPrecipOccluder;
-				precipitation.rule = Api::OccluderRule::Precipitation;
-				precipitation.target = Api::OcclusionTarget::EngineMask;
-				precipitation.list = "precipitation";
-				precipitation.report = "precipitation";
-				precipitation.targetName = "DCLF precipitation occlusion mask";
-				precipitation.referenceDue = &PrecipitationReferenceDue;
-			}
-		}
 
 		/** @brief Core's own sources: the sun's and the focus views' cameras from Core's hooks, the kept local lights' from LightViews. */
 		void FillCoreSources(ShadowViewSet& a_set)
@@ -142,15 +91,10 @@ namespace DCLF::Extensions
 		if (std::exchange(once, true))
 			stl::report_and_fail("Drawcall Limit Fix: the shadow views were resolved twice");
 		ShadowViewSet set;
-		FillCoreMaps(set);
 		FillCoreSources(set);
-		for (std::size_t v = 0; v < a_maps.size(); ++v) {
-			if (a_maps[v].map >= Api::OcclusionMap::Count)
-				continue;
-			if (kCoreMaps[v])
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: occlusion map {} was registered by a feature, but Core still fills it", v));
-			FillRegistered(set.maps[v], a_maps[v]);
-		}
+		for (std::size_t v = 0; v < a_maps.size(); ++v)
+			if (a_maps[v].map < Api::OcclusionMap::Count)
+				FillRegistered(set.maps[v], a_maps[v]);
 		for (std::size_t s = 0; s < a_sources.size(); ++s) {
 			if (a_sources[s].source >= Api::ShadowSource::Count)
 				continue;

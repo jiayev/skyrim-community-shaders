@@ -79,15 +79,15 @@ namespace DCLF::Features::Reflection
 
 		void Install(Api::InstallContext& a_context)
 		{
-			// Where Core's was listed: after the precipitation mask's.
+			// Where Core's was listed: after the precipitation mask's (Features/OcclusionMaps', registered earlier before the same Core switch).
 			const auto reflectionsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_REFLECTIONS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "0: the water reflection's faces stay native (live toggle's seed)", .after = "CS_DCLF_PRECIPITATION" });
+				.description = "0: the water reflection's faces stay native (live toggle's seed)", .before = "CS_DCLF_OPAQUE_EFFECTS" });
 			// The water reflection's cube map faces' LOD drawn by DCLF from its own tables (dclf-lod.md, "Water reflections"). Where Core's was
-			// listed, after the precipitation occlusion's, opening its section; the first feature toggle registered, so its bit in the packed
-			// word is where Core's was.
+			// listed, after the precipitation occlusion's (Features/OcclusionMaps', registered earlier after the same Core toggle), opening its
+			// section; the first feature toggle registered after the maps', so its bit in the packed word is where Core's was.
 			const auto reflections = a_context.RegisterToggle({ .name = "reflections", .label = "Draw the water reflection's distant land, objects and trees (CS_DCLF_REFLECTIONS)",
 				.tooltip = "DCLF draws the LOD the water's cube map reflects from its own tables on the GPU; the engine draws the sky, and any LOD DCLF cannot draw yet.",
-				.section = "Reflections", .seed = reflectionsSwitch, .after = "precipitation occlusion" });
+				.section = "Reflections", .seed = reflectionsSwitch, .after = "exclude primary entries" });
 			// The view (Core's view machinery: its epochs, revisions, set decisions and withholding read it as data).
 			a_context.RegisterView(Contribution(reflections));
 			// The faces' targets, the LOD slots' forward pipelines and tree LOD's, and the view's resources, after tree LOD's decision; the

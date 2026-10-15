@@ -60,15 +60,12 @@ namespace DCLF
 		bool skipSunAccumulation = false;
 		// The sun's cascade culls skip the references whose shadows DCLF draws entirely (SunAccumulation).
 		bool excludeSunEntries = false;
-		// DCLF draws Skylighting's occlusion map.
-		bool skyOcclusion = false;
-		// DCLF draws the precipitation occlusion mask (with Skylighting, whose hook renders it).
-		bool precipitationOcclusion = false;
 		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull).
 		bool excludePrimaryEntries = false;
 
 		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees;
-		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs; Features/FirstPerson: a view), ...
+		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs; Features/FirstPerson: a view;
+		// Features/OcclusionMaps: its maps), ...
 		std::uint32_t registered = 0;
 		/** @brief Whether a feature's toggle is on (false for none). */
 		bool On(Api::ToggleId a_toggle) const { return a_toggle && ((registered >> a_toggle.bit) & 1u) != 0; }

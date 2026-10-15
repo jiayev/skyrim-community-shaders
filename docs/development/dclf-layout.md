@@ -58,7 +58,7 @@ may name camera hooks (`Api::Feature::cameraHooks`): the engine hooks that write
 | Scene resources | `Api/SceneResources.h` | state held with the scene's tables: versioned buffers registered with the scene's set, their graph registration, each revision's requirement, and the slots they hold of the objects (`SceneFit`) |
 | Commit hook | `Api/Commits.h` | its part of each commit's frame data (depth, colour, shadow), staged into the adopted versions on the render thread |
 | Frame binding | `Api/FrameBindings.h` | a buffer every draw reads at a declared texture register, given by the frame records (main, shadow, the builds' embedded addresses) and checked by the named-address parity |
-| Switches and toggles | `Api/Settings.h` | its `CS_DCLF_*` switches, listed where it says beside Core's, and its live toggles, in the menu and the packed word (a toggle may need Core's or an earlier feature's) |
+| Switches and toggles | `Api/Settings.h` | its `CS_DCLF_*` switches, listed where it says beside Core's (right after a Core switch, or right before one), and its live toggles, in the menu and the packed word (a toggle may need Core's or an earlier feature's) |
 | Report lines | `Api/Reports.h` | its lines at a named point of the periodic report: logged, handed the report's frame (`PrimaryCull`; `Statistics`, the statistics' last), or appended to the report's text (`AsyncWorkViews`, the views' lines in the draws' async work, after the visibility lines and before the forward epoch's; `AsyncWork`, the draws' async work) |
 | Stand-in observer | `Api/EngineEvents.h` | the primary cull's stood-in roots as they change, and Main::Update's entry; whether the primary cull is installed |
 | Table family | `Api/TableFamilies.h` | columns of its own in every `SceneTables` (`Extensions::TableFamilies`), read through a typed handle; Core keeps beside them the write stamp (the publication copies a family only when it moved), the objects' references into it (bounded by its scene resources' fit, carried in the record at a declared word) and its rows' tags, and recycles its retired rows |
@@ -144,7 +144,7 @@ observer, the set's decisions and their parity, the decals' forward keys, the pl
 frame globals' culled bits); FrameValues' root-view rows, palettes and particles; `PassCapture`'s withholding (InMainRenderers) and the
 census's view. BuildDrawsCS mirrors `kViewFirstPerson` (the manifest checks it).
 `Features/Reflection` followed, the second view on the contract: its switch and toggle (listed where Core's were, after the precipitation
-mask's, and registered first, so the toggle's bit in the packed word is where Core's was), its set phase and view bit (`kSetReflection`,
+mask's, and registered right after the occlusion maps' toggles, so the toggle's bit in the packed word is where Core's was), its set phase and view bit (`kSetReflection`,
 `kViewReflection`; no HLSL mirror), its contribution (the LOD techniques of the main set, a LOD Lighting technique's slots only; six faces
 with tree LOD; its last shape kept while off; its imported target's area; withheld in renderers of its own; drawn into the engine's cube
 with DCLF's own depth; covered before its first coverage and on a failed graph), its coverage callback, its work after tree LOD's decision
@@ -160,6 +160,19 @@ and what belongs to tree LOD and the LOD gates until those features move: the tr
 engine's place (`IndirectDraws::ViewLodRootsOwned`, with `LodGates` and `PassCapture::kLodRoots`/`kTreeRoot`), the residue watch under
 them (`PassCapture::WatchReflectionResidue`, `Policy::KeepReflectionRoots`, the residue classes), and the forward targets the faces'
 pipelines are built for (`DrawPipelines::SetForwardTargets`).
+`Features/OcclusionMaps` followed, the first feature on the shadow-view contract: its switches (`CS_DCLF_SKYLIGHT`, `CS_DCLF_PRECIPITATION`,
+listed where Core's were: before `CS_DCLF_OPAQUE_EFFECTS`, after the trees' list-all switch, with the reflection's and the first person's
+following them there) and its two toggles (which need the shadows; the first feature toggles registered, so their bits in the packed word
+are where Core's were, the feature listed first), the maps' set phases and view bits (`kSetOccluderSky`, `kSetOccluderPrecipitation`,
+`kViewSkyOccluder`, `kViewPrecipOccluder`, their values unchanged; no HLSL mirror; the manifest checks them and Core's `kCoreSetPhases` and
+`kCoreViewBits` no longer hold them), and the two `RegisterOcclusionMap` contributions: the sky map (Skylighting's occluder rule, its target
+Skylighting's own occlusion texture, imported by `importTarget`) and the precipitation mask (its rule, the engine's mask), both available
+while Skylighting is loaded (`skylighting.loaded`, read as data), with their labels and reference parity (`Policy::RenderOcclusionReference`).
+What it leaves Core is the shadow engine's: the occlusion epoch on the shadow commit, the maps' modes, view slots, depth targets and technique
+columns, the occluder rules' bodies (`Coordinator::OcclusionTechniqueOf`), the set decisions and the reports, all reading the maps' entries.
+The shell keeps its six occlusion methods and the 0x1C capture, which Skylighting calls (`DrawcallLimitFix::OcclusionReady` and its
+siblings), and the diagnostics keep `CS_DCLF_SKYLIGHT_PARITY`'s compare (`Diagnostics/Feature/Skylight`: its switches, its `Observation`
+flag and its place among the feature observers' installs are Core's).
 The particles' and billboards' per-object paths stay Core's for now: the particle snapshot store and the
 expansion FrameValues' producer runs per particle member into the palette part it shares with the skins (`Engine/Capture/
 ParticleSnapshots`), and the billboard placement row it samples per moving object (`Engine/Capture/Billboards`, Effect.hlsl's
@@ -259,10 +272,10 @@ boards and their math, the sun's accumulation, the caster phases and modes, and 
   (`ShadowViewSet::sourceOf`), and the capture reads its camera from that source's board.
 - **Resolved once.** `Extensions::ResolveShadowViews` (in `InstallFeatures`, after the views) makes each entry and derives each mode's
   phase (`phaseOfMode`), the set decision's readiness order (the casters', then the maps'), each engine view kind's source and the
-  import order. A map or source Core still fills itself fails the install when a feature registers it.
-- **Where it stands.** Core fills every entry itself (the maps with Core's toggles and Skylighting's flag, texture and reference parity;
-  the sources with its own hooks and `LightViews`), and installs the cameras' hooks it holds through `InstallCameraHooks`; the occlusion
-  maps move to `Features/OcclusionMaps`, the sun to `Features/Shadows/Sun` and the spot, point and focus sources to
+  import order. A source Core still fills itself fails the install when a feature registers it.
+- **Where it stands.** The occlusion maps are `Features/OcclusionMaps`' (their switches, toggles, bits, Skylighting's flag and texture
+  and their reference parity). Core still fills the sources' entries itself (its own hooks and `LightViews`), and installs the cameras'
+  hooks it holds through `InstallCameraHooks`; the sun moves to `Features/Shadows/Sun` and the spot, point and focus sources to
   `Features/Shadows/Local`.
 
 ## The rules

@@ -72,7 +72,7 @@ namespace DCLF::Api
 		/** @brief Fails the install for no view, no point or no function, or a view no feature contributes. */
 		virtual void RegisterViewWork(const ViewWork& a_work) = 0;
 		/**
-		 * @brief Fails the install for a map another feature (or Core) has, without a registered toggle or its available flag, with a phase
+		 * @brief Fails the install for a map another feature has, without a registered toggle or its available flag, with a phase
 		 * or view bit Core or another view has (or none, checked once all are in), or an ImportedTexture map without importTarget.
 		 */
 		virtual void RegisterOcclusionMap(const OcclusionMapContribution& a_map) = 0;

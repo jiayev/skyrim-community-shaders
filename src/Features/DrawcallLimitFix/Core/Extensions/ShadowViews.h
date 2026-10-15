@@ -1,7 +1,7 @@
 #pragma once
 
 // The shadow-view contributions' Core side (Api/ShadowViews.h): each occlusion map's and shadow source's entry, resolved once at
-// InstallFeatures (ResolveShadowViews) from the features' registrations or Core's own (a map or source Core still fills itself, until
+// InstallFeatures (ResolveShadowViews) from the features' registrations (the maps') or Core's own (a source Core still fills itself, until
 // its feature takes it), and what the shadow engine derives from them for its per-object and per-frame paths (each mode's set phase, the
 // set decision's readiness order, the source of each engine view kind, the maps' import order). The shadow capability, the captures,
 // both shadow epochs, the set decisions, the classification and the reports read them as data; the contexts the callbacks are handed
@@ -56,12 +56,11 @@ namespace DCLF::Extensions
 	inline constexpr std::size_t kShadowEngineModes = 3 + kOcclusionMaps;
 	inline constexpr std::size_t kShadowViewKinds = 4;
 
-	/** @brief A map's resolved entry: its feature's registration, or Core's own (none: registered false, every field its default). */
+	/** @brief A map's resolved entry: its feature's registration (none: registered false, every field its default). */
 	struct OcclusionMapEntry
 	{
 		bool registered = false;
 		Api::ToggleId toggle;                         // the feature's toggle
-		bool ToggleSet::*coreToggle = nullptr;        // or Core's own, while Core fills the entry
 		const bool* available = nullptr;              // the load-time flag, read whenever the toggle is
 		std::uint8_t phase = 0;                       // its set phase
 		std::uint32_t viewBit = 0;                    // its view bit at the GPU cull
@@ -112,20 +111,20 @@ namespace DCLF::Extensions
 	inline const ShadowSourceEntry& ShadowSourceOf(Api::ShadowSource a_source) { return ShadowViewsSet().sources[static_cast<std::size_t>(a_source)]; }
 	/**
 	 * @brief Main thread, in InstallFeatures (Registry), after the features' installs: the entries from the registered contributions (by
-	 * map and source; Count: none) and Core's own. Fails the install for a map or source a feature registered that Core still fills. Once.
+	 * map and source; Count: none) and Core's own sources. Fails the install for a source a feature registered that Core still fills. Once.
 	 */
 	void ResolveShadowViews(std::span<const Api::OcclusionMapContribution, kOcclusionMaps> a_maps,
 		std::span<const Api::ShadowSourceContribution, kShadowSources> a_sources);
 
 	/**
-	 * @brief Whether DCLF draws occlusion map a_map under a_toggles: taken, available (its load-time flag: Skylighting's, whose hook
-	 * drives both maps) and its toggle on. False past the maps.
+	 * @brief Whether DCLF draws occlusion map a_map under a_toggles: taken, available (its load-time flag: Features/OcclusionMaps' is
+	 * Skylighting's, whose hook drives both maps) and its toggle on. False past the maps.
 	 */
 	inline bool OcclusionOn(const ToggleSet& a_toggles, std::uint32_t a_map)
 	{
 		if (a_map >= kOcclusionMaps)
 			return false;
 		const auto& map = OcclusionMapOf(a_map);
-		return map.registered && *map.available && (map.coreToggle ? a_toggles.*map.coreToggle : a_toggles.On(map.toggle));
+		return map.registered && *map.available && a_toggles.On(map.toggle);
 	}
 }

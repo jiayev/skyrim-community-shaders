@@ -27,23 +27,26 @@ namespace DCLF
 	{
 		kSetMain = 1u << 0,                    // the main camera's Z-prepass and colour pass
 		kSetCaster = 1u << 1,                  // the plain and clamped shadow views (the sun's cascades, spot lights)
-		kSetOccluderSky = 1u << 2,             // Skylighting's occlusion map
-		kSetOccluderPrecipitation = 1u << 3,   // the precipitation occlusion mask
+		// 1u << 2, 1u << 3: the occlusion maps' (Features/OcclusionMaps' kSetOccluderSky, Skylighting's occlusion map, and
+		// kSetOccluderPrecipitation, the precipitation occlusion mask; Api::OcclusionMapContribution::bits, Features/Manifest.cpp).
 		kSetCasterPoint = 1u << 4,             // the paraboloid shadow views (point lights)
 		// 1u << 5, 1u << 6: features' views' (Features/Reflection's kSetReflection: a LOD member whose forward pipeline is ready and that
 		// was a main member at the last commit too, the faces drawing from the last frame's depth inputs; Features/FirstPerson's
 		// kSetFirstPerson; Api::ViewContribution::phase, Features/Manifest.cpp).
 	};
-	/** @brief Core's set phases: a view's phase (a feature's own bit) is none of them (Extensions::ResolveViews, Features/Manifest.cpp). */
-	inline constexpr std::uint8_t kCoreSetPhases = kSetMain | kSetCaster | kSetOccluderSky | kSetOccluderPrecipitation | kSetCasterPoint;
+	/**
+	 * @brief Core's set phases: a view's phase (a feature's own bit, of either view family) is none of them (Extensions::ResolveViewBits,
+	 * Features/Manifest.cpp).
+	 */
+	inline constexpr std::uint8_t kCoreSetPhases = kSetMain | kSetCaster | kSetCasterPoint;
 
 	/**
-	 * @brief The phase a shadow build's mode draws (IndirectDraws' mode index: 0 plain, 1 clamped, 2 paraboloid, then the occlusion
-	 * maps, kFirstOcclusionMode + kOcclusionSky / kOcclusionPrecipitation).
+	 * @brief The phase a shadow build's caster mode draws (IndirectDraws' mode index: 0 plain, 1 clamped, 2 paraboloid). An occlusion
+	 * map's mode (kFirstOcclusionMode + kOcclusionSky / kOcclusionPrecipitation) draws its map's phase: Extensions::ShadowViewSet::phaseOfMode.
 	 */
 	inline constexpr std::uint8_t SetPhaseOfMode(std::uint32_t a_mode)
 	{
-		return a_mode < 2 ? kSetCaster : a_mode == 2 ? kSetCasterPoint : a_mode == 3 ? kSetOccluderSky : kSetOccluderPrecipitation;
+		return a_mode < 2 ? kSetCaster : kSetCasterPoint;
 	}
 
 	/** @brief The set for one frame, by geometry: each member's phases. Immutable once published. */
