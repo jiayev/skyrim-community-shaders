@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 
@@ -1931,8 +1932,10 @@ namespace DCLF
 	void FrameValues::Impl::SampleFirstPerson(Job& a_job, const SetSnapshot& a_claims)
 	{
 		std::vector<std::uint8_t> taken;
+		// A CategoryRoot view's member (the first person's phase: Extensions::Views, resolved at install).
+		const std::uint8_t rootPhases = Extensions::Views().rootPhases;
 		auto take = [&](const Plan::Item& a_item) {
-			if (!a_item.firstPerson || !a_item.geometry || a_item.slot == kNoObjectSlot || !(a_claims.PhasesOf(a_item.geometry.get()) & kSetFirstPerson))
+			if (!a_item.firstPerson || !a_item.geometry || a_item.slot == kNoObjectSlot || !(a_claims.PhasesOf(a_item.geometry.get()) & rootPhases))
 				return;
 			if (taken.size() <= a_item.slot)
 				taken.resize(a_item.slot + 1, 0);
@@ -2039,7 +2042,7 @@ namespace DCLF
 			std::memcpy(job.firstPersonParticleCamera.eye, eye, sizeof(job.firstPersonParticleCamera.eye));
 		// Claimed first-person members, sampled after the engine's update and before Main::Draw's first-person shift
 		// (FUN_1414cb020), palettes included: the engine draws none of them, so none of its reads see a world-space palette.
-		if (const auto claims = std::exchange(firstPersonClaims, nullptr))
+		if (const auto claims = std::exchange(rootViewClaims, nullptr))
 			s.SampleFirstPerson(job, *claims);
 		if (s.plan)
 			s.plans.emplace_back(seq, s.plan);

@@ -99,7 +99,7 @@ namespace DCLF::Scene
 			std::uint64_t roots = 0, stillRoots = 0, rootsGated = 0;
 			std::uint64_t fadeRootsUnmirrored = 0;  // listed with no mirror record (FadeRootFromMirror)
 		} placementStats;
-		const RE::NiNode* plannedFirstPerson = nullptr;  // firstPersonCategory as the planned keys took it (a change makes the set anew)
+		std::array<const RE::NiNode*, Extensions::kEngineViews> plannedViewRoots{};  // viewRoots as the planned keys took them (a change makes the set anew)
 		/** @brief The frame each key last had a move event (drained at the delta walk). */
 		ankerl::unordered_dense::map<const void*, std::uint32_t> movedFrame;
 		// Keys with a move event this frame and the last: QueueRoots lists those references' roots whatever RootMoves says (cell updates

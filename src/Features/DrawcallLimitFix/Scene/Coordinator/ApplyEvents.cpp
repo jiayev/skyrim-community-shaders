@@ -872,8 +872,8 @@ namespace DCLF::Scene
 				retake.insert(a_geometry);
 		};
 		auto announceKey = [&](const void* a_key) {
-			// Not the first-person root (toggled within every frame; no member chain reaches its bit).
-			if (categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<void*>(a_key))) && a_key != firstPersonCategory)
+			// Not a CategoryRoot view's root (the first-person root: toggled within every frame; no member chain reaches its bit).
+			if (categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<void*>(a_key))) && !ViewRoot(a_key))
 				categoryEvents.insert(a_key);
 			const auto dependents = hiddenDependents.find(a_key);
 			if (dependents == hiddenDependents.end())

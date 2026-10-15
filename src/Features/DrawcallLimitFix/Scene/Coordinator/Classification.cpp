@@ -92,8 +92,9 @@ namespace DCLF::Scene
 		RE::NiNode* found = nullptr;
 		bool unmirrored = false;
 		const void* top = a_object;
-		// The first-person root is its own category node, never filed under one above it (whose members take no first-person phase).
-		if (a_object && a_object == firstPersonCategory) {
+		// A CategoryRoot view's root (the first-person root) is its own category node, never filed under one above it (whose members take
+		// no part in the view's phase).
+		if (ViewRoot(a_object)) {
 			a_reason = Ineligible::None;
 			a_unmirrored = !mirror.Node(a_object);
 			return static_cast<RE::NiNode*>(const_cast<void*>(a_object));
@@ -140,8 +141,8 @@ namespace DCLF::Scene
 	RE::NiNode* Coordinator::FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const
 	{
 		EngineReadWindow::Touch("Coordinator::FindCategoryNodeLive");
-		// The first-person root files its subtree under itself (MirrorCategoryNode).
-		if (a_object && a_object == firstPersonCategory) {
+		// A CategoryRoot view's root files its subtree under itself (MirrorCategoryNode).
+		if (ViewRoot(a_object)) {
 			if (a_parentReason)
 				*a_parentReason = Ineligible::None;
 			return static_cast<RE::NiNode*>(a_object);
@@ -191,7 +192,7 @@ namespace DCLF::Scene
 			++referenceStats.pins;
 		}
 		categorySignature = capture->signature;
-		firstPersonCategory = capture->firstPersonRoot;
+		viewRoots = capture->viewRoots;
 		const auto& current = capture->nodes;
 		const auto& currentRoots = capture->roots;
 
@@ -1064,8 +1065,8 @@ namespace DCLF::Scene
 		}
 		logger::info("[DCLF] first-person hidden verdict (T7e): geometry {} filed under {} (the first-person root {}{}); hidden at chain depth {}: node {}{}, {} (the mirror's bit {}); "
 					 "{} nodes listed in the frame's capture; the mirror's chain: {}",
-			static_cast<const void*>(a_tracked.geometry.get()), static_cast<const void*>(a_tracked.categoryNode), static_cast<const void*>(firstPersonCategory),
-			FirstPersonEntry(a_tracked.categoryNode) ? ", the same" : ", another", a_depth, a_key, a_key == a_tracked.categoryNode ? " (its category node)" : "",
+			static_cast<const void*>(a_tracked.geometry.get()), static_cast<const void*>(a_tracked.categoryNode), static_cast<const void*>(FirstViewRoot()),
+			ViewRootEntry(a_tracked.categoryNode) ? ", the same" : ", another", a_depth, a_key, a_key == a_tracked.categoryNode ? " (its category node)" : "",
 			listed ? fmt::format("listed hidden {} in the frame's capture", it->second) : std::string("not in the frame's capture"),
 			(a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0, cullHidden.size(), chain);
 	}
@@ -1076,7 +1077,7 @@ namespace DCLF::Scene
 		if (!Extensions::ParentAdmits(ActiveToggles(), Api::EngineParent::Billboard, Api::ParentLeaves::TurnedEffectShapes) ||
 			a_tracked.parentReason != Ineligible::Billboard)
 			return -1;
-		// First-person entries too (magic hand glows): the first-person forward part's b12 block (ExecuteFirstPersonDepth) is world
+		// First-person entries too (magic hand glows): the first-person forward part's b12 block (Features/FirstPerson's depth epoch) is world
 		// space throughout (c0-c2 the camera rotation, c40 the eye at GetFirstPersonNodePosition), sampled before the shift.
 		const auto leaf = mirror.Leaf(a_tracked.geometry.get());
 		if (!leaf || !SceneCapture::LeafView::Effect(leaf.property) || leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) || leaf.Skinned())
@@ -1097,12 +1098,14 @@ namespace DCLF::Scene
 		return billboards == 1 && mode <= 5 ? mode : -1;
 	}
 
-	void Coordinator::FirstPersonDecalForward(const Tracked& a_tracked, LightingDescriptors& a_descriptors) const
+	void Coordinator::ViewDecalForward(const Tracked& a_tracked, LightingDescriptors& a_descriptors) const
 	{
-		static const bool on = Extensions::ViewForwardDecals(Api::EngineView::FirstPerson);
-		// Decal groups 1 and 2 (hints 2 and 3); group 3 is a multi-index layer's, never first person's.
+		// Decal groups 1 and 2 (hints 2 and 3); group 3 is a multi-index layer's, never a view root's (first person's).
 		const std::uint32_t group = a_descriptors.decalGroup;
-		if (!on || (group != 1 && group != 2) || !FirstPersonEntry(a_tracked.categoryNode))
+		if (group != 1 && group != 2)
+			return;
+		const auto view = ViewRootOf(a_tracked.categoryNode);
+		if (view == Api::EngineView::Count || !Extensions::ViewForwardDecals(view))
 			return;
 		// The forward pixel stage: drop Deferred, as LightingShaderDescriptors does for a forward key.
 		a_descriptors.pixel &= a_descriptors.effect ? ~EffectFlag::Deferred : ~kLightingPixelDeferred;
@@ -1155,18 +1158,19 @@ namespace DCLF::Scene
 		const void* key = a_tracked.geometry.get();
 		std::uint32_t depth = 0;
 		for (const auto* record = mirror.Node(key); record; child = key, key = record->parent, record = key ? mirror.Node(key) : nullptr, ++depth) {
-			// The first-person root's kHidden belongs to the view (Main::Draw, unk_FPCulling and RenderDepth toggle it within the frame,
-			// FUN_140736150 at the camera switch): the chain stops before it. Whether the view draws is the first-person latch's.
-			if (key && key == firstPersonCategory) {
-				if (a_tracked.categoryNode != firstPersonCategory)
-					Diagnostics::Notify(Diagnostics::FirstPersonMisfiled{ a_tracked.geometry.get(), a_tracked.categoryNode });
+			// A CategoryRoot view's root's kHidden belongs to the view (the first-person root's: Main::Draw, unk_FPCulling and RenderDepth
+			// toggle it within the frame, FUN_140736150 at the camera switch): the chain stops before it. Whether the view draws is the
+			// view's (the first-person latch).
+			if (const auto view = ViewRootOf(key); view != Api::EngineView::Count) {
+				if (a_tracked.categoryNode != key)
+					Diagnostics::Notify(Diagnostics::ViewMisfiled{ view, a_tracked.geometry.get(), a_tracked.categoryNode });
 				break;
 			}
 			if (HiddenForWalk(key, *record)) {
 				// Diagnostic (pointers only, never dereferenced).
-				if (firstPersonCategory) {
+				if (FirstViewRoot()) {
 					const auto& skeleton = FrameGlobals::Current().firstPersonGeometry;
-					if (FirstPersonEntry(a_tracked.categoryNode) ||
+					if (ViewRootEntry(a_tracked.categoryNode) ||
 						std::binary_search(skeleton.begin(), skeleton.end(), static_cast<const RE::NiAVObject*>(static_cast<const void*>(a_tracked.geometry.get()))))
 						NoteFirstPersonHidden(a_tracked, key, *record, depth);
 				}

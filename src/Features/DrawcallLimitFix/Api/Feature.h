@@ -63,7 +63,11 @@ namespace DCLF::Api
 		virtual void RegisterShading(const ShadingContribution& a_shading) = 0;
 		/** @brief Fails the install past Extensions::kFrameGlobalsFloats floats in all. */
 		virtual FrameGlobalsSlot RegisterFrameGlobals(const FrameGlobalsContribution& a_globals) = 0;
-		/** @brief Fails the install for a view another feature has, one Core keeps, or without a registered toggle. */
+		/**
+		 * @brief Fails the install for a view another feature has, one Core keeps, without a registered toggle, with a phase or view bit
+		 * Core or another view has (or none), without covered, a CategoryRoot view without captureRoot, or an InMainRenderers view
+		 * without accumulators.
+		 */
 		virtual void RegisterView(const ViewContribution& a_view) = 0;
 		/** @brief Fails the install for no view, no point or no function. */
 		virtual void RegisterViewWork(const ViewWork& a_work) = 0;

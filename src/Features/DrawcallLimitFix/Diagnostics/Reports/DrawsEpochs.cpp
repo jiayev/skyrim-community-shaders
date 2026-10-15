@@ -7,7 +7,7 @@
 #include "Engine.h"
 
 // The views' epochs' report lines (taken by IndirectDraws::AsyncReport): the forward epoch and the effects, the reflection faces, the
-// first-person view, the accumulated visibility, the shadow capability.
+// accumulated visibility, the shadow capability. (The first-person view's: Features/FirstPerson.)
 
 namespace DCLF
 {
@@ -120,42 +120,6 @@ namespace DCLF
 		parity = {};
 		reflection.facesCaptured = reflection.updates = reflection.epochs = reflection.facesDrawn = reflection.lateFaces = 0;
 		reflection.skipped = {};
-		return text;
-	}
-
-	std::string IndirectDraws::FirstPersonReport()
-	{
-		if (!impl)
-			return {};
-		auto& f = impl->firstPerson;
-		const auto counts = PassCapture::Get().TakeFirstPersonCounts();
-		if (!f.frames && !Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) && !counts.registered)
-			return {};
-		const auto& s = f.skipped;
-		std::string text = fmt::format("[DCLF] first person (T7e, CS_DCLF_FIRST_PERSON {}): {} frames, {} the engine drew first person (latch); epochs: {} depth, {} colour; not drawn: "
-									   "{} not the view's frame, {} not covered, {} without the camera, {} stale inputs, {} without resources, {} failed{}, {} colour without the "
-									   "frame's depth epoch{}; targets colour {} motion {} depth {}, {} first-person pipeline slots, {} pipelines ready, depth range {:.4f}\n",
-			Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) ? "on" : "off", f.frames, f.latched, f.depthEpochs, f.colourEpochs, s[0], s[1], s[2], s[3], s[4], s[5], s[5] ? " <- EPOCH FAILED" : "", s[6],
-			s[6] ? " <- NO DEPTH EPOCH" : "", static_cast<int>(f.targets.colour), static_cast<int>(f.targets.colour2), static_cast<int>(f.targets.depth), f.slots,
-			f.pipelinesReady, f.depthRange);
-		const auto particles = FrameValues::TakeFirstPersonParticleStats();
-		text += fmt::format("[DCLF] first person's forward part (T7e): {:.1f} forward members a frame (blended Lighting, effects, particles; the main set's pipelines "
-							"through the colour signature, sorted back to front); particle members: {} expansions of {} particles faced to the first-person eye, "
-							"their snapshots' bound at most {:.0f} units from it{}{}\n",
-			f.frames ? static_cast<double>(f.forwardMembers) / static_cast<double>(f.frames) : 0.0, particles.expansions, particles.particles, particles.farthest,
-			particles.farthest > 2000.0f ? " <- FIRST-PERSON PARTICLE SPACE" : "",
-			f.forwardCompatible.load(std::memory_order_acquire) ? "" : "; the main depth format is not kPOST_ZPREPASS_COPY's: forward members stay the engine's");
-		// The <- FIRST PERSON observer (CS_DCLF_SET_PARITY; PassCapture): the engine's first-person registrations of members, withheld, and
-		// those it was handed (a member registered while its epochs did not draw: 0 on every covered frame).
-		if (Diagnostics::Observe().claims || counts.memberKept)
-			text += fmt::format("[DCLF] first person's registrations (T7e, the first-person accumulator and RenderDepth's block): {} passes registered into the "
-								"first-person accumulator, {} member passes withheld, {} member passes the engine drew{}\n",
-				counts.registered, counts.withheld, counts.memberKept,
-				counts.memberKept && f.depthEpochs ? " <- FIRST PERSON" : (counts.withheld || counts.registered ? " <- OK" : ""));
-		const std::uint32_t depthFrame = f.depthFrame;
-		f.frames = f.latched = f.depthEpochs = f.colourEpochs = f.forwardMembers = 0;
-		f.skipped = {};
-		f.depthFrame = depthFrame;
 		return text;
 	}
 

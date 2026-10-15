@@ -1,14 +1,16 @@
 // The features' shader manifest: the compile-time constants their shaders share with Core's, checked here not to overlap Core's or each
-// other's - the frame bindings' texture registers, the object flag bits their technique contributions set, and the record words their
-// table families' references are carried in. A feature with a frame binding (Api::FrameBinding) lists its register; the install checks
-// the registrations the same way (InstallContext::RegisterFrameBinding). One with a technique contribution (Api::TechniqueContribution)
-// lists its flags, and one whose family the record carries (Api::TableFamily::recordWord) its word. The contributions' keys (a
-// technique, a geometry type, a Core class's value: Api/ObjectContributors.h) are not listed here: the install fails a key two features
-// claim.
+// other's - the frame bindings' texture registers, the object flag bits their technique contributions set, the record words their
+// table families' references are carried in, and the views' set phases and view bits. A feature with a frame binding (Api::FrameBinding)
+// lists its register; the install checks the registrations the same way (InstallContext::RegisterFrameBinding). One with a technique
+// contribution (Api::TechniqueContribution) lists its flags, one whose family the record carries (Api::TableFamily::recordWord) its word,
+// and one with a view contribution (Api::ViewContribution) its phase and view bit (the install checks those too: Extensions::ResolveViews).
+// The contributions' keys (a technique, a geometry type, a Core class's value: Api/ObjectContributors.h) are not listed here: the install
+// fails a key two features claim.
 
 // TreeWindScene.h first: volk must precede every Vulkan header of the translation unit (the record layout).
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
 #include <cstddef>
@@ -60,6 +62,27 @@ namespace DCLF::Features
 			TreeWind::kTreeRecordWord,
 		};
 
+		// Every view's set phase (SceneSet.h's SetPhase bits: one bit of the eight, none Core's: kCoreSetPhases) and view bit at the GPU cull
+		// (GpuLayouts.h's kView*: one bit, none Core's: kCoreViewBits), none another view's.
+		constexpr std::uint32_t kViewPhases[] = {
+			FirstPerson::kSetFirstPerson,
+		};
+		constexpr std::uint32_t kViewBits[] = {
+			FirstPerson::kViewFirstPerson,
+		};
+
+		constexpr bool ViewBitsValid(const std::uint32_t* a_bits, std::size_t a_count, std::uint32_t a_core, std::uint32_t a_space)
+		{
+			std::uint32_t taken = a_core;
+			for (std::size_t i = 0; i < a_count; ++i) {
+				const std::uint32_t bit = a_bits[i];
+				if (!bit || (bit & (bit - 1)) || (bit & ~a_space) || (bit & taken))
+					return false;
+				taken |= bit;
+			}
+			return true;
+		}
+
 		constexpr bool RecordWordsValid()
 		{
 			for (std::size_t i = 0; i < std::size(kRecordWords); ++i) {
@@ -77,6 +100,10 @@ namespace DCLF::Features
 	static_assert(std::size(kFrameBindingRegisters) <= Extensions::kFrameBindingSlots, "more frame bindings than ResourceAddresses embeds: grow kFrameBindingSlots");
 	static_assert(ObjectFlagsValid(), "a feature's object flags are Core's (outside kFeatureObjectFlags) or another feature's");
 	static_assert(RecordWordsValid(), "a family's record words are past the object record or another family's");
+	static_assert(ViewBitsValid(kViewPhases, std::size(kViewPhases), kCoreSetPhases, 0xFFu), "a view's set phase is not one bit of the eight, or is Core's or another view's");
+	static_assert(ViewBitsValid(kViewBits, std::size(kViewBits), Draws::kCoreViewBits, 0xFFFFFFFFu), "a view's view bit is not one bit, or is Core's or another view's");
+	// FirstPerson's view bit: BuildDrawsCS.hlsl's kViewFirstPerson (the first-person forward range's cull).
+	static_assert(FirstPerson::kViewFirstPerson == 1u << 11, "FirstPerson's view bit is not BuildDrawsCS's kViewFirstPerson");
 	// TreeWind's: DCLFObjectRecord's DCLFWindTimers.zw (the record's TreeParams and WindTimers, xy the record's own).
 	static_assert(offsetof(BindlessObject, tree) + offsetof(ObjectTreeAnim, windTimers) + 2 * sizeof(float) == TreeWind::kTreeRecordWord * 4,
 		"TreeWind's record word is not DCLFWindTimers.z");

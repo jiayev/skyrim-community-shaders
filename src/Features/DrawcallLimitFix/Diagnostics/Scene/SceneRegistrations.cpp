@@ -158,7 +158,7 @@ namespace DCLF::Diagnostics
 
 	namespace
 	{
-		void OnMisfiled(const FirstPersonMisfiled& a_event)
+		void OnMisfiled(const ViewMisfiled& a_event)
 		{
 			auto& fp = SceneDiagnostics().firstPerson;
 			fp.misfiled.fetch_add(1, std::memory_order_relaxed);
@@ -169,7 +169,7 @@ namespace DCLF::Diagnostics
 
 	void InstallFirstPersonFiling()
 	{
-		Subscribe<FirstPersonMisfiled>(OnMisfiled);
+		Subscribe<ViewMisfiled>(OnMisfiled);
 	}
 
 	ResidueClasses TakeResidueClasses()

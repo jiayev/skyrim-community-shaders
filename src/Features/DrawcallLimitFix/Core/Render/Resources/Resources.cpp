@@ -839,15 +839,16 @@ namespace DCLF
 		return true;
 	}
 
-	bool IndirectDraws::Impl::ImportFirstPersonDepth()
+	bool IndirectDraws::Impl::ImportViewDepthTarget(ViewKind a_kind)
 	{
 		// kPOST_ZPREPASS_COPY, the first-person colour pass's depth (FUN_1414cb6d0: FUN_140e4fe00(manager, 7, ...)), imported in its
 		// DSV's format; the extension is added with it and again when the main resources change.
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto* renderer = globals::game::renderer;
-		if (!firstPerson.resources || !host || !renderer)
+		auto& view = View(a_kind);
+		if (!view.resources || !host || !renderer)
 			return false;
-		auto& r = *firstPerson.resources;
+		auto& r = *view.resources;
 		const auto& copy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 		if (!copy.texture || !copy.views[0])
 			return false;
@@ -877,7 +878,7 @@ namespace DCLF
 			logger::info("[DCLF] first-person depth imported: {}x{}, format {}", info.image.extent.width, info.image.extent.height, static_cast<int>(dsvDesc.Format));
 		}
 		r.rebuildPending = false;
-		host->AddExtension(kViewSlots[ViewIndex(ViewKind::FirstPerson)].extensionId, [state = firstPerson.resources] { return MakeViewExtension(state); });
+		host->AddExtension(kViewSlots[ViewIndex(a_kind)].extensionId, [state = view.resources] { return MakeViewExtension(state); });
 		PostRevisionInputs();
 		return true;
 	}

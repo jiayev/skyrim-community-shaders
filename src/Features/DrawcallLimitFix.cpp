@@ -370,36 +370,6 @@ void DrawcallLimitFix::Hooks::Accumulator_BlendedDraw<N>::thunk(void* a_accumula
 		DCLF::Diagnostics::Notify(DCLF::Diagnostics::TargetPoint{ "after engine blended" });
 }
 
-void DrawcallLimitFix::Hooks::RenderDepth_FirstPersonDraw::thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags)
-{
-	auto& feature = globals::features::drawcallLimitFix;
-	if (feature.Running()) {
-		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ZPrepass);
-		// The first-person subtree's hidden bits as the engine's first-person culls (unk_FPCulling, this block's) saw them: the next
-		// frame's members' chains read these (FrameGlobals::NoteFirstPersonCulled).
-		if (DCLF::Extensions::ViewOn(DCLF::ActiveToggles(), DCLF::Api::EngineView::FirstPerson))
-			if (auto* player = RE::PlayerCharacter::GetSingleton())
-				DCLF::FrameGlobals::NoteFirstPersonCulled(player->Get3D(true));
-		DCLF::IndirectDraws::Get().ExecuteFirstPersonDepth(DCLF::ShellState::Passes().depthControlDriven);
-		// DCLF's epoch leaves the context's bindings to the engine's state tracking.
-		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-	}
-	func(a_camera, a_accumulator, a_flags);
-}
-
-void DrawcallLimitFix::Hooks::RenderFirstPersonView_Draw::thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags)
-{
-	auto& feature = globals::features::drawcallLimitFix;
-	DCLF::Diagnostics::Notify(DCLF::Diagnostics::TargetPoint{ "before first person" });
-	if (feature.Running()) {
-		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::AfterOpaque);
-		DCLF::IndirectDraws::Get().ExecuteFirstPersonColour();
-		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-	}
-	DCLF::Diagnostics::Notify(DCLF::Diagnostics::TargetPoint{ "after DCLF first person" });
-	func(a_camera, a_accumulator, a_flags);
-	DCLF::Diagnostics::Notify(DCLF::Diagnostics::TargetPoint{ "after first person" });
-}
 
 std::uint32_t DrawcallLimitFix::Hooks::Main_Draw_RefractionCheck::thunk(void* a_accumulator)
 {
@@ -450,15 +420,7 @@ void DrawcallLimitFix::Hooks::Install()
 		stl::write_thunk_call<Main_Draw_RefractionCheck>(REL::Offset(DCLF::Engine::Address::kRefractionCheck).address());
 	else
 		logger::warn("[DCLF] Main::Draw's refraction point is not where expected; CS_DCLF_REFRACTION must stay off");
-	// The first-person view's two points (FUN_1414a90f0, the accumulator render, at RenderDepth's first-person draw and at
-	// FUN_1414cb6d0's), always installed: one compare a frame each while CS_DCLF_FIRST_PERSON is off.
-	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kDepthFirstPersonDraw).address(), REL::Offset(DCLF::Engine::Address::kAccumulatorRender).address()) &&
-		DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kFirstPersonViewDraw).address(), REL::Offset(DCLF::Engine::Address::kAccumulatorRender).address())) {
-		stl::write_thunk_call<RenderDepth_FirstPersonDraw>(REL::Offset(DCLF::Engine::Address::kDepthFirstPersonDraw).address());
-		stl::write_thunk_call<RenderFirstPersonView_Draw>(REL::Offset(DCLF::Engine::Address::kFirstPersonViewDraw).address());
-	} else {
-		logger::warn("[DCLF] the first-person draws are not where expected; the first-person view (T7e) never runs, and CS_DCLF_FIRST_PERSON must stay off");
-	}
+	// (The first-person view's two points are Features/FirstPerson's, installed with the features.)
 	logger::info("[DCLF] Native pass hooks installed");
 }
 

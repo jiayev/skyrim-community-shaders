@@ -125,8 +125,8 @@ namespace DCLF
 			view.HandOverAtFrameStart(draws.AdoptSnapshot(toggleGeneration));
 			view.SyncFrameTables();
 		}
-		// The views' frame start before the coverage that decides whether their members are withheld (the first-person view's latch,
-		// targets, pipelines and resources).
+		// The views' frame start before the coverage that decides whether their members are withheld (Features/FirstPerson's: the view's
+		// latch, targets, pipelines and resources).
 		RunViewWork(Api::ViewPoint::FrameStartBeforeCoverage);
 		// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand.
 		SunAccumulation::Get().BeginFrame(view.GetSunCandidates());
@@ -145,9 +145,12 @@ namespace DCLF
 			view.ReleaseGates();
 		}
 		Diagnostics::Notify<Diagnostics::FramePoint::ClaimsInstalled>();
-		// The first-person members the frame's epochs draw: their rows and palettes taken by the frame values' kick (below) on this thread,
-		// before Main::Draw moves the skeleton into its root's space.
-		FrameValues::Get().SetFirstPersonClaims(draws.FirstPersonCovered() ? view.FrameClaims() : nullptr);
+		// The CategoryRoot views' members the frame's epochs draw (the first person's): their rows and palettes taken by the frame values'
+		// kick (below) on this thread, before Main::Draw moves the skeleton into its root's space.
+		bool rootViewsCovered = false;
+		for (std::uint32_t i = 0; i < Extensions::Views().rootCount; ++i)
+			rootViewsCovered = rootViewsCovered || draws.ViewCovered(Extensions::Views().rootViews[i]);
+		FrameValues::Get().SetRootViewClaims(rootViewsCovered ? view.FrameClaims() : nullptr);
 		// What the next builds ahead take from the frame.
 		draws.PostAheadContext();
 		// The stood-in fade roots' write-back and the visibility readbacks: tasks on DCLF's executor, never joined.
@@ -192,7 +195,8 @@ namespace DCLF
 
 	void FrameDriver::RunViewWork(Api::ViewPoint a_point)
 	{
-		const Api::ViewPointContext context{ Scene::FrameView::Get().GetFrame(), IndirectDraws::Get().Failed() };
+		const auto& frame = Scene::FrameView::Get();
+		const Api::ViewPointContext context{ frame.GetFrame(), IndirectDraws::Get().Failed(), &frame.GetTables(), FrameCatalog() };
 		const auto point = static_cast<std::size_t>(a_point);
 		for (const auto& view : Extensions::Views().views)
 			for (const auto run : view.work[point])

@@ -3,11 +3,13 @@
 // The scene's channels: every message between the render thread (Scene::FrameView) and the coordinator's passes (Scene::Coordinator).
 // Each is lock-free and has one producer side and one consumer side; neither thread reads the other's state, only what was sent here.
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/PublicationLog.h"
@@ -73,8 +75,9 @@ namespace DCLF::Scene
 		// Every node and geometry under its new category nodes and new roots, held for the coordinator's references (copies of these) until
 		// it has applied a newer capture. "New" is against the capture the coordinator applied last, so each capture pins all it names.
 		std::vector<RE::NiPointer<RE::NiRefObject>> pins;
-		// The player's first-person root (CS_DCLF_FIRST_PERSON), both a category node and a root (filed under itself), or null.
-		const RE::NiNode* firstPersonRoot = nullptr;
+		// By view, a CategoryRoot view's root (Api::ViewContribution::captureRoot: the player's first-person root while its toggle is on),
+		// both a category node and a root (filed under itself), or null.
+		std::array<const RE::NiNode*, Extensions::kEngineViews> viewRoots{};
 	};
 
 	/**

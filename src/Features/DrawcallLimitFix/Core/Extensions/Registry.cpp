@@ -241,7 +241,11 @@ namespace DCLF::Extensions
 
 			void RegisterView(const Api::ViewContribution& a_view) override
 			{
-				if (a_view.view >= Api::EngineView::Count || !a_view.toggle)
+				// Its callbacks: the coverage always, the root for a CategoryRoot view, the accumulators for an InMainRenderers one. Its phase
+				// and view bit are checked against Core's and the other views' once all are in (ResolveViews).
+				if (a_view.view >= Api::EngineView::Count || !a_view.toggle || !a_view.phase || !a_view.shape.viewBits || !a_view.covered ||
+					(a_view.membership == Api::ViewMembership::CategoryRoot && !a_view.captureRoot) ||
+					(a_view.withholding == Api::ViewWithholding::InMainRenderers && !a_view.accumulators))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete view contribution", feature));
 				if (CoreKeepsView(a_view.view))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes view {}, which Core keeps", feature, static_cast<std::uint32_t>(a_view.view)));

@@ -91,7 +91,7 @@ namespace DCLF
 			// A skin's palette block (SceneTables::boneOffset, boneRows), 0 rows without one: the engine's palette update, then its
 			// rows (PaletteRowsOf).
 			std::uint32_t boneOffset = 0, boneRows = 0;
-			// A first-person entry's (FirstPersonEntry). The engine moves the first-person skeleton's world translations to its
+			// A first-person entry's (a CategoryRoot view's: ViewRootEntry). The engine moves the first-person skeleton's world translations to its
 			// root's space on the render thread (FUN_1414cb020 to FUN_1414cb270, and RenderDepth's block), within the read window: the
 			// producer never samples it, and the render thread takes a claimed one's row and palette at the frame's start, before
 			// the shift (FrameValues::Kick).

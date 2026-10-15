@@ -26,7 +26,7 @@ namespace DCLF::Diagnostics
 		static std::uint32_t tablesGeneration(const Store& s) { return s.tablesGeneration; }
 		static std::uint32_t walkSerial(const Store& s) { return s.walkSerial; }
 		static const auto& perFrameSet(const Store& s) { return s.perFrameSet; }
-		static const RE::NiNode* firstPersonCategory(const Store& s) { return s.firstPersonCategory; }
+		static const RE::NiNode* firstViewRoot(const Store& s) { return s.FirstViewRoot(); }
 
 		// The render thread's (Scene::FrameView): its frame, its captures' and constants' counters, tree LOD's mirror.
 		using Frame = Scene::FrameView;

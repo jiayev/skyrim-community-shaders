@@ -2,29 +2,57 @@
 
 // FirstPerson (CS_DCLF_FIRST_PERSON, CS_DCLF_FIRST_PERSON_DECALS; drawcall-limit-fix.md, "First person as a view bit"): the player's
 // first-person skeleton (arms, weapons, shield, magic hands) drawn by DCLF as a view of the one scene, while its toggle is on. The feature
-// registers its switches and live toggle (which needs the skinned and Features/Actors' actors), the view's contribution
-// (Api::EngineView::FirstPerson: the view machinery reads its toggle and its forward decals as data), the view's report lines (at the draws'
-// async work) and the skeleton's parity (Diagnostics/SkeletonParity.cpp).
+// registers its switches and live toggle (which needs the skinned and Features/Actors' actors) and the view's contribution
+// (Api::EngineView::FirstPerson): its set phase and view bit (kSetFirstPerson, kViewFirstPerson), its membership (a category root: the
+// first-person root, CaptureRoot), its key rule and shape (one face, a forward part, a depth pass), its life (dropped while off), area
+// (the main colour viewport), withholding (in the main accumulators: Accumulators) and target (kPOST_ZPREPASS_COPY), and its coverage
+// (Covered). Its work at the frame's start (BeginFrame: the latch, the targets, the skeleton's walk, the pipelines and resources), its
+// two epochs (ExecuteDepth, ExecuteColour) and their engine hooks (InstallHooks: RenderDepth's first-person draw, Main::RenderFirstPersonView's
+// accumulator render), its state and report counters (FirstPersonFrame, Report: its lines at the views' async work) and the skeleton's
+// parity (Diagnostics/SkeletonParity.cpp) are the feature's, on the view engine's calls (IndirectDraws.h, "The view engine").
 //
-// Core keeps the view machinery the reflection and the shadow views share:
-// - the epochs (Core/Render/Epochs/FirstPerson.cpp: the latch, the targets, the pipelines, the depth and colour epochs, their segments and
-//   Tracy zones; ViewEpoch*.cpp: the view's passes and its forward part), their revisions (Revision/: the view's shape, key group and
-//   coverage), its resources and state (Impl/Views.h's FirstPersonState, the report's counters: IndirectDraws::FirstPersonReport);
-// - the scene's side: the first-person root as a category node (State/Categories.h, ClassifyFrame's category stop and
-//   NoteFirstPersonHidden, the misfiled observer), kSetFirstPerson and its decisions (SetParticipation, FirstPersonSlotReady), the view bit
-//   kViewFirstPerson, the placements' per-frame chains (Placements.cpp, Walk.cpp), the first-person decals' forward keys
-//   (Coordinator::FirstPersonDecalForward), the frame requests' root and the frame globals' culled bits;
-// - FrameValues' first-person rows and palettes (taken at the frame's start, the palette marks) and its particles faced to the view's eye;
-// - PassCapture's withholding of the members' engine registrations, and the census's first-person view;
-// - the shell's two engine hooks (RenderDepth's first-person draw, Main::RenderFirstPersonView's accumulator render), which run the epochs.
-// Moving them needs a view contract (see dclf-layout.md, "view kinds"). Included by the feature's sources only.
+// Core keeps what every bucketed view shares, keyed by the view's slot or its membership (Core/Render/Views/ViewSlots.h,
+// Core/Extensions/Views.h):
+// - the epochs' segments and Tracy zones' passes (ViewEpoch*.cpp: the view's passes and its forward part), their revisions (the
+//   shape, key group, coverage inputs), the slot's state (Impl/Views.h's ViewEpochState: targets, resources, depth range, forward
+//   compatibility), the forward keys' targets (DrawPipelines' kForwardFirstPerson keys and first-person targets);
+// - the scene's side of a CategoryRoot view: its root as a category node (the classification's root stop, NoteFirstPersonHidden and the
+//   misfiled observer, ViewMisfiled), the set's decisions (SetParticipation, the slot readiness, the first-person decals' forward keys:
+//   Coordinator::ViewDecalForward), the placements' per-frame chains (Placements.cpp, Walk.cpp), the frame requests' root and the frame
+//   globals' culled bits (FrameGlobals::NoteFirstPersonCulled);
+// - FrameValues' root-view rows and palettes (taken at the frame's start, the palette marks) and its particles faced to the view's eye;
+// - PassCapture's withholding of the members' engine registrations (InMainRenderers), and the census's first-person view.
+// Included by the feature's sources only (and Features/Manifest.cpp, for the constants).
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 
+#include <cstdint>
+#include <string>
+
 namespace DCLF::Features::FirstPerson
 {
+	// The view's set phase (SceneSet.h's SetPhase bits) and view bit at the GPU cull (GpuLayouts.h's kView*; BuildDrawsCS.hlsl's
+	// kViewFirstPerson mirrors it): Features/Manifest.cpp checks them against Core's.
+	inline constexpr std::uint8_t kSetFirstPerson = 1u << 6;
+	inline constexpr std::uint32_t kViewFirstPerson = 1u << 11;
+
 	// FirstPersonFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
+
+	// FirstPersonView.cpp: the view's work at the frame's start (ViewPoint::FrameStartBeforeCoverage), and its callbacks.
+	void BeginFrame(const Api::ViewPointContext& a_context);
+	bool Covered(const Api::ViewCoverage& a_coverage);
+	void CaptureRoot(Api::ViewRootCapture& a_capture);
+	void Accumulators(Api::ViewAccumulators& a_accumulators);
+
+	// FirstPersonEpochs.cpp: the depth epoch (RenderDepth's first-person draw), the colour epoch (Main::RenderFirstPersonView's accumulator
+	// render), and the view's report lines, taking its counters.
+	void ExecuteDepth(bool a_controlDriven);
+	void ExecuteColour();
+	std::string Report();
+
+	// FirstPersonHooks.cpp: the two engine hooks that run the epochs, from the feature's install.
+	void InstallHooks();
 
 	// Diagnostics/SkeletonParity.cpp: CS_DCLF_SET_PARITY's log of the skeleton's slots and claimed phases, when they change.
 	void SubscribeSkeletonParity();

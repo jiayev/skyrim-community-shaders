@@ -19,9 +19,14 @@ namespace DCLF::Scene
 {
 	std::uint32_t Coordinator::SetCapability()
 	{
-		// Main always; shadow/occlusion once set up (objects then wait on PhaseReady); reflection and first person once drawable.
-		return kSetMain | (ActiveToggles().shadows ? IndirectDraws::Get().ShadowCapability() : 0u) |
-		       (IndirectDraws::Get().ReflectionDrawable() ? kSetReflection : 0u) | (IndirectDraws::Get().FirstPersonDrawable() ? kSetFirstPerson : 0u);
+		// Main always; shadow/occlusion once set up (objects then wait on PhaseReady); each view's phase once it is drawable, in slot order
+		// (the reflection's, the first person's).
+		std::uint32_t phases = kSetMain | (ActiveToggles().shadows ? IndirectDraws::Get().ShadowCapability() : 0u);
+		const auto& views = Extensions::Views();
+		for (std::size_t v = 0; v < views.views.size(); ++v)
+			if (views.views[v].phase && IndirectDraws::Get().ViewDrawable(static_cast<Api::EngineView>(v)))
+				phases |= views.views[v].phase;
+		return phases;
 	}
 
 	std::uint8_t Coordinator::SetParticipation(std::uint32_t a_slot, std::uint32_t a_drawn) const
@@ -29,15 +34,15 @@ namespace DCLF::Scene
 		const auto flags = tables.objects[a_slot].flags;
 		if (flags & kObjectFree)
 			return 0;
-		// A first-person slot takes part in the first-person view alone (the engine draws the skeleton in no world view; the sun's
-		// casters run with both roots hidden): opaque, alpha-tested or forward (blended Lighting, Effect meshes, particles). Decals,
-		// refraction and shadow-only objects stay the engine's (an effect decal is forward there, FirstPersonDecalForward).
-		if (FirstPersonSlot(a_slot)) {
+		// A CategoryRoot view's slot (a first-person one) takes part in its view alone (the engine draws the skeleton in no world view;
+		// the sun's casters run with both roots hidden): opaque, alpha-tested or forward (blended Lighting, Effect meshes, particles).
+		// Decals, refraction and shadow-only objects stay the engine's (an effect decal is forward there, ViewDecalForward).
+		if (const auto view = ViewRootOfSlot(a_slot); view != Api::EngineView::Count) {
 			const auto p = tables.objects[a_slot].pipelineIndex;
 			const bool forward = (flags & kObjectForward) && p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags);
 			const bool drawable = !(flags & kObjectShadowOnly) && !ObjectDecalGroup(flags) && p < tables.pipelines.size() &&
 			                      !RasterRefraction(tables.pipelines[p].rasterFlags) && (forward || !((flags & kObjectForward) || RasterEffect(tables.pipelines[p].rasterFlags)));
-			return static_cast<std::uint8_t>((drawable ? kSetFirstPerson : 0u) & a_drawn);
+			return static_cast<std::uint8_t>((drawable ? Extensions::ViewEntryOf(view).phase : 0u) & a_drawn);
 		}
 		std::uint32_t phases = 0;
 		if (!(flags & kObjectShadowOnly))
@@ -55,12 +60,12 @@ namespace DCLF::Scene
 		return static_cast<std::uint8_t>(phases & a_drawn);
 	}
 
-	bool Coordinator::FirstPersonSlot(std::uint32_t a_slot) const
+	Api::EngineView Coordinator::ViewRootOfSlot(std::uint32_t a_slot) const
 	{
-		if (!firstPersonCategory || a_slot >= tables.objectGeometry.size() || !tables.objectGeometry[a_slot])
-			return false;
+		if (!FirstViewRoot() || a_slot >= tables.objectGeometry.size() || !tables.objectGeometry[a_slot])
+			return Api::EngineView::Count;
 		const auto entry = tracked.find(tables.objectGeometry[a_slot]);
-		return entry != tracked.end() && FirstPersonEntry(entry->second.categoryNode);
+		return entry != tracked.end() ? ViewRootOf(entry->second.categoryNode) : Api::EngineView::Count;
 	}
 
 	bool Coordinator::MainReady(std::uint32_t a_slot, std::uint32_t& a_why) const
@@ -296,9 +301,12 @@ namespace DCLF::Scene
 			return d;
 		const std::uint8_t participation = SetParticipation(a_slot, a_drawn);
 		std::uint8_t phases = participation;
+		const auto& views = Extensions::Views();
 		if (!phases) {
-			// For the observers: a first-person slot SetParticipation left out.
-			d.firstPersonExcluded = (a_drawn & kSetFirstPerson) && Diagnostics::Armed<Diagnostics::SetSlotDecided>() && FirstPersonSlot(a_slot);
+			// For the observers: a CategoryRoot view's slot (a first-person one) SetParticipation left out.
+			if ((a_drawn & views.rootPhases) && Diagnostics::Armed<Diagnostics::SetSlotDecided>())
+				if (const auto view = ViewRootOfSlot(a_slot); view != Api::EngineView::Count)
+					d.rootViewExcluded = (a_drawn & Extensions::ViewEntryOf(view).phase) != 0;
 			return d;
 		}
 		auto waiting = [&](std::uint32_t a_why) {
@@ -316,32 +324,40 @@ namespace DCLF::Scene
 			if (!main)
 				phases &= ~kSetMain;
 		}
-		// First person draws with the main rows and bindings (FirstPerson.cpp): main-ready, plus its first-person pipelines (forward and
-		// Z-prepass) in the lookups' catalog. Reason 8: a forward pipeline.
-		if (phases & kSetFirstPerson) {
-			bool firstPerson = IsResidentSlot(a_slot);
-			if (std::uint32_t why = 0; firstPerson && !MainReady(a_slot, why)) {
-				waiting(why);
-				firstPerson = false;
-			}
-			std::uint32_t slotWhy = 0;
-			if (firstPerson && !IndirectDraws::Get().FirstPersonSlotReady(&tables, &lookups, lookupsCatalog.get(), a_slot, &slotWhy)) {
+		// The views', in the decision's order (Extensions::ViewSet::decideOrder: the CategoryRoot views, then the rest). Reason 8: a
+		// forward pipeline.
+		for (std::uint32_t i = 0; i < views.decideCount; ++i) {
+			const auto view = views.decideOrder[i];
+			const auto& entry = Extensions::ViewEntryOf(view);
+			if (!(phases & entry.phase))
+				continue;
+			if (entry.membership == Api::ViewMembership::CategoryRoot) {
+				// A CategoryRoot view (the first person) draws with the main rows and bindings: main-ready, plus its pipelines (forward and
+				// Z-prepass) in the lookups' catalog.
+				bool member = IsResidentSlot(a_slot);
+				if (std::uint32_t why = 0; member && !MainReady(a_slot, why)) {
+					waiting(why);
+					member = false;
+				}
+				std::uint32_t slotWhy = 0;
+				if (member && !IndirectDraws::Get().ViewSlotReady(view, &tables, &lookups, lookupsCatalog.get(), a_slot, &slotWhy)) {
+					waiting(8);
+					member = false;
+				}
+				if (!member)
+					phases &= static_cast<std::uint8_t>(~entry.phase);
+				// For the observers: held out, and why.
+				if (!member) {
+					d.rootViewHeld = true;
+					d.heldWhyCount = d.whyCount;
+					d.rootViewSlotWhy = slotWhy;
+				}
+			} else if (!IndirectDraws::Get().ViewSlotReady(view, &tables, &lookups, lookupsCatalog.get(), a_slot)) {
+				// A LodTechniques view (the reflection's faces) needs the slot's forward pipeline in the lookups' catalog (the one the
+				// revision resolves from).
 				waiting(8);
-				firstPerson = false;
+				phases &= static_cast<std::uint8_t>(~entry.phase);
 			}
-			if (!firstPerson)
-				phases &= ~kSetFirstPerson;
-			// For the observers: held out, and why.
-			if (!firstPerson) {
-				d.firstPersonHeld = true;
-				d.heldWhyCount = d.whyCount;
-				d.firstPersonSlotWhy = slotWhy;
-			}
-		}
-		// The reflection's faces need the slot's forward pipeline in the lookups' catalog (the one the revision resolves from).
-		if ((phases & kSetReflection) && !IndirectDraws::Get().ReflectionSlotReady(&tables, lookupsCatalog.get(), a_slot)) {
-			waiting(8);
-			phases &= ~kSetReflection;
 		}
 		for (const std::uint8_t phase : { kSetCaster, kSetCasterPoint, kSetOccluderSky, kSetOccluderPrecipitation })
 			if (std::uint32_t why = 7; (phases & phase) && !IndirectDraws::Get().PhaseReady(&tables, lookups, a_slot, phase, &why)) {
@@ -494,7 +510,7 @@ namespace DCLF::Scene
 					if (const auto* geometry = tables.objectGeometry[a_slot])
 						setStats.firstWaiting = fmt::format("'{}' (slot {}, reason {})", geometry->name.c_str() ? geometry->name.c_str() : "?", a_slot, why);
 			}
-			if (decision.firstPersonExcluded || decision.firstPersonHeld)
+			if (decision.rootViewExcluded || decision.rootViewHeld)
 				Diagnostics::Notify(Diagnostics::SetSlotDecided{ *this, a_slot, decision, decision.heldWhyCount ? decision.whys[0] : whyBefore });
 			return decision.phases;
 		};

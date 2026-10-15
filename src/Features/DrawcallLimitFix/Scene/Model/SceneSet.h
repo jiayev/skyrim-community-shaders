@@ -33,10 +33,10 @@ namespace DCLF
 		// The water reflection's cube map faces (dclf-lod.md, "Water reflections"): a LOD member whose forward pipeline is ready
 		// and that was a main member at the last commit too (the faces draw from the last frame's depth inputs).
 		kSetReflection = 1u << 5,
-		// The first-person view (drawcall-limit-fix.md, "First person as a view bit"): the first-person skeleton's geometry, drawn
-		// by the first-person epochs with the first-person camera and in no world view (never with another phase).
-		kSetFirstPerson = 1u << 6,
+		// 1u << 6: a feature's view's (Features/FirstPerson's kSetFirstPerson; Api::ViewContribution::phase, Features/Manifest.cpp).
 	};
+	/** @brief Core's set phases: a view's phase (a feature's own bit) is none of them (Extensions::ResolveViews, Features/Manifest.cpp). */
+	inline constexpr std::uint8_t kCoreSetPhases = kSetMain | kSetCaster | kSetOccluderSky | kSetOccluderPrecipitation | kSetCasterPoint | kSetReflection;
 
 	/**
 	 * @brief The phase a shadow build's mode draws (IndirectDraws' mode index: 0 plain, 1 clamped, 2 paraboloid, then the occlusion

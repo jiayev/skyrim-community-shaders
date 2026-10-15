@@ -79,7 +79,7 @@ namespace DCLF::Scene
 		// The claims this publication's revocation takes back (RevokeUndrawnClaims), applied to its claims alone.
 		std::vector<std::pair<const RE::BSGeometry*, std::uint8_t>> claimsRevoked;
 		bool setSnapshotDirty = true;  // setBuilding changed since the last published claims
-		/** @brief One slot's decision: phases, whether and why it waits, and the observers' first-person notes. */
+		/** @brief One slot's decision: phases, whether and why it waits, and the observers' notes of a CategoryRoot view's slot (first person's). */
 		struct SlotDecision
 		{
 			std::uint8_t phases = 0;  // every phase it takes part in if ready for all, else 0
@@ -87,10 +87,10 @@ namespace DCLF::Scene
 			bool partial = false;
 			std::array<std::uint8_t, 8> whys{};  // waiting reasons in order (waitingBy's index)
 			std::uint8_t whyCount = 0;
-			bool firstPersonExcluded = false;    // observed runs: a first-person slot its view takes no part in
-			bool firstPersonHeld = false;        // a first-person slot held out of its view
+			bool rootViewExcluded = false;       // observed runs: a CategoryRoot view's slot its view takes no part in
+			bool rootViewHeld = false;           // a CategoryRoot view's slot held out of its view
 			std::uint8_t heldWhyCount = 0;       // the reasons noted before it was held out
-			std::uint32_t firstPersonSlotWhy = 0;  // IndirectDraws::FirstPersonSlotReady's cause
+			std::uint32_t rootViewSlotWhy = 0;   // IndirectDraws::ViewSlotReady's cause
 		};
 	};
 }

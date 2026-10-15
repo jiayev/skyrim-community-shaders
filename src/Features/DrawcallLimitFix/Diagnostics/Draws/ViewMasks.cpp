@@ -17,6 +17,8 @@ namespace DCLF::Diagnostics
 		const auto& a_tables = a_built.tables;
 		auto& p = DrawsState::Get().viewMasks;
 		std::uint64_t inputs = 0, differ = 0;
+		// The main build's bits (Core's and the views'), and the CategoryRoot views' (resolved at install).
+		const std::uint32_t mainSideBits = MainSideBits(), rootViewBits = Extensions::Views().rootViewBits;
 		// a_list: 0 and 1 the main part (undrawable, drawable), 2 + mode a shadow mode's.
 		// The main part (both segments read the same): every input taken by one of them, and a drawable one by both (the colour
 		// segment's bits, kViewMain or kViewDecal, and the depth segment's but for a decal). A scene entry's shadow bits are the shadow
@@ -24,7 +26,7 @@ namespace DCLF::Diagnostics
 		auto checkMain = [&](const DrawInput& a_input) {
 			++inputs;
 			const std::uint32_t expected = MainMaskOf(a_tables, a_input.objectIndex);
-			const std::uint32_t mask = a_input.view.mask & kMainSideBits;
+			const std::uint32_t mask = a_input.view.mask & mainSideBits;
 			// A forward object (blended Lighting, refraction, an Effect member: kViewForward or kViewRefraction alone) is the colour
 			// segment's alone, as a decal is.
 			const bool colourOnly = ObjectDecalGroup(a_input.flags) != 0 || (a_input.flags & kObjectForward) != 0;
@@ -32,8 +34,8 @@ namespace DCLF::Diagnostics
 			if (mask == expected && (mask & (kDepthViewBits | kColourViewBits)) &&
 				(!drawable || ((mask & kColourViewBits) && (colourOnly || (mask & kDepthViewBits)))))
 				return;
-			// A first-person member's is kViewFirstPerson alone: the first-person epochs', no main segment's.
-			if (mask == expected && mask == kViewFirstPerson)
+			// A CategoryRoot view's member's is its view bit alone (a first-person member's): its epochs', no main segment's.
+			if (mask == expected && (mask & rootViewBits) && !(mask & ~rootViewBits))
 				return;
 			++differ;
 			std::uint64_t none = ~0ull;
@@ -44,7 +46,7 @@ namespace DCLF::Diagnostics
 			// The scene list's region: an entry holds a main part, shadow words, or both; never neither.
 			for (std::size_t i = 0; i < payload->resident.Count(); ++i) {
 				const DrawInput& input = *payload->resident.At(i);
-				if (input.view.mask & kMainSideBits)
+				if (input.view.mask & mainSideBits)
 					checkMain(input);
 				else if (!input.view.mask) {
 					++inputs;
@@ -58,7 +60,7 @@ namespace DCLF::Diagnostics
 		// with the key of each family it is drawn in.
 		if (const auto& shadowPayload = a_draws.shadow)
 			shadowPayload->ForEachInput([&](const DrawInput& a_input) {
-				const std::uint32_t shadowMask = a_input.view.mask & ~kMainSideBits;
+				const std::uint32_t shadowMask = a_input.view.mask & ~mainSideBits;
 				if (!shadowMask)
 					return;  // a scene entry's main part alone
 				++inputs;

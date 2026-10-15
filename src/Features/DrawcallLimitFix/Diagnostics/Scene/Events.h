@@ -186,9 +186,13 @@ namespace DCLF::Diagnostics
 		const RE::BSCullingProcess& process;
 	};
 
-	/** @brief An evaluation (any thread of the pass): an entry whose mirror chain reaches the first-person root while it is filed under another category node. */
-	struct FirstPersonMisfiled
+	/**
+	 * @brief An evaluation (any thread of the pass): an entry whose mirror chain reaches a CategoryRoot view's root (the first-person
+	 * root) while it is filed under another category node.
+	 */
+	struct ViewMisfiled
 	{
+		Api::EngineView view;
 		const void* geometry;
 		const void* category;
 	};
@@ -199,7 +203,10 @@ namespace DCLF::Diagnostics
 		std::span<const RE::NiAVObject* const> chain;
 	};
 
-	/** @brief The coordinator, CommitSet: a slot's decision that left a first-person slot out of its view (`waitWhy`: the waiting reason it shows). */
+	/**
+	 * @brief The coordinator, CommitSet: a slot's decision that left a CategoryRoot view's slot (a first-person one) out of its view
+	 * (`waitWhy`: the waiting reason it shows).
+	 */
 	struct SetSlotDecided
 	{
 		Scene::Coordinator& store;

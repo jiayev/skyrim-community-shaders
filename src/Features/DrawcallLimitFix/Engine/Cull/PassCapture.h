@@ -12,6 +12,7 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneSet.h"
@@ -20,9 +21,9 @@ namespace DCLF
 {
 	/**
 	 * @brief The registration hooks at every point where the engine hands a pass to a batch renderer. A member of the frame's DCLF
-	 * set (SceneSet.h) has its passes withheld from the main views (Z-prepass and main accumulators), the first-person accumulator,
-	 * the reflection faces and the occlusion maps while DCLF draws them; shadow views withhold the casters DCLF draws. Runs on
-	 * whatever thread the engine registers on.
+	 * set (SceneSet.h) has its passes withheld from the main views (Z-prepass and main accumulators), an InMainRenderers view's
+	 * accumulators (the first person's), the reflection faces and the occlusion maps while DCLF draws them; shadow views withhold the
+	 * casters DCLF draws. Runs on whatever thread the engine registers on.
 	 *
 	 * Lighting passes are also recorded, for observers only (FrameView::DrainCapture): DCLF draws nothing from registrations.
 	 * `BSBatchRenderer::RegisterPass` (vfunc 0x02), not GetRenderPasses, because `technique` (the caller's `techniqueID`, which
@@ -77,30 +78,39 @@ namespace DCLF
 		void SetReflectionFace(bool a_plain) { reflectionFace.store(a_plain, std::memory_order_release); }
 		void SetReflectionTreeLodOwned(bool a_owned) { reflectionTreeLodOwned.store(a_owned, std::memory_order_release); }
 		/**
-		 * @brief Render thread, BeginSceneFrame: whether the first-person epochs draw the first-person members. While set, a
-		 * kSetFirstPerson member's pass into the first-person accumulator (*0x14338c840, Main::unk_FPCulling's) or the Z-prepass's
-		 * (RenderDepth's first-person block culls into it) is withheld.
+		 * @brief Render thread, BeginSceneFrame: whether a view's epochs draw its members (its coverage). While an InMainRenderers view's
+		 * is set, its member's pass into the view's accumulators (the first person's: *0x14338c840, Main::unk_FPCulling's) or into the
+		 * main views' (the first person's RenderDepth block culls into the Z-prepass's) is withheld; an OwnRenderers view's is the
+		 * reflection faces' (SetReflectionCovered, while Core keeps the reflection).
 		 */
-		void SetFirstPersonCovered(bool a_covered) { firstPersonCovered.store(a_covered, std::memory_order_release); }
-		bool FirstPersonCovered() const { return firstPersonCovered.load(std::memory_order_acquire); }
-		/** @brief Whether a_batch is one of the first-person accumulator's batch renderers (for the census). */
-		bool IsFirstPersonRenderer(const RE::BSBatchRenderer* a_batch) const
+		void SetViewCovered(Api::EngineView a_view, bool a_covered)
 		{
-			const auto renderers = std::atomic_load(&firstPersonRenderers);
+			if (Extensions::ViewEntryOf(a_view).withholding == Api::ViewWithholding::InMainRenderers)
+				mainViews[static_cast<std::size_t>(a_view)].covered.store(a_covered, std::memory_order_release);
+			else
+				SetReflectionCovered(a_covered);
+		}
+		/** @brief An InMainRenderers view's coverage (SetViewCovered). */
+		bool ViewCovered(Api::EngineView a_view) const { return mainViews[static_cast<std::size_t>(a_view)].covered.load(std::memory_order_acquire); }
+		/** @brief Whether a_batch is one of an InMainRenderers view's accumulators' batch renderers. */
+		bool IsViewRenderer(Api::EngineView a_view, const RE::BSBatchRenderer* a_batch) const
+		{
+			const auto renderers = std::atomic_load(&mainViews[static_cast<std::size_t>(a_view)].renderers);
 			return renderers && renderers->contains(a_batch);
 		}
 		/**
-		 * @brief The <- FIRST PERSON observer's counts since the last call: members' passes withheld, members' passes handed on (the
-		 * epochs did not draw), and every pass into the first-person accumulator.
+		 * @brief An InMainRenderers view's counts since the last call (its report's observer, the first person's <- FIRST PERSON): members'
+		 * passes withheld, members' passes handed on (the epochs did not draw), and every pass into the view's accumulators.
 		 */
-		struct FirstPersonCounts
+		struct ViewCounts
 		{
 			std::uint32_t withheld = 0, memberKept = 0, registered = 0;
 		};
-		FirstPersonCounts TakeFirstPersonCounts()
+		ViewCounts TakeViewCounts(Api::EngineView a_view)
 		{
-			return { firstPersonWithheld.exchange(0, std::memory_order_relaxed), firstPersonMemberKept.exchange(0, std::memory_order_relaxed),
-				firstPersonRegistered.exchange(0, std::memory_order_relaxed) };
+			auto& view = mainViews[static_cast<std::size_t>(a_view)];
+			return { view.withheld.exchange(0, std::memory_order_relaxed), view.memberKept.exchange(0, std::memory_order_relaxed),
+				view.registered.exchange(0, std::memory_order_relaxed) };
 		}
 		/** @brief Render thread, BeginSceneFrame: whether the frame's faces are DCLF's at all. */
 		void SetReflectionCovered(bool a_covered) { reflectionCovered.store(a_covered, std::memory_order_release); }
@@ -238,14 +248,19 @@ namespace DCLF
 		using RendererSet = ankerl::unordered_dense::set<const RE::BSBatchRenderer*>;
 		std::shared_ptr<const RendererSet> mainRenderers;
 		std::array<const void*, 2> mainAccumulators{};  // what mainRenderers was made from (render thread)
-		// The first-person accumulator's renderers (also in mainRenderers), their source, and the counts.
-		std::shared_ptr<const RendererSet> firstPersonRenderers;
-		const void* firstPersonAccumulator = nullptr;
-		std::atomic<bool> firstPersonCovered{ false };
-		std::atomic<std::uint32_t> firstPersonWithheld{ 0 }, firstPersonMemberKept{ 0 }, firstPersonRegistered{ 0 };
+		// By view, an InMainRenderers view's: its accumulators' renderers (also in mainRenderers), their source (render thread), its
+		// coverage and its counts.
+		struct MainRendererView
+		{
+			std::shared_ptr<const RendererSet> renderers;
+			Api::ViewAccumulators accumulators;
+			std::atomic<bool> covered{ false };
+			std::atomic<std::uint32_t> withheld{ 0 }, memberKept{ 0 }, registered{ 0 };
+		};
+		std::array<MainRendererView, Extensions::kEngineViews> mainViews;
 		/**
 		 * @brief The main-view test at every insertion point: a member's pass into a main view (all of them: DCLF draws its fades and LOD
-		 * cross-fade copy), or tree LOD's or a first-person member's while DCLF draws those.
+		 * cross-fade copy), or tree LOD's or an InMainRenderers view's member's (the first person's) while DCLF draws those.
 		 */
 		bool WithholdMain(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass);
 		template <std::uint32_t Group>
