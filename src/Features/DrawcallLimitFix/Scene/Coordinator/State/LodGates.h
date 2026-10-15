@@ -59,12 +59,8 @@ namespace DCLF::Scene
 			std::vector<std::uint32_t> requestToFlipFrames;
 		};
 		ankerl::unordered_dense::map<std::uint64_t, LodGate> lodGates;
-		struct GateRoot
-		{
-			std::uint64_t token = 0;
-			std::uint8_t side = 0;  // kGateIncoming, kGateOutgoing
-		};
-		ankerl::unordered_dense::map<const void*, GateRoot> gateOfRoot;
+		// The gates' roots are the coordinator's marks (rootMarks: the gates' component's, token and side kGateIncoming/kGateOutgoing; the
+		// incoming own their hide).
 		std::vector<GateSlot> gateSlots;                                     // by object slot
 		std::vector<GateOutcome> gateOutcomesHeld;                           // taken, not applied yet
 		std::uint32_t gateHeldOutCount = 0;                                  // entries with Tracked::gateHeldOut

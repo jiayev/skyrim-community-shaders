@@ -348,8 +348,8 @@ namespace DCLF::Scene
 			hiddenAhead.clear();
 			DropSunCandidates();
 			buckets = {};
-			// The rescan's adds re-tag gated entries.
-			ResetGateTags();
+			// The rescan's adds re-tag gated entries (the gates' rescan hook drops their tags).
+			ComponentsRescan();
 		}
 
 		BatchIndex index;
@@ -657,9 +657,9 @@ namespace DCLF::Scene
 						mirror.Evict(event->node.get(), fmt::format("'{}' {}", event->node->name.c_str() ? event->node->name.c_str() : "",
 															 const_cast<RE::NiAVObject*>(event->node.get())->GetRTTI() ? const_cast<RE::NiAVObject*>(event->node.get())->GetRTTI()->name : "?"));
 				} else if (event->type == SceneTracker::EventType::Detached) {
-					// Before the records go: the gate goes on without a detached root.
-					if (event->detachedRoot && !gateOfRoot.empty())
-						NoteGateRootsDetached(event->detachedRoot, event->removedNodes);
+					// Before the records go: the marks on the detached roots erased, their components told (a gate goes on without the root).
+					if (event->detachedRoot && !rootMarks.empty())
+						UnmarkDetached(event->detachedRoot, event->removedNodes);
 					if (event->detachedRoot)
 						mirror.Detach(event->detachedRoot, event->removed, event->removedNodes);
 				} else if (event->type == SceneTracker::EventType::Stacked) {

@@ -16,6 +16,12 @@ namespace DCLF::Scene
 		{
 			Coordinator::Get().ApplyGateEvent(a_event.token, a_event.pinned, a_event.named, a_event.stampNs, a_event.stampFrame);
 		}
+		static void RootDetached(const void* a_key, const Api::Mark& a_mark) { Coordinator::Get().GateRootDetached(a_key, a_mark.token); }
+		static void Rescan() { Coordinator::Get().ResetGateTags(); }
+		static void UnderMark(const void* a_geometry, const Api::Mark& a_mark)
+		{
+			Coordinator::Get().TagGateUnder(static_cast<const RE::BSGeometry*>(a_geometry), a_mark);
+		}
 	};
 
 	namespace
@@ -27,12 +33,29 @@ namespace DCLF::Scene
 			if (a_channel == GateAdoption::channel)
 				GateComponentAccess::ApplyGateEvent(a_event);
 		}
+
+		// A gate root detached (its mark erased: the coordinator's UnmarkDetached, before the mirror's records go) leaves its gate.
+		void RootDetached(const Api::CoordinatorComponentContext&, const void* a_key, const Api::Mark& a_mark)
+		{
+			GateComponentAccess::RootDetached(a_key, a_mark);
+		}
+
+		// The rescan: the gates' tags dropped with the tracked set (its adds tag again).
+		void Rescan(const Api::CoordinatorComponentContext&)
+		{
+			GateComponentAccess::Rescan();
+		}
+
+		// A newly tracked geometry under a gate root (the nearest mark on its chain, its prepare's): tagged on the root's side.
+		void UnderMark(const Api::CoordinatorComponentContext&, const void* a_geometry, const Api::Mark& a_mark)
+		{
+			GateComponentAccess::UnderMark(a_geometry, a_mark);
+		}
 	}
 
 	void RegisterCoreGates(Api::InstallContext& a_context)
 	{
-		// The LOD gates, while their hooks are installed. Still to move onto the generic structures: their component's marks and events
-		// (b3), commit hooks (b4).
+		// The LOD gates, while their hooks are installed. Still to move onto the generic structures: their component's commit hooks (b4).
 		if (!LodGates::Enabled())
 			return;
 		// Their events on the scene's stack (in order with the incoming blocks' attaches), each, and each outcome they post, waking a
@@ -52,11 +75,11 @@ namespace DCLF::Scene
 		// The frames withdraw their claims while the installed publication predates a forced release (an older one may claim the
 		// outgoing blocks it detached).
 		a_context.RegisterAdoptionGuard({ .name = "LOD gates' forced releases", .generation = &GateAdoption::ForcedGeneration });
-		// The gates' component: gate events applied in stack order, flips published by the commit that made them, released by the frame
-		// adopting them.
+		// The gates' component: gate events applied in stack order, their roots marked (detached, rescanned, entries tagged under them), flips
+		// published by the commit that made them, released by the frame adopting them.
 		GateAdoption::component = a_context.RegisterCoordinatorComponent({ .name = "LOD gates",
 			.make = &GateAdoption::MakeState,
-			.events = { .stacked = &ApplyGateEvent },
+			.events = { .stacked = &ApplyGateEvent, .detached = &RootDetached, .rescan = &Rescan, .underMark = &UnderMark },
 			.commit = { .published = &GateAdoption::Published },
 			.adoption = { .adopt = &GateAdoption::Adopt } });
 	}

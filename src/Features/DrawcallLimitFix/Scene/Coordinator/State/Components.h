@@ -17,5 +17,14 @@ namespace DCLF::Scene
 		// Their deltas for the next publication (PublicationDeltas::componentDeltas: CoordinatorComponentContext::PublishDelta), by
 		// registration; empty while none published.
 		std::vector<std::vector<std::shared_ptr<const void>>> componentDeltaRequests;
+		// The marks on scene roots (CoordinatorComponentContext::MarkRoot), and whether the mark owns the root's hide (mirror.SetGated:
+		// ungated with it). Written only while the mirror's events are applied (the stacked and detached events, the outcomes after the
+		// batch), never while the adds prepare: the parallel prepares read it as data.
+		struct RootMark
+		{
+			Api::Mark mark;
+			bool ownHide = false;
+		};
+		ankerl::unordered_dense::map<const void*, RootMark> rootMarks;
 	};
 }

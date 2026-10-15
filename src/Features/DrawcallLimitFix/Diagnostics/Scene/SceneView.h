@@ -138,11 +138,12 @@ namespace DCLF::Diagnostics
 			return deltas | std::views::transform([](const std::shared_ptr<const void>& a_delta) -> const GateFlip& { return *static_cast<const GateFlip*>(a_delta.get()); });
 		}
 		static const SetSnapshot* publicationClaims(const Store& s) { return s.publicationClaims.get(); }
-		// The gate parity's reads (SceneGateParity.cpp): the root map, the slots' readiness as the commit recorded it, the slots queued for
-		// the next commit, the next publication's claims, and a slot's participation (DecideSlot's).
-		using GateRoot = Scene::Coordinator::GateRoot;
+		// The gate parity's reads (SceneGateParity.cpp): the coordinator's root marks (the gates' are their component's), the slots'
+		// readiness as the commit recorded it, the slots queued for the next commit, the next publication's claims, and a slot's
+		// participation (DecideSlot's).
 		static constexpr std::uint8_t kGateIncoming = Scene::Coordinator::kGateIncoming, kGateOutgoing = Scene::Coordinator::kGateOutgoing;
-		static const auto& gateOfRoot(const Store& s) { return s.gateOfRoot; }
+		static const auto& rootMarks(const Store& s) { return s.rootMarks; }
+		static bool gateMark(const Api::Mark& a_mark) { return a_mark.component.index == Scene::GateAdoption::component.index; }
 		static const auto& gateSlots(const Store& s) { return s.gateSlots; }
 		static const auto& gateQueued(const Store& s) { return s.gateQueued; }
 		static const SetSnapshot* setBuilding(const Store& s) { return s.setBuilding.get(); }
