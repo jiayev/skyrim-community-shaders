@@ -375,9 +375,10 @@ namespace DCLF::Scene
 			UnlistDependents(it->first, it->second, true);
 			UnlistCategoryMember(it->first, it->second);
 			ComponentsForgot(it->first);
-			// Off its LOD gate (an outgoing block's geometries leave here, by their detach after the flip).
-			if (it->second.gate || it->second.gateHeldOut)
-				UntagGate(it->first, it->second);
+			// Off its veto (an outgoing LOD block's geometries leave their hold-out here, by their detach after the flip; their tags went
+			// with the components' forgot).
+			if (const std::uint8_t veto = it->second.veto)
+				--(veto == Api::kVetoHold ? vetoHeld : vetoObserved);
 			sceneIdentity.Detach(a_geometry);
 			lodRanges.erase(a_geometry);
 			HandBack(std::move(it->second.geometry));

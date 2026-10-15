@@ -75,7 +75,7 @@ namespace DCLF::Diagnostics
 		static SlotDecision DecideSlot(const Store& s, std::uint32_t a_slot, bool a_live, std::uint32_t a_drawn) { return s.DecideSlot(a_slot, a_live, a_drawn); }
 		static const auto& setPhasesNext(const Store& s) { return s.setPhasesNext; }
 		static const auto& setWaitingMark(const Store& s) { return s.setWaitingMark; }
-		static bool GateWithholds(const Store& s, std::uint32_t a_slot) { return s.GateWithholds(a_slot); }
+		static bool EntryVetoed(const Store& s, std::uint32_t a_slot) { return s.EntryVetoed(a_slot); }
 		// The mirror reads' checks (Coordinator's counting: NoteMirrorRead, LiveCheckLease, the deferred rechecks).
 		using MirrorRead = Scene::Coordinator::MirrorRead;
 		static EngineReadWindow::Lease LiveCheckLease(const Store& s, MirrorRead a_read) { return s.LiveCheckLease(a_read); }
@@ -120,10 +120,13 @@ namespace DCLF::Diagnostics
 		static auto& placementStats(Store& s) { return s.placementStats; }
 		static auto& gateStats(Store& s) { return s.gateStats; }
 		static const auto& lodGates(const Store& s) { return s.lodGates; }
-		static std::uint32_t gateHeldOutCount(const Store& s) { return s.gateHeldOutCount; }
+		// The entries held out (the Hold vetoes: the gates' are their only ones) and observed (Observe: an open gate's incoming).
+		static std::uint32_t gateHeldOutCount(const Store& s) { return s.vetoHeld; }
+		static std::uint32_t vetoObservedCount(const Store& s) { return s.vetoObserved; }
 		static const auto& setWaitCause(const Store& s) { return s.setWaitCause; }
 		static const auto& setWaitWhy(const Store& s) { return s.setWaitWhy; }
-		static bool GateGeometryReady(const Store& s, const RE::BSGeometry* a_geometry, const Tracked& a_entry) { return s.GateGeometryReady(a_geometry, a_entry); }
+		static bool GateGeometryReady(const Store& s, const RE::BSGeometry* a_geometry) { return s.GateGeometryReady(a_geometry); }
+		static Api::TrackedState TrackedStateOf(const Store& s, const void* a_entry) { return s.TrackedStateOf(a_entry); }
 		static bool IsResidentSlot(const Store& s, std::uint32_t a_slot) { return s.IsResidentSlot(a_slot); }
 		static auto& shadingStats(Store& s) { return s.shadingStats; }
 		static auto& mirrorReads(Store& s) { return s.mirrorReads; }
@@ -138,14 +141,21 @@ namespace DCLF::Diagnostics
 			return deltas | std::views::transform([](const std::shared_ptr<const void>& a_delta) -> const GateFlip& { return *static_cast<const GateFlip*>(a_delta.get()); });
 		}
 		static const SetSnapshot* publicationClaims(const Store& s) { return s.publicationClaims.get(); }
-		// The gate parity's reads (SceneGateParity.cpp): the coordinator's root marks (the gates' are their component's), the slots'
-		// readiness as the commit recorded it, the slots queued for the next commit, the next publication's claims, and a slot's
-		// participation (DecideSlot's).
+		// The gate parity's reads (SceneGateParity.cpp): the coordinator's root marks (the gates' are their component's), the gates' tags,
+		// the observed slots' readiness as the commit recorded it, the slots requeued for the next commit, the next publication's claims,
+		// and a slot's participation (DecideSlot's).
 		static constexpr std::uint8_t kGateIncoming = Scene::Coordinator::kGateIncoming, kGateOutgoing = Scene::Coordinator::kGateOutgoing;
 		static const auto& rootMarks(const Store& s) { return s.rootMarks; }
 		static bool gateMark(const Api::Mark& a_mark) { return a_mark.component.index == Scene::GateAdoption::component.index; }
-		static const auto& gateSlots(const Store& s) { return s.gateSlots; }
-		static const auto& gateQueued(const Store& s) { return s.gateQueued; }
+		using GateTag = Scene::Coordinator::GateTag;
+		/** @brief a_geometry's gate tag (token 0: none). */
+		static GateTag gateTagOf(const Store& s, const RE::BSGeometry* a_geometry)
+		{
+			const auto at = s.gateTags.find(a_geometry);
+			return at != s.gateTags.end() ? at->second : GateTag{};
+		}
+		static Api::ObservedState ObservedSlot(const Store& s, std::uint32_t a_slot) { return s.ObservedSlotOf(a_slot); }
+		static const auto& requeued(const Store& s) { return s.requeued; }
 		static const SetSnapshot* setBuilding(const Store& s) { return s.setBuilding.get(); }
 		static std::uint8_t SetParticipation(const Store& s, std::uint32_t a_slot, std::uint32_t a_drawn) { return s.SetParticipation(a_slot, a_drawn); }
 

@@ -403,11 +403,11 @@ namespace DCLF::Scene
 		auto markApply = [&](std::uint32_t a_slot) { MarkSetApply(a_slot); };
 		if (!setBuilding)
 			setBuilding = std::make_shared<SetSnapshot>();
-		// Without open gates or held-out blocks the commit does no gate work.
-		const bool gatesLive = !lodGates.empty() || gateHeldOutCount != 0;
-		for (const std::uint32_t slot : gateQueued)
+		// Without a component asking for it (open gates) or a vetoed entry (held-out blocks) the commit does no veto work.
+		const bool gatesLive = CommitLive();
+		for (const std::uint32_t slot : requeued)
 			QueueSet(slot);
-		gateQueued.clear();
+		requeued.clear();
 
 		// Membership events: the change log since the last commit and readiness moves for waiting slots. New phases, new tables or a
 		// log the cursor cannot continue evaluate every slot.
@@ -603,22 +603,28 @@ namespace DCLF::Scene
 					phases = 0;
 					partnerPhases = 0;
 				}
-				// Gated incoming blocks hold their phases until the flip; outgoing ones drop after it.
+				// Vetoed entries' slots, read as data: gated incoming blocks hold their phases until the flip (Observe); outgoing ones drop
+				// after it (Hold).
 				if (gatesLive)
-					partnerPhases = GateWithhold(partner, partnerPhases, partnerWait, drawn, live);
+					partnerPhases = VetoedPhases(partner, partnerPhases, partnerWait, drawn, live);
 				apply(partner, partnerPhases, partnerWait);
 			}
 			if (gatesLive)
-				phases = GateWithhold(slot, phases, wait, drawn, live);
+				phases = VetoedPhases(slot, phases, wait, drawn, live);
 			apply(slot, phases, wait);
 		}
-		// Gates whose incoming geometries are all settled flip here and ride the publication (the gates' component deltas: GateAdoption).
+		// The components settle: gates whose incoming geometries are all settled flip here and ride the publication (the gates' component
+		// deltas: GateAdoption). The vetoes they drop or set apply here, before the set's change is noted and the claims are snapshotted.
 		if (gatesLive) {
-			std::vector<std::pair<std::uint32_t, std::uint8_t>> flipped;
-			UpdateGates(live, flipped);
-			for (const auto& [slot, phases] : flipped)
+			restructuredTaken = false;
+			settleApply.clear();
+			settling = true;
+			ComponentsSettle(live);
+			settling = false;
+			for (const auto& [slot, phases] : settleApply)
 				if (slot < objects)
 					apply(slot, phases, false);
+			settleApply.clear();
 		}
 		Diagnostics::Notify(Diagnostics::SetCommitted{ *this, live, drawn, gatesLive });
 		setStats.evaluated += setQueue.size();
@@ -711,6 +717,53 @@ namespace DCLF::Scene
 		}
 		publicationCommitFrame = setCommitFrame;
 		publicationCommitToggles = setCommitToggles;
+	}
+
+	std::uint8_t Coordinator::VetoedPhases(std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait, std::uint32_t a_drawn, bool a_live)
+	{
+		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+		const auto it = geometry ? tracked.find(const_cast<RE::BSGeometry*>(geometry)) : tracked.end();
+		if (it == tracked.end())
+			return a_phases;
+		const std::uint8_t veto = it->second.veto;
+		if (veto == Api::kVetoHold)
+			return 0;
+		if (veto != Api::kVetoObserve)
+			return a_phases;
+		// The slot's phases as the commit decided them, and whether whole (every phase it takes part in, not waiting): what dropping the
+		// Observe applies and what its component's readiness counts (ObservedSlot).
+		if (observedSlots.size() < tables.objects.size())
+			observedSlots.resize(tables.objects.size());
+		auto& held = observedSlots[a_slot];
+		held.geometry = geometry;
+		held.phases = a_phases;
+		held.ready = !a_wait && a_phases == (a_live ? SetParticipation(a_slot, a_drawn) : std::uint8_t{ 0 });
+		return 0;
+	}
+
+	bool Coordinator::EntryVetoed(std::uint32_t a_slot) const
+	{
+		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+		if (!geometry)
+			return false;
+		const auto it = tracked.find(const_cast<RE::BSGeometry*>(geometry));
+		return it != tracked.end() && it->second.veto != 0;
+	}
+
+	bool Coordinator::RestructuredSincePublication(std::uint32_t a_slot)
+	{
+		// The slots whose structure changed since the last publication's revocation (revokeCursor's unread kStructureCauses: a record
+		// written or rewritten since): the publication this commit makes takes their claims back whole (RevokeUndrawnClaims) and claims them
+		// only at the next one. Read once a commit, when first asked.
+		if (!restructuredTaken) {
+			restructuredTaken = true;
+			restructured.clear();
+			if (!IndirectDraws::Get().Failed() && revokeCursor.Continues(tables.changeLog, tablesGeneration))
+				for (const auto& change : revokeCursor.Unread(tables.changeLog))
+					if (change.causes & kStructureCauses)
+						restructured.insert(change.slot);
+		}
+		return a_slot != kNoObjectSlot && restructured.contains(a_slot);
 	}
 
 	void Coordinator::NoteStructureChanges()
@@ -961,10 +1014,11 @@ namespace DCLF::Scene
 			TakeCategoryCapture();
 		}
 		{
-			// Gate outcomes are taken before the tracker's stack (an outcome is posted after its gate's events, so the batch holds them) and
-			// applied after the batch, unless it is a load screen's (carried, not applied): those wait for the next.
+			// The components' own queues (the gate outcomes) are taken before the tracker's stack (an outcome is posted after its gate's
+			// events, so the batch holds them) and applied after the batch (AfterBatch), unless it is a load screen's (carried, not applied):
+			// those wait for the next.
 			ZoneScopedN("CS.DCLF.Scene.TakeGateOutcomes");
-			TakeGateOutcomes();
+			ComponentsTake();
 		}
 		{
 			auto batch = CollectEvents();
@@ -974,7 +1028,8 @@ namespace DCLF::Scene
 				ApplyEvents(std::move(batch));
 			}
 			ZoneScopedN("CS.DCLF.Scene.ApplyGateOutcomes");
-			ApplyGateOutcomes(applied);
+			if (applied)
+				ComponentsChannelKeys(Api::ChannelApply::AfterBatch);
 		}
 		if (!full) {
 			++pumpStats.eventsOnly;

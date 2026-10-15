@@ -183,12 +183,32 @@ namespace DCLF::Api
 		return at != marks.end() ? at->second.mark : Mark{};
 	}
 
+	void CoordinatorComponentContext::SetEntryVeto(const void* a_entry, std::uint8_t a_veto) const
+	{
+		coordinator.SetEntryVeto(a_entry, a_veto);
+	}
+
 	ObservedState CoordinatorComponentContext::ObservedSlot(std::uint32_t a_slot) const
 	{
-		const auto& slots = coordinator.gateSlots;
-		if (a_slot >= slots.size())
-			return {};
-		return { slots[a_slot].geometry, slots[a_slot].phases, slots[a_slot].ready };
+		return coordinator.ObservedSlotOf(a_slot);
+	}
+
+	void CoordinatorComponentContext::SetCommitLive(bool a_live) const
+	{
+		auto& live = coordinator.componentCommitLive;
+		if (live.size() <= component)
+			live.resize(std::size_t(component) + 1, 0);
+		live[component] = a_live ? 1 : 0;
+	}
+
+	TrackedState CoordinatorComponentContext::TrackedStateOf(const void* a_entry) const
+	{
+		return coordinator.TrackedStateOf(a_entry);
+	}
+
+	bool CoordinatorComponentContext::RestructuredSincePublication(std::uint32_t a_slot) const
+	{
+		return coordinator.RestructuredSincePublication(a_slot);
 	}
 
 	void CoordinatorComponentContext::Requeue(const void* a_entry, std::uint8_t a_flags) const
@@ -206,7 +226,7 @@ namespace DCLF::Api
 		if (a_flags & kRequeueSlots)
 			for (const std::uint32_t slot : { entry.slot, entry.layerSlot })
 				if (slot != kNoObjectSlot)
-					coordinator.gateQueued.push_back(slot);
+					coordinator.requeued.push_back(slot);
 	}
 
 	void CoordinatorComponentContext::SubtreeEntries(const void* a_root, std::vector<const void*>& a_out, bool& a_lacking) const
@@ -351,6 +371,9 @@ namespace DCLF::Scene
 
 	void Coordinator::ComponentsForgotAll()
 	{
+		// The tracked set cleared: its entries' vetoes went with them.
+		vetoHeld = 0;
+		vetoObserved = 0;
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
 			if (registered[c].retirement.forgotAll)
@@ -376,6 +399,96 @@ namespace DCLF::Scene
 				if (registered[c].events.keys)
 					registered[c].events.keys({ tables, ComponentState(c), *this, c }, Api::EngineChannelId{ k }, channelKeys);
 		}
+	}
+
+	void Coordinator::ComponentsChannelKeys(Api::ChannelApply a_apply)
+	{
+		const auto engineChannels = Extensions::RegisteredEngineChannels();
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t k = 0; k < engineChannels.size(); ++k) {
+			if (engineChannels[k].apply != a_apply)
+				continue;
+			for (std::uint32_t c = 0; c < registered.size(); ++c)
+				if (registered[c].events.keys)
+					registered[c].events.keys({ tables, ComponentState(c), *this, c }, Api::EngineChannelId{ k }, {});
+		}
+	}
+
+	void Coordinator::SetEntryVeto(const void* a_entry, std::uint8_t a_veto)
+	{
+		// One byte: Hold and Observe exclude each other.
+		if (a_veto != 0 && a_veto != Api::kVetoHold && a_veto != Api::kVetoObserve) {
+			static std::uint32_t logged = 0;
+			if (logged++ < 4)
+				logger::warn("[DCLF] entry veto {:#x}: not Hold, Observe or none, ignored <- ENTRY VETO", a_veto);
+			return;
+		}
+		const auto it = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_entry)));
+		if (it == tracked.end())
+			return;
+		auto& entry = it->second;
+		const std::uint8_t before = entry.veto;
+		if (before != a_veto) {
+			if (before)
+				--(before == Api::kVetoHold ? vetoHeld : vetoObserved);
+			if (a_veto)
+				++(a_veto == Api::kVetoHold ? vetoHeld : vetoObserved);
+			entry.veto = a_veto;
+		}
+		// Observed from here: ready only by an evaluation under this Observe (an earlier record of the slot is not this one's).
+		if (a_veto == Api::kVetoObserve)
+			for (const std::uint32_t slot : { entry.slot, entry.layerSlot })
+				if (slot != kNoObjectSlot && slot < observedSlots.size())
+					observedSlots[slot] = {};
+		if (!settling)
+			return;
+		// In the settle, this commit: a Hold applies none to the entry's slots; an Observe dropped applies the phases the commit recorded of
+		// each slot it last evaluated for the entry. Otherwise the requeued slots carry the change to the next commit.
+		if (a_veto == Api::kVetoHold) {
+			for (const std::uint32_t slot : { entry.slot, entry.layerSlot })
+				if (slot != kNoObjectSlot)
+					settleApply.emplace_back(slot, std::uint8_t{ 0 });
+		} else if (!a_veto && before == Api::kVetoObserve) {
+			for (const std::uint32_t slot : { entry.slot, entry.layerSlot })
+				if (slot != kNoObjectSlot && slot < observedSlots.size() && observedSlots[slot].geometry == a_entry)
+					settleApply.emplace_back(slot, observedSlots[slot].phases);
+		}
+	}
+
+	Api::ObservedState Coordinator::ObservedSlotOf(std::uint32_t a_slot) const
+	{
+		return a_slot < observedSlots.size() ? observedSlots[a_slot] : Api::ObservedState{};
+	}
+
+	Api::TrackedState Coordinator::TrackedStateOf(const void* a_entry) const
+	{
+		const auto it = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_entry)));
+		if (it == tracked.end())
+			return {};
+		const auto& entry = it->second;
+		Api::TrackedState state;
+		state.tracked = true;
+		state.classified = entry.candidateFrame != 0;
+		state.leafWaiting = entry.leafWaiting;
+		state.slot = entry.slot;
+		state.layerSlot = entry.layerSlot;
+		state.reason = static_cast<std::uint8_t>(entry.candidateReason);
+		state.veto = entry.veto;
+		// Its slot's commit state: its base's, else its layer's.
+		if (const std::uint32_t slot = entry.slot != kNoObjectSlot ? entry.slot : entry.layerSlot; slot != kNoObjectSlot) {
+			state.waitCause = slot < setWaitCause.size() ? setWaitCause[slot] : std::uint8_t{ 0 };
+			state.waitWhy = slot < setWaitWhy.size() ? setWaitWhy[slot] : std::uint8_t{ 0 };
+			state.resident = IsResidentSlot(slot);
+		}
+		return state;
+	}
+
+	bool Coordinator::CommitLive() const
+	{
+		for (const std::uint8_t live : componentCommitLive)
+			if (live)
+				return true;
+		return vetoHeld != 0 || vetoObserved != 0;
 	}
 
 	void Coordinator::ComponentsStacked(Api::EngineChannelId a_channel, const Api::Stacked& a_event)

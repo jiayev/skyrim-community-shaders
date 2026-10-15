@@ -70,9 +70,6 @@ namespace DCLF::Reports
 		{
 			auto& s = V::gateStats(a_store);
 			const auto& lodGates = V::lodGates(a_store);
-			const auto& tracked = V::tracked(a_store);
-			const auto& setWaitCause = V::setWaitCause(a_store);
-			const auto& setWaitWhy = V::setWaitWhy(a_store);
 			const std::uint32_t gateHeldOutCount = V::gateHeldOutCount(a_store);
 			const auto& parity = Diagnostics::SceneDiagnostics().gates.parity;
 			if (!s.opened && !s.retiredFlipped && !s.retiredForced && lodGates.empty() && !gateHeldOutCount && !s.unknownOutcomes && !s.keptNotices && !parity.checks)
@@ -94,18 +91,18 @@ namespace DCLF::Reports
 				unmirrored += gate.unmirrored;
 				noIncoming += gate.incoming.empty() ? 1u : 0u;
 				for (auto* geometry : gate.incomingGeometries) {
-					const auto it = tracked.find(geometry);
-					if (it == tracked.end() || V::GateGeometryReady(a_store, geometry, it->second))
+					// Its tracked state (its slot's commit state: the base's, else the layer's).
+					const Api::TrackedState entry = V::TrackedStateOf(a_store, geometry);
+					if (!entry.tracked || V::GateGeometryReady(a_store, geometry))
 						continue;
-					const auto& entry = it->second;
 					const std::uint32_t slot = entry.slot != kNoObjectSlot ? entry.slot : entry.layerSlot;
-					if (entry.leafWaiting || entry.candidateFrame == 0)
+					if (entry.leafWaiting || !entry.classified)
 						++unclassified;
 					else if (slot == kNoObjectSlot)
 						++noRecord;
-					else if (slot < setWaitCause.size() && setWaitCause[slot])
-						++waitingBy[slot < setWaitWhy.size() ? (std::min<std::size_t>)(setWaitWhy[slot], waitingBy.size() - 1) : 0];
-					else if (!V::IsResidentSlot(a_store, slot))
+					else if (entry.waitCause)
+						++waitingBy[(std::min<std::size_t>)(entry.waitWhy, waitingBy.size() - 1)];
+					else if (!entry.resident)
 						++unbound;
 					else
 						++partial;

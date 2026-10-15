@@ -1,7 +1,8 @@
 // CS_DCLF_PERSISTENT_PARITY: the LOD gates' state (Scene/Coordinator/Gates.cpp) against what it is derived from, at each commit while gates
-// live (SetCommitted: after UpdateGates, before the publication takes the commit's flips): the root map and the mirror's gated roots, the
-// tags, the withheld slots, the open gates' readiness taken again, the commit's flips. Every 60th pass a sweep of the tracked set: the tags
-// and the hold-outs, the marks a walk of the mirror gives now, and the open gates' incoming roots hidden. Gate roots are keys: nothing
+// live (SetCommitted: after the gates' settle, UpdateGates, before the publication takes the commit's flips): the root map and the mirror's
+// gated roots, the tags, the withheld slots, the open gates' readiness taken again, the commit's flips. Every 60th pass a sweep of the
+// tracked set: the tags and the vetoes (hold-outs, observed incoming), the marks a walk of the mirror gives now, and the open gates'
+// incoming roots hidden. Gate roots are keys: nothing
 // engine is dereferenced. Reported with the gates' line (GATE PARITY).
 
 #include "SceneObservers.h"
@@ -43,7 +44,7 @@ namespace DCLF::Diagnostics
 		}
 
 		/**
-		 * @brief A slot whole now, as GateWithhold records it: its decision taken again (DecideSlot), its layer partner's main phase paired
+		 * @brief A slot whole now, as the commit records an observed slot (VetoedPhases): its decision taken again (DecideSlot), its layer partner's main phase paired
 		 * as the commit pairs them, not waiting, every phase it takes part in.
 		 */
 		bool SlotWholeNow(const Commit& a_commit, std::uint32_t a_slot)
@@ -71,9 +72,8 @@ namespace DCLF::Diagnostics
 				return false;
 			if (a_entry.slot == kNoObjectSlot && a_entry.layerSlot == kNoObjectSlot)
 				return a_entry.candidateReason != Ineligible::None;
-			const auto& gateSlots = V::gateSlots(a_commit.store);
 			for (const std::uint32_t slot : { a_entry.slot, a_entry.layerSlot })
-				if (slot != kNoObjectSlot && (slot >= gateSlots.size() || gateSlots[slot].geometry != a_geometry || !SlotWholeNow(a_commit, slot)))
+				if (slot != kNoObjectSlot && (V::ObservedSlot(a_commit.store, slot).geometry != a_geometry || !SlotWholeNow(a_commit, slot)))
 					return false;
 			return true;
 		}
@@ -83,26 +83,25 @@ namespace DCLF::Diagnostics
 		 * gate's incoming, whose slots are withheld from their first evaluation under the gate (one tagged since, by UpdateGates' walk, is
 		 * the next commit's); else held out, whose slots the flip applied 0 to and every evaluation since withholds.
 		 */
-		void CheckWithheld(const Commit& a_commit, const RE::BSGeometry* a_geometry, const V::Tracked& a_entry, bool a_open)
+		void CheckWithheld(const Commit& a_commit, const RE::BSGeometry* a_geometry, const V::Tracked& a_entry, std::uint64_t a_token, bool a_open)
 		{
 			const auto& setPhases = V::setPhasesNext(a_commit.store);
-			const auto& gateSlots = V::gateSlots(a_commit.store);
 			bool base = false;
 			for (const std::uint32_t slot : { a_entry.slot, a_entry.layerSlot }) {
-				if (slot == kNoObjectSlot || (a_open && (slot >= gateSlots.size() || gateSlots[slot].geometry != a_geometry)))
+				if (slot == kNoObjectSlot || (a_open && V::ObservedSlot(a_commit.store, slot).geometry != a_geometry))
 					continue;
 				base = base || slot == a_entry.slot;
 				if (slot < setPhases.size() && setPhases[slot])
 					Differ(a_commit.parity, [&] {
 						return fmt::format("withheld: geometry {} ({} of gate {}) slot {} holds {:#x} in the commit", static_cast<const void*>(a_geometry),
-							a_open ? "incoming" : "held out", a_entry.gate, slot, setPhases[slot]);
+							a_open ? "incoming" : "held out", a_token, slot, setPhases[slot]);
 					});
 			}
 			if (const auto* building = V::setBuilding(a_commit.store); base && building)
 				if (const auto it = building->phases.find(a_geometry); it != building->phases.end())
 					Differ(a_commit.parity, [&] {
 						return fmt::format("withheld: geometry {} ({} of gate {}) claimed {:#x} by the next publication", static_cast<const void*>(a_geometry),
-							a_open ? "incoming" : "held out", a_entry.gate, it->second);
+							a_open ? "incoming" : "held out", a_token, it->second);
 					});
 		}
 
@@ -152,16 +151,17 @@ namespace DCLF::Diagnostics
 			for (const std::uint8_t side : { V::kGateIncoming, V::kGateOutgoing })
 				for (auto* geometry : side == V::kGateIncoming ? a_gate.incomingGeometries : a_gate.outgoingGeometries) {
 					const auto it = tracked.find(geometry);
-					if (it == tracked.end() || it->second.gate != a_token || it->second.gateSide != side) {
+					const auto tag = V::gateTagOf(a_commit.store, geometry);
+					if (it == tracked.end() || tag.token != a_token || tag.side != side) {
 						Differ(a_commit.parity, [&] {
 							return it == tracked.end() ? fmt::format("tags: gate {} {} geometry {} not tracked", a_token, SideName(side), static_cast<const void*>(geometry)) :
 							                             fmt::format("tags: gate {} {} geometry {} tagged gate {} ({})", a_token, SideName(side), static_cast<const void*>(geometry),
-															 it->second.gate, SideName(it->second.gateSide));
+															 tag.token, SideName(tag.side));
 						});
 						continue;
 					}
-					if (it->second.gateHeldOut)
-						CheckWithheld(a_commit, geometry, it->second, false);
+					if (it->second.veto == Api::kVetoHold)
+						CheckWithheld(a_commit, geometry, it->second, a_token, false);
 				}
 		}
 
@@ -183,8 +183,8 @@ namespace DCLF::Diagnostics
 					++fresh;
 					continue;
 				}
-				CheckWithheld(a_commit, geometry, it->second, true);
-				const bool wasReady = V::GateGeometryReady(store, geometry, it->second);
+				CheckWithheld(a_commit, geometry, it->second, a_token, true);
+				const bool wasReady = V::GateGeometryReady(store, geometry);
 				const bool readyNow = ReadyNow(a_commit, geometry, it->second);
 				recorded += wasReady ? 0u : 1u;
 				fresh += readyNow ? 0u : 1u;
@@ -200,8 +200,8 @@ namespace DCLF::Diagnostics
 				Differ(a_commit.parity, [&] { return fmt::format("stuck: gate {} open with nothing pending ({} incoming geometries, {} roots)", a_token, a_gate.incomingGeometries.size(), a_gate.incoming.size()); });
 			// The count: not for a gate the structure check deferred (every geometry ready by the commit's records; pending then counts the
 			// records not published yet), nor after a tag in UpdateGates' walks (an unmirrored gate's walk may take a geometry of a gate
-			// counted before it; each such tag of a geometry with slots queues them, and gateQueued is empty after the commit's start
-			// otherwise). A geometry with neither slots nor a verdict queues nothing: taking it needs a root nested under another gate's,
+			// counted before it; each such tag of a geometry with slots requeues them, and the requeued slots are none after the commit's
+			// start otherwise). A geometry with neither slots nor a verdict queues nothing: taking it needs a root nested under another gate's,
 			// which the marks (G6) flag.
 			const bool counted = !(flippable && !recorded) && !a_retagged;
 			if (differs || (counted && fresh != a_gate.pending))
@@ -338,8 +338,9 @@ namespace DCLF::Diagnostics
 		}
 
 		/**
-		 * @brief The sweep: G2 over the tracked set (each tagged entry in its gate's set, the held-out count), G3 for the held-out entries
-		 * no gate's set covered, G6 (each entry's tag against TagGateAbove's rule now), then G7.
+		 * @brief The sweep: G2 over the tracked set (each tagged entry in its gate's set, its veto as its tag and gate give it, the held-out
+		 * and observed counts), G3 for the held-out entries no gate's set covered, G6 (each entry's tag against TagGateAbove's rule now),
+		 * then G7.
 		 */
 		void Sweep(const Commit& a_commit)
 		{
@@ -347,31 +348,41 @@ namespace DCLF::Diagnostics
 			const auto& lodGates = V::lodGates(store);
 			auto& p = a_commit.parity;
 			++p.sweeps;
-			std::uint32_t heldOut = 0;
+			std::uint32_t heldOut = 0, observed = 0;
 			std::vector<std::pair<std::uint64_t, const void*>> unmarkedOutgoing;
 			for (const auto& [geometry, entry] : V::tracked(store)) {
 				++p.entries;
 				bool covered = false;
-				if (entry.gate) {
-					const auto gate = lodGates.find(entry.gate);
-					const auto* set = gate == lodGates.end()                ? nullptr :
-					                  entry.gateSide == V::kGateIncoming ? &gate->second.incomingGeometries :
-					                  entry.gateSide == V::kGateOutgoing ? &gate->second.outgoingGeometries :
-					                                                       nullptr;
+				const auto tag = V::gateTagOf(store, geometry);
+				// Observed exactly while an open gate's incoming (the withholding its tag and gate give).
+				bool open = false;
+				if (tag.token) {
+					const auto gate = lodGates.find(tag.token);
+					const auto* set = gate == lodGates.end()          ? nullptr :
+					                  tag.side == V::kGateIncoming ? &gate->second.incomingGeometries :
+					                  tag.side == V::kGateOutgoing ? &gate->second.outgoingGeometries :
+					                                                 nullptr;
 					covered = set && set->contains(geometry);
+					open = tag.side == V::kGateIncoming && gate != lodGates.end() && gate->second.state == V::LodGate::State::Open;
 					if (!covered)
 						Differ(p, [&] {
-							return fmt::format("tags: geometry {} tagged gate {} ({}), {}", static_cast<const void*>(geometry), entry.gate, SideName(entry.gateSide),
+							return fmt::format("tags: geometry {} tagged gate {} ({}), {}", static_cast<const void*>(geometry), tag.token, SideName(tag.side),
 								gate == lodGates.end() ? "no such gate" : "not in its set");
 						});
 				}
-				if (entry.gateHeldOut) {
+				observed += entry.veto == Api::kVetoObserve ? 1u : 0u;
+				if ((entry.veto == Api::kVetoObserve) != open)
+					Differ(p, [&] {
+						return fmt::format("tags: geometry {} tagged gate {} ({}{}), veto {:#x}", static_cast<const void*>(geometry), tag.token, SideName(tag.side),
+							open ? ", open" : "", entry.veto);
+					});
+				if (entry.veto == Api::kVetoHold) {
 					++heldOut;
 					// A gate's held-out outgoing was checked with its gate (CheckTags).
 					if (!covered)
-						CheckWithheld(a_commit, geometry, entry, false);
+						CheckWithheld(a_commit, geometry, entry, tag.token, false);
 					// Held out with no gate: a retired flip's outgoing awaiting its detach, under no gate root any more.
-					if (!entry.gate)
+					if (!tag.token)
 						continue;
 				}
 				bool resolved = true;
@@ -380,30 +391,32 @@ namespace DCLF::Diagnostics
 					continue;
 				const std::uint64_t token = above ? above->token : 0;
 				const std::uint8_t side = above ? above->side : 0;
-				if (!above && entry.gate && entry.gateSide == V::kGateOutgoing) {
+				if (!above && tag.token && tag.side == V::kGateOutgoing) {
 					// An outgoing tag under no gate root: the root detached (or a held block reattached) ahead of its entries' erasure or
 					// the kept notice, which untag them. Flagged only when still so at the next sweep.
 					++p.unmarked;
-					unmarkedOutgoing.emplace_back(entry.gate, geometry);
+					unmarkedOutgoing.emplace_back(tag.token, geometry);
 					if (std::ranges::find(p.unmarkedOutgoing, unmarkedOutgoing.back()) != p.unmarkedOutgoing.end())
 						Differ(p, [&] {
-							const auto gate = lodGates.find(entry.gate);
+							const auto gate = lodGates.find(tag.token);
 							return fmt::format("marks: geometry {} tagged gate {} (outgoing) under no gate root at two sweeps; gate {}, {} outgoing roots left, {}held out",
-								static_cast<const void*>(geometry), entry.gate,
+								static_cast<const void*>(geometry), tag.token,
 								gate == lodGates.end() ? "retired" : gate->second.state == V::LodGate::State::Open ? "open" : "flipped",
-								gate == lodGates.end() ? 0 : gate->second.outgoing.size(), entry.gateHeldOut ? "" : "not ");
+								gate == lodGates.end() ? 0 : gate->second.outgoing.size(), entry.veto == Api::kVetoHold ? "" : "not ");
 						});
 					continue;
 				}
-				if (token != entry.gate || side != entry.gateSide)
+				if (token != tag.token || side != tag.side)
 					Differ(p, [&] {
-						return fmt::format("marks: geometry {} tagged gate {} ({}), its mirror chain's nearest root is gate {} ({})", static_cast<const void*>(geometry), entry.gate,
-							SideName(entry.gateSide), token, SideName(side));
+						return fmt::format("marks: geometry {} tagged gate {} ({}), its mirror chain's nearest root is gate {} ({})", static_cast<const void*>(geometry), tag.token,
+							SideName(tag.side), token, SideName(side));
 					});
 			}
 			p.unmarkedOutgoing = std::move(unmarkedOutgoing);
 			if (heldOut != V::gateHeldOutCount(store))
 				Differ(p, [&] { return fmt::format("tags: {} entries held out, {} counted", heldOut, V::gateHeldOutCount(store)); });
+			if (observed != V::vetoObservedCount(store))
+				Differ(p, [&] { return fmt::format("tags: {} entries observed, {} counted", observed, V::vetoObservedCount(store)); });
 			CheckVetoes(a_commit);
 		}
 
@@ -416,7 +429,7 @@ namespace DCLF::Diagnostics
 			auto& p = commit.parity;
 			++p.checks;
 			CheckRoots(commit);
-			const bool retagged = !V::gateQueued(store).empty();
+			const bool retagged = !V::requeued(store).empty();
 			for (const auto& [token, gate] : V::lodGates(store)) {
 				++p.gates;
 				CheckTags(commit, token, gate);
