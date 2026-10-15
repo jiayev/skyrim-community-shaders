@@ -38,6 +38,38 @@ Features register at install, before DCLF's threads start. Their callbacks run p
 The bits that shaders share stay compile-time: each feature declares its own, and a core manifest checks that they don't
 overlap.
 
+## The extension points
+
+A feature is an `Api::Feature`: a name and an install function. It is listed in `Features/FeatureList.cpp`, the one place
+that shows what DCLF does. The shell's `PostPostLoad` calls `Extensions::InstallFeatures` before DCLF's threads start.
+Install registers the feature's parts through `Api::InstallContext`. The registry (`Core/Extensions/Registry`) is
+read-only after that.
+
+| Contract | Header | What a feature gets |
+| --- | --- | --- |
+| Frame-value pool | `Api/FrameValues.h` | rows sampled every frame on DCLF's pool into a pooled backing the frame reads by descriptor (`FrameValues::PoolIndex`) |
+| GPU stage | `Api/GpuStages.h` | a compute pass at a named slot of an epoch, its programs set up with the scene's buffers, and optionally the segment's latch word |
+| Payload product | `Api/Payload.h` | data built with every main payload on the builder, carried with it, and installed with it on the render thread |
+
+Each contract's thread, timing and lifetime is documented in its header.
+
+The headers in `Api/` name only standard and ORG types. The contexts their callbacks receive are opaque there. Core
+defines them in companions under `Core/Extensions/` (`FrameValuePools.h`, `GpuStages.h`, `PayloadProducts.h`), which
+features inside DCLF include for typed access to Core's types.
+
+`Features/TextureTransforms/` was the first feature built on them: a pool, a stage and a product. The extension points
+still to come, as the next features need them:
+- a stage's queue, and more slots;
+- buffers registered with the scene's set;
+- a per-commit hook;
+- frame-record bindings;
+- coordinator components and table columns;
+- engine event channels;
+- material contributors;
+- view kinds;
+- toggles, parity and report lines;
+- the shader-bit manifest.
+
 ## The rules
 
 `tools/dclf-layout-check.py` checks these.
@@ -72,4 +104,5 @@ The steps:
 3. Split `IndirectDraws` into `Core/Render`. *Done.*
 4. Split `Coordinator.h` into the coordinator's core plus one component per concern. *Done (Scene/Coordinator/State/).*
 5. Two pilot features, `TextureTransforms` then `TreeWind`. Together they define the first extension points.
+   *`TextureTransforms` done.*
 6. The other features, least entangled first and `Fades` last. Then the integrations, then `Main` with what remains of Core.

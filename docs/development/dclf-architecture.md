@@ -339,16 +339,19 @@ transforms) and the set's growth all lease their backings from ORGModuleServices
     a cap. Each keeps one warm spare per game frame in flight, less one (`PooledBackings::PerFrameSpares`).
 -   **Release.** A released backing is destroyed on the graph host's resource cleanup lane (`PooledBackings::Retire`),
     never on the thread that let it go: the render thread is the frame values' pools' acquirer.
--   **Frame values.** `FrameValues::Kick` leases the frame's six backings on the render thread. The producer catches each
+-   **Frame values.** `FrameValues::Kick` leases the frame's backings on the render thread: its five built-in parts', then
+    one per pool a feature registered (`Api::FrameValuePool`, below). The producer catches each
     up from its journal on the pool, without a GPU wait, and `FrameValues::EndFrame` binds them.
--   **Texture transforms.** A material's `TexcoordOffset` (offset and scale) is not its record's: the record keeps the
-    capture-time value. At `Finish` the main build lists every packed material row that carries one (`TextureTransformList`:
-    the material, the row's byte offset, the component mask; `MainPayload::textureTransforms`, carried by `PayloadVersions`),
-    and `AdoptSnapshot` hands the installed payload's list to FrameValues (`SetTextureTransforms`). Each frame the producer
-    reads every entry's current buffer (`textureTransformBuffer`, the one the frame's shaders read) under a lease into the
-    `texture-transforms` pool, sending only the rows that moved, and `cs.dclf.z.texture-transforms` (`TextureTransformsCS`),
-    first in the Z-prepass epoch, stores them into the installed payload's material rows. Every such row is written every
-    frame, so a pooled backing holds the frame's value whatever its journal sent it.
+-   **Texture transforms** (`Features/TextureTransforms/`, the first feature on the extension points). A material's
+    `TexcoordOffset` (offset and scale) is not its record's: the record keeps the capture-time value. The feature's payload
+    product (`Api::PayloadProduct`) lists, at the main build's `Finish`, every packed material row that carries one
+    (`TextureTransformList`: the material, the row's byte offset, the component mask); the payload carries it, and adoption
+    installs the payload's list with the feature. Each frame the feature's frame-value pool reads every entry's current
+    buffer (`textureTransformBuffer`, the one the frame's shaders read) under a lease, sending only the rows that moved, and
+    its GPU stage `cs.dclf.z.texture-transforms` (`Api::GpuStage`, `TextureTransformsCS`), first in the Z-prepass epoch,
+    stores them into the installed payload's material rows; the pool's descriptor reaches the shader through the depth
+    segment's `BuildDrawsLatch::stageWord`. Every such row is written every frame, so a pooled backing holds the frame's value
+    whatever its journal sent it.
 
 The readback staging is not pooled: it is GPU-to-host and rewritten whole every frame, one host buffer per frame slot for
 each list capacity a sealed set names (`HostEventRing::AddSet`). What else could move into the pools is in

@@ -33,7 +33,7 @@ GPU a publication late, while FrameValues' shading reaches it in the same frame.
 **Done for `TexcoordOffset` (2026-10-14), another way.** The sketch below adds a row the draws read; that changes
 `package/Shaders`. Instead the texture transforms are patched into the material rows themselves
 (dclf-architecture.md, "Texture transforms"):
--   the main build lists every packed row carrying one (`TextureTransformList`, `Core/Gpu/TextureTransforms.h`), and the
+-   the main build lists every packed row carrying one (`TextureTransformList`, `Features/TextureTransforms/TextureTransforms.h`), and the
     payload carries it;
 -   FrameValues' sixth pool (`texture-transforms`) samples each entry's current buffer every frame and sends the rows that
     moved;
@@ -62,7 +62,7 @@ then go. To work out first:
 material rows sees last frame's offset (or, right after a new payload is installed, the capture-time value). W10 named the
 water reflection and Skylighting's occlusion views, but dclf-architecture.md's frame table puts the reflection epoch after the
 depth commit, so confirm which epochs really read the rows first. Then either run the patch in the earliest of them
-(`ViewEpoch.cpp`'s latch would carry `textureTransformsIndex`), or, with the GPU-computed scroll above, have each epoch's
+(`ViewEpoch.cpp`'s latch would carry the stage word, `BuildDrawsLatch::stageWord`), or, with the GPU-computed scroll above, have each epoch's
 pass compute its own value.
 
 **Also left: the frame-sourced components.** `RefreshMaterialSignatures` writes the frame-sourced floats into every slot of a

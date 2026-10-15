@@ -3,7 +3,7 @@
 // The main rows and the main payload a build makes for a main epoch: written by the main build (DCLF's pool), read by the
 // commit on the render thread. Included by Internal.h, in its order.
 
-#include "Features/DrawcallLimitFix/Core/Gpu/TextureTransforms.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PayloadProducts.h"
 
 namespace DCLF::Draws
 {
@@ -44,8 +44,8 @@ namespace DCLF::Draws
 			std::uint32_t features = 0;  // kFeatureMaterialRegisters likewise
 			std::uint64_t tables = 0;    // the constant tables its blocks were packed with (a hash)
 			bool blocksOk = false;       // both blocks fit their places
-			// Where its VS block placed TexcoordOffset (the frame's, patched on the GPU: TextureTransformList): the packed dword, ~0 none,
-			// and the components the record wrote.
+			// Where its VS block placed TexcoordOffset (the frame's, which a feature patches on the GPU from a payload product): the packed
+			// dword, ~0 none, and the components the record wrote.
 			std::uint32_t texcoordDword = ~0u;
 			std::uint8_t texcoordMask = 0;
 		};
@@ -222,8 +222,8 @@ namespace DCLF::Draws
 		KeptView<MaterialRow> materialRows;
 		KeptView<PipelineRow> pipelineRows;
 		std::uint64_t materialRowsWritten = 0, pipelineRowsWritten = 0;
-		// The material rows that carry TexcoordOffset, with where (MainBuild::Finish): the frame's values patch them on the GPU.
-		std::shared_ptr<const TextureTransformList> textureTransforms;
+		// The features' payload products (Api::PayloadProduct, by registration), built at MainBuild::Finish.
+		Extensions::PayloadProducts products;
 		// The frame's stream views the build read (its geometry slots), held with the payload.
 		std::shared_ptr<const StreamViews> streams;
 		// The frame's textures (t16 and up) the drawn pipelines read, which only the commit can resolve (into the frame
@@ -273,7 +273,8 @@ namespace DCLF::Draws
 			materialRows.Reset();
 			pipelineRows.Reset();
 			materialRowsWritten = pipelineRowsWritten = 0;
-			textureTransforms.reset();
+			for (auto& product : products)
+				product.reset();
 			for (auto& templates : decalTemplates)
 				templates.clear();
 			decalCount = {};

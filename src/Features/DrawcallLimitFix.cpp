@@ -6,6 +6,8 @@
 
 #	include "Deferred.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
+#	include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#	include "Features/DrawcallLimitFix/Features/FeatureList.h"
 #	include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #	include "DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #	include "DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -102,6 +104,8 @@ void DrawcallLimitFix::PostPostLoad()
 	// CS_DCLF_LOD_GATES (on unless 0): the engine's LOD swaps gated on DCLF's claims (skyrim-engine-notes.md, "LOD swaps and their
 	// gates"). Shares the LOD drain's and the retirement's detours with the import timings.
 	DCLF::LodGates::Install([] { return globals::features::drawcallLimitFix.Running(); });
+	// The features' extension points (Features/FeatureList.cpp), registered before DCLF's threads start and read-only after.
+	DCLF::Extensions::InstallFeatures(DCLF::Features::List());
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();

@@ -119,18 +119,6 @@ namespace DCLF::Draws
 	static_assert(sizeof(TreeWindFrameRow) == 64);
 	constexpr std::uint32_t kTreeWindConstantWords = sizeof(TreeWindConstants) / 4;
 	constexpr std::uint32_t kTreeWindGroup = 64;
-	// TextureTransformsCS.hlsl (the frame's TexcoordOffset into the installed payload's material rows): the depth segment's BuildDrawsLatch
-	// in its frame slot, which names the rows (materialRowsLo/Hi) and the frame values' entries (textureTransformsIndex). The dispatch is
-	// fixed; its threads stride over the entries the header counts.
-	constexpr const char* kTextureTransformsShader = "DrawcallLimitFix/TextureTransformsCS.hlsl";
-	struct TextureTransformsConstants
-	{
-		std::uint32_t latchIndex = 0, latchOffset = 0;
-		std::uint32_t padding[2]{};
-	};
-	static_assert(sizeof(TextureTransformsConstants) == 16);
-	constexpr std::uint32_t kTextureTransformsConstantWords = sizeof(TextureTransformsConstants) / 4;
-	constexpr std::uint32_t kTextureTransformsGroup = 64, kTextureTransformsGroups = 32;
 	// The foliage record (Policy::RecordFoliagePixels, CS_DCLF_FOLIAGE_PARITY; Diagnostics/Draws/Foliage.cpp): alpha-tested colour
 	// draws write each shaded pixel's object (index + 1, low 24 bits; the frame's low 8 above) and albedo and diffuse. The compare
 	// pass's results: kFoliageCounters counters, then the samples, kFoliageSampleWords words each.
@@ -450,9 +438,10 @@ namespace DCLF::Draws
 		std::uint32_t fadeSeedsIndex;
 		// Colour segment: the terrain groups' capacities past phase 2's base. 0 elsewhere.
 		std::uint32_t terrainCapacity[2];
-		// The depth segment: FrameValues' texture transform rows (TextureTransformsIndex), which TextureTransformsCS stores into the material
-		// rows above before the depth draws. 0 elsewhere (and the word keeps terrainNear's 16-byte alignment).
-		std::uint32_t textureTransformsIndex;
+		// The depth segment: the stage word of the feature stage before its build that asks for one (Api::GpuStage::latchWord, at byte 300;
+		// e.g. the texture transforms' frame-value rows, which their stage stores into the material rows above). 0 elsewhere (and the word
+		// keeps terrainNear's 16-byte alignment). One word: a second stage needing one grows this latch (the shaders read it by byte offset).
+		std::uint32_t stageWord;
 		// Depth segment under Terrain Blending: its eye and near distance in w. A terrain group 1 draw within it goes to its slot's
 		// twin bucket (kBucketTerrainPair), drawn into the terrain depth and, offset, the main depth. w 0: no test.
 		float terrainNear[4];
@@ -468,7 +457,7 @@ namespace DCLF::Draws
 				  offsetof(BuildDrawsLatch, localShadowOffset) == 232 && offsetof(BuildDrawsLatch, bucketTableOffset) == 236 &&
 				  offsetof(BuildDrawsLatch, fadeStatesIndex) == 240 && offsetof(BuildDrawsLatch, phaseTwoBucketTableOffset) == 244 &&
 				  offsetof(BuildDrawsLatch, bucketMapOffset) == 248 && offsetof(BuildDrawsLatch, placementsIndex) == 252 &&
-				  offsetof(BuildDrawsLatch, materialRowsHi) == 276 && offsetof(BuildDrawsLatch, textureTransformsIndex) == 300);  // TextureTransformsCS.hlsl
+				  offsetof(BuildDrawsLatch, materialRowsHi) == 276 && offsetof(BuildDrawsLatch, stageWord) == 300);  // the stage's shader
 	// BuildDrawsLatch::bucketMapOffset: a pipeline slot without a bucket (BuildDrawsCS's kNoPipeline).
 	constexpr std::uint32_t kNoBucket = 0xFFFFFFFFu;
 	// A first-person forward slot's map word, its range's table entry in the low bits (BuildDrawsCS's kBucketForward).

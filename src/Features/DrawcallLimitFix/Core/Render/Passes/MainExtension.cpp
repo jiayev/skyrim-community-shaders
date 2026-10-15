@@ -4,9 +4,25 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/IndexPoolPass.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 
 namespace DCLF::Draws
 {
+	namespace
+	{
+		/** @brief The features' stages at a_slot (Api::GpuStage), in registration order: each whose setup gave a state. */
+		template <class Epoch>
+		void AddStages(std::vector<org::RenderGraph::ExternalPassDesc>& a_out, const std::shared_ptr<Resources>& a_resources, Api::GpuStageSlot a_slot, Epoch a_epoch)
+		{
+			const auto stages = Extensions::RegisteredStages();
+			const auto& states = a_resources->scene->stages;
+			for (std::size_t i = 0; i < stages.size() && i < states.size(); ++i)
+				if (stages[i].slot == a_slot && states[i])
+					AddPass(a_out, PassKind::Compute, stages[i].passName, stages[i].makePass({ a_resources, states[i] }), a_epoch);
+		}
+	}
+
 	/** @brief The buffers a main commit may latch into (LatchedUploads); its latched copies declare them. */
 	std::vector<LatchedTarget> MainLatchedTargets(const Resources& a_resources)
 	{
@@ -113,9 +129,8 @@ namespace DCLF::Draws
 			// Its write-back events, to the host.
 			if (resources->scene->fadeState && resources->scene->fadeRoots && resources->scene->fadeEvents && resources->scene->fadeWriteBack)
 				AddPass(a_out, PassKind::Copy, "cs.dclf.z.fade-events", MakeEventReadbackPass(resources->scene, resources->scene->fadeEvents, resources->scene->fadeWriteBack), depth, PassQueue::None);
-			// The frame's texture transforms into the payload's material rows, before anything of the frame draws from them.
-			if (resources->scene->textureTransforms)
-				AddPass(a_out, PassKind::Compute, "cs.dclf.z.texture-transforms", MakeTextureTransformsPass(resources), depth);
+			// The features' stages before the depth build, before anything of the frame draws (Api::GpuStageSlot::DepthSegmentBeforeBuild).
+			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentBeforeBuild, depth);
 			AddPass(a_out, PassKind::Compute, "cs.dclf.z.build-draws", MakeBuildDrawsPass(resources, depthSegment), depth);
 			// The pool copies the depth commit gave out (when the shadow epoch has not), before the draws read them.
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.index-pool",
