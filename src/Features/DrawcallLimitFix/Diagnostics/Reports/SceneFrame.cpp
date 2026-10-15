@@ -80,10 +80,10 @@ namespace DCLF::Reports
 			if (rs.any)
 				logger::info("[DCLF] LOD gate releases (T6b5): {} released, {} refused (forced or unknown by then), {} in a withdrawn frame; flip to release: ms "
 							 "(p50/p95/max) {}, frames (p50/p95/max) {}; request to release ms (p50/p95/max) {}; checked {} (the set or persistent parity): "
-							 "{} incoming not claimed as flipped{}{}{}, {} outgoing still claimed{}{}{}",
+							 "{} incoming not claimed as flipped{}{}{} ({} in refused flips), {} outgoing still claimed{}{}{}",
 					rs.released, rs.refused, rs.withdrawn, Percentiles(rs.flipToReleaseMs), Percentiles(rs.flipToReleaseFrames),
 					Percentiles(rs.requestToReleaseMs), observed.checked, observed.holes, observed.firstHole.empty() ? "" : ", first ", observed.firstHole,
-					observed.holes ? " <- GATE HOLE" : "", observed.coverage, observed.firstCoverage.empty() ? "" : ", first ", observed.firstCoverage,
+					observed.holes ? " <- GATE HOLE" : "", observed.refusedHoles, observed.coverage, observed.firstCoverage.empty() ? "" : ", first ", observed.firstCoverage,
 					observed.coverage ? " <- GATE COVERAGE" : "");
 			if (LodGates::Enabled())
 				if (const auto engine = LodGatesLine(kInterval); !engine.empty())

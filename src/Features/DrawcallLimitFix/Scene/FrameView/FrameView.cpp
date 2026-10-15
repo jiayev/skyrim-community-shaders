@@ -271,14 +271,15 @@ namespace DCLF::Scene
 		const SetSnapshot* claims = !setWithdrawn && installed && installed->claims ? installed->claims.get() : nullptr;
 		const std::uint64_t now = GateNowNs();
 		for (const auto& flip : frameGateReleases) {
+			const bool released = LodGates::Flip(flip.token);
 			if (!claims)
 				++rs.withdrawn;
 			else
-				Diagnostics::Notify(Diagnostics::GateReleasing{ *claims, flip.token, flip.incoming, flip.outgoing });
+				Diagnostics::Notify(Diagnostics::GateReleasing{ *claims, flip.token, flip.incoming, flip.outgoing, released });
 			rs.flipToReleaseMs.push_back(GateMs(flip.flipNs, now));
 			rs.requestToReleaseMs.push_back(GateMs(flip.requestNs, now));
 			rs.flipToReleaseFrames.push_back(frame >= flip.flipFrame ? frame - flip.flipFrame : 0u);
-			if (LodGates::Flip(flip.token))
+			if (released)
 				++rs.released;
 			else
 				++rs.refused;

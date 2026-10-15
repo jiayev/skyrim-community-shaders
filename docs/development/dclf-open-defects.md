@@ -173,6 +173,17 @@ The suspect is `JudgeEntry`'s skip (`Core/Render/Readback/Visibility.cpp`). It s
 wanted value and `entryWrittenVersion` is unchanged, so a write made while the entry was in some other state can hide a later one. The
 change under test (the view contract, stage V2) does not touch this path.
 
+Under motion it reproduces every time (`verify.sh mpp`: `CS_DCLF_TEST_MOVE` with `CS_DCLF_PERSISTENT_PARITY`). On the B1 build it
+appeared in 3 windows (root 4466 again), and with the gate parity build in 9 windows, where the first was root 3953 (`set
+(reference's alone)`). Both builds leave this path unchanged. The motion run is the reproduction to use when it is investigated.
+
+## Portal parity: one unbound-space occluder mismatch under motion (found 2026-10-15; not investigated)
+
+In one `verify.sh mpp` run (the B2 gate parity build), one window reported `<- PORTAL VIEW; first: unbound space: 4 ops 1 sets, the
+engine's 0 ops 0 sets`. In that window the engine listed one unbound-space occluder plane (state 2, flags `0x1000001`), and DCLF had
+it in state 0. The same motion path on the B1 build, and the earlier motion runs, showed none. The gates change did not touch
+portals.
+
 ## Pooled payload: open items (2026-10-14)
 
 The payload ring was replaced by pooled versions published once per snapshot (dclf-architecture.md, "The payload"). These
