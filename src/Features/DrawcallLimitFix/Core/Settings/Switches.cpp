@@ -82,7 +82,6 @@ namespace DCLF
 			{ PrimaryExclude, "CS_DCLF_PRIMARY_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the main camera's cull (live toggle's seed)" },
 			{ Skylight, "CS_DCLF_SKYLIGHT", F, Reduced::UnlessOne, false, "0: Skylighting's occlusion map stays native (live toggle's seed)" },
 			{ Precipitation, "CS_DCLF_PRECIPITATION", F, Reduced::UnlessOne, false, "0: the precipitation occlusion mask stays native (live toggle's seed)" },
-			{ Reflections, "CS_DCLF_REFLECTIONS", F, Reduced::UnlessOne, false, "0: the water reflection's faces stay native (live toggle's seed)" },
 			{ OpaqueEffects, "CS_DCLF_OPAQUE_EFFECTS", F, Reduced::Zero, false,
 				"default on (T7f item 7): opaque BSEffectShaderProperty meshes (hint 0: no blending alpha property, no Falloff, depth tested and written; forge coals, slag) drawn by DCLF in the G-buffer with the DEFERRED effect variant, through the opaque decal group's fixed slots and its decal depth pass without the bias (needs CS_DCLF_EFFECTS and CS_DCLF_DECALS); 0 they stay the engine's (effect-opaque)" },
 			{ EmptyFadeNode, "CS_DCLF_EMPTY_FADE_NODE", F, Reduced::Zero, false,

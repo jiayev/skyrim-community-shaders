@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
+#include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
 #include <cstddef>
@@ -65,9 +66,11 @@ namespace DCLF::Features
 		// Every view's set phase (SceneSet.h's SetPhase bits: one bit of the eight, none Core's: kCoreSetPhases) and view bit at the GPU cull
 		// (GpuLayouts.h's kView*: one bit, none Core's: kCoreViewBits), none another view's.
 		constexpr std::uint32_t kViewPhases[] = {
+			Reflection::kSetReflection,
 			FirstPerson::kSetFirstPerson,
 		};
 		constexpr std::uint32_t kViewBits[] = {
+			Reflection::kViewReflection,
 			FirstPerson::kViewFirstPerson,
 		};
 
@@ -102,8 +105,11 @@ namespace DCLF::Features
 	static_assert(RecordWordsValid(), "a family's record words are past the object record or another family's");
 	static_assert(ViewBitsValid(kViewPhases, std::size(kViewPhases), kCoreSetPhases, 0xFFu), "a view's set phase is not one bit of the eight, or is Core's or another view's");
 	static_assert(ViewBitsValid(kViewBits, std::size(kViewBits), Draws::kCoreViewBits, 0xFFFFFFFFu), "a view's view bit is not one bit, or is Core's or another view's");
-	// FirstPerson's view bit: BuildDrawsCS.hlsl's kViewFirstPerson (the first-person forward range's cull).
+	// FirstPerson's view bit: BuildDrawsCS.hlsl's kViewFirstPerson (the first-person forward range's cull). Reflection's has no HLSL
+	// mirror (the faces' cull reads their latch's view bits as data).
 	static_assert(FirstPerson::kViewFirstPerson == 1u << 11, "FirstPerson's view bit is not BuildDrawsCS's kViewFirstPerson");
+	// The reflection's faces: Core's per-view capacity (ViewEpoch.h).
+	static_assert(Reflection::kFaces <= Draws::kMaxViewFaces, "the reflection's faces are past Core's kMaxViewFaces");
 	// TreeWind's: DCLFObjectRecord's DCLFWindTimers.zw (the record's TreeParams and WindTimers, xy the record's own).
 	static_assert(offsetof(BindlessObject, tree) + offsetof(ObjectTreeAnim, windTimers) + 2 * sizeof(float) == TreeWind::kTreeRecordWord * 4,
 		"TreeWind's record word is not DCLFWindTimers.z");

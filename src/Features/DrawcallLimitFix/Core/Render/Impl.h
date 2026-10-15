@@ -236,10 +236,15 @@ namespace DCLF
 		void RequireView(GrowthBuild& a_build, ViewResources& a_view, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws);
 		/** @brief A DepthTarget view's target, the engine's kPOST_ZPREPASS_COPY, imported (again when it changes), and its extension added. */
 		bool ImportViewDepthTarget(ViewKind a_kind);
-		/** @brief The reflection phase's readiness of an object: its pipeline slot's forward pipeline is built. */
-		bool ReflectionPhaseReady(const SceneTables& a_tables, std::uint32_t a_slot) const;
-		/** @brief The engine's cube target imported (again when it changes). */
-		bool ImportReflectionCube(ID3D11Texture2D* a_texture);
+		/**
+		 * @brief A LodTechniques view's phase readiness of an object (a_phase the view's set phase): its pipeline slot's forward pipeline
+		 * for the view is in its state's slot pipelines (IndirectDraws::ResolveViewPipelines).
+		 */
+		bool LodPhaseReady(std::uint8_t a_phase, const SceneTables& a_tables, std::uint32_t a_slot) const;
+		/** @brief A ColourWithOwnDepth view's target, the engine's a_texture, imported (again when it changes) with DCLF's own depth. */
+		bool ImportViewColourTarget(ViewKind a_kind, ID3D11Texture2D* a_texture);
+		/** @brief A trees view's tree LOD row for an epoch's commit (IndirectDraws::SubmitViewEpoch): none unless its faces' tree LOD is DCLF's. */
+		TreeLod::DrawRow ViewTreeRow(ViewKind a_kind, const ViewFrame& a_shape, std::vector<std::shared_ptr<const void>>& a_owners);
 		/** @brief A view's commit (render thread): its map, faces and tree LOD rows into the shape's latch; returns faces drawn. */
 		std::uint32_t CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const TreeLod::DrawRow* a_treeRow);
 		/** @brief What an epoch's execution holds besides its shape (binding owners, the adopted snapshot). */
@@ -370,12 +375,11 @@ namespace DCLF
 		 */
 		bool EpochCovered(std::uint32_t a_epoch) const;
 		/**
-		 * @brief DecideCoverage's stages (Coverage.cpp): a failed graph's coverage, the epochs' recordings, the faces', a registered view's
-		 * (its feature's covered callback over Api::ViewCoverage).
+		 * @brief DecideCoverage's stages (Coverage.cpp): a failed graph's coverage, the epochs' recordings, a registered view's (its
+		 * feature's covered callback over Api::ViewCoverage).
 		 */
 		void CoverFailedGraph();
 		void DecideEpochCoverage(org::PersistentGraphHost* a_host);
-		void DecideReflectionCoverage(org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame);
 		void DecideViewCoverage(ViewKind a_kind, org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame);
 		void SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index);
 		std::string RevisionReport();

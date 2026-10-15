@@ -272,15 +272,6 @@ namespace DCLF::Diagnostics
 		};
 		std::array<OcclusionView, kOcclusionViews> occlusionViews;
 
-		// Reflection face cameras (CheckReflectionFace): faces compared, differing (block, slice).
-		struct FaceCameras
-		{
-			std::uint32_t faces = 0, blocks = 0, slices = 0;
-			std::uint64_t registers = 0;  // differing registers (c0-c44), by bit
-			float largest = 0.0f;
-			std::string first;
-		} faceCameras;
-
 		// CS_DCLF_PERSISTENT_PARITY: the catalog's constant tables against Community Shaders' (CheckConstantTables).
 		struct ConstantTables
 		{

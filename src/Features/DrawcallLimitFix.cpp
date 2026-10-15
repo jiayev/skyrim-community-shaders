@@ -34,7 +34,6 @@
 #	include "DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #	include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #	include "DrawcallLimitFix/Engine/Cull/PassCapture.h"
-#	include "DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
 #	include "DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #	include "DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #	include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -67,26 +66,12 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::Scene::InstallSceneEvents();
 	// Capture at registration: where the set's members' passes are withheld from the views DCLF draws.
 	DCLF::PassCapture::Get().Install();
-	DCLF::ReflectionFaces::Install();
-	DCLF::ReflectionFaces::SetFaceOriented([](const RE::NiCamera& a_camera, std::uint32_t a_face) {
-		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ReflectionFace);
-		if (globals::features::drawcallLimitFix.Running())
-			DCLF::IndirectDraws::Get().ReflectionFaceCamera(a_camera, a_face);
-	});
-	DCLF::ReflectionFaces::SetAfterFaceDraws([] {
-		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ReflectionFace);
-		if (globals::features::drawcallLimitFix.Running())
-			DCLF::IndirectDraws::Get().CaptureReflectionFace();
-	});
-	DCLF::ReflectionFaces::SetRootsOwned([](bool a_plain) {
-		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ReflectionFace);
-		return globals::features::drawcallLimitFix.Running() ? DCLF::IndirectDraws::Get().ReflectionRootsOwned(a_plain) : 0u;
-	});
 	// Whether DCLF runs, for the engine hooks outside the shell (the features' own thunks), before any of them is installed.
 	DCLF::ShellState::InstallRunningQuery([] { return globals::features::drawcallLimitFix.Running(); });
-	// The features' engine hooks that must precede DCLF's own engine side (Features/Billboards: its parity's NiBillboardNode::OnVisible
-	// thunk, before the primary cull takes the slot; Features/HiddenNodes: the hidden stores, right after the scene events as before),
-	// then the observers this run's switches ask for, and the engine hooks only they use (before DCLF's threads start).
+	// The features' engine hooks that must precede DCLF's own engine side (Features/Reflection: the water reflection's update, add-roots
+	// and face render, first, right after the pass capture; Features/Billboards: its parity's NiBillboardNode::OnVisible thunk, before the
+	// primary cull takes the slot; Features/HiddenNodes: the hidden stores, right after the scene events as before), then the observers
+	// this run's switches ask for, and the engine hooks only they use (before DCLF's threads start).
 	DCLF::Extensions::InstallEarlyHooks(DCLF::Features::List());
 	DCLF::Diagnostics::Install();
 	DCLF::MaterialWrites::Install();

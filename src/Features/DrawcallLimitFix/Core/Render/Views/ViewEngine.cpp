@@ -1,7 +1,8 @@
 // The view engine (IndirectDraws.h, "The view engine"): Core's calls for the features that take an engine view - the view slot's state,
 // targets, depth range, pipelines, resources and target import at the frame's start, its epochs' inputs and submission, its coverage,
 // and its phase's capability and slot readiness. Each is what Core did for the view itself, over the slot the view names. Render thread,
-// but for ViewDrawable and ViewSlotReady (the scene lane's commit) and ViewCovered.
+// but for ViewDrawable and ViewSlotReady (the scene lane's commit) and ViewCovered. (A trees view's tree LOD per face and the cube camera's
+// LOD roots: ViewTreeLod.cpp.)
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
@@ -53,7 +54,7 @@ namespace DCLF
 	}
 
 	IndirectDraws::ViewPipelineCounts IndirectDraws::ResolveViewPipelines(Api::EngineView a_view, const SceneTables& a_tables, const PipelineCatalog* a_catalog,
-		std::span<const std::uint8_t> a_wanted)
+		std::span<const std::uint8_t> a_wanted, bool a_programs)
 	{
 		auto& state = impl->View(a_view);
 		auto& drawPipelines = DrawPipelines::Get();
@@ -61,16 +62,27 @@ namespace DCLF
 		state.slotPipelines.assign(a_tables.pipelines.size(), rhi::PipelineHandle{});
 		for (std::size_t p = 0; p < a_tables.pipelines.size(); ++p) {
 			ForwardPipelineKey key;
-			if (!a_wanted[p] || !ViewForwardKey(a_view, a_tables, p, key))
+			if ((!a_wanted.empty() && !a_wanted[p]) || !ViewForwardKey(a_view, a_tables, p, key))
 				continue;
 			++counts.slots;
 			drawPipelines.RequestForward(key);
-			if (const auto pipeline = ForwardPipelineOf(a_catalog, key, state.targets); pipeline.valid()) {
-				state.slotPipelines[p] = pipeline;
-				++counts.ready;
+			// With a_programs, the programs built and whether a pipeline missing is still to come (its entry not failed): the frame's waits.
+			const auto* entry = a_programs && a_catalog ? a_catalog->FindForward(key) : nullptr;
+			counts.programs += entry && entry->program ? 1u : 0u;
+			const auto pipeline = ForwardPipelineOf(a_catalog, key, state.targets);
+			if (!pipeline.valid()) {
+				counts.waited |= a_programs && !(entry && entry->failed);
+				continue;
 			}
+			state.slotPipelines[p] = pipeline;
+			++counts.ready;
 		}
 		return counts;
+	}
+
+	void IndirectDraws::DropViewPipelines(Api::EngineView a_view)
+	{
+		impl->View(a_view).slotPipelines.clear();
 	}
 
 	bool IndirectDraws::SetUpView(Api::EngineView a_view)
@@ -83,10 +95,10 @@ namespace DCLF
 		if (!impl)
 			return false;
 		// A DepthTarget view's: kPOST_ZPREPASS_COPY. A ColourWithOwnDepth view's: the engine's colour target with DCLF's own depth (the
-		// reflection cube's, Reflection.cpp's while Core keeps the reflection).
+		// reflection's cube).
 		if (Extensions::ViewEntryOf(a_view).targetImport == Api::ViewTargetImport::DepthTarget)
 			return impl->ImportViewDepthTarget(a_view);
-		return impl->ImportReflectionCube(a_texture);
+		return impl->ImportViewColourTarget(a_view, a_texture);
 	}
 
 	IndirectDraws::ViewInputsTaken IndirectDraws::TakeViewInputs(Api::EngineView a_view, ViewInputsFrom a_from, ViewListed& a_listed)
@@ -102,10 +114,15 @@ namespace DCLF
 			return ViewInputsTaken::Taken;
 		}
 		// The frame's scene list (the installed payload) with this frame's depth commit's index pool, inputs, object records and geometry
-		// rows - the frame's publication whole.
+		// rows - the frame's publication whole - and, from the frame before, its colour commit's frame record, in the backing it was written
+		// to (both commits of the adopted set).
 		const auto main = impl->resources;
 		const auto& depthCommit = main ? main->committed[kDepthShape] : Resources::Committed{};
-		if (!main || !impl->scene || depthCommit.frame != frameNumber || depthCommit.adoptedSerial != impl->Adopted().Serial())
+		const std::uint64_t adoptedSerial = impl->Adopted().Serial();
+		if (!main || !impl->scene || depthCommit.frame != frameNumber || depthCommit.adoptedSerial != adoptedSerial)
+			return ViewInputsTaken::Stale;
+		const bool colourBefore = a_from == ViewInputsFrom::DepthThisFrameColourBefore;
+		if (colourBefore && (main->committed[kColourShape].frame + 1 != frameNumber || main->committed[kColourShape].adoptedSerial != adoptedSerial))
 			return ViewInputsTaken::Stale;
 		const auto& draws = impl->installedDraws;
 		const MainPayload* listed = impl->InstalledPayload() && draws ? draws->payloads[kAsyncZPrepass].get() : nullptr;
@@ -113,8 +130,10 @@ namespace DCLF
 			return ViewInputsTaken::Stale;
 		// The main part of the scene list: its region and the main frame inputs (the shadow frame inputs after them are no main input).
 		a_listed.inputs = static_cast<std::uint32_t>(listed->resident.Count() + listed->inputList.size());
+		// The view's target: a DepthThisFrame view's imported before (its frame start); a DepthThisFrameColourBefore view's work imports it
+		// after taking its inputs.
 		const auto& resources = impl->View(a_view).resources;
-		if (!resources || !resources->target)
+		if (!colourBefore && (!resources || !resources->target))
 			return ViewInputsTaken::NoTarget;
 		a_listed.owners = { draws->payloads[0].get(), draws->payloads[1].get() };
 		a_listed.ownerCount = 2;
@@ -122,7 +141,7 @@ namespace DCLF
 	}
 
 	IndirectDraws::ViewSubmit IndirectDraws::SubmitViewEpoch(Api::EngineView a_view, std::uint32_t a_epoch, const ViewListed& a_listed,
-		std::span<const ViewFace> a_faces, const TreeLod::DrawRow* a_treeRow, std::uint32_t* a_drawn)
+		std::span<const ViewFace> a_faces, std::uint32_t* a_drawn)
 	{
 		const auto& slot = kViewSlots[ViewIndex(a_view)];
 		const std::uint32_t epoch = slot.epochs[a_epoch];
@@ -137,10 +156,15 @@ namespace DCLF
 		const auto owners = impl->EpochOwners(std::span<const MainPayload* const>(a_listed.owners.data(), a_listed.ownerCount));
 		if (!owners)
 			return ViewSubmit::NoOwners;
+		// A trees view's tree LOD row (ViewTreeLod.cpp), its texture held with the owners.
+		TreeLod::DrawRow treeRow{};
+		const bool trees = !a_faces.empty() && TraitsOf(a_view).trees;
+		if (trees)
+			treeRow = impl->ViewTreeRow(a_view, *shape, *owners);
 		std::uint32_t drawn = 0;
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(slot.segments[a_epoch], [&](org::RenderGraph&) {
 			if (!a_faces.empty())
-				drawn = impl->CommitView(*shape, a_faces, a_listed.inputs, a_treeRow);
+				drawn = impl->CommitView(*shape, a_faces, a_listed.inputs, trees ? &treeRow : nullptr);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, 0);
 		}, owners);
 		if (!ok)
@@ -152,24 +176,33 @@ namespace DCLF
 
 	bool IndirectDraws::ViewCovered(Api::EngineView a_view) const
 	{
-		return impl && impl->View(a_view).covered;
+		return impl && impl->ViewCovered(a_view);
 	}
 
 	bool IndirectDraws::ViewDrawable(Api::EngineView a_view) const
 	{
-		if (Extensions::CoreKeepsView(a_view))
-			return ReflectionDrawable();
-		// A capability (Coordinator::SetCapability, the scene lane's commit): the toggle, and the view's targets published (the colour
-		// epoch's formats, known once the main pass's targets were captured and the view's target exists). Each member then waits for its
-		// own pipelines (ViewSlotReady), and the engine draws it until the frame's epochs are covered (PassCapture).
+		// A capability (Coordinator::SetCapability, the scene lane's commit), not whether the last epoch drew nor what the view's resources
+		// or pipelines are yet: the toggle, and the view's targets published, never the render thread's own copy (the first person's colour
+		// epoch's formats, known once the main pass's targets were captured; the reflection's faces', known at the first frame). Each member
+		// then waits for its own pipelines (ViewSlotReady), and the engine draws it until the frame's epochs are covered (PassCapture).
 		return impl && Extensions::ViewOn(ActiveToggles(), a_view) && !failed && impl->View(a_view).LaneTargets().colour != DXGI_FORMAT_UNKNOWN;
 	}
 
 	bool IndirectDraws::ViewSlotReady(Api::EngineView a_view, const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot,
 		std::uint32_t* a_why) const
 	{
-		if (Extensions::ViewEntryOf(a_view).membership == Api::ViewMembership::LodTechniques)
-			return ReflectionSlotReady(a_tables, a_catalog, a_slot);
+		if (Extensions::ViewEntryOf(a_view).membership == Api::ViewMembership::LodTechniques) {
+			// A LodTechniques view's member (the reflection's): the slot's forward pipeline as a_catalog has it for the view's targets
+			// (ViewPipelinesOf's rule, which the revision's shapes resolve from their publication's catalog): the scene lane's commit's, from
+			// its own catalog, never the render thread's per-frame list (the state's slot pipelines, which ResolveViewPipelines assigns whole).
+			const auto& tables = *static_cast<const SceneTables*>(a_tables);
+			const ForwardTargets targets = impl->View(a_view).LaneTargets();  // the published copy (the render thread writes its own at every face capture)
+			if (!a_catalog || targets.colour == DXGI_FORMAT_UNKNOWN || a_slot >= tables.objects.size())
+				return false;
+			const std::uint32_t p = tables.objects[a_slot].pipelineIndex;
+			ForwardPipelineKey key;
+			return p < tables.pipelines.size() && ViewForwardKey(a_view, tables, p, key) && ForwardPipelineOf(a_catalog, key, targets).valid();
+		}
 		// A CategoryRoot view's member (the first person's). a_why (the set parity's observer): 1 no catalog or targets, 2 a forward key
 		// the forward part cannot draw, 3 no key of the view's, 4 its pipeline not in a_catalog, 5 no Z-prepass group pipeline.
 		auto fail = [&](std::uint32_t a_cause) {

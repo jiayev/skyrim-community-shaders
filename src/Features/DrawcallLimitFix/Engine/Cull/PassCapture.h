@@ -22,8 +22,8 @@ namespace DCLF
 	/**
 	 * @brief The registration hooks at every point where the engine hands a pass to a batch renderer. A member of the frame's DCLF
 	 * set (SceneSet.h) has its passes withheld from the main views (Z-prepass and main accumulators), an InMainRenderers view's
-	 * accumulators (the first person's), the reflection faces and the occlusion maps while DCLF draws them; shadow views withhold the
-	 * casters DCLF draws. Runs on whatever thread the engine registers on.
+	 * accumulators (the first person's), an OwnRenderers view's renderers (the reflection faces') and the occlusion maps while DCLF draws
+	 * them; shadow views withhold the casters DCLF draws. Runs on whatever thread the engine registers on.
 	 *
 	 * Lighting passes are also recorded, for observers only (FrameView::DrainCapture): DCLF draws nothing from registrations.
 	 * `BSBatchRenderer::RegisterPass` (vfunc 0x02), not GetRenderPasses, because `technique` (the caller's `techniqueID`, which
@@ -61,8 +61,9 @@ namespace DCLF
 			std::uint32_t mainWithheld = 0;
 			std::uint32_t occlusionWithheld = 0;
 			std::uint32_t treeLodWithheld = 0;    // tree LOD into the main views while DCLF draws it
-			// The water reflection's faces: reflection-phase members, and tree LOD while DCLF draws the faces' tree LOD.
-			std::uint32_t reflectionWithheld = 0, reflectionTreeLodWithheld = 0;
+			// By view, an OwnRenderers view's (the water reflection's faces): its members' passes, and tree LOD's while DCLF draws its tree
+			// LOD per face.
+			std::array<std::uint32_t, Extensions::kEngineViews> viewWithheld{}, viewTreeLodWithheld{};
 		};
 
 		/** @brief Render thread, before the main cull: whether DCLF draws tree LOD this frame (then its main-view passes are withheld). */
@@ -70,34 +71,42 @@ namespace DCLF
 		bool TreeLodOwned() const { return treeLodOwned.load(std::memory_order_acquire); }
 
 		/**
-		 * @brief The water reflection's faces (dclf-lod.md, "Water reflections"). SetReflectionCamera: render thread, the cube camera
-		 * whose accumulators' renderers are the faces'. SetReflectionFace: around a face render in plain mode (0), the only one whose
-		 * registrations the hooks see (mode 0x19's are FUN_1414b2b90's). SetReflectionTreeLodOwned: once a frame.
+		 * @brief Render thread, BeginSceneFrame: whether a view's epochs draw its members (its coverage; before the first, its
+		 * coveredInitially). While an InMainRenderers view's is set, its member's pass into the view's accumulators (the first person's:
+		 * *0x14338c840, Main::unk_FPCulling's) or into the main views' (the first person's RenderDepth block culls into the Z-prepass's) is
+		 * withheld; while an OwnRenderers view's is, its member's pass into its renderers while its render withholds (the reflection faces').
 		 */
-		void SetReflectionCamera(const RE::NiCamera* a_camera);
-		void SetReflectionFace(bool a_plain) { reflectionFace.store(a_plain, std::memory_order_release); }
-		void SetReflectionTreeLodOwned(bool a_owned) { reflectionTreeLodOwned.store(a_owned, std::memory_order_release); }
-		/**
-		 * @brief Render thread, BeginSceneFrame: whether a view's epochs draw its members (its coverage). While an InMainRenderers view's
-		 * is set, its member's pass into the view's accumulators (the first person's: *0x14338c840, Main::unk_FPCulling's) or into the
-		 * main views' (the first person's RenderDepth block culls into the Z-prepass's) is withheld; an OwnRenderers view's is the
-		 * reflection faces' (SetReflectionCovered, while Core keeps the reflection).
-		 */
-		void SetViewCovered(Api::EngineView a_view, bool a_covered)
+		void SetViewCovered(Api::EngineView a_view, bool a_covered) { viewRenderers[static_cast<std::size_t>(a_view)].coverage.store(a_covered ? 2 : 1, std::memory_order_release); }
+		/** @brief A view's coverage (SetViewCovered). */
+		bool ViewCovered(Api::EngineView a_view) const
 		{
-			if (Extensions::ViewEntryOf(a_view).withholding == Api::ViewWithholding::InMainRenderers)
-				mainViews[static_cast<std::size_t>(a_view)].covered.store(a_covered, std::memory_order_release);
-			else
-				SetReflectionCovered(a_covered);
+			const auto coverage = viewRenderers[static_cast<std::size_t>(a_view)].coverage.load(std::memory_order_acquire);
+			return coverage ? coverage == 2 : Extensions::ViewEntryOf(a_view).coveredInitially;
 		}
-		/** @brief An InMainRenderers view's coverage (SetViewCovered). */
-		bool ViewCovered(Api::EngineView a_view) const { return mainViews[static_cast<std::size_t>(a_view)].covered.load(std::memory_order_acquire); }
 		/** @brief Whether a_batch is one of an InMainRenderers view's accumulators' batch renderers. */
 		bool IsViewRenderer(Api::EngineView a_view, const RE::BSBatchRenderer* a_batch) const
 		{
-			const auto renderers = std::atomic_load(&mainViews[static_cast<std::size_t>(a_view)].renderers);
+			const auto renderers = std::atomic_load(&viewRenderers[static_cast<std::size_t>(a_view)].renderers);
 			return renderers && renderers->contains(a_batch);
 		}
+		/**
+		 * @brief An OwnRenderers view's renderers (the water reflection's faces, dclf-lod.md, "Water reflections"), named by its feature's
+		 * engine hooks. SetViewRenderers: render thread, the accumulators whose batch renderers (and their geometry groups') are the view's
+		 * (the cube camera's), rebuilt only when they change. SetViewWithholdActive: around the view's render while its members' passes
+		 * into them are withheld (the faces' plain mode, 0: the only one whose registrations the hooks see; mode 0x19's are FUN_1414b2b90's).
+		 * SetViewRendering: around the view's render, whatever its mode (the observers: OwnViewRendering). SetViewTreeLodOwned: once a
+		 * frame, a trees view's tree LOD per face DCLF's (its tree LOD passes into its renderers withheld; Core's while TreeLod is).
+		 */
+		void SetViewRenderers(Api::EngineView a_view, const Api::ViewAccumulators& a_accumulators);
+		void SetViewWithholdActive(Api::EngineView a_view, bool a_active) { viewRenderers[static_cast<std::size_t>(a_view)].withholdActive.store(a_active, std::memory_order_release); }
+		void SetViewRendering(Api::EngineView a_view, bool a_rendering) { viewRenderers[static_cast<std::size_t>(a_view)].rendering.store(a_rendering, std::memory_order_release); }
+		void SetViewTreeLodOwned(Api::EngineView a_view, bool a_owned) { viewRenderers[static_cast<std::size_t>(a_view)].treeLodOwned.store(a_owned, std::memory_order_release); }
+		/** @brief Whether a_batch is one of an OwnRenderers view's batch renderers (for the census). */
+		bool IsOwnViewRenderer(Api::EngineView a_view, const RE::BSBatchRenderer* a_batch) const { return IsViewRenderer(a_view, a_batch); }
+		/** @brief Render thread: whether an OwnRenderers view's render runs (a reflection face render: the capture parity's face draws). */
+		bool OwnViewRendering() const;
+		/** @brief Whether an OwnRenderers view's render withholds its members now (its own gates: active and covered; the census). */
+		bool OwnViewWithholding() const;
 		/**
 		 * @brief An InMainRenderers view's counts since the last call (its report's observer, the first person's <- FIRST PERSON): members'
 		 * passes withheld, members' passes handed on (the epochs did not draw), and every pass into the view's accumulators.
@@ -108,22 +117,19 @@ namespace DCLF
 		};
 		ViewCounts TakeViewCounts(Api::EngineView a_view)
 		{
-			auto& view = mainViews[static_cast<std::size_t>(a_view)];
+			auto& view = viewRenderers[static_cast<std::size_t>(a_view)];
 			return { view.withheld.exchange(0, std::memory_order_relaxed), view.memberKept.exchange(0, std::memory_order_relaxed),
 				view.registered.exchange(0, std::memory_order_relaxed) };
 		}
-		/** @brief Render thread, BeginSceneFrame: whether the frame's faces are DCLF's at all. */
-		void SetReflectionCovered(bool a_covered) { reflectionCovered.store(a_covered, std::memory_order_release); }
-		bool ReflectionTreeLodOwned() const { return reflectionTreeLodOwned.load(std::memory_order_acquire); }
-		/** @brief Whether a_batch is one of the reflection faces' batch renderers (for the census). */
-		bool IsReflectionRenderer(const RE::BSBatchRenderer* a_batch) const
-		{
-			const auto renderers = std::atomic_load(&reflectionRenderers);
-			return renderers && renderers->contains(a_batch);
-		}
+		/**
+		 * @brief The cube camera's LOD roots (IndirectDraws::ViewLodRootsOwned, Features/Reflection's ReflectionFaces::RootBits): LOD land
+		 * and objects (the reflection phase), LOD trees (the faces' tree LOD). Core's while tree LOD and the LOD gates are.
+		 */
+		static constexpr std::uint32_t kLodRoots = 1u << 0, kTreeRoot = 1u << 1;
 		/**
 		 * @brief The faces' residue watch: render thread, at an update's start, the cube camera's roots to watch (0: none). While set,
-		 * passes into a face's renderer that are not withheld (geometry the engine still draws) are counted by root (not the sky's).
+		 * passes into an OwnRenderers view's renderer that are not withheld (geometry the engine still draws) are counted by root (not the
+		 * sky's). Core's while tree LOD and the LOD gates are.
 		 */
 		void WatchReflectionResidue(std::uint32_t a_roots) { reflectionResidueWatch.store(a_roots, std::memory_order_release); }
 		struct ReflectionResidue
@@ -230,17 +236,16 @@ namespace DCLF
 		std::atomic<std::uint32_t> mainWithheld{ 0 }, occlusionWithheld{ 0 };
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
 		std::atomic<bool> treeLodOwned{ false };
-		std::atomic<std::uint32_t> reflectionWithheld{ 0 }, reflectionTreeLodWithheld{ 0 };
 		std::atomic<std::uint32_t> reflectionResidueWatch{ 0 }, reflectionResidueLod{ 0 }, reflectionResidueTree{ 0 };
 		std::mutex reflectionResidueLock;
 		std::string reflectionResidueFirst;  // under reflectionResidueLock
 		std::vector<const RE::BSGeometry*> reflectionResidueGeometries;  // under reflectionResidueLock
 		void NoteReflectionResidue(const RE::BSRenderPass* a_pass, bool a_treeLod);
-		std::atomic<bool> reflectionFace{ false }, reflectionTreeLodOwned{ false }, reflectionCovered{ true };
-		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> reflectionRenderers;
-		std::array<const void*, 2> reflectionAccumulators{};  // what reflectionRenderers was made from (render thread)
-		/** @brief The reflection test at every main-mode insertion point: a reflection-phase member's pass into a face renderer. */
-		bool WithholdReflection(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass);
+		/**
+		 * @brief The OwnRenderers views' test at every main-mode insertion point, after WithholdMain: a member's pass of the view's phase
+		 * into its renderers while its render withholds and its epochs draw (the reflection faces'), or tree LOD's while its tree LOD is DCLF's.
+		 */
+		bool WithholdOwn(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass);
 		std::atomic<std::uint8_t> occlusionPhase{ 0 };
 		struct OcclusionGroupHook;
 		friend struct OcclusionGroupHook;
@@ -248,16 +253,20 @@ namespace DCLF
 		using RendererSet = ankerl::unordered_dense::set<const RE::BSBatchRenderer*>;
 		std::shared_ptr<const RendererSet> mainRenderers;
 		std::array<const void*, 2> mainAccumulators{};  // what mainRenderers was made from (render thread)
-		// By view, an InMainRenderers view's: its accumulators' renderers (also in mainRenderers), their source (render thread), its
-		// coverage and its counts.
-		struct MainRendererView
+		// By view: its renderers (an InMainRenderers view's accumulators', also in mainRenderers; an OwnRenderers view's, SetViewRenderers),
+		// their source (render thread) and its coverage (0: not set yet, its coveredInitially standing for it; 1 not covered; 2 covered).
+		// An InMainRenderers view's counts; an OwnRenderers view's render's gates (rendering, withholding), its tree LOD's ownership and
+		// its counts (Drain takes them).
+		struct ViewRenderers
 		{
 			std::shared_ptr<const RendererSet> renderers;
 			Api::ViewAccumulators accumulators;
-			std::atomic<bool> covered{ false };
+			std::atomic<std::uint8_t> coverage{ 0 };
 			std::atomic<std::uint32_t> withheld{ 0 }, memberKept{ 0 }, registered{ 0 };
+			std::atomic<bool> rendering{ false }, withholdActive{ false }, treeLodOwned{ false };
+			std::atomic<std::uint32_t> ownWithheld{ 0 }, ownTreeLodWithheld{ 0 };
 		};
-		std::array<MainRendererView, Extensions::kEngineViews> mainViews;
+		std::array<ViewRenderers, Extensions::kEngineViews> viewRenderers;
 		/**
 		 * @brief The main-view test at every insertion point: a member's pass into a main view (all of them: DCLF draws its fades and LOD
 		 * cross-fade copy), or tree LOD's or an InMainRenderers view's member's (the first person's) while DCLF draws those.

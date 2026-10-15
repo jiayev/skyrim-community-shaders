@@ -33,7 +33,6 @@ namespace DCLF::Diagnostics
 	struct OcclusionCaptured;
 	struct ShadowViewLatched;
 	struct MainCullViewProj;
-	struct ReflectionFaceDrawn;
 	struct FoliageRecordMade;
 	struct MainGraphPasses;
 
@@ -87,8 +86,6 @@ namespace DCLF::Diagnostics
 	void CheckSunEntry(const ShadowViewLatched& a_latched);
 	// CS_DCLF_TARGET_PROBE: the objects whose bound covers the pixel (ColourProbes.cpp).
 	void ProbeTarget(const MainCullViewProj& a_cull);
-	// The reflection's face cameras (ReflectionChecks.cpp; CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY).
-	void CheckReflectionFace(const ReflectionFaceDrawn& a_drawn);
 	// CS_DCLF_FOLIAGE_PARITY: the compare pass's program and readbacks, its passes after the colour draws (Foliage.cpp).
 	void MakeFoliageCompare(const FoliageRecordMade& a_made);
 	void AppendFoliagePasses(const MainGraphPasses& a_passes);

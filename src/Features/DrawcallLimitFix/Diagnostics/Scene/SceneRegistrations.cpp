@@ -38,7 +38,7 @@ namespace DCLF::Diagnostics
 			auto& state = SceneDiagnostics();
 			auto drain = std::make_shared<RegistrationDrain>();
 			// The reflection residue's geometries, classified by the next scene pass. Its watch is its own gate (the parities:
-			// IndirectDraws::ReflectionRootsOwned); taken every frame so it never accumulates. Their names are read here,
+			// IndirectDraws::ViewLodRootsOwned); taken every frame so it never accumulates. Their names are read here,
 			// where the frame registered them (the pass reading them runs past this frame's Present).
 			if (residueOn) {
 				const auto residue = PassCapture::Get().TakeReflectionResidueGeometries();
@@ -96,6 +96,8 @@ namespace DCLF::Diagnostics
 				return;
 			const auto& tracked = V::tracked(a_store);
 			const std::uint32_t sceneFrame = V::sceneFrame(a_store);
+			// The reflection's phase: its feature's (Extensions::Views).
+			const std::uint8_t reflectionPhase = Extensions::ViewEntryOf(Api::EngineView::Reflection).phase;
 			std::scoped_lock lock(state.residueLock);
 			auto& classes = state.residue;
 			for (const auto& [geometry, names] : state.drain->residue) {
@@ -108,7 +110,7 @@ namespace DCLF::Diagnostics
 				else if (const std::int32_t slot = a_store.FindObject(geometry); !V::ResidentObject(a_store, slot))
 					kind = kResidueUnbound;
 				else
-					kind = (Scene::PhasesIn(V::tables(a_store), static_cast<std::uint32_t>(slot)) & kSetReflection) ? kResidueReflection : kResidueNotReflection;
+					kind = (Scene::PhasesIn(V::tables(a_store), static_cast<std::uint32_t>(slot)) & reflectionPhase) ? kResidueReflection : kResidueNotReflection;
 				++classes.counts[kind];
 				// How long a geometry stays in the residue (distinct geometries, and those seen on 10 frames or more this window).
 				if (auto& seen = classes.seen[geometry]; seen.frame != sceneFrame) {

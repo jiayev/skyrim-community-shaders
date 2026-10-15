@@ -114,7 +114,7 @@ namespace DCLF::Diagnostics
 		const SetSnapshot& claims;
 	};
 
-	/** @brief The engine drew a reflection face (IndirectDraws::CaptureReflectionFace), its targets still bound. */
+	/** @brief The engine drew a reflection face (Features/Reflection's FaceDrawn), its targets still bound: its face camera parity's point. */
 	struct ReflectionFaceDrawn
 	{
 	};

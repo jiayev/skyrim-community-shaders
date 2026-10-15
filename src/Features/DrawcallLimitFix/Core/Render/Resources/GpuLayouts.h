@@ -266,14 +266,14 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kViewPointCaster = 1u << 4;    // the point lights' paraboloids
 	constexpr std::uint32_t kViewSkyOccluder = 1u << 5;    // Skylighting's occlusion map
 	constexpr std::uint32_t kViewPrecipOccluder = 1u << 6; // the precipitation mask
-	constexpr std::uint32_t kViewReflection = 1u << 7;     // the water reflection's faces
+	// 1u << 7: a feature's view's (Features/Reflection's kViewReflection, the water reflection's faces).
 	constexpr std::uint32_t kViewDecal = 1u << 8;          // a decal: the colour segment's fixed ordinal slots only
 	constexpr std::uint32_t kViewForward = 1u << 9;        // a forward object: the colour segment's forward range only
 	constexpr std::uint32_t kViewRefraction = 1u << 10;    // a refraction object (kRasterRefraction): the refraction range only
 	// 1u << 11: a feature's view's (Features/FirstPerson's kViewFirstPerson, BuildDrawsCS's; Api::ViewShape::viewBits, Features/Manifest.cpp).
 	/** @brief Core's view bits: a view's bit (a feature's own) is none of them (Extensions::ResolveViews, Features/Manifest.cpp). */
 	constexpr std::uint32_t kCoreViewBits = kViewMainCull | kViewMain | kViewSunCaster | kViewSpotCaster | kViewPointCaster | kViewSkyOccluder |
-	                                        kViewPrecipOccluder | kViewReflection | kViewDecal | kViewForward | kViewRefraction;
+	                                        kViewPrecipOccluder | kViewDecal | kViewForward | kViewRefraction;
 	// The main segments' views of the one main list: depth culls every candidate; colour draws members and every decal's slot.
 	constexpr std::uint32_t kDepthViewBits = kViewMainCull;
 	constexpr std::uint32_t kColourViewBits = kViewMain | kViewDecal | kViewForward | kViewRefraction;

@@ -12,7 +12,7 @@
 #include "Deferred.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Feature/TargetDump.h"
-#include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
+#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/TerrainBlending.h"
 
@@ -105,7 +105,8 @@ namespace DCLF::Diagnostics
 		// The native lighting draws: the capture parity (the capture point's is the draws area's).
 		if (o.capture)
 			Subscribe<NativeLightingDraw>([](const NativeLightingDraw& a_event) {
-				if (ReflectionFaces::InFace())
+				// Inside a reflection face render (an OwnRenderers view's: Features/Reflection's face render hook says so).
+				if (PassCapture::Get().OwnViewRendering())
 					CaptureParity::Get().OnFaceLightingDraw(a_event.pass, a_event.renderFlags);
 				else
 					CaptureParity::Get().OnNativeLightingDraw(a_event.pass, a_event.renderFlags);

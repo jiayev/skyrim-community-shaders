@@ -245,32 +245,6 @@ namespace DCLF
 		 */
 		bool DecideTreeLod();
 		/**
-		 * @brief The water reflection's faces (dclf-lod.md, "Water reflections"), render thread. CaptureReflectionFace: at a face's
-		 * accumulator render's end, its targets. PrepareReflection: once a frame after DecideTreeLod, the LOD slots' and tree LOD's
-		 * forward pipelines. ExecuteReflection: in the depth hook right after the Z-prepass epoch (its commit), after the frame's updates (TESWaterReflections::Update runs twice
-		 * a frame, a face each): one epoch drawing the faces' members and tree LOD into the cube target.
-		 */
-		void CaptureReflectionFace();
-		/**
-		 * @brief Render thread, once the engine has oriented the cube camera to a face, before its cull and draws: the face's view as
-		 * DCLF computes it (SunViews' arithmetic; the face's slice of the cube target).
-		 */
-		void ReflectionFaceCamera(const RE::NiCamera& a_camera, std::uint32_t a_face);
-		/**
-		 * @brief Render thread, at a reflection update's start: the cube camera's LOD roots DCLF draws (ReflectionFaces::RootBits),
-		 * whose add-roots are skipped so the engine neither culls nor registers them.
-		 */
-		std::uint32_t ReflectionRootsOwned(bool a_plain);
-		void PrepareReflection();
-		bool ReflectionDrawable() const;
-		/**
-		 * @brief Scene lane's commit: whether the slot's faces' forward pipeline is in a_catalog (the lane's) for the faces' targets:
-		 * the reflection phase's readiness, read from nothing the render thread writes per frame.
-		 */
-		bool ReflectionSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const;
-		void ExecuteReflection();
-		std::string ReflectionReport();
-		/**
 		 * @brief The view engine (Views/ViewEngine.cpp): Core's calls for the features that take an engine view (Api/Views.h,
 		 * Extensions::Views) - their state, targets, pipelines and resources at their frame's start, and their epochs' inputs and
 		 * submission - each over the view's slot, so a feature's work and epochs reproduce Core's own. Render thread unless said otherwise;
@@ -290,16 +264,41 @@ namespace DCLF
 		float ViewDepthRange(Api::EngineView a_view) const;
 		/** @brief Publishes whether the main set's forward pipelines draw into the view's forward part (ViewSlotReady); the previous value. */
 		bool ExchangeViewForwardCompatible(Api::EngineView a_view, bool a_compatible);
-		/** @brief What ResolveViewPipelines found: the slots with a key of the view's, and those whose pipeline a_catalog has. */
+		/**
+		 * @brief What ResolveViewPipelines found: the slots with a key of the view's, and those whose pipeline a_catalog has; with
+		 * a_programs, those whose program a_catalog has, and whether a pipeline missing there is still to come (not failed).
+		 */
 		struct ViewPipelineCounts
 		{
-			std::uint32_t slots = 0, ready = 0;
+			std::uint32_t slots = 0, ready = 0, programs = 0;
+			bool waited = false;
 		};
 		/**
-		 * @brief The view's forward pipelines of a_wanted's slots (by pipeline slot, nonzero: wanted), asked of the pipeline lane (each key
-		 * once) and read from a_catalog (the frame's) for the view's targets, into its state's slot pipelines.
+		 * @brief The view's forward pipelines of a_wanted's slots (by pipeline slot, nonzero: wanted; empty: every slot), asked of the
+		 * pipeline lane (each key once) and read from a_catalog (the frame's) for the view's targets, into its state's slot pipelines.
 		 */
-		ViewPipelineCounts ResolveViewPipelines(Api::EngineView a_view, const SceneTables& a_tables, const PipelineCatalog* a_catalog, std::span<const std::uint8_t> a_wanted);
+		ViewPipelineCounts ResolveViewPipelines(Api::EngineView a_view, const SceneTables& a_tables, const PipelineCatalog* a_catalog, std::span<const std::uint8_t> a_wanted,
+			bool a_programs = false);
+		/** @brief The view's state's slot pipelines dropped (the view off: none of its slots is ready, PhaseReady). */
+		void DropViewPipelines(Api::EngineView a_view);
+		/**
+		 * @brief Tree LOD drawn per face by a trees view (Api::ViewShape::trees; Core's while TreeLod is), render thread, once a frame after
+		 * DecideTreeLod. ResolveViewTreeLod: its forward pipeline asked of the pipeline lane and read from a_catalog for the view's targets
+		 * while a_on and the tree LOD toggle are (none otherwise); true while it is still to come and the main view's tree LOD is DCLF's.
+		 * DecideViewTreeLod: whether the faces' tree LOD is DCLF's this frame (the view drawable and covered, its pipeline ready, the main
+		 * view's tree LOD DCLF's, the last depth commit's row and tree LOD's pipelines there), published to PassCapture
+		 * (SetViewTreeLodOwned). SubmitViewEpoch draws its row then.
+		 */
+		bool ResolveViewTreeLod(Api::EngineView a_view, bool a_on, const PipelineCatalog* a_catalog);
+		void DecideViewTreeLod(Api::EngineView a_view);
+		/**
+		 * @brief Render thread, at a cube camera update's start (Features/Reflection's update hook): the camera's LOD roots a_view's faces
+		 * draw in the engine's place (PassCapture::kLodRoots, kTreeRoot), whose add-roots are skipped so the engine neither culls nor
+		 * registers them. Core's while tree LOD and the LOD gates are: the tree root while the faces' tree LOD is DCLF's, the LOD land and
+		 * objects roots while the LOD swaps are gated (LodGates) and both are DCLF's; none on a non-plain update, while the view is not
+		 * drawable or covered, or on an update that keeps them for the residue watch (Policy::KeepReflectionRoots).
+		 */
+		std::uint32_t ViewLodRootsOwned(Api::EngineView a_view, bool a_plain);
 		/** @brief The view's graph resources, once the main resources and index pool exist; true when it has them. */
 		bool SetUpView(Api::EngineView a_view);
 		/**
@@ -316,17 +315,20 @@ namespace DCLF
 		};
 		/**
 		 * @brief Which of the frame's commits a view's epoch draws from. DepthThisFrame: the frame's scene list with this frame's depth
-		 * commit (its index pool, inputs, records, geometry rows); ColourThisFrame: this frame's colour commit's payload and frame constants.
+		 * commit (its index pool, inputs, records, geometry rows); DepthThisFrameColourBefore: the same with the frame before's colour
+		 * commit's frame record, both commits of the adopted set (the view's work sets up and imports its target after); ColourThisFrame:
+		 * this frame's colour commit's payload and frame constants.
 		 */
 		enum class ViewInputsFrom : std::uint8_t
 		{
 			DepthThisFrame,
+			DepthThisFrameColourBefore,
 			ColourThisFrame,
 		};
 		enum class ViewInputsTaken : std::uint8_t
 		{
 			Taken,
-			Stale,     // the commits are not the frame's, or nothing is listed
+			Stale,     // the commits are not the frame's (or the frame before's), or nothing is listed
 			NoTarget,  // the view's resources or its imported target are missing (DepthThisFrame)
 		};
 		ViewInputsTaken TakeViewInputs(Api::EngineView a_view, ViewInputsFrom a_from, ViewListed& a_listed);
@@ -339,11 +341,12 @@ namespace DCLF
 		};
 		/**
 		 * @brief The view's epoch a_epoch (0 the depth or only one, 1 the colour one) submitted: its recording from the adopted revision,
-		 * with a commit of a_faces (its cameras: none commits nothing) and a_treeRow into its shape, holding a_listed's payloads; a_drawn:
-		 * the faces the commit drew.
+		 * with a commit of a_faces (its cameras: none commits nothing) into its shape, holding a_listed's payloads; a_drawn: the faces the
+		 * commit drew. A trees view's commit takes tree LOD's row as the last depth commit uploaded it while the faces' tree LOD is DCLF's
+		 * (DecideViewTreeLod) and the shape draws it, its texture bound again for the execution (Core's while TreeLod is).
 		 */
 		ViewSubmit SubmitViewEpoch(Api::EngineView a_view, std::uint32_t a_epoch, const ViewListed& a_listed, std::span<const Draws::ViewFace> a_faces,
-			const TreeLod::DrawRow* a_treeRow, std::uint32_t* a_drawn = nullptr);
+			std::uint32_t* a_drawn = nullptr);
 		/** @brief Any thread: whether the view's epochs draw its members this frame (its coverage, decided at the frame's start). */
 		bool ViewCovered(Api::EngineView a_view) const;
 		/**
@@ -353,8 +356,9 @@ namespace DCLF
 		bool ViewDrawable(Api::EngineView a_view) const;
 		/**
 		 * @brief The scene lane's commit: whether a_slot's pipelines for the view are in a_catalog (the lane's), as the view's membership
-		 * reads it. CategoryRoot: a_why (the set parity's observer) 1 no catalog or targets, 2 a forward key the forward part cannot draw,
-		 * 3 no key of the view's, 4 its pipeline not in a_catalog, 5 no Z-prepass group pipeline. LodTechniques: ReflectionSlotReady.
+		 * reads it, from nothing the render thread writes per frame. CategoryRoot: a_why (the set parity's observer) 1 no catalog or
+		 * targets, 2 a forward key the forward part cannot draw, 3 no key of the view's, 4 its pipeline not in a_catalog, 5 no Z-prepass
+		 * group pipeline. LodTechniques: the slot's forward pipeline for the view's published targets (a_why untouched).
 		 */
 		bool ViewSlotReady(Api::EngineView a_view, const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot,
 			std::uint32_t* a_why = nullptr) const;

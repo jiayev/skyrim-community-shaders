@@ -1,12 +1,14 @@
 // ReflectionFaces: the water reflection update, add-root and face render hooks (render thread).
 
-#include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
+// ReflectionView.h first (Internal.h): volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
+#include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
-#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
-
-namespace DCLF::ReflectionFaces
+namespace DCLF::Features::Reflection::ReflectionFaces
 {
+	static_assert(kLodRoots == PassCapture::kLodRoots && kTreeRoot == PassCapture::kTreeRoot, "ReflectionFaces' root bits are PassCapture's");
+
 	namespace
 	{
 		// Render thread only: the update and the face render run there, and so does everything that asks.
@@ -88,10 +90,21 @@ namespace DCLF::ReflectionFaces
 				// registrations reach PassCapture's hooks (FUN_1414b2330), so only then can a member's passes be withheld.
 				plain = !a_silhouettes && !a_noSky;
 				auto& capture = PassCapture::Get();
-				capture.SetReflectionCamera(a_camera);
-				capture.SetReflectionFace(plain);
+				// BSCubeMapCamera's two accumulators (+0x1A0, +0x1A8; skyrim-engine-notes.md, "Water reflections: the cube map"): the faces
+				// cull into the first. Their renderers are the view's own (OwnRenderers).
+				if (a_camera) {
+					const auto* bytes = reinterpret_cast<const std::byte*>(a_camera);
+					Api::ViewAccumulators accumulators;
+					accumulators.accumulators[0] = *reinterpret_cast<void* const*>(bytes + 0x1A0);
+					accumulators.accumulators[1] = *reinterpret_cast<void* const*>(bytes + 0x1A8);
+					accumulators.count = 2;
+					capture.SetViewRenderers(kView, accumulators);
+				}
+				capture.SetViewWithholdActive(kView, plain);
+				capture.SetViewRendering(kView, true);
 				func(a_camera, a_faces, a_silhouettes, a_clearRoots, a_noSky);
-				capture.SetReflectionFace(false);
+				capture.SetViewRendering(kView, false);
+				capture.SetViewWithholdActive(kView, false);
 				camera = nullptr;
 				faceMask = 0;
 			}

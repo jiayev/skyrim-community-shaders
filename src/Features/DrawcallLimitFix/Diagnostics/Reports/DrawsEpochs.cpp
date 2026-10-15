@@ -1,13 +1,11 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
-#include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Scene/Residue.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
 #include "Engine.h"
 
-// The views' epochs' report lines (taken by IndirectDraws::AsyncReport): the forward epoch and the effects, the reflection faces, the
-// accumulated visibility, the shadow capability. (The first-person view's: Features/FirstPerson.)
+// The views' epochs' report lines (taken by IndirectDraws::AsyncReport): the forward epoch and the effects, the accumulated visibility,
+// the shadow capability. (The reflection's and the first-person view's: Features/Reflection, Features/FirstPerson.)
 
 namespace DCLF
 {
@@ -72,54 +70,6 @@ namespace DCLF
 		f = {};
 		f.submittedFrame = submitted;
 		f.refractionFrame = refractionFrame;
-		return text;
-	}
-
-	std::string IndirectDraws::ReflectionReport()
-	{
-		auto& reflection = impl->reflection;
-		const auto forward = DrawPipelines::Get().GetStats();
-		const auto& capture = PassCapture::Get().GetStats();
-		const auto& s = reflection.skipped;
-		std::string text = fmt::format("[DCLF] reflection faces: {} captured (targets colour {}, depth {}); {} LOD pipeline slots, {} forward programs and {} forward pipelines ready, "
-									   "tree LOD's {}; forward pipelines {} requested, {} built, {} failed{}\n",
-			reflection.facesCaptured, static_cast<int>(reflection.targets.colour), static_cast<int>(reflection.targets.depth), reflection.lodSlots, reflection.programsReady,
-			reflection.pipelinesReady, reflection.treeReady ? "ready" : "not ready", forward.forwardRequested, forward.forwardReady, forward.forwardFailed,
-			forward.forwardFailed ? " <- FAILED" : "");
-		text += fmt::format("[DCLF] reflection faces drawn: {} frames, {} epochs, {} faces drawn, {} captured after their frame's epoch{}; not drawn: {} not the set's, {} without faces, "
-							"{} the engine's (not covered), {} stale inputs, {} without resources, {} failed{}; last frame's registrations: {} member passes and {} tree LOD passes withheld (faces' tree LOD {})\n",
-			reflection.updates, reflection.epochs, reflection.facesDrawn, reflection.lateFaces, reflection.lateFaces ? " <- LATE FACES" : "", s[0], s[2], s[1], s[3], s[4], s[5],
-			s[5] ? " <- EPOCH FAILED" : "", capture.reflectionWithheld, capture.reflectionTreeLodWithheld, reflection.treeOwned ? "DCLF's" : "the engine's");
-		// The faces' cameras against the engine's at their draws, and the LOD roots the engine did not cull.
-		const auto roots = ReflectionFaces::TakeRootStats();
-		const auto residue = PassCapture::Get().TakeReflectionResidue();
-		std::string residueKinds;
-		{
-			const auto classes = Diagnostics::TakeResidueClasses();
-			for (std::size_t k = 0; k < Diagnostics::kResidueKinds; ++k) {
-				if (!classes.counts[k])
-					continue;
-				const std::string_view name = k < Diagnostics::kResidueUntracked ? kIneligibleNames[k] :
-				                              k == Diagnostics::kResidueUntracked ? "untracked" :
-				                              k == Diagnostics::kResidueUnbound   ? "eligible, unbound" :
-				                              k == Diagnostics::kResidueNotReflection ? "bound, not a reflection member" :
-				                                                                       "a reflection member";
-				residueKinds += fmt::format("{}{} {}{}", residueKinds.empty() ? " [" : "; ", classes.counts[k], name, classes.first[k].empty() ? "" : " (" + classes.first[k] + ")");
-			}
-			if (!residueKinds.empty())
-				residueKinds += fmt::format("; {} geometries, {} of them on 10 frames or more]", classes.seen.size(), classes.persistent);
-		}
-		auto& parity = Diagnostics::DrawsState::Get().faceCameras;
-		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's tree LOD root skipped; T6b6: its LOD land and objects roots while gated): {} updates, {} without the "
-							"tree root, {} without the LOD roots; parity: {} faces, {} blocks "
-							"and {} slices differ (registers {:#x}, largest {:.3g}){}{}; residue: {} tree LOD passes{}, {} under the LOD land and objects roots (kept on every "
-							"30th update){}{}\n",
-			roots.updates, roots.treeSkipped, roots.lodSkipped, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
-			parity.blocks || parity.slices ? " <- FACE CAMERA" : (parity.faces ? " <- OK" : ""), parity.first.empty() ? "" : " (first: " + parity.first + ")",
-			residue.treePasses, residue.treePasses ? " <- REFLECTION RESIDUE" : "", residue.lodPasses, residue.first.empty() ? "" : " (first: " + residue.first + ")", residueKinds);
-		parity = {};
-		reflection.facesCaptured = reflection.updates = reflection.epochs = reflection.facesDrawn = reflection.lateFaces = 0;
-		reflection.skipped = {};
 		return text;
 	}
 
