@@ -27,7 +27,7 @@ namespace DCLF::Diagnostics
 		JoinsBegin,              // the joins begin (the walk done, nothing bound yet)
 		ResidentsKept,           // the joins' residents kept (KeepResidentsAlive), before the slot check
 		JoinsEnd,                // the joins done (the verdicts and the residency this pass leaves)
-		GateFlipsPublished,      // taking a publication's deltas (the gates' published hook): the gates its commits flipped (the gates' component's deltas pending: Scene::Gates::Flips), against its claims
+		GateFlipsPublished,      // taking a publication's deltas (the gates' published hook): the gates its commits flipped (the gates' component's deltas pending: Features::Lod::Gates::Flips), against its claims
 		MirrorCheckPoint,        // at a pass's end (its events all drained)
 		MirrorProbePoint,        // render thread, the frame's start (ServeFrameRequests): the live scene is captured for the mirror's observers
 		AccumulatePrepared,      // render thread, EarlyPrepass: the accumulate phase's frame inputs prepared (the material captures served)
@@ -72,7 +72,7 @@ namespace DCLF::Diagnostics
 		bool keepFadeRoots, keepConstants;  // the other families the replay kept
 	};
 
-	/** @brief Render thread, the frame's start (the gates' adoption, Scene::Gates::Adopt): a LOD gate flipped by an installed publication, about to be released, and the claims the frame installed. */
+	/** @brief Render thread, the frame's start (the gates' adoption, Features::Lod::Gates::Adopt): a LOD gate flipped by an installed publication, about to be released, and the claims the frame installed. */
 	struct GateReleasing
 	{
 		const SetSnapshot& claims;

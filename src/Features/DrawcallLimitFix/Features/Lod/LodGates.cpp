@@ -1,6 +1,6 @@
 // LodGates: the swap thunks and detours (on the engine's LOD threads, under the terrain manager's lock), the veto table HiddenStores'
 // stubs read lock-free, the render thread's Flip, and the outcomes posted to the coordinator.
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
@@ -23,7 +23,7 @@
 #include <vector>
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
-namespace DCLF::LodGates
+namespace DCLF::Features::Lod::LodGates
 {
 	namespace
 	{
@@ -333,7 +333,7 @@ namespace DCLF::LodGates
 		std::atomic<std::uint32_t> flipActive{ 0 };  // the render thread between a flip's exchange and its Flipped
 		std::atomic<std::uint32_t> engineWork{ 0 };  // open + pending + deferred: the hooks' fast test (no lock taken at 0)
 		std::atomic<std::uint64_t> forcedGeneration{ 0 };
-		// Core's registration (NoteRegistered, InstallFeatures: before any gate opens): the gates' SceneStack channel and their stores'
+		// The feature's registration (NoteRegistered, its install: before any gate opens): the gates' SceneStack channel and their stores'
 		// hidden site.
 		Api::EngineChannelId gatesChannel;
 		std::uint32_t gatesHiddenSite = 0;
@@ -1230,12 +1230,12 @@ namespace DCLF::LodGates
 		detoursInstalled = true;
 	}
 
-	void Install(bool (*a_running)())
+	void Install(Api::SwitchId a_switch, bool (*a_running)())
 	{
 		if (installed)
 			return;
 		running = a_running;
-		if (SwitchValue(Switch::LodGates) == "0") {
+		if (SwitchValue(a_switch) == "0") {
 			logger::info("[DCLF] LOD gates (T6b5) off (CS_DCLF_LOD_GATES=0): the engine's LOD swaps ungated");
 			return;
 		}

@@ -16,8 +16,8 @@ namespace DCLF::Features::HiddenNodes
 
 	Api::Feature Feature()
 	{
-		// The stores go in early, where Core's scene events left them: before the diagnostics and Core's engine side (the primary cull's
-		// kept scene lists, the LOD gates) install, which follow the events once Scene::HiddenStoresLive answers.
+		// The stores go in early, where Core's scene events left them: before the diagnostics, Core's engine side (the primary cull's
+		// kept scene lists) and Features/Lod's LOD gates install, which follow the events once Scene::HiddenStoresLive answers.
 		return { "hidden-nodes", &Install, &InstallStores };
 	}
 }

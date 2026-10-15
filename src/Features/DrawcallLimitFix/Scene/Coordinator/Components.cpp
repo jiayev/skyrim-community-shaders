@@ -193,6 +193,11 @@ namespace DCLF::Api
 		return coordinator.ObservedSlotOf(a_slot);
 	}
 
+	bool CoordinatorComponentContext::LayerSlot(std::uint32_t a_slot) const
+	{
+		return tables.IsLayer(a_slot);
+	}
+
 	std::uint32_t CoordinatorComponentContext::VetoCount(std::uint8_t a_veto) const
 	{
 		return a_veto == kVetoHold ? coordinator.vetoHeld : a_veto == kVetoObserve ? coordinator.vetoObserved : 0u;

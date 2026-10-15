@@ -70,10 +70,8 @@ namespace DCLF
 			{ Refraction, "CS_DCLF_REFRACTION", F, Reduced::UnlessOne, false,
 				"1: refraction (kRefraction, kTempRefraction Lighting geometry: heat haze, invisibility) drawn by DCLF into the refraction normals in the forward epoch (T7d; needs CS_DCLF_FORWARD); 0 it stays native (live toggle's seed)" },
 			{ ProjectedUv, "CS_DCLF_PROJECTED_UV", F, Reduced::UnlessOne, false, "0: projected-UV objects stay native (live toggle's seed)" },
-			// (Features/Lod's CS_DCLF_LOD_OBJECTS and CS_DCLF_LOD_TERRAIN, then Features/TreeLod's CS_DCLF_LOD_TREES, are listed here, before
-			// CS_DCLF_LOD_GATES.)
-			{ LodGates, "CS_DCLF_LOD_GATES", F, Reduced::Zero, false,
-				"0: the engine's LOD swaps ungated (T6b5: by default an object or terrain LOD swap keeps the outgoing level shown, and the incoming hidden, until DCLF's claims cover the incoming)" },
+			// (Features/Lod's CS_DCLF_LOD_OBJECTS and CS_DCLF_LOD_TERRAIN, then Features/TreeLod's CS_DCLF_LOD_TREES, then Features/Lod's
+			// CS_DCLF_LOD_GATES, are listed here, before CS_DCLF_SHADOWS.)
 			{ Shadows, "CS_DCLF_SHADOWS", F, Reduced::UnlessOne, false, "0: DCLF does not draw the shadow views (live toggle's seed)" },
 			{ SunSkip, "CS_DCLF_SUN_SKIP", F, Reduced::UnlessOne, false, "0: the engine keeps culling and registering the sun's casters (live toggle's seed)" },
 			{ SunExclude, "CS_DCLF_SUN_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the sun's culls (live toggle's seed)" },

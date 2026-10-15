@@ -1,19 +1,18 @@
-// The LOD gates' report lines (registered by GateComponent.cpp): the component's line at the coordinator's report (the scene lane), and
+// The LOD gates' report lines (registered by LodGateChannel.cpp): the component's line at the coordinator's report (the scene lane), and
 // the releases' and the engine side's at the frame's (the render thread).
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Gates.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Spread.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
 
 #include <algorithm>
 #include <array>
 #include <string>
 
-namespace DCLF::Scene::Gates
+namespace DCLF::Features::Lod::Gates
 {
 	namespace
 	{
@@ -76,10 +75,10 @@ namespace DCLF::Scene::Gates
 				const Api::TrackedState entry = a_context.TrackedStateOf(geometry);
 				if (!entry.tracked || GeometryReady(geometry, entry, [&](std::uint32_t a_slot) { return a_context.ObservedSlot(a_slot); }))
 					continue;
-				const std::uint32_t slot = entry.slot != kNoObjectSlot ? entry.slot : entry.layerSlot;
+				const std::uint32_t slot = entry.slot != kNoSlot ? entry.slot : entry.layerSlot;
 				if (entry.leafWaiting || !entry.classified)
 					++unclassified;
-				else if (slot == kNoObjectSlot)
+				else if (slot == kNoSlot)
 					++noRecord;
 				else if (entry.waitCause)
 					++waitingBy[(std::min<std::size_t>)(entry.waitWhy, waitingBy.size() - 1)];

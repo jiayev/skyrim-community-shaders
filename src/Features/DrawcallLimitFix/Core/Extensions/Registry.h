@@ -202,12 +202,3 @@ namespace DCLF::Extensions
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions();
 	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals();
 }
-
-namespace DCLF::Scene
-{
-	/**
-	 * @brief Core's built-in registrations of the scene's gates (Scene/Coordinator/GateComponent.cpp), as Core: InstallFeatures, before
-	 * the features install.
-	 */
-	void RegisterCoreGates(Api::InstallContext& a_context);
-}

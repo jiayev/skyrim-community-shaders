@@ -349,7 +349,7 @@ namespace DCLF::Reports
 				// CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads (any is a defect).
 				if (const auto releases = ReleaseGuardLine(); !releases.empty())
 					logger::info("{}", releases);
-				// The LOD gates' line (opened, flipped, retired; the open ones' age and what they wait for: their component's, registered first)
+				// The LOD gates' line (opened, flipped, retired; the open ones' age and what they wait for: their component's, the first registered here)
 				// and the features' lines here.
 				V::componentsReportLines(s, Api::ReportPoint::SceneCoordinatorGates, a_sceneFrame);
 			}

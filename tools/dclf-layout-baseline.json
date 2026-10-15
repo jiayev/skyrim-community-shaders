@@ -1,8 +1,8 @@
 {
  "legacyEdges": {
-  "Core -> Engine": 20,
+  "Core -> Engine": 19,
   "Core -> Scene": 29,
-  "Engine -> Scene": 26,
+  "Engine -> Scene": 25,
   "Features/Billboards -> Engine": 1,
   "Features/Billboards -> Scene": 3,
   "Features/Decals -> Scene": 2,
@@ -10,12 +10,14 @@
   "Features/Faces -> Scene": 2,
   "Features/FirstPerson -> Engine": 1,
   "Features/FirstPerson -> Scene": 1,
-  "Features/HiddenNodes -> Engine": 2,
+  "Features/HiddenNodes -> Engine": 1,
+  "Features/Lod -> Engine": 4,
+  "Features/Lod -> Scene": 1,
   "Features/Particles -> Engine": 1,
   "Features/Shadows/Local -> Scene": 2,
   "Features/Shadows/Sun -> Scene": 1,
   "Features/TextureTransforms -> Scene": 1,
-  "Scene -> Engine": 33
+  "Scene -> Engine": 29
  },
  "overThresholds": {
   "DCLF::CaptureParity::OnNativeLightingDraw": [
@@ -123,23 +125,23 @@
    67
   ],
   "DCLF::Reports::Coordinator": [
-   218,
-   90
+   216,
+   89
   ],
   "DCLF::Reports::SceneLines": [
-   154,
-   79
+   141,
+   69
   ],
   "DCLF::Reports::Stats": [
    225,
    91
   ],
   "DCLF::Scene::Coordinator::ApplyBatch": [
-   202,
+   203,
    46
   ],
   "DCLF::Scene::Coordinator::ApplyMirrorEvents": [
-   146,
+   147,
    65
   ],
   "DCLF::Scene::Coordinator::BuildAccumulatePhase": [
@@ -151,8 +153,8 @@
    44
   ],
   "DCLF::Scene::Coordinator::CommitSet": [
-   235,
-   94
+   239,
+   93
   ],
   "DCLF::Scene::Coordinator::DeltaWalk": [
    197,
@@ -199,12 +201,8 @@
    46
   ],
   "DCLF::Scene::Coordinator::RunSceneWork": [
-   126,
-   11
-  ],
-  "DCLF::Scene::Coordinator::UpdateGates": [
-   80,
-   41
+   127,
+   12
   ],
   "DCLF::Scene::Coordinator::UpdateSharedBindings": [
    167,

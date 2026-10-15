@@ -1,17 +1,16 @@
-// The LOD gates' scene side (Engine/Cull/LodGates.h has the engine side; dclf-async-publication.md, "T6b5, the scene side"): the
+// The LOD gates' scene side (LodGates.h has the engine side; dclf-async-publication.md, "T6b5, the scene side"): the
 // component's gates, opened by their events, the commit's withholding and flips, and the outcomes that retire them (drained from the
 // engine side: LodGates::DrainOutcomes). Scene lane; the coordinator only through the hooks' context.
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Gates.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
 
 #include <algorithm>
 
-namespace DCLF::Scene::Gates
+namespace DCLF::Features::Lod::Gates
 {
 	namespace
 	{
@@ -317,8 +316,8 @@ namespace DCLF::Scene::Gates
 				// Its Observe dropped: each slot the commit last evaluated for it takes the phases recorded then.
 				a_context.SetEntryVeto(geometry, 0);
 				// The claims are by base geometry (a layer is claimed with its base).
-				if (entry.slot != kNoObjectSlot)
-					if (const auto observed = a_context.ObservedSlot(entry.slot); observed.geometry == geometry && observed.phases && !a_context.tables.IsLayer(entry.slot))
+				if (entry.slot != kNoSlot)
+					if (const auto observed = a_context.ObservedSlot(entry.slot); observed.geometry == geometry && observed.phases && !a_context.LayerSlot(entry.slot))
 						flip.incoming.emplace_back(geometry, observed.phases);
 			}
 			for (auto* geometry : gate.outgoingGeometries) {

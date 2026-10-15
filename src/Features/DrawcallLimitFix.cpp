@@ -21,7 +21,6 @@
 #	include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #	include "DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
-#	include "DrawcallLimitFix/Engine/Cull/LodGates.h"
 #	include "DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #	include "DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
 #	include "Features/Skylighting.h"
@@ -85,12 +84,10 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::PrimaryCull::Get().Install();
 	// Main::IsRoomVisible answered from PortalViews' VisibleSet while DCLF runs.
 	DCLF::RoomVisibility::Install();
-	// CS_DCLF_LOD_GATES (on unless 0): the engine's LOD swaps gated on DCLF's claims (skyrim-engine-notes.md, "LOD swaps and their
-	// gates"). Shares the LOD drain's and the retirement's detours with the import timings.
-	DCLF::LodGates::Install([] { return globals::features::drawcallLimitFix.Running(); });
 	// The features' extension points (Features/FeatureList.cpp), registered before DCLF's threads start and read-only after, and
 	// their engine hooks (after DCLF's own: Features/TreeWind's tree manager hooks follow the primary cull's stand-in; Features/Particles'
-	// snapshots of NiParticleSystem's update; Features/Faces' thunks in the face morphing).
+	// snapshots of NiParticleSystem's update; Features/Lod's LOD gates, the engine's LOD swaps gated on DCLF's claims; Features/Faces'
+	// thunks in the face morphing).
 	DCLF::Extensions::InstallFeatures(DCLF::Features::List());
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
