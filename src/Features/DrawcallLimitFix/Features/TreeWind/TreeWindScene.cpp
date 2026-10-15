@@ -2,6 +2,7 @@
 // them (the commit hook), and the wind rows the frame's draws read at t124 (the frame binding).
 
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindTables.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
@@ -13,9 +14,9 @@ namespace DCLF::Features::TreeWind
 		Api::SceneResourcesId sceneId;  // install
 
 		// Data globals SetupGeometry's TreeAnim case reads, resolved as addresses and read through.
-		REL::Relocation<std::uintptr_t> treeWindFadeStart{ REL::Offset(Engine::Address::kTreeWindFadeStart) };
-		REL::Relocation<std::uintptr_t> treeWindFadeEnd{ REL::Offset(Engine::Address::kTreeWindFadeEnd) };
-		REL::Relocation<std::uintptr_t> treeWindTimerScale{ REL::Offset(Engine::Address::kTreeWindTimerScale) };
+		REL::Relocation<std::uintptr_t> treeWindFadeStart{ REL::Offset(Address::kTreeWindFadeStart) };
+		REL::Relocation<std::uintptr_t> treeWindFadeEnd{ REL::Offset(Address::kTreeWindFadeEnd) };
+		REL::Relocation<std::uintptr_t> treeWindTimerScale{ REL::Offset(Address::kTreeWindTimerScale) };
 		// A pointer to the object whose +0x304 holds the global wind magnitude.
 		REL::Relocation<std::uintptr_t> treeWindSource{ REL::Offset(Engine::Address::kShadowSceneNode) };
 		// BSTreeManager* (+0x78 the gust's speed, +0x80 the squared range of its update), and the frame's seconds it advances the
@@ -91,7 +92,7 @@ namespace DCLF::Features::TreeWind
 		{
 			const auto& s = a_requirements.State<TreeWindScene>();
 			if (s.trees)
-				Draws::UnitGroup{}.Add(s.trees).Add(s.treeClocks).Add(s.treeWindRows[0]).Add(s.treeWindRows[1]).Require(a_requirements.build, a_requirements.tables.trees.size());
+				Draws::UnitGroup{}.Add(s.trees).Add(s.treeClocks).Add(s.treeWindRows[0]).Add(s.treeWindRows[1]).Require(a_requirements.build, TreesOf(a_requirements.tables).trees.size());
 		}
 
 		// Without the tree wind program no draw reads the wind rows by its tree slot (the records keep their own wind).
@@ -102,14 +103,14 @@ namespace DCLF::Features::TreeWind
 				return static_cast<std::uint32_t>(std::min<std::uint64_t>(Draws::NamedUnits(a_fit.sealed, a_buffer), UINT32_MAX));
 			};
 			if (scene.treeWind && scene.trees)
-				a_fit.fit.trees = std::min({ units(scene.trees), units(scene.treeWindRows[0]), units(scene.treeWindRows[1]) });
+				a_fit.fit.familyRows[TreeFamilyId().index] = std::min({ units(scene.trees), units(scene.treeWindRows[0]), units(scene.treeWindRows[1]) });
 		}
 
 		/**
 		 * @brief A commit's tree uploads into the versions a_sealed (the adopted set) names. a_frameRow: also the frame row (only the
 		 * Z-prepass's TreeWindPass reads it).
 		 */
-		void UploadTrees(const Draws::NamedVersions& a_sealed, const SceneTables& a_tables, std::uint32_t a_frame, TreeWindScene& a_scene, Draws::CommitUploads& a_uploads,
+		void UploadTrees(const Draws::NamedVersions& a_sealed, const TreeTables& a_tables, std::uint32_t a_frame, TreeWindScene& a_scene, Draws::CommitUploads& a_uploads,
 			bool a_frameRow)
 		{
 			if (!a_scene.treeWind || !a_scene.trees)
@@ -142,7 +143,7 @@ namespace DCLF::Features::TreeWind
 		void Commit(const Api::CommitContext& a_commit)
 		{
 			if (auto* scene = SceneOf(a_commit.scene))
-				UploadTrees(a_commit.adopted, a_commit.tables, a_commit.frame, *scene, a_commit.uploads, a_commit.kind == Api::CommitKind::Depth);
+				UploadTrees(a_commit.adopted, TreesOf(a_commit.tables), a_commit.frame, *scene, a_commit.uploads, a_commit.kind == Api::CommitKind::Depth);
 		}
 
 		// t124: the wind buffer a frame's draws read (the one the previous frame wrote).

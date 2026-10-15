@@ -54,8 +54,9 @@ namespace DCLF::Scene
 		residentPatches.clear();
 		residentPos.clear();
 		residentMaintenanceDirty = true;
-		// The listed nodes' references through the retirement chain with everything else the cleared tables named.
-		HandBack(treeOwners);
+		// The listed nodes' references through the retirement chain with everything else the cleared tables named (the components'
+		// too).
+		ComponentsReset();
 		HandBack(fadeRootOwners);
 		fadeRootMembers.Clear();
 		tables.Clear();

@@ -1,7 +1,7 @@
 #pragma once
 
 // Ports of the engine's pass and shader-descriptor selection: why an object stays native (Ineligible), the Lighting and Effect
-// descriptors DCLF draws it with, LOD fades, tree animation inputs and the particle path's acceptance. Pure functions of the capture
+// descriptors DCLF draws it with, LOD fades and the particle path's acceptance. Pure functions of the capture
 // records, called on the scene-work thread and its pool; the render thread samples the frame inputs (SampleLodFadeFrame).
 
 #include <array>
@@ -9,7 +9,7 @@
 #include <string_view>
 
 #include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Records.h"  // ObjectTreeAnim
+#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 
 namespace DCLF::SceneCapture
 {
@@ -277,12 +277,6 @@ namespace DCLF
 			a_descriptor &= ~kPassProjectedUV;
 		return (a_subPass == 1 || a_subPass == 3 || a_subPass == 4) ? (a_descriptor | kPassDoAlphaTest) : a_descriptor;
 	}
-
-	/**
-	 * @brief One object's tree-animation constants as SetupGeometry computes them (engine notes: Func6 at 1414dd040, case 0xc).
-	 * Skips its previousWindTimer = windTimer write: the native draw still does it, and twice would advance trees twice a frame.
-	 */
-	void DeriveTreeAnim(const RE::BSShaderProperty& a_property, ObjectTreeAnim& a_out);
 
 	/**
 	 * @brief MTLand and MTLandLODBlend (terrain) are eligible when the mtLand toggle is on and, while Terrain Blending holds the

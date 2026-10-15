@@ -848,7 +848,7 @@ namespace DCLF::Scene
 			a_deltas.plans.push_back(std::exchange(placementPlanReady, nullptr));
 		a_deltas.shading = std::exchange(shadingNamed, {});
 		a_deltas.fadeSeeds = std::exchange(fadeSeedRequests, {});
-		a_deltas.treeSeeds = std::exchange(treeSeedRequests, {});
+		a_deltas.componentSeeds = std::exchange(componentSeedRequests, {});
 		// No cap: PrimaryCull reads them all only on a full walk.
 		a_deltas.switches = std::exchange(switchesApplied, {});
 		a_deltas.switchResync = std::exchange(switchResync, false);
@@ -1126,9 +1126,8 @@ namespace DCLF::Scene
 					if (slot < tables.objects.size() && !tables.objectGeometry[slot])
 						tables.objectFree.push_back(slot);
 					break;
-				case Tables::kRetiredTree:
-					tables.NoteTreesWrite();
-					tables.treeFree.push_back(slot);
+				case Tables::kRetiredFamilyRow:
+					tables.families.Recycle(retired.extra, slot);
 					break;
 				case Tables::kRetiredFadeRoot:
 					tables.NoteFadeRootsWrite();
@@ -1288,8 +1287,7 @@ namespace DCLF::Scene
 			a_column(a_left.geometrySlotKey, a_right.geometrySlotKey);
 			a_column(a_left.geometryLayerKey, a_right.geometryLayerKey);
 		};
-		// The families copied only when their write stamp moved.
-		auto treeFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) { Tables::TreeFamily(a_left, a_right, a_member); };
+		// The families copied only when their write stamp moved (the table families' own stamps: Extensions::TableFamilies::Publish).
 		auto fadeRootFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) { Tables::FadeRootFamily(a_left, a_right, a_member); };
 		auto pipelineFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) { Tables::PipelineFamily(a_left, a_right, a_member); };
 		auto constantsFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) {
@@ -1302,7 +1300,7 @@ namespace DCLF::Scene
 			unpublished(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
 			pipelineFamily(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
 			constantsFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
-			treeFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
+			std::swap(a_left.families, a_right.families);
 			fadeRootFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
 			geometryColumns(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
 			a_left.extraRows.swap(a_right.extraRows);
@@ -1330,7 +1328,6 @@ namespace DCLF::Scene
 		const bool replayMaterials = tablesPoolReplayable[index] && tables.materialLog.Readable(materialPosition) && snapshot.materialLog.base <= tables.materialLog.base &&
 		                             snapshot.materials.size() <= tables.materials.size();
 		// Read before the copy writes the snapshot's stamps.
-		const bool keepTrees = tablesPoolReplayable[index] && snapshot.treesStamp == tables.treesStamp;
 		const bool keepFadeRoots = tablesPoolReplayable[index] && snapshot.fadeRootsStamp == tables.fadeRootsStamp;
 		const bool keepConstants = tablesPoolReplayable[index] && snapshot.constantsStamp == tables.constantsStamp;
 		const bool keepPipelines = tablesPoolReplayable[index] && snapshot.pipelinesStamp == tables.pipelinesStamp;
@@ -1561,10 +1558,7 @@ namespace DCLF::Scene
 			snapshot.extrasBlockLog = tables.extrasBlockLog;
 		}
 		auto assign = [](auto& a_to, auto& a_from) { a_to = a_from; };
-		if (keepTrees)
-			++publication.treesKept;
-		else
-			treeFamily(snapshot, tables, assign);
+		const std::uint32_t keptFamilies = snapshot.families.Publish(tables.families, tablesPoolReplayable[index] != 0, publication.familiesKept);
 		if (keepFadeRoots)
 			++publication.fadeRootsKept;
 		else
@@ -1592,7 +1586,7 @@ namespace DCLF::Scene
 		}
 		tablesPoolReplayable[index] = 1;
 
-		Diagnostics::Notify(Diagnostics::TablesReplayed{ *this, snapshot, publication.published, position, geometryPosition, keepTrees, keepFadeRoots, keepConstants });
+		Diagnostics::Notify(Diagnostics::TablesReplayed{ *this, snapshot, publication.published, position, geometryPosition, keptFamilies, keepFadeRoots, keepConstants });
 		// The publication log's readers are the snapshots alone (one behind the bound is copied whole).
 		tables.publicationLog.Trim(1u << 16);
 		// Its node collects what is freed after it.
@@ -1640,7 +1634,7 @@ namespace DCLF::Scene
 		if (a_published.pipelines != t.pipelines || a_published.pipelineBindingVersion != t.pipelineBindingVersion)
 			differ("the pipeline family");
 		if (a_published.changeLog.End() != t.changeLog.End() || a_published.geometryLog.End() != t.geometryLog.End() || a_published.materialLog.End() != t.materialLog.End() ||
-			a_published.extrasBlockLog.End() != t.extrasBlockLog.End() || a_published.treesStamp != t.treesStamp || a_published.fadeRootsStamp != t.fadeRootsStamp ||
+			a_published.extrasBlockLog.End() != t.extrasBlockLog.End() || !a_published.families.SameStamps(t.families) || a_published.fadeRootsStamp != t.fadeRootsStamp ||
 			a_published.constantsStamp != t.constantsStamp || a_published.pipelinesStamp != t.pipelinesStamp || a_published.extraRows != t.extraRows)
 			differ("a log's end, a family's stamp or the extras rows");
 		if (!first.empty()) {

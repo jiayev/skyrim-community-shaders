@@ -224,7 +224,7 @@ namespace DCLF::Scene
 					continue;
 				ListFadeRoot(slot);
 				if (IsResidentSlot(slot))
-					ListTree(slot);
+					ComponentsResident(slot);
 			}
 		});
 	}

@@ -75,8 +75,45 @@ namespace DCLF::Extensions
 		decltype(Api::ReportLines::lines) lines = nullptr;
 	};
 
+	/** @brief A registered table family. */
+	struct TableFamilyEntry
+	{
+		std::string name;
+		decltype(Api::TableFamily::make) make = nullptr;
+		decltype(Api::TableFamily::assign) assign = nullptr;
+		decltype(Api::TableFamily::same) same = nullptr;
+		decltype(Api::TableFamily::clear) clear = nullptr;
+		decltype(Api::TableFamily::recycle) recycle = nullptr;
+		std::uint32_t rowsEnd = ~0u, recordWord = ~0u;
+	};
+	/** @brief A registered coordinator component. */
+	struct CoordinatorComponentEntry
+	{
+		std::string name;
+		decltype(Api::CoordinatorComponent::make) make = nullptr;
+		decltype(Api::CoordinatorComponent::resident) resident = nullptr;
+		decltype(Api::CoordinatorComponent::left) left = nullptr;
+		decltype(Api::CoordinatorComponent::recount) recount = nullptr;
+		decltype(Api::CoordinatorComponent::reset) reset = nullptr;
+	};
+	/** @brief A registered shading contribution. */
+	struct ShadingContributionEntry
+	{
+		std::string name;
+		std::uint64_t propertyFlags = 0;
+		decltype(Api::ShadingContribution::derive) derive = nullptr;
+	};
+	/** @brief A registered frame-globals contribution: its floats at FrameGlobals::features[first, first + floats). */
+	struct FrameGlobalsEntry
+	{
+		std::string name;
+		std::uint32_t first = 0, floats = 0;
+		decltype(Api::FrameGlobalsContribution::capture) capture = nullptr;
+	};
+
 	// Any thread, after InstallFeatures (empty before): the registrations, in order. An index is the extension's id
-	// (Api::FrameValuePoolId::index, Api::SceneResourcesId::index; the stage states', products' and bindings' slots).
+	// (Api::FrameValuePoolId::index, Api::SceneResourcesId::index, Api::TableFamilyId::index, Api::CoordinatorComponentId::index; the
+	// stage states', products' and bindings' slots). The technique contributions are by technique (Extensions/ObjectContributors.h).
 	std::span<const FrameValuePoolEntry> RegisteredPools();
 	std::span<const GpuStageEntry> RegisteredStages();
 	std::span<const PayloadProductEntry> RegisteredProducts();
@@ -85,4 +122,8 @@ namespace DCLF::Extensions
 	std::span<const FrameBindingEntry> RegisteredFrameBindings();
 	std::span<const ReportLinesEntry> RegisteredReportLines();
 	std::span<const Api::StandInObserver> RegisteredStandInObservers();
+	std::span<const TableFamilyEntry> RegisteredTableFamilies();
+	std::span<const CoordinatorComponentEntry> RegisteredCoordinatorComponents();
+	std::span<const ShadingContributionEntry> RegisteredShadingContributions();
+	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals();
 }

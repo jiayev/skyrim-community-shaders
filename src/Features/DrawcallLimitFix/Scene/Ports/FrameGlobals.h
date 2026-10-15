@@ -12,6 +12,7 @@
 #include <d3d11.h>
 #include <winrt/base.h>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPortFrame.h"
 
 namespace RE
@@ -46,7 +47,7 @@ namespace DCLF
 	 * (FrameDriver::BeginFrame: the engine's update done, before the culls), immutable after.
 	 *
 	 * The scene work runs on DCLF's coordinator and reads no engine memory: what it needs of engine globals - settings, render
-	 * state bytes, the fade update's constants, the tree wind, the frame's cull-hidden roots - it reads from the capture its frame
+	 * state bytes, the fade update's constants, the features' globals, the frame's cull-hidden roots - it reads from the capture its frame
 	 * carries (Scope). A helper shared with the render thread reads the same capture, the render thread's latest. Any other thread
 	 * that reads it without a scope is a defect: counted and logged once (it gets the render thread's latest).
 	 */
@@ -75,8 +76,9 @@ namespace DCLF
 		// The main camera (SampleLodFadeFrame).
 		std::array<float, 3> eye{};
 		float lodAdjust = 0.0f;
-		// The tree wind (DeriveTreeAnim): the wind source's magnitude (+0x304), the fade band.
-		float treeWindMagnitude = 0.0f, treeWindFadeStart = 0.0f, treeWindFadeEnd = 0.0f, treeWindTimerScale = 0.0f;
+		// The features' frame-globals contributions (Api::FrameGlobalsContribution, each from its slot: Features/TreeWind's wind globals,
+		// which its shading derivation reads).
+		std::array<float, Extensions::kFrameGlobalsFloats> features{};
 		// The roots whose hidden bit the culls change around the scene's views (CaptureCullHiddenBits), as each view sees it; sorted.
 		std::vector<std::pair<const RE::NiAVObject*, bool>> cullHidden;
 		// SceneCapture::NextSequence just before cullHidden was read: a hidden store's event numbered after it may be newer than the bit

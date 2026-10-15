@@ -481,7 +481,7 @@ namespace DCLF
 			std::vector<WetnessValue> wetness;      // in capture order
 			std::vector<SeedCopy> seedValues;  // copied at the frame's start, in request order
 			std::uint32_t seedRows = 0;
-			std::shared_ptr<const FrameGlobals> globals;  // the frame's engine globals (shading rows' tree wind)
+			std::shared_ptr<const FrameGlobals> globals;  // the frame's engine globals (the shading rows' contributions)
 			// Per part: the backing the frame's draws read (leased until the producer is done), and the journal's trim floor (the
 			// oldest content a backing in circulation held at Kick; nullopt: none holds any, the journal keeps nothing).
 			FrameLeases leases;
@@ -1657,7 +1657,7 @@ namespace DCLF
 		std::atomic<std::uint64_t> refusedHere{ 0 };
 		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.Shading", items.size(), kGrain, [&](std::size_t a_begin, std::size_t a_end) {
 			ZoneScopedN("CS.DCLF.FrameValues.Shading");
-			FrameGlobals::Scope scope(a_job.globals);  // the tree wind's (SampleShading: DeriveTreeAnim)
+			FrameGlobals::Scope scope(a_job.globals);  // the features' globals (SampleShading: the shading contributions)
 			auto& mine = changed[a_begin / kGrain];
 			for (std::size_t i = a_begin; i < a_end; ++i) {
 				const auto& item = *items[i];

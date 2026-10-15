@@ -243,8 +243,8 @@ namespace DCLF
 		// A bit per ObjectShading float SetupGeometry writes (kShadingWritten*), for CPU comparisons; the shader reads none.
 		std::uint32_t written;
 		std::uint32_t padding[2];
-		// SetupGeometry's TreeParams and WindTimers (xy) for a TreeAnim property (DeriveTreeAnim): what a member draws with until
-		// TreeWindCS has an entry for its tree (DCLFTreeParamsOf).
+		// SetupGeometry's TreeParams and WindTimers (xy) for a TreeAnim property (the shading contributions: Features/TreeWind's): what a
+		// member draws with until TreeWindCS has an entry for its tree (DCLFTreeParamsOf).
 		float treeParams[4];
 		float windTimers[4];
 	};

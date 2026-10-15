@@ -32,16 +32,18 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief Whether object a_object is within what the scene's buffers hold (SceneFit): its per-object rows, its tree and fade root
-	 * rows and its face positions (its record, geometry rows and extras are the payload's, which holds them all). One past them waits
-	 * for their growth: no input names it, so no draw or culling test reads past a buffer.
+	 * @brief Whether object a_object is within what the scene's buffers hold (SceneFit): its per-object rows, its table families' and fade
+	 * root rows and its face positions (its record, geometry rows and extras are the payload's, which holds them all). One past them
+	 * waits for their growth: no input names it, so no draw or culling test reads past a buffer.
 	 */
 	inline bool ObjectFits(const SceneTables& a_tables, std::uint32_t a_object, const SceneFit& a_fit)
 	{
 		if (a_object >= a_fit.objects)
 			return false;
-		if (a_object < a_tables.objectTree.size() && a_tables.objectTree[a_object] < kNodelessTree && a_tables.objectTree[a_object] >= a_fit.trees)
-			return false;
+		const auto families = a_tables.families.All();
+		for (std::size_t f = 0; f < families.size(); ++f)
+			if (!families[f].RowFits(a_object, a_fit.familyRows[f]))
+				return false;
 		if (a_object < a_tables.objectFadeRoot.size() && a_tables.objectFadeRoot[a_object] != kNoFadeRoot && a_tables.objectFadeRoot[a_object] >= a_fit.fadeRoots)
 			return false;
 		if (a_object < a_tables.faceStream.size() && a_tables.faceStream[a_object] != kNoFaceStream) {

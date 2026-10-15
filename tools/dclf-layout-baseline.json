@@ -56,8 +56,8 @@
    48
   ],
   "DCLF::Diagnostics::OnTablesReplayed": [
-   103,
-   68
+   102,
+   64
   ],
   "DCLF::Diagnostics::PortalParity::Check": [
    197,
@@ -165,7 +165,7 @@
   ],
   "DCLF::Scene::Coordinator::EvaluateJoin": [
    91,
-   69
+   68
   ],
   "DCLF::Scene::Coordinator::EvaluateRound": [
    137,
@@ -179,10 +179,6 @@
    151,
    50
   ],
-  "DCLF::Scene::Coordinator::KeepResidentsAlive": [
-   121,
-   38
-  ],
   "DCLF::Scene::Coordinator::MergeEntry": [
    132,
    61
@@ -192,8 +188,8 @@
    68
   ],
   "DCLF::Scene::Coordinator::PublishTables": [
-   382,
-   91
+   377,
+   88
   ],
   "DCLF::Scene::Coordinator::RefreshCategoryNodes": [
    128,

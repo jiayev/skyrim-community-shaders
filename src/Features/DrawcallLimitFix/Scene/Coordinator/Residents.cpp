@@ -1,5 +1,5 @@
-// The coordinator's residents (scene lane): the resident set's slots marked, dropped and kept alive, and the tree and fade-root rows
-// listed for them, with their owned engine nodes and seed requests.
+// The coordinator's residents (scene lane): the resident set's slots marked, dropped and kept alive, and the fade-root rows listed for
+// them, with their owned engine nodes and seed requests (the features' components list theirs at the same points: Components.cpp).
 
 #include "Internal.h"
 
@@ -26,7 +26,7 @@ namespace DCLF::Scene
 		if (residentPos.size() <= a_slot)
 			residentPos.resize(std::max<std::size_t>(a_slot + 1, tables.objects.size()), kNotResident);
 		// The accumulate phase notes the join, and a patch that changed, with the rest of its write.
-		ListTree(a_slot);
+		ComponentsResident(a_slot);
 		if (residentPos[a_slot] != kNotResident) {
 			residentPatches[residentPos[a_slot]] = a_patch;
 			return;
@@ -51,7 +51,7 @@ namespace DCLF::Scene
 		residents.pop_back();
 		residentPatches.pop_back();
 		residentPos[a_slot] = kNotResident;
-		UnlistTree(a_slot);
+		ComponentsLeft(a_slot);
 		// The scene work's drops reach PrimaryCull as set changes (ApplySet) or as revoked claims (RevokeUndrawnClaims); the
 		// accumulate phase's, at once.
 		if (a_slot < tables.objectGeometry.size() && tables.objectGeometry[a_slot]) {
@@ -84,7 +84,7 @@ namespace DCLF::Scene
 		memberDecals.clear();
 		NoteDecalsCleared();
 		for (const std::uint32_t slot : residents) {
-			UnlistTree(slot);
+			ComponentsLeft(slot);
 			ResetAccumulatedHalf(slot);
 			residentPos[slot] = kNotResident;
 			if (slot < tables.residentSlot.size()) {
@@ -105,7 +105,6 @@ namespace DCLF::Scene
 		if (materialMembers.size() < tables.materials.size())
 			materialMembers.resize(tables.materials.size(), 0);
 		std::vector<std::uint32_t> pipelinesTouched, materialsTouched;
-		bool treesTouched = false;
 		// A resident's keys now (none for a slot that is not resident).
 		auto keysOf = [&](std::uint32_t a_slot) {
 			ResidentCounted keys;
@@ -114,7 +113,6 @@ namespace DCLF::Scene
 			const auto& object = tables.objects[a_slot];
 			keys.pipeline = object.pipelineIndex;
 			keys.material = object.materialIndex;
-			keys.tree = (object.flags & kObjectTreeAnim) != 0;
 			return keys;
 		};
 		auto uncount = [&](std::uint32_t a_slot) {
@@ -126,10 +124,6 @@ namespace DCLF::Scene
 			if (was.material != ResidentCounted::kNone && was.material < materialMembers.size()) {
 				--materialMembers[was.material];
 				materialsTouched.push_back(was.material);
-			}
-			if (was.tree) {
-				treeMembers.Remove(0, a_slot);
-				treesTouched = true;
 			}
 			was = {};
 		};
@@ -143,10 +137,6 @@ namespace DCLF::Scene
 				materialMembers.resize(std::size_t(keys.material) + 1, 0);
 			++materialMembers[keys.material];
 			materialsTouched.push_back(keys.material);
-			if (keys.tree) {
-				treeMembers.Add(0, a_slot);
-				treesTouched = true;
-			}
 			counted[a_slot] = keys;
 		};
 		if (residentMaintenanceDirty) {
@@ -154,12 +144,11 @@ namespace DCLF::Scene
 			ZoneScopedN("CS.DCLF.Accumulate.RebuildResidentMaintenance");
 			counted.assign(tables.objects.size(), ResidentCounted{});
 			pipelineMembers.Clear();
-			treeMembers.Clear();
 			materialMembers.assign(tables.materials.size(), 0);
 			tables.ClearUsed();
 			for (const std::uint32_t slot : residents)
 				count(slot);
-			treesTouched = true;
+			ComponentsRecount(true, {});
 			residentMaintenanceDirty = false;
 		} else {
 			// The slots named since: their old keys out (all of them first: a fade root freed and listed again for another node
@@ -172,6 +161,7 @@ namespace DCLF::Scene
 			for (const std::uint32_t slot : residentsTouched)
 				if (slot < counted.size())
 					count(slot);
+			ComponentsRecount(false, residentsTouched);
 		}
 		residentsTouched.clear();
 		// The used sets: a pipeline or material is used while a resident holds it. The joins marked theirs as they bound; one
@@ -184,22 +174,6 @@ namespace DCLF::Scene
 			tables.SetPipelineUsed(p, pipelineMembers.Count(p) != 0);
 		for (const std::uint32_t m : materialsTouched)
 			tables.SetMaterialUsed(m, m < materialMembers.size() && materialMembers[m] != 0);
-		// The members TreeWindCS writes the wind of, by their tree slots (in slot order).
-		if (treesTouched) {
-			std::vector<std::uint32_t> slots = treeMembers.lists.empty() ? std::vector<std::uint32_t>{} : treeMembers.lists[0];
-			std::sort(slots.begin(), slots.end());
-			std::vector<TreeObject> treeObjects;
-			treeObjects.reserve(slots.size());
-			for (const std::uint32_t slot : slots)
-				if (slot < tables.objectTree.size() && tables.objectTree[slot] != kNoTree)
-					treeObjects.push_back({ slot, tables.objectTree[slot] });
-			if (treeObjects.size() != tables.treeObjects.size() ||
-				std::memcmp(treeObjects.data(), tables.treeObjects.data(), treeObjects.size() * sizeof(TreeObject)) != 0) {
-				tables.treeObjects = std::move(treeObjects);
-				++tables.treeObjectsVersion;
-				tables.NoteTreesWrite();
-			}
-		}
 		// A pipeline's lighting template is its first member's held property (SlotProperty). It moves where the first member may
 		// change, a pipeline whose membership changed (pipelinesTouched), and where that member's entry takes another property: a leaf
 		// update's swap (HoldProperties, on PushLeafUpdate) rewrites no slot, so it notes the slot (NoteResidentTouched), whose recount
@@ -229,7 +203,6 @@ namespace DCLF::Scene
 				tp.Reset();
 			}
 		}
-		// A tree's wind is TreeWindCS's from here (Records.h, TreeStatic): nothing is taken from the tree nodes per frame.
 	}
 
 	RE::NiPointer<RE::NiAVObject> Coordinator::HeldFadeNode(std::uint32_t a_slot, const void* a_node)
@@ -247,71 +220,6 @@ namespace DCLF::Scene
 		// Asked of the render thread: listed when its answer comes (ApplyFadeNodeAnswers).
 		++referenceStats.fadeRootsUnowned;
 		return nullptr;
-	}
-
-	void Coordinator::ListTree(std::uint32_t a_slot)
-	{
-		// The walk parity's dense walk restores the tables, not the owners kept beside them (as ListFadeRoot).
-		if (denseWalk)
-			return;
-		const bool tree = a_slot < tables.objects.size() && (tables.objects[a_slot].flags & kObjectTreeAnim);
-		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
-		// The tree node from the mirror (its property's fade node, a BSTreeNode); its values are the seed's, which the render thread takes
-		// at the frame's start (the scene work reads no engine memory, and runs no engine code).
-		TreeStatic row;
-		const void* node = nullptr;
-		if (const auto* record = tree && geometry ? mirror.Leaf(geometry).property : nullptr; record && record->fadeNode)
-			if (const auto* fade = mirror.Node(record->fadeNode); fade && (fade->kind & SceneCapture::kKindTree))
-				node = record->fadeNode;
-		// A node not listed yet is owned from the entry's reference (pins), never from the key; without one, nodeless.
-		RE::NiPointer<RE::NiAVObject> owner;
-		if (node && !tables.treeIndex.contains(node) && !(owner = HeldFadeNode(a_slot, node)))
-			node = nullptr;
-		if (tables.objectTree.size() <= a_slot) {
-			tables.NoteTreesWrite();
-			tables.objectTree.resize(std::size_t(a_slot) + 1, kNoTree);
-		}
-		auto& current = tables.objectTree[a_slot];
-		const std::uint32_t wanted = !tree ? kNoTree : !node ? kNodelessTree : kNoTree;
-		// Already under this node (a patch that changed something else), or nodeless and staying so.
-		if (node && current < tables.treeNode.size() && tables.treeNode[current] == node)
-			return;
-		if (!node && current == wanted)
-			return;
-		tables.NoteTreesWrite();
-		UnlistTree(a_slot);
-		if (!node) {
-			current = wanted;
-			NoteResidentTouched(a_slot);
-			return;
-		}
-		auto [it, inserted] = tables.treeIndex.try_emplace(node, 0u);
-		if (inserted) {
-			std::uint32_t t;
-			if (!tables.treeFree.empty()) {
-				t = tables.treeFree.back();
-				tables.treeFree.pop_back();
-			} else {
-				t = static_cast<std::uint32_t>(tables.trees.size());
-				tables.trees.emplace_back();
-				tables.treeRefs.push_back(0);
-				tables.treeNode.push_back(nullptr);
-			}
-			row.generation = ++tables.treeGenerations;
-			row.seedOdd = (tables.trees[t].seedOdd & 1u) ^ 1u;
-			tables.trees[t] = row;
-			tables.treeNode[t] = node;
-			// Owned while listed (a published version that names it keeps it, through the retirement chain).
-			if (treeOwners.size() <= t)
-				treeOwners.resize(std::size_t(t) + 1);
-			treeOwners[t] = std::move(owner);
-			treeSeedRequests.push_back({ treeOwners[t], t, row.generation, 2 * t + row.seedOdd });
-			it->second = t;
-			++tables.treesContentEpoch;
-		}
-		++tables.treeRefs[it->second];
-		current = it->second;
-		NoteResidentTouched(a_slot);
 	}
 
 	void Coordinator::ListFadeRoot(std::uint32_t a_slot)
@@ -521,23 +429,5 @@ namespace DCLF::Scene
 		// An input, not state: the GPU's state row is kept, and FadeStateCS steps its amountFade toward it as the engine does.
 		row.fadeAmount = amount;
 		tables.NoteFadeRoot(it->second);
-	}
-
-	void Coordinator::UnlistTree(std::uint32_t a_slot)
-	{
-		if (a_slot >= tables.objectTree.size())
-			return;
-		tables.NoteTreesWrite();
-		auto& current = tables.objectTree[a_slot];
-		if (current < tables.treeRefs.size() && --tables.treeRefs[current] == 0) {
-			tables.treeIndex.erase(tables.treeNode[current]);
-			tables.treeNode[current] = nullptr;
-			if (current < treeOwners.size())
-				HandBack(std::move(treeOwners[current]));
-			tables.Retire(Tables::kRetiredTree, current);
-		}
-		if (current != kNoTree)
-			NoteResidentTouched(a_slot);
-		current = kNoTree;
 	}
 }

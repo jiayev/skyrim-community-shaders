@@ -6,7 +6,9 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Globals.h"
+#include "ShaderCache.h"
 
 #include <bit>
 
@@ -16,6 +18,15 @@ namespace DCLF
 {
 	namespace
 	{
+		// The record flags of the objects whose TreeParams and WindTimers are their own, not the pipeline template's: technique 12's
+		// (its contribution's: Features/TreeWind's kObjectTreeAnim). Read once, the features installed before any scene work.
+		std::uint32_t PerObjectWindFlags()
+		{
+			static const std::uint32_t flags = Extensions::TechniqueObjectFlags(Extensions::RegisteredTechniques(),
+				static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderTechniques::TreeAnim));
+			return flags;
+		}
+
 		void StoreRelative(float* a_out, const float (&a_world)[12], const RE::NiPoint3& a_posAdjust)
 		{
 			std::memcpy(a_out, a_world, sizeof(a_world));
@@ -256,7 +267,7 @@ namespace DCLF
 		std::memcpy(&constants.ps.floats[psLayout.offset[kPSMaterialData]], shading.materialData, sizeof(shading.materialData));
 		std::memcpy(&constants.ps.floats[psLayout.offset[kPSEmitColor]], shading.emitColor, sizeof(shading.emitColor));
 		constants.ps.floats[psLayout.offset[kPSSSRParams] + 3] = shading.ssrSpecular;
-		if (object.flags & kObjectTreeAnim) {
+		if (object.flags & PerObjectWindFlags()) {
 			std::memcpy(&constants.vs.floats[vsLayout.offset[kVSTreeParams]], a_shading.treeParams, sizeof(a_shading.treeParams));
 			std::memcpy(&constants.vs.floats[vsLayout.offset[kVSWindTimers]], a_shading.windTimers, 2 * sizeof(float));
 		}
@@ -345,7 +356,7 @@ namespace DCLF
 			static_cast<std::uint32_t>(std::size(shading.materialData)));
 		write(a_psOut, a_offsets.psEmitColor, a_offsets.psEmitColorSize, shading.emitColor,
 			static_cast<std::uint32_t>(std::size(shading.emitColor)));
-		if (object.flags & kObjectTreeAnim) {
+		if (object.flags & PerObjectWindFlags()) {
 			write(a_vsOut, a_offsets.vsTreeParams, a_offsets.vsTreeParamsSize, a_shading.treeParams, 4);
 			write(a_vsOut, a_offsets.vsWindTimers, a_offsets.vsWindTimersSize, a_shading.windTimers, 2);
 		}
@@ -393,14 +404,13 @@ namespace DCLF
 		// A Blood effect's is its threshold whatever its alpha test (AlphaTestRefOf: SetupGeometry's AlphaTestRef.x).
 		a_out.alphaTestRef = AlphaTestRefOf(object.flags, object.pipelineIndex < a_tables.pipelines.size() ? &a_tables.pipelines[object.pipelineIndex] : nullptr);
 		a_out.tree = a_objectIndex < a_tables.treeAnim.size() ? a_tables.treeAnim[a_objectIndex] : ObjectTreeAnim{};
-		// The tree listing the member draws under, for the trees' wind (DCLFTreeWind): its slot, and its generation (never 0).
-		if (const std::uint32_t treeSlot = a_objectIndex < a_tables.objectTree.size() ? a_tables.objectTree[a_objectIndex] : kNoTree; treeSlot != kNoTree) {
-			const std::uint32_t generation = treeSlot == kNodelessTree ? kNodelessTree : treeSlot < a_tables.trees.size() ? a_tables.trees[treeSlot].generation : 0u;
-			a_out.tree.windTimers[2] = std::bit_cast<float>(treeSlot);
-			a_out.tree.windTimers[3] = std::bit_cast<float>(generation);
-		} else {
-			a_out.tree.windTimers[2] = a_out.tree.windTimers[3] = 0.0f;
-		}
+		// The table families' references the record carries, each its row and the row's tag (Api::TableFamily::recordWord: Features/
+		// TreeWind's tree slot and listing generation, never 0, for its wind: DCLFTreeWind).
+		for (const auto& family : a_tables.families.All())
+			if (family.recordWord != ~0u) {
+				const auto words = family.RecordWordsOf(a_objectIndex);
+				std::memcpy(reinterpret_cast<std::byte*>(&a_out) + std::size_t(family.recordWord) * 4, words.data(), sizeof(words));
+			}
 		// Skinning: the palette block's rows in the frame's palettes (FrameValues, PaletteRowsOf).
 		const bool skinned = (object.flags & kObjectSkinned) && a_objectIndex < a_tables.boneOffset.size();
 		const auto palette = skinned ? PaletteRowsOf(a_tables.boneOffset[a_objectIndex], a_tables.boneRows[a_objectIndex]) : PaletteRows{};
@@ -476,10 +486,9 @@ namespace DCLF
 		shading.emitColor[2] = emissive ? emissive->blue * mult : 0.0f;
 		shading.ssrSpecular = ((GeometryPort::kMainPassRenderFlags & 2) ? 0.0f : 1.0f) * (specular ? a_property.specularLODFade : 0.0f);
 		a_out.padding[0] = a_out.padding[1] = 0u;
-		// The tree's wind, as SetupGeometry's case 0xc makes it now.
+		// The tree's wind, as SetupGeometry's case 0xc makes it now (the shading contributions: Features/TreeWind's, for a TreeAnim property).
 		ObjectTreeAnim tree{};
-		if (a_property.flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTreeAnim))
-			DeriveTreeAnim(a_property, tree);
+		Extensions::DeriveShading(a_property, tree);
 		std::memcpy(a_out.treeParams, tree.treeParams, sizeof(a_out.treeParams));
 		a_out.windTimers[0] = tree.windTimers[0];
 		a_out.windTimers[1] = tree.windTimers[1];

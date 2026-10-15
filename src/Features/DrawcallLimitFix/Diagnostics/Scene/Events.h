@@ -77,7 +77,8 @@ namespace DCLF::Diagnostics
 		const SceneTables& snapshot;
 		std::uint64_t published;
 		std::uint64_t position, geometryPosition;  // the snapshot's change and geometry logs' ends before the replay
-		bool keepTrees, keepFadeRoots, keepConstants;  // the families the replay kept (their stamps stood)
+		std::uint32_t keptFamilies;  // the table families the replay kept (their stamps stood), a bit by registration
+		bool keepFadeRoots, keepConstants;  // the other families the replay kept
 	};
 
 	/** @brief Render thread, the frame's start (ReleaseGates): a LOD gate flipped by an installed publication, about to be released, and the claims the frame installed. */

@@ -370,8 +370,9 @@ namespace DCLF::Scene
 	void Coordinator::DenseReference(Tables& a_dense, ankerl::unordered_dense::map<const RE::BSGeometry*, Ineligible>& a_reasons)
 	{
 		// Everything the second walk overwrites is saved and restored, so the frame goes on with the slot tables unchanged (the
-		// geometry index and face regions live outside the tables, so they are saved too). Tree and fade-root owners are not: the dense
-		// walk lists neither, and copies would be references the pump drops. The reference walks the whole tracked set.
+		// geometry index and face regions live outside the tables, so they are saved too). Fade-root owners and the components' (Features/
+		// TreeWind's tree owners) are not: the dense walk lists none, and copies would be references the pump drops. The reference walks the
+		// whole tracked set.
 		Tables slots = tables;
 		const auto savedStamp = objectStamp;
 		const auto savedStats = stats;

@@ -11,6 +11,7 @@
 #include <span>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Scene/Channels.h"
 #include "Features/DrawcallLimitFix/Scene/Model/FrameTables.h"
@@ -280,7 +281,11 @@ namespace DCLF::Scene
 		void RetireImport(std::shared_ptr<const void> a_owner) { frameRetiredImports.push_back(std::move(a_owner)); }
 		/** @brief Render thread, frame start: seeds requested since the last take (from the publication log). */
 		std::vector<FadeSeedItem> TakeFadeSeeds() { return std::exchange(frameFadeSeeds, {}); }
-		std::vector<TreeSeedItem> TakeTreeSeeds() { return std::exchange(frameTreeSeeds, {}); }
+		/** @brief Render thread, frame start: a coordinator component's seeds requested since the last take (its feature's frame start). */
+		std::vector<FadeSeedItem> TakeComponentSeeds(Api::CoordinatorComponentId a_component)
+		{
+			return a_component.index < frameComponentSeeds.size() ? std::exchange(frameComponentSeeds[a_component.index], {}) : std::vector<FadeSeedItem>{};
+		}
 		/** @brief Render thread: the frame's engine globals (FrameValues binds them for the seeds' LOD scale). */
 		const std::shared_ptr<const FrameGlobals>& FrameGlobalsOfFrame() const { return frameGlobals; }
 		/** @brief Render thread, frame start: the slots named since the last take, once (from the publication log). */
@@ -376,7 +381,8 @@ namespace DCLF::Scene
 		std::vector<std::shared_ptr<const void>> frameRetiredImports;
 		std::vector<std::shared_ptr<const PlacementPlan>> framePlans;
 		std::vector<ShadingItem> frameShading;
-		std::vector<FadeSeedItem> frameFadeSeeds, frameTreeSeeds;
+		std::vector<FadeSeedItem> frameFadeSeeds;
+		std::vector<std::vector<FadeSeedItem>> frameComponentSeeds;  // by coordinator component
 		ankerl::unordered_dense::set<const RE::NiAVObject*> frameLightEntrySet;
 		std::shared_ptr<const ankerl::unordered_dense::set<RE::NiNode*>> frameCategoryNodes;  // the installed publication's (IsCategoryNode)
 		// CaptureWetness's actor index: membership from the coordinator's walks (SceneTables::actorWetnessChanges, via the log);

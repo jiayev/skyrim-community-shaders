@@ -3,6 +3,7 @@
 // shadow dependency index refreshed.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
@@ -17,6 +18,14 @@ namespace DCLF::Scene
 {
 	namespace
 	{
+		// The record flags a technique's objects carry: a feature's contribution (Api::TechniqueContribution; Features/TreeWind's
+		// kObjectTreeAnim for technique 12). Read once, the features installed before any scene work.
+		std::uint32_t TechniqueFlags(std::uint32_t a_technique)
+		{
+			static const auto& techniques = Extensions::RegisteredTechniques();
+			return Extensions::TechniqueObjectFlags(techniques, a_technique);
+		}
+
 		/**
 		 * @brief Subsurface Scattering's IsBeastRace (BSLightingShader_SetupSkin) for a face property (kFace or kFaceGenRGBTint), from the
 		 * node record (BeastOf). Lighting.hlsl reads it only under SKIN.
@@ -854,7 +863,7 @@ namespace DCLF::Scene
 			const bool suppress = interior && (propertyRecord->flags & static_cast<std::uint64_t>(PropertyFlag::kExternalEmittance)) && !r.leaf.node->emittance;
 			r.staticFlags = (alphaTest ? kObjectAlphaTest : 0u) | (twoSided ? kObjectTwoSided : 0u) |
 			                (suppress ? kObjectSuppressExternalEmittance : 0u) |
-			                (descriptors.technique == kTechniqueTreeAnim ? kObjectTreeAnim : 0u) |
+			                TechniqueFlags(descriptors.technique) |
 			                // A Blood effect keeps its threshold too (AlphaTestRefOf: SetupGeometry's AlphaTestRef.x, tested or not).
 			                ((alphaTest || (alpha && descriptors.effect && (descriptors.pass & EffectFlag::Blood))) ?
 			                        static_cast<std::uint32_t>(alpha->threshold) << kObjectAlphaThresholdShift :

@@ -76,13 +76,13 @@ namespace DCLF::Features::TreeWind
 		// The producers', one at a time in frame order: the seed rows, by 2 * tree slot + seedOdd.
 		KeptWholeArray<TreeStatic> seeds;
 
-		// Render thread, every frame's start: the seeds the installed publications asked for (the coordinator's listings: FrameView).
+		// Render thread, every frame's start: the seeds the installed publications asked for (the component's listings: FrameView).
 		void FrameStart(const Api::FrameValuePoolFrameStart& a_start)
 		{
 			FrameGlobals::Scope scope(a_start.globals);
 			// Read here, not by the producer: TreeStaticOfNode's near-list test reads the tree's multibound shape's cull result (FUN_14147d640
 			// is a pure read, the first child's AsMultiBoundNode; then the shape's +0x10), which this frame's culls write.
-			for (const auto& seed : Scene::FrameView::Get().TakeTreeSeeds()) {
+			for (const auto& seed : Scene::FrameView::Get().TakeComponentSeeds(ComponentId())) {
 				if (!seed.node)
 					continue;
 				TreeStatic row;

@@ -2,6 +2,7 @@
 // later) and checked against the engine's formulas and clocks; and both wind buffers whole, every listed tree's entry.
 
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindTables.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
@@ -80,7 +81,7 @@ namespace DCLF::Features::TreeWind
 		};
 
 		// One member's record (TreeParams, WindTimers) against the engine's formulas and its node's clock.
-		void CheckMember(const TreeReadback::Sample& a_sample, const float (&tree)[8], const TreeWindFrame& in, const SceneTables& tables, MemberCheck& c)
+		void CheckMember(const TreeReadback::Sample& a_sample, const float (&tree)[8], const TreeWindFrame& in, const TreeTables& tables, MemberCheck& c)
 		{
 			++c.checked;
 			const bool nodeless = a_sample.tree == kNodelessTree;
@@ -128,7 +129,7 @@ namespace DCLF::Features::TreeWind
 		}
 
 		// The member readback, three frames after its copy: every member checked, the clock rates and the parity's lines.
-		void HarvestMembers(TreeReadback& a_readback, const SceneTables& a_tables, ID3D11DeviceContext* a_context)
+		void HarvestMembers(TreeReadback& a_readback, const TreeTables& a_tables, ID3D11DeviceContext* a_context)
 		{
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			if (FAILED(a_context->Map(a_readback.records.get(), 0, D3D11_MAP_READ, 0, &mapped)))
@@ -206,7 +207,7 @@ namespace DCLF::Features::TreeWind
 		}
 
 		// The manager's near list (+0x38, count +0x48), FUN_140437e50's selection this frame, against the listed trees.
-		void ReadNearList(const SceneTables& a_tables, WholeReadback& a_next)
+		void ReadNearList(const TreeTables& a_tables, WholeReadback& a_next)
 		{
 			const auto manager = *reinterpret_cast<const std::uintptr_t*>(REL::Offset(Address::kTreeManager).address());
 			ankerl::unordered_dense::set<const void*> nearNodes;
@@ -229,7 +230,7 @@ namespace DCLF::Features::TreeWind
 		}
 
 		// Both wind buffers copied whole, with the listed trees as they are now.
-		void KickWhole(const TreeWindScene& a_wind, const Draws::NamedVersions& a_adopted, const SceneTables& a_tables, ID3D11DeviceContext* a_context)
+		void KickWhole(const TreeWindScene& a_wind, const Draws::NamedVersions& a_adopted, const TreeTables& a_tables, ID3D11DeviceContext* a_context)
 		{
 			WholeReadback next;
 			next.entries = static_cast<std::uint32_t>(a_adopted.Of(a_wind.trees).units) + 1;
@@ -271,7 +272,7 @@ namespace DCLF::Features::TreeWind
 
 		// The first 64 members, each one's tree entry (TreeParams and WindTimers, 32 bytes) of the wind buffer this frame's draws
 		// read (the frame binding's): the one the frame before wrote, from its inputs.
-		void KickMembers(const TreeWindScene& a_wind, const Draws::NamedVersions& a_adopted, const SceneTables& a_tables, ID3D11DeviceContext* a_context)
+		void KickMembers(const TreeWindScene& a_wind, const Draws::NamedVersions& a_adopted, const TreeTables& a_tables, ID3D11DeviceContext* a_context)
 		{
 			TreeReadback readback;
 			const std::size_t count = std::min<std::size_t>(64, a_tables.treeObjects.size());
@@ -309,7 +310,7 @@ namespace DCLF::Features::TreeWind
 			if (a_epoch.depthOnly)
 				return;
 			auto* context = globals::d3d::context;
-			const auto& tables = Scene::FrameView::Get().GetTables();
+			const auto& tables = TreesOf(Scene::FrameView::Get().GetTables());
 			const auto& adopted = Diagnostics::DrawsView::Get().Adopted();
 			if (treeReadback) {
 				if (--treeReadback->framesLeft)

@@ -1,5 +1,5 @@
-// LightingDescriptors.h's ports: technique selection, pass and shader descriptors, shadow bits, LOD fades, tree animation and the
-// Effect / particle acceptance. Pure functions of the records and FrameGlobals; the Sample* functions are the render thread's.
+// LightingDescriptors.h's ports: technique selection, pass and shader descriptors, shadow bits, LOD fades and the Effect / particle
+// acceptance. Pure functions of the records and FrameGlobals; the Sample* functions are the render thread's.
 
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 
@@ -12,6 +12,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
@@ -28,11 +29,12 @@ namespace DCLF
 		constexpr std::uint64_t Bit(Flag a_flag) { return static_cast<std::uint64_t>(a_flag); }
 		constexpr std::uint32_t Bit(LightingFlag a_flag) { return static_cast<std::uint32_t>(a_flag); }
 
-		// Tree wind's live toggle (Features/TreeWind registers it): looked up once, the features installed before any scene work.
-		Api::ToggleId TreesToggle()
+		// A technique a feature contributes (Api::TechniqueContribution; Features/TreeWind's TreeAnim) is DCLF's while its toggle is on.
+		// The contributions are read once, the features installed before any scene work.
+		bool ContributedTechniqueOn(std::uint32_t a_technique)
 		{
-			static const Api::ToggleId trees = FindToggle("trees");
-			return trees;
+			static const auto& techniques = Extensions::RegisteredTechniques();
+			return a_technique < techniques.size() && techniques[a_technique].toggle && ActiveToggles().On(techniques[a_technique].toggle);
 		}
 
 		// Techniques DCLF supports. The rest stay native.
@@ -52,9 +54,6 @@ namespace DCLF
 			// projected textures replace the slot-10 texture SetupTechnique binds.
 			case Technique::MultiIndexSparkle:
 				return ActiveToggles().layers;
-			// Tree wind's object class (Features/TreeWind registers the trees toggle).
-			case Technique::TreeAnim:
-				return ActiveToggles().On(TreesToggle());
 			// Actor skin (SKIN path, TintColor), faces (Facegen: tint and detail maps at t3/t4), hair (TintColor) and eyes (eye
 			// centres, material VS constants): all written by SetupMaterial. A face part's positions are FaceSnapshots'.
 			case Technique::FacegenRGBTint:
@@ -74,7 +73,7 @@ namespace DCLF
 			case Technique::LODLandNoise:
 				return ActiveToggles().lodTerrain;
 			default:
-				return false;
+				return ContributedTechniqueOn(a_technique);
 			}
 		}
 
@@ -256,65 +255,6 @@ namespace DCLF
 		if (f & Bit(Flag::kEyeReflect))
 			t = 16;
 		return t;
-	}
-
-	namespace
-	{
-		// BSFadeNode vtable slot 0x1f8/8: the downcast to BSTreeNode, null for anything that is not one.
-		constexpr std::size_t kAsTreeNodeSlot = 0x1f8 / 8;
-
-		const void* AsTreeNode(const RE::BSFadeNode* a_fadeNode)
-		{
-			// The engine's "no node" sentinel (0x14332a2a0 holds a pointer to it) counts as null.
-			if (!a_fadeNode || a_fadeNode == Engine::EmptyFadeNode())
-				return nullptr;
-			const auto* vtable = *reinterpret_cast<const std::uintptr_t* const*>(a_fadeNode);
-			using Fn = const void* (*)(const RE::BSFadeNode*);
-			return reinterpret_cast<Fn>(vtable[kAsTreeNodeSlot])(a_fadeNode);
-		}
-
-		// The engine's own square root, reproduced bit for bit (engine notes: Func6, case 0xc).
-		float FastSqrt(float a_value)
-		{
-			// The engine shifts as a SIGNED integer (`sar`): this matters for a negative pattern (a fern's uninitialised distance
-			// field), where the engine's result clamps to the maximum amplitude.
-			const auto bits = std::bit_cast<std::int32_t>(a_value);
-			const float estimate = std::bit_cast<float>(static_cast<std::uint32_t>(0x5f3759df - (bits >> 1)));
-			return (1.5f - a_value * 0.5f * estimate * estimate) * estimate * a_value;
-		}
-
-		float TreeNodeFloat(const void* a_node, std::size_t a_offset)
-		{
-			return *reinterpret_cast<const float*>(static_cast<const std::byte*>(a_node) + a_offset);
-		}
-	}
-
-	void DeriveTreeAnim(const RE::BSShaderProperty& a_property, ObjectTreeAnim& a_out)
-	{
-		const void* node = AsTreeNode(a_property.fadeNode);
-
-		const auto& g = FrameGlobals::Current();
-		a_out.treeParams[0] = 0.0f;
-		a_out.treeParams[1] = g.treeWindMagnitude;
-
-		// Amplitude falls off with distance. The engine takes the squared distance at +0x158 through the 0x5f3759df fast inverse
-		// square root (one Newton step) times x, not sqrtf; std::sqrt differs for trees inside the fade band.
-		const float distance = node ? FastSqrt(TreeNodeFloat(node, 0x158)) : 0.0f;
-		const float maxAmplitude = node ? TreeNodeFloat(node, 0x15c) : 1.0f;
-		const float fadeStart = g.treeWindFadeStart;
-		const float span = g.treeWindFadeEnd - fadeStart;
-		float amplitude = (1.0f - (distance - fadeStart) / span) * maxAmplitude;
-		amplitude = std::max(amplitude, 0.0f);
-		amplitude = std::min(amplitude, maxAmplitude);
-		a_out.treeParams[2] = amplitude;
-		a_out.treeParams[3] = node ? TreeNodeFloat(node, 0x160) : 1.0f;
-
-		const float scale = g.treeWindTimerScale;
-		a_out.windTimers[0] = node ? TreeNodeFloat(node, 0x164) * scale : 0.0f;
-		a_out.windTimers[1] = node ? TreeNodeFloat(node, 0x168) * scale : 0.0f;
-		// Diagnostics only (the shader reads xy): the amplitude's raw inputs, so a parity mismatch can tell node from distance.
-		a_out.windTimers[2] = node ? TreeNodeFloat(node, 0x158) : -1.0f;
-		a_out.windTimers[3] = node ? TreeNodeFloat(node, 0x15c) : -1.0f;
 	}
 
 	bool TerrainBlendingDefersTerrain()

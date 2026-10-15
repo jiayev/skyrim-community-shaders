@@ -14,6 +14,7 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
@@ -102,16 +103,9 @@ namespace DCLF
 		std::vector<ObjectLights> lights;                     // parallel to objects
 		// Only technique 12 fills it; others keep the template's defaults.
 		std::vector<ObjectTreeAnim> treeAnim;                 // parallel to objects: the record's, as the member joined
-		// Tree wind (Records.h, TreeStatic): a slot per tree node a member draws under, refcounted by members; treeObjects lists
-		// the members for TreeWindCS. The commits upload against the versions.
-		std::vector<TreeStatic> trees;
-		std::vector<std::uint32_t> treeRefs, treeFree;
-		std::vector<const void*> treeNode;
-		ankerl::unordered_dense::map<const void*, std::uint32_t> treeIndex;
-		std::vector<std::uint32_t> objectTree;
-		std::vector<TreeObject> treeObjects;
-		std::uint64_t treesContentEpoch = 0, treeObjectsVersion = 0;
-		std::uint32_t treeGenerations = 0;
+		// The features' table families (Api::TableFamily; Features/TreeWind's trees): their columns, stamps, the objects' references
+		// into them and their rows' tags. Published with the rest: a family is copied only when its stamp moved.
+		Extensions::TableFamilies families;
 		// Fade roots (Records.h, FadeRootStatic): a slot per fade node a member draws under, refcounted by members, its row
 		// rewritten when an input event arrives (a tree's LOD switch: fadeRootSwitch). A row's object is one of its members (whose
 		// fade node row is the centre), rechosen when membership changes.
@@ -130,23 +124,10 @@ namespace DCLF
 			NoteFadeRootsWrite();
 		}
 		std::uint32_t fadeRootGenerations = 0;
-		// Write stamps of the tree and fade-root families (TreeFamily, FadeRootFamily), bumped by every write: the publication
-		// copies a family only when its stamp differs. fadeRootsJournal is not in the family; it is always copied.
-		std::uint64_t treesStamp = 0, fadeRootsStamp = 0;
-		void NoteTreesWrite() { ++treesStamp; }
+		// Write stamp of the fade-root family (FadeRootFamily), bumped by every write: the publication copies the family only when its
+		// stamp differs (as the table families' own: families). fadeRootsJournal is not in the family; it is always copied.
+		std::uint64_t fadeRootsStamp = 0;
 		void NoteFadeRootsWrite() { ++fadeRootsStamp; }
-		/** @brief The tree family's members of two tables, each pair to a_member (the publication's copy, its checks). */
-		template <class T, class F>
-		static void TreeFamily(T& a_left, T& a_right, F&& a_member)
-		{
-			a_member(a_left.trees, a_right.trees);
-			a_member(a_left.treeRefs, a_right.treeRefs);
-			a_member(a_left.treeFree, a_right.treeFree);
-			a_member(a_left.treeNode, a_right.treeNode);
-			a_member(a_left.treeIndex, a_right.treeIndex);
-			a_member(a_left.treeObjects, a_right.treeObjects);
-			a_member(a_left.objectTree, a_right.objectTree);
-		}
 		/** @brief The fade-root family's members of two tables, each pair to a_member. */
 		template <class T, class F>
 		static void FadeRootFamily(T& a_left, T& a_right, F&& a_member)
@@ -538,7 +519,7 @@ namespace DCLF
 		enum RetiredKind : std::uint8_t
 		{
 			kRetiredObject,
-			kRetiredTree,
+			kRetiredFamilyRow,  // a table family's row (families); extra: the family's index
 			kRetiredFadeRoot,
 			kRetiredExtras,     // slot: the block's row offset
 			kRetiredBones,      // slot: the block's offset, extra: its rows

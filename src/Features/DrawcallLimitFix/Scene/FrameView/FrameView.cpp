@@ -85,7 +85,10 @@ namespace DCLF::Scene
 			append(framePlans, deltas.plans);
 			append(frameShading, deltas.shading);
 			append(frameFadeSeeds, deltas.fadeSeeds);
-			append(frameTreeSeeds, deltas.treeSeeds);
+			if (frameComponentSeeds.size() < deltas.componentSeeds.size())
+				frameComponentSeeds.resize(deltas.componentSeeds.size());
+			for (std::size_t c = 0; c < deltas.componentSeeds.size(); ++c)
+				append(frameComponentSeeds[c], deltas.componentSeeds[c]);
 			append(frameSwitchChanges, deltas.switches);
 			frameSwitchResync = frameSwitchResync || std::exchange(deltas.switchResync, false);
 			append(frameRetiredImports, deltas.retiredImports);

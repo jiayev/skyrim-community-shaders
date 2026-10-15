@@ -318,17 +318,8 @@ namespace DCLF
 		pipelineBindingVersion.clear();
 		lights.clear();
 		treeAnim.clear();
-		NoteTreesWrite();
+		families.Clear();
 		NoteFadeRootsWrite();
-		trees.clear();
-		treeRefs.clear();
-		treeFree.clear();
-		treeNode.clear();
-		treeIndex.clear();
-		objectTree.clear();
-		treeObjects.clear();
-		++treesContentEpoch;
-		++treeObjectsVersion;
 		fadeRoots.clear();
 		fadeRootRefs.clear();
 		fadeRootFree.clear();
