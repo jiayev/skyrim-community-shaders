@@ -10,7 +10,6 @@
 #include "Registrations.h"
 #include "RegistrationCensus.h"
 #include "ReleaseGuard.h"
-#include "ShadowViewTally.h"
 #include "SunCasters.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
@@ -32,9 +31,9 @@ namespace DCLF::Diagnostics
 			LightCulls::Install();
 		// CS_DCLF_CENSUS: the passes the registration hooks hand on to the engine.
 		RegistrationCensus::Install();
-		// The shadow views against the engine's (both parities) and the sun exclusion's watch (CS_DCLF_PERSISTENT_PARITY).
+		// The portal views and the light selection against the engine's (both parities; the shadow views' are their sources' features':
+		// their install) and the sun exclusion's watch (CS_DCLF_PERSISTENT_PARITY).
 		if (o.claimsOrScene) {
-			InstallShadowViews();
 			PortalParity::Install();
 			LightSelectionParity::Install();
 		}

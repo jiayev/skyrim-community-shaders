@@ -79,10 +79,6 @@ namespace DCLF::MaterialSources
 		{
 			return Extensions::MaterialSpaceOf(a_kind).frameVSFloats;
 		}
-		const std::vector<std::uint32_t>& TexcoordPositionsOf(const MaterialRecord& a_record)
-		{
-			return a_record.kind != kMaterialKindLighting ? PortVSPositions(a_record.kind) : FrameVSFloats();
-		}
 	}
 
 	std::uint32_t Signature(std::uint32_t a_passDescriptor)
@@ -175,26 +171,6 @@ namespace DCLF::MaterialSources
 		return (a_passDescriptor & kCharacterLight) && ((a_live.textureWritten >> kCharacterLightSlot) & 1) ? a_live.textures[kCharacterLightSlot] : nullptr;
 	}
 
-	bool ApplyTextureTransform(const RE::BSShaderMaterial* a_material, MaterialRecord& a_record)
-	{
-		const auto* smState = globals::game::smState;
-		if (!a_material || !smState)
-			return false;
-		// SetupMaterial (vanilla and TruePBR alike): offset and scale of the buffer the frame reads.
-		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_material);
-		const std::uint32_t buffer = smState->textureTransformCurrentBuffer & 1;
-		const float values[4]{ material->texCoordOffset[buffer].x, material->texCoordOffset[buffer].y, material->texCoordScale[buffer].x,
-			material->texCoordScale[buffer].y };
-		const auto& positions = TexcoordPositionsOf(a_record);
-		bool changed = false;
-		for (std::size_t c = 0; c < positions.size() && c < 4; ++c)
-			if (a_record.vs.Written(positions[c])) {
-				changed |= std::bit_cast<std::uint32_t>(a_record.vs.floats[positions[c]]) != std::bit_cast<std::uint32_t>(values[c]);
-				a_record.vs.floats[positions[c]] = values[c];
-			}
-		return changed;
-	}
-
 	void KeepUnreadFloats(const MaterialRecord& a_from, MaterialRecord& a_to)
 	{
 		if (a_from.kind != kMaterialKindLighting || a_to.kind != kMaterialKindLighting)
@@ -203,31 +179,6 @@ namespace DCLF::MaterialSources
 		const auto& layout = LightingPSLayout();
 		for (std::uint32_t c = 0; c < layout.size[kPSIBLParams]; ++c)
 			a_to.ps.floats[layout.offset[kPSIBLParams] + c] = a_from.ps.floats[layout.offset[kPSIBLParams] + c];
-	}
-
-	TextureTransforms TextureTransformsOf(const MaterialPort::MaterialSnapshot& a_snapshot)
-	{
-		// BSShaderMaterial's texCoordOffset (+0xc) and texCoordScale (+0x1c), 8 bytes a buffer (MaterialPortVanilla's and
-		// MaterialPortFeature's TexcoordOffset read the same fields).
-		constexpr std::size_t kOffset = 0xc, kScale = 0x1c;
-		TextureTransforms out;
-		for (std::size_t b = 0; b < out.buffers.size(); ++b)
-			out.buffers[b] = { a_snapshot.At<float>(kOffset + b * 8), a_snapshot.At<float>(kOffset + b * 8 + 4), a_snapshot.At<float>(kScale + b * 8),
-				a_snapshot.At<float>(kScale + b * 8 + 4) };
-		return out;
-	}
-
-	bool ApplyTextureTransform(const TextureTransforms& a_transforms, std::uint32_t a_buffer, MaterialRecord& a_record)
-	{
-		const auto& values = a_transforms.buffers[a_buffer & 1];
-		const auto& positions = TexcoordPositionsOf(a_record);
-		bool changed = false;
-		for (std::size_t c = 0; c < positions.size() && c < values.size(); ++c)
-			if (a_record.vs.Written(positions[c])) {
-				changed |= std::bit_cast<std::uint32_t>(a_record.vs.floats[positions[c]]) != std::bit_cast<std::uint32_t>(values[c]);
-				a_record.vs.floats[positions[c]] = values[c];
-			}
-		return changed;
 	}
 
 	ID3D11ShaderResourceView* FrameCharacterLightView(const MaterialPort::MaterialFrame& a_frame)

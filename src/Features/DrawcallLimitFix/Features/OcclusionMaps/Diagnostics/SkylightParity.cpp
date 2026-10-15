@@ -1,20 +1,21 @@
-#include "Skylight.h"
+// CS_DCLF_SKYLIGHT_PARITY: the two renders of one occlusion map, the engine's (kept before the map is cleared again) and DCLF's (kept
+// after its epoch drew it), compared texel by texel once both copies are readable. Render thread.
 
+#include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/Skylighting.h"
 
 #include <filesystem>
 #include <fstream>
 
-// CS_DCLF_SKYLIGHT_PARITY: the two renders of one occlusion map, the engine's (kept before the map is cleared again) and DCLF's (kept
-// after its epoch drew it), compared texel by texel once both copies are readable. Render thread.
-
-namespace DCLF::Diagnostics::Skylight
+namespace DCLF::Features::OcclusionMaps
 {
 	namespace
 	{
+		bool parityOn = false;    // CS_DCLF_SKYLIGHT_PARITY (install)
+		Api::SwitchId dumpDir;    // CS_DCLF_SKYLIGHT_DUMP_DIR (install)
+
 		struct Map
 		{
 			std::array<winrt::com_ptr<ID3D11Texture2D>, 2> staging;
@@ -77,7 +78,7 @@ namespace DCLF::Diagnostics::Skylight
 			if (bigDiff * 20 > texels) {
 				static std::uint32_t dumps = 0;
 				if (dumps < 4) {
-					const auto& dir = SwitchValue(Switch::SkylightDumpDir);
+					const auto& dir = SwitchValue(dumpDir);
 					const auto directory = std::filesystem::path(dir.empty() ? "." : dir);
 					for (std::uint32_t image = 0; image < 2; ++image) {
 						std::ofstream out(directory / fmt::format("{}-parity-{}-{}.pgm", a_map ? "precipitation" : "sky", dumps, image ? "dclf" : "engine"), std::ios::binary);
@@ -142,18 +143,24 @@ namespace DCLF::Diagnostics::Skylight
 
 	bool ReferenceDue(std::uint32_t a_map)
 	{
-		if (!Observe().skylight || a_map >= maps.size())
+		if (!parityOn || a_map >= maps.size())
 			return false;
 		auto& map = maps[a_map];
 		return !map.pending && (map.frames++ % 120) == 60;
 	}
 
-	void Install()
+	void RegisterParity(Api::InstallContext& a_context)
 	{
-		if (!Observe().skylight)
+		// Where Core's were listed: the parity's after the capture point's, its dump directory after the table start's.
+		const auto parity = a_context.RegisterSwitch({ .name = "CS_DCLF_SKYLIGHT_PARITY", .kind = Api::SwitchKind::Parity,
+			.description = "1: DCLF's Skylighting occlusion map against the engine's, texel by texel", .after = "CS_DCLF_CAPTURE_POINT_PARITY" });
+		dumpDir = a_context.RegisterSwitch({ .name = "CS_DCLF_SKYLIGHT_DUMP_DIR", .kind = Api::SwitchKind::Diagnostic,
+			.description = "where CS_DCLF_SKYLIGHT_PARITY writes the maps it compares", .after = "CS_DCLF_TABLE_START" });
+		parityOn = SwitchEnabled(parity);
+		if (!parityOn)
 			return;
-		Subscribe<OcclusionReferenceRendered>([](const OcclusionReferenceRendered& a_event) { Copy(a_event.map, 0); });
-		Subscribe<OcclusionMapsDrawn>([](const OcclusionMapsDrawn& a_event) {
+		Diagnostics::Subscribe<Diagnostics::OcclusionReferenceRendered>([](const Diagnostics::OcclusionReferenceRendered& a_event) { Copy(a_event.map, 0); });
+		Diagnostics::Subscribe<Diagnostics::OcclusionMapsDrawn>([](const Diagnostics::OcclusionMapsDrawn& a_event) {
 			for (std::uint32_t map = 0; map < 2; ++map)
 				if (waiting & (1u << map)) {
 					if (a_event.drawn & (1u << map))
@@ -163,7 +170,7 @@ namespace DCLF::Diagnostics::Skylight
 				}
 			waiting = 0;
 		});
-		Subscribe<PrepassBegin>([](const PrepassBegin&) {
+		Diagnostics::Subscribe<Diagnostics::PrepassBegin>([](const Diagnostics::PrepassBegin&) {
 			for (std::uint32_t map = 0; map < 2; ++map)
 				Compare(map);
 		});

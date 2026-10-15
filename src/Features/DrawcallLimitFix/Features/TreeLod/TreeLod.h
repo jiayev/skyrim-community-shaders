@@ -6,22 +6,30 @@
 // (Api::ObjectClass::TreeLod, which gates the family), installs the source of its channel at its early hooks (TreeLodHooks.cpp: the refill,
 // block update, AddGroup and RemoveGroup, pushing onto events) and keeps the render thread's mirror (TreeLodMirror.h, drained by the
 // family's serve). It draws it: the tables as scene resources, with what they post with the revision's inputs and latch in the depth
-// commit, and the depth commit's uploads as a commit hook (TreeLodTables.cpp); TreeLodCullCS in the depth segment's two phases and the
-// counts' readback as GPU stages (TreeLodPasses.cpp); the family - its frame's decision and program source, its depth and colour draws
-// (TreeLodDraws.cpp) and a trees view's faces (TreeLodFaces.cpp: the per-face cull, draw and row, the lists' units). Its report lines
+// commit, and the depth commit's uploads as a commit hook (TreeLodTables.cpp); TreeLodCullCS (its HLSL in the feature's shader folder,
+// Features/TreeLod/TreeLodCullCS.hlsl) in the depth segment's two phases and the counts' readback as GPU stages (TreeLodPasses.cpp);
+// the family - its frame's decision and program source, its depth and colour draws (TreeLodDraws.cpp) and a trees view's faces (TreeLodFaces.cpp: the per-face cull, draw and row, the lists' units). Its report lines
 // (Diagnostics/TreeLodReport.cpp), the mirror's parity (Diagnostics/TreeLodParity.cpp) and the audit of the open defect it probes
 // (Diagnostics/TreeLodAudit.cpp) are its own.
 //
 // Core keeps the family's slot (Core/Render/DrawFamilies/FamilySlots.h): its pipelines on the lane (DrawPipelines' tree LOD family,
 // ForwardPipelineKey::kForwardTreeLod) from the program source, the ownership it publishes from the decision (PassCapture's withholding of
-// the engine's tree LOD passes), the shapes key's part, a trees view's lists, rows and latch, the GPU layout the shaders mirror
-// (TreeInstancesLayout.h) and TreeLodCullCS.hlsl's place.
+// the engine's tree LOD passes), the shapes key's part, a trees view's lists, rows and latch (with the cull's thread group,
+// Draws::kTreeLodCullGroup) and the GPU layout the shaders mirror (TreeInstancesLayout.h).
 // Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 
+#include <cstdint>
+
 namespace DCLF::Features::TreeLod
 {
+	// AE 1.6.1170 (module offsets) of the engine state this feature alone reads.
+	namespace Address
+	{
+		inline constexpr std::uintptr_t kTreeLodAtlas = 0x33dcd18;  // NiSourceTexture*: tree LOD's atlas
+	}
+
 	// TreeLodFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
 

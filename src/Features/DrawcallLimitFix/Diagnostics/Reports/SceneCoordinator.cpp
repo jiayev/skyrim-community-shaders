@@ -187,13 +187,8 @@ namespace DCLF::Reports
 					r.transformsWritten / n, r.uncovered ? " <- MATERIAL PORT" : "");
 				r = {};
 			}
-			if (auto& dp = Diagnostics::SceneDiagnostics().decalOrder; dp.checks) {
-				text += fmt::format("[DCLF] decal order parity (the kept order against one made whole): {} checks, {} decals, {} differ{}{}; {} kept keys stale, "
-									"{} neighbours the whole order does not hold{}{}\n",
-					dp.checks, dp.decals, dp.differ, dp.differ ? " <- DIFFER; first: " : " <- OK", dp.first, dp.staleKeys, dp.unordered,
-					dp.staleKeys ? "; first stale: " : "", dp.staleFirst);
-				dp = {};
-			}
+			// The features' lines here (Features/Decals' order parity), the components' with their context.
+			V::componentsReportText(s, Api::ReportPoint::SceneCoordinatorMaterials, text);
 			if (auto& ms = V::materialSnapshotStats(s); ms.captured || ms.made || ms.requested) {
 				text += fmt::format("[DCLF] material captures (T6b2a: the scene work's records): {} captured ({} replacing an older one, {} older than the held one), {} "
 									"let go unused, {} held; {} records made by the scene work, {} uncovered, {} asked of the render thread{}\n",
@@ -295,11 +290,13 @@ namespace DCLF::Reports
 					V::lightTable(s).index.size(), V::lightTable(s).nodes.size(), std::exchange(V::lightTable(s).entriesWritten, 0), std::exchange(V::lightTable(s).snapshots, 0),
 					Diagnostics::SceneDiagnostics().candidates.checks, Diagnostics::SceneDiagnostics().candidates.mismatches, Diagnostics::SceneDiagnostics().candidates.checks ? (Diagnostics::SceneDiagnostics().candidates.mismatches ? " <- CANDIDATES" : " <- OK") : "");
 				Diagnostics::SceneDiagnostics().candidates = {};
-				text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up by the render thread at ingestion ({:.2f} under attached subtrees or the world after a load; {:.2f} us/frame), {:.1f} entries classified again; face publications {:.1f}/frame: {:.1f} streams updated in place, {:.2f} shapes written\n",
+				text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up by the render thread at ingestion ({:.2f} under attached subtrees or the world after a load; {:.2f} us/frame), {:.1f} entries classified again",
 					t.walks, t.full, t.evaluated / n, t.evaluatedMax, t.perFrame / n, t.kept / n, t.moved / n, t.pending / n, t.property / n, t.node / n, t.roots / n,
 					t.geometryDirty / n, t.restored / n, t.live / n, t.propertyEvents / n, t.nodeEvents / n,
-					t.switchEvents / n, t.switchChanges / n, t.switchCatchUps / n, t.attachCatchUps / n, catchUpUs, t.switchReclassified / n, t.facePublished / n, t.faceUpdated / n,
-					t.faceWritten / n);
+					t.switchEvents / n, t.switchChanges / n, t.switchCatchUps / n, t.attachCatchUps / n, catchUpUs, t.switchReclassified / n);
+				// The features' fragments of the line (Features/Faces' publications), the components' with their context.
+				V::componentsReportText(s, Api::ReportPoint::SceneCoordinatorDelta, text);
+				text += '\n';
 				if (auto& rootMotion = V::rootMotion(s); rootMotion.size() > (1u << 16))
 					rootMotion.clear();
 				t = {};
@@ -442,9 +439,8 @@ namespace DCLF::Reports
 				logger::info("[DCLF] fading: {} screen-door fading objects drawn by DCLF over {} frames", fading, fadingFrames);
 			if (stats.skinned)
 				logger::info("[DCLF] skinned (the last pass): {} candidates, {} palette rows (FrameValues')", stats.skinned, stats.boneRows);
-			if (stats.decals[0] || stats.decals[1] || stats.decals[2])
-				logger::info("[DCLF] decals (the last pass): {} candidates ({} in the opaque group, {} multi-index layers, {} in the blended group)",
-					stats.decals[0] + stats.decals[1] + stats.decals[2], stats.decals[0], stats.decals[2], stats.decals[1]);
+			// The features' lines here (Features/Decals' candidates), the components' with their context.
+			V::componentsReportLines(s, Api::ReportPoint::SceneCoordinatorLastPass, a_sceneFrame);
 			logger::info("[DCLF] derived cache (the last pass): {} served, {} recomputed and compared, {} differ{}; slots alive {} geometries / {} pipelines / {} materials, {} swept, {} geometries refreshed in place, {} slot violations{}",
 				stats.derivedHits, stats.derivedChecked, stats.derivedDiffers, stats.derivedDiffers ? " <- STALE" : "",
 				stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive, stats.slotsSwept, stats.geometriesRefreshed,

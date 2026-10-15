@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -97,8 +98,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_141480fc0 (object, &colour): points the external emittance of the Lighting and effect properties under the object at
-	// a colour. The colour is a classification input (ListDependents), so a re-point is a property event.
+	// FUN_141480fc0 (object, &colour): points the external emittance of the Lighting and material port properties under the object
+	// at a colour. The colour is a classification input (ListDependents), so a re-point is a property event.
 	struct SetExternalEmittance
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_object, RE::NiColor** a_colour)
@@ -106,16 +107,18 @@ namespace DCLF::Scene
 			auto* geometry = a_object ? a_object->AsGeometry() : nullptr;
 			auto* shaderProperty = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
 			auto* property = shaderProperty ? netimmerse_cast<RE::BSLightingShaderProperty*>(shaderProperty) : nullptr;
-			// An effect property's emittanceColor is its PropertyColor (the mirror's emissive): a re-point is an event too.
-			auto* effect = shaderProperty && !property ? netimmerse_cast<RE::BSEffectShaderProperty*>(shaderProperty) : nullptr;
-			const RE::NiColor* before = property ? property->emissiveColor : effect ? effect->emittanceColor : nullptr;
+			// A port property's emissive (the Effect port's emittanceColor, its PropertyColor: the mirror's emissive): a re-point is an
+			// event too. The port's (its exact RTTI, as the capture's), read through its emissiveOf.
+			const std::uint8_t port = shaderProperty && !property ? Extensions::PortOfRtti(shaderProperty->GetRTTI()) : std::uint8_t{ 0 };
+			const auto emissiveOf = port ? Extensions::MaterialPorts()[port].emissiveOf : nullptr;
+			const void* before = property ? property->emissiveColor : emissiveOf ? emissiveOf(*shaderProperty) : nullptr;
 			const auto result = func(a_object, a_colour);
 			if (property && property->emissiveColor != before) {
 				PushProperty(property);
 				PushPropertyUpdate(property, SceneCapture::PropertyRecord::kEmissive);
-			} else if (effect && effect->emittanceColor != before) {
-				PushProperty(effect);
-				PushPropertyUpdate(effect, SceneCapture::PropertyRecord::kEmissive);
+			} else if (emissiveOf && emissiveOf(*shaderProperty) != before) {
+				PushProperty(shaderProperty);
+				PushPropertyUpdate(shaderProperty, SceneCapture::PropertyRecord::kEmissive);
 			}
 			return result;
 		}
@@ -1019,5 +1022,15 @@ namespace DCLF::Extensions
 		// A feature's own stores as events, on its reserved site (past the source's).
 		if (Scene::hiddenEventsInstalled && a_object)
 			Scene::PushHiddenUpdate(a_object, a_site);
+	}
+
+	bool HiddenEventsLive()
+	{
+		return Scene::hiddenEventsInstalled;
+	}
+
+	void PushSegmentsUpdate(const RE::BSGeometry* a_geometry)
+	{
+		Scene::PushGeometryUpdate(a_geometry, SceneCapture::GeometryRecord::kSegments);
 	}
 }

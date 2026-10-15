@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 
 namespace DCLF::Extensions
 {
@@ -47,4 +48,7 @@ namespace DCLF::Extensions
 			if (observer.updateEntry)
 				observer.updateEntry(a_running);
 	}
+
+	bool StandInVerdict(const void* a_root) { return IndirectDraws::Get().AccumulatedVerdict(a_root); }
+	bool ListedVerdictOf(const void* a_root, bool& a_visible) { return IndirectDraws::Get().AccumulatedVerdictOf(a_root, a_visible); }
 }

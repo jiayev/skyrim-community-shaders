@@ -193,12 +193,6 @@ namespace DCLF::Draws
 		bool depthOnly = false;
 		std::uint32_t vsFrameMask = 0, psFrameMask = 0;  // the frame slots the commit supplies
 		std::array<std::uint32_t, kDecalGroups> decalCount{};
-		// The PerMaterial floats that are the frame's rather than the material's (Coordinator::
-		// GetMaterialPatchedFloats / GetMaterialPatchedVSFloats, MaterialSources): the build cache leaves them
-		// out of a pair's signature and repacks the group, so a drifting frame component or a scrolling
-		// TexcoordOffset does not rebuild every pair every frame.
-		std::vector<std::uint32_t> materialPatchedFloats;
-		std::vector<std::uint32_t> materialPatchedVSFloats;
 		ResourceAddresses addresses{};
 		std::uint32_t lookupGeneration = 0, tablesGeneration = 0;
 		// What the region's, the kept tables' and the rows' journals keep changes back to: the oldest content epoch a backing of

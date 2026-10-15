@@ -1,7 +1,9 @@
-// FocusViews: the BSShadowDirectionalLight::sub detour (render thread) and the focus views it records (ShadowCameras::Focus).
+// FocusViews: the BSShadowDirectionalLight::sub detour (render thread) and the focus views it records (ShadowCameras::Focus), and the
+// engine's focus targets.
 
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/FocusViews.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -15,6 +17,20 @@ namespace DCLF::Features::Shadows::Local
 	namespace
 	{
 		constexpr std::uintptr_t kFocusCameras = 0x14f0480;  // BSShadowDirectionalLight::sub: the focus cameras, any host
+		constexpr std::uintptr_t kFocusTargets = 0x332a488;  // the focus targets: {float distance; NiAVObject* node} x count
+	}
+
+	std::uint32_t EngineFocusTargetCount()
+	{
+		return Engine::Global<std::uint32_t>(Engine::Address::kFocusTargetCount);
+	}
+
+	const RE::NiAVObject* EngineFocusTarget(std::uint32_t a_index)
+	{
+		const auto* targets = Engine::Global<const std::byte*>(kFocusTargets);
+		if (!targets || a_index >= EngineFocusTargetCount())
+			return nullptr;
+		return Engine::At<const RE::NiAVObject*>(targets, std::size_t(a_index) * 16 + 8);
 	}
 
 	FocusViews& FocusViews::Get()
@@ -36,9 +52,9 @@ namespace DCLF::Features::Shadows::Local
 		}
 		// The targets as sub read them.
 		constexpr std::uint32_t kMaxFocus = ShadowCameras::FocusFrame::kMaxFocus;
-		const std::uint32_t targetCount = board.targetCount = std::min(ShadowCameras::EngineFocusTargetCount(), kMaxFocus);
+		const std::uint32_t targetCount = board.targetCount = std::min(EngineFocusTargetCount(), kMaxFocus);
 		for (std::uint32_t i = 0; i < kMaxFocus; ++i)
-			board.targets[i] = i < targetCount ? ShadowCameras::EngineFocusTarget(i) : nullptr;
+			board.targets[i] = i < targetCount ? EngineFocusTarget(i) : nullptr;
 		ShadowCameras::FocusFrame::Host* host = nullptr;
 		for (auto& existing : hosts)
 			if (existing.light == a_light)

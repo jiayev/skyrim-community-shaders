@@ -1,8 +1,10 @@
 // The material ports' table and calls (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace DCLF
 {
@@ -56,6 +58,7 @@ namespace DCLF::Extensions
 		for (std::size_t kind = 0; kind < a_count && kind < table.size(); ++kind) {
 			const auto& port = a_byKind[kind];
 			auto& entry = table[kind];
+			entry.name = port.name;
 			entry.shaderType = port.shaderType;
 			entry.objectClass = port.objectClass;
 			// The engine's addresses, read once here (REL), never per capture.
@@ -77,6 +80,7 @@ namespace DCLF::Extensions
 			entry.shading = port.shading;
 			entry.variants = port.variants;
 			entry.variantNames = port.variantNames;
+			entry.emissiveOf = port.emissiveOf;
 		}
 	}
 
@@ -111,5 +115,43 @@ namespace DCLF::Extensions
 	{
 		Api::MaterialPortShading shading{ a_property, a_pass, a_member, a_out };
 		Table()[a_kind].shading(shading);
+	}
+}
+
+namespace DCLF::Api
+{
+	std::uint8_t MaterialPortEvaluation::Port() const { return snapshot.port; }
+	std::uint32_t MaterialPortEvaluation::Size() const { return snapshot.size; }
+	ID3D11ShaderResourceView* MaterialPortEvaluation::View(std::uint16_t a_offset) const { return snapshot.View(a_offset); }
+	bool MaterialPortEvaluation::FrameSampled() const { return frame.vanilla.sampled; }
+	std::uint32_t MaterialPortEvaluation::TextureTransformBuffer() const { return frame.vanilla.textureTransformBuffer; }
+
+	void MaterialPortEvaluation::Read(std::size_t a_offset, void* a_out, std::size_t a_bytes) const
+	{
+		if (a_offset + a_bytes <= snapshot.size)
+			std::memcpy(a_out, snapshot.bytes.data() + a_offset, a_bytes);
+	}
+
+	void MaterialPortEvaluation::ResetRecord(std::uint8_t a_kind)
+	{
+		out.vs.Reset();
+		out.ps.Reset();
+		out.textures.fill(nullptr);
+		out.addressModes.fill(0);
+		out.filterModes.fill(kUnwrittenFilterMode);
+		out.textureWritten = 0;
+		out.featureTextures.fill(nullptr);
+		out.kind = a_kind;
+	}
+
+	float* MaterialPortEvaluation::VSFloats() { return out.vs.floats.data(); }
+	float* MaterialPortEvaluation::PSFloats() { return out.ps.floats.data(); }
+	void MaterialPortEvaluation::SetFilterMode(std::uint32_t a_slot, std::uint32_t a_mode) { out.filterModes[a_slot] = a_mode; }
+
+	void MaterialPortEvaluation::BindTexture(std::uint32_t a_slot, ID3D11ShaderResourceView* a_view, std::uint32_t a_addressMode)
+	{
+		out.textures[a_slot] = a_view;
+		out.addressModes[a_slot] = a_addressMode;
+		out.textureWritten |= 1u << a_slot;
 	}
 }

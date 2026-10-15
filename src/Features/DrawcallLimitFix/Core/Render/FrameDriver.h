@@ -22,7 +22,7 @@ namespace DCLF
 	public:
 		static FrameDriver& Get();
 
-		/** @brief The render thread's time in the frame's DCLF points since the last report, and the occlusion maps' native frames. */
+		/** @brief The render thread's time in the frame's DCLF points since the last report. */
 		struct Counters
 		{
 			struct Timing
@@ -34,12 +34,22 @@ namespace DCLF
 				double sceneMaxMs = 0.0;
 				std::uint32_t frames = 0;
 			} timing;
-			// Per occlusion view (kOcclusionSky, kOcclusionPrecipitation): the maps left to the engine (DCLF not ready), and the frames the
-			// engine registered the map's other occluders.
-			std::array<std::uint32_t, 2> occlusionNativeFrames{};
-			std::array<std::uint32_t, 2> occlusionEngineFrames{};
 		};
 		Counters& ReportCounters() { return counters; }
+
+		/** @brief The occlusion maps' frames since the last take (Features/OcclusionMaps' report line), with what the line reads beside them now. */
+		struct OcclusionFrames
+		{
+			// Per occlusion view (kOcclusionSky, kOcclusionPrecipitation): the maps left to the engine (DCLF not ready), and the frames the
+			// engine registered the map's other occluders.
+			std::array<std::uint32_t, 2> native{};
+			std::array<std::uint32_t, 2> engine{};
+			// Per occlusion view, now: the map's phase's members the frame's set lacks (FrameView::SetLacking).
+			std::array<std::uint32_t, 2> lacking{};
+			std::uint32_t withheld = 0;  // the maps' member passes withheld (PassCapture's, last frame)
+		};
+		/** @brief Render thread, at the report: the occlusion maps' frames since the last take (reset), and the set's lacking and withheld counts now. */
+		OcclusionFrames TakeOcclusionFrames();
 
 		/**
 		 * @brief Main::Draw's early point, every frame. a_running false (DCLF not loaded or switched off): the coordinator's passes apply
@@ -72,6 +82,7 @@ namespace DCLF
 		void RunViewWork(Api::ViewPoint a_point);
 
 		Counters counters;
+		OcclusionFrames occlusionFrames;  // native and engine only: the rest is read at the take
 		std::uint32_t toggleGeneration = 0;
 		bool frameRan = false;            // a scene frame ran since the last Present
 		std::uint32_t occlusionWanted = 0;  // the maps OcclusionReady said DCLF draws this frame

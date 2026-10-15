@@ -115,7 +115,7 @@ namespace DCLF
 		enum class SnapshotChange : std::uint8_t
 		{
 			None,        // the same fields and views (the reference count aside)
-			Transforms,  // only the two texture-transform buffers (BSShaderMaterial +0xc..+0x2c, TextureTransformsOf's fields)
+			Transforms,  // only the two texture-transform buffers (BSShaderMaterial +0xc..+0x2c, the texture transforms' fields)
 			Fields,      // anything else
 		};
 		/**

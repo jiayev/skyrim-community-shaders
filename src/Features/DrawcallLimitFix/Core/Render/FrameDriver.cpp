@@ -307,7 +307,7 @@ namespace DCLF
 			return false;
 		// DCLF draws the map's members of the set this frame (none until its phase is drawn: a frame after the first that drew it).
 		const bool ready = IndirectDraws::Get().OcclusionReady(a_map);
-		counters.occlusionNativeFrames[a_map] += ready ? 0 : 1;
+		occlusionFrames.native[a_map] += ready ? 0 : 1;
 		occlusionWanted |= ready ? 1u << a_map : 0u;
 		const std::uint8_t phase = Extensions::OcclusionMapOf(a_map).phase;
 		const auto set = capture.CurrentSet();
@@ -326,8 +326,17 @@ namespace DCLF
 		// The engine's cull of the map reads the scene lists: whole again.
 		if (needed)
 			PrimaryCull::Get().RestoreSceneLists();
-		counters.occlusionEngineFrames[a_map] += needed ? 1 : 0;
+		occlusionFrames.engine[a_map] += needed ? 1 : 0;
 		return needed;
+	}
+
+	FrameDriver::OcclusionFrames FrameDriver::TakeOcclusionFrames()
+	{
+		auto frames = std::exchange(occlusionFrames, OcclusionFrames{});
+		for (std::uint32_t map = 0; map < Extensions::kOcclusionMaps; ++map)
+			frames.lacking[map] = Scene::FrameView::Get().SetLacking(Extensions::OcclusionMapOf(map).phase);
+		frames.withheld = PassCapture::Get().GetStats().occlusionWithheld;
+		return frames;
 	}
 
 	void FrameDriver::DrawOcclusion()

@@ -23,7 +23,6 @@ namespace DCLF::Diagnostics
 	void InstallReplayParity();
 	void InstallMirrorReads();
 	void InstallMirrorParity();
-	void InstallShadowVolumeParity();
 	void InstallFirstPersonFiling();
 	void InstallCommitParity();
 	void InstallMirrorWatchPlacement();

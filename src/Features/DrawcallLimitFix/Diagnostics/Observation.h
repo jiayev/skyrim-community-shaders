@@ -29,7 +29,6 @@ namespace DCLF::Diagnostics
 		bool capture = false;        // CS_DCLF_CAPTURE_PARITY: the tables against the engine's own lighting draws
 		bool engineDrawsAll = false; // CS_DCLF_PARITY_BOTH: nothing is withheld from the engine (Policy::WithholdFromEngine)
 		bool capturePoint = false;   // CS_DCLF_CAPTURE_POINT_PARITY: the colour epoch's captured bindings against the first native lighting draw
-		bool skylight = false;       // CS_DCLF_SKYLIGHT_PARITY: DCLF's occlusion maps against the engine's, texel by texel
 		bool accumulated = false;    // CS_DCLF_ACCUMULATED_PARITY: the decoded visibility and the animation gate against the engine's
 		bool foliage = false;        // CS_DCLF_FOLIAGE_PARITY (1, wind or land): the alpha-tested colour draws' pixels against the frame before's
 		bool foliageFrozen = false;  // ... with tree wind frozen (1 or land)

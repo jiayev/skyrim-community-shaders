@@ -236,10 +236,10 @@ namespace DCLF::Diagnostics
 			ankerl::unordered_dense::map<std::uint64_t, ExtrasMirror> extrasMirrors;
 			ParityCounter extras;
 		} kept;
-		// The main commits' log (CommitLog.cpp): unfilled frame buffers by register, tree LOD holes (the report's count), fade inputs
-		// varied, the culling setup logged, the epoch lines' periods.
+		// The main commits' log (CommitLog.cpp): unfilled frame buffers by register, fade inputs varied, the culling setup logged, the epoch
+		// lines' periods.
 		std::array<std::uint32_t, kTextureRegisters> unfilledFrameBuffers{};
-		std::uint32_t treeLodMissed = 0, fadeInputsVaried = 0;
+		std::uint32_t fadeInputsVaried = 0;
 		bool cullingSetupLogged = false;
 		std::array<std::uint32_t, 2> epochLines{};  // colour, Z-prepass
 

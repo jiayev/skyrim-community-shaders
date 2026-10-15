@@ -111,7 +111,6 @@ namespace DCLF::Scene
 		stats.materialsEvaluated = 0;
 		stats.classifyHits = stats.classifyChecked = stats.classifyDiffers = 0;
 		stats.derivedHits = stats.derivedChecked = stats.derivedDiffers = 0;
-		stats.decals = {};
 		stats.skinned = stats.boneRows = 0;
 		stats.projectedUV = stats.landBlend = 0;
 		stats.shadowCasters = 0;

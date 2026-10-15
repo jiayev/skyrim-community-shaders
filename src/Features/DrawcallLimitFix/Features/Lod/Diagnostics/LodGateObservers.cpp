@@ -5,7 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
+#include "Features/DrawcallLimitFix/Features/Lod/Diagnostics/LodGateEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneView.h"
 
 namespace DCLF::Features::Lod
@@ -15,7 +15,7 @@ namespace DCLF::Features::Lod
 		using V = Diagnostics::SceneView;
 		namespace G = Gates;
 
-		void OnFlipsPublished(const Diagnostics::On<Diagnostics::ScenePoint::GateFlipsPublished>&)
+		void OnFlipsPublished(const GateFlipsPublished&)
 		{
 			// A hole here is the commit's or the revocation's, one only at the release the hand-over's.
 			const auto& store = Scene::Coordinator::Get();
@@ -33,14 +33,14 @@ namespace DCLF::Features::Lod
 					}
 		}
 
-		void OnReleasing(const Diagnostics::GateReleasing& a_event)
+		void OnReleasing(const GateReleasing& a_event)
 		{
 			// Every incoming geometry claimed with the flip's phases, no outgoing claimed. A later publication's legitimate change of an
 			// incoming member reads as a hole here too.
 			auto& rs = G::Releases().observed;
 			++rs.checked;
 			for (const auto& [geometry, phases] : a_event.incoming)
-				if (const std::uint8_t installedPhases = a_event.claims.PhasesOf(geometry); installedPhases != phases) {
+				if (const std::uint8_t installedPhases = V::ClaimedPhases(a_event.claims, geometry); installedPhases != phases) {
 					// A refused flip's engine already moved on (forced, or a later gate superseded it), so a later publication may have
 					// retired its incoming members: counted apart, not a hole.
 					if (!a_event.released) {
@@ -52,7 +52,7 @@ namespace DCLF::Features::Lod
 						rs.firstHole = fmt::format("gate {}: geometry {} claimed {:#x}, flipped {:#x}", a_event.token, static_cast<const void*>(geometry), installedPhases, phases);
 				}
 			for (const auto* geometry : a_event.outgoing)
-				if (const std::uint8_t installedPhases = a_event.claims.PhasesOf(geometry)) {
+				if (const std::uint8_t installedPhases = V::ClaimedPhases(a_event.claims, geometry)) {
 					++rs.coverage;
 					if (rs.firstCoverage.empty())
 						rs.firstCoverage = fmt::format("gate {}: geometry {} claimed {:#x}", a_event.token, static_cast<const void*>(geometry), installedPhases);
@@ -62,7 +62,7 @@ namespace DCLF::Features::Lod
 
 	void Gates::SubscribeGateObservers()
 	{
-		Diagnostics::Subscribe<Diagnostics::ScenePoint::GateFlipsPublished>(OnFlipsPublished);
-		Diagnostics::Subscribe<Diagnostics::GateReleasing>(OnReleasing);
+		Diagnostics::Subscribe<GateFlipsPublished>(OnFlipsPublished);
+		Diagnostics::Subscribe<GateReleasing>(OnReleasing);
 	}
 }

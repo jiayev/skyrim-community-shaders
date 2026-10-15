@@ -21,7 +21,7 @@ namespace DCLF::Features::Effects
 		 */
 		std::array<float, 4> SampleEffectCamera()
 		{
-			static const REL::Relocation<const std::byte* const*> camera{ REL::Offset(Engine::Address::kEffectCamera) };
+			static const REL::Relocation<const std::byte* const*> camera{ REL::Offset(Address::kEffectCamera) };
 			const std::byte* current = *camera.get();
 			if (!current)
 				return {};
@@ -38,7 +38,7 @@ namespace DCLF::Features::Effects
 		 */
 		std::array<float, 4> SampleEffectBlood()
 		{
-			static const REL::Relocation<const float*> globals{ REL::Offset(Engine::Address::kEffectBlood) };
+			static const REL::Relocation<const float*> globals{ REL::Offset(Address::kEffectBlood) };
 			const float* blood = globals.get();
 			return { 0.0f, blood[0], blood[1], 0.0f };
 		}

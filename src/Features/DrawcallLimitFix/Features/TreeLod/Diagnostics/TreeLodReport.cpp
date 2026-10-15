@@ -1,10 +1,12 @@
 // Tree LOD's report lines: its draws and two-phase cull in the draws' async work (ReportPoint::AsyncWorkFamilies), and its mirror's line
-// with its parity's among the render thread's scene lines (ReportPoint::SceneFrame).
+// with its parity's among the render thread's scene lines (ReportPoint::SceneFrame); and the depth commits' holes' log (always on), which
+// the draws' line counts.
 
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodEvents.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodParity.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsView.h"
 
 #include <string>
@@ -13,6 +15,16 @@ namespace DCLF::Features::TreeLod
 {
 	namespace
 	{
+		// The depth commits that could not draw a withheld frame (render thread, LogMissed): the draws' line's count.
+		std::uint32_t missedCommits = 0;
+
+		void LogMissed(const TreeLodMissed& a_missed)
+		{
+			if (missedCommits++ < 8)
+				logger::warn("[DCLF] tree LOD: frame {} withheld the engine's passes but the depth commit could not draw (tables {} of {} shape slots)", a_missed.frame,
+					a_missed.shapeSlots, a_missed.bufferSlots);
+		}
+
 		/** @brief The cull's line (newline-terminated): in view, drawn by phase 1, occluded by the last frame's HZB, brought back by the rebuilt one. */
 		void CullLine(TreeLodCounts& a_counts, std::string& a_text)
 		{
@@ -35,7 +47,7 @@ namespace DCLF::Features::TreeLod
 			if (!tables || !tables->uploads)
 				return;
 			const auto& adopted = impl->Adopted();
-			const auto missed = Diagnostics::DrawsState::Get().treeLodMissed;
+			const auto missed = missedCommits;
 			a_text += fmt::format("[DCLF] tree LOD draws: {} ({} depth commits, {} shape slots sent; tables {} shape and {} mesh slots; {} commits that could not draw a "
 								  "withheld frame){}\n",
 				IndirectDraws::Get().DrawFamilyOwned(Api::DrawFamily::TreeInstances) ? "DCLF's" : "the engine's", tables->uploads, tables->slotsSent,
@@ -72,5 +84,7 @@ namespace DCLF::Features::TreeLod
 		// line, before the mirror watch's.
 		a_context.RegisterReportLines({ .name = "tree-lod draws", .point = Api::ReportPoint::AsyncWorkFamilies, .text = &DrawsText });
 		a_context.RegisterReportLines({ .name = "tree-lod mirror", .point = Api::ReportPoint::SceneFrame, .text = &MirrorText });
+		// The depth commits' holes (TreeLodTables.cpp's commit hook), logged whatever the observers.
+		Diagnostics::Subscribe<TreeLodMissed>(&LogMissed);
 	}
 }

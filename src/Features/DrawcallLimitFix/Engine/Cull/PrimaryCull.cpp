@@ -928,7 +928,7 @@ namespace DCLF
 		std::sort(ownDirty.begin(), ownDirty.end());
 		ownDirty.erase(std::unique(ownDirty.begin(), ownDirty.end()), ownDirty.end());
 		std::vector<std::uint32_t> joined;
-		std::vector<const RE::NiAVObject*> animatedLeft, animatedJoined, treesLeft, treesJoined;
+		std::vector<const RE::NiAVObject*> animatedLeft, animatedJoined;
 		bool ownedMoved = false;
 		const auto erase = [](auto& a_list, auto& a_position, const void* a_root) {
 			const auto it = a_position.find(a_root);
@@ -963,8 +963,6 @@ namespace DCLF
 					erase(standInList, standInPosition, old);
 					animatedLeft.push_back(old);
 				}
-				if (was == kOwnTree)
-					treesLeft.push_back(old);
 			}
 			ownState[e] = state;
 			ownRoot[e] = root;
@@ -988,14 +986,12 @@ namespace DCLF
 					standInList.push_back(root);
 				animatedJoined.push_back(root);
 			}
-			if (state == kOwnTree)
-				treesJoined.push_back(root);
 		}
 		// The coordinator takes the owned set whole (latest wins, applied by its scene pass).
 		if (ownedMoved)
 			Scene::FrameView::Get().SetFadeRootsOwned(ownedFade);
-		if (!animatedLeft.empty() || !animatedJoined.empty() || !treesLeft.empty() || !treesJoined.empty())
-			Extensions::StandInRootsChanged({ animatedLeft, animatedJoined, treesLeft, treesJoined });
+		if (!animatedLeft.empty() || !animatedJoined.empty())
+			Extensions::StandInRootsChanged({ animatedLeft, animatedJoined });
 	}
 
 	void PrimaryCull::ClearFadeOwnership()

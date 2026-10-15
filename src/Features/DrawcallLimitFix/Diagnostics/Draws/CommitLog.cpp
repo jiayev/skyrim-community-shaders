@@ -1,5 +1,5 @@
-// The main commits' warnings and setup log (always on, render thread): frame buffers the mirror cannot fill, tree LOD holes, the fade
-// updates' varied inputs, a draw past its buffers, and the culling setup (once) with each epoch's viewport and ViewProj z row (periodic).
+// The main commits' warnings and setup log (always on, render thread): frame buffers the mirror cannot fill, the fade updates' varied
+// inputs, a draw past its buffers, and the culling setup (once) with each epoch's viewport and ViewProj z row (periodic).
 
 #include "DrawsState.h"
 #include "Events.h"
@@ -13,13 +13,6 @@ namespace DCLF::Diagnostics
 		if ((unfilled++ % 600) == 0)
 			logger::warn("[DCLF] frame buffer t{} ({} elements of {} bytes) not filled: the mirror holds {} bytes of it ({} times)", a_unfilled.textureRegister,
 				a_unfilled.elements, a_unfilled.stride, a_unfilled.mirrorBytes, unfilled);
-	}
-
-	void LogTreeLodMissed(const TreeLodMissed& a_missed)
-	{
-		if (DrawsState::Get().treeLodMissed++ < 8)
-			logger::warn("[DCLF] tree LOD: frame {} withheld the engine's passes but the depth commit could not draw (tables {} of {} shape slots)", a_missed.frame,
-				a_missed.shapeSlots, a_missed.bufferSlots);
 	}
 
 	void LogFadeInputsVaried(const FadeInputsVaried& a_varied)

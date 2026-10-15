@@ -51,13 +51,6 @@ namespace DCLF::Diagnostics
 		std::size_t mirrorBytes;
 	};
 
-	/** @brief The depth commit could not draw tree LOD on a frame that withheld the engine's passes (a hole): the tables' shape slots and the buffer's. */
-	struct TreeLodMissed
-	{
-		std::uint32_t frame;
-		std::uint64_t shapeSlots, bufferSlots;
-	};
-
 	/** @brief The depth commit's fade updates of `frame`, from the animation job, had differing inputs: the first's stand for all. */
 	struct FadeInputsVaried
 	{

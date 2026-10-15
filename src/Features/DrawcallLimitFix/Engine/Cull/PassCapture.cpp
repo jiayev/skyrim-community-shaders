@@ -358,7 +358,7 @@ namespace DCLF
 			return false;
 		// A shadow view's renderers (the focus views' among them): the set's casters. A pass into any other renderer
 		// (reflections, cubemaps) is never withheld here; the main camera's are WithholdMain's, an OwnRenderers view's WithholdOwn's.
-		// What the engine registers into a covered focus view, for its observer (Diagnostics::ShadowViewTally: against its target's fade root).
+		// What the engine registers into a covered focus view, for its observer (Features/Shadows/Local's focus parity: against its target's fade root).
 		if (Diagnostics::Armed<Diagnostics::FocusRegistration>())
 			if (const auto focus = std::atomic_load(&focusRenderers); focus && !focus->empty())
 				if (const auto it = focus->find(a_batch); it != focus->end())

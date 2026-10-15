@@ -43,8 +43,7 @@ namespace DCLF::Diagnostics
 			InstallFirstPersonFiling();
 			InstallCommitParity();
 		}
-		if (o.claimsOrScene)
-			InstallShadowVolumeParity();
+		// (Features/Shadows/Local's shadow volume parity follows under either parity: the feature's install.)
 		// CS_DCLF_CAPTURE_PARITY: the materials written each frame, for its follow-ups.
 		if (o.capture)
 			Subscribe<ScenePoint::AccumulatePrepared>([](const On<ScenePoint::AccumulatePrepared>&) { CaptureParity::Get().DrainWrittenMaterials(); });

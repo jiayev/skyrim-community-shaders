@@ -6,7 +6,6 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectDescriptors.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 
 #include <bit>
 #include <cstring>
@@ -54,85 +53,77 @@ namespace DCLF::Features::Effects
 		 * @brief BSEffectShader::SetupMaterial (0x1414ea6c0, the non-membrane half) and SetupTechnique's filter modes for an effect material's
 		 * snapshot, into a record of kind kMaterialKindEffect (EffectVSLayout / EffectPSLayout order). LightingInfluence.y holds
 		 * softFalloffDepth itself (the pixel stage divides the frame's near * far by it). False: a membrane pass, a greyscale pass without
-		 * its palette, or a snapshot that is not an effect material's.
+		 * its palette, or a snapshot that is not an effect material's. The vanilla frame's sources alone (the snapshot's and the record's
+		 * through the evaluation's calls: Core/Extensions/MaterialPorts.h).
 		 */
-		bool EvaluateEffect(const MaterialPort::MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const MaterialPort::VanillaFrame& a_frame, MaterialRecord& a_out)
+		bool EvaluateEffect(Api::MaterialPortEvaluation& a_port)
 		{
-			if (a_snapshot.port != kMaterialKindEffect || a_snapshot.size < kEffectMaterialBytes || !a_frame.sampled)
+			const std::uint32_t pass = a_port.passDescriptor;
+			if (a_port.Port() != kMaterialKindEffect || a_port.Size() < kEffectMaterialBytes || !a_port.FrameSampled())
 				return false;
 			// The membrane half (the TESEffectShader membranes: normal and noise textures, no constants) is not ported.
-			if (a_passDescriptor & EffectFlag::Membrane)
+			if (pass & EffectFlag::Membrane)
 				return false;
-			a_out.vs.Reset();
-			a_out.ps.Reset();
-			a_out.textures.fill(nullptr);
-			a_out.addressModes.fill(0);
-			a_out.filterModes.fill(kUnwrittenFilterMode);
-			a_out.textureWritten = 0;
-			a_out.featureTextures.fill(nullptr);
-			a_out.kind = kMaterialKindEffect;
+			a_port.ResetRecord(kMaterialKindEffect);
 
 			const auto& vs = EffectVSLayout();
 			const auto& ps = EffectPSLayout();
-			const auto bits = [&](std::size_t a_offset) { return a_snapshot.At<std::uint32_t>(a_offset); };
+			float* const vsFloats = a_port.VSFloats();
+			float* const psFloats = a_port.PSFloats();
+			const auto bits = [&](std::size_t a_offset) { return a_port.At<std::uint32_t>(a_offset); };
 			const auto setPS = [&](std::uint32_t a_variable, std::uint32_t a_component, float a_value) {
-				a_out.ps.floats[ps.offset[a_variable] + a_component] = a_value;
+				psFloats[ps.offset[a_variable] + a_component] = a_value;
 			};
 			const auto copyVS = [&](std::uint32_t a_variable, std::uint32_t a_component, std::size_t a_offset) {
 				const std::uint32_t value = bits(a_offset);
-				std::memcpy(&a_out.vs.floats[vs.offset[a_variable] + a_component], &value, sizeof(value));
+				std::memcpy(&vsFloats[vs.offset[a_variable] + a_component], &value, sizeof(value));
 			};
 			const auto copyPS = [&](std::uint32_t a_variable, std::uint32_t a_component, std::size_t a_offset) {
 				const std::uint32_t value = bits(a_offset);
-				std::memcpy(&a_out.ps.floats[ps.offset[a_variable] + a_component], &value, sizeof(value));
+				std::memcpy(&psFloats[ps.offset[a_variable] + a_component], &value, sizeof(value));
 			};
 
-			if (a_passDescriptor & EffectFlag::Texture) {
+			if (pass & EffectFlag::Texture) {
 				// SetupTechnique: t0 anisotropic. SetupMaterial: the source texture with the material's clamp mode, when there is one (the
 				// engine binds its renderer texture's view, null without one), and TexcoordOffset from the buffer the frame reads.
-				a_out.filterModes[0] = kFilterAnisotropic;
-				if (a_snapshot.HasTexture(kSourceTexture)) {
-					a_out.textures[0] = a_snapshot.View(kSourceTexture);
-					a_out.addressModes[0] = a_snapshot.At<std::uint8_t>(kClampMode);
-					a_out.textureWritten |= 1u << 0;
-				}
-				const std::size_t buffer = std::size_t(a_frame.textureTransformBuffer & 1u) * 8;
+				a_port.SetFilterMode(0, kFilterAnisotropic);
+				if (a_port.HasTexture(kSourceTexture))
+					a_port.BindTexture(0, a_port.View(kSourceTexture), a_port.At<std::uint8_t>(kClampMode));
+				const std::size_t buffer = std::size_t(a_port.TextureTransformBuffer() & 1u) * 8;
 				copyVS(kEffectVSTexcoordOffset, 0, kTexcoordOffset + buffer);
 				copyVS(kEffectVSTexcoordOffset, 1, kTexcoordOffset + 4 + buffer);
 				copyVS(kEffectVSTexcoordOffset, 2, kTexcoordScale + buffer);
 				copyVS(kEffectVSTexcoordOffset, 3, kTexcoordScale + 4 + buffer);
 			}
-			if (a_passDescriptor & (EffectFlag::GrayscaleToColor | EffectFlag::GrayscaleToAlpha)) {
+			if (pass & (EffectFlag::GrayscaleToColor | EffectFlag::GrayscaleToAlpha)) {
 				// The greyscale palette: dereferenced without a test by the engine (a null one would crash its draw), so not one DCLF draws.
-				if (!a_snapshot.HasTexture(kGreyscaleTexture))
+				if (!a_port.HasTexture(kGreyscaleTexture))
 					return false;
-				a_out.textures[4] = a_snapshot.View(kGreyscaleTexture);
-				a_out.addressModes[4] = 0;
-				a_out.filterModes[4] = kFilterBilinear;
-				a_out.textureWritten |= 1u << 4;
+				a_port.BindTexture(4, a_port.View(kGreyscaleTexture), 0);
+				a_port.SetFilterMode(4, kFilterBilinear);
 			}
 
 			// BaseColor: the base colour times its scale, or with GrayscaleToColor the raw colour and the scale apart (the palette's).
-			const float scale = a_snapshot.At<float>(kBaseColorScale);
-			if (!(a_passDescriptor & EffectFlag::GrayscaleToColor)) {
-				setPS(kEffectPSBaseColor, 0, scale * a_snapshot.At<float>(kBaseColor));
-				setPS(kEffectPSBaseColor, 1, a_snapshot.At<float>(kBaseColor + 4) * scale);
-				setPS(kEffectPSBaseColor, 2, a_snapshot.At<float>(kBaseColor + 8) * scale);
+			const float scale = a_port.At<float>(kBaseColorScale);
+			if (!(pass & EffectFlag::GrayscaleToColor)) {
+				setPS(kEffectPSBaseColor, 0, scale * a_port.At<float>(kBaseColor));
+				setPS(kEffectPSBaseColor, 1, a_port.At<float>(kBaseColor + 4) * scale);
+				setPS(kEffectPSBaseColor, 2, a_port.At<float>(kBaseColor + 8) * scale);
 				copyPS(kEffectPSBaseColor, 3, kBaseColor + 12);
 			} else {
 				for (std::uint32_t c = 0; c < 4; ++c)
 					copyPS(kEffectPSBaseColor, c, kBaseColor + 4 * c);
 				copyPS(kEffectPSBaseColorScale, 0, kBaseColorScale);
 			}
-			setPS(kEffectPSLightingInfluence, 0, static_cast<float>(a_snapshot.At<std::uint8_t>(kLightingInfluence)) * std::bit_cast<float>(kInverse255Bits));
-			if (a_passDescriptor & EffectFlag::Soft) {
+			setPS(kEffectPSLightingInfluence, 0, static_cast<float>(a_port.At<std::uint8_t>(kLightingInfluence)) * std::bit_cast<float>(kInverse255Bits));
+			if (pass & EffectFlag::Soft) {
 				// The engine writes near * far / softFalloffDepth, the camera's planes as SetupTechnique left them. DCLF keeps the depth itself
 				// here and the pixel stage divides the frame's product by it (Effect.hlsl, DCLF_BINDLESS: the same product and quotient), so
 				// the record does not change with the camera.
 				copyPS(kEffectPSLightingInfluence, 1, kSoftFalloffDepth);
 				copyVS(kEffectVSSoftMaterialParams, 0, kSoftFalloffDepth);
 			}
-			if (a_passDescriptor & EffectFlag::Falloff)
+			if (pass & EffectFlag::Falloff)
 				for (std::uint32_t c = 0; c < 4; ++c)
 					copyVS(kEffectVSFalloffData, c, kFalloff + 4 * c);
 			return true;
@@ -152,7 +143,7 @@ namespace DCLF::Features::Effects
 		bool EvaluateEffectPort(Api::MaterialPortEvaluation& a_evaluation)
 		{
 			// No Community Shaders hook on BSEffectShader's SetupMaterial: the vanilla frame's sources alone.
-			return EvaluateEffect(a_evaluation.snapshot, a_evaluation.passDescriptor, a_evaluation.frame.vanilla, a_evaluation.out);
+			return EvaluateEffect(a_evaluation);
 		}
 	}
 
@@ -161,6 +152,7 @@ namespace DCLF::Features::Effects
 		// The first port registered (no feature before this one registers one), so kind 1: the kind its records carry (kMaterialKindEffect).
 		static_assert(kMaterialKindEffect == 1);
 		static const Api::MaterialPortContribution port{
+			.name = "effect",
 			.shaderType = static_cast<std::uint8_t>(RE::BSShader::Type::Effect),
 			.objectClass = Api::ObjectClass::Effect,
 			.propertyRtti = []() -> const void* { return REL::Relocation<const RE::NiRTTI*>{ RE::BSEffectShaderProperty::Ni_RTTI }.get(); },
@@ -184,6 +176,7 @@ namespace DCLF::Features::Effects
 			.shading = &SampleEffectShading,
 			.variants = &EffectVariants,
 			.variantNames = kEffectVariantNames,
+			.emissiveOf = &EffectEmissive,
 		};
 		if (a_context.RegisterMaterialPort(port) != kMaterialKindEffect)
 			stl::report_and_fail("Drawcall Limit Fix: the Effect port did not take material kind 1 (a feature before Effects registered a port)");

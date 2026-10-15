@@ -53,7 +53,6 @@ namespace DCLF
 		CaptureParity,
 		ParityBoth,
 		CapturePointParity,
-		SkylightParity,
 		AccumulatedParity,
 
 		// Diagnostics: stats, shader debugging, and the probes of open investigations (dclf-open-defects.md).
@@ -66,7 +65,6 @@ namespace DCLF
 		Census,
 		MirrorWatch,
 		TableStart,
-		SkylightDumpDir,
 		DepthTrace,
 		DrawTrace,
 		TargetProbe,

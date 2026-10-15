@@ -28,9 +28,6 @@ namespace DCLF::Policy
 	/** @brief The engine's scene lists are kept as DCLF's filter leaves them on frame a_frame (else the engine builds them whole). Normal path: true. */
 	bool FilterSceneLists(std::uint32_t a_frame);
 
-	/** @brief The engine renders occlusion map a_map (0 Skylighting's, 1 the precipitation mask) whole this frame, before DCLF's, as a reference. Normal path: false. */
-	bool RenderOcclusionReference(std::uint32_t a_map);
-
 	/** @brief The shadow views copy the engine's per-frame block even where DCLF owns the view's camera. Normal path: false. */
 	bool CaptureEngineShadowBlock();
 

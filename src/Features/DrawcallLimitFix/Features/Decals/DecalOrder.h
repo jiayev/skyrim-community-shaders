@@ -6,6 +6,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -57,12 +58,22 @@ namespace DCLF::Features::Decals
 		const RE::NiAVObject* decalNode = nullptr;
 	};
 
+	/** @brief CS_DCLF_PERSISTENT_PARITY: the kept order against one made whole, summed until the report's order parity line takes it. */
+	struct DecalOrderParity
+	{
+		std::uint64_t checks = 0, decals = 0, differ = 0, staleKeys = 0, unordered = 0;
+		std::string first, staleFirst;
+	};
+
 	/**
 	 * @brief The member decals (the component's state, scene lane): each member decal's key, the changes since the last order, the kept
-	 * order and the ordered set.
+	 * order and the ordered set; with the walk's candidates and the parity's sums, for the report.
 	 */
 	struct DecalOrder
 	{
+		// Decal candidates this walk, by group (the patch's chain >> 60, less one): the accumulate phase's patches since the walk began.
+		std::array<std::uint32_t, 3> candidates{};
+		DecalOrderParity parity;
 		// Member decals: object -> its chain, group, technique and sub-pass; joined and left with the membership.
 		ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> memberDecals;
 		// Decals changed since the last OrderDecals, and whether to rebuild the order whole.
@@ -94,11 +105,12 @@ namespace DCLF::Features::Decals
 		bool& checked;
 	};
 
-	/** @brief The kept order brought up to date, on a pass an observer checks it (OrderDue). */
+	/** @brief The kept order brought up to date, on a pass an observer checks it (OrderDue): the parity sums into `parity`. */
 	struct Ordered
 	{
 		const DecalOrder& order;
 		const SceneTables& tables;
 		const SceneMirror& mirror;
+		DecalOrderParity& parity;
 	};
 }

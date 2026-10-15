@@ -48,7 +48,7 @@ namespace DCLF::Api
 		bool DenseWalk() const;
 		/**
 		 * @brief The fade node of a_slot's property as the mirror holds it (null: no geometry, no property record or none), and the node's
-		 * capture kind (SceneCapture::kKind*; 0 when the mirror holds no record of it). Reads no engine memory.
+		 * capture kind (Api::kMirroredKind*; 0 when the mirror holds no record of it). Reads no engine memory.
 		 */
 		const void* MirroredFadeNode(std::uint32_t a_slot, std::uint32_t& a_kind) const;
 		/**
@@ -179,8 +179,8 @@ namespace DCLF::Api
 	};
 
 	/**
-	 * @brief The delta walk's scheduling (DeltaWalk): whether it is a full evaluation, and what the component's events did, counted into
-	 * the walk's statistics (the scene delta line).
+	 * @brief The delta walk's scheduling (DeltaWalk): whether it is a full evaluation, and what the component's events did, the component's
+	 * own counts (for its report lines).
 	 */
 	class WalkScheduling
 	{

@@ -10,6 +10,18 @@
 
 namespace DCLF::Features::TreeLod
 {
+	// Tree LOD's cull (TreeLodCullCS.hlsl) in the depth segment's two phases and a trees view's faces: a thread per instance (phase 1)
+	// or retest entry (2), Draws::kTreeLodCullGroup a group.
+	inline constexpr const char* kTreeLodCullShader = "DrawcallLimitFix/Features/TreeLod/TreeLodCullCS.hlsl";
+	struct TreeLodCullConstants
+	{
+		std::uint32_t shapesIndex = 0, instancesIndex = 0, visibleIndex = 0, latchIndex = 0, latchOffset = 0, drawIndex = 0;
+		std::uint32_t phase = 0;
+		std::uint32_t retestOffset = 0;  // bytes into the visible list
+		std::uint32_t hzbIndex = 0, hzbSizePacked = 0, hzbMips = 0, padding = 0;
+	};
+	inline constexpr std::uint32_t kTreeLodCullConstantWords = sizeof(TreeLodCullConstants) / 4;
+
 	/**
 	 * @brief Tree LOD cull counts (TreeLodReadbackPass), read back per frame slot on the graph host's thread.
 	 */

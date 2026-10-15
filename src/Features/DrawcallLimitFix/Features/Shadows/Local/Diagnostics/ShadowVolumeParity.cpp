@@ -1,13 +1,13 @@
 // CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the local shadow lights' volumes (the Lights board's cull planes, which LocalShadowLights samples)
 // against their culling processes' after the cull, reported every 3000 volumes.
 
-#include "SceneObservers.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/Local.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
-namespace DCLF::Diagnostics
+namespace DCLF::Features::Shadows::Local
 {
 	namespace
 	{
@@ -33,7 +33,7 @@ namespace DCLF::Diagnostics
 		 * @brief A descriptor's volume as the Lights board has it against its culling process after the cull: its planes, and its custom planes
 		 * when it has them.
 		 */
-		void OnShadowVolume(const ShadowVolumeSampled& a_event)
+		void OnShadowVolume(const Diagnostics::ShadowVolumeSampled& a_event)
 		{
 			const auto& a_view = a_event.view;
 			const auto& a_process = a_event.process;
@@ -63,8 +63,8 @@ namespace DCLF::Diagnostics
 		}
 	}
 
-	void InstallShadowVolumeParity()
+	void SubscribeShadowVolumeParity()
 	{
-		Subscribe<ShadowVolumeSampled>(OnShadowVolume);
+		Diagnostics::Subscribe<Diagnostics::ShadowVolumeSampled>(OnShadowVolume);
 	}
 }

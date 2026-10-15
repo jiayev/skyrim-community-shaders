@@ -754,7 +754,7 @@ namespace DCLF
 			return fail("blocks have no device address");
 		// The forward part draws through the main colour signature with an explicit preprocess, as ForwardDrawPass.
 		if (traits.forwardPart)
-			state->preprocessForward = PreprocessStates::Create(device, host->FrameSlots(), "the first-person forward part");
+			state->preprocessForward = PreprocessStates::Create(device, host->FrameSlots(), fmt::format("the {} forward part", traits.name).c_str());
 		v.resources = std::move(state);
 		logger::info("[DCLF] {} graph resources created", traits.name);
 		PostRevisionInputs();
@@ -763,11 +763,13 @@ namespace DCLF
 
 	bool IndirectDraws::Impl::ImportViewColourTarget(ViewKind a_kind, ID3D11Texture2D* a_texture)
 	{
-		// The reflection's: the engine's cube target, its faces the epoch's (its log lines name it).
+		// A ColourWithOwnDepth view's (the reflection's: the engine's cube target, its faces the epoch's); its labels and log lines are its
+		// shape's name and target.
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto& view = View(a_kind);
 		if (!view.resources || !host || !a_texture)
 			return false;
+		const auto& traits = TraitsOf(a_kind);
 		auto& r = *view.resources;
 		if (r.target && r.targetTexture == a_texture)
 			return true;
@@ -779,11 +781,11 @@ namespace DCLF
 		desc.channels = 4;
 		desc.hasRTV = true;
 		desc.rtvFormat = desc.format;
-		auto cube = ImportImage(host->GetDesc().device, info.image, desc, "DCLF reflection cube");
+		auto cube = ImportImage(host->GetDesc().device, info.image, desc, fmt::format("DCLF {} {}", traits.name, traits.target).c_str());
 		if (!cube) {
 			static std::uint32_t logged = 0;
 			if (logged++ < 4)
-				logger::warn("[DCLF] the reflection cube could not be imported (not in the general layout?); the faces stay native");
+				logger::warn("[DCLF] the {} {} could not be imported (not in the general layout?); the faces stay native", traits.name, traits.target);
 			return false;
 		}
 		// DCLF's own depth for the faces, at the engine's precision (its depth target 6 is R24G8).
@@ -794,21 +796,22 @@ namespace DCLF
 		depthDesc.hasDSV = true;
 		depthDesc.dsvFormat = depthDesc.format;
 		r.depth = org::PixelBuffer::CreateSharedUnmaterialized(depthDesc);
-		r.depth->SetName("cs.dclf.reflection.depth");
+		r.depth->SetName(fmt::format("{}.depth", traits.prefix));
 		r.target = std::move(cube);
 		r.targetTexture = a_texture;
 		r.width = info.image.extent.width;
 		r.height = info.image.extent.height;
 		host->AddExtension(kViewSlots[ViewIndex(a_kind)].extensionId, [state = view.resources] { return MakeViewExtension(state); });
-		logger::info("[DCLF] reflection cube imported: {}x{}, {} faces, format {}", r.width, r.height, info.image.arrayLayers, static_cast<int>(view.targets.colour));
+		logger::info("[DCLF] {} {} imported: {}x{}, {} faces, format {}", traits.name, traits.target, r.width, r.height, info.image.arrayLayers, static_cast<int>(view.targets.colour));
 		PostRevisionInputs();
 		return true;
 	}
 
 	bool IndirectDraws::Impl::ImportViewDepthTarget(ViewKind a_kind)
 	{
-		// kPOST_ZPREPASS_COPY, the first-person colour pass's depth (FUN_1414cb6d0: FUN_140e4fe00(manager, 7, ...)), imported in its
-		// DSV's format; the extension is added with it and again when the main resources change.
+		// A DepthTarget view's: kPOST_ZPREPASS_COPY (the first person's: its colour pass's depth, FUN_1414cb6d0: FUN_140e4fe00(manager, 7,
+		// ...)), imported in its DSV's format; the extension is added with it and again when the main resources change. Its labels and log
+		// lines are its shape's name and its slot's key group name.
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto* renderer = globals::game::renderer;
 		auto& view = View(a_kind);
@@ -832,16 +835,18 @@ namespace DCLF
 			desc.channels = 1;
 			desc.hasDSV = true;
 			desc.dsvFormat = desc.format;
-			auto imported = ImportImage(host->GetDesc().device, info.image, desc, "DCLF first-person depth (kPOST_ZPREPASS_COPY)");
+			const auto& traits = TraitsOf(a_kind);
+			auto imported = ImportImage(host->GetDesc().device, info.image, desc, fmt::format("DCLF {} depth (kPOST_ZPREPASS_COPY)", traits.name).c_str());
 			if (!imported) {
 				static std::uint32_t logged = 0;
 				if (logged++ < 4)
-					logger::warn("[DCLF] kPOST_ZPREPASS_COPY could not be imported (not in the general layout?); first person stays native");
+					logger::warn("[DCLF] kPOST_ZPREPASS_COPY could not be imported (not in the general layout?); {} stays native",
+						kKeyGroupNames[kViewSlots[ViewIndex(a_kind)].keyGroup]);
 				return false;
 			}
 			r.target = std::move(imported);
 			r.targetTexture = copy.texture;
-			logger::info("[DCLF] first-person depth imported: {}x{}, format {}", info.image.extent.width, info.image.extent.height, static_cast<int>(dsvDesc.Format));
+			logger::info("[DCLF] {} depth imported: {}x{}, format {}", traits.name, info.image.extent.width, info.image.extent.height, static_cast<int>(dsvDesc.Format));
 		}
 		r.rebuildPending = false;
 		host->AddExtension(kViewSlots[ViewIndex(a_kind)].extensionId, [state = view.resources] { return MakeViewExtension(state); });

@@ -160,8 +160,6 @@ namespace DCLF::Scene
 			std::uint32_t walks = 0, full = 0;
 			std::uint64_t evaluated = 0, perFrame = 0, pending = 0, property = 0, node = 0, roots = 0, geometryDirty = 0, restored = 0, moved = 0, kept = 0;
 			std::uint64_t propertyEvents = 0, nodeEvents = 0;
-			// The components' events, in-place updates and writes (ComponentsScheduling; Features/Faces' heads' publications).
-			std::uint64_t facePublished = 0, faceUpdated = 0, faceWritten = 0;
 			std::uint64_t switchEvents = 0, switchChanges = 0, switchCatchUps = 0, switchReclassified = 0, attachCatchUps = 0;
 			std::uint64_t live = 0;
 			std::uint32_t evaluatedMax = 0;

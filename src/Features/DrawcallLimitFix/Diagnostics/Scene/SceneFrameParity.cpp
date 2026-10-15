@@ -75,11 +75,11 @@ namespace DCLF::Diagnostics
 					const std::uint32_t i = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
 					if (i >= view.pipelines.size())
 						continue;
-					// The Effect port: an effect key's technique row is the plain technique's (Effect.hlsl, DCLF_BINDLESS reads none of it): the
-					// check leaves it out.
-					const bool effectKey = KeyFamily(view.pipelines[i].rasterFlags) == Api::ProgramFamily::Effect;
+					// A program family's key (the Effect port's): its technique row is the plain technique's (its family's shader reads none of
+					// it: Effect.hlsl, DCLF_BINDLESS): the check leaves it out.
+					const bool familyKey = KeyFamily(view.pipelines[i].rasterFlags) != Api::ProgramFamily::Count;
 					if (const std::uint32_t r = i < view.pipelineTechnique.size() ? view.pipelineTechnique[i] : ~0u;
-						!effectKey && r < techniqueChecked.size() && !techniqueChecked[r] && view.techniqueConstants[r].valid) {
+						!familyKey &&r < techniqueChecked.size() && !techniqueChecked[r] && view.techniqueConstants[r].valid) {
 						techniqueChecked[r] = 1;
 						const auto& row = view.techniqueConstants[r];
 						TechniqueConstants reference;

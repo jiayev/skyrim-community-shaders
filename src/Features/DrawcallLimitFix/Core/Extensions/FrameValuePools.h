@@ -56,6 +56,11 @@ namespace DCLF::Api
 		const FrameGlobals* globals = nullptr;       // the frame's engine globals (null: none captured)
 		const std::shared_ptr<const void>* input = nullptr;  // what the pool's kick handed this frame (FrameValueInput::input)
 
+		/**
+		 * @brief The texture-transform buffer the frame's shaders read (the frame's capture of it, after Main::Update's flip: the engine's
+		 * index as captured; 0 without globals). FrameValuePools.cpp.
+		 */
+		std::uint32_t TextureTransformBuffer() const;
 		/** @brief The kick's input as the pool's type (null: none). */
 		template <class T>
 		const T* Input() const
@@ -98,4 +103,13 @@ namespace DCLF::Api
 		std::size_t pool = 0;
 		std::atomic<std::uint64_t>* seeded = nullptr;
 	};
+}
+
+namespace DCLF::Extensions
+{
+	/**
+	 * @brief Render thread, from FrameValues::Kick until the next: the descriptor of a_pool's frame backing the frame's GPU work reads
+	 * (0 without a producer: FrameValues::PoolIndex). FrameValuePools.cpp.
+	 */
+	std::uint32_t FrameValuePoolIndex(Api::FrameValuePoolId a_pool);
 }

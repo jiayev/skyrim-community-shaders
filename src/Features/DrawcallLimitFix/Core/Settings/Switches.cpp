@@ -98,7 +98,7 @@ namespace DCLF
 			{ CaptureParity, "CS_DCLF_CAPTURE_PARITY", P, N, false, "1: the tables against the engine's own lighting draws (run with CS_DCLF_PARITY_BOTH=1, so the engine draws what DCLF draws)" },
 			{ ParityBoth, "CS_DCLF_PARITY_BOTH", P, N, false, "1: nothing is withheld from the engine, which draws everything while DCLF draws its set as well (capture parity compares the two; it double-draws)" },
 			{ CapturePointParity, "CS_DCLF_CAPTURE_POINT_PARITY", P, N, false, "1: the colour epoch's captured bindings against the frame's first native lighting draw" },
-			{ SkylightParity, "CS_DCLF_SKYLIGHT_PARITY", P, N, false, "1: DCLF's Skylighting occlusion map against the engine's, texel by texel" },
+			// (Features/OcclusionMaps' CS_DCLF_SKYLIGHT_PARITY is listed here, after CS_DCLF_CAPTURE_POINT_PARITY.)
 			{ AccumulatedParity, "CS_DCLF_ACCUMULATED_PARITY", P, N, false,
 				"1: T7b1/T7b2 observers: DCLF's decoded visibility against the engine's kAccumulated on the listed roots and their geometry, frame by frame (<- ACCUMULATED), and FUN_1402cff60's animation gate on the stood-in roots against DCLF's writes (<- ANIM RATE); off: the readback and the writes still run" },
 
@@ -113,7 +113,7 @@ namespace DCLF
 				"1: T7a's census, every report: what the engine still draws (the passes registered and not withheld) per view and class (DCLF's verdict for Lighting geometry; shader type and RTTI otherwise)" },
 			{ MirrorWatch, "CS_DCLF_MIRROR_WATCH", D, N, false, "1: hardware watchpoints on a fade node's statics after its placement name the writers the mirror misses" },
 			{ TableStart, "CS_DCLF_TABLE_START", D, N, false, "small: the growable GPU tables start with a few rows, so that growth runs early and often" },
-			{ SkylightDumpDir, "CS_DCLF_SKYLIGHT_DUMP_DIR", D, N, false, "where CS_DCLF_SKYLIGHT_PARITY writes the maps it compares" },
+			// (Features/OcclusionMaps' CS_DCLF_SKYLIGHT_DUMP_DIR is listed here, after CS_DCLF_TABLE_START.)
 			{ DepthTrace, "CS_DCLF_DEPTH_TRACE", D, N, false, "1: the D3D11 calls that touch the main depth buffer, for five frames" },
 			{ DrawTrace, "CS_DCLF_DRAW_TRACE", D, N, false, "1: the callers of the D3D11 draws" },
 			{ TargetProbe, "CS_DCLF_TARGET_PROBE", D, N, false, "x,y: the G-buffer targets at a pixel where the opaque pass ends (open defect)" },

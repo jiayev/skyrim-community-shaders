@@ -107,9 +107,7 @@ namespace DCLF::Scene
 			tables.NoteChange(objectId, kChangeExtras);
 		// Sampled by the next frame's values (the earliest it can join the set).
 		NameShading(objectId, true);
-		if (a_patch.decalKey)
-			++stats.decals[static_cast<std::uint32_t>(a_patch.decalKey >> 60) - 1];
-		// The features' components list what they keep by the patch (Features/Decals: the member decals' order).
+		// The features' components list what they keep by the patch (Features/Decals: the member decals' order and candidates).
 		ComponentsAccumulated(objectId, a_patch.decalKey);
 	}
 

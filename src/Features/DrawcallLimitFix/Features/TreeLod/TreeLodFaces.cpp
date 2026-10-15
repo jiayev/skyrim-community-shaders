@@ -27,7 +27,7 @@ namespace DCLF::Draws
 		{
 			std::shared_ptr<const ComputeProgram> program;
 			std::shared_ptr<const org::LatchBlock> latch;
-			TreeLodCullConstants constants{};
+			Features::TreeLod::TreeLodCullConstants constants{};
 			std::uint32_t faces = 0;
 			std::array<std::uint32_t, kMaxViewFaces> rowIndex{}, visibleIndex{};
 			std::uint32_t groups = 0;
@@ -102,7 +102,7 @@ namespace DCLF::Draws
 					constants.latchOffset = region + f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
 					constants.drawIndex = a_prepared.rowIndex[f];
 					constants.visibleIndex = a_prepared.visibleIndex[f];
-					commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+					commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::TreeLod::kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 					commands.Dispatch(a_prepared.groups, 1, 1);
 				}
 			}

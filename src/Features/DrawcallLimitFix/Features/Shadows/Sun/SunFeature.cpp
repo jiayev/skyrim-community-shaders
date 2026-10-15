@@ -1,7 +1,9 @@
-// Shadows/Sun: the Sun source and its camera hook (SunViews).
+// Shadows/Sun: the Sun source and its camera hook (SunViews), and their parity (Diagnostics/).
 
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunViews.h"
+
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 namespace DCLF::Features::Shadows::Sun
 {
@@ -18,6 +20,12 @@ namespace DCLF::Features::Shadows::Sun
 		{
 			// The directional views draw while the source is registered; its cameras are the hook's (the Sun board).
 			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Sun });
+			// CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the sun views, the accumulation's cascades and the entry rule's planes
+			// against the engine's.
+			if (Diagnostics::Observe().claimsOrScene) {
+				SubscribeSunViewParity();
+				SubscribeSunEntryPlanesParity();
+			}
 		}
 	}
 

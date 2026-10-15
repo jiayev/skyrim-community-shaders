@@ -228,7 +228,7 @@ namespace DCLF::Features::Decals
 			order.decalsRebuild = false;
 
 			if (checked)
-				Diagnostics::Notify(Ordered{ order, tables, mirror });
+				Diagnostics::Notify(Ordered{ order, tables, mirror, order.parity });
 			if (!changed)
 				return;
 			CountOrdinals(order, tables);
@@ -259,8 +259,15 @@ namespace DCLF::Features::Decals
 			if (!a_patch.chain)
 				return;
 			auto& order = a_context.State<DecalOrder>();
+			++order.candidates[static_cast<std::uint32_t>(a_patch.chain >> 60) - 1];
 			order.memberDecals[a_slot] = a_patch.chain;
 			order.decalsChanged.push_back(a_slot);
+		}
+
+		// The walk's candidates are counted again from its patches (the report's "the last pass").
+		void WalkBegun(const Api::CoordinatorComponentContext& a_context)
+		{
+			a_context.State<DecalOrder>().candidates = {};
 		}
 
 		void Rewritten(const Api::CoordinatorComponentContext& a_context, std::uint32_t a_slot, const Api::SlotRewrite& a_rewrite)
@@ -273,6 +280,14 @@ namespace DCLF::Features::Decals
 			if (DecalSpanOf(a_rewrite.partitionsBefore) != DecalSpanOf(a_rewrite.partitionsNow))
 				order.decalsChanged.push_back(a_slot);
 		}
+	}
+
+	void CandidateLines(const Api::CoordinatorComponentContext& a_context, std::string& a_text)
+	{
+		const auto& decals = a_context.State<DecalOrder>().candidates;
+		if (decals[0] || decals[1] || decals[2])
+			a_text += fmt::format("[DCLF] decals (the last pass): {} candidates ({} in the opaque group, {} multi-index layers, {} in the blended group)",
+				decals[0] + decals[1] + decals[2], decals[0], decals[2], decals[1]);
 	}
 
 	DecalOrderComparison CompareDecalOrder(const DecalOrder& a_order, const SceneTables& a_tables, const SceneMirror& a_mirror)
@@ -309,15 +324,15 @@ namespace DCLF::Features::Decals
 		return out;
 	}
 
-	void RegisterOrder(Api::InstallContext& a_context)
+	Api::CoordinatorComponentId RegisterOrder(Api::InstallContext& a_context)
 	{
 		// The member decals follow the membership: joined by their patches' chains, left with their residency, re-keyed when the walk
-		// rewrites them, and ordered once the joins are done (the accumulate phase's statistics).
-		a_context.RegisterCoordinatorComponent({ .name = "decal-order",
+		// rewrites them, and ordered once the joins are done (the accumulate phase's statistics); their patches counted as the walk's candidates.
+		return a_context.RegisterCoordinatorComponent({ .name = "decal-order",
 			.make = &MakeOrder,
 			.residency = { .left = &LeaveMember, .allLeft = &ClearMembers },
 			.accumulate = { .patched = &JoinMember, .joinsDone = &OrderDecals },
-			.walk = { .rewritten = &Rewritten },
+			.walk = { .begun = &WalkBegun, .rewritten = &Rewritten },
 			.retirement = { .reset = &ClearMembers } });
 	}
 }

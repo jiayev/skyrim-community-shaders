@@ -35,6 +35,11 @@
 #include <string_view>
 #include <utility>
 
+namespace RE
+{
+	class BSShaderProperty;
+}
+
 namespace DCLF::Api
 {
 	// Defined by Core (Core/Extensions/ObjectContributors.h), which the features inside DCLF include for it.
@@ -276,9 +281,13 @@ namespace DCLF::Api
 	 *   false for one the port does not cover. Pure.
 	 * - shading: per shading item (FrameValues' pool, in the engine-read window): the shading row of its property. Pure but for the reads.
 	 * - variants, variantNames: the census's split of its variant reason (a bit each, named).
+	 * - name: the census's name of its objects' classes ("<name>: ..." where Lighting's read "lighting: ...").
+	 * - emissiveOf: per external emittance re-point (SetExternalEmittance's hook, any thread the engine calls it on): the colour its
+	 *   property's emissive points at now (the record's emissive, its capture's); null: its emissive is never re-pointed. Pure.
 	 */
 	struct MaterialPortContribution
 	{
+		std::string_view name;
 		std::uint8_t shaderType = 0xFF;
 		ObjectClass objectClass = ObjectClass::Count;
 		const void* (*propertyRtti)() = nullptr;
@@ -293,5 +302,6 @@ namespace DCLF::Api
 		void (*shading)(MaterialPortShading& a_shading) = nullptr;
 		std::uint32_t (*variants)(const MaterialPortDerivation& a_derivation) = nullptr;
 		std::span<const std::string_view> variantNames;
+		const void* (*emissiveOf)(const RE::BSShaderProperty& a_property) = nullptr;
 	};
 }

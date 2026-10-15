@@ -19,8 +19,9 @@ namespace DCLF::Diagnostics
 			return a_variable < a_table.size() ? static_cast<std::uint8_t>(a_table[a_variable]) : 0u;
 		};
 		for (const auto& entry : a_lookups.pipelines) {
-			// An effect key's tables are of the Effect shader, not of the Lighting shader objects compared here.
-			if (entry.setIndex == Lookups::kNone || KeyFamily(entry.key.rasterFlags) == Api::ProgramFamily::Effect)
+			// A program family's key's tables are of its family's shader (the Effect port's: the Effect shader), not of the Lighting shader
+			// objects compared here.
+			if (entry.setIndex == Lookups::kNone || KeyFamily(entry.key.rasterFlags) != Api::ProgramFamily::Count)
 				continue;
 			++parity.entries;
 			const auto* vs = cache.GetVertexShader(a_lighting, entry.key.vertexDescriptor);

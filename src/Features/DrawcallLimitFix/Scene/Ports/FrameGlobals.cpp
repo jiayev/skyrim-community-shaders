@@ -381,8 +381,12 @@ namespace DCLF
 				const RE::NiAVObject* firstPerson = player->Get3D(true);
 				if (firstPerson && firstPerson != thirdPerson)
 					g->cullHidden.emplace_back(firstPerson, true);
-				if (firstPerson && firstPerson != thirdPerson && Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson))
-					subtreeRoot = firstPerson;
+			}
+			// The first-person view's root while its toggle is on, as its feature names it (Api::ViewContribution::captureRoot).
+			if (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson)) {
+				Api::ViewRootCapture root;
+				Extensions::ViewEntryOf(Api::EngineView::FirstPerson).captureRoot(root);
+				subtreeRoot = root.root;
 			}
 			// The water objects' shapes as they are now: TESWaterReflections::Update hides them around the cube map's faces too, and
 			// restores them after.

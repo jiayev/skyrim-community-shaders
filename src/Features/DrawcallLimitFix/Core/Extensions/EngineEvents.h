@@ -12,19 +12,18 @@
 
 namespace RE
 {
+	class BSGeometry;
 	class NiAVObject;
 }
 
 namespace DCLF::Api
 {
-	/** @brief The stood-in roots' change (PrimaryCull::SyncFadeOwnership): the roots that left and joined, and the BSTreeNodes among them. */
+	/** @brief The stood-in roots' change (PrimaryCull::SyncFadeOwnership): the roots that left and joined. */
 	class StandInRootsChange
 	{
 	public:
 		const std::vector<const RE::NiAVObject*>& left;
 		const std::vector<const RE::NiAVObject*>& joined;
-		const std::vector<const RE::NiAVObject*>& treesLeft;
-		const std::vector<const RE::NiAVObject*>& treesJoined;
 	};
 
 	/**
@@ -90,6 +89,16 @@ namespace DCLF::Extensions
 	 * the storing thread after the store. Nothing while the hidden-node source is not installed.
 	 */
 	void PushReservedHidden(const RE::NiAVObject* a_object, std::uint32_t a_site);
+	/**
+	 * @brief Any thread, after InstallFeatures: whether the hidden-node source is installed, so the hidden events flow (a feature that
+	 * follows them, the LOD gates, engages only then).
+	 */
+	bool HiddenEventsLive();
+	/**
+	 * @brief A store of the feature's own to a_geometry's segments (a BSSubIndexTriShape's drawn ranges): the mirror's update of them, on
+	 * the storing thread after the store, in order with what that thread pushed before. Nothing for null.
+	 */
+	void PushSegmentsUpdate(const RE::BSGeometry* a_geometry);
 
 	/** @brief Main thread (PrimaryCull::Install): the primary cull installed, so the stand-in observers will be called. */
 	void NoteStandInInstalled();
@@ -99,4 +108,13 @@ namespace DCLF::Extensions
 	void StandInRootsChanged(const Api::StandInRootsChange& a_change);
 	void StandInRootsCleared();
 	void StandInUpdateEntry(bool a_running);
+	// What a stand-in observer reads of DCLF's main-camera verdicts (the roots' kAccumulated as written at Main::Update's entry, before
+	// updateEntry): direct calls, a feature's per-root loop may make them. Main thread, after Main::Update's entry; no engine memory read.
+	/** @brief A stood-in root's verdict as last written; visible when not written yet (IndirectDraws::AccumulatedVerdict). */
+	bool StandInVerdict(const void* a_root);
+	/**
+	 * @brief The verdict of any root DCLF lists (a fade root or plain entry root, from the wide writes) into a_visible; false when it has
+	 * none (IndirectDraws::AccumulatedVerdictOf).
+	 */
+	bool ListedVerdictOf(const void* a_root, bool& a_visible);
 }
