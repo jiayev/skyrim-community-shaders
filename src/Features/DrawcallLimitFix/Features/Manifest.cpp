@@ -2,7 +2,9 @@
 // other's - the frame bindings' texture registers, the object flag bits their technique contributions set, and the record words their
 // table families' references are carried in. A feature with a frame binding (Api::FrameBinding) lists its register; the install checks
 // the registrations the same way (InstallContext::RegisterFrameBinding). One with a technique contribution (Api::TechniqueContribution)
-// lists its flags, and one whose family the record carries (Api::TableFamily::recordWord) its word.
+// lists its flags, and one whose family the record carries (Api::TableFamily::recordWord) its word. The contributions' keys (a
+// technique, a geometry type, a Core class's value: Api/ObjectContributors.h) are not listed here: the install fails a key two features
+// claim.
 
 // TreeWindScene.h first: volk must precede every Vulkan header of the translation unit (the record layout).
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"

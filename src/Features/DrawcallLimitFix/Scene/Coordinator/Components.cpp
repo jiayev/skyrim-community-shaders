@@ -120,16 +120,16 @@ namespace DCLF::Scene
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].resident)
-				registered[c].resident({ tables, ComponentState(c), *this, c }, a_slot);
+			if (registered[c].residency.resident)
+				registered[c].residency.resident({ tables, ComponentState(c), *this, c }, a_slot);
 	}
 
 	void Coordinator::ComponentsLeft(std::uint32_t a_slot)
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].left)
-				registered[c].left({ tables, ComponentState(c), *this, c }, a_slot);
+			if (registered[c].residency.left)
+				registered[c].residency.left({ tables, ComponentState(c), *this, c }, a_slot);
 	}
 
 	void Coordinator::ComponentsRecount(bool a_rebuild, std::span<const std::uint32_t> a_touched)
@@ -137,24 +137,24 @@ namespace DCLF::Scene
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		const Api::ResidentRecount recount{ a_rebuild, a_touched, residents };
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].recount)
-				registered[c].recount({ tables, ComponentState(c), *this, c }, recount);
+			if (registered[c].residency.recount)
+				registered[c].residency.recount({ tables, ComponentState(c), *this, c }, recount);
 	}
 
 	void Coordinator::ComponentsReset()
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].reset)
-				registered[c].reset({ tables, ComponentState(c), *this, c });
+			if (registered[c].retirement.reset)
+				registered[c].retirement.reset({ tables, ComponentState(c), *this, c });
 	}
 
 	void Coordinator::ComponentsAllLeft()
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].allLeft)
-				registered[c].allLeft({ tables, ComponentState(c), *this, c });
+			if (registered[c].residency.allLeft)
+				registered[c].residency.allLeft({ tables, ComponentState(c), *this, c });
 	}
 
 	void Coordinator::ComponentsAccumulated(std::uint32_t a_slot, std::uint64_t a_chain)
@@ -162,8 +162,8 @@ namespace DCLF::Scene
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		const Api::AccumulatedPatch patch{ a_chain };
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].accumulated)
-				registered[c].accumulated({ tables, ComponentState(c), *this, c }, a_slot, patch);
+			if (registered[c].accumulate.patched)
+				registered[c].accumulate.patched({ tables, ComponentState(c), *this, c }, a_slot, patch);
 	}
 
 	void Coordinator::ComponentsRewritten(std::uint32_t a_slot, bool a_written, std::uint32_t a_partitionsBefore, std::uint32_t a_partitionsNow)
@@ -171,34 +171,34 @@ namespace DCLF::Scene
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		const Api::SlotRewrite rewrite{ a_written, a_partitionsBefore, a_partitionsNow };
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].rewritten)
-				registered[c].rewritten({ tables, ComponentState(c), *this, c }, a_slot, rewrite);
+			if (registered[c].walk.rewritten)
+				registered[c].walk.rewritten({ tables, ComponentState(c), *this, c }, a_slot, rewrite);
 	}
 
 	void Coordinator::ComponentsJoinsDone()
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].joinsDone)
-				registered[c].joinsDone({ tables, ComponentState(c), *this, c });
+			if (registered[c].accumulate.joinsDone)
+				registered[c].accumulate.joinsDone({ tables, ComponentState(c), *this, c });
 	}
 
 	void Coordinator::ComponentsWalkBegun()
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].walkBegun)
-				registered[c].walkBegun({ tables, ComponentState(c), *this, c });
+			if (registered[c].walk.begun)
+				registered[c].walk.begun({ tables, ComponentState(c), *this, c });
 	}
 
 	void Coordinator::ComponentsScheduling(bool a_full)
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c) {
-			if (!registered[c].scheduling)
+			if (!registered[c].walk.scheduling)
 				continue;
 			Api::WalkScheduling scheduling{ a_full };
-			registered[c].scheduling({ tables, ComponentState(c), *this, c }, scheduling);
+			registered[c].walk.scheduling({ tables, ComponentState(c), *this, c }, scheduling);
 			delta.facePublished += scheduling.events;
 			delta.faceUpdated += scheduling.updated;
 			delta.faceWritten += scheduling.written;
@@ -209,15 +209,15 @@ namespace DCLF::Scene
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].walkEnded)
-				registered[c].walkEnded({ tables, ComponentState(c), *this, c });
+			if (registered[c].walk.ended)
+				registered[c].walk.ended({ tables, ComponentState(c), *this, c });
 	}
 
 	void Coordinator::ComponentsDense(bool a_begun)
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (const auto hook = a_begun ? registered[c].denseBegun : registered[c].denseEnded)
+			if (const auto hook = a_begun ? registered[c].dense.begun : registered[c].dense.ended)
 				hook({ tables, ComponentState(c), *this, c });
 	}
 
@@ -225,32 +225,32 @@ namespace DCLF::Scene
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].forgot)
-				registered[c].forgot({ tables, ComponentState(c), *this, c }, a_geometry);
+			if (registered[c].retirement.forgot)
+				registered[c].retirement.forgot({ tables, ComponentState(c), *this, c }, a_geometry);
 	}
 
 	void Coordinator::ComponentsForgotAll()
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].forgotAll)
-				registered[c].forgotAll({ tables, ComponentState(c), *this, c });
+			if (registered[c].retirement.forgotAll)
+				registered[c].retirement.forgotAll({ tables, ComponentState(c), *this, c });
 	}
 
 	void Coordinator::ComponentRecycled(std::uint32_t a_component, std::uint32_t a_first, std::uint32_t a_count)
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
-		if (a_component < registered.size() && registered[a_component].recycled)
-			registered[a_component].recycled({ tables, ComponentState(a_component), *this, a_component }, a_first, a_count);
+		if (a_component < registered.size() && registered[a_component].retirement.recycled)
+			registered[a_component].retirement.recycled({ tables, ComponentState(a_component), *this, a_component }, a_first, a_count);
 	}
 
 	void Coordinator::ComponentsListed(RE::BSGeometry& a_geometry, const Tracked& a_tracked, Api::EntryClass a_class)
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].follows == a_class && registered[c].listed) {
+			if (registered[c].entryClass.follows == a_class && registered[c].entryClass.listed) {
 				const Api::EntryWrite write{ a_geometry, a_tracked.faceHeadRef.get() };
-				registered[c].listed({ tables, ComponentState(c), *this, c }, write);
+				registered[c].entryClass.listed({ tables, ComponentState(c), *this, c }, write);
 			}
 	}
 
@@ -258,8 +258,8 @@ namespace DCLF::Scene
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].follows == a_class)
-				return registered[c].resolve && registered[c].resolve({ tables, ComponentState(c), *this, c }, a_write);
+			if (registered[c].entryClass.follows == a_class)
+				return registered[c].entryClass.resolve && registered[c].entryClass.resolve({ tables, ComponentState(c), *this, c }, a_write);
 		return false;
 	}
 
@@ -267,7 +267,7 @@ namespace DCLF::Scene
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].follows == a_class && registered[c].streamed)
-				registered[c].streamed({ tables, ComponentState(c), *this, c }, a_slot, a_write);
+			if (registered[c].entryClass.follows == a_class && registered[c].entryClass.streamed)
+				registered[c].entryClass.streamed({ tables, ComponentState(c), *this, c }, a_slot, a_write);
 	}
 }

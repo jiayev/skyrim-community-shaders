@@ -361,19 +361,9 @@ namespace DCLF::Features::Faces
 	{
 		a_context.RegisterCoordinatorComponent({ .name = "faces",
 			.make = &Make,
-			.reset = &Reset,
-			.walkBegun = &WalkBegun,
-			.scheduling = &Scheduling,
-			.walkEnded = &WalkEnded,
-			.denseBegun = &DenseBegun,
-			.denseEnded = &DenseEnded,
-			.forgot = &Forgot,
-			.forgotAll = &ForgotAll,
-			.recycled = &Recycled,
-			.follows = Api::EntryClass::FaceShape,
-			.takes = a_taken,
-			.listed = &Listed,
-			.resolve = &Resolve,
-			.streamed = &Streamed });
+			.walk = { .begun = &WalkBegun, .scheduling = &Scheduling, .ended = &WalkEnded },
+			.dense = { .begun = &DenseBegun, .ended = &DenseEnded },
+			.retirement = { .reset = &Reset, .forgot = &Forgot, .forgotAll = &ForgotAll, .recycled = &Recycled },
+			.entryClass = { .follows = Api::EntryClass::FaceShape, .takes = a_taken, .listed = &Listed, .resolve = &Resolve, .streamed = &Streamed } });
 	}
 }

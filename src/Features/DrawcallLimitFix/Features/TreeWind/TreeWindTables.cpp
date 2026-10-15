@@ -288,6 +288,9 @@ namespace DCLF::Features::TreeWind
 		treeFamily = a_context.RegisterTableFamily({ .name = "trees", .make = &MakeTrees, .assign = &AssignTrees, .same = &SameTrees, .clear = &ClearTrees,
 			.recycle = &RecycleTree, .rowsEnd = kNodelessTree, .recordWord = kTreeRecordWord });
 		component = a_context.RegisterCoordinatorComponent(
-			{ .name = "tree-wind", .make = &MakeComponent, .resident = &ListTree, .left = &UnlistTree, .recount = &Recount, .reset = &Reset });
+			{ .name = "tree-wind",
+				.make = &MakeComponent,
+				.residency = { .resident = &ListTree, .left = &UnlistTree, .recount = &Recount },
+				.retirement = { .reset = &Reset } });
 	}
 }

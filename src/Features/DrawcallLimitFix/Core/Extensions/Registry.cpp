@@ -160,20 +160,19 @@ namespace DCLF::Extensions
 
 			Api::CoordinatorComponentId RegisterCoordinatorComponent(const Api::CoordinatorComponent& a_component) override
 			{
-				if (a_component.name.empty() || !a_component.make || a_component.follows >= Api::EntryClass::Count)
+				const auto& followed = a_component.entryClass;
+				if (a_component.name.empty() || !a_component.make || followed.follows >= Api::EntryClass::Count)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete coordinator component", feature));
 				// One component follows an entry class: it supplies what the class's writes wait on.
-				if (a_component.follows != Api::EntryClass::None)
+				if (followed.follows != Api::EntryClass::None)
 					for (const auto& component : lists.coordinatorComponents)
-						if (component.follows == a_component.follows)
+						if (component.entryClass.follows == followed.follows)
 							stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s component {} follows entry class {}, which {} follows", feature, a_component.name,
-								static_cast<std::uint32_t>(a_component.follows), component.name));
-				lists.coordinatorComponents.push_back({ std::string(a_component.name), a_component.make, a_component.resident, a_component.left, a_component.recount,
-					a_component.reset, a_component.allLeft, a_component.accumulated, a_component.rewritten, a_component.joinsDone, a_component.walkBegun,
-					a_component.scheduling, a_component.walkEnded, a_component.denseBegun, a_component.denseEnded, a_component.forgot, a_component.forgotAll,
-					a_component.recycled, a_component.follows, a_component.takes, a_component.listed, a_component.resolve, a_component.streamed });
-				if (a_component.follows != Api::EntryClass::None)
-					lists.entryClassesTaken[static_cast<std::size_t>(a_component.follows)] = a_component.takes;
+								static_cast<std::uint32_t>(followed.follows), component.name));
+				lists.coordinatorComponents.push_back({ std::string(a_component.name), a_component.make, a_component.residency, a_component.accumulate, a_component.walk,
+					a_component.dense, a_component.retirement, followed });
+				if (followed.follows != Api::EntryClass::None)
+					lists.entryClassesTaken[static_cast<std::size_t>(followed.follows)] = followed.takes;
 				return { static_cast<std::uint32_t>(lists.coordinatorComponents.size() - 1) };
 			}
 

@@ -313,7 +313,11 @@ namespace DCLF::Features::Decals
 	{
 		// The member decals follow the membership: joined by their patches' chains, left with their residency, re-keyed when the walk
 		// rewrites them, and ordered once the joins are done (the accumulate phase's statistics).
-		a_context.RegisterCoordinatorComponent({ .name = "decal-order", .make = &MakeOrder, .left = &LeaveMember, .reset = &ClearMembers,
-			.allLeft = &ClearMembers, .accumulated = &JoinMember, .rewritten = &Rewritten, .joinsDone = &OrderDecals });
+		a_context.RegisterCoordinatorComponent({ .name = "decal-order",
+			.make = &MakeOrder,
+			.residency = { .left = &LeaveMember, .allLeft = &ClearMembers },
+			.accumulate = { .patched = &JoinMember, .joinsDone = &OrderDecals },
+			.walk = { .rewritten = &Rewritten },
+			.retirement = { .reset = &ClearMembers } });
 	}
 }

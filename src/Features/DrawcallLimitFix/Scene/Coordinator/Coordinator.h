@@ -1207,7 +1207,8 @@ namespace DCLF
 		void MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn);
 
 		// The features' components: State/Components.h (CoordinatorComponents). Each call runs every registered component's hook at
-		// the coordinator's residency point, walk phase or entry write (Api::CoordinatorComponent), in registration order.
+		// the coordinator's residency point, walk phase or entry write (Api::CoordinatorComponent's hook sets: residency, accumulate, walk,
+		// dense, retirement, entryClass), in registration order.
 		/** @brief a_slot is resident (MarkResidentSlot; a fade node answer for a resident: ApplyFadeNodeAnswers). */
 		void ComponentsResident(std::uint32_t a_slot);
 		/** @brief a_slot's residency ended (DropResidentSlot, EndAllResidency). */
@@ -1239,8 +1240,8 @@ namespace DCLF
 		/** @brief RecycleRetired: a range component a_component retired (Tables::kRetiredComponentRange) is free. */
 		void ComponentRecycled(std::uint32_t a_component, std::uint32_t a_first, std::uint32_t a_count);
 		/**
-		 * @brief MergeWrite's writes of an entry of a_class (Api::CoordinatorComponent::follows): every write of one (listed); a taken record's
-		 * stream before its slot (resolve: false, it waits); the slot it took (streamed).
+		 * @brief MergeWrite's writes of an entry of a_class (Api::CoordinatorComponent::EntryClassHooks::follows): every write of one
+		 * (listed); a taken record's stream before its slot (resolve: false, it waits); the slot it took (streamed).
 		 */
 		void ComponentsListed(RE::BSGeometry& a_geometry, const Tracked& a_tracked, Api::EntryClass a_class);
 		bool ComponentsResolve(Api::EntryWrite& a_write, Api::EntryClass a_class);
