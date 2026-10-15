@@ -1,7 +1,8 @@
-// Tree LOD: the hooks' push (any thread; events onto TreeLod::events, from Features/TreeLod's hooks on the refill, block update, AddGroup
-// and RemoveGroup), the refill's packing rule, and the render thread's Mirror (Drain, slots, mesh leases) the depth commit uploads from.
+// Tree LOD: the hooks' push (any thread; events onto events, from the feature's hooks on the refill, block update, AddGroup and
+// RemoveGroup), the refill's packing rule, and the render thread's Mirror (Drain, slots, mesh leases) the depth commit uploads from.
 
-#include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodEvents.h"
 
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -10,9 +11,8 @@
 
 #include <cstring>
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Scene/TreeLodEvents.h"
 
-namespace DCLF::TreeLod
+namespace DCLF::Features::TreeLod
 {
 	namespace
 	{
@@ -31,7 +31,7 @@ namespace DCLF::TreeLod
 		}
 
 		/** @brief The group's records by the refill's rule (FUN_140504a40), with the engine's own conversions. */
-		void Pack(bool a_allVisible, const RE::BGSDistantTreeBlock::TreeGroup& a_group, std::vector<Instance>& a_out)
+		void Pack(bool a_allVisible, const RE::BGSDistantTreeBlock::TreeGroup& a_group, std::vector<TreeInstances::Instance>& a_out)
 		{
 			using HalfToFloat = float (*)(std::uint16_t);
 			using FloatToHalf = std::uint16_t (*)(float);
@@ -40,7 +40,7 @@ namespace DCLF::TreeLod
 			static const auto toHalf = reinterpret_cast<FloatToHalf>(REL::Offset(kFloatToHalf).address());
 			static const auto cosine = reinterpret_cast<Trig>(REL::Offset(kCos).address());
 			static const auto sine = reinterpret_cast<Trig>(REL::Offset(kSin).address());
-			const std::uint32_t count = std::min<std::uint32_t>(a_group.instances.size(), kMaxGroupInstances);
+			const std::uint32_t count = std::min<std::uint32_t>(a_group.instances.size(), TreeInstances::kMaxGroupInstances);
 			const std::uint16_t one = toHalf(Engine::Global<float>(Engine::Address::kFadeSpecialB));
 			a_out.assign(count, {});
 			for (std::uint32_t i = 0; i < count; ++i) {
@@ -71,7 +71,7 @@ namespace DCLF::TreeLod
 		return offThread.exchange(0, std::memory_order_relaxed);
 	}
 
-	void PackGroup(bool a_allVisible, const RE::BGSDistantTreeBlock::TreeGroup& a_group, std::vector<Instance>& a_out)
+	void PackGroup(bool a_allVisible, const RE::BGSDistantTreeBlock::TreeGroup& a_group, std::vector<TreeInstances::Instance>& a_out)
 	{
 		Pack(a_allVisible, a_group, a_out);
 	}
@@ -81,18 +81,17 @@ namespace DCLF::TreeLod
 		return Engine::Global<RE::NiNode*>(kLodTreesRoot);
 	}
 
-	bool IsTreeLodShape(const RE::BSGeometry* a_shape)
+	Mirror& RenderMirror()
 	{
-		const auto* property = a_shape ? a_shape->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
-		static const std::uintptr_t treeVtable = RE::VTABLE_BSDistantTreeShaderProperty[0].address();
-		return Engine::VtableIs(property, treeVtable);
+		static Mirror mirror;
+		return mirror;
 	}
 
 	void Mirror::Drain(std::uint32_t a_frame)
 	{
 		drainThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
 		events.Drain([&](Event&& a_event) {
-			Diagnostics::Notify(Diagnostics::TreeLodEventDrained{ a_event.shape });
+			Diagnostics::Notify(TreeLodEventDrained{ a_event.shape });
 			if (a_event.kind == Event::Kind::Remove) {
 				++stats.removes;
 				if (const auto it = groups.find(a_event.shape); it != groups.end()) {
@@ -137,7 +136,7 @@ namespace DCLF::TreeLod
 			row.mesh = mesh != meshes.end() ? mesh->second.slot : ~0u;
 			MarkSlot(group.slot);
 		});
-		Diagnostics::Notify(Diagnostics::TreeLodDrained{ *this, a_frame });
+		Diagnostics::Notify(TreeLodDrained{ *this, a_frame });
 	}
 
 	std::uint32_t Mirror::AcquireSlot()
@@ -257,24 +256,24 @@ namespace DCLF::TreeLod
 		changedSlots.clear();
 	}
 
-	const ShapeRow& Mirror::SlotRow(std::uint32_t a_slot) const
+	const TreeInstances::ShapeRow& Mirror::SlotRow(std::uint32_t a_slot) const
 	{
-		static const ShapeRow kFree{};
+		static const TreeInstances::ShapeRow kFree{};
 		const auto* shape = a_slot < slotGroups.size() ? slotGroups[a_slot] : nullptr;
 		const auto it = shape ? groups.find(shape) : groups.end();
 		return it != groups.end() ? it->second.row : kFree;
 	}
 
-	const std::vector<Instance>* Mirror::SlotInstances(std::uint32_t a_slot) const
+	const std::vector<TreeInstances::Instance>* Mirror::SlotInstances(std::uint32_t a_slot) const
 	{
 		const auto* shape = a_slot < slotGroups.size() ? slotGroups[a_slot] : nullptr;
 		const auto it = shape ? groups.find(shape) : groups.end();
 		return it != groups.end() ? &it->second.instances : nullptr;
 	}
 
-	const MeshRow& Mirror::MeshSlotRow(std::uint32_t a_slot) const
+	const TreeInstances::MeshRow& Mirror::MeshSlotRow(std::uint32_t a_slot) const
 	{
-		static const MeshRow kNone{};
+		static const TreeInstances::MeshRow kNone{};
 		const auto* key = a_slot < meshSlots.size() ? meshSlots[a_slot] : nullptr;
 		const auto it = key ? meshes.find(key) : meshes.end();
 		return it != meshes.end() ? it->second.row : kNone;

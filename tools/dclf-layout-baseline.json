@@ -2,7 +2,7 @@
  "legacyEdges": {
   "Core -> Engine": 22,
   "Core -> Scene": 29,
-  "Engine -> Scene": 29,
+  "Engine -> Scene": 28,
   "Features/Billboards -> Engine": 1,
   "Features/Billboards -> Scene": 3,
   "Features/Decals -> Scene": 2,
@@ -15,7 +15,6 @@
   "Features/Shadows/Local -> Scene": 2,
   "Features/Shadows/Sun -> Scene": 1,
   "Features/TextureTransforms -> Scene": 1,
-  "Features/TreeLod -> Scene": 1,
   "Scene -> Engine": 34
  },
  "overThresholds": {
@@ -100,7 +99,7 @@
    1
   ],
   "DCLF::IndirectDraws::ExecuteShadowFrame": [
-   283,
+   284,
    78
   ],
   "DCLF::JudgeObject": [
@@ -132,11 +131,11 @@
    67
   ],
   "DCLF::Reports::Coordinator": [
-   217,
+   218,
    90
   ],
   "DCLF::Reports::SceneLines": [
-   153,
+   154,
    79
   ],
   "DCLF::Reports::Stats": [

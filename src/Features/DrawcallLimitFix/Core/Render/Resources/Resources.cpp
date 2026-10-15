@@ -47,20 +47,6 @@ namespace DCLF::Draws
 			return a_device.GetBufferDeviceAddress({ a_buffer.GetAPIResource().GetHandle(), 0 });
 		}
 
-		// Tree LOD's table sizes in words (TreeLod.h): per shape slot its row, records and visible/retest list entries; per mesh slot
-		// its row; plus the list header.
-		std::uint32_t TreeLodShapeWords(std::uint32_t a_slots) { return a_slots * static_cast<std::uint32_t>(sizeof(TreeLod::ShapeRow) / 4); }
-		std::uint32_t TreeLodInstanceWords(std::uint32_t a_slots) { return a_slots * TreeLod::kMaxGroupInstances * static_cast<std::uint32_t>(sizeof(TreeLod::Instance) / 4); }
-		std::uint32_t TreeLodMeshWords(std::uint32_t a_slots) { return a_slots * static_cast<std::uint32_t>(sizeof(TreeLod::MeshRow) / 4); }
-		std::uint32_t TreeLodVisibleWords(std::uint32_t a_slots) { return TreeLod::kVisibleHeaderWords + 2 * a_slots * TreeLod::kMaxGroupInstances; }
-
-		/** @brief The units a buffer's current version holds (a buffer made at another's size: a requirement grows it from there). */
-		std::uint32_t CurrentUnits(const Versioned& a_buffer, std::uint64_t a_unitBytes)
-		{
-			const auto buffer = a_buffer ? a_buffer->Get() : nullptr;
-			return buffer ? static_cast<std::uint32_t>(std::min<std::uint64_t>(buffer->GetSize() / a_unitBytes, UINT32_MAX)) : 0u;
-		}
-
 		/** @brief A per-object buffer's first units (CS_DCLF_TABLE_START=small: a few, to test growth); RequireSceneTables grows it. */
 		std::uint32_t InitialObjectUnits()
 		{
@@ -605,37 +591,8 @@ namespace DCLF
 		} else {
 			logger::warn("[DCLF] The fade state program could not be created; fades stay the CPU's");
 		}
-		// Without the tree LOD cull program, tree LOD stays the engine's.
-		buffers->treeLodCull = ComputeProgram::Load(a_device, { .source = kTreeLodCullShader, .constantWords = kTreeLodCullConstantWords });
-		if (buffers->treeLodCull) {
-			// By shape slot: a row, its records, and a phase 1 and a retest entry per record after the visible list's header.
-			const std::uint32_t shapes = smallStart ? 4u : kInitialTreeLodShapes;
-			buffers->treeLodShapes = MakeVersioned(CreateWords(TreeLodShapeWords(shapes), false, "cs.dclf.tree-lod-shapes"), { .extent = { 0, sizeof(TreeLod::ShapeRow), 4 } });
-			buffers->treeLodInstances = MakeVersioned(CreateWords(TreeLodInstanceWords(shapes), false, "cs.dclf.tree-lod-instances"),
-				{ .extent = { 0, TreeLod::kMaxGroupInstances * sizeof(TreeLod::Instance), 4 } });
-			buffers->treeLodMeshes = MakeVersioned(CreateWords(TreeLodMeshWords(smallStart ? 4u : kInitialTreeLodMeshes), false, "cs.dclf.tree-lod-meshes"),
-				{ .extent = { 0, sizeof(TreeLod::MeshRow), 4 } });
-			buffers->treeLodDraw = CreateWords(sizeof(TreeLod::DrawRow) / 4, false, "cs.dclf.tree-lod-draw");
-			buffers->treeLodVisible = MakeVersioned(CreateWords(TreeLodVisibleWords(shapes), true, "cs.dclf.tree-lod-visible"),
-				{ .extent = { TreeLod::kVisibleHeaderWords * 4, 2 * TreeLod::kMaxGroupInstances * 4, 4 } });
-			buffers->treeLodDrawAddress = AddressOf(a_device, *buffers->treeLodDraw);
-			if (!AddressOf(a_device, *buffers->treeLodShapes->Get()) || !AddressOf(a_device, *buffers->treeLodInstances->Get()) ||
-				!AddressOf(a_device, *buffers->treeLodMeshes->Get()) || !buffers->treeLodDrawAddress || !AddressOf(a_device, *buffers->treeLodVisible->Get())) {
-				logger::warn("[DCLF] Tree LOD's tables have no device address; tree LOD stays native");
-				buffers->treeLodCull = nullptr;
-			}
-			if (auto* host = RenderGraphRuntime::Get().Host(); host && buffers->treeLodCull) {
-				auto counts = std::make_shared<SceneBuffers::TreeLodCounts>();
-				for (std::uint32_t i = 0; i < host->FrameSlots(); ++i)
-					counts->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, sizeof(TreeLod::VisibleHeader)));
-				counts->filled.assign(host->FrameSlots(), 0u);
-				buffers->treeLodCounts = std::move(counts);
-			}
-		} else {
-			logger::warn("[DCLF] The tree LOD cull program could not be created; tree LOD stays native");
-		}
-		// The GPU stages (Api::GpuStage::setup: their programs; a null state keeps a stage out of the graph), after every table: Core's
-		// tree LOD stages take its cull program and counts.
+		// The GPU stages (Api::GpuStage::setup: their programs; a null state keeps a stage out of the graph), after every table: a stage may
+		// take its feature's scene resources (Features/TreeLod's cull and counts take its tables').
 		buffers->stages = Extensions::SetUpGpuStages(a_device, *buffers);
 		scene = std::move(buffers);
 		return true;
@@ -772,17 +729,20 @@ namespace DCLF
 				{ .extent = { 0, 4, 4 }, .policy = org::services::GrowthPolicy::Headroom(0) });
 		state->sequences = MakeVersioned(CreateWords(std::uint64_t(traits.faces) * 64u * sizeof(DrawSequence) / 4, true, name("sequences").c_str()),
 			{ .extent = { 0, traits.faces * sizeof(DrawSequence), 4 }, .policy = org::services::GrowthPolicy::Doubling(64) });
-		// The faces' tree LOD rows and lists, at the scene's shape slots: the lists grow with the scene's tables (RequireSceneTables).
+		// The faces' tree LOD rows and lists, at the TreeInstances family's units (its faces.lists: tree LOD's shape slots): the lists grow
+		// with its tables (RequireSceneTables).
+		const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances).contribution.faces;
 		for (std::uint32_t f = 0; f < traits.faces && traits.trees; ++f) {
-			state->treeRows[f] = CreateWords(sizeof(TreeLod::DrawRow) / 4, false, name(fmt::format("tree-row{}", f)).c_str());
+			state->treeRows[f] = CreateWords(sizeof(TreeInstances::DrawRow) / 4, false, name(fmt::format("tree-row{}", f)).c_str());
 			state->treeRowsAddress[f] = AddressOf(device, *state->treeRows[f]);
 			if (!state->treeRowsAddress[f])
 				return fail("tree LOD rows have no device address");
-			if (scene->treeLodCull) {
-				const std::uint32_t shapes = CurrentUnits(scene->treeLodShapes, sizeof(TreeLod::ShapeRow));
-				const std::uint32_t words = TreeLod::kVisibleHeaderWords + shapes * TreeLod::kMaxGroupInstances;
+			if (trees.lists && FamilySetUp(*scene, Api::DrawFamily::TreeInstances)) {
+				Api::DrawFamilyLists lists{ *scene };
+				trees.lists(lists);
+				const std::uint32_t words = TreeInstances::kVisibleHeaderWords + lists.current * TreeInstances::kMaxGroupInstances;
 				state->treeVisible[f] = MakeVersioned(CreateWords(words, true, name(fmt::format("tree-visible{}", f)).c_str()),
-					{ .extent = { TreeLod::kVisibleHeaderWords * 4, TreeLod::kMaxGroupInstances * 4, 4 } });
+					{ .extent = { TreeInstances::kVisibleHeaderWords * 4, TreeInstances::kMaxGroupInstances * 4, 4 } });
 			}
 		}
 		state->blocks = DeviceBuffer(std::uint64_t(traits.faces) * kViewBlockBytes, name(traits.blocks).c_str());

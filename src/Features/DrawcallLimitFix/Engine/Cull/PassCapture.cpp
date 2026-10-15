@@ -10,7 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
+#include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/TreeInstancesLayout.h"
 
 #include <span>
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
@@ -159,7 +159,7 @@ namespace DCLF
 		// Tree LOD (dclf-lod.md, "Tree LOD: the draws"): DCLF draws every instance the mirror holds this frame, so the engine's
 		// passes of every tree LOD shape (its Z-prepass's, hint 7 into group 1 through the shadow modes' registration; its colour
 		// pass's, hint 7 into group 1) are withheld.
-		if (treeLodOwned.load(std::memory_order_acquire) && TreeLod::IsTreeLodShape(a_pass->geometry)) {
+		if (familyOwned[static_cast<std::size_t>(Api::DrawFamily::TreeInstances)].load(std::memory_order_acquire) && TreeInstances::IsEngineShape(a_pass->geometry)) {
 			treeLodWithheld.fetch_add(1, std::memory_order_relaxed);
 			return true;
 		}
@@ -250,7 +250,7 @@ namespace DCLF
 			const auto renderers = std::atomic_load(&view.renderers);
 			if (!renderers || !renderers->contains(a_batch))
 				continue;
-			const bool treeLod = TreeLod::IsTreeLodShape(a_pass->geometry);
+			const bool treeLod = TreeInstances::IsEngineShape(a_pass->geometry);
 			if (treeLod && view.treeLodOwned.load(std::memory_order_acquire)) {
 				view.ownTreeLodWithheld.fetch_add(1, std::memory_order_relaxed);
 				return true;

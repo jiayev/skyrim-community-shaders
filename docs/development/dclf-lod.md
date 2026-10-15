@@ -157,7 +157,7 @@ All addresses are AE 1.6.1170.
 
 ## Tree LOD: the mirror (L4a, 2026-10-04)
 
-`TreeLod.h` / `TreeLod.cpp`. The mirror is not under a toggle: it changes nothing the engine does.
+`Features/TreeLod/TreeLodMirror.h` / `TreeLodMirror.cpp`. The mirror is not under a toggle: it changes nothing the engine does.
 
 - **Events.** The refill's two calls are patched (`0x1405037f6`, `0x140503fbf`); each names the block and group it packs,
   per thread. The `AddGroup` and `RemoveGroup` slots of `BSMultiStreamInstanceTriShape` are patched too:
@@ -197,7 +197,7 @@ Measured at `BSDistantTreeShader::SetupGeometry` (a temporary probe), over the t
 
 Under the `lodTrees` toggle (`CS_DCLF_LOD_TREES`, "tree LOD"), on when unset.
 
-- **The tables** (`SceneBuffers`, `Scene/Ports/TreeLod.h`). The mirror gives each shape a slot and each mesh (a type's base
+- **The tables** (Features/TreeLod's scene resources, `TreeLodTables.h`; their layout `Core/Render/DrawFamilies/TreeInstancesLayout.h`). The mirror gives each shape a slot and each mesh (a type's base
   shape's renderer data) a slot of its own:
   - a shape row per slot: translation, mesh slot, record count, its type's extent;
   - 75 instance records per slot, the engine's 32-byte records;
@@ -219,7 +219,7 @@ Under the `lodTrees` toggle (`CS_DCLF_LOD_TREES`, "tree LOD"), on when unset.
   LESS with writes. The colour pass draws the deferred technique, depth EQUAL, the engine's write mode 1. Both draw
   two-sided. The pixel stages take the atlas, the sampler (address mode 0, filter 2) and 128/255 from the draw row.
 - **Ownership.** At the frame's first DCLF point, after the scene events and before the main camera's cull,
-  `IndirectDraws::DecideTreeLod` decides whether DCLF draws tree LOD this frame: the toggle, the programs, the pipelines and
+  the `TreeInstances` draw family's decision (`IndirectDraws::DecideDrawFamilies`) decides whether DCLF draws tree LOD this frame: the toggle, the programs, the pipelines and
   the tables built, and the atlas loaded. On it, the registration withholds every tree LOD pass into the main camera's
   views (`PassCapture::WithholdMain`: hint 7 into group 1, from both the colour pass's registration and the Z-prepass's), and
   the depth commit names the slots in the draw row. Otherwise the draw row names none, the cull appends nothing, and both
@@ -373,7 +373,7 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
   - **Only plain face renders** (render mode 0). Mode `0x19` (no sky) registers through `FUN_1414b2b90` and `0x1B` draws
     silhouettes; neither is withheld nor drawn by DCLF (`ReflectionFaces::Plain`).
   - **Tree LOD in the faces** is DCLF's (every tree LOD pass into the faces withheld) while the main view's is
-    (`DecideTreeLod`), the last depth commit drew it, the forward tree pipeline is built and the phase is drawn
+    (`DecideDrawFamilies`), the last depth commit drew it, the forward tree pipeline is built and the phase is drawn
     (`PrepareReflection`).
 - **No lag for members** (since U5): the faces draw the frame's scene list, the members of the claims the frame withholds.
   - Tree LOD's tables are as the last depth commit left them: a block attached or detached this frame is a one-frame hole or

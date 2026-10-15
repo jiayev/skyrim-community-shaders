@@ -16,18 +16,6 @@ namespace DCLF::Reports
 {
 	using V = Diagnostics::SceneView;
 
-	/** @brief Tree LOD's mirror line (newline-terminated), its counters and its parity's reset. */
-	std::string TreeLodLine(TreeLod::Mirror& a_mirror)
-	{
-		const auto s = a_mirror.TakeStats();
-		auto& p = Diagnostics::SceneDiagnostics().treeLod;
-		auto text = fmt::format("[DCLF] tree LOD mirror: {} shapes, {} instances{}; {} adds, {} removes ({} off the render thread); parity {} checks, {} shapes compared, {} not settled, {} missing, {} stale, {} refilled after the drain, {} differ{}{}; {} groups drawn by the rule where the engine keeps hidden records\n",
-			a_mirror.Size(), a_mirror.InstanceCount(), TreeLod::installed ? "" : ", events not installed", s.adds, s.removes, TreeLod::TakeOffThread(), p.checks, p.shapes, p.unsettled,
-			p.missing, p.stale, p.late, p.differ, p.checks ? (p.missing || p.stale || p.differ ? " <- TREE LOD MIRROR; first: " : " <- OK") : "", p.first, s.intended);
-		p = { .suspects = std::move(p.suspects), .frame = p.frame };
-		return text;
-	}
-
 	std::string SceneFrameLines()
 	{
 		// What the render thread keeps (its parities and captures), reported from the frame: nothing of the coordinator's.
@@ -60,10 +48,8 @@ namespace DCLF::Reports
 				ep.objects, ep.differ, ep.maxDifference, ep.staleStatic, ep.differ || ep.staleStatic ? " <- DIFFER" : " <- OK", ep.differ ? "; first: " + ep.first : std::string());
 			ep = {};
 		}
-		// The features' scene lines here, where tree LOD's mirror line follows.
+		// The features' scene lines here (Features/TreeLod's mirror line).
 		Extensions::ReportTextAt(Api::ReportPoint::SceneFrame, text);
-		if (V::treeLod().Size() || TreeLod::installed)
-			text += TreeLodLine(V::treeLod());
 		text += MirrorWatch::TakeReport(V::frame());
 		auto& captureNs = V::captureNs();
 		auto& categoryCaptureNs = V::categoryCaptureNs();

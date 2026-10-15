@@ -157,7 +157,7 @@ namespace DCLF
 		if (!owners)
 			return ViewSubmit::NoOwners;
 		// A trees view's tree LOD row (ViewTreeLod.cpp), its texture held with the owners.
-		TreeLod::DrawRow treeRow{};
+		TreeInstances::DrawRow treeRow{};
 		const bool trees = !a_faces.empty() && TraitsOf(a_view).trees;
 		if (trees)
 			treeRow = impl->ViewTreeRow(a_view, *shape, *owners);

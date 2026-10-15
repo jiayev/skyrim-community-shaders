@@ -227,8 +227,8 @@ namespace DCLF
 		}
 		// The scene buffers and their stores, every epoch's: the builds ahead run one at a time, in publication order.
 		std::shared_ptr<SceneBuffers> scene;
-		// The frame's tree LOD decision (DecideTreeLod), which the depth commit draws on.
-		bool treeLodOwned = false;
+		// The frame's draw family decisions (DecideDrawFamilies, by family), which the depth commit and a trees view's faces draw on.
+		std::array<bool, Extensions::kDrawFamilies> familyOwned{};
 		// The views' frame state: Impl/Views.h (ImplViews).
 		/** @brief A view's graph resources, created once its targets are known (render thread). */
 		bool SetupView(ViewKind a_kind);
@@ -244,9 +244,9 @@ namespace DCLF
 		/** @brief A ColourWithOwnDepth view's target, the engine's a_texture, imported (again when it changes) with DCLF's own depth. */
 		bool ImportViewColourTarget(ViewKind a_kind, ID3D11Texture2D* a_texture);
 		/** @brief A trees view's tree LOD row for an epoch's commit (IndirectDraws::SubmitViewEpoch): none unless its faces' tree LOD is DCLF's. */
-		TreeLod::DrawRow ViewTreeRow(ViewKind a_kind, const ViewFrame& a_shape, std::vector<std::shared_ptr<const void>>& a_owners);
+		TreeInstances::DrawRow ViewTreeRow(ViewKind a_kind, const ViewFrame& a_shape, std::vector<std::shared_ptr<const void>>& a_owners);
 		/** @brief A view's commit (render thread): its map, faces and tree LOD rows into the shape's latch; returns faces drawn. */
-		std::uint32_t CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const TreeLod::DrawRow* a_treeRow);
+		std::uint32_t CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const TreeInstances::DrawRow* a_treeRow);
 		/** @brief What an epoch's execution holds besides its shape (binding owners, the adopted snapshot). */
 		std::shared_ptr<std::vector<std::shared_ptr<const void>>> EpochOwners(std::span<const MainPayload* const> a_payloads);
 		/** @brief The scene buffers, created once (render thread). False when they have no device address. */

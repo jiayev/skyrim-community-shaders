@@ -122,8 +122,8 @@ namespace DCLF::Features::Reflection
 			pipelines = draws.ResolveViewPipelines(kView, *a_context.tables, a_context.catalog, {}, true);
 		else
 			draws.DropViewPipelines(kView);
-		// Tree LOD's forward pipeline (its program is built of the DistantTree shader DecideTreeLod posts): the view engine's, under the tree
-		// LOD class.
+		// Tree LOD's forward pipeline (its program is built of the DistantTree shader the TreeInstances family's decision posts): the view
+		// engine's, under the family (its tree LOD class).
 		const bool treeWaited = draws.ResolveViewTreeLod(kView, on, a_context.catalog);
 		drawPipelines.NoteFrameWaits(false, pipelines.waited || treeWaited);
 		reflection.lodSlots = pipelines.slots;
@@ -131,7 +131,7 @@ namespace DCLF::Features::Reflection
 		reflection.pipelinesReady = pipelines.ready;
 		if (on)
 			draws.SetUpView(kView);
-		// The faces' tree LOD: DCLF's while the main view's is (DecideTreeLod, before this), the last depth commit uploaded the tables
+		// The faces' tree LOD: DCLF's while the main view's is (DecideDrawFamilies, before this), the last depth commit uploaded the tables
 		// the faces draw from, and the faces are drawn.
 		draws.DecideViewTreeLod(kView);
 	}

@@ -1,9 +1,9 @@
-// Tree LOD's engine side: the hooks on the refill, block update, AddGroup and RemoveGroup (any thread), the source of Core's tree LOD
-// channel (events onto TreeLod::events through TreeLod::Push, which the render thread's mirror drains).
+// Tree LOD's engine side: the hooks on the refill, block update, AddGroup and RemoveGroup (any thread), the source of the feature's tree
+// LOD channel (events onto events through Push, which the render thread's mirror drains: TreeLodMirror.h).
 
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
 
 #include <algorithm>
 #include <bit>
@@ -14,8 +14,8 @@ namespace DCLF::Features::TreeLod
 {
 	namespace
 	{
-		// Core's channel: the events, their records and the refill's rule.
-		namespace Channel = ::DCLF::TreeLod;
+		// The family's records (Core's layout: TreeInstancesLayout.h) and engine shapes.
+		namespace Layout = ::DCLF::TreeInstances;
 
 		constexpr std::uintptr_t kRefill = 0x504a40;            // FUN_140504a40(block, group)
 		constexpr std::uintptr_t kRefillSites[] = { 0x5037f6,   // the block's attach (FUN_140503630)
@@ -54,10 +54,10 @@ namespace DCLF::Features::TreeLod
 			static std::uint32_t thunk(RE::BSMultiStreamInstanceTriShape* a_shape, std::uint32_t a_count, const std::uint16_t* a_data, std::uint32_t a_shorts, float a_radius)
 			{
 				const auto index = func(a_shape, a_count, a_data, a_shorts, a_radius);
-				if (refilling.group && a_shorts == Channel::kInstanceShorts) {
-					Channel::Event event{ a_shape, refilling.block, refilling.group, std::vector<Channel::Instance>(a_count), Channel::Event::Kind::Add };
+				if (refilling.group && a_shorts == Layout::kInstanceShorts) {
+					Event event{ a_shape, refilling.block, refilling.group, std::vector<Layout::Instance>(a_count), Event::Kind::Add };
 					if (a_count)
-						std::memcpy(event.instances.data(), a_data, a_count * sizeof(Channel::Instance));
+						std::memcpy(event.instances.data(), a_data, a_count * sizeof(Layout::Instance));
 					// The shape's placement (AddGroup's bound uses its local translation), its type's extent, and its mesh, whose
 					// buffers are held until the render thread leases them.
 					const auto& translate = a_shape->local.translate;
@@ -75,7 +75,7 @@ namespace DCLF::Features::TreeLod
 						event.mesh.vertexDesc = std::bit_cast<std::uint64_t>(data->vertexDesc);
 						event.mesh.indexCount = static_cast<std::uint32_t>(static_cast<RE::BSTriShape*>(a_shape)->GetTrishapeRuntimeData().triangleCount) * 3;
 					}
-					Channel::Push(std::move(event));
+					Push(std::move(event));
 				}
 				return index;
 			}
@@ -87,8 +87,8 @@ namespace DCLF::Features::TreeLod
 			static void thunk(RE::BSMultiStreamInstanceTriShape* a_shape, std::uint32_t a_index)
 			{
 				func(a_shape, a_index);
-				if (Channel::IsTreeLodShape(a_shape))
-					Channel::Push(Channel::Event{ a_shape, nullptr, nullptr, {}, Channel::Event::Kind::Remove });
+				if (Layout::IsEngineShape(a_shape))
+					Push(Event{ a_shape, nullptr, nullptr, {}, Event::Kind::Remove });
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -110,15 +110,15 @@ namespace DCLF::Features::TreeLod
 				for (auto* group : a_block->treeGroups) {
 					if (!group || !group->geometry)
 						continue;
-					const auto count = std::min<std::uint32_t>(group->instances.size(), Channel::kMaxGroupInstances);
+					const auto count = std::min<std::uint32_t>(group->instances.size(), Layout::kMaxGroupInstances);
 					bool hidden = false;
 					for (std::uint32_t i = 0; i < count && !hidden; ++i)
 						hidden = (reinterpret_cast<const std::uint8_t&>(group->instances[i].hidden) & 1) != 0;
 					if (!hidden)
 						continue;
-					Channel::Event event{ group->geometry.get(), a_block, group, {}, Channel::Event::Kind::Add, true };
-					Channel::PackGroup(a_block->allVisible, *group, event.instances);
-					Channel::Push(std::move(event));
+					Event event{ group->geometry.get(), a_block, group, {}, Event::Kind::Add, true };
+					PackGroup(a_block->allVisible, *group, event.instances);
+					Push(std::move(event));
 				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -143,6 +143,6 @@ namespace DCLF::Features::TreeLod
 		stl::write_thunk_call<BlockUpdate>(at(kBlockUpdateSite));
 		stl::write_vfunc<kAddGroupSlot, AddGroup>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 		stl::write_vfunc<kRemoveGroupSlot, RemoveGroup>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
-		Channel::installed = true;
+		installed = true;
 	}
 }

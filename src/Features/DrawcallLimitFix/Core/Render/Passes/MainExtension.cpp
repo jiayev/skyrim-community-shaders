@@ -43,17 +43,13 @@ namespace DCLF::Draws
 		for (const auto& frameBuffer : a_resources.frameBuffers)
 			if (frameBuffer.copy)
 				out.push_back({ frameBuffer.copy, nullptr });
-		// The features' scene resources' latched buffers (Api::SceneResources::latched).
+		// The features' scene resources' latched buffers (Api::SceneResources::latched: Features/TreeLod's draw row and list header); not the
+		// next-frame state's frame rows (the features', the fades'), which the compute queue reads.
 		Extensions::LatchSceneResources(a_resources.scene->sceneResources,
 			[](void* a_out, const std::shared_ptr<org::Buffer>& a_buffer, const Versioned& a_versioned, std::size_t) {
 				static_cast<std::vector<LatchedTarget>*>(a_out)->push_back({ a_buffer, a_versioned });
 			},
 			&out);
-		// Tree LOD's draw row and list header; not the next-frame state's frame rows (the features', the fades'), which the compute queue reads.
-		if (const auto& scene = *a_resources.scene; scene.treeLodCull) {
-			out.push_back({ scene.treeLodDraw, nullptr });
-			out.push_back({ nullptr, scene.treeLodVisible });
-		}
 		return out;
 	}
 

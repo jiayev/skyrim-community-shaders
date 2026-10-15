@@ -93,17 +93,14 @@ namespace DCLF
 			add(constants, sizeof(std::array<float, 4>), kEffectBloodFrameOffset);   // its Blood (SampleEffectBlood)
 			if (!a_depthOnly && a_resources.foliage)
 				add(constants, 8 * sizeof(std::uint32_t), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame));
-			// The features' scene resources' latched buffers (Api::SceneResources::latched), the depth commit's.
+			// The features' scene resources' latched buffers (Api::SceneResources::latched: Features/TreeLod's draw row and list header), the
+			// depth commit's.
 			if (a_depthOnly)
 				Extensions::LatchSceneResources(a_resources.scene->sceneResources,
 					[](void* a_add, const std::shared_ptr<org::Buffer>& a_buffer, const Versioned& a_versioned, std::size_t a_bytes) {
 						(*static_cast<decltype(add)*>(a_add))(a_versioned ? a_versioned->Key() : a_buffer.get(), a_bytes, 0);
 					},
 					&add);
-			if (const auto& scene = *a_resources.scene; a_depthOnly && scene.treeLodCull && scene.treeLodShapes) {
-				add(scene.treeLodDraw.get(), sizeof(TreeLod::DrawRow), 0);
-				add(scene.treeLodVisible->Key(), sizeof(TreeLod::VisibleHeader), 0);
-			}
 			add(a_resources.count.get(), a_depthOnly ? sizeof(kZeroCounts) : sizeof(std::uint32_t), 0);
 			if (!a_depthOnly) {
 				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
@@ -549,11 +546,14 @@ namespace DCLF
 		const auto& viewOn = a_make.viewOn;
 		const rhi::DescriptorHeapHandle resourceHeap = inputs.resourceHeap, samplerHeap = inputs.samplerHeap;
 		// The views', from their resources and the main layout (the heaps the graph's); first person's render area is the colour commit's
-		// viewport. The faces' lists hold the scene's tree shape slots (one unit group: the least any of them holds).
+		// viewport. The faces' lists hold the TreeInstances family's units (its faces.lists: tree LOD's shape slots; one unit group with its
+		// tables: the least any of them holds).
 		std::uint32_t treeShapes = 0;
-		if (const auto& s = inputs.scene; s && s->treeLodCull) {
+		const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances).contribution.faces;
+		if (const auto& s = inputs.scene; s && trees.lists && FamilySetUp(*s, Api::DrawFamily::TreeInstances)) {
 			UnitGroup shapes;
-			shapes.Add(s->treeLodShapes).Add(s->treeLodInstances).Add(s->treeLodVisible);
+			Api::DrawFamilyLists lists{ *s, {}, &shapes };
+			trees.lists(lists);
 			for (const auto& view : inputs.views)
 				if (view.resources)
 					for (const auto& visible : view.resources->treeVisible)
@@ -741,7 +741,7 @@ namespace DCLF
 					a_mixer.Mix(a_treeLod->drawSignature.generation);
 				}
 				a_mixer.Mix(a_treeLod ? 1u : 0u);
-				a_mixer.Mix(sceneState->treeLodCull ? 1u : 0u);
+				a_mixer.Mix(FamilySetUp(*sceneState, Api::DrawFamily::TreeInstances) ? 1u : 0u);
 			}
 		}
 		for (const auto& slot : kViewSlots)

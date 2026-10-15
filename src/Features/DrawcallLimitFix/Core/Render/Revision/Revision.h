@@ -63,9 +63,10 @@ namespace DCLF::Draws
 		// size (the reflection cube's import, the main colour viewport) and the depth range (first person's).
 		std::array<ViewInputs, kViews> views;
 		// What the scene tables' requirements size by besides the tables (RequireSceneTables): the portal programs' words a frame's
-		// encoding takes (PortalViews::Encoded), and tree LOD's mirror's shape and mesh slots.
-		std::uint32_t portalWords = 0, treeLodShapeSlots = 0, treeLodMeshSlots = 0;
-		// The features' scene resources' words they size by (Api::SceneResources::postInputs, each at its registration's words).
+		// encoding takes (PortalViews::Encoded).
+		std::uint32_t portalWords = 0;
+		// The features' scene resources' words they size by (Api::SceneResources::postInputs, each at its registration's words: Features/
+		// TreeLod's mirror's shape and mesh slots).
 		Extensions::SceneResourceInputs resourceInputs{};
 		// The shadow view slots' buffers (made by the frame: ServeRevisionRequests, SetupShadow).
 		std::shared_ptr<const ShadowSlotBuffers> shadowSlots;

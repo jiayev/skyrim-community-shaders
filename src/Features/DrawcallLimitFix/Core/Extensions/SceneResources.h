@@ -136,6 +136,8 @@ namespace DCLF::Extensions
 		const SceneResourceInputs& a_inputs);
 	/** @brief Render thread (PostRevisionInputs): every registration's postInputs into its words of a_out (zeroed first), in order. */
 	void PostSceneResourceInputs(SceneResourceInputs& a_out);
+	/** @brief a_id's words of a_inputs (what its postInputs posted; empty: none, or no such registration). */
+	std::span<const std::uint32_t> SceneResourceInputsOf(const SceneResourceInputs& a_inputs, Api::SceneResourcesId a_id);
 	/** @brief Render thread (MainLatchedTargets, MainLatchedLayout): every state's latched buffers into a_sink, in order. */
 	void LatchSceneResources(const SceneResourceStates& a_states,
 		void (*a_sink)(void*, const std::shared_ptr<org::Buffer>&, const std::shared_ptr<org::VersionedBuffer>&, std::size_t), void* a_context);

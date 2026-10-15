@@ -152,8 +152,6 @@ namespace DCLF::Draws
 	};
 	constexpr std::uint32_t kTreeLodCullConstantWords = sizeof(TreeLodCullConstants) / 4;
 	constexpr std::uint32_t kTreeLodCullGroup = 64;
-	// The tree LOD tables' first capacities (shape slots, mesh slots), doubled as the mirror needs.
-	constexpr std::uint32_t kInitialTreeLodShapes = 1024, kInitialTreeLodMeshes = 256;
 	constexpr const char* kIndexPoolShader = "DrawcallLimitFix/IndexPoolCS.hlsl";
 	// IndexPoolCS.hlsl's constants: the latch block and its copies' dispatch (ShadowLatchLayout::PoolOffset), the copies, the pool.
 	struct IndexPoolConstants

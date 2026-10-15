@@ -59,8 +59,8 @@ namespace DCLF::Draws
 		std::uint32_t buckets = 0;  // entries a face's table holds
 		std::uint32_t faceBytes = kViewBlockBytes;
 		static constexpr std::uint32_t kTreeRowInFace = kViewBlockBytes;
-		static constexpr std::uint32_t kTreeHeaderInFace = kTreeRowInFace + static_cast<std::uint32_t>(sizeof(TreeLod::DrawRow));
-		static constexpr std::uint32_t kTreeFaceBytes = (kTreeHeaderInFace + static_cast<std::uint32_t>(sizeof(TreeLod::VisibleHeader)) + 255u) & ~255u;
+		static constexpr std::uint32_t kTreeHeaderInFace = kTreeRowInFace + static_cast<std::uint32_t>(sizeof(TreeInstances::DrawRow));
+		static constexpr std::uint32_t kTreeFaceBytes = (kTreeHeaderInFace + static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader)) + 255u) & ~255u;
 		static ViewLatchLayout Initial(const ViewTraits& a_traits) { return { a_traits.faces, 64, 4, a_traits.trees ? kTreeFaceBytes : kViewBlockBytes }; }
 		std::uint32_t MapOffset() const { return faces * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t TableOffset(std::uint32_t a_face) const { return MapOffset() + slots * 4 + a_face * buckets * 8; }

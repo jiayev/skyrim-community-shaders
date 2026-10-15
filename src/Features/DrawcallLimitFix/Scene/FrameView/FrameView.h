@@ -15,7 +15,6 @@
 #include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Scene/Channels.h"
 #include "Features/DrawcallLimitFix/Scene/Model/FrameTables.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
 
 namespace DCLF
 {
@@ -266,8 +265,6 @@ namespace DCLF::Scene
 			// No wake: the frame's next pass takes it.
 			channels.fadeOwnedPosted.Post(std::make_unique<std::vector<OwnedFadeRoot>>(a_owned));
 		}
-		/** @brief Tree LOD's mirror of the engine's groups (TreeLod.h): the depth commit uploads what it changed. Render thread. */
-		TreeLod::Mirror& TreeLodMirror() { return treeLod; }
 		/**
 		 * @brief Render thread: whether the installed publication claims the geometry, which keeps it alive (the retirement chain
 		 * keeps what a held publication names). PrimaryCull's liveness check (NoteSetChanges).
@@ -418,8 +415,6 @@ namespace DCLF::Scene
 		std::array<std::uint32_t, 3> frameLackingCount{};
 		PublicationStats publicationStats;
 		bool setWithdrawn = false;  // the frame's claims (WithdrawSet), until the next installation
-		// Tree LOD (dclf-lod.md): the engine's tree LOD groups and their instance records, by events (TreeLod.h).
-		TreeLod::Mirror treeLod;
 		// The frame sample the held pipeline blocks were made from (RefreshFrameConstants' last with a sun; also PostPipelineFrame).
 		std::optional<GeometryPort::PipelineFrame> geometryPortFrame;
 		std::uint32_t geometryPortFrameNumber = ~0u;

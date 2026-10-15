@@ -61,7 +61,6 @@ namespace DCLF
 			       a_next.shadowCandidates == a_previous.shadowCandidates && a_next.occlusionLayouts == a_previous.occlusionLayouts &&
 			       a_next.shadowPlacements == a_previous.shadowPlacements && a_next.mainKnown == a_previous.mainKnown && a_next.viewport == a_previous.viewport &&
 			       a_next.blockSizes == a_previous.blockSizes && a_next.portalWords == a_previous.portalWords &&
-			       a_next.treeLodShapeSlots == a_previous.treeLodShapeSlots && a_next.treeLodMeshSlots == a_previous.treeLodMeshSlots &&
 			       a_next.resourceInputs == a_previous.resourceInputs &&
 			       a_next.shadowSlots == a_previous.shadowSlots && a_next.asyncEpochs == a_previous.asyncEpochs &&
 			       !a_next.uploads.owner_before(a_previous.uploads) && !a_previous.uploads.owner_before(a_next.uploads);
@@ -108,9 +107,6 @@ namespace DCLF
 				target ? (view.resources ? view.resources->height : 0u) : mainEpochInputs.viewport[kColourShape].height, DepthRangeOf(slot.view) };
 		}
 		next.portalWords = static_cast<std::uint32_t>(PortalViews::Get().Encoded().size());
-		auto& mirror = Scene::FrameView::Get().TreeLodMirror();
-		next.treeLodShapeSlots = mirror.ShapeSlots();
-		next.treeLodMeshSlots = mirror.MeshSlots();
 		Extensions::PostSceneResourceInputs(next.resourceInputs);
 		if (shadow && (!postedShadowSlots || postedShadowSlots->sequences.size() != shadow->sequences.size()))
 			postedShadowSlots = std::make_shared<const ShadowSlotBuffers>(ShadowSlotBuffers{ shadow->sequences, shadow->bucketCounts });

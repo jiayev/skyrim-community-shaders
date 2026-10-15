@@ -147,7 +147,7 @@ namespace DCLF
 			if (a_in.tree.valid()) {
 				frame->tree = a_in.tree;
 				frame->treeSignature = a_in.treeSignature;
-				frame->treeGroups = static_cast<std::uint32_t>((std::uint64_t(a_in.treeShapes) * TreeLod::kMaxGroupInstances + kTreeLodCullGroup - 1) / kTreeLodCullGroup);
+				frame->treeGroups = static_cast<std::uint32_t>((std::uint64_t(a_in.treeShapes) * TreeInstances::kMaxGroupInstances + kTreeLodCullGroup - 1) / kTreeLodCullGroup);
 			}
 			// Per face, the colour segment's frame constants (the frame lighting at PS b13, the frame record) with VS and PS b12 its block.
 			const auto base = FramePushWords(a_in.frameConstantsAddress);
@@ -173,8 +173,8 @@ namespace DCLF
 				fromZeros.copies.push_back({ a_resources.bucketCounts[f]->Key(), 0, bucketBytes, 0 });
 				fromLatch.copies.push_back({ a_resources.blocks.get(), face, kViewBlockBytes, std::uint64_t(f) * kViewBlockBytes });
 				if (frame->tree.valid() && a_resources.treeRows[f] && a_resources.treeVisible[f]) {
-					fromLatch.copies.push_back({ a_resources.treeRows[f].get(), face + ViewLatchLayout::kTreeRowInFace, static_cast<std::uint32_t>(sizeof(TreeLod::DrawRow)), 0 });
-					fromLatch.copies.push_back({ a_resources.treeVisible[f]->Key(), face + ViewLatchLayout::kTreeHeaderInFace, static_cast<std::uint32_t>(sizeof(TreeLod::VisibleHeader)), 0 });
+					fromLatch.copies.push_back({ a_resources.treeRows[f].get(), face + ViewLatchLayout::kTreeRowInFace, static_cast<std::uint32_t>(sizeof(TreeInstances::DrawRow)), 0 });
+					fromLatch.copies.push_back({ a_resources.treeVisible[f]->Key(), face + ViewLatchLayout::kTreeHeaderInFace, static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader)), 0 });
 				}
 			}
 			return frame;
@@ -286,7 +286,7 @@ namespace DCLF
 		}
 	}
 
-	std::uint32_t IndirectDraws::Impl::CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const TreeLod::DrawRow* a_treeRow)
+	std::uint32_t IndirectDraws::Impl::CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const TreeInstances::DrawRow* a_treeRow)
 	{
 		const auto& traits = TraitsOf(a_shape.kind);
 		const auto& labels = traits.labels;
@@ -338,11 +338,11 @@ namespace DCLF
 				LatchWrite(latchBlock, labels.blocks, latchSlot, layout.FaceOffset(f), face.block);
 			if (a_treeRow && a_shape.tree.valid() && view) {
 				// The face's row (its own list), naming no slot when the face is not drawn or the faces' tree LOD is the engine's.
-				TreeLod::DrawRow row = *a_treeRow;
-				row.visible = Adopted().Of(view->treeVisible[f]).deviceAddress + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
+				TreeInstances::DrawRow row = *a_treeRow;
+				row.visible = Adopted().Of(view->treeVisible[f]).deviceAddress + TreeInstances::kVisibleHeaderWords * sizeof(std::uint32_t);
 				row.shapeSlots = face.drawn ? a_treeRow->shapeSlots : 0u;
 				LatchWriteValue(latchBlock, labels.trees, latchSlot, layout.FaceOffset(f) + ViewLatchLayout::kTreeRowInFace, row);
-				TreeLod::VisibleHeader header{};
+				TreeInstances::VisibleHeader header{};
 				header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = std::max(row.maxIndices, 1u);
 				LatchWriteValue(latchBlock, labels.trees, latchSlot, layout.FaceOffset(f) + ViewLatchLayout::kTreeHeaderInFace, header);
 			}

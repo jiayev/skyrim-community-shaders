@@ -1,7 +1,7 @@
 #pragma once
 
 // The scene's GPU tables shared by every epoch (SceneBuffers: face positions, the features' scene resources, fade roots and states,
-// readback lists, tree LOD), and the commits' uploads into them (render thread). Included by Internal.h.
+// readback lists, the draw families' published pipelines), and the commits' uploads into them (render thread). Included by Internal.h.
 
 namespace DCLF::Draws
 {
@@ -72,122 +72,10 @@ namespace DCLF::Draws
 		std::array<org::services::FilledVersion, 2> visibilityReportedFollowed;
 		std::shared_ptr<const ComputeProgram> visibilityEventsProgram;
 		std::shared_ptr<VisibilityReadback> visibilityReadback;
-		// Tree LOD (dclf-lod.md): shape rows, instance records (75 per shape slot), mesh rows, draw row and visible list, read by
-		// address in the vertex stage (the draw row's names the adopted set's versions). TreeLodCullPass fills the list in the depth
-		// epoch. treeLodReady: the row names its slots.
-		Versioned treeLodShapes, treeLodInstances, treeLodMeshes, treeLodVisible;
-		std::array<org::services::FilledVersion, 3> treeLodFilled;  // shapes, instances, meshes
-		std::shared_ptr<org::Buffer> treeLodDraw;
-		std::uint64_t treeLodDrawAddress = 0;
-		std::shared_ptr<const ComputeProgram> treeLodCull;
-		// Published by the depth commit once built; read on the graph host's thread.
-		std::atomic<std::shared_ptr<const TreeLodPipelines>> treeLodPipelines;
-		std::atomic<bool> treeLodReady{ false };
-		std::uint64_t treeLodUploads = 0, treeLodSlotsSent = 0;  // since the last report
-		/**
-		 * @brief Tree LOD cull counts (TreeLodReadbackPass), read back per frame slot on the graph host's thread.
-		 */
-		struct TreeLodCounts
-		{
-			std::vector<std::shared_ptr<org::Buffer>> readback;
-			std::vector<std::uint8_t> filled;
-			std::atomic<std::uint64_t> frames{ 0 }, phaseOne{ 0 }, retests{ 0 }, phaseTwo{ 0 };
-		};
-		std::shared_ptr<TreeLodCounts> treeLodCounts;
-		// The last depth commit's draw row; the reflection reuses the tables with its own lists.
-		TreeLod::DrawRow treeLodRow{};
+		// The draw families' pipelines on their lane (Api::DrawFamily, by family; the TreeInstances lane's TreeLodPipelines), published
+		// by the frame's decision once built (DrawFamilyFrame::Pipelines); read on the graph host's thread (FamilyPipelinesOf).
+		std::array<std::atomic<std::shared_ptr<const TreeLodPipelines>>, Extensions::kDrawFamilies> familyPipelines;
 	};
-
-	/**
-	 * @brief Tree LOD's texture and sampler into a_row: the engine's tree LOD atlas (BSDistantTreeShader::SetupTechnique's static at
-	 * 0x1433dcd18) and slot 0's sampler as its draws leave it (address mode 0, filter 2). Binding owners go to the execution.
-	 * False when there is no texture.
-	 */
-	inline bool TreeLodTextureBinding(TreeLod::DrawRow& a_row, std::vector<std::shared_ptr<const void>>& a_owners)
-	{
-		const auto* texture = Engine::Global<RE::NiSourceTexture*>(Engine::Address::kTreeLodAtlas);
-		auto* view = texture && texture->rendererTexture ? texture->rendererTexture->resourceView : nullptr;
-		if (!view)
-			return false;
-		auto& textures = GpuTextures::Get();
-		auto textureBinding = textures.ResolveBinding(view, 0);
-		auto samplerBinding = textures.SamplerBinding(0, 2);
-		if (textureBinding.index == GpuTextures::kInvalid || samplerBinding.index == GpuTextures::kInvalid)
-			return false;
-		a_owners.push_back(std::move(textureBinding.owner));
-		a_owners.push_back(std::move(samplerBinding.owner));
-		a_row.textureIndex = textureBinding.index;
-		a_row.samplerIndex = samplerBinding.index;
-		return true;
-	}
-
-	/**
-	 * @brief The depth commit's tree LOD uploads, into the versions a_sealed (the adopted set) names: their capacities and the draw
-	 * row's addresses are theirs. Retired mesh leases and bindings go to the execution (a_owners).
-	 */
-	template <class Uploads>
-	void UploadTreeLod(const NamedVersions& a_sealed, TreeLod::Mirror& a_mirror, SceneBuffers& a_scene, Uploads& a_uploads, std::vector<std::shared_ptr<const void>>& a_owners,
-		bool a_draw)
-	{
-		a_scene.treeLodReady.store(false, std::memory_order_release);
-		if (!a_scene.treeLodCull || !a_scene.treeLodShapes)
-			return;
-		for (auto& owner : a_mirror.TakeRetired())
-			a_owners.push_back(std::move(owner));
-		const auto &shapes = a_sealed.Of(a_scene.treeLodShapes), &records = a_sealed.Of(a_scene.treeLodInstances), &meshRows = a_sealed.Of(a_scene.treeLodMeshes),
-				   &visible = a_sealed.Of(a_scene.treeLodVisible);
-		// The shape slots every shape-slot table holds (the visible list: its header, then a phase 1 and a retest entry per record).
-		const std::uint64_t visibleRecords = visible.bytes / 4 > TreeLod::kVisibleHeaderWords ? (visible.bytes / 4 - TreeLod::kVisibleHeaderWords) / 2 : 0;
-		const auto shapeSlots = static_cast<std::uint32_t>(std::min({ shapes.bytes / sizeof(TreeLod::ShapeRow),
-			records.bytes / (TreeLod::kMaxGroupInstances * sizeof(TreeLod::Instance)), visibleRecords / TreeLod::kMaxGroupInstances }));
-		const auto meshSlots = static_cast<std::uint32_t>(meshRows.bytes / sizeof(TreeLod::MeshRow));
-		// Capacities are reserved before the epoch; a mirror past them keeps its changes and draws nothing this commit. Versions this
-		// commit did not fill (a new backing holds nothing) are sent every slot and mesh.
-		std::vector<std::uint32_t> slots, meshes;
-		const bool fits = a_mirror.ShapeSlots() <= shapeSlots && a_mirror.MeshSlots() <= meshSlots;
-		if (!fits) {
-			a_draw = false;
-		} else {
-			auto& filled = a_scene.treeLodFilled;
-			if (!filled[0].Holds(shapes) || !filled[1].Holds(records) || !filled[2].Holds(meshRows))
-				a_mirror.MarkAllChanged();
-			a_mirror.TakeChanges(slots, meshes);
-			filled[0].Filled(shapes);
-			filled[1].Filled(records);
-			filled[2].Filled(meshRows);
-		}
-		for (const std::uint32_t slot : slots) {
-			const auto& row = a_mirror.SlotRow(slot);
-			a_uploads(a_scene.treeLodShapes, &row, sizeof(row), std::uint64_t(slot) * sizeof(TreeLod::ShapeRow));
-			if (const auto* instances = a_mirror.SlotInstances(slot); instances && !instances->empty())
-				a_uploads(a_scene.treeLodInstances, instances->data(), instances->size() * sizeof(TreeLod::Instance),
-					std::uint64_t(slot) * TreeLod::kMaxGroupInstances * sizeof(TreeLod::Instance));
-		}
-		for (const std::uint32_t mesh : meshes) {
-			const auto& row = a_mirror.MeshSlotRow(mesh);
-			a_uploads(a_scene.treeLodMeshes, &row, sizeof(row), std::uint64_t(mesh) * sizeof(TreeLod::MeshRow));
-		}
-		a_scene.treeLodSlotsSent += slots.size();
-		++a_scene.treeLodUploads;
-		// The cull appends only while the row names shape slots, so both passes skip tree LOD together.
-		TreeLod::DrawRow row{};
-		row.instances = records.deviceAddress;
-		row.shapes = shapes.deviceAddress;
-		row.meshes = meshRows.deviceAddress;
-		row.visible = visible.deviceAddress + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
-		row.alphaRef = 128.0f / 255.0f;
-		row.maxIndices = std::max(a_mirror.MaxIndices(), 1u);
-		// The engine's tree LOD draws use the worldspace's atlas and alpha reference 128/255 (dclf-lod.md).
-		if (a_draw && a_mirror.MaxIndices() && TreeLodTextureBinding(row, a_owners))
-			row.shapeSlots = shapeSlots;
-		a_uploads(a_scene.treeLodDraw, &row, sizeof(row), 0);
-		a_scene.treeLodRow = row;
-		TreeLod::VisibleHeader header{};
-		header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = row.maxIndices;
-		a_uploads(a_scene.treeLodVisible, &header, sizeof(header), 0);
-		if (row.shapeSlots)
-			a_scene.treeLodReady.store(true, std::memory_order_release);
-	}
 
 	/** @brief Sends sorted word indices as runs a_send(first, count), merging gaps up to kFadeRunGap. */
 	constexpr std::uint32_t kFadeRunGap = 32;

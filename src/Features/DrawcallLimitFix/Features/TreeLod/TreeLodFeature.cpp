@@ -1,8 +1,10 @@
 // Tree LOD: the tree LOD instances DCLF draws in the engine's place. Its switches and toggle, the tree LOD class's contribution, the
-// channel's source (its early hooks) and the audit.
+// channel's source (its early hooks), the tables with their commit hook, the cull and counts' stages, the draw family, the report lines,
+// the parity and the audit.
 
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 namespace DCLF::Features::TreeLod
 {
@@ -21,9 +23,17 @@ namespace DCLF::Features::TreeLod
 			// Features/Lod's (which register before this feature). Its change drops no classification cache: tree LOD is drawn from the
 			// mirror, not classified.
 			const auto toggle = a_context.RegisterToggle({ .name = "tree LOD", .label = "Tree LOD: distant trees (CS_DCLF_LOD_TREES)", .seed = trees, .after = "refraction" });
-			// The tree LOD instances, Core's tree LOD path's while the toggle is on (DecideTreeLod; the revisions' trees pipelines; a trees
-			// view's tree LOD per face).
+			// The tree LOD instances, the TreeInstances draw family's while the toggle is on (its decision; the revisions' trees pipelines; a
+			// trees view's tree LOD per face).
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::TreeLod, .toggle = toggle });
+			// Its tables and their uploads, its stages, the family over them, its report lines.
+			RegisterTables(a_context);
+			RegisterStages(a_context);
+			RegisterFamily(a_context);
+			RegisterReport(a_context);
+			// CS_DCLF_PERSISTENT_PARITY: the mirror against the LOD trees root.
+			if (Diagnostics::Observe().scene)
+				SubscribeParity();
 			// Main::Draw's early hook, DCLF running or not.
 			if (SwitchEnabled(audit))
 				SubscribeAudit(audit);

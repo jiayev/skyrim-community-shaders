@@ -1,5 +1,5 @@
 // The main epochs' commit (render thread, inside the epoch): stream views, CommitMainPayload (the frame's values
-// into the selected revision's shape) and the depth commit's scene uploads; DecideTreeLod; and the fade write-back (armed by the
+// into the selected revision's shape) and the depth commit's scene uploads; and the fade write-back (armed by the
 // depth commit, judged on DCLF's executor by KickFadeWriteBack, its stores made on the main thread by WriteFadeStores).
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
@@ -564,7 +564,7 @@ namespace DCLF
 		}
 	}
 
-	// Uploads run ahead of every pass of this epoch: face streams, the features' commit hooks and the tree LOD.
+	// Uploads run ahead of every pass of this epoch: face streams and the features' commit hooks (Features/TreeLod's tables among them).
 	void IndirectDraws::Impl::UploadSceneStreams(const MainCommit& a_commit)
 	{
 		const auto& adopted = a_commit.adopted;
@@ -573,14 +573,6 @@ namespace DCLF
 		UploadFaceStreams(adopted, a_commit.payload.faceStreams, epochResources->scene->facePositions, epochResources->scene->faceUploaded, a_commit.uploads);
 		Extensions::RunCommitHooks({ depthOnly ? Api::CommitKind::Depth : Api::CommitKind::Colour, adopted, Scene::FrameView::Get().GetTables(),
 			Scene::FrameView::Get().GetFrame(), *epochResources->scene, a_commit.uploads, &a_commit.latched, a_commit.bindingOwners });
-		// Tree LOD (dclf-lod.md): the mirror's changes, draw row and list arguments, for the depth cull and both passes' draws.
-		if (depthOnly && epochResources->scene->treeLodCull) {
-			auto& sceneBuffers = *epochResources->scene;
-			UploadTreeLod(adopted, Scene::FrameView::Get().TreeLodMirror(), sceneBuffers, a_commit.latched, a_commit.bindingOwners, treeLodOwned);
-			// The engine's passes were withheld: a commit that cannot draw leaves a hole.
-			if (treeLodOwned && !sceneBuffers.treeLodReady.load(std::memory_order_acquire))
-				Diagnostics::Notify(Diagnostics::TreeLodMissed{ a_commit.frameNumber, Scene::FrameView::Get().TreeLodMirror().ShapeSlots(), adopted.Of(sceneBuffers.treeLodShapes).units });
-		}
 	}
 
 	// Fade roots and, once a frame, their inputs for FadeStateCS; the fade and visibility readbacks armed; the roots' portal programs.
@@ -786,38 +778,6 @@ namespace DCLF
 
 namespace DCLF
 {
-	bool IndirectDraws::DecideTreeLod()
-	{
-		bool owned = false;
-		auto* buffers = impl->scene.get();
-		// A frame without claims is the engine's whole, tree LOD included; so is one whose family (its tree LOD class) is not taken or off.
-		const auto& family = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances);
-		if (buffers && buffers->treeLodCull && Extensions::DrawFamilyOn(ActiveToggles(), Api::DrawFamily::TreeInstances) && Scene::FrameView::Get().TreeLodMirror().Size() &&
-			!Scene::FrameView::Get().SetWithdrawn()) {
-			// The pipeline lane builds its pipelines (the family's program source, the DistantTree shader, as input); until the frame's
-			// catalog has them the engine draws tree LOD.
-			auto& drawPipelines = DrawPipelines::Get();
-			if (auto* shader = static_cast<RE::BSShader*>(family.contribution.frame.programSource())) {
-				drawPipelines.SetTreeLodInputs(*shader);
-				drawPipelines.RequestTreeLod();
-			}
-			const auto* catalog = FrameCatalog();
-			const auto* texture = Engine::Global<RE::NiSourceTexture*>(Engine::Address::kTreeLodAtlas);  // its tree LOD atlas (UploadTreeLod)
-			TreeLodPipelines pipelines;
-			const bool built = TreeLodPipelinesOf(catalog, pipelines);
-			if (built && texture && texture->rendererTexture && texture->rendererTexture->resourceView) {
-				const auto published = buffers->treeLodPipelines.load(std::memory_order_acquire);
-				if (!published || !SameHandle(published->depth, pipelines.depth) || !SameHandle(published->colour, pipelines.colour))
-					buffers->treeLodPipelines.store(std::make_shared<const TreeLodPipelines>(pipelines), std::memory_order_release);
-				owned = true;
-			}
-			drawPipelines.NoteFrameWaits(!built && !(catalog && catalog->treeLod.failed), false);
-		}
-		impl->treeLodOwned = owned;
-		PassCapture::Get().SetTreeLodOwned(owned);
-		return owned;
-	}
-
 	void IndirectDraws::WriteFadeStores(bool a_live, const std::function<bool(const void*)>& a_written)
 	{
 		if (!impl->scene || !impl->scene->fadeWriteBack)

@@ -55,6 +55,14 @@ namespace DCLF::Extensions
 				registered.postInputs(std::span(a_out).subspan(registered.firstInput, registered.inputWords));
 	}
 
+	std::span<const std::uint32_t> SceneResourceInputsOf(const SceneResourceInputs& a_inputs, Api::SceneResourcesId a_id)
+	{
+		const auto registered = RegisteredSceneResources();
+		if (a_id.index >= registered.size())
+			return {};
+		return std::span(a_inputs).subspan(registered[a_id.index].firstInput, registered[a_id.index].inputWords);
+	}
+
 	void LatchSceneResources(const SceneResourceStates& a_states,
 		void (*a_sink)(void*, const std::shared_ptr<org::Buffer>&, const std::shared_ptr<org::VersionedBuffer>&, std::size_t), void* a_context)
 	{

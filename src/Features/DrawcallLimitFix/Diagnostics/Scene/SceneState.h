@@ -204,15 +204,6 @@ namespace DCLF::Diagnostics
 		} tally;
 	};
 
-	/** @brief CS_DCLF_PERSISTENT_PARITY: tree LOD's mirror against the LOD trees root (render thread; reported with the mirror's line). */
-	struct TreeLodParityState
-	{
-		std::uint64_t checks = 0, shapes = 0, stale = 0, missing = 0, differ = 0, late = 0, unsettled = 0;
-		std::string first;
-		ankerl::unordered_dense::map<const void*, std::string> suspects;  // differed at the last check, with what
-		std::uint32_t frame = ~0u;                                       // the frame the last check ran in
-	};
-
 	/**
 	 * @brief CS_DCLF_SET_PARITY: entries whose mirror chain reaches the first-person root while they are filed under another category node
 	 * (the first-person view never takes them). Counted from the evaluations' threads.
@@ -240,7 +231,6 @@ namespace DCLF::Diagnostics
 	{
 		CommitParityState commit;
 		FirstPersonObserverState firstPerson;
-		TreeLodParityState treeLod;
 		MirrorParityState mirror;
 		GateObserverState gates;
 		GateReleaseObserverState gateReleases;
