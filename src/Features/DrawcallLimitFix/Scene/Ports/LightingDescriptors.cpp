@@ -55,7 +55,7 @@ namespace DCLF
 			case Technique::MultiIndexSparkle:
 				return Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Layer);
 			// Actor skin (SKIN path, TintColor), faces (Facegen: tint and detail maps at t3/t4), hair (TintColor) and eyes (eye
-			// centres, material VS constants): all written by SetupMaterial. A face part's positions are FaceSnapshots'.
+			// centres, material VS constants): all written by SetupMaterial. A face part's positions are its head's snapshots' (Features/Faces).
 			case Technique::FacegenRGBTint:
 			case Technique::Facegen:
 			case Technique::Hair:

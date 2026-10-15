@@ -88,13 +88,13 @@ namespace DCLF::Scene
 			 */
 			std::uint32_t candidateFrame = 0;  // the pass that classified it (PassStamp); 0: never classified
 			Ineligible candidateReason = Ineligible::None;
-			// An NPC face shape (a BSDynamicTriShape under a BSFaceGenNiNode, positions from FaceSnapshots); resolved once by the walk.
+			// An NPC face shape (a BSDynamicTriShape under a BSFaceGenNiNode, positions from its head's snapshots: Api::EntryClass::FaceShape,
+			// followed by Features/Faces' component); resolved once by the walk.
 			bool faceShape = false;
 			bool faceShapeResolved = false;
-			// Its head (a key) while listed in faceHeads, and whether its last write found no head snapshot (the head's next publication
+			// Whether its last record write found no second vertex stream (its component's next event, a face shape's head's publication,
 			// rewrites it).
-			const RE::BSFaceGenNiNode* faceHead = nullptr;
-			bool faceWaiting = false;
+			bool streamWaiting = false;
 			// A face shape's head, held from the batch's pins at its attach (the face snapshot record's reference is a copy).
 			RE::NiPointer<RE::BSFaceGenNiNode> faceHeadRef;
 			// Its property's fade node, held from the naming event's pins: fade-root owners (and the components': Features/TreeWind's tree

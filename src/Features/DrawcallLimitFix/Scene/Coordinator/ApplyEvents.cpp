@@ -274,7 +274,7 @@ namespace DCLF::Scene
 				HandBack(std::move(entry.fadeNodeRef));
 			}
 			tracked.clear();
-			ClearFaceShapes();
+			ComponentsForgotAll();
 			++trackedLayout;
 			sceneIdentity.Reset();
 			categoryNodes.clear();

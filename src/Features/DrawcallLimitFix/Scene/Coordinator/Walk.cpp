@@ -1,7 +1,8 @@
 // The coordinator's walk (scene lane; entry evaluations across the pool): the scene phase of a pass, the delta walk's rounds
-// (evaluate, then merge in order), the object records and their geometry slots, face shapes' regions, and the per-frame traits.
+// (evaluate, then merge in order), the object records and their geometry slots, and the per-frame traits.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
@@ -93,238 +94,15 @@ namespace DCLF::Scene
 		sceneBuilt = true;
 	}
 
-	bool Coordinator::ResolveFace(RE::BSGeometry& a_geometry, const Tracked& a_tracked, FaceSnapshots::ShapeView& a_face, std::uint32_t& a_region)
-	{
-		a_face = {};
-		a_region = kNoFaceRegion;
-		// The head's shapes: its dynamic-shape children in the mirror, each with its tracked entry's reference.
-		if (auto* head = a_tracked.faceHeadRef.get()) {
-			a_face = FaceSnapshots::Get().Shape(&a_geometry, head, [&](std::vector<FaceSnapshots::ShapeInput>& a_out) {
-				const auto* record = mirror.Node(head);
-				if (!record)
-					return;
-				for (const void* child : record->children) {
-					const auto* g = child ? mirror.Geometry(child) : nullptr;
-					if (!g || g->type != static_cast<std::uint8_t>(RE::BSGeometry::Type::kDynamicTriShape))
-						continue;
-					const auto entry = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(child)));
-					if (entry == tracked.end() || !entry->second.geometry)
-						continue;
-					a_out.push_back({ static_cast<RE::BSDynamicTriShape*>(entry->second.geometry.get()), g->vertexCount });
-				}
-			});
-		}
-		if (a_face.positions)
-			a_region = FaceRegionOf(&a_geometry, a_face.vertexCount);
-		return a_region != kNoFaceRegion;
-	}
-
-	void Coordinator::PushFaceStream(RE::BSGeometry& a_geometry, const Tracked& a_tracked, std::uint32_t a_slot, const FaceSnapshots::ShapeView& a_face, std::uint32_t a_region)
-	{
-		std::shared_ptr<const FaceSnapshots::HeadView> headView;
-		const RE::BSFaceGenNiNode* head = a_tracked.faceHeadRef.get();  // the entry's
-		if (head) {
-			auto [headEntry, inserted] = capturedFaceHeads.try_emplace(head);
-			if (inserted) {
-				auto snapshot = FaceSnapshots::Get().HeadSnapshot(*head);
-				if (snapshot.recordId && snapshot.generation && snapshot.owner)
-					headEntry->second = std::make_shared<const FaceSnapshots::HeadView>(std::move(snapshot));
-			}
-			headView = headEntry->second;
-		}
-		if (headView && (headView->generation != a_face.generation || headView->owner != a_face.owner))
-			headView.reset();
-		tables.SetFaceStream(a_slot, { a_slot, a_region, a_face.vertexCount, a_face.generation, a_face.positions, a_face.owner, std::move(headView), &a_geometry, head });
-	}
-
-	void Coordinator::ListFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked)
-	{
-		const auto* head = a_tracked.faceHeadRef.get();  // the entry's
-		if (!head || a_tracked.faceHead == head)
-			return;
-		UnlistFaceShape(a_geometry, a_tracked);
-		faceHeads[head].push_back(a_geometry);
-		a_tracked.faceHead = head;
-	}
-
-	void Coordinator::UnlistFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked)
-	{
-		const auto* head = std::exchange(a_tracked.faceHead, nullptr);
-		if (!head)
-			return;
-		const auto it = faceHeads.find(head);
-		if (it == faceHeads.end())
-			return;
-		std::erase(it->second, a_geometry);
-		if (!it->second.empty()) {
-			// Its siblings are written again, which rebuilds the head's record without it.
-			faceStale.push_back(head);
-			return;
-		}
-		faceHeads.erase(it);
-		if (FaceSnapshots::Enabled())
-			FaceSnapshots::Get().Release(head);
-	}
-
-	void Coordinator::ClearFaceShapes()
-	{
-		faceHeads.clear();
-		facePublished.clear();
-		faceStale.clear();
-		if (FaceSnapshots::Enabled())
-			FaceSnapshots::Get().ReleaseAll();
-	}
-
-	void Coordinator::ApplyFacePublications()
-	{
-		// A head's record changed shape: every shape of it is written again, the first rebuilding the record.
-		for (const auto* head : faceStale) {
-			const auto it = faceHeads.find(head);
-			if (it == faceHeads.end())
-				continue;
-			for (auto* geometry : it->second)
-				if (const auto entry = tracked.find(geometry); entry != tracked.end()) {
-					Schedule(entry->first, entry->second, true);
-					++delta.faceWritten;
-				}
-		}
-		faceStale.clear();
-		// A new snapshot of a head: its kept streams take it in place; a shape that waits for one is written.
-		auto& snapshots = FaceSnapshots::Get();
-		delta.facePublished += facePublished.size();
-		for (const auto* head : facePublished) {
-			const auto it = faceHeads.find(head);
-			if (it == faceHeads.end())
-				continue;
-			std::shared_ptr<const FaceSnapshots::HeadView> headView;
-			bool headTaken = false;
-			for (auto* geometry : it->second) {
-				const auto entry = tracked.find(geometry);
-				if (entry == tracked.end())
-					continue;
-				auto& tracked_ = entry->second;
-				const std::uint32_t slot = tracked_.slot;
-				const std::uint32_t index = slot != kNoObjectSlot && slot < tables.faceStream.size() ? tables.faceStream[slot] : kNoFaceStream;
-				if (index == kNoFaceStream) {
-					if (tracked_.faceWaiting) {
-						Schedule(entry->first, tracked_, true);
-						++delta.faceWritten;
-					}
-					continue;
-				}
-				auto& stream = tables.faceStreams[index];
-				auto view = snapshots.View(geometry, head);
-				if (!view.positions || view.vertexCount != stream.vertexCount) {
-					Schedule(entry->first, tracked_, true);
-					++delta.faceWritten;
-					continue;
-				}
-				if (!headTaken) {
-					headTaken = true;
-					if (auto snapshot = snapshots.HeadSnapshot(*head); snapshot.recordId && snapshot.generation && snapshot.owner)
-						headView = std::make_shared<const FaceSnapshots::HeadView>(std::move(snapshot));
-				}
-				stream.positions = view.positions;
-				stream.generation = view.generation;
-				stream.headView = headView && headView->generation == view.generation && headView->owner == view.owner ? headView : nullptr;
-				stream.owner = std::move(view.owner);
-				++delta.faceUpdated;
-			}
-		}
-		facePublished.clear();
-	}
-
-	std::uint32_t Coordinator::FaceRegionOf(const RE::BSGeometry* a_geometry, std::uint32_t a_vertexCount)
-	{
-		auto& region = faceRegions[a_geometry];
-		if (region.count != a_vertexCount) {
-			// Retired, not freed: an installed publication's streams may still name it.
-			if (region.count)
-				tables.Retire(Tables::kRetiredFaceRegion, region.first, region.count);
-			region = {};
-			// First fit among the freed ranges, else the top of the buffer.
-			for (auto it = faceRegionFree.begin(); it != faceRegionFree.end(); ++it) {
-				if (it->second < a_vertexCount)
-					continue;
-				region.first = it->first;
-				region.count = a_vertexCount;
-				it->first += a_vertexCount;
-				it->second -= a_vertexCount;
-				if (it->second == 0)
-					faceRegionFree.erase(it);
-				break;
-			}
-			if (!region.count) {
-				region.first = faceRegionTop;
-				region.count = a_vertexCount;
-				faceRegionTop += a_vertexCount;
-			}
-		}
-		return region.first;
-	}
-
-	void Coordinator::ClearFaceRegions()
-	{
-		faceRegions.clear();
-		faceRegionFree.clear();
-		faceRegionTop = 0;
-		tables.faceStreamsReleased.clear();
-	}
-
-	void Coordinator::EndFaceWalk()
-	{
-		// Freed streams' regions retire once no stream of the shape holds them. The dense walk's tables are put back, so skip it.
-		for (const auto& [geometry, first] : denseWalk ? decltype(tables.faceStreamsReleased){} : tables.faceStreamsReleased) {
-			const auto it = faceRegions.find(geometry);
-			if (it == faceRegions.end() || it->second.first != first)
-				continue;
-			if (const auto entry = tracked.find(const_cast<RE::BSGeometry*>(geometry)); entry != tracked.end()) {
-				const std::uint32_t slot = entry->second.slot;
-				if (slot != kNoObjectSlot && slot < tables.faceStream.size() && tables.faceStream[slot] != kNoFaceStream &&
-					tables.faceStreams[tables.faceStream[slot]].region == first)
-					continue;
-			}
-			tables.Retire(Tables::kRetiredFaceRegion, it->second.first, it->second.count);
-			faceRegions.erase(it);
-		}
-		tables.faceStreamsReleased.clear();
-		// Coalesce the free ranges (RecycleRetired returns them).
-		std::sort(faceRegionFree.begin(), faceRegionFree.end());
-		std::size_t out = 0;
-		for (std::size_t i = 0; i < faceRegionFree.size(); ++i) {
-			if (out && faceRegionFree[out - 1].first + faceRegionFree[out - 1].second == faceRegionFree[i].first)
-				faceRegionFree[out - 1].second += faceRegionFree[i].second;
-			else
-				faceRegionFree[out++] = faceRegionFree[i];
-		}
-		faceRegionFree.resize(out);
-		if (!faceRegionFree.empty() && faceRegionFree.back().first + faceRegionFree.back().second == faceRegionTop) {
-			faceRegionTop = faceRegionFree.back().first;
-			faceRegionFree.pop_back();
-		}
-		if (FaceSnapshots::Enabled())
-			FaceSnapshots::Get().EndWalk();
-	}
-
 	void Coordinator::BeginWalk(bool a_keepIndices)
 	{
-		capturedFaceHeads.clear();
 		const bool keepObjects = !denseWalk;
 		tables.ClearFrame(keepObjects);
 		if (!a_keepIndices)
 			InvalidateObjectIndices();
 		++walkSerial;
-		if (FaceSnapshots::Enabled()) {
-			FaceSnapshots::Get().BeginWalk(facePublished, faceStale);
-			// The freed records' references, released at Present through the retirement chain.
-			std::vector<RE::NiRefObject*> released;
-			FaceSnapshots::Get().TakeReleased(released);
-			for (auto* object : released) {
-				RE::NiPointer<RE::NiRefObject> reference(object);
-				object->DecRefCount();  // the count TakeReleased handed over, now the reference's
-				HandBack(std::move(reference));
-			}
-		}
+		// The components take their events since the last walk (Features/Faces: the heads' publications).
+		ComponentsWalkBegun();
 		stats.ineligible.fill(0);
 		stats.techniqueRejects.fill(0);
 		stats.shadowMaskPipelines = 0;
@@ -364,25 +142,23 @@ namespace DCLF::Scene
 
 		SweepObjectSlots();
 
-		EndFaceWalk();
+		ComponentsWalkEnded();
 		tables.InvalidateChangeLog();
 	}
 
 	void Coordinator::DenseReference(Tables& a_dense, ankerl::unordered_dense::map<const RE::BSGeometry*, Ineligible>& a_reasons)
 	{
 		// Everything the second walk overwrites is saved and restored, so the frame goes on with the slot tables unchanged (the
-		// geometry index and face regions live outside the tables, so they are saved too). Fade-root owners and the components' (Features/
-		// TreeWind's tree owners) are not: the dense walk lists none, and copies would be references the pump drops. The reference walks the
-		// whole tracked set.
+		// geometry index lives outside the tables, so it is saved too, and the components save what they keep that it writes: Features/
+		// Faces' regions). Fade-root owners and the components' (Features/TreeWind's tree owners) are not: the dense walk lists none, and
+		// copies would be references the pump drops. The reference walks the whole tracked set.
 		Tables slots = tables;
 		const auto savedStamp = objectStamp;
 		const auto savedStats = stats;
 		const auto savedSkinned = skinnedObjects;
 		const auto savedGeometryIndex = geometryIndex;
 		const auto savedRefreshed = refreshedGeometry;
-		const auto savedFaceRegions = faceRegions;
-		const auto savedFaceRegionFree = faceRegionFree;
-		const auto savedFaceRegionTop = faceRegionTop;
+		ComponentsDense(true);
 		BuildFullOrder();
 		referenceReasons.clear();
 		denseWalk = true;
@@ -390,9 +166,7 @@ namespace DCLF::Scene
 		denseWalk = false;
 		geometryIndex = savedGeometryIndex;
 		refreshedGeometry = savedRefreshed;
-		faceRegions = savedFaceRegions;
-		faceRegionFree = savedFaceRegionFree;
-		faceRegionTop = savedFaceRegionTop;
+		ComponentsDense(false);
 		a_dense = std::move(tables);
 		tables = std::move(slots);
 		objectStamp = savedStamp;
@@ -458,7 +232,7 @@ namespace DCLF::Scene
 			d.faceShape = faceShapeOf = leaf.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kDynamicTriShape) && leaf.parent &&
 			                            (leaf.parent->kind & SceneCapture::kKindFaceGen);
 		}
-		const bool faceShape = faceShapeOf && FaceSnapshots::Enabled();
+		const bool faceShape = faceShapeOf && Extensions::EntryClassTaken(Api::EntryClass::FaceShape);
 		// Actor-owned as Skin::GetWetness decides it; resolved once.
 		if (!entry.actorOwnedResolved) {
 			d.actorOwnedSet = true;
@@ -546,7 +320,7 @@ namespace DCLF::Scene
 			}
 		}
 
-		// The record's slot-free inputs (the face is the merge's: FaceSnapshots' state is shared).
+		// The record's slot-free inputs (the face's stream is the merge's: its component's state is shared).
 		a_out.write = EvalResult::Write::Record;
 		a_out.faceShape = faceShape;
 		const auto& g = *leaf.geometry;
@@ -626,8 +400,9 @@ namespace DCLF::Scene
 			trackedEntry->faceShapeResolved = true;
 			trackedEntry->faceShape = d.faceShape;
 		}
-		if (trackedEntry->faceShape && !trackedEntry->faceHead)
-			ListFaceShape(geometry, *trackedEntry);
+		// The component that follows face shapes lists them (Features/Faces: under their heads).
+		if (trackedEntry->faceShape)
+			ComponentsListed(*geometry, *trackedEntry, Api::EntryClass::FaceShape);
 		if (d.actorOwnedSet) {
 			trackedEntry->actorOwnedResolved = true;
 			trackedEntry->actorOwned = d.actorOwned;
@@ -647,12 +422,11 @@ namespace DCLF::Scene
 		const auto& g = *leaf.geometry;
 		const Ineligible reason = r.reason;
 		const bool shadowOnly = r.shadowOnly;
-		// A face shape's positions (its head's snapshot) and its region of the positions buffer, whatever its verdict. Without a
-		// snapshot it gets no record and waits for its head's publication (ApplyFacePublications), which writes it again.
-		FaceSnapshots::ShapeView face{};
-		std::uint32_t faceRegion = kNoFaceRegion;
-		trackedEntry->faceWaiting = r.faceShape && !ResolveFace(*geometry, *trackedEntry, face, faceRegion);
-		if (trackedEntry->faceWaiting)
+		// A face shape's positions (its head's snapshot) and its region of the positions buffer, whatever its verdict: its component's
+		// (Features/Faces). Without a snapshot it gets no record and waits for its head's publication, which writes it again.
+		Api::EntryWrite face{ *geometry, trackedEntry->faceHeadRef.get() };
+		trackedEntry->streamWaiting = r.faceShape && !ComponentsResolve(face, Api::EntryClass::FaceShape);
+		if (trackedEntry->streamWaiting)
 			return false;
 		// Geometry slots are shared by every object drawing the same TriShape; a skinned shape draws each partition's buffers.
 		const bool skinned = g.skin && g.skinPartition && !g.partitions.empty();
@@ -786,7 +560,7 @@ namespace DCLF::Scene
 		tables.sunEntryNode[objectId] = trackedEntry->sunEntryNode;
 		tables.hasFadeNode[objectId] = leaf.property && leaf.property->fadeNode ? 1 : 0;
 		if (face.positions)
-			PushFaceStream(*geometry, *trackedEntry, objectId, face, faceRegion);
+			ComponentsStreamed(objectId, face, Api::EntryClass::FaceShape);
 		else
 			tables.ClearFaceStream(objectId);
 		tables.shadowDiffuse[objectId] = r.shadowDiffuse;
@@ -2077,8 +1851,7 @@ namespace DCLF::Scene
 		if (full) {
 			// After a reset, a load or a live toggle nothing kept can be trusted.
 			fullEvaluation = false;
-			facePublished.clear();
-			faceStale.clear();
+			ComponentsScheduling(true);
 			++delta.full;
 			perFrameSet.clear();
 			pendingEvaluation.clear();
@@ -2167,7 +1940,8 @@ namespace DCLF::Scene
 				if (const auto it = tracked.find(geometry); it != tracked.end())
 					Schedule(it->first, it->second);
 			pendingEvaluation.clear();
-			ApplyFacePublications();
+			// The components' events (Features/Faces: the heads' publications) write their entries or update them in place.
+			ComponentsScheduling(false);
 			count(delta.pending);
 			delta.propertyEvents += propertyChanged.size();
 			delta.nodeEvents += nodeChanged.size();
@@ -2246,7 +2020,7 @@ namespace DCLF::Scene
 		}
 		{
 			DCLF_SCENE_PART(FaceWalk, "CS.DCLF.Scene.FaceWalk");
-			EndFaceWalk();
+			ComponentsWalkEnded();
 		}
 		stats.ineligible = buckets;
 		delta.evaluated += order.size();

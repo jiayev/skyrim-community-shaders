@@ -13,7 +13,6 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameData.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"

@@ -17,7 +17,6 @@
 #	include "DrawcallLimitFix/Diagnostics/TestHarness.h"
 #	include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#	include "DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 #	include "DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #	include "DrawcallLimitFix/Engine/Views/SunViews.h"
 #	include "DrawcallLimitFix/Engine/Views/FocusViews.h"
@@ -90,7 +89,6 @@ void DrawcallLimitFix::PostPostLoad()
 	// The frame-sourced float positions built now, off the render thread's first frame.
 	(void)DCLF::MaterialSources::FramePSFloats();
 	(void)DCLF::MaterialSources::FrameVSFloats();
-	DCLF::FaceSnapshots::Get().Install();
 	DCLF::SunAccumulation::Get().Install();
 	DCLF::SunViews::Get().Install();
 	DCLF::LightSelection::Get().Install();
@@ -103,7 +101,7 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::LodGates::Install([] { return globals::features::drawcallLimitFix.Running(); });
 	// The features' extension points (Features/FeatureList.cpp), registered before DCLF's threads start and read-only after, and
 	// their engine hooks (after DCLF's own: Features/TreeWind's tree manager hooks follow the primary cull's stand-in; Features/Particles'
-	// snapshots of NiParticleSystem's update).
+	// snapshots of NiParticleSystem's update; Features/Faces' thunks in the face morphing).
 	DCLF::Extensions::InstallFeatures(DCLF::Features::List());
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();

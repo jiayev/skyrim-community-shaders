@@ -165,7 +165,7 @@ namespace DCLF::Draws
 		return bytes;
 	}
 
-	// ---- NPC face shapes' positions (FaceSnapshots, SceneTables::faceStreams). Each face stream has a
+	// ---- NPC face shapes' positions (Features/Faces' snapshots, SceneTables::faceStreams). Each face stream has a
 	// GeometryDraw after the geometry slots, whose vertex buffer view is the shape's region of the epoch's
 	// positions buffer; an input names it as its second stream (DrawInput::streamIndex).
 

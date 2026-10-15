@@ -31,7 +31,6 @@
 #include "Features/DrawcallLimitFix/Scene/Model/LodSegments.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
 #include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneIdentity.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
@@ -86,7 +85,6 @@ namespace DCLF
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Slots.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Materials.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Bindings.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Faces.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Walk.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Joins.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Residents.h"
@@ -129,7 +127,6 @@ namespace DCLF
 		private CoordinatorSlots,
 		private CoordinatorMaterials,
 		private CoordinatorBindings,
-		private CoordinatorFaces,
 		private CoordinatorWalk,
 		private CoordinatorJoins,
 		private CoordinatorResidents,
@@ -1031,28 +1028,6 @@ namespace DCLF
 		/** @brief New lookups (tables reset): generations past the last, versions continuing. */
 		void ResetLookups();
 
-		// The face shapes: State/Faces.h (CoordinatorFaces).
-		/** @brief A face shape's snapshot and region this walk; false without one. */
-		bool ResolveFace(RE::BSGeometry& a_geometry, const Tracked& a_tracked, FaceSnapshots::ShapeView& a_face, std::uint32_t& a_region);
-		/** @brief Appends a face shape's stream to this walk's faceStreams and points its slot at it. */
-		void PushFaceStream(RE::BSGeometry& a_geometry, const Tracked& a_tracked, std::uint32_t a_slot, const FaceSnapshots::ShapeView& a_face, std::uint32_t a_region);
-		/**
-		 * @brief The heads' publications: kept face streams take the new snapshot in place; waiting, missing or stale-head shapes are
-		 * rewritten.
-		 */
-		void ApplyFacePublications();
-		/** @brief A tracked face shape joins or leaves its head's list; the head's last one releases its record. */
-		void ListFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		void UnlistFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		void ClearFaceShapes();
-		/**
-		 * @brief A face shape's region of the positions buffer, held while a stream uses it; EndFaceWalk frees released streams' regions.
-		 * Walk thread only.
-		 */
-		std::uint32_t FaceRegionOf(const RE::BSGeometry* a_geometry, std::uint32_t a_vertexCount);
-		void EndFaceWalk();
-		void ClearFaceRegions();
-
 		// The walk: State/Walk.h (CoordinatorWalk).
 		/** @brief Skylighting::OcclusionTechnique from the records: the nearest fade node above the leaf's BSX flags. */
 		std::uint32_t OcclusionTechniqueOf(const SceneCapture::LeafView& a_leaf, bool a_skylighting) const;
@@ -1232,7 +1207,7 @@ namespace DCLF
 		void MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn);
 
 		// The features' components: State/Components.h (CoordinatorComponents). Each call runs every registered component's hook at
-		// the coordinator's residency point (Api::CoordinatorComponent), in registration order.
+		// the coordinator's residency point, walk phase or entry write (Api::CoordinatorComponent), in registration order.
 		/** @brief a_slot is resident (MarkResidentSlot; a fade node answer for a resident: ApplyFadeNodeAnswers). */
 		void ComponentsResident(std::uint32_t a_slot);
 		/** @brief a_slot's residency ended (DropResidentSlot, EndAllResidency). */
@@ -1249,6 +1224,27 @@ namespace DCLF
 		void ComponentsRewritten(std::uint32_t a_slot, bool a_written, std::uint32_t a_partitionsBefore, std::uint32_t a_partitionsNow);
 		/** @brief The accumulate phase's joins done (its statistics). */
 		void ComponentsJoinsDone();
+		/** @brief BeginWalk, its frame tables cleared and its serial moved on. */
+		void ComponentsWalkBegun();
+		/** @brief DeltaWalk's scheduling: a_full, a full evaluation; else after the pending entries (the counts into delta). */
+		void ComponentsScheduling(bool a_full);
+		/** @brief The walk's end (DeltaWalk after the candidates, DenseWalk after its sweep). */
+		void ComponentsWalkEnded();
+		/** @brief DenseReference: a_begun, before the dense walk; else right after it. */
+		void ComponentsDense(bool a_begun);
+		/** @brief EraseTracked, after the entry's slot is released. */
+		void ComponentsForgot(const RE::BSGeometry* a_geometry);
+		/** @brief The rescan, after the tracked set is cleared. */
+		void ComponentsForgotAll();
+		/** @brief RecycleRetired: a range component a_component retired (Tables::kRetiredComponentRange) is free. */
+		void ComponentRecycled(std::uint32_t a_component, std::uint32_t a_first, std::uint32_t a_count);
+		/**
+		 * @brief MergeWrite's writes of an entry of a_class (Api::CoordinatorComponent::follows): every write of one (listed); a taken record's
+		 * stream before its slot (resolve: false, it waits); the slot it took (streamed).
+		 */
+		void ComponentsListed(RE::BSGeometry& a_geometry, const Tracked& a_tracked, Api::EntryClass a_class);
+		bool ComponentsResolve(Api::EntryWrite& a_write, Api::EntryClass a_class);
+		void ComponentsStreamed(std::uint32_t a_slot, Api::EntryWrite& a_write, Api::EntryClass a_class);
 		/** @brief Component a_component's state, the components made first when they are not (scene lane). */
 		const std::shared_ptr<void>& ComponentState(std::uint32_t a_component);
 

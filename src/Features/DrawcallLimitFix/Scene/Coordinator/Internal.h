@@ -23,7 +23,6 @@
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/VertexInput.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 #include <bit>
 #include <cassert>
 #include <xbyak/xbyak.h>

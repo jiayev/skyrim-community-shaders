@@ -50,7 +50,7 @@ namespace DCLF
 		ShadowSets,        // RefreshShadowSets and its parity
 		ObjectSweep,       // SweepObjectSlots (a full walk only)
 		SunCandidates,     // UpdateSunCandidates
-		FaceWalk,          // EndFaceWalk
+		FaceWalk,          // the components' walk end (ComponentsWalkEnded: Features/Faces' regions)
 		WalkReference,     // the walk's observers' dense reference (DenseReference)
 		Shading,           // NameShadingEvents: the shading events' slots named for FrameValues
 		Placements,        // PublishPlacementPlan: the roots taken, and the walk's plan for FrameValues

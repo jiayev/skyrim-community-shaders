@@ -44,6 +44,39 @@ namespace DCLF::Api
 		coordinator.HandBack(a_references);
 	}
 
+	void CoordinatorComponentContext::HandBack(RE::NiPointer<RE::NiRefObject>&& a_reference) const
+	{
+		coordinator.HandBack(std::move(a_reference));
+	}
+
+	CoordinatorComponentContext::TrackedWrite CoordinatorComponentContext::TrackedWriteOf(const RE::BSGeometry* a_geometry) const
+	{
+		const auto entry = coordinator.tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
+		if (entry == coordinator.tracked.end())
+			return {};
+		return { true, entry->second.slot, entry->second.streamWaiting };
+	}
+
+	bool CoordinatorComponentContext::ScheduleWrite(RE::BSGeometry* a_geometry) const
+	{
+		const auto entry = coordinator.tracked.find(a_geometry);
+		if (entry == coordinator.tracked.end())
+			return false;
+		coordinator.Schedule(entry->first, entry->second, true);
+		return true;
+	}
+
+	RE::BSGeometry* CoordinatorComponentContext::TrackedGeometry(const void* a_key) const
+	{
+		const auto entry = coordinator.tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_key)));
+		return entry != coordinator.tracked.end() ? entry->second.geometry.get() : nullptr;
+	}
+
+	void CoordinatorComponentContext::RetireRange(std::uint32_t a_first, std::uint32_t a_count) const
+	{
+		tables.Retire(SceneTables::kRetiredComponentRange, a_first, a_count, static_cast<std::uint8_t>(component));
+	}
+
 	void CoordinatorComponentContext::RequestSeed(FadeSeedItem&& a_seed) const
 	{
 		auto& requests = coordinator.componentSeedRequests;
@@ -148,5 +181,93 @@ namespace DCLF::Scene
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
 			if (registered[c].joinsDone)
 				registered[c].joinsDone({ tables, ComponentState(c), *this, c });
+	}
+
+	void Coordinator::ComponentsWalkBegun()
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].walkBegun)
+				registered[c].walkBegun({ tables, ComponentState(c), *this, c });
+	}
+
+	void Coordinator::ComponentsScheduling(bool a_full)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c) {
+			if (!registered[c].scheduling)
+				continue;
+			Api::WalkScheduling scheduling{ a_full };
+			registered[c].scheduling({ tables, ComponentState(c), *this, c }, scheduling);
+			delta.facePublished += scheduling.events;
+			delta.faceUpdated += scheduling.updated;
+			delta.faceWritten += scheduling.written;
+		}
+	}
+
+	void Coordinator::ComponentsWalkEnded()
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].walkEnded)
+				registered[c].walkEnded({ tables, ComponentState(c), *this, c });
+	}
+
+	void Coordinator::ComponentsDense(bool a_begun)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (const auto hook = a_begun ? registered[c].denseBegun : registered[c].denseEnded)
+				hook({ tables, ComponentState(c), *this, c });
+	}
+
+	void Coordinator::ComponentsForgot(const RE::BSGeometry* a_geometry)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].forgot)
+				registered[c].forgot({ tables, ComponentState(c), *this, c }, a_geometry);
+	}
+
+	void Coordinator::ComponentsForgotAll()
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].forgotAll)
+				registered[c].forgotAll({ tables, ComponentState(c), *this, c });
+	}
+
+	void Coordinator::ComponentRecycled(std::uint32_t a_component, std::uint32_t a_first, std::uint32_t a_count)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		if (a_component < registered.size() && registered[a_component].recycled)
+			registered[a_component].recycled({ tables, ComponentState(a_component), *this, a_component }, a_first, a_count);
+	}
+
+	void Coordinator::ComponentsListed(RE::BSGeometry& a_geometry, const Tracked& a_tracked, Api::EntryClass a_class)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].follows == a_class && registered[c].listed) {
+				const Api::EntryWrite write{ a_geometry, a_tracked.faceHeadRef.get() };
+				registered[c].listed({ tables, ComponentState(c), *this, c }, write);
+			}
+	}
+
+	bool Coordinator::ComponentsResolve(Api::EntryWrite& a_write, Api::EntryClass a_class)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].follows == a_class)
+				return registered[c].resolve && registered[c].resolve({ tables, ComponentState(c), *this, c }, a_write);
+		return false;
+	}
+
+	void Coordinator::ComponentsStreamed(std::uint32_t a_slot, Api::EntryWrite& a_write, Api::EntryClass a_class)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].follows == a_class && registered[c].streamed)
+				registered[c].streamed({ tables, ComponentState(c), *this, c }, a_slot, a_write);
 	}
 }

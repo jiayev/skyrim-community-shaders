@@ -3,9 +3,9 @@
 
 #include "Features/DrawcallLimitFix/Scene/Model/Eligibility.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 
 namespace DCLF::Eligibility
 {
@@ -37,11 +37,11 @@ namespace DCLF::Eligibility
 		if (!a_leaf)
 			return Ineligible::NotTriShape;
 		const auto& g = *a_leaf.geometry;
-		// An NPC face shape (a dynamic shape under a BSFaceGenNiNode) takes the checks below like any shape. Its
-		// positions are not in its buffers but in FaceSnapshots: the walk gives every record of one its stream
-		// (Coordinator::Tracked::faceShape), whatever the verdict, and the draws bind it as the second stream.
+		// An NPC face shape (a dynamic shape under a BSFaceGenNiNode) takes the checks below like any shape, while face shapes are DCLF's
+		// (Api::EntryClass::FaceShape). Its positions are not in its buffers but its head's snapshots (Features/Faces): the walk gives every
+		// record of one its stream (Coordinator::Tracked::faceShape), whatever the verdict, and the draws bind it as the second stream.
 		const auto type = static_cast<RE::BSGeometry::Type>(g.type);
-		const bool face = type == RE::BSGeometry::Type::kDynamicTriShape && FaceSnapshots::Enabled() && a_leaf.parent &&
+		const bool face = type == RE::BSGeometry::Type::kDynamicTriShape && Extensions::EntryClassTaken(Api::EntryClass::FaceShape) && a_leaf.parent &&
 		                  (a_leaf.parent->kind & SceneCapture::kKindFaceGen);
 		// A BSMultiIndexTriShape (cave walls, rocks with a snow layer) draws every pass but one as a tri-shape: its renderer data and
 		// its triangle count (FUN_1414f2ad0, type 7). The exception is the additional property's main-pass layer (accumulation

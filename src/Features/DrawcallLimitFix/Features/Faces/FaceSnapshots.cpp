@@ -1,7 +1,7 @@
 // FaceSnapshots: the morph-job and stage-join thunks (the engine's face morphing threads) and the head records the coordinator's scene walk
-// keeps; the open-addressed head table they share.
+// keeps (through the feature's component, FaceShapes.cpp); the open-addressed head table they share.
 
-#include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
+#include "Features/DrawcallLimitFix/Features/Faces/FaceSnapshots.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -11,7 +11,7 @@
 #include <cstring>
 #include <vector>
 
-namespace DCLF
+namespace DCLF::Features::Faces
 {
 	namespace
 	{

@@ -105,6 +105,19 @@ namespace DCLF::Extensions
 		decltype(Api::CoordinatorComponent::accumulated) accumulated = nullptr;
 		decltype(Api::CoordinatorComponent::rewritten) rewritten = nullptr;
 		decltype(Api::CoordinatorComponent::joinsDone) joinsDone = nullptr;
+		decltype(Api::CoordinatorComponent::walkBegun) walkBegun = nullptr;
+		decltype(Api::CoordinatorComponent::scheduling) scheduling = nullptr;
+		decltype(Api::CoordinatorComponent::walkEnded) walkEnded = nullptr;
+		decltype(Api::CoordinatorComponent::denseBegun) denseBegun = nullptr;
+		decltype(Api::CoordinatorComponent::denseEnded) denseEnded = nullptr;
+		decltype(Api::CoordinatorComponent::forgot) forgot = nullptr;
+		decltype(Api::CoordinatorComponent::forgotAll) forgotAll = nullptr;
+		decltype(Api::CoordinatorComponent::recycled) recycled = nullptr;
+		Api::EntryClass follows = Api::EntryClass::None;
+		bool takes = false;
+		decltype(Api::CoordinatorComponent::listed) listed = nullptr;
+		decltype(Api::CoordinatorComponent::resolve) resolve = nullptr;
+		decltype(Api::CoordinatorComponent::streamed) streamed = nullptr;
 	};
 	/** @brief A registered shading contribution. */
 	struct ShadingContributionEntry

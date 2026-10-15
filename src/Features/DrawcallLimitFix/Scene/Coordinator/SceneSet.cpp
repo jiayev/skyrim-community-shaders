@@ -1102,9 +1102,9 @@ namespace DCLF::Scene
 		batch.slots.insert(batch.slots.end(), tables.retiring.begin(), tables.retiring.end());
 		tables.retiring.clear();
 		const std::uint32_t epoch = tables.slotEpoch;
-		tables.geometrySlots.TakeRetiring([&](std::uint32_t a_slot, std::uint32_t a_generation) { batch.slots.push_back({ Tables::kRetiredGeometrySlot, a_slot, a_generation, epoch }); });
-		tables.materialSlots.TakeRetiring([&](std::uint32_t a_slot, std::uint32_t a_generation) { batch.slots.push_back({ Tables::kRetiredMaterialSlot, a_slot, a_generation, epoch }); });
-		tables.pipelineSlots.TakeRetiring([&](std::uint32_t a_slot, std::uint32_t a_generation) { batch.slots.push_back({ Tables::kRetiredPipelineSlot, a_slot, a_generation, epoch }); });
+		tables.geometrySlots.TakeRetiring([&](std::uint32_t a_slot, std::uint32_t a_generation) { batch.slots.push_back({ Tables::kRetiredGeometrySlot, 0, a_slot, a_generation, epoch }); });
+		tables.materialSlots.TakeRetiring([&](std::uint32_t a_slot, std::uint32_t a_generation) { batch.slots.push_back({ Tables::kRetiredMaterialSlot, 0, a_slot, a_generation, epoch }); });
+		tables.pipelineSlots.TakeRetiring([&](std::uint32_t a_slot, std::uint32_t a_generation) { batch.slots.push_back({ Tables::kRetiredPipelineSlot, 0, a_slot, a_generation, epoch }); });
 		retirementStats.retired += batch.slots.size() - before;
 	}
 
@@ -1157,8 +1157,8 @@ namespace DCLF::Scene
 				case Tables::kRetiredPipelineSlot:
 					tables.pipelineSlots.Recycle(slot, retired.extra);
 					break;
-				case Tables::kRetiredFaceRegion:
-					faceRegionFree.push_back({ slot, retired.extra });
+				case Tables::kRetiredComponentRange:
+					ComponentRecycled(retired.owner, slot, retired.extra);
 					break;
 				}
 			}
