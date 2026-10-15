@@ -88,6 +88,20 @@ namespace DCLF::Extensions
 		std::uint32_t textureRegister = ~0u;
 		decltype(Api::FrameBinding::select) select = nullptr;
 	};
+	/** @brief A registered frame constant row. */
+	struct FrameConstantRowEntry
+	{
+		std::string name;
+		std::uint32_t row = ~0u;
+		decltype(Api::FrameConstantRow::sample) sample = nullptr;
+	};
+	/** @brief A registered frame texture. */
+	struct FrameTextureEntry
+	{
+		std::string name;
+		std::uint32_t textureRegister = ~0u;
+		decltype(Api::FrameTexture::view) view = nullptr;
+	};
 	/** @brief A feature's registered report lines. */
 	struct ReportLinesEntry
 	{
@@ -145,6 +159,10 @@ namespace DCLF::Extensions
 	std::span<const SceneResourcesEntry> RegisteredSceneResources();
 	std::span<const CommitHookEntry> RegisteredCommitHooks();
 	std::span<const FrameBindingEntry> RegisteredFrameBindings();
+	// The frame constant rows in ascending row order (Core's built-ins and the features'); the frame textures in registration order (Core's
+	// built-ins first; Extensions::FrameTextureIndices names each register's).
+	std::span<const FrameConstantRowEntry> RegisteredFrameConstantRows();
+	std::span<const FrameTextureEntry> RegisteredFrameTextures();
 	std::span<const ReportLinesEntry> RegisteredReportLines();
 	std::span<const Api::StandInObserver> RegisteredStandInObservers();
 	std::span<const TableFamilyEntry> RegisteredTableFamilies();

@@ -4,6 +4,8 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
@@ -25,8 +27,9 @@ namespace DCLF
 				const auto& entry = a_lookups.pipelines[p];
 				if (entry.setIndex == Lookups::kNone || !(entry.key == keys[p]) || entry.setIndex >= groups.size())
 					continue;
-				// The Effect port: no bucket for an effect key (no forward object is a depth input, and its pipeline has no Z-prepass pipeline).
-				if (RasterEffect(keys[p].rasterFlags))
+				// No bucket for a family key not a depth segment input (ProgramBuild::ForwardOrDecal, the Effect port's: no forward object is
+				// a depth input, and its pipeline has no Z-prepass pipeline).
+				if (!Extensions::FamilyRules(keys[p].rasterFlags).depthSegment)
 					continue;
 				const std::uint32_t group = groups[entry.setIndex];
 				auto& bucket = groupBucket[group];
@@ -88,9 +91,9 @@ namespace DCLF
 			add(constants, sizeof(FrameFog), FrameSlotOffset(false, kFrameFogRegister));
 			add(constants, kExtrasFrameVertexBytes, FrameSlotOffset(false, kFrameFogRegister) + sizeof(FrameFog));
 			add(constants, sizeof(ExtrasFrame::projectedGlobals), kExtrasPixelFrameOffset);
-			add(constants, sizeof(std::array<float, 4>), kEffectCameraFrameOffset);  // the Effect port (SampleEffectCamera)
-			add(constants, sizeof(std::array<float, 4>), kEffectLightFrameOffset);   // its Lighting variant (SampleEffectLight)
-			add(constants, sizeof(std::array<float, 4>), kEffectBloodFrameOffset);   // its Blood (SampleEffectBlood)
+			// The frame constant rows, in ascending row order (the Effect port's camera planes, light colour and blood).
+			for (const auto& row : Extensions::RegisteredFrameConstantRows())
+				add(constants, sizeof(float[4]), FrameConstantRowOffset(row.row));
 			if (!a_depthOnly && a_resources.foliage)
 				add(constants, 8 * sizeof(std::uint32_t), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame));
 			// The features' scene resources' latched buffers (Api::SceneResources::latched: Features/TreeLod's draw row and list header), the

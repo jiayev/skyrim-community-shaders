@@ -3,6 +3,7 @@
 // requirement is the publication's tables', the frame's posted counts' or the builds ahead's; a set is sealed only once it holds them
 // all (SceneBufferSet), so a shape made from that set never indexes past a buffer it names.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 
 namespace DCLF
@@ -105,8 +106,9 @@ namespace DCLF
 		if (moved)
 			layout.zBucketCapacity.resize(slots, 0u);
 		for (std::uint32_t p = 0; p < slots; ++p) {
-			// Effect keys draw only in the forward range and have no Z-prepass pipeline.
-			if (RasterEffect(a_tables.pipelines[p].rasterFlags))
+			// A family key not a depth segment input (ProgramBuild::ForwardOrDecal, the Effect port's) draws only in the forward range and
+			// has no Z-prepass pipeline.
+			if (!Extensions::FamilyRules(a_tables.pipelines[p].rasterFlags).depthSegment)
 				continue;
 			if (const std::uint32_t pipelineDraws = drawBound.PipelineDraws(p); pipelineDraws > layout.zBucketCapacity[p]) {
 				layout.zBucketCapacity[p] = std::bit_ceil(pipelineDraws);

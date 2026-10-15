@@ -43,13 +43,14 @@ namespace DCLF::Features::Effects
 				}
 				for (std::uint32_t m = 0; m < tables.materials.size(); ++m)
 					materials += tables.MaterialUsed(m) && tables.materials[m].kind == kMaterialKindEffect ? 1u : 0u;
-				const auto pipelines = DrawPipelines::Get().GetStats();
+				const auto pipelineStats = DrawPipelines::Get().GetStats();
+				const auto& pipelines = pipelineStats.families[static_cast<std::size_t>(Api::ProgramFamily::Effect)];
 				const bool on = ActiveToggles().On(Toggle());
-				if (members || materials || pipelines.effectRequested || on)
+				if (members || materials || pipelines.requested || on)
 					text += fmt::format("[DCLF] effects (T7d's Effect port, CS_DCLF_EFFECTS {}): {} members bound ({} the Lighting variant, {} decals, {} skinned; {} forward "
 										"members in all; {} opaque, hint 0, in decal group 1), {} effect materials in use; pipelines {} requested, {} ready, {} failed{}{}\n",
-						on ? "on" : "off", members, lit, decals, skinned, forwardMembers, opaque, materials, pipelines.effectRequested, pipelines.effectReady,
-						pipelines.effectFailed, pipelines.effectFailed ? " <- EFFECT PIPELINE FAILED" : "", firstOpaque);
+						on ? "on" : "off", members, lit, decals, skinned, forwardMembers, opaque, materials, pipelines.requested, pipelines.ready, pipelines.failed,
+						pipelines.failed ? " <- EFFECT PIPELINE FAILED" : "", firstOpaque);
 			}
 			// CS_DCLF_SET_PARITY: the members' Lighting-variant passes the engine registered, against the sun light the port reads as their light 0.
 			if (const auto [checked, other] = TakeLight(); checked)

@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
 #include "Features/DrawcallLimitFix/Scene/Model/FrameTables.h"
@@ -292,22 +293,27 @@ namespace DCLF
 	// the leaf to the drawing camera (DCLFBillboardWorld). Shares bits 4-7 with refraction.
 	inline constexpr std::uint32_t kRecordEffectBillboard = 1u << 4;
 	inline constexpr std::uint32_t kRecordEffectBillboardModeShift = 5;
-	/** @brief The kRecordEffect* bits of an object drawn with a_key: none unless it is an effect key (kRasterEffect). */
-	inline constexpr std::uint32_t EffectRecordFlagsOf(const PipelineKey& a_key, std::uint32_t a_objectFlags)
+	/**
+	 * @brief The record bits of an object drawn with a_key its family sets (Extensions::FamilyRules' records: the Effect port's kRecordEffect*
+	 * bits, its billboard mode from the key's spare bits): none for a Lighting key.
+	 */
+	inline std::uint32_t FamilyRecordFlagsOf(const PipelineKey& a_key, std::uint32_t a_objectFlags)
 	{
-		const std::uint32_t billboard = RasterEffectBillboard(a_key.rasterFlags);
-		return (RasterEffect(a_key.rasterFlags) && (a_objectFlags & kObjectSuppressExternalEmittance) ? kRecordEffectSuppressEmittance : 0u) |
-		       (billboard ? kRecordEffectBillboard | ((billboard - 1) << kRecordEffectBillboardModeShift) : 0u);
+		const auto& rules = Extensions::FamilyRules(a_key.rasterFlags);
+		const std::uint32_t turned = rules.turnedKeyBits ? (a_key.rasterFlags >> rules.spareShift) & kProgramFamilySpareBits : 0u;
+		return ((a_objectFlags & kObjectSuppressExternalEmittance) ? rules.records.suppressEmittance : 0u) |
+		       (turned ? rules.records.turned | ((turned - 1) << rules.records.turnedModeShift) : 0u);
 	}
 	/**
-	 * @brief Whether a_key is the Effect Blood permutation. SetupGeometry (0x1414eab10) writes its PS AlphaTestRef.x as the alpha
-	 * property's threshold / 255 whatever its alpha test, so that is the record's reference (DCLFBloodAlphaTestRef).
+	 * @brief Whether a_key's family keeps the alpha property's threshold as its reference whatever its alpha test (its records'
+	 * alphaRefPassBits in its pass descriptor): the Effect Blood permutation, whose PS AlphaTestRef.x SetupGeometry (0x1414eab10) writes
+	 * as the threshold / 255 (DCLFBloodAlphaTestRef).
 	 */
-	inline constexpr bool BloodEffectKey(const PipelineKey& a_key) { return RasterEffect(a_key.rasterFlags) && (a_key.passDescriptor & (1u << 14)); }
+	inline bool FamilyAlphaRefKey(const PipelineKey& a_key) { return (a_key.passDescriptor & Extensions::FamilyRules(a_key.rasterFlags).records.alphaRefPassBits) != 0; }
 	/** @brief BindlessObject::alphaTestRef of an object drawn with a_key: threshold / 255 when alpha tested or a Blood effect, else 0. */
 	inline float AlphaTestRefOf(std::uint32_t a_objectFlags, const PipelineKey* a_key)
 	{
-		const bool blood = a_key && !(a_objectFlags & kObjectNoBindings) && BloodEffectKey(*a_key);
+		const bool blood = a_key && !(a_objectFlags & kObjectNoBindings) && FamilyAlphaRefKey(*a_key);
 		return (a_objectFlags & kObjectAlphaTest) || blood ? ((a_objectFlags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
 	}
 	inline constexpr std::uint32_t kRecordFadeRootShift = 8;

@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
@@ -503,10 +504,9 @@ namespace DCLF::Draws
 			}
 			PackConstantGroup(a_block, a_layout, a_table, a_variables, a_first, std::span(row.bytes.data() + a_offset, a_room));
 		};
-		// An effect key's technique and PerGeometry blocks stay zero: its variants read the frame's (fog VS b13, camera planes PS
-		// b13 c17: Effect.hlsl) or the object's (World, PropertyColor, alpha test reference).
-		const bool effect = RasterEffect(tables.pipelines[p].rasterFlags);
-		if (!effect) {
+		// A family key without row blocks keeps its technique and PerGeometry blocks zero (the Effect port's: its variants read the frame's
+		// fog VS b13 and camera planes PS b13 c17, Effect.hlsl, or the object's World, PropertyColor and alpha test reference).
+		if (Extensions::FamilyRules(tables.pipelines[p].rasterFlags).rowBlocks) {
 			pack(technique.vs, LightingVSLayout(), blocks.vsTable, kVSGroups[kPerTechnique], kVSFirstVariable[kPerTechnique], kPipelineRowTechniqueVS, kPipelineRowTechniqueBytes);
 			pack(technique.ps, LightingPSLayout(), blocks.psTable, kPSGroups[kPerTechnique], kPSFirstVariable[kPerTechnique], kPipelineRowTechniquePS, kPipelineRowTechniqueBytes);
 			// The PerGeometry template: what objects do not override from their records.
@@ -731,11 +731,11 @@ namespace DCLF::Draws
 		// Both segments or neither: every built segment's variant must get what it reads, colour first (its skip is the report's).
 		if (colourBuilt && !reads(kAsyncColour))
 			return;
-		// Forward keys (blended Lighting, refraction, effects) are no depth segment input, so their depth variant is never drawn. An
-		// effect's depth variant is its colour stages (BuildEffect), drawn only by the colour segment's decal depth pass with the
-		// colour frame record, which the check above covered.
+		// Forward keys (blended Lighting, refraction, effects) are no depth segment input, so their depth variant is never drawn. A
+		// ForwardOrDecal family key's depth variant (the Effect port's) is its colour stages (BuildForwardOrDecal), drawn only by the colour
+		// segment's decal depth pass with the colour frame record, which the check above covered.
 		const auto rasterFlags = tables.pipelines[p].rasterFlags;
-		if (segmentIn[kAsyncZPrepass] && !RasterForward(rasterFlags) && !RasterEffect(rasterFlags) && !reads(kAsyncZPrepass)) {
+		if (segmentIn[kAsyncZPrepass] && !RasterForward(rasterFlags) && Extensions::FamilyRules(rasterFlags).depthSegment && !reads(kAsyncZPrepass)) {
 			// Colour alone would test EQUAL against depth nobody wrote: neither segment draws it.
 			static std::atomic<std::uint32_t> logged{ 0 };
 			if (colourBuilt && logged.fetch_add(1, std::memory_order_relaxed) < 8)
@@ -752,8 +752,9 @@ namespace DCLF::Draws
 		// The row's sources: the material record and frame values, its lookup entry, the shared lookups, its technique's bindings
 		// (filter modes a material leaves unwritten) and the constant tables it is packed with.
 		const Lookups::Material* lookup = m < lookups.materials.size() ? &lookups.materials[m] : nullptr;
-		// The Lighting pass descriptor's ProjectedUV (an effect key's bit 15 is Membrane's, not ported).
-		const bool projected = (tables.pipelines[p].passDescriptor & 0x8000u) != 0 && !RasterEffect(tables.pipelines[p].rasterFlags);
+		// The key's port's ProjectedUV bit of its pass descriptor (Lighting's 0x8000; none for an effect key, whose bit 15 is Membrane's, not
+		// ported).
+		const bool projected = (tables.pipelines[p].passDescriptor & Extensions::FamilyRules(tables.pipelines[p].rasterFlags).projectedPassBit) != 0;
 		return { m < tables.materialVersion.size() ? tables.materialVersion[m] : 0u, m < tables.materialFrameVersion.size() ? tables.materialFrameVersion[m] : 0u,
 			lookup ? lookup->version : ~0u, lookups.sharedVersion, tables.TechniqueOf(p).bindingVersion, projected ? 1u : 0u, static_cast<std::uint32_t>(blocks.tables),
 			static_cast<std::uint32_t>(blocks.tables >> 32) };
@@ -761,7 +762,7 @@ namespace DCLF::Draws
 
 	std::array<std::uint64_t, 3> MainBuild::PackingOf(std::uint32_t p) const
 	{
-		const bool projected = (tables.pipelines[p].passDescriptor & 0x8000u) != 0 && !RasterEffect(tables.pipelines[p].rasterFlags);
+		const bool projected = (tables.pipelines[p].passDescriptor & Extensions::FamilyRules(tables.pipelines[p].rasterFlags).projectedPassBit) != 0;
 		return { tables.TechniqueOf(p).bindingVersion, projected ? 1u : 0u, pipelineBlocks[p].tables };
 	}
 
@@ -805,7 +806,7 @@ namespace DCLF::Draws
 		// PerMaterial blocks, packed through the technique's tables in the record's shader's variable space (a port's record is its shader's,
 		// the Effect port's BSEffectShader's, its tables Effect.hlsl's), the groups the key's shader's. A record of another shader than its
 		// key's gets no row.
-		const std::uint8_t keyKind = RasterEffect(tables.pipelines[p].rasterFlags) ? kMaterialKindEffect : kMaterialKindLighting;
+		const std::uint8_t keyKind = Extensions::FamilyRules(tables.pipelines[p].rasterFlags).kind;
 		const auto& recordSpace = Extensions::MaterialSpaceOf(material.kind);
 		const auto& keySpace = Extensions::MaterialSpaceOf(keyKind);
 		const auto& vsLayout = recordSpace.vs.layout;

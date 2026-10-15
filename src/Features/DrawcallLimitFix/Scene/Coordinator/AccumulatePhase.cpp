@@ -5,6 +5,7 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
@@ -856,12 +857,13 @@ namespace DCLF::Scene
 				rasterFlags |= PackRefractionRasterFlags(descriptors.refractionFalloff, descriptors.refractionClamp);
 			if (globals::features::extendedTranslucency.loaded && !descriptors.port)
 				rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ TranslucencyModelOf(r.leaf)) & 7u) << kRasterTranslucencyShift;
-			if (descriptors.port == kMaterialKindEffect)
-				rasterFlags |= kRasterEffect;
-			// A billboard leaf's mode + 1, so the vertex stage turns it (ClassifyFrame admits it only with a mode).
-			if (descriptors.port == kMaterialKindEffect && entry.parentReason == Ineligible::Billboard)
+			// A port's key carries its program family's key bit (the Effect port's kRasterEffect; none for Lighting's).
+			const auto& family = Extensions::FamilyRulesOfKind(descriptors.port);
+			rasterFlags |= family.keyBit;
+			// A billboard leaf's mode + 1 in its family's spare bits, so the vertex stage turns it (ClassifyFrame admits it only with a mode).
+			if (family.turnedKeyBits && entry.parentReason == Ineligible::Billboard)
 				if (const std::int32_t mode = BillboardModeOf(entry); mode >= 0)
-					rasterFlags |= static_cast<std::uint32_t>(mode + 1) << kRasterEffectBillboardShift;
+					rasterFlags |= static_cast<std::uint32_t>(mode + 1) << family.spareShift;
 			r.key = PipelineKey{ descriptors.vertex, descriptors.pixel, rasterFlags, descriptors.pass,
 				VertexLayoutOf(tables.geometries[r.geometrySlot].vertexDesc) };
 			// ExternalEmittance::ShouldSuppress: interior, kExternalEmittance, and a reference without an emittance source.
@@ -869,8 +871,9 @@ namespace DCLF::Scene
 			r.staticFlags = (alphaTest ? kObjectAlphaTest : 0u) | (twoSided ? kObjectTwoSided : 0u) |
 			                (suppress ? kObjectSuppressExternalEmittance : 0u) |
 			                TechniqueFlags(descriptors.technique) |
-			                // A Blood effect keeps its threshold too (AlphaTestRefOf: SetupGeometry's AlphaTestRef.x, tested or not).
-			                ((alphaTest || (alpha && descriptors.port == kMaterialKindEffect && (descriptors.pass & EffectFlag::Blood))) ?
+			                // A Blood effect keeps its threshold too (its family's alphaRefPassBits; AlphaTestRefOf: SetupGeometry's AlphaTestRef.x,
+			                // tested or not).
+			                ((alphaTest || (alpha && (descriptors.pass & family.records.alphaRefPassBits))) ?
 			                        static_cast<std::uint32_t>(alpha->threshold) << kObjectAlphaThresholdShift :
 			                        0u) |
 			                (alphaTest && alphaBlending ? kObjectAlphaBlended : 0u) |

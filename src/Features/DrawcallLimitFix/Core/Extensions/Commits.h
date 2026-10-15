@@ -1,11 +1,14 @@
 #pragma once
 
-// The commit hook contract's Core side (Api/Commits.h): what a registered hook's commit is handed, and the call the commits make.
+// The commit hook contract's Core side (Api/Commits.h): what a registered hook's commit is handed, and the call the commits make. And the
+// frame constant rows' (Api::FrameConstantRow): Core's feature rows of PS b13 they take, and Core's built-ins (the main commits latch them
+// in ascending row order, Extensions::RegisteredFrameConstantRows: LatchFrameSlots and MainLatchedLayout).
 
 #include "Features/DrawcallLimitFix/Api/Commits.h"
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace org::services
@@ -48,4 +51,16 @@ namespace DCLF::Extensions
 {
 	/** @brief Render thread (a commit, with the scene's streams): every registered hook's commit, in order. */
 	void RunCommitHooks(const Api::CommitContext& a_commit);
+
+	/**
+	 * @brief Core's feature rows of the lighting slot (PS b13): c17 up to c19, after the extras' pixel row (c16). A frame constant row
+	 * takes one of them (Features/Manifest.cpp checks the features' rows, the install every registration's).
+	 */
+	inline constexpr std::uint32_t kFrameConstantRowFirst = 17;
+	inline constexpr std::uint32_t kFrameConstantRowsEnd = 20;
+	/**
+	 * @brief Core's own frame constant rows, registered ahead of the features' (Registry's InstallFeatures): the Effect port's camera
+	 * planes, light colour and blood (c17-c19), until Features/Effects registers them (Scene/Ports/EffectFrame.cpp).
+	 */
+	std::span<const Api::FrameConstantRow> CoreFrameConstantRows();
 }

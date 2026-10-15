@@ -259,7 +259,7 @@ namespace DCLF
 		// MaterialModelOf; the permutation's ExtraFeatureDescriptor). Non-zero only for blended geometry (e.g. NPC hairlines).
 		kRasterTranslucencyShift = 21,
 		// Effect keys only, same 3 bits: billboard mode + 1 of a leaf under an NiBillboardNode (CS_DCLF_BILLBOARDS), else 0. The
-		// vertex stage turns the leaf to its view's camera (DCLFBillboardWorld); the record carries the mode (EffectRecordFlagsOf).
+		// vertex stage turns the leaf to its view's camera (DCLFBillboardWorld); the record carries the mode (FamilyRecordFlagsOf).
 		kRasterEffectBillboardShift = kRasterTranslucencyShift,
 		// 2 bits, ObjectTerrainGroup. Group 1: blend and write modes 1 and 1, LESS_EQUAL with depth writes; group 2: write mode 1,
 		// no blending, EQUAL. No depth bias.

@@ -428,9 +428,9 @@ namespace DCLF
 			fades = ((pass & 0x200u) ? kLodFadeSpecular | ((a_renderFlags & 2) ? 0u : kLodFadeSsr) : 0u) | (((pass >> 24) & 0x3f) == 1 ? kLodFadeEnvmap : 0u);
 		}
 		a_out.lodFades = fades;
-		// A refraction object's variant bits (kRecordRefraction*), from its key; the Effect port's suppress bit (kRecordEffectSuppressEmittance).
+		// A refraction object's variant bits (kRecordRefraction*), from its key; its family's (the Effect port's suppress and billboard bits).
 		if (!(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size())
-			a_out.recordFlags |= RefractionRecordFlagsOf(a_tables.pipelines[object.pipelineIndex]) | EffectRecordFlagsOf(a_tables.pipelines[object.pipelineIndex], object.flags);
+			a_out.recordFlags |= RefractionRecordFlagsOf(a_tables.pipelines[object.pipelineIndex]) | FamilyRecordFlagsOf(a_tables.pipelines[object.pipelineIndex], object.flags);
 	}
 
 	void SampleEffectShading(const RE::BSShaderProperty& a_base, bool a_member, BindlessShading& a_out)

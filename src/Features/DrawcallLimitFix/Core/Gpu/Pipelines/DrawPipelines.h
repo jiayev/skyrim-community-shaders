@@ -361,8 +361,12 @@ namespace DCLF
 			std::uint32_t treeLodRequested = 0, treeLodReady = 0, treeLodFailed = 0;
 			std::uint32_t forwardRequested = 0, forwardReady = 0, forwardFailed = 0;
 			std::uint32_t treeLodWaits = 0, forwardWaits = 0;
-			// Effect keys (kRasterEffect) among requested, ready and failed.
-			std::uint32_t effectRequested = 0, effectReady = 0, effectFailed = 0;
+			// By program family: its keys (KeyFamily; the Effect port's kRasterEffect) among requested, ready and failed.
+			struct Family
+			{
+				std::uint32_t requested = 0, ready = 0, failed = 0;
+			};
+			std::array<Family, Extensions::kProgramFamilies> families{};
 		};
 
 		static DrawPipelines& Get();

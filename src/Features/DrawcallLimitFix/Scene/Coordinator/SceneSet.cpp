@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
@@ -42,7 +43,8 @@ namespace DCLF::Scene
 			const auto p = tables.objects[a_slot].pipelineIndex;
 			const bool forward = (flags & kObjectForward) && p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags);
 			const bool drawable = !(flags & kObjectShadowOnly) && !ObjectDecalGroup(flags) && p < tables.pipelines.size() &&
-			                      !RasterRefraction(tables.pipelines[p].rasterFlags) && (forward || !((flags & kObjectForward) || RasterEffect(tables.pipelines[p].rasterFlags)));
+			                      !RasterRefraction(tables.pipelines[p].rasterFlags) &&
+			                      (forward || !((flags & kObjectForward) || Extensions::FamilyRules(tables.pipelines[p].rasterFlags).rootViewsForwardOnly));
 			return static_cast<std::uint8_t>((drawable ? Extensions::ViewEntryOf(view).phase : 0u) & a_drawn);
 		}
 		std::uint32_t phases = 0;

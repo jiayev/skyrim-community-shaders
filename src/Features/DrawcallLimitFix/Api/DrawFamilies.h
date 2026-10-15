@@ -1,7 +1,8 @@
 #pragma once
 
 // The draw family contract (Api::InstallContext::RegisterDrawFamily): a feature's instanced draws in Core's main passes (the depth
-// segment's two phases and the colour segment) and in a trees view's faces, at Core's fixed slot for the family.
+// segment's two phases and the colour segment) and in a trees view's faces, at Core's fixed slot for the family. And its sibling, the
+// program family contract (RegisterProgramFamily): a material port's keys drawn by the main pipeline set at Core's slot for the family.
 
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
@@ -94,5 +95,67 @@ namespace DCLF::Api
 			bool (*row)(DrawFamilyFaceRow& a_row) = nullptr;
 			void (*lists)(DrawFamilyLists& a_lists) = nullptr;
 		} faces;
+	};
+
+	/**
+	 * @brief Core's fixed slot per program family (Core/Gpu/Pipelines/ProgramFamilySlots.h): a material port's shader drawn by the main
+	 * pipeline set beside Lighting's keys, whichever feature takes it - its key bit in the raster flags (KeyFamily), the three spare key
+	 * bits it may use, its bit in the stage cache's key and in its programs' ids, its Z key's salt and its pipeline counters.
+	 */
+	enum class ProgramFamily : std::uint8_t
+	{
+		// The Effect port's keys (BSEffectShader; Effect.hlsl): key bit 17, spare bits 21-23, stage-key bit 37, program-id bit 63.
+		Effect,
+		Count,
+	};
+
+	/** @brief The stages a family's programs are built of. */
+	enum class ProgramStages : std::uint8_t
+	{
+		VertexPixel,  // its source's vertex and pixel stages alone, never pulled
+	};
+
+	/** @brief How a family's pipelines are built from its program (Core's named rules). */
+	enum class ProgramBuild : std::uint8_t
+	{
+		// A forward key's or a decal group's (a decal draws the DEFERRED pixel stage): its depth variant its colour stages, never a depth
+		// segment input (no Z-prepass bucket) and its Z key never shared.
+		ForwardOrDecal,
+	};
+
+	/**
+	 * @brief A program family (Api::InstallContext::RegisterProgramFamily): a material port's keys (Api/ObjectContributors.h, section 4:
+	 * the port with shaderType) drawn by the main pipeline set at Core's slot for the family. What Core reads per object per frame is
+	 * resolved once at install, as data (Extensions::FamilyRules); programSource is called only by the pipeline lane's render-thread side.
+	 *
+	 * - family: the slot. shaderType: its port's engine shader (RE::BSShader::Type), the source of its programs' defines.
+	 * - name: the logs' ("Effect": "SPIR-V build of Effect ..."); keyName: its keys' and recipes' ("effect": "dclf.effect...", "effect
+	 *   color"); sourcePath: its HLSL ("Data/Shaders/Effect.hlsl"), loaded with Core's sources; nativeNote: what stays native without it
+	 *   ("effect meshes stay native").
+	 * - stages, build: its programs' stages and its pipelines' rule.
+	 * - rowBlocks: false: its pipeline rows' technique and geometry blocks stay zero (its variants read the frame's and the object's).
+	 * - rootViewsForwardOnly: a category root's view (first person) draws its keys only when forward (a decal stays the engine's).
+	 * - turnedKeyBits: a billboard-turned leaf's key carries the billboard mode + 1 in the family's spare bits (Coordinator::BillboardModeOf).
+	 * - records: the object record bits its keys set (BindlessObject::recordFlags): suppressEmittance for an object with External
+	 *   Emittance suppressed; turned and the mode at turnedModeShift for a turned leaf; alphaRefPassBits: the pass descriptor bits whose
+	 *   keys keep the alpha property's threshold as their reference whatever the alpha test.
+	 * - programSource: render thread, each time the lane's inputs are posted: the engine shader its programs are built from (null: none
+	 *   yet).
+	 */
+	struct ProgramFamilyContribution
+	{
+		ProgramFamily family = ProgramFamily::Count;
+		std::uint8_t shaderType = 0xFF;
+		std::string_view name, keyName, sourcePath, nativeNote;
+		ProgramStages stages = ProgramStages::VertexPixel;
+		ProgramBuild build = ProgramBuild::ForwardOrDecal;
+		bool rowBlocks = true;
+		bool rootViewsForwardOnly = false;
+		bool turnedKeyBits = false;
+		struct Records
+		{
+			std::uint32_t suppressEmittance = 0, turned = 0, turnedModeShift = 0, alphaRefPassBits = 0;
+		} records;
+		const void* (*programSource)() = nullptr;
 	};
 }

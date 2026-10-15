@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
@@ -16,6 +17,10 @@
 
 namespace DCLF
 {
+	// Core's feature rows start right after the extras' pixel row (FrameSlots.h).
+	static_assert(Draws::FrameConstantRowOffset(Extensions::kFrameConstantRowFirst) == Draws::kExtrasPixelFrameOffset + sizeof(ExtrasFrame::projectedGlobals),
+		"Core's first frame constant row is not right after the extras' pixel row");
+
 	void Draws::CommitUploads::operator()(const Versioned& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset)
 	{
 		Diagnostics::Notify(Diagnostics::CommitTargetStaged{ adopted, a_target });
@@ -147,8 +152,8 @@ namespace DCLF
 			a_commit.latched(resources.frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 		}
 
-		// The frame slots, the shared light block and the frame-wide values in PS/VS b13 (lighting, LOD fades, fog, extras, effects,
-		// foliage).
+		// The frame slots, the shared light block and the frame-wide values in PS/VS b13 (lighting, LOD fades, fog, extras, the frame
+		// constant rows, foliage).
 		void LatchFrameSlots(const MainCommit& a_commit, const FrameBlocks& a_blocks)
 		{
 			const auto& resources = a_commit.resources;
@@ -178,15 +183,13 @@ namespace DCLF
 			const ExtrasFrame extrasFrame = SampleExtrasFrame();
 			latched(resources->frameConstants, &extrasFrame, kExtrasFrameVertexBytes, FrameSlotOffset(false, kFrameFogRegister) + sizeof(FrameFog));
 			latched(resources->frameConstants, extrasFrame.projectedGlobals, sizeof(extrasFrame.projectedGlobals), kExtrasPixelFrameOffset);
-			// The camera planes soft effects read (PS b13 c17, DCLFEffectCamera).
-			const auto effectCamera = SampleEffectCamera();
-			latched(resources->frameConstants, effectCamera.data(), sizeof(effectCamera), kEffectCameraFrameOffset);
-			// The sun's effect colour (PS b13 c18, DCLFEffectDLightColor).
-			const auto effectLight = SampleEffectLight();
-			latched(resources->frameConstants, effectLight.data(), sizeof(effectLight), kEffectLightFrameOffset);
-			// Blood's AlphaTestRef.yz (PS b13 c19, DCLFEffectBlood): the weapon blood's two globals.
-			const auto effectBlood = SampleEffectBlood();
-			latched(resources->frameConstants, effectBlood.data(), sizeof(effectBlood), kEffectBloodFrameOffset);
+			// The frame constant rows (PS b13 c17 and up, Api::FrameConstantRow: the Effect port's camera planes, light colour and blood),
+			// in ascending row order, as MainLatchedLayout lays them out.
+			for (const auto& row : Extensions::RegisteredFrameConstantRows()) {
+				float value[4]{};
+				row.sample(value);
+				latched(resources->frameConstants, value, sizeof(value), FrameConstantRowOffset(row.row));
+			}
 			// The foliage record: buffers (by parity) and tag at PS b13 c14, counters zeroed. The Z-prepass reads the owners' index
 			// and size as the previous colour commit left them.
 			if (const auto& foliage = resources->foliage; foliage && !a_commit.depthOnly) {
@@ -517,18 +520,19 @@ namespace DCLF
 		constexpr std::uint32_t kTerrainBlendingMaskRegister = 55;
 		const auto& terrainBlending = globals::features::terrainBlending;
 		auto* const terrainMask = TerrainBlendingDefersTerrain() ? terrainBlending.terrainDepth.depthSRV : nullptr;
-		// Soft effects' depth: the kPOST_ZPREPASS_COPY SetupTechnique binds for a Soft pass, which CS fills from the main depth
-		// after the deferred pass, before the forward epoch.
-		auto* const effectSoftDepth = globals::game::renderer ?
-		                                  reinterpret_cast<ID3D11ShaderResourceView*>(
-											  globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV) :
-		                                  nullptr;
+		// The frame textures (Api::FrameTexture: the soft effects' depth, the kPOST_ZPREPASS_COPY a Soft pass reads), each view once a
+		// colour commit; their registers read them.
+		const auto frameTextures = Extensions::RegisteredFrameTextures();
+		const auto frameTextureAt = Extensions::FrameTextureIndices();
+		std::array<ID3D11ShaderResourceView*, Extensions::kFrameTextureSlots> frameTextureViews{};
+		for (std::size_t i = 0; i < frameTextures.size() && !depthOnly; ++i)
+			frameTextureViews[i] = static_cast<ID3D11ShaderResourceView*>(frameTextures[i].view());
 		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters && !depthOnly; ++t) {
 			auto& held = frameTextureBindings[t];
-			auto* const view = t == kCharacterLightRegister                         ? Scene::FrameView::Get().GetFrameCapture().characterLightView :
-			                   (t == kTerrainBlendingMaskRegister && terrainMask) ? terrainMask :
-			                   t == kEffectSoftDepthRegister                      ? effectSoftDepth :
-			                                                                         capture.psViews[t];
+			auto* const view = t == kCharacterLightRegister                           ? Scene::FrameView::Get().GetFrameCapture().characterLightView :
+			                   (t == kTerrainBlendingMaskRegister && terrainMask)   ? terrainMask :
+			                   frameTextureAt[t] != Extensions::kNoFrameTexture     ? frameTextureViews[frameTextureAt[t]] :
+			                                                                           capture.psViews[t];
 			if (!view) {
 				if (held.view)
 					held = {};

@@ -42,7 +42,10 @@ namespace DCLF::Api
 		virtual void RegisterPayloadProduct(const PayloadProduct& a_product) = 0;
 		virtual SceneResourcesId RegisterSceneResources(const SceneResources& a_resources) = 0;
 		virtual void RegisterCommitHook(const CommitHook& a_hook) = 0;
-		/** @brief Fails the install for a register Core or another binding has, or past Extensions::kFrameBindingSlots bindings. */
+		/**
+		 * @brief Fails the install for a register Core, another binding or a frame texture has, or past Extensions::kFrameBindingSlots
+		 * bindings.
+		 */
 		virtual void RegisterFrameBinding(const FrameBinding& a_binding) = 0;
 		virtual SwitchId RegisterSwitch(const FeatureSwitch& a_switch) = 0;
 		/**
@@ -107,6 +110,21 @@ namespace DCLF::Api
 		 * names not one a variable, or one port past Extensions::kMaterialKinds.
 		 */
 		virtual void RegisterMaterialPort(const MaterialPortContribution& a_port) = 0;
+		/**
+		 * @brief Fails the install for a family another registration has (Core's built-ins are in first), Lighting's or no shader type, no
+		 * name, key name or source path, or no program source; and at its end for a shader type no material port has.
+		 */
+		virtual void RegisterProgramFamily(const ProgramFamilyContribution& a_family) = 0;
+		/**
+		 * @brief Fails the install for a row outside Core's feature rows (Extensions::kFrameConstantRowFirst up to kFrameConstantRowsEnd),
+		 * one another registration has (Core's built-ins are in first), no name or no sample.
+		 */
+		virtual void RegisterFrameConstantRow(const FrameConstantRow& a_row) = 0;
+		/**
+		 * @brief Fails the install for a register below the frame textures (t16), past t127, Core's, a frame binding's or another frame
+		 * texture's (Core's built-ins are in first), no name or no view, or past Extensions::kFrameTextureSlots textures.
+		 */
+		virtual void RegisterFrameTexture(const FrameTexture& a_texture) = 0;
 
 	protected:
 		~InstallContext() = default;
