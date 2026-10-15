@@ -4,6 +4,7 @@
 // recordings' resolves of buffers their set does not name (render thread).
 
 #include "DrawsState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Events.h"
 #include "Observers.h"
 
@@ -66,10 +67,17 @@ namespace DCLF::Diagnostics
 			};
 			if (a_embedded.facePositions || FaceSnapshots::Enabled())
 				check("face positions", scene.facePositions, a_embedded.facePositions, entry(scene.facePositions).deviceAddress);
-			// The wind read by the frame the context was posted at: the one the frame before wrote, either parity's.
-			const std::uint64_t wind = a_embedded.treeWindIndex;
-			const std::uint64_t even = entry(scene.treeWindRows[0]).srvIndex, odd = entry(scene.treeWindRows[1]).srvIndex;
-			check("tree wind SRV", scene.treeWindRows[0], wind, wind == odd ? odd : even);
+			// The features' frame bindings (Api::FrameBinding), each read by the frame the context was posted at: the frame's buffer or the
+			// next one's (one alternating by frame: either parity's).
+			const auto bindings = Extensions::RegisteredFrameBindings();
+			for (std::size_t i = 0; i < bindings.size(); ++i) {
+				static const Draws::Versioned kNone;
+				const auto* even = Extensions::FrameBindingBuffer(i, scene, 1);
+				const auto* odd = Extensions::FrameBindingBuffer(i, scene, 0);
+				const std::uint64_t value = a_embedded.frameBindings[i];
+				const std::uint64_t evenIndex = even ? entry(*even).srvIndex : 0, oddIndex = odd ? entry(*odd).srvIndex : 0;
+				check(bindings[i].name.c_str(), even ? *even : kNone, value, value == oddIndex ? oddIndex : evenIndex);
+			}
 		}
 	}
 

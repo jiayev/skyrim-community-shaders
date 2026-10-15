@@ -1,0 +1,44 @@
+// The registered frame bindings' values and registers (see the header).
+
+// Internal.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+
+namespace DCLF::Extensions
+{
+	const std::shared_ptr<org::VersionedBuffer>* FrameBindingBuffer(std::size_t a_binding, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame)
+	{
+		const auto bindings = RegisteredFrameBindings();
+		if (a_binding >= bindings.size())
+			return nullptr;
+		Api::FrameBindingSelect select{ a_scene, a_frame };
+		bindings[a_binding].select(select);
+		return select.buffer;
+	}
+
+	void FrameBindingValuesOf(const org::services::NamedVersions& a_sealed, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame, FrameBindingValues& a_out)
+	{
+		const auto bindings = RegisteredFrameBindings();
+		for (std::size_t i = 0; i < bindings.size(); ++i) {
+			const auto* buffer = FrameBindingBuffer(i, a_scene, a_frame);
+			a_out[i] = buffer && *buffer ? a_sealed.Of(**buffer).srvIndex : kNoFrameBinding;
+		}
+	}
+
+	void WriteFrameBindings(const FrameBindingValues& a_values, std::span<std::uint32_t> a_textures)
+	{
+		const auto bindings = RegisteredFrameBindings();
+		for (std::size_t i = 0; i < bindings.size(); ++i)
+			if (a_values[i] != kNoFrameBinding && bindings[i].textureRegister < a_textures.size())
+				a_textures[bindings[i].textureRegister] = a_values[i];
+	}
+
+	bool FrameBindingRegister(std::uint32_t a_register)
+	{
+		for (const auto& binding : RegisteredFrameBindings())
+			if (binding.textureRegister == a_register)
+				return true;
+		return false;
+	}
+}

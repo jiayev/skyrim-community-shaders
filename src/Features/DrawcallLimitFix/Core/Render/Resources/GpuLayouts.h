@@ -97,28 +97,6 @@ namespace DCLF::Draws
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
 	constexpr const char* kHzbShader = "DrawcallLimitFix/HzbCS.hlsl";
 	constexpr const char* kSortSequencesShader = "DrawcallLimitFix/SortSequencesCS.hlsl";
-	constexpr const char* kTreeWindShader = "DrawcallLimitFix/TreeWindCS.hlsl";
-	// TreeWindCS.hlsl's constants: buffer indices only; per-frame values are the frame row every commit uploads.
-	struct TreeWindConstants
-	{
-		std::uint32_t treesIndex = 0, clocksIndex = 0, frameIndex = 0, padding0 = 0;
-		std::uint32_t windIndices[2]{};
-		std::uint32_t padding1[2]{};
-	};
-	// The wind buffers' rows per entry (TreeWindCS.hlsl): TreeParams, WindTimers, the listing's generation.
-	constexpr std::uint32_t kTreeWindEntryRows = 3;
-	static_assert(sizeof(TreeWindConstants) == 32);
-	// TreeWindCS.hlsl's frame row (StructuredBuffer, one row).
-	struct TreeWindFrameRow
-	{
-		std::uint32_t treeCount = 0, objectCount = 0, frame = 0;
-		std::uint32_t treeSeedsIndex = 0;  // FrameValues::TreeSeedsIndex (the frame's pooled backing)
-		TreeWindFrame inputs{};
-		std::uint32_t padding2[2]{};
-	};
-	static_assert(sizeof(TreeWindFrameRow) == 64);
-	constexpr std::uint32_t kTreeWindConstantWords = sizeof(TreeWindConstants) / 4;
-	constexpr std::uint32_t kTreeWindGroup = 64;
 	// The foliage record (Policy::RecordFoliagePixels, CS_DCLF_FOLIAGE_PARITY; Diagnostics/Draws/Foliage.cpp): alpha-tested colour
 	// draws write each shaded pixel's object (index + 1, low 24 bits; the frame's low 8 above) and albedo and diffuse. The compare
 	// pass's results: kFoliageCounters counters, then the samples, kFoliageSampleWords words each.
@@ -162,8 +140,6 @@ namespace DCLF::Draws
 							kFoliageLandSampleBase = kFoliageWhiteSampleBase + kFoliageWhiteSamples;
 	constexpr std::uint32_t kFoliageResultWords = kFoliageCounters + (kFoliageLandSampleBase + kFoliageLandSamples) * kFoliageSampleWords;
 	constexpr std::uint32_t kFoliageColourWords = 4;  // a pixel's: albedo, diffuse, motion error, motion vector
-	// The tree buffers' first capacity (doubled as needed).
-	constexpr std::uint32_t kInitialTrees = 1024;
 	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";
 	// Tree LOD's cull (TreeLodCullCS.hlsl) in the depth segment's two phases: a thread per instance (phase 1) or retest entry (2).
 	constexpr const char* kTreeLodCullShader = "DrawcallLimitFix/TreeLodCullCS.hlsl";

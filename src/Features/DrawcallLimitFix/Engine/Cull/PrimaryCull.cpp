@@ -14,7 +14,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/TreeAnimation.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
@@ -913,8 +913,9 @@ namespace DCLF
 	void PrimaryCull::SyncFadeOwnership()
 	{
 		// Admitted entries with a fade root: their fade is FadeStateCS's from the next frame. A mixed one is culled by the engine,
-		// which updates its node. Every other is stood in (state on the GPU alone) and taken off the tree manager's animation list
-		// (TreeAnimation: TreeWindCS animates its trees; the tree clock reads BSLeafAnimNode's kAccumulated). Its kAccumulated is
+		// which updates its node. Every other is stood in (state on the GPU alone) and, through the stand-in observers (Api::StandInObserver),
+		// taken off the tree manager's animation list (Features/TreeWind's TreeAnimation: TreeWindCS animates its trees; the tree clock
+		// reads BSLeafAnimNode's kAccumulated). Its kAccumulated is
 		// DCLF's, written at Main::Update's entry (AtUpdateEntry); clearing it would stop FUN_1402cff60 animating a stood-in
 		// reference that never fades. Until its first write it keeps the engine's last bit (a new listing is written visible).
 		// A stood-in plain entry has no engine cull either: its kAccumulated is DCLF's. A stood-in BSTreeNode stays on the tree
@@ -991,7 +992,7 @@ namespace DCLF
 		if (ownedMoved)
 			Scene::FrameView::Get().SetFadeRootsOwned(ownedFade);
 		if (!animatedLeft.empty() || !animatedJoined.empty() || !treesLeft.empty() || !treesJoined.empty())
-			TreeAnimation::UpdateOwned(animatedLeft, animatedJoined, treesLeft, treesJoined);
+			Extensions::StandInRootsChanged({ animatedLeft, animatedJoined, treesLeft, treesJoined });
 	}
 
 	void PrimaryCull::ClearFadeOwnership()
@@ -1002,7 +1003,7 @@ namespace DCLF
 		standInList.clear();
 		standInPosition.clear();
 		Scene::FrameView::Get().SetFadeRootsOwned({});
-		TreeAnimation::SetOwned({}, {});
+		Extensions::StandInRootsCleared();
 		// Judged again whole when the stand-in comes back.
 		std::fill(ownState.begin(), ownState.end(), kOwnNone);
 		std::fill(ownRoot.begin(), ownRoot.end(), nullptr);
@@ -1018,8 +1019,9 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.AccumulatedWrites");
 		// Roots no longer stood in are left to the engine's cull this frame.
 		IndirectDraws::Get().WriteAccumulated(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); });
-		// The tree manager's loop (later in this Main::Update) takes the stood-in trees' visibility from those writes.
-		TreeAnimation::AtUpdateEntry(a_running);
+		// The stand-in observers (the tree manager's loop, later in this Main::Update, takes the stood-in trees' visibility from those
+		// writes).
+		Extensions::StandInUpdateEntry(a_running);
 		// The fade write-back on every root the accepted tables list with kFadeRootWritten, published first as the set the gate
 		// and fade OnVisibles skip.
 		PublishWriterTables(a_running);
@@ -1506,7 +1508,8 @@ namespace DCLF
 		stl::write_vfunc<0x16, Hooks::Process1>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		stl::write_vfunc<0x18, Hooks::AppendVirtual>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		InstallSceneLists();
-		TreeAnimation::Install();
+		// The stand-in observers' engine hooks go in with the features' install (Api::InstallContext::RegisterStandInObserver).
+		Extensions::NoteStandInInstalled();
 		Diagnostics::Notify<Diagnostics::EnginePoint::PrimaryCullInstalled>();
 		LocalLightCull::Install();
 		// Fade OnVisibles leave DCLF-written roots alone (detours, not vtable slots, so subclass tables and FadeState::PlanOf keep

@@ -38,9 +38,10 @@ namespace DCLF
 	 *   sequence number (always, also after a failure), which every batch of the frame waits for (PersistentGraphHost's frame wait).
 	 *
 	 * The features' registered pools (Api::FrameValuePool, Extensions::RegisteredPools) run beside the built-in row sets, after them: their
-	 * kicks after the built-in inputs, their samples after the built-in sampling, their sends after the built-in sends.
+	 * frame-start reads after the built-in ones, their kicks after the built-in inputs, their samples after the built-in sampling, their
+	 * sends after the built-in sends.
 	 *
-	 * Each of the row sets (the five built-in ones: placements, palettes, shading, fade seeds, tree seeds; then the registered pools') is a pooled version (D6,
+	 * Each of the row sets (the four built-in ones: placements, palettes, shading, fade seeds; then the registered pools') is a pooled version (D6,
 	 * org::services::BackingPool on DCLF's retirement clock, the render thread its one acquirer): Kick leases a backing holding every
 	 * row, preferring the one that holds the most (its contentEpoch), and the producer sends it the journal's runs since then. The
 	 * frame's draws read those backings (the frame record's t123, t122 and t121, and the culling's latches); EndFrame binds them to the
@@ -77,8 +78,7 @@ namespace DCLF
 		 * first producer.
 		 */
 		bool Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
-			std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::vector<TreeSeedItem> a_treeSeeds,
-			std::shared_ptr<const FrameGlobals> a_globals);
+			std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::shared_ptr<const FrameGlobals> a_globals);
 		/**
 		 * @brief Render thread, before Kick: the claims whose first-person members the frame draws (null: none, the first-person
 		 * epochs do not draw this frame). Kick samples those members' rows and skin palettes itself, before Main::Draw moves the
@@ -111,14 +111,16 @@ namespace DCLF
 		 * a root slot: FadeSeedRow; 0 before the first frame). A root's seed is its node as the frame's start had it (its bytes copied at Kick, StaticOf on the copy by the producer).
 		 */
 		std::uint32_t FadeSeedsIndex() const { return seedsIndex; }
-		/** @brief Render thread: the tree seeds likewise (StructuredBuffer<TreeStatic>, two rows a tree slot: MergeTreeSeed). */
-		std::uint32_t TreeSeedsIndex() const { return treeSeedsIndex; }
 		/**
 		 * @brief Render thread: the descriptor of a registered pool's backing the current frame reads (StructuredBuffer of its rows; 0
 		 * before the first frame, on a frame without a producer, and for an unknown pool).
 		 */
 		std::uint32_t PoolIndex(Api::FrameValuePoolId a_pool) const;
-		const std::vector<TreeStatic>* TreeSeedsIfDone(bool a_wait = false) const;
+		/**
+		 * @brief Render thread (diagnostics): whether the frame's producer is done (false before the first frame); a_wait: waits for it
+		 * first. A registered pool's rows are then as it left them, until the next Kick.
+		 */
+		bool ProducerDone(bool a_wait = false) const;
 		/** @brief Render thread: the seed rows as the frame's producer left them, once it is done; a_wait (diagnostics frames): waits for it. */
 		const std::vector<FadeRootStatic>* FadeSeedsIfDone(bool a_wait = false) const;
 		bool Available() const;
@@ -156,7 +158,7 @@ namespace DCLF
 			// The journal's trim floor at the last Kick (the oldest content any backing holds; 0: none holds any).
 			std::uint64_t floor = 0;
 		};
-		static constexpr std::size_t kBuiltInPools = 5;  // placements, palettes, shading, fade-seeds, tree-seeds
+		static constexpr std::size_t kBuiltInPools = 4;  // placements, palettes, shading, fade-seeds
 		/**
 		 * @brief Any thread (the report): the pools' stats, the since-last-take counts reset: the built-in parts', then the registered
 		 * pools' once the first Kick made them.
@@ -168,7 +170,7 @@ namespace DCLF
 		~FrameValues();
 		struct Impl;
 		std::unique_ptr<Impl> impl;
-		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0, treeSeedsIndex = 0;
+		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0;
 		std::shared_ptr<const SetSnapshot> firstPersonClaims;  // SetFirstPersonClaims
 	};
 }

@@ -1,6 +1,6 @@
 #pragma once
 
-// The frame-value pool contract's Core side (Api/FrameValues.h): what a registered pool's kick and producer are handed. Made by
+// The frame-value pool contract's Core side (Api/FrameValues.h): what a registered pool's frame start, kick and producer are handed. Made by
 // FrameValues (Core/Gpu/FrameValues.cpp) for each call; valid for that call only.
 
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
@@ -19,6 +19,13 @@ namespace DCLF
 
 namespace DCLF::Api
 {
+	/** @brief A pool's frame start (render thread, every FrameValues::Kick): the frame's engine globals (null: none captured). */
+	class FrameValuePoolFrameStart
+	{
+	public:
+		const std::shared_ptr<const FrameGlobals>& globals;
+	};
+
 	/** @brief A pool's kick (render thread, FrameValues::Kick): the frame it is for. */
 	class FrameValuePoolKick
 	{
@@ -76,12 +83,19 @@ namespace DCLF::Api
 				static_cast<const KeptView<Row>*>(a_view)->Emit(a_contentEpoch, a_sink);
 			});
 		}
+		/** @brief Sample: a_rows rows seeded from what the frame's start read of the engine, counted with the frame values' own seeds. */
+		void NoteSeeded(std::uint64_t a_rows) const
+		{
+			if (seeded && a_rows)
+				seeded->fetch_add(a_rows);
+		}
 
-		// FrameValues': the job's floor for the pool, the newest Kick, and the send into the pool's backing.
+		// FrameValues': the job's floor for the pool, the newest Kick, the send into the pool's backing, and its seeded count.
 		std::optional<std::uint64_t> oldestContentEpoch;
 		const std::atomic<std::uint64_t>* kickedSeq = nullptr;
 		SendRowsFn send = nullptr;
 		void* owner = nullptr;
 		std::size_t pool = 0;
+		std::atomic<std::uint64_t>* seeded = nullptr;
 	};
 }

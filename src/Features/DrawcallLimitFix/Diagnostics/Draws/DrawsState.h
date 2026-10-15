@@ -111,26 +111,6 @@ namespace DCLF::Diagnostics
 		BuildDrawsLatch sunUpload{};
 		std::array<float, 4> terrainNearUpload{};
 		/**
-		 * @brief CS_DCLF_PERSISTENT_PARITY tree wind: every 120th colour epoch, up to 64 tree members' records are read back and
-		 * checked against the engine's formulas; timer drift is reported.
-		 */
-		struct TreeReadback
-		{
-			winrt::com_ptr<ID3D11Buffer> records;
-			std::uint32_t framesLeft = 0;
-			struct Sample
-			{
-				std::uint32_t object = 0, tree = 0;
-				const void* node = nullptr;
-			};
-			std::vector<Sample> samples;
-			TreeWindFrame inputs{};
-		};
-		std::optional<TreeReadback> treeReadback;
-		ankerl::unordered_dense::map<const void*, std::pair<float, float>> treeTimers;  // node -> engine's and GPU's timers at the last readback
-		std::uint32_t treeEpochs = 0;
-
-		/**
 		 * @brief CS_DCLF_FADE_PARITY: FadeStateCS against the C++ port (Scene/Ports/FadeState.h). Every 30th frame the depth commit
 		 * logs kFadeLogEntries roots from a rotating cursor (NextFadeLog); ReadFadeLog checks three frames later that the port,
 		 * from each update's starting state and the GPU's frustum verdict, reproduces it.

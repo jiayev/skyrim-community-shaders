@@ -51,8 +51,6 @@ namespace DCLF::Diagnostics
 	void LogCullingSetup(const MainCullingSetup& a_setup);
 	// CS_DCLF_BUILD_PARITY (BuildParity.cpp).
 	void CheckBuildParity(const MainEpochDone& a_epoch);
-	// CS_DCLF_PERSISTENT_PARITY: tree wind (TreeWind.cpp).
-	void ReadTreeWind(const MainEpochDone& a_epoch);
 	// CS_DCLF_FADE_PARITY (FadeLog.cpp).
 	void NextFadeLog(const FadeLogWindow& a_window);
 	void ReadFadeLog(const MainEpochDone& a_epoch);

@@ -1,4 +1,5 @@
-// Drawcall Limit Fix: tree wind on the GPU (drawcall-limit-fix.md, "Tree wind on the GPU"; Records.h, TreeStatic).
+// Drawcall Limit Fix: tree wind on the GPU (src/Features/DrawcallLimitFix/Features/TreeWind; drawcall-limit-fix.md, "Tree wind on the
+// GPU"; Records.h, TreeStatic).
 //
 // The engine's tree manager (FUN_1404381e0, from Main::Update) advances each BSTreeNode's clock and takes its gust from it;
 // BSLightingShader::SetupGeometry (case 0xc) turns the node into TreeParams and WindTimers. DCLF's members draw with what
@@ -11,7 +12,7 @@
 // generation. The buffers alternate by frame: this frame's is drawn by the next one (Common/DCLFObjects.hlsli, DCLFTreeWind),
 // so nothing waits for this pass.
 
-// Must match TreeWindConstants (Draws/IndirectDraws/Core/GpuLayouts.h).
+// Must match TreeWindConstants (Features/TreeWind/TreeWind.h).
 cbuffer TreeWindConstants : register(b0)
 {
 	uint TreesIndex;    // StructuredBuffer<TreeStatic>
@@ -22,14 +23,14 @@ cbuffer TreeWindConstants : register(b0)
 	uint2 Padding1;
 }
 
-// The frame's values (GpuLayouts.h, TreeWindFrameRow), a buffer rather than constants: the pass is prepared ahead of the
+// The frame's values (TreeWind.h, TreeWindFrameRow), a buffer rather than constants: the pass is prepared ahead of the
 // commit that knows them. The dispatch covers every slot the buffers hold; the counts end it.
 struct TreeWindFrameRow
 {
 	uint TreeCount;    // tree slots
 	uint ObjectCount;  // members (unused)
 	uint Frame;
-	uint TreeSeedsIndex;  // StructuredBuffer<TreeStatic>, FrameValues' tree seeds (two rows a slot)
+	uint TreeSeedsIndex;  // StructuredBuffer<TreeStatic>, the seeds' frame-value pool (two rows a slot)
 	float DeltaTime;
 	float CameraX;
 	float CameraY;
@@ -46,7 +47,7 @@ struct TreeWindFrameRow
 
 static TreeWindFrameRow W;
 
-// Records.h's TreeStatic and TreeClock: must match.
+// Records.h's TreeStatic and TreeWind.h's TreeClock: must match.
 struct TreeStatic
 {
 	float3 Position;
@@ -117,7 +118,7 @@ float Distance2(float3 a_position)
 		StructuredBuffer<TreeStatic> trees = ResourceDescriptorHeap[TreesIndex];
 		RWStructuredBuffer<TreeClock> clocks = ResourceDescriptorHeap[ClocksIndex];
 		TreeStatic tree = trees[slot];
-		// The node's values are its seed's (Records.h, MergeTreeSeed: keep the two the same); none of the listing's generation yet:
+		// The node's values are its seed's (TreeWind.h, MergeTreeSeed: keep the two the same); none of the listing's generation yet:
 		// no clock step and no entry this frame (a member draws with its shading row's until there is one).
 		{
 			if (W.TreeSeedsIndex == 0)

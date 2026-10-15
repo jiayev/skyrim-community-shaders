@@ -291,12 +291,11 @@ namespace DCLF
 			kPlacements,
 			kPalettes,
 			kShading,
-			kFadeSeeds,
-			kTreeSeeds
+			kFadeSeeds
 		};
-		static constexpr std::array<const char*, kBuiltInPools> kPartNames{ "placements", "palettes", "shading", "fade-seeds", "tree-seeds" };
+		static constexpr std::array<const char*, kBuiltInPools> kPartNames{ "placements", "palettes", "shading", "fade-seeds" };
 		static constexpr std::array<std::uint32_t, kBuiltInPools> kStrides{ sizeof(BindlessPlacement), sizeof(PaletteRow), sizeof(BindlessShading),
-			sizeof(FadeRootStatic), sizeof(TreeStatic) };
+			sizeof(FadeRootStatic) };
 
 		/**
 		 * @brief A fade root's node as the frame's start had it: its bytes (FadeState::NodeBytes), copied by the render thread before the
@@ -363,8 +362,6 @@ namespace DCLF
 		std::vector<WetnessValue> unsampledWetness;
 		std::vector<SeedCopy> unsentSeeds;  // not yet taken by a producer, in request order
 		std::uint32_t seedRows = 0;         // highest named FadeSeedRow + 1
-		std::vector<std::pair<std::uint32_t, TreeStatic>> unsentTreeSeeds;
-		std::uint32_t treeSeedRows = 0;
 		std::deque<std::pair<std::uint64_t, std::shared_ptr<const Plan>>> plans;  // held per kicked producer's sequence
 		std::uint64_t seq = 0;                                          // the last kicked
 		bool kicked = false;                                            // this frame
@@ -375,7 +372,6 @@ namespace DCLF
 		KeptWholeArray<PaletteRow> palettes;
 		KeptWholeArray<BindlessShading> shading;
 		KeptWholeArray<FadeRootStatic> seeds;  // by FadeSeedRow
-		KeptWholeArray<TreeStatic> treeSeeds;  // by 2 * tree slot + seedOdd
 		// The newest Kick's sequence (render thread's store): a registered pool's producer reads what its frame's publication holds only
 		// while it is the newest (FrameValuePoolProducer::Newest), so within the window that publication is installed or was until this
 		// frame's start.
@@ -485,8 +481,6 @@ namespace DCLF
 			std::vector<WetnessValue> wetness;      // in capture order
 			std::vector<SeedCopy> seedValues;  // copied at the frame's start, in request order
 			std::uint32_t seedRows = 0;
-			std::vector<std::pair<std::uint32_t, TreeStatic>> treeSeedValues;
-			std::uint32_t treeSeedRows = 0;
 			std::shared_ptr<const FrameGlobals> globals;  // the frame's engine globals (shading rows' tree wind)
 			// Per part: the backing the frame's draws read (leased until the producer is done), and the journal's trim floor (the
 			// oldest content a backing in circulation held at Kick; nullopt: none holds any, the journal keeps nothing).
@@ -566,7 +560,7 @@ namespace DCLF
 			const std::string& a_firstPalette, const std::string& a_firstRoot);
 		// Kick's stages (render thread).
 		void CopySeeds(std::vector<FadeSeedItem>& a_seeds, const std::shared_ptr<const FrameGlobals>& a_globals);
-		void ReadTreeSeeds(const std::vector<TreeSeedItem>& a_treeSeeds, const std::shared_ptr<const FrameGlobals>& a_globals);
+		static void FrameStartRegistered(const std::shared_ptr<const FrameGlobals>& a_globals);
 		void ApplyFirstPersonPlans(const std::vector<std::shared_ptr<const Plan>>& a_plans);
 		void QueuePlans(std::vector<std::shared_ptr<const Plan>>& a_plans);
 		void LeaseBackings(Job& a_job);
@@ -1639,20 +1633,6 @@ namespace DCLF
 		// The carried copies' references to the render thread (the job's go with the job).
 		for (auto& copy : carried)
 			ReleaseLater(copy.node);
-		BeginBuild(a_job, kTreeSeeds, treeSeeds);
-		auto& trees = treeSeeds.Mutable();
-		if (trees.size() < a_job.treeSeedRows) {
-			const std::size_t first = trees.size();
-			trees.resize(a_job.treeSeedRows, TreeStatic{});
-			treeSeeds.MarkRange(first, a_job.treeSeedRows - first);
-		}
-		for (const auto& [at, row] : a_job.treeSeedValues) {
-			if (at >= trees.size())
-				continue;
-			trees[at] = row;
-			treeSeeds.Mark(at);
-			++seeded;
-		}
 	}
 
 	void FrameValues::Impl::SampleShadingRows(const Job& a_job, std::size_t a_slots)
@@ -1785,6 +1765,7 @@ namespace DCLF
 			producer.send = send;
 			producer.owner = &owner;
 			producer.pool = i;
+			producer.seeded = &seeded;
 			a_call(*registered[i].entry, producer);
 		}
 	}
@@ -1796,7 +1777,6 @@ namespace DCLF
 		Send(a_job, kPalettes, palettes);
 		Send(a_job, kShading, shading);
 		Send(a_job, kFadeSeeds, seeds);
-		Send(a_job, kTreeSeeds, treeSeeds);
 		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) { a_entry.send(a_producer); });
 	}
 
@@ -1833,21 +1813,12 @@ namespace DCLF
 		}
 	}
 
-	void FrameValues::Impl::ReadTreeSeeds(const std::vector<TreeSeedItem>& a_treeSeeds, const std::shared_ptr<const FrameGlobals>& a_globals)
+	void FrameValues::Impl::FrameStartRegistered(const std::shared_ptr<const FrameGlobals>& a_globals)
 	{
-		FrameGlobals::Scope scope(a_globals);
-		// Tree seeds likewise, but read here: TreeStaticOfNode's near-list test reads the tree's multibound shape's cull result (FUN_14147d640
-		// is a pure read, the first child's AsMultiBoundNode; then the shape's +0x10), which this frame's culls write.
-		for (const auto& seed : a_treeSeeds) {
-			if (!seed.node)
-				continue;
-			TreeStatic row;
-			TreeStaticOfNode(seed.node.get(), row);
-			row.generation = seed.generation;
-			row.seedOdd = seed.row & 1u;
-			unsentTreeSeeds.emplace_back(seed.row, row);
-			treeSeedRows = std::max(treeSeedRows, seed.row + 1);
-		}
+		const Api::FrameValuePoolFrameStart start{ a_globals };
+		for (const auto& entry : Extensions::RegisteredPools())
+			if (entry.frameStart)
+				entry.frameStart(start);
 	}
 
 	// The kept set's first-person movers, every plan applied in order (the producers apply the same plans to the whole set).
@@ -1900,7 +1871,7 @@ namespace DCLF
 	void FrameValues::Impl::LeaseBackings(Job& a_job)
 	{
 		const std::array<std::uint64_t, kBuiltInPools> needed{ plan ? plan->slots : 0u, plan ? 2ull * plan->boneCapacity : 0u,
-			plan ? plan->slots : 0u, seedRows, treeSeedRows };
+			plan ? plan->slots : 0u, seedRows };
 		for (std::size_t part = 0; part < kBuiltInPools; ++part)
 			LeasePool(pools[part], kPartNames[part], kStrides[part], needed[part], frameLeases[part], a_job.leases[part], a_job.oldestContentEpochs[part]);
 		for (std::size_t i = 0; i < a_job.registered.size(); ++i) {
@@ -1995,8 +1966,7 @@ namespace DCLF
 	}
 
 	bool FrameValues::Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
-		std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::vector<TreeSeedItem> a_treeSeeds,
-		std::shared_ptr<const FrameGlobals> a_globals)
+		std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::shared_ptr<const FrameGlobals> a_globals)
 	{
 		auto& s = *impl;
 		s.kicked = false;
@@ -2005,7 +1975,8 @@ namespace DCLF
 		// Fade seeds: the node as the frame's start has it, before this frame's culls update it (FadeStateCS's first update is this
 		// frame's): its bytes copied here, the row made from the copy by the producer (StaticOf, with the frame's globals: its LOD scale).
 		s.CopySeeds(a_seeds, a_globals);
-		s.ReadTreeSeeds(a_treeSeeds, a_globals);
+		// The registered pools' frame-start reads (Api::FrameValuePool::frameStart), whether or not the frame has a producer.
+		Impl::FrameStartRegistered(a_globals);
 		// Appended after any not yet taken (newest last).
 		s.unsampledShading.insert(s.unsampledShading.end(), std::make_move_iterator(a_shading.begin()), std::make_move_iterator(a_shading.end()));
 		s.unsampledWetness.insert(s.unsampledWetness.end(), a_wetness.begin(), a_wetness.end());
@@ -2019,7 +1990,7 @@ namespace DCLF
 			if (host)
 				host->SetFrameWaitValue(0);
 			// No backing is leased for the frame: its draws have no rows (no index names a backing the pool may release).
-			frameIndex = paletteIndex = shadingIndex = seedsIndex = treeSeedsIndex = 0;
+			frameIndex = paletteIndex = shadingIndex = seedsIndex = 0;
 			std::fill(s.registeredIndex.begin(), s.registeredIndex.end(), 0u);
 			if (!s.unavailableLogged && s.seq) {
 				s.unavailableLogged = true;
@@ -2051,8 +2022,6 @@ namespace DCLF
 		job.wetness = std::exchange(s.unsampledWetness, {});
 		job.seedValues = std::exchange(s.unsentSeeds, {});
 		job.seedRows = s.seedRows;
-		job.treeSeedValues = std::exchange(s.unsentTreeSeeds, {});
-		job.treeSeedRows = s.treeSeedRows;
 		job.globals = a_globals;
 		// The registered pools' inputs for the frame's producer, and the rows each asks for.
 		s.KickRegistered(job, a_globals.get());
@@ -2078,7 +2047,6 @@ namespace DCLF
 		paletteIndex = s.frameLeases[Impl::kPalettes]->srvIndex;
 		shadingIndex = s.frameLeases[Impl::kShading]->srvIndex;
 		seedsIndex = s.frameLeases[Impl::kFadeSeeds]->srvIndex;
-		treeSeedsIndex = s.frameLeases[Impl::kTreeSeeds]->srvIndex;
 		for (std::size_t i = 0; i < s.registeredIndex.size(); ++i)
 			s.registeredIndex[i] = s.registeredFrameLeases[i]->srvIndex;
 		// Batches submitted from here wait for the frame's values; the producer always signals.
@@ -2118,12 +2086,9 @@ namespace DCLF
 		BindFrameLeases(s.frameLeases, s.registeredFrameLeases);
 	}
 
-	const std::vector<TreeStatic>* FrameValues::TreeSeedsIfDone(bool a_wait) const
+	bool FrameValues::ProducerDone(bool a_wait) const
 	{
-		auto& s = *impl;
-		if (!FadeSeedsIfDone(a_wait))
-			return nullptr;
-		return &s.treeSeeds.Get();
+		return FadeSeedsIfDone(a_wait) != nullptr;
 	}
 
 	const std::vector<FadeRootStatic>* FrameValues::FadeSeedsIfDone(bool a_wait) const

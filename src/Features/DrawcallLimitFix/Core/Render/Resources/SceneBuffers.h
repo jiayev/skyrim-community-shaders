@@ -1,7 +1,7 @@
 #pragma once
 
-// The scene's GPU tables shared by every epoch (SceneBuffers: face positions, tree wind,
-// fade roots and states, readback lists, tree LOD), and the commits' uploads into them (render thread). Included by Internal.h.
+// The scene's GPU tables shared by every epoch (SceneBuffers: face positions, the features' scene resources, fade roots and states,
+// readback lists, tree LOD), and the commits' uploads into them (render thread). Included by Internal.h.
 
 namespace DCLF::Draws
 {
@@ -23,26 +23,9 @@ namespace DCLF::Draws
 		// The index pool every plain indexed draw binds; kept current by every commit that draws from it (UpdateIndexPool).
 		std::shared_ptr<IndexPool> pool;
 		FaceUploads faceUploaded;
-		// Tree wind (TreeWindCS): tree rows (UploadTrees) and GPU-only clocks, by tree slot.
-		Versioned trees, treeClocks;
-		std::shared_ptr<org::Buffer> treeFrameBuffer;  // TreeWindFrameRow
-		// Wind output (kTreeWindEntryRows per entry: nodeless trees, then tree slot s at s + 1), one buffer per frame parity: the
-		// Z-prepass writes this frame's, draws read the other. Every version is zero-filled (a zero generation is never a listing's).
-		std::array<Versioned, 2> treeWindRows;
-		/** @brief The SRV index of the wind buffer a frame's draws read (the one the previous frame wrote), as a_sealed names it. */
-		std::uint32_t TreeWindReadIndex(const NamedVersions& a_sealed, std::uint32_t a_frame) const { return a_sealed.Of(treeWindRows[(a_frame + 1) & 1]).srvIndex; }
-		org::services::FilledContents<> treesFilled;  // the tree rows' content epoch (SceneTables::treesContentEpoch)
-		/** @brief The tree rows' content epoch the trees version a_sealed names holds (~0: none). */
-		std::uint64_t TreesContentEpoch(const NamedVersions& a_sealed) const { return treesFilled.Since(a_sealed.Of(trees)).value_or(~0ull); }
-		std::uint32_t treeCount = 0;
-		std::uint32_t treeFrame = 0;  // the scene frame of treeInputs
-		TreeWindFrame treeInputs{};
-		// The previous frame's, which wrote the buffer this frame's draws read. ~0u until a frame has run.
-		std::uint32_t previousTreeFrame = ~0u;
-		TreeWindFrame previousTreeInputs{};
-		std::uint64_t previousTreesContentEpoch = ~0ull;  // the tree rows that frame's pass read
-		std::uint64_t frameTreesContentEpoch = ~0ull;     // this frame's
-		std::shared_ptr<const ComputeProgram> treeWind;
+		// The features' scene resources' states (Api::SceneResources::setup, by registration: Extensions::RegisteredSceneResources;
+		// Extensions::SceneResourcesOf), made with these tables, after the face positions, and held until they go.
+		std::vector<std::shared_ptr<void>> sceneResources;
 		// The features' GPU stages' states (Api::GpuStage::setup, by registration: Extensions::RegisteredStages); null: out of the graph.
 		std::vector<std::shared_ptr<const void>> stages;
 		// Fade roots (FadeStateCS): static rows by root slot, GPU state rows, the frame's inputs, and CS_DCLF_FADE_PARITY's log.
@@ -275,36 +258,4 @@ namespace DCLF::Draws
 		// The write-back's header is ArmFadeReadback's.
 	}
 
-	/**
-	 * @brief A commit's tree uploads into the versions a_sealed (the adopted set) names. a_frameRow: also the frame row (only the
-	 * Z-prepass's TreeWindPass reads it).
-	 */
-	template <class Uploads>
-	void UploadTrees(const NamedVersions& a_sealed, const SceneTables& a_tables, std::uint32_t a_frame, SceneBuffers& a_scene, Uploads& a_uploads, bool a_frameRow)
-	{
-		if (!a_scene.treeWind || !a_scene.trees)
-			return;
-		const auto& trees = a_sealed.Of(a_scene.trees);
-		if (a_scene.treesFilled.Since(trees) != a_tables.treesContentEpoch && a_tables.trees.size() <= trees.units) {
-			if (!a_tables.trees.empty())
-				a_uploads(a_scene.trees, a_tables.trees.data(), a_tables.trees.size() * sizeof(TreeStatic), 0);
-			a_scene.treesFilled.Filled(trees, a_tables.treesContentEpoch);
-		}
-		a_scene.frameTreesContentEpoch = a_scene.TreesContentEpoch(a_sealed);
-		a_scene.treeCount = a_scene.frameTreesContentEpoch == a_tables.treesContentEpoch ? static_cast<std::uint32_t>(a_tables.trees.size()) : 0u;
-		if (a_scene.treeFrame != a_frame) {
-			a_scene.previousTreeFrame = a_scene.treeFrame;
-			a_scene.previousTreeInputs = a_scene.treeInputs;
-			a_scene.previousTreesContentEpoch = a_scene.frameTreesContentEpoch;
-			a_scene.treeFrame = a_frame;
-			a_scene.treeInputs = SampleTreeWindFrame();
-			if (Policy::FreezeTreeWind())
-				a_scene.treeInputs.deltaTime = 0.0f;
-		}
-		// Every Z-prepass commit: the pass's invocation is prepared ahead of it.
-		if (a_frameRow && a_scene.treeFrameBuffer) {
-			const TreeWindFrameRow row{ a_scene.treeCount, 0, a_scene.treeFrame, FrameValues::Get().TreeSeedsIndex(), a_scene.treeInputs, {} };
-			a_uploads(a_scene.treeFrameBuffer, &row, sizeof(row), 0);
-		}
-	}
 }

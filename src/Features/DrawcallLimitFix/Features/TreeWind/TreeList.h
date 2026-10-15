@@ -1,6 +1,8 @@
 #pragma once
 
-namespace DCLF::TreeList
+// The engine's tree manager list loop, detoured for the stood-in trees (tree wind's engine side). Included by the feature's sources.
+
+namespace DCLF::Features::TreeWind::TreeList
 {
 	/**
 	 * @brief The engine's tree manager list loop (skyrim-engine-notes.md, "Tree manager list"). AE only.

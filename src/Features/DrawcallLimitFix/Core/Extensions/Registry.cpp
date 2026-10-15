@@ -1,6 +1,10 @@
 // The extension registry (see the header): the install context the features register with, and the lists it fills.
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 #include <vector>
 
@@ -15,6 +19,11 @@ namespace DCLF::Extensions
 			std::vector<FrameValuePoolEntry> pools;
 			std::vector<GpuStageEntry> stages;
 			std::vector<PayloadProductEntry> products;
+			std::vector<SceneResourcesEntry> sceneResources;
+			std::vector<CommitHookEntry> commitHooks;
+			std::vector<FrameBindingEntry> frameBindings;
+			std::vector<ReportLinesEntry> reportLines;
+			std::vector<Api::StandInObserver> standInObservers;
 			bool installed = false;
 		};
 
@@ -34,7 +43,7 @@ namespace DCLF::Extensions
 			{
 				if (a_pool.name.empty() || !a_pool.stride || !a_pool.kick || !a_pool.sample || !a_pool.send)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete frame-value pool", feature));
-				lists.pools.push_back({ std::string(a_pool.name), a_pool.stride, a_pool.kick, a_pool.sample, a_pool.send });
+				lists.pools.push_back({ std::string(a_pool.name), a_pool.stride, a_pool.frameStart, a_pool.kick, a_pool.sample, a_pool.send });
 				return { static_cast<std::uint32_t>(lists.pools.size() - 1) };
 			}
 
@@ -51,7 +60,7 @@ namespace DCLF::Extensions
 							stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s stage {} asks for the latch's stage word, which {} has: grow BuildDrawsLatch first",
 								feature, a_stage.passName, stage.passName));
 				}
-				lists.stages.push_back({ std::string(a_stage.passName), a_stage.slot, a_stage.setup, a_stage.makePass, a_stage.latchWord });
+				lists.stages.push_back({ std::string(a_stage.passName), a_stage.slot, a_stage.queue, a_stage.setup, a_stage.makePass, a_stage.latchWord });
 			}
 
 			void RegisterPayloadProduct(const Api::PayloadProduct& a_product) override
@@ -59,6 +68,63 @@ namespace DCLF::Extensions
 				if (a_product.name.empty() || !a_product.build || !a_product.install)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete payload product", feature));
 				lists.products.push_back({ std::string(a_product.name), a_product.build, a_product.carried, a_product.install });
+			}
+
+			Api::SceneResourcesId RegisterSceneResources(const Api::SceneResources& a_resources) override
+			{
+				if (a_resources.name.empty() || !a_resources.setup)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete scene resources", feature));
+				lists.sceneResources.push_back({ std::string(a_resources.name), a_resources.setup, a_resources.registerGraph, a_resources.require, a_resources.fit });
+				return { static_cast<std::uint32_t>(lists.sceneResources.size() - 1) };
+			}
+
+			void RegisterCommitHook(const Api::CommitHook& a_hook) override
+			{
+				if (a_hook.name.empty() || !a_hook.commit)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete commit hook", feature));
+				lists.commitHooks.push_back({ std::string(a_hook.name), a_hook.commit });
+			}
+
+			void RegisterFrameBinding(const Api::FrameBinding& a_binding) override
+			{
+				if (a_binding.name.empty() || !a_binding.select || a_binding.textureRegister >= kTextureRegisters)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete frame binding", feature));
+				if (CoreFrameRegister(a_binding.textureRegister))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} takes t{}, which Core keeps", feature, a_binding.name, a_binding.textureRegister));
+				for (const auto& binding : lists.frameBindings)
+					if (binding.textureRegister == a_binding.textureRegister)
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} takes t{}, which {} has", feature, a_binding.name, a_binding.textureRegister,
+							binding.name));
+				// A build embeds every binding's value (ResourceAddresses::frameBindings).
+				if (lists.frameBindings.size() >= kFrameBindingSlots)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} is one past kFrameBindingSlots: grow it first", feature, a_binding.name));
+				lists.frameBindings.push_back({ std::string(a_binding.name), a_binding.textureRegister, a_binding.select });
+			}
+
+			Api::SwitchId RegisterSwitch(const Api::FeatureSwitch& a_switch) override
+			{
+				return DCLF::RegisterSwitch(a_switch, feature);
+			}
+
+			Api::ToggleId RegisterToggle(const Api::FeatureToggle& a_toggle) override
+			{
+				return DCLF::RegisterToggle(a_toggle, feature);
+			}
+
+			void RegisterReportLines(const Api::ReportLines& a_lines) override
+			{
+				if (a_lines.name.empty() || !a_lines.lines)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete report lines", feature));
+				lists.reportLines.push_back({ std::string(a_lines.name), a_lines.point, a_lines.lines });
+			}
+
+			bool RegisterStandInObserver(const Api::StandInObserver& a_observer) override
+			{
+				// Without the primary cull nothing stands in, and nothing would call it.
+				if (!StandInInstalled())
+					return false;
+				lists.standInObservers.push_back(a_observer);
+				return true;
 			}
 
 			std::string_view feature;  // the feature installing
@@ -79,9 +145,16 @@ namespace DCLF::Extensions
 			if (feature.install)
 				feature.install(context);
 		}
+		// The features' toggles seeded from their switches, into the requested and active sets.
+		Toggles::Get().SeedRegistered();
 	}
 
 	std::span<const FrameValuePoolEntry> RegisteredPools() { return Registered().pools; }
 	std::span<const GpuStageEntry> RegisteredStages() { return Registered().stages; }
 	std::span<const PayloadProductEntry> RegisteredProducts() { return Registered().products; }
+	std::span<const SceneResourcesEntry> RegisteredSceneResources() { return Registered().sceneResources; }
+	std::span<const CommitHookEntry> RegisteredCommitHooks() { return Registered().commitHooks; }
+	std::span<const FrameBindingEntry> RegisteredFrameBindings() { return Registered().frameBindings; }
+	std::span<const ReportLinesEntry> RegisteredReportLines() { return Registered().reportLines; }
+	std::span<const Api::StandInObserver> RegisteredStandInObservers() { return Registered().standInObservers; }
 }

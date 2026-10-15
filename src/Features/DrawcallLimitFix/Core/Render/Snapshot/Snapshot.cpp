@@ -142,7 +142,7 @@ namespace DCLF
 			std::uint64_t objects = a_sealed.Of(a_resources.visibility).units;
 			if constexpr (requires { a_resources.frustum; })
 				objects = std::min(objects, a_sealed.Of(a_resources.frustum).units);
-			a_out.treeWindIndex = scene.TreeWindReadIndex(a_sealed, a_frame);
+			Extensions::FrameBindingValuesOf(a_sealed, scene, a_frame, a_out.frameBindings);
 			a_out.facePositions = FaceSnapshots::Enabled() ? a_sealed.Of(scene.facePositions).deviceAddress : 0;
 			a_out.fit = SceneFitOf(a_sealed, scene, objects);
 		}

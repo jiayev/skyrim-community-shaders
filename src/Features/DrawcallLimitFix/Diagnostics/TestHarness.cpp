@@ -88,7 +88,7 @@ namespace DCLF
 						bool found = false;
 						for (const auto& info : DCLF::ToggleTable())
 							if (info.name == name) {
-								DCLF::Toggles::Get().Requested().*info.member = on;
+								DCLF::SetToggleValue(DCLF::Toggles::Get().Requested(), info, on);
 								found = true;
 							}
 						if (!found)

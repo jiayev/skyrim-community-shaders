@@ -125,8 +125,7 @@ namespace DCLF
 	 * every frame, so the frame record gives it; a character-light material row binds the null texture at t11.
 	 */
 	inline constexpr std::uint32_t kCharacterLightRegister = kTextureRegisters - 3;
-	/** @brief t124: the trees' wind (DCLFTreeWind; TreeWindCS), vertex stage. Frame record: it alternates by frame. */
-	inline constexpr std::uint32_t kTreeWindRegister = kTextureRegisters - 4;
+	// t124: a feature's frame binding (Api::FrameBinding; Features/TreeWind's wind rows, kWindRegister): the frame record gives it.
 	/** @brief t123: the objects' placement rows (DCLFPlacements; BindlessPlacement), both stages: what a move changes. Frame record. */
 	inline constexpr std::uint32_t kPlacementBufferRegister = kTextureRegisters - 5;
 	/**

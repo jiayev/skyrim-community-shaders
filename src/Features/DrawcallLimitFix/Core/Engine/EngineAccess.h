@@ -106,7 +106,6 @@ namespace DCLF::Engine
 		inline constexpr std::uintptr_t kTreeWindFadeEnd = 0x2033104;  // float: the tree wind fade end
 		inline constexpr std::uintptr_t kTreeWindTimerScale = 0x1ad28bc;  // float: the tree wind timer scale
 		inline constexpr std::uintptr_t kFocusTargetCount = 0x332a498;  // the focus targets' count
-		inline constexpr std::uintptr_t kTreeManager = 0x20f6a18;  // BSTreeManager*
 		inline constexpr std::uintptr_t kReflectSky = 0x20104e8;  // bool: the water reflection draws the sky
 		inline constexpr std::uintptr_t kTreeLodAtlas = 0x33dcd18;  // NiSourceTexture*: tree LOD's atlas
 		inline constexpr std::uintptr_t kTransformToMatrix = 0x14aaf10;  // FUN_1414aaf10: an NiTransform as the shaders' row-major matrix
@@ -114,7 +113,6 @@ namespace DCLF::Engine
 		inline constexpr std::uintptr_t kEffectShader = 0x33dcce8;    // BSEffectShader*: the instance GetRenderPasses makes passes of
 		inline constexpr std::uintptr_t kClearGroup = 0x14b4ae0;      // FUN_1414b4ae0(accumulator, group): a group's pass list cleared, undrawn
 		inline constexpr std::uintptr_t kImageSpaceManager = 0x332a6a0;  // ImageSpaceManager*; the HDR multiplier at +0xe0
-		inline constexpr std::uintptr_t kTreeFirstMultiBound = 0x147d640;  // FUN_14147d640(tree node): its object (+0x118), its first child's AsMultiBoundNode (vfunc 0x30), or null
 		inline constexpr std::uintptr_t kFrameSeconds = 0x31cc288;  // float: the frame's seconds (GetSecondsPassed)
 		inline constexpr std::uintptr_t kHighDetailRange = 0x2033094;  // float[4]: the loaded grid's centre and half extents (FUN_141480ab0)
 		inline constexpr std::uintptr_t kHighDetailMargin = 0x1ad28d0;  // float: taken off the high detail range's z and w (15)

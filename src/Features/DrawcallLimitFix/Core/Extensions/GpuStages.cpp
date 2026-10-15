@@ -5,11 +5,11 @@
 
 namespace DCLF::Extensions
 {
-	std::vector<std::shared_ptr<const void>> SetUpGpuStages(rhi::Device a_device)
+	std::vector<std::shared_ptr<const void>> SetUpGpuStages(rhi::Device a_device, const Draws::SceneBuffers& a_scene)
 	{
 		const auto stages = RegisteredStages();
 		std::vector<std::shared_ptr<const void>> states(stages.size());
-		const Api::GpuStageSetup setup{ a_device };
+		const Api::GpuStageSetup setup{ a_device, a_scene };
 		for (std::size_t i = 0; i < stages.size(); ++i)
 			states[i] = stages[i].setup(setup);
 		return states;
