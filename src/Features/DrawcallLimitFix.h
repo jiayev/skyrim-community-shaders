@@ -249,6 +249,4 @@ private:
 	void SetActive(bool a_active);
 	// Why DCLF is off for the session (not AE, or the render graph could not come up); shown in the menu.
 	std::string unavailableReason;
-	bool inDepthPass = false;
-	bool depthControlDriven = false;  // RenderDepth's second argument (the first-person depth range's choice)
 };

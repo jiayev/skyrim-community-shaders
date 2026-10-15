@@ -5,6 +5,18 @@
 
 namespace DCLF
 {
+	namespace
+	{
+		/** @brief A view's coverage told to PassCapture, which withholds its members' registrations while it holds. */
+		void PostViewCovered(ViewKind a_view, bool a_covered)
+		{
+			if (a_view == ViewKind::Reflection)
+				PassCapture::Get().SetReflectionCovered(a_covered);
+			else
+				PassCapture::Get().SetFirstPersonCovered(a_covered);
+		}
+	}
+
 	void IndirectDraws::BuildPoint()
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
@@ -127,19 +139,24 @@ namespace DCLF
 		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape] && (!ActiveToggles().forward || rv.covered[Epoch::Forward]);
 		rv.withdrawn += main ? 0 : 1;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
-		impl->DecideReflectionCoverage(host, main, frame);
-		impl->DecideFirstPersonCoverage(host, main, frame);
+		// Each view's, in slot order.
+		using DecideView = void (Impl::*)(org::PersistentGraphHost*, bool, std::uint32_t);
+		static constexpr std::array<DecideView, kViews> kDecideView = { &Impl::DecideReflectionCoverage, &Impl::DecideFirstPersonCoverage };
+		for (const auto& slot : kViewSlots)
+			(impl.get()->*kDecideView[ViewIndex(slot.view)])(host, main, frame);
 		return main;
 	}
 
 	void IndirectDraws::Impl::CoverFailedGraph()
 	{
 		revisions.covered.fill(true);
-		reflection.covered = true;
-		PassCapture::Get().SetReflectionCovered(true);
-		// Nothing of the first person's is withheld from a failed graph (the engine draws it).
-		firstPerson.covered = false;
-		PassCapture::Get().SetFirstPersonCovered(false);
+		// Each view as its entry says, in slot order (the reflection's covered; nothing of the first person's is withheld from a failed
+		// graph: the engine draws it).
+		for (const auto& slot : kViewSlots) {
+			auto& state = View(slot.view);
+			state.covered = Extensions::Views().views[ViewIndex(slot.view)].coveredOnFailedGraph;
+			PostViewCovered(slot.view, state.covered);
+		}
 	}
 
 	void IndirectDraws::Impl::DecideEpochCoverage(org::PersistentGraphHost* a_host)

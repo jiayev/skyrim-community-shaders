@@ -4,6 +4,7 @@
 
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
@@ -657,9 +658,10 @@ namespace DCLF::Scene
 		auto leaveMain = [&](std::uint32_t a_slot) {
 			if (a_slot < setPhasesNext.size() && (setPhasesNext[a_slot] & kSetMain))
 				++setStats.rebinding;
-			// A first-person member draws with its main bindings, so it leaves too.
-			LeaveSet(a_slot, kSetMain | kSetReflection | kSetFirstPerson);
-			if (PhasesIn(tables, a_slot) & (kSetMain | kSetReflection | kSetFirstPerson)) {
+			// Every view's member draws with its main bindings (a first-person member too), so it leaves too.
+			const auto phases = static_cast<std::uint8_t>(kSetMain | Extensions::Views().phases);
+			LeaveSet(a_slot, phases);
+			if (PhasesIn(tables, a_slot) & phases) {
 				tables.setPhases[a_slot] = 0;
 				tables.objects[a_slot].flags &= ~kObjectMember;
 				tables.NoteChange(a_slot, kChangeBindings);

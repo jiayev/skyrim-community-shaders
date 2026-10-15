@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -41,10 +42,10 @@ namespace DCLF::Scene
 		std::uint32_t phases = 0;
 		if (!(flags & kObjectShadowOnly))
 			phases |= kSetMain;
-		// The reflection's faces draw the LOD techniques (dclf-lod.md).
+		// The LodTechniques views draw the LOD techniques (the reflection's faces: dclf-lod.md).
 		if (const auto p = tables.objects[a_slot].pipelineIndex; !(flags & kObjectShadowOnly) && p < tables.pipelines.size() &&
 			LodLightingTechnique(tables.pipelines[p].passDescriptor))
-			phases |= kSetReflection;
+			phases |= Extensions::Views().lodPhases;
 		if (!(flags & kObjectNoShadow))
 			phases |= kSetCaster | kSetCasterPoint;
 		if (a_slot < tables.occlusionTechnique[kOcclusionSky].size() && tables.occlusionTechnique[kOcclusionSky][a_slot])
@@ -144,13 +145,13 @@ namespace DCLF::Scene
 		const std::uint32_t partner = tables.IsLayer(a_slot) ? tables.layerBase[a_slot] : a_slot < tables.layerOf.size() ? tables.layerOf[a_slot] : kNoObjectSlot;
 		if (partner == kNoObjectSlot || partner >= tables.objects.size())
 			return;
-		constexpr std::uint8_t kMainPhases = kSetMain | kSetReflection;
-		if (PhasesIn(tables, partner) & kMainPhases) {
+		const auto mainPhases = static_cast<std::uint8_t>(kSetMain | Extensions::Views().lodPhases);
+		if (PhasesIn(tables, partner) & mainPhases) {
 			tables.setPhases[partner] = 0;
 			tables.objects[partner].flags &= ~kObjectMember;
 			tables.NoteChange(partner, kChangeBindings);
 		}
-		LeaveSet(partner, kMainPhases, false);
+		LeaveSet(partner, mainPhases, false);
 	}
 
 	void Coordinator::MarkSetApply(std::uint32_t a_slot)
@@ -716,10 +717,13 @@ namespace DCLF::Scene
 				// Rows taken after the commit (extras, a fade root) may lie past the scene buffers until they grow (FitsScene).
 				auto& draws = IndirectDraws::Get();
 				const bool main = (flags & kObjectMember) && !(flags & kObjectNoBindings) && draws.FitsScene(&tables, a_slot, false);
-				// A first-person member draws with main bindings but has no kObjectMember.
-				const bool firstPerson = (tables.setPhases[a_slot] & kSetFirstPerson) && !(flags & kObjectNoBindings) && draws.FitsScene(&tables, a_slot, false);
-				const std::uint8_t others = draws.FitsScene(&tables, a_slot, true) ? static_cast<std::uint8_t>(tables.setPhases[a_slot] & ~(kSetMain | kSetReflection | kSetFirstPerson)) : 0;
-				drawn = static_cast<std::uint8_t>((main ? (kSetMain | kSetReflection) : 0u) | (firstPerson ? kSetFirstPerson : 0u) | others);
+				// A CategoryRoot view's member (a first-person one) draws with main bindings but has no kObjectMember; a LodTechniques
+				// view's draws with the main phase.
+				const auto& views = Extensions::Views();
+				const auto root = static_cast<std::uint8_t>(tables.setPhases[a_slot] & views.rootPhases);
+				const bool rootMember = root && !(flags & kObjectNoBindings) && draws.FitsScene(&tables, a_slot, false);
+				const std::uint8_t others = draws.FitsScene(&tables, a_slot, true) ? static_cast<std::uint8_t>(tables.setPhases[a_slot] & ~(kSetMain | views.phases)) : 0;
+				drawn = static_cast<std::uint8_t>((main ? (kSetMain | views.lodPhases) : 0u) | (rootMember ? root : 0u) | others);
 			}
 			// A structural change (shapes made without it) or any undrawn phase revokes the whole claim.
 			const std::uint8_t lost = ((same && a_structure) || (claimed & ~drawn)) ? claimed : std::uint8_t{ 0 };

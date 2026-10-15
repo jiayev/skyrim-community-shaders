@@ -26,13 +26,12 @@ namespace DCLF::Draws
 		};
 	}
 
-	/** @brief The views drawn by epochs of their own (ViewEpoch.cpp): the reflection's faces and the first-person view. */
-	enum class ViewKind : std::uint8_t
-	{
-		Reflection,
-		FirstPerson,
-	};
-	constexpr std::size_t kViews = 2;
+	/**
+	 * @brief The views drawn by epochs of their own (ViewEpoch.cpp): the reflection's faces and the first-person view. The engine views
+	 * (Api/Views.h, included before by Internal.h), in Core's slot order (Views/ViewSlots.h).
+	 */
+	using ViewKind = Api::EngineView;
+	constexpr std::size_t kViews = static_cast<std::size_t>(ViewKind::Count);
 	constexpr std::size_t ViewIndex(ViewKind a_kind) { return static_cast<std::size_t>(a_kind); }
 
 	// Index of a drawing segment's shape (Resources::frames): the main epochs'.

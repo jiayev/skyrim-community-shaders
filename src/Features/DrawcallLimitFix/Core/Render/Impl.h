@@ -22,6 +22,7 @@ namespace DCLF
 	namespace Draws
 	{
 		struct MainCommit;  // CommitMainPayload's shared locals (Payload/Uploads.cpp)
+		struct ShapesKeyMixer;  // RevisionShapesKey's hash by group (Revision/Producer.cpp)
 	}
 
 	struct IndirectDraws::Impl : ImplSnapshotBuilder, ImplViews, ImplProducer, ImplStats
@@ -377,6 +378,8 @@ namespace DCLF
 		std::string RevisionReport();
 		ShapesKey RevisionShapesKey(const NamedVersions& a_sealed, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups,
 			std::size_t a_pipelines, const TreeLodPipelines* a_treeLod) const;
+		/** @brief RevisionShapesKey's views' part: each view's inputs into its slot's key group, tree LOD's, the DropWhenOff views' toggles. */
+		void MixViewShapesKey(ShapesKeyMixer& a_mixer, const TreeLodPipelines* a_treeLod) const;
 		/**
 		 * @brief Whether the last shadow and occlusion shapes hold a_bounds (capacities and buckets enough, no row at the bucket words
 		 * they were made for). Capacities only grow, so a shape remade from a bound they hold is the same shape.

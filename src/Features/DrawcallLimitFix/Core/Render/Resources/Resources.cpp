@@ -341,8 +341,8 @@ namespace DCLF
 		width = target.Width;
 		height = target.Height;
 		// The views draw from the main resources: rebuilt at their next import, before the graph is built (on the render thread).
-		for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson })
-			if (const auto& view = View(kind).resources) {
+		for (const auto& slot : kViewSlots)
+			if (const auto& view = View(slot.view).resources) {
 				view->main = state;
 				view->rebuildPending = true;
 			}
@@ -833,7 +833,7 @@ namespace DCLF
 		r.targetTexture = a_texture;
 		r.width = info.image.extent.width;
 		r.height = info.image.extent.height;
-		host->AddExtension(kReflectionExtensionId, [state = reflection.resources] { return MakeViewExtension(state); });
+		host->AddExtension(kViewSlots[ViewIndex(ViewKind::Reflection)].extensionId, [state = reflection.resources] { return MakeViewExtension(state); });
 		logger::info("[DCLF] reflection cube imported: {}x{}, {} faces, format {}", r.width, r.height, info.image.arrayLayers, static_cast<int>(reflection.targets.colour));
 		PostRevisionInputs();
 		return true;
@@ -877,7 +877,7 @@ namespace DCLF
 			logger::info("[DCLF] first-person depth imported: {}x{}, format {}", info.image.extent.width, info.image.extent.height, static_cast<int>(dsvDesc.Format));
 		}
 		r.rebuildPending = false;
-		host->AddExtension(kFirstPersonExtensionId, [state = firstPerson.resources] { return MakeViewExtension(state); });
+		host->AddExtension(kViewSlots[ViewIndex(ViewKind::FirstPerson)].extensionId, [state = firstPerson.resources] { return MakeViewExtension(state); });
 		PostRevisionInputs();
 		return true;
 	}

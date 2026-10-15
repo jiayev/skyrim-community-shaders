@@ -40,7 +40,9 @@ namespace DCLF::Extensions
 			std::vector<ShadingContributionEntry> shadingContributions;
 			std::vector<FrameGlobalsEntry> frameGlobals;
 			std::uint32_t frameGlobalsFloats = 0;
-			ViewEntries views{};
+			// By view: its contribution (EngineView::Count: none); the views' work, in order. Resolved at the end (ResolveViews).
+			std::array<Api::ViewContribution, kEngineViews> views{};
+			std::vector<Api::ViewWork> viewWork;
 			bool installed = false;
 		};
 
@@ -131,7 +133,7 @@ namespace DCLF::Extensions
 			void RegisterReportLines(const Api::ReportLines& a_lines) override
 			{
 				// A point composing its text takes text lines; the others, logged lines.
-				const bool text = a_lines.point == Api::ReportPoint::AsyncWork;
+				const bool text = a_lines.point == Api::ReportPoint::AsyncWorkViews || a_lines.point == Api::ReportPoint::AsyncWork;
 				if (a_lines.name.empty() || (text ? !a_lines.text || a_lines.lines : !a_lines.lines || a_lines.text))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete report lines", feature));
 				lists.reportLines.push_back({ std::string(a_lines.name), a_lines.point, a_lines.lines, a_lines.text });
@@ -241,10 +243,19 @@ namespace DCLF::Extensions
 			{
 				if (a_view.view >= Api::EngineView::Count || !a_view.toggle)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete view contribution", feature));
+				if (CoreKeepsView(a_view.view))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes view {}, which Core keeps", feature, static_cast<std::uint32_t>(a_view.view)));
 				auto& entry = lists.views[static_cast<std::size_t>(a_view.view)];
-				if (entry.toggle)
+				if (entry.view != Api::EngineView::Count)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes view {}, which another feature has", feature, static_cast<std::uint32_t>(a_view.view)));
-				entry = { a_view.toggle, a_view.forwardDecals };
+				entry = a_view;
+			}
+
+			void RegisterViewWork(const Api::ViewWork& a_work) override
+			{
+				if (a_work.view >= Api::EngineView::Count || a_work.point >= Api::ViewPoint::Count || !a_work.run)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete view work", feature));
+				lists.viewWork.push_back(a_work);
 			}
 
 			std::string_view feature;  // the feature installing
@@ -275,6 +286,8 @@ namespace DCLF::Extensions
 			if (feature.install)
 				feature.install(context);
 		}
+		// The views' entries, from Core's slots and the features' contributions and work.
+		ResolveViews(lists.views, lists.viewWork);
 		// The features' toggles seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
 	}
@@ -295,7 +308,6 @@ namespace DCLF::Extensions
 	const ObjectClassToggles& RegisteredObjectClasses() { return Registered().objectClasses; }
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions() { return Registered().shadingContributions; }
 	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals() { return Registered().frameGlobals; }
-	const ViewEntries& RegisteredViews() { return Registered().views; }
 
 	bool EntryClassTaken(Api::EntryClass a_class)
 	{
