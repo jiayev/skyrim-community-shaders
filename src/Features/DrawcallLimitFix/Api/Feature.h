@@ -69,6 +69,8 @@ namespace DCLF::Api
 		 * Extensions::PushReservedHidden), in reservation order.
 		 */
 		virtual std::uint32_t ReserveHiddenSite() = 0;
+		/** @brief A node class whose ordered children the mirror captures for the feature (fails: incomplete, or its RTTI taken). */
+		virtual void RegisterNodeCapture(const NodeCaptureContribution& a_capture) = 0;
 		/** @brief Fails the install past Extensions::kTableFamilySlots families. */
 		virtual TableFamilyId RegisterTableFamily(const TableFamily& a_family) = 0;
 		virtual CoordinatorComponentId RegisterCoordinatorComponent(const CoordinatorComponent& a_component) = 0;
@@ -151,7 +153,8 @@ namespace DCLF::Api
 	 * - earlyHooks (optional): the main thread at PostPostLoad, before DCLF's own engine side and observers install (the shell's
 	 *   Extensions::InstallEarlyHooks, in the list's order): engine hooks that must be in before Core's engine side reads what they
 	 *   change (a vtable slot the primary cull takes at its install; the source of an engine event channel Core follows, after Core's
-	 *   own scene events are in). Registers nothing; Core's switches and Diagnostics::Observe are readable.
+	 *   own scene events are in; a writer completing Core's movers, on a slot it reserves first: Extensions::ReserveMoveWriter). Registers
+	 *   nothing; Core's switches and Diagnostics::Observe are readable.
 	 * - cameraHooks (optional): the main thread at PostPostLoad, where the shadow cameras' hooks install (the shell's
 	 *   Extensions::InstallCameraHooks, after SunAccumulation's, before the primary cull's): the engine hooks that write a shadow
 	 *   source's cameras into Core's boards (Core/Render/Shadow/ShadowCameras.h). Called once per source, in ShadowSource order (Sun,

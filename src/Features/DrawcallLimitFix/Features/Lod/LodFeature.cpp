@@ -8,10 +8,35 @@
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegmentEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
+#include "ShaderCache.h"
+
+#include <cstdint>
+
 namespace DCLF::Features::Lod
 {
 	namespace
 	{
+		using Technique = SIE::ShaderCache::LightingShaderTechniques;
+		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+
+		// The Lighting property flags that mark object LOD (a BSSubIndexTriShape: dclf-lod.md) and terrain LOD (a land block's BSTriShape).
+		constexpr std::uint64_t kObjectLodFlags = static_cast<std::uint64_t>(Flag::kLODObjects) | static_cast<std::uint64_t>(Flag::kHDLODObjects);
+		constexpr std::uint64_t kTerrainLodFlags = static_cast<std::uint64_t>(Flag::kLODLandscape);
+		constexpr auto kSubIndexTriShape = static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape);
+		constexpr auto kTriShape = static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape);
+
+		/**
+		 * @brief Both classes' category root (the category capture, render thread): TES::lodLandRoot holds the terrain manager's LOD blocks
+		 * (a BSMultiBoundNode each: object LOD's BSSubIndexTriShapes, one segment per cell, and the land's BSTriShapes), attached and detached
+		 * as the camera moves (dclf-lod.md). It is the category node; its content is tracked by the usual structural events. A class not
+		 * taken, or whose toggle is off, classifies as Lod.
+		 */
+		RE::NiNode* LodLandRoot()
+		{
+			const auto* tes = RE::TES::GetSingleton();
+			return tes ? tes->lodLandRoot : nullptr;
+		}
+
 		void Install(Api::InstallContext& a_context)
 		{
 			// Where Core's were listed: the switches before the LOD gates' (Features/TreeLod's follow them there), the toggles after the
@@ -32,8 +57,19 @@ namespace DCLF::Features::Lod
 			// Object LOD (the sub-index shapes' eligibility, the LOD object techniques and flags) and terrain LOD (the LOD land techniques and
 			// flags), each an object class; either lists the LOD root as a category node, and both (with the swaps gated) let a view's faces
 			// draw the LOD land and objects roots in the engine's place.
-			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::LodObjects, .toggle = objects });
-			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::LodTerrain, .toggle = terrain });
+			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::LodObjects, .toggle = objects, .categoryRoot = &LodLandRoot });
+			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::LodTerrain, .toggle = terrain, .categoryRoot = &LodLandRoot });
+			// Object LOD, drawn by visible segment ranges: its techniques, only for a BSSubIndexTriShape with the LOD object flags; and the
+			// sub-index shapes with those flags, drawn as tri-shapes over the ranges LodSegments mirrors (Ineligible::Lod while the toggle is
+			// off). Any other sub-index shape is not one DCLF draws.
+			for (const auto technique : { Technique::LODObjects, Technique::LODObjectHD })
+				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = objects, .propertyFlags = kObjectLodFlags,
+					.geometryType = kSubIndexTriShape });
+			a_context.RegisterGeometryType({ .geometryType = kSubIndexTriShape, .toggle = objects, .propertyFlags = kObjectLodFlags });
+			// Terrain LOD: its techniques, only for a land block's shape under the LOD root (a BSTriShape with the LOD landscape flag).
+			for (const auto technique : { Technique::LODLand, Technique::LODLandNoise })
+				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = terrain, .propertyFlags = kTerrainLodFlags,
+					.geometryType = kTriShape });
 			// The LOD gates (CS_DCLF_LOD_GATES): their engine hooks, then, while installed, their registrations, first of the feature's (where
 			// Core registered them, before every feature: their channel and adoption guard the first, their hidden site the first reserved,
 			// their component before the segments' and every later feature's; no earlier feature's component shares a hook with theirs).

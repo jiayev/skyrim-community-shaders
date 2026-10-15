@@ -126,25 +126,25 @@ namespace DCLF
 				view.registered.exchange(0, std::memory_order_relaxed) };
 		}
 		/**
-		 * @brief The cube camera's LOD roots (IndirectDraws::ViewLodRootsOwned, Features/Reflection's ReflectionFaces::RootBits): LOD land
-		 * and objects (the reflection phase), LOD trees (the faces' tree LOD). Core's while tree LOD and the LOD gates are.
+		 * @brief A view's LOD roots (IndirectDraws::ViewLodRootsOwned; the cube camera's: Features/Reflection's ReflectionFaces::RootBits):
+		 * LOD land and objects (the view's phase), LOD trees (its tree LOD per face). Core's while tree LOD and the LOD gates are.
 		 */
 		static constexpr std::uint32_t kLodRoots = 1u << 0, kTreeRoot = 1u << 1;
 		/**
-		 * @brief The faces' residue watch: render thread, at an update's start, the cube camera's roots to watch (0: none). While set,
-		 * passes into an OwnRenderers view's renderer that are not withheld (geometry the engine still draws) are counted by root (not the
-		 * sky's). Core's while tree LOD and the LOD gates are.
+		 * @brief An OwnRenderers view's residue watch (IndirectDraws::ViewLodRootsOwned, on the renders its residueDue keeps the roots):
+		 * render thread, at a render's start, the view's LOD roots to watch (0: none). While set, passes into the view's renderers that are
+		 * not withheld (geometry the engine still draws) are counted by root (not the sky's). Core's while tree LOD and the LOD gates are.
 		 */
-		void WatchReflectionResidue(std::uint32_t a_roots) { reflectionResidueWatch.store(a_roots, std::memory_order_release); }
-		struct ReflectionResidue
+		void WatchViewResidue(Api::EngineView a_view, std::uint32_t a_roots) { viewRenderers[static_cast<std::size_t>(a_view)].residueWatch.store(a_roots, std::memory_order_release); }
+		struct ViewResidue
 		{
 			std::uint32_t lodPasses = 0, treePasses = 0;  // under the LOD land and objects roots, under the tree root
 			std::string first;
 		};
-		/** @brief Since the last call. */
-		ReflectionResidue TakeReflectionResidue();
-		/** @brief The residue's geometries under the LOD roots since the last call (pointers only: never dereferenced). */
-		std::vector<const RE::BSGeometry*> TakeReflectionResidueGeometries();
+		/** @brief A view's residue since the last call. */
+		ViewResidue TakeViewResidue(Api::EngineView a_view);
+		/** @brief A view's residue geometries under the LOD roots since the last call (pointers only: never dereferenced). */
+		std::vector<const RE::BSGeometry*> TakeViewResidueGeometries(Api::EngineView a_view);
 
 		static constexpr std::uint32_t kShadowModes = 3;
 
@@ -240,11 +240,6 @@ namespace DCLF
 		std::atomic<std::uint32_t> mainWithheld{ 0 }, occlusionWithheld{ 0 };
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
 		std::array<std::atomic<bool>, static_cast<std::size_t>(Api::DrawFamily::Count)> familyOwned{};
-		std::atomic<std::uint32_t> reflectionResidueWatch{ 0 }, reflectionResidueLod{ 0 }, reflectionResidueTree{ 0 };
-		std::mutex reflectionResidueLock;
-		std::string reflectionResidueFirst;  // under reflectionResidueLock
-		std::vector<const RE::BSGeometry*> reflectionResidueGeometries;  // under reflectionResidueLock
-		void NoteReflectionResidue(const RE::BSRenderPass* a_pass, bool a_treeLod);
 		/**
 		 * @brief The OwnRenderers views' test at every main-mode insertion point, after WithholdMain: a member's pass of the view's phase
 		 * into its renderers while its render withholds and its epochs draw (the reflection faces'), or tree LOD's while its tree LOD is DCLF's.
@@ -259,8 +254,9 @@ namespace DCLF
 		std::array<const void*, 2> mainAccumulators{};  // what mainRenderers was made from (render thread)
 		// By view: its renderers (an InMainRenderers view's accumulators', also in mainRenderers; an OwnRenderers view's, SetViewRenderers),
 		// their source (render thread) and its coverage (0: not set yet, its coveredInitially standing for it; 1 not covered; 2 covered).
-		// An InMainRenderers view's counts; an OwnRenderers view's render's gates (rendering, withholding), its tree LOD's ownership and
-		// its counts (Drain takes them).
+		// An InMainRenderers view's counts; an OwnRenderers view's render's gates (rendering, withholding), its tree LOD's ownership, its
+		// counts (Drain takes them) and its residue watch (the roots watched; the passes by root, the first and the geometries, the last
+		// two under residueLock).
 		struct ViewRenderers
 		{
 			std::shared_ptr<const RendererSet> renderers;
@@ -269,8 +265,13 @@ namespace DCLF
 			std::atomic<std::uint32_t> withheld{ 0 }, memberKept{ 0 }, registered{ 0 };
 			std::atomic<bool> rendering{ false }, withholdActive{ false }, treeLodOwned{ false };
 			std::atomic<std::uint32_t> ownWithheld{ 0 }, ownTreeLodWithheld{ 0 };
+			std::atomic<std::uint32_t> residueWatch{ 0 }, residueLod{ 0 }, residueTree{ 0 };
+			std::mutex residueLock;
+			std::string residueFirst;
+			std::vector<const RE::BSGeometry*> residueGeometries;
 		};
 		std::array<ViewRenderers, Extensions::kEngineViews> viewRenderers;
+		static void NoteViewResidue(ViewRenderers& a_view, const RE::BSRenderPass* a_pass, bool a_treeLod);
 		/**
 		 * @brief The main-view test at every insertion point: a member's pass into a main view (all of them: DCLF draws its fades and LOD
 		 * cross-fade copy), or tree LOD's or an InMainRenderers view's member's (the first person's) while DCLF draws those.

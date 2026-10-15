@@ -4,7 +4,6 @@
 // thread (the coordinator's, or the render thread's); what crosses between them is handed over under a lock or by exchange.
 
 #include "Census.h"
-#include "Residue.h"
 #include "SceneView.h"
 
 #include <atomic>
@@ -44,25 +43,16 @@ namespace DCLF::Diagnostics
 
 	/**
 	 * @brief What the frame registered, for the scene pass after it (SceneRegistrations.cpp): the render thread at the capture's drain ->
-	 * the next pass (latest wins, but for the residue: a drain no pass took carries its residue into the next, so every residue geometry is
-	 * classified once).
+	 * the next pass (latest wins).
 	 */
 	struct RegistrationDrain
 	{
-		// A reflection residue geometry with its names, read by the render thread at the drain: the scene pass classifies it a frame later,
-		// past a Present that may have released it, so it dereferences none untracked.
-		struct Residue
-		{
-			const RE::BSGeometry* geometry = nullptr;
-			std::string names;  // "'name' under 'parent' (RTTI)"
-		};
 		// The main renderers' registrations of the frame.
 		struct Registration
 		{
 			const RE::BSGeometry* geometry = nullptr;
 			std::uint32_t hint = 0;
 		};
-		std::vector<Residue> residue;
 		std::vector<Registration> registrations;
 		bool observed = false;  // the frame's registrations were observed (CS_DCLF_PERSISTENT_PARITY), so registrations holds them
 	};
@@ -176,32 +166,18 @@ namespace DCLF::Diagnostics
 	};
 
 	/**
-	 * @brief CS_DCLF_SET_PARITY: entries whose mirror chain reaches the first-person root while they are filed under another category node
-	 * (the first-person view never takes them). Counted from the evaluations' threads.
+	 * @brief CS_DCLF_SET_PARITY: the set's commit decided again (reported with the set's line). The root view's slots its decisions leave
+	 * out are Features/FirstPerson's (the check's decisions announced: SetSlotRedecided).
 	 */
-	struct FirstPersonObserverState
-	{
-		std::atomic<std::uint64_t> misfiled{ 0 };
-		std::atomic<const void*> misfiledGeometry{ nullptr }, misfiledCategory{ nullptr };
-	};
-
-	/** @brief CS_DCLF_SET_PARITY: the set's commit decided again, and the first-person slots its decisions leave out (reported with the set's line). */
 	struct CommitParityState
 	{
 		std::uint64_t commitParityChecks = 0, commitParityDiffer = 0;  // full evaluations, slots that differed
-		// First-person entries' slots the first-person view takes no part in (SetParticipation), the first.
-		std::uint64_t firstPersonExcluded = 0;
-		std::string firstFirstPersonExcluded;
-		// First-person slots that take part but are held out (not resident, not main-ready, pipelines), the first.
-		std::uint64_t firstPersonHeld = 0;
-		std::string firstFirstPersonHeld;
 	};
 
 	/** @brief The scene area's diagnostics state: what its observers keep between their hook points and the reports. */
 	struct SceneState
 	{
 		CommitParityState commit;
-		FirstPersonObserverState firstPerson;
 		MirrorParityState mirror;
 		ReplayParityState replay;
 		CandidateParityState candidates;
@@ -212,9 +188,6 @@ namespace DCLF::Diagnostics
 		ShadingParityState shading;
 		WalkParityState walk;
 		ChangeLogParityState changeLog;
-		// The residue's classes: written by the coordinator, taken by the render thread's reflection report, under the lock.
-		std::mutex residueLock;
-		ResidueClasses residue;
 		// The capture's drains: the render thread's post, and the pass's newest taken (null until the first; none posted since the last
 		// pass leaves none, so no drain is checked twice).
 		std::atomic<std::shared_ptr<const RegistrationDrain>> drainPosted;

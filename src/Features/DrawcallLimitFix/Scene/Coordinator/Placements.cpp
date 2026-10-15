@@ -2,6 +2,7 @@
 // placement set (movers, moving and still roots with their dependents), and the placement plan published when that set changes.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 
 namespace DCLF::Scene
@@ -133,11 +134,11 @@ namespace DCLF::Scene
 		if (slot < tables.boneRows.size() && (tables.objects[slot].flags & kObjectSkinned) && tables.boneRows[slot]) {
 			key.boneOffset = tables.boneOffset[slot];
 			key.boneRows = tables.boneRows[slot];
-			// A particle member's block holds its quads (its palette rows class's: Api::PaletteRowsContribution), not a skin's palette
-			// (the mirror's record says which).
-			const auto* record = mirror.Geometry(a_geometry);
-			if (record && record->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) && !record->skin)
-				key.itemClass = Api::FrameValueItemClass::ParticleSystem;
+			// A palette rows member's block holds its class's rows (a particle system's quads: Api::PaletteRowsContribution), not a skin's
+			// palette: its geometry type's item class for a skinless record (the mirror's record says which; the frame values' parity tests
+			// the same, Extensions::PlannedItemClass).
+			if (const auto* record = mirror.Geometry(a_geometry))
+				key.itemClass = Extensions::PlannedItemClass(true, record->type, record->skin != nullptr);
 		}
 		return key;
 	}

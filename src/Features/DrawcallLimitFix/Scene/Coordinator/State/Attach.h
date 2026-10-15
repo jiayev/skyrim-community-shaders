@@ -44,13 +44,13 @@ namespace DCLF::Scene
 			Ineligible reason = Ineligible::None;  // what the nodes between the category node and it make of it (MirrorSubtree's)
 			const RE::TESObjectREFR* actorOwner = nullptr;
 			const RE::NiNode* roomNode = nullptr;
-			const RE::BSFaceGenNiNode* faceHead = nullptr;
+			const RE::NiNode* faceHead = nullptr;  // its entry class's held parent (EntryRule::holdsParent: a face shape's head)
 			bool mirrored = false;
 			bool subIndex = false;
 			bool resolved = false;
 			const void* sunEntry = nullptr;
 			const RE::NiAVObject* lightActorRoot = nullptr;
-			// The batch's pins of the geometry and its face head (null: none).
+			// The batch's pins of the geometry and its held parent (null: none).
 			RE::NiRefObject* geometryPin = nullptr;
 			RE::NiRefObject* faceHeadPin = nullptr;
 			HeldKeys held;

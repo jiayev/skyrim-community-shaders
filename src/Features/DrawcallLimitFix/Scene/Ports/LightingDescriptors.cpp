@@ -55,15 +55,8 @@ namespace DCLF
 			case Technique::MTLand:
 			case Technique::MTLandLODBlend:
 				return MtLandEnabled();
-			// Object LOD (dclf-lod.md), drawn by visible segment ranges; only a BSSubIndexTriShape with the LOD object flags.
-			case Technique::LODObjects:
-			case Technique::LODObjectHD:
-				return Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodObjects);
-			// Terrain LOD (dclf-lod.md): only a land block's shape under the LOD root (IsLodLand).
-			case Technique::LODLand:
-			case Technique::LODLandNoise:
-				return Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodTerrain);
-			// The features' (Features/Actors: actor skin, faces, hair and eyes; Features/TreeWind: TreeAnim).
+			// The features' (Features/Actors: actor skin, faces, hair and eyes; Features/TreeWind: TreeAnim; Features/Lod: object LOD's
+			// LODObjects and LODObjectHD, terrain LOD's LODLand and LODLandNoise, each only for its flags' geometry type: the flag rules).
 			default:
 				return ContributedTechniqueOn(a_technique);
 			}
@@ -286,11 +279,12 @@ namespace DCLF
 	{
 		std::uint64_t f = a_property.flags;
 
-		// Terrain LOD (a land block's BSTriShape) and object LOD (a BSSubIndexTriShape, drawn by LodSegments' ranges) each by its class.
-		if ((f & Bit(Flag::kLODLandscape)) && !(Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodTerrain) && IsLodLand(a_property.flags, a_leaf.Type())))
-			return Ineligible::Lod;
-		if ((f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects))) && !(Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodObjects) && IsLodObject(a_property.flags, a_leaf.Type())))
-			return Ineligible::Lod;
+		// The techniques' property flag rules (Api::TechniqueContribution::propertyFlags: Features/Lod's terrain LOD, a land block's
+		// BSTriShape, and object LOD, a BSSubIndexTriShape drawn by LodSegments' ranges): a flagged object only of its geometry type, while
+		// its toggle is on.
+		for (const auto& rule : Extensions::PropertyFlagRules())
+			if ((f & rule.propertyFlags) && !(ActiveToggles().On(rule.toggle) && a_leaf.Type() == rule.geometryType))
+				return Ineligible::Lod;
 		const auto* alpha = a_leaf.alpha;
 		const bool blending = a_leaf.AlphaBlending();
 		if (a_layer) {
@@ -472,13 +466,15 @@ namespace DCLF
 		return Ineligible::None;
 	}
 
-	bool ParticleSystemTaken(const SceneCapture::LeafView& a_leaf)
+	Api::FrameValueItemClass PaletteItemClassOf(const SceneCapture::LeafView& a_leaf)
 	{
-		constexpr auto kParticles = static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles);
-		if (!Extensions::GeometryTypeOn(ActiveToggles(), kParticles) || !a_leaf.geometry || a_leaf.Type() != kParticles || a_leaf.Skinned())
-			return false;
+		if (!a_leaf.geometry || a_leaf.Skinned())
+			return Api::FrameValueItemClass::None;
+		const auto itemClass = Extensions::GeometryItemClassOn(ActiveToggles(), a_leaf.Type());
+		if (itemClass == Api::FrameValueItemClass::None)
+			return itemClass;
 		const auto& p = a_leaf.geometry->particles;
 		// Aligned quads with the velocities FUN_140e51320 reads for them.
-		return p.system && p.data && (!p.aligned || p.velocities) && p.capacity > 0;
+		return p.system && p.data && (!p.aligned || p.velocities) && p.capacity > 0 ? itemClass : Api::FrameValueItemClass::None;
 	}
 }

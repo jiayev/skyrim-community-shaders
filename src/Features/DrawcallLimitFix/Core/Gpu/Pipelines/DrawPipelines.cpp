@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
@@ -816,10 +817,9 @@ namespace DCLF
 			RE::BSShader* utility = nullptr;
 			DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
 			std::shared_ptr<const std::vector<ShadowRasterState>> shadowStates;
-			// SetTreeLodInputs (DistantTree: tree LOD's and the forward tree program), SetForwardTargets.
+			// SetTreeLodInputs (DistantTree: tree LOD's and the forward tree program); SetViewForwardTargets, by view (its keys').
 			RE::BSShader* distantTree = nullptr;
-			ForwardTargets forwardTargets;
-			ForwardTargets firstPersonTargets;  // SetFirstPersonTargets: the first-person keys'
+			std::array<ForwardTargets, Extensions::kEngineViews> viewTargets{};
 			// SetRefractionInputs.
 			RE::BSShader* refractionUtility = nullptr;
 			DXGI_FORMAT refractionFormat = DXGI_FORMAT_UNKNOWN;
@@ -1637,21 +1637,13 @@ namespace DCLF
 		WakePipelineLane();
 	}
 
-	void DrawPipelines::SetForwardTargets(const ForwardTargets& a_targets)
+	void DrawPipelines::SetViewForwardTargets(Api::EngineView a_view, const ForwardTargets& a_targets)
 	{
 		auto& input = impl->renderInput;
-		if (a_targets.colour == DXGI_FORMAT_UNKNOWN || a_targets.depth == DXGI_FORMAT_UNKNOWN || input.forwardTargets == a_targets || !Enabled())
+		auto& viewTargets = input.viewTargets[static_cast<std::size_t>(a_view)];
+		if (a_targets.colour == DXGI_FORMAT_UNKNOWN || a_targets.depth == DXGI_FORMAT_UNKNOWN || viewTargets == a_targets || !Enabled())
 			return;
-		input.forwardTargets = a_targets;
-		impl->PostInput(*this);
-	}
-
-	void DrawPipelines::SetFirstPersonTargets(const ForwardTargets& a_targets)
-	{
-		auto& input = impl->renderInput;
-		if (a_targets.colour == DXGI_FORMAT_UNKNOWN || a_targets.depth == DXGI_FORMAT_UNKNOWN || input.firstPersonTargets == a_targets || !Enabled())
-			return;
-		input.firstPersonTargets = a_targets;
+		viewTargets = a_targets;
 		impl->PostInput(*this);
 	}
 
@@ -1807,11 +1799,12 @@ namespace DCLF
 				RecreateMainSet(l.input->targets, input->targets);
 			if (l.input && l.input->shadowFormat != DXGI_FORMAT_UNKNOWN && input->shadowFormat != l.input->shadowFormat)
 				RecreateShadowSet(l.input->shadowFormat, input->shadowFormat);
-			if (l.input && l.input->forwardTargets.colour != DXGI_FORMAT_UNKNOWN && !(l.input->forwardTargets == input->forwardTargets))
-				RecreateForward(l.input->forwardTargets, input->forwardTargets);
-			// New first-person targets (rare) rebuild every forward pipeline too.
-			else if (l.input && l.input->firstPersonTargets.colour != DXGI_FORMAT_UNKNOWN && !(l.input->firstPersonTargets == input->firstPersonTargets))
-				RecreateForward(l.input->firstPersonTargets, input->firstPersonTargets);
+			// A view's new targets rebuild every forward pipeline (the first view in slot order whose targets changed names them).
+			for (std::size_t v = 0; l.input && v < Extensions::kEngineViews; ++v)
+				if (l.input->viewTargets[v].colour != DXGI_FORMAT_UNKNOWN && !(l.input->viewTargets[v] == input->viewTargets[v])) {
+					RecreateForward(l.input->viewTargets[v], input->viewTargets[v]);
+					break;
+				}
 			if (l.input && (l.input->refractionFormat != input->refractionFormat || l.input->refractionWriteMask != input->refractionWriteMask))
 				l.refraction.Reset();
 			l.input = std::shared_ptr<const FrameInput>(std::move(input));
@@ -2288,11 +2281,12 @@ namespace DCLF
 		if (f.entries.contains(a_key))
 			return;  // requested, or failed for good
 		const bool tree = (a_key.flags & ForwardPipelineKey::kForwardTreeLod) != 0;
-		// A first-person key draws into the first-person targets, back faces culled (no mirror there).
-		const bool firstPerson = (a_key.flags & ForwardPipelineKey::kForwardFirstPerson) != 0;
+		// A key draws into its view's targets (Extensions::ForwardKeyView), with its view's culling (a plain projection's back faces).
+		const auto view = Extensions::ForwardKeyView(a_key.flags);
+		const bool cullBack = view != Api::EngineView::Count && Extensions::ViewEntryOf(view).keys.cullBackFaces;
 		const auto* input = lane.input.get();
-		const ForwardTargets* keyTargets = input ? (firstPerson ? &input->firstPersonTargets : &input->forwardTargets) : nullptr;
-		if (!input || keyTargets->colour == DXGI_FORMAT_UNKNOWN || keyTargets->depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW ||
+		const ForwardTargets* keyTargets = input && view != Api::EngineView::Count ? &input->viewTargets[static_cast<std::size_t>(view)] : nullptr;
+		if (!input || !keyTargets || keyTargets->colour == DXGI_FORMAT_UNKNOWN || keyTargets->depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW ||
 			!(tree ? input->distantTree : input->lighting) || !zLayout) {
 			f.blocked.push_back(a_key);
 			return;
@@ -2312,7 +2306,7 @@ namespace DCLF
 			return;
 		}
 		const ForwardTargets forwardTargets = *keyTargets;
-		const auto cull = (a_key.flags & ForwardPipelineKey::kForwardTwoSided) ? rhi::CullMode::None : firstPerson ? rhi::CullMode::Back : rhi::CullMode::Front;
+		const auto cull = (a_key.flags & ForwardPipelineKey::kForwardTwoSided) ? rhi::CullMode::None : cullBack ? rhi::CullMode::Back : rhi::CullMode::Front;
 		org::services::PipelineRecipe recipe;
 		recipe.id = tree ? std::string("dclf.forward.tree-lod") : fmt::format("dclf.forward.{:08X}.{:08X}.{:X}", a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.flags);
 		recipe.shaderKey = ModuleHash(program->vertex) ^ ModuleHash(program->pixel) * 0x9E3779B97F4A7C15ull;
@@ -2443,8 +2437,7 @@ namespace DCLF
 			out.failed = entry.failed;
 			catalog->forwardEntries.emplace(key, out);
 		}
-		catalog->forwardTargets = l.input ? l.input->forwardTargets : ForwardTargets{};
-		catalog->firstPersonTargets = l.input ? l.input->firstPersonTargets : ForwardTargets{};
+		catalog->viewTargets = l.input ? l.input->viewTargets : decltype(catalog->viewTargets){};
 		catalogSlot.Post(std::move(catalog));
 		// The scene lane takes it at its next pass (ResolveLookups).
 		WakeScenePass(SceneWake::Catalog);
@@ -2480,8 +2473,8 @@ namespace DCLF
 	{
 		if (!a_catalog)
 			return {};
-		const auto& built = (a_key.flags & ForwardPipelineKey::kForwardFirstPerson) ? a_catalog->firstPersonTargets : a_catalog->forwardTargets;
-		if (!(built == a_targets))
+		const auto view = Extensions::ForwardKeyView(a_key.flags);
+		if (view == Api::EngineView::Count || !(a_catalog->viewTargets[static_cast<std::size_t>(view)] == a_targets))
 			return {};
 		const auto* entry = a_catalog->FindForward(a_key);
 		if (!entry || !entry->pipeline)

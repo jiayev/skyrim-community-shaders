@@ -148,8 +148,11 @@ namespace DCLF
 			++listStats.notToggled;
 			return nullptr;
 		}
-		// Precipitation::SetupMask culls every list when the engine draws an occlusion map: both must be DCLF's.
-		if (!Extensions::OcclusionOn(ActiveToggles(), kOcclusionSky) || !Extensions::OcclusionOn(ActiveToggles(), kOcclusionPrecipitation)) {
+		// Precipitation::SetupMask culls every list when the engine draws an occlusion map: every map must be DCLF's.
+		bool everyMap = true;
+		for (std::uint32_t v = 0; v < kOcclusionViews && everyMap; ++v)
+			everyMap = Extensions::OcclusionOn(ActiveToggles(), v);
+		if (!everyMap) {
 			++listStats.noOcclusion;
 			return nullptr;
 		}

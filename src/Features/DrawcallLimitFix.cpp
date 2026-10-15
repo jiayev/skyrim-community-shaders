@@ -230,11 +230,15 @@ bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 void DrawcallLimitFix::OcclusionView(OcclusionMap a_map)
 {
 	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
-	auto* sky = globals::game::sky;
-	auto* precip = sky ? sky->precip : nullptr;
-	if (!Running() || !precip || !precip->occlusionData.camera)
+	// The map's camera (its entry's: Features/OcclusionMaps' is the precipitation accumulator's).
+	const auto& map = DCLF::Extensions::OcclusionMapOf(a_map);
+	if (!Running() || !map.camera)
 		return;
-	DCLF::IndirectDraws::Get().OcclusionView(a_map, *precip->occlusionData.camera);
+	DCLF::Api::OcclusionCamera camera;
+	map.camera(camera);
+	if (!camera.camera)
+		return;
+	DCLF::IndirectDraws::Get().OcclusionView(a_map, *camera.camera);
 }
 
 void DrawcallLimitFix::DrawOcclusion()
@@ -251,7 +255,7 @@ bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap a_map)
 
 bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap a_map)
 {
-	// The map's own parity's (its entry's referenceDue: Policy::RenderOcclusionReference for Features/OcclusionMaps' maps).
+	// The map's own parity's (its entry's referenceDue: CS_DCLF_SKYLIGHT_PARITY's for Features/OcclusionMaps' maps).
 	const auto& map = DCLF::Extensions::OcclusionMapOf(a_map);
 	const bool due = map.referenceDue && map.referenceDue();
 	// The engine's reference map registers every occluder, from the whole scene lists.
@@ -319,14 +323,16 @@ void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::
 	if (!globals::features::drawcallLimitFix.Running())
 		return;
 	const auto mode = static_cast<std::uint32_t>(a_accumulator->GetRuntimeData().renderMode);
-	// The occlusion maps (render mode 0x1C, the precipitation accumulator): Skylighting's own map while it draws it
-	// (inOcclusion), else the precipitation mask.
+	// The occlusion maps (render mode 0x1C): the map whose entry owns the accumulator, in slot order (Features/OcclusionMaps': the
+	// precipitation accumulator's, Skylighting's own map while it draws it, else the precipitation mask).
 	if (mode == 0x1C) {
 		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
-		auto* sky = globals::game::sky;
-		auto* precip = sky ? sky->precip : nullptr;
-		if (precip && precip->occlusionData.accumulator.get() == reinterpret_cast<RE::BSShaderAccumulator*>(a_accumulator))
-			DCLF::IndirectDraws::Get().CaptureOcclusion(globals::features::skylighting.inOcclusion ? DCLF::kOcclusionSky : DCLF::kOcclusionPrecipitation);
+		const DCLF::Api::OcclusionAccumulator accumulator{ reinterpret_cast<RE::BSShaderAccumulator*>(a_accumulator) };
+		for (std::uint32_t v = 0; v < DCLF::kOcclusionViews; ++v)
+			if (const auto& map = DCLF::Extensions::OcclusionMapOf(v); map.ownsAccumulator && map.ownsAccumulator(accumulator)) {
+				DCLF::IndirectDraws::Get().CaptureOcclusion(v);
+				break;
+			}
 		return;
 	}
 	if (mode < 0xD || mode > 0xF)

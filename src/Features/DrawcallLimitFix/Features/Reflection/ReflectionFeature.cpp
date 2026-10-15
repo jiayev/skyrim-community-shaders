@@ -1,6 +1,6 @@
 // Reflection: the water reflection's cube map faces drawn by DCLF as a view of the one scene. Its switch and the reflections toggle, the
 // view's contribution and its work after tree LOD's decision and at the depth commit, its engine hooks (the feature's early hooks), its
-// report lines and the faces' camera parity.
+// report lines, the faces' camera parity and the residue's classes.
 
 // ReflectionView.h first (Internal.h): volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
@@ -26,7 +26,8 @@ namespace DCLF::Features::Reflection
 		 * @brief The view's contribution: the LOD techniques of the main set; keys for a LOD Lighting technique's slot only, front faces culled
 		 * unless two-sided (dclf-lod.md, "Water reflections"); six faces with tree LOD; its last shape kept while off; its imported target's
 		 * area; withheld in renderers of its own (the cube camera's accumulators, ReflectionFaces); drawn into the engine's cube with DCLF's
-		 * own depth; covered before its first coverage and on a failed graph.
+		 * own depth; covered before its first coverage and on a failed graph; its LOD roots kept for the residue watch on the updates the
+		 * parities ask for (Diagnostics/Residue.cpp).
 		 */
 		Api::ViewContribution Contribution(Api::ToggleId a_toggle)
 		{
@@ -50,7 +51,8 @@ namespace DCLF::Features::Reflection
 				.targetImport = Api::ViewTargetImport::ColourWithOwnDepth,
 				.coveredInitially = true,
 				.coveredOnFailedGraph = true,
-				.covered = &Covered };
+				.covered = &Covered,
+				.residueDue = &ResidueDue };
 		}
 
 		/**
@@ -96,9 +98,11 @@ namespace DCLF::Features::Reflection
 			a_context.RegisterViewWork({ .view = kView, .point = Api::ViewPoint::DepthCommitted, .run = &Execute });
 			// After the visibility lines and before the forward epoch's, where Core printed the view's.
 			a_context.RegisterReportLines({ .name = "reflection", .point = Api::ReportPoint::AsyncWorkViews, .text = &Lines });
-			// CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the faces' cameras against the engine's.
-			if (Diagnostics::Observe().claimsOrScene)
+			// CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the faces' cameras against the engine's, and the residue's classes.
+			if (Diagnostics::Observe().claimsOrScene) {
 				SubscribeFaceCameraParity();
+				SubscribeResidue();
+			}
 		}
 	}
 

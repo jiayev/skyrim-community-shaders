@@ -371,13 +371,6 @@ namespace DCLF::Scene
 		}
 	}
 
-	void Coordinator::WatchMaterialTransforms(const RE::BSShaderMaterial*, const MaterialPort::MaterialSnapshot&, bool)
-	{
-		// The texture transforms are no record's: the frame values read every material row's TexcoordOffset from the buffer the frame's
-		// shaders read, and the GPU patches the rows (TextureTransformList, TextureTransformsCS). No version moves, nothing is logged.
-		++materialRecordStats.transformsWatched;
-	}
-
 	void Coordinator::ResetMaterialRecords()
 	{
 		for (auto& item : materialSignatures) {

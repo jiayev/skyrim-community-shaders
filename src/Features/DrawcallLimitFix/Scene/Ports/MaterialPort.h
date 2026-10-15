@@ -10,6 +10,7 @@
 #include <d3d11.h>
 #include <winrt/base.h>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
@@ -120,7 +121,8 @@ namespace DCLF
 		};
 		/**
 		 * @brief Pure: how a_new differs from a_held, two captures of the same material. The reference count (+0x8) is left out: every
-		 * capture moves it. A record's only input from the transform buffers is TexcoordOffset, the transform watch's.
+		 * capture moves it. A record's only input from the transform buffers is TexcoordOffset, which a feature's frame patch may own
+		 * (Extensions::FrameVSVariablePatched: then Transforms rewrites no record).
 		 */
 		SnapshotChange SnapshotChangeOf(const MaterialSnapshot& a_held, const MaterialSnapshot& a_new);
 

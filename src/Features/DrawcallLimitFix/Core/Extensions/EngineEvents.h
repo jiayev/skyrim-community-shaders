@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace RE
@@ -99,6 +100,35 @@ namespace DCLF::Extensions
 	 * the storing thread after the store, in order with what that thread pushed before. Nothing for null.
 	 */
 	void PushSegmentsUpdate(const RE::BSGeometry* a_geometry);
+	/**
+	 * @brief A store of the feature's own to a_root's fadeAmount (+0x100; Actor::SetAlpha's, Features/Actors), on the storing thread after
+	 * the store: Core's fadeAmount event (Coordinator::RefreshFadeAmount rereads the node) and, for a fade node, the mirror's value.
+	 */
+	void PushFadeAmount(RE::NiAVObject* a_root);
+
+	/** @brief The move writers the report counts (Core's and the reserved ones; Scene::moveWriterCalls): grow it before more are reserved. */
+	inline constexpr std::uint32_t kMoveWriterSlots = 8;
+	/**
+	 * @brief Main thread at PostPostLoad, before DCLF's threads start (a feature's early hooks or install), before the writer's hooks go in:
+	 * a move writer of the feature's own named a_name (copied; the report's move writers' calls name it). Core's writers keep their slots
+	 * (animation 0, reference 3D position 1, graph animation 5, update pass 6) and the reserved ones take the free slots in reservation
+	 * order, so the report's order is the writers' as it was (Features/Actors' three at its early hooks: 2-4; Features/Particles' at its
+	 * install: 7). Scene::MoveEventsLive is false until the writer is installed (MoveWriterInstalled). Fails for no name or past
+	 * kMoveWriterSlots.
+	 */
+	Api::MoveWriterId ReserveMoveWriter(std::string_view a_name);
+	/** @brief Main thread at PostPostLoad: a_writer's hooks are in. */
+	void MoveWriterInstalled(Api::MoveWriterId a_writer);
+	/**
+	 * @brief Main thread at PostPostLoad, after Core's scene events: whether Core's own move writers are in (the cells' update passes where
+	 * expected). A feature whose writers complete Core's movers installs them only then (all or none, as when Core installed them).
+	 */
+	bool CoreMoveWritersLive();
+	/**
+	 * @brief Any thread, in a reserved writer's hook after the write: a_key moved (MoveEvents; FrameValueMoves too for WithPlacements), and
+	 * a call counted for a_writer. A null key is counted, not pushed.
+	 */
+	void PushReservedMove(Api::MoveWriterId a_writer, const void* a_key, Api::MoveReach a_reach);
 
 	/** @brief Main thread (PrimaryCull::Install): the primary cull installed, so the stand-in observers will be called. */
 	void NoteStandInInstalled();
@@ -108,6 +138,7 @@ namespace DCLF::Extensions
 	void StandInRootsChanged(const Api::StandInRootsChange& a_change);
 	void StandInRootsCleared();
 	void StandInUpdateEntry(bool a_running);
+	void StandInAfterWrites(bool a_running);
 	// What a stand-in observer reads of DCLF's main-camera verdicts (the roots' kAccumulated as written at Main::Update's entry, before
 	// updateEntry): direct calls, a feature's per-root loop may make them. Main thread, after Main::Update's entry; no engine memory read.
 	/** @brief A stood-in root's verdict as last written; visible when not written yet (IndirectDraws::AccumulatedVerdict). */

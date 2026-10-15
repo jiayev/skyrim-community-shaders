@@ -62,9 +62,6 @@ namespace DCLF::Policy
 	/** @brief The trees' wind clocks stand still (each frame's tree wind is the frame before's). Normal path: false. */
 	bool FreezeTreeWind();
 
-	/** @brief This reflection update keeps the face roots DCLF owns (their members' registrations watched for the residue); a_updates counts the calls. Normal path: false. */
-	bool KeepReflectionRoots(std::uint32_t& a_updates);
-
 	/** @brief Pass a_pass's walk makes the shadow sets again whole after their incremental update (the two compared). Normal path: false. */
 	bool RebuildShadowSets(std::uint64_t a_pass);
 

@@ -15,8 +15,9 @@
 // (Api::ProgramFamilyContribution, EffectPrograms.cpp: Effect.hlsl's programs and pipelines on Core's Effect slot, its record bits), and
 // the frame inputs (EffectFrame.cpp: the camera, light and blood rows, Api::FrameConstantRow; the soft depth, Api::FrameTexture). Its
 // constants are EffectConstants.h's. Core keeps what it decides by: the Ineligible verdicts (EffectOpaque, EffectVariant), the effect key
-// bit (Records.h's kRasterEffect, the family's slot), the particle item class and the billboard capture, and the effect controllers'
-// material-write hooks (Engine/Capture/MaterialWrites.cpp, until a material-write channel exists). Included by the feature's sources only.
+// bit (Records.h's kRasterEffect, the family's slot), the particle item class and the billboard capture. The effect controllers' and the
+// effect material's write hooks are the feature's (EffectWrites.cpp), naming each write through the material-write sink
+// (Api/MaterialWrites.h). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 
@@ -51,4 +52,7 @@ namespace DCLF::Features::Effects
 	void RegisterPrograms(Api::InstallContext& a_context);
 	// EffectFrame.cpp: the frame constant rows' and the frame texture's registrations.
 	void RegisterFrame(Api::InstallContext& a_context);
+	// EffectWrites.cpp: the effect controllers' and the effect material's write hooks (main thread, the feature's install, whatever the
+	// toggle; the controllers capture nothing while it is off).
+	void InstallWrites();
 }

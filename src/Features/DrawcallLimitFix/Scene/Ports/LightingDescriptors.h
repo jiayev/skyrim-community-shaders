@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 
 namespace DCLF::SceneCapture
@@ -333,9 +334,11 @@ namespace DCLF
 	/** @brief A particle geometry's type (BSGeometry::Type kParticles or kStripParticles: NiParticles, drawn from its particle data). */
 	inline constexpr bool ParticleGeometryType(std::uint8_t a_type) { return a_type == 1 || a_type == 2; }
 	/**
-	 * @brief CS_DCLF_PARTICLES: whether the particle path draws it (drawcall-limit-fix.md, "Particles"): exactly an NiParticleSystem
-	 * (type 1) with particle data, local or world space (a world-space system's transform is the identity with its parent's scale,
-	 * FUN_140dd4db0), and for aspect flags (FUN_140e51320's other path) an NiPSysData with velocities.
+	 * @brief The palette rows class a member's block is its geometry type's (Api::GeometryTypeContribution::itemClass, while the
+	 * contribution's toggle is on; None for none): a skinless leaf whose capture is a complete particle system (drawcall-limit-fix.md,
+	 * "Particles"), exactly an NiParticleSystem with particle data, local or world space (a world-space system's transform is the identity
+	 * with its parent's scale, FUN_140dd4db0), for aspect flags (FUN_140e51320's other path) an NiPSysData with velocities, and a capacity
+	 * (the block's units).
 	 */
-	bool ParticleSystemTaken(const SceneCapture::LeafView& a_leaf);
+	Api::FrameValueItemClass PaletteItemClassOf(const SceneCapture::LeafView& a_leaf);
 }

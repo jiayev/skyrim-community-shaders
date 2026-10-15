@@ -39,7 +39,7 @@ namespace DCLF::SceneCapture
 		kKindFadeNode = 1u << 6,
 		kKindFaceGen = 1u << 7,
 		kKindTree = 1u << 8,
-		kKindDecalNode = 1u << 9,  // a BGSDecalNode (its RTTI exactly: what its OnVisible is)
+		kKindCaptured = 1u << 9,  // a node capture contribution's class (its RTTI exactly: Extensions::NodeCaptureOf): its list captured
 		// With kKindBillboard: the face mode (NiBillboardNode::userFlags & 7, +0x128, what OnVisible turns it by) in bits 13-15.
 		kKindBillboardModeShift = 13,
 	};
@@ -71,9 +71,10 @@ namespace DCLF::SceneCapture
 			kFadeLevel = 1u << 18,   // its LOD level (+0x152 & 0xF): FUN_14147a430's
 			kFadeDoor = 1u << 19,    // its screen-door byte (+0x154)
 			kFadeAmount = 1u << 20,  // a fade node's fadeAmount (+0x100): Actor::SetAlpha's
-			kDecals = 1u << 21,      // a decal node's decals' 3D, in its array's order (the decal array's edits)
+			kCaptured = 1u << 21,    // a contributed node's list (Api::kNodeFieldCaptured: its writers' edits, the feature's hooks)
 			kFieldCount = 22,
 		};
+		// kCaptured keeps the parities' name for it ("decals": its one contribution's, Features/Decals).
 		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "parent", "rtti", "kind", "hidden", "flags", "user data", "controllers",
 			"body", "children", "switch", "fade near", "fade far", "fade +0x109", "fade type", "tree LOD switch", "name", "extra", "current fade", "LOD level",
 			"screen door", "fade amount", "decals" };
@@ -102,9 +103,9 @@ namespace DCLF::SceneCapture
 		std::uint16_t switchFlags = 0;
 		bool switchCurrent = false;
 		const void* switchChild = nullptr;  // children[switchIndex]
-		// A decal node's decals' 3D (BSTempEffect::Get3D, null for none) in array order; OnVisible culls them last to first, not its
-		// children.
-		std::vector<const void*> decals;
+		// kKindCaptured: the list its node capture contribution captures (Api::NodeCaptureContribution: what OnVisible visits in the
+		// children's place, in the contribution's order).
+		std::vector<const void*> captured;
 		// kExtra. bsx: a fade node's BSX value, -1 none. emittance: the reference has an ExtraEmittanceSource with a source. beast:
 		// BeastRaceFace's answer (true without an actor or race).
 		std::int32_t bsx = -1;

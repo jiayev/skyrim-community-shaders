@@ -20,6 +20,9 @@ namespace DCLF::Api
 		// The views' lines in the draws' async work (IndirectDraws::AsyncReport), after the visibility lines and the reflection's, before
 		// the forward epoch's: every report. Text lines (ReportLines::text).
 		AsyncWorkViews,
+		// The accumulated writes' lines (IndirectDraws::VisibilityReport, in the draws' async work), after its every-listed-root lines,
+		// before the accumulated parity's (Features/Actors' animation stamp): on a report whose scene has the visibility readback. Text lines.
+		AccumulatedWrites,
 		// The forward epoch's lines (IndirectDraws::ForwardReport), after its own and the refraction's, before AsyncWork's: on a report
 		// that prints the forward epoch's (it reached a frame since the last, or its toggle is on). Text lines.
 		AsyncWorkForward,
@@ -38,6 +41,9 @@ namespace DCLF::Api
 		// The coordinator's lines (Reports' scene pass report: the scene lane, not the render thread), after the LOD gates' line, at the
 		// end of the pump's lines: logged lines, handed the scene frame.
 		SceneCoordinatorGates,
+		// The coordinator's set lines (Reports' scene pass report: the scene lane), right after the set's line ("DCLF set: ..."), before its
+		// leaves by cause: logged lines, handed the scene frame, or a coordinator component's (logged as one line).
+		SceneCoordinatorSet,
 		// The coordinator's scene lines (the scene lane), after the shared bindings', where the object LOD segments' line was (Features/Lod's
 		// now), before the change log parity's. Text lines, or a coordinator component's (ReportLines::componentText).
 		SceneCoordinatorSegments,
@@ -61,7 +67,7 @@ namespace DCLF::Api
 	/** @brief Whether a_point composes its lines into the report's text (ReportLines::text), not logs them (ReportLines::lines). */
 	constexpr bool ReportPointComposesText(ReportPoint a_point)
 	{
-		return a_point == ReportPoint::AsyncWorkViews || a_point == ReportPoint::AsyncWorkForward || a_point == ReportPoint::AsyncWork ||
+		return a_point == ReportPoint::AsyncWorkViews || a_point == ReportPoint::AccumulatedWrites || a_point == ReportPoint::AsyncWorkForward || a_point == ReportPoint::AsyncWork ||
 		       a_point == ReportPoint::AsyncWorkFamilies || a_point == ReportPoint::SceneFrame || a_point == ReportPoint::SceneCoordinatorSegments ||
 		       a_point == ReportPoint::SceneCoordinatorMaterials || a_point == ReportPoint::SceneCoordinatorDelta;
 	}
@@ -69,7 +75,7 @@ namespace DCLF::Api
 	/** @brief Whether a_point is the coordinator's, where a coordinator component's lines go (ReportLines::componentText). */
 	constexpr bool ReportPointTakesComponents(ReportPoint a_point)
 	{
-		return a_point == ReportPoint::SceneCoordinatorGates || a_point == ReportPoint::SceneCoordinatorSegments ||
+		return a_point == ReportPoint::SceneCoordinatorGates || a_point == ReportPoint::SceneCoordinatorSet || a_point == ReportPoint::SceneCoordinatorSegments ||
 		       a_point == ReportPoint::SceneCoordinatorMaterials || a_point == ReportPoint::SceneCoordinatorDelta ||
 		       a_point == ReportPoint::SceneCoordinatorLastPass;
 	}

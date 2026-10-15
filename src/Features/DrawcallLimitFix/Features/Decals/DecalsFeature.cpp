@@ -1,5 +1,6 @@
 // Decals: the decals and multi-index layers DCLF draws in its decal groups. Its switches and the decals and layers toggles, the object
-// classes' contributions, the groups' main ranges, the member decals' order (a coordinator component), its parity and their lines.
+// classes' contributions, the groups' main ranges, the decal nodes' arrays (their edits' early hooks and node capture), the member
+// decals' order (a coordinator component), its parity and their lines.
 
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
@@ -30,6 +31,8 @@ namespace DCLF::Features::Decals
 			a_context.RegisterMainRange({ .slot = kOpaqueRange, .name = "decals-opaque", .order = 0, .depthPrepass = true, .objectClass = Api::ObjectClass::Decal });
 			a_context.RegisterMainRange({ .slot = kLayerRange, .name = "decals-layers", .order = 1, .objectClass = Api::ObjectClass::Layer });
 			a_context.RegisterMainRange({ .slot = kBlendedRange, .name = "decals-blended", .order = 4, .objectClass = Api::ObjectClass::Decal });
+			// The decal nodes' arrays in the mirror (a node capture contribution), which the order's keys read.
+			RegisterDecalCapture(a_context);
 			const auto order = RegisterOrder(a_context);
 			// Its lines, the component's: the walk's candidates among the coordinator's last pass statistics (after the skinned line), the
 			// order parity's after the material records' line.
@@ -44,6 +47,8 @@ namespace DCLF::Features::Decals
 
 	Api::Feature Feature()
 	{
-		return { "decals", &Install };
+		// Its early hooks: the decal array edits' (after Core's scene events, the hidden nodes' early hooks before them; no other hook
+		// shares their sites).
+		return { "decals", &Install, &InstallDecalHooks };
 	}
 }

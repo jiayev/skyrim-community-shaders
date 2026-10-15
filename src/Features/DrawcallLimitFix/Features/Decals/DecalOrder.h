@@ -16,10 +16,9 @@ namespace RE
 	class NiAVObject;
 }
 
-namespace DCLF
+namespace DCLF::Api
 {
-	struct SceneTables;
-	class SceneMirror;
+	class CoordinatorComponentContext;
 }
 
 namespace DCLF::Features::Decals
@@ -94,7 +93,7 @@ namespace DCLF::Features::Decals
 	};
 
 	/** @brief The kept order against one made whole now (a key that went stale: a parent's children re-indexed under a kept decal). */
-	DecalOrderComparison CompareDecalOrder(const DecalOrder& a_order, const SceneTables& a_tables, const SceneMirror& a_mirror);
+	DecalOrderComparison CompareDecalOrder(const DecalOrder& a_order, const Api::CoordinatorComponentContext& a_context);
 
 	// The order's hook points (Diagnostics::Notify; the scene lane, in the accumulate phase's statistics), for the parity.
 
@@ -109,8 +108,7 @@ namespace DCLF::Features::Decals
 	struct Ordered
 	{
 		const DecalOrder& order;
-		const SceneTables& tables;
-		const SceneMirror& mirror;
+		const Api::CoordinatorComponentContext& context;  // the tables and the mirror, as the order read them
 		DecalOrderParity& parity;
 	};
 }

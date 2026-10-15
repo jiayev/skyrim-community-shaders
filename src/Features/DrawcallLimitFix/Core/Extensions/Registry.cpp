@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/NodeCaptures.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
@@ -56,9 +57,16 @@ namespace DCLF::Extensions
 			// By entry class: whether the component that follows it takes it (EntryClassTaken).
 			std::array<bool, static_cast<std::size_t>(Api::EntryClass::Count)> entryClassesTaken{};
 			TechniqueEntries techniques{};
+			// The techniques' property flag rules, once each (PropertyFlagRules): at most one a technique.
+			std::array<PropertyFlagRule, kTechniqueSlots> propertyFlagRules{};
+			std::size_t propertyFlagRuleCount = 0;
 			GeometryTypeToggles geometryTypes{};
+			// By type: its contribution (geometryType 0xFF: none); by entry class: the rule a contribution names it with.
+			GeometryTypeContributions geometryTypeContributions{};
+			EntryClassRules entryClassRules{};
 			ParentToggles parents{};
 			ObjectClassToggles objectClasses{};
+			CategoryRoots categoryRoots{};
 			std::vector<ShadingContributionEntry> shadingContributions;
 			std::vector<FrameGlobalsEntry> frameGlobals;
 			std::uint32_t frameGlobalsFloats = 0;
@@ -340,6 +348,7 @@ namespace DCLF::Extensions
 			}
 
 			std::uint32_t ReserveHiddenSite() override { return HiddenSourceSites() + lists.reservedHiddenSites++; }
+			void RegisterNodeCapture(const Api::NodeCaptureContribution& a_capture) override { AddNodeCapture(feature, a_capture); }
 
 			Api::EngineChannelId FindEngineChannel(std::string_view a_name) const override
 			{
@@ -381,22 +390,48 @@ namespace DCLF::Extensions
 
 			void RegisterTechnique(const Api::TechniqueContribution& a_technique) override
 			{
-				if (a_technique.technique >= kTechniqueSlots || !a_technique.toggle)
+				// A property flag rule names the geometry type its flagged objects must be.
+				if (a_technique.technique >= kTechniqueSlots || !a_technique.toggle || (a_technique.propertyFlags && a_technique.geometryType >= kGeometryTypeSlots))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete technique contribution", feature));
 				auto& entry = lists.techniques[a_technique.technique];
 				if (entry.toggle)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes technique {}, which another feature has", feature, a_technique.technique));
 				entry = { a_technique.toggle, a_technique.objectFlags };
+				// Its property flag rule, once for the techniques that share it (LODLand and LODLandNoise: one rule).
+				if (a_technique.propertyFlags) {
+					const PropertyFlagRule rule{ a_technique.propertyFlags, a_technique.geometryType, a_technique.toggle };
+					const auto rules = std::span(lists.propertyFlagRules).first(lists.propertyFlagRuleCount);
+					const bool known = std::ranges::any_of(rules, [&rule](const PropertyFlagRule& a_rule) {
+						return a_rule.propertyFlags == rule.propertyFlags && a_rule.geometryType == rule.geometryType && a_rule.toggle.bit == rule.toggle.bit;
+					});
+					if (!known)
+						lists.propertyFlagRules[lists.propertyFlagRuleCount++] = rule;
+				}
 			}
 
 			void RegisterGeometryType(const Api::GeometryTypeContribution& a_type) override
 			{
-				if (a_type.geometryType >= kGeometryTypeSlots || !a_type.toggle)
+				// A toggle, but for a contribution that names an entry class alone; an entry class with the parent kinds it is under.
+				const auto& entry = a_type.entry;
+				const bool entryValid = entry.entryClass < Api::EntryClass::Count &&
+				                        (entry.entryClass == Api::EntryClass::None ? !entry.parentKind && !entry.perFrame && !entry.holdsParent : entry.parentKind != 0);
+				const bool classValid = a_type.toggle ||
+				                        (!a_type.propertyFlags && a_type.itemClass == Api::FrameValueItemClass::None && !a_type.moves && entry.entryClass != Api::EntryClass::None);
+				if (a_type.geometryType >= kGeometryTypeSlots || a_type.itemClass >= Api::FrameValueItemClass::Count || !entryValid || !classValid)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete geometry type contribution", feature));
-				auto& toggle = lists.geometryTypes[a_type.geometryType];
-				if (toggle)
+				auto& contribution = lists.geometryTypeContributions[a_type.geometryType];
+				if (contribution.geometryType != 0xFF)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes geometry type {}, which another feature has", feature, static_cast<std::uint32_t>(a_type.geometryType)));
-				toggle = a_type.toggle;
+				contribution = a_type;
+				lists.geometryTypes[a_type.geometryType] = a_type.toggle;
+				// One rule an entry class: a second type naming it names it alike.
+				if (entry.entryClass != Api::EntryClass::None) {
+					auto& rule = lists.entryClassRules[static_cast<std::size_t>(entry.entryClass)];
+					if (rule.entryClass != Api::EntryClass::None && (rule.perFrame != entry.perFrame || rule.holdsParent != entry.holdsParent))
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s geometry type {} names entry class {} unlike another contribution", feature,
+							static_cast<std::uint32_t>(a_type.geometryType), static_cast<std::uint32_t>(entry.entryClass)));
+					rule = entry;
+				}
 			}
 
 			void RegisterParent(const Api::ParentContribution& a_parent) override
@@ -419,6 +454,7 @@ namespace DCLF::Extensions
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes object class {}, which another feature has", feature,
 						static_cast<std::uint32_t>(a_class.objectClass)));
 				toggle = a_class.toggle;
+				lists.categoryRoots[static_cast<std::size_t>(a_class.objectClass)] = a_class.categoryRoot;
 			}
 
 			void RegisterShading(const Api::ShadingContribution& a_shading) override
@@ -463,10 +499,10 @@ namespace DCLF::Extensions
 
 			void RegisterOcclusionMap(const Api::OcclusionMapContribution& a_map) override
 			{
-				// Its toggle, flag and bits always, the import for an ImportedTexture map. Its bits are checked against Core's and the other
+				// Its toggle, flag, bits, rule, camera and accumulator test always, the import for an ImportedTexture map. Its bits are checked against Core's and the other
 				// views' once all are in (ResolveViewBits).
 				if (a_map.map >= Api::OcclusionMap::Count || !a_map.toggle || !a_map.available || !a_map.bits.phase || !a_map.bits.viewBit ||
-					(a_map.target == Api::OcclusionTarget::ImportedTexture && !a_map.importTarget))
+					!a_map.technique || !a_map.camera || !a_map.ownsAccumulator || (a_map.target == Api::OcclusionTarget::ImportedTexture && !a_map.importTarget))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete occlusion map contribution", feature));
 				auto& entry = lists.occlusionMaps[static_cast<std::size_t>(a_map.map)];
 				if (entry.map != Api::OcclusionMap::Count)
@@ -614,6 +650,10 @@ namespace DCLF::Extensions
 	std::span<const CoordinatorComponentEntry> RegisteredCoordinatorComponents() { return Registered().coordinatorComponents; }
 	const TechniqueEntries& RegisteredTechniques() { return Registered().techniques; }
 	const GeometryTypeToggles& RegisteredGeometryTypes() { return Registered().geometryTypes; }
+	const GeometryTypeContributions& RegisteredGeometryTypeContributions() { return Registered().geometryTypeContributions; }
+	const EntryClassRules& RegisteredEntryClassRules() { return Registered().entryClassRules; }
+	std::span<const PropertyFlagRule> PropertyFlagRules() { return std::span(Registered().propertyFlagRules).first(Registered().propertyFlagRuleCount); }
+	const CategoryRoots& RegisteredCategoryRoots() { return Registered().categoryRoots; }
 	const ParentToggles& RegisteredParents() { return Registered().parents; }
 	const ObjectClassToggles& RegisteredObjectClasses() { return Registered().objectClasses; }
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions() { return Registered().shadingContributions; }

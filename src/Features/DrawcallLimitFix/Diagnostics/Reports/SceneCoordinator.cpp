@@ -73,7 +73,7 @@ namespace DCLF::Reports
 			std::string writers;
 			for (std::size_t i = 0; i < Scene::moveWriterCalls.size(); ++i)
 				if (const auto calls = Scene::moveWriterCalls[i].exchange(0, std::memory_order_relaxed))
-					writers += fmt::format("{}{} {}", writers.empty() ? "" : ", ", Scene::kMoveWriterNames[i], calls);
+					writers += fmt::format("{}{} {}", writers.empty() ? "" : ", ", Scene::moveWriterNames[i], calls);
 			if (p.roots || p.rootsGated)
 				line = fmt::format("[DCLF] placement plan: roots: {} listed ({} of still roots on a move event), {} left for want of a move event", p.roots, p.stillRoots,
 					p.rootsGated);
@@ -366,17 +366,8 @@ namespace DCLF::Reports
 					set.publications, set.waitingBy[0], set.waitingBy[1], set.waitingBy[2], set.waitingBy[3], set.waitingBy[4], set.waitingBy[5], set.waitingBy[6], set.waitingBy[7], set.waitingBy[8],
 					set.waitingBy[9], set.waitingBy[10], set.waitingBy[12], set.waitingBy[13], set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "", set.leftAfterCommit, commit.commitParityChecks, commit.commitParityDiffer,
 					commit.commitParityChecks ? (commit.commitParityDiffer ? " <- COMMIT" : " <- OK") : "");
-				if (const auto misfiled = Diagnostics::SceneDiagnostics().firstPerson.misfiled.exchange(0, std::memory_order_relaxed))
-					logger::info("[DCLF] first-person entries filed under another category node (T7e, CS_DCLF_SET_PARITY): {} evaluations; last geometry {} under {} "
-								 "(the first-person root {}) <- FIRST-PERSON FILING",
-						misfiled, Diagnostics::SceneDiagnostics().firstPerson.misfiledGeometry.load(std::memory_order_relaxed), Diagnostics::SceneDiagnostics().firstPerson.misfiledCategory.load(std::memory_order_relaxed),
-						static_cast<const void*>(V::firstViewRoot(s)));
-				if (commit.firstPersonHeld)
-					logger::info("[DCLF] first-person slots held out of the first-person view (T7e, CS_DCLF_SET_PARITY): {} slot evaluations; first: {}", commit.firstPersonHeld,
-						commit.firstFirstPersonHeld);
-				if (commit.firstPersonExcluded)
-					logger::info("[DCLF] first-person entries the first-person view takes no part in (T7e, CS_DCLF_SET_PARITY): {} slot evaluations; first: {}", commit.firstPersonExcluded,
-						commit.firstFirstPersonExcluded);
+				// The features' set lines (Features/FirstPerson's root view filing and the slots its decisions leave out).
+				V::componentsReportLines(s, Api::ReportPoint::SceneCoordinatorSet, a_sceneFrame);
 				// Why the members that left did (each leave once, by its commit's verdict).
 				std::string waitingText;
 				for (std::size_t why = 0; why < set.leftWaiting.size(); ++why)

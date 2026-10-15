@@ -5,33 +5,11 @@
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
 
-#include "Features/DrawcallLimitFix/Diagnostics/Scene/Residue.h"
-
 namespace DCLF::Features::Reflection
 {
 	namespace
 	{
 		using ViewSubmit = IndirectDraws::ViewSubmit;
-
-		/** @brief The third line's residue part: the classes of what the engine registered under the LOD roots, since the last report. */
-		std::string ResidueKinds()
-		{
-			std::string residueKinds;
-			const auto classes = Diagnostics::TakeResidueClasses();
-			for (std::size_t k = 0; k < Diagnostics::kResidueKinds; ++k) {
-				if (!classes.counts[k])
-					continue;
-				const std::string_view name = k < Diagnostics::kResidueUntracked ? kIneligibleNames[k] :
-				                              k == Diagnostics::kResidueUntracked ? "untracked" :
-				                              k == Diagnostics::kResidueUnbound   ? "eligible, unbound" :
-				                              k == Diagnostics::kResidueNotReflection ? "bound, not a reflection member" :
-				                                                                       "a reflection member";
-				residueKinds += fmt::format("{}{} {}{}", residueKinds.empty() ? " [" : "; ", classes.counts[k], name, classes.first[k].empty() ? "" : " (" + classes.first[k] + ")");
-			}
-			if (!residueKinds.empty())
-				residueKinds += fmt::format("; {} geometries, {} of them on 10 frames or more]", classes.seen.size(), classes.persistent);
-			return residueKinds;
-		}
 	}
 
 	void Execute(const Api::ViewPointContext&)
@@ -107,7 +85,7 @@ namespace DCLF::Features::Reflection
 			s[5] ? " <- EPOCH FAILED" : "", capture.viewWithheld[v], capture.viewTreeLodWithheld[v], state->treeOwned ? "DCLF's" : "the engine's");
 		// The faces' cameras against the engine's at their draws, and the LOD roots the engine did not cull.
 		const auto roots = ReflectionFaces::TakeRootStats();
-		const auto residue = PassCapture::Get().TakeReflectionResidue();
+		const auto residue = PassCapture::Get().TakeViewResidue(kView);
 		const std::string residueKinds = ResidueKinds();
 		auto& parity = FaceCameraCounts();
 		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's tree LOD root skipped; T6b6: its LOD land and objects roots while gated): {} updates, {} without the "

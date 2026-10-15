@@ -465,46 +465,12 @@ namespace DCLF::Scene
 		return live;
 	}
 
-	std::uint32_t Coordinator::OcclusionTechniqueOf(const SceneCapture::LeafView& a_leaf, bool a_skylighting) const
+	std::int32_t Coordinator::NearestFadeNodeBsx(const SceneCapture::LeafView& a_leaf) const
 	{
-		using enum RE::BSShaderProperty::EShaderPropertyFlag;
-		using enum RE::BSUtilityShader::Flags;
-		const auto* property = SceneCapture::LeafView::Lighting(a_leaf.property);
-		if (!property || !a_leaf.geometry)
-			return 0;
-		const auto any = [&](auto... a_flags) { return (property->flags & (static_cast<std::uint64_t>(a_flags) | ...)) != 0; };
-		if (a_skylighting ? any(kSkinned) && !any(kTreeAnim) : any(kSkinned))
-			return 0;
-		if (a_skylighting && a_leaf.node->userData) {
-			// The nearest fade node's BSX flags.
-			const SceneCapture::NodeRecord* fadeNode = nullptr;
-			for (const auto* record = a_leaf.parent; record && !fadeNode; record = record->parent ? mirror.Node(record->parent) : nullptr)
-				fadeNode = (record->kind & SceneCapture::kKindFadeNode) ? record : nullptr;
-			using Bsx = RE::BSXFlags::Flag;
-			constexpr auto kRejected = static_cast<std::int32_t>(Bsx::kRagdoll) | static_cast<std::int32_t>(Bsx::kEditorMarker) | static_cast<std::int32_t>(Bsx::kDynamic) |
-			                           static_cast<std::int32_t>(Bsx::kAddon) | static_cast<std::int32_t>(Bsx::kNeedsTransformUpdate) |
-			                           static_cast<std::int32_t>(Bsx::kMagicShaderParticles) | static_cast<std::int32_t>(Bsx::kLights) |
-			                           static_cast<std::int32_t>(Bsx::kBreakable) | static_cast<std::int32_t>(Bsx::kSearchedBreakable);
-			if (fadeNode && fadeNode->bsx != -1 && (fadeNode->bsx & kRejected))
-				return 0;
-		}
-		const bool valid = a_skylighting ? any(kZBufferWrite) && !any(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal) :
-		                                   any(kZBufferWrite) && !any(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal);
-		if (!valid)
-			return 0;
-		stl::enumeration<RE::BSUtilityShader::Flags> technique;
-		technique.set(RenderDepth);
-		if (any(kVertexColors))
-			technique.set(Vc);
-		if (a_leaf.AlphaTesting()) {
-			technique.set(Texture);
-			technique.set(AlphaTest);
-		}
-		if (any(kLODObjects, kHDLODObjects))
-			technique.set(LodObject);
-		if (any(kTreeAnim))
-			technique.set(TreeAnim);
-		return technique.underlying();
+		const SceneCapture::NodeRecord* fadeNode = nullptr;
+		for (const auto* record = a_leaf.parent; record && !fadeNode; record = record->parent ? mirror.Node(record->parent) : nullptr)
+			fadeNode = (record->kind & SceneCapture::kKindFadeNode) ? record : nullptr;
+		return fadeNode ? fadeNode->bsx : -1;
 	}
 
 	const RE::NiNode* Coordinator::RoomNodeOf(const void* a_object) const
@@ -648,7 +614,7 @@ namespace DCLF::Scene
 		if (identity.replaced) {
 			ReleaseObjectSlot(entry);
 			entry.actorOwnedResolved = false;
-			entry.faceShapeResolved = false;
+			entry.entryClassResolved = false;
 		}
 		if (inserted) {
 			entry.trackedFrame = sceneFrame;
@@ -661,12 +627,12 @@ namespace DCLF::Scene
 		entry.roomMapGeneration = 0;
 		entry.geometry = std::move(reference);
 		HoldProperties(entry, a_prep.held);
-		// A face shape's head, held from the batch's pins.
+		// Its entry class's held parent (a face shape's head), held from the batch's pins.
 		{
 			const auto* head = a_prep.faceHead;
 			if (entry.faceHeadRef.get() != head) {
 				HandBack(std::move(entry.faceHeadRef));
-				if (head && !(entry.faceHeadRef = FromPin<RE::BSFaceGenNiNode>(a_prep.faceHeadPin)))
+				if (head && !(entry.faceHeadRef = FromPin<RE::NiNode>(a_prep.faceHeadPin)))
 					++referenceStats.refused;
 			}
 		}
@@ -836,11 +802,13 @@ namespace DCLF::Scene
 		                       static_cast<const RE::TESObjectREFR*>(record->userData) :
 		                       nullptr;
 		a_out.roomNode = RoomNodeOf(a_geometry);
-		// A face shape's head: a dynamic shape under a BSFaceGenNiNode.
+		// Its entry class's held parent: the parent its geometry type's rule matches under and holds (Api::GeometryTypeContribution::entry:
+		// a face shape's head, a dynamic shape's BSFaceGenNiNode).
 		const auto* g = mirror.Geometry(a_geometry);
 		const auto* parent = record && record->parent ? mirror.Node(record->parent) : nullptr;
-		const bool face = parent && (parent->kind & SceneCapture::kKindFaceGen) && g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kDynamicTriShape);
-		a_out.faceHead = face ? static_cast<const RE::BSFaceGenNiNode*>(record->parent) : nullptr;
+		const auto entryClass = parent && g ? Extensions::EntryClassOf(g->type, parent->kind) : Api::EntryClass::None;
+		const bool held = entryClass != Api::EntryClass::None && Extensions::EntryClassRuleOf(entryClass).holdsParent;
+		a_out.faceHead = held ? static_cast<const RE::NiNode*>(record->parent) : nullptr;
 		a_out.subIndex = g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape);
 		// The batch's pins (frozen while the batch's adds prepare and merge), HoldProperties' reads, an object LOD's ranges.
 		a_out.geometryPin = PinOf(a_geometry);
@@ -1044,32 +1012,6 @@ namespace DCLF::Scene
 		return (a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0 && !mirror.Gated(a_object);
 	}
 
-	void Coordinator::NoteFirstPersonHidden(const Tracked& a_tracked, const void* a_key, const SceneCapture::NodeRecord& a_record, std::uint32_t a_depth) const
-	{
-		static std::atomic<std::uint32_t> logged{ 0 };
-		if (logged.fetch_add(1, std::memory_order_relaxed) >= 16)
-			return;
-		const auto& cullHidden = FrameGlobals::Current().cullHidden;
-		const auto* object = static_cast<const RE::NiAVObject*>(a_key);
-		const auto it = std::lower_bound(cullHidden.begin(), cullHidden.end(), object, [](const auto& a_entry, const RE::NiAVObject* a_object) { return a_entry.first < a_object; });
-		const bool listed = it != cullHidden.end() && it->first == object;
-		std::string chain;
-		const void* at = a_tracked.geometry.get();
-		for (std::uint32_t n = 0; at && n < 16; ++n) {
-			const auto* node = mirror.Node(at);
-			chain += fmt::format("{}{}", n ? " <- " : "", at);
-			at = node ? node->parent : nullptr;
-			if (!node)
-				chain += " (no record)";
-		}
-		logger::info("[DCLF] first-person hidden verdict (T7e): geometry {} filed under {} (the first-person root {}{}); hidden at chain depth {}: node {}{}, {} (the mirror's bit {}); "
-					 "{} nodes listed in the frame's capture; the mirror's chain: {}",
-			static_cast<const void*>(a_tracked.geometry.get()), static_cast<const void*>(a_tracked.categoryNode), static_cast<const void*>(FirstViewRoot()),
-			ViewRootEntry(a_tracked.categoryNode) ? ", the same" : ", another", a_depth, a_key, a_key == a_tracked.categoryNode ? " (its category node)" : "",
-			listed ? fmt::format("listed hidden {} in the frame's capture", it->second) : std::string("not in the frame's capture"),
-			(a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0, cullHidden.size(), chain);
-	}
-
 	std::int32_t Coordinator::BillboardModeOf(const Tracked& a_tracked) const
 	{
 		// The parent contribution's (Features/Billboards: the billboards toggle).
@@ -1168,12 +1110,15 @@ namespace DCLF::Scene
 				break;
 			}
 			if (HiddenForWalk(key, *record)) {
-				// Diagnostic (pointers only, never dereferenced).
-				if (FirstViewRoot()) {
-					const auto& skeleton = FrameGlobals::Current().firstPersonGeometry;
-					if (ViewRootEntry(a_tracked.categoryNode) ||
+				// Diagnostic (pointers only, never dereferenced): a root view's entry or subtree geometry hidden (Features/FirstPerson's log).
+				if (Diagnostics::Armed<Diagnostics::RootViewHidden>() && FirstViewRoot()) {
+					const auto& globals = FrameGlobals::Current();
+					const auto& skeleton = globals.firstPersonGeometry;
+					const bool sameRoot = ViewRootEntry(a_tracked.categoryNode);
+					if (sameRoot ||
 						std::binary_search(skeleton.begin(), skeleton.end(), static_cast<const RE::NiAVObject*>(static_cast<const void*>(a_tracked.geometry.get()))))
-						NoteFirstPersonHidden(a_tracked, key, *record, depth);
+						Diagnostics::Notify(Diagnostics::RootViewHidden{ *this, a_tracked.geometry.get(), a_tracked.categoryNode, FirstViewRoot(), sameRoot, key, depth,
+							(record->flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0, globals.cullHidden });
 				}
 				return Ineligible::Hidden;
 			}

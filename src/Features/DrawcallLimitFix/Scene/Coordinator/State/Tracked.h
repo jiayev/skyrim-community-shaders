@@ -88,15 +88,17 @@ namespace DCLF::Scene
 			 */
 			std::uint32_t candidateFrame = 0;  // the pass that classified it (PassStamp); 0: never classified
 			Ineligible candidateReason = Ineligible::None;
-			// An NPC face shape (a BSDynamicTriShape under a BSFaceGenNiNode, positions from its head's snapshots: Api::EntryClass::FaceShape,
-			// followed by Features/Faces' component); resolved once by the walk.
-			bool faceShape = false;
-			bool faceShapeResolved = false;
+			// Its entry class (its geometry type's rule, Api::GeometryTypeContribution::entry: Features/Faces' face shape, a BSDynamicTriShape
+			// under a BSFaceGenNiNode, positions from its head's snapshots, followed by the Faces component; None: none); resolved once by the
+			// walk.
+			Api::EntryClass entryClass = Api::EntryClass::None;
+			bool entryClassResolved = false;
 			// Whether its last record write found no second vertex stream (its component's next event, a face shape's head's publication,
 			// rewrites it).
 			bool streamWaiting = false;
-			// A face shape's head, held from the batch's pins at its attach (the face snapshot record's reference is a copy).
-			RE::NiPointer<RE::BSFaceGenNiNode> faceHeadRef;
+			// Its entry class's source node, the parent its rule holds (EntryRule::holdsParent: a face shape's head), held from the batch's pins
+			// at its attach (the component's record's reference is a copy).
+			RE::NiPointer<RE::NiNode> faceHeadRef;
 			// Its property's fade node, held from the naming event's pins: fade-root owners (and the components': Features/TreeWind's tree
 			// owners) are copied from it, never made from a key.
 			RE::NiPointer<RE::NiAVObject> fadeNodeRef;

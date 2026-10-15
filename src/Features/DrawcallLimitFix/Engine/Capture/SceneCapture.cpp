@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/NodeCaptures.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
@@ -136,7 +137,7 @@ namespace DCLF::SceneCapture
 		d |= fade109 != a_o.fade109 ? kFade109 : 0u;
 		d |= fadeType != a_o.fadeType ? kFadeType : 0u;
 		d |= treeLodSwitch != a_o.treeLodSwitch ? kTreeLodSwitch : 0u;
-		d |= decals != a_o.decals ? kDecals : 0u;
+		d |= captured != a_o.captured ? kCaptured : 0u;
 		return d;
 	}
 
@@ -238,8 +239,8 @@ namespace DCLF::SceneCapture
 			fadeType = a_o.fadeType;
 		if (a_f & kTreeLodSwitch)
 			treeLodSwitch = a_o.treeLodSwitch;
-		if (a_f & kDecals)
-			decals = a_o.decals;
+		if (a_f & kCaptured)
+			captured = a_o.captured;
 		if (a_f & kName)
 			name = a_o.name;
 		updatedFrame = Frame();
@@ -337,17 +338,13 @@ namespace DCLF::SceneCapture
 
 	namespace
 	{
-		bool IsDecalNode(RE::NiAVObject& a_object)
-		{
-			static const REL::Relocation<const RE::NiRTTI*> decalNode{ RE::BGSDecalNode::Ni_RTTI };
-			return a_object.GetRTTI() == decalNode.get();
-		}
+		static_assert(Api::kNodeFieldCaptured == NodeRecord::kCaptured, "the Api's node fields are the capture's");
 
-		void CaptureDecals(const RE::NiAVObject& a_node, NodeRecord& r)
+		/** @brief A contributed node's list (Api::NodeCaptureContribution::capture), in place of the record's. */
+		void CaptureContributed(const Extensions::NodeCaptureEntry& a_capture, const RE::NiAVObject& a_node, NodeRecord& r)
 		{
-			r.decals.clear();
-			for (const auto& decal : static_cast<const RE::BGSDecalNode&>(a_node).GetRuntimeData().decals)
-				r.decals.push_back(decal ? decal->Get3D() : nullptr);
+			r.captured.clear();
+			a_capture.capture(&a_node, r.captured);
 		}
 
 		void CaptureSwitch(const RE::NiNode& a_node, NodeRecord& r)
@@ -393,9 +390,10 @@ namespace DCLF::SceneCapture
 		if (a_fields & F::kSwitch)
 			if (const auto* node = object.AsNode())
 				CaptureSwitch(*node, r);
-		// A decal node's array edit.
-		if ((a_fields & F::kDecals) && IsDecalNode(object))
-			CaptureDecals(a_object, r);
+		// A contributed node's list edit (the feature's hook).
+		if (a_fields & F::kCaptured)
+			if (const auto* capture = Extensions::NodeCaptureOf(object.GetRTTI()))
+				CaptureContributed(*capture, a_object, r);
 		return r;
 	}
 
@@ -433,9 +431,9 @@ namespace DCLF::SceneCapture
 			r.children.push_back(children[i].get());
 		while (!r.children.empty() && !r.children.back())
 			r.children.pop_back();
-		if (IsDecalNode(object)) {
-			r.kind |= kKindDecalNode;
-			CaptureDecals(a_object, r);
+		if (const auto* capture = Extensions::NodeCaptureOf(r.rtti)) {
+			r.kind |= kKindCaptured;
+			CaptureContributed(*capture, a_object, r);
 		}
 		if (node->AsSwitchNode()) {
 			r.kind |= kKindSwitch;

@@ -3,7 +3,8 @@
 // Decals (CS_DCLF_DECALS, CS_DCLF_LAYERS; drawcall-limit-fix.md; engine notes, "decals"): the engine's decals (accumulation hints 2 and 3)
 // and multi-index shapes' layers (hint 12), which DCLF draws in its decal groups after the opaque draws, each group in the engine's draw
 // order. The feature registers its switches and live toggles, the decal and layer object classes' contributions (Api::ObjectClass: the
-// Lighting and Effect ports' eligibility reads the toggles through them, as data), the member decals' order (a coordinator component:
+// Lighting and Effect ports' eligibility reads the toggles through them, as data), the decal nodes' arrays (their edits' engine hooks
+// at its early hooks and a node capture contribution: DecalHooks.cpp), the member decals' order (a coordinator component:
 // DecalOrder.cpp, writing SceneTables::rangeOrdinal and rangeCount), the decal groups' ranges of the colour segment's second pass
 // (Api/MainRanges.h: their slots, order, nvperf names and the opaque group's depth prepass), its parity
 // (Diagnostics/DecalOrderParity.cpp) and their report lines (the component's: the walk's candidates, the parity's).
@@ -27,6 +28,14 @@ namespace DCLF::Features::Decals
 
 	// DecalsFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
+
+	// DecalHooks.cpp: the decal nodes' arrays. Their edits' hooks (the feature's early hooks), pushing the node's update
+	// (Extensions::PushNodeUpdate, Api::kNodeFieldCaptured), and the decal node's capture (a node capture contribution: its decals' 3D in
+	// array order, the mirror record's captured list the order's keys read).
+	void InstallDecalHooks();
+	void RegisterDecalCapture(Api::InstallContext& a_context);
+	/** @brief BGSDecalNode's RTTI (resolved once): the contribution's class, which the order tests a record by. */
+	const void* DecalNodeRtti();
 
 	// DecalOrder.cpp: the member decals' order, a coordinator component (scene lane).
 	Api::CoordinatorComponentId RegisterOrder(Api::InstallContext& a_context);

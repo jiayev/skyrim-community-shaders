@@ -3,6 +3,7 @@
 // pool, the patch a GPU stage first in the depth segment.
 
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
+#include "Features/DrawcallLimitFix/Api/MaterialWrites.h"
 
 namespace DCLF::Features::TextureTransforms
 {
@@ -13,6 +14,9 @@ namespace DCLF::Features::TextureTransforms
 			RegisterPool(a_context);
 			RegisterStage(a_context);
 			RegisterProduct(a_context);
+			// Together they write every material row's TexcoordOffset (the ports' frame VS variable) every frame: a capture or controller
+			// write that moved only the texture transforms leaves the records as they are.
+			Api::RegisterFrameVSVariablePatch();
 		}
 	}
 

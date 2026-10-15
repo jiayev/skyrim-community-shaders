@@ -2,7 +2,6 @@
 // view's contribution and its work at the frame's start, its engine hooks, its report lines and the skeleton's parity.
 
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
@@ -20,7 +19,7 @@ namespace DCLF::Features::FirstPerson
 
 		/**
 		 * @brief The view's contribution: a category root (the first-person root, filed under itself) with an exclusive phase; keys for
-		 * every slot but a forward one (its forward part draws those), with the first-person targets; one face with a forward part and a
+		 * every slot but a forward one (its forward part draws those), with the first-person targets (its key bit) and back faces culled; one face with a forward part and a
 		 * depth pass; dropped while off; the main colour viewport; withheld in the main accumulators (and the first-person one); drawn
 		 * into kPOST_ZPREPASS_COPY; not covered before its first coverage nor on a failed graph (the engine draws it).
 		 */
@@ -31,7 +30,7 @@ namespace DCLF::Features::FirstPerson
 				.forwardDecals = a_forwardDecals,
 				.phase = kSetFirstPerson,
 				.membership = Api::ViewMembership::CategoryRoot,
-				.keys = { .forwardRasterToForwardPart = true, .keyFlags = ForwardPipelineKey::kForwardFirstPerson },
+				.keys = { .forwardRasterToForwardPart = true, .keyFlags = kForwardKeyFirstPerson, .cullBackFaces = true },
 				.shape = { .faces = 1,
 					.forwardPart = true,
 					.depthPass = true,
@@ -80,6 +79,10 @@ namespace DCLF::Features::FirstPerson
 			// CS_DCLF_SET_PARITY: the skeleton's slots and claimed phases.
 			if (Diagnostics::Observe().claims)
 				SubscribeSkeletonParity();
+			// The view's scene diagnostics (Core announces them at its root view's points), and their lines after the set's, where Core
+			// printed them.
+			SubscribeRootViewChecks();
+			a_context.RegisterReportLines({ .name = "first person filing", .point = Api::ReportPoint::SceneCoordinatorSet, .lines = &SetLines });
 			// RenderDepth's first-person draw and Main::RenderFirstPersonView's accumulator render, where the epochs run.
 			InstallHooks();
 		}

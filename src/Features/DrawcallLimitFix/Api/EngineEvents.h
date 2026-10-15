@@ -25,12 +25,15 @@ namespace DCLF::Api
 	 * - cleared: render thread, when the stand-in is dropped whole (PrimaryCull::ClearFadeOwnership): no root is stood in. Optional.
 	 * - updateEntry: the main thread at Main::Update's entry (PrimaryCull::AtUpdateEntry), after the stood-in roots' kAccumulated is
 	 *   written: whether DCLF runs this frame. Optional.
+	 * - afterWrites: the main thread at Main::Update's entry too, after the writes that follow updateEntry (the fade writers' tables
+	 *   published, the fade stores written, the UpdateEntry diagnostics event), last there: whether DCLF runs this frame. Optional.
 	 */
 	struct StandInObserver
 	{
 		void (*changed)(const StandInRootsChange& a_change) = nullptr;
 		void (*cleared)() = nullptr;
 		void (*updateEntry)(bool a_running) = nullptr;
+		void (*afterWrites)(bool a_running) = nullptr;
 	};
 
 	/** @brief What an engine channel carries. */
@@ -160,4 +163,58 @@ namespace DCLF::Api
 		void (*engineHid)(const void* a_object, std::uint32_t a_siteOffset) = nullptr;
 		std::span<const std::uint32_t> hideSites;
 	};
+
+	/**
+	 * @brief A move writer of a feature's own (Extensions::ReserveMoveWriter): an engine writer whose hook pushes move events (Core's
+	 * MoveEvents, Engine/Capture/SceneEvents.h) through Extensions::PushReservedMove, counted under its name in the report's move writers'
+	 * calls.
+	 */
+	struct MoveWriterId
+	{
+		std::uint32_t index = ~0u;
+		explicit operator bool() const { return index != ~0u; }
+		bool operator==(const MoveWriterId&) const = default;
+	};
+
+	/**
+	 * @brief Whom a reserved writer's move event reaches: ScenePass, the scene pass's light path alone (MoveEvents); WithPlacements, also
+	 * FrameValues' placement producer (FrameValueMoves), as Core's own writers push.
+	 */
+	enum class MoveReach : std::uint8_t
+	{
+		ScenePass,
+		WithPlacements,
+	};
+}
+
+// Node capture contributions and the features' node updates (Core/Extensions/NodeCaptures.h).
+
+#include <vector>
+
+namespace DCLF::Api
+{
+	/**
+	 * @brief A node capture contribution (InstallContext::RegisterNodeCapture): an engine node class (its RTTI exactly) whose OnVisible
+	 * visits an ordered list of its own in its children's place (Features/Decals: a BGSDecalNode's decals, last to first). The scene
+	 * capture records the list with the node's record (kMirroredKindCaptured; CoordinatorComponentContext::MirroredNodeOf's captured),
+	 * and again on each update of kNodeFieldCaptured the feature's own hooks push (Extensions::PushNodeUpdate). One contribution a class.
+	 *
+	 * - name: the contribution's (the install's failures).
+	 * - rtti: the node class's RTTI, called once at registration.
+	 * - capture: the capturing thread (a hook's writer, a loader attaching, or the render thread), inside the engine-read window or under
+	 *   the engine call that holds the node: a_node's list into a_out (empty on the call), in its order. Per captured node of the class,
+	 *   never per frame.
+	 */
+	struct NodeCaptureContribution
+	{
+		std::string_view name;
+		const void* (*rtti)() = nullptr;
+		void (*capture)(const void* a_node, std::vector<const void*>& a_out) = nullptr;
+	};
+
+	/**
+	 * @brief The node record fields a feature's hook may push (Extensions::PushNodeUpdate's a_fields; the capture's NodeRecord fields as
+	 * they are, Core checks they match). Captured: a node capture contribution's list (its writers' edits).
+	 */
+	inline constexpr std::uint32_t kNodeFieldCaptured = 1u << 21;
 }

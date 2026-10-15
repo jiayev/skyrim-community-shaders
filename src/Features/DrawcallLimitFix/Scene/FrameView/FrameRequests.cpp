@@ -34,11 +34,20 @@ namespace DCLF::Scene
 		// (an interior moves them into its rooms); walked whatever the actors' toggle says (Features/Actors), since its parent contribution is ClassifyFrame's and live.
 		constexpr std::array<std::uint32_t, 4> kDrawnCategories{ 0 /*Actor*/, 3 /*Static*/, 4 /*Dynamic*/, 5 /*MultiBound*/ };
 
-		/** @brief The LOD classes that list TES::lodLandRoot (object LOD 1, terrain LOD 2; 0: the root is not listed). */
-		std::uint32_t LodListing(const ToggleSet& a_toggles)
+		constexpr std::uint32_t kObjectClasses = static_cast<std::uint32_t>(Api::ObjectClass::Count);
+
+		/**
+		 * @brief The object classes on under a_toggles that list a category root (Api::ObjectClassContribution::categoryRoot: Features/Lod's
+		 * object and terrain LOD, TES::lodLandRoot), a bit each by class (0: no root is listed).
+		 */
+		std::uint32_t RootListing(const ToggleSet& a_toggles)
 		{
-			return (Extensions::ObjectClassOn(a_toggles, Api::ObjectClass::LodObjects) ? 1u : 0u) |
-			       (Extensions::ObjectClassOn(a_toggles, Api::ObjectClass::LodTerrain) ? 2u : 0u);
+			const auto& roots = Extensions::RegisteredCategoryRoots();
+			std::uint32_t listing = 0;
+			for (std::uint32_t c = 0; c < kObjectClasses; ++c)
+				if (roots[c] && Extensions::ObjectClassOn(a_toggles, static_cast<Api::ObjectClass>(c)))
+					listing |= 1u << c;
+			return listing;
 		}
 
 		/**
@@ -193,13 +202,16 @@ namespace DCLF::Scene
 		{
 			Fnv1a hash;
 			const auto& views = Extensions::Views();
-			std::uint32_t listing = LodListing(ActiveToggles());
+			std::uint32_t listing = RootListing(ActiveToggles());
 			for (std::uint32_t i = 0; i < views.rootCount; ++i)
-				listing |= Extensions::ViewOn(ActiveToggles(), views.rootViews[i]) ? 4u << i : 0u;
+				listing |= Extensions::ViewOn(ActiveToggles(), views.rootViews[i]) ? 1u << (kObjectClasses + i) : 0u;
 			hash.Mix(listing);
+			// The classes' category roots, listed or not.
+			for (const auto root : Extensions::RegisteredCategoryRoots())
+				if (root)
+					hash.Mix(root());
 			if (auto* tes = RE::TES::GetSingleton()) {
 				hash.Mix(tes->objRoot);
-				hash.Mix(tes->lodLandRoot);
 				hash.Mix(tes->interiorCell);
 				const auto* grid = tes->gridCells;
 				hash.Mix(grid);
@@ -257,10 +269,13 @@ namespace DCLF::Scene
 					hash.Mix(objRoot->GetChildren().size());
 				mix(tes->objRoot);
 				watch(tes->objRoot);
-				// The LOD root, with the classes that list it.
-				const std::uint32_t lodListing = LodListing(ActiveToggles());
-				mix(lodListing ? tes->lodLandRoot : nullptr);
-				hash.Mix(lodListing);
+				// The classes' category roots, with the classes that list them.
+				const std::uint32_t rootListing = RootListing(ActiveToggles());
+				const auto& roots = Extensions::RegisteredCategoryRoots();
+				for (std::uint32_t c = 0; c < kObjectClasses; ++c)
+					if (roots[c])
+						mix(rootListing & (1u << c) ? roots[c]() : nullptr);
+				hash.Mix(rootListing);
 				// The CategoryRoot views' roots' inputs while their toggles track them (the first-person root).
 				MixViewRootInputs(mix);
 				mix(tes->interiorCell);
@@ -543,12 +558,16 @@ namespace DCLF::Scene
 						current.insert(multiBound);
 				}
 			}
-			// Object and terrain LOD: TES::lodLandRoot holds the terrain manager's LOD blocks (a BSMultiBoundNode each: object LOD's
-			// BSSubIndexTriShapes, one segment per cell, and the land's BSTriShapes), attached and detached as the camera moves
-			// (dclf-lod.md). It is the category node; its content is tracked by the usual structural events. A class not taken, or whose
-			// toggle is off, classifies as Lod.
-			if (LodListing(ActiveToggles()) && tes->lodLandRoot)
-				current.insert(tes->lodLandRoot);
+			// The classes' category roots while a class that lists one is on (Api::ObjectClassContribution::categoryRoot: Features/Lod's
+			// TES::lodLandRoot, the terrain manager's LOD blocks): category nodes, their content tracked by the usual structural events. A
+			// root two classes list is one node.
+			if (const std::uint32_t rootListing = RootListing(ActiveToggles())) {
+				const auto& roots = Extensions::RegisteredCategoryRoots();
+				for (std::uint32_t c = 0; c < kObjectClasses; ++c)
+					if (rootListing & (1u << c))
+						if (auto* root = roots[c]())
+							current.insert(root);
+			}
 			Engine::ForEachLoadedCell(*tes, addCell);
 		}
 		// The CategoryRoot views' roots while their toggles are on (their callbacks, in slot order: Features/FirstPerson's, the player's

@@ -211,11 +211,12 @@ namespace DCLF
 				// Occluders, material rows, frame record, objects and geometries are the installed payload's, which the shadow commit read
 				// this frame (OcclusionReady).
 				WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
-				// Frustum culling (near plane included), Skylighting::OcclusionTechnique's size test (bound radius above 32), and fade
-				// roots as the engine's cull leaves them (kCullFadeOnVisible): never a root the main camera faded out or has not seen yet.
+				// Frustum culling (near plane included), the map's size test while its entry asks (minRadius: Skylighting::
+				// OcclusionTechnique's, bound radius above 32; both maps' do), and fade roots as the engine's cull leaves them
+				// (kCullFadeOnVisible): never a root the main camera faded out or has not seen yet.
 				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(Engine::Address::kFadesOn) };
-				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u) | KeyWordOf(mode);
+				latch.cullFlags = 1u | (Extensions::OcclusionMapOf(v).minRadius ? kCullMinRadius : 0u) | (*fadesOn.get() ? kCullFadeOnVisible : 0u) | KeyWordOf(mode);
 				latch.viewBits = ShadowViewBits(mode, false);
 				latch.fadeStatesIndex = scene.FadeStatesReadIndex(impl->Adopted(), frameNumber);
 				ShadowPayloadLatch(*impl->InstalledPayload(), latch);

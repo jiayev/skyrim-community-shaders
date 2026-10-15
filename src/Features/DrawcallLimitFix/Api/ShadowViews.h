@@ -15,6 +15,9 @@ namespace DCLF::Api
 {
 	// Core-defined (Core/Extensions/ShadowViews.h): what a map's and a source's callbacks are handed.
 	class OcclusionTargetImport;
+	class OccluderLeaf;
+	class OcclusionCamera;
+	class OcclusionAccumulator;
 	class ShadowLightKept;
 
 	/**
@@ -27,12 +30,6 @@ namespace DCLF::Api
 		Sky,
 		Precipitation,
 		Count,
-	};
-	/** @brief Which of Core's occluder rules decides a map's technique per object (read as data: Coordinator::OcclusionTechniqueOf). */
-	enum class OccluderRule : std::uint8_t
-	{
-		Skylighting,
-		Precipitation,
 	};
 	/** @brief What a map draws into: the engine's mask (the precipitation occlusion target), or a texture the feature imports. */
 	enum class OcclusionTarget : std::uint8_t
@@ -47,11 +44,21 @@ namespace DCLF::Api
 	};
 	/**
 	 * @brief An occlusion map contribution: the map is DCLF's while it is available and its toggle is on. Read where the shadow epochs,
-	 * the set decisions and the classification run, as data (no call per object).
+	 * the set decisions and the classification run, as data (resolved once at install; its occluder rule called per walked entry).
 	 *
 	 * - map: the map, one feature's. toggle: a registered toggle. available: a load-time flag the feature owns, read as data whenever
 	 *   the toggle is (required).
-	 * - bits: the map's set phase and view bit (the feature's own: Api/ViewCommon.h). rule, target, labels: see their types.
+	 * - bits: the map's set phase and view bit (the feature's own: Api/ViewCommon.h). target, labels: see their types.
+	 * - technique (required, pure): the scene work, per walked entry while the map is on, for an object with a Lighting property that
+	 *   is not LOD (LOD occludes neither map: Precipitation::SetupMask culls the scene lists, which do not hold the LOD root): the
+	 *   Utility technique the map draws it with (Skylighting::OcclusionTechnique's bits; 0x80, alpha-tested, samples the diffuse), 0:
+	 *   it occludes nothing.
+	 * - minRadius: the map's cull draws nothing of an object whose bound radius is at most 32 (Skylighting::OcclusionTechnique's size
+	 *   test).
+	 * - camera (required): render thread, as the map's view is set up (DrawcallLimitFix::OcclusionView) while DCLF runs: the camera the
+	 *   map is drawn from (none: the view is not set up).
+	 * - ownsAccumulator (required): render thread, as a 0x1C accumulator finishes accumulating while DCLF runs, in slot order until one
+	 *   does: whether the accumulator is drawing the map (the map's capture).
 	 * - importTarget (ImportedTexture, required): render thread, once, as the shadow capability sets the maps' modes up
 	 *   (IndirectDraws::UpdateShadowCapability), in Core's import order (Precipitation, then Sky): the texture to import as the map's
 	 *   depth target.
@@ -64,11 +71,14 @@ namespace DCLF::Api
 		ToggleId toggle;
 		const bool* available = nullptr;
 		ViewBits bits;
-		OccluderRule rule = OccluderRule::Precipitation;
+		std::uint32_t (*technique)(const OccluderLeaf& a_leaf) = nullptr;
+		bool minRadius = false;
 		OcclusionTarget target = OcclusionTarget::EngineMask;
 		OcclusionLabels labels;
 		void (*importTarget)(OcclusionTargetImport& a_import) = nullptr;
 		bool (*referenceDue)() = nullptr;
+		void (*camera)(OcclusionCamera& a_camera) = nullptr;
+		bool (*ownsAccumulator)(const OcclusionAccumulator& a_accumulator) = nullptr;
 	};
 
 	/**

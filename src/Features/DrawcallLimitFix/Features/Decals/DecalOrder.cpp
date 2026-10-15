@@ -7,18 +7,24 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Scene/Model/SceneMirror.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+
+#include <span>
 
 namespace DCLF::Features::Decals
 {
 	namespace
 	{
-		/** @brief VisitIndex from the parent's record: a decal node's decals (its record's, in array order), else its children by slot. */
-		std::uint32_t VisitIndex(const SceneCapture::NodeRecord& a_parent, const void* a_child)
+		/** @brief A BGSDecalNode's record (its RTTI exactly: what its OnVisible is; its decals the record's captured list). */
+		bool IsDecalNode(const Api::MirroredNode& a_node)
 		{
-			if (a_parent.kind & SceneCapture::kKindDecalNode) {
-				const auto& decals = a_parent.decals;
+			return a_node.rtti == DecalNodeRtti();
+		}
+
+		/** @brief VisitIndex from the parent's record: a decal node's decals (its record's, in array order), else its children by slot. */
+		std::uint32_t VisitIndex(const Api::MirroredNode& a_parent, const void* a_child)
+		{
+			if (IsDecalNode(a_parent)) {
+				const auto& decals = a_parent.captured;
 				for (std::uint32_t j = 0; j < decals.size(); ++j)
 					if (decals[j] && decals[j] == a_child)
 						return static_cast<std::uint32_t>(decals.size()) - 1 - j;
@@ -35,26 +41,26 @@ namespace DCLF::Features::Decals
 		 * visit positions from the top of the scene graph down (NiNode slots do not move; a BGSDecalNode visits its decals
 		 * last to first). Within a reference this is the registration's order exactly.
 		 */
-		bool SceneKeyOf(const SceneMirror& a_mirror, const void* a_geometry, OrderKey& a_out)
+		bool SceneKeyOf(const Api::CoordinatorComponentContext& a_context, const void* a_geometry, OrderKey& a_out)
 		{
 			static const REL::Relocation<const RE::NiRTTI*> orderedNode{ RE::BSOrderedNode::Ni_RTTI };
 			a_out = {};
 			for (const void* key = a_geometry; key;) {
-				const auto* record = a_mirror.Node(key);
-				if (!record)
+				const auto record = a_context.MirroredNodeOf(key);
+				if (!record.known)
 					return false;
-				if (!record->parent)
+				if (!record.parent)
 					break;
-				const auto* parent = a_mirror.Node(record->parent);
-				if (!parent)
+				const auto parent = a_context.MirroredNodeOf(record.parent);
+				if (!parent.known)
 					return false;
-				if (parent->rtti == orderedNode.get())
+				if (parent.rtti == orderedNode.get())
 					a_out.ordered = true;
-				const std::uint32_t at = VisitIndex(*parent, key);
+				const std::uint32_t at = VisitIndex(parent, key);
 				if (at == ~0u)
 					return false;
 				a_out.path.push_back(at);
-				key = record->parent;
+				key = record.parent;
 			}
 			std::reverse(a_out.path.begin(), a_out.path.end());
 			return true;
@@ -72,16 +78,16 @@ namespace DCLF::Features::Decals
 		}
 
 		/** @brief The BGSDecalNode above a_object (its record's kind: the RTTI exactly). */
-		const RE::NiAVObject* DecalNodeOf(const SceneMirror& a_mirror, const void* a_object)
+		const RE::NiAVObject* DecalNodeOf(const Api::CoordinatorComponentContext& a_context, const void* a_object)
 		{
-			const auto* record = a_object ? a_mirror.Node(a_object) : nullptr;
-			for (const void* key = record ? record->parent : nullptr; key;) {
-				const auto* node = a_mirror.Node(key);
-				if (!node)
+			const auto record = a_object ? a_context.MirroredNodeOf(a_object) : Api::MirroredNode{};
+			for (const void* key = record.parent; key;) {
+				const auto node = a_context.MirroredNodeOf(key);
+				if (!node.known)
 					return nullptr;
-				if (node->kind & SceneCapture::kKindDecalNode)
+				if (IsDecalNode(node))
 					return static_cast<const RE::NiAVObject*>(key);
-				key = node->parent;
+				key = node.parent;
 			}
 			return nullptr;
 		}
@@ -98,24 +104,24 @@ namespace DCLF::Features::Decals
 		}
 
 		/** @brief A decal's place in the order: its chain and key (none for an object with no geometry). */
-		bool KeyedDecal(const SceneTables& a_tables, const SceneMirror& a_mirror, std::uint32_t a_object, std::uint64_t a_chain, OrderedDecal& a_out)
+		bool KeyedDecal(const Api::CoordinatorComponentContext& a_context, std::uint32_t a_object, std::uint64_t a_chain, OrderedDecal& a_out)
 		{
-			const auto* geometry = a_object < a_tables.objectGeometry.size() ? a_tables.objectGeometry[a_object] : nullptr;
+			const auto* geometry = a_context.ObjectGeometry(a_object);
 			if (!geometry)
 				return false;
-			a_out = { a_chain, {}, a_object, DecalNodeOf(a_mirror, geometry) };
-			SceneKeyOf(a_mirror, geometry, a_out.key);
+			a_out = { a_chain, {}, a_object, DecalNodeOf(a_context, geometry) };
+			SceneKeyOf(a_context, geometry, a_out.key);
 			return true;
 		}
 
 		/** @brief The member decals' order made whole (every key taken now). */
-		std::vector<OrderedDecal> WholeDecalOrder(const SceneTables& a_tables, const SceneMirror& a_mirror,
+		std::vector<OrderedDecal> WholeDecalOrder(const Api::CoordinatorComponentContext& a_context,
 			const ankerl::unordered_dense::map<std::uint32_t, std::uint64_t>& a_members)
 		{
 			std::vector<OrderedDecal> ordered;
 			ordered.reserve(a_members.size());
 			for (const auto& [object, chain] : a_members)
-				if (OrderedDecal entry; KeyedDecal(a_tables, a_mirror, object, chain, entry))
+				if (OrderedDecal entry; KeyedDecal(a_context, object, chain, entry))
 					ordered.push_back(std::move(entry));
 			std::sort(ordered.begin(), ordered.end(), DrawnBefore);
 			return ordered;
@@ -125,12 +131,12 @@ namespace DCLF::Features::Decals
 		 * @brief The changed decals out of the kept order, and those still members in again with their keys taken now; with them every
 		 * kept decal under a decal node one of them is (or was) under, whose places the node's decal array gives now.
 		 */
-		void RekeyChanged(DecalOrder& a_order, const SceneTables& a_tables, const SceneMirror& a_mirror)
+		void RekeyChanged(DecalOrder& a_order, const Api::CoordinatorComponentContext& a_context)
 		{
 			auto& kept = a_order.kept;
 			auto& decalsChanged = a_order.decalsChanged;
 			const auto& memberDecals = a_order.memberDecals;
-			auto keyed = [&](std::uint32_t a_object, std::uint64_t a_chain, OrderedDecal& a_out) { return KeyedDecal(a_tables, a_mirror, a_object, a_chain, a_out); };
+			auto keyed = [&](std::uint32_t a_object, std::uint64_t a_chain, OrderedDecal& a_out) { return KeyedDecal(a_context, a_object, a_chain, a_out); };
 			std::sort(decalsChanged.begin(), decalsChanged.end());
 			decalsChanged.erase(std::unique(decalsChanged.begin(), decalsChanged.end()), decalsChanged.end());
 			auto isChanged = [&](std::uint32_t a_object) { return std::binary_search(decalsChanged.begin(), decalsChanged.end(), a_object); };
@@ -169,39 +175,40 @@ namespace DCLF::Features::Decals
 		 * @brief The ordinals, counted again in draw order: a decal whose ordinal moved is a change (its draw input's), and so is one no
 		 * longer ordered.
 		 */
-		void CountOrdinals(DecalOrder& a_order, SceneTables& a_tables)
+		void CountOrdinals(DecalOrder& a_order, const Api::CoordinatorComponentContext& a_context, std::span<std::uint32_t> a_ordinals)
 		{
 			auto& decalOrdered = a_order.decalOrdered;
+			const auto rangeCount = a_context.RangeCounts();
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> before;
 			before.reserve(decalOrdered.size());
 			for (const std::uint32_t o : decalOrdered)
-				if (o < a_tables.rangeOrdinal.size()) {
-					before.emplace_back(o, a_tables.rangeOrdinal[o]);
-					a_tables.rangeOrdinal[o] = ~0u;
+				if (o < a_ordinals.size()) {
+					before.emplace_back(o, a_ordinals[o]);
+					a_ordinals[o] = ~0u;
 				}
 			decalOrdered.clear();
-			a_tables.rangeCount = {};
+			std::fill(rangeCount.begin(), rangeCount.end(), 0u);
 			ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> previous(before.begin(), before.end());
 			for (const auto& entry : a_order.kept) {
 				const std::uint32_t group = static_cast<std::uint32_t>(entry.chain >> 60) - 1;
-				// A skinned decal of several partitions takes a slot per partition (DecalSpanOf).
-				const std::uint32_t ordinal = a_tables.rangeCount[group];
-				a_tables.rangeCount[group] += DecalSpanOf(entry.object < a_tables.skinPartitions.size() ? a_tables.skinPartitions[entry.object] : 0u);
-				a_tables.rangeOrdinal[entry.object] = ordinal;
+				// A skinned decal of several partitions takes a slot per partition (RangeSpan).
+				const std::uint32_t ordinal = rangeCount[group];
+				rangeCount[group] += a_context.RangeSpan(entry.object);
+				a_ordinals[entry.object] = ordinal;
 				decalOrdered.push_back(entry.object);
 				const auto it = previous.find(entry.object);
 				if (it == previous.end() || it->second != ordinal)
-					a_tables.NoteChange(entry.object, kChangeBindings);
+					a_context.NoteRangeOrdinalChanged(entry.object);
 				if (it != previous.end())
 					previous.erase(it);
 			}
 			// Decals no longer ordered (left the members, or no longer decals).
 			for (const auto& [object, ordinal] : previous)
-				if (ordinal != ~0u && object < a_tables.objects.size())
-					a_tables.NoteChange(object, kChangeBindings);
+				if (ordinal != ~0u && object < a_context.ObjectSlots())
+					a_context.NoteRangeOrdinalChanged(object);
 		}
 
-		/** @brief SceneTables::rangeOrdinal and rangeCount (the decal groups' fixed ranges): the member decals, in the engine's draw order (joinsDone). */
+		/** @brief The slots' ordinals and counts in the decal groups' fixed ranges: the member decals, in the engine's draw order (joinsDone). */
 		void OrderDecals(const Api::CoordinatorComponentContext& a_context)
 		{
 			// The engine draws a decal chain (a group's technique bucket and sub-pass list) in reverse registration order, and
@@ -209,29 +216,26 @@ namespace DCLF::Features::Decals
 			// scene's order, kept: a decal's key is taken when it joins (or is patched again), and a change re-keys only the
 			// decals it names; the ordinals are counted again in one pass.
 			auto& order = a_context.State<DecalOrder>();
-			auto& tables = a_context.tables;
-			const auto& mirror = a_context.Mirror();
 			// The observers' check of this pass (the kept order against one made whole) runs the order's upkeep even with no change.
 			bool checked = false;
 			Diagnostics::Notify(OrderDue{ a_context.PassSerial(), checked });
 			if (!order.decalsRebuild && order.decalsChanged.empty() && !checked)
 				return;
-			if (tables.rangeOrdinal.size() != tables.objects.size())
-				tables.rangeOrdinal.resize(tables.objects.size(), ~0u);
+			const auto ordinals = a_context.SizedRangeOrdinals();
 
 			if (order.decalsRebuild)
-				order.kept = WholeDecalOrder(tables, mirror, order.memberDecals);
+				order.kept = WholeDecalOrder(a_context, order.memberDecals);
 			else if (!order.decalsChanged.empty())
-				RekeyChanged(order, tables, mirror);
+				RekeyChanged(order, a_context);
 			const bool changed = order.decalsRebuild || !order.decalsChanged.empty();
 			order.decalsChanged.clear();
 			order.decalsRebuild = false;
 
 			if (checked)
-				Diagnostics::Notify(Ordered{ order, tables, mirror, order.parity });
+				Diagnostics::Notify(Ordered{ order, a_context, order.parity });
 			if (!changed)
 				return;
-			CountOrdinals(order, tables);
+			CountOrdinals(order, a_context, ordinals);
 		}
 
 		// The component's hooks (Api::CoordinatorComponent).
@@ -276,8 +280,9 @@ namespace DCLF::Features::Decals
 			// A rewritten member decal may have moved in the scene graph: reorder it.
 			if (a_rewrite.written && order.memberDecals.contains(a_slot))
 				order.decalsChanged.push_back(a_slot);
-			// Blood decals: its slots follow its partitions (DecalSpanOf); reorder when the span moves.
-			if (DecalSpanOf(a_rewrite.partitionsBefore) != DecalSpanOf(a_rewrite.partitionsNow))
+			// Blood decals: its slots follow its partitions (RangeSpanOf); reorder when the span moves.
+			using Context = Api::CoordinatorComponentContext;
+			if (Context::RangeSpanOf(a_rewrite.partitionsBefore) != Context::RangeSpanOf(a_rewrite.partitionsNow))
 				order.decalsChanged.push_back(a_slot);
 		}
 	}
@@ -290,12 +295,12 @@ namespace DCLF::Features::Decals
 				decals[0] + decals[1] + decals[2], decals[0], decals[2], decals[1]);
 	}
 
-	DecalOrderComparison CompareDecalOrder(const DecalOrder& a_order, const SceneTables& a_tables, const SceneMirror& a_mirror)
+	DecalOrderComparison CompareDecalOrder(const DecalOrder& a_order, const Api::CoordinatorComponentContext& a_context)
 	{
 		// The kept order against one made whole now (a key that went stale: a parent's children re-indexed under a kept decal).
 		DecalOrderComparison out;
 		const auto& kept = a_order.kept;
-		const auto reference = WholeDecalOrder(a_tables, a_mirror, a_order.memberDecals);
+		const auto reference = WholeDecalOrder(a_context, a_order.memberDecals);
 		out.decals = reference.size();
 		bool same = reference.size() == kept.size();
 		for (std::size_t i = 0; same && i < kept.size(); ++i)
@@ -304,8 +309,8 @@ namespace DCLF::Features::Decals
 		// difference), or an order the comparator does not hold (not a strict weak order).
 		for (const auto& entry : kept) {
 			OrderedDecal now;
-			if (KeyedDecal(a_tables, a_mirror, entry.object, entry.chain, now) && (Before(now.key, entry.key) || Before(entry.key, now.key)) && out.staleKeys++ == 0) {
-				const auto* geometry = a_tables.objectGeometry[entry.object];
+			if (KeyedDecal(a_context, entry.object, entry.chain, now) && (Before(now.key, entry.key) || Before(entry.key, now.key)) && out.staleKeys++ == 0) {
+				const auto* geometry = a_context.ObjectGeometry(entry.object);
 				out.staleFirst = fmt::format("object {} '{}' (decal node {}, now {}): kept ordered {} path [{}], now ordered {} path [{}]", entry.object,
 					geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", fmt::ptr(entry.decalNode), fmt::ptr(now.decalNode), entry.key.ordered,
 					PathText(entry.key.path), now.key.ordered, PathText(now.key.path));

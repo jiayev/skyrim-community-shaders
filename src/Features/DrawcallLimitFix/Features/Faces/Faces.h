@@ -11,8 +11,9 @@
 //
 // Core keeps what every draw of the stream reads, generic: the stream rows in the scene's tables (SceneTables::streamRows, the objects'
 // streamRow, kRetiredStreamRow) and the payloads' copies of them, the builds' second-stream geometry draws (StreamGeometry,
-// AppendStreamRows) and the passes' bindings of the buffer (SceneBuffers::vertexStream); and the walk's classification of a face shape
-// (Tracked::faceShape, its head held from the attach's pins, the per-frame face trait). Included by the feature's sources only.
+// AppendStreamRows) and the passes' bindings of the buffer (SceneBuffers::vertexStream); and the walk's entry classes, which the feature's
+// geometry type contribution names a face shape's (Api::GeometryTypeContribution::entry: a dynamic shape under a BSFaceGenNiNode, classified
+// every frame with the per-frame entry-class trait, its head held from the attach's pins). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 

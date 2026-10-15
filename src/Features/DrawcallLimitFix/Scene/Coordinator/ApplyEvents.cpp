@@ -182,11 +182,14 @@ namespace DCLF::Scene
 				return;
 			}
 			// A capture equal to the held one (every attached leaf captures its shared material; a controller rewrites the same value)
-			// changes no record: the newer is kept, nothing is rewritten. One whose transform buffers alone moved goes to the watch, the
-			// one writer of TexcoordOffset (a rewrite keeps the slots' own).
+			// changes no record: the newer is kept, nothing is rewritten. One whose transform buffers alone moved is counted as watched
+			// while a feature patches TexcoordOffset every frame (Extensions::FrameVSVariablePatched: Features/TextureTransforms, the one
+			// writer of it; a rewrite keeps the slots' own); unpatched, the transforms are the records': it is rewritten.
 			auto change = MaterialPort::SnapshotChange::Fields;
 			if (entry.held)
 				change = MaterialPort::SnapshotChangeOf(entry.held->snapshot, a_held->snapshot);
+			if (change == MaterialPort::SnapshotChange::Transforms && !Extensions::FrameVSVariablePatched())
+				change = MaterialPort::SnapshotChange::Fields;
 			if (entry.held) {
 				++s.replaced;
 				HandBackHeld(std::move(entry.held));
@@ -197,8 +200,9 @@ namespace DCLF::Scene
 				++s.deduped;
 				if (change == MaterialPort::SnapshotChange::Transforms) {
 					++s.transformsOnly;
+					// Nothing to follow (the frame values read the material's frame buffer and the GPU patches its rows): counted only.
 					if (materialDependents.contains(material))
-						WatchMaterialTransforms(material, entry.held->snapshot);
+						++materialRecordStats.transformsWatched;
 				}
 				if (parity && !entry.listed)
 					materialsDeduped.push_back(material);

@@ -32,17 +32,16 @@ namespace DCLF::Diagnostics
 			InstallShadowSetParity();
 			InstallReplayParity();
 		}
-		// The capture's drain: the reflection residue (watched under the set or persistent parity), the registration parity.
-		InstallRegistrations(o.claimsOrScene, o.scene);
+		// The capture's drain: the registration parity. (Features/Reflection's residue classes follow under either parity: the feature's install.)
+		InstallRegistrations(o.scene);
 		// After the joins: the resident parity.
 		if (o.residents)
 			InstallResidentParity();
 		// (Features/Lod's LOD gate observers, the flips against the claims, follow under either parity, and their parity, after the commit
 		// parity, under the persistent one: the feature's install.)
-		if (o.claims) {
-			InstallFirstPersonFiling();
+		// (Features/FirstPerson's root view filing and left-out slots follow under the set parity: the feature's install.)
+		if (o.claims)
 			InstallCommitParity();
-		}
 		// (Features/Shadows/Local's shadow volume parity follows under either parity: the feature's install.)
 		// CS_DCLF_CAPTURE_PARITY: the materials written each frame, for its follow-ups.
 		if (o.capture)

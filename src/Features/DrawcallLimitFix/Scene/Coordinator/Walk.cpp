@@ -16,6 +16,23 @@
 
 namespace DCLF::Scene
 {
+	static_assert(Api::kMirroredKindFaceGen == SceneCapture::kKindFaceGen, "the Api's mirrored kind bits are the capture's");
+
+	namespace
+	{
+		/** @brief The entry class a_leaf's geometry type's rule matches under its parent (Api::GeometryTypeContribution::entry; None: none). */
+		Api::EntryClass EntryClassOfLeaf(const SceneCapture::LeafView& a_leaf)
+		{
+			return a_leaf.parent ? Extensions::EntryClassOf(a_leaf.Type(), a_leaf.parent->kind) : Api::EntryClass::None;
+		}
+
+		/** @brief Whether an entry of a_class carries the per-frame entry-class trait (its rule's perFrame: a face shape's kTraitFace). */
+		bool PerFrameEntryClass(Api::EntryClass a_class)
+		{
+			return a_class != Api::EntryClass::None && Extensions::EntryClassRuleOf(a_class).perFrame;
+		}
+	}
+
 	void Coordinator::BuildFrame(Phase a_phase)
 	{
 		if (a_phase == Phase::Scene)
@@ -226,14 +243,18 @@ namespace DCLF::Scene
 		// Eligibility only, from Tracked's event-refreshed cache. A verdict stale toward "eligible" is harmless (the accumulate phase
 		// classifies again before binding); one stale the other way would leave an accumulated object without a record, so that phase
 		// clears the cache for it.
-		// An NPC face shape, resolved once: a tracked geometry's type and parent do not change.
-		bool faceShapeOf = entry.faceShape;
-		if (!entry.faceShapeResolved) {
+		// Its entry class (its geometry type's rule: Features/Faces' face shape), resolved once: a tracked geometry's type and parent do not
+		// change. The merge stores the class (EntryClassOfLeaf again, from the delta's match).
+		Api::EntryClass entryClassOf = entry.entryClass;
+		if (!entry.entryClassResolved) {
 			d.faceShapeSet = true;
-			d.faceShape = faceShapeOf = leaf.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kDynamicTriShape) && leaf.parent &&
-			                            (leaf.parent->kind & SceneCapture::kKindFaceGen);
+			entryClassOf = EntryClassOfLeaf(leaf);
+			d.faceShape = entryClassOf != Api::EntryClass::None;
 		}
-		const bool faceShape = faceShapeOf && Extensions::EntryClassTaken(Api::EntryClass::FaceShape);
+		const bool entryTaken = entryClassOf != Api::EntryClass::None && Extensions::EntryClassTaken(entryClassOf);
+		// A taken class whose records follow its component's per-frame state is classified every frame (Features/Faces: a face shape's head's
+		// snapshot and the actor's state).
+		const bool classifiedEveryFrame = entryTaken && Extensions::EntryClassRuleOf(entryClassOf).perFrame;
 		// Actor-owned as Skin::GetWetness decides it; resolved once.
 		if (!entry.actorOwnedResolved) {
 			d.actorOwnedSet = true;
@@ -242,10 +263,11 @@ namespace DCLF::Scene
 		Ineligible reason;
 		bool shadowOnly = false;  // not the main pass's, but a caster the shadow epochs draw (kObjectShadowOnly)
 		// A classification stands until an event (property, fade, hidden bit, attach, detach) writes the entry again. Exceptions: a
-		// face shape is classified every frame (its record depends on the head's snapshot and the actor's state), as are an actor's and
-		// other per-frame entries' frame verdicts. The dense rebuild classifies from scratch and leaves the caches alone.
+		// per-frame entry class's entry is classified every frame (a face shape's record depends on the head's snapshot and the actor's
+		// state), as are an actor's and other per-frame entries' frame verdicts. The dense rebuild classifies from scratch and leaves the
+		// caches alone.
 		const bool rereads = entry.perFrame && (!entry.lightTraits || (entry.lightTraits & kTraitActor));
-		bool cached = !denseWalk && !faceShape && entry.candidateFrame != 0;
+		bool cached = !denseWalk && !classifiedEveryFrame && entry.candidateFrame != 0;
 		if (cached) {
 			reason = entry.candidateReason;
 			// Under a switch node the verdict follows the switch's selection, which changes (a harvested plant, a tree's variant)
@@ -323,7 +345,7 @@ namespace DCLF::Scene
 
 		// The record's slot-free inputs (the face's stream is the merge's: its component's state is shared).
 		a_out.write = EvalResult::Write::Record;
-		a_out.faceShape = faceShape;
+		a_out.faceShape = entryTaken;
 		const auto& g = *leaf.geometry;
 		// The skin partitions the engine draws: every LOD level's for a LOD skin (the draw narrows to its root's level); none at any
 		// level is a member that draws nothing (kNoPartitions).
@@ -345,10 +367,11 @@ namespace DCLF::Scene
 			if (rows && rows <= 240)
 				a_out.boneRows = rows;
 		}
-		// A particle member's palette block: its class's rule (Api::PaletteRowsContribution: five rows a particle of its capacity bucket),
-		// filled by FrameValues every frame.
-		if (a_out.reason == Ineligible::None && ParticleSystemTaken(leaf))
-			a_out.particleRows = Extensions::PaletteRowsOf(Api::FrameValueItemClass::ParticleSystem, leaf.geometry->particles.capacity);
+		// A palette rows member's block: its geometry type's item class's rule (Api::GeometryTypeContribution::itemClass,
+		// Api::PaletteRowsContribution: a particle system's five rows a particle of its capacity bucket), filled by FrameValues every frame.
+		if (a_out.reason == Ineligible::None)
+			if (const auto itemClass = PaletteItemClassOf(leaf); itemClass != Api::FrameValueItemClass::None)
+				a_out.particleRows = Extensions::PaletteRowsOf(itemClass, leaf.geometry->particles.capacity);
 		// Whether the engine would draw this object into a shadow map, and with which Utility technique.
 		using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
 		const auto* shadowProperty = leaf.property;
@@ -372,10 +395,22 @@ namespace DCLF::Scene
 		constexpr std::uint64_t kLodFlags = static_cast<std::uint64_t>(PropertyFlag::kLODLandscape) | static_cast<std::uint64_t>(PropertyFlag::kLODObjects) |
 		                                    static_cast<std::uint64_t>(PropertyFlag::kHDLODObjects);
 		const bool lod = shadowProperty && (shadowProperty->flags & kLodFlags);
+		// The leaf as the maps' occluder rules read it: an object with a Lighting property (none occludes nothing); the nearest fade
+		// node's BSX flags walked only when a rule asks.
+		const auto* occluderProperty = SceneCapture::LeafView::Lighting(leaf.property);
+		const bool occluderLeaf = occluderProperty && leaf.geometry;
+		const Api::OccluderLeaf occluder{ .flags = occluderLeaf ? occluderProperty->flags : 0u,
+			.alphaTesting = leaf.AlphaTesting(),
+			.referenced = leaf.node && leaf.node->userData,
+			.scene = this,
+			.records = &leaf,
+			.nearestFadeBsx = [](const Api::OccluderLeaf& a_leaf) {
+				return static_cast<const Coordinator*>(a_leaf.scene)->NearestFadeNodeBsx(*static_cast<const SceneCapture::LeafView*>(a_leaf.records));
+			} };
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
-			// The map's occluder rule (its entry's, read as data).
-			const bool skylighting = Extensions::OcclusionMapOf(v).rule == Api::OccluderRule::Skylighting;
-			const std::uint32_t occlusion = Extensions::OcclusionOn(ActiveToggles(), v) && !lod ? OcclusionTechniqueOf(leaf, skylighting) : 0u;
+			// The map's occluder rule (its entry's, resolved at install).
+			const auto& map = Extensions::OcclusionMapOf(v);
+			const std::uint32_t occlusion = Extensions::OcclusionOn(ActiveToggles(), v) && !lod && occluderLeaf ? map.technique(occluder) : 0u;
 			a_out.occlusion[v] = occlusion;
 			if (occlusion & 0x80)
 				sampleDiffuse();
@@ -400,13 +435,14 @@ namespace DCLF::Scene
 		const bool wasMember = !denseWalk && a_tracked.slot != kNoObjectSlot && IsResidentSlot(a_tracked.slot);
 		if (wasMember)
 			++residentStats.rewritten;
+		// The evaluation resolved its entry class from a leaf (a match: the class its rule names).
 		if (d.faceShapeSet) {
-			trackedEntry->faceShapeResolved = true;
-			trackedEntry->faceShape = d.faceShape;
+			trackedEntry->entryClassResolved = true;
+			trackedEntry->entryClass = d.faceShape ? EntryClassOfLeaf(r.leaf) : Api::EntryClass::None;
 		}
-		// The component that follows face shapes lists them (Features/Faces: under their heads).
-		if (trackedEntry->faceShape)
-			ComponentsListed(*geometry, *trackedEntry, Api::EntryClass::FaceShape);
+		// The component that follows its entry class lists it (Features/Faces: a face shape under its head).
+		if (trackedEntry->entryClass != Api::EntryClass::None)
+			ComponentsListed(*geometry, *trackedEntry, trackedEntry->entryClass);
 		if (d.actorOwnedSet) {
 			trackedEntry->actorOwnedResolved = true;
 			trackedEntry->actorOwned = d.actorOwned;
@@ -426,10 +462,10 @@ namespace DCLF::Scene
 		const auto& g = *leaf.geometry;
 		const Ineligible reason = r.reason;
 		const bool shadowOnly = r.shadowOnly;
-		// A face shape's positions (its head's snapshot) and its region of the positions buffer, whatever its verdict: its component's
-		// (Features/Faces). Without a snapshot it gets no record and waits for its head's publication, which writes it again.
+		// A taken entry class's positions (a face shape's head's snapshot) and its region of the positions buffer, whatever its verdict: its
+		// component's (Features/Faces). Without a snapshot it gets no record and waits for the component's publication, which writes it again.
 		Api::EntryWrite face{ *geometry, trackedEntry->faceHeadRef.get() };
-		trackedEntry->streamWaiting = r.faceShape && !ComponentsResolve(face, Api::EntryClass::FaceShape);
+		trackedEntry->streamWaiting = r.faceShape && !ComponentsResolve(face, trackedEntry->entryClass);
 		if (trackedEntry->streamWaiting)
 			return false;
 		// Geometry slots are shared by every object drawing the same TriShape; a skinned shape draws each partition's buffers.
@@ -564,7 +600,7 @@ namespace DCLF::Scene
 		tables.sunEntryNode[objectId] = trackedEntry->sunEntryNode;
 		tables.hasFadeNode[objectId] = leaf.property && leaf.property->fadeNode ? 1 : 0;
 		if (face.positions)
-			ComponentsStreamed(objectId, face, Api::EntryClass::FaceShape);
+			ComponentsStreamed(objectId, face, trackedEntry->entryClass);
 		else
 			tables.ClearStreamRow(objectId);
 		tables.shadowDiffuse[objectId] = r.shadowDiffuse;
@@ -710,10 +746,13 @@ namespace DCLF::Scene
 	{
 		// A particle system draws the renderer's own quads (FUN_1414f2ad0 type 1: FUN_140e4d280's quad index list and texcoord stream,
 		// one quad a particle), vertices pulled from its palette block: one slot per capacity bucket, keyed by a DCLF address.
-		// The slot is the class's (Api::PaletteRowsContribution::geometrySource: Features/Particles' quad buckets).
-		if (!a_partition && a_geometry.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) && a_geometry.particles.system) {
+		// The slot is its geometry type's item class's (Api::GeometryTypeContribution::itemClass, Api::PaletteRowsContribution::geometrySource:
+		// Features/Particles' quad buckets).
+		const auto itemClass = !a_partition && a_geometry.particles.system ? Extensions::GeometryTypeContributionOf(a_geometry.type).itemClass :
+		                                                                     Api::FrameValueItemClass::None;
+		if (itemClass != Api::FrameValueItemClass::None) {
 			Api::PaletteGeometrySource palette;
-			if (!Extensions::PaletteGeometryOf(Api::FrameValueItemClass::ParticleSystem, a_geometry.particles.capacity, palette))
+			if (!Extensions::PaletteGeometryOf(itemClass, a_geometry.particles.capacity, palette))
 				return Tables::kSlotFree;
 			GeometrySource source;
 			source.key = static_cast<const RE::BSGraphics::TriShape*>(palette.key);
@@ -1262,7 +1301,7 @@ namespace DCLF::Scene
 
 	std::uint32_t Coordinator::PerFrameTraits(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const
 	{
-		return PerFrameTraitsOf(a_tracked.faceShape, a_tracked.actorOwned, a_tracked.categoryNode, a_geometry);
+		return PerFrameTraitsOf(PerFrameEntryClass(a_tracked.entryClass), a_tracked.actorOwned, a_tracked.categoryNode, a_geometry);
 	}
 
 	std::uint32_t Coordinator::PerFrameTraitsOf(bool a_faceShape, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const
@@ -1270,15 +1309,16 @@ namespace DCLF::Scene
 		// The movable set (dclf-event-driven-tables.md): a static reference never moves in place, so what moves is actor-owned,
 		// controller-animated or Havok-simulated. Skin palettes and face snapshots change without moving. A controller on the shader or
 		// alpha property animates the material alpha the shadow verdict reads (kTraitAnimatedShading: its events name it, never per frame).
+		// a_faceShape: a per-frame entry class's entry (PerFrameEntryClass: a face shape), its trait kTraitFace.
 		std::uint32_t traits = 0;
 		traits |= a_faceShape ? kTraitFace : 0u;
 		traits |= a_actorOwned ? kTraitActor : 0u;
 		const auto leaf = mirror.Leaf(&a_geometry);
 		traits |= leaf.Skinned() ? kTraitSkin : 0u;
-		// A particle system's bound and quads change with each update, invisibly to the walk: a mover (FrameValues places it every frame),
-		// its own update its move event (Features/Particles' snapshot capture pushes it).
-		constexpr auto kParticles = static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles);
-		if (Extensions::GeometryTypeOn(ActiveToggles(), kParticles) && leaf.geometry && leaf.geometry->type == kParticles)
+		// A geometry type whose objects change every frame invisibly to the walk (Api::GeometryTypeContribution::moves: a particle system's
+		// bound and quads, with each update): a mover (FrameValues places it every frame), its own update its move event (Features/Particles'
+		// snapshot capture pushes it).
+		if (leaf.geometry && Extensions::GeometryTypeMoves(ActiveToggles(), leaf.geometry->type))
 			traits |= kTraitMoves;
 		if (leaf.property && leaf.property->controllers)
 			traits |= kTraitAnimatedShading;
@@ -1406,11 +1446,11 @@ namespace DCLF::Scene
 		auto& r = a_out;
 		a_timer.Add(BuildPart::LoopTail);
 		// Profiling bucket.
-		r.kind = entry.lightTraits && entry.perFrame ? EvaluateKind::Light :
-		         !entry.perFrame                     ? EvaluateKind::Event :
-		         entry.faceShape                     ? EvaluateKind::Face :
-		         entry.actorOwned                    ? (entry.candidateReason == Ineligible::None ? EvaluateKind::Actor : EvaluateKind::ActorNoRecord) :
-		                                               EvaluateKind::PerFrame;
+		r.kind = entry.lightTraits && entry.perFrame       ? EvaluateKind::Light :
+		         !entry.perFrame                           ? EvaluateKind::Event :
+		         entry.entryClass != Api::EntryClass::None ? EvaluateKind::Face :
+		         entry.actorOwned                          ? (entry.candidateReason == Ineligible::None ? EvaluateKind::Actor : EvaluateKind::ActorNoRecord) :
+		                                                     EvaluateKind::PerFrame;
 		const bool profileKinds = a_light && Diagnostics::Observe().profile;
 		struct KindSample
 		{
@@ -1467,7 +1507,8 @@ namespace DCLF::Scene
 		a_out.classified = candidateFrame == PassStamp();
 		if (a_out.classified) {
 			// PerFrameOf's inputs as the merge will see them; root motion is read fresh here, PerFrameMerge prefers rootMotion.
-			a_out.traits = PerFrameTraitsOf(d.faceShapeSet ? d.faceShape : entry.faceShape, d.actorOwnedSet ? d.actorOwned : entry.actorOwned, entry.categoryNode, *geometry);
+			const Api::EntryClass entryClass = d.faceShapeSet ? (d.faceShape ? EntryClassOfLeaf(a_out.leaf) : Api::EntryClass::None) : entry.entryClass;
+			a_out.traits = PerFrameTraitsOf(PerFrameEntryClass(entryClass), d.actorOwnedSet ? d.actorOwned : entry.actorOwned, entry.categoryNode, *geometry);
 			a_out.mayRecord = reason == Ineligible::None || Eligibility::DeferredToAccumulate(reason) || Eligibility::ShadowOnlyCaster(reason, a_out.leaf);
 			if (a_out.mayRecord && !(a_out.traits & (kTraitFace | kTraitActor))) {
 				// The resolved sun entry, or the one ResolveSunEntry will resolve at the write.

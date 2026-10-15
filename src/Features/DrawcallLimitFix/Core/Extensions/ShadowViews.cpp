@@ -23,13 +23,16 @@ namespace DCLF::Extensions
 			a_entry.available = a_map.available;
 			a_entry.phase = a_map.bits.phase;
 			a_entry.viewBit = a_map.bits.viewBit;
-			a_entry.rule = a_map.rule;
+			a_entry.technique = a_map.technique;
+			a_entry.minRadius = a_map.minRadius;
 			a_entry.target = a_map.target;
 			a_entry.list = a_map.labels.list;
 			a_entry.report = a_map.labels.report;
 			a_entry.targetName = a_map.labels.target;
 			a_entry.importTarget = a_map.importTarget;
 			a_entry.referenceDue = a_map.referenceDue;
+			a_entry.camera = a_map.camera;
+			a_entry.ownsAccumulator = a_map.ownsAccumulator;
 		}
 
 		/** @brief Each mode's phase, the readiness order, the views' sources by kind and the import order. */

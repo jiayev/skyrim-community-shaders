@@ -17,9 +17,10 @@
 // view's own renderers. It keeps a trees view's tree LOD per face, the view engine's under the tree LOD class (Api::ObjectClass::TreeLod,
 // Features/TreeLod's): its pipeline, ownership and row (IndirectDraws::ResolveViewTreeLod, DecideViewTreeLod and SubmitViewEpoch's row);
 // the cube camera's LOD roots the faces draw in the engine's place (IndirectDraws::ViewLodRootsOwned: the tree root by the faces' tree LOD,
-// the LOD land and objects roots by the LOD classes and the LOD gates' show veto, Features/Lod's) and the residue watch under them (PassCapture);
-// and the forward targets the faces' pipelines are built for (DrawPipelines::SetForwardTargets). The feature reaches them through the view
-// engine's calls alone, never a LOD feature's headers.
+// the LOD land and objects roots by the LOD classes and the LOD gates' show veto, Features/Lod's) and an OwnRenderers view's residue watch
+// under them (PassCapture::WatchViewResidue, on the updates the view's residueDue keeps them: the feature's Diagnostics/Residue.cpp, which
+// also classifies the residue); and the forward targets by view (DrawPipelines::SetViewForwardTargets: the faces' keys carry no view bit).
+// The feature reaches them through the view engine's calls alone, never a LOD feature's headers.
 // Included by the feature's sources only (and Features/Manifest.cpp, for the constants).
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
@@ -58,4 +59,11 @@ namespace DCLF::Features::Reflection
 	// ReflectionFaces.cpp (its own header): the engine hooks. Diagnostics/FaceCameraParity.cpp: CS_DCLF_SET_PARITY's or
 	// CS_DCLF_PERSISTENT_PARITY's check of the faces' cameras against the engine's at their draws (its counts: ReflectionView.h).
 	void SubscribeFaceCameraParity();
+
+	// Diagnostics/Residue.cpp: the residue watch's question (the view's residueDue: every 30th update while CS_DCLF_SET_PARITY or
+	// CS_DCLF_PERSISTENT_PARITY observes), the residue's classification by the scene pass that takes the frame's drain (subscribed under
+	// either parity), and the report's part of it: the classes since the last report (empty: none).
+	bool ResidueDue();
+	void SubscribeResidue();
+	std::string ResidueKinds();
 }

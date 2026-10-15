@@ -75,8 +75,9 @@ namespace DCLF::Api
 	class PaletteRowsChunk;
 
 	/**
-	 * @brief A class of FrameValues' items (PlacementPlan::Item::itemClass), Core's to decide: the coordinator names an item's class as
-	 * data when it plans it, the walk sizes its palette block by the class's rule, and the class's registration fills the block.
+	 * @brief A class of FrameValues' items (PlacementPlan::Item::itemClass), Core's to decide: a geometry type contribution names the class
+	 * of its skinless objects (Api::GeometryTypeContribution::itemClass, read as data), the coordinator names an item's class when it plans
+	 * it, the walk sizes its palette block by the class's rule, and the class's registration fills the block.
 	 * - ParticleSystem: a particle system without a skin (BSGeometry type kParticles), its block its quads (Features/Particles).
 	 */
 	enum class FrameValueItemClass : std::uint8_t

@@ -43,7 +43,11 @@ namespace DCLF::Api
 	{
 		bool lodTechniquesOnly = false;           // only a slot whose pass is a LOD Lighting technique has a key
 		bool forwardRasterToForwardPart = false;  // a forward slot has none: the view's forward part draws it (the main set's pipeline)
-		std::uint32_t keyFlags = 0;               // the ForwardPipelineKey flags its keys carry (their targets and culling)
+		// The ForwardPipelineKey flags its keys carry: the view's own bits (the feature's, above Core's two-sided and tree LOD bits; none
+		// for at most one view), by which the pipeline lane finds the key's view (its forward targets, DrawPipelines::SetViewForwardTargets).
+		std::uint32_t keyFlags = 0;
+		// Its keys cull back faces unless two-sided (a plain projection); else front faces (a cube face's projection mirrors the image).
+		bool cullBackFaces = false;
 	};
 	/**
 	 * @brief A view's shape: what tells its epochs apart (Core's ViewTraits, with the view's slot: its epochs and segments).
@@ -117,6 +121,9 @@ namespace DCLF::Api
 	 *   signatures): the view's root, a category node filed under itself, and the engine pointers it is found from.
 	 * - accumulators (InMainRenderers, required): render thread, once a frame (PassCapture::RefreshMainRenderers): the engine accumulators
 	 *   its members register into.
+	 * - residueDue (OwnRenderers, optional): render thread, once per render of the view that would leave its LOD roots to DCLF
+	 *   (IndirectDraws::ViewLodRootsOwned): whether this one keeps them, its renderers' passes DCLF does not withhold under them watched
+	 *   (PassCapture::WatchViewResidue, taken by TakeViewResidue). A diagnostics question: false on the normal path.
 	 */
 	struct ViewContribution
 	{
@@ -135,6 +142,7 @@ namespace DCLF::Api
 		bool (*covered)(const ViewCoverage& a_coverage) = nullptr;
 		void (*captureRoot)(ViewRootCapture& a_capture) = nullptr;
 		void (*accumulators)(ViewAccumulators& a_accumulators) = nullptr;
+		bool (*residueDue)() = nullptr;
 	};
 
 	/**

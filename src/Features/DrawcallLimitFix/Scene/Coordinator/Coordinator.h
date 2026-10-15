@@ -646,8 +646,6 @@ namespace DCLF
 		RE::NiNode* FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason, bool* a_unmirrored = nullptr) const;
 		/** @brief The same from the live chain (the parities and diagnostics; the object alive). */
 		RE::NiNode* FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const;
-		/** @brief Diagnostics: the node that hid a first-person skeleton entry (ClassifyFrame), the first 16. */
-		void NoteFirstPersonHidden(const Tracked& a_tracked, const void* a_key, const SceneCapture::NodeRecord& a_record, std::uint32_t a_depth) const;
 		/** @brief The CategoryRoot view whose root a_node is (EngineView::Count: none, or a null a_node). */
 		Api::EngineView ViewRootOf(const void* a_node) const
 		{
@@ -974,11 +972,6 @@ namespace DCLF
 		/** @brief A slot's record made (a join) or written from a_snapshot: listed under its signature. */
 		void NoteMaterialRecord(std::uint32_t a_slot, const MaterialPort::MaterialSnapshot& a_snapshot);
 		/**
-		 * @brief A capture's texture transforms, once per material: nothing to follow (the frame values read the material's frame buffer
-		 * and the GPU patches its rows), counted only (MaterialRecordStats::transformsWatched).
-		 */
-		void WatchMaterialTransforms(const RE::BSShaderMaterial* a_material, const MaterialPort::MaterialSnapshot& a_snapshot, bool a_recordsCurrent = false);
-		/**
 		 * @brief Pure (any thread; the pass's sources passed in): a_snapshot's record for a_pass as records hold it (no frame view). For a
 		 * rewrite (a_slot != kNoMaterialSlot) the slot's frame parts and unread floats are kept, and `same` tells an unchanged record.
 		 */
@@ -1041,8 +1034,11 @@ namespace DCLF
 		void ResetLookups();
 
 		// The walk: State/Walk.h (CoordinatorWalk).
-		/** @brief Skylighting::OcclusionTechnique from the records: the nearest fade node above the leaf's BSX flags. */
-		std::uint32_t OcclusionTechniqueOf(const SceneCapture::LeafView& a_leaf, bool a_skylighting) const;
+		/**
+		 * @brief The BSX flags of the nearest fade node above a_leaf, by the mirror's parents (-1: none, or none read): what an occlusion
+		 * map's occluder rule asks (Api::OccluderLeaf::NearestFadeNodeBsx).
+		 */
+		std::int32_t NearestFadeNodeBsx(const SceneCapture::LeafView& a_leaf) const;
 		Ineligible ClassifyFrame(const Tracked& a_tracked) const;
 		/**
 		 * @brief The face mode (0-5) of the one NiBillboardNode above a Billboard-parented leaf when DCLF turns it on the GPU (its parent
