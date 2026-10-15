@@ -1,7 +1,8 @@
 // MaterialPort's snapshot capture (any thread where the material is alive), the capture queue's producer side and Evaluate's
-// dispatch to the vanilla, PBR, feature-hook and Effect ports.
+// dispatch to the vanilla, PBR and feature-hook ports and the material ports (Extensions::MaterialPorts: the Effect port).
 
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
@@ -35,10 +36,12 @@ namespace DCLF::MaterialPort
 		a_out.vtable = *reinterpret_cast<const void* const*>(&a_material);
 		a_out.feature = static_cast<std::uint32_t>(a_material.GetFeature());
 		a_out.pbr = OwnClass(a_out.vtable);
-		a_out.effect = !a_out.pbr && EffectMaterial(a_material);
-		if (a_out.effect)
+		// A material port's class (its vtable, resolved at install), its size and texture fields the port's.
+		a_out.port = a_out.pbr ? std::uint8_t(0) : Extensions::PortOfVtable(a_out.vtable);
+		const auto& port = Extensions::MaterialPorts()[a_out.port];
+		if (a_out.port)
 			a_out.feature = 0;  // no Lighting material feature (FeatureHooksCovered: none of Advanced Skin's)
-		a_out.size = a_out.pbr ? PBRMaterialBytes(a_material) : a_out.effect ? kEffectMaterialBytes : VanillaClassSize(a_material);
+		a_out.size = a_out.pbr ? PBRMaterialBytes(a_material) : a_out.port ? port.materialBytes : VanillaClassSize(a_material);
 		a_out.textureCount = 0;
 		if (!a_out.size || a_out.size > kMaxMaterialBytes)
 			return false;
@@ -47,8 +50,9 @@ namespace DCLF::MaterialPort
 		std::uint32_t count = 0;
 		if (a_out.pbr)
 			PBRTextureFields(a_material, fields.data(), count);
-		else if (a_out.effect)
-			EffectTextureFields(fields.data(), count);
+		else if (a_out.port)
+			for (std::size_t i = 0; i < port.textureFields.size() && count < kMaxTextureFields; ++i)
+				fields[count++] = port.textureFields[i];
 		else
 			VanillaTextureFields(a_material, fields.data(), count);
 		for (std::uint32_t i = 0; i < count && i < kMaxTextureFields; ++i)
@@ -86,7 +90,7 @@ namespace DCLF::MaterialPort
 		// each: +0xc..+0x2c, MaterialSources::TextureTransformsOf).
 		constexpr std::size_t kCount = 0x8, kTransforms = 0xc, kTransformsEnd = 0x2c;
 		if (a_held.key != a_new.key || a_held.vtable != a_new.vtable || a_held.feature != a_new.feature || a_held.pbr != a_new.pbr ||
-			a_held.effect != a_new.effect || a_held.size != a_new.size || a_held.textureCount != a_new.textureCount)
+			a_held.port != a_new.port || a_held.size != a_new.size || a_held.textureCount != a_new.textureCount)
 			return SnapshotChange::Fields;
 		for (std::uint32_t i = 0; i < a_new.textureCount && i < kMaxTextureFields; ++i)
 			if (a_held.textures[i].offset != a_new.textures[i].offset || a_held.textures[i].view != a_new.textures[i].view)
@@ -143,9 +147,9 @@ namespace DCLF::MaterialPort
 
 	bool Evaluate(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const MaterialFrame& a_frame, MaterialRecord& a_out)
 	{
-		// An effect material is BSEffectShader's (no Community Shaders hook on its SetupMaterial).
-		if (a_snapshot.effect)
-			return EvaluateEffect(a_snapshot, a_passDescriptor, a_frame.vanilla, a_out);
+		// A material port's material is its shader's (the Effect port's: BSEffectShader's, no Community Shaders hook on its SetupMaterial).
+		if (a_snapshot.port)
+			return Extensions::EvaluatePort(a_snapshot.port, a_snapshot, a_passDescriptor, a_frame, a_out);
 		// The hooks' chain (installed in feature order): Advanced Skin and TerrainHelper around TruePBR around vanilla. TruePBR's
 		// replacement takes the passes it takes (and hands back to vanilla what it does not draw: EvaluatePBR).
 		const bool covered = PBRTakesPass(a_passDescriptor, a_frame.feature) ? EvaluatePBR(a_snapshot, a_passDescriptor, a_frame, a_out) :

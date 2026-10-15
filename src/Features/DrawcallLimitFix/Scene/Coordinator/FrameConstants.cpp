@@ -4,6 +4,7 @@
 
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
@@ -340,9 +341,9 @@ namespace DCLF::Scene
 		const auto [material, pass] = tables.materialSlotKey[a_slot];
 		if (!material)
 			return;
-		// The Effect port: an effect record has no signature-sourced component (its pass descriptor's bits are not Lighting's); its texture
+		// A port's record without signature components (the Effect port's: its pass descriptor's bits are not Lighting's); its texture
 		// transforms are the frame values'.
-		if (a_slot < tables.materials.size() && tables.materials[a_slot].kind == kMaterialKindEffect)
+		if (a_slot < tables.materials.size() && !Extensions::PortRules(tables.materials[a_slot].kind).signatureComponents)
 			return;
 		const std::uint32_t signature = MaterialSources::Signature(pass);
 		auto& entry = materialSignatures[signature];

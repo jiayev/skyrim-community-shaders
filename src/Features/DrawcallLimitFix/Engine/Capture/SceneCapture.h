@@ -235,9 +235,10 @@ namespace DCLF::SceneCapture
 		const void* key = nullptr;
 		const void* rtti = nullptr;
 		bool lighting = false;
-		// With kRtti, a BSEffectShaderProperty (exact RTTI): emissive is its emittanceColor (+0x88, null for white), feature its
-		// material's texture paths (EffectConstants.h, kEffectHasSourcePath, kEffectHasGreyscalePath).
-		bool effect = false;
+		// With kRtti, a material port's property (its exact RTTI: Extensions::PortOfRtti), its kind (0: none): emissive and feature are
+		// what the port's capture takes (the Effect port's: the emittanceColor, +0x88, null for white; the material's texture paths,
+		// EffectConstants.h's kEffectHasSourcePath and kEffectHasGreyscalePath).
+		std::uint8_t port = 0;
 		std::uint64_t flags = 0;
 		const void* material = nullptr;
 		float materialAlpha = 1.0f;
@@ -331,8 +332,8 @@ namespace DCLF::SceneCapture
 		bool AlphaTesting() const { return alpha && (alpha->flags & (1u << 9)); }
 		/** @brief a_property if a BSLightingShaderProperty (netimmerse_cast), else null. */
 		static const PropertyRecord* Lighting(const PropertyRecord* a_property) { return a_property && a_property->lighting ? a_property : nullptr; }
-		/** @brief a_property if a BSEffectShaderProperty, else null. */
-		static const PropertyRecord* Effect(const PropertyRecord* a_property) { return a_property && a_property->effect ? a_property : nullptr; }
+		/** @brief a_property if a material port's (PropertyRecord::port: the Effect port's BSEffectShaderProperty), else null. */
+		static const PropertyRecord* Port(const PropertyRecord* a_property) { return a_property && a_property->port ? a_property : nullptr; }
 	};
 
 	/** @brief A geometry's records captured live and held, with their view: for a reader on the render thread. */

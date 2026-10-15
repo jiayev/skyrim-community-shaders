@@ -11,6 +11,10 @@
 //    entryClass.follows and takes, Api/CoordinatorComponents.h). A view is the same pattern for an engine view (EngineView, Api/Views.h).
 // 3. Derivations: the per-object values the Lighting port derives from a property of the feature's (ShadingContribution), and the engine
 //    globals that derivation reads, captured with the frame's (FrameGlobalsContribution).
+// 4. Material ports: an engine shader other than Lighting whose objects Core classifies, captures and draws through the feature's port
+//    (MaterialPortContribution, Api::InstallContext::RegisterMaterialPort): its property and material classes, its constant space, the rules
+//    Core's classification and builds read as data, and the callbacks Core makes per event (a capture, a classification, an evaluation, a
+//    shading sample).
 //
 // A membership is read as data where Core decides (Core/Extensions/ObjectContributors.h: Extensions::TechniqueObjectFlags,
 // GeometryTypeOn, ParentAdmits, ObjectClassOn; Core/Extensions/CoordinatorComponents.h: EntryClassTaken), never called per object. A
@@ -27,12 +31,19 @@
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 
 #include <cstdint>
+#include <span>
 #include <string_view>
+#include <utility>
 
 namespace DCLF::Api
 {
 	// Defined by Core (Core/Extensions/ObjectContributors.h), which the features inside DCLF include for it.
 	class ShadingDerivation;
+	// Defined by Core (Core/Extensions/MaterialPorts.h), likewise.
+	class MaterialPortCapture;
+	class MaterialPortDerivation;
+	class MaterialPortEvaluation;
+	class MaterialPortShading;
 
 	// ---- 1. Membership by an engine key.
 
@@ -205,5 +216,81 @@ namespace DCLF::Api
 		std::string_view name;
 		std::uint32_t floats = 0;
 		void (*capture)(float* a_out) = nullptr;
+	};
+
+	// ---- 4. Material ports.
+
+	/**
+	 * @brief A port's constant space for one stage: its engine shader's variables by index (as its Setup functions write them), each 4 floats
+	 * of a ConstantBlock but the `sized` ones (variable, floats) and the `scratch` ones nothing reads (one shared region: StageLayout,
+	 * Core/Extensions/MaterialPorts.h); which constant group each belongs to (PerTechnique, PerMaterial, PerGeometry: b0-b2) and each
+	 * group's first variable; the shader's member names by variable.
+	 */
+	struct MaterialStageSpace
+	{
+		std::uint32_t variables = 0;
+		std::span<const std::pair<std::uint32_t, std::uint32_t>> sized;
+		std::span<const std::uint32_t> scratch;
+		std::uint64_t groups[3]{};
+		std::uint32_t first[3]{};
+		std::span<const std::string_view> names;
+	};
+
+	/**
+	 * @brief What Core's classification, joins and material records read of a port, as data (Extensions::PortRules; Core's Lighting has its
+	 * own, kind 0).
+	 */
+	struct MaterialPortRules
+	{
+		std::uint32_t passEnumBase = 0;       // the engine's pass enum less the pass descriptor (MakeRenderPass's): a member's and a decal's order key
+		std::uint32_t deferredPixelBit = 0;   // the pixel descriptor's G-buffer bit, dropped for a forward decal (Coordinator::ViewDecalForward)
+		std::uint32_t projectedPassBit = 0;   // the pass descriptor's ProjectedUV binding bit (0: none)
+		std::uint32_t frameVSVariable = ~0u;  // the VS variable a record takes from the frame (the texture transforms' TexcoordOffset)
+		bool techniqueRows = true;            // false: its keys read technique row 0 (no Lighting technique, no shadow mask)
+		bool rawPermutation = false;          // its permutation: the raw VS, the raw PS bits the lookup dropped, InWorld, no feature bits
+		bool signatureComponents = true;      // false: its records have no signature-sourced component (MaterialSources::Signature)
+		bool emissiveAlwaysListed = false;    // its property's emissive colour is listed whatever its flags (the walk's emittance events)
+		bool turnedByBillboards = false;      // ParentLeaves::TurnedEffectShapes' leaves are its properties' (Coordinator::BillboardModeOf)
+		bool particleGeometry = false;        // the particle geometry types' leaves with its property are its to classify (Eligibility::Static)
+	};
+
+	/**
+	 * @brief A material port: the objects of an engine shader (other than Lighting, which is Core's) whose property and material Core captures
+	 * and whose objects it classifies, joins and draws through the port while its class is on. Read where the objects are captured,
+	 * classified and joined, and where the material records are evaluated and packed, as data resolved once at install
+	 * (Extensions::MaterialPorts, by kind: the index records carry, PropertyRecord::port, MaterialSnapshot::port, LightingDescriptors::port,
+	 * MaterialRecord::kind); the callbacks run per event, never per object per frame.
+	 *
+	 * - shaderType: its engine shader (RE::BSShader::Type), one port's; never Lighting.
+	 * - objectClass: the class whose toggle turns it on (registered by then; Core's built-ins: by the end of the install).
+	 * - propertyRtti, materialVtable: its property's RTTI and its material's vtable, called once at install.
+	 * - materialBytes, textureFields: the material bytes a snapshot keeps, and its NiSourceTexture fields (offsets).
+	 * - vs, ps: its constant space (at most 64 variables a stage).
+	 * - rules: what Core reads as data.
+	 * - capture: the property's capture (SceneCapture::CaptureProperty, in the engine-read window or under the engine call that holds it):
+	 *   what the port's derive and shading read of the property and its material into the record.
+	 * - derive: per classification, join or membership pass (any thread): the object's descriptors from its records, or why it stays
+	 *   native. Pure.
+	 * - evaluate: per material evaluation (the scene work and its pool): the record of a snapshot of its material under a pass descriptor;
+	 *   false for one the port does not cover. Pure.
+	 * - shading: per shading item (FrameValues' pool, in the engine-read window): the shading row of its property. Pure but for the reads.
+	 * - variants, variantNames: the census's split of its variant reason (a bit each, named).
+	 */
+	struct MaterialPortContribution
+	{
+		std::uint8_t shaderType = 0xFF;
+		ObjectClass objectClass = ObjectClass::Count;
+		const void* (*propertyRtti)() = nullptr;
+		const void* (*materialVtable)() = nullptr;
+		std::uint32_t materialBytes = 0;
+		std::span<const std::uint16_t> textureFields;
+		MaterialStageSpace vs, ps;
+		MaterialPortRules rules;
+		void (*capture)(const MaterialPortCapture& a_capture) = nullptr;
+		void (*derive)(MaterialPortDerivation& a_derivation) = nullptr;
+		bool (*evaluate)(MaterialPortEvaluation& a_evaluation) = nullptr;
+		void (*shading)(MaterialPortShading& a_shading) = nullptr;
+		std::uint32_t (*variants)(const MaterialPortDerivation& a_derivation) = nullptr;
+		std::span<const std::string_view> variantNames;
 	};
 }

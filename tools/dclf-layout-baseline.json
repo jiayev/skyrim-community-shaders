@@ -2,7 +2,7 @@
  "legacyEdges": {
   "Core -> Engine": 20,
   "Core -> Scene": 29,
-  "Engine -> Scene": 27,
+  "Engine -> Scene": 26,
   "Features/Billboards -> Engine": 1,
   "Features/Billboards -> Scene": 3,
   "Features/Decals -> Scene": 2,
@@ -147,8 +147,8 @@
    65
   ],
   "DCLF::Scene::Coordinator::BuildAccumulatePhase": [
-   369,
-   97
+   370,
+   96
   ],
   "DCLF::Scene::Coordinator::CheckPacedPublication": [
    64,

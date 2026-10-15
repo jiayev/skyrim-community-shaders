@@ -4,6 +4,7 @@
 
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
@@ -1079,8 +1080,10 @@ namespace DCLF::Scene
 			return -1;
 		// First-person entries too (magic hand glows): the first-person forward part's b12 block (Features/FirstPerson's depth epoch) is world
 		// space throughout (c0-c2 the camera rotation, c40 the eye at GetFirstPersonNodePosition), sampled before the shift.
+		// The turned shapes: a skinless BSTriShape with the property of a port the billboards turn (the Effect port's).
 		const auto leaf = mirror.Leaf(a_tracked.geometry.get());
-		if (!leaf || !SceneCapture::LeafView::Effect(leaf.property) || leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) || leaf.Skinned())
+		const auto* port = leaf ? SceneCapture::LeafView::Port(leaf.property) : nullptr;
+		if (!port || !Extensions::PortRules(port->port).turnedByBillboards || leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) || leaf.Skinned())
 			return -1;
 		std::int32_t mode = -1;
 		std::uint32_t billboards = 0;
@@ -1107,8 +1110,8 @@ namespace DCLF::Scene
 		const auto view = ViewRootOf(a_tracked.categoryNode);
 		if (view == Api::EngineView::Count || !Extensions::ViewForwardDecals(view))
 			return;
-		// The forward pixel stage: drop Deferred, as LightingShaderDescriptors does for a forward key.
-		a_descriptors.pixel &= a_descriptors.effect ? ~EffectFlag::Deferred : ~kLightingPixelDeferred;
+		// The forward pixel stage: drop its kind's Deferred bit, as LightingShaderDescriptors does for a forward key.
+		a_descriptors.pixel &= ~Extensions::PortRules(a_descriptors.port).deferredPixelBit;
 		a_descriptors.forward = true;
 		a_descriptors.forwardBlendMode = group == 2 ? a_descriptors.decalBlendMode : 0u;
 		a_descriptors.forwardDepthTest = true;

@@ -7,6 +7,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 
@@ -30,54 +31,53 @@ namespace DCLF
 		static_assert(kTruePBRFeatureTextures + TruePBR::NumExtendedTextures == kFeatureMaterialTextures &&
 					  kFeatureMaterialRegisters[kTruePBRFeatureTextures] == TruePBR::FirstExtendedTexture);
 
-		StageLayout MakeLayout(std::uint32_t a_count, std::initializer_list<std::pair<std::uint32_t, std::uint32_t>> a_sizes,
-			std::initializer_list<std::uint32_t> a_scratch)
-		{
-			StageLayout layout{};
-			layout.count = a_count;
-			layout.size.fill(4);
-			for (auto [variable, size] : a_sizes)
-				layout.size[variable] = static_cast<std::uint8_t>(size);
-			// Variables nothing reads (the per-geometry point lights under Light Limit Fix) share one region at the end.
-			constexpr std::uint32_t kScratchRegion = 228;
-			std::uint32_t next = 0;
-			for (std::uint32_t i = 0; i < a_count; ++i) {
-				if (std::find(a_scratch.begin(), a_scratch.end(), i) != a_scratch.end()) {
-					layout.offset[i] = static_cast<std::uint8_t>(kScratchRegion);
-					continue;
-				}
-				layout.offset[i] = static_cast<std::uint8_t>(next);
-				next += layout.size[i];
-			}
-			return layout;
-		}
+		// Lighting's variables of more than 4 floats and the ones nothing reads: World, PreviousWorld and TextureProj are float3x4; Bones
+		// (skinned only) never needs real storage. DirectionalAmbient is float3x4; PointLightPosition/Color[7] (1, 2) are unused with Light
+		// Limit Fix.
+		constexpr std::pair<std::uint32_t, std::uint32_t> kLightingVSSized[] = { { 0, 12 }, { 1, 12 }, { 6, 12 } };
+		constexpr std::uint32_t kLightingVSScratch[] = { 16 };
+		constexpr std::pair<std::uint32_t, std::uint32_t> kLightingPSSized[] = { { 5, 12 }, { 1, 28 }, { 2, 28 } };
+		constexpr std::uint32_t kLightingPSScratch[] = { 1, 2 };
 	}
 
 	const StageLayout& LightingVSLayout()
 	{
-		// World, PreviousWorld and TextureProj are float3x4; Bones (skinned only) never needs real storage.
-		static const StageLayout layout = MakeLayout(kLightingVSVariables, { { 0, 12 }, { 1, 12 }, { 6, 12 } }, { 16 });
+		static const StageLayout layout = MakeStageLayout(kLightingVSVariables, kLightingVSSized, kLightingVSScratch);
 		return layout;
 	}
 
 	const StageLayout& LightingPSLayout()
 	{
-		// DirectionalAmbient is float3x4; PointLightPosition/Color[7] (1, 2) are unused with Light Limit Fix.
-		static const StageLayout layout = MakeLayout(kLightingPSVariables, { { 5, 12 }, { 1, 28 }, { 2, 28 } }, { 1, 2 });
+		static const StageLayout layout = MakeStageLayout(kLightingPSVariables, kLightingPSSized, kLightingPSScratch);
 		return layout;
 	}
 
 	const StageLayout& EffectVSLayout()
 	{
-		// World, PreviousWorld and MatProj are float3x4 (MatProj a float4[3]); Bones (skinned only) never needs real storage.
-		static const StageLayout layout = MakeLayout(kEffectVSVariables, { { kEffectVSWorld, 12 }, { kEffectVSPreviousWorld, 12 }, { kEffectVSMatProj, 12 } }, { kEffectVSBones });
+		static const StageLayout layout = MakeStageLayout(kEffectVSVariables, kEffectVSSized, kEffectVSScratch);
 		return layout;
 	}
 
 	const StageLayout& EffectPSLayout()
 	{
-		static const StageLayout layout = MakeLayout(kEffectPSVariables, {}, {});
+		static const StageLayout layout = MakeStageLayout(kEffectPSVariables, {}, {});
 		return layout;
+	}
+
+	const Api::MaterialPortContribution& Extensions::CoreLightingPort()
+	{
+		// Kind 0: BSLightingShader's space (LightingVSLayout's rows, the groups of LightingConstants.h, ShaderCache's names: DrawPipelines'
+		// own) and the rules Core's Lighting paths take: pass enum + 0x4800002D, the Deferred pixel bit, ProjectedUV, TexcoordOffset (VS 11)
+		// from the frame, technique rows, its own permutation and signature.
+		static const Api::MaterialPortContribution lighting{
+			.shaderType = static_cast<std::uint8_t>(RE::BSShader::Type::Lighting),
+			.vs = { .variables = kLightingVSVariables, .sized = kLightingVSSized, .scratch = kLightingVSScratch, .groups = { kVSGroups[0], kVSGroups[1], kVSGroups[2] },
+				.first = { kVSFirstVariable[0], kVSFirstVariable[1], kVSFirstVariable[2] } },
+			.ps = { .variables = kLightingPSVariables, .sized = kLightingPSSized, .scratch = kLightingPSScratch, .groups = { kPSGroups[0], kPSGroups[1], kPSGroups[2] },
+				.first = { kPSFirstVariable[0], kPSFirstVariable[1], kPSFirstVariable[2] } },
+			.rules = { .passEnumBase = 0x4800002Du, .deferredPixelBit = kLightingPixelDeferred, .projectedPassBit = kPassProjectedUV, .frameVSVariable = 11 },
+		};
+		return lighting;
 	}
 
 	void ConstantBlock::Reset()
@@ -143,11 +143,9 @@ namespace DCLF
 	void EvaluateTechnique(std::uint32_t a_passDescriptor, const TechniqueInputs& a_inputs, TechniqueConstants& a_out)
 	{
 		// Lighting variable indices (ShaderConstants::LightingVS / LightingPS).
-		constexpr std::uint32_t kVSHighDetailRange = 12;
 		constexpr std::uint32_t kVSFogParam = 13;
 		constexpr std::uint32_t kVSFogNearColor = 14;
 		constexpr std::uint32_t kVSFogFarColor = 15;
-		constexpr std::uint32_t kPSFogColor = 19;
 		constexpr std::uint32_t kPSColourOutputClamp = 20;
 		constexpr auto kAnisotropic = static_cast<std::uint32_t>(RE::BSGraphics::TextureFilterMode::kAnisotropic);
 

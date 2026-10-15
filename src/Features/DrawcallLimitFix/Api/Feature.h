@@ -101,6 +101,12 @@ namespace DCLF::Api
 		 * or a rule without rows or units (minUnits past maxUnits; maxUnits not a power of two for a pow2 rule).
 		 */
 		virtual void RegisterPaletteRows(const PaletteRowsContribution& a_rows) = 0;
+		/**
+		 * @brief Fails the install for a shader type another port has (Core's built-ins are in first) or Lighting's, a class with no
+		 * registered toggle, no property RTTI, material vtable, capture, derive, evaluate or shading, more than 64 variables a stage, or
+		 * names not one a variable, or one port past Extensions::kMaterialKinds.
+		 */
+		virtual void RegisterMaterialPort(const MaterialPortContribution& a_port) = 0;
 
 	protected:
 		~InstallContext() = default;

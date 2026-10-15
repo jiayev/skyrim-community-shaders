@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 
@@ -54,23 +55,14 @@ namespace DCLF
 	inline constexpr std::uint32_t kConstantBlockFloats = 256 + 4;
 
 	/**
-	 * @brief Where each Lighting variable lives in a ConstantBlock (in floats) and how many floats it has.
-	 * Matrices take 12, the per-geometry point light arrays share a scratch region, the rest 4.
+	 * @brief Where each Lighting variable lives in a ConstantBlock (StageLayout, Core/Extensions/MaterialPorts.h): the per-geometry point
+	 * light arrays share the scratch region. Kind 0's space (Extensions::MaterialSpaceOf), built from the same rows (CoreLightingPort).
 	 */
-	struct StageLayout
-	{
-		std::uint32_t count;
-		std::array<std::uint8_t, 64> offset;
-		std::array<std::uint8_t, 64> size;
-	};
 	const StageLayout& LightingVSLayout();
 	const StageLayout& LightingPSLayout();
-	/** @brief The same for the Effect shader's variables (EffectConstants.h): an effect MaterialRecord's blocks. */
+	/** @brief The same for the Effect shader's variables (EffectConstants.h): an effect MaterialRecord's blocks (the Effect port's space). */
 	const StageLayout& EffectVSLayout();
 	const StageLayout& EffectPSLayout();
-	/** @brief A record's layouts by its kind (MaterialRecord::kind: kMaterialKindLighting or kMaterialKindEffect). */
-	inline const StageLayout& MaterialVSLayout(std::uint8_t a_kind) { return a_kind == kMaterialKindEffect ? EffectVSLayout() : LightingVSLayout(); }
-	inline const StageLayout& MaterialPSLayout(std::uint8_t a_kind) { return a_kind == kMaterialKindEffect ? EffectPSLayout() : LightingPSLayout(); }
 
 	/** @brief One constant group's values in StageLayout order; unwritten components hold kUnwrittenBits. */
 	struct ConstantBlock
