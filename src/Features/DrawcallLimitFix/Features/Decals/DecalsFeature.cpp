@@ -10,11 +10,12 @@ namespace DCLF::Features::Decals
 	{
 		void Install(Api::InstallContext& a_context)
 		{
-			// Where Core's were listed: after the actors' (and Features/TreeWind's, which registers before this feature).
+			// Where Core's were listed: after the skin partitions' (and Features/Actors' and Features/TreeWind's, which register before this
+			// feature).
 			const auto decalsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_DECALS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "0: decals stay native (live toggle's seed)", .after = "CS_DCLF_ACTORS" });
+				.description = "0: decals stay native (live toggle's seed)", .after = "CS_DCLF_SKIN_PARTITIONS" });
 			const auto layersSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LAYERS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "0: multi-index shapes' main passes stay native (live toggle's seed)", .after = "CS_DCLF_ACTORS" });
+				.description = "0: multi-index shapes' main passes stay native (live toggle's seed)", .after = "CS_DCLF_SKIN_PARTITIONS" });
 			// Decals (accumulation hints 2 and 3), drawn by the second pass: an object class. After the skinned (and the trees, registered
 			// before), the layers after it.
 			const auto decals = a_context.RegisterToggle({ .name = "decals", .label = "Decals (CS_DCLF_DECALS)", .seed = decalsSwitch,

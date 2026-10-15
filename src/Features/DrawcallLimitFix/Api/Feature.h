@@ -40,7 +40,10 @@ namespace DCLF::Api
 		/** @brief Fails the install for a register Core or another binding has, or past Extensions::kFrameBindingSlots bindings. */
 		virtual void RegisterFrameBinding(const FrameBinding& a_binding) = 0;
 		virtual SwitchId RegisterSwitch(const FeatureSwitch& a_switch) = 0;
-		/** @brief Fails the install past the toggle word's bits, for a toggle after one Core does not have, or needing one not listed before it. */
+		/**
+		 * @brief Fails the install past the toggle word's bits, for a toggle after one Core does not have, needing one not listed before
+		 * it, or needed by one Core does not list after it (or whose two needs are taken).
+		 */
 		virtual ToggleId RegisterToggle(const FeatureToggle& a_toggle) = 0;
 		virtual void RegisterReportLines(const ReportLines& a_lines) = 0;
 		/** @brief Whether the primary cull is installed: false, and the observer is never called, without it (its engine hooks failed). */

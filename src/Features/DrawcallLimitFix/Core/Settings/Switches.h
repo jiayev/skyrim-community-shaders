@@ -25,7 +25,6 @@ namespace DCLF
 		Cull,
 		Skinned,
 		SkinPartitions,
-		Actors,
 		MtLand,
 		TbTerrain,
 		Forward,

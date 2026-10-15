@@ -12,11 +12,12 @@ namespace DCLF::Features::TreeWind
 	{
 		Api::SwitchId listAllSwitch;  // install
 
-		// The trees' switches and live toggle, where Core's were listed (after the actors' and the primary exclusion's): the toggle.
+		// The trees' switches and live toggle, where Core's were listed (after the skin partitions' behind Features/Actors', which registers
+		// before this feature, and the primary exclusion's): the toggle.
 		Api::ToggleId RegisterSettings(Api::InstallContext& a_context)
 		{
 			const auto trees = a_context.RegisterSwitch({ .name = "CS_DCLF_TREES", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "0: trees stay native (live toggle's seed)", .after = "CS_DCLF_ACTORS" });
+				.description = "0: trees stay native (live toggle's seed)", .after = "CS_DCLF_SKIN_PARTITIONS" });
 			listAllSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_TREE_LIST_ALL", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::Never,
 				.description = "1 (T7f; off by default): the tree manager's list loop given DCLF's verdict for every BSTreeNode DCLF lists; off: the stood-in trees alone (T7b5's fix)",
 				.after = "CS_DCLF_PRIMARY_EXCLUDE" });

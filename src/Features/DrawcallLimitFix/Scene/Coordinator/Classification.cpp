@@ -1147,8 +1147,9 @@ namespace DCLF::Scene
 		if (ordered && orderedLeaf())
 			return Ineligible::UnsupportedParent;
 
-		// Hidden anywhere up to the category node; part of an actor; under a switch not drawing this branch.
-		const bool actors = ActiveToggles().actors;
+		// Hidden anywhere up to the category node; part of an actor; under a switch not drawing this branch. The leaves under an actor
+		// are the parent contribution's (Features/Actors: CS_DCLF_ACTORS and its toggle).
+		const bool actors = Extensions::ParentAdmits(ActiveToggles(), Api::EngineParent::Actor, Api::ParentLeaves::AllLeaves);
 		const void* child = nullptr;
 		const void* key = a_tracked.geometry.get();
 		std::uint32_t depth = 0;

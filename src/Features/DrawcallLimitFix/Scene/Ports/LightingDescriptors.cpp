@@ -54,13 +54,6 @@ namespace DCLF
 			// projected textures replace the slot-10 texture SetupTechnique binds.
 			case Technique::MultiIndexSparkle:
 				return Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Layer);
-			// Actor skin (SKIN path, TintColor), faces (Facegen: tint and detail maps at t3/t4), hair (TintColor) and eyes (eye
-			// centres, material VS constants): all written by SetupMaterial. A face part's positions are its head's snapshots' (Features/Faces).
-			case Technique::FacegenRGBTint:
-			case Technique::Facegen:
-			case Technique::Hair:
-			case Technique::Eye:
-				return ActiveToggles().actors;
 			case Technique::MTLand:
 			case Technique::MTLandLODBlend:
 				return MtLandEnabled();
@@ -72,6 +65,7 @@ namespace DCLF
 			case Technique::LODLand:
 			case Technique::LODLandNoise:
 				return ActiveToggles().lodTerrain;
+			// The features' (Features/Actors: actor skin, faces, hair and eyes; Features/TreeWind: TreeAnim).
 			default:
 				return ContributedTechniqueOn(a_technique);
 			}

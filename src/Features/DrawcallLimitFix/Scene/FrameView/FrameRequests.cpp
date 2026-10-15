@@ -28,7 +28,7 @@ namespace DCLF::Scene
 	namespace
 	{
 		// Cell 3D category nodes DCLF draws from (engine notes: cell 3D category nodes). The Actor node holds an exterior's actors
-		// (an interior moves them into its rooms); walked whatever CS_DCLF_ACTORS says, since that toggle is ClassifyFrame's and live.
+		// (an interior moves them into its rooms); walked whatever the actors' toggle says (Features/Actors), since its parent contribution is ClassifyFrame's and live.
 		constexpr std::array<std::uint32_t, 4> kDrawnCategories{ 0 /*Actor*/, 3 /*Static*/, 4 /*Dynamic*/, 5 /*MultiBound*/ };
 
 		/**
