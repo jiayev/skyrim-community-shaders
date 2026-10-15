@@ -15,6 +15,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
@@ -143,7 +144,7 @@ namespace DCLF
 	bool PrimaryCull::FreshSyntheticPass(const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out)
 	{
 		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
-		if (const auto* effect = lighting ? nullptr : SceneCapture::LeafView::Effect(a_leaf.property); effect && ActiveToggles().effects) {
+		if (const auto* effect = lighting ? nullptr : SceneCapture::LeafView::Effect(a_leaf.property); effect && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect)) {
 			if (!EffectMembershipPass(a_leaf, *effect, a_out, nullptr))
 				return false;
 			a_out.resident = true;
@@ -207,7 +208,7 @@ namespace DCLF
 		answer.derived = a_cached;
 		answer.fail = 2;  // not lighting (SyntheticPass's index)
 		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
-		if (const auto* effect = lighting ? nullptr : SceneCapture::LeafView::Effect(a_leaf.property); effect && ActiveToggles().effects) {
+		if (const auto* effect = lighting ? nullptr : SceneCapture::LeafView::Effect(a_leaf.property); effect && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect)) {
 			std::uint32_t derived = kNotDerived;
 			answer.ok = EffectMembershipPass(a_leaf, *effect, answer.pass, &derived);
 			answer.derived = { effect->key, effect->material, effect->flags, 0, derived };

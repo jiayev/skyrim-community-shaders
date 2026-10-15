@@ -28,7 +28,6 @@ namespace DCLF
 		MtLand,
 		TbTerrain,
 		Forward,
-		Effects,
 		Refraction,
 		ProjectedUv,
 		LodGates,
@@ -36,7 +35,6 @@ namespace DCLF
 		SunSkip,
 		SunExclude,
 		PrimaryExclude,
-		OpaqueEffects,
 		EmptyFadeNode,
 		OrgEpochs,
 		OrgAsyncEpochs,
@@ -115,9 +113,15 @@ namespace DCLF
 
 	/**
 	 * @brief Main thread, at install (Extensions::InstallFeatures, for a_feature): a feature's switch, read now, as Core's were. Fails
-	 * the install for a name Core or another feature has, an after or a before naming no Core switch, or both.
+	 * the install for a name Core or another feature has, or both an after and a before. Its after or before names a Core switch or a
+	 * feature's (registered before it or after), which CheckSwitchAnchors checks once every feature registered.
 	 */
 	Api::SwitchId RegisterSwitch(const Api::FeatureSwitch& a_switch, std::string_view a_feature);
+	/**
+	 * @brief Main thread, at the end of the features' install (Extensions::InstallFeatures): fails the install for a feature's switch
+	 * whose after or before names no switch, Core's or a feature's, or whose anchors loop back to it (it would be listed nowhere).
+	 */
+	void CheckSwitchAnchors();
 	/** @brief A feature's switch's value (empty: unset, or no such switch); any thread after its registration. */
 	const std::string& SwitchValue(Api::SwitchId a_switch);
 	/** @brief Whether a feature's switch is set to "1". */

@@ -22,9 +22,7 @@ namespace DCLF
 			{ &S::forward, Switch::Forward, kOn, "forward", {}, "Blended objects: the forward epoch (CS_DCLF_FORWARD)",
 				"T7d: DCLF draws blended Lighting geometry itself, sorted back to front on the GPU, just before the engine's own blended draws (effects, particles). On by default (validated w174/w175).",
 				true, {} },
-			{ &S::effects, Switch::Effects, kOn, "effects", {}, "Effect meshes: clouds, glows, mist (CS_DCLF_EFFECTS)",
-				"T7d: DCLF draws blended effect-shader meshes in the forward epoch, sorted with the blended Lighting objects, and (with Decals) effect decals in its decal groups, skinned ones (with Skinned) through the skin palette. On by default (validated w174/w175; decals and skinned effects not yet).",
-				true, { &S::forward } },
+			// (Features/Effects' "effects" follows the forward epoch's here.)
 			{ &S::refraction, Switch::Refraction, kOn, "refraction", {}, "Refraction: heat haze, invisibility (CS_DCLF_REFRACTION)",
 				"T7d: DCLF draws refraction geometry's normals into the refraction normals the engine's refraction effect warps the frame by, in the forward epoch. On by default (validated w174/w175).",
 				true, { &S::forward } },

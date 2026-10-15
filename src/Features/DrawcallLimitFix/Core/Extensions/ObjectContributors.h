@@ -97,6 +97,15 @@ namespace DCLF::Extensions
 	}
 
 	/**
+	 * @brief Whether a feature took a_class at install, whatever its toggle: a class whose registration stands for a load-time switch, read
+	 * on a path its own toggle's class already gates (ObjectClass::OpaqueEffect, inside the Effect port).
+	 */
+	inline bool ObjectClassTaken(Api::ObjectClass a_class)
+	{
+		return static_cast<bool>(RegisteredObjectClasses()[static_cast<std::size_t>(a_class)]);
+	}
+
+	/**
 	 * @brief The shading sample (SampleShading): every shading contribution whose property flags a_property has, in registration order,
 	 * deriving a_out (left as it is by none).
 	 */

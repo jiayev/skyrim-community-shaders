@@ -83,7 +83,7 @@ namespace DCLF::RegistrationCensus
 		// for the geometry yet); any other shader's its type and the geometry's RTTI (static data).
 		constexpr std::uint64_t kLightingKey = 1ull << 63;
 		constexpr std::uint64_t kApproximateKey = 1ull << 62;
-		// An effect geometry classified as a Lighting one (CS_DCLF_EFFECTS on): its classes are named "effect: ...".
+		// An effect geometry classified as a Lighting one (Api::ObjectClass::Effect on): its classes are named "effect: ...".
 		constexpr std::uint64_t kEffectKey = 1ull << 61;
 		constexpr std::uint64_t kRttiMask = (1ull << 48) - 1;
 
@@ -403,9 +403,9 @@ namespace DCLF::RegistrationCensus
 			const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
 			// A Lighting geometry is DCLF's to classify whichever shader its pass has (the shadow views' passes are Utility's).
 			const bool lighting = property && netimmerse_cast<RE::BSLightingShaderProperty*>(const_cast<RE::BSShaderProperty*>(property));
-			// With CS_DCLF_EFFECTS an effect geometry is DCLF's to classify too (its verdict: a member, effect-opaque, ...).
+			// With the effects (Api::ObjectClass::Effect) an effect geometry is DCLF's to classify too (its verdict: a member, effect-opaque, ...).
 			static const REL::Relocation<const RE::NiRTTI*> effectRtti{ RE::BSEffectShaderProperty::Ni_RTTI };
-			const bool effect = !lighting && property && ActiveToggles().effects && property->GetRTTI() == effectRtti.get();
+			const bool effect = !lighting && property && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect) && property->GetRTTI() == effectRtti.get();
 			if (lighting || effect) {
 				std::uint64_t cls;
 				if (const auto phase = WithheldPhase(a_noted, view, a_frame); phase && (a_frame.set->PhasesOf(geometry) & phase)) {

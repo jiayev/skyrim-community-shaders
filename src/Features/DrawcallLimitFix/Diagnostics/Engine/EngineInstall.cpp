@@ -40,7 +40,8 @@ namespace DCLF::Diagnostics
 		}
 		if (o.scene)
 			SunCasters::Install();
-		// CS_DCLF_SET_PARITY: the members' withheld forward, refraction and Effect Lighting passes (the particle members' are their feature's).
+		// CS_DCLF_SET_PARITY: the members' withheld forward and refraction passes (the particle members' and the Effect Lighting ones are their
+		// features').
 		if (o.claims)
 			Registrations::Install();
 	}

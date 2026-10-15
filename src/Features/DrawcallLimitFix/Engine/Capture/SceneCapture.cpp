@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
@@ -642,7 +643,7 @@ namespace DCLF::SceneCapture
 		// A Lighting (or an effect) property's material, for the scene work's records (the property holds it here): an attach's or a swap's
 		// (a_pins). A material shared by several leaves is pushed by each; the scene work keeps the newest.
 		auto pushMaterial = [&](const PropertyRecord& a_property) {
-			if (a_pins && (a_property.lighting || (a_property.effect && ActiveToggles().effects)) && a_property.material)
+			if (a_pins && (a_property.lighting || (a_property.effect && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect))) && a_property.material)
 				MaterialPort::PushCapture(static_cast<const RE::BSShaderMaterial*>(a_property.material));
 		};
 		if (g.property) {
