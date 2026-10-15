@@ -8,6 +8,7 @@
 #include "Deferred.h"
 #include "EngineFixes/LODBlendRingFix.h"
 #include "EngineFixes/LandscapeSeamsFix.h"
+#include "EngineFixes/SunShadowMaskFix.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
@@ -287,6 +288,7 @@ void State::Reset()
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	LandscapeSeamsFix::GetInstance().Reset();
 	LODBlendRingFix::GetInstance().Update();
+	SunShadowMaskFix::Update();
 
 	// Cache menu open states once per frame to avoid repeated IsMenuOpen calls
 	// (each call constructs a BSFixedString, which is expensive at scale).
