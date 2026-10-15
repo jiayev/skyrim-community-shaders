@@ -119,8 +119,15 @@ namespace DCLF::Extensions
 		Api::ChannelKind kind = Api::ChannelKind::Keys;
 		Api::ChannelApply apply = Api::ChannelApply::AfterSwitches;
 		Api::ChannelLoading loading = Api::ChannelLoading::KeepKeys;
+		Api::WakeSource wake = Api::WakeSource::None;
 		bool namesKeys = false;
 		decltype(Api::EngineChannel::drain) drain = nullptr;
+	};
+	/** @brief A registered adoption guard. */
+	struct AdoptionGuardEntry
+	{
+		std::string name;
+		decltype(Api::AdoptionGuard::generation) generation = nullptr;
 	};
 
 	/** @brief A registered table family. */
@@ -147,6 +154,8 @@ namespace DCLF::Extensions
 		Api::CoordinatorComponent::Retirement retirement;
 		Api::CoordinatorComponent::EntryClassHooks entryClass;
 		Api::CoordinatorComponent::Events events;
+		Api::CoordinatorComponent::Commit commit;
+		Api::CoordinatorComponent::Adoption adoption;
 	};
 	/** @brief A registered shading contribution. */
 	struct ShadingContributionEntry
@@ -179,8 +188,26 @@ namespace DCLF::Extensions
 	std::span<const ReportLinesEntry> RegisteredReportLines();
 	std::span<const Api::StandInObserver> RegisteredStandInObservers();
 	std::span<const EngineChannelEntry> RegisteredEngineChannels();
+	std::span<const AdoptionGuardEntry> RegisteredAdoptionGuards();
+	/**
+	 * @brief The show veto's cells, at a fixed address for the session (the stubs load them): the registered veto's, else open a zero
+	 * word and vetoes a function answering false (engineHid null, no hide sites). Whether one is registered: ShowVetoRegistered.
+	 */
+	const Api::ShowVeto& RegisteredShowVeto();
+	bool ShowVetoRegistered();
+	/** @brief The hidden sites reserved (InstallContext::ReserveHiddenSite): from HiddenSourceSites(), this many. */
+	std::uint32_t ReservedHiddenSites();
 	std::span<const TableFamilyEntry> RegisteredTableFamilies();
 	std::span<const CoordinatorComponentEntry> RegisteredCoordinatorComponents();
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions();
 	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals();
+}
+
+namespace DCLF::Scene
+{
+	/**
+	 * @brief Core's built-in registrations of the scene's gates (Scene/Coordinator/GateComponent.cpp), as Core: InstallFeatures, before
+	 * the features install.
+	 */
+	void RegisterCoreGates(Api::InstallContext& a_context);
 }

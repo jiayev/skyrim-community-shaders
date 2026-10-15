@@ -177,6 +177,14 @@ Under motion it reproduces every time (`verify.sh mpp`: `CS_DCLF_TEST_MOVE` with
 appeared in 3 windows (root 4466 again), and with the gate parity build in 9 windows, where the first was root 3953 (`set
 (reference's alone)`). Both builds leave this path unchanged. The motion run is the reproduction to use when it is investigated.
 
+## LOD gates: an intermittent flipped incoming geometry missing from its flip's publication (found 2026-10-15; not investigated)
+
+In one of four `verify.sh msp` runs (`CS_DCLF_TEST_MOVE` with `CS_DCLF_SET_PARITY`; the B2 b0 build, whose changes are inert),
+`TakeDeltas`' check reported `1 flipped incoming geometries not claimed by the flip's own publication, first gate 171: geometry ...
+claimed 0x0, flipped 0x21 <- GATE HOLE (publication)`. If real, the incoming block is not drawn for the frames that install that
+publication, while the outgoing one is already hidden. No earlier log shows it, but moving set-parity runs are new. The B2 gate
+rewrite runs `msp` at every sub-step, which shows if the rate changes.
+
 ## Portal parity: one unbound-space occluder mismatch under motion (found 2026-10-15; not investigated)
 
 In one `verify.sh mpp` run (the B2 gate parity build), one window reported `<- PORTAL VIEW; first: unbound space: 4 ops 1 sets, the

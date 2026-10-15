@@ -4,7 +4,8 @@
 // coordinator beside its residents, and the hooks the coordinator calls at its points - what a feature lists for the scene's members (its
 // table family's rows, the engine nodes it owns, the seeds it asks the frame for) follows the members. The hooks come in sets, one per
 // concern of the coordinator's: residency, the accumulate phase, the walk, the walk parity's dense walk, retirement, the writes of the
-// entry class the component follows (Api::EntryClass, Api/ObjectContributors.h), and the engine channels' events (Api/EngineEvents.h).
+// entry class the component follows (Api::EntryClass, Api/ObjectContributors.h), the engine channels' events (Api/EngineEvents.h), the
+// commit and publication, and the frame's adoption.
 
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
@@ -32,10 +33,70 @@ namespace DCLF::Api
 	};
 
 	/**
+	 * @brief A mark on a scene root (CoordinatorComponentContext::MarkRoot): the component that marked it, its token and its side, which
+	 * the coordinator reads as data for the entries under the root (CoordinatorComponent::Events::underMark) and erases with the root's
+	 * detach (detached). No component: no mark.
+	 */
+	struct Mark
+	{
+		CoordinatorComponentId component;
+		std::uint64_t token = 0;
+		std::uint8_t side = 0;
+		explicit operator bool() const { return static_cast<bool>(component); }
+	};
+
+	/**
+	 * @brief An entry's veto (CoordinatorComponentContext::SetEntryVeto; one byte, so Hold and Observe exclude each other): the commit
+	 * withholds the entry's slots. Hold: applied as no phases. Observe: withheld, and what the commit would have applied is recorded
+	 * (CoordinatorComponentContext::ObservedSlot). 0: none.
+	 */
+	inline constexpr std::uint8_t kVetoHold = 1, kVetoObserve = 2;
+
+	/**
+	 * @brief What CoordinatorComponentContext::Requeue does with an entry: its slots committed again at the next commit (Slots); its
+	 * verdict taken again when it was classified (Reevaluate), or whatever it was (ReevaluateAlways).
+	 */
+	inline constexpr std::uint8_t kRequeueSlots = 1, kRequeueReevaluate = 2, kRequeueReevaluateAlways = 4;
+
+	/** @brief A tracked entry's state as the coordinator keeps it (CoordinatorComponentContext::TrackedStateOf; tracked false: none). */
+	struct TrackedState
+	{
+		bool tracked = false;
+		bool classified = false;   // a pass took its verdict (and it has not been asked again)
+		bool leafWaiting = false;  // written while the mirror held no record of it
+		std::uint32_t slot = ~0u, layerSlot = ~0u;  // its object slots (~0u: none)
+		std::uint8_t reason = 0;     // its candidate verdict (Ineligible)
+		std::uint8_t veto = 0;       // kVetoHold, kVetoObserve or 0
+		std::uint8_t waitCause = 0;  // its slot's: what the commit's wait waits on (0: not waiting)
+		std::uint8_t waitWhy = 0;    // its slot's first reason of its last wait
+		bool resident = false;       // its slot resident
+	};
+
+	/** @brief What the commit recorded of an observed slot (CoordinatorComponentContext::ObservedSlot): its entry, phases, readiness. */
+	struct ObservedState
+	{
+		const void* geometry = nullptr;  // the entry the commit last evaluated the slot for (null: none since the Observe)
+		std::uint8_t phases = 0;
+		bool ready = false;  // all its phases, not waiting
+	};
+
+	/**
+	 * @brief What the adoption hook is handed (render thread, the frame's start, after the frame's claims are installed or withdrawn):
+	 * the frame, the claims it installed (the installed publication's set snapshot; null when withdrawn), and the component's deltas
+	 * (CoordinatorComponentContext::PublishDelta) of the publications installed since the last call, oldest first.
+	 */
+	struct AdoptionContext
+	{
+		std::uint32_t frame = 0;
+		const void* claims = nullptr;
+		std::span<const std::shared_ptr<const void>> deltas;
+	};
+
+	/**
 	 * @brief A coordinator component: its name, its state, and its hook sets (each below, documented once).
 	 *
 	 * What every hook shares:
-	 * - Thread: the scene lane, inside a pass.
+	 * - Thread: the scene lane, inside a pass (Adoption's: the render thread).
 	 * - Context: CoordinatorComponentContext (Core/Extensions/CoordinatorComponents.h): the coordinator's live tables, the component's
 	 *   state, and the few coordinator services a residency change or a walk's phase needs, never the coordinator itself.
 	 * - Order: every registered component's hook in registration order, at exactly the place the coordinator's own work runs there.
@@ -161,10 +222,47 @@ namespace DCLF::Api
 		 * - keys: a pass applies a_channel's keys at the channel's point (ChannelApply), the channels at a point in registration order:
 		 *   the keys its queue held at the pass's drain, oldest first (possibly none: called every pass that applies a batch, a load
 		 *   screen's empty one too). The keys are never dereferenced: an entry the coordinator tracks is the only one known alive.
+		 * - stacked: a pass applies a SceneStack channel's event (Api::Stacked) in stack order, among the attaches and detaches.
+		 * - detached: a root the component marked (or a node under a detached root) is detached: its mark is erased (a_mark, as it was)
+		 *   before the call. The marking component's alone.
+		 * - rescan: the rescan after a load: the tracked set is walked again from nothing.
+		 * - underMark: a newly tracked entry (a_geometry) is under a root marked a_mark (the nearest on its chain). The marking
+		 *   component's alone; per added entry, never per frame.
 		 */
 		struct Events
 		{
 			void (*keys)(const CoordinatorComponentContext& a_context, EngineChannelId a_channel, std::span<const void* const> a_keys) = nullptr;
+			void (*stacked)(const CoordinatorComponentContext& a_context, EngineChannelId a_channel, const Stacked& a_event) = nullptr;
+			void (*detached)(const CoordinatorComponentContext& a_context, const void* a_key, const Mark& a_mark) = nullptr;
+			void (*rescan)(const CoordinatorComponentContext& a_context) = nullptr;
+			void (*underMark)(const CoordinatorComponentContext& a_context, const void* a_geometry, const Mark& a_mark) = nullptr;
+		};
+
+		/**
+		 * @brief The commit (SceneSet.cpp) and the publication.
+		 *
+		 * - settle: the commit, after its slots are decided and before the set's change is noted and the claims are snapshotted: vetoes
+		 *   changed here apply in the same commit (an Observe dropped applies the observed phases where the observed entry matches; Hold
+		 *   applies none). a_live: whether the commit runs live (any component live, CoordinatorComponentContext::SetCommitLive, or any
+		 *   entry vetoed).
+		 * - take: the pass, before its events are collected: what the component's own queues hold, taken (applied after the batch, by an
+		 *   AfterBatch channel's keys hook).
+		 * - published: the publication's deltas are taken (its PublishDelta payloads among them).
+		 */
+		struct Commit
+		{
+			void (*settle)(const CoordinatorComponentContext& a_context, bool a_live) = nullptr;
+			void (*take)(const CoordinatorComponentContext& a_context) = nullptr;
+			void (*published)(const CoordinatorComponentContext& a_context) = nullptr;
+		};
+
+		/**
+		 * @brief The adoption (render thread, the frame's start: AdoptionContext), every frame. Called with no coordinator context: what it
+		 * keeps is the component's own render-thread state.
+		 */
+		struct Adoption
+		{
+			void (*adopt)(const AdoptionContext& a_context) = nullptr;
 		};
 
 		std::string_view name;
@@ -176,5 +274,7 @@ namespace DCLF::Api
 		Retirement retirement;
 		EntryClassHooks entryClass;
 		Events events;
+		Commit commit;
+		Adoption adoption;
 	};
 }

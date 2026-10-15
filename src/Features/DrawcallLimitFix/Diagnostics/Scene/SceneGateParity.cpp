@@ -342,6 +342,7 @@ namespace DCLF::Diagnostics
 			auto& p = a_commit.parity;
 			++p.sweeps;
 			std::uint32_t heldOut = 0;
+			std::vector<std::pair<std::uint64_t, const void*>> unmarkedOutgoing;
 			for (const auto& [geometry, entry] : V::tracked(store)) {
 				++p.entries;
 				bool covered = false;
@@ -373,12 +374,28 @@ namespace DCLF::Diagnostics
 					continue;
 				const std::uint64_t token = above ? above->token : 0;
 				const std::uint8_t side = above ? above->side : 0;
+				if (!above && entry.gate && entry.gateSide == V::kGateOutgoing) {
+					// An outgoing tag under no gate root: the root detached (or a held block reattached) ahead of its entries' erasure or
+					// the kept notice, which untag them. Flagged only when still so at the next sweep.
+					++p.unmarked;
+					unmarkedOutgoing.emplace_back(entry.gate, geometry);
+					if (std::ranges::find(p.unmarkedOutgoing, unmarkedOutgoing.back()) != p.unmarkedOutgoing.end())
+						Differ(p, [&] {
+							const auto gate = lodGates.find(entry.gate);
+							return fmt::format("marks: geometry {} tagged gate {} (outgoing) under no gate root at two sweeps; gate {}, {} outgoing roots left, {}held out",
+								static_cast<const void*>(geometry), entry.gate,
+								gate == lodGates.end() ? "retired" : gate->second.state == V::LodGate::State::Open ? "open" : "flipped",
+								gate == lodGates.end() ? 0 : gate->second.outgoing.size(), entry.gateHeldOut ? "" : "not ");
+						});
+					continue;
+				}
 				if (token != entry.gate || side != entry.gateSide)
 					Differ(p, [&] {
 						return fmt::format("marks: geometry {} tagged gate {} ({}), its mirror chain's nearest root is gate {} ({})", static_cast<const void*>(geometry), entry.gate,
 							SideName(entry.gateSide), token, SideName(side));
 					});
 			}
+			p.unmarkedOutgoing = std::move(unmarkedOutgoing);
 			if (heldOut != V::gateHeldOutCount(store))
 				Differ(p, [&] { return fmt::format("tags: {} entries held out, {} counted", heldOut, V::gateHeldOutCount(store)); });
 			CheckVetoes(a_commit);

@@ -54,7 +54,7 @@ namespace DCLF::Api
 	 * - text: the same, at a point that composes its lines into the report's text (AsyncWorkViews, AsyncWorkForward, AsyncWork, AsyncWorkFamilies,
 	 *   SceneFrame, SceneCoordinatorSegments): appends them to a_text, each ending in a newline. One of the two, as the point asks.
 	 *   The SceneCoordinator points run on the scene lane, in the coordinator's report pass.
-	 * - componentText (with component): at SceneCoordinatorSegments, in text's place: the lines of a coordinator component's (what it
+	 * - componentText (with component): at SceneCoordinatorSegments or SceneCoordinatorGates, in text's (or lines') place: the lines of a coordinator component's (what it
 	 *   keeps, and what the coordinator keeps for it), handed the component's context. Registered after the component.
 	 */
 	struct ReportLines

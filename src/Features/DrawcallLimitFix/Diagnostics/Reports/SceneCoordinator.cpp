@@ -133,11 +133,13 @@ namespace DCLF::Reports
 				text += fmt::format("; {} flipped incoming geometries not claimed by the flip's own publication, first {} <- GATE HOLE (publication)", observed.publishHoles,
 					observed.firstPublishHole);
 			if (const auto& p = observed.parity; p.checks)
-				text += fmt::format("; parity {} checks, {} gates compared ({} full sweeps, {} entries), {} differ{}", p.checks, p.gates, p.sweeps, p.entries, p.differ,
+				text += fmt::format("; parity {} checks, {} gates compared ({} full sweeps, {} entries, {} outgoing tags under no root for a sweep), {} differ{}", p.checks, p.gates,
+					p.sweeps, p.entries, p.unmarked, p.differ,
 					p.differ ? " <- GATE PARITY; first: " + p.first : std::string(" <- OK"));
 			s = {};
 			// The parity's flip and shown roots stay: they are the next commit's and sweep's.
-			observed = { .parity = { .pass = observed.parity.pass, .lastFlip = observed.parity.lastFlip, .shown = std::move(observed.parity.shown) } };
+			observed = { .parity = { .pass = observed.parity.pass, .lastFlip = observed.parity.lastFlip, .shown = std::move(observed.parity.shown),
+				.unmarkedOutgoing = std::move(observed.parity.unmarkedOutgoing) } };
 			return text;
 		}
 
