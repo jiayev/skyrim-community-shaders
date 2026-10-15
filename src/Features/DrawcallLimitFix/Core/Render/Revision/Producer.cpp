@@ -192,10 +192,10 @@ namespace DCLF
 			handles.shadow = buffers.RegisterLatch("cs.dclf.shadow.latch", slots);
 			handles.shadowZeros = buffers.RegisterLatch("cs.dclf.shadow.zeros", 1);
 			handles.shadowLatched = buffers.RegisterLatch("cs.dclf.latched-copies", slots, latched);
-			for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson }) {
-				const std::size_t v = ViewIndex(kind);
-				handles.views[v] = buffers.RegisterLatch(fmt::format("{}.latch", TraitsOf(kind).prefix), slots);
-				handles.viewZeros[v] = buffers.RegisterLatch(fmt::format("{}.zeros", TraitsOf(kind).prefix), 1);
+			for (const auto& slot : kViewSlots) {
+				const std::size_t v = ViewIndex(slot.view);
+				handles.views[v] = buffers.RegisterLatch(fmt::format("{}.latch", TraitsOf(slot.view).prefix), slots);
+				handles.viewZeros[v] = buffers.RegisterLatch(fmt::format("{}.zeros", TraitsOf(slot.view).prefix), 1);
 			}
 		}
 		const bool smallTables = SwitchValue(Switch::TableStart) == "small";
@@ -211,9 +211,9 @@ namespace DCLF
 			latches.shadow = InitialShadowLatchLayout();
 			latches.shadowLaidOut = true;
 		}
-		for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson })
-			if (const std::size_t v = ViewIndex(kind); !latches.viewsLaidOut[v] && inputs.views[v].resources) {
-				latches.views[v] = ViewLatchLayout::Initial(TraitsOf(kind));
+		for (const auto& slot : kViewSlots)
+			if (const std::size_t v = ViewIndex(slot.view); !latches.viewsLaidOut[v] && inputs.views[v].resources) {
+				latches.views[v] = ViewLatchLayout::Initial(TraitsOf(slot.view));
 				latches.viewsLaidOut[v] = true;
 			}
 	}
@@ -370,12 +370,12 @@ namespace DCLF
 		// Z-prepass's (above).
 		a_make.treeLod = TreeLodPipelinesOf(a_make.catalog, inputs.targetsGeneration, a_make.treeLodPipelines);
 		auto& viewOn = a_make.viewOn;
-		for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson }) {
+		for (const auto& slot : kViewSlots) {
+			const auto kind = slot.view;
 			const std::size_t v = ViewIndex(kind);
 			const auto& traits = TraitsOf(kind);
 			const auto& view = inputs.views[v];
-			const bool toggle = kind == ViewKind::Reflection ? inputs.toggles.reflections : Extensions::ViewOn(inputs.toggles, Api::EngineView::FirstPerson);
-			viewOn[v] = view.targets.colour != DXGI_FORMAT_UNKNOWN && toggle && inputs.claims;
+			viewOn[v] = view.targets.colour != DXGI_FORMAT_UNKNOWN && Extensions::ViewOn(inputs.toggles, kind) && inputs.claims;
 			ViewPipelinesOf(kind, a_make.catalog, tables, view.targets, viewOn[v], viewRevisionPipelines[v]);
 			if (traits.forwardPart)
 				ViewForwardSlotsOf(tables, viewOn[v], viewForwardSlots);
@@ -546,9 +546,9 @@ namespace DCLF
 						shapes.Add(visible);
 			treeShapes = static_cast<std::uint32_t>(std::min<std::uint64_t>(shapes.Units(a_sealed), UINT32_MAX));
 		}
-		for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson }) {
-			const std::size_t v = ViewIndex(kind);
-			const auto& traits = TraitsOf(kind);
+		for (const auto& slot : kViewSlots) {
+			const std::size_t v = ViewIndex(slot.view);
+			const auto& traits = TraitsOf(slot.view);
 			const auto& view = inputs.views[v];
 			auto& shape = producer.made.views[v];
 			shape = nullptr;
@@ -581,28 +581,45 @@ namespace DCLF
 		}
 	}
 
+	namespace Draws
+	{
+		/** @brief RevisionShapesKey's hash: each value mixed into the current group's word. */
+		struct ShapesKeyMixer
+		{
+			ImplProducer::ShapesKey& key;
+			std::size_t group = 0;
+			void Mix(std::uint64_t a_value)
+			{
+				auto& h = key[group];
+				h = (h ^ a_value) * 0x100000001b3ull;
+				h ^= h >> 29;
+			}
+			void Ptr(const void* a_pointer) { Mix(reinterpret_cast<std::uintptr_t>(a_pointer)); }
+			template <class T>
+			void Raw(const T& a_value)
+			{
+				static_assert(std::is_trivially_copyable_v<T>);
+				std::array<std::byte, (sizeof(T) + 7) / 8 * 8> bytes{};
+				std::memcpy(bytes.data(), &a_value, sizeof(T));
+				for (std::size_t b = 0; b < bytes.size(); b += 8) {
+					std::uint64_t word;
+					std::memcpy(&word, bytes.data() + b, 8);
+					Mix(word);
+				}
+			}
+		};
+	}
+
 	IndirectDraws::Impl::ShapesKey IndirectDraws::Impl::RevisionShapesKey(const NamedVersions& a_sealed, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect,
 		const Lookups& a_lookups, std::size_t a_pipelines, const TreeLodPipelines* a_treeLod) const
 	{
 		ShapesKey key;
 		key.fill(0xcbf29ce484222325ull);
-		std::size_t group = 0;
-		auto mix = [&key, &group](std::uint64_t a_value) {
-			auto& h = key[group];
-			h = (h ^ a_value) * 0x100000001b3ull;
-			h ^= h >> 29;
-		};
-		auto ptr = [&mix](const void* a_pointer) { mix(reinterpret_cast<std::uintptr_t>(a_pointer)); };
-		auto raw = [&mix]<class T>(const T& a_value) {
-			static_assert(std::is_trivially_copyable_v<T>);
-			std::array<std::byte, (sizeof(T) + 7) / 8 * 8> bytes{};
-			std::memcpy(bytes.data(), &a_value, sizeof(T));
-			for (std::size_t b = 0; b < bytes.size(); b += 8) {
-				std::uint64_t word;
-				std::memcpy(&word, bytes.data() + b, 8);
-				mix(word);
-			}
-		};
+		ShapesKeyMixer mixer{ key };
+		auto& group = mixer.group;
+		auto mix = [&mixer](std::uint64_t a_value) { mixer.Mix(a_value); };
+		auto ptr = [&mixer](const void* a_pointer) { mixer.Ptr(a_pointer); };
+		auto raw = [&mixer]<class T>(const T& a_value) { mixer.Raw(a_value); };
 		// The revision's inputs (RevisionInputs) and latch layouts (the producer's): what its shapes are made from besides the request.
 		const auto& inputs = producer.inputs;
 		const auto& latches = producer.latches;
@@ -663,45 +680,61 @@ namespace DCLF
 		}
 		group = kKeyBound;
 		mix(shadowBoundOutgrown);
+		MixViewShapesKey(mixer, a_treeLod);
+		return key;
+	}
+
+	void IndirectDraws::Impl::MixViewShapesKey(ShapesKeyMixer& a_mixer, const TreeLodPipelines* a_treeLod) const
+	{
+		const auto& inputs = producer.inputs;
+		const auto& latches = producer.latches;
 		// The views': their resources, latch layouts, targets, render area and depth range, the slots' pipelines, first person's forward slots,
 		// the faces' tree LOD's (the request's catalog's).
-		for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson }) {
+		for (const auto& slot : kViewSlots) {
+			const auto kind = slot.view;
 			const std::size_t v = ViewIndex(kind);
-			group = kKeyReflection + v;
+			a_mixer.group = slot.keyGroup;
 			const auto& view = inputs.views[v];
 			if (!view.resources)
 				continue;
-			ptr(view.resources.get());
-			mix(latches.viewsLaidOut[v]);
-			raw(latches.views[v]);
-			raw(view.targets);
-			mix(view.width);
-			mix(view.height);
-			raw(view.depthRange);
+			a_mixer.Ptr(view.resources.get());
+			a_mixer.Mix(latches.viewsLaidOut[v]);
+			a_mixer.Raw(latches.views[v]);
+			a_mixer.Raw(view.targets);
+			a_mixer.Mix(view.width);
+			a_mixer.Mix(view.height);
+			a_mixer.Raw(view.depthRange);
 			for (const auto& pipeline : viewRevisionPipelines[v]) {
-				mix(pipeline.index);
-				mix(pipeline.generation);
+				a_mixer.Mix(pipeline.index);
+				a_mixer.Mix(pipeline.generation);
 			}
 			if (TraitsOf(kind).forwardPart)
 				for (const std::uint8_t forward : viewForwardSlots)
-					mix(forward);
+					a_mixer.Mix(forward);
 			if (TraitsOf(kind).trees) {
-				mix(viewRevisionTree.index);
-				mix(viewRevisionTree.generation);
+				a_mixer.Mix(viewRevisionTree.index);
+				a_mixer.Mix(viewRevisionTree.generation);
 			}
 		}
-		group = kKeyReflection;
-		if (const auto& sceneState = inputs.scene) {
-			if (a_treeLod) {
-				mix(a_treeLod->drawSignature.index);
-				mix(a_treeLod->drawSignature.generation);
+		// Tree LOD's, in the group of the view that draws it per face; each view whose shape is dropped while it is off, its toggle.
+		for (const auto& slot : kViewSlots) {
+			if (!TraitsOf(slot.view).trees)
+				continue;
+			a_mixer.group = slot.keyGroup;
+			if (const auto& sceneState = inputs.scene) {
+				if (a_treeLod) {
+					a_mixer.Mix(a_treeLod->drawSignature.index);
+					a_mixer.Mix(a_treeLod->drawSignature.generation);
+				}
+				a_mixer.Mix(a_treeLod ? 1u : 0u);
+				a_mixer.Mix(sceneState->treeLodCull ? 1u : 0u);
 			}
-			mix(a_treeLod ? 1u : 0u);
-			mix(sceneState->treeLodCull ? 1u : 0u);
 		}
-		group = kKeyFirstPerson;
-		mix(Extensions::ViewOn(inputs.toggles, Api::EngineView::FirstPerson));
-		return key;
+		for (const auto& slot : kViewSlots)
+			if (Extensions::Views().views[ViewIndex(slot.view)].life == Api::ViewShapeLife::DropWhenOff) {
+				a_mixer.group = slot.keyGroup;
+				a_mixer.Mix(Extensions::ViewOn(inputs.toggles, slot.view));
+			}
 	}
 
 	bool IndirectDraws::Impl::ShadowShapesHold(const ShadowBounds& a_bounds) const

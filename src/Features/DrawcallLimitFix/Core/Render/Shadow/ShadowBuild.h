@@ -31,18 +31,13 @@ namespace DCLF::Draws
 		return (a_tables.objects[a_object].flags & kObjectNoShadow) ? 0u : (a_tables.shadowTechnique[a_object] | ModeBitsOf(a_mode));
 	}
 
-	/** @brief The view types a set phase mask takes part in (kView*). */
+	/**
+	 * @brief The view types a set phase mask takes part in (kView*): Core's phases' (main, casters, occluders) and the views' (their
+	 * entries' phase and view bit), resolved once into a table by mask (Extensions::ViewSet::viewBitsOfPhases).
+	 */
 	inline std::uint32_t ViewBitsOf(std::uint8_t a_phases)
 	{
-		std::uint32_t bits = 0;
-		bits |= (a_phases & kSetMain) ? kViewMain : 0u;
-		bits |= (a_phases & kSetCaster) ? (kViewSunCaster | kViewSpotCaster) : 0u;
-		bits |= (a_phases & kSetCasterPoint) ? kViewPointCaster : 0u;
-		bits |= (a_phases & kSetOccluderSky) ? kViewSkyOccluder : 0u;
-		bits |= (a_phases & kSetOccluderPrecipitation) ? kViewPrecipOccluder : 0u;
-		bits |= (a_phases & kSetReflection) ? kViewReflection : 0u;
-		bits |= (a_phases & kSetFirstPerson) ? kViewFirstPerson : 0u;
-		return bits;
+		return Extensions::Views().viewBitsOfPhases[a_phases];
 	}
 	/**
 	 * @brief An input's view mask (DrawInput::ViewWords::mask): the view types of the object's applied phases (SceneTables::setPhases),
@@ -62,10 +57,12 @@ namespace DCLF::Draws
 	inline std::uint32_t MainMaskOf(const SceneTables& a_tables, std::size_t a_object)
 	{
 		const std::uint32_t flags = a_object < a_tables.objects.size() ? a_tables.objects[a_object].flags : 0u;
-		// A first-person member's is kViewFirstPerson alone: the first-person epochs' cull and draws, never a main candidate (the
-		// world's depth segment would draw a drawable input with kViewMainCull, and the HZB must leave the arms out).
-		if (a_object < a_tables.setPhases.size() && (a_tables.setPhases[a_object] & kSetFirstPerson))
-			return kViewFirstPerson;
+		// A CategoryRoot view's member's is its view bit alone (an exclusive phase): a first-person member's kViewFirstPerson, the
+		// first-person epochs' cull and draws, never a main candidate (the world's depth segment would draw a drawable input with
+		// kViewMainCull, and the HZB must leave the arms out).
+		if (a_object < a_tables.setPhases.size())
+			if (const auto root = static_cast<std::uint8_t>(a_tables.setPhases[a_object] & Extensions::Views().rootPhases))
+				return ViewBitsOf(root);
 		if (ObjectDecalGroup(flags))
 			return kViewDecal;
 		// A forward object's is kViewForward alone (with its member bit): the colour segment's forward range, culled by no other

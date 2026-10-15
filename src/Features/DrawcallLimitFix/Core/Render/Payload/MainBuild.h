@@ -58,7 +58,9 @@ namespace DCLF::Draws
 	// The view bits the main build writes of an entry (the main segments', refraction's, reflection's, first person's; MainMaskOf);
 	// the rest are the shadow build's. A main bit missing here is dropped when an entry's parts merge (SetMainPart, SetShadowPart),
 	// and BuildDraws' view test then skips that view's input entirely.
-	constexpr std::uint32_t kMainSideBits = kViewMainCull | kViewMain | kViewDecal | kViewForward | kViewRefraction | kViewReflection | kViewFirstPerson;
+	// Core's own, and the views' (Extensions::ViewSet::viewBits: still Core's constants, so the merges keep a compile-time mask).
+	constexpr std::uint32_t kMainCoreSideBits = kViewMainCull | kViewMain | kViewDecal | kViewForward | kViewRefraction;
+	constexpr std::uint32_t kMainSideBits = kMainCoreSideBits | kViewReflection | kViewFirstPerson;
 	// Which builds' parts an entry holds (ResidentRegion::sideOf).
 	constexpr std::uint8_t kSideMain = 1;
 	constexpr std::uint8_t kSideShadow = 2;

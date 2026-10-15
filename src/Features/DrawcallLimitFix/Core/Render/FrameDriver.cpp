@@ -12,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
@@ -124,8 +125,9 @@ namespace DCLF
 			view.HandOverAtFrameStart(draws.AdoptSnapshot(toggleGeneration));
 			view.SyncFrameTables();
 		}
-		// The first-person view's latch, targets, pipelines and resources, before the coverage that decides whether its members are withheld.
-		draws.BeginFirstPersonFrame();
+		// The views' frame start before the coverage that decides whether their members are withheld (the first-person view's latch,
+		// targets, pipelines and resources).
+		RunViewWork(Api::ViewPoint::FrameStartBeforeCoverage);
 		// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand.
 		SunAccumulation::Get().BeginFrame(view.GetSunCandidates());
 		// The lookups are the installed publication's; what only the frame has goes to the scene lane (PostLookupInputs).
@@ -161,9 +163,10 @@ namespace DCLF
 		}
 		LocalLightCull::SelectFrame(view.GetFrame());
 		PassCapture::Get().RefreshMainRenderers();
-		// Tree LOD's for the frame, before the main camera's cull registers its passes; the water reflection's forward pipelines.
+		// Tree LOD's for the frame, before the main camera's cull registers its passes; the views' work after it (the water reflection's
+		// forward pipelines).
 		draws.DecideTreeLod();
-		draws.PrepareReflection();
+		RunViewWork(Api::ViewPoint::FrameStartAfterTreeLod);
 		PrimaryCull::Get().PublishListFilter();
 		// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the plans and named
 		// slots the installed publications carried, and waited for by the GPU; the wetness captured here (Skin's cache is the render
@@ -175,6 +178,25 @@ namespace DCLF
 			scene.RunScenePassInline();
 		frameRan = true;
 		return true;
+	}
+
+	void FrameDriver::DepthCommitted()
+	{
+		IndirectDraws::Get().CaptureDepthPass();
+		// The frame's reflection faces (every TESWaterReflections::Update of the frame has run: two a frame, a face each), drawn by DCLF
+		// in one epoch, before the water reads the cube (dclf-lod.md, "Water reflections"). It must follow the depth commit, which brings
+		// the index pool and the scene's buffers to the frame's publication whose scene list the faces draw: against the frame before's
+		// pool, a slot the publication gave another geometry would draw its old indices against its new vertices (a device fault).
+		RunViewWork(Api::ViewPoint::DepthCommitted);
+	}
+
+	void FrameDriver::RunViewWork(Api::ViewPoint a_point)
+	{
+		const Api::ViewPointContext context{ Scene::FrameView::Get().GetFrame(), IndirectDraws::Get().Failed() };
+		const auto point = static_cast<std::size_t>(a_point);
+		for (const auto& view : Extensions::Views().views)
+			for (const auto run : view.work[point])
+				run(context);
 	}
 
 	void FrameDriver::EndFrame(bool a_running)

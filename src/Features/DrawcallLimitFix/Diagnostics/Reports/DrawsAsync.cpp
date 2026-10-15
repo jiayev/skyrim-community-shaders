@@ -37,6 +37,8 @@ namespace DCLF
 		text += Reports::FadeWritersLine();
 		text += VisibilityReport();
 		text += ReflectionReport();
+		// The views' lines here, before the forward epoch's.
+		Extensions::ReportTextAt(Api::ReportPoint::AsyncWorkViews, text);
 		text += ForwardReport();
 		// The features' lines here (Features/Particles, Features/Billboards, Features/FirstPerson: the first-person view's).
 		Extensions::ReportTextAt(Api::ReportPoint::AsyncWork, text);

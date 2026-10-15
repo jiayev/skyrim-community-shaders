@@ -1,9 +1,11 @@
 #pragma once
 
 // The frame's DCLF work at each engine point, render thread: the scene frame's start (the publication installed, its claims, the
-// coordinator's requests served, the frame values kicked), the shadow views, EarlyPrepass and Prepass, the occlusion maps, the main
-// pass's captures and the colour epoch, and Present's end of frame. The feature file's hooks call it; it reads the scene through
+// coordinator's requests served, the frame values kicked), the shadow views, the depth commit, EarlyPrepass and Prepass, the occlusion
+// maps, the main pass's captures and the colour epoch, the views' work at their points (Api::ViewPoint), and Present's end of frame. The feature file's hooks call it; it reads the scene through
 // Scene::FrameView and drives IndirectDraws.
+
+#include "Features/DrawcallLimitFix/Api/Views.h"
 
 #include <array>
 #include <cstdint>
@@ -48,6 +50,11 @@ namespace DCLF
 		void EndFrame(bool a_running);
 		void BeforeShadowMaps();
 		void AfterShadowMaps();
+		/**
+		 * @brief Main::RenderDepth's world-drawn point, while DCLF runs: the depth commit (IndirectDraws::CaptureDepthPass), then the views'
+		 * work there (ViewPoint::DepthCommitted: the frame's reflection faces).
+		 */
+		void DepthCommitted();
 		void EarlyPrepass();
 		void Prepass();
 		bool OcclusionReady(std::uint32_t a_map, bool a_running);
@@ -61,6 +68,8 @@ namespace DCLF
 	private:
 		/** @brief The main pass's targets and bindings for this frame's colour epoch; false when its targets are not bound. */
 		bool CaptureMainPass();
+		/** @brief Every view's work at a_point (Extensions::ViewEntry::work), the views in slot order. */
+		void RunViewWork(Api::ViewPoint a_point);
 
 		Counters counters;
 		std::uint32_t toggleGeneration = 0;

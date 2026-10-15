@@ -13,13 +13,15 @@ namespace DCLF
 	{
 		const ViewTraits& TraitsOf(ViewKind a_kind)
 		{
-			using Segment = RenderGraphRuntime::Segment;
+			// The epochs and segments are the view's slot's (kViewSlots).
+			const auto& reflection = kViewSlots[ViewIndex(ViewKind::Reflection)];
+			const auto& firstPerson = kViewSlots[ViewIndex(ViewKind::FirstPerson)];
 			static const ViewTraits kTraits[kViews] = {
-				{ ViewKind::Reflection, kReflectionFaces, true, false, false, kViewReflection, { Epoch::Reflection, Epoch::Count }, { Segment::Reflection, Segment::Reflection },
+				{ ViewKind::Reflection, kReflectionFaces, true, false, false, kViewReflection, reflection.epochs, { reflection.segments[0], reflection.segments[1] },
 					"reflection", "cs.dclf.reflection", "face-blocks", "cube",
 					{ "reflection bucket map", "reflection bucket tables", "reflection culling latches", "reflection face per-frame data", "reflection tree rows" } },
-				{ ViewKind::FirstPerson, 1, false, true, true, kViewFirstPerson, { Epoch::FirstPersonDepth, Epoch::FirstPersonColour },
-					{ Segment::FirstPersonDepth, Segment::FirstPerson }, "first-person", "cs.dclf.first-person", "block", "depth-copy",
+				{ ViewKind::FirstPerson, 1, false, true, true, kViewFirstPerson, firstPerson.epochs, { firstPerson.segments[0], firstPerson.segments[1] },
+					"first-person", "cs.dclf.first-person", "block", "depth-copy",
 					{ "first-person bucket map", "first-person bucket table", "first-person culling latch", "first-person per-frame data", "first-person tree rows" } },
 			};
 			return kTraits[ViewIndex(a_kind)];

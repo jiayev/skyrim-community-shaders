@@ -101,16 +101,17 @@ namespace DCLF
 					if (changed)
 						setShape(e, std::shared_ptr<const ShadowVariants>(std::move(variants)));
 				} else {
-					// First person's shape while CS_DCLF_FIRST_PERSON is on (none while it is off); the reflection's last one stands without a
-					// new one.
-					const bool isFirstPerson = traits.index == ViewIndex(ViewKind::FirstPerson);
-					const auto& made = isFirstPerson && !Extensions::ViewOn(toggles, Api::EngineView::FirstPerson) ? nullptr : shapes.views[traits.index];
+					// A DropWhenOff view's shape while its toggle is on (none while it is off: first person's); a KeepLast view's last one
+					// stands without a new one (the reflection's).
+					const auto view = static_cast<ViewKind>(traits.index);
+					const bool dropWhenOff = Extensions::Views().views[traits.index].life == Api::ViewShapeLife::DropWhenOff;
+					const auto& made = dropWhenOff && !Extensions::ViewOn(toggles, view) ? nullptr : shapes.views[traits.index];
 					const auto currentShape = current ? current->Value<ViewFrame>() : nullptr;
 					if (made) {
 						auto kept = Kept<ViewFrame>(currentShape, made, changed);
 						if (changed)
 							setShape(e, std::move(kept));
-					} else if (currentShape && isFirstPerson) {
+					} else if (currentShape && dropWhenOff) {
 						draft.Set(R::kShapeSlot + e, nullptr);
 					}
 				}

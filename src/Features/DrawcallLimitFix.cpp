@@ -6,6 +6,7 @@
 
 #	include "Deferred.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
+#	include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #	include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #	include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #	include "Features/DrawcallLimitFix/Features/FeatureList.h"
@@ -81,6 +82,8 @@ void DrawcallLimitFix::PostPostLoad()
 		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ReflectionFace);
 		return globals::features::drawcallLimitFix.Running() ? DCLF::IndirectDraws::Get().ReflectionRootsOwned(a_plain) : 0u;
 	});
+	// Whether DCLF runs, for the engine hooks outside the shell (the features' own thunks), before any of them is installed.
+	DCLF::ShellState::InstallRunningQuery([] { return globals::features::drawcallLimitFix.Running(); });
 	// The features' engine hooks that must precede DCLF's own engine side (Features/Billboards: its parity's NiBillboardNode::OnVisible
 	// thunk, before the primary cull takes the slot; Features/HiddenNodes: the hidden stores, right after the scene events as before),
 	// then the observers this run's switches ask for, and the engine hooks only they use (before DCLF's threads start).
@@ -289,29 +292,25 @@ void DrawcallLimitFix::Prepass()
 
 void DrawcallLimitFix::Hooks::Main_RenderDepth::thunk(bool a_firstPerson, bool a_a2)
 {
-	auto& feature = globals::features::drawcallLimitFix;
-	feature.inDepthPass = true;
-	feature.depthControlDriven = a_a2;
+	auto& passes = DCLF::ShellState::Passes();
+	passes.inDepthPass = true;
+	passes.depthControlDriven = a_a2;
 	func(a_firstPerson, a_a2);
-	feature.inDepthPass = false;
+	passes.inDepthPass = false;
 }
 
 void DrawcallLimitFix::Hooks::Main_RenderDepth_WorldDrawn::thunk(void* a_accumulator, bool a_a2)
 {
 	func(a_accumulator, a_a2);
 	auto& feature = globals::features::drawcallLimitFix;
-	if (!feature.inDepthPass || !feature.Running())
+	if (!DCLF::ShellState::Passes().inDepthPass || !feature.Running())
 		return;
 	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ZPrepass);
 	// The world's depth draws are done and its camera is still current. The engine's own copy of the depth
 	// (kPOST_ZPREPASS_COPY), at the end of the pass, now includes DCLF's objects, and the first-person model's
-	// depth goes in after the world's, as it does natively, so there is nothing to refresh.
-	DCLF::IndirectDraws::Get().CaptureDepthPass();
-	// The frame's reflection faces (every TESWaterReflections::Update of the frame has run: two a frame, a face each), drawn by DCLF
-	// in one epoch, before the water reads the cube (dclf-lod.md, "Water reflections"). It must follow the depth commit, which brings
-	// the index pool and the scene's buffers to the frame's publication whose scene list the faces draw: against the frame before's
-	// pool, a slot the publication gave another geometry would draw its old indices against its new vertices (a device fault).
-	DCLF::IndirectDraws::Get().ExecuteReflection();
+	// depth goes in after the world's, as it does natively, so there is nothing to refresh. Then the views' work at the depth commit
+	// (the frame's reflection faces).
+	DCLF::FrameDriver::Get().DepthCommitted();
 	if (DCLF::Scene::FrameView::Get().GetTables().objects.size() >= 400)
 		globals::BeginDCLFDepthTrace(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture);
 	// DCLF's epoch leaves the context's bindings to the engine's state tracking: rebind its targets for the
@@ -324,9 +323,9 @@ void DrawcallLimitFix::Hooks::BSBatchRenderer_RenderPassImmediately<N>::thunk(RE
 {
 	auto& feature = globals::features::drawcallLimitFix;
 	if (feature.Running())
-		DCLF::Diagnostics::Notify(DCLF::Diagnostics::NativePassOffered{ a_pass, a_technique, feature.inDepthPass });
+		DCLF::Diagnostics::Notify(DCLF::Diagnostics::NativePassOffered{ a_pass, a_technique, DCLF::ShellState::Passes().inDepthPass });
 	func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-	DCLF::Diagnostics::Notify(DCLF::Diagnostics::NativePassDrawn{ a_pass, feature.inDepthPass });
+	DCLF::Diagnostics::Notify(DCLF::Diagnostics::NativePassDrawn{ a_pass, DCLF::ShellState::Passes().inDepthPass });
 }
 
 void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::BSGraphics::BSShaderAccumulator* a_accumulator, std::uint32_t a_renderFlags)
@@ -381,7 +380,7 @@ void DrawcallLimitFix::Hooks::RenderDepth_FirstPersonDraw::thunk(void* a_camera,
 		if (DCLF::Extensions::ViewOn(DCLF::ActiveToggles(), DCLF::Api::EngineView::FirstPerson))
 			if (auto* player = RE::PlayerCharacter::GetSingleton())
 				DCLF::FrameGlobals::NoteFirstPersonCulled(player->Get3D(true));
-		DCLF::IndirectDraws::Get().ExecuteFirstPersonDepth(feature.depthControlDriven);
+		DCLF::IndirectDraws::Get().ExecuteFirstPersonDepth(DCLF::ShellState::Passes().depthControlDriven);
 		// DCLF's epoch leaves the context's bindings to the engine's state tracking.
 		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 	}
