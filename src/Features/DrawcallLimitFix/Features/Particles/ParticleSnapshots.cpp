@@ -5,8 +5,8 @@
 #include "Features/DrawcallLimitFix/Features/Particles/ParticleSnapshots.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -52,6 +52,9 @@ namespace DCLF::Features::Particles
 		// One address per quad bucket (QuadSlotKey): DCLF's own, so no engine TriShape can share a geometry slot key with them.
 		constexpr std::uint32_t kBuckets = std::countr_zero(ParticleSnapshots::kMaxQuads) + 1;
 		alignas(8) std::byte quadSlotKeys[kBuckets]{};
+
+		// The snapshots' move writer ("particle update"), reserved at the install before the update thunks go in.
+		Api::MoveWriterId moveWriter;
 
 		std::uint64_t Mix(const void* a_pointer)
 		{
@@ -244,8 +247,11 @@ namespace DCLF::Features::Particles
 			logger::warn("[DCLF] particle snapshots: NiParticleSystem's update slots are not the expected functions; particle systems stay the engine's");
 			return;
 		}
+		// Its move writer, the report's "particle update" (the slot after Features/Actors' three, as Core's table had it).
+		moveWriter = Extensions::ReserveMoveWriter("particle update");
 		stl::write_vfunc<kUpdateDownwardSlot, UpdateHook>(RE::VTABLE_NiParticleSystem[0]);
 		stl::write_vfunc<kUpdateSelectedSlot, SelectedHook>(RE::VTABLE_NiParticleSystem[0]);
+		Extensions::MoveWriterInstalled(moveWriter);
 		installed = true;
 		logger::info("[DCLF] particle snapshots installed on NiParticleSystem's update");
 	}
@@ -394,8 +400,7 @@ namespace DCLF::Features::Particles
 				captures.fetch_add(1, std::memory_order_relaxed);
 				// The system's move event (MoveEvents, keyed by the geometry): the scene pass's light path takes it then, not every frame.
 				if (Extensions::GeometryTypeOn(ActiveToggles(), static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))) {
-					Scene::PushMove(&a_system);
-					Scene::CountMove(7);
+					Extensions::PushReservedMove(moveWriter, &a_system, Api::MoveReach::ScenePass);
 				}
 			}
 		}

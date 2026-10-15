@@ -1026,8 +1026,8 @@ namespace DCLF
 		PublishWriterTables(a_running);
 		IndirectDraws::Get().WriteFadeStores(a_running, [this](const void* a_root) { return FadeWrittenByDclf(a_root); });
 		Diagnostics::Notify(Diagnostics::UpdateEntry{ a_running });
-		// The high actors' animation stamp from DCLF's shadow views.
-		SideEffects::UpdateActorRate(a_running);
+		// The stand-in observers' late point, after the writes (Features/Actors: the high actors' animation stamp from DCLF's shadow views).
+		Extensions::StandInAfterWrites(a_running);
 	}
 
 	PrimaryCull::FadeWriterCounts PrimaryCull::TakeFadeWriterCounts()

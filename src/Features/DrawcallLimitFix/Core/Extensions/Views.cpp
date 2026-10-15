@@ -53,6 +53,7 @@ namespace DCLF::Extensions
 			a_entry.covered = a_view.covered;
 			a_entry.captureRoot = a_view.captureRoot;
 			a_entry.accumulators = a_view.accumulators;
+			a_entry.residueDue = a_view.residueDue;
 		}
 
 		/** @brief The set's phases and view bits from its entries (the view bits by phase: ResolveViewBits). */
@@ -91,6 +92,30 @@ namespace DCLF::Extensions
 				if (a_set.views[v].phase && a_set.views[v].membership != Api::ViewMembership::CategoryRoot)
 					a_set.decideOrder[a_set.decideCount++] = static_cast<Api::EngineView>(v);
 		}
+
+		/**
+		 * @brief The view of a forward key without view bits (the pipeline lane's ForwardKeyView). Fails the install for view bits that
+		 * are Core's (two-sided, tree LOD) or another view's, or a second view without any.
+		 */
+		void DeriveForwardKeyViews(ViewSet& a_set)
+		{
+			constexpr std::uint32_t coreBits = ForwardPipelineKey::kForwardTwoSided | ForwardPipelineKey::kForwardTreeLod;
+			std::uint32_t claimed = coreBits;
+			for (std::size_t v = 0; v < a_set.views.size(); ++v) {
+				const auto& entry = a_set.views[v];
+				if (!entry.registered)
+					continue;
+				const std::uint32_t bits = entry.keys.keyFlags;
+				if (bits & claimed)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: view {}'s forward key flags {:#x} overlap Core's or another view's", static_cast<std::uint32_t>(v), bits));
+				claimed |= bits;
+				if (bits)
+					continue;
+				if (a_set.plainKeyView != Api::EngineView::Count)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: views {} and {} both have forward keys without key flags", static_cast<std::uint32_t>(a_set.plainKeyView), static_cast<std::uint32_t>(v)));
+				a_set.plainKeyView = static_cast<Api::EngineView>(v);
+			}
+		}
 	}
 
 	void ResolveViews(std::span<const Api::ViewContribution, kEngineViews> a_views, std::span<const Api::ViewWork> a_work)
@@ -111,6 +136,7 @@ namespace DCLF::Extensions
 		}
 		DeriveViewPhases(set);
 		DeriveOrders(set);
+		DeriveForwardKeyViews(set);
 		Detail::resolvedViews = std::move(set);
 		// The shapes' views into the strings where they now stand.
 		for (auto& entry : Detail::resolvedViews.views)

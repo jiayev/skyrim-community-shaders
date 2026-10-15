@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneView.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/RootViewEvents.h"
 
 #include <vector>
 

@@ -118,7 +118,7 @@ namespace DCLF::Features::FirstPerson
 		if (state.targets.colour == DXGI_FORMAT_UNKNOWN)
 			return;
 		// The slots' first-person forward pipelines, asked of the pipeline lane (each key once) and read from the frame's catalog.
-		DrawPipelines::Get().SetFirstPersonTargets(state.targets);
+		DrawPipelines::Get().SetViewForwardTargets(Api::EngineView::FirstPerson, state.targets);
 		const auto* catalog = a_context.catalog;
 		const auto& tables = *a_context.tables;
 		// The pipeline slots the skeleton's geometry draws with: the installed tables' slots of the geometry under the first-person root

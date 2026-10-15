@@ -56,8 +56,8 @@ namespace DCLF
 				text += fmt::format("[DCLF] accumulated, geometries whose walk missed their root (T7f): {}\n", r.wideNoChainFirst);
 			r.wideNoChainFirst.clear();
 		}
-		// The actors' animation stamp.
-		text += Reports::ActorRateLine();
+		// The accumulated writes' features' lines here (Features/Actors: the actors' animation stamp).
+		Extensions::ReportTextAt(Api::ReportPoint::AccumulatedWrites, text);
 		if (!Diagnostics::Observe().accumulated)
 			return text;
 		text += Reports::AnimRateLine();

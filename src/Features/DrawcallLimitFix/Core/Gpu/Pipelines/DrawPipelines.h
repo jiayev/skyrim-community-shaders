@@ -21,6 +21,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
+#include "Features/DrawcallLimitFix/Api/Views.h"
 
 namespace DCLF
 {
@@ -214,9 +215,9 @@ namespace DCLF
 	 */
 	struct ForwardPipelineKey
 	{
-		// kForwardFirstPerson: the first-person targets (kMAIN + motion vectors, kPOST_ZPREPASS_COPY's depth), back faces culled
-		// unless two-sided, every channel written.
-		static constexpr std::uint32_t kForwardTwoSided = 1, kForwardTreeLod = 2, kForwardFirstPerson = 4;
+		// Core's bits; a view's own bits above them (Api::ViewKeyRule::keyFlags, the feature's) name the key's view: its targets
+		// (SetViewForwardTargets) and its culling (cullBackFaces: back faces unless two-sided, else front faces).
+		static constexpr std::uint32_t kForwardTwoSided = 1, kForwardTreeLod = 2;
 		std::uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
 		std::uint32_t flags = 0;  // kForward*
 
@@ -296,10 +297,9 @@ namespace DCLF
 			bool program = false;                  // its program is compiled
 			bool failed = false;                   // its program or its build failed, for good
 		};
-		// Every forward key whose program the lane has or found failed, built for forwardTargets.
+		// Every forward key whose program the lane has or found failed, built for its view's targets (by Api::EngineView).
 		ankerl::unordered_dense::map<ForwardPipelineKey, ForwardEntry, ForwardPipelineKeyHash> forwardEntries;
-		ForwardTargets forwardTargets;
-		ForwardTargets firstPersonTargets;
+		std::array<ForwardTargets, static_cast<std::size_t>(Api::EngineView::Count)> viewTargets{};
 
 		const Entry* Find(const PipelineKey& a_key) const
 		{
@@ -329,7 +329,7 @@ namespace DCLF
 	 *
 	 * One owner, the pipeline lane (BuildExecutor.h): it takes requests, programs and build completions, admits them, publishes set
 	 * versions and then the catalog. Render-thread state reaches it only as frame inputs (SetTargetFormats, CaptureEngineStates,
-	 * SetShadowInputs, ShadowRasterStateId, SetTreeLodInputs, SetForwardTargets, ...). The render thread only posts and reads its
+	 * SetShadowInputs, ShadowRasterStateId, SetTreeLodInputs, SetViewForwardTargets, ...). The render thread only posts and reads its
 	 * frame's catalog (FrameCatalog).
 	 */
 	class DrawPipelines
@@ -432,10 +432,11 @@ namespace DCLF
 		 * no blending. Repeats are dropped. Arrives in PipelineCatalog::forwardEntries.
 		 */
 		void RequestForward(const ForwardPipelineKey& a_key);
-		/** @brief Render thread: the forward targets (frame input; a change rebuilds every forward pipeline). */
-		void SetForwardTargets(const ForwardTargets& a_targets);
-		/** @brief Render thread: the first-person keys' targets (kForwardFirstPerson), as SetForwardTargets. */
-		void SetFirstPersonTargets(const ForwardTargets& a_targets);
+		/**
+		 * @brief Render thread: a view's forward targets, its keys' (Extensions::ForwardKeyView; frame input; a change rebuilds every
+		 * forward pipeline).
+		 */
+		void SetViewForwardTargets(Api::EngineView a_view, const ForwardTargets& a_targets);
 		/** @brief Render thread: counts a frame whose tree LOD or forward view waited for a pipeline. */
 		void NoteFrameWaits(bool a_treeLod, bool a_forward)
 		{

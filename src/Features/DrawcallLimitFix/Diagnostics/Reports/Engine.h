@@ -29,8 +29,6 @@ namespace DCLF::Reports
 	std::string EngineReadWindowLine();
 	/** @brief CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads; empty while not installed. */
 	std::string ReleaseGuardLine();
-	/** @brief The actors' animation stamp (newline-terminated); empty when it did not run. */
-	std::string ActorRateLine();
 	/** @brief CS_DCLF_ACCUMULATED_PARITY: the animation gate against DCLF's prediction (newline-terminated); empty without the switch. */
 	std::string AnimRateLine();
 }

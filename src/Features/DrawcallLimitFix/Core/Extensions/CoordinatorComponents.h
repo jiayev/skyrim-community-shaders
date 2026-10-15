@@ -6,6 +6,7 @@
 // calls the hooks, and the registry (EntryClassTaken).
 
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Api/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Engine/LodSegments.h"
 
 #include <ankerl/unordered_dense.h>
@@ -85,6 +86,25 @@ namespace DCLF::Api
 		bool Counted(std::uint32_t a_slot) const;
 		/** @brief The coordinator's scene mirror, as the pass's events left it (the parent chains, the nodes' kinds; no engine memory). */
 		const SceneMirror& Mirror() const;
+		/** @brief a_key's node as the mirror holds it (Api::MirroredNode: a parent chain's walk, the node's kind, RTTI and lists). */
+		MirroredNode MirroredNodeOf(const void* a_key) const;
+
+		// The object slots' columns a component reads, and the fixed main ranges' it writes (Api/MainRanges.h; the slots' ordinals in
+		// their range: Features/Decals' order), the live tables'. Read per event, never per object per frame.
+		/** @brief How many object slots the tables hold. */
+		std::uint32_t ObjectSlots() const;
+		/** @brief a_slot's geometry (null past the slots, or none). */
+		const RE::BSGeometry* ObjectGeometry(std::uint32_t a_slot) const;
+		/** @brief The slots a_slot takes in its fixed range, by its skin partitions (RangeSpanOf; one past the slots). */
+		std::uint32_t RangeSpan(std::uint32_t a_slot) const;
+		/** @brief The slots a range member of a_partitions (a skin partitions value: Api::SlotRewrite's) takes: one per partition up to the last. */
+		static std::uint32_t RangeSpanOf(std::uint32_t a_partitions);
+		/** @brief Each object slot's ordinal in its fixed range (~0u: none), sized to the object slots first (a new slot's none). */
+		std::span<std::uint32_t> SizedRangeOrdinals() const;
+		/** @brief Each fixed range's slots. */
+		std::span<std::uint32_t, kFixedMainRanges> RangeCounts() const;
+		/** @brief a_slot's ordinal moved, or it left its range: its draw's inputs changed (noted with the bindings' cause). */
+		void NoteRangeOrdinalChanged(std::uint32_t a_slot) const;
 		/** @brief The coordinator's pass serial (the observers' ParityDue). */
 		std::uint64_t PassSerial() const;
 		/** @brief The pass's stamp (Coordinator::PassStamp: never 0), for a check run once a pass. */

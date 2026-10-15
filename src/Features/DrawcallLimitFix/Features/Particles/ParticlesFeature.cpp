@@ -24,9 +24,12 @@ namespace DCLF::Features::Particles
 			particlesToggle = a_context.RegisterToggle({ .name = "particles", .label = "Particle systems: smoke, flames, glows (CS_DCLF_PARTICLES)",
 				.tooltip = "T7e: DCLF draws effect-shader particle systems in the forward epoch, sorted with the other blended objects, their quads built from snapshots taken at the engine's particle update. On by default (validated fp6).",
 				.seed = particles, .entersClassification = true, .after = "refraction", .needs = { "effects" } });
-			// The particle geometry types (ParticleGeometryType): DCLF's while the toggle is on.
-			for (const auto type : { RE::BSGeometry::Type::kParticles, RE::BSGeometry::Type::kStripParticles })
-				a_context.RegisterGeometryType({ .geometryType = static_cast<std::uint8_t>(type), .toggle = particlesToggle });
+			// The particle geometry types (ParticleGeometryType): DCLF's while the toggle is on. A particle system (kParticles) without a skin
+			// is the particle systems' item class (its palette block its quads: ParticleRows.cpp), and a mover: its bound and quads change with
+			// each update, invisibly to the walk (FrameValues places it every frame; its update's snapshot capture pushes its move event).
+			a_context.RegisterGeometryType({ .geometryType = static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles), .toggle = particlesToggle,
+				.itemClass = Api::FrameValueItemClass::ParticleSystem, .moves = true });
+			a_context.RegisterGeometryType({ .geometryType = static_cast<std::uint8_t>(RE::BSGeometry::Type::kStripParticles), .toggle = particlesToggle });
 			// The particle systems' snapshots, taken after the engine's update of each (ParticleSnapshots; the systems DCLF follows alone).
 			ParticleSnapshots::Get().Install();
 			// Their palette rows: the members' blocks and placements, from the snapshots, every frame.

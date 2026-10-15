@@ -10,7 +10,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -81,18 +80,6 @@ namespace DCLF::Reports
 						   "({} without a class name){}{}{}{}",
 			c.lane, c.pool, c.unnamed, c.lane || c.pool ? " <- LANE ENGINE RELEASE; first: " : " <- OK", c.first ? c.first : "", c.lane || c.pool ? ", last: " : "",
 			(c.lane || c.pool) && c.last ? c.last : "");
-	}
-
-	std::string ActorRateLine()
-	{
-		const auto c = SideEffects::TakeActorRate();
-		if (!c.entries)
-			return {};
-		return fmt::format(
-			"[DCLF] actor rate (T7f checklist item 6): {} entries, {:.1f} high actors a frame ({:.1f} without a skin property or 3D), {:.1f} in the "
-			"sun's cascade culls and {:.1f} in a local shadow view a frame, {:.1f} stamped by DCLF a frame\n",
-			c.entries, double(c.actors) / double(c.entries), double(c.noProperty) / double(c.entries),
-			double(c.inSun) / double(c.entries), double(c.inLocal) / double(c.entries), double(c.stamped) / double(c.entries));
 	}
 
 	std::string AnimRateLine()

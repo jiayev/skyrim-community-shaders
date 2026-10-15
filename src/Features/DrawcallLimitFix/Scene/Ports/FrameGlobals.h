@@ -43,6 +43,17 @@ namespace DCLF
 	};
 
 	/**
+	 * @brief One node of a root view's subtree (the first person's; render thread): its key (an identity, dereferenced only right after a
+	 * walk of the live tree found it), whether it is a geometry, its hidden bit now (the hidden events applied) and, saved when an event
+	 * changed it after the engine's last culls of the view, its bit at those culls. Diagnostics::RootSubtreeSynced hands them out.
+	 */
+	struct RootSubtreeNode
+	{
+		const RE::NiAVObject* key = nullptr;
+		bool geometry = false, hidden = false, culled = false, saved = false;
+	};
+
+	/**
 	 * @brief The engine's frame globals the scene reads, captured by the render thread at the frame's start
 	 * (FrameDriver::BeginFrame: the engine's update done, before the culls), immutable after.
 	 *
@@ -84,8 +95,8 @@ namespace DCLF
 		// SceneCapture::NextSequence just before cullHidden was read: a hidden store's event numbered after it may be newer than the bit
 		// the capture holds for its node (Coordinator::DrainHiddenEvents announces it again at a newer capture).
 		std::uint64_t cullHiddenSequence = 0;
-		// The geometry keys under the first-person root as the frame's start walked them (sorted; identities): the first-person
-		// hidden verdict's diagnostic (Coordinator::NoteFirstPersonHidden).
+		// The geometry keys under the first-person root as the frame's start walked them (sorted; identities): the root view's hidden
+		// verdict's diagnostic (ClassifyFrame's Diagnostics::RootViewHidden).
 		std::vector<const RE::NiAVObject*> firstPersonGeometry;
 		// PrimaryCull::MembershipWitness of the values above.
 		std::uint32_t membershipWitness = 0;

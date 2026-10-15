@@ -8,8 +8,10 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
@@ -166,21 +168,23 @@ namespace DCLF::Scene
 	 * and which still roots the plan lists (QueueRoots). Pushed after the write from the animation and cell jobs.
 	 * - Actors: FUN_14066afa0 (start of every animation path: RunOneActorAnimationUpdateJob, Actor::UpdateAnimation,
 	 *   PlayerCharacter::UpdateAnimation, Actor::FinishLoadGame); TESObjectREFR::Update3DPosition (0x1402d9800, called by
-	 *   Actor::Update3DPosition); Actor::UpdateActor3DPosition (0x14069eb80); the sky cell's skin job (FUN_140663430); the
-	 *   ragdoll job (FUN_140770dc0), per actor on its list.
+	 *   Actor::Update3DPosition); and Features/Actors' reserved writers (its early hooks): Actor::UpdateActor3DPosition
+	 *   (0x14069eb80), the sky cell's skin job (FUN_140663430), the ragdoll job (FUN_140770dc0), per actor on its list.
 	 * - Other references: a cell's animated references' UpdateSelectedDownwardPass (from FUN_1402b41a0, only in a visible room
 	 *   or fading), the cell's dynamic node's (FUN_1402b3ae0, keyed by the node), graph-animated references' (FUN_1402f75a0,
 	 *   from UpdateAnimationJob).
 	 * - Node events (Havok writes, controller additions) name the reference above the node.
-	 * - Particle systems: ParticleSnapshots' NiParticleSystem update thunks (vtable 0x2C, 0x2D), keyed by the system (the geometry),
-	 *   when a capture took a new snapshot of a followed system (the particles toggle on).
+	 * - Particle systems: Features/Particles' reserved writer, ParticleSnapshots' NiParticleSystem update thunks (vtable 0x2C, 0x2D),
+	 *   keyed by the system (the geometry), when a capture took a new snapshot of a followed system (the particles toggle on).
+	 * A feature's writers are reserved (Extensions::ReserveMoveWriter) and push through Extensions::PushReservedMove.
 	 */
 	// Per-frame: no wake (thousands a frame); the next frame input's pass drains them.
 	inline EventQueue<const void*> moveEvents;
-	// Calls per writer (the order of kMoveWriterNames), for the report.
-	inline std::array<std::atomic<std::uint64_t>, 8> moveWriterCalls{};
-	constexpr std::array<const char*, 8> kMoveWriterNames{ "animation", "reference 3D position", "actor 3D position", "sky cell skin", "ragdoll",
-		"graph animation", "update pass", "particle update" };
+	// Calls per writer (the order of moveWriterNames), for the report.
+	inline std::array<std::atomic<std::uint64_t>, Extensions::kMoveWriterSlots> moveWriterCalls{};
+	// Core's writers at their slots; the free ones (empty) are the reserved writers', named at their reservation (main thread, PostPostLoad).
+	inline std::array<std::string_view, Extensions::kMoveWriterSlots> moveWriterNames{ "animation", "reference 3D position", {}, {}, {}, "graph animation",
+		"update pass" };
 	inline void CountMove(std::size_t a_writer) { moveWriterCalls[a_writer].fetch_add(1, std::memory_order_relaxed); }
 
 	/**
@@ -275,13 +279,15 @@ namespace DCLF::Scene
 	}
 
 	inline bool switchEventsInstalled = false;
+	// Core's move writers (InstallMoveEvents); the reserved writers not installed yet (Extensions::ReserveMoveWriter, MoveWriterInstalled).
 	inline bool moveEventsInstalled = false;
+	inline std::uint32_t moveWritersPending = 0;
 
 	/** @brief Patches the stores (after checking every site's bytes; none is patched when one differs). */
 	bool InstallSwitchStores();
 
-	/** @brief The move writers are hooked (MoveEvents). */
-	inline bool MoveEventsLive() { return moveEventsInstalled; }
+	/** @brief The move writers are hooked (MoveEvents): Core's and every reserved one. */
+	inline bool MoveEventsLive() { return moveEventsInstalled && moveWritersPending == 0; }
 	/**
 	 * @brief The switch events are installed (false when the engine's writers are not the expected code); a newly selected child
 	 * is brought up to date when its event is applied (CatchUpSwitch).

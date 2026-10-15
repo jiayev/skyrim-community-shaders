@@ -8,6 +8,7 @@
 namespace DCLF::Api
 {
 	static_assert(kMirroredKindTree == SceneCapture::kKindTree, "the Api's mirrored kind bits are the capture's");
+	static_assert(kMirroredKindCaptured == SceneCapture::kKindCaptured, "the Api's mirrored kind bits are the capture's");
 
 	bool CoordinatorComponentContext::DenseWalk() const
 	{
@@ -105,6 +106,51 @@ namespace DCLF::Api
 	const SceneMirror& CoordinatorComponentContext::Mirror() const
 	{
 		return coordinator.mirror;
+	}
+
+	MirroredNode CoordinatorComponentContext::MirroredNodeOf(const void* a_key) const
+	{
+		const auto* record = coordinator.mirror.Node(a_key);
+		if (!record)
+			return {};
+		return { true, record->parent, record->rtti, record->kind, record->children, record->captured };
+	}
+
+	std::uint32_t CoordinatorComponentContext::ObjectSlots() const
+	{
+		return static_cast<std::uint32_t>(tables.objects.size());
+	}
+
+	const RE::BSGeometry* CoordinatorComponentContext::ObjectGeometry(std::uint32_t a_slot) const
+	{
+		return a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+	}
+
+	std::uint32_t CoordinatorComponentContext::RangeSpan(std::uint32_t a_slot) const
+	{
+		return RangeSpanOf(a_slot < tables.skinPartitions.size() ? tables.skinPartitions[a_slot] : 0u);
+	}
+
+	std::uint32_t CoordinatorComponentContext::RangeSpanOf(std::uint32_t a_partitions)
+	{
+		return DecalSpanOf(a_partitions);
+	}
+
+	std::span<std::uint32_t> CoordinatorComponentContext::SizedRangeOrdinals() const
+	{
+		if (tables.rangeOrdinal.size() != tables.objects.size())
+			tables.rangeOrdinal.resize(tables.objects.size(), ~0u);
+		return tables.rangeOrdinal;
+	}
+
+	std::span<std::uint32_t, kFixedMainRanges> CoordinatorComponentContext::RangeCounts() const
+	{
+		return tables.rangeCount;
+	}
+
+	void CoordinatorComponentContext::NoteRangeOrdinalChanged(std::uint32_t a_slot) const
+	{
+		tables.NoteChange(a_slot, kChangeBindings);
 	}
 
 	std::uint64_t CoordinatorComponentContext::PassSerial() const

@@ -21,6 +21,8 @@ struct ID3D11DepthStencilView;
 namespace RE
 {
 	class BSShadowLight;
+	class NiCamera;
+	class BSShaderAccumulator;
 }
 
 namespace DCLF::Api
@@ -35,6 +37,39 @@ namespace DCLF::Api
 		bool supplied = false;
 		ID3D11Texture2D* texture = nullptr;
 		ID3D11DepthStencilView* view = nullptr;
+	};
+
+	/**
+	 * @brief What a map's technique is handed: the walked object's records as its occluder rule reads them (the mirror's, on the scene
+	 * work). The nearest fade node's BSX flags are walked only when asked (the walk's own, through nearestFadeBsx).
+	 */
+	class OccluderLeaf
+	{
+	public:
+		std::uint64_t flags = 0;    // its Lighting property's (BSShaderProperty::flags)
+		bool alphaTesting = false;  // NiAlphaProperty::GetAlphaTesting
+		bool referenced = false;    // its node has a reference (user data)
+		/** @brief The BSX flags of the nearest fade node above the object, by the mirror's parents (-1: none, or none read). */
+		std::int32_t NearestFadeNodeBsx() const { return nearestFadeBsx(*this); }
+
+		// The walk's: what NearestFadeNodeBsx walks (the coordinator and the object's records).
+		const void* scene = nullptr;
+		const void* records = nullptr;
+		std::int32_t (*nearestFadeBsx)(const OccluderLeaf& a_leaf) = nullptr;
+	};
+
+	/** @brief What a map's camera is handed: the camera it is drawn from (none: the view is not set up). */
+	class OcclusionCamera
+	{
+	public:
+		const RE::NiCamera* camera = nullptr;
+	};
+
+	/** @brief What a map's ownsAccumulator is handed: the 0x1C accumulator that finished accumulating. */
+	class OcclusionAccumulator
+	{
+	public:
+		const RE::BSShaderAccumulator* accumulator = nullptr;
 	};
 
 	/** @brief A light the selection kept (ShadowSourceContribution::lightKept), and the scene frame of the selection. */
@@ -63,11 +98,14 @@ namespace DCLF::Extensions
 		const bool* available = nullptr;              // the load-time flag, read whenever the toggle is
 		std::uint8_t phase = 0;                       // its set phase
 		std::uint32_t viewBit = 0;                    // its view bit at the GPU cull
-		Api::OccluderRule rule = Api::OccluderRule::Precipitation;
+		std::uint32_t (*technique)(const Api::OccluderLeaf&) = nullptr;  // its occluder rule, per walked entry
+		bool minRadius = false;                       // its cull's size test (kCullMinRadius)
 		Api::OcclusionTarget target = Api::OcclusionTarget::EngineMask;
 		std::string list, report, targetName;         // its labels, owned here
 		void (*importTarget)(Api::OcclusionTargetImport&) = nullptr;
 		bool (*referenceDue)() = nullptr;
+		void (*camera)(Api::OcclusionCamera&) = nullptr;
+		bool (*ownsAccumulator)(const Api::OcclusionAccumulator&) = nullptr;
 	};
 	/** @brief A source's resolved entry. */
 	struct ShadowSourceEntry

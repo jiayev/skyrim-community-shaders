@@ -1,10 +1,10 @@
-// MaterialWrites: the controller and material vtable hooks (on whichever thread runs the engine's update) and their lock-free queues.
+// MaterialWrites: the controller and material vtable hooks (on whichever thread runs the engine's update) and their lock-free queues, which
+// the features' hooks reach through the material-write sink (Api/MaterialWrites.h, defined here).
 
 #include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
-#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
@@ -79,8 +79,8 @@ namespace DCLF::MaterialWrites
 		// property's emissive multiplier (per-object shading, resampled every frame at Prepass) and types above
 		// 0x13 the texture-transform buffers; every other type a material field.
 		// The texture transforms are no record's: the frame values read every material row's TexcoordOffset from the buffer the frame
-		// reads and the GPU patches the rows (TextureTransformList), so a write that moved only them captures nothing; the kept shadow
-		// build still hears of it (its rows read the transform themselves).
+		// reads and the GPU patches the rows (Features/TextureTransforms, registered as the frame VS variable's patch), so a write that moved
+		// only them captures nothing; the kept shadow build still hears of it (its rows read the transform themselves).
 		struct FloatControllerUpdate
 		{
 			static void thunk(RE::NiTimeController* a_this, void* a_data)
@@ -100,8 +100,12 @@ namespace DCLF::MaterialWrites
 					// A swap during the update is the property's: its current material (alive, the property holding it) is captured.
 					if (property->material != material && property->material)
 						MaterialPort::PushCapture(property->material);
-					if (property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
-						scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1])
+					const bool moved = property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
+					                   scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1];
+					// Unless a feature patches the frame's (Api::RegisterFrameVSVariablePatch), the transforms are the records': captured.
+					if (moved && property->material == material && !Extensions::FrameVSVariablePatched())
+						NoteWritten(material);
+					if (moved)
 						ShadowTransformQueue().Push(material);
 				} else if (type <= 0x13 && type != 0xb && property && property->material && ControllerDestinationTablesKnown()) {
 					auto* material = property->material;
@@ -154,77 +158,6 @@ namespace DCLF::MaterialWrites
 					if (type != 1)
 						NoteTarget(a_this);
 				}
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		// The Effect port: what an effect controller can write of its property's BSEffectShaderMaterial (0x14150f090, 0x14150f700): the
-		// texture-transform buffers (+0x0c..+0x2c: UV scroll, types 6 and up), the falloff (+0x38..+0x44, types 0-4) and the base colour
-		// (+0x48..+0x54: the colour, type 5's alpha through SetMaterialAlpha).
-		constexpr std::size_t kEffectWrittenFirst = 0x0c, kEffectWrittenEnd = 0x58;
-		constexpr std::size_t kEffectTransformsEnd = 0x2c;  // the texture-transform buffers lead the written span
-		using EffectWritten = std::array<std::byte, kEffectWrittenEnd - kEffectWrittenFirst>;
-		EffectWritten EffectWrittenOf(const RE::BSShaderMaterial* a_material)
-		{
-			EffectWritten out{};
-			if (a_material)
-				std::memcpy(out.data(), reinterpret_cast<const std::byte*>(a_material) + kEffectWrittenFirst, out.size());
-			return out;
-		}
-		// An effect controller's update: the material captured when it moved (its records, the transform watch), and the property's shading
-		// resampled (an effect member's PropertyColor: the material's alpha, the emittance colour). A colour controller of any other type
-		// writes a property colour (its table 0x1435ef2e8): its shading is resampled.
-		void EffectControllerUpdate(RE::NiTimeController* a_this, bool a_propertyColour, void (*a_func)(RE::NiTimeController*, void*), void* a_data)
-		{
-			// Nothing is captured while the toggle is off: no effect record exists then (the scene work asks for a material it lacks:
-			// FrameView::ServeMaterialRequests).
-			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect)) {
-				a_func(a_this, a_data);
-				return;
-			}
-			auto* property = static_cast<RE::BSShaderProperty*>(a_this->target);
-			auto* material = property ? property->material : nullptr;
-			const auto before = EffectWrittenOf(material);
-			a_func(a_this, a_data);
-			if (!property)
-				return;
-			// The texture transforms alone (a UV scroll) are the frame values' (TextureTransformList): neither the record nor the shading
-			// reads them, so such a write captures nothing.
-			const auto after = material ? EffectWrittenOf(material) : EffectWritten{};
-			constexpr std::size_t kTransforms = kEffectTransformsEnd - kEffectWrittenFirst;
-			const bool fields = property->material != material ||
-			                    (material && std::memcmp(after.data() + kTransforms, before.data() + kTransforms, after.size() - kTransforms) != 0);
-			if (fields) {
-				if (property->material)
-					NoteWritten(property->material);
-				ShadingQueue().Push(property);
-			} else if (a_propertyColour) {
-				ShadingQueue().Push(property);
-			}
-		}
-		struct EffectFloatControllerUpdate
-		{
-			static void thunk(RE::NiTimeController* a_this, void* a_data)
-			{
-				EffectControllerUpdate(a_this, false, [](RE::NiTimeController* a_c, void* a_d) { func(a_c, a_d); }, a_data);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-		struct EffectColorControllerUpdate
-		{
-			static void thunk(RE::NiTimeController* a_this, void* a_data)
-			{
-				EffectControllerUpdate(a_this, ControllerType(a_this) != 0, [](RE::NiTimeController* a_c, void* a_d) { func(a_c, a_d); }, a_data);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-		// BSEffectShaderMaterial::CopyMembers (02, 0x1414e9cf0): its in-place rewrite.
-		struct EffectCopyMembers
-		{
-			static void thunk(RE::BSShaderMaterial* a_this, RE::BSShaderMaterial* a_that)
-			{
-				func(a_this, a_that);
-				NoteWritten(a_this);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -290,12 +223,8 @@ namespace DCLF::MaterialWrites
 		stl::write_vfunc<0x27, FloatControllerUpdate>(RE::VTABLE_BSLightingShaderPropertyFloatController[0]);
 		stl::write_vfunc<0x27, ColorControllerUpdate>(RE::VTABLE_BSLightingShaderPropertyColorController[0]);
 		InstallMaterialHooks(Engine::LightingMaterialVtables(), std::make_index_sequence<14>{});
-		// The Effect port: the effect controllers and the effect material's rewrite (installed whatever the toggle; the controllers capture
-		// nothing while it is off).
-		stl::write_vfunc<0x27, EffectFloatControllerUpdate>(RE::VTABLE_BSEffectShaderPropertyFloatController[0]);
-		stl::write_vfunc<0x27, EffectColorControllerUpdate>(RE::VTABLE_BSEffectShaderPropertyColorController[0]);
-		stl::write_vfunc<0x02, EffectCopyMembers>(RE::VTABLE_BSEffectShaderMaterial[0]);
-		logger::info("[DCLF] material write hooks installed: float and colour controllers, 14 material vtables, the effect controllers and material");
+		// The Effect port's controllers and material rewrite are Features/Effects' (EffectWrites.cpp, at its install), through Api/MaterialWrites.h.
+		logger::info("[DCLF] material write hooks installed: float and colour controllers, 14 material vtables");
 	}
 
 	void NoteWritten(const RE::BSShaderMaterial* a_material)
@@ -323,5 +252,19 @@ namespace DCLF::MaterialWrites
 	void DrainShadowTransformChanges(std::vector<const RE::BSShaderMaterial*>& a_out)
 	{
 		ShadowTransformQueue().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.push_back(a_material); });
+	}
+}
+
+namespace DCLF::Api
+{
+	// The material-write sink (Api/MaterialWrites.h): a feature's hooks reach the write queues through it.
+	void NoteMaterialWritten(const RE::BSShaderMaterial* a_material)
+	{
+		MaterialWrites::NoteWritten(a_material);
+	}
+
+	void NotePropertyShading(const RE::BSShaderProperty* a_property)
+	{
+		MaterialWrites::ShadingQueue().Push(a_property);
 	}
 }

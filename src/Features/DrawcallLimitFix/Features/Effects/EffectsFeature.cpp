@@ -1,5 +1,5 @@
 // Effects: the effect-shader objects DCLF draws through the Effect port. Its switches and the effects toggle, the effect and opaque effect
-// object classes' contributions, the Effect port's registrations, the report lines and the parity.
+// object classes' contributions, the Effect port's registrations and write hooks, the report lines and the parity.
 
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -38,6 +38,8 @@ namespace DCLF::Features::Effects
 			RegisterPrograms(a_context);
 			RegisterFrame(a_context);
 			RegisterReport(a_context);
+			// The port's material-write hooks (once Core's Lighting write hooks are in: Engine/Capture/MaterialWrites).
+			InstallWrites();
 			// CS_DCLF_SET_PARITY: the members' withheld Lighting-variant passes.
 			if (Diagnostics::Observe().claims)
 				SubscribeLight();

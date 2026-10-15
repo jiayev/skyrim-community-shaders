@@ -11,7 +11,7 @@
 
 namespace DCLF::Diagnostics
 {
-	void InstallRegistrations(bool a_residue, bool a_parity);
+	void InstallRegistrations(bool a_parity);
 	void InstallCensus();
 	void InstallWalkParity();
 	void InstallChangeLogParity();
@@ -23,7 +23,6 @@ namespace DCLF::Diagnostics
 	void InstallReplayParity();
 	void InstallMirrorReads();
 	void InstallMirrorParity();
-	void InstallFirstPersonFiling();
 	void InstallCommitParity();
 	void InstallMirrorWatchPlacement();
 

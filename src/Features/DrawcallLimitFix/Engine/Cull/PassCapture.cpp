@@ -259,8 +259,8 @@ namespace DCLF
 			const std::uint8_t phase = views.views[v].phase;
 			if (!set || !(set->drawn & phase) || !(set->PhasesOf(a_pass->geometry) & phase)) {
 				// The residue watch: tree LOD under the tree root, anything else but the sky under the LOD land and objects roots.
-				if (const auto watch = reflectionResidueWatch.load(std::memory_order_acquire); watch & (treeLod ? kTreeRoot : kLodRoots))
-					NoteReflectionResidue(a_pass, treeLod);
+				if (const auto watch = view.residueWatch.load(std::memory_order_acquire); watch & (treeLod ? kTreeRoot : kLodRoots))
+					NoteViewResidue(view, a_pass, treeLod);
 				return false;
 			}
 			view.ownWithheld.fetch_add(1, std::memory_order_relaxed);
@@ -269,7 +269,7 @@ namespace DCLF
 		return false;
 	}
 
-	void PassCapture::NoteReflectionResidue(const RE::BSRenderPass* a_pass, bool a_treeLod)
+	void PassCapture::NoteViewResidue(ViewRenderers& a_view, const RE::BSRenderPass* a_pass, bool a_treeLod)
 	{
 		const auto* sky = RE::Sky::GetSingleton();
 		const RE::NiNode* skyRoot = sky ? sky->root.get() : nullptr;
@@ -277,33 +277,35 @@ namespace DCLF
 			if (node == skyRoot)
 				return;
 		if (!a_treeLod) {
-			std::scoped_lock lock(reflectionResidueLock);
-			if (reflectionResidueGeometries.size() < 4096)
-				reflectionResidueGeometries.push_back(a_pass->geometry);
+			std::scoped_lock lock(a_view.residueLock);
+			if (a_view.residueGeometries.size() < 4096)
+				a_view.residueGeometries.push_back(a_pass->geometry);
 		}
-		if ((a_treeLod ? reflectionResidueTree : reflectionResidueLod).fetch_add(1, std::memory_order_relaxed) == 0) {
-			std::scoped_lock lock(reflectionResidueLock);
-			if (reflectionResidueFirst.empty()) {
+		if ((a_treeLod ? a_view.residueTree : a_view.residueLod).fetch_add(1, std::memory_order_relaxed) == 0) {
+			std::scoped_lock lock(a_view.residueLock);
+			if (a_view.residueFirst.empty()) {
 				const auto* name = a_pass->geometry->name.c_str();
-				reflectionResidueFirst = fmt::format("'{}' (technique {:#x}, hint {})", name ? name : "?", a_pass->passEnum, static_cast<std::uint32_t>(a_pass->accumulationHint));
+				a_view.residueFirst = fmt::format("'{}' (technique {:#x}, hint {})", name ? name : "?", a_pass->passEnum, static_cast<std::uint32_t>(a_pass->accumulationHint));
 			}
 		}
 	}
 
-	std::vector<const RE::BSGeometry*> PassCapture::TakeReflectionResidueGeometries()
+	std::vector<const RE::BSGeometry*> PassCapture::TakeViewResidueGeometries(Api::EngineView a_view)
 	{
-		std::scoped_lock lock(reflectionResidueLock);
-		return std::exchange(reflectionResidueGeometries, {});
+		auto& view = viewRenderers[static_cast<std::size_t>(a_view)];
+		std::scoped_lock lock(view.residueLock);
+		return std::exchange(view.residueGeometries, {});
 	}
 
-	PassCapture::ReflectionResidue PassCapture::TakeReflectionResidue()
+	PassCapture::ViewResidue PassCapture::TakeViewResidue(Api::EngineView a_view)
 	{
-		ReflectionResidue out;
-		out.lodPasses = reflectionResidueLod.exchange(0, std::memory_order_relaxed);
-		out.treePasses = reflectionResidueTree.exchange(0, std::memory_order_relaxed);
-		std::scoped_lock lock(reflectionResidueLock);
-		out.first = std::move(reflectionResidueFirst);
-		reflectionResidueFirst.clear();
+		auto& view = viewRenderers[static_cast<std::size_t>(a_view)];
+		ViewResidue out;
+		out.lodPasses = view.residueLod.exchange(0, std::memory_order_relaxed);
+		out.treePasses = view.residueTree.exchange(0, std::memory_order_relaxed);
+		std::scoped_lock lock(view.residueLock);
+		out.first = std::move(view.residueFirst);
+		view.residueFirst.clear();
 		return out;
 	}
 

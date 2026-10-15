@@ -21,7 +21,7 @@ namespace DCLF::Features::Decals
 		void OnOrdered(const Ordered& a_event)
 		{
 			auto& dp = a_event.parity;
-			const auto result = CompareDecalOrder(a_event.order, a_event.tables, a_event.mirror);
+			const auto result = CompareDecalOrder(a_event.order, a_event.context);
 			++dp.checks;
 			dp.decals += result.decals;
 			if (result.staleKeys && dp.staleKeys == 0)

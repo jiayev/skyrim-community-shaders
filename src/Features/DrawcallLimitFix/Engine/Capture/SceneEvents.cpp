@@ -7,7 +7,6 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 #include <xbyak/xbyak.h>
@@ -42,32 +41,7 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	/**
-	 * @brief Actor::SetAlpha (vfunc 0xE1, 0x1406c1a50; Actor, Character, PlayerCharacter tables): fadeAmount (+0x100) of the 3D
-	 * root, and the player's first-person root.
-	 */
-	template <class T>
-	struct ActorSetAlpha
-	{
-		static void thunk(RE::Actor* a_this, float a_alpha)
-		{
-			RE::NiAVObject* roots[2]{ a_this->Get3D1(false), a_this->Get3D1(true) };
-			float before[2]{};
-			for (std::uint32_t i = 0; i < 2; ++i)
-				before[i] = roots[i] ? Engine::At<float>(roots[i], 0x100) : 0.0f;
-			func(a_this, a_alpha);
-			for (std::uint32_t i = 0; i < 2; ++i)
-				if (roots[i] && Engine::At<float>(roots[i], 0x100) != before[i] && (i == 0 || roots[1] != roots[0])) {
-					fadeAmountEvents.Push(roots[i]);
-					if (roots[i]->AsFadeNode())
-						PushNodeUpdate(roots[i], SceneCapture::NodeRecord::kFadeAmount);  // the mirror's value
-				}
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-	struct ActorTable;
-	struct CharacterTable;
-	struct PlayerTable;
+	// Actor::SetAlpha's fadeAmount writes are Features/Actors' (its early hooks; Extensions::PushFadeAmount).
 
 	/**
 	 * @brief FUN_14147a430 (node, level): the only writer of the fade node's LOD level (+0x152 & 0xF, the skin partitions' row);
@@ -299,22 +273,19 @@ namespace DCLF::Scene
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+}
 
-	// A BGSDecalNode's decal array edits (AE 1.6.1170): append (FUN_1401fdfb0, from BSTempEffectGeometryDecal::Attach and simple
-	// decals' attach); erases: a decal's or reference's decals (FUN_1401fdc80 via FUN_1401fe020, from the decal manager), the
-	// geometry decal's update (FUN_1401fdcb0), erase-and-detach (FUN_1401fdd50, FUN_1401fde40). Node first, other arguments passed
-	// through; the node's decals after the call.
-	template <int N>
-	struct DecalArrayEdit
+namespace DCLF::Extensions
+{
+	// A contributed node's list edit, from the feature's own hooks (Features/Decals' decal array edits): Core/Extensions/NodeCaptures.h.
+	void PushNodeUpdate(const RE::NiAVObject* a_node, std::uint32_t a_fields)
 	{
-		static void thunk(RE::NiAVObject* a_node, void* a_1, void* a_2, void* a_3)
-		{
-			func(a_node, a_1, a_2, a_3);
-			PushNodeUpdate(a_node, SceneCapture::NodeRecord::kDecals);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
+		Scene::PushNodeUpdate(a_node, a_fields);
+	}
+}
 
+namespace DCLF::Scene
+{
 	// BSGeometry::AttachProperty (0x140267cf0, geometry, alpha): the alpha property (+0x120), set after attach (object LOD's
 	// blocks). The leaf after the call.
 	struct GeometryAttachAlpha
@@ -566,46 +537,7 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct ActorUpdate3DPosition
-	{
-		static void thunk(RE::Actor* a_actor)
-		{
-			func(a_actor);
-			PushMoved(a_actor);
-			CountMove(2);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct SkyCellSkin
-	{
-		static std::uint64_t thunk(RE::Actor* a_actor)
-		{
-			const auto result = func(a_actor);
-			PushMoved(a_actor);
-			CountMove(3);
-			return result;
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct RagdollJob
-	{
-		// FUN_140770dc0's list: the actors' handles at +0x30, their count at +0x40.
-		static void thunk(std::byte* a_list)
-		{
-			func(a_list);
-			const auto* handles = *reinterpret_cast<const RE::RefHandle* const*>(a_list + 0x30);
-			const auto count = *reinterpret_cast<const std::uint32_t*>(a_list + 0x40);
-			for (std::uint32_t i = 0; handles && i < count; ++i) {
-				RE::NiPointer<RE::TESObjectREFR> reference;
-				if (RE::LookupReferenceByHandle(handles[i], reference))
-					PushMoved(reference.get());
-				CountMove(4);
-			}
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
+	// Slots 2-4 (actor 3D position, sky cell skin, ragdoll) are Features/Actors' reserved writers (its early hooks).
 
 	struct GraphAnimation
 	{
@@ -886,17 +818,13 @@ namespace DCLF::Scene
 		trampoline.write_call<6>(dynamicNodeCall, SelectiveUpdateCall::thunk);
 		constexpr std::uintptr_t kAnimationGraphPlace = 0x66afa0;     // FUN_14066afa0
 		constexpr std::uintptr_t kReferenceUpdate3DPosition = 0x2d9800;  // TESObjectREFR::Update3DPosition
-		constexpr std::uintptr_t kActorUpdate3DPosition = 0x69eb80;   // Actor::UpdateActor3DPosition
-		constexpr std::uintptr_t kSkyCellSkin = 0x663430;             // FUN_140663430
-		constexpr std::uintptr_t kRagdollJob = 0x770dc0;              // FUN_140770dc0
 		constexpr std::uintptr_t kGraphAnimation = 0x2f75a0;          // FUN_1402f75a0
 		stl::detour_thunk<AnimationGraphPlace>(REL::Offset(kAnimationGraphPlace).address());
 		stl::detour_thunk<ReferenceUpdate3DPosition>(REL::Offset(kReferenceUpdate3DPosition).address());
-		stl::detour_thunk<ActorUpdate3DPosition>(REL::Offset(kActorUpdate3DPosition).address());
-		stl::detour_thunk<SkyCellSkin>(REL::Offset(kSkyCellSkin).address());
-		stl::detour_thunk<RagdollJob>(REL::Offset(kRagdollJob).address());
 		stl::detour_thunk<GraphAnimation>(REL::Offset(kGraphAnimation).address());
 		moveEventsInstalled = true;
+		// The actors' 3D position, sky cell skin and ragdoll writers follow at Features/Actors' early hooks (only when these are in);
+		// the line names every writer, as before they moved.
 		logger::info("[DCLF] move events installed (animation, 3D positions, ragdolls, the cells' update passes)");
 	}
 
@@ -917,9 +845,7 @@ namespace DCLF::Scene
 		stl::detour_thunk<LodLevelUpdate>(REL::Offset(Engine::Address::kLodLevelUpdate).address());
 		constexpr std::uintptr_t kFadeSnap = 0x147aa20;             // FUN_14147aa20: a fade node's placement snap
 		stl::detour_thunk<FadeSnap>(REL::Offset(kFadeSnap).address());
-		stl::write_vfunc<0xE1, ActorSetAlpha<ActorTable>>(RE::VTABLE_Actor[0]);
-		stl::write_vfunc<0xE1, ActorSetAlpha<CharacterTable>>(RE::VTABLE_Character[0]);
-		stl::write_vfunc<0xE1, ActorSetAlpha<PlayerTable>>(RE::VTABLE_PlayerCharacter[0]);
+		// Actor::SetAlpha's slot (0xE1) is Features/Actors' (its early hooks); no other hook takes it.
 		constexpr std::uintptr_t kFadeSetRange = 0x147a9b0;         // FUN_14147a9b0: a fade node's near and far
 		constexpr std::uintptr_t kFadeSetLodType = 0x147aa00;       // FUN_14147aa00: a fade node's LOD type
 		stl::detour_thunk<FadeSetRange>(REL::Offset(kFadeSetRange).address());
@@ -951,12 +877,7 @@ namespace DCLF::Scene
 		stl::detour_thunk<LandBlendParams>(REL::Offset(kLandBlendParams).address());
 		constexpr std::uintptr_t kPropertiesProjectedUV = 0x14abd10;  // FUN_1414abd10: projected UV on the properties under an object
 		stl::detour_thunk<PropertiesProjectedUV>(REL::Offset(kPropertiesProjectedUV).address());
-		// A decal node's array edits: DecalArrayEdit.
-		stl::detour_thunk<DecalArrayEdit<0>>(REL::Offset(0x1fdfb0).address());
-		stl::detour_thunk<DecalArrayEdit<1>>(REL::Offset(0x1fdc80).address());
-		stl::detour_thunk<DecalArrayEdit<2>>(REL::Offset(0x1fdcb0).address());
-		stl::detour_thunk<DecalArrayEdit<3>>(REL::Offset(0x1fdd50).address());
-		stl::detour_thunk<DecalArrayEdit<4>>(REL::Offset(0x1fde40).address());
+		// A decal node's array edits are Features/Decals' (its early hooks, after these).
 		constexpr std::uintptr_t kCellPlaceReference = 0x2d1280;    // FUN_1402d1280: a reference's 3D placed in its cell
 		constexpr std::uintptr_t kCellPlaceReferenceAt = 0x2d5090;  // FUN_1402d5090: the same, another path
 		stl::detour_thunk<CellPlaceReference>(REL::Offset(kCellPlaceReference).address());
@@ -992,6 +913,7 @@ namespace DCLF::Scene
 		logger::info("[DCLF] scene events installed (fades, property flags, materials and material alpha, LOD fades, emittance, Havok node transforms, controllers): OnVisible at {:#x}",
 			onVisible - REL::Module::get().base() + 0x140000000);
 		InstallMoveEvents();
+		// Actor::SetAlpha and the actors' reserved move writers are Features/Actors' (its early hooks, after the reflection's).
 		// The hidden stores are Features/HiddenNodes' (its early hooks, right after these). Object LOD's segment writers are Features/Lod's
 		// engine channel's source (its early hooks, before tree LOD's and the hidden nodes').
 		// Tree LOD's channel's source is Features/TreeLod's (its early hooks, right after these).
@@ -1000,8 +922,8 @@ namespace DCLF::Scene
 
 namespace DCLF::Extensions
 {
-	// The engine side's pushes for the features' engine hooks (Core/Extensions/EngineEvents.h), onto the scene's stack and Core's hidden
-	// channel.
+	// The engine side's pushes for the features' engine hooks (Core/Extensions/EngineEvents.h), onto the scene's stack and Core's hidden,
+	// fade amount and move channels.
 
 	void PushStacked(Api::EngineChannelId a_channel, std::uint64_t a_token, std::span<RE::NiAVObject* const> a_pinned, std::span<RE::NiAVObject* const> a_named)
 	{
@@ -1032,5 +954,52 @@ namespace DCLF::Extensions
 	void PushSegmentsUpdate(const RE::BSGeometry* a_geometry)
 	{
 		Scene::PushGeometryUpdate(a_geometry, SceneCapture::GeometryRecord::kSegments);
+	}
+
+	void PushFadeAmount(RE::NiAVObject* a_root)
+	{
+		Scene::fadeAmountEvents.Push(a_root);
+		if (a_root->AsFadeNode())
+			Scene::PushNodeUpdate(a_root, SceneCapture::NodeRecord::kFadeAmount);  // the mirror's value
+	}
+
+	namespace
+	{
+		// The reserved writers' names, copied (Scene::moveWriterNames views them); written on the main thread at PostPostLoad.
+		std::array<std::string, kMoveWriterSlots> reservedMoveWriterNames;
+	}
+
+	Api::MoveWriterId ReserveMoveWriter(std::string_view a_name)
+	{
+		if (a_name.empty())
+			stl::report_and_fail("Drawcall Limit Fix: a move writer was reserved without a name");
+		for (std::uint32_t slot = 0; slot < kMoveWriterSlots; ++slot) {
+			if (!Scene::moveWriterNames[slot].empty())
+				continue;
+			reservedMoveWriterNames[slot] = a_name;
+			Scene::moveWriterNames[slot] = reservedMoveWriterNames[slot];
+			++Scene::moveWritersPending;
+			return { slot };
+		}
+		stl::report_and_fail(fmt::format("Drawcall Limit Fix: the move writer {} is past Extensions::kMoveWriterSlots", a_name));
+	}
+
+	void MoveWriterInstalled(Api::MoveWriterId a_writer)
+	{
+		if (a_writer && Scene::moveWritersPending)
+			--Scene::moveWritersPending;
+	}
+
+	bool CoreMoveWritersLive()
+	{
+		return Scene::moveEventsInstalled;
+	}
+
+	void PushReservedMove(Api::MoveWriterId a_writer, const void* a_key, Api::MoveReach a_reach)
+	{
+		Scene::PushMove(a_key);
+		if (a_reach == Api::MoveReach::WithPlacements)
+			FrameValueMoves::PushKey(a_key);
+		Scene::CountMove(a_writer.index);
 	}
 }

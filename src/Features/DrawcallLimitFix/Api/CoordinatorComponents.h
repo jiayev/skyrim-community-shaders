@@ -60,9 +60,25 @@ namespace DCLF::Api
 
 	/**
 	 * @brief The mirrored node kind bits a component may test (CoordinatorComponentContext::MirroredFadeNode's a_kind, the mirror's capture
-	 * kind as is; Core checks they match it). Tree: a BSTreeNode.
+	 * kind as is; Core checks they match it). Tree: a BSTreeNode. Captured: a node capture contribution's class (Api/EngineEvents.h,
+	 * NodeCaptureContribution), its list in MirroredNode::captured.
 	 */
 	inline constexpr std::uint32_t kMirroredKindTree = 1u << 8;
+	inline constexpr std::uint32_t kMirroredKindCaptured = 1u << 9;
+
+	/**
+	 * @brief A node as the mirror holds it (CoordinatorComponentContext::MirroredNodeOf; known false: no record), viewed in place: valid
+	 * until the hook returns. Keys are never dereferenced.
+	 */
+	struct MirroredNode
+	{
+		bool known = false;
+		const void* parent = nullptr;  // null: a root
+		const void* rtti = nullptr;    // its RTTI exactly
+		std::uint32_t kind = 0;        // its capture kind as is (kMirroredKind*)
+		std::span<const void* const> children;  // by engine slot (stable; null slots kept): what OnVisible visits, in order
+		std::span<const void* const> captured;  // kMirroredKindCaptured: its contribution's list, in its order (else empty)
+	};
 
 	/** @brief A tracked entry's state as the coordinator keeps it (CoordinatorComponentContext::TrackedStateOf; tracked false: none). */
 	struct TrackedState

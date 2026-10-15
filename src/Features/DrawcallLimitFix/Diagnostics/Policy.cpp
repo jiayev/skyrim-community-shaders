@@ -89,12 +89,6 @@ namespace DCLF::Policy
 		return Diagnostics::Observe().foliageFrozen;
 	}
 
-	bool KeepReflectionRoots(std::uint32_t& a_updates)
-	{
-		// The residue's watch (the reflection report's): every 30th update while the parities observe.
-		return Diagnostics::Observe().claimsOrScene && a_updates++ % 30 == 0;
-	}
-
 	bool RebuildShadowSets(std::uint64_t a_pass)
 	{
 		// The persistent parity's shadow dependency check.

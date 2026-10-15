@@ -2,6 +2,7 @@
 
 #include "DrawsState.h"
 #include "Observers.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 
 namespace DCLF::Diagnostics
 {
@@ -27,9 +28,13 @@ namespace DCLF::Diagnostics
 		for (std::uint32_t slot = 0; slot < count; ++slot) {
 			if (!FrameValues::SampleSlot(a_tables, slot, expected))
 				continue;
-			// A particle member's row is its snapshot's (ParticleSnapshots), not the engine's transforms now.
-			if ((a_tables.objects[slot].flags & kObjectSkinned) && a_tables.objectGeometry[slot] &&
-				a_tables.objectGeometry[slot]->GetType().get() == RE::BSGeometry::Type::kParticles)
+			// A palette rows member's row is its class's (a particle system's snapshot's, Features/Particles), not the engine's transforms
+			// now: the item class the coordinator plans it as (Coordinator::PlacedKeyOf: a palette block of a skinless geometry of the class's
+			// type).
+			const bool paletteBlock = (a_tables.objects[slot].flags & kObjectSkinned) && slot < a_tables.boneRows.size() && a_tables.boneRows[slot];
+			if (auto* geometry = a_tables.objectGeometry[slot]; geometry &&
+				Extensions::PlannedItemClass(paletteBlock, static_cast<std::uint8_t>(geometry->GetType().get()), geometry->GetGeometryRuntimeData().skinInstance != nullptr) !=
+					Api::FrameValueItemClass::None)
 				continue;
 			++s.checks;
 			if (fresh[slot]) {

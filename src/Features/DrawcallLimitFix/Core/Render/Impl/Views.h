@@ -1,7 +1,7 @@
 #pragma once
 
 // IndirectDraws::Impl's view state (ImplViews, a base of Impl): each view slot's frame state (ViewEpochState, which the view engine's
-// calls hand the view features: IndirectDraws::ViewState), and the cube camera's LOD roots' residue watch (Core's while Lod is).
+// calls hand the view features: IndirectDraws::ViewState).
 // Part of IndirectDraws' implementation: included by Impl.h, before the struct.
 
 namespace DCLF
@@ -58,8 +58,6 @@ namespace DCLF
 		// By view slot (the reflection's faces: the engine's cube target's format with DCLF's D24S8 depth; the first person's: kMAIN's
 		// format, the motion vectors' (colour2) and kPOST_ZPREPASS_COPY's).
 		std::array<ViewEpochState, kViews> viewStates;
-		// The cube camera's LOD roots' residue watch: Policy::KeepReflectionRoots' updates (IndirectDraws::ViewLodRootsOwned).
-		std::uint32_t reflectionResidueUpdates = 0;
 		ViewEpochState& View(ViewKind a_kind) { return viewStates[ViewIndex(a_kind)]; }
 		const ViewEpochState& View(ViewKind a_kind) const { return viewStates[ViewIndex(a_kind)]; }
 		/** @brief A view's coverage: its last decision's, else its coveredInitially (before the first). */

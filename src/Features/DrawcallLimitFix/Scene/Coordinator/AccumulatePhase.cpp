@@ -433,8 +433,8 @@ namespace DCLF::Scene
 					materialIt = materialIndex.emplace(std::pair{ material, descriptors.pass }, slot).first;
 					ListMaterialDependent(material, slot);
 					NoteMaterialRecord(slot, held->second.held->snapshot);
-					// Made from this frame's buffer: watched only while the buffers disagree (or another slot's watch runs).
-					WatchMaterialTransforms(material, held->second.held->snapshot, true);
+					// Its texture transforms counted as watched (nothing follows them: the frame values patch the rows).
+					++materialRecordStats.transformsWatched;
 					timer.Add(BuildPart::MaterialEval);
 				}
 				materialSlot = materialIt->second;

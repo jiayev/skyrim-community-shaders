@@ -38,31 +38,33 @@ namespace DCLF::Eligibility
 		if (!a_leaf)
 			return Ineligible::NotTriShape;
 		const auto& g = *a_leaf.geometry;
-		// An NPC face shape (a dynamic shape under a BSFaceGenNiNode) takes the checks below like any shape, while face shapes are DCLF's
-		// (Api::EntryClass::FaceShape). Its positions are not in its buffers but its head's snapshots (Features/Faces): the walk gives every
-		// record of one its stream (Coordinator::Tracked::faceShape), whatever the verdict, and the draws bind it as the second stream.
+		// An entry of a taken entry class (its geometry type's rule, Api::GeometryTypeContribution::entry: Features/Faces' face shape, a
+		// dynamic shape under a BSFaceGenNiNode) takes the checks below like any shape. Its positions are not in its buffers but its
+		// component's (a face shape's head's snapshots): the walk gives every record of one its stream (Coordinator::Tracked::entryClass),
+		// whatever the verdict, and the draws bind it as the second stream.
 		const auto type = static_cast<RE::BSGeometry::Type>(g.type);
-		const bool face = type == RE::BSGeometry::Type::kDynamicTriShape && Extensions::EntryClassTaken(Api::EntryClass::FaceShape) && a_leaf.parent &&
-		                  (a_leaf.parent->kind & SceneCapture::kKindFaceGen);
+		const auto entryClass = a_leaf.parent ? Extensions::EntryClassOf(g.type, a_leaf.parent->kind) : Api::EntryClass::None;
+		const bool entryShape = entryClass != Api::EntryClass::None && Extensions::EntryClassTaken(entryClass);
 		// A BSMultiIndexTriShape (cave walls, rocks with a snow layer) draws every pass but one as a tri-shape: its renderer data and
 		// its triangle count (FUN_1414f2ad0, type 7). The exception is the additional property's main-pass layer (accumulation
 		// hint 12), drawn from its second index list: DCLF's layer object (Tracked::layerSlot, Layer). The shadow modes
 		// register the main property's passes alone (FUN_1414b2a60), so it casts as a tri-shape. One whose layer DCLF cannot
 		// draw is MultiIndex, a shadow-only caster (ShadowOnlyReason): its two main passes stay the engine's, together.
 		const bool multiIndex = type == RE::BSGeometry::Type::kMultiIndexTriShape;
-		// Object LOD (dclf-lod.md): a BSSubIndexTriShape whose Lighting property has the LOD object flags, drawn by the segment
-		// runs the engine leaves visible (FUN_1414f2ad0, type 8): a tri-shape over the ranges LodSegments mirrors. Tracked under
-		// TES::lodLandRoot; LOD without its class (ObjectClass::LodObjects). Any other sub-index shape is not one DCLF draws.
-		bool lodObject = false;
-		if (type == RE::BSGeometry::Type::kSubIndexTriShape) {
-			const auto* lodProperty = SceneCapture::LeafView::Lighting(a_leaf.property);
-			if (lodProperty && IsLodObject(lodProperty->flags, g.type)) {
-				if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodObjects))
+		// A geometry type a contribution takes by its Lighting property's flags (Api::GeometryTypeContribution::propertyFlags: Features/Lod's
+		// object LOD, a BSSubIndexTriShape with the LOD object flags, drawn by the segment runs the engine leaves visible, FUN_1414f2ad0
+		// type 8): a tri-shape over the ranges LodSegments mirrors, Lod while its toggle is off. Any other shape of the type is not one DCLF
+		// draws.
+		bool flaggedShape = false;
+		if (const auto& flagged = Extensions::GeometryTypeContributionOf(g.type); flagged.propertyFlags) {
+			const auto* flaggedProperty = SceneCapture::LeafView::Lighting(a_leaf.property);
+			if (flaggedProperty && (flaggedProperty->flags & flagged.propertyFlags)) {
+				if (!ActiveToggles().On(flagged.toggle))
 					return Ineligible::Lod;
-				lodObject = true;
+				flaggedShape = true;
 			}
 		}
-		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex && !lodObject) {
+		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex && !flaggedShape) {
 			// Its geometry type's contribution (Features/Particles): a particle geometry with a material port's property is that port's to
 			// classify when it takes the particle geometries (the Effect port's DeriveEffectDescriptors: a particle system DCLF's particle path
 			// draws, or the particle variant). It has no renderer data of its own: its draw is the renderer's quads, its vertices
@@ -77,7 +79,7 @@ namespace DCLF::Eligibility
 					*a_descriptors = descriptors;
 				return reason;
 			}
-			if (!face)
+			if (!entryShape)
 				return Ineligible::NotTriShape;
 		}
 

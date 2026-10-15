@@ -1,5 +1,6 @@
 // OcclusionMaps: Skylighting's sky occlusion map and the precipitation occlusion mask drawn by Core's shadow engine. Their switches and
-// toggles, each map's contribution (its bits, occluder rule, target, labels and reference parity), their report lines and parity.
+// toggles, each map's contribution (its bits, occluder rule, cull size test, target, labels, camera, accumulator and reference parity),
+// their report lines and parity.
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
@@ -29,7 +30,8 @@ namespace DCLF::Features::OcclusionMaps
 
 		/**
 		 * @brief The maps' contributions: Skylighting's sky map and the precipitation mask, both available while Skylighting is loaded (its
-		 * RenderOcclusion drives both maps: its hook of the engine's precipitation mask, then its own map).
+		 * RenderOcclusion drives both maps: its hook of the engine's precipitation mask, then its own map), both drawn by the precipitation
+		 * accumulator from its camera.
 		 */
 		void RegisterMaps(Api::InstallContext& a_context, Api::ToggleId a_sky, Api::ToggleId a_precipitation)
 		{
@@ -37,19 +39,26 @@ namespace DCLF::Features::OcclusionMaps
 				.toggle = a_sky,
 				.available = &globals::features::skylighting.loaded,
 				.bits = { kSetOccluderSky, kViewSkyOccluder },
-				.rule = Api::OccluderRule::Skylighting,
+				.technique = &SkylightingTechnique,
+				.minRadius = true,
 				.target = Api::OcclusionTarget::ImportedTexture,
 				.labels = { "sky occlusion", "Skylighting", "DCLF Skylighting occlusion map" },
 				.importTarget = &ImportSkyTarget,
-				.referenceDue = &SkyReferenceDue });
+				.referenceDue = &SkyReferenceDue,
+				.camera = &PrecipitationCamera,
+				.ownsAccumulator = &SkyOwnsAccumulator });
 			a_context.RegisterOcclusionMap({ .map = Api::OcclusionMap::Precipitation,
 				.toggle = a_precipitation,
 				.available = &globals::features::skylighting.loaded,
 				.bits = { kSetOccluderPrecipitation, kViewPrecipOccluder },
-				.rule = Api::OccluderRule::Precipitation,
+				.technique = &PrecipitationTechnique,
+				// Skylighting's size test, which the mask's cull has always taken too.
+				.minRadius = true,
 				.target = Api::OcclusionTarget::EngineMask,
 				.labels = { "precipitation", "precipitation", "DCLF precipitation occlusion mask" },
-				.referenceDue = &PrecipitationReferenceDue });
+				.referenceDue = &PrecipitationReferenceDue,
+				.camera = &PrecipitationCamera,
+				.ownsAccumulator = &PrecipitationOwnsAccumulator });
 		}
 
 		void Install(Api::InstallContext& a_context)
@@ -68,7 +77,8 @@ namespace DCLF::Features::OcclusionMaps
 			const auto precipitation = a_context.RegisterToggle({ .name = "precipitation occlusion", .label = "Draw the precipitation occlusion mask (CS_DCLF_PRECIPITATION)",
 				.tooltip = "With Skylighting loaded, DCLF draws the precipitation occlusion mask (where rain and snow stop) from its own tables on the GPU, and the engine no longer culls or registers the scene for it.",
 				.seed = precipitationSwitch, .entersClassification = true, .after = "exclude primary entries", .needs = { "shadows" } });
-			// The maps (Core's shadow engine: the occlusion epoch, the set decisions, the classification and the reports read them as data).
+			// The maps (Core's shadow engine: the occlusion epoch, the set decisions and the reports read them as data; the classification
+			// calls their rules per walked entry).
 			RegisterMaps(a_context, sky, precipitation);
 			// Their report lines, and CS_DCLF_SKYLIGHT_PARITY's switches and compare.
 			RegisterReport(a_context);

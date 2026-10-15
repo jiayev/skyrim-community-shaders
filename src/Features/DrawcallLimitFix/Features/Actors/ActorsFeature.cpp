@@ -1,5 +1,5 @@
 // Actors: the geometry under an actor's 3D and the actor techniques DCLF draws. Their switch and the actors toggle, the actor parent's
-// contribution and the actor techniques'.
+// contribution and the actor techniques'; the actors' engine events at the early hooks and the animation stamp.
 
 #include "Features/DrawcallLimitFix/Features/Actors/Actors.h"
 
@@ -29,11 +29,15 @@ namespace DCLF::Features::Actors
 			// material VS constants): all written by SetupMaterial. A face part's positions are its head's snapshots' (Features/Faces).
 			for (const auto technique : { Technique::FacegenRGBTint, Technique::Facegen, Technique::Hair, Technique::Eye })
 				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = actors });
+			// The high actors' animation stamp from DCLF's shadow views, whatever the toggle.
+			RegisterActorRate(a_context);
 		}
 	}
 
 	Api::Feature Feature()
 	{
-		return { "actors", &Install };
+		// The early hooks: right after the reflection's (the first), where Core's scene events installed them before (nothing between
+		// patches the same functions or slot).
+		return { "actors", &Install, &InstallEngineEvents };
 	}
 }

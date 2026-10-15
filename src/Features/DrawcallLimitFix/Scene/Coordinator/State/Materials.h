@@ -96,7 +96,8 @@ namespace DCLF::Scene
 		std::vector<std::uint32_t> materialSignatureListed;  // per material slot: its signature + 1, 0 when unlisted
 		struct MaterialRecordStats
 		{
-			// transformsWatched: captures whose texture transforms reached WatchMaterialTransforms (nothing followed: the frame values'),
+			// transformsWatched: captures of a material with dependents whose texture transforms alone moved while a feature patches them
+			// (Extensions::FrameVSVariablePatched), and the joins' records made (nothing followed: the frame values'),
 			// transformsWritten: records the scene lane wrote for them (none).
 			std::uint64_t passes = 0, captured = 0, rewritten = 0, retried = 0, uncovered = 0, samples = 0, applications = 0, slotsApplied = 0,
 						  transformsWatched = 0, transformsWritten = 0;

@@ -9,17 +9,19 @@
 // (Covered). Its work at the frame's start (BeginFrame: the latch, the targets, the skeleton's walk, the pipelines and resources), its
 // two epochs (ExecuteDepth, ExecuteColour) and their engine hooks (InstallHooks: RenderDepth's first-person draw, Main::RenderFirstPersonView's
 // accumulator render), its state and report counters (FirstPersonFrame, Report: its lines at the views' async work) and the skeleton's
-// parity (Diagnostics/SkeletonParity.cpp) are the feature's, on the view engine's calls (IndirectDraws.h, "The view engine").
+// parity (Diagnostics/SkeletonParity.cpp) and its scene diagnostics (Diagnostics/RootViewChecks.cpp) are the feature's, on the view
+// engine's calls (IndirectDraws.h, "The view engine").
 //
 // Core keeps what every bucketed view shares, keyed by the view's slot or its membership (Core/Render/Views/ViewSlots.h,
 // Core/Extensions/Views.h):
 // - the epochs' segments and Tracy zones' passes (ViewEpoch*.cpp: the view's passes and its forward part), their revisions (the
 //   shape, key group, coverage inputs), the slot's state (Impl/Views.h's ViewEpochState: targets, resources, depth range, forward
-//   compatibility), the forward keys' targets (DrawPipelines' kForwardFirstPerson keys and first-person targets);
-// - the scene's side of a CategoryRoot view: its root as a category node (the classification's root stop, NoteFirstPersonHidden and the
-//   misfiled observer, ViewMisfiled), the set's decisions (SetParticipation, the slot readiness, the first-person decals' forward keys:
-//   Coordinator::ViewDecalForward), the placements' per-frame chains (Placements.cpp, Walk.cpp), the frame requests' root and the frame
-//   globals' culled bits (FrameGlobals::NoteFirstPersonCulled);
+//   compatibility), the forward keys' targets by view (DrawPipelines::SetViewForwardTargets, keyed by kForwardKeyFirstPerson);
+// - the scene's side of a CategoryRoot view: its root as a category node (the classification's root stop, its hidden verdicts and
+//   misfiled entries announced: RootViewHidden, ViewMisfiled), the set's decisions (SetParticipation, the slot readiness, the
+//   first-person decals' forward keys: Coordinator::ViewDecalForward; the left-out slots announced: SetSlotDecided, SetSlotRedecided),
+//   the placements' per-frame chains (Placements.cpp, Walk.cpp), the frame requests' root and the frame globals' culled bits
+//   (FrameGlobals::NoteFirstPersonCulled; the subtree announced: RootSubtreeSynced);
 // - FrameValues' root-view rows and palettes (taken at the frame's start, the palette marks), and its counters of the palette rows
 //   classes' first-person writes (Features/Particles faces their quads to the view's eye), which the report reads with no Particles include;
 // - PassCapture's withholding of the members' engine registrations (InMainRenderers), and the census's first-person view.
@@ -36,6 +38,9 @@ namespace DCLF::Features::FirstPerson
 	// kViewFirstPerson mirrors it): Features/Manifest.cpp checks them against Core's.
 	inline constexpr std::uint8_t kSetFirstPerson = 1u << 6;
 	inline constexpr std::uint32_t kViewFirstPerson = 1u << 11;
+	// The view's forward keys' bit (Api::ViewKeyRule::keyFlags, above Core's ForwardPipelineKey bits): their targets are the first
+	// person's (kMAIN + motion vectors, kPOST_ZPREPASS_COPY's depth), every channel written. Its value is in the keys' recipe ids.
+	inline constexpr std::uint32_t kForwardKeyFirstPerson = 4;
 
 	// FirstPersonFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
@@ -57,4 +62,10 @@ namespace DCLF::Features::FirstPerson
 
 	// Diagnostics/SkeletonParity.cpp: CS_DCLF_SET_PARITY's log of the skeleton's slots and claimed phases, when they change.
 	void SubscribeSkeletonParity();
+
+	// Diagnostics/RootViewChecks.cpp: the view's scene diagnostics on Core's root view hook points (the subtree's bits, chain and hidden
+	// geometry; its entries' hidden verdicts; under CS_DCLF_SET_PARITY the misfiled entries and the slots the set's decisions leave out),
+	// subscribed from the install; and their report lines after the set's (ReportPoint::SceneCoordinatorSet, the scene lane).
+	void SubscribeRootViewChecks();
+	void SetLines(std::uint32_t a_sceneFrame);
 }

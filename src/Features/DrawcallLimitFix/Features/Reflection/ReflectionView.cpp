@@ -115,7 +115,7 @@ namespace DCLF::Features::Reflection
 		const bool on = state->targets.colour != DXGI_FORMAT_UNKNOWN && Extensions::ViewOn(ActiveToggles(), kView) && !a_context.failed;
 		auto& drawPipelines = DrawPipelines::Get();
 		if (on)
-			drawPipelines.SetForwardTargets(state->targets);
+			drawPipelines.SetViewForwardTargets(kView, state->targets);
 		// Every slot with a key of the view's (a LOD Lighting technique's), with their programs counted and whether one is still to come.
 		IndirectDraws::ViewPipelineCounts pipelines;
 		if (on)

@@ -17,8 +17,9 @@
 //    shading sample).
 //
 // A membership is read as data where Core decides (Core/Extensions/ObjectContributors.h: Extensions::TechniqueObjectFlags,
-// GeometryTypeOn, ParentAdmits, ObjectClassOn; Core/Extensions/CoordinatorComponents.h: EntryClassTaken), never called per object. A
-// derivation is called per sampled property or per frame, never per object.
+// PropertyFlagRules, GeometryTypeOn, GeometryTypeMoves, PlannedItemClass, EntryClassOf, ParentAdmits, ObjectClassOn, CategoryRoots;
+// Core/Extensions/CoordinatorComponents.h: EntryClassTaken), never called per object (a class's category root: per frame). A derivation
+// is called per sampled property or per frame, never per object.
 //
 // Adding a Core class for a feature (section 2) is the same three steps whichever enum it goes in:
 // - its value in the enum here, before Count, saying what Core recognises (its Ineligible reason, its trait) and which feature takes it;
@@ -38,6 +39,7 @@
 namespace RE
 {
 	class BSShaderProperty;
+	class NiNode;
 }
 
 namespace DCLF::Api
@@ -49,6 +51,9 @@ namespace DCLF::Api
 	class MaterialPortDerivation;
 	class MaterialPortEvaluation;
 	class MaterialPortShading;
+	// Defined below (section 2) and by Api/FrameValues.h: a geometry type contribution names them (value None: 0).
+	enum class EntryClass : std::uint8_t;
+	enum class FrameValueItemClass : std::uint8_t;
 
 	// ---- 1. Membership by an engine key.
 
@@ -59,13 +64,25 @@ namespace DCLF::Api
 	 * - technique: the Lighting technique (SIE::ShaderCache::LightingShaderTechniques; below Extensions::kTechniqueSlots), one feature's.
 	 * - toggle: a registered toggle; the technique's objects are DCLF's while it is on (the Lighting port's eligibility).
 	 * - objectFlags: the record flags its objects carry (the joins' static flags), the feature's own bits (Records.h, kFeatureObjectFlags).
+	 * - propertyFlags, geometryType (optional): the Lighting property flags (BSShaderProperty::EShaderPropertyFlag bits) that mark its
+	 *   objects whatever technique the flags pick, and the geometry type such an object must be: an object whose property has any of them
+	 *   is DCLF's only while toggle is on and its geometry is geometryType, else Ineligible::Lod (object and terrain LOD: Features/Lod).
+	 *   Resolved once into Core's flag rules (Extensions::PropertyFlagRules), which the Lighting port's eligibility reads.
 	 */
 	struct TechniqueContribution
 	{
 		std::uint32_t technique = ~0u;
 		ToggleId toggle;
 		std::uint32_t objectFlags = 0;
+		std::uint64_t propertyFlags = 0;
+		std::uint8_t geometryType = 0xFF;
 	};
+
+	/**
+	 * @brief The mirrored node kind bits an entry class rule may test (GeometryTypeContribution::EntryRule::parentKind, the mirror's capture
+	 * kind as is; Core checks they match it). FaceGen: a BSFaceGenNiNode.
+	 */
+	inline constexpr std::uint32_t kMirroredKindFaceGen = 1u << 7;
 
 	/**
 	 * @brief A geometry type contribution: an engine geometry type (RE::BSGeometry::Type) whose objects the feature ports, a class of DCLF's
@@ -73,12 +90,38 @@ namespace DCLF::Api
 	 * walk's traits, the engine side's captures), as data (no call per object).
 	 *
 	 * - geometryType: the type (below Extensions::kGeometryTypeSlots), one feature's.
-	 * - toggle: a registered toggle.
+	 * - toggle: a registered toggle (none only for a contribution that sets entry alone: its type is no class of DCLF's).
+	 * - propertyFlags (optional): its objects are only those whose Lighting property has any of these flags (BSShaderProperty::
+	 *   EShaderPropertyFlag bits), drawn as a tri-shape while toggle is on, Ineligible::Lod while off (Eligibility::Static: object LOD's
+	 *   sub-index shapes, Features/Lod); 0: every object of the type.
+	 * - itemClass (optional): the FrameValues item class (Api/FrameValues.h) its skinless objects with a palette block are. The walk sizes
+	 *   a member's block by the class's rule while toggle is on (for Core's capture of a complete particle system: its units), the class's
+	 *   geometry source is its slot's, the coordinator plans the item as the class and the frame values' parity leaves its rows to the
+	 *   class (Extensions::PlannedItemClass). None: none.
+	 * - moves: its objects change every frame invisibly to the walk while toggle is on (a particle system's bound and quads): movers in
+	 *   the walk's per-frame traits, placed by FrameValues every frame, their own updates their move events.
+	 * - entry (optional): the entry class (Api::EntryClass) its objects under a parent with any of entry.parentKind are, whatever toggle:
+	 *   resolved once per tracked entry by the walk, and read by the eligibility and the attach's prepare (Extensions::EntryClassOf).
+	 *   - perFrame: its entries' records follow what the following component publishes: classified every frame while the class is taken,
+	 *     and given the walk's per-frame entry-class trait (no root motion of their own; the light path's).
+	 *   - holdsParent: an entry's parent is held from the attach's pins as its source node (EntryWrite::source: a face shape's head).
 	 */
 	struct GeometryTypeContribution
 	{
+		struct EntryRule
+		{
+			EntryClass entryClass{};
+			std::uint32_t parentKind = 0;  // kMirroredKind* bits
+			bool perFrame = false;
+			bool holdsParent = false;
+		};
+
 		std::uint8_t geometryType = 0xFF;
 		ToggleId toggle;
+		std::uint64_t propertyFlags = 0;
+		FrameValueItemClass itemClass{};
+		bool moves = false;
+		EntryRule entry;
 	};
 
 	// ---- 2. Membership by a Core class (a value per class a feature takes: see the steps above).
@@ -164,11 +207,15 @@ namespace DCLF::Api
 	 *
 	 * - objectClass: the class, one feature's.
 	 * - toggle: a registered toggle.
+	 * - categoryRoot (optional): the engine root the class's objects are under, listed as a category node while the class is on (the
+	 *   category capture: render thread, the frame's start, every frame; null: none now). Called per frame, never per object; two classes
+	 *   may list the same root (TES::lodLandRoot: Features/Lod's).
 	 */
 	struct ObjectClassContribution
 	{
 		ObjectClass objectClass = ObjectClass::Count;
 		ToggleId toggle;
+		RE::NiNode* (*categoryRoot)() = nullptr;
 	};
 
 	/**
@@ -181,7 +228,8 @@ namespace DCLF::Api
 	{
 		None,
 		// A dynamic shape under a BSFaceGenNiNode (an NPC's head, mouth, hair, brows): its positions are its head's, published by the
-		// engine's face morphing, not its buffers'. Its record waits for its second vertex stream (Features/Faces).
+		// engine's face morphing, not its buffers'. Its record waits for its second vertex stream (Features/Faces: matched by its geometry
+		// type contribution's entry rule, classified every frame, its head held).
 		FaceShape,
 		Count,
 	};

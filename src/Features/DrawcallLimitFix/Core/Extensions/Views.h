@@ -120,6 +120,7 @@ namespace DCLF::Extensions
 		bool (*covered)(const Api::ViewCoverage&) = nullptr;
 		void (*captureRoot)(Api::ViewRootCapture&) = nullptr;
 		void (*accumulators)(Api::ViewAccumulators&) = nullptr;
+		bool (*residueDue)() = nullptr;
 		// By ViewPoint: the features' work (RegisterViewWork), in order.
 		std::array<std::vector<void (*)(const Api::ViewPointContext&)>, kViewPoints> work;
 	};
@@ -145,6 +146,9 @@ namespace DCLF::Extensions
 		// The OwnRenderers views, in slot order (PassCapture: the renderers their features name, tested after WithholdMain).
 		std::array<Api::EngineView, kEngineViews> ownRendererViews{};
 		std::uint32_t ownRendererCount = 0;
+		// The view whose forward keys carry no view bits of their own (Api::ViewKeyRule::keyFlags 0; Count: none), the pipeline lane's
+		// view for a key no other view's bits name (ForwardKeyView).
+		Api::EngineView plainKeyView = Api::EngineView::Count;
 		// The view bits by phase are both families' (ViewCommon.h: ResolvedViewBits).
 	};
 
@@ -172,6 +176,21 @@ namespace DCLF::Extensions
 	inline bool ViewOn(const ToggleSet& a_toggles, Api::EngineView a_view)
 	{
 		return a_toggles.On(ViewEntryOf(a_view).toggle);
+	}
+
+	/**
+	 * @brief Any thread (the pipeline lane), after InstallFeatures: the view a forward key's flags are of (Api::ViewKeyRule::keyFlags): the
+	 * view whose bits it carries, else the view whose keys carry none (Count: neither). Its targets and culling are that view's.
+	 */
+	inline Api::EngineView ForwardKeyView(std::uint32_t a_flags)
+	{
+		const auto& views = Views();
+		for (std::size_t v = 0; v < kEngineViews; ++v) {
+			const std::uint32_t bits = views.views[v].keys.keyFlags;
+			if (views.views[v].registered && bits && (a_flags & bits) == bits)
+				return static_cast<Api::EngineView>(v);
+		}
+		return views.plainKeyView;
 	}
 
 	/** @brief Whether a decal on a_view's entries is a forward object of its forward part (its contribution's; false for none). */
