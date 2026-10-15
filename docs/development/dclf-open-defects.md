@@ -362,7 +362,7 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
 -   **Reflection residue under the LOD roots rose with the LOD gates (T6b5).** Baseline w150: mostly 0 a window (max 18);
     w154: 17-83 in every window, almost all "bound, not a reflection member" ('Land' under 'chunk', 'obj'/'objsnow'). Suspected:
     outgoing blocks the engine reuses (a held handle attached again as a node's current block: "23 reused" a window) stay
-    `gateHeldOut` and are drawn natively; the scene report's "held out now" stays at 6-22. The fix is written (2026-10-11, not built
+    `gateHeldOut` (now their Hold veto, `Api::kVetoHold`) and are drawn natively; the scene report's "held out now" stays at 6-22. The fix is written (2026-10-11, not built
     or run yet): a kept notice (`LodGates::Outcome::kept`) at a reattach before the flip and at a release that finds the handle
     reused, which `ApplyGateKept` turns into members again; forced and superseded gates audited (dclf-async-publication.md, T6b5).
     To confirm: "held out now" near 0 between swaps, the residue back to the w150 baseline. Blocks T6b6's gate (residue 0).

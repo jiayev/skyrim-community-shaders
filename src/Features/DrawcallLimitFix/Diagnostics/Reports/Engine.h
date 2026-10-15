@@ -39,6 +39,4 @@ namespace DCLF::Reports
 	std::string ActorRateLine();
 	/** @brief CS_DCLF_ACCUMULATED_PARITY: the animation gate against DCLF's prediction (newline-terminated); empty without the switch. */
 	std::string AnimRateLine();
-	/** @brief The LOD gates' engine side over a_frames frames; empty while nothing happened. */
-	std::string LodGatesLine(std::uint32_t a_frames);
 }

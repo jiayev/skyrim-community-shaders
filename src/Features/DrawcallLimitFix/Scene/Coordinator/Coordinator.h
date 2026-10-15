@@ -91,7 +91,6 @@ namespace DCLF
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Fades.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Components.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/ShadowSets.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/State/LodGates.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Set.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Publication.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Pump.h"
@@ -101,7 +100,6 @@ namespace DCLF
 	namespace Scene
 	{
 		class Coordinator;
-		struct GateComponentAccess;
 	}
 
 	/**
@@ -134,7 +132,6 @@ namespace DCLF
 		private CoordinatorFades,
 		private CoordinatorComponents,
 		private CoordinatorShadowSets,
-		private CoordinatorLodGates,
 		private CoordinatorSet,
 		private CoordinatorPublication,
 		private CoordinatorPump
@@ -143,7 +140,6 @@ namespace DCLF
 		friend struct Diagnostics::SceneView;
 		// The features' coordinator components reach its services through their context (Components.cpp).
 		friend class Api::CoordinatorComponentContext;
-		friend struct Scene::GateComponentAccess;
 
 	public:
 		using Tables = SceneTables;
@@ -1286,6 +1282,11 @@ namespace DCLF
 		 * components' (Api::ReportLines::componentText, with the component's context) there, in registration order.
 		 */
 		void ComponentsReportText(Api::ReportPoint a_point, std::string& a_text);
+		/**
+		 * @brief The coordinator's report pass at a logged point (Api::ReportPoint::SceneCoordinatorGates): the features' lines (handed
+		 * a_frame) and the components' text (with the component's context), each logged as one line when not empty, in registration order.
+		 */
+		void ComponentsReportLines(Api::ReportPoint a_point, std::uint32_t a_frame);
 		/** @brief Component a_component's state, the components made first when they are not (scene lane). */
 		const std::shared_ptr<void>& ComponentState(std::uint32_t a_component);
 		/** @brief A SceneStack channel's event applied in stack order: every component's stacked hook (Api::CoordinatorComponent::Events). */
@@ -1309,46 +1310,6 @@ namespace DCLF
 		// The shadow sets: State/ShadowSets.h (CoordinatorShadowSets).
 		ShadowInputs ShadowInputsOf(std::uint32_t a_slot) const;
 		void RefreshShadowSets(bool a_forceRebuild);
-
-		// The LOD gates: State/LodGates.h (CoordinatorLodGates).
-		/** @brief A Gate event (ApplyMirrorEvents, in batch order) opens its gate: token, roots (keys), push stamp. */
-		void ApplyGateEvent(std::uint64_t a_token, std::span<const void* const> a_incoming, std::span<const void* const> a_outgoing, std::uint64_t a_stampNs,
-			std::uint32_t a_stampFrame);
-		/** @brief The gates' detached hook: a_key (its mark of gate a_token erased: UnmarkDetached) leaves its gate. */
-		void GateRootDetached(const void* a_key, std::uint64_t a_token);
-		/** @brief The gates' component's context (their calls on the coordinator's services). */
-		Api::CoordinatorComponentContext GateContext();
-		/** @brief Tags the tracked geometries under a_root on a_token's a_side; true when the mirror lacked a record there. */
-		bool TagGateRoot(std::uint64_t a_token, const void* a_root, std::uint8_t a_side);
-		/** @brief Tags a tracked a_geometry on a_token's a_side (its veto: Observe while an open gate's incoming, else none). */
-		void TagGate(const RE::BSGeometry* a_geometry, std::uint64_t a_token, std::uint8_t a_side);
-		/** @brief The gates' underMark hook: a newly tracked a_geometry under a root of theirs (AddGeometry's prepare found it) tagged. */
-		void TagGateUnder(const RE::BSGeometry* a_geometry, const Api::Mark& a_mark);
-		/** @brief Off its gate's tag (the component's forgot, a retag, a kept notice); its veto is the caller's. */
-		void UntagGate(const RE::BSGeometry* a_geometry);
-		/** @brief The rescan (the gates' rescan hook): gate tags dropped with the entries (its adds tag again). */
-		void ResetGateTags();
-		/** @brief Whether a gated incoming geometry is ready: ineligible by a verdict of the gate's time, or every slot of it whole. */
-		bool GateGeometryReady(const RE::BSGeometry* a_geometry) const;
-		/**
-		 * @brief The gates' settle (CommitSet after its queue): flips the open gates that are ready (roots mirrored, incoming ready, a live
-		 * scene), their vetoes dropped and set in this commit, into the gates' component's deltas (PublishDelta: each flip a GateFlip,
-		 * published by this commit's publication).
-		 */
-		void UpdateGates(bool a_live);
-		/** @brief The gates' take (before CollectEvents): holds LodGates' outcomes posted so far. */
-		void TakeGateOutcomes();
-		/**
-		 * @brief The gates' AfterBatch keys (a pass that applies a batch, after it; not a load screen's pass): retires each held outcome's
-		 * gate (a forced gate's incoming reclassified).
-		 */
-		void ApplyGateOutcomes();
-		void RetireGate(std::uint64_t a_token, bool a_forced);
-		/**
-		 * @brief The engine reused a_token's held block under a_roots: those roots and their geometries leave the gate's outgoing side and
-		 * hold-out (requeued).
-		 */
-		void ApplyGateKept(std::uint64_t a_token, const std::array<const void*, 2>& a_roots);
 
 		// The DCLF set and the claims: State/Set.h (CoordinatorSet).
 		/** @brief The structural changes revokeCursor has not read, into structureChanged. */

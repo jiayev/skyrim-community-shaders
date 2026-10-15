@@ -3,7 +3,6 @@
 
 #include "Internal.h"
 
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
@@ -614,7 +613,7 @@ namespace DCLF::Scene
 			apply(slot, phases, wait);
 		}
 		// The components settle: gates whose incoming geometries are all settled flip here and ride the publication (the gates' component
-		// deltas: GateAdoption). The vetoes they drop or set apply here, before the set's change is noted and the claims are snapshotted.
+		// deltas: Scene::Gates::Adopt). The vetoes they drop or set apply here, before the set's change is noted and the claims are snapshotted.
 		if (gatesLive) {
 			restructuredTaken = false;
 			settleApply.clear();

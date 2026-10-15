@@ -29,7 +29,7 @@ namespace DCLF::LodGates
 	 * - the gate is captured as an event on the scene's stack (CaptureGate: the gates' SceneStack channel) on the swapping thread at the
 	 *   swap's last retirement call, in order after the attaches;
 	 * - the scene coordinator publishes the post-swap claims once every geometry under the incoming roots is a member or ineligible,
-	 *   with a flip for the gate (the gates' component's deltas: GateAdoption);
+	 *   with a flip for the gate (the gates' component's deltas: Scene/Coordinator/Gates.h);
 	 * - the render thread, adopting that publication (FrameView, at the frame's start before the culls), calls Flip: the incoming shown and the
 	 *   outgoing hidden through app-cull, with their hidden events, in the frame whose claims are post-swap;
 	 * - the next LOD drain, under the manager's lock, detaches and releases the outgoing through the engine's own functions.
@@ -97,7 +97,7 @@ namespace DCLF::LodGates
 	 * @brief What became of a gate, for the coordinator (its channel's wake, Extensions::WakeChannel), or of one of its held outgoing blocks: kept names a
 	 * block the engine reused (a quadtree node references its handle again: reattached while its gate lived, or found so at its release)
 	 * by its root keys (the object block's NiNode; the terrain block's land and water nodes), with the gate that held it. The block stays
-	 * attached as the node's current one, so the scene stops holding its geometries out (Tracked::gateHeldOut) and commits them again.
+	 * attached as the node's current one, so the scene stops holding its geometries out (their Hold veto: Api::kVetoHold) and commits them again.
 	 */
 	struct Outcome
 	{
@@ -119,7 +119,7 @@ namespace DCLF::LodGates
 	 */
 	std::uint64_t ForcedGeneration();
 
-	/** @brief The engine side's counters since the last Take (gates opened, flipped, forced, held blocks released, vetoes, the oldest open gate's age), reset (Reports::LodGatesLine). Empty (installed false) while not installed. */
+	/** @brief The engine side's counters since the last Take (gates opened, flipped, forced, held blocks released, vetoes, the oldest open gate's age), reset (the gates' release lines: Scene::Gates::ReleaseLines). Empty (installed false) while not installed. */
 	inline constexpr std::size_t kFlushKinds = 9;
 	struct Totals
 	{

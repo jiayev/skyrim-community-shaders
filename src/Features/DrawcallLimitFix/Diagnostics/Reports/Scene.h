@@ -22,6 +22,9 @@ namespace DCLF::Reports
 	void ScenePassEnd(Scene::Coordinator& a_store, std::uint32_t a_sceneFrame);
 	/** @brief Render thread, the frame's report: the lines of what the render thread keeps (newline-terminated). */
 	std::string SceneFrameLines();
-	/** @brief Render thread, the frame's start (before the components' adoption): the LOD gate releases' lines, when frame a_frame crossed into a new window. */
+	/**
+	 * @brief Render thread, the frame's start (before the components' adoption): the lines at Api::ReportPoint::GateReleases (the LOD gates'
+	 * releases' and engine side's), when frame a_frame crossed into a new window.
+	 */
 	void GateReleases(std::uint32_t a_frame);
 }

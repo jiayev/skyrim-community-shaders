@@ -1,9 +1,6 @@
 #pragma once
 
-#include <ranges>
-
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/GateAdoption.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
 namespace DCLF::Diagnostics
@@ -35,7 +32,6 @@ namespace DCLF::Diagnostics
 		using Frame = Scene::FrameView;
 		static std::uint32_t frame() { return Frame::Get().frame; }
 		static const auto& projectedTextures() { return Frame::Get().projectedTextures; }
-		static auto& gateReleaseStats() { return Scene::GateAdoption::Releases(); }  // the LOD gates' render-thread state
 		static auto& geometryStats() { return Frame::Get().geometryStats; }
 		static auto& pipelinesPosted() { return Frame::Get().pipelinesPosted; }
 		static auto& shadingFrames() { return Frame::Get().shadingFrames; }
@@ -61,6 +57,8 @@ namespace DCLF::Diagnostics
 		static auto& reportedChangeCounts(Store& s) { return s.reportedChangeCounts; }
 		// The features' and the components' text lines at a coordinator report point (Coordinator::ComponentsReportText).
 		static void componentsReportText(Store& s, Api::ReportPoint a_point, std::string& a_text) { s.ComponentsReportText(a_point, a_text); }
+		// ... and their logged lines at a logged one (Coordinator::ComponentsReportLines).
+		static void componentsReportLines(Store& s, Api::ReportPoint a_point, std::uint32_t a_frame) { s.ComponentsReportLines(a_point, a_frame); }
 		static auto& referenceStats(Store& s) { return s.referenceStats; }
 		static auto& leafStats(Store& s) { return s.leafStats; }
 		static auto& subtreesPended(Store& s) { return s.subtreesPended; }
@@ -118,42 +116,31 @@ namespace DCLF::Diagnostics
 		static auto& fanoutStats(Store& s) { return s.fanoutStats; }
 		static std::string attachLine(Store& s) { return s.TakeAttachLine(); }
 		static auto& placementStats(Store& s) { return s.placementStats; }
-		static auto& gateStats(Store& s) { return s.gateStats; }
-		static const auto& lodGates(const Store& s) { return s.lodGates; }
-		// The entries held out (the Hold vetoes: the gates' are their only ones) and observed (Observe: an open gate's incoming).
-		static std::uint32_t gateHeldOutCount(const Store& s) { return s.vetoHeld; }
+		// The entries held out (the Hold vetoes) and observed (Observe), as the coordinator counts them.
+		static std::uint32_t vetoHeldCount(const Store& s) { return s.vetoHeld; }
 		static std::uint32_t vetoObservedCount(const Store& s) { return s.vetoObserved; }
 		static const auto& setWaitCause(const Store& s) { return s.setWaitCause; }
 		static const auto& setWaitWhy(const Store& s) { return s.setWaitWhy; }
-		static bool GateGeometryReady(const Store& s, const RE::BSGeometry* a_geometry) { return s.GateGeometryReady(a_geometry); }
 		static Api::TrackedState TrackedStateOf(const Store& s, const void* a_entry) { return s.TrackedStateOf(a_entry); }
 		static bool IsResidentSlot(const Store& s, std::uint32_t a_slot) { return s.IsResidentSlot(a_slot); }
 		static auto& shadingStats(Store& s) { return s.shadingStats; }
 		static auto& mirrorReads(Store& s) { return s.mirrorReads; }
 		static constexpr const auto& kMirrorReadNames = Scene::Coordinator::kMirrorReadNames;
-		using LodGate = Scene::Coordinator::LodGate;
-		// The flips the commits made since the last publication: the gates' component's deltas pending (PublishDelta), each a GateFlip.
-		static auto gateFlipsMade(const Store& s)
+		// A component's state (null before it is made, or past the components) and the deltas it published since the last publication
+		// (PublishDelta), for its observers.
+		static void* componentState(const Store& s, Api::CoordinatorComponentId a_component)
+		{
+			return a_component.index < s.components.size() ? s.components[a_component.index].get() : nullptr;
+		}
+		static const std::vector<std::shared_ptr<const void>>& componentDeltas(const Store& s, Api::CoordinatorComponentId a_component)
 		{
 			static const std::vector<std::shared_ptr<const void>> none;
-			const std::uint32_t c = Scene::GateAdoption::component.index;
-			const auto& deltas = c < s.componentDeltaRequests.size() ? s.componentDeltaRequests[c] : none;
-			return deltas | std::views::transform([](const std::shared_ptr<const void>& a_delta) -> const GateFlip& { return *static_cast<const GateFlip*>(a_delta.get()); });
+			return a_component.index < s.componentDeltaRequests.size() ? s.componentDeltaRequests[a_component.index] : none;
 		}
 		static const SetSnapshot* publicationClaims(const Store& s) { return s.publicationClaims.get(); }
-		// The gate parity's reads (SceneGateParity.cpp): the coordinator's root marks (the gates' are their component's), the gates' tags,
-		// the observed slots' readiness as the commit recorded it, the slots requeued for the next commit, the next publication's claims,
-		// and a slot's participation (DecideSlot's).
-		static constexpr std::uint8_t kGateIncoming = Scene::Coordinator::kGateIncoming, kGateOutgoing = Scene::Coordinator::kGateOutgoing;
+		// The components' observers' reads (the LOD gates' parity): the coordinator's root marks, the observed slots' readiness as the
+		// commit recorded it, the slots requeued for the next commit, the next publication's claims, and a slot's participation (DecideSlot's).
 		static const auto& rootMarks(const Store& s) { return s.rootMarks; }
-		static bool gateMark(const Api::Mark& a_mark) { return a_mark.component.index == Scene::GateAdoption::component.index; }
-		using GateTag = Scene::Coordinator::GateTag;
-		/** @brief a_geometry's gate tag (token 0: none). */
-		static GateTag gateTagOf(const Store& s, const RE::BSGeometry* a_geometry)
-		{
-			const auto at = s.gateTags.find(a_geometry);
-			return at != s.gateTags.end() ? at->second : GateTag{};
-		}
 		static Api::ObservedState ObservedSlot(const Store& s, std::uint32_t a_slot) { return s.ObservedSlotOf(a_slot); }
 		static const auto& requeued(const Store& s) { return s.requeued; }
 		static const SetSnapshot* setBuilding(const Store& s) { return s.setBuilding.get(); }
