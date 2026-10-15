@@ -79,6 +79,7 @@ namespace DCLF::Diagnostics
 		std::uint64_t token;
 		std::span<const std::pair<const RE::BSGeometry*, std::uint8_t>> incoming;  // the incoming base geometries claimed, with the flip's phases
 		std::span<const RE::BSGeometry* const> outgoing;                          // the outgoing base geometries dropped
+		bool released;                                                            // false: refused (forced or unknown by then; the engine moved on)
 	};
 
 	// The mirror's reads (the lane reads the scene from the mirror), announced for the observers that check them against the live scene:

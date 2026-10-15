@@ -12,6 +12,9 @@
 
 namespace DCLF::Diagnostics
 {
+	// SceneGateParity.cpp.
+	void InstallGateParity();
+
 	void InstallScene()
 	{
 		const auto& o = Observe();
@@ -46,6 +49,9 @@ namespace DCLF::Diagnostics
 			InstallGateObservers();
 			InstallShadowVolumeParity();
 		}
+		// The LOD gates' state after each commit (the persistent parity).
+		if (o.scene)
+			InstallGateParity();
 		// CS_DCLF_CAPTURE_PARITY: the materials written each frame, for its follow-ups.
 		if (o.capture)
 			Subscribe<ScenePoint::AccumulatePrepared>([](const On<ScenePoint::AccumulatePrepared>&) { CaptureParity::Get().DrainWrittenMaterials(); });

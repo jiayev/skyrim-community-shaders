@@ -74,7 +74,8 @@ namespace DCLF::Reports
 			const auto& setWaitCause = V::setWaitCause(a_store);
 			const auto& setWaitWhy = V::setWaitWhy(a_store);
 			const std::uint32_t gateHeldOutCount = V::gateHeldOutCount(a_store);
-			if (!s.opened && !s.retiredFlipped && !s.retiredForced && lodGates.empty() && !gateHeldOutCount && !s.unknownOutcomes && !s.keptNotices)
+			const auto& parity = Diagnostics::SceneDiagnostics().gates.parity;
+			if (!s.opened && !s.retiredFlipped && !s.retiredForced && lodGates.empty() && !gateHeldOutCount && !s.unknownOutcomes && !s.keptNotices && !parity.checks)
 				return {};
 			// The open gates: their oldest request, and what their pending incoming geometries wait for (the blockers).
 			const std::uint64_t now = GateNowNs();
@@ -131,8 +132,12 @@ namespace DCLF::Reports
 			if (observed.publishHoles)
 				text += fmt::format("; {} flipped incoming geometries not claimed by the flip's own publication, first {} <- GATE HOLE (publication)", observed.publishHoles,
 					observed.firstPublishHole);
+			if (const auto& p = observed.parity; p.checks)
+				text += fmt::format("; parity {} checks, {} gates compared ({} full sweeps, {} entries), {} differ{}", p.checks, p.gates, p.sweeps, p.entries, p.differ,
+					p.differ ? " <- GATE PARITY; first: " + p.first : std::string(" <- OK"));
 			s = {};
-			observed = {};
+			// The parity's flip and shown roots stay: they are the next commit's and sweep's.
+			observed = { .parity = { .pass = observed.parity.pass, .lastFlip = observed.parity.lastFlip, .shown = std::move(observed.parity.shown) } };
 			return text;
 		}
 

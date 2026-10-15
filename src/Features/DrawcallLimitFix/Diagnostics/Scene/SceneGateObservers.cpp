@@ -35,6 +35,12 @@ namespace DCLF::Diagnostics
 			++rs.checked;
 			for (const auto& [geometry, phases] : a_event.incoming)
 				if (const std::uint8_t installedPhases = a_event.claims.PhasesOf(geometry); installedPhases != phases) {
+					// A refused flip's engine already moved on (forced, or a later gate superseded it), so a later publication may have
+					// retired its incoming members: counted apart, not a hole.
+					if (!a_event.released) {
+						++rs.refusedHoles;
+						continue;
+					}
 					++rs.holes;
 					if (rs.firstHole.empty())
 						rs.firstHole = fmt::format("gate {}: geometry {} claimed {:#x}, flipped {:#x}", a_event.token, static_cast<const void*>(geometry), installedPhases, phases);

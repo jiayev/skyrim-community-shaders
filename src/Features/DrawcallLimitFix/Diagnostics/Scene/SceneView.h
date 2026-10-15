@@ -128,6 +128,15 @@ namespace DCLF::Diagnostics
 		using LodGate = Scene::Coordinator::LodGate;
 		static const auto& gateFlipsMade(const Store& s) { return s.gateFlipsMade; }
 		static const SetSnapshot* publicationClaims(const Store& s) { return s.publicationClaims.get(); }
+		// The gate parity's reads (SceneGateParity.cpp): the root map, the slots' readiness as the commit recorded it, the slots queued for
+		// the next commit, the next publication's claims, and a slot's participation (DecideSlot's).
+		using GateRoot = Scene::Coordinator::GateRoot;
+		static constexpr std::uint8_t kGateIncoming = Scene::Coordinator::kGateIncoming, kGateOutgoing = Scene::Coordinator::kGateOutgoing;
+		static const auto& gateOfRoot(const Store& s) { return s.gateOfRoot; }
+		static const auto& gateSlots(const Store& s) { return s.gateSlots; }
+		static const auto& gateQueued(const Store& s) { return s.gateQueued; }
+		static const SetSnapshot* setBuilding(const Store& s) { return s.setBuilding.get(); }
+		static std::uint8_t SetParticipation(const Store& s, std::uint32_t a_slot, std::uint32_t a_drawn) { return s.SetParticipation(a_slot, a_drawn); }
 
 		// The mirror's records and its report's counters.
 		static const auto& mirrorNodes(const SceneMirror& m) { return m.nodes; }
