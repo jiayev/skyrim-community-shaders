@@ -357,7 +357,7 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(PermutationCB);
 
-	ConstantBuffer* permutationCB = nullptr;
+	std::unique_ptr<ConstantBuffer> permutationCB;
 
 	struct alignas(16) SharedDataCB
 	{
@@ -389,8 +389,8 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
 
-	ConstantBuffer* sharedDataCB = nullptr;
-	ConstantBuffer* featureDataCB = nullptr;
+	std::unique_ptr<ConstantBuffer> sharedDataCB;
+	std::unique_ptr<ConstantBuffer> featureDataCB;
 
 	PermutationCB permutationData{};
 	PermutationCB permutationDataPrevious{};
