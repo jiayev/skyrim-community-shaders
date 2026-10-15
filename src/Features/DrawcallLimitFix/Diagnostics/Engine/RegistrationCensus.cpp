@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Census.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -302,10 +303,14 @@ namespace DCLF::RegistrationCensus
 			const bool blended = !ActiveToggles().forward && (leaf.view.AlphaBlending() || (lighting && lighting->materialAlpha < 1.0f));
 			Ineligible parentReason = Ineligible::None;
 			bool tracked = false;
-			// CS_DCLF_BILLBOARDS: an effect BSTriShape without a skin under one billboard node is DCLF's (Coordinator::BillboardModeOf).
-			// A particle system under any billboard nodes too (ClassifyFrame: its world and particles are its last update's).
-			const bool particlesTaken = ActiveToggles().billboards && SwitchOnUnlessZero(Switch::BillboardParticles) && ParticleGeometryType(leaf.view.Type());
-			const bool billboardTaken = ActiveToggles().billboards && SceneCapture::LeafView::Effect(leaf.view.property) &&
+			// The billboard parent's contributions (Features/Billboards): an effect BSTriShape without a skin under one billboard node is
+			// DCLF's (Coordinator::BillboardModeOf); a particle system under any billboard nodes too (ClassifyFrame: its world and particles
+			// are its last update's).
+			const auto toggles = ActiveToggles();
+			const bool particlesTaken = Extensions::ParentAdmits(toggles, Api::EngineParent::Billboard, Api::ParentLeaves::ParticleSystems) &&
+			                            ParticleGeometryType(leaf.view.Type());
+			const bool billboardTaken = Extensions::ParentAdmits(toggles, Api::EngineParent::Billboard, Api::ParentLeaves::TurnedEffectShapes) &&
+			                            SceneCapture::LeafView::Effect(leaf.view.property) &&
 			                            leaf.view.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) && !leaf.view.Skinned();
 			std::uint32_t billboards = 0;
 			for (const RE::NiNode* node = a_geometry.parent; node; node = node->parent) {

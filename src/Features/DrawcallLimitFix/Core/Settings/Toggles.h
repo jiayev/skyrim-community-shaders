@@ -49,13 +49,6 @@ namespace DCLF
 		// the refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward;
 		// on by default: CS_DCLF_REFRACTION=0 seeds it off);
 		bool refraction = false;
-		// particles: NiParticleSystem geometry with a BSEffectShaderProperty, its quads built by DCLF from snapshots taken at the
-		// engine's particle update (ParticleSnapshots) and drawn in the forward epoch's sort (needs effects; on by default:
-		// CS_DCLF_PARTICLES=0 seeds it off);
-		bool particles = false;
-		// BSEffectShaderProperty meshes under one NiBillboardNode, turned to the drawing camera by the vertex stage from the node's base
-		// transform (Billboards.h; needs effects; on by default: CS_DCLF_BILLBOARDS=0 seeds it off);
-		bool billboards = false;
 		// a leaf under an NiSwitchNode, in the frames every switch on its path selects it (trees, harvestables);
 		bool switchNodes = false;
 		// object LOD (TES::lodLandRoot's BSSubIndexTriShape blocks): tracked under the LOD root, drawn by their visible segments;
@@ -88,7 +81,8 @@ namespace DCLF
 		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull).
 		bool excludePrimaryEntries = false;
 
-		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees), ...
+		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees;
+		// Features/Particles, Features/Billboards: theirs), ...
 		std::uint32_t registered = 0;
 		/** @brief Whether a feature's toggle is on (false for none). */
 		bool On(Api::ToggleId a_toggle) const { return a_toggle && ((registered >> a_toggle.bit) & 1u) != 0; }

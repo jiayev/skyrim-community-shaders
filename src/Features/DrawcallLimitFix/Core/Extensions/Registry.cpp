@@ -29,6 +29,8 @@ namespace DCLF::Extensions
 			std::vector<TableFamilyEntry> tableFamilies;
 			std::vector<CoordinatorComponentEntry> coordinatorComponents;
 			TechniqueEntries techniques{};
+			GeometryTypeToggles geometryTypes{};
+			ParentToggles parents{};
 			std::vector<ShadingContributionEntry> shadingContributions;
 			std::vector<FrameGlobalsEntry> frameGlobals;
 			std::uint32_t frameGlobalsFloats = 0;
@@ -121,9 +123,11 @@ namespace DCLF::Extensions
 
 			void RegisterReportLines(const Api::ReportLines& a_lines) override
 			{
-				if (a_lines.name.empty() || !a_lines.lines)
+				// A point composing its text takes text lines; the others, logged lines.
+				const bool text = a_lines.point == Api::ReportPoint::AsyncWork;
+				if (a_lines.name.empty() || (text ? !a_lines.text || a_lines.lines : !a_lines.lines || a_lines.text))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete report lines", feature));
-				lists.reportLines.push_back({ std::string(a_lines.name), a_lines.point, a_lines.lines });
+				lists.reportLines.push_back({ std::string(a_lines.name), a_lines.point, a_lines.lines, a_lines.text });
 			}
 
 			bool RegisterStandInObserver(const Api::StandInObserver& a_observer) override
@@ -166,6 +170,27 @@ namespace DCLF::Extensions
 				entry = { a_technique.toggle, a_technique.objectFlags };
 			}
 
+			void RegisterGeometryType(const Api::GeometryTypeContribution& a_type) override
+			{
+				if (a_type.geometryType >= kGeometryTypeSlots || !a_type.toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete geometry type contribution", feature));
+				auto& toggle = lists.geometryTypes[a_type.geometryType];
+				if (toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes geometry type {}, which another feature has", feature, static_cast<std::uint32_t>(a_type.geometryType)));
+				toggle = a_type.toggle;
+			}
+
+			void RegisterParent(const Api::ParentContribution& a_parent) override
+			{
+				if (a_parent.parent >= Api::EngineParent::Count || a_parent.leaves >= Api::ParentLeaves::Count || !a_parent.toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete parent contribution", feature));
+				auto& toggle = lists.parents[static_cast<std::size_t>(a_parent.parent)][static_cast<std::size_t>(a_parent.leaves)];
+				if (toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes parent {} leaves {}, which another feature has", feature,
+						static_cast<std::uint32_t>(a_parent.parent), static_cast<std::uint32_t>(a_parent.leaves)));
+				toggle = a_parent.toggle;
+			}
+
 			void RegisterShading(const Api::ShadingContribution& a_shading) override
 			{
 				if (a_shading.name.empty() || !a_shading.propertyFlags || !a_shading.derive)
@@ -190,6 +215,16 @@ namespace DCLF::Extensions
 		private:
 			Lists& lists;
 		};
+	}
+
+	void InstallEarlyHooks(std::span<const Api::Feature> a_features)
+	{
+		static bool installed = false;
+		if (std::exchange(installed, true) || Registered().installed)
+			stl::report_and_fail("Drawcall Limit Fix: the features' early hooks were installed twice, or after the features");
+		for (const auto& feature : a_features)
+			if (feature.earlyHooks)
+				feature.earlyHooks();
 	}
 
 	void InstallFeatures(std::span<const Api::Feature> a_features)
@@ -218,6 +253,8 @@ namespace DCLF::Extensions
 	std::span<const TableFamilyEntry> RegisteredTableFamilies() { return Registered().tableFamilies; }
 	std::span<const CoordinatorComponentEntry> RegisteredCoordinatorComponents() { return Registered().coordinatorComponents; }
 	const TechniqueEntries& RegisteredTechniques() { return Registered().techniques; }
+	const GeometryTypeToggles& RegisteredGeometryTypes() { return Registered().geometryTypes; }
+	const ParentToggles& RegisteredParents() { return Registered().parents; }
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions() { return Registered().shadingContributions; }
 	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals() { return Registered().frameGlobals; }
 }

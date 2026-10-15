@@ -3,7 +3,6 @@
 // main shape's plans (shared with the commits).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF

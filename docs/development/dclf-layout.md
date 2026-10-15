@@ -43,7 +43,9 @@ overlap.
 A feature is an `Api::Feature`: a name and an install function. It is listed in `Features/FeatureList.cpp`, the one place
 that shows what DCLF does. The shell's `PostPostLoad` calls `Extensions::InstallFeatures` before DCLF's threads start.
 Install registers the feature's parts through `Api::InstallContext`. The registry (`Core/Extensions/Registry`) is
-read-only after that.
+read-only after that. A feature may also name early hooks (`Api::Feature::earlyHooks`): engine hooks Core's engine side must
+find in place when it installs (a vtable slot the primary cull takes), which the shell runs before DCLF's own engine hooks and
+observers (`Extensions::InstallEarlyHooks`).
 
 | Contract | Header | What a feature gets |
 | --- | --- | --- |
@@ -54,11 +56,11 @@ read-only after that.
 | Commit hook | `Api/Commits.h` | its part of each commit's frame data (depth, colour, shadow), staged into the adopted versions on the render thread |
 | Frame binding | `Api/FrameBindings.h` | a buffer every draw reads at a declared texture register, given by the frame records (main, shadow, the builds' embedded addresses) and checked by the named-address parity |
 | Switches and toggles | `Api/Settings.h` | its `CS_DCLF_*` switches, listed where it says beside Core's, and its live toggles, in the menu and the packed word |
-| Report lines | `Api/Reports.h` | its lines at a named point of the periodic report |
+| Report lines | `Api/Reports.h` | its lines at a named point of the periodic report: logged (`PrimaryCull`), or appended to the report's text (`AsyncWork`, the draws' async work) |
 | Stand-in observer | `Api/EngineEvents.h` | the primary cull's stood-in roots as they change, and Main::Update's entry; whether the primary cull is installed |
 | Table family | `Api/TableFamilies.h` | columns of its own in every `SceneTables` (`Extensions::TableFamilies`), read through a typed handle; Core keeps beside them the write stamp (the publication copies a family only when it moved), the objects' references into it (bounded by its scene resources' fit, carried in the record at a declared word) and its rows' tags, and recycles its retired rows |
 | Coordinator component | `Api/CoordinatorComponents.h` | state the coordinator keeps for it, and hooks at the coordinator's residency points (a slot resident, left, the residents recounted, the slot tables reset) with a narrow context: the live tables, the mirror's fade node, the entry's reference, seeds the next frame takes (`FrameView::TakeComponentSeeds`) |
-| Object contributor | `Api/ObjectContributors.h` | a technique it ports (its eligibility under a toggle, its objects' record flags, read as data), the shading values it derives for a property flag of its own, and engine globals captured with the frame's (`FrameGlobals::features`) |
+| Object contributor | `Api/ObjectContributors.h` | a technique it ports (its eligibility under a toggle, its objects' record flags, read as data), a geometry type it ports (its objects a class under a toggle, read as data by the eligibility, the walk and the captures), the leaves it admits under an engine parent Core rejects them under (`EngineParent`, `ParentLeaves`, under a toggle, read as data by the classification), the shading values it derives for a property flag of its own, and engine globals captured with the frame's (`FrameGlobals::features`) |
 
 Each contract's thread, timing and lifetime is documented in its header. A feature's install also installs its engine
 hooks and subscribes its observers (`Diagnostics::Subscribe`, under Core's `Observe()` flags).
@@ -70,7 +72,8 @@ defines them in companions under `Core/Extensions/` (`FrameValuePools.h`, `GpuSt
 
 Residency changes are events, so a coordinator component's hooks are function pointers called per changed slot. The loops
 that run every frame over every object (the walk's evaluate, the builds' packing, the commit) never call a feature: they read
-what it registered as data (a technique's flags and toggle, a family's references and record word). The switches and toggles register with `Core/Settings`, which owns them.
+what it registered as data (a technique's flags and toggle, a geometry type's or a parent's toggle, a family's references and record
+word). The switches and toggles register with `Core/Settings`, which owns them.
 
 The shaders' shared constants stay compile-time: a feature declares its own (a frame binding's register beside its HLSL
 declaration, its object flag bits within `kFeatureObjectFlags`, its family's record word), and `Features/Manifest.cpp`
@@ -80,8 +83,14 @@ checks them against Core's and each other's.
 the second: a pool with frame-start reads, scene resources with their commit hook and frame binding, a next-frame stage on
 the compute queue, its switches and toggle, a report line, a stand-in observer with its engine hooks, its parity, and its
 table family (the tree slots), coordinator component (listing them as members join and leave) and object contributions
-(technique 12's eligibility and record flag, its shading derivation, its frame globals). The extension points still to come,
-as the next features need them:
+(technique 12's eligibility and record flag, its shading derivation, its frame globals). `Features/Particles/` and
+`Features/Billboards/` followed: their switches and toggles, report lines at the draws' async work and parity, a geometry type
+contribution (the particle types) and parent contributions (the leaves under an NiBillboardNode), the particle snapshots' engine
+hooks, and the billboard parity's early hooks. Their per-object paths stay Core's for now: the particle snapshot store and the
+expansion FrameValues' producer runs per particle member into the palette part it shares with the skins (`Engine/Capture/
+ParticleSnapshots`), and the billboard placement row it samples per moving object (`Engine/Capture/Billboards`, Effect.hlsl's
+layout). The extension points still to come, as the next features need them:
+- frame-value contributors that write into a built-in part per chunk (the particles' palette rows, the billboard placement row);
 - per-object record columns (the record's TreeParams and WindTimers block, `treeAnim`, is still Core's: the Lighting port's
   layout of `DCLFObjectRecord`);
 - more engine event channels (the stand-in change still names the BSTreeNodes among its roots);

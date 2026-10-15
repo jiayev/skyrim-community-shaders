@@ -6,7 +6,6 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Draws.h"

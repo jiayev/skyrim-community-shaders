@@ -4,7 +4,6 @@
 // The <- ACCUMULATED observer against the engine's bit runs only under CS_DCLF_ACCUMULATED_PARITY.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
 

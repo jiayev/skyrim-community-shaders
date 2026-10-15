@@ -2,6 +2,7 @@
 // (evaluate, then merge in order), the object records and their geometry slots, face shapes' regions, and the per-frame traits.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 
@@ -1500,7 +1501,8 @@ namespace DCLF::Scene
 		traits |= leaf.Skinned() ? kTraitSkin : 0u;
 		// A particle system's bound and quads change with each update, invisibly to the walk: a mover (FrameValues places it every frame),
 		// its own update its move event (ParticleSnapshots' capture pushes it).
-		if (ActiveToggles().particles && leaf.geometry && leaf.geometry->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))
+		constexpr auto kParticles = static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles);
+		if (Extensions::GeometryTypeOn(ActiveToggles(), kParticles) && leaf.geometry && leaf.geometry->type == kParticles)
 			traits |= kTraitMoves;
 		if (leaf.property && leaf.property->controllers)
 			traits |= kTraitAnimatedShading;

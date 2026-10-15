@@ -3,13 +3,11 @@
 // ViewEpoch.cpp's, its passes ViewEpochRecord.cpp's). Render thread, but for ReflectionDrawable and ReflectionSlotReady (the scene lane's commit).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 
 namespace DCLF

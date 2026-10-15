@@ -35,10 +35,6 @@ namespace DCLF::Reports
 	std::string EngineReadWindowLine();
 	/** @brief CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads; empty while not installed. */
 	std::string ReleaseGuardLine();
-	/** @brief The billboard members, and with CS_DCLF_SET_PARITY the engine's turns against DCLF's (newline-terminated lines). */
-	std::string BillboardsLines();
-	/** @brief The particle snapshots' lines, and with CS_DCLF_SET_PARITY the engine's passes against them (newline-terminated). */
-	std::string ParticleSnapshotsLines();
 	/** @brief The actors' animation stamp (newline-terminated); empty when it did not run. */
 	std::string ActorRateLine();
 	/** @brief CS_DCLF_ACCUMULATED_PARITY: the animation gate against DCLF's prediction (newline-terminated); empty without the switch. */

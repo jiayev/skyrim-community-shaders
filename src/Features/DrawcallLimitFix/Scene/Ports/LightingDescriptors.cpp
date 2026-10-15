@@ -497,7 +497,8 @@ namespace DCLF
 
 	bool ParticleSystemTaken(const SceneCapture::LeafView& a_leaf)
 	{
-		if (!ActiveToggles().particles || !a_leaf.geometry || a_leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) || a_leaf.Skinned())
+		constexpr auto kParticles = static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles);
+		if (!Extensions::GeometryTypeOn(ActiveToggles(), kParticles) || !a_leaf.geometry || a_leaf.Type() != kParticles || a_leaf.Skinned())
 			return false;
 		const auto& p = a_leaf.geometry->particles;
 		// Aligned quads with the velocities FUN_140e51320 reads for them.
@@ -508,7 +509,7 @@ namespace DCLF
 	{
 		// ParticleSystemTaken's conditions, a bit each, then the property's: a particle pass is hint 1 whatever its alpha, so without
 		// a blending alpha property its blend mode is the frame's property alpha (FUN_14150bc80); and no decal.
-		if (!ActiveToggles().particles)
+		if (!Extensions::GeometryTypeOn(ActiveToggles(), a_leaf.Type()))
 			return kEffectVariantParticle;
 		const auto* g = a_leaf.geometry;
 		if (!g || a_leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) || !g->particles.system || a_leaf.Skinned())

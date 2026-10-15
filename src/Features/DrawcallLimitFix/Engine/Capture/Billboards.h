@@ -31,6 +31,10 @@ namespace DCLF
 	 * stands; the vertex stage turns it about the pivot by (R0 * M) * R0^T); PreviousWorld's rotation part = R0, its w column the leaf's world bound radius (Effect.hlsl's
 	 * EffectRadius) and two zeros; Bound = the pivot, and a radius covering the leaf in every orientation (the distance of its bound's
 	 * centre from the pivot plus its radius): the GPU cull's sphere, and the forward sort's centre.
+	 *
+	 * The row and the mode are Core's: the placement row's layout is Effect.hlsl's, and FrameValues' producer samples it for every moving
+	 * object regardless of the toggle. The rest is the feature's (Features/Billboards: the switches and toggle, its parent contributions,
+	 * the CPU twin of the turn and the parity comparing it with the engine's).
 	 */
 	namespace Billboards
 	{
@@ -40,24 +44,11 @@ namespace DCLF
 		 */
 		std::uint32_t FaceMode(const void* a_node);
 
-		/** @brief A camera as the engine's billboard code reads it: its world rotation's columns (forward, up, right) and translation. */
-		struct Camera
-		{
-			float forward[3]{}, up[3]{}, right[3]{}, eye[3]{};
-		};
-
 		/**
 		 * @brief a_geometry's billboard row (above) into a_out's world, previousWorld and bound, when it is a BSEffectShaderProperty leaf
 		 * with an NiBillboardNode above it (the nearest); false, and a_out untouched, otherwise. Inside the engine-read window (the parents'
 		 * worlds and the locals are the update's; nothing a cull writes is read).
 		 */
 		bool SampleRow(const RE::BSGeometry& a_geometry, BindlessPlacement& a_out);
-
-		/**
-		 * @brief The node's world rotation NiBillboardNode::OnVisible makes (0x140d3e650: R0 * M; M from a_mode and a_camera, R0 replaced by
-		 * the identity for BSROTATE_ABOUT_UP), row-major. The CPU twin of Effect.hlsl's DCLFBillboardRotation (Diagnostics::BillboardTurns
-		 * compares it with the engine's turn).
-		 */
-		void Orient(const float (&a_base)[3][3], const float (&a_pivot)[3], std::uint32_t a_mode, const Camera& a_camera, float (&a_out)[3][3]);
 	}
 }

@@ -1,4 +1,5 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Draws.h"
 #include "Engine.h"
 
@@ -37,8 +38,8 @@ namespace DCLF
 		text += VisibilityReport();
 		text += ReflectionReport();
 		text += ForwardReport();
-		text += Reports::ParticleSnapshotsLines();
-		text += Reports::BillboardsLines();
+		// The features' lines here (Features/Particles, Features/Billboards).
+		Extensions::ReportTextAt(Api::ReportPoint::AsyncWork, text);
 		text += FirstPersonReport();
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
 			auto& scene = *impl->scene;

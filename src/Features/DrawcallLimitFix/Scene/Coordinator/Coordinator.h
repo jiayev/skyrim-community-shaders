@@ -1074,8 +1074,9 @@ namespace DCLF
 		std::uint32_t OcclusionTechniqueOf(const SceneCapture::LeafView& a_leaf, bool a_skylighting) const;
 		Ineligible ClassifyFrame(const Tracked& a_tracked) const;
 		/**
-		 * @brief CS_DCLF_BILLBOARDS: the face mode (0-5) of the one NiBillboardNode above a Billboard-parented leaf when DCLF turns it on
-		 * the GPU (Billboards.h: a skinless BSEffectShaderProperty BSTriShape, a known mode); else -1 (it stays Ineligible::Billboard).
+		 * @brief The face mode (0-5) of the one NiBillboardNode above a Billboard-parented leaf when DCLF turns it on the GPU (its parent
+		 * contribution's toggle on: Api::ParentLeaves::TurnedEffectShapes; Billboards.h: a skinless BSEffectShaderProperty BSTriShape, a
+		 * known mode); else -1 (it stays Ineligible::Billboard).
 		 */
 		std::int32_t BillboardModeOf(const Tracked& a_tracked) const;
 		/**

@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -392,7 +393,7 @@ namespace DCLF
 				record->writing.store(false, std::memory_order_release);
 				captures.fetch_add(1, std::memory_order_relaxed);
 				// The system's move event (MoveEvents, keyed by the geometry): the scene pass's light path takes it then, not every frame.
-				if (ActiveToggles().particles) {
+				if (Extensions::GeometryTypeOn(ActiveToggles(), static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))) {
 					Scene::PushMove(&a_system);
 					Scene::CountMove(7);
 				}

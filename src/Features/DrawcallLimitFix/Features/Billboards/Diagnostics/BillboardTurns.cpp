@@ -1,8 +1,7 @@
-// The billboards' observer (BillboardTurns.h): the thunk after NiBillboardNode::OnVisible, on whatever thread runs the cull; the
-// report takes its counts on the render thread.
+// CS_DCLF_SET_PARITY: the billboards' observer (Billboards.h, InstallTurns): the thunk after NiBillboardNode::OnVisible, on whatever
+// thread runs the cull; the report takes its counts on the render thread.
 
-#include "BillboardTurns.h"
-
+#include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
@@ -12,14 +11,12 @@
 #include <bit>
 #include <cmath>
 
-namespace DCLF::Diagnostics::BillboardTurns
+namespace DCLF::Features::Billboards
 {
 	namespace
 	{
-		using Billboards::Camera;
-		using Billboards::FaceMode;
-		using Billboards::Orient;
-		using Billboards::SampleRow;
+		using DCLF::Billboards::FaceMode;
+		using DCLF::Billboards::SampleRow;
 
 		// NiBillboardNode's vtable slot OnVisible and what it holds (AE 0x140d3f720).
 		constexpr std::size_t kOnVisibleSlot = 0x34;
@@ -159,7 +156,7 @@ namespace DCLF::Diagnostics::BillboardTurns
 		};
 	}
 
-	void Install()
+	void InstallTurns()
 	{
 		if (installed || !Diagnostics::Observe().claims)
 			return;
@@ -174,14 +171,14 @@ namespace DCLF::Diagnostics::BillboardTurns
 		logger::info("[DCLF] billboards' observer installed on NiBillboardNode::OnVisible (CS_DCLF_SET_PARITY)");
 	}
 
-	bool Installed()
+	bool TurnsInstalled()
 	{
 		return installed;
 	}
 
-	Counts Take()
+	TurnCounts TakeTurns()
 	{
-		Counts c;
+		TurnCounts c;
 		c.checked = checked.exchange(0);
 		c.differ = differ.exchange(0);
 		c.turns = turns.exchange(0);

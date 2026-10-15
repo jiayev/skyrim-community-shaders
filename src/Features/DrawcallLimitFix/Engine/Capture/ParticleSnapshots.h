@@ -48,7 +48,7 @@ namespace DCLF
 	public:
 		static ParticleSnapshots& Get();
 
-		/** @brief Installs the writer's thunks in NiParticleSystem's vtable (checked first). Render thread, at the feature's install. */
+		/** @brief Installs the writer's thunks in NiParticleSystem's vtable (checked first). Render thread, at the feature's install (Features/Particles). */
 		void Install();
 		bool Installed() const { return installed; }
 
@@ -111,14 +111,14 @@ namespace DCLF
 
 		/**
 		 * @brief Whether the producer expanded a snapshot of a_geometry in its last kCoveredRuns runs (a_followed: it has a record). Any
-		 * thread (Diagnostics::Registrations' <- PARTICLES, at the engine's registration of the member's pass).
+		 * thread (Features/Particles' <- PARTICLES, at the engine's registration of the member's pass).
 		 */
 		bool Covered(const RE::BSGeometry* a_geometry, bool& a_followed) const;
 		static constexpr std::uint32_t kCoveredRuns = 3;
 		/** @brief A record whose newest snapshot has not changed for this many runs is frozen (counted once, when it reaches it). */
 		static constexpr std::uint32_t kFrozenRuns = 30;
 
-		/** @brief The counters since the last Take (Reports::ParticleSnapshotsLines). */
+		/** @brief The counters since the last Take (Features/Particles' report lines). */
 		struct Counters
 		{
 			std::uint64_t captures = 0, contended = 0, aligned = 0, expansions = 0, expandedParticles = 0, withoutSnapshot = 0;
