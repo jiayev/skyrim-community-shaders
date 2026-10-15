@@ -38,9 +38,8 @@ namespace DCLF
 		text += VisibilityReport();
 		text += ReflectionReport();
 		text += ForwardReport();
-		// The features' lines here (Features/Particles, Features/Billboards).
+		// The features' lines here (Features/Particles, Features/Billboards, Features/FirstPerson: the first-person view's).
 		Extensions::ReportTextAt(Api::ReportPoint::AsyncWork, text);
-		text += FirstPersonReport();
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
 			auto& scene = *impl->scene;
 			text += fmt::format("[DCLF] tree LOD draws: {} ({} depth commits, {} shape slots sent; tables {} shape and {} mesh slots; {} commits that could not draw a "

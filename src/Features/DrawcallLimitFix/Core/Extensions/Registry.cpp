@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -39,6 +40,7 @@ namespace DCLF::Extensions
 			std::vector<ShadingContributionEntry> shadingContributions;
 			std::vector<FrameGlobalsEntry> frameGlobals;
 			std::uint32_t frameGlobalsFloats = 0;
+			ViewEntries views{};
 			bool installed = false;
 		};
 
@@ -236,6 +238,16 @@ namespace DCLF::Extensions
 				return { first };
 			}
 
+			void RegisterView(const Api::ViewContribution& a_view) override
+			{
+				if (a_view.view >= Api::EngineView::Count || !a_view.toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete view contribution", feature));
+				auto& entry = lists.views[static_cast<std::size_t>(a_view.view)];
+				if (entry.toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes view {}, which another feature has", feature, static_cast<std::uint32_t>(a_view.view)));
+				entry = { a_view.toggle, a_view.forwardDecals };
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -284,6 +296,7 @@ namespace DCLF::Extensions
 	const ObjectClassToggles& RegisteredObjectClasses() { return Registered().objectClasses; }
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions() { return Registered().shadingContributions; }
 	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals() { return Registered().frameGlobals; }
+	const ViewEntries& RegisteredViews() { return Registered().views; }
 
 	bool EntryClassTaken(Api::EntryClass a_class)
 	{

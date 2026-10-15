@@ -66,15 +66,11 @@ namespace DCLF
 		bool precipitationOcclusion = false;
 		// DCLF draws the water reflection's cube map faces' LOD (dclf-lod.md, "Water reflections").
 		bool reflections = false;
-		// The player's first-person skeleton (arms, weapons, shield, magic hands) as a view of the one scene: its geometry tracked
-		// under the first-person root, members of kSetFirstPerson drawn by the first-person epochs (on by default: CS_DCLF_FIRST_PERSON=0
-		// seeds it off).
-		bool firstPerson = false;
 		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull).
 		bool excludePrimaryEntries = false;
 
 		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees;
-		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs), ...
+		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs; Features/FirstPerson: a view), ...
 		std::uint32_t registered = 0;
 		/** @brief Whether a feature's toggle is on (false for none). */
 		bool On(Api::ToggleId a_toggle) const { return a_toggle && ((registered >> a_toggle.bit) & 1u) != 0; }

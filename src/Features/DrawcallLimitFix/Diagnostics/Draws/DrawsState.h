@@ -293,8 +293,6 @@ namespace DCLF::Diagnostics
 			std::uint32_t cacheOnly = 0;    // in ShaderCache's alone (DCLF_BINDLESS's blocks, or never read)
 			std::string first, catalogOnlyFirst;
 		} constantTables;
-		// CS_DCLF_SET_PARITY: the first-person skeleton's slots and claimed phases as last logged.
-		std::string loggedSkeleton;
 
 		// CS_DCLF_FOLIAGE_PARITY report (FoliageParityReport, ORG's host thread; the mutex orders it with the next frame's).
 		struct Foliage

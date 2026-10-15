@@ -34,7 +34,6 @@ namespace DCLF::Diagnostics
 	struct ShadowViewLatched;
 	struct MainCullViewProj;
 	struct ReflectionFaceDrawn;
-	struct FirstPersonSkeletonWalked;
 	struct FoliageRecordMade;
 	struct MainGraphPasses;
 
@@ -90,8 +89,6 @@ namespace DCLF::Diagnostics
 	void ProbeTarget(const MainCullViewProj& a_cull);
 	// The reflection's face cameras (ReflectionChecks.cpp; CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY).
 	void CheckReflectionFace(const ReflectionFaceDrawn& a_drawn);
-	// CS_DCLF_SET_PARITY: the first-person skeleton's slots and claimed phases, logged when they change (ReflectionChecks.cpp).
-	void NoteFirstPersonSkeleton(const FirstPersonSkeletonWalked& a_walked);
 	// CS_DCLF_FOLIAGE_PARITY: the compare pass's program and readbacks, its passes after the colour draws (Foliage.cpp).
 	void MakeFoliageCompare(const FoliageRecordMade& a_made);
 	void AppendFoliagePasses(const MainGraphPasses& a_passes);

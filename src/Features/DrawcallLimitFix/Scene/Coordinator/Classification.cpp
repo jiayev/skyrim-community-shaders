@@ -5,6 +5,7 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include <cassert>
 
@@ -1098,7 +1099,7 @@ namespace DCLF::Scene
 
 	void Coordinator::FirstPersonDecalForward(const Tracked& a_tracked, LightingDescriptors& a_descriptors) const
 	{
-		static const bool on = SwitchOnUnlessZero(Switch::FirstPersonDecals);
+		static const bool on = Extensions::ViewForwardDecals(Api::EngineView::FirstPerson);
 		// Decal groups 1 and 2 (hints 2 and 3); group 3 is a multi-index layer's, never first person's.
 		const std::uint32_t group = a_descriptors.decalGroup;
 		if (!on || (group != 1 && group != 2) || !FirstPersonEntry(a_tracked.categoryNode))

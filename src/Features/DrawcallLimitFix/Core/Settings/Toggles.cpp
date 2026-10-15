@@ -51,9 +51,6 @@ namespace DCLF
 				{ &S::shadows } },
 			{ &S::reflections, Switch::Reflections, kOn, "reflections", "Reflections", "Draw the water reflection's distant land, objects and trees (CS_DCLF_REFLECTIONS)",
 				"DCLF draws the LOD the water's cube map reflects from its own tables on the GPU; the engine draws the sky, and any LOD DCLF cannot draw yet.", false, {} },
-			{ &S::firstPerson, Switch::FirstPerson, kOn, "first person", "First person", "Draw the first-person arms and weapons (CS_DCLF_FIRST_PERSON)",
-				"T7e: DCLF draws the first-person skeleton's geometry (arms, weapons, shield, magic hands) as a view of its scene, with the first-person camera, in the engine's depth and first-person passes. On by default (validated fp6).",
-				true, { &S::skinned } },  // and a feature's: Features/Actors' actors (FeatureToggle::neededBy)
 		};
 
 		// The packed word: cullMode in the low two bits, then each flag in kToggles order, then the features' by their bits.
@@ -181,7 +178,8 @@ namespace DCLF
 		for (std::size_t n = 0; n < std::size(a_toggle.needs); ++n) {
 			if (a_toggle.needs[n].empty())
 				continue;
-			// Core's, or a feature's registered before it (Features/Decals: the layers need the decals).
+			// Core's, or a feature's registered before it (Features/Decals: the layers need the decals; Features/FirstPerson: the first person
+			// needs the actors).
 			const auto need = ToggleAt(a_toggle.needs[n]);
 			if (need < 0 || static_cast<std::size_t>(need) >= at)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s toggle {} needs {}, which is not listed before it", a_feature, a_toggle.name, a_toggle.needs[n]));
@@ -192,17 +190,6 @@ namespace DCLF
 				info.registeredNeeds[n] = needed.registered;
 		}
 		table.insert(table.begin() + static_cast<std::ptrdiff_t>(at), info);
-		// The Core toggle that needs it (Features/Actors: the first person needs the actors), listed after it: one of its two needs.
-		if (!a_toggle.neededBy.empty()) {
-			const auto by = CoreToggleAt(a_toggle.neededBy);
-			if (by <= static_cast<std::ptrdiff_t>(at))
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s toggle {} is needed by {}, which Core does not list after it", a_feature, a_toggle.name, a_toggle.neededBy));
-			auto& needer = table[static_cast<std::size_t>(by)];
-			const std::size_t n = !needer.registeredNeeds[0] ? 0 : !needer.registeredNeeds[1] ? 1 : std::size(needer.registeredNeeds);
-			if (n == std::size(needer.registeredNeeds))
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s toggle {} is needed by {}, whose features' needs are taken", a_feature, a_toggle.name, a_toggle.neededBy));
-			needer.registeredNeeds[n] = Api::ToggleId{ bit };
-		}
 		registeredCount.store(bit + 1, std::memory_order_relaxed);
 		return { bit };
 	}

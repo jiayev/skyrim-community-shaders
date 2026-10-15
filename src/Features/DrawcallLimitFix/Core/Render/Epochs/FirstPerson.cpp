@@ -135,7 +135,7 @@ namespace DCLF
 		// A capability (Coordinator::SetCapability, the scene lane's commit): the toggle, and the first-person targets published (the colour
 		// epoch's formats, known once the main pass's targets were captured and kPOST_ZPREPASS_COPY exists). Each member then waits for its
 		// own pipelines (FirstPersonSlotReady), and the engine draws it until the frame's epochs are covered (PassCapture).
-		return impl && ActiveToggles().firstPerson && !failed && impl->firstPerson.LaneTargets().colour != DXGI_FORMAT_UNKNOWN;
+		return impl && Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) && !failed && impl->firstPerson.LaneTargets().colour != DXGI_FORMAT_UNKNOWN;
 	}
 
 	bool IndirectDraws::FirstPersonCovered() const
@@ -182,7 +182,7 @@ namespace DCLF
 			return;
 		auto& f = impl->firstPerson;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
-		const bool on = ActiveToggles().firstPerson && !failed;
+		const bool on = Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) && !failed;
 		f.latch = false;
 		f.latchFrame = frame;
 		if (!on)
@@ -233,7 +233,7 @@ namespace DCLF
 			f.depthRange = range;
 			impl->PostRevisionInputs();
 		}
-		if (!ActiveToggles().firstPerson || !f.latch || f.latchFrame != frameNumber)
+		if (!Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) || !f.latch || f.latchFrame != frameNumber)
 			return skip(0);
 		const auto set = Scene::FrameView::Get().FrameClaims();
 		if (!set || !(set->drawn & kSetFirstPerson))
@@ -302,7 +302,7 @@ namespace DCLF
 		auto& f = impl->firstPerson;
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
 		auto skip = [&](std::uint32_t a_cause) { ++f.skipped[a_cause]; };
-		if (!ActiveToggles().firstPerson || !f.latch || f.latchFrame != frameNumber || !f.covered)
+		if (!Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) || !f.latch || f.latchFrame != frameNumber || !f.covered)
 			return;
 		// What it draws is what this frame's depth epoch culled (its sequences and bucket counts), with this frame's colour commit's frame
 		// constants (the frame record, the lighting at PS b13).

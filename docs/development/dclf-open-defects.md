@@ -145,6 +145,23 @@ Core validation at `coc RiverwoodSleepingGiantInn` (FP on), every run (i12vk, i1
 The sequences overrun and the invalid DGC address found with them are resolved (below: "Resolved: first-person and reflection
 draws read past their sequences").
 
+## The first-person weapon and hands are not drawn (found 2026-10-15; pre-existing, not investigated)
+
+With `CS_DCLF_FIRST_PERSON` on (the default), a readied weapon and the first-person hands are missing from the frame. With
+`CS_DCLF_FIRST_PERSON=0` (the engine draws first person) the sword shows. Seen at the bridge save, sword readied, in screenshot runs
+`shot2-fps-on` / `shot2-fps-off` (the run script's `-Shots 5 -ReadyWeaponAt 3`). It is present at a737c27f, and per the user also
+before the modular-layout refactor.
+
+The counters see no fault:
+-   The first-person epochs run on every latched frame (`epochs: 300 depth, 300 colour`, nothing skipped).
+-   Both pipeline slots are ready.
+-   The C3 first-person bits parity reports 0 membership and 0 bit differences.
+-   The set parity's player-3D check reports OK.
+
+So the members are filed and their epochs record, but nothing visible reaches the colour target. Parity does not cover what the
+epochs draw. Next: a target dump of the first-person colour and depth around `ExecuteFirstPersonColour`, and the first-person
+build-draws' sequence count.
+
 ## Pooled payload: open items (2026-10-14)
 
 The payload ring was replaced by pooled versions published once per snapshot (dclf-architecture.md, "The payload"). These

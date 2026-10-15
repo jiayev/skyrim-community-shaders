@@ -129,13 +129,13 @@ namespace DCLF
 			return {};
 		auto& f = impl->firstPerson;
 		const auto counts = PassCapture::Get().TakeFirstPersonCounts();
-		if (!f.frames && !ActiveToggles().firstPerson && !counts.registered)
+		if (!f.frames && !Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) && !counts.registered)
 			return {};
 		const auto& s = f.skipped;
 		std::string text = fmt::format("[DCLF] first person (T7e, CS_DCLF_FIRST_PERSON {}): {} frames, {} the engine drew first person (latch); epochs: {} depth, {} colour; not drawn: "
 									   "{} not the view's frame, {} not covered, {} without the camera, {} stale inputs, {} without resources, {} failed{}, {} colour without the "
 									   "frame's depth epoch{}; targets colour {} motion {} depth {}, {} first-person pipeline slots, {} pipelines ready, depth range {:.4f}\n",
-			ActiveToggles().firstPerson ? "on" : "off", f.frames, f.latched, f.depthEpochs, f.colourEpochs, s[0], s[1], s[2], s[3], s[4], s[5], s[5] ? " <- EPOCH FAILED" : "", s[6],
+			Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) ? "on" : "off", f.frames, f.latched, f.depthEpochs, f.colourEpochs, s[0], s[1], s[2], s[3], s[4], s[5], s[5] ? " <- EPOCH FAILED" : "", s[6],
 			s[6] ? " <- NO DEPTH EPOCH" : "", static_cast<int>(f.targets.colour), static_cast<int>(f.targets.colour2), static_cast<int>(f.targets.depth), f.slots,
 			f.pipelinesReady, f.depthRange);
 		const auto particles = FrameValues::TakeFirstPersonParticleStats();

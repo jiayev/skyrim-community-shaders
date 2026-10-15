@@ -69,8 +69,5 @@ namespace DCLF::Api
 		bool offByDefault = false;          // unset seeds it off: only onValue turns it on
 		std::string_view after;
 		std::string_view needs[2];  // the toggles it needs on (their names: Core's, or a feature's registered before it), or empty
-		// A Core toggle that needs this one on (its name; listed after it), or empty: normalised off while this one is, as Core's needs
-		// are (Features/Actors: the first person needs the actors).
-		std::string_view neededBy;
 	};
 }

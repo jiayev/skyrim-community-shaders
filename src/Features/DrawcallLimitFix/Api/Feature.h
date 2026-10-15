@@ -15,6 +15,7 @@
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Api/Views.h"
 
 #include <string_view>
 
@@ -41,8 +42,8 @@ namespace DCLF::Api
 		virtual void RegisterFrameBinding(const FrameBinding& a_binding) = 0;
 		virtual SwitchId RegisterSwitch(const FeatureSwitch& a_switch) = 0;
 		/**
-		 * @brief Fails the install past the toggle word's bits, for a toggle after one Core does not have, needing one not listed before
-		 * it, or needed by one Core does not list after it (or whose two needs are taken).
+		 * @brief Fails the install past the toggle word's bits, for a toggle after one Core does not have, or needing one not listed
+		 * before it.
 		 */
 		virtual ToggleId RegisterToggle(const FeatureToggle& a_toggle) = 0;
 		virtual void RegisterReportLines(const ReportLines& a_lines) = 0;
@@ -62,6 +63,8 @@ namespace DCLF::Api
 		virtual void RegisterShading(const ShadingContribution& a_shading) = 0;
 		/** @brief Fails the install past Extensions::kFrameGlobalsFloats floats in all. */
 		virtual FrameGlobalsSlot RegisterFrameGlobals(const FrameGlobalsContribution& a_globals) = 0;
+		/** @brief Fails the install for a view another feature has, or without a registered toggle. */
+		virtual void RegisterView(const ViewContribution& a_view) = 0;
 
 	protected:
 		~InstallContext() = default;

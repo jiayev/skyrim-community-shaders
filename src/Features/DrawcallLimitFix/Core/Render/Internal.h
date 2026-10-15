@@ -35,6 +35,7 @@
 #include "RE/B/BSCullingProcess.h"
 #include "RE/N/NiCamera.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include <ORGModuleServices/Async/RevisionAssembly.h>
 #include <ORGModuleServices/Async/SerializedTaskPump.h>
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"

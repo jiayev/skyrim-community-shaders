@@ -105,7 +105,7 @@ namespace DCLF::Diagnostics
 		const SceneTables& tables;
 	};
 
-	/** @brief The first-person view's walk of the skeleton's geometry (every 16 frames), with the frame's claims. */
+	/** @brief The first-person view's walk of the skeleton's geometry (every 16 frames), with the frame's claims (Features/FirstPerson's parity). */
 	struct FirstPersonSkeletonWalked
 	{
 		const SceneTables& tables;

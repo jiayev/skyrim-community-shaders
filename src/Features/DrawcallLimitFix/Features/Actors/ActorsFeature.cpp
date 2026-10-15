@@ -19,9 +19,10 @@ namespace DCLF::Features::Actors
 			// this feature).
 			const auto actorsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_ACTORS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
 				.description = "0: actors stay native (live toggle's seed)", .after = "CS_DCLF_SKIN_PARTITIONS" });
-			// Geometry under an actor's 3D, and the actor techniques: an object class. The first person needs it (the player's skeleton).
+			// Geometry under an actor's 3D, and the actor techniques: an object class. Features/FirstPerson's toggle needs it (the player's
+			// skeleton).
 			const auto actors = a_context.RegisterToggle({ .name = "actors", .label = "Actors (CS_DCLF_ACTORS)", .seed = actorsSwitch, .entersClassification = true,
-				.after = "skin partitions", .neededBy = "first person" });
+				.after = "skin partitions" });
 			// Every leaf under an actor's 3D (Coordinator::ClassifyFrame's chain test: Ineligible::Actor while the toggle is off).
 			a_context.RegisterParent({ .parent = Api::EngineParent::Actor, .leaves = Api::ParentLeaves::AllLeaves, .toggle = actors });
 			// Actor skin (SKIN path, TintColor), faces (Facegen: tint and detail maps at t3/t4), hair (TintColor) and eyes (eye centres,

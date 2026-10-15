@@ -104,7 +104,7 @@ namespace DCLF
 					// First person's shape while CS_DCLF_FIRST_PERSON is on (none while it is off); the reflection's last one stands without a
 					// new one.
 					const bool isFirstPerson = traits.index == ViewIndex(ViewKind::FirstPerson);
-					const auto& made = isFirstPerson && !toggles.firstPerson ? nullptr : shapes.views[traits.index];
+					const auto& made = isFirstPerson && !Extensions::ViewOn(toggles, Api::EngineView::FirstPerson) ? nullptr : shapes.views[traits.index];
 					const auto currentShape = current ? current->Value<ViewFrame>() : nullptr;
 					if (made) {
 						auto kept = Kept<ViewFrame>(currentShape, made, changed);
