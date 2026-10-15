@@ -108,7 +108,7 @@ namespace DCLF::ShadowCameras
 	 * CalculateActiveShadowCasterLights' return). Per descriptor: the camera, and the planes the light's culling process tests.
 	 *
 	 * Render thread: written as the selection keeps each light, read by the shadow views' capture and LocalShadowLights later in the
-	 * frame; SideEffects' actor rate reads the last scene frame's.
+	 * frame; Features/Actors' actor rate (ActorRate.cpp) reads the last scene frame's.
 	 */
 	struct LightFrame
 	{
@@ -133,8 +133,8 @@ namespace DCLF::ShadowCameras
 		}
 
 		/**
-		 * @brief For SideEffects' actor rate: every view of the lights kept in scene frame a_sceneFrame (none when the views are older), with
-		 * its light's sphere (centre, radius: what a point light's paraboloid cull tests, its views having no planes).
+		 * @brief For Features/Actors' actor rate (ActorRate.cpp): every view of the lights kept in scene frame a_sceneFrame (none when the
+		 * views are older), with its light's sphere (centre, radius: what a point light's paraboloid cull tests, its views having no planes).
 		 */
 		template <class F>
 		void ForEachView(std::uint32_t a_sceneFrame, F&& a_visit) const

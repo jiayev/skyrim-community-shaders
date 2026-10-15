@@ -162,7 +162,7 @@ namespace DCLF::Features::Effects
 
 	std::uint32_t ParticleRejectionOf(const SceneCapture::LeafView& a_leaf, std::uint64_t a_flags)
 	{
-		// ParticleSystemTaken's conditions, a bit each, then the property's: a particle pass is hint 1 whatever its alpha, so without
+		// PaletteItemClassOf's conditions, a bit each, then the property's: a particle pass is hint 1 whatever its alpha, so without
 		// a blending alpha property its blend mode is the frame's property alpha (FUN_14150bc80); and no decal.
 		if (!Extensions::GeometryTypeOn(ActiveToggles(), a_leaf.Type()))
 			return kEffectVariantParticle;

@@ -571,7 +571,8 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kCullVolumetricOnly = 0x800;
 	// cullFlags: a sun view (cascades and their volumetric copies): applies the sun's entry rule (sunEntryOffset).
 	constexpr std::uint32_t kCullSunEntry = 0x1000;
-	// cullFlags: Skylighting's size test (Skylighting::OcclusionTechnique) for its occlusion map: bound radius <= 32 draws nothing.
+	// cullFlags: Skylighting's size test (Skylighting::OcclusionTechnique) for an occlusion map whose entry asks (minRadius: both maps'):
+	// bound radius <= 32 draws nothing.
 	constexpr std::uint32_t kCullMinRadius = 0x2000;
 	// cullFlags: occlusion map view: an occluder under a fade root BSFadeNode::OnVisible stops at without cameraRelatedUpdates
 	// (Precipitation::SetupMask's cull; FadeStateCS's state) draws nothing, in place of the shadow views' fading test. Set while the

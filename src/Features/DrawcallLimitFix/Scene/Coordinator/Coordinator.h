@@ -1097,7 +1097,7 @@ namespace DCLF
 			PartTimer& a_timer);
 		std::uint32_t PerFrameTraits(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const;
 		/** @brief PerFrameTraits from what the entry's evaluation has. */
-		std::uint32_t PerFrameTraitsOf(bool a_faceShape, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const;
+		std::uint32_t PerFrameTraitsOf(bool a_entryClassTrait, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const;
 		/**
 		 * @brief Whether an entry with this verdict is per frame, and its light-path traits (a_traits: all traits). a_freshMotion: walk
 		 * parity's root motion from scratch.

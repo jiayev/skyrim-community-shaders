@@ -1562,7 +1562,9 @@ resident-draw, set and fade parity; motion m28/m29).
     - **Children by slot.** A node record's children are the engine's slots (a null slot null, no trailing null; a detach nulls its
       slot): what OnVisible visits, so the decal order's keys (`VisitIndex`) can be the mirror's, and `children[switchIndex]` is the
       switch's child.
-    - **Decal nodes** (`kKindDecalNode`, `decals`: each decal's `Get3D`, in the array's order). The array's writers are BGSDecalNode's
+    - **Decal nodes** (Features/Decals' node capture contribution: `kKindCaptured`, `captured`, each decal's `Get3D`, in the array's
+      order). The array's writers' hooks are `Features/Decals/DecalHooks.cpp` (the feature's early hooks), pushing
+      `Extensions::PushNodeUpdate(node, Api::kNodeFieldCaptured)`. The writers are BGSDecalNode's
       own (AE 1.6.1170): the append `FUN_1401fdfb0` (from `BSTempEffectGeometryDecal::Attach`, after its 3D's attach, and the simple
       decals') and the erases `FUN_1401fdc80` (through `FUN_1401fe020`, the decal manager's), `FUN_1401fdcb0` (the geometry decal's
       update), `FUN_1401fdd50` and `FUN_1401fde40` (erase and detach): detoured, each pushes the node's decals after the call.
@@ -1635,14 +1637,14 @@ resident-draw, set and fade parity; motion m28/m29).
       TriShapes' and the skin partitions' buffers and counts, the LOD ranges, the layer's second index list), the skin partition masks,
       the extras rows, the tree and fade-root lists, the room node, the decal order's keys and the face snapshots' shape lists are the
       records'. RTTI casts are the records' `lighting`, `kind` and `rtti`; Skylighting's occlusion rule is ported
-      (`OcclusionTechniqueOf`, the nearest fade node's BSX walked up the mirror). A record written while the mirror holds no leaf (an
+      (the occlusion maps' occluder rules, the nearest fade node's BSX walked up the mirror: `Coordinator::NearestFadeNodeBsx`). A record written while the mirror holds no leaf (an
       attach no hook captured) waits for the capture's batch (`leafWaiting`: none in w58-w65).
     - **Property references from pins.** An attach's capture and a leaf update (a property swap) also hold the geometry's properties
       (the update's event holds its own: `SceneTracker::Event::pins`; the mirror keeps copies of updates). A tracked geometry holds its
       shader and layer properties as the mirror names them (`Tracked::property`, `layerProperty`, `HoldProperties` after each batch
       that names it): `SlotProperty`, the shading samples and the pipelines' templates are these. A material request carries the
       property and the render thread takes the material's reference when the property still has it (else the request is stale: none
-      seen). A face shape holds its head from the pins (`faceHeadRef`); the face records' references are copies, and a freed record's
+      seen). A face shape holds its head from the pins (its entry's held source node, `sourceRef`); the face records' references are copies, and a freed record's
       go back through the retirement chain (`FaceSnapshots::TakeReleased`), not the scene work.
     - **One queue for the hidden stores.** A hidden store's event rides in its mirror update (`Update::hiddenSite`), so the event
       and the mirror's bit are the same batch's: with two queues drained at different points, an actor's part changed verdict a

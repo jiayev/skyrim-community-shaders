@@ -888,7 +888,6 @@ namespace DCLF
 		 */
 		void Compare(Readback& a_readback, Readback::Batch& a_batch, const Diagnostics::Accumulated::Sample& a_sample)
 		{
-			using namespace SideEffects;
 			const auto& tables = *a_batch.tables;
 			std::array<std::uint32_t, Readback::kCategories> kept{};
 			const auto keep = [&](Readback::Category a_category, const void* a_node) {

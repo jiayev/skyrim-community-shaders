@@ -71,6 +71,18 @@ namespace DCLF::Api
 		virtual std::uint32_t ReserveHiddenSite() = 0;
 		/** @brief A node class whose ordered children the mirror captures for the feature (fails: incomplete, or its RTTI taken). */
 		virtual void RegisterNodeCapture(const NodeCaptureContribution& a_capture) = 0;
+		/**
+		 * @brief A move writer of the feature's own named a_name, before the writer's hooks go in (Extensions::ReserveMoveWriter, which
+		 * early hooks call directly: they have no context). Fails for no name or past Extensions::kMoveWriterSlots.
+		 */
+		virtual MoveWriterId ReserveMoveWriter(std::string_view a_name) = 0;
+		/**
+		 * @brief The feature writes every material row's frame VS variable (the ports' MaterialPortRules::frameVSVariable, the texture
+		 * transforms' TexcoordOffset) with the frame's value every frame. A capture whose texture-transform buffers alone moved then
+		 * rewrites no record, and a write that moved only them captures nothing; without it they are the records' (rewritten from the
+		 * capture). Once or more; read as Extensions::FrameVSVariablePatched.
+		 */
+		virtual void RegisterFrameVSVariablePatch() = 0;
 		/** @brief Fails the install past Extensions::kTableFamilySlots families. */
 		virtual TableFamilyId RegisterTableFamily(const TableFamily& a_family) = 0;
 		virtual CoordinatorComponentId RegisterCoordinatorComponent(const CoordinatorComponent& a_component) = 0;

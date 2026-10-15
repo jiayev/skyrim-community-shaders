@@ -53,7 +53,7 @@ namespace DCLF::Features::Effects
 			if (!property)
 				return;
 			// The texture transforms alone (a UV scroll) are the frame values' while a feature patches the frame VS variable
-			// (Features/TextureTransforms, Api::RegisterFrameVSVariablePatch): neither the record nor the shading reads them, so such a
+			// (Features/TextureTransforms, InstallContext::RegisterFrameVSVariablePatch): neither the record nor the shading reads them, so such a
 			// write captures nothing. Unpatched, they are the record's: compared with the rest.
 			const auto after = material ? EffectWrittenOf(material) : EffectWritten{};
 			const std::size_t transforms = Extensions::FrameVSVariablePatched() ? kEffectTransformsEnd - kEffectWrittenFirst : 0;

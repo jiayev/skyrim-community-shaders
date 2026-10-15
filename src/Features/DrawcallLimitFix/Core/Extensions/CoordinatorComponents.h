@@ -219,7 +219,9 @@ namespace DCLF::Api
 	{
 	public:
 		RE::BSGeometry& geometry;
-		RE::NiNode* source = nullptr;  // the entry's held source node (a face shape's BSFaceGenNiNode, from its attach's pins), or null
+		// The entry's held source node (its entry class rule's parent, EntryRule::holdsParent: a face shape's BSFaceGenNiNode, from its
+		// attach's pins), or null.
+		RE::NiNode* source = nullptr;
 		// The stream: float4 positions, published by generation, leased by owner, and its region of the scene's positions buffer.
 		const float* positions = nullptr;
 		std::uint32_t vertexCount = 0;

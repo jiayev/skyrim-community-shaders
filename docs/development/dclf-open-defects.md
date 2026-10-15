@@ -229,7 +229,7 @@ Left open by the polls-to-events pass (dclf-async-publication.md, "Polls become 
     root's children each frame (about 26 nodes; one container's bit is set again every frame because the main camera's
     list cull clears it). An object-root edit counter in `PrimaryCull` (attach/detach under the object root, a hidden store
     on a child, a new object root) would let it walk only on an edit.
--   **`UpdateActorRate` stays on the render thread** (`Engine/Cull/SideEffects.cpp`, about 19 actors' plane tests a frame).
+-   **`UpdateActorRate` stays on the render thread** (`Features/Actors/ActorRate.cpp`, about 19 actors' plane tests a frame).
     Its bound tests need the frame's last shadow view made and must finish before `EngineReadWindow::Close` at Present, and no
     hook sits between the two. A kick after the shadow epoch's commit (where `LocalLightCull::Publish` runs) would let a
     leased task do them.

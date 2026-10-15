@@ -19,6 +19,11 @@ namespace RE
 	class NiParticleSystem;
 }
 
+namespace DCLF::Api
+{
+	class InstallContext;
+}
+
 namespace DCLF::Features::Particles
 {
 	/**
@@ -53,8 +58,11 @@ namespace DCLF::Features::Particles
 	public:
 		static ParticleSnapshots& Get();
 
-		/** @brief Installs the writer's thunks in NiParticleSystem's vtable (checked first). Render thread, at the feature's install (Features/Particles). */
-		void Install();
+		/**
+		 * @brief Installs the writer's thunks in NiParticleSystem's vtable (checked first), its move writer reserved through a_context first.
+		 * Render thread, at the feature's install (Features/Particles).
+		 */
+		void Install(Api::InstallContext& a_context);
 		bool Installed() const { return installed; }
 
 		// The block layout (Effect.hlsl, DCLFParticleInput): four rows a particle's corners (position relative to the model bound's centre,

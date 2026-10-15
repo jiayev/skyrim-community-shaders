@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/NodeCaptures.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -123,7 +124,7 @@ namespace DCLF::Extensions
 		}
 
 		/**
-		 * @brief Adds a_port at the next kind, which it returns, refused (a_who's) for no property RTTI, material vtable or callbacks,
+		 * @brief Adds a_port at the next kind, which it returns, refused (a_who's) for no name, property RTTI, material vtable or callbacks,
 		 * Lighting's or no shader type, a space past kMaxStageVariables or with names not one a variable, a class with no registered toggle,
 		 * a shader type another port has, or a kind past kMaterialKinds.
 		 */
@@ -133,7 +134,7 @@ namespace DCLF::Extensions
 				return a_stage.variables <= kMaxStageVariables && (a_stage.names.empty() || a_stage.names.size() == a_stage.variables);
 			};
 			const bool classValid = a_port.objectClass < Api::ObjectClass::Count && a_lists.objectClasses[static_cast<std::size_t>(a_port.objectClass)];
-			if (a_port.shaderType == RE::BSShader::Type::Lighting || a_port.shaderType >= RE::BSShader::Type::Total || !classValid || !a_port.propertyRtti ||
+			if (a_port.shaderType == RE::BSShader::Type::Lighting || a_port.shaderType >= RE::BSShader::Type::Total || !classValid || a_port.name.empty() || !a_port.propertyRtti ||
 				!a_port.materialVtable || !a_port.capture || !a_port.derive || !a_port.evaluate || !a_port.shading || !spaceValid(a_port.vs) || !spaceValid(a_port.ps))
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete material port", a_who));
 			for (std::size_t kind = 1; kind < a_lists.materialPortCount; ++kind)
@@ -349,6 +350,8 @@ namespace DCLF::Extensions
 
 			std::uint32_t ReserveHiddenSite() override { return HiddenSourceSites() + lists.reservedHiddenSites++; }
 			void RegisterNodeCapture(const Api::NodeCaptureContribution& a_capture) override { AddNodeCapture(feature, a_capture); }
+			Api::MoveWriterId ReserveMoveWriter(std::string_view a_name) override { return Extensions::ReserveMoveWriter(a_name); }
+			void RegisterFrameVSVariablePatch() override { NoteFrameVSVariablePatch(); }
 
 			Api::EngineChannelId FindEngineChannel(std::string_view a_name) const override
 			{
@@ -478,11 +481,13 @@ namespace DCLF::Extensions
 
 			void RegisterView(const Api::ViewContribution& a_view) override
 			{
-				// Its callbacks: the coverage always, the root for a CategoryRoot view, the accumulators for an InMainRenderers one. Its phase
-				// and view bit are checked against Core's and the other views' once all are in (ResolveViews).
+				// Its callbacks: the coverage always, the root for a CategoryRoot view, the accumulators for an InMainRenderers one, the residue
+				// question only for an OwnRenderers one (the watch is the pass capture's OwnRenderers test). Its phase and view bit are checked
+				// against Core's and the other views' once all are in (ResolveViews).
 				if (a_view.view >= Api::EngineView::Count || !a_view.toggle || !a_view.phase || !a_view.shape.viewBits || !a_view.covered ||
 					(a_view.membership == Api::ViewMembership::CategoryRoot && !a_view.captureRoot) ||
-					(a_view.withholding == Api::ViewWithholding::InMainRenderers && !a_view.accumulators))
+					(a_view.withholding == Api::ViewWithholding::InMainRenderers && !a_view.accumulators) ||
+					(a_view.withholding != Api::ViewWithholding::OwnRenderers && a_view.residueDue))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete view contribution", feature));
 				auto& entry = lists.views[static_cast<std::size_t>(a_view.view)];
 				if (entry.view != Api::EngineView::Count)

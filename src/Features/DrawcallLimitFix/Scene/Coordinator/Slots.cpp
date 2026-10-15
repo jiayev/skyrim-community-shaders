@@ -384,7 +384,7 @@ namespace DCLF::Scene
 			HandBack(std::move(it->second.geometry));
 			HandBack(std::move(it->second.property));
 			HandBack(std::move(it->second.layerProperty));
-			HandBack(std::move(it->second.faceHeadRef));
+			HandBack(std::move(it->second.sourceRef));
 			HandBack(std::move(it->second.fadeNodeRef));
 			tracked.erase(it);
 			++trackedLayout;

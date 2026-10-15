@@ -113,8 +113,8 @@ namespace DCLF::Extensions
 	 * a move writer of the feature's own named a_name (copied; the report's move writers' calls name it). Core's writers keep their slots
 	 * (animation 0, reference 3D position 1, graph animation 5, update pass 6) and the reserved ones take the free slots in reservation
 	 * order, so the report's order is the writers' as it was (Features/Actors' three at its early hooks: 2-4; Features/Particles' at its
-	 * install: 7). Scene::MoveEventsLive is false until the writer is installed (MoveWriterInstalled). Fails for no name or past
-	 * kMoveWriterSlots.
+	 * install, through InstallContext::ReserveMoveWriter: 7). Scene::MoveEventsLive is false until the writer is installed
+	 * (MoveWriterInstalled). Fails for no name or past kMoveWriterSlots.
 	 */
 	Api::MoveWriterId ReserveMoveWriter(std::string_view a_name);
 	/** @brief Main thread at PostPostLoad: a_writer's hooks are in. */

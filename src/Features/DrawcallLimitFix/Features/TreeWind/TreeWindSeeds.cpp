@@ -141,7 +141,7 @@ namespace DCLF::Features::TreeWind
 
 	std::uint32_t SeedsIndex()
 	{
-		return FrameValues::Get().PoolIndex(pool);
+		return Extensions::FrameValuePoolIndex(pool);
 	}
 
 	const std::vector<TreeStatic>* SeedsIfDone(bool a_wait)

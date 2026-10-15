@@ -102,7 +102,7 @@ namespace DCLF::MaterialWrites
 						MaterialPort::PushCapture(property->material);
 					const bool moved = property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
 					                   scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1];
-					// Unless a feature patches the frame's (Api::RegisterFrameVSVariablePatch), the transforms are the records': captured.
+					// Unless a feature patches the frame's (InstallContext::RegisterFrameVSVariablePatch), the transforms are the records': captured.
 					if (moved && property->material == material && !Extensions::FrameVSVariablePatched())
 						NoteWritten(material);
 					if (moved)

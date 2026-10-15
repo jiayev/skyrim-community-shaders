@@ -90,7 +90,8 @@ struct DrawcallLimitFix : Feature
 	void DrawOcclusion();
 	/**
 	 * @brief After OcclusionReady (DCLF draws the map): whether the engine renders the map first this frame, whole, as a reference
-	 * (Policy::RenderOcclusionReference); its render is announced with OcclusionReferenceRendered before the map is cleared for DCLF's.
+	 * (the map's referenceDue: Features/OcclusionMaps' CS_DCLF_SKYLIGHT_PARITY); its render is announced with OcclusionReferenceRendered
+	 * before the map is cleared for DCLF's.
 	 */
 	bool OcclusionReferenceFrame(OcclusionMap a_map);
 	void OcclusionReferenceRendered(OcclusionMap a_map);

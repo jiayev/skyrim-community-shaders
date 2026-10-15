@@ -224,7 +224,9 @@ namespace DCLF
 		 * @brief Main thread at Main::Update's entry (no cull or job list running): makes the decoder's kAccumulated writes with atomic
 		 * read-modify-writes: the stood-in roots and their geometry (while a_stoodIn says PrimaryCull still stands in), and the wide
 		 * writes (other listed roots, plain entry roots, the nodes between, the cell roots). a_live false: dropped, and the next
-		 * decode writes everything again.
+		 * decode writes everything again. kAccumulated is the engine side effect of the main camera's cull that DCLF produces where the
+		 * culls are stood in for (skyrim-engine-notes.md, "Engine side effects of the culls"; its observers are Diagnostics::Accumulated's;
+		 * the actors' animation stamp is Features/Actors', ActorRate.cpp).
 		 */
 		void WriteAccumulated(bool a_live, const std::function<bool(const void*)>& a_stoodIn);
 		/**
@@ -306,7 +308,7 @@ namespace DCLF
 		 * registers them, read of the classes' contributions and the LOD gates: the tree root while the faces' tree LOD is DCLF's, the LOD
 		 * land and objects roots while the LOD swaps are gated (a show veto registered: Features/Lod's LOD gates) and both are DCLF's (Api::ObjectClass::LodObjects and LodTerrain
 		 * on); none on a non-plain update, while the view is not
-		 * drawable or covered, or on an update that keeps them for the residue watch (Policy::KeepReflectionRoots).
+		 * drawable or covered, or on an update that keeps them for the residue watch (the view's residueDue: Api::ViewContribution).
 		 */
 		std::uint32_t ViewLodRootsOwned(Api::EngineView a_view, bool a_plain);
 		/** @brief The view's graph resources, once the main resources and index pool exist; true when it has them. */
