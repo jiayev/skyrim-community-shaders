@@ -1,12 +1,28 @@
 #pragma once
 
 // The object contributor contracts (Api::InstallContext::RegisterTechnique, RegisterGeometryType, RegisterParent, RegisterObjectClass,
-// RegisterShading, RegisterFrameGlobals): what a feature adds to the objects DCLF draws of an engine technique, geometry type, parent
-// class or object class it ports -
-// their eligibility and record flags, the per-object values the Lighting port derives from their properties, and the engine globals that
-// derivation reads, captured with the frame's. The records' layouts
-// stay compile-time: a feature declares its flag bits in its own header (Features/Manifest.cpp checks them against Core's and each
-// other's), and its record words with its table family (Api/TableFamilies.h).
+// RegisterShading, RegisterFrameGlobals): what a feature adds to the objects DCLF draws. Three kinds, a section each below:
+//
+// 1. Membership by an engine key: the objects of an engine technique or geometry type the feature ports (TechniqueContribution,
+//    GeometryTypeContribution). The key is the engine's own value, so nothing here grows with a feature.
+// 2. Membership by a Core class: objects Core recognises but rejects, or holds back, until a feature takes them - the leaves under an
+//    engine parent (EngineParent and ParentLeaves: ParentContribution), an object class Core's ports derive (ObjectClass:
+//    ObjectClassContribution), and an entry class whose records wait on a coordinator component (EntryClass: the component's
+//    entryClass.follows and takes, Api/CoordinatorComponents.h). A view is the same pattern for an engine view (EngineView, Api/Views.h).
+// 3. Derivations: the per-object values the Lighting port derives from a property of the feature's (ShadingContribution), and the engine
+//    globals that derivation reads, captured with the frame's (FrameGlobalsContribution).
+//
+// A membership is read as data where Core decides (Core/Extensions/ObjectContributors.h: Extensions::TechniqueObjectFlags,
+// GeometryTypeOn, ParentAdmits, ObjectClassOn; Core/Extensions/CoordinatorComponents.h: EntryClassTaken), never called per object. A
+// derivation is called per sampled property or per frame, never per object.
+//
+// Adding a Core class for a feature (section 2) is the same three steps whichever enum it goes in:
+// - its value in the enum here, before Count, saying what Core recognises (its Ineligible reason, its trait) and which feature takes it;
+// - Core's test of it where Core decides, through the Extensions query above (Core names the value, never the feature);
+// - the feature's registration of it, under its toggle (an entry class: the component that follows it).
+// The install fails a value a second feature claims, so no value is shared. What a contribution sets that the shaders read (a technique's
+// object flags) stays compile-time: the feature declares the bits in its own header, and Features/Manifest.cpp checks them against Core's
+// and each other's; its record words go with its table family (Api/TableFamilies.h).
 
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 
@@ -17,6 +33,8 @@ namespace DCLF::Api
 {
 	// Defined by Core (Core/Extensions/ObjectContributors.h), which the features inside DCLF include for it.
 	class ShadingDerivation;
+
+	// ---- 1. Membership by an engine key.
 
 	/**
 	 * @brief A technique contribution: an engine Lighting technique whose objects the feature ports. Read where the objects are classified
@@ -46,6 +64,8 @@ namespace DCLF::Api
 		std::uint8_t geometryType = 0xFF;
 		ToggleId toggle;
 	};
+
+	// ---- 2. Membership by a Core class (a value per class a feature takes: see the steps above).
 
 	/** @brief An engine parent class Core rejects the leaves under (Eligibility's parent reasons), which a parent contribution may admit. */
 	enum class EngineParent : std::uint8_t
@@ -113,6 +133,23 @@ namespace DCLF::Api
 		ObjectClass objectClass = ObjectClass::Count;
 		ToggleId toggle;
 	};
+
+	/**
+	 * @brief A class of tracked entries Core's walk classifies but whose records wait on a coordinator component: the component that
+	 * follows it (CoordinatorComponent::entryClass, Api/CoordinatorComponents.h) supplies what their writes need, and its objects are
+	 * DCLF's only while that component takes it. Read as data by the eligibility, the walk and the frame's addresses
+	 * (Extensions::EntryClassTaken).
+	 */
+	enum class EntryClass : std::uint8_t
+	{
+		None,
+		// A dynamic shape under a BSFaceGenNiNode (an NPC's head, mouth, hair, brows): its positions are its head's, published by the
+		// engine's face morphing, not its buffers'. Its record waits for its second vertex stream (Features/Faces).
+		FaceShape,
+		Count,
+	};
+
+	// ---- 3. Derivations.
 
 	/**
 	 * @brief A shading contribution: the per-object values SetupGeometry derives for a property of the feature's (the shading rows' tree

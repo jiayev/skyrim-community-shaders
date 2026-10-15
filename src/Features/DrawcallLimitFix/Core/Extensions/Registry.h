@@ -97,27 +97,13 @@ namespace DCLF::Extensions
 	{
 		std::string name;
 		decltype(Api::CoordinatorComponent::make) make = nullptr;
-		decltype(Api::CoordinatorComponent::resident) resident = nullptr;
-		decltype(Api::CoordinatorComponent::left) left = nullptr;
-		decltype(Api::CoordinatorComponent::recount) recount = nullptr;
-		decltype(Api::CoordinatorComponent::reset) reset = nullptr;
-		decltype(Api::CoordinatorComponent::allLeft) allLeft = nullptr;
-		decltype(Api::CoordinatorComponent::accumulated) accumulated = nullptr;
-		decltype(Api::CoordinatorComponent::rewritten) rewritten = nullptr;
-		decltype(Api::CoordinatorComponent::joinsDone) joinsDone = nullptr;
-		decltype(Api::CoordinatorComponent::walkBegun) walkBegun = nullptr;
-		decltype(Api::CoordinatorComponent::scheduling) scheduling = nullptr;
-		decltype(Api::CoordinatorComponent::walkEnded) walkEnded = nullptr;
-		decltype(Api::CoordinatorComponent::denseBegun) denseBegun = nullptr;
-		decltype(Api::CoordinatorComponent::denseEnded) denseEnded = nullptr;
-		decltype(Api::CoordinatorComponent::forgot) forgot = nullptr;
-		decltype(Api::CoordinatorComponent::forgotAll) forgotAll = nullptr;
-		decltype(Api::CoordinatorComponent::recycled) recycled = nullptr;
-		Api::EntryClass follows = Api::EntryClass::None;
-		bool takes = false;
-		decltype(Api::CoordinatorComponent::listed) listed = nullptr;
-		decltype(Api::CoordinatorComponent::resolve) resolve = nullptr;
-		decltype(Api::CoordinatorComponent::streamed) streamed = nullptr;
+		// Its hook sets, as registered.
+		Api::CoordinatorComponent::Residency residency;
+		Api::CoordinatorComponent::Accumulate accumulate;
+		Api::CoordinatorComponent::Walk walk;
+		Api::CoordinatorComponent::DenseWalk dense;
+		Api::CoordinatorComponent::Retirement retirement;
+		Api::CoordinatorComponent::EntryClassHooks entryClass;
 	};
 	/** @brief A registered shading contribution. */
 	struct ShadingContributionEntry

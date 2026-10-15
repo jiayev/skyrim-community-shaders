@@ -73,7 +73,7 @@ namespace DCLF::Api
 		RE::BSGeometry* TrackedGeometry(const void* a_key) const;
 		/**
 		 * @brief A range of the component's (a_count units from a_first) freed: retiring until no publication names it, then handed back
-		 * (CoordinatorComponent::recycled).
+		 * (CoordinatorComponent::Retirement::recycled).
 		 */
 		void RetireRange(std::uint32_t a_first, std::uint32_t a_count) const;
 		/** @brief A seed the next frame's start takes (PublicationDeltas, then FrameView::TakeComponentSeeds with the component's id). */
@@ -91,8 +91,9 @@ namespace DCLF::Api
 	};
 
 	/**
-	 * @brief An accumulated patch's values a component lists by (ApplyAccumulatePatch): the draw chain the Lighting port derived for an
-	 * object drawn in a kept order (a decal's group, pass and sub-pass: AccumulatePatch::decalKey; 0 for none).
+	 * @brief An accumulated patch's values a component lists by (ApplyAccumulatePatch; CoordinatorComponent::Accumulate::patched): the
+	 * draw chain the Lighting port derived for an object drawn in a kept order (a decal's group, pass and sub-pass:
+	 * AccumulatePatch::decalKey; 0 for none).
 	 */
 	class AccumulatedPatch
 	{
@@ -158,7 +159,7 @@ namespace DCLF::Extensions
 {
 	/**
 	 * @brief Any thread, after InstallFeatures (false before): whether a_class's objects are DCLF's (the component that follows it takes
-	 * it: Api::CoordinatorComponent::takes). Read as data by the eligibility, the walk and the frame's addresses.
+	 * it: Api::CoordinatorComponent::EntryClassHooks::takes). Read as data by the eligibility, the walk and the frame's addresses.
 	 */
 	bool EntryClassTaken(Api::EntryClass a_class);
 }
