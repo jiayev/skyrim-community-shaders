@@ -802,33 +802,34 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 
 float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular)
 {
+#			if !defined(DYNAMIC_CUBEMAPS)
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections))
 		return ReflectionColor.xyz * VarAmounts.y;
+#			endif
 
 	float3 R = reflect(viewDirection, WaterParams.y * normal + float3(0, 0, 1 - WaterParams.y));
-	float3 reflectionColor = CubeMapTex.SampleLevel(CubeMapSampler, R, 0).xyz;
 
 #			if defined(DYNAMIC_CUBEMAPS)
-	float3 dynamicCubemap;
-	if (SharedData::InInterior) {
-		dynamicCubemap = DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz;
-	} else {
-		float3 specularIrradiance = 1.0;
-		if (skylightingSpecular < 1.0)
-			specularIrradiance = Color::IrradianceToLinear(DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
+	if (SharedData::InInterior)
+		return DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz;
 
-		float3 specularIrradianceReflections = 1.0;
-		if (skylightingSpecular > 0.0)
-			specularIrradianceReflections = Color::IrradianceToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
+	float3 specularIrradiance = 0.0;
+	if (skylightingSpecular < 1.0)
+		specularIrradiance = Color::IrradianceToLinear(DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
 
-		dynamicCubemap = Color::IrradianceToGamma(lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular));
+	float3 specularIrradianceReflections = 0.0;
+	if (skylightingSpecular > 0.0)
+		specularIrradianceReflections = Color::IrradianceToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
+
+	float3 dynamicCubemap = Color::IrradianceToGamma(lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular));
+
+	float3 reflectionColor = dynamicCubemap;
+	if ((Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections) && !SharedData::HideSky) {
+		float reflectionAmount = saturate(length(input.WPosition.xyz) / 1024.0);
+		reflectionColor = lerp(dynamicCubemap, CubeMapTex.SampleLevel(CubeMapSampler, R, 0).xyz, reflectionAmount);
 	}
-
-	float reflectionAmount = saturate(length(input.WPosition.xyz) / 1024.0);
-
-	if (SharedData::HideSky)
-		reflectionAmount = 0.0;
-	reflectionColor = lerp(dynamicCubemap, reflectionColor, reflectionAmount);
+#			else
+	float3 reflectionColor = CubeMapTex.SampleLevel(CubeMapSampler, R, 0).xyz;
 #			endif
 
 #			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0
@@ -1153,7 +1154,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #				if !defined(UNDERWATER)
 	if (SharedData::enbSettings.EnableWater) {
-		float3 dirScatter = saturate(dot(normal.xyz, SharedData::DirLightDirection.xyz) * 0.5 + 0.5) * saturate(dot(viewDirection.xyz, SharedData::DirLightDirection.xyz) * 0.5 + 0.5) * SharedData::DirLightColor.xyz;
+		float3 dirScatter = saturate(dot(normal.xyz, SharedData::DirLightDirection.xyz) * 0.5 + 0.5) * saturate(dot(viewDirection.xyz, SharedData::DirLightDirection.xyz) * 0.5 + 0.5) * ShadowSampling::GetDirectionalLighting();
 		diffuseOutput.refractionDiffuseColor += DeepColor.xyz * dirScatter * surfaceShadow * SharedData::enbSettings.WaterSunLightingMultiplier;
 	}
 #				endif
