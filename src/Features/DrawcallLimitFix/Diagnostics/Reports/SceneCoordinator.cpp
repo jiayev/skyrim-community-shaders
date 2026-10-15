@@ -4,6 +4,7 @@
 #include "Schedule.h"
 #include "Spread.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneObservers.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
@@ -312,6 +313,8 @@ namespace DCLF::Reports
 					sb.shadowPending, ss.stale, ss.writtenShared, ss.writtenMasks, ss.writtenShadow, byKind);
 				sb.stats = {};
 			}
+			// The features' lines here, where the object LOD segments' line follows.
+			Extensions::ReportTextAt(Api::ReportPoint::SceneCoordinatorSegments, text);
 			auto& lp = Diagnostics::SceneDiagnostics().lodSegments;
 			if (auto& l = V::lodSegmentStats(s); l.events || lp.checks || !V::lodRanges(s).empty()) {
 				std::size_t partial = 0;
@@ -387,7 +390,7 @@ namespace DCLF::Reports
 			return text;
 		}
 
-		void Coordinator(Scene::Coordinator& s)
+		void Coordinator(Scene::Coordinator& s, std::uint32_t a_sceneFrame)
 		{
 			// The coordinator's own lines, composed in its pass from its own state as its frame crosses the report window; the frame's report
 			// reads only the frame's. "A frame" in the lines below that the walk counts is a walk (a pass).
@@ -432,6 +435,7 @@ namespace DCLF::Reports
 				// The LOD gates (opened, flipped, retired; the open ones' age and what they wait for).
 				if (const auto gates = GateLine(s); !gates.empty())
 					logger::info("{}", gates);
+				Extensions::ReportLinesAt(Api::ReportPoint::SceneCoordinatorGates, a_sceneFrame);
 			}
 			const std::uint64_t wholePasses = ps.passes - ps.eventsOnly;
 			const double fullPasses = std::max<double>(1.0, static_cast<double>(wholePasses));
@@ -627,6 +631,6 @@ namespace DCLF::Reports
 		// render thread inline), so the clock needs no lock.
 		static Crossing crossing;
 		if (crossing.Due(a_sceneFrame))
-			Coordinator(a_store);
+			Coordinator(a_store, a_sceneFrame);
 	}
 }

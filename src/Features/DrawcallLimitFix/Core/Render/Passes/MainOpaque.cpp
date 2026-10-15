@@ -1,26 +1,22 @@
-// The main opaque pass: DCLF's draws in the Z-prepass (depth, both phases) and the main colour pass, and tree LOD's draw.
+// The main opaque pass: DCLF's draws in the Z-prepass (depth, both phases) and the main colour pass, and the draw families' draws
+// (Api/DrawFamilies.h: tree LOD's).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
 
 namespace DCLF::Draws
 {
-	/**
-	 * @brief Records tree LOD's draw (dclf-lod.md): push data is the draw row's address and whether this is phase 2's depth draw;
-	 * arguments come from the list's header (TreeLod::VisibleHeader).
-	 */
-	void RecordTreeLodDraw(rhi::CommandList& a_commands, const TreeLodPipelines& a_pipelines, bool a_colour, bool a_phaseTwo, std::uint64_t a_draw, rhi::ResourceHandle a_visible)
-	{
-		std::uint32_t words[kDrawPushWords]{ static_cast<std::uint32_t>(a_draw), static_cast<std::uint32_t>(a_draw >> 32), a_phaseTwo ? 1u : 0u };
-		const std::uint64_t arguments = a_colour ? offsetof(TreeLod::VisibleHeader, colour) :
-		                                a_phaseTwo ? offsetof(TreeLod::VisibleHeader, phaseTwo) : offsetof(TreeLod::VisibleHeader, phaseOne);
-		a_commands.BindPipeline(a_colour ? a_pipelines.colour : a_pipelines.depth);
-		a_commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
-		a_commands.ExecuteIndirect(a_pipelines.drawSignature, a_visible, arguments, {}, 0, 1);
-	}
-
 	namespace
 	{
+		/** @brief A draw family's draw in this execution (Api::DrawFamilyContribution::main.record), for a family whose prepare gave one. */
+		void RecordFamily(std::size_t a_family, const PassBindings& a_bindings, const PreparedDraws& a_prepared, org::PassRecordContext& a_recording,
+			rhi::CommandList& a_commands, Api::DrawFamilyPass a_pass)
+		{
+			const auto& drawn = a_prepared.families[a_family];
+			Extensions::DrawFamilies()[a_family].contribution.main.record(
+				{ a_commands, a_pass, drawn.drawn, drawn.row, a_recording.Resolve(a_bindings.familyArguments[a_family]).GetHandle(), {}, {} });
+		}
+
 		/** @brief What MainOpaquePass::Record's stages share: the frame, the resolved sequences and count, the depth pass setup, the stats slot. */
 		struct MainRecording
 		{
@@ -72,9 +68,10 @@ namespace DCLF::Draws
 				drawCall(call, call.terrainNear);
 				terrainNear = terrainNear || call.terrainNear;
 			}
-			// Tree LOD's depth: one instanced draw of the phase's culled records.
-			if (a_prepared.treeLod)
-				RecordTreeLodDraw(commands, *a_prepared.treeLod, false, a_prepared.phaseTwo, a_prepared.treeLodDraw, a_recording.Resolve(a_bindings.treeLodVisible).GetHandle());
+			// The draw families' depth (tree LOD's: one instanced draw of the phase's culled records).
+			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
+				if (a_prepared.families[f].drawn)
+					RecordFamily(f, a_bindings, a_prepared, a_recording, commands, a_prepared.phaseTwo ? Api::DrawFamilyPass::DepthPhaseTwo : Api::DrawFamilyPass::Depth);
 			if (stats)
 				stats->End(commands, statsSlot, depthKind);
 			commands.EndPass();
@@ -183,7 +180,7 @@ namespace DCLF::Draws
 			state.End();
 		}
 
-		/** @brief The colour passes' execution: decal depth, the main draws and tree LOD's colour, then the second pass; nvperf ranges around the parts. */
+		/** @brief The colour passes' execution: decal depth, the main draws and the draw families' colour, then the second pass; nvperf ranges around the parts. */
 		void RecordColourExecution(const PassBindings& a_bindings, const PreparedDraws& a_prepared, org::PassRecordContext& a_recording, const MainRecording& a_pass,
 			const ColourPasses& a_passes, void* const a_nvCommands)
 		{
@@ -213,14 +210,15 @@ namespace DCLF::Draws
 				commands.ExecuteIndirect(a_passes.colourSignature, sequences, 0, count, 0, frame.drawCapacity);
 				endSubRange(drawPart);
 			}
-			// Tree LOD's colour tests EQUAL against its Z-prepass draw, under the Z-prepass layout (same frame push data).
-			if (a_prepared.treeLod) {
-				const bool treePart = subRange("cs.dclf.colour.tree-lod");
-				commands.BindLayout(frame.indirect.zLayout);
-				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
-				RecordTreeLodDraw(commands, *a_prepared.treeLod, true, false, a_prepared.treeLodDraw, a_recording.Resolve(a_bindings.treeLodVisible).GetHandle());
-				endSubRange(treePart);
-			}
+			// A draw family's colour tests EQUAL against its Z-prepass draw, under the Z-prepass layout (same frame push data).
+			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
+				if (a_prepared.families[f].drawn) {
+					const bool familyPart = subRange(Extensions::DrawFamilies()[f].colourRange.c_str());
+					commands.BindLayout(frame.indirect.zLayout);
+					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+					RecordFamily(f, a_bindings, a_prepared, a_recording, commands, Api::DrawFamilyPass::Colour);
+					endSubRange(familyPart);
+				}
 			if (stats)
 				stats->End(commands, statsSlot, PassStats::kColour);
 			commands.EndPass();
@@ -314,13 +312,12 @@ namespace DCLF::Draws
 			}
 			DeclareFrameBuffers(a_builder, *resources);
 			a_builder.ShaderResource(resources->frameConstants, noViews);  // the frame record's slots, by address
-			// Tree LOD's arguments and the tables its vertex stage reads by address.
-			if (const auto& scene = *resources->scene; scene.treeLodCull) {
-				bindings.treeLodVisible = a_builder.IndirectArguments(*scene.treeLodVisible).Resource();
-				for (const auto& table : { scene.treeLodShapes, scene.treeLodInstances, scene.treeLodMeshes })
-					a_builder.ShaderResource(*table, noViews);
-				a_builder.ShaderResource(scene.treeLodDraw, noViews);
-			}
+			// The draw families' arguments and the tables their vertex stages read by address (tree LOD's).
+			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
+				if (const auto& family = Extensions::DrawFamilies()[f]; family.taken) {
+					Api::DrawFamilyDeclare declare{ a_builder, *resources->scene, nullptr, std::span(&bindings.familyArguments[f], 1) };
+					family.contribution.main.declare(declare);
+				}
 			return bindings;
 		}
 
@@ -332,8 +329,10 @@ namespace DCLF::Draws
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(phaseTwo ? 1 : 0);
 			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->indices) : 0);
-			// Tree LOD's pipelines (built late, rebuilt on a target change).
-			a_out.push_back(reinterpret_cast<std::uintptr_t>(resources->scene->treeLodPipelines.load(std::memory_order_acquire).get()));
+			// The draw families' (tree LOD's pipelines: built late, rebuilt on a target change).
+			for (const auto& family : Extensions::DrawFamilies())
+				if (family.taken)
+					family.contribution.main.revision({ a_preparation, *resources->scene }, a_out);
 		}
 
 		PreparedDraws Prepare(const PassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -352,10 +351,12 @@ namespace DCLF::Draws
 			if (!prepared.zPrepass)
 				prepared.preprocess = resources->preprocessMain.get();
 			prepared.framePushWords = FramePushWords(resources->frameConstantsAddress);
-			if (resources->scene->treeLodCull) {
-				prepared.treeLod = resources->scene->treeLodPipelines.load(std::memory_order_acquire);
-				prepared.treeLodDraw = resources->scene->treeLodDrawAddress;
-			}
+			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
+				if (const auto& family = Extensions::DrawFamilies()[f]; family.taken) {
+					Api::DrawFamilyPrepare prepare{ a_preparation, *resources->scene };
+					family.contribution.main.prepare(prepare);
+					prepared.families[f] = { std::move(prepare.drawn), prepare.row };
+				}
 			prepared.frame = std::move(frame);
 			prepared.targetCount = resources->targetCount;
 			for (std::uint32_t i = 0; i < prepared.targetCount; ++i)

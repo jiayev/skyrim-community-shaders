@@ -1,4 +1,5 @@
-// The registered scene resources' setup, graph registration, requirements and fit, and their states' lookup (see the header).
+// The registered scene resources' setup, graph registration, requirements, fit, posted inputs and latched buffers, and their states'
+// lookup (see the header).
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
@@ -37,12 +38,32 @@ namespace DCLF::Extensions
 				registered[i].registerGraph({ a_graph, a_states[i] });
 	}
 
-	void RequireSceneResources(org::services::GrowableBufferSet::Build& a_build, const SceneTables& a_tables, const SceneResourceStates& a_states)
+	void RequireSceneResources(org::services::GrowableBufferSet::Build& a_build, const SceneTables& a_tables, const SceneResourceStates& a_states,
+		const SceneResourceInputs& a_inputs)
 	{
 		const auto registered = RegisteredSceneResources();
 		for (std::size_t i = 0; i < registered.size() && i < a_states.size(); ++i)
 			if (a_states[i] && registered[i].require)
-				registered[i].require({ a_build, a_tables, a_states[i] });
+				registered[i].require({ a_build, a_tables, a_states[i], std::span(a_inputs).subspan(registered[i].firstInput, registered[i].inputWords) });
+	}
+
+	void PostSceneResourceInputs(SceneResourceInputs& a_out)
+	{
+		a_out.fill(0);
+		for (const auto& registered : RegisteredSceneResources())
+			if (registered.postInputs)
+				registered.postInputs(std::span(a_out).subspan(registered.firstInput, registered.inputWords));
+	}
+
+	void LatchSceneResources(const SceneResourceStates& a_states,
+		void (*a_sink)(void*, const std::shared_ptr<org::Buffer>&, const std::shared_ptr<org::VersionedBuffer>&, std::size_t), void* a_context)
+	{
+		const auto registered = RegisteredSceneResources();
+		for (std::size_t i = 0; i < registered.size() && i < a_states.size(); ++i)
+			if (a_states[i] && registered[i].latched) {
+				Api::SceneResourcesLatch latch{ a_states[i], a_sink, a_context };
+				registered[i].latched(latch);
+			}
 	}
 
 	void FitSceneResources(const org::services::NamedVersions& a_sealed, const SceneResourceStates& a_states, Draws::SceneFit& a_fit)

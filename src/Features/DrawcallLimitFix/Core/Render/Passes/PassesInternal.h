@@ -1,7 +1,7 @@
 #pragma once
 
-// The main extension's passes, made by the sources that define them (MainExtension.cpp adds them to the graph).
-// Included by the sources of this folder only, after Internal.h.
+// The main extension's passes, made by the sources that define them (MainExtension.cpp adds them to the graph; Core's draw families'
+// stages, DrawFamilies/TreeInstances.cpp, add tree LOD's). Included by the sources of this folder and DrawFamilies/ only, after Internal.h.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 

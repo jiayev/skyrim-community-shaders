@@ -1,8 +1,8 @@
 // A view's tree LOD per face and the LOD it draws in the engine's place (IndirectDraws.h, "The view engine"): what the view features read of
-// Core's tree LOD path and the LOD gates, under the LOD classes' contributions (Api::ObjectClass::TreeLod, LodObjects, LodTerrain, read as
-// data; dclf-lod.md, "Water reflections"). A trees view's tree LOD pipeline, ownership and row
-// (ResolveViewTreeLod, DecideViewTreeLod, ViewTreeRow), the cube camera's LOD roots its faces draw (ViewLodRootsOwned) and a LodTechniques
-// view's phase readiness (LodPhaseReady). Render thread, but for LodPhaseReady (the scene lane's commit).
+// Core's tree LOD path (the TreeInstances draw family: Api/DrawFamilies.h, its slot and entry) and the LOD gates, under the LOD classes'
+// contributions (the family's class, LodObjects, LodTerrain, read as data; dclf-lod.md, "Water reflections"). A trees view's tree LOD
+// pipeline, ownership and row (ResolveViewTreeLod, DecideViewTreeLod, ViewTreeRow), the cube camera's LOD roots its faces draw
+// (ViewLodRootsOwned) and a LodTechniques view's phase readiness (LodPhaseReady). Render thread, but for LodPhaseReady (the scene lane's commit).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
@@ -17,10 +17,10 @@ namespace DCLF
 		auto& state = impl->View(a_view);
 		bool waited = false;
 		state.treePipeline = {};
-		if (a_on && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::TreeLod)) {
-			// Its program is built of the DistantTree shader DecideTreeLod posts.
+		if (a_on && Extensions::DrawFamilyOn(ActiveToggles(), Api::DrawFamily::TreeInstances)) {
+			// Its program is built of the family's program source DecideTreeLod posts (the DistantTree shader).
 			auto& drawPipelines = DrawPipelines::Get();
-			const ForwardPipelineKey treeKey{ 0, 0, ForwardPipelineKey::kForwardTreeLod };
+			const ForwardPipelineKey treeKey{ 0, 0, FamilySlotOf(Api::DrawFamily::TreeInstances).forwardFlags };
 			drawPipelines.RequestForward(treeKey);
 			state.treePipeline = ForwardPipelineOf(a_catalog, treeKey, state.targets);
 			const auto* entry = a_catalog ? a_catalog->FindForward(treeKey) : nullptr;
@@ -43,16 +43,17 @@ namespace DCLF
 
 	TreeLod::DrawRow IndirectDraws::Impl::ViewTreeRow(ViewKind a_kind, const ViewFrame& a_shape, std::vector<std::shared_ptr<const void>>& a_owners)
 	{
-		// Tree LOD's row as the last depth commit uploaded it, its texture bound again for this execution, when the revision's faces have
-		// tree LOD (their lists hold the scene's shape slots: one unit group) and the faces' tree LOD is DCLF's.
+		// The faces' draw family's row (Api::DrawFamilyContribution::faces.row: tree LOD's as the last depth commit uploaded it, its texture
+		// bound again for this execution), drawn when the revision's faces have it (their shape's pipeline), the view its pipeline, and
+		// the faces' tree LOD is DCLF's.
 		if (!scene)
 			return {};
 		const auto& state = View(a_kind);
-		const auto treeLod = scene->treeLodPipelines.load(std::memory_order_acquire);
-		TreeLod::DrawRow treeRow = scene->treeLodRow;
-		const bool trees = a_shape.tree.valid() && state.treePipeline.valid() && treeLod && scene->treeLodCull;
-		if (!(trees && state.treeOwned && treeRow.shapeSlots && TreeLodTextureBinding(treeRow, a_owners)))
-			treeRow.shapeSlots = 0;
+		TreeLod::DrawRow treeRow{};
+		if (const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances).contribution.faces; trees.row) {
+			Api::DrawFamilyFaceRow row{ *scene, a_shape.tree.valid() && state.treePipeline.valid() && state.treeOwned, treeRow, a_owners };
+			trees.row(row);
+		}
 		return treeRow;
 	}
 
@@ -71,7 +72,7 @@ namespace DCLF
 		const auto toggles = ActiveToggles();
 		const bool lodOwned = LodGates::Enabled() && Extensions::ObjectClassOn(toggles, Api::ObjectClass::LodObjects) &&
 		                      Extensions::ObjectClassOn(toggles, Api::ObjectClass::LodTerrain);
-		const std::uint32_t owned = (impl->View(a_view).treeOwned ? PassCapture::kTreeRoot : 0u) | (lodOwned ? PassCapture::kLodRoots : 0u);
+		const std::uint32_t owned = (impl->View(a_view).treeOwned ? FamilySlotOf(Api::DrawFamily::TreeInstances).lodRoot : 0u) | (lodOwned ? PassCapture::kLodRoots : 0u);
 		// The updates that keep the roots (Policy::KeepReflectionRoots): what the engine registers into the faces and DCLF does not
 		// withhold is watched, by root - the LOD roots' (what skipping them loses: any is a defect once they are owned) and the tree root's.
 		if (Policy::KeepReflectionRoots(impl->reflectionResidueUpdates)) {

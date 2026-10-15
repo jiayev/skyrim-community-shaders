@@ -240,9 +240,9 @@ namespace DCLF
 		/** @brief The visibility readback's line, and the <- ACCUMULATED and <- ANIM RATE observers' since the last call. */
 		std::string VisibilityReport();
 		/**
-		 * @brief Render thread, the frame's first DCLF point, before the main camera's cull: whether DCLF draws tree LOD this frame
-		 * (the tree LOD class on: Api::ObjectClass::TreeLod; pipelines, tables, the engine's tree LOD texture). If so PassCapture withholds
-		 * the engine's tree LOD passes.
+		 * @brief Render thread, the frame's first DCLF point, before the main camera's cull (the TreeInstances draw family's decide:
+		 * Extensions::DecideDrawFamilies): whether DCLF draws tree LOD this frame (the family on: its class, Api::ObjectClass::TreeLod;
+		 * pipelines from its program source, tables, the engine's tree LOD texture). If so PassCapture withholds the engine's tree LOD passes.
 		 */
 		bool DecideTreeLod();
 		/**
@@ -285,7 +285,7 @@ namespace DCLF
 		/**
 		 * @brief Tree LOD drawn per face by a trees view (Api::ViewShape::trees: the view engine's, from Core's tree LOD tables), render
 		 * thread, once a frame after DecideTreeLod. ResolveViewTreeLod: its forward pipeline asked of the pipeline lane and read from a_catalog
-		 * for the view's targets while a_on and the tree LOD class are (Api::ObjectClass::TreeLod; none otherwise); true while it is still to
+		 * for the view's targets while a_on and the TreeInstances draw family are (Extensions::DrawFamilyOn; none otherwise); true while it is still to
 		 * come and the main view's tree LOD is DCLF's.
 		 * DecideViewTreeLod: whether the faces' tree LOD is DCLF's this frame (the view drawable and covered, its pipeline ready, the main
 		 * view's tree LOD DCLF's, the last depth commit's row and tree LOD's pipelines there), published to PassCapture

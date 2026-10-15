@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/Hash.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
@@ -365,8 +366,8 @@ namespace DCLF::Scene
 			Diagnostics::Notify<Diagnostics::ScenePoint::MirrorProbePoint>();
 			ReportCategoryWatch();
 		}
-		// Tree LOD's mirror is the render thread's (DecideTreeLod reads it at frame start).
-		treeLod.Drain(frame);
+		// The draw families' mirrors are the render thread's (tree LOD's: DecideTreeLod reads it at frame start).
+		Extensions::ServeDrawFamilies(frame);
 	}
 
 	void FrameView::ServeFadeNodeRequests()

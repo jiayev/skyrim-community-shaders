@@ -12,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
@@ -167,9 +168,9 @@ namespace DCLF
 		}
 		LocalLightCull::SelectFrame(view.GetFrame());
 		PassCapture::Get().RefreshMainRenderers();
-		// Tree LOD's for the frame, before the main camera's cull registers its passes; the views' work after it (Features/Reflection's:
-		// the water reflection's forward pipelines).
-		draws.DecideTreeLod();
+		// The draw families' for the frame (tree LOD's: IndirectDraws::DecideTreeLod), before the main camera's cull registers its passes;
+		// the views' work after it (Features/Reflection's: the water reflection's forward pipelines).
+		Extensions::DecideDrawFamilies(view.GetFrame());
 		RunViewWork(Api::ViewPoint::FrameStartAfterTreeLod);
 		PrimaryCull::Get().PublishListFilter();
 		// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the plans and named

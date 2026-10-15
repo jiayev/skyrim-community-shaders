@@ -93,6 +93,13 @@ namespace DCLF
 			add(constants, sizeof(std::array<float, 4>), kEffectBloodFrameOffset);   // its Blood (SampleEffectBlood)
 			if (!a_depthOnly && a_resources.foliage)
 				add(constants, 8 * sizeof(std::uint32_t), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame));
+			// The features' scene resources' latched buffers (Api::SceneResources::latched), the depth commit's.
+			if (a_depthOnly)
+				Extensions::LatchSceneResources(a_resources.scene->sceneResources,
+					[](void* a_add, const std::shared_ptr<org::Buffer>& a_buffer, const Versioned& a_versioned, std::size_t a_bytes) {
+						(*static_cast<decltype(add)*>(a_add))(a_versioned ? a_versioned->Key() : a_buffer.get(), a_bytes, 0);
+					},
+					&add);
 			if (const auto& scene = *a_resources.scene; a_depthOnly && scene.treeLodCull && scene.treeLodShapes) {
 				add(scene.treeLodDraw.get(), sizeof(TreeLod::DrawRow), 0);
 				add(scene.treeLodVisible->Key(), sizeof(TreeLod::VisibleHeader), 0);
@@ -386,8 +393,9 @@ namespace DCLF
 			if (traits.forwardPart)
 				ViewForwardSlotsOf(tables, viewOn[v], viewForwardSlots);
 			if (traits.trees)
-				viewRevisionTree = viewOn[v] && Extensions::ObjectClassOn(inputs.toggles, Api::ObjectClass::TreeLod) ? ForwardPipelineOf(a_make.catalog, ForwardPipelineKey{ 0, 0, ForwardPipelineKey::kForwardTreeLod }, view.targets) :
-				                                                          rhi::PipelineHandle{};
+				viewRevisionTree = viewOn[v] && Extensions::DrawFamilyOn(inputs.toggles, Api::DrawFamily::TreeInstances) ?
+				                       ForwardPipelineOf(a_make.catalog, ForwardPipelineKey{ 0, 0, FamilySlotOf(Api::DrawFamily::TreeInstances).forwardFlags }, view.targets) :
+				                       rhi::PipelineHandle{};
 			if (!view.resources || (traits.depthPass && !viewOn[v]))
 				continue;
 			ViewPlan plan;

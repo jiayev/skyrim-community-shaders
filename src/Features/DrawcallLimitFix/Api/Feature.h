@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Api/Commits.h"
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Api/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
@@ -78,6 +79,11 @@ namespace DCLF::Api
 		virtual void RegisterOcclusionMap(const OcclusionMapContribution& a_map) = 0;
 		/** @brief Fails the install for a source another feature has, or a Spot or Point source without lightKept. */
 		virtual void RegisterShadowSource(const ShadowSourceContribution& a_source) = 0;
+		/**
+		 * @brief Fails the install for a family another registration has, a class with no registered toggle, or without its frame and
+		 * main callbacks (decide, programSource, main's four) or with only some of its faces' four.
+		 */
+		virtual void RegisterDrawFamily(const DrawFamilyContribution& a_family) = 0;
 
 	protected:
 		~InstallContext() = default;

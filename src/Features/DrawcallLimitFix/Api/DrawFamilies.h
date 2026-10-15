@@ -1,0 +1,90 @@
+#pragma once
+
+// The draw family contract (Api::InstallContext::RegisterDrawFamily): a feature's instanced draws in Core's main passes (the depth
+// segment's two phases and the colour segment) and in a trees view's faces, at Core's fixed slot for the family.
+
+#include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Api/SceneResources.h"
+
+#include <cstdint>
+#include <memory>
+#include <string_view>
+#include <vector>
+
+namespace org
+{
+	class RenderPass;
+}
+
+namespace DCLF::Api
+{
+	// Defined by Core (Core/Extensions/DrawFamilies.h), which the features inside DCLF include for them.
+	class DrawFamilyFrame;
+	class DrawFamilyDeclare;
+	class DrawFamilyPrepare;
+	class DrawFamilyRecord;
+	class DrawFamilyViewContext;
+	class DrawFamilyFaceRow;
+
+	/**
+	 * @brief Core's fixed slot per draw family (Core/Render/DrawFamilies/FamilySlots.h): what Core keeps for each, whichever feature
+	 * takes it - its catalog pipelines (depth, colour, a view's forward) on Core's pipeline lane, built from the program source the
+	 * feature names, their draw signature, its points in the main passes and a trees view's faces (ViewShape::trees draws TreeInstances
+	 * per face), its part of the revisions' shapes key, and PassCapture's ownership of the engine's passes it replaces.
+	 */
+	enum class DrawFamily : std::uint8_t
+	{
+		// The tree LOD instances (the BSDistantTreeShaderProperty groups under the LOD trees root), one instanced draw of a culled list.
+		TreeInstances,
+		Count,
+	};
+
+	/**
+	 * @brief A draw family: the feature's per-frame decisions and its part of each pass execution. None is called per object; a family
+	 * no feature takes adds no passes and no requirement.
+	 *
+	 * - family: the slot. objectClass: the class whose toggle gates it (ObjectClassOn, read as data; registered before). resources: its
+	 *   tables (Api/SceneResources.h; none while they are Core's). colourRange: the nvperf range around its colour draw.
+	 * - frame.serve (optional): render thread, at the frame's start where the frame requests are served (running or not: FrameView's
+	 *   ServeFrameRequests, at its end), handed the frame: what the family mirrors of the engine, drained.
+	 * - frame.decide: render thread, once a frame before the main camera's cull (FrameDriver, before the FrameStartAfterTreeLod view
+	 *   work): whether the family's draws are DCLF's this frame (then PassCapture withholds the engine's passes they replace).
+	 * - frame.programSource: render thread, at the frame's decision: the engine shader its slot's pipelines are built from (null: none
+	 *   yet), posted to the pipeline lane.
+	 * - main.declare, main.revision, main.prepare, main.record: the main pass's executions (z.depth, depth-phase2, main-opaque), in the
+	 *   graph's build (declare), each preparation (revision, then prepare: what the execution draws with, null for nothing), and each
+	 *   recording (record, only when prepare gave something: after the depth draws in the depth passes; in the colour pass after the
+	 *   main draws, under the Z-prepass layout and colourRange).
+	 * - faces.makeCull, faces.declare, faces.record, faces.row (optional, all or none): a trees view's faces (Api::ViewShape::trees):
+	 *   its cull pass in the view's depth epoch (makeCull at the graph's build; null: none), the faces' draw pass's declarations and its
+	 *   draw after each face's buckets (record, for a face whose shape has the family's pipeline), and each epoch commit's row
+	 *   (row: the row the faces' latch takes, its texture held; true when the faces draw it).
+	 */
+	struct DrawFamilyContribution
+	{
+		DrawFamily family = DrawFamily::Count;
+		ObjectClass objectClass = ObjectClass::Count;
+		SceneResourcesId resources;
+		std::string_view colourRange;
+		struct Frame
+		{
+			void (*serve)(const DrawFamilyFrame& a_frame) = nullptr;
+			bool (*decide)(const DrawFamilyFrame& a_frame) = nullptr;
+			void* (*programSource)() = nullptr;
+		} frame;
+		struct Main
+		{
+			void (*declare)(DrawFamilyDeclare& a_declare) = nullptr;
+			void (*revision)(const DrawFamilyPrepare& a_prepare, std::vector<std::uint64_t>& a_out) = nullptr;
+			void (*prepare)(DrawFamilyPrepare& a_prepare) = nullptr;
+			void (*record)(const DrawFamilyRecord& a_record) = nullptr;
+		} main;
+		struct Faces
+		{
+			std::shared_ptr<org::RenderPass> (*makeCull)(const DrawFamilyViewContext& a_view) = nullptr;
+			void (*declare)(DrawFamilyDeclare& a_declare) = nullptr;
+			void (*record)(const DrawFamilyRecord& a_record) = nullptr;
+			bool (*row)(DrawFamilyFaceRow& a_row) = nullptr;
+		} faces;
+	};
+}
