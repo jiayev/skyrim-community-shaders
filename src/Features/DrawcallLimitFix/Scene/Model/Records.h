@@ -103,7 +103,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kObjectIndexMask = (1u << kObjectLocalShadowShift) - 1;
 
 	/**
-	 * @brief The face positions buffer (FaceSnapshots): a float4 per vertex of each drawn face shape, in a per-shape region, bound
+	 * @brief The face positions buffer (Features/Faces' snapshots): a float4 per vertex of each drawn face shape, in a per-shape region, bound
 	 * as the second vertex stream (where the engine puts BSDynamicTriShape::dynamicData). kNoFaceRegion: no region yet.
 	 */
 	inline constexpr std::uint32_t kNoFaceRegion = ~0u;
@@ -574,7 +574,7 @@ namespace DCLF
 	 * pipeline set index, push data (pipeline row and material row addresses, object word), two vertex buffer views, index buffer
 	 * view (D3D12 VBV / IBV layouts), DrawIndexed.
 	 *
-	 * Slot 1 is a dynamic shape's positions (FaceSnapshots; where the engine binds BSDynamicTriShape::dynamicData); other draws
+	 * Slot 1 is a dynamic shape's positions (Features/Faces' snapshots; where the engine binds BSDynamicTriShape::dynamicData); other draws
 	 * repeat slot 0. The tables hold a template with the pipeline's table index; the epoch substitutes the set index and rows.
 	 */
 #pragma pack(push, 4)

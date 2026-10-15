@@ -1,6 +1,7 @@
 // The extension registry (see the header): the install context the features register with, and the lists it fills.
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -8,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
+#include <array>
 #include <vector>
 
 namespace DCLF::Extensions
@@ -28,6 +30,8 @@ namespace DCLF::Extensions
 			std::vector<Api::StandInObserver> standInObservers;
 			std::vector<TableFamilyEntry> tableFamilies;
 			std::vector<CoordinatorComponentEntry> coordinatorComponents;
+			// By entry class: whether the component that follows it takes it (EntryClassTaken).
+			std::array<bool, static_cast<std::size_t>(Api::EntryClass::Count)> entryClassesTaken{};
 			TechniqueEntries techniques{};
 			GeometryTypeToggles geometryTypes{};
 			ParentToggles parents{};
@@ -154,11 +158,20 @@ namespace DCLF::Extensions
 
 			Api::CoordinatorComponentId RegisterCoordinatorComponent(const Api::CoordinatorComponent& a_component) override
 			{
-				if (a_component.name.empty() || !a_component.make)
+				if (a_component.name.empty() || !a_component.make || a_component.follows >= Api::EntryClass::Count)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete coordinator component", feature));
-				lists.coordinatorComponents.push_back(
-					{ std::string(a_component.name), a_component.make, a_component.resident, a_component.left, a_component.recount, a_component.reset,
-						a_component.allLeft, a_component.accumulated, a_component.rewritten, a_component.joinsDone });
+				// One component follows an entry class: it supplies what the class's writes wait on.
+				if (a_component.follows != Api::EntryClass::None)
+					for (const auto& component : lists.coordinatorComponents)
+						if (component.follows == a_component.follows)
+							stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s component {} follows entry class {}, which {} follows", feature, a_component.name,
+								static_cast<std::uint32_t>(a_component.follows), component.name));
+				lists.coordinatorComponents.push_back({ std::string(a_component.name), a_component.make, a_component.resident, a_component.left, a_component.recount,
+					a_component.reset, a_component.allLeft, a_component.accumulated, a_component.rewritten, a_component.joinsDone, a_component.walkBegun,
+					a_component.scheduling, a_component.walkEnded, a_component.denseBegun, a_component.denseEnded, a_component.forgot, a_component.forgotAll,
+					a_component.recycled, a_component.follows, a_component.takes, a_component.listed, a_component.resolve, a_component.streamed });
+				if (a_component.follows != Api::EntryClass::None)
+					lists.entryClassesTaken[static_cast<std::size_t>(a_component.follows)] = a_component.takes;
 				return { static_cast<std::uint32_t>(lists.coordinatorComponents.size() - 1) };
 			}
 
@@ -271,4 +284,9 @@ namespace DCLF::Extensions
 	const ObjectClassToggles& RegisteredObjectClasses() { return Registered().objectClasses; }
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions() { return Registered().shadingContributions; }
 	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals() { return Registered().frameGlobals; }
+
+	bool EntryClassTaken(Api::EntryClass a_class)
+	{
+		return a_class < Api::EntryClass::Count && Registered().entryClassesTaken[static_cast<std::size_t>(a_class)];
+	}
 }

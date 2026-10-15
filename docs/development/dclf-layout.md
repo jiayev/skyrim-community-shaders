@@ -59,7 +59,7 @@ the shell runs after Core's scene events and before DCLF's own engine hooks and 
 | Report lines | `Api/Reports.h` | its lines at a named point of the periodic report: logged, handed the report's frame (`PrimaryCull`; `Statistics`, the statistics' last), or appended to the report's text (`AsyncWork`, the draws' async work) |
 | Stand-in observer | `Api/EngineEvents.h` | the primary cull's stood-in roots as they change, and Main::Update's entry; whether the primary cull is installed |
 | Table family | `Api/TableFamilies.h` | columns of its own in every `SceneTables` (`Extensions::TableFamilies`), read through a typed handle; Core keeps beside them the write stamp (the publication copies a family only when it moved), the objects' references into it (bounded by its scene resources' fit, carried in the record at a declared word) and its rows' tags, and recycles its retired rows |
-| Coordinator component | `Api/CoordinatorComponents.h` | state the coordinator keeps for it, and hooks at the coordinator's residency points (a slot resident, left, every residency ended, the residents recounted, the slot tables reset), at its writes (a patch accumulated with its draw chain, a slot rewritten by the walk or its skin partitions refreshed) and when the joins are done, with a narrow context: the live tables, the scene mirror and its fade node, the pass serial, the entry's reference, seeds the next frame takes (`FrameView::TakeComponentSeeds`) |
+| Coordinator component | `Api/CoordinatorComponents.h` | state the coordinator keeps for it, and hooks at the coordinator's residency points (a slot resident, left, every residency ended, the residents recounted, the slot tables reset), at its writes (a patch accumulated with its draw chain, a slot rewritten by the walk or its skin partitions refreshed), when the joins are done, at the walk's phases (begun, the delta walk's scheduling with its counts, ended, the dense walk's save and restore), as tracked entries are erased, and as ranges it retired come free (`RetireRange`); the writes of an entry class it follows (`EntryClass`: listed, its record's second vertex stream resolved or waiting, the stream's slot), and whether it takes the class (`Extensions::EntryClassTaken`, read as data); with a narrow context: the live tables, the scene mirror and its fade node, the pass serial, the entry's reference, a tracked entry's slot and write state, its write scheduled, seeds the next frame takes (`FrameView::TakeComponentSeeds`) |
 | Object contributor | `Api/ObjectContributors.h` | a technique it ports (its eligibility under a toggle, its objects' record flags, read as data), a geometry type it ports (its objects a class under a toggle, read as data by the eligibility, the walk and the captures), the leaves it admits under an engine parent Core rejects them under (`EngineParent`: a billboard or a switch node; `ParentLeaves`; under a toggle, read as data by the classification and the sun and light candidates), an object class Core's ports derive but leave native until it is taken (`ObjectClass`: a decal, a multi-index layer; under a toggle, read as data by the ports' eligibility), the shading values it derives for a property flag of its own, and engine globals captured with the frame's (`FrameGlobals::features`) |
 
 Each contract's thread, timing and lifetime is documented in its header. A feature's install also installs its engine
@@ -98,6 +98,16 @@ them needs an ordered fixed-slot range contract for the main pass. What SwitchNo
 selections the primary cull follows under every stood-in root whatever the toggle (the index stores' and child edits' events, without
 which DCLF does not run; the pending switches, the catch-ups, the cut's selection reads, tree LOD's switch), and the hidden-bit
 vocabulary (the channel, the chains and their drain, the frame's capture of the culls' bits, the Hidden verdict, the LOD gates' veto).
+`Features/Faces` followed: the face morphing's thunks and the head snapshots (`FaceSnapshots`), and the face shapes as a coordinator component following
+their entry class (`EntryClass::FaceShape`, taken once the thunks are in): their heads' lists, the heads' publications taken as each walk
+begins and applied as the delta walk schedules, each written shape's snapshot, region of the positions buffer and stream, and the regions
+retired as their streams go. What it leaves Core is what every draw reads and the walk's classification: the face streams in the scene's
+tables (`faceStreams`, the objects' `faceStream`, `kRetiredFaceStream`), the positions buffer, the commits' uploads into it, the builds'
+second-stream geometry draws and the passes' bindings (`SceneBuffers::facePositions`, `UploadFaceStreams`, `FaceStreamGeometry`), and a face
+shape's classification (`Tracked::faceShape`, its head held from the attach's pins, the per-frame face trait and the walk's face names in
+the reports). Moving the first needs a per-object vertex stream contract (a feature's rows in a buffer of its scene resources that the
+builds, the commits and the passes read as data, and the second stream's slot in the draws); the second, an entry-class contribution
+to the classification and the attach.
 The particles' and billboards' per-object paths stay Core's for now: the particle snapshot store and the
 expansion FrameValues' producer runs per particle member into the palette part it shares with the skins (`Engine/Capture/
 ParticleSnapshots`), and the billboard placement row it samples per moving object (`Engine/Capture/Billboards`, Effect.hlsl's
@@ -111,6 +121,9 @@ layout). The extension points still to come, as the next features need them:
 - the shared-bit manifest (object and record flags);
 - ordered fixed-slot ranges of the main pass: a feature's ranges in the sequence buffer, their count words and draws in the colour
   segment's second pass (the decal groups, interleaved there with Terrain Blending's groups).
+- a per-object vertex stream: a feature's rows in a versioned buffer of its scene resources, which the builds' second-stream geometry
+  draws, the commits' uploads and the passes' bindings read as data (Features/Faces' face streams and positions);
+- entry-class contributions to the walk's classification and the attach (a face shape's head pin, its per-frame trait).
 
 ## The rules
 

@@ -14,7 +14,7 @@ namespace RE
 	class BSGeometry;
 }
 
-namespace DCLF
+namespace DCLF::Features::Faces
 {
 	/**
 	 * @brief The positions of NPC face shapes (BSDynamicTriShape under a BSFaceGenNiNode: head, mouth, hair,
@@ -45,7 +45,8 @@ namespace DCLF
 	 *
 	 * A publication is the event a head's shapes follow: BeginWalk names the heads it took a fresh snapshot of, and the
 	 * heads whose writer found their shapes changed (stale), so that the coordinator updates their face streams in place
-	 * or writes their shapes again, without visiting them every frame.
+	 * or writes their shapes again, without visiting them every frame. The coordinator's side is the feature's component
+	 * (FaceShapes.cpp), the only caller of the walk's functions below.
 	 */
 	class FaceSnapshots
 	{
@@ -55,7 +56,7 @@ namespace DCLF
 		/** @brief Whether the writer's thunks are installed (Install checked the engine's code first). */
 		static bool Enabled();
 
-		/** @brief Installs the two thunks in the engine's face morphing (AE only). */
+		/** @brief Installs the two thunks in the engine's face morphing (AE only). Main thread, at the feature's install. */
 		void Install();
 
 		/** @brief A face shape's positions in the snapshot the walk holds: float4 per vertex. */

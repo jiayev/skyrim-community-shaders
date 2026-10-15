@@ -55,12 +55,11 @@ namespace DCLF::Scene
 		residentPos.clear();
 		residentMaintenanceDirty = true;
 		// The listed nodes' references through the retirement chain with everything else the cleared tables named (the components'
-		// too).
+		// too, and what they keep beside the tables: Features/Faces' regions).
 		ComponentsReset();
 		HandBack(fadeRootOwners);
 		fadeRootMembers.Clear();
 		tables.Clear();
-		ClearFaceRegions();
 		// The scene work's material and shared bindings with the tables they were made for, and the lookups they are written into.
 		ResetMaterialBindings();
 		ResetSharedBindings();
@@ -375,7 +374,7 @@ namespace DCLF::Scene
 			MoveBucket(it->second, Ineligible::Count);
 			UnlistDependents(it->first, it->second, true);
 			UnlistCategoryMember(it->first, it->second);
-			UnlistFaceShape(it->first, it->second);
+			ComponentsForgot(it->first);
 			// Off its LOD gate (an outgoing block's geometries leave here, by their detach after the flip).
 			if (it->second.gate || it->second.gateHeldOut)
 				UntagGate(it->first, it->second);

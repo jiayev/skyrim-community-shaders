@@ -5,8 +5,10 @@
 // on the scene-work thread; a publication carries an immutable copy that the render thread and the builds read.
 
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <utility>
@@ -17,7 +19,6 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 #include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
@@ -364,8 +365,9 @@ namespace DCLF
 		static std::uint32_t CausesBetween(const Columns& a_before, const Columns& a_after);
 		/** @brief Notes what a write changed, against the snapshot taken before it. */
 		void NoteWrite(std::uint32_t a_slot, const Columns& a_before) { NoteChange(a_slot, CausesBetween(a_before, ColumnsOf(a_slot))); }
-		// NPC face shapes: per face object, its positions in the head's snapshot (FaceSnapshots, leased) and its region of the
-		// positions buffer, uploaded on a new generation. Updated in place by Coordinator::ApplyFacePublications.
+		// NPC face shapes: per face object, its positions in the head's snapshot (Features/Faces' FaceSnapshots, leased) and its region
+		// of the positions buffer, uploaded on a new generation. Written and updated in place by Features/Faces' component (its heads'
+		// publications).
 		static constexpr std::uint32_t kNoFaceObject = ~0u;
 		struct FaceStream
 		{
@@ -375,16 +377,16 @@ namespace DCLF
 			std::uint64_t generation = 0;
 			const float* positions = nullptr;
 			std::shared_ptr<const std::vector<float>> owner;
-			// Complete sibling set for a future consistency-group publication.
-			std::shared_ptr<const FaceSnapshots::HeadView> headView;
-			// The shape and its head, as keys: a publication finds the stream's positions by them (FaceSnapshots::View).
+			// Complete sibling set for a future consistency-group publication (the feature's FaceSnapshots::HeadView; Core reads none).
+			std::shared_ptr<const void> headView;
+			// The shape and its head, as keys: a publication finds the stream's positions by them (the feature's FaceSnapshots::View).
 			const RE::BSGeometry* geometry = nullptr;
 			const RE::BSFaceGenNiNode* head = nullptr;
 		};
 		std::vector<FaceStream> faceStreams;
 		std::vector<std::uint32_t> faceStream;  // parallel to objects: index in faceStreams, or kNoFaceStream
 		std::vector<std::uint32_t> faceStreamFree;
-		// The (shape, region) of every stream freed since the walk's end took them (Coordinator::EndFaceWalk frees the region
+		// The (shape, region) of every stream freed since the walk's end took them (Features/Faces' component frees the region
 		// once no stream of the shape holds it).
 		std::vector<std::pair<const RE::BSGeometry*, std::uint32_t>> faceStreamsReleased;
 		/** @brief Writes a slot's face stream: in place when it has one, else at a free index. */
@@ -529,18 +531,22 @@ namespace DCLF
 			kRetiredGeometrySlot,    // a SlotTable's slot; extra: its generation when freed
 			kRetiredMaterialSlot,
 			kRetiredPipelineSlot,
-			kRetiredFaceRegion,  // slot: the region's first vertex in the face positions, extra: its vertices (faceRegionFree)
+			kRetiredComponentRange,  // a coordinator component's range (RetireRange; owner: the component), slot: its first unit, extra: its units
 		};
 		struct RetiredSlot
 		{
 			RetiredKind kind = kRetiredObject;
+			std::uint8_t owner = 0;  // kRetiredComponentRange's component (Api::CoordinatorComponentId::index)
 			std::uint32_t slot = 0, extra = 0;
 			std::uint32_t epoch = 0;  // slotEpoch when retired: a clear since drops it
 		};
 		std::vector<RetiredSlot> retiring;
 		std::uint32_t objectsRetiring = 0;  // object slots among them, and in the chain (neither live nor free)
 		std::uint32_t slotEpoch = 0;        // moves on when every slot is cleared
-		void Retire(RetiredKind a_kind, std::uint32_t a_slot, std::uint32_t a_extra = 0) { retiring.push_back({ a_kind, a_slot, a_extra, slotEpoch }); }
+		void Retire(RetiredKind a_kind, std::uint32_t a_slot, std::uint32_t a_extra = 0, std::uint8_t a_owner = 0)
+		{
+			retiring.push_back({ a_kind, a_owner, a_slot, a_extra, slotEpoch });
+		}
 		/** @brief An object slot freed: retiring until no publication names it (ResetObject first). */
 		void RetireObject(std::uint32_t a_slot)
 		{
