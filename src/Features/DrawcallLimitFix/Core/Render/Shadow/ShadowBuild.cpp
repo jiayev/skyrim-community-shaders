@@ -1017,7 +1017,7 @@ namespace DCLF::Draws
 		frameRecord.textures[kPlacementBufferRegister] = a_in.addresses.placementsIndex;
 		frameRecord.textures[kPaletteBufferRegister] = a_in.addresses.palettesIndex;
 		frameRecord.textures[kShadingBufferRegister] = a_in.addresses.shadingIndex;  // a tree's wind until its entry
-		frameRecord.textures[kTreeWindRegister] = a_in.addresses.treeWindIndex;
+		Extensions::WriteFrameBindings(a_in.addresses.frameBindings, frameRecord.textures);
 		const std::uint32_t wrapAnisotropic = a_lookups.Sampler(static_cast<std::uint32_t>(RE::BSGraphics::TextureAddressMode::kWrapSWrapT),
 			static_cast<std::uint32_t>(RE::BSGraphics::TextureFilterMode::kAnisotropic));
 		for (auto& index : frameRecord.samplers)

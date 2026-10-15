@@ -23,8 +23,7 @@ namespace DCLF::Draws
 	std::shared_ptr<org::RenderPass> MakeHzbPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment);
 	std::shared_ptr<org::RenderPass> MakeVisibilityEventsPass(std::shared_ptr<Resources> a_resources);
 
-	// SceneState.cpp: next frame's tree wind and fade states.
-	std::shared_ptr<org::RenderPass> MakeTreeWindPass(std::shared_ptr<SceneBuffers> a_scene);
+	// SceneState.cpp: next frame's fade states.
 	std::shared_ptr<org::RenderPass> MakeFadeStatePass(std::shared_ptr<Resources> a_resources);
 
 	// Readbacks.cpp: tree LOD's counts and an event ring's copy to the host.

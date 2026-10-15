@@ -4,6 +4,10 @@
 #include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 #include "Features/Skylighting.h"
 
+#include <deque>
+#include <string>
+#include <vector>
+
 namespace DCLF
 {
 	namespace
@@ -13,7 +17,6 @@ namespace DCLF
 
 		constexpr ToggleInfo kToggles[] = {
 			{ &S::skinned, Switch::Skinned, kOn, "skinned", "Object classes", "Skinned (CS_DCLF_SKINNED)", nullptr, true, {} },
-			{ &S::trees, Switch::Trees, kOn, "trees", {}, "Trees (CS_DCLF_TREES)", nullptr, true, {} },
 			{ &S::decals, Switch::Decals, kOn, "decals", {}, "Decals (CS_DCLF_DECALS)", nullptr, true, {} },
 			{ &S::layers, Switch::Layers, kOn, "multi-index layers", {}, "Multi-index shapes: cave walls with an ice or snow layer (CS_DCLF_LAYERS)", nullptr, true, { &S::decals } },
 			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV (CS_DCLF_PROJECTED_UV)", nullptr, true, {} },
@@ -63,9 +66,32 @@ namespace DCLF
 				true, { &S::skinned, &S::actors } },
 		};
 
-		// The packed word: cullMode in the low two bits, then each flag in kToggles order.
+		// The packed word: cullMode in the low two bits, then each flag in kToggles order, then the features' by their bits.
 		constexpr std::uint32_t kFirstFlagBit = 2;
-		static_assert(kFirstFlagBit + std::size(kToggles) <= 32);
+		constexpr std::uint32_t kFirstRegisteredBit = kFirstFlagBit + static_cast<std::uint32_t>(std::size(kToggles));
+		static_assert(kFirstRegisteredBit < 32);
+
+		// The features' toggles (RegisterToggle): their strings (the table's entries view them), the table with them in it, and their
+		// count. Written at install alone (the main thread, before DCLF's threads start), read-only after; before, the table is kToggles.
+		struct RegisteredStrings
+		{
+			std::string name, label, tooltip, section, onValue;
+		};
+		std::deque<RegisteredStrings>& Strings()
+		{
+			static std::deque<RegisteredStrings> strings;
+			return strings;
+		}
+		std::vector<ToggleInfo>& Table()
+		{
+			static std::vector<ToggleInfo> table(std::begin(kToggles), std::end(kToggles));
+			return table;
+		}
+		std::atomic<std::uint32_t> registeredCount{ 0 };
+		std::uint32_t RegisteredMask()
+		{
+			return (1u << registeredCount.load(std::memory_order_relaxed)) - 1u;
+		}
 
 		bool NeedsMet(const ToggleInfo& a_info, const ToggleSet& a_set)
 		{
@@ -75,38 +101,99 @@ namespace DCLF
 			return true;
 		}
 
+		const std::string& SeedValue(const ToggleInfo& a_info)
+		{
+			return a_info.member ? SwitchValue(a_info.seed) : SwitchValue(a_info.registeredSeed);
+		}
+
 		ToggleSet FromSwitches()
 		{
 			ToggleSet set;
 			const auto& cull = SwitchValue(Switch::Cull);
 			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 : 0;
-			for (const auto& toggle : kToggles) {
-				const auto& value = SwitchValue(toggle.seed);
-				set.*toggle.member = value.empty() ? !toggle.offByDefault : value == toggle.onValue;
+			for (const auto& toggle : Table()) {
+				const auto& value = SeedValue(toggle);
+				SetToggleValue(set, toggle, value.empty() ? !toggle.offByDefault : value == toggle.onValue);
 			}
 			return set;
 		}
 
-		/** @brief The combinations that cannot hold: each flag off while one it needs is off (kToggles order resolves chains). */
+		/** @brief The combinations that cannot hold: each flag off while one it needs is off (the table's order resolves chains). */
 		ToggleSet Normalised(ToggleSet a_set)
 		{
-			for (const auto& toggle : kToggles)
-				a_set.*toggle.member = a_set.*toggle.member && NeedsMet(toggle, a_set);
+			for (const auto& toggle : Table())
+				SetToggleValue(a_set, toggle, ToggleValue(a_set, toggle) && NeedsMet(toggle, a_set));
 			return a_set;
 		}
 
 		bool EntersClassification(const ToggleSet& a, const ToggleSet& b)
 		{
-			for (const auto& toggle : kToggles)
-				if (toggle.entersClassification && a.*toggle.member != b.*toggle.member)
+			for (const auto& toggle : Table())
+				if (toggle.entersClassification && ToggleValue(a, toggle) != ToggleValue(b, toggle))
 					return true;
 			return false;
+		}
+
+		/** @brief The Core toggle named a_name, by its index in the table (none: -1). */
+		std::ptrdiff_t CoreToggleAt(std::string_view a_name)
+		{
+			const auto& table = Table();
+			for (std::size_t i = 0; i < table.size(); ++i)
+				if (table[i].member && table[i].name == a_name)
+					return static_cast<std::ptrdiff_t>(i);
+			return -1;
 		}
 	}
 
 	std::span<const ToggleInfo> ToggleTable()
 	{
-		return kToggles;
+		return Table();
+	}
+
+	Api::ToggleId RegisterToggle(const Api::FeatureToggle& a_toggle, std::string_view a_feature)
+	{
+		auto& table = Table();
+		const std::uint32_t bit = registeredCount.load(std::memory_order_relaxed);
+		if (a_toggle.name.empty() || a_toggle.label.empty() || !a_toggle.seed)
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete toggle", a_feature));
+		for (const auto& toggle : table)
+			if (toggle.name == a_toggle.name)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered the toggle {}, which is taken", a_feature, a_toggle.name));
+		if (kFirstRegisteredBit + bit >= 32)
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s toggle {} is past the toggle word's 32 bits", a_feature, a_toggle.name));
+		// Right after its Core toggle (after the features' already there), or last; what it needs comes before it.
+		std::size_t at = table.size();
+		if (!a_toggle.after.empty()) {
+			const auto after = CoreToggleAt(a_toggle.after);
+			if (after < 0)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s toggle {} is listed after {}, which Core does not have", a_feature, a_toggle.name, a_toggle.after));
+			at = static_cast<std::size_t>(after) + 1;
+			while (at < table.size() && !table[at].member)
+				++at;
+		}
+		auto& strings = Strings().emplace_back(RegisteredStrings{ std::string(a_toggle.name), std::string(a_toggle.label), std::string(a_toggle.tooltip),
+			std::string(a_toggle.section), std::string(a_toggle.onValue) });
+		ToggleInfo info{ nullptr, Switch::Count, strings.onValue, strings.name, strings.section, strings.label.c_str(),
+			strings.tooltip.empty() ? nullptr : strings.tooltip.c_str(), a_toggle.entersClassification, {}, a_toggle.offByDefault, Api::ToggleId{ bit }, a_toggle.seed };
+		for (std::size_t n = 0; n < std::size(a_toggle.needs); ++n) {
+			if (a_toggle.needs[n].empty())
+				continue;
+			const auto need = CoreToggleAt(a_toggle.needs[n]);
+			if (need < 0 || static_cast<std::size_t>(need) >= at)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s toggle {} needs {}, which Core does not have before it", a_feature, a_toggle.name, a_toggle.needs[n]));
+			info.needs[n] = table[static_cast<std::size_t>(need)].member;
+		}
+		table.insert(table.begin() + static_cast<std::ptrdiff_t>(at), info);
+		registeredCount.store(bit + 1, std::memory_order_relaxed);
+		return { bit };
+	}
+
+	Api::ToggleId FindToggle(std::string_view a_name)
+	{
+		for (const auto& toggle : Table())
+			if (toggle.name == a_name)
+				return toggle.registered;
+		return {};
 	}
 
 	bool Toggles::Editable(const ToggleInfo& a_info) const
@@ -126,11 +213,18 @@ namespace DCLF
 		active.store(Pack(Normalised(requested)), std::memory_order_relaxed);
 	}
 
+	void Toggles::SeedRegistered()
+	{
+		requested.registered = FromSwitches().registered;
+		active.store(Pack(Normalised(requested)), std::memory_order_relaxed);
+	}
+
 	std::uint32_t Toggles::Pack(const ToggleSet& a_set)
 	{
 		std::uint32_t bits = a_set.cullMode & 3u;
 		for (std::uint32_t i = 0; i < std::size(kToggles); ++i)
 			bits |= (a_set.*kToggles[i].member ? 1u : 0u) << (kFirstFlagBit + i);
+		bits |= (a_set.registered & RegisteredMask()) << kFirstRegisteredBit;
 		return bits;
 	}
 
@@ -140,6 +234,7 @@ namespace DCLF
 		set.cullMode = static_cast<std::uint8_t>(a_bits & 3u);
 		for (std::uint32_t i = 0; i < std::size(kToggles); ++i)
 			set.*kToggles[i].member = ((a_bits >> (kFirstFlagBit + i)) & 1u) != 0;
+		set.registered = (a_bits >> kFirstRegisteredBit) & RegisteredMask();
 		return set;
 	}
 

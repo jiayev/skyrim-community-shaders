@@ -14,15 +14,20 @@
 namespace DCLF::Draws
 {
 	struct Resources;
+	struct SceneBuffers;
 }
 
 namespace DCLF::Api
 {
-	/** @brief A stage's setup (render thread, EnsureSceneBuffers): the device its programs are made on. */
+	/**
+	 * @brief A stage's setup (render thread, EnsureSceneBuffers): the device its programs are made on, and the scene's tables as far as
+	 * they are made (the features' scene resources included: Extensions::SceneResourcesOf).
+	 */
 	class GpuStageSetup
 	{
 	public:
 		rhi::Device device;
+		const Draws::SceneBuffers& scene;
 	};
 
 	/** @brief A stage's pass factory (render thread, the graph's build): the main view's resources and the state its setup made. */
@@ -44,7 +49,7 @@ namespace DCLF::Api
 namespace DCLF::Extensions
 {
 	/** @brief Render thread (EnsureSceneBuffers): every registered stage's setup, in order: its state by stage (null: out of the graph). */
-	std::vector<std::shared_ptr<const void>> SetUpGpuStages(rhi::Device a_device);
+	std::vector<std::shared_ptr<const void>> SetUpGpuStages(rhi::Device a_device, const Draws::SceneBuffers& a_scene);
 	/** @brief Render thread (the depth commit): a_slot's latch word (GpuStage::latchWord of its stage that has one; 0: none). */
 	std::uint32_t StageLatchWord(Api::GpuStageSlot a_slot);
 }

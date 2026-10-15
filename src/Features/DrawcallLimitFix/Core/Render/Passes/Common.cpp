@@ -2,6 +2,7 @@
 // the latched copies pass, frame buffer declaration and the preprocessed indirect draw.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 
 namespace DCLF::Draws
 {
@@ -57,13 +58,8 @@ namespace DCLF::Draws
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.pool-copies"), a_scene.pool->copies);
 		}
 		Register(a_graph, org::ResourceIdentifier("cs.dclf.face-positions"), a_scene.facePositions);
-		if (a_scene.trees) {
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.trees"), a_scene.trees);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-clocks"), a_scene.treeClocks);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-wind0"), a_scene.treeWindRows[0]);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-wind1"), a_scene.treeWindRows[1]);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-frame"), a_scene.treeFrameBuffer);
-		}
+		// The features' scene resources (Api::SceneResources::registerGraph).
+		Extensions::RegisterSceneResources(a_graph, a_scene.sceneResources);
 		if (a_scene.fadeRoots) {
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-roots"), a_scene.fadeRoots);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states"), a_scene.fadeStates);

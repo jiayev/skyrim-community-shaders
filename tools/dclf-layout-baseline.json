@@ -1,8 +1,9 @@
 {
  "legacyEdges": {
   "Core -> Engine": 32,
-  "Core -> Scene": 48,
+  "Core -> Scene": 47,
   "Engine -> Scene": 33,
+  "Features/TextureTransforms -> Scene": 1,
   "Scene -> Engine": 41
  },
  "overThresholds": {
@@ -66,10 +67,6 @@
    158,
    64
   ],
-  "DCLF::Diagnostics::ReadTreeWind": [
-   237,
-   109
-  ],
   "DCLF::Draws::BuildKeptShadow": [
    415,
    147
@@ -95,7 +92,7 @@
    60
   ],
   "DCLF::IndirectDraws::ExecuteShadowFrame": [
-   281,
+   283,
    78
   ],
   "DCLF::JudgeObject": [

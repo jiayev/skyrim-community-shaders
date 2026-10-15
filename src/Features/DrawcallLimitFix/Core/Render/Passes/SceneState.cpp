@@ -1,92 +1,11 @@
-// Next frame's scene state, on the compute queue beside the depth epoch: tree wind and fade states.
+// Next frame's scene state, on the compute queue beside the depth epoch: the fade states (the features' is their stages':
+// Api::GpuStageSlot::DepthSegmentNextFrameState).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
 
 namespace DCLF::Draws
 {
-	struct TreeWindBindings
-	{
-		org::DeclaredViewToken trees, clocks, frame;
-		std::array<org::DeclaredViewToken, 2> wind;
-	};
-
-	struct TreeWindFramePrepared
-	{
-		std::shared_ptr<const ComputeProgram> program;
-		TreeWindConstants constants{};
-		std::uint32_t groups = 0;
-	};
-
-	/**
-	 * @brief Tree wind (TreeWindCS.hlsl) on the compute queue in the Z-prepass epoch: advances each tree's clock and writes its
-	 * TreeParams and WindTimers into this frame's wind buffer (by parity), which next frame's draws read. Nothing this frame
-	 * reads it, so it overlaps the raster work; the host orders it against adjacent frames, and readers need not declare it.
-	 */
-	class TreeWindPass final : public org::TypedRenderGraphPass<TreeWindPass, TreeWindFramePrepared, TreeWindBindings>
-	{
-	public:
-		explicit TreeWindPass(std::shared_ptr<SceneBuffers> a_scene) :
-			scene(std::move(a_scene)) {}
-
-		TreeWindBindings Declare(org::PassBuilder& a_builder)
-		{
-			a_builder.PreferQueue(org::QueueKind::Compute);
-			TreeWindBindings bindings{};
-			bindings.trees = a_builder.ShaderResource(*scene->trees).View();
-			bindings.frame = a_builder.ShaderResource(scene->treeFrameBuffer).View();
-			bindings.clocks = a_builder.UnorderedAccess(*scene->treeClocks).View();
-			for (std::uint32_t h = 0; h < 2; ++h)
-				bindings.wind[h] = a_builder.UnorderedAccess(*scene->treeWindRows[h]).View();
-			return bindings;
-		}
-
-		// The recording depends on the buffers' versions; count and frame inputs are in the uploaded frame row.
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			for (const auto* buffer : { &scene->trees, &scene->treeClocks, &scene->treeWindRows[0], &scene->treeWindRows[1] })
-				a_out.push_back(NamedSerial(a_preparation, *buffer));
-		}
-
-		TreeWindFramePrepared Prepare(const TreeWindBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
-		{
-			TreeWindFramePrepared prepared{};
-			if (!scene->treeWind || !scene->treeFrameBuffer)
-				return prepared;
-			prepared.program = scene->treeWind;
-			auto& constants = prepared.constants;
-			constants.treesIndex = CaptureViewIndex(a_preparation, a_bindings.trees);
-			constants.clocksIndex = CaptureViewIndex(a_preparation, a_bindings.clocks);
-			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
-			for (std::uint32_t h = 0; h < 2; ++h)
-				constants.windIndices[h] = CaptureViewIndex(a_preparation, a_bindings.wind[h]);
-			// Full capacity (the nodeless entry, then the tree slots); the shader stops at the count.
-			const std::uint64_t trees = std::min({ NamedUnitsOf(a_preparation, scene->trees), NamedUnitsOf(a_preparation, scene->treeClocks),
-				NamedUnitsOf(a_preparation, scene->treeWindRows[0]), NamedUnitsOf(a_preparation, scene->treeWindRows[1]) });
-			prepared.groups = static_cast<std::uint32_t>((trees + 1 + kTreeWindGroup - 1) / kTreeWindGroup);
-			return prepared;
-		}
-
-		static void Record(const TreeWindBindings&, const TreeWindFramePrepared& a_frame, org::PassRecordContext& a_recording)
-		{
-			if (!a_frame.program || !a_frame.groups)
-				return;
-			auto& commands = a_recording.Commands();
-			commands.BindLayout(a_frame.program->layout->GetHandle());
-			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
-			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kTreeWindConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
-			commands.Dispatch(a_frame.groups, 1, 1);
-		}
-
-	private:
-		std::shared_ptr<SceneBuffers> scene;
-	};
-
-	std::shared_ptr<org::RenderPass> MakeTreeWindPass(std::shared_ptr<SceneBuffers> a_scene)
-	{
-		return std::make_shared<TreeWindPass>(std::move(a_scene));
-	}
-
 	struct FadeStateBindings
 	{
 		org::DeclaredViewToken roots, states, frame, log, programs, rootPrograms, animated, events, reported;

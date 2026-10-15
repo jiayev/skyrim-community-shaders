@@ -1,5 +1,7 @@
 #pragma once
 
+// The engine's tree manager stood down for the trees DCLF stands in for (tree wind's engine side). Included by the feature's sources.
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -11,7 +13,7 @@ namespace RE
 	class NiAVObject;
 }
 
-namespace DCLF::TreeAnimation
+namespace DCLF::Features::TreeWind::TreeAnimation
 {
 	/**
 	 * @brief The tree manager's animation list without DCLF's trees (drawcall-limit-fix.md, "Owned trees off the tree
@@ -34,12 +36,16 @@ namespace DCLF::TreeAnimation
 	 * entry (IndirectDraws::AccumulatedVerdict: 1 in view, 2 out), and the engine's value is put back right after: the loop decides
 	 * from DCLF's visibility, and no other reader of the cache sees DCLF's value. Written under the tree list's lock (+0x10), each
 	 * written tree held by a reference until the value is put back (released on the main thread).
+	 *
+	 * Installed by the feature's install (RegisterAnimation), with the primary cull's stand-in it follows (Api::StandInObserver), which
+	 * tells it the owned roots (SetOwned, UpdateOwned) and Main::Update's entry (AtUpdateEntry).
 	 */
 	void Install();
 	bool Installed();
 	/**
 	 * @brief The roots the animation list should not hold (PrimaryCull's owned roots without engine-drawn parts), as a whole set, and
-	 * the BSTreeNodes among them (a_trees: the tree list's, whose multibound result DCLF gives the loop). Render (main) thread.
+	 * the BSTreeNodes among them (a_trees: the tree list's, whose multibound result DCLF gives the loop). Render (main) thread. The
+	 * stand-in's clear gives the empty set.
 	 */
 	void SetOwned(const std::vector<const RE::NiAVObject*>& a_roots, const std::vector<const RE::NiAVObject*>& a_trees);
 	/**
@@ -63,7 +69,7 @@ namespace DCLF::TreeAnimation
 	 */
 	bool OwnedOnList(std::uint64_t& a_count);
 
-	/** @brief The counters since the last Take, reset (Reports::PrimaryCullLines' tree animation line). */
+	/** @brief The counters since the last Take, reset (the feature's tree animation line, at Api::ReportPoint::PrimaryCull). */
 	struct Counters
 	{
 		bool installed = false;

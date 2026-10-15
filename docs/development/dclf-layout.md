@@ -47,28 +47,38 @@ read-only after that.
 
 | Contract | Header | What a feature gets |
 | --- | --- | --- |
-| Frame-value pool | `Api/FrameValues.h` | rows sampled every frame on DCLF's pool into a pooled backing the frame reads by descriptor (`FrameValues::PoolIndex`) |
-| GPU stage | `Api/GpuStages.h` | a compute pass at a named slot of an epoch, its programs set up with the scene's buffers, and optionally the segment's latch word |
+| Frame-value pool | `Api/FrameValues.h` | rows sampled every frame on DCLF's pool into a pooled backing the frame reads by descriptor (`FrameValues::PoolIndex`); its own frame-start reads (`frameStart`), and the rows once the producer is done (`FrameValues::ProducerDone`) |
+| GPU stage | `Api/GpuStages.h` | a compute pass at a named slot of an epoch (`DepthSegmentBeforeBuild`, `DepthSegmentNextFrameState`), on a chosen queue, its programs set up with the scene's buffers, and optionally the segment's latch word |
 | Payload product | `Api/Payload.h` | data built with every main payload on the builder, carried with it, and installed with it on the render thread |
+| Scene resources | `Api/SceneResources.h` | state held with the scene's tables: versioned buffers registered with the scene's set, their graph registration, each revision's requirement, and the slots they hold of the objects (`SceneFit`) |
+| Commit hook | `Api/Commits.h` | its part of each commit's frame data (depth, colour, shadow), staged into the adopted versions on the render thread |
+| Frame binding | `Api/FrameBindings.h` | a buffer every draw reads at a declared texture register, given by the frame records (main, shadow, the builds' embedded addresses) and checked by the named-address parity |
+| Switches and toggles | `Api/Settings.h` | its `CS_DCLF_*` switches, listed where it says beside Core's, and its live toggles, in the menu and the packed word |
+| Report lines | `Api/Reports.h` | its lines at a named point of the periodic report |
+| Stand-in observer | `Api/EngineEvents.h` | the primary cull's stood-in roots as they change, and Main::Update's entry; whether the primary cull is installed |
 
-Each contract's thread, timing and lifetime is documented in its header.
+Each contract's thread, timing and lifetime is documented in its header. A feature's install also installs its engine
+hooks and subscribes its observers (`Diagnostics::Subscribe`, under Core's `Observe()` flags).
 
 The headers in `Api/` name only standard and ORG types. The contexts their callbacks receive are opaque there. Core
-defines them in companions under `Core/Extensions/` (`FrameValuePools.h`, `GpuStages.h`, `PayloadProducts.h`), which
-features inside DCLF include for typed access to Core's types.
+defines them in companions under `Core/Extensions/` (`FrameValuePools.h`, `GpuStages.h`, `PayloadProducts.h`,
+`SceneResources.h`, `Commits.h`, `FrameBindings.h`, `Reports.h`, `EngineEvents.h`), which features inside DCLF include
+for typed access to Core's types. The switches and toggles register with `Core/Settings`, which owns them.
 
-`Features/TextureTransforms/` was the first feature built on them: a pool, a stage and a product. The extension points
-still to come, as the next features need them:
-- a stage's queue, and more slots;
-- buffers registered with the scene's set;
-- a per-commit hook;
-- frame-record bindings;
-- coordinator components and table columns;
-- engine event channels;
+The shaders' shared constants stay compile-time: a feature declares its own (a frame binding's register beside its HLSL
+declaration), and `Features/Manifest.cpp` checks them against Core's and each other's.
+
+`Features/TextureTransforms/` was the first feature built on them: a pool, a stage and a product. `Features/TreeWind/` was
+the second: a pool with frame-start reads, scene resources with their commit hook and frame binding, a next-frame stage on
+the compute queue, its switches and toggle, a report line, a stand-in observer with its engine hooks, and its parity. The
+extension points still to come, as the next features need them:
+- coordinator components and table column families (the trees' listing and table family are still the coordinator's);
+- per-object slot rows (`SceneFit` and `ObjectFits` still name the trees' slot);
+- object contributors (a record's or a lighting descriptor's per-object fields and flags, technique eligibility);
+- more engine event channels;
 - material contributors;
 - view kinds;
-- toggles, parity and report lines;
-- the shader-bit manifest.
+- the shared-bit manifest (object and record flags).
 
 ## The rules
 
@@ -103,6 +113,5 @@ The steps:
 2. `Core/Runtime`, `Core/Engine`, `Core/Settings`, `Core/Scene/SceneWake`. *Done.*
 3. Split `IndirectDraws` into `Core/Render`. *Done.*
 4. Split `Coordinator.h` into the coordinator's core plus one component per concern. *Done (Scene/Coordinator/State/).*
-5. Two pilot features, `TextureTransforms` then `TreeWind`. Together they define the first extension points.
-   *`TextureTransforms` done.*
+5. Two pilot features, `TextureTransforms` then `TreeWind`. Together they define the first extension points. *Done.*
 6. The other features, least entangled first and `Fades` last. Then the integrations, then `Main` with what remains of Core.

@@ -2,6 +2,7 @@
 // into the selected revision's shape) and the depth commit's scene uploads; DecideTreeLod; and the fade write-back (armed by the
 // depth commit, judged on DCLF's executor by KickFadeWriteBack, its stores made on the main thread by WriteFadeStores).
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
@@ -134,7 +135,9 @@ namespace DCLF
 			frameRecord.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
 			frameRecord.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
 			frameRecord.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
-			frameRecord.textures[kTreeWindRegister] = sceneBuffers.TreeWindReadIndex(adopted, a_commit.frameNumber);
+			Extensions::FrameBindingValues bindings;
+			Extensions::FrameBindingValuesOf(adopted, sceneBuffers, a_commit.frameNumber, bindings);
+			Extensions::WriteFrameBindings(bindings, frameRecord.textures);
 			// The fade states and the roots' static rows every draw's alpha reads.
 			if (const std::uint32_t roots = adopted.Of(sceneBuffers.fadeRoots).srvIndex) {
 				frameRecord.textures[kFadeStatesRegister] = sceneBuffers.FadeStatesReadIndex(adopted, a_commit.frameNumber);
@@ -561,14 +564,15 @@ namespace DCLF
 		}
 	}
 
-	// Uploads run ahead of every pass of this epoch: face streams, trees and the tree LOD.
+	// Uploads run ahead of every pass of this epoch: face streams, the features' commit hooks and the tree LOD.
 	void IndirectDraws::Impl::UploadSceneStreams(const MainCommit& a_commit)
 	{
 		const auto& adopted = a_commit.adopted;
 		const auto& epochResources = a_commit.resources;
 		const bool depthOnly = a_commit.depthOnly;
 		UploadFaceStreams(adopted, a_commit.payload.faceStreams, epochResources->scene->facePositions, epochResources->scene->faceUploaded, a_commit.uploads);
-		UploadTrees(adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), *epochResources->scene, a_commit.uploads, depthOnly);
+		Extensions::RunCommitHooks({ depthOnly ? Api::CommitKind::Depth : Api::CommitKind::Colour, adopted, Scene::FrameView::Get().GetTables(),
+			Scene::FrameView::Get().GetFrame(), *epochResources->scene, a_commit.uploads });
 		// Tree LOD (dclf-lod.md): the mirror's changes, draw row and list arguments, for the depth cull and both passes' draws.
 		if (depthOnly && epochResources->scene->treeLodCull) {
 			auto& sceneBuffers = *epochResources->scene;

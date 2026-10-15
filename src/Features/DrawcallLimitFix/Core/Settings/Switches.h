@@ -1,14 +1,18 @@
 #pragma once
 
+#include "Features/DrawcallLimitFix/Api/Settings.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace DCLF
 {
 	/**
-	 * @brief Every `CS_*` switch DCLF (and the few other features that share its switches file) reads. The
-	 * registry in Switches.cpp holds each one's name, kind and description, in this order.
+	 * @brief Every `CS_*` switch DCLF's Core (and the few other features that share its switches file) reads. The
+	 * registry in Switches.cpp holds each one's name, kind and description, in this order. DCLF's features register their own
+	 * (RegisterSwitch), read by their Api::SwitchId.
 	 */
 	enum class Switch : std::uint8_t
 	{
@@ -22,7 +26,6 @@ namespace DCLF
 		Skinned,
 		SkinPartitions,
 		Actors,
-		Trees,
 		Decals,
 		Layers,
 		MtLand,
@@ -42,7 +45,6 @@ namespace DCLF
 		SunSkip,
 		SunExclude,
 		PrimaryExclude,
-		TreeListAll,
 		Skylight,
 		Precipitation,
 		Reflections,
@@ -127,6 +129,16 @@ namespace DCLF
 
 	/** @brief Whether a default-on switch is on: anything but "0" (unset included). */
 	inline bool SwitchOnUnlessZero(Switch a_switch) { return SwitchValue(a_switch) != "0"; }
+
+	/**
+	 * @brief Main thread, at install (Extensions::InstallFeatures, for a_feature): a feature's switch, read now, as Core's were. Fails
+	 * the install for a name Core or another feature has, or an after naming no Core switch.
+	 */
+	Api::SwitchId RegisterSwitch(const Api::FeatureSwitch& a_switch, std::string_view a_feature);
+	/** @brief A feature's switch's value (empty: unset, or no such switch); any thread after its registration. */
+	const std::string& SwitchValue(Api::SwitchId a_switch);
+	/** @brief Whether a feature's switch is set to "1". */
+	bool SwitchEnabled(Api::SwitchId a_switch);
 
 	/** @brief The directory the switches file lives in (the SKSE log directory), outside MO2's virtual file system. */
 	std::filesystem::path SwitchesDirectory();

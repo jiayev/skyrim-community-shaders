@@ -10,6 +10,7 @@
 namespace DCLF::Api
 {
 	// Defined by Core (Core/Extensions/FrameValuePools.h), which the features inside DCLF include for them.
+	class FrameValuePoolFrameStart;
 	class FrameValuePoolKick;
 	class FrameValuePoolProducer;
 
@@ -33,6 +34,10 @@ namespace DCLF::Api
 	/**
 	 * @brief A frame-value pool: its rows, journalled by the feature (KeptWholeArray<Row>), each frame sent the runs its backing lacks.
 	 *
+	 * - frameStart (optional): render thread, at every FrameValues::Kick (the frame's start), in registration order, with the built-in
+	 *   parts' own frame-start reads, before it is known whether the frame has a producer: reads what must be the frame start's (the
+	 *   engine as this frame's culls have not changed it yet) into the feature's own queue, which a later kick hands over. The feature
+	 *   drains its inputs here: the frame's queued requests (the publications' deltas the frame installed) are its to take.
 	 * - kick: render thread, in FrameValues::Kick (the frame's start, after the engine's update), in registration order, after the
 	 *   built-in parts' inputs. Not called on a frame without a producer.
 	 * - sample: the frame's producer, on DCLF's preparation pool, after the built-in parts' sampling. The producers run one at a time in
@@ -41,6 +46,8 @@ namespace DCLF::Api
 	 * - send: the same producer, after the built-in parts' sends: hands the rows to FrameValuePoolProducer::Send.
 	 *
 	 * The frame's GPU work reads the backing by FrameValues::PoolIndex (render thread, from Kick until the next; 0 without a producer).
+	 * The render thread's diagnostics read the rows as the frame's producer left them once FrameValues::ProducerDone says it is done
+	 * (until the next Kick, which no producer passes).
 	 * The backing is bound to the frame's last submission at EndFrame. A throw from sample or send fails the frame's values, as a built-in
 	 * part's failure does (logged; the frame draws what its backings held).
 	 */
@@ -48,6 +55,7 @@ namespace DCLF::Api
 	{
 		std::string_view name;    // the backing pool's name, cs.dclf.frame-values.<name>, and the report's
 		std::uint32_t stride = 0;  // bytes a row
+		void (*frameStart)(const FrameValuePoolFrameStart& a_start) = nullptr;
 		FrameValueInput (*kick)(const FrameValuePoolKick& a_kick) = nullptr;
 		void (*sample)(FrameValuePoolProducer& a_producer) = nullptr;
 		void (*send)(FrameValuePoolProducer& a_producer) = nullptr;

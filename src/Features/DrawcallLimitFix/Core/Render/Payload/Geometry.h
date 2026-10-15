@@ -16,8 +16,8 @@ namespace DCLF::Draws
 	/**
 	 * @brief What the versions a_sealed names of a_scene's buffers hold, with per-object buffers of a_objectBuffers objects (an epoch's
 	 * visibility). A buffer the set does not name holds nothing. The payload's parts (records, geometry rows, extras) bound nothing:
-	 * the payload holds every row of its publication (PayloadBuilder). Without the tree wind or fade programs no draw reads their rows
-	 * (the records keep their own wind; no fade root is tested).
+	 * the payload holds every row of its publication (PayloadBuilder). Without the fade program no draw reads its rows (no fade root is
+	 * tested); a feature's scene resources say what theirs hold (Api::SceneResources::fit).
 	 */
 	inline SceneFit SceneFitOf(const NamedVersions& a_sealed, const SceneBuffers& a_scene, std::uint64_t a_objectBuffers)
 	{
@@ -25,8 +25,7 @@ namespace DCLF::Draws
 		SceneFit fit;
 		fit.objects = static_cast<std::uint32_t>(std::min<std::uint64_t>(a_objectBuffers, UINT32_MAX));
 		fit.faceVertices = units(a_scene.facePositions);
-		if (a_scene.treeWind && a_scene.trees)
-			fit.trees = std::min({ units(a_scene.trees), units(a_scene.treeWindRows[0]), units(a_scene.treeWindRows[1]) });
+		Extensions::FitSceneResources(a_sealed, a_scene.sceneResources, fit);
 		if (a_scene.fadeState && a_scene.fadeRoots)
 			fit.fadeRoots = std::min({ units(a_scene.fadeRoots), units(a_scene.fadeStatesOut[0]), units(a_scene.fadeStatesOut[1]) });
 		return fit;

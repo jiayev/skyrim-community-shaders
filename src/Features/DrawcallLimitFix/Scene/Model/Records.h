@@ -1,8 +1,8 @@
 #pragma once
 
-// The scene's record types and their GPU layouts: object records and flags, geometry buffers, pipeline keys and raster flags, tree
-// wind, fade roots, the fade write-back and the indirect draw sequence. Written by the coordinator into SceneTables, read by the
-// render thread's builds and by the shaders, whose HLSL layouts must match these.
+// The scene's record types and their GPU layouts: object records and flags, geometry buffers, pipeline keys and raster flags, the
+// trees' listing, fade roots, the fade write-back and the indirect draw sequence. Written by the coordinator into SceneTables, read
+// by the render thread's builds and by the shaders, whose HLSL layouts must match these.
 
 #include <algorithm>
 #include <bit>
@@ -337,13 +337,15 @@ namespace DCLF
 	static_assert(sizeof(ObjectTreeAnim) == 32);
 
 	/**
-	 * @brief A tree's wind clock on the GPU (TreeWindCS.hlsl; drawcall-limit-fix.md, "Tree wind on the GPU").
+	 * @brief A tree's static row: what tree wind (Features/TreeWind, TreeWindCS.hlsl; drawcall-limit-fix.md, "Tree wind on the GPU")
+	 * clocks a listed BSTreeNode from. The scene's tables list the trees (SceneTables' tree family, the coordinator's ListTree); the
+	 * feature owns the rest of the wind (its clock rows, seeds, pass and wind rows).
 	 *
 	 * The engine's tree manager (FUN_1404381e0, from Main::Update) advances a BSTreeNode's timer (+0x164) by the frame's
 	 * seconds, measures its squared distance to the camera (+0x158), and within its range (manager +0x80) takes the gust
 	 * amplitude (+0x15C) from the timer: 0.25 * sum over k in {1,3,5,7} of sin(k * pi * manager+0x78 * timer), times the
 	 * model's scale (model +0xB0). SetupGeometry reads them and keeps the timer as the previous one (+0x168). For members
-	 * TreeWindCS does it all: per node a TreeStatic row (CPU, when listed) and a TreeClock row (GPU, reseeded on a new
+	 * TreeWindCS does it all: per node a TreeStatic row (CPU, when listed) and a clock row (GPU, reseeded on a new
 	 * generation); per member a TreeObject, whose record's TreeParams and WindTimers the pass writes.
 	 */
 	struct TreeStatic
@@ -362,25 +364,6 @@ namespace DCLF
 		std::uint32_t padding = 0;
 	};
 	static_assert(sizeof(TreeStatic) == 48);
-	/** @brief The row TreeWindCS takes a tree from: its seed, if one of the row's generation is there (must match TreeWindCS.hlsl). */
-	inline bool MergeTreeSeed(const TreeStatic& a_row, const TreeStatic* a_seeds, std::size_t a_seedCount, std::uint32_t a_slot, TreeStatic& a_out)
-	{
-		const std::size_t at = 2ull * a_slot + (a_row.seedOdd & 1u);
-		if (!a_seeds || at >= a_seedCount || a_seeds[at].generation != a_row.generation)
-			return false;
-		TreeStatic merged = a_seeds[at];  // a_out may be a_row
-		merged.seedOdd = a_row.seedOdd;
-		a_out = merged;
-		return true;
-	}
-
-	struct TreeClock
-	{
-		float timer, previousTimer, amplitude;
-		std::uint32_t generation, frame;
-		std::uint32_t padding[3];
-	};
-	static_assert(sizeof(TreeClock) == 32);
 
 	// A member drawing under a tree node: its object slot and the node's tree slot (kNodelessTree: the engine's defaults).
 	struct TreeObject
@@ -389,18 +372,6 @@ namespace DCLF
 	};
 	inline constexpr std::uint32_t kNoTree = ~0u;
 	inline constexpr std::uint32_t kNodelessTree = ~0u - 1;
-
-	/** @brief The frame's inputs to the tree clocks (TreeWindCS.hlsl's constants after its indices). */
-	struct TreeWindFrame
-	{
-		float deltaTime = 0.0f;  // the frame's seconds (GetSecondsPassed's global)
-		float camera[3]{};       // the main camera's world position
-		float windSpeed = 0.0f;  // the tree manager's +0x78
-		float maxDistance2 = 0.0f;  // its +0x80
-		float windMagnitude = 0.0f;
-		float fadeStart = 0.0f, fadeEnd = 0.0f;
-		float timerScale = 0.0f;
-	};
 
 	/**
 	 * @brief The occlusion maps DCLF draws from its tables, each a view of the precipitation accumulator (render mode 0x1C) the

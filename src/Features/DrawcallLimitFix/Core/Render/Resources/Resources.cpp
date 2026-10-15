@@ -3,6 +3,7 @@
 // scene's draw bound and the main latch the revision code keeps.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/TerrainBlending.h"
@@ -549,25 +550,10 @@ namespace DCLF
 		buffers->facePositions = MakeVersioned(DeviceBuffer(std::uint64_t(smallStart ? 1024u : kInitialFaceVertices) * 16, "cs.dclf.face-positions"), { .extent = { 0, 16, 0 } });
 		if (!AddressOf(a_device, *buffers->facePositions->Get()))
 			return false;
-		// Without the tree wind program, trees keep the wind they joined with (the wind buffers, t124, exist and stay zero).
-		buffers->treeWind = ComputeProgram::Load(a_device, { .source = kTreeWindShader, .constantWords = kTreeWindConstantWords });
-		std::uint32_t trees = 0;
-		if (buffers->treeWind) {
-			trees = smallStart ? 4u : kInitialTrees;
-			buffers->trees = MakeVersioned(StructuredBuffer(trees, sizeof(TreeStatic), "cs.dclf.trees", unused), { .extent = { 0, sizeof(TreeStatic), sizeof(TreeStatic) } });
-			// New clocks restart from each tree's static row.
-			buffers->treeClocks = MakeVersioned(StructuredBuffer(trees, sizeof(TreeClock), "cs.dclf.tree-clocks", unused, true),
-				{ .extent = { 0, sizeof(TreeClock), sizeof(TreeClock) } });
-			buffers->treeFrameBuffer = StructuredBuffer(1, sizeof(TreeWindFrameRow), "cs.dclf.tree-frame", unused);
-		} else {
-			logger::warn("[DCLF] The tree wind program could not be created; trees keep the wind they joined with");
-		}
-		// The nodeless trees' entry, then a unit per tree slot; every version zero-filled (a zero generation is never a listing's).
-		for (std::uint32_t h = 0; h < 2; ++h)
-			buffers->treeWindRows[h] = MakeVersioned(StructuredBuffer((trees + 1) * kTreeWindEntryRows, 16, h ? "cs.dclf.tree-wind1" : "cs.dclf.tree-wind0", unused, true),
-				{ .extent = { kTreeWindEntryRows * 16, kTreeWindEntryRows * 16, 16 }, .contents = GrowableContents::Zero });
+		// The features' scene resources (Api::SceneResources::setup: their programs and buffers, registered with the set in this order).
+		buffers->sceneResources = Extensions::SetUpSceneResources(a_device, smallStart);
 		// The features' GPU stages (Api::GpuStage::setup: their programs; a null state keeps a stage out of the graph).
-		buffers->stages = Extensions::SetUpGpuStages(a_device);
+		buffers->stages = Extensions::SetUpGpuStages(a_device, *buffers);
 		// Without the fade state program, fades stay the CPU's.
 		buffers->fadeState = ComputeProgram::Load(a_device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
 		if (buffers->fadeState) {

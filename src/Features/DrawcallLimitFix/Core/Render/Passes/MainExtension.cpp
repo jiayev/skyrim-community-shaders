@@ -11,7 +11,7 @@ namespace DCLF::Draws
 {
 	namespace
 	{
-		/** @brief The features' stages at a_slot (Api::GpuStage), in registration order: each whose setup gave a state. */
+		/** @brief The features' stages at a_slot (Api::GpuStage), in registration order: each whose setup gave a state, on its queue. */
 		template <class Epoch>
 		void AddStages(std::vector<org::RenderGraph::ExternalPassDesc>& a_out, const std::shared_ptr<Resources>& a_resources, Api::GpuStageSlot a_slot, Epoch a_epoch)
 		{
@@ -19,7 +19,8 @@ namespace DCLF::Draws
 			const auto& states = a_resources->scene->stages;
 			for (std::size_t i = 0; i < stages.size() && i < states.size(); ++i)
 				if (stages[i].slot == a_slot && states[i])
-					AddPass(a_out, PassKind::Compute, stages[i].passName, stages[i].makePass({ a_resources, states[i] }), a_epoch);
+					AddPass(a_out, PassKind::Compute, stages[i].passName, stages[i].makePass({ a_resources, states[i] }), a_epoch,
+						stages[i].queue == Api::GpuQueue::Compute ? PassQueue::Compute : PassQueue::Default);
 		}
 	}
 
@@ -36,7 +37,7 @@ namespace DCLF::Draws
 		for (const auto& frameBuffer : a_resources.frameBuffers)
 			if (frameBuffer.copy)
 				out.push_back({ frameBuffer.copy, nullptr });
-		// Tree LOD's draw row and list header; not the trees' or fades' frame rows, which the compute queue reads.
+		// Tree LOD's draw row and list header; not the next-frame state's frame rows (the features', the fades'), which the compute queue reads.
 		if (const auto& scene = *a_resources.scene; scene.treeLodCull) {
 			out.push_back({ scene.treeLodDraw, nullptr });
 			out.push_back({ nullptr, scene.treeLodVisible });
@@ -120,9 +121,8 @@ namespace DCLF::Draws
 						.PreferQueue(org::QueueKind::Graphics)
 						.Epoch(a_epoch));
 			};
-			// Tree wind for the next frame, beside this epoch's raster work.
-			if (resources->scene->treeWind && resources->scene->trees)
-				AddPass(a_out, PassKind::Compute, "cs.dclf.z.tree-wind", MakeTreeWindPass(resources->scene), depth, PassQueue::Compute);
+			// The features' next-frame state, beside this epoch's raster work (Api::GpuStageSlot::DepthSegmentNextFrameState).
+			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentNextFrameState, depth);
 			// Fade roots' state for the next frame's culling, likewise.
 			if (resources->scene->fadeState && resources->scene->fadeRoots)
 				AddPass(a_out, PassKind::Compute, "cs.dclf.z.fade-state", MakeFadeStatePass(resources), depth, PassQueue::Compute);

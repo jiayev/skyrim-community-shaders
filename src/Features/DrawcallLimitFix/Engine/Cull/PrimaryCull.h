@@ -646,8 +646,8 @@ namespace DCLF
 			kOwnNone,
 			kOwnPlain,      // a stood-in plain entry: standInRoots
 			kOwnMixedFade,  // an admitted fade root with engine-drawn parts: ownedFade (not stood in)
-			kOwnFade,       // a stood-in fade root: standInRoots, ownedFade, standInList, off TreeAnimation's animation list
-			kOwnTree,       // ... a BSTreeNode: also on TreeAnimation's tree list
+			kOwnFade,       // a stood-in fade root: standInRoots, ownedFade, standInList, the stand-in observers' (off TreeAnimation's animation list)
+			kOwnTree,       // ... a BSTreeNode: also the observers' trees (on TreeAnimation's tree list)
 		};
 		std::vector<std::uint8_t> ownState;
 		std::vector<const RE::NiAVObject*> ownRoot;
@@ -676,7 +676,7 @@ namespace DCLF
 		// The camera cut test: the main camera's last position and rotation.
 		std::array<float, 12> cutCamera{};
 		bool cutCameraKnown = false;
-		/** @brief FrameView::SetFadeRootsOwned and TreeAnimation::UpdateOwned from the admitted entries that moved (ownDirty). */
+		/** @brief FrameView::SetFadeRootsOwned and the stand-in observers' change from the admitted entries that moved (ownDirty). */
 		void SyncFadeOwnership();
 		/** @brief Render thread: the cut planned from nothing for its snapshot, leaving cut as is (the cut observer's reference). */
 		Cut PlanWholeCut();

@@ -5,8 +5,11 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
+#include <deque>
 #include <string_view>
+#include <vector>
 
 namespace DCLF
 {
@@ -42,6 +45,9 @@ namespace DCLF
 
 		using enum Switch;
 		constexpr auto F = Kind::Feature, P = Kind::Parity, D = Kind::Diagnostic, T = Kind::Test, O = Kind::Other;
+		// A feature's Api::SwitchKind is one of these (RegisterSwitch casts it).
+		static_assert(static_cast<Kind>(Api::SwitchKind::Feature) == F && static_cast<Kind>(Api::SwitchKind::Parity) == P &&
+					  static_cast<Kind>(Api::SwitchKind::Diagnostic) == D && static_cast<Kind>(Api::SwitchKind::Test) == T && static_cast<Kind>(Api::SwitchKind::Other) == O);
 		constexpr auto N = Reduced::Never;
 
 		// One row per switch, in Switch order (checked below).
@@ -56,7 +62,6 @@ namespace DCLF
 			{ Skinned, "CS_DCLF_SKINNED", F, Reduced::UnlessOne, false, "0: skinned objects stay native (live toggle's seed)" },
 			{ SkinPartitions, "CS_DCLF_SKIN_PARTITIONS", F, Reduced::UnlessOne, false, "0: skins of several partitions stay native (live toggle's seed)" },
 			{ Actors, "CS_DCLF_ACTORS", F, Reduced::UnlessOne, false, "0: actors stay native (live toggle's seed)" },
-			{ Trees, "CS_DCLF_TREES", F, Reduced::UnlessOne, false, "0: trees stay native (live toggle's seed)" },
 			{ Decals, "CS_DCLF_DECALS", F, Reduced::UnlessOne, false, "0: decals stay native (live toggle's seed)" },
 			{ Layers, "CS_DCLF_LAYERS", F, Reduced::UnlessOne, false, "0: multi-index shapes' main passes stay native (live toggle's seed)" },
 			{ MtLand, "CS_DCLF_MTLAND", F, Reduced::UnlessOne, false, "0: terrain stays native (live toggle's seed)" },
@@ -83,8 +88,6 @@ namespace DCLF
 			{ SunSkip, "CS_DCLF_SUN_SKIP", F, Reduced::UnlessOne, false, "0: the engine keeps culling and registering the sun's casters (live toggle's seed)" },
 			{ SunExclude, "CS_DCLF_SUN_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the sun's culls (live toggle's seed)" },
 			{ PrimaryExclude, "CS_DCLF_PRIMARY_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the main camera's cull (live toggle's seed)" },
-			{ TreeListAll, "CS_DCLF_TREE_LIST_ALL", F, N, false,
-				"1 (T7f; off by default): the tree manager's list loop given DCLF's verdict for every BSTreeNode DCLF lists; off: the stood-in trees alone (T7b5's fix)" },
 			{ Skylight, "CS_DCLF_SKYLIGHT", F, Reduced::UnlessOne, false, "0: Skylighting's occlusion map stays native (live toggle's seed)" },
 			{ Precipitation, "CS_DCLF_PRECIPITATION", F, Reduced::UnlessOne, false, "0: the precipitation occlusion mask stays native (live toggle's seed)" },
 			{ Reflections, "CS_DCLF_REFLECTIONS", F, Reduced::UnlessOne, false, "0: the water reflection's faces stay native (live toggle's seed)" },
@@ -203,6 +206,44 @@ namespace DCLF
 			return values;
 		}
 
+		// The features' switches (RegisterSwitch), each read as it registered, listed right after the Core row its after names. Written
+		// at install alone (the main thread, before DCLF's threads start), read-only after.
+		struct Registered
+		{
+			std::string name, description, after;
+			Kind kind = Kind::Feature;
+			Reduced reduced = Reduced::Never;
+			std::string value;
+			bool enabled = false;
+		};
+		std::deque<Registered>& RegisteredSwitches()
+		{
+			static std::deque<Registered> registered;
+			return registered;
+		}
+
+		/** @brief Every switch row in listing order (each Core row, then the features' after it; the rest last): a_row(name, kind, reduced, value). */
+		template <class Row>
+		void ForEachRow(Row&& a_row)
+		{
+			const auto& registered = RegisteredSwitches();
+			std::vector<std::uint8_t> listed(registered.size(), 0);
+			const auto after = [&](std::string_view a_name) {
+				for (std::size_t i = 0; i < registered.size(); ++i)
+					if (!listed[i] && registered[i].after == a_name) {
+						listed[i] = 1;
+						a_row(std::string_view(registered[i].name), registered[i].kind, registered[i].reduced, registered[i].value);
+					}
+			};
+			for (const auto& entry : kRegistry) {
+				a_row(entry.name, entry.kind, entry.reduced, SwitchValue(entry.id));
+				after(entry.name);
+			}
+			for (std::size_t i = 0; i < registered.size(); ++i)
+				if (!listed[i])
+					a_row(std::string_view(registered[i].name), registered[i].kind, registered[i].reduced, registered[i].value);
+		}
+
 		bool IsReduced(Reduced a_rule, const std::string& a_value)
 		{
 			switch (a_rule) {
@@ -230,17 +271,56 @@ namespace DCLF
 		return Read().enabled[static_cast<std::size_t>(a_switch)];
 	}
 
+	Api::SwitchId RegisterSwitch(const Api::FeatureSwitch& a_switch, std::string_view a_feature)
+	{
+		auto& registered = RegisteredSwitches();
+		const auto known = [&](std::string_view a_name) {
+			for (const auto& entry : kRegistry)
+				if (entry.name == a_name)
+					return true;
+			return false;
+		};
+		if (a_switch.name.empty() || known(a_switch.name))
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered the switch '{}', which Core has (or no name)", a_feature, a_switch.name));
+		for (const auto& entry : registered)
+			if (entry.name == a_switch.name)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered the switch {} twice", a_feature, a_switch.name));
+		if (!a_switch.after.empty() && !known(a_switch.after))
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s switch {} is listed after {}, which Core does not have", a_feature, a_switch.name, a_switch.after));
+		auto& entry = registered.emplace_back();
+		entry.name = a_switch.name;
+		entry.description = a_switch.description;
+		entry.after = a_switch.after;
+		entry.kind = static_cast<Kind>(a_switch.kind);
+		entry.reduced = a_switch.reduced == Api::SwitchReduced::UnlessOne ? Reduced::UnlessOne : a_switch.reduced == Api::SwitchReduced::Zero ? Reduced::Zero : Reduced::Never;
+		entry.value = Util::SwitchFile::Value(entry.name, false);
+		entry.enabled = entry.value == "1";
+		return { static_cast<std::uint32_t>(registered.size() - 1) };
+	}
+
+	const std::string& SwitchValue(Api::SwitchId a_switch)
+	{
+		static const std::string kUnset;
+		const auto& registered = RegisteredSwitches();
+		return a_switch.index < registered.size() ? registered[a_switch.index].value : kUnset;
+	}
+
+	bool SwitchEnabled(Api::SwitchId a_switch)
+	{
+		const auto& registered = RegisteredSwitches();
+		return a_switch.index < registered.size() && registered[a_switch.index].enabled;
+	}
+
 	std::string ReducedFeatures()
 	{
 		std::string text;
-		for (const auto& entry : kRegistry) {
-			const auto& value = SwitchValue(entry.id);
-			if (!IsReduced(entry.reduced, value))
-				continue;
+		ForEachRow([&](std::string_view a_name, Kind, Reduced a_reduced, const std::string& a_value) {
+			if (!IsReduced(a_reduced, a_value))
+				return;
 			if (!text.empty())
 				text += ", ";
-			text += fmt::format("{}={}", entry.name, value);
-		}
+			text += fmt::format("{}={}", a_name, a_value);
+		});
 		return text;
 	}
 
@@ -253,15 +333,19 @@ namespace DCLF
 		std::string text;
 		for (const auto& [kind, label] : kGroups) {
 			std::string group;
-			for (const auto& entry : kRegistry)
-				if (entry.kind == kind && !SwitchValue(entry.id).empty())
-					group += fmt::format("{}{}={}", group.empty() ? "" : ", ", entry.name, SwitchValue(entry.id));
+			const Kind wanted = kind;
+			ForEachRow([&](std::string_view a_name, Kind a_kind, Reduced, const std::string& a_value) {
+				if (a_kind == wanted && !a_value.empty())
+					group += fmt::format("{}{}={}", group.empty() ? "" : ", ", a_name, a_value);
+			});
 			if (!group.empty())
 				text += fmt::format("{}{}: {}", text.empty() ? "" : "; ", label, group);
 		}
+		// Read before the features registered theirs: a name one of them registered is known.
 		std::string unknown;
 		for (const auto& name : Read().unknown)
-			unknown += fmt::format("{}{}", unknown.empty() ? "" : ", ", name);
+			if (std::ranges::none_of(RegisteredSwitches(), [&](const Registered& a_entry) { return a_entry.name == name; }))
+				unknown += fmt::format("{}{}", unknown.empty() ? "" : ", ", name);
 		if (!unknown.empty())
 			text += fmt::format("{}UNKNOWN (read by nothing): {}", text.empty() ? "" : "; ", unknown);
 		return text.empty() ? std::string("none set") : text;

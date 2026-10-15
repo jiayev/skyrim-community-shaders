@@ -170,7 +170,7 @@ namespace DCLF
 
 		/**
 		 * @brief The addresses, SRV indices, capacities and fit a main (shadow) build embeds of its resources' versioned buffers, as
-		 * a_sealed names them (the tree wind read at a_frame: the buffer the frame before wrote), and the main layout's decal range.
+		 * a_sealed names them (the features' frame bindings read at a_frame), and the main layout's decal range.
 		 * Every other field of a_out stands.
 		 */
 		static void AddressesOf(const NamedVersions& a_sealed, const MainLayout& a_layout, const Resources& a_resources, std::uint32_t a_frame, ResourceAddresses& a_out);

@@ -28,6 +28,13 @@ namespace DCLF
 		constexpr std::uint64_t Bit(Flag a_flag) { return static_cast<std::uint64_t>(a_flag); }
 		constexpr std::uint32_t Bit(LightingFlag a_flag) { return static_cast<std::uint32_t>(a_flag); }
 
+		// Tree wind's live toggle (Features/TreeWind registers it): looked up once, the features installed before any scene work.
+		Api::ToggleId TreesToggle()
+		{
+			static const Api::ToggleId trees = FindToggle("trees");
+			return trees;
+		}
+
 		// Techniques DCLF supports. The rest stay native.
 		bool IsSupportedTechnique(std::uint32_t a_technique)
 		{
@@ -45,8 +52,9 @@ namespace DCLF
 			// projected textures replace the slot-10 texture SetupTechnique binds.
 			case Technique::MultiIndexSparkle:
 				return ActiveToggles().layers;
+			// Tree wind's object class (Features/TreeWind registers the trees toggle).
 			case Technique::TreeAnim:
-				return ActiveToggles().trees;
+				return ActiveToggles().On(TreesToggle());
 			// Actor skin (SKIN path, TintColor), faces (Facegen: tint and detail maps at t3/t4), hair (TintColor) and eyes (eye
 			// centres, material VS constants): all written by SetupMaterial. A face part's positions are FaceSnapshots'.
 			case Technique::FacegenRGBTint:
@@ -252,22 +260,6 @@ namespace DCLF
 
 	namespace
 	{
-		// Data globals SetupGeometry's TreeAnim case reads, resolved as addresses and read through.
-		REL::Relocation<std::uintptr_t> treeWindFadeStart{ REL::Offset(Engine::Address::kTreeWindFadeStart) };
-		REL::Relocation<std::uintptr_t> treeWindFadeEnd{ REL::Offset(Engine::Address::kTreeWindFadeEnd) };
-		REL::Relocation<std::uintptr_t> treeWindTimerScale{ REL::Offset(Engine::Address::kTreeWindTimerScale) };
-		// A pointer to the object whose +0x304 holds the global wind magnitude.
-		REL::Relocation<std::uintptr_t> treeWindSource{ REL::Offset(Engine::Address::kShadowSceneNode) };
-		// BSTreeManager* (+0x78 the gust's speed, +0x80 the squared range of its update), and the frame's seconds it advances the
-		// clocks by (FUN_140437d40's argument; GetSecondsPassed reads it).
-		REL::Relocation<std::uintptr_t> treeManager{ REL::Offset(Engine::Address::kTreeManager) };
-		REL::Relocation<std::uintptr_t> frameSeconds{ REL::Offset(Engine::Address::kFrameSeconds) };
-
-		float GlobalFloat(const REL::Relocation<std::uintptr_t>& a_at)
-		{
-			return *reinterpret_cast<const float*>(a_at.address());
-		}
-
 		// BSFadeNode vtable slot 0x1f8/8: the downcast to BSTreeNode, null for anything that is not one.
 		constexpr std::size_t kAsTreeNodeSlot = 0x1f8 / 8;
 
@@ -295,71 +287,6 @@ namespace DCLF
 		{
 			return *reinterpret_cast<const float*>(static_cast<const std::byte*>(a_node) + a_offset);
 		}
-
-		// FUN_14147d640(node): the node's object (+0x118, via vfunc 0x30). FUN_140437e50 takes a tree into the near list when
-		// object+0x128 -> +0x18 -> int at +0x10 == 1.
-		REL::Relocation<std::uintptr_t (*)(const void*)> treeObjectOf{ REL::Offset(Engine::Address::kTreeFirstMultiBound) };
-
-		bool NearListSelectable(const void* a_node)
-		{
-			const std::uintptr_t object = treeObjectOf(a_node);
-			if (!object)
-				return false;
-			const auto first = *reinterpret_cast<const std::uintptr_t*>(object + 0x128);
-			if (!first)
-				return false;
-			const auto second = *reinterpret_cast<const std::uintptr_t*>(first + 0x18);
-			return second && *reinterpret_cast<const std::int32_t*>(second + 0x10) == 1;
-		}
-	}
-
-	const void* TreeStaticOf(const RE::BSShaderProperty& a_property, TreeStatic& a_out)
-	{
-		a_out = {};
-		const void* node = AsTreeNode(a_property.fadeNode);
-		if (node)
-			TreeStaticOfNode(node, a_out);
-		return node;
-	}
-
-	void TreeStaticOfNode(const void* a_node, TreeStatic& a_out)
-	{
-		a_out = {};
-		const void* node = a_node;
-		const auto* bytes = static_cast<const std::byte*>(node);
-		std::memcpy(a_out.position, bytes + 0xA0, sizeof(a_out.position));
-		a_out.leafFrequency = TreeNodeFloat(node, 0x160);
-		a_out.timer = TreeNodeFloat(node, 0x164);
-		a_out.previousTimer = TreeNodeFloat(node, 0x168);
-		a_out.amplitude = TreeNodeFloat(node, 0x15c);
-		// The manager advances a node only in its near loop (FUN_1404381e0's loop 2 over FUN_140437e50's near list): one the list
-		// selects whose model (+0xF8, its +0x40) has bones (+0xB8), scaling the gust by the model's +0xB0. Other nodes keep their
-		// clock and amplitude; their +0xB0 is never read (can be garbage like 2.3e36). Not replicated: the near list's count cap.
-		const auto* holder = *reinterpret_cast<const std::byte* const*>(bytes + 0xF8);
-		const auto* model = holder ? *reinterpret_cast<const std::byte* const*>(holder + 0x40) : nullptr;
-		const bool bones = model && *reinterpret_cast<const void* const*>(model + 0xB8);
-		a_out.animated = bones && NearListSelectable(node) ? 1u : 0u;
-		a_out.modelAmplitude = a_out.animated ? *reinterpret_cast<const float*>(model + 0xB0) : 0.0f;
-	}
-
-	TreeWindFrame SampleTreeWindFrame()
-	{
-		TreeWindFrame frame;
-		frame.deltaTime = GlobalFloat(frameSeconds);
-		if (auto* camera = RE::Main::WorldRootCamera()) {
-			frame.camera[0] = camera->world.translate.x;
-			frame.camera[1] = camera->world.translate.y;
-			frame.camera[2] = camera->world.translate.z;
-		}
-		if (const auto manager = *reinterpret_cast<const std::uintptr_t*>(treeManager.address())) {
-			frame.windSpeed = *reinterpret_cast<const float*>(manager + 0x78);
-			frame.maxDistance2 = *reinterpret_cast<const float*>(manager + 0x80);
-		}
-		frame.windMagnitude = *reinterpret_cast<const float*>(*reinterpret_cast<const std::uintptr_t*>(treeWindSource.address()) + 0x304);
-		frame.fadeStart = GlobalFloat(treeWindFadeStart);
-		frame.fadeEnd = GlobalFloat(treeWindFadeEnd);
-		frame.timerScale = GlobalFloat(treeWindTimerScale);
-		return frame;
 	}
 
 	void DeriveTreeAnim(const RE::BSShaderProperty& a_property, ObjectTreeAnim& a_out)

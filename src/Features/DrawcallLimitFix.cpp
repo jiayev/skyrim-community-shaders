@@ -26,7 +26,6 @@
 #	include "DrawcallLimitFix/Engine/Views/LightSelection.h"
 #	include "DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #	include "DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
-#	include "DrawcallLimitFix/Engine/Cull/TreeList.h"
 #	include "Features/Skylighting.h"
 
 #	include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
@@ -99,12 +98,11 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::PrimaryCull::Get().Install();
 	// Main::IsRoomVisible answered from PortalViews' VisibleSet while DCLF runs.
 	DCLF::RoomVisibility::Install();
-	// The tree manager's list loop: the stood-in trees' multibound results from DCLF's verdicts (TreeAnimation).
-	DCLF::TreeList::Install();
 	// CS_DCLF_LOD_GATES (on unless 0): the engine's LOD swaps gated on DCLF's claims (skyrim-engine-notes.md, "LOD swaps and their
 	// gates"). Shares the LOD drain's and the retirement's detours with the import timings.
 	DCLF::LodGates::Install([] { return globals::features::drawcallLimitFix.Running(); });
-	// The features' extension points (Features/FeatureList.cpp), registered before DCLF's threads start and read-only after.
+	// The features' extension points (Features/FeatureList.cpp), registered before DCLF's threads start and read-only after, and
+	// their engine hooks (after DCLF's own: Features/TreeWind's tree manager hooks follow the primary cull's stand-in).
 	DCLF::Extensions::InstallFeatures(DCLF::Features::List());
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
@@ -515,7 +513,8 @@ void DrawcallLimitFix::DrawSettings()
 			if (!toggle.section.empty())
 				ImGui::SeparatorText(toggle.section.data());
 			ImGui::BeginDisabled(!DCLF::Toggles::Get().Editable(toggle));
-			ImGui::Checkbox(toggle.label, &(toggles.*toggle.member));
+			if (bool value = DCLF::ToggleValue(toggles, toggle); ImGui::Checkbox(toggle.label, &value))
+				DCLF::SetToggleValue(toggles, toggle, value);
 			if (toggle.tooltip)
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted(toggle.tooltip);
@@ -526,7 +525,7 @@ void DrawcallLimitFix::DrawSettings()
 	if (ImGui::TreeNodeEx("This frame", ImGuiTreeNodeFlags_DefaultOpen)) {
 		std::string flags = fmt::format("Active: cull {}", active.cullMode);
 		for (const auto& toggle : DCLF::ToggleTable())
-			flags += fmt::format(", {} {}", toggle.name, active.*toggle.member ? 1 : 0);
+			flags += fmt::format(", {} {}", toggle.name, DCLF::ToggleValue(active, toggle) ? 1 : 0);
 		ImGui::TextWrapped("%s", flags.c_str());
 		ImGui::Text("Tracked geometry: %u (under %u category nodes)", stats.tracked, stats.categoryNodes);
 		ImGui::Text("Objects this frame: %u, geometries: %u, pipelines: %u", stats.objects, stats.geometries, stats.pipelines);

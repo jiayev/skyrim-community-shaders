@@ -169,8 +169,7 @@ namespace DCLF
 		// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the plans and named
 		// slots the installed publications carried, and waited for by the GPU; the wetness captured here (Skin's cache is the render
 		// thread's). The scene payload is not the frame's to send: the installed snapshot carries it, ready (PayloadVersions).
-		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), view.CaptureWetness(), view.TakeFadeSeeds(), view.TakeTreeSeeds(),
-			view.FrameGlobalsOfFrame());
+		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), view.CaptureWetness(), view.TakeFadeSeeds(), view.FrameGlobalsOfFrame());
 		// Under the parities the scene pass runs here, inline, so the render thread's observers keep their placement; the normal path
 		// never waits for a pass.
 		if (inlinePass)

@@ -13,7 +13,9 @@ namespace DCLF::Draws
 	struct SceneFit
 	{
 		std::uint32_t objects = ~0u, faceVertices = ~0u;
-		std::uint32_t trees = ~0u, fadeRoots = ~0u;  // the tree wind entries and fade root rows a draw reads by its slot (none: unbounded)
+		// The tree wind entries (Features/TreeWind's scene resources: their fit) and fade root rows a draw reads by its slot (none:
+		// unbounded).
+		std::uint32_t trees = ~0u, fadeRoots = ~0u;
 		bool operator==(const SceneFit&) const = default;
 	};
 
@@ -27,7 +29,8 @@ namespace DCLF::Draws
 		std::uint32_t placementsIndex = 0;  // the frame's placement rows (FrameValues::PlacementsIndex)
 		std::uint32_t palettesIndex = 0;    // the frame's palettes (FrameValues::PalettesIndex)
 		std::uint32_t shadingIndex = 0;     // the frame's shading rows (FrameValues::ShadingIndex)
-		std::uint32_t treeWindIndex = 0;  // the wind buffer the frame's draws read (SceneBuffers::TreeWindReadIndex)
+		// The features' frame bindings' descriptors for the frame the context was posted at (Extensions::FrameBindingValuesOf).
+		Extensions::FrameBindingValues frameBindings{};
 		std::uint32_t sequenceDecals = 0;    // the sequences' decal range per group (MainLayout): a decal past it waits for their growth
 		SceneFit fit;                        // what the scene's buffers hold (an object past them waits)
 		const void* identity = nullptr;

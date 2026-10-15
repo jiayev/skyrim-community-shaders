@@ -2,8 +2,7 @@
 
 // Ports of the engine's pass and shader-descriptor selection: why an object stays native (Ineligible), the Lighting and Effect
 // descriptors DCLF draws it with, LOD fades, tree animation inputs and the particle path's acceptance. Pure functions of the capture
-// records, called on the scene-work thread and its pool; the render thread samples the frame inputs (SampleLodFadeFrame,
-// SampleTreeWindFrame).
+// records, called on the scene-work thread and its pool; the render thread samples the frame inputs (SampleLodFadeFrame).
 
 #include <array>
 #include <cstdint>
@@ -284,13 +283,6 @@ namespace DCLF
 	 * Skips its previousWindTimer = windTimer write: the native draw still does it, and twice would advance trees twice a frame.
 	 */
 	void DeriveTreeAnim(const RE::BSShaderProperty& a_property, ObjectTreeAnim& a_out);
-
-	/** @brief A BSTreeNode's static row into a_out (the render thread's tree seeds). */
-	void TreeStaticOfNode(const void* a_node, TreeStatic& a_out);
-	/** @brief The BSTreeNode a property's fade node downcasts to, with its static row in a_out; null when there is none. */
-	const void* TreeStaticOf(const RE::BSShaderProperty& a_property, TreeStatic& a_out);
-	/** @brief The frame's tree clock inputs (render thread, any time after Main::Update). */
-	TreeWindFrame SampleTreeWindFrame();
 
 	/**
 	 * @brief MTLand and MTLandLODBlend (terrain) are eligible when the mtLand toggle is on and, while Terrain Blending holds the

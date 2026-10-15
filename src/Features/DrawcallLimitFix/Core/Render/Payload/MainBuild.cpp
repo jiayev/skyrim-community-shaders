@@ -124,7 +124,7 @@ namespace DCLF::Draws
 						c.material[w] |= bit;
 					else if (const int f = FeatureMaterialSlot(t); f >= 0)
 						c.featureRegister[f] = t;
-					else if (t == kObjectBufferRegister || t == kExtrasBufferRegister || t == kTreeWindRegister || t == kPlacementBufferRegister ||
+					else if (t == kObjectBufferRegister || t == kExtrasBufferRegister || Extensions::FrameBindingRegister(t) || t == kPlacementBufferRegister ||
 							 t == kPaletteBufferRegister || t == kShadingBufferRegister || t == kFadeStatesRegister || t == kFadeRootsRegister)
 						c.buffers[w] |= bit;
 					else {

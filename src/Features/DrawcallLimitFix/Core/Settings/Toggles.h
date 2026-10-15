@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Features/DrawcallLimitFix/Api/Settings.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 #include <atomic>
@@ -15,7 +16,8 @@ namespace DCLF
 	 *
 	 * Each is seeded from its `CS_DCLF_*` switch (Switches.h) and then edited from the feature's menu. Unset,
 	 * they default to the tested configuration: everything on, both ownerships static, occlusion culling.
-	 * kToggles describes every flag; cullMode, the one that is not a flag, is handled beside it.
+	 * kToggles describes every Core flag (the features register theirs: RegisterToggle); cullMode, the one that is not a flag, is
+	 * handled beside it.
 	 */
 	struct ToggleSet
 	{
@@ -26,8 +28,6 @@ namespace DCLF
 		// The object classes (LightingDescriptors):
 		// single-partition NiSkinInstance shapes, palettes from the engine;
 		bool skinned = false;
-		// the TreeAnim technique, whose vertex animation reads TreeParams and WindTimers per object (extras rows);
-		bool trees = false;
 		// decals (accumulation hints 2 and 3), drawn by the second pass;
 		bool decals = false;
 		// multi-index shapes' main passes: the shape, and its layer (the additional property's passes, hint 12) as decal group 3;
@@ -88,10 +88,15 @@ namespace DCLF
 		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull).
 		bool excludePrimaryEntries = false;
 
+		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees), ...
+		std::uint32_t registered = 0;
+		/** @brief Whether a feature's toggle is on (false for none). */
+		bool On(Api::ToggleId a_toggle) const { return a_toggle && ((registered >> a_toggle.bit) & 1u) != 0; }
+
 		bool operator==(const ToggleSet&) const = default;
 	};
 
-	/** @brief One flag of ToggleSet: its seed, its menu entry, and what it needs. */
+	/** @brief One flag of ToggleSet: its seed, its menu entry, and what it needs. A feature's has no member: its bit and seed are registered. */
 	struct ToggleInfo
 	{
 		bool ToggleSet::*member;
@@ -104,10 +109,37 @@ namespace DCLF
 		bool entersClassification;  // a change drops the classification caches (Coordinator::InvalidateVerdicts)
 		bool ToggleSet::*needs[2];  // the flags it needs on, earlier in kToggles (nullptr when unused)
 		bool offByDefault = false;  // unset seeds it off: only its onValue turns it on
+		Api::ToggleId registered{};       // a feature's toggle: its bit (ToggleSet::registered); member is null
+		Api::SwitchId registeredSeed{};   // ... and its seed, a feature's switch
 	};
 
-	/** @brief Every flag of ToggleSet, in menu order; a flag comes after the flags it needs. */
+	/** @brief A flag's value in a_set (its member, or a feature's bit). */
+	inline bool ToggleValue(const ToggleSet& a_set, const ToggleInfo& a_info)
+	{
+		return a_info.member ? a_set.*a_info.member : a_set.On(a_info.registered);
+	}
+	/** @brief Sets a flag in a_set. */
+	inline void SetToggleValue(ToggleSet& a_set, const ToggleInfo& a_info, bool a_value)
+	{
+		if (a_info.member)
+			a_set.*a_info.member = a_value;
+		else if (a_info.registered)
+			a_set.registered = a_value ? a_set.registered | (1u << a_info.registered.bit) : a_set.registered & ~(1u << a_info.registered.bit);
+	}
+
+	/**
+	 * @brief Every flag of ToggleSet, in menu order; a flag comes after the flags it needs. The features' toggles are among them (each
+	 * after the Core toggle it names) once they registered; read-only after the install.
+	 */
 	std::span<const ToggleInfo> ToggleTable();
+
+	/**
+	 * @brief Main thread, at install (Extensions::InstallFeatures, for a_feature): a feature's toggle, into the table after the Core
+	 * toggle its after names. Fails the install past the packed word's bits, or for an after or a need Core does not have.
+	 */
+	Api::ToggleId RegisterToggle(const Api::FeatureToggle& a_toggle, std::string_view a_feature);
+	/** @brief A toggle by its name (ToggleInfo::name): a feature's id (none: no such toggle, or Core's). Any thread after the install. */
+	Api::ToggleId FindToggle(std::string_view a_name);
 
 	/**
 	 * @brief The requested and the active toggle sets.
@@ -142,6 +174,9 @@ namespace DCLF
 
 		/** @brief Whether a flag of the requested set would take effect: every flag it needs, directly or not, is on. */
 		bool Editable(const ToggleInfo& a_info) const;
+
+		/** @brief Main thread, after the features' install: their toggles seeded from their switches, into both sets. */
+		void SeedRegistered();
 
 	private:
 		Toggles();

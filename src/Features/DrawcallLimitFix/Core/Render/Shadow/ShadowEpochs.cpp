@@ -2,6 +2,7 @@
 // the arena and the latched CS blocks), the epochs' inputs and the culling counters' readback.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -366,7 +367,7 @@ namespace DCLF
 			const auto inputsStart = std::chrono::steady_clock::now();
 			auto& scene = *resources->scene;
 			shadowStats.faceUploads += UploadFaceStreams(adopted, payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads);
-			UploadTrees(adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), scene, uploads, false);
+			Extensions::RunCommitHooks({ Api::CommitKind::Shadow, adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), scene, uploads });
 			shadowStats.records = static_cast<std::uint32_t>(payload.materialRows.Count());
 			shadowStats.skippedTexture = payload.skippedTexture;
 			shadowStats.skippedPipeline = payload.skippedPipeline;
@@ -450,7 +451,9 @@ namespace DCLF
 				record.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
 				record.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
 				record.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
-				record.textures[kTreeWindRegister] = resources->scene->TreeWindReadIndex(adopted, frameNumber);
+				Extensions::FrameBindingValues bindings;
+				Extensions::FrameBindingValuesOf(adopted, *resources->scene, frameNumber, bindings);
+				Extensions::WriteFrameBindings(bindings, record.textures);
 				constexpr std::size_t recordEnd = kShadowFrameRecordOffset + sizeof(DrawBindings);
 				if (bytes.size() < recordEnd)
 					stl::report_and_fail("Drawcall Limit Fix: a shadow arena without its frame record");

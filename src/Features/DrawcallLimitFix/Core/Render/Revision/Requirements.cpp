@@ -3,6 +3,7 @@
 // requirement is the publication's tables', the frame's posted counts' or the builds ahead's; a set is sealed only once it holds them
 // all (SceneBufferSet), so a shape made from that set never indexes past a buffer it names.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 
 namespace DCLF
 {
@@ -61,9 +62,8 @@ namespace DCLF
 			if (stream.object != SceneTables::kNoFaceObject)
 				faceVertices = std::max<std::uint64_t>(faceVertices, std::uint64_t(stream.region) + stream.vertexCount);
 		buffers.Require(a_build, s.facePositions, faceVertices);
-		// Tree rows, clocks and wind by tree slot.
-		if (s.trees)
-			UnitGroup{}.Add(s.trees).Add(s.treeClocks).Add(s.treeWindRows[0]).Add(s.treeWindRows[1]).Require(a_build, a_tables.trees.size());
+		// The features' scene resources (Api::SceneResources::require).
+		Extensions::RequireSceneResources(a_build, a_tables, s.sceneResources);
 		// Fade roots by root slot: the static rows, the GPU state, the programs, the animation stamps and the readbacks' words.
 		if (s.fadeRoots) {
 			UnitGroup roots;

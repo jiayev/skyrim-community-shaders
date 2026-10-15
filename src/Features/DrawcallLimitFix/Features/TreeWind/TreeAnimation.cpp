@@ -1,11 +1,13 @@
 // TreeAnimation: the tree manager's animation list without DCLF's trees (render thread syncs, the engine's add/remove/clear detours
 // on any thread), and the tree list's multibound results around its loop (main thread). TreeAnimation.h describes it.
-#include "Features/DrawcallLimitFix/Engine/Cull/TreeAnimation.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeAnimation.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeList.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 
 #include <ankerl/unordered_dense.h>
@@ -15,7 +17,7 @@
 #include <atomic>
 #include <cstring>
 
-namespace DCLF::TreeAnimation
+namespace DCLF::Features::TreeWind::TreeAnimation
 {
 	namespace
 	{
@@ -36,7 +38,7 @@ namespace DCLF::TreeAnimation
 
 		using List = RE::BSTArray<RE::NiAVObject*>;
 
-		std::byte* Manager() { return Global<std::byte*>(Engine::Address::kTreeManager); }
+		std::byte* Manager() { return Global<std::byte*>(TreeWind::Address::kTreeManager); }
 		List& AnimationList(std::byte* a_manager) { return *reinterpret_cast<List*>(a_manager + kAnimationList); }
 		RE::BSSpinLock& Lock(std::byte* a_manager, std::size_t a_offset = kLock) { return *reinterpret_cast<RE::BSSpinLock*>(a_manager + a_offset); }
 
@@ -295,11 +297,11 @@ namespace DCLF::TreeAnimation
 	{
 		// CS_DCLF_TREE_LIST_ALL gives the loop DCLF's verdict for every BSTreeNode DCLF lists (IndirectDraws::
 		// AccumulatedVerdictOf: the root's kAccumulated as written at Main::Update's entry).
-		static const bool all = SwitchEnabled(Switch::TreeListAll);
+		static const bool all = ListAll();
 		if (!installed || !running || !a_manager || !written.empty() || (ownedTrees.empty() && !all))
 			return;
 		using FirstMultiBound = std::byte* (*)(const void*);
-		static const auto firstMultiBound = reinterpret_cast<FirstMultiBound>(REL::Module::get().base() + Engine::Address::kTreeFirstMultiBound);
+		static const auto firstMultiBound = reinterpret_cast<FirstMultiBound>(REL::Module::get().base() + TreeWind::Address::kTreeFirstMultiBound);
 		auto& draws = IndirectDraws::Get();
 		// The list holds each tree: a stood-in one on it is alive while the lock is held, and the reference taken keeps it so until
 		// AfterListLoop, whatever another thread removes meanwhile.
@@ -402,5 +404,32 @@ namespace DCLF::TreeAnimation
 		s.treeLoops = s.treesIn = s.treesOut = s.noMultiBound = 0;
 		s.replaced = {};
 		return c;
+	}
+}
+
+namespace DCLF::Features::TreeWind
+{
+	namespace
+	{
+		// The primary cull's stand-in, as it moves (Api::StandInObserver): the roots off the animation list, the trees whose loop DCLF
+		// answers, and whether DCLF runs this frame.
+		void RootsChanged(const Api::StandInRootsChange& a_change)
+		{
+			TreeAnimation::UpdateOwned(a_change.left, a_change.joined, a_change.treesLeft, a_change.treesJoined);
+		}
+
+		void RootsCleared()
+		{
+			TreeAnimation::SetOwned({}, {});
+		}
+	}
+
+	void RegisterAnimation(Api::InstallContext& a_context)
+	{
+		// The animation list's hooks follow the primary cull (installed with it); the tree list's loop is detoured always.
+		if (a_context.RegisterStandInObserver({ .changed = &RootsChanged, .cleared = &RootsCleared, .updateEntry = &TreeAnimation::AtUpdateEntry }))
+			TreeAnimation::Install();
+		// The tree manager's list loop: the stood-in trees' multibound results from DCLF's verdicts (TreeAnimation).
+		TreeList::Install();
 	}
 }

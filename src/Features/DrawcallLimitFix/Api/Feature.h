@@ -3,9 +3,15 @@
 // DCLF's extension API: a feature is a name and an install function that registers the extension points it fills. Api/ names only
 // Api/, standard and ORG types; the contexts its callbacks receive are Core's (Core/Extensions/), which the features inside DCLF include.
 
+#include "Features/DrawcallLimitFix/Api/Commits.h"
+#include "Features/DrawcallLimitFix/Api/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Api/GpuStages.h"
 #include "Features/DrawcallLimitFix/Api/Payload.h"
+#include "Features/DrawcallLimitFix/Api/Reports.h"
+#include "Features/DrawcallLimitFix/Api/SceneResources.h"
+#include "Features/DrawcallLimitFix/Api/Settings.h"
 
 #include <string_view>
 
@@ -15,7 +21,10 @@ namespace DCLF::Api
 	 * @brief What a feature registers with (Feature::install), implemented by Core (Extensions::InstallFeatures). Valid only during the
 	 * install call: once, on the main thread at PostPostLoad, before DCLF's threads start. What is registered is read-only after, and
 	 * runs in registration order (the features in FeatureList's order, a feature's registrations in its call order). The descriptors are
-	 * copied; their callbacks are plain functions, called per phase or per frame, never per object.
+	 * copied (their strings too); their callbacks are plain functions, called per phase or per frame, never per object.
+	 *
+	 * Install also installs the feature's engine hooks (the engine is not running DCLF's frames yet; the hooks DCLF's own engine side
+	 * installed are in) and subscribes its observers (Diagnostics::Subscribe, under the same Observe() flags as Core's), after Core's.
 	 */
 	class InstallContext
 	{
@@ -23,6 +32,16 @@ namespace DCLF::Api
 		virtual FrameValuePoolId RegisterFrameValuePool(const FrameValuePool& a_pool) = 0;
 		virtual void RegisterGpuStage(const GpuStage& a_stage) = 0;
 		virtual void RegisterPayloadProduct(const PayloadProduct& a_product) = 0;
+		virtual SceneResourcesId RegisterSceneResources(const SceneResources& a_resources) = 0;
+		virtual void RegisterCommitHook(const CommitHook& a_hook) = 0;
+		/** @brief Fails the install for a register Core or another binding has, or past Extensions::kFrameBindingSlots bindings. */
+		virtual void RegisterFrameBinding(const FrameBinding& a_binding) = 0;
+		virtual SwitchId RegisterSwitch(const FeatureSwitch& a_switch) = 0;
+		/** @brief Fails the install past the toggle word's bits, or for a toggle after or needing one Core does not have. */
+		virtual ToggleId RegisterToggle(const FeatureToggle& a_toggle) = 0;
+		virtual void RegisterReportLines(const ReportLines& a_lines) = 0;
+		/** @brief Whether the primary cull is installed: false, and the observer is never called, without it (its engine hooks failed). */
+		virtual bool RegisterStandInObserver(const StandInObserver& a_observer) = 0;
 
 	protected:
 		~InstallContext() = default;

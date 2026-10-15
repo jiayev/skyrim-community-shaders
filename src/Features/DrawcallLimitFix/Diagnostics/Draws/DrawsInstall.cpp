@@ -28,8 +28,9 @@ namespace DCLF::Diagnostics
 	void InstallDraws()
 	{
 		const auto& o = Observe();
-		// A main epoch's readbacks, in this order: the build parity (both epochs), the culling's counters (always), the tree wind,
-		// the fade log (the Z-prepass's), the set parity (the colour epoch's, with the frame's Z-prepass payload).
+		// A main epoch's readbacks, in this order: the build parity (both epochs), the culling's counters (always), the fade log (the
+		// Z-prepass's), the set parity (the colour epoch's, with the frame's Z-prepass payload); the features' after (their install:
+		// Features/TreeWind's tree wind).
 		if (o.builds)
 			Subscribe<MainEpochDone>(&CheckBuildParity);
 		Subscribe<CullLatchWritten>(&NoteCullLatch);
@@ -41,8 +42,6 @@ namespace DCLF::Diagnostics
 		Subscribe<FadeInputsVaried>(&LogFadeInputsVaried);
 		Subscribe<ShortBuffersDrawn>(&LogShortBuffers);
 		Subscribe<MainCullingSetup>(&LogCullingSetup);
-		if (o.scene)
-			Subscribe<MainEpochDone>(&ReadTreeWind);
 		if (o.fade) {
 			Subscribe<FadeLogWindow>(&NextFadeLog);
 			Subscribe<MainEpochDone>(&ReadFadeLog);
