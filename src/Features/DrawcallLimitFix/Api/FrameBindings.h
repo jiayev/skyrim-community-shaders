@@ -1,7 +1,8 @@
 #pragma once
 
 // The frame binding contract (Api::InstallContext::RegisterFrameBinding): a buffer every DCLF draw reads at a declared texture register,
-// given by the frame record (DrawBindings) because it changes by frame: the version of a feature's buffer the frame's draws read.
+// given by the frame record (DrawBindings) because it changes by frame: the version of a feature's buffer the frame's draws read. And the
+// frame texture contract (RegisterFrameTexture): an engine render target's view the frame record names at a declared texture register.
 
 #include <cstdint>
 #include <string_view>
@@ -27,5 +28,22 @@ namespace DCLF::Api
 		std::string_view name;  // the named-address parity's name for it
 		std::uint32_t textureRegister = ~0u;
 		void (*select)(FrameBindingSelect& a_select) = nullptr;
+	};
+
+	/**
+	 * @brief A frame texture (Api::InstallContext::RegisterFrameTexture): an engine view every DCLF colour draw reads at a declared texture
+	 * register, which the frame record names because it is a render target (a material row never holds one).
+	 *
+	 * The register is the feature's compile-time constant, with its HLSL declaration; Features/Manifest.cpp checks it against Core's and the
+	 * frame bindings', the install against those and the other frame textures'.
+	 *
+	 * - view: render thread, once per colour commit before its frame textures are resolved: the engine's shader resource view
+	 *   (ID3D11ShaderResourceView*) the register reads (null: the null texture).
+	 */
+	struct FrameTexture
+	{
+		std::string_view name;
+		std::uint32_t textureRegister = ~0u;
+		void* (*view)() = nullptr;
 	};
 }

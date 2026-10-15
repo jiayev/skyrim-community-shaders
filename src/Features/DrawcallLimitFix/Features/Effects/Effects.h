@@ -12,8 +12,9 @@
 // Core keeps the Effect port itself, which Core classifies every effect-shader item by before a feature sees it (the particle systems and
 // the billboards' effect shapes too): its descriptors and variants (DeriveEffectDescriptors, Ineligible::EffectOpaque and EffectVariant,
 // EffectConstants.h's EffectFlag), its material records and constants (MaterialPortEffect, kMaterialKindEffect, the effect frame slots
-// and SampleEffectLight), the effect keys (Records.h's kRasterEffect) and their programs and pipelines (ShaderPrograms' FindEffect,
-// DrawPipelines' effect pipelines), and the builds and passes that draw them. Included by the feature's sources only.
+// and SampleEffectLight), the effect keys (Records.h's kRasterEffect) and their programs and pipelines (Core's built-in Effect program
+// family: ShaderPrograms' FindFamily, DrawPipelines' effect pipelines), and the builds and passes that draw them. Included by the feature's
+// sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 

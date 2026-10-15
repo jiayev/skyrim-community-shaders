@@ -1,6 +1,7 @@
 // The extension registry (see the header): the install context the features register with, and the lists it fills.
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
@@ -9,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
@@ -17,6 +19,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -66,6 +69,16 @@ namespace DCLF::Extensions
 			// end (ResolveMaterialPorts).
 			std::array<Api::MaterialPortContribution, kMaterialKinds> materialPorts{};
 			std::size_t materialPortCount = 0;
+			// By family: its contribution (Count: none), Core's built-ins first. Resolved at the end (ResolveProgramFamilies).
+			std::array<Api::ProgramFamilyContribution, kProgramFamilies> programFamilies{};
+			// Core's built-ins first; the rows sorted by row at the end. By texture register: its frame texture's index.
+			std::vector<FrameConstantRowEntry> frameConstantRows;
+			std::vector<FrameTextureEntry> frameTextures;
+			std::array<std::uint8_t, kTextureRegisters> frameTextureIndices = [] {
+				std::array<std::uint8_t, kTextureRegisters> indices{};
+				indices.fill(kNoFrameTexture);
+				return indices;
+			}();
 			bool installed = false;
 		};
 
@@ -111,6 +124,55 @@ namespace DCLF::Extensions
 			if (a_lists.materialPortCount >= kMaterialKinds)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material port is one past kMaterialKinds: grow it first", a_who));
 			a_lists.materialPorts[a_lists.materialPortCount++] = a_port;
+		}
+
+		/**
+		 * @brief Adds a_family by its family, refused (a_who's) for a family already registered, Lighting's or no shader type, no name, key
+		 * name or source path, or no program source.
+		 */
+		void AddProgramFamily(Lists& a_lists, std::string_view a_who, const Api::ProgramFamilyContribution& a_family)
+		{
+			if (a_family.family >= Api::ProgramFamily::Count || a_family.shaderType == RE::BSShader::Type::Lighting || a_family.shaderType >= RE::BSShader::Type::Total ||
+				a_family.name.empty() || a_family.keyName.empty() || a_family.sourcePath.empty() || !a_family.programSource)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete program family", a_who));
+			auto& entry = a_lists.programFamilies[static_cast<std::size_t>(a_family.family)];
+			if (entry.family != Api::ProgramFamily::Count)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes program family {}, which {} has", a_who, a_family.name, entry.name));
+			entry = a_family;
+		}
+
+		/** @brief Adds a_row, refused (a_who's) for a row outside Core's feature rows or another registration's, no name or no sample. */
+		void AddFrameConstantRow(Lists& a_lists, std::string_view a_who, const Api::FrameConstantRow& a_row)
+		{
+			if (a_row.name.empty() || !a_row.sample || a_row.row < kFrameConstantRowFirst || a_row.row >= kFrameConstantRowsEnd)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete frame constant row", a_who));
+			for (const auto& row : a_lists.frameConstantRows)
+				if (row.row == a_row.row)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame constant row {} takes c{}, which {} has", a_who, a_row.name, a_row.row, row.name));
+			a_lists.frameConstantRows.push_back({ std::string(a_row.name), a_row.row, a_row.sample });
+		}
+
+		/**
+		 * @brief Adds a_texture, refused (a_who's) for a register below the frame textures or past t127, Core's, a frame binding's or another
+		 * frame texture's, no name or no view, or one past kFrameTextureSlots.
+		 */
+		void AddFrameTexture(Lists& a_lists, std::string_view a_who, const Api::FrameTexture& a_texture)
+		{
+			const auto r = a_texture.textureRegister;
+			if (a_texture.name.empty() || !a_texture.view || r < kPixelTextureSlots || r >= kTextureRegisters)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete frame texture", a_who));
+			if (CoreFrameRegister(r))
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} takes t{}, which Core keeps", a_who, a_texture.name, r));
+			for (const auto& binding : a_lists.frameBindings)
+				if (binding.textureRegister == r)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} takes t{}, which {} has", a_who, a_texture.name, r, binding.name));
+			if (const auto other = a_lists.frameTextureIndices[r]; other != kNoFrameTexture)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} takes t{}, which {} has", a_who, a_texture.name, r, a_lists.frameTextures[other].name));
+			// A colour commit samples every view into a fixed array (ResolveFrameTextures).
+			if (a_lists.frameTextures.size() >= kFrameTextureSlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} is one past kFrameTextureSlots: grow it first", a_who, a_texture.name));
+			a_lists.frameTextureIndices[r] = static_cast<std::uint8_t>(a_lists.frameTextures.size());
+			a_lists.frameTextures.push_back({ std::string(a_texture.name), r, a_texture.view });
 		}
 
 		Lists& Registered()
@@ -186,6 +248,9 @@ namespace DCLF::Extensions
 					if (binding.textureRegister == a_binding.textureRegister)
 						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} takes t{}, which {} has", feature, a_binding.name, a_binding.textureRegister,
 							binding.name));
+				if (const auto texture = lists.frameTextureIndices[a_binding.textureRegister]; texture != kNoFrameTexture)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} takes t{}, which {} has", feature, a_binding.name, a_binding.textureRegister,
+						lists.frameTextures[texture].name));
 				// A build embeds every binding's value (ResourceAddresses::frameBindings).
 				if (lists.frameBindings.size() >= kFrameBindingSlots)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} is one past kFrameBindingSlots: grow it first", feature, a_binding.name));
@@ -410,6 +475,9 @@ namespace DCLF::Extensions
 			}
 
 			void RegisterMaterialPort(const Api::MaterialPortContribution& a_port) override { AddMaterialPort(lists, feature, a_port, false); }
+			void RegisterProgramFamily(const Api::ProgramFamilyContribution& a_family) override { AddProgramFamily(lists, feature, a_family); }
+			void RegisterFrameConstantRow(const Api::FrameConstantRow& a_row) override { AddFrameConstantRow(lists, feature, a_row); }
+			void RegisterFrameTexture(const Api::FrameTexture& a_texture) override { AddFrameTexture(lists, feature, a_texture); }
 
 			std::string_view feature;  // the feature installing
 
@@ -441,6 +509,13 @@ namespace DCLF::Extensions
 		lists.materialPorts[lists.materialPortCount++] = CoreLightingPort();
 		for (const auto& port : CoreMaterialPorts())
 			AddMaterialPort(lists, "Core", port, true);
+		// Core's own program families, frame constant rows and frame textures: a feature's on their families, rows or registers is refused.
+		for (const auto& family : CoreProgramFamilies())
+			AddProgramFamily(lists, "Core", family);
+		for (const auto& row : CoreFrameConstantRows())
+			AddFrameConstantRow(lists, "Core", row);
+		for (const auto& texture : CoreFrameTextures())
+			AddFrameTexture(lists, "Core", texture);
 		Context context(lists);
 		for (const auto& feature : a_features) {
 			context.feature = feature.name;
@@ -452,7 +527,7 @@ namespace DCLF::Extensions
 		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
 		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the palette rows classes'; the material ports'
-		// (their engine addresses and spaces).
+		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
 		ResolveViews(lists.views, lists.viewWork);
 		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
 		ResolveViewBits();
@@ -464,6 +539,8 @@ namespace DCLF::Extensions
 		// Core's built-in ports kept their kinds (the first of them is kind 1).
 		if (!CoreMaterialPorts().empty() && MaterialPorts()[1].shaderType != CoreMaterialPorts().front().shaderType)
 			stl::report_and_fail("Drawcall Limit Fix: Core's first built-in material port did not resolve to kind 1");
+		ResolveProgramFamilies(lists.programFamilies);
+		std::ranges::sort(lists.frameConstantRows, {}, &FrameConstantRowEntry::row);
 		// The features' toggles seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
 	}
@@ -474,6 +551,9 @@ namespace DCLF::Extensions
 	std::span<const SceneResourcesEntry> RegisteredSceneResources() { return Registered().sceneResources; }
 	std::span<const CommitHookEntry> RegisteredCommitHooks() { return Registered().commitHooks; }
 	std::span<const FrameBindingEntry> RegisteredFrameBindings() { return Registered().frameBindings; }
+	std::span<const FrameConstantRowEntry> RegisteredFrameConstantRows() { return Registered().frameConstantRows; }
+	std::span<const FrameTextureEntry> RegisteredFrameTextures() { return Registered().frameTextures; }
+	std::span<const std::uint8_t> FrameTextureIndices() { return Registered().frameTextureIndices; }
 	std::span<const ReportLinesEntry> RegisteredReportLines() { return Registered().reportLines; }
 	std::span<const Api::StandInObserver> RegisteredStandInObservers() { return Registered().standInObservers; }
 	std::span<const TableFamilyEntry> RegisteredTableFamilies() { return Registered().tableFamilies; }

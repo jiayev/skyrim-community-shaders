@@ -36,8 +36,11 @@ namespace DCLF
 			TreeLod,
 			Forward,
 			ForwardTreeLod,
-			Effect  // FindEffect
+			Family  // FindFamily: the first family's (Api::ProgramFamily 0); a family's is Family + its index
 		};
+
+		StageUser FamilyUser(Api::ProgramFamily a_family) { return static_cast<StageUser>(static_cast<std::uint8_t>(StageUser::Family) + static_cast<std::uint8_t>(a_family)); }
+		std::size_t FamilyIndexOf(StageUser a_user) { return static_cast<std::size_t>(a_user) - static_cast<std::size_t>(StageUser::Family); }
 	}
 
 	namespace
@@ -45,7 +48,6 @@ namespace DCLF
 		constexpr const char* kSourcePath = "Data/Shaders/Lighting.hlsl";
 		constexpr const char* kUtilitySourcePath = "Data/Shaders/Utility.hlsl";
 		constexpr const char* kDistantTreeSourcePath = "Data/Shaders/DistantTree.hlsl";
-		constexpr const char* kEffectSourcePath = "Data/Shaders/Effect.hlsl";  // FindEffect
 		// DistantTree's descriptors (ShaderCache.h, DistantTreeShaderTechniques and DistantTreeShaderFlags): the technique in bit 0
 		// (1: Depth), Deferred and AlphaTest, as the engine's main view draws tree LOD (BSDistantTreeShader::SetupTechnique).
 		constexpr std::uint32_t kDistantTreeDepth = 1, kDistantTreeDeferred = 1u << 8, kDistantTreeAlphaTest = 1u << 16;
@@ -373,18 +375,23 @@ namespace DCLF
 			else
 				logger::warn("[DCLF] {} is missing; tree LOD stays native", kDistantTreeSourcePath);
 		}
-		{
-			std::ifstream effect(kEffectSourcePath, std::ios::binary);
-			std::vector<char> effectBytes((std::istreambuf_iterator<char>(effect)), std::istreambuf_iterator<char>());
-			effectSource.resize(effectBytes.size());
-			if (!effectBytes.empty())
-				std::memcpy(effectSource.data(), effectBytes.data(), effectBytes.size());
+		// The program families' sources (Extensions::ProgramFamilies: the Effect port's Effect.hlsl), in family order.
+		for (std::size_t f = 0; f < Extensions::kProgramFamilies; ++f) {
+			const auto& family = Extensions::ProgramFamilies()[f];
+			if (!family.taken)
+				continue;
+			std::ifstream familyFile(family.sourcePath, std::ios::binary);
+			std::vector<char> familyBytes((std::istreambuf_iterator<char>(familyFile)), std::istreambuf_iterator<char>());
+			familySources[f].resize(familyBytes.size());
+			if (!familyBytes.empty())
+				std::memcpy(familySources[f].data(), familyBytes.data(), familyBytes.size());
 			else
-				logger::warn("[DCLF] {} is missing; effect meshes stay native", kEffectSourcePath);
+				logger::warn("[DCLF] {} is missing; {}", family.sourcePath, family.nativeNote);
 		}
 		if (auto* compiler = RenderGraphRuntime::Get().ShaderCompiler()) {
 			sourceFingerprint = compiler->FingerprintInputs(source, dependencies);
-			effectFingerprint = effectSource.empty() ? 0 : compiler->FingerprintInputs(effectSource, dependencies);
+			for (std::size_t f = 0; f < Extensions::kProgramFamilies; ++f)
+				familyFingerprints[f] = familySources[f].empty() ? 0 : compiler->FingerprintInputs(familySources[f], dependencies);
 			pulledFingerprint = pulledSource.empty() ? 0 : compiler->FingerprintInputs(pulledSource, dependencies);
 			utilityFingerprint = utilitySource.empty() ? 0 : compiler->FingerprintInputs(utilitySource, dependencies);
 			distantTreeFingerprint = distantTreeSource.empty() ? 0 : compiler->FingerprintInputs(distantTreeSource, dependencies);
@@ -398,6 +405,25 @@ namespace DCLF
 
 	namespace
 	{
+		// The logs' name of a source: Lighting, Utility, a program family's (Extensions::ProgramFamilies' name: Effect) or DistantTree.
+		const char* SourceLogName(const char* a_sourceName)
+		{
+			if (a_sourceName == kSourcePath)
+				return "Lighting";
+			if (a_sourceName == kUtilitySourcePath)
+				return "Utility";
+			for (const auto& family : Extensions::ProgramFamilies())
+				if (family.taken && family.sourcePath.c_str() == a_sourceName)
+					return family.name.c_str();
+			return "DistantTree";
+		}
+
+		// A family's stages' bit in the stage cache's key (its slot's), 0 for none.
+		std::uint64_t StageKeyBitOf(Api::ProgramFamily a_family)
+		{
+			return a_family == Api::ProgramFamily::Count ? 0ull : ProgramFamilySlotOf(a_family).stageKeyBit;
+		}
+
 		// Requests a_stage's compile; the completion callback fills it and pushes its key to StageCompletions.
 		void RequestStage(org::services::ShaderCompiler& a_compiler, const StagePtr& a_stage, std::span<const std::byte> a_source,
 			const std::vector<std::filesystem::path>& a_dependencies, std::uint64_t a_fingerprint, const RE::BSShader& a_lighting, bool a_pixel, std::uint32_t a_descriptor,
@@ -450,9 +476,8 @@ namespace DCLF
 				std::string text;
 				for (const auto& define : request.defines)
 					text += fmt::format(" -D {}{}{}", Util::WStringToString(define.name), define.value.empty() ? "" : "=", Util::WStringToString(define.value));
-				logger::info("[DCLF] SPIR-V build of {} {}{} {:08X} defines:{}",
-					a_sourceName == kSourcePath ? "Lighting" : a_sourceName == kUtilitySourcePath ? "Utility" : a_sourceName == kEffectSourcePath ? "Effect" : "DistantTree",
-					a_pixel ? (a_depthOnly ? "PS (depth)" : "PS") : "VS", a_pulled ? " (pulled)" : "", a_descriptor, text);
+				logger::info("[DCLF] SPIR-V build of {} {}{} {:08X} defines:{}", SourceLogName(a_sourceName), a_pixel ? (a_depthOnly ? "PS (depth)" : "PS") : "VS",
+					a_pulled ? " (pulled)" : "", a_descriptor, text);
 			}
 			const auto shift = [&](const wchar_t* a_flag, std::uint32_t a_value) {
 				request.arguments.insert(request.arguments.end(), { a_flag, std::to_wstring(a_value), L"0" });
@@ -496,11 +521,13 @@ namespace DCLF
 		{
 			const bool utility = shader.shaderType.get() == RE::BSShader::Type::Utility;
 			const bool distantTree = shader.shaderType.get() == RE::BSShader::Type::DistantTree;
-			// Effect.hlsl's builds, never pulled (FindEffect).
-			const bool effect = shader.shaderType.get() == RE::BSShader::Type::Effect;
-			pulled = !effect && (pulled || utility || distantTree);
+			// A program family's builds (its shader's: the Effect port's Effect.hlsl), never pulled (FindFamily), its slot's bit in the key.
+			const auto family = Extensions::FamilyOfShader(static_cast<std::uint8_t>(shader.shaderType.get()));
+			const bool familyBuild = family != Api::ProgramFamily::Count;
+			const auto f = static_cast<std::size_t>(family);
+			pulled = !familyBuild && (pulled || utility || distantTree);
 			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34) |
-			                          (std::uint64_t(pulled) << 35) | (std::uint64_t(distantTree) << 36) | (std::uint64_t(effect) << 37);
+			                          (std::uint64_t(pulled) << 35) | (std::uint64_t(distantTree) << 36) | StageKeyBitOf(family);
 			{
 				std::lock_guard lock(mutex);
 				if (const auto found = stages.find(key); found != stages.end())
@@ -514,7 +541,7 @@ namespace DCLF
 					return found->second;
 			}
 			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()) || (distantTree && owner.distantTreeSource.empty()) ||
-				(effect && owner.effectSource.empty()) || (pulled && !utility && !distantTree && owner.pulledSource.empty()))
+				(familyBuild && owner.familySources[f].empty()) || (pulled && !utility && !distantTree && owner.pulledSource.empty()))
 				return {};
 			auto* compiler = RenderGraphRuntime::Get().ShaderCompiler();
 			if (configured != compiler) {
@@ -528,10 +555,11 @@ namespace DCLF
 			auto stage = std::make_shared<Stage>();
 			stage->key = key;
 			RequestStage(*compiler, stage,
-				utility ? owner.utilitySource : distantTree ? owner.distantTreeSource : effect ? owner.effectSource : pulled ? owner.pulledSource : owner.source,
+				utility ? owner.utilitySource : distantTree ? owner.distantTreeSource : familyBuild ? owner.familySources[f] : pulled ? owner.pulledSource : owner.source,
 				owner.dependencies,
-				utility ? owner.utilityFingerprint : distantTree ? owner.distantTreeFingerprint : effect ? owner.effectFingerprint : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
-				shader, pixel, descriptor, depth, pulled, utility ? kUtilitySourcePath : distantTree ? kDistantTreeSourcePath : effect ? kEffectSourcePath : kSourcePath);
+				utility ? owner.utilityFingerprint : distantTree ? owner.distantTreeFingerprint : familyBuild ? owner.familyFingerprints[f] : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
+				shader, pixel, descriptor, depth, pulled,
+				utility ? kUtilitySourcePath : distantTree ? kDistantTreeSourcePath : familyBuild ? Extensions::ProgramFamilyOf(family).sourcePath.c_str() : kSourcePath);
 			{
 				std::lock_guard lock(mutex);
 				stages.emplace(key, stage);
@@ -676,15 +704,15 @@ namespace DCLF
 		return Found(slot.get(), a_failed);
 	}
 
-	const ShaderPrograms::Program* ShaderPrograms::FindEffect(const PipelineKey& a_key, RE::BSShader& a_effect, bool* a_failed)
+	const ShaderPrograms::Program* ShaderPrograms::FindFamily(Api::ProgramFamily a_family, const PipelineKey& a_key, const RE::BSShader& a_shader, bool* a_failed)
 	{
 		if (!Enabled())
-			return Found<EffectEntry>(nullptr, a_failed);
-		const std::uint64_t id = EffectProgramId(a_key);
-		auto& slot = effectEntries[id];
+			return Found<FamilyEntry>(nullptr, a_failed);
+		const std::uint64_t id = FamilyProgramId(a_family, a_key);
+		auto& slot = familyEntries[static_cast<std::size_t>(a_family)][id];
 		if (!slot)
-			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Effect), id, &laneStats.requested, laneStats.failed, [&](bool*) {
-				return std::array<StagePtr, 2>{ stages->Request(*this, a_effect, false, a_key.vertexDescriptor), stages->Request(*this, a_effect, true, a_key.pixelDescriptor) };
+			MakeEntry(slot, static_cast<std::uint8_t>(FamilyUser(a_family)), id, &laneStats.requested, laneStats.failed, [&](bool*) {
+				return std::array<StagePtr, 2>{ stages->Request(*this, a_shader, false, a_key.vertexDescriptor), stages->Request(*this, a_shader, true, a_key.pixelDescriptor) };
 			});
 		return Found(slot.get(), a_failed);
 	}
@@ -828,10 +856,10 @@ namespace DCLF
 			case StageUser::TreeLod: return treeLodEntry->remaining;
 			case StageUser::Forward: return forwardEntries.find(a_waiter.id)->second->remaining;
 			case StageUser::ForwardTreeLod: return forwardTreeLodEntry->remaining;
-			case StageUser::Effect: return effectEntries.find(a_waiter.id)->second->remaining;
-			case StageUser::Lighting: break;
+			case StageUser::Lighting: return entries.find(a_waiter.id)->second->remaining;
+			default: break;
 			}
-			return entries.find(a_waiter.id)->second->remaining;
+			return familyEntries[FamilyIndexOf(a_waiter.user)].find(a_waiter.id)->second->remaining;
 		});
 		for (const auto& waiter : std::exchange(stages->ready, {})) {
 			const std::uint64_t id = waiter.id;
@@ -878,17 +906,23 @@ namespace DCLF
 						a_finished.forward.push_back(id);
 				}
 				continue;
-			case StageUser::Effect:
-				// Effect.hlsl's vertex and pixel stages, a Program of those two alone.
-				FinishEntry(*effectEntries.find(id)->second, &laneStats.ready, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
-					if (loggedFailures++ < kMaxLoggedFailures)
-						logger::warn("[DCLF] SPIR-V build of Effect {} {:08X} failed; its effect meshes stay native:\n{}", a_stage ? "PS" : "VS", a_stage ? pixel : vertex & 0x7FFFFFFFu,
-						a_artifact.diagnostics.substr(0, 1500));
-				});
-				a_finished.effect.push_back(id);
-				continue;
 			case StageUser::Lighting:
 				break;
+			default:
+				{
+					// A program family's vertex and pixel stages (the Effect port's Effect.hlsl), a Program of those two alone; its id's
+					// vertex part without the family's program-id bit.
+					const auto f = FamilyIndexOf(waiter.user);
+					const auto& family = Extensions::ProgramFamilies()[f];
+					const auto familyVertex = static_cast<std::uint32_t>((id & ~kProgramFamilySlots[f].programIdBit) >> 32);
+					FinishEntry(*familyEntries[f].find(id)->second, &laneStats.ready, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+						if (loggedFailures++ < kMaxLoggedFailures)
+							logger::warn("[DCLF] SPIR-V build of {} {} {:08X} failed; its {}:\n{}", family.name, a_stage ? "PS" : "VS", a_stage ? pixel : familyVertex,
+								family.nativeNote, a_artifact.diagnostics.substr(0, 1500));
+					});
+					a_finished.families[f].push_back(id);
+				}
+				continue;
 			}
 			auto& entry = *entries.find(id)->second;
 			a_finished.lighting.push_back(id);

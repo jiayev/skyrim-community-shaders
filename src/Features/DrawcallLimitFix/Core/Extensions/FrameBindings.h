@@ -1,7 +1,8 @@
 #pragma once
 
 // The frame binding contract's Core side (Api/FrameBindings.h): what a registered binding's select is handed, the values the frame
-// records take from the bindings, and the texture registers Core keeps for itself (which no binding may take).
+// records take from the bindings, and the texture registers Core keeps for itself (which no binding or frame texture may take). And the
+// frame textures' (Api::FrameTexture): their registers' indices and Core's built-ins.
 
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
@@ -52,14 +53,14 @@ namespace DCLF::Extensions
 
 	/**
 	 * @brief Whether Core keeps a_register: the material rows' pixel textures, the features' material registers, and the frame record's
-	 * own buffers and textures (DrawPipelines.h). A binding may take none of them (Features/Manifest.cpp checks the features' registers
-	 * against it at compile time, the install at registration).
+	 * own buffers and textures (DrawPipelines.h). A binding or a frame texture may take none of them (Features/Manifest.cpp checks the
+	 * features' registers against it at compile time, the install at registration).
 	 */
 	inline constexpr bool CoreFrameRegister(std::uint32_t a_register)
 	{
 		return a_register < kPixelTextureSlots || FeatureMaterialSlot(a_register) >= 0 || a_register == kObjectBufferRegister || a_register == kExtrasBufferRegister ||
 		       a_register == kCharacterLightRegister || a_register == kPlacementBufferRegister || a_register == kPaletteBufferRegister ||
-		       a_register == kShadingBufferRegister || a_register == kFadeStatesRegister || a_register == kFadeRootsRegister || a_register == kEffectSoftDepthRegister;
+		       a_register == kShadingBufferRegister || a_register == kFadeStatesRegister || a_register == kFadeRootsRegister;
 	}
 
 	/** @brief The descriptor of every binding's buffer for a_frame, as a_sealed names it, into a_out (render thread or snapshot builder). */
@@ -70,4 +71,19 @@ namespace DCLF::Extensions
 	bool FrameBindingRegister(std::uint32_t a_register);
 	/** @brief Binding a_binding's buffer for a_frame (its select's answer; null: none), for the named-address parity. */
 	const std::shared_ptr<org::VersionedBuffer>* FrameBindingBuffer(std::size_t a_binding, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame);
+
+	/**
+	 * @brief The most frame textures there may be: a colour commit samples their views into a fixed array (ResolveFrameTextures). A
+	 * texture past them fails the install: grow this first.
+	 */
+	inline constexpr std::size_t kFrameTextureSlots = 4;
+	/** @brief A register no frame texture has (FrameTextureIndices). */
+	inline constexpr std::uint8_t kNoFrameTexture = 0xFF;
+	/** @brief Any thread, after InstallFeatures: by texture register, its frame texture's index (RegisteredFrameTextures), or kNoFrameTexture. */
+	std::span<const std::uint8_t> FrameTextureIndices();
+	/**
+	 * @brief Core's own frame textures, registered ahead of the features' (Registry's InstallFeatures): the soft effects' depth (t118,
+	 * kEffectSoftDepthRegister), until Features/Effects registers it (Scene/Ports/EffectFrame.cpp).
+	 */
+	std::span<const Api::FrameTexture> CoreFrameTextures();
 }

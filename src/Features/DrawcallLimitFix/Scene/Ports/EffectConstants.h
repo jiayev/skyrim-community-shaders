@@ -102,6 +102,14 @@ namespace DCLF
 		inline constexpr std::uint32_t Deferred = 1u << 27;
 	}
 	inline constexpr std::uint32_t kEffectPassEnumBase = 0x4000002Cu;
+	/**
+	 * @brief The Effect port's frame constant rows (Api::FrameConstantRow, PS b13): c17 the camera's planes (SampleEffectCamera;
+	 * Effect.hlsl, DCLFEffectCamera), c18 its Lighting variant's DLightColor (SampleEffectLight; DCLFEffectDLightColor), c19 Blood's
+	 * AlphaTestRef.yz globals (SampleEffectBlood; DCLFEffectBlood).
+	 */
+	inline constexpr std::uint32_t kEffectCameraFrameRow = 17;
+	inline constexpr std::uint32_t kEffectLightFrameRow = 18;
+	inline constexpr std::uint32_t kEffectBloodFrameRow = 19;
 	/** @brief The effect material's texture-path bits a PropertyRecord holds in `feature` (SceneCapture::CaptureProperty). */
 	inline constexpr std::uint32_t kEffectHasSourcePath = 1u << 0;
 	inline constexpr std::uint32_t kEffectHasGreyscalePath = 1u << 1;

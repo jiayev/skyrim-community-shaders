@@ -96,12 +96,10 @@ namespace DCLF::Draws
 	// the extras' pixel inputs (c16, ExtrasFrame::projectedGlobals).
 	constexpr std::uint64_t kExtrasPixelFrameOffset = std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame) + 32;
 	static_assert(sizeof(FrameLighting) + sizeof(LodFadeFrame) + 32 == 16 * 16);
-	// The Effect port: c17, the camera's planes (SampleEffectCamera; Effect.hlsl, DCLFEffectCamera).
-	constexpr std::uint64_t kEffectCameraFrameOffset = kExtrasPixelFrameOffset + sizeof(ExtrasFrame::projectedGlobals);
-	// The Effect port's Lighting variant: c18, its DLightColor (SampleEffectLight; Effect.hlsl, DCLFEffectDLightColor).
-	constexpr std::uint64_t kEffectLightFrameOffset = kEffectCameraFrameOffset + 16;
-	// The Effect port's Blood: c19, AlphaTestRef.yz's two globals (SampleEffectBlood; Effect.hlsl, DCLFEffectBlood).
-	constexpr std::uint64_t kEffectBloodFrameOffset = kEffectLightFrameOffset + 16;
+	// Then Core's feature rows (c17 up to Extensions::kFrameConstantRowsEnd, Core/Extensions/Commits.h): the frame constant rows
+	// (Api::FrameConstantRow; the Effect port's camera planes, light colour and blood at c17-c19), 16 bytes each. Uploads.cpp checks the
+	// first is right after the extras' pixel row.
+	constexpr std::uint64_t FrameConstantRowOffset(std::uint32_t a_row) { return std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + std::uint64_t(a_row) * 16; }
 	static_assert(sizeof(FrameFog) == 3 * 16);
 
 	/**

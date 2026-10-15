@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <atomic>
 #include <cstdint>
@@ -8,10 +9,15 @@
 #include <string>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 
 namespace DCLF
 {
+	// The Effect family's slot is Records.h's effect key bits.
+	static_assert(ProgramFamilySlotOf(Api::ProgramFamily::Effect).keyBit == kRasterEffect &&
+	                  ProgramFamilySlotOf(Api::ProgramFamily::Effect).spareShift == kRasterEffectBillboardShift,
+		"the Effect family's slot is not Records.h's kRasterEffect and kRasterEffectBillboardShift");
 	/**
 	 * @brief Register classes of the SPIR-V builds, shifted onto separate binding ranges (DXC
 	 * -fvk-{b,t,s,u}-shift, all in set 0) so that the pipeline layout can map each class on its own.
@@ -150,14 +156,18 @@ namespace DCLF
 			return (static_cast<std::uint64_t>(a_vertexDescriptor) << 32) | a_pixelDescriptor;
 		}
 		/**
-		 * @brief An effect key's program (Records.h, kRasterEffect), `Data/Shaders/Effect.hlsl`'s builds of its vertex and
-		 * pixel descriptors with the same defines as the Lighting builds (DCLF_BINDLESS and DCLF_BINDLESS_DRAW: Effect.hlsl's DCLF reads).
-		 * Only its vertex and pixel stages (a forward object is no depth segment input: DrawPipelines builds its depth variant from them and
-		 * no Z-prepass pipeline); null until both are compiled. Never freed. The pipeline lane's; a_failed as Find's.
+		 * @brief A program family's key's program (Api::ProgramFamily: its key bit, KeyFamily; the Effect port's Effect.hlsl), its source's
+		 * builds (Extensions::ProgramFamilies' sourcePath) of its vertex and pixel descriptors with the same defines as the Lighting builds
+		 * (DCLF_BINDLESS and DCLF_BINDLESS_DRAW: the source's DCLF reads), a_shader's (its programSource). Only its vertex and pixel stages
+		 * (ProgramStages::VertexPixel: a forward object is no depth segment input, so DrawPipelines builds its depth variant from them and no
+		 * Z-prepass pipeline); null until both are compiled. Never freed. The pipeline lane's; a_failed as Find's.
 		 */
-		const Program* FindEffect(const PipelineKey& a_key, RE::BSShader& a_effect, bool* a_failed = nullptr);
-		/** @brief Which Effect program a key draws with (FindEffect's entries, UpdateLane's ids): distinct from every LightingProgramId. */
-		static std::uint64_t EffectProgramId(const PipelineKey& a_key) { return LightingProgramId(a_key) | (1ull << 63); }
+		const Program* FindFamily(Api::ProgramFamily a_family, const PipelineKey& a_key, const RE::BSShader& a_shader, bool* a_failed = nullptr);
+		/**
+		 * @brief Which family program a key draws with (FindFamily's entries, UpdateLane's ids): its slot's program-id bit, distinct from every
+		 * LightingProgramId.
+		 */
+		static std::uint64_t FamilyProgramId(Api::ProgramFamily a_family, const PipelineKey& a_key) { return LightingProgramId(a_key) | ProgramFamilySlotOf(a_family).programIdBit; }
 		/** @brief Tree LOD's forward program: DistantTree's DistantTreeBlock technique with AlphaTest and without Deferred, pulled. */
 		const ForwardProgram* FindForwardTreeLod(RE::BSShader& a_distantTree, bool* a_failed = nullptr);
 
@@ -167,16 +177,23 @@ namespace DCLF
 			std::vector<std::uint64_t> lighting;  // LightingProgramId
 			std::vector<std::uint32_t> shadow;    // Utility techniques
 			std::vector<std::uint64_t> forward;   // ForwardProgramId
-			std::vector<std::uint64_t> effect;    // EffectProgramId
+			std::array<std::vector<std::uint64_t>, Extensions::kProgramFamilies> families;  // by family: FamilyProgramId
 			bool treeLod = false, forwardTreeLod = false;
 
-			bool Empty() const { return lighting.empty() && shadow.empty() && forward.empty() && effect.empty() && !treeLod && !forwardTreeLod; }
+			bool Empty() const
+			{
+				for (const auto& ids : families)
+					if (!ids.empty())
+						return false;
+				return lighting.empty() && shadow.empty() && forward.empty() && !treeLod && !forwardTreeLod;
+			}
 			void Clear()
 			{
 				lighting.clear();
 				shadow.clear();
 				forward.clear();
-				effect.clear();
+				for (auto& ids : families)
+					ids.clear();
 				treeLod = forwardTreeLod = false;
 			}
 		};
@@ -213,7 +230,7 @@ namespace DCLF
 		using ShadowEntry = ProgramEntry<ShadowProgram, 2>;
 		using TreeLodEntry = ProgramEntry<TreeLodProgram, 4>;  // vertex, pixel, depth vertex, depth pixel
 		using ForwardEntry = ProgramEntry<ForwardProgram, 2>;
-		using EffectEntry = ProgramEntry<Program, 2>;  // vertex and pixel alone
+		using FamilyEntry = ProgramEntry<Program, 2>;  // vertex and pixel alone (ProgramStages::VertexPixel)
 		struct StageCache;
 		std::unique_ptr<StageCache> stages;
 		bool LoadSources();
@@ -236,8 +253,10 @@ namespace DCLF
 		std::unique_ptr<TreeLodEntry> treeLodEntry;
 		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<ForwardEntry>> forwardEntries;
 		std::unique_ptr<ForwardEntry> forwardTreeLodEntry;
-		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<EffectEntry>> effectEntries;
-		std::vector<std::byte> effectSource;  // Data/Shaders/Effect.hlsl; empty when missing
+		// By family: its entries, and its source (Extensions::ProgramFamilies' sourcePath: Data/Shaders/Effect.hlsl; empty when missing or
+		// not taken).
+		std::array<ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<FamilyEntry>>, Extensions::kProgramFamilies> familyEntries;
+		std::array<std::vector<std::byte>, Extensions::kProgramFamilies> familySources;
 		std::vector<std::byte> distantTreeSource;
 		std::vector<std::byte> source;
 		std::vector<std::byte> pulledSource;  // source for the pulled builds (PulledMaterialSource); empty when it could not be made
@@ -245,7 +264,8 @@ namespace DCLF
 		std::vector<std::filesystem::path> dependencies;
 		// Each source's ShaderCompiler::FingerprintInputs with the dependencies, taken once when they load: every request's key
 		// starts from it instead of hashing the source and checking the dependency files again (thousands of keys a launch).
-		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0, distantTreeFingerprint = 0, effectFingerprint = 0;
+		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0, distantTreeFingerprint = 0;
+		std::array<std::uint64_t, Extensions::kProgramFamilies> familyFingerprints{};
 		bool sourcesLoaded = false;
 		std::atomic<bool> sourcesMissing{ false };
 		std::atomic<std::uint32_t> loggedFailures{ 0 };

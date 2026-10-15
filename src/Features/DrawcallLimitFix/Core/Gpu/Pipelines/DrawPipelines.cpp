@@ -9,6 +9,8 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
@@ -227,12 +229,15 @@ namespace DCLF
 			return a_pixel ? std::span<const std::string_view>(kLightingPSNames) : std::span<const std::string_view>(kLightingVSNames);
 		}
 
-		/** @brief A key's variable names: the Effect shader's for an effect key (EffectConstants.h), else Lighting's. */
+		/**
+		 * @brief A key's variable names: its family's port space's (Extensions::MaterialSpaceOf: the Effect port's EffectConstants.h names
+		 * for an effect key), else Lighting's (kind 0's space names none: these).
+		 */
 		std::span<const std::string_view> VariableNames(const PipelineKey& a_key, bool a_pixel)
 		{
-			if (RasterEffect(a_key.rasterFlags))
-				return a_pixel ? std::span<const std::string_view>(kEffectPSNames) : std::span<const std::string_view>(kEffectVSNames);
-			return LightingNames(a_pixel);
+			const auto& space = Extensions::MaterialSpaceOf(Extensions::FamilyRules(a_key.rasterFlags).kind);
+			const auto names = a_pixel ? space.ps.names : space.vs.names;
+			return names.empty() ? LightingNames(a_pixel) : names;
 		}
 
 		/**
@@ -805,7 +810,8 @@ namespace DCLF
 			std::shared_ptr<const ankerl::unordered_dense::map<std::uint32_t, EngineState>> states;
 			std::optional<bool> frontCCW;      // EngineFrontCCW, once the engine's table holds a state
 			RE::BSShader* lighting = nullptr;  // the Lighting shader the programs' defines are of (EngineShaders::Lighting)
-			RE::BSShader* effect = nullptr;    // the Effect shader its programs' defines are of (EngineShaders::Effect)
+			// By program family: the engine shader its programs' defines are of (its programSource: the Effect port's BSEffectShader).
+			std::array<const void*, Extensions::kProgramFamilies> familySource{};
 			// Rasterizer states by id - 1, append-only: a newer list holds every id an older one did.
 			RE::BSShader* utility = nullptr;
 			DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
@@ -930,12 +936,12 @@ namespace DCLF
 			std::string recreatedBy;  // the set's last recreation, for NearestKey's warnings
 			std::uint64_t revision = 0;
 			bool dirty = false;  // the catalog to publish at the end of the pass
-			// Stats::effect*.
-			struct EffectCounters
+			// Stats::families, by program family.
+			struct ProgramFamilyCounters
 			{
 				std::atomic<std::uint32_t> requested{ 0 }, ready{ 0 }, failed{ 0 };
 			};
-			EffectCounters effectCounters;
+			std::array<ProgramFamilyCounters, Extensions::kProgramFamilies> programFamilyCounters;
 			/**
 			 * @brief The shadow views' set, kept as the main set: keyed by view key (with mode bits and view state), built for the shadow map
 			 * format, its own versions. Its generation is PipelineCatalog::shadowGeneration.
@@ -1065,8 +1071,11 @@ namespace DCLF
 		std::string NearestKey(const PipelineKey& a_key) const;
 		static std::string DescribeKey(const PipelineKey& a_key)
 		{
+			// A family's key is named by its key name ("effect"), a Lighting key by its technique.
+			const auto family = KeyFamily(a_key.rasterFlags);
 			return fmt::format("VS {:08X} PS {:08X} pass {:08X} ({}), raster {:X}, vertex layout {:016X}", a_key.vertexDescriptor, a_key.pixelDescriptor,
-				a_key.passDescriptor, RasterEffect(a_key.rasterFlags) ? std::string_view("effect") : LightingTechniqueName((a_key.passDescriptor >> 24) & 0x3f),
+				a_key.passDescriptor,
+				family != Api::ProgramFamily::Count ? std::string_view(Extensions::ProgramFamilyOf(family).keyName) : LightingTechniqueName((a_key.passDescriptor >> 24) & 0x3f),
 				a_key.rasterFlags, a_key.vertexLayout);
 		}
 
@@ -1290,18 +1299,19 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief An effect key's pipelines (kRasterEffect), following Build's forward or decal rules (a decal uses the DEFERRED pixel
-		 * stage). An attachment the pixel stage does not output keeps its contents (write mask 0), as DXVK builds the engine's pipeline:
-		 * DEFERRED without Normals/MotionVectorsNormals writes neither. Its Z key is never shared; the depth variant of a forward key is
-		 * never drawn (no Z-prepass bucket: PlanZBuckets).
+		 * @brief A ForwardOrDecal family key's pipelines (Api::ProgramBuild::ForwardOrDecal: the Effect port's keys), following Build's
+		 * forward or decal rules (a decal uses the DEFERRED pixel stage). An attachment the pixel stage does not output keeps its contents
+		 * (write mask 0), as DXVK builds the engine's pipeline: DEFERRED without Normals/MotionVectorsNormals writes neither. Its Z key is
+		 * never shared (a_slot's salt); the depth variant of a forward key is never drawn (no Z-prepass bucket: PlanZBuckets). Named by
+		 * a_keyName ("effect color", "effect depth").
 		 */
-		static org::services::PipelinePayload BuildEffect(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, PipelineKey a_key,
-			const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW)
+		static org::services::PipelinePayload BuildForwardOrDecal(const ProgramFamilySlot& a_slot, std::string_view a_keyName, rhi::Device a_device,
+			rhi::PipelineLayoutHandle a_layout, PipelineKey a_key, const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW)
 		{
 			auto [vertex, pixel] = Parse<2>({ &a_program->vertex, &a_program->pixel });
 			const std::uint32_t decalGroup = RasterDecalGroup(a_key.rasterFlags);
 			if (!a_state.valid || (!RasterForward(a_key.rasterFlags) && decalGroup != 1 && decalGroup != 2))
-				throw std::runtime_error("an effect key without the forward or a decal group's state");
+				throw std::runtime_error(fmt::format("an {} key without the forward or a decal group's state", a_keyName));
 			CheckBindings(vertex, false);
 			CheckBindings(pixel, true);
 			auto built = std::make_shared<Built>();
@@ -1310,7 +1320,7 @@ namespace DCLF
 				AddUsage(pixel, true, built->usage[variant]);
 			}
 			built->tables = std::make_shared<const ConstantTables>(ConstantTables{ ConstantTableOf({ &vertex }, false, a_key), ConstantTableOf({ &pixel }, true, a_key) });
-			built->zKey.vertex = ModuleHash(a_program->vertex) ^ 0xEFFEC7EFFEC7EFFEull;  // no Lighting pipeline's
+			built->zKey.vertex = ModuleHash(a_program->vertex) ^ a_slot.zSalt;  // no Lighting pipeline's
 			built->zKey.vertexBytes = static_cast<std::uint32_t>(a_program->vertex.size());
 			built->zKey.pixel = ModuleHash(a_program->pixel);
 			built->zKey.pixelBytes = static_cast<std::uint32_t>(a_program->pixel.size());
@@ -1348,7 +1358,7 @@ namespace DCLF
 						desc.blend.bs.attachments[i].writeMask = static_cast<rhi::ColorWriteEnable>(0);
 					}
 				}
-				desc.Create(a_device, built->pipelines[variant], depthOnly ? "effect depth" : "effect color");
+				desc.Create(a_device, built->pipelines[variant], fmt::format("{} {}", a_keyName, depthOnly ? "depth" : "color"));
 			}
 			return built;
 		}
@@ -1356,8 +1366,10 @@ namespace DCLF
 		static org::services::PipelinePayload Build(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, rhi::PipelineLayoutHandle a_zLayout, PipelineKey a_key,
 			const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW)
 		{
-			if (RasterEffect(a_key.rasterFlags))
-				return BuildEffect(a_device, a_layout, a_key, a_program, a_targets, a_state, a_frontCCW);
+			// A program family's key: its build rule (Api::ProgramBuild; ForwardOrDecal, the one there is).
+			if (const auto family = KeyFamily(a_key.rasterFlags); family != Api::ProgramFamily::Count)
+				return BuildForwardOrDecal(ProgramFamilySlotOf(family), Extensions::ProgramFamilyOf(family).keyName, a_device, a_layout, a_key, a_program, a_targets, a_state,
+					a_frontCCW);
 			auto [vertex, pixel, depthPixel, pulledVertex, pulledDepthPixel] =
 				Parse<5>({ &a_program->vertex, &a_program->pixel, &a_program->depthPixel, &a_program->pulledVertex, &a_program->pulledDepthPixel });
 			CheckBindings(vertex, false);
@@ -1659,9 +1671,11 @@ namespace DCLF
 		result.zDepthOnly = counters.zDepthOnly.load(std::memory_order_relaxed);
 		result.setPublishes = counters.setPublishes.load(std::memory_order_relaxed);
 		result.setWaits = counters.setWaits.load(std::memory_order_relaxed);
-		result.effectRequested = impl->lane.effectCounters.requested.load(std::memory_order_relaxed);
-		result.effectReady = impl->lane.effectCounters.ready.load(std::memory_order_relaxed);
-		result.effectFailed = impl->lane.effectCounters.failed.load(std::memory_order_relaxed);
+		for (std::size_t f = 0; f < Extensions::kProgramFamilies; ++f) {
+			const auto& programCounters = impl->lane.programFamilyCounters[f];
+			result.families[f] = { programCounters.requested.load(std::memory_order_relaxed), programCounters.ready.load(std::memory_order_relaxed),
+				programCounters.failed.load(std::memory_order_relaxed) };
+		}
 		const auto& shadowCounters = impl->lane.shadow.counters;
 		result.shadowRequested = shadowCounters.requested.load(std::memory_order_relaxed);
 		result.shadowReady = shadowCounters.ready.load(std::memory_order_relaxed);
@@ -1837,9 +1851,9 @@ namespace DCLF
 			ShaderPrograms::Get().UpdateLane(finished);
 			if (finished.Empty())
 				break;
-			// An effect program's id is distinct from every Lighting one (EffectProgramId); its keys wait in the same map.
-			for (const std::uint64_t id : finished.effect)
-				finished.lighting.push_back(id);
+			// A family program's id is distinct from every Lighting one (FamilyProgramId); its keys wait in the same map.
+			for (const auto& ids : finished.families)
+				finished.lighting.insert(finished.lighting.end(), ids.begin(), ids.end());
 			for (const std::uint64_t id : finished.lighting)
 				l.RetryProgram(id, [&](const auto& a_key) { TryRequest(a_key); });
 			for (const std::uint32_t technique : finished.shadow)
@@ -1868,8 +1882,11 @@ namespace DCLF
 		if (l.entries.contains(a_key))
 			return;  // requested, or failed for good
 		const auto* input = l.input.get();
-		const bool effect = RasterEffect(a_key.rasterFlags);
-		if (!input || !input->lighting || (effect && !input->effect) || input->targets.colorCount == 0 || input->targets.depth == DXGI_FORMAT_UNKNOWN ||
+		// A program family's key (Api::ProgramFamily: the Effect port's): its programs are its source's, of its family's shader.
+		const auto family = KeyFamily(a_key.rasterFlags);
+		const bool member = family != Api::ProgramFamily::Count;
+		const auto f = static_cast<std::size_t>(family);
+		if (!input || !input->lighting || (member && !input->familySource[f]) || input->targets.colorCount == 0 || input->targets.depth == DXGI_FORMAT_UNKNOWN ||
 			!input->frontCCW || !input->states || !layout || !zLayout) {
 			l.blocked.push_back(a_key);
 			return;
@@ -1879,8 +1896,8 @@ namespace DCLF
 		// A build here is one the precompile missed: each is logged with its key, slot and nearest relative to find the gap.
 		std::uint8_t onDemand = 0;
 		bool programFailed = false;
-		// An effect key's program is Effect.hlsl's.
-		const auto* program = effect ? ShaderPrograms::Get().FindEffect(a_key, *input->effect, &programFailed) :
+		// A family key's program is its source's (Effect.hlsl for an effect key).
+		const auto* program = member ? ShaderPrograms::Get().FindFamily(family, a_key, *static_cast<const RE::BSShader*>(input->familySource[f]), &programFailed) :
 		                               ShaderPrograms::Get().Find(a_key, *input->lighting, &onDemand, &programFailed);
 		if (onDemand)
 			logger::warn("[DCLF] on-demand SPIR-V compile: Lighting {} that no precompile requested ({}), for pipeline slot {}: {}", ShaderPrograms::OnDemandStages(onDemand),
@@ -1890,12 +1907,12 @@ namespace DCLF
 			// Its objects stay native (no set index ever comes).
 			l.FailForGood(a_key);
 			l.dirty = true;
-			if (effect)
-				l.effectCounters.failed.fetch_add(1, std::memory_order_relaxed);
+			if (member)
+				l.programFamilyCounters[f].failed.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
 		if (!program) {
-			l.programWaiters[effect ? ShaderPrograms::EffectProgramId(a_key) : ShaderPrograms::LightingProgramId(a_key)].push_back(a_key);
+			l.programWaiters[member ? ShaderPrograms::FamilyProgramId(family, a_key) : ShaderPrograms::LightingProgramId(a_key)].push_back(a_key);
 			return;
 		}
 		if (l.Full()) {
@@ -1935,8 +1952,8 @@ namespace DCLF
 		}
 		const auto& inputTargets = input->targets;
 		org::services::PipelineRecipe recipe;
-		recipe.id = fmt::format("dclf.{}.{:08X}.{:08X}.{:08X}.{:X}.{:016X}", effect ? "effect" : "lighting", a_key.vertexDescriptor, a_key.pixelDescriptor,
-			a_key.passDescriptor, a_key.rasterFlags, a_key.vertexLayout);
+		recipe.id = fmt::format("dclf.{}.{:08X}.{:08X}.{:08X}.{:X}.{:016X}", member ? std::string_view(Extensions::ProgramFamilyOf(family).keyName) : std::string_view("lighting"),
+			a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.passDescriptor, a_key.rasterFlags, a_key.vertexLayout);
 		recipe.shaderKey = PipelineKeyHash{}(a_key);
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&inputTargets, sizeof(inputTargets));
 		// The blend state too: its write masks are the engine's, so other masks are another pipeline.
@@ -1951,9 +1968,10 @@ namespace DCLF
 			WakePipelineLane();
 		});
 		l.counters.requested.fetch_add(1, std::memory_order_relaxed);
-		if (effect)
-			l.effectCounters.requested.fetch_add(1, std::memory_order_relaxed);
-		logger::warn("[DCLF] on-demand pipeline build: {} pipeline slot {}: {}; {}", effect ? "Effect" : "Lighting", slot, DescribeKey(a_key), NearestKey(a_key));
+		if (member)
+			l.programFamilyCounters[f].requested.fetch_add(1, std::memory_order_relaxed);
+		logger::warn("[DCLF] on-demand pipeline build: {} pipeline slot {}: {}; {}", member ? std::string_view(Extensions::ProgramFamilyOf(family).name) : std::string_view("Lighting"),
+			slot, DescribeKey(a_key), NearestKey(a_key));
 	}
 
 	void DrawPipelines::Impl::RecreateMainSet(const TargetFormats& a_from, const TargetFormats& a_to)
@@ -1975,8 +1993,9 @@ namespace DCLF
 		l.zGroups.clear();
 		l.usage.clear();
 		l.constantTables.clear();
-		for (auto* counter : { &l.effectCounters.requested, &l.effectCounters.ready, &l.effectCounters.failed })
-			counter->store(0, std::memory_order_relaxed);
+		for (auto& programCounters : l.programFamilyCounters)
+			for (auto* counter : { &programCounters.requested, &programCounters.ready, &programCounters.failed })
+				counter->store(0, std::memory_order_relaxed);
 		l.recreatedBy = fmt::format("main pass targets {} -> {}", describe(a_from), describe(a_to));
 		// Tree LOD depends on the targets too: rebuilt (TryRequestTreeLod), the last kept for the process.
 		auto& t = l.treeLod;
@@ -2011,8 +2030,8 @@ namespace DCLF
 				entry.failed = true;
 				++l.failedEntries;
 				l.counters.failed.fetch_add(1, std::memory_order_relaxed);
-				if (RasterEffect(key.rasterFlags))
-					l.effectCounters.failed.fetch_add(1, std::memory_order_relaxed);
+				if (const auto family = KeyFamily(key.rasterFlags); family != Api::ProgramFamily::Count)
+					l.programFamilyCounters[static_cast<std::size_t>(family)].failed.fetch_add(1, std::memory_order_relaxed);
 				if (l.loggedFailures++ < kMaxLoggedFailures)
 					logger::warn("[DCLF] Indirect pipeline VS {:08X} PS {:08X} layout {:016X} failed: {}", key.vertexDescriptor, key.pixelDescriptor, key.vertexLayout, artifact.error);
 				return;
@@ -2052,8 +2071,8 @@ namespace DCLF
 			a_version.zGroupFirst.assign(l.zGroupFirst.begin(), l.zGroupFirst.begin() + static_cast<std::ptrdiff_t>(groups));
 			return true;
 		}, [&](const PipelineKey& a_key) {
-			if (RasterEffect(a_key.rasterFlags))
-				l.effectCounters.ready.fetch_add(1, std::memory_order_relaxed);
+			if (const auto family = KeyFamily(a_key.rasterFlags); family != Api::ProgramFamily::Count)
+				l.programFamilyCounters[static_cast<std::size_t>(family)].ready.fetch_add(1, std::memory_order_relaxed);
 		});
 	}
 
@@ -2521,9 +2540,13 @@ namespace DCLF
 			input.lighting = lighting;
 			changed = true;
 		}
-		if (auto* effect = EngineShaders::Effect(); effect != input.effect) {
-			input.effect = effect;
-			changed = true;
+		// The program families' shaders (their programSource: the Effect port's BSEffectShader).
+		for (std::size_t f = 0; f < Extensions::kProgramFamilies; ++f) {
+			const auto& family = Extensions::ProgramFamilies()[f];
+			if (const void* source = family.taken ? family.contribution.programSource() : nullptr; source != input.familySource[f]) {
+				input.familySource[f] = source;
+				changed = true;
+			}
 		}
 		// The deferred blend states exist from the first deferred pass; read nothing before, so no state is recorded unreadable for good.
 		if (DeferredBlendState(0, 0, 10, 0)) {

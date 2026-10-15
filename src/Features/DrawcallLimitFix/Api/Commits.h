@@ -1,7 +1,8 @@
 #pragma once
 
 // The commit hook contract (Api::InstallContext::RegisterCommitHook): a feature's part of a commit's frame data, written on the render
-// thread into the versions the frame adopted, before any pass of the commit's epoch runs.
+// thread into the versions the frame adopted, before any pass of the commit's epoch runs. And the frame constant row contract
+// (RegisterFrameConstantRow): a feature's float4 in Core's feature rows of PS b13, sampled and latched by each main commit.
 
 #include <cstdint>
 #include <string_view>
@@ -31,5 +32,20 @@ namespace DCLF::Api
 	{
 		std::string_view name;
 		void (*commit)(const CommitContext& a_commit) = nullptr;
+	};
+
+	/**
+	 * @brief A frame constant row (Api::InstallContext::RegisterFrameConstantRow): a float4 of the frame's every draw reads in Core's
+	 * feature rows of PS b13 (c17 up to Extensions::kFrameConstantRowsEnd; the row is the feature's compile-time constant, with its HLSL
+	 * declaration).
+	 *
+	 * - sample: render thread, in each main commit (depth and colour), where the frame slots are latched: the row's value, one 16-byte
+	 *   latched copy. The rows are latched in ascending row order, whatever the registration order.
+	 */
+	struct FrameConstantRow
+	{
+		std::string_view name;
+		std::uint32_t row = ~0u;
+		void (*sample)(float (&a_out)[4]) = nullptr;
 	};
 }
