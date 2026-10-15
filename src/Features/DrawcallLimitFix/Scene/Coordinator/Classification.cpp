@@ -4,6 +4,7 @@
 
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include <cassert>
 
@@ -1070,7 +1071,9 @@ namespace DCLF::Scene
 
 	std::int32_t Coordinator::BillboardModeOf(const Tracked& a_tracked) const
 	{
-		if (!ActiveToggles().billboards || a_tracked.parentReason != Ineligible::Billboard)
+		// The parent contribution's (Features/Billboards: the billboards toggle).
+		if (!Extensions::ParentAdmits(ActiveToggles(), Api::EngineParent::Billboard, Api::ParentLeaves::TurnedEffectShapes) ||
+			a_tracked.parentReason != Ineligible::Billboard)
 			return -1;
 		// First-person entries too (magic hand glows): the first-person forward part's b12 block (ExecuteFirstPersonDepth) is world
 		// space throughout (c0-c2 the camera rotation, c40 the eye at GetFirstPersonNodePosition), sampled before the shift.
@@ -1123,9 +1126,9 @@ namespace DCLF::Scene
 		// A particle system under billboards needs no vertex-stage turn: 0x140d3e650 runs each child's UpdateDownwardPass (slot 0x2C,
 		// NiPSysUpdateCtlr), after which ParticleSnapshots snapshots it, and NiParticleSystem::UpdateWorldData (vtable 0x1419c3898 slot
 		// 0x30, 0x140dd4c90) is empty, so the engine draws the last update's world and particles, which the snapshot copies.
+		// The parent contribution's (Features/Billboards: CS_DCLF_BILLBOARD_PARTICLES and the billboards toggle).
 		const auto particlesUnderBillboard = [&] {
-			static const bool on = SwitchOnUnlessZero(Switch::BillboardParticles);
-			if (!on || !ActiveToggles().billboards)
+			if (!Extensions::ParentAdmits(ActiveToggles(), Api::EngineParent::Billboard, Api::ParentLeaves::ParticleSystems))
 				return false;
 			const auto leaf = mirror.Leaf(a_tracked.geometry.get());
 			return leaf && ParticleGeometryType(leaf.Type());

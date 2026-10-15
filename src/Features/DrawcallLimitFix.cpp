@@ -18,7 +18,6 @@
 #	include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #	include "DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
-#	include "DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 #	include "DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #	include "DrawcallLimitFix/Engine/Views/SunViews.h"
 #	include "DrawcallLimitFix/Engine/Views/FocusViews.h"
@@ -82,15 +81,16 @@ void DrawcallLimitFix::PostPostLoad()
 		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ReflectionFace);
 		return globals::features::drawcallLimitFix.Running() ? DCLF::IndirectDraws::Get().ReflectionRootsOwned(a_plain) : 0u;
 	});
-	// The observers this run's switches ask for, and the engine hooks only they use (before DCLF's threads start).
+	// The features' engine hooks that must precede DCLF's own engine side (Features/Billboards: its parity's NiBillboardNode::OnVisible
+	// thunk, before the primary cull takes the slot), then the observers this run's switches ask for, and the engine hooks only they use
+	// (before DCLF's threads start).
+	DCLF::Extensions::InstallEarlyHooks(DCLF::Features::List());
 	DCLF::Diagnostics::Install();
 	DCLF::MaterialWrites::Install();
 	// The frame-sourced float positions built now, off the render thread's first frame.
 	(void)DCLF::MaterialSources::FramePSFloats();
 	(void)DCLF::MaterialSources::FrameVSFloats();
 	DCLF::FaceSnapshots::Get().Install();
-	// The particle systems' snapshots, taken after the engine's update of each (ParticleSnapshots; the systems DCLF follows alone).
-	DCLF::ParticleSnapshots::Get().Install();
 	DCLF::SunAccumulation::Get().Install();
 	DCLF::SunViews::Get().Install();
 	DCLF::LightSelection::Get().Install();
@@ -102,7 +102,8 @@ void DrawcallLimitFix::PostPostLoad()
 	// gates"). Shares the LOD drain's and the retirement's detours with the import timings.
 	DCLF::LodGates::Install([] { return globals::features::drawcallLimitFix.Running(); });
 	// The features' extension points (Features/FeatureList.cpp), registered before DCLF's threads start and read-only after, and
-	// their engine hooks (after DCLF's own: Features/TreeWind's tree manager hooks follow the primary cull's stand-in).
+	// their engine hooks (after DCLF's own: Features/TreeWind's tree manager hooks follow the primary cull's stand-in; Features/Particles'
+	// snapshots of NiParticleSystem's update).
 	DCLF::Extensions::InstallFeatures(DCLF::Features::List());
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();

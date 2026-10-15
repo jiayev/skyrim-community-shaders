@@ -50,6 +50,10 @@ namespace DCLF::Api
 		virtual CoordinatorComponentId RegisterCoordinatorComponent(const CoordinatorComponent& a_component) = 0;
 		/** @brief Fails the install for a technique another feature has, past Extensions::kTechniqueSlots, or without a registered toggle. */
 		virtual void RegisterTechnique(const TechniqueContribution& a_technique) = 0;
+		/** @brief Fails the install for a type another feature has, past Extensions::kGeometryTypeSlots, or without a registered toggle. */
+		virtual void RegisterGeometryType(const GeometryTypeContribution& a_type) = 0;
+		/** @brief Fails the install for a parent and leaves another feature has, or without a registered toggle. */
+		virtual void RegisterParent(const ParentContribution& a_parent) = 0;
 		virtual void RegisterShading(const ShadingContribution& a_shading) = 0;
 		/** @brief Fails the install past Extensions::kFrameGlobalsFloats floats in all. */
 		virtual FrameGlobalsSlot RegisterFrameGlobals(const FrameGlobalsContribution& a_globals) = 0;
@@ -58,10 +62,19 @@ namespace DCLF::Api
 		~InstallContext() = default;
 	};
 
-	/** @brief A feature DCLF installs (Features/FeatureList.cpp). */
+	/**
+	 * @brief A feature DCLF installs (Features/FeatureList.cpp).
+	 *
+	 * - install: see InstallContext.
+	 * - earlyHooks (optional): the main thread at PostPostLoad, before DCLF's own engine side and observers install (the shell's
+	 *   Extensions::InstallEarlyHooks, in the list's order): engine hooks that must be in before Core's engine side reads what they
+	 *   change (a vtable slot the primary cull takes at its install). Registers nothing; Core's switches and Diagnostics::Observe are
+	 *   readable.
+	 */
 	struct Feature
 	{
 		std::string_view name;
 		void (*install)(InstallContext& a_context) = nullptr;
+		void (*earlyHooks)() = nullptr;
 	};
 }

@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Scene/Model/Eligibility.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 
@@ -61,10 +62,10 @@ namespace DCLF::Eligibility
 			}
 		}
 		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex && !lodObject) {
-			// CS_DCLF_PARTICLES: a particle geometry with an effect property is the Effect port's to classify (DeriveEffectDescriptors:
-			// a particle system DCLF's particle path draws, or the particle variant). It has no renderer data of its own: its draw is the
-			// renderer's quads, its vertices ParticleSnapshots' (Coordinator::ResolveGeometrySlot).
-			if (ParticleGeometryType(g.type) && ActiveToggles().particles) {
+			// Its geometry type's contribution (Features/Particles): a particle geometry with an effect property is the Effect port's to
+			// classify (DeriveEffectDescriptors: a particle system DCLF's particle path draws, or the particle variant). It has no renderer
+			// data of its own: its draw is the renderer's quads, its vertices ParticleSnapshots' (Coordinator::ResolveGeometrySlot).
+			if (ParticleGeometryType(g.type) && Extensions::GeometryTypeOn(ActiveToggles(), g.type)) {
 				const auto* effect = SceneCapture::LeafView::Effect(a_leaf.property);
 				if (!effect || !ActiveToggles().effects)
 					return Ineligible::NotLightingShader;

@@ -2,12 +2,10 @@
 // epochs' commits (their passes are ViewEpochRecord.cpp's). Render thread, but for FirstPersonDrawable and FirstPersonSlotReady (the scene lane's commit).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 
 namespace DCLF

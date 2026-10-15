@@ -3,8 +3,6 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
 
 namespace DCLF::Draws

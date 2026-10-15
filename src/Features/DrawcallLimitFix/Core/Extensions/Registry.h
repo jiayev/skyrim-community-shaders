@@ -16,6 +16,11 @@ namespace DCLF::Extensions
 	 * SceneScheduler::Graph and the shell's hooks): every feature's install, in a_features' order. Once; a second call fails.
 	 */
 	void InstallFeatures(std::span<const Api::Feature> a_features);
+	/**
+	 * @brief Main thread, at PostPostLoad, before DCLF's own engine hooks and observers install (the shell, before Diagnostics::Install):
+	 * every feature's early hooks (Api::Feature::earlyHooks), in a_features' order. Once, before InstallFeatures.
+	 */
+	void InstallEarlyHooks(std::span<const Api::Feature> a_features);
 
 	/** @brief A registered frame-value pool (its descriptor, the name owned). */
 	struct FrameValuePoolEntry
@@ -73,6 +78,7 @@ namespace DCLF::Extensions
 		std::string name;
 		Api::ReportPoint point = Api::ReportPoint::PrimaryCull;
 		decltype(Api::ReportLines::lines) lines = nullptr;
+		decltype(Api::ReportLines::text) text = nullptr;
 	};
 
 	/** @brief A registered table family. */

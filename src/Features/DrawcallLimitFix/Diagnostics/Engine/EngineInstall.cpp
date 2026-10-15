@@ -3,7 +3,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Install.h"
 
 #include "Accumulated.h"
-#include "BillboardTurns.h"
 #include "CutObservers.h"
 #include "LightCulls.h"
 #include "LightSelectionParity.h"
@@ -22,8 +21,6 @@ namespace DCLF::Diagnostics
 		const auto& o = Observe();
 		// CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads counted.
 		ReleaseGuard::Install();
-		// CS_DCLF_SET_PARITY: the billboards' observer on NiBillboardNode::OnVisible (before PrimaryCull reads the slot).
-		BillboardTurns::Install();
 		// CS_DCLF_ACCUMULATED_PARITY: the engine's kAccumulated sampled for the decode's comparison, the animation gate, the frame camera.
 		if (o.accumulated)
 			Accumulated::Install();
@@ -43,7 +40,7 @@ namespace DCLF::Diagnostics
 		}
 		if (o.scene)
 			SunCasters::Install();
-		// CS_DCLF_SET_PARITY: the members' withheld forward, refraction, Effect Lighting and particle passes.
+		// CS_DCLF_SET_PARITY: the members' withheld forward, refraction and Effect Lighting passes (the particle members' are their feature's).
 		if (o.claims)
 			Registrations::Install();
 	}

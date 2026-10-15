@@ -2,7 +2,6 @@
 // the resident region, the object loop). Pure; run by the snapshot builder on DCLF's pool, one build at a time.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws

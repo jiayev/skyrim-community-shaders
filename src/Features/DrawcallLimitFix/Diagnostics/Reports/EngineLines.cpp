@@ -2,7 +2,6 @@
 
 #include "Schedule.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Engine/BillboardTurns.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/LightSelectionParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/PortalParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
@@ -11,8 +10,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/SunCasters.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
@@ -28,32 +25,6 @@
 
 namespace DCLF::Reports
 {
-	std::string BillboardsLines()
-	{
-		// The billboard members in the installed tables: objects of an effect key with a billboard mode.
-		std::uint32_t members = 0;
-		{
-			const auto& tables = Scene::FrameView::Get().GetTables();
-			for (const auto& object : tables.objects) {
-				if ((object.flags & (kObjectFree | kObjectNoBindings)) || !(object.flags & kObjectMember) || object.pipelineIndex >= tables.pipelines.size())
-					continue;
-				members += RasterEffectBillboard(tables.pipelines[object.pipelineIndex].rasterFlags) ? 1u : 0u;
-			}
-		}
-		const bool on = ActiveToggles().billboards;
-		std::string text;
-		if (on || members)
-			text += fmt::format("[DCLF] billboards (CS_DCLF_BILLBOARDS {}): {} members bound, turned to each view's camera by the vertex stage\n", on ? "on" : "off", members);
-		if (Diagnostics::BillboardTurns::Installed()) {
-			const auto c = Diagnostics::BillboardTurns::Take();
-			const std::string firstText = c.first.empty() ? std::string() : fmt::format("; first {}", c.first);
-			text += fmt::format("[DCLF] billboards' engine turns (CS_DCLF_SET_PARITY): {} nodes turned by the engine's culls, {} effect leaves below them checked "
-								"against DCLF's row and turn, {} differ (largest rotation {:.2e}, translation {:.2e}){}{}\n",
-				c.turns, c.checked, c.differ, c.largestRotation, c.largestTranslation, c.differ ? " <- BILLBOARD" : " <- OK", firstText);
-		}
-		return text;
-	}
-
 	void LightSelectionLines()
 	{
 		const auto p = Diagnostics::LightSelectionParity::Take();
@@ -92,41 +63,6 @@ namespace DCLF::Reports
 									 "loaded cells) {}; incoming hidden by the engine between flip and release {}",
 							 t.coverageBoth, t.coverageNeither, t.coverageEngineHid, t.engineRehides) :
 						 std::string());
-	}
-
-	std::string ParticleSnapshotsLines()
-	{
-		// The particle members in the installed tables: objects of an effect key whose pass is a particle system's.
-		std::uint32_t members = 0;
-		{
-			const auto& installedTables = Scene::FrameView::Get().GetTables();
-			for (const auto& object : installedTables.objects) {
-				if ((object.flags & (kObjectFree | kObjectNoBindings)) || !(object.flags & kObjectMember) || object.pipelineIndex >= installedTables.pipelines.size())
-					continue;
-				const auto& pipeline = installedTables.pipelines[object.pipelineIndex];
-				members += RasterEffect(pipeline.rasterFlags) && (pipeline.passDescriptor & EffectFlag::Particles) ? 1u : 0u;
-			}
-		}
-		const auto c = ParticleSnapshots::Get().Take();
-		const bool on = ActiveToggles().particles;
-		std::string text;
-		if (on || members || c.captures || c.expansions)
-			text += fmt::format("[DCLF] particles (T7e, CS_DCLF_PARTICLES {}): {} members bound, {} systems followed; {} snapshots taken at the engine's updates ({} "
-								"update passes with nothing new skipped, {} while another update wrote the system); {} expansions of {} particles ({} without a "
-								"snapshot yet, {} systems newly frozen: the same snapshot {} runs in a row, {} of them aligned quads); {} tables "
-								"published, {} records pruned\n",
-				on ? "on" : "off", members, c.followed, c.captures, c.unchanged, c.contended, c.expansions, c.expandedParticles, c.withoutSnapshot, c.frozen,
-				ParticleSnapshots::kFrozenRuns, c.aligned, c.published, c.pruned);
-		// CS_DCLF_SET_PARITY: the members' passes the engine registered (all withheld), against the snapshots the producer drew them from.
-		// Printed whenever the parity is on: a member under a stood-in root (every geometry of its reference DCLF's) is not culled by the engine
-		// at all, so 0 registrations is the expected answer there; a non-zero uncovered count is the defect.
-		if (const auto p = Diagnostics::Registrations::TakeParticles(); p.passes || (Diagnostics::Observe().claims && on)) {
-			const std::string first = p.first.empty() ? std::string() : fmt::format("; first {}", p.first);
-			text += fmt::format("[DCLF] particles' engine passes (CS_DCLF_SET_PARITY): {} passes of particle members the engine registered (withheld), {} of "
-								"them without a snapshot DCLF expanded in its last {} runs{}{}\n",
-				p.passes, p.uncovered, ParticleSnapshots::kCoveredRuns, p.uncovered ? " <- PARTICLES" : " <- OK", first);
-		}
-		return text;
 	}
 
 	void PortalViewsLine()

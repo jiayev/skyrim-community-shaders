@@ -1,8 +1,9 @@
 #pragma once
 
-// The object contributor contracts (Api::InstallContext::RegisterTechnique, RegisterShading, RegisterFrameGlobals): what a feature adds
-// to the objects DCLF draws of an engine technique it ports - their eligibility and record flags, the per-object values the Lighting
-// port derives from their properties, and the engine globals that derivation reads, captured with the frame's. The records' layouts
+// The object contributor contracts (Api::InstallContext::RegisterTechnique, RegisterGeometryType, RegisterParent, RegisterShading,
+// RegisterFrameGlobals): what a feature adds to the objects DCLF draws of an engine technique, geometry type or parent class it ports -
+// their eligibility and record flags, the per-object values the Lighting port derives from their properties, and the engine globals that
+// derivation reads, captured with the frame's. The records' layouts
 // stay compile-time: a feature declares its flag bits in its own header (Features/Manifest.cpp checks them against Core's and each
 // other's), and its record words with its table family (Api/TableFamilies.h).
 
@@ -29,6 +30,52 @@ namespace DCLF::Api
 		std::uint32_t technique = ~0u;
 		ToggleId toggle;
 		std::uint32_t objectFlags = 0;
+	};
+
+	/**
+	 * @brief A geometry type contribution: an engine geometry type (RE::BSGeometry::Type) whose objects the feature ports, a class of DCLF's
+	 * while its toggle is on. Read where the objects are classified, tracked and captured (the Lighting and Effect ports' eligibility, the
+	 * walk's traits, the engine side's captures), as data (no call per object).
+	 *
+	 * - geometryType: the type (below Extensions::kGeometryTypeSlots), one feature's.
+	 * - toggle: a registered toggle.
+	 */
+	struct GeometryTypeContribution
+	{
+		std::uint8_t geometryType = 0xFF;
+		ToggleId toggle;
+	};
+
+	/** @brief An engine parent class Core rejects the leaves under (Eligibility's parent reasons), which a parent contribution may admit. */
+	enum class EngineParent : std::uint8_t
+	{
+		Billboard,  // NiBillboardNode (Ineligible::Billboard): its OnVisible turns it to each culling camera
+		Count,
+	};
+
+	/** @brief The leaves under such a parent a parent contribution takes. */
+	enum class ParentLeaves : std::uint8_t
+	{
+		// A skinless BSEffectShaderProperty BSTriShape under exactly one such parent whose mode Core reads (a billboard's face mode, 0-5):
+		// its key carries the mode (Records.h, RasterEffectBillboard), which the vertex stage turns it by.
+		TurnedEffectShapes,
+		// A particle system (ParticleGeometryType) under any number of them.
+		ParticleSystems,
+		Count,
+	};
+
+	/**
+	 * @brief A parent contribution: the leaves under an engine parent class Core rejects them under that the feature ports, while its
+	 * toggle is on. Read where the objects are classified (Coordinator::ClassifyFrame, the joins' keys) and by the census, as data.
+	 *
+	 * - parent, leaves: what it admits, one feature's.
+	 * - toggle: a registered toggle.
+	 */
+	struct ParentContribution
+	{
+		EngineParent parent = EngineParent::Billboard;
+		ParentLeaves leaves = ParentLeaves::TurnedEffectShapes;
+		ToggleId toggle;
 	};
 
 	/**
