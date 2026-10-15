@@ -20,6 +20,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/RainRefraction.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -72,6 +73,7 @@ namespace globals
 		HairSpecular hairSpecular{};
 		HorizonFix horizonFix{};
 		InteriorSun interiorSun{};
+		RainRefraction rainRefraction{};
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpaceShadows screenSpaceShadows{};
 		Skylighting skylighting{};

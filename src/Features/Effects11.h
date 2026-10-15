@@ -39,9 +39,7 @@ public:
 		float FireIntensity;
 
 		float FireCurve;
-		uint EnableRain;
-		float RainMotionStretch;
-		float RainMotionTransparency;
+		float pad0[3];
 
 		float CloudsCurve;
 		float CloudsDesaturation;
@@ -193,7 +191,6 @@ public:
 	ID3D11ComputeShader* blurHCS = nullptr;
 	ID3D11ComputeShader* blurVCS = nullptr;
 	winrt::com_ptr<ID3D11BlendState> additiveBlendState;
-	winrt::com_ptr<ID3D11BlendState> alphaBlendState;
 
 	std::unique_ptr<Texture2D> vlTexA;
 	std::unique_ptr<Texture2D> vlTexB;
@@ -206,11 +203,6 @@ public:
 	std::unique_ptr<Texture2D> sunRaysTexA;
 	std::unique_ptr<Texture2D> sunRaysTexB;
 	std::unique_ptr<ConstantBuffer> sunRaysCB;
-
-	winrt::com_ptr<ID3D11Texture2D> raindropTexture;
-	winrt::com_ptr<ID3D11ShaderResourceView> raindropSRV;
-	std::string raindropStatus;
-	void LoadRaindropTexture();
 
 	/** @brief Sun color after the preset's sun desaturation and filter, normalized to a peak of 1; tints the sky scattering. */
 	float3 scatteringSunColor = { 1.0f, 1.0f, 1.0f };
@@ -248,10 +240,6 @@ public:
 	void OverrideAmbientLighting(DirectionalAmbientColors& DirectionalAmbientColors);
 
 	void ModifySky(RE::BSRenderPass* Pass);
-	__declspec(noinline) void ModifyParticle(RE::BSRenderPass* Pass);
-	void ParticleShaderHacks();
-	/** @brief True when the effect is on, the raindrop texture loaded, and RAIN "Enable" is set. */
-	bool IsRainEnabled();
 	bool HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
 	/** @brief True when the effect chain replaced ISHDR for the frame being presented, leaving an SDR scene for HDR Display to expand. */
 	bool ReplacedTonemapperThisFrame() const;

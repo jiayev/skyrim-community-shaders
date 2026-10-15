@@ -118,6 +118,7 @@ file_common_defines:
             - CLOUD_SHADOWS
             - WATER_EFFECTS
             - SSS
+            - RAIN_REFRACTION
         VSHADER:
             - IBL
             - DYNAMIC_CUBEMAPS
@@ -130,6 +131,7 @@ file_common_defines:
             - CLOUD_SHADOWS
             - WATER_EFFECTS
             - SSS
+            - RAIN_REFRACTION
         CSHADER: []
     Effect.hlsl:
         PSHADER:
@@ -2325,6 +2327,7 @@ shaders:
                   - CLOUD_SHADOWS
                   - WATER_EFFECTS
                   - SSS
+                  - RAIN_REFRACTION
               entries:
                   - entry: Particle:Pixel:0
                     defines: []
@@ -2362,6 +2365,7 @@ shaders:
                   - CLOUD_SHADOWS
                   - WATER_EFFECTS
                   - SSS
+                  - RAIN_REFRACTION
               entries:
                   - entry: Particle:Vertex:0
                     defines: []
