@@ -1270,6 +1270,17 @@ namespace DCLF
 		 * handed to every component's keys hook (Api::CoordinatorComponent::Events).
 		 */
 		void ComponentsChannelKeys(Api::ChannelApply a_apply, const EventBatch& a_batch);
+		/** @brief A point with no batch's keys (AfterBatch, after ApplyEvents in a pass that applied a batch): its channels' keys hooks, no keys. */
+		void ComponentsChannelKeys(Api::ChannelApply a_apply);
+		// The commit's vetoes (State/Components.h; CoordinatorComponentContext's services).
+		/** @brief a_entry's veto set (Api::kVetoHold, kVetoObserve or 0; none when untracked); in the settle, what it drops or holds applies. */
+		void SetEntryVeto(const void* a_entry, std::uint8_t a_veto);
+		/** @brief What the commit recorded of a_slot while Observe withheld it (none past the slots). */
+		Api::ObservedState ObservedSlotOf(std::uint32_t a_slot) const;
+		/** @brief a_entry's tracked state (tracked false: not tracked). */
+		Api::TrackedState TrackedStateOf(const void* a_entry) const;
+		/** @brief Whether the commit runs live: a component asked (SetCommitLive) or an entry is vetoed. */
+		bool CommitLive() const;
 		/**
 		 * @brief The coordinator's report pass at a text point (Api::ReportPoint::SceneCoordinatorSegments): the features' text lines and the
 		 * components' (Api::ReportLines::componentText, with the component's context) there, in registration order.
@@ -1290,7 +1301,7 @@ namespace DCLF
 		void ComponentsRescan();
 		/** @brief A newly tracked entry under a marked root (the nearest on its chain): the marking component's underMark hook. */
 		void ComponentsUnderMark(const RE::BSGeometry* a_geometry, const Api::Mark& a_mark);
-		/** @brief The commit's settle (a_live: the commit runs live), the pass's take before CollectEvents, the deltas taken (published). */
+		/** @brief The commit's settle (a_live: the scene built), the pass's take before CollectEvents, the deltas taken (published). */
 		void ComponentsSettle(bool a_live);
 		void ComponentsTake();
 		void ComponentsPublished();
@@ -1305,39 +1316,37 @@ namespace DCLF
 			std::uint32_t a_stampFrame);
 		/** @brief The gates' detached hook: a_key (its mark of gate a_token erased: UnmarkDetached) leaves its gate. */
 		void GateRootDetached(const void* a_key, std::uint64_t a_token);
+		/** @brief The gates' component's context (their calls on the coordinator's services). */
+		Api::CoordinatorComponentContext GateContext();
 		/** @brief Tags the tracked geometries under a_root on a_token's a_side; true when the mirror lacked a record there. */
 		bool TagGateRoot(std::uint64_t a_token, const void* a_root, std::uint8_t a_side);
-		/** @brief AddGeometry: tags a_geometry when a gate's root is on its mirror chain. */
-		void TagGateAbove(RE::BSGeometry* a_geometry, Tracked& a_entry);
-		void TagGate(RE::BSGeometry* a_geometry, Tracked& a_entry, std::uint64_t a_token, std::uint8_t a_side);
+		/** @brief Tags a tracked a_geometry on a_token's a_side (its veto: Observe while an open gate's incoming, else none). */
+		void TagGate(const RE::BSGeometry* a_geometry, std::uint64_t a_token, std::uint8_t a_side);
 		/** @brief The gates' underMark hook: a newly tracked a_geometry under a root of theirs (AddGeometry's prepare found it) tagged. */
 		void TagGateUnder(const RE::BSGeometry* a_geometry, const Api::Mark& a_mark);
-		/** @brief Off its gate (EraseTracked, a retag, the outcome) and no longer held out. */
-		void UntagGate(RE::BSGeometry* a_geometry, Tracked& a_entry);
+		/** @brief Off its gate's tag (the component's forgot, a retag, a kept notice); its veto is the caller's. */
+		void UntagGate(const RE::BSGeometry* a_geometry);
 		/** @brief The rescan (the gates' rescan hook): gate tags dropped with the entries (its adds tag again). */
 		void ResetGateTags();
-		/** @brief CommitSet: a_slot's phases as applied (0 for an open gate's incoming slot or one held out), recorded per slot. */
-		std::uint8_t GateWithhold(std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait, std::uint32_t a_drawn, bool a_live);
-		/** @brief GateWithhold's verdict alone (the set parity's). */
-		bool GateWithholds(std::uint32_t a_slot) const;
 		/** @brief Whether a gated incoming geometry is ready: ineligible by a verdict of the gate's time, or every slot of it whole. */
-		bool GateGeometryReady(const RE::BSGeometry* a_geometry, const Tracked& a_entry) const;
+		bool GateGeometryReady(const RE::BSGeometry* a_geometry) const;
 		/**
-		 * @brief CommitSet after its queue: flips the open gates that are ready (roots mirrored, incoming ready, a live scene) into a_apply
-		 * and the gates' component's deltas (PublishDelta: each flip a GateFlip, published by this commit's publication).
+		 * @brief The gates' settle (CommitSet after its queue): flips the open gates that are ready (roots mirrored, incoming ready, a live
+		 * scene), their vetoes dropped and set in this commit, into the gates' component's deltas (PublishDelta: each flip a GateFlip,
+		 * published by this commit's publication).
 		 */
-		void UpdateGates(bool a_live, std::vector<std::pair<std::uint32_t, std::uint8_t>>& a_apply);
-		/** @brief Before CollectEvents: holds LodGates' outcomes posted so far. */
+		void UpdateGates(bool a_live);
+		/** @brief The gates' take (before CollectEvents): holds LodGates' outcomes posted so far. */
 		void TakeGateOutcomes();
 		/**
-		 * @brief After the batch, unless a_applied is false (a load screen's pass): retires each held outcome's gate (a forced gate's
-		 * incoming reclassified).
+		 * @brief The gates' AfterBatch keys (a pass that applies a batch, after it; not a load screen's pass): retires each held outcome's
+		 * gate (a forced gate's incoming reclassified).
 		 */
-		void ApplyGateOutcomes(bool a_applied);
+		void ApplyGateOutcomes();
 		void RetireGate(std::uint64_t a_token, bool a_forced);
 		/**
 		 * @brief The engine reused a_token's held block under a_roots: those roots and their geometries leave the gate's outgoing side and
-		 * hold-out (recommitted via gateQueued).
+		 * hold-out (requeued).
 		 */
 		void ApplyGateKept(std::uint64_t a_token, const std::array<const void*, 2>& a_roots);
 
@@ -1396,6 +1405,15 @@ namespace DCLF
 		std::uint8_t SetParticipation(std::uint32_t a_slot, std::uint32_t a_drawn) const;
 		/** @brief What the commit decides for a_slot now. Pure: CommitSet applies the side effects; its observers re-decide every slot. */
 		SlotDecision DecideSlot(std::uint32_t a_slot, bool a_live, std::uint32_t a_drawn) const;
+		/**
+		 * @brief CommitSet: a_slot's phases as applied by its entry's veto (Hold: 0; Observe: 0, what it would have applied recorded for
+		 * ObservedSlot; none: a_phases).
+		 */
+		std::uint8_t VetoedPhases(std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait, std::uint32_t a_drawn, bool a_live);
+		/** @brief Whether a_slot's entry is vetoed (VetoedPhases' withholding alone: the set parity's). */
+		bool EntryVetoed(std::uint32_t a_slot) const;
+		/** @brief Whether a_slot's structure changed since the last publication's revocation (revokeCursor's unread changes), once a commit. */
+		bool RestructuredSincePublication(std::uint32_t a_slot);
 		/** @brief Whether everything the main phase draws with is ready; a_why: waitingBy's index when not. */
 		bool MainReady(std::uint32_t a_slot, std::uint32_t& a_why) const;
 		/** @brief The CategoryRoot view whose entry a slot's geometry is (a first-person entry's), EngineView::Count for none. */

@@ -101,11 +101,9 @@ namespace DCLF::Scene
 			// owners) are copied from it, never made from a key.
 			RE::NiPointer<RE::NiAVObject> fadeNodeRef;
 			const void* fadeNodeRequested = nullptr;  // the fade node key asked of the render thread (FadeNodeRequest), until answered
-			// Its LOD gate (token; 0: none) and side; held out after its gate flipped (until its detach); whether any gate ever tagged it.
-			std::uint64_t gate = 0;
-			std::uint8_t gateSide = 0;
-			bool gateHeldOut = false;
-			bool gateSeen = false;
+			// Its commit veto (Api::kVetoHold, kVetoObserve; 0: none), a component's (CoordinatorComponentContext::SetEntryVeto): read by the
+			// commit as data (VetoedPhases), counted in vetoHeld and vetoObserved.
+			std::uint8_t veto = 0;
 			// Owned by an actor (GetUserData is an ActorCharacter): Advanced Skin gives its draws the actor's wetness
 			// (Tables::skinWetness). Resolved once by the walk.
 			bool actorOwned = false;

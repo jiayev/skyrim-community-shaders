@@ -73,8 +73,8 @@ namespace DCLF::Diagnostics
 					if (!(phases & kSetMain) != !(wanted(partner, partnerWait) & kSetMain))
 						phases = 0;
 				}
-				// The gates' withholding, as the commit applies it.
-				if (a_event.gatesLive && V::GateWithholds(store, slot))
+				// The vetoed entries' withholding (the gates'), as the commit applies it.
+				if (a_event.gatesLive && V::EntryVetoed(store, slot))
 					phases = 0;
 				if (phases == setPhases[slot] && wait == (setWaitingMark[slot] != 0))
 					continue;

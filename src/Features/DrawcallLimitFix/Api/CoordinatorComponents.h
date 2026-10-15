@@ -243,8 +243,8 @@ namespace DCLF::Api
 		 *
 		 * - settle: the commit, after its slots are decided and before the set's change is noted and the claims are snapshotted: vetoes
 		 *   changed here apply in the same commit (an Observe dropped applies the observed phases where the observed entry matches; Hold
-		 *   applies none). a_live: whether the commit runs live (any component live, CoordinatorComponentContext::SetCommitLive, or any
-		 *   entry vetoed).
+		 *   applies none). Called only while the commit runs live (any component live, CoordinatorComponentContext::SetCommitLive, or any
+		 *   entry vetoed); a_live: whether the scene is built (not a load screen: its members are decided).
 		 * - take: the pass, before its events are collected: what the component's own queues hold, taken (applied after the batch, by an
 		 *   AfterBatch channel's keys hook).
 		 * - published: the publication's deltas are taken (its PublishDelta payloads among them).

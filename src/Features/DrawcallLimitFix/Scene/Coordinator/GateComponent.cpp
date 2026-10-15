@@ -22,6 +22,11 @@ namespace DCLF::Scene
 		{
 			Coordinator::Get().TagGateUnder(static_cast<const RE::BSGeometry*>(a_geometry), a_mark);
 		}
+		static void Settle(bool a_live) { Coordinator::Get().UpdateGates(a_live); }
+		static void Take() { Coordinator::Get().TakeGateOutcomes(); }
+		static void ApplyOutcomes() { Coordinator::Get().ApplyGateOutcomes(); }
+		static void Forgot(const void* a_entry) { Coordinator::Get().UntagGate(static_cast<const RE::BSGeometry*>(a_entry)); }
+		static void ForgotAll() { Coordinator::Get().gateTags.clear(); }
 	};
 
 	namespace
@@ -51,11 +56,43 @@ namespace DCLF::Scene
 		{
 			GateComponentAccess::UnderMark(a_geometry, a_mark);
 		}
+
+		// The commit's settle (its slots decided, before the set's change is noted and the claims snapshotted): the ready gates flip, their
+		// vetoes dropped and set in this commit.
+		void Settle(const Api::CoordinatorComponentContext&, bool a_live)
+		{
+			GateComponentAccess::Settle(a_live);
+		}
+
+		// Before the pass's events are collected: the outcomes LodGates posted so far (each after its gate's events, so the batch holds them).
+		void Take(const Api::CoordinatorComponentContext&)
+		{
+			GateComponentAccess::Take();
+		}
+
+		// After the batch (AfterBatch, a pass that applies one): the outcomes taken retire their gates.
+		void ApplyOutcomes(const Api::CoordinatorComponentContext&, Api::EngineChannelId a_channel, std::span<const void* const>)
+		{
+			if (a_channel == GateAdoption::channel)
+				GateComponentAccess::ApplyOutcomes();
+		}
+
+		// A tracked entry erased: off its gate's tag (its veto is the coordinator's, erased with it).
+		void Forgot(const Api::CoordinatorComponentContext&, const void* a_entry)
+		{
+			GateComponentAccess::Forgot(a_entry);
+		}
+
+		// The tracked set cleared (the rescan): every tag with it.
+		void ForgotAll(const Api::CoordinatorComponentContext&)
+		{
+			GateComponentAccess::ForgotAll();
+		}
 	}
 
 	void RegisterCoreGates(Api::InstallContext& a_context)
 	{
-		// The LOD gates, while their hooks are installed. Still to move onto the generic structures: their component's commit hooks (b4).
+		// The LOD gates, while their hooks are installed.
 		if (!LodGates::Enabled())
 			return;
 		// Their events on the scene's stack (in order with the incoming blocks' attaches), each, and each outcome they post, waking a
@@ -75,12 +112,15 @@ namespace DCLF::Scene
 		// The frames withdraw their claims while the installed publication predates a forced release (an older one may claim the
 		// outgoing blocks it detached).
 		a_context.RegisterAdoptionGuard({ .name = "LOD gates' forced releases", .generation = &GateAdoption::ForcedGeneration });
-		// The gates' component: gate events applied in stack order, their roots marked (detached, rescanned, entries tagged under them), flips
-		// published by the commit that made them, released by the frame adopting them.
+		// The gates' component: gate events applied in stack order, their roots marked (detached, rescanned, entries tagged under them, the
+		// tags forgotten with their entries), their incoming observed and their flipped outgoing held by the commit's vetoes, flips made by
+		// the commit's settle and published by its publication, outcomes taken before the batch and applied after it, released by the frame
+		// adopting them.
 		GateAdoption::component = a_context.RegisterCoordinatorComponent({ .name = "LOD gates",
 			.make = &GateAdoption::MakeState,
-			.events = { .stacked = &ApplyGateEvent, .detached = &RootDetached, .rescan = &Rescan, .underMark = &UnderMark },
-			.commit = { .published = &GateAdoption::Published },
+			.retirement = { .forgot = &Forgot, .forgotAll = &ForgotAll },
+			.events = { .keys = &ApplyOutcomes, .stacked = &ApplyGateEvent, .detached = &RootDetached, .rescan = &Rescan, .underMark = &UnderMark },
+			.commit = { .settle = &Settle, .take = &Take, .published = &GateAdoption::Published },
 			.adoption = { .adopt = &GateAdoption::Adopt } });
 	}
 }
