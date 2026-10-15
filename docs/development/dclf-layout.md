@@ -56,26 +56,35 @@ read-only after that.
 | Switches and toggles | `Api/Settings.h` | its `CS_DCLF_*` switches, listed where it says beside Core's, and its live toggles, in the menu and the packed word |
 | Report lines | `Api/Reports.h` | its lines at a named point of the periodic report |
 | Stand-in observer | `Api/EngineEvents.h` | the primary cull's stood-in roots as they change, and Main::Update's entry; whether the primary cull is installed |
+| Table family | `Api/TableFamilies.h` | columns of its own in every `SceneTables` (`Extensions::TableFamilies`), read through a typed handle; Core keeps beside them the write stamp (the publication copies a family only when it moved), the objects' references into it (bounded by its scene resources' fit, carried in the record at a declared word) and its rows' tags, and recycles its retired rows |
+| Coordinator component | `Api/CoordinatorComponents.h` | state the coordinator keeps for it, and hooks at the coordinator's residency points (a slot resident, left, the residents recounted, the slot tables reset) with a narrow context: the live tables, the mirror's fade node, the entry's reference, seeds the next frame takes (`FrameView::TakeComponentSeeds`) |
+| Object contributor | `Api/ObjectContributors.h` | a technique it ports (its eligibility under a toggle, its objects' record flags, read as data), the shading values it derives for a property flag of its own, and engine globals captured with the frame's (`FrameGlobals::features`) |
 
 Each contract's thread, timing and lifetime is documented in its header. A feature's install also installs its engine
 hooks and subscribes its observers (`Diagnostics::Subscribe`, under Core's `Observe()` flags).
 
 The headers in `Api/` name only standard and ORG types. The contexts their callbacks receive are opaque there. Core
 defines them in companions under `Core/Extensions/` (`FrameValuePools.h`, `GpuStages.h`, `PayloadProducts.h`,
-`SceneResources.h`, `Commits.h`, `FrameBindings.h`, `Reports.h`, `EngineEvents.h`), which features inside DCLF include
-for typed access to Core's types. The switches and toggles register with `Core/Settings`, which owns them.
+`SceneResources.h`, `Commits.h`, `FrameBindings.h`, `Reports.h`, `EngineEvents.h`, `TableFamilies.h`,
+`CoordinatorComponents.h`, `ObjectContributors.h`), which features inside DCLF include for typed access to Core's types.
+
+Residency changes are events, so a coordinator component's hooks are function pointers called per changed slot. The loops
+that run every frame over every object (the walk's evaluate, the builds' packing, the commit) never call a feature: they read
+what it registered as data (a technique's flags and toggle, a family's references and record word). The switches and toggles register with `Core/Settings`, which owns them.
 
 The shaders' shared constants stay compile-time: a feature declares its own (a frame binding's register beside its HLSL
-declaration), and `Features/Manifest.cpp` checks them against Core's and each other's.
+declaration, its object flag bits within `kFeatureObjectFlags`, its family's record word), and `Features/Manifest.cpp`
+checks them against Core's and each other's.
 
 `Features/TextureTransforms/` was the first feature built on them: a pool, a stage and a product. `Features/TreeWind/` was
 the second: a pool with frame-start reads, scene resources with their commit hook and frame binding, a next-frame stage on
-the compute queue, its switches and toggle, a report line, a stand-in observer with its engine hooks, and its parity. The
-extension points still to come, as the next features need them:
-- coordinator components and table column families (the trees' listing and table family are still the coordinator's);
-- per-object slot rows (`SceneFit` and `ObjectFits` still name the trees' slot);
-- object contributors (a record's or a lighting descriptor's per-object fields and flags, technique eligibility);
-- more engine event channels;
+the compute queue, its switches and toggle, a report line, a stand-in observer with its engine hooks, its parity, and its
+table family (the tree slots), coordinator component (listing them as members join and leave) and object contributions
+(technique 12's eligibility and record flag, its shading derivation, its frame globals). The extension points still to come,
+as the next features need them:
+- per-object record columns (the record's TreeParams and WindTimers block, `treeAnim`, is still Core's: the Lighting port's
+  layout of `DCLFObjectRecord`);
+- more engine event channels (the stand-in change still names the BSTreeNodes among its roots);
 - material contributors;
 - view kinds;
 - the shared-bit manifest (object and record flags).

@@ -101,10 +101,7 @@ namespace DCLF::Engine
 		inline constexpr std::uintptr_t kFadeUpdate = 0x147a160;  // FUN_14147a160(node, fadeAmount, camera): BSFadeNode's fade state machine
 		inline constexpr std::uintptr_t kFadeDistance = 0x147b110;  // FUN_14147b110(node, camera, out): the distance and LOD level
 		inline constexpr std::uintptr_t kLodLevelUpdate = 0x147a430;  // FUN_14147a430(node, level): the leaf and tree LOD transition (+0x152)
-		inline constexpr std::uintptr_t kShadowSceneNode = 0x2033060;  // ShadowSceneNode*: the main one (BSShaderManager::State's first; its +0x304 the tree wind magnitude)
-		inline constexpr std::uintptr_t kTreeWindFadeStart = 0x2033100;  // float: the tree wind fade start
-		inline constexpr std::uintptr_t kTreeWindFadeEnd = 0x2033104;  // float: the tree wind fade end
-		inline constexpr std::uintptr_t kTreeWindTimerScale = 0x1ad28bc;  // float: the tree wind timer scale
+		inline constexpr std::uintptr_t kShadowSceneNode = 0x2033060;  // ShadowSceneNode*: the main one (BSShaderManager::State's first; its +0x304 the wind magnitude)
 		inline constexpr std::uintptr_t kFocusTargetCount = 0x332a498;  // the focus targets' count
 		inline constexpr std::uintptr_t kReflectSky = 0x20104e8;  // bool: the water reflection draws the sky
 		inline constexpr std::uintptr_t kTreeLodAtlas = 0x33dcd18;  // NiSourceTexture*: tree LOD's atlas

@@ -54,7 +54,6 @@ namespace DCLF
 		constexpr std::uint32_t kIndexFormatR16 = 57;  // DXGI_FORMAT_R16_UINT
 		constexpr std::uint32_t kSpecularBit = 0x200;  // pass descriptor Specular
 		constexpr std::uint32_t kTechniqueEnvmap = 1;
-		constexpr std::uint32_t kTechniqueTreeAnim = 12;
 
 		inline void StoreTransform(const RE::NiTransform& a_transform, float (&a_out)[12])
 		{

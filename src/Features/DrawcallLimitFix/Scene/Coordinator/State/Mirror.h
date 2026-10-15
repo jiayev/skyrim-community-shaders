@@ -63,7 +63,7 @@ namespace DCLF::Scene
 			std::uint64_t fadeNodesFromRoots = 0, fadeNodesRequested = 0, fadeNodesAnswered = 0, fadeNodesAnsweredNone = 0;
 			std::uint32_t fadeNodeNamed = 0;
 			std::string fadeNodeFirst;
-			std::uint64_t fadeRootsUnowned = 0;                  // a tree or fade root left unlisted for want of its entry's reference
+			std::uint64_t fadeRootsUnowned = 0;                  // a fade root (or a component's node) left unlisted for want of its entry's reference
 			std::string firstPropertyRefused;
 		} referenceStats;
 		/** @brief Records written without the mirror's leaf, and those evaluated again when a capture named it. */

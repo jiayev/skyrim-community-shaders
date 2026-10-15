@@ -350,11 +350,7 @@ namespace DCLF
 			g->eye = { camera->world.translate.x, camera->world.translate.y, camera->world.translate.z };
 			g->lodAdjust = camera->GetRuntimeData2().lodAdjust;
 		}
-		if (const auto source = Global<std::uintptr_t>(Engine::Address::kShadowSceneNode))
-			g->treeWindMagnitude = *reinterpret_cast<const float*>(source + 0x304);
-		g->treeWindFadeStart = Global<float>(Engine::Address::kTreeWindFadeStart);
-		g->treeWindFadeEnd = Global<float>(Engine::Address::kTreeWindFadeEnd);
-		g->treeWindTimerScale = Global<float>(Engine::Address::kTreeWindTimerScale);
+		Extensions::CaptureFrameGlobals(g->features);
 		// The roots whose hidden bit the frame changes around the scene's views (Coordinator::HiddenForWalk), as the views see it,
 		// at the frame's start (after Main::Draw's early call).
 		if (!g->loading) {

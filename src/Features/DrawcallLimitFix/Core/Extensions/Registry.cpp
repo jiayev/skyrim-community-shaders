@@ -3,6 +3,8 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -24,6 +26,12 @@ namespace DCLF::Extensions
 			std::vector<FrameBindingEntry> frameBindings;
 			std::vector<ReportLinesEntry> reportLines;
 			std::vector<Api::StandInObserver> standInObservers;
+			std::vector<TableFamilyEntry> tableFamilies;
+			std::vector<CoordinatorComponentEntry> coordinatorComponents;
+			TechniqueEntries techniques{};
+			std::vector<ShadingContributionEntry> shadingContributions;
+			std::vector<FrameGlobalsEntry> frameGlobals;
+			std::uint32_t frameGlobalsFloats = 0;
 			bool installed = false;
 		};
 
@@ -127,6 +135,56 @@ namespace DCLF::Extensions
 				return true;
 			}
 
+			Api::TableFamilyId RegisterTableFamily(const Api::TableFamily& a_family) override
+			{
+				if (a_family.name.empty() || !a_family.make || !a_family.assign || !a_family.clear || !a_family.recycle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete table family", feature));
+				// A SceneFit bounds each family's rows (Draws::SceneFit::familyRows).
+				if (lists.tableFamilies.size() >= kTableFamilySlots)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s table family {} is one past kTableFamilySlots: grow it first", feature, a_family.name));
+				lists.tableFamilies.push_back({ std::string(a_family.name), a_family.make, a_family.assign, a_family.same, a_family.clear, a_family.recycle, a_family.rowsEnd,
+					a_family.recordWord });
+				return { static_cast<std::uint32_t>(lists.tableFamilies.size() - 1) };
+			}
+
+			Api::CoordinatorComponentId RegisterCoordinatorComponent(const Api::CoordinatorComponent& a_component) override
+			{
+				if (a_component.name.empty() || !a_component.make)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete coordinator component", feature));
+				lists.coordinatorComponents.push_back(
+					{ std::string(a_component.name), a_component.make, a_component.resident, a_component.left, a_component.recount, a_component.reset });
+				return { static_cast<std::uint32_t>(lists.coordinatorComponents.size() - 1) };
+			}
+
+			void RegisterTechnique(const Api::TechniqueContribution& a_technique) override
+			{
+				if (a_technique.technique >= kTechniqueSlots || !a_technique.toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete technique contribution", feature));
+				auto& entry = lists.techniques[a_technique.technique];
+				if (entry.toggle)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes technique {}, which another feature has", feature, a_technique.technique));
+				entry = { a_technique.toggle, a_technique.objectFlags };
+			}
+
+			void RegisterShading(const Api::ShadingContribution& a_shading) override
+			{
+				if (a_shading.name.empty() || !a_shading.propertyFlags || !a_shading.derive)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shading contribution", feature));
+				lists.shadingContributions.push_back({ std::string(a_shading.name), a_shading.propertyFlags, a_shading.derive });
+			}
+
+			Api::FrameGlobalsSlot RegisterFrameGlobals(const Api::FrameGlobalsContribution& a_globals) override
+			{
+				if (a_globals.name.empty() || !a_globals.floats || !a_globals.capture)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete frame-globals contribution", feature));
+				if (lists.frameGlobalsFloats + a_globals.floats > kFrameGlobalsFloats)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame globals {} are past kFrameGlobalsFloats: grow it first", feature, a_globals.name));
+				const std::uint32_t first = lists.frameGlobalsFloats;
+				lists.frameGlobals.push_back({ std::string(a_globals.name), first, a_globals.floats, a_globals.capture });
+				lists.frameGlobalsFloats += a_globals.floats;
+				return { first };
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -157,4 +215,9 @@ namespace DCLF::Extensions
 	std::span<const FrameBindingEntry> RegisteredFrameBindings() { return Registered().frameBindings; }
 	std::span<const ReportLinesEntry> RegisteredReportLines() { return Registered().reportLines; }
 	std::span<const Api::StandInObserver> RegisteredStandInObservers() { return Registered().standInObservers; }
+	std::span<const TableFamilyEntry> RegisteredTableFamilies() { return Registered().tableFamilies; }
+	std::span<const CoordinatorComponentEntry> RegisteredCoordinatorComponents() { return Registered().coordinatorComponents; }
+	const TechniqueEntries& RegisteredTechniques() { return Registered().techniques; }
+	std::span<const ShadingContributionEntry> RegisteredShadingContributions() { return Registered().shadingContributions; }
+	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals() { return Registered().frameGlobals; }
 }

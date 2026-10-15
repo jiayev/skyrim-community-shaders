@@ -97,8 +97,8 @@ namespace DCLF::Scene
 			bool faceWaiting = false;
 			// A face shape's head, held from the batch's pins at its attach (the face snapshot record's reference is a copy).
 			RE::NiPointer<RE::BSFaceGenNiNode> faceHeadRef;
-			// Its property's fade node, held from the naming event's pins: tree and fade-root owners are copied from it, never made from a
-			// key.
+			// Its property's fade node, held from the naming event's pins: fade-root owners (and the components': Features/TreeWind's tree
+			// owners) are copied from it, never made from a key.
 			RE::NiPointer<RE::NiAVObject> fadeNodeRef;
 			const void* fadeNodeRequested = nullptr;  // the fade node key asked of the render thread (FadeNodeRequest), until answered
 			// Its LOD gate (token; 0: none) and side; held out after its gate flipped (until its detach); whether any gate ever tagged it.

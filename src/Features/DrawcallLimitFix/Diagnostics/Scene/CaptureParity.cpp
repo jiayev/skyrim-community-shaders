@@ -3,6 +3,7 @@
 
 #include "CaptureParity.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
@@ -18,6 +19,7 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 
@@ -75,10 +77,26 @@ namespace DCLF
 			return bits;
 		}
 
-		/** @brief A tree whose TreeParams and WindTimers TreeWindCS writes (a member listed under its tree). */
-		bool GpuTreeWind(const SceneTables& a_tables, std::uint32_t a_object)
+		/** @brief The record flags of technique 12's objects, whose TreeParams and WindTimers are per object (its contribution's). */
+		std::uint32_t PerObjectWindFlags()
 		{
-			return Scene::FrameView::Get().IsMember(static_cast<std::int32_t>(a_object)) && a_object < a_tables.objectTree.size() && a_tables.objectTree[a_object] != kNoTree;
+			static const std::uint32_t flags = Extensions::TechniqueObjectFlags(Extensions::RegisteredTechniques(),
+				static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderTechniques::TreeAnim));
+			return flags;
+		}
+
+		/**
+		 * @brief A member whose TreeParams and WindTimers a feature's GPU stage writes: its record carries a table family's reference
+		 * (Api::TableFamily::recordWord; Features/TreeWind's: a member listed under its tree, whose wind TreeWindCS writes).
+		 */
+		bool GpuWrittenWind(const SceneTables& a_tables, std::uint32_t a_object)
+		{
+			if (!Scene::FrameView::Get().IsMember(static_cast<std::int32_t>(a_object)))
+				return false;
+			for (const auto& family : a_tables.families.All())
+				if (family.recordWord != ~0u && family.RowOf(a_object) != Extensions::kNoFamilyRow)
+					return true;
+			return false;
 		}
 
 		std::string Describe(const RE::BSGeometry* a_geometry)
@@ -341,10 +359,10 @@ namespace DCLF
 		compareContext = fmt::format(" (pipeline descriptor {:08X}, skinned object {})", tables.pipelines[object.pipelineIndex].passDescriptor,
 			(object.flags & kObjectSkinned) != 0);
 		// TreeParams and WindTimers: SetupGeometry writes them for technique 12 only (otherwise leftover, unread), and a member
-		// tree's come from TreeWindCS on the GPU (tree wind parity checks those). World and PreviousWorld: SetupGeometry skips them
+		// tree's come from a feature's GPU stage (TreeWindCS: its own parity checks those). World and PreviousWorld: SetupGeometry skips them
 		// for skinned objects (engine notes); the SKINNED vertex shader positions from the palette.
 		const std::uint64_t vsMask = kVSGroups[kPerGeometry] &
-		                             ((object.flags & kObjectTreeAnim) && !GpuTreeWind(tables, a_objectIndex) ? ~0ull : ~((1ull << kVSTreeParams) | (1ull << kVSWindTimers))) &
+		                             ((object.flags & PerObjectWindFlags()) && !GpuWrittenWind(tables, a_objectIndex) ? ~0ull : ~((1ull << kVSTreeParams) | (1ull << kVSWindTimers))) &
 		                             ((object.flags & kObjectSkinned) ? ~((1ull << kVSWorld) | (1ull << kVSPreviousWorld)) : ~0ull);
 		if (vs)
 			ok &= CompareBlock(a_geometry, "VS PerGeometry", expected.vs, vsLayout, vs->constantTable.data(),

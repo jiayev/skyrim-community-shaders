@@ -4,14 +4,17 @@
 // Api/, standard and ORG types; the contexts its callbacks receive are Core's (Core/Extensions/), which the features inside DCLF include.
 
 #include "Features/DrawcallLimitFix/Api/Commits.h"
+#include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Api/GpuStages.h"
+#include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Api/Payload.h"
 #include "Features/DrawcallLimitFix/Api/Reports.h"
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
+#include "Features/DrawcallLimitFix/Api/TableFamilies.h"
 
 #include <string_view>
 
@@ -42,6 +45,14 @@ namespace DCLF::Api
 		virtual void RegisterReportLines(const ReportLines& a_lines) = 0;
 		/** @brief Whether the primary cull is installed: false, and the observer is never called, without it (its engine hooks failed). */
 		virtual bool RegisterStandInObserver(const StandInObserver& a_observer) = 0;
+		/** @brief Fails the install past Extensions::kTableFamilySlots families. */
+		virtual TableFamilyId RegisterTableFamily(const TableFamily& a_family) = 0;
+		virtual CoordinatorComponentId RegisterCoordinatorComponent(const CoordinatorComponent& a_component) = 0;
+		/** @brief Fails the install for a technique another feature has, past Extensions::kTechniqueSlots, or without a registered toggle. */
+		virtual void RegisterTechnique(const TechniqueContribution& a_technique) = 0;
+		virtual void RegisterShading(const ShadingContribution& a_shading) = 0;
+		/** @brief Fails the install past Extensions::kFrameGlobalsFloats floats in all. */
+		virtual FrameGlobalsSlot RegisterFrameGlobals(const FrameGlobalsContribution& a_globals) = 0;
 
 	protected:
 		~InstallContext() = default;

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/MaterialBindings.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/SharedBindings.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
@@ -91,6 +92,7 @@ namespace DCLF
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Joins.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Residents.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Fades.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Components.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/ShadowSets.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/LodGates.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Set.h"
@@ -134,6 +136,7 @@ namespace DCLF
 		private CoordinatorJoins,
 		private CoordinatorResidents,
 		private CoordinatorFades,
+		private CoordinatorComponents,
 		private CoordinatorShadowSets,
 		private CoordinatorLodGates,
 		private CoordinatorSet,
@@ -142,6 +145,8 @@ namespace DCLF
 	{
 		// Diagnostics/Scene and the scene reports read the private state through it.
 		friend struct Diagnostics::SceneView;
+		// The features' coordinator components reach its services through their context (Components.cpp).
+		friend class Api::CoordinatorComponentContext;
 
 	public:
 		using Tables = SceneTables;
@@ -330,7 +335,9 @@ namespace DCLF
 			// Object slots replayed from the change log against slots; whole copies (a new snapshot, or one the log no longer reaches).
 			std::uint64_t objectsReplayed = 0, objectSlots = 0, wholeCopies = 0;
 			std::uint64_t geometriesReplayed = 0, geometrySlots = 0, geometryWholeCopies = 0;
-			std::uint64_t treesKept = 0, fadeRootsKept = 0;  // publications that kept the family (its stamp stood)
+			// Publications that kept the family (its stamp stood): the table families' by registration, the fade roots'.
+			std::array<std::uint64_t, Extensions::kTableFamilySlots> familiesKept{};
+			std::uint64_t fadeRootsKept = 0;
 			std::size_t pool = 0;
 			// Lookups per publication (PublishLookups): copied, or the last shared again unchanged; chunks rewritten since the last copy;
 			// copy time.
@@ -479,7 +486,6 @@ namespace DCLF
 		using PlacementPlan = DCLF::PlacementPlan;
 		using ShadingItem = DCLF::ShadingItem;
 		using FadeSeedItem = DCLF::FadeSeedItem;
-		using TreeSeedItem = DCLF::TreeSeedItem;
 		using WetnessValue = DCLF::WetnessValue;
 		/** @brief Diagnostics (inline passes): the plan the last walk made, not yet published. */
 		const PlacementPlan* PeekPlacementPlan() const { return placementPlanReady.get(); }
@@ -1209,7 +1215,7 @@ namespace DCLF
 		void KeepResidentsAlive();
 		void NoteResidentTouched(std::uint32_t a_slot) { residentsTouched.push_back(a_slot); }
 
-		// The fade and tree roots: State/Fades.h (CoordinatorFades).
+		// The fade roots: State/Fades.h (CoordinatorFades).
 		/** @brief ApplyBatch: the fade node answers into their entries (Tracked::fadeNodeRef), each entry rewritten. */
 		void ApplyFadeNodeAnswers();
 		/** @brief Early in a full pass: applies the fade root posts (Channels::fadeRootsSentPosted, fadeOwnedPosted). */
@@ -1217,15 +1223,12 @@ namespace DCLF
 		FadeRootStatic FadeRootFromMirror(const void* a_node);
 		/** @brief A new generation for a root's row, its seed row toggled and requested. */
 		void RequestFadeSeed(std::uint32_t a_root, FadeRootStatic& a_row);
-		/** @brief A member's tree slot (Tables::objectTree): taken for a tree member, given back otherwise or when it leaves. */
-		void ListTree(std::uint32_t a_slot);
-		void UnlistTree(std::uint32_t a_slot);
 		/** @brief A member's fade root (Tables::fadeRoots): listed when it joins, released with its last member. */
 		void ListFadeRoot(std::uint32_t a_slot);
 		void UnlistFadeRoot(std::uint32_t a_slot);
 		/**
-		 * @brief The reference a newly listed tree or fade root owner is copied from: the slot's entry's fade node if it is a_node, else
-		 * null (not listed: fadeRootsUnowned).
+		 * @brief The reference a newly listed fade root owner (or a component's: Features/TreeWind's trees) is copied from: the slot's
+		 * entry's fade node if it is a_node, else null (not listed: fadeRootsUnowned).
 		 */
 		RE::NiPointer<RE::NiAVObject> HeldFadeNode(std::uint32_t a_slot, const void* a_node);
 		/**
@@ -1242,6 +1245,19 @@ namespace DCLF
 		 * watch: its dependents' shadow verdicts read its fade from elsewhere.
 		 */
 		void MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn);
+
+		// The features' components: State/Components.h (CoordinatorComponents). Each call runs every registered component's hook at
+		// the coordinator's residency point (Api::CoordinatorComponent), in registration order.
+		/** @brief a_slot is resident (MarkResidentSlot; a fade node answer for a resident: ApplyFadeNodeAnswers). */
+		void ComponentsResident(std::uint32_t a_slot);
+		/** @brief a_slot's residency ended (DropResidentSlot, EndAllResidency). */
+		void ComponentsLeft(std::uint32_t a_slot);
+		/** @brief KeepResidentsAlive's recount: a_rebuild, every resident counted again; otherwise the touched slots (sorted, unique). */
+		void ComponentsRecount(bool a_rebuild, std::span<const std::uint32_t> a_touched);
+		/** @brief ResetSlotTables, before the tables are cleared. */
+		void ComponentsReset();
+		/** @brief Component a_component's state, the components made first when they are not (scene lane). */
+		const std::shared_ptr<void>& ComponentState(std::uint32_t a_component);
 
 		// The shadow sets: State/ShadowSets.h (CoordinatorShadowSets).
 		ShadowInputs ShadowInputsOf(std::uint32_t a_slot) const;

@@ -154,7 +154,8 @@ namespace DCLF
 
 	/**
 	 * @brief A fade root whose seed FrameValues samples (FadeState::StaticOf) in the frame that first draws its generation, into
-	 * its seed row (FadeSeedRow): listed, reseeded by a placement snap, or owned. Holds the node.
+	 * its seed row (FadeSeedRow): listed, reseeded by a placement snap, or owned; or a node a coordinator component listed, whose seed
+	 * its feature takes at the frame's start (Api::CoordinatorComponentContext::RequestSeed; root: the component's slot). Holds the node.
 	 */
 	struct FadeSeedItem
 	{
@@ -163,9 +164,6 @@ namespace DCLF
 		std::uint32_t generation = 0;
 		std::uint32_t row = 0;
 	};
-
-	/** @brief A listed tree node whose values FrameValues' tree seeds take at the frame's start (row: 2 * slot + seedOdd). */
-	using TreeSeedItem = FadeSeedItem;
 
 	/** @brief One actor-owned slot's wetness, as the frame's start captured it (Skin::GetWetness). */
 	struct WetnessValue
@@ -197,7 +195,7 @@ namespace DCLF
 	 * @brief What one publication's passes made for the frame and the frame's start takes, carried by the publication log in
 	 * the publication's order: the main claims' changes against the publication before it (taken up to the installed one), and the
 	 * frame inputs (taken up to the newest one taken): the walks' placement plans, the slots named for their shading, the fade and
-	 * tree seed requests, the switches the walks applied (switchResync: PrimaryCull reads them all), the import leases of the geometry
+	 * components' seed requests, the switches the walks applied (switchResync: PrimaryCull reads them all), the import leases of the geometry
 	 * slots cleared, and the actors' wetness membership changes.
 	 */
 	struct PublicationDeltas
@@ -211,7 +209,8 @@ namespace DCLF
 		std::vector<const RE::BSGeometry*> joined, left;
 		std::vector<std::shared_ptr<const PlacementPlan>> plans;
 		std::vector<ShadingItem> shading;
-		std::vector<FadeSeedItem> fadeSeeds, treeSeeds;
+		std::vector<FadeSeedItem> fadeSeeds;
+		std::vector<std::vector<FadeSeedItem>> componentSeeds;  // by coordinator component (Api::CoordinatorComponentId)
 		std::vector<const RE::NiAVObject*> switches;
 		bool switchResync = false;
 		std::vector<std::shared_ptr<const void>> retiredImports;

@@ -527,7 +527,7 @@ namespace DCLF::Scene
 			return keys;
 		keys.property = record->property;
 		keys.layer = record->Layer();
-		// The property's fade node, for the tree and fade-root owners (an attach's capture pins every ancestor).
+		// The property's fade node, for the fade-root owners and the components' (an attach's capture pins every ancestor).
 		const auto* property = record->property ? mirror.Property(record->property) : nullptr;
 		keys.fadeNode = property ? property->fadeNode : nullptr;
 		// The engine's "no fade node" sentinel is no root.

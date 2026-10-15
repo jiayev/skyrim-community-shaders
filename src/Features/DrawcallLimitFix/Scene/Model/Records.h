@@ -1,7 +1,7 @@
 #pragma once
 
-// The scene's record types and their GPU layouts: object records and flags, geometry buffers, pipeline keys and raster flags, the
-// trees' listing, fade roots, the fade write-back and the indirect draw sequence. Written by the coordinator into SceneTables, read
+// The scene's record types and their GPU layouts: object records and flags, geometry buffers, pipeline keys and raster flags, fade
+// roots, the fade write-back and the indirect draw sequence. Written by the coordinator into SceneTables, read
 // by the render thread's builds and by the shaders, whose HLSL layouts must match these.
 
 #include <algorithm>
@@ -38,9 +38,7 @@ namespace DCLF
 		// A culling candidate only: materialIndex and pipelineIndex mean nothing; check before indexing. The tables may be empty
 		// (first frame after a teleport), so even index 0 is unsafe.
 		kObjectNoBindings = 1u << 5,
-		// Technique 12: TreeParams and WindTimers are per object. For anything else they are the pipeline template's, which a
-		// zeroed per-object copy would clobber.
-		kObjectTreeAnim = 1u << 6,
+		// 1u << 6: a feature's (kFeatureObjectFlags).
 		// CS_DCLF_DECALS. Never an occluder: not in the depth segment, drawn by the colour segment's second pass after the opaque
 		// draws. Group (bits 20-21): 1 = accumulation hint 2 (opaque, geometry group 3, first), 3 = multi-index layer (hint 12,
 		// group 2, second), 2 = hint 3 (blended, group 4, last); see kDecalDrawOrder.
@@ -87,6 +85,14 @@ namespace DCLF
 		// engine's blended point (FUN_1414b39d0). Key: kRasterForward.
 		kObjectForward = 1u << 31,
 	};
+
+	/**
+	 * @brief The object flags the features' technique contributions own (Api::TechniqueContribution::objectFlags), each bit declared in
+	 * its feature's header and checked by Features/Manifest.cpp against Core's and each other's: Features/TreeWind's kObjectTreeAnim
+	 * (technique 12, whose TreeParams and WindTimers are per object; for anything else they are the pipeline template's, which a zeroed
+	 * per-object copy would clobber).
+	 */
+	inline constexpr std::uint32_t kFeatureObjectFlags = 1u << 6;
 
 	/** @brief The high bit of a draw's object-index word: the draw misses every sun cascade (kObjectSunTest). */
 	inline constexpr std::uint32_t kObjectSunMiss = 1u << 31;
@@ -332,46 +338,12 @@ namespace DCLF
 	struct ObjectTreeAnim
 	{
 		float treeParams[4]{};   // 0, wind magnitude, amplitude, leaf frequency
-		float windTimers[4]{};   // wind timer, previous wind timer, then in the GPU record its tree slot and generation (bits)
+		// Wind timer, previous wind timer; zw in the GPU record a table family's reference (Api::TableFamily::recordWord: Features/
+		// TreeWind's tree slot and generation, as bits).
+		float windTimers[4]{};
 	};
 	static_assert(sizeof(ObjectTreeAnim) == 32);
 
-	/**
-	 * @brief A tree's static row: what tree wind (Features/TreeWind, TreeWindCS.hlsl; drawcall-limit-fix.md, "Tree wind on the GPU")
-	 * clocks a listed BSTreeNode from. The scene's tables list the trees (SceneTables' tree family, the coordinator's ListTree); the
-	 * feature owns the rest of the wind (its clock rows, seeds, pass and wind rows).
-	 *
-	 * The engine's tree manager (FUN_1404381e0, from Main::Update) advances a BSTreeNode's timer (+0x164) by the frame's
-	 * seconds, measures its squared distance to the camera (+0x158), and within its range (manager +0x80) takes the gust
-	 * amplitude (+0x15C) from the timer: 0.25 * sum over k in {1,3,5,7} of sin(k * pi * manager+0x78 * timer), times the
-	 * model's scale (model +0xB0). SetupGeometry reads them and keeps the timer as the previous one (+0x168). For members
-	 * TreeWindCS does it all: per node a TreeStatic row (CPU, when listed) and a clock row (GPU, reseeded on a new
-	 * generation); per member a TreeObject, whose record's TreeParams and WindTimers the pass writes.
-	 */
-	struct TreeStatic
-	{
-		float position[3]{};       // the node's world translate (+0xA0)
-		float leafFrequency = 1.0f;  // +0x160
-		float modelAmplitude = 0.0f; // the model's +0xB0
-		float timer = 0.0f;          // the node's clock when listed: +0x164, +0x168, +0x15C
-		float previousTimer = 0.0f;
-		float amplitude = 1.0f;
-		std::uint32_t generation = 0;  // new for every listing: the clock row takes the values above again
-		std::uint32_t animated = 0;    // a model is attached (the manager advances only such a node)
-		// Which of the slot's two seed rows (FrameValues' tree seeds, 2 * slot + this) holds its generation's: the values above
-		// are the seed's (the node at frame start); the coordinator's row holds the generation and this.
-		std::uint32_t seedOdd = 0;
-		std::uint32_t padding = 0;
-	};
-	static_assert(sizeof(TreeStatic) == 48);
-
-	// A member drawing under a tree node: its object slot and the node's tree slot (kNodelessTree: the engine's defaults).
-	struct TreeObject
-	{
-		std::uint32_t object, tree;
-	};
-	inline constexpr std::uint32_t kNoTree = ~0u;
-	inline constexpr std::uint32_t kNodelessTree = ~0u - 1;
 
 	/**
 	 * @brief The occlusion maps DCLF draws from its tables, each a view of the precipitation accumulator (render mode 0x1C) the

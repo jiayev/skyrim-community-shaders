@@ -5,17 +5,26 @@
 
 namespace DCLF::Draws
 {
+	/** @brief Every table family's rows unbounded (SceneFit::familyRows before a fit bounds them). */
+	inline constexpr std::array<std::uint32_t, Extensions::kTableFamilySlots> kUnboundedFamilyRows = [] {
+		std::array<std::uint32_t, Extensions::kTableFamilySlots> rows{};
+		rows.fill(~0u);
+		return rows;
+	}();
+
 	/**
 	 * @brief What the named versions of the scene's buffers hold (the per-object buffers' objects): an object past them - its per-object
-	 * rows, its tree or fade root rows, its face positions - waits for the requirement that grows them, drawing nothing and culling
-	 * nothing (ObjectFits). The payload's parts are not among them: it holds every row of its publication.
+	 * rows, its table families' or fade root rows, its face positions - waits for the requirement that grows them, drawing nothing and
+	 * culling nothing (ObjectFits). The payload's parts are not among them: it holds every row of its publication.
 	 */
 	struct SceneFit
 	{
 		std::uint32_t objects = ~0u, faceVertices = ~0u;
-		// The tree wind entries (Features/TreeWind's scene resources: their fit) and fade root rows a draw reads by its slot (none:
-		// unbounded).
-		std::uint32_t trees = ~0u, fadeRoots = ~0u;
+		// The fade root rows a draw reads by its slot (none: unbounded).
+		std::uint32_t fadeRoots = ~0u;
+		// The table families' rows a draw reads by its reference, by registration (Extensions::TableFamilyColumns::objectRow): what the
+		// features' scene resources hold of them (their fit: Features/TreeWind's wind entries), unbounded without one.
+		std::array<std::uint32_t, Extensions::kTableFamilySlots> familyRows = kUnboundedFamilyRows;
 		bool operator==(const SceneFit&) const = default;
 	};
 

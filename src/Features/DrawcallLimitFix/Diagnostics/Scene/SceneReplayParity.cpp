@@ -6,12 +6,22 @@
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 
 namespace DCLF::Diagnostics
 {
 	namespace
 	{
 		using V = SceneView;
+
+		/** @brief The kept table families (a_kept, a bit by registration) against the tables' (Extensions::TableFamilies::Same). */
+		void CheckKeptFamilies(std::uint32_t a_kept, const SceneTables& a_snapshot, const SceneTables& a_tables, std::uint64_t& a_differ)
+		{
+			const auto families = Extensions::RegisteredTableFamilies();
+			for (std::uint32_t f = 0; f < families.size(); ++f)
+				if (((a_kept >> f) & 1u) && !a_snapshot.families.Same(f, a_tables.families) && a_differ++ == 0)
+					logger::error("[DCLF] tables replay (6d): the {} were kept (stamp {}) but differ from the tables'", families[f].name, a_tables.families.StampOf(f));
+		}
 
 		void OnTablesReplayed(const TablesReplayed& a_event)
 		{
@@ -24,7 +34,7 @@ namespace DCLF::Diagnostics
 			const std::size_t objectSlots = tables.objects.size();
 			const std::size_t geometrySlots = tables.geometries.size();
 			const std::uint64_t position = a_event.position, geometryPosition = a_event.geometryPosition;
-			const bool keepTrees = a_event.keepTrees, keepFadeRoots = a_event.keepFadeRoots, keepConstants = a_event.keepConstants;
+			const bool keepFadeRoots = a_event.keepFadeRoots, keepConstants = a_event.keepConstants;
 				++replay.parityChecks;
 				replay.parityMaterials += slots;
 				for (std::size_t slot = 0; slot < slots; ++slot)
@@ -76,8 +86,7 @@ namespace DCLF::Diagnostics
 					a_family(snapshot, tables, [&](auto& a_x, auto& a_y) { same = same && sameMember(a_x, a_y); });
 					return same;
 				};
-				if (keepTrees && !sameFamily([](auto& a_x, auto& a_y, auto&& a_member) { SceneTables::TreeFamily(a_x, a_y, a_member); }) && replay.parityFamiliesDiffer++ == 0)
-					logger::error("[DCLF] tables replay (6d): the trees were kept (stamp {}) but differ from the tables'", tables.treesStamp);
+				CheckKeptFamilies(a_event.keptFamilies, snapshot, tables, replay.parityFamiliesDiffer);
 				if (keepConstants) {
 					bool same = snapshot.pipelineConstants.size() == tables.pipelineConstants.size() && snapshot.techniqueConstants.size() == tables.techniqueConstants.size();
 					for (std::size_t p = 0; same && p < tables.pipelineConstants.size(); ++p)
