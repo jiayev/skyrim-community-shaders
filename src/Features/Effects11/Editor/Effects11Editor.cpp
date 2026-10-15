@@ -75,6 +75,7 @@ namespace
 		{ "CLOUDSHADOWS", Group::Sky },
 		{ "VOLUMETRICFOG", Group::Atmosphere },
 		{ "VOLUMETRICRAYS", Group::Atmosphere },
+		{ "RAYS", Group::Atmosphere },
 		{ "GAMEVOLUMETRICRAYS", Group::Atmosphere },
 		{ "ADAPTATION", Group::Camera },
 		{ "DEPTHOFFIELD", Group::Camera },
@@ -151,9 +152,11 @@ namespace
 		if (a_category == "CLOUDSHADOWS")
 			return { T("feature.effects11.category.cloudshadows", "Cloud Shadows"), T("feature.effects11.category.cloudshadows_desc", "Strength of the shadows clouds cast on the ground.") };
 		if (a_category == "VOLUMETRICFOG")
-			return { T("feature.effects11.category.volumetricfog", "Volumetric Fog"), T("feature.effects11.category.volumetricfog_desc", "Brightness and color of volumetric fog.") };
+			return { T("feature.effects11.category.volumetricfog", "Volumetric Fog"), T("feature.effects11.category.volumetricfog_desc", "Brightness, color, opacity and shadowing of fog volume effects.") };
 		if (a_category == "VOLUMETRICRAYS")
 			return { T("feature.effects11.category.volumetricrays", "Volumetric Rays"), T("feature.effects11.category.volumetricrays_desc", "Effects 11 sun rays.") };
+		if (a_category == "RAYS")
+			return { T("feature.effects11.category.rays", "Sun Rays"), T("feature.effects11.category.rays_desc", "Screen-space light shafts streaming from the sun, or from a moon at night.") };
 		if (a_category == "GAMEVOLUMETRICRAYS")
 			return { T("feature.effects11.category.gamevolumetricrays", "Game Volumetric Rays"), T("feature.effects11.category.gamevolumetricrays_desc", "Adjustments to the game's own god rays.") };
 		if (a_category == "ADAPTATION")
