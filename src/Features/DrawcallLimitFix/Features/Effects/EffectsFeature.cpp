@@ -1,5 +1,5 @@
 // Effects: the effect-shader objects DCLF draws through the Effect port. Its switches and the effects toggle, the effect and opaque effect
-// object classes' contributions, the report lines and the parity.
+// object classes' contributions, the Effect port's registrations, the report lines and the parity.
 
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -33,6 +33,10 @@ namespace DCLF::Features::Effects
 			// only while the effects are on; the decals' toggle is its own test).
 			if (SwitchValue(opaque) != "0")
 				a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::OpaqueEffect, .toggle = effectsToggle });
+			// The Effect port, after its class: the material port (kind 1), its program family, its frame constant rows and soft depth.
+			RegisterPort(a_context);
+			RegisterPrograms(a_context);
+			RegisterFrame(a_context);
 			RegisterReport(a_context);
 			// CS_DCLF_SET_PARITY: the members' withheld Lighting-variant passes.
 			if (Diagnostics::Observe().claims)

@@ -1,15 +1,14 @@
 #pragma once
 
-// The constant records DCLF evaluates in place of the engine's setup functions: ConstantBlock and the Lighting / Effect variable
-// layouts, MaterialRecord (SetupMaterial), TechniqueConstants (SetupTechnique, a pure function of TechniqueInputs the render thread
-// samples at the frame's start) and GeometryConstants (SetupGeometry).
+// The constant records DCLF evaluates in place of the engine's setup functions: ConstantBlock and the Lighting variable layouts (a
+// material port's are its space's: Extensions::MaterialSpaceOf), MaterialRecord (SetupMaterial), TechniqueConstants (SetupTechnique, a
+// pure function of TechniqueInputs the render thread samples at the frame's start) and GeometryConstants (SetupGeometry).
 
 #include <array>
 #include <cstdint>
 #include <cstring>
 
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 
 struct ID3D11ShaderResourceView;
@@ -60,9 +59,6 @@ namespace DCLF
 	 */
 	const StageLayout& LightingVSLayout();
 	const StageLayout& LightingPSLayout();
-	/** @brief The same for the Effect shader's variables (EffectConstants.h): an effect MaterialRecord's blocks (the Effect port's space). */
-	const StageLayout& EffectVSLayout();
-	const StageLayout& EffectPSLayout();
 
 	/** @brief One constant group's values in StageLayout order; unwritten components hold kUnwrittenBits. */
 	struct ConstantBlock
@@ -91,7 +87,7 @@ namespace DCLF
 		// kFeatureMaterialRegisters: null where the feature binds nothing for the material (it leaves the previous
 		// draw's binding; the draws then take the frame's).
 		std::array<ID3D11ShaderResourceView*, kFeatureMaterialTextures> featureTextures{};
-		// Which shader's SetupMaterial made it (EffectConstants.h, kMaterialKind*): the variable space of vs and ps.
+		// Which shader's SetupMaterial made it (kMaterialKindLighting, or its material port's kind): the variable space of vs and ps.
 		std::uint8_t kind = kMaterialKindLighting;
 
 		/**

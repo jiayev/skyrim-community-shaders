@@ -1,8 +1,8 @@
 #pragma once
 
 // The material port contract's Core side (Api/ObjectContributors.h, section 4): the ports by kind, resolved once at InstallFeatures
-// (ResolveMaterialPorts) from Core's Lighting (kind 0: CoreLightingPort, its space and rules alone), Core's built-in ports (CoreMaterialPorts,
-// kinds from 1 in their order) and the features' registrations; what each callback is handed; and the calls Core makes per event
+// (ResolveMaterialPorts) from Core's Lighting (kind 0: CoreLightingPort, its space and rules alone) and the features' registrations (kinds
+// from 1 in their order: Features/Effects' Effect port is 1); what each callback is handed; and the calls Core makes per event
 // (CapturePort, DerivePort, EvaluatePort, SamplePortShading, PortVariants). Where Core decides it reads the table as data (PortOfRtti,
 // PortOfVtable, PortOn, PortRules, MaterialSpaceOf), never calling a port per object per frame.
 
@@ -51,6 +51,9 @@ namespace DCLF
 		std::array<std::uint8_t, 64> offset;
 		std::array<std::uint8_t, 64> size;
 	};
+	/** @brief A MaterialRecord's kind (MaterialRecord::kind, LightingDescriptors::port) for Core's Lighting; a port's is its kind. */
+	inline constexpr std::uint8_t kMaterialKindLighting = 0;
+
 	/** @brief Pure: the layout of a_count variables, 4 floats each but a_sized's (variable, floats), a_scratch's in the shared region. */
 	StageLayout MakeStageLayout(std::uint32_t a_count, std::span<const std::pair<std::uint32_t, std::uint32_t>> a_sized, std::span<const std::uint32_t> a_scratch);
 }
@@ -141,11 +144,6 @@ namespace DCLF::Extensions
 
 	/** @brief Core's Lighting as kind 0's entry: its constant space and rules, no callbacks (Scene/Ports/ConstantEvaluator.cpp). */
 	const Api::MaterialPortContribution& CoreLightingPort();
-	/**
-	 * @brief Core's own ports, registered ahead of the features' (Registry's InstallFeatures), kinds from 1 in their order: the Effect port,
-	 * until Features/Effects registers it (Scene/Ports/MaterialPortEffect.cpp).
-	 */
-	std::span<const Api::MaterialPortContribution> CoreMaterialPorts();
 	/** @brief Main thread, the end of InstallFeatures: the entries from the registrations by kind (a_byKind[0] Lighting's), a_count of them. */
 	void ResolveMaterialPorts(std::span<const Api::MaterialPortContribution> a_byKind, std::size_t a_count);
 	/** @brief Any thread, after InstallFeatures (all empty before): the entries, by kind. */

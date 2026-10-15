@@ -18,7 +18,6 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 
 // The engine area's report lines (Engine.h), but the primary cull's (EnginePrimaryCull.cpp).

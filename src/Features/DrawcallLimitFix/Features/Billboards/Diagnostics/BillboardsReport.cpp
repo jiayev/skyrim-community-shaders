@@ -2,6 +2,7 @@
 // engine's turns against DCLF's.
 
 #include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
@@ -14,14 +15,17 @@ namespace DCLF::Features::Billboards
 	{
 		void Lines(std::string& a_text)
 		{
-			// The billboard members in the installed tables: objects of an effect key with a billboard mode.
+			// The billboard members in the installed tables: objects of a family's key with a billboard mode (its turned key bits: the Effect
+			// family's).
 			std::uint32_t members = 0;
 			{
 				const auto& tables = Scene::FrameView::Get().GetTables();
 				for (const auto& object : tables.objects) {
 					if ((object.flags & (kObjectFree | kObjectNoBindings)) || !(object.flags & kObjectMember) || object.pipelineIndex >= tables.pipelines.size())
 						continue;
-					members += RasterEffectBillboard(tables.pipelines[object.pipelineIndex].rasterFlags) ? 1u : 0u;
+					const std::uint32_t rasterFlags = tables.pipelines[object.pipelineIndex].rasterFlags;
+					const auto& rules = Extensions::FamilyRules(rasterFlags);
+					members += rules.turnedKeyBits && ((rasterFlags >> rules.spareShift) & kProgramFamilySpareBits) ? 1u : 0u;
 				}
 			}
 			const bool on = ActiveToggles().On(Toggle());

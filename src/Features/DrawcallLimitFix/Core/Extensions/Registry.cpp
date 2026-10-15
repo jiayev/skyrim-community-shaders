@@ -65,13 +65,13 @@ namespace DCLF::Extensions
 			Api::VertexStreamContribution vertexStream{};
 			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
 			std::array<Api::PaletteRowsContribution, Api::kPaletteRowsClasses> paletteRows{};
-			// By kind: Lighting's (0), then Core's built-in ports and the features', in order (materialPorts first unset). Resolved at the
-			// end (ResolveMaterialPorts).
+			// By kind: Lighting's (0), then the features' ports, in order (materialPorts first unset). Resolved at the end
+			// (ResolveMaterialPorts).
 			std::array<Api::MaterialPortContribution, kMaterialKinds> materialPorts{};
 			std::size_t materialPortCount = 0;
-			// By family: its contribution (Count: none), Core's built-ins first. Resolved at the end (ResolveProgramFamilies).
+			// By family: its contribution (Count: none). Resolved at the end (ResolveProgramFamilies).
 			std::array<Api::ProgramFamilyContribution, kProgramFamilies> programFamilies{};
-			// Core's built-ins first; the rows sorted by row at the end. By texture register: its frame texture's index.
+			// In registration order; the rows sorted by row at the end. By texture register: its frame texture's index.
 			std::vector<FrameConstantRowEntry> frameConstantRows;
 			std::vector<FrameTextureEntry> frameTextures;
 			std::array<std::uint8_t, kTextureRegisters> frameTextureIndices = [] {
@@ -104,16 +104,16 @@ namespace DCLF::Extensions
 		}
 
 		/**
-		 * @brief Adds a_port at the next kind, refused (a_who's) for no property RTTI, material vtable or callbacks, Lighting's or no shader
-		 * type, a space past kMaxStageVariables or with names not one a variable, a feature's class with no registered toggle (Core's
-		 * built-ins name one a feature registers later), a shader type another port has, or a kind past kMaterialKinds.
+		 * @brief Adds a_port at the next kind, which it returns, refused (a_who's) for no property RTTI, material vtable or callbacks,
+		 * Lighting's or no shader type, a space past kMaxStageVariables or with names not one a variable, a class with no registered toggle,
+		 * a shader type another port has, or a kind past kMaterialKinds.
 		 */
-		void AddMaterialPort(Lists& a_lists, std::string_view a_who, const Api::MaterialPortContribution& a_port, bool a_builtIn)
+		std::uint8_t AddMaterialPort(Lists& a_lists, std::string_view a_who, const Api::MaterialPortContribution& a_port)
 		{
 			const auto spaceValid = [](const Api::MaterialStageSpace& a_stage) {
 				return a_stage.variables <= kMaxStageVariables && (a_stage.names.empty() || a_stage.names.size() == a_stage.variables);
 			};
-			const bool classValid = a_port.objectClass < Api::ObjectClass::Count && (a_builtIn || a_lists.objectClasses[static_cast<std::size_t>(a_port.objectClass)]);
+			const bool classValid = a_port.objectClass < Api::ObjectClass::Count && a_lists.objectClasses[static_cast<std::size_t>(a_port.objectClass)];
 			if (a_port.shaderType == RE::BSShader::Type::Lighting || a_port.shaderType >= RE::BSShader::Type::Total || !classValid || !a_port.propertyRtti ||
 				!a_port.materialVtable || !a_port.capture || !a_port.derive || !a_port.evaluate || !a_port.shading || !spaceValid(a_port.vs) || !spaceValid(a_port.ps))
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete material port", a_who));
@@ -123,7 +123,8 @@ namespace DCLF::Extensions
 						static_cast<std::uint32_t>(a_port.shaderType)));
 			if (a_lists.materialPortCount >= kMaterialKinds)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material port is one past kMaterialKinds: grow it first", a_who));
-			a_lists.materialPorts[a_lists.materialPortCount++] = a_port;
+			a_lists.materialPorts[a_lists.materialPortCount] = a_port;
+			return static_cast<std::uint8_t>(a_lists.materialPortCount++);
 		}
 
 		/**
@@ -474,7 +475,7 @@ namespace DCLF::Extensions
 				entry = a_rows;
 			}
 
-			void RegisterMaterialPort(const Api::MaterialPortContribution& a_port) override { AddMaterialPort(lists, feature, a_port, false); }
+			std::uint8_t RegisterMaterialPort(const Api::MaterialPortContribution& a_port) override { return AddMaterialPort(lists, feature, a_port); }
 			void RegisterProgramFamily(const Api::ProgramFamilyContribution& a_family) override { AddProgramFamily(lists, feature, a_family); }
 			void RegisterFrameConstantRow(const Api::FrameConstantRow& a_row) override { AddFrameConstantRow(lists, feature, a_row); }
 			void RegisterFrameTexture(const Api::FrameTexture& a_texture) override { AddFrameTexture(lists, feature, a_texture); }
@@ -504,18 +505,9 @@ namespace DCLF::Extensions
 		// Core's own main ranges first: a feature's on their slots or orders is refused.
 		for (const auto& range : CoreMainRanges())
 			AddMainRange(lists, "Core", range, true);
-		// Lighting's space and rules as kind 0, then Core's own material ports: kinds from 1 in their order, which the records they write
-		// name (the Effect port's kMaterialKindEffect, 1).
+		// Lighting's space and rules as kind 0; the features' material ports take kinds from 1 in their registration order, which the records
+		// they write name (RegisterMaterialPort returns it).
 		lists.materialPorts[lists.materialPortCount++] = CoreLightingPort();
-		for (const auto& port : CoreMaterialPorts())
-			AddMaterialPort(lists, "Core", port, true);
-		// Core's own program families, frame constant rows and frame textures: a feature's on their families, rows or registers is refused.
-		for (const auto& family : CoreProgramFamilies())
-			AddProgramFamily(lists, "Core", family);
-		for (const auto& row : CoreFrameConstantRows())
-			AddFrameConstantRow(lists, "Core", row);
-		for (const auto& texture : CoreFrameTextures())
-			AddFrameTexture(lists, "Core", texture);
 		Context context(lists);
 		for (const auto& feature : a_features) {
 			context.feature = feature.name;
@@ -536,9 +528,6 @@ namespace DCLF::Extensions
 		ResolveVertexStream(lists.vertexStream);
 		ResolvePaletteRows(lists.paletteRows);
 		ResolveMaterialPorts(lists.materialPorts, lists.materialPortCount);
-		// Core's built-in ports kept their kinds (the first of them is kind 1).
-		if (!CoreMaterialPorts().empty() && MaterialPorts()[1].shaderType != CoreMaterialPorts().front().shaderType)
-			stl::report_and_fail("Drawcall Limit Fix: Core's first built-in material port did not resolve to kind 1");
 		ResolveProgramFamilies(lists.programFamilies);
 		std::ranges::sort(lists.frameConstantRows, {}, &FrameConstantRowEntry::row);
 		// The features' toggles seeded from their switches, into the requested and active sets.

@@ -253,13 +253,15 @@ namespace DCLF
 		kRasterWriteModeShift = 12,  // 4 bits: alphaBlendWriteMode (0-12)
 		kRasterBlendExtra = 1u << 16,
 		// CS_DCLF_EFFECTS: an Effect shader key (BSEffectShader; Effect.hlsl), descriptors and pass descriptor that shader's
-		// (EffectDescriptors.h). Not an engine state index: RasterStateBits leaves it out.
+		// (Features/Effects): the Effect program family's key bit (ProgramFamilySlots.h, KeyFamily). Not an engine state index:
+		// RasterStateBits leaves it out.
 		kRasterEffect = 1u << 17,
 		// Main keys only, 3 bits: Extended Translucency's material model XOR DescriptorDisabled (ExtendedTranslucency::
 		// MaterialModelOf; the permutation's ExtraFeatureDescriptor). Non-zero only for blended geometry (e.g. NPC hairlines).
 		kRasterTranslucencyShift = 21,
 		// Effect keys only, same 3 bits: billboard mode + 1 of a leaf under an NiBillboardNode (CS_DCLF_BILLBOARDS), else 0. The
-		// vertex stage turns the leaf to its view's camera (DCLFBillboardWorld); the record carries the mode (FamilyRecordFlagsOf).
+		// vertex stage turns the leaf to its view's camera (DCLFBillboardWorld); the record carries the mode (FamilyRecordFlagsOf). The
+		// Effect family's spare key bits (ProgramFamilySlots.h; Extensions::FamilyRules' turnedKeyBits).
 		kRasterEffectBillboardShift = kRasterTranslucencyShift,
 		// 2 bits, ObjectTerrainGroup. Group 1: blend and write modes 1 and 1, LESS_EQUAL with depth writes; group 2: write mode 1,
 		// no blending, EQUAL. No depth bias.
@@ -285,9 +287,6 @@ namespace DCLF
 	inline constexpr std::uint32_t RasterTerrainGroup(std::uint32_t a_flags) { return (a_flags >> kRasterTerrainGroupShift) & 3u; }
 	/** @brief What selects the engine's state objects: everything but two-sidedness, the translucency model and the shader class. */
 	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterTranslucencyMask | kRasterEffect); }
-	inline constexpr bool RasterEffect(std::uint32_t a_flags) { return (a_flags & kRasterEffect) != 0; }
-	/** @brief An effect key's billboard mode + 1 (kRasterEffectBillboardShift), 0 for a key that is no billboard's. */
-	inline constexpr std::uint32_t RasterEffectBillboard(std::uint32_t a_flags) { return RasterEffect(a_flags) ? (a_flags >> kRasterEffectBillboardShift) & 7u : 0u; }
 	inline constexpr std::uint32_t RasterTranslucency(std::uint32_t a_flags) { return (a_flags & kRasterTranslucencyMask) >> kRasterTranslucencyShift; }
 
 	/** @brief Packs a decal's state indices (EngineStates.h says where each comes from). */

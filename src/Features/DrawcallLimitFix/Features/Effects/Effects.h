@@ -9,12 +9,14 @@
 // rule reads whether it is taken), its report lines among the forward epoch's (Diagnostics/EffectsReport.cpp) and the parity of the members'
 // Lighting-variant passes (Diagnostics/EffectLight.cpp).
 //
-// Core keeps the Effect port itself, which Core classifies every effect-shader item by before a feature sees it (the particle systems and
-// the billboards' effect shapes too): its descriptors and variants (DeriveEffectDescriptors, Ineligible::EffectOpaque and EffectVariant,
-// EffectConstants.h's EffectFlag), its material records and constants (MaterialPortEffect, kMaterialKindEffect, the effect frame slots
-// and SampleEffectLight), the effect keys (Records.h's kRasterEffect) and their programs and pipelines (Core's built-in Effect program
-// family: ShaderPrograms' FindFamily, DrawPipelines' effect pipelines), and the builds and passes that draw them. Included by the feature's
-// sources only.
+// And the Effect port itself, which Core classifies every effect-shader item by before a feature sees it (the particle systems and the
+// billboards' effect shapes too), on Core's contracts: the material port (Api::MaterialPortContribution, EffectMaterial.cpp: its capture
+// and shading, EffectProperty.cpp; its descriptors and variants, EffectDescriptors.cpp; its material records), the program family
+// (Api::ProgramFamilyContribution, EffectPrograms.cpp: Effect.hlsl's programs and pipelines on Core's Effect slot, its record bits), and
+// the frame inputs (EffectFrame.cpp: the camera, light and blood rows, Api::FrameConstantRow; the soft depth, Api::FrameTexture). Its
+// constants are EffectConstants.h's. Core keeps what it decides by: the Ineligible verdicts (EffectOpaque, EffectVariant), the effect key
+// bit (Records.h's kRasterEffect, the family's slot), the particle item class and the billboard capture, and the effect controllers'
+// material-write hooks (Engine/Capture/MaterialWrites.cpp, until a material-write channel exists). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 
@@ -30,11 +32,21 @@ namespace DCLF::Features::Effects
 	// Diagnostics/EffectLight.cpp: CS_DCLF_SET_PARITY's observer of the members' blended passes the main camera's registration withholds
 	// (PassCapture's hooks, on whatever thread the engine registers): <- EFFECT LIGHT, of those the Effect shader's Lighting variant's
 	// (checked), the ones whose light 0 is not the scene's sun light (other): the port draws them with the sun light's DLightColor
-	// (LightingConstants.h, SampleEffectLight), which holds while FUN_1414fcf80 gives them ShadowSceneNode +0x200.
+	// (EffectFrame.cpp, SampleEffectLight), which holds while FUN_1414fcf80 gives them ShadowSceneNode +0x200.
 	void SubscribeLight();
 	/** @brief The Effect Lighting passes checked and those with another light 0, since the last call. Render thread, once a report. */
 	std::pair<std::uint32_t, std::uint32_t> TakeLight();
 
 	// Diagnostics/EffectsReport.cpp: the report lines (among the forward epoch's).
 	void RegisterReport(Api::InstallContext& a_context);
+
+	// EffectMaterial.cpp: the material port's registration (kind 1: kMaterialKindEffect, checked).
+	void RegisterPort(Api::InstallContext& a_context);
+	// EffectProperty.cpp: the port's capture (in the read window) and shading (per shading item) callbacks.
+	void CaptureEffectProperty(const Api::MaterialPortCapture& a_capture);
+	void SampleEffectShading(Api::MaterialPortShading& a_shading);
+	// EffectPrograms.cpp: the program family's registration.
+	void RegisterPrograms(Api::InstallContext& a_context);
+	// EffectFrame.cpp: the frame constant rows' and the frame texture's registrations.
+	void RegisterFrame(Api::InstallContext& a_context);
 }

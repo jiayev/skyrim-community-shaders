@@ -6,12 +6,12 @@
   "Features/Billboards -> Engine": 1,
   "Features/Billboards -> Scene": 3,
   "Features/Decals -> Scene": 2,
+  "Features/Effects -> Scene": 1,
   "Features/Faces -> Scene": 2,
   "Features/FirstPerson -> Engine": 1,
   "Features/FirstPerson -> Scene": 1,
   "Features/HiddenNodes -> Engine": 2,
   "Features/Particles -> Engine": 1,
-  "Features/Particles -> Scene": 2,
   "Features/Shadows/Local -> Scene": 2,
   "Features/Shadows/Sun -> Scene": 1,
   "Features/TextureTransforms -> Scene": 1,
@@ -25,10 +25,6 @@
   "DCLF::CaptureParity::Report": [
    171,
    75
-  ],
-  "DCLF::DeriveEffectDescriptors": [
-   85,
-   47
   ],
   "DCLF::DeriveLightingDescriptors": [
    141,
@@ -164,7 +160,7 @@
   ],
   "DCLF::Scene::Coordinator::EvaluateJoin": [
    91,
-   68
+   66
   ],
   "DCLF::Scene::Coordinator::EvaluateRound": [
    137,

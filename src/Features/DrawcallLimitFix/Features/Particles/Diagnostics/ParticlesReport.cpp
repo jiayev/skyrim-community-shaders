@@ -2,10 +2,10 @@
 // passes against them.
 
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+#include "ShaderCache.h"
 
 #include <string>
 
@@ -15,7 +15,8 @@ namespace DCLF::Features::Particles
 	{
 		void Lines(std::string& a_text)
 		{
-			// The particle members in the installed tables: objects of an effect key whose pass is a particle system's.
+			// The particle members in the installed tables: objects of an effect key (the Effect family's) whose pass is a particle system's
+			// (CS's EffectShaderFlags: the pass descriptor's bits).
 			std::uint32_t members = 0;
 			{
 				const auto& installedTables = Scene::FrameView::Get().GetTables();
@@ -23,7 +24,8 @@ namespace DCLF::Features::Particles
 					if ((object.flags & (kObjectFree | kObjectNoBindings)) || !(object.flags & kObjectMember) || object.pipelineIndex >= installedTables.pipelines.size())
 						continue;
 					const auto& pipeline = installedTables.pipelines[object.pipelineIndex];
-					members += RasterEffect(pipeline.rasterFlags) && (pipeline.passDescriptor & EffectFlag::Particles) ? 1u : 0u;
+					const bool particlePass = (pipeline.passDescriptor & static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::Particles)) != 0;
+					members += KeyFamily(pipeline.rasterFlags) == Api::ProgramFamily::Effect && particlePass ? 1u : 0u;
 				}
 			}
 			const auto c = ParticleSnapshots::Get().Take();
