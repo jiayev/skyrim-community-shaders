@@ -3,9 +3,9 @@
 #include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -58,7 +58,7 @@ namespace DCLF
 		}
 
 		/** @brief FUN_14150aba0's test of one frustum's corners and edges against the other's six planes (all six, whatever the mask). */
-		bool CornersOrEdgesInside(const Corners& a_points, const SunViews::Planes& a_planes)
+		bool CornersOrEdgesInside(const Corners& a_points, const ShadowCameras::Planes& a_planes)
 		{
 			const auto& planes = a_planes.plane;
 			// A corner strictly inside all six.
@@ -99,14 +99,14 @@ namespace DCLF
 		/** @brief FUN_14150aba0 (light, world camera, the light's camera): whether the two frusta intersect. */
 		bool FrustaIntersect(const RE::NiCamera& a_world, const RE::NiCamera& a_light)
 		{
-			SunViews::Planes worldPlanes, lightPlanes;
-			SunViews::FrustumPlanes(const_cast<RE::NiCamera&>(a_world).GetRuntimeData2().viewFrustum, a_world.world, worldPlanes);
-			SunViews::FrustumPlanes(const_cast<RE::NiCamera&>(a_light).GetRuntimeData2().viewFrustum, a_light.world, lightPlanes);
+			ShadowCameras::Planes worldPlanes, lightPlanes;
+			ShadowCameras::FrustumPlanes(const_cast<RE::NiCamera&>(a_world).GetRuntimeData2().viewFrustum, a_world.world, worldPlanes);
+			ShadowCameras::FrustumPlanes(const_cast<RE::NiCamera&>(a_light).GetRuntimeData2().viewFrustum, a_light.world, lightPlanes);
 			return CornersOrEdgesInside(FrustumCorners(a_world), lightPlanes) || CornersOrEdgesInside(FrustumCorners(a_light), worldPlanes);
 		}
 
 		/** @brief BSMultiBoundSphere::Func41: a sphere inside a frustum's active planes (outside when n.c - d <= -r, or unordered). */
-		bool SphereInside(const float a_centre[3], float a_radius, const SunViews::Planes& a_planes)
+		bool SphereInside(const float a_centre[3], float a_radius, const ShadowCameras::Planes& a_planes)
 		{
 			for (std::uint32_t k = 0; k < 6; ++k) {
 				if (!((a_planes.mask >> k) & 1))
@@ -120,7 +120,7 @@ namespace DCLF
 		}
 
 		/** @brief vfunc 0x10's verdict (BSShadowFrustumLight 0x14151ac50, BSShadowParabolicLight 0x14151b620; a directional one's is true). */
-		bool Visible(const RE::BSShadowLight& a_light, const RE::NiCamera& a_camera, const SunViews::Planes& a_cameraPlanes)
+		bool Visible(const RE::BSShadowLight& a_light, const RE::NiCamera& a_camera, const ShadowCameras::Planes& a_cameraPlanes)
 		{
 			auto& light = const_cast<RE::BSShadowLight&>(a_light);
 			const auto* niLight = light.light.get();
@@ -224,8 +224,8 @@ namespace DCLF
 		}
 		lastFocusHost = nullptr;
 		roomVerdicts.clear();
-		SunViews::Planes cameraPlanes;
-		SunViews::FrustumPlanes(const_cast<RE::NiCamera*>(camera)->GetRuntimeData2().viewFrustum, camera->world, cameraPlanes);
+		ShadowCameras::Planes cameraPlanes;
+		ShadowCameras::FrustumPlanes(const_cast<RE::NiCamera*>(camera)->GetRuntimeData2().viewFrustum, camera->world, cameraPlanes);
 		for (const auto& pointer : runtime.activeShadowLights) {
 			const auto* light = pointer.get();
 			if (!light || kept >= kMaxLights)
@@ -282,13 +282,22 @@ namespace DCLF
 			lightRooms = std::move(live);
 		}
 		frame.valid = true;
-		// Their views, from the cameras their UpdateCamera has set up (LightViews).
-		for (const auto& selected : frame.locals) {
-			auto* light = const_cast<RE::BSShadowLight*>(selected.light);
-			if (light->GetIsFrustumLight() || light->GetIsParabolicLight())
-				LightViews::Get().Update(selected.light);
-		}
+		TellKeptLights(frame);
 		Diagnostics::Notify<Diagnostics::EnginePoint::LightSelectionMade>();
+	}
+
+	void LightSelection::TellKeptLights(const Frame& a_frame)
+	{
+		// Their views, from the cameras their UpdateCamera has set up: each kept spot light to the Spot source, each point light to the
+		// Point source (Api::ShadowSourceContribution::lightKept), in the selection's order.
+		const auto& spot = Extensions::ShadowSourceOf(Api::ShadowSource::Spot);
+		const auto& point = Extensions::ShadowSourceOf(Api::ShadowSource::Point);
+		for (const auto& selected : a_frame.locals) {
+			auto* light = const_cast<RE::BSShadowLight*>(selected.light);
+			const auto* source = light->GetIsFrustumLight() ? &spot : light->GetIsParabolicLight() ? &point : nullptr;
+			if (source && source->lightKept)
+				source->lightKept({ selected.light, a_frame.sceneFrame });
+		}
 	}
 
 	struct LightSelection::Hooks

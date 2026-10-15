@@ -4,7 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
-#include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "State.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -40,7 +40,7 @@ namespace DCLF
 				const auto* process = descriptor.cullingProcess;
 				if (!process || !descriptor.isEnabled)
 					continue;
-				const auto* view = LightViews::Get().CascadeOf(selected.light, d, sceneFrame);
+				const auto* view = ShadowCameras::Lights().CascadeOf(selected.light, d, sceneFrame);
 				if (!view)
 					continue;
 				Light::Volume volume;

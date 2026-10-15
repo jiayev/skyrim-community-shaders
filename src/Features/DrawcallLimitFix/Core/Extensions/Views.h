@@ -2,12 +2,13 @@
 
 // The view contributions' Core side (Api/Views.h): each engine view's entry, resolved once at InstallFeatures (ResolveViews) from the
 // feature's registration (a view no feature takes has none: every per-view loop skips it), and what Core derives from them for its
-// per-object paths (the set's phases, the view bits by phase, the root views, the decision and withholding orders). The view machinery's epochs, revisions, frame requests, classification,
-// set decisions, pass capture and the builds read them as data; the contexts the views' callbacks and work are handed are defined here.
+// per-object paths (the set's phases, the root views, the decision and withholding orders; the view bits by phase: ViewCommon.h). The view
+// machinery's epochs, revisions, frame requests, classification, set decisions, pass capture and the builds read them as data; the contexts the views' callbacks and work are handed are defined here.
 // The view engine's calls for a feature's work and epochs (its state, targets, pipelines, inputs and epoch submission) are
 // IndirectDraws' (Core/Render/IndirectDraws.h, "The view engine").
 
 #include "Features/DrawcallLimitFix/Api/Views.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ViewCommon.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 #include <array>
@@ -144,10 +145,7 @@ namespace DCLF::Extensions
 		// The OwnRenderers views, in slot order (PassCapture: the renderers their features name, tested after WithholdMain).
 		std::array<Api::EngineView, kEngineViews> ownRendererViews{};
 		std::uint32_t ownRendererCount = 0;
-		// The view bits a set phase bit takes part in (Core's main and shadow phases filled by Core, the views' by their entries), and the
-		// same by phase mask: ViewBitsOf's one read.
-		std::array<std::uint32_t, 8> viewBitsOfPhaseBit{};
-		std::array<std::uint32_t, 256> viewBitsOfPhases{};
+		// The view bits by phase are both families' (ViewCommon.h: ResolvedViewBits).
 	};
 
 	namespace Detail
@@ -165,8 +163,8 @@ namespace DCLF::Extensions
 	inline bool ViewRegistered(Api::EngineView a_view) { return ViewEntryOf(a_view).registered; }
 	/**
 	 * @brief Main thread, at the end of InstallFeatures (Registry): the entries resolved from the registered contributions (by view;
-	 * EngineView::Count: none) and the registered work. Fails the install for a phase or view bit a contribution shares with Core's or
-	 * another view's, and for work on a view no feature took. Once.
+	 * EngineView::Count: none) and the registered work. Fails the install for work on a view no feature took (a phase or view bit a
+	 * contribution shares with Core's or another view's: ResolveViewBits). Once.
 	 */
 	void ResolveViews(std::span<const Api::ViewContribution, kEngineViews> a_views, std::span<const Api::ViewWork> a_work);
 

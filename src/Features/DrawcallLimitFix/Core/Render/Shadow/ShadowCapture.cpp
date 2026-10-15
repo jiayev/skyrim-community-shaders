@@ -5,8 +5,6 @@
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#include "Features/DrawcallLimitFix/Engine/Views/FocusViews.h"
-#include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
 
 namespace DCLF
 {
@@ -44,10 +42,10 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Replaces the captured viewport and eye with DCLF's own (SunViews/LightViews/FocusViews, from the light's
+		 * @brief Replaces the captured viewport and eye with DCLF's own (ShadowCameras' boards, from the light's
 		 * UpdateCamera): port times target size. False without DCLF's view this frame (captured values stand).
 		 */
-		bool ApplyOwnViewport(PendingView& a_view, const SunViews::Cascade* a_cascade, std::uint32_t a_descriptor, std::uint32_t a_target, Diagnostics::ShadowView a_kind)
+		bool ApplyOwnViewport(PendingView& a_view, const ShadowCameras::Camera* a_cascade, std::uint32_t a_descriptor, std::uint32_t a_target, Diagnostics::ShadowView a_kind)
 		{
 			Diagnostics::Notify(Diagnostics::OwnShadowViewport{ a_view, a_cascade, a_descriptor, a_target, a_kind });
 			auto* texture = globals::game::renderer->GetDepthStencilData().depthStencils[a_target].texture;
@@ -55,7 +53,7 @@ namespace DCLF
 				return false;
 			D3D11_TEXTURE2D_DESC desc{};
 			texture->GetDesc(&desc);
-			const auto port = SunViews::Viewport(a_cascade->port, desc.Width, desc.Height);
+			const auto port = ShadowCameras::Viewport(a_cascade->port, desc.Width, desc.Height);
 			const RE::NiPoint3 eye{ a_cascade->eye[0], a_cascade->eye[1], a_cascade->eye[2] };
 			a_view.x = port[0];
 			a_view.y = port[1];
@@ -68,15 +66,15 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Sets the view's VS_PerFrame block and caster planes from DCLF's own camera (SunViews::Block). a_engineBlock: the
+		 * @brief Sets the view's VS_PerFrame block and caster planes from DCLF's own camera (ShadowCameras::Block). a_engineBlock: the
 		 * engine's block was captured too, for the observers.
 		 */
-		void ApplyOwnCamera(PendingView& a_view, const SunViews::Cascade& a_cascade, std::uint32_t a_descriptor, Diagnostics::ShadowView a_kind, bool a_engineBlock)
+		void ApplyOwnCamera(PendingView& a_view, const ShadowCameras::Camera& a_cascade, std::uint32_t a_descriptor, Diagnostics::ShadowView a_kind, bool a_engineBlock)
 		{
 			if (a_engineBlock)
 				Diagnostics::Notify(Diagnostics::OwnShadowCamera{ a_view, a_cascade, a_descriptor, a_kind });
-			std::array<std::byte, SunViews::kBlockBytes> block{};
-			SunViews::Block(a_cascade, block.data());
+			std::array<std::byte, ShadowCameras::kBlockBytes> block{};
+			ShadowCameras::Block(a_cascade, block.data());
 			const auto* mine = reinterpret_cast<const float*>(block.data());
 			std::memcpy(a_view.perFrame.data(), block.data(), block.size());
 			a_view.perFrameBytes = static_cast<std::uint32_t>(block.size());
@@ -94,7 +92,7 @@ namespace DCLF
 		 * transform moves into the projection (x' = x * sw/W + (sw + 2 sx)/W - 1, y' = y * sh/H + 1 - (sh + 2 sy)/H on c4, c8, c12
 		 * and the culling view-projection), so casters land on the same pixels; the rest of the slice is sampled by no receiver.
 		 */
-		void FocusToSlice(PendingView& a_view, const SunViews::Cascade& a_cascade, std::uint32_t a_target)
+		void FocusToSlice(PendingView& a_view, const ShadowCameras::Camera& a_cascade, std::uint32_t a_target)
 		{
 			auto* texture = globals::game::renderer->GetDepthStencilData().depthStencils[a_target].texture;
 			if (!texture)
@@ -118,6 +116,88 @@ namespace DCLF
 				}
 			}
 			std::memcpy(a_view.viewProj.data(), block + 32, sizeof(float) * 16);
+		}
+
+		/**
+		 * @brief DCLF's own camera for a view, from its source's board (ShadowCameras: the sun's cascades, the kept local lights' views,
+		 * the focus views; Extensions::ShadowViewSet::sourceOf by its kind), with the observers' kind and a focus view's target. False for a
+		 * view of no source (its captured values stand).
+		 */
+		bool OwnViewOf(const ShadowViews::View& a_view, std::uint32_t a_sceneFrame, PendingView& a_pending, const ShadowCameras::Camera*& a_own,
+			Diagnostics::ShadowView& a_kind)
+		{
+			const auto source = Extensions::ShadowViewsSet().sourceOf[static_cast<std::size_t>(a_view.kind)][a_view.focus ? 1 : 0];
+			switch (source) {
+			case Api::ShadowSource::Sun:
+				a_own = ShadowCameras::Sun().CascadeOf(a_view.descriptor, a_sceneFrame);
+				return true;
+			case Api::ShadowSource::Spot:
+			case Api::ShadowSource::Point:
+				a_own = ShadowCameras::Lights().CascadeOf(a_view.light, a_view.descriptor, a_sceneFrame);
+				a_kind = Diagnostics::ShadowView::Light;
+				return true;
+			case Api::ShadowSource::Focus:
+				a_own = ShadowCameras::Focus().CascadeOf(a_view.light, a_view.descriptor, a_sceneFrame);
+				a_kind = Diagnostics::ShadowView::Focus;
+				a_pending.focusTarget = ShadowCameras::Focus().TargetOf(a_view.descriptor, a_sceneFrame);
+				a_pending.focus = true;
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		/**
+		 * @brief The engine's caster volume: BSShadowDirectionalLight::UpdateCamera builds it from the main frustum's corners and the
+		 * light direction into the descriptor's culling process, and the accumulation's cull (FUN_1414f0920) tests it on top of the shadow
+		 * frustum. Much tighter than the orthographic box, it keeps casters no visible receiver can see out of the far cascade. A focus
+		 * view has no culling process (its descriptor indexes the focus array).
+		 */
+		void CaptureCasterVolume(PendingView& a_view, const ShadowViews::View& a_shadowView)
+		{
+			if (auto& lightData = const_cast<RE::BSShadowLight*>(a_shadowView.light)->GetRuntimeData();
+				!a_shadowView.focus && a_shadowView.descriptor < lightData.shadowmapDescriptors.size()) {
+				const auto* process = lightData.shadowmapDescriptors[a_shadowView.descriptor].cullingProcess;
+				if (process && process->doCustomCullPlanes) {
+					const auto& planes = process->customCullPlanes;
+					for (std::uint32_t p = 0; p < RE::NiFrustumPlanes::Planes::kTotal; ++p) {
+						a_view.cullPlanes[p][0] = planes.cullingPlanes[p].normal.x;
+						a_view.cullPlanes[p][1] = planes.cullingPlanes[p].normal.y;
+						a_view.cullPlanes[p][2] = planes.cullingPlanes[p].normal.z;
+						a_view.cullPlanes[p][3] = planes.cullingPlanes[p].constant;
+					}
+					a_view.cullPlaneMask = planes.activePlanes.underlying() & 0x3Fu;
+				}
+			}
+		}
+
+		/** @brief Capture check: the block's CameraPosAdjust (c40) against the renderer's eye for the view, reported every 1000 views. */
+		void CheckCapturedEye(const PendingView& a_view, std::uint32_t a_viewId, std::uint32_t a_renderMode)
+		{
+			static std::uint64_t views = 0, fallback = 0, differ = 0;
+			static float largest = 0.0f;
+			static std::string first;
+			++views;
+			const auto* block = reinterpret_cast<const float*>(a_view.perFrame.data());
+			if (a_view.perFrameBytes >= 164 * sizeof(float)) {
+				const float d = std::max({ std::abs(block[160] - a_view.eye.x), std::abs(block[161] - a_view.eye.y), std::abs(block[162] - a_view.eye.z) });
+				if (d > 0.01f) {
+					++differ;
+					if (first.empty())
+						first = fmt::format("view {} mode {:#x}: block ({:.1f} {:.1f} {:.1f}), renderer ({:.1f} {:.1f} {:.1f})", a_viewId, a_renderMode, block[160], block[161],
+							block[162], a_view.eye.x, a_view.eye.y, a_view.eye.z);
+				}
+				largest = std::max(largest, d);
+			}
+			if (!ConstantMirror::Get().Contents(*globals::game::perFrame.get()).size())
+				++fallback;
+			if (views == 1000) {
+				logger::info("[DCLF] shadow view capture: {} views, {} from the cached copy, {} whose b12 eye is not the renderer's (largest {:.2f}){}{}", views, fallback, differ,
+					largest, differ ? " <- CAPTURE" : " <- OK", first.empty() ? "" : "; first " + first);
+				views = fallback = differ = 0;
+				largest = 0.0f;
+				first.clear();
+			}
 		}
 
 		/**
@@ -262,22 +342,9 @@ namespace DCLF
 		CaptureViewTarget(view, target);
 		// The sun's, local lights' and focus views' viewport and eye are DCLF's; the renderer's are the observers'.
 		const std::uint32_t sceneFrame = Scene::FrameView::Get().GetFrame();
-		const SunViews::Cascade* ownView = nullptr;
+		const ShadowCameras::Camera* ownView = nullptr;
 		auto ownKind = Diagnostics::ShadowView::Sun;
-		const bool localView = !view.sunView && !shadowView->focus &&
-		                       (shadowView->kind == ShadowViews::Kind::Frustum || shadowView->kind == ShadowViews::Kind::Parabolic);
-		if (view.sunView) {
-			ownView = SunViews::Get().CascadeOf(shadowView->descriptor, sceneFrame);
-		} else if (localView) {
-			ownView = LightViews::Get().CascadeOf(shadowView->light, shadowView->descriptor, sceneFrame);
-			ownKind = Diagnostics::ShadowView::Light;
-		} else if (shadowView->focus) {
-			ownView = FocusViews::Get().CascadeOf(shadowView->light, shadowView->descriptor, sceneFrame);
-			ownKind = Diagnostics::ShadowView::Focus;
-			view.focusTarget = FocusViews::Get().TargetOf(shadowView->descriptor, sceneFrame);
-			view.focus = true;
-		}
-		const bool owned = (view.sunView || localView || shadowView->focus) && ApplyOwnViewport(view, ownView, shadowView->descriptor, target, ownKind);
+		const bool owned = OwnViewOf(*shadowView, sceneFrame, view, ownView, ownKind) && ApplyOwnViewport(view, ownView, shadowView->descriptor, target, ownKind);
 		// A focus view draws over its whole slice (FocusToSlice).
 		if (owned && shadowView->focus)
 			if (auto* texture = globals::game::renderer->GetDepthStencilData().depthStencils[target].texture) {
@@ -307,24 +374,7 @@ namespace DCLF
 			}
 			view.slot = impl->shadowPlacements[placement].slot;
 		}
-		// The engine's caster volume: BSShadowDirectionalLight::UpdateCamera builds it from the main frustum's corners and the light
-		// direction into the descriptor's culling process, and the accumulation's cull (FUN_1414f0920) tests it on top of the shadow
-		// frustum. Much tighter than the orthographic box, it keeps casters no visible receiver can see out of the far cascade.
-		// A focus view has no culling process (its descriptor indexes the focus array).
-		if (auto& lightData = const_cast<RE::BSShadowLight*>(shadowView->light)->GetRuntimeData();
-			!shadowView->focus && shadowView->descriptor < lightData.shadowmapDescriptors.size()) {
-			const auto* process = lightData.shadowmapDescriptors[shadowView->descriptor].cullingProcess;
-			if (process && process->doCustomCullPlanes) {
-				const auto& planes = process->customCullPlanes;
-				for (std::uint32_t p = 0; p < RE::NiFrustumPlanes::Planes::kTotal; ++p) {
-					view.cullPlanes[p][0] = planes.cullingPlanes[p].normal.x;
-					view.cullPlanes[p][1] = planes.cullingPlanes[p].normal.y;
-					view.cullPlanes[p][2] = planes.cullingPlanes[p].normal.z;
-					view.cullPlanes[p][3] = planes.cullingPlanes[p].constant;
-				}
-				view.cullPlaneMask = planes.activePlanes.underlying() & 0x3Fu;
-			}
-		}
+		CaptureCasterVolume(view, *shadowView);
 		// PerTechnique (b0): HighDetailRange (LOD landscape only; zero until owned) and ParabolaParam from the engine's two globals as
 		// SetupTechnique reads them.
 		{
@@ -346,44 +396,18 @@ namespace DCLF
 		// After the observers compared the engine's block.
 		if (owned && shadowView->focus)
 			FocusToSlice(view, *ownView, target);
-		// Capture check: the block's CameraPosAdjust (c40) against the renderer's eye for the view.
-		{
-			static std::uint64_t views = 0, fallback = 0, differ = 0;
-			static float largest = 0.0f;
-			static std::string first;
-			++views;
-			const auto* block = reinterpret_cast<const float*>(view.perFrame.data());
-			if (view.perFrameBytes >= 164 * sizeof(float)) {
-				const float d = std::max({ std::abs(block[160] - view.eye.x), std::abs(block[161] - view.eye.y), std::abs(block[162] - view.eye.z) });
-				if (d > 0.01f) {
-					++differ;
-					if (first.empty())
-						first = fmt::format("view {} mode {:#x}: block ({:.1f} {:.1f} {:.1f}), renderer ({:.1f} {:.1f} {:.1f})", a_viewId, a_renderMode, block[160], block[161],
-							block[162], view.eye.x, view.eye.y, view.eye.z);
-				}
-				largest = std::max(largest, d);
-			}
-			if (!ConstantMirror::Get().Contents(*globals::game::perFrame.get()).size())
-				++fallback;
-			if (views == 1000) {
-				logger::info("[DCLF] shadow view capture: {} views, {} from the cached copy, {} whose b12 eye is not the renderer's (largest {:.2f}){}{}", views, fallback, differ,
-					largest, differ ? " <- CAPTURE" : " <- OK", first.empty() ? "" : "; first " + first);
-				views = fallback = differ = 0;
-				largest = 0.0f;
-				first.clear();
-			}
-		}
+		CheckCapturedEye(view, a_viewId, a_renderMode);
 		shadowStats.captureMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 	}
 
 	void IndirectDraws::OcclusionView(std::uint32_t a_view, const RE::NiCamera& a_camera)
 	{
 		// DCLF's view from the camera Skylighting just set up for the map (Precipitation's occlusion camera; for the sky map a quarter
-		// of its square, SetViewFrustum), before RenderMask draws it: SunViews' matrices and eye, port times map size; depth target 10
+		// of its square, SetViewFrustum), before RenderMask draws it: ShadowCameras' matrices and eye, port times map size; depth target 10
 		// (Skylighting swaps its own texture in for the sky map), slice 0; back-face culling, solid fill, no bias or scissor (the
 		// Utility shader's state but for two-sided keys). Computed every frame the map renders, drawn or not: next frame's build
 		// prepares pipelines for its state and format.
-		if (a_view >= kOcclusionViews || !ActiveToggles().shadows || failed || !OcclusionEnabled(a_view) || !impl->SetupShadow())
+		if (a_view >= kOcclusionViews || !ActiveToggles().shadows || failed || !Extensions::OcclusionOn(ActiveToggles(), a_view) || !impl->SetupShadow())
 			return;
 		constexpr auto target = static_cast<std::uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP);
 		const std::uint32_t rasterState = EngineRasterStateId(0, 1, 0, 0, kOcclusionRenderMode);
@@ -415,9 +439,9 @@ namespace DCLF
 		view.dsvFormat = dsvDesc.Format;
 		D3D11_TEXTURE2D_DESC desc{};
 		depth.texture->GetDesc(&desc);
-		SunViews::Cascade camera;
-		SunViews::CameraMatrices(a_camera, camera);
-		const auto port = SunViews::Viewport(camera.port, desc.Width, desc.Height);
+		ShadowCameras::Camera camera;
+		ShadowCameras::CameraMatrices(a_camera, camera);
+		const auto port = ShadowCameras::Viewport(camera.port, desc.Width, desc.Height);
 		view.x = port[0];
 		view.y = port[1];
 		view.width = port[2];
@@ -425,8 +449,8 @@ namespace DCLF
 		view.minDepth = 0.0f;
 		view.maxDepth = 1.0f;
 		view.eye = { camera.eye[0], camera.eye[1], camera.eye[2] };
-		SunViews::Block(camera, view.perFrame.data());
-		view.perFrameBytes = SunViews::kBlockBytes;
+		ShadowCameras::Block(camera, view.perFrame.data());
+		view.perFrameBytes = ShadowCameras::kBlockBytes;
 		std::memcpy(view.viewProj.data(), reinterpret_cast<const float*>(view.perFrame.data()) + 32, sizeof(float) * 16);
 		view.hasViewProj = true;
 		occlusion.rasterState = rasterState;
@@ -451,7 +475,7 @@ namespace DCLF
 		std::vector<ShadowViewLayout> out;
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 			const auto& o = occlusion[v];
-			if (!OcclusionEnabled(v) || !o.rasterState || o.dsvFormat == DXGI_FORMAT_UNKNOWN)
+			if (!Extensions::OcclusionOn(ActiveToggles(), v) || !o.rasterState || o.dsvFormat == DXGI_FORMAT_UNKNOWN)
 				continue;
 			out.push_back(LayoutOf(o.view, OcclusionSlot(v), OcclusionModeOf(v), OcclusionDepthTarget(v)));
 		}

@@ -2,6 +2,7 @@
 // render thread at BeforeShadowMaps).
 
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -138,6 +139,11 @@ namespace DCLF
 		}
 	}
 
+	// Core's view of the kinds (Extensions::ShadowViewSet::sourceOf is by them).
+	static_assert(Extensions::kShadowViewKinds == ShadowViews::kKindCount && static_cast<std::size_t>(ShadowViews::Kind::Directional) == 0 &&
+				  static_cast<std::size_t>(ShadowViews::Kind::Frustum) == 1 && static_cast<std::size_t>(ShadowViews::Kind::Parabolic) == 2 &&
+				  static_cast<std::size_t>(ShadowViews::Kind::Other) == 3);
+
 	const char* ShadowViews::KindName(Kind a_kind)
 	{
 		switch (a_kind) {
@@ -232,11 +238,15 @@ namespace DCLF
 		PredictTargets();
 		captures.assign(views.size(), 0);
 		valid = true;
-		// DCLF's views: its candidates in the engine's order, within the slots its buffers hold (SetViewCapacity).
+		// DCLF's views: its candidates in the engine's order, within the slots its buffers hold (SetViewCapacity); a view of a source no
+		// feature takes (Extensions::ShadowViewSet::sourceOf) is the engine's.
 		candidates = 0;
+		const auto& shadowViews = Extensions::ShadowViewsSet();
 		for (auto& view : views) {
+			const auto source = shadowViews.sourceOf[static_cast<std::size_t>(view.kind)][view.focus ? 1 : 0];
 			const bool candidate = view.renderMode >= PassCapture::kFirstShadowMode &&
-			                       view.renderMode < PassCapture::kFirstShadowMode + PassCapture::kShadowModes;
+			                       view.renderMode < PassCapture::kFirstShadowMode + PassCapture::kShadowModes &&
+			                       (source == Api::ShadowSource::Count || shadowViews.sources[static_cast<std::size_t>(source)].registered);
 			view.covered = candidate && candidates < viewCapacity;
 			candidates += candidate ? 1u : 0u;
 		}

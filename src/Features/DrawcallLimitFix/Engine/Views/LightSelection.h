@@ -44,7 +44,8 @@ namespace DCLF
 	 * still a candidate, else the first kept light whose vfunc 0x20 is true (a directional or spot light). The flag persists across
 	 * frames, so DCLF keeps its own per light, written where the engine writes +0x558; the engine's is the observer's.
 	 *
-	 * Render thread: written in the detour, read by LightViews, ShadowViews and LocalShadowLights later in the frame.
+	 * Render thread: written in the detour, read by the Spot and Point sources (their lightKept), ShadowViews and LocalShadowLights later in
+	 * the frame.
 	 */
 	class LightSelection
 	{
@@ -81,6 +82,8 @@ namespace DCLF
 		/** @brief The engine's room condition for a candidate, from DCLF's walk (PortalViews::WalkLight). */
 		bool SharesRoomWithCamera(const RE::BSShadowLight* a_light);
 		void Select();
+		/** @brief The kept spot and point lights, to their sources (the end of Select). */
+		static void TellKeptLights(const Frame& a_frame);
 
 		Frame frame;
 		// Each light's portal-graph entry as DCLF keeps it (a light not walked keeps its last), and this frame's room verdicts.

@@ -4,6 +4,7 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 
@@ -371,7 +372,9 @@ namespace DCLF::Scene
 		                                    static_cast<std::uint64_t>(PropertyFlag::kHDLODObjects);
 		const bool lod = shadowProperty && (shadowProperty->flags & kLodFlags);
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
-			const std::uint32_t occlusion = OcclusionEnabled(v) && !lod ? OcclusionTechniqueOf(leaf, v == kOcclusionSky) : 0u;
+			// The map's occluder rule (its entry's, read as data).
+			const bool skylighting = Extensions::OcclusionMapOf(v).rule == Api::OccluderRule::Skylighting;
+			const std::uint32_t occlusion = Extensions::OcclusionOn(ActiveToggles(), v) && !lod ? OcclusionTechniqueOf(leaf, skylighting) : 0u;
 			a_out.occlusion[v] = occlusion;
 			if (occlusion & 0x80)
 				sampleDiffuse();

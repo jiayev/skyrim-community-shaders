@@ -2,8 +2,7 @@
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
 #include <array>
@@ -21,7 +20,7 @@ namespace DCLF::SideEffects
 
 		ActorRate actorRate;
 
-		bool SphereInside(const SunViews::Planes& a_planes, const RE::NiPoint3& a_centre, float a_radius)
+		bool SphereInside(const ShadowCameras::Planes& a_planes, const RE::NiPoint3& a_centre, float a_radius)
 		{
 			for (std::uint32_t p = 0; p < 6; ++p) {
 				if (!((a_planes.mask >> p) & 1))
@@ -46,7 +45,7 @@ namespace DCLF::SideEffects
 		const std::uint32_t counter = Engine::Global<std::uint32_t>(kFrameCounter);
 		// The last scene frame's shadow views (the frame whose stamps the engine left): the sun's cascade culls, the local lights' views.
 		const std::uint32_t sceneFrame = Scene::FrameView::Get().GetFrame();
-		const auto& sun = SunViews::Get().Current();
+		const auto& sun = ShadowCameras::Sun();
 		const bool sunViews = sun.valid && sun.sceneFrame == sceneFrame;
 		for (const auto& handle : lists->highActorHandles) {
 			const auto actor = handle.get();
@@ -64,15 +63,15 @@ namespace DCLF::SideEffects
 			// DCLF's verdict: the 3D's bound inside a shadow view of the last scene frame.
 			const auto& bound = root->worldBound;
 			bool inSun = false, inLocal = false;
-			// The sun: the cascade culls walk what the full-frustum cull kept (SunViews::Frame::fullFrusta), then test their own planes.
+			// The sun: the cascade culls walk what the full-frustum cull kept (ShadowCameras::SunFrame::fullFrusta), then test their own planes.
 			bool inFull = sun.fullFrusta.empty();
 			for (const auto& planes : sun.fullFrusta)
 				inFull = inFull || SphereInside(planes, bound.center, bound.radius);
 			if (sunViews && inFull)
-				for (std::uint32_t i = 0; i < sun.count && i < SunViews::kMaxCascades && !inSun; ++i)
+				for (std::uint32_t i = 0; i < sun.count && i < ShadowCameras::SunFrame::kMaxCascades && !inSun; ++i)
 					inSun = sun.cascades[i].valid && SphereInside(sun.cascades[i].cull, bound.center, bound.radius);
 			if (!inSun)
-				LightViews::Get().ForEachView(sceneFrame, [&](const SunViews::Cascade& a_view, const std::array<float, 4>& a_sphere) {
+				ShadowCameras::Lights().ForEachView(sceneFrame, [&](const ShadowCameras::Camera& a_view, const std::array<float, 4>& a_sphere) {
 					// A spot light's view: its cull planes; a point light's (no planes): the bound within the light's radius.
 					if (inLocal)
 						return;

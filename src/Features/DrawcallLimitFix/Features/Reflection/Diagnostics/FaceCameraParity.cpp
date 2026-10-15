@@ -43,18 +43,18 @@ namespace DCLF::Features::Reflection
 			}
 			auto* perFrame = *globals::game::perFrame.get();
 			const auto contents = perFrame ? ConstantMirror::Get().Contents(perFrame) : std::span<const std::byte>{};
-			if (contents.size() < SunViews::kBlockBytes)
+			if (contents.size() < ShadowCameras::kBlockBytes)
 				return;
 			const auto* theirs = reinterpret_cast<const float*>(contents.data());
 			const auto* mine = reinterpret_cast<const float*>(face.perFrame.data());
 			// Every register within rounding but the inverses DCLF computes with arithmetic of its own (c20-c23, c32-c39: within 1e-3).
 			float largest = 0.0f;
 			std::int32_t first = -1;
-			for (std::uint32_t i = 0; i < SunViews::kBlockBytes / sizeof(float); ++i) {
+			for (std::uint32_t i = 0; i < ShadowCameras::kBlockBytes / sizeof(float); ++i) {
 				const std::uint32_t c = i / 4;
 				const bool loose = (c >= 20 && c < 24) || (c >= 32 && c < 40);
 				const float d = std::abs(mine[i] - theirs[i]);
-				const bool same = loose ? d <= 1e-3f * std::max(1.0f, std::abs(theirs[i])) : SunViews::Close(mine[i], theirs[i]);
+				const bool same = loose ? d <= 1e-3f * std::max(1.0f, std::abs(theirs[i])) : ShadowCameras::Close(mine[i], theirs[i]);
 				if (!same) {
 					largest = std::max(largest, d);
 					parity.registers |= 1ull << c;

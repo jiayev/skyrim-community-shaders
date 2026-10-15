@@ -8,7 +8,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Engine.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Engine/Views/PortalShapes.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
 namespace DCLF::Diagnostics::PortalParity
 {
@@ -130,7 +130,7 @@ namespace DCLF::Diagnostics::PortalParity
 								continue;
 							for (std::uint32_t c = 0; c < 4; ++c) {
 								const float d = std::abs(a.plane[q][c] - b.plane[q][c]);
-								if (!SunViews::Close(a.plane[q][c], b.plane[q][c])) {
+								if (!ShadowCameras::Close(a.plane[q][c], b.plane[q][c])) {
 									why = fmt::format("set {} plane {} [{}] {}, the engine's {}", s, q, c, a.plane[q][c], b.plane[q][c]);
 									break;
 								}

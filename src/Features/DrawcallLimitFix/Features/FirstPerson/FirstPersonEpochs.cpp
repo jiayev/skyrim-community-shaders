@@ -35,8 +35,8 @@ namespace DCLF::Features::FirstPerson
 			if (!camera)
 				return false;
 			const auto* eyeWorld = REL::Relocation<const float*>{ REL::Offset(Engine::Address::kDrawWorldEye) }.get();
-			SunViews::Cascade view;
-			SunViews::CameraMatrices(*camera, view);
+			ShadowCameras::Camera view;
+			ShadowCameras::CameraMatrices(*camera, view);
 			const RE::NiPoint3 eye{ eyeWorld[0], eyeWorld[1], eyeWorld[2] };
 			// The rows are world space (FrameValues samples them before the first-person shift): CameraPosAdjust is the world eye, not the
 			// first-person camera's root-space translate.

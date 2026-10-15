@@ -1,8 +1,9 @@
-// FocusViews: the BSShadowDirectionalLight::sub detour (render thread) and the focus views it records.
+// FocusViews: the BSShadowDirectionalLight::sub detour (render thread) and the focus views it records (ShadowCameras::Focus).
 
 #include "Features/DrawcallLimitFix/Engine/Views/FocusViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -40,35 +41,23 @@ namespace DCLF
 		return At<const RE::NiAVObject*>(targets, std::size_t(a_index) * 16 + 8);
 	}
 
-	const SunViews::Cascade* FocusViews::CascadeOf(const RE::BSShadowLight* a_light, std::uint32_t a_descriptor, std::uint32_t a_sceneFrame) const
-	{
-		if (a_sceneFrame != sceneFrame)
-			return nullptr;
-		for (const auto& host : hosts)
-			if (host.light == a_light)
-				return a_descriptor < host.views.size() && host.views[a_descriptor].valid ? &host.views[a_descriptor] : nullptr;
-		return nullptr;
-	}
-
-	const RE::NiAVObject* FocusViews::TargetOf(std::uint32_t a_descriptor, std::uint32_t a_sceneFrame) const
-	{
-		return a_sceneFrame == sceneFrame && a_descriptor < targetCount ? targets[a_descriptor] : nullptr;
-	}
-
 	void FocusViews::Update(const RE::BSShadowLight* a_light)
 	{
+		auto& board = ShadowCameras::Focus();
+		auto& hosts = board.hosts;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
-		if (frame != sceneFrame) {
+		if (frame != board.sceneFrame) {
 			if (!hosts.empty())
 				Diagnostics::Notify<Diagnostics::EnginePoint::FocusViewsFrame>();
 			hosts.clear();
-			sceneFrame = frame;
+			board.sceneFrame = frame;
 		}
 		// The targets as sub read them.
-		targetCount = std::min(EngineTargetCount(), kMaxFocus);
+		constexpr std::uint32_t kMaxFocus = ShadowCameras::FocusFrame::kMaxFocus;
+		const std::uint32_t targetCount = board.targetCount = std::min(EngineTargetCount(), kMaxFocus);
 		for (std::uint32_t i = 0; i < kMaxFocus; ++i)
-			targets[i] = i < targetCount ? EngineTarget(i) : nullptr;
-		Host* host = nullptr;
+			board.targets[i] = i < targetCount ? EngineTarget(i) : nullptr;
+		ShadowCameras::FocusFrame::Host* host = nullptr;
 		for (auto& existing : hosts)
 			if (existing.light == a_light)
 				host = &existing;
@@ -77,14 +66,14 @@ namespace DCLF
 			host->light = a_light;
 		}
 		auto& data = const_cast<RE::BSShadowLight*>(a_light)->GetRuntimeData();
-		host->views.assign(targetCount, SunViews::Cascade{});
+		host->views.assign(targetCount, ShadowCameras::Camera{});
 		for (std::uint32_t d = 0; d < targetCount; ++d) {
 			const auto* camera = data.focusShadowmapDescriptors[d].camera.get();
 			if (!camera)
 				continue;
 			auto& view = host->views[d];
-			SunViews::CameraMatrices(*camera, view);
-			SunViews::FrustumPlanes(const_cast<RE::NiCamera*>(camera)->GetRuntimeData2().viewFrustum, camera->world, view.frustum);
+			ShadowCameras::CameraMatrices(*camera, view);
+			ShadowCameras::FrustumPlanes(const_cast<RE::NiCamera*>(camera)->GetRuntimeData2().viewFrustum, camera->world, view.frustum);
 			// No caster volume and no cull: the focus accumulation registers the target's subtree whole.
 			view.valid = true;
 		}

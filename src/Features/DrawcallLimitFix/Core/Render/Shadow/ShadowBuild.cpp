@@ -9,10 +9,10 @@ namespace DCLF::Draws
 {
 	namespace
 	{
-		/** @brief In the frame's DCLF set for the mode's phase: the only objects the mode's views draw. */
+		/** @brief In the frame's DCLF set for the mode's phase (Extensions::ShadowViewSet::phaseOfMode): the only objects the mode's views draw. */
 		bool SetCaster(const SceneTables& a_tables, std::uint32_t a_object, std::uint32_t a_mode)
 		{
-			return a_object < a_tables.setPhases.size() && (a_tables.setPhases[a_object] & SetPhaseOfMode(a_mode)) != 0;
+			return a_object < a_tables.setPhases.size() && (a_tables.setPhases[a_object] & Extensions::ShadowViewsSet().phaseOfMode[a_mode]) != 0;
 		}
 
 		/** @brief The key slot of a_technique on a_object's geometry, or ~0u (none, or not yet). */

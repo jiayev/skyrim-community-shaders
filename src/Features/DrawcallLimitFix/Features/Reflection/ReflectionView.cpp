@@ -73,10 +73,10 @@ namespace DCLF::Features::Reflection
 		face = {};
 		// VS_PerFrame for the face's camera over the frame's registers as the renderer last uploaded them (as the engine uploads it for
 		// a face: no jitter, no previous camera).
-		SunViews::Cascade view;
-		SunViews::CameraMatrices(a_camera, view);
+		ShadowCameras::Camera view;
+		ShadowCameras::CameraMatrices(a_camera, view);
 		PerFrameBlock(view, FrameBlockNow(), false, nullptr, face.perFrame.data());
-		face.perFrameBytes = SunViews::kBlockBytes;
+		face.perFrameBytes = ShadowCameras::kBlockBytes;
 		const auto* floats = reinterpret_cast<const float*>(face.perFrame.data());
 		std::memcpy(face.viewProj.data(), floats + 32, sizeof(float) * 16);
 		face.eye = { floats[160], floats[161], floats[162] };

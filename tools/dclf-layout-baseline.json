@@ -1,7 +1,7 @@
 {
  "legacyEdges": {
-  "Core -> Engine": 24,
-  "Core -> Scene": 30,
+  "Core -> Engine": 25,
+  "Core -> Scene": 29,
   "Engine -> Scene": 33,
   "Features/Billboards -> Engine": 1,
   "Features/Billboards -> Scene": 3,
@@ -13,7 +13,7 @@
   "Features/Particles -> Engine": 1,
   "Features/Particles -> Scene": 2,
   "Features/TextureTransforms -> Scene": 1,
-  "Scene -> Engine": 35
+  "Scene -> Engine": 34
  },
  "overThresholds": {
   "DCLF::AuditTreeLod": [
@@ -100,10 +100,6 @@
    470,
    1
   ],
-  "DCLF::IndirectDraws::CaptureShadowView": [
-   164,
-   60
-  ],
   "DCLF::IndirectDraws::ExecuteShadowFrame": [
    283,
    78
@@ -111,10 +107,6 @@
   "DCLF::JudgeObject": [
    92,
    48
-  ],
-  "DCLF::LightSelection::Select": [
-   93,
-   41
   ],
   "DCLF::MaterialPort::EvaluateVanilla": [
    212,
@@ -150,7 +142,7 @@
   ],
   "DCLF::Reports::Stats": [
    225,
-   93
+   91
   ],
   "DCLF::Scene::Coordinator::ApplyBatch": [
    202,
@@ -185,7 +177,7 @@
    28
   ],
   "DCLF::Scene::Coordinator::EvaluateWrite": [
-   148,
+   149,
    72
   ],
   "DCLF::Scene::Coordinator::FinishDeltaWalk": [

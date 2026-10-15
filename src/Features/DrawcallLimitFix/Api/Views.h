@@ -5,17 +5,17 @@
 // feature takes it, under the feature's toggle; and the feature's work at the view's engine points.
 
 #include "Features/DrawcallLimitFix/Api/Settings.h"
+#include "Features/DrawcallLimitFix/Api/ViewCommon.h"
 
 #include <cstdint>
 #include <string_view>
 
 namespace DCLF::Api
 {
-	// Core-defined (Core/Extensions/Views.h): what a view's callbacks and work are handed.
+	// Core-defined (Core/Extensions/Views.h): what a view's callbacks are handed (its work's context: Api/ViewCommon.h).
 	class ViewCoverage;
 	class ViewRootCapture;
 	class ViewAccumulators;
-	class ViewPointContext;
 
 	/**
 	 * @brief An engine view Core's view machinery draws once a feature takes it. The order is Core's slot order (Core/Render/Views/
@@ -136,17 +136,10 @@ namespace DCLF::Api
 		void (*accumulators)(ViewAccumulators& a_accumulators) = nullptr;
 	};
 
-	/** @brief The engine points a view's work runs at (render thread, while DCLF runs). */
-	enum class ViewPoint : std::uint8_t
-	{
-		FrameStartBeforeCoverage,  // FrameDriver::BeginFrame, after SyncFrameTables, before SunAccumulation::BeginFrame and DecideCoverage
-		FrameStartAfterTreeLod,    // FrameDriver::BeginFrame, after DecideTreeLod, before PublishListFilter and FrameValues::Kick
-		DepthCommitted,            // Main::RenderDepth's world-drawn point, right after the depth commit (FrameDriver::DepthCommitted)
-		Count,
-	};
 	/**
-	 * @brief A feature's work for a view at an engine point: run there once a frame, render thread, the views in EngineView order and a
-	 * view's work in registration order (the view's feature's). Runs whatever the view's toggle: the work reads it.
+	 * @brief A feature's work for a view at an engine point (Api/ViewCommon.h's ViewPoint): run there once a frame, render thread, the
+	 * views in EngineView order and a view's work in registration order (the view's feature's). Runs whatever the view's toggle: the work
+	 * reads it.
 	 */
 	struct ViewWork
 	{

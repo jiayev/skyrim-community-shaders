@@ -1,5 +1,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Draws.h"
 #include "Engine.h"
 
@@ -85,13 +86,18 @@ namespace DCLF
 			a = {};
 		}
 		if (auto& p = Diagnostics::DrawsState::Get().viewMasks; p.checks.load(std::memory_order_relaxed)) {
-			static constexpr std::array<const char*, 2 + kShadowModeCount> kLists{ "main", "main drawable", "plain", "clamped", "paraboloid", "sky occlusion", "precipitation" };
+			// The main lists, the caster modes', then each occlusion map's (its entry's list label).
+			static constexpr std::array<const char*, 2 + kFirstOcclusionMode> kLists{ "main", "main drawable", "plain", "clamped", "paraboloid" };
+			const auto listName = [](std::size_t a_list) -> std::string_view {
+				const std::size_t list = std::min<std::size_t>(a_list, 1 + kShadowModeCount);
+				return list < kLists.size() ? std::string_view(kLists[list]) : std::string_view(Extensions::OcclusionMapOf(static_cast<std::uint32_t>(list - kLists.size())).list);
+			};
 			const auto first = p.first.exchange(~0ull);
 			const auto differ = p.differ.exchange(0);
 			text += fmt::format("[DCLF] view mask parity (U3): {} publications, {} inputs, {} with a mask other than their object's or outside their list's views{}{}\n",
 				p.checks.exchange(0), p.inputs.exchange(0), differ, differ ? " <- VIEW MASK" : " <- OK",
 				first == ~0ull ? std::string() :
-								 fmt::format("; first: {} input of object {}, mask {:#x}, expected {:#x}", kLists[std::min<std::size_t>(first >> 56, kLists.size() - 1)],
+								 fmt::format("; first: {} input of object {}, mask {:#x}, expected {:#x}", listName(first >> 56),
 									 (first >> 24) & 0xFFFFFFFFu, p.firstMask.load(std::memory_order_relaxed), first & 0xFFFFFFu));
 		}
 		return text;

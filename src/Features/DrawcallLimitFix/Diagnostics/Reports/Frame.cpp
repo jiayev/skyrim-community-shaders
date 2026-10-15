@@ -7,6 +7,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/FrameDriver.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/RegistrationCensus.h"
 
 #include "Deferred.h"
@@ -212,8 +213,8 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 				if (shadow.occlusionDrawn[v] || shadow.occlusionNotReady[v] || occlusionNativeFrames[v])
 					logger::info("[DCLF] {} occlusion: DCLF drew {} maps ({} of the set's occluders, last), {} it could not draw, {} left to the engine whole; the engine "
 								 "registered the map's other occluders on {} frames ({} not members now); {} member passes withheld (last frame)",
-						v == DCLF::kOcclusionSky ? "Skylighting" : "precipitation", shadow.occlusionDrawn[v], shadow.occlusionInputs[v], shadow.occlusionNotReady[v],
-						occlusionNativeFrames[v], occlusionEngineFrames[v], DCLF::Scene::FrameView::Get().SetLacking(v == DCLF::kOcclusionSky ? DCLF::kSetOccluderSky : DCLF::kSetOccluderPrecipitation),
+						DCLF::Extensions::OcclusionMapOf(v).report, shadow.occlusionDrawn[v], shadow.occlusionInputs[v], shadow.occlusionNotReady[v],
+						occlusionNativeFrames[v], occlusionEngineFrames[v], DCLF::Scene::FrameView::Get().SetLacking(DCLF::Extensions::OcclusionMapOf(v).phase),
 						DCLF::PassCapture::Get().GetStats().occlusionWithheld);
 			if (shadow.occlusionEpochs)
 				logger::info("[DCLF] occlusion maps: {} epochs, render thread {:.3f} ms per epoch", shadow.occlusionEpochs, shadow.occlusionMs / shadow.occlusionEpochs);

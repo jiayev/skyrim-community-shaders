@@ -194,7 +194,4 @@ namespace DCLF
 	private:
 		const ToggleSet* previous;
 	};
-
-	/** @brief Whether DCLF draws an occlusion view (kOcclusion*): its toggle, and Skylighting, whose hook drives both maps. */
-	bool OcclusionEnabled(std::uint32_t a_view);
 }

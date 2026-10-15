@@ -5,7 +5,9 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ViewCommon.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -43,6 +45,9 @@ namespace DCLF::Extensions
 			// By view: its contribution (EngineView::Count: none); the views' work, in order. Resolved at the end (ResolveViews).
 			std::array<Api::ViewContribution, kEngineViews> views{};
 			std::vector<Api::ViewWork> viewWork;
+			// By map and by source: its contribution (Count: none). Resolved at the end (ResolveShadowViews).
+			std::array<Api::OcclusionMapContribution, kOcclusionMaps> occlusionMaps{};
+			std::array<Api::ShadowSourceContribution, kShadowSources> shadowSources{};
 			bool installed = false;
 		};
 
@@ -260,6 +265,32 @@ namespace DCLF::Extensions
 				lists.viewWork.push_back(a_work);
 			}
 
+			void RegisterOcclusionMap(const Api::OcclusionMapContribution& a_map) override
+			{
+				// Its toggle, flag and bits always, the import for an ImportedTexture map. Its bits are checked against Core's and the other
+				// views' once all are in (ResolveViewBits); a map Core still fills, as the maps are resolved (ResolveShadowViews).
+				if (a_map.map >= Api::OcclusionMap::Count || !a_map.toggle || !a_map.available || !a_map.bits.phase || !a_map.bits.viewBit ||
+					(a_map.target == Api::OcclusionTarget::ImportedTexture && !a_map.importTarget))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete occlusion map contribution", feature));
+				auto& entry = lists.occlusionMaps[static_cast<std::size_t>(a_map.map)];
+				if (entry.map != Api::OcclusionMap::Count)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes occlusion map {}, which another feature has", feature, static_cast<std::uint32_t>(a_map.map)));
+				entry = a_map;
+			}
+
+			void RegisterShadowSource(const Api::ShadowSourceContribution& a_source) override
+			{
+				// A local light source is told of each light the selection keeps.
+				const bool local = a_source.source == Api::ShadowSource::Spot || a_source.source == Api::ShadowSource::Point;
+				if (a_source.source >= Api::ShadowSource::Count || (local && !a_source.lightKept))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shadow source contribution", feature));
+				auto& entry = lists.shadowSources[static_cast<std::size_t>(a_source.source)];
+				if (entry.source != Api::ShadowSource::Count)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes shadow source {}, which another feature has", feature,
+						static_cast<std::uint32_t>(a_source.source)));
+				entry = a_source;
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -288,8 +319,11 @@ namespace DCLF::Extensions
 			if (feature.install)
 				feature.install(context);
 		}
-		// The views' entries, from Core's slots and the features' contributions and work.
+		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
+		// the features' contributions and Core's own; then both families' phases and view bits.
 		ResolveViews(lists.views, lists.viewWork);
+		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
+		ResolveViewBits();
 		// The features' toggles seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
 	}

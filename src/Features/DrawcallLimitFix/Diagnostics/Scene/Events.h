@@ -2,7 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneView.h"
 
@@ -182,7 +182,7 @@ namespace DCLF::Diagnostics
 	/** @brief LocalShadowLights::Sample: a local shadow descriptor's volume as LightViews has it, and its culling process after the cull. */
 	struct ShadowVolumeSampled
 	{
-		const SunViews::Cascade& view;
+		const ShadowCameras::Camera& view;
 		const RE::BSCullingProcess& process;
 	};
 

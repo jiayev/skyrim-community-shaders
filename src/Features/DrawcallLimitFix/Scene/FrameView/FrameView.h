@@ -254,10 +254,11 @@ namespace DCLF::Scene
 		 */
 		std::uint32_t SetLacking(std::uint8_t a_phase) const
 		{
-			// The third count is the LodTechniques views' phases' (the reflection's).
-			const std::uint8_t lodPhases = Extensions::Views().lodPhases;
-			const bool lod = a_phase && (a_phase & lodPhases) == a_phase;
-			return a_phase == kSetOccluderSky ? frameLackingCount[0] : a_phase == kSetOccluderPrecipitation ? frameLackingCount[1] : lod ? frameLackingCount[2] : 0u;
+			// The counts are by Extensions::ViewBitTable::lackingPhases: the occlusion maps', then the LodTechniques views' phases' (the
+			// reflection's).
+			const auto& lacking = Extensions::ResolvedViewBits().lackingPhases;
+			const bool lod = a_phase && (a_phase & lacking[2]) == a_phase;
+			return a_phase && a_phase == lacking[0] ? frameLackingCount[0] : a_phase && a_phase == lacking[1] ? frameLackingCount[1] : lod ? frameLackingCount[2] : 0u;
 		}
 		/** @brief Render thread (PrimaryCull): posted latest-wins, applied at the coordinator's next scene pass. */
 		void SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned)

@@ -12,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
@@ -292,13 +293,13 @@ namespace DCLF
 	{
 		auto& capture = PassCapture::Get();
 		capture.SetOcclusionPhase(0);
-		if (!a_running || !OcclusionEnabled(a_map))
+		if (!a_running || !Extensions::OcclusionOn(ActiveToggles(), a_map))
 			return false;
 		// DCLF draws the map's members of the set this frame (none until its phase is drawn: a frame after the first that drew it).
 		const bool ready = IndirectDraws::Get().OcclusionReady(a_map);
 		counters.occlusionNativeFrames[a_map] += ready ? 0 : 1;
 		occlusionWanted |= ready ? 1u << a_map : 0u;
-		const std::uint8_t phase = a_map == kOcclusionSky ? kSetOccluderSky : kSetOccluderPrecipitation;
+		const std::uint8_t phase = Extensions::OcclusionMapOf(a_map).phase;
 		const auto set = capture.CurrentSet();
 		if (ready && set && (set->drawn & phase))
 			capture.SetOcclusionPhase(phase);
@@ -307,10 +308,10 @@ namespace DCLF
 
 	bool FrameDriver::OcclusionNeedsEngine(std::uint32_t a_map, bool a_running)
 	{
-		const std::uint8_t phase = a_map == kOcclusionSky ? kSetOccluderSky : kSetOccluderPrecipitation;
+		const std::uint8_t phase = a_map < Extensions::kOcclusionMaps ? Extensions::OcclusionMapOf(a_map).phase : std::uint8_t{ 0 };
 		auto& view = Scene::FrameView::Get();
 		const auto set = view.FrameClaims();
-		const bool needed = !a_running || !OcclusionEnabled(a_map) || !(occlusionWanted & (1u << a_map)) || !set || !(set->drawn & phase) ||
+		const bool needed = !a_running || !Extensions::OcclusionOn(ActiveToggles(), a_map) || !(occlusionWanted & (1u << a_map)) || !set || !(set->drawn & phase) ||
 		                    view.SetLacking(phase) > 0;
 		// The engine's cull of the map reads the scene lists: whole again.
 		if (needed)

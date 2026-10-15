@@ -218,17 +218,17 @@ namespace DCLF
 				mirror.Watch(perFrame);
 				frame = mirror.Contents(perFrame);
 			}
-			if (frame.size() < SunViews::kBlockBytes) {
+			if (frame.size() < ShadowCameras::kBlockBytes) {
 				const auto& cached = globals::game::frameBufferCached.data;
-				static_assert(sizeof(cached) >= SunViews::kBlockBytes);
+				static_assert(sizeof(cached) >= ShadowCameras::kBlockBytes);
 				frame = std::as_bytes(std::span(&cached, 1));
 			}
 			return frame;
 		}
 
-		void PerFrameBlock(const SunViews::Cascade& a_camera, std::span<const std::byte> a_frame, bool a_jitter, const PreviousCamera* a_previous, std::byte* a_out)
+		void PerFrameBlock(const ShadowCameras::Camera& a_camera, std::span<const std::byte> a_frame, bool a_jitter, const PreviousCamera* a_previous, std::byte* a_out)
 		{
-			std::memcpy(a_out, a_frame.data(), SunViews::kBlockBytes);
+			std::memcpy(a_out, a_frame.data(), ShadowCameras::kBlockBytes);
 			auto* out = reinterpret_cast<float*>(a_out);
 			auto transposed = [&](std::uint32_t a_register, const std::array<float, 16>& a_m) {
 				for (std::uint32_t row = 0; row < 4; ++row)

@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -148,7 +149,7 @@ namespace DCLF
 			return nullptr;
 		}
 		// Precipitation::SetupMask culls every list when the engine draws an occlusion map: both must be DCLF's.
-		if (!OcclusionEnabled(kOcclusionSky) || !OcclusionEnabled(kOcclusionPrecipitation)) {
+		if (!Extensions::OcclusionOn(ActiveToggles(), kOcclusionSky) || !Extensions::OcclusionOn(ActiveToggles(), kOcclusionPrecipitation)) {
 			++listStats.noOcclusion;
 			return nullptr;
 		}

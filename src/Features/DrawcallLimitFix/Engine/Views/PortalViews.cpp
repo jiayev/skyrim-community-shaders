@@ -7,7 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Views/PortalShapes.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -1242,8 +1242,8 @@ namespace DCLF
 		const auto& world = *reinterpret_cast<const RE::NiTransform*>(cam + kCameraRotation);
 		const auto& frustum = *reinterpret_cast<const RE::NiFrustum*>(cam + kCameraFrustum);
 		camera.eye = { world.translate.x, world.translate.y, world.translate.z };
-		SunViews::Planes planes;
-		SunViews::FrustumPlanes(frustum, world, planes);
+		ShadowCameras::Planes planes;
+		ShadowCameras::FrustumPlanes(frustum, world, planes);
 		camera.view = {};
 		for (std::uint32_t p = 0; p < 6; ++p)
 			camera.view.plane[p] = planes.plane[p];

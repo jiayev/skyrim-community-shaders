@@ -6,7 +6,7 @@
 
 #include "DrawsView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
 namespace DCLF::Diagnostics
 {
@@ -165,7 +165,7 @@ namespace DCLF::Diagnostics
 	struct OwnShadowViewport
 	{
 		const Draws::PendingView& view;
-		const SunViews::Cascade* cascade;
+		const ShadowCameras::Camera* cascade;
 		std::uint32_t descriptor, target;
 		ShadowView kind;
 	};
@@ -174,7 +174,7 @@ namespace DCLF::Diagnostics
 	struct OwnShadowCamera
 	{
 		const Draws::PendingView& view;
-		const SunViews::Cascade& cascade;
+		const ShadowCameras::Camera& cascade;
 		std::uint32_t descriptor;
 		ShadowView kind;
 	};

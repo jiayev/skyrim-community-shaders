@@ -4,8 +4,6 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 
-#include <bit>
-
 namespace DCLF::Extensions
 {
 	namespace
@@ -57,49 +55,16 @@ namespace DCLF::Extensions
 			a_entry.accumulators = a_view.accumulators;
 		}
 
-		/** @brief Each registered view's phase and view bit: one bit, none Core's (its phases and view bits) nor another view's. */
-		void CheckViewBits(const ViewSet& a_set)
+		/** @brief The set's phases and view bits from its entries (the view bits by phase: ResolveViewBits). */
+		void DeriveViewPhases(ViewSet& a_set)
 		{
-			std::uint32_t phases = kCoreSetPhases, viewBits = Draws::kCoreViewBits;
-			for (std::size_t v = 0; v < a_set.views.size(); ++v) {
-				const auto& entry = a_set.views[v];
-				if (!entry.registered)
-					continue;
-				if (!std::has_single_bit(static_cast<std::uint32_t>(entry.phase)) || (entry.phase & phases) || !std::has_single_bit(entry.viewBit) || (entry.viewBit & viewBits))
-					stl::report_and_fail(fmt::format("Drawcall Limit Fix: view {} has a set phase ({:#x}) or view bit ({:#x}) that is none, more than one, or Core's or another view's",
-						v, entry.phase, entry.viewBit));
-				phases |= entry.phase;
-				viewBits |= entry.viewBit;
-			}
-		}
-
-		void AddPhaseBits(ViewSet& a_set, std::uint8_t a_phase, std::uint32_t a_viewBits)
-		{
-			for (std::uint32_t b = 0; b < a_set.viewBitsOfPhaseBit.size(); ++b)
-				if (a_phase & (1u << b))
-					a_set.viewBitsOfPhaseBit[b] |= a_viewBits;
-		}
-
-		/** @brief The set's phases and view bits from its entries, and the view bits by phase (Core's phases', then the views'). */
-		void DeriveViewBits(ViewSet& a_set)
-		{
-			AddPhaseBits(a_set, kSetMain, Draws::kViewMain);
-			AddPhaseBits(a_set, kSetCaster, Draws::kViewSunCaster | Draws::kViewSpotCaster);
-			AddPhaseBits(a_set, kSetCasterPoint, Draws::kViewPointCaster);
-			AddPhaseBits(a_set, kSetOccluderSky, Draws::kViewSkyOccluder);
-			AddPhaseBits(a_set, kSetOccluderPrecipitation, Draws::kViewPrecipOccluder);
 			for (const auto& entry : a_set.views) {
 				const bool root = entry.membership == Api::ViewMembership::CategoryRoot;
 				a_set.phases |= entry.phase;
 				(root ? a_set.rootPhases : a_set.lodPhases) |= entry.phase;
 				a_set.viewBits |= entry.viewBit;
 				a_set.rootViewBits |= root ? entry.viewBit : 0u;
-				AddPhaseBits(a_set, entry.phase, entry.viewBit);
 			}
-			for (std::uint32_t mask = 0; mask < a_set.viewBitsOfPhases.size(); ++mask)
-				for (std::uint32_t b = 0; b < a_set.viewBitsOfPhaseBit.size(); ++b)
-					if (mask & (1u << b))
-						a_set.viewBitsOfPhases[mask] |= a_set.viewBitsOfPhaseBit[b];
 		}
 
 		/**
@@ -144,8 +109,7 @@ namespace DCLF::Extensions
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: work was registered for view {}, which no feature contributes", static_cast<std::uint32_t>(work.view)));
 			WorkAt(entry, work.point).push_back(work.run);
 		}
-		CheckViewBits(set);
-		DeriveViewBits(set);
+		DeriveViewPhases(set);
 		DeriveOrders(set);
 		Detail::resolvedViews = std::move(set);
 		// The shapes' views into the strings where they now stand.

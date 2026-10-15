@@ -1,6 +1,8 @@
-// LightViews: the kept local lights' views, computed on the render thread from LightSelection's detour.
+// LightViews: the kept local lights' views (ShadowCameras::Lights), computed on the render thread from LightSelection's detour.
 
 #include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
+
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -16,25 +18,17 @@ namespace DCLF
 		return instance;
 	}
 
-	const SunViews::Cascade* LightViews::CascadeOf(const RE::BSShadowLight* a_light, std::uint32_t a_descriptor, std::uint32_t a_sceneFrame) const
-	{
-		if (a_sceneFrame != sceneFrame)
-			return nullptr;
-		for (const auto& light : lights)
-			if (light.light == a_light)
-				return a_descriptor < light.views.size() && light.views[a_descriptor].valid ? &light.views[a_descriptor] : nullptr;
-		return nullptr;
-	}
-
 	void LightViews::Update(const RE::BSShadowLight* a_light)
 	{
+		auto& board = ShadowCameras::Lights();
+		auto& lights = board.lights;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
-		if (frame != sceneFrame) {
+		if (frame != board.sceneFrame) {
 			// A new frame: last frame's views go; the observers count frames that had local lights.
 			if (!lights.empty())
 				Diagnostics::Notify<Diagnostics::EnginePoint::LightViewsFrame>();
 			lights.clear();
-			sceneFrame = frame;
+			board.sceneFrame = frame;
 		}
 		auto& light = lights.emplace_back();
 		light.light = a_light;
@@ -49,15 +43,15 @@ namespace DCLF
 			if (!camera)
 				continue;
 			auto& view = light.views[d];
-			SunViews::CameraMatrices(*camera, view);
-			SunViews::FrustumPlanes(const_cast<RE::NiCamera*>(camera)->GetRuntimeData2().viewFrustum, camera->world, view.frustum);
+			ShadowCameras::CameraMatrices(*camera, view);
+			ShadowCameras::FrustumPlanes(const_cast<RE::NiCamera*>(camera)->GetRuntimeData2().viewFrustum, camera->world, view.frustum);
 			// The caster volume UpdateCamera left on the light's culling process (none: mask 0), and what its cull tests.
 			const auto* process = static_cast<const RE::NiCullingProcess*>(descriptor.cullingProcess);
 			if (process && process->doCustomCullPlanes)
-				SunViews::CullPlanes(process, *camera, view.caster);
+				ShadowCameras::CullPlanes(process, *camera, view.caster);
 			// A point light's process (BSParabolicCullingProcess) culls without planes: they stay zero, and nothing is outside them.
 			if (!const_cast<RE::BSShadowLight*>(a_light)->GetIsParabolicLight() || (process && process->doCustomCullPlanes))
-				SunViews::CullPlanes(process, *camera, view.cull);
+				ShadowCameras::CullPlanes(process, *camera, view.cull);
 			view.valid = true;
 		}
 	}
