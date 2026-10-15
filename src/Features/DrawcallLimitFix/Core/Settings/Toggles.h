@@ -45,12 +45,6 @@ namespace DCLF
 		// the refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward;
 		// on by default: CS_DCLF_REFRACTION=0 seeds it off);
 		bool refraction = false;
-		// object LOD (TES::lodLandRoot's BSSubIndexTriShape blocks): tracked under the LOD root, drawn by their visible segments;
-		bool lodObjects = false;
-		// terrain LOD (TES::lodLandRoot's land blocks, the LODLand and LODLandNoise techniques): tracked under the LOD root;
-		bool lodTerrain = false;
-		// tree LOD (the LOD trees root's instanced shapes): drawn by DCLF's own cull and draws from the mirrored instance records;
-		bool lodTrees = false;
 		// skins of several partitions (LOD trees, actor bodies), one draw per partition the engine would draw;
 		bool skinPartitions = false;
 
@@ -64,8 +58,8 @@ namespace DCLF
 		bool excludePrimaryEntries = false;
 
 		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees;
-		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs; Features/FirstPerson: a view;
-		// Features/OcclusionMaps: its maps), ...
+		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs; Features/Lod: object and
+		// terrain LOD; Features/TreeLod: tree LOD; Features/FirstPerson: a view; Features/OcclusionMaps: its maps), ...
 		std::uint32_t registered = 0;
 		/** @brief Whether a feature's toggle is on (false for none). */
 		bool On(Api::ToggleId a_toggle) const { return a_toggle && ((registered >> a_toggle.bit) & 1u) != 0; }

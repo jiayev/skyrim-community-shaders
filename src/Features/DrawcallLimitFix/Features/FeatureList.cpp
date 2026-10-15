@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
+#include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
@@ -15,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
 #include "Features/DrawcallLimitFix/Features/SwitchNodes/SwitchNodes.h"
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
 #include <array>
@@ -35,7 +37,10 @@ namespace DCLF::Features
 		// partitions', before tree wind's and the decals' (which follow it there); it registers no pool, stage or product. Tree wind next:
 		// its seeds' pool runs right after the frame values' built-in parts, before the texture transforms' pool.
 		// Particles before billboards, then switch nodes: their toggles are listed after the refraction's in this order (the first two's
-		// switches too), and the first two's report lines. Hidden nodes' early hooks after billboards' (no order between them). Decals
+		// switches too), and the first two's report lines. LOD then tree LOD after switch nodes: their toggles follow the switch nodes'
+		// after the refraction's, in this order, and their switches are listed before the LOD gates' in this order; tree LOD's early hooks
+		// (its channel's source) after billboards', before hidden nodes' (no order between them); no pool, stage or product.
+		// Hidden nodes' early hooks after billboards' and tree LOD's (no order between them). Decals
 		// after tree wind: its switches and toggles are listed after the trees' (after the actors' and the skinned). Faces after them: its
 		// coordinator component's hooks after the others' at the points they share (the slot tables' reset). First person last, after the
 		// actors (its toggle needs theirs) and after billboards (its report lines follow theirs at the draws' async work); its switches and toggle
@@ -51,6 +56,8 @@ namespace DCLF::Features
 			Particles::Feature(),
 			Billboards::Feature(),
 			SwitchNodes::Feature(),
+			Lod::Feature(),
+			TreeLod::Feature(),
 			HiddenNodes::Feature(),
 			Decals::Feature(),
 			Faces::Feature(),

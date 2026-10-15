@@ -3,6 +3,7 @@
 // main shape's plans (shared with the commits).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
@@ -385,7 +386,7 @@ namespace DCLF
 			if (traits.forwardPart)
 				ViewForwardSlotsOf(tables, viewOn[v], viewForwardSlots);
 			if (traits.trees)
-				viewRevisionTree = viewOn[v] && inputs.toggles.lodTrees ? ForwardPipelineOf(a_make.catalog, ForwardPipelineKey{ 0, 0, ForwardPipelineKey::kForwardTreeLod }, view.targets) :
+				viewRevisionTree = viewOn[v] && Extensions::ObjectClassOn(inputs.toggles, Api::ObjectClass::TreeLod) ? ForwardPipelineOf(a_make.catalog, ForwardPipelineKey{ 0, 0, ForwardPipelineKey::kForwardTreeLod }, view.targets) :
 				                                                          rhi::PipelineHandle{};
 			if (!view.resources || (traits.depthPass && !viewOn[v]))
 				continue;

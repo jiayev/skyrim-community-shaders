@@ -51,12 +51,12 @@ namespace DCLF::Eligibility
 		const bool multiIndex = type == RE::BSGeometry::Type::kMultiIndexTriShape;
 		// Object LOD (dclf-lod.md): a BSSubIndexTriShape whose Lighting property has the LOD object flags, drawn by the segment
 		// runs the engine leaves visible (FUN_1414f2ad0, type 8): a tri-shape over the ranges LodSegments mirrors. Tracked under
-		// TES::lodLandRoot; LOD without its toggle. Any other sub-index shape is not one DCLF draws.
+		// TES::lodLandRoot; LOD without its class (ObjectClass::LodObjects). Any other sub-index shape is not one DCLF draws.
 		bool lodObject = false;
 		if (type == RE::BSGeometry::Type::kSubIndexTriShape) {
 			const auto* lodProperty = SceneCapture::LeafView::Lighting(a_leaf.property);
 			if (lodProperty && IsLodObject(lodProperty->flags, g.type)) {
-				if (!ActiveToggles().lodObjects)
+				if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::LodObjects))
 					return Ineligible::Lod;
 				lodObject = true;
 			}

@@ -241,7 +241,8 @@ namespace DCLF
 		std::string VisibilityReport();
 		/**
 		 * @brief Render thread, the frame's first DCLF point, before the main camera's cull: whether DCLF draws tree LOD this frame
-		 * (toggle, pipelines, tables, the engine's tree LOD texture). If so PassCapture withholds the engine's tree LOD passes.
+		 * (the tree LOD class on: Api::ObjectClass::TreeLod; pipelines, tables, the engine's tree LOD texture). If so PassCapture withholds
+		 * the engine's tree LOD passes.
 		 */
 		bool DecideTreeLod();
 		/**
@@ -282,9 +283,10 @@ namespace DCLF
 		/** @brief The view's state's slot pipelines dropped (the view off: none of its slots is ready, PhaseReady). */
 		void DropViewPipelines(Api::EngineView a_view);
 		/**
-		 * @brief Tree LOD drawn per face by a trees view (Api::ViewShape::trees; Core's while TreeLod is), render thread, once a frame after
-		 * DecideTreeLod. ResolveViewTreeLod: its forward pipeline asked of the pipeline lane and read from a_catalog for the view's targets
-		 * while a_on and the tree LOD toggle are (none otherwise); true while it is still to come and the main view's tree LOD is DCLF's.
+		 * @brief Tree LOD drawn per face by a trees view (Api::ViewShape::trees: the view engine's, from Core's tree LOD tables), render
+		 * thread, once a frame after DecideTreeLod. ResolveViewTreeLod: its forward pipeline asked of the pipeline lane and read from a_catalog
+		 * for the view's targets while a_on and the tree LOD class are (Api::ObjectClass::TreeLod; none otherwise); true while it is still to
+		 * come and the main view's tree LOD is DCLF's.
 		 * DecideViewTreeLod: whether the faces' tree LOD is DCLF's this frame (the view drawable and covered, its pipeline ready, the main
 		 * view's tree LOD DCLF's, the last depth commit's row and tree LOD's pipelines there), published to PassCapture
 		 * (SetViewTreeLodOwned). SubmitViewEpoch draws its row then.
@@ -294,8 +296,9 @@ namespace DCLF
 		/**
 		 * @brief Render thread, at a cube camera update's start (Features/Reflection's update hook): the camera's LOD roots a_view's faces
 		 * draw in the engine's place (PassCapture::kLodRoots, kTreeRoot), whose add-roots are skipped so the engine neither culls nor
-		 * registers them. Core's while tree LOD and the LOD gates are: the tree root while the faces' tree LOD is DCLF's, the LOD land and
-		 * objects roots while the LOD swaps are gated (LodGates) and both are DCLF's; none on a non-plain update, while the view is not
+		 * registers them, read of the classes' contributions and the LOD gates: the tree root while the faces' tree LOD is DCLF's, the LOD
+		 * land and objects roots while the LOD swaps are gated (LodGates) and both are DCLF's (Api::ObjectClass::LodObjects and LodTerrain
+		 * on); none on a non-plain update, while the view is not
 		 * drawable or covered, or on an update that keeps them for the residue watch (Policy::KeepReflectionRoots).
 		 */
 		std::uint32_t ViewLodRootsOwned(Api::EngineView a_view, bool a_plain);
@@ -343,7 +346,7 @@ namespace DCLF
 		 * @brief The view's epoch a_epoch (0 the depth or only one, 1 the colour one) submitted: its recording from the adopted revision,
 		 * with a commit of a_faces (its cameras: none commits nothing) into its shape, holding a_listed's payloads; a_drawn: the faces the
 		 * commit drew. A trees view's commit takes tree LOD's row as the last depth commit uploaded it while the faces' tree LOD is DCLF's
-		 * (DecideViewTreeLod) and the shape draws it, its texture bound again for the execution (Core's while TreeLod is).
+		 * (DecideViewTreeLod) and the shape draws it, its texture bound again for the execution.
 		 */
 		ViewSubmit SubmitViewEpoch(Api::EngineView a_view, std::uint32_t a_epoch, const ViewListed& a_listed, std::span<const Draws::ViewFace> a_faces,
 			std::uint32_t* a_drawn = nullptr);

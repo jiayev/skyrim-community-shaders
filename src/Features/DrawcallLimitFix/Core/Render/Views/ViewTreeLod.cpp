@@ -1,10 +1,12 @@
 // A view's tree LOD per face and the LOD it draws in the engine's place (IndirectDraws.h, "The view engine"): what the view features read of
-// tree LOD and the LOD gates while those are Core's (dclf-lod.md, "Water reflections"). A trees view's tree LOD pipeline, ownership and row
+// Core's tree LOD path and the LOD gates, under the LOD classes' contributions (Api::ObjectClass::TreeLod, LodObjects, LodTerrain, read as
+// data; dclf-lod.md, "Water reflections"). A trees view's tree LOD pipeline, ownership and row
 // (ResolveViewTreeLod, DecideViewTreeLod, ViewTreeRow), the cube camera's LOD roots its faces draw (ViewLodRootsOwned) and a LodTechniques
 // view's phase readiness (LodPhaseReady). Render thread, but for LodPhaseReady (the scene lane's commit).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 
@@ -15,7 +17,7 @@ namespace DCLF
 		auto& state = impl->View(a_view);
 		bool waited = false;
 		state.treePipeline = {};
-		if (a_on && ActiveToggles().lodTrees) {
+		if (a_on && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::TreeLod)) {
 			// Its program is built of the DistantTree shader DecideTreeLod posts.
 			auto& drawPipelines = DrawPipelines::Get();
 			const ForwardPipelineKey treeKey{ 0, 0, ForwardPipelineKey::kForwardTreeLod };
@@ -58,7 +60,7 @@ namespace DCLF
 	{
 		// The roots whose members DCLF's faces draw, in a plain update of a frame whose faces are DCLF's (DecideCoverage):
 		// - LOD trees while the faces' tree LOD is DCLF's (DecideViewTreeLod): drawn from DCLF's mirror, no registration needed.
-		// - LOD land and objects while the engine's LOD swaps are gated (LodGates) and both are DCLF's (the toggles): a
+		// - LOD land and objects while the engine's LOD swaps are gated (LodGates) and both are DCLF's (their classes): a
 		//   swap's incoming blocks are shown only by the frame whose claims hold them, so the faces never need the engine's
 		//   registrations of them. Ungated, the LOD chunks and objects the engine shows or attaches in motion take DCLF a few frames
 		//   to bind (ClassifyResidue) and their roots stay, the members withheld (PassCapture).
@@ -67,7 +69,8 @@ namespace DCLF
 		if (!a_plain || !ViewDrawable(a_view) || !impl->ViewCovered(a_view) || !Policy::WithholdFromEngine())
 			return 0;
 		const auto toggles = ActiveToggles();
-		const bool lodOwned = LodGates::Enabled() && toggles.lodObjects && toggles.lodTerrain;
+		const bool lodOwned = LodGates::Enabled() && Extensions::ObjectClassOn(toggles, Api::ObjectClass::LodObjects) &&
+		                      Extensions::ObjectClassOn(toggles, Api::ObjectClass::LodTerrain);
 		const std::uint32_t owned = (impl->View(a_view).treeOwned ? PassCapture::kTreeRoot : 0u) | (lodOwned ? PassCapture::kLodRoots : 0u);
 		// The updates that keep the roots (Policy::KeepReflectionRoots): what the engine registers into the faces and DCLF does not
 		// withhold is watched, by root - the LOD roots' (what skipping them loses: any is a defect once they are owned) and the tree root's.

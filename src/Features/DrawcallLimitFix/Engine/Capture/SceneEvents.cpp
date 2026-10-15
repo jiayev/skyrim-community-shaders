@@ -5,7 +5,6 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 #include <xbyak/xbyak.h>
@@ -1061,6 +1060,6 @@ namespace DCLF::Scene
 		InstallMoveEvents();
 		// The hidden stores are Features/HiddenNodes' (its early hooks, right after these).
 		lodSegmentEventsInstalled = InstallLodSegmentHooks();
-		TreeLod::Install();
+		// Tree LOD's channel's source is Features/TreeLod's (its early hooks, right after these).
 	}
 }

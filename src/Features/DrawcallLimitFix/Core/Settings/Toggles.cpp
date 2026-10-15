@@ -28,9 +28,8 @@ namespace DCLF
 			{ &S::refraction, Switch::Refraction, kOn, "refraction", {}, "Refraction: heat haze, invisibility (CS_DCLF_REFRACTION)",
 				"T7d: DCLF draws refraction geometry's normals into the refraction normals the engine's refraction effect warps the frame by, in the forward epoch. On by default (validated w174/w175).",
 				true, { &S::forward } },
-			{ &S::lodObjects, Switch::LodObjects, kOn, "object LOD", {}, "Object LOD: distant objects (CS_DCLF_LOD_OBJECTS)", nullptr, true, {} },
-			{ &S::lodTerrain, Switch::LodTerrain, kOn, "terrain LOD", {}, "Terrain LOD: distant land (CS_DCLF_LOD_TERRAIN)", nullptr, true, {} },
-			{ &S::lodTrees, Switch::LodTrees, kOn, "tree LOD", {}, "Tree LOD: distant trees (CS_DCLF_LOD_TREES)", nullptr, false, {} },
+			// (Features/Particles', Features/Billboards' and Features/SwitchNodes' toggles follow the refraction's here, then Features/Lod's
+			// "object LOD" and "terrain LOD" and Features/TreeLod's "tree LOD".)
 			{ &S::skinPartitions, Switch::SkinPartitions, kOn, "skin partitions", {}, "Skins of several partitions: LOD trees, actor bodies (CS_DCLF_SKIN_PARTITIONS)", nullptr, true, { &S::skinned } },
 			{ &S::shadows, Switch::Shadows, kOn, "shadows", "Shadow views", "Draw the shadow views (CS_DCLF_SHADOWS)", nullptr, false, {} },
 			{ &S::skipSunAccumulation, Switch::SunSkip, kOn, "skip sun accumulation", {}, "Skip the engine's sun shadow culling and registration (CS_DCLF_SUN_SKIP)",

@@ -71,9 +71,8 @@ namespace DCLF
 			{ Refraction, "CS_DCLF_REFRACTION", F, Reduced::UnlessOne, false,
 				"1: refraction (kRefraction, kTempRefraction Lighting geometry: heat haze, invisibility) drawn by DCLF into the refraction normals in the forward epoch (T7d; needs CS_DCLF_FORWARD); 0 it stays native (live toggle's seed)" },
 			{ ProjectedUv, "CS_DCLF_PROJECTED_UV", F, Reduced::UnlessOne, false, "0: projected-UV objects stay native (live toggle's seed)" },
-			{ LodObjects, "CS_DCLF_LOD_OBJECTS", F, Reduced::UnlessOne, false, "0: object LOD stays native and untracked (live toggle's seed)" },
-			{ LodTerrain, "CS_DCLF_LOD_TERRAIN", F, Reduced::UnlessOne, false, "0: terrain LOD stays native (live toggle's seed)" },
-			{ LodTrees, "CS_DCLF_LOD_TREES", F, Reduced::UnlessOne, false, "0: tree LOD stays native (live toggle's seed)" },
+			// (Features/Lod's CS_DCLF_LOD_OBJECTS and CS_DCLF_LOD_TERRAIN, then Features/TreeLod's CS_DCLF_LOD_TREES, are listed here, before
+			// CS_DCLF_LOD_GATES.)
 			{ LodGates, "CS_DCLF_LOD_GATES", F, Reduced::Zero, false,
 				"0: the engine's LOD swaps ungated (T6b5: by default an object or terrain LOD swap keeps the outgoing level shown, and the incoming hidden, until DCLF's claims cover the incoming)" },
 			{ Shadows, "CS_DCLF_SHADOWS", F, Reduced::UnlessOne, false, "0: DCLF does not draw the shadow views (live toggle's seed)" },
@@ -113,7 +112,7 @@ namespace DCLF
 			{ ShaderDebug, "CS_DCLF_SHADER_DEBUG", D, N, false, "default on: SPIR-V with debug info, and the HLSL sources copied beside the log; 0: without" },
 			{ ShaderSourceDir, "CS_DCLF_SHADER_SOURCE_DIR", D, N, false, "where CS_DCLF_SHADER_DEBUG copies the HLSL sources" },
 			{ TraceTexturePaths, "CS_DCLF_TRACE_TEXTURE_PATHS", D, N, false, "set: texture identities are logged with their paths" },
-			{ TreeLodAudit, "CS_DCLF_TREE_LOD_AUDIT", D, N, false, "1: tree LOD instances the engine leaves shown over a loaded, visible full tree (and hidden ones without one), every 60 frames" },
+			// (Features/TreeLod's CS_DCLF_TREE_LOD_AUDIT is listed here, after CS_DCLF_TRACE_TEXTURE_PATHS.)
 			{ Census, "CS_DCLF_CENSUS", D, N, false,
 				"1: T7a's census, every report: what the engine still draws (the passes registered and not withheld) per view and class (DCLF's verdict for Lighting geometry; shader type and RTTI otherwise)" },
 			{ MirrorWatch, "CS_DCLF_MIRROR_WATCH", D, N, false, "1: hardware watchpoints on a fade node's statics after its placement name the writers the mirror misses" },

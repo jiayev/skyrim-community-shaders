@@ -93,9 +93,7 @@ namespace DCLF::Diagnostics
 	void InstallFeature()
 	{
 		const auto& o = Observe();
-		// Main::Draw's early hook, DCLF running or not.
-		if (SwitchEnabled(Switch::TreeLodAudit))
-			Subscribe<FrameBegin>([](const FrameBegin&) { AuditTreeLod(); });
+		// (Main::Draw's early hook: Features/TreeLod's audit subscribes from its install.)
 		if (o.claims)
 			Subscribe<FramePoint::ClaimsInstalled>([](const On<FramePoint::ClaimsInstalled>&) { ObservePlayerClaims(); });
 		// Prepass: the occlusion maps' compare (Skylight).
