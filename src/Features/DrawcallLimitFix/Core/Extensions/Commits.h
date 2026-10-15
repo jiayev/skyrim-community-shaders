@@ -5,6 +5,8 @@
 #include "Features/DrawcallLimitFix/Api/Commits.h"
 
 #include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace org::services
 {
@@ -18,12 +20,16 @@ namespace DCLF
 	{
 		struct SceneBuffers;
 		class CommitUploads;
+		class LatchedUploads;
 	}
 }
 
 namespace DCLF::Api
 {
-	/** @brief A hook's commit (render thread): what the frame adopted, and the commit's uploads into it. */
+	/**
+	 * @brief A hook's commit (render thread): what the frame adopted, the commit's uploads into it, its latched uploads (the values its
+	 * epoch's first pass copies: a scene resources' latched buffers, SceneResources::latched) and what its execution holds.
+	 */
 	class CommitContext
 	{
 	public:
@@ -33,6 +39,8 @@ namespace DCLF::Api
 		std::uint32_t frame;                          // the scene frame (FrameView::GetFrame)
 		Draws::SceneBuffers& scene;                   // the scene's tables (a feature's scene resources: Extensions::SceneResourcesOf)
 		Draws::CommitUploads& uploads;                // the commit's staged uploads (into a versioned buffer: the version adopted names)
+		Draws::LatchedUploads* latched;               // the main commits' latched uploads (a value no copy is laid out for is staged); null: the shadow's
+		std::vector<std::shared_ptr<const void>>& bindingOwners;  // held until the commit's execution retires (a texture a row binds)
 	};
 }
 

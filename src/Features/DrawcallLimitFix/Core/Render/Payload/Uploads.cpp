@@ -572,7 +572,7 @@ namespace DCLF
 		const bool depthOnly = a_commit.depthOnly;
 		UploadFaceStreams(adopted, a_commit.payload.faceStreams, epochResources->scene->facePositions, epochResources->scene->faceUploaded, a_commit.uploads);
 		Extensions::RunCommitHooks({ depthOnly ? Api::CommitKind::Depth : Api::CommitKind::Colour, adopted, Scene::FrameView::Get().GetTables(),
-			Scene::FrameView::Get().GetFrame(), *epochResources->scene, a_commit.uploads });
+			Scene::FrameView::Get().GetFrame(), *epochResources->scene, a_commit.uploads, &a_commit.latched, a_commit.bindingOwners });
 		// Tree LOD (dclf-lod.md): the mirror's changes, draw row and list arguments, for the depth cull and both passes' draws.
 		if (depthOnly && epochResources->scene->treeLodCull) {
 			auto& sceneBuffers = *epochResources->scene;
@@ -790,12 +790,14 @@ namespace DCLF
 	{
 		bool owned = false;
 		auto* buffers = impl->scene.get();
-		// A frame without claims is the engine's whole, tree LOD included; so is one whose tree LOD class is not taken or off.
-		if (buffers && buffers->treeLodCull && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::TreeLod) && Scene::FrameView::Get().TreeLodMirror().Size() && !Scene::FrameView::Get().SetWithdrawn()) {
-			// The pipeline lane builds its pipelines (the DistantTree shader as input); until the frame's catalog has them the
-			// engine draws tree LOD.
+		// A frame without claims is the engine's whole, tree LOD included; so is one whose family (its tree LOD class) is not taken or off.
+		const auto& family = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances);
+		if (buffers && buffers->treeLodCull && Extensions::DrawFamilyOn(ActiveToggles(), Api::DrawFamily::TreeInstances) && Scene::FrameView::Get().TreeLodMirror().Size() &&
+			!Scene::FrameView::Get().SetWithdrawn()) {
+			// The pipeline lane builds its pipelines (the family's program source, the DistantTree shader, as input); until the frame's
+			// catalog has them the engine draws tree LOD.
 			auto& drawPipelines = DrawPipelines::Get();
-			if (auto* shader = Engine::Global<RE::BSShader*>(0x33dcd10)) {  // the BSDistantTreeShader
+			if (auto* shader = static_cast<RE::BSShader*>(family.contribution.frame.programSource())) {
 				drawPipelines.SetTreeLodInputs(*shader);
 				drawPipelines.RequestTreeLod();
 			}

@@ -116,7 +116,7 @@ namespace DCLF::Draws
 		org::DeclaredViewToken terrainDepth;  // the Z-prepass's, with Terrain Blending (Resources::terrainDepth)
 		org::ResourceBindingToken sequences, count;
 		org::ResourceBindingToken pool, bucketCounts;  // the depth segment's plain draws
-		org::ResourceBindingToken treeLodVisible;      // tree LOD's draw's arguments (UploadTreeLod, TreeLodCullPass)
+		std::array<org::ResourceBindingToken, Extensions::kDrawFamilies> familyArguments;  // each draw family's arguments (DrawFamilyDeclare)
 	};
 
 	/*
@@ -260,6 +260,13 @@ namespace DCLF::Draws
 	// Frame push: the pass-wide constant buffers' addresses, as the layout's push address ranges read them.
 	inline std::array<std::uint32_t, kFramePushWords> FramePushWords(std::uint64_t a_frameConstants);
 
+	/** @brief What a main pass execution draws of a draw family (DrawFamilyPrepare's out: null for nothing) and its row's address. */
+	struct FamilyPrepared
+	{
+		std::shared_ptr<const void> drawn;
+		std::uint64_t row = 0;
+	};
+
 	struct PreparedDraws
 	{
 		PassStats* stats = nullptr;  // CS_DCLF_PASS_STATS
@@ -273,8 +280,7 @@ namespace DCLF::Draws
 		std::uint32_t targetCount = 0;
 		bool phaseTwo = false;
 		bool zPrepass = false;
-		// Tree LOD's draw (UploadTreeLod): pipelines and the draw row's address (in its push data).
-		std::shared_ptr<const TreeLodPipelines> treeLod;
-		std::uint64_t treeLodDraw = 0;
+		// The draw families' draws (Api::DrawFamilyContribution::main), by family.
+		std::array<FamilyPrepared, Extensions::kDrawFamilies> families{};
 	};
 }

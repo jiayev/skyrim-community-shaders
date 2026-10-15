@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string_view>
 
 namespace DCLF::Api
@@ -15,6 +16,7 @@ namespace DCLF::Api
 	class SceneResourcesGraph;
 	class SceneResourcesRequirements;
 	class SceneResourcesFit;
+	class SceneResourcesLatch;
 
 	/** @brief Registered scene resources (RegisterSceneResources' result): Extensions::SceneResourcesOf finds their state by it. */
 	struct SceneResourcesId
@@ -33,9 +35,16 @@ namespace DCLF::Api
 	 * - registerGraph (optional): render thread, when a graph extension registers the scene's buffers (RegisterSceneBuffers), after the
 	 *   face positions: the buffers its passes declare, each under its name.
 	 * - require (optional): the snapshot builder, each revision's requirements (RequireSceneTables), after the face positions: the
-	 *   units its versioned buffers must hold for the publication's tables. A set is sealed only once they hold them.
+	 *   units its versioned buffers must hold for the publication's tables (and the words postInputs posted for the revision:
+	 *   SceneResourcesRequirements::inputs). A set is sealed only once they hold them.
 	 * - fit (optional): the snapshot builder or the render thread, wherever a SceneFit is made from the versions a set names: what its
 	 *   buffers hold of the slots the objects read them by. An object past them waits (ObjectFits).
+	 * - postInputs (optional, with inputWords): render thread, wherever Core posts the revision's inputs (PostRevisionInputs): the
+	 *   feature's inputWords words of them (what its requirements grow by: a mirror's slots), into a_words (zeroed). A change of them
+	 *   is a new revision's inputs (RevisionInputs' equality); require reads them as posted. Any state or none: it reads its own.
+	 * - latched (optional): render thread, where the main view's latched targets are listed (MainLatchedTargets: the graph's build) and
+	 *   the depth shape's latch is laid out (MainLatchedLayout): the buffers the depth commit latches (CommitContext::latched), each with
+	 *   its bytes from offset 0, after the frame buffers' and before the draw count's.
 	 *
 	 * The state is the render thread's (its commits: Api/Commits.h), but for what registerGraph, require and fit read: the handles setup
 	 * made, never replaced.
@@ -47,5 +56,8 @@ namespace DCLF::Api
 		void (*registerGraph)(const SceneResourcesGraph& a_graph) = nullptr;
 		void (*require)(const SceneResourcesRequirements& a_requirements) = nullptr;
 		void (*fit)(SceneResourcesFit& a_fit) = nullptr;
+		void (*postInputs)(std::span<std::uint32_t> a_words) = nullptr;
+		std::uint32_t inputWords = 0;
+		void (*latched)(SceneResourcesLatch& a_latch) = nullptr;
 	};
 }

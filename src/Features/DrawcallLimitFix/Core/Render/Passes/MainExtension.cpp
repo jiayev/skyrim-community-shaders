@@ -11,7 +11,13 @@ namespace DCLF::Draws
 {
 	namespace
 	{
-		/** @brief The features' stages at a_slot (Api::GpuStage), in registration order: each whose setup gave a state, on its queue. */
+		/** @brief The queue a stage's pass asks for (Api::GpuQueue: Graphics is a copy's or compute pass's default). */
+		PassQueue QueueOf(Api::GpuQueue a_queue)
+		{
+			return a_queue == Api::GpuQueue::Compute ? PassQueue::Compute : a_queue == Api::GpuQueue::None ? PassQueue::None : PassQueue::Default;
+		}
+
+		/** @brief The features' stages at a_slot (Api::GpuStage), in registration order: each whose setup gave a state, as its kind, on its queue. */
 		template <class Epoch>
 		void AddStages(std::vector<org::RenderGraph::ExternalPassDesc>& a_out, const std::shared_ptr<Resources>& a_resources, Api::GpuStageSlot a_slot, Epoch a_epoch)
 		{
@@ -19,8 +25,8 @@ namespace DCLF::Draws
 			const auto& states = a_resources->scene->stages;
 			for (std::size_t i = 0; i < stages.size() && i < states.size(); ++i)
 				if (stages[i].slot == a_slot && states[i])
-					AddPass(a_out, PassKind::Compute, stages[i].passName, stages[i].makePass({ a_resources, states[i] }), a_epoch,
-						stages[i].queue == Api::GpuQueue::Compute ? PassQueue::Compute : PassQueue::Default);
+					AddPass(a_out, stages[i].kind == Api::GpuStageKind::Copy ? PassKind::Copy : PassKind::Compute, stages[i].passName,
+						stages[i].makePass({ a_resources, states[i] }), a_epoch, QueueOf(stages[i].queue));
 		}
 	}
 
@@ -37,6 +43,12 @@ namespace DCLF::Draws
 		for (const auto& frameBuffer : a_resources.frameBuffers)
 			if (frameBuffer.copy)
 				out.push_back({ frameBuffer.copy, nullptr });
+		// The features' scene resources' latched buffers (Api::SceneResources::latched).
+		Extensions::LatchSceneResources(a_resources.scene->sceneResources,
+			[](void* a_out, const std::shared_ptr<org::Buffer>& a_buffer, const Versioned& a_versioned, std::size_t) {
+				static_cast<std::vector<LatchedTarget>*>(a_out)->push_back({ a_buffer, a_versioned });
+			},
+			&out);
 		// Tree LOD's draw row and list header; not the next-frame state's frame rows (the features', the fades'), which the compute queue reads.
 		if (const auto& scene = *a_resources.scene; scene.treeLodCull) {
 			out.push_back({ scene.treeLodDraw, nullptr });
@@ -140,9 +152,8 @@ namespace DCLF::Draws
 				})))
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(depth));
-			// Tree LOD's phase 1 list, before the depth draw.
-			if (resources->scene->treeLodCull)
-				AddPass(a_out, PassKind::Compute, "cs.dclf.z.tree-lod-cull", MakeTreeLodCullPass(resources, 1), depth);
+			// The stages right before the depth draw (Api::GpuStageSlot::DepthSegmentBeforeDepthDraw: tree LOD's phase 1 list).
+			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentBeforeDepthDraw, depth);
 			AddPass(a_out, PassKind::Render, "cs.dclf.z.depth", MakeMainOpaquePass(resources, depthSegment), depth);
 			AddPass(a_out, PassKind::Compute, "cs.dclf.build-draws", MakeBuildDrawsPass(resources, colourSegment), colour);
 			addSort("cs.dclf.sort-scan", "cs.dclf.sort-scatter", colourSegment, colour);
@@ -165,17 +176,17 @@ namespace DCLF::Draws
 			AddPass(a_out, PassKind::Render, "cs.dclf.main-opaque", MakeMainOpaquePass(resources, colourSegment), colour);
 			Diagnostics::Notify(Diagnostics::MainGraphPasses{ Diagnostics::MainGraphPasses::kAfterColour, resources, colour, a_out });
 			// The two-phase tail, in the depth segment, in this order: build-draws (phase 1, last frame's HZB), depth draw, hzb
-			// (rebuilt from it), build-draws-phase2 and tree-lod-cull-phase2 (phase 1's rejects retested), depth-phase2 (the
-			// rescues). Phase 1's frame-old HZB misses what just came out from behind an occluder; phase 2 takes those back.
+			// (rebuilt from it), build-draws-phase2 and the phase 2 stages (Api::GpuStageSlot::DepthSegmentPhaseTwoBeforeDraw:
+			// tree-lod-cull-phase2; phase 1's rejects retested), depth-phase2 (the rescues). Phase 1's frame-old HZB misses what just
+			// came out from behind an occluder; phase 2 takes those back.
 			if (resources->hzb) {
 				AddPass(a_out, PassKind::Compute, "cs.dclf.hzb", MakeHzbPass(resources, depthSegment), depth);
 				AddPass(a_out, PassKind::Compute, "cs.dclf.build-draws-phase2", MakeBuildDrawsPass(resources, depthSegment, 2), depth);
-				if (resources->scene->treeLodCull)
-					AddPass(a_out, PassKind::Compute, "cs.dclf.tree-lod-cull-phase2", MakeTreeLodCullPass(resources, 2), depth);
+				AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentPhaseTwoBeforeDraw, depth);
 				AddPass(a_out, PassKind::Render, "cs.dclf.depth-phase2", MakeMainOpaquePass(resources, depthSegment, true), depth);
 			}
-			if (resources->scene->treeLodCull && resources->scene->treeLodCounts)
-				AddPass(a_out, PassKind::Copy, "cs.dclf.z.tree-lod-counts", MakeTreeLodReadbackPass(resources->scene), depth, PassQueue::None);
+			// The stages after both phases (Api::GpuStageSlot::DepthSegmentAfterPhaseTwo: tree LOD's counts' readback).
+			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentAfterPhaseTwo, depth);
 			// Visibility changes once both phases' verdicts are final, and their readback copy.
 			const auto& sceneBuffers = *resources->scene;
 			if (sceneBuffers.visibilityEventsProgram && sceneBuffers.visibilityReadback && sceneBuffers.fadeState && sceneBuffers.fadeRoots && resources->frustum) {

@@ -48,6 +48,26 @@ namespace DCLF
 			impl->PostRevisionInputs();
 	}
 
+	namespace
+	{
+		/** @brief Whether a_next holds what a_previous posted (its generations aside): no new revision inputs to post. */
+		bool SameRevisionInputs(const RevisionInputs& a_next, const RevisionInputs& a_previous)
+		{
+			return a_next.main == a_previous.main && a_next.shadow == a_previous.shadow && a_next.views == a_previous.views && a_next.scene == a_previous.scene &&
+			       a_next.buildGeneration == a_previous.buildGeneration && SameHandle(a_next.resourceHeap, a_previous.resourceHeap) &&
+			       SameHandle(a_next.samplerHeap, a_previous.samplerHeap) && a_next.targetsGeneration == a_previous.targetsGeneration &&
+			       a_next.shadowFormat == a_previous.shadowFormat && a_next.shadowRasterStates == a_previous.shadowRasterStates && a_next.toggles == a_previous.toggles &&
+			       a_next.togglesGeneration == a_previous.togglesGeneration && a_next.claims == a_previous.claims &&
+			       a_next.shadowCandidates == a_previous.shadowCandidates && a_next.occlusionLayouts == a_previous.occlusionLayouts &&
+			       a_next.shadowPlacements == a_previous.shadowPlacements && a_next.mainKnown == a_previous.mainKnown && a_next.viewport == a_previous.viewport &&
+			       a_next.blockSizes == a_previous.blockSizes && a_next.portalWords == a_previous.portalWords &&
+			       a_next.treeLodShapeSlots == a_previous.treeLodShapeSlots && a_next.treeLodMeshSlots == a_previous.treeLodMeshSlots &&
+			       a_next.resourceInputs == a_previous.resourceInputs &&
+			       a_next.shadowSlots == a_previous.shadowSlots && a_next.asyncEpochs == a_previous.asyncEpochs &&
+			       !a_next.uploads.owner_before(a_previous.uploads) && !a_previous.uploads.owner_before(a_next.uploads);
+		}
+	}
+
 	void IndirectDraws::Impl::PostRevisionInputs()
 	{
 		// Everything a revision reads of the frame, as the frame has it now (render thread).
@@ -91,22 +111,13 @@ namespace DCLF
 		auto& mirror = Scene::FrameView::Get().TreeLodMirror();
 		next.treeLodShapeSlots = mirror.ShapeSlots();
 		next.treeLodMeshSlots = mirror.MeshSlots();
+		Extensions::PostSceneResourceInputs(next.resourceInputs);
 		if (shadow && (!postedShadowSlots || postedShadowSlots->sequences.size() != shadow->sequences.size()))
 			postedShadowSlots = std::make_shared<const ShadowSlotBuffers>(ShadowSlotBuffers{ shadow->sequences, shadow->bucketCounts });
 		next.shadowSlots = shadow ? postedShadowSlots : nullptr;
 		const auto& previous = postedInputs;
 		next.mainGeneration = previous.mainGeneration + (next.main != previous.main ? 1u : 0u);
-		const bool same = next.main == previous.main && next.shadow == previous.shadow && next.views == previous.views && next.scene == previous.scene &&
-		                  next.buildGeneration == previous.buildGeneration && SameHandle(next.resourceHeap, previous.resourceHeap) &&
-		                  SameHandle(next.samplerHeap, previous.samplerHeap) && next.targetsGeneration == previous.targetsGeneration &&
-		                  next.shadowFormat == previous.shadowFormat && next.shadowRasterStates == previous.shadowRasterStates && next.toggles == previous.toggles &&
-		                  next.togglesGeneration == previous.togglesGeneration && next.claims == previous.claims &&
-		                  next.shadowCandidates == previous.shadowCandidates && next.occlusionLayouts == previous.occlusionLayouts &&
-		                  next.shadowPlacements == previous.shadowPlacements && next.mainKnown == previous.mainKnown && next.viewport == previous.viewport &&
-		                  next.blockSizes == previous.blockSizes && next.portalWords == previous.portalWords &&
-		                  next.treeLodShapeSlots == previous.treeLodShapeSlots && next.treeLodMeshSlots == previous.treeLodMeshSlots &&
-		                  next.shadowSlots == previous.shadowSlots && next.asyncEpochs == previous.asyncEpochs &&
-		                  !next.uploads.owner_before(previous.uploads) && !previous.uploads.owner_before(next.uploads);
+		const bool same = SameRevisionInputs(next, previous);
 		if (same && previous.generation)
 			return;
 		next.generation = previous.generation + 1;

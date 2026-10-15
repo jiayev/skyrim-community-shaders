@@ -551,8 +551,6 @@ namespace DCLF
 			return false;
 		// The features' scene resources (Api::SceneResources::setup: their programs and buffers, registered with the set in this order).
 		buffers->sceneResources = Extensions::SetUpSceneResources(a_device, smallStart);
-		// The features' GPU stages (Api::GpuStage::setup: their programs; a null state keeps a stage out of the graph).
-		buffers->stages = Extensions::SetUpGpuStages(a_device, *buffers);
 		// Without the fade state program, fades stay the CPU's.
 		buffers->fadeState = ComputeProgram::Load(a_device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
 		if (buffers->fadeState) {
@@ -636,6 +634,9 @@ namespace DCLF
 		} else {
 			logger::warn("[DCLF] The tree LOD cull program could not be created; tree LOD stays native");
 		}
+		// The GPU stages (Api::GpuStage::setup: their programs; a null state keeps a stage out of the graph), after every table: Core's
+		// tree LOD stages take its cull program and counts.
+		buffers->stages = Extensions::SetUpGpuStages(a_device, *buffers);
 		scene = std::move(buffers);
 		return true;
 	}

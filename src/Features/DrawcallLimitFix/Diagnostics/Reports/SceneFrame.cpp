@@ -3,6 +3,7 @@
 #include "Engine.h"
 #include "Schedule.h"
 #include "Spread.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
@@ -59,6 +60,8 @@ namespace DCLF::Reports
 				ep.objects, ep.differ, ep.maxDifference, ep.staleStatic, ep.differ || ep.staleStatic ? " <- DIFFER" : " <- OK", ep.differ ? "; first: " + ep.first : std::string());
 			ep = {};
 		}
+		// The features' scene lines here, where tree LOD's mirror line follows.
+		Extensions::ReportTextAt(Api::ReportPoint::SceneFrame, text);
 		if (V::treeLod().Size() || TreeLod::installed)
 			text += TreeLodLine(V::treeLod());
 		text += MirrorWatch::TakeReport(V::frame());
@@ -99,6 +102,7 @@ namespace DCLF::Reports
 			if (LodGates::Enabled())
 				if (const auto engine = LodGatesLine(kInterval); !engine.empty())
 					logger::info("{}", engine);
+			Extensions::ReportLinesAt(Api::ReportPoint::GateReleases, a_frame);
 			rs = {};
 			observed = {};
 		}

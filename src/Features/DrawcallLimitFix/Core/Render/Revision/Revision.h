@@ -65,6 +65,8 @@ namespace DCLF::Draws
 		// What the scene tables' requirements size by besides the tables (RequireSceneTables): the portal programs' words a frame's
 		// encoding takes (PortalViews::Encoded), and tree LOD's mirror's shape and mesh slots.
 		std::uint32_t portalWords = 0, treeLodShapeSlots = 0, treeLodMeshSlots = 0;
+		// The features' scene resources' words they size by (Api::SceneResources::postInputs, each at its registration's words).
+		Extensions::SceneResourceInputs resourceInputs{};
 		// The shadow view slots' buffers (made by the frame: ServeRevisionRequests, SetupShadow).
 		std::shared_ptr<const ShadowSlotBuffers> shadowSlots;
 		// The host's owner-thread state the revision code needs: whether async (revision-driven) epochs run (AssembleRevision records

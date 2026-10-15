@@ -13,7 +13,8 @@ namespace DCLF::Extensions
 {
 	/**
 	 * @brief Main thread, at PostPostLoad, before DCLF's threads start (the shell, after DCLF's own engine hooks, before
-	 * SceneScheduler::Graph and the shell's hooks): every feature's install, in a_features' order. Once; a second call fails.
+	 * SceneScheduler::Graph and the shell's hooks): every feature's install, in a_features' order, then the draw families Core still
+	 * registers itself (Draws::InstallCoreDrawFamilies), then the resolutions. Once; a second call fails.
 	 */
 	void InstallFeatures(std::span<const Api::Feature> a_features);
 	/**
@@ -47,6 +48,7 @@ namespace DCLF::Extensions
 		decltype(Api::GpuStage::setup) setup = nullptr;
 		decltype(Api::GpuStage::makePass) makePass = nullptr;
 		decltype(Api::GpuStage::latchWord) latchWord = nullptr;
+		Api::GpuStageKind kind = Api::GpuStageKind::Compute;
 	};
 	/** @brief A registered payload product. */
 	struct PayloadProductEntry
@@ -56,7 +58,12 @@ namespace DCLF::Extensions
 		decltype(Api::PayloadProduct::carried) carried = nullptr;
 		decltype(Api::PayloadProduct::install) install = nullptr;
 	};
-	/** @brief Registered scene resources. */
+	/**
+	 * @brief The words the scene resources' postInputs post with the revision's inputs, all of them (each its inputWords, in registration
+	 * order: SceneResourcesEntry::firstInput; RevisionInputs' SceneResourceInputs): grow it before more are registered.
+	 */
+	inline constexpr std::uint32_t kSceneResourceInputWords = 8;
+	/** @brief Registered scene resources: its posted inputs at [firstInput, firstInput + inputWords) of the kSceneResourceInputWords. */
 	struct SceneResourcesEntry
 	{
 		std::string name;
@@ -64,6 +71,9 @@ namespace DCLF::Extensions
 		decltype(Api::SceneResources::registerGraph) registerGraph = nullptr;
 		decltype(Api::SceneResources::require) require = nullptr;
 		decltype(Api::SceneResources::fit) fit = nullptr;
+		decltype(Api::SceneResources::postInputs) postInputs = nullptr;
+		std::uint32_t firstInput = 0, inputWords = 0;
+		decltype(Api::SceneResources::latched) latched = nullptr;
 	};
 	/** @brief A registered commit hook. */
 	struct CommitHookEntry

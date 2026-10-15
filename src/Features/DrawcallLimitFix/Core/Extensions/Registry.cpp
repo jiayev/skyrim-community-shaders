@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -27,6 +28,7 @@ namespace DCLF::Extensions
 			std::vector<GpuStageEntry> stages;
 			std::vector<PayloadProductEntry> products;
 			std::vector<SceneResourcesEntry> sceneResources;
+			std::uint32_t sceneResourceInputs = 0;
 			std::vector<CommitHookEntry> commitHooks;
 			std::vector<FrameBindingEntry> frameBindings;
 			std::vector<ReportLinesEntry> reportLines;
@@ -48,6 +50,8 @@ namespace DCLF::Extensions
 			// By map and by source: its contribution (Count: none). Resolved at the end (ResolveShadowViews).
 			std::array<Api::OcclusionMapContribution, kOcclusionMaps> occlusionMaps{};
 			std::array<Api::ShadowSourceContribution, kShadowSources> shadowSources{};
+			// By family: its contribution (Count: none). Resolved at the end (ResolveDrawFamilies).
+			std::array<Api::DrawFamilyContribution, kDrawFamilies> drawFamilies{};
 			bool installed = false;
 		};
 
@@ -84,7 +88,7 @@ namespace DCLF::Extensions
 							stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s stage {} asks for the latch's stage word, which {} has: grow BuildDrawsLatch first",
 								feature, a_stage.passName, stage.passName));
 				}
-				lists.stages.push_back({ std::string(a_stage.passName), a_stage.slot, a_stage.queue, a_stage.setup, a_stage.makePass, a_stage.latchWord });
+				lists.stages.push_back({ std::string(a_stage.passName), a_stage.slot, a_stage.queue, a_stage.setup, a_stage.makePass, a_stage.latchWord, a_stage.kind });
 			}
 
 			void RegisterPayloadProduct(const Api::PayloadProduct& a_product) override
@@ -96,9 +100,14 @@ namespace DCLF::Extensions
 
 			Api::SceneResourcesId RegisterSceneResources(const Api::SceneResources& a_resources) override
 			{
-				if (a_resources.name.empty() || !a_resources.setup)
+				if (a_resources.name.empty() || !a_resources.setup || !a_resources.postInputs != !a_resources.inputWords)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete scene resources", feature));
-				lists.sceneResources.push_back({ std::string(a_resources.name), a_resources.setup, a_resources.registerGraph, a_resources.require, a_resources.fit });
+				// RevisionInputs holds every registration's posted words (SceneResourceInputs).
+				if (lists.sceneResourceInputs + a_resources.inputWords > kSceneResourceInputWords)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s scene resources {} post words past kSceneResourceInputWords: grow it first", feature, a_resources.name));
+				lists.sceneResources.push_back({ std::string(a_resources.name), a_resources.setup, a_resources.registerGraph, a_resources.require, a_resources.fit,
+					a_resources.postInputs, lists.sceneResourceInputs, a_resources.inputWords, a_resources.latched });
+				lists.sceneResourceInputs += a_resources.inputWords;
 				return { static_cast<std::uint32_t>(lists.sceneResources.size() - 1) };
 			}
 
@@ -138,7 +147,9 @@ namespace DCLF::Extensions
 			void RegisterReportLines(const Api::ReportLines& a_lines) override
 			{
 				// A point composing its text takes text lines; the others, logged lines.
-				const bool text = a_lines.point == Api::ReportPoint::AsyncWorkViews || a_lines.point == Api::ReportPoint::AsyncWork;
+				const auto point = a_lines.point;
+				const bool text = point == Api::ReportPoint::AsyncWorkViews || point == Api::ReportPoint::AsyncWork || point == Api::ReportPoint::AsyncWorkFamilies ||
+				                  point == Api::ReportPoint::SceneFrame || point == Api::ReportPoint::SceneCoordinatorSegments;
 				if (a_lines.name.empty() || (text ? !a_lines.text || a_lines.lines : !a_lines.lines || a_lines.text))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete report lines", feature));
 				lists.reportLines.push_back({ std::string(a_lines.name), a_lines.point, a_lines.lines, a_lines.text });
@@ -291,6 +302,23 @@ namespace DCLF::Extensions
 				entry = a_source;
 			}
 
+			void RegisterDrawFamily(const Api::DrawFamilyContribution& a_family) override
+			{
+				// Its class's toggle gates it; its frame and main callbacks always, its faces' all or none.
+				const auto& main = a_family.main;
+				const auto& faces = a_family.faces;
+				const int facesSet = (faces.makeCull ? 1 : 0) + (faces.declare ? 1 : 0) + (faces.record ? 1 : 0) + (faces.row ? 1 : 0);
+				if (a_family.family >= Api::DrawFamily::Count || a_family.objectClass >= Api::ObjectClass::Count ||
+					!lists.objectClasses[static_cast<std::size_t>(a_family.objectClass)] || !a_family.frame.decide || !a_family.frame.programSource ||
+					!main.declare || !main.revision || !main.prepare || !main.record || (facesSet != 0 && facesSet != 4))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete draw family contribution", feature));
+				auto& entry = lists.drawFamilies[static_cast<std::size_t>(a_family.family)];
+				if (entry.family != Api::DrawFamily::Count)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes draw family {}, which another registration has", feature,
+						static_cast<std::uint32_t>(a_family.family)));
+				entry = a_family;
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -319,11 +347,16 @@ namespace DCLF::Extensions
 			if (feature.install)
 				feature.install(context);
 		}
+		// The draw families Core still draws itself, after the features (their classes' toggles registered; their stages after the
+		// features' at the slots they share).
+		context.feature = "Core";
+		Draws::InstallCoreDrawFamilies(context);
 		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
-		// the features' contributions; then both families' phases and view bits.
+		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations.
 		ResolveViews(lists.views, lists.viewWork);
 		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
 		ResolveViewBits();
+		ResolveDrawFamilies(lists.drawFamilies);
 		// The features' toggles seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
 	}

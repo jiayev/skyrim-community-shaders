@@ -49,8 +49,9 @@ namespace DCLF::Api
 	 * @brief A view's shape: what tells its epochs apart (Core's ViewTraits, with the view's slot: its epochs and segments).
 	 *
 	 * - faces: the faces each epoch draws (at most Core's kMaxViewFaces), each with a camera and a range of the sequences.
-	 * - trees: tree LOD drawn per face. forwardPart: a forward range, sorted by the depth epoch and drawn after the buckets by the colour
-	 *   epoch. depthPass: the depth epoch draws the buckets' depth pipelines into the main depth (the colour epoch then their colour ones).
+	 * - trees: tree LOD drawn per face (the DrawFamily::TreeInstances family's faces, Api/DrawFamilies.h). forwardPart: a forward
+	 *   range, sorted by the depth epoch and drawn after the buckets by the colour epoch. depthPass: the depth epoch draws the buckets'
+	 *   depth pipelines into the main depth (the colour epoch then their colour ones).
 	 * - viewBits: the view's bit at the GPU cull (the feature's kView*, checked by Features/Manifest.cpp).
 	 * - name (the log), prefix (its graph resources', passes' and extension's identifiers), blocks (its blocks' resource) and target (its
 	 *   target's resource); labels: its latch writes, as FrameData counts them. Copied at install.

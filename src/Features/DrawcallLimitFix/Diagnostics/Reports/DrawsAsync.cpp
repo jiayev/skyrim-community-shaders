@@ -42,6 +42,8 @@ namespace DCLF
 		text += ForwardReport();
 		// The features' lines here (Features/Particles, Features/Billboards, Features/FirstPerson: the first-person view's).
 		Extensions::ReportTextAt(Api::ReportPoint::AsyncWork, text);
+		// The draw families' lines here, where tree LOD's draws' follow.
+		Extensions::ReportTextAt(Api::ReportPoint::AsyncWorkFamilies, text);
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
 			auto& scene = *impl->scene;
 			text += fmt::format("[DCLF] tree LOD draws: {} ({} depth commits, {} shape slots sent; tables {} shape and {} mesh slots; {} commits that could not draw a "

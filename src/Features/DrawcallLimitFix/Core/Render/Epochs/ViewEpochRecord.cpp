@@ -1,4 +1,4 @@
-// The views' epochs' recording (ViewEpoch.h): their passes (cull, tree LOD, draws, forward range) and graph extension.
+// The views' epochs' recording (ViewEpoch.h): their passes (cull, a trees view's draw family, draws, forward range) and graph extension.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
@@ -278,14 +278,10 @@ namespace DCLF
 					a_builder.ShaderResource(resources->blocks, noViews);
 					if (mode == DrawMode::Colour)
 						DeclareFrameBuffers(a_builder, main);
-					if (mode == DrawMode::Faces && scene.treeLodCull && resources->treeVisible[0]) {
-						for (const auto& table : { scene.treeLodShapes, scene.treeLodInstances, scene.treeLodMeshes })
-							a_builder.ShaderResource(*table, noViews);
-						for (std::uint32_t f = 0; f < faces; ++f) {
-							a_builder.ShaderResource(resources->treeRows[f], noViews);
-							bindings.treeVisible[f] = a_builder.IndirectArguments(*resources->treeVisible[f]).Resource();
-							a_builder.ShaderResource(*resources->treeVisible[f], noViews);
-						}
+					// The faces' draw family (Api::DrawFamily::TreeInstances: tree LOD's tables, the faces' rows and lists).
+					if (const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances).contribution.faces; mode == DrawMode::Faces && trees.declare) {
+						Api::DrawFamilyDeclare declare{ a_builder, scene, resources.get(), std::span(bindings.treeVisible) };
+						trees.declare(declare);
 					}
 					return bindings;
 				}
@@ -329,6 +325,8 @@ namespace DCLF
 					const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
 					const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
 					const rhi::IndexBufferView pool{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt };
+					const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances).contribution.faces;
+					static const std::shared_ptr<const void> kNothing;  // a face's draw has no prepared state: its pipeline is the shape's
 					for (std::uint32_t f = 0; f < a_prepared.faces; ++f) {
 						std::array<rhi::ColorAttachment, 2> colours{};
 						rhi::PassBeginInfo begin{};
@@ -377,13 +375,10 @@ namespace DCLF
 							RecordBucketDraw(commands, frame.indirect.zDrawSignature, sequences, sequencesAddress, std::uint64_t(f) * frame.sequenceDraws + bucket.first,
 								mode == DrawMode::Depth ? bucket.depth : bucket.colour, counts, b, bucket.capacity);
 						}
-						// Tree LOD: one instanced draw of the face's list, its row the face's (phase 1's arguments, its instances from the list's start).
-						if (mode == DrawMode::Faces && frame.tree.valid() && frame.treeGroups) {
-							std::uint32_t words[kDrawPushWords]{ static_cast<std::uint32_t>(a_prepared.treeRows[f]), static_cast<std::uint32_t>(a_prepared.treeRows[f] >> 32), 0u };
-							commands.BindPipeline(frame.tree);
-							commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
-							commands.ExecuteIndirect(frame.treeSignature, a_recording.Resolve(a_bindings.treeVisible[f]).GetHandle(), offsetof(TreeLod::VisibleHeader, phaseOne),
-								{}, 0, 1);
+						// The faces' draw family (tree LOD: one instanced draw of the face's list, its row the face's), with the shape's pipeline for it.
+						if (mode == DrawMode::Faces && frame.tree.valid() && frame.treeGroups && trees.record) {
+							trees.record({ commands, Api::DrawFamilyPass::Face, kNothing, a_prepared.treeRows[f], a_recording.Resolve(a_bindings.treeVisible[f]).GetHandle(),
+								frame.tree, frame.treeSignature });
 						}
 						commands.EndPass();
 					}
@@ -530,8 +525,10 @@ namespace DCLF
 					}),
 						depthEpoch);
 					AddPass(a_out, PassKind::Compute, name("build-draws"), std::make_shared<BuildDrawsPass>(resources), depthEpoch);
-					if (traits.trees && main->scene->treeLodCull && resources->treeVisible[0])
-						AddPass(a_out, PassKind::Compute, name("tree-lod-cull"), std::make_shared<TreeCullPass>(resources), depthEpoch);
+					// A trees view's draw family's cull (Api::DrawFamily::TreeInstances: tree LOD's, phase 1 per face).
+					if (const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances).contribution.faces; traits.trees && resources->treeVisible[0] && trees.makeCull)
+						if (auto cull = trees.makeCull({ resources }))
+							AddPass(a_out, PassKind::Compute, name(FamilySlotOf(Api::DrawFamily::TreeInstances).facesCull), std::move(cull), depthEpoch);
 					if (!traits.depthPass) {
 						AddPass(a_out, PassKind::Render, name("faces"), std::make_shared<DrawPass>(resources, DrawMode::Faces), depthEpoch);
 						return;
@@ -574,6 +571,11 @@ namespace DCLF
 
 				std::shared_ptr<ViewResources> resources;
 			};
+		}
+
+		std::shared_ptr<org::RenderPass> MakeViewTreeCullPass(std::shared_ptr<ViewResources> a_resources)
+		{
+			return std::make_shared<TreeCullPass>(std::move(a_resources));
 		}
 
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeViewExtension(std::shared_ptr<ViewResources> a_resources)

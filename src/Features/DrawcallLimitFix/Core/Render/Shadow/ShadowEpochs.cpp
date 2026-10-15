@@ -365,7 +365,8 @@ namespace DCLF
 			const auto inputsStart = std::chrono::steady_clock::now();
 			auto& scene = *resources->scene;
 			shadowStats.faceUploads += UploadFaceStreams(adopted, payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads);
-			Extensions::RunCommitHooks({ Api::CommitKind::Shadow, adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), scene, uploads });
+			Extensions::RunCommitHooks({ Api::CommitKind::Shadow, adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), scene, uploads, nullptr,
+				*frameOwners });
 			shadowStats.records = static_cast<std::uint32_t>(payload.materialRows.Count());
 			shadowStats.skippedTexture = payload.skippedTexture;
 			shadowStats.skippedPipeline = payload.skippedPipeline;
