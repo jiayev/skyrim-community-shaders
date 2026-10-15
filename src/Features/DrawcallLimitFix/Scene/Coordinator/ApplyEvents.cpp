@@ -15,21 +15,24 @@ namespace DCLF::Scene
 		using ChannelKeys = std::array<std::vector<const void*>, Extensions::kEngineChannelSlots>;
 
 		// The engine channels a pass applies at a_apply, each drained into its slot (in registration order), where Core's own queues of
-		// that point drain.
+		// that point drain. A SceneStack channel has no queue (its events are on the scene's stack).
 		void DrainChannels(Api::ChannelApply a_apply, ChannelKeys& a_keys)
 		{
 			const auto engineChannels = Extensions::RegisteredEngineChannels();
 			for (std::size_t k = 0; k < engineChannels.size(); ++k)
-				if (engineChannels[k].apply == a_apply) {
+				if (engineChannels[k].apply == a_apply && engineChannels[k].kind != Api::ChannelKind::SceneStack) {
 					Api::KeySink sink(&a_keys[k]);
 					engineChannels[k].drain(sink);
 				}
 		}
 
 		// A load screen's drain of every engine channel, in registration order: its keys kept as named (ChannelLoading::KeepKeys) or dropped.
+		// A SceneStack channel has no queue (its events are on the scene's stack).
 		void DrainChannelsLoading(std::vector<const void*>& a_named)
 		{
 			for (const auto& channel : Extensions::RegisteredEngineChannels()) {
+				if (channel.kind == Api::ChannelKind::SceneStack)
+					continue;
 				Api::KeySink sink(channel.loading == Api::ChannelLoading::KeepKeys ? &a_named : nullptr);
 				channel.drain(sink);
 			}
@@ -623,7 +626,7 @@ namespace DCLF::Scene
 				}
 				enter(static_cast<std::size_t>(event->type == SceneTracker::EventType::Attached ? (event->captured ? (event->mirrorFill ? 1 : 0) : 2) :
 											   event->type == SceneTracker::EventType::Detached ? 3 :
-											   event->type == SceneTracker::EventType::Gate     ? 4 :
+											   event->type == SceneTracker::EventType::Stacked  ? 4 :
 											                                                      5));
 				if (event->type == SceneTracker::EventType::Attached) {
 					if (event->captured && event->mirrorFill) {
@@ -659,9 +662,10 @@ namespace DCLF::Scene
 						NoteGateRootsDetached(event->detachedRoot, event->removedNodes);
 					if (event->detachedRoot)
 						mirror.Detach(event->detachedRoot, event->removed, event->removedNodes);
-				} else if (event->type == SceneTracker::EventType::Gate) {
-					// Ordered after its incoming blocks' attaches.
-					ApplyGateEvent(event->gateToken, event->gateIncoming, event->gateOutgoing, event->stampNs, event->stampFrame);
+				} else if (event->type == SceneTracker::EventType::Stacked) {
+					// Ordered after the attaches pushed before it (a LOD gate's: its incoming blocks').
+					ComponentsStacked(Api::EngineChannelId{ event->stackedChannel },
+						Api::Stacked{ event->stackedToken, event->stackedPinned, event->stackedNamed, event->stampNs, event->stampFrame });
 				} else {
 					// The update's record is the mirror's to keep from here (moved; the event's fields, leaf, sequence and site stay).
 					const auto* hidden = event->update.hiddenSite != ~0u ? std::get_if<SceneCapture::NodeRecord>(&event->update.record) : nullptr;

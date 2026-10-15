@@ -10,7 +10,6 @@ namespace DCLF::Scene
 {
 	struct CoordinatorLodGates
 	{
-		std::uint64_t publishedLodForced = 0; // the LOD gates' forced generation of the last publication (NotePublished)
 		using GateFlip = DCLF::GateFlip;
 		/**
 		 * @brief The LOD gates, coordinator side (Engine/Cull/LodGates.h; dclf-async-publication.md). A gate tags the geometries under its
@@ -67,7 +66,6 @@ namespace DCLF::Scene
 		};
 		ankerl::unordered_dense::map<const void*, GateRoot> gateOfRoot;
 		std::vector<GateSlot> gateSlots;                                     // by object slot
-		std::vector<GateFlip> gateFlipsMade;                                 // since the last publication
 		std::vector<GateOutcome> gateOutcomesHeld;                           // taken, not applied yet
 		std::uint32_t gateHeldOutCount = 0;                                  // entries with Tracked::gateHeldOut
 		// Slots a gate's tag or retirement wants evaluated again, queued at the next commit's start.

@@ -85,6 +85,15 @@ namespace DCLF::Api
 		requests[component].push_back(std::move(a_seed));
 	}
 
+	void CoordinatorComponentContext::PublishDelta(std::shared_ptr<const void> a_delta) const
+	{
+		// Pending until the deltas are taken (TakeDeltas): DeltasPending counts them, so the next pass publishes.
+		auto& requests = coordinator.componentDeltaRequests;
+		if (requests.size() <= component)
+			requests.resize(std::size_t(component) + 1);
+		requests[component].push_back(std::move(a_delta));
+	}
+
 	bool CoordinatorComponentContext::Counted(std::uint32_t a_slot) const
 	{
 		const auto& counted = coordinator.residentCounted;

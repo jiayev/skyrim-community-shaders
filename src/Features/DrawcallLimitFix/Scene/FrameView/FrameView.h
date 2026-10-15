@@ -67,13 +67,6 @@ namespace DCLF::Scene
 			// Publications installed (and skipped past), and frames whose snapshot brought no newer one.
 			std::uint64_t installed = 0, kept = 0, skipped = 0;
 		};
-		struct GateReleaseStats
-		{
-			std::uint64_t released = 0, refused = 0, withdrawn = 0;
-			std::vector<double> flipToReleaseMs, requestToReleaseMs;
-			std::vector<std::uint32_t> flipToReleaseFrames;
-			bool any = false;
-		};
 		/**
 		 * @brief Render thread, at Present and frame start (menus too): whether a load screen is up. On the first sighting posts a
 		 * marker (ApplyLoading) and withdraws the set (PassCapture::PublishSet(nullptr)); the first frame after catches up every
@@ -154,15 +147,17 @@ namespace DCLF::Scene
 		bool HasInstalled() const { return installed != nullptr; }
 		/** @brief The toggles generation the installed publication's commit was made under, 0 without one. */
 		std::uint32_t InstalledToggles() const { return installed ? installed->togglesGeneration : 0u; }
-		/** @brief The LOD gates' forced-release generation the installed publication was built for, and the frame's (BeginFrame's read). */
-		std::uint64_t InstalledLodForced() const { return installed ? installed->lodForcedGeneration : 0u; }
-		std::uint64_t FrameLodForced() const { return frameLodForced; }
+		/** @brief The adoption guards' generations the installed publication was built for, and the frame's (BeginFrame's sample). */
+		Extensions::AdoptionGenerations InstalledAdoptionGuards() const { return installed ? installed->adoptionGuards : Extensions::AdoptionGenerations{}; }
+		const Extensions::AdoptionGenerations& FrameAdoptionGuards() const { return frameAdoptionGuards; }
 		/**
-		 * @brief Render thread, frame start after InstallClaims or WithdrawSet, before the culls: releases the LOD gates the installed
-		 * publications flipped (LodGates::Flip: incoming shown, outgoing hidden, in the first post-swap frame), then wakes the
-		 * coordinator. Under set or persistent parity, checks the claims against each flip (<- GATE HOLE, <- GATE COVERAGE).
+		 * @brief Render thread, frame start after InstallClaims or WithdrawSet, before the culls (Extensions::ComponentsAdopt): the claims
+		 * the frame installed (null when withdrawn), and by component the deltas of the publications installed since the last adoption,
+		 * oldest first; cleared after it (ClearAdoptedDeltas).
 		 */
-		void ReleaseGates();
+		const SetSnapshot* AdoptedClaims() const;
+		std::span<const std::vector<std::shared_ptr<const void>>> AdoptedDeltas() const { return frameComponentDeltas; }
+		void ClearAdoptedDeltas();
 		PublicationStats TakePublicationStats() { return std::exchange(publicationStats, PublicationStats{}); }
 		/**
 		 * @brief Render thread, frame start (reads no coordinator state): installs a_adopted (IndirectDraws::AdoptSnapshot's
@@ -365,7 +360,7 @@ namespace DCLF::Scene
 		std::uint64_t categoryMirrorCaptures = 0, categoryMirrorRecords = 0;  // CaptureCategories' captures for the mirror
 		// The frame's engine globals (FrameGlobals::Capture at BeginFrame; FrameValues binds them for its seeds).
 		std::shared_ptr<const FrameGlobals> frameGlobals;
-		std::uint64_t frameLodForced = 0;     // the frame's LodGates::ForcedGeneration (BeginFrame)
+		Extensions::AdoptionGenerations frameAdoptionGuards{};  // the frame's adoption guards' generations (BeginFrame)
 		std::uint64_t roomMapPostedGeneration = ~0ull;  // render thread: the generation last posted
 		// Render thread: the first frame after a load catches up every switch in the world (CatchUpSwitches) and forces its category
 		// capture (as after a detach: categoryDetachSeen).
@@ -398,8 +393,8 @@ namespace DCLF::Scene
 		ProjectedTextures projectedTextures;
 		bool loadingPosted = false;  // render thread: the load's marker is posted
 		bool rescanCaptureAll = false;  // render thread: a load's marker posted, so the next category capture pins every category node
-		// Render thread: flips of the publications installed since the last ReleaseGates, and the release stats.
-		std::vector<GateFlip> frameGateReleases;
+		// Render thread: by coordinator component, the deltas of the publications installed since the last adoption (AdoptedDeltas).
+		std::vector<std::vector<std::shared_ptr<const void>>> frameComponentDeltas;
 		// The installed publication (the adopted snapshot's, HandOverAtFrameStart).
 		std::shared_ptr<const ScenePublication> installed;
 		// Cursors into the log, both up to the installed publication: frame inputs taken and claims' changes taken (never past
@@ -428,7 +423,6 @@ namespace DCLF::Scene
 		{
 			std::uint64_t frames = 0, full = 0, samples = 0, changed = 0, lightingVersions = 0;
 		} geometryStats;
-		GateReleaseStats gateReleaseStats;
 		// Since the last report: pipeline blocks posted to the coordinator (PostPipelineConstants), Prepass frames.
 		std::atomic<std::uint64_t> pipelinesPosted{ 0 };  // taken by the coordinator's report
 		std::uint64_t shadingFrames = 0;

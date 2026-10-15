@@ -2,6 +2,8 @@
 // pushing the mirror's update and the scene pass's event on the writer's thread (SceneEvents.h).
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
@@ -857,13 +859,6 @@ namespace DCLF::Scene
 		SceneTracker::Get().PushUpdate(std::move(update));
 	}
 
-	void PushGateHidden(const RE::NiAVObject* a_object)
-	{
-		// LodGates' own stores (a flip, a forced release's unhide) as events: the site index past the source's.
-		if (hiddenEventsInstalled && a_object)
-			PushHiddenUpdate(a_object, hiddenGateSite);
-	}
-
 	bool HiddenStoresLive()
 	{
 		return hiddenEventsInstalled;
@@ -997,5 +992,32 @@ namespace DCLF::Scene
 		// The hidden stores are Features/HiddenNodes' (its early hooks, right after these). Object LOD's segment writers are Features/Lod's
 		// engine channel's source (its early hooks, before tree LOD's and the hidden nodes').
 		// Tree LOD's channel's source is Features/TreeLod's (its early hooks, right after these).
+	}
+}
+
+namespace DCLF::Extensions
+{
+	// The engine side's pushes for the features' engine hooks (Core/Extensions/EngineEvents.h), onto the scene's stack and Core's hidden
+	// channel.
+
+	void PushStacked(Api::EngineChannelId a_channel, std::uint64_t a_token, std::span<RE::NiAVObject* const> a_pinned, std::span<RE::NiAVObject* const> a_named)
+	{
+		const auto channels = RegisteredEngineChannels();
+		const bool wakes = a_channel.index < channels.size() && channels[a_channel.index].wake == Api::WakeSource::Pass;
+		SceneTracker::Get().PushStacked(a_channel.index, a_token, a_pinned, a_named, wakes);
+	}
+
+	void WakeChannel(Api::EngineChannelId a_channel)
+	{
+		const auto channels = RegisteredEngineChannels();
+		if (a_channel.index < channels.size() && channels[a_channel.index].wake == Api::WakeSource::Pass)
+			WakeScenePass(SceneWake::Channel);
+	}
+
+	void PushReservedHidden(const RE::NiAVObject* a_object, std::uint32_t a_site)
+	{
+		// A feature's own stores as events, on its reserved site (past the source's).
+		if (Scene::hiddenEventsInstalled && a_object)
+			Scene::PushHiddenUpdate(a_object, a_site);
 	}
 }

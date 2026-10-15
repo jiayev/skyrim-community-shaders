@@ -5,6 +5,7 @@
 #include "Deferred.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Reports/Scene.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameData.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
@@ -12,6 +13,8 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
@@ -136,15 +139,21 @@ namespace DCLF
 		Diagnostics::Notify<Diagnostics::FramePoint::LookupsInstalled>();
 		draws.PostLookupInputs();
 		{
-			// A frame the adopted snapshot does not cover, or whose publication was committed under older toggles or before a LOD gate's
-			// forced release, has no claims: the engine draws everything, and the next covered frame installs the whole set again.
+			// A frame the adopted snapshot does not cover, or whose publication was committed under older toggles or before an adoption
+			// guard's generation (a LOD gate's forced release), has no claims: the engine draws everything, and the next covered frame
+			// installs the whole set again.
 			RenderThreadBudget::Part exchange(RenderThreadBudget::Bucket::Exchange);
-			if (!draws.DecideCoverage() || !view.HasInstalled() || view.InstalledToggles() < toggleGeneration || view.InstalledLodForced() < view.FrameLodForced())
+			if (!draws.DecideCoverage() || !view.HasInstalled() || view.InstalledToggles() < toggleGeneration ||
+				Extensions::AdoptionGuarded(view.InstalledAdoptionGuards(), view.FrameAdoptionGuards()))
 				view.WithdrawSet();
 			else
 				view.InstallClaims();
-			// The LOD gates the installed publications flipped, released before the culls (in the frame whose claims are post-swap).
-			view.ReleaseGates();
+			// The releases' report (the render thread's: the flip to its release), with the engine side's, once a report window.
+			Reports::GateReleases(view.GetFrame());
+			// The components' adoption of the installed publications' deltas, before the culls (in the frame whose claims are post-swap):
+			// the LOD gates the installed publications flipped, released.
+			Extensions::ComponentsAdopt(view.GetFrame(), view.AdoptedClaims(), view.AdoptedDeltas());
+			view.ClearAdoptedDeltas();
 		}
 		Diagnostics::Notify<Diagnostics::FramePoint::ClaimsInstalled>();
 		// The CategoryRoot views' members the frame's epochs draw (the first person's): their rows and palettes taken by the frame values'

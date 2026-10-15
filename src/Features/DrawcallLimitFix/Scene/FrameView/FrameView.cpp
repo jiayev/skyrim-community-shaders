@@ -1,14 +1,13 @@
 // FrameView's frame start and hand-over: the frame inputs posted, the adopted publication installed with the log walked up to it,
-// the claims installed or withdrawn, the LOD gates released, load screens noted and the actors' wetness captured. Render thread.
+// the claims installed or withdrawn, the components' deltas gathered for their adoption, load screens noted and the actors' wetness
+// captured. Render thread.
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Reports/Scene.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
@@ -37,9 +36,9 @@ namespace DCLF::Scene
 		frameGlobals = FrameGlobals::Capture();
 		SceneCapture::SetMainThread(::GetCurrentThreadId());
 		SceneCapture::SetFrame(frame);
-		// The LOD gates' forced releases so far, once a frame: the frame inputs carry it to the coordinator, and the frame withdraws its
-		// claims while the installed publication was built for an older one (FrameDriver).
-		frameLodForced = LodGates::ForcedGeneration();
+		// The adoption guards' generations (the LOD gates' forced releases so far), once a frame: the frame inputs carry them to the
+		// coordinator, and the frame withdraws its claims while the installed publication was built for an older one (FrameDriver).
+		frameAdoptionGuards = Extensions::SampleAdoptionGuards();
 		captureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - captureStart).count());
 		++captureFrames;
 		// What the coordinator's passes take of the frame: posted after the capture; the post wakes the pump (folded with
@@ -57,7 +56,7 @@ namespace DCLF::Scene
 		inputs->membershipWitness = PrimaryCull::Get().SampleMembershipWitness();
 		inputs->togglesGeneration = Toggles::Get().Generation();
 		inputs->verdictsGeneration = verdictsRequested;
-		inputs->lodForcedGeneration = frameLodForced;
+		inputs->adoptionGuards = frameAdoptionGuards;
 		channels.frameInputs.Post(std::move(inputs));
 		WakeScenePass(SceneWake::FrameInput);
 	}
@@ -125,8 +124,12 @@ namespace DCLF::Scene
 				note = next;
 				auto& deltas = note->value;
 				installNotes.emplace_back(std::move(deltas.joined), std::move(deltas.left));
-				// The gates these claims flipped, released by the frame installing them (ReleaseGates).
-				append(frameGateReleases, deltas.gateFlips);
+				// The components' deltas these publications carried (the LOD gates these claims flipped), adopted by the frame installing
+				// them (Extensions::ComponentsAdopt).
+				if (frameComponentDeltas.size() < deltas.componentDeltas.size())
+					frameComponentDeltas.resize(deltas.componentDeltas.size());
+				for (std::size_t c = 0; c < deltas.componentDeltas.size(); ++c)
+					append(frameComponentDeltas[c], deltas.componentDeltas[c]);
 				// The oldest event these publications carried (the ones the builder skipped past included).
 				if (deltas.eventNs && (!oldestNs || deltas.eventNs < oldestNs)) {
 					oldestNs = deltas.eventNs;
@@ -259,34 +262,16 @@ namespace DCLF::Scene
 		return items;
 	}
 
-	void FrameView::ReleaseGates()
+	const SetSnapshot* FrameView::AdoptedClaims() const
 	{
-		auto& rs = gateReleaseStats;
-		// The releases' report (the render thread's: the flip to its release), with the engine side's, once a report window.
-		Reports::GateReleases(frame);
-		if (frameGateReleases.empty())
-			return;
-		rs.any = true;
-		// The claims the frame installed (none when withdrawn: the frame is the engine's, and every later publication is post-swap).
-		const SetSnapshot* claims = !setWithdrawn && installed && installed->claims ? installed->claims.get() : nullptr;
-		const std::uint64_t now = GateNowNs();
-		for (const auto& flip : frameGateReleases) {
-			const bool released = LodGates::Flip(flip.token);
-			if (!claims)
-				++rs.withdrawn;
-			else
-				Diagnostics::Notify(Diagnostics::GateReleasing{ *claims, flip.token, flip.incoming, flip.outgoing, released });
-			rs.flipToReleaseMs.push_back(GateMs(flip.flipNs, now));
-			rs.requestToReleaseMs.push_back(GateMs(flip.requestNs, now));
-			rs.flipToReleaseFrames.push_back(frame >= flip.flipFrame ? frame - flip.flipFrame : 0u);
-			if (released)
-				++rs.released;
-			else
-				++rs.refused;
-		}
-		frameGateReleases.clear();
-		// The outcomes the flips posted, for the coordinator (folded into the frame start's wakes: ScenePassWakeBatch).
-		WakeScenePass(SceneWake::Gate);
+		// None when withdrawn: the frame is the engine's, and every later publication is post-swap.
+		return !setWithdrawn && installed && installed->claims ? installed->claims.get() : nullptr;
+	}
+
+	void FrameView::ClearAdoptedDeltas()
+	{
+		for (auto& deltas : frameComponentDeltas)
+			deltas.clear();
 	}
 
 	bool FrameView::IsLoadingScreenUp()

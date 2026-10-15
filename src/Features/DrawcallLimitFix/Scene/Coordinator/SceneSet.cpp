@@ -612,7 +612,7 @@ namespace DCLF::Scene
 				phases = GateWithhold(slot, phases, wait, drawn, live);
 			apply(slot, phases, wait);
 		}
-		// Gates whose incoming geometries are all settled flip here and ride the publication (PublicationDeltas::gateFlips).
+		// Gates whose incoming geometries are all settled flip here and ride the publication (the gates' component deltas: GateAdoption).
 		if (gatesLive) {
 			std::vector<std::pair<std::uint32_t, std::uint8_t>> flipped;
 			UpdateGates(live, flipped);
@@ -821,8 +821,8 @@ namespace DCLF::Scene
 		publication->sequence = ++publicationSequence;
 		publication->commitFrame = publicationCommitFrame;
 		publication->togglesGeneration = publicationCommitToggles;
-		// The LOD forced-release generation this pass's events are complete for (taken before its drains).
-		publication->lodForcedGeneration = sceneInputs.lodForcedGeneration;
+		// The adoption guards' generations (the LOD forced releases) this pass's events are complete for (taken before its drains).
+		publication->adoptionGuards = sceneInputs.adoptionGuards;
 		publication->tablesGeneration = tablesGeneration;
 		publication->tables = publishedTables;
 		publication->claims = publicationClaims ? publicationClaims : std::make_shared<const SetSnapshot>();
@@ -885,9 +885,9 @@ namespace DCLF::Scene
 		a_deltas.retiredImports = std::exchange(retiredImports, {});
 		a_deltas.actorWetness = std::exchange(tables.actorWetnessChanges, {});
 		a_deltas.lightEntries = std::exchange(lightEntryChanges, {});
-		if (!gateFlipsMade.empty())
-			Diagnostics::Notify<Diagnostics::ScenePoint::GateFlipsPublished>();
-		a_deltas.gateFlips = std::exchange(gateFlipsMade, {});
+		// The components' published hooks before their deltas are taken (the LOD gates' observers read the flips pending).
+		ComponentsPublished();
+		a_deltas.componentDeltas = std::exchange(componentDeltaRequests, {});
 	}
 
 	void Coordinator::DropReturnedPublications()

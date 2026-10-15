@@ -4,7 +4,6 @@
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 
@@ -251,9 +250,11 @@ namespace DCLF
 			else if (std::holds_alternative<SceneCapture::AlphaRecord>(a_event->update.record))
 				source = SceneWake::AlphaUpdate;
 			break;
-		case EventType::Gate:
-			// Always (its incoming blocks are withheld from the claims and hidden from the engine until the coordinator flips it).
-			source = SceneWake::Gate;
+		case EventType::Stacked:
+			// By its channel (Api::WakeSource::Pass: the LOD gates', whose incoming blocks are withheld from the claims and hidden from the
+			// engine until the coordinator flips the gate).
+			if (a_event->stackedWakes)
+				source = SceneWake::Channel;
 			break;
 		}
 		// Only what wakes is stamped: the latencies measure what is meant to reach the frame at once, not what the frame's own pass takes.
@@ -335,26 +336,29 @@ namespace DCLF
 		Push(event);
 	}
 
-	void SceneTracker::PushGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing)
+	void SceneTracker::PushStacked(std::uint32_t a_channel, std::uint64_t a_token, std::span<RE::NiAVObject* const> a_pinned, std::span<RE::NiAVObject* const> a_named,
+		bool a_wakes)
 	{
 		if (!a_token || stopped.load(std::memory_order_acquire))
 			return;
 		auto* event = new Event{};
-		event->type = EventType::Gate;
-		event->gateToken = a_token;
-		// The incoming roots pinned here, while the swap holds them (released with the batch, on the render thread: never on the scene
-		// work); the outgoing are named alone (the engine side holds their handles until their detach at a LOD drain after the flip).
-		event->gateIncoming.reserve(a_incoming.size());
-		event->pins.reserve(a_incoming.size());
-		for (auto* root : a_incoming)
+		event->type = EventType::Stacked;
+		event->stackedChannel = a_channel;
+		event->stackedWakes = a_wakes;
+		event->stackedToken = a_token;
+		// The pinned roots pinned here, while the pusher holds them (released with the batch, on the render thread: never on the scene
+		// work); the named are keys alone (the pusher holds them: a LOD gate's outgoing, until their detach at a LOD drain after the flip).
+		event->stackedPinned.reserve(a_pinned.size());
+		event->pins.reserve(a_pinned.size());
+		for (auto* root : a_pinned)
 			if (root) {
-				event->gateIncoming.push_back(root);
+				event->stackedPinned.push_back(root);
 				event->pins.emplace_back(root);
 			}
-		event->gateOutgoing.reserve(a_outgoing.size());
-		for (auto* root : a_outgoing)
+		event->stackedNamed.reserve(a_named.size());
+		for (auto* root : a_named)
 			if (root)
-				event->gateOutgoing.push_back(root);
+				event->stackedNamed.push_back(root);
 		Push(event);
 	}
 
@@ -498,15 +502,5 @@ namespace DCLF
 		edits.otherThreads = windowEditsOther.exchange(0, std::memory_order_relaxed);
 		edits.firstThread = windowEditFirst.exchange(0, std::memory_order_relaxed);
 		return edits;
-	}
-
-	namespace LodGates
-	{
-		void CaptureGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing)
-		{
-			// The scene side of the gate: an event on the swapping thread's stack, ordered after the attaches it follows; the
-			// coordinator opens the gate when it applies it (Coordinator::ApplyGateEvent).
-			SceneTracker::Get().PushGate(a_token, a_incoming, a_outgoing);
-		}
 	}
 }

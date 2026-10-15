@@ -1,10 +1,11 @@
 // The hidden events' source: every engine store that can change NiAVObject::flags' kHidden bit calls a stub that pushes the node's
-// mirror update on the storing thread when the bit changed (Core's channel: Scene::PushHiddenUpdate); LOD show stores also take LodGates'
-// veto. Installed on the render thread, at the feature's early hooks.
+// mirror update on the storing thread when the bit changed (Core's channel: Scene::PushHiddenUpdate); LOD show stores also take the show
+// veto (Api::ShowVeto, through Core's cells). Installed on the render thread, at the feature's early hooks.
 
 #include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include <xbyak/xbyak.h>
 
 namespace DCLF::Features::HiddenNodes
@@ -500,22 +501,28 @@ namespace DCLF::Features::HiddenNodes
 			return sites;
 		}
 
-		// The LOD show stores, vetoed in their stubs (LodGates): an object FUN_1405103e0 shows every update, a terrain block's two
-		// nodes (FUN_140509b50), the map's fixed-level object block (FUN_140511680). PushHidden runs after the store, too late to veto.
+		// The LOD show stores, vetoed in their stubs (the show veto: the LOD gates'): an object FUN_1405103e0 shows every update, a terrain
+		// block's two nodes (FUN_140509b50), the map's fixed-level object block (FUN_140511680). PushHidden runs after the store, too late
+		// to veto.
 		constexpr std::array<std::uint32_t, 4> kLodShowSites{ 0x510697, 0x509b59, 0x509b69, 0x5117d0 };
 		bool IsLodShowSite(std::uint32_t a_offset)
 		{
 			return std::ranges::find(kLodShowSites, a_offset) != kLodShowSites.end();
 		}
 
+		// The show veto's cells (Extensions::RegisteredShowVeto: Core's, at a fixed address for the session), set at InstallStores before
+		// any stub runs. The stubs load open and vetoes from them; PushHidden reads engineHid and hideSites.
+		const Api::ShowVeto* showVeto = nullptr;
+
 		void PushHidden(const void* a_object, std::uint32_t a_site)
 		{
 			// Called after the store: bit 0 is its value (or a racing writer's, which pushes its own event).
 			const bool hidden = (*reinterpret_cast<const volatile std::uint32_t*>(static_cast<const std::byte*>(a_object) + 0xF4) & 1u) != 0;
-			// LodGates' coverage observer: the engine's own LOD hides (object update, terrain block nodes) after a flip.
-			if (hidden && a_site < HiddenStoreSites().size())
-				if (const auto offset = HiddenStoreSites()[a_site].offset; offset == 0x5106a4 || offset == 0x509b29 || offset == 0x509b39)
-					LodGates::NoteEngineHide(a_object, offset);
+			// The show veto's engine hide observer (the LOD gates' coverage observer: the engine's own LOD hides, object update and terrain
+			// block nodes, after a flip).
+			if (hidden && showVeto->engineHid && a_site < HiddenStoreSites().size())
+				if (const auto offset = HiddenStoreSites()[a_site].offset; std::ranges::find(showVeto->hideSites, offset) != showVeto->hideSites.end())
+					showVeto->engineHid(a_object, offset);
 			Scene::PushHiddenUpdate(a_object, a_site);
 		}
 
@@ -525,9 +532,11 @@ namespace DCLF::Features::HiddenNodes
 		 * are restored and an `or`/`and` runs once more (idempotent) to give the following code its expected flags; a `mov` sets
 		 * none and is not rerun, so a concurrent writer's value is never stored over.
 		 *
-		 * A LOD show stub (kLodShowSites) starts with the veto: while a gate is open (LodGates::OpenGates, one compare) it calls
-		 * LodGates::Vetoes through a second body that leaves the answer in ZF; a vetoed store returns at once, unrun and without an
-		 * event, so the object stays hidden until the flip. The code after each of the four reads no flags (`jmp`, load, `ret`, `jmp`).
+		 * A LOD show stub (kLodShowSites) starts with the veto: while its open word is not 0 (Api::ShowVeto::open, loaded from Core's
+		 * cell, then one compare) it calls Api::ShowVeto::vetoes (through its cell) in a second body that leaves the answer in ZF; a vetoed
+		 * store returns at once, unrun and without an event, so the object stays hidden until the flip. The code after each of the four
+		 * reads no flags (`jmp`, load, `ret`, `jmp`). The cells, not their values, are built in: whatever the install registers (or
+		 * nothing: a zero word, a function answering false), the stubs are the same.
 		 */
 		struct HiddenStoreStubs : Xbyak::CodeGenerator
 		{
@@ -548,7 +557,8 @@ namespace DCLF::Features::HiddenNodes
 						Xbyak::Label proceed;
 						pushf();
 						push(rax);
-						mov(rax, reinterpret_cast<std::uintptr_t>(&LodGates::OpenGates()));
+						mov(rax, reinterpret_cast<std::uintptr_t>(&showVeto->open));
+						mov(rax, qword[rax]);
 						cmp(dword[rax], 0);
 						pop(rax);
 						je(proceed, T_NEAR);
@@ -633,8 +643,8 @@ namespace DCLF::Features::HiddenNodes
 				sub(rsp, 0x80);
 				for (int i = 0; i < 6; ++i)
 					movdqu(ptr[rsp + 0x20 + 0x10 * i], Xbyak::Xmm(i));
-				mov(rax, reinterpret_cast<std::uintptr_t>(&LodGates::Vetoes));
-				call(rax);
+				mov(rax, reinterpret_cast<std::uintptr_t>(&showVeto->vetoes));
+				call(ptr[rax]);  // unsized: Xbyak's strict size check refuses qword for an indirect call
 				test(al, al);
 				for (int i = 0; i < 6; ++i)
 					movdqu(Xbyak::Xmm(i), ptr[rsp + 0x20 + 0x10 * i]);
@@ -709,8 +719,10 @@ namespace DCLF::Features::HiddenNodes
 
 	void InstallStores()
 	{
-		// Core's channel: LodGates' own stores carry the site past the table; the walk gates its verdicts on the events once installed.
-		Scene::hiddenGateSite = static_cast<std::uint32_t>(HiddenStoreSites().size());
+		// Core's channel: the reserved sites (a feature's own stores, InstallContext::ReserveHiddenSite) follow the table; the walk gates its
+		// verdicts on the events once installed. The show veto's cells before the stubs are built (they load them).
+		Extensions::NoteHiddenSourceSites(static_cast<std::uint32_t>(HiddenStoreSites().size()));
+		showVeto = &Extensions::RegisteredShowVeto();
 		Scene::hiddenEventsInstalled = PatchStores();
 	}
 

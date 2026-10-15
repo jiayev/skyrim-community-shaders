@@ -1,6 +1,9 @@
 #pragma once
 
+#include <ranges>
+
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/GateAdoption.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
 namespace DCLF::Diagnostics
@@ -32,7 +35,7 @@ namespace DCLF::Diagnostics
 		using Frame = Scene::FrameView;
 		static std::uint32_t frame() { return Frame::Get().frame; }
 		static const auto& projectedTextures() { return Frame::Get().projectedTextures; }
-		static auto& gateReleaseStats() { return Frame::Get().gateReleaseStats; }
+		static auto& gateReleaseStats() { return Scene::GateAdoption::Releases(); }  // the LOD gates' render-thread state
 		static auto& geometryStats() { return Frame::Get().geometryStats; }
 		static auto& pipelinesPosted() { return Frame::Get().pipelinesPosted; }
 		static auto& shadingFrames() { return Frame::Get().shadingFrames; }
@@ -126,7 +129,14 @@ namespace DCLF::Diagnostics
 		static auto& mirrorReads(Store& s) { return s.mirrorReads; }
 		static constexpr const auto& kMirrorReadNames = Scene::Coordinator::kMirrorReadNames;
 		using LodGate = Scene::Coordinator::LodGate;
-		static const auto& gateFlipsMade(const Store& s) { return s.gateFlipsMade; }
+		// The flips the commits made since the last publication: the gates' component's deltas pending (PublishDelta), each a GateFlip.
+		static auto gateFlipsMade(const Store& s)
+		{
+			static const std::vector<std::shared_ptr<const void>> none;
+			const std::uint32_t c = Scene::GateAdoption::component.index;
+			const auto& deltas = c < s.componentDeltaRequests.size() ? s.componentDeltaRequests[c] : none;
+			return deltas | std::views::transform([](const std::shared_ptr<const void>& a_delta) -> const GateFlip& { return *static_cast<const GateFlip*>(a_delta.get()); });
+		}
 		static const SetSnapshot* publicationClaims(const Store& s) { return s.publicationClaims.get(); }
 		// The gate parity's reads (SceneGateParity.cpp): the root map, the slots' readiness as the commit recorded it, the slots queued for
 		// the next commit, the next publication's claims, and a slot's participation (DecideSlot's).
