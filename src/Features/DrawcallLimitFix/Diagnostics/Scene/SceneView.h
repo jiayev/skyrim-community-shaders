@@ -103,7 +103,6 @@ namespace DCLF::Diagnostics
 		static const auto& shadowIndexedLive(const Store& s) { return s.shadowIndexedLive; }
 		static Scene::Coordinator::ShadowInputs ShadowInputsOf(const Store& s, std::uint32_t a_slot) { return s.ShadowInputsOf(a_slot); }
 		static const auto& stats(const Store& s) { return s.stats; }
-		static Scene::Coordinator::DecalOrderComparison CompareDecalOrder(const Store& s) { return s.CompareDecalOrder(); }
 		static const auto& sunTable(const Store& s) { return s.sunTable; }
 		static const auto& lightTable(const Store& s) { return s.lightTable; }
 		static const auto& sunCandidateSet(const Store& s) { return s.sunCandidateSet; }

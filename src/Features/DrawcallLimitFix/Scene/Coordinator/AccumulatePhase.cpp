@@ -105,11 +105,10 @@ namespace DCLF::Scene
 			tables.NoteChange(objectId, kChangeExtras);
 		// Sampled by the next frame's values (the earliest it can join the set).
 		NameShading(objectId, true);
-		if (a_patch.decalKey) {
+		if (a_patch.decalKey)
 			++stats.decals[static_cast<std::uint32_t>(a_patch.decalKey >> 60) - 1];
-			memberDecals[objectId] = a_patch.decalKey;
-			NoteDecalChanged(objectId);
-		}
+		// The features' components list what they keep by the patch (Features/Decals: the member decals' order).
+		ComponentsAccumulated(objectId, a_patch.decalKey);
 	}
 
 	void Coordinator::TakeAccumulateInputs()
@@ -505,7 +504,7 @@ namespace DCLF::Scene
 					++stats.fadingFrames;
 				++stats.fadingDrawn;
 			}
-			// A member decal's order key (DecalOrder.cpp): group, pass enum (Lighting descriptor + 0x4800002D, effect + 0x4000002C:
+			// A member decal's order key (Features/Decals/DecalOrder.cpp): group, pass enum (Lighting descriptor + 0x4800002D, effect + 0x4000002C:
 			// EffectPassEnum), sub-pass. The engine draws a group's buckets in ascending enum, so effect decals precede Lighting ones.
 			if (descriptors.decalGroup) {
 				const std::uint32_t passEnum = descriptors.effect ? EffectPassEnum(accumulated->technique) : accumulated->technique + 0x4800002Du;
@@ -604,7 +603,7 @@ namespace DCLF::Scene
 		};
 		stats.pipelines = countBits(tables.usedPipelineBits);
 		stats.materials = countBits(tables.usedMaterialBits);
-		OrderDecals();
+		ComponentsJoinsDone();
 		stats.geometries = static_cast<std::uint32_t>(tables.geometrySlots.ReferencedCount());
 		stats.geometriesAlive = static_cast<std::uint32_t>(tables.geometrySlots.AliveCount());
 		stats.pipelinesAlive = static_cast<std::uint32_t>(tables.pipelineSlots.AliveCount());

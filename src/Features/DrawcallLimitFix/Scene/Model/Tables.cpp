@@ -279,7 +279,7 @@ namespace DCLF
 			retiring.clear();
 			objectsRetiring = 0;
 			++slotEpoch;
-			// The decals' ordinals are the member decals' (Coordinator::OrderDecals), kept with the objects.
+			// The decals' ordinals are the member decals' (Features/Decals: OrderDecals), kept with the objects.
 			decalOrdinal.clear();
 			decalCount = {};
 		}

@@ -64,8 +64,6 @@ namespace DCLF::Scene
 			tables.residentSlot[a_slot] = 0;
 			tables.NoteChange(a_slot, kChangeMembership);
 		}
-		if (memberDecals.erase(a_slot))
-			NoteDecalChanged(a_slot);
 		if (a_restore)
 			ResetAccumulatedHalf(a_slot);
 		// A layer and its base are members together (WriteLayer): the other leaves too.
@@ -81,8 +79,7 @@ namespace DCLF::Scene
 			channels.primaryNotes.Push({ PrimaryNote::Kind::AllMembersLost, nullptr });
 		else
 			PrimaryCull::Get().NoteAllMembersLost();
-		memberDecals.clear();
-		NoteDecalsCleared();
+		ComponentsAllLeft();
 		for (const std::uint32_t slot : residents) {
 			ComponentsLeft(slot);
 			ResetAccumulatedHalf(slot);

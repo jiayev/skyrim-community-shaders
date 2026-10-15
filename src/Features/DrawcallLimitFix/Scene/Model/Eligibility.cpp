@@ -152,7 +152,7 @@ namespace DCLF::Eligibility
 			return reason;
 		if (!g.layerProperty)
 			return Ineligible::None;  // nothing but its own passes: a tri-shape
-		return ActiveToggles().layers && Layer(a_leaf, nullptr, nullptr) == Ineligible::None ? Ineligible::None : Ineligible::MultiIndex;
+		return Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Layer) && Layer(a_leaf, nullptr, nullptr) == Ineligible::None ? Ineligible::None : Ineligible::MultiIndex;
 	}
 
 	Ineligible Layer(const SceneCapture::LeafView& a_leaf, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated)
@@ -183,7 +183,7 @@ namespace DCLF::Eligibility
 			return false;
 		// A decal is a member like any other (its group from the settled state); the blended decal group is DCLF's too.
 		const bool decal = (a_leaf.property->flags & 0xc000000ull) != 0;
-		if (decal && !ActiveToggles().decals)
+		if (decal && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal))
 			return false;
 		// A blended member is DCLF's too (the forward epoch: blended Lighting, the Effect port, its billboards), so its entry can be whole;
 		// its eligibility (the entry's reason) already says whether the forward toggles take it.

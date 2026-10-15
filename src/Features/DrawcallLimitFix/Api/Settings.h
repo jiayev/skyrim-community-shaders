@@ -68,6 +68,6 @@ namespace DCLF::Api
 		bool entersClassification = false;  // a change drops the classification caches (Coordinator::InvalidateVerdicts)
 		bool offByDefault = false;          // unset seeds it off: only onValue turns it on
 		std::string_view after;
-		std::string_view needs[2];  // the Core toggles it needs on (their names), or empty
+		std::string_view needs[2];  // the toggles it needs on (their names: Core's, or a feature's registered before it), or empty
 	};
 }

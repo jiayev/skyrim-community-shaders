@@ -24,7 +24,6 @@ namespace DCLF::Diagnostics
 		LodSegmentsApplied,      // the pass's object LOD segment events applied (the shapes' drawn ranges sampled again)
 		ShadowSetsKept,          // the shadow sets updated by changes, about to be made whole again (Policy::RebuildShadowSets)
 		ShadowSetsRebuilt,       // ... made whole again from the same tables
-		DecalsOrdered,           // the kept decal order brought up to date, on a pass an observer checks it (DecalOrderDue)
 		WalkDone,                // the walk done (the shading named, the placement plan published), before the joins
 		JoinsBegin,              // the joins begin (the walk done, nothing bound yet)
 		ResidentsKept,           // the joins' residents kept (KeepResidentsAlive), before the slot check
@@ -61,13 +60,6 @@ namespace DCLF::Diagnostics
 	{
 		Scene::Coordinator& store;
 		bool sun;
-	};
-
-	/** @brief The coordinator, the decal order's upkeep (after the joins): whether an observer checks the order this pass (`checked`), which runs the upkeep even with no change. */
-	struct DecalOrderDue
-	{
-		Scene::Coordinator& store;
-		bool& checked;
 	};
 
 	/** @brief The coordinator: a publication's snapshot brought up to the tables (PublishTables; `published`: the publications before it). */

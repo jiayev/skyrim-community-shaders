@@ -28,10 +28,6 @@ namespace DCLF
 		// The object classes (LightingDescriptors):
 		// single-partition NiSkinInstance shapes, palettes from the engine;
 		bool skinned = false;
-		// decals (accumulation hints 2 and 3), drawn by the second pass;
-		bool decals = false;
-		// multi-index shapes' main passes: the shape, and its layer (the additional property's passes, hint 12) as decal group 3;
-		bool layers = false;
 		// kProjectedUV objects (snow and moss projection);
 		bool projectedUv = false;
 		// terrain, the MTLand and MTLandLODBlend techniques (MtLandEnabled adds the Terrain Blending condition);
@@ -80,7 +76,7 @@ namespace DCLF
 		bool excludePrimaryEntries = false;
 
 		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees;
-		// Features/Particles, Features/Billboards, Features/SwitchNodes: theirs), ...
+		// Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals: theirs), ...
 		std::uint32_t registered = 0;
 		/** @brief Whether a feature's toggle is on (false for none). */
 		bool On(Api::ToggleId a_toggle) const { return a_toggle && ((registered >> a_toggle.bit) & 1u) != 0; }
@@ -103,6 +99,7 @@ namespace DCLF
 		bool offByDefault = false;  // unset seeds it off: only its onValue turns it on
 		Api::ToggleId registered{};       // a feature's toggle: its bit (ToggleSet::registered); member is null
 		Api::SwitchId registeredSeed{};   // ... and its seed, a feature's switch
+		Api::ToggleId registeredNeeds[2]{};  // the features' toggles it needs on, earlier in the table (none when unused)
 	};
 
 	/** @brief A flag's value in a_set (its member, or a feature's bit). */
@@ -127,7 +124,8 @@ namespace DCLF
 
 	/**
 	 * @brief Main thread, at install (Extensions::InstallFeatures, for a_feature): a feature's toggle, into the table after the Core
-	 * toggle its after names. Fails the install past the packed word's bits, or for an after or a need Core does not have.
+	 * toggle its after names. Fails the install past the packed word's bits, for an after Core does not have, or a need not listed before it
+	 * (Core's, or a feature's registered earlier).
 	 */
 	Api::ToggleId RegisterToggle(const Api::FeatureToggle& a_toggle, std::string_view a_feature);
 	/** @brief A toggle by its name (ToggleInfo::name): a feature's id (none: no such toggle, or Core's). Any thread after the install. */

@@ -19,7 +19,6 @@ namespace DCLF::Diagnostics
 	void InstallSlotDrainCheck();
 	void InstallFrameParity();
 	void InstallCandidateParity();
-	void InstallDecalOrderParity();
 	void InstallLodSegmentParity();
 	void InstallShadowSetParity();
 	void InstallReplayParity();

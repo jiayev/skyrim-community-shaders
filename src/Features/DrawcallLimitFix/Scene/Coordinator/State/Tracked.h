@@ -2,7 +2,7 @@
 
 // The coordinator's tracked set (CoordinatorTracked): each tracked geometry's entry (Tracked, its caches and list keys), the
 // tracked map, the scene identity and the walk's and the joins' orders. Every phase reads it: attach and detach (ApplyEvents.cpp,
-// Classification.cpp), the walk (Walk.cpp), the joins (AccumulatePhase.cpp), the gates (Gates.cpp) and the decals (DecalOrder.cpp).
+// Classification.cpp), the walk (Walk.cpp), the joins (AccumulatePhase.cpp) and the gates (Gates.cpp).
 //
 // A private base of Scene::Coordinator, included by Coordinator.h: names, types and initialisers are the coordinator's own,
 // and the functions over them are declared there.

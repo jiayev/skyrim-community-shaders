@@ -86,7 +86,6 @@ namespace DCLF
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Slots.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Materials.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Bindings.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Decals.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Faces.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Walk.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Joins.h"
@@ -130,7 +129,6 @@ namespace DCLF
 		private CoordinatorSlots,
 		private CoordinatorMaterials,
 		private CoordinatorBindings,
-		private CoordinatorDecals,
 		private CoordinatorFaces,
 		private CoordinatorWalk,
 		private CoordinatorJoins,
@@ -505,7 +503,7 @@ namespace DCLF
 		struct BatchIndex;
 		struct ShardScope;
 
-		// State whose types are the coordinator's own (public, or declared here): the report counters, the kept decal order, the
+		// State whose types are the coordinator's own (public, or declared here): the report counters, the
 		// load screen's carry, the material owners and the retirement chain. The rest of the state is in the bases (State/).
 		// Pipeline blocks the render thread posted (Channels::pipelineConstantsPosted), applied where the slot still holds the key.
 		ConstantsPostStats constantsPostStats;
@@ -513,9 +511,6 @@ namespace DCLF
 		ResidentStats residentStats;
 		SetStats setStats;
 		Stats stats;
-		// The member decals in draw order with their keys, kept so a change re-keys only the decals it names.
-		struct KeptDecalOrder;
-		std::shared_ptr<KeptDecalOrder> keptDecals;
 		// A load screen's attach and detach events for the mirror (taken by the first pass after the load).
 		std::shared_ptr<EventBatch> loadingCarry;
 		/**
@@ -1036,17 +1031,6 @@ namespace DCLF
 		/** @brief New lookups (tables reset): generations past the last, versions continuing. */
 		void ResetLookups();
 
-		// The member decals: State/Decals.h (CoordinatorDecals).
-		void NoteDecalChanged(std::uint32_t a_object) { decalsChanged.push_back(a_object); }
-		void NoteDecalsCleared()
-		{
-			decalsChanged.clear();
-			decalsRebuild = true;
-		}
-		/** @brief Tables::decalOrdinal and decalCount: the member decals, in the engine's draw order. */
-		void OrderDecals();
-		DecalOrderComparison CompareDecalOrder() const;
-
 		// The face shapes: State/Faces.h (CoordinatorFaces).
 		/** @brief A face shape's snapshot and region this walk; false without one. */
 		bool ResolveFace(RE::BSGeometry& a_geometry, const Tracked& a_tracked, FaceSnapshots::ShapeView& a_face, std::uint32_t& a_region);
@@ -1257,6 +1241,14 @@ namespace DCLF
 		void ComponentsRecount(bool a_rebuild, std::span<const std::uint32_t> a_touched);
 		/** @brief ResetSlotTables, before the tables are cleared. */
 		void ComponentsReset();
+		/** @brief EndAllResidency, before the residents' ComponentsLeft. */
+		void ComponentsAllLeft();
+		/** @brief ApplyAccumulatePatch wrote a_slot's accumulated half (a_chain: the patch's decalKey). */
+		void ComponentsAccumulated(std::uint32_t a_slot, std::uint64_t a_chain);
+		/** @brief The walk rewrote a_slot (a_written: its scene half; its skin partitions before and now). */
+		void ComponentsRewritten(std::uint32_t a_slot, bool a_written, std::uint32_t a_partitionsBefore, std::uint32_t a_partitionsNow);
+		/** @brief The accumulate phase's joins done (its statistics). */
+		void ComponentsJoinsDone();
 		/** @brief Component a_component's state, the components made first when they are not (scene lane). */
 		const std::shared_ptr<void>& ComponentState(std::uint32_t a_component);
 

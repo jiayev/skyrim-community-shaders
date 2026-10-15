@@ -57,6 +57,16 @@ namespace DCLF::Api
 		const auto& counted = coordinator.residentCounted;
 		return a_slot < counted.size() && counted[a_slot].pipeline != Scene::CoordinatorResidents::ResidentCounted::kNone;
 	}
+
+	const SceneMirror& CoordinatorComponentContext::Mirror() const
+	{
+		return coordinator.mirror;
+	}
+
+	std::uint64_t CoordinatorComponentContext::PassSerial() const
+	{
+		return coordinator.passSerial;
+	}
 }
 
 namespace DCLF::Scene
@@ -104,5 +114,39 @@ namespace DCLF::Scene
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
 			if (registered[c].reset)
 				registered[c].reset({ tables, ComponentState(c), *this, c });
+	}
+
+	void Coordinator::ComponentsAllLeft()
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].allLeft)
+				registered[c].allLeft({ tables, ComponentState(c), *this, c });
+	}
+
+	void Coordinator::ComponentsAccumulated(std::uint32_t a_slot, std::uint64_t a_chain)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		const Api::AccumulatedPatch patch{ a_chain };
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].accumulated)
+				registered[c].accumulated({ tables, ComponentState(c), *this, c }, a_slot, patch);
+	}
+
+	void Coordinator::ComponentsRewritten(std::uint32_t a_slot, bool a_written, std::uint32_t a_partitionsBefore, std::uint32_t a_partitionsNow)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		const Api::SlotRewrite rewrite{ a_written, a_partitionsBefore, a_partitionsNow };
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].rewritten)
+				registered[c].rewritten({ tables, ComponentState(c), *this, c }, a_slot, rewrite);
+	}
+
+	void Coordinator::ComponentsJoinsDone()
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].joinsDone)
+				registered[c].joinsDone({ tables, ComponentState(c), *this, c });
 	}
 }

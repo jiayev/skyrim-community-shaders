@@ -13,6 +13,8 @@ namespace DCLF::Api
 	// Defined by Core (Core/Extensions/CoordinatorComponents.h), which the features inside DCLF include for them.
 	class CoordinatorComponentContext;
 	class ResidentRecount;
+	class AccumulatedPatch;
+	class SlotRewrite;
 
 	/** @brief A registered component (RegisterCoordinatorComponent's result): FrameView::TakeComponentSeeds takes its seeds by it. */
 	struct CoordinatorComponentId
@@ -38,6 +40,14 @@ namespace DCLF::Api
 	 *   one (or, rebuilt, every resident), before the used sets: the component recounts the same slots (ResidentRecount).
 	 * - reset (optional): the slot tables reset (ResetSlotTables), before the tables are cleared: the component's references are handed
 	 *   back (through the retirement chain, with everything else the tables named).
+	 * - allLeft (optional): every residency ends (EndAllResidency), before left is called for each resident: what the component keeps of
+	 *   the members goes whole.
+	 * - accumulated (optional): the accumulate phase wrote a_slot's accumulated half from its patch (a join, or a resident's patch that
+	 *   changed: ApplyAccumulatePatch), after the write: the patch's values the component lists by (AccumulatedPatch).
+	 * - rewritten (optional): the walk rewrote a_slot's scene half (its write, or a layer's), or refreshed its skin partitions in place
+	 *   (SlotRewrite), where the coordinator writes them. Called per written slot (the walk writes the slots its events changed).
+	 * - joinsDone (optional): the accumulate phase's joins done (the residents kept alive, the slots checked), in its statistics: the
+	 *   component brings what it derives from the members up to date, writing the live tables (noting their changes).
 	 */
 	struct CoordinatorComponent
 	{
@@ -47,5 +57,9 @@ namespace DCLF::Api
 		void (*left)(const CoordinatorComponentContext& a_context, std::uint32_t a_slot) = nullptr;
 		void (*recount)(const CoordinatorComponentContext& a_context, const ResidentRecount& a_recount) = nullptr;
 		void (*reset)(const CoordinatorComponentContext& a_context) = nullptr;
+		void (*allLeft)(const CoordinatorComponentContext& a_context) = nullptr;
+		void (*accumulated)(const CoordinatorComponentContext& a_context, std::uint32_t a_slot, const AccumulatedPatch& a_patch) = nullptr;
+		void (*rewritten)(const CoordinatorComponentContext& a_context, std::uint32_t a_slot, const SlotRewrite& a_rewrite) = nullptr;
+		void (*joinsDone)(const CoordinatorComponentContext& a_context) = nullptr;
 	};
 }

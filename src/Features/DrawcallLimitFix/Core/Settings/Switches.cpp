@@ -62,8 +62,6 @@ namespace DCLF
 			{ Skinned, "CS_DCLF_SKINNED", F, Reduced::UnlessOne, false, "0: skinned objects stay native (live toggle's seed)" },
 			{ SkinPartitions, "CS_DCLF_SKIN_PARTITIONS", F, Reduced::UnlessOne, false, "0: skins of several partitions stay native (live toggle's seed)" },
 			{ Actors, "CS_DCLF_ACTORS", F, Reduced::UnlessOne, false, "0: actors stay native (live toggle's seed)" },
-			{ Decals, "CS_DCLF_DECALS", F, Reduced::UnlessOne, false, "0: decals stay native (live toggle's seed)" },
-			{ Layers, "CS_DCLF_LAYERS", F, Reduced::UnlessOne, false, "0: multi-index shapes' main passes stay native (live toggle's seed)" },
 			{ MtLand, "CS_DCLF_MTLAND", F, Reduced::UnlessOne, false, "0: terrain stays native (live toggle's seed)" },
 			{ TbTerrain, "CS_DCLF_TB_TERRAIN", F, Reduced::UnlessOne, false,
 				"0: terrain under Terrain Blending, and the meshes that feature redraws after it, stay native (T7c1; live toggle's seed)" },

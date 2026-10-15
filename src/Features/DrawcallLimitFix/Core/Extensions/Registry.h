@@ -101,6 +101,10 @@ namespace DCLF::Extensions
 		decltype(Api::CoordinatorComponent::left) left = nullptr;
 		decltype(Api::CoordinatorComponent::recount) recount = nullptr;
 		decltype(Api::CoordinatorComponent::reset) reset = nullptr;
+		decltype(Api::CoordinatorComponent::allLeft) allLeft = nullptr;
+		decltype(Api::CoordinatorComponent::accumulated) accumulated = nullptr;
+		decltype(Api::CoordinatorComponent::rewritten) rewritten = nullptr;
+		decltype(Api::CoordinatorComponent::joinsDone) joinsDone = nullptr;
 	};
 	/** @brief A registered shading contribution. */
 	struct ShadingContributionEntry

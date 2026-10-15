@@ -26,8 +26,6 @@ namespace DCLF
 		Skinned,
 		SkinPartitions,
 		Actors,
-		Decals,
-		Layers,
 		MtLand,
 		TbTerrain,
 		Forward,

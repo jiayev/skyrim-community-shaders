@@ -223,7 +223,7 @@ namespace DCLF
 		std::vector<DrawSequence> draws;  // one per object (templates: pipelineIndex is the table index)
 		// Decals: each decal's slot in its group's range, in the engine's draw order (group, technique bucket, batch list, chain
 		// position). The colour epoch writes the draw, or a zero-count one, to that fixed slot so overlapping decals keep their
-		// order (an atomic append would not). ~0u for non-decals. Every changed ordinal notes its slot (Coordinator::OrderDecals).
+		// order (an atomic append would not). ~0u for non-decals. Every changed ordinal notes its slot (Features/Decals: OrderDecals).
 		std::vector<std::uint32_t> decalOrdinal;  // parallel to objects (sized by OrderDecals)
 		std::array<std::uint32_t, 3> decalCount{};
 		// Skinning (CS_DCLF_SKINNED): each skinned object's block in FrameValues' palettes (NiSkinInstance::boneMatrices and
