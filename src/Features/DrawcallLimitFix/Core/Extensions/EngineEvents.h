@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -50,6 +51,29 @@ namespace DCLF::Extensions
 {
 	/** @brief The engine channels a batch holds keys of (Coordinator::EventBatch::channelKeys): grow it before more are registered. */
 	inline constexpr std::uint32_t kEngineChannelSlots = 4;
+	/**
+	 * @brief The adoption guards the frame inputs and a publication carry the generations of (Scene::FrameInputs::adoptionGuards,
+	 * ScenePublication::adoptionGuards), by registration order: grow it before more are registered.
+	 */
+	inline constexpr std::uint32_t kAdoptionGuardSlots = 2;
+	using AdoptionGenerations = std::array<std::uint64_t, kAdoptionGuardSlots>;
+	/** @brief Any thread, after InstallFeatures: every registered guard's generation (Api::AdoptionGuard::generation), 0 past them. */
+	AdoptionGenerations SampleAdoptionGuards();
+	/** @brief Whether any of a_installed's guards is older than a_frame's (the frame withdraws its claims). */
+	inline bool AdoptionGuarded(const AdoptionGenerations& a_installed, const AdoptionGenerations& a_frame)
+	{
+		for (std::uint32_t g = 0; g < kAdoptionGuardSlots; ++g)
+			if (a_installed[g] < a_frame[g])
+				return true;
+		return false;
+	}
+
+	/**
+	 * @brief Main thread, at PostPostLoad, before InstallFeatures (the hidden-node source's install, in the early hooks): its stores' sites;
+	 * the sites InstallContext::ReserveHiddenSite hands out follow them.
+	 */
+	void NoteHiddenSourceSites(std::uint32_t a_sites);
+	std::uint32_t HiddenSourceSites();
 
 	/** @brief Main thread (PrimaryCull::Install): the primary cull installed, so the stand-in observers will be called. */
 	void NoteStandInInstalled();

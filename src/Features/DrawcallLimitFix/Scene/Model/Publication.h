@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneSet.h"
@@ -47,6 +48,9 @@ namespace DCLF
 		// The LOD gates' forced releases its pass's events were complete for (FrameInputs::lodForcedGeneration): an older one may
 		// claim the outgoing blocks a forced release detached, and the frames withdraw until one built after it is installed.
 		std::uint64_t lodForcedGeneration = 0;
+		// The adoption guards' generations its pass's events were complete for (FrameInputs::adoptionGuards): a frame whose own are newer
+		// withdraws until one built after them is installed (Extensions::AdoptionGuarded).
+		Extensions::AdoptionGenerations adoptionGuards{};
 		std::uint32_t tablesGeneration = 0;   // the tables' generation (GetTablesGeneration while it is the frame's)
 		std::shared_ptr<const SceneTables> tables;
 		std::shared_ptr<const SetSnapshot> claims;
@@ -220,6 +224,9 @@ namespace DCLF
 		std::vector<SceneTables::ActorWetnessChange> actorWetness;
 		std::vector<LightEntryChange> lightEntries;
 		std::vector<GateFlip> gateFlips;  // the LOD gates its commits flipped (ReleaseGates)
+		// By coordinator component (Api::CoordinatorComponentId): the deltas its passes published (CoordinatorComponentContext::PublishDelta),
+		// handed to its adoption.
+		std::vector<std::vector<std::shared_ptr<const void>>> componentDeltas;
 	};
 
 	/** @brief What a publication is made from (the tables' logs, stamps and sizes, the lookups, the catalog): a pass that changed none of it publishes nothing. */

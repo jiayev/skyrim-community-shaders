@@ -43,6 +43,7 @@ namespace DCLF::Scene
 		std::uint32_t togglesGeneration = 0;
 		std::uint32_t verdictsGeneration = 0;
 		std::uint64_t lodForcedGeneration = 0;  // LodGates::ForcedGeneration at the frame's start (ScenePublication's)
+		Extensions::AdoptionGenerations adoptionGuards{};  // the adoption guards' generations at the frame's start (ScenePublication's)
 	};
 
 	/** @brief Light Limit Fix's room map (its room nodes' indices), copied by the render thread when its generation moves. */

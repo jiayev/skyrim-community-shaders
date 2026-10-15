@@ -102,6 +102,39 @@ namespace DCLF::Api
 		/** @brief a_entry's kept ranges replaced; a_rewrite: its record (its range slot chain) is written again this walk. */
 		void SetEntryRanges(const void* a_entry, std::vector<LodSegments::Range>&& a_ranges, bool a_rewrite) const;
 
+		// The marks on scene roots (Api::Mark), the coordinator's map read as data by the prepares (written only while the mirror's events
+		// are applied, before the adds).
+		/**
+		 * @brief a_key marked the component's (a_token, a_side); a_ownHide: the mirror counts the subtree's hide as the component's (its
+		 * entries' verdicts do not take it). Returns the mark it displaced (none: no other).
+		 */
+		Mark MarkRoot(const void* a_key, std::uint64_t a_token, std::uint8_t a_side, bool a_ownHide) const;
+		/** @brief a_key's mark erased when it is the component's with a_token; whether it was. */
+		bool UnmarkRoot(const void* a_key, std::uint64_t a_token) const;
+		/** @brief a_key's mark (none: unmarked). */
+		Mark MarkOf(const void* a_key) const;
+
+		// The commit's vetoes (Api::kVetoHold, kVetoObserve): one byte per entry, read by the commit as data.
+		/** @brief a_entry's veto set (0: none); Observe resets its observed slots. Set during settle, it applies in the same commit. */
+		void SetEntryVeto(const void* a_entry, std::uint8_t a_veto) const;
+		/** @brief What the commit recorded of a_slot while Observe withheld it (none past the slots). */
+		ObservedState ObservedSlot(std::uint32_t a_slot) const;
+		/** @brief Whether the component needs the commit live (settle called with a_live) whatever the vetoes. */
+		void SetCommitLive(bool a_live) const;
+		/** @brief a_entry requeued (Api::kRequeueSlots, kRequeueReevaluate, kRequeueReevaluateAlways); nothing when it is not tracked. */
+		void Requeue(const void* a_entry, std::uint8_t a_flags) const;
+		/** @brief a_entry's tracked state (Api::TrackedState; tracked false: not tracked). */
+		TrackedState TrackedStateOf(const void* a_entry) const;
+		/** @brief A delta the next publication carries for the component (forces one), handed to its adoption (AdoptionContext::deltas). */
+		void PublishDelta(std::shared_ptr<const void> a_delta) const;
+		/** @brief Whether a_slot's structure changed since the last publication's revocation (its claim is taken back by the next one). */
+		bool RestructuredSincePublication(std::uint32_t a_slot) const;
+		/**
+		 * @brief The tracked entries under a_root as the mirror holds the subtree (the tracking walk's), into a_out (appended); a_lacking set
+		 * when the mirror lacks a record of the root or a node under it.
+		 */
+		void SubtreeEntries(const void* a_root, std::vector<const void*>& a_out, bool& a_lacking) const;
+
 	private:
 		Scene::Coordinator& coordinator;  // the services above, not the component's
 		std::uint32_t component;          // its registration
@@ -179,4 +212,10 @@ namespace DCLF::Extensions
 	 * it: Api::CoordinatorComponent::EntryClassHooks::takes). Read as data by the eligibility, the walk and the frame's addresses.
 	 */
 	bool EntryClassTaken(Api::EntryClass a_class);
+	/**
+	 * @brief Render thread, the frame's start (after its claims are installed or withdrawn): every component's adoption hook
+	 * (Api::CoordinatorComponent::Adoption), in registration order, handed a_frame, a_claims (null: withdrawn) and its deltas
+	 * (a_deltas by component: the publications installed since the last call; none past it). Scene/Coordinator/Components.cpp.
+	 */
+	void ComponentsAdopt(std::uint32_t a_frame, const void* a_claims, std::span<const std::vector<std::shared_ptr<const void>>> a_deltas);
 }

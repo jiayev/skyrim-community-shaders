@@ -129,6 +129,44 @@ namespace DCLF::Api
 			coordinator.pendingEvaluation.push_back(geometry);
 		coordinator.lodRanges[geometry] = std::move(a_ranges);
 	}
+
+	ObservedState CoordinatorComponentContext::ObservedSlot(std::uint32_t a_slot) const
+	{
+		const auto& slots = coordinator.gateSlots;
+		if (a_slot >= slots.size())
+			return {};
+		return { slots[a_slot].geometry, slots[a_slot].phases, slots[a_slot].ready };
+	}
+
+	void CoordinatorComponentContext::Requeue(const void* a_entry, std::uint8_t a_flags) const
+	{
+		const auto it = coordinator.tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_entry)));
+		if (it == coordinator.tracked.end())
+			return;
+		auto& entry = it->second;
+		// Its verdict taken again: always, or only when it was classified (an unclassified entry's evaluation is pending already).
+		if ((a_flags & kRequeueReevaluateAlways) || ((a_flags & kRequeueReevaluate) && entry.candidateFrame != 0)) {
+			entry.candidateFrame = 0;
+			coordinator.pendingEvaluation.push_back(it->first);
+		}
+		// Its slots committed again by the next commit (queued at its start).
+		if (a_flags & kRequeueSlots)
+			for (const std::uint32_t slot : { entry.slot, entry.layerSlot })
+				if (slot != kNoObjectSlot)
+					coordinator.gateQueued.push_back(slot);
+	}
+
+	void CoordinatorComponentContext::SubtreeEntries(const void* a_root, std::vector<const void*>& a_out, bool& a_lacking) const
+	{
+		// One walk of the mirror: the subtree as the tracking walks it (MirrorSubtree), its tracked geometries.
+		std::vector<std::pair<RE::BSGeometry*, Ineligible>> found;
+		if (!coordinator.mirror.Node(a_root))
+			a_lacking = true;
+		coordinator.MirrorSubtree(a_root, Ineligible::None, found, a_lacking);
+		for (const auto& [geometry, reason] : found)
+			if (coordinator.tracked.contains(geometry))
+				a_out.push_back(geometry);
+	}
 }
 
 namespace DCLF::Scene
@@ -287,6 +325,62 @@ namespace DCLF::Scene
 		}
 	}
 
+	void Coordinator::ComponentsStacked(Api::EngineChannelId a_channel, const Api::Stacked& a_event)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].events.stacked)
+				registered[c].events.stacked({ tables, ComponentState(c), *this, c }, a_channel, a_event);
+	}
+
+	void Coordinator::ComponentsDetached(const void* a_key, const Api::Mark& a_mark)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		const std::uint32_t c = a_mark.component.index;
+		if (c < registered.size() && registered[c].events.detached)
+			registered[c].events.detached({ tables, ComponentState(c), *this, c }, a_key, a_mark);
+	}
+
+	void Coordinator::ComponentsRescan()
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].events.rescan)
+				registered[c].events.rescan({ tables, ComponentState(c), *this, c });
+	}
+
+	void Coordinator::ComponentsUnderMark(const RE::BSGeometry* a_geometry, const Api::Mark& a_mark)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		const std::uint32_t c = a_mark.component.index;
+		if (c < registered.size() && registered[c].events.underMark)
+			registered[c].events.underMark({ tables, ComponentState(c), *this, c }, a_geometry, a_mark);
+	}
+
+	void Coordinator::ComponentsSettle(bool a_live)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].commit.settle)
+				registered[c].commit.settle({ tables, ComponentState(c), *this, c }, a_live);
+	}
+
+	void Coordinator::ComponentsTake()
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].commit.take)
+				registered[c].commit.take({ tables, ComponentState(c), *this, c });
+	}
+
+	void Coordinator::ComponentsPublished()
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].commit.published)
+				registered[c].commit.published({ tables, ComponentState(c), *this, c });
+	}
+
 	void Coordinator::ComponentsReportText(Api::ReportPoint a_point, std::string& a_text)
 	{
 		// The features' text lines and the components', in registration order.
@@ -325,5 +419,21 @@ namespace DCLF::Scene
 		for (std::uint32_t c = 0; c < registered.size(); ++c)
 			if (registered[c].entryClass.follows == a_class && registered[c].entryClass.streamed)
 				registered[c].entryClass.streamed({ tables, ComponentState(c), *this, c }, a_slot, a_write);
+	}
+}
+
+namespace DCLF::Extensions
+{
+	void ComponentsAdopt(std::uint32_t a_frame, const void* a_claims, std::span<const std::vector<std::shared_ptr<const void>>> a_deltas)
+	{
+		const auto registered = RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c) {
+			if (!registered[c].adoption.adopt)
+				continue;
+			Api::AdoptionContext context{ a_frame, a_claims };
+			if (c < a_deltas.size())
+				context.deltas = a_deltas[c];
+			registered[c].adoption.adopt(context);
+		}
 	}
 }

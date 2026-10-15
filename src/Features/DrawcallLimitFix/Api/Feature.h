@@ -60,6 +60,15 @@ namespace DCLF::Api
 		virtual EngineChannelId RegisterEngineChannel(const EngineChannel& a_channel) = 0;
 		/** @brief The channel registered (by this feature or an earlier one) under a_name; none when no channel has it. */
 		virtual EngineChannelId FindEngineChannel(std::string_view a_name) const = 0;
+		/** @brief Fails the install for a second show veto, or one without open or vetoes. */
+		virtual void RegisterShowVeto(const ShowVeto& a_veto) = 0;
+		/** @brief Fails the install for no name or generation, or past Extensions::kAdoptionGuardSlots guards. */
+		virtual void RegisterAdoptionGuard(const AdoptionGuard& a_guard) = 0;
+		/**
+		 * @brief A hidden-event site of the feature's own, past the hidden-node source's sites (its stores' events carry it:
+		 * Extensions::PushReservedHidden), in reservation order.
+		 */
+		virtual std::uint32_t ReserveHiddenSite() = 0;
 		/** @brief Fails the install past Extensions::kTableFamilySlots families. */
 		virtual TableFamilyId RegisterTableFamily(const TableFamily& a_family) = 0;
 		virtual CoordinatorComponentId RegisterCoordinatorComponent(const CoordinatorComponent& a_component) = 0;

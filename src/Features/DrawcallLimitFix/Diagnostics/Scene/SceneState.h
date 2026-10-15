@@ -142,13 +142,15 @@ namespace DCLF::Diagnostics
 		// CS_DCLF_PERSISTENT_PARITY: the gates' state against what it is derived from (SceneGateParity.cpp), since the last report.
 		struct Parity
 		{
-			std::uint64_t checks = 0, gates = 0, sweeps = 0, entries = 0, differ = 0;
+			std::uint64_t checks = 0, gates = 0, sweeps = 0, entries = 0, differ = 0, unmarked = 0;
 			std::string first;  // its invariant's tag first (roots, tags, withheld, ready, stuck, early, flip, marks, veto)
 			std::uint32_t pass = 0;  // the pass (PassStamp) that ran the sweep: once a pass
 			// Kept across reports: the newest flip checked (each by the commit that made it; tokens are unique), and the open
 			// gates' incoming roots the last sweep found shown in the mirror.
 			std::uint64_t lastFlip = 0;
 			std::vector<std::pair<std::uint64_t, const void*>> shown;
+			// And the outgoing-tagged entries the last sweep found under no gate root.
+			std::vector<std::pair<std::uint64_t, const void*>> unmarkedOutgoing;
 		} parity;
 	};
 

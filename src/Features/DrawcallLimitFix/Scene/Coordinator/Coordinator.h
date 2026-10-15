@@ -1275,6 +1275,18 @@ namespace DCLF
 		void ComponentsReportText(Api::ReportPoint a_point, std::string& a_text);
 		/** @brief Component a_component's state, the components made first when they are not (scene lane). */
 		const std::shared_ptr<void>& ComponentState(std::uint32_t a_component);
+		/** @brief A SceneStack channel's event applied in stack order: every component's stacked hook (Api::CoordinatorComponent::Events). */
+		void ComponentsStacked(Api::EngineChannelId a_channel, const Api::Stacked& a_event);
+		/** @brief A marked root (or a node under a detached root) detached, its mark erased: the marking component's detached hook. */
+		void ComponentsDetached(const void* a_key, const Api::Mark& a_mark);
+		/** @brief The rescan: every component's rescan hook. */
+		void ComponentsRescan();
+		/** @brief A newly tracked entry under a marked root (the nearest on its chain): the marking component's underMark hook. */
+		void ComponentsUnderMark(const RE::BSGeometry* a_geometry, const Api::Mark& a_mark);
+		/** @brief The commit's settle (a_live: the commit runs live), the pass's take before CollectEvents, the deltas taken (published). */
+		void ComponentsSettle(bool a_live);
+		void ComponentsTake();
+		void ComponentsPublished();
 
 		// The shadow sets: State/ShadowSets.h (CoordinatorShadowSets).
 		ShadowInputs ShadowInputsOf(std::uint32_t a_slot) const;
