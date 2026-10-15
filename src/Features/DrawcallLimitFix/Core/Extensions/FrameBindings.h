@@ -2,7 +2,7 @@
 
 // The frame binding contract's Core side (Api/FrameBindings.h): what a registered binding's select is handed, the values the frame
 // records take from the bindings, and the texture registers Core keeps for itself (which no binding or frame texture may take). And the
-// frame textures' (Api::FrameTexture): their registers' indices and Core's built-ins.
+// frame textures' (Api::FrameTexture): their registers' indices.
 
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
@@ -81,9 +81,4 @@ namespace DCLF::Extensions
 	inline constexpr std::uint8_t kNoFrameTexture = 0xFF;
 	/** @brief Any thread, after InstallFeatures: by texture register, its frame texture's index (RegisteredFrameTextures), or kNoFrameTexture. */
 	std::span<const std::uint8_t> FrameTextureIndices();
-	/**
-	 * @brief Core's own frame textures, registered ahead of the features' (Registry's InstallFeatures): the soft effects' depth (t118,
-	 * kEffectSoftDepthRegister), until Features/Effects registers it (Scene/Ports/EffectFrame.cpp).
-	 */
-	std::span<const Api::FrameTexture> CoreFrameTextures();
 }

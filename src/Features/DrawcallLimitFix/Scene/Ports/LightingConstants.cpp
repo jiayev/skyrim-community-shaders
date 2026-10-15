@@ -1,5 +1,5 @@
-// LightingConstants.h's implementations: frame block merges, the render thread's frame samples (extras, effect camera / light /
-// blood), the object rows (BuildObjectRecord, SampleShading) and the constant-group packing.
+// LightingConstants.h's implementations: frame block merges, the render thread's frame samples (extras), the object rows
+// (BuildObjectRecord, SampleShading) and the constant-group packing.
 
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/GeometryPort.h"
@@ -169,47 +169,6 @@ namespace DCLF
 		frame.projectedGlobals[2] = 0.0f;
 		frame.projectedGlobals[3] = *reinterpret_cast<const std::uint8_t*>(REL::Offset(Engine::Address::kProjectedNormals).address()) ? 1.0f : 0.0f;
 		return frame;
-	}
-
-	std::array<float, 4> SampleEffectCamera()
-	{
-		static const REL::Relocation<const std::byte* const*> camera{ REL::Offset(Engine::Address::kEffectCamera) };
-		const std::byte* current = *camera.get();
-		if (!current)
-			return {};
-		float nearPlane = 0.0f, farPlane = 0.0f;
-		std::memcpy(&nearPlane, current + 0x160, sizeof(nearPlane));
-		std::memcpy(&farPlane, current + 0x164, sizeof(farPlane));
-		return { farPlane, nearPlane, farPlane - nearPlane, 0.0f };
-	}
-
-	std::array<float, 4> SampleEffectBlood()
-	{
-		static const REL::Relocation<const float*> globals{ REL::Offset(Engine::Address::kEffectBlood) };
-		const float* blood = globals.get();
-		return { 0.0f, blood[0], blood[1], 0.0f };
-	}
-
-	std::array<float, 4> SampleEffectLight()
-	{
-		// SetupGeometry (0x1414eab10), the Lighting bit: PS DLightColor = (ImageSpaceManager +0xe0) x (NiLight +0x134), then that times each
-		// of the light's +0x14c, +0x150, +0x154 (the multiplier first, as the engine's mulss order). Light 0 is BSLight +0x48's NiLight.
-		static const REL::Relocation<const std::byte* const*> imageSpace{ REL::Offset(Engine::Address::kImageSpaceManager) };
-		auto* sceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
-		const RE::BSLight* sun = sceneNode ? sceneNode->GetRuntimeData().sunLight : nullptr;
-		const std::byte* light = nullptr;
-		if (sun)
-			std::memcpy(&light, reinterpret_cast<const std::byte*>(sun) + 0x48, sizeof(light));
-		const std::byte* manager = *imageSpace.get();
-		if (!light || !manager)
-			return {};
-		auto read = [](const std::byte* a_base, std::size_t a_offset) {
-			float value = 0.0f;
-			std::memcpy(&value, a_base + a_offset, sizeof(value));
-			return value;
-		};
-		const float scale = read(manager, 0xe0) * read(light, 0x134);
-		return { scale * read(light, 0x14c), scale * read(light, 0x150), scale * read(light, 0x154), 0.0f };
 	}
 
 	void CompleteExtras(const float* a_static, std::uint32_t a_objectFlags, const float (&a_world)[12], const ExtrasFrame& a_frame, float* a_out)
@@ -431,27 +390,6 @@ namespace DCLF
 		// A refraction object's variant bits (kRecordRefraction*), from its key; its family's (the Effect port's suppress and billboard bits).
 		if (!(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size())
 			a_out.recordFlags |= RefractionRecordFlagsOf(a_tables.pipelines[object.pipelineIndex]) | FamilyRecordFlagsOf(a_tables.pipelines[object.pipelineIndex], object.flags);
-	}
-
-	void SampleEffectShading(const RE::BSShaderProperty& a_base, bool a_member, BindlessShading& a_out)
-	{
-		// Effect port: PropertyColor (SetupGeometry 0x1414eab10): the emittance colour or white, and the property's alpha, which
-		// GetRenderPasses leaves as the material's (the base colour's) times the fade node's currentFade; a member's is the material's.
-		const auto& effect = static_cast<const RE::BSEffectShaderProperty&>(a_base);
-		const auto* material = static_cast<const RE::BSEffectShaderMaterial*>(effect.material);
-		auto& shading = a_out.shading;
-		shading.materialData[0] = shading.materialData[1] = shading.materialData[3] = 0.0f;
-		shading.materialData[2] = a_member && material ? material->baseColor.alpha : effect.alpha;
-		const auto* emittance = effect.emittanceColor;
-		shading.emitColor[0] = emittance ? emittance->red : 1.0f;
-		shading.emitColor[1] = emittance ? emittance->green : 1.0f;
-		shading.emitColor[2] = emittance ? emittance->blue : 1.0f;
-		shading.ssrSpecular = 0.0f;
-		a_out.emissiveMult = 1.0f;
-		a_out.written = 4u | 0x70u;
-		a_out.padding[0] = a_out.padding[1] = 0u;
-		std::fill(std::begin(a_out.treeParams), std::end(a_out.treeParams), 0.0f);
-		std::fill(std::begin(a_out.windTimers), std::end(a_out.windTimers), 0.0f);
 	}
 
 	void SampleShading(const RE::BSShaderProperty& a_base, std::uint32_t a_pass, bool a_member, BindlessShading& a_out)

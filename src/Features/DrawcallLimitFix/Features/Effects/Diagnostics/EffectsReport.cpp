@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
 
 #include <string>
 
@@ -25,7 +26,7 @@ namespace DCLF::Features::Effects
 					if ((object.flags & (kObjectFree | kObjectNoBindings)) || !(object.flags & kObjectMember))
 						continue;
 					forwardMembers += (object.flags & kObjectForward) ? 1u : 0u;
-					if (object.pipelineIndex < tables.pipelines.size() && RasterEffect(tables.pipelines[object.pipelineIndex].rasterFlags)) {
+					if (object.pipelineIndex < tables.pipelines.size() && KeyFamily(tables.pipelines[object.pipelineIndex].rasterFlags) == Api::ProgramFamily::Effect) {
 						++members;
 						lit += (tables.pipelines[object.pipelineIndex].passDescriptor & EffectFlag::Lighting) ? 1u : 0u;  // the Lighting variant
 						decals += ObjectDecalGroup(object.flags) ? 1u : 0u;

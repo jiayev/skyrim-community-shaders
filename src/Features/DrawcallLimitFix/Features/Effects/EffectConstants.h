@@ -1,18 +1,21 @@
 #pragma once
 
+// The Effect port's constants: BSEffectShader's variable space, the pass descriptor's bits, its frame constant rows and soft-depth
+// register (Features/Manifest.cpp lists them), and its record bits. Included by the feature's sources and the manifest only.
+
 #include <array>
 #include <cstdint>
 #include <string_view>
 #include <utility>
 
-namespace DCLF
+namespace DCLF::Features::Effects
 {
 	/*
 	 * The Effect port (CS_DCLF_EFFECTS; drawcall-limit-fix.md, "The Effect shader in the forward epoch"): BSEffectShader's constants in
 	 * the engine's own variable space. BSEffectShader's Setup functions write VS variable i through the vertex shader's constant table at
 	 * +0x50 + i and PS variable i through the pixel shader's at +0x40 + i (SetupTechnique 0x1414ea2c0, SetupMaterial 0x1414ea6c0,
 	 * SetupGeometry 0x1414eab10), the order Community Shaders reflects Effect.hlsl into (ShaderCache.cpp, effectVS / effectPS). An effect
-	 * MaterialRecord's blocks hold them in EffectVSLayout / EffectPSLayout order (ConstantEvaluator.h).
+	 * MaterialRecord's blocks hold them in EffectVSLayout / EffectPSLayout order (EffectMaterial.cpp).
 	 */
 	inline constexpr std::uint32_t kEffectVSVariables = 14;
 	inline constexpr std::uint32_t kEffectPSVariables = 19;
@@ -43,7 +46,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kEffectPSBaseColorScale = 16;
 	inline constexpr std::uint32_t kEffectPSLightingInfluence = 17;
 
-	/** @brief Effect.hlsl's member names, by variable (DrawPipelines.cpp, ConstantTableOf, for an effect key). */
+	/** @brief Effect.hlsl's member names, by variable (DrawPipelines.cpp, ConstantTableOf, for an effect key: the port's space's names). */
 	inline constexpr std::array<std::string_view, kEffectVSVariables> kEffectVSNames{ "World", "PreviousWorld", "Bones", "EyePosition", "FogParam", "FogNearColor",
 		"FogFarColor", "FalloffData", "SoftMateralVSParams", "TexcoordOffset", "TexcoordOffsetMembrane", "SubTexOffset", "PosAdjust", "MatProj" };
 	inline constexpr std::array<std::string_view, kEffectPSVariables> kEffectPSNames{ "PropertyColor", "AlphaTestRef", "MembraneRimColor", "MembraneVars",
@@ -63,8 +66,10 @@ namespace DCLF
 	inline constexpr std::uint32_t kEffectVSFirstVariable[3] = { kEffectVSFogParam, kEffectVSTexcoordOffset, kEffectVSWorld };
 	inline constexpr std::uint32_t kEffectPSFirstVariable[3] = { kEffectPSCameraData, kEffectPSBaseColor, kEffectPSPLightPositionX };
 
-	/** @brief A MaterialRecord's shader (MaterialRecord::kind): which variable space its blocks are in. */
-	inline constexpr std::uint8_t kMaterialKindLighting = 0;
+	/**
+	 * @brief The Effect port's material kind (MaterialRecord::kind, LightingDescriptors::port, MaterialSnapshot::port): kind 1, the first
+	 * port registered (Core's Lighting is 0), which the feature's registration checks (EffectMaterial.cpp, RegisterPort).
+	 */
 	inline constexpr std::uint8_t kMaterialKindEffect = 1;
 
 	/*
@@ -102,15 +107,34 @@ namespace DCLF
 		inline constexpr std::uint32_t Deferred = 1u << 27;
 	}
 	inline constexpr std::uint32_t kEffectPassEnumBase = 0x4000002Cu;
+	/** @brief The engine's pass enum of an effect pass descriptor (BSShader::MakeRenderPass's, GetRenderPasses' +0x4000002C). */
+	inline constexpr std::uint32_t EffectPassEnum(std::uint32_t a_descriptor) { return a_descriptor + kEffectPassEnumBase; }
+
 	/**
-	 * @brief The Effect port's frame constant rows (Api::FrameConstantRow, PS b13): c17 the camera's planes (SampleEffectCamera;
-	 * Effect.hlsl, DCLFEffectCamera), c18 its Lighting variant's DLightColor (SampleEffectLight; DCLFEffectDLightColor), c19 Blood's
-	 * AlphaTestRef.yz globals (SampleEffectBlood; DCLFEffectBlood).
+	 * @brief The Effect port's frame constant rows (Api::FrameConstantRow, PS b13; EffectFrame.cpp): c17 the camera's planes
+	 * (SampleEffectCamera; Effect.hlsl, DCLFEffectCamera), c18 its Lighting variant's DLightColor (SampleEffectLight; DCLFEffectDLightColor),
+	 * c19 Blood's AlphaTestRef.yz globals (SampleEffectBlood; DCLFEffectBlood).
 	 */
 	inline constexpr std::uint32_t kEffectCameraFrameRow = 17;
 	inline constexpr std::uint32_t kEffectLightFrameRow = 18;
 	inline constexpr std::uint32_t kEffectBloodFrameRow = 19;
-	/** @brief The effect material's texture-path bits a PropertyRecord holds in `feature` (SceneCapture::CaptureProperty). */
+	/**
+	 * @brief t118 (kTextureRegisters - 10): the soft effects' depth (Api::FrameTexture; Effect.hlsl, DCLFEffectSoftDepth), which the
+	 * engine's SetupTechnique binds at t3 for a Soft pass: the depth copy (kPOST_ZPREPASS_COPY, the main view's 0x14328cbfc). A render
+	 * target, so the frame record names it (EffectFrame.cpp).
+	 */
+	inline constexpr std::uint32_t kSoftDepthRegister = 118;
+
+	// The Effect family's record bits (BindlessObject::recordFlags, DCLFObjects.hlsli; Api::ProgramFamilyContribution::records):
+	// External Emittance's suppress bit (DCLFSuppressExternalEmittance). Shares bit 3 with refraction: an effect record never has
+	// kRecordRefraction.
+	inline constexpr std::uint32_t kRecordEffectSuppressEmittance = 1u << 3;
+	// A billboard effect (CS_DCLF_BILLBOARDS): bit 4, and NiBillboardNode's mode (userFlags & 7) in bits 5-7, by which Effect.hlsl turns
+	// the leaf to the drawing camera (DCLFBillboardWorld). Shares bits 4-7 with refraction.
+	inline constexpr std::uint32_t kRecordEffectBillboard = 1u << 4;
+	inline constexpr std::uint32_t kRecordEffectBillboardModeShift = 5;
+
+	/** @brief The effect material's texture-path bits a PropertyRecord holds in `feature` (the port's capture: EffectProperty.cpp). */
 	inline constexpr std::uint32_t kEffectHasSourcePath = 1u << 0;
 	inline constexpr std::uint32_t kEffectHasGreyscalePath = 1u << 1;
 }

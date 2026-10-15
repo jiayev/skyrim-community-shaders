@@ -237,7 +237,7 @@ namespace DCLF::SceneCapture
 		bool lighting = false;
 		// With kRtti, a material port's property (its exact RTTI: Extensions::PortOfRtti), its kind (0: none): emissive and feature are
 		// what the port's capture takes (the Effect port's: the emittanceColor, +0x88, null for white; the material's texture paths,
-		// EffectConstants.h's kEffectHasSourcePath and kEffectHasGreyscalePath).
+		// Features/Effects' kEffectHasSourcePath and kEffectHasGreyscalePath).
 		std::uint8_t port = 0;
 		std::uint64_t flags = 0;
 		const void* material = nullptr;

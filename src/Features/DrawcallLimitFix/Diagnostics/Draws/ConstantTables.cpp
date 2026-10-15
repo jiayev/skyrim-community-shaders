@@ -4,6 +4,7 @@
 
 #include "DrawsState.h"
 #include "Observers.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ProgramFamilySlots.h"
 #include "ShaderCache.h"
 
 namespace DCLF::Diagnostics
@@ -19,7 +20,7 @@ namespace DCLF::Diagnostics
 		};
 		for (const auto& entry : a_lookups.pipelines) {
 			// An effect key's tables are of the Effect shader, not of the Lighting shader objects compared here.
-			if (entry.setIndex == Lookups::kNone || RasterEffect(entry.key.rasterFlags))
+			if (entry.setIndex == Lookups::kNone || KeyFamily(entry.key.rasterFlags) == Api::ProgramFamily::Effect)
 				continue;
 			++parity.entries;
 			const auto* vs = cache.GetVertexShader(a_lighting, entry.key.vertexDescriptor);

@@ -5,28 +5,18 @@
 namespace DCLF
 {
 	/**
-	 * @brief The engine's shader instances DCLF's programs and material ports are of.
+	 * @brief The engine's Lighting shader instance DCLF's programs are of (a program family's source is the family's own:
+	 * Api::ProgramFamilyContribution::programSource).
 	 *
 	 * The Lighting shader is BSLightingShader's instance (0x14338ca00, written by its constructor), as captured at a frame's start
 	 * (FrameView::CaptureLightingShader): set once, on the render thread before the frame's inputs are posted, so the scene lane reads
-	 * only what was set before it; null before the engine made it. The Effect shader is read where it is asked for.
+	 * only what was set before it; null before the engine made it.
 	 */
 	class EngineShaders
 	{
 	public:
 		static RE::BSShader* Lighting() { return lighting; }
 		static void SetLighting(RE::BSShader* a_shader) { lighting = a_shader; }
-
-		/**
-		 * @brief The engine's BSEffectShader (the instance its GetRenderPasses makes passes of), null before it exists or
-		 * when what is there is not an Effect shader. Any thread (a pointer read).
-		 */
-		static RE::BSShader* Effect()
-		{
-			static const REL::Relocation<RE::BSShader**> instance{ REL::Offset(Engine::Address::kEffectShader) };
-			auto* shader = *instance.get();
-			return shader && shader->shaderType.get() == RE::BSShader::Type::Effect ? shader : nullptr;
-		}
 
 	private:
 		static inline RE::BSShader* lighting = nullptr;

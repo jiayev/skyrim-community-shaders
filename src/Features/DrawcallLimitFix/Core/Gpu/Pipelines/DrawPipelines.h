@@ -144,11 +144,6 @@ namespace DCLF
 	 */
 	inline constexpr std::uint32_t kFadeStatesRegister = kTextureRegisters - 8;
 	inline constexpr std::uint32_t kFadeRootsRegister = kTextureRegisters - 9;
-	/**
-	 * @brief t118: the soft effects' depth (DCLFEffectSoftDepth), which the engine's SetupTechnique binds at t3 for a Soft pass: the
-	 * depth copy (kPOST_ZPREPASS_COPY, the main view's 0x14328cbfc). A render target, so the frame record names it (Core/Uploads.cpp).
-	 */
-	inline constexpr std::uint32_t kEffectSoftDepthRegister = kTextureRegisters - 10;
 
 	/**
 	 * @brief A binding record in GPU memory, one entry per Lighting register, mapped by the layout (VK_EXT_descriptor_heap indirect

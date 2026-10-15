@@ -9,7 +9,7 @@
 //
 // Core keeps what package/Shaders and the engine define: the placement row and the face mode (Engine/Capture/Billboards.h), the parent
 // reason (Ineligible::Billboard), the walk up to the one billboard node (Coordinator::BillboardModeOf) and the mode bits the key and the
-// record carry (Records.h, RasterEffectBillboard; LightingConstants.h, kRecordEffectBillboard). Included by the feature's sources only.
+// record carry (Records.h, kRasterEffectBillboardShift; the Effect family's record bits). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 

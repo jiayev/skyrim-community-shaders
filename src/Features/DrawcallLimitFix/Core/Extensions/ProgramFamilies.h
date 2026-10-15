@@ -1,8 +1,8 @@
 #pragma once
 
 // The program family contract's Core side (Api/DrawFamilies.h, ProgramFamilyContribution): each family's entry, resolved once at
-// InstallFeatures (ResolveProgramFamilies, after the material ports) from Core's built-ins (CoreProgramFamilies) and the features'
-// registrations, and the rules Core reads per object per frame as data (FamilyRules: by a key's family, KeyFamily; FamilyRulesOfKind: by a
+// InstallFeatures (ResolveProgramFamilies, after the material ports) from the features' registrations (Features/Effects' Effect family),
+// and the rules Core reads per object per frame as data (FamilyRules: by a key's family, KeyFamily; FamilyRulesOfKind: by a
 // record's material kind), never calling a family. Core's slot per family is Core/Gpu/Pipelines/ProgramFamilySlots.h; its programs are
 // ShaderPrograms::FindFamily's, its pipelines DrawPipelines'.
 
@@ -12,7 +12,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <string>
 
 namespace DCLF::Extensions
@@ -38,7 +37,7 @@ namespace DCLF::Extensions
 	};
 	using ProgramFamilyRulesTable = std::array<ProgramFamilyRules, kProgramFamilies + 1>;
 
-	/** @brief A family's entry: its registration (taken: Core's built-in or a feature's), with its strings owned. */
+	/** @brief A family's entry: its registration (taken: a feature's), with its strings owned. */
 	struct ProgramFamilyEntry
 	{
 		bool taken = false;
@@ -48,11 +47,6 @@ namespace DCLF::Extensions
 	};
 	using ProgramFamilySet = std::array<ProgramFamilyEntry, kProgramFamilies>;
 
-	/**
-	 * @brief Core's own families, registered ahead of the features' (Registry's InstallFeatures): the Effect family, until Features/Effects
-	 * registers it (Scene/Ports/EffectPrograms.cpp).
-	 */
-	std::span<const Api::ProgramFamilyContribution> CoreProgramFamilies();
 	/**
 	 * @brief Main thread, the end of InstallFeatures, after ResolveMaterialPorts: the families' entries and rules from their registrations
 	 * (family Count: none). Fails the install for a family whose shader type no material port has.

@@ -230,8 +230,8 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief A key's variable names: its family's port space's (Extensions::MaterialSpaceOf: the Effect port's EffectConstants.h names
-		 * for an effect key), else Lighting's (kind 0's space names none: these).
+		 * @brief A key's variable names: its family's port space's (Extensions::MaterialSpaceOf: the Effect port's names for an effect key,
+		 * Features/Effects/EffectConstants.h), else Lighting's (kind 0's space names none: these).
 		 */
 		std::span<const std::string_view> VariableNames(const PipelineKey& a_key, bool a_pixel)
 		{

@@ -3,7 +3,6 @@
 
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -49,18 +48,6 @@ namespace DCLF
 	const StageLayout& LightingPSLayout()
 	{
 		static const StageLayout layout = MakeStageLayout(kLightingPSVariables, kLightingPSSized, kLightingPSScratch);
-		return layout;
-	}
-
-	const StageLayout& EffectVSLayout()
-	{
-		static const StageLayout layout = MakeStageLayout(kEffectVSVariables, kEffectVSSized, kEffectVSScratch);
-		return layout;
-	}
-
-	const StageLayout& EffectPSLayout()
-	{
-		static const StageLayout layout = MakeStageLayout(kEffectPSVariables, {}, {});
 		return layout;
 	}
 

@@ -1,7 +1,7 @@
 #pragma once
 
-// The Lighting shader's constant layout and DCLF's per-object rows: variable groups, the frame blocks (lighting, fog, extras, effect
-// inputs) the bindless stages read instead of per-pipeline constants, the BindlessObject / Shading / Placement rows, and packing a
+// The Lighting shader's constant layout and DCLF's per-object rows: variable groups, the frame blocks (lighting, fog, extras) the
+// bindless stages read instead of per-pipeline constants, the BindlessObject / Shading / Placement rows, and packing a
 // group into a cbuffer. Sample* run on the render thread; the rest are pure.
 
 #include <array>
@@ -163,24 +163,6 @@ namespace DCLF
 	};
 	static_assert(sizeof(ExtrasFrame) == 96);
 	inline constexpr std::size_t kExtrasFrameVertexBytes = offsetof(ExtrasFrame, projectedGlobals);
-	/**
-	 * @brief Effect port: the camera planes BSEffectShader::SetupTechnique (0x1414ea2c0) takes for a Soft pass (camera at 0x14332a328:
-	 * near +0x160, far +0x164): far, near, far - near (CameraDataEffect.yz), 0. PS b13 c17 (DCLFEffectCamera); zero without a camera.
-	 */
-	std::array<float, 4> SampleEffectCamera();
-	/**
-	 * @brief Effect port, Lighting variant: PS DLightColor as BSEffectShader::SetupGeometry (0x1414eab10) writes it: light 0
-	 * (FUN_1414fcf80: the sun, ShadowSceneNode[0] +0x200, without kCloudLOD), its NiLight fade (+0x134) times the HDR multiplier
-	 * (ImageSpaceManager +0xe0) times each channel of NiDirectionalLight +0x14c (the weather's effect lighting); w 0. PS b13 c18
-	 * (DCLFEffectDLightColor); zero without a sun light.
-	 */
-	std::array<float, 4> SampleEffectLight();
-	/**
-	 * @brief Effect port, Blood (kWeaponBlood): PS AlphaTestRef.yz as SetupGeometry (0x1414eab10) writes them: globals 0x1433dccf0 and
-	 * 0x1433dccf4, written only by FUN_1414ec2a0 from BSTempEffectWeaponBlood's Update and start (game settings DAT_14200fbe8,
-	 * DAT_14200fc00); x 0 (the record's threshold), w 0. PS b13 c19 (DCLFEffectBlood).
-	 */
-	std::array<float, 4> SampleEffectBlood();
 	/** @brief This frame's, from the engine's globals (render thread). */
 	ExtrasFrame SampleExtrasFrame();
 	/**
@@ -257,11 +239,6 @@ namespace DCLF
 	 * engine-read window. A material port's property (Extensions::PortOfRtti) is its port's (SamplePortShading).
 	 */
 	void SampleShading(const RE::BSShaderProperty& a_property, std::uint32_t a_pass, bool a_member, BindlessShading& a_out);
-	/**
-	 * @brief The Effect port's shading (its material port's shading): an effect property's PropertyColor, EmitColor the emittance colour
-	 * (white without one), MaterialData.z the material's alpha for a member, else the property's alpha; the rest zero.
-	 */
-	void SampleEffectShading(const RE::BSShaderProperty& a_base, bool a_member, BindlessShading& a_out);
 	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): Subsurface Scattering's IsBeastRace (kObjectBeastRace).
 	inline constexpr std::uint32_t kRecordBeastRace = 1u << 0;
 	// ... and an alpha-tested object whose alpha property blends (kObjectAlphaBlended): the depth pass's reference (Utility.hlsl).
@@ -286,16 +263,11 @@ namespace DCLF
 		       ((a_key.passDescriptor & (1u << 0)) ? kRecordRefractionVertexColors : 0u) |  // its VC
 		       ((a_key.rasterFlags & kRasterTwoSided) ? kRecordRefractionTwoSided : 0u);
 	}
-	// Effect: External Emittance's suppress bit (DCLFSuppressExternalEmittance). Shares bit 3 with refraction: an effect record never
-	// has kRecordRefraction.
-	inline constexpr std::uint32_t kRecordEffectSuppressEmittance = 1u << 3;
-	// A billboard effect (CS_DCLF_BILLBOARDS): bit 4, and NiBillboardNode's mode (userFlags & 7) in bits 5-7, by which Effect.hlsl turns
-	// the leaf to the drawing camera (DCLFBillboardWorld). Shares bits 4-7 with refraction.
-	inline constexpr std::uint32_t kRecordEffectBillboard = 1u << 4;
-	inline constexpr std::uint32_t kRecordEffectBillboardModeShift = 5;
+	// A program family's record bits (Api::ProgramFamilyContribution::records) share bits 3-7 with refraction: a family's record never has
+	// kRecordRefraction (Features/Effects/EffectConstants.h: the Effect family's suppress, billboard and mode bits).
 	/**
-	 * @brief The record bits of an object drawn with a_key its family sets (Extensions::FamilyRules' records: the Effect port's kRecordEffect*
-	 * bits, its billboard mode from the key's spare bits): none for a Lighting key.
+	 * @brief The record bits of an object drawn with a_key its family sets (Extensions::FamilyRules' records: the Effect family's
+	 * suppress and billboard bits, its billboard mode from the key's spare bits): none for a Lighting key.
 	 */
 	inline std::uint32_t FamilyRecordFlagsOf(const PipelineKey& a_key, std::uint32_t a_objectFlags)
 	{

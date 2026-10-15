@@ -105,24 +105,25 @@ namespace DCLF::Api
 		 */
 		virtual void RegisterPaletteRows(const PaletteRowsContribution& a_rows) = 0;
 		/**
-		 * @brief Fails the install for a shader type another port has (Core's built-ins are in first) or Lighting's, a class with no
-		 * registered toggle, no property RTTI, material vtable, capture, derive, evaluate or shading, more than 64 variables a stage, or
-		 * names not one a variable, or one port past Extensions::kMaterialKinds.
+		 * @brief The material kind the port takes (Core's Lighting is 0; the ports from 1, in registration order), which its records carry.
+		 * Fails the install for a shader type another port has or Lighting's, a class with no registered toggle, no property RTTI,
+		 * material vtable, capture, derive, evaluate or shading, more than 64 variables a stage, or names not one a variable, or one port
+		 * past Extensions::kMaterialKinds.
 		 */
-		virtual void RegisterMaterialPort(const MaterialPortContribution& a_port) = 0;
+		virtual std::uint8_t RegisterMaterialPort(const MaterialPortContribution& a_port) = 0;
 		/**
-		 * @brief Fails the install for a family another registration has (Core's built-ins are in first), Lighting's or no shader type, no
-		 * name, key name or source path, or no program source; and at its end for a shader type no material port has.
+		 * @brief Fails the install for a family another registration has, Lighting's or no shader type, no name, key name or source path,
+		 * or no program source; and at its end for a shader type no material port has.
 		 */
 		virtual void RegisterProgramFamily(const ProgramFamilyContribution& a_family) = 0;
 		/**
 		 * @brief Fails the install for a row outside Core's feature rows (Extensions::kFrameConstantRowFirst up to kFrameConstantRowsEnd),
-		 * one another registration has (Core's built-ins are in first), no name or no sample.
+		 * one another registration has, no name or no sample.
 		 */
 		virtual void RegisterFrameConstantRow(const FrameConstantRow& a_row) = 0;
 		/**
 		 * @brief Fails the install for a register below the frame textures (t16), past t127, Core's, a frame binding's or another frame
-		 * texture's (Core's built-ins are in first), no name or no view, or past Extensions::kFrameTextureSlots textures.
+		 * texture's, no name or no view, or past Extensions::kFrameTextureSlots textures.
 		 */
 		virtual void RegisterFrameTexture(const FrameTexture& a_texture) = 0;
 

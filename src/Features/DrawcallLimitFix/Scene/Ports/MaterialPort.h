@@ -147,15 +147,6 @@ namespace DCLF
 		std::uint32_t VanillaClassSize(const RE::BSShaderMaterial& a_material);
 		/** @brief The PBR class's texture fields (MaterialPortFeature.cpp). */
 		void PBRTextureFields(const RE::BSShaderMaterial& a_material, std::uint16_t* a_out, std::uint32_t& a_count);
-		/** @brief BSEffectShaderMaterial's size (its Create's allocation, CommonLib's sizeof). */
-		inline constexpr std::uint32_t kEffectMaterialBytes = 0x88;
-		/**
-		 * @brief BSEffectShader::SetupMaterial (0x1414ea6c0, the non-membrane half) and SetupTechnique's filter modes for
-		 * an effect material's snapshot, into a record of kind kMaterialKindEffect (EffectVSLayout / EffectPSLayout order: the Effect port's evaluate). LightingInfluence.y
-		 * holds softFalloffDepth itself (the pixel stage divides the frame's near * far by it). False: a membrane pass, a greyscale pass without
-		 * its palette, or a snapshot that is not an effect material's (MaterialPortEffect.cpp).
-		 */
-		bool EvaluateEffect(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const VanillaFrame& a_frame, MaterialRecord& a_out);
 		/** @brief The view SetupMaterial binds for a texture object (NiSourceTexture -> renderer texture -> view), or null. */
 		ID3D11ShaderResourceView* ViewOf(const void* a_texture);
 	}

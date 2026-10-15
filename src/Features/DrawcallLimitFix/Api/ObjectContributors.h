@@ -91,7 +91,8 @@ namespace DCLF::Api
 	enum class ParentLeaves : std::uint8_t
 	{
 		// A skinless BSEffectShaderProperty BSTriShape under exactly one such parent whose mode Core reads (a billboard's face mode, 0-5):
-		// its key carries the mode (Records.h, RasterEffectBillboard), which the vertex stage turns it by.
+		// its key carries the mode (its family's spare key bits: Records.h, kRasterEffectBillboardShift), which the vertex stage turns it
+		// by.
 		TurnedEffectShapes,
 		// A particle system (ParticleGeometryType) under any number of them.
 		ParticleSystems,
@@ -262,7 +263,7 @@ namespace DCLF::Api
 	 * MaterialRecord::kind); the callbacks run per event, never per object per frame.
 	 *
 	 * - shaderType: its engine shader (RE::BSShader::Type), one port's; never Lighting.
-	 * - objectClass: the class whose toggle turns it on (registered by then; Core's built-ins: by the end of the install).
+	 * - objectClass: the class whose toggle turns it on (registered before).
 	 * - propertyRtti, materialVtable: its property's RTTI and its material's vtable, called once at install.
 	 * - materialBytes, textureFields: the material bytes a snapshot keeps, and its NiSourceTexture fields (offsets).
 	 * - vs, ps: its constant space (at most 64 variables a stage).

@@ -159,8 +159,8 @@ namespace DCLF::Extensions
 	std::span<const SceneResourcesEntry> RegisteredSceneResources();
 	std::span<const CommitHookEntry> RegisteredCommitHooks();
 	std::span<const FrameBindingEntry> RegisteredFrameBindings();
-	// The frame constant rows in ascending row order (Core's built-ins and the features'); the frame textures in registration order (Core's
-	// built-ins first; Extensions::FrameTextureIndices names each register's).
+	// The frame constant rows in ascending row order; the frame textures in registration order (Extensions::FrameTextureIndices names each
+	// register's).
 	std::span<const FrameConstantRowEntry> RegisteredFrameConstantRows();
 	std::span<const FrameTextureEntry> RegisteredFrameTextures();
 	std::span<const ReportLinesEntry> RegisteredReportLines();

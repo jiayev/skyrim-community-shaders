@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
+#include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
@@ -47,10 +48,10 @@ namespace DCLF::Features
 			return true;
 		}
 
-		// Every frame texture's register (Api::FrameTexture; its HLSL declares the same: the soft effects' depth, Effect.hlsl's
-		// DCLFEffectSoftDepth, Core's built-in until Features/Effects registers it): none Core's, a frame binding's or another's.
+		// Every frame texture's register (Api::FrameTexture; its HLSL declares the same: Effects' soft depth, Effect.hlsl's
+		// DCLFEffectSoftDepth): none Core's, a frame binding's or another's.
 		constexpr std::uint32_t kFrameTextureRegisters[] = {
-			kEffectSoftDepthRegister,
+			Effects::kSoftDepthRegister,
 		};
 
 		constexpr bool FrameTextureRegistersValid()
@@ -69,13 +70,12 @@ namespace DCLF::Features
 			return true;
 		}
 
-		// Every frame constant row (Api::FrameConstantRow; its HLSL declares the same: the Effect port's camera planes, light colour and
-		// blood, Effect.hlsl's DCLFEffectCamera, DCLFEffectDLightColor and DCLFEffectBlood, Core's built-ins until Features/Effects
-		// registers them): within Core's feature rows of PS b13, none another's.
+		// Every frame constant row (Api::FrameConstantRow; its HLSL declares the same: Effects' camera planes, light colour and blood,
+		// Effect.hlsl's DCLFEffectCamera, DCLFEffectDLightColor and DCLFEffectBlood): within Core's feature rows of PS b13, none another's.
 		constexpr std::uint32_t kFrameConstantRows[] = {
-			kEffectCameraFrameRow,
-			kEffectLightFrameRow,
-			kEffectBloodFrameRow,
+			Effects::kEffectCameraFrameRow,
+			Effects::kEffectLightFrameRow,
+			Effects::kEffectBloodFrameRow,
 		};
 
 		constexpr bool FrameConstantRowsValid()

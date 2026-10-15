@@ -25,7 +25,7 @@ namespace DCLF
 	 * holds what no cull writes - the node's base (R0 and its translation, the pivot) and the leaf's unturned world (the base times the
 	 * locals between the node and the leaf) - and the vertex stage builds M from the drawing view's camera (VS_PerFrame b12:
 	 * CameraView's rows and the eye), so one row serves every view (Effect.hlsl, DCLFBillboardWorld; the mode is the key's,
-	 * RasterEffectBillboard, and the record's, kRecordEffectBillboard).
+	 * kRasterEffectBillboardShift, and the record's, the Effect family's billboard bits).
 	 *
 	 * The row (SampleRow): World = the unturned world (a world transform, so a pass that does not turn the leaf draws it where the node
 	 * stands; the vertex stage turns it about the pivot by (R0 * M) * R0^T); PreviousWorld's rotation part = R0, its w column the leaf's world bound radius (Effect.hlsl's

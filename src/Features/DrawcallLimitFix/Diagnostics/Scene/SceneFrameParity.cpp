@@ -8,6 +8,7 @@
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ProgramFamilySlots.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 
@@ -76,7 +77,7 @@ namespace DCLF::Diagnostics
 						continue;
 					// The Effect port: an effect key's technique row is the plain technique's (Effect.hlsl, DCLF_BINDLESS reads none of it): the
 					// check leaves it out.
-					const bool effectKey = RasterEffect(view.pipelines[i].rasterFlags);
+					const bool effectKey = KeyFamily(view.pipelines[i].rasterFlags) == Api::ProgramFamily::Effect;
 					if (const std::uint32_t r = i < view.pipelineTechnique.size() ? view.pipelineTechnique[i] : ~0u;
 						!effectKey && r < techniqueChecked.size() && !techniqueChecked[r] && view.techniqueConstants[r].valid) {
 						techniqueChecked[r] = 1;
