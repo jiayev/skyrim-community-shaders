@@ -234,8 +234,8 @@ namespace DCLF
 		bool SetupView(ViewKind a_kind);
 		/** @brief Revision code: a view's latch layout for a_slots slots and a_buckets buckets, and its buffers required to hold them and a_draws a face. */
 		void RequireView(GrowthBuild& a_build, ViewResources& a_view, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws);
-		/** @brief The engine's kPOST_ZPREPASS_COPY imported (again when it changes), and the extension added. */
-		bool ImportFirstPersonDepth();
+		/** @brief A DepthTarget view's target, the engine's kPOST_ZPREPASS_COPY, imported (again when it changes), and its extension added. */
+		bool ImportViewDepthTarget(ViewKind a_kind);
 		/** @brief The reflection phase's readiness of an object: its pipeline slot's forward pipeline is built. */
 		bool ReflectionPhaseReady(const SceneTables& a_tables, std::uint32_t a_slot) const;
 		/** @brief The engine's cube target imported (again when it changes). */
@@ -369,11 +369,14 @@ namespace DCLF
 		 * before the engine draws, and not submitted. True without revisions.
 		 */
 		bool EpochCovered(std::uint32_t a_epoch) const;
-		/** @brief DecideCoverage's stages (Coverage.cpp): a failed graph's coverage, the epochs' recordings, the faces', first person's. */
+		/**
+		 * @brief DecideCoverage's stages (Coverage.cpp): a failed graph's coverage, the epochs' recordings, the faces', a registered view's
+		 * (its feature's covered callback over Api::ViewCoverage).
+		 */
 		void CoverFailedGraph();
 		void DecideEpochCoverage(org::PersistentGraphHost* a_host);
 		void DecideReflectionCoverage(org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame);
-		void DecideFirstPersonCoverage(org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame);
+		void DecideViewCoverage(ViewKind a_kind, org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame);
 		void SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index);
 		std::string RevisionReport();
 		ShapesKey RevisionShapesKey(const NamedVersions& a_sealed, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups,

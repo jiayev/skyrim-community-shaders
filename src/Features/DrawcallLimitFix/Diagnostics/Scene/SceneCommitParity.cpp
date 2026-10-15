@@ -18,7 +18,7 @@ namespace DCLF::Diagnostics
 		{
 			auto& fp = SceneDiagnostics().commit;
 			const auto& tables = V::tables(a_store);
-			if (a_decision.firstPersonExcluded) {
+			if (a_decision.rootViewExcluded) {
 				++fp.firstPersonExcluded;
 				if (fp.firstFirstPersonExcluded.empty())
 					if (const auto* geometry = tables.objectGeometry[a_slot]) {
@@ -27,13 +27,13 @@ namespace DCLF::Diagnostics
 							a_slot, tables.objects[a_slot].flags, p < tables.pipelines.size() ? tables.pipelines[p].rasterFlags : 0u);
 					}
 			}
-			if (a_decision.firstPersonHeld) {
+			if (a_decision.rootViewHeld) {
 				++fp.firstPersonHeld;
 				if (fp.firstFirstPersonHeld.empty())
 					if (const auto* geometry = tables.objectGeometry[a_slot])
 						fp.firstFirstPersonHeld = fmt::format("'{}' (slot {}, {}, waiting reason {}, first-person readiness cause {}, pipeline slot {} raster {:#x})",
 							geometry->name.c_str() ? geometry->name.c_str() : "?", a_slot, V::IsResidentSlot(a_store, a_slot) ? "resident" : "not resident",
-							a_waitWhy, a_decision.firstPersonSlotWhy, tables.objects[a_slot].pipelineIndex,
+							a_waitWhy, a_decision.rootViewSlotWhy, tables.objects[a_slot].pipelineIndex,
 							tables.objects[a_slot].pipelineIndex < tables.pipelines.size() ? tables.pipelines[tables.objects[a_slot].pipelineIndex].rasterFlags : 0u);
 			}
 		}
@@ -58,7 +58,7 @@ namespace DCLF::Diagnostics
 			auto wanted = [&](std::uint32_t a_slot, bool& a_wait) {
 				const auto decision = V::DecideSlot(store, a_slot, a_event.live, a_event.drawn);
 				a_wait = decision.wait;
-				if (decision.firstPersonExcluded || decision.firstPersonHeld)
+				if (decision.rootViewExcluded || decision.rootViewHeld)
 					NoteFirstPerson(store, a_slot, decision, a_slot < setWaitWhy.size() ? setWaitWhy[a_slot] : std::uint8_t{ 0 });
 				return decision.phases;
 			};

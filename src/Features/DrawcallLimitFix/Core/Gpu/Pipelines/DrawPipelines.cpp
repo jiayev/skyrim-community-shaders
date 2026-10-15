@@ -1327,7 +1327,7 @@ namespace DCLF
 				depth.depthEnable = depthOnly || test || write;
 				depth.depthFunc = (depthOnly || test) ? rhi::CompareOp::LessEqual : rhi::CompareOp::Always;
 				// Decal rules: bias on the colour variant and on the opaque group's depth variant; LESS_EQUAL; only the opaque group's depth
-				// variant writes depth. A first-person effect decal drawn forward (FirstPersonDecalForward) keeps its group's bias.
+				// variant writes depth. A first-person effect decal drawn forward (Coordinator::ViewDecalForward) keeps its group's bias.
 				if (decalGroup ? (!depthOnly || decalGroup == 1) : (!depthOnly && RasterDepthBiasMode(a_key.rasterFlags))) {
 					desc.raster.rs.depthBias = a_state.depthBias;
 					desc.raster.rs.depthBiasClamp = a_state.depthBiasClamp;

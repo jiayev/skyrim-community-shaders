@@ -105,17 +105,26 @@ namespace DCLF
 		// (FUN_1414cbff0) take them (skyrim-engine-notes.md, "The primary's cull: the scene lists").
 		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> depthAccumulator{ REL::Offset(Engine::Address::kDepthAccumulator) };
 		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> mainAccumulator{ REL::Offset(Engine::Address::kMainAccumulator) };
-		// The first-person accumulator (Main::unk_FPCulling culls the first-person root alone into it; FUN_1414cb6d0 renders it). Its
-		// registrations are the first-person skeleton's alone, so a member's there is a first-person member's (WithholdMain).
-		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> firstPersonAccumulatorAt{ REL::Offset(Engine::Address::kFirstPersonAccumulator) };
 		const std::array<const void*, 2> accumulators{ *depthAccumulator, *mainAccumulator };
-		const void* firstPerson = *firstPersonAccumulatorAt;
-		if (accumulators == mainAccumulators && firstPerson == firstPersonAccumulator && std::atomic_load(&mainRenderers))
+		// The InMainRenderers views' accumulators (their callbacks: the first person's, Main::unk_FPCulling culls the first-person root
+		// alone into it and FUN_1414cb6d0 renders it). Their registrations are their members' alone, so a member's there is the view's
+		// member's (WithholdMain).
+		const auto& views = Extensions::Views();
+		std::array<Api::ViewAccumulators, Extensions::kEngineViews> viewAccumulators{};
+		bool same = accumulators == mainAccumulators;
+		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i) {
+			const auto v = static_cast<std::size_t>(views.mainRendererViews[i]);
+			views.views[v].accumulators(viewAccumulators[v]);
+			same = same && viewAccumulators[v] == mainViews[v].accumulators;
+		}
+		if (same && std::atomic_load(&mainRenderers))
 			return;
 		mainAccumulators = accumulators;
-		firstPersonAccumulator = firstPerson;
+		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i) {
+			const auto v = static_cast<std::size_t>(views.mainRendererViews[i]);
+			mainViews[v].accumulators = viewAccumulators[v];
+		}
 		auto renderers = std::make_shared<RendererSet>();
-		auto firstPersonSet = std::make_shared<RendererSet>();
 		auto add = [](RendererSet& a_set, RE::BSGraphics::BSShaderAccumulator* a_accumulator) {
 			auto* batch = a_accumulator ? a_accumulator->GetRuntimeData().batchRenderer : nullptr;
 			if (!batch)
@@ -127,9 +136,15 @@ namespace DCLF
 		};
 		for (auto* accumulator : { *depthAccumulator, *mainAccumulator })
 			add(*renderers, accumulator);
-		add(*firstPersonSet, *firstPersonAccumulatorAt);
-		renderers->insert(firstPersonSet->begin(), firstPersonSet->end());
-		std::atomic_store(&firstPersonRenderers, std::shared_ptr<const RendererSet>(std::move(firstPersonSet)));
+		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i) {
+			const auto v = static_cast<std::size_t>(views.mainRendererViews[i]);
+			auto viewSet = std::make_shared<RendererSet>();
+			const auto& viewAccumulator = viewAccumulators[v];
+			for (std::uint32_t a = 0; a < viewAccumulator.count; ++a)
+				add(*viewSet, static_cast<RE::BSGraphics::BSShaderAccumulator*>(const_cast<void*>(viewAccumulator.accumulators[a])));
+			renderers->insert(viewSet->begin(), viewSet->end());
+			std::atomic_store(&mainViews[v].renderers, std::shared_ptr<const RendererSet>(std::move(viewSet)));
+		}
 		logger::info("[DCLF] the main camera's views: {} batch renderers (Z-prepass accumulator {}, main {})", renderers->size(), accumulators[0], accumulators[1]);
 		std::atomic_store(&mainRenderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
 	}
@@ -147,18 +162,25 @@ namespace DCLF
 		}
 		const auto set = std::atomic_load(&frameSet);
 		const std::uint8_t phases = set ? set->PhasesOf(a_pass->geometry) : std::uint8_t{ 0 };
-		const bool firstPersonView = IsFirstPersonRenderer(a_batch);
-		if (firstPersonView)
-			firstPersonRegistered.fetch_add(1, std::memory_order_relaxed);
-		// A first-person member (kSetFirstPerson alone: no world view registers it, its root hidden there): its passes into the
-		// first-person accumulator and into the Z-prepass's (RenderDepth's first-person block) are the first-person epochs' while they
-		// draw this frame (SetFirstPersonCovered); every fade of the skeleton is the engine's root's (alpha 1).
-		if (phases & kSetFirstPerson) {
-			if (firstPersonCovered.load(std::memory_order_acquire) && (set->drawn & kSetFirstPerson)) {
-				firstPersonWithheld.fetch_add(1, std::memory_order_relaxed);
+		const auto& views = Extensions::Views();
+		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i)
+			if (IsViewRenderer(views.mainRendererViews[i], a_batch))
+				mainViews[static_cast<std::size_t>(views.mainRendererViews[i])].registered.fetch_add(1, std::memory_order_relaxed);
+		// An InMainRenderers view's member (the first person's: kSetFirstPerson alone, no world view registers it, its root hidden there):
+		// its passes into the view's accumulators and into the main views' (the first person's RenderDepth block culls into the
+		// Z-prepass's) are the view's epochs' while they draw this frame (SetViewCovered); every fade of the skeleton is the engine's
+		// root's (alpha 1).
+		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i) {
+			const auto v = static_cast<std::size_t>(views.mainRendererViews[i]);
+			const std::uint8_t phase = views.views[v].phase;
+			if (!(phases & phase))
+				continue;
+			auto& view = mainViews[v];
+			if (view.covered.load(std::memory_order_acquire) && (set->drawn & phase)) {
+				view.withheld.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
-			firstPersonMemberKept.fetch_add(1, std::memory_order_relaxed);
+			view.memberKept.fetch_add(1, std::memory_order_relaxed);
 			return false;
 		}
 		if (!(phases & kSetMain))

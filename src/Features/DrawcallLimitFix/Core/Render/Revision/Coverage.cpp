@@ -5,18 +5,6 @@
 
 namespace DCLF
 {
-	namespace
-	{
-		/** @brief A view's coverage told to PassCapture, which withholds its members' registrations while it holds. */
-		void PostViewCovered(ViewKind a_view, bool a_covered)
-		{
-			if (a_view == ViewKind::Reflection)
-				PassCapture::Get().SetReflectionCovered(a_covered);
-			else
-				PassCapture::Get().SetFirstPersonCovered(a_covered);
-		}
-	}
-
 	void IndirectDraws::BuildPoint()
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
@@ -89,10 +77,15 @@ namespace DCLF
 		next.mainKnown = mainEpochInputs.known;
 		next.viewport = mainEpochInputs.viewport;
 		next.blockSizes = mainEpochInputs.blockSizes;
-		next.views[ViewIndex(ViewKind::Reflection)] = { reflection.resources, reflection.targets, reflection.resources ? reflection.resources->width : 0u,
-			reflection.resources ? reflection.resources->height : 0u, 1.0f };
-		next.views[ViewIndex(ViewKind::FirstPerson)] = { firstPerson.resources, firstPerson.targets, mainEpochInputs.viewport[kColourShape].width,
-			mainEpochInputs.viewport[kColourShape].height, firstPerson.depthRange };
+		// The views', in slot order: a Target view's render area its imported target's, a MainColourViewport one's the colour commit's
+		// viewport; its depth range its work's (the shape's until then).
+		for (const auto& slot : kViewSlots) {
+			const auto& view = View(slot.view);
+			const bool target = Extensions::ViewEntryOf(slot.view).area == Api::ViewArea::Target;
+			next.views[ViewIndex(slot.view)] = { view.resources, view.targets,
+				target ? (view.resources ? view.resources->width : 0u) : mainEpochInputs.viewport[kColourShape].width,
+				target ? (view.resources ? view.resources->height : 0u) : mainEpochInputs.viewport[kColourShape].height, DepthRangeOf(slot.view) };
+		}
 		next.portalWords = static_cast<std::uint32_t>(PortalViews::Get().Encoded().size());
 		auto& mirror = Scene::FrameView::Get().TreeLodMirror();
 		next.treeLodShapeSlots = mirror.ShapeSlots();
@@ -139,11 +132,13 @@ namespace DCLF
 		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape] && (!ActiveToggles().forward || rv.covered[Epoch::Forward]);
 		rv.withdrawn += main ? 0 : 1;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
-		// Each view's, in slot order.
-		using DecideView = void (Impl::*)(org::PersistentGraphHost*, bool, std::uint32_t);
-		static constexpr std::array<DecideView, kViews> kDecideView = { &Impl::DecideReflectionCoverage, &Impl::DecideFirstPersonCoverage };
-		for (const auto& slot : kViewSlots)
-			(impl.get()->*kDecideView[ViewIndex(slot.view)])(host, main, frame);
+		// Each view's, in slot order: a registered view's by its feature's callback, the reflection's by Core while it keeps it.
+		for (const auto& slot : kViewSlots) {
+			if (Extensions::ViewEntryOf(slot.view).covered)
+				impl->DecideViewCoverage(slot.view, host, main, frame);
+			else if (Extensions::CoreKeepsView(slot.view))
+				impl->DecideReflectionCoverage(host, main, frame);
+		}
 		return main;
 	}
 
@@ -154,8 +149,8 @@ namespace DCLF
 		// graph: the engine draws it).
 		for (const auto& slot : kViewSlots) {
 			auto& state = View(slot.view);
-			state.covered = Extensions::Views().views[ViewIndex(slot.view)].coveredOnFailedGraph;
-			PostViewCovered(slot.view, state.covered);
+			state.covered = Extensions::ViewEntryOf(slot.view).coveredOnFailedGraph;
+			PassCapture::Get().SetViewCovered(slot.view, state.covered);
 		}
 	}
 
@@ -210,17 +205,33 @@ namespace DCLF
 		PassCapture::Get().SetReflectionCovered(reflection.covered);
 	}
 
-	void IndirectDraws::Impl::DecideFirstPersonCoverage(org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame)
+	void IndirectDraws::Impl::DecideViewCoverage(ViewKind a_kind, org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame)
 	{
+		// What a registered view's coverage is decided from (Api::ViewCoverage), every input read whatever the others: its feature's
+		// callback decides (the first person's: its members withheld from the engine, PassCapture, and drawn by its epochs on a frame the
+		// engine draws it, whose claims stand, both epochs' recordings in the revision and its target imported into the graph as built).
 		const auto& rv = revisions;
-		auto& fp = firstPerson;
-		// The first-person members are withheld from the engine (PassCapture) and drawn by the first-person epochs on a frame the engine
-		// draws first person (the latch), whose claims stand, both epochs' recordings in the revision and the depth copy imported into the
-		// graph as built. Its members need no frame before's inputs: both epochs draw this frame's scene list with this frame's camera.
-		fp.covered = a_main && Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) && fp.latch && fp.latchFrame == a_frame && rv.covered[Epoch::FirstPersonDepth] && rv.covered[Epoch::FirstPersonColour] &&
-		             fp.resources && fp.resources->target && !fp.resources->rebuildPending && fp.resources->main && fp.resources->main == resources &&
-		             fp.resources->main->native[1] && !a_host->RebuildRequested();
-		PassCapture::Get().SetFirstPersonCovered(fp.covered);
+		const auto& slot = kViewSlots[ViewIndex(a_kind)];
+		auto& view = View(a_kind);
+		const auto& r = view.resources;
+		Api::ViewCoverage coverage;
+		coverage.main = a_main;
+		coverage.on = Extensions::ViewOn(ActiveToggles(), a_kind);
+		coverage.epochsCovered = rv.covered[slot.epochs[0]] && (slot.epochs[1] == Epoch::Count || rv.covered[slot.epochs[1]]);
+		coverage.targetImported = r && r->target;
+		coverage.rebuildPending = r && r->rebuildPending;
+		coverage.mainResourcesCurrent = r && r->main && r->main == resources && r->main->native[1];
+		coverage.rebuildRequested = a_host && a_host->RebuildRequested();
+		// The frame before's colour inputs (a view drawing the frame's scene list with the frame before's colour frame record): both commits
+		// of one frame, this one or the one before, of the adopted set, after the installed payload.
+		const std::uint64_t adoptedSerial = Adopted().Serial();
+		coverage.frameBeforeColourHeld = resources && resources->committed[kDepthShape].frame == resources->committed[kColourShape].frame &&
+		                                 a_frame - resources->committed[kDepthShape].frame <= 1 && resources->committed[kDepthShape].adoptedSerial == adoptedSerial &&
+		                                 resources->committed[kColourShape].adoptedSerial == adoptedSerial &&
+		                                 installedPayloadFrame <= resources->committed[kColourShape].frame && scene;
+		coverage.frame = a_frame;
+		view.covered = Extensions::ViewEntryOf(a_kind).covered(coverage);
+		PassCapture::Get().SetViewCovered(a_kind, view.covered);
 	}
 
 	bool IndirectDraws::Impl::EpochCovered(std::uint32_t a_epoch) const

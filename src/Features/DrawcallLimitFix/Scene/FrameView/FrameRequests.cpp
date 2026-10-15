@@ -157,14 +157,37 @@ namespace DCLF::Scene
 		}
 
 		/**
+		 * @brief The engine pointers each CategoryRoot view's root is found from (Api::ViewRootCapture::inputs: the player's first- and
+		 * third-person roots), into a_mix, for the views whose toggles are on; the views' callbacks, in slot order.
+		 */
+		template <class Mix>
+		void MixViewRootInputs(Mix&& a_mix)
+		{
+			const auto& views = Extensions::Views();
+			for (std::uint32_t i = 0; i < views.rootCount; ++i) {
+				const auto view = views.rootViews[i];
+				if (!Extensions::ViewOn(ActiveToggles(), view))
+					continue;
+				Api::ViewRootCapture capture;
+				Extensions::ViewEntryOf(view).captureRoot(capture);
+				for (std::uint32_t n = 0; n < capture.inputCount; ++n)
+					a_mix(capture.inputs[n]);
+			}
+		}
+
+		/**
 		 * @brief What CategorySignature folds in that costs O(1) to read (step C2): TES's roots, the grid's identity and centre, the
-		 * interior, the first-person roots and the toggles that list nodes. Compared every frame; the rest is read only after an edit of a
-		 * watched node (SceneTracker::CategoryEdits) or a change here.
+		 * interior, the CategoryRoot views' roots' inputs (the first- and third-person roots) and the toggles that list nodes. Compared
+		 * every frame; the rest is read only after an edit of a watched node (SceneTracker::CategoryEdits) or a change here.
 		 */
 		std::uint64_t CategoryInputs()
 		{
 			Fnv1a hash;
-			hash.Mix((ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u) | (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson) ? 4u : 0u));
+			const auto& views = Extensions::Views();
+			std::uint32_t listing = (ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u);
+			for (std::uint32_t i = 0; i < views.rootCount; ++i)
+				listing |= Extensions::ViewOn(ActiveToggles(), views.rootViews[i]) ? 4u << i : 0u;
+			hash.Mix(listing);
 			if (auto* tes = RE::TES::GetSingleton()) {
 				hash.Mix(tes->objRoot);
 				hash.Mix(tes->lodLandRoot);
@@ -177,11 +200,7 @@ namespace DCLF::Scene
 					hash.Mix(grid->cells);
 				}
 			}
-			if (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson))
-				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-					hash.Mix(player->Get3D(true));
-					hash.Mix(player->Get3D(false));
-				}
+			MixViewRootInputs([&hash](const void* a_input) { hash.Mix(a_input); });
 			return hash.value;
 		}
 
@@ -232,12 +251,8 @@ namespace DCLF::Scene
 				// The LOD root, with the toggles that list it.
 				mix(ActiveToggles().lodObjects || ActiveToggles().lodTerrain ? tes->lodLandRoot : nullptr);
 				hash.Mix((ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u));
-				// The first-person root while the toggle tracks it.
-				if (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson))
-					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-						mix(player->Get3D(true));
-						mix(player->Get3D(false));
-					}
+				// The CategoryRoot views' roots' inputs while their toggles track them (the first-person root).
+				MixViewRootInputs(mix);
 				mix(tes->interiorCell);
 				Engine::ForEachLoadedCell(*tes, mixCell);
 			}
@@ -526,18 +541,25 @@ namespace DCLF::Scene
 				current.insert(tes->lodLandRoot);
 			Engine::ForEachLoadedCell(*tes, addCell);
 		}
-		// CS_DCLF_FIRST_PERSON: the player's first-person skeleton (PlayerCharacter +0x8F8, Load3D: no parent; Main::unk_FPCulling and
-		// RenderDepth cull it alone). Its root is a category node and a parentless root filed under itself, so the mirror counts it
-		// in the world (SetDrawnRoots) and its equipment attaches reach the tracker as events. Its kHidden is view-scoped:
-		// ClassifyFrame stops at it.
-		if (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson))
-			if (auto* player = RE::PlayerCharacter::GetSingleton())
-				if (auto* firstPerson = player->Get3D(true); firstPerson && firstPerson != player->Get3D(false))
-					if (auto* node = firstPerson->AsNode()) {
-						current.insert(node);
-						currentRoots.try_emplace(node, CategoryCapture::Root{ RE::NiPointer<RE::NiAVObject>(node), node });
-						capture->firstPersonRoot = node;
-					}
+		// The CategoryRoot views' roots while their toggles are on (their callbacks, in slot order: Features/FirstPerson's, the player's
+		// first-person skeleton, PlayerCharacter +0x8F8, Load3D: no parent; Main::unk_FPCulling and RenderDepth cull it alone). A root is
+		// a category node and a parentless root filed under itself, so the mirror counts it in the world (SetDrawnRoots) and its equipment
+		// attaches reach the tracker as events. Its kHidden is view-scoped: ClassifyFrame stops at it.
+		{
+			const auto& views = Extensions::Views();
+			for (std::uint32_t i = 0; i < views.rootCount; ++i) {
+				const auto view = views.rootViews[i];
+				if (!Extensions::ViewOn(ActiveToggles(), view))
+					continue;
+				Api::ViewRootCapture root;
+				Extensions::ViewEntryOf(view).captureRoot(root);
+				if (auto* node = root.root) {
+					current.insert(node);
+					currentRoots.try_emplace(node, CategoryCapture::Root{ RE::NiPointer<RE::NiAVObject>(node), node });
+					capture->viewRoots[static_cast<std::size_t>(view)] = node;
+				}
+			}
+		}
 		capture->held.reserve(current.size());
 		for (auto* node : current)
 			capture->held.emplace_back(node);

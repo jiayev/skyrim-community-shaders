@@ -1357,7 +1357,7 @@ namespace DCLF::Scene
 		// Its inputs (chain hidden bits, switch selection, toggles, fades) all have events or are retaken here, so without one it
 		// stands; a witness frame retakes it and counts an unannounced change. First-person chains are recaptured every frame.
 		const bool announced = a_tracked.hiddenEventOwed || a_tracked.parentReason == Ineligible::Switch || !hiddenGating || a_tracked.hiddenChain.empty() ||
-		                       FirstPersonEntry(a_tracked.categoryNode);
+		                       ViewRootEntry(a_tracked.categoryNode);
 		if (!announced && !hiddenWitness) {
 			++a_counters.verdictsSkipped;
 			return true;

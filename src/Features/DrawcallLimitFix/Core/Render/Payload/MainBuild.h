@@ -58,9 +58,9 @@ namespace DCLF::Draws
 	// The view bits the main build writes of an entry (the main segments', refraction's, reflection's, first person's; MainMaskOf);
 	// the rest are the shadow build's. A main bit missing here is dropped when an entry's parts merge (SetMainPart, SetShadowPart),
 	// and BuildDraws' view test then skips that view's input entirely.
-	// Core's own, and the views' (Extensions::ViewSet::viewBits: still Core's constants, so the merges keep a compile-time mask).
+	// Core's own, and the views' (Extensions::ViewSet::viewBits, resolved at install: a plain read of the resolved set, no call).
 	constexpr std::uint32_t kMainCoreSideBits = kViewMainCull | kViewMain | kViewDecal | kViewForward | kViewRefraction;
-	constexpr std::uint32_t kMainSideBits = kMainCoreSideBits | kViewReflection | kViewFirstPerson;
+	inline std::uint32_t MainSideBits() { return kMainCoreSideBits | Extensions::Views().viewBits; }
 	// Which builds' parts an entry holds (ResidentRegion::sideOf).
 	constexpr std::uint8_t kSideMain = 1;
 	constexpr std::uint8_t kSideShadow = 2;
@@ -69,9 +69,10 @@ namespace DCLF::Draws
 	{
 		const DrawInput::ViewWords view = a_entry.view;
 		const std::uint32_t shadowRow = a_entry.shadowRow;
+		const std::uint32_t mainSide = MainSideBits();
 		a_entry = a_main;
 		a_entry.view = view;
-		a_entry.view.mask = (a_main.view.mask & kMainSideBits) | (view.mask & ~kMainSideBits);
+		a_entry.view.mask = (a_main.view.mask & mainSide) | (view.mask & ~mainSide);
 		a_entry.shadowRow = shadowRow;
 	}
 	/** @brief A scene entry with no main part: what the main build wrote of it cleared (its object's fields stay). */
@@ -80,7 +81,7 @@ namespace DCLF::Draws
 		a_entry.pipelineIndex = a_entry.recordIndex = a_entry.decalOrdinal = 0;
 		a_entry.fadeDistance = 0.0f;
 		a_entry.flags &= ~kInputDrawable;
-		a_entry.view.mask &= ~kMainSideBits;
+		a_entry.view.mask &= ~MainSideBits();
 	}
 	/** @brief A scene entry's shadow words from a_shadow (ShadowEntry), its main part kept; with none, a_shadow's object fields too. */
 	inline void SetShadowPart(DrawInput& a_entry, const DrawInput& a_shadow, bool a_mainHeld)
@@ -88,12 +89,13 @@ namespace DCLF::Draws
 		if (!a_mainHeld) {
 			a_entry = a_shadow;
 			ClearMainPart(a_entry);
-			a_entry.view.mask = a_shadow.view.mask & ~kMainSideBits;
+			a_entry.view.mask = a_shadow.view.mask & ~MainSideBits();
 			return;
 		}
 		const std::uint32_t mask = a_entry.view.mask;
+		const std::uint32_t mainSide = MainSideBits();
 		a_entry.view = a_shadow.view;
-		a_entry.view.mask = (mask & kMainSideBits) | (a_shadow.view.mask & ~kMainSideBits);
+		a_entry.view.mask = (mask & mainSide) | (a_shadow.view.mask & ~mainSide);
 		a_entry.shadowRow = a_shadow.shadowRow;
 	}
 	/** @brief A scene entry with no shadow words: what the shadow build wrote of it cleared. */
@@ -101,7 +103,7 @@ namespace DCLF::Draws
 	{
 		a_entry.view.shadowKey = a_entry.view.occlusionKey[0] = a_entry.view.occlusionKey[1] = ~0u;
 		a_entry.shadowRow = 0;
-		a_entry.view.mask &= kMainSideBits;
+		a_entry.view.mask &= MainSideBits();
 	}
 	/**
 	 * @brief A shadow input as the shadow views read it, for comparing two builds' (CheckKeptShadow): without what the main build
@@ -112,7 +114,7 @@ namespace DCLF::Draws
 		a_input.pipelineIndex = a_input.recordIndex = a_input.decalOrdinal = a_input.shadowRow = 0;
 		a_input.fadeDistance = 0.0f;
 		a_input.flags &= ~(kInputDrawable | kObjectDecal | kObjectForward);
-		a_input.view.mask &= ~kMainSideBits;
+		a_input.view.mask &= ~MainSideBits();
 		return a_input;
 	}
 

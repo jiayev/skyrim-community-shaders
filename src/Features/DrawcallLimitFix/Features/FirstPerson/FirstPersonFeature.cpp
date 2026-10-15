@@ -1,8 +1,8 @@
 // FirstPerson: the player's first-person skeleton drawn by DCLF as a view of the one scene. Its switches and the first person toggle, the
-// view's contribution, its report lines and the skeleton's parity.
+// view's contribution and its work at the frame's start, its engine hooks, its report lines and the skeleton's parity.
 
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
-#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
@@ -12,10 +12,46 @@ namespace DCLF::Features::FirstPerson
 {
 	namespace
 	{
-		// The view's lines (its epochs, its forward part, the engine's registrations of its members): Core's view state, taken here.
+		// The view's lines (its epochs, its forward part, the engine's registrations of its members), taking its counters.
 		void Lines(std::string& a_text)
 		{
-			a_text += IndirectDraws::Get().FirstPersonReport();
+			a_text += Report();
+		}
+
+		/**
+		 * @brief The view's contribution: a category root (the first-person root, filed under itself) with an exclusive phase; keys for
+		 * every slot but a forward one (its forward part draws those), with the first-person targets; one face with a forward part and a
+		 * depth pass; dropped while off; the main colour viewport; withheld in the main accumulators (and the first-person one); drawn
+		 * into kPOST_ZPREPASS_COPY; not covered before its first coverage nor on a failed graph (the engine draws it).
+		 */
+		Api::ViewContribution Contribution(Api::ToggleId a_toggle, bool a_forwardDecals)
+		{
+			return { .view = Api::EngineView::FirstPerson,
+				.toggle = a_toggle,
+				.forwardDecals = a_forwardDecals,
+				.phase = kSetFirstPerson,
+				.membership = Api::ViewMembership::CategoryRoot,
+				.keys = { .forwardRasterToForwardPart = true, .keyFlags = ForwardPipelineKey::kForwardFirstPerson },
+				.shape = { .faces = 1,
+					.forwardPart = true,
+					.depthPass = true,
+					.viewBits = kViewFirstPerson,
+					.name = "first-person",
+					.prefix = "cs.dclf.first-person",
+					.blocks = "block",
+					.target = "depth-copy",
+					.labels = { "first-person bucket map", "first-person bucket table", "first-person culling latch", "first-person per-frame data",
+						"first-person tree rows" },
+					.depthRange = 0.1f },
+				.life = Api::ViewShapeLife::DropWhenOff,
+				.area = Api::ViewArea::MainColourViewport,
+				.withholding = Api::ViewWithholding::InMainRenderers,
+				.targetImport = Api::ViewTargetImport::DepthTarget,
+				.coveredInitially = false,
+				.coveredOnFailedGraph = false,
+				.covered = &Covered,
+				.captureRoot = &CaptureRoot,
+				.accumulators = &Accumulators };
 		}
 
 		void Install(Api::InstallContext& a_context)
@@ -33,14 +69,18 @@ namespace DCLF::Features::FirstPerson
 			const auto firstPerson = a_context.RegisterToggle({ .name = "first person", .label = "Draw the first-person arms and weapons (CS_DCLF_FIRST_PERSON)",
 				.tooltip = "T7e: DCLF draws the first-person skeleton's geometry (arms, weapons, shield, magic hands) as a view of its scene, with the first-person camera, in the engine's depth and first-person passes. On by default (validated fp6).",
 				.section = "First person", .seed = firstPersonSwitch, .entersClassification = true, .after = "reflections", .needs = { "skinned", "actors" } });
-			// The view (Core's view machinery: its epochs, revisions, frame requests and classification read the toggle as data), and with
-			// CS_DCLF_FIRST_PERSON_DECALS (read once, here) a decal on a first-person entry as a forward object of its forward part.
-			a_context.RegisterView({ .view = Api::EngineView::FirstPerson, .toggle = firstPerson, .forwardDecals = SwitchValue(decalsSwitch) != "0" });
+			// The view (Core's view machinery: its epochs, revisions, frame requests, classification and set decisions read it as data), and
+			// with CS_DCLF_FIRST_PERSON_DECALS (read once, here) a decal on a first-person entry as a forward object of its forward part.
+			a_context.RegisterView(Contribution(firstPerson, SwitchValue(decalsSwitch) != "0"));
+			// The view's latch, targets, pipelines and resources, before the coverage that decides whether its members are withheld.
+			a_context.RegisterViewWork({ .view = Api::EngineView::FirstPerson, .point = Api::ViewPoint::FrameStartBeforeCoverage, .run = &BeginFrame });
 			// After Features/Particles' and Features/Billboards' lines, where Core printed the view's.
 			a_context.RegisterReportLines({ .name = "first person", .point = Api::ReportPoint::AsyncWork, .text = &Lines });
 			// CS_DCLF_SET_PARITY: the skeleton's slots and claimed phases.
 			if (Diagnostics::Observe().claims)
 				SubscribeSkeletonParity();
+			// RenderDepth's first-person draw and Main::RenderFirstPersonView's accumulator render, where the epochs run.
+			InstallHooks();
 		}
 	}
 

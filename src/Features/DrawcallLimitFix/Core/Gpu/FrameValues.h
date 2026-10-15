@@ -80,11 +80,11 @@ namespace DCLF
 		bool Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
 			std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::shared_ptr<const FrameGlobals> a_globals);
 		/**
-		 * @brief Render thread, before Kick: the claims whose first-person members the frame draws (null: none, the first-person
-		 * epochs do not draw this frame). Kick samples those members' rows and skin palettes itself, before Main::Draw moves the
-		 * first-person skeleton into its root's space (FUN_1414cb020); the producer never samples a first-person item.
+		 * @brief Render thread, before Kick: the claims whose CategoryRoot views' members the frame draws (null: none, those views'
+		 * epochs do not draw this frame: the first person's). Kick samples those members' rows and skin palettes itself, before Main::Draw
+		 * moves the first-person skeleton into its root's space (FUN_1414cb020); the producer never samples a root view's item.
 		 */
-		void SetFirstPersonClaims(std::shared_ptr<const SetSnapshot> a_claims) { firstPersonClaims = std::move(a_claims); }
+		void SetRootViewClaims(std::shared_ptr<const SetSnapshot> a_claims) { rootViewClaims = std::move(a_claims); }
 		/**
 		 * @brief The first-person report: the first-person particle members' expansions since the last call, their
 		 * particles, and the farthest a snapshot's bound centre was from the first-person eye it was faced to (a snapshot taken while
@@ -171,6 +171,6 @@ namespace DCLF
 		struct Impl;
 		std::unique_ptr<Impl> impl;
 		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0;
-		std::shared_ptr<const SetSnapshot> firstPersonClaims;  // SetFirstPersonClaims
+		std::shared_ptr<const SetSnapshot> rootViewClaims;  // SetRootViewClaims
 	};
 }

@@ -74,8 +74,8 @@ namespace DCLF::Draws
 				return kViewRefraction;
 			return kViewForward;
 		}
-		// The main build's bits of a scene entry alone (kMainSideBits): the shadow views' are the shadow build's.
-		return (ViewMaskOf(a_tables, a_object, true) & kMainSideBits & ~kViewMain) | ((flags & kObjectMember) ? kViewMain : 0u);
+		// The main build's bits of a scene entry alone (MainSideBits): the shadow views' are the shadow build's.
+		return (ViewMaskOf(a_tables, a_object, true) & MainSideBits() & ~kViewMain) | ((flags & kObjectMember) ? kViewMain : 0u);
 	}
 	/** @brief The view bits a shadow or occlusion view draws: its mode's, a clamped view's split by whether it is the sun's. */
 	inline std::uint32_t ShadowViewBits(std::uint32_t a_mode, bool a_sun)

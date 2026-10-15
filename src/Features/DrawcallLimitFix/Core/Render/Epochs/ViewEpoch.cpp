@@ -1,6 +1,6 @@
 // The views' epochs (ViewEpoch.h): their traits, forward keys, bucket plans and shapes, their cameras' VS_PerFrame and their
 // commits (render thread). Their passes and graph extension are ViewEpochRecord.cpp's, their captures and coverage
-// Reflection.cpp's and FirstPerson.cpp's.
+// Reflection.cpp's and the view features' (Features/FirstPerson), on the view engine's calls (ViewEngine.cpp).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
@@ -13,17 +13,19 @@ namespace DCLF
 	{
 		const ViewTraits& TraitsOf(ViewKind a_kind)
 		{
-			// The epochs and segments are the view's slot's (kViewSlots).
-			const auto& reflection = kViewSlots[ViewIndex(ViewKind::Reflection)];
-			const auto& firstPerson = kViewSlots[ViewIndex(ViewKind::FirstPerson)];
-			static const ViewTraits kTraits[kViews] = {
-				{ ViewKind::Reflection, kReflectionFaces, true, false, false, kViewReflection, reflection.epochs, { reflection.segments[0], reflection.segments[1] },
-					"reflection", "cs.dclf.reflection", "face-blocks", "cube",
-					{ "reflection bucket map", "reflection bucket tables", "reflection culling latches", "reflection face per-frame data", "reflection tree rows" } },
-				{ ViewKind::FirstPerson, 1, false, true, true, kViewFirstPerson, firstPerson.epochs, { firstPerson.segments[0], firstPerson.segments[1] },
-					"first-person", "cs.dclf.first-person", "block", "depth-copy",
-					{ "first-person bucket map", "first-person bucket table", "first-person culling latch", "first-person per-frame data", "first-person tree rows" } },
-			};
+			// The view's resolved shape (Extensions::Views: Core's for a view it keeps, else the feature's registration) with its slot's
+			// epochs and segments (kViewSlots); made once, the first time a view's traits are read (after InstallFeatures).
+			static const auto kTraits = [] {
+				std::array<ViewTraits, kViews> traits{};
+				for (const auto& slot : kViewSlots) {
+					const auto& entry = Extensions::ViewEntryOf(slot.view);
+					const auto& shape = entry.shape;
+					traits[ViewIndex(slot.view)] = { slot.view, shape.faces, shape.trees, shape.forwardPart, shape.depthPass, shape.viewBits, slot.epochs,
+						{ slot.segments[0], slot.segments[1] }, entry.name.c_str(), entry.prefix.c_str(), entry.blocks.c_str(), entry.target.c_str(),
+						{ entry.labels[0].c_str(), entry.labels[1].c_str(), entry.labels[2].c_str(), entry.labels[3].c_str(), entry.labels[4].c_str() } };
+				}
+				return traits;
+			}();
 			return kTraits[ViewIndex(a_kind)];
 		}
 
@@ -33,18 +35,16 @@ namespace DCLF
 				return false;
 			const auto& pipelineKey = a_tables.pipelines[a_slot];
 			const std::uint32_t twoSided = (pipelineKey.rasterFlags & kRasterTwoSided) ? ForwardPipelineKey::kForwardTwoSided : 0u;
-			if (a_kind == ViewKind::Reflection) {
-				if (!LodLightingTechnique(pipelineKey.passDescriptor))
-					return false;
-				a_key = ForwardPipelineKey{ pipelineKey.vertexDescriptor, pipelineKey.pixelDescriptor & ~kLightingPixelDeferred, twoSided };
-				return true;
-			}
-			// First person: a forward key's slot draws with the main set's colour pipeline in the forward range (ViewForwardSlotsOf). The
-			// vertex descriptor is the pulled vertex stage (skins read their palette as the Z-prepass's do); the pixel descriptor drops
-			// Deferred (the engine draws first person forward, after the composite: Community Shaders' Deferred sets InWorld around it).
-			if (RasterForward(pipelineKey.rasterFlags))
+			// The view's key rule (Api::ViewKeyRule). The faces': a LOD slot's. First person's: a forward key's slot draws with the main
+			// set's colour pipeline in the forward range (ViewForwardSlotsOf), the rest with the first-person targets' key. The vertex
+			// descriptor is the pulled vertex stage (skins read their palette as the Z-prepass's do); the pixel descriptor drops Deferred
+			// (the engine draws first person forward, after the composite: Community Shaders' Deferred sets InWorld around it).
+			const auto& keys = Extensions::ViewEntryOf(a_kind).keys;
+			if (keys.lodTechniquesOnly && !LodLightingTechnique(pipelineKey.passDescriptor))
 				return false;
-			a_key = ForwardPipelineKey{ pipelineKey.vertexDescriptor, pipelineKey.pixelDescriptor & ~kLightingPixelDeferred, ForwardPipelineKey::kForwardFirstPerson | twoSided };
+			if (keys.forwardRasterToForwardPart && RasterForward(pipelineKey.rasterFlags))
+				return false;
+			a_key = ForwardPipelineKey{ pipelineKey.vertexDescriptor, pipelineKey.pixelDescriptor & ~kLightingPixelDeferred, keys.keyFlags | twoSided };
 			return true;
 		}
 

@@ -453,7 +453,7 @@ namespace DCLF::Reports
 					logger::info("[DCLF] first-person entries filed under another category node (T7e, CS_DCLF_SET_PARITY): {} evaluations; last geometry {} under {} "
 								 "(the first-person root {}) <- FIRST-PERSON FILING",
 						misfiled, Diagnostics::SceneDiagnostics().firstPerson.misfiledGeometry.load(std::memory_order_relaxed), Diagnostics::SceneDiagnostics().firstPerson.misfiledCategory.load(std::memory_order_relaxed),
-						static_cast<const void*>(V::firstPersonCategory(s)));
+						static_cast<const void*>(V::firstViewRoot(s)));
 				if (commit.firstPersonHeld)
 					logger::info("[DCLF] first-person slots held out of the first-person view (T7e, CS_DCLF_SET_PARITY): {} slot evaluations; first: {}", commit.firstPersonHeld,
 						commit.firstFirstPersonHeld);

@@ -257,8 +257,11 @@ namespace DCLF::RegistrationCensus
 			case kMainDepth:
 			case kMain:
 				return kSetMain;  // WithholdMain: any main member (and a first-person member in RenderDepth's block: WithheldPhase's caller's)
-			case kFirstPerson:
-				return PassCapture::Get().FirstPersonCovered() && (set->drawn & kSetFirstPerson) ? kSetFirstPerson : 0;
+			case kFirstPerson: {
+				// The first-person view's phase (its feature's: Extensions::Views), withheld while its epochs draw (PassCapture::SetViewCovered).
+				const std::uint8_t phase = Extensions::ViewEntryOf(Api::EngineView::FirstPerson).phase;
+				return PassCapture::Get().ViewCovered(Api::EngineView::FirstPerson) && (set->drawn & phase) ? phase : 0;
+			}
 			case kReflection:
 				return (a_noted.flags & kReflectionFace) && (set->drawn & kSetReflection) ? kSetReflection : 0;
 			case kOcclusionSky:

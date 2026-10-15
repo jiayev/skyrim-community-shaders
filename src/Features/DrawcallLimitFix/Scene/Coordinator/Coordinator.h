@@ -638,7 +638,7 @@ namespace DCLF
 		/** @brief The listed root's reference (a copy); null and counted for an unlisted root. */
 		RE::NiPointer<RE::NiAVObject> OwnedRoot(const RE::NiAVObject* a_root);
 
-		// The category nodes and first person: State/Categories.h (CoordinatorCategories).
+		// The category nodes and the CategoryRoot views' roots: State/Categories.h (CoordinatorCategories).
 		/** @brief Diffs the category nodes and portal roots against the taken capture when it is new or a_force (the post-load rescan). */
 		void RefreshCategoryNodes(bool a_force = false);
 		/** @brief First in the pass, before the drains: takes the newest category capture posted. */
@@ -652,8 +652,26 @@ namespace DCLF
 		RE::NiNode* FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const;
 		/** @brief Diagnostics: the node that hid a first-person skeleton entry (ClassifyFrame), the first 16. */
 		void NoteFirstPersonHidden(const Tracked& a_tracked, const void* a_key, const SceneCapture::NodeRecord& a_record, std::uint32_t a_depth) const;
-		/** @brief Whether a tracked entry is a first-person one (its category node the first-person root). */
-		bool FirstPersonEntry(const RE::NiNode* a_categoryNode) const { return a_categoryNode && a_categoryNode == firstPersonCategory; }
+		/** @brief The CategoryRoot view whose root a_node is (EngineView::Count: none, or a null a_node). */
+		Api::EngineView ViewRootOf(const void* a_node) const
+		{
+			for (std::size_t v = 0; v < viewRoots.size(); ++v)
+				if (a_node && a_node == viewRoots[v])
+					return static_cast<Api::EngineView>(v);
+			return Api::EngineView::Count;
+		}
+		/** @brief Whether a node is a CategoryRoot view's root (the first-person root). */
+		bool ViewRoot(const void* a_node) const { return ViewRootOf(a_node) != Api::EngineView::Count; }
+		/** @brief Whether a tracked entry is a CategoryRoot view's (its category node the view's root: a first-person entry). */
+		bool ViewRootEntry(const RE::NiNode* a_categoryNode) const { return ViewRoot(a_categoryNode); }
+		/** @brief The first CategoryRoot view's root this pass has (null: none): the diagnostics' "the first-person root". */
+		const RE::NiNode* FirstViewRoot() const
+		{
+			for (const auto* root : viewRoots)
+				if (root)
+					return root;
+			return nullptr;
+		}
 		/** @brief Whether a node is one of the coordinator's category nodes (the frame reads IsCategoryNode). */
 		bool CategoryNodeOwn(const RE::NiAVObject* a_node) const
 		{
@@ -1039,11 +1057,12 @@ namespace DCLF
 		 */
 		std::int32_t BillboardModeOf(const Tracked& a_tracked) const;
 		/**
-		 * @brief CS_DCLF_FIRST_PERSON_DECALS: a first-person entry's decal (a blood decal, a weapon's BloodLighting) as a forward object
-		 * drawn after the first-person opaque buckets, as the engine's accumulator does: no Deferred, its group's blend mode, depth tested,
-		 * depth written by the opaque group only (modes 3 and 1), the group's depth bias.
+		 * @brief A CategoryRoot view's entry's decal (a first-person blood decal, a weapon's BloodLighting) as a forward object drawn
+		 * after the view's opaque buckets, while the view's contribution says so (Api::ViewContribution::forwardDecals: the first person's
+		 * CS_DCLF_FIRST_PERSON_DECALS), as the engine's accumulator does: no Deferred, its group's blend mode, depth tested, depth written by
+		 * the opaque group only (modes 3 and 1), the group's depth bias.
 		 */
-		void FirstPersonDecalForward(const Tracked& a_tracked, LightingDescriptors& a_descriptors) const;
+		void ViewDecalForward(const Tracked& a_tracked, LightingDescriptors& a_descriptors) const;
 		/**
 		 * @brief Whether a node is hidden for the walk's views: from the frame's capture (FrameGlobals::cullHidden, taken at frame start)
 		 * for nodes whose kHidden the engine flips around its views, else the node's own bit. ShadowSceneNode::OnVisible hides a portal
@@ -1350,8 +1369,8 @@ namespace DCLF
 		SlotDecision DecideSlot(std::uint32_t a_slot, bool a_live, std::uint32_t a_drawn) const;
 		/** @brief Whether everything the main phase draws with is ready; a_why: waitingBy's index when not. */
 		bool MainReady(std::uint32_t a_slot, std::uint32_t& a_why) const;
-		/** @brief Whether a slot's geometry is a first-person entry's. */
-		bool FirstPersonSlot(std::uint32_t a_slot) const;
+		/** @brief The CategoryRoot view whose entry a slot's geometry is (a first-person entry's), EngineView::Count for none. */
+		Api::EngineView ViewRootOfSlot(std::uint32_t a_slot) const;
 
 		// The publication and the retirement chain: State/Publication.h (CoordinatorPublication).
 		void PublishTables();

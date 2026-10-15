@@ -5,8 +5,12 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 
+#include "Features/DrawcallLimitFix/Api/Views.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDrawStats.h"
+
+struct ID3D11Texture2D;
 
 namespace RE
 {
@@ -28,6 +32,19 @@ namespace DCLF
 	struct Lookups;
 	struct LookupsResolveState;
 	struct PipelineCatalog;
+	struct SceneTables;
+	struct ForwardTargets;
+	struct TargetFormats;
+	struct ViewEpochState;
+	namespace Draws
+	{
+		struct MainPayload;
+		struct ViewFace;
+	}
+	namespace TreeLod
+	{
+		struct DrawRow;
+	}
 
 	/**
 	 * @brief DCLF's draws: the installed scene publication's objects drawn by the render graph with GPU-culled indirect draws; the
@@ -254,19 +271,93 @@ namespace DCLF
 		void ExecuteReflection();
 		std::string ReflectionReport();
 		/**
-		 * @brief The first-person view (CS_DCLF_FIRST_PERSON; drawcall-limit-fix.md, "First person as a view bit"). Render thread.
-		 * BeginFirstPersonFrame, before DecideCoverage: the latch (Main::Draw's cVar23 recomputed: first-person root shown, main menu
-		 * closed, camera not the free one), depth range, targets, pipelines. ExecuteFirstPersonDepth: at RenderDepth's first-person
-		 * draw (camera set up by FUN_1414cb020): the depth epoch. ExecuteFirstPersonColour: at FUN_1414cb6d0's accumulator render.
+		 * @brief The view engine (Views/ViewEngine.cpp): Core's calls for the features that take an engine view (Api/Views.h,
+		 * Extensions::Views) - their state, targets, pipelines and resources at their frame's start, and their epochs' inputs and
+		 * submission - each over the view's slot, so a feature's work and epochs reproduce Core's own. Render thread unless said otherwise;
+		 * nothing before the implementation exists.
 		 */
-		void BeginFirstPersonFrame();
-		void ExecuteFirstPersonDepth(bool a_controlDriven);
-		void ExecuteFirstPersonColour();
-		bool FirstPersonDrawable() const;
-		bool FirstPersonSlotReady(const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot, std::uint32_t* a_why = nullptr) const;
-		bool FirstPersonCovered() const;
-		/** @brief The view's report lines, taking its counters (Features/FirstPerson's lines at the draws' async work). */
-		std::string FirstPersonReport();
+		/** @brief The view's frame state (Impl/Views.h; null before the implementation exists): its targets, resources, coverage. */
+		const ViewEpochState* ViewState(Api::EngineView a_view) const;
+		/** @brief The main pass's captured formats (null before the implementation exists): what a view's targets follow. */
+		const TargetFormats* MainTargetFormats() const;
+		/** @brief The view's targets, published for the scene lane (LaneTargets) when they changed; true then. */
+		bool SetViewTargets(Api::EngineView a_view, const ForwardTargets& a_targets);
+		/** @brief Posts what a scene revision reads of the frame (a view's targets, depth range or resources moved). */
+		void PostViewInputs();
+		/** @brief The engine's depth range for the view (a revision input: the shapes' viewport): posted when a positive range changed it. */
+		void SetViewDepthRange(Api::EngineView a_view, float a_range);
+		/** @brief The view's depth range: the last SetViewDepthRange's, else its shape's (Api::ViewShape::depthRange). */
+		float ViewDepthRange(Api::EngineView a_view) const;
+		/** @brief Publishes whether the main set's forward pipelines draw into the view's forward part (ViewSlotReady); the previous value. */
+		bool ExchangeViewForwardCompatible(Api::EngineView a_view, bool a_compatible);
+		/** @brief What ResolveViewPipelines found: the slots with a key of the view's, and those whose pipeline a_catalog has. */
+		struct ViewPipelineCounts
+		{
+			std::uint32_t slots = 0, ready = 0;
+		};
+		/**
+		 * @brief The view's forward pipelines of a_wanted's slots (by pipeline slot, nonzero: wanted), asked of the pipeline lane (each key
+		 * once) and read from a_catalog (the frame's) for the view's targets, into its state's slot pipelines.
+		 */
+		ViewPipelineCounts ResolveViewPipelines(Api::EngineView a_view, const SceneTables& a_tables, const PipelineCatalog* a_catalog, std::span<const std::uint8_t> a_wanted);
+		/** @brief The view's graph resources, once the main resources and index pool exist; true when it has them. */
+		bool SetUpView(Api::EngineView a_view);
+		/**
+		 * @brief The view's target imported into the graph, as its entry says (Api::ViewTargetImport): kPOST_ZPREPASS_COPY for a
+		 * DepthTarget view, a_texture (the engine's) with DCLF's own depth for a ColourWithOwnDepth one; true when it is.
+		 */
+		bool ImportViewTarget(Api::EngineView a_view, ID3D11Texture2D* a_texture = nullptr);
+		/** @brief What a view's epoch draws from (TakeViewInputs): the installed payloads it holds, and its scene list's inputs. */
+		struct ViewListed
+		{
+			std::array<const Draws::MainPayload*, 2> owners{};
+			std::uint32_t ownerCount = 0;
+			std::uint32_t inputs = 0;
+		};
+		/**
+		 * @brief Which of the frame's commits a view's epoch draws from. DepthThisFrame: the frame's scene list with this frame's depth
+		 * commit (its index pool, inputs, records, geometry rows); ColourThisFrame: this frame's colour commit's payload and frame constants.
+		 */
+		enum class ViewInputsFrom : std::uint8_t
+		{
+			DepthThisFrame,
+			ColourThisFrame,
+		};
+		enum class ViewInputsTaken : std::uint8_t
+		{
+			Taken,
+			Stale,     // the commits are not the frame's, or nothing is listed
+			NoTarget,  // the view's resources or its imported target are missing (DepthThisFrame)
+		};
+		ViewInputsTaken TakeViewInputs(Api::EngineView a_view, ViewInputsFrom a_from, ViewListed& a_listed);
+		enum class ViewSubmit : std::uint8_t
+		{
+			Submitted,
+			NoRevision,  // the adopted revision has no recording or shape for the epoch
+			NoOwners,    // the payloads it draws are not held
+			Failed,      // the graph refused the epoch
+		};
+		/**
+		 * @brief The view's epoch a_epoch (0 the depth or only one, 1 the colour one) submitted: its recording from the adopted revision,
+		 * with a commit of a_faces (its cameras: none commits nothing) and a_treeRow into its shape, holding a_listed's payloads; a_drawn:
+		 * the faces the commit drew.
+		 */
+		ViewSubmit SubmitViewEpoch(Api::EngineView a_view, std::uint32_t a_epoch, const ViewListed& a_listed, std::span<const Draws::ViewFace> a_faces,
+			const TreeLod::DrawRow* a_treeRow, std::uint32_t* a_drawn = nullptr);
+		/** @brief Any thread: whether the view's epochs draw its members this frame (its coverage, decided at the frame's start). */
+		bool ViewCovered(Api::EngineView a_view) const;
+		/**
+		 * @brief The scene lane's commit (Coordinator::SetCapability): whether the view's phase can be drawn - its toggle, and its targets
+		 * published (a capability: each member then waits for its own pipelines, ViewSlotReady).
+		 */
+		bool ViewDrawable(Api::EngineView a_view) const;
+		/**
+		 * @brief The scene lane's commit: whether a_slot's pipelines for the view are in a_catalog (the lane's), as the view's membership
+		 * reads it. CategoryRoot: a_why (the set parity's observer) 1 no catalog or targets, 2 a forward key the forward part cannot draw,
+		 * 3 no key of the view's, 4 its pipeline not in a_catalog, 5 no Z-prepass group pipeline. LodTechniques: ReflectionSlotReady.
+		 */
+		bool ViewSlotReady(Api::EngineView a_view, const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot,
+			std::uint32_t* a_why = nullptr) const;
 
 		/**
 		 * @brief Render thread: posts what a scene revision reads of the frame (Impl::RevisionInputs) when it moved; called where such

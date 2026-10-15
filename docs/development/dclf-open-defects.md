@@ -162,6 +162,16 @@ So the members are filed and their epochs record, but nothing visible reaches th
 epochs draw. Next: a target dump of the first-person colour and depth around `ExecuteFirstPersonColour`, and the first-person
 build-draws' sequence count.
 
+## Accumulated writes parity (A5): an intermittent entry write the incremental pass skips (found 2026-10-15; not investigated)
+
+In one `CS_DCLF_PERSISTENT_PARITY` run (v2-pp), 2 of the 5 compared frames differed. Both were the same entry root (4466): the
+reference wrote it visible (a wide set), and the pass wrote nothing (`<- WRITES DIFFER; first: root 4466 set wide (reference's
+alone)`). Two reruns of the same build compared 5 frames each with 0 differences, and no earlier run shows it.
+
+The suspect is `JudgeEntry`'s skip (`Core/Render/Readback/Visibility.cpp`). It skips when the entry's `entryWritten` already holds the
+wanted value and `entryWrittenVersion` is unchanged, so a write made while the entry was in some other state can hide a later one. The
+change under test (the view contract, stage V2) does not touch this path.
+
 ## Pooled payload: open items (2026-10-14)
 
 The payload ring was replaced by pooled versions published once per snapshot (dclf-architecture.md, "The payload"). These

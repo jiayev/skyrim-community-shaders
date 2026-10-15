@@ -100,8 +100,8 @@ namespace DCLF::Scene
 			a_why = 2;
 			return true;
 		}
-		// First-person chains are recaptured every frame (ActorRecordKept takes their verdict every frame).
-		if ((a_tracked.lightTraits & kTraitActor) && FirstPersonEntry(a_tracked.categoryNode)) {
+		// First-person chains (a CategoryRoot view's entries') are recaptured every frame (ActorRecordKept takes their verdict every frame).
+		if ((a_tracked.lightTraits & kTraitActor) && ViewRootEntry(a_tracked.categoryNode)) {
 			a_why = 3;
 			return true;
 		}
@@ -128,7 +128,7 @@ namespace DCLF::Scene
 		ResolveSunEntry(a_tracked, *a_geometry);
 		const std::uint32_t slot = a_tracked.slot;
 		PlannedKey key{ a_geometry, slot, slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot, 0, 0, a_tracked.sunEntryNode,
-			FirstPersonEntry(a_tracked.categoryNode), false };
+			ViewRootEntry(a_tracked.categoryNode), false };
 		// A skinned record's palette: its block, which the record addresses.
 		if (slot < tables.boneRows.size() && (tables.objects[slot].flags & kObjectSkinned) && tables.boneRows[slot]) {
 			key.boneOffset = tables.boneOffset[slot];
@@ -214,7 +214,7 @@ namespace DCLF::Scene
 			}
 		}
 		placementCursor.Advance(log);
-		if (objectStamp != plannedObjectStamp || firstPersonCategory != plannedFirstPerson)
+		if (objectStamp != plannedObjectStamp || viewRoots != plannedViewRoots)
 			placementDirty = true;
 	}
 
@@ -513,7 +513,7 @@ namespace DCLF::Scene
 			DiffPlacementSet(plan, reset);
 		placementDirty = false;
 		plannedObjectStamp = objectStamp;
-		plannedFirstPerson = firstPersonCategory;
+		plannedViewRoots = viewRoots;
 		const bool changed = plan.reset || plan.movers.size() + plan.roots.size() != joinedBefore || !plan.moversLeft.empty() || !plan.rootsLeft.empty() ||
 		                     !plan.dependentsLeft.empty();
 		if (!changed && !written && !sized) {

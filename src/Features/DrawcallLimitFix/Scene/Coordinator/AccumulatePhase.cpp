@@ -815,7 +815,7 @@ namespace DCLF::Scene
 			reason = layer ? Eligibility::Layer(r.leaf, &r.descriptors, accumulated) : Eligibility::Static(r.leaf, &r.descriptors, accumulated);
 		// A first-person decal draws in the first-person forward part.
 		if (r.classified && reason == Ineligible::None && !layer)
-			FirstPersonDecalForward(entry, r.descriptors);
+			ViewDecalForward(entry, r.descriptors);
 		// Every time, cached or not: an object just hidden must lose its bindings now, or DCLF keeps drawing what the engine stopped.
 		if (reason == Ineligible::None)
 			reason = ClassifyFrame(entry);

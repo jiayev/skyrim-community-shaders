@@ -202,27 +202,6 @@ private:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		/**
-		 * @brief RenderDepth's first-person draw (AE 0x1414cd47e, RenderDepth +0x94E: FUN_1414a90f0(first-person camera, the Z-prepass's
-		 * accumulator, 3), after the root's cull with the first-person camera and before kPOST_ZPREPASS_COPY): DCLF's first-person depth
-		 * epoch first (IndirectDraws::ExecuteFirstPersonDepth), then the engine's draw of what it still registers.
-		 */
-		struct RenderDepth_FirstPersonDraw
-		{
-			static void thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		/**
-		 * @brief Main::RenderFirstPersonView's accumulator render (AE 0x1414cb7d1, FUN_1414cb6d0 +0x101: FUN_1414a90f0(first-person
-		 * camera, the first-person accumulator, firstPerson << 4 | 0x43), its targets and depth range set): DCLF's first-person colour epoch
-		 * first (IndirectDraws::ExecuteFirstPersonColour), then the engine's residue (effects, particles, anything not DCLF's).
-		 */
-		struct RenderFirstPersonView_Draw
-		{
-			static void thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
 
 		/** @brief The call sites of BSBatchRenderer::RenderPassImmediately, as Light Limit Fix hooks them. */
 		template <int N>

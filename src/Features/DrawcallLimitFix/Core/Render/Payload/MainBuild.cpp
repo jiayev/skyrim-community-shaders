@@ -229,6 +229,8 @@ namespace DCLF::Draws
 			const bool timeParts = Diagnostics::Observe().stats || Diagnostics::Observe().profile;
 			// Pool fan-out (Policy::SerialFanout keeps every loop on the builder's thread).
 			const bool serialFanout = Policy::SerialFanout();
+			// The CategoryRoot views' phases (Extensions::Views, resolved at install), read once a build for InSet.
+			const std::uint8_t rootPhases = Extensions::Views().rootPhases;
 			// Policy::CheckRowPacking: per material, the first pipeline packing its row this build (whole builds; the region checks its pairs).
 			const bool checkPacking = Policy::CheckRowPacking(rows.builds);
 			ankerl::unordered_dense::map<std::uint32_t, std::pair<std::uint32_t, std::array<std::uint64_t, 3>>> packingSeen;
@@ -269,11 +271,11 @@ namespace DCLF::Draws
 			{
 				return static_cast<std::uint8_t>((segmentIn[kAsyncColour] ? 1u << kAsyncColour : 0u) | (segmentIn[kAsyncZPrepass] ? 1u << kAsyncZPrepass : 0u));
 			}
-			// In the frame's set: the only objects either segment draws. First-person members (kSetFirstPerson, no kObjectMember)
-			// are drawable, their input the first-person view's alone.
+			// In the frame's set: the only objects either segment draws. A CategoryRoot view's members (the first person's: its phase, no
+			// kObjectMember) are drawable, their input the view's alone.
 			bool InSet(std::uint32_t o) const
 			{
-				return o < tables.objects.size() && ((tables.objects[o].flags & kObjectMember) || (o < tables.setPhases.size() && (tables.setPhases[o] & kSetFirstPerson)));
+				return o < tables.objects.size() && ((tables.objects[o].flags & kObjectMember) || (o < tables.setPhases.size() && (tables.setPhases[o] & rootPhases)));
 			}
 
 			// The pair's rows (RowsOf), checked once per build, or kNoRecord after Skipped() recorded why.
