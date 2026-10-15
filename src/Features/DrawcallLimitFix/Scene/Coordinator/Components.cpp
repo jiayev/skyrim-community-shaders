@@ -139,6 +139,50 @@ namespace DCLF::Api
 		coordinator.lodRanges[geometry] = std::move(a_ranges);
 	}
 
+	Mark CoordinatorComponentContext::MarkRoot(const void* a_key, std::uint64_t a_token, std::uint8_t a_side, bool a_ownHide) const
+	{
+		// A root another mark names (another component's, or this one's under another token) is this one's from here: the displaced
+		// mark's hide goes with it unless this one owns it too. Marked again under the same token, the root keeps a hide it owns.
+		auto& marks = coordinator.rootMarks;
+		const auto [at, inserted] = marks.try_emplace(a_key);
+		Mark displaced;
+		bool ownHide = a_ownHide;
+		if (!inserted) {
+			if (at->second.mark.component.index != component || at->second.mark.token != a_token) {
+				displaced = at->second.mark;
+				if (at->second.ownHide && !a_ownHide)
+					coordinator.mirror.SetGated(a_key, false);
+			} else {
+				ownHide = ownHide || at->second.ownHide;
+			}
+		}
+		at->second = { Mark{ CoordinatorComponentId{ component }, a_token, a_side }, ownHide };
+		// Its own hide the component's from here (HiddenForWalk).
+		if (a_ownHide)
+			coordinator.mirror.SetGated(a_key, true);
+		return displaced;
+	}
+
+	bool CoordinatorComponentContext::UnmarkRoot(const void* a_key, std::uint64_t a_token) const
+	{
+		auto& marks = coordinator.rootMarks;
+		const auto at = marks.find(a_key);
+		if (at == marks.end() || at->second.mark.component.index != component || at->second.mark.token != a_token)
+			return false;
+		const bool ownHide = at->second.ownHide;
+		marks.erase(at);
+		if (ownHide)
+			coordinator.mirror.SetGated(a_key, false);
+		return true;
+	}
+
+	Mark CoordinatorComponentContext::MarkOf(const void* a_key) const
+	{
+		const auto& marks = coordinator.rootMarks;
+		const auto at = marks.find(a_key);
+		return at != marks.end() ? at->second.mark : Mark{};
+	}
+
 	ObservedState CoordinatorComponentContext::ObservedSlot(std::uint32_t a_slot) const
 	{
 		const auto& slots = coordinator.gateSlots;
@@ -348,6 +392,24 @@ namespace DCLF::Scene
 		const std::uint32_t c = a_mark.component.index;
 		if (c < registered.size() && registered[c].events.detached)
 			registered[c].events.detached({ tables, ComponentState(c), *this, c }, a_key, a_mark);
+	}
+
+	void Coordinator::UnmarkDetached(const void* a_root, std::span<const void* const> a_nodes)
+	{
+		// A root detached loses its mark (its hide ungated), then its component hears of it (its entries leave with their own erasure).
+		auto leave = [&](const void* a_key) {
+			const auto at = rootMarks.find(a_key);
+			if (at == rootMarks.end())
+				return;
+			const Api::Mark mark = at->second.mark;
+			if (at->second.ownHide)
+				mirror.SetGated(a_key, false);
+			rootMarks.erase(at);
+			ComponentsDetached(a_key, mark);
+		};
+		leave(a_root);
+		for (const void* node : a_nodes)
+			leave(node);
 	}
 
 	void Coordinator::ComponentsRescan()

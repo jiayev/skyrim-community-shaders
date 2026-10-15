@@ -110,19 +110,24 @@ namespace DCLF::Diagnostics
 		void CheckRoots(const Commit& a_commit)
 		{
 			const auto& lodGates = V::lodGates(a_commit.store);
-			const auto& gateOfRoot = V::gateOfRoot(a_commit.store);
+			const auto& rootMarks = V::rootMarks(a_commit.store);
 			const auto& mirror = V::mirror(a_commit.store);
 			for (const auto& [token, gate] : lodGates)
 				for (const std::uint8_t side : { V::kGateIncoming, V::kGateOutgoing })
 					for (const void* root : side == V::kGateIncoming ? gate.incoming : gate.outgoing)
-						if (const auto at = gateOfRoot.find(root); at == gateOfRoot.end() || at->second.token != token || at->second.side != side)
+						if (const auto at = rootMarks.find(root);
+							at == rootMarks.end() || !V::gateMark(at->second.mark) || at->second.mark.token != token || at->second.mark.side != side)
 							Differ(a_commit.parity, [&] {
-								return at == gateOfRoot.end() ? fmt::format("roots: gate {} lists {} root {}, the root map has none", token, SideName(side), root) :
-								                                fmt::format("roots: gate {} lists {} root {}, the root map names gate {} ({})", token, SideName(side), root,
-																	at->second.token, SideName(at->second.side));
+								return at == rootMarks.end() || !V::gateMark(at->second.mark) ?
+								           fmt::format("roots: gate {} lists {} root {}, the root map has none", token, SideName(side), root) :
+								           fmt::format("roots: gate {} lists {} root {}, the root map names gate {} ({})", token, SideName(side), root,
+											   at->second.mark.token, SideName(at->second.mark.side));
 							});
 			std::size_t incoming = 0;
-			for (const auto& [root, owner] : gateOfRoot) {
+			for (const auto& [root, marked] : rootMarks) {
+				if (!V::gateMark(marked.mark))
+					continue;
+				const auto& owner = marked.mark;
 				const auto gate = lodGates.find(owner.token);
 				const auto* roots = gate == lodGates.end()          ? nullptr :
 				                    owner.side == V::kGateIncoming ? &gate->second.incoming :
@@ -280,10 +285,10 @@ namespace DCLF::Diagnostics
 		 * a_resolved false: the chain meets a key the mirror holds no record of (TagGateAbove stops there; the gate's own walk does not
 		 * reach past it either), or runs past any depth a scene has.
 		 */
-		const V::GateRoot* GateAbove(const Scene::Coordinator& a_store, const RE::BSGeometry* a_geometry, const V::Tracked& a_entry, bool& a_resolved)
+		const Api::Mark* GateAbove(const Scene::Coordinator& a_store, const RE::BSGeometry* a_geometry, const V::Tracked& a_entry, bool& a_resolved)
 		{
 			const auto& mirror = V::mirror(a_store);
-			const auto& gateOfRoot = V::gateOfRoot(a_store);
+			const auto& rootMarks = V::rootMarks(a_store);
 			const auto* record = mirror.Node(a_geometry);
 			if (!record) {
 				a_resolved = false;
@@ -291,8 +296,9 @@ namespace DCLF::Diagnostics
 			}
 			std::uint32_t depth = 0;
 			for (const void* key = record->parent; key;) {
-				if (const auto at = gateOfRoot.find(key); at != gateOfRoot.end())
-					return &at->second;
+				// The nearest mark decides (the prepare's walk): another component's is no gate root.
+				if (const auto at = rootMarks.find(key); at != rootMarks.end())
+					return V::gateMark(at->second.mark) ? &at->second.mark : nullptr;
 				if (key == a_entry.categoryNode)
 					return nullptr;
 				const auto* node = mirror.Node(key);

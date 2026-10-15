@@ -732,9 +732,9 @@ namespace DCLF::Scene
 		if (a_prep.subIndex)
 			lodRanges[a_geometry] = std::move(a_prep.segments);
 		pendingEvaluation.push_back(a_geometry);
-		// Under a LOD gate's root applied earlier: tag it (the prepare found the nearest, as TagGateAbove).
-		if (a_prep.gated)
-			TagGate(a_geometry, entry, a_prep.gateToken, a_prep.gateSide);
+		// Under a root marked earlier (a LOD gate's): the marking component's (the prepare found the nearest, as TagGateAbove).
+		if (a_prep.mark)
+			ComponentsUnderMark(a_geometry, a_prep.mark);
 	}
 
 	const RE::NiAVObject* Coordinator::LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_live) const
@@ -848,14 +848,12 @@ namespace DCLF::Scene
 		a_out.held = HeldKeysOf(a_geometry);
 		if (a_out.subIndex && g)
 			a_out.segments = g->segments;
-		// TagGateAbove's walk: the mirror's chain up to the category node, the nearest gate root on it (gate roots change only with the
-		// mirror's events, before the adds).
-		if (!gateOfRoot.empty())
+		// TagGateAbove's walk: the mirror's chain up to the category node, the nearest marked root on it (the marks change only with the
+		// mirror's events, before the adds: the parallel prepares read them as data).
+		if (!rootMarks.empty())
 			for (const void* key = record ? record->parent : nullptr; key;) {
-				if (const auto at = gateOfRoot.find(key); at != gateOfRoot.end()) {
-					a_out.gated = true;
-					a_out.gateToken = at->second.token;
-					a_out.gateSide = at->second.side;
+				if (const auto at = rootMarks.find(key); at != rootMarks.end()) {
+					a_out.mark = at->second.mark;
 					break;
 				}
 				if (key == a_category)

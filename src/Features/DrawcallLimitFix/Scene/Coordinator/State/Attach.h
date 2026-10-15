@@ -57,10 +57,9 @@ namespace DCLF::Scene
 			// Of the sun entry (when resolved): its record's reference, and whether a category node owns it (CategoryNodeOwn).
 			const RE::TESObjectREFR* sunEntryReference = nullptr;
 			bool sunEntryCategory = false;
-			// A LOD gate root up its chain to the category node (TagGateAbove's), and an object LOD's drawn ranges (as its events' component takes them).
-			bool gated = false;
-			std::uint8_t gateSide = 0;
-			std::uint64_t gateToken = 0;
+			// The nearest marked root up its chain to the category node (rootMarks; none: no mark), and an object LOD's drawn ranges (as its
+			// events' component takes them).
+			Api::Mark mark;
 			std::vector<LodSegments::Range> segments;
 		};
 		/** @brief One subtree's prepare (PrepareSubtree): its category node (none: nothing tracked), and its geometries in walk order. */

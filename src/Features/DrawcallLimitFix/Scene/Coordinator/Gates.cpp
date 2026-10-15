@@ -33,27 +33,27 @@ namespace DCLF::Scene
 			gate.stampNs = a_stampNs ? a_stampNs : GateNowNs();
 			gate.stampFrame = a_stampFrame;
 		}
-		// A root another gate still names (its block swapped again before that gate's outcome): this gate's from here. A root that changes
-		// side is gated only while incoming (an outgoing block's hide is the engine's own).
+		// A root another gate still names (its block swapped again before that gate's outcome): this gate's from here (the coordinator's
+		// mark, MarkRoot). A root that changes side is gated only while incoming (an outgoing block's hide is the engine's own): the
+		// incoming own their hide.
+		const std::uint32_t component = GateAdoption::component.index;
+		const Api::CoordinatorComponentContext context{ tables, ComponentState(component), *this, component };
 		auto take = [&](const void* a_root, std::uint8_t a_side) {
-			if (const auto at = gateOfRoot.find(a_root); at != gateOfRoot.end() && at->second.token != a_token) {
-				if (const auto other = lodGates.find(at->second.token); other != lodGates.end()) {
-					std::erase(other->second.incoming, a_root);
-					std::erase(other->second.outgoing, a_root);
-				}
-				if (at->second.side == kGateIncoming && a_side != kGateIncoming)
-					mirror.SetGated(a_root, false);
+			if (const auto displaced = context.MarkRoot(a_root, a_token, a_side, a_side == kGateIncoming)) {
+				if (displaced.component.index == component)
+					if (const auto other = lodGates.find(displaced.token); other != lodGates.end()) {
+						std::erase(other->second.incoming, a_root);
+						std::erase(other->second.outgoing, a_root);
+					}
 				++gateStats.superseded;
 			}
-			gateOfRoot.insert_or_assign(a_root, GateRoot{ a_token, a_side });
 		};
 		for (const void* root : a_incoming) {
 			if (!root)
 				continue;
+			// Its own hide the gate's from here (HiddenForWalk): classified, written, bound and committed while the engine keeps it hidden.
 			take(root, kGateIncoming);
 			lodGates.find(a_token)->second.incoming.push_back(root);
-			// Its own hide the gate's from here (HiddenForWalk): classified, written, bound and committed while the engine keeps it hidden.
-			mirror.SetGated(root, true);
 			// The tracked geometries under it (its attach applied before this event: tracked by an earlier pass, or by this batch's adds after
 			// the mirror's events, which AddGeometry tags); a root or node the mirror lacks a record of holds the gate until it has one.
 			if (TagGateRoot(a_token, root, kGateIncoming))
@@ -87,8 +87,9 @@ namespace DCLF::Scene
 		// The mirror's chain up to its category node (the walk's): the nearest gate root on it decides.
 		const auto* record = mirror.Node(a_geometry);
 		for (const void* key = record ? record->parent : nullptr; key;) {
-			if (const auto at = gateOfRoot.find(key); at != gateOfRoot.end()) {
-				TagGate(a_geometry, a_entry, at->second.token, at->second.side);
+			if (const auto at = rootMarks.find(key); at != rootMarks.end()) {
+				if (at->second.mark.component.index == GateAdoption::component.index)
+					TagGate(a_geometry, a_entry, at->second.mark.token, at->second.mark.side);
 				return;
 			}
 			if (key == a_entry.categoryNode)
@@ -132,6 +133,12 @@ namespace DCLF::Scene
 		}
 	}
 
+	void Coordinator::TagGateUnder(const RE::BSGeometry* a_geometry, const Api::Mark& a_mark)
+	{
+		if (const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry)); it != tracked.end())
+			TagGate(it->first, it->second, a_mark.token, a_mark.side);
+	}
+
 	void Coordinator::UntagGate(RE::BSGeometry* a_geometry, Tracked& a_entry)
 	{
 		if (a_entry.gate)
@@ -155,26 +162,16 @@ namespace DCLF::Scene
 		gateHeldOutCount = 0;
 	}
 
-	void Coordinator::NoteGateRootsDetached(const void* a_root, std::span<const void* const> a_nodes)
+	void Coordinator::GateRootDetached(const void* a_key, std::uint64_t a_token)
 	{
-		// A root detached leaves its gate (its geometries leave with their own erasure: EraseTracked untags them). An open gate left without
-		// an incoming root never flips (its outgoing would be hidden over nothing): the engine side's forced release retires it.
-		auto leave = [&](const void* a_key) {
-			const auto at = gateOfRoot.find(a_key);
-			if (at == gateOfRoot.end())
-				return;
-			if (const auto gate = lodGates.find(at->second.token); gate != lodGates.end()) {
-				std::erase(gate->second.incoming, a_key);
-				std::erase(gate->second.outgoing, a_key);
-			}
-			if (at->second.side == kGateIncoming)
-				mirror.SetGated(a_key, false);
-			gateOfRoot.erase(at);
-			++gateStats.rootsDetached;
-		};
-		leave(a_root);
-		for (const void* node : a_nodes)
-			leave(node);
+		// A root detached leaves its gate (its mark erased, its hide ungated: UnmarkDetached; its geometries leave with their own erasure:
+		// EraseTracked untags them). An open gate left without an incoming root never flips (its outgoing would be hidden over nothing):
+		// the engine side's forced release retires it.
+		if (const auto gate = lodGates.find(a_token); gate != lodGates.end()) {
+			std::erase(gate->second.incoming, a_key);
+			std::erase(gate->second.outgoing, a_key);
+		}
+		++gateStats.rootsDetached;
 	}
 
 	bool Coordinator::GateWithholds(std::uint32_t a_slot) const
@@ -360,17 +357,14 @@ namespace DCLF::Scene
 			return;
 		auto& gate = it->second;
 		const bool open = gate.state == LodGate::State::Open;
-		// Its roots ungated (flipped: the engine's show came as the root's hidden event, applied before this outcome), off the root map.
-		auto release = [&](const void* a_root, bool a_incoming) {
-			if (const auto at = gateOfRoot.find(a_root); at != gateOfRoot.end() && at->second.token == a_token)
-				gateOfRoot.erase(at);
-			if (a_incoming)
-				mirror.SetGated(a_root, false);
-		};
+		// Its roots unmarked, the incoming ungated (flipped: the engine's show came as the root's hidden event, applied before this outcome).
+		// A root listed is marked this gate's (a later gate's mark, or a detach, took it off the list).
+		const std::uint32_t component = GateAdoption::component.index;
+		const Api::CoordinatorComponentContext context{ tables, ComponentState(component), *this, component };
 		for (const void* root : gate.incoming)
-			release(root, true);
+			context.UnmarkRoot(root, a_token);
 		for (const void* root : gate.outgoing)
-			release(root, false);
+			context.UnmarkRoot(root, a_token);
 		for (auto* geometry : gate.incomingGeometries) {
 			const auto entry = tracked.find(geometry);
 			if (entry == tracked.end())
@@ -409,12 +403,14 @@ namespace DCLF::Scene
 		// out), flipped, or retired already (the flip's outcome came first: the hold-out stays on entries with no gate).
 		++gateStats.keptNotices;
 		const auto gate = lodGates.find(a_token);
+		const std::uint32_t component = GateAdoption::component.index;
+		const Api::CoordinatorComponentContext context{ tables, ComponentState(component), *this, component };
 		std::vector<std::pair<RE::BSGeometry*, Ineligible>> found;
 		for (const void* root : a_roots) {
 			if (!root)
 				continue;
-			if (const auto at = gateOfRoot.find(root); at != gateOfRoot.end() && at->second.token == a_token && at->second.side == kGateOutgoing) {
-				gateOfRoot.erase(at);
+			if (const auto mark = context.MarkOf(root); mark.component.index == component && mark.token == a_token && mark.side == kGateOutgoing) {
+				context.UnmarkRoot(root, a_token);
 				if (gate != lodGates.end())
 					std::erase(gate->second.outgoing, root);
 			}

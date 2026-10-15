@@ -1281,6 +1281,11 @@ namespace DCLF
 		void ComponentsStacked(Api::EngineChannelId a_channel, const Api::Stacked& a_event);
 		/** @brief A marked root (or a node under a detached root) detached, its mark erased: the marking component's detached hook. */
 		void ComponentsDetached(const void* a_key, const Api::Mark& a_mark);
+		/**
+		 * @brief A detach in the world (ApplyMirrorEvents, before the mirror's records go): the marks on a_root and a_nodes erased (their
+		 * hides ungated), each marking component told (ComponentsDetached).
+		 */
+		void UnmarkDetached(const void* a_root, std::span<const void* const> a_nodes);
 		/** @brief The rescan: every component's rescan hook. */
 		void ComponentsRescan();
 		/** @brief A newly tracked entry under a marked root (the nearest on its chain): the marking component's underMark hook. */
@@ -1298,16 +1303,18 @@ namespace DCLF
 		/** @brief A Gate event (ApplyMirrorEvents, in batch order) opens its gate: token, roots (keys), push stamp. */
 		void ApplyGateEvent(std::uint64_t a_token, std::span<const void* const> a_incoming, std::span<const void* const> a_outgoing, std::uint64_t a_stampNs,
 			std::uint32_t a_stampFrame);
-		/** @brief A detach in the world (ApplyMirrorEvents): gate roots among a_root and a_nodes leave their gates. */
-		void NoteGateRootsDetached(const void* a_root, std::span<const void* const> a_nodes);
+		/** @brief The gates' detached hook: a_key (its mark of gate a_token erased: UnmarkDetached) leaves its gate. */
+		void GateRootDetached(const void* a_key, std::uint64_t a_token);
 		/** @brief Tags the tracked geometries under a_root on a_token's a_side; true when the mirror lacked a record there. */
 		bool TagGateRoot(std::uint64_t a_token, const void* a_root, std::uint8_t a_side);
 		/** @brief AddGeometry: tags a_geometry when a gate's root is on its mirror chain. */
 		void TagGateAbove(RE::BSGeometry* a_geometry, Tracked& a_entry);
 		void TagGate(RE::BSGeometry* a_geometry, Tracked& a_entry, std::uint64_t a_token, std::uint8_t a_side);
+		/** @brief The gates' underMark hook: a newly tracked a_geometry under a root of theirs (AddGeometry's prepare found it) tagged. */
+		void TagGateUnder(const RE::BSGeometry* a_geometry, const Api::Mark& a_mark);
 		/** @brief Off its gate (EraseTracked, a retag, the outcome) and no longer held out. */
 		void UntagGate(RE::BSGeometry* a_geometry, Tracked& a_entry);
-		/** @brief The rescan: gate tags dropped with the entries (its adds tag again). */
+		/** @brief The rescan (the gates' rescan hook): gate tags dropped with the entries (its adds tag again). */
 		void ResetGateTags();
 		/** @brief CommitSet: a_slot's phases as applied (0 for an open gate's incoming slot or one held out), recorded per slot. */
 		std::uint8_t GateWithhold(std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait, std::uint32_t a_drawn, bool a_live);
