@@ -38,6 +38,9 @@ namespace DCLF::Features::FirstPerson
 			SunViews::Cascade view;
 			SunViews::CameraMatrices(*camera, view);
 			const RE::NiPoint3 eye{ eyeWorld[0], eyeWorld[1], eyeWorld[2] };
+			// The rows are world space (FrameValues samples them before the first-person shift): CameraPosAdjust is the world eye, not the
+			// first-person camera's root-space translate.
+			view.eye = { eye.x, eye.y, eye.z };
 			// VS_PerFrame (b12) for the camera, as the engine's SetCameraData builds it for the first-person draws (the accumulator renders'
 			// flags 3 and 0x43: jittered), over the renderer's last block; the motion vectors' previous camera last frame's, its own on the first.
 			const PreviousCamera current{ view.viewProj, eye };
