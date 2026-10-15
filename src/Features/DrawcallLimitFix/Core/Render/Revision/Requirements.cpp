@@ -167,7 +167,7 @@ namespace DCLF
 		ReserveMainLatch(producer.latches.main.cascades, producer.latches.main.shadowVolumes, layout.buckets);
 		std::uint32_t decals = 0;
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
-			decals = std::max(decals, a_tables.decalCount[group]);
+			decals = std::max(decals, a_tables.rangeCount[group]);
 		CheckSequenceLimits("the main pass", draws, true);
 		CheckSequenceLimits("a decal group", decals, false);
 		// The sequence ranges: doubled past the bound, the buffers sized to them exactly.

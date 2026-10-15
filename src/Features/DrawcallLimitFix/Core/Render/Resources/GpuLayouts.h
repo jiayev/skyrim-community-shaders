@@ -280,11 +280,9 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kColourViewBits = kViewMain | kViewDecal | kViewForward | kViewRefraction;
 	static_assert(offsetof(DrawInput, view) == 16 && offsetof(DrawInput, shadowRow) == 52 && offsetof(DrawInput, fadeDistance) == 60);
 	// The main sequence buffer's ranges: phase 1 and colour draws, phase 2's (fixed: the CPU records where its draw starts), then
-	// one per decal group. A decal goes to its ordinal's slot in the engine's draw order (SceneTables::decalOrdinal), so decals
-	// keep that order; a culled one has zero indices.
+	// one per decal group. A decal goes to its ordinal's slot in its range's order (SceneTables::rangeOrdinal; Features/Decals: the
+	// engine's draw order), so decals keep that order; a culled one has zero indices.
 	constexpr std::uint32_t kDecalGroups = 3;
-	/** @brief The decal ranges (ObjectDecalGroup - 1) in the order the second pass draws them: the engine's geometry groups 3, 2, 4. */
-	constexpr std::array<std::uint32_t, kDecalGroups> kDecalDrawOrder{ 0, 2, 1 };
 	/** @brief The count word a decal range's draw reads its slot count from. */
 	constexpr std::uint32_t DecalCountWord(std::uint32_t a_range) { return a_range < 2 ? kCountDecalGroupWord + a_range : kCountDecalLayerWord; }
 	/** @brief The main sequence buffer's slots for a_draws per draw range and a_decals per decal group. */
@@ -292,6 +290,16 @@ namespace DCLF::Draws
 	// The terrain groups' colour draws reuse phase 2's range (the depth segment is done with it): group 1 from its start, group 2
 	// after group 1's capacity (MainLayout::terrainCapacity).
 	constexpr std::uint32_t kTerrainGroups = 2;
+	// The second pass's range slots (Api::MainRangeSlot, as an index; Extensions::MainRanges orders them): the fixed slots are the
+	// decal groups' ranges (ObjectDecalGroup - 1), the appended ones the terrain groups' (ObjectTerrainGroup - 1). BuildDrawsCS's
+	// layout, so compile-time (Features/Manifest.cpp checks the slots against it).
+	constexpr std::uint32_t kMainRangeSlotCount = kDecalGroups + kTerrainGroups;
+	inline constexpr bool MainRangeFixed(std::uint32_t a_slot) { return a_slot < kDecalGroups; }
+	/** @brief The count word a range slot's draw reads its count from. */
+	inline constexpr std::uint32_t MainRangeCountWord(std::uint32_t a_slot)
+	{
+		return MainRangeFixed(a_slot) ? DecalCountWord(a_slot) : kCountTerrainGroupWord + (a_slot - kDecalGroups);
+	}
 	// The forward range, after the terrain ranges: a staging half BuildDraws appends visible forward draws to (view depth in the
 	// unexecuted firstInstance word), then a sorted half ForwardSortCS fills back to front. Each MainLayout::forwardCapacity.
 	constexpr const char* kForwardSortShader = "DrawcallLimitFix/ForwardSortCS.hlsl";

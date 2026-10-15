@@ -562,7 +562,7 @@ namespace DCLF::Draws
 		if (colourBuilt) {
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
 				// The decal ranges hold every decal except while their growth is outstanding: the rest wait.
-				decalCount[group] = std::min(tables.decalCount[group], in.addresses.sequenceDecals);
+				decalCount[group] = std::min(tables.rangeCount[group], in.addresses.sequenceDecals);
 			}
 			// A decal past the scene's buffers keeps its slot with a blank input: cutting the range would drop every later
 			// decal while the set claims them.
@@ -975,7 +975,7 @@ namespace DCLF::Draws
 			return false;
 		// A decal (colour segment only) needs its ordinal within its group's range (OrderDecals logs a change for every move).
 		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
-			if (o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[group - 1])
+			if (o >= tables.rangeOrdinal.size() || tables.rangeOrdinal[o] >= decalCount[group - 1])
 				return false;
 		// A face shape, or a second-stream position, needs its positions' stream.
 		const bool needsStream = IsFaceObject(tables, o) || (tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream);
@@ -1000,7 +1000,7 @@ namespace DCLF::Draws
 		const auto pair = r.pairs.find(PairKeyOf(object));
 		// A decal's slots in its group's range (one per partition: DecalSpanOf); an undrawable decal is still an input (zero-count draws).
 		const bool decal = ObjectDecalGroup(object.flags) != 0;
-		const std::uint32_t ordinal = decal ? tables.decalOrdinal[o] : 0u;
+		const std::uint32_t ordinal = decal ? tables.rangeOrdinal[o] : 0u;
 		const std::uint32_t partitions = PartitionsOf(tables, o);
 		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok;
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
@@ -1151,7 +1151,7 @@ namespace DCLF::Draws
 	{
 		const auto& object = tables.objects[o];
 		// No kInputDrawable; stream and fade row stay none. The partitions word names the decal's slots, each a zero-count draw.
-		return { 0, 0, object.geometryIndex < tables.geometries.size() ? object.geometryIndex : 0u, object.flags, { MainMaskOf(tables, o) }, o, tables.decalOrdinal[o],
+		return { 0, 0, object.geometryIndex < tables.geometries.size() ? object.geometryIndex : 0u, object.flags, { MainMaskOf(tables, o) }, o, tables.rangeOrdinal[o],
 			o < tables.skinPartitions.size() ? tables.skinPartitions[o] : 0u };
 	}
 
@@ -1282,8 +1282,8 @@ namespace DCLF::Draws
 			// A decal group's capped count moved: retake the decals between the old and new counts (changed ordinals are in the log).
 			if (r.decalCount != decalCount) {
 				++out.residentDecalRetakes;
-				for (std::uint32_t o = 0; o < tables.decalOrdinal.size() && o < tables.objects.size(); ++o) {
-					const std::uint32_t ordinal = tables.decalOrdinal[o];
+				for (std::uint32_t o = 0; o < tables.rangeOrdinal.size() && o < tables.objects.size(); ++o) {
+					const std::uint32_t ordinal = tables.rangeOrdinal[o];
 					const std::uint32_t group = ordinal != ~0u ? ObjectDecalGroup(tables.objects[o].flags) : 0;
 					if (group && ordinal >= std::min(r.decalCount[group - 1], decalCount[group - 1]) &&
 						ordinal < std::max(r.decalCount[group - 1], decalCount[group - 1]))
@@ -1897,7 +1897,7 @@ namespace DCLF::Draws
 		// Past the scene's buffers' named versions: no input, except a decal's blank, which keeps its slot as a zero-count draw.
 		if (!ObjectFits(tables, o, in.addresses.fit)) {
 			if (const std::uint32_t group = ObjectDecalGroup(object.flags);
-				group && o < tables.decalOrdinal.size() && tables.decalOrdinal[o] < decalCount[group - 1])
+				group && o < tables.rangeOrdinal.size() && tables.rangeOrdinal[o] < decalCount[group - 1])
 				drawInputs.push_back(DecalBlank(o));
 			Skipped(Skip::Capacity);
 			return;
@@ -1912,7 +1912,7 @@ namespace DCLF::Draws
 		}
 		// Decals are not occluders: only the colour segment's second pass draws them; without it no decal has a slot.
 		const std::uint32_t decalGroup = ObjectDecalGroup(object.flags);
-		if (decalGroup && (o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[decalGroup - 1]))
+		if (decalGroup && (o >= tables.rangeOrdinal.size() || tables.rangeOrdinal[o] >= decalCount[decalGroup - 1]))
 			return;
 		// An undrawable decal must still reach BuildDraws so its slot is a zero-count draw, not a stale one: this guard pushes
 		// the blank on every early return below.
@@ -1928,7 +1928,7 @@ namespace DCLF::Draws
 		} decalSlot;
 		if (decalGroup) {
 			decalSlot.inputs = &drawInputs;
-			decalSlot.blank = { 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), tables.decalOrdinal[o],
+			decalSlot.blank = { 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), tables.rangeOrdinal[o],
 				o < tables.skinPartitions.size() ? tables.skinPartitions[o] : 0u };
 		}
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
@@ -1974,7 +1974,7 @@ namespace DCLF::Draws
 		if (streamIndex != ~0u)
 			SetSequenceStream(sequence, tables, o, in.addresses.facePositions);
 		if (decalGroup) {
-			const std::uint32_t ordinal = tables.decalOrdinal[o];
+			const std::uint32_t ordinal = tables.rangeOrdinal[o];
 			decalSlot.inputs = nullptr;  // drawn: the blank is not needed
 			// The partitions word names the slots (BuildDrawsCS draws a partition at each).
 			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, object.flags | kInputDrawable, { MainMaskOf(tables, o) },

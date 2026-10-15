@@ -113,7 +113,7 @@ namespace DCLF::Diagnostics
 							a_left.size(), a_right.size(), at, position, tables.changeLog.End());
 				};
 				sameColumn("setPhases", snapshot.setPhases, tables.setPhases);
-				sameColumn("decalOrdinal", snapshot.decalOrdinal, tables.decalOrdinal);
+				sameColumn("decalOrdinal", snapshot.rangeOrdinal, tables.rangeOrdinal);
 				sameColumn("layerBase", snapshot.layerBase, tables.layerBase);
 				sameColumn("layerOf", snapshot.layerOf, tables.layerOf);
 				auto sameLog = [](const auto& a_left, const auto& a_right) {

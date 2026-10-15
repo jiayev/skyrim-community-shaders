@@ -175,19 +175,19 @@ namespace DCLF::Features::Decals
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> before;
 			before.reserve(decalOrdered.size());
 			for (const std::uint32_t o : decalOrdered)
-				if (o < a_tables.decalOrdinal.size()) {
-					before.emplace_back(o, a_tables.decalOrdinal[o]);
-					a_tables.decalOrdinal[o] = ~0u;
+				if (o < a_tables.rangeOrdinal.size()) {
+					before.emplace_back(o, a_tables.rangeOrdinal[o]);
+					a_tables.rangeOrdinal[o] = ~0u;
 				}
 			decalOrdered.clear();
-			a_tables.decalCount = {};
+			a_tables.rangeCount = {};
 			ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> previous(before.begin(), before.end());
 			for (const auto& entry : a_order.kept) {
 				const std::uint32_t group = static_cast<std::uint32_t>(entry.chain >> 60) - 1;
 				// A skinned decal of several partitions takes a slot per partition (DecalSpanOf).
-				const std::uint32_t ordinal = a_tables.decalCount[group];
-				a_tables.decalCount[group] += DecalSpanOf(entry.object < a_tables.skinPartitions.size() ? a_tables.skinPartitions[entry.object] : 0u);
-				a_tables.decalOrdinal[entry.object] = ordinal;
+				const std::uint32_t ordinal = a_tables.rangeCount[group];
+				a_tables.rangeCount[group] += DecalSpanOf(entry.object < a_tables.skinPartitions.size() ? a_tables.skinPartitions[entry.object] : 0u);
+				a_tables.rangeOrdinal[entry.object] = ordinal;
 				decalOrdered.push_back(entry.object);
 				const auto it = previous.find(entry.object);
 				if (it == previous.end() || it->second != ordinal)
@@ -201,7 +201,7 @@ namespace DCLF::Features::Decals
 					a_tables.NoteChange(object, kChangeBindings);
 		}
 
-		/** @brief SceneTables::decalOrdinal and decalCount: the member decals, in the engine's draw order (joinsDone). */
+		/** @brief SceneTables::rangeOrdinal and rangeCount (the decal groups' fixed ranges): the member decals, in the engine's draw order (joinsDone). */
 		void OrderDecals(const Api::CoordinatorComponentContext& a_context)
 		{
 			// The engine draws a decal chain (a group's technique bucket and sub-pass list) in reverse registration order, and
@@ -216,8 +216,8 @@ namespace DCLF::Features::Decals
 			Diagnostics::Notify(OrderDue{ a_context.PassSerial(), checked });
 			if (!order.decalsRebuild && order.decalsChanged.empty() && !checked)
 				return;
-			if (tables.decalOrdinal.size() != tables.objects.size())
-				tables.decalOrdinal.resize(tables.objects.size(), ~0u);
+			if (tables.rangeOrdinal.size() != tables.objects.size())
+				tables.rangeOrdinal.resize(tables.objects.size(), ~0u);
 
 			if (order.decalsRebuild)
 				order.kept = WholeDecalOrder(tables, mirror, order.memberDecals);

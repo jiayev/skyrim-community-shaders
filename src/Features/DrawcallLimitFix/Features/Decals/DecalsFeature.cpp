@@ -1,5 +1,5 @@
 // Decals: the decals and multi-index layers DCLF draws in its decal groups. Its switches and the decals and layers toggles, the object
-// classes' contributions, the member decals' order (a coordinator component) and its parity.
+// classes' contributions, the groups' main ranges, the member decals' order (a coordinator component) and its parity.
 
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
@@ -25,6 +25,11 @@ namespace DCLF::Features::Decals
 				.seed = layersSwitch, .entersClassification = true, .after = "skinned", .needs = { "decals" } });
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Decal, .toggle = decals });
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Layer, .toggle = layers });
+			// The groups' ranges in the second pass, the engine's geometry groups 3, 2, 4: opaque decals (their depth first, in a
+			// pass of their own), multi-index layers, then - after Terrain Blending's groups (Core's orders 2 and 3) - blended decals.
+			a_context.RegisterMainRange({ .slot = kOpaqueRange, .name = "decals-opaque", .order = 0, .depthPrepass = true, .objectClass = Api::ObjectClass::Decal });
+			a_context.RegisterMainRange({ .slot = kLayerRange, .name = "decals-layers", .order = 1, .objectClass = Api::ObjectClass::Layer });
+			a_context.RegisterMainRange({ .slot = kBlendedRange, .name = "decals-blended", .order = 4, .objectClass = Api::ObjectClass::Decal });
 			RegisterOrder(a_context);
 			// CS_DCLF_PERSISTENT_PARITY: the kept order against one made whole.
 			if (Diagnostics::Observe().scene)

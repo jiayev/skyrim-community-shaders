@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Api/GpuStages.h"
+#include "Features/DrawcallLimitFix/Api/MainRanges.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Api/Payload.h"
 #include "Features/DrawcallLimitFix/Api/Reports.h"
@@ -84,6 +85,11 @@ namespace DCLF::Api
 		 * resources, its frame and main callbacks (decide, programSource, main's three) or with only some of its faces' five.
 		 */
 		virtual void RegisterDrawFamily(const DrawFamilyContribution& a_family) = 0;
+		/**
+		 * @brief Fails the install for a slot another registration has (Core's built-ins are in first), an order another range has, no
+		 * name, a depth prepass on an appended slot, or a class with no registered toggle.
+		 */
+		virtual void RegisterMainRange(const MainRangeContribution& a_range) = 0;
 
 	protected:
 		~InstallContext() = default;
