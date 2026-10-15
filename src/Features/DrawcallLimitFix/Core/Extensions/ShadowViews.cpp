@@ -1,14 +1,11 @@
-// The shadow-view entries (see the header): the features' contributions and Core's own sources, what the shadow engine reads of them,
-// and the shadow cameras' hooks.
+// The shadow-view entries (see the header): the features' contributions, what the shadow engine reads of them, and the shadow cameras'
+// hooks.
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Engine/Views/FocusViews.h"
 #include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
-#include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
-#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
 
 namespace DCLF::Extensions
 {
@@ -18,31 +15,6 @@ namespace DCLF::Extensions
 
 	namespace
 	{
-		constexpr auto kSun = static_cast<std::size_t>(Api::ShadowSource::Sun);
-		constexpr auto kSpot = static_cast<std::size_t>(Api::ShadowSource::Spot);
-		constexpr auto kPoint = static_cast<std::size_t>(Api::ShadowSource::Point);
-		constexpr auto kFocus = static_cast<std::size_t>(Api::ShadowSource::Focus);
-
-		// Core's own entries, until their features take them: the sun (Features/Shadows/Sun), the spot, point and focus sources
-		// (Features/Shadows/Local). A feature registering one of them fails the install. (The occlusion maps are Features/OcclusionMaps'.)
-		constexpr bool kCoreSources[kShadowSources] = { true, true, true, true };
-
-		/** @brief A kept spot or point light's views, from its cameras (LightViews: the Lights board). */
-		void LightKept(const Api::ShadowLightKept& a_light) { LightViews::Get().Update(a_light.light); }
-
-		/** @brief Core's own sources: the sun's and the focus views' cameras from Core's hooks, the kept local lights' from LightViews. */
-		void FillCoreSources(ShadowViewSet& a_set)
-		{
-			if (kCoreSources[kSun])
-				a_set.sources[kSun].registered = true;
-			if (kCoreSources[kSpot])
-				a_set.sources[kSpot] = { true, &LightKept };
-			if (kCoreSources[kPoint])
-				a_set.sources[kPoint] = { true, &LightKept };
-			if (kCoreSources[kFocus])
-				a_set.sources[kFocus].registered = true;
-		}
-
 		/** @brief A feature's map into its entry (Registry refused incomplete ones and a second for a map). */
 		void FillRegistered(OcclusionMapEntry& a_entry, const Api::OcclusionMapContribution& a_map)
 		{
@@ -91,16 +63,12 @@ namespace DCLF::Extensions
 		if (std::exchange(once, true))
 			stl::report_and_fail("Drawcall Limit Fix: the shadow views were resolved twice");
 		ShadowViewSet set;
-		FillCoreSources(set);
 		for (std::size_t v = 0; v < a_maps.size(); ++v)
 			if (a_maps[v].map < Api::OcclusionMap::Count)
 				FillRegistered(set.maps[v], a_maps[v]);
 		for (std::size_t s = 0; s < a_sources.size(); ++s) {
-			if (a_sources[s].source >= Api::ShadowSource::Count)
-				continue;
-			if (kCoreSources[s])
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: shadow source {} was registered by a feature, but Core still fills it", s));
-			set.sources[s] = { true, a_sources[s].lightKept };
+			if (a_sources[s].source < Api::ShadowSource::Count)
+				set.sources[s] = { true, a_sources[s].lightKept };
 		}
 		DeriveShadowOrders(set);
 		Detail::resolvedShadowViews = std::move(set);
@@ -111,15 +79,15 @@ namespace DCLF::Extensions
 		static bool installed = false;
 		if (std::exchange(installed, true))
 			stl::report_and_fail("Drawcall Limit Fix: the shadow cameras' hooks were installed twice");
-		// Core's own, in the install log's order: the sun's UpdateCamera, the light selection (Core's, whatever the sources), the focus
-		// cameras. Then the features' camera hooks, in the list's order.
-		if (kCoreSources[kSun])
-			SunViews::Get().Install();
-		LightSelection::Get().Install();
-		if (kCoreSources[kFocus])
-			FocusViews::Get().Install();
-		for (const auto& feature : a_features)
-			if (feature.cameraHooks)
-				feature.cameraHooks();
+		// By source, in ShadowSource order (the install log's): the sun's UpdateCamera (Features/Shadows/Sun), the light selection (Core's,
+		// whatever the sources: it hands the Spot and Point sources their kept lights), then the focus cameras (Features/Shadows/Local).
+		for (std::size_t s = 0; s < kShadowSources; ++s) {
+			const auto source = static_cast<Api::ShadowSource>(s);
+			for (const auto& feature : a_features)
+				if (feature.cameraHooks)
+					feature.cameraHooks(source);
+			if (source == Api::ShadowSource::Sun)
+				LightSelection::Get().Install();
+		}
 	}
 }

@@ -1,8 +1,8 @@
 {
  "legacyEdges": {
-  "Core -> Engine": 25,
+  "Core -> Engine": 22,
   "Core -> Scene": 29,
-  "Engine -> Scene": 33,
+  "Engine -> Scene": 30,
   "Features/Billboards -> Engine": 1,
   "Features/Billboards -> Scene": 3,
   "Features/Decals -> Scene": 2,
@@ -12,6 +12,8 @@
   "Features/HiddenNodes -> Engine": 2,
   "Features/Particles -> Engine": 1,
   "Features/Particles -> Scene": 2,
+  "Features/Shadows/Local -> Scene": 2,
+  "Features/Shadows/Sun -> Scene": 1,
   "Features/TextureTransforms -> Scene": 1,
   "Scene -> Engine": 34
  },

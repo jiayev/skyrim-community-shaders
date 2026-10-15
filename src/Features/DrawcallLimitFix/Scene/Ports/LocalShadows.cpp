@@ -16,7 +16,7 @@ namespace DCLF
 	{
 		LocalShadowLights out;
 		// DCLF's selection: the lights CalculateActiveShadowCasterLights keeps, a light once (the sun's slots are the sun's),
-		// their mask indices, and per shadowmap descriptor what its cull tests (LightViews: Process2's planes).
+		// their mask indices, and per shadowmap descriptor what its cull tests (the Lights board: Process2's planes).
 		const std::uint32_t sceneFrame = Scene::FrameView::Get().GetFrame();
 		const auto* selection = LightSelection::Get().Current(sceneFrame);
 		if (!selection)

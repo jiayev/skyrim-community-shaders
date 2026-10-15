@@ -5,7 +5,7 @@ namespace RE
 	class BSShadowLight;
 }
 
-namespace DCLF
+namespace DCLF::Features::Shadows::Local
 {
 	/**
 	 * @brief The local shadow lights' views as DCLF computes them, into Core's board (ShadowCameras::Lights): spot (BSShadowFrustumLight)

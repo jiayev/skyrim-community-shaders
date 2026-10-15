@@ -1,6 +1,7 @@
-// LightViews: the kept local lights' views (ShadowCameras::Lights), computed on the render thread from LightSelection's detour.
+// LightViews: the kept local lights' views (ShadowCameras::Lights), computed on the render thread from LightSelection's detour (the Spot
+// and Point sources' lightKept).
 
-#include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/LightViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
@@ -10,7 +11,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
-namespace DCLF
+namespace DCLF::Features::Shadows::Local
 {
 	LightViews& LightViews::Get()
 	{

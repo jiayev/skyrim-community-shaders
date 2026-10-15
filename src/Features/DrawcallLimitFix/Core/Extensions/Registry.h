@@ -23,9 +23,8 @@ namespace DCLF::Extensions
 	void InstallEarlyHooks(std::span<const Api::Feature> a_features);
 	/**
 	 * @brief Main thread, at PostPostLoad, where the shadow cameras' hooks install (the shell, after SunAccumulation's, before the primary
-	 * cull's): Core's own (the sun's UpdateCamera while Core holds the Sun source, the light selection, the focus cameras while Core holds
-	 * the Focus source; Extensions/ShadowViews.cpp), then every feature's camera hooks (Api::Feature::cameraHooks), in a_features' order.
-	 * Once, before InstallFeatures.
+	 * cull's): by source, in Api::ShadowSource order, every feature's camera hooks for it (Api::Feature::cameraHooks, in a_features'
+	 * order), with Core's light selection right after the Sun's (Extensions/ShadowViews.cpp). Once, before InstallFeatures.
 	 */
 	void InstallCameraHooks(std::span<const Api::Feature> a_features);
 

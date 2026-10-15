@@ -20,7 +20,7 @@ namespace DCLF
 	 * light's +0x61 is clear and the property is landscape (kLandscape 14, kNoLODLandFade 46; BSLightingShaderProperty's
 	 * FUN_14147c340). Light Limit Fix's ShadowBitMask is then the OR of those lights' maskIndex bits (the accumulation's
 	 * order, BSShadowLight +0x520). The lights and their mask indices are DCLF's selection's (LightSelection), and each shadowmap
-	 * descriptor's cull is what LightViews computes it tests (Process2: its custom planes, else its frustum).
+	 * descriptor's cull is what the Lights board has it test (Process2: its custom planes, else its frustum).
 	 */
 	struct LocalShadowLights
 	{

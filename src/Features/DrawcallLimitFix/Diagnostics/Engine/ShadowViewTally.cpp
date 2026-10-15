@@ -9,7 +9,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
-#include "Features/DrawcallLimitFix/Engine/Views/FocusViews.h"
 
 #include <array>
 #include <atomic>
@@ -62,7 +61,7 @@ namespace DCLF::Diagnostics
 			const auto* geometry = static_cast<const RE::BSGeometry*>(a_event.geometry);
 			const auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
 			const RE::NiAVObject* root = property ? property->fadeNode : nullptr;
-			const auto* target = FocusViews::EngineTarget(a_event.descriptor);
+			const auto* target = ShadowCameras::EngineFocusTarget(a_event.descriptor);
 			if (root == target || outside.fetch_add(1, std::memory_order_relaxed) != 0)
 				return;
 			std::uint32_t free = 0;

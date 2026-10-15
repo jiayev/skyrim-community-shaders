@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace DCLF
+namespace DCLF::Features::Shadows::Sun
 {
 	/**
 	 * @brief The sun's camera hook: BSShadowDirectionalLight::UpdateCamera (0x141512230), which writes the sun's views into Core's board
@@ -14,7 +14,8 @@ namespace DCLF
 	 * of the full-frustum cull's processes' planes, which cull through the full-frustum camera (FUN_141511f30; the sun's entry rule,
 	 * kCullSunEntry).
 	 *
-	 * Render thread: written in the hook (CalculateActiveShadowCasterLights, before the full-frustum cull and Accumulate).
+	 * Render thread: written in the hook (CalculateActiveShadowCasterLights, before the full-frustum cull and Accumulate). Installed from
+	 * the feature's camera hooks, for the Sun source (Api::Feature::cameraHooks).
 	 */
 	class SunViews
 	{

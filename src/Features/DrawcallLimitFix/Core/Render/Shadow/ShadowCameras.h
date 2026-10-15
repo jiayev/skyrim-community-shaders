@@ -188,6 +188,14 @@ namespace DCLF::ShadowCameras
 		}
 	};
 
+	/**
+	 * @brief The engine's current focus targets (0x14332a488: {float distance; NiAVObject* node} x the count at 0x14332a498): target
+	 * a_index's node, or null past the count. What the focus camera hook records (FocusFrame::targets) and the focus parity compares
+	 * the registrations with. Any thread that reads the engine's focus state.
+	 */
+	const RE::NiAVObject* EngineFocusTarget(std::uint32_t a_index);
+	std::uint32_t EngineFocusTargetCount();
+
 	/** @brief The boards (render thread; see each). Written in place by the sources' camera hooks: their storage is reused. */
 	SunFrame& Sun();
 	LightFrame& Lights();

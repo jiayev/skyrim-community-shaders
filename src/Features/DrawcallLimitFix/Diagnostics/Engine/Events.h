@@ -98,7 +98,7 @@ namespace DCLF::Diagnostics
 		bool skipExcluded;
 	};
 
-	/** @brief A cascade of the sun's Accumulate without DCLF's view (SunViews has none for its descriptor this frame). */
+	/** @brief A cascade of the sun's Accumulate without DCLF's view (the Sun board has none for its descriptor this frame). */
 	struct SunCascadeMissing
 	{
 		std::uint32_t frame;

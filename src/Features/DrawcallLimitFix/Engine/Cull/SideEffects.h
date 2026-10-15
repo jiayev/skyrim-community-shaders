@@ -22,7 +22,7 @@ namespace DCLF::SideEffects
 	 * stop, and for an actor the sun's entry exclusion keeps out of the cascade culls.
 	 *
 	 * Main thread at Main::Update's entry (no job runs; gFrameCounter is this frame's until Renderer::End): DCLF's verdict per high actor
-	 * is its 3D's world bound inside any of the last scene frame's shadow views (SunViews' cascade culls, LightViews' local views) - the
+	 * is its 3D's world bound inside any of the last scene frame's shadow views (the Sun board's cascade culls, the Lights board's local views) - the
 	 * views DCLF draws, from the cameras the engine set up, no cull result read. The property of every actor with that verdict is
 	 * stamped.
 	 */
