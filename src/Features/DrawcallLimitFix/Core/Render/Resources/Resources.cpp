@@ -2,6 +2,7 @@
 // SetupShadow, SetupView), each versioned buffer registered with the scene's set (its extent, growth policy and contents), the
 // scene's draw bound and the main latch the revision code keeps.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/TerrainBlending.h"
@@ -565,10 +566,8 @@ namespace DCLF
 		for (std::uint32_t h = 0; h < 2; ++h)
 			buffers->treeWindRows[h] = MakeVersioned(StructuredBuffer((trees + 1) * kTreeWindEntryRows, 16, h ? "cs.dclf.tree-wind1" : "cs.dclf.tree-wind0", unused, true),
 				{ .extent = { kTreeWindEntryRows * 16, kTreeWindEntryRows * 16, 16 }, .contents = GrowableContents::Zero });
-		// The frame's texture transforms into the material rows (the scene lane no longer writes them into records).
-		buffers->textureTransforms = ComputeProgram::Load(a_device, { .source = kTextureTransformsShader, .constantWords = kTextureTransformsConstantWords });
-		if (!buffers->textureTransforms)
-			logger::warn("[DCLF] The texture transforms program could not be created; DCLF's draws keep their materials' captured TexcoordOffset");
+		// The features' GPU stages (Api::GpuStage::setup: their programs; a null state keeps a stage out of the graph).
+		buffers->stages = Extensions::SetUpGpuStages(a_device);
 		// Without the fade state program, fades stay the CPU's.
 		buffers->fadeState = ComputeProgram::Load(a_device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
 		if (buffers->fadeState) {

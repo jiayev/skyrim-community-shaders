@@ -2,6 +2,7 @@
 // into the selected revision's shape) and the depth commit's scene uploads; DecideTreeLod; and the fade write-back (armed by the
 // depth commit, judged on DCLF's executor by KickFadeWriteBack, its stores made on the main thread by WriteFadeStores).
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -410,8 +411,8 @@ namespace DCLF
 			const std::uint32_t frameNumber = a_commit.frameNumber;
 			a_latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 			a_latch.fadeSeedsIndex = FrameValues::Get().FadeSeedsIndex();
-			// The depth segment: the frame's TexcoordOffset rows, which TextureTransformsCS stores into the payload's material rows first.
-			a_latch.textureTransformsIndex = depthOnly ? FrameValues::Get().TextureTransformsIndex() : 0u;
+			// The depth segment: its stage word, for the feature stage before the depth build that reads one (Api::GpuStage::latchWord).
+			a_latch.stageWord = depthOnly ? Extensions::StageLatchWord(Api::GpuStageSlot::DepthSegmentBeforeBuild) : 0u;
 			PayloadLatch(a_commit.parts, a_latch);
 			a_latch.dispatch[0] = (a_cull.inputCount + 63) / 64;
 			a_latch.dispatch[1] = 1;

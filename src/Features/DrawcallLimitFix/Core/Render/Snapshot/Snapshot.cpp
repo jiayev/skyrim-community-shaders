@@ -648,8 +648,8 @@ namespace DCLF
 			s.installedPayloadFrame = Scene::FrameView::Get().GetFrame();
 			if (s.installedPayload)
 				s.payloadsInstalled.fetch_add(1, std::memory_order_relaxed);
-			// Its rows carrying TexcoordOffset, for the frame values (the producers sample them; TextureTransformsCS patches the rows).
-			FrameValues::Get().SetTextureTransforms(s.installedPayload ? s.installedPayload->textureTransforms : nullptr);
+			// Its products, for the features that registered them (Api::PayloadProduct::install).
+			Extensions::InstallPayloadProducts(s.installedPayload ? &s.installedPayload->products : nullptr);
 		}
 		s.snapshotStale = false;
 		++s.snapshotsAdopted;

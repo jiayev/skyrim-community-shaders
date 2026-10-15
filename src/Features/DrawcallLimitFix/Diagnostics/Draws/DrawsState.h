@@ -265,8 +265,8 @@ namespace DCLF::Diagnostics
 
 		// CS_DCLF_PERSISTENT_PARITY: the payload's pools' leak watch, by part (the snapshot builder's ProducerReport).
 		std::array<PoolLeakWatch, Draws::kPayloadParts> payloadPools;
-		// ... and FrameValues' pools' (the render thread's FrameValuesLine).
-		std::array<PoolLeakWatch, FrameValues::kPools> frameValuesPools;
+		// ... and FrameValues' pools' (the render thread's FrameValuesLine, which sizes it: the registered pools included).
+		std::vector<PoolLeakWatch> frameValuesPools;
 
 		// CS_DCLF_PERSISTENT_PARITY: view masks (CheckViewMasks, in the builds), taken by the render thread's report.
 		struct ViewMasks

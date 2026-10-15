@@ -30,12 +30,14 @@ namespace DCLF::Reports
 				s.paletteDiffers ? " <- DIFFER; first: " : " <- OK", s.paletteDiffers ? s.paletteFirst : std::string());
 			s = {};
 		}
-		// The five row sets' pools (D6): a frame's acquires and catch-up, the backings made, the census and the journal floor; under
-		// CS_DCLF_PERSISTENT_PARITY, the leased count against the lease-leak bound.
+		// The row sets' pools (D6; the built-in parts', then the features' registered pools): a frame's acquires and catch-up, the backings
+		// made, the census and the journal floor; under CS_DCLF_PERSISTENT_PARITY, the leased count against the lease-leak bound.
 		const bool watch = Diagnostics::Observe().scene;
 		auto& watches = Diagnostics::DrawsState::Get().frameValuesPools;
 		line += "\n[DCLF] frame values' pools (D6):";
 		const auto pools = FrameValues::Get().TakePoolStats();
+		if (watches.size() < pools.size())
+			watches.resize(pools.size());
 		for (std::size_t p = 0; p < pools.size(); ++p) {
 			const auto& pool = pools[p];
 			line += fmt::format("{} {} {:.2f} acquires, {:.1f} runs ({:.1f} KB) caught up a frame, {} made; {} live ({} leased, {} free, {:.1f} MB), floor {}{}", p ? ";" : "",
