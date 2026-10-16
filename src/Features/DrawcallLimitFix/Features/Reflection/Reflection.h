@@ -49,6 +49,9 @@ namespace DCLF::Features::Reflection
 	// callbacks (a face's camera once the engine oriented it, the face drawn).
 	void Prepare(const Api::ViewPointContext& a_context);
 	bool Covered(const Api::ViewCoverage& a_coverage);
+	// The update's cull hidden source (Api::CullHiddenSource, listed with their bits now): the player's third-person 3D and the water
+	// objects' shapes, which TESWaterReflections::Update hides around the cube map's faces.
+	void CullHiddenByUpdate(Api::CullHiddenNodes& a_nodes);
 	void FaceOriented(const RE::NiCamera& a_camera, std::uint32_t a_face);
 	void FaceDrawn();
 

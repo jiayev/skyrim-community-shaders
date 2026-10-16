@@ -318,8 +318,8 @@ namespace DCLF
 		std::vector<std::uint32_t> registeredIndex;                       // the descriptor of each one's frame backing (PoolIndex)
 		std::shared_ptr<const Plan> plan;                              // the newest (its slots and palette capacity)
 		std::uint64_t planSerial = 0;                                  // bumped with every newest plan
-		// The kept set's first-person movers (Kick's samples): every plan applied in order as Kick receives it, as the producers apply it.
-		ankerl::unordered_dense::map<const void*, Plan::Item> firstPersonMovers;
+		// The kept set's root-view movers (the first person's; Kick's samples): every plan applied in order as Kick receives it, as the producers apply it.
+		ankerl::unordered_dense::map<const void*, Plan::Item> rootViewMovers;
 		std::vector<std::shared_ptr<const Plan>> unsampled;           // plans no producer has applied (and sampled the written slots of) yet
 		std::vector<ShadingItem> unsampledShading;        // not yet taken by a producer
 		std::vector<ShadingFieldValue> unsampledFieldValues;
@@ -420,10 +420,10 @@ namespace DCLF
 		std::atomic<std::uint64_t> sampleUs{ 0 }, uploadUs{ 0 }, maxTotalUs{ 0 };
 
 		/**
-		 * @brief A first-person member's rows and palettes, sampled by the render thread at Kick, before Main::Draw moves the
-		 * skeleton into its root's space.
+		 * @brief A root view's member's rows and palettes (the first person's), sampled by the render thread at Kick, before Main::Draw
+		 * moves the skeleton into its root's space.
 		 */
-		struct FirstPersonSample
+		struct RootViewSample
 		{
 			std::uint32_t slot = kNoObjectSlot, layerSlot = kNoObjectSlot, boneOffset = 0, boneRows = 0;
 			BindlessPlacement row{}, layer{};
@@ -454,7 +454,7 @@ namespace DCLF
 			std::vector<RegisteredPart> registered;
 			std::shared_ptr<rhi::TimelinePtr> timeline;
 			std::shared_ptr<org::runtime::IUploadService> uploads;
-			std::vector<FirstPersonSample> firstPerson;  // the render thread's samples (Kick)
+			std::vector<RootViewSample> rootViewSamples;  // the render thread's samples (Kick)
 			// The palette rows classes' frame inputs (their kicks'; by class index - 1).
 			std::array<Api::PaletteRowsInput, Api::kPaletteRowsClasses> paletteInputs{};
 		};
@@ -518,7 +518,7 @@ namespace DCLF
 		};
 		void ListItem(const Plan::Item& a_item, bool a_settles, bool a_mover, std::size_t a_rows, std::size_t a_blocks, std::vector<Listed>& a_items);
 		void MarkSampledRoots();
-		void ApplyFirstPersonSamples(const Job& a_job, const SampleOut& a_out, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked);
+		void ApplyRootViewSamples(const Job& a_job, const SampleOut& a_out, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked);
 		void SampleItems(const Job& a_job, const std::vector<Listed>& a_items, const SampleOut& a_out, std::vector<Changed>& a_changed,
 			std::atomic<std::uint64_t>& a_refused);
 		static void BeginPaletteRuns(const Job& a_job, const std::vector<Listed>& a_items, PaletteRuns& a_runs);
@@ -549,14 +549,14 @@ namespace DCLF
 			const std::string& a_firstPalette, const std::string& a_firstRoot);
 		// Kick's stages (render thread).
 		static void FrameStartRegistered(const std::shared_ptr<const FrameGlobals>& a_globals);
-		void ApplyFirstPersonPlans(const std::vector<std::shared_ptr<const Plan>>& a_plans);
+		void ApplyRootViewPlans(const std::vector<std::shared_ptr<const Plan>>& a_plans);
 		void QueuePlans(std::vector<std::shared_ptr<const Plan>>& a_plans);
 		void LeaseBackings(Job& a_job);
 		void LeasePool(Pool& a_pool, std::string_view a_name, std::uint32_t a_stride, std::uint64_t a_needed, org::services::BackingLease& a_frameLease,
 			org::services::BackingLease& a_jobLease, std::optional<std::uint64_t>& a_oldestContentEpoch);
 		void MakeRegistered();
 		void KickRegistered(Job& a_job, const FrameGlobals* a_globals);
-		void SampleFirstPerson(Job& a_job, const SetSnapshot& a_claims);
+		void SampleRootViews(Job& a_job, const SetSnapshot& a_claims);
 		void Run(const Job& a_job);
 		void Sample(const Job& a_job);
 		void ApplyPlans(const Job& a_job);
@@ -1122,8 +1122,8 @@ namespace DCLF
 			ListItem(item, true, false, slots, blocks, items);
 		MarkSampledRoots();
 		const SampleOut sampleOut{ out, paletteOut };
-		std::uint64_t firstPersonMarked = 0, firstPersonPaletteMarked = 0;
-		ApplyFirstPersonSamples(a_job, sampleOut, firstPersonMarked, firstPersonPaletteMarked);
+		std::uint64_t rootViewMarked = 0, rootViewPaletteMarked = 0;
+		ApplyRootViewSamples(a_job, sampleOut, rootViewMarked, rootViewPaletteMarked);
 		std::vector<Changed> changed((items.size() + kSampleGrain - 1) / kSampleGrain);
 		std::atomic<std::uint64_t> refusedHere{ 0 };
 		SampleItems(a_job, items, sampleOut, changed, refusedHere);
@@ -1133,9 +1133,9 @@ namespace DCLF
 		SampleRoots(sampleOut, rootChanged, rootRefused, refusedHere);
 		std::uint64_t marked = 0, paletteMarked = 0;
 		MarkSampled(changed, rootChanged, rootRefused, marked, paletteMarked);
-		sampled += static_cast<std::uint64_t>(items.size() + a_job.firstPerson.size());
-		rowsChanged += marked + firstPersonMarked;
-		paletteRowsChanged += paletteMarked + firstPersonPaletteMarked;
+		sampled += static_cast<std::uint64_t>(items.size() + a_job.rootViewSamples.size());
+		rowsChanged += marked + rootViewMarked;
+		paletteRowsChanged += paletteMarked + rootViewPaletteMarked;
 		movers += liveMovers;
 		moversDue += dueMovers.size();
 		roots += liveRoots;
@@ -1156,7 +1156,7 @@ namespace DCLF
 		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) { a_entry.sample(a_producer); });
 	}
 
-	// First-person items are the render thread's (FirstPersonSample), except a palette rows class's (particle members, expanded from
+	// First-person items are the render thread's (RootViewSample), except a palette rows class's (particle members, expanded from
 	// snapshots).
 	void FrameValues::Impl::ListItem(const Plan::Item& a_item, bool a_settles, bool a_mover, std::size_t a_rows, std::size_t a_blocks, std::vector<Listed>& a_items)
 	{
@@ -1181,12 +1181,12 @@ namespace DCLF
 					MarkRoot(r);
 	}
 
-	// The render thread's first-person samples (Kick) onto the rows and palettes.
-	void FrameValues::Impl::ApplyFirstPersonSamples(const Job& a_job, const SampleOut& a_out, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked)
+	// The render thread's root-view samples (Kick) onto the rows and palettes.
+	void FrameValues::Impl::ApplyRootViewSamples(const Job& a_job, const SampleOut& a_out, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked)
 	{
 		auto& out = a_out.out;
 		auto& paletteOut = a_out.paletteOut;
-		for (const auto& sample : a_job.firstPerson) {
+		for (const auto& sample : a_job.rootViewSamples) {
 			if (sample.slot >= out.size())
 				continue;
 			if (std::memcmp(&out[sample.slot], &sample.row, sizeof(sample.row)) != 0) {
@@ -1858,8 +1858,8 @@ namespace DCLF
 				entry.frameStart(start);
 	}
 
-	// The kept set's first-person movers, every plan applied in order (the producers apply the same plans to the whole set).
-	void FrameValues::Impl::ApplyFirstPersonPlans(const std::vector<std::shared_ptr<const Plan>>& a_plans)
+	// The kept set's root-view movers, every plan applied in order (the producers apply the same plans to the whole set).
+	void FrameValues::Impl::ApplyRootViewPlans(const std::vector<std::shared_ptr<const Plan>>& a_plans)
 	{
 		for (const auto& applied : a_plans) {
 			if (!applied)
@@ -1869,27 +1869,27 @@ namespace DCLF
 				ReleaseLater(a_item.sunEntryNode);
 			};
 			if (applied->reset) {
-				for (auto& [geometry, item] : firstPersonMovers)
+				for (auto& [geometry, item] : rootViewMovers)
 					release(item);
-				firstPersonMovers.clear();
+				rootViewMovers.clear();
 			}
 			for (const void* geometry : applied->moversLeft)
-				if (const auto it = firstPersonMovers.find(geometry); it != firstPersonMovers.end()) {
+				if (const auto it = rootViewMovers.find(geometry); it != rootViewMovers.end()) {
 					release(it->second);
-					firstPersonMovers.erase(it);
+					rootViewMovers.erase(it);
 				}
 			for (const auto& item : applied->movers) {
 				if (!item.geometry)
 					continue;
-				const auto it = firstPersonMovers.find(item.geometry.get());
-				if (it != firstPersonMovers.end()) {
+				const auto it = rootViewMovers.find(item.geometry.get());
+				if (it != rootViewMovers.end()) {
 					release(it->second);
 					if (item.firstPerson)
 						it->second = item;
 					else
-						firstPersonMovers.erase(it);
+						rootViewMovers.erase(it);
 				} else if (item.firstPerson) {
-					firstPersonMovers.emplace(item.geometry.get(), item);
+					rootViewMovers.emplace(item.geometry.get(), item);
 				}
 			}
 		}
@@ -1964,7 +1964,7 @@ namespace DCLF
 		}
 	}
 
-	void FrameValues::Impl::SampleFirstPerson(Job& a_job, const SetSnapshot& a_claims)
+	void FrameValues::Impl::SampleRootViews(Job& a_job, const SetSnapshot& a_claims)
 	{
 		std::vector<std::uint8_t> taken;
 		// A CategoryRoot view's member (the first person's phase: Extensions::Views, resolved at install).
@@ -1976,7 +1976,7 @@ namespace DCLF
 				taken.resize(a_item.slot + 1, 0);
 			if (std::exchange(taken[a_item.slot], 1))
 				return;
-			auto& sample = a_job.firstPerson.emplace_back();
+			auto& sample = a_job.rootViewSamples.emplace_back();
 			sample.slot = a_item.slot;
 			sample.layerSlot = a_item.layerSlot;
 			SampleItem(a_item, sample.row, sample.layer);
@@ -1994,7 +1994,7 @@ namespace DCLF
 			sample.current.assign(currentRows, currentRows + a_item.boneRows);
 			sample.previous.assign(previousRows, previousRows + a_item.boneRows);
 		};
-		for (const auto& [geometry, item] : firstPersonMovers)
+		for (const auto& [geometry, item] : rootViewMovers)
 			take(item);
 		for (auto it = a_job.written.rbegin(); it != a_job.written.rend(); ++it)
 			for (const auto& item : (*it)->written)
@@ -2014,7 +2014,7 @@ namespace DCLF
 		// Appended after any not yet taken (newest last).
 		s.unsampledShading.insert(s.unsampledShading.end(), std::make_move_iterator(a_shading.begin()), std::make_move_iterator(a_shading.end()));
 		s.unsampledFieldValues.insert(s.unsampledFieldValues.end(), a_fieldValues.begin(), a_fieldValues.end());
-		s.ApplyFirstPersonPlans(a_plans);
+		s.ApplyRootViewPlans(a_plans);
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
 		auto uploads = host ? host->RetainUploads() : nullptr;
@@ -2070,7 +2070,7 @@ namespace DCLF
 		// Claimed first-person members, sampled after the engine's update and before Main::Draw's first-person shift
 		// (FUN_1414cb020), palettes included: the engine draws none of them, so none of its reads see a world-space palette.
 		if (const auto claims = std::exchange(rootViewClaims, nullptr))
-			s.SampleFirstPerson(job, *claims);
+			s.SampleRootViews(job, *claims);
 		if (s.plan)
 			s.plans.emplace_back(seq, s.plan);
 		frameIndex = s.frameLeases[Impl::kPlacements]->srvIndex;

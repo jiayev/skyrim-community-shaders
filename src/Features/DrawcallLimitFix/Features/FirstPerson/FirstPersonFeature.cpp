@@ -74,6 +74,8 @@ namespace DCLF::Features::FirstPerson
 			a_context.RegisterView(Contribution(firstPerson, SwitchValue(decalsSwitch) != "0"));
 			// The view's latch, targets, pipelines and resources, before the coverage that decides whether its members are withheld.
 			a_context.RegisterViewWork({ .view = Api::EngineView::FirstPerson, .point = Api::ViewPoint::FrameStartBeforeCoverage, .run = &BeginFrame });
+			// The skeleton, hidden for every view the scene serves, in the frame's cull-hidden list (whatever the toggle, as Core listed it).
+			a_context.RegisterCullHiddenSource({ .bit = Api::CullHiddenBit::Hidden, .nodes = &CullHiddenSkeleton });
 			// After Features/Particles' and Features/Billboards' lines, where Core printed the view's.
 			a_context.RegisterReportLines({ .name = "first person", .point = Api::ReportPoint::AsyncWork, .text = &Lines });
 			// CS_DCLF_SET_PARITY: the skeleton's slots and claimed phases.

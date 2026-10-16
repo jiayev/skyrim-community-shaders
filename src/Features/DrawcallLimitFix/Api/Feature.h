@@ -155,6 +155,8 @@ namespace DCLF::Api
 		virtual void RegisterViewWork(const ViewWork& a_work) = 0;
 		/** @brief Fails the install for no root or no owned, or a root another contribution or a draw family's faces have. */
 		virtual void RegisterViewRoot(const ViewRootContribution& a_root) = 0;
+		/** @brief Fails the install for no nodes or an unknown bit. */
+		virtual void RegisterCullHiddenSource(const CullHiddenSource& a_source) = 0;
 		/**
 		 * @brief Fails the install for a map another feature has, without a registered toggle or its available flag, with a phase
 		 * or view bit Core or another view has (or none, checked once all are in), or an ImportedTexture map without importTarget.

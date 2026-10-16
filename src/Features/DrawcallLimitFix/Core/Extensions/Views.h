@@ -16,10 +16,12 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RE
 {
+	class NiAVObject;
 	class NiNode;
 }
 
@@ -98,6 +100,20 @@ namespace DCLF::Api
 		EngineView view;
 		const ToggleSet& toggles;
 	};
+
+	/**
+	 * @brief Where a cull hidden source lists its nodes (CullHiddenSource::nodes): the frame's cull-hidden list (FrameGlobals::cullHidden,
+	 * reserved by its capture), and whether the source's nodes are listed hidden (CullHiddenBit::Hidden) or with their bit now.
+	 */
+	class CullHiddenNodes
+	{
+	public:
+		/** @brief a_node listed with the source's bit (null: none). */
+		void Add(const RE::NiAVObject* a_node);
+
+		std::vector<std::pair<const RE::NiAVObject*, bool>>& list;
+		bool hidden = false;
+	};
 }
 
 namespace DCLF::Extensions
@@ -162,6 +178,8 @@ namespace DCLF::Extensions
 		std::array<bool (*)(const Api::ViewRootFrame&), kViewRoots> rootOwned{};
 		// The view root contributions' roots (Api::ViewRootBit; 0: none): a residue watch's roots besides those owned.
 		std::uint32_t rootBits = 0;
+		// The cull hidden sources, in registration order (CollectCullHidden).
+		std::vector<Api::CullHiddenSource> cullHiddenSources;
 		// The view bits by phase are both families' (ViewCommon.h: ResolvedViewBits).
 	};
 
@@ -181,11 +199,17 @@ namespace DCLF::Extensions
 	/**
 	 * @brief Main thread, at the end of InstallFeatures (Registry): the entries resolved from the registered contributions (by view;
 	 * EngineView::Count: none) and the registered work. Fails the install for work on a view no feature took (a phase or view bit a
-	 * contribution shares with Core's or another view's: ResolveViewBits) and the view root contributions (by root; ViewRoot::Count: none).
-	 * Once.
+	 * contribution shares with Core's or another view's: ResolveViewBits), the view root contributions (by root; ViewRoot::Count: none) and
+	 * the cull hidden sources (in registration order). Once.
 	 */
 	void ResolveViews(std::span<const Api::ViewContribution, kEngineViews> a_views, std::span<const Api::ViewWork> a_work,
-		std::span<const Api::ViewRootContribution, kViewRoots> a_roots);
+		std::span<const Api::ViewRootContribution, kViewRoots> a_roots, std::span<const Api::CullHiddenSource> a_cullHidden);
+
+	/**
+	 * @brief Render thread, at the frame's start (FrameGlobals::Capture): every cull hidden source's nodes appended to a_list, in
+	 * registration order (the caller sorts it).
+	 */
+	void CollectCullHidden(std::vector<std::pair<const RE::NiAVObject*, bool>>& a_list);
 
 	/** @brief Whether DCLF draws a_view under a_toggles (its toggle on; false for a view no feature took). */
 	inline bool ViewOn(const ToggleSet& a_toggles, Api::EngineView a_view)
