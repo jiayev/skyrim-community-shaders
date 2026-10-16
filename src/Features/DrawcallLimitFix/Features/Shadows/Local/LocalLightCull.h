@@ -14,13 +14,10 @@ namespace RE
 	class NiNode;
 }
 
-namespace DCLF
-{
-	struct SunExclusion;
-}
-
 namespace DCLF::Features::Shadows::Local
 {
+	struct SunExclusion;
+
 	/**
 	 * @brief The point lights' shadow culls without the entries DCLF draws (drawcall-limit-fix.md, "Point lights' shadow culls
 	 * without DCLF's entries"). AE only. The point lights' culls run on the render thread; the detours and registration hook on any.

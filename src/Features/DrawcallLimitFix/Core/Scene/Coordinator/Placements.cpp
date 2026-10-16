@@ -128,7 +128,7 @@ namespace DCLF::Scene
 	{
 		ResolveSunEntry(a_tracked, *a_geometry);
 		const std::uint32_t slot = a_tracked.slot;
-		PlannedKey key{ a_geometry, slot, slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot, 0, 0, a_tracked.sunEntryNode,
+		PlannedKey key{ a_geometry, slot, slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot, 0, 0, a_tracked.entryRoot,
 			ViewRootEntry(a_tracked.categoryNode), Api::FrameValueItemClass::None };
 		// A skinned record's palette: its block, which the record addresses.
 		if (slot < tables.boneRows.size() && (tables.objects[slot].flags & kObjectPaletteBlock) && tables.boneRows[slot]) {
@@ -149,7 +149,7 @@ namespace DCLF::Scene
 		PlacementPlan::Item item;
 		// Copies of references the scene work holds: the entry's, and its listed root's.
 		item.geometry = a_tracked.geometry;
-		item.sunEntryNode = OwnedRoot(a_tracked.sunEntryNode);
+		item.listedRoot = OwnedRoot(a_tracked.entryRoot);
 		item.slot = key.slot;
 		item.layerSlot = key.layerSlot;
 		item.firstPerson = key.firstPerson;

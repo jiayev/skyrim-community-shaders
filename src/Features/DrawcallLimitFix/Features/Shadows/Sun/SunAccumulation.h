@@ -10,7 +10,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include "Features/DrawcallLimitFix/Api/Settings.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/SunExclusion.h"
 
 namespace DCLF::Features::Shadows::Sun
 {
@@ -158,7 +158,7 @@ namespace DCLF::Features::Shadows::Sun
 		/** @brief The frame's exclusion, as the registration thunks read it. */
 		struct FrameState
 		{
-			std::shared_ptr<SunExclusion> exclusion;  // kept alive until the next full-frustum cull
+			std::shared_ptr<Local::SunExclusion> exclusion;  // kept alive until the next full-frustum cull
 			std::uint32_t stamp = 0;
 			// The cascade culls skip excluded entries they reach anyway (ExcludeSun, SunAccumulation.cpp).
 			bool skipExcluded = true;
@@ -168,7 +168,7 @@ namespace DCLF::Features::Shadows::Sun
 			std::uint32_t cascadesFrame = ~0u;        // the scene frame whose Accumulate captured them
 			std::uint32_t sunBits = 0;                // every cascade's bit
 		};
-		std::shared_ptr<SunExclusion> previousExclusion;  // the last frame's, kept alive for a straggling registration
+		std::shared_ptr<Local::SunExclusion> previousExclusion;  // the last frame's, kept alive for a straggling registration
 		/**
 		 * @brief One full-frustum process while the veto is armed. Its appends come from the one job culling it (and, after the jobs,
 		 * the render thread's), so its counts have one writer at a time; the render thread reads them after the cull.
@@ -182,8 +182,8 @@ namespace DCLF::Features::Shadows::Sun
 			bool givenBack = false;
 		};
 		std::vector<VetoProcess> vetoProcesses;          // written on the render thread before the veto is armed
-		std::shared_ptr<SunExclusion> armedExclusion;     // render thread: the exclusion the armed veto applies
-		std::atomic<const SunExclusion*> vetoExclusion{ nullptr };  // the appends' view of it (null: disarmed)
+		std::shared_ptr<Local::SunExclusion> armedExclusion;     // render thread: the exclusion the armed veto applies
+		std::atomic<const Local::SunExclusion*> vetoExclusion{ nullptr };  // the appends' view of it (null: disarmed)
 		std::uint32_t vetoStamp = 0;                      // written before the veto is armed
 		FrameState frameState;                           // written on the render thread before bitsReady
 		// Set at the end of the sun's Accumulate, cleared when Main::Draw's mask clear returns and at the full-frustum cull: while set,

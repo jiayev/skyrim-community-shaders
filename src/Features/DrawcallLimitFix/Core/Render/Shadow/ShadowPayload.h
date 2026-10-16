@@ -56,7 +56,7 @@ namespace DCLF::Draws
 		// Per mode, the rasterizer states of its views.
 		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
 		// The sun's full-frustum culling processes, as the full-frustum cull (FUN_141511f30) has just used them: an object
-		// whose entry (SceneTables::sunEntryNode) is outside every one is no candidate of the sun's cascade culls. However
+		// whose entry (SceneTables::listedRoot) is outside every one is no candidate of the sun's cascade culls. However
 		// many there are: the sun views' latches name them in a shared region of the latch block (ReserveShadowLatch).
 		std::vector<SunEntryProcess> sunEntryProcesses;
 		// The sun entries DCLF can take out of the cascade culls (the Sun source's accumulation): the build turns them into the next
@@ -144,8 +144,9 @@ namespace DCLF::Draws
 		std::string setWaitingFirst;  // the first, and why
 		// The build ahead also builds the next frame's exclusions, which the epoch publishes; empty for a build made at the epoch,
 		// which builds them at the publish.
-		std::shared_ptr<SunExclusion> sunExclusion;  // from the cascades' mode (BuildSunExclusion)
-		std::shared_ptr<SunExclusion> parabolicExclusion;  // and from the paraboloid mode (the Point source's culls)
+		// The exclusion contribution's own type, opaque here (Api::ShadowExclusionContribution: built by build, handed back by publish).
+		std::shared_ptr<void> sunExclusion;  // from the cascades' mode
+		std::shared_ptr<void> parabolicExclusion;  // and from the paraboloid mode (the Point source's culls)
 
 		void Reset()
 		{

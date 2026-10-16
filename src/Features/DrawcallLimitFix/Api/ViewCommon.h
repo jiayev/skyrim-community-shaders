@@ -14,7 +14,7 @@ namespace DCLF::Api
 	/** @brief The engine points a view's work runs at (render thread, while DCLF runs). */
 	enum class ViewPoint : std::uint8_t
 	{
-		FrameStartBeforeCoverage,  // FrameDriver::BeginFrame, after SyncFrameTables, before SunExclusionSlot::BeginFrame and DecideCoverage
+		FrameStartBeforeCoverage,  // FrameDriver::BeginFrame, after SyncFrameTables, before the shadow exclusion's frame start, Extensions::ShadowExclusionFrameStart and DecideCoverage
 		FrameStartAfterTreeLod,    // FrameDriver::BeginFrame, after DecideDrawFamilies (tree LOD's), before PublishListFilter and FrameValues::Kick
 		DepthCommitted,            // Main::RenderDepth's world-drawn point, right after the depth commit (FrameDriver::DepthCommitted)
 		Count,

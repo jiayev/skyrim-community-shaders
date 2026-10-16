@@ -3,13 +3,15 @@
 // The shadow-view contract (Api::InstallContext::RegisterOcclusionMap, RegisterShadowSource, RegisterShadowExclusion), the view
 // contract's sibling (Api/Views.h): the occlusion maps and the shadow sources that Core's one shadow engine draws (one payload, one set
 // of resources, one latch block and one key group; the occlusion epoch shares the shadow commit), taken by features as data and event
-// callbacks, and the entry exclusions its payload carries. Casters are keyed by the engine's render mode, not by source: the sources own
-// no set phase or view bit.
+// callbacks, and the entry exclusions its payload carries (the contribution's own type, held by Core opaquely). Casters are keyed by the
+// engine's render mode, not by source: the sources own no set phase or view bit.
 
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 #include "Features/DrawcallLimitFix/Api/ViewCommon.h"
 
 #include <cstdint>
+#include <memory>
+#include <span>
 #include <string_view>
 
 namespace DCLF::Api
@@ -126,20 +128,49 @@ namespace DCLF::Api
 	};
 
 	/**
+	 * @brief What the exclusion contribution's listExclusion answers: the sun's pending exclusion as the primary cull's scene-list filter
+	 * reads it (a root out of the lists is out of the sun's cascades only when it takes the root's entry out too). A plain view the
+	 * contribution fills once a call, read by Core per entry directly; held keeps it alive (none: no exclusion pending).
+	 *
+	 * - candidates: the identity of the candidates (Core's EntrySpace) it is a verdict on.
+	 * - excluded: per candidate index, nonzero for an entry it takes out of the cascade culls (its size the entry count).
+	 * - version: changes only when excluded does.
+	 */
+	struct ShadowListExclusion
+	{
+		std::shared_ptr<const void> held;
+		const void* candidates = nullptr;
+		std::span<const std::uint8_t> excluded;
+		std::uint64_t version = 0;
+	};
+
+	/**
 	 * @brief The shadow payload's entry exclusions (one contribution: a second fails the install): the next frame's verdicts on the
 	 * entries DCLF can take out of the engine's culls (the sun's cascade culls, the point lights'), from the candidates and the mode's
-	 * inputs, which Core's shadow epoch publishes for them (SunExclusionSlot, ParabolicExclusionSlot). Without one the payload carries no
-	 * exclusion, and nothing is taken out.
+	 * inputs, which Core's shadow epoch hands back to it (publish) and the contribution keeps for its culls (Features/Shadows/Local's
+	 * SunExclusionSlot, ParabolicExclusionSlot). The exclusions are the contribution's own type: Core holds them opaquely. Without one the
+	 * payload carries no exclusion, and nothing is taken out.
 	 *
 	 * - name: the contribution's (the install's failures).
-	 * - build: the snapshot builder, in the shadow participant's payload (ShadowEngine::BuildPayload) while the shadow withholding is on,
-	 *   once per mode its views used, the Sun source's then the Point source's (a pool task each when both): a_build's exclusion into
-	 *   a_build.result. Per build, never per object.
+	 * - build (required): the snapshot builder, in the shadow participant's payload (ShadowEngine::BuildPayload) while the shadow
+	 *   withholding is on, once per mode its views used, the Sun source's then the Point source's (a pool task each when both): a_build's
+	 *   exclusion into a_build.result. Per build, never per object.
+	 * - publish (required): render thread, once a frame, after the shadow epoch drew (ShadowEngine::NoteShadowEpochDrawn) while the
+	 *   shadow withholding is on: the Sun source's exclusion when its mode drew (the payload's, null: none), then the Point source's while
+	 *   its culls are installed (Extensions::SourceCullsInstalled; null when its mode drew nothing); and the Sun source's null when the
+	 *   frame's set is withdrawn (Scene::FrameView::WithdrawSet).
+	 * - frameStart (required): render thread, once a frame, in the frame driver after the views' FrameStartBeforeCoverage work and before
+	 *   the lookups are installed: the pending exclusions brought to the frame's candidates.
+	 * - listExclusion (required): render thread, once a frame where the primary cull's scene-list filter is judged (and on its report
+	 *   frames): the Sun source's pending exclusion into a_view (left empty: none).
 	 */
 	struct ShadowExclusionContribution
 	{
 		std::string_view name;
 		void (*build)(ShadowExclusionBuild& a_build) = nullptr;
+		void (*publish)(ShadowSource a_source, std::shared_ptr<void> a_exclusion) = nullptr;
+		void (*frameStart)() = nullptr;
+		void (*listExclusion)(ShadowListExclusion& a_view) = nullptr;
 	};
 
 	/**

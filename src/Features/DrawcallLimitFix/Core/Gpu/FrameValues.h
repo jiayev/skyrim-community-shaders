@@ -60,10 +60,10 @@ namespace DCLF
 		static FrameValues& Get();
 
 		/**
-		 * @brief An object's placement row from the engine now: its geometry's transforms and bound, its sun entry node's bound
+		 * @brief An object's placement row from the engine now: its geometry's transforms and bound, its listed root's bound
 		 * (unbounded without one), its fade property's fade node (the layer property for a layer's row).
 		 */
-		static void SampleRow(const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_sunEntryNode, const RE::BSShaderProperty* a_fadeProperty,
+		static void SampleRow(const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_listedRoot, const RE::BSShaderProperty* a_fadeProperty,
 			BindlessPlacement& a_out);
 		/** @brief Render thread (diagnostics): a slot's row from the engine now, by the tables' structure; false for a free slot. */
 		static bool SampleSlot(const SceneTables& a_tables, std::uint32_t a_slot, BindlessPlacement& a_out);

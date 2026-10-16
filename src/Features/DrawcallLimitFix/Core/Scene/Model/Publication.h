@@ -88,7 +88,7 @@ namespace DCLF
 		struct Item
 		{
 			RE::NiPointer<RE::BSGeometry> geometry;
-			RE::NiPointer<RE::NiAVObject> sunEntryNode;  // its sun entry (ResolveSunEntry); none: the entry is unbounded
+			RE::NiPointer<RE::NiAVObject> listedRoot;  // its listed root, the sun entry (ResolveSunEntry); none: the entry is unbounded
 			std::uint32_t slot = kNoObjectSlot;
 			std::uint32_t layerSlot = kNoObjectSlot;  // its layer's row (WriteLayer): the same placement, its layer property's fade node
 			// A skin's palette block (SceneTables::boneOffset, boneRows), 0 rows without one: the engine's palette update, then its
@@ -115,14 +115,14 @@ namespace DCLF
 			bool operator==(const Key&) const = default;
 			static Key Of(const Item& a_item)
 			{
-				return { a_item.geometry.get(), a_item.slot, a_item.layerSlot, a_item.boneOffset, a_item.boneRows, a_item.sunEntryNode.get(), a_item.firstPerson,
+				return { a_item.geometry.get(), a_item.slot, a_item.layerSlot, a_item.boneOffset, a_item.boneRows, a_item.listedRoot.get(), a_item.firstPerson,
 					a_item.itemClass };
 			}
 		};
 		struct Root
 		{
 			RE::NiPointer<RE::NiAVObject> root;
-			std::vector<Item> dependents;  // joined or changed (by geometry); their sun entry is the root's bound (sunEntryNode unused)
+			std::vector<Item> dependents;  // joined or changed (by geometry); their sun entry is the root's bound (listedRoot unused)
 		};
 		/** @brief Parity (the coordinator's full rebuild of the set after this plan): movers by object, roots by node with their dependents, sorted. */
 		struct Check

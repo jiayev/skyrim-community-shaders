@@ -667,12 +667,13 @@ namespace DCLF
 			epochStats.setWaitingFirst = payload.setWaitingFirst;
 		if (PassCapture::ShadowWithholdingEnabled()) {
 			// The cascades' casters decide which sun entries the next frame's cascade culls may skip.
+			// Handed back to the exclusion contribution (Features/Shadows/Local's slots).
 			if (modeUsed[kSunShadowMode])
-				SunExclusionSlot::Get().Publish(payload.sunExclusion);
+				Extensions::PublishShadowExclusion(Api::ShadowSource::Sun, payload.sunExclusion);
 			// Likewise the paraboloids for point-light culls (none when no point light drew: a new light is the engine's), while the Point
 			// source's culls are in to take it.
 			if (Extensions::SourceCullsInstalled(Api::ShadowSource::Point))
-				ParabolicExclusionSlot::Get().Publish(modeUsed[kParabolicShadowMode] ? payload.parabolicExclusion : nullptr);
+				Extensions::PublishShadowExclusion(Api::ShadowSource::Point, modeUsed[kParabolicShadowMode] ? payload.parabolicExclusion : nullptr);
 		}
 		pendingViews.clear();
 	}

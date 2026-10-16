@@ -148,7 +148,7 @@ namespace DCLF
 		return out;
 	}
 
-	void FrameValues::SampleRow(const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_sunEntryNode, const RE::BSShaderProperty* a_fadeProperty,
+	void FrameValues::SampleRow(const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_listedRoot, const RE::BSShaderProperty* a_fadeProperty,
 		BindlessPlacement& a_out)
 	{
 		StoreTransform(a_geometry.world, a_out.world);
@@ -161,7 +161,7 @@ namespace DCLF
 		a_out.bound[1] = a_geometry.worldBound.center.y;
 		a_out.bound[2] = a_geometry.worldBound.center.z;
 		a_out.bound[3] = a_geometry.worldBound.radius;
-		StoreListedRoot(a_sunEntryNode, a_out.sunEntry);
+		StoreListedRoot(a_listedRoot, a_out.sunEntry);
 		StoreFadeNode(a_fadeProperty, a_out.lodFadeNode);
 		StoreForwardSort(a_geometry, a_out.forwardSort);
 		// A billboard's unturned world, base and pivot (BillboardRow.h), sampled regardless of the toggle so rows never depend on it.
@@ -175,7 +175,7 @@ namespace DCLF
 			return false;
 		// A layer's row is its base's placement with its layer property's fade node (WriteLayer).
 		const RE::BSShaderProperty* fadeProperty = a_tables.IsLayer(a_slot) ? LayerPropertyOf(*geometry) : geometry->GetGeometryRuntimeData().shaderProperty.get();
-		SampleRow(*geometry, a_slot < a_tables.sunEntryNode.size() ? a_tables.sunEntryNode[a_slot] : nullptr, fadeProperty, a_out);
+		SampleRow(*geometry, a_slot < a_tables.listedRoot.size() ? a_tables.listedRoot[a_slot] : nullptr, fadeProperty, a_out);
 		return true;
 	}
 
@@ -206,7 +206,7 @@ namespace DCLF
 		void SampleItem(const Plan::Item& a_item, BindlessPlacement& a_row, BindlessPlacement& a_layer)
 		{
 			const auto& geometry = *a_item.geometry;
-			FrameValues::SampleRow(geometry, a_item.sunEntryNode.get(), geometry.GetGeometryRuntimeData().shaderProperty.get(), a_row);
+			FrameValues::SampleRow(geometry, a_item.listedRoot.get(), geometry.GetGeometryRuntimeData().shaderProperty.get(), a_row);
 			if (a_item.layerSlot != kNoObjectSlot) {
 				a_layer = a_row;
 				StoreFadeNode(LayerPropertyOf(geometry), a_layer.lodFadeNode);
@@ -614,7 +614,7 @@ namespace DCLF
 		void ReleaseItem(Plan::Item& a_item)
 		{
 			ReleaseLater(a_item.geometry);
-			ReleaseLater(a_item.sunEntryNode);
+			ReleaseLater(a_item.listedRoot);
 		}
 
 		template <class Index>
@@ -1114,7 +1114,7 @@ namespace DCLF
 			{
 				for (auto& item : items) {
 					EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.geometry)));
-					EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.sunEntryNode)));
+					EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.listedRoot)));
 				}
 			}
 		} handOver{ carried };
@@ -1866,7 +1866,7 @@ namespace DCLF
 				continue;
 			auto release = [](Plan::Item& a_item) {
 				ReleaseLater(a_item.geometry);
-				ReleaseLater(a_item.sunEntryNode);
+				ReleaseLater(a_item.listedRoot);
 			};
 			if (applied->reset) {
 				for (auto& [geometry, item] : rootViewMovers)

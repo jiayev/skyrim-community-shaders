@@ -131,7 +131,7 @@ namespace DCLF::Draws
 	// thread, diagnostics only), which the shadow checks compare with the test BuildDraws makes on the placement row.
 	inline bool OutsideSunEntry(const ShadowInputs& a_in, const SceneTables& a_tables, std::size_t a_object)
 	{
-		const auto* node = a_object < a_tables.sunEntryNode.size() ? a_tables.sunEntryNode[a_object] : nullptr;
+		const auto* node = a_object < a_tables.listedRoot.size() ? a_tables.listedRoot[a_object] : nullptr;
 		if (!node || node->worldBound.radius < 0.0f)
 			return false;
 		const auto& bound = node->worldBound;

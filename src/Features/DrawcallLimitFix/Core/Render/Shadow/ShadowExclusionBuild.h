@@ -2,12 +2,12 @@
 
 // What the shadow exclusion contribution's build is handed (Api::ShadowExclusionContribution, Api/ShadowViews.h): one mode's exclusion
 // build out of the shadow participant's payload (ShadowEngine::BuildPayload), the candidates it judges and the mode's inputs as the
-// payload has them, and the exclusion it answers. Self-contained: the contribution's feature includes it.
+// payload has them, and the exclusion it answers (opaque to Core). Self-contained: the contribution's feature includes it.
 
 #include "Features/DrawcallLimitFix/Api/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EntrySpace.h"
 
 #include <cstdint>
 #include <memory>
@@ -44,7 +44,7 @@ namespace DCLF::Api
 		std::uint64_t membership = 0;           // ShadowPayload::membership of the mode (0 without the kept state)
 		std::uint32_t frameNumber = 0;          // the payload's inputs' frame
 		std::uint32_t tablesGeneration = 0;     // and tables generation
-		std::shared_ptr<SunExclusion> result;   // the build's answer (null: none)
+		std::shared_ptr<void> result;           // the build's answer, the contribution's own type (null: none)
 
 		/** @brief The paraboloid mode's (the Point source's culls' reach words). */
 		bool Paraboloid() const { return source == ShadowSource::Point; }

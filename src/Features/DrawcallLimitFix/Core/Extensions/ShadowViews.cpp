@@ -73,8 +73,12 @@ namespace DCLF::Extensions
 				set.sources[s] = { true, a_sources[s].camera, a_sources[s].lightKept, a_sources[s].fullFrustumWindowEnd, a_sources[s].frameStart,
 					a_sources[s].frameEnd };
 		}
-		if (!a_exclusion.name.empty())
+		if (!a_exclusion.name.empty()) {
 			set.exclusion = a_exclusion.build;
+			set.exclusionPublish = a_exclusion.publish;
+			set.exclusionFrameStart = a_exclusion.frameStart;
+			set.listExclusion = a_exclusion.listExclusion;
+		}
 		DeriveShadowOrders(set);
 		Detail::resolvedShadowViews = std::move(set);
 	}

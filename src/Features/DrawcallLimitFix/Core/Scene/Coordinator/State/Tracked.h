@@ -120,8 +120,11 @@ namespace DCLF::Scene
 			std::uint32_t objectId = 0;
 			// Its persistent object slot (objectId's value while it keeps a record), kNoObjectSlot while it has none.
 			std::uint32_t slot = kNoObjectSlot;
-			// The node whose bound decides sun caster candidacy, resolved once (the graph above a tracked geometry is fixed).
-			const RE::NiAVObject* sunEntryNode = nullptr;
+			// Its entry's root: the node whose bound decides sun caster candidacy, resolved once (the graph above a tracked geometry is fixed;
+			// ResolveSunEntry), the tables' listedRoot column. Kept apart from listedRoot below (the rootDependents key, this one while
+			// listed): that one is cleared when the entry is unlisted, and ResolveSunEntry (also called by the walk's write and the
+			// placements) sets this one without listing it.
+			const RE::NiAVObject* entryRoot = nullptr;
 			bool sunEntryResolved = false;
 			// Its light entry (LightEntryOf), listed in lightDependents while tracked; null: none.
 			const RE::NiAVObject* lightRoot = nullptr;
@@ -152,8 +155,8 @@ namespace DCLF::Scene
 			// the first-person switch's hide of the third-person skeleton is lost).
 			std::vector<const RE::NiAVObject*> hiddenChain;
 			bool hiddenEventOwed = false;
-			// The keys it is listed under: its shader and alpha properties in propertyDependents (the last evaluation's), its sun entry
-			// node in rootDependents (while tracked).
+			// The keys it is listed under: its shader and alpha properties in propertyDependents (the last evaluation's), its entry root
+			// (entryRoot) in rootDependents (while tracked).
 			const void* listedProperty = nullptr;
 			const void* listedAlpha = nullptr;
 			const void* listedEmittance = nullptr;  // external emittance's shared colour (emittanceEvents)

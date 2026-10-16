@@ -1,10 +1,10 @@
 // The entry exclusions (see the header): their translations to later candidates, and their slots.
 
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/SunExclusion.h"
 
 #include <algorithm>
 
-namespace DCLF
+namespace DCLF::Features::Shadows::Local
 {
 	SunExclusionSlot& SunExclusionSlot::Get()
 	{
@@ -61,7 +61,7 @@ namespace DCLF
 				flipped = true;
 			}
 		out->excludedCount = count;
-		// Versions of translated copies are apart from the builds' (ShadowBuild.cpp counts from 1).
+		// Versions of translated copies are apart from the builds' (ExclusionBuild.cpp counts from 1).
 		static std::atomic<std::uint64_t> translatedVersions{ 0 };
 		out->version = a_newVersion && flipped ? (1ull << 63) | (translatedVersions.fetch_add(1, std::memory_order_relaxed) + 1) : a_exclusion->version;
 		out->builtFrame = a_exclusion->builtFrame;

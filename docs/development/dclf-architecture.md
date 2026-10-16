@@ -134,7 +134,9 @@ elsewhere (2026-10-14; the record is dclf-async-publication.md, "Polls become ev
     family only when `pipelinesStamp` moves.
 -   **Exclusions.** The exclusion build (the shadow exclusion contribution, Features/Shadows/Local's `ExclusionBuild`, called by the
     shadow participant's payload) republishes the same sun exclusion while nothing it was judged from moved, and links each
-    one forward to later candidates (`ForwardExclusion`). The full-frustum entry exclusion is a veto at insertion
+    one forward to later candidates (`ForwardExclusion`). The exclusions are the contribution's type and slots (`SunExclusion.h`): Core's
+    payload holds them opaquely, hands them back through its `publish`, and its scene-list filter reads the sun's pending one through
+    `listExclusion`'s plain view. The full-frustum entry exclusion is a veto at insertion
     (`BSGeometryListCullingProcess::AppendNonAccum`, vtable slot 0x19), not a walk after the cull.
 -   **Visibility decode.** `PrepareWrites` visits only the slots an event, the expiry list, the change log, the fade-root
     journal or the candidate log names (`VisibilityDecode`).

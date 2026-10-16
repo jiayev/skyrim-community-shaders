@@ -11,16 +11,17 @@
 // (the point lights' bits, LocalLightCull::NoteMainRegistration, a static call per main registration: so this feature DEPENDS on
 // Shadows/Local and is listed after it). Without this feature the point lights' culls stay off (LocalLightCull's install warns, at the
 // Point source's hooks), as when the call sites fail their check.
+// The exclusion it applies is Features/Shadows/Local's (SunExclusionSlot, over Core's EntrySpace; built by its ExclusionBuild, one build for
+// the sun's and the paraboloids', handed back by the shadow epoch through the exclusion contribution's publish, forwarded by its frameStart).
 // Its report lines are the accumulation's and the entry exclusion's (Api::ReportPoint::RenderThread), and its parity is its own
 // (Diagnostics/): the sun views' line, the accumulation's cascades against the cascade culls' and the entry rule's planes against the
 // full-frustum processes', under CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY, and the exclusion's watch (SunCasters) under
 // CS_DCLF_PERSISTENT_PARITY.
 //
 // Core keeps the shadow engine: the shadow epoch and its capability and captures, the views list and the camera math
-// (Core/Render/Shadow/ShadowCameras.h), the views' tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally),
-// the exclusion its shadow epoch publishes and the frame start forwards (SunExclusionSlot, over Core's EntrySpace; built by
-// Features/Shadows/Local's ExclusionBuild, one build for the sun's and the paraboloids'), the caster phases, view bits and modes, and the shadows' and primary exclusion's toggles. The source owns no phase or view bit; its switches and toggles are the
-// accumulation's (CS_DCLF_SUN_SKIP, "skip sun accumulation") and the entry exclusion's (CS_DCLF_SUN_EXCLUDE, "exclude sun entries"),
+// (Core/Render/Shadow/ShadowCameras.h), the views' tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally), the caster
+// phases, view bits and modes, and the shadows' and primary exclusion's toggles. The source owns no phase or view bit; its switches and
+// toggles are the accumulation's (CS_DCLF_SUN_SKIP, "skip sun accumulation") and the entry exclusion's (CS_DCLF_SUN_EXCLUDE, "exclude sun entries"),
 // listed where Core's were, after the shadows'; Core's "exclude primary entries" needs the second by name, so without this feature it
 // never takes effect. Included by the feature's sources only.
 

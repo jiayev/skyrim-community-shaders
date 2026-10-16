@@ -12,7 +12,7 @@
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EntrySpace.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
