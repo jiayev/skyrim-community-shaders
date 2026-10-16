@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/SunVolume.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -684,21 +685,12 @@ namespace DCLF
 		in.frameNumber = Scene::FrameView::Get().GetFrame();
 		in.modeUsed = a_modeUsed;
 		in.modeRasterStates = a_modeRasterStates;
-		// The sun's full-frustum planes (kCullSunEntry), DCLF's as UpdateCamera set up each process (ShadowCameras::Sun): this frame's at the
-		// shadow epoch, last frame's for the build ahead (posted before this frame's UpdateCamera), as the engine held them there.
-		if (const auto& sunViews = ShadowCameras::Sun();
-			sunViews.valid && (sunViews.sceneFrame == in.frameNumber || sunViews.sceneFrame + 1 == in.frameNumber) && !sunViews.fullFrusta.empty()) {
-			for (const auto& mine : sunViews.fullFrusta) {
-				auto& out = in.sunEntryProcesses.emplace_back();
-				for (std::uint32_t p = 0; p < 6; ++p)
-					for (std::uint32_t i = 0; i < 4; ++i)
-						out.planes[p][i] = mine.plane[p][i];
-				out.mask = mine.mask;
-			}
-			Diagnostics::Notify(Diagnostics::SunEntryPlanesTaken{ in.frameNumber, true });
-		} else {
-			Diagnostics::Notify(Diagnostics::SunEntryPlanesTaken{ in.frameNumber, false });
-		}
+		// The sun's full-frustum planes (kCullSunEntry), DCLF's as UpdateCamera set up each process (Api::SunVolumeContribution: Features/
+		// Shadows/Sun's Sun board): this frame's at the shadow epoch, last frame's for the build ahead (posted before this frame's
+		// UpdateCamera), as the engine held them there.
+		Api::SunEntryPlanesSink entryPlanes(in.sunEntryProcesses);
+		const bool entryPlanesTaken = Extensions::SampleSunEntryPlanes(entryPlanes, in.frameNumber);
+		Diagnostics::Notify(Diagnostics::SunEntryPlanesTaken{ in.frameNumber, entryPlanesTaken });
 		in.sunCandidates = Scene::FrameView::Get().GetSunCandidates();
 		in.lightCandidates = Scene::FrameView::Get().GetLightCandidates();
 		// The versioned buffers' addresses and SRV indices are the sealed set's (BuildSnapshotDraws: AddressesOf).

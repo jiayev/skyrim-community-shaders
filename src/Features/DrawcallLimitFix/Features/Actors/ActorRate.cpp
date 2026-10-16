@@ -9,14 +9,17 @@
 // entry exclusion keeps out of the cascade culls.
 //
 // Main thread at Main::Update's entry (no job runs; gFrameCounter is this frame's until Renderer::End): DCLF's verdict per high actor is
-// its 3D's world bound inside any of the last scene frame's shadow views (the Sun board's cascade culls, the Lights board's local views) -
-// the views DCLF draws, from the cameras the engine set up, no cull result read. The property of every actor with that verdict is stamped.
+// its 3D's world bound inside any of the last scene frame's shadow views (the Sun board's cascade culls, the Lights board's local views:
+// Features/Shadows/Sun's and Features/Shadows/Local's, DEPENDS) - the views DCLF draws, from the cameras the engine set up, no cull result
+// read. The property of every actor with that verdict is stamped.
 
 #include "Features/DrawcallLimitFix/Features/Actors/Actors.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/LightViews.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunViews.h"
 
 #include <array>
 #include <atomic>
@@ -65,7 +68,7 @@ namespace DCLF::Features::Actors
 			const std::uint32_t counter = Engine::Global<std::uint32_t>(kFrameCounter);
 			// The last scene frame's shadow views (the frame whose stamps the engine left): the sun's cascade culls, the local lights' views.
 			const std::uint32_t sceneFrame = Scene::FrameView::Get().GetFrame();
-			const auto& sun = ShadowCameras::Sun();
+			const auto& sun = Shadows::Sun::SunBoard();
 			const bool sunViews = sun.valid && sun.sceneFrame == sceneFrame;
 			for (const auto& handle : lists->highActorHandles) {
 				const auto actor = handle.get();
@@ -83,15 +86,15 @@ namespace DCLF::Features::Actors
 				// DCLF's verdict: the 3D's bound inside a shadow view of the last scene frame.
 				const auto& bound = root->worldBound;
 				bool inSun = false, inLocal = false;
-				// The sun: the cascade culls walk what the full-frustum cull kept (ShadowCameras::SunFrame::fullFrusta), then test their own planes.
+				// The sun: the cascade culls walk what the full-frustum cull kept (Shadows::Sun::SunFrame::fullFrusta), then test their own planes.
 				bool inFull = sun.fullFrusta.empty();
 				for (const auto& planes : sun.fullFrusta)
 					inFull = inFull || SphereInside(planes, bound.center, bound.radius);
 				if (sunViews && inFull)
-					for (std::uint32_t i = 0; i < sun.count && i < ShadowCameras::SunFrame::kMaxCascades && !inSun; ++i)
+					for (std::uint32_t i = 0; i < sun.count && i < Shadows::Sun::SunFrame::kMaxCascades && !inSun; ++i)
 						inSun = sun.cascades[i].valid && SphereInside(sun.cascades[i].cull, bound.center, bound.radius);
 				if (!inSun)
-					ShadowCameras::Lights().ForEachView(sceneFrame, [&](const ShadowCameras::Camera& a_view, const std::array<float, 4>& a_sphere) {
+					Shadows::Local::LightsBoard().ForEachView(sceneFrame, [&](const ShadowCameras::Camera& a_view, const std::array<float, 4>& a_sphere) {
 						// A spot light's view: its cull planes; a point light's (no planes): the bound within the light's radius.
 						if (inLocal)
 							return;

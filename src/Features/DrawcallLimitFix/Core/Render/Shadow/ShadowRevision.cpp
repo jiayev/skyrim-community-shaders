@@ -4,9 +4,29 @@
 // render thread, its revision inputs and its part of the ahead context.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowExclusionBuild.h"
 
 namespace DCLF
 {
+	namespace
+	{
+		/**
+		 * @brief A mode's exclusion from a_payload (Api::ShadowExclusionContribution: Features/Shadows/Local's builder and caches), over
+		 * a_candidates. Null without the contribution.
+		 */
+		std::shared_ptr<SunExclusion> BuildExclusion(Api::ShadowSource a_source, const std::shared_ptr<const EntrySpace>& a_candidates,
+			const ShadowPayload& a_payload, std::uint32_t a_mode, const SceneTables& a_tables)
+		{
+			Api::ShadowExclusionBuild build(a_source, a_candidates, a_tables, a_payload.regionInputs, a_payload.inputList);
+			build.modeBits = a_payload.modeBits[a_mode];
+			build.membership = a_payload.kept ? a_payload.membership[a_mode] : 0;
+			build.frameNumber = a_payload.inputs.frameNumber;
+			build.tablesGeneration = a_payload.inputs.tablesGeneration;
+			Extensions::BuildShadowExclusion(build);
+			return std::move(build.result);
+		}
+	}
+
 	void ShadowEngine::RequireSequences(RevisionMake& a_make, GrowthBuild& a_build)
 	{
 		auto& producer = a_make.producer.producer;
@@ -276,13 +296,13 @@ namespace DCLF
 		if (PassCapture::ShadowWithholdingEnabled()) {
 			ZoneScopedN("CS.DCLF.BuildShadow.Exclusions");
 			const auto exclusionsStart = std::chrono::steady_clock::now();
-			// The sun's and the paraboloid lights' exclusions read the payload and each its own cache: two pool tasks.
+			// The sun's and the paraboloid lights' exclusions read the payload and each its own cache (the contribution's): two pool tasks.
 			const bool sun = in.modeUsed[kSunShadowMode], parabolic = in.modeUsed[kParabolicShadowMode];
 			const auto exclusion = [&](std::size_t a_which) {
 				if (a_which == 0 && sun)
-					payload->sunExclusion = BuildSunExclusion(in.sunCandidates, *payload, kSunShadowMode, tables, &sunExclusionCache);
+					payload->sunExclusion = BuildExclusion(Api::ShadowSource::Sun, in.sunCandidates, *payload, kSunShadowMode, tables);
 				else if (a_which == 1 && parabolic)
-					payload->parabolicExclusion = BuildSunExclusion(in.lightCandidates, *payload, kParabolicShadowMode, tables, &parabolicExclusionCache);
+					payload->parabolicExclusion = BuildExclusion(Api::ShadowSource::Point, in.lightCandidates, *payload, kParabolicShadowMode, tables);
 			};
 			if (sun && parabolic && !Policy::SerialFanout()) {
 				SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildShadow.Exclusions", 2, 1, [&](std::size_t a_begin, std::size_t a_end) {

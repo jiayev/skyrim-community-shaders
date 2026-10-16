@@ -1,9 +1,10 @@
-// FocusViews: the BSShadowDirectionalLight::sub detour (render thread) and the focus views it records (ShadowCameras::Focus), and the
-// engine's focus targets.
+// FocusViews: the BSShadowDirectionalLight::sub detour (render thread) and the focus views it records (FocusBoard), the Focus source's
+// camera over them, and the engine's focus targets.
 
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/FocusViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
@@ -33,6 +34,19 @@ namespace DCLF::Features::Shadows::Local
 		return Engine::At<const RE::NiAVObject*>(targets, std::size_t(a_index) * 16 + 8);
 	}
 
+	FocusFrame& FocusBoard()
+	{
+		static FocusFrame frame;
+		return frame;
+	}
+
+	void FocusCamera(Api::ShadowSourceCamera& a_camera)
+	{
+		const auto& board = FocusBoard();
+		a_camera.camera = board.CascadeOf(a_camera.light, a_camera.descriptor, a_camera.sceneFrame);
+		a_camera.focusTarget = board.TargetOf(a_camera.descriptor, a_camera.sceneFrame);
+	}
+
 	FocusViews& FocusViews::Get()
 	{
 		static FocusViews instance;
@@ -41,7 +55,7 @@ namespace DCLF::Features::Shadows::Local
 
 	void FocusViews::Update(const RE::BSShadowLight* a_light)
 	{
-		auto& board = ShadowCameras::Focus();
+		auto& board = FocusBoard();
 		auto& hosts = board.hosts;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		if (frame != board.sceneFrame) {
@@ -51,11 +65,11 @@ namespace DCLF::Features::Shadows::Local
 			board.sceneFrame = frame;
 		}
 		// The targets as sub read them.
-		constexpr std::uint32_t kMaxFocus = ShadowCameras::FocusFrame::kMaxFocus;
+		constexpr std::uint32_t kMaxFocus = FocusFrame::kMaxFocus;
 		const std::uint32_t targetCount = board.targetCount = std::min(EngineFocusTargetCount(), kMaxFocus);
 		for (std::uint32_t i = 0; i < kMaxFocus; ++i)
 			board.targets[i] = i < targetCount ? EngineFocusTarget(i) : nullptr;
-		ShadowCameras::FocusFrame::Host* host = nullptr;
+		FocusFrame::Host* host = nullptr;
 		for (auto& existing : hosts)
 			if (existing.light == a_light)
 				host = &existing;

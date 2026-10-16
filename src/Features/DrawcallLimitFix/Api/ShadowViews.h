@@ -1,9 +1,10 @@
 #pragma once
 
-// The shadow-view contract (Api::InstallContext::RegisterOcclusionMap, RegisterShadowSource), the view contract's sibling
-// (Api/Views.h): the occlusion maps and the shadow sources that Core's one shadow engine draws (one payload, one set of resources,
-// one latch block and one key group; the occlusion epoch shares the shadow commit), taken by features as data and event callbacks.
-// Casters are keyed by the engine's render mode, not by source: the sources own no set phase or view bit.
+// The shadow-view contract (Api::InstallContext::RegisterOcclusionMap, RegisterShadowSource, RegisterShadowExclusion), the view
+// contract's sibling (Api/Views.h): the occlusion maps and the shadow sources that Core's one shadow engine draws (one payload, one set
+// of resources, one latch block and one key group; the occlusion epoch shares the shadow commit), taken by features as data and event
+// callbacks, and the entry exclusions its payload carries. Casters are keyed by the engine's render mode, not by source: the sources own
+// no set phase or view bit.
 
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 #include "Features/DrawcallLimitFix/Api/ViewCommon.h"
@@ -19,6 +20,9 @@ namespace DCLF::Api
 	class OcclusionCamera;
 	class OcclusionAccumulator;
 	class ShadowLightKept;
+	class ShadowSourceCamera;
+	// Core-defined (Core/Render/Shadow/ShadowExclusionBuild.h): what the exclusion contribution's build is handed.
+	class ShadowExclusionBuild;
 
 	/**
 	 * @brief An occlusion map: a view of the precipitation accumulator (render mode 0x1C) the engine would fill by culling the scene
@@ -95,10 +99,13 @@ namespace DCLF::Api
 	};
 	/**
 	 * @brief A shadow source contribution: the source's views are drawn while it is registered (a view of a source none registered stays
-	 * the engine's). Its cameras are the feature's to compute, into Core's boards (Core/Render/Shadow/ShadowCameras.h), from its
-	 * Feature::sourceHooks (called with the source, in ShadowSource order: the Sun's, the Spot's with Features/LocalLights' light
-	 * selection, then the others').
+	 * the engine's). Its cameras are the feature's to compute (with Core's camera math, Core/Render/Shadow/ShadowCameras.h), into its own
+	 * boards, from its Feature::sourceHooks (called with the source, in ShadowSource order: the Sun's, the Spot's with Features/LocalLights'
+	 * light selection, then the others'), and to hand Core through camera.
 	 *
+	 * - camera (required): render thread, per view of the source the shadow views' capture takes (and per descriptor of a kept light the
+	 *   light volumes' sample reads, Extensions::SourceCamera): DCLF's camera for a_camera's view (its light, descriptor and scene frame),
+	 *   null when it has none this frame; a Focus view's also its target's node (the casters' root).
 	 * - lightKept (Spot and Point, required): render thread, at the end of the light selection, once per kept light of the source's kind,
 	 *   in the selection's order.
 	 * - fullFrustumWindowEnd (Sun, required; none for the others): render thread, once a frame, after the main camera's full-frustum cull call site
@@ -111,10 +118,28 @@ namespace DCLF::Api
 	struct ShadowSourceContribution
 	{
 		ShadowSource source = ShadowSource::Count;
+		void (*camera)(ShadowSourceCamera& a_camera) = nullptr;
 		void (*lightKept)(const ShadowLightKept& a_light) = nullptr;
 		bool (*fullFrustumWindowEnd)() = nullptr;
 		void (*frameStart)(std::uint32_t a_frame) = nullptr;
 		void (*frameEnd)() = nullptr;
+	};
+
+	/**
+	 * @brief The shadow payload's entry exclusions (one contribution: a second fails the install): the next frame's verdicts on the
+	 * entries DCLF can take out of the engine's culls (the sun's cascade culls, the point lights'), from the candidates and the mode's
+	 * inputs, which Core's shadow epoch publishes for them (SunExclusionSlot, ParabolicExclusionSlot). Without one the payload carries no
+	 * exclusion, and nothing is taken out.
+	 *
+	 * - name: the contribution's (the install's failures).
+	 * - build: the snapshot builder, in the shadow participant's payload (ShadowEngine::BuildPayload) while the shadow withholding is on,
+	 *   once per mode its views used, the Sun source's then the Point source's (a pool task each when both): a_build's exclusion into
+	 *   a_build.result. Per build, never per object.
+	 */
+	struct ShadowExclusionContribution
+	{
+		std::string_view name;
+		void (*build)(ShadowExclusionBuild& a_build) = nullptr;
 	};
 
 	/**

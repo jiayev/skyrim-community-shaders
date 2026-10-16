@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunViews.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -15,9 +16,9 @@ namespace DCLF::Features::Shadows::Sun
 	{
 		void CheckSunEntryPlanes(const Diagnostics::SunEntryPlanesTaken& a_taken)
 		{
-			// The processes' own planes after the full-frustum cull against DCLF's (the Sun board, ShadowCameras::Sun), which the entry rule tests.
+			// The processes' own planes after the full-frustum cull against DCLF's (the Sun board, SunBoard), which the entry rule tests.
 			auto& tally = Diagnostics::ShadowViewTally(Diagnostics::ShadowView::Sun);
-			const auto& sunViews = ShadowCameras::Sun();
+			const auto& sunViews = SunBoard();
 			if (!a_taken.taken) {
 				++tally.missing;
 				tally.Note("missing full frustum", 0.0f, fmt::format("inputs of frame {}, DCLF's views of frame {} (valid {}, {} processes)", a_taken.frame,

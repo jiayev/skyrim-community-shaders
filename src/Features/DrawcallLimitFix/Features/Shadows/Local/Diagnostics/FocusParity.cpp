@@ -60,7 +60,7 @@ namespace DCLF::Features::Shadows::Local
 				members.registrations, members.outside, members.outside ? " <- FOCUS MEMBERS" : " <- OK", members.first.empty() ? std::string() : "; first: " + members.first);
 		}
 
-		void FocusFrame(const Diagnostics::On<Diagnostics::EnginePoint::FocusViewsFrame>&)
+		void OnFocusFrame(const Diagnostics::On<Diagnostics::EnginePoint::FocusViewsFrame>&)
 		{
 			if (focusWindow.Tick())
 				FocusViewsLines();
@@ -89,7 +89,7 @@ namespace DCLF::Features::Shadows::Local
 
 	void SubscribeFocusParity()
 	{
-		Diagnostics::Subscribe<Diagnostics::EnginePoint::FocusViewsFrame>(FocusFrame);
+		Diagnostics::Subscribe<Diagnostics::EnginePoint::FocusViewsFrame>(OnFocusFrame);
 		Diagnostics::Subscribe<Diagnostics::FocusRegistration>(FocusRegistered);
 	}
 }

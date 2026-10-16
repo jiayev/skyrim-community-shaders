@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunViews.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -344,7 +345,7 @@ namespace DCLF::Features::Shadows::Sun
 				for (std::uint32_t i = 0; i < call.count; ++i) {
 					auto& cascade = self.frameState.cascades[i];
 					cascade = {};
-					if (const auto* mine = ShadowCameras::Sun().CascadeOf(call.descriptors[i], frame)) {
+					if (const auto* mine = SunBoard().CascadeOf(call.descriptors[i], frame)) {
 						cascade.planes = mine->cull.plane;
 						cascade.planeMask = mine->cull.mask;
 						cascade.customPlanes = mine->caster.plane;

@@ -1,10 +1,11 @@
 #pragma once
 
-// The shadow-view contributions' Core side (Api/ShadowViews.h): each occlusion map's and shadow source's entry, resolved once at
-// InstallFeatures (ResolveShadowViews) from the features' registrations, and what the shadow engine derives from them for its
-// per-object and per-frame paths (each mode's set phase, the set decision's readiness order, the source of each engine view kind, the
-// maps' import order). The shadow capability, the captures, both shadow epochs, the set decisions, the classification and the reports
-// read them as data; the contexts the callbacks are handed are defined here.
+// The shadow-view contributions' Core side (Api/ShadowViews.h): each occlusion map's and shadow source's entry and the exclusion
+// contribution's, resolved once at InstallFeatures (ResolveShadowViews) from the features' registrations, and what the shadow engine
+// derives from them for its per-object and per-frame paths (each mode's set phase, the set decision's readiness order, the source of each
+// engine view kind, the maps' import order). The shadow capability, the captures, both shadow epochs, the set decisions, the
+// classification and the reports read them as data; the contexts the callbacks are handed are defined here (but the exclusion build's,
+// Core/Render/Shadow/ShadowExclusionBuild.h).
 
 #include "Features/DrawcallLimitFix/Api/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -21,8 +22,14 @@ struct ID3D11DepthStencilView;
 namespace RE
 {
 	class BSShadowLight;
+	class NiAVObject;
 	class NiCamera;
 	class BSShaderAccumulator;
+}
+
+namespace DCLF::ShadowCameras
+{
+	struct Camera;
 }
 
 namespace DCLF::Api
@@ -79,6 +86,20 @@ namespace DCLF::Api
 		const RE::BSShadowLight* light = nullptr;
 		std::uint32_t sceneFrame = 0;
 	};
+
+	/**
+	 * @brief What a source's camera is handed: a view (its light, its descriptor, the scene frame), and what it answers: DCLF's camera
+	 * for the view (null: none this frame) and, a focus view's, its target's node (null: past the targets).
+	 */
+	class ShadowSourceCamera
+	{
+	public:
+		const RE::BSShadowLight* light = nullptr;
+		std::uint32_t descriptor = 0;
+		std::uint32_t sceneFrame = 0;
+		const ShadowCameras::Camera* camera = nullptr;
+		const RE::NiAVObject* focusTarget = nullptr;
+	};
 }
 
 namespace DCLF::Extensions
@@ -111,6 +132,7 @@ namespace DCLF::Extensions
 	struct ShadowSourceEntry
 	{
 		bool registered = false;
+		void (*camera)(Api::ShadowSourceCamera&) = nullptr;  // Registry refused a source without it
 		void (*lightKept)(const Api::ShadowLightKept&) = nullptr;
 		bool (*fullFrustumWindowEnd)() = nullptr;  // the Sun's: Registry refused a Sun source without it
 		void (*frameStart)(std::uint32_t) = nullptr;
@@ -121,6 +143,7 @@ namespace DCLF::Extensions
 	{
 		std::array<OcclusionMapEntry, kOcclusionMaps> maps;
 		std::array<ShadowSourceEntry, kShadowSources> sources;
+		void (*exclusion)(Api::ShadowExclusionBuild&) = nullptr;  // the exclusion contribution's build (none: no exclusion)
 		std::uint8_t occluderPhases = 0;     // the registered maps' phases
 		std::uint32_t occluderViewBits = 0;  // and their view bits
 		// Each mode's set phase (SetPhaseOfMode for the caster modes, the map's for an occlusion mode: 0 for a map none takes).
@@ -150,11 +173,30 @@ namespace DCLF::Extensions
 	/** @brief Any thread, after InstallFeatures: a_source's entry. */
 	inline const ShadowSourceEntry& ShadowSourceOf(Api::ShadowSource a_source) { return ShadowViewsSet().sources[static_cast<std::size_t>(a_source)]; }
 	/**
+	 * @brief Render thread: a_source's camera for a_request's view (ShadowSourceContribution::camera), also in a_request.camera; null
+	 * for a source none registered.
+	 */
+	inline const ShadowCameras::Camera* SourceCamera(Api::ShadowSource a_source, Api::ShadowSourceCamera& a_request)
+	{
+		if (const auto& source = ShadowSourceOf(a_source); source.camera)
+			source.camera(a_request);
+		return a_request.camera;
+	}
+	/**
+	 * @brief The snapshot builder, in the shadow participant's payload: a_build's exclusion into a_build.result (the exclusion
+	 * contribution's build; nothing without one).
+	 */
+	inline void BuildShadowExclusion(Api::ShadowExclusionBuild& a_build)
+	{
+		if (const auto exclusion = ShadowViewsSet().exclusion)
+			exclusion(a_build);
+	}
+	/**
 	 * @brief Main thread, in InstallFeatures (Registry), after the features' installs: the entries from the registered contributions (by
-	 * map and source; Count: none). Once.
+	 * map and source; Count: none; the exclusion's, no name: none). Once.
 	 */
 	void ResolveShadowViews(std::span<const Api::OcclusionMapContribution, kOcclusionMaps> a_maps,
-		std::span<const Api::ShadowSourceContribution, kShadowSources> a_sources);
+		std::span<const Api::ShadowSourceContribution, kShadowSources> a_sources, const Api::ShadowExclusionContribution& a_exclusion);
 	/**
 	 * @brief Main thread, from the source's hooks on (InstallSourceHooks): whether a_source's feature installed its engine culls' hooks
 	 * (Api::ShadowSourceHooks::CullsInstalled; Features/Shadows/Local's point culls install only after the Sun's).

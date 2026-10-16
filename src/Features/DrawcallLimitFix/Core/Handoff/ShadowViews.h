@@ -129,6 +129,44 @@ namespace DCLF
 	std::uint32_t ShadowModeBits(std::uint32_t a_renderMode);
 
 	/**
+	 * @brief The selection's slots: shadowLightsAccum as DCLF's light selection fills it (CalculateActiveShadowCasterLights ported:
+	 * Features/LocalLights' selection), the array GetShadowCasterLightArrayEntry indexes: the sun per slot, then the lights (null: a slot a
+	 * light took but did not fill); and the focus shadows' hosts (the drawn lights with the focus flag) and the focus views each draws. The
+	 * spans are into the selection's own frame, which stays put until its next selection, which invalidates the board first.
+	 *
+	 * The views list's input (ShadowViews::LightSlots, Core's: the list is built from it), which the selection publishes. Render thread:
+	 * invalidated at the selection's start and published at its end (an early return leaves it invalid), read by the shadow views' rebuild
+	 * later in the frame.
+	 */
+	struct LightSlotFrame
+	{
+		std::uint32_t sceneFrame = ~0u;
+		std::span<const RE::BSShadowLight* const> slots;
+		std::span<const RE::BSShadowLight* const> focusHosts;
+		std::uint32_t focusCount = 0;  // the focus views each host draws (the targets, at most 4)
+		bool valid = false;
+
+		void Invalidate()
+		{
+			valid = false;
+			slots = {};
+			focusHosts = {};
+			focusCount = 0;
+		}
+		void Publish(std::uint32_t a_sceneFrame, std::span<const RE::BSShadowLight* const> a_slots, std::span<const RE::BSShadowLight* const> a_focusHosts,
+			std::uint32_t a_focusCount)
+		{
+			sceneFrame = a_sceneFrame;
+			slots = a_slots;
+			focusHosts = a_focusHosts;
+			focusCount = a_focusCount;
+			valid = true;
+		}
+		/** @brief This frame's slots, or null before the selection has run this frame. */
+		const LightSlotFrame* Current(std::uint32_t a_sceneFrame) const { return valid && sceneFrame == a_sceneFrame ? this : nullptr; }
+	};
+
+	/**
 	 * @brief The shadow views of the frame, as the engine is about to draw them.
 	 *
 	 * One view per `ShadowmapDescriptor`: a cascade of the sun, a spot light's frustum, one hemisphere of
@@ -199,6 +237,8 @@ namespace DCLF
 		};
 
 		static ShadowViews& Get();
+		/** @brief The selection's slots the list is rebuilt from (render thread; see LightSlotFrame). */
+		static LightSlotFrame& LightSlots();
 
 		/** @brief How many shadow views DCLF can draw this frame (its view slots' buffers); UINT32_MAX: no bound. Before Rebuild. */
 		void SetViewCapacity(std::uint32_t a_views) { viewCapacity = a_views; }

@@ -1,8 +1,10 @@
-// Shadows/Local: the Spot, Point and Focus sources, the kept lights' views (LightViews), the point lights' culls (LocalLightCull) and the
-// focus cameras' hook (FocusViews), their report lines and their parity (Diagnostics/).
+// Shadows/Local: the Spot, Point and Focus sources, the kept lights' views (LightViews), the point lights' culls (LocalLightCull), the
+// focus cameras' hook (FocusViews), the shadow payload's entry exclusions (ExclusionBuild), their report lines and their parity
+// (Diagnostics/).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/ExclusionBuild.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/FocusViews.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LightViews.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/Local.h"
@@ -39,11 +41,16 @@ namespace DCLF::Features::Shadows::Local
 
 		void Install(Api::InstallContext& a_context)
 		{
-			// The frustum and parabolic views draw while their sources are registered, from the lights the selection keeps; the focus
-			// views, whatever their host, from the focus cameras' hook (the Focus board).
-			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Spot, .lightKept = &LightKept });
-			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Point, .lightKept = &LightKept, .frameStart = &PointFrameStart, .frameEnd = &LocalLightCull::EndFrame });
-			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Focus });
+			// The frustum and parabolic views draw while their sources are registered, from the lights the selection keeps (the Lights
+			// board); the focus views, whatever their host, from the focus cameras' hook (the Focus board). Core reads both through the
+			// sources' cameras.
+			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Spot, .camera = &LightCamera, .lightKept = &LightKept });
+			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Point, .camera = &LightCamera, .lightKept = &LightKept, .frameStart = &PointFrameStart,
+				.frameEnd = &LocalLightCull::EndFrame });
+			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Focus, .camera = &FocusCamera });
+			// The next frame's exclusions, the sun's and the paraboloids' (one build, a cache each), which the shadow epoch publishes for the
+			// full-frustum cull and the point lights' culls.
+			a_context.RegisterShadowExclusion({ .name = "entry exclusions", .build = &BuildExclusion });
 			// The point lights' culls' category filter follows the children attached to and detached from its nodes.
 			a_context.RegisterStandInObserver({ .structure = &LocalLightCull::NoteStructure });
 			// The point lights' culls' lines, on the primary cull's report frames.

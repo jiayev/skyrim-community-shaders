@@ -1,6 +1,6 @@
 #pragma once
 
-// The shadow build's types and helpers: caster classes, view bits and keys, the sun exclusion, the kept shadow state, and the
+// The shadow build's types and helpers: caster classes, view bits and keys, the sun entry test, the kept shadow state, and the
 // scene lane's pipeline lookups. The build runs on DCLF's pool (the snapshot builder). Included by Internal.h, in its order.
 
 namespace DCLF::Draws
@@ -125,40 +125,6 @@ namespace DCLF::Draws
 				techniques |= a_tables.occlusionTechnique[v][a_object];
 		return techniques;
 	}
-
-	struct SunExclusionIndex;  // ShadowBuild.cpp
-
-	/**
-	 * @brief The last sun exclusion's inputs and verdicts, kept up to date by what moved (BuildSunExclusion): the candidates (the
-	 * entries whose versions moved), the change log (an object's flags, shadow reject or geometry) and the mode's inputs (the objects
-	 * that joined or left them, while ShadowKept::Mode::membership moves). Judged whole only for a new cache or tables generation,
-	 * or behind the log's trim.
-	 */
-	struct SunExclusionCache
-	{
-		std::shared_ptr<const EntrySpace> candidates;
-		LogCursor cursor;
-		std::uint64_t membership = 0;
-		std::vector<std::uint8_t> excluded;
-		std::uint32_t excludedCount = 0;
-		std::uint64_t version = 0;  // SunExclusion::version of excluded
-		bool valid = false;
-		// What the verdicts are updated by: the objects by geometry, the inputs, the published exclusion, the stamped words and the
-		// forward chains (shared_ptr: the type is the builder's own).
-		std::shared_ptr<SunExclusionIndex> index;
-		// Since the last report: builds; of them kept (updated by what moved; translated: for newer candidates) and, of those, the
-		// same exclusion published again (nothing moved); the rest judged whole. And the builds' time.
-		std::uint64_t builds = 0, reused = 0, translated = 0, same = 0;
-		double buildMs = 0.0, buildMaxMs = 0.0;
-	};
-
-	/**
-	 * @brief The next frame's sun entry exclusion, from the candidates and the cascades' mode's inputs, which are the set's
-	 * casters (SceneSet.h): a candidate stays in the cascade culls when one of its table objects casts (no
-	 * kObjectNoShadow) and is not an input, since the engine must then still draw it. Null without candidates.
-	 */
-	std::shared_ptr<SunExclusion> BuildSunExclusion(const std::shared_ptr<const EntrySpace>& a_candidates, const ShadowPayload& a_payload, std::uint32_t a_mode,
-		const SceneTables& a_tables, SunExclusionCache* a_cache = nullptr);
 
 	// Whether an object's entry is outside every one of the sun's full-frustum processes, so the sun's cascade
 	// culls never reach it (ShadowInputs::sunEntryProcesses): the CPU's verdict, from the entry node's bound now (render

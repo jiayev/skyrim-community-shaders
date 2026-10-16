@@ -53,8 +53,10 @@ namespace DCLF::Features::Shadows::Sun
 				.tooltip = "The sun's cascade culls skip every reference whose shadows DCLF draws entirely; DCLF sets those objects' sun shadow bits for the main pass.",
 				.seed = excludeSwitch, .after = "skip sun accumulation", .needs = { "skip sun accumulation" } });
 			SunAccumulation::SetToggles(skip, exclude);
-			// The directional views draw while the source is registered; its cameras are the hook's (the Sun board).
-			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Sun, .fullFrustumWindowEnd = &FullFrustumWindowEnd });
+			// The directional views draw while the source is registered; its cameras are the hook's (the Sun board), which Core reads through
+			// the source's camera and the sun volume (the colour commits' cascades, the shadow inputs' full-frustum planes).
+			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Sun, .camera = &SunCamera, .fullFrustumWindowEnd = &FullFrustumWindowEnd });
+			a_context.RegisterSunVolume({ .name = "sun views", .cascades = &SampleSunCascades, .entryPlanes = &SampleSunEntryPlanes });
 			// The accumulation's lines, every frame (they test their report frames and the install themselves).
 			a_context.RegisterReportLines({ .name = "sun accumulation", .point = Api::ReportPoint::RenderThread, .lines = &SunAccumulationLines });
 			// CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the sun views, the accumulation's cascades and the entry rule's planes

@@ -1,8 +1,9 @@
-// LightViews: the kept local lights' views (ShadowCameras::Lights), computed on the render thread from LightSelection's detour (the Spot
-// and Point sources' lightKept).
+// LightViews: the kept local lights' views (LightsBoard), computed on the render thread from LightSelection's detour (the Spot and Point
+// sources' lightKept), and the sources' camera over them.
 
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LightViews.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
@@ -13,6 +14,17 @@
 
 namespace DCLF::Features::Shadows::Local
 {
+	LightFrame& LightsBoard()
+	{
+		static LightFrame frame;
+		return frame;
+	}
+
+	void LightCamera(Api::ShadowSourceCamera& a_camera)
+	{
+		a_camera.camera = LightsBoard().CascadeOf(a_camera.light, a_camera.descriptor, a_camera.sceneFrame);
+	}
+
 	LightViews& LightViews::Get()
 	{
 		static LightViews instance;
@@ -21,7 +33,7 @@ namespace DCLF::Features::Shadows::Local
 
 	void LightViews::Update(const RE::BSShadowLight* a_light)
 	{
-		auto& board = ShadowCameras::Lights();
+		auto& board = LightsBoard();
 		auto& lights = board.lights;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		if (frame != board.sceneFrame) {
