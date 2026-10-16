@@ -290,8 +290,9 @@ namespace DCLF
 		// 0 when none or the map is off (Extensions::OcclusionOn). Alpha-tested ones use shadowDiffuse / shadowMaterial.
 		std::array<std::vector<std::uint32_t>, kOcclusionViews> occlusionTechnique;
 		// The object's entry in the sun's full-frustum culling processes' objectArray (Coordinator::ResolveSunEntry), null when
-		// never tested (an actor's: its cell's container). Bound: BindlessPlacement::sunEntry; the node is for diagnostics.
-		std::vector<const RE::NiAVObject*> sunEntryNode;  // parallel to objects
+		// never tested (an actor's: its cell's container): the entry's listed root. Bound: BindlessPlacement::sunEntry; the node is for
+		// diagnostics.
+		std::vector<const RE::NiAVObject*> listedRoot;  // parallel to objects
 		// Whether the property has a fade node (LodFadeNodeOf), whose centre is the placement row's: for the fade-out test and the
 		// draw's specular and envmap LOD fades.
 		std::vector<std::uint8_t> hasFadeNode;  // parallel to objects
@@ -348,7 +349,7 @@ namespace DCLF
 			ObjectAncestorValue ancestorValue{};
 			std::array<float, kExtraRows * 4> extras{};
 			const RE::BSGeometry* geometry = nullptr;
-			const RE::NiAVObject* sunEntryNode = nullptr;
+			const RE::NiAVObject* listedRoot = nullptr;
 			std::uint64_t identity = 0;
 			std::uint64_t groupIdentity = 0;
 			ID3D11ShaderResourceView* shadowDiffuse = nullptr;

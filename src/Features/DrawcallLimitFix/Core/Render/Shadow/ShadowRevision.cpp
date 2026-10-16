@@ -14,7 +14,7 @@ namespace DCLF
 		 * @brief A mode's exclusion from a_payload (Api::ShadowExclusionContribution: Features/Shadows/Local's builder and caches), over
 		 * a_candidates. Null without the contribution.
 		 */
-		std::shared_ptr<SunExclusion> BuildExclusion(Api::ShadowSource a_source, const std::shared_ptr<const EntrySpace>& a_candidates,
+		std::shared_ptr<void> BuildExclusion(Api::ShadowSource a_source, const std::shared_ptr<const EntrySpace>& a_candidates,
 			const ShadowPayload& a_payload, std::uint32_t a_mode, const SceneTables& a_tables)
 		{
 			Api::ShadowExclusionBuild build(a_source, a_candidates, a_tables, a_payload.regionInputs, a_payload.inputList);

@@ -8,18 +8,20 @@
 // Core reads the boards through the sources' camera (LightCamera, FocusCamera), Features/LocalLights' light volumes through the same
 // (Extensions::SourceCamera); Features/Actors' actor rate reads the Lights board directly (DEPENDS). The Point source's culls are the
 // feature's too (LocalLightCull.h: the point lights' shadow culls without DCLF's entries), installed by its source hooks once the Sun's
-// registration hooks are in (Api::ShadowSourceHooks::CullsInstalled), run by its frameStart (this frame's exclusion, from Core's
-// ParabolicExclusionSlot) and frameEnd, told of the structure changes by a stand-in observer (Api::StandInObserver::structure); their
+// registration hooks are in (Api::ShadowSourceHooks::CullsInstalled), run by its frameStart (this frame's exclusion, from the
+// feature's ParabolicExclusionSlot) and frameEnd, told of the structure changes by a stand-in observer (Api::StandInObserver::structure); their
 // lines are at Api::ReportPoint::PrimaryCullSources (Diagnostics/PointCullLines.cpp). So is the shadow payload's exclusion build
 // (ExclusionBuild.h, Api::ShadowExclusionContribution): the sun's and the paraboloids' exclusions, one build with a cache each, which the
-// shadow participant's payload calls on the snapshot builder (here because Features/Shadows/Sun DEPENDS on this feature, not the reverse).
+// shadow participant's payload calls on the snapshot builder (here because Features/Shadows/Sun DEPENDS on this feature, not the reverse),
+// and the exclusions' type, translations and slots (SunExclusion.h): the shadow epoch hands each back through the contribution's publish,
+// the frame driver forwards the sun's through its frameStart, and the primary cull's scene-list filter reads the sun's pending one through
+// its listExclusion (a plain view: Core never names the type).
 // Its parity is its own (Diagnostics/): the light and focus views' lines, the focus views' membership and the local shadow volumes, under
 // CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY, and the point lights' culls' (LightCulls) under CS_DCLF_PERSISTENT_PARITY.
 //
 // Core keeps the shadow engine: the shadow epoch and its capability and captures, the views list and the camera math
-// (Core/Render/Shadow/ShadowCameras.h), the exclusions' type and the slots its shadow epoch publishes them in (SunExclusion.h), the views'
-// tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally), the caster phases, view bits and modes, and the shadow toggles;
-// the light selection (which calls lightKept) and the local shadows' port are Features/LocalLights'. The Sun's registration thunk calls
+// (Core/Render/Shadow/ShadowCameras.h), the views' tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally), the caster
+// phases, view bits and modes, the candidates (Core's EntrySpace), and the shadow toggles; the light selection (which calls lightKept) and the local shadows' port are Features/LocalLights'. The Sun's registration thunk calls
 // LocalLightCull::NoteMainRegistration directly (Features/Shadows/Sun, listed after this feature). The sources own no phase or view bit
 // and no toggle. Included by the feature's sources only.
 

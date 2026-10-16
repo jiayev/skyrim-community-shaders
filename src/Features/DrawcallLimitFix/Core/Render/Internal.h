@@ -25,7 +25,7 @@
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EntrySpace.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "RE/B/BSShadowLight.h"
 #include "RE/B/BSLightingShaderMaterialBase.h"

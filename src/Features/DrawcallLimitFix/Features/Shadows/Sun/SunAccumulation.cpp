@@ -163,7 +163,7 @@ namespace DCLF::Features::Shadows::Sun
 
 	void SunAccumulation::ArmExclusion(RE::BSShadowDirectionalLight* a_light)
 	{
-		auto exclusion = SunExclusionSlot::Get().Take();
+		auto exclusion = Local::SunExclusionSlot::Get().Take();
 		previousExclusion = std::move(frameState.exclusion);
 		frameState.exclusion.reset();
 		armedExclusion.reset();
@@ -635,7 +635,7 @@ namespace DCLF::Features::Shadows::Sun
 	SunAccumulation::Stats SunAccumulation::TakeStats()
 	{
 		stats.offThread = offThread.exchange(0, std::memory_order_relaxed);
-		const auto forward = SunExclusionSlot::Get().TakeForwardCounts();
+		const auto forward = Local::SunExclusionSlot::Get().TakeForwardCounts();
 		stats.exclusionForwarded = forward.forwarded;
 		stats.exclusionUnforwarded = forward.unforwarded;
 		return std::exchange(stats, {});

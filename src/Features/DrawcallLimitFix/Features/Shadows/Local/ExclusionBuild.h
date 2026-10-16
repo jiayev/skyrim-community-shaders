@@ -3,11 +3,11 @@
 // The shadow payload's entry exclusions (Api::ShadowExclusionContribution: this feature's, for both modes, since the build is one): the
 // next frame's sun exclusion (the cascades' mode, over the sun candidates) and the paraboloids' (the Point source's culls, over the light
 // candidates), built by the shadow participant's payload on the snapshot builder, each with its own cache kept up to date by what moved.
-// The exclusions are Core's type (Core/Render/Shadow/SunExclusion.h), which its shadow epoch publishes into its slots for the
-// full-frustum cull (Features/Shadows/Sun's accumulation) and the point lights' culls (LocalLightCull).
+// The exclusions are this feature's type (SunExclusion.h), opaque to Core, whose shadow epoch hands them back through the contribution's
+// publish into their slots for the full-frustum cull (Features/Shadows/Sun's accumulation) and the point lights' culls (LocalLightCull).
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowExclusionBuild.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Scene/EntrySpace.h"
 

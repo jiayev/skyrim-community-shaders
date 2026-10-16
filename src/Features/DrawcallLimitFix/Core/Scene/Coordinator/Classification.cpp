@@ -387,13 +387,13 @@ namespace DCLF::Scene
 			const void* entry = MirrorSunEntry(&a_geometry);
 			// The mirror's (root pinned by the attach's capture), or on a live walk the live chain's; observers compare the two.
 			if (!a_live) {
-				a_tracked.sunEntryNode = static_cast<const RE::NiAVObject*>(entry);
+				a_tracked.entryRoot = static_cast<const RE::NiAVObject*>(entry);
 				Diagnostics::Notify(Diagnostics::SunEntryRead{ *this, a_geometry, entry, nullptr, false });
 				return;
 			}
 			const EngineReadWindow::Lease lease;
 			const RE::NiAVObject* live = LiveSunEntry(a_geometry);
-			a_tracked.sunEntryNode = live;
+			a_tracked.entryRoot = live;
 			Diagnostics::Notify(Diagnostics::SunEntryRead{ *this, a_geometry, entry, live, true });
 		}
 	}
@@ -610,28 +610,28 @@ namespace DCLF::Scene
 		{
 			UnlistDependents(a_geometry, entry, true);
 			entry.sunEntryResolved = false;
-			entry.sunEntryNode = nullptr;
+			entry.entryRoot = nullptr;
 			// The prepare's read (counted here), or ResolveSunEntry's with its live check.
 			const bool prepared = a_prep.resolved && !a_live;
 			if (prepared) {
 				++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::SunEntry)];
 				entry.sunEntryResolved = true;
-				entry.sunEntryNode = static_cast<const RE::NiAVObject*>(a_prep.sunEntry);
+				entry.entryRoot = static_cast<const RE::NiAVObject*>(a_prep.sunEntry);
 			} else {
 				ResolveSunEntry(entry, *a_geometry, a_live);
 			}
-			if (entry.sunEntryNode && !OwnRoot(entry.sunEntryNode, a_live))
-				entry.sunEntryNode = nullptr;
-			if (entry.sunEntryNode) {
-				List(rootDependents, rootDependentsAt, entry.sunEntryNode, a_geometry);
+			if (entry.entryRoot && !OwnRoot(entry.entryRoot, a_live))
+				entry.entryRoot = nullptr;
+			if (entry.entryRoot) {
+				List(rootDependents, rootDependentsAt, entry.entryRoot, a_geometry);
 				// The root's reference: the prepare's read, or the mirror's.
-				const auto* rootRecord = prepared ? nullptr : mirror.Node(entry.sunEntryNode);
+				const auto* rootRecord = prepared ? nullptr : mirror.Node(entry.entryRoot);
 				if (const auto* rootRef = prepared ? a_prep.sunEntryReference : rootRecord ? static_cast<const RE::TESObjectREFR*>(rootRecord->userData) : nullptr;
-					rootRef && rootReference.try_emplace(entry.sunEntryNode, rootRef).second)
-					referenceRoot[rootRef] = entry.sunEntryNode;
-				entry.listedRoot = entry.sunEntryNode;
-				dirtyRoots.push_back(entry.sunEntryNode);
-				MarkSunEntryDirty(entry.sunEntryNode);
+					rootRef && rootReference.try_emplace(entry.entryRoot, rootRef).second)
+					referenceRoot[rootRef] = entry.entryRoot;
+				entry.listedRoot = entry.entryRoot;
+				dirtyRoots.push_back(entry.entryRoot);
+				MarkListedRootDirty(entry.entryRoot);
 			}
 			// As LightEntryOf: the prepare's actor root, else the sun entry unless a category node owns it.
 			const RE::NiAVObject* lightEntry = nullptr;
@@ -640,7 +640,7 @@ namespace DCLF::Scene
 			} else {
 				if (entry.categoryNode)
 					++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::LightEntry)];
-				lightEntry = a_prep.lightActorRoot ? a_prep.lightActorRoot : entry.sunEntryNode && !a_prep.sunEntryCategory ? entry.sunEntryNode : nullptr;
+				lightEntry = a_prep.lightActorRoot ? a_prep.lightActorRoot : entry.entryRoot && !a_prep.sunEntryCategory ? entry.entryRoot : nullptr;
 			}
 			if (lightEntry && OwnRoot(lightEntry, a_live)) {
 				auto& dependents = lightDependents[lightEntry];
@@ -677,7 +677,7 @@ namespace DCLF::Scene
 				Diagnostics::Notify(Diagnostics::LightEntryRead{ *this, a_geometry, category, root, actorRoot, nullptr, false, false });
 				if (actorRoot)
 					return static_cast<const RE::NiAVObject*>(root);
-				return a_tracked.sunEntryNode && !CategoryNodeOwn(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
+				return a_tracked.entryRoot && !CategoryNodeOwn(a_tracked.entryRoot) ? a_tracked.entryRoot : nullptr;
 			}
 			const EngineReadWindow::Lease lease;
 			bool liveActor = false;
@@ -686,7 +686,7 @@ namespace DCLF::Scene
 			if (liveActor)
 				return live;
 		}
-		return a_tracked.sunEntryNode && !CategoryNodeOwn(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
+		return a_tracked.entryRoot && !CategoryNodeOwn(a_tracked.entryRoot) ? a_tracked.entryRoot : nullptr;
 	}
 
 	const RE::NiAVObject* Coordinator::LiveLightRoot(const RE::BSGeometry& a_geometry, const RE::NiNode* a_category, bool& a_actor)

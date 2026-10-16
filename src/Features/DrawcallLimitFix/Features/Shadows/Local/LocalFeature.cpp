@@ -3,7 +3,8 @@
 // (Diagnostics/).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/ExclusionBuild.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/FocusViews.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LightViews.h"
@@ -39,6 +40,31 @@ namespace DCLF::Features::Shadows::Local
 		/** @brief The frame start: the point lights' culls select this frame's exclusion, the one the shadow epoch published (null: none). */
 		void PointFrameStart(std::uint32_t a_frame) { LocalLightCull::SelectFrame(a_frame, ParabolicExclusionSlot::Get().Pending()); }
 
+		/** @brief The shadow epoch's exclusion of a_source (the payload's, this feature's type), into its slot. */
+		void PublishExclusion(Api::ShadowSource a_source, std::shared_ptr<void> a_exclusion)
+		{
+			auto exclusion = std::static_pointer_cast<SunExclusion>(std::move(a_exclusion));
+			if (a_source == Api::ShadowSource::Sun)
+				SunExclusionSlot::Get().Publish(std::move(exclusion));
+			else if (a_source == Api::ShadowSource::Point)
+				ParabolicExclusionSlot::Get().Publish(std::move(exclusion));
+		}
+
+		/** @brief The frame start: the sun's pending exclusion as the builder translated it to the frame's candidates. */
+		void ExclusionFrameStart() { SunExclusionSlot::Get().BeginFrame(Scene::FrameView::Get().GetSunCandidates()); }
+
+		/** @brief The sun's pending exclusion as the primary cull's scene-list filter reads it (empty: none pending). */
+		void ListExclusion(Api::ShadowListExclusion& a_view)
+		{
+			auto pending = SunExclusionSlot::Get().Pending();
+			if (!pending)
+				return;
+			a_view.candidates = pending->candidates.get();
+			a_view.excluded = pending->excluded;
+			a_view.version = pending->version;
+			a_view.held = std::move(pending);
+		}
+
 		void Install(Api::InstallContext& a_context)
 		{
 			// The frustum and parabolic views draw while their sources are registered, from the lights the selection keeps (the Lights
@@ -48,9 +74,11 @@ namespace DCLF::Features::Shadows::Local
 			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Point, .camera = &LightCamera, .lightKept = &LightKept, .frameStart = &PointFrameStart,
 				.frameEnd = &LocalLightCull::EndFrame });
 			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Focus, .camera = &FocusCamera });
-			// The next frame's exclusions, the sun's and the paraboloids' (one build, a cache each), which the shadow epoch publishes for the
-			// full-frustum cull and the point lights' culls.
-			a_context.RegisterShadowExclusion({ .name = "entry exclusions", .build = &BuildExclusion });
+			// The next frame's exclusions, the sun's and the paraboloids' (one build, a cache each), which the shadow epoch hands back into
+			// their slots for the full-frustum cull and the point lights' culls; the sun's forwarded at the frame start and read by the
+			// primary cull's scene-list filter.
+			a_context.RegisterShadowExclusion({ .name = "entry exclusions", .build = &BuildExclusion, .publish = &PublishExclusion,
+				.frameStart = &ExclusionFrameStart, .listExclusion = &ListExclusion });
 			// The point lights' culls' category filter follows the children attached to and detached from its nodes.
 			a_context.RegisterStandInObserver({ .structure = &LocalLightCull::NoteStructure });
 			// The point lights' culls' lines, on the primary cull's report frames.

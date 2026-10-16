@@ -1036,7 +1036,7 @@ namespace DCLF::Extensions
 
 			void RegisterShadowExclusion(const Api::ShadowExclusionContribution& a_exclusion) override
 			{
-				if (a_exclusion.name.empty() || !a_exclusion.build)
+				if (a_exclusion.name.empty() || !a_exclusion.build || !a_exclusion.publish || !a_exclusion.frameStart || !a_exclusion.listExclusion)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shadow exclusion contribution", feature));
 				// The payload carries one exclusion per mode.
 				if (!lists.shadowExclusion.name.empty())

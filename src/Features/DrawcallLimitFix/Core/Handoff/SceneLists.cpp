@@ -12,7 +12,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EntrySpace.h"
 
 #include <algorithm>
 #include <atomic>
@@ -138,7 +138,7 @@ namespace DCLF
 		return true;
 	}
 
-	bool PrimaryCull::ListFilterReady(bool& a_sunOff, std::shared_ptr<const SunExclusion>& a_exclusion)
+	bool PrimaryCull::ListFilterReady(bool& a_sunOff, Api::ShadowListExclusion& a_exclusion)
 	{
 		// Entries to judge again pile up while no filter is made: past the index space, all are.
 		if (filterDirty.size() > std::max<std::size_t>(cut.plans.size(), 1024)) {
@@ -171,10 +171,13 @@ namespace DCLF
 		}
 		// The exclusion this frame's full-frustum cull applies, for the same snapshot: a root out of the lists is out of
 		// the sun's cascades only when that exclusion takes it out too. With the sun off (an interior) no full-frustum cull
-		// reads the lists, and no exclusion is needed.
+		// reads the lists, and no exclusion is needed. The exclusion is the contribution's (Features/Shadows/Local's SunExclusionSlot), read
+		// through its plain view.
 		const bool sunOff = Global<std::uint8_t>(Engine::Address::kSunOff) != 0;
-		auto exclusion = sunOff ? nullptr : SunExclusionSlot::Get().Pending();
-		if (!sunOff && (!exclusion || exclusion->candidates != cut.candidates || exclusion->excluded.size() != cut.plans.size())) {
+		Api::ShadowListExclusion exclusion;
+		if (!sunOff)
+			Extensions::ListExclusion(exclusion);
+		if (!sunOff && (!exclusion.held || exclusion.candidates != cut.candidates.get() || exclusion.excluded.size() != cut.plans.size())) {
 			++listStats.noExclusion;
 			return false;
 		}
@@ -183,13 +186,13 @@ namespace DCLF
 		return true;
 	}
 
-	bool PrimaryCull::MarkFilterDirty(std::uint32_t a_entries, bool a_sunOff, std::shared_ptr<const SunExclusion>& a_exclusion)
+	bool PrimaryCull::MarkFilterDirty(std::uint32_t a_entries, bool a_sunOff, Api::ShadowListExclusion& a_exclusion)
 	{
 		// Judged again: the entries the cut changed (NoteFilterEntry) and those whose exclusion bit moved; all for a first filter.
-		bool all = filterDirtyAll || !listFilterBuilt || a_sunOff != filterSunOff || (!a_sunOff && !filterExclusion);
-		if (!all && !a_sunOff && a_exclusion != filterExclusion) {
-			const auto& was = filterExclusion->excluded;
-			const auto& now = a_exclusion->excluded;
+		bool all = filterDirtyAll || !listFilterBuilt || a_sunOff != filterSunOff || (!a_sunOff && !filterExclusion.held);
+		if (!all && !a_sunOff && a_exclusion.held != filterExclusion.held) {
+			const auto was = filterExclusion.excluded;
+			const auto now = a_exclusion.excluded;
 			for (std::uint32_t e = 0; e < a_entries; ++e)
 				if (e >= was.size() || was[e] != now[e])
 					filterDirty.push_back(e);
@@ -215,7 +218,7 @@ namespace DCLF
 				return kMixed;
 			if (cut.walk[a_e])
 				return kWalked;
-			if (!a_sunOff && !filterExclusion->excluded[a_e])
+			if (!a_sunOff && !filterExclusion.excluded[a_e])
 				return kNotExcluded;
 			return kRemovable;
 		};
@@ -283,7 +286,7 @@ namespace DCLF
 	std::shared_ptr<const PrimaryCull::ListFilter> PrimaryCull::CurrentListFilter()
 	{
 		bool sunOff = false;
-		std::shared_ptr<const SunExclusion> exclusion;
+		Api::ShadowListExclusion exclusion;
 		if (!ListFilterReady(sunOff, exclusion))
 			return nullptr;
 		const auto entries = static_cast<std::uint32_t>(cut.plans.size());

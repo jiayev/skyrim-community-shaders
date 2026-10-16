@@ -168,7 +168,7 @@ namespace DCLF::Api
 		 * Sun source without fullFrustumWindowEnd (another source with one).
 		 */
 		virtual void RegisterShadowSource(const ShadowSourceContribution& a_source) = 0;
-		/** @brief Fails the install for a second contribution, or one without a name or build. */
+		/** @brief Fails the install for a second contribution, or one without a name, build, publish, frameStart or listExclusion. */
 		virtual void RegisterShadowExclusion(const ShadowExclusionContribution& a_exclusion) = 0;
 		/**
 		 * @brief Fails the install for a family another registration has, a class with no registered toggle, or without its scene

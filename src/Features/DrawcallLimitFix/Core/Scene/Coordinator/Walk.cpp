@@ -662,7 +662,7 @@ namespace DCLF::Scene
 		const bool shadowOnly = r.shadowOnly;
 		const std::uint16_t partitionMask = r.partitionMask;
 		ResolveSunEntry(*trackedEntry, *geometry);
-		tables.sunEntryNode[objectId] = trackedEntry->sunEntryNode;
+		tables.listedRoot[objectId] = trackedEntry->entryRoot;
 		tables.hasFadeNode[objectId] = leaf.property && leaf.property->fadeNode ? 1 : 0;
 		if (face.positions)
 			ComponentsStreamed(objectId, face, trackedEntry->entryClass);
@@ -754,7 +754,7 @@ namespace DCLF::Scene
 		tables.shadowReject[slot] = static_cast<std::uint8_t>(ShadowReject::Layer);
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 			tables.occlusionTechnique[v][slot] = 0;
-		tables.sunEntryNode[slot] = tables.sunEntryNode[a_base];
+		tables.listedRoot[slot] = tables.listedRoot[a_base];
 		tables.hasFadeNode[slot] = property->fadeNode ? 1 : 0;
 		tables.ClearStreamRow(slot);
 		tables.shadowDiffuse[slot] = nullptr;
@@ -1231,7 +1231,7 @@ namespace DCLF::Scene
 			a_tracked.lightRoot = nullptr;
 		}
 		if (a_root && a_tracked.listedRoot) {
-			MarkSunEntryDirty(a_tracked.listedRoot);
+			MarkListedRootDirty(a_tracked.listedRoot);
 			// A listed root's dependents are a plan's: this one leaves it at the next plan.
 			TouchPlacedDependent(a_tracked.listedRoot, a_geometry);
 			// The root's bound drops this one. The node is only a key here; it may be gone.
@@ -1406,15 +1406,15 @@ namespace DCLF::Scene
 		const bool mayRecord = a_reason == Ineligible::None || Eligibility::DeferredToAccumulate(a_reason) || Eligibility::ShadowOnlyCaster(a_reason, mirror.Leaf(&a_geometry));
 		std::uint32_t traits = PerFrameTraits(a_tracked, a_geometry);
 		// An owner class's own motion (an actor's) places it every frame: its root's motion is never read.
-		if (mayRecord && !(traits & kTraitEntryClass) && !a_tracked.owner.ownMotion && a_tracked.sunEntryNode) {
+		if (mayRecord && !(traits & kTraitEntryClass) && !a_tracked.owner.ownMotion && a_tracked.entryRoot) {
 			bool moves = false;
 			if (a_freshMotion) {
-				const auto [motion, inserted] = a_freshMotion->try_emplace(a_tracked.sunEntryNode, false);
+				const auto [motion, inserted] = a_freshMotion->try_emplace(a_tracked.entryRoot, false);
 				if (inserted)
-					motion->second = RootMovesNow(a_tracked.sunEntryNode);
+					motion->second = RootMovesNow(a_tracked.entryRoot);
 				moves = motion->second;
 			} else {
-				moves = RootMoves(a_tracked.sunEntryNode);
+				moves = RootMoves(a_tracked.entryRoot);
 			}
 			if (moves)
 				traits |= kTraitRootMoves;
@@ -1447,9 +1447,9 @@ namespace DCLF::Scene
 	{
 		// PerFrameOf from the evaluation's traits; root motion from rootMotion, else the evaluation's fresh read (inserted here).
 		std::uint32_t traits = a_result.traits;
-		if (a_result.mayRecord && !(traits & kTraitEntryClass) && !a_tracked.owner.ownMotion && a_tracked.sunEntryNode) {
-			const bool* now = a_tracked.sunEntryNode == a_result.rootCandidate ? &a_result.rootMovesNow : nullptr;
-			if (RootMoves(a_tracked.sunEntryNode, now))
+		if (a_result.mayRecord && !(traits & kTraitEntryClass) && !a_tracked.owner.ownMotion && a_tracked.entryRoot) {
+			const bool* now = a_tracked.entryRoot == a_result.rootCandidate ? &a_result.rootMovesNow : nullptr;
+			if (RootMoves(a_tracked.entryRoot, now))
 				traits |= kTraitRootMoves;
 		}
 		return PerFrameFrom(traits, a_tracked.candidateReason, a_result.mayRecord);
@@ -1577,7 +1577,7 @@ namespace DCLF::Scene
 			a_out.mayRecord = reason == Ineligible::None || Eligibility::DeferredToAccumulate(reason) || Eligibility::ShadowOnlyCaster(reason, a_out.leaf);
 			if (a_out.mayRecord && !(a_out.traits & kTraitEntryClass) && !owner.ownMotion) {
 				// The resolved sun entry, or the one ResolveSunEntry will resolve at the write.
-				a_out.rootCandidate = entry.sunEntryResolved ? entry.sunEntryNode : static_cast<const RE::NiAVObject*>(MirrorSunEntry(geometry));
+				a_out.rootCandidate = entry.sunEntryResolved ? entry.entryRoot : static_cast<const RE::NiAVObject*>(MirrorSunEntry(geometry));
 				if (a_out.rootCandidate) {
 					const auto [motion, inserted] = a_counters.rootMotion.try_emplace(a_out.rootCandidate, false);
 					if (inserted)
@@ -1657,7 +1657,7 @@ namespace DCLF::Scene
 		}
 		// A write may change what the sun/light entry's candidacy and snapshot row read (SunEntryAllows, PrimaryEntryAllows).
 		if (hadSlot != (entry.slot != kNoObjectSlot) || reasonBefore != entry.candidateReason || written) {
-			MarkSunEntryDirty(entry.sunEntryNode);
+			MarkListedRootDirty(entry.entryRoot);
 			MarkLightEntryDirty(entry.lightRoot);
 		}
 		if (!(ShadowInputsOf(written ? entry.slot : kNoObjectSlot) == shadowBefore)) {

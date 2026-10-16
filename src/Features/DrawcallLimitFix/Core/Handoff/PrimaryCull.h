@@ -35,7 +35,6 @@ namespace DCLF
 {
 	struct EntrySpace;
 	struct FrameGlobals;
-	struct SunExclusion;
 
 	/**
 	 * @brief The main camera's cull, and taking DCLF's objects out of it (dclf-gpu-driven-frame.md). AE only. Owns the scene
@@ -315,9 +314,9 @@ namespace DCLF
 		 */
 		std::shared_ptr<const ListFilter> CurrentListFilter();
 		/** @brief CurrentListFilter's preconditions, the cut brought to the frame's candidates, and the exclusion it is judged with. False: no filter. */
-		bool ListFilterReady(bool& a_sunOff, std::shared_ptr<const SunExclusion>& a_exclusion);
+		bool ListFilterReady(bool& a_sunOff, Api::ShadowListExclusion& a_exclusion);
 		/** @brief CurrentListFilter: the entries judged again queued (filterDirty), a_exclusion taken as filterExclusion. True: all are. */
-		bool MarkFilterDirty(std::uint32_t a_entries, bool a_sunOff, std::shared_ptr<const SunExclusion>& a_exclusion);
+		bool MarkFilterDirty(std::uint32_t a_entries, bool a_sunOff, Api::ShadowListExclusion& a_exclusion);
 		/** @brief CurrentListFilter: the queued entries judged, their roots erased then inserted in the next version (null: none moved). */
 		std::shared_ptr<ListFilter> JudgeFilterEntries(std::uint32_t a_entries, bool a_sunOff, bool a_all);
 		/** @brief Render thread: entry a_e's verdict may have moved (admission, walk, plan): judged again by the next filter. */
@@ -352,7 +351,7 @@ namespace DCLF
 		std::array<std::uint64_t, 6> listReasonCount{};             // entries by listReason
 		std::vector<std::uint32_t> filterDirty;                     // entries to judge again (NoteFilterEntry)
 		bool filterDirtyAll = true;                                 // every entry judged again
-		std::shared_ptr<const SunExclusion> filterExclusion;        // the exclusion listFilterBuilt was judged with
+		Api::ShadowListExclusion filterExclusion;                   // the exclusion listFilterBuilt was judged with (held: none)
 		bool filterSunOff = false;
 		std::uint64_t listFilterVersion = 0;
 		std::vector<std::uint8_t> filterScratch;                    // the build's job

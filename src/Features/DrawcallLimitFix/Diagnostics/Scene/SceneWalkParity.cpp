@@ -89,7 +89,7 @@ namespace DCLF::Diagnostics
 					what = "the skin";
 				else if (slots.shadowTechnique[s] != dense.shadowTechnique[d] || slots.shadowReject[s] != dense.shadowReject[d])
 					what = "the shadow verdict";
-				else if (slots.sunEntryNode[s] != dense.sunEntryNode[d])
+				else if (slots.listedRoot[s] != dense.listedRoot[d])
 					what = "the sun entry node";
 				else if (slots.hasFadeNode[s] != dense.hasFadeNode[d])
 					what = "the fade node";

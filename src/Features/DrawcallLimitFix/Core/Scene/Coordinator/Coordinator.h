@@ -721,7 +721,7 @@ namespace DCLF
 		std::uint8_t PrimaryVerdictOf(RE::BSGeometry* a_geometry) const;
 		/** @brief A tracked entry's verdict as the eligibility rules read it (Eligibility::EntryVerdict). */
 		static Eligibility::EntryVerdict VerdictOf(const Tracked& a_tracked) { return { a_tracked.slot != kNoObjectSlot, a_tracked.candidateFrame != 0, a_tracked.candidateReason }; }
-		void MarkSunEntryDirty(const RE::NiAVObject* a_entry)
+		void MarkListedRootDirty(const RE::NiAVObject* a_entry)
 		{
 			if (a_entry)
 				sunEntriesDirty.push_back(a_entry);

@@ -13,8 +13,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
+#include <utility>
 
 struct ID3D11Texture2D;
 struct ID3D11DepthStencilView;
@@ -143,7 +145,11 @@ namespace DCLF::Extensions
 	{
 		std::array<OcclusionMapEntry, kOcclusionMaps> maps;
 		std::array<ShadowSourceEntry, kShadowSources> sources;
-		void (*exclusion)(Api::ShadowExclusionBuild&) = nullptr;  // the exclusion contribution's build (none: no exclusion)
+		// The exclusion contribution's callbacks (none: no exclusion; Registry refused one without any of them).
+		void (*exclusion)(Api::ShadowExclusionBuild&) = nullptr;
+		void (*exclusionPublish)(Api::ShadowSource, std::shared_ptr<void>) = nullptr;
+		void (*exclusionFrameStart)() = nullptr;
+		void (*listExclusion)(Api::ShadowListExclusion&) = nullptr;
 		std::uint8_t occluderPhases = 0;     // the registered maps' phases
 		std::uint32_t occluderViewBits = 0;  // and their view bits
 		// Each mode's set phase (SetPhaseOfMode for the caster modes, the map's for an occlusion mode: 0 for a map none takes).
@@ -190,6 +196,33 @@ namespace DCLF::Extensions
 	{
 		if (const auto exclusion = ShadowViewsSet().exclusion)
 			exclusion(a_build);
+	}
+	/**
+	 * @brief Render thread, after the shadow epoch drew (and the Sun source's null at a withdrawn set): a_exclusion, the payload's opaque
+	 * exclusion of a_source, handed back to the exclusion contribution (publish; nothing without one).
+	 */
+	inline void PublishShadowExclusion(Api::ShadowSource a_source, std::shared_ptr<void> a_exclusion)
+	{
+		if (const auto publish = ShadowViewsSet().exclusionPublish)
+			publish(a_source, std::move(a_exclusion));
+	}
+	/**
+	 * @brief Render thread, once a frame (FrameDriver, after the views' FrameStartBeforeCoverage work, before the lookups are installed):
+	 * the exclusion contribution's frameStart (nothing without one).
+	 */
+	inline void ShadowExclusionFrameStart()
+	{
+		if (const auto frameStart = ShadowViewsSet().exclusionFrameStart)
+			frameStart();
+	}
+	/**
+	 * @brief Render thread: the Sun source's pending exclusion as the scene-list filter reads it (the exclusion contribution's
+	 * listExclusion), into a_view; left empty without one.
+	 */
+	inline void ListExclusion(Api::ShadowListExclusion& a_view)
+	{
+		if (const auto listExclusion = ShadowViewsSet().listExclusion)
+			listExclusion(a_view);
 	}
 	/**
 	 * @brief Main thread, in InstallFeatures (Registry), after the features' installs: the entries from the registered contributions (by

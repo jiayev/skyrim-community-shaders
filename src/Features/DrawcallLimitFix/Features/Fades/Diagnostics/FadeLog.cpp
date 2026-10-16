@@ -148,7 +148,7 @@ namespace DCLF::Features::Fades
 		}
 		for (std::size_t i = 0; i < count; ++i) {
 			const auto object = a_readback.roots[i].object;
-			const auto* entryNode = object < a_tables.sunEntryNode.size() ? a_tables.sunEntryNode[object] : nullptr;
+			const auto* entryNode = object < a_tables.listedRoot.size() ? a_tables.listedRoot[object] : nullptr;
 			const float entry = entryNode ? entryNode->worldBound.radius : -1.0f;
 			a_readback.radii[i] = entry >= 0.0f && entry < 1e30f ? entry : a_readback.roots[i].radius;
 			if (const auto* node = static_cast<const RE::NiAVObject*>(a_list.nodes[a_readback.base + i])) {

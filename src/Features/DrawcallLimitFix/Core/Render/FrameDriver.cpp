@@ -25,7 +25,6 @@
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowPoints.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
@@ -117,8 +116,9 @@ namespace DCLF
 		// The views' frame start before the coverage that decides whether their members are withheld (Features/FirstPerson's: the view's
 		// latch, targets, pipelines and resources).
 		RunViewWork(Api::ViewPoint::FrameStartBeforeCoverage);
-		// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand.
-		SunExclusionSlot::Get().BeginFrame(view.GetSunCandidates());
+		// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand (the exclusion
+		// contribution's frameStart: Features/Shadows/Local's SunExclusionSlot::BeginFrame).
+		Extensions::ShadowExclusionFrameStart();
 		// The lookups are the installed publication's; what only the frame has goes to the scene lane (PostLookupInputs).
 		Diagnostics::Notify<Diagnostics::FramePoint::LookupsInstalled>();
 		draws.PostLookupInputs();

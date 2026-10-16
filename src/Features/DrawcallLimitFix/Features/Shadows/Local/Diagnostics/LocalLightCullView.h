@@ -9,13 +9,10 @@ namespace RE
 	class NiAVObject;
 }
 
-namespace DCLF
-{
-	struct SunExclusion;
-}
-
 namespace DCLF::Features::Shadows::Local
 {
+	struct SunExclusion;
+
 	/**
 	 * @brief The point light culls' observer's (LightCulls) read-only view of LocalLightCull's file-local state (defined beside it, in
 	 * LocalLightCull.cpp). Any thread the hooks run on; the frame's state is published before the culls.

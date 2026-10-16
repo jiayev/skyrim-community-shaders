@@ -6,7 +6,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/CutObservers.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/PrimaryCullView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
@@ -74,8 +74,9 @@ namespace DCLF::Reports
 			ankerl::unordered_dense::map<const char*, std::pair<std::uint64_t, const RE::NiAVObject*>> reasons;
 			std::string mixedFirst;
 			std::uint32_t mixedNamed = 0;
-			const auto exclusion = SunExclusionSlot::Get().Pending();
-			const bool exclusionCurrent = exclusion && exclusion->candidates == cut.candidates && exclusion->excluded.size() >= cut.plans.size();
+			Api::ShadowListExclusion exclusion;
+			Extensions::ListExclusion(exclusion);
+			const bool exclusionCurrent = exclusion.held && exclusion.candidates == cut.candidates.get() && exclusion.excluded.size() >= cut.plans.size();
 			const auto nameOf = [](const RE::NiAVObject* a_node) { return a_node && a_node->name.c_str() ? a_node->name.c_str() : ""; };
 			for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {
 				if (!cut.roots[e])
@@ -97,7 +98,7 @@ namespace DCLF::Reports
 					++walked;
 				} else {
 					++whole;
-					sunKept += exclusionCurrent && !exclusion->excluded[e] ? 1 : 0;
+					sunKept += exclusionCurrent && !exclusion.excluded[e] ? 1 : 0;
 				}
 			}
 			std::vector<std::pair<const char*, std::pair<std::uint64_t, const RE::NiAVObject*>>> sorted(reasons.begin(), reasons.end());

@@ -29,7 +29,7 @@ namespace DCLF
 		shadowReject.resize(a_count, 0);
 		for (auto& column : occlusionTechnique)
 			column.resize(a_count, 0);
-		sunEntryNode.resize(a_count, nullptr);
+		listedRoot.resize(a_count, nullptr);
 		hasFadeNode.resize(a_count, 0);
 		fadeDistance.resize(a_count, 0.0f);
 		residentSlot.resize(a_count, 0);
@@ -50,7 +50,7 @@ namespace DCLF
 		columns.object = objects[a_slot];
 		columns.draw = draws[a_slot];
 		columns.ancestorValue = ancestorValue[a_slot];
-		columns.sunEntryNode = sunEntryNode[a_slot];
+		columns.listedRoot = listedRoot[a_slot];
 		columns.hasFadeNode = hasFadeNode[a_slot];
 		columns.extraOffset = extraOffset[a_slot];
 		if (columns.extraOffset != kNoExtraRows && (std::size_t(columns.extraOffset) + kExtraRows) * 4 <= extraRows.size())
@@ -170,7 +170,7 @@ namespace DCLF
 		shadowReject[a_slot] = 0;
 		for (auto& column : occlusionTechnique)
 			column[a_slot] = 0;
-		sunEntryNode[a_slot] = nullptr;
+		listedRoot[a_slot] = nullptr;
 		hasFadeNode[a_slot] = 0;
 		fadeDistance[a_slot] = 0.0f;
 		residentSlot[a_slot] = 0;
@@ -250,7 +250,7 @@ namespace DCLF
 			shadowReject.clear();
 			for (auto& column : occlusionTechnique)
 				column.clear();
-			sunEntryNode.clear();
+			listedRoot.clear();
 			hasFadeNode.clear();
 			fadeDistance.clear();
 			residentSlot.clear();
@@ -340,7 +340,7 @@ namespace DCLF
 		shadowReject.clear();
 		for (auto& column : occlusionTechnique)
 			column.clear();
-		sunEntryNode.clear();
+		listedRoot.clear();
 		hasFadeNode.clear();
 		fadeDistance.clear();
 		residentSlot.clear();
