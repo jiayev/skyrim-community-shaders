@@ -32,13 +32,11 @@ namespace DCLF
 			// "object LOD" and "terrain LOD" and Features/TreeLod's "tree LOD"; then Features/Skins' "skin partitions" after the tree LOD's,
 			// and Features/Actors' "actors" after it.)
 			{ &S::shadows, Switch::Shadows, kOn, "shadows", "Shadow views", "Draw the shadow views (CS_DCLF_SHADOWS)", nullptr, false, {} },
-			{ &S::skipSunAccumulation, Switch::SunSkip, kOn, "skip sun accumulation", {}, "Skip the engine's sun shadow culling and registration (CS_DCLF_SUN_SKIP)",
-				"The engine stops building sun shadow passes for the casters DCLF draws; it still sets their shadow bits for the main pass.", false, { &S::shadows } },
-			{ &S::excludeSunEntries, Switch::SunExclude, kOn, "exclude sun entries", {}, "Take DCLF's objects out of the engine's sun culls (CS_DCLF_SUN_EXCLUDE)",
-				"The sun's cascade culls skip every reference whose shadows DCLF draws entirely; DCLF sets those objects' sun shadow bits for the main pass.", false, { &S::skipSunAccumulation } },
+			// (Features/Shadows/Sun's "skip sun accumulation", then its "exclude sun entries", follow the shadows' here.)
+			// It needs the sun's entry exclusion by name (SeedRegistered resolves it): without Features/Shadows/Sun it never takes effect.
 			{ &S::excludePrimaryEntries, Switch::PrimaryExclude, kOn, "exclude primary entries", {}, "Take DCLF's objects out of the engine's main camera cull (CS_DCLF_PRIMARY_EXCLUDE)",
 				"The main camera's cull and registration skip every reference DCLF draws entirely; DCLF builds their main passes itself and runs their fade updates.", false,
-				{ &S::excludeSunEntries } },
+				{}, false, {}, {}, {}, { "exclude sun entries" } },
 			// (Features/OcclusionMaps' "sky occlusion" and "precipitation occlusion" follow here: the first feature toggles registered, their
 			// bits right after these; then Features/Reflection's "reflections" and Features/FirstPerson's "first person".)
 		};

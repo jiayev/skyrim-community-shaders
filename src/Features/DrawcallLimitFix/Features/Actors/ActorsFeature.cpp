@@ -15,7 +15,7 @@ namespace DCLF::Features::Actors
 
 		void Install(Api::InstallContext& a_context)
 		{
-			// Where Core's were listed: after the skin partitions' (before Features/TreeWind's and Features/Decals', which register after
+			// Where Core's were listed: after Features/Skins' skin partitions' (before Features/TreeWind's and Features/Decals', which register after
 			// this feature).
 			const auto actorsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_ACTORS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
 				.description = "0: actors stay native (live toggle's seed)", .after = "CS_DCLF_SKIN_PARTITIONS" });

@@ -1543,7 +1543,7 @@ resident-draw, set and fade parity; motion m28/m29).
       update. A seed sampled by the producer, during the frame, was a step ahead of the engine (its cull had updated the node).
     - **Trees' seeds** likewise (`TreeStaticOfNode` at Kick, the engine's `FUN_14147d640` on the render thread; `seedOdd`; the wind
       frame row carries the descriptor; TreeWindCS merges and skips). A member's wind until its tree's entry is the shading row's
-      (`BindlessShading::treeParams`, `windTimers`: `DeriveTreeAnim` under FrameValues' lease, with the frame's globals bound), no
+      (`BindlessShading::featureBlock`, the shading contribution's block: `DeriveTreeAnim` under FrameValues' lease, with the frame's globals bound), no
       longer the record's from the join; the vertex stage maps t121 (the shading rows) for it, and the shadow frame records bind it.
     - **The mirror's fadeAmount** (Actor::SetAlpha's update): `RefreshFadeAmount` reads it.
     - **What the mirror lacked**: a geometry the category walk tracks with no record (the references the engine moves into
@@ -1837,17 +1837,17 @@ resident-draw, set and fade parity; motion m28/m29).
       each ring entry keeps its own mirror now, checked where it uploads. A kept extras block rewritten in place by the accumulate
       patch (a re-bind moving ProjectedUV/LandBlend or the technique) was never journaled (`kChangeExtras`): noted now.
     - **Tree LOD and the forward pipelines on the pipeline lane** (T6b2c step 9): the last programs and pipelines the render thread
-      requested, built, admitted and polled (`ShaderPrograms::FindTreeLod`, `FindForward`, `FindForwardTreeLod`, `Update`;
-      `DrawPipelines::FindTreeLod`, `FindForwardPipeline`, `Update`) are the lane's. `ShaderPrograms` has one consumer: one
+      requested, built, admitted and polled (`ShaderPrograms::FindDrawFamily`, `FindForward`, `FindDrawFamilyForward`, `Update`;
+      `DrawPipelines::RequestFamily`, `FindForwardPipeline`, `Update`) are the lane's. `ShaderPrograms` has one consumer: one
       completions queue, one waiting map, every kind finished by `UpdateLane` (`ShaderPrograms::Finished`). The render thread posts:
-      `DecideTreeLod` the DistantTree shader (`SetTreeLodInputs`, a frame input) and `RequestTreeLod` (once, a flag);
+      `DecideTreeLod` the DistantTree shader (`SetFamilyInputs`, a frame input) and `RequestFamily` (once, a flag);
       `PrepareReflection` the faces' targets (`SetForwardTargets`) and each LOD slot's `ForwardPipelineKey` (its vertex descriptor,
       its pixel descriptor without Deferred, two-sided or not; tree LOD's forward key by a flag) through `RequestForward` (each key
       once). The lane builds tree LOD's pair from its inputs (targets, winding, the opaque write mode's state) with the main set's
       generation, again at each `RecreateMainSet`, and the forward pipelines for its forward targets (`RecreateForward` on a change);
       completions wake it, and the service's `PublishReady` runs at the end of its pass. The catalog gains `treeLod` (the built pair,
       or failed) and `forwardEntries` with `forwardTargets` (additive). Neither is a set: the lane keeps every built pipeline for the
-      process (earlier generations' too), so the frame resolves them from its catalog alone (`TreeLodPipelinesOf`, which also checks the
+      process (earlier generations' too), so the frame resolves them from its catalog alone (`CatalogFamilyPipelines`, which also checks the
       catalog's `targetsGeneration` as `GetIndirectState` does; `ForwardPipelineOf`, which checks the targets), through one accessor
       for the frame's catalog (`FrameCatalog`). Until a catalog has them the engine draws: tree LOD stays the engine's (no passes
       withheld), and a LOD slot without its forward pipeline is no reflection-phase member (the engine draws it in the faces). The
@@ -2002,7 +2002,7 @@ resident-draw, set and fade parity; motion m28/m29).
     reserves) now reads only its request and a posted copy of the frame's inputs, and shares no mutable state with the epochs, so
     b2b moves the call into the producer job and nothing else. Behaviour is meant to be w114's, with the differences named.
     - **Explicit catalog.** `GetIndirectState(catalog, targetsGeneration)` and `GetShadowIndirectState(catalog, shadowFormat)` (and
-      `TreeLodPipelinesOf(catalog, targetsGeneration, ...)`) take what they were made for; the frame's epochs call
+      `CatalogFamilyPipelines(catalog, family, targetsGeneration, ...)`) take what they were made for; the frame's epochs call
       `FrameIndirectState()` / `FrameShadowIndirectState()` (the held catalog, `DrawPipelines::Generation`, `ShadowFormat`). The
       `HoldCatalog` swap and `CatalogRestore` in the revision are gone: it names its request's catalog. The faces' forward pipelines
       come from it too (`ReflectionPipelinesOf`, PrepareReflection's rule without its requests).
@@ -2355,7 +2355,7 @@ resident-draw, set and fade parity; motion m28/m29).
       otherwise runs `EvaluateWrite` (WriteObject's classification and the record's slot-free inputs) and `EvaluateClassified` (an entry
       classified in this walk: its traits without the root's motion, `mayRecord`, its sun entry as the merge's PerFrameOf will find it -
       the resolved one, else `MirrorSunEntry` - with that root's `RootMovesNow`, its move key, and `ShadingInputsOf` where the merge may
-      store it). It reads the frozen mirror, the entry's own `Tracked`, `lodRanges`, the walk's stamps (`walkSerial`, `objectStamp`,
+      store it). It reads the frozen mirror, the entry's own `Tracked`, `entryRanges`, the walk's stamps (`walkSerial`, `objectStamp`,
       `PassStamp`), `denseWalk`, `hiddenGating`/`hiddenWitness` and the snapshot; no table, slot, `geometryIndex`, `rootMotion`, dependents
       list, face state or other entry, and writes only its `EvalResult` (a `TrackedDelta`: verdict, candidate frame and reason, classify
       inputs, input components, face shape, actor ownership; the light path's verdict with KeepSkin's record half and the HiddenWatch nodes;

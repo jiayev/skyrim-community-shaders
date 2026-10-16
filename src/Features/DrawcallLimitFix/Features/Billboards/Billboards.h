@@ -7,7 +7,7 @@
 // reads them as data, BillboardsFeature.cpp), the CPU twin of the engine's turn (Orient), the parity comparing it with the engine's culls
 // (Diagnostics/BillboardTurns.cpp: its early hooks, in before the primary cull takes NiBillboardNode's OnVisible slot) and its report lines.
 //
-// Core keeps what package/Shaders and the engine define: the placement row and the face mode (Engine/Capture/Billboards.h), the parent
+// Core keeps what package/Shaders and the engine define: the placement row and the face mode (Core/Gpu/PlacementRows/BillboardRow.h), the parent
 // reason (Ineligible::Billboard), the walk up to the one billboard node (Coordinator::BillboardModeOf) and the mode bits the key and the
 // record carry (Records.h, kRasterEffectBillboardShift; the Effect family's record bits). Included by the feature's sources only.
 
@@ -39,7 +39,7 @@ namespace DCLF::Features::Billboards
 	/**
 	 * @brief CS_DCLF_SET_PARITY: the billboards' observer. A thunk after NiBillboardNode::OnVisible (checked first) compares the world the
 	 * engine's cull just turned each effect leaf below to (for the culling camera) with DCLF's row and DCLF's turn of it
-	 * (DCLF::Billboards::SampleRow, Orient: the vertex stage's arithmetic on the CPU). Main thread, at the early hooks.
+	 * (DCLF::PlacementRows::SampleBillboardRow, Orient: the vertex stage's arithmetic on the CPU). Main thread, at the early hooks.
 	 */
 	void InstallTurns();
 	bool TurnsInstalled();

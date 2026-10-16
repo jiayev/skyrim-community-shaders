@@ -435,7 +435,7 @@ block of the next set. A view is never left native for want of a slot.
   map array's slices (Ghidra: `ShadowSceneNode` constructor to `BSShadowDirectionalLight::SetShadowMapCount`, a
   `BSTArray` resize). `SunAccumulation` keeps them in a vector, grown at the sun's `Accumulate` while `bitsReady` is
   clear, and the colour epoch writes them into a region after the main latch (`MainLatchLayout`, 208-byte
-  `SunAccumulation::GpuCascade` records), whose layout grows when it needs to (`ReserveMainLatch`: a new block of the next
+  `Draws::GpuCascade` records, `GpuLayouts.h`), whose layout grows when it needs to (`ReserveMainLatch`: a new block of the next
   set; a `PassFrame` keeps its own).
 - **View rasterizer states.** The id is a field of `ShadowPipelineKey` (`viewState`, also in the pipeline recipe id), a
   mode's states are sorted lists (`ModeRasterStates`: casters and volumetric-only), the lookups' map rows are a vector,

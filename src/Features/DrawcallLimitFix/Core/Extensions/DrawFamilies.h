@@ -108,7 +108,7 @@ namespace DCLF::Api
 		rhi::PipelineHandle pipeline;
 		rhi::CommandSignatureHandle signature;
 
-		/** @brief The slot's pipelines (main), as the lane's type (TreeLodPipelines). */
+		/** @brief The slot's pipelines (main), as the lane's type (FamilyPipelines). */
 		template <class T>
 		const T& Drawn() const
 		{

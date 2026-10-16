@@ -29,8 +29,6 @@ namespace DCLF
 		Refraction,
 		ProjectedUv,
 		Shadows,
-		SunSkip,
-		SunExclude,
 		PrimaryExclude,
 		EmptyFadeNode,
 		OrgEpochs,

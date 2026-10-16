@@ -197,7 +197,7 @@ Measured at `BSDistantTreeShader::SetupGeometry` (a temporary probe), over the t
 
 Under the `lodTrees` toggle (`CS_DCLF_LOD_TREES`, "tree LOD"), on when unset.
 
-- **The tables** (Features/TreeLod's scene resources, `TreeLodTables.h`; their layout `Core/Render/DrawFamilies/TreeInstancesLayout.h`). The mirror gives each shape a slot and each mesh (a type's base
+- **The tables** (Features/TreeLod's scene resources, `TreeLodTables.h`; their layout `Features/TreeLod/TreeInstancesLayout.h`). The mirror gives each shape a slot and each mesh (a type's base
   shape's renderer data) a slot of its own:
   - a shape row per slot: translation, mesh slot, record count, its type's extent;
   - 75 instance records per slot, the engine's 32-byte records;
@@ -224,10 +224,10 @@ Under the `lodTrees` toggle (`CS_DCLF_LOD_TREES`, "tree LOD"), on when unset.
   views (`PassCapture::WithholdMain`: hint 7 into group 1, from both the colour pass's registration and the Z-prepass's), and
   the depth commit names the slots in the draw row. Otherwise the draw row names none, the cull appends nothing, and both
   passes draw no instances. So the passes, which are prepared ahead of the commits, never disagree within a frame.
-- **Programs and pipelines.** `ShaderPrograms::FindTreeLod` compiles `DistantTree.hlsl` with `DCLF_PULLED` for descriptors
+- **Programs and pipelines.** `ShaderPrograms::FindDrawFamily` compiles `DistantTree.hlsl` with `DCLF_PULLED` for descriptors
   `0x10100` (deferred) and `0x10001` (depth). A pulled DistantTree build takes `Permutation.hlsli`'s values as zero statics
-  (`DCLF_PULLED_ROWS`): DCLF draws no reflection. `DrawPipelines::FindTreeLod` builds the two pipelines through the pipeline
-  service.
+  (`DCLF_PULLED_ROWS`): DCLF draws no reflection. `DrawPipelines::RequestFamily` builds the two pipelines through the pipeline
+  service (the descriptors and source come from the family's program block, `Api::DrawFamilyProgram`).
 - **A defect fixed on the way.** `DrawPipelines::Update` took a reference to a finished build's artifact, then reset the
   future. When `PipelineService::PublishReady` had already dropped its own reference, that destroyed the artifact under the
   reference (tree LOD's build failed with an empty error). It is copied now, at all three sites.
@@ -356,7 +356,7 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
   tree LOD's tables. The tables are stable then (written again at the placement join, BeforeShadowMaps), but this frame's
   rows don't exist yet. So the faces draw from the frame before's, and the design follows from that.
 - **Programs** (L5b). `ShaderPrograms::FindForward(vertex, pixel)`: a main pipeline's pulled vertex stage and the pulled
-  colour pixel stage of its pixel descriptor without `Deferred`. `FindForwardTreeLod`: DistantTree's `DistantTreeBlock` with
+  colour pixel stage of its pixel descriptor without `Deferred`. `FindDrawFamilyForward`: DistantTree's `DistantTreeBlock` with
   `AlphaTest`, pulled.
 - **Pipelines** (L5b). `FindForwardPipeline(program, targets, cull)`: the forward program's stages under the Z-prepass's
   layout (plain draws), the face's colour and depth formats, depth LESS_EQUAL with writes, front faces culled (none for a
@@ -536,7 +536,7 @@ skyrim-engine-notes.md has the details: "Object LOD: segments and where LOD is d
 `CategorySignature`). Everything under it is tracked through the same attach and detach events as a cell's content.
 Terrain LOD under it stays `Lod`.
 
-**Segments by events (`Core/Engine/LodSegments.h`; `Features/Lod/LodSegmentEvents.h`).**
+**Segments by events (`Features/Lod/LodSegments.h`, captured through the `kSubIndexTriShape` contribution's `ranges`; `Features/Lod/LodSegmentEvents.h`).**
 - **Hooks.** The nine call sites of the three writers are patched (`Features/Lod`'s early hooks, `InstallSegmentHooks`). Each makes the
   write, then pushes the shape onto the feature's engine channel (a lock-free queue, `Api::EngineChannel`), from whichever thread runs the
   terrain manager's update.

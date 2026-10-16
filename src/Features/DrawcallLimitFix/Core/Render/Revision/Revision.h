@@ -42,7 +42,7 @@ namespace DCLF::Draws
 		// BuildPoint: the graph's build (PersistentGraphHost::BuildGeneration) and the heaps every recording binds (the graph's own).
 		std::uint64_t buildGeneration = 0;
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
-		// The pipeline generations a catalog's sets must be built for (GetIndirectState, GetShadowIndirectState, TreeLodPipelinesOf).
+		// The pipeline generations a catalog's sets must be built for (GetIndirectState, GetShadowIndirectState, CatalogFamilyPipelines).
 		std::uint32_t targetsGeneration = 0;
 		DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
 		// The toggles (the cull mode, the reflections and tree LOD, the occlusion maps), their generation, and the switches read.

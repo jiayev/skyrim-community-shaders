@@ -9,6 +9,7 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Api/Settings.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 
 namespace DCLF::Features::Shadows::Sun
@@ -19,12 +20,12 @@ namespace DCLF::Features::Shadows::Sun
 	 * @brief The engine's work for the sun's cascades, removed where DCLF already draws the result (skyrim-engine-notes.md, "The
 	 * sun's accumulation"). AE only. Render thread, plus the registration thunks on job threads.
 	 *
-	 * Registration-free accumulation (`skipSunAccumulation`, CS_DCLF_SUN_SKIP): BSShadowDirectionalLight::Accumulate culls each
+	 * Registration-free accumulation (toggle "skip sun accumulation", CS_DCLF_SUN_SKIP): BSShadowDirectionalLight::Accumulate culls each
 	 * cascade and hands each geometry to the accumulator's registration (FUN_1414b2140, from FUN_140e28af0), which builds shadow
 	 * passes and ORs the cascade's bit into activeLightMask (the main pass reads it). For a member the thunks replicate the early-outs
 	 * and mask write and skip the passes; anything else calls the original.
 	 *
-	 * Entry exclusion (`excludeSunEntries`, CS_DCLF_SUN_EXCLUDE; drawcall-limit-fix.md, "The sun's cascades without DCLF's objects"):
+	 * Entry exclusion (toggle "exclude sun entries", CS_DCLF_SUN_EXCLUDE; drawcall-limit-fix.md, "The sun's cascades without DCLF's objects"):
 	 * the cascade culls walk only the full-frustum processes' objectArray, so after the full-frustum cull every entry DCLF draws
 	 * entirely is removed from it. DCLF writes the sun's mask bits at the main registration instead: the cascades the bound meets,
 	 * against the planes the engine's cascade cull used.
@@ -37,6 +38,8 @@ namespace DCLF::Features::Shadows::Sun
 		/** @brief AE: the Accumulate vtable slot and the call sites; verified before patching. */
 		void Install();
 		bool Installed() const { return installed; }
+		/** @brief Main thread, at the feature's install (before DCLF's threads start): its toggles, the registration skip's and the entry exclusion's. */
+		static void SetToggles(Api::ToggleId a_skip, Api::ToggleId a_exclude);
 
 
 		/** @brief Whether this frame's full-frustum cull applied the entry exclusion. */
