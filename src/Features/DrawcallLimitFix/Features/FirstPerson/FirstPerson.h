@@ -50,6 +50,8 @@ namespace DCLF::Features::FirstPerson
 	bool Covered(const Api::ViewCoverage& a_coverage);
 	void CaptureRoot(Api::ViewRootCapture& a_capture);
 	void Accumulators(Api::ViewAccumulators& a_accumulators);
+	// The skeleton's cull hidden source (Api::CullHiddenSource, listed hidden): the first-person 3D, while it is not the third-person one.
+	void CullHiddenSkeleton(Api::CullHiddenNodes& a_nodes);
 
 	// FirstPersonEpochs.cpp: the depth epoch (RenderDepth's first-person draw), the colour epoch (Main::RenderFirstPersonView's accumulator
 	// render), and the view's report lines, taking its counters.

@@ -3,6 +3,7 @@
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 namespace DCLF::Extensions
 {
@@ -119,7 +120,7 @@ namespace DCLF::Extensions
 	}
 
 	void ResolveViews(std::span<const Api::ViewContribution, kEngineViews> a_views, std::span<const Api::ViewWork> a_work,
-		std::span<const Api::ViewRootContribution, kViewRoots> a_roots)
+		std::span<const Api::ViewRootContribution, kViewRoots> a_roots, std::span<const Api::CullHiddenSource> a_cullHidden)
 	{
 		static bool once = false;
 		if (std::exchange(once, true))
@@ -143,9 +144,29 @@ namespace DCLF::Extensions
 			set.rootOwned[r] = a_roots[r].root < Api::ViewRoot::Count ? a_roots[r].owned : nullptr;
 			set.rootBits |= set.rootOwned[r] ? Api::ViewRootBit(static_cast<Api::ViewRoot>(r)) : 0u;
 		}
+		// The cull hidden sources (Registry refused incomplete ones), in registration order.
+		set.cullHiddenSources.assign(a_cullHidden.begin(), a_cullHidden.end());
 		Detail::resolvedViews = std::move(set);
 		// The shapes' views into the strings where they now stand.
 		for (auto& entry : Detail::resolvedViews.views)
 			PointShape(entry);
+	}
+
+	void CollectCullHidden(std::vector<std::pair<const RE::NiAVObject*, bool>>& a_list)
+	{
+		for (const auto& source : Views().cullHiddenSources) {
+			Api::CullHiddenNodes nodes{ a_list, source.bit == Api::CullHiddenBit::Hidden };
+			source.nodes(nodes);
+		}
+	}
+}
+
+namespace DCLF::Api
+{
+	void CullHiddenNodes::Add(const RE::NiAVObject* a_node)
+	{
+		// A hidden source's bit is not read (FirstPerson's skeleton: hidden for every view the scene serves, whatever it is now).
+		if (a_node)
+			list.emplace_back(a_node, hidden || Engine::IsHidden(a_node));
 	}
 }

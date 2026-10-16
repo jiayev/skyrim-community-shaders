@@ -185,4 +185,27 @@ namespace DCLF::Api
 		ViewRoot root = ViewRoot::Count;
 		bool (*owned)(const ViewRootFrame& a_frame) = nullptr;
 	};
+
+	// Core-defined (Core/Extensions/Views.h): where a cull hidden source lists its nodes.
+	class CullHiddenNodes;
+
+	/** @brief How a cull hidden source's nodes are listed: with their hidden bit as it is now, or hidden (their bit not read). */
+	enum class CullHiddenBit : std::uint8_t
+	{
+		AsNow,
+		Hidden,
+	};
+
+	/**
+	 * @brief A cull hidden source (Api::InstallContext::RegisterCullHiddenSource): engine nodes whose hidden bit the engine changes around
+	 * the scene's views within the frame, which the frame's capture lists with the bit the views see (FrameGlobals::cullHidden, read by the
+	 * membership in place of the bit now: Coordinator::HiddenForWalk). nodes: render thread, at the frame's start (FrameGlobals::Capture),
+	 * once a frame off a loading screen, in registration order: its nodes (CullHiddenNodes::Add), each listed with bit's. The list is
+	 * sorted after every source: the order is not a result.
+	 */
+	struct CullHiddenSource
+	{
+		CullHiddenBit bit = CullHiddenBit::AsNow;
+		void (*nodes)(CullHiddenNodes& a_nodes) = nullptr;
+	};
 }

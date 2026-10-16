@@ -1,6 +1,6 @@
 // The first-person view's frame start and callbacks: the latch, its targets, the skeleton's walk and pipelines, its resources and target
 // (BeginFrame, the view's work before the coverage), its coverage (Covered), its root (CaptureRoot) and the accumulators its members
-// register into (Accumulators). Render thread.
+// register into (Accumulators), and the skeleton's cull hidden source (CullHiddenSkeleton). Render thread.
 
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPersonView.h"
 
@@ -172,6 +172,20 @@ namespace DCLF::Features::FirstPerson
 			a_capture.inputCount = 2;
 			if (firstPerson && firstPerson != thirdPerson)
 				a_capture.root = firstPerson->AsNode();
+		}
+	}
+
+	void CullHiddenSkeleton(Api::CullHiddenNodes& a_nodes)
+	{
+		// The first-person skeleton: Main::Draw (AE 0x1406444b0) hides it right after the call the frame's start runs from,
+		// keeps it hidden through the main camera's cull and the sun's shadow casters, and shows it only to draw the
+		// first-person view with its own camera. For every view the scene serves it is hidden (the source's bit). The third-person
+		// skeleton is Features/Reflection's source's.
+		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+			const RE::NiAVObject* thirdPerson = player->Get3D(false);
+			const RE::NiAVObject* firstPerson = player->Get3D(true);
+			if (firstPerson && firstPerson != thirdPerson)
+				a_nodes.Add(firstPerson);
 		}
 	}
 

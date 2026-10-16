@@ -98,6 +98,9 @@ namespace DCLF::Features::Reflection
 			// frame's faces' epoch right after the depth commit.
 			a_context.RegisterViewWork({ .view = kView, .point = Api::ViewPoint::FrameStartAfterTreeLod, .run = &Prepare });
 			a_context.RegisterViewWork({ .view = kView, .point = Api::ViewPoint::DepthCommitted, .run = &Execute });
+			// The nodes the reflection's update hides around its faces, in the frame's cull-hidden list (whatever the toggle: the engine's
+			// update hides them either way).
+			a_context.RegisterCullHiddenSource({ .bit = Api::CullHiddenBit::AsNow, .nodes = &CullHiddenByUpdate });
 			// After the visibility lines and before the forward epoch's, where Core printed the view's.
 			a_context.RegisterReportLines({ .name = "reflection", .point = Api::ReportPoint::AsyncWorkViews, .text = &Lines });
 			// CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the faces' cameras against the engine's, and the residue's classes.

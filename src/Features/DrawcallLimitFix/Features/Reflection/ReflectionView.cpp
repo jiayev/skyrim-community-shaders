@@ -1,6 +1,6 @@
 // The water reflection's faces' capture and frame start: a face's camera and targets once the engine oriented it (FaceOriented), the face
 // drawn for the observers (FaceDrawn), the faces' targets, the LOD slots' forward pipelines and the view's resources after tree LOD's
-// decision (Prepare), and its coverage (Covered). Render thread.
+// decision (Prepare), its coverage (Covered), and the nodes its update hides (CullHiddenByUpdate). Render thread.
 
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
@@ -139,6 +139,21 @@ namespace DCLF::Features::Reflection
 		// The faces' draw families (tree LOD): each DCLF's while the main view's is (DecideDrawFamilies, before this), the last depth commit
 		// uploaded the tables the faces draw from, and the faces are drawn.
 		draws.DecideViewFaces(kView);
+	}
+
+	void CullHiddenByUpdate(Api::CullHiddenNodes& a_nodes)
+	{
+		// The third-person skeleton as it is now. TESWaterReflections::Update (AE 0x140520570), on the frames a cube-map
+		// reflection updates, hides the player's 3D while it renders the faces and then restores it; Main::Draw calls it
+		// between the main cull jobs' Begin and Finish.
+		if (auto* player = RE::PlayerCharacter::GetSingleton())
+			a_nodes.Add(player->Get3D(false));
+		// The water objects' shapes as they are now: TESWaterReflections::Update hides them around the cube map's faces too, and
+		// restores them after.
+		if (auto* water = RE::TESWaterSystem::GetSingleton())
+			for (const auto& object : water->waterObjects)
+				if (object && object->shape)
+					a_nodes.Add(object->shape.get());
 	}
 
 	bool Covered(const Api::ViewCoverage& a_coverage)

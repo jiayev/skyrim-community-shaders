@@ -281,33 +281,21 @@ namespace DCLF
 				if (graph->portalSharedNode)
 					g->cullHidden.emplace_back(graph->portalSharedNode.get(), Hidden(graph->portalSharedNode.get()));
 			}
+			// The features' nodes whose bit the engine changes around the views (Api::CullHiddenSource: Features/Reflection's player 3D and
+			// water shapes, Features/FirstPerson's skeleton), sorted with the rest below.
+			Extensions::CollectCullHidden(g->cullHidden);
+			// A CategoryRoot view's root while its toggle is on, as its feature names it (Api::ViewContribution::captureRoot): the first
+			// with a root. The subtree machinery below holds one root (the first person's, the one CategoryRoot view today).
 			const RE::NiAVObject* subtreeRoot = nullptr;
-			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-				// The third-person skeleton as it is now. TESWaterReflections::Update (AE 0x140520570), on the frames a cube-map
-				// reflection updates, hides the player's 3D while it renders the faces and then restores it; Main::Draw calls it
-				// between the main cull jobs' Begin and Finish.
-				const RE::NiAVObject* thirdPerson = player->Get3D(false);
-				if (thirdPerson)
-					g->cullHidden.emplace_back(thirdPerson, Hidden(thirdPerson));
-				// The first-person skeleton: Main::Draw (AE 0x1406444b0) hides it right after the call the frame's start runs from,
-				// keeps it hidden through the main camera's cull and the sun's shadow casters, and shows it only to draw the
-				// first-person view with its own camera. For every view the scene serves it is hidden.
-				const RE::NiAVObject* firstPerson = player->Get3D(true);
-				if (firstPerson && firstPerson != thirdPerson)
-					g->cullHidden.emplace_back(firstPerson, true);
-			}
-			// The first-person view's root while its toggle is on, as its feature names it (Api::ViewContribution::captureRoot).
-			if (Extensions::ViewOn(ActiveToggles(), Api::EngineView::FirstPerson)) {
+			const auto& views = Extensions::Views();
+			for (std::uint32_t i = 0; i < views.rootCount && !subtreeRoot; ++i) {
+				const auto view = views.rootViews[i];
+				if (!Extensions::ViewOn(ActiveToggles(), view))
+					continue;
 				Api::ViewRootCapture root;
-				Extensions::ViewEntryOf(Api::EngineView::FirstPerson).captureRoot(root);
+				Extensions::ViewEntryOf(view).captureRoot(root);
 				subtreeRoot = root.root;
 			}
-			// The water objects' shapes as they are now: TESWaterReflections::Update hides them around the cube map's faces too, and
-			// restores them after.
-			if (auto* water = RE::TESWaterSystem::GetSingleton())
-				for (const auto& object : water->waterObjects)
-					if (object && object->shape)
-						g->cullHidden.emplace_back(object->shape.get(), Hidden(object->shape.get()));
 			std::sort(g->cullHidden.begin(), g->cullHidden.end());
 			// CS_DCLF_FIRST_PERSON: every node and geometry under the first-person root, with the bit the engine's first-person culls saw
 			// last frame (NoteFirstPersonCulled), else as it is now (this thread, before Main::Draw touches the skeleton). The frame start's

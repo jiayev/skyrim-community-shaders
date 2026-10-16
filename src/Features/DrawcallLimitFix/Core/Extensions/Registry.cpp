@@ -93,6 +93,8 @@ namespace DCLF::Extensions
 			std::vector<Api::ViewWork> viewWork;
 			// By root: its view root contribution (ViewRoot::Count: none). Resolved with the views (ResolveViews).
 			std::array<Api::ViewRootContribution, kViewRoots> viewRoots{};
+			// The cull hidden sources, in registration order. Resolved with the views (ResolveViews).
+			std::vector<Api::CullHiddenSource> cullHiddenSources;
 			// By map and by source: its contribution (Count: none). Resolved at the end (ResolveShadowViews).
 			std::array<Api::OcclusionMapContribution, kOcclusionMaps> occlusionMaps{};
 			std::array<Api::ShadowSourceContribution, kShadowSources> shadowSources{};
@@ -983,6 +985,13 @@ namespace DCLF::Extensions
 				lists.viewRoots[static_cast<std::size_t>(a_root.root)] = a_root;
 			}
 
+			void RegisterCullHiddenSource(const Api::CullHiddenSource& a_source) override
+			{
+				if (!a_source.nodes || a_source.bit > Api::CullHiddenBit::Hidden)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete cull hidden source", feature));
+				lists.cullHiddenSources.push_back(a_source);
+			}
+
 			void RegisterOcclusionMap(const Api::OcclusionMapContribution& a_map) override
 			{
 				// Its toggle, flag, bits, rule, camera and accumulator test always, the import for an ImportedTexture map. Its bits are checked against Core's and the other
@@ -1230,7 +1239,7 @@ namespace DCLF::Extensions
 		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the primary view's; the root states'; the palette rows classes'; the shading fields'
 		// (and the published entry classes); the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
-		ResolveViews(lists.views, lists.viewWork, lists.viewRoots);
+		ResolveViews(lists.views, lists.viewWork, lists.viewRoots, lists.cullHiddenSources);
 		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
 		ResolveViewBits();
 		ResolveDrawFamilies(lists.drawFamilies);
