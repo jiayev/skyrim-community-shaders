@@ -204,11 +204,13 @@ namespace DCLF
 		void PostAheadContext();
 
 		/**
-		 * @brief Render thread, the frame's start: hands the fade events read back since the last kick to a task on DCLF's executor
+		 * @brief Render thread, the frame's start (the root states' kick: Extensions::RootStatesKick): hands the fade events read back since the last kick to a task on DCLF's executor
 		 * that judges them into the stores WriteFadeStores makes (drawcall-limit-fix.md, "The fade write-back"). Without it a stood-in
 		 * root's node stays as the engine last wrote it for its readers (tree LOD crossfade, occlusion cull, animation gate).
 		 */
 		void KickFadeWriteBack();
+		/** @brief Render thread (DrainAsync's root states' wait; never per frame): waits for the fade write-back task, drops what it found. */
+		void WaitFadeWriteBack();
 		/**
 		 * @brief Main thread at Main::Update's entry (no list cull, cell animation or animation job runs): makes the last task's
 		 * stores on the roots DCLF writes (a_written: PrimaryCull::FadeWrittenByDclf; other roots are left to the engine's cull).
@@ -394,7 +396,7 @@ namespace DCLF
 		/** @brief Whether DCLF cannot draw (set once, by the render thread): the frame then has no claims. */
 		bool Failed() const { return failed.load(std::memory_order_relaxed); }
 
-		/** @brief Waits for the builds ahead, the fade write-back and the visibility decode; lets go of the frame's stream views. */
+		/** @brief Waits for the builds ahead, the root states' task (the fade write-back) and the visibility decode; lets go of the frame's stream views. */
 		void DrainAsync();
 
 		/** @brief The `[DCLF] async` report lines for the interval; resets its counters. */

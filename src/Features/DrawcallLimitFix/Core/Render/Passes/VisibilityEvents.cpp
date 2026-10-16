@@ -33,9 +33,11 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			const auto& scene = *resources->scene;
 			VisibilityEventsBindings bindings{};
-			bindings.roots = a_builder.ShaderResource(*scene.fadeRoots).View();
-			bindings.states = a_builder.ShaderResource(*scene.fadeStates).View();
-			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
+			// The root states' rows, the states their step wrote this frame and its frame row (the cull bindings RootRows, RootStepStates,
+			// RootFrame: the pass is added only with the rows).
+			bindings.roots = a_builder.ShaderResource(*Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, scene)).View();
+			bindings.states = a_builder.ShaderResource(*Extensions::CullBindingBuffer(Api::CullBindingSlot::RootStepStates, scene)).View();
+			bindings.frame = a_builder.ShaderResource(*Extensions::SelectCullBinding(Api::CullBindingSlot::RootFrame, scene).buffer).View();
 			bindings.frustum = a_builder.ShaderResource(*resources->frustum).View();
 			bindings.rootReported = a_builder.UnorderedAccess(*scene.visibilityRootReported).View();
 			bindings.objectReported = a_builder.UnorderedAccess(*scene.visibilityObjectReported).View();
@@ -49,8 +51,9 @@ namespace DCLF::Draws
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
 			const auto& main = *resources;
 			const auto& scene = *main.scene;
-			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &main.frustum, &scene.visibilityRootReported, &scene.visibilityObjectReported,
-					 &scene.visibilityEvents })
+			for (const auto* buffer : { &Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, scene),
+					 &Extensions::CullBindingBuffer(Api::CullBindingSlot::RootStepStates, scene), &main.frustum, &scene.visibilityRootReported,
+					 &scene.visibilityObjectReported, &scene.visibilityEvents })
 				a_out.push_back(NamedSerial(a_preparation, *buffer));
 			a_out.push_back(frame ? frame->generation : 0);
 		}
@@ -75,8 +78,8 @@ namespace DCLF::Draws
 			constants.eventCapacity = events;
 			// Every root slot, then every object slot while the segment builds (without depth phase 1 no stamp is this frame's): what the
 			// revision's versions of the buffers read and written by slot hold.
-			constants.rootSlots = static_cast<std::uint32_t>(std::min({ NamedUnitsOf(a_preparation, scene.fadeRoots), NamedUnitsOf(a_preparation, scene.fadeStates),
-				NamedUnitsOf(a_preparation, scene.visibilityRootReported) }));
+			constants.rootSlots = static_cast<std::uint32_t>(std::min({ NamedUnitsOf(a_preparation, Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, scene)),
+				NamedUnitsOf(a_preparation, Extensions::CullBindingBuffer(Api::CullBindingSlot::RootStepStates, scene)), NamedUnitsOf(a_preparation, scene.visibilityRootReported) }));
 			constants.objectSlots = BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass) ?
 			                            static_cast<std::uint32_t>(std::min(NamedUnitsOf(a_preparation, resources->frustum), NamedUnitsOf(a_preparation, scene.visibilityObjectReported))) :
 			                            0u;

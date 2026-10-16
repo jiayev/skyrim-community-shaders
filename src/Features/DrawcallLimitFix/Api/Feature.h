@@ -19,6 +19,7 @@
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Api/Payload.h"
 #include "Features/DrawcallLimitFix/Api/Reports.h"
+#include "Features/DrawcallLimitFix/Api/RootStates.h"
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
 #include "Features/DrawcallLimitFix/Api/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
@@ -70,10 +71,21 @@ namespace DCLF::Api
 		virtual void RegisterReportLines(const ReportLines& a_lines) = 0;
 		/** @brief Whether the primary cull is installed: false, and the observer is never called, without it (its engine hooks failed). */
 		virtual bool RegisterStandInObserver(const StandInObserver& a_observer) = 0;
-		/** @brief Fails the install for a name another channel has, no name or drain, or past Extensions::kEngineChannelSlots channels. */
+		/**
+		 * @brief Fails the install for a name another channel has, no name or drain (a Keys channel), or past
+		 * Extensions::kEngineChannelSlots channels.
+		 */
 		virtual EngineChannelId RegisterEngineChannel(const EngineChannel& a_channel) = 0;
 		/** @brief The channel registered (by this feature or an earlier one) under a_name; none when no channel has it. */
 		virtual EngineChannelId FindEngineChannel(std::string_view a_name) const = 0;
+		/**
+		 * @brief The channel registered (by any feature, a later one too) under a_name, for the feature's own hooks to push to
+		 * (Extensions::PushChannelKey), bound once every install ran (as NeedClassifyInput's needs are); until then, and for good when
+		 * none has the name or its channel takes no pushes (Api::EngineChannel::push), a push is dropped. Not a channel the feature's
+		 * keys hooks are handed (those name the registered id). Fails the install for no name or past Extensions::kEngineChannelNeedSlots
+		 * needs.
+		 */
+		virtual EngineChannelId NeedEngineChannel(std::string_view a_name) = 0;
 		/** @brief Fails the install for a second show veto, or one without open or vetoes. */
 		virtual void RegisterShowVeto(const ShowVeto& a_veto) = 0;
 		/** @brief Fails the install for no name or generation, or past Extensions::kAdoptionGuardSlots guards. */
@@ -220,6 +232,11 @@ namespace DCLF::Api
 		 * pass name, setup or makePass.
 		 */
 		virtual void RegisterDepthPyramid(const DepthPyramidContribution& a_pyramid) = 0;
+		/**
+		 * @brief Fails the install for a second contribution (Core's readers take one producer's states), or one without a name, a table
+		 * family registered before, view or test.
+		 */
+		virtual void RegisterRootStates(const RootStatesContribution& a_states) = 0;
 
 	protected:
 		~InstallContext() = default;

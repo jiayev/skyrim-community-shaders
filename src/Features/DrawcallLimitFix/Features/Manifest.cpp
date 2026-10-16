@@ -37,9 +37,12 @@ namespace DCLF::Features
 {
 	namespace
 	{
-		// Every feature's frame-binding register (its HLSL declares the same: TreeWind's DCLFTreeWind, Common/DCLFObjects.hlsli).
+		// Every feature's frame-binding register (its HLSL declares the same: TreeWind's DCLFTreeWind, Common/DCLFObjects.hlsli), and Core's
+		// fade roots' (their states and roots, FadeRenderRegistration.cpp).
 		constexpr std::uint32_t kFrameBindingRegisters[] = {
 			TreeWind::kWindRegister,
+			kFadeStatesRegister,
+			kFadeRootsRegister,
 		};
 
 		constexpr bool FrameBindingRegistersValid()
@@ -135,10 +138,14 @@ namespace DCLF::Features
 			return true;
 		}
 
-		// Every feature's object flags (its technique contributions' objectFlags): within the bits Core's enum leaves the features
-		// (Records.h, kFeatureObjectFlags), none another's.
+		// Every feature's object flags (its technique contributions' objectFlags, a root states contribution's objectFlags): within the bits
+		// Core's enum leaves the features (Records.h, kFeatureObjectFlags), none another's. The root test's two (the fade roots': the
+		// fade-out distance and the tree height test, Api::RootStatesContribution::objectFlags) are named by Core's enum until
+		// Features/Fades declares them.
 		constexpr std::uint32_t kObjectFlags[] = {
 			TreeWind::kObjectTreeAnim,
+			kObjectFadeTest,
+			kObjectHeightTest,
 		};
 
 		constexpr bool ObjectFlagsValid()
@@ -243,6 +250,15 @@ namespace DCLF::Features
 	static_assert(GraphBufferRegistersValid(), "a graph buffer's register is below t16, past t127, Core's, a frame binding's, a frame texture's or another graph buffer's");
 	static_assert(FrameConstantRowsValid(), "a frame constant row is outside Core's feature rows of PS b13 or another row's");
 	static_assert(ObjectFlagsValid(), "a feature's object flags are Core's (outside kFeatureObjectFlags) or another feature's");
+	// Every bit kFeatureObjectFlags leaves the features is one a feature declares (none left over for Core to take back unnoticed).
+	static_assert([] {
+		std::uint32_t all = 0;
+		for (const std::uint32_t flags : kObjectFlags)
+			all |= flags;
+		return all == kFeatureObjectFlags;
+	}(), "kFeatureObjectFlags holds a bit no feature declares");
+	// The root test's bits: DCLFObjects.hlsli's and BuildDrawsCS's fade test and height test (27, 28), which the shaders mirror.
+	static_assert(kObjectFadeTest == 1u << 27 && kObjectHeightTest == 1u << 28, "the root test's object flags are not the shaders' bits 27 and 28");
 	static_assert(RecordWordsValid(), "a family's record words are past the object record or another family's");
 	static_assert(AncestorRecordWordsValid(), "an ancestor value's record word is past the object record, a family's or another ancestor value's");
 	// Integrations/LightLimitFix's room index: DCLFObjectRecord's RoomIndex (DCLFObjects.hlsli), the record's first word.

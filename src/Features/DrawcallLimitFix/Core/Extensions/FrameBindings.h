@@ -62,7 +62,7 @@ namespace DCLF::Extensions
 	{
 		return a_register < kPixelTextureSlots || FeatureMaterialSlot(a_register) >= 0 || a_register == kObjectBufferRegister || a_register == kExtrasBufferRegister ||
 		       a_register == kCharacterLightRegister || a_register == kPlacementBufferRegister || a_register == kPaletteBufferRegister ||
-		       a_register == kShadingBufferRegister || a_register == kFadeStatesRegister || a_register == kFadeRootsRegister;
+		       a_register == kShadingBufferRegister;
 	}
 
 	/** @brief The descriptor of every binding's buffer for a_frame, as a_sealed names it, into a_out (render thread or snapshot builder). */

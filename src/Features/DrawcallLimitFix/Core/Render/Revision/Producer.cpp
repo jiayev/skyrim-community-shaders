@@ -288,8 +288,9 @@ namespace DCLF
 		const auto& sealed = *seal.named;
 		// The event lists' staging sets for the capacities the set names, before any shape of it.
 		if (const auto& s = inputs.scene) {
-			if (s->fadeEvents && s->fadeWriteBack)
-				s->fadeWriteBack->AddSet(static_cast<std::uint32_t>(sealed.Of(s->fadeEvents).units));
+			// Core's fade roots' write-back (its scene resources: no contract hands a scene resource the sealed set yet).
+			if (const auto* fades = FadeSceneOf(*s); fades && fades->fadeEvents && fades->fadeWriteBack)
+				fades->fadeWriteBack->AddSet(static_cast<std::uint32_t>(sealed.Of(fades->fadeEvents).units));
 			if (s->visibilityEvents && s->visibilityReadback)
 				s->visibilityReadback->AddSet(static_cast<std::uint32_t>(sealed.Of(s->visibilityEvents).units));
 		}

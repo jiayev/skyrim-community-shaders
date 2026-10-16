@@ -126,7 +126,7 @@ namespace DCLF::Draws
 					else if (const int f = FeatureMaterialSlot(t); f >= 0)
 						c.featureRegister[f] = t;
 					else if (t == kObjectBufferRegister || t == kExtrasBufferRegister || Extensions::FrameBindingRegister(t) || t == kPlacementBufferRegister ||
-							 t == kPaletteBufferRegister || t == kShadingBufferRegister || t == kFadeStatesRegister || t == kFadeRootsRegister)
+							 t == kPaletteBufferRegister || t == kShadingBufferRegister)
 						c.buffers[w] |= bit;
 					else {
 						c.frame[w] |= bit;
@@ -221,6 +221,8 @@ namespace DCLF::Draws
 			const std::size_t primary;
 			const MainInputs& in;  // the primary segment's
 			const SceneTables& tables;
+			// Each object's root slot (the root states' family's objectRow), read once a build for the inputs' fade rows.
+			const std::span<const std::uint32_t> objectRoots = ObjectRootsOf(tables);
 			const FrameTables& frame;  // the frame's PerGeometry blocks
 			const Lookups& lookups;
 			MainPayload& out;  // the primary segment's
@@ -993,7 +995,7 @@ namespace DCLF::Draws
 		if (object.flags & kObjectNoBindings) {
 			// A cull-only candidate: bounds for culling, nothing to draw.
 			a_input = { 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, o, 0 };
-			SetFadeRow(a_input, tables, o);
+			SetFadeRow(a_input, objectRoots, tables, o);
 			return 0;
 		}
 		if (ObjectDecalGroup(object.flags) && !ObjectFits(tables, o, in.addresses.fit)) {
@@ -1009,7 +1011,7 @@ namespace DCLF::Draws
 		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok;
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
 			{ MainMaskOf(tables, o) }, o, ordinal, partitions, StreamGeometry(tables, o, in.addresses.streamBuffer) };
-		SetFadeRow(a_input, tables, o);
+		SetFadeRow(a_input, objectRoots, tables, o);
 		if (!drawable)
 			return 0;
 		return decal ? kRegionDecal : static_cast<std::uint8_t>(PartitionDraws(partitions));
@@ -1909,7 +1911,7 @@ namespace DCLF::Draws
 		if (object.flags & kObjectNoBindings) {
 			// No material or pipeline entry: the depth segment submits it cull-only, with its bounds.
 			drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), 0 });
-			SetFadeRow(drawInputs.back(), tables, o);
+			SetFadeRow(drawInputs.back(), objectRoots, tables, o);
 			if (!region)
 				Skipped(Skip::CandidateOnly);
 			return;
@@ -1950,7 +1952,7 @@ namespace DCLF::Draws
 			// Still cull-only: the depth segment publishes every candidate's verdict for the colour segment. A decal gets its blank.
 			if (!decalGroup) {
 				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), 0 });
-				SetFadeRow(drawInputs.back(), tables, o);
+				SetFadeRow(drawInputs.back(), objectRoots, tables, o);
 			}
 			Skipped(Skip::NotInSet);
 			return;
@@ -1993,7 +1995,7 @@ namespace DCLF::Draws
 				out.objectState[o] = kObjectStateDrawable;
 			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, object.flags | kInputDrawable, { MainMaskOf(tables, o) },
 				static_cast<std::uint32_t>(o), 0, partitions, streamIndex });
-			SetFadeRow(drawInputs.back(), tables, o);
+			SetFadeRow(drawInputs.back(), objectRoots, tables, o);
 			if (!partitions) {
 				sequences.push_back(sequence);
 			} else {

@@ -22,13 +22,13 @@ namespace DCLF::Reports
 	{
 		using V = Diagnostics::SceneView;
 
-		/** @brief The table families' kept counts ("<name> kept N, " each: Features/TreeWind's trees), the replay line's before the fade roots'. */
+		/** @brief The table families' kept counts ("<name> kept N", joined by ", ": Features/TreeWind's trees, then the fade roots). */
 		std::string FamiliesKept(const std::array<std::uint64_t, Extensions::kTableFamilySlots>& a_kept)
 		{
 			std::string line;
 			const auto families = Extensions::RegisteredTableFamilies();
 			for (std::size_t f = 0; f < families.size(); ++f)
-				line += fmt::format("{} kept {}, ", families[f].name, a_kept[f]);
+				line += fmt::format("{}{} kept {}", f ? ", " : "", families[f].name, a_kept[f]);
 			return line;
 		}
 
@@ -469,11 +469,11 @@ namespace DCLF::Reports
 				const std::uint64_t differ = replay.parityDiffer + replay.parityObjectsDiffer + replay.parityLogsDiffer + replay.parityGeometriesDiffer +
 				                             replay.parityFamiliesDiffer;
 				logger::info("[DCLF] tables replay (6d): {:.1f} of {:.0f} object slots, {:.1f} of {:.0f} geometry slots and {:.1f} of {:.0f} material records written a "
-							 "publication, {}/{} copied whole; {}fade roots kept {}; the rest copied whole {:.3f} ms; parity {} checks: {} slots ({} differ), {} "
+							 "publication, {}/{} copied whole; {}; the rest copied whole {:.3f} ms; parity {} checks: {} slots ({} differ), {} "
 							 "geometries ({} differ), {} records ({} differ), logs {} differ, kept families {} differ{}",
 					publication.objectsReplayed / n, publication.objectSlots / n, publication.geometriesReplayed / n, publication.geometrySlots / n,
 					publication.materialsReplayed / n, publication.materialSlots / n, publication.wholeCopies, publication.geometryWholeCopies, FamiliesKept(publication.familiesKept),
-					publication.fadeRootsKept, publication.restMs / n,
+					publication.restMs / n,
 					replay.parityChecks, replay.parityObjects, replay.parityObjectsDiffer, replay.parityGeometries, replay.parityGeometriesDiffer,
 					replay.parityMaterials, replay.parityDiffer, replay.parityLogsDiffer, replay.parityFamiliesDiffer,
 					replay.parityChecks ? (differ ? " <- REPLAY DIFFERS" : " <- OK") : "");

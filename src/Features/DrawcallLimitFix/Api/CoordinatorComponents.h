@@ -103,6 +103,16 @@ namespace DCLF::Api
 	};
 
 	/**
+	 * @brief A root of the primary cull's admitted entries (CoordinatorComponent::Events::admitted): its node (a key, never dereferenced),
+	 * and whether DCLF stands in for it whole (no engine-drawn part: its state the GPU's alone).
+	 */
+	struct StandInRoot
+	{
+		const void* node = nullptr;
+		bool standIn = false;
+	};
+
+	/**
 	 * @brief What the adoption hook is handed (render thread, the frame's start, after the frame's claims are installed or withdrawn):
 	 * the frame, the claims it installed (the installed publication's set snapshot; null when withdrawn), and the component's deltas
 	 * (CoordinatorComponentContext::PublishDelta) of the publications installed since the last call, oldest first.
@@ -131,6 +141,24 @@ namespace DCLF::Api
 	 */
 	struct CoordinatorComponent
 	{
+		/**
+		 * @brief A slot's record, not its residency (Walk.cpp, ApplyEvents.cpp, Slots.cpp): what the component lists for what a slot's record
+		 * names (the fade root its fade node is: Features/Fades) follows the record's writes and its slot's release, whether or not the
+		 * slot joins. Called in the walk parity's dense walk too: a component whose listing the dense walk must not touch returns there
+		 * (CoordinatorComponentContext::DenseWalk), as the fade roots do.
+		 *
+		 * - written: the walk wrote a_slot's record or a layer's (before its identity is set and before Walk::rewritten), or the render
+		 *   thread answered the fade node a_slot's entry asked for (ApplyFadeNodeAnswers, before Residency::resident): list what the
+		 *   record names. Called again for a slot already listed.
+		 * - released: a_slot is freed (a slot's or a layer's release, the walk's sweep of unseen slots, the scan's untracked hit): after its
+		 *   residency ended where it was resident (Residency::left), right before the slot's object is reset: unlist what it listed.
+		 */
+		struct Slots
+		{
+			void (*written)(const CoordinatorComponentContext& a_context, std::uint32_t a_slot) = nullptr;
+			void (*released)(const CoordinatorComponentContext& a_context, std::uint32_t a_slot) = nullptr;
+		};
+
 		/**
 		 * @brief Residency (Residents.cpp; ApplyEvents.cpp's answers): a slot's residency begins, changes and ends, and the residents are
 		 * recounted. What the component lists for the members follows them.
@@ -250,6 +278,12 @@ namespace DCLF::Api
 		 * - rescan: the rescan after a load: the tracked set is walked again from nothing.
 		 * - underMark: a newly tracked entry (a_geometry) is under a root marked a_mark (the nearest on its chain). The marking
 		 *   component's alone; per added entry, never per frame.
+		 * - switched: a pass applies a switch event (ApplyEvents' switch loop, per applied event, right after it is noted applied and
+		 *   before the entries under it are scheduled; a full evaluation's too): a_switch, the switch node (a key, never dereferenced). A
+		 *   tree root's LOD switch restepping its root (Features/Fades).
+		 * - admitted: the primary cull's admitted roots, whole, latest wins (FrameView::SetStandInRoots, render thread), at the pass's
+		 *   coordinator inputs after the table families' sent epochs (TableFamilies::TakeSent): which listed roots it owns and which it
+		 *   stands in for (StandInRoot). The pass forces a publication. Per change of the set, never per frame.
 		 */
 		struct Events
 		{
@@ -258,6 +292,8 @@ namespace DCLF::Api
 			void (*detached)(const CoordinatorComponentContext& a_context, const void* a_key, const Mark& a_mark) = nullptr;
 			void (*rescan)(const CoordinatorComponentContext& a_context) = nullptr;
 			void (*underMark)(const CoordinatorComponentContext& a_context, const void* a_geometry, const Mark& a_mark) = nullptr;
+			void (*switched)(const CoordinatorComponentContext& a_context, const void* a_switch) = nullptr;
+			void (*admitted)(const CoordinatorComponentContext& a_context, std::span<const StandInRoot> a_roots) = nullptr;
 		};
 
 		/**
@@ -289,6 +325,7 @@ namespace DCLF::Api
 
 		std::string_view name;
 		std::shared_ptr<void> (*make)() = nullptr;
+		Slots slots;
 		Residency residency;
 		Accumulate accumulate;
 		Walk walk;

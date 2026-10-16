@@ -140,8 +140,9 @@ namespace DCLF
 	 */
 	inline constexpr std::uint32_t kShadingBufferRegister = kTextureRegisters - 7;
 	/**
-	 * @brief t120/t119: FadeStateCS's states (SceneBuffers::FadeStatesReadIndex) and the fade roots' rows, pixel stage (DCLFAlphaFade).
-	 * Frame record; unbound reads generation 0, no fade.
+	 * @brief t120/t119: FadeStateCS's states (the frame's read parity, FadeScene::FadeStatesRead) and the fade roots' rows, pixel stage
+	 * (DCLFAlphaFade). Frame bindings of the root states (Api::FrameBinding: Core's fade roots, RegisterCoreFadeRender; Features/Fades'
+	 * constants in stage F3); unbound reads generation 0, no fade.
 	 */
 	inline constexpr std::uint32_t kFadeStatesRegister = kTextureRegisters - 8;
 	inline constexpr std::uint32_t kFadeRootsRegister = kTextureRegisters - 9;

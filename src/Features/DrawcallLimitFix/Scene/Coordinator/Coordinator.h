@@ -86,7 +86,6 @@ namespace DCLF
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Walk.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Joins.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Residents.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/State/Fades.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Components.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/ShadowSets.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/State/Set.h"
@@ -127,7 +126,6 @@ namespace DCLF
 		private CoordinatorWalk,
 		private CoordinatorJoins,
 		private CoordinatorResidents,
-		private CoordinatorFades,
 		private CoordinatorComponents,
 		private CoordinatorShadowSets,
 		private CoordinatorSet,
@@ -324,9 +322,8 @@ namespace DCLF
 			// Object slots replayed from the change log against slots; whole copies (a new snapshot, or one the log no longer reaches).
 			std::uint64_t objectsReplayed = 0, objectSlots = 0, wholeCopies = 0;
 			std::uint64_t geometriesReplayed = 0, geometrySlots = 0, geometryWholeCopies = 0;
-			// Publications that kept the family (its stamp stood): the table families' by registration, the fade roots'.
+			// Publications that kept the family (its stamp stood): the table families' by registration (the fade roots among them).
 			std::array<std::uint64_t, Extensions::kTableFamilySlots> familiesKept{};
-			std::uint64_t fadeRootsKept = 0;
 			std::size_t pool = 0;
 			// Lookups per publication (PublishLookups): copied, or the last shared again unchanged; chunks rewritten since the last copy;
 			// copy time.
@@ -414,21 +411,12 @@ namespace DCLF
 			std::string firstWaiting;
 		};
 		SetStats TakeSetStats() { return std::exchange(setStats, {}); }
-		/** @brief TakeCoordinatorInputs: PrimaryCull's fade root ownership, a whole set (MarkFadeRootOwned each). */
-		void ApplyFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned);
-		/**
-		 * @brief Diagnostics: whether the fade node's state is the GPU's alone. Every listed fade root is owned and DCLF's to write
-		 * (kFadeRootWritten); no engine OnVisible steps it, so readers take the GPU's or the settled state.
-		 */
-		bool FadeOnGpu(const RE::NiAVObject* a_fadeNode) const { return a_fadeNode && tables.fadeRootIndex.contains(a_fadeNode); }
 		/** @brief A report: why a tracked geometry's sun entry rule allows it, or that it is not tracked (looked up by address). */
 		std::string DescribeSunCandidate(const void* a_geometry) const;
-		std::size_t StoodInFadeRoots() const
-		{
-			return static_cast<std::size_t>(std::count_if(fadeRootOwned.begin(), fadeRootOwned.end(), [](const auto& a_root) { return a_root.second; }));
-		}
-		/** @brief A listed fade root's row from its node again (a new generation: the GPU's state restarts from it), owned bits kept. */
-		void ReseedFadeRoot(const void* a_node);
+		/** @brief The report: the admitted fade roots the primary cull stands in for (the fade roots' component: FadeRoots.cpp). */
+		std::size_t StoodInFadeRoots() const;
+		/** @brief The fade roots' component (scene lane): a root listed with no mirror record (the placement statistics). */
+		void NoteFadeRootUnmirrored() { ++placementStats.fadeRootsUnmirrored; }
 		/** @brief Whether the geometry sits under a tracked category node (the tracked map, read on the caller's thread). */
 		bool IsTracked(const RE::BSGeometry* a_geometry) const;
 		/** @brief The index ranges a tracked entry of a ranged geometry type draws (object LOD: its visible segments' runs), or null. */
@@ -1171,17 +1159,11 @@ namespace DCLF
 		void KeepResidentsAlive();
 		void NoteResidentTouched(std::uint32_t a_slot) { residentsTouched.push_back(a_slot); }
 
-		// The fade roots: State/Fades.h (CoordinatorFades).
+		// The fade nodes the slots' listings hold (the fade roots' component, FadeRoots.cpp, and the features': Features/TreeWind's trees).
 		/** @brief ApplyBatch: the fade node answers into their entries (Tracked::fadeNodeRef), each entry rewritten. */
 		void ApplyFadeNodeAnswers();
-		/** @brief Early in a full pass: applies the fade root posts (Channels::fadeRootsSentPosted, fadeOwnedPosted). */
+		/** @brief Early in a full pass: applies the render thread's posts (the table families' sent epochs, the admitted roots: standInRootsPosted). */
 		void TakeCoordinatorInputs();
-		FadeRootStatic FadeRootFromMirror(const void* a_node);
-		/** @brief A new generation for a root's row, its seed row toggled and requested. */
-		void RequestFadeSeed(std::uint32_t a_root, FadeRootStatic& a_row);
-		/** @brief A member's fade root (Tables::fadeRoots): listed when it joins, released with its last member. */
-		void ListFadeRoot(std::uint32_t a_slot);
-		void UnlistFadeRoot(std::uint32_t a_slot);
 		/**
 		 * @brief The reference a newly listed fade root owner (or a component's: Features/TreeWind's trees) is copied from: the slot's
 		 * entry's fade node if it is a_node, else null (not listed: fadeRootsUnowned).
@@ -1192,15 +1174,6 @@ namespace DCLF
 		 * per key). True when held now.
 		 */
 		bool AcquireFadeNode(Tracked& a_entry, const void* a_node, const char* a_path);
-		/** @brief A switch event on a tree root's LOD switch: its kFadeRootTreeLod retaken. */
-		void RefreshFadeRootSwitch(const RE::NiAVObject* a_switch);
-		/** @brief A fadeAmount event (Actor::SetAlpha): a listed root's fadeAmount retaken from its node, its state row kept. */
-		void RefreshFadeAmount(const void* a_node);
-		/**
-		 * @brief Marks a root's row owned or not; a newly owned root is reseeded from its node. A change of stood-in state goes to the fade
-		 * watch: its dependents' shadow verdicts read its fade from elsewhere.
-		 */
-		void MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn);
 
 		// The features' components: State/Components.h (CoordinatorComponents). Each call runs every registered component's hook at
 		// the coordinator's residency point, walk phase or entry write (Api::CoordinatorComponent's hook sets: residency, accumulate, walk,
@@ -1209,6 +1182,17 @@ namespace DCLF
 		void ComponentsResident(std::uint32_t a_slot);
 		/** @brief a_slot's residency ended (DropResidentSlot, EndAllResidency). */
 		void ComponentsLeft(std::uint32_t a_slot);
+		/**
+		 * @brief a_slot's record or layer written (WriteObject, WriteLayer: before its identity and ComponentsRewritten), or its entry's fade
+		 * node answered (ApplyFadeNodeAnswers, before ComponentsResident): every component's slots.written.
+		 */
+		void ComponentsSlotWritten(std::uint32_t a_slot);
+		/** @brief a_slot freed (the slot and layer releases, the sweep, the scan's untracked hit), right before its object is reset. */
+		void ComponentsSlotReleased(std::uint32_t a_slot);
+		/** @brief ApplySwitchEvents: a switch event applied (after switchesApplied, before the entries under it are scheduled). */
+		void ComponentsSwitched(const void* a_switch);
+		/** @brief TakeCoordinatorInputs: the primary cull's admitted roots, whole (after the table families' sent epochs). */
+		void ComponentsAdmitted(std::span<const Api::StandInRoot> a_roots);
 		/** @brief KeepResidentsAlive's recount: a_rebuild, every resident counted again; otherwise the touched slots (sorted, unique). */
 		void ComponentsRecount(bool a_rebuild, std::span<const std::uint32_t> a_touched);
 		/** @brief ResetSlotTables, before the tables are cleared. */

@@ -41,6 +41,9 @@ namespace DCLF::Api
 	 * - same (optional): whether two families' columns hold the same rows (CS_DCLF_PERSISTENT_PARITY's replay check of a kept family).
 	 * - clear: every row gone (SceneTables::Clear), the family's content epochs moved on.
 	 * - recycle: a retired row back on the family's free list.
+	 *
+	 * The defaults (no shift, bias or journal, a tag word, no rows) are a family's whose record carries its row and tag as they are
+	 * (Features/TreeWind's trees).
 	 */
 	struct TableFamily
 	{
@@ -56,5 +59,20 @@ namespace DCLF::Api
 		// The object record's 32-bit word (DCLFObjectRecord, Common/DCLFObjects.hlsli) the reference's row is written to, its tag to the
 		// next (0 and 0 without a reference); ~0u: the record carries none. Checked by Features/Manifest.cpp.
 		std::uint32_t recordWord = ~0u;
+		// The reference as recordWord carries it: (row + recordBias) << recordShift, ORed into the word (Core's own bits of the word stay
+		// below the shift), and 0 when it does not fit the word's bits above the shift (a root slot past 24 bits rides as none: the
+		// record's root reference, bits 8-31 = root + 1). 0 and 0 keep the row as is.
+		std::uint32_t recordShift = 0, recordBias = 0;
+		// Whether the record carries the row's tag in the word after recordWord; false: one word, no tag (a family whose rows carry their
+		// generation themselves).
+		bool recordTag = true;
+		// Core keeps a change journal of the rows beside the stamp (Extensions::TableFamilyColumns::Mark marks a row and moves the stamp),
+		// copied with every publication, kept family or not. A commit hook sends the rows the journal names since what its buffer holds
+		// (TableFamilyColumns::Journal) and reports the content epoch it sent (Extensions::TableFamilySent; render thread, latest wins); the
+		// scene lane trims the journal to it at the pass's coordinator inputs (TableFamilies::TakeSent, forcing a publication).
+		bool journaled = false;
+		// Optional, per revision (render thread, never per object): the rows the resources sized by the family must hold for a_columns
+		// (Extensions::TableFamilyRows: Core's buffers sized by the family's rows, its visibility rows, besides the feature's own).
+		std::uint32_t (*rows)(const void* a_columns) = nullptr;
 	};
 }

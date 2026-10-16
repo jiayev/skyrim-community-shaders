@@ -25,8 +25,12 @@ namespace DCLF::Api
 		DepthSegmentBeforeBuild,
 		// The depth epoch, after its latched copies: the next frame's scene state, which nothing of this frame reads, so it overlaps the
 		// epoch's raster work on the compute queue (GpuQueue::Compute). The host orders it against the adjacent frames; its readers need
-		// not declare it. Before the fade states and DepthSegmentBeforeBuild's stages.
+		// not declare it. Before DepthSegmentCullState's and DepthSegmentBeforeBuild's stages.
 		DepthSegmentNextFrameState,
+		// The depth epoch, after DepthSegmentNextFrameState's stages, before DepthSegmentBeforeBuild's: the next frame's cull state, which
+		// the next frame's cull reads (the root states' step, then its write-back copy: Features/Fades' cs.dclf.z.fade-state on
+		// GpuQueue::Compute and cs.dclf.z.fade-events, a Copy on GpuQueue::None). On the queue each stage asks for.
+		DepthSegmentCullState,
 		// The depth epoch, after its BuildDraws and the index pool's copies (cs.dclf.z.index-pool), right before its depth draw
 		// (cs.dclf.z.depth): phase 1's work a draw family's depth draw reads (Api/DrawFamilies.h). On the graphics queue.
 		DepthSegmentBeforeDepthDraw,

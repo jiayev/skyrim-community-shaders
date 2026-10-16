@@ -342,7 +342,7 @@ namespace DCLF::Scene
 	bool Coordinator::DeltasPending() const
 	{
 		return !publicationJoined.empty() || !publicationLeft.empty() || placementPlanReady || !placementPlansHeld.empty() || !shadingNamed.empty() ||
-		       !fadeSeedRequests.empty() || !componentSeedRequests.empty() || !switchesApplied.empty() || switchResync || !retiredImports.empty() ||
+		       !componentSeedRequests.empty() || !switchesApplied.empty() || switchResync || !retiredImports.empty() ||
 		       tables.ClassMemberChangesPending() || !lightEntryChanges.empty() || !componentDeltaRequests.empty();
 	}
 
@@ -350,7 +350,7 @@ namespace DCLF::Scene
 	{
 		PublishKey key;
 		key.words = { tablesGeneration, tables.changeLog.End(), tables.geometryLog.End(), tables.materialLog.End(), tables.extrasBlockLog.End(),
-			tables.versionCounter, tables.constantsStamp, tables.families.StampSum(), tables.fadeRootsStamp, tables.objects.size(), tables.geometries.size(),
+			tables.versionCounter, tables.constantsStamp, tables.families.StampSum(), tables.objects.size(), tables.geometries.size(),
 			tables.pipelines.size(), tables.materials.size(), sunCandidatesGeneration, lightCandidatesGeneration, lightEntriesAppeared, setCommitToggles,
 			constantsPostStats.pipelinesApplied };
 		key.lookups = lookups.ChangeKey();

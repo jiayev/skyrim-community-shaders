@@ -54,11 +54,9 @@ namespace DCLF::Scene
 		residentPatches.clear();
 		residentPos.clear();
 		residentMaintenanceDirty = true;
-		// The listed nodes' references through the retirement chain with everything else the cleared tables named (the components'
-		// too, and what they keep beside the tables: Features/Faces' regions).
+		// The listed nodes' references through the retirement chain with everything else the cleared tables named (the components',
+		// the fade roots' last, and what they keep beside the tables: Features/Faces' regions).
 		ComponentsReset();
-		HandBack(fadeRootOwners);
-		fadeRootMembers.Clear();
 		tables.Clear();
 		// The scene work's material and shared bindings with the tables they were made for, and the lookups they are written into.
 		ResetMaterialBindings();
@@ -338,7 +336,7 @@ namespace DCLF::Scene
 			DropResidentSlot(slot, false);
 			++residentStats.released;
 		}
-		UnlistFadeRoot(slot);
+		ComponentsSlotReleased(slot);
 		tables.ResetObject(slot);
 		tables.RetireObject(slot);
 		if (tables.liveObjects)
@@ -360,7 +358,7 @@ namespace DCLF::Scene
 			DropResidentSlot(slot, false);
 			++residentStats.released;
 		}
-		UnlistFadeRoot(slot);
+		ComponentsSlotReleased(slot);
 		tables.ResetObject(slot);
 		tables.RetireObject(slot);
 		if (tables.liveObjects)
@@ -413,7 +411,7 @@ namespace DCLF::Scene
 				if (it->second.layerSlot == slot)
 					it->second.layerSlot = kNoObjectSlot;
 			}
-			UnlistFadeRoot(slot);
+			ComponentsSlotReleased(slot);
 			tables.ResetObject(slot);
 			tables.RetireObject(slot);
 		}

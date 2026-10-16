@@ -330,6 +330,38 @@ namespace DCLF::Scene
 				registered[c].residency.left({ tables, ComponentState(c), *this, c }, a_slot);
 	}
 
+	void Coordinator::ComponentsSlotWritten(std::uint32_t a_slot)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].slots.written)
+				registered[c].slots.written({ tables, ComponentState(c), *this, c }, a_slot);
+	}
+
+	void Coordinator::ComponentsSlotReleased(std::uint32_t a_slot)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].slots.released)
+				registered[c].slots.released({ tables, ComponentState(c), *this, c }, a_slot);
+	}
+
+	void Coordinator::ComponentsSwitched(const void* a_switch)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].events.switched)
+				registered[c].events.switched({ tables, ComponentState(c), *this, c }, a_switch);
+	}
+
+	void Coordinator::ComponentsAdmitted(std::span<const Api::StandInRoot> a_roots)
+	{
+		const auto registered = Extensions::RegisteredCoordinatorComponents();
+		for (std::uint32_t c = 0; c < registered.size(); ++c)
+			if (registered[c].events.admitted)
+				registered[c].events.admitted({ tables, ComponentState(c), *this, c }, a_roots);
+	}
+
 	void Coordinator::ComponentsRecount(bool a_rebuild, std::span<const std::uint32_t> a_touched)
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();

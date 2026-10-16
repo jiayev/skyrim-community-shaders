@@ -35,7 +35,7 @@ namespace DCLF::Api
 	/**
 	 * @brief The fade roots a depth commit asks the judge about (render thread, UploadFadeRootPrograms): Count of them, each one's node
 	 * (Root: non-null, a root without one takes noProgram unasked), and the answer Put back by the same index. Core keeps the batch's
-	 * storage beside its programs mirror (SceneBuffers::fadeRootProgramsBatch): no allocation per commit once grown.
+	 * storage beside its programs mirror (Draws::FadeScene::fadeRootProgramsBatch): no allocation per commit once grown.
 	 */
 	class RootProgramsJudge
 	{
@@ -44,7 +44,7 @@ namespace DCLF::Api
 		const void* Root(std::size_t a_index) const { return nodes[roots[asked[a_index]]]; }
 		void Put(std::size_t a_index, std::uint32_t a_program) const { programs[asked[a_index]] = a_program; }
 
-		std::span<const void* const> nodes;     // by root slot (SceneTables::fadeRootNode)
+		std::span<const void* const> nodes;     // by root slot (Extensions::RootListOf's nodes)
 		std::span<const std::uint32_t> roots;   // the roots judged, in Core's order
 		std::span<const std::uint32_t> asked;   // by question: its place in roots (those with a node)
 		std::span<std::uint32_t> programs;      // by place in roots: the answers
@@ -67,11 +67,15 @@ namespace DCLF::Api
 		void Buffer(const std::shared_ptr<org::Buffer>& a_buffer) { buffer = &a_buffer; }
 		/** @brief A pooled buffer's SRV index this frame (a frame value pool's: 0 none), which no pass declares. */
 		void Index(std::uint32_t a_srv) { srv = a_srv; }
+		/** @brief With Versioned or Buffer: how many of its units hold the content its readers may read now (a by-root buffer: the roots the
+		 *  depth commit sent; 0: none yet, its readers bind none). Unanswered: all it names. */
+		void Rows(std::uint32_t a_rows) { rows = a_rows; }
 
 		// The answer (Core reads it).
 		const std::shared_ptr<org::VersionedBuffer>* versioned = nullptr;
 		const std::shared_ptr<org::Buffer>* buffer = nullptr;
 		std::uint32_t srv = 0;
+		std::uint32_t rows = ~0u;
 	};
 }
 

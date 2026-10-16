@@ -16,25 +16,23 @@ namespace DCLF::Draws
 	/**
 	 * @brief What the versions a_sealed names of a_scene's buffers hold, with per-object buffers of a_objectBuffers objects (an epoch's
 	 * visibility). A buffer the set does not name holds nothing. The payload's parts (records, geometry rows, extras) bound nothing:
-	 * the payload holds every row of its publication (PayloadBuilder). Without the fade program no draw reads its rows (no fade root is
-	 * tested); a feature's scene resources say what theirs hold (Api::SceneResources::fit).
+	 * the payload holds every row of its publication (PayloadBuilder). A feature's scene resources say what theirs hold
+	 * (Api::SceneResources::fit): the root states' rows among them (their family's rows; without the fade program no draw reads them).
 	 */
 	inline SceneFit SceneFitOf(const NamedVersions& a_sealed, const SceneBuffers& a_scene, std::uint64_t a_objectBuffers)
 	{
-		const auto units = [&](const Versioned& a_buffer) { return static_cast<std::uint32_t>(std::min<std::uint64_t>(NamedUnits(a_sealed, a_buffer), UINT32_MAX)); };
 		SceneFit fit;
 		fit.objects = static_cast<std::uint32_t>(std::min<std::uint64_t>(a_objectBuffers, UINT32_MAX));
 		// The vertex stream's vertices are its scene resources' (Features/Faces' face positions: SceneFit::streamVertices).
 		Extensions::FitSceneResources(a_sealed, a_scene.sceneResources, fit);
-		if (a_scene.fadeState && a_scene.fadeRoots)
-			fit.fadeRoots = std::min({ units(a_scene.fadeRoots), units(a_scene.fadeStatesOut[0]), units(a_scene.fadeStatesOut[1]) });
 		return fit;
 	}
 
 	/**
-	 * @brief Whether object a_object is within what the scene's buffers hold (SceneFit): its per-object rows, its table families' and fade
-	 * root rows and its vertex stream row's vertices (its record, geometry rows and extras are the payload's, which holds them all). One past them
-	 * waits for their growth: no input names it, so no draw or culling test reads past a buffer.
+	 * @brief Whether object a_object is within what the scene's buffers hold (SceneFit): its per-object rows, its table families' rows (its
+	 * root's among them: the root states' family) and its vertex stream row's vertices (its record, geometry rows and extras are the
+	 * payload's, which holds them all). One past them waits for their growth: no input names it, so no draw or culling test reads past a
+	 * buffer.
 	 */
 	inline bool ObjectFits(const SceneTables& a_tables, std::uint32_t a_object, const SceneFit& a_fit)
 	{
@@ -44,8 +42,6 @@ namespace DCLF::Draws
 		for (std::size_t f = 0; f < families.size(); ++f)
 			if (!families[f].RowFits(a_object, a_fit.familyRows[f]))
 				return false;
-		if (a_object < a_tables.objectFadeRoot.size() && a_tables.objectFadeRoot[a_object] != kNoFadeRoot && a_tables.objectFadeRoot[a_object] >= a_fit.fadeRoots)
-			return false;
 		if (a_object < a_tables.streamRow.size() && a_tables.streamRow[a_object] != kNoStreamRow) {
 			const std::uint32_t row = a_tables.streamRow[a_object];
 			if (row < a_tables.streamRows.size() && std::uint64_t(a_tables.streamRows[row].first) + a_tables.streamRows[row].count > a_fit.streamVertices)
@@ -88,24 +84,35 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief An object's fade root slot (SceneTables::objectFadeRoot), ~0u for none: a shadow input's, whose BuildDraws drops the
-	 * caster while a stood-in root fades (kFadeRootStoodIn). A member's root changes only with a noted change (ListFadeRoot).
+	 * @brief Each object's root slot, by object slot (the root states' family's objectRow: kNoFadeRoot none), read as data; empty
+	 * without a producer. Per build or commit, never per object.
 	 */
-	inline std::uint32_t FadeRootOf(const SceneTables& a_tables, std::uint32_t a_object)
+	inline std::span<const std::uint32_t> ObjectRootsOf(const SceneTables& a_tables)
 	{
-		return a_object < a_tables.objectFadeRoot.size() ? a_tables.objectFadeRoot[a_object] : ~0u;
+		const auto* family = RootFamilyOf(a_tables);
+		return family ? std::span<const std::uint32_t>(family->objectRow) : std::span<const std::uint32_t>();
 	}
 
 	/**
-	 * @brief A main input's fade row: its fade root's slot (FadeStateCS's state, which its members follow), a LOD skin's
-	 * partitions per level (picked by that state's level), and for the distance test (kObjectFadeTest) its fade-out
+	 * @brief An object's fade root slot (the root states' family's objectRow), ~0u for none: a shadow input's, whose BuildDraws drops the
+	 * caster while a stood-in root fades (kFadeRootStoodIn). A member's root changes only with a noted change (the family's listing).
+	 */
+	inline std::uint32_t FadeRootOf(const SceneTables& a_tables, std::uint32_t a_object)
+	{
+		const auto* family = RootFamilyOf(a_tables);
+		return family ? family->RowOf(a_object) : ~0u;
+	}
+
+	/**
+	 * @brief A main input's fade row: its fade root's slot (FadeStateCS's state, which its members follow: a_objectRoots, ObjectRootsOf),
+	 * a LOD skin's partitions per level (picked by that state's level), and for the distance test (kObjectFadeTest) its fade-out
 	 * distance. The node's centre is its placement row's (BindlessPlacement::lodFadeNode, FrameValues); the slot and the
 	 * distance only change with its membership and bindings.
 	 */
-	inline void SetFadeRow(DrawInput& a_input, const SceneTables& a_tables, std::size_t a_object)
+	inline void SetFadeRow(DrawInput& a_input, std::span<const std::uint32_t> a_objectRoots, const SceneTables& a_tables, std::size_t a_object)
 	{
-		if (a_object < a_tables.objectFadeRoot.size())
-			a_input.fadeRoot = a_tables.objectFadeRoot[a_object];
+		if (a_object < a_objectRoots.size())
+			a_input.fadeRoot = a_objectRoots[a_object];
 		a_input.lodPartitions = LodPartitionsOf(a_tables, static_cast<std::uint32_t>(a_object));
 		if (!(a_input.flags & (kObjectFadeTest | kObjectHeightTest)) || a_object >= a_tables.fadeDistance.size() || a_object >= a_tables.hasFadeNode.size())
 			return;

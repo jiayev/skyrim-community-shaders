@@ -609,7 +609,7 @@ namespace DCLF::Scene
 		tables.shadowMaterial[objectId] = r.shadowMaterial;
 		tables.sceneFlags[objectId] = object.flags;
 		tables.objectGeometry[objectId] = geometry;
-		ListFadeRoot(objectId);
+		ComponentsSlotWritten(objectId);
 		tables.objectIdentity[objectId] = trackedEntry->identity;
 		tables.objectGroup[objectId] = trackedEntry->groupIdentity;
 		const std::uint32_t keptPipeline = tables.draws[objectId].pipelineIndex;
@@ -699,7 +699,7 @@ namespace DCLF::Scene
 		tables.shadowMaterial[slot] = nullptr;
 		tables.sceneFlags[slot] = object.flags;
 		tables.objectGeometry[slot] = a_geometry;
-		ListFadeRoot(slot);
+		ComponentsSlotWritten(slot);
 		tables.objectIdentity[slot] = a_tracked.identity;
 		tables.objectGroup[slot] = a_tracked.groupIdentity;
 		ComponentsRewritten(slot, true, 0u, 0u);  // a layer's partitions are not rewritten here
@@ -2164,7 +2164,7 @@ namespace DCLF::Scene
 				if (const auto it = tracked.find(tables.objectGeometry[s]); it != tracked.end()) {
 					Schedule(it->first, it->second);
 				} else {
-					UnlistFadeRoot(s);
+					ComponentsSlotReleased(s);
 					tables.ResetObject(s);
 					tables.RetireObject(s);
 					shadowSetsDirty = true;

@@ -4,9 +4,57 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 
 #include <algorithm>
+#include <atomic>
 
 namespace DCLF::Extensions
 {
+	namespace
+	{
+		// By family: the content epoch its commit hook last reported sent (TableFamilySent; render thread -> scene lane, latest wins).
+		constexpr std::uint64_t kNoneSent = ~0ull;
+		struct SentSlot
+		{
+			std::atomic<std::uint64_t> contentEpoch{ kNoneSent };
+		};
+		std::array<SentSlot, kTableFamilySlots> sentPosted;
+	}
+
+	void TableFamilySent(Api::TableFamilyId a_id, std::uint64_t a_contentEpoch)
+	{
+		const auto registered = RegisteredTableFamilies();
+		if (a_id.index >= registered.size() || !registered[a_id.index].journaled)
+			return;
+		// No wake: the frame's next pass takes it.
+		sentPosted[a_id.index].contentEpoch.store(a_contentEpoch, std::memory_order_release);
+	}
+
+	std::uint32_t TableFamilyRows(const TableFamilies& a_tables, Api::TableFamilyId a_family)
+	{
+		const auto registered = RegisteredTableFamilies();
+		const auto* family = a_tables.Find(a_family);
+		if (!family || a_family.index >= registered.size() || !registered[a_family.index].rows || !family->columns)
+			return 0;
+		return registered[a_family.index].rows(family->columns.get());
+	}
+
+	bool TableFamilies::TakeSent()
+	{
+		const auto registered = RegisteredTableFamilies();
+		bool taken = false;
+		for (std::size_t f = 0; f < registered.size(); ++f) {
+			if (!registered[f].journaled)
+				continue;
+			const std::uint64_t contentEpoch = sentPosted[f].contentEpoch.exchange(kNoneSent, std::memory_order_acq_rel);
+			if (contentEpoch == kNoneSent)
+				continue;
+			// The live tables hold every family from their first write on (Mutable); none held: nothing was sent from them.
+			if (f < entries.size())
+				entries[f].journal.BeginBuild(contentEpoch);
+			taken = true;
+		}
+		return taken;
+	}
+
 	TableFamilies::TableFamilies(const TableFamilies& a_other)
 	{
 		*this = a_other;
@@ -37,6 +85,10 @@ namespace DCLF::Extensions
 			entries[f].columns = registered[f].make();
 			entries[f].rowsEnd = registered[f].rowsEnd;
 			entries[f].recordWord = registered[f].recordWord;
+			entries[f].recordShift = registered[f].recordShift;
+			entries[f].recordBias = registered[f].recordBias;
+			entries[f].recordTag = registered[f].recordTag;
+			entries[f].journaled = registered[f].journaled;
 		}
 	}
 
@@ -51,6 +103,12 @@ namespace DCLF::Extensions
 		to.rowTag = a_from.rowTag;
 		to.rowsEnd = a_from.rowsEnd;
 		to.recordWord = a_from.recordWord;
+		to.recordShift = a_from.recordShift;
+		to.recordBias = a_from.recordBias;
+		to.recordTag = a_from.recordTag;
+		to.journaled = a_from.journaled;
+		if (a_from.journaled)
+			to.journal = a_from.journal;
 		if (a_from.columns && a_family < registered.size())
 			registered[a_family].assign(to.columns.get(), a_from.columns.get());
 	}
@@ -71,6 +129,9 @@ namespace DCLF::Extensions
 			family.objectRow.clear();
 			family.rowTag.clear();
 			registered[f].clear(family.columns.get());
+			// Every holder is sent everything (its content epoch counts on).
+			if (family.journaled)
+				family.journal.Resync();
 		}
 	}
 
@@ -110,6 +171,9 @@ namespace DCLF::Extensions
 			if (a_replayable && StampOf(family) == a_from.StampOf(family)) {
 				++a_kept[f];
 				kept |= 1u << f;
+				// The journal is copied whatever the stamp: a sent epoch trims it without a write.
+				if (f < entries.size() && f < a_from.entries.size() && a_from.entries[f].journaled)
+					entries[f].journal = a_from.entries[f].journal;
 				continue;
 			}
 			// The live tables hold every family from their first write on, and their stamps only move: one they do not hold yet is one

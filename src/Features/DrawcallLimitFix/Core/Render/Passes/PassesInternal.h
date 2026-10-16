@@ -21,7 +21,7 @@ namespace DCLF::Draws
 	// VisibilityEvents.cpp: the visibility events.
 	std::shared_ptr<org::RenderPass> MakeVisibilityEventsPass(std::shared_ptr<Resources> a_resources);
 
-	// SceneState.cpp: next frame's fade states.
+	// SceneState.cpp: Core's fade roots' stages (the fade states; RegisterFadeStages).
 	std::shared_ptr<org::RenderPass> MakeFadeStatePass(std::shared_ptr<Resources> a_resources);
 
 	// Readbacks.cpp: an event ring's copy to the host.

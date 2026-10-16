@@ -291,7 +291,10 @@ namespace DCLF
 		return (a_objectFlags & kObjectAlphaTest) || blood ? ((a_objectFlags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
 	}
 	inline constexpr std::uint32_t kRecordFadeRootShift = 8;
-	/** @brief BindlessObject::recordFlags of an object: its flags and its fade root slot (Tables::objectFadeRoot) + 1 in bits 8-31. */
+	/**
+	 * @brief BindlessObject::recordFlags of an object: its flags and its fade root slot + 1 in bits 8-31 (the record's own: the root
+	 * states' family, Api::TableFamily::recordShift, writes it as BuildObjectRecord's families do, with the same 24-bit cut-off).
+	 */
 	inline std::uint32_t RecordFlagsOf(std::uint32_t a_objectFlags, std::uint32_t a_fadeRoot)
 	{
 		return ((a_objectFlags & kObjectBeastRace) ? kRecordBeastRace : 0u) | ((a_objectFlags & kObjectAlphaBlended) ? kRecordAlphaBlended : 0u) |

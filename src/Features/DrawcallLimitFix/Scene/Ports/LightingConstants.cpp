@@ -351,7 +351,8 @@ namespace DCLF
 	{
 		const auto& object = a_tables.objects[a_objectIndex];
 		a_out.ancestorValue = a_tables.ancestorValue[a_objectIndex].value;
-		a_out.recordFlags = RecordFlagsOf(object.flags, a_objectIndex < a_tables.objectFadeRoot.size() ? a_tables.objectFadeRoot[a_objectIndex] : kNoFadeRoot);
+		// The fade root's reference (bits 8-31) is the root states' family's, ORed in with the families' words below.
+		a_out.recordFlags = RecordFlagsOf(object.flags, kNoFadeRoot);
 		// The same reference the native draw's AlphaTestRefBuffer carries: threshold / 255, and 0 when the
 		// object is not alpha tested (the shader's test is then compiled out anyway).
 		// A Blood effect's is its threshold whatever its alpha test (AlphaTestRefOf: SetupGeometry's AlphaTestRef.x).
@@ -359,13 +360,11 @@ namespace DCLF
 		// The feature block is zero bar the family's record word below (its variables are the shading row's and the feature's: Features/
 		// TreeWind's wind, DCLFTreeWind).
 		std::fill(std::begin(a_out.featureBlock), std::end(a_out.featureBlock), 0u);
-		// The table families' references the record carries, each its row and the row's tag (Api::TableFamily::recordWord: Features/
-		// TreeWind's tree slot and listing generation, never 0, for its wind: DCLFTreeWind).
+		// The table families' references the record carries, ORed into their words after recordFlags (Api::TableFamily::recordWord:
+		// Features/TreeWind's tree slot and listing generation, never 0, for its wind: DCLFTreeWind; the fade roots' (root + 1) << 8 in
+		// recordFlags, by which the pixel stage reads FadeStateCS's fade).
 		for (const auto& family : a_tables.families.All())
-			if (family.recordWord != ~0u) {
-				const auto words = family.RecordWordsOf(a_objectIndex);
-				std::memcpy(reinterpret_cast<std::byte*>(&a_out) + std::size_t(family.recordWord) * 4, words.data(), sizeof(words));
-			}
+			family.WriteRecordWords(reinterpret_cast<std::uint32_t*>(&a_out), a_objectIndex);
 		// Skinning: the palette block's rows in the frame's palettes (FrameValues, PaletteRowsOf).
 		const bool skinned = (object.flags & kObjectPaletteBlock) && a_objectIndex < a_tables.boneOffset.size();
 		const auto palette = skinned ? PaletteRowsOf(a_tables.boneOffset[a_objectIndex], a_tables.boneRows[a_objectIndex]) : PaletteRows{};

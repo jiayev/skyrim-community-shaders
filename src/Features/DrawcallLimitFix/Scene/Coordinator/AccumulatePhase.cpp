@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
@@ -783,10 +784,13 @@ namespace DCLF::Scene
 			return;
 		}
 		r.pass = membership.pass;
-		// A fade node's fade-out distance for BuildDraws' fade test (measured from the node's centre); trees add the height test.
+		// The root test (the root states' producer): a fade node's fade-out distance for BuildDraws' fade test (measured from the node's
+		// centre), and the height test where it asks for one (trees).
 		if (const auto* fadeNode = r.leaf.fadeNode) {
-			r.pass.fadeDistance = PrimaryCull::MembershipFadeDistance(*fadeNode);
-			r.pass.heightTest = (fadeNode->kind & SceneCapture::kKindTree) != 0;
+			Api::RootTestOutput test;
+			Extensions::RootStatesTest(*fadeNode, FrameGlobals::Current(), test);
+			r.pass.fadeDistance = test.distance;
+			r.pass.heightTest = (test.objectFlags & kObjectHeightTest) != 0;
 		}
 		r.kind = JoinPre::Kind::Pass;
 	}

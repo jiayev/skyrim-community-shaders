@@ -105,43 +105,10 @@ namespace DCLF
 		// No shading (MaterialData, EmitColor, SSRParams.w, emissive multiplier, wetness): FrameValues' rows (BindlessShading),
 		// sampled at frame start for the slots the walk names (ShadingItem).
 		std::vector<ObjectAncestorValue> ancestorValue;       // parallel to objects
-		// The features' table families (Api::TableFamily; Features/TreeWind's trees): their columns, stamps, the objects' references
-		// into them and their rows' tags. Published with the rest: a family is copied only when its stamp moved.
+		// The features' table families (Api::TableFamily; Features/TreeWind's trees, the fade roots: Scene/Coordinator/FadeRoots.h): their
+		// columns, stamps, the objects' references into them and their rows' tags. Published with the rest: a family is copied only when its
+		// stamp moved.
 		Extensions::TableFamilies families;
-		// Fade roots (Records.h, FadeRootStatic): a slot per fade node a member draws under, refcounted by members, its row
-		// rewritten when an input event arrives (a tree's LOD switch: fadeRootSwitch). A row's object is one of its members (whose
-		// fade node row is the centre), rechosen when membership changes.
-		std::vector<FadeRootStatic> fadeRoots;
-		std::vector<std::uint32_t> fadeRootRefs, fadeRootFree;
-		std::vector<const void*> fadeRootNode;
-		ankerl::unordered_dense::map<const void*, std::uint32_t> fadeRootIndex;
-		ankerl::unordered_dense::map<const void*, std::uint32_t> fadeRootSwitch;  // a tree root's LOD switch -> its root slot
-		std::vector<std::uint32_t> objectFadeRoot;
-		// Root rows written since what the depth commit holds (FadeRootsSent trims it): it sends those runs, not the whole table.
-		ChangeJournal fadeRootsJournal;
-		std::uint64_t FadeRootsContentEpoch() const { return fadeRootsJournal.ContentEpoch(); }
-		void NoteFadeRoot(std::uint32_t a_root)
-		{
-			fadeRootsJournal.Mark(a_root);
-			NoteFadeRootsWrite();
-		}
-		std::uint32_t fadeRootGenerations = 0;
-		// Write stamp of the fade-root family (FadeRootFamily), bumped by every write: the publication copies the family only when its
-		// stamp differs (as the table families' own: families). fadeRootsJournal is not in the family; it is always copied.
-		std::uint64_t fadeRootsStamp = 0;
-		void NoteFadeRootsWrite() { ++fadeRootsStamp; }
-		/** @brief The fade-root family's members of two tables, each pair to a_member. */
-		template <class T, class F>
-		static void FadeRootFamily(T& a_left, T& a_right, F&& a_member)
-		{
-			a_member(a_left.fadeRoots, a_right.fadeRoots);
-			a_member(a_left.fadeRootRefs, a_right.fadeRootRefs);
-			a_member(a_left.fadeRootFree, a_right.fadeRootFree);
-			a_member(a_left.fadeRootNode, a_right.fadeRootNode);
-			a_member(a_left.fadeRootIndex, a_right.fadeRootIndex);
-			a_member(a_left.fadeRootSwitch, a_right.fadeRootSwitch);
-			a_member(a_left.objectFadeRoot, a_right.objectFadeRoot);
-		}
 		// The published entry classes' members (Api::EntryClassContribution::published: Features/Actors' actor-owned), by class: the slots
 		// whose shading fields are their owner's (Api/ShadingFields.h: Integrations/AdvancedSkin's SkinPerGeometry, the owning actor's
 		// wetness); zero for every other slot. Values are FrameValues' (the fields' captures); these say who has one.
@@ -541,7 +508,6 @@ namespace DCLF
 		{
 			kRetiredObject,
 			kRetiredFamilyRow,  // a table family's row (families); extra: the family's index
-			kRetiredFadeRoot,
 			kRetiredExtras,     // slot: the block's row offset
 			kRetiredBones,      // slot: the block's offset, extra: its rows
 			kRetiredStreamRow,  // a vertex stream row (streamRows)

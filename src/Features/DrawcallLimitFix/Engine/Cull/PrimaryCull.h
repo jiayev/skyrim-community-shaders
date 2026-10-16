@@ -24,6 +24,7 @@ namespace DCLF::SceneCapture
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
@@ -105,10 +106,15 @@ namespace DCLF
 		/**
 		 * @brief Main thread at Main::Update's entry, the safe point (last frame's job cycle waited for, this one's not started, so no
 		 * list cull, cell animation or animation job writes the flags): writes the stood-in roots' and their geometry's kAccumulated
-		 * from DCLF's visibility (IndirectDraws::WriteAccumulated; skyrim-engine-notes.md, "who sets kAccumulated"), then publishes
-		 * the fade-writer set. a_running false drops the writes.
+		 * from DCLF's visibility (IndirectDraws::WriteAccumulated; skyrim-engine-notes.md, "who sets kAccumulated"), then calls the
+		 * stand-in observers (the fade writers' last: WriteFadeWriters). a_running false drops the writes.
 		 */
 		void AtUpdateEntry(bool a_running);
+		/**
+		 * @brief Main thread, at Main::Update's entry (the fade writers' stand-in observer, updateEntry, last): publishes the fade-writer
+		 * set, then writes the fade stores back. a_running false drops the writes.
+		 */
+		void WriteFadeWriters(bool a_running);
 		/** @brief Whether the cut stands in for a_root (admitted, unmixed). Render (main) thread. */
 		bool StoodIn(const void* a_root) const { return standInRoots.contains(a_root); }
 		/**
@@ -147,7 +153,8 @@ namespace DCLF
 		 * @brief One animation-job fade update, its root resolved on the job thread through the writer tables (the SceneTables
 		 * accepted at Main::Update's entry, immutable and held until the next entry, so stable through the animation job): the slot in
 		 * those tables, its row's generation and the node. A consumer reading other tables (the frame's, after a swap at frame start)
-		 * takes the slot only where fadeRootNode[slot] is the node and fadeRoots[slot].generation the generation; no hashing.
+		 * takes the slot only where its root list's nodes[slot] is the node and rows[slot].generation the generation (Extensions::RootListOf);
+		 * no hashing.
 		 */
 		struct AnimatedFadeRoot
 		{
@@ -160,6 +167,11 @@ namespace DCLF
 		 * the writer tables, one per update, and inputs), which FadeStateCS repeats before its cull test (Records.h, FadeFrame anim*).
 		 */
 		void TakeAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs);
+		/**
+		 * @brief Render thread, at the list jobs' Finish (the fade writers' stand-in observer, listJobsDone): the animation job's queued
+		 * updates and inputs become the batch TakeAnimatedBatch hands out.
+		 */
+		void DrainAnimatedFades();
 		/** @brief BSTreeNode::OnVisible's height test for kObjectHeightTest: base and limit (+infinity: off). */
 		std::array<float, 2> TreeHeightTest() const { return treeHeight; }
 		/** @brief Why this thread's last SyntheticPass failed (kSyntheticFailNames index; 0: it succeeded). */
@@ -641,26 +653,26 @@ namespace DCLF
 		bool NoteAnimatedFade(const void* a_node, const float* a_camera);
 		bool standInLive = false;        // this frame's snapshot is current: the stand-in runs
 		bool liveStale = true;                             // a frame skipped the switch changes: memberLive is read again
-		// SyncFadeOwnership's state per entry index: what of the sets below holds its root (ownRoot, as judged).
+		// SyncRootOwnership's state per entry index: what of the sets below holds its root (ownRoot, as judged).
 		enum : std::uint8_t
 		{
 			kOwnNone,
 			kOwnPlain,      // a stood-in plain entry: standInRoots
-			kOwnMixedFade,  // an admitted fade root with engine-drawn parts: ownedFade (not stood in)
-			kOwnFade,       // a stood-in fade root: standInRoots, ownedFade, standInList, the stand-in observers' (off TreeAnimation's animation list)
+			kOwnMixedFade,  // an admitted fade root with engine-drawn parts: ownedRoots (not stood in)
+			kOwnFade,       // a stood-in fade root: standInRoots, ownedRoots, standInList, the stand-in observers' (off TreeAnimation's animation list)
 			kOwnTree,       // ... a BSTreeNode: TreeWind's tree list takes it from the stand-in's roots
 		};
 		std::vector<std::uint8_t> ownState;
 		std::vector<const RE::NiAVObject*> ownRoot;
-		std::vector<std::uint32_t> ownDirty;  // entries planned again or admitted: judged by the next SyncFadeOwnership
+		std::vector<std::uint32_t> ownDirty;  // entries planned again or admitted: judged by the next SyncRootOwnership
 		std::uint8_t OwnStateOf(std::uint32_t a_e) const;
 		/** @brief Every set below emptied (the stand-in toggled off); every entry judged again when it comes back. */
-		void ClearFadeOwnership();
+		void ClearRootOwnership();
 		static const void* KeyOf(const void* a_root) { return a_root; }
-		static const void* KeyOf(const Scene::OwnedFadeRoot& a_root) { return a_root.node; }
+		static const void* KeyOf(const Api::StandInRoot& a_root) { return a_root.node; }
 		// The fade roots DCLF services (admitted entries with a fade plan), as the coordinator takes them, and each one's index.
-		std::vector<Scene::OwnedFadeRoot> ownedFade;
-		ankerl::unordered_dense::map<const void*, std::uint32_t> ownedFadePosition;
+		std::vector<Api::StandInRoot> ownedRoots;
+		ankerl::unordered_dense::map<const void*, std::uint32_t> ownedRootPosition;
 		// The roots the cut stands in for (admitted, unmixed), whose kAccumulated no engine cull writes (AtUpdateEntry), and the
 		// stood-in fade roots among them (each one's index).
 		ankerl::unordered_dense::set<const void*> standInRoots;
@@ -677,8 +689,8 @@ namespace DCLF
 		// The camera cut test: the main camera's last position and rotation.
 		std::array<float, 12> cutCamera{};
 		bool cutCameraKnown = false;
-		/** @brief FrameView::SetFadeRootsOwned and the stand-in observers' change from the admitted entries that moved (ownDirty). */
-		void SyncFadeOwnership();
+		/** @brief FrameView::SetStandInRoots and the stand-in observers' change from the admitted entries that moved (ownDirty). */
+		void SyncRootOwnership();
 		/** @brief Render thread: the cut planned from nothing for its snapshot, leaving cut as is (the cut observer's reference). */
 		Cut PlanWholeCut();
 		/** @brief Render thread, between the jobs: Cut::walk of entry a_e from its current members. */

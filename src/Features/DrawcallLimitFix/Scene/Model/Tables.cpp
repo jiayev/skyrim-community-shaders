@@ -313,15 +313,6 @@ namespace DCLF
 		pipelineBindingVersion.clear();
 		ancestorValue.clear();
 		families.Clear();
-		NoteFadeRootsWrite();
-		fadeRoots.clear();
-		fadeRootRefs.clear();
-		fadeRootFree.clear();
-		fadeRootNode.clear();
-		fadeRootIndex.clear();
-		fadeRootSwitch.clear();
-		objectFadeRoot.clear();
-		fadeRootsJournal.Resync();
 		for (auto& members : classMembers)
 			members.objects.clear();
 		skinPartitions.clear();

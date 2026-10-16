@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -19,7 +20,7 @@ namespace RE
 
 namespace DCLF::Api
 {
-	/** @brief The stood-in roots' change (PrimaryCull::SyncFadeOwnership): the roots that left and joined. */
+	/** @brief The stood-in roots' change (PrimaryCull::SyncRootOwnership): the roots that left and joined. */
 	class StandInRootsChange
 	{
 	public:
@@ -51,7 +52,22 @@ namespace DCLF::Api
 namespace DCLF::Extensions
 {
 	/** @brief The engine channels a batch holds keys of (Coordinator::EventBatch::channelKeys): grow it before more are registered. */
-	inline constexpr std::uint32_t kEngineChannelSlots = 4;
+	inline constexpr std::uint32_t kEngineChannelSlots = 6;
+	/**
+	 * @brief The engine channels needed by name (InstallContext::NeedEngineChannel): a need's id is this bit and its slot, which
+	 * PushChannelKey resolves through the needs bound at the end of InstallFeatures (BindEngineChannelNeeds). Grow the slots before more
+	 * names are needed.
+	 */
+	inline constexpr std::uint32_t kEngineChannelNeedBit = 1u << 31;
+	inline constexpr std::uint32_t kEngineChannelNeedSlots = 2;
+	/** @brief Main thread, the end of InstallFeatures: each needed name bound to its channel (none: its pushes are dropped). */
+	void BindEngineChannelNeeds(std::span<const std::string> a_needs);
+	/**
+	 * @brief Any thread, lock-free, after InstallFeatures, in a feature's hook after the store it reports: a_key pushed into a_channel
+	 * (a registered id, or a need's: InstallContext::NeedEngineChannel) through the channel's push (Api::EngineChannel::push). Dropped
+	 * before the needs are bound, for an unbound need, or a channel without a push.
+	 */
+	void PushChannelKey(Api::EngineChannelId a_channel, const void* a_key);
 	/**
 	 * @brief The adoption guards the frame inputs and a publication carry the generations of (Scene::FrameInputs::adoptionGuards,
 	 * ScenePublication::adoptionGuards), by registration order: grow it before more are registered.
@@ -101,12 +117,6 @@ namespace DCLF::Extensions
 	 * that thread pushed before. Nothing for null.
 	 */
 	void PushRangesUpdate(const RE::BSGeometry* a_geometry);
-	/**
-	 * @brief A store of the feature's own to a_root's fadeAmount (+0x100; Actor::SetAlpha's, Features/Actors), on the storing thread after
-	 * the store: Core's fadeAmount event (Coordinator::RefreshFadeAmount rereads the node) and, for a fade node, the mirror's value.
-	 */
-	void PushFadeAmount(RE::NiAVObject* a_root);
-
 	/** @brief The move writers the report counts (Core's and the reserved ones; Scene::moveWriterCalls): grow it before more are reserved. */
 	inline constexpr std::uint32_t kMoveWriterSlots = 8;
 	/**
@@ -142,6 +152,11 @@ namespace DCLF::Extensions
 	void StandInAfterWrites(bool a_running);
 	/** @brief Any thread (PrimaryCull::NoteListStructure, first, before the main cull input's): each observer's structure. No lock. */
 	void StandInStructure(const void* a_parent);
+	/**
+	 * @brief Render thread, at the list jobs' Finish (PrimaryCull's ListJobsFinish, where the animated batch is drained today): each
+	 * observer's listJobsDone.
+	 */
+	void StandInListJobsDone();
 	// What a stand-in observer reads of DCLF's main-camera verdicts (the roots' kAccumulated as written at Main::Update's entry, before
 	// updateEntry): direct calls, a feature's per-root loop may make them. Main thread, after Main::Update's entry; no engine memory read.
 	/** @brief A stood-in root's verdict as last written; visible when not written yet (IndirectDraws::AccumulatedVerdict). */

@@ -28,7 +28,7 @@ namespace DCLF::Diagnostics::Accumulated
 	struct Sample
 	{
 		std::uint32_t frame = 0;
-		std::vector<const void*> rootNodes;       // Tables::fadeRootNode
+		std::vector<const void*> rootNodes;       // the listed roots' nodes (Extensions::RootListOf)
 		std::vector<std::uint8_t> rootBits;
 		std::vector<const void*> objectGeometry;  // Tables::objectGeometry (a layer's: null, its base slot's geometry is sampled)
 		std::vector<std::uint8_t> objectBits;

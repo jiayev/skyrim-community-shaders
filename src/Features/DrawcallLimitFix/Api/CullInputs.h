@@ -54,6 +54,8 @@ namespace DCLF::Api
 	 * - RootPrograms: each listed root's program (by root slot).
 	 * - RootRows: the listed roots' static rows (by root slot).
 	 * - RootStates: the roots' published states a frame's cull reads (by root slot; may alternate by frame).
+	 * - RootStepStates: the root states' step's own state rows (by root slot): this frame's once the step ran (the visibility events read
+	 *   them; RootStates is the published copy a frame's cull reads).
 	 * - RootSeeds: the roots' seeds (a frame value pool's: by SRV index).
 	 * - RootFrame: the root states' frame inputs.
 	 */
@@ -63,6 +65,7 @@ namespace DCLF::Api
 		RootPrograms,
 		RootRows,
 		RootStates,
+		RootStepStates,
 		RootSeeds,
 		RootFrame,
 		Count
@@ -74,8 +77,9 @@ namespace DCLF::Api
 	 * - name: the binding's (the install's refusals name it).
 	 * - select: render thread (a pass's declaration, revision and preparation; a commit), per pass or commit, never per object: the buffer
 	 *   the slot reads, answered on a_select (Core's: the scene's tables, the frame, the adopted set where there is one): Versioned for a
-	 *   versioned buffer of the feature's scene resources, Buffer for a plain one, Index for a pooled buffer's SRV index. No answer: the
-	 *   slot is unbound (its readers take what they do without it). It reads only handles made at the scene's setup, its pool, and the frame.
+	 *   versioned buffer of the feature's scene resources, Buffer for a plain one, Index for a pooled buffer's SRV index; with Versioned or
+	 *   Buffer, Rows for how many of its units its readers may read now. No answer: the slot is unbound (its readers take what they do
+	 *   without it). It reads only handles made at the scene's setup, its pool, and the frame.
 	 */
 	struct CullBinding
 	{

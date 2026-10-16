@@ -321,7 +321,8 @@ namespace DCLF
 	void IndirectDraws::DrainAsync()
 	{
 		impl->WaitAhead();
-		impl->WaitFadeWriteBack();
+		// The root states' task (Core's fade roots': the fade write-back).
+		Extensions::RootStatesWait();
 		impl->WaitVisibilityReadback();
 	}
 

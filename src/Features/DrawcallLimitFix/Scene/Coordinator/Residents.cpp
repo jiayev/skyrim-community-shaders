@@ -1,10 +1,10 @@
-// The coordinator's residents (scene lane): the resident set's slots marked, dropped and kept alive, and the fade-root rows listed for
-// them, with their owned engine nodes and seed requests (the features' components list theirs at the same points: Components.cpp).
+// The coordinator's residents (scene lane): the resident set's slots marked, dropped and kept alive, and the fade nodes held for the
+// slots' listings (the components list theirs at the same points: Components.cpp; the fade roots': FadeRoots.cpp).
 
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/FadeRoots.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
 
@@ -219,212 +219,13 @@ namespace DCLF::Scene
 		return nullptr;
 	}
 
-	void Coordinator::ListFadeRoot(std::uint32_t a_slot)
+	std::size_t Coordinator::StoodInFadeRoots() const
 	{
-		// The walk parity's dense walk restores the tables, not the members kept beside them.
-		if (denseWalk)
-			return;
-		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
-		// Its property's fade node (the mirror's).
-		const auto* property = geometry ? mirror.Leaf(geometry).property : nullptr;
-		const auto* node = property ? static_cast<const RE::NiAVObject*>(property->fadeNode) : nullptr;
-		// The engine's "no fade node" (Engine::EmptyFadeNode: terrain, object LOD, references whose root is no BSFadeNode) is no root: it
-		// is one node shared by thousands of geometries, outside the scene graph, so no chain reaches it and FadeStateCS and the write-back
-		// would write a static engine node. Such a geometry takes its entry's root as any plain one.
-		static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
-		if (emptyIsNone && node == Engine::EmptyFadeNode())
-			node = nullptr;
-		// A root not listed yet is owned from the entry's reference (pins), never from the key; without one, not listed.
-		RE::NiPointer<RE::NiAVObject> owner;
-		if (node && !tables.fadeRootIndex.contains(node) && !(owner = HeldFadeNode(a_slot, node)))
-			node = nullptr;
-		if (tables.objectFadeRoot.size() <= a_slot) {
-			tables.NoteFadeRootsWrite();
-			tables.objectFadeRoot.resize(std::size_t(a_slot) + 1, kNoFadeRoot);
-		}
-		auto& current = tables.objectFadeRoot[a_slot];
-		if (node && current < tables.fadeRootNode.size() && tables.fadeRootNode[current] == node)
-			return;
-		if (!node && current == kNoFadeRoot)
-			return;
-		tables.NoteFadeRootsWrite();
-		UnlistFadeRoot(a_slot);
-		if (!node)
-			return;
-		auto [it, inserted] = tables.fadeRootIndex.try_emplace(node, 0u);
-		if (inserted) {
-			std::uint32_t r;
-			if (!tables.fadeRootFree.empty()) {
-				r = tables.fadeRootFree.back();
-				tables.fadeRootFree.pop_back();
-			} else {
-				r = static_cast<std::uint32_t>(tables.fadeRoots.size());
-				tables.fadeRoots.emplace_back();
-				tables.fadeRootRefs.push_back(0);
-				tables.fadeRootNode.push_back(nullptr);
-			}
-			// The coordinator's half from the mirror; the node's state and values are the seed's, sampled by FrameValues in the frame
-			// that first draws the generation (the scene work reads no engine memory).
-			auto row = FadeRootFromMirror(node);
-			row.object = a_slot;
-			row.bits |= tables.fadeRoots[r].bits & kFadeRootSeedOdd;
-			if (const auto owned = fadeRootOwned.find(node); owned != fadeRootOwned.end())
-				row.bits |= kFadeRootOwned | (owned->second ? kFadeRootStoodIn | kFadeRootWritten : 0u);
-			// Every listed root is owned and DCLF's to write from its listing (the row's seed is the node as listed).
-			row.bits |= kFadeRootOwned | kFadeRootWritten;
-			tables.fadeRootNode[r] = node;
-			// Owned while listed (a published version that names it keeps it, through the retirement chain).
-			if (fadeRootOwners.size() <= r)
-				fadeRootOwners.resize(std::size_t(r) + 1);
-			fadeRootOwners[r] = std::move(owner);
-			RequestFadeSeed(r, row);
-			tables.fadeRoots[r] = row;
-			if (const auto* record = mirror.Node(node); record && record->treeLodSwitch)
-				tables.fadeRootSwitch.insert_or_assign(record->treeLodSwitch, r);
-			it->second = r;
-			tables.NoteFadeRoot(r);
-		}
-		++tables.fadeRootRefs[it->second];
-		fadeRootMembers.Add(it->second, a_slot);
-		current = it->second;
-		// The shadow inputs name it (FadeRootOf).
-		tables.NoteChange(a_slot, kChangeBindings);
+		return FadeRootsStoodIn();
 	}
 
-	void Coordinator::UnlistFadeRoot(std::uint32_t a_slot)
+	void NoteFadeRootUnmirrored()
 	{
-		if (denseWalk || a_slot >= tables.objectFadeRoot.size() || tables.objectFadeRoot[a_slot] == kNoFadeRoot)
-			return;
-		tables.NoteFadeRootsWrite();
-		auto& current = tables.objectFadeRoot[a_slot];
-		if (fadeRootMembers.Has(current, a_slot))
-			fadeRootMembers.Remove(current, a_slot);
-		// The root's centre is a record that holds it (its fade node row): another one when this was it.
-		if (current < tables.fadeRoots.size() && tables.fadeRoots[current].object == a_slot && tables.fadeRootRefs[current] > 1) {
-			tables.fadeRoots[current].object = fadeRootMembers.First(current);
-			tables.NoteFadeRoot(current);
-		}
-		if (current < tables.fadeRootRefs.size() && --tables.fadeRootRefs[current] == 0) {
-			const auto* node = static_cast<const RE::NiAVObject*>(tables.fadeRootNode[current]);
-			std::erase_if(tables.fadeRootSwitch, [&](const auto& a_entry) { return a_entry.second == current; });
-			tables.fadeRootIndex.erase(node);
-			tables.fadeRootNode[current] = nullptr;
-			if (current < fadeRootOwners.size())
-				HandBack(std::move(fadeRootOwners[current]));
-			tables.fadeRoots[current] = FadeRootStatic{};
-			tables.Retire(Tables::kRetiredFadeRoot, current);
-			tables.NoteFadeRoot(current);
-		}
-		current = kNoFadeRoot;
-	}
-
-	void Coordinator::MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn)
-	{
-		const auto it = tables.fadeRootIndex.find(a_node);
-		if (it == tables.fadeRootIndex.end())
-			return;
-		auto& row = tables.fadeRoots[it->second];
-		// Owned and written since its listing, its state the GPU's throughout (no engine step to seed again from):
-		// the cut's stand-in only moves kFadeRootStoodIn.
-		row.bits = (row.bits & ~kFadeRootStoodIn) | kFadeRootOwned | kFadeRootWritten | (a_owned && a_standIn ? kFadeRootStoodIn : 0u);
-		tables.NoteFadeRoot(it->second);
-	}
-
-	void Coordinator::ApplyFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned)
-	{
-		ankerl::unordered_dense::map<const void*, bool> owned;
-		for (const auto& root : a_owned)
-			owned.insert_or_assign(root.node, root.standIn);
-		for (const auto& [node, standIn] : fadeRootOwned)
-			if (!owned.contains(node))
-				MarkFadeRootOwned(node, false, false);
-		for (const auto& [node, standIn] : owned)
-			if (const auto it = fadeRootOwned.find(node); it == fadeRootOwned.end() || it->second != standIn)
-				MarkFadeRootOwned(node, true, standIn);
-		fadeRootOwned = std::move(owned);
-	}
-
-	void Coordinator::ReseedFadeRoot(const void* a_node)
-	{
-		const auto it = tables.fadeRootIndex.find(a_node);
-		if (it == tables.fadeRootIndex.end())
-			return;
-		auto& row = tables.fadeRoots[it->second];
-		const std::uint32_t object = row.object;
-		const std::uint32_t kept = row.bits & (kFadeRootOwned | kFadeRootStoodIn | kFadeRootSeedOdd | kFadeRootWritten);
-		row = FadeRootFromMirror(a_node);
-		row.object = object;
-		row.bits |= kept;
-		RequestFadeSeed(it->second, row);
-		tables.NoteFadeRoot(it->second);
-	}
-
-	FadeRootStatic Coordinator::FadeRootFromMirror(const void* a_node)
-	{
-		// What the coordinator's row holds of the node (CheckFadeInputs, the builds' state until the seed's): the fade's range, +0x109,
-		// the fadeAmount, the tree LOD switch's selection; and the state as far as the mirror holds it (the fade and the levels), the
-		// builds' until FadeStateCS's first update. The plan here is a guess (the seed's bits are the node's).
-		FadeRootStatic row;
-		const auto* node = mirror.Node(a_node);
-		if (!node) {
-			// Its geometry tracked this frame by a walk the mirror's captures lag (CaptureMirrorRequests takes it next frame), or a
-			// property's fade node outside the world: the seed brings the node's values.
-			++placementStats.fadeRootsUnmirrored;
-			return row;
-		}
-		row.initial.currentFade = node->currentFade;
-		row.initial.levels = node->fadeLevel | (std::uint32_t(node->fadeType) << 8);
-		row.fadeAmount = node->fadeAmount;
-		row.nearDistance = node->fadeNear;
-		row.farDistance = node->fadeFar;
-		row.bits = (std::uint32_t(node->fade109) << kFadeRootBitsShift) |
-		           ((node->kind & SceneCapture::kKindTree) ? (kFadeRootTree | kFadeRootTreeThresholds) : kFadeRootFade);
-		if (node->treeLodSwitch)
-			if (const auto* lodSwitch = mirror.Node(node->treeLodSwitch); lodSwitch && lodSwitch->switchIndex > 0)
-				row.bits |= kFadeRootTreeLod;
-		return row;
-	}
-
-	void Coordinator::RequestFadeSeed(std::uint32_t a_root, FadeRootStatic& a_row)
-	{
-		a_row.bits ^= kFadeRootSeedOdd;
-		a_row.generation = ++tables.fadeRootGenerations;
-		if (a_root < fadeRootOwners.size() && fadeRootOwners[a_root])
-			fadeSeedRequests.push_back({ fadeRootOwners[a_root], a_root, a_row.generation, static_cast<std::uint32_t>(FadeSeedRow(a_root, a_row.bits)) });
-	}
-
-	void Coordinator::RefreshFadeRootSwitch(const RE::NiAVObject* a_switch)
-	{
-		const auto it = tables.fadeRootSwitch.find(a_switch);
-		if (it == tables.fadeRootSwitch.end() || it->second >= tables.fadeRoots.size() || !tables.fadeRootNode[it->second])
-			return;
-		auto& row = tables.fadeRoots[it->second];
-		// The mirror's (the switch's stores carry its index, applied before the switch events).
-		const auto* lodSwitch = mirror.Node(a_switch);
-		const bool selected = lodSwitch && lodSwitch->switchIndex > 0;
-		if (selected == ((row.bits & kFadeRootTreeLod) != 0))
-			return;
-		// An input, not state: the row changes without a new generation, so the GPU's state row is kept.
-		row.bits = selected ? (row.bits | kFadeRootTreeLod) : (row.bits & ~kFadeRootTreeLod);
-		tables.NoteFadeRoot(it->second);
-	}
-
-	void Coordinator::RefreshFadeAmount(const void* a_node)
-	{
-		// The key alone until it names a listed root, which the listing holds.
-		const auto it = tables.fadeRootIndex.find(a_node);
-		if (it == tables.fadeRootIndex.end())
-			return;
-		auto& row = tables.fadeRoots[it->second];
-		// The mirror's (Actor::SetAlpha's update carries it, applied before this batch's structural events).
-		const auto* record = mirror.Node(a_node);
-		if (!record)
-			return;
-		const float amount = record->fadeAmount;
-		if (std::memcmp(&amount, &row.fadeAmount, sizeof(amount)) == 0)
-			return;
-		// An input, not state: the GPU's state row is kept, and FadeStateCS steps its amountFade toward it as the engine does.
-		row.fadeAmount = amount;
-		tables.NoteFadeRoot(it->second);
+		Coordinator::Get().NoteFadeRootUnmirrored();
 	}
 }

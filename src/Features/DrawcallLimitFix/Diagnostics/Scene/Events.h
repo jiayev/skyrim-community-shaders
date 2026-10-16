@@ -68,8 +68,8 @@ namespace DCLF::Diagnostics
 		const SceneTables& snapshot;
 		std::uint64_t published;
 		std::uint64_t position, geometryPosition;  // the snapshot's change and geometry logs' ends before the replay
-		std::uint32_t keptFamilies;  // the table families the replay kept (their stamps stood), a bit by registration
-		bool keepFadeRoots, keepConstants;  // the other families the replay kept
+		std::uint32_t keptFamilies;  // the table families the replay kept (their stamps stood), a bit by registration (the fade roots among them)
+		bool keepConstants;  // the other family the replay kept
 	};
 
 	// The mirror's reads (the lane reads the scene from the mirror), announced for the observers that check them against the live scene:

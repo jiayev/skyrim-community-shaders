@@ -10,6 +10,11 @@
 #include <string>
 #include <vector>
 
+namespace DCLF::Api
+{
+	class InstallContext;
+}
+
 namespace DCLF
 {
 	struct FrameGlobals;
@@ -41,7 +46,8 @@ namespace DCLF
 	 * frame-start reads after the built-in ones, their kicks after the built-in inputs, their samples after the built-in sampling, their
 	 * sends after the built-in sends.
 	 *
-	 * Each of the row sets (the four built-in ones: placements, palettes, shading, fade seeds; then the registered pools') is a pooled version (D6,
+	 * Each of the row sets (the three built-in ones: placements, palettes, shading; then the registered pools', Core's fade seeds the last:
+	 * RegisterFadeSeeds) is a pooled version (D6,
 	 * org::services::BackingPool on DCLF's retirement clock, the render thread its one acquirer): Kick leases a backing holding every
 	 * row, preferring the one that holds the most (its contentEpoch), and the producer sends it the journal's runs since then. The
 	 * frame's draws read those backings (the frame record's t123, t122 and t121, and the culling's latches); EndFrame binds them to the
@@ -77,7 +83,7 @@ namespace DCLF
 		 * first producer.
 		 */
 		bool Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
-			std::vector<ShadingFieldValue> a_fieldValues, std::vector<FadeSeedItem> a_seeds, std::shared_ptr<const FrameGlobals> a_globals);
+			std::vector<ShadingFieldValue> a_fieldValues, std::shared_ptr<const FrameGlobals> a_globals);
 		/**
 		 * @brief Render thread, before Kick: the claims whose CategoryRoot views' members the frame draws (null: none, those views'
 		 * epochs do not draw this frame: the first person's). Kick samples those members' rows and skin palettes itself, before Main::Draw
@@ -108,9 +114,11 @@ namespace DCLF
 		std::uint32_t ShadingIndex() const { return shadingIndex; }
 		/**
 		 * @brief Render thread: the descriptor of the fade seeds the current frame reads (StructuredBuffer<FadeRootStatic>, two rows
-		 * a root slot: FadeSeedRow; 0 before the first frame). A root's seed is its node as the frame's start had it (its bytes copied at Kick, StaticOf on the copy by the producer).
+		 * a root slot: FadeSeedRow; 0 before the first frame): Core's fade seeds pool's backing (RegisterFadeSeeds; its readers take it as
+		 * the cull binding RootSeeds). A root's seed is its node as the frame's start had it (its bytes copied at Kick, StaticOf on the copy
+		 * by the producer).
 		 */
-		std::uint32_t FadeSeedsIndex() const { return seedsIndex; }
+		std::uint32_t FadeSeedsIndex() const;
 		/**
 		 * @brief Render thread: the descriptor of a registered pool's backing the current frame reads (StructuredBuffer of its rows; 0
 		 * before the first frame, on a frame without a producer, and for an unknown pool).
@@ -123,6 +131,14 @@ namespace DCLF
 		bool ProducerDone(bool a_wait = false) const;
 		/** @brief Render thread: the seed rows as the frame's producer left them, once it is done; a_wait (diagnostics frames): waits for it. */
 		const std::vector<FadeRootStatic>* FadeSeedsIfDone(bool a_wait = false) const;
+		/**
+		 * @brief Main thread at install (Scene::RegisterCoreFades, through Draws::RegisterCoreFadeRender): Core's fade seeds as a registered
+		 * pool ("fade-seeds", after every feature's): the fade roots component's seeds (FrameView::TakeComponentSeeds) copied at each Kick,
+		 * their rows made by the producer (FadeState::StaticOf). Features/Fades' in stage F3.
+		 */
+		static void RegisterFadeSeeds(Api::InstallContext& a_context);
+		/** @brief The producer (a pool's sample): an engine-read lease refused, counted with the built-in parts' (Counters::refused). */
+		void NoteRefused();
 		bool Available() const;
 
 		/**
@@ -158,7 +174,7 @@ namespace DCLF
 			// The journal's trim floor at the last Kick (the oldest content any backing holds; 0: none holds any).
 			std::uint64_t floor = 0;
 		};
-		static constexpr std::size_t kBuiltInPools = 4;  // placements, palettes, shading, fade-seeds
+		static constexpr std::size_t kBuiltInPools = 3;  // placements, palettes, shading
 		/**
 		 * @brief Any thread (the report): the pools' stats, the since-last-take counts reset: the built-in parts', then the registered
 		 * pools' once the first Kick made them.
@@ -170,7 +186,7 @@ namespace DCLF
 		~FrameValues();
 		struct Impl;
 		std::unique_ptr<Impl> impl;
-		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0;
+		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0;
 		std::shared_ptr<const SetSnapshot> rootViewClaims;  // SetRootViewClaims
 	};
 }
