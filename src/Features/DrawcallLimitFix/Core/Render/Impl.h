@@ -204,10 +204,10 @@ namespace DCLF
 		std::string SnapshotReport();
 		/** @brief The snapshot builder: a publication's stream views and payloads (on the pool, in publication order). */
 		std::shared_ptr<const DrawPublication> RunAhead(std::shared_ptr<const SceneTables> a_tables, const AheadContext& a_context, const Lookups& a_lookups,
-			std::uint32_t a_generation, std::uint32_t a_frame, std::shared_ptr<const SunCandidates> a_sunCandidates, std::shared_ptr<const SunCandidates> a_lightCandidates);
+			std::uint32_t a_generation, std::uint32_t a_frame, std::shared_ptr<const EntrySpace> a_sunCandidates, std::shared_ptr<const EntrySpace> a_lightCandidates);
 		/** @brief RunAhead's shadow stage: the shadow payload into a_out, from the same tables, stream views and lookups, and its exclusions. */
 		void BuildAheadShadow(DrawPublication& a_out, const AheadContext& a_context, const SceneTables& a_tables, const Lookups& a_lookups, std::uint32_t a_generation,
-			std::uint32_t a_frame, const std::shared_ptr<const SunCandidates>& a_sunCandidates, const std::shared_ptr<const SunCandidates>& a_lightCandidates,
+			std::uint32_t a_frame, const std::shared_ptr<const EntrySpace>& a_sunCandidates, const std::shared_ptr<const EntrySpace>& a_lightCandidates,
 			const TablesContentEpochs& a_oldestTables);
 		/** @brief Waits until no build ahead runs (DrainAsync; never per frame). */
 		void WaitAhead();

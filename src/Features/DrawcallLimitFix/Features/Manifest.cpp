@@ -7,7 +7,9 @@
 // contribution (Api::TechniqueContribution) lists its flags, one whose family the record carries (Api::TableFamily::recordWord) its word,
 // and one with a view contribution (Api::ViewContribution, Api::OcclusionMapContribution) its phase and view bit (the install checks those
 // too: Extensions::ResolveViewBits). One with a main range (Api::MainRangeContribution) checks its slot against the GPU layout its objects'
-// flags select (BuildDrawsCS's group bits and count words: GpuLayouts.h's MainRangeCountWord).
+// flags select (BuildDrawsCS's group bits and count words: GpuLayouts.h's MainRangeCountWord). One whose view root contribution
+// (Api::ViewRootContribution) or draw family's faces (Api::DrawFamilyContribution::faces.root) owns an engine root lists it: one owner a root
+// (the install checks it too: InstallContext::RegisterViewRoot, RegisterDrawFamily).
 // The contributions' keys (a technique, a geometry type, a Core class's value: Api/ObjectContributors.h) are not listed here: the install
 // fails a key two features claim.
 
@@ -18,8 +20,10 @@
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
+#include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
 #include <cstddef>
@@ -141,6 +145,23 @@ namespace DCLF::Features
 			return true;
 		}
 
+		// Every engine root a view root contribution or a draw family's faces own (Api::ViewRoot): a root, none another's.
+		constexpr Api::ViewRoot kViewRoots[] = {
+			Lod::kOwnedRoot,
+			TreeLod::kFacesRoot,
+		};
+
+		constexpr bool ViewRootsValid()
+		{
+			std::uint32_t taken = 0;
+			for (const Api::ViewRoot root : kViewRoots) {
+				if (root >= Api::ViewRoot::Count || (Api::ViewRootBit(root) & taken))
+					return false;
+				taken |= Api::ViewRootBit(root);
+			}
+			return true;
+		}
+
 		constexpr bool RecordWordsValid()
 		{
 			for (std::size_t i = 0; i < std::size(kRecordWords); ++i) {
@@ -161,6 +182,7 @@ namespace DCLF::Features
 	static_assert(FrameConstantRowsValid(), "a frame constant row is outside Core's feature rows of PS b13 or another row's");
 	static_assert(ObjectFlagsValid(), "a feature's object flags are Core's (outside kFeatureObjectFlags) or another feature's");
 	static_assert(RecordWordsValid(), "a family's record words are past the object record or another family's");
+	static_assert(ViewRootsValid(), "a view root is not one, or another registration owns it");
 	static_assert(ViewBitsValid(kViewPhases, std::size(kViewPhases), kCoreSetPhases, 0xFFu), "a view's set phase is not one bit of the eight, or is Core's or another view's");
 	static_assert(ViewBitsValid(kViewBits, std::size(kViewBits), Draws::kCoreViewBits, 0xFFFFFFFFu), "a view's view bit is not one bit, or is Core's or another view's");
 	// FirstPerson's view bit: BuildDrawsCS.hlsl's kViewFirstPerson (the first-person forward range's cull). Reflection's and the

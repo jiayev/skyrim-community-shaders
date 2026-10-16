@@ -2,7 +2,8 @@
 
 // The view contribution contract (Api::InstallContext::RegisterView, RegisterViewWork): a view of the engine's that Core's view machinery
 // can draw in its place (its scene set, its view bit at the GPU cull, its epochs and their revisions) but leaves to the engine until a
-// feature takes it, under the feature's toggle; and the feature's work at the view's engine points.
+// feature takes it, under the feature's toggle; the feature's work at the view's engine points; and the engine roots a covered view's faces
+// draw in the engine's place (RegisterViewRoot).
 
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 #include "Features/DrawcallLimitFix/Api/ViewCommon.h"
@@ -156,5 +157,32 @@ namespace DCLF::Api
 		EngineView view = EngineView::Count;
 		ViewPoint point = ViewPoint::Count;
 		void (*run)(const ViewPointContext& a_context) = nullptr;
+	};
+
+	/**
+	 * @brief An engine root a covered view's faces can draw in the engine's place, its add-root skipped so the engine neither culls nor
+	 * registers its members: one owner each, a draw family's faces (Api::DrawFamilyContribution::faces.root) or a view root contribution.
+	 */
+	enum class ViewRoot : std::uint8_t
+	{
+		LodLandAndObjects,  // the LOD land and objects roots (the terrain manager's LOD blocks)
+		LodTrees,           // the LOD trees root (tree LOD's instanced shapes)
+		Count,
+	};
+	/** @brief a_root's bit in a view's owned roots (the roots' word the view's engine hooks read). */
+	inline constexpr std::uint32_t ViewRootBit(ViewRoot a_root) { return 1u << static_cast<std::uint32_t>(a_root); }
+
+	// Core-defined (Core/Extensions/Views.h): what a root's owned callback is handed - the view and the active toggles.
+	class ViewRootFrame;
+
+	/**
+	 * @brief A view root contribution (Api::InstallContext::RegisterViewRoot): a root whose members a covered view's faces draw while
+	 * owned says so. owned: render thread, once per plain render of a covered, drawable view (where the view's owned roots are decided),
+	 * handed the view and the active toggles; read of data the feature registered (no engine read).
+	 */
+	struct ViewRootContribution
+	{
+		ViewRoot root = ViewRoot::Count;
+		bool (*owned)(const ViewRootFrame& a_frame) = nullptr;
 	};
 }

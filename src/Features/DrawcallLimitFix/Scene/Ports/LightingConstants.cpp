@@ -363,7 +363,8 @@ namespace DCLF
 		// object is not alpha tested (the shader's test is then compiled out anyway).
 		// A Blood effect's is its threshold whatever its alpha test (AlphaTestRefOf: SetupGeometry's AlphaTestRef.x).
 		a_out.alphaTestRef = AlphaTestRefOf(object.flags, object.pipelineIndex < a_tables.pipelines.size() ? &a_tables.pipelines[object.pipelineIndex] : nullptr);
-		a_out.tree = a_objectIndex < a_tables.treeAnim.size() ? a_tables.treeAnim[a_objectIndex] : ObjectTreeAnim{};
+		// The tree words are zero bar the family's record word below (the wind is the shading row's and DCLFTreeWind's).
+		a_out.tree = ObjectTreeAnim{};
 		// The table families' references the record carries, each its row and the row's tag (Api::TableFamily::recordWord: Features/
 		// TreeWind's tree slot and listing generation, never 0, for its wind: DCLFTreeWind).
 		for (const auto& family : a_tables.families.All())

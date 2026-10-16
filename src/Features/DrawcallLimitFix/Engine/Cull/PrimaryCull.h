@@ -33,7 +33,7 @@ namespace DCLF::SceneCapture
 
 namespace DCLF
 {
-	struct SunCandidates;
+	struct EntrySpace;
 	struct FrameGlobals;
 
 	/**
@@ -184,7 +184,7 @@ namespace DCLF
 		 * on DCLF's pool (KickPlans; TakePlans splices them in, the engine culling them meanwhile), or here when a_inline (the parity's
 		 * whole plan).
 		 */
-		void SyncCut(const std::shared_ptr<const SunCandidates>& a_candidates, std::span<const std::uint32_t> a_changed, bool a_inline = false);
+		void SyncCut(const std::shared_ptr<const EntrySpace>& a_candidates, std::span<const std::uint32_t> a_changed, bool a_inline = false);
 		/** @brief Repacks the member and switch pools without the let-go ranges. */
 		void CompactCut();
 		std::size_t cutGarbage = 0;  // members of let-go ranges still in the pool
@@ -354,7 +354,7 @@ namespace DCLF
 		 */
 		struct ListFilter
 		{
-			std::shared_ptr<const SunCandidates> candidates;
+			std::shared_ptr<const EntrySpace> candidates;
 			ankerl::unordered_dense::set<const RE::NiAVObject*> roots;
 			std::uint64_t version = 0, base = 0;  // base: the version the delta is from (0: none)
 			std::vector<const RE::NiAVObject*> inserted, erased;
@@ -476,7 +476,7 @@ namespace DCLF
 		 * @brief The entry's plan from a walk of a_root's subtree and a_candidates (the snapshot it was let go for), into a_out. Any thread
 		 * (the pool's under a lease); reads nothing of the cut.
 		 */
-		EntryPlan PlanEntry(const SunCandidates& a_candidates, const RE::NiAVObject* a_root, PlannedEntry& a_out) const;
+		EntryPlan PlanEntry(const EntrySpace& a_candidates, const RE::NiAVObject* a_root, PlannedEntry& a_out) const;
 		/** @brief Render thread: a_planned (entry a_e, let go, its plan made for its current root) put into the cut. */
 		void SplicePlan(std::uint32_t a_e, PlannedEntry& a_planned);
 		/** @brief Render thread, before the cut is read: the pool's plans spliced in (those still for their entry's let-go). */
@@ -513,7 +513,7 @@ namespace DCLF
 		 */
 		struct Cut
 		{
-			std::shared_ptr<const SunCandidates> candidates;  // the snapshot the plans are for
+			std::shared_ptr<const EntrySpace> candidates;  // the snapshot the plans are for
 			std::vector<EntryPlan> plans;                     // per candidate entry index
 			/** @brief A geometry under an eligible entry: DCLF's (synthetic pass) or the engine's (handed to its registration). */
 			struct Member
@@ -585,7 +585,7 @@ namespace DCLF
 		/** @brief A kick's plans, with the snapshot they were made against (held, so its roots are; dropped on the render thread). */
 		struct PlanBatch
 		{
-			std::shared_ptr<const SunCandidates> candidates;
+			std::shared_ptr<const EntrySpace> candidates;
 			std::vector<PlannedEntry> entries;
 		};
 		EventQueue<PlanBatch*, 64> plansReady;  // the pool's, drained by TakePlans

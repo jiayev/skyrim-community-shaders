@@ -50,7 +50,7 @@
 #include "Features/DrawcallLimitFix/Scene/Model/Publication.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneSet.h"
 #include "Features/DrawcallLimitFix/Scene/Channels.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/EntrySpaceTable.h"
 
 namespace DCLF
 {
@@ -65,7 +65,7 @@ namespace DCLF
 	struct FrameGlobals;
 	/** @brief Attributes the time since the last call to one BuildPart (CS_DCLF_PROFILE). */
 	struct PartTimer;
-	struct SunCandidates;
+	struct EntrySpace;
 	struct PipelineCatalog;
 }
 
@@ -362,8 +362,8 @@ namespace DCLF
 		 */
 		std::uint32_t PassStamp() const { return static_cast<std::uint32_t>(passSerial % 0xFFFFFFFEull) + 1u; }
 		/** @brief The candidates as the coordinator last made them (the frame takes the publication's copy). */
-		std::shared_ptr<const SunCandidates> CoordinatorSunCandidates() const { return sunCandidates; }
-		std::shared_ptr<const SunCandidates> CoordinatorLightCandidates() const { return lightCandidates; }
+		std::shared_ptr<const EntrySpace> CoordinatorSunCandidates() const { return sunCandidates; }
+		std::shared_ptr<const EntrySpace> CoordinatorLightCandidates() const { return lightCandidates; }
 
 
 		/**

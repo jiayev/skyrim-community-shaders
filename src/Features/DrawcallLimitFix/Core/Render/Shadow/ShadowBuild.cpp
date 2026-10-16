@@ -636,7 +636,7 @@ namespace DCLF::Draws
 		}
 
 		/** @brief Every entry judged from every object (the reference the kept verdicts are checked against). a_isInput: per object. */
-		void JudgeAll(const SunCandidates& a_candidates, const SceneTables& a_tables, const std::vector<std::uint8_t>& a_isInput, std::uint8_t a_bit,
+		void JudgeAll(const EntrySpace& a_candidates, const SceneTables& a_tables, const std::vector<std::uint8_t>& a_isInput, std::uint8_t a_bit,
 			std::vector<std::uint8_t>& a_out)
 		{
 			// Every live entry excluded unless a caster under it is not drawn; a free index never.
@@ -694,7 +694,7 @@ namespace DCLF::Draws
 		}
 	}
 
-	std::shared_ptr<SunExclusion> BuildSunExclusion(const std::shared_ptr<const SunCandidates>& a_candidates, const ShadowPayload& a_payload, std::uint32_t a_mode,
+	std::shared_ptr<SunExclusion> BuildSunExclusion(const std::shared_ptr<const EntrySpace>& a_candidates, const ShadowPayload& a_payload, std::uint32_t a_mode,
 		const SceneTables& a_tables, SunExclusionCache* a_cache)
 	{
 		ZoneScopedN("CS.DCLF.BuildSunExclusion");

@@ -6,6 +6,7 @@
 
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
+#include "Features/DrawcallLimitFix/Api/Views.h"
 
 #include <cstdint>
 #include <memory>
@@ -27,6 +28,7 @@ namespace DCLF::Api
 	class DrawFamilyViewContext;
 	class DrawFamilyFaceRow;
 	class DrawFamilyLists;
+	class DrawFamilyFaceWrite;
 
 	/**
 	 * @brief Core's fixed slot per draw family (Core/Render/DrawFamilies/FamilySlots.h): what Core keeps for each, whichever feature
@@ -39,6 +41,52 @@ namespace DCLF::Api
 		// The tree LOD instances (the BSDistantTreeShaderProperty groups under the LOD trees root), one instanced draw of a culled list.
 		TreeInstances,
 		Count,
+	};
+
+	/** @brief How a family's main pipelines are built from its program (Core's named rules). */
+	enum class DrawFamilyBuild : std::uint8_t
+	{
+		// A depth pipeline (depth write, LESS) of the program's depth stages, then a colour one (no depth write, EQUAL against it) of its
+		// colour stages, both with culling off; the colour pipeline blends as the engine's opaque write mode.
+		DepthThenEqualColour,
+	};
+	/** @brief The draw signature a family's draws execute with (Core's, created per slot). */
+	enum class DrawFamilySignature : std::uint8_t
+	{
+		DrawInstanced,  // one non-indexed draw's arguments (vertices, instances, first vertex, first instance)
+	};
+
+	/**
+	 * @brief A draw family's program: what Core's pipeline lane builds its slot's pipelines of (the engine shader frame.programSource
+	 * names), resolved once at install with its strings owned.
+	 *
+	 * - shaderType: the engine shader (RE::BSShader::Type) its programs' defines come from; none Lighting's or another draw or program
+	 *   family's.
+	 * - name: the logs' ("DistantTree": "SPIR-V build of DistantTree ..."); label: the reports' and pipelines' ("tree LOD": "tree LOD
+	 *   colour"); keyName: its recipes' ("tree-lod": "dclf.tree-lod", "dclf.forward.tree-lod"); sourcePath: its HLSL, loaded with Core's
+	 *   sources; nativeNote: what stays native without it ("tree LOD stays native").
+	 * - descriptors: the engine descriptors of its colour and depth programs and of a view's forward program.
+	 * - build, signature: its pipelines' rule and its draws' signature.
+	 */
+	struct DrawFamilyProgram
+	{
+		std::uint8_t shaderType = 0xFF;
+		std::string_view name, label, keyName, sourcePath, nativeNote;
+		struct Descriptors
+		{
+			std::uint32_t colour = 0, depth = 0, forward = 0;
+		} descriptors;
+		DrawFamilyBuild build = DrawFamilyBuild::DepthThenEqualColour;
+		DrawFamilySignature signature = DrawFamilySignature::DrawInstanced;
+	};
+
+	/**
+	 * @brief The engine's shapes a family's draws replace (PassCapture withholds their passes while the family is DCLF's). propertyVtable:
+	 * called once at install: the address of their shader property's vtable.
+	 */
+	struct DrawFamilyEngineShapes
+	{
+		const void* (*propertyVtable)() = nullptr;
 	};
 
 	/**
@@ -68,6 +116,12 @@ namespace DCLF::Api
 	 *   commit's row (row: the row the faces' latch takes, its texture held; true when the faces draw it; and the faces' decision, without
 	 *   owners), and the units the faces' lists hold with the family's tables (lists: Core's view machinery's lists, sized, required and
 	 *   counted with them).
+	 * - program, engineShapes: what its slot's pipelines are built of, and the engine shapes its draws replace (read once at install).
+	 * - faces' data (with its callbacks, all or none): cullName (its cull pass, after the view's pass prefix), rowName and listName (a
+	 *   face's row and list resources, the face's index appended); rowBytes and headerBytes (a face's row and its list's header in the
+	 *   face's latch values), unitWords (a list's words per unit its tables hold), cullGroup (its cull's thread group); root: the engine
+	 *   root a trees view's faces draw in the engine's place while they draw the family (Api::ViewRoot, one owner). face: render thread,
+	 *   per face of each trees view's epoch commit: the face's row and list header from the commit's row (Core's DrawFamilyFaceWrite).
 	 */
 	struct DrawFamilyContribution
 	{
@@ -94,7 +148,13 @@ namespace DCLF::Api
 			void (*record)(const DrawFamilyRecord& a_record) = nullptr;
 			bool (*row)(DrawFamilyFaceRow& a_row) = nullptr;
 			void (*lists)(DrawFamilyLists& a_lists) = nullptr;
+			std::string_view cullName, rowName, listName;
+			std::uint32_t rowBytes = 0, headerBytes = 0, unitWords = 0, cullGroup = 0;
+			ViewRoot root = ViewRoot::Count;
+			void (*face)(DrawFamilyFaceWrite& a_face) = nullptr;
 		} faces;
+		DrawFamilyProgram program;
+		DrawFamilyEngineShapes engineShapes;
 	};
 
 	/**

@@ -121,7 +121,7 @@ namespace DCLF::Eligibility
 		Ineligible reason = Ineligible::None;  // that classification's (Tracked::candidateReason)
 	};
 
-	/** @brief A sun candidate geometry row's primary verdict (SunCandidates::primaryGeometry; PrimaryCull::PlanOf reads it). */
+	/** @brief A sun candidate geometry row's primary verdict (EntrySpace::primaryGeometry; PrimaryCull::PlanOf reads it). */
 	inline constexpr std::uint8_t kPrimaryEngine = 0, kPrimaryMember = 1, kPrimaryHiddenStatic = 2;
 
 	/** @brief A leaf that is no part of an actor: hidden, its hidden bit changes by its events alone (an actor's parts are shown and hidden by its behaviour graph). */
@@ -181,7 +181,7 @@ namespace DCLF::Eligibility
 	bool Primary(const EntryVerdict& a_entry, const SceneCapture::LeafView& a_leaf);
 
 	/**
-	 * @brief The primary verdict a sun candidate's geometry row carries (SunCandidates::primaryGeometry): kPrimaryMember when Primary, kPrimaryHiddenStatic
+	 * @brief The primary verdict a sun candidate's geometry row carries (EntrySpace::primaryGeometry): kPrimaryMember when Primary, kPrimaryHiddenStatic
 	 * for a hidden static's geometry, which nobody draws while hidden and whose unhiding is an event
 	 * that changes this verdict (so its entry is planned again), kPrimaryEngine otherwise (the engine's).
 	 */

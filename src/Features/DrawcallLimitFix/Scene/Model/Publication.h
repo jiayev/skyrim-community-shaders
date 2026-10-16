@@ -19,7 +19,7 @@
 namespace DCLF
 {
 	struct PipelineCatalog;
-	struct SunCandidates;
+	struct EntrySpace;
 
 	/**
 	 * @brief What a scene revision is made of besides its publication's tables, lookups and catalog (the revision is its publication's
@@ -58,7 +58,7 @@ namespace DCLF
 		std::shared_ptr<const Lookups> lookups;
 		std::shared_ptr<const PipelineCatalog> catalog;
 		// The sun and light candidates as its pass left them (UpdateSunCandidates, UpdateLightCandidates).
-		std::shared_ptr<const SunCandidates> sunCandidates, lightCandidates;
+		std::shared_ptr<const EntrySpace> sunCandidates, lightCandidates;
 		std::uint64_t lightEntriesAppeared = 0;
 		// The category nodes as its pass left them (immutable, copied again only when the set changed, a cell attach or detach): what the
 		// point lights' culls ask of the frame (IsCategoryNode), never the coordinator's set. The light entries change with every

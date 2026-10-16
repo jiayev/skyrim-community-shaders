@@ -9,7 +9,7 @@
 
 #include <ankerl/unordered_dense.h>
 
-#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EntrySpace.h"
 
 namespace DCLF::Diagnostics
 {
@@ -18,66 +18,6 @@ namespace DCLF::Diagnostics
 
 namespace DCLF
 {
-	struct CandidateChanges;  // Scene/Coordinator/CandidateTable.h
-
-	/**
-	 * @brief The sun entries DCLF could take out of the engine's cascade culls (Coordinator::UpdateSunCandidates); immutable once
-	 * published. An entry (a static reference's root, or a terrain block's multibound node) is a candidate when every tracked
-	 * geometry under it is a table object (its shadow drawn by the shadow epoch or rejected by the caster rule) or one the engine
-	 * never draws into a shadow map (non-Lighting, hidden, blended, fading, unselected switch child).
-	 *
-	 * Indices are stable while an entry is a candidate, as are its geometries'. Every index change takes a session-unique version
-	 * (entryVersion), so snapshots differ exactly where versions differ (ChangedEntries), which consumers update by.
-	 */
-	struct SunCandidates
-	{
-		SunCandidates() = default;
-		SunCandidates(const SunCandidates&) = delete;
-		SunCandidates& operator=(const SunCandidates&) = delete;
-		// The last owner may be any thread: the entry nodes are released on the render thread.
-		~SunCandidates()
-		{
-			for (auto& node : held)
-				EngineReleases::Push(std::move(node));
-		}
-
-		std::uint32_t generation = 0;
-		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> entries;     // entry node -> entry index
-		std::vector<const RE::NiAVObject*> entryNodes;                                  // entry index -> entry node (null: free)
-		std::vector<std::uint32_t> entryVersion;                                        // entry index -> its version
-		// The entry nodes, held as long as the snapshot: readers keyed by them may dereference one after the engine drops it.
-		std::vector<RE::NiPointer<RE::NiAVObject>> held;
-		std::vector<std::vector<std::uint32_t>> entryGeometries;                        // entry index -> its geometry indices
-		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> geometries;  // every tracked geometry under one -> geometry index
-		std::vector<const RE::BSGeometry*> geometryNodes;                               // geometry index -> geometry (null: free)
-		std::vector<std::uint32_t> geometryEntry;                                       // geometry index -> entry index (kNone: free)
-		// geometry index -> its object slot at the snapshot's walk (-1: no record); the frame reads this, not the tracked set
-		std::vector<std::int32_t> geometrySlot;
-		// Per geometry (Eligibility::PrimaryVerdict): 1, a table object PrimaryCull can give a synthetic pass; 2, a hidden static's,
-		// drawn by nobody; 0, the engine's (under a left-out entry, handed over as its cull would).
-		std::vector<std::uint8_t> primaryGeometry;
-		// The table's change log as published with this snapshot: which indices moved since earlier generations
-		// (CandidateTable.h, ChangedEntriesByLog). Null for a snapshot no table published.
-		std::shared_ptr<const CandidateChanges> changes;
-
-		static constexpr std::uint32_t kNone = ~0u;
-		/** @brief The index space: entry indices are below it (free ones among them). */
-		std::uint32_t Capacity() const { return static_cast<std::uint32_t>(entryNodes.size()); }
-		std::uint32_t GeometryCapacity() const { return static_cast<std::uint32_t>(geometryNodes.size()); }
-		/** @brief The live entries. */
-		std::uint32_t Count() const { return static_cast<std::uint32_t>(entries.size()); }
-	};
-
-	/**
-	 * @brief Appends, in order, the entry indices whose versions differ between a_from and a_to (null a_from: every index), by comparing
-	 * every index: ChangedEntriesByScan. Readers that update by the change follow ChangedEntriesByLog instead (O(changes)).
-	 */
-	void ChangedEntries(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out);
-	// Defined with the candidate table (Scene/Coordinator/CandidateTable.h, which documents them); declared here for the readers of
-	// SunCandidates.
-	bool ChangedEntriesByLog(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out);
-	void ChangedEntriesByScan(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out);
-
 	/**
 	 * @brief One shadow epoch's verdict: the entries whose casters it all drew, which the next frame's full-frustum cull leaves out of
 	 * the cascade culls. Built by the shadow build; immutable once published (but for its stamped words and its forward link), and
@@ -89,7 +29,7 @@ namespace DCLF
 		SunExclusion(const SunExclusion&) = delete;
 		SunExclusion& operator=(const SunExclusion&) = delete;
 
-		std::shared_ptr<const SunCandidates> candidates;
+		std::shared_ptr<const EntrySpace> candidates;
 		std::vector<std::uint8_t> excluded;  // per candidate index
 		std::uint32_t excludedCount = 0;
 		// Changes only when excluded does: the scene lists' filter compares it.
@@ -127,7 +67,7 @@ namespace DCLF
 	 * a_stamps: an exclusion for a_to whose stamped words the translation shares (else a_exclusion's when long enough, else new ones).
 	 * The builder makes them (ForwardExclusion follows what it made); a reader translating itself pays O(changes + candidates).
 	 */
-	std::shared_ptr<SunExclusion> TranslateExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
+	std::shared_ptr<SunExclusion> TranslateExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const EntrySpace>& a_to,
 		bool a_newVersion, bool a_lightReach, std::vector<std::uint32_t>* a_changed = nullptr, const SunExclusion* a_stamps = nullptr);
 
 	/**
@@ -135,7 +75,7 @@ namespace DCLF
 	 * verdict TranslateExclusion gives); a_exclusion itself when it is for a_to. Null when the builder made none for a_to (it did not
 	 * build that mode's exclusion for those candidates). a_changed: appends each link's changed entries. O(links), any thread.
 	 */
-	std::shared_ptr<SunExclusion> ForwardExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
+	std::shared_ptr<SunExclusion> ForwardExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const EntrySpace>& a_to,
 		std::vector<std::uint32_t>* a_changed = nullptr);
 
 	/**
@@ -171,7 +111,7 @@ namespace DCLF
 		 * a_candidates (ForwardExclusion: a pointer swap). None made (the builder did not build the mode for them): the pending one stays
 		 * as it is, a verdict on other candidates, which the full-frustum cull does not apply (stale).
 		 */
-		void BeginFrame(const std::shared_ptr<const SunCandidates>& a_candidates);
+		void BeginFrame(const std::shared_ptr<const EntrySpace>& a_candidates);
 
 		/** @brief One cascade as BuildDraws tests it (GpuLayouts.h): plane masks (custom 0: none), 6 planes and 6 custom planes. */
 		struct GpuCascade

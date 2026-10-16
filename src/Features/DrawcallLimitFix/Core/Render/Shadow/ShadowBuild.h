@@ -136,7 +136,7 @@ namespace DCLF::Draws
 	 */
 	struct SunExclusionCache
 	{
-		std::shared_ptr<const SunCandidates> candidates;
+		std::shared_ptr<const EntrySpace> candidates;
 		LogCursor cursor;
 		std::uint64_t membership = 0;
 		std::vector<std::uint8_t> excluded;
@@ -157,7 +157,7 @@ namespace DCLF::Draws
 	 * casters (SceneSet.h): a candidate stays in the cascade culls when one of its table objects casts (no
 	 * kObjectNoShadow) and is not an input, since the engine must then still draw it. Null without candidates.
 	 */
-	std::shared_ptr<SunExclusion> BuildSunExclusion(const std::shared_ptr<const SunCandidates>& a_candidates, const ShadowPayload& a_payload, std::uint32_t a_mode,
+	std::shared_ptr<SunExclusion> BuildSunExclusion(const std::shared_ptr<const EntrySpace>& a_candidates, const ShadowPayload& a_payload, std::uint32_t a_mode,
 		const SceneTables& a_tables, SunExclusionCache* a_cache = nullptr);
 
 	// Whether an object's entry is outside every one of the sun's full-frustum processes, so the sun's cascade

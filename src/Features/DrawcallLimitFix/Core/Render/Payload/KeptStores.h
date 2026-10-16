@@ -254,9 +254,9 @@ namespace DCLF::Draws
 	std::shared_ptr<const StreamViews> MakeStreamViews(ObjectRecordStore& a_objects, ExtrasStore& a_extras, GeometryStore& a_geometries, const TablesContentEpochs& a_oldest,
 		std::shared_ptr<const SceneTables> a_hold, const SceneTables& a_tables, std::uint32_t a_generation, std::uint32_t a_frame);
 
-	// What a record is built from (BuildObjectRecord): the alpha test and the LOD fades (bindings), the lights, the tree
-	// animation, the palette's place and the extras'.
-	constexpr std::uint32_t kObjectRecordCauses = kChangeBindings | kChangeLights | kChangeTree | kChangeSkin | kChangeExtras;
+	// What a record is built from (BuildObjectRecord): the alpha test and the LOD fades (bindings), the lights, the
+	// palette's place and the extras'.
+	constexpr std::uint32_t kObjectRecordCauses = kChangeBindings | kChangeLights | kChangeSkin | kChangeExtras;
 
 	/**
 	 * @brief The build's object records: brought up to date from the change log in the store (its journal trimmed to

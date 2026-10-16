@@ -604,7 +604,7 @@ namespace DCLF
 		auto* lists = Global<SceneList*>(Engine::Address::kSceneLists);
 		if (!filter || !lists || !count)
 			return;
-		// The filter's roots are alive: its candidates hold them (SunCandidates::held). One the engine detached since the snapshot
+		// The filter's roots are alive: its candidates hold them (EntrySpace::held). One the engine detached since the snapshot
 		// was made stays out (it has left the scene); a hidden one is skipped by the cull. Taking a reference to a root the
 		// snapshot did not hold is what put freed roots into the lists, released at Present (crash-catalog.md).
 		const auto* scene = SceneNode();

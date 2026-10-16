@@ -74,6 +74,8 @@ namespace DCLF::Extensions
 			// By view: its contribution (EngineView::Count: none); the views' work, in order. Resolved at the end (ResolveViews).
 			std::array<Api::ViewContribution, kEngineViews> views{};
 			std::vector<Api::ViewWork> viewWork;
+			// By root: its view root contribution (ViewRoot::Count: none). Resolved with the views (ResolveViews).
+			std::array<Api::ViewRootContribution, kViewRoots> viewRoots{};
 			// By map and by source: its contribution (Count: none). Resolved at the end (ResolveShadowViews).
 			std::array<Api::OcclusionMapContribution, kOcclusionMaps> occlusionMaps{};
 			std::array<Api::ShadowSourceContribution, kShadowSources> shadowSources{};
@@ -147,9 +149,46 @@ namespace DCLF::Extensions
 			return static_cast<std::uint8_t>(a_lists.materialPortCount++);
 		}
 
+		/** @brief Whether a draw family's program or a program family registered so far is built from a_shaderType. */
+		bool ProgramShaderTaken(const Lists& a_lists, std::uint8_t a_shaderType)
+		{
+			for (const auto& family : a_lists.drawFamilies)
+				if (family.family != Api::DrawFamily::Count && family.program.shaderType == a_shaderType)
+					return true;
+			for (const auto& family : a_lists.programFamilies)
+				if (family.family != Api::ProgramFamily::Count && family.shaderType == a_shaderType)
+					return true;
+			return false;
+		}
+
+		/** @brief Whether a_root has an owner registered so far: a view root contribution or a draw family's faces. */
+		bool ViewRootTaken(const Lists& a_lists, Api::ViewRoot a_root)
+		{
+			if (a_lists.viewRoots[static_cast<std::size_t>(a_root)].root != Api::ViewRoot::Count)
+				return true;
+			for (const auto& family : a_lists.drawFamilies)
+				if (family.family != Api::DrawFamily::Count && family.faces.root == a_root)
+					return true;
+			return false;
+		}
+
+		/**
+		 * @brief Whether a_faces are all or none: the callbacks, sizes, names and root all set (a trees view's faces draw the family) or none
+		 * (they do not).
+		 */
+		bool DrawFamilyFacesComplete(const Api::DrawFamilyContribution::Faces& a_faces)
+		{
+			const int callbacks = (a_faces.makeCull ? 1 : 0) + (a_faces.declare ? 1 : 0) + (a_faces.record ? 1 : 0) + (a_faces.row ? 1 : 0) + (a_faces.lists ? 1 : 0) +
+			                      (a_faces.face ? 1 : 0);
+			const int data = (a_faces.rowBytes ? 1 : 0) + (a_faces.headerBytes ? 1 : 0) + (a_faces.unitWords ? 1 : 0) + (a_faces.cullGroup ? 1 : 0) +
+			                 (a_faces.cullName.empty() ? 0 : 1) + (a_faces.rowName.empty() ? 0 : 1) + (a_faces.listName.empty() ? 0 : 1) +
+			                 (a_faces.root < Api::ViewRoot::Count ? 1 : 0);
+			return callbacks == 0 ? data == 0 : callbacks == 6 && data == 8;
+		}
+
 		/**
 		 * @brief Adds a_family by its family, refused (a_who's) for a family already registered, Lighting's or no shader type, no name, key
-		 * name or source path, or no program source.
+		 * name or source path, or no program source; or a shader type a draw family's program or another program family has.
 		 */
 		void AddProgramFamily(Lists& a_lists, std::string_view a_who, const Api::ProgramFamilyContribution& a_family)
 		{
@@ -159,6 +198,9 @@ namespace DCLF::Extensions
 			auto& entry = a_lists.programFamilies[static_cast<std::size_t>(a_family.family)];
 			if (entry.family != Api::ProgramFamily::Count)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes program family {}, which {} has", a_who, a_family.name, entry.name));
+			if (ProgramShaderTaken(a_lists, a_family.shaderType))
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s program family {} takes shader type {}, which another family has", a_who, a_family.name,
+					static_cast<std::uint32_t>(a_family.shaderType)));
 			entry = a_family;
 		}
 
@@ -502,6 +544,17 @@ namespace DCLF::Extensions
 				lists.viewWork.push_back(a_work);
 			}
 
+			void RegisterViewRoot(const Api::ViewRootContribution& a_root) override
+			{
+				if (a_root.root >= Api::ViewRoot::Count || !a_root.owned)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete view root contribution", feature));
+				// One owner a root: a view's owned roots are its owners' answers.
+				if (ViewRootTaken(lists, a_root.root))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes view root {}, which another registration has", feature,
+						static_cast<std::uint32_t>(a_root.root)));
+				lists.viewRoots[static_cast<std::size_t>(a_root.root)] = a_root;
+			}
+
 			void RegisterOcclusionMap(const Api::OcclusionMapContribution& a_map) override
 			{
 				// Its toggle, flag, bits, rule, camera and accumulator test always, the import for an ImportedTexture map. Its bits are checked against Core's and the other
@@ -530,19 +583,28 @@ namespace DCLF::Extensions
 
 			void RegisterDrawFamily(const Api::DrawFamilyContribution& a_family) override
 			{
-				// Its class's toggle gates it, its scene resources (registered before) are its tables; its frame and main callbacks always,
-				// its faces' all or none.
+				// Its class's toggle gates it, its scene resources (registered before) are its tables; its frame and main callbacks, its
+				// program and its engine shapes always, its faces' all or none.
 				const auto& main = a_family.main;
-				const auto& faces = a_family.faces;
-				const int facesSet = (faces.makeCull ? 1 : 0) + (faces.declare ? 1 : 0) + (faces.record ? 1 : 0) + (faces.row ? 1 : 0) + (faces.lists ? 1 : 0);
+				const auto& program = a_family.program;
+				const bool programValid = program.shaderType != RE::BSShader::Type::Lighting && program.shaderType < RE::BSShader::Type::Total && !program.name.empty() &&
+				                          !program.label.empty() && !program.keyName.empty() && !program.sourcePath.empty() && a_family.engineShapes.propertyVtable;
 				if (a_family.family >= Api::DrawFamily::Count || a_family.objectClass >= Api::ObjectClass::Count ||
 					!lists.objectClasses[static_cast<std::size_t>(a_family.objectClass)] || a_family.resources.index >= lists.sceneResources.size() ||
-					!a_family.frame.decide || !a_family.frame.programSource || !main.declare || !main.revision || !main.record || (facesSet != 0 && facesSet != 5))
+					!a_family.frame.decide || !a_family.frame.programSource || !main.declare || !main.revision || !main.record || !programValid ||
+					!DrawFamilyFacesComplete(a_family.faces))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete draw family contribution", feature));
 				auto& entry = lists.drawFamilies[static_cast<std::size_t>(a_family.family)];
 				if (entry.family != Api::DrawFamily::Count)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes draw family {}, which another registration has", feature,
 						static_cast<std::uint32_t>(a_family.family)));
+				// Its programs are found by their shader type (Extensions::DrawFamilyOfShader); its faces' root has one owner.
+				if (ProgramShaderTaken(lists, program.shaderType))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s draw family {} takes shader type {}, which another family has", feature, program.name,
+						static_cast<std::uint32_t>(program.shaderType)));
+				if (a_family.faces.root < Api::ViewRoot::Count && ViewRootTaken(lists, a_family.faces.root))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s draw family {} draws view root {}, which another registration has", feature, program.name,
+						static_cast<std::uint32_t>(a_family.faces.root)));
 				entry = a_family;
 			}
 
@@ -617,11 +679,11 @@ namespace DCLF::Extensions
 		}
 		// The features' switches' anchors, which may name a switch a later feature registered.
 		CheckSwitchAnchors();
-		// The views' entries, from Core's slots and the features' contributions and work; the occlusion maps' and shadow sources', from
+		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
 		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the palette rows classes'; the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
-		ResolveViews(lists.views, lists.viewWork);
+		ResolveViews(lists.views, lists.viewWork, lists.viewRoots);
 		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
 		ResolveViewBits();
 		ResolveDrawFamilies(lists.drawFamilies);

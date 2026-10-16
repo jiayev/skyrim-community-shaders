@@ -30,6 +30,10 @@ namespace DCLF::Features::TreeLod
 		inline constexpr std::uintptr_t kTreeLodAtlas = 0x33dcd18;  // NiSourceTexture*: tree LOD's atlas
 	}
 
+	// The engine root a trees view's faces draw in the engine's place while they draw the family (Api::DrawFamilyContribution::faces.root;
+	// one owner: Features/Manifest.cpp lists it).
+	inline constexpr Api::ViewRoot kFacesRoot = Api::ViewRoot::LodTrees;
+
 	// TreeLodFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
 

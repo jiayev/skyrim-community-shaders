@@ -1,5 +1,5 @@
 // The coordinator's sun and point-light candidate sets (scene lane, verdicts across the preparation pool): the dirty entries judged,
-// written into their CandidateTable, and a snapshot published for the shadow builds when an entry moved.
+// written into their EntrySpaceTable, and a snapshot published for the shadow builds when an entry moved.
 
 #include "Internal.h"
 

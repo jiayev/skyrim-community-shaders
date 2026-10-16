@@ -1312,7 +1312,6 @@ namespace DCLF::Scene
 			a_column(a_left.objects, a_right.objects, kChangeAll);
 			a_column(a_left.draws, a_right.draws, kChangeAll);
 			a_column(a_left.lights, a_right.lights, kChangeLights);
-			a_column(a_left.treeAnim, a_right.treeAnim, kChangeTree);
 			a_column(a_left.sunEntryNode, a_right.sunEntryNode, kChangeAll);
 			a_column(a_left.hasFadeNode, a_right.hasFadeNode, kChangeAll);
 			a_column(a_left.extraOffset, a_right.extraOffset, kChangeExtras);

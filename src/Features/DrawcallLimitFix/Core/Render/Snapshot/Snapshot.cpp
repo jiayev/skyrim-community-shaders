@@ -230,7 +230,7 @@ namespace DCLF
 
 	std::shared_ptr<const IndirectDraws::Impl::DrawPublication> IndirectDraws::Impl::RunAhead(std::shared_ptr<const SceneTables> a_tables,
 		const AheadContext& a_context, const Lookups& a_lookups, std::uint32_t a_generation, std::uint32_t a_frame,
-		std::shared_ptr<const SunCandidates> a_sunCandidates, std::shared_ptr<const SunCandidates> a_lightCandidates)
+		std::shared_ptr<const EntrySpace> a_sunCandidates, std::shared_ptr<const EntrySpace> a_lightCandidates)
 	{
 		ZoneScopedN("CS.DCLF.BuildAhead");
 		auto out = std::make_shared<DrawPublication>();
@@ -317,8 +317,8 @@ namespace DCLF
 	}
 
 	void IndirectDraws::Impl::BuildAheadShadow(DrawPublication& a_out, const AheadContext& a_context, const SceneTables& a_tables, const Lookups& a_lookups,
-		std::uint32_t a_generation, std::uint32_t a_frame, const std::shared_ptr<const SunCandidates>& a_sunCandidates,
-		const std::shared_ptr<const SunCandidates>& a_lightCandidates, const TablesContentEpochs& a_oldestTables)
+		std::uint32_t a_generation, std::uint32_t a_frame, const std::shared_ptr<const EntrySpace>& a_sunCandidates,
+		const std::shared_ptr<const EntrySpace>& a_lightCandidates, const TablesContentEpochs& a_oldestTables)
 	{
 		// As RunAhead's: the journals' oldest content epochs, the stages' times.
 		const auto oldest = [this](PayloadPart a_part) { return payloadBuilder.OldestContentEpoch(a_part).value_or(~std::uint64_t{ 0 }); };

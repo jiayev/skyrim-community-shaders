@@ -23,6 +23,10 @@
 
 namespace DCLF::Features::Lod
 {
+	// The engine roots a covered view's faces draw in the engine's place while both classes are on and the swaps gated (its view root
+	// contribution; one owner: Features/Manifest.cpp lists it).
+	inline constexpr Api::ViewRoot kOwnedRoot = Api::ViewRoot::LodLandAndObjects;
+
 	// LodFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
 }

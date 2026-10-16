@@ -88,7 +88,6 @@ namespace DCLF::Scene
 		tables.fadeDistance[objectId] = a_patch.fadeDistance;
 		tables.draws[objectId].pipelineIndex = a_patch.pipeline;
 		tables.lights[objectId] = a_patch.lights;
-		tables.treeAnim[objectId] = a_patch.tree;
 		bool extrasWritten = false;
 		if (a_patch.projectedUV || a_patch.landBlend) {
 			stats.projectedUV += a_patch.projectedUV ? 1 : 0;
@@ -916,7 +915,6 @@ namespace DCLF::Scene
 		object.pipelineIndex = 0;
 		tables.draws[a_slot].pipelineIndex = 0;
 		tables.lights[a_slot] = ObjectLights{};
-		tables.treeAnim[a_slot] = ObjectTreeAnim{};
 		tables.FreeExtras(a_slot);
 		tables.fadeDistance[a_slot] = 0.0f;
 		tables.NoteWrite(a_slot, columnsBefore);

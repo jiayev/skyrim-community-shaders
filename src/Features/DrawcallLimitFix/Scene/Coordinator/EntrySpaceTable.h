@@ -1,6 +1,6 @@
 #pragma once
 
-// The coordinator's stable index space for a candidate set (the sun's and the point lights' SunCandidates), and the pooled snapshots
+// The coordinator's stable index space for a candidate set (the sun's and the point lights' EntrySpace), and the pooled snapshots
 // published from it. Coordinator thread only; a published snapshot is read by the frame's builds and released by its last owner.
 
 #include <algorithm>
@@ -12,43 +12,8 @@
 #include <tuple>
 #include <vector>
 
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EntrySpace.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
-
-namespace DCLF
-{
-	/**
-	 * @brief A candidate table's change log as one snapshot carries it (SunCandidates::changes), immutable once published: per
-	 * generation after floor up to the snapshot's, the entry indices written in between (Set, Reset). Readers in any thread take
-	 * from it the indices that moved between an older snapshot of the same log and this one (ChangedEntriesByLog).
-	 */
-	struct CandidateChanges
-	{
-		/** @brief The indices written between generation - 1 and generation, ascending, each once. */
-		struct Run
-		{
-			std::uint32_t generation = 0;
-			std::vector<std::uint32_t> entries;
-		};
-		std::uint64_t log = 0;         // session-unique per table: snapshots of different tables never chain
-		std::uint32_t floor = 0;       // the runs reach a snapshot of a generation from floor on (Reset, the trim: floor moves on)
-		std::uint32_t generation = 0;  // the snapshot's
-		std::vector<std::shared_ptr<const Run>> runs;  // oldest first, contiguous over (floor, generation]
-
-		/** @brief Whether a snapshot of a_log at a_generation is reached: its changes up to this one are in the runs. */
-		bool Reaches(std::uint64_t a_log, std::uint32_t a_generation) const { return a_log == log && a_generation >= floor && a_generation <= generation; }
-	};
-
-	/**
-	 * @brief ChangedEntries by the log: appends, ascending, the entry indices whose versions differ between a_from and a_to (null
-	 * a_from: every index live in a_to), the same indices ChangedEntries finds. When a_to's log reaches a_from it reads the runs
-	 * between them (O(changes)); otherwise - a_from null, of another table, older than the log's floor - it compares the snapshots
-	 * index by index, as a journal's reader behind its floor reads everything again. Returns whether the log answered. Any thread.
-	 */
-	bool ChangedEntriesByLog(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out);
-	/** @brief The same by comparing every index (what ChangedEntriesByLog does when the log does not reach a_from; parity's reference). */
-	void ChangedEntriesByScan(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out);
-}
 
 namespace DCLF::Scene
 {
@@ -59,13 +24,13 @@ namespace DCLF::Scene
 	 *
 	 * Every index Set or Reset writes is appended to log. Each pooled snapshot keeps a LogCursor into it and catches up by the indices
 	 * it has not read; a snapshot whose cursor is no longer readable (new, or behind a Reset or the trim) is brought up index by index.
-	 * Each publication also closes a run of the indices written since the last (CandidateChanges), published with the snapshot.
+	 * Each publication also closes a run of the indices written since the last (EntrySpaceChanges), published with the snapshot.
 	 *
 	 * The lane brings up only one publication's run: after each publication a spare (the free pooled snapshot nearest the log, or a
 	 * new one) is brought up to it on the preparation pool from the published snapshot and its runs, and the next publication takes
 	 * the spare. An index rewritten under the same root keeps its map entries and its held root (no map churn for a rewrite).
 	 */
-	struct CandidateTable
+	struct EntrySpaceTable
 	{
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> index;
 		std::vector<const RE::NiAVObject*> nodes;
@@ -93,19 +58,19 @@ namespace DCLF::Scene
 				std::uint32_t generation = 0;
 				std::uint32_t caughtUp = 0;  // indices the catch-up brought up (the lane counts them as it takes the spare)
 			};
-			std::shared_ptr<SunCandidates> snapshot = std::make_shared<SunCandidates>();
+			std::shared_ptr<EntrySpace> snapshot = std::make_shared<EntrySpace>();
 			LogCursor cursor;
 			std::shared_ptr<State> state = std::make_shared<State>();
 			// What the catch-up brings it up to, held by the lane until it is done (the job reads it by address).
-			std::shared_ptr<const SunCandidates> source;
+			std::shared_ptr<const EntrySpace> source;
 		};
 		std::vector<Pooled> pool;
 		// Every index written, in order (Reset invalidates it: every reader is brought up whole).
 		EventLog<std::uint32_t> log;
 		std::uint64_t logId = NextLogId();
 		std::uint64_t published = 0;  // log's end at the last publication (the next run starts there)
-		std::shared_ptr<const CandidateChanges> changes;  // the last publication's
-		std::shared_ptr<const SunCandidates> last;        // the last publication (parity's reference; the coordinator holds it too)
+		std::shared_ptr<const EntrySpaceChanges> changes;  // the last publication's
+		std::shared_ptr<const EntrySpace> last;        // the last publication (parity's reference; the coordinator holds it too)
 		std::vector<std::uint8_t> marks;  // per index, Publish's scratch
 		bool changed = true;                              // an index moved since the last snapshot
 		std::uint64_t entriesWritten = 0, snapshots = 0;  // since the last report
@@ -128,15 +93,15 @@ namespace DCLF::Scene
 		template <class Geometry>
 		void Set(const RE::NiAVObject* a_root, const std::vector<RE::BSGeometry*>* a_dependents, std::uint32_t& a_versions, Geometry&& a_geometry);
 		/** @brief A snapshot, a new generation (a_generation), brought up to the table at the indices that moved; a_ownedRoot holds each entry. */
-		std::shared_ptr<const SunCandidates> Publish(std::uint32_t& a_generation, const std::function<RE::NiPointer<RE::NiAVObject>(const RE::NiAVObject*)>& a_ownedRoot);
+		std::shared_ptr<const EntrySpace> Publish(std::uint32_t& a_generation, const std::function<RE::NiPointer<RE::NiAVObject>(const RE::NiAVObject*)>& a_ownedRoot);
 		/** @brief Parity: a_snapshot against the table index by index (what a snapshot made whole would hold); the first difference, or empty. */
-		std::string CheckSnapshot(const SunCandidates& a_snapshot) const;
+		std::string CheckSnapshot(const EntrySpace& a_snapshot) const;
 
-		CandidateTable() = default;
-		CandidateTable(const CandidateTable&) = delete;
-		CandidateTable& operator=(const CandidateTable&) = delete;
+		EntrySpaceTable() = default;
+		EntrySpaceTable(const EntrySpaceTable&) = delete;
+		EntrySpaceTable& operator=(const EntrySpaceTable&) = delete;
 		/** @brief Every spare's catch-up finished first (its job reads the pool's snapshots by address). */
-		~CandidateTable();
+		~EntrySpaceTable();
 
 	private:
 		/** @brief After a publication (pool[a_published]): a spare brought up to last on the preparation pool (inline under Policy::SerialFanout). */
@@ -146,7 +111,7 @@ namespace DCLF::Scene
 	};
 
 	template <class Geometry>
-	void CandidateTable::Set(const RE::NiAVObject* a_root, const std::vector<RE::BSGeometry*>* a_dependents, std::uint32_t& a_versions, Geometry&& a_geometry)
+	void EntrySpaceTable::Set(const RE::NiAVObject* a_root, const std::vector<RE::BSGeometry*>* a_dependents, std::uint32_t& a_versions, Geometry&& a_geometry)
 	{
 		const auto found = index.find(a_root);
 		if (!a_dependents && found == index.end())
@@ -178,7 +143,7 @@ namespace DCLF::Scene
 			if (const auto it = geometryIndex.find(geometryNodes[g]); it != geometryIndex.end() && it->second == g)
 				geometryIndex.erase(it);
 			geometryNodes[g] = nullptr;
-			geometryEntry[g] = SunCandidates::kNone;
+			geometryEntry[g] = EntrySpace::kNone;
 			geometryFree.push_back(g);
 		}
 		version[e] = ++a_versions;
@@ -211,7 +176,7 @@ namespace DCLF::Scene
 				} else {
 					g = static_cast<std::uint32_t>(geometryNodes.size());
 					geometryNodes.push_back(nullptr);
-					geometryEntry.push_back(SunCandidates::kNone);
+					geometryEntry.push_back(EntrySpace::kNone);
 					geometrySlot.push_back(-1);
 					primaryGeometry.push_back(0);
 				}
