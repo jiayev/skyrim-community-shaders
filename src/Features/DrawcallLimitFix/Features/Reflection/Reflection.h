@@ -15,7 +15,7 @@
 // Core/Extensions/Views.h): the epoch's segment and passes (ViewEpoch*.cpp), its revisions, the slot's state (Impl/Views.h's
 // ViewEpochState), a LodTechniques view's slot readiness and phase readiness, the colour target's import, and PassCapture's withholding in a
 // view's own renderers. It keeps a trees view's tree LOD per face, the view engine's under the tree LOD class (Api::ObjectClass::TreeLod,
-// Features/TreeLod's): its pipeline, ownership and row (IndirectDraws::ResolveViewTreeLod, DecideViewTreeLod and SubmitViewEpoch's row);
+// Features/TreeLod's): its pipeline, ownership and row (IndirectDraws::ResolveViewFaces, DecideViewFaces and SubmitViewEpoch's rows);
 // the cube camera's LOD roots the faces draw in the engine's place (IndirectDraws::ViewLodRootsOwned: the tree root by the faces' tree LOD,
 // the LOD land and objects roots by the LOD classes and the LOD gates' show veto, Features/Lod's) and an OwnRenderers view's residue watch
 // under them (PassCapture::WatchViewResidue, on the updates the view's residueDue keeps them: the feature's Diagnostics/Residue.cpp, which

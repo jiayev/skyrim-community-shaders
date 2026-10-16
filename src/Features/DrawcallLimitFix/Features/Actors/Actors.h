@@ -20,10 +20,10 @@
 // - the skinned geometry's path once its class is on: the bone palettes FrameValues samples into the palette part it shares with the
 //   particles, the skin partitions and their LOD in the tables and the walk, kObjectPaletteBlock and the vertex stages' bones;
 // - an owner class's entry's classification: Tracked::owner, the per-frame owner class trait and its verdict recheck (Coordinator::
-//   FrameVerdictKept), SceneTables::actorObjects, the mirror's actor bit (NodeRecord::actor);
+//   FrameVerdictKept), SceneTables::classMembers, the mirror's actor bit (NodeRecord::actor);
 // - the animation path's move writer (Engine/Capture/SceneEvents: FUN_14066afa0, every reference's animation) and the fadeAmount channel;
-// - Advanced Skin's coupling: the actors' wetness (SceneTables::actorWetness, FrameView::CaptureWetness, FrameValues' fan-out into the shading
-//   rows' SkinPerGeometry) and its material textures (MaterialPortFeature's SkinTextures).
+// - Advanced Skin's coupling is Integrations/AdvancedSkin's (its wetness: a shading field of the published actor-owned class; FrameValues'
+//   fan-out into the shading rows' SkinPerGeometry); its material textures are still MaterialPortFeature's SkinTextures.
 // Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"

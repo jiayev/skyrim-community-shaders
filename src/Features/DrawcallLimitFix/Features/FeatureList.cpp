@@ -30,8 +30,9 @@ namespace DCLF::Features
 		// The occlusion maps first: their toggles are the first registered, so their bits in the packed toggle word are where Core's were
 		// (right after Core's flags), and their switches and toggles are listed before the reflection's and the first person's (which follow
 		// them there); no early hooks, no pool, stage or product. The shadow sources next, sun then local (Shadows/Sun, Shadows/Local): they
-		// register only their sources (resolved by source, whatever the order) and camera hooks (installed by source, the sun's, Core's light
-		// selection, then the focus cameras, whatever the list's order); no switch, toggle, early hook, pool, stage or product.
+		// register their sources (resolved by source, whatever the order) and source hooks (installed by source: the sun's accumulation and
+		// camera, Core's light selection, then the focus cameras, whatever the list's order); the sun also its switches and toggles (anchored
+		// after the shadows'); no early hook, pool, stage or product.
 		// Reflection next: its early hooks (the water reflection's update, add-roots and face render) run before every other feature's and
 		// Core's observers, where the shell installed them; its toggle's bit follows
 		// the maps', where Core's was; its switch and toggle are listed after the precipitation mask's, before the first person's (which

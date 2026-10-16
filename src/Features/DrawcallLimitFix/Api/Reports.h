@@ -57,8 +57,9 @@ namespace DCLF::Api
 		// Inside the coordinator's scene delta line (the scene lane), at its end, before its newline (Features/Faces' publications): text
 		// fragments, each beginning "; " and ending in no newline, or a coordinator component's; only when the line prints (a walk since).
 		SceneCoordinatorDelta,
-		// The coordinator's statistics of its last pass (the scene lane, under CS_DCLF_STATS), after the skinned line, before the derived
-		// cache's (Features/Decals' candidates): logged lines, handed the scene frame, or a coordinator component's (logged as one line).
+		// The coordinator's statistics of its last pass (the scene lane, under CS_DCLF_STATS), after the fading line, before the derived
+		// cache's (Features/Skins' skinned line, then Features/Decals' candidates): logged lines, handed the scene frame, or a coordinator
+		// component's (logged as one line).
 		SceneCoordinatorLastPass,
 		// The shadow views' lines in the frame report's statistics (Reports::Stats, with the shadows' toggle on), after the shadow views'
 		// "by the set" line, before the shadow counters' reset (IndirectDraws::ResetShadowStats): on a report frame with CS_DCLF_STATS.

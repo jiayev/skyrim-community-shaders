@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Scene/Model/Eligibility.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -97,7 +98,7 @@ namespace DCLF::Eligibility
 			if (g.skinRtti != niSkinInstance.get() && !dismember)
 				return Ineligible::SkinShape;
 			const auto partitions = static_cast<std::uint32_t>(g.partitions.size());
-			if (!g.skinPartition || !g.skinData || partitions == 0 || g.boneCount == 0 || g.boneCount * 3 > 240)
+			if (!g.skinPartition || !g.skinData || partitions == 0 || !SkinPalettes::Fits(g.boneCount * SkinPalettes::kRowsPerBone))
 				return Ineligible::SkinShape;
 			if ((partitions > 1 || dismember) && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::SkinPartitions))
 				return Ineligible::SkinShape;

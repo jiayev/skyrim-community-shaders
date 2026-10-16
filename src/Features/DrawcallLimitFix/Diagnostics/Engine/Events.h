@@ -90,9 +90,12 @@ namespace DCLF::Diagnostics
 		bool running;
 	};
 
-	// The sun's accumulation (SunAccumulation's hooks; render thread unless said).
+	// The sun's accumulation (Features/Shadows/Sun's SunAccumulation hooks; render thread unless said).
 
-	/** @brief ExcludeEntries applied this frame's exclusion: `skipExcluded` is Policy::ExcludeSun's answer (false: the cascades skip nothing). */
+	/**
+	 * @brief ExcludeEntries applied this frame's exclusion: `skipExcluded` is the Sun feature's ExcludeSun answer
+	 * (Features/Shadows/Sun/SunAccumulation.cpp; false: the cascades skip nothing).
+	 */
 	struct SunExclusionApplied
 	{
 		bool skipExcluded;

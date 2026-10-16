@@ -43,17 +43,16 @@ namespace DCLF
 
 		// The shadow views are drawn by the render graph.
 		bool shadows = false;
-		// The engine does not build sun shadow passes for the set's casters (SunAccumulation).
-		bool skipSunAccumulation = false;
-		// The sun's cascade culls skip the references whose shadows DCLF draws entirely (SunAccumulation).
-		bool excludeSunEntries = false;
-		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull).
+		// (Features/Shadows/Sun's "skip sun accumulation" and "exclude sun entries" follow the shadows' in the table.)
+		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull; needs Features/Shadows/Sun's "exclude sun
+		// entries", by name).
 		bool excludePrimaryEntries = false;
 
 		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/Skins: the skinned and
 		// skins of several partitions; Features/TreeWind: trees;
 		// Features/Effects, Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs; Features/Lod: object and
-		// terrain LOD; Features/TreeLod: tree LOD; Features/FirstPerson: a view; Features/OcclusionMaps: its maps), ...
+		// terrain LOD; Features/TreeLod: tree LOD; Features/FirstPerson: a view; Features/OcclusionMaps: its maps), or a source's engine work
+		// removed (Features/Shadows/Sun: the sun's accumulation and its entries' culls), ...
 		std::uint32_t registered = 0;
 		/** @brief Whether a feature's toggle is on (false for none). */
 		bool On(Api::ToggleId a_toggle) const { return a_toggle && ((registered >> a_toggle.bit) & 1u) != 0; }

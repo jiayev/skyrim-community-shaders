@@ -263,11 +263,6 @@ namespace DCLF
 		}
 	}
 
-	bool FrameValues::SkinPalettes(const RE::BSGeometry& a_geometry, std::uint32_t a_rows, const float*& a_current, const float*& a_previous)
-	{
-		return DCLF::SkinPalettes::Of(a_geometry, a_rows, a_current, a_previous);
-	}
-
 	struct FrameValues::Impl
 	{
 		enum Part : std::size_t

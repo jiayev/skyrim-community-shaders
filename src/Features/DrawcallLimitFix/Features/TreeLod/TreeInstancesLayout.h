@@ -88,7 +88,7 @@ namespace DCLF::TreeInstances
 
 	/**
 	 * @brief Whether a geometry is one of the family's engine shapes: its shader property is a BSDistantTreeShaderProperty. Any thread
-	 * (PassCapture's withholding while the family is DCLF's; its feature's channel and parity).
+	 * (its feature's channel and parity; PassCapture's withholding reads the family's DrawFamilyEntry::engineShapeVtable instead).
 	 */
 	inline bool IsEngineShape(const RE::BSGeometry* a_shape)
 	{

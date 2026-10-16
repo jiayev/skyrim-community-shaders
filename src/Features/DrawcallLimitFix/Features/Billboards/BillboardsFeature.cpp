@@ -21,7 +21,7 @@ namespace DCLF::Features::Billboards
 				.description = "default on (T7f item 7): particle systems under NiBillboardNodes (the magic hands' fire cores and embers) drawn by DCLF's particle path like any other (their world and particles are their last update's; needs CS_DCLF_BILLBOARDS and CS_DCLF_PARTICLES); 0 they stay the engine's (billboard)",
 				.after = "CS_DCLF_OPAQUE_EFFECTS" });
 			// BSEffectShaderProperty meshes under one NiBillboardNode, turned to the drawing camera by the vertex stage from the node's base
-			// transform (Engine/Capture/Billboards.h; needs effects; on by default: CS_DCLF_BILLBOARDS=0 seeds it off): an object class.
+			// transform (Core/Gpu/PlacementRows/BillboardRow.h; needs effects; on by default: CS_DCLF_BILLBOARDS=0 seeds it off): an object class.
 			billboardsToggle = a_context.RegisterToggle({ .name = "billboards", .label = "Billboards: fire cards, spray jets (CS_DCLF_BILLBOARDS)",
 				.tooltip = "DCLF draws effect-shader meshes under a billboard node, turning each to the drawing camera on the GPU as the engine's cull turns the node. On by default.",
 				.seed = billboards, .entersClassification = true, .after = "refraction", .needs = { "effects" } });

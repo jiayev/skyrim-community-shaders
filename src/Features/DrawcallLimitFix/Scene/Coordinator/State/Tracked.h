@@ -107,8 +107,8 @@ namespace DCLF::Scene
 			// commit as data (VetoedPhases), counted in vetoHeld and vetoObserved.
 			std::uint8_t veto = 0;
 			// Its owner class and rules (Api::EntryClassContribution, by its leaf's reference's form type: Features/Actors' actor-owned, whose
-			// draws Advanced Skin gives the actor's wetness, Tables::skinWetness), apart from entryClass (a face shape is both). Resolved once by
-			// the walk (Extensions::OwnerClassOf).
+			// draws Advanced Skin gives the actor's wetness, SceneTables::classMembers: Integrations/AdvancedSkin's), apart from
+			// entryClass (a face shape is both). Resolved once by the walk (Extensions::OwnerClassOf).
 			Extensions::OwnerClassRule owner;
 			bool ownerResolved = false;
 			// The joins' verdict when they left it unbound (Diagnostics::CensusVerdictOf reads this frame's).

@@ -19,8 +19,8 @@
 //    shading sample).
 //
 // A membership is read as data where Core decides (Core/Extensions/ObjectContributors.h: Extensions::TechniqueObjectFlags,
-// PropertyFlagRules, GeometryTypeOn, GeometryTypeMoves, PlannedItemClass, EntryClassOf, OwnerClassOf, ParentAdmits, ObjectClassOn,
-// CategoryRoots; Core/Extensions/CoordinatorComponents.h: EntryClassTaken), never called per object (a class's category root: per frame). A derivation
+// PropertyFlagRules, GeometryTypeOn, GeometryTypeMoves, GeometryTypeRanged, PlannedItemClass, EntryClassOf, OwnerClassOf, ParentAdmits,
+// ObjectClassOn, CategoryRoots; Core/Extensions/CoordinatorComponents.h: EntryClassTaken), never called per object (a class's category root: per frame). A derivation
 // is called per sampled property or per frame, never per object.
 //
 // Adding a Core class for a feature (section 2) is the same three steps whichever enum it goes in:
@@ -265,7 +265,8 @@ namespace DCLF::Api
 	 *   static (Eligibility::HiddenStatic).
 	 * - ownMotion: its entries move with no controller or body on their chain (an actor's skeleton: Havok's behaviour graph): placed every
 	 *   frame (FrameValues' movers), their root motion never read, node and motion events never reclassify them. Needs everyFrame.
-	 * - published: its members are listed for the frame (SceneTables::actorObjects and actorWetness: Advanced Skin's wetness).
+	 * - published: its members are listed for the frame (SceneTables::classMembers: the members of the shading
+	 *   fields that name the class, Api/ShadingFields.h; Integrations/AdvancedSkin's wetness).
 	 */
 	struct EntryClassContribution
 	{

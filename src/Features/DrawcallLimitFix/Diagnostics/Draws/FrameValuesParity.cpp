@@ -2,6 +2,7 @@
 
 #include "DrawsState.h"
 #include "Observers.h"
+#include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 
 namespace DCLF::Diagnostics
@@ -59,7 +60,7 @@ namespace DCLF::Diagnostics
 			const auto at = PaletteRowsOf(a_tables.boneOffset[slot], boneRows);
 			const float* current = nullptr;
 			const float* previous = nullptr;
-			if (std::size_t(at.previous) + boneRows > palettes.size() || !FrameValues::SkinPalettes(*a_tables.objectGeometry[slot], boneRows, current, previous))
+			if (std::size_t(at.previous) + boneRows > palettes.size() || !SkinPalettes::Of(*a_tables.objectGeometry[slot], boneRows, current, previous))
 				continue;
 			++s.paletteChecks;
 			const std::size_t bytes = std::size_t(boneRows) * sizeof(FrameValues::PaletteRow);

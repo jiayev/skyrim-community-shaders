@@ -56,10 +56,13 @@ namespace DCLF::Features::Shadows::Sun
 		constexpr std::size_t kGeometryType = 0x150;
 		constexpr std::size_t kDismemberSkinReady = 0x98;
 
+		// The feature's toggles (SetToggles): written at its install alone (the main thread, before DCLF's threads start), read-only after.
+		Api::ToggleId skipToggle, excludeToggle;
+
 		/** @brief Whether the registration skip applies this frame: the set it skips registrations by withholds casters. */
 		bool M1Active(const ToggleSet& a_toggles)
 		{
-			return a_toggles.skipSunAccumulation && PassCapture::ShadowWithholdingEnabled() &&
+			return a_toggles.On(skipToggle) && PassCapture::ShadowWithholdingEnabled() &&
 			       !PassCapture::Get().Bypassed();
 		}
 
@@ -150,6 +153,12 @@ namespace DCLF::Features::Shadows::Sun
 		return instance;
 	}
 
+	void SunAccumulation::SetToggles(Api::ToggleId a_skip, Api::ToggleId a_exclude)
+	{
+		skipToggle = a_skip;
+		excludeToggle = a_exclude;
+	}
+
 	void SunAccumulation::ArmExclusion(RE::BSShadowDirectionalLight* a_light)
 	{
 		auto exclusion = SunExclusionSlot::Get().Take();
@@ -157,7 +166,7 @@ namespace DCLF::Features::Shadows::Sun
 		frameState.exclusion.reset();
 		armedExclusion.reset();
 		const auto toggles = ActiveToggles();
-		if (!toggles.excludeSunEntries || !M1Active(toggles) || !a_light)
+		if (!toggles.On(excludeToggle) || !M1Active(toggles) || !a_light)
 			return;
 		auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
 		if (!node || node->GetRuntimeData().sunShadowDirLight != a_light)

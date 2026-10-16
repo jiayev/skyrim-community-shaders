@@ -53,9 +53,9 @@ is under `src/Features/DrawcallLimitFix/`:
 | --- | --- | --- |
 | `Engine/Access/` | `EngineAccess.h` (`Engine::Address`: every shared engine address and offset, object flags, RTTI/vtable tests, switch-node reads), `EngineReadWindow` (when workers may read the engine's scene graph), `Walkers.h` | any |
 | `Engine/Capture/` | The engine's writers, hooked: `SceneTracker` (attach/detach), `SceneEvents` / `MaterialWrites` (the event hooks: Lighting's material write hooks and the material-write sink, the effect hooks being `Features/Effects/EffectWrites.cpp`; the hidden stores are `Features/HiddenNodes`'), `SceneCapture` (the record reads), `ConstantMirror` (the D3D11 constant buffers), `ParticleSnapshots`, `Billboards` (the face snapshots are `Features/Faces`') | the writer's thread (pushes events); render thread (captures) |
-| `Engine/Cull/` | Where the engine's cull and registration meet DCLF: `PassCapture` (withholds claimed passes), `PrimaryCull` (stands in for DCLF's references in the list jobs), `SunAccumulation`, `LocalLightCull`, `SceneLists`, `LodGates`, `RoomVisibility`, `TreeList`, `TreeAnimation` (the actors' animation stamp is `Features/Actors/ActorRate.cpp`) | render thread and the engine's cull jobs |
+| `Engine/Cull/` | Where the engine's cull and registration meet DCLF: `PassCapture` (withholds claimed passes), `PrimaryCull` (stands in for DCLF's references in the list jobs), `LocalLightCull`, `SceneLists`, `LodGates`, `RoomVisibility`, `TreeList`, `TreeAnimation` (the actors' animation stamp is `Features/Actors/ActorRate.cpp`; the sun's accumulation is `Features/Shadows/Sun/SunAccumulation.{h,cpp}`, namespace `DCLF::Features::Shadows::Sun`, with `SunCasters` and `SunAccumulationView` in its `Diagnostics/` and its report lines in `Diagnostics/SunAccumulationReport.cpp`, at `Api::ReportPoint::RenderThread`) | render thread and the engine's cull jobs |
 | `Engine/Views/` | The views DCLF draws for the engine: `ShadowViews`, `SunViews`, `LightViews`, `FocusViews`, `PortalViews` (+ `PortalShapes.h`), `LightSelection`, `ReflectionFaces` | render thread |
-| `Scene/Model/` | The data: `Records.h`, `Tables` (the shared slot tables and their change log), `Publication.h` (what a publication carries), `SceneMirror` (the scene graph as the events left it), `SceneSet.h`, `Eligibility` (pure verdicts), `Lookups.h`, `FrameTables.h`, `ActorValueIndex.h`, `SceneIdentity.h` | written by the coordinator, read through publications |
+| `Scene/Model/` | The data: `Records.h`, `Tables` (the shared slot tables and their change log), `Publication.h` (what a publication carries), `SceneMirror` (the scene graph as the events left it), `SceneSet.h`, `Eligibility` (pure verdicts), `Lookups.h`, `FrameTables.h`, `SceneIdentity.h` (the owners' value index is `Integrations/AdvancedSkin/OwnerValues.h`) | written by the coordinator, read through publications |
 | `Scene/Ports/` | What a record is derived from, ported from the engine's shaders and functions: `MaterialPort*`, `GeometryPort`, `LightingConstants`, `LightingDescriptors`, `FadeState`, `TreeLod`, `FrameGlobals`, `ConstantEvaluator`, `EffectConstants.h`, `EngineShaders.h`, `VertexInput`, `LocalShadows`, `MaterialSources` | coordinator (records), render thread (frame values) |
 | `Scene/Coordinator/` | `Scene::Coordinator`: the scene's state and its pass (events applied, classification, the walk, the accumulate phase, the set's commit, the publication), split by stage into `ApplyEvents`, `Classification`, `Walk`, `AccumulatePhase`, `SceneSet`, `Gates`, `Slots`, `Residents`, `Placements`, `FrameConstants`, `Material/SharedBindings`, `DecalOrder`, `EntrySpaceTable`, `SunCandidates`, `ScenePump` | coordinator (the scene lane) and its pool shards |
 | `Scene/FrameView/` | `Scene::FrameView`: the render thread's half: the installed publication, the publication log walked up to it, the frame's captures, tables, lookups and claims, and the requests it serves for the coordinator | render thread |
@@ -3157,7 +3157,7 @@ same toggles (`CS_DCLF_EFFECTS`, with `CS_DCLF_DECALS` for decals and `CS_DCLF_S
     descriptor's Skinned bit without a skin instance, a skin instance without it, or a skin with `CS_DCLF_SKINNED` off. Otherwise the
     descriptor gets Skinned (the vertex stage's `SKINNED`; SetupTechnique's split drops it from the pixel stage) and the object goes the
     Lighting skinned objects' way, which never depended on the shader: `ClassifyStatic`'s skin checks (one `NiSkinInstance` partition, or
-    with `CS_DCLF_SKIN_PARTITIONS` dismember skins and several partitions; at most 80 bones), the walk's palette rows (`kObjectSkinned`,
+    with `CS_DCLF_SKIN_PARTITIONS` dismember skins and several partitions; at most 80 bones), the walk's palette rows (`kObjectPaletteBlock`,
     `FrameValues`' palette update), the partition buffers and masks (BuildDraws draws each enabled partition). A skinned blended effect is a
     forward object (the forward epoch, sorted with the rest); a skinned decal is a decal.
 -   **`Effect.hlsl`**: under `DCLF_BINDLESS` the `SKINNED` vertex path reads the object's rows in `DCLFPalettes` at its record's
@@ -3549,7 +3549,8 @@ plus the producers in the plan's T7f checklist.
     -   The commit now uses the drained geometries only while a fallback toggle is off, and releases every held member otherwise.
     -   The cross-fade fallback is the last registration reader. It goes with the fallbacks at T7f: with the culls off, the engine
         draws nothing to fall back to.
--   **The GPU sun test's cascades** (`SunAccumulation::GpuCascades`). It took its frame, its cascade count and its validity from the
+-   **The GPU sun test's cascades** (`SunAccumulation::GpuCascades`; now the file-local `GpuCascades` in Core/Render/Payload/Uploads.cpp,
+    reading the Sun board through `ShadowCameras::Sun`). It took its frame, its cascade count and its validity from the
     engine's sun `Accumulate` hook. If the sun's cull stopped, the cascades would come back empty, and every pass with the sun's
     bits would draw unshadowed. It now reads `SunViews::Current()`, from the cameras `UpdateCamera` set up. The planes are the same
     ones the hook copied from those views. A frame without sun views (an interior) still gets none.
@@ -4514,7 +4515,7 @@ colour` epochs recorded; the census's `first person` view without Lighting geome
     own limit).
 -   **The arms were `hidden`** (census: the skeleton's ` (0003CA03)` meshes "lighting: hidden" while the engine drew them): a stale
     mirror bit, from a store with no event. `FrameGlobals::cullHidden` now holds every node of the first-person subtree with its live bit
-    each frame (the render thread, before Main::Draw touches it), and `ActorRecordKept` takes a first-person entry's verdict again every
+    each frame (the render thread, before Main::Draw touches it), and `FrameVerdictKept` takes a first-person entry's verdict again every
     frame. With no record the arms had no slot, hence `0 first-person pipeline slots`.
 -   **`<- COMMIT`, a member kept waiting** ('IronLongSword:0' waiting with reason 8 and cause `0x10` while its first-person pipeline was
     ready): no readiness source moves when the lane publishes a forward pipeline in a new catalog. `CommitSet` now counts the lookups'
@@ -4588,7 +4589,7 @@ With the toggle off particle geometry stays `not-trishape`.
     slot per capacity bucket (a power of two from 8 to 0x800 quads, keyed by an address of DCLF's), with a vertex description of the
     texture-coordinate stream alone (`ParticleSnapshots::kSlotVertexDesc`: NiParticles' own puts the position on stream 1, which DCLF's
     draws reserve for face streams).
--   **The block**: a particle member takes a block of the frame's palettes as a skin's palette does (`kObjectSkinned`, the record's
+-   **The block**: a particle member takes a block of the frame's palettes as a skin's palette does (`kObjectPaletteBlock`, the record's
     `boneOffset`; `Tables::PlaceBones`, whose free lists are now exact for any block size: `BoneFreeList`), five rows a particle of its
     bucket: four corners (position relative to the model bound's centre, the packed colour in w) and the subtexture rect. Its entry is per
     frame (`kTraitMoves`), so the placement plan lists it as a mover, its item marked `particles`.
@@ -4685,7 +4686,7 @@ Part 2 draws the first two. Billboards are behind a new live toggle, `CS_DCLF_BI
     -   The join puts `mode + 1` in the effect key's raster bits 21-23 (`kRasterEffectBillboardShift`). Those bits are Extended
         Translucency's, which an effect key never carries.
     -   `EffectRecordFlagsOf` turns them into the object record's `kRecordEffectBillboard` (bit 4), with the mode in bits 5-7.
--   **The row** (`Billboards::SampleRow`, called at the end of `FrameValues::SampleRow` for every effect leaf under a billboard,
+-   **The row** (`PlacementRows::SampleBillboardRow`, Core/Gpu/PlacementRows/BillboardRow, called at the end of `FrameValues::SampleRow` for every effect leaf under a billboard,
     whatever the toggle). It reads nothing a cull writes.
     -   World is the leaf's **unturned** world: the node's base (its parent's world times its local) times the locals down to the leaf.
         It is still a world transform, so a pass that does not turn the leaf draws it where the node stands.
@@ -4734,7 +4735,7 @@ stage`.
 -   **bb3/bb4**: the census's `effect: billboard` and `effect: effect-variant (particle: aligned)` left the main view, with 18 billboard
     members and ~800-900 aligned expansions a window. But the observer flagged every leaf (`<- BILLBOARD`, rotation off by up to 1.97).
     Its dump showed the engine's turn keeping the base's y axis (ROTATE_ABOUT_UP) on nodes whose mode read 0: **CommonLib's
-    `NiBillboardNode::userFlags` is not at AE's `+0x128` in this build.** The mode is now read at the offset (`Billboards::FaceMode`).
+    `NiBillboardNode::userFlags` is not at AE's `+0x128` in this build.** The mode is now read at the offset (`PlacementRows::BillboardFaceMode`).
 -   **bb6** (motion, census, set parity): the observer found **0 of ~11,000 leaves a window differing (largest rotation 3e-7,
     translation 4e-3)**.
     -   `effect: billboard` is gone from main except `Glow11:22` (1 a frame at the start; not investigated, probably nested or under a
@@ -6051,7 +6052,8 @@ offsets. The scene probe used to show the same thing at about 1 in 300 frames.
     build. A slot's row is written when the slot is taken, while it waits (texture not resolved, or past the table's
     capacity), and while its material's texture transform moves: the controllers' hook
     (`BSLightingShaderPropertyFloatController::Update`, types above `0x13`) feeds a second queue
-    (`MaterialSources::DrainShadowTransformChanges`), and a slot stays watched while its two transform buffers differ or
+    (`TransformMoves`, drained by `Extensions::DrainTransformMoves`, Core/Extensions/MaterialWrites.h, in the kept build's
+    `WatchTransformMoves`, Core/Render/Shadow/ShadowBuild.cpp), and a slot stays watched while its two transform buffers differ or
     for 2 builds after the last event, as the main pass's watch does. A change of the lookups' generation or of the
     capacity writes every slot. The texture owners go to the payload as one shared bundle, rebuilt only when a slot's
     owner changes. Persistent parity compares the rows by value on every input: 0 differ.
@@ -7076,7 +7078,7 @@ the capture happened to see: one material's t71/t74, one actor's wetness.
 -   **b7: the actor's wetness, per object.** `Skin::GetWetness(geometry)` returns the owning actor's sweat,
     water wetness, height and water depth: zero unless the geometry's user data is an `ActorCharacter`. It keeps
     a fading state per actor and computes once a frame; later calls in the frame return the cached value.
-    -   The walk resolves ownership once per tracked geometry (`Tracked::actorOwned`).
+    -   The walk resolves ownership once per tracked geometry (`Tracked::owner`, `Extensions::OwnerClassOf`).
     -   `RefreshFrameConstants` (Prepass, the same frame as the main pass) calls `GetWetness` for every
         actor-owned object in the tables (`Tables::actorObjects`, `Tables::skinWetness`), while Skin is enabled.
         Every actor's fade therefore advances once a frame whether or not the engine draws it. Natively it

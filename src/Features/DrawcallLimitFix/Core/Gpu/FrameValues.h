@@ -66,8 +66,6 @@ namespace DCLF
 			BindlessPlacement& a_out);
 		/** @brief Render thread (diagnostics): a slot's row from the engine now, by the tables' structure; false for a free slot. */
 		static bool SampleSlot(const SceneTables& a_tables, std::uint32_t a_slot, BindlessPlacement& a_out);
-		/** @brief A skin's palettes after this frame's update, or false when its size is not a_rows (its block's). */
-		static bool SkinPalettes(const RE::BSGeometry& a_geometry, std::uint32_t a_rows, const float*& a_current, const float*& a_previous);
 
 		/**
 		 * @brief Render thread, at the scene's start (the engine's update done, the window open): the frame's producer, from a_plans

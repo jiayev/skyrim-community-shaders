@@ -769,8 +769,8 @@ namespace DCLF::Extensions
 		ResolveMaterialPorts(lists.materialPorts, lists.materialPortCount);
 		ResolveProgramFamilies(lists.programFamilies);
 		std::ranges::sort(lists.frameConstantRows, {}, &FrameConstantRowEntry::row);
-		// The features' toggles placed in the menu's table by their anchors (which may name a toggle a later feature registered), then
-		// seeded from their switches, into the requested and active sets.
+		// The Core flags' needs by name resolved, then the features' toggles placed in the menu's table by their anchors (which may
+		// name a toggle a later feature registered), then seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
 	}
 

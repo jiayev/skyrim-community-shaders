@@ -479,7 +479,7 @@ changed on 2-4 slots a frame, while placement changed on about 1,100 and the pal
 **Actors and faces on the light path.** An actor's record is kept when its classification inputs
 (`ClassifyInputsOf`, which now also covers the skin partition and the sky map's radius test) and its frame verdict
 (`ClassifyFrame`, taken again exactly as `WriteObject`'s re-read would take it) are unchanged
-(`ActorRecordKept`). Then only its placement and palette are taken. A face shape also takes its head's snapshot and
+(`FrameVerdictKept`). Then only its placement and palette are taken. A face shape also takes its head's snapshot and
 region for the walk (`KeepFaceStream`, sharing `ResolveFace` and `PushFaceStream` with `WriteObject`). A verdict the
 frame changes counts as a classification, so the entry's traits are taken again. Walk parity counts motion an
 actor gains after its classification as served, since the light path places an actor every frame. A full evaluation
@@ -581,7 +581,7 @@ is a key no entry lists, and nothing dereferences a key. The stubs live in a blo
 image, since a `call rel32` must reach them (CommonLib's trampoline placed them more than 2 GB from some sites).
 
 An actor's light-path entry lists every node from it up to its category node (`ListHiddenChain`,
-`hiddenDependents`). `ActorRecordKept` takes the frame verdict again only on a frame when one of those nodes had an
+`hiddenDependents`). `FrameVerdictKept` takes the frame verdict again only on a frame when one of those nodes had an
 event, for an entry under a switch, and for every entry on a parity frame, where a verdict that changed with no event
 is counted as missed. The other frame-verdict inputs already classify the entry again: fades through their events, the
 toggles through a full evaluation. The classification inputs (`ClassifyInputsOf`) are still compared every frame,
