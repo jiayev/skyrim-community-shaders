@@ -6,6 +6,7 @@
 // context it was made with (segment), never a literal one: the schedule decides where it runs.
 
 #include "Features/DrawcallLimitFix/Api/Passes.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Epochs.h"
 
 #include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -83,6 +84,17 @@ namespace DCLF::Api
 		 * (its retest build, the features' phase 2 passes, its depth draw) is added only then.
 		 */
 		bool PhaseTwo() const;
+
+		/**
+		 * @brief The segment of the epoch whose shape the pass records against: its epoch's own, or the epoch it shares the shape of
+		 * (Api::EpochDef::sharesWith: the forward epoch's passes read the colour epoch's shape). A search: call it from a make, not per frame.
+		 */
+		RenderGraphRuntime::Segment ShapeSegment() const
+		{
+			const std::uint32_t row = Draws::EpochById(epochId);
+			const std::uint32_t shared = row == Draws::kNoEpoch ? Draws::kNoEpoch : Draws::EpochTraitsOf(row).sharesWith;
+			return shared == Draws::kNoEpoch ? segment : Draws::EpochTraitsOf(shared).segment;
+		}
 	};
 
 	/** @brief What an anchor adds to its epoch: in order, each with its name, kind and queue. */

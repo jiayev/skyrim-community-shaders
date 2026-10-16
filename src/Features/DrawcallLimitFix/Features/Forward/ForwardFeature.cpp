@@ -1,5 +1,5 @@
 // Forward: DCLF's blended objects and refraction in the forward epoch. Its switches and the forward and refraction toggles, the object
-// classes' contributions, and the engine's two forward points.
+// classes' contributions, the engine's two forward points, the epoch's passes and its report lines.
 
 #include "Features/DrawcallLimitFix/Features/Forward/Forward.h"
 
@@ -36,6 +36,9 @@ namespace DCLF::Features::Forward
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Refraction, .toggle = refraction });
 			// The main pass's blended draw, where the forward epoch runs, and Main::Draw's refraction point.
 			InstallHooks(a_context);
+			// The forward epoch's passes, and its report lines (before Features/Effects', which install after it).
+			RegisterPasses(a_context);
+			RegisterReport(a_context);
 		}
 	}
 

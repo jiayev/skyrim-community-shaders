@@ -4,36 +4,43 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 #include "Engine.h"
 
-// The views' epochs' report lines (taken by IndirectDraws::AsyncReport): the forward epoch, the accumulated visibility, the shadow
-// capability. (The reflection's and the first-person view's: Features/Reflection, Features/FirstPerson; the effects': Features/Effects.)
+// The views' epochs' report lines (taken by IndirectDraws::AsyncReport): the shared epochs' point, the accumulated visibility, the shadow
+// capability. (The forward epoch's: Features/Forward; the reflection's and the first-person view's: Features/Reflection,
+// Features/FirstPerson; the effects': Features/Effects.)
 
 namespace DCLF
 {
-	std::string IndirectDraws::ForwardReport()
+	std::string IndirectDraws::SharedEpochReport()
 	{
 		if (!impl)
 			return {};
-		auto& f = impl->forwardEpoch;
-		if (!f.reached && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
+		// On a report where a shared epoch reached a frame since the last, or its gate class is on (the forward epoch's: its toggle).
+		const ToggleSet toggles = ActiveToggles();
+		bool due = false;
+		for (std::uint32_t e = 0; e < EpochCount() && !due; ++e) {
+			const auto& traits = EpochTraitsOf(e);
+			if (traits.sharesWith == kNoEpoch || EpochTraitsOf(traits.sharesWith).shape != ShapeKind::Main)
+				continue;
+			due = impl->sharedEpochs[e].reached || (traits.gate != Api::ObjectClass::Count && Extensions::ObjectClassOn(toggles, traits.gate));
+		}
+		if (!due)
 			return {};
-		std::string text = fmt::format("[DCLF] forward epoch (T7d, CS_DCLF_FORWARD {}): reached {} frames, {} epochs; not submitted: {} without this frame's colour epoch, "
-									   "{} without a forward recording{}, {} failed{}\n",
-			Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) ? "on" : "off", f.reached, f.epochs, f.noColour, f.noRecording,
-			f.noRecording ? " <- NO FORWARD RECORDING" : "", f.failed,
-			f.failed ? " <- EPOCH FAILED" : "");
-		if (f.refractionDrawn || f.refractionNotReady || Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction))
-			text += fmt::format("[DCLF] refraction (T7d, CS_DCLF_REFRACTION {}): {} forward epochs drew the refraction normals, {} with refraction slots could not "
-								"(no refraction pipeline yet, or no refraction normals){}\n",
-				Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction) ? "on" : "off", f.refractionDrawn, f.refractionNotReady,
-				f.refractionNotReady && !f.refractionDrawn ? " <- NO REFRACTION DRAW" : "");
-		// The forward epoch's features' lines here (Features/Effects: the Effect port's members and its Lighting variant's parity).
+		// Features/Forward's forward and refraction lines (taking the counters: TakeSharedEpochStats), then the forward epoch's features'
+		// (Features/Effects: the Effect port's members and its Lighting variant's parity).
+		std::string text;
 		Extensions::ReportTextAt(Api::ReportPoint::AsyncWorkForward, text);
-		const std::uint32_t submitted = f.submittedFrame;
-		const std::uint32_t refractionFrame = f.refractionFrame;
-		f = {};
-		f.submittedFrame = submitted;
-		f.refractionFrame = refractionFrame;
 		return text;
+	}
+
+	SharedEpochStats IndirectDraws::TakeSharedEpochStats(std::uint32_t a_epoch)
+	{
+		if (!impl || a_epoch >= EpochCount())
+			return {};
+		auto& f = impl->sharedEpochs[a_epoch];
+		const SharedEpochStats taken = f;
+		f = {};
+		f.submittedFrame = taken.submittedFrame;
+		return taken;
 	}
 
 	std::string IndirectDraws::VisibilityReport()

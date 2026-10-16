@@ -39,7 +39,7 @@ namespace DCLF::Api
 		// The accumulated writes' lines (IndirectDraws::VisibilityReport, in the draws' async work), after its every-listed-root lines,
 		// before the accumulated parity's (Features/Actors' animation stamp): on a report whose scene has the visibility readback. Text lines.
 		AccumulatedWrites,
-		// The forward epoch's lines (IndirectDraws::ForwardReport), after its own and the refraction's, before AsyncWork's: on a report
+		// The forward epoch's lines (IndirectDraws::SharedEpochReport; Features/Forward's lines first), after its own and the refraction's, before AsyncWork's: on a report
 		// that prints the forward epoch's (it reached a frame since the last, or its toggle is on). Text lines.
 		AsyncWorkForward,
 		// The draws' async work lines (IndirectDraws::AsyncReport), after the forward epoch's lines, before the tree LOD draws': every

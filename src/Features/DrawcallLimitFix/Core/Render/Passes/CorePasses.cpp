@@ -1,6 +1,7 @@
-// Core's passes (Api::PassDef), which the schedule (Schedule/Frame.cpp) names by key: the main view's (core.*, main-view.*, forward.*),
-// the diagnostics' anchors (diag.*), and through Shadow.cpp and ViewEpochRecord.cpp the shadow views' (shadows.*) and the views' (view.*).
-// Each make is its pass's condition and factory; the executor adds the pass. The features register their own passes.
+// Core's passes (Api::PassDef), which the schedule (Schedule/Frame.cpp) names by key: the main view's (core.*, main-view.*), the
+// diagnostics' anchors (diag.*), and through Shadow.cpp and ViewEpochRecord.cpp the shadow views' (shadows.*) and the views' (view.*).
+// Each make is its pass's condition and factory; the executor adds the pass. The features register their own passes (the forward
+// epoch's forward.*: Features/Forward).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -101,7 +102,7 @@ namespace DCLF::Draws
 			return resources->sort ? MakeSortSequencesPass(resources, a_context.segment) : nullptr;
 		}
 
-		// The forward sort after the colour build; its draw in the forward epoch (IndirectDraws::ExecuteForward).
+		// The forward sort after the colour build; its draw in the forward epoch (Features/Forward's forward.draw).
 		std::shared_ptr<org::RenderPass> ForwardSort(const Api::PassContext& a_context)
 		{
 			const auto& resources = a_context.Main();
@@ -113,19 +114,6 @@ namespace DCLF::Draws
 					return ForwardSortSource{ frame ? frame->generation : 0 };
 				return ForwardSortSource{ frame->generation, main->forwardSort, static_cast<std::uint32_t>(ForwardStagingSlot(*frame)), frame->forwardCapacity };
 			});
-		}
-
-		std::shared_ptr<org::RenderPass> ForwardDraw(const Api::PassContext& a_context)
-		{
-			const auto& resources = a_context.Main();
-			return resources->forwardSort ? MakeForwardDrawPass(resources) : nullptr;
-		}
-
-		// Refraction normals, in the forward epoch after the blended draws.
-		std::shared_ptr<org::RenderPass> RefractionDraw(const Api::PassContext& a_context)
-		{
-			const auto& resources = a_context.Main();
-			return resources->refractionNormals && resources->nativeDepth && resources->pool ? MakeRefractionDrawPass(resources) : nullptr;
 		}
 
 		using DiagPoint = Diagnostics::MainGraphPasses::Point;
@@ -146,8 +134,6 @@ namespace DCLF::Draws
 			{ .key = "main-view.z.depth", .passName = "cs.dclf.z.depth", .kind = PassKind::Render, .make = &MainDraws },
 			{ .key = "main-view.depth-phase2", .passName = "cs.dclf.depth-phase2", .kind = PassKind::Render, .make = &DepthDrawPhaseTwo },
 			{ .key = "main-view.colour", .passName = "cs.dclf.main-opaque", .kind = PassKind::Render, .make = &MainDraws },
-			{ .key = "forward.draw", .passName = "cs.dclf.forward", .kind = PassKind::Render, .make = &ForwardDraw },
-			{ .key = "forward.refraction", .passName = "cs.dclf.refraction", .kind = PassKind::Render, .make = &RefractionDraw },
 			// The anchors: the diagnostics' passes at each point.
 			{ .key = "diag.before-colour", .emit = &EmitDiagnostics<DiagPoint::kBeforeColour> },
 			{ .key = "diag.after-colour", .emit = &EmitDiagnostics<DiagPoint::kAfterColour> },

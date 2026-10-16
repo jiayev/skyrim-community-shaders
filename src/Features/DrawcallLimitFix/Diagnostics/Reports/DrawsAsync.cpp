@@ -19,7 +19,7 @@ namespace DCLF
 		text += VisibilityReport();
 		// The views' lines here, before the forward epoch's (Features/Reflection: the reflection faces').
 		Extensions::ReportTextAt(Api::ReportPoint::AsyncWorkViews, text);
-		text += ForwardReport();
+		text += SharedEpochReport();
 		// The features' lines here (Features/Particles, Features/Billboards, Features/FirstPerson: the first-person view's).
 		Extensions::ReportTextAt(Api::ReportPoint::AsyncWork, text);
 		// The draw families' lines here (Features/TreeLod's draws and cull).

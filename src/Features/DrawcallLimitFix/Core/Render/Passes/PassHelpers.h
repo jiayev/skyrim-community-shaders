@@ -1,11 +1,12 @@
 #pragma once
 
-// What the passes and the graph extensions share: recording helpers, registration, the latched copies pass, attachments (the ones features
-// use too, Register and RecordDispatch, are Core/Extensions/PassContext.h's). Part of IndirectDraws' implementation: included by
-// Internal.h, in its order.
+// What the passes and the graph extensions share: recording helpers, registration, the latched copies pass (the ones features use too:
+// Register and RecordDispatch, Core/Extensions/PassContext.h's; the draw passes' attachments, frame buffers and preprocessed draw,
+// Passes/DrawHelpers.h's). Part of IndirectDraws' implementation: included by Internal.h, in its order.
 
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
 
 namespace DCLF::Draws
 {
@@ -107,17 +108,6 @@ namespace DCLF::Draws
 	/** @brief The sort of a forward range of a_sequences (the main one, a view's), its count read from a_counts. */
 	std::shared_ptr<org::RenderPass> MakeForwardSortPass(Versioned a_sequences, LatchedTarget a_counts, std::function<ForwardSortSource(const org::PassPrepareContext&)> a_source);
 
-	/** @brief A pass's frame buffers (t16 and up) and Light Limit Fix's lights (t35-t37) declared as read, through no view. */
-	void DeclareFrameBuffers(org::PassBuilder& a_builder, const Resources& a_resources, bool a_lights = true);
-
-	/**
-	 * @brief One explicitly preprocessed draw pass (the forward ranges'): the preprocess on the frame slot's state list, set up as the
-	 * execution is (a_begin's attachments, the layout, the topology, the frame push data, the heaps), then the execution.
-	 */
-	void RecordPreprocessedDraw(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,
-		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::CommandSignatureHandle a_signature,
-		rhi::ResourceHandle a_arguments, std::uint64_t a_argumentsOffset, rhi::ResourceHandle a_counts, std::uint64_t a_countOffset, std::uint32_t a_capacity);
-
 	/** @brief The rows' strides into BuildDraws' constants (BuildDrawsCS: RowsOf; the addresses are the latch's: PayloadLatch). */
 	inline void SetRowStrides(BuildDrawsConstants& a_constants, bool a_pipelineRows = true)
 	{
@@ -177,30 +167,5 @@ namespace DCLF::Draws
 		static thread_local std::vector<std::uint32_t> none;
 		none.assign(a_slots - a_map.size(), kNoBucket);
 		LatchWrite(a_latch, a_what, a_slot, a_offset + static_cast<std::uint32_t>(a_map.size() * sizeof(std::uint32_t)), std::as_bytes(std::span(none)));
-	}
-	/** @brief A pass's colour attachments, loaded and stored: a_count of a_views, each with its resource (a_tokens). */
-	template <std::size_t N>
-	std::array<rhi::ColorAttachment, N> LoadedColours(org::PassRecordContext& a_recording, const std::array<org::PreparedDescriptorReference, N>& a_views,
-		const std::array<org::DeclaredViewToken, N>& a_tokens, std::uint32_t a_count)
-	{
-		std::array<rhi::ColorAttachment, N> out{};
-		for (std::uint32_t i = 0; i < a_count; ++i) {
-			out[i].rtv = a_recording.Resolve(a_views[i]);
-			out[i].loadOp = rhi::LoadOp::Load;
-			out[i].storeOp = rhi::StoreOp::Store;
-			out[i].resource = a_recording.Resolve(a_tokens[i].Resource()).GetHandle();
-		}
-		return out;
-	}
-	/** @brief A pass's depth attachment through a_view, depth and stencil loaded and stored. */
-	inline rhi::DepthAttachment LoadedDepth(org::PassRecordContext& a_recording, const org::PreparedDescriptorReference& a_view)
-	{
-		rhi::DepthAttachment depth{};
-		depth.dsv = a_recording.Resolve(a_view);
-		depth.depthLoad = rhi::LoadOp::Load;
-		depth.depthStore = rhi::StoreOp::Store;
-		depth.stencilLoad = rhi::LoadOp::Load;
-		depth.stencilStore = rhi::StoreOp::Store;
-		return depth;
 	}
 }

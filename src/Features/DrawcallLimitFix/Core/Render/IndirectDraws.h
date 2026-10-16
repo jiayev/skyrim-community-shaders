@@ -39,6 +39,8 @@ namespace DCLF
 	namespace Draws
 	{
 		struct MainPayload;
+		struct PassFrame;
+		struct Resources;
 		struct SceneBuffers;
 		struct ViewFace;
 	}
@@ -50,6 +52,32 @@ namespace DCLF
 	{
 		enum class DrawFamily : std::uint8_t;
 	}
+
+	/**
+	 * @brief An epoch sharing another's shape (Api::EpochDef::sharesWith), submitted by its owner (IndirectDraws::SubmitSharedEpoch):
+	 * its counters since the last report (TakeSharedEpochStats), and the frame it was last submitted in (the once-a-frame guard).
+	 */
+	struct SharedEpochStats
+	{
+		std::uint64_t reached = 0, epochs = 0, noSharedPayload = 0, noRecording = 0, failed = 0;
+		std::uint32_t submittedFrame = ~0u;
+	};
+	/**
+	 * @brief The owner's part of a shared epoch's submission: prepare, render thread, right before the execution, handed context, the
+	 * main resources and the selected revision's shape (null: none). It prepares the owner's optional part (Features/Forward: the
+	 * refraction pipeline's inputs) and says whether this execution draws it.
+	 */
+	struct SharedEpochSubmit
+	{
+		bool (*prepare)(void* a_context, const Draws::Resources* a_resources, const Draws::PassFrame* a_shape) = nullptr;
+		void* context = nullptr;
+	};
+	/** @brief A shared epoch's submission: whether it was submitted, and whether its optional part draws (what prepare said). */
+	struct SharedEpochResult
+	{
+		bool submitted = false;
+		bool optional = false;
+	};
 
 	/**
 	 * @brief DCLF's draws: the installed scene publication's objects drawn by the render graph with GPU-culled indirect draws; the
@@ -139,19 +167,19 @@ namespace DCLF
 		void ExecuteColour();
 
 		/**
-		 * @brief The forward epoch (CS_DCLF_FORWARD), at the engine's blended draw (FUN_1414b39d0, after the deferred composite and
-		 * the water): the visible forward objects, sorted back to front by the colour epoch, drawn before the engine's own blended
-		 * draws. Render thread; only after this frame's colour epoch, whose commit wrote everything these draws read.
-		 * @return whether this execution drew the refraction normals (the caller marks them for the engine: Features/Forward).
+		 * @brief Render thread, at a_epoch's trigger (its owner's hook: Features/Forward's blended draw for the forward epoch): epoch
+		 * a_epoch, which shares a main epoch's shape (Api::EpochDef::sharesWith), submitted once a frame. Only after this frame's
+		 * commit of the shared epoch (not withdrawn), whose commit wrote everything its draws read: the selected revision's recording,
+		 * the shared payload's owners held, a_submit's prepare, then the execution in the epoch's segment. Each early return counted.
 		 */
-		bool ExecuteForward();
-		/** @brief The forward epoch's report line, its counters reset. */
-		std::string ForwardReport();
+		SharedEpochResult SubmitSharedEpoch(std::uint32_t a_epoch, const SharedEpochSubmit& a_submit);
+		/** @brief Render thread, at the report: a_epoch's shared epoch counters since the last report, reset (its submitted frame kept). */
+		SharedEpochStats TakeSharedEpochStats(std::uint32_t a_epoch);
 		/**
-		 * @brief Whether this frame's forward epoch drew the refraction normals (and marked them begun for the engine). Render thread,
-		 * at Main::Draw's refraction point (Main_Draw_RefractionCheck).
+		 * @brief The shared epochs' report lines (ReportPoint::AsyncWorkForward: Features/Forward's forward and refraction lines, then the
+		 * forward epoch's features'), on a report where a shared epoch reached a frame since the last or its gate class is on.
 		 */
-		bool RefractionDrawnThisFrame() const;
+		std::string SharedEpochReport();
 
 		/**
 		 * @brief Render thread, the frame's start: posts what the scene lane's lookups need that only the frame has (import context,
