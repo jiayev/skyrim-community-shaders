@@ -8,7 +8,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Engine.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 
 #include <unordered_map>
 

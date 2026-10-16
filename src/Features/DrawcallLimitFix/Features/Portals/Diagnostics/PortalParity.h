@@ -10,7 +10,7 @@ namespace DCLF::Diagnostics::PortalParity
 	 * jobs), DCLF's programs against the engine's portal-graph entry as Main::Update's walk left it - the rooms in its map, each room's
 	 * and unbound space's BSCompoundFrustum (the structure exactly, the planes within rounding), the boxes' corners and silhouette sets,
 	 * the rooms the walk popped - with a frame whose camera moved after the engine's walk tallied apart. The line every 300 builds
-	 * (Reports::PortalViewsLine).
+	 * (Features::Portals::PortalViewsLine).
 	 */
 	void Install();
 

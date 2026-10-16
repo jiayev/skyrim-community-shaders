@@ -343,25 +343,6 @@ namespace DCLF
 
 
 	/**
-	 * @brief The main camera's portal and occluder programs (Engine/Views/PortalViews), for FadeStateCS's and BuildDrawsCS's main
-	 * view tests: a ByteAddressBuffer uploaded with the depth commit.
-	 *
-	 * Layout (bytes): the camera's view planes (NiFrustumPlanes: six {n, d}, the active mask at +96; kPortalSetBytes), then a header
-	 * {program count, 0, 0, 0}, then a directory entry per program (kPortalDirectoryBytes: flags, operator count, set count, first
-	 * operator, first operator record, first set, cull mode, 0), then the operator records (the engine's {type, next if true, next if
-	 * false}, padded to 16 bytes; a test's set index is the next record's first word, relative to the program's first set) and the
-	 * plane sets. Program 0 is unbound space; program 1 + i the portal graph's room i (graph +0x40). A root's program is
-	 * kPortalNoProgram when there is no walk this frame (the frustum alone).
-	 */
-	inline constexpr std::uint32_t kPortalSetBytes = 112;
-	inline constexpr std::uint32_t kPortalHeaderBytes = kPortalSetBytes + 16;
-	inline constexpr std::uint32_t kPortalDirectoryBytes = 32;
-	inline constexpr std::uint32_t kPortalOpBytes = 16;
-	inline constexpr std::uint32_t kPortalNoProgram = 0xFFFFFFFFu;
-	inline constexpr std::uint32_t kPortalReached = 1u << 0;   // the walk reached it (else a room's children are not culled into)
-	inline constexpr std::uint32_t kPortalSkipView = 1u << 1;  // skipViewFrustum: the view test is not made
-
-	/**
 	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; drawcall-limit-fix.md, "Fades on the GPU"). A member's fade node is a root:
 	 * a FadeRootStatic row (CPU, when listed) and a FadeNodeState row (GPU, reseeded from `initial` on a new generation). The pass
 	 * runs the node's OnVisible for the main camera whenever its bound is in view (C++ port: Scene/Ports/FadeState.h).

@@ -8,6 +8,8 @@
 #include "Events.h"
 #include "Observers.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/CutObservers.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 
 namespace DCLF::Diagnostics
 {

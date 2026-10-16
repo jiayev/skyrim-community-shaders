@@ -1,7 +1,6 @@
 // PrimaryCull: the list jobs' stand-in (Process1, AppendVirtual; job threads), the render thread's frame around them, the cut's
 // plans and admission, the synthetic membership passes (any thread), and the fade writer's hooks.
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
@@ -14,6 +13,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
@@ -45,8 +45,6 @@ namespace DCLF
 		// AE 1.6.1170 (module offsets).
 		constexpr std::uintptr_t kAfterFullFrustumCallSite = 0x14cbcea;  // CalculateAndDrawShadowCasterLights -> FUN_1414a0840, after either branch
 		constexpr std::uintptr_t kAfterFullFrustum = 0x14a0840;
-		constexpr std::uintptr_t kPortalWalkCallSite = 0x64685f;  // Main::Update -> FUN_1401a43c0, the main camera's portal walk
-		constexpr std::uintptr_t kPortalWalk = 0x1a43c0;
 		constexpr std::uintptr_t kListJobsFinishCallSite = 0x14cbf4d;  // ... -> JobList::Finish(scene list culling)
 		constexpr std::uintptr_t kProcess1 = 0xe28390;  // BSCullingProcess::Process1, the list processes' vtable slot 0x16
 		constexpr std::size_t kAccumulatorDeferredShadow = 0x178;  // byte: the accumulator draws the deferred shadow mask
@@ -1343,17 +1341,6 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		/** @brief Main::Update's portal walk (FUN_1401a43c0): DCLF's walk follows, same camera, before the list build. */
-		struct PortalWalk
-		{
-			static void thunk(void* a_tes, void* a_process)
-			{
-				func(a_tes, a_process);
-				PortalViews::Get().Build();
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
 		/** @brief CalculateAndDrawShadowCasterLights' call of FUN_1414a0840, right after the full-frustum cull. */
 		struct AfterFullFrustum
 		{
@@ -1489,7 +1476,8 @@ namespace DCLF
 		const auto base = REL::Module::get().base();
 		const auto afterFullFrustum = base + kAfterFullFrustumCallSite;
 		const auto finish = base + kListJobsFinishCallSite;
-		if (!CallsTo(afterFullFrustum, base + kAfterFullFrustum) || !CallsTo(finish, base + Engine::Address::kListJobsFinish) || !CallsTo(base + kPortalWalkCallSite, base + kPortalWalk)) {
+		// The main walk's hook (Api::MainCullInputContribution: Features/Portals' early hooks) is in, or nothing would build its programs.
+		if (!CallsTo(afterFullFrustum, base + kAfterFullFrustum) || !CallsTo(finish, base + Engine::Address::kListJobsFinish) || !Extensions::MainWalkInstalled()) {
 			logger::warn("[DCLF] primary cull: the calls are not where expected; the engine keeps the primary's cull");
 			return;
 		}
@@ -1499,7 +1487,6 @@ namespace DCLF
 			logger::warn("[DCLF] primary cull: BSGeometryListCullingProcess::Process1 is not the engine's; the engine keeps the primary's cull");
 			return;
 		}
-		stl::write_thunk_call<Hooks::PortalWalk>(base + kPortalWalkCallSite);
 		stl::write_thunk_call<Hooks::AfterFullFrustum>(afterFullFrustum);
 		stl::write_thunk_call<Hooks::ListJobsFinish>(finish);
 		if (CallsTo(base + kAnimatedFadeCallSite, base + Engine::Address::kFadeUpdate))

@@ -67,8 +67,8 @@ namespace DCLF
 			roots.Add(s.fadeStatesOut[0]).Add(s.fadeStatesOut[1]);
 			roots.Require(a_build, a_tables.fadeRoots.size());
 		}
-		// Portal programs, to the most a frame's encoding needs.
-		buffers.Require(a_build, s.portalPrograms, inputs.portalWords);
+		// The main cull input's programs, to the most a frame's encoding needs.
+		buffers.Require(a_build, s.cullPrograms, inputs.programWords);
 		// The event lists, to the most a frame wanted (dropped roots append again); their staging sets follow the named capacity.
 		if (s.fadeEvents && s.fadeWriteBack)
 			buffers.Require(a_build, s.fadeEvents, s.fadeWriteBack->wanted.load(std::memory_order_acquire));

@@ -2,13 +2,13 @@
 // the engine function it ports (AE 1.6.1170); the arithmetic keeps the engine's grouping where it decides a comparison
 // (skyrim-engine-notes.md, "Portals, rooms and occluders").
 
-#include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Views/PortalShapes.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalShapes.h"
+#include "Features/DrawcallLimitFix/Features/Portals/RoomVisibility.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
 #include <algorithm>
@@ -20,7 +20,7 @@
 #include <limits>
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Reports/Engine.h"
+#include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
 
 namespace DCLF
 {
@@ -1634,7 +1634,7 @@ namespace DCLF
 			return;
 		PublishVisible();
 		if (visibleReports.Tick())
-			Reports::RoomVisibilityLines();
+			Features::Portals::RoomVisibilityLines();
 	}
 
 	void PortalViews::PublishVisible()

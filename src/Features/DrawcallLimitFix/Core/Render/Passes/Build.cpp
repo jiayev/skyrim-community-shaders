@@ -11,7 +11,7 @@ namespace DCLF::Draws
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
 		org::DeclaredViewToken fadeRoots;
 		org::DeclaredViewToken bucketCounts, poolFirsts;  // the depth segment's buckets (Resources::zBucketCounts) and the pool's firsts
-		org::DeclaredViewToken portalPrograms, rootPrograms;  // the main camera's first phase: its portal programs, each root's
+		org::DeclaredViewToken cullPrograms, rootPrograms;  // the main camera's first phase: its cull input's programs, each root's
 	};
 
 	struct BuildDrawsFrame
@@ -49,9 +49,9 @@ namespace DCLF::Draws
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(*resources->frustum).View();
-			// Phase 1 tests a member against its root's portal program (kPortal*).
-			if (resources->frustum && resources->scene->portalPrograms && resources->scene->fadeRootPrograms) {
-				bindings.portalPrograms = a_builder.ShaderResource(*resources->scene->portalPrograms).View();
+			// Phase 1 tests a member against its root's program (the main cull input's: Features/Portals' portal programs).
+			if (resources->frustum && resources->scene->cullPrograms && resources->scene->fadeRootPrograms) {
+				bindings.cullPrograms = a_builder.ShaderResource(*resources->scene->cullPrograms).View();
 				bindings.rootPrograms = a_builder.ShaderResource(*resources->scene->fadeRootPrograms).View();
 			}
 			// Every phase reads the fade roots' static rows (phase 1's fade verdicts, LOD skin partitions). The states FadeStateCS
@@ -111,9 +111,9 @@ namespace DCLF::Draws
 			// Frustum stamps: only depth phase 1 tests every candidate's frustum.
 			if (resources->frustum && phase == 1)
 				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
-			// A member whose root's portal program culls its bound is out of view.
-			if (resources->frustum && phase == 1 && a_bindings.portalPrograms.layout && resources->scene->fadeRoots && resources->scene->fadeRootCount) {
-				constants.portalProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.portalPrograms);
+			// A member whose root's program culls its bound is out of view.
+			if (resources->frustum && phase == 1 && a_bindings.cullPrograms.layout && resources->scene->fadeRoots && resources->scene->fadeRootCount) {
+				constants.cullProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.cullPrograms);
 				constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
 			}
 			if (resources->scene->fadeRoots && resources->scene->fadeRootCount) {

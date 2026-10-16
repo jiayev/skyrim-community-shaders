@@ -62,9 +62,9 @@ namespace DCLF::Draws
 		// The views' (ViewKind): their resources, the targets their pipelines are resolved for from the request's catalog, a face's
 		// size (the reflection cube's import, the main colour viewport) and the depth range (first person's).
 		std::array<ViewInputs, kViews> views;
-		// What the scene tables' requirements size by besides the tables (RequireSceneTables): the portal programs' words a frame's
-		// encoding takes (PortalViews::Encoded).
-		std::uint32_t portalWords = 0;
+		// What the scene tables' requirements size by besides the tables (RequireSceneTables): the main cull input's programs' words a
+		// frame's encoding takes (Extensions::MainCullPrograms).
+		std::uint32_t programWords = 0;
 		// The features' scene resources' words they size by (Api::SceneResources::postInputs, each at its registration's words: Features/
 		// TreeLod's mirror's shape and mesh slots).
 		Extensions::SceneResourceInputs resourceInputs{};

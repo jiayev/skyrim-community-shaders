@@ -263,58 +263,88 @@ namespace DCLF
 			Diagnostics::Notify(Diagnostics::FadeLogWindow{ Scene::FrameView::Get().GetFrame(), Scene::FrameView::Get().GetTables(), a_inputs, a_logBase });
 		}
 
-		// Each root's portal program (its room's), when the roots, a room's children or the portal graph changed. With the portals
-		// unchanged and the version holding the mirror, only the roots written since the mirror's content epoch (the roots' journal)
-		// and the new ones are judged again; a portal change, or a version the mirror is not of, judges every root.
+		// The roots UploadFadeRootPrograms judges again, in its order: incrementally, those written since the mirror's content epoch
+		// (the roots' journal, below the mirror's size) and the new ones; else every root.
+		void CollectRootsToJudge(const SceneTables& a_tables, bool a_incremental, std::uint64_t a_judgedEpoch, std::size_t a_before, std::size_t a_rootCount,
+			std::vector<std::uint32_t>& a_roots)
+		{
+			a_roots.clear();
+			if (a_incremental) {
+				a_tables.fadeRootsJournal.Take().ForEachRun(a_judgedEpoch, a_before, [&](std::uint64_t a_first, std::uint64_t a_count) {
+					for (std::uint64_t r = a_first; r < a_first + a_count && r < a_before; ++r)
+						a_roots.push_back(static_cast<std::uint32_t>(r));
+				});
+				for (std::size_t r = a_before; r < a_rootCount; ++r)
+					a_roots.push_back(static_cast<std::uint32_t>(r));
+			} else {
+				for (std::size_t r = 0; r < a_rootCount; ++r)
+					a_roots.push_back(static_cast<std::uint32_t>(r));
+			}
+		}
+
+		// The batch's programs from the main cull input's judge, called once: a root without a node takes noProgram unasked.
+		void JudgeRootPrograms(const Extensions::MainCullInputEntry& a_input, const SceneTables& a_tables, SceneBuffers::RootProgramsBatch& a_batch)
+		{
+			a_batch.asked.clear();
+			a_batch.programs.assign(a_batch.roots.size(), a_input.contribution.noProgram);
+			for (std::size_t k = 0; k < a_batch.roots.size(); ++k)
+				if (a_tables.fadeRootNode[a_batch.roots[k]])
+					a_batch.asked.push_back(static_cast<std::uint32_t>(k));
+			if (a_batch.asked.empty())
+				return;
+			Api::RootProgramsJudge judge{ a_tables.fadeRootNode, a_batch.roots, a_batch.asked, a_batch.programs };
+			a_input.contribution.judge(judge);
+		}
+
+		// Each root's program (the main cull input's: Features/Portals' room programs), when the roots or the input's answers
+		// (programsVersion) changed. With the input unchanged and the version holding the mirror, only the roots written since the
+		// mirror's content epoch (the roots' journal) and the new ones are judged again; an input change, or a version the mirror is not
+		// of, judges every root. Without an input FadeStateCS and the builds bind no programs, so the roots' are not read.
 		void UploadFadeRootPrograms(const MainCommit& a_commit, SceneBuffers& a_buffers)
 		{
+			const auto* input = Extensions::MainCullInput();
+			if (!input)
+				return;
 			const auto& adopted = a_commit.adopted;
 			auto& uploads = a_commit.uploads;
 			const auto& rootTables = Scene::FrameView::Get().GetTables();
-			auto& portals = PortalViews::Get();
-			const std::uint64_t rootsEpoch = rootTables.FadeRootsContentEpoch(), portalsVersion = portals.ProgramsVersion();
-			const std::uint64_t programsKey = rootsEpoch * 0x9E3779B97F4A7C15ull ^ portalsVersion;
+			const std::uint64_t rootsEpoch = rootTables.FadeRootsContentEpoch(), inputVersion = input->contribution.programsVersion();
+			const std::uint64_t programsKey = rootsEpoch * 0x9E3779B97F4A7C15ull ^ inputVersion;
 			const auto& programsVersion = adopted.Of(a_buffers.fadeRootPrograms);
 			const auto programsFilledKey = a_buffers.fadeRootProgramsFilled.Since(programsVersion);
 			const std::size_t rootCount = rootTables.fadeRootNode.size();
 			if (programsFilledKey != programsKey && rootCount <= programsVersion.units) {
 				auto& sent = a_buffers.fadeRootProgramsMirror;
 				const auto judged = a_buffers.fadeRootProgramsMirrorOf;
-				const bool incremental = programsFilledKey && *programsFilledKey == judged.key && judged.portals == portalsVersion && sent.size() <= rootCount;
+				const bool incremental = programsFilledKey && *programsFilledKey == judged.key && judged.programs == inputVersion && sent.size() <= rootCount;
 				if (!programsFilledKey)
 					sent.clear();
+				if (!incremental)
+					sent.resize(std::min(sent.size(), rootCount));
+				auto& batch = a_buffers.fadeRootProgramsBatch;
+				CollectRootsToJudge(rootTables, incremental, judged.rootsEpoch, sent.size(), rootCount, batch.roots);
+				JudgeRootPrograms(*input, rootTables, batch);
 				// Only words that differ (all of them for a version not filled); the mirror takes the new words.
 				std::vector<std::uint32_t> differing;
-				const auto judge = [&](std::size_t a_root) {
-					const auto* node = static_cast<const RE::NiAVObject*>(rootTables.fadeRootNode[a_root]);
-					const std::uint32_t program = node ? portals.ProgramOf(node) : kPortalNoProgram;
-					if (a_root < sent.size() && sent[a_root] == program)
-						return;
-					if (a_root >= sent.size())
-						sent.resize(a_root + 1, ~program);
-					sent[a_root] = program;
-					differing.push_back(static_cast<std::uint32_t>(a_root));
-				};
+				for (std::size_t k = 0; k < batch.roots.size(); ++k) {
+					const std::size_t root = batch.roots[k];
+					const std::uint32_t program = batch.programs[k];
+					if (root < sent.size() && sent[root] == program)
+						continue;
+					if (root >= sent.size())
+						sent.resize(root + 1, ~program);
+					sent[root] = program;
+					differing.push_back(static_cast<std::uint32_t>(root));
+				}
 				if (incremental) {
-					const std::size_t before = sent.size();
-					rootTables.fadeRootsJournal.Take().ForEachRun(judged.rootsEpoch, before, [&](std::uint64_t a_first, std::uint64_t a_count) {
-						for (std::uint64_t r = a_first; r < a_first + a_count && r < before; ++r)
-							judge(static_cast<std::size_t>(r));
-					});
-					for (std::size_t r = before; r < rootCount; ++r)
-						judge(r);
 					std::sort(differing.begin(), differing.end());
 					differing.erase(std::unique(differing.begin(), differing.end()), differing.end());
-				} else {
-					sent.resize(std::min(sent.size(), rootCount));
-					for (std::size_t r = 0; r < rootCount; ++r)
-						judge(r);
 				}
 				SendWordRuns(differing, [&](std::uint32_t a_first, std::uint32_t a_count) {
 					uploads(a_buffers.fadeRootPrograms, sent.data() + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
 				});
 				a_buffers.fadeRootProgramsFilled.Filled(programsVersion, programsKey);
-				a_buffers.fadeRootProgramsMirrorOf = { programsKey, rootsEpoch, portalsVersion };
+				a_buffers.fadeRootProgramsMirrorOf = { programsKey, rootsEpoch, inputVersion };
 			}
 		}
 
@@ -604,7 +634,7 @@ namespace DCLF
 			Scene::FrameView::Get().GetFrame(), *epochResources->scene, a_commit.uploads, &a_commit.latched, a_commit.bindingOwners });
 	}
 
-	// Fade roots and, once a frame, their inputs for FadeStateCS; the fade and visibility readbacks armed; the roots' portal programs.
+	// Fade roots and, once a frame, their inputs for FadeStateCS; the fade and visibility readbacks armed; the roots' cull programs.
 	void IndirectDraws::Impl::CommitFadeRoots(const MainCommit& a_commit)
 	{
 		const auto& adopted = a_commit.adopted;
@@ -615,7 +645,7 @@ namespace DCLF
 		FadeFrame inputs = buffers.fadeFrame;
 		if (buffers.fadeFrameNumber != Scene::FrameView::Get().GetFrame())
 			SampleFadeInputs(a_commit, buffers, rootSlots, inputs, logBase);
-		UploadFadeRoots(adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), inputs, logBase, buffers, uploads, PortalViews::Get().Encoded());
+		UploadFadeRoots(adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), inputs, logBase, buffers, uploads, Extensions::MainCullPrograms());
 		Scene::FrameView::Get().FadeRootsSent(buffers.FadeRootsContentEpoch(adopted));
 		// The fade events' header and readback slot (its last execution harvested first).
 		ArmFadeReadback(buffers, uploads);

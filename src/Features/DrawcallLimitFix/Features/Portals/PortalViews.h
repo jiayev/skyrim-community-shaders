@@ -29,7 +29,7 @@ namespace DCLF
 	 * and its BSCompoundFrustum builders (skyrim-engine-notes.md, "Portals, rooms and occluders"). The engine builds, in Main::Update,
 	 * a compound frustum per visible room (its children are culled through it; an unreached room is not culled into) and one for
 	 * unbound space. DCLF builds the same programs with its own copies of the shapes' scratch: it writes no engine object and reads
-	 * nothing the engine's culls wrote. Render thread, right after Main::Update's walk (PrimaryCull's PortalWalk hook).
+	 * nothing the engine's culls wrote. Render thread, right after Main::Update's walk (the feature's PortalWalk thunk, PortalsFeature.cpp).
 	 */
 	class PortalViews
 	{
@@ -99,7 +99,7 @@ namespace DCLF
 		BuildCounts TakeBuildCounts();
 
 		/**
-		 * @brief This frame's programs as FadeStateCS and BuildDraws read them (Records.h, kPortal*): view planes, directory (unbound
+		 * @brief This frame's programs as FadeStateCS and BuildDraws read them (PortalPrograms.h, kPortal*): view planes, directory (unbound
 		 * space, then rooms in order) and records; a header of no programs without a walk.
 		 */
 		void Encode(std::vector<std::uint32_t>& a_words) const;
