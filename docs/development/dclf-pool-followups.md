@@ -72,9 +72,9 @@ build packs with the record (a frame's move writes one row per signature), or co
 `SceneTables::materials`, so a publication shares the chunks nothing wrote.
 
 **Where.**
--   The capture and refresh: `Scene/Ports/MaterialSources.{h,cpp}`; `Scene/Coordinator/FrameConstants.cpp`
-    (`RefreshMaterialSignatures`); and `Scene/Ports/MaterialPortEffect.cpp` (`kFalloff` 0x38, `kBaseColor` 0x48).
--   The row: `Builders/MainBuild.cpp` (`WriteMaterialRow`) and `Builders/MainPayload.h` (`kMaterialRowParts`).
+-   The capture and refresh: `Core/Shading/MaterialSources.{h,cpp}`; `Core/Scene/Coordinator/FrameConstants.cpp`
+    (`RefreshMaterialSignatures`); and `Features/Effects/EffectMaterial.cpp` (`kFalloff` 0x38, `kBaseColor` 0x48).
+-   The row: `Core/Render/Payload/MainBuild.cpp` (`WriteMaterialRow`) and `Core/Render/Payload/MainPayload.h` (`kMaterialRowParts`).
 -   The pools: `Core/Gpu/FrameValues.{h,cpp}` (six pools, `kPools`).
 
 **Sketch** (for the effect values; the texture transforms' patch is the other way, and needs no shader change).

@@ -34,7 +34,7 @@ namespace DCLF
 					continue;
 				const std::uint32_t group = groups[entry.setIndex];
 				auto& bucket = groupBucket[group];
-				// A terrain group 1 slot's group (its depth pipeline's key holds no other: DrawPipelines.cpp, ZPipelineKey) has a twin
+				// A terrain group 1 slot's group (its depth pipeline's key holds no other: DrawPipelinesImpl.h, ZPipelineKey) has a twin
 				// bucket right after its own, as large, for its near blocks (BuildDrawsCS, kBucketTerrainPair; MainOpaquePass).
 				const bool terrain = RasterTerrainGroup(keys[p].rasterFlags) == 1;
 				if (bucket == kNoBucket) {

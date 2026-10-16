@@ -1191,7 +1191,7 @@ resident-draw, set and fade parity; motion m28/m29).
   a frame for their material, all served.
 - *6b, second part: the frame's engine values out of the tables* (y4, y6). Writing them into the frame's snapshot copy was
   rejected: the coordinator bumps the same version counters in its own tables, so versions would collide and the upload caches
-  that compare them would miss changes. Instead `FrameTables` (Scene/Model/FrameTables.h) holds them, written by the render thread only,
+  that compare them would miss changes. Instead `FrameTables` (Core/Scene/Model/FrameTables.h) holds them, written by the render thread only,
   versioned by its own counter, indexed by the tables' slots and keyed to them (a slot whose key, binding or record version moved
   is taken afresh): the pipelines' PerGeometry blocks; the technique rows' constants (the tables keep each row's key; the shadow
   mask is the key's low bit); the material records as the frame draws them (the coordinator's record with the writer events'
@@ -1677,7 +1677,7 @@ resident-draw, set and fade parity; motion m28/m29).
     only the known open flags. Present found the scene work running 85 times in 7,200 on the normal path (w69), never with the
     parities (their frames finish before it); the render thread's waits 0.006 ms a frame (the frame start's join).
   - *T6b2: the constants ported* (2026-10-10, w70-w87; the ports written by subagents in parallel, integrated and measured here):
-    - **The material port** (`Scene/Ports/MaterialPort.h`): `MaterialPort::Evaluate` makes SetupMaterial's record from a
+    - **The material port** (`Core/Shading/MaterialPort.h`): `MaterialPort::Evaluate` makes SetupMaterial's record from a
       `MaterialSnapshot` (the material's bytes, its class, its textures' views: `Capture`) and a `MaterialFrame` (the shader object's,
       the globals' and the render targets' values: `SampleFrame`). The parts: vanilla SetupMaterial 1414dc310 (`MaterialPortVanilla`,
       every technique and flag path, the class table by vtable with each class's size from its Create), TruePBR's replacement and its
@@ -1686,7 +1686,7 @@ resident-draw, set and fade parity; motion m28/m29).
       (`SceneStore::PortMaterial`: the new slots, the written materials, the frame components' samples); the engine's evaluation runs
       only as the parity (`CheckMaterialPort`, CS_DCLF_PERSISTENT_PARITY, `<- MATERIAL PORT`). IBLParams (PS 29, the shader object's,
       unread by the Lighting stages) moves within a frame: counted apart, not compared.
-    - **The pipeline template port** (`Scene/Ports/GeometryPort.h`): SetupGeometry's per-pipeline part (the sun, the ambient, the light
+    - **The pipeline template port** (`Core/Shading/GeometryPort.h`): SetupGeometry's per-pipeline part (the sun, the ambient, the light
       counts, the eye, SSRParams, the world map rows) from a sampled `PipelineFrame`; no per-pipeline value depends on the template
       object. SSE Engine Fixes' BSLightingAmbientSpecular fix writes PS 6 in SetupGeometry (and NOPs SetupMaterial's write): ported,
       the patch found by its instruction (engine notes). The parity `<- GEOMETRY PORT` against the template's evaluation.
@@ -2167,7 +2167,7 @@ resident-draw, set and fade parity; motion m28/m29).
       before the main cull). The commit sees the joins' new pipelines and records, so members join a frame earlier and
       `members patched by the accumulate phase` must stay 0. The joins and the publication lengthen the pass that Present tries to join.
   - *T6b3d: the pump; the joins out* (2026-10-10; w122-w130: parity and normal path run after each revision; the last wake revision written, not run yet). The
-    scene pass is no longer kicked or joined by the frame: a `SerializedTaskPump` (the coordinator's pump, `Scene/Coordinator/ScenePump.cpp`,
+    scene pass is no longer kicked or joined by the frame: a `SerializedTaskPump` (the coordinator's pump, `Core/Scene/Coordinator/ScenePump.cpp`,
     a new file) runs `RunSceneWork` on the scene lane when one of its producers wakes it with an input, any number of times a frame
     (bursts) or none (menus).
     - **The lane.** The pump dispatches onto `SceneScheduler::SceneLane()` (its `Coordinator` class), not `Executor()`'s coordinator: the

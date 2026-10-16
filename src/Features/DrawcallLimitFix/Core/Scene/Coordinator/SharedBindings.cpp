@@ -18,6 +18,35 @@ namespace DCLF::Scene
 	{
 		ZoneScopedN("CS.DCLF.Scene.SharedBindings");
 		auto& sb = sharedBindings;
+		const std::uint32_t answeredKinds = DrainSharedReplies();
+		// The shadow textures answered (an answer for one the index has let go meanwhile is dropped with arrived).
+		if (answeredKinds & (1u << SharedBindings::kShadow))
+			for (const auto& answer : sb.arrived)
+				ResolveShadowTextureBinding(answer.first);
+		TakeFixedBindings();
+		// The projected textures: a new capture's views asked for (the capture holds them meanwhile), else the pending ones answered.
+		if (auto capture = channels.projectedPosted.load(std::memory_order_acquire); capture != sb.projectedSeen) {
+			sb.projectedSeen = std::move(capture);
+			++sb.stats.projectedCaptures;
+			ResolveProjectedBindings(0xf);
+		} else if (sb.projectedPending && (answeredKinds & (1u << SharedBindings::kProjected))) {
+			ResolveProjectedBindings(sb.projectedPending);
+		}
+		ResolveMaskBindings();
+		// The shadow textures the dependency index added or removed since the last pass (RefreshShadowSets, the walk's).
+		std::vector<std::pair<ID3D11ShaderResourceView*, bool>> changes;
+		tables.TakeShadowTextureChanges(changes);
+		ApplyShadowTextureChanges(changes);
+		sb.arrived.clear();
+		SealSharedBindingBlock();
+		TracyPlot("CS.DCLF.ShadowTextureChanges", static_cast<std::int64_t>(changes.size()));
+		TracyPlot("CS.DCLF.ShadowTexturePending", static_cast<std::int64_t>(sb.shadowPending));
+		TracyPlot("CS.DCLF.ShadowTextureOwners", static_cast<std::int64_t>(sb.shadowTextures.size() - sb.shadowPending));
+	}
+
+	std::uint32_t Coordinator::DrainSharedReplies()
+	{
+		auto& sb = sharedBindings;
 		// The answers since the last pass, each to every kind that waited on its view. An answer nobody waits on any more lets its owner go
 		// here: the last release of an import, or of its descriptor, runs on the cleanup queue (ResourceCleanupQueue::Make).
 		std::uint32_t answeredKinds = 0;
@@ -52,10 +81,12 @@ namespace DCLF::Scene
 			}
 			sb.arrived[a_reply.view] = std::move(a_reply.binding);
 		});
-		// The shadow textures answered (an answer for one the index has let go meanwhile is dropped with arrived).
-		if (answeredKinds & (1u << SharedBindings::kShadow))
-			for (const auto& answer : sb.arrived)
-				ResolveShadowTextureBinding(answer.first);
+		return answeredKinds;
+	}
+
+	void Coordinator::TakeFixedBindings()
+	{
+		auto& sb = sharedBindings;
 		// The fixed bindings, as the render thread last published them with the import context: made there once, read here. Written into
 		// the lookups where they differ: the null texture and the samplers are the shadow builds' too, so either moves both
 		// generations, and is a new shared version.
@@ -84,14 +115,11 @@ namespace DCLF::Scene
 			sb.sharedChanged = true;
 			++sb.stats.fixedPublished;
 		}
-		// The projected textures: a new capture's views asked for (the capture holds them meanwhile), else the pending ones answered.
-		if (auto capture = channels.projectedPosted.load(std::memory_order_acquire); capture != sb.projectedSeen) {
-			sb.projectedSeen = std::move(capture);
-			++sb.stats.projectedCaptures;
-			ResolveProjectedBindings(0xf);
-		} else if (sb.projectedPending && (answeredKinds & (1u << SharedBindings::kProjected))) {
-			ResolveProjectedBindings(sb.projectedPending);
-		}
+	}
+
+	void Coordinator::ResolveMaskBindings()
+	{
+		auto& sb = sharedBindings;
 		// Each used pipeline's technique mask, from its row (the rows follow this pass's frame sample: RefreshTechniqueRows). The row's
 		// view is the frame's shadow mask target, which the frame's capture holds.
 		if (sb.masks.size() < tables.pipelines.size())
@@ -157,10 +185,12 @@ namespace DCLF::Scene
 						[&] { return fmt::format("pipeline {}: its technique mask moved outside the change set", a_slot); });
 				});
 		}
-		// The shadow textures the dependency index added or removed since the last pass (RefreshShadowSets, the walk's).
-		std::vector<std::pair<ID3D11ShaderResourceView*, bool>> changes;
-		tables.TakeShadowTextureChanges(changes);
-		for (const auto& [view, present] : changes) {
+	}
+
+	void Coordinator::ApplyShadowTextureChanges(const std::vector<std::pair<ID3D11ShaderResourceView*, bool>>& a_changes)
+	{
+		auto& sb = sharedBindings;
+		for (const auto& [view, present] : a_changes) {
 			if (present) {
 				if (!sb.shadowTextures.try_emplace(view).second)
 					continue;
@@ -181,7 +211,11 @@ namespace DCLF::Scene
 				++sb.stats.shadowRemoved;
 			}
 		}
-		sb.arrived.clear();
+	}
+
+	void Coordinator::SealSharedBindingBlock()
+	{
+		auto& sb = sharedBindings;
 		// The shared entries' binding block: the owners of what they name, sealed again when one changed.
 		if (sb.sharedChanged) {
 			std::vector<std::shared_ptr<const void>> owners;
@@ -196,9 +230,6 @@ namespace DCLF::Scene
 			++lookups.changes;
 			sb.sharedChanged = false;
 		}
-		TracyPlot("CS.DCLF.ShadowTextureChanges", static_cast<std::int64_t>(changes.size()));
-		TracyPlot("CS.DCLF.ShadowTexturePending", static_cast<std::int64_t>(sb.shadowPending));
-		TracyPlot("CS.DCLF.ShadowTextureOwners", static_cast<std::int64_t>(sb.shadowTextures.size() - sb.shadowPending));
 	}
 
 	GpuTextures::Binding Coordinator::SharedViewBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, SharedBindings::Kind a_kind)

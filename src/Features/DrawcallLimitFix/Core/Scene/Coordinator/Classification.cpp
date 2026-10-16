@@ -156,69 +156,8 @@ namespace DCLF::Scene
 				break;
 			}
 		}
-		if (removedAny || removedRoot) {
-			// The members of the cells that went away, and of the category nodes a changed portal root was filed under (only those can
-			// hold an entry whose chain tops out at that root): the index's, not a walk over every tracked entry.
-			auto& a = attachStats;
-			std::vector<RE::BSGeometry*> stale;
-			// Filed under a portal root: stale when the root left.
-			auto portalStale = [&](RE::BSGeometry* a_geometry, const RE::NiNode* a_category) {
-				const void* top = a_geometry;
-				const void* parent = mirror.Parent(top);
-				for (; parent && parent != a_category; parent = mirror.Parent(top))
-					top = parent;
-				if (parent || !alwaysRenderRoots.contains(static_cast<const RE::NiAVObject*>(top)))
-					return false;
-				const auto it = currentRoots.find(static_cast<const RE::NiAVObject*>(top));
-				return it == currentRoots.end() || it->second.category != a_category;
-			};
-			// Every category node entries are filed under that the capture lacks (a portal category too, not a category node itself).
-			std::vector<const RE::NiNode*> scanned;
-			for (const auto& [node, members] : categoryMembers)
-				if (!current.contains(const_cast<RE::NiNode*>(node))) {
-					++a.categoriesLeft;
-					scanned.push_back(node);
-				}
-			const std::size_t gone = scanned.size();
-			if (removedRoot)
-				for (const auto& [root, entry] : alwaysRenderRoots)
-					if (const auto it = currentRoots.find(root); (it == currentRoots.end() || it->second.category != entry.category) && current.contains(const_cast<RE::NiNode*>(entry.category)) &&
-																 std::find(scanned.begin(), scanned.end(), entry.category) == scanned.end())
-						scanned.push_back(entry.category);
-			for (std::size_t i = 0; i < scanned.size(); ++i) {
-				const auto members = categoryMembers.find(scanned[i]);
-				if (members == categoryMembers.end())
-					continue;
-				for (auto* geometry : members->second) {
-					const auto entry = tracked.find(geometry);
-					if (entry == tracked.end() || entry->second.categoryNode != scanned[i])
-						continue;
-					a.rootsLeftScanned += i >= gone ? 1 : 0;
-					if (i < gone || portalStale(geometry, scanned[i]))
-						stale.push_back(geometry);
-				}
-			}
-			a.categoryMembersDropped += stale.size();
-			if (Policy::CheckCategoryMembers(true, passSerial)) {
-				// Parity: the whole scan's stale set (the walk the index replaced) against the index's.
-				std::vector<RE::BSGeometry*> whole;
-				for (auto& [geometry, entry] : tracked)
-					if (!current.contains(entry.categoryNode) || (removedRoot && alwaysRenderRoots.size() && portalStale(geometry, entry.categoryNode)))
-						whole.push_back(geometry);
-				std::vector<RE::BSGeometry*> indexed = stale;
-				std::ranges::sort(whole);
-				std::ranges::sort(indexed);
-				++a.categoryChecks;
-				if (whole != indexed) {
-					if (a.categoryDiffer++ == 0)
-						a.categoryFirst = fmt::format("a refresh dropped {} entries by the index, {} by the whole scan ({} cells gone, {} portal categories scanned)", indexed.size(),
-							whole.size(), gone, scanned.size() - gone);
-				}
-				CheckCategoryMembers("a refresh's removal");
-			}
-			for (auto* geometry : stale)
-				EraseTracked(geometry);
-		}
+		if (removedAny || removedRoot)
+			DropRemovedCategories(*capture, removedRoot);
 		std::vector<RE::NiAVObject*> addedRoots;
 		for (const auto& [root, entry] : currentRoots) {
 			if (!alwaysRenderRoots.contains(root) && categoryNodes.contains(entry.category))
@@ -240,15 +179,88 @@ namespace DCLF::Scene
 		for (const auto& [root, entry] : currentRoots)
 			alwaysRenderRoots.emplace(root, AlwaysRenderRoot{ entry.root, entry.category });
 		std::erase_if(categoryFound, [&](const auto& a_entry) { return !categoryNodes.contains(const_cast<RE::NiNode*>(a_entry.first)); });
+		TrackAppearedCategories(*capture, added, addedRoots, cause);
+	}
+
+	void Coordinator::DropRemovedCategories(const CategoryCapture& a_capture, bool a_removedRoot)
+	{
+		const auto& current = a_capture.nodes;
+		const auto& currentRoots = a_capture.roots;
+		// The members of the cells that went away, and of the category nodes a changed portal root was filed under (only those can
+		// hold an entry whose chain tops out at that root): the index's, not a walk over every tracked entry.
+		auto& a = attachStats;
+		std::vector<RE::BSGeometry*> stale;
+		// Filed under a portal root: stale when the root left.
+		auto portalStale = [&](RE::BSGeometry* a_geometry, const RE::NiNode* a_category) {
+			const void* top = a_geometry;
+			const void* parent = mirror.Parent(top);
+			for (; parent && parent != a_category; parent = mirror.Parent(top))
+				top = parent;
+			if (parent || !alwaysRenderRoots.contains(static_cast<const RE::NiAVObject*>(top)))
+				return false;
+			const auto it = currentRoots.find(static_cast<const RE::NiAVObject*>(top));
+			return it == currentRoots.end() || it->second.category != a_category;
+		};
+		// Every category node entries are filed under that the capture lacks (a portal category too, not a category node itself).
+		std::vector<const RE::NiNode*> scanned;
+		for (const auto& [node, members] : categoryMembers)
+			if (!current.contains(const_cast<RE::NiNode*>(node))) {
+				++a.categoriesLeft;
+				scanned.push_back(node);
+			}
+		const std::size_t gone = scanned.size();
+		if (a_removedRoot)
+			for (const auto& [root, entry] : alwaysRenderRoots)
+				if (const auto it = currentRoots.find(root); (it == currentRoots.end() || it->second.category != entry.category) && current.contains(const_cast<RE::NiNode*>(entry.category)) &&
+															 std::find(scanned.begin(), scanned.end(), entry.category) == scanned.end())
+					scanned.push_back(entry.category);
+		for (std::size_t i = 0; i < scanned.size(); ++i) {
+			const auto members = categoryMembers.find(scanned[i]);
+			if (members == categoryMembers.end())
+				continue;
+			for (auto* geometry : members->second) {
+				const auto entry = tracked.find(geometry);
+				if (entry == tracked.end() || entry->second.categoryNode != scanned[i])
+					continue;
+				a.rootsLeftScanned += i >= gone ? 1 : 0;
+				if (i < gone || portalStale(geometry, scanned[i]))
+					stale.push_back(geometry);
+			}
+		}
+		a.categoryMembersDropped += stale.size();
+		if (Policy::CheckCategoryMembers(true, passSerial)) {
+			// Parity: the whole scan's stale set (the walk the index replaced) against the index's.
+			std::vector<RE::BSGeometry*> whole;
+			for (auto& [geometry, entry] : tracked)
+				if (!current.contains(entry.categoryNode) || (a_removedRoot && alwaysRenderRoots.size() && portalStale(geometry, entry.categoryNode)))
+					whole.push_back(geometry);
+			std::vector<RE::BSGeometry*> indexed = stale;
+			std::ranges::sort(whole);
+			std::ranges::sort(indexed);
+			++a.categoryChecks;
+			if (whole != indexed) {
+				if (a.categoryDiffer++ == 0)
+					a.categoryFirst = fmt::format("a refresh dropped {} entries by the index, {} by the whole scan ({} cells gone, {} portal categories scanned)", indexed.size(),
+						whole.size(), gone, scanned.size() - gone);
+			}
+			CheckCategoryMembers("a refresh's removal");
+		}
+		for (auto* geometry : stale)
+			EraseTracked(geometry);
+	}
+
+	void Coordinator::TrackAppearedCategories(const CategoryCapture& a_capture, const std::vector<RE::NiNode*>& a_added,
+		const std::vector<RE::NiAVObject*>& a_addedRoots, std::uint8_t a_cause)
+	{
 		const TrackSource previousSource = addSource;
 		if (addSource != TrackSource::Rescan)
 			addSource = TrackSource::CategoryAppeared;
 		// Roots listed in walk order, then tracked together (AddSubtrees prepares on the pool for a rescan and merges in this order).
 		std::vector<std::pair<RE::NiAVObject*, SubtreeSource>> walked;
-		for (auto* node : added) {
-			categoryFound[node] = { sceneFrame, cause };
-			const auto keys = capture->children.find(node);
-			if (keys == capture->children.end()) {
+		for (auto* node : a_added) {
+			categoryFound[node] = { sceneFrame, a_cause };
+			const auto keys = a_capture.children.find(node);
+			if (keys == a_capture.children.end()) {
 				++categoryChildrenMissing;
 				continue;
 			}
@@ -257,10 +269,10 @@ namespace DCLF::Scene
 		}
 		// Roots of a graph whose shared node just appeared.
 		for (const auto& [root, entry] : alwaysRenderRoots) {
-			if (std::find(added.begin(), added.end(), entry.category) != added.end())
+			if (std::find(a_added.begin(), a_added.end(), entry.category) != a_added.end())
 				walked.emplace_back(entry.root.get(), SubtreeSource::CategoryWalk);
 		}
-		for (auto* root : addedRoots)
+		for (auto* root : a_addedRoots)
 			walked.emplace_back(root, SubtreeSource::CategoryWalk);
 		AddSubtrees(walked);
 		addSource = previousSource;

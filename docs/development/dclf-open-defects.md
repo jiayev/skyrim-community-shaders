@@ -49,7 +49,7 @@ already do (`DrawPipelines::ReadEngineState`).
 
 ## Stood-in animated references that never fade freeze (found by T7b0, 2026-10-11; fixed by T7b2, pending validation)
 
-`SyncRootOwnership` (formerly `SyncFadeOwnership`; `Engine/Cull/PrimaryCull.cpp` ~828) clears kAccumulated (bit 26) on the roots DCLF stands in for, and nothing
+`SyncRootOwnership` (formerly `SyncFadeOwnership`; `Core/Handoff/PrimaryCull.cpp` ~842) clears kAccumulated (bit 26) on the roots DCLF stands in for, and nothing
 sets it again while they are stood in. `FUN_1402cff60` (`UpdateAnimationJob`'s and the managed nodes' gate, on `ref->Get3D()`)
 then takes its "not accumulated" path (`skyrim-engine-notes.md`, "T7b0"):
 
@@ -195,7 +195,7 @@ rewrite runs `msp` at every sub-step, which shows if the rate changes.
 
 ## Material transform moves: nothing drains the queue without the kept shadow build (found 2026-10-15; not investigated)
 
-`TransformMoves` (Engine/Capture/MaterialWrites.cpp, drained by `Extensions::DrainTransformMoves`) has one consumer, the kept shadow
+`TransformMoves` (Core/Shading/MaterialWrites.cpp, drained by `Extensions::DrainTransformMoves`) has one consumer, the kept shadow
 build's `WatchTransformMoves`. In a configuration that never runs the kept build, nothing drains it, and the EventQueue spills when it
 fills. This predates the B2/wave-3 moves, which only renamed the queue.
 
@@ -247,7 +247,7 @@ were left open:
 Left open by the polls-to-events pass (dclf-async-publication.md, "Polls become events"):
 
 -   **`CS.DCLF.ListJobsWait` remains.** The zone is the engine's own fork-join (`JobList::Finish` over the main camera's
-    scene-list cull jobs, `ListJobsFinish` in `Engine/Cull/PrimaryCull.cpp`), not a DCLF lock: the render thread waits while
+    scene-list cull jobs, `ListJobsFinish` in `Core/Handoff/PrimaryCull.cpp`), not a DCLF lock: the render thread waits while
     engine job threads cull the residue left in the lists (about 193 entries per DCLF build in the motion run; 0.17 ms in
     median frames, 0.5 ms on average and 1.6 ms at most in the worst). The per-reason counters of entries kept in the lists
     say what to shrink next. The wait ends only when DCLF owns that residue (dclf-cull-job-elimination.md).
@@ -285,7 +285,7 @@ The motion run after it: the average pass 559 us (target 0.4 ms), the worst 30 p
     -   `ResolveMaterialBinding` still resolves on the lane.
     -   The walk merge's `geometryIndex` lookup cannot move into the evaluation without an index frozen per round.
     -   The shadow build's pre-phase (records, material rows, mode evaluation) does not overlap the main build: it needs a
-        two-stage `ShadowBuildStages` in `Builders/ShadowBuild.h`, as `MainBuildStages`.
+        two-stage `ShadowBuildStages` in `Core/Render/Shadow/ShadowBuild.h`, as `MainBuildStages`.
 -   **The builder's O(whole) left.** The main build's last stage copies the primary segment's payload whole into the other
     segment's (`other = out`) before giving it its own inputs; `PackPipelines` still compares every pipeline (O(P)).
 -   **Texture transforms before the Z-prepass epoch.** `cs.dclf.z.texture-transforms` runs first in the Z-prepass epoch, so an
@@ -295,7 +295,7 @@ The motion run after it: the average pass 559 us (target 0.4 ms), the worst 30 p
 -   **Capture parity's `CompareMaterial` must leave out VS variable 11.** A record now keeps its capture-time `TexcoordOffset`
     (the GPU patches the rows), so under `CS_DCLF_CAPTURE_PARITY` every scrolling material mismatches there. Leave out the
     variable in that `CompareBlock`, or compare it with FrameValues' entry for the slot (`TextureTransformList`). Comments
-    still naming `RefreshMaterialTransforms` or the transform watch: `Scene/Model/Tables.h`, `Scene/Ports/MaterialPortFrame.h`.
+    still naming `RefreshMaterialTransforms` or the transform watch: `Core/Scene/Model/Tables.h`, `Core/Shading/MaterialPortFrame.h`.
 -   **Mirror parity under lane mode flags late or missed node fields with movement.** Likely asynchronous timing rather than a
     missed writer; not attributed. The parity system is to be reworked for the asynchronous scene.
 -   **A material row is keyed per material but packed per pair (latent).** `MainRows::materials[m]` is one row per material slot,
@@ -737,7 +737,7 @@ epochs all submitted.
 -   **What PrimaryCull asked.** `RunAdmission` (every member of a pending entry) and `RefreshWalk` (DCLF members not in the set)
     asked "is this member still tracked?" only as a liveness guard: an untracked member may be freed, so admission waits rather than
     dereference it in `MemberShown`.
--   **Fix (`Engine/Cull/PrimaryCull.cpp`).** Both answer from the cut's candidate snapshot (`cut.candidates->geometries`, the
+-   **Fix (`Core/Handoff/PrimaryCull.cpp`).** Both answer from the cut's candidate snapshot (`cut.candidates->geometries`, the
     frame's `FrameView::GetSunCandidates()`), which comes with the installed publication. The snapshot lists exactly what was tracked
     when it was published: a sun entry is a candidate only while every dependent geometry is tracked (`UpdateSunCandidates`), and an
     untrack or a new tracked dependent rewrites the entry (its signature mixes each dependent and its slot), so the next snapshot drops

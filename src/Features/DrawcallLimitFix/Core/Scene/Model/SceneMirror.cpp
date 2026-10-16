@@ -117,6 +117,29 @@ namespace DCLF
 		replaying = false;
 	}
 
+	namespace
+	{
+		/** @brief ApplyCapture's parity: every prepared record is its capture's, stamped with the capture's sequence. */
+		void CheckPrepared(const Records& a_records, const SceneMirror::Prepared& a_prepared, std::uint64_t& a_checked, std::uint64_t& a_wrong)
+		{
+			const std::uint64_t sequence = a_records.sequence;
+			++a_checked;
+			bool wrong = a_prepared.nodes.size() != a_records.nodes.size() || a_prepared.geometries.size() != a_records.geometries.size() ||
+			             a_prepared.properties.size() != a_records.properties.size() || a_prepared.alphas.size() != a_records.alphas.size();
+			auto compare = [&](const auto& a_ready, const auto& a_captured) {
+				for (std::size_t i = 0; !wrong && i < a_ready.size(); ++i)
+					wrong = a_ready[i].key != a_captured[i].key || a_ready[i].sequence != sequence || a_ready[i].Differ(a_captured[i]) != 0;
+			};
+			if (!wrong) {
+				compare(a_prepared.nodes, a_records.nodes);
+				compare(a_prepared.geometries, a_records.geometries);
+				compare(a_prepared.properties, a_records.properties);
+				compare(a_prepared.alphas, a_records.alphas);
+			}
+			a_wrong += wrong ? 1 : 0;
+		}
+	}
+
 	void SceneMirror::ApplyCapture(const Records& a_records, Prepared* a_prepared)
 	{
 		ZoneScopedN("CS.DCLF.Scene.Mirror.Capture");
@@ -142,23 +165,8 @@ namespace DCLF
 		};
 		assert(!a_prepared || (a_prepared->nodes.size() == a_records.nodes.size() && a_prepared->geometries.size() == a_records.geometries.size() &&
 								  a_prepared->properties.size() == a_records.properties.size() && a_prepared->alphas.size() == a_records.alphas.size()));
-		if (a_prepared && checking) {
-			// Parity: every prepared record is its capture's, stamped with the capture's sequence.
-			++work.preparedChecked;
-			bool wrong = a_prepared->nodes.size() != a_records.nodes.size() || a_prepared->geometries.size() != a_records.geometries.size() ||
-			             a_prepared->properties.size() != a_records.properties.size() || a_prepared->alphas.size() != a_records.alphas.size();
-			auto compare = [&](const auto& a_ready, const auto& a_captured) {
-				for (std::size_t i = 0; !wrong && i < a_ready.size(); ++i)
-					wrong = a_ready[i].key != a_captured[i].key || a_ready[i].sequence != sequence || a_ready[i].Differ(a_captured[i]) != 0;
-			};
-			if (!wrong) {
-				compare(a_prepared->nodes, a_records.nodes);
-				compare(a_prepared->geometries, a_records.geometries);
-				compare(a_prepared->properties, a_records.properties);
-				compare(a_prepared->alphas, a_records.alphas);
-			}
-			work.preparedWrong += wrong ? 1 : 0;
-		}
+		if (a_prepared && checking)
+			CheckPrepared(a_records, *a_prepared, work.preparedChecked, work.preparedWrong);
 		// Properties and alphas first (their values), then the geometries that count their uses.
 		for (std::size_t i = 0; i < a_records.properties.size(); ++i)
 			take(properties[a_records.properties[i].key].record, a_records.properties[i], a_prepared ? &a_prepared->properties[i] : nullptr);

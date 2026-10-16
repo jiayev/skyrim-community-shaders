@@ -25,7 +25,7 @@ namespace DCLF
 	unsigned BuildWidth();
 
 	/**
-	 * @brief The pipeline lane: the coordinator of the Lighting programs and pipelines (DrawPipelines.cpp, Impl::Lane).
+	 * @brief The pipeline lane: the coordinator of the Lighting programs and pipelines (DrawPipelinesImpl.h, Impl::Lane; DrawPipelines.cpp drains it).
 	 * One drain pass at a time on DCLF's coordinator (SceneScheduler::Executor(), SceneExecutor::Coordinator), scheduled by
 	 * WakePipelineLane, which any thread calls after it posts something the lane takes: a request, a compile's or a build's
 	 * completion, the frame's inputs. Wakes coalesce (org::async::SerializedTaskPump: lock-free, level-triggered), and a wake

@@ -77,6 +77,56 @@ namespace DCLF::Scene
 		}
 	}
 
+	/** @brief ResolveMaterialBinding's textures: each bound or cleared against the entry's held owner block, the changes collected. */
+	struct Coordinator::MaterialTextureBinder
+	{
+		Coordinator& self;
+		std::uint32_t slot;
+		bool sameGeneration;
+		bool wasResolved;
+		const Lookups::MaterialOwners* owners;  // the owners held now (the entry's block, immutable)
+		bool& changed;
+		bool held = false, pending = false, ownersChanged = false;
+		Lookups::MaterialOwners next;  // the owners that change, sealed into a new block after
+		std::uint32_t texturesMoved = 0, featuresMoved = 0;
+
+		// One texture: kept while its view and binding stand; held while a resolved entry's new view is asked for; else what is known.
+		void Bind(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, std::uint32_t& a_index, bool a_feature, std::uint32_t a_at,
+			ID3D11ShaderResourceView*& a_seen)
+		{
+			const void* owner = owners ? (a_feature ? owners->features[a_at] : owners->textures[a_at]).get() : nullptr;
+			if (sameGeneration && a_seen == a_view && owner && a_index != Lookups::kNone)
+				return;
+			auto binding = self.MaterialViewBinding(a_view, a_sourceTag, slot);
+			if (binding.pending && wasResolved && owner && a_index != Lookups::kNone) {
+				held = true;
+				return;
+			}
+			pending |= binding.pending;
+			const bool ownerChanged = owner != binding.owner.get();
+			changed |= ownerChanged || a_index != binding.index;
+			if (ownerChanged) {
+				ownersChanged = true;
+				(a_feature ? featuresMoved : texturesMoved) |= 1u << a_at;
+				(a_feature ? next.features[a_at] : next.textures[a_at]) = std::move(binding.owner);
+			}
+			a_index = binding.index;
+			a_seen = a_view;
+		}
+
+		void Clear(std::uint32_t& a_index, bool a_feature, std::uint32_t a_at, ID3D11ShaderResourceView*& a_seen)
+		{
+			const bool owner = owners && (a_feature ? owners->features[a_at] : owners->textures[a_at]);
+			changed |= a_index != Lookups::kNone || owner;
+			if (owner) {
+				ownersChanged = true;
+				(a_feature ? featuresMoved : texturesMoved) |= 1u << a_at;
+			}
+			a_index = Lookups::kNone;
+			a_seen = nullptr;
+		}
+	};
+
 	void Coordinator::ResolveMaterialBinding(std::uint32_t a_slot)
 	{
 		auto& mb = materialBindings;
@@ -116,57 +166,23 @@ namespace DCLF::Scene
 		// Readiness is held (the DCLF set: a member joined because its material resolved, and the engine no longer draws it): a resolved
 		// entry whose view changed keeps drawing with the previous view, whose import its owner still holds, until the new one is answered.
 		const bool wasResolved = entry.resolved && sameGeneration;
-		bool held = false, pending = false, ownersChanged = false;
 		// The owners held now (the entry's block, immutable); those that change are collected and sealed into a new block after.
-		const Lookups::MaterialOwners* owners = entry.bindingBlock.get();
-		Lookups::MaterialOwners next;
-		std::uint32_t texturesMoved = 0, featuresMoved = 0;
-		// One texture: kept while its view and binding stand; held while a resolved entry's new view is asked for; else what is known.
-		auto bind = [&](ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, std::uint32_t& a_index, bool a_feature, std::uint32_t a_at,
-						ID3D11ShaderResourceView*& a_seen) {
-			const void* owner = owners ? (a_feature ? owners->features[a_at] : owners->textures[a_at]).get() : nullptr;
-			if (sameGeneration && a_seen == a_view && owner && a_index != Lookups::kNone)
-				return;
-			auto binding = MaterialViewBinding(a_view, a_sourceTag, a_slot);
-			if (binding.pending && wasResolved && owner && a_index != Lookups::kNone) {
-				held = true;
-				return;
-			}
-			pending |= binding.pending;
-			const bool ownerChanged = owner != binding.owner.get();
-			changed |= ownerChanged || a_index != binding.index;
-			if (ownerChanged) {
-				ownersChanged = true;
-				(a_feature ? featuresMoved : texturesMoved) |= 1u << a_at;
-				(a_feature ? next.features[a_at] : next.textures[a_at]) = std::move(binding.owner);
-			}
-			a_index = binding.index;
-			a_seen = a_view;
-		};
-		auto clear = [&](std::uint32_t& a_index, bool a_feature, std::uint32_t a_at, ID3D11ShaderResourceView*& a_seen) {
-			const bool owner = owners && (a_feature ? owners->features[a_at] : owners->textures[a_at]);
-			changed |= a_index != Lookups::kNone || owner;
-			if (owner) {
-				ownersChanged = true;
-				(a_feature ? featuresMoved : texturesMoved) |= 1u << a_at;
-			}
-			a_index = Lookups::kNone;
-			a_seen = nullptr;
-		};
+		MaterialTextureBinder binder{ *this, a_slot, sameGeneration, wasResolved, entry.bindingBlock.get(), changed };
 		const std::uint32_t textureWritten = material.textureWritten & ~(MaterialSources::FrameCharacterLight(key.second) ? 1u << kCharacterLightTexture : 0u);
 		for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
 			if ((textureWritten >> t) & 1)
-				bind(material.textures[t], t, entry.textureIndex[t], false, t, entry.views[t]);  // a null view: the null descriptor
+				binder.Bind(material.textures[t], t, entry.textureIndex[t], false, t, entry.views[t]);  // a null view: the null descriptor
 			else
-				clear(entry.textureIndex[t], false, t, entry.views[t]);
+				binder.Clear(entry.textureIndex[t], false, t, entry.views[t]);
 		}
 		for (std::uint32_t f = 0; f < Extensions::kFeatureTextureSlots; ++f) {
 			if (material.featureTextures[f])
-				bind(material.featureTextures[f], kFeatureSourceTag + f, entry.featureIndex[f], true, f, entry.featureViews[f]);
+				binder.Bind(material.featureTextures[f], kFeatureSourceTag + f, entry.featureIndex[f], true, f, entry.featureViews[f]);
 			else
-				clear(entry.featureIndex[f], true, f, entry.featureViews[f]);
+				binder.Clear(entry.featureIndex[f], true, f, entry.featureViews[f]);
 		}
 		// A texture still asked for leaves the slot unresolved: its draws defer (they stay the engine's) until the answer resolves it.
+		const bool pending = binder.pending;
 		if (entry.resolved == pending) {
 			changed = true;
 			if (!pending)
@@ -176,9 +192,9 @@ namespace DCLF::Scene
 		entry.written = material.textureWritten;  // the record's, so a character-light pass's is not resolved again every pass
 		entry.texturesGeneration = textureGeneration;
 		entry.recordVersion = tables.materialVersion[a_slot];
-		mb.held[a_slot] = held ? 1 : 0;
-		if (ownersChanged)
-			entry.bindingBlock = SealMaterialOwners(key.first, owners, next, texturesMoved, featuresMoved);
+		mb.held[a_slot] = binder.held ? 1 : 0;
+		if (binder.ownersChanged)
+			entry.bindingBlock = SealMaterialOwners(key.first, binder.owners, binder.next, binder.texturesMoved, binder.featuresMoved);
 		if (changed)
 			mb.MarkChanged(a_slot);
 	}

@@ -594,6 +594,10 @@ namespace DCLF
 		 */
 		const void* AncestorKeyOf(const void* a_object) const;
 		void ApplyMirrorEvents(const EventBatch& a_batch, BatchIndex& a_index);
+		// ApplyMirrorEvents' stages: the batch's pins and the captures to prepare (one walk), the apply's work counters, the uses parity.
+		void PinMirrorBatch(const EventBatch& a_batch, std::vector<const SceneCapture::Records*>& a_captures, std::size_t& a_records);
+		void CountMirrorWork();
+		void CheckMirrorRecordUses();
 
 		// The dependents lists and the root owners: State/Dependents.h (CoordinatorDependents).
 		/** @brief Lists an evaluated entry under its properties; UnlistDependents takes it off every list. */
@@ -613,6 +617,10 @@ namespace DCLF
 		// The category nodes and the CategoryRoot views' roots: State/Categories.h (CoordinatorCategories).
 		/** @brief Diffs the category nodes and portal roots against the taken capture when it is new or a_force (the post-load rescan). */
 		void RefreshCategoryNodes(bool a_force = false);
+		// RefreshCategoryNodes' stages: the entries of the cells and portal roots that went away erased; the new ones' subtrees tracked.
+		void DropRemovedCategories(const CategoryCapture& a_capture, bool a_removedRoot);
+		void TrackAppearedCategories(const CategoryCapture& a_capture, const std::vector<RE::NiNode*>& a_added,
+			const std::vector<RE::NiAVObject*>& a_addedRoots, std::uint8_t a_cause);
 		/** @brief First in the pass, before the drains: takes the newest category capture posted. */
 		void TakeCategoryCapture();
 		/**
@@ -842,6 +850,13 @@ namespace DCLF
 		/** @brief Drops what a load screen invalidated (NoteLoadingScreen's marker). */
 		void ApplyLoading();
 		void ApplyBatch(std::shared_ptr<EventBatch> a_batch);
+		// ApplyBatch's stages: the post-load rescan's clear, the category refresh and retries, the attach/detach merge (its detaches
+		// erased last), the leaf updates' property holds.
+		void ClearForRescan();
+		void RefreshBatchCategories(const BatchIndex& a_index, bool a_rescanned);
+		void ApplyAttachDetach(const BatchIndex& a_index);
+		void ApplyDetaches(const std::vector<RE::BSGeometry*>& a_detached);
+		void HoldLeafProperties(const BatchIndex& a_index);
 
 		// The shading events: State/Shading.h (CoordinatorShading).
 		/** @brief A slot's ShadingItem into shadingNamed (none for a free, unbound or propertyless slot). */
@@ -968,6 +983,8 @@ namespace DCLF
 		void UpdateMaterialBindings();
 		/** @brief A used slot's entry written from its record; bindings requested for views with none known. */
 		void ResolveMaterialBinding(std::uint32_t a_slot);
+		/** @brief ResolveMaterialBinding's per-texture binder: one slot's textures bound or cleared, its owner changes collected (MaterialBindings.cpp). */
+		struct MaterialTextureBinder;
 		/**
 		 * @brief An entry's new owner block: a_next's moved owners (bits of a_texturesMoved / a_featuresMoved) with a_held's others, sealed,
 		 * or the block another slot of a_material sealed for the same owners; null when none is held.
@@ -987,6 +1004,16 @@ namespace DCLF
 		 * textures requested or released.
 		 */
 		void UpdateSharedBindings();
+		/** @brief UpdateSharedBindings' answers drained into arrived and the cache; returns the kinds that waited on them. */
+		std::uint32_t DrainSharedReplies();
+		/** @brief UpdateSharedBindings' fixed bindings (null texture, samplers) taken from GpuTextures::Fixed where they moved. */
+		void TakeFixedBindings();
+		/** @brief UpdateSharedBindings' technique masks: the change set (or every used one on a sweep) resolved, then the parity. */
+		void ResolveMaskBindings();
+		/** @brief UpdateSharedBindings' shadow textures the dependency index added (requested) or removed (released). */
+		void ApplyShadowTextureChanges(const std::vector<std::pair<ID3D11ShaderResourceView*, bool>>& a_changes);
+		/** @brief UpdateSharedBindings' shared entries' binding block, sealed again when one changed. */
+		void SealSharedBindingBlock();
 		/** @brief A view's binding: answered in this drain, cached (here or in the material bindings), else requested. */
 		GpuTextures::Binding SharedViewBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, SharedBindings::Kind a_kind);
 		/** @brief The projected entries from their capture; pending ones requested. */
@@ -1058,6 +1085,14 @@ namespace DCLF
 		 * stands until such an event (dclf-event-driven-tables.md); CS_DCLF_WALK_PARITY checks it against a from-scratch walk.
 		 */
 		void DeltaWalk();
+		/** @brief DeltaWalk's scheduling of a full evaluation: everything kept dropped, the whole tracked set into `order`. */
+		void ScheduleFullEvaluation();
+		/** @brief DeltaWalk's scheduling: the per-frame entries the light path's gate (MoverDue) takes, into a cleared `order`. */
+		void SchedulePerFrameEntries();
+		/** @brief DeltaWalk's scheduling after the per-frame entries: pending, component, property, mirror, node and root events. */
+		void ScheduleEventEntries();
+		/** @brief After the walk: the published classes' kept slots still theirs back into Tables::classMembers. */
+		void RestoreKeptMembers(std::array<std::vector<std::uint32_t>, Extensions::kPublishedEntryClasses>& a_kept);
 		/** @brief The whole tracked set into `order` (a full evaluation, the dense walk). */
 		void BuildFullOrder();
 		/**
@@ -1097,16 +1132,32 @@ namespace DCLF
 		void MoveBucket(Tracked& a_tracked, Ineligible a_bucket);
 		/** @brief After the delta walk's evaluations: the kept slots' geometry slots, and the shadow sets. */
 		void FinishDeltaWalk(PartTimer& a_timer);
+		/** @brief FinishDeltaWalk's geometry scan: the kept objects drawing a stale or freed geometry slot scheduled (or retired). */
+		void ScheduleStaleGeometry();
+		/** @brief FinishDeltaWalk's third round: the kept objects drawing a geometry slot re-resolved in place, scheduled and evaluated. */
+		void ScheduleRefreshedGeometry(PartTimer& a_timer);
 		/**
 		 * @brief One walk round from a_first: evaluations (EvaluateEntry, pure), then merges in index order (MergeEntry). CS_DCLF_FANOUT 0:
 		 * each in turn (also under the mirror-read parity); 1: all evaluated, then merged; 2 (default): pool chunks, each merged once
 		 * ready.
 		 */
 		void EvaluateRound(PartTimer& a_timer, std::size_t a_first);
+		/** @brief EvaluateRound's mode 2: pool chunks of a_count entries, each merged in order once ready (a_mirrorWrites, a_layout: the witnesses). */
+		void EvaluateStreamed(PartTimer& a_timer, std::size_t a_first, std::size_t a_count, std::size_t a_chunks, bool a_light, bool a_profileKinds,
+			std::uint64_t a_mirrorWrites, std::uint64_t a_layout);
 		/** @brief Entry a_index evaluated (a_light: the first round, trying the light path). Pure. */
 		void EvaluateEntry(std::size_t a_index, bool a_light, EvalCounters& a_counters, EvalResult& a_out, PartTimer& a_timer) const;
 		/** @brief WriteObject's evaluation half: the classification and the slot-free record inputs. */
 		void EvaluateWrite(RE::BSGeometry* a_geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out, PartTimer& a_timer) const;
+		/** @brief EvaluateWrite's cached classification (the frame verdict retaken where it may change); false: rejected, no record. */
+		bool EvaluateKeptVerdict(const Tracked& a_tracked, const SceneCapture::LeafView& a_leaf, bool a_rereads, EvalCounters& a_counters, EvalResult& a_out) const;
+		/** @brief EvaluateWrite's classification from scratch (the static verdict's cache, then the frame's); false: rejected, no record. */
+		bool EvaluateStaticVerdict(RE::BSGeometry* a_geometry, const Tracked& a_tracked, const SceneCapture::LeafView& a_leaf, bool a_classifyProbe,
+			EvalCounters& a_counters, EvalResult& a_out, PartTimer& a_timer) const;
+		/** @brief EvaluateWrite's slot-free record inputs: partitions or ranges, palette rows. */
+		void EvaluateRecordInputs(RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, EvalResult& a_out) const;
+		/** @brief EvaluateWrite's shadow caster verdict and technique, and the occlusion maps' techniques. */
+		void EvaluateShadowInputs(const SceneCapture::LeafView& a_leaf, EvalResult& a_out) const;
 		/** @brief A classified entry's bookkeeping, evaluated (see EvalResult), plus its shading inputs where the merge may store them. */
 		void EvaluateClassified(RE::BSGeometry* a_geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const;
 		/** @brief PerFrameOf at the merge, from the evaluation's traits and root motion. */
@@ -1115,8 +1166,28 @@ namespace DCLF
 		static std::pair<bool, std::uint32_t> PerFrameFrom(std::uint32_t a_traits, Ineligible a_reason, bool a_mayRecord);
 		/** @brief Entry a_index's merge (a_profileKinds: time its EvaluateKind). */
 		void MergeEntry(std::size_t a_index, bool a_profileKinds, EvalResult& a_result, PartTimer& a_timer);
+		/**
+		 * @brief MergeEntry's light path: true when the kept record stands; else the entry is evaluated in full for the write (a_missed:
+		 * the gate witness's finding).
+		 */
+		bool MergeLight(RE::BSGeometry* a_geometry, Tracked& a_tracked, EvalResult& a_result, PartTimer& a_timer, bool a_witnessed, const char*& a_missed);
+		/** @brief ScheduleRoot's parity at the merge: a dependent only its witness scheduled came out as it went in. */
+		void CheckRootWitness(const Tracked& a_tracked, bool a_written, bool a_hadSlot, std::uint32_t a_slotBefore, const Tables::Columns& a_columnsBefore,
+			bool a_perFrameBefore, std::uint32_t a_traitsBefore, Ineligible a_reasonBefore);
 		/** @brief WriteObject's merge half: the Tracked delta, then the face, geometry slots and record. */
 		bool MergeWrite(RE::BSGeometry* a_geometry, Tracked& a_tracked, EvalResult& a_result, PartTimer& a_timer, Ineligible& a_bucket);
+		/** @brief MergeWrite's geometry slots (a skin's partitions linked, or a LOD chain's ranges); Tables::kSlotFree: unstable, rebucketed. */
+		std::uint32_t ResolveWriteGeometry(RE::BSGeometry* a_geometry, const SceneCapture::GeometryRecord& a_record, const EvalResult& a_result, PartTimer& a_timer,
+			Ineligible& a_bucket);
+		/** @brief MergeWrite's object record before its slot: flags, skinning and palette rows (a_boneRows). */
+		ObjectRecord RecordOfWrite(RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, const EvalResult& a_result, std::uint32_t a_geometrySlot,
+			PartTimer& a_timer, std::uint32_t& a_boneRows);
+		/** @brief MergeWrite's shadow and occlusion columns at a_slot, and the keys they use. */
+		void MergeShadowColumns(std::uint32_t a_slot, std::uint32_t a_geometrySlot, const SceneCapture::LeafView& a_leaf, const EvalResult& a_result,
+			ObjectRecord& a_object);
+		/** @brief MergeWrite's row at a_slot: the remaining columns, the record (a_keepHalf: its accumulate half kept), the draw and the layer. */
+		void MergeRecordRow(RE::BSGeometry* a_geometry, Tracked& a_tracked, const EvalResult& a_result, Api::EntryWrite& a_face, std::uint32_t a_slot,
+			std::uint32_t a_geometrySlot, bool a_keepHalf, ObjectRecord& a_object, Ineligible a_bucket, PartTimer& a_timer);
 		/** @brief A chunk's counters into the coordinator's, in chunk order; its warnings logged. */
 		void MergeCounters(EvalCounters& a_counters);
 		/** @brief A chunk's mirror-read counts into the coordinator's. */
@@ -1131,6 +1202,21 @@ namespace DCLF
 
 		// The membership joins: State/Joins.h (CoordinatorJoins).
 		void BuildAccumulatePhase();
+		// BuildAccumulatePhase's stages (AccumulatePhase.cpp): the joins run, one join's merge (its pipeline, material, derivation
+		// cache and patch), and the residency the unpatched joins leave.
+		struct JoinFrame;
+		struct JoinBinding;
+		void RunJoins(JoinFrame& a_frame);
+		void MergeJoin(const OrderEntry& a_entry, JoinResult& a_result, JoinFrame& a_frame);
+		std::uint32_t BindJoinPipeline(const JoinResult& a_result, const LightingDescriptors& a_descriptors, bool a_layer, PartTimer& a_timer);
+		std::uint32_t MakeJoinPipeline(const JoinResult& a_result, const LightingDescriptors& a_descriptors, bool a_layer);
+		bool BindJoinMaterial(std::uint32_t a_objectId, const JoinResult& a_result, const LightingDescriptors& a_descriptors, Tracked::Derived& a_derived,
+			PartTimer& a_timer, std::uint32_t& a_materialSlot);
+		void RecordJoinDerivation(const OrderEntry& a_entry, const JoinResult& a_result, const JoinFrame& a_frame, bool a_derivedHit,
+			const LightingDescriptors& a_descriptors, const JoinBinding& a_binding, Tracked::Derived& a_derived);
+		void PatchJoin(const OrderEntry& a_entry, const JoinResult& a_result, JoinFrame& a_frame, ObjectRecord& a_object, std::uint32_t a_objectId,
+			const LightingDescriptors& a_descriptors, const JoinBinding& a_binding);
+		void SettleJoinResidency();
 		void ApplyAccumulatePatch(const AccumulatePatch& a_patch);
 		/**
 		 * @brief Binds the bind queue's records as residents from membership passes (PrimaryCull::MembershipPass), kept until rewritten.
@@ -1138,6 +1224,8 @@ namespace DCLF
 		void BindByMembership();
 		void EvaluateJoinPre(std::uint32_t a_slot, JoinPre& a_out) const;
 		void EvaluateJoin(const OrderEntry& a_entry, bool a_classify, JoinResult& a_out) const;
+		/** @brief A classified join's pipeline key and static flags (EvaluateJoin's stage; pure). */
+		void KeyJoin(const Tracked& a_entry, bool a_layer, const SceneCapture::PropertyRecord& a_property, bool a_interior, JoinResult& a_out) const;
 		/**
 		 * @brief a_count evaluations into a_results, in chunks of kFanoutGrain on the pool (a_pool) or on this thread. In
 		 * AccumulatePhase.cpp.
@@ -1276,6 +1364,10 @@ namespace DCLF
 		// The shadow sets: State/ShadowSets.h (CoordinatorShadowSets).
 		ShadowInputs ShadowInputsOf(std::uint32_t a_slot) const;
 		void RefreshShadowSets(bool a_forceRebuild);
+		// RefreshShadowSets' stages: the index cleared for a rebuild, one slot's inputs in or out of the indices, the lists emitted.
+		void ResetShadowIndex(std::vector<std::uint32_t>& a_changed);
+		void ApplyShadowInputs(std::uint32_t a_slot, const ShadowInputs& a_inputs, bool a_live, bool a_add, std::uint32_t& a_moved);
+		void EmitShadowSets(bool a_rebuild, std::uint32_t a_moved);
 
 		// The DCLF set and the claims: State/Set.h (CoordinatorSet).
 		/** @brief The structural changes revokeCursor has not read, into structureChanged. */
@@ -1332,6 +1424,17 @@ namespace DCLF
 		std::uint8_t SetParticipation(std::uint32_t a_slot, std::uint32_t a_drawn) const;
 		/** @brief What the commit decides for a_slot now. Pure: CommitSet applies the side effects; its observers re-decide every slot. */
 		SlotDecision DecideSlot(std::uint32_t a_slot, bool a_live, std::uint32_t a_drawn) const;
+		// CommitSet's stages (SceneSet.cpp), over one commit's inputs (SetCommit).
+		struct SetCommit;
+		void CommitMembershipEvents(const SetCommit& a_commit);
+		void CommitReadinessSources();
+		void CommitShadowModeRequeues(std::size_t a_objects);
+		/** @brief DecideSlot plus the commit's side effects (wait causes and reasons, counts, observers). */
+		std::uint8_t CommitDecideSlot(std::uint32_t a_slot, const SetCommit& a_commit, bool& a_wait, bool* a_partial = nullptr);
+		/** @brief a_slot's decided phases into the commit's copy, the lacking and waiting marks and setBuilding. */
+		void CommitApplySlot(std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait, SetCommit& a_commit);
+		void CommitQueuedSlots(SetCommit& a_commit);
+		void CommitComponentsSettle(SetCommit& a_commit);
 		/**
 		 * @brief CommitSet: a_slot's phases as applied by its entry's veto (Hold: 0; Observe: 0, what it would have applied recorded for
 		 * ObservedSlot; none: a_phases).
@@ -1348,6 +1451,8 @@ namespace DCLF
 
 		// The publication and the retirement chain: State/Publication.h (CoordinatorPublication).
 		void PublishTables();
+		/** @brief PublishTables' replay jobs: a_snapshot's object columns (a_replay) and material records by the collected slots. */
+		void ReplayTableColumns(Tables& a_snapshot, bool a_replay);
 		// Engine references the scene work lets go of go through the retirement chain to EngineReleases (released at Present), since a kept
 		// publication may still name them.
 		template <class T>
@@ -1393,6 +1498,8 @@ namespace DCLF
 		void NotePublished();
 		/** @brief Whether this pass publishes now (PublicationNeeded holds), and why; false: it defers. */
 		bool PublicationDue(bool a_task, PublishReason& a_why) const;
+		/** @brief RunSceneWork's publish stage: the pacing counts, then PublishScene when needed and due, else a deferral. */
+		void PublishIfDue(bool a_task);
 		/** @brief Once a report window: the pacing line (passes and publications a frame, deferrals, the claims' replay, the paced parity). */
 		void ReportPublicationPacing();
 		/** @brief CS_DCLF_SET_PARITY (Policy::CheckPacedPublication): the publication just made against the coordinator's whole state. */
