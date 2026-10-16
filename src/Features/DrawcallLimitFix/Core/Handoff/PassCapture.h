@@ -97,8 +97,8 @@ namespace DCLF
 		}
 		/**
 		 * @brief An OwnRenderers view's renderers (the water reflection's faces, dclf-lod.md, "Water reflections"), named by its feature's
-		 * engine hooks. SetViewRenderers: render thread, the accumulators whose batch renderers (and their geometry groups') are the view's
-		 * (the cube camera's), rebuilt only when they change. SetViewWithholdActive: around the view's render while its members' passes
+		 * engine hooks. SetViewRenderers: render thread, the accumulators whose batch renderers (and their geometry and alpha groups') are the
+		 * view's (the cube camera's), made again whenever any of those renderers changes (the engine makes groups as geometry first uses them). SetViewWithholdActive: around the view's render while its members' passes
 		 * into them are withheld (the faces' plain mode, 0: the only one whose registrations the hooks see; mode 0x19's are FUN_1414b2b90's).
 		 * SetViewRendering: around the view's render, whatever its mode (the observers: OwnViewRendering). SetViewFamilyOwned: once a
 		 * frame, a trees view's draw family per face DCLF's (its engine shapes' passes into its renderers withheld; Core's while the family
@@ -260,6 +260,7 @@ namespace DCLF
 		using RendererSet = ankerl::unordered_dense::set<const RE::BSBatchRenderer*>;
 		std::shared_ptr<const RendererSet> mainRenderers;
 		std::array<const void*, 2> mainAccumulators{};  // what mainRenderers was made from (render thread)
+		std::vector<const RE::BSBatchRenderer*> mainSources;  // the batch renderers mainRenderers was made from, in order (render thread)
 		// By view: its renderers (an InMainRenderers view's accumulators', also in mainRenderers; an OwnRenderers view's, SetViewRenderers),
 		// their source (render thread) and its coverage (0: not set yet, its coveredInitially standing for it; 1 not covered; 2 covered).
 		// An InMainRenderers view's counts; an OwnRenderers view's render's gates (rendering, withholding), its draw families' ownership, its
@@ -269,6 +270,7 @@ namespace DCLF
 		{
 			std::shared_ptr<const RendererSet> renderers;
 			Api::ViewAccumulators accumulators;
+			std::vector<const RE::BSBatchRenderer*> sources;  // an OwnRenderers view's batch renderers its set was made from (render thread)
 			std::atomic<std::uint8_t> coverage{ 0 };
 			std::atomic<std::uint32_t> withheld{ 0 }, memberKept{ 0 }, registered{ 0 };
 			std::atomic<bool> rendering{ false }, withholdActive{ false };
