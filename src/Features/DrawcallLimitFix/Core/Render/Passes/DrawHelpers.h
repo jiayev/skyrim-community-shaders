@@ -1,23 +1,59 @@
 #pragma once
 
 // The draw passes' recording helpers: attachments, the frame buffers' declaration, the preprocessed indirect draw, a bucket's plain draws,
-// and the frame slots' addresses a draw pass pushes. Self-contained (a feature's draw pass includes it: Features/Forward's,
-// Features/MainView's); PassHelpers.h includes it.
+// and the frame slots' addresses a draw pass pushes; and the common passes a feature's epoch is made of: the latched copies, the latched
+// BuildDraws dispatch, the shadow epoch's index pool copies. Self-contained (a feature's pass includes it: Features/Forward's,
+// Features/MainView's, Features/Shadows/Engine's); PassHelpers.h includes it.
 
 // volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
+#include <Render/LatchBlock.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
 #include <rhi.h>
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <span>
+#include <vector>
 
 namespace DCLF::Draws
 {
+	struct ShadowResources;
+
+	// Records one BuildDrawsCS dispatch whose values and group count are the slot's latch at a_latchOffset.
+	void RecordLatchedDispatch(BuildDrawsConstants a_constants, const org::LatchBlock& a_latch,
+		rhi::CommandSignatureHandle a_signature, std::uint32_t a_latchOffset, org::PassRecordContext& a_recording);
+
+	/** @brief What a latched copies pass copies, as of the shape its preparation is for: the shape's generation, the shape (held), its lists. */
+	struct LatchedSource
+	{
+		std::uint64_t generation = 0;
+		std::shared_ptr<const void> shape;
+		std::span<const LatchedList> lists;
+	};
+	/**
+	 * @brief An epoch's first pass: its shape's latched copies (LatchedList) from their blocks to where its passes read them,
+	 * recorded with the epoch's ticket on ORG's host thread (its commit records no copy). It declares a_targets() as copy
+	 * destinations, published to a_declared when given (what a commit may latch: LatchedUploads); a copy of another target is skipped.
+	 */
+	std::shared_ptr<org::RenderPass> MakeLatchedCopiesPass(std::function<std::vector<LatchedTarget>()> a_targets,
+		std::function<LatchedSource(const org::PassPrepareContext&)> a_source, std::atomic<std::shared_ptr<const std::vector<const void*>>>* a_declared = nullptr);
+
+	/**
+	 * @brief The shadow epoch's index pool copies (Passes/Shadow.cpp: IndexPoolPass, Core's, as the depth epoch's), dispatched from the
+	 * revision's shadow shape's latch.
+	 */
+	std::shared_ptr<org::RenderPass> MakeShadowIndexPoolPass(const std::shared_ptr<ShadowResources>& a_resources);
+
 	/** @brief A pass's frame buffers (t16 and up) and Light Limit Fix's lights (t35-t37) declared as read, through no view. */
 	void DeclareFrameBuffers(org::PassBuilder& a_builder, const Resources& a_resources, bool a_lights = true);
 

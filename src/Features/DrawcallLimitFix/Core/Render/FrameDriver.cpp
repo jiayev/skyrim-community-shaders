@@ -20,6 +20,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/PrimaryView.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
@@ -240,8 +241,10 @@ namespace DCLF
 		ScopedPerfEvent event("CS DCLF: shadow views");
 		const auto start = std::chrono::steady_clock::now();
 		Diagnostics::Notify<Diagnostics::FramePoint::ShadowViewsBegin>();
-		// The frame's shadow views listed, decided and begun (the shadow engine's).
-		Draws::ShadowEnginePoints().BeforeShadowMaps();
+		// The frame's shadow views listed (Core's), then decided and begun (the shadow epochs': Features/Shadows/Engine).
+		Draws::ListShadowViews();
+		if (const auto* epochs = Extensions::ShadowEpochs())
+			epochs->beforeShadowMaps();
 		const double ms = MillisecondsSince(start);
 		counters.timing.sceneMs += ms;
 		counters.timing.sceneMaxMs = std::max(counters.timing.sceneMaxMs, ms);
@@ -249,9 +252,9 @@ namespace DCLF
 
 	void FrameDriver::AfterShadowMaps()
 	{
-		// The frame's shadow epoch: every view the accumulator hook captured, drawn in one graph execution.
-		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::ShadowMapsAfter));
-		Draws::ShadowEnginePoints().AfterShadowMaps();
+		// The frame's shadow epoch (Features/Shadows/Engine, under its shadow-maps.after trigger).
+		if (const auto* epochs = Extensions::ShadowEpochs())
+			epochs->afterShadowMaps();
 	}
 
 	void FrameDriver::EarlyPrepass()
@@ -286,7 +289,8 @@ namespace DCLF
 		if (!a_running || !Extensions::OcclusionOn(ActiveToggles(), a_map))
 			return false;
 		// DCLF draws the map's members of the set this frame (none until its phase is drawn: a frame after the first that drew it).
-		const bool ready = Draws::ShadowEnginePoints().OcclusionReady(a_map);
+		const auto* epochs = Extensions::ShadowEpochs();
+		const bool ready = epochs && epochs->occlusionReady(a_map);
 		occlusionFrames.native[a_map] += ready ? 0 : 1;
 		occlusionWanted |= ready ? 1u << a_map : 0u;
 		const std::uint8_t phase = Extensions::OcclusionMapOf(a_map).phase;
@@ -324,8 +328,9 @@ namespace DCLF
 		// Every occlusion map whose Ready said DCLF draws it this frame, in one epoch.
 		const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
 		PassCapture::Get().SetOcclusionPhase(0);
-		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::OcclusionDraw));
-		const std::uint32_t drawn = wanted ? Draws::ShadowEnginePoints().DrawOcclusion(wanted) : 0u;
+		// The maps' epoch (Features/Shadows/Engine, under its occlusion.draw trigger).
+		const auto* epochs = Extensions::ShadowEpochs();
+		const std::uint32_t drawn = wanted && epochs ? epochs->drawOcclusion(wanted) : 0u;
 		Diagnostics::Notify(Diagnostics::OcclusionMapsDrawn{ drawn });
 	}
 

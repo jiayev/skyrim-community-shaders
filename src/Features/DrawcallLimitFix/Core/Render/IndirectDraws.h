@@ -124,12 +124,14 @@ namespace DCLF
 		std::string ShadowCapabilityReport() const;
 		/**
 		 * @brief Render thread, before ShadowViews::Rebuild: how many shadow views DCLF draws - every one (UINT32_MAX) once the view
-		 * placements are set up, none before, after a failure, or on a frame without claims.
+		 * placements are set up, none before, after a failure, or on a frame without claims. Core's ListShadowViews (Shadow/ShadowPoints.h).
 		 */
 		std::uint32_t ShadowViewCapacity();
 		/**
 		 * @brief BeforeShadowMaps, after ShadowViews::Rebuild: the frame's views are DCLF's with the selected revision's shape; until a
-		 * revision has recorded it (startup, a growth), every one is the engine's this frame (ShadowViews::UncoverAll).
+		 * revision has recorded it (startup, a growth), every one is the engine's this frame (ShadowViews::UncoverAll). Called by
+		 * Features/Shadows/Engine's shadow epochs handler (Api/ShadowEpochs.h), as are BeginShadowFrame, ExecuteShadowFrame, OcclusionReady
+		 * and ExecuteOcclusion.
 		 */
 		void DecideShadowCoverage();
 		/**

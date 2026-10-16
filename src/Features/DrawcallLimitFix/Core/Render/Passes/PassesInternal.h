@@ -16,7 +16,4 @@ namespace DCLF::Draws
 
 	// MainExtension.cpp: the buffers a main commit may latch into (LatchedUploads); its latched copies declare them.
 	std::vector<LatchedTarget> MainLatchedTargets(const Resources& a_resources);
-
-	// Shadow.cpp: the shadow and occlusion epochs' passes (shadows.*), which CorePasses.cpp registers.
-	std::span<const Api::PassDef> ShadowPassDefs();
 }

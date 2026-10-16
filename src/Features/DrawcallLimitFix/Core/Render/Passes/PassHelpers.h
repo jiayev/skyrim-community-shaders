@@ -1,8 +1,9 @@
 #pragma once
 
-// What the passes and the graph extensions share: recording helpers, registration, the latched copies pass (the ones features use too:
-// Register and RecordDispatch, Core/Extensions/PassContext.h's; the draw passes' attachments, frame buffers, preprocessed and bucket
-// draws, Passes/DrawHelpers.h's). Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// What the passes and the graph extensions share: recording helpers, registration (the ones features use too: Register and
+// RecordDispatch, Core/Extensions/PassContext.h's; the draw passes' attachments, frame buffers, preprocessed and bucket draws, the latched
+// copies pass, the latched dispatch and the shadow epoch's index pool copies, Passes/DrawHelpers.h's). Part of IndirectDraws'
+// implementation: included by Internal.h, in its order.
 
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
@@ -22,10 +23,6 @@ namespace DCLF::Draws
 	 * by subtracting M's upper-left 3x3 applied to the camera.
 	 */
 	void FoldEyeIntoViewProj(const std::array<float, 16>& a_viewProj, const RE::NiPoint3& a_eye, float (&a_out)[16]);
-
-	// Records one BuildDrawsCS dispatch whose values and group count are the slot's latch at a_latchOffset.
-	void RecordLatchedDispatch(BuildDrawsConstants a_constants, const org::LatchBlock& a_latch,
-		rhi::CommandSignatureHandle a_signature, std::uint32_t a_latchOffset, org::PassRecordContext& a_recording);
 
 	// MainPayload::objectState values besides the Skip reasons.
 	constexpr std::uint8_t kObjectStateDrawable = 0xF0;
@@ -78,21 +75,6 @@ namespace DCLF::Draws
 			desc.PreferQueue(org::QueueKind::Graphics);
 		a_out.push_back(std::move(desc.Epoch(a_epoch)));
 	}
-
-	/** @brief What a latched copies pass copies, as of the shape its preparation is for: the shape's generation, the shape (held), its lists. */
-	struct LatchedSource
-	{
-		std::uint64_t generation = 0;
-		std::shared_ptr<const void> shape;
-		std::span<const LatchedList> lists;
-	};
-	/**
-	 * @brief An epoch's first pass: its shape's latched copies (LatchedList) from their blocks to where its passes read them,
-	 * recorded with the epoch's ticket on ORG's host thread (its commit records no copy). It declares a_targets() as copy
-	 * destinations, published to a_declared when given (what a commit may latch: LatchedUploads); a copy of another target is skipped.
-	 */
-	std::shared_ptr<org::RenderPass> MakeLatchedCopiesPass(std::function<std::vector<LatchedTarget>()> a_targets,
-		std::function<LatchedSource(const org::PassPrepareContext&)> a_source, std::atomic<std::shared_ptr<const std::vector<const void*>>>* a_declared = nullptr);
 
 	/**
 	 * @brief A forward range's sort, back to front (ForwardSortCS.hlsl), as of the shape its preparation is for: the staging half's first

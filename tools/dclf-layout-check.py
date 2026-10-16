@@ -51,8 +51,10 @@ TOP_LEVEL = {"Api", "Core", "Features", "Integrations", "Diagnostics", "Schedule
 CORE_SUBFOLDERS = {"Runtime", "Engine", "Settings", "Scene", "Handoff", "Shading", "Gpu", "Render", "Extensions"}
 # Features/<X> -> the other features it may include (and that are listed before it in Features/FeatureList.cpp).
 DEPENDS = {
-    "Shadows/Sun": {"Shadows/Local"},
-    "Shadows/Local": set(),
+    "Shadows/Engine": set(),
+    "Shadows/Sun": {"Shadows/Engine", "Shadows/Local"},
+    "Shadows/Local": {"Shadows/Engine"},
+    "OcclusionMaps": {"Shadows/Engine"},
     "LocalLights": {"Portals"},
     "FirstPerson": {"Actors", "Skins"},
     "Effects": {"Skins"},

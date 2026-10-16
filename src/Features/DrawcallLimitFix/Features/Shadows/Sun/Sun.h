@@ -1,6 +1,6 @@
 #pragma once
 
-// Shadows/Sun: the sun's shadow views, drawn by Core's shadow engine. The feature registers the Sun source (Api::ShadowSourceContribution,
+// Shadows/Sun: the sun's shadow views, drawn by the shadow epoch (Features/Shadows/Engine, DEPENDS). The feature registers the Sun source (Api::ShadowSourceContribution,
 // Api/ShadowViews.h: the directional views draw while it is registered) and its source hooks: the accumulation's (SunAccumulation.h:
 // Accumulate, its cascade culls and registrations, the full-frustum cull, and the entry exclusion; it reads the board after its
 // bitsReady), then its camera hook (SunViews: BSShadowDirectionalLight::UpdateCamera, which writes the sun's cascades and full-frustum
@@ -18,7 +18,7 @@
 // full-frustum processes', under CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY, and the exclusion's watch (SunCasters) under
 // CS_DCLF_PERSISTENT_PARITY.
 //
-// Core keeps the shadow engine: the shadow epoch and its capability and captures, the views list and the camera math
+// Core keeps the shadow engine's scene side: the shadow epoch's commit and its capability and captures, the views list and the camera math
 // (Core/Render/Shadow/ShadowCameras.h), the views' tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally), the caster
 // phases, view bits and modes, and the shadows' and primary exclusion's toggles. The source owns no phase or view bit; its switches and
 // toggles are the accumulation's (CS_DCLF_SUN_SKIP, "skip sun accumulation") and the entry exclusion's (CS_DCLF_SUN_EXCLUDE, "exclude sun entries"),

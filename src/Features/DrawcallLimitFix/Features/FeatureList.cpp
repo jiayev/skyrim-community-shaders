@@ -21,6 +21,7 @@
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
 #include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Engine/Engine.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/Local.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
 #include "Features/DrawcallLimitFix/Features/Skins/Skins.h"
@@ -39,6 +40,10 @@ namespace DCLF::Features
 		// and its install's room visibility (its install log right after the primary cull's, where the shell installed it) and stand-in
 		// observer (Main::Update's entry, before the others', where the shell set it live); it registers the main cull input and no
 		// switch, toggle, pool, pass or product.
+		// The shadow epochs next (Shadows/Engine), before the features that build on them (DEPENDS: the occlusion maps, the shadow sources):
+		// their passes (shadows.*, no setup: a Shadow epoch's pass has none, so their place among the registrations changes no order), the
+		// shadow epochs' handlers (the only ones) and their triggers (found by name); no switch, toggle, hook, pool, product or report line,
+		// so the occlusion maps' toggles stay the first registered.
 		// The occlusion maps next: their toggles are the first registered, so their bits in the packed toggle word are where Core's were
 		// (right after Core's flags), and their switches and toggles are listed before the reflection's and the first person's (which follow
 		// them there); no early hooks, no pool, pass or product. The shadow sources next, local then sun (Shadows/Local, Shadows/Sun: the
@@ -97,6 +102,7 @@ namespace DCLF::Features
 		// Features/Actors needs its fade amounts channel by name.
 		static const std::array kFeatures{
 			Portals::Feature(),
+			Shadows::Engine::Feature(),
 			OcclusionMaps::Feature(),
 			Shadows::Local::Feature(),
 			Shadows::Sun::Feature(),

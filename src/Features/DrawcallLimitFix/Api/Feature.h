@@ -26,6 +26,7 @@
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
 #include "Features/DrawcallLimitFix/Api/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
+#include "Features/DrawcallLimitFix/Api/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Api/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Api/SunVolume.h"
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
@@ -254,6 +255,11 @@ namespace DCLF::Api
 		virtual void RegisterDepthPyramid(const DepthPyramidContribution& a_pyramid) = 0;
 		/** @brief Fails the install for a second contribution (FrameDriver's main pass points call one main view), or one without a handler. */
 		virtual void RegisterPrimaryView(const PrimaryViewContribution& a_view) = 0;
+		/**
+		 * @brief Fails the install for a second contribution (FrameDriver's shadow and occlusion points call one shadow engine's epochs), or
+		 * one without its handlers.
+		 */
+		virtual void RegisterShadowEpochs(const ShadowEpochsContribution& a_epochs) = 0;
 		/**
 		 * @brief Fails the install for a second contribution (Core's readers take one producer's states), or one without a name, a table
 		 * family registered before, view or test.
