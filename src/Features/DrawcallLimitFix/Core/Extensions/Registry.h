@@ -7,8 +7,10 @@
 #include "Features/DrawcallLimitFix/Api/Epochs.h"
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 
+#include <cstdint>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace DCLF::Extensions
 {
@@ -31,6 +33,19 @@ namespace DCLF::Extensions
 	 * light selection at the Spot's: Extensions/ShadowViews.cpp). Once, before InstallFeatures.
 	 */
 	void InstallSourceHooks(std::span<const Api::Feature> a_features);
+	/**
+	 * @brief The frame's epoch orders, as RenderGraphRuntime::Segment values: the frame's (Api::FrameSchedule::frameOrder), the host's
+	 * async epochs (asyncOrder) and the revision-driven ones among them (its DCLF epochs with revision).
+	 */
+	struct FrameOrders
+	{
+		std::vector<std::uint32_t> epochOrder, asyncOrder, revisionEpochs;
+	};
+	/**
+	 * @brief Main thread, after InstallFeatures (empty before): the schedule's orders, resolved with it (the schedule's executor's), which
+	 * the shell hands to RenderGraphRuntime::ConfigureFrame before the runtime initializes.
+	 */
+	const FrameOrders& ScheduledFrameOrders();
 
 	/** @brief A registered frame-value pool (its descriptor, the name owned). */
 	struct FrameValuePoolEntry

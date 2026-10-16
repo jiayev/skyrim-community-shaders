@@ -4,6 +4,9 @@
 // - An epoch is a RenderGraphRuntime::Segment and the shape its passes are made from: Main (the main extension's resources), Shadow (the
 //   shadow extension's) or View (a view's extension, for the Api::EngineView it names). ORG orders the epochs; within one, its passes
 //   run in this order.
+// - An epoch's row is its definition (Api::EpochDef): its index in its shape, the epoch whose shape it shares, the class gating it and
+//   whether the frame's claims need it. The rows' order is the scene revisions' slot order and the reports'; the frame's order is
+//   kFrameOrder, the host's async order kAsyncOrder (the revision-driven epochs are those with revision; the foreign ones never are).
 // - A pass is a key (Api::PassDef), registered at install by its owner, whom the key's prefix names: core.* (the main view's culling and
 //   copies), main-view.* (its draws), forward.*, shadows.*, view.* (Core's, through Core/Render/Passes/CorePasses.cpp), or a feature's
 //   (Features/<Name>/): tree-wind.*, fades.*, texture-transforms.*, tree-lod.*, gpu-occlusion.* (the depth pyramid's producer).
@@ -26,6 +29,7 @@ namespace DCLF::Schedule
 
 		constexpr std::uint32_t SegmentOf(Segment a_segment) { return static_cast<std::uint32_t>(a_segment); }
 		constexpr std::uint32_t ViewOf(Api::EngineView a_view) { return static_cast<std::uint32_t>(a_view); }
+		constexpr std::uint32_t MainOf(Api::MainShape a_shape) { return static_cast<std::uint32_t>(a_shape); }
 
 		// The depth (Z-prepass) epoch: the latched copies; the next frame's state (tree wind, on the compute queue beside the epoch's raster
 		// work, which nothing of this frame reads) and cull state (the fade roots' states, then their write-back copy); the texture
@@ -100,21 +104,63 @@ namespace DCLF::Schedule
 			"view.forward",
 		};
 
+		// In the scene revisions' slot order (an epoch is its row's index); the frame runs them in kFrameOrder. The main epochs decide the
+		// frame's claims (the forward epoch's too while its class is on: its members' passes are withheld with the claims, and only it
+		// draws them).
 		constexpr Api::EpochDef kEpochs[] = {
-			{ "main.depth", SegmentOf(Segment::ZPrepass), Api::EpochShape::Main, 0, kMainDepth },
-			{ "main.colour", SegmentOf(Segment::MainOpaque), Api::EpochShape::Main, 0, kMainColour },
-			{ "forward", SegmentOf(Segment::Forward), Api::EpochShape::Main, 0, kForward },
-			{ "shadow", SegmentOf(Segment::ShadowView), Api::EpochShape::Shadow, 0, kShadow },
-			{ "occlusion", SegmentOf(Segment::SkyOcclusion), Api::EpochShape::Shadow, 0, kOcclusion },
-			{ "reflection", SegmentOf(Segment::Reflection), Api::EpochShape::View, ViewOf(Api::EngineView::Reflection), kReflection },
-			{ "fp.depth", SegmentOf(Segment::FirstPersonDepth), Api::EpochShape::View, ViewOf(Api::EngineView::FirstPerson), kFirstPersonDepth },
-			{ "fp.colour", SegmentOf(Segment::FirstPerson), Api::EpochShape::View, ViewOf(Api::EngineView::FirstPerson), kFirstPersonColour },
+			{ .id = "main.depth", .label = "Z-prepass", .segment = SegmentOf(Segment::ZPrepass), .shape = Api::EpochShape::Main,
+				.shapeIndex = MainOf(Api::MainShape::Depth), .claims = true, .passes = kMainDepth },
+			{ .id = "main.colour", .label = "colour", .segment = SegmentOf(Segment::MainOpaque), .shape = Api::EpochShape::Main,
+				.shapeIndex = MainOf(Api::MainShape::Colour), .claims = true, .passes = kMainColour },
+			{ .id = "shadow", .label = "shadow", .segment = SegmentOf(Segment::ShadowView), .shape = Api::EpochShape::Shadow, .shapeIndex = 0,
+				.passes = kShadow },
+			{ .id = "occlusion", .label = "occlusion", .segment = SegmentOf(Segment::SkyOcclusion), .shape = Api::EpochShape::Shadow, .shapeIndex = 1,
+				.passes = kOcclusion },
+			{ .id = "reflection", .label = "reflection", .segment = SegmentOf(Segment::Reflection), .shape = Api::EpochShape::View,
+				.shapeIndex = ViewOf(Api::EngineView::Reflection), .passes = kReflection },
+			{ .id = "forward", .label = "forward", .segment = SegmentOf(Segment::Forward), .shape = Api::EpochShape::Main,
+				.shapeIndex = MainOf(Api::MainShape::Colour), .sharesWith = "main.colour", .gate = Api::ObjectClass::Forward, .claims = true,
+				.passes = kForward },
+			{ .id = "fp.depth", .label = "first-person depth", .segment = SegmentOf(Segment::FirstPersonDepth), .shape = Api::EpochShape::View,
+				.shapeIndex = ViewOf(Api::EngineView::FirstPerson), .passes = kFirstPersonDepth },
+			{ .id = "fp.colour", .label = "first-person colour", .segment = SegmentOf(Segment::FirstPerson), .shape = Api::EpochShape::View,
+				.shapeIndex = ViewOf(Api::EngineView::FirstPerson), .sharesWith = "fp.depth", .passes = kFirstPersonColour },
+		};
+		// Light Limit Fix's light culling: live (its ticket prepared on the host's thread), not a revision's.
+		constexpr Api::ForeignEpoch kForeign[] = {
+			{ "light-culling", SegmentOf(Segment::LightCulling) },
+		};
+		// The order a frame runs them: the shadow views at AfterShadowMaps, the Z-prepass at the depth pass, the water reflection's faces
+		// after it, first person's depth, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main pass's
+		// opaque batches end, the forward epoch at the engine's blended draw after the deferred composite, first person's colour.
+		constexpr std::string_view kFrameOrder[] = {
+			"shadow",
+			"main.depth",
+			"reflection",
+			"fp.depth",
+			"occlusion",
+			"light-culling",
+			"main.colour",
+			"forward",
+			"fp.colour",
+		};
+		// The host's async epochs, in its ticket loop's order; the revision-driven ones are those with revision.
+		constexpr std::string_view kAsyncOrder[] = {
+			"reflection",
+			"shadow",
+			"main.depth",
+			"occlusion",
+			"light-culling",
+			"main.colour",
+			"forward",
+			"fp.depth",
+			"fp.colour",
 		};
 	}
 
 	const Api::FrameSchedule& Frame()
 	{
-		static constexpr Api::FrameSchedule kFrame{ kEpochs };
+		static constexpr Api::FrameSchedule kFrame{ kEpochs, kForeign, kFrameOrder, kAsyncOrder };
 		return kFrame;
 	}
 }

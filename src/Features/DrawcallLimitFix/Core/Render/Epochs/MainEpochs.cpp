@@ -9,6 +9,19 @@
 
 namespace DCLF
 {
+	namespace
+	{
+		/**
+		 * @brief The forward epoch (the schedule's "forward", where Core's forward.* passes are; kNoEpoch: none scheduled), looked up once:
+		 * its first read is the render thread's, after InstallFeatures resolved the schedule.
+		 */
+		std::uint32_t ForwardEpoch()
+		{
+			static const std::uint32_t epoch = Draws::EpochById("forward");
+			return epoch;
+		}
+	}
+
 	IndirectDraws::IndirectDraws() :
 		impl(std::make_unique<Impl>())
 	{}
@@ -87,7 +100,8 @@ namespace DCLF
 		if (!impl || failed)
 			return false;
 		const ToggleSet toggles = ActiveToggles();
-		if (!Extensions::ObjectClassOn(toggles, Api::ObjectClass::Forward))
+		const std::uint32_t forwardEpoch = ForwardEpoch();
+		if (!Extensions::ObjectClassOn(toggles, Api::ObjectClass::Forward) || forwardEpoch == Draws::kNoEpoch)
 			return false;
 		auto& f = impl->forwardEpoch;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
@@ -103,7 +117,7 @@ namespace DCLF
 			return false;
 		}
 		// The selected revision's forward recording (DecideCoverage required it for the frame's claims while the toggle is on).
-		const auto revision = impl->RevisionOf(Epoch::Forward);
+		const auto revision = impl->RevisionOf(forwardEpoch);
 		if (!revision) {
 			++f.noRecording;
 			return false;
@@ -143,7 +157,7 @@ namespace DCLF
 			}
 		}
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::Forward, [&](org::RenderGraph&) {
-			impl->SubmitRevisionRecording(Epoch::Forward, *revision.recordings, 0);
+			impl->SubmitRevisionRecording(forwardEpoch, *revision.recordings, 0);
 		}, owners);
 		if (!ok) {
 			++f.failed;
@@ -256,7 +270,7 @@ namespace DCLF
 		// The selected revision's shape and recording (DecideCoverage covered the main epochs), and the installed publication's
 		// payload (a snapshot without one for each epoch gives the frame no claims: DecideCoverage): trusted, nothing is built or checked here. A payload built
 		// for other main resources (made at this frame's Setup: a new render size) names their buffers: the frame is not submitted.
-		const auto revision = impl->RevisionOf(static_cast<std::uint32_t>(depthOnly ? kDepthShape : kColourShape));
+		const auto revision = impl->RevisionOf(EpochOfShape(ShapeKind::Main, static_cast<std::uint32_t>(depthOnly ? kDepthShape : kColourShape)));
 		std::shared_ptr<MainPayload> ahead = impl->installedDraws ? impl->installedDraws->payloads[jobIndex] : nullptr;
 		if (!revision || !ahead || ahead->inputs.addresses.identity != resources.get()) {
 			// Resources made at this frame's Setup are the only way here (the graph is built for them, and the frames until their

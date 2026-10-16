@@ -68,10 +68,10 @@ namespace DCLF
 		// The snapshot builder's (composed in its pass, posted for the frame's report): nothing here is the frame's.
 		auto& rv = revisions;
 		std::string epochs;
-		for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e) {
+		for (std::uint32_t e = 0, count = EpochCount(); e < count; ++e) {
 			auto& s = rv.epochs[e];
 			const auto recorded = s.recorded.exchange(0), failedCount = s.failed.exchange(0), dropped = s.dropped.exchange(0), shapes = s.shapes.exchange(0);
-			epochs += fmt::format("{}{} {} changed, {} requested, {} recorded ({} shapes), {} failed{}{}", epochs.empty() ? "" : "; ", kEpochTraits[e].name, s.changed,
+			epochs += fmt::format("{}{} {} changed, {} requested, {} recorded ({} shapes), {} failed{}{}", epochs.empty() ? "" : "; ", EpochTraitsOf(e).name, s.changed,
 				s.requested, recorded, shapes, failedCount, dropped ? fmt::format(", {} dropped by a graph build", dropped) : std::string(),
 				s.refused ? fmt::format(", {} refused", s.refused) : std::string());
 			s.changed = s.requested = s.refused = 0;
@@ -110,9 +110,9 @@ namespace DCLF
 	{
 		auto& rv = revisions;
 		std::string covered;
-		for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e) {
+		for (std::uint32_t e = 0, count = EpochCount(); e < count; ++e) {
 			const auto unrevised = std::exchange(rv.unrevised[e], 0), clamped = std::exchange(rv.latchClamped[e], 0);
-			covered += fmt::format("{}{} {}{}{}", covered.empty() ? "" : "; ", kEpochTraits[e].name, std::exchange(rv.submitted[e], 0),
+			covered += fmt::format("{}{} {}{}{}", covered.empty() ? "" : "; ", EpochTraitsOf(e).name, std::exchange(rv.submitted[e], 0),
 				unrevised ? fmt::format(", {} without the revision's shape <- UNREVISED", unrevised) : std::string(),
 				clamped ? fmt::format(", {} with values past its latch <- LATCH", clamped) : std::string());
 		}
@@ -122,8 +122,8 @@ namespace DCLF
 				std::exchange(rv.latchedMisses, 0));
 		{
 			std::string uncovered;
-			for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e)
-				uncovered += fmt::format("{}{} {}", e ? ", " : "", kEpochTraits[e].name, std::exchange(rv.uncovered[e], 0));
+			for (std::uint32_t e = 0, count = EpochCount(); e < count; ++e)
+				uncovered += fmt::format("{}{} {}", e ? ", " : "", EpochTraitsOf(e).name, std::exchange(rv.uncovered[e], 0));
 			const std::uint64_t unbuiltTotal = unbuilt[kAsyncZPrepass] + unbuilt[kAsyncColour] + shadowUnbuilt;
 			text += fmt::format("[DCLF] strict epochs: {} frames without the adopted snapshot's main recordings (claims withdrawn: the engine's), {} graph builds at the "
 								"build point, {} tickets of epochs not submitted given back for recordings; frames whose revision lacked an epoch's current recordings: {}; "

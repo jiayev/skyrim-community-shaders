@@ -687,18 +687,33 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
   pyramid's pass, the retest build, `tree-lod.cull-phase2`, the rescues' depth draw) returns null without it.
 - **Anchors** exist only for diagnostics: `diag.*` are PassDefs with an `emit`, which adds the `MainGraphPasses` observers' passes at
   that point, any number of them.
-- **The table** (`Schedule/Frame.cpp`, `Api/Epochs.h`) lists each epoch: its id, its `RenderGraphRuntime::Segment`, the shape its
-  passes are made from (`Api::EpochShape`: the main, shadow or a view's extension's resources) and its pass keys in order, Core's and
-  the features' side by side. Only the shell includes it, handing it to `Extensions::InstallFeatures`; Core never includes `Schedule/`.
+- **The table** (`Schedule/Frame.cpp`, `Api/Epochs.h`) defines every epoch; nothing else does. Only the shell includes it, handing it to
+  `Extensions::InstallFeatures`; Core never includes `Schedule/`. An `Api::EpochDef` holds:
+  - its `id` and `label` (the reports' name), and its `RenderGraphRuntime::Segment`;
+  - the shape its passes are made from and record against (`shape`, `Api::EpochShape`: the main, shadow or a view's extension's
+    resources) and its index there (`shapeIndex`: `Api::MainShape` depth or colour; shadow 0, occlusion 1; the `Api::EngineView`);
+  - `sharesWith`, the id of an earlier epoch whose shape it records against instead of its own (`forward`: `main.colour`;
+    `fp.colour`: `fp.depth`);
+  - `gate`, an `Api::ObjectClass` (none: `Count`): while it is off the shared shape is not taken and the frame's claims don't need the
+    epoch; `claims`, whether the frame's claims need its recordings (`main.depth`, `main.colour`, and `forward` under its gate);
+  - `revision`, whether it is revision-driven (every DCLF epoch is); and its pass keys in order, Core's and the features' side by side.
+- **The orders.** The rows' order is the scene revisions' slot order and the reports' order: an epoch is its row's index in Core
+  (`Core/Render/Revision/Epochs.h`: `EpochCount`, `EpochTraitsOf`, `EpochOfShape`, `EpochById`, `ViewEpochsOf`; the fixed arrays hold
+  `kMaxEpochs`). The order a frame runs them is `frameOrder`, the host's async ticket loop's `asyncOrder` (its revision-driven epochs
+  are the ones with `revision`), both by id and naming every epoch once, the `ForeignEpoch`s too (Light Limit Fix's `light-culling`:
+  live, never revision-driven). The shell hands them to `RenderGraphRuntime::ConfigureFrame` (`Extensions::ScheduledFrameOrders`) before
+  the runtime initializes; without DCLF the runtime keeps its built-in orders.
+- **A new epoch** is a CS segment (`RenderGraphRuntime::Segment`), a row in the table (with its place in `frameOrder` and `asyncOrder`)
+  and its passes. Its shape must be one Core records (a main or shadow shape, or a view's); a new kind of shape is Core's work first.
 - **The executor** (`Core/Render/Epochs/ScheduleExecutor`) keeps every registered PassDef (a missing or duplicate key, neither or both
   of make and emit, or an anchor with a setup or latch word fails the install), resolves the table once at the end of
-  `InstallFeatures` (a key nobody registered fails it, naming the epoch; so do the setup and latch word rules above), runs the setups
+  `InstallFeatures` (a key nobody registered fails it, naming the epoch; so do the setup and latch word rules above, an epoch id unknown
+  or duplicated, a segment used twice, a `sharesWith` naming no earlier epoch recording that shape itself, a shape of Core's no epoch
+  records, an order not naming every epoch once, and more epochs than `kMaxEpochs`), runs the setups
   (`SetUpPassStates`, from `EnsureSceneBuffers`), gives the depth commit its latch word (`PassLatchWord`), and adds an extension's
   epochs' passes when its `GatherStructuralPasses` asks (`GatherScheduled`), epoch by epoch in table order. ORG orders the epochs;
   within an epoch the passes keep the table's order. Each extension still registers its own resources in `PrepareForBuild`.
 - Rule 6 below keeps it the one way in: nothing else adds a pass.
-
-A later step adds the epochs' definitions (their traits, triggers and frame and async orders) to `Api::EpochDef`.
 
 ## The rules
 

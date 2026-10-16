@@ -255,7 +255,7 @@ namespace DCLF
 			return;
 		// The views are DCLF's once the selected revision has the shadow epoch's recording (shaped for all placements) on the built
 		// graph and the installed publication has a shadow payload; until then (startup, a toggle) the engine's. Both are trusted.
-		if (!impl->EpochCovered(Epoch::Shadow) || !impl->installedDraws || !impl->installedDraws->shadow) {
+		if (!impl->EpochCovered(EpochOfShape(ShapeKind::Shadow, kShadowShape)) || !impl->installedDraws || !impl->installedDraws->shadow) {
 			++impl->shadowUnrecorded;
 			views.UncoverAll();
 		}

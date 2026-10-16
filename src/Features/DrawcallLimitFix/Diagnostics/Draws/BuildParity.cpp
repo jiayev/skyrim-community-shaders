@@ -211,7 +211,8 @@ namespace DCLF::Diagnostics
 		readback.count = staging(a_resources->countD3D11.get());
 		// The ranges of the shape the epoch was committed into (the adopted revision's).
 		const auto& active = DrawsView::Get().revisions.active;
-		const auto shape = active ? active->Get<PassFrame>(DrawsView::Impl::SceneRevisions::kShapeSlot + (a_epoch.depthOnly ? kDepthShape : kColourShape)) : nullptr;
+		const auto epoch = Draws::EpochOfShape(Draws::ShapeKind::Main, static_cast<std::uint32_t>(a_epoch.depthOnly ? kDepthShape : kColourShape));
+		const auto shape = active ? active->Get<PassFrame>(DrawsView::Impl::SceneRevisions::kShapeSlot + epoch) : nullptr;
 		if (!shape)
 			return;
 		readback.sequenceDraws = shape->sequenceDraws;

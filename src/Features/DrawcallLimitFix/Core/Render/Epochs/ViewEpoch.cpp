@@ -13,15 +13,16 @@ namespace DCLF
 	{
 		const ViewTraits& TraitsOf(ViewKind a_kind)
 		{
-			// The view's resolved shape (Extensions::Views: the feature's registration; none for a view no feature took) with its slot's
-			// epochs and segments (kViewSlots); made once, the first time a view's traits are read (after InstallFeatures).
+			// The view's resolved shape (Extensions::Views: the feature's registration; none for a view no feature took) with its epochs
+			// and segments (the schedule's: ViewEpochsOf); made once, the first time a view's traits are read (after InstallFeatures).
 			static const auto kTraits = [] {
 				std::array<ViewTraits, kViews> traits{};
 				for (const auto& slot : kViewSlots) {
 					const auto& entry = Extensions::ViewEntryOf(slot.view);
 					const auto& shape = entry.shape;
-					traits[ViewIndex(slot.view)] = { slot.view, shape.faces, shape.trees, shape.forwardPart, shape.depthPass, shape.viewBits, slot.epochs,
-						{ slot.segments[0], slot.segments[1] }, entry.name.c_str(), entry.prefix.c_str(), entry.blocks.c_str(), entry.target.c_str(),
+					const auto& epochs = ViewEpochsOf(slot.view);
+					traits[ViewIndex(slot.view)] = { slot.view, shape.faces, shape.trees, shape.forwardPart, shape.depthPass, shape.viewBits, epochs.epochs,
+						{ epochs.segments[0], epochs.segments[1] }, entry.name.c_str(), entry.prefix.c_str(), entry.blocks.c_str(), entry.target.c_str(),
 						{ entry.labels[0].c_str(), entry.labels[1].c_str(), entry.labels[2].c_str(), entry.labels[3].c_str(), entry.labels[4].c_str() } };
 				}
 				return traits;

@@ -51,7 +51,7 @@ namespace DCLF::Api
 		bool cullBackFaces = false;
 	};
 	/**
-	 * @brief A view's shape: what tells its epochs apart (Core's ViewTraits, with the view's slot: its epochs and segments).
+	 * @brief A view's shape: what tells its epochs apart (Core's ViewTraits, with its epochs and segments from the schedule: Schedule/Frame.cpp).
 	 *
 	 * - faces: the faces each epoch draws (at most Core's kMaxViewFaces), each with a camera and a range of the sequences.
 	 * - trees: tree LOD drawn per face (the DrawFamily::TreeInstances family's faces, Api/DrawFamilies.h). forwardPart: a forward

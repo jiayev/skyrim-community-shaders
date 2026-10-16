@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 
 #include <algorithm>
 #include <array>
@@ -48,6 +49,15 @@ namespace DCLF::Draws
 			std::array<std::vector<ResolvedEpoch>, 3> epochs;
 			decltype(Api::PassDef::latchWord) latchWord = nullptr;  // the one pass's that has one (none: null)
 			bool resolved = false;
+			// The epochs' definitions (Revision/Epochs.h), by row: their traits (named by names, owned), ids, and the epoch recording each
+			// main and shadow shape, and each view's.
+			std::array<EpochTraits, kMaxEpochs> traits{};
+			std::array<std::string, kMaxEpochs> ids, names;
+			std::uint32_t epochCount = 0;
+			std::array<std::uint32_t, 2> mainEpochs{ kNoEpoch, kNoEpoch }, shadowEpochs{ kNoEpoch, kNoEpoch };
+			std::array<ViewEpochs, kViews> views{};
+			// The frame's orders, as segment values (FrameOrders).
+			Extensions::FrameOrders orders;
 		};
 
 		Executor& State()
@@ -66,6 +76,130 @@ namespace DCLF::Draws
 			for (auto at = name.find(kViewToken); at != std::string::npos; at = name.find(kViewToken, at + prefix.size()))
 				name.replace(at, kViewToken.size(), prefix);
 			return name;
+		}
+
+		static_assert(static_cast<int>(Api::EpochShape::Main) == static_cast<int>(ShapeKind::Main) &&
+		                  static_cast<int>(Api::EpochShape::Shadow) == static_cast<int>(ShapeKind::Shadow) &&
+		                  static_cast<int>(Api::EpochShape::View) == static_cast<int>(ShapeKind::View),
+			"Api::EpochShape is Core's ShapeKind");
+
+		/** @brief The row of a_schedule's epoch a_id (a_schedule.epochs.size() + the foreign epoch's index for a foreign one; ~0u: none). */
+		std::uint32_t RowOf(const Api::FrameSchedule& a_schedule, std::string_view a_id)
+		{
+			for (std::uint32_t i = 0; i < a_schedule.epochs.size(); ++i)
+				if (a_schedule.epochs[i].id == a_id)
+					return i;
+			for (std::uint32_t i = 0; i < a_schedule.foreign.size(); ++i)
+				if (a_schedule.foreign[i].id == a_id)
+					return static_cast<std::uint32_t>(a_schedule.epochs.size()) + i;
+			return ~0u;
+		}
+
+		/** @brief Fails the install unless every epoch's and foreign epoch's id is set and its own, and every segment is one and used once. */
+		void CheckEpochIds(const Api::FrameSchedule& a_schedule)
+		{
+			const auto rows = static_cast<std::uint32_t>(a_schedule.epochs.size() + a_schedule.foreign.size());
+			auto idOf = [&](std::uint32_t a_row) { return a_row < a_schedule.epochs.size() ? a_schedule.epochs[a_row].id : a_schedule.foreign[a_row - a_schedule.epochs.size()].id; };
+			auto segmentOf = [&](std::uint32_t a_row) {
+				return a_row < a_schedule.epochs.size() ? a_schedule.epochs[a_row].segment : a_schedule.foreign[a_row - a_schedule.epochs.size()].segment;
+			};
+			if (a_schedule.epochs.size() > kMaxEpochs)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule has {} epochs, more than the revisions hold ({}): grow kMaxEpochs first", a_schedule.epochs.size(), kMaxEpochs));
+			for (std::uint32_t row = 0; row < rows; ++row) {
+				if (idOf(row).empty() || RowOf(a_schedule, idOf(row)) != row)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} has no id, or one another epoch has", idOf(row)));
+				if (segmentOf(row) >= static_cast<std::uint32_t>(RenderGraphRuntime::Segment::Count))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} has no segment", idOf(row)));
+				for (std::uint32_t other = 0; other < row; ++other)
+					if (segmentOf(other) == segmentOf(row))
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epochs {} and {} share segment {}", idOf(other), idOf(row), segmentOf(row)));
+			}
+		}
+
+		/** @brief Fails the install unless a_order (a_what) names every epoch and foreign epoch once; its segments, in order. */
+		std::vector<std::uint32_t> ResolveOrder(const Api::FrameSchedule& a_schedule, std::span<const std::string_view> a_order, std::string_view a_what)
+		{
+			const auto rows = a_schedule.epochs.size() + a_schedule.foreign.size();
+			std::vector<std::uint32_t> segments;
+			std::vector<bool> listed(rows, false);
+			for (const auto id : a_order) {
+				const auto row = RowOf(a_schedule, id);
+				if (row == ~0u || listed[row])
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's {} names epoch {}, which is unknown or named twice", a_what, id));
+				listed[row] = true;
+				segments.push_back(row < a_schedule.epochs.size() ? a_schedule.epochs[row].segment : a_schedule.foreign[row - a_schedule.epochs.size()].segment);
+			}
+			if (segments.size() != rows)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's {} lists {} of its {} epochs", a_what, segments.size(), rows));
+			return segments;
+		}
+
+		/**
+		 * @brief Epoch a_row's traits in a_state: its shape's kind and index, the epoch it shares (an earlier one recording the same shape
+		 * itself, or the install fails), its gate and claims; the epoch recording its shape, or a view's second one.
+		 */
+		void ResolveEpochTraits(Executor& a_state, const Api::FrameSchedule& a_schedule, std::uint32_t a_row)
+		{
+			const auto& epoch = a_schedule.epochs[a_row];
+			const auto shape = static_cast<ShapeKind>(epoch.shape);
+			const std::size_t indices = shape == ShapeKind::View ? kViews : 2;
+			if (static_cast<std::size_t>(epoch.shape) > static_cast<std::size_t>(ShapeKind::View) || epoch.shapeIndex >= indices)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} records a shape Core has not ({} {})", epoch.id,
+					static_cast<std::uint32_t>(epoch.shape), epoch.shapeIndex));
+			a_state.ids[a_row] = std::string(epoch.id);
+			a_state.names[a_row] = std::string(epoch.label);
+			auto& traits = a_state.traits[a_row];
+			traits = { static_cast<RenderGraphRuntime::Segment>(epoch.segment), a_state.names[a_row], shape, epoch.shapeIndex, kNoEpoch, epoch.gate, epoch.claims };
+			if (!epoch.sharesWith.empty()) {
+				// The assembly takes a shared shape from its source's slot of the same draft: the source comes first.
+				const auto source = RowOf(a_schedule, epoch.sharesWith);
+				if (source >= a_row || a_state.traits[source].shape != shape || a_state.traits[source].index != epoch.shapeIndex || a_state.traits[source].sharesWith != kNoEpoch)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} shares {}'s shape, which is not an earlier epoch recording that shape itself",
+						epoch.id, epoch.sharesWith));
+				traits.sharesWith = source;
+				if (shape == ShapeKind::View) {
+					auto& view = a_state.views[epoch.shapeIndex];
+					if (view.epochs[1] != kNoEpoch)
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} is a second sharing view {}'s shape", epoch.id, epoch.shapeIndex));
+					view.epochs[1] = a_row;
+					view.segments[1] = traits.segment;
+				}
+				return;
+			}
+			auto& owner = shape == ShapeKind::Main ? a_state.mainEpochs[epoch.shapeIndex] : shape == ShapeKind::Shadow ? a_state.shadowEpochs[epoch.shapeIndex] :
+			                                                                              a_state.views[epoch.shapeIndex].epochs[0];
+			if (owner != kNoEpoch)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epochs {} and {} both record one shape: the second shares it", a_state.ids[owner], epoch.id));
+			owner = a_row;
+			if (shape == ShapeKind::View)
+				a_state.views[epoch.shapeIndex].segments = { traits.segment, traits.segment };
+		}
+
+		/**
+		 * @brief The schedule's epochs' definitions, resolved into a_state, and the frame's orders; fails the install for an unknown or
+		 * duplicated id, a segment used twice, a shape Core has not or one it records with no epoch, a bad share, an order that does not
+		 * name every epoch once, or more epochs than kMaxEpochs.
+		 */
+		void ResolveEpochs(Executor& a_state, const Api::FrameSchedule& a_schedule)
+		{
+			CheckEpochIds(a_schedule);
+			for (std::uint32_t row = 0; row < a_schedule.epochs.size(); ++row)
+				ResolveEpochTraits(a_state, a_schedule, row);
+			// Core records every main and shadow shape and every view's (their loops run over all of them).
+			for (std::uint32_t i = 0; i < 2; ++i)
+				if (a_state.mainEpochs[i] == kNoEpoch || a_state.shadowEpochs[i] == kNoEpoch)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule records no epoch for Core's main or shadow shape {}", i));
+			for (std::size_t v = 0; v < kViews; ++v)
+				if (a_state.views[v].epochs[0] == kNoEpoch)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule records no epoch for view {}", v));
+			a_state.epochCount = static_cast<std::uint32_t>(a_schedule.epochs.size());
+			auto& orders = a_state.orders;
+			orders.epochOrder = ResolveOrder(a_schedule, a_schedule.frameOrder, "frame order");
+			orders.asyncOrder = ResolveOrder(a_schedule, a_schedule.asyncOrder, "async order");
+			// The revision-driven ones: the async order's DCLF epochs with revision (a foreign epoch never is).
+			for (const auto id : a_schedule.asyncOrder)
+				if (const auto row = RowOf(a_schedule, id); row < a_schedule.epochs.size() && a_schedule.epochs[row].revision)
+					orders.revisionEpochs.push_back(a_schedule.epochs[row].segment);
 		}
 	}
 
@@ -86,6 +220,7 @@ namespace DCLF::Draws
 		auto& state = State();
 		if (std::exchange(state.resolved, true))
 			stl::report_and_fail("Drawcall Limit Fix: the schedule was resolved twice");
+		ResolveEpochs(state, a_schedule);
 		// BuildDrawsLatch has one stage word, the depth segment's (Api/Passes.h).
 		std::uint32_t latchPass = ~0u;
 		for (std::uint32_t i = 0; i < state.passes.size(); ++i) {
@@ -101,7 +236,7 @@ namespace DCLF::Draws
 			const auto shape = static_cast<std::size_t>(epoch.shape);
 			if (shape >= state.epochs.size() || epoch.segment >= static_cast<std::uint32_t>(RenderGraphRuntime::Segment::Count))
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} has no shape or segment", epoch.id));
-			ResolvedEpoch resolved{ std::string(epoch.id), static_cast<RenderGraphRuntime::Segment>(epoch.segment), static_cast<Api::EngineView>(epoch.view), {} };
+			ResolvedEpoch resolved{ std::string(epoch.id), static_cast<RenderGraphRuntime::Segment>(epoch.segment), static_cast<Api::EngineView>(epoch.shapeIndex), {} };
 			for (std::size_t k = 0; k < epoch.passes.size(); ++k) {
 				const auto key = epoch.passes[k];
 				std::uint32_t found = ~0u;
@@ -151,6 +286,43 @@ namespace DCLF::Draws
 		return latchWord ? latchWord() : 0u;
 	}
 
+	std::uint32_t EpochCount()
+	{
+		return State().epochCount;
+	}
+
+	const EpochTraits& EpochTraitsOf(std::uint32_t a_epoch)
+	{
+		return State().traits[a_epoch];
+	}
+
+	std::uint32_t EpochOfShape(ShapeKind a_shape, std::uint32_t a_index)
+	{
+		const auto& state = State();
+		switch (a_shape) {
+		case ShapeKind::Main:
+			return a_index < state.mainEpochs.size() ? state.mainEpochs[a_index] : kNoEpoch;
+		case ShapeKind::Shadow:
+			return a_index < state.shadowEpochs.size() ? state.shadowEpochs[a_index] : kNoEpoch;
+		default:
+			return a_index < state.views.size() ? state.views[a_index].epochs[0] : kNoEpoch;
+		}
+	}
+
+	std::uint32_t EpochById(std::string_view a_id)
+	{
+		const auto& state = State();
+		for (std::uint32_t e = 0; e < state.epochCount; ++e)
+			if (state.ids[e] == a_id)
+				return e;
+		return kNoEpoch;
+	}
+
+	const ViewEpochs& ViewEpochsOf(ViewKind a_kind)
+	{
+		return State().views[ViewIndex(a_kind)];
+	}
+
 	void GatherScheduled(Api::EpochShape a_shape, Api::EngineView a_view, const Api::PassContext& a_base, std::vector<org::RenderGraph::ExternalPassDesc>& a_out)
 	{
 		const auto& state = State();
@@ -180,6 +352,14 @@ namespace DCLF::Draws
 					AddPass(a_out, entry.kind, NameOf(entry, context), std::move(pass), context.epoch, entry.queue);
 			}
 		}
+	}
+}
+
+namespace DCLF::Extensions
+{
+	const FrameOrders& ScheduledFrameOrders()
+	{
+		return Draws::State().orders;
 	}
 }
 

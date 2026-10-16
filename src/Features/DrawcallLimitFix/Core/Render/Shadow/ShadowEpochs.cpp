@@ -135,9 +135,10 @@ namespace DCLF
 			return false;
 		const auto layouts = impl->PredictedOcclusion();
 		bool shaped = false;
-		if (impl->EpochCovered(Epoch::Occlusion))
+		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kOcclusionShape);
+		if (impl->EpochCovered(epoch))
 			if (const auto& active = impl->revisions.active)
-				if (const auto& fragment = active->Fragment(Impl::SceneRevisions::kShapeSlot + Epoch::Occlusion))
+				if (const auto& fragment = active->Fragment(Impl::SceneRevisions::kShapeSlot + epoch))
 					if (const auto variants = fragment->Value<ShadowVariants>())
 						for (const auto& shape : variants->shapes)
 							shaped = shaped || (shape && LayoutOf(*shape) == layouts);
@@ -176,7 +177,8 @@ namespace DCLF
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 			if (drawable & (1u << v))
 				layouts.push_back(LayoutOf(impl->occlusion[v].view, OcclusionSlot(v), OcclusionModeOf(v), OcclusionDepthTarget(v)));
-		const auto revision = impl->RevisionOf(Epoch::Occlusion);
+		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kOcclusionShape);
+		const auto revision = impl->RevisionOf(epoch);
 		std::shared_ptr<const ShadowFrame> revisionShape;
 		std::size_t revisionVariant = 0;
 		if (revision)
@@ -230,7 +232,7 @@ namespace DCLF
 				shadowStats.occlusionInputs[v] = inputCount;
 				++shadowStats.occlusionDrawn[v];
 			}
-			impl->SubmitRevisionRecording(Epoch::Occlusion, *revision.recordings, revisionVariant);
+			impl->SubmitRevisionRecording(epoch, *revision.recordings, revisionVariant);
 		}, impl->shadowExecutionOwner);
 		shadowStats.occlusionMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		++shadowStats.occlusionEpochs;
@@ -515,7 +517,8 @@ namespace DCLF
 		// The revision's shape and recording and the installed payload: trusted, nothing is checked here. The epoch covers every
 		// placement; a slot without a view does no work (zero latch, counters zeroed, its render pass loads and stores the engine's).
 		const std::vector<ShadowViewLayout>& layouts = impl->shadowPlacements;
-		const auto revision = impl->RevisionOf(Epoch::Shadow);
+		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kShadowShape);
+		const auto revision = impl->RevisionOf(epoch);
 		const std::shared_ptr<ShadowPayload> ahead = impl->installedDraws ? impl->installedDraws->shadow : nullptr;
 		if (!revision || !ahead || ahead->inputs.addresses.identity != in.addresses.identity) {
 			if (revision && impl->shadowUnbuilt++ == 0)
@@ -526,7 +529,7 @@ namespace DCLF
 		const ShadowFrame& target = *revisionShape;
 		// Clamped to the latch the producer sized (ReserveShadowLatch).
 		if (in.sunEntryProcesses.size() > target.latchLayout.sunProcesses) {
-			++impl->revisions.latchClamped[Epoch::Shadow];
+			++impl->revisions.latchClamped[epoch];
 			in.sunEntryProcesses.resize(target.latchLayout.sunProcesses);
 		}
 		ShadowPayload* committed = ahead.get();
@@ -583,7 +586,7 @@ namespace DCLF
 			Draws::LatchShadowViews(commit, latchSlot, revisionShape, layouts);
 			Draws::UploadShadowArena(commit);
 			impl->revisions.latchedMisses += Draws::LatchShadowCsBlocks(commit, latchSlot);
-			impl->SubmitRevisionRecording(Epoch::Shadow, *revision.recordings, 0);
+			impl->SubmitRevisionRecording(epoch, *revision.recordings, 0);
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			Draws::LogShadowEpoch(commit);
 			TracyCZoneEnd(shadowViewsZone);

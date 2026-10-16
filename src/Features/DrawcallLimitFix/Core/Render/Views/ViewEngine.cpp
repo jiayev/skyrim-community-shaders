@@ -143,8 +143,8 @@ namespace DCLF
 	IndirectDraws::ViewSubmit IndirectDraws::SubmitViewEpoch(Api::EngineView a_view, std::uint32_t a_epoch, const ViewListed& a_listed,
 		std::span<const ViewFace> a_faces, std::uint32_t* a_drawn)
 	{
-		const auto& slot = kViewSlots[ViewIndex(a_view)];
-		const std::uint32_t epoch = slot.epochs[a_epoch];
+		const auto& epochs = ViewEpochsOf(a_view);
+		const std::uint32_t epoch = epochs.epochs[a_epoch];
 		// The selected revision's shape and recording (DecideCoverage covered the view): trusted, its map, buckets and latch are what the
 		// values go into.
 		const auto revision = impl->RevisionOf(epoch);
@@ -162,7 +162,7 @@ namespace DCLF
 		if (trees)
 			rows = impl->ViewFaceRows(a_view, *shape, *owners);
 		std::uint32_t drawn = 0;
-		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(slot.segments[a_epoch], [&](org::RenderGraph&) {
+		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(epochs.segments[a_epoch], [&](org::RenderGraph&) {
 			if (!a_faces.empty())
 				drawn = impl->CommitView(*shape, a_faces, a_listed.inputs, trees ? &rows : nullptr);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, 0);

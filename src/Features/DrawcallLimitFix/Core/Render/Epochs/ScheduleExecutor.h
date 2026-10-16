@@ -28,9 +28,12 @@ namespace DCLF::Draws
 	/** @brief Main thread, at InstallFeatures, before the features install: Core's passes (Passes/CorePasses.cpp). */
 	void RegisterCorePasses();
 	/**
-	 * @brief Main thread, once, at the end of InstallFeatures: each epoch's keys to their passes, grouped by shape (and view). Fails the
-	 * install for a key nobody registered, naming it and its epoch; a pass with a setup in a Shadow epoch; a second pass with a latch word,
-	 * or one the schedule names anywhere but in main.depth before core.z.build-draws.
+	 * @brief Main thread, once, at the end of InstallFeatures: the epochs' definitions (the revisions' epochs, Revision/Epochs.h: EpochCount,
+	 * EpochTraitsOf, EpochOfShape, EpochById, ViewEpochsOf) and the frame's orders (Extensions::ScheduledFrameOrders), then each epoch's
+	 * keys to their passes, grouped by shape (and view). Fails the install for an epoch id unknown or duplicated, a segment used twice, more
+	 * epochs than kMaxEpochs, a shape Core has not or one of Core's with no epoch, a sharesWith naming no earlier epoch recording that shape
+	 * itself, an order not naming every epoch and foreign epoch once; a key nobody registered, naming it and its epoch; a pass with a setup
+	 * in a Shadow epoch; a second pass with a latch word, or one the schedule names anywhere but in main.depth before core.z.build-draws.
 	 */
 	void ResolveSchedule(const Api::FrameSchedule& a_schedule);
 	/**

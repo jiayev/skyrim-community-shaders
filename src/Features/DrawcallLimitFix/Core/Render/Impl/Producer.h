@@ -56,10 +56,10 @@ namespace DCLF
 		 */
 		struct SceneRevisions
 		{
-			// By Epoch: the forward epoch uses the colour shape, the first-person epochs share one. The versions slot: the set the
-			// revision names (NamedVersions), adopted by the frame with it.
-			static constexpr std::uint32_t kEpochs = Epoch::Count;
-			static constexpr std::uint32_t kVersionsSlot = 0, kShapeSlot = 1, kRecordingSlot = kShapeSlot + kEpochs, kSlots = kRecordingSlot + kEpochs;
+			// By epoch (the schedule's rows, Revision/Epochs.h; kMaxEpochs of them, EpochCount() used): an epoch sharing a shape
+			// (EpochTraits::sharesWith) holds its source's. The versions slot: the set the revision names (NamedVersions), adopted by the
+			// frame with it.
+			static constexpr std::uint32_t kVersionsSlot = 0, kShapeSlot = 1, kRecordingSlot = kShapeSlot + kMaxEpochs, kSlots = kRecordingSlot + kMaxEpochs;
 			// The builder's alone (the only consumer); a revision's last recording completing wakes the builder.
 			org::async::RevisionAssembler assembler{ kSlots, [] { WakeSnapshotBuilder(); } };
 			// This make's sealed set (MakeRevision) and the layout its shapes were made from.
@@ -83,20 +83,20 @@ namespace DCLF
 				// The completions' (ORG's host thread): recorded, failed, dropped by a graph build (or recorded on another: asked again).
 				std::atomic<std::uint64_t> recorded = 0, failed = 0, dropped = 0, shapes = 0;
 			};
-			std::array<EpochStats, kEpochs> epochs;
+			std::array<EpochStats, kMaxEpochs> epochs;
 			std::atomic<std::uint32_t> failuresLogged = 0;
 			// The frame's from here on. The adopted snapshot's revision, for the frame's epochs.
 			org::async::RevisionAssembler::Lease active;
 			std::uint64_t latchedMisses = 0;  // values a commit staged because the revision's latched copies lacked them
 			// Per epoch since the last report: commits with no shape or recording, values past the latch (dropped), submissions.
-			std::array<std::uint64_t, kEpochs> unrevised{}, latchClamped{}, submitted{};
+			std::array<std::uint64_t, kMaxEpochs> unrevised{}, latchClamped{}, submitted{};
 			// Per epoch, whether the selected revision has its recordings of the graph as built now (DecideCoverage).
-			std::array<bool, kEpochs> covered{};
+			std::array<bool, kMaxEpochs> covered{};
 			bool explicitBuilds = false;
 			std::uint64_t builds = 0, withdrawn = 0, ticketsReleased = 0;
-			std::array<std::uint64_t, kEpochs> uncovered{};
+			std::array<std::uint64_t, kMaxEpochs> uncovered{};
 			// Per epoch, the inputs (versions, shape) whose recording failed: not asked again until they change.
-			std::array<std::pair<std::shared_ptr<const org::async::RevisionFragment>, std::shared_ptr<const org::async::RevisionFragment>>, kEpochs> failedFor;
+			std::array<std::pair<std::shared_ptr<const org::async::RevisionFragment>, std::shared_ptr<const org::async::RevisionFragment>>, kMaxEpochs> failedFor;
 		} revisions;
 		/** @brief Recording requests not yet completed: what the build point releases unsubmitted tickets for. */
 		std::atomic<std::uint32_t> recordingsOutstanding{ 0 };
