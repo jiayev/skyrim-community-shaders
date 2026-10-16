@@ -9,7 +9,7 @@ namespace DCLF::EngineReleases
 	/**
 	 * @brief Engine references let go of off the render thread, released on it (Release, at Present). Dropping the last
 	 * reference to a scene graph object runs the engine's destructors, which belong on its main thread; an immutable
-	 * publication that holds references (SunCandidates) may lose its last owner on any thread, so it hands them over here, as
+	 * publication that holds references (EntrySpace) may lose its last owner on any thread, so it hands them over here, as
 	 * the scene work does with what holds them (an applied event batch, a material reference: PushOwner).
 	 */
 	inline EventQueue<RE::NiPointer<RE::NiRefObject>> queue;

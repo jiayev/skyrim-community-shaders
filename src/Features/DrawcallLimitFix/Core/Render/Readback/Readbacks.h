@@ -199,7 +199,7 @@ namespace DCLF::Draws
 			std::uint32_t lastFrame = 0;
 			std::uint32_t outFrame = 0;
 		};
-		/** @brief A write's node: a fade root slot's, a plain entry root (SunCandidates' entry with no fade root), a geometry. */
+		/** @brief A write's node: a fade root slot's, a plain entry root (EntrySpace' entry with no fade root), a geometry. */
 		enum WriteKind : std::uint8_t
 		{
 			kWriteRoot,
@@ -225,7 +225,7 @@ namespace DCLF::Draws
 			std::uint32_t frame = 0;  // the scene frame of the batch the writes follow
 			bool full = false;        // every stood-in root and geometry, not only the changes (a refresh, a reset, a cut's first batch)
 			std::shared_ptr<const SceneTables> tables;
-			std::shared_ptr<const SunCandidates> candidates;  // the plain entry roots' (held: their nodes live until the write)
+			std::shared_ptr<const EntrySpace> candidates;  // the plain entry roots' (held: their nodes live until the write)
 			std::vector<Write> writes;
 			Writes* next = nullptr;
 		};
@@ -252,7 +252,7 @@ namespace DCLF::Draws
 			bool reset = false;     // the frame's commit zeroed the reported words: the decoder's verdicts start again
 			bool complete = true;   // every change fit (no verdict arrives a frame late)
 			std::shared_ptr<const SceneTables> tables;  // the frame's (the occupants); let go by the render thread alone
-			std::shared_ptr<const SunCandidates> candidates;   // the frame's entries (the wide writes' plain entry roots)
+			std::shared_ptr<const EntrySpace> candidates;   // the frame's entries (the wide writes' plain entry roots)
 			std::vector<VisibilityEvent> events;
 			std::vector<std::pair<std::uint8_t, const void*>> firsts;  // (category, node), named while `tables` holds the node
 			Batch* next = nullptr;
@@ -264,7 +264,7 @@ namespace DCLF::Draws
 			std::uint32_t frame = 0;
 			bool reset = false;
 			std::shared_ptr<const SceneTables> tables;
-			std::shared_ptr<const SunCandidates> candidates;
+			std::shared_ptr<const EntrySpace> candidates;
 		};
 
 		// Render thread: each frame slot's arm, and harvested batches not yet handed to a task, in frame order.
@@ -286,7 +286,7 @@ namespace DCLF::Draws
 		// The decoder's: each slot's last ask class (1: wide), the plain entry roots' last asks, each object slot's cached plain entry.
 		std::vector<std::uint8_t> rootWrittenWide, objectWrittenWide, entryWritten;
 		std::vector<std::uint32_t> entryWrittenVersion;
-		const SunCandidates* entryCandidates = nullptr;
+		const EntrySpace* entryCandidates = nullptr;
 		std::vector<std::uint32_t> objectEntry;
 		std::vector<const void*> objectEntryGeometry;
 		// The decoder's alone: PrepareWrites' incremental state (Visibility.cpp's VisibilityDecode).
@@ -299,7 +299,7 @@ namespace DCLF::Draws
 		std::atomic<Writes*> writes{ nullptr };
 		// The main thread's: the newest writes' tables (a cut's writes take the stood-in roots from them), and the cut it wrote.
 		std::shared_ptr<const SceneTables> writtenTables;
-		std::shared_ptr<const SunCandidates> writtenCandidates;  // the newest writes' (the plain entry roots)
+		std::shared_ptr<const EntrySpace> writtenCandidates;  // the newest writes' (the plain entry roots)
 		std::uint32_t cutWritten = 0;
 		std::uint32_t verdictPrunes = 0;           // entries since rootVerdicts was last pruned to the newest tables
 		std::vector<RE::NiAVObject*> chain;        // scratch: a geometry's nodes up to its root

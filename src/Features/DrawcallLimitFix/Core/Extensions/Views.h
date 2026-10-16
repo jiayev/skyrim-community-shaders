@@ -90,12 +90,21 @@ namespace DCLF::Api
 		std::uint32_t count = 0;
 		bool operator==(const ViewAccumulators&) const = default;
 	};
+
+	/** @brief What a view root contribution's owned is handed (ViewRootContribution::owned): the view, and the active toggles. */
+	class ViewRootFrame
+	{
+	public:
+		EngineView view;
+		const ToggleSet& toggles;
+	};
 }
 
 namespace DCLF::Extensions
 {
 	inline constexpr std::size_t kEngineViews = static_cast<std::size_t>(Api::EngineView::Count);
 	inline constexpr std::size_t kViewPoints = static_cast<std::size_t>(Api::ViewPoint::Count);
+	inline constexpr std::size_t kViewRoots = static_cast<std::size_t>(Api::ViewRoot::Count);
 
 	/** @brief A view's resolved entry: its feature's registration (none: registered false, every field its default). */
 	struct ViewEntry
@@ -149,6 +158,8 @@ namespace DCLF::Extensions
 		// The view whose forward keys carry no view bits of their own (Api::ViewKeyRule::keyFlags 0; Count: none), the pipeline lane's
 		// view for a key no other view's bits name (ForwardKeyView).
 		Api::EngineView plainKeyView = Api::EngineView::Count;
+		// By root: its view root contribution's owned (null: none; a draw family's faces' root is the family's entry's).
+		std::array<bool (*)(const Api::ViewRootFrame&), kViewRoots> rootOwned{};
 		// The view bits by phase are both families' (ViewCommon.h: ResolvedViewBits).
 	};
 
@@ -168,9 +179,11 @@ namespace DCLF::Extensions
 	/**
 	 * @brief Main thread, at the end of InstallFeatures (Registry): the entries resolved from the registered contributions (by view;
 	 * EngineView::Count: none) and the registered work. Fails the install for work on a view no feature took (a phase or view bit a
-	 * contribution shares with Core's or another view's: ResolveViewBits). Once.
+	 * contribution shares with Core's or another view's: ResolveViewBits) and the view root contributions (by root; ViewRoot::Count: none).
+	 * Once.
 	 */
-	void ResolveViews(std::span<const Api::ViewContribution, kEngineViews> a_views, std::span<const Api::ViewWork> a_work);
+	void ResolveViews(std::span<const Api::ViewContribution, kEngineViews> a_views, std::span<const Api::ViewWork> a_work,
+		std::span<const Api::ViewRootContribution, kViewRoots> a_roots);
 
 	/** @brief Whether DCLF draws a_view under a_toggles (its toggle on; false for a view no feature took). */
 	inline bool ViewOn(const ToggleSet& a_toggles, Api::EngineView a_view)

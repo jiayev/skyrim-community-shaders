@@ -6,6 +6,9 @@
 #include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegmentEvents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include "ShaderCache.h"
@@ -37,6 +40,19 @@ namespace DCLF::Features::Lod
 			return tes ? tes->lodLandRoot : nullptr;
 		}
 
+		/**
+		 * @brief A covered view's LOD land and objects roots are its faces' (the view root contribution) while the engine's LOD swaps are
+		 * gated (a show veto registered: the LOD gates') and both classes are DCLF's: a swap's incoming blocks are shown only by the frame
+		 * whose claims hold them, so the faces never need the engine's registrations of them. Ungated, the LOD chunks and objects the engine
+		 * shows or attaches in motion take DCLF a few frames to bind (ClassifyResidue) and their roots stay, the members withheld
+		 * (PassCapture).
+		 */
+		bool LodRootsOwned(const Api::ViewRootFrame& a_frame)
+		{
+			return Extensions::ShowVetoRegistered() && Extensions::ObjectClassOn(a_frame.toggles, Api::ObjectClass::LodObjects) &&
+			       Extensions::ObjectClassOn(a_frame.toggles, Api::ObjectClass::LodTerrain);
+		}
+
 		void Install(Api::InstallContext& a_context)
 		{
 			// Where Core's were listed: the switches before the LOD gates' (Features/TreeLod's follow them there), the toggles after the
@@ -59,6 +75,7 @@ namespace DCLF::Features::Lod
 			// draw the LOD land and objects roots in the engine's place.
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::LodObjects, .toggle = objects, .categoryRoot = &LodLandRoot });
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::LodTerrain, .toggle = terrain, .categoryRoot = &LodLandRoot });
+			a_context.RegisterViewRoot({ .root = kOwnedRoot, .owned = &LodRootsOwned });
 			// Object LOD, drawn by visible segment ranges: its techniques, only for a BSSubIndexTriShape with the LOD object flags; and the
 			// sub-index shapes with those flags, drawn as tri-shapes over the ranges LodSegments mirrors (Ineligible::Lod while the toggle is
 			// off). Any other sub-index shape is not one DCLF draws.

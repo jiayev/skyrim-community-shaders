@@ -61,9 +61,9 @@ namespace DCLF::Draws
 		std::vector<SunEntryProcess> sunEntryProcesses;
 		// The sun entries DCLF can take out of the cascade culls (SunAccumulation): the build turns them into the next
 		// frame's exclusion.
-		std::shared_ptr<const SunCandidates> sunCandidates;
+		std::shared_ptr<const EntrySpace> sunCandidates;
 		// And those it could take out of the point lights' culls (LocalLightCull): the paraboloid exclusion's.
-		std::shared_ptr<const SunCandidates> lightCandidates;
+		std::shared_ptr<const EntrySpace> lightCandidates;
 		ResourceAddresses addresses{};
 		// Community Shaders' SharedData (b5) and FeatureData (b6), copied from the structs CS keeps.
 		std::vector<std::byte> sharedData, featureData;

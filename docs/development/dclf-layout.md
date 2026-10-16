@@ -342,7 +342,8 @@ extension points still to come, as the next features need them:
 
 Decided (2026-10-15): skinning becomes its own feature, `Features/Skins`, which the features that read skins (Actors, the LOD chains,
 FirstPerson, Effects, the blood decals) declare as a dependency (DEPENDS in the layout check); the actors' wetness and the skin parity go to
-`Integrations/AdvancedSkin`; `SunCandidates` and `CandidateTable` stay in Core, renamed as the entry index space.
+`Integrations/AdvancedSkin`; `SunCandidates` and `CandidateTable` stay in Core, renamed as the entry index space (`EntrySpace`, `EntrySpaceChanges` and the
+ChangedEntries readers in `Core/Scene/EntrySpace`; the table, `EntrySpaceTable`, in `Scene/Coordinator`).
 
 ## The view contract
 

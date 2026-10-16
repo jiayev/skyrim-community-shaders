@@ -59,7 +59,7 @@ namespace DCLF
 			std::shared_ptr<const ScenePublication> publication;
 			AheadContext context;
 			std::uint32_t frame = 0;
-			std::shared_ptr<const SunCandidates> sun, light;
+			std::shared_ptr<const EntrySpace> sun, light;
 			std::uint64_t aheadNumber = 0;  // aheadKicked when posted
 		};
 		/** @brief A complete scene snapshot (builder -> AdoptSnapshot): publication, draws, revision, and the generations compared. */

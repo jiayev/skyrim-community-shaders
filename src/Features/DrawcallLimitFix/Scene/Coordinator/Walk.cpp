@@ -141,7 +141,6 @@ namespace DCLF::Scene
 			tables.objectGeometry.reserve(tracked.size());
 			tables.draws.reserve(tracked.size());
 			tables.lights.reserve(tracked.size());
-			tables.treeAnim.reserve(tracked.size());
 			tables.skinPartitions.reserve(tracked.size());
 		}
 
@@ -623,7 +622,6 @@ namespace DCLF::Scene
 			tables.FreeExtras(objectId);
 			tables.objects[objectId] = object;
 			tables.lights[objectId] = ObjectLights{};
-			tables.treeAnim[objectId] = ObjectTreeAnim{};
 			tables.fadeDistance[objectId] = 0.0f;
 		}
 		tables.SetActorWetness(objectId, trackedEntry->actorOwned ? trackedEntry->groupIdentity : 0,
@@ -717,7 +715,6 @@ namespace DCLF::Scene
 			tables.FreeExtras(slot);
 			tables.objects[slot] = object;
 			tables.lights[slot] = ObjectLights{};
-			tables.treeAnim[slot] = ObjectTreeAnim{};
 			tables.fadeDistance[slot] = 0.0f;
 		}
 		tables.SetActorWetness(slot, 0, a_tracked.identity);

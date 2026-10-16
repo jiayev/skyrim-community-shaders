@@ -29,6 +29,32 @@ namespace DCLF::Features::TreeLod
 			return Engine::Global<RE::BSShader*>(0x33dcd10);  // the BSDistantTreeShader
 		}
 
+		// The engine's tree LOD shapes: their shader property is a BSDistantTreeShaderProperty.
+		const void* EngineShapeVtable()
+		{
+			return reinterpret_cast<const void*>(RE::VTABLE_BSDistantTreeShaderProperty[0].address());
+		}
+
+		// DistantTree's descriptors (ShaderCache.h, DistantTreeShaderTechniques and DistantTreeShaderFlags), as the engine's main view draws
+		// tree LOD (BSDistantTreeShader::SetupTechnique): colour Deferred and AlphaTest, depth the Depth technique (bit 0) and AlphaTest; a
+		// view's forward program AlphaTest alone.
+		using TreeTechnique = SIE::ShaderCache::DistantTreeShaderTechniques;
+		using TreeFlag = SIE::ShaderCache::DistantTreeShaderFlags;
+		constexpr std::uint32_t kTreeAlphaTest = static_cast<std::uint32_t>(TreeFlag::AlphaTest);
+		constexpr Api::DrawFamilyProgram kProgram{ .shaderType = static_cast<std::uint8_t>(RE::BSShader::Type::DistantTree),
+			.name = "DistantTree",
+			.label = "tree LOD",
+			.keyName = "tree-lod",
+			.sourcePath = "Data/Shaders/DistantTree.hlsl",
+			.nativeNote = "tree LOD stays native",
+			.descriptors = { .colour = static_cast<std::uint32_t>(TreeFlag::Deferred) | kTreeAlphaTest,
+				.depth = static_cast<std::uint32_t>(TreeTechnique::Depth) | kTreeAlphaTest,
+				.forward = kTreeAlphaTest },
+			.build = Api::DrawFamilyBuild::DepthThenEqualColour,
+			.signature = Api::DrawFamilySignature::DrawInstanced };
+		static_assert(kProgram.descriptors.colour == 0x10100 && kProgram.descriptors.depth == 0x10001 && kProgram.descriptors.forward == 0x10000,
+			"tree LOD's descriptors are not ShaderPrograms' kDistantTree* (Deferred | AlphaTest, Depth | AlphaTest, AlphaTest)");
+
 		/**
 		 * @brief Records tree LOD's draw (dclf-lod.md): push data is the draw row's address and whether this is phase 2's depth draw;
 		 * arguments come from the list's header (TreeInstances::VisibleHeader).
@@ -81,6 +107,8 @@ namespace DCLF::Features::TreeLod
 			.colourRange = "cs.dclf.colour.tree-lod",
 			.frame = { .serve = &Serve, .decide = &Decide, .programSource = &ProgramSource },
 			.main = { .declare = &MainDeclare, .revision = &MainRevision, .record = &MainRecord },
-			.faces = FacesContribution() });
+			.faces = FacesContribution(),
+			.program = kProgram,
+			.engineShapes = { .propertyVtable = &EngineShapeVtable } });
 	}
 }

@@ -5,7 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/EntrySpaceTable.h"
 
 namespace DCLF
 {
@@ -41,7 +41,7 @@ namespace DCLF
 			std::uint64_t rootEpoch = 0;         // fadeRootsJournal's content epoch the root classes were judged at
 			bool rootsHeld = false;
 			std::uint32_t cutVisited = 0;        // the cut whose pending pass visited everything
-			std::shared_ptr<const SunCandidates> candidates;  // the snapshot whose indices entryMembers are in
+			std::shared_ptr<const EntrySpace> candidates;  // the snapshot whose indices entryMembers are in
 			// Per root slot: its class as last judged (0 not written, 1 stood in, 2 wide), its node, the object slots under it.
 			std::vector<std::uint8_t> rootClass;
 			std::vector<const void*> rootNode;
@@ -157,7 +157,7 @@ namespace DCLF
 			std::vector<const void*> objectWrittenGeometry;
 			std::vector<std::uint8_t> rootWrittenWide, objectWrittenWide, entryWritten;
 			std::vector<std::uint32_t> entryWrittenVersion;
-			const SunCandidates* entryCandidates = nullptr;
+			const EntrySpace* entryCandidates = nullptr;
 			std::vector<std::uint32_t> objectEntry;
 			std::vector<const void*> objectEntryGeometry;
 
@@ -214,14 +214,14 @@ namespace DCLF
 				a_asked.rootWrittenWide[r] = wideBit;
 				writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteRoot, !stoodIn });
 			}
-			const SunCandidates* candidates = a_newest.candidates.get();
+			const EntrySpace* candidates = a_newest.candidates.get();
 			if (candidates != a_asked.entryCandidates) {
 				a_asked.entryCandidates = candidates;
-				a_asked.objectEntry.assign(a_asked.objectEntry.size(), SunCandidates::kNone);
+				a_asked.objectEntry.assign(a_asked.objectEntry.size(), EntrySpace::kNone);
 				a_asked.objectEntryGeometry.assign(a_asked.objectEntryGeometry.size(), nullptr);
 			}
 			if (a_asked.objectEntry.size() < objects) {
-				a_asked.objectEntry.resize(objects, SunCandidates::kNone);
+				a_asked.objectEntry.resize(objects, EntrySpace::kNone);
 				a_asked.objectEntryGeometry.resize(objects, nullptr);
 			}
 			const std::uint32_t entries = candidates ? candidates->Capacity() : 0u;
@@ -232,7 +232,7 @@ namespace DCLF
 				const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
 				std::uint8_t objectClass = 0;
 				const void* rootNode = nullptr;
-				std::uint32_t entry = SunCandidates::kNone;
+				std::uint32_t entry = EntrySpace::kNone;
 				if (geometry && !tables.IsLayer(static_cast<std::uint32_t>(o))) {
 					if (root != kNoFadeRoot && root < roots && rootClass[root]) {
 						objectClass = rootClass[root];
@@ -240,7 +240,7 @@ namespace DCLF
 					} else if (root == kNoFadeRoot && candidates) {
 						if (a_asked.objectEntryGeometry[o] != geometry) {
 							a_asked.objectEntryGeometry[o] = geometry;
-							a_asked.objectEntry[o] = SunCandidates::kNone;
+							a_asked.objectEntry[o] = EntrySpace::kNone;
 							if (const auto it = candidates->geometries.find(geometry); it != candidates->geometries.end() && it->second < candidates->geometryEntry.size())
 								a_asked.objectEntry[o] = candidates->geometryEntry[it->second];
 						}
@@ -250,13 +250,13 @@ namespace DCLF
 							objectClass = 2;
 							rootNode = candidates->entryNodes[entry];
 						} else {
-							entry = SunCandidates::kNone;
+							entry = EntrySpace::kNone;
 						}
 					}
 				}
 				if (objectClass == 2 && o < tables.objects.size() &&
 					(!(tables.objects[o].flags & kObjectMember) || (tables.objects[o].flags & (kObjectNoBindings | kObjectShadowOnly | kObjectFree)))) {
-					if (entry != SunCandidates::kNone)
+					if (entry != EntrySpace::kNone)
 						entryResidue[entry] = 1;
 					objectClass = 0;
 				}
@@ -267,7 +267,7 @@ namespace DCLF
 				bool visible = cutPending;
 				if (!visible && o < a_readback.objects.size())
 					visible = a_readback.objects[o].visible || a_readback.objects[o].outFrame > window;
-				if (entry != SunCandidates::kNone)
+				if (entry != EntrySpace::kNone)
 					entryState[entry] = std::max<std::uint8_t>(entryState[entry], visible ? 2 : 1);
 				const std::uint8_t wideBit = objectClass == 2 ? 1 : 0;
 				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
@@ -306,7 +306,7 @@ namespace DCLF
 			Readback& readback;
 			VisibilityDecode& decode;
 			const SceneTables& tables;
-			const SunCandidates* candidates;
+			const EntrySpace* candidates;
 			std::uint32_t entries;      // the candidates' index space
 			std::size_t roots, objects;  // the tables'
 			std::uint32_t window;        // the conservative rule's: the older of the last two decoded frames
@@ -469,7 +469,7 @@ namespace DCLF
 			}
 			std::uint8_t objectClass = 0;
 			const void* rootNode = nullptr;
-			std::uint32_t entry = SunCandidates::kNone, entryOf = kUnlisted;
+			std::uint32_t entry = EntrySpace::kNone, entryOf = kUnlisted;
 			const auto* candidates = a_pass.candidates;
 			if (drawn) {
 				if (root != kNoFadeRoot && root < a_pass.roots && root < decode.rootClass.size() && decode.rootClass[root]) {
@@ -478,7 +478,7 @@ namespace DCLF
 				} else if (root == kNoFadeRoot && candidates) {
 					if (readback.objectEntryGeometry[a_object] != geometry) {
 						readback.objectEntryGeometry[a_object] = geometry;
-						readback.objectEntry[a_object] = SunCandidates::kNone;
+						readback.objectEntry[a_object] = EntrySpace::kNone;
 						if (const auto it = candidates->geometries.find(geometry); it != candidates->geometries.end() && it->second < candidates->geometryEntry.size())
 							readback.objectEntry[a_object] = candidates->geometryEntry[it->second];
 					}
@@ -489,10 +489,10 @@ namespace DCLF
 							objectClass = 2;
 							rootNode = candidates->entryNodes[entry];
 						} else {
-							entry = SunCandidates::kNone;
+							entry = EntrySpace::kNone;
 						}
 					} else {
-						entry = SunCandidates::kNone;
+						entry = EntrySpace::kNone;
 					}
 				}
 			}
@@ -512,7 +512,7 @@ namespace DCLF
 			std::uint8_t share = 0;
 			if (objectClass == 2 && a_object < tables.objects.size() &&
 				(!(tables.objects[a_object].flags & kObjectMember) || (tables.objects[a_object].flags & (kObjectNoBindings | kObjectShadowOnly | kObjectFree)))) {
-				if (entry != SunCandidates::kNone)
+				if (entry != EntrySpace::kNone)
 					share = kShareResidue;
 				objectClass = 0;
 			}
@@ -525,7 +525,7 @@ namespace DCLF
 			bool visible = a_pass.cutPending;
 			if (!visible && a_object < readback.objects.size())
 				visible = readback.objects[a_object].visible || readback.objects[a_object].outFrame > a_pass.window;
-			if (entry != SunCandidates::kNone)
+			if (entry != EntrySpace::kNone)
 				share = visible ? kShareListed | kShareVisible : kShareListed;
 			Share(decode, a_object, share);
 			const std::uint8_t wideBit = objectClass == 2 ? 1 : 0;
@@ -648,7 +648,7 @@ namespace DCLF
 				a_readback.objectWrittenGeometry.resize(objects, nullptr);
 				a_readback.objectWrittenWide.resize(objects, 0u);
 			}
-			const SunCandidates* candidates = a_newest.candidates.get();
+			const EntrySpace* candidates = a_newest.candidates.get();
 			const std::uint32_t entries = candidates ? candidates->Capacity() : 0u;
 			// The parity observer's reference starts from the asks before this pass.
 			std::optional<Asked> asked;
@@ -701,13 +701,13 @@ namespace DCLF
 					}
 				}
 				if (everything) {
-					a_readback.objectEntry.assign(a_readback.objectEntry.size(), SunCandidates::kNone);
+					a_readback.objectEntry.assign(a_readback.objectEntry.size(), EntrySpace::kNone);
 					a_readback.objectEntryGeometry.assign(a_readback.objectEntryGeometry.size(), nullptr);
 				}
 				a_decode.candidates = a_newest.candidates;
 			}
 			if (a_readback.objectEntry.size() < objects) {
-				a_readback.objectEntry.resize(objects, SunCandidates::kNone);
+				a_readback.objectEntry.resize(objects, EntrySpace::kNone);
 				a_readback.objectEntryGeometry.resize(objects, nullptr);
 			}
 			if (a_readback.entryWritten.size() < entries) {
@@ -1221,7 +1221,7 @@ namespace DCLF
 				if (root != kNoFadeRoot || !candidates)
 					continue;
 				const auto it = candidates->geometries.find(geometry);
-				const std::uint32_t entry = it != candidates->geometries.end() && it->second < candidates->geometryEntry.size() ? candidates->geometryEntry[it->second] : SunCandidates::kNone;
+				const std::uint32_t entry = it != candidates->geometries.end() && it->second < candidates->geometryEntry.size() ? candidates->geometryEntry[it->second] : EntrySpace::kNone;
 				const RE::NiAVObject* entryNode = entry < candidates->entryNodes.size() ? candidates->entryNodes[entry] : nullptr;
 				if (!entryNode || tables.fadeRootIndex.contains(entryNode))
 					continue;

@@ -14,7 +14,7 @@ namespace DCLF::Diagnostics
 		using V = SceneView;
 
 		/** @brief a_table against a_set and the dependents now; the first difference, or empty. */
-		std::string CheckCandidateTable(const Scene::Coordinator& a_store, const V::CandidateTable& a_table, const ankerl::unordered_dense::set<const RE::NiAVObject*>& a_set, bool a_sun)
+		std::string CheckCandidateTable(const Scene::Coordinator& a_store, const V::EntrySpaceTable& a_table, const ankerl::unordered_dense::set<const RE::NiAVObject*>& a_set, bool a_sun)
 		{
 			// The table against the set and the dependents as they are (what a snapshot made whole would hold).
 			const auto& rootDependents = V::rootDependents(a_store);
@@ -56,15 +56,15 @@ namespace DCLF::Diagnostics
 		 */
 		struct EarlierSnapshot
 		{
-			std::weak_ptr<const SunCandidates> snapshot;
+			std::weak_ptr<const EntrySpace> snapshot;
 			std::uint32_t generation = 0;
 
-			std::shared_ptr<const SunCandidates> Get() const
+			std::shared_ptr<const EntrySpace> Get() const
 			{
 				auto held = snapshot.lock();
 				return held && held->generation == generation ? held : nullptr;
 			}
-			void Set(const std::shared_ptr<const SunCandidates>& a_snapshot)
+			void Set(const std::shared_ptr<const EntrySpace>& a_snapshot)
 			{
 				snapshot = a_snapshot;
 				generation = a_snapshot ? a_snapshot->generation : 0;
@@ -76,7 +76,7 @@ namespace DCLF::Diagnostics
 		};
 
 		/** @brief The indices a_to's log names since a_from against a comparison of the two; the first difference, or empty. */
-		std::string CheckCandidateLog(const std::shared_ptr<const SunCandidates>& a_from, const SunCandidates& a_to)
+		std::string CheckCandidateLog(const std::shared_ptr<const EntrySpace>& a_from, const EntrySpace& a_to)
 		{
 			if (!a_from || a_from.get() == &a_to)
 				return {};

@@ -1,6 +1,6 @@
-// CandidateTable's reset and snapshot publication (coordinator thread), and the readers of its published log (any thread).
+// EntrySpaceTable's reset and snapshot publication (coordinator thread). The readers of its published log are Core/Scene/EntrySpace's.
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/EntrySpaceTable.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
@@ -9,54 +9,6 @@
 #include <algorithm>
 #include <atomic>
 #include <numeric>
-
-namespace DCLF
-{
-	void ChangedEntriesByScan(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out)
-	{
-		if (a_from == &a_to)
-			return;
-		const std::uint32_t to = a_to.Capacity(), from = a_from ? a_from->Capacity() : 0u;
-		for (std::uint32_t e = 0, end = std::max(to, from); e < end; ++e) {
-			const bool inFrom = e < from && a_from->entryNodes[e];
-			const bool inTo = e < to && a_to.entryNodes[e];
-			if ((inFrom || inTo) && (inFrom != inTo || a_from->entryVersion[e] != a_to.entryVersion[e]))
-				a_out.push_back(e);
-		}
-	}
-
-	bool ChangedEntriesByLog(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out)
-	{
-		if (a_from == &a_to)
-			return true;
-		if (!a_from || !a_from->changes || !a_to.changes || !a_to.changes->Reaches(a_from->changes->log, a_from->generation)) {
-			ChangedEntriesByScan(a_from, a_to, a_out);
-			return false;
-		}
-		// The runs after a_from's generation, merged; then the indices whose versions differ (an index written and freed again
-		// between them is not a change).
-		const std::size_t first = a_out.size();
-		std::size_t runs = 0;
-		for (const auto& run : a_to.changes->runs)
-			if (run->generation > a_from->generation) {
-				a_out.insert(a_out.end(), run->entries.begin(), run->entries.end());
-				++runs;
-			}
-		if (runs > 1) {
-			std::sort(a_out.begin() + std::ptrdiff_t(first), a_out.end());
-			a_out.erase(std::unique(a_out.begin() + std::ptrdiff_t(first), a_out.end()), a_out.end());
-		}
-		const std::uint32_t to = a_to.Capacity(), from = a_from->Capacity();
-		a_out.erase(std::remove_if(a_out.begin() + std::ptrdiff_t(first), a_out.end(),
-						[&](std::uint32_t e) {
-							const bool inFrom = e < from && a_from->entryNodes[e];
-							const bool inTo = e < to && a_to.entryNodes[e];
-							return !((inFrom || inTo) && (inFrom != inTo || a_from->entryVersion[e] != a_to.entryVersion[e]));
-						}),
-			a_out.end());
-		return true;
-	}
-}
 
 namespace DCLF::Scene
 {
@@ -87,7 +39,7 @@ namespace DCLF::Scene
 		 * not maps.
 		 */
 		template <class Held>
-		void BringUp(SunCandidates& a_s, const CandidateRows& a_rows, const std::vector<std::uint32_t>& a_moved, Held&& a_held, std::uint64_t& a_kept)
+		void BringUp(EntrySpace& a_s, const CandidateRows& a_rows, const std::vector<std::uint32_t>& a_moved, Held&& a_held, std::uint64_t& a_kept)
 		{
 			auto& s = a_s;
 			const std::uint32_t capacity = static_cast<std::uint32_t>(a_rows.nodes.size());
@@ -98,7 +50,7 @@ namespace DCLF::Scene
 			s.held.resize(span);
 			s.entryGeometries.resize(span);
 			s.geometryNodes.resize(std::max(geometryCapacity, s.GeometryCapacity()), nullptr);
-			s.geometryEntry.resize(s.geometryNodes.size(), SunCandidates::kNone);
+			s.geometryEntry.resize(s.geometryNodes.size(), EntrySpace::kNone);
 			s.geometrySlot.resize(s.geometryNodes.size(), -1);
 			s.primaryGeometry.resize(s.geometryNodes.size(), 0);
 			for (const std::uint32_t e : a_moved) {
@@ -115,7 +67,7 @@ namespace DCLF::Scene
 					if (const auto it = s.geometries.find(s.geometryNodes[g]); it != s.geometries.end() && it->second == g)
 						s.geometries.erase(it);
 					s.geometryNodes[g] = nullptr;
-					s.geometryEntry[g] = SunCandidates::kNone;
+					s.geometryEntry[g] = EntrySpace::kNone;
 				}
 				if (same) {
 					++a_kept;
@@ -163,7 +115,7 @@ namespace DCLF::Scene
 		 * source's runs after the spare's own generation of the same log (a_state.log, generation), else by comparing every index. Free
 		 * indices included: a version moves when its index is freed, and the next catch-up compares versions.
 		 */
-		void CatchUpSpare(SunCandidates& a_spare, const SunCandidates& a_source, Scene::CandidateTable::Pooled::State& a_state)
+		void CatchUpSpare(EntrySpace& a_spare, const EntrySpace& a_source, Scene::EntrySpaceTable::Pooled::State& a_state)
 		{
 			ZoneScopedN("CS.DCLF.Scene.SunCandidates.Spare");
 			const auto& s = a_spare;
@@ -195,13 +147,13 @@ namespace DCLF::Scene
 		}
 	}
 
-	std::uint64_t CandidateTable::NextLogId()
+	std::uint64_t EntrySpaceTable::NextLogId()
 	{
 		static std::atomic<std::uint64_t> ids{ 0 };
 		return ids.fetch_add(1, std::memory_order_relaxed) + 1;
 	}
 
-	void CandidateTable::Reset(std::uint32_t& a_versions)
+	void EntrySpaceTable::Reset(std::uint32_t& a_versions)
 	{
 		for (std::uint32_t e = 0; e < nodes.size(); ++e)
 			version[e] = ++a_versions;
@@ -213,7 +165,7 @@ namespace DCLF::Scene
 		std::iota(free.rbegin(), free.rend(), 0u);
 		geometryIndex.clear();
 		std::fill(geometryNodes.begin(), geometryNodes.end(), nullptr);
-		std::fill(geometryEntry.begin(), geometryEntry.end(), SunCandidates::kNone);
+		std::fill(geometryEntry.begin(), geometryEntry.end(), EntrySpace::kNone);
 		geometryFree.resize(geometryNodes.size());
 		std::iota(geometryFree.rbegin(), geometryFree.rend(), 0u);
 		// Every index moved: the pooled snapshots are brought up whole, and the published log starts again (no reader chains across).
@@ -222,7 +174,7 @@ namespace DCLF::Scene
 		changed = true;
 	}
 
-	std::shared_ptr<const SunCandidates> CandidateTable::Publish(std::uint32_t& a_generation, const std::function<RE::NiPointer<RE::NiAVObject>(const RE::NiAVObject*)>& a_ownedRoot)
+	std::shared_ptr<const EntrySpace> EntrySpaceTable::Publish(std::uint32_t& a_generation, const std::function<RE::NiPointer<RE::NiAVObject>(const RE::NiAVObject*)>& a_ownedRoot)
 	{
 		ZoneScopedN("CS.DCLF.Scene.SunCandidates.Snapshot");
 		// A pooled snapshot no reader holds (the pool's own reference only), the one with the least of the log to read: the spare,
@@ -248,7 +200,7 @@ namespace DCLF::Scene
 		FinishSpare(pooled);
 		spareEntries += std::exchange(pooled.state->caughtUp, 0u);
 		pooled.source.reset();
-		const std::shared_ptr<SunCandidates> snapshot = pooled.snapshot;
+		const std::shared_ptr<EntrySpace> snapshot = pooled.snapshot;
 		auto& cursor = pooled.cursor;
 		auto& s = *snapshot;
 		const std::uint32_t capacity = static_cast<std::uint32_t>(nodes.size());
@@ -281,11 +233,11 @@ namespace DCLF::Scene
 
 		// The run of indices written since the last publication, published with the earlier runs; with none to chain to (the first
 		// publication, or after a Reset) the log starts at this generation.
-		auto next = std::make_shared<CandidateChanges>();
+		auto next = std::make_shared<EntrySpaceChanges>();
 		next->log = logId;
 		next->generation = s.generation;
 		if (changes && changes->log == logId && log.Readable(published)) {
-			auto run = std::make_shared<CandidateChanges::Run>();
+			auto run = std::make_shared<EntrySpaceChanges::Run>();
 			run->generation = s.generation;
 			marks.resize(std::max<std::size_t>(marks.size(), capacity), 0);
 			for (const std::uint32_t e : log.From(published))
@@ -333,13 +285,13 @@ namespace DCLF::Scene
 		return snapshot;
 	}
 
-	CandidateTable::~CandidateTable()
+	EntrySpaceTable::~EntrySpaceTable()
 	{
 		for (auto& p : pool)
 			FinishSpare(p);
 	}
 
-	void CandidateTable::FinishSpare(Pooled& a_pooled)
+	void EntrySpaceTable::FinishSpare(Pooled& a_pooled)
 	{
 		auto& state = *a_pooled.state;
 		if (!state.busy.load(std::memory_order_acquire))
@@ -356,7 +308,7 @@ namespace DCLF::Scene
 		++sparesWaited;
 	}
 
-	void CandidateTable::DispatchSpare(std::size_t a_published)
+	void EntrySpaceTable::DispatchSpare(std::size_t a_published)
 	{
 		// The free pooled snapshot nearest the log (else a new one), brought up to this publication on the pool while the lane goes on:
 		// the next publication then reads one run on the lane, not every run since the spare's own publication (snapshots held in
@@ -405,7 +357,7 @@ namespace DCLF::Scene
 			job();
 	}
 
-	std::string CandidateTable::CheckSnapshot(const SunCandidates& a_snapshot) const
+	std::string EntrySpaceTable::CheckSnapshot(const EntrySpace& a_snapshot) const
 	{
 		const auto& s = a_snapshot;
 		if (s.Capacity() != nodes.size() || s.GeometryCapacity() != geometryNodes.size())

@@ -35,7 +35,7 @@ namespace DCLF
 	{
 		kChangeBindings = 1u << 0,    // flags, material, pipeline (the draw's too), the fade distance, whether it has a fade node
 		kChangeLights = 1u << 1,      // Light Limit Fix's room index and shadow mask
-		kChangeTree = 1u << 2,        // tree animation
+		kChangeRetired2 = 1u << 2,    // retired (was the record's tree animation, never written); noted only within kChangeAll
 		kChangeSkin = 1u << 3,        // skin partitions, palette block (offset and rows)
 		kChangeExtras = 1u << 4,      // the extras block and its rows
 		kChangeShadow = 1u << 5,      // shadow technique and reason, sky technique, shadow material and diffuse
@@ -49,6 +49,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kChangeCauseCount = 9;
 	// What a shadow input carries (IndirectDraws' shadow build). Not placements: a caster's bound and sun entry are its record's.
 	inline constexpr std::uint32_t kShadowChangeCauses = kChangeShadow | kChangeBindings | kChangeGeometry | kChangeSkin | kChangeMembership;
+	// The retired bit keeps its name: kChangeAll notes still count it, and the reports print it.
 	inline constexpr std::array<const char*, kChangeCauseCount> kChangeCauseNames{ "bindings", "lights", "tree", "skin", "extras", "shadow", "geometry",
 		"membership", "structure" };
 	inline constexpr std::uint32_t kChangeAll = (1u << kChangeCauseCount) - 1;
@@ -104,8 +105,6 @@ namespace DCLF
 		// No shading (MaterialData, EmitColor, SSRParams.w, emissive multiplier, wetness): FrameValues' rows (BindlessShading),
 		// sampled at frame start for the slots the walk names (ShadingItem).
 		std::vector<ObjectLights> lights;                     // parallel to objects
-		// Only technique 12 fills it; others keep the template's defaults.
-		std::vector<ObjectTreeAnim> treeAnim;                 // parallel to objects: the record's, as the member joined
 		// The features' table families (Api::TableFamily; Features/TreeWind's trees): their columns, stamps, the objects' references
 		// into them and their rows' tags. Published with the rest: a family is copied only when its stamp moved.
 		Extensions::TableFamilies families;
@@ -347,7 +346,6 @@ namespace DCLF
 			ObjectRecord object{};
 			DrawSequence draw{};
 			ObjectLights lights{};
-			ObjectTreeAnim tree{};
 			std::array<float, kExtraRows * 4> extras{};
 			const RE::BSGeometry* geometry = nullptr;
 			const RE::NiAVObject* sunEntryNode = nullptr;

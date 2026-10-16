@@ -81,7 +81,7 @@ namespace DCLF::LocalLightCull
 		struct Filter
 		{
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::shared_ptr<CategoryFilter>> nodes;
-			const SunCandidates* candidates = nullptr;
+			const EntrySpace* candidates = nullptr;
 			std::uint64_t exclusionVersion = ~0ull;
 			std::uint64_t entriesAppeared = 0;  // FrameView::GetLightEntriesAppeared at the build
 		};

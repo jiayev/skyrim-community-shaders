@@ -19,7 +19,6 @@ namespace DCLF::Scene
 			std::uint32_t object = 0, material = 0, pipeline = 0, flags = 0;
 			float fadeDistance = 0.0f;
 			ObjectLights lights{};
-			ObjectTreeAnim tree{};
 			bool projectedUV = false, landBlend = false;
 			std::uint64_t decalKey = 0;
 		};

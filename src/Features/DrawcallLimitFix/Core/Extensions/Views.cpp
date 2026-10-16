@@ -118,7 +118,8 @@ namespace DCLF::Extensions
 		}
 	}
 
-	void ResolveViews(std::span<const Api::ViewContribution, kEngineViews> a_views, std::span<const Api::ViewWork> a_work)
+	void ResolveViews(std::span<const Api::ViewContribution, kEngineViews> a_views, std::span<const Api::ViewWork> a_work,
+		std::span<const Api::ViewRootContribution, kViewRoots> a_roots)
 	{
 		static bool once = false;
 		if (std::exchange(once, true))
@@ -137,6 +138,9 @@ namespace DCLF::Extensions
 		DeriveViewPhases(set);
 		DeriveOrders(set);
 		DeriveForwardKeyViews(set);
+		// The view root contributions (Registry refused incomplete ones and a second for a root).
+		for (std::size_t r = 0; r < kViewRoots; ++r)
+			set.rootOwned[r] = a_roots[r].root < Api::ViewRoot::Count ? a_roots[r].owned : nullptr;
 		Detail::resolvedViews = std::move(set);
 		// The shapes' views into the strings where they now stand.
 		for (auto& entry : Detail::resolvedViews.views)

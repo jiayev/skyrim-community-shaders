@@ -19,7 +19,6 @@ namespace DCLF
 		objectIdentity.resize(a_count, 0);
 		objectGroup.resize(a_count, 0);
 		lights.resize(a_count, ObjectLights{});
-		treeAnim.resize(a_count, ObjectTreeAnim{});
 		skinPartitions.resize(a_count, 0);
 		skinLodPartitions.resize(a_count, 0);
 		draws.resize(a_count, DrawSequence{});
@@ -51,7 +50,6 @@ namespace DCLF
 		columns.object = objects[a_slot];
 		columns.draw = draws[a_slot];
 		columns.lights = lights[a_slot];
-		columns.tree = treeAnim[a_slot];
 		columns.sunEntryNode = sunEntryNode[a_slot];
 		columns.hasFadeNode = hasFadeNode[a_slot];
 		columns.extraOffset = extraOffset[a_slot];
@@ -89,8 +87,6 @@ namespace DCLF
 			causes |= kChangeBindings;
 		if (!same(a.lights, b.lights))
 			causes |= kChangeLights;
-		if (!same(a.tree, b.tree))
-			causes |= kChangeTree;
 		if (a.skinPartitions != b.skinPartitions || a.skinLodPartitions != b.skinLodPartitions || a.boneOffset != b.boneOffset || a.boneRows != b.boneRows)
 			causes |= kChangeSkin;
 		if (a.extraOffset != b.extraOffset || !same(a.extras, b.extras))
@@ -167,7 +163,6 @@ namespace DCLF
 		objectIdentity[a_slot] = 0;
 		objectGroup[a_slot] = 0;
 		lights[a_slot] = ObjectLights{};
-		treeAnim[a_slot] = ObjectTreeAnim{};
 		skinPartitions[a_slot] = 0;
 		skinLodPartitions[a_slot] = 0;
 		draws[a_slot] = DrawSequence{};
@@ -239,7 +234,6 @@ namespace DCLF
 			objectIdentity.clear();
 			objectGroup.clear();
 			lights.clear();
-			treeAnim.clear();
 			skinPartitions.clear();
 			skinLodPartitions.clear();
 			draws.clear();
@@ -317,7 +311,6 @@ namespace DCLF
 		materialVersion.clear();
 		pipelineBindingVersion.clear();
 		lights.clear();
-		treeAnim.clear();
 		families.Clear();
 		NoteFadeRootsWrite();
 		fadeRoots.clear();

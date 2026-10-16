@@ -67,7 +67,7 @@ namespace DCLF::Diagnostics
 		static auto& sunTable(Store& s) { return s.sunTable; }
 		static auto& lightTable(Store& s) { return s.lightTable; }
 		static auto& rootMotion(Store& s) { return s.rootMotion; }
-		using CandidateTable = Scene::CandidateTable;
+		using EntrySpaceTable = Scene::EntrySpaceTable;
 		// The set's commit.
 		using SlotDecision = Scene::Coordinator::SlotDecision;
 		static SlotDecision DecideSlot(const Store& s, std::uint32_t a_slot, bool a_live, std::uint32_t a_drawn) { return s.DecideSlot(a_slot, a_live, a_drawn); }

@@ -19,7 +19,7 @@
 namespace DCLF
 {
 	struct FrameGlobals;
-	struct SunCandidates;
+	struct EntrySpace;
 	struct PipelineCatalog;
 	namespace Diagnostics
 	{
@@ -180,13 +180,13 @@ namespace DCLF::Scene
 		/** @brief The frame's tables' generation (0 before the first); moves on a slot table reset or InvalidateVerdicts. */
 		std::uint32_t GetTablesGeneration() const { return frameTablesGeneration; }
 		/** @brief The sun entries DCLF can take out of the cascade culls (UpdateSunCandidates), with their generation. */
-		std::shared_ptr<const SunCandidates> GetSunCandidates() const { return frameSunCandidates; }
+		std::shared_ptr<const EntrySpace> GetSunCandidates() const { return frameSunCandidates; }
 		/**
 		 * @brief The entries DCLF can take out of the point lights' culls (UpdateLightCandidates): light entries (LightEntryOf: an
 		 * actor's root, a reference's, a terrain block's multibound node) whose every tracked geometry is a table object
 		 * (BuildSunExclusion), or one the light's registration takes nothing from (Eligibility::Light).
 		 */
-		std::shared_ptr<const SunCandidates> GetLightCandidates() const { return frameLightCandidates; }
+		std::shared_ptr<const EntrySpace> GetLightCandidates() const { return frameLightCandidates; }
 		/**
 		 * @brief Render thread: count of light entries that gained their first tracked geometry. An entry LocalLightCull's filter cut
 		 * for holding none is judged again when this moves.
@@ -368,7 +368,7 @@ namespace DCLF::Scene
 		bool categoryCapturePending = false;
 		std::vector<RE::NiAVObject*> attachedRoots;  // the ingestion's attached subtrees, for CatchUpSwitches (scratch)
 		// The frame's copies, taken at frame start from the newest publication and the log (HandOverAtFrameStart).
-		std::shared_ptr<const SunCandidates> frameSunCandidates, frameLightCandidates;
+		std::shared_ptr<const EntrySpace> frameSunCandidates, frameLightCandidates;
 		std::uint64_t frameLightEntriesAppeared = 0;
 		std::uint32_t frameTablesGeneration = 0;  // GetTablesGeneration
 		std::vector<const RE::NiAVObject*> frameSwitchChanges;

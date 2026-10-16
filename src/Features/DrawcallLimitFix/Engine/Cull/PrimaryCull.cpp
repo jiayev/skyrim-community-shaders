@@ -268,7 +268,7 @@ namespace DCLF
 		       a_node->worldBound.center.z - Global<float>(kTreeHeightBase) > Global<float>(kTreeHeightLimit);
 	}
 
-	PrimaryCull::EntryPlan PrimaryCull::PlanEntry(const SunCandidates& a_candidates, const RE::NiAVObject* a_root, PlannedEntry& a_out) const
+	PrimaryCull::EntryPlan PrimaryCull::PlanEntry(const EntrySpace& a_candidates, const RE::NiAVObject* a_root, PlannedEntry& a_out) const
 	{
 		// Each node and geometry is judged by its OnVisible slot (wideOnVisible), not its RTTI. A geometry the snapshot has as DCLF's
 		// (Eligibility::PrimaryVerdict) is a member; a hidden static's is left out; any other is the engine's and makes the entry mixed.
@@ -548,7 +548,7 @@ namespace DCLF
 			}
 	}
 
-	void PrimaryCull::SyncCut(const std::shared_ptr<const SunCandidates>& a_candidates, std::span<const std::uint32_t> a_changed, bool a_inline)
+	void PrimaryCull::SyncCut(const std::shared_ptr<const EntrySpace>& a_candidates, std::span<const std::uint32_t> a_changed, bool a_inline)
 	{
 		cut.candidates = a_candidates;
 		const auto& candidates = *a_candidates;

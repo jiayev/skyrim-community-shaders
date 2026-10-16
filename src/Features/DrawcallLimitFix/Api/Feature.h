@@ -104,6 +104,8 @@ namespace DCLF::Api
 		virtual void RegisterView(const ViewContribution& a_view) = 0;
 		/** @brief Fails the install for no view, no point or no function, or a view no feature contributes. */
 		virtual void RegisterViewWork(const ViewWork& a_work) = 0;
+		/** @brief Fails the install for no root or no owned, or a root another contribution or a draw family's faces have. */
+		virtual void RegisterViewRoot(const ViewRootContribution& a_root) = 0;
 		/**
 		 * @brief Fails the install for a map another feature has, without a registered toggle or its available flag, with a phase
 		 * or view bit Core or another view has (or none, checked once all are in), or an ImportedTexture map without importTarget.
@@ -113,7 +115,9 @@ namespace DCLF::Api
 		virtual void RegisterShadowSource(const ShadowSourceContribution& a_source) = 0;
 		/**
 		 * @brief Fails the install for a family another registration has, a class with no registered toggle, or without its scene
-		 * resources, its frame and main callbacks (decide, programSource, main's three) or with only some of its faces' five.
+		 * resources, its frame and main callbacks (decide, programSource, main's three), its program (Lighting's, no or another draw or
+		 * program family's shader type; no name, label, key name or source path) or its engine shapes' vtable, or with only some of its
+		 * faces' callbacks, sizes, names and root, or a root another family's faces or a view root contribution have.
 		 */
 		virtual void RegisterDrawFamily(const DrawFamilyContribution& a_family) = 0;
 		/**

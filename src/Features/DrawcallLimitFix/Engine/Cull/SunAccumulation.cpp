@@ -11,8 +11,8 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <map>
@@ -27,7 +27,7 @@
 
 namespace DCLF
 {
-	void SunAccumulation::BeginFrame(const std::shared_ptr<const SunCandidates>& a_candidates)
+	void SunAccumulation::BeginFrame(const std::shared_ptr<const EntrySpace>& a_candidates)
 	{
 		// The builder translated each verdict it built to the candidates of every later build (ForwardExclusion): the frame takes the
 		// one for its candidates, a swap. None (a snapshot the builder made no exclusion for): the pending one stays, a verdict on other
@@ -42,12 +42,7 @@ namespace DCLF
 		}
 	}
 
-	void ChangedEntries(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out)
-	{
-		ChangedEntriesByScan(a_from, a_to, a_out);
-	}
-
-	std::shared_ptr<SunExclusion> TranslateExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
+	std::shared_ptr<SunExclusion> TranslateExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const EntrySpace>& a_to,
 		bool a_newVersion, bool a_lightReach, std::vector<std::uint32_t>* a_changed, const SunExclusion* a_stamps)
 	{
 		if (!a_exclusion || !a_to || a_exclusion->candidates == a_to)
@@ -102,7 +97,7 @@ namespace DCLF
 		return out;
 	}
 
-	std::shared_ptr<SunExclusion> ForwardExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
+	std::shared_ptr<SunExclusion> ForwardExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const EntrySpace>& a_to,
 		std::vector<std::uint32_t>* a_changed)
 	{
 		if (!a_exclusion || !a_to)

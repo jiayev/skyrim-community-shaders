@@ -185,10 +185,42 @@ namespace DCLF::Features::TreeLod
 			const auto buffer = tables->shapes ? tables->shapes->Get() : nullptr;
 			a_lists.current = buffer ? static_cast<std::uint32_t>(std::min<std::uint64_t>(buffer->GetSize() / sizeof(TreeInstances::ShapeRow), UINT32_MAX)) : 0u;
 		}
+
+		// The face's row (its own list), naming no slot when the face is not drawn, and its list's header: the draws' vertex count, the
+		// meshes' largest index count (at least 1), with no instances.
+		void FacesFace(Api::DrawFamilyFaceWrite& a_face)
+		{
+			TreeInstances::DrawRow commitRow{};
+			std::memcpy(&commitRow, a_face.commitRow.data(), sizeof(commitRow));
+			TreeInstances::DrawRow row = commitRow;
+			row.visible = a_face.listAddress + TreeInstances::kVisibleHeaderWords * sizeof(std::uint32_t);
+			row.shapeSlots = a_face.drawn ? commitRow.shapeSlots : 0u;
+			std::memcpy(a_face.row.data(), &row, sizeof(row));
+			TreeInstances::VisibleHeader header{};
+			header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = std::max(row.maxIndices, 1u);
+			std::memcpy(a_face.header.data(), &header, sizeof(header));
+		}
 	}
 
 	Api::DrawFamilyContribution::Faces FacesContribution()
 	{
-		return { .makeCull = &FacesCull, .declare = &FacesDeclare, .record = &FacesRecord, .row = &FacesRow, .lists = &FacesLists };
+		// A face's list: a word per instance record its shape slots hold (kMaxGroupInstances a slot); the cull a thread per record.
+		return { .makeCull = &FacesCull,
+			.declare = &FacesDeclare,
+			.record = &FacesRecord,
+			.row = &FacesRow,
+			.lists = &FacesLists,
+			.cullName = "tree-lod-cull",
+			.rowName = "tree-row",
+			.listName = "tree-visible",
+			.rowBytes = static_cast<std::uint32_t>(sizeof(TreeInstances::DrawRow)),
+			.headerBytes = static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader)),
+			.unitWords = TreeInstances::kMaxGroupInstances,
+			.cullGroup = Draws::kTreeLodCullGroup,
+			.root = kFacesRoot,
+			.face = &FacesFace };
 	}
+	static_assert(sizeof(TreeInstances::DrawRow) == 64 && sizeof(TreeInstances::VisibleHeader) == 64 && TreeInstances::kMaxGroupInstances == 75 &&
+	                  Draws::kTreeLodCullGroup == 64,
+		"tree LOD's faces' sizes are not the view latch's (ViewLatchLayout::kTreeRowInFace, kTreeHeaderInFace) and the faces' lists' and cull's");
 }

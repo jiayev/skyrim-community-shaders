@@ -128,7 +128,7 @@ elsewhere (2026-10-14; the record is dclf-async-publication.md, "Polls become ev
     witness (`FrameComponentsWitness`) changes; `KeepResidentsAlive` refreshes the geometry template only for the
     pipelines whose membership changed. A texture transform is no record's: the frame values patch the rows on the GPU
     ("Pooled versions and the retirement clock"), and a controller write that moved only the transforms is not captured.
--   **Publication.** Each candidate snapshot carries its change log (`CandidateChanges`; readers call
+-   **Publication.** Each candidate snapshot carries its change log (`EntrySpaceChanges`; readers call
     `ChangedEntriesByLog`). `PublishTables` replays the per-object columns by slot (`SceneTables::publicationLog`,
     `NotePublished`, and the change log's causes) and the material records by the material log, and copies the pipeline
     family only when `pipelinesStamp` moves.
@@ -181,7 +181,7 @@ a minimum count (`FanoutMode`); `Policy::SerialFanout()` runs every one on the l
     identity moves exactly when an owner does. `ResolvePipelineLookups` is witness-driven on the normal path. The held
     snapshots age once a frame.
 -   **Shading.** `NameShadingKeys` is prepared by chunks of keys on the pool and applied in key order.
--   **Candidates.** The candidate tables' pooled snapshots (`CandidateTable::pool`) are spares a pool job catches up from the
+-   **Candidates.** The candidate tables' pooled snapshots (`EntrySpaceTable::pool`) are spares a pool job catches up from the
     published snapshot's log; the lane runs one itself only when it finds it unstarted.
 -   **Shadow sets.** `RefreshShadowSets` applies the journaled slots. The index is rebuilt only when forced or when
     `shadowIndexNeedsRebuild` is set (a table reset, a full walk); an empty journal (a slotless entry's detach) re-emits the

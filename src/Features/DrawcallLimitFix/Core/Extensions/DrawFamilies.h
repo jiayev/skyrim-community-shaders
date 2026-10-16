@@ -158,11 +158,35 @@ namespace DCLF::Api
 		std::uint64_t required = 0;
 		std::uint32_t current = 0;
 	};
+
+	/**
+	 * @brief A face of a trees view's epoch commit (render thread, per face): the commit's row (faces.row's, rowBytes), the face's list's
+	 * device address (its adopted version) and whether the face is drawn; out: the face's row (rowBytes) and its list's header
+	 * (headerBytes), which the face's latch values take.
+	 */
+	class DrawFamilyFaceWrite
+	{
+	public:
+		std::span<const std::byte> commitRow;
+		std::uint64_t listAddress = 0;
+		bool drawn = false;
+		std::span<std::byte> row;
+		std::span<std::byte> header;
+	};
 }
 
 namespace DCLF::Extensions
 {
 	inline constexpr std::size_t kDrawFamilies = static_cast<std::size_t>(Api::DrawFamily::Count);
+
+	/**
+	 * @brief Where a family's face values stand in a trees view's face latch values (ViewLatchLayout): its row and its list's header, past
+	 * the face's block and the earlier taken families' (in family order).
+	 */
+	struct DrawFamilyFaceLayout
+	{
+		std::uint32_t rowInFace = 0, headerInFace = 0;
+	};
 
 	/** @brief A family's entry: its registration (taken: a feature's), with its strings owned. */
 	struct DrawFamilyEntry
@@ -170,6 +194,12 @@ namespace DCLF::Extensions
 		bool taken = false;
 		Api::DrawFamilyContribution contribution;
 		std::string colourRange;
+		// The program's and the faces' strings (contribution's views point into them).
+		std::string name, label, keyName, sourcePath, nativeNote;
+		std::string cullName, rowName, listName;
+		// The engine shapes' property vtable (engineShapes.propertyVtable, called once at install).
+		std::uintptr_t engineShapeVtable = 0;
+		DrawFamilyFaceLayout faceLayout;
 	};
 	using DrawFamilySet = std::array<DrawFamilyEntry, kDrawFamilies>;
 
@@ -178,6 +208,13 @@ namespace DCLF::Extensions
 	/** @brief Any thread, after InstallFeatures (none taken before): the families' entries, by family. */
 	const DrawFamilySet& DrawFamilies();
 	inline const DrawFamilyEntry& DrawFamilyOf(Api::DrawFamily a_family) { return DrawFamilies()[static_cast<std::size_t>(a_family)]; }
+	/** @brief Any thread, after InstallFeatures: the family whose program a_shaderType (RE::BSShader::Type) is (Count: none). */
+	Api::DrawFamily DrawFamilyOfShader(std::uint8_t a_shaderType);
+	/**
+	 * @brief Any thread, after InstallFeatures: a trees view's face latch values' bytes - the face's block and every taken family's faces'
+	 * row and header (DrawFamilyFaceLayout), rounded to 256.
+	 */
+	std::uint32_t DrawFamilyFaceBytes();
 	/** @brief Whether a_family is DCLF's under a_toggles: taken, its class's toggle on. */
 	bool DrawFamilyOn(const ToggleSet& a_toggles, Api::DrawFamily a_family);
 
