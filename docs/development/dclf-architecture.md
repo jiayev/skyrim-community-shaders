@@ -43,7 +43,7 @@ it ([dclf-async-publication.md](./dclf-async-publication.md)).
 | --- | --- | --- | --- |
 | `Main::Draw`, before the main cull (`FrameDriver::BeginFrame`) | Applies the toggles, adopts the newest complete snapshot the snapshot builder posted (`IndirectDraws::AdoptSnapshot`: its revision, its draws and its publication, installed by `FrameView::HandOverAtFrameStart`), then installs its claims, list filter and sun exclusion (the builder's, followed along its forward links: `ForwardExclusion`), or withdraws the set (below). Serves the coordinator's requests (the switch catch-ups; the mirror's portal-root captures and capture requests; the pins walk and the fade nodes' answers go to a leased pool job, `FrameStartJob`) and kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, fade and tree seeds, texture transforms, each into a backing leased from its pool; the render thread copies the fade nodes' bytes and samples the tree seeds, the producer the rest) | **Scene pass** (`Coordinator::RunSceneWork`, whenever its producers wake the pump): the events applied, the walk, the set's commit; then, at the snapshot builder's pace, the publication (`PublishScene`), handed to the **snapshot builder** on the pool (`IndirectDraws::PostSnapshotWork`: the payloads built ahead, the revision made and sealed, the payload's pooled versions published) | The frame values' uploads, on the copy queue; the payload's catch-up, on the uploader |
 | The engine's cull jobs | The engine registers the passes it keeps. `PassCapture` withholds DCLF's objects, `PrimaryCull` stands in for DCLF's references inside the list jobs, and the sun's cascades skip DCLF's entries | | |
-| `BeforeShadowMaps` | The frame's shadow views (`ShadowViews`), their coverage by the selected revision (`DecideShadowCoverage`) | | |
+| `BeforeShadowMaps` | The frame's shadow views (`ShadowViews`), then, through Features/Shadows/Engine's handler, their coverage by the selected revision (`DecideShadowCoverage`) | | |
 | Each shadow view's `FinishAccumulating` | `CaptureShadowView`: where the engine drew, and with which constants | | The engine's own shadow draws |
 | `AfterShadowMaps` | The **shadow epoch**: the installed shadow payload committed into the revision's shape | | Every placement's casters, culled per view |
 | Skylighting's `RenderOcclusion` | The **occlusion epoch** | | The occlusion maps |
@@ -529,7 +529,9 @@ present; the rest of CS calls DCLF only through it). Under `src/Features/Drawcal
 -   `Core/Gpu/`: frame values, pooled backings, GPU resources and textures, pipelines (`Pipelines/`, split by family).
 -   `Core/Render/`: `IndirectDraws` and `FrameDriver`, with the snapshot, revisions, payloads, epochs, passes, shadow,
     readbacks, views, what the main view shares with the others (its commits, culling, sorts, targets and shapes) and the draw
-    families. The main view's draws and its capture and colour epoch at the main pass's points are `Features/MainView`'s.
+    families. The main view's draws and its capture and colour epoch at the main pass's points are `Features/MainView`'s; the
+    shadow and occlusion epochs' passes, their submission at the shadow and occlusion points and their triggers are
+    `Features/Shadows/Engine`'s (Core keeps the shadow engine's scene side, its captures, pipelines and commits).
 -   `Core/Extensions/`: the extension registry and the Core halves of `Api/`'s contracts.
 
 `Features/`, `Integrations/` and `Diagnostics/` are areas, not layers: one folder per engine feature DCLF ports, one per CS

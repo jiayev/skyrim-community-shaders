@@ -1,7 +1,37 @@
 #pragma once
 
 // The shadow and occlusion epochs' types: captured views (render thread hooks), shapes (revision producer), the index pool and
-// the graph resources (render thread). Included by Internal.h.
+// the graph resources (render thread). Self-contained (Features/Shadows/Engine's passes include it); Internal.h includes it in its order.
+
+// volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/IndexPool.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+
+#include <string>
+// GrowableRows.h is not self-contained: Versioned.h and <string> above are what it names.
+#include "Features/DrawcallLimitFix/Core/Render/Payload/GrowableRows.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include <Render/LatchBlock.h>
+#include <Resources/ExternalTextureResource.h>
+#include <rhi.h>
+
+#include <d3d11.h>
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace DCLF::Draws
 {
@@ -140,4 +170,12 @@ namespace DCLF::Draws
 		};
 		std::vector<ViewLabel> labels;
 	};
+
+	/** @brief The revision's shadow (or, a_sky, occlusion) shape a pass's preparation is for; null without one. */
+	inline std::shared_ptr<const ShadowFrame> CurrentShadowFrame(const org::PassPrepareContext& a_preparation, bool a_sky)
+	{
+		if (const auto* shapes = RevisionShapesOf(a_preparation))
+			return a_sky ? shapes->occlusion : shapes->shadow;
+		return nullptr;
+	}
 }

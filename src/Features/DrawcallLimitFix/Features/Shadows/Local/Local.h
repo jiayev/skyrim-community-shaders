@@ -1,6 +1,6 @@
 #pragma once
 
-// Shadows/Local: the local shadow lights' views and the focus views, drawn by Core's shadow engine. The feature registers the Spot, Point
+// Shadows/Local: the local shadow lights' views and the focus views, drawn by the shadow epoch (Features/Shadows/Engine, DEPENDS). The feature registers the Spot, Point
 // and Focus sources (Api::ShadowSourceContribution, Api/ShadowViews.h: the frustum, parabolic and focus views draw while their source is
 // registered): the spot and point sources' lightKept (LightViews: each light the selection keeps, its views from the cameras its
 // UpdateCamera set up, into the feature's board, LightsBoard), and the focus source's camera hook (FocusViews:
@@ -19,7 +19,7 @@
 // Its parity is its own (Diagnostics/): the light and focus views' lines, the focus views' membership and the local shadow volumes, under
 // CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY, and the point lights' culls' (LightCulls) under CS_DCLF_PERSISTENT_PARITY.
 //
-// Core keeps the shadow engine: the shadow epoch and its capability and captures, the views list and the camera math
+// Core keeps the shadow engine's scene side: the shadow epoch's commit and its capability and captures, the views list and the camera math
 // (Core/Render/Shadow/ShadowCameras.h), the views' tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally), the caster
 // phases, view bits and modes, the candidates (Core's EntrySpace), and the shadow toggles; the light selection (which calls lightKept) and the local shadows' port are Features/LocalLights'. The Sun's registration thunk calls
 // LocalLightCull::NoteMainRegistration directly (Features/Shadows/Sun, listed after this feature). The sources own no phase or view bit

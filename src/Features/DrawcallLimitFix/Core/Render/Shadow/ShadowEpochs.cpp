@@ -1,5 +1,6 @@
 // The shadow and occlusion epochs (render thread): their commits (the installed payload, the index pool, the views' latches,
-// the arena and the latched CS blocks), the epochs' inputs and the culling counters' readback.
+// the arena and the latched CS blocks), the epochs' inputs and the culling counters' readback. Submitted where Features/Shadows/Engine's
+// handlers call them (ExecuteShadowFrame, ExecuteOcclusion: Api/ShadowEpochs.h), each in its epoch's segment (its traits).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
@@ -199,7 +200,7 @@ namespace DCLF
 			return 0;
 		}
 		const auto& payload = *committed;
-		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::SkyOcclusion, [&](org::RenderGraph&) {
+		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(EpochTraitsOf(epoch).segment, [&](org::RenderGraph&) {
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
 			const ShadowFrame& target = *revisionShape;
 			const auto& latchBlock = *target.latch;
@@ -542,7 +543,7 @@ namespace DCLF
 		if (!cleanup)
 			return;
 		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
-		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::ShadowView, [&](org::RenderGraph&) {
+		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(EpochTraitsOf(epoch).segment, [&](org::RenderGraph&) {
 			ZoneScopedN("CS.DCLF.ShadowInputs");
 			struct BodyTimer
 			{

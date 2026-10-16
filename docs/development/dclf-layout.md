@@ -24,7 +24,7 @@ src/Features/DrawcallLimitFix/
     Render/         the snapshot builder, revisions, payloads, the epoch framework, common passes, the views' shared parts, the frame driver
     Extensions/     the extension registry and the Core halves of Api/'s contracts
   Features/       one folder per engine feature DCLF ports (MainView, Forward, FirstPerson, Reflection, OcclusionMaps,
-                  Shadows/{Sun,Local}, Portals, GpuOcclusion, LocalLights, Skins, Actors, Faces, Particles, Billboards,
+                  Shadows/{Engine,Sun,Local}, Portals, GpuOcclusion, LocalLights, Skins, Actors, Faces, Particles, Billboards,
                   Decals, Effects, Landscape, Fades, Lod, TreeLod, TreeWind, TextureTransforms, HiddenNodes, SwitchNodes)
   Integrations/   one folder per CS feature DCLF supports, written against Api/ (AdvancedSkin, TerrainBlending, LightLimitFix, TruePBR, SubsurfaceScattering, ExtendedTranslucency, LinearLighting)
   Diagnostics/    the observer infrastructure and the parity checks that span features
@@ -38,6 +38,14 @@ off: the frame commits (the depth commit, the colour commit and its frame consta
 BuildDraws passes of both main phases and phase 2, the latched copies, the index pool, the sorts, visibility and its readback, the
 frame constants, the z-bucket counts, the native targets and depth (first person draws into them), the shapes, the revisions and the
 view engine (`Core/Render/{Main,Epochs/MainEpochs.cpp,Passes/CorePasses.cpp,Passes/MainExtension.cpp}`).
+
+The shadow engine's epoch half is a feature too, `Features/Shadows/Engine` ("shadow-epochs", namespace
+`DCLF::Features::Shadows::Engine`): the shadow and occlusion epochs' passes (`ShadowBuildDrawsPass`, `ShadowViewPass`, still in
+`namespace DCLF::Draws`; the latched copies; the index pool's copies and the culling counters' readback through Core's factories:
+`shadows.*`, `shadows.sky.*`) and their frame points, which `FrameDriver` calls at the engine's shadow and occlusion points through the
+shadow epochs contract (`Api/ShadowEpochs.h`): the views' coverage and the shadow frame begun, the shadow epoch, the occlusion maps'
+readiness and their epoch. Shadows/Sun, Shadows/Local and OcclusionMaps build on it (DEPENDS). Core keeps the scene side (see
+"Remaining architectural flaws").
 
 `Features/`, `Integrations/` and `Diagnostics/` are areas, not layers: one folder per feature or integration, and the checks.
 `Diagnostics/{Scene,Engine,Draws}` keep the old layer names until the parity rework.
@@ -88,6 +96,7 @@ shading line), their text unchanged.
 | Pass | `Api/Passes.h` (`Core/Extensions/PassContext.h`) | a graph pass the frame's schedule names by key (`InstallContext::RegisterPass`, `PassDef{key, passName, kind, queue, make, emit, setup, latchWord}`; "The schedule", below): its kind (`PassKind`) and queue (`PassQueue`: the graphics queue by default, `Compute`, or none asked), made at the graph's build from its epoch's resources (`PassContext`; `ShapeSegment()`, the segment of the shape it records against, the shared epoch's for an epoch that shares one), optionally with a state its `setup` makes with the scene's tables (none: not added) and the depth segment's latch word. A draw pass outside Core records with `Core/Render/Passes/DrawHelpers.h` (attachments, `DeclareFrameBuffers`, `RecordPreprocessedDraw`, the frame slots' addresses: `MainFramePushWords`, `MainShadowLayoutPush`, `LodFadeFrameAddress`) |
 | Trigger | `Api/Epochs.h` (`Core/Extensions/Triggers.h`) | the schedule's engine point its hook owns (`InstallContext::FindTrigger(id)`, at install: an id the schedule has not fails it), marked active around the hook's DCLF work with `Extensions::TriggerScope` ("The schedule", below): the epochs submitted there are checked against it |
 | Shared epoch submission | `Core/Render/IndirectDraws.h` (`SubmitSharedEpoch`) | an epoch of the schedule that shares a main epoch's shape (`sharesWith`), submitted from its owner's hook (render thread, inside its trigger's scope): `IndirectDraws::SubmitSharedEpoch(epoch, SharedEpochSubmit{prepare, context})` holds the generic steps (once a frame; this frame's commit of the shared epoch, not withdrawn; the selected revision's recording; the shared payload's owners; the execution in the epoch's segment, `EpochTraitsOf(e).segment`) and counts each early return (`SharedEpochStats`: reached, epochs, no shared payload, no recording, failed; by epoch, `ImplStats::sharedEpochs`); `prepare` (a function pointer and a context: no allocation) is handed the main resources and the selected revision's shape (`const PassFrame*`) right before the execution and says whether the owner's optional part draws (`SharedEpochResult{submitted, optional}`). Its report lines go at `ReportPoint::AsyncWorkForward`, which Core prints while a shared epoch reached a frame since the last report or its gate class is on (`IndirectDraws::SharedEpochReport`), taking the counters with `IndirectDraws::TakeSharedEpochStats(epoch)`. Features/Forward's forward epoch |
+| Shadow epochs | `Api/ShadowEpochs.h` (`Core/Extensions/ShadowEpochs.h`) | the shadow and occlusion epochs' handlers at the engine's shadow and occlusion points, which the shell's hooks reach through `FrameDriver` (one: a second fails the install, as does one without its four handlers; `InstallContext::RegisterShadowEpochs`, `ShadowEpochsContribution{beforeShadowMaps, afterShadowMaps, occlusionReady, drawOcclusion}`, resolved once, `Extensions::ShadowEpochs()`, null without one: the engine draws every view and map). Render thread: `beforeShadowMaps` once a frame after Core lists the frame's shadow views and the revision inputs they move (`Draws::ListShadowViews`, `Core/Render/Shadow/ShadowPoints.h`), with the shadows toggle on deciding their coverage and beginning the shadow frame (`IndirectDraws::DecideShadowCoverage`, `BeginShadowFrame`); `afterShadowMaps` submits the shadow epoch under its trigger (`shadow-maps.after`, found with `FindTrigger`) through Core's `IndirectDraws::ExecuteShadowFrame`; `occlusionReady` (a map's Ready point, its toggle on) through `IndirectDraws::OcclusionReady`; `drawOcclusion` (the maps' draw point, a map wanted) submits the maps under `occlusion.draw` through `IndirectDraws::ExecuteOcclusion`. `FrameDriver` keeps the bookkeeping: the views list, its timing and diagnostics points, the maps' phases, wanted maps and frame counts. One function-pointer call each per point. Features/Shadows/Engine's |
 | Primary view | `Api/PrimaryView.h` (`Core/Extensions/PrimaryView.h`) | the main pass's two points, which the shell's hooks reach through `FrameDriver` (one: a second fails the install, as does one without both handlers; `InstallContext::RegisterPrimaryView`, `PrimaryViewContribution{beforeOpaque, afterOpaque}`, resolved once, `Extensions::PrimaryView()`, null without one): `beforeOpaque` (render thread, where the opaque batches start, after `FrameDriver` applied the engine's pending state) captures the main pass for the frame's colour epoch and says whether it did (`FrameDriver` keeps the captured frame for the native draws' observers); `afterOpaque` (where they end) submits the colour epoch under its trigger (`opaque.after`, found with `FindTrigger`) through Core's `IndirectDraws::ExecuteColour`. One function-pointer call each a frame. Features/MainView's (the targets' formats, `IndirectDraws::CaptureMainPass`, the engine's states, the failure's warning; the unbind, the probes, the dirty render target flag) |
 | Payload product | `Api/Payload.h` | data built with every main payload on the builder, carried with it, and installed with it on the render thread |
 | Scene resources | `Api/SceneResources.h` | state held with the scene's tables: versioned buffers registered with the scene's set, their graph registration, each revision's requirement (with the words it posts with the revision's inputs, `postInputs`, compared for a new revision), the slots they hold of the objects (`SceneFit`), the buffers the depth commit latches (`latched`: the main latched targets and the depth latch's layout), and `sealed`, called once a set is sealed, before any shape, with its versions (`Extensions::SealSceneResources`; Fades' write-back takes the set there) |
@@ -436,6 +445,15 @@ for the feature's stats; Shadows/Sun DEPENDS {Shadows/Local}). What it leaves Co
 cascades' GPU form (`Draws::GpuCascade`, `GpuLayouts.h`; since phase 10 put by the sun volume's `SunCascadeSink`), the entry index space the exclusion is over
 (`Core/Scene/EntrySpace.{h,cpp}`: `EntrySpace`, `EntrySpaceChanges`, the ChangedEntries readers; the table, `EntrySpaceTable`, in
 `Core/Scene/Coordinator`; formerly SunCandidates and CandidateTable), and the sun's cascade bits as a Diagnostics event (`Diagnostics::SunBitsSet`).
+`Features/Shadows/Engine` followed in round 2 (phase 11), the shadow engine's epoch half: the shadow and occlusion epochs' passes
+(`ShadowEpochPasses.cpp`, from `Core/Render/Passes/Shadow.cpp`: `ShadowBuildDrawsPass`, `ShadowViewPass`, the latched copies, and the
+`shadows.*` PassDefs Core registered; the index pool's copies and the culling counters' readback through Core's factories,
+`Draws::MakeShadowIndexPoolPass`, `MakeShadowCullCounterPass`), with `ShadowFrame.h` made self-contained (and `CurrentShadowFrame` in it) and
+the latched copies' and latched dispatch's declarations moved to `Passes/DrawHelpers.h`; and their frame points (`ShadowEpochPoints.cpp`,
+from `Shadow/ShadowPoints.cpp`, behind `Api/ShadowEpochs.h`): the coverage and the shadow frame, the shadow epoch under `shadow-maps.after`,
+the maps' readiness and epoch under `occlusion.draw` (both triggers its own; `CoreTrigger` keeps `depth.committed` alone). Core's
+`ShadowPoints` keeps the views list (`Draws::ListShadowViews`). Listed right after Portals, before the features that build on it
+(Shadows/Sun, Shadows/Local, OcclusionMaps DEPEND on it); it registers no switch, toggle, hook, pool, product or report line.
 `Features/Skins` followed, the policy of which skinned shapes are DCLF's: its switches (`CS_DCLF_SKINNED`, `CS_DCLF_SKIN_PARTITIONS`, after
 `CS_DCLF_CULL`), its toggles ("skinned", `.before = "projected"`, opening "Object classes"; "skin partitions", `.after = "tree LOD"`, needing
 "skinned"), two object classes (`ObjectClass::Skinned`, `SkinPartitions`, read through `Extensions::ObjectClassOn` by the eligibility, the
@@ -725,10 +743,11 @@ volumes reach Core on the light volumes contract (`Api/LightVolumes.h`).
 
 Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, the graph pass's name, its kind and queue, and either a
 `make` (render thread, at the graph's build: the pass, or null when its conditions are unmet) or an `emit`.
-- **Keys** name their owner by prefix: `core.*` (the main view's culling and copies), `shadows.*`, `view.*` (Core's, registered
-  from `Core/Render/Passes/CorePasses.cpp` before the features install; the shadow and view passes' tables stay beside their classes,
-  in `Passes/Shadow.cpp` and `Epochs/ViewEpochRecord.cpp`), and the features' own: `main-view.*` (Features/MainView: the main view's
-  depth draws in both phases and its colour draws), `forward.*` (the forward epoch's draws and refraction normals), `tree-wind.*`, `fades.*`,
+- **Keys** name their owner by prefix: `core.*` (the main view's culling and copies), `view.*` (Core's, registered
+  from `Core/Render/Passes/CorePasses.cpp` before the features install; the view passes' table stays beside their classes, in
+  `Epochs/ViewEpochRecord.cpp`), and the features' own: `main-view.*` (Features/MainView: the main view's
+  depth draws in both phases and its colour draws), `shadows.*` (Features/Shadows/Engine: the shadow epoch's and, as `shadows.sky.*`,
+  the occlusion epoch's latched copies, culling, views' draws, index pool copies and culling counters), `forward.*` (the forward epoch's draws and refraction normals), `tree-wind.*`, `fades.*`,
   `texture-transforms.*`, `tree-lod.*` (its cull, retest, counts and a trees view's faces' cull), `gpu-occlusion.hzb` (the depth
   pyramid's producer). A feature registers its passes with `InstallContext::RegisterPass`, from its own folder. A view pass's name
   says `{view}`, which becomes the view's prefix.
@@ -762,9 +781,10 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
   the runtime initializes; without DCLF the runtime keeps its built-in orders.
 - **Triggers.** A trigger (`Api::TriggerDef{id, owner, where}`, `FrameSchedule::triggers`) is an engine point epochs are submitted at:
   `owner` names whose hook it is (`Core`, `Features/Forward`, ...), `where` the engine point and the hook. The table's, in the frame's
-  order: `shadow-maps.after` (Core: Deferred's `Main_RenderShadowMaps` returned; `shadow`), `depth.committed` (Core: the shell's
+  order: `shadow-maps.after` (Features/Shadows/Engine: Deferred's `Main_RenderShadowMaps` returned, its shadow epochs handler called
+  from FrameDriver; `shadow`), `depth.committed` (Core: the shell's
   `Main_RenderDepth_WorldDrawn`; `main.depth`, and `reflection` from the views' work there), `fp.depth-draw` (Features/FirstPerson:
-  RenderDepth's first-person draw; `fp.depth`), `occlusion.draw` (Core: Skylighting's `DrawOcclusion`; `occlusion`), `opaque.after`
+  RenderDepth's first-person draw; `fp.depth`), `occlusion.draw` (Features/Shadows/Engine: Skylighting's `DrawOcclusion`, its handler called from FrameDriver; `occlusion`), `opaque.after`
   (Features/MainView: the opaque batches done, `Main_RenderWorld_BlendedDecals`, its primary view handler called from FrameDriver;
   `main.colour`), `blended.draw` (Features/Forward: the main pass's
   blended draw; `forward`), `fp.colour-render` (Features/FirstPerson: `Main::RenderFirstPersonView`'s accumulator render; `fp.colour`).
@@ -807,8 +827,8 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
    - `Core/` includes `Api/` and `Core/`.
    - A feature includes `Api/`, `Core/`, its own folder, and the features it declares as dependencies.
    - An integration includes `Api/` and `Core/`.
-   - The dependencies are the check's `DEPENDS` (Shadows/Sun: Shadows/Local; LocalLights: Portals; FirstPerson: Actors, Skins; Effects:
-     Skins; Actors: Shadows/Sun, Shadows/Local).
+   - The dependencies are the check's `DEPENDS` (Shadows/Sun: Shadows/Engine, Shadows/Local; Shadows/Local: Shadows/Engine;
+     OcclusionMaps: Shadows/Engine; LocalLights: Portals; FirstPerson: Actors, Skins; Effects: Skins; Actors: Shadows/Sun, Shadows/Local).
    - `Diagnostics/` may be included from anywhere. Production code reaches it only through its observer contract (`Hooks.h`,
      `Observation`, `Policy`), which the parity rework will redefine.
 4. **A dependency installs first.** Every feature `DEPENDS` names is listed in `Features/FeatureList.cpp` before the feature that
@@ -854,7 +874,7 @@ The steps:
 4. Split `Coordinator.h` into the coordinator's core plus one component per concern. *Done (`Core/Scene/Coordinator/State/`).*
 5. Two pilot features, `TextureTransforms` then `TreeWind`. Together they define the first extension points. *Done.*
 6. The other features, least entangled first, `Fades` last; then the integrations. *Done.* The main view's draws and points followed in
-   round 2 (`Features/MainView`; what Core keeps of it: "The target").
+   round 2 (`Features/MainView`; what Core keeps of it: "The target"), then the shadow engine's epoch half (`Features/Shadows/Engine`).
 7. Dissolve `Scene/` and `Engine/` into Core (`Core/Scene`, `Core/Engine/Capture`, `Core/Handoff`, `Core/Shading`), then split what
    remains over the thresholds. *The move is done (no legacy includes left); the splits are landing.*
 
@@ -893,3 +913,19 @@ What the round's moves left in Core that a feature alone uses, and why.
   primary cull's cut and scene-list filter, the shadow inputs), so a component owning them would need a contract by which a feature
   hands Core an index space it then plans, filters and translates against: new machinery, not the existing component contract. The
   exclusions over them are Features/Shadows/Local's (opaque to Core, read through `Api::ShadowListExclusion`).
+- **The shadow engine's scene side and commits.** Features/Shadows/Engine owns the shadow and occlusion epochs' passes, their frame points
+  and triggers; Core keeps the rest of the shadow engine:
+  - the scene side (`Core/Render/Shadow/ShadowEngine`, its revision participant: the requirements, the latch, the shapes and variants, the
+    shadow payload; the shadow table columns; the walk's caster verdicts; PassCapture's withholding; the views list the capture builds,
+    `Handoff/ShadowViews`, listed by Core at BeforeShadowMaps, `Draws::ListShadowViews`): everything a frame's set and revision decide
+    before an epoch runs, read by Core's own producer, coverage and capture;
+  - the captures (`IndirectDraws::CaptureShadowView`, `CaptureOcclusion`, at the shell's FinishAccumulating hook): the scene side's input;
+  - the shadow pipelines (`DrawPipelines`' shadow set, published into the shapes like refraction's: see above);
+  - the shadow extension and its resources' registration (`Passes/Shadow.cpp`, added from `Resources.cpp`, rule 6), as the main and view
+    extensions';
+  - the epochs' commits (`IndirectDraws::ExecuteShadowFrame`, `ExecuteOcclusion`, `Shadow/ShadowEpochs.cpp`), which the feature's handlers
+    call. Split as Features/Forward's submission was, nothing feature-specific is left in them: every step writes Core's private state
+    (`failed`, `stats`, `shadowStats`, the revision's latch clamps and misses, the shadow engine's committed payload and execution owner),
+    every early return counts into those counters, and the decision to submit is the toggles' and the revision's, which they read
+    themselves. So the bodies stay Core's whole, each executed in its epoch's segment (`EpochTraitsOf(epoch).segment`, no literal), and
+    the feature holds the calling and the triggers.

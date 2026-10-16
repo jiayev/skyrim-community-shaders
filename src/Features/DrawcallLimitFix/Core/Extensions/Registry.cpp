@@ -22,6 +22,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SunVolume.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
@@ -130,6 +131,9 @@ namespace DCLF::Extensions
 			// The primary view and its feature (no handlers: none). Resolved at the end (ResolvePrimaryView).
 			Api::PrimaryViewContribution primaryView{};
 			std::string primaryViewFeature;
+			// The shadow epochs and their feature (no handlers: none). Resolved at the end (ResolveShadowEpochs).
+			Api::ShadowEpochsContribution shadowEpochs{};
+			std::string shadowEpochsFeature;
 			// The root states (no name: none). Resolved at the end (ResolveRootStates).
 			Api::RootStatesContribution rootStates{};
 			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
@@ -1164,6 +1168,17 @@ namespace DCLF::Extensions
 				lists.primaryViewFeature = std::string(feature);
 			}
 
+			void RegisterShadowEpochs(const Api::ShadowEpochsContribution& a_epochs) override
+			{
+				if (!a_epochs.beforeShadowMaps || !a_epochs.afterShadowMaps || !a_epochs.occlusionReady || !a_epochs.drawOcclusion)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete shadow epochs", feature));
+				// FrameDriver's shadow and occlusion points call one shadow engine's epochs.
+				if (lists.shadowEpochs.afterShadowMaps)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes the shadow epochs, which {} has", feature, lists.shadowEpochsFeature));
+				lists.shadowEpochs = a_epochs;
+				lists.shadowEpochsFeature = std::string(feature);
+			}
+
 			void RegisterRootStates(const Api::RootStatesContribution& a_states) override
 			{
 				// Its family registered before (its objects' references are the roots Core reads), and the callbacks Core calls per decode and join.
@@ -1263,7 +1278,7 @@ namespace DCLF::Extensions
 		ResolveAncestorValue(lists.ancestorValue);
 		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps', shadow sources' and shadow exclusion's, from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
-		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the primary view's; the root states'; the palette rows classes'; the shading fields'
+		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the primary view's; the shadow epochs'; the root states'; the palette rows classes'; the shading fields'
 		// (and the published entry classes); the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
 		ResolveViews(lists.views, lists.viewWork, lists.viewRoots, lists.cullHiddenSources);
@@ -1276,6 +1291,7 @@ namespace DCLF::Extensions
 		ResolveCullBindings(lists.cullBindings);
 		ResolveDepthPyramid(lists.depthPyramid);
 		ResolvePrimaryView(lists.primaryView);
+		ResolveShadowEpochs(lists.shadowEpochs);
 		ResolveRootStates(lists.rootStates);
 		ResolvePaletteRows(lists.paletteRows);
 		ResolveShadingFields(lists.shadingFields);

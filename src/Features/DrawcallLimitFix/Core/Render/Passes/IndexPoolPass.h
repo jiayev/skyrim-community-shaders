@@ -1,6 +1,6 @@
 #pragma once
 
-// The index pool's copy pass (IndexPoolCS.hlsl), made for the main and shadow epochs (CorePasses.cpp: core.z.index-pool; Shadow.cpp: shadows.index-pool).
+// The index pool's copy pass (IndexPoolCS.hlsl), made for the main and shadow epochs (CorePasses.cpp: core.z.index-pool; Passes/Shadow.cpp MakeShadowIndexPoolPass: shadows.index-pool, registered by Features/Shadows/Engine).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 

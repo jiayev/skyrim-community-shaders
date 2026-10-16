@@ -1,7 +1,7 @@
 // Core's passes (Api::PassDef), which the schedule (Schedule/Frame.cpp) names by key: the main view's culling and copies (core.*), the
-// diagnostics' anchors (diag.*), and through Shadow.cpp and ViewEpochRecord.cpp the shadow views' (shadows.*) and the views' (view.*).
-// Each make is its pass's condition and factory; the executor adds the pass. The features register their own passes (the main view's
-// draws, main-view.*: Features/MainView; the forward epoch's forward.*: Features/Forward).
+// diagnostics' anchors (diag.*), and through ViewEpochRecord.cpp the views' (view.*). Each make is its pass's condition and factory; the
+// executor adds the pass. The features register their own passes (the main view's draws, main-view.*: Features/MainView; the forward
+// epoch's forward.*: Features/Forward; the shadow and occlusion epochs' shadows.*: Features/Shadows/Engine).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -131,8 +131,6 @@ namespace DCLF::Draws
 	void RegisterCorePasses()
 	{
 		for (const auto& pass : kCorePasses)
-			RegisterPassDef(pass, "Core");
-		for (const auto& pass : ShadowPassDefs())
 			RegisterPassDef(pass, "Core");
 		for (const auto& pass : ViewPassDefs())
 			RegisterPassDef(pass, "Core");
