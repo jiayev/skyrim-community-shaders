@@ -880,7 +880,27 @@ The steps:
 
 ## Remaining architectural flaws
 
-What the round's moves left in Core that a feature alone uses, and why.
+What the round's moves left in Core that a feature alone uses, and why. The first is the largest, and the one the round did not
+attempt.
+- **BuildDrawsCS composes every feature's cull logic in one Core shader.** One compute program (`kBuildDrawsShader`,
+  `features/Drawcall Limit Fix/Shaders/DrawcallLimitFix/BuildDrawsCS.hlsl`) runs once per view and phase and holds, switched by latch
+  words and bindings rather than by features registering code:
+  - Features/Portals' room programs (`PortalPrograms.hlsli`, phase 1 and FadeStateCS);
+  - Features/Fades' root fading, LOD partitions and seed state (`RootFading`, `LodPartitions`, `SeedState`; the fade test reads the
+    latch's `fadeEye`/`treeHeight`, written from Fades' `latchGlobals`);
+  - LocalLights' local shadow mask (object-word bits 26-29, `LocalShadowMask`), and Shadows/Sun's cascade test and sun miss
+    (`InSunCascades`, `kObjectSunMiss`, `OutsideSunEntry`);
+  - the shadow views' branches (`CastersOnly`, `VolumetricOnly`, `SunEntry`, `MinRadius`, `FadeOnVisible`, `FocusRoot`);
+  - the decal ordinals and terrain-group ranges (Decals, Terrain Blending), the forward staging and refraction ranges (Forward), the
+    first-person forward branch, the HZB test TreeLod's cull shares (`HzbTest.hlsli`), and the one feature stage word
+    (TextureTransforms' latch word).
+
+  So a feature's GPU behaviour in the cull is still Core's code: adding or changing one edits Core's shader and its latch layout
+  (`BuildDrawsLatch`, `GpuLayouts.h`), and the latch has room for one stage word. It stays because it is one dispatch per view and phase:
+  giving a feature its own cull pass would walk the scene list and read the visibility words again (extra GPU work), which the round
+  ruled out. A fix keeps the single dispatch and moves the code: each feature contributes an `.hlsli` of stage functions plus a range of
+  latch words, and the program is generated from the registered stages at shader-compile time (an include list and a stage table in
+  feature order), so the features own their cull code and Core owns only the walk, the visibility words and the stage calls.
 - **Refraction's pipeline** (`DrawPipelines::RequestRefraction`, `SetRefractionInputs`, the catalog's refraction entry, `kRefractionTechnique`;
   `Core/Gpu/Pipelines/ForwardPipelines.cpp`) is Features/Forward's alone, but stays Core's: no pipeline contract fits it. A program family
   (`Api::ProgramFamilyContribution`) is a material port's keys built into the main pipeline set at a fixed family slot, its key bits read
@@ -929,3 +949,19 @@ What the round's moves left in Core that a feature alone uses, and why.
     every early return counts into those counters, and the decision to submit is the toggles' and the revision's, which they read
     themselves. So the bodies stay Core's whole, each executed in its epoch's segment (`EpochTraitsOf(epoch).segment`, no literal), and
     the feature holds the calling and the triggers.
+- **Diagnostics' passes reach the graph through anchors.** The `diag.*` keys are the only anchors left: Diagnostics' `MainGraphPasses`
+  observers append finished descs (cull counters, the foliage compare) at three points, exempt from rule 6 until the parity rework
+  gives Diagnostics PassDefs of its own.
+- **Kept in Core on purpose (not flaws, recorded so they are not moved by accident):**
+  - **Billboard rows** (`Core/Gpu/PlacementRows/BillboardRow.h`): sampled for every moving object whatever the toggle, read per slot
+    by three parities, and laid out as Effect.hlsl's frozen `DCLFBillboardWorld` decode; the header gives the full reasoning.
+    Features/Billboards owns the switches, toggle, parent contributions and the CPU twin of the turn.
+  - **Skin partitions** (`Core/Engine/SkinPartitions.h`, the `skinPartitions`/`skinLodPartitions` columns): the engine's rule for which
+    partitions a skinned geometry draws, woven through the walk's geometry slots, the main build and the index pool's sizing, like the
+    LOD rows. Moving them means generalising `Api::EntryRanges` to partition chains on the walk's per-geometry path.
+  - **The ProjectedUv toggle and the particle capture fields** (`Core/Settings/Toggles`, `LightingDescriptors.cpp`;
+    `SceneCapture`'s particle fields, `PaletteItemClassOf`): each would need a contract it does not have (a property-flag rule with a
+    reason other than LOD; a geometry-capture contribution, the geometry counterpart of `NodeCapture`) for a few dozen lines.
+  - **The fixed-slot enums named after features** (`ObjectClass`, `EngineView`, `DrawFamily::TreeInstances`, `ProgramFamily::Effect`,
+    `OcclusionMap`, `ShadowSource`, `MainRangeSlot`): Core's slot vocabulary, which features fill; adding a slot is a Core change by
+    design.
