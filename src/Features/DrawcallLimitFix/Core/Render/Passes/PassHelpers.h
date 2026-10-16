@@ -3,6 +3,8 @@
 // What the passes and the graph extensions share: recording helpers, registration, the latched copies pass, attachments.
 // Part of IndirectDraws' implementation: included by Internal.h, in its order.
 
+#include "Features/DrawcallLimitFix/Api/Passes.h"
+
 namespace DCLF::Draws
 {
 	/**
@@ -66,19 +68,12 @@ namespace DCLF::Draws
 	/** @brief The scene tables, which every extension registers (the same identifiers: a second registration is an update). */
 	void RegisterSceneBuffers(org::RenderGraph& a_graph, const SceneBuffers& a_scene);
 
-	/** @brief A pass of an extension: a copy or compute pass on the graphics queue unless a_queue says otherwise, a render pass. */
-	enum class PassKind : std::uint8_t
-	{
-		Copy,
-		Compute,
-		Render,
-	};
-	enum class PassQueue : std::uint8_t
-	{
-		Default,  // the graphics queue for a copy or compute pass, none asked for a render pass
-		None,
-		Compute,
-	};
+	/**
+	 * @brief A pass of an extension: a copy or compute pass on the graphics queue unless a_queue says otherwise, a render pass (the pass
+	 * contract's: Api/Passes.h). Only the schedule's executor (Epochs/ScheduleExecutor.cpp) calls AddPass.
+	 */
+	using PassKind = Api::PassKind;
+	using PassQueue = Api::PassQueue;
 	template <class Epoch>
 	void AddPass(std::vector<org::RenderGraph::ExternalPassDesc>& a_out, PassKind a_kind, std::string a_name, std::shared_ptr<org::RenderPass> a_pass, Epoch a_epoch,
 		PassQueue a_queue = PassQueue::Default)

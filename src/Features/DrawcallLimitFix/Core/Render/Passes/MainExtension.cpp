@@ -1,37 +1,15 @@
-// The main graph extension: registers the main view's resources and adds its passes to the depth, colour and forward epochs.
+// The main graph extension: registers the main view's resources and adds its passes (the schedule's: Epochs/ScheduleExecutor.h) to the
+// depth, colour and forward epochs.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Passes/IndexPoolPass.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF::Draws
 {
-	namespace
-	{
-		/** @brief The queue a stage's pass asks for (Api::GpuQueue: Graphics is a copy's or compute pass's default). */
-		PassQueue QueueOf(Api::GpuQueue a_queue)
-		{
-			return a_queue == Api::GpuQueue::Compute ? PassQueue::Compute : a_queue == Api::GpuQueue::None ? PassQueue::None : PassQueue::Default;
-		}
-
-		/** @brief The features' stages at a_slot (Api::GpuStage), in registration order: each whose setup gave a state, as its kind, on its queue. */
-		template <class Epoch>
-		void AddStages(std::vector<org::RenderGraph::ExternalPassDesc>& a_out, const std::shared_ptr<Resources>& a_resources, Api::GpuStageSlot a_slot, Epoch a_epoch)
-		{
-			const auto stages = Extensions::RegisteredStages();
-			const auto& states = a_resources->scene->stages;
-			for (std::size_t i = 0; i < stages.size() && i < states.size(); ++i)
-				if (stages[i].slot == a_slot && states[i])
-					AddPass(a_out, stages[i].kind == Api::GpuStageKind::Copy ? PassKind::Copy : PassKind::Compute, stages[i].passName,
-						stages[i].makePass({ a_resources, states[i] }), a_epoch, QueueOf(stages[i].queue));
-		}
-	}
-
 	/** @brief The buffers a main commit may latch into (LatchedUploads); its latched copies declare them. */
 	std::vector<LatchedTarget> MainLatchedTargets(const Resources& a_resources)
 	{
@@ -104,97 +82,10 @@ namespace DCLF::Draws
 
 		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 		{
-			using Segment = RenderGraphRuntime::Segment;
-			const auto colour = RenderGraphRuntime::EpochOf(Segment::MainOpaque);
-			const auto depth = RenderGraphRuntime::EpochOf(Segment::ZPrepass);
-			const auto colourSegment = Segment::MainOpaque;
-			const auto depthSegment = Segment::ZPrepass;
-			// Each epoch's first pass copies the commit's latched values. It publishes its declared targets (Resources::latchedTargets),
-			// so a commit latches only what the pass will copy.
-			for (const auto segment : { depthSegment, colourSegment })
-				AddPass(a_out, PassKind::Copy, segment == depthSegment ? "cs.dclf.z.latched-copies" : "cs.dclf.latched-copies",
-					MakeLatchedCopiesPass([resources = resources] { return MainLatchedTargets(*resources); },
-						[segment](const org::PassPrepareContext& a_preparation) {
-							const auto frame = CurrentFrame(a_preparation, segment);
-							return frame ? LatchedSource{ frame->generation, frame, std::span(&frame->latched, 1) } : LatchedSource{};
-						},
-						&resources->latchedTargets),
-					RenderGraphRuntime::EpochOf(segment));
-			// A pass's segment is fixed, so each segment has its own instances.
-			// The sort by pipeline (DrawSort): the scan runs in every execution (so the counts it clears are zero even without a
-			// build), the scatter only after a build.
-			const auto addSort = [&](const char* a_scan, const char* a_scatter, RenderGraphRuntime::Segment a_segment, auto a_epoch) {
-				if (!resources->sort)
-					return;
-				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute(a_scan, resources->sort->ScanPass())
-						.PreferQueue(org::QueueKind::Graphics)
-						.Epoch(a_epoch));
-				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute(a_scatter,
-					MakeSortSequencesPass(resources, a_segment))
-						.PreferQueue(org::QueueKind::Graphics)
-						.Epoch(a_epoch));
-			};
-			// The features' next-frame state, beside this epoch's raster work (Api::GpuStageSlot::DepthSegmentNextFrameState).
-			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentNextFrameState, depth);
-			// The next frame's cull state, likewise (Api::GpuStageSlot::DepthSegmentCullState: the root states' step, then its write-back's
-			// copy to the host: Core's fade roots' cs.dclf.z.fade-state and cs.dclf.z.fade-events).
-			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentCullState, depth);
-			// The features' stages before the depth build, before anything of the frame draws (Api::GpuStageSlot::DepthSegmentBeforeBuild).
-			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentBeforeBuild, depth);
-			AddPass(a_out, PassKind::Compute, "cs.dclf.z.build-draws", MakeBuildDrawsPass(resources, depthSegment), depth);
-			// The pool copies the depth commit gave out (when the shadow epoch has not), before the draws read them.
-			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.index-pool",
-				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [main = resources](const org::PassPrepareContext& a_preparation) {
-					const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
-					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
-				})))
-					.PreferQueue(org::QueueKind::Graphics)
-					.Epoch(depth));
-			// The stages right before the depth draw (Api::GpuStageSlot::DepthSegmentBeforeDepthDraw: tree LOD's phase 1 list).
-			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentBeforeDepthDraw, depth);
-			AddPass(a_out, PassKind::Render, "cs.dclf.z.depth", MakeMainOpaquePass(resources, depthSegment), depth);
-			AddPass(a_out, PassKind::Compute, "cs.dclf.build-draws", MakeBuildDrawsPass(resources, colourSegment), colour);
-			addSort("cs.dclf.sort-scan", "cs.dclf.sort-scatter", colourSegment, colour);
-			// The forward sort after the colour build; its draw in the forward epoch (IndirectDraws::ExecuteForward).
-			if (resources->forwardSort) {
-				AddPass(a_out, PassKind::Compute, "cs.dclf.forward-sort",
-					MakeForwardSortPass(resources->sequences, { resources->count, nullptr }, [main = resources](const org::PassPrepareContext& a_preparation) {
-						const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
-						if (!frame || !BuildsDraws(a_preparation, *main, RenderGraphRuntime::Segment::MainOpaque))
-							return ForwardSortSource{ frame ? frame->generation : 0 };
-						return ForwardSortSource{ frame->generation, main->forwardSort, static_cast<std::uint32_t>(ForwardStagingSlot(*frame)), frame->forwardCapacity };
-					}),
-					colour);
-				AddPass(a_out, PassKind::Render, "cs.dclf.forward", MakeForwardDrawPass(resources), RenderGraphRuntime::EpochOf(Segment::Forward));
-			}
-			// Refraction normals, in the forward epoch after the blended draws.
-			if (resources->refractionNormals && resources->nativeDepth && resources->pool)
-				AddPass(a_out, PassKind::Render, "cs.dclf.refraction", MakeRefractionDrawPass(resources), RenderGraphRuntime::EpochOf(Segment::Forward));
-			Diagnostics::Notify(Diagnostics::MainGraphPasses{ Diagnostics::MainGraphPasses::kBeforeColour, resources, colour, a_out });
-			AddPass(a_out, PassKind::Render, "cs.dclf.main-opaque", MakeMainOpaquePass(resources, colourSegment), colour);
-			Diagnostics::Notify(Diagnostics::MainGraphPasses{ Diagnostics::MainGraphPasses::kAfterColour, resources, colour, a_out });
-			// The two-phase tail, in the depth segment, in this order: build-draws (phase 1, last frame's HZB), depth draw, hzb
-			// (rebuilt from it by the depth pyramid's producer, Api/DepthPyramid.h), build-draws-phase2 and the phase 2 stages
-			// (Api::GpuStageSlot::DepthSegmentPhaseTwoBeforeDraw: tree-lod-cull-phase2; phase 1's rejects retested), depth-phase2 (the
-			// rescues). Phase 1's frame-old HZB misses what just
-			// came out from behind an occluder; phase 2 takes those back.
-			if (resources->hzb) {
-				const auto& pyramid = *Extensions::DepthPyramidOf();
-				AddPass(a_out, PassKind::Compute, pyramid.passName, pyramid.makePass({ resources, resources->hzbState }), depth);
-				AddPass(a_out, PassKind::Compute, "cs.dclf.build-draws-phase2", MakeBuildDrawsPass(resources, depthSegment, 2), depth);
-				AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentPhaseTwoBeforeDraw, depth);
-				AddPass(a_out, PassKind::Render, "cs.dclf.depth-phase2", MakeMainOpaquePass(resources, depthSegment, true), depth);
-			}
-			// The stages after both phases (Api::GpuStageSlot::DepthSegmentAfterPhaseTwo: tree LOD's counts' readback).
-			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentAfterPhaseTwo, depth);
-			// Visibility changes once both phases' verdicts are final, and their readback copy.
-			const auto& sceneBuffers = *resources->scene;
-			if (sceneBuffers.visibilityEventsProgram && sceneBuffers.visibilityReadback && Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, sceneBuffers) &&
-				resources->frustum) {
-				AddPass(a_out, PassKind::Compute, "cs.dclf.z.visibility-events", MakeVisibilityEventsPass(resources), depth);
-				AddPass(a_out, PassKind::Copy, "cs.dclf.z.visibility-readback", MakeEventReadbackPass(resources->scene, resources->scene->visibilityEvents, resources->scene->visibilityReadback), depth, PassQueue::None);
-			}
-			Diagnostics::Notify(Diagnostics::MainGraphPasses{ Diagnostics::MainGraphPasses::kAfterDepth, resources, depth, a_out });
+			// The depth, colour and forward epochs' passes (Schedule/Frame.cpp; Passes/CorePasses.cpp makes them).
+			Api::PassContext context{};
+			context.main = &resources;
+			GatherScheduled(Api::EpochShape::Main, {}, context, a_out);
 		}
 
 	private:

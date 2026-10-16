@@ -26,6 +26,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ViewCommon.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -576,6 +577,8 @@ namespace DCLF::Extensions
 				}
 				lists.stages.push_back({ std::string(a_stage.passName), a_stage.slot, a_stage.queue, a_stage.setup, a_stage.makePass, a_stage.latchWord, a_stage.kind });
 			}
+
+			void RegisterPass(const Api::PassDef& a_pass) override { Draws::RegisterPassDef(a_pass, feature); }
 
 			void RegisterPayloadProduct(const Api::PayloadProduct& a_product) override
 			{
@@ -1188,11 +1191,13 @@ namespace DCLF::Extensions
 				feature.earlyHooks();
 	}
 
-	void InstallFeatures(std::span<const Api::Feature> a_features, std::span<const Api::Feature> a_integrations)
+	void InstallFeatures(std::span<const Api::Feature> a_features, std::span<const Api::Feature> a_integrations, const Api::FrameSchedule& a_schedule)
 	{
 		auto& lists = Registered();
 		if (std::exchange(lists.installed, true))
 			stl::report_and_fail("Drawcall Limit Fix: the features were installed twice");
+		// Core's passes (Core/Render/Passes/CorePasses.cpp) before the features', so a feature's key that is Core's fails its install.
+		Draws::RegisterCorePasses();
 		// Lighting's space and rules as kind 0; the features' material ports take kinds from 1 in their registration order, which the records
 		// they write name (RegisterMaterialPort returns it).
 		lists.materialPorts[lists.materialPortCount++] = CoreLightingPort();
@@ -1246,6 +1251,8 @@ namespace DCLF::Extensions
 		// The Core flags' needs by name resolved, then the features' toggles placed in the menu's table by their anchors (which may
 		// name a toggle a later feature registered), then seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
+		// The frame's schedule against every registered pass: a key nobody registered fails the install.
+		Draws::ResolveSchedule(a_schedule);
 	}
 
 	std::span<const FrameValuePoolEntry> RegisteredPools() { return Registered().pools; }

@@ -1,6 +1,9 @@
-// The views' epochs' recording (ViewEpoch.h): their passes (cull, a trees view's draw family, draws, forward range) and graph extension.
+// The views' epochs' recording (ViewEpoch.h): their passes (cull, a trees view's draw family, draws, forward range), their PassDefs
+// (view.*, which Passes/CorePasses.cpp registers) and graph extension.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF
 {
@@ -430,65 +433,110 @@ namespace DCLF
 					const auto& main = resources->main;
 					if (!main || !main->scene || !main->scene->pool || !resources->target || (traits.depthPass && (!main->nativeDepth || !main->native[0] || !main->native[1])))
 						return;
-					const auto depthEpoch = RenderGraphRuntime::EpochOf(traits.segments[0]);
-					const auto colourEpoch = RenderGraphRuntime::EpochOf(traits.segments[1]);
-					const auto name = [&](const char* a_pass) { return fmt::format("{}.{}", traits.prefix, a_pass); };
-					AddPass(a_out, PassKind::Copy, name("latched-copies"), MakeLatchedCopiesPass(LatchedTargets(resources), [kind = traits.kind](const org::PassPrepareContext& a_preparation) {
-						const auto frame = CurrentViewFrame(a_preparation, kind);
-						return frame ? LatchedSource{ frame->generation, frame, frame->latched } : LatchedSource{};
-					}),
-						depthEpoch);
-					AddPass(a_out, PassKind::Compute, name("build-draws"), std::make_shared<BuildDrawsPass>(resources), depthEpoch);
-					// A trees view's draw families' culls (tree LOD's, phase 1 per face), each its cullName.
-					for (std::size_t d = 0; d < Extensions::kDrawFamilies && traits.trees; ++d)
-						if (const auto& entry = Extensions::DrawFamilies()[d]; resources->faceLists[d][0] && entry.contribution.faces.makeCull)
-							if (auto cull = entry.contribution.faces.makeCull({ resources }))
-								AddPass(a_out, PassKind::Compute, name(entry.cullName.c_str()), std::move(cull), depthEpoch);
-					if (!traits.depthPass) {
-						AddPass(a_out, PassKind::Render, name("faces"), std::make_shared<DrawPass>(resources, DrawMode::Faces), depthEpoch);
-						return;
-					}
-					AddPass(a_out, PassKind::Render, name("depth"), std::make_shared<DrawPass>(resources, DrawMode::Depth), depthEpoch);
-					// The forward range sorted with the depth epoch (after its BuildDraws), drawn in the colour epoch after the bucket draws.
-					if (traits.forwardPart && main->forwardSort)
-						AddPass(a_out, PassKind::Compute, name("forward-sort"),
-							MakeForwardSortPass(resources->sequences, { nullptr, resources->bucketCounts[0] }, [view = resources](const org::PassPrepareContext& a_preparation) {
-								const auto frame = CurrentViewFrame(a_preparation, view->traits->kind);
-								if (!frame || !frame->latch)
-									return ForwardSortSource{ frame ? frame->generation : 0 };
-								// Its count is the range's bucket count word, after the buckets'.
-								return ForwardSortSource{ frame->generation, view->main->forwardSort, frame->forwardFirst, frame->forwardCapacity,
-									frame->forwardEntry * static_cast<std::uint32_t>(sizeof(std::uint32_t)), true };
-							}),
-							depthEpoch);
-					AddPass(a_out, PassKind::Render, name("colour"), std::make_shared<DrawPass>(resources, DrawMode::Colour), colourEpoch);
-					if (traits.forwardPart && main->forwardSort && resources->preprocessForward)
-						AddPass(a_out, PassKind::Render, name("forward"), std::make_shared<ForwardPass>(resources), colourEpoch);
+					// The view's epochs' passes (Schedule/Frame.cpp).
+					Api::PassContext context{};
+					context.main = &resources->main;
+					context.view = &resources;
+					GatherScheduled(Api::EpochShape::View, traits.kind, context, a_out);
 				}
 
 			private:
-				/** @brief The targets the view's latched copies write: the draw count, the blocks, each face's bucket counts and draw families' rows and lists. */
-				static std::function<std::vector<LatchedTarget>()> LatchedTargets(std::shared_ptr<ViewResources> a_resources)
-				{
-					return [resources = std::move(a_resources)] {
-						std::vector<LatchedTarget> out{ { resources->count, nullptr }, { resources->blocks, nullptr } };
-						std::array<bool, Extensions::kDrawFamilies> families{};
-						for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
-							families[d] = FamilySetUp(*resources->main->scene, static_cast<Api::DrawFamily>(d)) && resources->faceLists[d][0];
-						for (std::uint32_t f = 0; f < resources->traits->faces; ++f) {
-							out.push_back({ nullptr, resources->bucketCounts[f] });
-							for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
-								if (families[d]) {
-									out.push_back({ resources->faceRows[d][f], nullptr });
-									out.push_back({ nullptr, resources->faceLists[d][f] });
-								}
-						}
-						return out;
-					};
-				}
-
 				std::shared_ptr<ViewResources> resources;
 			};
+
+			/** @brief The targets the view's latched copies write: the draw count, the blocks, each face's bucket counts and draw families' rows and lists. */
+			std::function<std::vector<LatchedTarget>()> LatchedTargets(std::shared_ptr<ViewResources> a_resources)
+			{
+				return [resources = std::move(a_resources)] {
+					std::vector<LatchedTarget> out{ { resources->count, nullptr }, { resources->blocks, nullptr } };
+					std::array<bool, Extensions::kDrawFamilies> families{};
+					for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
+						families[d] = FamilySetUp(*resources->main->scene, static_cast<Api::DrawFamily>(d)) && resources->faceLists[d][0];
+					for (std::uint32_t f = 0; f < resources->traits->faces; ++f) {
+						out.push_back({ nullptr, resources->bucketCounts[f] });
+						for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
+							if (families[d]) {
+								out.push_back({ resources->faceRows[d][f], nullptr });
+								out.push_back({ nullptr, resources->faceLists[d][f] });
+							}
+					}
+					return out;
+				};
+			}
+
+			std::shared_ptr<org::RenderPass> LatchedCopies(const Api::PassContext& a_context)
+			{
+				const auto& resources = a_context.View();
+				return MakeLatchedCopiesPass(LatchedTargets(resources), [kind = resources->traits->kind](const org::PassPrepareContext& a_preparation) {
+					const auto frame = CurrentViewFrame(a_preparation, kind);
+					return frame ? LatchedSource{ frame->generation, frame, frame->latched } : LatchedSource{};
+				});
+			}
+
+			std::shared_ptr<org::RenderPass> BuildDraws(const Api::PassContext& a_context)
+			{
+				return std::make_shared<BuildDrawsPass>(a_context.View());
+			}
+
+			// A view without a depth pass draws its faces in its one epoch; one with a depth pass its depth, then its colour in the
+			// colour epoch.
+			std::shared_ptr<org::RenderPass> FacesDraw(const Api::PassContext& a_context)
+			{
+				const auto& resources = a_context.View();
+				return !resources->traits->depthPass ? std::make_shared<DrawPass>(resources, DrawMode::Faces) : nullptr;
+			}
+
+			std::shared_ptr<org::RenderPass> DepthDraw(const Api::PassContext& a_context)
+			{
+				const auto& resources = a_context.View();
+				return resources->traits->depthPass ? std::make_shared<DrawPass>(resources, DrawMode::Depth) : nullptr;
+			}
+
+			// The forward range sorted with the depth epoch (after its BuildDraws), drawn in the colour epoch after the bucket draws.
+			std::shared_ptr<org::RenderPass> ForwardSort(const Api::PassContext& a_context)
+			{
+				const auto& resources = a_context.View();
+				const auto& traits = *resources->traits;
+				if (!traits.depthPass || !traits.forwardPart || !resources->main->forwardSort)
+					return nullptr;
+				return MakeForwardSortPass(resources->sequences, { nullptr, resources->bucketCounts[0] }, [view = resources](const org::PassPrepareContext& a_preparation) {
+					const auto frame = CurrentViewFrame(a_preparation, view->traits->kind);
+					if (!frame || !frame->latch)
+						return ForwardSortSource{ frame ? frame->generation : 0 };
+					// Its count is the range's bucket count word, after the buckets'.
+					return ForwardSortSource{ frame->generation, view->main->forwardSort, frame->forwardFirst, frame->forwardCapacity,
+						frame->forwardEntry * static_cast<std::uint32_t>(sizeof(std::uint32_t)), true };
+				});
+			}
+
+			std::shared_ptr<org::RenderPass> ColourDraw(const Api::PassContext& a_context)
+			{
+				const auto& resources = a_context.View();
+				return resources->traits->depthPass ? std::make_shared<DrawPass>(resources, DrawMode::Colour) : nullptr;
+			}
+
+			std::shared_ptr<org::RenderPass> ForwardDraw(const Api::PassContext& a_context)
+			{
+				const auto& resources = a_context.View();
+				const auto& traits = *resources->traits;
+				return traits.depthPass && traits.forwardPart && resources->main->forwardSort && resources->preprocessForward ? std::make_shared<ForwardPass>(resources) : nullptr;
+			}
+
+			// Named with the view's prefix (ViewTraits::prefix).
+			constexpr Api::PassDef kViewPasses[] = {
+				{ .key = "view.latched-copies", .passName = "{view}.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
+				{ .key = "view.build-draws", .passName = "{view}.build-draws", .make = &BuildDraws },
+				{ .key = "view.faces", .passName = "{view}.faces", .kind = PassKind::Render, .make = &FacesDraw },
+				{ .key = "view.depth", .passName = "{view}.depth", .kind = PassKind::Render, .make = &DepthDraw },
+				{ .key = "view.forward-sort", .passName = "{view}.forward-sort", .make = &ForwardSort },
+				{ .key = "view.colour", .passName = "{view}.colour", .kind = PassKind::Render, .make = &ColourDraw },
+				{ .key = "view.forward", .passName = "{view}.forward", .kind = PassKind::Render, .make = &ForwardDraw },
+			};
+		}
+
+		std::span<const Api::PassDef> ViewPassDefs()
+		{
+			return kViewPasses;
 		}
 
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeViewExtension(std::shared_ptr<ViewResources> a_resources)

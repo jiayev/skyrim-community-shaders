@@ -4,6 +4,7 @@
 // extension point runs (FrameValues, the scene's GPU setup, commits and graph, the frame records, the main build, the payload's
 // publication and adoption, the primary cull's stand-in, the report). Switches and toggles register with Core/Settings, which owns them.
 
+#include "Features/DrawcallLimitFix/Api/Epochs.h"
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 
 #include <span>
@@ -14,10 +15,11 @@ namespace DCLF::Extensions
 	/**
 	 * @brief Main thread, at PostPostLoad, before DCLF's threads start (the shell, after DCLF's own engine hooks, before
 	 * SceneScheduler::Graph and the shell's hooks): every feature's install, in a_features' order, then every integration's (Integrations/,
-	 * written against Api/ like a feature: no early or source hooks), in a_integrations' order, then the resolutions. Once; a second call
+	 * written against Api/ like a feature: no early or source hooks), in a_integrations' order, then the resolutions, the frame's schedule
+	 * (a_schedule: Schedule/Frame.cpp, which Core never includes) last, against Core's passes and the registered ones. Once; a second call
 	 * fails.
 	 */
-	void InstallFeatures(std::span<const Api::Feature> a_features, std::span<const Api::Feature> a_integrations);
+	void InstallFeatures(std::span<const Api::Feature> a_features, std::span<const Api::Feature> a_integrations, const Api::FrameSchedule& a_schedule);
 	/**
 	 * @brief Main thread, at PostPostLoad, before DCLF's own engine hooks and observers install (the shell, before Diagnostics::Install):
 	 * every feature's early hooks (Api::Feature::earlyHooks), in a_features' order. Once, before InstallFeatures.

@@ -14,6 +14,10 @@ Rules (always errors):
      run first: toggles, classes, report lines).
   5. The top level is closed: every file under the DCLF tree is in one of TOP_LEVEL's folders (none at its root), and Core/ holds
      only its documented subfolders (CORE_SUBFOLDERS, dclf-layout.md's tree): no new layer folder grows back.
+  6. Passes reach the graph through the schedule's executor alone: under the DCLF tree, AddPass( and .Epoch( appear only in
+     PASS_ADDERS (the executor, AddPass's definition) and in Diagnostics/ (its MainGraphPasses observers append finished descs), and
+     host->AddExtension only in EXTENSION_ADDERS. Schedule/ (the frame's schedule) includes only Api/ (and CS's RenderGraphRuntime.h),
+     and only the shell includes it.
 
 Diagnostics/ may be included from anywhere: production code reaches it only through its observer contract (Hooks.h, Observation,
 Policy), which the parity rework will redefine.
@@ -39,7 +43,7 @@ SHELL = {SRC / "Features" / "DrawcallLimitFix.h", SRC / "Features" / "DrawcallLi
 BASELINE = ROOT / "tools" / "dclf-layout-baseline.json"
 
 # Rule 5: the DCLF tree's top-level folders, and Core's subfolders (docs/development/dclf-layout.md, "The target").
-TOP_LEVEL = {"Api", "Core", "Features", "Integrations", "Diagnostics"}
+TOP_LEVEL = {"Api", "Core", "Features", "Integrations", "Diagnostics", "Schedule"}
 CORE_SUBFOLDERS = {"Runtime", "Engine", "Settings", "Scene", "Handoff", "Shading", "Gpu", "Render", "Extensions"}
 # Features/<X> -> the other features it may include (and that are listed before it in Features/FeatureList.cpp).
 DEPENDS = {
@@ -58,6 +62,12 @@ MAX_CCN = 40
 EXEMPT = {
     "DCLF::Features::HiddenNodes::HiddenStoreSites": "data table",
 }
+
+# Rule 6: the only files under the tree (besides Diagnostics/) that add a graph pass, and that add a graph extension.
+PASS_ADDERS = {TREE / "Core" / "Render" / "Epochs" / "ScheduleExecutor.cpp", TREE / "Core" / "Render" / "Passes" / "PassHelpers.h"}
+EXTENSION_ADDERS = {TREE / "Core" / "Render" / "Resources" / "Resources.cpp"}
+PASS_ADD = re.compile(r"\bAddPass\(|\.Epoch\(")
+EXTENSION_ADD = re.compile(r"host->AddExtension\b")
 
 INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^">]+)[">]')
 DEPENDENCY_MACRO = re.compile(r"\b(CS_HAS_RENDER_GRAPH|CS_HAS_ORG_MODULE_SERVICES|CS_HAS_DCLF|ORG_MODULE_SERVICES_HAS_DXC)\b")
@@ -95,7 +105,11 @@ def module(path):
 
 
 def allowed(source, target):
-    if source == target or target == "Diagnostics":
+    if source == target:
+        return True
+    if source == "Schedule" or target == "Schedule":
+        return source == "Schedule" and target == "Api"  # the shell alone includes Schedule/ (from outside the tree)
+    if target == "Diagnostics":
         return True
     if source == "Api":
         return target == "Api"
@@ -116,6 +130,18 @@ def feature_order():
         if m:
             order.append(m.group(1).rstrip(":").replace("::", "/"))
     return order
+
+
+def pass_adder_errors(path, rel, text):
+    """Rule 6: a graph pass added only by the schedule's executor (and Diagnostics' observers), an extension only by Resources.cpp."""
+    errors = []
+    diagnostics = module(path) == "Diagnostics"
+    for number, line in enumerate(text.splitlines(), 1):
+        if PASS_ADD.search(line) and path not in PASS_ADDERS and not diagnostics:
+            errors.append(f"{rel}:{number}: adds a graph pass (only the schedule's executor may: Core/Render/Epochs/ScheduleExecutor.cpp)")
+        if EXTENSION_ADD.search(line) and path not in EXTENSION_ADDERS:
+            errors.append(f"{rel}:{number}: adds a graph extension (only Core/Render/Resources/Resources.cpp may)")
+    return errors
 
 
 def depends_order_errors():
@@ -176,6 +202,8 @@ def main():
         rel = path.relative_to(ROOT).as_posix()
         if inside and DEPENDENCY_MACRO.search(text):
             errors.append(f"{rel}: tests a dependency macro (only the shell may: CS_HAS_DCLF)")
+        if inside:
+            errors += pass_adder_errors(path, rel, text)
         for number, line in enumerate(text.splitlines(), 1):
             m = INCLUDE.match(line)
             if not m:

@@ -1,7 +1,7 @@
 #pragma once
 
-// The main extension's passes, made by the sources that define them (MainExtension.cpp adds them to the graph).
-// Included by the sources of this folder only, after Internal.h.
+// The passes Core registers (CorePasses.cpp), made by the sources that define them; the schedule's executor adds them to the graph
+// (Epochs/ScheduleExecutor.cpp). Included by the sources of this folder only, after Internal.h.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
@@ -23,4 +23,10 @@ namespace DCLF::Draws
 
 	// Readbacks.cpp: an event ring's copy to the host.
 	std::shared_ptr<org::RenderPass> MakeEventReadbackPass(std::shared_ptr<SceneBuffers> a_scene, Versioned a_events, std::shared_ptr<HostEventRing> a_ring);
+
+	// MainExtension.cpp: the buffers a main commit may latch into (LatchedUploads); its latched copies declare them.
+	std::vector<LatchedTarget> MainLatchedTargets(const Resources& a_resources);
+
+	// Shadow.cpp: the shadow and occlusion epochs' passes (shadows.*), which CorePasses.cpp registers.
+	std::span<const Api::PassDef> ShadowPassDefs();
 }

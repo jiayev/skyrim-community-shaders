@@ -28,6 +28,7 @@ src/Features/DrawcallLimitFix/
                   Decals, Effects, Landscape, Fades, Lod, TreeLod, TreeWind, TextureTransforms, HiddenNodes, SwitchNodes)
   Integrations/   one folder per CS feature DCLF supports, written against Api/ (AdvancedSkin, TerrainBlending, LightLimitFix, TruePBR, SubsurfaceScattering, ExtendedTranslucency, LinearLighting)
   Diagnostics/    the observer infrastructure and the parity checks that span features
+  Schedule/       the frame's schedule: every epoch and its passes' keys in order (Frame.cpp), which only the shell includes
 ```
 
 The main view is Core's, not a feature. Every contract hangs off it (main ranges, payload products, commit hooks, frame
@@ -665,6 +666,30 @@ the light volumes contract (`Api/LightVolumes.h`).
   lines, the focus membership and the local shadow volumes, and the point lights' culls under `CS_DCLF_PERSISTENT_PARITY` (`LightCulls`,
   `Shadows/Local`); the light selection and its rooms (`LightSelectionParity`, `LocalLights`). The occlusion maps' view check is `Features/OcclusionMaps`' (`Diagnostics/OcclusionViewCheck.cpp`).
 
+## The schedule
+
+Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, the graph pass's name, its kind and queue, and either a
+`make` (render thread, at the graph's build: the pass, or null when its conditions are unmet) or an `emit`.
+- **Keys** name their owner by prefix: `core.*` (the main view's culling and copies), `main-view.*`, `forward.*`, `shadows.*`, `view.*`
+  (Core's, registered from `Core/Render/Passes/CorePasses.cpp` before the features install; the shadow and view passes' tables stay
+  beside their classes, in `Passes/Shadow.cpp` and `Epochs/ViewEpochRecord.cpp`), `gpu-occlusion.hzb` (the depth pyramid's
+  producer's name and pass). A feature registers its own with `InstallContext::RegisterPass`. A view pass's name says `{view}`,
+  which becomes the view's prefix.
+- **Anchors** are PassDefs with an `emit`, which adds any number of passes at its place: `stages.*` (the GPU stages registered at that
+  `Api::GpuStageSlot`, in registration order), `families.faces-cull` (each draw family's face cull), `diag.*` (the `MainGraphPasses`
+  observers' passes at that point).
+- **The table** (`Schedule/Frame.cpp`, `Api/Epochs.h`) lists each epoch: its id, its `RenderGraphRuntime::Segment`, the shape its
+  passes are made from (`Api::EpochShape`: the main, shadow or a view's extension's resources) and its pass keys in order. Only the
+  shell includes it, handing it to `Extensions::InstallFeatures`; Core never includes `Schedule/`.
+- **The executor** (`Core/Render/Epochs/ScheduleExecutor`) keeps every registered PassDef (a missing or duplicate key, or neither or
+  both of make and emit, fails the install), resolves the table once at the end of `InstallFeatures` (a key nobody registered fails it,
+  naming the epoch), and adds an extension's epochs' passes when its `GatherStructuralPasses` asks (`GatherScheduled`), epoch by epoch
+  in table order. ORG orders the epochs; within an epoch the passes keep the table's order. Each extension still registers its own
+  resources in `PrepareForBuild`.
+- Rule 6 below keeps it the one way in: nothing else adds a pass.
+
+A later step adds the epochs' definitions (their traits, triggers and frame and async orders) to `Api::EpochDef`.
+
 ## The rules
 
 `tools/dclf-layout-check.py` checks these.
@@ -685,10 +710,16 @@ the light volumes contract (`Api/LightVolumes.h`).
      `Observation`, `Policy`), which the parity rework will redefine.
 4. **A dependency installs first.** Every feature `DEPENDS` names is listed in `Features/FeatureList.cpp` before the feature that
    depends on it, so its registrations (toggles, classes, report lines) run first.
-5. **The top level is closed.** Every file is in `Api/`, `Core/`, `Features/`, `Integrations/` or `Diagnostics/`, none at
-   the tree's root, and `Core/` holds only the subfolders in the tree above (`TOP_LEVEL`, `CORE_SUBFOLDERS`). A new layer
+5. **The top level is closed.** Every file is in `Api/`, `Core/`, `Features/`, `Integrations/`, `Diagnostics/` or `Schedule/`,
+   none at the tree's root, and `Core/` holds only the subfolders in the tree above (`TOP_LEVEL`, `CORE_SUBFOLDERS`). A new layer
    folder doesn't grow back.
-6. **Complexity may only shrink.** The functions over the thresholds (120 lines or cyclomatic complexity 40) are counted
+6. **Passes reach the graph through the schedule's executor alone.**
+   - Under the tree, `AddPass(` and `.Epoch(` appear only in `Core/Render/Epochs/ScheduleExecutor.cpp` (the gather and
+     `PassOut::Add`), in `Core/Render/Passes/PassHelpers.h` (AddPass's definition) and in `Diagnostics/`, whose `MainGraphPasses`
+     observers append finished descs until a later step.
+   - `host->AddExtension` appears only in `Core/Render/Resources/Resources.cpp`.
+   - `Schedule/` includes only `Api/` (and CS's `RenderGraph/RenderGraphRuntime.h`); nothing under the tree includes `Schedule/`.
+7. **Complexity may only shrink.** The functions over the thresholds (120 lines or cyclomatic complexity 40) are counted
    against a baseline, which each split lowers (`--update`). A function not in the baseline may not cross them. `EXEMPT`
    names the ones not counted, each with its reason (a data table, a flat verdict chain a split would only fragment).
 
