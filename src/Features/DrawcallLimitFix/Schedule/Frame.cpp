@@ -12,8 +12,9 @@
 //   class gating it and whether the frame's claims need it. The rows' order is the scene revisions' slot order and the reports'; the frame's order is
 //   kFrameOrder, the host's async order kAsyncOrder (the revision-driven epochs are those with revision; the foreign ones never are).
 // - A pass is a key (Api::PassDef), registered at install by its owner, whom the key's prefix names: core.* (the main view's culling and
-//   copies), main-view.* (its draws), forward.*, shadows.*, view.* (Core's, through Core/Render/Passes/CorePasses.cpp), or a feature's
-//   (Features/<Name>/): tree-wind.*, fades.*, texture-transforms.*, tree-lod.*, gpu-occlusion.* (the depth pyramid's producer).
+//   copies), shadows.*, view.* (Core's, through Core/Render/Passes/CorePasses.cpp), or a feature's (Features/<Name>/): main-view.* (the
+//   main view's draws: Features/MainView), forward.*, tree-wind.*, fades.*, texture-transforms.*, tree-lod.*, gpu-occlusion.* (the depth
+//   pyramid's producer).
 // - A pass's own conditions decide whether it is added (no sort, no forward range, no HZB, no state from its setup: the pass is skipped,
 //   not the key).
 // - Anchors exist only for diagnostics (diag.*): each adds the diagnostics' observers' passes at that point, any number of them.
@@ -45,7 +46,7 @@ namespace DCLF::Schedule
 				.where = "RenderDepth's first-person draw (the accumulator render's call there, FirstPersonHooks.cpp)" },
 			{ .id = "occlusion.draw", .owner = "Core",
 				.where = "Skylighting's occlusion mask rendered (its DrawOcclusion call, Skylighting.cpp)" },
-			{ .id = "opaque.after", .owner = "Core",
+			{ .id = "opaque.after", .owner = "Features/MainView",
 				.where = "the main pass's opaque batches done (Deferred's Main_RenderWorld_BlendedDecals hook)" },
 			{ .id = "blended.draw", .owner = "Features/Forward",
 				.where = "the main pass's blended draw for the main accumulator (both its call sites, ForwardHooks.cpp)" },

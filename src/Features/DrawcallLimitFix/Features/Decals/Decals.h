@@ -12,7 +12,7 @@
 // Core keeps what the main pass is built of: the ports' decal groups and states (LightingDescriptors, the accumulate patch's decalKey,
 // Records.h's kObjectDecal and group bits, the raster keys), the tables' ordinal columns, the main build's decal inputs and templates,
 // the sequence buffer's range slots and count words (GpuLayouts.h, BuildDrawsCS), and the colour segment's passes that draw the
-// registered ranges (MainOpaque.cpp). Included by the feature's sources only.
+// registered ranges (Features/MainView/MainViewPasses.cpp). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 

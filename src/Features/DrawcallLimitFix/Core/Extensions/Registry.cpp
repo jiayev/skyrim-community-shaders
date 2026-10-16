@@ -18,6 +18,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/NodeCaptures.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PrimaryView.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
@@ -119,6 +120,9 @@ namespace DCLF::Extensions
 			std::array<Api::CullBinding, kCullBindingSlots> cullBindings{};
 			// The depth pyramid (no setup: none). Resolved at the end (ResolveDepthPyramid).
 			Api::DepthPyramidContribution depthPyramid{};
+			// The primary view and its feature (no handlers: none). Resolved at the end (ResolvePrimaryView).
+			Api::PrimaryViewContribution primaryView{};
+			std::string primaryViewFeature;
 			// The root states (no name: none). Resolved at the end (ResolveRootStates).
 			Api::RootStatesContribution rootStates{};
 			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
@@ -1114,6 +1118,17 @@ namespace DCLF::Extensions
 				lists.depthPyramid = a_pyramid;
 			}
 
+			void RegisterPrimaryView(const Api::PrimaryViewContribution& a_view) override
+			{
+				if (!a_view.beforeOpaque || !a_view.afterOpaque)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete primary view", feature));
+				// FrameDriver's main pass points call one main view.
+				if (lists.primaryView.beforeOpaque)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes a primary view, which {} has", feature, lists.primaryViewFeature));
+				lists.primaryView = a_view;
+				lists.primaryViewFeature = std::string(feature);
+			}
+
 			void RegisterRootStates(const Api::RootStatesContribution& a_states) override
 			{
 				// Its family registered before (its objects' references are the roots Core reads), and the callbacks Core calls per decode and join.
@@ -1212,7 +1227,7 @@ namespace DCLF::Extensions
 		ResolveAncestorValue(lists.ancestorValue);
 		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
-		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the root states'; the palette rows classes'; the shading fields'
+		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the primary view's; the root states'; the palette rows classes'; the shading fields'
 		// (and the published entry classes); the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
 		ResolveViews(lists.views, lists.viewWork, lists.viewRoots);
@@ -1224,6 +1239,7 @@ namespace DCLF::Extensions
 		ResolveMainCullInput(lists.mainCullInput);
 		ResolveCullBindings(lists.cullBindings);
 		ResolveDepthPyramid(lists.depthPyramid);
+		ResolvePrimaryView(lists.primaryView);
 		ResolveRootStates(lists.rootStates);
 		ResolvePaletteRows(lists.paletteRows);
 		ResolveShadingFields(lists.shadingFields);

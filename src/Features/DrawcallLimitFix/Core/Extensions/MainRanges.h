@@ -2,7 +2,7 @@
 
 // The main range contract's Core side (Api/MainRanges.h): the second pass's ranges in draw order, resolved once at InstallFeatures
 // (ResolveMainRanges) from the registrations (the features' main ranges and held groups); a slot nobody registers is never drawn. The
-// colour segment's passes (MainOpaque.cpp) walk the table; each slot's arguments, count word and capacity are Core's (GpuLayouts.h). And the
+// colour segment's passes (Features/MainView/MainViewPasses.cpp) walk the table; each slot's arguments, count word and capacity are Core's (GpuLayouts.h). And the
 // held groups (HeldGroups), which the Lighting port's derive reads, and the near twin (NearTwin).
 
 #include "Features/DrawcallLimitFix/Api/MainRanges.h"

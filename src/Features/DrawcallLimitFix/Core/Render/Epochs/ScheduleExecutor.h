@@ -43,13 +43,15 @@ namespace DCLF::Draws
 	 */
 	Api::TriggerId FindTrigger(const Api::FrameSchedule& a_schedule, std::string_view a_id, std::string_view a_who);
 
-	/** @brief Core's trigger points (FrameDriver's), resolved by id at ResolveSchedule: a schedule without one fails the install. */
+	/**
+	 * @brief Core's trigger points (FrameDriver's), resolved by id at ResolveSchedule: a schedule without one fails the install. The main
+	 * pass's opaque.after is Features/MainView's (its handler, called from FrameDriver: Api/PrimaryView.h).
+	 */
 	enum class CoreTrigger : std::uint32_t
 	{
 		ShadowMapsAfter,  // shadow-maps.after
 		DepthCommitted,   // depth.committed
 		OcclusionDraw,    // occlusion.draw
-		OpaqueAfter,      // opaque.after
 		Count,
 	};
 	/** @brief Any thread, after InstallFeatures: Core's trigger a_trigger. */

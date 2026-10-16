@@ -2,7 +2,8 @@
 
 // The frame's DCLF work at each engine point, render thread: the scene frame's start (the publication installed, its claims, the
 // coordinator's requests served, the frame values kicked), the shadow views, the depth commit, EarlyPrepass and Prepass, the occlusion
-// maps, the main pass's captures and the colour epoch, the views' work at their points (Api::ViewPoint), and Present's end of frame. The feature file's hooks call it; it reads the scene through
+// maps, the main pass's points (their bookkeeping, and the main view's handlers there: Api/PrimaryView.h, Features/MainView's capture and
+// colour epoch), the views' work at their points (Api::ViewPoint), and Present's end of frame. The feature file's hooks call it; it reads the scene through
 // Scene::FrameView and drives IndirectDraws.
 
 #include "Features/DrawcallLimitFix/Api/Views.h"
@@ -70,14 +71,14 @@ namespace DCLF
 		bool OcclusionReady(std::uint32_t a_map, bool a_running);
 		bool OcclusionNeedsEngine(std::uint32_t a_map, bool a_running);
 		void DrawOcclusion();
+		/** @brief Where the main pass's opaque batches start: the engine's pending state applied, then the main view's capture (Api::PrimaryViewContribution). */
 		void BeforeOpaquePass();
+		/** @brief Where they end: the main view's colour epoch (Api::PrimaryViewContribution::afterOpaque). */
 		void AfterOpaquePass();
 		/** @brief A native lighting draw in the main pass: SetupGeometry's projected textures noted, and the observers told. */
 		void NativeLightingDraw(RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags);
 
 	private:
-		/** @brief The main pass's targets and bindings for this frame's colour epoch; false when its targets are not bound. */
-		bool CaptureMainPass();
 		/** @brief Every view's work at a_point (Extensions::ViewEntry::work), the views in slot order. */
 		void RunViewWork(Api::ViewPoint a_point);
 
@@ -86,7 +87,6 @@ namespace DCLF
 		std::uint32_t toggleGeneration = 0;
 		bool frameRan = false;            // a scene frame ran since the last Present
 		std::uint32_t occlusionWanted = 0;  // the maps OcclusionReady said DCLF draws this frame
-		std::uint32_t captureFrame = ~0u;   // the frame whose main-pass bindings have been captured
-		bool loggedCaptureFailure = false;
+		std::uint32_t captureFrame = ~0u;   // the frame whose main-pass bindings have been captured (Api::PrimaryViewContribution::beforeOpaque)
 	};
 }

@@ -50,7 +50,7 @@ it ([dclf-async-publication.md](./dclf-async-publication.md)).
 | `EarlyPrepass` | Kicks the **accumulate work**; requests the shadow pipelines for the keys in use | **Accumulate work**: what the main camera's registrations decided | |
 | `Main_RenderDepth`, world drawn | `CaptureDepthPass`: the **Z-prepass epoch**; then the **reflection epoch** (`ExecuteReflection`, after every reflection update of the frame; it must follow the depth commit, which brings the index pool and the scene's buffers to the publication whose scene list the faces draw) | | DCLF's depth, the HZB, two-phase occlusion culling; the water reflection's faces |
 | `Prepass` | Latches the accumulator and refreshes the camera-dependent constants | | |
-| The main pass's opaque batches (`BeforeOpaquePass`, `AfterOpaquePass`) | `CaptureMainPass`, then the **colour epoch** | | The drawn set into the G-buffer, depth-tested EQUAL, then decals |
+| The main pass's opaque batches (`BeforeOpaquePass`, `AfterOpaquePass`) | Features/MainView's handlers (`Api/PrimaryView.h`): `CaptureMainPass`, then the **colour epoch** | | The drawn set into the G-buffer, depth-tested EQUAL, then decals |
 | `Present` (`Reset`) | Closes the engine-read window, binds what the frame read to its last submission (`BindAdopted`: the adopted set and the installed payload; `FrameValues::EndFrame`), writes the report, releases what the scene work let go of (`EngineReleases`), handles the menu toggle. Only under `Policy::ScenePassInline` (the parities) does a Present with no frame since the last apply the events itself (`ApplyEventsInline`) | | |
 
 Each epoch is submitted from the selected scene revision's recording (ORG's revision-driven epochs): the commit writes the
@@ -525,7 +525,8 @@ present; the rest of CS calls DCLF only through it). Under `src/Features/Drawcal
 -   `Core/Shading/`: the material ports, material sources and writes, constants, lighting descriptors, frame globals.
 -   `Core/Gpu/`: frame values, pooled backings, GPU resources and textures, pipelines (`Pipelines/`, split by family).
 -   `Core/Render/`: `IndirectDraws` and `FrameDriver`, with the snapshot, revisions, payloads, epochs, passes, shadow,
-    readbacks, views, the main view and the draw families.
+    readbacks, views, what the main view shares with the others (its commits, culling, sorts, targets and shapes) and the draw
+    families. The main view's draws and its capture and colour epoch at the main pass's points are `Features/MainView`'s.
 -   `Core/Extensions/`: the extension registry and the Core halves of `Api/`'s contracts.
 
 `Features/`, `Integrations/` and `Diagnostics/` are areas, not layers: one folder per engine feature DCLF ports, one per CS

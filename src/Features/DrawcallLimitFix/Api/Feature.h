@@ -20,6 +20,7 @@
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Api/Payload.h"
+#include "Features/DrawcallLimitFix/Api/PrimaryView.h"
 #include "Features/DrawcallLimitFix/Api/Reports.h"
 #include "Features/DrawcallLimitFix/Api/RootStates.h"
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
@@ -244,6 +245,8 @@ namespace DCLF::Api
 		 * setup.
 		 */
 		virtual void RegisterDepthPyramid(const DepthPyramidContribution& a_pyramid) = 0;
+		/** @brief Fails the install for a second contribution (FrameDriver's main pass points call one main view), or one without a handler. */
+		virtual void RegisterPrimaryView(const PrimaryViewContribution& a_view) = 0;
 		/**
 		 * @brief Fails the install for a second contribution (Core's readers take one producer's states), or one without a name, a table
 		 * family registered before, view or test.

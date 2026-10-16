@@ -1,7 +1,7 @@
-// Core's passes (Api::PassDef), which the schedule (Schedule/Frame.cpp) names by key: the main view's (core.*, main-view.*), the
+// Core's passes (Api::PassDef), which the schedule (Schedule/Frame.cpp) names by key: the main view's culling and copies (core.*), the
 // diagnostics' anchors (diag.*), and through Shadow.cpp and ViewEpochRecord.cpp the shadow views' (shadows.*) and the views' (view.*).
-// Each make is its pass's condition and factory; the executor adds the pass. The features register their own passes (the forward
-// epoch's forward.*: Features/Forward).
+// Each make is its pass's condition and factory; the executor adds the pass. The features register their own passes (the main view's
+// draws, main-view.*: Features/MainView; the forward epoch's forward.*: Features/Forward).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -49,23 +49,13 @@ namespace DCLF::Draws
 			}));
 		}
 
-		std::shared_ptr<org::RenderPass> MainDraws(const Api::PassContext& a_context)
-		{
-			return MakeMainOpaquePass(a_context.Main(), a_context.segment);
-		}
-
-		// The two-phase tail, in the depth segment, in this order: build-draws (phase 1, last frame's HZB), depth draw, hzb (rebuilt from
+			// The two-phase tail, in the depth segment, in this order: build-draws (phase 1, last frame's HZB), depth draw, hzb (rebuilt from
 		// it by the depth pyramid's producer, Api/DepthPyramid.h), build-draws-phase2 and the features' phase 2 passes (tree-lod-cull-phase2;
-		// phase 1's rejects retested), depth-phase2 (the rescues). Phase 1's frame-old HZB misses what just came out from behind an
-		// occluder; phase 2 takes those back. Each only while the HZB exists (PassContext::PhaseTwo).
+		// phase 1's rejects retested), depth-phase2 (the rescues: Features/MainView's). Phase 1's frame-old HZB misses what just came out
+		// from behind an occluder; phase 2 takes those back. Each only while the HZB exists (PassContext::PhaseTwo).
 		std::shared_ptr<org::RenderPass> BuildDrawsPhaseTwo(const Api::PassContext& a_context)
 		{
 			return a_context.PhaseTwo() ? MakeBuildDrawsPass(a_context.Main(), a_context.segment, 2) : nullptr;
-		}
-
-		std::shared_ptr<org::RenderPass> DepthDrawPhaseTwo(const Api::PassContext& a_context)
-		{
-			return a_context.PhaseTwo() ? MakeMainOpaquePass(a_context.Main(), a_context.segment, true) : nullptr;
 		}
 
 		// Visibility changes once both phases' verdicts are final, and their readback copy.
@@ -119,7 +109,7 @@ namespace DCLF::Draws
 		using DiagPoint = Diagnostics::MainGraphPasses::Point;
 
 		constexpr Api::PassDef kCorePasses[] = {
-			// The main view's (the main extension's resources).
+			// The main view's culling and copies (the main extension's resources).
 			{ .key = "core.z.latched-copies", .passName = "cs.dclf.z.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
 			{ .key = "core.latched-copies", .passName = "cs.dclf.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
 			{ .key = "core.z.build-draws", .passName = "cs.dclf.z.build-draws", .make = &BuildDraws },
@@ -131,9 +121,6 @@ namespace DCLF::Draws
 			{ .key = "core.sort-scan", .passName = "cs.dclf.sort-scan", .make = &SortScan },
 			{ .key = "core.sort-scatter", .passName = "cs.dclf.sort-scatter", .make = &SortScatter },
 			{ .key = "core.forward-sort", .passName = "cs.dclf.forward-sort", .make = &ForwardSort },
-			{ .key = "main-view.z.depth", .passName = "cs.dclf.z.depth", .kind = PassKind::Render, .make = &MainDraws },
-			{ .key = "main-view.depth-phase2", .passName = "cs.dclf.depth-phase2", .kind = PassKind::Render, .make = &DepthDrawPhaseTwo },
-			{ .key = "main-view.colour", .passName = "cs.dclf.main-opaque", .kind = PassKind::Render, .make = &MainDraws },
 			// The anchors: the diagnostics' passes at each point.
 			{ .key = "diag.before-colour", .emit = &EmitDiagnostics<DiagPoint::kBeforeColour> },
 			{ .key = "diag.after-colour", .emit = &EmitDiagnostics<DiagPoint::kAfterColour> },

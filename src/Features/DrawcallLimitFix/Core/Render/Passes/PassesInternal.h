@@ -7,9 +7,6 @@
 
 namespace DCLF::Draws
 {
-	// MainOpaque.cpp: DCLF's draws in the depth segment (a_phaseTwo: phase 2's rescues) or the main colour pass.
-	std::shared_ptr<org::RenderPass> MakeMainOpaquePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, bool a_phaseTwo = false);
-
 	// Build.cpp: BuildDraws (a_phase 0 follows the segment's shape; 2 is the phase 2 retest), the sort's scatter.
 	std::shared_ptr<org::RenderPass> MakeBuildDrawsPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, std::uint32_t a_phase = 0);
 	std::shared_ptr<org::RenderPass> MakeSortSequencesPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment);

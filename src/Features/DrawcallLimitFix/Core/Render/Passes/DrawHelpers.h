@@ -1,11 +1,13 @@
 #pragma once
 
-// The draw passes' recording helpers: attachments, the frame buffers' declaration, the preprocessed indirect draw, and the frame slots'
-// addresses a draw pass pushes. Self-contained (a feature's draw pass includes it: Features/Forward's); PassHelpers.h includes it.
+// The draw passes' recording helpers: attachments, the frame buffers' declaration, the preprocessed indirect draw, a bucket's plain draws,
+// and the frame slots' addresses a draw pass pushes. Self-contained (a feature's draw pass includes it: Features/Forward's,
+// Features/MainView's); PassHelpers.h includes it.
 
 // volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
 #include <rhi.h>
@@ -38,6 +40,25 @@ namespace DCLF::Draws
 	void MainShadowLayoutPush(std::uint64_t a_frameConstants, std::uint32_t (&a_out)[kShadowPushWords]);
 	/** @brief The address of the frame's LodFadeFrame (after FrameLighting in the lighting slot) in the main frame constants at a_frameConstants. */
 	std::uint64_t LodFadeFrameAddress(std::uint64_t a_frameConstants);
+
+	/**
+	 * @brief One bucket's plain indexed indirect draws (DCLF_PULLED): its range of the sequences from slot a_first, its pipeline, its
+	 * push words (kZDrawPush*: the range's first sequence, a_offsetDepth) and its count word a_bucket of a_counts. The vertex stage
+	 * fetches each draw's vertices and rows through the sequence its instance names, as a plain draw binds no vertex buffer or push
+	 * data of its own.
+	 */
+	inline void RecordBucketDraw(rhi::CommandList& a_commands, rhi::CommandSignatureHandle a_signature, rhi::ResourceHandle a_sequences, std::uint64_t a_sequencesAddress,
+		std::uint64_t a_first, rhi::PipelineHandle a_pipeline, rhi::ResourceHandle a_counts, std::uint32_t a_bucket, std::uint32_t a_capacity, bool a_offsetDepth = false)
+	{
+		const std::uint64_t first = a_first * sizeof(DrawSequence);
+		std::uint32_t words[kDrawPushWords]{};
+		words[kZDrawPushSequences] = static_cast<std::uint32_t>(a_sequencesAddress + first);
+		words[kZDrawPushSequences + 1] = static_cast<std::uint32_t>((a_sequencesAddress + first) >> 32);
+		words[kZDrawPushOffsetDepth] = a_offsetDepth ? 1u : 0u;
+		a_commands.BindPipeline(a_pipeline);
+		a_commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
+		a_commands.ExecuteIndirect(a_signature, a_sequences, first + kSequenceDrawOffset, a_counts, std::uint64_t(a_bucket) * sizeof(std::uint32_t), a_capacity);
+	}
 
 	/** @brief A pass's colour attachments, loaded and stored: a_count of a_views, each with its resource (a_tokens). */
 	template <std::size_t N>

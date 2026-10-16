@@ -66,7 +66,7 @@ namespace DCLF::Draws
 		};
 
 		// Core's trigger points' ids (CoreTrigger's order): FrameDriver marks them.
-		constexpr std::string_view kCoreTriggers[] = { "shadow-maps.after", "depth.committed", "occlusion.draw", "opaque.after" };
+		constexpr std::string_view kCoreTriggers[] = { "shadow-maps.after", "depth.committed", "occlusion.draw" };
 		static_assert(std::size(kCoreTriggers) == static_cast<std::size_t>(CoreTrigger::Count));
 
 		Executor& State()
