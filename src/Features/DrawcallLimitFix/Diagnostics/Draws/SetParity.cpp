@@ -3,6 +3,7 @@
 // set, the depth and colour segments disagreeing, the registration hooks' claims against the set, and the gaps.
 
 #include "DrawsState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Events.h"
 #include "Observers.h"
@@ -66,6 +67,8 @@ namespace DCLF::Diagnostics
 				}
 			}
 			bool damaged = false;
+			// The snapshot's listed roots (the fade checks below read them by object).
+			const Api::RootListView roots = snapshot.tables ? Extensions::RootListOf(*snapshot.tables) : Api::RootListView{};
 			for (std::size_t o = 0; o < snapshot.flags.size(); ++o) {
 				const std::uint32_t word = words[o];
 				const bool current = (word >> 4) == stamp;
@@ -118,17 +121,16 @@ namespace DCLF::Diagnostics
 							// The engine's verdict where it still runs the root's OnVisible (not stood in): its node fully faded in
 							// (currentFade and fadeAmount 1) draws the members. FadeStateCS models that node, so dropping them is a
 							// fade the engine does not have: a missed input or a port difference.
-							const auto& tables = *snapshot.tables;
-							const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
-							const auto* rootNode = root < tables.fadeRootNode.size() ? static_cast<const RE::NiAVObject*>(tables.fadeRootNode[root]) : nullptr;
+							const std::uint32_t root = roots.RootOf(static_cast<std::uint32_t>(o));
+							const auto* rootNode = static_cast<const RE::NiAVObject*>(roots.NodeOf(root));
 							const auto* fadeNode = rootNode ? const_cast<RE::NiAVObject*>(rootNode)->AsFadeNode() : nullptr;
-							if (fadeNode && root < tables.fadeRoots.size() && !(tables.fadeRoots[root].bits & kFadeRootWritten) &&
+							if (fadeNode && root < roots.Size() && !(roots.rows[root].bits & kFadeRootWritten) &&
 								fadeNode->GetRuntimeData().currentFade == 1.0f && Engine::At<float>(rootNode, 0x100) == 1.0f) {
 								counts.fadeContradictedLast = snapshot.frame;
 								if (counts.fadeContradicted++ == 0)
 									counts.fadeContradictedFirst = fmt::format("frame {}: object {} '{}' under root {} '{}' (bits {:#x}, the row's fadeAmount {})", snapshot.frame, o,
-										geometry->name.c_str() ? geometry->name.c_str() : "", root, rootNode->name.c_str() ? rootNode->name.c_str() : "", tables.fadeRoots[root].bits,
-										tables.fadeRoots[root].fadeAmount);
+										geometry->name.c_str() ? geometry->name.c_str() : "", root, rootNode->name.c_str() ? rootNode->name.c_str() : "", roots.rows[root].bits,
+										roots.rows[root].fadeAmount);
 							}
 						}
 						const bool skinned = alive && geometry->GetGeometryRuntimeData().skinInstance;
@@ -139,8 +141,8 @@ namespace DCLF::Diagnostics
 								owner = node->GetUserData();
 							const auto* base = owner ? owner->GetBaseObject() : nullptr;
 							const auto& tables = *snapshot.tables;
-							const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
-							const auto* rootNode = root < tables.fadeRootNode.size() ? static_cast<const RE::NiAVObject*>(tables.fadeRootNode[root]) : nullptr;
+							const std::uint32_t root = roots.RootOf(static_cast<std::uint32_t>(o));
+							const auto* rootNode = static_cast<const RE::NiAVObject*>(roots.NodeOf(root));
 							const auto* fadeNode = rootNode ? const_cast<RE::NiAVObject*>(rootNode)->AsFadeNode() : nullptr;
 							const auto& b = snapshot.bound[o];
 							const auto& live = geometry->worldBound;
@@ -150,14 +152,14 @@ namespace DCLF::Diagnostics
 								snapshot.frame, fadeHidden ? "the fade test" : "the frustum", o, geometry->name.c_str() ? geometry->name.c_str() : "", skinned ? " (skinned)" : "",
 								base ? RE::FormTypeToString(base->GetFormType()) : "no ref", base && base->GetName() ? base->GetName() : "", b[0], b[1], b[2], b[3], live.center.x,
 								live.center.y, live.center.z, live.radius, root == kNoFadeRoot ? -1 : static_cast<std::int64_t>(root),
-								rootNode && rootNode->name.c_str() ? rootNode->name.c_str() : "", root < tables.fadeRoots.size() ? tables.fadeRoots[root].bits : 0u,
+								rootNode && rootNode->name.c_str() ? rootNode->name.c_str() : "", root < roots.Size() ? roots.rows[root].bits : 0u,
 								fadeNode ? fadeNode->GetRuntimeData().currentFade : -1.0f,
 								stateName(o < snapshot.colourState.size() ? snapshot.colourState[o] : kObjectStateAbsent));
 							// The centre FadeStateCS tests the root at: its chosen member's placement row 8 (LodFadeNodeOf: the member's
 							// property's fade node), against the root node's own bound.
-							if (fadeHidden && root < tables.fadeRoots.size()) {
+							if (fadeHidden && root < roots.Size()) {
 								fadeLogFocus.store(root, std::memory_order_relaxed);
-								const std::uint32_t member = tables.fadeRoots[root].object;
+								const std::uint32_t member = roots.rows[root].object;
 								const auto* memberGeometry = member < tables.objectGeometry.size() ? tables.objectGeometry[member] : nullptr;
 								const auto* property = memberGeometry ? memberGeometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
 								const auto row = LodFadeNodeOf(property);
@@ -166,7 +168,7 @@ namespace DCLF::Diagnostics
 											 "the root node's bound ({:.0f} {:.0f} {:.0f}) r {:.0f}; listed near {:.0f} far {:.0f} radius {:.0f}",
 									snapshot.frame, member, memberGeometry && memberGeometry->name.c_str() ? memberGeometry->name.c_str() : "?", row[0], row[1], row[2], row[3],
 									property && property->fadeNode ? "present" : "none", centre.x, centre.y, centre.z, rootNode ? rootNode->worldBound.radius : -1.0f,
-									tables.fadeRoots[root].nearDistance, tables.fadeRoots[root].farDistance, tables.fadeRoots[root].radius);
+									roots.rows[root].nearDistance, roots.rows[root].farDistance, roots.rows[root].radius);
 							}
 						}
 					}
@@ -239,9 +241,8 @@ namespace DCLF::Diagnostics
 							const bool passedFrustum = (frustumWord & 0x0FFFFFFFu) == stamp;
 							std::uint8_t cls = !current ? 6 : !frustum ? 5 : !passedFrustum ? 1 : 4;
 							if (passedFrustum && (frustumWord & 0x80000000u)) {
-								const auto& tables = *snapshot.tables;
-								const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
-								cls = root < tables.fadeRoots.size() && (tables.fadeRoots[root].bits & kFadeRootOwned) ? 2 : 3;
+								const std::uint32_t root = roots.RootOf(static_cast<std::uint32_t>(o));
+								cls = root < roots.Size() && (roots.rows[root].bits & kFadeRootOwned) ? 2 : 3;
 							}
 							history.run = 1;
 							history.runClass = cls;

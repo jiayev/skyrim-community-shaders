@@ -211,11 +211,10 @@ namespace DCLF
 			const TablesContentEpochs& a_oldestTables);
 		/** @brief Waits until no build ahead runs (DrainAsync; never per frame). */
 		void WaitAhead();
-		/** @brief Waits for the fade write-back task (DrainAsync; never per frame). */
-		void WaitFadeWriteBack();
-		/** @brief The depth commit: harvests the frame slot's last fade events for the write-back task, resets the list, arms the slot. */
-		void ArmFadeReadback(SceneBuffers& a_scene, CommitUploads& a_uploads);
-		/** @brief As ArmFadeReadback for the visibility events (the reported words zeroed once per backing). */
+		/**
+		 * @brief The depth commit, after the commit hooks (Core's fade roots' arm their write-back there: Draws::CommitFadeRoots): harvests the
+		 * frame slot's last visibility events for the decode task, resets the list, arms the slot (the reported words zeroed once per backing).
+		 */
 		void ArmVisibilityReadback(SceneBuffers& a_scene, CommitUploads& a_uploads);
 		/** @brief Waits for the visibility decode task (DrainAsync; never per frame). */
 		void WaitVisibilityReadback();
@@ -316,7 +315,6 @@ namespace DCLF
 		void CommitShadowInputs(bool a_depthOnly, const PassFrame& a_shape, std::uint32_t a_revisionEpoch);
 		void ResolveFrameTextures(const MainCommit& a_commit, std::array<std::uint32_t, kTextureRegisters>& a_frameTextures);
 		void UploadSceneStreams(const MainCommit& a_commit);
-		void CommitFadeRoots(const MainCommit& a_commit);
 		void ZeroCommitCounts(const MainCommit& a_commit);
 		void WriteDepthBuckets(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch);
 		void WriteShadowLatch(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch);

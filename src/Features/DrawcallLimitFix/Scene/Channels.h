@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -142,13 +143,6 @@ namespace DCLF::Scene
 		bool captured = false;  // false: the property held another material by then (the request stale)
 	};
 
-	/** @brief A fade root whose OnVisible DCLF services (PrimaryCull's admitted, stood-in entries' roots; kFadeRootOwned). */
-	struct OwnedFadeRoot
-	{
-		const RE::NiAVObject* node = nullptr;
-		bool standIn = false;  // kFadeRootStoodIn: no engine-drawn part
-	};
-
 	/**
 	 * @brief A pass's request for the switch catch-ups (CollectEvents -> FrameView::ServeFrameRequests): its attached roots and its switch
 	 * events, each a reference of its own, dropped on the render thread after the catch-ups.
@@ -180,10 +174,9 @@ namespace DCLF::Scene
 		std::atomic<std::shared_ptr<const GeometryPort::PipelineFrame>> pipelineFramePosted;
 		std::atomic<std::shared_ptr<const AncestorMapInput>> ancestorMapPosted;
 		std::atomic<std::shared_ptr<const SharedBindings::ProjectedCapture>> projectedPosted;
-		// The fade root rows the depth commit holds (latest wins), PrimaryCull's fade ownership (a whole set: latest wins).
-		static constexpr std::uint64_t kNoFadeRootsSent = ~0ull;
-		std::atomic<std::uint64_t> fadeRootsSentPosted{ kNoFadeRootsSent };
-		LatestSlot<std::vector<OwnedFadeRoot>> fadeOwnedPosted;
+		// PrimaryCull's admitted roots (a whole set: latest wins), for the components' admitted hooks (the fade roots' owned bits). The
+		// journaled families' sent epochs are the table families' own posts (Extensions::TableFamilySent).
+		LatestSlot<std::vector<Api::StandInRoot>> standInRootsPosted;
 		EventQueue<std::unique_ptr<PipelineConstantsPost>, 256> pipelineConstantsPosted;
 		// A load screen's marker, posted once a load after loadingSeen is raised: the coordinator drops what the load invalidates
 		// (ApplyLoading); while loadingSeen holds, a pass drains the engine's queues into the mirror's carry.

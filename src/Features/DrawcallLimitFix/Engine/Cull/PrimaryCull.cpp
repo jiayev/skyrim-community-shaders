@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
@@ -191,13 +192,8 @@ namespace DCLF
 		const auto mix = [&](std::uint32_t a_value) { witness = (witness ^ a_value) * 16777619u; };
 		// The static sun bits (SunShadowStatic).
 		mix(a_g.noSunShadowDir | (a_g.accumulator && a_g.accumulatorDeferredShadow ? 2u : 0u) | (a_g.screenDoorFades ? 4u : 0u));
-		// The fade distances (FadeDistanceOf).
-		mix(a_g.fadesOn | (a_g.fadeLodUpdates << 8) | (a_g.fadeSpecialA == a_g.fadeSpecialB ? 0x10000u : 0u));
-		mix(std::bit_cast<std::uint32_t>(a_g.fadeDistanceMult));
-		mix(std::bit_cast<std::uint32_t>(a_g.fadeOutThreshold));
-		mix(std::bit_cast<std::uint32_t>(a_g.fadeDefaultScale));
-		for (std::uint32_t type = 0; type < 13; ++type)
-			mix(std::bit_cast<std::uint32_t>(a_g.fadeTypeDivisors[type]));
+		// The root test's globals (the fade distances: Api::RootStatesContribution::globalsKey).
+		Extensions::RootStatesGlobalsKey(a_g, witness);
 		return witness;
 	}
 
@@ -411,8 +407,8 @@ namespace DCLF
 		Diagnostics::Notify(Diagnostics::CutSlotsReset{ count });
 		// The stand-in needs a current snapshot; otherwise the engine culls every entry (less the leaf exclusion).
 		if (!ActiveToggles().excludePrimaryEntries) {
-			if (!ownedFade.empty() || !standInRoots.empty())
-				ClearFadeOwnership();
+			if (!ownedRoots.empty() || !standInRoots.empty())
+				ClearRootOwnership();
 			frameLive.store(true, std::memory_order_release);
 			return;
 		}
@@ -422,7 +418,7 @@ namespace DCLF
 			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
 			// The engine culls the stood-in roots and writes their kAccumulated this frame; the next decode writes them all.
-			if (!ownedFade.empty())
+			if (!ownedRoots.empty())
 				IndirectDraws::Get().RequestAccumulatedRefresh();
 			frameLive.store(true, std::memory_order_release);
 			return;
@@ -470,7 +466,7 @@ namespace DCLF
 		RunAdmission();
 		// Fade roots: the entries a new snapshot planned again or admission admitted.
 		if (!ownDirty.empty())
-			SyncFadeOwnership();
+			SyncRootOwnership();
 		++cutStats.appliedFrames;
 		cutStats.prepareTicks += Now() - start;
 		// The list jobs are queued after this returns, which orders everything above before their reads.
@@ -484,10 +480,12 @@ namespace DCLF
 		// do not list is no root of DCLF's this update (one listed later is seeded from the node, this update included).
 		bool written = false;
 		if (const auto* tables = static_cast<const SceneTables*>(fadeWriterTables.load(std::memory_order_acquire))) {
-			if (const auto it = tables->fadeRootIndex.find(a_node); it != tables->fadeRootIndex.end() && it->second < tables->fadeRoots.size()) {
-				const auto& row = tables->fadeRoots[it->second];
+			// Interim (Fades F2): the root list through the root states' view; F3 moves this hook into Features/Fades, reading its columns.
+			const auto roots = Extensions::RootListOf(*tables);
+			if (const auto slot = roots.Find(a_node); slot < roots.Size()) {
+				const auto& row = roots.rows[slot];
 				written = (row.bits & kFadeRootWritten) != 0;
-				animatedNodes.Push({ a_node, it->second, row.generation });
+				animatedNodes.Push({ a_node, slot, row.generation });
 			}
 		}
 		// FUN_14147a160's inputs: the camera FUN_1402cff60 passes (world root camera's position, lodAdjust) and the fade globals;
@@ -626,7 +624,7 @@ namespace DCLF
 		// Repack once garbage exceeds live members (amortised: one copy per member let go).
 		if (cutGarbage > cut.members.size() / 2)
 			CompactCut();
-		// Frames that sync the cut but stop before SyncFadeOwnership: the entries to judge kept once each.
+		// Frames that sync the cut but stop before SyncRootOwnership: the entries to judge kept once each.
 		if (ownDirty.size() > 2 * std::size_t(capacity) + 1024) {
 			std::sort(ownDirty.begin(), ownDirty.end());
 			ownDirty.erase(std::unique(ownDirty.begin(), ownDirty.end()), ownDirty.end());
@@ -910,7 +908,7 @@ namespace DCLF
 		}
 	}
 
-	void PrimaryCull::SyncFadeOwnership()
+	void PrimaryCull::SyncRootOwnership()
 	{
 		// Admitted entries with a fade root: their fade is FadeStateCS's from the next frame. A mixed one is culled by the engine,
 		// which updates its node. Every other is stood in (state on the GPU alone) and, through the stand-in observers (Api::StandInObserver),
@@ -953,7 +951,7 @@ namespace DCLF
 				if (was == kOwnPlain || was == kOwnFade || was == kOwnTree)
 					standInRoots.erase(old);
 				if (was == kOwnMixedFade || was == kOwnFade || was == kOwnTree) {
-					erase(ownedFade, ownedFadePosition, old);
+					erase(ownedRoots, ownedRootPosition, old);
 					ownedMoved = true;
 				}
 				if (was == kOwnFade || was == kOwnTree) {
@@ -972,10 +970,10 @@ namespace DCLF
 			if (state == kOwnPlain || state == kOwnFade || state == kOwnTree)
 				standInRoots.insert(root);
 			if (state == kOwnMixedFade || state == kOwnFade || state == kOwnTree) {
-				if (const auto [it, added] = ownedFadePosition.try_emplace(root, static_cast<std::uint32_t>(ownedFade.size())); added)
-					ownedFade.push_back({ root, state != kOwnMixedFade });
+				if (const auto [it, added] = ownedRootPosition.try_emplace(root, static_cast<std::uint32_t>(ownedRoots.size())); added)
+					ownedRoots.push_back({ root, state != kOwnMixedFade });
 				else
-					ownedFade[it->second].standIn = state != kOwnMixedFade;
+					ownedRoots[it->second].standIn = state != kOwnMixedFade;
 				ownedMoved = true;
 			}
 			if (state == kOwnFade || state == kOwnTree) {
@@ -986,19 +984,19 @@ namespace DCLF
 		}
 		// The coordinator takes the owned set whole (latest wins, applied by its scene pass).
 		if (ownedMoved)
-			Scene::FrameView::Get().SetFadeRootsOwned(ownedFade);
+			Scene::FrameView::Get().SetStandInRoots(ownedRoots);
 		if (!animatedLeft.empty() || !animatedJoined.empty())
 			Extensions::StandInRootsChanged({ animatedLeft, animatedJoined });
 	}
 
-	void PrimaryCull::ClearFadeOwnership()
+	void PrimaryCull::ClearRootOwnership()
 	{
-		ownedFade.clear();
-		ownedFadePosition.clear();
+		ownedRoots.clear();
+		ownedRootPosition.clear();
 		standInRoots.clear();
 		standInList.clear();
 		standInPosition.clear();
-		Scene::FrameView::Get().SetFadeRootsOwned({});
+		Scene::FrameView::Get().SetStandInRoots({});
 		Extensions::StandInRootsCleared();
 		// Judged again whole when the stand-in comes back.
 		std::fill(ownState.begin(), ownState.end(), kOwnNone);
@@ -1016,15 +1014,19 @@ namespace DCLF
 		// Roots no longer stood in are left to the engine's cull this frame.
 		IndirectDraws::Get().WriteAccumulated(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); });
 		// The stand-in observers (the tree manager's loop, later in this Main::Update, takes the stood-in trees' visibility from those
-		// writes).
+		// writes); the fade writers' last (WriteFadeWriters).
 		Extensions::StandInUpdateEntry(a_running);
+		Diagnostics::Notify(Diagnostics::UpdateEntry{ a_running });
+		// The stand-in observers' late point, after the writes (Features/Actors: the high actors' animation stamp from DCLF's shadow views).
+		Extensions::StandInAfterWrites(a_running);
+	}
+
+	void PrimaryCull::WriteFadeWriters(bool a_running)
+	{
 		// The fade write-back on every root the accepted tables list with kFadeRootWritten, published first as the set the gate
 		// and fade OnVisibles skip.
 		PublishWriterTables(a_running);
 		IndirectDraws::Get().WriteFadeStores(a_running, [this](const void* a_root) { return FadeWrittenByDclf(a_root); });
-		Diagnostics::Notify(Diagnostics::UpdateEntry{ a_running });
-		// The stand-in observers' late point, after the writes (Features/Actors: the high actors' animation stamp from DCLF's shadow views).
-		Extensions::StandInAfterWrites(a_running);
 	}
 
 	PrimaryCull::FadeWriterCounts PrimaryCull::TakeFadeWriterCounts()
@@ -1033,7 +1035,10 @@ namespace DCLF
 		c.onVisibleSkipped = onVisibleFadeSkipped.exchange(0, std::memory_order_relaxed);
 		c.gateSkipped = gateFadeSkipped.exchange(0, std::memory_order_relaxed);
 		const auto* tables = static_cast<const SceneTables*>(fadeWriterTables.load(std::memory_order_acquire));
-		c.roots = tables ? tables->fadeRootIndex.size() : 0;
+		if (tables) {
+			const auto roots = Extensions::RootListOf(*tables);
+			c.roots = roots.index ? roots.index->size() : 0;
+		}
 		return c;
 	}
 
@@ -1148,7 +1153,7 @@ namespace DCLF
 		return true;
 	}
 
-	void PrimaryCull::AfterListJobs()
+	void PrimaryCull::DrainAnimatedFades()
 	{
 		// The animation job runs between two culls, so its updates are complete now: its queued nodes and published inputs become
 		// the batch, and the record is free for the next update.
@@ -1165,6 +1170,12 @@ namespace DCLF
 		});
 		animatedVaried.store(0, std::memory_order_relaxed);
 		animatedState.store(kAnimatedEmpty, std::memory_order_release);
+	}
+
+	void PrimaryCull::AfterListJobs()
+	{
+		// The stand-in observers' list jobs point (the animated fades' batch: DrainAnimatedFades).
+		Extensions::StandInListJobsDone();
 		Diagnostics::Notify<Diagnostics::EnginePoint::ListJobsDone>();
 		if (!frameLive.exchange(false, std::memory_order_acq_rel))
 			return;
@@ -1455,8 +1466,9 @@ namespace DCLF
 	bool PrimaryCull::WrittenByTables(const void* a_tables, const void* a_node)
 	{
 		const auto& tables = *static_cast<const SceneTables*>(a_tables);
-		const auto it = tables.fadeRootIndex.find(a_node);
-		return it != tables.fadeRootIndex.end() && it->second < tables.fadeRoots.size() && (tables.fadeRoots[it->second].bits & kFadeRootWritten);
+		const auto roots = Extensions::RootListOf(tables);
+		const auto slot = roots.Find(a_node);
+		return slot < roots.Size() && (roots.rows[slot].bits & kFadeRootWritten);
 	}
 
 	void PrimaryCull::PublishWriterTables(bool a_running)

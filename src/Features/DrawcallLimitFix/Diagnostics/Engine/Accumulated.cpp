@@ -7,6 +7,7 @@
 #include "PrimaryCullView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
 #include <ankerl/unordered_dense.h>
@@ -143,12 +144,13 @@ namespace DCLF::Diagnostics::Accumulated
 			const auto& tables = Scene::FrameView::Get().GetTables();
 			auto sample = std::make_unique<Sample>();
 			sample->frame = Scene::FrameView::Get().GetFrame();
-			const std::size_t roots = tables.fadeRootNode.size();
-			sample->rootNodes.assign(tables.fadeRootNode.begin(), tables.fadeRootNode.end());
+			const Api::RootListView list = Extensions::RootListOf(tables);
+			const std::size_t roots = list.nodes.size();
+			sample->rootNodes.assign(list.nodes.begin(), list.nodes.end());
 			sample->rootBits.assign(roots, 0u);
 			// A root the cut stood in for is not the engine cull's (its bit is DCLF's write at Main::Update's entry).
 			for (std::size_t r = 0; r < roots; ++r)
-				if (const void* node = tables.fadeRootNode[r])
+				if (const void* node = list.nodes[r])
 					sample->rootBits[r] = (AccumulatedBit(node) ? kSampleAccumulated : 0u) | (PrimaryCullView::StoodInWhole(node) ? kSampleStoodIn : 0u) |
 					                      ((Flags(node) & kFlagHidden) ? kSampleHidden : 0u);
 			const std::size_t objects = tables.objectGeometry.size();
@@ -162,8 +164,8 @@ namespace DCLF::Diagnostics::Accumulated
 				std::uint8_t bits = AccumulatedBit(geometry) ? kSampleAccumulated : 0u;
 				// Its fade root's: a geometry the cull did not reach this frame (its root out of view, or faded out) keeps the bit the
 				// last cull that did left; the root's says which.
-				const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
-				if (root != kNoFadeRoot && root < roots && tables.fadeRootNode[root]) {
+				const std::uint32_t root = list.RootOf(static_cast<std::uint32_t>(o));
+				if (root != kNoFadeRoot && root < roots && list.nodes[root]) {
 					bits |= (sample->rootBits[root] & kSampleAccumulated) ? kSampleRootAccumulated : 0u;
 					bits |= sample->rootBits[root] & (kSampleStoodIn | kSampleHidden);
 				} else {

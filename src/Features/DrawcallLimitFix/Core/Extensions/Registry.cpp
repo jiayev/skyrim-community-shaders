@@ -18,6 +18,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
@@ -31,6 +32,15 @@
 #include <array>
 #include <functional>
 #include <vector>
+
+namespace DCLF::Scene
+{
+	/**
+	 * @brief Interim (Fades F2): Core's fade roots' registrations through the contracts (Scene/Coordinator/FadeRegistration.cpp), at the
+	 * end of the features' installs, before the integrations': Features/Fades' place. Gone with F3 (Features/Fades in FeatureList, last).
+	 */
+	void RegisterCoreFades(Api::InstallContext& a_context);
+}
 
 namespace DCLF::Extensions
 {
@@ -54,6 +64,8 @@ namespace DCLF::Extensions
 			std::vector<ReportLinesEntry> reportLines;
 			std::vector<Api::StandInObserver> standInObservers;
 			std::vector<EngineChannelEntry> engineChannels;
+			// The engine channels needed by name (by need slot), bound at the end (BindEngineChannelNeeds).
+			std::vector<std::string> engineChannelNeeds;
 			std::vector<AdoptionGuardEntry> adoptionGuards;
 			// The show veto's cells (RegisteredShowVeto: their address fixed for the session), its hide sites owned.
 			Api::ShowVeto showVeto{ &kShowVetoClosed, &NoShowVeto, nullptr, {} };
@@ -114,6 +126,8 @@ namespace DCLF::Extensions
 			std::array<Api::CullBinding, kCullBindingSlots> cullBindings{};
 			// The depth pyramid (no setup: none). Resolved at the end (ResolveDepthPyramid).
 			Api::DepthPyramidContribution depthPyramid{};
+			// The root states (no name: none). Resolved at the end (ResolveRootStates).
+			Api::RootStatesContribution rootStates{};
 			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
 			std::array<Api::PaletteRowsContribution, Api::kPaletteRowsClasses> paletteRows{};
 			// The shading fields, in registration order; whether a field is taken. Resolved at the end (ResolveShadingFields).
@@ -535,8 +549,25 @@ namespace DCLF::Extensions
 				if (lists.engineChannels.size() >= kEngineChannelSlots)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s engine channel {} is one past kEngineChannelSlots: grow it first", feature, a_channel.name));
 				lists.engineChannels.push_back({ std::string(a_channel.name), a_channel.kind, a_channel.apply, a_channel.loading, a_channel.wake, a_channel.namesKeys,
-					a_channel.drain });
+					a_channel.drain, a_channel.push });
 				return { static_cast<std::uint32_t>(lists.engineChannels.size() - 1) };
+			}
+
+			Api::EngineChannelId NeedEngineChannel(std::string_view a_name) override
+			{
+				if (a_name.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} needs an engine channel without a name", feature));
+				// A name needed twice is one need.
+				std::size_t slot = 0;
+				while (slot < lists.engineChannelNeeds.size() && lists.engineChannelNeeds[slot] != a_name)
+					++slot;
+				if (slot == lists.engineChannelNeeds.size()) {
+					// The bound table holds each need in a slot (EngineEvents.h).
+					if (slot >= kEngineChannelNeedSlots)
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s need of engine channel {} is one past kEngineChannelNeedSlots: grow it first", feature, a_name));
+					lists.engineChannelNeeds.emplace_back(a_name);
+				}
+				return { kEngineChannelNeedBit | static_cast<std::uint32_t>(slot) };
 			}
 
 			void RegisterShowVeto(const Api::ShowVeto& a_veto) override
@@ -580,8 +611,11 @@ namespace DCLF::Extensions
 				// A SceneFit bounds each family's rows (Draws::SceneFit::familyRows).
 				if (lists.tableFamilies.size() >= kTableFamilySlots)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s table family {} is one past kTableFamilySlots: grow it first", feature, a_family.name));
+				// The reference must leave a bit above its shift, and a shifted or biased reference needs a word to ride in.
+				if (a_family.recordShift >= 32 || ((a_family.recordShift || a_family.recordBias || !a_family.recordTag) && a_family.recordWord == ~0u))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s table family {} packs its record reference past the word, or into none", feature, a_family.name));
 				lists.tableFamilies.push_back({ std::string(a_family.name), a_family.make, a_family.assign, a_family.same, a_family.clear, a_family.recycle, a_family.rowsEnd,
-					a_family.recordWord });
+					a_family.recordWord, a_family.recordShift, a_family.recordBias, a_family.recordTag, a_family.journaled, a_family.rows });
 				return { static_cast<std::uint32_t>(lists.tableFamilies.size() - 1) };
 			}
 
@@ -596,7 +630,7 @@ namespace DCLF::Extensions
 						if (component.entryClass.follows == followed.follows)
 							stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s component {} follows entry class {}, which {} follows", feature, a_component.name,
 								static_cast<std::uint32_t>(followed.follows), component.name));
-				lists.coordinatorComponents.push_back({ std::string(a_component.name), a_component.make, a_component.residency, a_component.accumulate, a_component.walk,
+				lists.coordinatorComponents.push_back({ std::string(a_component.name), a_component.make, a_component.slots, a_component.residency, a_component.accumulate, a_component.walk,
 					a_component.dense, a_component.retirement, followed, a_component.events, a_component.commit, a_component.adoption });
 				if (followed.follows != Api::EntryClass::None)
 					lists.entryClassesTaken[static_cast<std::size_t>(followed.follows)] = followed.takes;
@@ -914,6 +948,17 @@ namespace DCLF::Extensions
 				lists.depthPyramid = a_pyramid;
 			}
 
+			void RegisterRootStates(const Api::RootStatesContribution& a_states) override
+			{
+				// Its family registered before (its objects' references are the roots Core reads), and the callbacks Core calls per decode and join.
+				if (a_states.name.empty() || !a_states.family || a_states.family.index >= lists.tableFamilies.size() || !a_states.view || !a_states.test)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete root states", feature));
+				// The cull, the shadows and the draws read one producer's states.
+				if (!lists.rootStates.name.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes root states {}, which {} has", feature, a_states.name, lists.rootStates.name));
+				lists.rootStates = a_states;
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -945,6 +990,10 @@ namespace DCLF::Extensions
 			if (feature.install)
 				feature.install(context);
 		}
+		// Interim (Fades F2): Core's fade roots register through the contracts at Fades' place, last among the features, until
+		// Features/Fades takes them (Scene/Coordinator/FadeRegistration.cpp).
+		context.feature = "Fades";
+		Scene::RegisterCoreFades(context);
 		// The integrations after every feature (Integrations/IntegrationList.cpp): what they register may name what a feature registered
 		// (Integrations/AdvancedSkin's wetness: Features/Actors' published actor-owned class). They have no early or source hooks (the
 		// shell installs those for the features alone).
@@ -960,11 +1009,13 @@ namespace DCLF::Extensions
 		// The classify inputs needed by name, which a later feature or an integration may register; then the light volumes and the ancestor
 		// value (its key classes' RTTI).
 		BindClassifyInputNeeds(lists.classifyInputNeeds);
+		// The engine channels needed by name (Features/Actors' fade amounts, a later feature's channel).
+		BindEngineChannelNeeds(lists.engineChannelNeeds);
 		ResolveLightVolumes(lists.lightVolumes);
 		ResolveAncestorValue(lists.ancestorValue);
 		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
-		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the palette rows classes'; the shading fields'
+		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the root states'; the palette rows classes'; the shading fields'
 		// (and the published entry classes); the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
 		ResolveViews(lists.views, lists.viewWork, lists.viewRoots);
@@ -976,6 +1027,7 @@ namespace DCLF::Extensions
 		ResolveMainCullInput(lists.mainCullInput);
 		ResolveCullBindings(lists.cullBindings);
 		ResolveDepthPyramid(lists.depthPyramid);
+		ResolveRootStates(lists.rootStates);
 		ResolvePaletteRows(lists.paletteRows);
 		ResolveShadingFields(lists.shadingFields);
 		ResolveMaterialPorts(lists.materialPorts, lists.materialPortCount);

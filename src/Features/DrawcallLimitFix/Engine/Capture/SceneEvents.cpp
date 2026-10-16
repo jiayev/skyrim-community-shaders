@@ -41,7 +41,7 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// Actor::SetAlpha's fadeAmount writes are Features/Actors' (its early hooks; Extensions::PushFadeAmount).
+	// Actor::SetAlpha's fadeAmount writes are Features/Actors' (its early hooks; the fade amounts channel's push, FadeEngineRegistration.cpp).
 
 	/**
 	 * @brief FUN_14147a430 (node, level): the only writer of the fade node's LOD level (+0x152 & 0xF, the skin partitions' row);
@@ -100,7 +100,8 @@ namespace DCLF::Scene
 	};
 
 	// FUN_14147aa20: a fade node's placement snap. The cell attaches (FUN_1402d1280, FUN_1402d5090) call it after writing the
-	// fade statics (LOD type `and`/`or` at +0x153, range through FUN_14021f200), so its update carries them.
+	// fade statics (LOD type `and`/`or` at +0x153, range through FUN_14021f200), so its update carries them. Its key goes to the
+	// fade snaps channel's queue (fadeSnapEvents, drained by the channel: FadeEngineRegistration.cpp).
 	struct FadeSnap
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_node, void* a_camera)
@@ -954,13 +955,6 @@ namespace DCLF::Extensions
 	void PushRangesUpdate(const RE::BSGeometry* a_geometry)
 	{
 		Scene::PushGeometryUpdate(a_geometry, SceneCapture::GeometryRecord::kRanges);
-	}
-
-	void PushFadeAmount(RE::NiAVObject* a_root)
-	{
-		Scene::fadeAmountEvents.Push(a_root);
-		if (a_root->AsFadeNode())
-			Scene::PushNodeUpdate(a_root, SceneCapture::NodeRecord::kFadeAmount);  // the mirror's value
 	}
 
 	namespace

@@ -15,9 +15,10 @@ namespace DCLF
 	{
 		/**
 		 * @brief A shadow view's common latch: a single phase over every input (no engine-visibility gate), the eye-folded
-		 * view-projection and the frame's stamp. Culling flags and planes are the caller's.
+		 * view-projection and the frame's stamp. Culling flags and planes are the caller's. a_seedsIndex: the root states' seeds (the cull
+		 * binding RootSeeds).
 		 */
-		BuildDrawsLatch ShadowViewLatch(const PendingView& a_view, std::uint32_t a_inputs, std::uint32_t a_frame)
+		BuildDrawsLatch ShadowViewLatch(const PendingView& a_view, std::uint32_t a_inputs, std::uint32_t a_frame, std::uint32_t a_seedsIndex)
 		{
 			BuildDrawsLatch latch{};
 			latch.dispatch[0] = (a_inputs + 63) / 64;
@@ -26,7 +27,7 @@ namespace DCLF
 			latch.drawCount = a_inputs;
 			latch.visibilityStamp = a_frame & 0x0FFFFFFFu;  // 28 bits: BuildDrawsCS keeps flags below it
 			latch.placementsIndex = FrameValues::Get().PlacementsIndex();
-			latch.fadeSeedsIndex = FrameValues::Get().FadeSeedsIndex();
+			latch.fadeSeedsIndex = a_seedsIndex;
 			FoldEyeIntoViewProj(a_view.viewProj, a_view.eye, latch.viewProj);
 			return latch;
 		}
@@ -199,6 +200,9 @@ namespace DCLF
 			const auto& latchBlock = *target.latch;
 			const auto& latchLayout = target.latchLayout;
 			auto& scene = *resources->scene;
+			// The root states' seeds and the states the frame's cull reads (the cull bindings RootSeeds, RootStates), once for every map.
+			const std::uint32_t seedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, scene, frameNumber, impl->Adopted());
+			const std::uint32_t statesIndex = CullBindingIndex(Api::CullBindingSlot::RootStates, scene, frameNumber, impl->Adopted());
 			std::size_t index = 0;
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 				if (!(drawable & (1u << v)))
@@ -214,11 +218,11 @@ namespace DCLF
 				// Frustum culling (near plane included), the map's size test while its entry asks (minRadius: Skylighting::
 				// OcclusionTechnique's, bound radius above 32; both maps' do), and fade roots as the engine's cull leaves them
 				// (kCullFadeOnVisible): never a root the main camera faded out or has not seen yet.
-				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
+				auto latch = ShadowViewLatch(view, inputCount, frameNumber, seedsIndex);
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(Engine::Address::kFadesOn) };
 				latch.cullFlags = 1u | (Extensions::OcclusionMapOf(v).minRadius ? kCullMinRadius : 0u) | (*fadesOn.get() ? kCullFadeOnVisible : 0u) | KeyWordOf(mode);
 				latch.viewBits = ShadowViewBits(mode, false);
-				latch.fadeStatesIndex = scene.FadeStatesReadIndex(impl->Adopted(), frameNumber);
+				latch.fadeStatesIndex = statesIndex;
 				ShadowPayloadLatch(*impl->InstalledPayload(), latch);
 				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, mode, view.rasterState, true, latch);
 				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, true, latch);
@@ -398,6 +402,11 @@ namespace DCLF
 			auto& held = Draws::shadowLatchRegions.Of(latchSlot, target.latch, revisionShape, 0);
 			std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
 			std::vector<bool> slotDrawn(layouts.size());
+			// The root states' seeds, the states the frame's cull reads (the cull bindings RootSeeds, RootStates) and the listed roots (a
+			// focus view's target), once for every view.
+			const std::uint32_t seedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, scene, frameNumber, adopted);
+			const std::uint32_t statesIndex = CullBindingIndex(Api::CullBindingSlot::RootStates, scene, frameNumber, adopted);
+			const auto roots = Extensions::RootListOf(Scene::FrameView::Get().GetTables());
 			for (const auto& view : pending) {
 				ZoneScopedN("CS.DCLF.ShadowInputs.View");
 				const std::uint32_t slot = view.slot;
@@ -407,20 +416,19 @@ namespace DCLF
 				// The whole shadow list: the view bits select the mode's inputs.
 				const auto inputCount = static_cast<std::uint32_t>(payload.Inputs());
 				// Frustum culling, no engine-visibility gate. Only class-split modes test the caster class (not the paraboloids).
-				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
+				auto latch = ShadowViewLatch(view, inputCount, frameNumber, seedsIndex);
 				const std::uint32_t classFlags = view.casterClass ? kCullVolumetricOnly : view.modeIndex == kParabolicShadowMode ? 0u : kCullCastersOnly;
 				latch.cullFlags = (view.hasViewProj ? (1u | (view.renderMode == 0xE ? kCullNoNearPlane : 0u)) : 0u) | classFlags |
 				                  (view.sunView ? kCullSunEntry : 0u) | KeyWordOf(view.modeIndex);
 				latch.viewBits = ShadowViewBits(view.modeIndex, view.sunView);
 				// A focus view draws its target's members alone (root slot + 1; an unlisted target draws nothing).
 				if (view.focus) {
-					const auto& rootIndex = Scene::FrameView::Get().GetTables().fadeRootIndex;
-					const auto root = view.focusTarget ? rootIndex.find(view.focusTarget) : rootIndex.end();
-					latch.focusRoot = root != rootIndex.end() ? root->second + 1 : kFocusRootNone;
+					const auto root = view.focusTarget ? roots.Find(view.focusTarget) : kNoFadeRoot;
+					latch.focusRoot = root != kNoFadeRoot ? root + 1 : kFocusRootNone;
 				}
 				latch.cullPlaneMask = view.cullPlaneMask;
 				std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));
-				latch.fadeStatesIndex = resources->scene->FadeStatesReadIndex(adopted, frameNumber);
+				latch.fadeStatesIndex = statesIndex;
 				ShadowPayloadLatch(parts, latch);
 				// Sun entry rule: BuildDraws tests each input's entry sphere against the full-frustum processes (written once per frame).
 				if (view.sunView) {

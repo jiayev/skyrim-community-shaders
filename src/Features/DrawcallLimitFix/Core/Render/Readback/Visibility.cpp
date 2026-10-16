@@ -38,7 +38,7 @@ namespace DCLF
 			MarkedList roots, objects, entries;  // this pass's visits
 			std::vector<Expiry> expiries;        // a min-heap by frame
 			LogCursor changes;                   // tables.changeLog
-			std::uint64_t rootEpoch = 0;         // fadeRootsJournal's content epoch the root classes were judged at
+			std::uint64_t rootEpoch = 0;         // the root states' family's journal content epoch the root classes were judged at
 			bool rootsHeld = false;
 			std::uint32_t cutVisited = 0;        // the cut whose pending pass visited everything
 			std::shared_ptr<const EntrySpace> candidates;  // the snapshot whose indices entryMembers are in
@@ -90,11 +90,12 @@ namespace DCLF
 		void Apply(Readback& a_readback, VisibilityDecode& a_decode, const Readback::Batch& a_batch)
 		{
 			const auto& tables = *a_batch.tables;
+			const auto rootList = Extensions::RootListOf(tables);
 			if (a_batch.reset)
 				StartAgain(a_readback, a_decode);
-			if (a_readback.roots.size() < tables.fadeRoots.size()) {
-				a_readback.roots.resize(tables.fadeRoots.size());
-				a_readback.rootApplied.resize(tables.fadeRoots.size(), 0u);
+			if (a_readback.roots.size() < rootList.rows.size()) {
+				a_readback.roots.resize(rootList.rows.size());
+				a_readback.rootApplied.resize(rootList.rows.size(), 0u);
 			}
 			if (a_readback.objects.size() < tables.objects.size()) {
 				a_readback.objects.resize(tables.objects.size());
@@ -106,7 +107,7 @@ namespace DCLF
 				const bool visible = (event.bits & kVisibilityBitVisible) != 0;
 				if (event.kind == kVisibilityKindRoot) {
 					// Must match its listing in its frame's tables and be no older than the last applied.
-					if (event.slot >= tables.fadeRoots.size() || tables.fadeRoots[event.slot].generation != event.generation || !tables.fadeRootNode[event.slot] ||
+					if (event.slot >= rootList.rows.size() || rootList.rows[event.slot].generation != event.generation || !rootList.nodes[event.slot] ||
 						frame < a_readback.rootApplied[event.slot]) {
 						++stale;
 						continue;
@@ -176,8 +177,9 @@ namespace DCLF
 		std::vector<Readback::Writes::Write> ReferenceWrites(const Readback& a_readback, Asked& a_asked, const Readback::Batch& a_newest, bool a_full, bool a_cutPending)
 		{
 			const auto& tables = *a_newest.tables;
+			const auto rootList = Extensions::RootListOf(tables);
 			const bool full = a_full, cutPending = a_cutPending;
-			const std::size_t roots = tables.fadeRootNode.size(), objects = tables.objectGeometry.size();
+			const std::size_t roots = rootList.nodes.size(), objects = tables.objectGeometry.size();
 			if (a_asked.rootWritten.size() < roots) {
 				a_asked.rootWritten.resize(roots, Readback::kWrittenNone);
 				a_asked.rootWrittenGeneration.resize(roots, 0u);
@@ -193,13 +195,13 @@ namespace DCLF
 			// Per root slot: 1 stood in, 2 wide (its geometry takes the same class).
 			std::vector<std::uint8_t> rootClass(roots, 0u);
 			for (std::size_t r = 0; r < roots; ++r) {
-				const void* node = tables.fadeRootNode[r];
-				const bool stoodIn = node && r < tables.fadeRoots.size() && (tables.fadeRoots[r].bits & kFadeRootStoodIn);
-				if (!node || r >= tables.fadeRoots.size()) {
+				const void* node = rootList.nodes[r];
+				const bool stoodIn = node && r < rootList.rows.size() && (rootList.rows[r].bits & kFadeRootStoodIn);
+				if (!node || r >= rootList.rows.size()) {
 					a_asked.rootWritten[r] = Readback::kWrittenNone;
 					continue;
 				}
-				const auto& row = tables.fadeRoots[r];
+				const auto& row = rootList.rows[r];
 				rootClass[r] = stoodIn ? 1 : 2;
 				bool visible = cutPending;
 				const bool listed = r < a_readback.roots.size() && a_readback.roots[r].generation == row.generation && a_readback.roots[r].known;
@@ -229,14 +231,14 @@ namespace DCLF
 			std::vector<std::uint8_t> entryState(entries, 0u), entryResidue(entries, 0u);
 			for (std::size_t o = 0; o < objects; ++o) {
 				auto* geometry = tables.objectGeometry[o];
-				const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
+				const std::uint32_t root = rootList.RootOf(static_cast<std::uint32_t>(o));
 				std::uint8_t objectClass = 0;
 				const void* rootNode = nullptr;
 				std::uint32_t entry = EntrySpace::kNone;
 				if (geometry && !tables.IsLayer(static_cast<std::uint32_t>(o))) {
 					if (root != kNoFadeRoot && root < roots && rootClass[root]) {
 						objectClass = rootClass[root];
-						rootNode = tables.fadeRootNode[root];
+						rootNode = rootList.nodes[root];
 					} else if (root == kNoFadeRoot && candidates) {
 						if (a_asked.objectEntryGeometry[o] != geometry) {
 							a_asked.objectEntryGeometry[o] = geometry;
@@ -245,7 +247,7 @@ namespace DCLF
 								a_asked.objectEntry[o] = candidates->geometryEntry[it->second];
 						}
 						entry = a_asked.objectEntry[o];
-						const bool entryIsRoot = entry < entries && candidates->entryNodes[entry] && tables.fadeRootIndex.contains(candidates->entryNodes[entry]);
+						const bool entryIsRoot = entry < entries && candidates->entryNodes[entry] && rootList.Contains(candidates->entryNodes[entry]);
 						if (entry < entries && candidates->entryNodes[entry] && !entryIsRoot) {
 							objectClass = 2;
 							rootNode = candidates->entryNodes[entry];
@@ -306,6 +308,7 @@ namespace DCLF
 			Readback& readback;
 			VisibilityDecode& decode;
 			const SceneTables& tables;
+			const Api::RootListView& rootList;  // the tables' listed roots (the root states' view)
 			const EntrySpace* candidates;
 			std::uint32_t entries;      // the candidates' index space
 			std::size_t roots, objects;  // the tables'
@@ -400,17 +403,17 @@ namespace DCLF
 		{
 			auto& readback = a_pass.readback;
 			auto& decode = a_pass.decode;
-			const auto& tables = a_pass.tables;
 			SizeRoots(decode, std::size_t(a_root) + 1);
-			const void* node = a_root < a_pass.roots ? tables.fadeRootNode[a_root] : nullptr;
+			const auto& rootList = a_pass.rootList;
+			const void* node = a_root < a_pass.roots ? rootList.nodes[a_root] : nullptr;
 			std::uint8_t rootClass = 0;
-			if (!node || a_root >= tables.fadeRoots.size()) {
+			if (!node || a_root >= rootList.rows.size()) {
 				// Not written: forget the last write so a return writes again.
 				node = nullptr;
 				if (a_root < readback.rootWritten.size())
 					readback.rootWritten[a_root] = Readback::kWrittenNone;
 			} else {
-				const auto& row = tables.fadeRoots[a_root];
+				const auto& row = rootList.rows[a_root];
 				const bool stoodIn = (row.bits & kFadeRootStoodIn) != 0;
 				rootClass = stoodIn ? 1 : 2;
 				bool visible = a_pass.cutPending;
@@ -452,7 +455,8 @@ namespace DCLF
 			const bool held = a_object < a_pass.objects;
 			auto* geometry = held ? tables.objectGeometry[a_object] : nullptr;
 			const bool drawn = geometry && !tables.IsLayer(a_object);
-			const std::uint32_t root = held && a_object < tables.objectFadeRoot.size() ? tables.objectFadeRoot[a_object] : kNoFadeRoot;
+			const auto& rootList = a_pass.rootList;
+			const std::uint32_t root = held ? rootList.RootOf(a_object) : kNoFadeRoot;
 			if (decode.objectGeometry[a_object] != geometry) {
 				if (const auto it = decode.geometrySlot.find(decode.objectGeometry[a_object]); it != decode.geometrySlot.end() && it->second == a_object)
 					decode.geometrySlot.erase(it);
@@ -474,7 +478,7 @@ namespace DCLF
 			if (drawn) {
 				if (root != kNoFadeRoot && root < a_pass.roots && root < decode.rootClass.size() && decode.rootClass[root]) {
 					objectClass = decode.rootClass[root];
-					rootNode = tables.fadeRootNode[root];
+					rootNode = rootList.nodes[root];
 				} else if (root == kNoFadeRoot && candidates) {
 					if (readback.objectEntryGeometry[a_object] != geometry) {
 						readback.objectEntryGeometry[a_object] = geometry;
@@ -485,7 +489,7 @@ namespace DCLF
 					entry = readback.objectEntry[a_object];
 					if (entry < a_pass.entries && candidates->entryNodes[entry]) {
 						entryOf = entry;
-						if (!tables.fadeRootIndex.contains(candidates->entryNodes[entry])) {
+						if (!rootList.Contains(candidates->entryNodes[entry])) {
 							objectClass = 2;
 							rootNode = candidates->entryNodes[entry];
 						} else {
@@ -584,8 +588,8 @@ namespace DCLF
 				static constexpr std::array<const char*, 3> kKinds{ "root", "entry", "geometry" };
 				std::uint32_t slot = ~0u;
 				if (a_write.kind == Readback::kWriteRoot) {
-					if (const auto it = a_pass.tables.fadeRootIndex.find(a_write.node); it != a_pass.tables.fadeRootIndex.end())
-						slot = it->second;
+					if (const std::uint32_t root = a_pass.rootList.Find(a_write.node); root != kNoFadeRoot)
+						slot = root;
 				} else if (a_write.kind == Readback::kWriteEntry) {
 					if (a_pass.candidates)
 						if (const auto it = a_pass.candidates->entries.find(static_cast<const RE::NiAVObject*>(a_write.node)); it != a_pass.candidates->entries.end())
@@ -637,7 +641,8 @@ namespace DCLF
 			const bool full = a_reset || cutAnswered || a_readback.refreshWanted.exchange(false, std::memory_order_acq_rel);
 			if (cutAnswered)
 				a_readback.cutAnswered = cut;
-			const std::size_t roots = tables.fadeRootNode.size(), objects = tables.objectGeometry.size();
+			const auto rootList = Extensions::RootListOf(tables);
+			const std::size_t roots = rootList.nodes.size(), objects = tables.objectGeometry.size();
 			if (a_readback.rootWritten.size() < roots) {
 				a_readback.rootWritten.resize(roots, Readback::kWrittenNone);
 				a_readback.rootWrittenGeneration.resize(roots, 0u);
@@ -717,13 +722,13 @@ namespace DCLF
 			// The root rows the journal marked since the classes were judged (all of them for a holder behind its floor).
 			if (everything || !a_decode.rootsHeld) {
 				everything = true;
-			} else {
-				tables.fadeRootsJournal.Take().ForEachRun(a_decode.rootEpoch, roots, [&](std::uint64_t a_first, std::uint64_t a_count) {
+			} else if (const auto* family = RootFamilyOf(tables)) {
+				family->Journal().Take().ForEachRun(a_decode.rootEpoch, roots, [&](std::uint64_t a_first, std::uint64_t a_count) {
 					for (std::uint64_t r = a_first; r < a_first + a_count; ++r)
 						a_decode.roots.Add(static_cast<std::uint32_t>(r));
 				});
 			}
-			a_decode.rootEpoch = tables.fadeRootsJournal.ContentEpoch();
+			a_decode.rootEpoch = rootList.contentEpoch;
 			a_decode.rootsHeld = true;
 			// The verdicts whose out-of-view frame the window has reached.
 			const std::uint32_t window = a_readback.previousDecodedFrame;
@@ -744,7 +749,7 @@ namespace DCLF
 			auto* list = new Readback::Writes();
 			list->frame = a_newest.frame;
 			list->full = full;
-			Pass pass{ a_readback, a_decode, tables, candidates, entries, roots, objects, window, cutPending, full, *list };
+			Pass pass{ a_readback, a_decode, tables, rootList, candidates, entries, roots, objects, window, cutPending, full, *list };
 			// Roots first (their classes are their objects'), objects next (their shares are their entries' counts).
 			for (const std::uint32_t r : a_decode.roots.list)
 				JudgeRoot(pass, r);
@@ -889,6 +894,7 @@ namespace DCLF
 		void Compare(Readback& a_readback, Readback::Batch& a_batch, const Diagnostics::Accumulated::Sample& a_sample)
 		{
 			const auto& tables = *a_batch.tables;
+			const auto rootList = Extensions::RootListOf(tables);
 			std::array<std::uint32_t, Readback::kCategories> kept{};
 			const auto keep = [&](Readback::Category a_category, const void* a_node) {
 				if (kept[a_category]++ < 2)
@@ -899,13 +905,13 @@ namespace DCLF
 				const void* node = a_sample.rootNodes[r];
 				if (!node)
 					continue;
-				if (r >= tables.fadeRootNode.size() || tables.fadeRootNode[r] != node) {
+				if (r >= rootList.nodes.size() || rootList.nodes[r] != node) {
 					++moved;
 					continue;
 				}
 				const std::uint8_t bits = a_sample.rootBits[r];
 				const bool engine = (bits & Diagnostics::Accumulated::kSampleAccumulated) != 0;
-				const bool listed = r < a_readback.roots.size() && a_readback.roots[r].generation == tables.fadeRoots[r].generation;
+				const bool listed = r < a_readback.roots.size() && a_readback.roots[r].generation == rootList.rows[r].generation;
 				if (!listed || !a_readback.roots[r].known) {
 					++(engine ? noVerdictEngine : noVerdictNeither);
 					continue;
@@ -1161,6 +1167,7 @@ namespace DCLF
 				list = following;
 			}
 			r.writtenTables.reset();
+			r.writtenRoots = {};
 			r.writtenCandidates.reset();
 			r.rootVerdicts.clear();
 			r.refreshWanted.store(true, std::memory_order_release);
@@ -1186,6 +1193,7 @@ namespace DCLF
 			r.writeBatches.fetch_add(1, std::memory_order_relaxed);
 			// Keep the newest tables (a cut's writes read them); older ones are released here, on the main thread.
 			r.writtenTables = std::move(list->tables);
+			r.writtenRoots = r.writtenTables ? Extensions::RootListOf(*r.writtenTables) : Api::RootListView{};
 			r.writtenCandidates = std::move(list->candidates);
 			auto* following = list->next;
 			delete list;
@@ -1195,12 +1203,13 @@ namespace DCLF
 		if (cut && r.cutWritten != cut && r.writtenTables) {
 			r.cutWritten = cut;
 			const auto& tables = *r.writtenTables;
-			std::vector<std::uint8_t> written(tables.fadeRootNode.size(), 0u);
-			for (std::size_t root = 0; root < tables.fadeRootNode.size(); ++root) {
-				const void* node = tables.fadeRootNode[root];
-				if (!node || root >= tables.fadeRoots.size())
+			const auto& rootList = r.writtenRoots;
+			std::vector<std::uint8_t> written(rootList.nodes.size(), 0u);
+			for (std::size_t root = 0; root < rootList.nodes.size(); ++root) {
+				const void* node = rootList.nodes[root];
+				if (!node || root >= rootList.rows.size())
 					continue;
-				const bool stoodIn = (tables.fadeRoots[root].bits & kFadeRootStoodIn) && a_stoodIn(node);
+				const bool stoodIn = (rootList.rows[root].bits & kFadeRootStoodIn) && a_stoodIn(node);
 				written[root] = 1;
 				Store(r, const_cast<void*>(node), true, !stoodIn);
 				r.rootVerdicts.insert_or_assign(node, true);
@@ -1211,10 +1220,10 @@ namespace DCLF
 				auto* geometry = tables.objectGeometry[o];
 				if (!geometry || tables.IsLayer(static_cast<std::uint32_t>(o)))
 					continue;
-				const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
+				const std::uint32_t root = rootList.RootOf(static_cast<std::uint32_t>(o));
 				if (root < written.size() && written[root]) {
-					Store(r, geometry, true, !(tables.fadeRoots[root].bits & kFadeRootStoodIn));
-					SetChain(r, geometry, tables.fadeRootNode[root]);
+					Store(r, geometry, true, !(rootList.rows[root].bits & kFadeRootStoodIn));
+					SetChain(r, geometry, rootList.nodes[root]);
 					continue;
 				}
 				// A plain entry root's geometry (no fade root).
@@ -1223,7 +1232,7 @@ namespace DCLF
 				const auto it = candidates->geometries.find(geometry);
 				const std::uint32_t entry = it != candidates->geometries.end() && it->second < candidates->geometryEntry.size() ? candidates->geometryEntry[it->second] : EntrySpace::kNone;
 				const RE::NiAVObject* entryNode = entry < candidates->entryNodes.size() ? candidates->entryNodes[entry] : nullptr;
-				if (!entryNode || tables.fadeRootIndex.contains(entryNode))
+				if (!entryNode || rootList.Contains(entryNode))
 					continue;
 				r.rootVerdicts.insert_or_assign(entryNode, true);
 				Store(r, const_cast<RE::NiAVObject*>(entryNode), true, true);
@@ -1235,7 +1244,7 @@ namespace DCLF
 		if (wrote && ++r.verdictPrunes >= 60) {
 			r.verdictPrunes = 0;
 			for (auto it = r.rootVerdicts.begin(); it != r.rootVerdicts.end();)
-				it = (r.writtenTables && r.writtenTables->fadeRootIndex.contains(it->first)) ||
+				it = (r.writtenTables && r.writtenRoots.Contains(it->first)) ||
 				             (r.writtenCandidates && r.writtenCandidates->entries.contains(static_cast<const RE::NiAVObject*>(it->first))) ?
 				         std::next(it) :
 				         r.rootVerdicts.erase(it);
@@ -1263,7 +1272,7 @@ namespace DCLF
 		if (it == r.rootVerdicts.end())
 			return false;
 		// Must still be listed: a kept verdict for a freed node must not answer for another at its address.
-		if (!(r.writtenTables && r.writtenTables->fadeRootIndex.contains(a_root)) &&
+		if (!(r.writtenTables && r.writtenRoots.Contains(a_root)) &&
 			!(r.writtenCandidates && r.writtenCandidates->entries.contains(static_cast<const RE::NiAVObject*>(a_root))))
 			return false;
 		a_visible = it->second;

@@ -280,8 +280,6 @@ namespace DCLF
 	{
 		SceneTracker::Event* head = nullptr;  // SceneTracker's attach and detach events (and the render thread's mirror-only captures)
 		SceneTracker::Event* tail = nullptr;
-		std::vector<const void*> fadeSnaps;
-		std::vector<const void*> fadeAmounts;
 		std::vector<const void*> properties;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
 		std::vector<SwitchEvent> switches;

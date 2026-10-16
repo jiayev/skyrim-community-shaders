@@ -1,4 +1,5 @@
-// Actors' engine events (the feature's early hooks): Actor::SetAlpha's fadeAmount writes into Core's fadeAmount events, and the actors'
+// Actors' engine events (the feature's early hooks): Actor::SetAlpha's fadeAmount writes into the fade amounts channel (needed by name at
+// install: InstallContext::NeedEngineChannel), and the actors'
 // move writers Core's own complete (MoveEvents, Engine/Capture/SceneEvents.h), on reserved slots of the report's move writers' calls.
 
 #include "Features/DrawcallLimitFix/Features/Actors/Actors.h"
@@ -15,6 +16,8 @@ namespace DCLF::Features::Actors
 	{
 		// The reserved writers (Extensions::ReserveMoveWriter), before their thunks go in: slots 2-4, where Core's table had them.
 		Api::MoveWriterId actor3DPosition, skyCellSkin, ragdoll;
+		// The fade amounts channel, needed at install (bound at the end of InstallFeatures, before the early hooks fire).
+		Api::EngineChannelId fadeAmounts;
 
 		/**
 		 * @brief Actor::SetAlpha (vfunc 0xE1, 0x1406c1a50; Actor, Character, PlayerCharacter tables): fadeAmount (+0x100) of the 3D
@@ -32,7 +35,7 @@ namespace DCLF::Features::Actors
 				func(a_this, a_alpha);
 				for (std::uint32_t i = 0; i < 2; ++i)
 					if (roots[i] && Engine::At<float>(roots[i], 0x100) != before[i] && (i == 0 || roots[1] != roots[0]))
-						Extensions::PushFadeAmount(roots[i]);
+						Extensions::PushChannelKey(fadeAmounts, roots[i]);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -79,6 +82,11 @@ namespace DCLF::Features::Actors
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
+	}
+
+	void NeedFadeAmounts(Api::InstallContext& a_context)
+	{
+		fadeAmounts = a_context.NeedEngineChannel("fade amounts");
 	}
 
 	void InstallEngineEvents()

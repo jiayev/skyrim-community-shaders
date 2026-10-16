@@ -124,6 +124,7 @@ namespace DCLF::Extensions
 		Api::WakeSource wake = Api::WakeSource::None;
 		bool namesKeys = false;
 		decltype(Api::EngineChannel::drain) drain = nullptr;
+		decltype(Api::EngineChannel::push) push = nullptr;
 	};
 	/** @brief A registered adoption guard. */
 	struct AdoptionGuardEntry
@@ -142,6 +143,9 @@ namespace DCLF::Extensions
 		decltype(Api::TableFamily::clear) clear = nullptr;
 		decltype(Api::TableFamily::recycle) recycle = nullptr;
 		std::uint32_t rowsEnd = ~0u, recordWord = ~0u;
+		std::uint32_t recordShift = 0, recordBias = 0;
+		bool recordTag = true, journaled = false;
+		decltype(Api::TableFamily::rows) rows = nullptr;
 	};
 	/** @brief A registered coordinator component. */
 	struct CoordinatorComponentEntry
@@ -149,6 +153,7 @@ namespace DCLF::Extensions
 		std::string name;
 		decltype(Api::CoordinatorComponent::make) make = nullptr;
 		// Its hook sets, as registered.
+		Api::CoordinatorComponent::Slots slots;
 		Api::CoordinatorComponent::Residency residency;
 		Api::CoordinatorComponent::Accumulate accumulate;
 		Api::CoordinatorComponent::Walk walk;

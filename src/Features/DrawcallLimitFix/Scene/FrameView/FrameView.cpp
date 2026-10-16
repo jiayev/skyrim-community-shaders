@@ -83,7 +83,6 @@ namespace DCLF::Scene
 			auto& deltas = at->value;
 			append(framePlans, deltas.plans);
 			append(frameShading, deltas.shading);
-			append(frameFadeSeeds, deltas.fadeSeeds);
 			if (frameComponentSeeds.size() < deltas.componentSeeds.size())
 				frameComponentSeeds.resize(deltas.componentSeeds.size());
 			for (std::size_t c = 0; c < deltas.componentSeeds.size(); ++c)

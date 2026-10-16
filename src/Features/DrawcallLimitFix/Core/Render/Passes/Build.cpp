@@ -49,16 +49,18 @@ namespace DCLF::Draws
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(*resources->frustum).View();
-			// Phase 1 tests a member against its root's program (the cull binding Programs: Features/Portals' portal programs).
+			// Phase 1 tests a member against its root's program (the cull bindings Programs: Features/Portals' portal programs, and
+			// RootPrograms: each root's).
 			const auto& programs = Extensions::CullBindingBuffer(Api::CullBindingSlot::Programs, *resources->scene);
-			if (resources->frustum && programs && resources->scene->fadeRootPrograms) {
+			const auto& rootPrograms = Extensions::CullBindingBuffer(Api::CullBindingSlot::RootPrograms, *resources->scene);
+			if (resources->frustum && programs && rootPrograms) {
 				bindings.cullPrograms = a_builder.ShaderResource(*programs).View();
-				bindings.rootPrograms = a_builder.ShaderResource(*resources->scene->fadeRootPrograms).View();
+				bindings.rootPrograms = a_builder.ShaderResource(*rootPrograms).View();
 			}
-			// Every phase reads the fade roots' static rows (phase 1's fade verdicts, LOD skin partitions). The states FadeStateCS
-			// published last frame are undeclared: nothing this frame writes them.
-			if (resources->scene->fadeRoots)
-				bindings.fadeRoots = a_builder.ShaderResource(*resources->scene->fadeRoots).View();
+			// Every phase reads the fade roots' static rows (the cull binding RootRows: phase 1's fade verdicts, LOD skin partitions). The
+			// states FadeStateCS published last frame (RootStates, the latch's) are undeclared: nothing this frame writes them.
+			if (const auto& roots = Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, *resources->scene))
+				bindings.fadeRoots = a_builder.ShaderResource(*roots).View();
 			// Phase 1 sees last frame's HZB, phase 2 the one rebuilt this frame: same resource, ordered by their place around the build.
 			if (resources->hzb)
 				bindings.hzb = a_builder.ShaderResource(resources->hzb).View();
@@ -112,12 +114,13 @@ namespace DCLF::Draws
 			// Frustum stamps: only depth phase 1 tests every candidate's frustum.
 			if (resources->frustum && phase == 1)
 				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
-			// A member whose root's program culls its bound is out of view.
-			if (resources->frustum && phase == 1 && a_bindings.cullPrograms.layout && resources->scene->fadeRoots && resources->scene->fadeRootCount) {
+			// A member whose root's program culls its bound is out of view. The roots' rows only while they hold the tables' roots.
+			const bool rootRows = RootRowsCurrent(*resources->scene);
+			if (resources->frustum && phase == 1 && a_bindings.cullPrograms.layout && rootRows) {
 				constants.cullProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.cullPrograms);
 				constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
 			}
-			if (resources->scene->fadeRoots && resources->scene->fadeRootCount) {
+			if (rootRows) {
 				constants.fadeRootsIndex = CaptureViewIndex(a_preparation, a_bindings.fadeRoots);
 			}
 			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {

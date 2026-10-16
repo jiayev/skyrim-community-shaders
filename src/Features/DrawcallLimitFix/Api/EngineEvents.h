@@ -20,16 +20,19 @@ namespace DCLF::Api
 	 * @brief An observer of the primary cull's stood-in roots: the fade roots DCLF stands in for whole (state on the GPU alone; no engine
 	 * cull visits them). Called per change, never per root; the roots are alive during the call (the cut's snapshot holds them).
 	 *
-	 * - changed: render thread (the main thread), when the admitted entries' ownership moved (PrimaryCull::SyncFadeOwnership): the roots
+	 * - changed: render thread (the main thread), when the admitted entries' ownership moved (PrimaryCull::SyncRootOwnership): the roots
 	 *   that left and joined, left first (a root in both stays). Optional.
-	 * - cleared: render thread, when the stand-in is dropped whole (PrimaryCull::ClearFadeOwnership): no root is stood in. Optional.
+	 * - cleared: render thread, when the stand-in is dropped whole (PrimaryCull::ClearRootOwnership): no root is stood in. Optional.
 	 * - updateEntry: the main thread at Main::Update's entry (PrimaryCull::AtUpdateEntry), after the stood-in roots' kAccumulated is
-	 *   written: whether DCLF runs this frame. Optional.
-	 * - afterWrites: the main thread at Main::Update's entry too, after the writes that follow updateEntry (the fade writers' tables
-	 *   published, the fade stores written, the UpdateEntry diagnostics event), last there: whether DCLF runs this frame. Optional.
+	 *   written, in registration order (the fade writers' tables and stores are the last's, Fades'): whether DCLF runs this frame. Optional.
+	 * - afterWrites: the main thread at Main::Update's entry too, after every updateEntry and the UpdateEntry diagnostics event, last
+	 *   there: whether DCLF runs this frame. Optional.
 	 * - structure: any thread (the attaching or detaching one), per attach/detach the primary cull's structure events follow
 	 *   (PrimaryCull::NoteListStructure), first there, before the main cull input's: a_parent, the node attached to or detached from (an
 	 *   engine NiNode; null for none). Lock-free and cheap. Optional.
+	 * - listJobsDone: render thread, once a frame the list jobs ran, at their Finish (PrimaryCull's ListJobsFinish, where the stand-in's
+	 *   jobs are done and before the registration jobs read their output): what the feature's hooks gathered on the jobs' threads is
+	 *   whole (the animated fades' batch). Optional.
 	 */
 	struct StandInObserver
 	{
@@ -38,6 +41,7 @@ namespace DCLF::Api
 		void (*updateEntry)(bool a_running) = nullptr;
 		void (*afterWrites)(bool a_running) = nullptr;
 		void (*structure)(const void* a_parent) = nullptr;
+		void (*listJobsDone)() = nullptr;
 	};
 
 	/** @brief What an engine channel carries. */
@@ -110,6 +114,10 @@ namespace DCLF::Api
 	 *   named (a field its probe finds different on one has a hook).
 	 * - drain: the scene lane, the queue's one consumer (CollectEvents, once a pass): every key pushed before the call into a_sink, oldest
 	 *   first (EventQueue::Drain(a_sink)); returns how many. None for a SceneStack channel.
+	 * - push (optional): any thread, lock-free, after the store it reports: a_key into the channel's queue, for another feature's hooks
+	 *   (InstallContext::NeedEngineChannel, Extensions::PushChannelKey: Features/Actors' Actor::SetAlpha into the fade amounts). Whatever
+	 *   else the channel's own hooks do with the store (the mirror's value: Extensions::PushNodeUpdate) it does too. None: the channel
+	 *   takes no pushes but its own.
 	 */
 	struct EngineChannel
 	{
@@ -120,6 +128,7 @@ namespace DCLF::Api
 		WakeSource wake = WakeSource::None;
 		bool namesKeys = false;
 		std::size_t (*drain)(KeySink& a_sink) = nullptr;
+		void (*push)(const void* a_key) = nullptr;
 	};
 
 	/**
@@ -218,7 +227,9 @@ namespace DCLF::Api
 
 	/**
 	 * @brief The node record fields a feature's hook may push (Extensions::PushNodeUpdate's a_fields; the capture's NodeRecord fields as
-	 * they are, Core checks they match). Captured: a node capture contribution's list (its writers' edits).
+	 * they are, Core checks they match). Captured: a node capture contribution's list (its writers' edits). FadeAmount: a fade node's
+	 * fadeAmount (+0x100: Actor::SetAlpha's, through the fade amounts channel's push).
 	 */
 	inline constexpr std::uint32_t kNodeFieldCaptured = 1u << 21;
+	inline constexpr std::uint32_t kNodeFieldFadeAmount = 1u << 20;
 }

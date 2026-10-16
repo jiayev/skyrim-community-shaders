@@ -208,8 +208,10 @@ namespace DCLF::Diagnostics
 				a_stats.sunMissed = words[kCountSunMissedWord];
 				a_stats.fadeTested = words[kCountFadeTestedWord];
 				a_stats.fadeHidden = words[kCountFadeHiddenWord];
-				if (impl.scene)
-					a_stats.fadeRoots = impl.scene->fadeRootCount;
+				if (impl.scene) {
+					if (const auto* fades = Draws::FadeSceneOf(*impl.scene))
+						a_stats.fadeRoots = fades->fadeRootCount;
+				}
 				a_stats.sunCpuTested = cpu.sunTested;
 				a_stats.sunCpuMissed = cpu.sunMissed;
 				a_stats.terrainNearTested = words[kCountTerrainNearTestedWord];

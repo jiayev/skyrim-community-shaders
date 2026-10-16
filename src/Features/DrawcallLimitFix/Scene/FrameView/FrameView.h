@@ -165,15 +165,6 @@ namespace DCLF::Scene
 		 */
 		void HandOverAtFrameStart(std::shared_ptr<const void> a_adopted);
 		const std::shared_ptr<const Tables>& AcceptedTables() const { return acceptedTables; }
-		/**
-		 * @brief Render thread, depth commit: its fade root rows are at a_contentEpoch (fadeRootsJournal's content epoch), posted latest-wins; the
-		 * coordinator's journal forgets what it has at its next pass.
-		 */
-		void FadeRootsSent(std::uint64_t a_contentEpoch)
-		{
-			// No wake: the frame's next pass takes it.
-			channels.fadeRootsSentPosted.store(a_contentEpoch, std::memory_order_release);
-		}
 		/** @brief Render thread: the frame's capture (latched by every commit). */
 		const FrameCapture& GetFrameCapture() const { return frameCapture; }
 		/** @brief The frame's tables' generation (0 before the first); moves on a slot table reset or InvalidateVerdicts. */
@@ -253,11 +244,14 @@ namespace DCLF::Scene
 			const bool lod = a_phase && (a_phase & lacking[2]) == a_phase;
 			return a_phase && a_phase == lacking[0] ? frameLackingCount[0] : a_phase && a_phase == lacking[1] ? frameLackingCount[1] : lod ? frameLackingCount[2] : 0u;
 		}
-		/** @brief Render thread (PrimaryCull): posted latest-wins, applied at the coordinator's next scene pass. */
-		void SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned)
+		/**
+		 * @brief Render thread (PrimaryCull): its admitted roots, a whole set, posted latest-wins; the coordinator's next scene pass hands them
+		 * to the components (Api::CoordinatorComponent::Events::admitted).
+		 */
+		void SetStandInRoots(const std::vector<Api::StandInRoot>& a_roots)
 		{
 			// No wake: the frame's next pass takes it.
-			channels.fadeOwnedPosted.Post(std::make_unique<std::vector<OwnedFadeRoot>>(a_owned));
+			channels.standInRootsPosted.Post(std::make_unique<std::vector<Api::StandInRoot>>(a_roots));
 		}
 		/**
 		 * @brief Render thread: whether the installed publication claims the geometry, which keeps it alive (the retirement chain
@@ -274,8 +268,6 @@ namespace DCLF::Scene
 		std::vector<std::shared_ptr<const void>> TakeRetiredImports() { return std::exchange(frameRetiredImports, {}); }
 		/** @brief Render thread: a GPU object the frame's executions may still read, released with the next main commit's (TakeRetiredImports). */
 		void RetireImport(std::shared_ptr<const void> a_owner) { frameRetiredImports.push_back(std::move(a_owner)); }
-		/** @brief Render thread, frame start: seeds requested since the last take (from the publication log). */
-		std::vector<FadeSeedItem> TakeFadeSeeds() { return std::exchange(frameFadeSeeds, {}); }
 		/** @brief Render thread, frame start: a coordinator component's seeds requested since the last take (its feature's frame start). */
 		std::vector<FadeSeedItem> TakeComponentSeeds(Api::CoordinatorComponentId a_component)
 		{
@@ -376,7 +368,6 @@ namespace DCLF::Scene
 		std::vector<std::shared_ptr<const void>> frameRetiredImports;
 		std::vector<std::shared_ptr<const PlacementPlan>> framePlans;
 		std::vector<ShadingItem> frameShading;
-		std::vector<FadeSeedItem> frameFadeSeeds;
 		std::vector<std::vector<FadeSeedItem>> frameComponentSeeds;  // by coordinator component
 		ankerl::unordered_dense::set<const RE::NiAVObject*> frameLightEntrySet;
 		std::shared_ptr<const ankerl::unordered_dense::set<RE::NiNode*>> frameCategoryNodes;  // the installed publication's (IsCategoryNode)

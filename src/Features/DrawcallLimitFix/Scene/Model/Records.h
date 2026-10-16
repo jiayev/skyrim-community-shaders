@@ -91,9 +91,10 @@ namespace DCLF
 	 * @brief The object flags the features' technique contributions own (Api::TechniqueContribution::objectFlags), each bit declared in
 	 * its feature's header and checked by Features/Manifest.cpp against Core's and each other's: Features/TreeWind's kObjectTreeAnim
 	 * (technique 12, whose TreeParams and WindTimers are per object; for anything else they are the pipeline template's, which a zeroed
-	 * per-object copy would clobber).
+	 * per-object copy would clobber); and the root test's bits a root states contribution sets (Api::RootStatesContribution::objectFlags):
+	 * the fade roots' kObjectFadeTest (27) and kObjectHeightTest (28), still declared in Core's enum until Features/Fades holds them.
 	 */
-	inline constexpr std::uint32_t kFeatureObjectFlags = 1u << 6;
+	inline constexpr std::uint32_t kFeatureObjectFlags = (1u << 6) | (1u << 27) | (1u << 28);
 
 	/** @brief The high bit of a draw's object-index word: the draw misses every sun cascade (kObjectSunTest). */
 	inline constexpr std::uint32_t kObjectSunMiss = 1u << 31;

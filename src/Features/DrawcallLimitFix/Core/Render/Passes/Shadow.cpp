@@ -52,10 +52,10 @@ namespace DCLF::Draws
 			}
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
-			// Fade roots' rows: casters under stood-in roots follow FadeStateCS's state, occluders their roots' OnVisible
-			// (kCullFadeOnVisible). The states are last frame's, undeclared as in the depth segment.
-			if (resources->scene->fadeRoots)
-				bindings.fadeRoots = a_builder.ShaderResource(*resources->scene->fadeRoots).View();
+			// Fade roots' rows (the cull binding RootRows): casters under stood-in roots follow FadeStateCS's state, occluders their roots'
+			// OnVisible (kCullFadeOnVisible). The states are last frame's (RootStates, the latch's), undeclared as in the depth segment.
+			if (const auto& roots = Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, *resources->scene))
+				bindings.fadeRoots = a_builder.ShaderResource(*roots).View();
 			return bindings;
 		}
 
@@ -116,8 +116,8 @@ namespace DCLF::Draws
 		}
 
 	private:
-		// The fade roots' rows mirror the tables (the depth commit uploads them).
-		bool FadeRows() const { return resources->scene->fadeRoots && resources->scene->fadeRootCount; }
+		// The fade roots' rows mirror the tables (the depth commit uploads them: the cull binding RootRows' rows).
+		bool FadeRows() const { return RootRowsCurrent(*resources->scene); }
 
 		std::shared_ptr<ShadowResources> resources;
 		bool sky = false;

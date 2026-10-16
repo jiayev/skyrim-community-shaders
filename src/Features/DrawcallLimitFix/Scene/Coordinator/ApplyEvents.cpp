@@ -77,8 +77,6 @@ namespace DCLF::Scene
 				DrainPropertyEvents(keys);
 			}
 			DrainNodeEvents(discarded->nodes);
-			fadeSnapEvents.Drain(keep);
-			fadeAmountEvents.Drain(keep);
 			DrainChannelsLoading(named);
 			switchEvents.Drain([&](SwitchEvent&& a_event) {
 				keep(a_event.node.get());
@@ -100,8 +98,7 @@ namespace DCLF::Scene
 		// Only pointer moves here, in push order; walking and evaluating is ApplyEvents'.
 		auto* drained = tracker.Drain();
 		batch->Append(drained);
-		fadeSnapEvents.Drain([&](const void* a_node) { batch->fadeSnaps.push_back(a_node); });
-		fadeAmountEvents.Drain([&](const void* a_node) { batch->fadeAmounts.push_back(a_node); });
+		// The fade snaps and fade amounts first among them (Core's fade roots' channels, registered snaps then amounts).
 		DrainChannels(Api::ChannelApply::BeforeStructural, batch->channelKeys);
 		DrainPropertyEvents(batch->properties);
 		DrainNodeEvents(batch->nodes);
@@ -152,8 +149,7 @@ namespace DCLF::Scene
 		}
 		if (catchUp)
 			channels.switchCatchUps.Push(std::move(catchUp));
-		events += static_cast<std::uint32_t>(batch->fadeSnaps.size() + batch->fadeAmounts.size() + batch->properties.size() +
-											 batch->nodes.size() + batch->switches.size() + ChannelKeyCount(batch->channelKeys));
+		events += static_cast<std::uint32_t>(batch->properties.size() + batch->nodes.size() + batch->switches.size() + ChannelKeyCount(batch->channelKeys));
 		pumpStats.passEvents.push_back(events);
 		return batch;
 	}
@@ -265,7 +261,7 @@ namespace DCLF::Scene
 			for (const std::uint32_t slot : { entry->slot, entry->layerSlot }) {
 				if (slot == kNoObjectSlot || slot >= tables.objects.size() || tables.objectGeometry[slot] != geometry)
 					continue;
-				ListFadeRoot(slot);
+				ComponentsSlotWritten(slot);
 				if (IsResidentSlot(slot))
 					ComponentsResident(slot);
 			}
@@ -470,11 +466,7 @@ namespace DCLF::Scene
 				ValidateSlice();
 		}
 		DCLF_SCENE_PART(StructuralEvents, "CS.DCLF.Scene.StructuralEvents");
-		for (const void* node : batch->fadeSnaps)
-			ReseedFadeRoot(node);
-		// Actors' fadeAmount: the rows' input (the GPU's fade state stands).
-		for (const void* node : batch->fadeAmounts)
-			RefreshFadeAmount(node);
+		// The fade snaps' reseeds, then Actors' fadeAmounts (the rows' input; the GPU's fade state stands): the fade roots' channels.
 		ComponentsChannelKeys(Api::ChannelApply::BeforeStructural, *batch);
 		// Structural events: property flag/material/controller changes, and nodes Havok moved or gave a controller.
 		propertyChanged.insert(propertyChanged.end(), batch->properties.begin(), batch->properties.end());
@@ -740,7 +732,7 @@ namespace DCLF::Scene
 				Diagnostics::Notify(Diagnostics::TrackedBelowRead{ *this, MirrorRead::SwitchEvent, node });
 			++delta.switchChanges;
 			switchesApplied.push_back(node);
-			RefreshFadeRootSwitch(node);
+			ComponentsSwitched(node);
 			if (a_full)
 				continue;
 			// The selection is a classification input for every entry under it.

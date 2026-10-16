@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -261,7 +262,7 @@ namespace DCLF::Diagnostics::CutObservers
 			const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 			if ((frame % 30) != 0)
 				return;
-			const auto& roots = Scene::FrameView::Get().GetTables().fadeRootNode;
+			const auto roots = Extensions::RootListOf(Scene::FrameView::Get().GetTables()).nodes;
 			nodeSnapshot.resize(roots.size());
 			for (std::size_t r = 0; r < roots.size(); ++r)
 				nodeSnapshot[r] = roots[r] ? FadeState::ReadNode(*static_cast<const RE::NiAVObject*>(roots[r])) : FadeNodeState{};

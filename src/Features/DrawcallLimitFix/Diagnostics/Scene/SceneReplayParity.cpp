@@ -34,7 +34,7 @@ namespace DCLF::Diagnostics
 			const std::size_t objectSlots = tables.objects.size();
 			const std::size_t geometrySlots = tables.geometries.size();
 			const std::uint64_t position = a_event.position, geometryPosition = a_event.geometryPosition;
-			const bool keepFadeRoots = a_event.keepFadeRoots, keepConstants = a_event.keepConstants;
+			const bool keepConstants = a_event.keepConstants;
 				++replay.parityChecks;
 				replay.parityMaterials += slots;
 				for (std::size_t slot = 0; slot < slots; ++slot)
@@ -97,8 +97,6 @@ namespace DCLF::Diagnostics
 					if (!same && replay.parityFamiliesDiffer++ == 0)
 						logger::error("[DCLF] tables replay (6d): the constants were kept (stamp {}) but differ from the tables'", tables.constantsStamp);
 				}
-				if (keepFadeRoots && !sameFamily([](auto& a_x, auto& a_y, auto&& a_member) { SceneTables::FadeRootFamily(a_x, a_y, a_member); }) && replay.parityFamiliesDiffer++ == 0)
-					logger::error("[DCLF] tables replay (6d): the fade roots were kept (stamp {}) but differ from the tables'", tables.fadeRootsStamp);
 				if (!sameFamily([](auto& a_x, auto& a_y, auto&& a_member) { SceneTables::PipelineFamily(a_x, a_y, a_member); }) && replay.parityFamiliesDiffer++ == 0)
 					logger::error("[DCLF] tables replay (6d): the pipeline family (stamp {}, the snapshot's {}) differs from the tables'", tables.pipelinesStamp, snapshot.pipelinesStamp);
 				// The per-object columns replayed by slot beside the logged ones, against the tables' whole.

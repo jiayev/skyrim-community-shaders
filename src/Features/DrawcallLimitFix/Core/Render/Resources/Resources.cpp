@@ -74,6 +74,46 @@ namespace DCLF::Draws
 		return layout;
 	}
 
+	std::shared_ptr<void> SetUpFadeScene(const Api::SceneResourcesSetup& a_setup)
+	{
+		using org::services::GrowableContents;
+		// Without the fade state program, fades stay the CPU's.
+		auto fadeState = ComputeProgram::Load(a_setup.device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
+		if (!fadeState) {
+			logger::warn("[DCLF] The fade state program could not be created; fades stay the CPU's");
+			return nullptr;
+		}
+		auto scene = std::make_shared<FadeScene>();
+		scene->fadeState = std::move(fadeState);
+		// By root slot. New state is reseeded from the static rows; the frame-ahead outputs are zero-filled.
+		const std::uint32_t roots = a_setup.smallStart ? 4u : kInitialFadeRoots;
+		scene->fadeRoots = MakeVersioned(a_setup.StructuredBuffer(roots, sizeof(FadeRootStatic), "cs.dclf.fade-roots"),
+			{ .extent = { 0, sizeof(FadeRootStatic), sizeof(FadeRootStatic) } });
+		scene->fadeStates = MakeVersioned(a_setup.StructuredBuffer(roots, sizeof(FadeNodeState), "cs.dclf.fade-states", true),
+			{ .extent = { 0, sizeof(FadeNodeState), sizeof(FadeNodeState) } });
+		for (std::uint32_t h = 0; h < 2; ++h)
+			scene->fadeStatesOut[h] = MakeVersioned(a_setup.StructuredBuffer(roots, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0", true),
+				{ .extent = { 0, sizeof(FadeNodeState), sizeof(FadeNodeState) }, .contents = GrowableContents::Zero });
+		scene->fadeFrameBuffer = a_setup.StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame");
+		scene->fadeRootPrograms = MakeVersioned(a_setup.StructuredBuffer(roots, sizeof(std::uint32_t), "cs.dclf.fade-root-programs"), { .extent = { 0, 4, 4 } });
+		scene->fadeAnimated = MakeVersioned(a_setup.StructuredBuffer(roots, sizeof(std::uint32_t), "cs.dclf.fade-animated"), { .extent = { 0, 4, 4 } });
+		scene->fadeLog = a_setup.StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", true);
+		// The fade write-back: events, the roots' reported milestones, and a staging set (a host buffer per frame slot).
+		if (auto* host = RenderGraphRuntime::Get().Host()) {
+			const std::uint32_t events = a_setup.smallStart ? 4u : kInitialFadeEvents;
+			scene->fadeEvents = MakeVersioned(CreateWords(FadeWriteBack::BytesFor(events) / 4, true, "cs.dclf.fade-events"),
+				{ .extent = { kFadeEventHeaderWords * 4, kFadeEventWords * 4, 4 } });
+			scene->fadeReported = MakeVersioned(a_setup.StructuredBuffer(roots, 2 * sizeof(std::uint32_t), "cs.dclf.fade-reported", true),
+				{ .extent = { 0, 8, 8 }, .contents = GrowableContents::Zero });
+			auto writeBack = std::make_shared<FadeWriteBack>();
+			writeBack->frameSlots = host->FrameSlots();
+			writeBack->armed.resize(writeBack->frameSlots);
+			writeBack->AddSet(events);
+			scene->fadeWriteBack = std::move(writeBack);
+		}
+		return scene;
+	}
+
 	bool GrowableRows::Create(std::uint32_t a_stride, std::uint32_t a_rows, const char* a_name, org::services::GrowthPolicy a_policy, org::services::GrowableContents a_contents,
 		org::services::GrowableCapture a_capture)
 	{
@@ -523,35 +563,11 @@ namespace DCLF
 		buffers->vertexStream = Extensions::SelectVertexStream(buffers->sceneResources);
 		if (Extensions::VertexStream().registered && !buffers->vertexStream)
 			return false;
-		// Without the fade state program, fades stay the CPU's.
-		buffers->fadeState = ComputeProgram::Load(a_device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
-		if (buffers->fadeState) {
-			// By root slot. New state is reseeded from the static rows; the frame-ahead outputs are zero-filled.
+		// Core's fade roots' buffers are the root states' scene resources, made above (SetUpFadeScene: Fades' in stage F3). The visibility
+		// readback reads their rows (the cull binding RootRows): without them it is not made.
+		if (Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, *buffers)) {
+			// By root slot, as the root states' buffers start.
 			const std::uint32_t roots = smallStart ? 4u : kInitialFadeRoots;
-			buffers->fadeRoots = MakeVersioned(StructuredBuffer(roots, sizeof(FadeRootStatic), "cs.dclf.fade-roots", unused),
-				{ .extent = { 0, sizeof(FadeRootStatic), sizeof(FadeRootStatic) } });
-			buffers->fadeStates = MakeVersioned(StructuredBuffer(roots, sizeof(FadeNodeState), "cs.dclf.fade-states", unused, true),
-				{ .extent = { 0, sizeof(FadeNodeState), sizeof(FadeNodeState) } });
-			for (std::uint32_t h = 0; h < 2; ++h)
-				buffers->fadeStatesOut[h] = MakeVersioned(StructuredBuffer(roots, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0", unused, true),
-					{ .extent = { 0, sizeof(FadeNodeState), sizeof(FadeNodeState) }, .contents = GrowableContents::Zero });
-			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
-			buffers->fadeRootPrograms = MakeVersioned(StructuredBuffer(roots, sizeof(std::uint32_t), "cs.dclf.fade-root-programs", unused), { .extent = { 0, 4, 4 } });
-			buffers->fadeAnimated = MakeVersioned(StructuredBuffer(roots, sizeof(std::uint32_t), "cs.dclf.fade-animated", unused), { .extent = { 0, 4, 4 } });
-			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
-			// The fade write-back: events, the roots' reported milestones, and a staging set (a host buffer per frame slot).
-			if (auto* host = RenderGraphRuntime::Get().Host()) {
-				const std::uint32_t events = smallStart ? 4u : kInitialFadeEvents;
-				buffers->fadeEvents = MakeVersioned(CreateWords(FadeWriteBack::BytesFor(events) / 4, true, "cs.dclf.fade-events"),
-					{ .extent = { kFadeEventHeaderWords * 4, kFadeEventWords * 4, 4 } });
-				buffers->fadeReported = MakeVersioned(StructuredBuffer(roots, 2 * sizeof(std::uint32_t), "cs.dclf.fade-reported", unused, true),
-					{ .extent = { 0, 8, 8 }, .contents = GrowableContents::Zero });
-				auto writeBack = std::make_shared<FadeWriteBack>();
-				writeBack->frameSlots = host->FrameSlots();
-				writeBack->armed.resize(writeBack->frameSlots);
-				writeBack->AddSet(events);
-				buffers->fadeWriteBack = std::move(writeBack);
-			}
 			// The visibility readback (the normal path writes the listed roots' kAccumulated from it): events, each root's and object's
 			// reported verdict, and a staging set.
 			if (auto* host = RenderGraphRuntime::Get().Host()) {
@@ -573,8 +589,6 @@ namespace DCLF
 					logger::warn("[DCLF] The visibility events program could not be created; the stood-in roots' kAccumulated is not written (T7b2)");
 				}
 			}
-		} else {
-			logger::warn("[DCLF] The fade state program could not be created; fades stay the CPU's");
 		}
 		// The GPU stages (Api::GpuStage::setup: their programs; a null state keeps a stage out of the graph), after every table: a stage may
 		// take its feature's scene resources (Features/TreeLod's cull and counts take its tables').

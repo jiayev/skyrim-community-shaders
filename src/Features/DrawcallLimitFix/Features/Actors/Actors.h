@@ -8,7 +8,7 @@
 // - the actor-owned entry class (Api::EntryClass::ActorOwned, an owner class by the ActorCharacter form type: per frame, its own motion,
 //   published), which Core's walk resolves and reads as data;
 // - the actors' engine events, at its early hooks (ActorEvents.cpp): Actor::SetAlpha's fadeAmount writes into Core's fadeAmount events
-//   (Extensions::PushFadeAmount; their channel is Core's until Features/Fades), and the move writers of Actor::UpdateActor3DPosition, the
+//   (the "fade amounts" engine channel, needed by name: Extensions::PushChannelKey), and the move writers of Actor::UpdateActor3DPosition, the
 //   sky cell's skin job and the ragdoll job on reserved move-writer slots (Extensions::ReserveMoveWriter), which every mover's placement
 //   follows;
 // - the actors' animation stamp from DCLF's shadow views (ActorRate.cpp: the stand-in observer's afterWrites) and its report line
@@ -32,8 +32,10 @@ namespace DCLF::Features::Actors
 {
 	// ActorsFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
-	// ActorEvents.cpp: the early hooks' engine events (SetAlpha, the reserved move writers).
+	// ActorEvents.cpp: the early hooks' engine events (SetAlpha, the reserved move writers), and the fade amounts channel SetAlpha pushes
+	// into, needed by name from the install.
 	void InstallEngineEvents();
+	void NeedFadeAmounts(Api::InstallContext& a_context);
 	// ActorRate.cpp: the animation stamp's stand-in observer and report line.
 	void RegisterActorRate(Api::InstallContext& a_context);
 }

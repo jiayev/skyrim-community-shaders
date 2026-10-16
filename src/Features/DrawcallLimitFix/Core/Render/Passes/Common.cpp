@@ -58,24 +58,28 @@ namespace DCLF::Draws
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.pool-copies"), a_scene.pool->copies);
 		}
 		// The features' scene resources (Api::SceneResources::registerGraph: the vertex stream's first, Features/Faces' face positions).
+		// Core's fade roots' buffers are among them (RegisterFadeSceneGraph). The visibility readback is made only with their rows.
 		Extensions::RegisterSceneResources(a_graph, a_scene.sceneResources);
-		if (a_scene.fadeRoots) {
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-roots"), a_scene.fadeRoots);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states"), a_scene.fadeStates);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states-out0"), a_scene.fadeStatesOut[0]);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states-out1"), a_scene.fadeStatesOut[1]);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-root-programs"), a_scene.fadeRootPrograms);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
-			if (a_scene.fadeEvents) {
-				Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-events"), a_scene.fadeEvents);
-				Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-reported"), a_scene.fadeReported);
-			}
-			if (a_scene.visibilityEvents) {
-				Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-events"), a_scene.visibilityEvents);
-				Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-root-reported"), a_scene.visibilityRootReported);
-				Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-object-reported"), a_scene.visibilityObjectReported);
-			}
+		if (a_scene.visibilityEvents) {
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-events"), a_scene.visibilityEvents);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-root-reported"), a_scene.visibilityRootReported);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-object-reported"), a_scene.visibilityObjectReported);
+		}
+	}
+
+	void RegisterFadeSceneGraph(const Api::SceneResourcesGraph& a_graph)
+	{
+		const auto& fades = a_graph.State<FadeScene>();
+		Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-roots"), fades.fadeRoots);
+		Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-states"), fades.fadeStates);
+		Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-states-out0"), fades.fadeStatesOut[0]);
+		Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-states-out1"), fades.fadeStatesOut[1]);
+		Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-frame"), fades.fadeFrameBuffer);
+		Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-root-programs"), fades.fadeRootPrograms);
+		Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-log"), fades.fadeLog);
+		if (fades.fadeEvents) {
+			Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-events"), fades.fadeEvents);
+			Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-reported"), fades.fadeReported);
 		}
 	}
 

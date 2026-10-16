@@ -4,6 +4,8 @@
 // stall. The render thread arms and harvests, a task on DCLF's executor decodes, the main thread makes the engine writes at
 // Main::Update's entry. Included by Internal.h, in its order.
 
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
+
 namespace DCLF::Draws
 {
 	/**
@@ -299,6 +301,7 @@ namespace DCLF::Draws
 		std::atomic<Writes*> writes{ nullptr };
 		// The main thread's: the newest writes' tables (a cut's writes take the stood-in roots from them), and the cut it wrote.
 		std::shared_ptr<const SceneTables> writtenTables;
+		Api::RootListView writtenRoots;  // writtenTables' listed roots (the root states' view: valid while they are held)
 		std::shared_ptr<const EntrySpace> writtenCandidates;  // the newest writes' (the plain entry roots)
 		std::uint32_t cutWritten = 0;
 		std::uint32_t verdictPrunes = 0;           // entries since rootVerdicts was last pruned to the newest tables

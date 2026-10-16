@@ -4,6 +4,7 @@
 #include "SceneObservers.h"
 #include "SceneState.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 
 namespace DCLF::Diagnostics
@@ -19,6 +20,7 @@ namespace DCLF::Diagnostics
 			const auto& mirror = V::mirror(a_store);
 			const auto& residents = V::residents(a_store);
 			const auto& residentPatches = V::residentPatches(a_store);
+			const Api::RootListView roots = Extensions::RootListOf(tables);
 			++residentStats.parityChecks;
 			std::uint32_t logged = 0;
 			for (std::size_t r = 0; r < residents.size(); ++r) {
@@ -27,10 +29,10 @@ namespace DCLF::Diagnostics
 				const auto* geometry = tables.objectGeometry[slot];
 				if (!geometry)
 					continue;
-				// A root the engine updates that has started to fade: its pass is not compared. A stood-in root's node is not its
-				// state (FadeOnGpu), and its members' passes are the settled state's.
+				// A root the engine updates that has started to fade: its pass is not compared. A listed root's node is not its
+				// state (the GPU's alone: every listed root is DCLF's to write), and its members' passes are the settled state's.
 				if (const auto leaf = mirror.Leaf(geometry);
-					leaf.fadeNode && !a_store.FadeOnGpu(static_cast<const RE::NiAVObject*>(leaf.property->fadeNode)) && leaf.fadeNode->currentFade < 1.0f) {
+					leaf.fadeNode && !(leaf.property->fadeNode && roots.Contains(static_cast<const RE::NiAVObject*>(leaf.property->fadeNode))) && leaf.fadeNode->currentFade < 1.0f) {
 					++residentStats.parityPending;
 					continue;
 				}

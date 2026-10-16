@@ -1,7 +1,7 @@
 #pragma once
 
-// The residents (CoordinatorResidents): the resident slots and their patches, and what they keep alive (pipeline, material and
-// fade root members; the features' components keep their own: State/Components.h). Residents.cpp, with the joins (AccumulatePhase.cpp).
+// The residents (CoordinatorResidents): the resident slots and their patches, and what they keep alive (pipeline and material
+// members; the components keep their own: State/Components.h, the fade roots' FadeRoots.cpp). Residents.cpp, with the joins (AccumulatePhase.cpp).
 //
 // A private base of Scene::Coordinator, included by Coordinator.h: names, types and initialisers are the coordinator's own,
 // and the functions over them are declared there.
@@ -24,7 +24,7 @@ namespace DCLF::Scene
 		// What the residents keep (KeepResidentsAlive), kept by changes: only slots NoteResidentTouched names are recounted; rebuilt whole
 		// when every residency ended or the tables reset.
 		bool residentMaintenanceDirty = true;
-		/** @brief Slots by key (a pipeline, a fade root), each in one list at a time: swap-removed, the first kept. */
+		/** @brief Slots by key (a pipeline), each in one list at a time: swap-removed, the first kept. */
 		struct SlotMembers
 		{
 			std::vector<std::vector<std::uint32_t>> lists;
@@ -69,7 +69,7 @@ namespace DCLF::Scene
 		};
 		std::vector<ResidentCounted> residentCounted;
 		std::vector<std::uint32_t> residentsTouched;   // since the last KeepResidentsAlive
-		SlotMembers pipelineMembers, fadeRootMembers;
+		SlotMembers pipelineMembers;
 		std::vector<std::uint32_t> materialMembers;    // by material slot: resident count
 		// Pipelines and materials the joins marked used this pass, cleared again where no resident holds them.
 		std::vector<std::uint32_t> joinMarkedPipelines, joinMarkedMaterials;

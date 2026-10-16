@@ -14,8 +14,8 @@ namespace DCLF
 		std::string text;
 		if (auto window = Reports::EngineReadWindowLine(); !window.empty())
 			text += window + "\n";
-		if (impl->scene && impl->scene->fadeWriteBack) {
-			auto& writeBack = *impl->scene->fadeWriteBack;
+		if (const auto* fades = impl->scene ? Draws::FadeSceneOf(*impl->scene) : nullptr; fades && fades->fadeWriteBack) {
+			auto& writeBack = *fades->fadeWriteBack;
 			const auto applied = writeBack.applied.exchange(0), stale = writeBack.stale.exchange(0), busy = writeBack.busy.exchange(0);
 			const auto storeNs = writeBack.storeNs.exchange(0), notWritten = writeBack.notWritten.exchange(0), dropped = writeBack.dropped.exchange(0);
 			const auto harvested = writeBack.harvested.exchange(0), withEvents = writeBack.harvestedWithEvents.exchange(0), events = writeBack.events.exchange(0);

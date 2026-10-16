@@ -335,7 +335,8 @@ namespace DCLF
 			latch.viewBits = traits.viewBits;  // the main list's members of the view
 			latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
 			latch.placementsIndex = FrameValues::Get().PlacementsIndex();
-			latch.fadeSeedsIndex = FrameValues::Get().FadeSeedsIndex();
+			// The root states' seeds (the cull binding RootSeeds: a pooled buffer's index).
+			latch.fadeSeedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, *scene, frameNumber, Adopted());
 			// The frame's scene list: the installed payload (a covered frame has a ready one).
 			PayloadLatch(*InstalledPayload(), latch);
 			FoldEyeIntoViewProj(face.viewProj, face.eye, latch.viewProj);

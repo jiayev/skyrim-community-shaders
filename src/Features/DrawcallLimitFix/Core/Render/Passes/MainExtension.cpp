@@ -136,12 +136,9 @@ namespace DCLF::Draws
 			};
 			// The features' next-frame state, beside this epoch's raster work (Api::GpuStageSlot::DepthSegmentNextFrameState).
 			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentNextFrameState, depth);
-			// Fade roots' state for the next frame's culling, likewise.
-			if (resources->scene->fadeState && resources->scene->fadeRoots)
-				AddPass(a_out, PassKind::Compute, "cs.dclf.z.fade-state", MakeFadeStatePass(resources), depth, PassQueue::Compute);
-			// Its write-back events, to the host.
-			if (resources->scene->fadeState && resources->scene->fadeRoots && resources->scene->fadeEvents && resources->scene->fadeWriteBack)
-				AddPass(a_out, PassKind::Copy, "cs.dclf.z.fade-events", MakeEventReadbackPass(resources->scene, resources->scene->fadeEvents, resources->scene->fadeWriteBack), depth, PassQueue::None);
+			// The next frame's cull state, likewise (Api::GpuStageSlot::DepthSegmentCullState: the root states' step, then its write-back's
+			// copy to the host: Core's fade roots' cs.dclf.z.fade-state and cs.dclf.z.fade-events).
+			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentCullState, depth);
 			// The features' stages before the depth build, before anything of the frame draws (Api::GpuStageSlot::DepthSegmentBeforeBuild).
 			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentBeforeBuild, depth);
 			AddPass(a_out, PassKind::Compute, "cs.dclf.z.build-draws", MakeBuildDrawsPass(resources, depthSegment), depth);
@@ -192,7 +189,8 @@ namespace DCLF::Draws
 			AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentAfterPhaseTwo, depth);
 			// Visibility changes once both phases' verdicts are final, and their readback copy.
 			const auto& sceneBuffers = *resources->scene;
-			if (sceneBuffers.visibilityEventsProgram && sceneBuffers.visibilityReadback && sceneBuffers.fadeState && sceneBuffers.fadeRoots && resources->frustum) {
+			if (sceneBuffers.visibilityEventsProgram && sceneBuffers.visibilityReadback && Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, sceneBuffers) &&
+				resources->frustum) {
 				AddPass(a_out, PassKind::Compute, "cs.dclf.z.visibility-events", MakeVisibilityEventsPass(resources), depth);
 				AddPass(a_out, PassKind::Copy, "cs.dclf.z.visibility-readback", MakeEventReadbackPass(resources->scene, resources->scene->visibilityEvents, resources->scene->visibilityReadback), depth, PassQueue::None);
 			}

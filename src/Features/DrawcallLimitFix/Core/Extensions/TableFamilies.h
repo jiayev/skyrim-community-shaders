@@ -4,6 +4,7 @@
 // tables), the typed handle a feature reads its columns by, and the calls the tables' clear, retirement and publication make.
 
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 
 #include <array>
 #include <cstdint>
@@ -33,16 +34,57 @@ namespace DCLF::Extensions
 		std::vector<std::uint32_t> rowTag;
 		// The registration's, copied with the columns (the per-object readers read no registry).
 		std::uint32_t rowsEnd = ~0u, recordWord = ~0u;
+		std::uint32_t recordShift = 0, recordBias = 0;
+		bool recordTag = true, journaled = false;
+		// A journaled family's rows written since what its commit hook's buffer holds (Api::TableFamily::journaled): Mark marks them,
+		// TakeSent trims what the hook reported sent. Copied with every publication, kept family or not; unused otherwise.
+		ChangeJournal journal;
+
+		/** @brief A journaled family's row a_row written: marked in the journal (once a build), and the stamp moved. */
+		void Mark(std::uint32_t a_row)
+		{
+			journal.Mark(a_row);
+			NoteWrite();
+		}
+		/** @brief The journal a commit hook sends a journaled family's rows by (ForEachRun from what its buffer holds). */
+		const ChangeJournal& Journal() const { return journal; }
+		/** @brief The journal's content epoch: what a commit hook that sent every run holds (Extensions::TableFamilySent's a_contentEpoch). */
+		std::uint64_t ContentEpoch() const { return journal.ContentEpoch(); }
 
 		/** @brief The row a_object references, or kNoFamilyRow. */
 		std::uint32_t RowOf(std::uint32_t a_object) const { return a_object < objectRow.size() ? objectRow[a_object] : kNoFamilyRow; }
-		/** @brief The two record words a_object's reference is carried by (Api::TableFamily::recordWord): its row and the row's tag. */
+		/**
+		 * @brief The record's reference to a_row (Api::TableFamily::recordShift, recordBias): (row + bias) << shift, 0 when it does not
+		 * fit the bits above the shift.
+		 */
+		std::uint32_t RecordReferenceOf(std::uint32_t a_row) const
+		{
+			const std::uint64_t biased = std::uint64_t(a_row) + recordBias;
+			return biased < (std::uint64_t(1) << (32 - recordShift)) ? static_cast<std::uint32_t>(biased << recordShift) : 0u;
+		}
+		/**
+		 * @brief The two record words a_object's reference is carried by (Api::TableFamily::recordWord): its reference and the row's tag
+		 * (0 without recordTag).
+		 */
 		std::array<std::uint32_t, 2> RecordWordsOf(std::uint32_t a_object) const
 		{
 			const std::uint32_t row = RowOf(a_object);
 			if (row == kNoFamilyRow)
 				return { 0u, 0u };
-			return { row, row >= rowsEnd ? row : row < rowTag.size() ? rowTag[row] : 0u };
+			return { RecordReferenceOf(row), !recordTag ? 0u : row >= rowsEnd ? row : row < rowTag.size() ? rowTag[row] : 0u };
+		}
+		/**
+		 * @brief a_object's reference ORed into a_record's words (recordWord, and the next with a tag): the record's Core bits of the word
+		 * stay (below the shift); a word Core zeroed takes the words as they are. Nothing without a record word.
+		 */
+		void WriteRecordWords(std::uint32_t* a_record, std::uint32_t a_object) const
+		{
+			if (recordWord == ~0u)
+				return;
+			const auto words = RecordWordsOf(a_object);
+			a_record[recordWord] |= words[0];
+			if (recordTag)
+				a_record[recordWord + 1] |= words[1];
 		}
 		/** @brief Whether a_object's reference is within a_rows rows (one past them waits for their growth: ObjectFits). */
 		bool RowFits(std::uint32_t a_object, std::uint32_t a_rows) const
@@ -103,6 +145,13 @@ namespace DCLF::Extensions
 		bool Same(std::uint32_t a_family, const TableFamilies& a_other) const;
 		/** @brief a_family's stamp (0 when not held). */
 		std::uint64_t StampOf(std::uint32_t a_family) const { return a_family < entries.size() ? entries[a_family].stamp : 0; }
+		/**
+		 * @brief The scene lane, the pass's coordinator inputs (Coordinator::TakeCoordinatorInputs, first there), on the live tables: each
+		 * journaled family's sent content epoch posted since the last call (TableFamilySent, latest wins) taken, its journal trimmed to it
+		 * (ChangeJournal::BeginBuild). Whether any was (the pass then forces a publication). A family these tables do not hold yet takes
+		 * nothing (its post is dropped: no row of it was ever written).
+		 */
+		bool TakeSent();
 
 	private:
 		void MakeAll();
@@ -110,4 +159,16 @@ namespace DCLF::Extensions
 
 		std::vector<TableFamilyColumns> entries;
 	};
+
+	/**
+	 * @brief Render thread, a commit hook of a journaled family (Api::TableFamily::journaled), after it sent its rows: its buffer holds
+	 * a_id's rows at a_contentEpoch (TableFamilyColumns::ContentEpoch of the tables it sent from). Posted latest-wins, no wake: the next
+	 * pass's coordinator inputs take it (TableFamilies::TakeSent). Nothing for a family that is not journaled.
+	 */
+	void TableFamilySent(Api::TableFamilyId a_id, std::uint64_t a_contentEpoch);
+	/**
+	 * @brief Render thread, per revision (never per object): the rows the resources sized by a_family must hold for a_tables' columns
+	 * (Api::TableFamily::rows); 0 without the callback or the family.
+	 */
+	std::uint32_t TableFamilyRows(const TableFamilies& a_tables, Api::TableFamilyId a_family);
 }

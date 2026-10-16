@@ -202,7 +202,6 @@ namespace DCLF
 		std::vector<const RE::BSGeometry*> joined, left;
 		std::vector<std::shared_ptr<const PlacementPlan>> plans;
 		std::vector<ShadingItem> shading;
-		std::vector<FadeSeedItem> fadeSeeds;
 		std::vector<std::vector<FadeSeedItem>> componentSeeds;  // by coordinator component (Api::CoordinatorComponentId)
 		std::vector<const RE::NiAVObject*> switches;
 		bool switchResync = false;
@@ -218,7 +217,7 @@ namespace DCLF
 	/** @brief What a publication is made from (the tables' logs, stamps and sizes, the lookups, the catalog): a pass that changed none of it publishes nothing. */
 	struct PublishKey
 	{
-		std::array<std::uint64_t, 18> words{};
+		std::array<std::uint64_t, 17> words{};
 		std::array<std::uint64_t, 6> lookups{};
 		const void* catalog = nullptr;
 		bool operator==(const PublishKey&) const = default;

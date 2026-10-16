@@ -4,6 +4,7 @@
 // the GPU's frustum verdict. And the root rows' inputs against the nodes (CheckFadeInputs).
 
 #include "DrawsState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Events.h"
 #include "Observers.h"
@@ -28,16 +29,17 @@ namespace DCLF::Diagnostics
 		// behind a value the engine steps each frame, so only a node that held its value since the last check is judged.
 		auto& p = fadeParity;
 		++p.inputChecks;
+		const Api::RootListView list = Extensions::RootListOf(a_tables);
 		ankerl::unordered_dense::map<const void*, std::pair<float, std::uint8_t>> seen;
-		seen.reserve(a_tables.fadeRoots.size());
+		seen.reserve(list.rows.size());
 		// The rows FadeStateCS updates with: +0x109 is the seed's (the node's as the frame's values sampled it), fadeAmount the
 		// coordinator's. A root whose seed is not there yet is left out.
 		const auto* seeds = FrameValues::Get().FadeSeedsIfDone(true);
-		for (std::size_t r = 0; r < a_tables.fadeRoots.size() && r < a_tables.fadeRootNode.size(); ++r) {
+		for (std::size_t r = 0; r < list.rows.size() && r < list.nodes.size(); ++r) {
 			FadeRootStatic row;
-			if (!seeds || !MergeFadeSeed(a_tables.fadeRoots[r], seeds->data(), seeds->size(), static_cast<std::uint32_t>(r), row))
+			if (!seeds || !MergeFadeSeed(list.rows[r], seeds->data(), seeds->size(), static_cast<std::uint32_t>(r), row))
 				continue;
-			const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[r]);
+			const auto* node = static_cast<const RE::NiAVObject*>(list.nodes[r]);
 			if (!node || row.generation == 0)
 				continue;
 			++p.inputRoots;
@@ -74,15 +76,18 @@ namespace DCLF::Diagnostics
 		auto& fadeLogCursor = state.fadeLogCursor;
 		auto& fadeLogFocus = state.fadeLogFocus;
 		auto& turn = state.fadeLogTurn;
-		if (!Diagnostics::Observe().fade || (a_frame % 30) != 0 || a_tables.fadeRoots.empty())
+		if (!Diagnostics::Observe().fade || (a_frame % 30) != 0)
+			return ~0u;
+		const Api::RootListView list = Extensions::RootListOf(a_tables);
+		if (list.rows.empty())
 			return ~0u;
 		CheckFadeInputs(a_tables);
 		if (fadeReadback)
 			return ~0u;
-		const auto count = static_cast<std::uint32_t>(a_tables.fadeRoots.size());
+		const auto count = static_cast<std::uint32_t>(list.rows.size());
 		// The window starts at a live root: the slot table grows and frees rows, and FadeStateCS logs nothing for an empty one (a
 		// window of empty rows read back the last log written, and checked nothing). Every other window: the set parity's focus.
-		const auto live = [&](std::uint32_t a_row) { return a_row < count && a_tables.fadeRoots[a_row].generation != 0 && a_tables.fadeRoots[a_row].object != ~0u; };
+		const auto live = [&](std::uint32_t a_row) { return a_row < count && list.rows[a_row].generation != 0 && list.rows[a_row].object != ~0u; };
 		std::uint32_t base = ~0u;
 		if (const std::uint32_t focus = fadeLogFocus.exchange(~0u, std::memory_order_relaxed); (++turn & 1) && live(focus))
 			base = focus;
@@ -96,7 +101,7 @@ namespace DCLF::Diagnostics
 		FadeReadback readback;
 		readback.frame = a_frame;
 		readback.base = base;
-		readback.roots.assign(a_tables.fadeRoots.begin() + base, a_tables.fadeRoots.begin() + std::min(count, base + kFadeLogEntries));
+		readback.roots.assign(list.rows.begin() + base, list.rows.begin() + std::min(count, base + kFadeLogEntries));
 		// The rows FadeStateCS updates with: the seeds' node values with the coordinator's inputs (MergeFadeSeed).
 		if (const auto* seeds = FrameValues::Get().FadeSeedsIfDone(true))
 			for (std::size_t i = 0; i < readback.roots.size(); ++i)
@@ -112,13 +117,13 @@ namespace DCLF::Diagnostics
 			readback.nodeRadii.assign(readback.roots.size(), 0.0f);
 			readback.nodeFlags.assign(readback.roots.size(), 0u);
 			for (std::size_t i = 0; i < readback.roots.size(); ++i) {
-				if (const auto* root = base + i < a_tables.fadeRootNode.size() ? static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i]) : nullptr)
+				if (const auto* root = static_cast<const RE::NiAVObject*>(list.NodeOf(static_cast<std::uint32_t>(base + i))))
 					readback.rootPrograms[i] = portals.ProgramOf(root);
 				const auto object = readback.roots[i].object;
 				const auto* entryNode = object < a_tables.sunEntryNode.size() ? a_tables.sunEntryNode[object] : nullptr;
 				const float entry = entryNode ? entryNode->worldBound.radius : -1.0f;
 				readback.radii[i] = entry >= 0.0f && entry < 1e30f ? entry : readback.roots[i].radius;
-				if (const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i])) {
+				if (const auto* node = static_cast<const RE::NiAVObject*>(list.nodes[base + i])) {
 					readback.nodeRadii[i] = node->worldBound.radius;
 					readback.nodeFlags[i] = node->GetFlags().underlying();
 				}
@@ -131,7 +136,7 @@ namespace DCLF::Diagnostics
 		const auto* snapshot = CutObservers::NodeSnapshot(a_frame);
 		for (std::size_t i = 0; i < readback.roots.size(); ++i) {
 			const auto bits = readback.roots[i].bits;
-			const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i]);
+			const auto* node = static_cast<const RE::NiAVObject*>(list.nodes[base + i]);
 			// A root DCLF writes (kFadeRootWritten: every listed root) has no engine OnVisible to compare.
 			if (node && snapshot && base + i < snapshot->size() && !(bits & kFadeRootWritten)) {
 				readback.nodes[i] = (*snapshot)[base + i];
@@ -163,10 +168,10 @@ namespace DCLF::Diagnostics
 			return;
 		auto* context = globals::d3d::context;
 		auto& readback = *fadeReadback;
-		auto& buffers = *a_resources->scene;
+		const auto* fades = Draws::FadeSceneOf(*a_resources->scene);
 		if (!readback.log) {
 			// After the depth epoch that logged: the log into a staging buffer, read three frames later.
-			if (!buffers.fadeLog || buffers.fadeLogBase != readback.base || buffers.fadeFrameNumber != readback.frame) {
+			if (!fades || !fades->fadeLog || fades->fadeLogBase != readback.base || fades->fadeFrameNumber != readback.frame) {
 				fadeReadback.reset();
 				return;
 			}
@@ -177,7 +182,7 @@ namespace DCLF::Diagnostics
 			sourceDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 			sourceDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 			sourceDesc.StructureByteStride = sizeof(std::uint32_t);
-			const auto source = RenderGraphRuntime::Get().WrapBuffer(*buffers.fadeLog, sourceDesc);
+			const auto source = RenderGraphRuntime::Get().WrapBuffer(*fades->fadeLog, sourceDesc);
 			D3D11_BUFFER_DESC desc{};
 			desc.ByteWidth = bytes;
 			desc.Usage = D3D11_USAGE_STAGING;
@@ -255,7 +260,7 @@ namespace DCLF::Diagnostics
 							const int port = PortalViews::Visible(done.programs, list, entry.centre, done.radii[i], done.nodeFlags[i], why);
 							{
 								// How far below its listed entry the root is (the cut lists entries; the engine culls a child after its parents).
-								const auto* node = static_cast<const RE::NiAVObject*>(Scene::FrameView::Get().GetTables().fadeRootNode[entry.root]);
+								const auto* node = static_cast<const RE::NiAVObject*>(Extensions::RootListOf(Scene::FrameView::Get().GetTables()).nodes[entry.root]);
 								std::uint32_t depth = 0;
 								const RE::NiAVObject* at = node;
 								while (at && !PrimaryCull::Get().IsEntry(at))

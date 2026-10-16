@@ -17,6 +17,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
@@ -165,8 +166,8 @@ namespace DCLF
 		FrameValues::Get().SetRootViewClaims(rootViewsCovered ? view.FrameClaims() : nullptr);
 		// What the next builds ahead take from the frame.
 		draws.PostAheadContext();
-		// The stood-in fade roots' write-back and the visibility readbacks: tasks on DCLF's executor, never joined.
-		draws.KickFadeWriteBack();
+		// The root states' task (the stood-in fade roots' write-back) and the visibility readbacks: tasks on DCLF's executor, never joined.
+		Extensions::RootStatesKick();
 		draws.KickVisibilityReadback();
 		// What the coordinator's passes asked of the render thread, served, and its captures posted for them (not while a load screen is
 		// up): the switch catch-ups (engine writes, before the culls), the category capture, the mirror's capture requests, tree LOD's mirror.
@@ -188,8 +189,7 @@ namespace DCLF
 		// slots the installed publications carried, and waited for by the GPU; the shading fields captured here (Integrations/AdvancedSkin's
 		// wetness: Skin's cache is the render thread's). The scene payload is not the frame's to send: the installed snapshot carries it,
 		// ready (PayloadVersions).
-		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), Extensions::CaptureShadingFields(view), view.TakeFadeSeeds(),
-			view.FrameGlobalsOfFrame());
+		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), Extensions::CaptureShadingFields(view), view.FrameGlobalsOfFrame());
 		// Under the parities the scene pass runs here, inline, so the render thread's observers keep their placement; the normal path
 		// never waits for a pass.
 		if (inlinePass)

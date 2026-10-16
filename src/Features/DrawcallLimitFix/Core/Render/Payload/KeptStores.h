@@ -14,7 +14,7 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief What the named versions of the scene's buffers hold (the per-object buffers' objects): an object past them - its per-object
-	 * rows, its table families' or fade root rows, its vertex stream row's vertices - waits for the requirement that grows them, drawing nothing and
+	 * rows, its table families' rows (the fade roots' among them), its vertex stream row's vertices - waits for the requirement that grows them, drawing nothing and
 	 * culling nothing (ObjectFits). The payload's parts are not among them: it holds every row of its publication.
 	 */
 	struct SceneFit
@@ -22,8 +22,6 @@ namespace DCLF::Draws
 		std::uint32_t objects = ~0u;
 		// The vertex stream's vertices (its scene resources' fit: Features/Faces' face positions), unbounded without one.
 		std::uint32_t streamVertices = ~0u;
-		// The fade root rows a draw reads by its slot (none: unbounded).
-		std::uint32_t fadeRoots = ~0u;
 		// The table families' rows a draw reads by its reference, by registration (Extensions::TableFamilyColumns::objectRow): what the
 		// features' scene resources hold of them (their fit: Features/TreeWind's wind entries), unbounded without one.
 		std::array<std::uint32_t, Extensions::kTableFamilySlots> familyRows = kUnboundedFamilyRows;
