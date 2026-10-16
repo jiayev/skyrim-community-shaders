@@ -1,9 +1,11 @@
 // ReflectionFaces: the water reflection update, add-root and face render hooks (render thread).
 
-// ReflectionView.h first (Internal.h): volk must precede every Vulkan header of the translation unit.
+// ReflectionView.h first (Epochs/ViewEpoch.h): volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 
 namespace DCLF::Features::Reflection::ReflectionFaces
 {

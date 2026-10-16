@@ -2,12 +2,40 @@
 
 // Host sides of the event lists the depth epoch's GPU work appends to (the visibility events; Features/Fades' write-back is another),
 // read back without a stall. The render thread arms and harvests, a task on DCLF's executor decodes, the main thread makes the engine
-// writes at Main::Update's entry. Included by Internal.h, in its order.
+// writes at Main::Update's entry. Self-contained (features include it); Internal.h includes it in its order.
 
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
+
+#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <Render/LatchBlock.h>
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <Resources/Buffers/Buffer.h>
+#include <rhi.h>
+
+#include <ankerl/unordered_dense.h>
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace DCLF
+{
+	struct EntrySpace;
+	struct SceneTables;
+}
 
 namespace DCLF::Draws
 {
+	struct SceneBuffers;
+
 	/**
 	 * @brief An event list the depth epoch appends to, read back without a stall. Its revision-driven readback pass records a fixed
 	 * copy of the list into its frame slot's host buffer. The depth commit first harvests the slot's last execution (the host has
@@ -97,6 +125,9 @@ namespace DCLF::Draws
 			return false;
 		}
 	};
+
+	/** @brief An event ring's copy to the host (Passes/Readbacks.cpp): a_events into a_ring's frame slot's staging buffer. */
+	std::shared_ptr<org::RenderPass> MakeEventReadbackPass(std::shared_ptr<SceneBuffers> a_scene, Versioned a_events, std::shared_ptr<HostEventRing> a_ring);
 
 	/**
 	 * @brief The visibility readback (drawcall-limit-fix.md, "visibility events", "kAccumulated written by DCLF"): the

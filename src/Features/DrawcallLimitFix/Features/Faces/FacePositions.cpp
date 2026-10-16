@@ -2,11 +2,22 @@
 // vertex stream's first; its graph registration, each revision's requirement from the stream rows and its fit), and the commits' uploads
 // of the face shapes' rows into it.
 
-// Internal.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Uploads.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+
+#include <Resources/Buffers/Buffer.h>
+#include <rhi.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
 
 namespace DCLF::Features::Faces
 {

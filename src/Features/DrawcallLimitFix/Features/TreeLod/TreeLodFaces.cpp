@@ -3,9 +3,32 @@
 // hold with the tables. The lists, rows and latch are Core's view machinery's (ViewResources' faceRows and faceLists at the family's
 // slot, ViewLatchLayout), sized by the faces' data.
 
+// ViewEpoch.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ViewEpoch.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/FamilySlots.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Epochs.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include <Render/LatchBlock.h>
+#include <Render/RenderGraph/RenderGraph.h>
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <rhi.h>
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <vector>
 
 namespace DCLF::Draws
 {

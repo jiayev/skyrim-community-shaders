@@ -1,6 +1,15 @@
 #pragma once
 
-// IndirectDraws' versioned buffers (immutable inputs). Included by Internal.h, after the headers these declarations use.
+// IndirectDraws' versioned buffers (immutable inputs). Self-contained (features include it); Internal.h includes it in its order.
+
+#include <ORGModuleServices/GrowableBufferSet.h>
+#include <ORGModuleServices/GrowableBufferTypes.h>
+#include <ORGModuleServices/GrowthPolicy.h>
+#include <Resources/Buffers/Buffer.h>
+#include <Resources/Buffers/VersionedBuffer.h>
+
+#include <cstdint>
+#include <memory>
 
 namespace DCLF::Draws
 {

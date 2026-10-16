@@ -256,7 +256,7 @@ namespace DCLF
 		 * submission - each over the view's slot, so a feature's work and epochs reproduce Core's own. Render thread unless said otherwise;
 		 * nothing before the implementation exists.
 		 */
-		/** @brief The view's frame state (Impl/Views.h; null before the implementation exists): its targets, resources, coverage. */
+		/** @brief The view's frame state (Epochs/ViewEpoch.h; null before the implementation exists): its targets, resources, coverage. */
 		const ViewEpochState* ViewState(Api::EngineView a_view) const;
 		/** @brief The main pass's captured formats (null before the implementation exists): what a view's targets follow. */
 		const TargetFormats* MainTargetFormats() const;

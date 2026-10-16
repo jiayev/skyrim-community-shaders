@@ -1,63 +1,11 @@
 #pragma once
 
-// IndirectDraws::Impl's view state (ImplViews, a base of Impl): each view slot's frame state (ViewEpochState, which the view engine's
-// calls hand the view features: IndirectDraws::ViewState).
+// IndirectDraws::Impl's view state (ImplViews, a base of Impl): each view slot's frame state (ViewEpochState, Epochs/ViewEpoch.h, which
+// the view engine's calls hand the view features: IndirectDraws::ViewState).
 // Part of IndirectDraws' implementation: included by Impl.h, before the struct.
 
 namespace DCLF
 {
-	/**
-	 * @brief A view's frame state (ViewEpoch.cpp and the view engine, ViewEngine.cpp; render thread). The scene lane reads only the
-	 * published LaneTargets and forwardCompatible, never `targets`. `covered` is decided at the frame's start, before the engine draws
-	 * the view (ImplViews::ViewCovered reads it).
-	 */
-	struct ViewEpochState
-	{
-		ForwardTargets targets;
-		std::atomic<std::uint64_t> laneColours{ 0 }, laneDepth{ 0 };  // colour in the low 32 bits, colour2 in the high
-		void PublishTargets()
-		{
-			const std::uint64_t colours = std::uint64_t(static_cast<std::uint32_t>(targets.colour)) | (std::uint64_t(static_cast<std::uint32_t>(targets.colour2)) << 32);
-			if (laneColours.load(std::memory_order_relaxed) != colours)
-				laneColours.store(colours, std::memory_order_release);
-			if (laneDepth.load(std::memory_order_relaxed) != static_cast<std::uint64_t>(targets.depth))
-				laneDepth.store(static_cast<std::uint64_t>(targets.depth), std::memory_order_release);
-		}
-		ForwardTargets LaneTargets() const
-		{
-			const std::uint64_t colours = laneColours.load(std::memory_order_acquire);
-			ForwardTargets out;
-			out.colour = static_cast<DXGI_FORMAT>(colours & 0xFFFFFFFFu);
-			out.colour2 = static_cast<DXGI_FORMAT>(colours >> 32);
-			out.depth = static_cast<DXGI_FORMAT>(laneDepth.load(std::memory_order_acquire));
-			return out;
-		}
-		std::vector<rhi::PipelineHandle> slotPipelines;
-		std::shared_ptr<ViewResources> resources;
-		bool setupFailed = false;
-		// Until the first coverage decided it (coverageDecided), the view's coveredInitially stands for it (ImplViews::ViewCovered).
-		bool covered = false;
-		bool coverageDecided = false;
-		// The engine's viewport depth range for the view (a revision input: the shapes' viewport); 0 until the view's work sets one
-		// (IndirectDraws::SetViewDepthRange), the shape's (Api::ViewShape::depthRange) until then.
-		float depthRange = 0.0f;
-		// Whether the main set's forward pipelines can draw into the view's forward part (its depth format the main pass's), published
-		// for the slot readiness (IndirectDraws::ViewSlotReady).
-		std::atomic<bool> forwardCompatible{ false };
-		// A trees view's draw families per face (Api::ViewShape::trees, the view engine's: IndirectDraws::ResolveViewFaces,
-		// DecideViewFaces), by family: its forward pipeline for the view's targets; the commit's row (faces.row's: Impl::ViewFaceRows,
-		// and the decision's query) and a face's row and list header (faces.face's: CommitView), sized once at the family's faces'.
-		struct FamilyFaces
-		{
-			rhi::PipelineHandle pipeline{};
-			bool ready = false;
-			std::vector<std::byte> row, faceRow, faceHeader;
-		};
-		std::array<FamilyFaces, Extensions::kDrawFamilies> faces;
-		// By family, whether the faces' draws are DCLF's this frame (PassCapture::SetViewFamilyOwned; the roots they own: ViewRoots.cpp).
-		std::array<bool, Extensions::kDrawFamilies> facesOwned{};
-	};
-
 	// The views' frame state (ViewEpoch.cpp, the view engine): each view slot's, and their revision pipelines.
 	struct ImplViews
 	{

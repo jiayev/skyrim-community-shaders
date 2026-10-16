@@ -1,7 +1,13 @@
 #pragma once
 
 // IndirectDraws' capacities and the layouts the GPU reads, which must match the HLSL (BuildDrawsCS, Lighting.hlsl's DCLF paths).
-// Included by Internal.h, after the headers these declarations use.
+// Self-contained (features include it); Internal.h includes it in its order.
+
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <span>
 
 namespace DCLF::Draws
 {
@@ -185,6 +191,9 @@ namespace DCLF::Draws
 	{
 		return (kVisibilityEventHeaderWords + std::uint64_t(a_events) * 4) * sizeof(std::uint32_t);
 	}
+
+	// A stream vertex (the vertex stream: Payload/Geometry.h): float4.
+	constexpr std::uint32_t kStreamVertexBytes = 16;
 
 
 	// BuildDrawsCS.hlsl's inputs (byte-address buffers).

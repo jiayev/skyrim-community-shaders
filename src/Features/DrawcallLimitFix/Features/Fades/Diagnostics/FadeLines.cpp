@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Engine.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 
 #include <algorithm>
 #include <string>

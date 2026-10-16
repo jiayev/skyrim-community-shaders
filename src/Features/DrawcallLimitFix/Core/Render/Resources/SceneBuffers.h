@@ -1,12 +1,33 @@
 #pragma once
 
 // The scene's GPU tables shared by every epoch (SceneBuffers: the vertex stream, the features' scene resources, readback lists, the draw
-// families' published pipelines), the root states' and cull bindings' readers (render thread). Included by Internal.h.
+// families' published pipelines), the root states' and cull bindings' readers (render thread). Self-contained (features include it);
+// Internal.h includes it in its order.
 
+// volk must precede every Vulkan header in this translation unit (Helpers.h: DrawPipelinesRhi.h's FamilyPipelines).
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include <ORGModuleServices/GrowableBufferTypes.h>
+#include <Resources/Buffers/Buffer.h>
+
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace DCLF::Draws
 {
+	struct IndexPool;
+
 	/**
 	 * @brief The scene's tables, each a buffer of the scene's set (SceneBufferSet): every capacity a commit, build or pass reads is
 	 * its named version's units, which the revision producer requires to hold the tables (RequireSceneTables).

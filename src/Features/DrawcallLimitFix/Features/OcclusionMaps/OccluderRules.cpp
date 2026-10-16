@@ -1,8 +1,6 @@
 // The maps' occluder rules (their contributions' technique): Skylighting::OcclusionTechnique's and the precipitation mask's, from the
 // walked object's records (Api::OccluderLeaf); and the maps' camera and accumulator, the precipitation accumulator's.
 
-// Internal.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/Skylighting.h"

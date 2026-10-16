@@ -1,9 +1,21 @@
 // Tree LOD's draw family (Api::DrawFamily::TreeInstances, dclf-lod.md): the mirror's drain, the frame's decision and its program source,
 // and its draws in the main passes (the depth segment's two phases and the colour segment); a trees view's faces are TreeLodFaces.cpp's.
 
+// volk must precede every Vulkan header of the translation unit (DrawPipelinesRhi.h's FamilyPipelines).
+#include <rhi_interop_vulkan.h>
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+
+#include "ShaderCache.h"
+#include <Render/RenderGraph/RenderGraph.h>
+#include <rhi.h>
+
+#include <cstdint>
+#include <span>
+#include <vector>
 
 namespace DCLF::Features::TreeLod
 {

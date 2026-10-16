@@ -1,7 +1,18 @@
 #pragma once
 
 // Latched copies: the per-frame values a commit writes into a latch block and its epoch's first pass copies to their targets.
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// Self-contained (features include it); Internal.h includes it in its order.
+
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+
+#include <Render/LatchBlock.h>
+#include <Resources/Buffers/Buffer.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <utility>
+#include <vector>
 
 namespace DCLF::Draws
 {

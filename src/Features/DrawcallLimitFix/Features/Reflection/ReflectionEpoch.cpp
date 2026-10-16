@@ -5,6 +5,17 @@
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
 
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/SceneSet.h"
+
+#include <algorithm>
+#include <array>
+#include <string>
+
 namespace DCLF::Features::Reflection
 {
 	namespace
@@ -42,7 +53,7 @@ namespace DCLF::Features::Reflection
 		// Not DCLF's this frame (no claims, or the cube was imported since the graph was built): the engine rendered the faces whole.
 		if (!draws.ViewCovered(kView))
 			return skip(1);
-		std::array<ViewFace, kFaces> views{};
+		std::array<Draws::ViewFace, kFaces> views{};
 		for (std::uint32_t f = 0; f < kFaces; ++f)
 			if (faces[f].captured)
 				views[f] = { true, std::span(faces[f].perFrame.data(), faces[f].perFrameBytes), faces[f].viewProj, faces[f].eye };

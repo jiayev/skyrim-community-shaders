@@ -1,8 +1,24 @@
 // Tree LOD's passes: its cull (TreeLodCullCS) in the depth segment's two phases, right before each phase's depth draw, and its list
 // counts' readback once both phases are done, from the tables (the scene resources) and the depth segment's latch.
 
+// Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <Render/LatchBlock.h>
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <rhi.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <vector>
 
 namespace DCLF::Draws
 {
@@ -28,8 +44,10 @@ namespace DCLF::Draws
 	class TreeLodCullPass final : public org::TypedRenderGraphPass<TreeLodCullPass, TreeLodCullPrepared, TreeLodCullBindings>
 	{
 	public:
-		TreeLodCullPass(std::shared_ptr<Resources> a_resources, std::shared_ptr<const Features::TreeLod::TreeLodTables> a_tables, std::uint32_t a_phase) :
-			resources(std::move(a_resources)), tables(std::move(a_tables)), phase(a_phase) {}
+		// a_segment: its epoch's (the depth epoch's: the PassContext it was made with).
+		TreeLodCullPass(std::shared_ptr<Resources> a_resources, std::shared_ptr<const Features::TreeLod::TreeLodTables> a_tables, std::uint32_t a_phase,
+			RenderGraphRuntime::Segment a_segment) :
+			resources(std::move(a_resources)), tables(std::move(a_tables)), phase(a_phase), segment(a_segment) {}
 
 		TreeLodCullBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -48,7 +66,7 @@ namespace DCLF::Draws
 		// The recording depends on the tables' versions (a growth changes views and dispatch) and the depth segment's shape.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
+			const auto frame = CurrentFrame(a_preparation, segment);
 			for (const auto* table : { &tables->shapes, &tables->instances, &tables->visible })
 				a_out.push_back(NamedSerial(a_preparation, *table));
 			a_out.push_back(frame ? frame->generation : 0);
@@ -57,7 +75,7 @@ namespace DCLF::Draws
 		TreeLodCullPrepared Prepare(const TreeLodCullBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			TreeLodCullPrepared prepared{};
-			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
+			const auto frame = CurrentFrame(a_preparation, segment);
 			// The shape slots every table the cull reads holds (the revision's versions).
 			const std::uint64_t shapes = std::min({ NamedUnitsOf(a_preparation, tables->shapes), NamedUnitsOf(a_preparation, tables->instances),
 				NamedUnitsOf(a_preparation, tables->visible) });
@@ -102,6 +120,7 @@ namespace DCLF::Draws
 		std::shared_ptr<Resources> resources;
 		std::shared_ptr<const Features::TreeLod::TreeLodTables> tables;
 		std::uint32_t phase = 1;
+		RenderGraphRuntime::Segment segment;
 	};
 
 	struct TreeLodReadbackBindings
@@ -188,7 +207,7 @@ namespace DCLF::Features::TreeLod
 
 		std::shared_ptr<org::RenderPass> MakeCullPhaseOne(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::TreeLodCullPass>(a_context.Main(), a_context.State<TreeLodTables>(), 1);
+			return std::make_shared<Draws::TreeLodCullPass>(a_context.Main(), a_context.State<TreeLodTables>(), 1, a_context.segment);
 		}
 
 		// Phase 2's retest only with the HZB rebuilt this frame (the depth epoch's phase 2 block).
@@ -196,7 +215,7 @@ namespace DCLF::Features::TreeLod
 		{
 			if (!a_context.PhaseTwo())
 				return nullptr;
-			return std::make_shared<Draws::TreeLodCullPass>(a_context.Main(), a_context.State<TreeLodTables>(), 2);
+			return std::make_shared<Draws::TreeLodCullPass>(a_context.Main(), a_context.State<TreeLodTables>(), 2, a_context.segment);
 		}
 
 		std::shared_ptr<org::RenderPass> MakeCounts(const Api::PassContext& a_context)

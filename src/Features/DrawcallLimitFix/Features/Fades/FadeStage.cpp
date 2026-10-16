@@ -2,8 +2,24 @@
 // (FadeStateCS), on the compute queue beside the depth epoch's raster work, then their write-back events' copy to the host.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
-#include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"  // MakeEventReadbackPass
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"  // MakeEventReadbackPass
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <Render/LatchBlock.h>
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace DCLF::Draws
 {
@@ -26,8 +42,9 @@ namespace DCLF::Draws
 	class FadeStatePass final : public org::TypedRenderGraphPass<FadeStatePass, FadeStatePrepared, FadeStateBindings>
 	{
 	public:
-		explicit FadeStatePass(std::shared_ptr<Resources> a_resources) :
-			resources(std::move(a_resources)), fades(Features::Fades::SharedSceneOf(*resources->scene)) {}
+		// a_segment: its epoch's (the depth epoch's: the PassContext it was made with).
+		FadeStatePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment) :
+			resources(std::move(a_resources)), fades(Features::Fades::SharedSceneOf(*resources->scene)), segment(a_segment) {}
 
 		FadeStateBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -55,7 +72,7 @@ namespace DCLF::Draws
 		// The recording depends on the buffers' versions and the depth shape; counts are in the uploaded FadeFrame row.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
+			const auto frame = CurrentFrame(a_preparation, segment);
 			const auto& scene = *fades;
 			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &scene.fadeStatesOut[0], &scene.fadeStatesOut[1],
 					 &Extensions::CullBindingBuffer(Api::CullBindingSlot::Programs, *resources->scene), &scene.fadeRootPrograms,
@@ -68,7 +85,7 @@ namespace DCLF::Draws
 		{
 			FadeStatePrepared prepared{};
 			const auto& scene = *fades;
-			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
+			const auto frame = CurrentFrame(a_preparation, segment);
 			// The root slots every buffer the pass reads or writes by root holds (the revision's versions: one unit group).
 			std::uint64_t roots = ~0ull;
 			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &scene.fadeStatesOut[0], &scene.fadeStatesOut[1], &scene.fadeRootPrograms, &scene.fadeAnimated })
@@ -120,6 +137,7 @@ namespace DCLF::Draws
 	private:
 		std::shared_ptr<Resources> resources;
 		std::shared_ptr<const Features::Fades::FadeScene> fades;  // Fades' scene resources (the pass's setup required them)
+		RenderGraphRuntime::Segment segment;
 	};
 }
 
@@ -138,7 +156,7 @@ namespace DCLF::Features::Fades
 
 		std::shared_ptr<org::RenderPass> MakeFadeStateStage(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::FadeStatePass>(a_context.Main());
+			return std::make_shared<Draws::FadeStatePass>(a_context.Main(), a_context.segment);
 		}
 
 		// Its write-back events' copy: only with the list and its staging sets.

@@ -1,10 +1,23 @@
 #pragma once
 
 // Tree wind's scene resources (Api::SceneResources): its buffers and the commits' frame state, held with the scene's tables. Included
-// first by the feature's sources that use them (Internal.h first: volk must precede every Vulkan header of the translation unit).
+// by the feature's sources that use them.
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include <ORGModuleServices/GrowableBufferTypes.h>
+#include <Resources/Buffers/Buffer.h>
+
+#include <array>
+#include <cstdint>
+#include <memory>
+
+namespace DCLF::Draws
+{
+	struct SceneBuffers;
+}
 
 namespace DCLF::Features::TreeWind
 {

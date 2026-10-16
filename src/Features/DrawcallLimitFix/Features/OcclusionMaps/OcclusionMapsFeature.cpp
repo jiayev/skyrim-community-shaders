@@ -2,8 +2,6 @@
 // toggles, each map's contribution (its bits, occluder rule, cull size test, target, labels, camera, accumulator and reference parity),
 // their report lines and parity.
 
-// Internal.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"

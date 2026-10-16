@@ -4,7 +4,10 @@
 
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPersonView.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"

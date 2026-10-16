@@ -6,7 +6,17 @@
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Uploads.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
 #include <algorithm>
 #include <numeric>

@@ -2,7 +2,43 @@
 
 // The main epochs' graph resources, bindings, bucket plans, shape inputs and pass statistics. Render thread's; their buffers grow
 // to the revision producer's requirements (SceneBufferSet), its layout (MainLayout) derived from the scene's draw bound.
-// Included by Internal.h.
+// Self-contained (features include it); Internal.h includes it in its order.
+
+// volk must precede every Vulkan header in this translation unit (FrameLayout.h first).
+#include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Reports/Draws.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include <Render/LatchBlock.h>
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <Resources/Buffers/Buffer.h>
+#include <Resources/ExternalTextureResource.h>
+#include <Resources/PixelBuffer.h>
+#include <rhi.h>
+
+#include <d3d11.h>
+#include <winrt/base.h>
+
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <vector>
+
+namespace DCLF
+{
+	struct SceneTables;
+}
 
 namespace DCLF::Draws
 {

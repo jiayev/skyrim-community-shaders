@@ -4,7 +4,9 @@
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindTables.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
 namespace DCLF::Features::TreeWind
 {

@@ -1,10 +1,51 @@
 #pragma once
 
 // A commit's uploads on the render thread: staged (CommitUploads) or latched into the epoch's latch block (LatchedUploads).
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// Self-contained (features include it); Internal.h includes it in its order.
+
+#include "Features/DrawcallLimitFix/Core/Gpu/FrameData.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+
+#include <Render/LatchBlock.h>
+#include <Render/Runtime/IUploadService.h>
+#include <Render/Runtime/StagedUploadBatch.h>
+#include <Render/Runtime/UploadServiceAccess.h>
+#include <Resources/Buffers/Buffer.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace DCLF::Draws
 {
+	/**
+	 * @brief Where a write at a_offset into the frame-constants buffer goes, named for FrameData: a stage's register slot, the
+	 * shared light block, the lighting slot's parts (the frame lighting, the LOD fades' inputs, the foliage record's) or the record.
+	 * Resources/FrameSlots.cpp.
+	 */
+	std::string FrameConstantsPart(std::uint64_t a_offset);
+	/** @brief FrameData's name of a write to a_target at a_offset, as a_route ("latched", "staged"). */
+	template <class Target>
+	std::string FrameDataWhere(std::string_view a_route, const Target& a_target, std::uint64_t a_offset)
+	{
+		std::string where(a_route);
+		where += ": ";
+		if constexpr (requires { a_target->GetName(); }) {
+			const auto& name = a_target ? a_target->GetName() : std::string();
+			if (name == "cs.dclf.frame-constants")
+				return where + FrameConstantsPart(a_offset);
+			where += name.empty() ? std::string("unnamed") : name;
+		} else {
+			where += "other";
+		}
+		return where;
+	}
+
 	/**
 	 * @brief A released batch from a pool (neither a payload nor the upload service still holds it), reset, or a new one
 	 * of a_pageSize pages added to the pool.

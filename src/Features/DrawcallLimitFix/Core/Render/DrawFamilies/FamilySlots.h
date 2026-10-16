@@ -9,7 +9,21 @@
 // scene's (SceneBuffers::familyPipelines). A new family is the enum value, its slot here and its lane slot, then the feature's registration
 // (Extensions::DrawFamilies). A family's GPU layout is its feature's (TreeInstances': Features/TreeLod/TreeInstancesLayout.h), sized for
 // Core by its faces' data.
-// Part of IndirectDraws' implementation: included by Internal.h after Views/ViewSlots.h.
+// Self-contained (features include it); Internal.h includes it after Views/ViewSlots.h.
+
+// volk must precede every Vulkan header in this translation unit (SceneBuffers.h first).
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
+#include "Features/DrawcallLimitFix/Api/DrawFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawFamilyLaneSlots.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 
 namespace DCLF::Draws
 {

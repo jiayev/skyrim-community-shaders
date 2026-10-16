@@ -1,15 +1,35 @@
 #pragma once
 
 // Fades' render side: its scene resources (FadeScene: FadeStateCS's buffers, the root programs, the write-back ring, held with the scene's
-// tables), the write-back's host side, and the parts RegisterRender registers (FadeRender.cpp), each in its own source. Included first
-// by the feature's sources that use them (Internal.h first: volk must precede every Vulkan header of the translation unit).
+// tables), the write-back's host side, and the parts RegisterRender registers (FadeRender.cpp), each in its own source. Included by the
+// feature's sources that use them.
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Api/Feature.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeLayout.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRecords.h"
 
+#include "RenderGraph/ComputeProgram.h"
+#include <ORGModuleServices/GrowableBufferTypes.h>
+#include <Resources/Buffers/Buffer.h>
+
+#include <array>
+#include <atomic>
+#include <cstdint>
 #include <functional>
+#include <memory>
+#include <vector>
+
+namespace DCLF
+{
+	struct SceneTables;
+	namespace Draws
+	{
+		struct SceneBuffers;
+	}
+}
 
 namespace DCLF::Features::Fades
 {

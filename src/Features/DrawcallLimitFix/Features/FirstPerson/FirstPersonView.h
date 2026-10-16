@@ -4,9 +4,15 @@
 // what Core keeps of the view's slot (IndirectDraws::ViewState: its targets, resources, coverage, depth range). Render thread, and the
 // report. Included by the feature's view and epoch sources.
 
-// Internal.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+// ViewEpoch.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ViewEpoch.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
+#include "Features/DrawcallLimitFix/Api/Views.h"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
 
 namespace DCLF::Features::FirstPerson
 {
@@ -23,10 +29,10 @@ namespace DCLF::Features::FirstPerson
 		bool latch = false;
 		std::uint32_t latchFrame = ~0u;
 		// The first-person camera as the engine set it up (FUN_1414cb020), in world space; last frame's for the motion vectors.
-		std::array<std::byte, kViewBlockBytes> perFrame{};
+		std::array<std::byte, Draws::kViewBlockBytes> perFrame{};
 		std::array<float, 16> viewProj{};
 		RE::NiPoint3 eye;
-		PreviousCamera previous;
+		Draws::PreviousCamera previous;
 		bool havePrevious = false;
 		// The frame whose depth epoch built the sequences the colour epoch draws.
 		std::uint32_t depthFrame = ~0u;

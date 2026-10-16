@@ -3,9 +3,19 @@
 
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindTables.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Uploads.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
 
 namespace DCLF::Features::TreeWind
 {

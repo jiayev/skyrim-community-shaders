@@ -2,7 +2,8 @@
 // live toggles and the "light limit fix" classify input (whether Light Limit Fix is loaded).
 
 #include "Features/DrawcallLimitFix/Features/Effects/EffectDescriptors.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"

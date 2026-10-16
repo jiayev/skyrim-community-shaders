@@ -4,9 +4,18 @@
 // counters, beside what Core keeps of the view's slot (IndirectDraws::ViewState: its targets, resources, coverage, slot pipelines and the
 // faces' tree LOD); and the faces' camera parity's counts. Render thread, and the report. Included by the feature's sources.
 
-// Internal.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+// ViewEpoch.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ViewEpoch.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
+#include "Features/DrawcallLimitFix/Api/Views.h"
+
+#include <d3d11.h>
+#include <winrt/base.h>
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <string>
 
 namespace DCLF::Features::Reflection
 {
@@ -20,7 +29,7 @@ namespace DCLF::Features::Reflection
 		struct Face
 		{
 			bool captured = false;
-			std::array<std::byte, kViewBlockBytes> perFrame{};
+			std::array<std::byte, Draws::kViewBlockBytes> perFrame{};
 			std::uint32_t perFrameBytes = 0;
 			std::array<float, 16> viewProj{};
 			RE::NiPoint3 eye;

@@ -1,7 +1,18 @@
 #pragma once
 
 // A scene revision's epochs (the schedule's, resolved) and their traits, and the views drawn by epochs of their own.
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// Self-contained (features include it); Internal.h includes it in its order.
+
+#include "Features/DrawcallLimitFix/Api/Epochs.h"
+#include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Api/Views.h"
+
+#include "RenderGraph/RenderGraphRuntime.h"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
 
 namespace DCLF::Draws
 {
@@ -15,7 +26,7 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief The views drawn by epochs of their own (ViewEpoch.cpp): the reflection's faces and the first-person view. The engine views
-	 * (Api/Views.h, included before by Internal.h), in Core's slot order (Views/ViewSlots.h).
+	 * (Api/Views.h), in Core's slot order (Views/ViewSlots.h).
 	 */
 	using ViewKind = Api::EngineView;
 	constexpr std::size_t kViews = static_cast<std::size_t>(ViewKind::Count);

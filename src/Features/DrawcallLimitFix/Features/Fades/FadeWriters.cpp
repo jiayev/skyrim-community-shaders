@@ -2,7 +2,7 @@
 // their batch at the list jobs' end (render thread), the fade OnVisibles without their stores (cull threads), their stand-in observer
 // and installs; and the root test's fade-out distance.
 
-#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"  // first: the write-back's WriteFadeStores (Render/Internal.h)
+#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"  // the write-back's WriteFadeStores
 #include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"

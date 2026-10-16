@@ -3,8 +3,8 @@
 // where Core holds the property (the capture's read window, FrameValues' shading items).
 
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
 
 #include <algorithm>

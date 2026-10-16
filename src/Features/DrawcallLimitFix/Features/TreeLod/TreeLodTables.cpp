@@ -1,12 +1,32 @@
 // Tree LOD's scene resources (the TreeInstances family's tables, its cull program and counts' readbacks, made with the scene's tables),
 // what they post with the revision's inputs and latch in the depth commit, and the depth commit's uploads into them (the commit hook).
 
+// Helpers.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Uploads.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <Resources/Buffers/Buffer.h>
+#include <rhi.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace DCLF::Features::TreeLod
 {

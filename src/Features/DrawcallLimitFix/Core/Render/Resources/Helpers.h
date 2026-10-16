@@ -1,7 +1,21 @@
 #pragma once
 
 // Small helpers every part of IndirectDraws uses: view indices, formats, handles, buffers, registers.
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// Self-contained (features include it); Internal.h includes it in its order.
+
+// volk must precede every Vulkan header in this translation unit (DrawPipelinesRhi.h is included after it).
+#include <rhi_interop_vulkan.h>
+#include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <Resources/Buffers/Buffer.h>
+#include <rhi.h>
+
+#include <algorithm>
+#include <bit>
+#include <cstdint>
+#include <memory>
 
 namespace DCLF::Draws
 {
