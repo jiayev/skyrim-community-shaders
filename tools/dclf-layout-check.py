@@ -42,8 +42,9 @@ BASELINE = ROOT / "tools" / "dclf-layout-baseline.json"
 LEGACY = {"Runtime", "Engine", "Scene", "Draws"}
 # Features/<X> -> the other features it may include (and that are listed before it in Features/FeatureList.cpp).
 DEPENDS = {
-    "Shadows/Sun": set(),
+    "Shadows/Sun": {"Shadows/Local"},
     "Shadows/Local": set(),
+    "LocalLights": {"Portals"},
     "FirstPerson": {"Actors", "Skins"},
     "Effects": {"Skins"},
 }

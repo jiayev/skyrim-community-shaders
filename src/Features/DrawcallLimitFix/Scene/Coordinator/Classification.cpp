@@ -4,6 +4,7 @@
 
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
@@ -416,17 +417,19 @@ namespace DCLF::Scene
 		return fadeNode ? fadeNode->bsx : -1;
 	}
 
-	const RE::NiNode* Coordinator::RoomNodeOf(const void* a_object) const
+	const void* Coordinator::AncestorKeyOf(const void* a_object) const
 	{
-		// Light Limit Fix's GetParentRoomNode: the nearest BSMultiBoundRoom or BSPortalSharedNode up the chain, by RTTI.
-		static const auto* roomRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSMultiBoundRoom }.get();
-		static const auto* portalRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSPortalSharedNode }.get();
+		// The nearest node of the contribution's classes up the chain, by RTTI (Light Limit Fix's GetParentRoomNode: BSMultiBoundRoom or
+		// BSPortalSharedNode). Its classes were resolved at install, before any scene work.
+		const auto* value = Extensions::AncestorValue();
+		if (!value)
+			return nullptr;
 		for (const void* key = a_object; key;) {
 			const auto* record = mirror.Node(key);
 			if (!record)
 				return nullptr;
-			if (record->rtti == roomRtti || record->rtti == portalRtti)
-				return static_cast<const RE::NiNode*>(key);
+			if (value->IsKey(record->rtti))
+				return key;
 			key = record->parent;
 		}
 		return nullptr;
@@ -566,8 +569,8 @@ namespace DCLF::Scene
 		entry.identity = identity.member;
 		entry.groupIdentity = identity.group;
 		entry.ownerReference = ownerReference;
-		entry.roomNode = a_prep.roomNode;
-		entry.roomMapGeneration = 0;
+		entry.ancestorKey = a_prep.ancestorKey;
+		entry.ancestorMapGeneration = 0;
 		entry.geometry = std::move(reference);
 		HoldProperties(entry, a_prep.held);
 		// Its entry class's held parent (a face shape's head), held from the batch's pins.
@@ -745,7 +748,7 @@ namespace DCLF::Scene
 		a_out.ownerReference = record && Extensions::OwnerClassOf(*record).ownerClass != Api::EntryClass::None ?
 		                           static_cast<const RE::TESObjectREFR*>(record->userData) :
 		                           nullptr;
-		a_out.roomNode = RoomNodeOf(a_geometry);
+		a_out.ancestorKey = AncestorKeyOf(a_geometry);
 		// Its entry class's held parent: the parent its geometry type's rule matches under and holds (Api::GeometryTypeContribution::entry:
 		// a face shape's head, a dynamic shape's BSFaceGenNiNode).
 		const auto* g = mirror.Geometry(a_geometry);

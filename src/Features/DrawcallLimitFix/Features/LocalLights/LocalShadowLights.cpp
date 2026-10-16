@@ -1,9 +1,10 @@
 // LocalShadowLights' render-thread sample from DCLF's light selection and light views, and the per-object mask test.
 
-#include "Features/DrawcallLimitFix/Scene/Ports/LocalShadows.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/LocalShadowLights.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/LocalLights.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "State.h"
@@ -53,34 +54,5 @@ namespace DCLF
 			out.lights.push_back(std::move(sampled));
 		}
 		return out;
-	}
-
-	std::uint32_t LocalShadowLights::MaskOf(const RE::BSShaderProperty* a_property, const float a_center[3], float a_radius) const
-	{
-		constexpr std::uint64_t kLandscapeFlags = (1ull << 14) | (1ull << 46);
-		const bool landscape = a_property && (a_property->flags.underlying() & kLandscapeFlags);
-		std::uint32_t mask = 0;
-		for (const auto& light : lights) {
-			if (landscape && !light.affectsLand)
-				continue;
-			const float dx = a_center[0] - light.center[0], dy = a_center[1] - light.center[1], dz = a_center[2] - light.center[2];
-			const float reach = light.radius + a_radius;
-			if (dx * dx + dy * dy + dz * dz > reach * reach)
-				continue;
-			for (const auto& volume : light.volumes) {
-				bool inside = true;
-				for (std::uint32_t p = 0; p < 12 && inside; ++p) {
-					if (!((volume.masks[p / 6] >> (p % 6)) & 1))
-						continue;
-					const auto& plane = volume.planes[p];
-					inside = plane[0] * a_center[0] + plane[1] * a_center[1] + plane[2] * a_center[2] - plane[3] >= -a_radius;
-				}
-				if (inside) {
-					mask |= light.maskBit;
-					break;
-				}
-			}
-		}
-		return mask;
 	}
 }

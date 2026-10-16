@@ -26,8 +26,24 @@ namespace DCLF::Extensions
 	{
 		if (snapshot)
 			return snapshot->On(a_input);
+		const auto input = ResolvedClassifyInput(a_input);
 		const auto inputs = RegisteredClassifyInputs();
-		return a_input.index < inputs.size() && inputs[a_input.index].sample();
+		return input.index < inputs.size() && inputs[input.index].sample();
+	}
+
+	void BindClassifyInputNeeds(std::span<const std::string> a_needs)
+	{
+		static bool once = false;
+		if (std::exchange(once, true))
+			stl::report_and_fail("Drawcall Limit Fix: the classify input needs were bound twice");
+		// By name, as a toggle's needs are: the first input registered under it (names are unique: Registry refuses a second).
+		const auto inputs = RegisteredClassifyInputs();
+		for (std::size_t n = 0; n < a_needs.size() && n < kClassifyInputNeedSlots; ++n)
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+				if (inputs[i].name == a_needs[n]) {
+					Detail::boundClassifyInputNeeds[n] = static_cast<std::uint32_t>(i);
+					break;
+				}
 	}
 
 	ClassifyInputsScope::ClassifyInputsScope(const ClassifyInputSet* a_inputs) :

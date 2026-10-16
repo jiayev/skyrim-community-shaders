@@ -34,7 +34,7 @@ namespace DCLF
 	enum ChangeCause : std::uint32_t
 	{
 		kChangeBindings = 1u << 0,    // flags, material, pipeline (the draw's too), the fade distance, whether it has a fade node
-		kChangeLights = 1u << 1,      // Light Limit Fix's room index and shadow mask
+		kChangeAncestorValue = 1u << 1,  // the ancestor value (Integrations/LightLimitFix's room index)
 		kChangeRetired2 = 1u << 2,    // retired (was the record's tree animation, never written); noted only within kChangeAll
 		kChangeSkin = 1u << 3,        // skin partitions, palette block (offset and rows)
 		kChangeExtras = 1u << 4,      // the extras block and its rows
@@ -104,7 +104,7 @@ namespace DCLF
 		std::uint32_t NextVersion() { return ++versionCounter; }
 		// No shading (MaterialData, EmitColor, SSRParams.w, emissive multiplier, wetness): FrameValues' rows (BindlessShading),
 		// sampled at frame start for the slots the walk names (ShadingItem).
-		std::vector<ObjectLights> lights;                     // parallel to objects
+		std::vector<ObjectAncestorValue> ancestorValue;       // parallel to objects
 		// The features' table families (Api::TableFamily; Features/TreeWind's trees): their columns, stamps, the objects' references
 		// into them and their rows' tags. Published with the rest: a family is copied only when its stamp moved.
 		Extensions::TableFamilies families;
@@ -378,7 +378,7 @@ namespace DCLF
 		{
 			ObjectRecord object{};
 			DrawSequence draw{};
-			ObjectLights lights{};
+			ObjectAncestorValue ancestorValue{};
 			std::array<float, kExtraRows * 4> extras{};
 			const RE::BSGeometry* geometry = nullptr;
 			const RE::NiAVObject* sunEntryNode = nullptr;

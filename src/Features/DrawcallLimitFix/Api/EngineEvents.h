@@ -27,6 +27,9 @@ namespace DCLF::Api
 	 *   written: whether DCLF runs this frame. Optional.
 	 * - afterWrites: the main thread at Main::Update's entry too, after the writes that follow updateEntry (the fade writers' tables
 	 *   published, the fade stores written, the UpdateEntry diagnostics event), last there: whether DCLF runs this frame. Optional.
+	 * - structure: any thread (the attaching or detaching one), per attach/detach the primary cull's structure events follow
+	 *   (PrimaryCull::NoteListStructure), first there, before the main cull input's: a_parent, the node attached to or detached from (an
+	 *   engine NiNode; null for none). Lock-free and cheap. Optional.
 	 */
 	struct StandInObserver
 	{
@@ -34,6 +37,7 @@ namespace DCLF::Api
 		void (*cleared)() = nullptr;
 		void (*updateEntry)(bool a_running) = nullptr;
 		void (*afterWrites)(bool a_running) = nullptr;
+		void (*structure)(const void* a_parent) = nullptr;
 	};
 
 	/** @brief What an engine channel carries. */

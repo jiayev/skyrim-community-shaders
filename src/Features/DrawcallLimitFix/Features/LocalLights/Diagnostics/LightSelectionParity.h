@@ -9,7 +9,7 @@ namespace DCLF::Diagnostics::LightSelectionParity
 	 * @brief The light selection's parity (CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY): DCLF's choice of shadow lights, slots, mask
 	 * indices and focus hosts against CalculateActiveShadowCasterLights' (LightSelectionMade), and each tested light's room verdict and
 	 * walked rooms against the engine's entries sampled at the function's entry (LightSelectionBegin), a light moved since the
-	 * engine's walk tallied apart. The lines every 300 selections (Reports::LightSelectionLines).
+	 * engine's walk tallied apart. The lines every 300 selections (Features::LocalLights::LightSelectionLines).
 	 */
 	void Install();
 

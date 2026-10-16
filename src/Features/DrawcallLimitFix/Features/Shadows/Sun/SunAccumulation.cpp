@@ -2,6 +2,7 @@
 // thunks on the sun's Accumulate and its registrations (the render thread and the registration jobs), and the sun's bits for removed
 // entries.
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
@@ -426,9 +427,9 @@ namespace DCLF::Features::Shadows::Sun
 						self.ApplySunBits(geometry, At<std::uint32_t>(a_accumulator, kAccumulatorLightIndex) == 0xFFFF);
 					else if (!call && self.exclusionLive.load(std::memory_order_acquire) && self.UnderRemovedEntry(geometry))
 						self.bitStats.notReady.fetch_add(1, std::memory_order_relaxed);
-					// And the point lights' bits of a geometry their culls left out (LocalLightCull).
+					// And the point lights' bits of a geometry their culls left out (Features/Shadows/Local's LocalLightCull: a static call).
 					if (lightIndex == 0xFFFF)
-						LocalLightCull::NoteMainRegistration(geometry);
+						Local::LocalLightCull::NoteMainRegistration(geometry);
 					return func(a_accumulator, a_geometry, a_arg);
 				}
 				std::uint64_t result = 1;
@@ -624,7 +625,7 @@ namespace DCLF::Features::Shadows::Sun
 		stl::write_thunk_call<Hooks::Cascade>(cascadeCall);
 		stl::write_thunk_call<Hooks::CascadeCull>(cascadeCull);
 		stl::write_thunk_call<Hooks::MaskClear>(maskClear);
-		// The cascades' skip of the excluded entries they reach anyway (the point lights' culls have their own: LocalLightCull).
+		// The cascades' skip of the excluded entries they reach anyway (the point lights' culls have their own: Shadows/Local's LocalLightCull).
 		stl::write_vfunc<0x16, Hooks::CascadeProcess1>(RE::VTABLE_BSCullingProcess[0]);
 		installed = true;
 		logger::info("[DCLF] sun accumulation installed (Accumulate, its cascades and registrations, the full-frustum cull)");

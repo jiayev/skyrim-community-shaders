@@ -5,8 +5,10 @@
 // Accumulate, its cascade culls and registrations, the full-frustum cull, and the entry exclusion; it reads the board after its
 // bitsReady), then its camera hook (SunViews: BSShadowDirectionalLight::UpdateCamera, which writes the sun's cascades and full-frustum
 // planes into Core's board, ShadowCameras::Sun, from the cameras it set up).
-// The registration thunk also does Core's work at the main registration (PrimaryCull's owned masks, LocalLightCull::NoteMainRegistration),
-// so without this feature the point lights' culls stay off (LocalLightCull's install warns), as when the call sites fail their check.
+// The registration thunk also does the main registration's work for others: Core's (PrimaryCull's owned masks) and Features/Shadows/Local's
+// (the point lights' bits, LocalLightCull::NoteMainRegistration, a static call per main registration: so this feature DEPENDS on
+// Shadows/Local and is listed after it). Without this feature the point lights' culls stay off (LocalLightCull's install warns, at the
+// Point source's hooks), as when the call sites fail their check.
 // Its report lines are the accumulation's and the entry exclusion's (Api::ReportPoint::RenderThread), and its parity is its own
 // (Diagnostics/): the sun views' line, the accumulation's cascades against the cascade culls' and the entry rule's planes against the
 // full-frustum processes', under CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY, and the exclusion's watch (SunCasters) under

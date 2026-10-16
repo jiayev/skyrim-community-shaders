@@ -13,9 +13,6 @@ namespace DCLF::Reports
 	/** @brief Render thread, Present (Reports::RenderThread): the primary cull's lines, with the scene lists', the culls off, the tree list's and the point lights' culls. */
 	void PrimaryCullLines(std::uint32_t a_frame);
 
-	/** @brief The light rooms' and light selection's parity lines, logged (every 300 selections with either parity). */
-	void LightSelectionLines();
-
 	/** @brief The fade writers' line (newline-terminated); empty while nothing was skipped. */
 	std::string FadeWritersLine();
 

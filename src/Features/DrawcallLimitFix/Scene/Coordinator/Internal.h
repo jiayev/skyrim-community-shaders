@@ -32,7 +32,6 @@
 #include <optional>
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/ExtendedTranslucency.h"
-#include "Features/LightLimitFix.h"
 #include "Features/Skin.h"
 #include "Features/Skylighting.h"
 #include "State.h"
@@ -238,14 +237,14 @@ namespace DCLF
 		struct AccumulateSnapshot
 		{
 			std::uint32_t flags, material, pipeline, drawPipeline, extras;
-			ObjectLights lights;
+			ObjectAncestorValue ancestorValue;
 			float fade;
 			std::uint8_t resident;
 
 			AccumulateSnapshot(const Coordinator::Tables& a_tables, std::uint32_t a_slot) :
 				flags(a_tables.objects[a_slot].flags), material(a_tables.objects[a_slot].materialIndex),
 				pipeline(a_tables.objects[a_slot].pipelineIndex), drawPipeline(a_tables.draws[a_slot].pipelineIndex),
-				extras(a_tables.extraOffset[a_slot]), lights(a_tables.lights[a_slot]), fade(a_tables.fadeDistance[a_slot]),
+				extras(a_tables.extraOffset[a_slot]), ancestorValue(a_tables.ancestorValue[a_slot]), fade(a_tables.fadeDistance[a_slot]),
 				resident(a_tables.residentSlot[a_slot])
 			{}
 
@@ -257,8 +256,8 @@ namespace DCLF
 				if (flags != object.flags || material != object.materialIndex || pipeline != object.pipelineIndex ||
 					drawPipeline != a_tables.draws[a_slot].pipelineIndex || differs(fade, a_tables.fadeDistance[a_slot]))
 					causes |= kChangeBindings;
-				if (differs(lights, a_tables.lights[a_slot]))
-					causes |= kChangeLights;
+				if (differs(ancestorValue, a_tables.ancestorValue[a_slot]))
+					causes |= kChangeAncestorValue;
 				if (extras != a_tables.extraOffset[a_slot])
 					causes |= kChangeExtras;
 				if (resident != a_tables.residentSlot[a_slot])

@@ -25,8 +25,8 @@ namespace DCLF::Extensions
 	void InstallEarlyHooks(std::span<const Api::Feature> a_features);
 	/**
 	 * @brief Main thread, at PostPostLoad, where the shadow sources' hooks install (the shell, before the primary cull's): by source, in
-	 * Api::ShadowSource order, every feature's source hooks for it (Api::Feature::sourceHooks, in a_features' order), with Core's light
-	 * selection right after the Sun's (Extensions/ShadowViews.cpp). Once, before InstallFeatures.
+	 * Api::ShadowSource order, every feature's source hooks for it (Api::Feature::sourceHooks, in a_features' order; Features/LocalLights'
+	 * light selection at the Spot's: Extensions/ShadowViews.cpp). Once, before InstallFeatures.
 	 */
 	void InstallSourceHooks(std::span<const Api::Feature> a_features);
 

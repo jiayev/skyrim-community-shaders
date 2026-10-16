@@ -12,6 +12,10 @@ namespace DCLF
 {
 	struct LightingDescriptors;
 	enum class Ineligible : std::uint8_t;
+	namespace Api
+	{
+		class InstallContext;
+	}
 	namespace SceneCapture
 	{
 		struct PropertyRecord;
@@ -67,4 +71,9 @@ namespace DCLF::Features::Effects
 	bool EffectSkinned(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf);
 	/** @brief The particle cause bits (kEffectVariantParticles) of a particle geometry's pass with a_flags property flags: 0 when taken. */
 	std::uint32_t ParticleRejectionOf(const SceneCapture::LeafView& a_leaf, std::uint64_t a_flags);
+	/**
+	 * @brief Install: the "light limit fix" classify input the variants read (Integrations/LightLimitFix's: loaded), needed by name. Unbound
+	 * (the integration not installed) it reads false: kEffectVariantLightingNoLlf.
+	 */
+	void NeedLightLimitFix(Api::InstallContext& a_context);
 }

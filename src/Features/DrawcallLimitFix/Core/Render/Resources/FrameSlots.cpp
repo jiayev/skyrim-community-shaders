@@ -78,12 +78,25 @@ namespace DCLF::Draws
 		return capture;
 	}
 
-	std::vector<FrameBuffer> FrameBuffersOf(const Capture& a_capture, bool a_lightLimitFix)
+	namespace
+	{
+		/** @brief Whether a_register is one of the frame graph buffers' in a_graphBuffers (a bit per registration). */
+		bool GraphBufferHeld(std::uint32_t a_graphBuffers, std::uint32_t a_register)
+		{
+			const auto registered = Extensions::RegisteredFrameGraphBuffers();
+			for (std::size_t b = 0; b < registered.size(); ++b)
+				if (((a_graphBuffers >> b) & 1) && a_register >= registered[b].firstRegister && a_register - registered[b].firstRegister < registered[b].count)
+					return true;
+			return false;
+		}
+	}
+
+	std::vector<FrameBuffer> FrameBuffersOf(const Capture& a_capture, std::uint32_t a_graphBuffers)
 	{
 		std::vector<FrameBuffer> result;
 		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t) {
 			auto* view = a_capture.psViews[t];
-			if (!view || (a_lightLimitFix && t >= kLightsRegister && t < kLightsRegister + 3))
+			if (!view || (a_graphBuffers && GraphBufferHeld(a_graphBuffers, t)))
 				continue;
 			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
 			view->GetDesc(&viewDesc);

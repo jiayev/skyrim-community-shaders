@@ -14,7 +14,6 @@
 #include <cstring>
 
 #include "Deferred.h"
-#include "Features/LightLimitFix.h"
 #include "Features/Skin.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -30,9 +29,9 @@ namespace DCLF
 	{
 		constexpr std::size_t kMaxSamples = 24;
 
-		// Constant buffers that change per draw by design: LLF's StrictLightData (PS b3, checked separately), the permutation (b4,
-		// checked separately), bone palettes (VS b9, b10; SKINNED), Skin's SkinPerGeometry (PS b7; SKIN), Linear Lighting's
-		// LLPerGeometry (PS b8) and the alpha-test reference (PS b11).
+		// Constant buffers that change per draw by design: LLF's StrictLightData (PS b3, Integrations/LightLimitFix's parity), the
+		// permutation (b4, checked separately), bone palettes (VS b9, b10; SKINNED), Skin's SkinPerGeometry (PS b7; SKIN), Linear
+		// Lighting's LLPerGeometry (PS b8) and the alpha-test reference (PS b11).
 		constexpr std::uint32_t kPerDrawVSBuffers = (1u << 4) | (1u << 9) | (1u << 10);
 		constexpr std::uint32_t kPerDrawPSBuffers = (1u << 3) | (1u << 4) | (1u << 7) | (1u << 8) | (1u << 11);
 
@@ -696,18 +695,12 @@ namespace DCLF
 			}
 		}
 
-		// LLF's StrictLightData as its SetupGeometry hook left it. Not ShadowBitMask: DCLF's comes from BuildDrawsCS's local
-		// shadow selection, which draw parity checks (expectedLocalShadows).
-		if (globals::features::lightLimitFix.loaded) {
-			const auto& native = globals::features::lightLimitFix.strictLightDataTemp;
-			const auto& expected = tables.lights[index];
-			++lightChecks;
-			if (native.NumStrictLights != 0 || native.RoomIndex != expected.roomIndex) {
-				++lightMismatches;
-				NoteMismatch(fmt::format("{} strict light data: DCLF room {} shadow mask {:X}, native {} strict lights, room {} shadow mask {:X}", Describe(geometry),
-					expected.roomIndex, expected.shadowBitMask, native.NumStrictLights, native.RoomIndex, native.ShadowBitMask));
-			}
-		}
+		// PS b3: Integrations/LightLimitFix's.
+		lightData.Compare(geometry, static_cast<std::uint32_t>(index), tables,
+			[](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) {
+				static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message));
+			},
+			this);
 
 		CompareSkin(a_context, geometry, static_cast<std::uint32_t>(index));
 		CompareTruePBR(a_context, geometry, static_cast<std::uint32_t>(index));
@@ -1057,7 +1050,7 @@ namespace DCLF
 		}
 
 		const auto& stats = Scene::Coordinator::Get().GetStats();
-		const bool ok = mismatchedDraws == 0 && untrackedEligible == 0 && drawMismatches == 0 && permutationMismatches == 0 && lightMismatches == 0 &&
+		const bool ok = mismatchedDraws == 0 && untrackedEligible == 0 && drawMismatches == 0 && permutationMismatches == 0 && lightData.Ok() &&
 		                skinTextureMismatches == 0 && skinWetness.Ok() && truePBRTextureMismatches == 0;
 		std::string flags;
 		for (auto value : renderFlagsSeen)
@@ -1110,8 +1103,7 @@ namespace DCLF
 		boneChecks = boneMismatches = 0;
 		logger::info("[DCLF] draw parity {}: {} draws checked, {} with different arguments or bound buffers", drawMismatches == 0 ? "OK" : "MISMATCH",
 			drawsChecked, drawMismatches);
-		logger::info("[DCLF] light data parity {}: {} draws checked, {} with different StrictLightData", lightMismatches == 0 ? "OK" : "MISMATCH", lightChecks,
-			lightMismatches);
+		lightData.Report();
 		logger::info("[DCLF] skin parity {}: {} draws' t71/t74 checked, {} differ; {} draws' wetness checked ({} wet), {} differ, {} with a different actor ownership",
 			skinTextureMismatches == 0 && skinWetness.Ok() ? "OK" : "MISMATCH", skinTextureChecks, skinTextureMismatches, skinWetness.checks,
 			skinWetness.wetDraws, skinWetness.mismatches, skinWetness.ownerMismatches);
@@ -1173,7 +1165,8 @@ namespace DCLF
 		shadingSinceStart = 0;
 		nativeDraws = checkedDraws = mismatchedDraws = untrackedEligible = notInTables = nativeOnlyPasses = perDrawNormalised = materialMismatches = geometryMismatches = 0;
 		drawMismatches = drawsChecked = 0;
-		techniqueMismatches = inheritedFilters = permutationChecks = permutationMismatches = lightChecks = lightMismatches = 0;
+		techniqueMismatches = inheritedFilters = permutationChecks = permutationMismatches = 0;
+		lightData.Reset();
 		skinTextureChecks = skinTextureMismatches = 0;
 		skinWetness.Reset();
 		truePBRTextureChecks = truePBRTextureMismatches = 0;

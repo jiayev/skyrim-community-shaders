@@ -17,6 +17,12 @@ namespace DCLF::ShadowCameras
 		return frame;
 	}
 
+	LightSlotFrame& LightSlots()
+	{
+		static LightSlotFrame frame;
+		return frame;
+	}
+
 	LightFrame& Lights()
 	{
 		static LightFrame frame;

@@ -127,7 +127,7 @@ namespace DCLF::Scene
 			frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, frameTablesGeneration, view.pipelinesStamp);
 		}
 		/**
-		 * @brief Render thread, EarlyPrepass: posts the accumulate phase's inputs (PostRoomMap), drains the capture (DrainCapture) and
+		 * @brief Render thread, EarlyPrepass: posts the accumulate phase's inputs (PostAncestorMap), drains the capture (DrainCapture) and
 		 * notifies Diagnostics::RegistrationsDone. No scene work: the next scene pass takes them (TakeAccumulateInputs).
 		 */
 		void PostAccumulateInputs();
@@ -321,8 +321,8 @@ namespace DCLF::Scene
 		void DrainCapture();
 		/** @brief Render thread, BeginFrame (coordinator idle): the engine's BSLightingShader instance, once. */
 		void CaptureLightingShader();
-		/** @brief Render thread (PostAccumulateInputs): LightLimitFix's room map copied and posted when its generation moves. */
-		void PostRoomMap();
+		/** @brief Render thread (PostAccumulateInputs): the ancestor value's map (Light Limit Fix's room map) filled and posted when its generation moves. */
+		void PostAncestorMap();
 		/** @brief Render thread, after BeginFrame's capture: the frame's inputs posted for the coordinator. */
 		void PostFrameInputs();
 		/**
@@ -360,7 +360,7 @@ namespace DCLF::Scene
 		// The frame's engine globals (FrameGlobals::Capture at BeginFrame; FrameValues binds them for its seeds).
 		std::shared_ptr<const FrameGlobals> frameGlobals;
 		Extensions::AdoptionGenerations frameAdoptionGuards{};  // the frame's adoption guards' generations (BeginFrame)
-		std::uint64_t roomMapPostedGeneration = ~0ull;  // render thread: the generation last posted
+		std::uint64_t ancestorMapPostedGeneration = ~0ull;  // render thread: the ancestor map's generation last posted
 		// Render thread: the first frame after a load catches up every switch in the world (CatchUpSwitches) and forces its category
 		// capture (as after a detach: categoryDetachSeen).
 		bool worldCatchUpPending = false;

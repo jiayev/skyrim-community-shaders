@@ -53,10 +53,10 @@ is under `src/Features/DrawcallLimitFix/`:
 | --- | --- | --- |
 | `Engine/Access/` | `EngineAccess.h` (`Engine::Address`: every shared engine address and offset, object flags, RTTI/vtable tests, switch-node reads), `EngineReadWindow` (when workers may read the engine's scene graph), `Walkers.h` | any |
 | `Engine/Capture/` | The engine's writers, hooked: `SceneTracker` (attach/detach), `SceneEvents` / `MaterialWrites` (the event hooks: Lighting's material write hooks and the material-write sink, the effect hooks being `Features/Effects/EffectWrites.cpp`; the hidden stores are `Features/HiddenNodes`'), `SceneCapture` (the record reads), `ConstantMirror` (the D3D11 constant buffers), `ParticleSnapshots`, `Billboards` (the face snapshots are `Features/Faces`') | the writer's thread (pushes events); render thread (captures) |
-| `Engine/Cull/` | Where the engine's cull and registration meet DCLF: `PassCapture` (withholds claimed passes), `PrimaryCull` (stands in for DCLF's references in the list jobs), `LocalLightCull`, `SceneLists`, `LodGates`, `RoomVisibility`, `TreeList`, `TreeAnimation` (the actors' animation stamp is `Features/Actors/ActorRate.cpp`; the sun's accumulation is `Features/Shadows/Sun/SunAccumulation.{h,cpp}`, namespace `DCLF::Features::Shadows::Sun`, with `SunCasters` and `SunAccumulationView` in its `Diagnostics/` and its report lines in `Diagnostics/SunAccumulationReport.cpp`, at `Api::ReportPoint::RenderThread`) | render thread and the engine's cull jobs |
-| `Engine/Views/` | The views DCLF draws for the engine: `ShadowViews`, `SunViews`, `LightViews`, `FocusViews`, `PortalViews` (+ `PortalShapes.h`), `LightSelection`, `ReflectionFaces` | render thread |
+| `Engine/Cull/` | Where the engine's cull and registration meet DCLF: `PassCapture` (withholds claimed passes), `PrimaryCull` (stands in for DCLF's references in the list jobs), `SceneLists`, `LodGates`, `RoomVisibility`, `TreeList`, `TreeAnimation` (the actors' animation stamp is `Features/Actors/ActorRate.cpp`; the sun's accumulation is `Features/Shadows/Sun/SunAccumulation.{h,cpp}`, namespace `DCLF::Features::Shadows::Sun`, with `SunCasters` and `SunAccumulationView` in its `Diagnostics/` and its report lines in `Diagnostics/SunAccumulationReport.cpp`, at `Api::ReportPoint::RenderThread`; the point lights' culls are `Features/Shadows/Local/LocalLightCull.{h,cpp}`, namespace `DCLF::Features::Shadows::Local`, with `LightCulls` and `LocalLightCullView` in its `Diagnostics/` and its lines in `Diagnostics/PointCullLines.cpp`, at `Api::ReportPoint::PrimaryCullSources`) | render thread and the engine's cull jobs |
+| `Engine/Views/` | The views DCLF draws for the engine: `ShadowViews`, `SunViews`, `LightViews`, `FocusViews`, `PortalViews` (+ `PortalShapes.h`), `ReflectionFaces` (the light selection is `Features/LocalLights/LightSelection.{h,cpp}`, with `LightSelectionParity`, `LightSelectionView` and `LightSelectionLines.cpp` in its `Diagnostics/`) | render thread |
 | `Scene/Model/` | The data: `Records.h`, `Tables` (the shared slot tables and their change log), `Publication.h` (what a publication carries), `SceneMirror` (the scene graph as the events left it), `SceneSet.h`, `Eligibility` (pure verdicts), `Lookups.h`, `FrameTables.h`, `SceneIdentity.h` (the owners' value index is `Integrations/AdvancedSkin/OwnerValues.h`) | written by the coordinator, read through publications |
-| `Scene/Ports/` | What a record is derived from, ported from the engine's shaders and functions: `MaterialPort*`, `GeometryPort`, `LightingConstants`, `LightingDescriptors`, `FadeState`, `TreeLod`, `FrameGlobals`, `ConstantEvaluator`, `EffectConstants.h`, `EngineShaders.h`, `VertexInput`, `LocalShadows`, `MaterialSources` | coordinator (records), render thread (frame values) |
+| `Scene/Ports/` | What a record is derived from, ported from the engine's shaders and functions: `MaterialPort*`, `GeometryPort`, `LightingConstants`, `LightingDescriptors`, `FadeState`, `TreeLod`, `FrameGlobals`, `ConstantEvaluator`, `EffectConstants.h`, `EngineShaders.h`, `VertexInput`, `MaterialSources` (the local shadow lights' volumes are `Features/LocalLights/LocalShadowLights.{h,cpp}`) | coordinator (records), render thread (frame values) |
 | `Scene/Coordinator/` | `Scene::Coordinator`: the scene's state and its pass (events applied, classification, the walk, the accumulate phase, the set's commit, the publication), split by stage into `ApplyEvents`, `Classification`, `Walk`, `AccumulatePhase`, `SceneSet`, `Gates`, `Slots`, `Residents`, `Placements`, `FrameConstants`, `Material/SharedBindings`, `DecalOrder`, `EntrySpaceTable`, `SunCandidates`, `ScenePump` | coordinator (the scene lane) and its pool shards |
 | `Scene/FrameView/` | `Scene::FrameView`: the render thread's half: the installed publication, the publication log walked up to it, the frame's captures, tables, lookups and claims, and the requests it serves for the coordinator | render thread |
 | `Scene/Channels.h` | `Scene::Channels`: every message between the coordinator and the render thread (lock-free queues and slots); neither side reads the other's members | both |
@@ -180,7 +180,7 @@ drawn this frame. Phase 5 takes objects out of the accumulator, so it will need 
 | `permutations` (per pipeline) | Community Shaders' permutation buffer (b4) for the draw |
 | `materials` (`MaterialRecord`) | the `PerMaterial` constants, textures, address and filter modes for each (material, pass descriptor) |
 | `shading` (`ObjectShading`, 32 bytes) | the per-object `PerGeometry` pixel constants (LOD fades, alpha, emissive colour, SSR specular) |
-| `lights` (`ObjectLights`) | Light Limit Fix's per-object `StrictLightData` (b3): room index and shadow mask channels |
+| `ancestorValue` (`ObjectAncestorValue`) | the ancestor value (`Api/AncestorValues.h`): Light Limit Fix's room index for its `StrictLightData` (b3), from `Integrations/LightLimitFix` |
 | `draws` (`DrawSequence`, 48 bytes) | one indirect draw per object in the device-generated-commands token order, addresses filled in Phase 2 |
 
 The pass descriptor is the accumulated technique: it is what `SetupTechnique` receives. Deriving it from
@@ -9093,9 +9093,9 @@ casters, which `PassCapture` then withheld: DCLF's paraboloid views draw them.
     and every insertion watched, Riverwood's 2,099 and the Bannered Mare's 80 gave no paraboloid pass. They are no
     caster of any mode, and the parity reports one if a scene ever registers one.
 -   **Where it is built and published:** on the shadow worker beside the sun's, with its own cache, and published after
-    the shadow epoch that drew the paraboloid views (`LocalLightCull::Publish`).
+    the shadow epoch that drew the paraboloid views (`ParabolicExclusionSlot::Publish`, taken by the Point source's `frameStart`).
 
-**The skip** (`Engine/LocalLightCull.cpp`, `CS_DCLF_LIGHT_EXCLUDE`, on by default; `=probe` skips nothing):
+**The skip** (`Features/Shadows/Local/LocalLightCull.cpp`, `CS_DCLF_LIGHT_EXCLUDE`, on by default; `=probe` skips nothing):
 -   **The hook:** `BSParabolicCullingProcess::Process1` (vtable slot `0x16`, checked against `0x141519a90`) returns at
     an excluded entry.
 -   **The frame's exclusion** is chosen at the scene frame's start, after the frame's claims (`SelectFrame`). It applies
@@ -9325,7 +9325,7 @@ view's draw for them. The engine's values are the parity's alone (`CS_DCLF_SET_P
 -   **The local lights' views (T3a, `Engine/LightViews`).** The same arithmetic per descriptor of each spot and point light
     (a point light's second hemisphere: descriptor 1). A point light's culling process (`BSParabolicCullingProcess`) culls
     without planes (they stay zero), so its `cull` is none. Parity `light views ... <- LIGHT VIEW`.
--   **Which lights (T3b, `Engine/LightSelection`).** `CalculateActiveShadowCasterLights` (`0x1414cc570`) ported, by detour:
+-   **Which lights (T3b, `Features/LocalLights/LightSelection`).** `CalculateActiveShadowCasterLights` (`0x1414cc570`) ported, by detour:
     -   It walks `activeShadowLights` (ShadowSceneNode `+0x148`, insertion order) and keeps a light while fewer than 4 are
         kept (the sun counts when it draws: `0x14338c911` clear), its UpdateCamera's verdict is visible, and descriptor 0's
         culling process shares a room with the world camera's list process.
@@ -9707,7 +9707,7 @@ saved 0.89 -> 0.46 ms a frame outside, but portal-strict lights (every interior 
     culls its children with no tests at all;
 -   `BSParabolicCullingProcess::Process1` tests every node against the portals' compound frustum.
 
-**The category filter** (`Engine/LocalLightCull.cpp`, `CS_DCLF_LIGHT_LIST`, on with the skip). `NiNode::OnVisible`
+**The category filter** (`Features/Shadows/Local/LocalLightCull.cpp`, `CS_DCLF_LIGHT_LIST`, on with the skip). `NiNode::OnVisible`
 (`0x140d1e2c0`, `VTABLE_NiNode` slot 0x34) is trivial. If the bound radius is not 0 or the node is `kAlwaysDraw`, it calls
 `NiAVObject::Cull` (`0x140d1c570`: skip a hidden child, else `Process1`) on each child. Category nodes are exact
 `NiNode`s; `BSFadeNode` and the others call it directly, not through the vtable.

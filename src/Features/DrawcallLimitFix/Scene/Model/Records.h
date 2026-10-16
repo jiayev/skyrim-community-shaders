@@ -76,8 +76,8 @@ namespace DCLF
 		// A resident tree (PrimaryCull): dropped for good where BSTreeNode::OnVisible's height test would (entry root's centre
 		// above the frame's limit).
 		kObjectHeightTest = 1u << 28,
-		// A landscape property (kLandscape, kNoLODLandFade): the main pass's light selection gives it only the local shadow
-		// lights that take landscape (BSShadowLight +0x61; LocalShadowLights).
+		// A landscape property (Api::LightVolumesContribution::landscapeFlags: kLandscape, kNoLODLandFade): the main pass's light selection
+		// gives it only the local shadow lights that take landscape (BSShadowLight +0x61; Features/LocalLights' LocalShadowLights).
 		kObjectLandscapeLights = 1u << 29,
 		// Bound by scene membership (Coordinator::BindByMembership): drawn whenever the GPU finds it. Every record with bindings.
 		kObjectMember = 1u << 30,
@@ -97,7 +97,7 @@ namespace DCLF
 
 	/** @brief The high bit of a draw's object-index word: the draw misses every sun cascade (kObjectSunTest). */
 	inline constexpr std::uint32_t kObjectSunMiss = 1u << 31;
-	// The object word's local shadow lights (BuildDrawsCS, LocalShadowLights): Light Limit Fix's ShadowBitMask of the draw, whose
+	// The object word's local shadow lights (BuildDrawsCS, Api::LightVolumesContribution): Light Limit Fix's ShadowBitMask of the draw, whose
 	// lights are shadow mask channels 0-3. The object index is below them.
 	inline constexpr std::uint32_t kObjectLocalShadowShift = 26;
 	inline constexpr std::uint32_t kObjectLocalShadowMask = 0xFu << kObjectLocalShadowShift;
@@ -169,11 +169,13 @@ namespace DCLF
 		std::uint32_t nextPartition = kNoPartition;
 	};
 
-	/** @brief Light Limit Fix's per-draw StrictLightData (PS b3); the main pass has no strict lights, so only these vary. */
-	struct ObjectLights
+	/**
+	 * @brief The object's ancestor value (Api::AncestorValueContribution: Integrations/LightLimitFix's room index, its StrictLightData's
+	 * RoomIndex), the record's word 0. -1 (the contribution's none) until a join takes it.
+	 */
+	struct ObjectAncestorValue
 	{
-		std::int32_t roomIndex = -1;
-		std::uint32_t shadowBitMask = 0;
+		std::int32_t value = -1;
 	};
 
 	/**

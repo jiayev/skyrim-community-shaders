@@ -4,11 +4,11 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
-#include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Draws.h"
@@ -533,28 +533,18 @@ namespace DCLF
 			sunTestEmpty += sunCascades.empty() ? 1 : 0;
 			if (sunTestWindow.Tick())
 				Reports::ColourSunTestLine(std::exchange(sunTestEmpty, 0));
-			// Local shadow lights accumulated this frame, a volume per shadowmap descriptor, for Light Limit Fix's shadow mask.
-			localShadows = LocalShadowLights::Sample();
+			// The local shadow lights accumulated this frame, a volume per shadowmap descriptor (Api::LightVolumesContribution: Features/
+			// LocalLights'), for the objects' shadow mask (Light Limit Fix's ShadowBitMask). The list stays whole (the build parity's
+			// reference); the latch takes the clamped count.
 			shadowVolumes.clear();
-			for (const auto& light : localShadows.lights) {
-				for (const auto& volume : light.volumes) {
-					auto& out = shadowVolumes.emplace_back();
-					out.masks[0] = volume.masks[0];
-					out.masks[1] = volume.masks[1];
-					out.maskBit = light.maskBit;
-					out.affectsLand = light.affectsLand ? 1u : 0u;
-					out.sphere[0] = light.center[0];
-					out.sphere[1] = light.center[1];
-					out.sphere[2] = light.center[2];
-					out.sphere[3] = light.radius;
-					std::memcpy(out.planes, volume.planes.data(), sizeof(out.planes));
-				}
-			}
+			Api::LightVolumeSink sink(shadowVolumes);
+			Extensions::SampleLightVolumes(sink);
+			shadowVolumesLatched = static_cast<std::uint32_t>(shadowVolumes.size());
 		}
-		if (sunCascades.size() > a_shape.latchLayout.cascades || shadowVolumes.size() > a_shape.latchLayout.shadowVolumes) {
+		if (sunCascades.size() > a_shape.latchLayout.cascades || shadowVolumesLatched > a_shape.latchLayout.shadowVolumes) {
 			++revisions.latchClamped[a_revisionEpoch];
 			sunCascades.resize(std::min<std::size_t>(sunCascades.size(), a_shape.latchLayout.cascades));
-			shadowVolumes.resize(std::min<std::size_t>(shadowVolumes.size(), a_shape.latchLayout.shadowVolumes));
+			shadowVolumesLatched = std::min(shadowVolumesLatched, a_shape.latchLayout.shadowVolumes);
 		}
 	}
 
@@ -600,8 +590,11 @@ namespace DCLF
 			if (held.binding.owner)
 				a_commit.bindingOwners.push_back(held.binding.owner);
 		}
-		if (epochResources->lightLimitFix && !depthOnly)
-			ORGLightCulling::Get().GetShaderResourceIndices(a_frameTextures[kLightsRegister], a_frameTextures[kLightsRegister + 1], a_frameTextures[kLightsRegister + 2]);
+		// The frame graph buffers on the graph (Api::FrameGraphBuffers: Integrations/LightLimitFix's, t35-t37), their indices at their registers.
+		const auto graphBuffers = Extensions::RegisteredFrameGraphBuffers();
+		for (std::size_t b = 0; b < graphBuffers.size() && !depthOnly; ++b)
+			if ((epochResources->graphBuffers >> b) & 1)
+				graphBuffers[b].indices(std::span(a_frameTextures).subspan(graphBuffers[b].firstRegister, graphBuffers[b].count));
 		for (const auto& frameBuffer : depthOnly ? decltype(epochResources->frameBuffers){} : epochResources->frameBuffers) {
 			auto* buffer = BufferOf(capture.psViews[frameBuffer.textureRegister]);
 			mirror.Watch(buffer);
@@ -736,10 +729,11 @@ namespace DCLF
 		LatchWrite(latchBlock, "main sun cascades", a_latchSlot, MainLatchLayout::CascadeOffset(), std::as_bytes(std::span(header)));
 		if (!sunCascades.empty())
 			LatchWrite(latchBlock, "main sun cascades", a_latchSlot, MainLatchLayout::CascadeOffset() + kSunRegionHeader, std::as_bytes(std::span(sunCascades)));
-		const std::uint32_t volumeHeader[4] = { static_cast<std::uint32_t>(shadowVolumes.size()), 0, 0, 0 };
+		const std::uint32_t volumeHeader[4] = { shadowVolumesLatched, 0, 0, 0 };
 		LatchWrite(latchBlock, "main shadow volumes", a_latchSlot, layout.ShadowVolumeOffset(), std::as_bytes(std::span(volumeHeader)));
-		if (!shadowVolumes.empty())
-			LatchWrite(latchBlock, "main shadow volumes", a_latchSlot, layout.ShadowVolumeOffset() + kSunRegionHeader, std::as_bytes(std::span(shadowVolumes)));
+		if (shadowVolumesLatched)
+			LatchWrite(latchBlock, "main shadow volumes", a_latchSlot, layout.ShadowVolumeOffset() + kSunRegionHeader,
+				std::as_bytes(std::span(shadowVolumes).first(shadowVolumesLatched)));
 		a_latch.sunState = kSunTestOn;
 		a_latch.sunCascadeOffset = static_cast<std::uint32_t>(latchBlock.Offset(a_latchSlot)) + MainLatchLayout::CascadeOffset();
 		a_latch.localShadowOffset = static_cast<std::uint32_t>(latchBlock.Offset(a_latchSlot)) + layout.ShadowVolumeOffset();

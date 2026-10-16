@@ -1,7 +1,7 @@
 #pragma once
 
-// The shadow build's entry exclusions (the sun's cascades', the paraboloids'), their translations to later candidates, and the slot the
-// sun's waits in for the next full-frustum cull.
+// The shadow build's entry exclusions (the sun's cascades', the paraboloids'), their translations to later candidates, and the slots they
+// wait in: the sun's for the next full-frustum cull, the paraboloids' for the next frame's point-light culls.
 
 #include <atomic>
 #include <cstdint>
@@ -39,7 +39,7 @@ namespace DCLF
 		// Per geometry, the stamp of the frame whose main registration cleared its mask (+0x160 = 0xFFFF: reads, then zeroes it), so
 		// DCLF's sun bits are not written again that frame.
 		std::shared_ptr<std::atomic<std::uint32_t>[]> cleared;
-		// Paraboloid mode (LocalLightCull): per candidate, three stamped words (reach kinds) of the point lights whose cull reached and
+		// Paraboloid mode (the Point source's culls, Features/Shadows/Local): per candidate, three stamped words (reach kinds) of the point lights whose cull reached and
 		// skipped the entry this frame. Null for the sun's.
 		std::shared_ptr<std::atomic<std::uint64_t>[]> lightReach;
 		std::uint32_t removedCount = 0;  // entries removed and lightReach (times 3) hold
@@ -109,5 +109,26 @@ namespace DCLF
 
 		std::shared_ptr<SunExclusion> pending;
 		ForwardCounts counts;
+	};
+
+	/**
+	 * @brief The paraboloid mode's exclusion between the shadow epoch that published it and the next frame's point-light culls (the Point
+	 * source's, Features/Shadows/Local), whose frameStart takes it (Api::ShadowSourceContribution). Published only while the Point source's
+	 * culls are installed (Extensions::SourceCullsInstalled). Render thread only.
+	 */
+	class ParabolicExclusionSlot
+	{
+	public:
+		static ParabolicExclusionSlot& Get();
+
+		/** @brief After the shadow epoch: next frame's exclusion (null: none). */
+		void Publish(std::shared_ptr<SunExclusion> a_exclusion) { pending = std::move(a_exclusion); }
+		/** @brief The exclusion published last (null: none); it stays until the next Publish. */
+		std::shared_ptr<SunExclusion> Pending() const { return pending; }
+
+	private:
+		ParabolicExclusionSlot() = default;
+
+		std::shared_ptr<SunExclusion> pending;
 	};
 }

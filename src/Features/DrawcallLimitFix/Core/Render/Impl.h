@@ -282,7 +282,7 @@ namespace DCLF
 		ShadowKept shadowKept;  // the shadow epoch's inputs and records
 		ShadowKept* ShadowKeptState() { return &shadowKept; }
 		SunExclusionCache sunExclusionCache;  // the shadow builds', in frame order
-		SunExclusionCache parabolicExclusionCache;  // likewise, the paraboloid mode's (LocalLightCull)
+		SunExclusionCache parabolicExclusionCache;  // likewise, the paraboloid mode's (the Point source's culls)
 		std::array<std::uint32_t, 5> decalWords{};  // the count buffer's decal words (19-22, then 27), uploaded per colour epoch
 
 		/** @brief An epoch's per-frame constant blocks from the capture's mirrors (render thread; keeps the Z-prepass's bytes). */
@@ -338,9 +338,10 @@ namespace DCLF
 
 		// The sun cascades the colour commit's BuildDraws tests against (its latch's).
 		std::vector<GpuCascade> sunCascades;
-		// The local shadow lights its BuildDraws selected against (LocalShadowLights), and their volumes as uploaded.
-		LocalShadowLights localShadows;
+		// The light volumes its BuildDraws selected against (Api::LightVolumesContribution's sample), unclamped (the build parity's
+		// reference), and how many of them the latch takes (clamped to the revision's layout: CommitShadowInputs).
 		std::vector<GpuShadowVolume> shadowVolumes;
+		std::uint32_t shadowVolumesLatched = 0;
 		// The depth commit's scratch: its buckets (PlanZBuckets) and the zeros their count words take.
 		ZBucketPlan zBucketPlan;
 		std::vector<std::uint32_t> zBucketZeros;

@@ -5,8 +5,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/RegistrationCensus.h"
 
-#include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
-
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"

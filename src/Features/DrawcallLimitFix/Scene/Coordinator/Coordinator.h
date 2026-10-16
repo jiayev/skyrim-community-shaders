@@ -40,7 +40,6 @@
 #include "Features/DrawcallLimitFix/Core/Runtime/PublicationLog.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LocalShadows.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Model/FrameTables.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
@@ -278,12 +277,12 @@ namespace DCLF
 		};
 		ResidentStats TakeResidentStats() { return std::exchange(residentStats, {}); }
 		/**
-		 * @brief The joins' frame inputs since the last call: room maps and pipeline frames posted and taken, PerGeometry blocks made or
+		 * @brief The joins' frame inputs since the last call: ancestor maps and pipeline frames posted and taken, PerGeometry blocks made or
 		 * waited.
 		 */
 		struct AccumulateInputStats
 		{
-			std::uint64_t roomMapsPosted = 0, roomMapsTaken = 0, pipelineFramesPosted = 0, pipelineFramesTaken = 0;
+			std::uint64_t ancestorMapsPosted = 0, ancestorMapsTaken = 0, pipelineFramesPosted = 0, pipelineFramesTaken = 0;
 			std::uint64_t pipelineBlocksMade = 0, pipelineBlocksWaited = 0;
 		};
 		AccumulateInputStats TakeAccumulateInputStats();
@@ -600,8 +599,11 @@ namespace DCLF
 			++referenceStats.pinned;
 			return RE::NiPointer<T>(static_cast<T*>(a_pin));
 		}
-		/** @brief Light Limit Fix's room node for an object (GetParentRoomNode), from the mirror's chain. */
-		const RE::NiNode* RoomNodeOf(const void* a_object) const;
+		/**
+		 * @brief The ancestor value's key for an object: its nearest ancestor of the contribution's classes, from the mirror's chain
+		 * (Api::AncestorValueContribution::ancestorRtti: Light Limit Fix's GetParentRoomNode). Null without one, or without the contribution.
+		 */
+		const void* AncestorKeyOf(const void* a_object) const;
 		void ApplyMirrorEvents(const EventBatch& a_batch, BatchIndex& a_index);
 
 		// The dependents lists and the root owners: State/Dependents.h (CoordinatorDependents).
@@ -864,7 +866,7 @@ namespace DCLF
 		void NameShadingKeys(const std::vector<const void*>& a_keys, std::vector<std::uint32_t>* a_slots);
 
 		// The frame inputs and the technique rows: State/Frame.h (CoordinatorFrame).
-		/** @brief The scene pass, before the walk: the frame inputs posted since its last pass (room map, pipeline frame). */
+		/** @brief The scene pass, before the walk: the frame inputs posted since its last pass (ancestor map, pipeline frame). */
 		void TakeAccumulateInputs();
 		/** @brief The scene pass, after the joins: a used pipeline without a current PerGeometry block made from the pipeline frame. */
 		void MakeNewPipelineConstants();

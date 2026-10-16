@@ -3,7 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -173,10 +173,10 @@ namespace DCLF
 	void ShadowViews::Rebuild()
 	{
 		Clear();
-		// DCLF's selection's slots (LightSelection): shadowLightsAccum as CalculateActiveShadowCasterLights fills it, the array
-		// GetShadowCasterLightArrayEntry indexes - the lights, in the sequence, the engine renders a moment later. None this frame
-		// (no selection ran): no views, and the engine draws them.
-		const auto* selection = LightSelection::Get().Current(Scene::FrameView::Get().GetFrame());
+		// DCLF's selection's slots (the LightSlots board, Features/LocalLights' selection publishes it): shadowLightsAccum as
+		// CalculateActiveShadowCasterLights fills it, the array GetShadowCasterLightArrayEntry indexes - the lights, in the sequence,
+		// the engine renders a moment later. None this frame (no selection ran): no views, and the engine draws them.
+		const auto* selection = ShadowCameras::LightSlots().Current(Scene::FrameView::Get().GetFrame());
 		if (!selection)
 			return;
 		std::uint32_t lightIndex = 0;
@@ -226,7 +226,7 @@ namespace DCLF
 			};
 			for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d)
 				add(data.shadowmapDescriptors[d], d, false);
-			// A focus host's focus views (the Focus board: DCLF's hosts and target count: Render draws descriptors 0..count-1), once per light.
+			// A focus host's focus views (the LightSlots board: DCLF's hosts and target count: Render draws descriptors 0..count-1), once per light.
 			if (std::find(selection->focusHosts.begin(), selection->focusHosts.end(), light) != selection->focusHosts.end() &&
 				std::find(focusAdded.begin(), focusAdded.end(), light) == focusAdded.end()) {
 				focusAdded.push_back(light);

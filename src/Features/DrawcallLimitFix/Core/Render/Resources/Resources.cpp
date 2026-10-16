@@ -6,7 +6,6 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
-#include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
@@ -285,13 +284,18 @@ namespace DCLF
 		D3D11_TEXTURE2D_DESC target{};
 		a_capture.targets[0]->GetDesc(&target);
 		const auto& targets = DrawPipelines::Get().Targets();
-		std::uint32_t lights, list, grid;
-		const bool lightLimitFix = ORGLightCulling::Get().GetShaderResourceIndices(lights, list, grid);
-		auto frameBuffers = FrameBuffersOf(a_capture, lightLimitFix);
+		// The frame graph buffers on the graph now (Api::FrameGraphBuffers: Integrations/LightLimitFix's), a bit per registration.
+		std::uint32_t graphBuffers = 0;
+		for (std::size_t b = 0; b < Extensions::RegisteredFrameGraphBuffers().size(); ++b) {
+			std::array<std::uint32_t, Extensions::kFrameGraphBufferRegisters> indices;
+			if (Extensions::FrameGraphBufferIndices(b, indices))
+				graphBuffers |= 1u << b;
+		}
+		auto frameBuffers = FrameBuffersOf(a_capture, graphBuffers);
 		const bool sameFrameBuffers = resources && resources->frameBuffers.size() == frameBuffers.size() &&
 		                              std::equal(frameBuffers.begin(), frameBuffers.end(), resources->frameBuffers.begin(), [](const auto& a, const auto& b) { return a.SameShape(b); });
 		if (resources && targets == formats && target.Width == width && target.Height == height && sameFrameBuffers &&
-			resources->lightLimitFix == lightLimitFix)
+			resources->graphBuffers == graphBuffers)
 			return true;
 
 		auto device = host->GetDesc().device;
@@ -315,7 +319,7 @@ namespace DCLF
 
 		CreateHzb(*state, device);
 
-		state->lightLimitFix = lightLimitFix;
+		state->graphBuffers = graphBuffers;
 		for (auto& frameBuffer : frameBuffers) {
 			frameBuffer.copy = org::Buffer::CreateUnmaterializedStructuredBuffer(frameBuffer.elements, frameBuffer.stride, false);
 			frameBuffer.copy->SetName(fmt::format("cs.dclf.frame-buffer.t{}", frameBuffer.textureRegister));

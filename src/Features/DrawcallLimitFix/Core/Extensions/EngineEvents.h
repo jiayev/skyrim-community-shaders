@@ -140,6 +140,8 @@ namespace DCLF::Extensions
 	void StandInRootsCleared();
 	void StandInUpdateEntry(bool a_running);
 	void StandInAfterWrites(bool a_running);
+	/** @brief Any thread (PrimaryCull::NoteListStructure, first, before the main cull input's): each observer's structure. No lock. */
+	void StandInStructure(const void* a_parent);
 	// What a stand-in observer reads of DCLF's main-camera verdicts (the roots' kAccumulated as written at Main::Update's entry, before
 	// updateEntry): direct calls, a feature's per-root loop may make them. Main thread, after Main::Update's entry; no engine memory read.
 	/** @brief A stood-in root's verdict as last written; visible when not written yet (IndirectDraws::AccumulatedVerdict). */

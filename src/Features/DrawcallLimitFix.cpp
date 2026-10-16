@@ -79,8 +79,9 @@ void DrawcallLimitFix::PostPostLoad()
 	// The frame-sourced float positions built now, off the render thread's first frame.
 	(void)DCLF::MaterialSources::FramePSFloats();
 	(void)DCLF::MaterialSources::FrameVSFloats();
-	// The shadow sources' hooks, by source (Api::Feature::sourceHooks): Features/Shadows/Sun's accumulation and UpdateCamera, Core's light
-	// selection, then Features/Shadows/Local's focus cameras, in that order.
+	// The shadow sources' hooks, by source (Api::Feature::sourceHooks): Features/Shadows/Sun's accumulation and UpdateCamera, Features/LocalLights'
+	// light selection (Spot), then Features/Shadows/Local's point culls (Point) and focus cameras (Focus), in that order; the point culls
+	// write NiNode's OnVisible slot before the primary cull reads it.
 	DCLF::Extensions::InstallSourceHooks(DCLF::Features::List());
 	DCLF::PrimaryCull::Get().Install();
 	// The features' extension points (Features/FeatureList.cpp), registered before DCLF's threads start and read-only after, and

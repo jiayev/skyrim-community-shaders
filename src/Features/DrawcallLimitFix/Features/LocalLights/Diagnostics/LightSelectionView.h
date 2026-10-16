@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
 
 namespace DCLF::Diagnostics
 {

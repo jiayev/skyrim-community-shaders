@@ -147,9 +147,12 @@ namespace DCLF::Draws
 		const std::span<const org::SrvView> noViews{};
 		for (const auto& frameBuffer : a_resources.frameBuffers)
 			a_builder.ShaderResource(frameBuffer.copy, noViews);
-		if (a_lights && a_resources.lightLimitFix)
-			for (const char* id : { "cs.llf.lights", "cs.llf.light-index-list", "cs.llf.light-grid" })
-				a_builder.ShaderResource(org::ResourceIdentifier(id), noViews);
+		// The frame graph buffers on the graph (Api::FrameGraphBuffers: Integrations/LightLimitFix's lights, light index list and grid).
+		const auto graphBuffers = Extensions::RegisteredFrameGraphBuffers();
+		for (std::size_t b = 0; a_lights && b < graphBuffers.size(); ++b)
+			if ((a_resources.graphBuffers >> b) & 1)
+				for (std::uint32_t r = 0; r < graphBuffers[b].count; ++r)
+					a_builder.ShaderResource(org::ResourceIdentifier(graphBuffers[b].resources[r].c_str()), noViews);
 	}
 
 	void RecordPreprocessedDraw(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,

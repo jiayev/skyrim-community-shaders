@@ -5,7 +5,6 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
 
 namespace DCLF::Extensions
 {
@@ -71,7 +70,7 @@ namespace DCLF::Extensions
 				FillRegistered(set.maps[v], a_maps[v]);
 		for (std::size_t s = 0; s < a_sources.size(); ++s) {
 			if (a_sources[s].source < Api::ShadowSource::Count)
-				set.sources[s] = { true, a_sources[s].lightKept, a_sources[s].fullFrustumWindowEnd };
+				set.sources[s] = { true, a_sources[s].lightKept, a_sources[s].fullFrustumWindowEnd, a_sources[s].frameStart, a_sources[s].frameEnd };
 		}
 		DeriveShadowOrders(set);
 		Detail::resolvedShadowViews = std::move(set);
@@ -88,22 +87,33 @@ namespace DCLF::Extensions
 		return sourceCullsInstalled[static_cast<std::size_t>(a_source)];
 	}
 
+	void ShadowSourcesFrameStart(std::uint32_t a_frame)
+	{
+		for (const auto& source : ShadowViewsSet().sources)
+			if (source.frameStart)
+				source.frameStart(a_frame);
+	}
+
+	void ShadowSourcesFrameEnd()
+	{
+		for (const auto& source : ShadowViewsSet().sources)
+			if (source.frameEnd)
+				source.frameEnd();
+	}
+
 	void InstallSourceHooks(std::span<const Api::Feature> a_features)
 	{
 		static bool installed = false;
 		if (std::exchange(installed, true))
 			stl::report_and_fail("Drawcall Limit Fix: the shadow sources' hooks were installed twice");
 		// By source, in ShadowSource order (the install log's): the sun's accumulation and UpdateCamera (Features/Shadows/Sun), the light
-		// selection (Core's, whatever the sources: it hands the Spot and Point sources their kept lights), then the focus cameras
-		// (Features/Shadows/Local).
+		// selection at the Spot's (Features/LocalLights: it hands the Spot and Point sources their kept lights), the point culls
+		// (Features/Shadows/Local), then the focus cameras (Features/Shadows/Local).
 		for (std::size_t s = 0; s < kShadowSources; ++s) {
-			const auto source = static_cast<Api::ShadowSource>(s);
-			Api::ShadowSourceHooks hooks{ source };
+			Api::ShadowSourceHooks hooks{ static_cast<Api::ShadowSource>(s) };
 			for (const auto& feature : a_features)
 				if (feature.sourceHooks)
 					feature.sourceHooks(hooks);
-			if (source == Api::ShadowSource::Sun)
-				LightSelection::Get().Install();
 		}
 	}
 }

@@ -3,8 +3,11 @@
 // The frame binding contract (Api::InstallContext::RegisterFrameBinding): a buffer every DCLF draw reads at a declared texture register,
 // given by the frame record (DrawBindings) because it changes by frame: the version of a feature's buffer the frame's draws read. And the
 // frame texture contract (RegisterFrameTexture): an engine render target's view the frame record names at a declared texture register.
+// And the frame graph buffers' (RegisterFrameGraphBuffers): another CS feature's graph buffers, read at declared texture registers.
 
+#include <array>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace DCLF::Api
@@ -48,5 +51,28 @@ namespace DCLF::Api
 		std::uint32_t textureRegister = ~0u;
 		void* (*view)() = nullptr;
 		bool capturedWhenNull = false;
+	};
+
+	/**
+	 * @brief Frame graph buffers (Api::InstallContext::RegisterFrameGraphBuffers): another CS feature's buffers on the render graph, which
+	 * every DCLF colour draw reads at consecutive texture registers from firstRegister (Integrations/LightLimitFix's lights, light index
+	 * list and light grid, t35-t37), named by the frame record by their bindless indices.
+	 *
+	 * The registers are the feature's compile-time constants, with their HLSL declarations; Features/Manifest.cpp checks them against Core's,
+	 * the frame bindings' and the frame textures', the install against those and the other graph buffers'.
+	 *
+	 * - name: the registration's (the install's failures).
+	 * - firstRegister: the first's texture register; the others follow it.
+	 * - resources: the graph resource ids the colour passes declare (read), one a register: the leading non-empty ones count.
+	 * - indices: render thread, at the main resources' check (whether they are on the graph now: false, and the registers keep the frame
+	 *   buffers the commit captured there) and once per colour commit: each resource's bindless index into a_out (one a resource), and
+	 *   whether they are registered.
+	 */
+	struct FrameGraphBuffers
+	{
+		std::string_view name;
+		std::uint32_t firstRegister = ~0u;
+		std::array<std::string_view, 4> resources{};
+		bool (*indices)(std::span<std::uint32_t> a_out) = nullptr;
 	};
 }

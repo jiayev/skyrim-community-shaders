@@ -275,10 +275,10 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 					 "(max {:.3f}); EarlyPrepass's posts and material serving {:.3f} (max {:.3f})",
 			timing.eventsMs / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs);
 		// The joins' frame inputs: render thread (EarlyPrepass) -> the next scene pass, latest wins.
-		if (const auto inputs = store.TakeAccumulateInputStats(); inputs.roomMapsPosted || inputs.pipelineFramesPosted || inputs.pipelineBlocksMade || inputs.pipelineBlocksWaited)
+		if (const auto inputs = store.TakeAccumulateInputStats(); inputs.ancestorMapsPosted || inputs.pipelineFramesPosted || inputs.pipelineBlocksMade || inputs.pipelineBlocksWaited)
 			logger::info("[DCLF] accumulate frame inputs (T6b2c step 8): room map {} posted, {} taken; pipeline frame {} posted, {} taken; {} new pipelines' blocks made by "
 						 "the coordinator, {} waited for a pipeline frame",
-				inputs.roomMapsPosted, inputs.roomMapsTaken, inputs.pipelineFramesPosted, inputs.pipelineFramesTaken, inputs.pipelineBlocksMade, inputs.pipelineBlocksWaited);
+				inputs.ancestorMapsPosted, inputs.ancestorMapsTaken, inputs.pipelineFramesPosted, inputs.pipelineFramesTaken, inputs.pipelineBlocksMade, inputs.pipelineBlocksWaited);
 		{
 			const auto installs = DCLF::Scene::FrameView::Get().TakePublicationStats();
 			// A publication is installed with the snapshot that carries it (the snapshots' own counters: IndirectDraws' report).

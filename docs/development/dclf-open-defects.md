@@ -246,7 +246,7 @@ Left open by the polls-to-events pass (dclf-async-publication.md, "Polls become 
     on a child, a new object root) would let it walk only on an edit.
 -   **`UpdateActorRate` stays on the render thread** (`Features/Actors/ActorRate.cpp`, about 19 actors' plane tests a frame).
     Its bound tests need the frame's last shadow view made and must finish before `EngineReadWindow::Close` at Present, and no
-    hook sits between the two. A kick after the shadow epoch's commit (where `LocalLightCull::Publish` runs) would let a
+    hook sits between the two. A kick after the shadow epoch's commit (where `ParabolicExclusionSlot::Publish` runs) would let a
     leased task do them.
 -   **BasicRHI's present still holds `timelinesMutex`.** `q_submit` no longer does, but `sc_present` holds it across the
     present (SARP and BasicRenderer only). CS's upload queue may not need DXVK's `LockSubmissionQueue` either.

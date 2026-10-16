@@ -1,12 +1,13 @@
 // EffectDescriptors.h's ports: the Effect port's variants, the particle rejection and the descriptors. Pure functions of the records, the
-// live toggles and whether Light Limit Fix is loaded.
+// live toggles and the "light limit fix" classify input (whether Light Limit Fix is loaded).
 
 #include "Features/DrawcallLimitFix/Features/Effects/EffectDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
-#include "Features/LightLimitFix.h"
+#include "Features/DrawcallLimitFix/Api/Feature.h"
 
 namespace DCLF::Features::Effects
 {
@@ -15,6 +16,8 @@ namespace DCLF::Features::Effects
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 
 		constexpr std::uint64_t Bit(Flag a_flag) { return static_cast<std::uint64_t>(a_flag); }
+
+		Api::ClassifyInputId lightLimitFix;  // install (NeedLightLimitFix)
 
 		/** @brief How DeriveEffectDescriptors draws a pass it keeps: the decal, opaque or forward group, and the blend mode. */
 		struct EffectDraw
@@ -212,7 +215,7 @@ namespace DCLF::Features::Effects
 		if (f & Bit(Flag::kEffectLighting)) {
 			if (f & Bit(Flag::kCloudLOD))
 				variants |= kEffectVariantCloudLighting;
-			if (!globals::features::lightLimitFix.loaded)
+			if (!Extensions::ClassifyInputOn(lightLimitFix))
 				variants |= kEffectVariantLightingNoLlf;
 		}
 		// kWeaponBlood (BSTempEffectWeaponBlood) is ported: its AlphaTestRef (SetupGeometry: alpha threshold / 255 and two globals) is
@@ -233,5 +236,10 @@ namespace DCLF::Features::Effects
 			return reason;
 		WriteEffectDescriptors(EffectPassOf(a_property, a_leaf, draw.particles), a_property.flags, draw, a_out);
 		return Ineligible::None;
+	}
+
+	void NeedLightLimitFix(Api::InstallContext& a_context)
+	{
+		lightLimitFix = a_context.NeedClassifyInput("light limit fix");
 	}
 }

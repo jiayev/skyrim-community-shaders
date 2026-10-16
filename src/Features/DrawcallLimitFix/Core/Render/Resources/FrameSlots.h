@@ -36,8 +36,9 @@ namespace DCLF::Draws
 
 	Capture CaptureBindings();
 
-	// The CPU-written structured buffers the main pass binds at t16 and up (Light Limit Fix's come from the graph).
-	std::vector<FrameBuffer> FrameBuffersOf(const Capture& a_capture, bool a_lightLimitFix);
+	// The CPU-written structured buffers the main pass binds at t16 and up, less the registers of the frame graph buffers on the graph
+	// (a_graphBuffers: a bit per registration, Resources::graphBuffers), which come from the graph.
+	std::vector<FrameBuffer> FrameBuffersOf(const Capture& a_capture, std::uint32_t a_graphBuffers);
 
 	inline ID3D11Buffer* BufferOf(ID3D11ShaderResourceView* a_view)
 	{

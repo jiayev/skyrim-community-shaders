@@ -14,10 +14,10 @@ namespace DCLF
 	struct SunExclusion;
 }
 
-namespace DCLF::Diagnostics
+namespace DCLF::Features::Shadows::Local
 {
 	/**
-	 * @brief The point light culls' observer's read-only view of LocalLightCull's file-local state (defined beside it, in
+	 * @brief The point light culls' observer's (LightCulls) read-only view of LocalLightCull's file-local state (defined beside it, in
 	 * LocalLightCull.cpp). Any thread the hooks run on; the frame's state is published before the culls.
 	 */
 	struct LocalLightCullView

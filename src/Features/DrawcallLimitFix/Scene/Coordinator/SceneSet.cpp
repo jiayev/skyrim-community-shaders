@@ -1004,7 +1004,7 @@ namespace DCLF::Scene
 		const bool full = passesFull.load(std::memory_order_acquire);
 		if (full) {
 			TakeCoordinatorInputs();
-			// The joins' inputs posted at EarlyPrepass (room map, pipeline frame, capture drain).
+			// The joins' inputs posted at EarlyPrepass (ancestor map, pipeline frame, capture drain).
 			ZoneScopedN("CS.DCLF.Scene.TakeAccumulateInputs");
 			TakeAccumulateInputs();
 		}
@@ -1312,7 +1312,7 @@ namespace DCLF::Scene
 		auto loggedColumns = [](Tables& a_left, Tables& a_right, auto&& a_column) {
 			a_column(a_left.objects, a_right.objects, kChangeAll);
 			a_column(a_left.draws, a_right.draws, kChangeAll);
-			a_column(a_left.lights, a_right.lights, kChangeLights);
+			a_column(a_left.ancestorValue, a_right.ancestorValue, kChangeAncestorValue);
 			a_column(a_left.sunEntryNode, a_right.sunEntryNode, kChangeAll);
 			a_column(a_left.hasFadeNode, a_right.hasFadeNode, kChangeAll);
 			a_column(a_left.extraOffset, a_right.extraOffset, kChangeExtras);
