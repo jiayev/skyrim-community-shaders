@@ -21,6 +21,25 @@ namespace DCLF::Features::Reflection
 	namespace
 	{
 		using ViewSubmit = IndirectDraws::ViewSubmit;
+
+		/**
+		 * @brief The frame textures (t16 and up) the faces' forward programs read (the LOD Lighting techniques without Deferred, and the
+		 * DistantTree forward program; their sources' declarations): Volumetric Shadows' t18 and t98, Exponential Height Fog's t19, Cloud
+		 * Shadows' t25, Dynamic Cubemaps' t30 and t31, Light Limit Fix's t35-t37, Skylighting's t50 and t53, Terrain Blending's t55, Terrain
+		 * Shadows' t60, Water Effects' t65, IBL's t76-t79 and the character light's t125. Their commit gives each a source of this frame's
+		 * where it has one (the character light, a registered frame texture); the report names the others, which read null.
+		 */
+		constexpr std::uint32_t kFaceFrameTextures[] = { 18, 19, 25, 30, 31, 35, 36, 37, 50, 53, 55, 60, 65, 76, 77, 78, 79, 98, 125 };
+
+		/** @brief The faces' frame textures left null since the last report, by register ("none": every one had a source). */
+		std::string NullFaceTextures(const std::array<std::uint64_t, 2>& a_null)
+		{
+			std::string text;
+			for (const std::uint32_t t : kFaceFrameTextures)
+				if ((a_null[t / 64] >> (t % 64)) & 1)
+					text += fmt::format("{}t{}", text.empty() ? "" : " ", t);
+			return text.empty() ? std::string("none") : text;
+		}
 	}
 
 	void Execute(const Api::ViewPointContext&)
@@ -44,9 +63,10 @@ namespace DCLF::Features::Reflection
 			return skip(2);
 		// What the faces draw from: the frame's scene list (the installed payload, as the shadow views': a member is the reflection's from
 		// the frame it joins) with this frame's depth commit's index pool, depth inputs, object records and geometry rows - the frame's
-		// publication whole - and the frame before's colour frame record, in the backing it was written to.
+		// publication whole - and frame constants of their own, which their commit writes from this frame's sources. The cube is imported
+		// after (it is known only at the faces' capture).
 		IndirectDraws::ViewListed listed;
-		if (draws.TakeViewInputs(kView, IndirectDraws::ViewInputsFrom::DepthThisFrameColourBefore, listed) != IndirectDraws::ViewInputsTaken::Taken)
+		if (draws.TakeViewInputs(kView, IndirectDraws::ViewInputsFrom::DepthThisFrameTargetAfter, listed) != IndirectDraws::ViewInputsTaken::Taken)
 			return skip(3);
 		if (!FrameIndirectState().valid || !draws.SetUpView(kView) || !draws.ImportViewTarget(kView, reflection.cube.get()))
 			return skip(4);
@@ -60,7 +80,8 @@ namespace DCLF::Features::Reflection
 		// The selected revision's shape and recording (DecideCoverage covered the faces), with tree LOD's row as the last depth commit
 		// uploaded it when the faces' tree LOD is DCLF's (Core's, IndirectDraws::SubmitViewEpoch).
 		std::uint32_t drawn = 0;
-		switch (draws.SubmitViewEpoch(kView, 0, listed, views, &drawn)) {
+		std::array<std::uint64_t, 2> nullTextures{};
+		switch (draws.SubmitViewEpoch(kView, 0, listed, views, &drawn, &nullTextures)) {
 		case ViewSubmit::NoRevision:
 			return skip(1);
 		case ViewSubmit::NoOwners:
@@ -73,6 +94,8 @@ namespace DCLF::Features::Reflection
 		}
 		++reflection.epochs;
 		reflection.facesDrawn += drawn;
+		reflection.nullTextures[0] |= nullTextures[0];
+		reflection.nullTextures[1] |= nullTextures[1];
 	}
 
 	std::string Report()
@@ -94,9 +117,11 @@ namespace DCLF::Features::Reflection
 			forward.forwardFailed ? " <- FAILED" : "");
 		const auto v = static_cast<std::size_t>(kView);
 		text += fmt::format("[DCLF] reflection faces drawn: {} frames, {} epochs, {} faces drawn, {} captured after their frame's epoch{}; not drawn: {} not the set's, {} without faces, "
-							"{} the engine's (not covered), {} stale inputs, {} without resources, {} failed{}; last frame's registrations: {} member passes and {} tree LOD passes withheld (faces' tree LOD {})\n",
+							"{} the engine's (not covered), {} stale inputs, {} without resources, {} failed{}; last frame's registrations: {} member passes and {} tree LOD passes withheld (faces' tree LOD {}); "
+							"frame textures without a source: {}\n",
 			reflection.updates, reflection.epochs, reflection.facesDrawn, reflection.lateFaces, reflection.lateFaces ? " <- LATE FACES" : "", s[0], s[2], s[1], s[3], s[4], s[5],
-			s[5] ? " <- EPOCH FAILED" : "", capture.viewWithheld[v], capture.viewFamilyWithheld[v][static_cast<std::size_t>(Api::DrawFamily::TreeInstances)], facesOwned ? "DCLF's" : "the engine's");
+			s[5] ? " <- EPOCH FAILED" : "", capture.viewWithheld[v], capture.viewFamilyWithheld[v][static_cast<std::size_t>(Api::DrawFamily::TreeInstances)], facesOwned ? "DCLF's" : "the engine's",
+			reflection.epochs ? NullFaceTextures(reflection.nullTextures) : std::string("no epochs"));
 		// The faces' cameras against the engine's at their draws, and the LOD roots the engine did not cull.
 		const auto roots = ReflectionFaces::TakeRootStats();
 		const auto residue = PassCapture::Get().TakeViewResidue(kView);
@@ -112,6 +137,7 @@ namespace DCLF::Features::Reflection
 		parity = {};
 		reflection.facesCaptured = reflection.updates = reflection.epochs = reflection.facesDrawn = reflection.lateFaces = 0;
 		reflection.skipped = {};
+		reflection.nullTextures = {};
 		return text;
 	}
 }

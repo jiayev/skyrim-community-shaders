@@ -198,7 +198,7 @@ namespace DCLF
 		// What a registered view's coverage is decided from (Api::ViewCoverage), every input read whatever the others: its feature's
 		// callback decides (the first person's: its members withheld from the engine, PassCapture, and drawn by its epochs on a frame the
 		// engine draws it, whose claims stand, both epochs' recordings in the revision and its target imported into the graph as built; the
-		// reflection's: on a frame whose claims stand, drawing the frame before's colour inputs, its cube imported into the graph as built).
+		// reflection's: on a frame whose claims stand, its recording in the revision and its cube imported into the graph as built).
 		const auto& rv = revisions;
 		const auto& epochs = ViewEpochsOf(a_kind).epochs;
 		auto& view = View(a_kind);
@@ -211,13 +211,6 @@ namespace DCLF
 		coverage.rebuildPending = r && r->rebuildPending;
 		coverage.mainResourcesCurrent = r && r->main && r->main == resources && r->main->native[1];
 		coverage.rebuildRequested = a_host && a_host->RebuildRequested();
-		// The frame before's colour inputs (a view drawing the frame's scene list with the frame before's colour frame record): both commits
-		// of one frame, this one or the one before, of the adopted set, after the installed payload.
-		const std::uint64_t adoptedSerial = Adopted().Serial();
-		coverage.frameBeforeColourHeld = resources && resources->committed[kDepthShape].frame == resources->committed[kColourShape].frame &&
-		                                 a_frame - resources->committed[kDepthShape].frame <= 1 && resources->committed[kDepthShape].adoptedSerial == adoptedSerial &&
-		                                 resources->committed[kColourShape].adoptedSerial == adoptedSerial &&
-		                                 installedPayloadFrame <= resources->committed[kColourShape].frame && scene;
 		coverage.frame = a_frame;
 		const bool covered = Extensions::ViewEntryOf(a_kind).covered(coverage);
 		SetViewCovered(a_kind, covered);

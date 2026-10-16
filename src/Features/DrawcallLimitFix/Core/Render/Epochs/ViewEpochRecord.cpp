@@ -180,7 +180,8 @@ namespace DCLF
 					for (std::uint32_t f = 0; f < faces; ++f)
 						bindings.bucketCounts[f] = a_builder.IndirectArguments(*resources->bucketCounts[f]).Resource();
 					// Read through device addresses; declared so the graph orders them after their uploads.
-					a_builder.ShaderResource(main.frameConstants, noViews);  // the colour segment's frame slots, by address
+					// The view's own frame slots (the faces': its commit's) or the colour segment's, by address.
+					a_builder.ShaderResource(resources->frameConstants ? resources->frameConstants : main.frameConstants, noViews);
 					if (scene.vertexStream)
 						a_builder.ShaderResource(*scene.vertexStream, noViews);
 					a_builder.ShaderResource(resources->blocks, noViews);
@@ -418,6 +419,8 @@ namespace DCLF
 					const auto id = [&](std::string_view a_name) { return org::ResourceIdentifier(fmt::format("{}.{}", traits.prefix, a_name)); };
 					Register(a_graph, id("draw-count"), resources->count);
 					Register(a_graph, id(traits.blocks), resources->blocks);
+					if (resources->frameConstants)
+						Register(a_graph, id("frame-constants"), resources->frameConstants);
 					if (resources->depth)
 						Register(a_graph, id("depth"), resources->depth);
 					Register(a_graph, id(traits.target), resources->target);
@@ -444,11 +447,16 @@ namespace DCLF
 				std::shared_ptr<ViewResources> resources;
 			};
 
-			/** @brief The targets the view's latched copies write: the draw count, the blocks, each face's bucket counts and draw families' rows and lists. */
+			/**
+			 * @brief The targets the view's latched copies write: the draw count, the blocks, a view's own frame constants, each face's bucket
+			 * counts and draw families' rows and lists.
+			 */
 			std::function<std::vector<LatchedTarget>()> LatchedTargets(std::shared_ptr<ViewResources> a_resources)
 			{
 				return [resources = std::move(a_resources)] {
 					std::vector<LatchedTarget> out{ { resources->count, nullptr }, { resources->blocks, nullptr } };
+					if (resources->frameConstants)
+						out.push_back({ resources->frameConstants, nullptr });
 					std::array<bool, Extensions::kDrawFamilies> families{};
 					for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
 						families[d] = FamilySetUp(*resources->main->scene, static_cast<Api::DrawFamily>(d)) && resources->faceLists[d][0];

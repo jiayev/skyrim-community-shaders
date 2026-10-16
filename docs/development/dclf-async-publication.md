@@ -785,7 +785,9 @@ tables r4v1-3 with a forced mid-run growth and spawned NPCs, default r4d1: no lo
   own preparation left: the first report's Z-prepass and colour are all "by the revision", the withdrawn frames not submitted.
 - *Reflection.* Its faces draw from the frame before's main commits, whose inputs name the main rows by address. They are covered
   only when those commits exist, are of the current scene buffers, and no growth of the rows was adopted since (the rows' named
-  serial, `NamedEntry::serial`); else the engine renders them, decided before it does.
+  serial, `NamedEntry::serial`); else the engine renders them, decided before it does. (Since 2026-10-16 the faces draw this
+  frame's depth commit with frame constants of their own, written by their commit from this frame's sources: dclf-lod.md,
+  "Water reflections".)
 - *Device loss on a mid-run growth of the main rows* (found here, older than this step: the committed state lost the device too).
   A spawned NPC's pipelines grew the pipeline rows 128 -> 256 as graph work; the GPU faulted at VA 0 about 10 ms after the request,
   before any adoption, and only with the growth's fill (no fill, no loss; revisions off, no loss). The fill's copy runs on the
@@ -1355,7 +1357,8 @@ resident-draw, set and fade parity; motion m28/m29).
     (counted, logged once per slot), so the builds ahead see the same slots every frame - the in-frame builds for frame slots went
     from 1-6 per 300 frames to 0 (VS b7: 16 bytes captured at startup, absent since on the bridge; no pipeline drawn reads it, 0
     constants skips before and after). The Z-prepass's carried vertex blocks are the colour epoch's replay too. Face regions
-    (faceRegionFree) now retire through the chain (kRetiredFaceRegion): the reflection draws the frame before's streams. The
+    (faceRegionFree) now retire through the chain (kRetiredFaceRegion): the reflection draws the frame before's streams (since then
+    this frame's depth commit, with frame constants of its own). The
     resident region's resyncs, now most of the ring's bytes, were 1,209 of 1,211 decal-count changes (counted by reason): every
     ordinal OrderDecals moves is in the change log, so a count change re-takes only the decals between the old and the new count (a
     capped count moves those without a log entry). y26: 0 resyncs, resident-draw parity 0 differ (1.4M entries), set parity 0, 7,447

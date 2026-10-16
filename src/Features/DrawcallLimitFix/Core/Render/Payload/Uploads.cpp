@@ -2,6 +2,7 @@
 // into the selected revision's shape) and the depth commit's scene uploads.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
@@ -121,29 +122,9 @@ namespace DCLF
 		{
 			const auto& in = a_commit.in;
 			const auto& resources = *a_commit.resources;
-			DrawBindings frameRecord{};
-			const std::uint64_t frameConstants = resources.frameConstantsAddress;
-			for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
-				frameRecord.vertexConstants[r] = ((in.vsFrameMask >> r) & 1) ? frameConstants + FrameSlotOffset(false, r) : 0;
-				frameRecord.pixelConstants[r] = ((in.psFrameMask >> r) & 1) ? frameConstants + FrameSlotOffset(true, r) : 0;
-			}
-			frameRecord.pixelConstants[3] = frameConstants + std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes;
-			frameRecord.pixelConstants[kFrameLightingRegister] = frameConstants + std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes;
 			const std::uint32_t nullIndex = a_commit.textures.NullIndex() != kInvalidIndex ? a_commit.textures.NullIndex() : 0u;
-			for (std::uint32_t t = 0; t < kTextureRegisters; ++t)
-				frameRecord.textures[t] = a_frameTextures[t] == kInvalidIndex ? nullIndex : a_frameTextures[t];
-			const auto& sceneBuffers = *resources.scene;
-			const auto& parts = a_commit.parts;
-			const auto& adopted = a_commit.adopted;
-			frameRecord.textures[kObjectBufferRegister] = parts[PayloadPart::Objects].srvIndex;
-			frameRecord.textures[kExtrasBufferRegister] = parts[PayloadPart::Extras].srvIndex;
-			frameRecord.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
-			frameRecord.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
-			frameRecord.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
-			Extensions::FrameBindingValues bindings;
-			Extensions::FrameBindingValuesOf(adopted, sceneBuffers, a_commit.frameNumber, bindings);
-			// The root states and rows every draw's alpha reads are among them (t120/t119: Features/Fades').
-			Extensions::WriteFrameBindings(bindings, frameRecord.textures);
+			const DrawBindings frameRecord = FrameRecordOf(resources.frameConstantsAddress, in.vsFrameMask, in.psFrameMask, a_frameTextures, nullIndex, a_commit.parts,
+				{ in.addresses.placementsIndex, in.addresses.palettesIndex, in.addresses.shadingIndex }, a_commit.adopted, *resources.scene, a_commit.frameNumber);
 			a_commit.latched(resources.frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 		}
 
@@ -161,30 +142,9 @@ namespace DCLF
 				if (!a_blocks.ps[slot].empty())
 					latched(resources->frameConstants, a_blocks.ps[slot].data(), a_blocks.ps[slot].size(), FrameSlotOffset(true, slot));
 			}
-			if (!resources->sharedLightZeroed) {
-				static const std::array<std::uint32_t, kStrictLightDataBytes / 4> zeroLight{};
-				uploads(resources->frameConstants, zeroLight.data(), sizeof(zeroLight), std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes);
-				resources->sharedLightZeroed = true;
-			}
-			// The frame lighting, every commit: latching it only on change would change the frame's shape.
-			const auto& frameCapture = Scene::FrameView::Get().GetFrameCapture();
-			latched(resources->frameConstants, frameCapture.lighting.data(), sizeof(frameCapture.lighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
-			// The LOD fades' frame inputs after the lighting (PS b13, c6): the draws fade specular and envmap by distance.
-			const LodFadeFrame lodFadeFrame = SampleLodFadeFrame();
-			latched(resources->frameConstants, &lodFadeFrame, sizeof(lodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
-			// The frame's fog into VS b13 (DCLFFrameFog); the technique rows keep theirs.
-			latched(resources->frameConstants, frameCapture.fog.data(), sizeof(FrameFog), FrameSlotOffset(false, kFrameFogRegister));
-			// The extras' frame inputs: vertex part after the fog (c3-c7), pixel part at PS b13 c16.
-			const ExtrasFrame extrasFrame = SampleExtrasFrame();
-			latched(resources->frameConstants, &extrasFrame, kExtrasFrameVertexBytes, FrameSlotOffset(false, kFrameFogRegister) + sizeof(FrameFog));
-			latched(resources->frameConstants, extrasFrame.projectedGlobals, sizeof(extrasFrame.projectedGlobals), kExtrasPixelFrameOffset);
-			// The frame constant rows (PS b13 c17 and up, Api::FrameConstantRow: the Effect port's camera planes, light colour and blood),
-			// in ascending row order, as MainLatchedLayout lays them out.
-			for (const auto& row : Extensions::RegisteredFrameConstantRows()) {
-				float value[4]{};
-				row.sample(value);
-				latched(resources->frameConstants, value, sizeof(value), FrameConstantRowOffset(row.row));
-			}
+			ZeroSharedLightOnce(uploads, resources->frameConstants, resources->sharedLightZeroed);
+			// The frame-wide rows: lighting, LOD fades, fog, extras and the frame constant rows, as MainLatchedLayout lays them out.
+			LatchFrameRows(latched, resources->frameConstants);
 			// The foliage record: buffers (by parity) and tag at PS b13 c14, counters zeroed. The Z-prepass reads the owners' index
 			// and size as the previous colour commit left them.
 			if (const auto& foliage = resources->foliage; foliage && !a_commit.depthOnly) {
@@ -399,19 +359,7 @@ namespace DCLF
 			auto* const view = t == kCharacterLightRegister ? Scene::FrameView::Get().GetFrameCapture().characterLightView :
 			                   registered                   ? frameTextureViews[at] :
 			                                                  capture.psViews[t];
-			if (!view) {
-				if (held.view)
-					held = {};
-				a_frameTextures[t] = textures.NullIndex();
-				continue;  // the shared lookup root already owns the null descriptor
-			}
-			if (held.view != view || !held.binding.owner || held.binding.index == GpuTextures::kInvalid) {
-				held.view = view;
-				held.binding = textures.ResolveBinding(held.view, 64 + t);
-			}
-			a_frameTextures[t] = held.binding.index;
-			if (held.binding.owner)
-				a_commit.bindingOwners.push_back(held.binding.owner);
+			a_frameTextures[t] = HoldFrameTexture(held.view, held.binding, view, t, view ? 0u : textures.NullIndex(), a_commit.bindingOwners);
 		}
 		// The frame graph buffers on the graph (Api::FrameGraphBuffers: Integrations/LightLimitFix's, t35-t37), their indices at their registers.
 		const auto graphBuffers = Extensions::RegisteredFrameGraphBuffers();
@@ -584,7 +532,6 @@ namespace DCLF
 			a_stats.commitUs[a_part] += std::chrono::duration<double, std::micro>(now - last).count();
 			last = now;
 		};
-		const std::size_t shapeIndex = latchedShape;
 		const MainCommit commit{ a_capture, in, a_payload, a_resources, a_stats, a_bindingOwners, tables, parts, adopted, uploads, latched, textures, mirror, shape,
 			revisionShape, writePlan, latchBlock, latchLayout, frameNumber, depthOnly, replayVertexInputs };
 
@@ -622,8 +569,9 @@ namespace DCLF
 		if (!depthOnly)
 			WriteShadowLatch(commit, latchSlot, latch);
 		LatchWriteValue(latchBlock, "main culling latch", latchSlot, 0, latch);
-		// What the reflection faces draw from early next frame: this commit's inputs and buffer backings.
-		a_resources->committed[shapeIndex] = { frameNumber, cull.inputCount, adopted.Serial() };
+		// What a view drawing this frame's depth commit checks it against (TakeViewInputs): its frame and adopted set.
+		if (depthOnly)
+			a_resources->depthCommitted = { frameNumber, cull.inputCount, adopted.Serial() };
 
 		(void)latched.Finish();
 		revisions.latchedMisses += latched.Misses();

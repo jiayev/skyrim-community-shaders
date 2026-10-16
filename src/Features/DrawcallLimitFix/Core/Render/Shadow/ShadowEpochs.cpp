@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SunVolume.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -388,14 +389,8 @@ namespace DCLF
 				auto& arena = payload.arena;
 				if (const auto& bytes = arena.Bytes(); !bytes.empty()) {
 					DrawBindings record = payload.frameRecord;
-					record.textures[kObjectBufferRegister] = parts[PayloadPart::Objects].srvIndex;
-					record.textures[kExtrasBufferRegister] = parts[PayloadPart::Extras].srvIndex;
-					record.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
-					record.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
-					record.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
-					Extensions::FrameBindingValues bindings;
-					Extensions::FrameBindingValuesOf(a_commit.adopted, *resources.scene, a_commit.frameNumber, bindings);
-					Extensions::WriteFrameBindings(bindings, record.textures);
+					WriteRecordBuffers(record, parts, { in.addresses.placementsIndex, in.addresses.palettesIndex, in.addresses.shadingIndex }, a_commit.adopted,
+						*resources.scene, a_commit.frameNumber);
 					constexpr std::size_t recordEnd = kShadowFrameRecordOffset + sizeof(DrawBindings);
 					if (bytes.size() < recordEnd)
 						stl::report_and_fail("Drawcall Limit Fix: a shadow arena without its frame record");

@@ -3,6 +3,7 @@
 // main shape's plans (shared with the commits).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
@@ -87,14 +88,9 @@ namespace DCLF
 				add(constants, a_blocks.vs[slot], FrameSlotOffset(false, slot));
 				add(constants, a_blocks.ps[slot], FrameSlotOffset(true, slot));
 			}
-			add(constants, sizeof(Scene::FrameView::FrameCapture::lighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
-			add(constants, sizeof(LodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
-			add(constants, sizeof(FrameFog), FrameSlotOffset(false, kFrameFogRegister));
-			add(constants, kExtrasFrameVertexBytes, FrameSlotOffset(false, kFrameFogRegister) + sizeof(FrameFog));
-			add(constants, sizeof(ExtrasFrame::projectedGlobals), kExtrasPixelFrameOffset);
-			// The frame constant rows, in ascending row order (the Effect port's camera planes, light colour and blood).
-			for (const auto& row : Extensions::RegisteredFrameConstantRows())
-				add(constants, sizeof(float[4]), FrameConstantRowOffset(row.row));
+			// The frame-wide rows (LatchFrameRows: the lighting, LOD fades, fog, extras and the frame constant rows in ascending row order).
+			auto addConstants = [&](std::size_t a_bytes, std::uint64_t a_offset) { add(constants, a_bytes, a_offset); };
+			FrameRowWrites([](void* a_add, std::size_t a_bytes, std::uint64_t a_offset) { (*static_cast<decltype(addConstants)*>(a_add))(a_bytes, a_offset); }, &addConstants);
 			if (!a_depthOnly && a_resources.foliage)
 				add(constants, 8 * sizeof(std::uint32_t), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame));
 			// The features' scene resources' latched buffers (Api::SceneResources::latched: Features/TreeLod's draw row and list header), the
@@ -123,6 +119,29 @@ namespace DCLF
 		std::size_t LatchedBytes(const std::vector<LatchedCopy>& a_copies)
 		{
 			return a_copies.empty() ? 0 : std::size_t(a_copies.back().latchOffset) + a_copies.back().bytes;
+		}
+
+		/**
+		 * @brief A view's own frame values' latched copies (into a_key, its frame constants), in CommitView's order, packed from a_at (its
+		 * latch layout's FrameOffset): the record, CS's SharedData and FeatureData at the depth commit's sizes (a_depth: the same blocks,
+		 * this frame's), the frame-wide rows. The faces' programs read no other frame slot.
+		 */
+		std::vector<LatchedCopy> ViewFrameLatched(const void* a_key, const FrameBlockSizes& a_depth, std::uint32_t a_at)
+		{
+			std::vector<LatchedCopy> out;
+			std::size_t used = 0;
+			auto add = [&](std::size_t a_bytes, std::uint64_t a_offset) {
+				if (!a_bytes)
+					return;
+				const std::size_t at = (used + 15) & ~std::size_t(15);
+				out.push_back({ a_key, static_cast<std::uint32_t>(a_at + at), static_cast<std::uint32_t>(a_bytes), a_offset });
+				used = at + a_bytes;
+			};
+			add(sizeof(DrawBindings), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
+			add(a_depth.ps[kSharedDataRegister], FrameSlotOffset(true, kSharedDataRegister));
+			add(a_depth.ps[kFeatureDataRegister], FrameSlotOffset(true, kFeatureDataRegister));
+			FrameRowWrites([](void* a_add, std::size_t a_bytes, std::uint64_t a_offset) { (*static_cast<decltype(add)*>(a_add))(a_bytes, a_offset); }, &add);
+			return out;
 		}
 
 		/** @brief Producer: a latched-copies block holding a_copies (none: nothing asked). */
@@ -359,6 +378,13 @@ namespace DCLF
 			}
 			if (!view.resources || (traits.depthPass && !viewOn[v]))
 				continue;
+			// A view's own frame values (the faces'): its latch's frame region holds them at the depth commit's block sizes, grown by a page
+			// (another layout: a new block at the seal).
+			if (OwnsFrameConstants(traits) && view.resources->frameConstants && producer.latches.viewsLaidOut[v]) {
+				const auto bytes = static_cast<std::uint32_t>(LatchedBytes(ViewFrameLatched(view.resources->frameConstants.get(), inputs.blockSizes[kDepthShape], 0)));
+				if (auto& layout = producer.latches.views[v]; bytes > layout.frameBytes)
+					layout.frameBytes = (bytes + 4095u) & ~4095u;
+			}
 			ViewPlan plan;
 			PlanViewBuckets(traits, producer.mainLayout, &a_make.lookups, a_make.indirect, viewRevisionPipelines[v], traits.forwardPart ? std::span<const std::uint8_t>(viewForwardSlots) : std::span<const std::uint8_t>{}, plan);
 			// The forward range's table entry and count word after the buckets'.
@@ -461,7 +487,14 @@ namespace DCLF
 			in.samplerHeap = samplerHeap;
 			in.indirect = indirect;
 			in.latches = &viewLatches;
-			in.frameConstantsAddress = r.frameConstantsAddress;
+			// The view's own frame constants (the faces': its commit's, from this frame's sources) or the colour segment's.
+			const auto& own = view.resources->frameConstants;
+			in.frameConstantsAddress = own ? view.resources->frameConstantsAddress : r.frameConstantsAddress;
+			if (own && viewLatches.latch && viewLatches.layout.frameBytes) {
+				in.frameCopies = ViewFrameLatched(own.get(), inputs.blockSizes[kDepthShape], viewLatches.layout.FrameOffset());
+				if (LatchedBytes(in.frameCopies) > viewLatches.layout.Bytes())
+					in.frameCopies.clear();  // laid out for smaller blocks: the commit stages them
+			}
 			in.width = view.width;
 			in.height = view.height;
 			in.depthRange = view.depthRange;

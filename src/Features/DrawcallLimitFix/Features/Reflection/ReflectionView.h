@@ -42,6 +42,7 @@ namespace DCLF::Features::Reflection
 		// Since the last report.
 		std::uint32_t facesCaptured = 0, updates = 0, epochs = 0, facesDrawn = 0;
 		std::array<std::uint32_t, 6> skipped{};  // not drawable, not covered (DecideCoverage), no faces, stale inputs, no resources, the epoch failed
+		std::array<std::uint64_t, 2> nullTextures{};  // the frame texture registers the epochs' frame records left null (IndirectDraws::SubmitViewEpoch)
 		// The last Execute's frame, and faces captured after it that frame (expected none).
 		std::uint32_t executedFrame = ~0u, lateFaces = 0;
 	};

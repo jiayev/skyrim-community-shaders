@@ -642,8 +642,9 @@ classes and the engine's forward points) are not views.
   `ExchangeViewForwardCompatible`, `DrawPipelines::SetViewForwardTargets` (the view's forward targets, `PipelineCatalog::viewTargets`),
   `ResolveViewPipelines` (wanted slots or every slot; with the programs and waits counted on request),
   `DropViewPipelines`, `SetUpView`, `ImportViewTarget` (by its target import), `TakeViewInputs` (`DepthThisFrame`,
-  `DepthThisFrameColourBefore`: the frame before's colour frame record, the target imported after; `ColourThisFrame`), `SubmitViewEpoch`
-  (the revision's recording and shape, the payloads held, the faces committed: `Submitted`, `NoRevision`, `NoOwners`, `Failed`, which the
+  `DepthThisFrameTargetAfter`: the same commit, the target imported after; `ColourThisFrame`), `SubmitViewEpoch`
+  (the revision's recording and shape, the payloads held, the faces committed, a view with frame constants of its own its frame
+  record and rows too, from this frame's sources, Core/Render/Resources/FrameRecords.h: `Submitted`, `NoRevision`, `NoOwners`, `Failed`, which the
   feature maps onto its own skip causes and log lines), `ViewCovered`, `ViewDrawable`. A trees view's draw families per face are the view engine's
   (`ResolveViewFaces`, `DecideViewFaces`, per family, a no-op unless the view has trees; the rows `SubmitViewEpoch` commits), drawn by each
   family's faces while the family is on (`TreeInstances`: Features/TreeLod's, under `ObjectClass::TreeLod`); a view feature reaches them
