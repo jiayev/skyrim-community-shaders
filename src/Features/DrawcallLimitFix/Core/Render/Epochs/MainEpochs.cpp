@@ -1,5 +1,6 @@
-// The main epochs on the render thread: the Z-prepass's and colour pass's captures at their engine hooks, the forward and
-// refraction epoch, each epoch's commit of the installed publication's payload, and the frame blocks taken from the capture.
+// The main epochs on the render thread: the Z-prepass's and colour pass's captures at their engine hooks, an epoch sharing a main
+// epoch's shape (SubmitSharedEpoch: Features/Forward's forward epoch), each epoch's commit of the installed publication's payload, and
+// the frame blocks taken from the capture.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -9,19 +10,6 @@
 
 namespace DCLF
 {
-	namespace
-	{
-		/**
-		 * @brief The forward epoch (the schedule's "forward", where Core's forward.* passes are; kNoEpoch: none scheduled), looked up once:
-		 * its first read is the render thread's, after InstallFeatures resolved the schedule.
-		 */
-		std::uint32_t ForwardEpoch()
-		{
-			static const std::uint32_t epoch = Draws::EpochById("forward");
-			return epoch;
-		}
-	}
-
 	IndirectDraws::IndirectDraws() :
 		impl(std::make_unique<Impl>())
 	{}
@@ -94,89 +82,59 @@ namespace DCLF
 		RunEpoch(false);
 	}
 
-	bool IndirectDraws::ExecuteForward()
+	SharedEpochResult IndirectDraws::SubmitSharedEpoch(std::uint32_t a_epoch, const SharedEpochSubmit& a_submit)
 	{
-		ZoneScopedN("CS.DCLF.ExecuteForward");
-		if (!impl || failed)
-			return false;
-		const ToggleSet toggles = ActiveToggles();
-		const std::uint32_t forwardEpoch = ForwardEpoch();
-		if (!Extensions::ObjectClassOn(toggles, Api::ObjectClass::Forward) || forwardEpoch == Draws::kNoEpoch)
-			return false;
-		auto& f = impl->forwardEpoch;
+		if (!impl || failed || a_epoch >= EpochCount())
+			return {};
+		const auto& traits = EpochTraitsOf(a_epoch);
+		auto& f = impl->sharedEpochs[a_epoch];
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
-		// Once a frame (the engine's blended draw has two call sites: the camera under water draws it first, else after the water).
+		// Once a frame (the forward epoch's trigger, the engine's blended draw, has two call sites: the camera under water draws it
+		// first, else after the water).
 		if (f.submittedFrame == frame)
-			return false;
+			return {};
 		++f.reached;
-		// What it draws is what this frame's colour epoch built and sorted: nothing without it (no claims: the engine drew everything,
-		// the forward objects' passes included).
-		const MainPayload* colour = impl->committedPayload[kAsyncColour];
-		if (!colour || impl->committedFrame[kAsyncColour] != frame || Scene::FrameView::Get().SetWithdrawn()) {
-			++f.noColour;
-			return false;
+		// What it draws is what this frame's commit of the shared epoch (the colour epoch, for the forward epoch) built and sorted:
+		// nothing without it (no claims: the engine drew everything, the forward objects' passes included).
+		const std::uint32_t source = traits.sharesWith;
+		const bool mainSource = source != kNoEpoch && EpochTraitsOf(source).shape == ShapeKind::Main;
+		const std::size_t jobIndex = mainSource && EpochTraitsOf(source).index == kColourShape ? kAsyncColour : kAsyncZPrepass;
+		const MainPayload* shared = mainSource ? impl->committedPayload[jobIndex] : nullptr;
+		if (!shared || impl->committedFrame[jobIndex] != frame || Scene::FrameView::Get().SetWithdrawn()) {
+			++f.noSharedPayload;
+			return {};
 		}
-		// The selected revision's forward recording (DecideCoverage required it for the frame's claims while the toggle is on).
-		const auto revision = impl->RevisionOf(forwardEpoch);
+		// The selected revision's recording of the epoch (DecideCoverage required it for the frame's claims while its gate is on).
+		const auto revision = impl->RevisionOf(a_epoch);
 		if (!revision) {
 			++f.noRecording;
-			return false;
+			return {};
 		}
-		// Held until this execution retires (its draws read what the colour commit bound): the colour payload's bindings, the frame
+		// Held until this execution retires (its draws read what the shared commit bound): the shared payload's bindings, the frame
 		// textures its frame record names, the adopted snapshot whole.
-		const std::array<const MainPayload*, 1> payloads{ colour };
+		const std::array<const MainPayload*, 1> payloads{ shared };
 		const auto owners = impl->EpochOwners(payloads);
 		if (!owners) {
 			++f.failed;
-			return false;
+			return {};
 		}
-		// Refraction: the pipeline asked for and its inputs posted (each once, or when they change), and whether this recording draws
-		// the refraction normals (RefractionDrawPass: the colour shape has refraction slots and the refraction pipeline of the imported
-		// normals' format).
-		bool refraction = false;
-		if (Extensions::ObjectClassOn(toggles, Api::ObjectClass::Refraction)) {
-			const auto& resources = impl->resources;
-			auto& pipelines = DrawPipelines::Get();
-			pipelines.RequestRefraction();
-			if (resources && resources->refractionNormals && globals::game::utilityShader) {
-				// The engine's write mask for write mode 2 (FUN_1414b4860), blending off: the forward table's, as it is outside the deferred pass.
-				std::uint8_t writeMask = 0xF;
-				if (auto* blend = EngineBlendStates()[0][0][2][0]) {
-					D3D11_BLEND_DESC desc{};
-					blend->GetDesc(&desc);
-					writeMask = static_cast<std::uint8_t>(desc.RenderTarget[0].RenderTargetWriteMask & 0xF);
-				}
-				pipelines.SetRefractionInputs(*globals::game::utilityShader, resources->refractionFormat, writeMask);
-			}
+		// The owner's optional part (Features/Forward: refraction), prepared against the selected revision's shape.
+		SharedEpochResult result{};
+		if (a_submit.prepare) {
 			const auto shape = revision.shape ? revision.shape->Value<PassFrame>() : nullptr;
-			if (shape && shape->refractionCapacity) {
-				refraction = resources && resources->refractionNormals && resources->pool && shape->indirect.refraction.valid() &&
-				             shape->indirect.refractionFormat == resources->refractionFormat;
-				if (!refraction)
-					++f.refractionNotReady;
-			}
+			result.optional = a_submit.prepare(a_submit.context, impl->resources.get(), shape.get());
 		}
-		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::Forward, [&](org::RenderGraph&) {
-			impl->SubmitRevisionRecording(forwardEpoch, *revision.recordings, 0);
+		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(traits.segment, [&](org::RenderGraph&) {
+			impl->SubmitRevisionRecording(a_epoch, *revision.recordings, 0);
 		}, owners);
 		if (!ok) {
 			++f.failed;
-			return false;
+			return {};
 		}
 		f.submittedFrame = frame;
 		++f.epochs;
-		// Refraction: the epoch cleared and drew the refraction normals, ahead of Main::Draw's own group 5 (FUN_1414b4860). The caller
-		// (Features/Forward's blended-draw point) marks them begun and drawn, as that function does, before the engine's blended draws.
-		if (refraction) {
-			f.refractionFrame = frame;
-			++f.refractionDrawn;
-		}
-		return refraction;
-	}
-
-	bool IndirectDraws::RefractionDrawnThisFrame() const
-	{
-		return impl && impl->forwardEpoch.refractionFrame == Scene::FrameView::Get().GetFrame();
+		result.submitted = true;
+		return result;
 	}
 
 	void IndirectDraws::RunEpoch(bool a_depthOnly)

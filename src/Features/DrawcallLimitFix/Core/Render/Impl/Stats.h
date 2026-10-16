@@ -41,15 +41,8 @@ namespace DCLF
 		// From the oldest event its publication first carried (ScenePublication::eventNs, eventFrame) to its adoption, ms and frames.
 		std::vector<double> eventAdoptionMs;
 		std::vector<std::uint32_t> eventAdoptionFrames;
-		// The forward epoch's report counters.
-		struct ForwardEpochStats
-		{
-			std::uint64_t reached = 0, epochs = 0, noColour = 0, noRecording = 0, failed = 0;
-			std::uint32_t submittedFrame = ~0u;
-			// Refraction: epochs that drew the normals (marked begun for the engine), and those whose members could not.
-			std::uint64_t refractionDrawn = 0, refractionNotReady = 0;
-			std::uint32_t refractionFrame = ~0u;  // the frame whose forward epoch drew the refraction normals
-		} forwardEpoch;
+		// The shared epochs' report counters (SubmitSharedEpoch: the forward epoch's), by epoch (Revision/Epochs.h).
+		std::array<SharedEpochStats, kMaxEpochs> sharedEpochs{};
 		// Per main epoch since the last report: covered frames with no payload for the main resources (not submitted, <- UNBUILT).
 		std::array<std::uint64_t, 2> unbuilt{};
 		std::uint64_t frameSlotsCarried = 0;  // since the last report

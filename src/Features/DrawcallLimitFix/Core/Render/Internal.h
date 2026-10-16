@@ -105,6 +105,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/IndexPool.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowFrame.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameSlots.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/KeptStores.h"

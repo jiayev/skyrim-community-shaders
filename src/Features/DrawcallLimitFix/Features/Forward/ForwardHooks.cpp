@@ -7,7 +7,6 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
-#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
 #include <cstdint>
@@ -52,7 +51,7 @@ namespace DCLF::Features::Forward
 		 * @brief The main pass's blended draw (AE FUN_1414b39d0, BSShaderAccumulator's sorted blended list interleaved with the
 		 * geometry groups' stack, after the deferred composite), at both its call sites in FinishAccumulatingPostResolveDepth's render
 		 * mode 0 (FUN_1414b3390: +0x51, first when the camera is under water; +0x543, after the water otherwise). For the main
-		 * camera's accumulator the forward epoch draws DCLF's blended objects first (IndirectDraws::ExecuteForward).
+		 * camera's accumulator the forward epoch draws DCLF's blended objects first (SubmitForwardEpoch).
 		 */
 		template <int N>
 		struct Accumulator_BlendedDraw
@@ -67,7 +66,7 @@ namespace DCLF::Features::Forward
 					Diagnostics::Notify(Diagnostics::TargetPoint{ "before forward" });
 				if (main && ShellState::Running()) {
 					Extensions::TriggerScope trigger(blendedDraw);
-					if (IndirectDraws::Get().ExecuteForward())
+					if (SubmitForwardEpoch())
 						MarkRefractionNormals();
 				}
 				if (main)
@@ -90,7 +89,7 @@ namespace DCLF::Features::Forward
 			static std::uint32_t thunk(void* a_accumulator)
 			{
 				// FUN_1414b4ae0(accumulator, 6): the group's pass list cleared (FUN_1414f1940), undrawn.
-				if (a_accumulator && ShellState::Running() && IndirectDraws::Get().RefractionDrawnThisFrame()) {
+				if (a_accumulator && ShellState::Running() && RefractionDrawnThisFrame()) {
 					using ClearGroup = void (*)(void*, std::int32_t);
 					static REL::Relocation<ClearGroup> clearGroup{ REL::Offset(Address::kClearGroup) };
 					clearGroup(a_accumulator, 6);

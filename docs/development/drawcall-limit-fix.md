@@ -2674,7 +2674,7 @@ attachments are masked off, as the engine has them unbound).
     state list (`Resources::preprocessForward`).
 -   **The revision** (`SceneRevision.cpp`): a sixth epoch, `kForwardEpoch`, whose shape slot names the colour slot's shape while the toggle
     is on, so its recording is made with the colour one's and kept as long. `DecideCoverage` requires it for the frame's claims while the
-    toggle is on (a frame without it would withhold the members and draw nothing for them). `IndirectDraws::ExecuteForward` submits it,
+    toggle is on (a frame without it would withhold the members and draw nothing for them). `IndirectDraws::ExecuteForward` (since round 2: Features/Forward's `SubmitForwardEpoch` through `IndirectDraws::SubmitSharedEpoch`) submits it,
     only after this frame's colour epoch, holding the colour payload's bindings, the frame textures and the adopted snapshot.
 -   **Diagnostics**: `[DCLF] forward epoch (T7d, CS_DCLF_FORWARD on|off): reached N frames, E epochs; not submitted: ... without this
     frame's colour epoch, ... without a forward recording <- NO FORWARD RECORDING, ... failed <- EPOCH FAILED`, every report. With the
@@ -2749,7 +2749,7 @@ draws it behind `CS_DCLF_REFRACTION` (a live classification toggle, **off by def
 **Where DCLF draws it.** In the **forward epoch**, after the blended draws (`RefractionDrawPass`, `cs.dclf.refraction`, registered
 in `Segment::Forward` after `cs.dclf.forward`). The pass clears the imported `kREFRACTION_NORMALS` to (0.5, 0.5, 0, 0), as
 `FUN_1414b4860` does, and draws the refraction range with one plain indexed indirect draw that tests the main depth.
-`IndirectDraws::ExecuteForward` then sets `0x1435ef130` and `0x1435ef131`, as `FUN_1414b4860` does. Main::Draw's own refraction
+`IndirectDraws::ExecuteForward` (now Features/Forward's `SubmitForwardEpoch`) then sets `0x1435ef130` and `0x1435ef131`, as `FUN_1414b4860` does. Main::Draw's own refraction
 point then finds the normals begun: if the engine still has refraction passes in group 5 (non-members), it draws them **on top
 of DCLF's without clearing**, and ISRefraction runs. That point (the call at `0x140644d20`) is hooked
 (`Main_Draw_RefractionCheck`). When DCLF drew the normals that frame, the hook clears group 6 first. Group 6 is the only thing

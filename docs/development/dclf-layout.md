@@ -80,8 +80,9 @@ shading line), their text unchanged.
 | Contract | Header | What a feature gets |
 | --- | --- | --- |
 | Frame-value pool | `Api/FrameValues.h` | rows sampled every frame on DCLF's pool into a pooled backing the frame reads by descriptor (`Extensions::FrameValuePoolIndex`, `Core/Extensions/FrameValuePools.cpp`); its own frame-start reads (`frameStart`), the producer's view of the frame (`FrameValuePoolProducer`: the globals, the kick's input, the texture-transform buffer the frame's shaders read, `TextureTransformBuffer`), and the rows once the producer is done (`FrameValues::ProducerDone`) |
-| Pass | `Api/Passes.h` (`Core/Extensions/PassContext.h`) | a graph pass the frame's schedule names by key (`InstallContext::RegisterPass`, `PassDef{key, passName, kind, queue, make, emit, setup, latchWord}`; "The schedule", below): its kind (`PassKind`) and queue (`PassQueue`: the graphics queue by default, `Compute`, or none asked), made at the graph's build from its epoch's resources (`PassContext`), optionally with a state its `setup` makes with the scene's tables (none: not added) and the depth segment's latch word |
+| Pass | `Api/Passes.h` (`Core/Extensions/PassContext.h`) | a graph pass the frame's schedule names by key (`InstallContext::RegisterPass`, `PassDef{key, passName, kind, queue, make, emit, setup, latchWord}`; "The schedule", below): its kind (`PassKind`) and queue (`PassQueue`: the graphics queue by default, `Compute`, or none asked), made at the graph's build from its epoch's resources (`PassContext`; `ShapeSegment()`, the segment of the shape it records against, the shared epoch's for an epoch that shares one), optionally with a state its `setup` makes with the scene's tables (none: not added) and the depth segment's latch word. A draw pass outside Core records with `Core/Render/Passes/DrawHelpers.h` (attachments, `DeclareFrameBuffers`, `RecordPreprocessedDraw`, the frame slots' addresses: `MainFramePushWords`, `MainShadowLayoutPush`, `LodFadeFrameAddress`) |
 | Trigger | `Api/Epochs.h` (`Core/Extensions/Triggers.h`) | the schedule's engine point its hook owns (`InstallContext::FindTrigger(id)`, at install: an id the schedule has not fails it), marked active around the hook's DCLF work with `Extensions::TriggerScope` ("The schedule", below): the epochs submitted there are checked against it |
+| Shared epoch submission | `Core/Render/IndirectDraws.h` (`SubmitSharedEpoch`) | an epoch of the schedule that shares a main epoch's shape (`sharesWith`), submitted from its owner's hook (render thread, inside its trigger's scope): `IndirectDraws::SubmitSharedEpoch(epoch, SharedEpochSubmit{prepare, context})` holds the generic steps (once a frame; this frame's commit of the shared epoch, not withdrawn; the selected revision's recording; the shared payload's owners; the execution in the epoch's segment, `EpochTraitsOf(e).segment`) and counts each early return (`SharedEpochStats`: reached, epochs, no shared payload, no recording, failed; by epoch, `ImplStats::sharedEpochs`); `prepare` (a function pointer and a context: no allocation) is handed the main resources and the selected revision's shape (`const PassFrame*`) right before the execution and says whether the owner's optional part draws (`SharedEpochResult{submitted, optional}`). Its report lines go at `ReportPoint::AsyncWorkForward`, which Core prints while a shared epoch reached a frame since the last report or its gate class is on (`IndirectDraws::SharedEpochReport`), taking the counters with `IndirectDraws::TakeSharedEpochStats(epoch)`. Features/Forward's forward epoch |
 | Payload product | `Api/Payload.h` | data built with every main payload on the builder, carried with it, and installed with it on the render thread |
 | Scene resources | `Api/SceneResources.h` | state held with the scene's tables: versioned buffers registered with the scene's set, their graph registration, each revision's requirement (with the words it posts with the revision's inputs, `postInputs`, compared for a new revision), the slots they hold of the objects (`SceneFit`), the buffers the depth commit latches (`latched`: the main latched targets and the depth latch's layout), and `sealed`, called once a set is sealed, before any shape, with its versions (`Extensions::SealSceneResources`; Fades' write-back takes the set there) |
 | Commit hook | `Api/Commits.h` | its part of each commit's frame data (depth, colour, shadow), staged into the adopted versions on the render thread, or latched into a main commit's latched copies (`CommitContext::latched`), with owners its execution holds (`bindingOwners`) |
@@ -376,8 +377,8 @@ registered before or after, `CheckSwitchAnchors`), its toggle (right after the f
 need it: the feature is listed before them), two object classes (`ObjectClass::Effect`, read where Core read the toggle: the eligibility, the
 primary cull's membership passes, the scene capture's and the effect controllers' material captures, the census; `ObjectClass::OpaqueEffect`,
 taken unless the switch is 0, read by the Effect port's opaque rule as taken, `Extensions::ObjectClassTaken`, the rule's toggle being the
-decals'), its report lines among the forward epoch's (`ReportPoint::AsyncWorkForward`, inside `ForwardReport`, so they print when the forward
-epoch's do) and the Lighting variant's parity (`<- EFFECT LIGHT`, its own observer of the withheld blended passes). The Effect port followed it
+decals'), its report lines among the forward epoch's (`ReportPoint::AsyncWorkForward`, after Features/Forward's, printed by
+`IndirectDraws::SharedEpochReport`, so they print when the forward epoch's do) and the Lighting variant's parity (`<- EFFECT LIGHT`, its own observer of the withheld blended passes). The Effect port followed it
 there, on the material port, program family, frame constant row and frame texture contracts (Core classifies every effect-shader item through it
 before a feature sees it: the particle systems and the billboards' effect shapes too): its constants (`EffectConstants.h`: the variable space,
 `EffectFlag`, `kMaterialKindEffect`, the frame rows, `kSoftDepthRegister`, the record bits), its descriptors and variants (`EffectDescriptors`),
@@ -466,12 +467,18 @@ Without the feature, culling is frustum-only, as when the program fails.
 `Features/Forward` followed: the forward epoch's switches (`CS_DCLF_FORWARD`, `CS_DCLF_REFRACTION`, before `CS_DCLF_PROJECTED_UV`) and toggles
 ("forward", before "shadows"; "refraction", after "effects", needing "forward"), two object classes (`ObjectClass::Forward`, `Refraction`,
 read where Core read the toggles) and the engine's two forward points (the main pass's blended-draw thunks, which run
-`IndirectDraws::ExecuteForward`, and Main::Draw's refraction check, with the refraction normals' engine marks written once
-`ExecuteForward` says it drew them), installed at its install. It is listed right before Effects, whose toggle needs "forward". What it
-leaves Core is the forward epoch's machinery, shared by Lighting's blended objects, Effects (with Particles and Billboards) and FirstPerson:
-the forward and refraction ranges, their keys and bits (`kRasterForward`, `kObjectForward`, `kViewForward`), the forward sort, the epoch's
-recording, coverage and stats, refraction's pipeline and normals import, `DeriveForward`; and the views' forward parts, which are the view
-engine's (`TryRequestForward`, `ForwardTargets`). The forward and refraction lines stay in Diagnostics.
+`SubmitForwardEpoch`, and Main::Draw's refraction check, with the refraction normals' engine marks written once
+`SubmitForwardEpoch` says it drew them), installed at its install. It is listed right before Effects, whose toggle needs "forward".
+Round 2 gave it the epoch's passes and submission: `ForwardPasses.cpp` (`ForwardDrawPass`, `RefractionDrawPass`, in `DCLF::Draws` for
+ORG's recipe names; `forward.draw`, `forward.refraction`, registered at its install, reading the colour shape through
+`PassContext::ShapeSegment`) and `ForwardEpoch.cpp` (the epoch resolved once by id, the toggles, `IndirectDraws::SubmitSharedEpoch` with
+refraction's preparation as its `prepare`: `RequestRefraction`, `SetRefractionInputs` with the engine blend state's write mask, the
+readiness test on the shape's refraction slots; refraction's counters and `RefractionDrawnThisFrame`; the `[DCLF] forward epoch` and
+`[DCLF] refraction` lines at `ReportPoint::AsyncWorkForward`, first). What it leaves Core is what Lighting's blended objects, Effects (with
+Particles and Billboards) and FirstPerson share: the forward and refraction ranges, their keys and bits (`kRasterForward`, `kObjectForward`,
+`kViewForward`), the forward sort (`core.forward-sort`, `MakeForwardSortPass`, which the views' `view.forward-sort` uses too), the shared
+epoch's submission, recording, coverage and counters, refraction's pipeline (see "Remaining architectural flaws") and normals import,
+`DeriveForward`; and the views' forward parts, which are the view engine's (`TryRequestForward`, `ForwardTargets`).
 `Features/Fades` followed, last of the features (listed last, where Core's fade code registered, so every shared point keeps its order:
 its family after TreeWind's trees, its component's reset after the others', its channels' drain and apply, its stand-in observer's
 updateEntry after Portals' and TreeWind's): the BSFadeNode/BSLeafAnimNode/BSTreeNode OnVisible port (`FadeState.{h,cpp}`) and the
@@ -671,9 +678,10 @@ the light volumes contract (`Api/LightVolumes.h`).
 
 Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, the graph pass's name, its kind and queue, and either a
 `make` (render thread, at the graph's build: the pass, or null when its conditions are unmet) or an `emit`.
-- **Keys** name their owner by prefix: `core.*` (the main view's culling and copies), `main-view.*`, `forward.*`, `shadows.*`, `view.*`
+- **Keys** name their owner by prefix: `core.*` (the main view's culling and copies), `main-view.*`, `shadows.*`, `view.*`
   (Core's, registered from `Core/Render/Passes/CorePasses.cpp` before the features install; the shadow and view passes' tables stay
-  beside their classes, in `Passes/Shadow.cpp` and `Epochs/ViewEpochRecord.cpp`), and the features' own: `tree-wind.*`, `fades.*`,
+  beside their classes, in `Passes/Shadow.cpp` and `Epochs/ViewEpochRecord.cpp`), and the features' own: `forward.*` (the forward
+  epoch's draws and refraction normals), `tree-wind.*`, `fades.*`,
   `texture-transforms.*`, `tree-lod.*` (its cull, retest, counts and a trees view's faces' cull), `gpu-occlusion.hzb` (the depth
   pyramid's producer). A feature registers its passes with `InstallContext::RegisterPass`, from its own folder. A view pass's name
   says `{view}`, which becomes the view's prefix.
@@ -800,3 +808,18 @@ The steps:
 6. The other features, least entangled first, `Fades` last; then the integrations. *Done.* `Main` stays Core's (see "The target").
 7. Dissolve `Scene/` and `Engine/` into Core (`Core/Scene`, `Core/Engine/Capture`, `Core/Handoff`, `Core/Shading`), then split what
    remains over the thresholds. *The move is done (no legacy includes left); the splits are landing.*
+
+## Remaining architectural flaws
+
+What the round's moves left in Core that a feature alone uses, and why.
+- **Refraction's pipeline** (`DrawPipelines::RequestRefraction`, `SetRefractionInputs`, the catalog's refraction entry, `kRefractionTechnique`;
+  `Core/Gpu/Pipelines/ForwardPipelines.cpp`) is Features/Forward's alone, but stays Core's: no pipeline contract fits it. A program family
+  (`Api::ProgramFamilyContribution`) is a material port's keys built into the main pipeline set at a fixed family slot, its key bits read
+  per object; refraction is one dedicated pipeline (the Utility shader's RENDER_NORMAL, with its own layout and draw signature, built for
+  the imported normals' format and the engine's write mask) that the pipeline lane builds and publishes into the frame's indirect state
+  (`PassFrame::indirect.refraction`, `refractionLayout`, `refractionDrawSignature`, `refractionFormat`), part of every revision's shape. A
+  contract for it would be a feature pipeline the lane builds from feature inputs and publishes into the shape: new machinery for one
+  pipeline. The feature drives it (`RequestRefraction`, `SetRefractionInputs`, from its `prepare`).
+- **The refraction range in the shared shader interface.** The refraction words of `GpuLayouts.h` (`kCountRefractionWord`, the range's
+  slots after the forward halves, `RefractionSlot`) and `LightingConstants.h` are BuildDrawsCS's: it classifies and writes the refraction
+  range with the other ranges, so they stay Core's with it (the BuildDrawsCS flaw: one shader holds every feature's range).
