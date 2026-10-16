@@ -1,6 +1,8 @@
-// The depth pyramid's entry and setup (see the header).
+// The depth pyramid's entry, setup and state (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF::Extensions
 {
@@ -18,8 +20,7 @@ namespace DCLF::Extensions
 			stl::report_and_fail("Drawcall Limit Fix: the depth pyramid was resolved twice");
 		if (!a_registered.setup)
 			return;
-		resolved = { std::string(a_registered.resource), std::string(a_registered.scratchResource), std::string(a_registered.passName), a_registered.setup,
-			a_registered.makePass };
+		resolved = { std::string(a_registered.resource), std::string(a_registered.scratchResource), a_registered.setup };
 		registered = true;
 	}
 
@@ -31,4 +32,6 @@ namespace DCLF::Extensions
 			return nullptr;
 		return resolved.setup({ a_device, a_width, a_height }, a_out);
 	}
+
+	const std::shared_ptr<const void>& DepthPyramidState(const Api::PassContext& a_context) { return a_context.Main()->hzbState; }
 }

@@ -1,8 +1,8 @@
-// Tree LOD's GPU stages: its cull (TreeLodCullCS) in the depth segment's two phases, right before each phase's depth draw, and its list
+// Tree LOD's passes: its cull (TreeLodCullCS) in the depth segment's two phases, right before each phase's depth draw, and its list
 // counts' readback once both phases are done, from the tables (the scene resources) and the depth segment's latch.
 
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF::Draws
 {
@@ -172,13 +172,13 @@ namespace DCLF::Features::TreeLod
 {
 	namespace
 	{
-		// The stages: the cull's program and the counts' readbacks, as the tables' setup made them (fixed with the scene's tables).
-		std::shared_ptr<const void> CullSetup(const Api::GpuStageSetup& a_setup)
+		// The passes' states: the cull's program and the counts' readbacks, as the tables' setup made them (fixed with the scene's tables).
+		std::shared_ptr<const void> CullSetup(const Api::PassSetup& a_setup)
 		{
 			return SharedTablesOf(a_setup.scene);
 		}
 
-		std::shared_ptr<const void> CountsSetup(const Api::GpuStageSetup& a_setup)
+		std::shared_ptr<const void> CountsSetup(const Api::PassSetup& a_setup)
 		{
 			auto tables = SharedTablesOf(a_setup.scene);
 			if (!tables || !tables->counts)
@@ -186,31 +186,32 @@ namespace DCLF::Features::TreeLod
 			return tables;
 		}
 
-		std::shared_ptr<org::RenderPass> MakeCullPhaseOne(const Api::GpuStageContext& a_context)
+		std::shared_ptr<org::RenderPass> MakeCullPhaseOne(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::TreeLodCullPass>(a_context.resources, a_context.State<TreeLodTables>(), 1);
+			return std::make_shared<Draws::TreeLodCullPass>(a_context.Main(), a_context.State<TreeLodTables>(), 1);
 		}
 
-		std::shared_ptr<org::RenderPass> MakeCullPhaseTwo(const Api::GpuStageContext& a_context)
+		// Phase 2's retest only with the HZB rebuilt this frame (the depth epoch's phase 2 block).
+		std::shared_ptr<org::RenderPass> MakeCullPhaseTwo(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::TreeLodCullPass>(a_context.resources, a_context.State<TreeLodTables>(), 2);
+			if (!a_context.PhaseTwo())
+				return nullptr;
+			return std::make_shared<Draws::TreeLodCullPass>(a_context.Main(), a_context.State<TreeLodTables>(), 2);
 		}
 
-		std::shared_ptr<org::RenderPass> MakeCounts(const Api::GpuStageContext& a_context)
+		std::shared_ptr<org::RenderPass> MakeCounts(const Api::PassContext& a_context)
 		{
 			return std::make_shared<Draws::TreeLodReadbackPass>(a_context.State<TreeLodTables>());
 		}
 	}
 
-	void RegisterStages(Api::InstallContext& a_context)
+	void RegisterPasses(Api::InstallContext& a_context)
 	{
 		// Phase 1's list before the depth draw; phase 2's retest against the HZB rebuilt this frame; the list's counts read back once both
 		// phases are done.
-		a_context.RegisterGpuStage({ .passName = "cs.dclf.z.tree-lod-cull", .slot = Api::GpuStageSlot::DepthSegmentBeforeDepthDraw, .setup = &CullSetup,
-			.makePass = &MakeCullPhaseOne });
-		a_context.RegisterGpuStage({ .passName = "cs.dclf.tree-lod-cull-phase2", .slot = Api::GpuStageSlot::DepthSegmentPhaseTwoBeforeDraw, .setup = &CullSetup,
-			.makePass = &MakeCullPhaseTwo });
-		a_context.RegisterGpuStage({ .passName = "cs.dclf.z.tree-lod-counts", .slot = Api::GpuStageSlot::DepthSegmentAfterPhaseTwo, .queue = Api::GpuQueue::None,
-			.setup = &CountsSetup, .makePass = &MakeCounts, .kind = Api::GpuStageKind::Copy });
+		a_context.RegisterPass({ .key = "tree-lod.cull", .passName = "cs.dclf.z.tree-lod-cull", .make = &MakeCullPhaseOne, .setup = &CullSetup });
+		a_context.RegisterPass({ .key = "tree-lod.cull-phase2", .passName = "cs.dclf.tree-lod-cull-phase2", .make = &MakeCullPhaseTwo, .setup = &CullSetup });
+		a_context.RegisterPass({ .key = "tree-lod.counts", .passName = "cs.dclf.z.tree-lod-counts", .kind = Api::PassKind::Copy, .queue = Api::PassQueue::None,
+			.make = &MakeCounts, .setup = &CountsSetup });
 	}
 }

@@ -7,7 +7,7 @@
 // block update, AddGroup and RemoveGroup, pushing onto events) and keeps the render thread's mirror (TreeLodMirror.h, drained by the
 // family's serve). It draws it: the tables as scene resources, with what they post with the revision's inputs and latch in the depth
 // commit, and the depth commit's uploads as a commit hook (TreeLodTables.cpp); TreeLodCullCS (its HLSL in the feature's shader folder,
-// Features/TreeLod/TreeLodCullCS.hlsl) in the depth segment's two phases and the counts' readback as GPU stages (TreeLodPasses.cpp);
+// Features/TreeLod/TreeLodCullCS.hlsl) in the depth segment's two phases and the counts' readback as its passes (TreeLodPasses.cpp);
 // the family - its frame's decision and program source, its depth and colour draws (TreeLodDraws.cpp) and a trees view's faces (TreeLodFaces.cpp: the per-face cull, draw and row, the lists' units). Its report lines
 // (Diagnostics/TreeLodReport.cpp), the mirror's parity (Diagnostics/TreeLodParity.cpp) and the audit of the open defect it probes
 // (Diagnostics/TreeLodAudit.cpp) are its own.
@@ -42,12 +42,14 @@ namespace DCLF::Features::TreeLod
 
 	// TreeLodTables.cpp: the tables (scene resources) and the depth commit's uploads (commit hook).
 	void RegisterTables(Api::InstallContext& a_context);
-	// TreeLodPasses.cpp: the cull in the depth segment's two phases and the counts' readback (GPU stages).
-	void RegisterStages(Api::InstallContext& a_context);
+	// TreeLodPasses.cpp: the cull in the depth segment's two phases and the counts' readback (tree-lod.cull, tree-lod.cull-phase2,
+	// tree-lod.counts).
+	void RegisterPasses(Api::InstallContext& a_context);
 	// TreeLodDraws.cpp: the TreeInstances draw family (after the tables: its resources).
 	void RegisterFamily(Api::InstallContext& a_context);
-	// TreeLodFaces.cpp: the family's part in a trees view's faces.
+	// TreeLodFaces.cpp: the family's part in a trees view's faces, and their cull (tree-lod.faces-cull, in a trees view's depth epoch).
 	Api::DrawFamilyContribution::Faces FacesContribution();
+	void RegisterFacesCull(Api::InstallContext& a_context);
 	// Diagnostics/TreeLodReport.cpp: the draws' and the mirror's report lines.
 	void RegisterReport(Api::InstallContext& a_context);
 	// Diagnostics/TreeLodParity.cpp: CS_DCLF_PERSISTENT_PARITY's mirror check (Diagnostics::Observe().scene).

@@ -80,7 +80,7 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief A member whose feature block variables a feature's GPU stage writes: its record carries a table family's reference
+		 * @brief A member whose feature block variables a feature's pass writes: its record carries a table family's reference
 		 * (Api::TableFamily::recordWord; Features/TreeWind's: a member listed under its tree, whose wind TreeWindCS writes).
 		 */
 		bool GpuWrittenBlock(const SceneTables& a_tables, std::uint32_t a_object)
@@ -358,7 +358,7 @@ namespace DCLF
 		compareContext = fmt::format(" (pipeline descriptor {:08X}, skinned object {})", tables.pipelines[object.pipelineIndex].passDescriptor,
 			(object.flags & kObjectPaletteBlock) != 0);
 		// The block's variables (TreeParams and WindTimers): SetupGeometry writes them for its objects only (technique 12; otherwise
-		// leftover, unread), and a member tree's come from a feature's GPU stage (TreeWindCS: its own parity checks those). World and
+		// leftover, unread), and a member tree's come from a feature's pass (TreeWindCS: its own parity checks those). World and
 		// PreviousWorld: SetupGeometry skips them for skinned objects (engine notes); the SKINNED vertex shader positions from the palette.
 		const std::uint64_t vsMask = kVSGroups[kPerGeometry] &
 		                             ((object.flags & block.objectFlags) && !GpuWrittenBlock(tables, a_objectIndex) ? ~0ull : ~block.vsMask) &

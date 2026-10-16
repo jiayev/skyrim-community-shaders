@@ -3,10 +3,10 @@
 // Core's fixed slot per draw family (Api::DrawFamily): what Core reserves for each, whichever feature takes it. The family's catalog
 // pipelines are the pipeline lane's (DrawPipelines: its depth and colour pair, CatalogFamilyPipelines, and a view's forward pipeline by
 // the slot's key flags; the lane's part of the slot is Core/Gpu/Pipelines/DrawFamilyLaneSlots.h), its main pass points are the main
-// extension's and MainOpaquePass's (the stages around its draws at the depth segment's GpuStageSlots), its faces' points the view
-// epochs' (ViewEpochRecord.cpp), its part of the revisions' shapes key the trees view's key group (MixViewShapesKey), its ownership
-// PassCapture's (IndirectDraws::DecideDrawFamilies publishes the feature's decision), and its pipelines' publication the scene's
-// (SceneBuffers::familyPipelines). A new family is the enum value, its slot here and its lane slot, then the feature's registration
+// extension's and MainOpaquePass's (its feature's passes around its draws are the schedule's: Schedule/Frame.cpp), its faces' points
+// the view epochs' (ViewEpochRecord.cpp), its part of the revisions' shapes key the trees view's key group (MixViewShapesKey), its
+// ownership PassCapture's (IndirectDraws::DecideDrawFamilies publishes the feature's decision), and its pipelines' publication the
+// scene's (SceneBuffers::familyPipelines). A new family is the enum value, its slot here and its lane slot, then the feature's registration
 // (Extensions::DrawFamilies). A family's GPU layout is its feature's (TreeInstances': Features/TreeLod/TreeInstancesLayout.h), sized for
 // Core by its faces' data.
 // Part of IndirectDraws' implementation: included by Internal.h after Views/ViewSlots.h.
@@ -15,7 +15,7 @@ namespace DCLF::Draws
 {
 	/**
 	 * @brief A family's slot: the forward key flags of a trees view's pipeline for it (ForwardPipelineKey: the lane's key). (Its faces'
-	 * cull pass and root are its registration's: faces.cullName, faces.root.)
+	 * root is its registration's, faces.root; their cull pass is its feature's, an Api::PassDef.)
 	 */
 	struct FamilySlot
 	{

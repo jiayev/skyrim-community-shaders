@@ -1,8 +1,8 @@
-// Fades' GPU stages at Api::GpuStageSlot::DepthSegmentCullState: the fade roots' states for the next frame's cull (FadeStateCS), on the
-// compute queue beside the depth epoch's raster work, then their write-back events' copy to the host.
+// Fades' passes at the depth epoch's cull state (fades.state, fades.events): the fade roots' states for the next frame's cull
+// (FadeStateCS), on the compute queue beside the depth epoch's raster work, then their write-back events' copy to the host.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"  // MakeEventReadbackPass
 
 namespace DCLF::Draws
@@ -119,7 +119,7 @@ namespace DCLF::Draws
 
 	private:
 		std::shared_ptr<Resources> resources;
-		std::shared_ptr<const Features::Fades::FadeScene> fades;  // Fades' scene resources (the stage's setup required them)
+		std::shared_ptr<const Features::Fades::FadeScene> fades;  // Fades' scene resources (the pass's setup required them)
 	};
 }
 
@@ -128,7 +128,7 @@ namespace DCLF::Features::Fades
 	namespace
 	{
 		// The scene's GPU setup: the fade roots' scene resources when they made the program (else out of the graph).
-		std::shared_ptr<const void> SetUpFadeState(const Api::GpuStageSetup& a_setup)
+		std::shared_ptr<const void> SetUpFadeState(const Api::PassSetup& a_setup)
 		{
 			auto fades = SharedSceneOf(a_setup.scene);
 			if (!fades || !fades->fadeState || !fades->fadeRoots)
@@ -136,13 +136,13 @@ namespace DCLF::Features::Fades
 			return fades;
 		}
 
-		std::shared_ptr<org::RenderPass> MakeFadeStateStage(const Api::GpuStageContext& a_context)
+		std::shared_ptr<org::RenderPass> MakeFadeStateStage(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::FadeStatePass>(a_context.resources);
+			return std::make_shared<Draws::FadeStatePass>(a_context.Main());
 		}
 
 		// Its write-back events' copy: only with the list and its staging sets.
-		std::shared_ptr<const void> SetUpFadeEvents(const Api::GpuStageSetup& a_setup)
+		std::shared_ptr<const void> SetUpFadeEvents(const Api::PassSetup& a_setup)
 		{
 			auto fades = SharedSceneOf(a_setup.scene);
 			if (!fades || !fades->fadeState || !fades->fadeRoots || !fades->fadeEvents || !fades->fadeWriteBack)
@@ -150,19 +150,19 @@ namespace DCLF::Features::Fades
 			return fades;
 		}
 
-		std::shared_ptr<org::RenderPass> MakeFadeEventsStage(const Api::GpuStageContext& a_context)
+		std::shared_ptr<org::RenderPass> MakeFadeEventsStage(const Api::PassContext& a_context)
 		{
 			const auto fades = a_context.State<FadeScene>();
-			return Draws::MakeEventReadbackPass(a_context.resources->scene, fades->fadeEvents, fades->fadeWriteBack);
+			return Draws::MakeEventReadbackPass(a_context.Main()->scene, fades->fadeEvents, fades->fadeWriteBack);
 		}
 	}
 
-	void RegisterStages(Api::InstallContext& a_context)
+	void RegisterPasses(Api::InstallContext& a_context)
 	{
 		// Fade roots' state for the next frame's culling, beside the depth epoch's raster work; then its write-back events, to the host.
-		a_context.RegisterGpuStage({ .passName = "cs.dclf.z.fade-state", .slot = Api::GpuStageSlot::DepthSegmentCullState, .queue = Api::GpuQueue::Compute,
-			.setup = &SetUpFadeState, .makePass = &MakeFadeStateStage });
-		a_context.RegisterGpuStage({ .passName = "cs.dclf.z.fade-events", .slot = Api::GpuStageSlot::DepthSegmentCullState, .queue = Api::GpuQueue::None,
-			.setup = &SetUpFadeEvents, .makePass = &MakeFadeEventsStage, .kind = Api::GpuStageKind::Copy });
+		a_context.RegisterPass({ .key = "fades.state", .passName = "cs.dclf.z.fade-state", .queue = Api::PassQueue::Compute, .make = &MakeFadeStateStage,
+			.setup = &SetUpFadeState });
+		a_context.RegisterPass({ .key = "fades.events", .passName = "cs.dclf.z.fade-events", .kind = Api::PassKind::Copy, .queue = Api::PassQueue::None,
+			.make = &MakeFadeEventsStage, .setup = &SetUpFadeEvents });
 	}
 }

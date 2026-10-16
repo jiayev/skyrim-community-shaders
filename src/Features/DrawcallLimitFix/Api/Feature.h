@@ -13,7 +13,6 @@
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
-#include "Features/DrawcallLimitFix/Api/GpuStages.h"
 #include "Features/DrawcallLimitFix/Api/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Api/MainRanges.h"
 #include "Features/DrawcallLimitFix/Api/Materials.h"
@@ -47,10 +46,10 @@ namespace DCLF::Api
 	{
 	public:
 		virtual FrameValuePoolId RegisterFrameValuePool(const FrameValuePool& a_pool) = 0;
-		virtual void RegisterGpuStage(const GpuStage& a_stage) = 0;
 		/**
-		 * @brief A pass the frame's schedule names by its key (Schedule/Frame.cpp). Fails the install for no key, a key another pass has, or
-		 * neither or both of make and emit; a key the schedule names that nobody registered fails it at the end.
+		 * @brief A pass the frame's schedule names by its key (Schedule/Frame.cpp). Fails the install for no key, a key another pass has,
+		 * neither or both of make and emit, or an anchor with a setup or latch word; at the end, a key the schedule names that nobody
+		 * registered, a second pass with a latch word, or one scheduled anywhere but in main.depth before core.z.build-draws.
 		 */
 		virtual void RegisterPass(const PassDef& a_pass) = 0;
 		virtual void RegisterPayloadProduct(const PayloadProduct& a_product) = 0;
@@ -236,7 +235,7 @@ namespace DCLF::Api
 		virtual void RegisterCullBinding(const CullBinding& a_binding) = 0;
 		/**
 		 * @brief Fails the install for a second contribution (Core's cull tests one pyramid), or one without a resource, scratch resource or
-		 * pass name, setup or makePass.
+		 * setup.
 		 */
 		virtual void RegisterDepthPyramid(const DepthPyramidContribution& a_pyramid) = 0;
 		/**

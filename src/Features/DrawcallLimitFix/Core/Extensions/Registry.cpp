@@ -49,7 +49,6 @@ namespace DCLF::Extensions
 		struct Lists
 		{
 			std::vector<FrameValuePoolEntry> pools;
-			std::vector<GpuStageEntry> stages;
 			std::vector<PayloadProductEntry> products;
 			std::vector<SceneResourcesEntry> sceneResources;
 			std::uint32_t sceneResourceInputs = 0;
@@ -262,12 +261,10 @@ namespace DCLF::Extensions
 		 */
 		bool DrawFamilyFacesComplete(const Api::DrawFamilyContribution::Faces& a_faces)
 		{
-			const int callbacks = (a_faces.makeCull ? 1 : 0) + (a_faces.declare ? 1 : 0) + (a_faces.record ? 1 : 0) + (a_faces.row ? 1 : 0) + (a_faces.lists ? 1 : 0) +
-			                      (a_faces.face ? 1 : 0);
+			const int callbacks = (a_faces.declare ? 1 : 0) + (a_faces.record ? 1 : 0) + (a_faces.row ? 1 : 0) + (a_faces.lists ? 1 : 0) + (a_faces.face ? 1 : 0);
 			const int data = (a_faces.rowBytes ? 1 : 0) + (a_faces.headerBytes ? 1 : 0) + (a_faces.unitWords ? 1 : 0) + (a_faces.cullGroup ? 1 : 0) +
-			                 (a_faces.cullName.empty() ? 0 : 1) + (a_faces.rowName.empty() ? 0 : 1) + (a_faces.listName.empty() ? 0 : 1) +
-			                 (a_faces.root < Api::ViewRoot::Count ? 1 : 0);
-			return callbacks == 0 ? data == 0 : callbacks == 6 && data == 8;
+			                 (a_faces.rowName.empty() ? 0 : 1) + (a_faces.listName.empty() ? 0 : 1) + (a_faces.root < Api::ViewRoot::Count ? 1 : 0);
+			return callbacks == 0 ? data == 0 : callbacks == 5 && data == 7;
 		}
 
 		/**
@@ -560,22 +557,6 @@ namespace DCLF::Extensions
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete frame-value pool", feature));
 				lists.pools.push_back({ std::string(a_pool.name), a_pool.stride, a_pool.frameStart, a_pool.kick, a_pool.sample, a_pool.send });
 				return { static_cast<std::uint32_t>(lists.pools.size() - 1) };
-			}
-
-			void RegisterGpuStage(const Api::GpuStage& a_stage) override
-			{
-				if (a_stage.passName.empty() || !a_stage.setup || !a_stage.makePass)
-					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete GPU stage", feature));
-				// BuildDrawsLatch has one stage word, the depth segment's (Api/GpuStages.h).
-				if (a_stage.latchWord) {
-					if (a_stage.slot != Api::GpuStageSlot::DepthSegmentBeforeBuild)
-						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s stage {} asks for a latch word outside the depth segment", feature, a_stage.passName));
-					for (const auto& stage : lists.stages)
-						if (stage.latchWord && stage.slot == a_stage.slot)
-							stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s stage {} asks for the latch's stage word, which {} has: grow BuildDrawsLatch first",
-								feature, a_stage.passName, stage.passName));
-				}
-				lists.stages.push_back({ std::string(a_stage.passName), a_stage.slot, a_stage.queue, a_stage.setup, a_stage.makePass, a_stage.latchWord, a_stage.kind });
 			}
 
 			void RegisterPass(const Api::PassDef& a_pass) override { Draws::RegisterPassDef(a_pass, feature); }
@@ -1124,7 +1105,7 @@ namespace DCLF::Extensions
 
 			void RegisterDepthPyramid(const Api::DepthPyramidContribution& a_pyramid) override
 			{
-				if (a_pyramid.resource.empty() || a_pyramid.scratchResource.empty() || a_pyramid.passName.empty() || !a_pyramid.setup || !a_pyramid.makePass)
+				if (a_pyramid.resource.empty() || a_pyramid.scratchResource.empty() || !a_pyramid.setup)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete depth pyramid", feature));
 				// The cull tests one pyramid.
 				if (lists.depthPyramid.setup)
@@ -1256,7 +1237,6 @@ namespace DCLF::Extensions
 	}
 
 	std::span<const FrameValuePoolEntry> RegisteredPools() { return Registered().pools; }
-	std::span<const GpuStageEntry> RegisteredStages() { return Registered().stages; }
 	std::span<const PayloadProductEntry> RegisteredProducts() { return Registered().products; }
 	std::span<const SceneResourcesEntry> RegisteredSceneResources() { return Registered().sceneResources; }
 	std::span<const CommitHookEntry> RegisteredCommitHooks() { return Registered().commitHooks; }

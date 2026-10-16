@@ -60,7 +60,7 @@ namespace DCLF::Features::TreeLod
 
 	/** @brief The tables in a_scene (null before the scene's tables are made, or without them). */
 	TreeLodTables* TablesOf(const Draws::SceneBuffers& a_scene);
-	/** @brief TablesOf, sharing their ownership (a stage's state). */
+	/** @brief TablesOf, sharing their ownership (a pass's state). */
 	std::shared_ptr<TreeLodTables> SharedTablesOf(const Draws::SceneBuffers& a_scene);
 	/** @brief The tables' registration (RegisterTables). */
 	Api::SceneResourcesId TablesId();

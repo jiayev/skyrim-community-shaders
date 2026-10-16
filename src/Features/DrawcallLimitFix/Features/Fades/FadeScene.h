@@ -134,7 +134,7 @@ namespace DCLF::Features::Fades
 
 	/** @brief Fades' scene resources in a_scene (null: none made). FadeResources.cpp. */
 	FadeScene* SceneOf(const Draws::SceneBuffers& a_scene);
-	/** @brief SceneOf, sharing the state's ownership (a stage's pass holds it). */
+	/** @brief SceneOf, sharing the state's ownership (a pass holds it). */
 	std::shared_ptr<FadeScene> SharedSceneOf(const Draws::SceneBuffers& a_scene);
 
 	/**
@@ -168,6 +168,6 @@ namespace DCLF::Features::Fades
 	void RegisterResources(Api::InstallContext& a_context);
 	/** @brief The depth commit hook: the root rows and FadeStateCS's frame inputs, the write-back armed, the roots' programs. FadeCommit.cpp. */
 	void RegisterCommit(Api::InstallContext& a_context);
-	/** @brief The GPU stages at DepthSegmentCullState: the fade state, then its events' copy to the host. FadeStage.cpp. */
-	void RegisterStages(Api::InstallContext& a_context);
+	/** @brief The passes at the depth epoch's cull state: the fade state, then its events' copy to the host. FadeStage.cpp. */
+	void RegisterPasses(Api::InstallContext& a_context);
 }

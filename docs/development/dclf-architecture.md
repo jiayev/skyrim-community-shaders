@@ -348,9 +348,9 @@ transforms) and the set's growth all lease their backings from ORGModuleServices
     (`TextureTransformList`: the material, the row's byte offset, the component mask); the payload carries it, and adoption
     installs the payload's list with the feature. Each frame the feature's frame-value pool reads every entry's current
     buffer (`textureTransformBuffer`, the one the frame's shaders read) under a lease, sending only the rows that moved, and
-    its GPU stage `cs.dclf.z.texture-transforms` (`Api::GpuStage`, `TextureTransformsCS`), first in the Z-prepass epoch,
-    stores them into the installed payload's material rows; the pool's descriptor reaches the shader through the depth
-    segment's `BuildDrawsLatch::stageWord`. Every such row is written every frame, so a pooled backing holds the frame's value
+    its pass `cs.dclf.z.texture-transforms` (`texture-transforms.apply`, an `Api::PassDef`, `TextureTransformsCS`), first in
+    the Z-prepass epoch, stores them into the installed payload's material rows; the pool's descriptor reaches the shader
+    through the depth segment's `BuildDrawsLatch::stageWord` (the pass's `latchWord`). Every such row is written every frame, so a pooled backing holds the frame's value
     whatever its journal sent it.
 
 The readback staging is not pooled: it is GPU-to-host and rewritten whole every frame, one host buffer per frame slot for

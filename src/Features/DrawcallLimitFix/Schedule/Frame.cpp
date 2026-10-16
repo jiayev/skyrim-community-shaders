@@ -5,11 +5,11 @@
 //   shadow extension's) or View (a view's extension, for the Api::EngineView it names). ORG orders the epochs; within one, its passes
 //   run in this order.
 // - A pass is a key (Api::PassDef), registered at install by its owner, whom the key's prefix names: core.* (the main view's culling and
-//   copies), main-view.* (its draws), forward.*, shadows.*, view.* (Core's, through Core/Render/Passes/CorePasses.cpp), gpu-occlusion.*
-//   (the depth pyramid's producer).
-// - A pass's own conditions decide whether it is added (no sort, no forward range, no HZB: the pass is skipped, not the key).
-// - Anchors (stages.*, families.*, diag.*) add any number of passes at their place: the GPU stages registered at that Api::GpuStageSlot,
-//   in registration order; each draw family's face cull; the diagnostics' observers' passes at that point.
+//   copies), main-view.* (its draws), forward.*, shadows.*, view.* (Core's, through Core/Render/Passes/CorePasses.cpp), or a feature's
+//   (Features/<Name>/): tree-wind.*, fades.*, texture-transforms.*, tree-lod.*, gpu-occlusion.* (the depth pyramid's producer).
+// - A pass's own conditions decide whether it is added (no sort, no forward range, no HZB, no state from its setup: the pass is skipped,
+//   not the key).
+// - Anchors exist only for diagnostics (diag.*): each adds the diagnostics' observers' passes at that point, any number of them.
 // A key nobody registered fails the install (Extensions::InstallFeatures).
 
 #include "Features/DrawcallLimitFix/Schedule/Schedule.h"
@@ -27,22 +27,26 @@ namespace DCLF::Schedule
 		constexpr std::uint32_t SegmentOf(Segment a_segment) { return static_cast<std::uint32_t>(a_segment); }
 		constexpr std::uint32_t ViewOf(Api::EngineView a_view) { return static_cast<std::uint32_t>(a_view); }
 
-		// The depth (Z-prepass) epoch: the latched copies, the next frame's state and cull state, phase 1 (build, index pool, depth draw),
-		// the two-phase tail (only with the HZB), then what reads both phases.
+		// The depth (Z-prepass) epoch: the latched copies; the next frame's state (tree wind, on the compute queue beside the epoch's raster
+		// work, which nothing of this frame reads) and cull state (the fade roots' states, then their write-back copy); the texture
+		// transforms (the latch's stage word, before anything of the frame draws); phase 1 (build, index pool, tree LOD's cull, depth draw);
+		// the two-phase tail (only with the HZB: the pyramid, the retest build, tree LOD's retest, the rescues' depth draw); then what reads
+		// both phases (tree LOD's counts, the visibility events).
 		constexpr std::string_view kMainDepth[] = {
 			"core.z.latched-copies",
-			"stages.next-frame-state",
-			"stages.cull-state",
-			"stages.before-build",
+			"tree-wind.next-frame",
+			"fades.state",
+			"fades.events",
+			"texture-transforms.apply",
 			"core.z.build-draws",
 			"core.z.index-pool",
-			"stages.before-depth-draw",
+			"tree-lod.cull",
 			"main-view.z.depth",
 			"gpu-occlusion.hzb",
 			"core.build-draws-phase2",
-			"stages.phase-two-before-draw",
+			"tree-lod.cull-phase2",
 			"main-view.depth-phase2",
-			"stages.after-phase-two",
+			"tree-lod.counts",
 			"core.z.visibility-events",
 			"core.z.visibility-readback",
 			"diag.after-depth",
@@ -80,14 +84,14 @@ namespace DCLF::Schedule
 		constexpr std::string_view kReflection[] = {
 			"view.latched-copies",
 			"view.build-draws",
-			"families.faces-cull",
+			"tree-lod.faces-cull",
 			"view.faces",
 		};
 		// First person: the depth epoch (and the forward range's sort), then the colour epoch.
 		constexpr std::string_view kFirstPersonDepth[] = {
 			"view.latched-copies",
 			"view.build-draws",
-			"families.faces-cull",
+			"tree-lod.faces-cull",
 			"view.depth",
 			"view.forward-sort",
 		};

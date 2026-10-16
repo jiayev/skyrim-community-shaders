@@ -13,7 +13,7 @@
 // CS_DCLF_PERSISTENT_PARITY.
 //
 // Core keeps the category filing of the portal graphs' nodes, the fade roots' programs (created among the fade buffers, uploaded with
-// the depth commit) and the event PortalWalkBuilt on its bus. No switch, toggle, GPU stage or table. The light
+// the depth commit) and the event PortalWalkBuilt on its bus. No switch, toggle, pass or table. The light
 // selection's per-light walks (Features/LocalLights' LightSelection, DEPENDS {Portals}: WalkLight, SharesRoom) are static calls into PortalViews. Included by the
 // feature's sources only.
 

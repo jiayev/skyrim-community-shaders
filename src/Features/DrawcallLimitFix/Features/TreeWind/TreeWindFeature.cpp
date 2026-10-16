@@ -1,6 +1,6 @@
 // Tree wind: the trees DCLF owns animated on the GPU. Its switches and the trees toggle, technique 12's contributions, the trees' table
 // family and coordinator component, the seeds (a frame-value pool), the scene resources with their commit hook and frame binding (t124),
-// the stage in the depth epoch's next-frame state, the tree manager's engine side, the report line and the parity.
+// the pass in the depth epoch's next-frame state, the tree manager's engine side, the report line and the parity.
 
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -33,7 +33,7 @@ namespace DCLF::Features::TreeWind
 			RegisterTables(a_context);
 			RegisterSeeds(a_context);
 			RegisterScene(a_context);
-			RegisterStage(a_context);
+			RegisterPass(a_context);
 			RegisterAnimation(a_context);
 			RegisterReport(a_context);
 			// CS_DCLF_PERSISTENT_PARITY: the wind rows read back against the engine's formulas and clocks.

@@ -1,7 +1,7 @@
 #pragma once
 
 // The texture transforms (TexcoordOffset) the frame patches into the main material rows: the snapshot's list of rows that carry one
-// (the payload product, built with the main payload), the rows the feature's frame-value pool samples for it, and the stage that
+// (the payload product, built with the main payload), the rows the feature's frame-value pool samples for it, and the pass that
 // writes them into the rows (TextureTransformsCS.hlsl). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
@@ -71,6 +71,6 @@ namespace DCLF::Features::TextureTransforms
 	std::uint32_t RowsIndex();
 	// TextureTransformsList.cpp: the payload product.
 	void RegisterProduct(Api::InstallContext& a_context);
-	// TextureTransformsPass.cpp: the GPU stage.
-	void RegisterStage(Api::InstallContext& a_context);
+	// TextureTransformsPass.cpp: the pass (texture-transforms.apply).
+	void RegisterPass(Api::InstallContext& a_context);
 }

@@ -42,17 +42,6 @@ namespace DCLF::Extensions
 		decltype(Api::FrameValuePool::sample) sample = nullptr;
 		decltype(Api::FrameValuePool::send) send = nullptr;
 	};
-	/** @brief A registered GPU stage. */
-	struct GpuStageEntry
-	{
-		std::string passName;
-		Api::GpuStageSlot slot = Api::GpuStageSlot::DepthSegmentBeforeBuild;
-		Api::GpuQueue queue = Api::GpuQueue::Graphics;
-		decltype(Api::GpuStage::setup) setup = nullptr;
-		decltype(Api::GpuStage::makePass) makePass = nullptr;
-		decltype(Api::GpuStage::latchWord) latchWord = nullptr;
-		Api::GpuStageKind kind = Api::GpuStageKind::Compute;
-	};
 	/** @brief A registered payload product. */
 	struct PayloadProductEntry
 	{
@@ -186,11 +175,11 @@ namespace DCLF::Extensions
 
 	// Any thread, after InstallFeatures (empty before): the registrations, in order. An index is the extension's id
 	// (Api::FrameValuePoolId::index, Api::SceneResourcesId::index, Api::TableFamilyId::index, Api::CoordinatorComponentId::index,
-	// Api::EngineChannelId::index; the stage states', products' and bindings' slots). The technique contributions are by technique (Extensions/ObjectContributors.h).
+	// Api::EngineChannelId::index; the products' and bindings' slots). The passes are the schedule's executor's
+	// (Core/Render/Epochs/ScheduleExecutor.h). The technique contributions are by technique (Extensions/ObjectContributors.h).
 	// The material contributors are read resolved (Extensions/Materials.h: MaterialContributors), the Lighting join rules as registered
 	// (Extensions/ObjectContributors.h: RegisteredLightingJoinRules), the per-draw buffers by stage (Extensions/FrameBindings.h: PerDrawMask).
 	std::span<const FrameValuePoolEntry> RegisteredPools();
-	std::span<const GpuStageEntry> RegisteredStages();
 	std::span<const PayloadProductEntry> RegisteredProducts();
 	std::span<const SceneResourcesEntry> RegisteredSceneResources();
 	std::span<const CommitHookEntry> RegisteredCommitHooks();
