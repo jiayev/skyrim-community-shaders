@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -30,6 +31,22 @@ namespace DCLF
 
 		/** @brief Render thread: this frame's inputs, from the main camera (null: none this frame) and the engine's globals. */
 		FadeFrame SampleFrame(const RE::NiCamera* a_camera);
+
+		/**
+		 * @brief Render thread, the frame driver's frame start (Api::RootStatesContribution::frameStart: after Main::Draw's camera setup
+		 * and the camera cut, before the list build and culls, with the primary cull installed): FadeEye and TreeHeightTest from the main
+		 * camera, so neither depends on the engine's list processes running.
+		 */
+		void BeginFrame();
+		/**
+		 * @brief The main camera as BSFadeNode::OnVisible measures from it: position and LOD factor (NiCamera +0x184), for
+		 * kObjectFadeTest. Zero when no camera was seen.
+		 */
+		std::array<float, 4> FadeEye();
+		/** @brief BSTreeNode::OnVisible's height test for kObjectHeightTest: base and limit (+infinity: off). */
+		std::array<float, 2> TreeHeightTest();
+		/** @brief Render thread, the depth commit (Api::RootStatesContribution::latchGlobals): FadeEye and TreeHeightTest into the latch's words. */
+		void LatchGlobals(float (&a_eye)[4], float (&a_treeHeight)[2]);
 
 		/** @brief The node's fade fields as it holds them. */
 		FadeNodeState ReadNode(const RE::NiAVObject& a_node);

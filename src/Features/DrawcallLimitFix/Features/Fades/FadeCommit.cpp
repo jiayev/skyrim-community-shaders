@@ -15,13 +15,13 @@ namespace DCLF::Features::Fades
 {
 	namespace
 	{
-		// Once a frame, FadeStateCS's inputs: the list jobs' camera (PrimaryCull::FadeEye), the engine's fade globals and the
+		// Once a frame, FadeStateCS's inputs: the list jobs' camera (FadeState::FadeEye), the engine's fade globals and the
 		// animation job's batch (its roots' words sent), and the log window.
 		void SampleFadeInputs(const Draws::NamedVersions& a_adopted, Draws::CommitUploads& a_uploads, FadeScene& a_buffers, std::uint32_t a_rootSlots,
 			FadeFrame& a_inputs, std::uint32_t& a_logBase)
 		{
 			a_inputs = FadeState::SampleFrame(nullptr);
-			const auto eye = PrimaryCull::Get().FadeEye();
+			const auto eye = FadeState::FadeEye();
 			std::copy_n(eye.data(), 3, a_inputs.eye);
 			a_inputs.lodAdjust = eye[3];
 			// The animation job's updates since the last cull: roots stamped with this frame, inputs in the frame row.

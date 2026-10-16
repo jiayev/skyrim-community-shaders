@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 
 #include <algorithm>
 #include <array>
@@ -58,7 +59,15 @@ namespace DCLF::Draws
 			std::array<ViewEpochs, kViews> views{};
 			// The frame's orders, as segment values (FrameOrders).
 			Extensions::FrameOrders orders;
+			// The triggers' ids, by row; each epoch's trigger row; Core's triggers (CoreTrigger).
+			std::vector<std::string> triggers;
+			std::array<std::uint32_t, kMaxEpochs> epochTriggers{};
+			std::array<Api::TriggerId, static_cast<std::size_t>(CoreTrigger::Count)> coreTriggers{};
 		};
+
+		// Core's trigger points' ids (CoreTrigger's order): FrameDriver marks them.
+		constexpr std::string_view kCoreTriggers[] = { "shadow-maps.after", "depth.committed", "occlusion.draw", "opaque.after" };
+		static_assert(std::size(kCoreTriggers) == static_cast<std::size_t>(CoreTrigger::Count));
 
 		Executor& State()
 		{
@@ -176,6 +185,31 @@ namespace DCLF::Draws
 		}
 
 		/**
+		 * @brief The schedule's triggers, resolved into a_state: their ids, each epoch's trigger row and Core's triggers; fails the install
+		 * for a trigger id missing or duplicated, an epoch's trigger the schedule has not, a trigger no epoch names or one of Core's missing.
+		 */
+		void ResolveTriggers(Executor& a_state, const Api::FrameSchedule& a_schedule)
+		{
+			const auto& triggers = a_schedule.triggers;
+			for (std::uint32_t row = 0; row < triggers.size(); ++row) {
+				if (triggers[row].id.empty() || FindTrigger(a_schedule, triggers[row].id, "the schedule").index != row)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's trigger {} has no id, or one another trigger has", triggers[row].id));
+				a_state.triggers.emplace_back(triggers[row].id);
+			}
+			std::vector<bool> used(triggers.size(), false);
+			for (std::uint32_t row = 0; row < a_schedule.epochs.size(); ++row) {
+				const auto trigger = FindTrigger(a_schedule, a_schedule.epochs[row].trigger, fmt::format("the schedule's epoch {}", a_schedule.epochs[row].id));
+				a_state.epochTriggers[row] = trigger.index;
+				used[trigger.index] = true;
+			}
+			for (std::uint32_t row = 0; row < triggers.size(); ++row)
+				if (!used[row])
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's trigger {} is named by no epoch", triggers[row].id));
+			for (std::size_t i = 0; i < a_state.coreTriggers.size(); ++i)
+				a_state.coreTriggers[i] = FindTrigger(a_schedule, kCoreTriggers[i], "Core");
+		}
+
+		/**
 		 * @brief The schedule's epochs' definitions, resolved into a_state, and the frame's orders; fails the install for an unknown or
 		 * duplicated id, a segment used twice, a shape Core has not or one it records with no epoch, a bad share, an order that does not
 		 * name every epoch once, or more epochs than kMaxEpochs.
@@ -185,6 +219,7 @@ namespace DCLF::Draws
 			CheckEpochIds(a_schedule);
 			for (std::uint32_t row = 0; row < a_schedule.epochs.size(); ++row)
 				ResolveEpochTraits(a_state, a_schedule, row);
+			ResolveTriggers(a_state, a_schedule);
 			// Core records every main and shadow shape and every view's (their loops run over all of them).
 			for (std::uint32_t i = 0; i < 2; ++i)
 				if (a_state.mainEpochs[i] == kNoEpoch || a_state.shadowEpochs[i] == kNoEpoch)
@@ -213,6 +248,16 @@ namespace DCLF::Draws
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered pass {}, which {} has", a_who, a_pass.key, entry.who));
 		state.passes.push_back({ std::string(a_pass.key), std::string(a_pass.passName), std::string(a_who), a_pass.kind, a_pass.queue, a_pass.make, a_pass.emit,
 			a_pass.setup, a_pass.latchWord, a_pass.passName.find(kViewToken) != std::string_view::npos });
+	}
+
+	Api::TriggerId FindTrigger(const Api::FrameSchedule& a_schedule, std::string_view a_id, std::string_view a_who)
+	{
+		std::uint32_t row = 0;
+		while (row < a_schedule.triggers.size() && a_schedule.triggers[row].id != a_id)
+			++row;
+		if (a_id.empty() || row == a_schedule.triggers.size())
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} names trigger {}, which the schedule has not", a_who, a_id));
+		return { row };
 	}
 
 	void ResolveSchedule(const Api::FrameSchedule& a_schedule)
@@ -284,6 +329,22 @@ namespace DCLF::Draws
 	{
 		const auto latchWord = State().latchWord;
 		return latchWord ? latchWord() : 0u;
+	}
+
+	Api::TriggerId CoreTriggerOf(CoreTrigger a_trigger)
+	{
+		return State().coreTriggers[static_cast<std::size_t>(a_trigger)];
+	}
+
+	std::uint32_t EpochTrigger(std::uint32_t a_epoch)
+	{
+		return State().epochTriggers[a_epoch];
+	}
+
+	std::string_view TriggerName(std::uint32_t a_trigger)
+	{
+		const auto& triggers = State().triggers;
+		return a_trigger < triggers.size() ? std::string_view(triggers[a_trigger]) : std::string_view("none");
 	}
 
 	std::uint32_t EpochCount()

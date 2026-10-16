@@ -47,11 +47,9 @@ namespace DCLF
 		constexpr std::uintptr_t kListJobsFinishCallSite = 0x14cbf4d;  // ... -> JobList::Finish(scene list culling)
 		constexpr std::uintptr_t kProcess1 = 0xe28390;  // BSCullingProcess::Process1, the list processes' vtable slot 0x16
 		constexpr std::size_t kAccumulatorDeferredShadow = 0x178;  // byte: the accumulator draws the deferred shadow mask
-		// The main camera: the world scene graph's (+0x128), carried by the list processes; FUN_1406452c0 (Main::Draw's camera
-		// setup, before BeginSceneFrame) sets the tree height base from it.
+		// The main camera: the world scene graph's (+0x128), carried by the list processes.
 		constexpr std::size_t kSceneGraphCamera = 0x128;
-		constexpr std::size_t kCameraLodAdjust = 0x184;
-		// BSTreeNode::OnVisible (AE 0x14147d3c0): the height test and the LOD fix-up.
+		// BSTreeNode::OnVisible (AE 0x14147d3c0): the height test (the stand-in's, TreeAboveLimit) and the LOD fix-up.
 		constexpr std::size_t kProcessTreeHeightTest = 0x121;     // byte on the culling process
 		constexpr std::uintptr_t kTreeHeightTestOn = 0x2032fb8;   // byte
 		constexpr std::uintptr_t kTreeHeightBase = 0x332a2f0;     // float
@@ -322,14 +320,12 @@ namespace DCLF
 		const auto* sceneGraph = Global<const std::byte*>(Engine::Address::kWorldSceneGraph);
 		const auto* camera = sceneGraph ? At<const RE::NiCamera*>(sceneGraph, kSceneGraphCamera) : nullptr;
 		frameCamera = camera;
-		// The fade test's camera.
-		fadeEye = {};
 		if (camera) {
-			fadeEye = { camera->world.translate.x, camera->world.translate.y, camera->world.translate.z, At<float>(camera, kCameraLodAdjust) };
 			// A camera cut (a jump or snap turn the verdict-to-write latency cannot follow): every DCLF-written root visible until a
 			// batch of this frame or later decodes (IndirectDraws::NoteCameraCut). Turn angle from the relative rotation's trace.
 			const auto& r = camera->world.rotate.entry;
-			const std::array<float, 12> now{ fadeEye[0], fadeEye[1], fadeEye[2], r[0][0], r[0][1], r[0][2], r[1][0], r[1][1], r[1][2], r[2][0], r[2][1], r[2][2] };
+			const auto& t = camera->world.translate;
+			const std::array<float, 12> now{ t.x, t.y, t.z, r[0][0], r[0][1], r[0][2], r[1][0], r[1][1], r[1][2], r[2][0], r[2][1], r[2][2] };
 			if (cutCameraKnown) {
 				const float dx = now[0] - cutCamera[0], dy = now[1] - cutCamera[1], dz = now[2] - cutCamera[2];
 				float trace = 0.0f;
@@ -342,12 +338,6 @@ namespace DCLF
 			cutCamera = now;
 			cutCameraKnown = true;
 		}
-		// BSTreeNode::OnVisible's height test as the list processes have it: their +0x121 is 0 (only the constructors write it;
-		// skyrim-engine-notes.md, "the height-test byte"), the base is the camera height (FUN_1406452c0), the switch and limit globals.
-		const std::uint32_t count = Global<std::uint32_t>(Engine::Address::kSceneListCount);
-		auto** processes = Global<RE::NiCullingProcess**>(Engine::Address::kListProcesses);
-		const bool heightTest = processes && count && processes[0] && At<std::uint8_t>(processes[0], kProcessTreeHeightTest) && Global<std::uint8_t>(kTreeHeightTestOn);
-		treeHeight = { Global<float>(kTreeHeightBase), heightTest ? Global<float>(kTreeHeightLimit) : std::numeric_limits<float>::infinity() };
 	}
 
 	void PrimaryCull::PrepareFrame()

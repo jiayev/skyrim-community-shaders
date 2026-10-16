@@ -19,8 +19,8 @@ namespace DCLF::Diagnostics::Accumulated
 	 *   for, its result against DCLF's prediction: the bit WriteAccumulated left at Main::Update's entry. A stood-in root DCLF wrote
 	 *   visible that the gate rejects (not faded out) is a difference; the stood-in animated references are counted by kind (never
 	 *   fading: ignore-fade, zero radius or flag bit 29; fading);
-	 * - <- FRAME CAMERA: the list processes' camera against the main camera BeginFrameCamera read (FadeEye, the camera cut and the
-	 *   height test come from it).
+	 * - <- FRAME CAMERA: the list processes' camera against the main camera BeginFrameCamera read (the camera cut comes from it, and
+	 *   Fades' frame start reads FadeEye and the height test from the same camera).
 	 */
 	void Install();
 

@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -324,11 +325,8 @@ namespace DCLF
 			Diagnostics::Notify(Diagnostics::MainCullViewProj{ a_latch, shape.width, shape.height, frameNumber, depthOnly, a_commit.tables });
 			// The depth segment: the fade test's camera (kObjectFadeTest).
 			if (depthOnly) {
-				const auto eye = PrimaryCull::Get().FadeEye();
-				std::copy(eye.begin(), eye.end(), a_latch.fadeEye);
-				const auto treeHeight = PrimaryCull::Get().TreeHeightTest();
-				a_latch.treeHeight[0] = treeHeight[0];
-				a_latch.treeHeight[1] = treeHeight[1];
+				// Its eye and tree height test, the root states producer's (Features/Fades: captured at the frame start).
+				Extensions::RootStatesLatchGlobals(a_latch.fadeEye, a_latch.treeHeight);
 				// The near twin's test (Api::NearTwinContribution: Integrations/TerrainBlending's, with its depth-pass eye), for the terrain
 				// group 1 twin buckets (kBucketTerrainPair). No test (false) leaves the latch's zeros: w 0.
 				if (const auto nearTest = Extensions::NearTwin().nearTest)

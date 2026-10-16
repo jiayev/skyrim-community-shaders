@@ -46,6 +46,11 @@ namespace DCLF::Api
 	 *   nodes), never joined per frame. A task still running hands what remains to the next.
 	 * - wait (optional): render thread, when DCLF's async work is drained (IndirectDraws::DrainAsync, after the builds ahead; never per
 	 *   frame): its task joined.
+	 * - frameStart (optional): render thread, once a frame at the frame driver's frame start, with the primary cull installed, right
+	 *   after the camera cut (PrimaryCull::BeginFrameCamera): the producer's frame inputs from the engine (the cull's fade test: the main
+	 *   camera's eye and the tree height test).
+	 * - latchGlobals (optional): render thread, at the depth commit: the words the cull's fade test reads (the BuildDraws latch's eye:
+	 *   position and LOD factor; the height test: base and limit). Without it Core writes a zero eye and a height of {0, +infinity}.
 	 */
 	struct RootStatesContribution
 	{
@@ -57,5 +62,7 @@ namespace DCLF::Api
 		void (*globalsKey)(const RootTestInput& a_input, std::uint32_t& a_witness) = nullptr;
 		void (*kick)() = nullptr;
 		void (*wait)() = nullptr;
+		void (*frameStart)() = nullptr;
+		void (*latchGlobals)(float (&a_eye)[4], float (&a_treeHeight)[2]) = nullptr;
 	};
 }

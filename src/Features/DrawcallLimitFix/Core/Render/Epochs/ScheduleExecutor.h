@@ -32,10 +32,32 @@ namespace DCLF::Draws
 	 * EpochTraitsOf, EpochOfShape, EpochById, ViewEpochsOf) and the frame's orders (Extensions::ScheduledFrameOrders), then each epoch's
 	 * keys to their passes, grouped by shape (and view). Fails the install for an epoch id unknown or duplicated, a segment used twice, more
 	 * epochs than kMaxEpochs, a shape Core has not or one of Core's with no epoch, a sharesWith naming no earlier epoch recording that shape
-	 * itself, an order not naming every epoch and foreign epoch once; a key nobody registered, naming it and its epoch; a pass with a setup
+	 * itself, an order not naming every epoch and foreign epoch once; a trigger id missing or duplicated, an epoch's trigger the schedule
+	 * has not, a trigger no epoch names, one of Core's (CoreTrigger) missing; a key nobody registered, naming it and its epoch; a pass with a setup
 	 * in a Shadow epoch; a second pass with a latch word, or one the schedule names anywhere but in main.depth before core.z.build-draws.
 	 */
 	void ResolveSchedule(const Api::FrameSchedule& a_schedule);
+	/**
+	 * @brief Main thread, during InstallFeatures (Api::InstallContext::FindTrigger, and Core's own at ResolveSchedule): a_schedule's
+	 * trigger a_id, its row. Fails the install, naming a_who, for an id it has not.
+	 */
+	Api::TriggerId FindTrigger(const Api::FrameSchedule& a_schedule, std::string_view a_id, std::string_view a_who);
+
+	/** @brief Core's trigger points (FrameDriver's), resolved by id at ResolveSchedule: a schedule without one fails the install. */
+	enum class CoreTrigger : std::uint32_t
+	{
+		ShadowMapsAfter,  // shadow-maps.after
+		DepthCommitted,   // depth.committed
+		OcclusionDraw,    // occlusion.draw
+		OpaqueAfter,      // opaque.after
+		Count,
+	};
+	/** @brief Any thread, after InstallFeatures: Core's trigger a_trigger. */
+	Api::TriggerId CoreTriggerOf(CoreTrigger a_trigger);
+	/** @brief Any thread, after InstallFeatures: epoch a_epoch's trigger's row (Api::EpochDef::trigger). */
+	std::uint32_t EpochTrigger(std::uint32_t a_epoch);
+	/** @brief Any thread, after InstallFeatures: trigger row a_trigger's id ("none" for Extensions::kNoTrigger). */
+	std::string_view TriggerName(std::uint32_t a_trigger);
 	/**
 	 * @brief Render thread (EnsureSceneBuffers), after every table: every registered pass's setup (Api::PassDef::setup), in registration
 	 * order: its state by pass (SceneBuffers::passStates; null: no setup, or the pass is not added).

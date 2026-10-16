@@ -560,6 +560,7 @@ namespace DCLF::Extensions
 			}
 
 			void RegisterPass(const Api::PassDef& a_pass) override { Draws::RegisterPassDef(a_pass, feature); }
+			Api::TriggerId FindTrigger(std::string_view a_id) override { return Draws::FindTrigger(*schedule, a_id, feature); }
 
 			void RegisterPayloadProduct(const Api::PayloadProduct& a_product) override
 			{
@@ -1155,7 +1156,8 @@ namespace DCLF::Extensions
 			void RegisterLightingPassRules(const Api::LightingPassRules& a_rules) override { AddLightingPassRules(lists, feature, a_rules); }
 			void DeclarePerDrawBuffer(const Api::PerDrawBuffer& a_buffer) override { AddPerDrawBuffer(lists, feature, a_buffer); }
 
-			std::string_view feature;  // the feature installing
+			std::string_view feature;                       // the feature installing
+			const Api::FrameSchedule* schedule = nullptr;  // the schedule InstallFeatures resolves (FindTrigger)
 
 		private:
 			Lists& lists;
@@ -1183,6 +1185,7 @@ namespace DCLF::Extensions
 		// they write name (RegisterMaterialPort returns it).
 		lists.materialPorts[lists.materialPortCount++] = CoreLightingPort();
 		Context context(lists);
+		context.schedule = &a_schedule;
 		for (const auto& feature : a_features) {
 			context.feature = feature.name;
 			if (feature.install)

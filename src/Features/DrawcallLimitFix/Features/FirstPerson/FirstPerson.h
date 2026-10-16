@@ -57,8 +57,9 @@ namespace DCLF::Features::FirstPerson
 	void ExecuteColour();
 	std::string Report();
 
-	// FirstPersonHooks.cpp: the two engine hooks that run the epochs, from the feature's install.
-	void InstallHooks();
+	// FirstPersonHooks.cpp: the two engine hooks that run the epochs (their triggers, fp.depth-draw and fp.colour-render), from the
+	// feature's install.
+	void InstallHooks(Api::InstallContext& a_context);
 
 	// Diagnostics/SkeletonParity.cpp: CS_DCLF_SET_PARITY's log of the skeleton's slots and claimed phases, when they change.
 	void SubscribeSkeletonParity();

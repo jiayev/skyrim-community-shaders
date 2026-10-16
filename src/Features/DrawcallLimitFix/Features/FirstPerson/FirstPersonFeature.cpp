@@ -84,7 +84,7 @@ namespace DCLF::Features::FirstPerson
 			SubscribeRootViewChecks();
 			a_context.RegisterReportLines({ .name = "first person filing", .point = Api::ReportPoint::SceneCoordinatorSet, .lines = &SetLines });
 			// RenderDepth's first-person draw and Main::RenderFirstPersonView's accumulator render, where the epochs run.
-			InstallHooks();
+			InstallHooks(a_context);
 		}
 	}
 

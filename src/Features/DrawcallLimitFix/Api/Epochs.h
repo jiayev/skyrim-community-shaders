@@ -1,7 +1,8 @@
 #pragma once
 
-// The frame's schedule (Schedule/Frame.cpp): each epoch DCLF adds passes to, its definition (its shape, the shape it shares, its gate and
-// whether the frame's claims need it) and its passes' keys (Api/Passes.h) in order; the epochs outside DCLF; the frame and async orders.
+// The frame's schedule (Schedule/Frame.cpp): the engine points the epochs are submitted at (the triggers); each epoch DCLF adds passes to,
+// its definition (its trigger, its shape, the shape it shares, its gate and whether the frame's claims need it) and its passes' keys
+// (Api/Passes.h) in order; the epochs outside DCLF; the frame and async orders.
 
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 
@@ -27,6 +28,26 @@ namespace DCLF::Api
 	};
 
 	/**
+	 * @brief An engine point an epoch is submitted at: its owner's hook marks it active on the render thread for the duration of the
+	 * hook's DCLF work (Core's FrameDriver points; a feature's, InstallContext::FindTrigger and Extensions::TriggerScope). An epoch
+	 * submitted while another (or none) is active is counted and logged once.
+	 */
+	struct TriggerDef
+	{
+		std::string_view id;     // "shadow-maps.after", "depth.committed", ...
+		std::string_view owner;  // whose hook fires it: "Core", "Features/Forward", ...
+		std::string_view where;  // the engine point, and the hook
+	};
+
+	/** @brief A schedule's trigger (InstallContext::FindTrigger's result): its row in FrameSchedule::triggers. */
+	struct TriggerId
+	{
+		std::uint32_t index = ~0u;
+		explicit operator bool() const { return index != ~0u; }
+		bool operator==(const TriggerId&) const = default;
+	};
+
+	/**
 	 * @brief An epoch: what Core records it against, and its passes' keys, added in this order. Its row's index in FrameSchedule::epochs
 	 * is its index in the scene revisions (their shape and recording slots, the per-epoch counters, the coverage, the reports).
 	 */
@@ -34,6 +55,7 @@ namespace DCLF::Api
 	{
 		std::string_view id;                       // "main.depth", "main.colour", "shadow", "occlusion", "reflection", "forward", "fp.depth", "fp.colour"
 		std::string_view label;                    // the reports' name
+		std::string_view trigger;                  // the TriggerDef id of the engine point it is submitted at
 		std::uint32_t segment = 0;                 // RenderGraphRuntime::Segment, as its value
 		EpochShape shape = EpochShape::Main;
 		// Its index in its shape: Main, MainShape; Shadow, 0 the shadow views, 1 the occlusion maps; View, its Api::EngineView. As its value.
@@ -56,11 +78,12 @@ namespace DCLF::Api
 	};
 
 	/**
-	 * @brief The frame's epochs, in the revisions' slot order (within an epoch, its passes' order is the graph's; across epochs ORG orders
-	 * them by frameOrder); the foreign ones; the frame's order and the host's async order, by id, every epoch and foreign epoch once.
+	 * @brief The frame's triggers (each named by an epoch); its epochs, in the revisions' slot order (within an epoch, its passes' order
+	 * is the graph's; across epochs ORG orders them by frameOrder); the foreign ones; the frame's order and the host's async order, by id, every epoch and foreign epoch once.
 	 */
 	struct FrameSchedule
 	{
+		std::span<const TriggerDef> triggers;
 		std::span<const EpochDef> epochs;
 		std::span<const ForeignEpoch> foreign;
 		std::span<const std::string_view> frameOrder;  // the order a frame runs them (PersistentGraphHost::Desc::epochOrder)

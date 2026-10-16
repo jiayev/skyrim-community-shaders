@@ -1,7 +1,7 @@
 // Fades: the fade roots' OnVisible state, the one producer of root states. Its switches, the fade roots' table family and coordinator
 // component, the fade snaps and fade amounts channels, the render side (the seeds pool, the scene resources with their depth commit hook,
-// the passes, the frame and cull bindings), the root states (the family's view, the root test, the write-back's kick and wait), the
-// diagnostics, the fade writers (the stand-in observer and engine hooks, last) and the early hook (FadeSnap).
+// the passes, the frame and cull bindings), the root states (the family's view, the root test, the write-back's kick and wait, the fade
+// test's frame start and latch words), the diagnostics, the fade writers (the stand-in observer and engine hooks, last) and the early hook (FadeSnap).
 
 // FadeScene.h first: volk before every Vulkan header (the write-back's kick and wait).
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
@@ -12,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
@@ -73,8 +74,9 @@ namespace DCLF::Features::Fades
 				mix(std::bit_cast<std::uint32_t>(g.fadeTypeDivisors[type]));
 		}
 
-		// The root states: the family's rows, the root test per join and its globals in the membership witness, and the write-back task
-		// (kicked at the frame's start, joined when DCLF's async work drains).
+		// The root states: the family's rows, the root test per join and its globals in the membership witness, the write-back task
+		// (kicked at the frame's start, joined when DCLF's async work drains), and the fade test's frame inputs (the eye and the tree
+		// height test: captured at the frame start, written into the depth commit's latch).
 		void RegisterRootStates(Api::InstallContext& a_context)
 		{
 			a_context.RegisterRootStates({ .name = "fade roots",
@@ -84,7 +86,9 @@ namespace DCLF::Features::Fades
 				.test = &RootTest,
 				.globalsKey = &RootGlobalsKey,
 				.kick = &KickFadeWriteBack,
-				.wait = &WaitFadeWriteBack });
+				.wait = &WaitFadeWriteBack,
+				.frameStart = &FadeState::BeginFrame,
+				.latchGlobals = &FadeState::LatchGlobals });
 		}
 
 		void Install(Api::InstallContext& a_context)

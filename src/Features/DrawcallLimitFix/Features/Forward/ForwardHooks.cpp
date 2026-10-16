@@ -6,6 +6,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
@@ -28,6 +29,9 @@ namespace DCLF::Features::Forward
 			inline constexpr std::uintptr_t kRefractionNormalsDrawn = 0x35ef131;  // byte: drawn (ISRefraction's IsActive reads it)
 			inline constexpr std::uintptr_t kClearGroup = 0x14b4ae0;      // FUN_1414b4ae0(accumulator, group): a group's pass list cleared, undrawn
 		}
+
+		// The forward epoch's trigger (blended.draw), found at install, before any frame.
+		Api::TriggerId blendedDraw;
 
 		/**
 		 * @brief Refraction: the forward epoch cleared and drew the refraction normals, ahead of Main::Draw's own group 5 (FUN_1414b4860).
@@ -61,8 +65,11 @@ namespace DCLF::Features::Forward
 				const bool main = a_accumulator && a_accumulator == *mainAccumulator;
 				if (main)
 					Diagnostics::Notify(Diagnostics::TargetPoint{ "before forward" });
-				if (main && ShellState::Running() && IndirectDraws::Get().ExecuteForward())
-					MarkRefractionNormals();
+				if (main && ShellState::Running()) {
+					Extensions::TriggerScope trigger(blendedDraw);
+					if (IndirectDraws::Get().ExecuteForward())
+						MarkRefractionNormals();
+				}
 				if (main)
 					Diagnostics::Notify(Diagnostics::TargetPoint{ "after DCLF forward" });
 				func(a_accumulator, a_renderFlags);
@@ -94,8 +101,9 @@ namespace DCLF::Features::Forward
 		};
 	}
 
-	void InstallHooks()
+	void InstallHooks(Api::InstallContext& a_context)
 	{
+		blendedDraw = a_context.FindTrigger("blended.draw");
 		// The main pass's blended draw (FUN_1414b39d0), at both its call sites in FUN_1414b3390.
 		if (Engine::CallsTo(REL::Offset(Address::kBlendedUnderWater).address(), REL::Offset(Address::kBlendedDraw).address()) &&
 			Engine::CallsTo(REL::Offset(Address::kBlendedAfterWater).address(), REL::Offset(Address::kBlendedDraw).address())) {

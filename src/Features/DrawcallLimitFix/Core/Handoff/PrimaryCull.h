@@ -90,14 +90,9 @@ namespace DCLF
 		/** @brief The frame globals a membership pass reads (static sun bits, fade distances): a change rebinds every object. */
 		static std::uint32_t MembershipWitness(const FrameGlobals& a_globals);
 		/**
-		 * @brief The main camera as BSFadeNode::OnVisible measures from it: position and LOD factor (NiCamera +0x184), for
-		 * kObjectFadeTest. Zero when no camera was seen.
-		 */
-		std::array<float, 4> FadeEye() const { return fadeEye; }
-		/**
-		 * @brief Render thread, FrameDriver at BeginSceneFrame (after Main::Draw's camera setup, before the list build and culls):
-		 * FadeEye, the camera cut (IndirectDraws::NoteCameraCut) and TreeHeightTest from the main camera, so none of them depends on
-		 * the engine's list processes running.
+		 * @brief Render thread, FrameDriver at BeginSceneFrame (after Main::Draw's camera setup, before the list build and culls): the
+		 * camera cut (IndirectDraws::NoteCameraCut) from the main camera, so it does not depend on the engine's list processes running.
+		 * The root states' producer captures the fade test's inputs right after it (Extensions::RootStatesFrameStart).
 		 */
 		void BeginFrameCamera();
 		/**
@@ -121,8 +116,6 @@ namespace DCLF
 		}
 		/** @brief Whether a_node is an eligible entry's root in the cut's snapshot. */
 		bool IsEntry(const RE::NiAVObject* a_node) const { return cut.eligible.contains(a_node); }
-		/** @brief BSTreeNode::OnVisible's height test for kObjectHeightTest: base and limit (+infinity: off). */
-		std::array<float, 2> TreeHeightTest() const { return treeHeight; }
 		/** @brief Why this thread's last SyntheticPass failed (kSyntheticFailNames index; 0: it succeeded). */
 		static std::uint8_t LastSyntheticFail();
 		static constexpr std::array<const char*, 6> kSyntheticFailNames{ "-", "not derived", "not lighting", "-", "translucent layer", "translucent" };
@@ -580,10 +573,8 @@ namespace DCLF
 		// parity, CutObservers): set at Install by the observer (PrimaryCullView::CollectVisible); the counters stand either way.
 		bool collectVisible = false;
 		std::vector<const RE::NiAVObject*> switchChanges;  // scratch: Coordinator::TakeSwitchChanges
-		std::array<float, 4> fadeEye{};  // FadeEye, captured in BeginFrameCamera
 		const void* frameCamera = nullptr;  // BeginFrameCamera's camera
 		std::shared_ptr<const SetSnapshot> frameSet;  // the frame's set, for Owned (PrepareFrame)
-		std::array<float, 2> treeHeight{ 0.0f, std::numeric_limits<float>::infinity() };  // TreeHeightTest, captured in BeginFrameCamera
 		bool standInLive = false;        // this frame's snapshot is current: the stand-in runs
 		bool liveStale = true;                             // a frame skipped the switch changes: memberLive is read again
 		// SyncRootOwnership's state per entry index: what of the sets below holds its root (ownRoot, as judged).
