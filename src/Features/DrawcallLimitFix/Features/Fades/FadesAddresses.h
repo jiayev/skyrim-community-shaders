@@ -3,6 +3,7 @@
 // The engine addresses Fades alone reads or calls (module offsets, AE 1.6.1170); those Core or another feature also reads stay in
 // Core/Engine/EngineAccess.h (Engine::Address). Included by the feature's sources only.
 
+#include <cstddef>
 #include <cstdint>
 
 namespace DCLF::Features::Fades::Address
@@ -28,4 +29,10 @@ namespace DCLF::Features::Fades::Address
 	inline constexpr std::uintptr_t kFadeAmountSnapAbove = 0x1ad2874;
 	inline constexpr std::uintptr_t kFadeAmountSnapOffset = 0x1ad288c;
 	inline constexpr std::uintptr_t kFadeSnapRadiusLimit = 0x1ad29f4;
+	// BSTreeNode::OnVisible (AE 0x14147d3c0): the height test (the frame start's capture, TreeOnVisible's test). The switch byte is on
+	// the culling process (a field offset); the rest are module offsets.
+	inline constexpr std::size_t kProcessTreeHeightTest = 0x121;  // byte on the culling process
+	inline constexpr std::uintptr_t kTreeHeightTestOn = 0x2032fb8;  // byte
+	inline constexpr std::uintptr_t kTreeHeightBase = 0x332a2f0;  // float
+	inline constexpr std::uintptr_t kTreeHeightLimit = 0x2032fa0;  // float
 }

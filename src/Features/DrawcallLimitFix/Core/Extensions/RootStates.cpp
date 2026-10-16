@@ -3,6 +3,10 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 
+#include <algorithm>
+#include <iterator>
+#include <limits>
+
 namespace DCLF::Extensions
 {
 	namespace
@@ -100,5 +104,23 @@ namespace DCLF::Extensions
 	{
 		if (const auto* states = RootStates(); states && states->contribution.wait)
 			states->contribution.wait();
+	}
+
+	void RootStatesFrameStart()
+	{
+		if (const auto* states = RootStates(); states && states->contribution.frameStart)
+			states->contribution.frameStart();
+	}
+
+	void RootStatesLatchGlobals(float (&a_eye)[4], float (&a_treeHeight)[2])
+	{
+		if (const auto* states = RootStates(); states && states->contribution.latchGlobals) {
+			states->contribution.latchGlobals(a_eye, a_treeHeight);
+			return;
+		}
+		// No camera seen, and the height test off.
+		std::fill(std::begin(a_eye), std::end(a_eye), 0.0f);
+		a_treeHeight[0] = 0.0f;
+		a_treeHeight[1] = std::numeric_limits<float>::infinity();
 	}
 }

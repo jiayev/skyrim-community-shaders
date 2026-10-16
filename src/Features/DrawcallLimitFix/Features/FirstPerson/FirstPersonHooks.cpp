@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPersonView.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
@@ -20,6 +21,9 @@ namespace DCLF::Features::FirstPerson
 			inline constexpr std::uintptr_t kFirstPersonViewDraw = 0x14cb7d1;    // its call in FUN_1414cb6d0 (the first-person view)
 			inline constexpr std::uintptr_t kAccumulatorRender = 0x14a90f0;      // the accumulator render (FUN_1414a90f0)
 		}
+
+		// The epochs' triggers (fp.depth-draw, fp.colour-render), found at install, before any frame.
+		Api::TriggerId depthDraw, colourRender;
 
 		/**
 		 * @brief RenderDepth's first-person draw (AE 0x1414cd47e, RenderDepth +0x94E: FUN_1414a90f0(first-person camera, the Z-prepass's
@@ -37,7 +41,10 @@ namespace DCLF::Features::FirstPerson
 					if (Extensions::ViewOn(ActiveToggles(), kView))
 						if (auto* player = RE::PlayerCharacter::GetSingleton())
 							FrameGlobals::NoteFirstPersonCulled(player->Get3D(true));
-					ExecuteDepth(ShellState::Passes().depthControlDriven);
+					{
+						Extensions::TriggerScope trigger(depthDraw);
+						ExecuteDepth(ShellState::Passes().depthControlDriven);
+					}
 					// DCLF's epoch leaves the context's bindings to the engine's state tracking.
 					globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 				}
@@ -58,7 +65,10 @@ namespace DCLF::Features::FirstPerson
 				Diagnostics::Notify(Diagnostics::TargetPoint{ "before first person" });
 				if (ShellState::Running()) {
 					RenderThreadBudget::Hook budget(RenderThreadBudget::Site::AfterOpaque);
-					ExecuteColour();
+					{
+						Extensions::TriggerScope trigger(colourRender);
+						ExecuteColour();
+					}
 					globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 				}
 				Diagnostics::Notify(Diagnostics::TargetPoint{ "after DCLF first person" });
@@ -69,8 +79,10 @@ namespace DCLF::Features::FirstPerson
 		};
 	}
 
-	void InstallHooks()
+	void InstallHooks(Api::InstallContext& a_context)
 	{
+		depthDraw = a_context.FindTrigger("fp.depth-draw");
+		colourRender = a_context.FindTrigger("fp.colour-render");
 		// The first-person view's two points (FUN_1414a90f0, the accumulator render, at RenderDepth's first-person draw and at
 		// FUN_1414cb6d0's), always installed: one compare a frame each while CS_DCLF_FIRST_PERSON is off.
 		if (Engine::CallsTo(REL::Offset(Address::kDepthFirstPersonDraw).address(), REL::Offset(Address::kAccumulatorRender).address()) &&

@@ -3,6 +3,8 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 
 namespace DCLF
 {
@@ -10,6 +12,9 @@ namespace DCLF
 
 	namespace
 	{
+		// Render thread: the submissions of each epoch outside its trigger (SubmitRevisionRecording), the first logged.
+		std::array<std::uint64_t, kMaxEpochs> outsideTrigger{};
+
 		// Revision shapes' generations (their passes' invocation revisions): apart from the live shapes'.
 		std::uint64_t NextRevisionGeneration()
 		{
@@ -332,6 +337,12 @@ namespace DCLF
 
 	void IndirectDraws::Impl::SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index)
 	{
+		// Each epoch is submitted at its trigger's engine point (Schedule/Frame.cpp): anywhere else, a hook is out of step with the table.
+		if (const auto trigger = EpochTrigger(a_epoch); Extensions::ActiveTrigger() != trigger) [[unlikely]] {
+			if (outsideTrigger[a_epoch]++ == 0)
+				logger::warn("[DCLF] the {} epoch was submitted outside its trigger {} (active: {})", EpochTraitsOf(a_epoch).name, TriggerName(trigger),
+					TriggerName(Extensions::ActiveTrigger()));
+		}
 		if (auto* host = RenderGraphRuntime::Get().Host(); host && a_index < a_recordings.recordings.size()) {
 			host->UseEpochRecording(a_recordings.recordings[a_index]);
 			++revisions.submitted[a_epoch];

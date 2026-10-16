@@ -36,11 +36,6 @@ namespace DCLF::Features::Fades
 		constexpr std::size_t kLastVisibleFrame = 0x13C;
 		constexpr std::uint32_t kFlagFadeTargetReached = 1u << 14;
 		constexpr std::uintptr_t kAnimatedFadeCallSite = 0x2d0044;  // FUN_1402cff60 (UpdateAnimationJob) -> FUN_14147a160
-		// BSTreeNode::OnVisible (AE 0x14147d3c0): the height test.
-		constexpr std::size_t kProcessTreeHeightTest = 0x121;     // byte on the culling process
-		constexpr std::uintptr_t kTreeHeightTestOn = 0x2032fb8;   // byte
-		constexpr std::uintptr_t kTreeHeightBase = 0x332a2f0;     // float
-		constexpr std::uintptr_t kTreeHeightLimit = 0x2032fa0;    // float
 		// The NiNode OnVisible BSFadeNode's ends in (its children's cull), and fields the fade OnVisible detours read.
 		constexpr std::uintptr_t kNodeOnVisible = 0xd1e2c0;       // NiNode::OnVisible
 		constexpr std::size_t kNodeWorldZ = 0xEC;                 // NiAVObject::world.translate.z
@@ -216,8 +211,8 @@ namespace DCLF::Features::Fades
 					return;
 				}
 				onVisibleFadeSkipped.fetch_add(1, std::memory_order_relaxed);
-				if (At<std::uint8_t>(a_process, kProcessTreeHeightTest) && Global<std::uint8_t>(kTreeHeightTestOn) &&
-					At<float>(a_node, kNodeWorldZ) - Global<float>(kTreeHeightBase) > Global<float>(kTreeHeightLimit))
+				if (At<std::uint8_t>(a_process, Address::kProcessTreeHeightTest) && Global<std::uint8_t>(Address::kTreeHeightTestOn) &&
+					At<float>(a_node, kNodeWorldZ) - Global<float>(Address::kTreeHeightBase) > Global<float>(Address::kTreeHeightLimit))
 					return;
 				WrittenFadeOnVisible(a_node, a_process, a_arg);
 			}

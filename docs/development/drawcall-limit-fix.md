@@ -3378,7 +3378,7 @@ engine still culls. It changes nothing in the engine.
     -   the trees: the frame's tables' fade roots whose seed plan is `BSTreeNode`'s (the tree list) or `BSLeafAnimNode`'s
         (the animation list), stood-in ones included;
     -   the positions: the tree seeds (`TreeStatic.position`, the node's world translate);
-    -   the camera: `PrimaryCull::FadeEye`, the list camera of the frame;
+    -   the camera: `FadeState::FadeEye` (Features/Fades; `PrimaryCull::FadeEye` until round 2), the list camera of the frame;
     -   the verdicts: the visibility decoder's root verdicts (`kFadeVerdictInView`).
 
     A tree with an in-view verdict is visited. A visited tree strictly within range (manager `+0x80`) is near. The near trees
@@ -8317,7 +8317,7 @@ segment's first phase tests it:
     fades-off and LOD-updates-off globals, give no test.
 -   **The row.** A resident fade root's objects carry the distance (`Tables::fadeDistance`, `kObjectFadeTest`), and
     the depth inputs carry it with the entry root's centre (`Tables::sunEntry`, which the walk keeps current when the
-    root moves). The latch carries the main camera's position and LOD factor (`PrimaryCull::FadeEye`). `DrawInput` grew
+    root moves). The latch carries the main camera's position and LOD factor (`FadeState::FadeEye` (Features/Fades; `PrimaryCull::FadeEye` until round 2)). `DrawInput` grew
     to 64 bytes for the row.
 -   **The rule.** Past the distance and not in view last frame, the draw is dropped as a final verdict, so the colour
     segment and phase 2 follow it. The frustum stamp's bit 31 (`kFrustumFadeHidden`) remembers the drop, and a dropped
@@ -8343,7 +8343,7 @@ divisors) end every resident when they change.
 
 -   **The height test on the GPU.** `BSTreeNode::OnVisible` draws nothing of a tree whose root is above the frame's
     height limit. A resident tree's objects carry `kObjectHeightTest`, the latch carries the base and the limit
-    (`PrimaryCull::TreeHeightTest`; +infinity when the list processes' test is off), and the depth segment's first phase
+    (`FadeState::TreeHeightTest`, Features/Fades; +infinity when the list processes' test is off), and the depth segment's first phase
     drops them as a final verdict. The decode does not service a tree above the limit, as `OnVisible` would not.
 -   **The animation.** A tree's wind state is the tree manager's (`FUN_1404381e0`: it advances `+0x164` and derives
     `+0x15C` for the trees whose `kAccumulated` bit is set, which the feedback keeps). `KeepResidentsAlive` takes a

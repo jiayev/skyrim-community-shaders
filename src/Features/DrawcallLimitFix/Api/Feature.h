@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Api/DepthPyramid.h"
 #include "Features/DrawcallLimitFix/Api/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Api/Epochs.h"
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Api/LightVolumes.h"
@@ -52,6 +53,11 @@ namespace DCLF::Api
 		 * registered, a second pass with a latch word, or one scheduled anywhere but in main.depth before core.z.build-draws.
 		 */
 		virtual void RegisterPass(const PassDef& a_pass) = 0;
+		/**
+		 * @brief The schedule's trigger a_id (Schedule/Frame.cpp's TriggerDef), for the feature's hook to mark active around its DCLF work
+		 * (Extensions::TriggerScope, Core/Extensions/Triggers.h). Fails the install for an id the schedule has not.
+		 */
+		virtual TriggerId FindTrigger(std::string_view a_id) = 0;
 		virtual void RegisterPayloadProduct(const PayloadProduct& a_product) = 0;
 		virtual SceneResourcesId RegisterSceneResources(const SceneResources& a_resources) = 0;
 		virtual void RegisterCommitHook(const CommitHook& a_hook) = 0;

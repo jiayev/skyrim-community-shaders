@@ -35,7 +35,7 @@ namespace DCLF::Features::Forward
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Forward, .toggle = forward });
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Refraction, .toggle = refraction });
 			// The main pass's blended draw, where the forward epoch runs, and Main::Draw's refraction point.
-			InstallHooks();
+			InstallHooks(a_context);
 		}
 	}
 

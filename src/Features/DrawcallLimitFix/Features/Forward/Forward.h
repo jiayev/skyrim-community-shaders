@@ -20,6 +20,7 @@ namespace DCLF::Features::Forward
 	// ForwardFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
 
-	// ForwardHooks.cpp: the main pass's blended draw (both its call sites) and Main::Draw's refraction point, from the feature's install.
-	void InstallHooks();
+	// ForwardHooks.cpp: the main pass's blended draw (both its call sites; the forward epoch's trigger, blended.draw) and Main::Draw's
+	// refraction point, from the feature's install.
+	void InstallHooks(Api::InstallContext& a_context);
 }

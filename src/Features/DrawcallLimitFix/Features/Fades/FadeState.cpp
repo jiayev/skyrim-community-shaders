@@ -1,15 +1,16 @@
-// FadeState.h's port of the fade roots' OnVisible (pure, any thread), the render thread's node reads and writes and frame sample,
-// and the parity check that runs the engine's own functions on a copy of a node.
+// FadeState.h's port of the fade roots' OnVisible (pure, any thread), the render thread's node reads and writes, frame sample and
+// frame start capture (the fade test's eye and height test), and the parity check that runs the engine's own functions on a copy of a node.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadesAddresses.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace DCLF::FadeState
 {
@@ -23,6 +24,14 @@ namespace DCLF::FadeState
 		constexpr std::uintptr_t kLogf = 0x153d086;               // the engine's CRT logf
 		constexpr std::uintptr_t kPowf = 0x153d014;               // ... and powf
 		using Engine::kOnVisibleSlot;
+		// The main camera: the world scene graph's (+0x128), carried by the list processes; FUN_1406452c0 (Main::Draw's camera
+		// setup, before BeginSceneFrame) sets the tree height base from it.
+		constexpr std::size_t kSceneGraphCamera = 0x128;
+		constexpr std::size_t kCameraLodAdjust = 0x184;
+
+		// Render thread: BeginFrame's capture.
+		std::array<float, 4> fadeEye{};  // FadeEye, captured in BeginFrame
+		std::array<float, 2> treeHeight{ 0.0f, std::numeric_limits<float>::infinity() };  // TreeHeightTest, captured in BeginFrame
 
 		/** @brief MINSS a, b: a when a < b, else b (b when either is NaN). */
 		float MinSS(float a_a, float a_b) { return a_a < a_b ? a_a : a_b; }
@@ -319,12 +328,39 @@ namespace DCLF::FadeState
 		frame.amountSnapOffset = Global<float>(Features::Fades::Address::kFadeAmountSnapOffset);
 		frame.snapRadiusLimit = Global<float>(Features::Fades::Address::kFadeSnapRadiusLimit);
 		// BSTreeNode::OnVisible's height test as the list processes have it this frame (+infinity: off).
-		const auto treeHeight = PrimaryCull::Get().TreeHeightTest();
 		frame.treeHeightBase = treeHeight[0];
 		frame.treeHeightLimit = treeHeight[1];
 		for (std::uint32_t type = 0; type < 16; ++type)
 			frame.divisors[type] = Global<float>(Engine::Address::kFadeTypeDivisors + type * 4);
 		return frame;
+	}
+
+	void BeginFrame()
+	{
+		const auto* sceneGraph = Global<const std::byte*>(Engine::Address::kWorldSceneGraph);
+		const auto* camera = sceneGraph ? At<const RE::NiCamera*>(sceneGraph, kSceneGraphCamera) : nullptr;
+		// The fade test's camera.
+		fadeEye = {};
+		if (camera)
+			fadeEye = { camera->world.translate.x, camera->world.translate.y, camera->world.translate.z, At<float>(camera, kCameraLodAdjust) };
+		// BSTreeNode::OnVisible's height test as the list processes have it: their +0x121 is 0 (only the constructors write it;
+		// skyrim-engine-notes.md, "the height-test byte"), the base is the camera height (FUN_1406452c0), the switch and limit globals.
+		const std::uint32_t count = Global<std::uint32_t>(Engine::Address::kSceneListCount);
+		auto** processes = Global<RE::NiCullingProcess**>(Engine::Address::kListProcesses);
+		const bool heightTest = processes && count && processes[0] && At<std::uint8_t>(processes[0], Features::Fades::Address::kProcessTreeHeightTest) &&
+		                        Global<std::uint8_t>(Features::Fades::Address::kTreeHeightTestOn);
+		treeHeight = { Global<float>(Features::Fades::Address::kTreeHeightBase),
+			heightTest ? Global<float>(Features::Fades::Address::kTreeHeightLimit) : std::numeric_limits<float>::infinity() };
+	}
+
+	std::array<float, 4> FadeEye() { return fadeEye; }
+	std::array<float, 2> TreeHeightTest() { return treeHeight; }
+
+	void LatchGlobals(float (&a_eye)[4], float (&a_treeHeight)[2])
+	{
+		std::copy(fadeEye.begin(), fadeEye.end(), a_eye);
+		a_treeHeight[0] = treeHeight[0];
+		a_treeHeight[1] = treeHeight[1];
 	}
 
 	FadeNodeState ReadNode(const RE::NiAVObject& a_node)

@@ -3,7 +3,8 @@
 // The root states contract's Core side (Api/RootStates.h): the list view the producer fills from its family's columns (RootListView) and
 // Core's readers take (Extensions::RootListOf: per decode, commit or parity check), what the root test is handed (RootTestInput), and the
 // contribution's entry, resolved once at InstallFeatures (none registered: Extensions::RootStates() null), with the calls Core makes at
-// its points (the join's root test, the membership witness, the frame's write-back task and its join).
+// its points (the join's root test, the membership witness, the frame's write-back task and its join, the frame start's capture and
+// the depth commit's fade test words).
 
 #include "Features/DrawcallLimitFix/Api/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
@@ -121,4 +122,14 @@ namespace DCLF::Extensions
 	void RootStatesKick();
 	/** @brief Render thread, IndirectDraws::DrainAsync after the builds ahead (never per frame): the producer's wait. */
 	void RootStatesWait();
+	/**
+	 * @brief Render thread, once a frame at the frame driver's frame start, after the camera cut (PrimaryCull::BeginFrameCamera; only
+	 * with the primary cull installed): the producer's frameStart, its frame inputs (the fade test's eye and height test).
+	 */
+	void RootStatesFrameStart();
+	/**
+	 * @brief Render thread, the depth commit: the fade test's latch words from the producer's latchGlobals; without one, a zero eye
+	 * and a height of {0, +infinity} (off).
+	 */
+	void RootStatesLatchGlobals(float (&a_eye)[4], float (&a_treeHeight)[2]);
 }

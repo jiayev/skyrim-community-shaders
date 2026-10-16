@@ -20,6 +20,8 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
@@ -119,8 +121,11 @@ namespace DCLF
 			RenderThreadBudget::Part captures(RenderThreadBudget::Bucket::SceneCaptures);
 			view.BeginFrame();
 		}
-		// The frame's camera duties (FadeEye, the camera cut, the tree height test) from the main camera, under the frame's number.
+		// The frame's camera duties from the main camera, under the frame's number: the camera cut, then the root states' frame inputs
+		// (Features/Fades: the fade test's eye and tree height test), with the primary cull installed.
 		PrimaryCull::Get().BeginFrameCamera();
+		if (PrimaryCull::Get().Installed())
+			Extensions::RootStatesFrameStart();
 		// The palette rows classes' frame start (Features/Particles: the main camera the frame's particle quads face, which FrameValues'
 		// producer expands them for, and the renderer's quads once).
 		Extensions::PaletteRowsFrameStart();
@@ -201,6 +206,8 @@ namespace DCLF
 
 	void FrameDriver::DepthCommitted()
 	{
+		// The Z-prepass and the views' work here (the reflection's epoch) are submitted under depth.committed.
+		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::DepthCommitted));
 		IndirectDraws::Get().CaptureDepthPass();
 		// The views' work at the depth commit (Features/Reflection's: the frame's reflection faces, every TESWaterReflections::Update of the
 		// frame having run, two a frame, a face each, drawn by DCLF in one epoch before the water reads the cube; dclf-lod.md, "Water
@@ -276,6 +283,7 @@ namespace DCLF
 	void FrameDriver::AfterShadowMaps()
 	{
 		// The frame's shadow epoch: every view the accumulator hook captured, drawn in one graph execution.
+		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::ShadowMapsAfter));
 		IndirectDraws::Get().ExecuteShadowFrame();
 	}
 
@@ -349,6 +357,7 @@ namespace DCLF
 		// Every occlusion map whose Ready said DCLF draws it this frame, in one epoch.
 		const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
 		PassCapture::Get().SetOcclusionPhase(0);
+		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::OcclusionDraw));
 		const std::uint32_t drawn = wanted ? IndirectDraws::Get().ExecuteOcclusion(wanted) : 0u;
 		Diagnostics::Notify(Diagnostics::OcclusionMapsDrawn{ drawn });
 	}
@@ -390,6 +399,7 @@ namespace DCLF
 		auto& draws = IndirectDraws::Get();
 		globals::d3d::context->OMSetRenderTargets(0, nullptr, nullptr);  // the epoch writes the G-buffer the context has bound
 		draws.ProbeTargets("before colour");
+		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::OpaqueAfter));
 		draws.ExecuteColour();  // the colour pass, against the depth written at the first draw
 		draws.ProbeTargets("after colour");
 		// DCLF's epoch leaves the context's bindings to the engine's state tracking: its targets rebound for the rest of the pass.
