@@ -1,9 +1,9 @@
-// The texture transforms' GPU stage: this frame's TexcoordOffset into the installed payload's material rows (TextureTransformsCS), first
+// The texture transforms' pass: this frame's TexcoordOffset into the installed payload's material rows (TextureTransformsCS), first
 // in the depth segment, from the pool's rows the depth latch's stage word names.
 
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF::Draws
 {
@@ -101,7 +101,7 @@ namespace DCLF::Features::TextureTransforms
 	namespace
 	{
 		// The scene's GPU setup: the program (the scene lane no longer writes the transforms into records).
-		std::shared_ptr<const void> Setup(const Api::GpuStageSetup& a_setup)
+		std::shared_ptr<const void> Setup(const Api::PassSetup& a_setup)
 		{
 			auto program = ComputeProgram::Load(a_setup.device, { .source = Draws::kShader, .constantWords = Draws::kConstantWords });
 			if (!program)
@@ -109,17 +109,17 @@ namespace DCLF::Features::TextureTransforms
 			return program;
 		}
 
-		std::shared_ptr<org::RenderPass> MakePass(const Api::GpuStageContext& a_context)
+		std::shared_ptr<org::RenderPass> MakePass(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::TextureTransformsPass>(a_context.resources, a_context.State<ComputeProgram>());
+			return std::make_shared<Draws::TextureTransformsPass>(a_context.Main(), a_context.State<ComputeProgram>());
 		}
 	}
 
-	void RegisterStage(Api::InstallContext& a_context)
+	void RegisterPass(Api::InstallContext& a_context)
 	{
 		// The frame's texture transforms into the payload's material rows, before anything of the frame draws from them; the depth latch's
 		// stage word names the pool's rows (0: no producer this frame, the shader stores nothing).
-		a_context.RegisterGpuStage({ .passName = "cs.dclf.z.texture-transforms", .slot = Api::GpuStageSlot::DepthSegmentBeforeBuild, .setup = &Setup, .makePass = &MakePass,
+		a_context.RegisterPass({ .key = "texture-transforms.apply", .passName = "cs.dclf.z.texture-transforms", .make = &MakePass, .setup = &Setup,
 			.latchWord = &RowsIndex });
 	}
 }

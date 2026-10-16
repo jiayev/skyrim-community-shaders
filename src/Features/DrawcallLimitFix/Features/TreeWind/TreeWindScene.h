@@ -12,7 +12,7 @@ namespace DCLF::Features::TreeWind
 	 * @brief The trees' GPU state (Api::SceneResources' state; render thread, but for the handles, made once at setup).
 	 *
 	 * Without the tree wind program (treeWind null), trees keep the wind they joined with: the wind rows exist, stay zero and are bound
-	 * at t124 all the same; nothing else is made, and the stage stays out of the graph.
+	 * at t124 all the same; nothing else is made, and the pass stays out of the graph.
 	 */
 	struct TreeWindScene
 	{
@@ -40,6 +40,6 @@ namespace DCLF::Features::TreeWind
 
 	/** @brief The trees' GPU state in a_scene (null before the scene's tables are made). */
 	TreeWindScene* SceneOf(const Draws::SceneBuffers& a_scene);
-	/** @brief SceneOf, sharing its ownership (the stage's state). */
+	/** @brief SceneOf, sharing its ownership (the pass's state). */
 	std::shared_ptr<TreeWindScene> SharedSceneOf(const Draws::SceneBuffers& a_scene);
 }

@@ -346,7 +346,7 @@ namespace DCLF::Api
 
 	/**
 	 * @brief A shading contribution: the per-object values SetupGeometry derives for a property of the feature's (the shading rows' tree
-	 * parameters and wind timers), what a member draws with until the feature's GPU stage has its own.
+	 * parameters and wind timers), what a member draws with until the feature's pass has its own.
 	 *
 	 * - derive: FrameValues' pool (a shading sample: the slots shading events named, inside the engine-read window and the frame's
 	 *   FrameGlobals scope) or a parity's sample, for a property with any of propertyFlags: writes ShadingDerivation::block (zero-filled

@@ -22,8 +22,9 @@ namespace DCLF::Draws
 		// The features' scene resources' states (Api::SceneResources::setup, by registration: Extensions::RegisteredSceneResources;
 		// Extensions::SceneResourcesOf), made with these tables, the vertex stream's first, and held until they go.
 		std::vector<std::shared_ptr<void>> sceneResources;
-		// The features' GPU stages' states (Api::GpuStage::setup, by registration: Extensions::RegisteredStages); null: out of the graph.
-		std::vector<std::shared_ptr<const void>> stages;
+		// The passes' states (Api::PassDef::setup, by pass: the executor's registration order, SetUpPassStates); null: no setup, or the
+		// pass is not added.
+		std::vector<std::shared_ptr<const void>> passStates;
 		// Visibility readback (null without its program, or without the root states' rows: Api::CullBindingSlot::RootRows): events
 		// (count zeroed by every depth commit), and each root's and object's last reported verdict. Every version is zero-filled; the
 		// decoder restarts with the first batch of a version it has not followed (visibilityReportedFollowed: root, object).

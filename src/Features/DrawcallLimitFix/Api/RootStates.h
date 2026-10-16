@@ -2,8 +2,8 @@
 
 // The root states contract (Api::InstallContext::RegisterRootStates): the one producer of the listed roots' OnVisible state - the engine
 // nodes (fade nodes) whose state decides whether, and how faded, the objects under them draw. The producer lists the roots in a table
-// family (Api/TableFamilies.h; every object's reference into it is its root), steps their states on the GPU (a GPU stage at
-// DepthSegmentCullState) and binds the buffers Core's cull reads (Api/CullInputs.h's Root* cull bindings). Core keeps the vocabulary
+// family (Api/TableFamilies.h; every object's reference into it is its root), steps their states on the GPU (a pass at the
+// depth epoch's cull state: fades.state) and binds the buffers Core's cull reads (Api/CullInputs.h's Root* cull bindings). Core keeps the vocabulary
 // they share: the root rows' and states' layouts (Records.h's FadeRootStatic and FadeNodeState, mirrored by the shaders), the record's
 // root reference, and every reader of them (the main cull, the shadows, the focus views, the LOD skins, the draws, the visibility
 // events). Core reaches the producer per event through the callbacks below and per frame and per object only as data (the family's

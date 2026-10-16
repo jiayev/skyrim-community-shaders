@@ -9,14 +9,8 @@
 #include "Features/DrawcallLimitFix/Api/Views.h"
 
 #include <cstdint>
-#include <memory>
 #include <string_view>
 #include <vector>
-
-namespace org
-{
-	class RenderPass;
-}
 
 namespace DCLF::Api
 {
@@ -25,7 +19,6 @@ namespace DCLF::Api
 	class DrawFamilyDeclare;
 	class DrawFamilyRevision;
 	class DrawFamilyRecord;
-	class DrawFamilyViewContext;
 	class DrawFamilyFaceRow;
 	class DrawFamilyLists;
 	class DrawFamilyFaceWrite;
@@ -110,18 +103,18 @@ namespace DCLF::Api
 	 *   besides the slot's pipelines' words Core hands it; Core prepares the slot's pipelines and the row while the family is set up),
 	 *   and each recording (record, only once the slot's pipelines are published: after the depth draws in the depth passes; in the
 	 *   colour pass after the main draws, under the Z-prepass layout and colourRange).
-	 * - faces.makeCull, faces.declare, faces.record, faces.row, faces.lists (optional, all or none): a trees view's faces
-	 *   (Api::ViewShape::trees): its cull pass in the view's depth epoch (makeCull at the graph's build; null: none), the faces' draw
-	 *   pass's declarations and its draw after each face's buckets (record, for a face whose shape has the family's pipeline), each epoch
-	 *   commit's row (row: the row the faces' latch takes, its texture held; true when the faces draw it; and the faces' decision, without
-	 *   owners), and the units the faces' lists hold with the family's tables (lists: Core's view machinery's lists, sized, required and
-	 *   counted with them).
+	 * - faces.declare, faces.record, faces.row, faces.lists (optional, all or none): a trees view's faces (Api::ViewShape::trees): the
+	 *   faces' draw pass's declarations and its draw after each face's buckets (record, for a face whose shape has the family's
+	 *   pipeline), each epoch commit's row (row: the row the faces' latch takes, its texture held; true when the faces draw it; and the
+	 *   faces' decision, without owners), and the units the faces' lists hold with the family's tables (lists: Core's view machinery's
+	 *   lists, sized, required and counted with them). The lists' cull is the feature's own pass (Api::PassDef), which the schedule names
+	 *   in the views' depth epochs.
 	 * - program, engineShapes: what its slot's pipelines are built of, and the engine shapes its draws replace (read once at install).
-	 * - faces' data (with its callbacks, all or none): cullName (its cull pass, after the view's pass prefix), rowName and listName (a
-	 *   face's row and list resources, the face's index appended); rowBytes and headerBytes (a face's row and its list's header in the
-	 *   face's latch values), unitWords (a list's words per unit its tables hold), cullGroup (its cull's thread group); root: the engine
-	 *   root a trees view's faces draw in the engine's place while they draw the family (Api::ViewRoot, one owner). face: render thread,
-	 *   per face of each trees view's epoch commit: the face's row and list header from the commit's row (Core's DrawFamilyFaceWrite).
+	 * - faces' data (with its callbacks, all or none): rowName and listName (a face's row and list resources, the face's index
+	 *   appended); rowBytes and headerBytes (a face's row and its list's header in the face's latch values), unitWords (a list's words
+	 *   per unit its tables hold), cullGroup (its cull's thread group); root: the engine root a trees view's faces draw in the engine's
+	 *   place while they draw the family (Api::ViewRoot, one owner). face: render thread, per face of each trees view's epoch commit: the
+	 *   face's row and list header from the commit's row (Core's DrawFamilyFaceWrite).
 	 */
 	struct DrawFamilyContribution
 	{
@@ -143,12 +136,11 @@ namespace DCLF::Api
 		} main;
 		struct Faces
 		{
-			std::shared_ptr<org::RenderPass> (*makeCull)(const DrawFamilyViewContext& a_view) = nullptr;
 			void (*declare)(DrawFamilyDeclare& a_declare) = nullptr;
 			void (*record)(const DrawFamilyRecord& a_record) = nullptr;
 			bool (*row)(DrawFamilyFaceRow& a_row) = nullptr;
 			void (*lists)(DrawFamilyLists& a_lists) = nullptr;
-			std::string_view cullName, rowName, listName;
+			std::string_view rowName, listName;
 			std::uint32_t rowBytes = 0, headerBytes = 0, unitWords = 0, cullGroup = 0;
 			ViewRoot root = ViewRoot::Count;
 			void (*face)(DrawFamilyFaceWrite& a_face) = nullptr;

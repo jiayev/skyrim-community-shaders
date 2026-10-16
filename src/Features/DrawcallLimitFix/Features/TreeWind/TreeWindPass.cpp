@@ -1,8 +1,8 @@
-// Tree wind's GPU stage: the next frame's wind (TreeWindCS), on the compute queue in the depth epoch beside its raster work, from the
+// Tree wind's pass: the next frame's wind (TreeWindCS), on the compute queue in the depth epoch beside its raster work, from the
 // scene resources' rows and the depth commit's frame row.
 
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF::Draws
 {
@@ -91,7 +91,7 @@ namespace DCLF::Features::TreeWind
 	namespace
 	{
 		// The scene's GPU setup, after the scene resources: their state when they made the program (else out of the graph).
-		std::shared_ptr<const void> Setup(const Api::GpuStageSetup& a_setup)
+		std::shared_ptr<const void> Setup(const Api::PassSetup& a_setup)
 		{
 			auto scene = SharedSceneOf(a_setup.scene);
 			if (!scene || !scene->treeWind || !scene->trees)
@@ -99,16 +99,16 @@ namespace DCLF::Features::TreeWind
 			return scene;
 		}
 
-		std::shared_ptr<org::RenderPass> MakePass(const Api::GpuStageContext& a_context)
+		std::shared_ptr<org::RenderPass> MakePass(const Api::PassContext& a_context)
 		{
 			return std::make_shared<Draws::TreeWindPass>(a_context.State<TreeWindScene>());
 		}
 	}
 
-	void RegisterStage(Api::InstallContext& a_context)
+	void RegisterPass(Api::InstallContext& a_context)
 	{
 		// Tree wind for the next frame, beside the depth epoch's raster work.
-		a_context.RegisterGpuStage({ .passName = "cs.dclf.z.tree-wind", .slot = Api::GpuStageSlot::DepthSegmentNextFrameState, .queue = Api::GpuQueue::Compute,
-			.setup = &Setup, .makePass = &MakePass });
+		a_context.RegisterPass({ .key = "tree-wind.next-frame", .passName = "cs.dclf.z.tree-wind", .queue = Api::PassQueue::Compute, .make = &MakePass,
+			.setup = &Setup });
 	}
 }

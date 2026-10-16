@@ -2,8 +2,8 @@
 // SetupShadow, SetupView), each versioned buffer registered with the scene's set (its extent, growth policy and contents), the
 // scene's draw bound and the main latch the revision code keeps.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
@@ -551,9 +551,9 @@ namespace DCLF
 				}
 			}
 		}
-		// The GPU stages (Api::GpuStage::setup: their programs; a null state keeps a stage out of the graph), after every table: a stage may
-		// take its feature's scene resources (Features/TreeLod's cull and counts take its tables').
-		buffers->stages = Extensions::SetUpGpuStages(a_device, *buffers);
+		// The passes' setups (Api::PassDef::setup: their programs; a null state keeps a pass out of the graph), after every table: a pass
+		// may take its feature's scene resources (Features/TreeLod's cull and counts take its tables').
+		buffers->passStates = Draws::SetUpPassStates(a_device, *buffers);
 		scene = std::move(buffers);
 		return true;
 	}

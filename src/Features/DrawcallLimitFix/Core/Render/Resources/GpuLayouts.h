@@ -390,9 +390,9 @@ namespace DCLF::Draws
 		std::uint32_t fadeSeedsIndex;
 		// Colour segment: the terrain groups' capacities past phase 2's base. 0 elsewhere.
 		std::uint32_t terrainCapacity[2];
-		// The depth segment: the stage word of the feature stage before its build that asks for one (Api::GpuStage::latchWord, at byte 300;
-		// e.g. the texture transforms' frame-value rows, which their stage stores into the material rows above). 0 elsewhere (and the word
-		// keeps terrainNear's 16-byte alignment). One word: a second stage needing one grows this latch (the shaders read it by byte offset).
+		// The depth segment: the stage word of the feature pass before its build that asks for one (Api::PassDef::latchWord, at byte 300;
+		// e.g. the texture transforms' frame-value rows, which their pass stores into the material rows above). 0 elsewhere (and the word
+		// keeps terrainNear's 16-byte alignment). One word: a second pass needing one grows this latch (the shaders read it by byte offset).
 		std::uint32_t stageWord;
 		// Depth segment under Terrain Blending: its eye and near distance in w. A terrain group 1 draw within it goes to its slot's
 		// twin bucket (kBucketTerrainPair), drawn into the terrain depth and, offset, the main depth. w 0: no test.

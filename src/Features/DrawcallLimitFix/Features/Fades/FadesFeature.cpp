@@ -1,6 +1,6 @@
 // Fades: the fade roots' OnVisible state, the one producer of root states. Its switches, the fade roots' table family and coordinator
 // component, the fade snaps and fade amounts channels, the render side (the seeds pool, the scene resources with their depth commit hook,
-// the stages, the frame and cull bindings), the root states (the family's view, the root test, the write-back's kick and wait), the
+// the passes, the frame and cull bindings), the root states (the family's view, the root test, the write-back's kick and wait), the
 // diagnostics, the fade writers (the stand-in observer and engine hooks, last) and the early hook (FadeSnap).
 
 // FadeScene.h first: volk before every Vulkan header (the write-back's kick and wait).
@@ -94,7 +94,7 @@ namespace DCLF::Features::Fades
 			RegisterScene(a_context);
 			// The channels: "fade snaps" then "fade amounts", drained and applied where Core's queues were (BeforeStructural).
 			RegisterEngine(a_context, Scene::fadeSnaps, Scene::fadeAmounts);
-			// The render side: the seeds pool, the scene resources, the depth commit hook, the stages, the frame and cull bindings.
+			// The render side: the seeds pool, the scene resources, the depth commit hook, the passes, the frame and cull bindings.
 			RegisterRender(a_context);
 			RegisterRootStates(a_context);
 			RegisterDiagnostics(a_context);

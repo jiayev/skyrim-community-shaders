@@ -4,7 +4,7 @@
 // its members draw under in the scene's tables (TreeStatic: its table family, written by its coordinator component as members join and
 // leave: TreeWindTables), ports their technique (technique 12: its eligibility, record flag, shading derivation and frame globals:
 // TreeWindObjects), takes their nodes at the frame's start (a frame-value pool, the seeds), clocks them on the GPU (TreeWindCS.hlsl: a
-// stage in the depth epoch's next-frame state, its scene resources, its commit's frame row) into the wind rows the draws read at t124 (a
+// pass in the depth epoch's next-frame state, its scene resources, its commit's frame row) into the wind rows the draws read at t124 (a
 // frame binding), and stands the engine's tree manager down for the trees DCLF stands in for (TreeAnimation, TreeList). Included by the
 // feature's sources only.
 
@@ -166,8 +166,8 @@ namespace DCLF::Features::TreeWind
 	const std::vector<TreeStatic>* SeedsIfDone(bool a_wait);
 	// TreeWindScene.cpp: the scene resources (tree rows, clocks, frame row, wind rows), the commit hook and the frame binding.
 	void RegisterScene(Api::InstallContext& a_context);
-	// TreeWindPass.cpp: the GPU stage.
-	void RegisterStage(Api::InstallContext& a_context);
+	// TreeWindPass.cpp: the pass (tree-wind.next-frame).
+	void RegisterPass(Api::InstallContext& a_context);
 	// TreeAnimation.cpp: the tree manager stood down for the stood-in trees (the stand-in observer, its engine hooks with TreeList's).
 	void RegisterAnimation(Api::InstallContext& a_context);
 	// Diagnostics/TreeWindReport.cpp, Diagnostics/TreeWindParity.cpp: the report line and the parity's observers.

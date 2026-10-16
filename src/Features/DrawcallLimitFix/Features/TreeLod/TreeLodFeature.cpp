@@ -1,5 +1,5 @@
 // Tree LOD: the tree LOD instances DCLF draws in the engine's place. Its switches and toggle, the tree LOD class's contribution, the
-// channel's source (its early hooks), the tables with their commit hook, the cull and counts' stages, the draw family, the report lines,
+// channel's source (its early hooks), the tables with their commit hook, the cull and counts' passes, the draw family, the report lines,
 // the parity and the audit.
 
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
@@ -26,9 +26,10 @@ namespace DCLF::Features::TreeLod
 			// The tree LOD instances, the TreeInstances draw family's while the toggle is on (its decision; the revisions' trees pipelines; a
 			// trees view's tree LOD per face).
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::TreeLod, .toggle = toggle });
-			// Its tables and their uploads, its stages, the family over them, its report lines.
+			// Its tables and their uploads, its passes (a trees view's faces' cull among them), the family over them, its report lines.
 			RegisterTables(a_context);
-			RegisterStages(a_context);
+			RegisterPasses(a_context);
+			RegisterFacesCull(a_context);
 			RegisterFamily(a_context);
 			RegisterReport(a_context);
 			// CS_DCLF_PERSISTENT_PARITY: the mirror against the LOD trees root.

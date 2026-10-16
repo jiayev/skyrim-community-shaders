@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Features/GpuOcclusion/GpuOcclusion.h"
 #include "Features/DrawcallLimitFix/Features/GpuOcclusion/HzbLayout.h"
 
@@ -203,15 +204,18 @@ namespace DCLF::Features::GpuOcclusion
 			return state;
 		}
 
-		std::shared_ptr<org::RenderPass> MakePass(const Api::DepthPyramidContext& a_context)
+		// Only while the setup gave a texture (the depth epoch's phase 2 block).
+		std::shared_ptr<org::RenderPass> MakePass(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::HzbPass>(a_context.resources, a_context.State<HzbState>(), RenderGraphRuntime::Segment::ZPrepass);
+			if (!a_context.PhaseTwo())
+				return nullptr;
+			return std::make_shared<Draws::HzbPass>(a_context.Main(), Extensions::DepthPyramidState<HzbState>(a_context), RenderGraphRuntime::Segment::ZPrepass);
 		}
 	}
 
 	void RegisterPyramid(Api::InstallContext& a_context)
 	{
-		a_context.RegisterDepthPyramid({ .resource = "cs.dclf.hzb", .scratchResource = "cs.dclf.hzb-counter", .passName = "cs.dclf.hzb",
-			.setup = &Setup, .makePass = &MakePass });
+		a_context.RegisterDepthPyramid({ .resource = "cs.dclf.hzb", .scratchResource = "cs.dclf.hzb-counter", .setup = &Setup });
+		a_context.RegisterPass({ .key = "gpu-occlusion.hzb", .passName = "cs.dclf.hzb", .make = &MakePass });
 	}
 }

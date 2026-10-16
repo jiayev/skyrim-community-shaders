@@ -116,13 +116,6 @@ namespace DCLF::Api
 		}
 	};
 
-	/** @brief A trees view's graph extension (the graph's build): the view's resources, its faces' rows and lists among them. */
-	class DrawFamilyViewContext
-	{
-	public:
-		const std::shared_ptr<Draws::ViewResources>& resources;
-	};
-
 	/**
 	 * @brief A trees view's epoch commit (render thread): the scene's tables, whether the view draws the family this execution (its
 	 * shape's pipeline, its own pipeline and the faces' ownership: DecideViewFaces), the row the faces' latch takes (out, rowBytes,
@@ -192,7 +185,7 @@ namespace DCLF::Extensions
 		std::string colourRange;
 		// The program's and the faces' strings (contribution's views point into them).
 		std::string name, label, keyName, sourcePath, nativeNote;
-		std::string cullName, rowName, listName;
+		std::string rowName, listName;
 		// The engine shapes' property vtable (engineShapes.propertyVtable, called once at install).
 		std::uintptr_t engineShapeVtable = 0;
 		DrawFamilyFaceLayout faceLayout;

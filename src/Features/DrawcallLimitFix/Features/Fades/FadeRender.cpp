@@ -1,5 +1,5 @@
 // Fades' render side registered (RegisterRender, from the feature's install after its family, component and channels): the seeds pool,
-// the scene resources, the depth commit hook, the GPU stages at DepthSegmentCullState, the frame bindings t120/t119 the draws read and
+// the scene resources, the depth commit hook, the passes at the depth epoch's cull state, the frame bindings t120/t119 the draws read and
 // the Root* cull bindings Core's cull reads.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
@@ -71,7 +71,7 @@ namespace DCLF::Features::Fades
 		RegisterResources(a_context);
 		// The depth commit's rows, inputs, write-back and root programs, after every feature's hook (Portals' programs among them).
 		RegisterCommit(a_context);
-		RegisterStages(a_context);
+		RegisterPasses(a_context);
 		// Named as the named-address parity names them.
 		a_context.RegisterFrameBinding({ .name = "fade states SRV", .textureRegister = kFadeStatesRegister, .select = &SelectStatesBinding });
 		a_context.RegisterFrameBinding({ .name = "fade roots SRV", .textureRegister = kFadeRootsRegister, .select = &SelectRootsBinding });

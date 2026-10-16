@@ -48,10 +48,8 @@ namespace DCLF::Extensions
 			program.sourcePath = a_entry.sourcePath;
 			program.nativeNote = a_entry.nativeNote;
 			auto& faces = a_entry.contribution.faces;
-			a_entry.cullName = faces.cullName;
 			a_entry.rowName = faces.rowName;
 			a_entry.listName = faces.listName;
-			faces.cullName = a_entry.cullName;
 			faces.rowName = a_entry.rowName;
 			faces.listName = a_entry.listName;
 		}

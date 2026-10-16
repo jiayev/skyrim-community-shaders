@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF::Draws
 {
@@ -122,13 +123,17 @@ namespace DCLF::Features::TreeLod
 {
 	namespace
 	{
-		// Phase 1 per face into the face's list (its cull pass, in the view's depth epoch).
-		std::shared_ptr<org::RenderPass> FacesCull(const Api::DrawFamilyViewContext& a_view)
+		// Phase 1 per face into the face's list (its cull pass, in the view's depth epoch): only a trees view's, with the faces' lists.
+		std::shared_ptr<org::RenderPass> FacesCull(const Api::PassContext& a_context)
 		{
-			auto tables = SharedTablesOf(*a_view.resources->main->scene);
+			const auto& resources = a_context.View();
+			constexpr std::size_t family = static_cast<std::size_t>(Api::DrawFamily::TreeInstances);
+			if (!resources->traits->trees || !resources->faceLists[family][0])
+				return nullptr;
+			auto tables = SharedTablesOf(*resources->main->scene);
 			if (!tables)
 				return nullptr;
-			return std::make_shared<Draws::TreeCullPass>(a_view.resources, std::move(tables));
+			return std::make_shared<Draws::TreeCullPass>(resources, std::move(tables));
 		}
 
 		// The tables and the faces' rows and lists.
@@ -213,12 +218,10 @@ namespace DCLF::Features::TreeLod
 	Api::DrawFamilyContribution::Faces FacesContribution()
 	{
 		// A face's list: a word per instance record its shape slots hold (kMaxGroupInstances a slot); the cull a thread per record.
-		return { .makeCull = &FacesCull,
-			.declare = &FacesDeclare,
+		return { .declare = &FacesDeclare,
 			.record = &FacesRecord,
 			.row = &FacesRow,
 			.lists = &FacesLists,
-			.cullName = "tree-lod-cull",
 			.rowName = "tree-row",
 			.listName = "tree-visible",
 			.rowBytes = static_cast<std::uint32_t>(sizeof(TreeInstances::DrawRow)),
@@ -228,6 +231,12 @@ namespace DCLF::Features::TreeLod
 			.root = kFacesRoot,
 			.face = &FacesFace };
 	}
+
+	void RegisterFacesCull(Api::InstallContext& a_context)
+	{
+		a_context.RegisterPass({ .key = "tree-lod.faces-cull", .passName = "{view}.tree-lod-cull", .make = &FacesCull });
+	}
+
 	static_assert(sizeof(TreeInstances::DrawRow) == 64 && sizeof(TreeInstances::VisibleHeader) == 64 && TreeInstances::kMaxGroupInstances == 75 &&
 	                  kTreeLodCullGroup == 64,
 		"tree LOD's faces' sizes are not the shaders' (TreeInstancesLayout.h, TreeLodCullCS.hlsl)");

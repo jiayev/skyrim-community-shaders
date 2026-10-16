@@ -15,7 +15,7 @@ namespace DCLF::Api
 	/** @brief The commit a hook runs in. */
 	enum class CommitKind : std::uint8_t
 	{
-		Depth,   // the main view's depth (Z-prepass) epoch: the one whose graph runs the next frame's state (GpuStageSlot::DepthSegmentNextFrameState)
+		Depth,   // the main view's depth (Z-prepass) epoch: the one whose graph runs the next frame's state (its next-frame passes: tree-wind.next-frame)
 		Colour,  // the main view's colour epoch
 		Shadow,  // the shadow epoch's shared inputs
 	};

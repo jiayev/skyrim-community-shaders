@@ -1,8 +1,8 @@
 // The main epochs' commit (render thread, inside the epoch): stream views, CommitMainPayload (the frame's values
 // into the selected revision's shape) and the depth commit's scene uploads.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -298,8 +298,8 @@ namespace DCLF
 			a_latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 			// The root states' seeds (the cull binding RootSeeds: a pooled buffer's index).
 			a_latch.fadeSeedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, *resources->scene, frameNumber, a_commit.adopted);
-			// The depth segment: its stage word, for the feature stage before the depth build that reads one (Api::GpuStage::latchWord).
-			a_latch.stageWord = depthOnly ? Extensions::StageLatchWord(Api::GpuStageSlot::DepthSegmentBeforeBuild) : 0u;
+			// The depth segment: its stage word, for the feature pass before the depth build that reads one (Api::PassDef::latchWord).
+			a_latch.stageWord = depthOnly ? Draws::PassLatchWord() : 0u;
 			PayloadLatch(a_commit.parts, a_latch);
 			a_latch.dispatch[0] = (a_cull.inputCount + 63) / 64;
 			a_latch.dispatch[1] = 1;

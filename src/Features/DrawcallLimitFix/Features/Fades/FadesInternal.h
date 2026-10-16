@@ -11,7 +11,7 @@ namespace DCLF::Features::Fades
 	// FadeRoots.cpp: the fade roots' table family and the coordinator component that lists and steps its rows.
 	void RegisterScene(Api::InstallContext& a_context);
 	// FadeRender.cpp (its parts in FadeSeeds, FadeResources, FadeCommit, FadeStage: FadeScene.h): the seeds pool, the scene resources, the
-	// depth commit hook, the stages, the frame and cull bindings.
+	// depth commit hook, the passes, the frame and cull bindings.
 	void RegisterRender(Api::InstallContext& a_context);
 	// FadeEvents.cpp: the engine channels "fade snaps" then "fade amounts" (their ids for the component's events.keys).
 	void RegisterEngine(Api::InstallContext& a_context, Api::EngineChannelId& a_snaps, Api::EngineChannelId& a_amounts);
