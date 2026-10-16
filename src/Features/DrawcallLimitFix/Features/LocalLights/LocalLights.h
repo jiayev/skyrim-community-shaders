@@ -2,15 +2,16 @@
 
 // LocalLights: the selection and receiver side of the engine's local shadow lights. LightSelection is the CalculateActiveShadowCasterLights
 // port (installed from the Spot source's hooks, so the install log keeps its place: the sun's, the selection's, the point culls', the
-// focus cameras'): it hands the Spot and Point sources their kept lights (lightKept), publishes the frame's slots on Core's board
-// (ShadowCameras::LightSlots) and tests each light's rooms through Portals (PortalViews::WalkLight, SharesRoom: static calls, DEPENDS
+// focus cameras'): it hands the Spot and Point sources their kept lights (lightKept), publishes the frame's slots to Core's views list
+// (ShadowViews::LightSlots) and tests each light's rooms through Portals (PortalViews::WalkLight, SharesRoom: static calls, DEPENDS
 // {Portals}). LocalShadowLights is each DCLF object's main-pass shadow mask: the kept lights' volumes, sampled per colour commit into Core's
 // light volumes (Api::LightVolumesContribution, Api/LightVolumes.h), with its landscape rule as data (kLandscapeFlags). Its parity
 // (Diagnostics/LightSelectionParity, under CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY) and report lines (self-scheduled,
 // Diagnostics/LightSelectionLines.cpp) are its own.
 //
-// Core keeps the shadow engine: the light candidates, the boards and the views list, the latch's volumes and BuildDraws' receiver test.
-// The caster side (the point culls) is Shadows/Local's. No switch, toggle, pool, stage or product. Included by the feature's sources only.
+// Core keeps the shadow engine: the light candidates, the views list, the latch's volumes and BuildDraws' receiver test. The caster side
+// (the point culls) and the kept lights' views are Shadows/Local's (LocalShadowLights reads them through the sources' cameras,
+// Extensions::SourceCamera). No switch, toggle, pool, stage or product. Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 

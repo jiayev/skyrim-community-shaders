@@ -2,7 +2,7 @@
 
 // The shadow engine (ShadowEngine, IndirectDraws::Impl's shadowEngine): the shadow and occlusion views' state - their resources, the
 // capability and its catalog, the placements, the frame's captured views and the occlusion maps', the payload the epoch committed, the
-// builds' kept state and exclusions - and the functions over it. It is the shadow shape kind's revision participant (Revision/
+// builds' kept state - and the functions over it. It is the shadow shape kind's revision participant (Revision/
 // Participant.h: its requirements, shapes, revision inputs and payload, Shadow/ShadowRevision.cpp). What it needs of the rest of the
 // implementation it reaches through ShadowHost (the revision inputs' post, the scene buffers) or takes as parameters (the revision
 // producer's state, RevisionMake::producer); it holds no reference to the whole Impl. The shadow and occlusion epochs' frame half
@@ -176,7 +176,7 @@ namespace DCLF
 
 		ShadowKept shadowKept;  // the shadow epoch's inputs and records
 		ShadowKept* ShadowKeptState() { return &shadowKept; }
-		SunExclusionCache sunExclusionCache;  // the shadow builds', in frame order
-		SunExclusionCache parabolicExclusionCache;  // likewise, the paraboloid mode's (the Point source's culls)
+		// The builds' exclusions and their caches are the shadow exclusion contribution's (Api::ShadowExclusionContribution: Features/
+		// Shadows/Local), which BuildPayload calls.
 	};
 }

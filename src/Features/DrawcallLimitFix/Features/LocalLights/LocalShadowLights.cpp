@@ -1,8 +1,10 @@
-// LocalShadowLights' render-thread sample from DCLF's light selection and light views, and the per-object mask test.
+// LocalShadowLights' render-thread sample from DCLF's light selection and light views (the Spot and Point sources' cameras), and the
+// per-object mask test.
 
 #include "Features/DrawcallLimitFix/Features/LocalLights/LocalShadowLights.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/LocalLights.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
@@ -17,7 +19,8 @@ namespace DCLF
 	{
 		LocalShadowLights out;
 		// DCLF's selection: the lights CalculateActiveShadowCasterLights keeps, a light once (the sun's slots are the sun's),
-		// their mask indices, and per shadowmap descriptor what its cull tests (the Lights board: Process2's planes).
+		// their mask indices, and per shadowmap descriptor what its cull tests (its source's camera, Shadows/Local's Lights board:
+		// Process2's planes).
 		const std::uint32_t sceneFrame = Scene::FrameView::Get().GetFrame();
 		const auto* selection = LightSelection::Get().Current(sceneFrame);
 		if (!selection)
@@ -36,12 +39,14 @@ namespace DCLF
 				sampled.center[2] = niLight->world.translate.z;
 				sampled.radius = niLight->GetLightRuntimeData().radius.x;
 			}
+			const auto source = shadowLight->GetIsParabolicLight() ? Api::ShadowSource::Point : Api::ShadowSource::Spot;
 			for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d) {
 				const auto& descriptor = data.shadowmapDescriptors[d];
 				const auto* process = descriptor.cullingProcess;
 				if (!process || !descriptor.isEnabled)
 					continue;
-				const auto* view = ShadowCameras::Lights().CascadeOf(selected.light, d, sceneFrame);
+				Api::ShadowSourceCamera request{ selected.light, d, sceneFrame };
+				const auto* view = Extensions::SourceCamera(source, request);
 				if (!view)
 					continue;
 				Light::Volume volume;

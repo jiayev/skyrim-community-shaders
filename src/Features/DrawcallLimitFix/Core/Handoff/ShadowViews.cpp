@@ -3,7 +3,6 @@
 
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
@@ -160,6 +159,12 @@ namespace DCLF
 		return views;
 	}
 
+	LightSlotFrame& ShadowViews::LightSlots()
+	{
+		static LightSlotFrame frame;
+		return frame;
+	}
+
 	void ShadowViews::Clear()
 	{
 		views.clear();
@@ -176,7 +181,7 @@ namespace DCLF
 		// DCLF's selection's slots (the LightSlots board, Features/LocalLights' selection publishes it): shadowLightsAccum as
 		// CalculateActiveShadowCasterLights fills it, the array GetShadowCasterLightArrayEntry indexes - the lights, in the sequence,
 		// the engine renders a moment later. None this frame (no selection ran): no views, and the engine draws them.
-		const auto* selection = ShadowCameras::LightSlots().Current(Scene::FrameView::Get().GetFrame());
+		const auto* selection = LightSlots().Current(Scene::FrameView::Get().GetFrame());
 		if (!selection)
 			return;
 		std::uint32_t lightIndex = 0;

@@ -67,8 +67,8 @@ namespace DCLF
 			a_out[11] = a_transform.translate.z;
 		}
 
-		// The node's bound, or unbounded (radius +max, inside every process).
-		void StoreSunEntry(const RE::NiAVObject* a_node, float (&a_out)[4])
+		// A listed root's bound (the sun entry test's: the row's sunEntry), or unbounded (radius +max, inside every process).
+		void StoreListedRoot(const RE::NiAVObject* a_node, float (&a_out)[4])
 		{
 			if (a_node && a_node->worldBound.radius >= 0.0f) {
 				const auto& bound = a_node->worldBound;
@@ -161,7 +161,7 @@ namespace DCLF
 		a_out.bound[1] = a_geometry.worldBound.center.y;
 		a_out.bound[2] = a_geometry.worldBound.center.z;
 		a_out.bound[3] = a_geometry.worldBound.radius;
-		StoreSunEntry(a_sunEntryNode, a_out.sunEntry);
+		StoreListedRoot(a_sunEntryNode, a_out.sunEntry);
 		StoreFadeNode(a_fadeProperty, a_out.lodFadeNode);
 		StoreForwardSort(a_geometry, a_out.forwardSort);
 		// A billboard's unturned world, base and pivot (BillboardRow.h), sampled regardless of the toggle so rows never depend on it.
@@ -1449,7 +1449,7 @@ namespace DCLF
 					continue;
 				}
 				float entry[4];
-				StoreSunEntry(root.root.get(), entry);
+				StoreListedRoot(root.root.get(), entry);
 				for (const auto& dependent : root.dependents) {
 					if (dependent.firstPerson || dependent.slot >= out.size() || !dependent.geometry)
 						continue;
@@ -1587,7 +1587,7 @@ namespace DCLF
 			if (!lease || !root.live || !root.root)
 				continue;
 			float entry[4];
-			StoreSunEntry(root.root.get(), entry);
+			StoreListedRoot(root.root.get(), entry);
 			for (const auto& dependent : root.dependents) {
 				if (dependent.firstPerson || dependent.slot >= out.size() || !dependent.geometry)
 					continue;

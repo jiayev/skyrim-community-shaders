@@ -4,7 +4,9 @@
 // Api/ShadowViews.h: the directional views draw while it is registered) and its source hooks: the accumulation's (SunAccumulation.h:
 // Accumulate, its cascade culls and registrations, the full-frustum cull, and the entry exclusion; it reads the board after its
 // bitsReady), then its camera hook (SunViews: BSShadowDirectionalLight::UpdateCamera, which writes the sun's cascades and full-frustum
-// planes into Core's board, ShadowCameras::Sun, from the cameras it set up).
+// planes into the feature's board, SunBoard, from the cameras it set up). Core reads the board through the source's camera (the shadow
+// views' capture) and the sun volume (Api::SunVolumeContribution, Api/SunVolume.h: the colour commits' cascades and the shadow inputs'
+// full-frustum planes); Features/Actors' actor rate reads it directly (DEPENDS).
 // The registration thunk also does the main registration's work for others: Core's (PrimaryCull's owned masks) and Features/Shadows/Local's
 // (the point lights' bits, LocalLightCull::NoteMainRegistration, a static call per main registration: so this feature DEPENDS on
 // Shadows/Local and is listed after it). Without this feature the point lights' culls stay off (LocalLightCull's install warns, at the
@@ -14,10 +16,10 @@
 // full-frustum processes', under CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY, and the exclusion's watch (SunCasters) under
 // CS_DCLF_PERSISTENT_PARITY.
 //
-// Core keeps the shadow engine: the shadow epoch and its capability and captures, the views list, the light selection, the boards and
-// the camera math (Core/Render/Shadow/ShadowCameras.h), the views' tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally),
-// the exclusion the builder publishes and the frame start forwards (SunExclusionSlot, over Core's EntrySpace), the caster phases, view
-// bits and modes, and the shadows' and primary exclusion's toggles. The source owns no phase or view bit; its switches and toggles are the
+// Core keeps the shadow engine: the shadow epoch and its capability and captures, the views list and the camera math
+// (Core/Render/Shadow/ShadowCameras.h), the views' tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally),
+// the exclusion its shadow epoch publishes and the frame start forwards (SunExclusionSlot, over Core's EntrySpace; built by
+// Features/Shadows/Local's ExclusionBuild, one build for the sun's and the paraboloids'), the caster phases, view bits and modes, and the shadows' and primary exclusion's toggles. The source owns no phase or view bit; its switches and toggles are the
 // accumulation's (CS_DCLF_SUN_SKIP, "skip sun accumulation") and the entry exclusion's (CS_DCLF_SUN_EXCLUDE, "exclude sun entries"),
 // listed where Core's were, after the shadows'; Core's "exclude primary entries" needs the second by name, so without this feature it
 // never takes effect. Included by the feature's sources only.

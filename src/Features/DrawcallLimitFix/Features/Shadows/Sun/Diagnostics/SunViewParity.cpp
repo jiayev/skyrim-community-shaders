@@ -7,6 +7,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunViews.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -60,7 +61,7 @@ namespace DCLF::Features::Shadows::Sun
 		{
 			auto& tally = Diagnostics::ShadowViewTally(ShadowView::Sun);
 			++tally.missing;
-			const auto& sun = ShadowCameras::Sun();
+			const auto& sun = SunBoard();
 			tally.Note("missing cascade", 0.0f, fmt::format("Accumulate of frame {}, descriptor {}, DCLF's views of frame {} ({} cascades)", a_event.frame, a_event.descriptor,
 				sun.sceneFrame, sun.count));
 		}

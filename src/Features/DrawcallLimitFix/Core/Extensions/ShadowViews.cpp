@@ -59,7 +59,7 @@ namespace DCLF::Extensions
 	}
 
 	void ResolveShadowViews(std::span<const Api::OcclusionMapContribution, kOcclusionMaps> a_maps,
-		std::span<const Api::ShadowSourceContribution, kShadowSources> a_sources)
+		std::span<const Api::ShadowSourceContribution, kShadowSources> a_sources, const Api::ShadowExclusionContribution& a_exclusion)
 	{
 		static bool once = false;
 		if (std::exchange(once, true))
@@ -70,8 +70,11 @@ namespace DCLF::Extensions
 				FillRegistered(set.maps[v], a_maps[v]);
 		for (std::size_t s = 0; s < a_sources.size(); ++s) {
 			if (a_sources[s].source < Api::ShadowSource::Count)
-				set.sources[s] = { true, a_sources[s].lightKept, a_sources[s].fullFrustumWindowEnd, a_sources[s].frameStart, a_sources[s].frameEnd };
+				set.sources[s] = { true, a_sources[s].camera, a_sources[s].lightKept, a_sources[s].fullFrustumWindowEnd, a_sources[s].frameStart,
+					a_sources[s].frameEnd };
 		}
+		if (!a_exclusion.name.empty())
+			set.exclusion = a_exclusion.build;
 		DeriveShadowOrders(set);
 		Detail::resolvedShadowViews = std::move(set);
 	}

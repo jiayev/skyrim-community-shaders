@@ -1,4 +1,4 @@
-// The shadow cameras (see the header): the ports of the engine's camera, plane and viewport arithmetic, and the boards.
+// The cameras (see the header): the ports of the engine's camera, plane and viewport arithmetic.
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
@@ -11,30 +11,6 @@
 
 namespace DCLF::ShadowCameras
 {
-	SunFrame& Sun()
-	{
-		static SunFrame frame;
-		return frame;
-	}
-
-	LightSlotFrame& LightSlots()
-	{
-		static LightSlotFrame frame;
-		return frame;
-	}
-
-	LightFrame& Lights()
-	{
-		static LightFrame frame;
-		return frame;
-	}
-
-	FocusFrame& Focus()
-	{
-		static FocusFrame frame;
-		return frame;
-	}
-
 	void FrustumPlanes(const RE::NiFrustum& a_frustum, const RE::NiTransform& a_world, Planes& a_out)
 	{
 		// FUN_140d32cc0 (AE): the camera looks down its rotation's first column, up its second, right its third.

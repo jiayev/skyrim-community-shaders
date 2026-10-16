@@ -42,7 +42,7 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Replaces the captured viewport and eye with DCLF's own (ShadowCameras' boards, from the light's
+		 * @brief Replaces the captured viewport and eye with DCLF's own (its source's camera, from the light's
 		 * UpdateCamera): port times target size. False without DCLF's view this frame (captured values stand).
 		 */
 		bool ApplyOwnViewport(PendingView& a_view, const ShadowCameras::Camera* a_cascade, std::uint32_t a_descriptor, std::uint32_t a_target, Diagnostics::ShadowView a_kind)
@@ -119,32 +119,32 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief DCLF's own camera for a view, from its source's board (ShadowCameras: the sun's cascades, the kept local lights' views,
-		 * the focus views; Extensions::ShadowViewSet::sourceOf by its kind), with the observers' kind and a focus view's target. False for a
-		 * view of no source (its captured values stand).
+		 * @brief DCLF's own camera for a view, from its source (Api::ShadowSourceContribution::camera, by its kind:
+		 * Extensions::ShadowViewSet::sourceOf: the sun's cascades, the kept local lights' views, the focus views), with the observers' kind
+		 * and a focus view's target. False for a view of no source (its captured values stand).
 		 */
 		bool OwnViewOf(const ShadowViews::View& a_view, std::uint32_t a_sceneFrame, PendingView& a_pending, const ShadowCameras::Camera*& a_own,
 			Diagnostics::ShadowView& a_kind)
 		{
 			const auto source = Extensions::ShadowViewsSet().sourceOf[static_cast<std::size_t>(a_view.kind)][a_view.focus ? 1 : 0];
+			if (source >= Api::ShadowSource::Count)
+				return false;
+			Api::ShadowSourceCamera request{ a_view.light, a_view.descriptor, a_sceneFrame };
+			a_own = Extensions::SourceCamera(source, request);
 			switch (source) {
-			case Api::ShadowSource::Sun:
-				a_own = ShadowCameras::Sun().CascadeOf(a_view.descriptor, a_sceneFrame);
-				return true;
 			case Api::ShadowSource::Spot:
 			case Api::ShadowSource::Point:
-				a_own = ShadowCameras::Lights().CascadeOf(a_view.light, a_view.descriptor, a_sceneFrame);
 				a_kind = Diagnostics::ShadowView::Light;
-				return true;
+				break;
 			case Api::ShadowSource::Focus:
-				a_own = ShadowCameras::Focus().CascadeOf(a_view.light, a_view.descriptor, a_sceneFrame);
 				a_kind = Diagnostics::ShadowView::Focus;
-				a_pending.focusTarget = ShadowCameras::Focus().TargetOf(a_view.descriptor, a_sceneFrame);
+				a_pending.focusTarget = request.focusTarget;
 				a_pending.focus = true;
-				return true;
+				break;
 			default:
-				return false;
+				break;
 			}
+			return true;
 		}
 
 		/**

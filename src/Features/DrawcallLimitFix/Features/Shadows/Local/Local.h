@@ -3,19 +3,23 @@
 // Shadows/Local: the local shadow lights' views and the focus views, drawn by Core's shadow engine. The feature registers the Spot, Point
 // and Focus sources (Api::ShadowSourceContribution, Api/ShadowViews.h: the frustum, parabolic and focus views draw while their source is
 // registered): the spot and point sources' lightKept (LightViews: each light the selection keeps, its views from the cameras its
-// UpdateCamera set up, into Core's board, ShadowCameras::Lights), and the focus source's camera hook (FocusViews:
-// BSShadowDirectionalLight::sub, which writes the focus views into ShadowCameras::Focus, from the engine's focus targets:
-// EngineFocusTarget). The Point source's culls are the feature's too (LocalLightCull.h: the point lights' shadow culls without DCLF's
-// entries), installed by its source hooks once the Sun's registration hooks are in (Api::ShadowSourceHooks::CullsInstalled), run by its
-// frameStart (this frame's exclusion, from Core's ParabolicExclusionSlot) and frameEnd, told of the structure changes by a stand-in
-// observer (Api::StandInObserver::structure); their lines are at Api::ReportPoint::PrimaryCullSources (Diagnostics/PointCullLines.cpp).
+// UpdateCamera set up, into the feature's board, LightsBoard), and the focus source's camera hook (FocusViews:
+// BSShadowDirectionalLight::sub, which writes the focus views into FocusBoard, from the engine's focus targets: EngineFocusTarget).
+// Core reads the boards through the sources' camera (LightCamera, FocusCamera), Features/LocalLights' light volumes through the same
+// (Extensions::SourceCamera); Features/Actors' actor rate reads the Lights board directly (DEPENDS). The Point source's culls are the
+// feature's too (LocalLightCull.h: the point lights' shadow culls without DCLF's entries), installed by its source hooks once the Sun's
+// registration hooks are in (Api::ShadowSourceHooks::CullsInstalled), run by its frameStart (this frame's exclusion, from Core's
+// ParabolicExclusionSlot) and frameEnd, told of the structure changes by a stand-in observer (Api::StandInObserver::structure); their
+// lines are at Api::ReportPoint::PrimaryCullSources (Diagnostics/PointCullLines.cpp). So is the shadow payload's exclusion build
+// (ExclusionBuild.h, Api::ShadowExclusionContribution): the sun's and the paraboloids' exclusions, one build with a cache each, which the
+// shadow participant's payload calls on the snapshot builder (here because Features/Shadows/Sun DEPENDS on this feature, not the reverse).
 // Its parity is its own (Diagnostics/): the light and focus views' lines, the focus views' membership and the local shadow volumes, under
 // CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY, and the point lights' culls' (LightCulls) under CS_DCLF_PERSISTENT_PARITY.
 //
-// Core keeps the shadow engine: the shadow epoch and its capability and captures, the views list, the boards and the camera math
-// (Core/Render/Shadow/ShadowCameras.h), the exclusions the builder publishes (SunExclusion.h), the views' tallies the shadow epochs'
-// checks fill (Diagnostics::ShadowViewTally), the caster phases, view bits and modes, and the shadow toggles; the light selection (which
-// calls lightKept) and the local shadows' port are Features/LocalLights'. The Sun's registration thunk calls
+// Core keeps the shadow engine: the shadow epoch and its capability and captures, the views list and the camera math
+// (Core/Render/Shadow/ShadowCameras.h), the exclusions' type and the slots its shadow epoch publishes them in (SunExclusion.h), the views'
+// tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally), the caster phases, view bits and modes, and the shadow toggles;
+// the light selection (which calls lightKept) and the local shadows' port are Features/LocalLights'. The Sun's registration thunk calls
 // LocalLightCull::NoteMainRegistration directly (Features/Shadows/Sun, listed after this feature). The sources own no phase or view bit
 // and no toggle. Included by the feature's sources only.
 

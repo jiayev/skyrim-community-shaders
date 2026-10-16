@@ -27,6 +27,7 @@
 #include "Features/DrawcallLimitFix/Api/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 #include "Features/DrawcallLimitFix/Api/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Api/SunVolume.h"
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Api/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Api/Views.h"
@@ -163,10 +164,12 @@ namespace DCLF::Api
 		 */
 		virtual void RegisterOcclusionMap(const OcclusionMapContribution& a_map) = 0;
 		/**
-		 * @brief Fails the install for a source another feature has, a Spot or Point source without lightKept, or a Sun source without
-		 * fullFrustumWindowEnd (another source with one).
+		 * @brief Fails the install for a source another feature has, one without camera, a Spot or Point source without lightKept, or a
+		 * Sun source without fullFrustumWindowEnd (another source with one).
 		 */
 		virtual void RegisterShadowSource(const ShadowSourceContribution& a_source) = 0;
+		/** @brief Fails the install for a second contribution, or one without a name or build. */
+		virtual void RegisterShadowExclusion(const ShadowExclusionContribution& a_exclusion) = 0;
 		/**
 		 * @brief Fails the install for a family another registration has, a class with no registered toggle, or without its scene
 		 * resources, its frame and main callbacks (decide, programSource, main's three), its program (Lighting's, no or another draw or
@@ -226,6 +229,8 @@ namespace DCLF::Api
 		virtual void RegisterFrameGraphBuffers(const FrameGraphBuffers& a_buffers) = 0;
 		/** @brief Fails the install for a second contribution, or one without a name or sample. */
 		virtual void RegisterLightVolumes(const LightVolumesContribution& a_volumes) = 0;
+		/** @brief Fails the install for a second contribution, or one without a name, cascades or entryPlanes. */
+		virtual void RegisterSunVolume(const SunVolumeContribution& a_volume) = 0;
 		/**
 		 * @brief Fails the install for a second contribution, or one without a name, an ancestor RTTI, generation or fill, or a registered
 		 * whileOn input.
@@ -302,8 +307,8 @@ namespace DCLF::Api
 	 *   nothing; Core's switches and Diagnostics::Observe are readable.
 	 * - sourceHooks (optional): the main thread at PostPostLoad, where the shadow sources' hooks install (the shell's
 	 *   Extensions::InstallSourceHooks, before the primary cull's): the engine hooks of a shadow source, its culls' (calling
-	 *   ShadowSourceHooks::CullsInstalled once they are in) and those that write its cameras into Core's boards
-	 *   (Core/Render/Shadow/ShadowCameras.h). Called once per source, in ShadowSource order (Sun, Spot, Point, Focus; at each source the
+	 *   ShadowSourceHooks::CullsInstalled once they are in) and those that write its cameras into its boards (with Core's camera math,
+	 *   Core/Render/Shadow/ShadowCameras.h; Core reads them through the source's camera and the sun volume). Called once per source, in ShadowSource order (Sun, Spot, Point, Focus; at each source the
 	 *   features in the list's order; Features/LocalLights' light selection at the Spot's): a feature installs the hooks of
 	 *   a_hooks.source (none for a source it does not take), so the hooks' install order (and the install log's) is the sources',
 	 *   whatever the features' places in the list. Registers nothing.

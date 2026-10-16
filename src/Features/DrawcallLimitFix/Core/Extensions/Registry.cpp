@@ -23,6 +23,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/SunVolume.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ViewCommon.h"
@@ -98,6 +99,8 @@ namespace DCLF::Extensions
 			// By map and by source: its contribution (Count: none). Resolved at the end (ResolveShadowViews).
 			std::array<Api::OcclusionMapContribution, kOcclusionMaps> occlusionMaps{};
 			std::array<Api::ShadowSourceContribution, kShadowSources> shadowSources{};
+			// The shadow exclusion (no name: none). Resolved with them.
+			Api::ShadowExclusionContribution shadowExclusion{};
 			// By family: its contribution (Count: none). Resolved at the end (ResolveDrawFamilies).
 			std::array<Api::DrawFamilyContribution, kDrawFamilies> drawFamilies{};
 			// By slot: its range (Count: none), the held groups' among them. Resolved at the end (ResolveMainRanges).
@@ -111,8 +114,10 @@ namespace DCLF::Extensions
 			std::vector<std::string> classifyInputNeeds;
 			// The frame graph buffers, in registration order.
 			std::vector<FrameGraphBuffersEntry> frameGraphBuffers;
-			// The light volumes and the ancestor value (no name: none). Resolved at the end (ResolveLightVolumes, ResolveAncestorValue).
+			// The light volumes, the sun volume and the ancestor value (no name: none). Resolved at the end (ResolveLightVolumes,
+			// ResolveSunVolume, ResolveAncestorValue).
 			Api::LightVolumesContribution lightVolumes{};
+			Api::SunVolumeContribution sunVolume{};
 			Api::AncestorValueContribution ancestorValue{};
 			// The vertex stream (entry class Count: none). Resolved at the end (ResolveVertexStream).
 			Api::VertexStreamContribution vertexStream{};
@@ -674,6 +679,16 @@ namespace DCLF::Extensions
 				lists.lightVolumes = a_volumes;
 			}
 
+			void RegisterSunVolume(const Api::SunVolumeContribution& a_volume) override
+			{
+				if (a_volume.name.empty() || !a_volume.cascades || !a_volume.entryPlanes)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete sun volume contribution", feature));
+				// One sun: its cascades and its full-frustum planes are one feature's.
+				if (!lists.sunVolume.name.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes sun volume {}, which {} has", feature, a_volume.name, lists.sunVolume.name));
+				lists.sunVolume = a_volume;
+			}
+
 			void RegisterAncestorValue(const Api::AncestorValueContribution& a_value) override
 			{
 				// Its input registered before (an integration registers its own first).
@@ -1010,13 +1025,24 @@ namespace DCLF::Extensions
 				// A local light source is told of each light the selection keeps; the Sun alone ends the full-frustum window.
 				const bool local = a_source.source == Api::ShadowSource::Spot || a_source.source == Api::ShadowSource::Point;
 				const bool sun = a_source.source == Api::ShadowSource::Sun;
-				if (a_source.source >= Api::ShadowSource::Count || (local && !a_source.lightKept) || sun != !!a_source.fullFrustumWindowEnd)
+				if (a_source.source >= Api::ShadowSource::Count || !a_source.camera || (local && !a_source.lightKept) || sun != !!a_source.fullFrustumWindowEnd)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shadow source contribution", feature));
 				auto& entry = lists.shadowSources[static_cast<std::size_t>(a_source.source)];
 				if (entry.source != Api::ShadowSource::Count)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes shadow source {}, which another feature has", feature,
 						static_cast<std::uint32_t>(a_source.source)));
 				entry = a_source;
+			}
+
+			void RegisterShadowExclusion(const Api::ShadowExclusionContribution& a_exclusion) override
+			{
+				if (a_exclusion.name.empty() || !a_exclusion.build)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shadow exclusion contribution", feature));
+				// The payload carries one exclusion per mode.
+				if (!lists.shadowExclusion.name.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes shadow exclusion {}, which {} has", feature, a_exclusion.name,
+						lists.shadowExclusion.name));
+				lists.shadowExclusion = a_exclusion;
 			}
 
 			void RegisterDrawFamily(const Api::DrawFamilyContribution& a_family) override
@@ -1227,20 +1253,21 @@ namespace DCLF::Extensions
 		}
 		// The features' switches' anchors, which may name a switch a later feature registered.
 		CheckSwitchAnchors();
-		// The classify inputs needed by name, which a later feature or an integration may register; then the light volumes and the ancestor
-		// value (its key classes' RTTI).
+		// The classify inputs needed by name, which a later feature or an integration may register; then the light volumes, the sun volume
+		// and the ancestor value (its key classes' RTTI).
 		BindClassifyInputNeeds(lists.classifyInputNeeds);
 		// The engine channels needed by name (Features/Actors' fade amounts, a later feature's channel).
 		BindEngineChannelNeeds(lists.engineChannelNeeds);
 		ResolveLightVolumes(lists.lightVolumes);
+		ResolveSunVolume(lists.sunVolume);
 		ResolveAncestorValue(lists.ancestorValue);
-		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps' and shadow sources', from
+		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps', shadow sources' and shadow exclusion's, from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
 		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the primary view's; the root states'; the palette rows classes'; the shading fields'
 		// (and the published entry classes); the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
 		ResolveViews(lists.views, lists.viewWork, lists.viewRoots, lists.cullHiddenSources);
-		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
+		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources, lists.shadowExclusion);
 		ResolveViewBits();
 		ResolveDrawFamilies(lists.drawFamilies);
 		ResolveMainRanges(lists.mainRanges);

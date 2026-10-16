@@ -4,6 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
@@ -188,7 +189,7 @@ namespace DCLF
 	void LightSelection::Select()
 	{
 		// The slots' board first: an early return leaves it invalid (no views this frame), as the frame below.
-		ShadowCameras::LightSlots().Invalidate();
+		ShadowViews::LightSlots().Invalidate();
 		frame = {};
 		frame.sceneFrame = Scene::FrameView::Get().GetFrame();
 		auto* node = SceneNode();
@@ -285,7 +286,7 @@ namespace DCLF
 		}
 		frame.valid = true;
 		// The slots and focus hosts to the shadow views (the LightSlots board: spans into frame, stable until the next Select).
-		ShadowCameras::LightSlots().Publish(frame.sceneFrame, frame.slots, frame.focusHosts, frame.focusCount);
+		ShadowViews::LightSlots().Publish(frame.sceneFrame, frame.slots, frame.focusHosts, frame.focusCount);
 		TellKeptLights(frame);
 		Diagnostics::Notify<Diagnostics::EnginePoint::LightSelectionMade>();
 	}

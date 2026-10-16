@@ -1,5 +1,6 @@
 #include "Spread.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/ExclusionBuild.h"
 
 // The scene revisions' and snapshots' report lines: the frame's (SnapshotReport, RevisionReport) and the snapshot builder's, composed in
 // its pass and posted for the frame's report (ProducerReport: the revisions, the growths, the shapes made, the draw bound, and the stores
@@ -235,8 +236,9 @@ namespace DCLF
 			store->updates = store->rewritten = store->resyncs = 0;
 			kept.geometry.Reset();
 		}
-		auto& sunExclusionCache = shadowEngine->sunExclusionCache;
-		for (auto* cache : { &sunExclusionCache, &shadowEngine->parabolicExclusionCache }) {
+		// The exclusions' caches are the shadow exclusion contribution's (Features/Shadows/Local), on this thread.
+		auto& sunExclusionCache = Features::Shadows::Local::ExclusionCacheOf(Api::ShadowSource::Sun);
+		for (auto* cache : { &sunExclusionCache, &Features::Shadows::Local::ExclusionCacheOf(Api::ShadowSource::Point) }) {
 			if (auto& c = *cache; c.builds) {
 				auto& parity = cache == &sunExclusionCache ? kept.sunExclusion : kept.parabolicExclusion;
 				text += fmt::format("[DCLF] {} exclusion: {} builds: {} the same exclusion again (nothing moved), {} updated by what moved ({} for newer candidates), {} judged whole; "
