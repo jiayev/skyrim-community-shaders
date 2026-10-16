@@ -28,11 +28,7 @@ namespace DCLF
 		// The object classes (LightingDescriptors):
 		// kProjectedUV objects (snow and moss projection);
 		bool projectedUv = false;
-		// terrain, the MTLand and MTLandLODBlend techniques (MtLandEnabled adds the Terrain Blending condition);
-		bool mtLand = false;
-		// while Terrain Blending holds the terrain, the terrain (its groups 1 and 2: Records.h, ObjectTerrainGroup), drawn as
-		// that feature draws it;
-		bool tbTerrain = false;
+		// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's in the table.)
 		// blended Lighting geometry (alpha-blended, or a material alpha below one), drawn by the forward epoch: a GPU depth sort of
 		// the visible set, back to front, before the engine's own blended draws (on by default: CS_DCLF_FORWARD=0 seeds it off);
 		bool forward = false;

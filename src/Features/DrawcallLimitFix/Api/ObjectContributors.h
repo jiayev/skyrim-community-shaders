@@ -31,6 +31,7 @@
 // object flags) stays compile-time: the feature declares the bits in its own header, and Features/Manifest.cpp checks them against Core's
 // and each other's; its record words go with its table family (Api/TableFamilies.h).
 
+#include "Features/DrawcallLimitFix/Api/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Api/EntryRanges.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 
@@ -61,6 +62,18 @@ namespace DCLF::Api
 	// ---- 1. Membership by an engine key.
 
 	/**
+	 * @brief Core's per-object VS extras rows (the extras buffer) a technique's objects take, beside what their record holds.
+	 *
+	 * - None: none.
+	 * - LandBlend: a land block's blend rows (kObjectLandBlend: its LandBlendParams and the frame's land fade).
+	 */
+	enum class ObjectExtras : std::uint8_t
+	{
+		None,
+		LandBlend,
+	};
+
+	/**
 	 * @brief A technique contribution: an engine Lighting technique whose objects the feature ports. Read where the objects are classified
 	 * and joined, as data (no call per object).
 	 *
@@ -71,6 +84,7 @@ namespace DCLF::Api
 	 *   objects whatever technique the flags pick, and the geometry type such an object must be: an object whose property has any of them
 	 *   is DCLF's only while toggle is on and its geometry is geometryType, else Ineligible::Lod (object and terrain LOD: Features/Lod).
 	 *   Resolved once into Core's flag rules (Extensions::PropertyFlagRules), which the Lighting port's eligibility reads.
+	 * - extras (optional): Core's extras rows its objects take (read per join: Extensions::TechniqueExtras).
 	 */
 	struct TechniqueContribution
 	{
@@ -79,6 +93,24 @@ namespace DCLF::Api
 		std::uint32_t objectFlags = 0;
 		std::uint64_t propertyFlags = 0;
 		std::uint8_t geometryType = 0xFF;
+		ObjectExtras extras = ObjectExtras::None;
+	};
+
+	/**
+	 * @brief A technique gate (Api::InstallContext::RegisterTechniqueGate): while a classify input holds, a contributed technique's objects
+	 * are DCLF's only while a further toggle is on too (a CS feature that redraws them its own way: Integrations/TerrainBlending's terrain,
+	 * which DCLF then draws as that feature does). Resolved once into the technique's contribution, read as data where the Lighting port's
+	 * eligibility reads its toggle (no call per object; the input is the scene pass's snapshot).
+	 *
+	 * - technique: a technique a feature contributed (registered before), one gate's.
+	 * - whileOn: the registered input under which the gate applies.
+	 * - needs: the registered toggle the technique needs while whileOn holds.
+	 */
+	struct TechniqueGate
+	{
+		std::uint32_t technique = ~0u;
+		ClassifyInputId whileOn;
+		ToggleId needs;
 	};
 
 	/**

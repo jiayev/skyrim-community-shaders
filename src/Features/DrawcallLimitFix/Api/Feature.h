@@ -3,6 +3,7 @@
 // DCLF's extension API: a feature is a name and an install function that registers the extension points it fills. Api/ names only
 // Api/, standard and ORG types; the contexts its callbacks receive are Core's (Core/Extensions/), which the features inside DCLF include.
 
+#include "Features/DrawcallLimitFix/Api/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Api/Commits.h"
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Api/DrawFamilies.h"
@@ -54,6 +55,8 @@ namespace DCLF::Api
 		 * before it.
 		 */
 		virtual ToggleId RegisterToggle(const FeatureToggle& a_toggle) = 0;
+		/** @brief Fails the install for no name or sample, or past Extensions::kClassifyInputSlots inputs. */
+		virtual ClassifyInputId RegisterClassifyInput(const ClassifyInputContribution& a_input) = 0;
 		virtual void RegisterReportLines(const ReportLines& a_lines) = 0;
 		/** @brief Whether the primary cull is installed: false, and the observer is never called, without it (its engine hooks failed). */
 		virtual bool RegisterStandInObserver(const StandInObserver& a_observer) = 0;
@@ -89,6 +92,11 @@ namespace DCLF::Api
 		virtual CoordinatorComponentId RegisterCoordinatorComponent(const CoordinatorComponent& a_component) = 0;
 		/** @brief Fails the install for a technique another feature has, past Extensions::kTechniqueSlots, or without a registered toggle. */
 		virtual void RegisterTechnique(const TechniqueContribution& a_technique) = 0;
+		/**
+		 * @brief Fails the install for a technique no contribution has (registered before) or another gate has, or without a registered
+		 * input or toggle.
+		 */
+		virtual void RegisterTechniqueGate(const TechniqueGate& a_gate) = 0;
 		/** @brief Fails the install for a type another feature has, past Extensions::kGeometryTypeSlots, or without a registered toggle. */
 		virtual void RegisterGeometryType(const GeometryTypeContribution& a_type) = 0;
 		/** @brief Fails the install for a parent and leaves another feature has, or without a registered toggle. */
@@ -130,10 +138,17 @@ namespace DCLF::Api
 		 */
 		virtual void RegisterDrawFamily(const DrawFamilyContribution& a_family) = 0;
 		/**
-		 * @brief Fails the install for a slot another registration has (Core's built-ins are in first), an order another range has, no
-		 * name, a depth prepass on an appended slot, or a class with no registered toggle.
+		 * @brief Fails the install for a slot another registration has (a held group's too), an order another range has, no name, a depth
+		 * prepass on an appended slot, or a class with no registered toggle.
 		 */
 		virtual void RegisterMainRange(const MainRangeContribution& a_range) = 0;
+		/**
+		 * @brief Registers the group's main range too (RegisterMainRange's refusals, its class Count). Fails the install for a slot not
+		 * appended, no name or property flags, or without a registered input.
+		 */
+		virtual void RegisterHeldGroup(const HeldGroupContribution& a_group) = 0;
+		/** @brief Fails the install for a second near twin, or one without a name, debug name, resource, target or near test. */
+		virtual void RegisterNearTwin(const NearTwinContribution& a_twin) = 0;
 		/**
 		 * @brief Fails the install for a second stream (Core's draws have one second-stream slot), no name, select or upload, scene resources
 		 * not registered before, or an entry class no component follows.

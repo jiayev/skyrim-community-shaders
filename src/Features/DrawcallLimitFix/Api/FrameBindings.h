@@ -38,12 +38,15 @@ namespace DCLF::Api
 	 * frame bindings', the install against those and the other frame textures'.
 	 *
 	 * - view: render thread, once per colour commit before its frame textures are resolved: the engine's shader resource view
-	 *   (ID3D11ShaderResourceView*) the register reads (null: the null texture).
+	 *   (ID3D11ShaderResourceView*) the register reads (null: the null texture, or with capturedWhenNull the captured view).
+	 * - capturedWhenNull: a null view leaves the register the engine view the commit captured there (a texture the feature names only
+	 *   while it binds it itself after the epoch, and the engine's binding stands otherwise: Integrations/TerrainBlending's mask).
 	 */
 	struct FrameTexture
 	{
 		std::string_view name;
 		std::uint32_t textureRegister = ~0u;
 		void* (*view)() = nullptr;
+		bool capturedWhenNull = false;
 	};
 }

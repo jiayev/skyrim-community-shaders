@@ -60,10 +60,8 @@ namespace DCLF
 			{ Precompile, "CS_DCLF_PRECOMPILE", F, Reduced::Zero, false, "0: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders" },
 			{ Cull, "CS_DCLF_CULL", F, Reduced::Cull, false, "off|frustum|occlusion (default): GPU culling, the live toggle's seed" },
 			// (Features/Skins' CS_DCLF_SKINNED, then its CS_DCLF_SKIN_PARTITIONS, are listed here, after CS_DCLF_CULL; Features/Actors',
-			// Features/TreeWind's and Features/Decals' switches after CS_DCLF_SKIN_PARTITIONS.)
-			{ MtLand, "CS_DCLF_MTLAND", F, Reduced::UnlessOne, false, "0: terrain stays native (live toggle's seed)" },
-			{ TbTerrain, "CS_DCLF_TB_TERRAIN", F, Reduced::UnlessOne, false,
-				"0: terrain under Terrain Blending, and the meshes that feature redraws after it, stay native (T7c1; live toggle's seed)" },
+			// Features/TreeWind's and Features/Decals' switches after CS_DCLF_SKIN_PARTITIONS; then Features/Landscape's CS_DCLF_MTLAND and
+			// Integrations/TerrainBlending's CS_DCLF_TB_TERRAIN, before CS_DCLF_FORWARD.)
 			{ Forward, "CS_DCLF_FORWARD", F, Reduced::UnlessOne, false,
 				"1: blended Lighting geometry drawn by DCLF's forward epoch (T7d: a GPU depth sort, back to front, before the engine's blended draws); 0 it stays native (live toggle's seed)" },
 			// (Features/Effects' CS_DCLF_EFFECTS is listed here, after CS_DCLF_FORWARD.)

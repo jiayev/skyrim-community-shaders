@@ -1,17 +1,16 @@
-// The features' shader manifest: the compile-time constants their shaders share with Core's, checked here not to overlap Core's or each
-// other's - the frame bindings' and frame textures' texture registers, the frame constant rows, the object flag bits their technique
-// contributions set, the record words their table families' references are carried in, and the views' set phases and view bits. A feature
-// with a frame binding (Api::FrameBinding) or a frame texture (Api::FrameTexture) lists its register, one with a frame constant row
-// (Api::FrameConstantRow) its row; the install checks the registrations the same way (InstallContext::RegisterFrameBinding,
-// RegisterFrameTexture, RegisterFrameConstantRow). One with a technique
-// contribution (Api::TechniqueContribution) lists its flags, one whose family the record carries (Api::TableFamily::recordWord) its word,
-// and one with a view contribution (Api::ViewContribution, Api::OcclusionMapContribution) its phase and view bit (the install checks those
-// too: Extensions::ResolveViewBits). One with a main range (Api::MainRangeContribution) checks its slot against the GPU layout its objects'
-// flags select (BuildDrawsCS's group bits and count words: GpuLayouts.h's MainRangeCountWord). One whose view root contribution
-// (Api::ViewRootContribution) or draw family's faces (Api::DrawFamilyContribution::faces.root) owns an engine root lists it: one owner a root
-// (the install checks it too: InstallContext::RegisterViewRoot, RegisterDrawFamily).
-// The contributions' keys (a technique, a geometry type, a Core class's value: Api/ObjectContributors.h) are not listed here: the install
-// fails a key two features claim.
+// The features' (and integrations') shader manifest: the compile-time constants their shaders share with Core's, checked here not to
+// overlap Core's or each other's - the frame bindings' and frame textures' texture registers, the frame constant rows, the object flag bits
+// their technique contributions set, the record words their table families' references are carried in, and the views' set phases and view
+// bits. A feature with a frame binding (Api::FrameBinding) or a frame texture (Api::FrameTexture) lists its register, one with a frame
+// constant row (Api::FrameConstantRow) its row; the install checks the registrations the same way (InstallContext::RegisterFrameBinding,
+// RegisterFrameTexture, RegisterFrameConstantRow). One with a technique contribution (Api::TechniqueContribution) lists its flags, one
+// whose family the record carries (Api::TableFamily::recordWord) its word, and one with a view contribution (Api::ViewContribution,
+// Api::OcclusionMapContribution) its phase and view bit (the install checks those too: Extensions::ResolveViewBits). One with a main range
+// (Api::MainRangeContribution, or a held group's: Api::HeldGroupContribution) checks its slot against the GPU layout its objects' flags
+// select (BuildDrawsCS's group bits and count words: GpuLayouts.h's MainRangeCountWord). One whose view root contribution
+// (Api::ViewRootContribution) or draw family's faces (Api::DrawFamilyContribution::faces.root) owns an engine root lists it: one owner a
+// root (the install checks it too: InstallContext::RegisterViewRoot, RegisterDrawFamily). The contributions' keys (a technique, a geometry
+// type, a Core class's value: Api/ObjectContributors.h) are not listed here: the install fails a key two features claim.
 
 // TreeWindScene.h first: volk must precede every Vulkan header of the translation unit (the record layout).
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
@@ -25,6 +24,7 @@
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
+#include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -53,9 +53,11 @@ namespace DCLF::Features
 		}
 
 		// Every frame texture's register (Api::FrameTexture; its HLSL declares the same: Effects' soft depth, Effect.hlsl's
-		// DCLFEffectSoftDepth): none Core's, a frame binding's or another's.
+		// DCLFEffectSoftDepth; Integrations/TerrainBlending's mask, TerrainBlending.hlsli's TerrainBlendingMaskTexture): none Core's, a frame
+		// binding's or another's.
 		constexpr std::uint32_t kFrameTextureRegisters[] = {
 			Effects::kSoftDepthRegister,
+			Integrations::TerrainBlending::kMaskRegister,
 		};
 
 		constexpr bool FrameTextureRegistersValid()
@@ -217,4 +219,8 @@ namespace DCLF::Features
 	static_assert(static_cast<std::uint32_t>(Decals::kOpaqueRange) == 1 - 1 && static_cast<std::uint32_t>(Decals::kBlendedRange) == 2 - 1 &&
 	                  static_cast<std::uint32_t>(Decals::kLayerRange) == 3 - 1,
 		"Decals' range slots are not its groups' (ObjectDecalGroup - 1)");
+	// Integrations/TerrainBlending's held groups' slots: terrain group bits g (Records.h) draw in slot Appended(g - 1); terrain 1, no-blend 2.
+	static_assert(static_cast<std::uint32_t>(Integrations::TerrainBlending::kTerrainRange) == static_cast<std::uint32_t>(Api::MainRangeSlot::Appended0) + 1 - 1 &&
+	                  static_cast<std::uint32_t>(Integrations::TerrainBlending::kNoBlendRange) == static_cast<std::uint32_t>(Api::MainRangeSlot::Appended0) + 2 - 1,
+		"Terrain Blending's range slots are not its terrain groups' (Appended0 + group - 1)");
 }

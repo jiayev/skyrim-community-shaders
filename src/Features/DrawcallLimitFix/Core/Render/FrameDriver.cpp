@@ -13,6 +13,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
@@ -102,12 +103,12 @@ namespace DCLF
 		ScenePassWakeBatch wakes;
 		scene.SetScenePassMode(true, inlinePass);
 		// The frame's toggles, before anything reads them. A change that enters the classification drops the cached verdicts (the
-		// coordinator drops them at its next pass, told by the frame inputs); so does Terrain Blending switched on or off, which moves the
-		// terrain and its no-blend meshes between their terrain groups and the native loop (TerrainBlendingDefersTerrain).
-		static bool terrainDefersSeen = TerrainBlendingDefersTerrain();
-		const bool terrainDefers = TerrainBlendingDefersTerrain();
+		// coordinator drops them at its next pass, told by the frame inputs); so does a classify input's (Api/ClassifyInputs.h: a CS feature
+		// switched on or off that holds objects back, moving them between their held groups and the native loop).
+		static Extensions::ClassifyInputSet inputsSeen = Extensions::SampleClassifyInputs();
+		const auto inputs = Extensions::SampleClassifyInputs();
 		const bool togglesClassify = Toggles::Get().BeginFrame();
-		if (togglesClassify || terrainDefers != std::exchange(terrainDefersSeen, terrainDefers))
+		if (togglesClassify || inputs != std::exchange(inputsSeen, inputs))
 			view.RequestVerdictsInvalidated();
 		// The claims committed before a toggle are another capability's: the frames are the engine's from here until a publication
 		// committed under the new toggles is installed (its commit's toggles generation, which the frame inputs carry to the coordinator).

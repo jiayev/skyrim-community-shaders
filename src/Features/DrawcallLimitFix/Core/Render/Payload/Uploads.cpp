@@ -4,12 +4,12 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Draws.h"
 
@@ -449,14 +449,10 @@ namespace DCLF
 				const auto treeHeight = PrimaryCull::Get().TreeHeightTest();
 				a_latch.treeHeight[0] = treeHeight[0];
 				a_latch.treeHeight[1] = treeHeight[1];
-				// Terrain Blending's near test with its depth-pass eye, for the terrain group 1 twin buckets (kBucketTerrainPair).
-				if (TerrainBlendingDefersTerrain()) {
-					const auto& terrainEye = globals::features::terrainBlending.eyePosition;
-					a_latch.terrainNear[0] = terrainEye.x;
-					a_latch.terrainNear[1] = terrainEye.y;
-					a_latch.terrainNear[2] = terrainEye.z;
-					a_latch.terrainNear[3] = TerrainBlending::kTerrainDepthDistance;
-				}
+				// The near twin's test (Api::NearTwinContribution: Integrations/TerrainBlending's, with its depth-pass eye), for the terrain
+				// group 1 twin buckets (kBucketTerrainPair). No test (false) leaves the latch's zeros: w 0.
+				if (const auto nearTest = Extensions::NearTwin().nearTest)
+					nearTest(a_latch.terrainNear);
 				Diagnostics::Notify(Diagnostics::CullLatchWritten{ a_latch, true });
 			} else {
 				a_latch.terrainCapacity[0] = shape.terrainCapacity[0];
@@ -545,13 +541,9 @@ namespace DCLF
 			frameTextureBindings = {};
 			frameTextureGeneration = textures.Generation();
 		}
-		// Terrain Blending's mask (t55) is its terrain depth, bound by its replay after this epoch, so named here rather than
-		// captured. By the colour epoch it holds the Z-prepass's main depth (TerrainBlending::BlendPrepassDepths).
-		constexpr std::uint32_t kTerrainBlendingMaskRegister = 55;
-		const auto& terrainBlending = globals::features::terrainBlending;
-		auto* const terrainMask = TerrainBlendingDefersTerrain() ? terrainBlending.terrainDepth.depthSRV : nullptr;
-		// The frame textures (Api::FrameTexture: the soft effects' depth, the kPOST_ZPREPASS_COPY a Soft pass reads), each view once a
-		// colour commit; their registers read them.
+		// The frame textures (Api::FrameTexture: the soft effects' depth, the kPOST_ZPREPASS_COPY a Soft pass reads; Integrations/
+		// TerrainBlending's mask, t55, bound by its replay after this epoch, so named rather than captured), each view once a colour
+		// commit; their registers read them. A null view with capturedWhenNull leaves the captured one (the mask while not deferred).
 		const auto frameTextures = Extensions::RegisteredFrameTextures();
 		const auto frameTextureAt = Extensions::FrameTextureIndices();
 		std::array<ID3D11ShaderResourceView*, Extensions::kFrameTextureSlots> frameTextureViews{};
@@ -559,10 +551,11 @@ namespace DCLF
 			frameTextureViews[i] = static_cast<ID3D11ShaderResourceView*>(frameTextures[i].view());
 		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters && !depthOnly; ++t) {
 			auto& held = frameTextureBindings[t];
-			auto* const view = t == kCharacterLightRegister                           ? Scene::FrameView::Get().GetFrameCapture().characterLightView :
-			                   (t == kTerrainBlendingMaskRegister && terrainMask)   ? terrainMask :
-			                   frameTextureAt[t] != Extensions::kNoFrameTexture     ? frameTextureViews[frameTextureAt[t]] :
-			                                                                           capture.psViews[t];
+			const auto at = frameTextureAt[t];
+			const bool registered = at != Extensions::kNoFrameTexture && (frameTextureViews[at] || !frameTextures[at].capturedWhenNull);
+			auto* const view = t == kCharacterLightRegister ? Scene::FrameView::Get().GetFrameCapture().characterLightView :
+			                   registered                   ? frameTextureViews[at] :
+			                                                  capture.psViews[t];
 			if (!view) {
 				if (held.view)
 					held = {};

@@ -1,6 +1,7 @@
 // The extension registry (see the header): the install context the features register with, and the lists it fills.
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
@@ -87,8 +88,13 @@ namespace DCLF::Extensions
 			std::array<Api::ShadowSourceContribution, kShadowSources> shadowSources{};
 			// By family: its contribution (Count: none). Resolved at the end (ResolveDrawFamilies).
 			std::array<Api::DrawFamilyContribution, kDrawFamilies> drawFamilies{};
-			// By slot: its range (Count: none), Core's built-ins first. Resolved at the end (ResolveMainRanges).
+			// By slot: its range (Count: none), the held groups' among them. Resolved at the end (ResolveMainRanges).
 			std::array<Api::MainRangeContribution, kMainRangeSlots> mainRanges{};
+			// The held groups, in registration order (HeldGroups); the near twin (target null: none).
+			std::vector<HeldGroupEntry> heldGroups;
+			NearTwinEntry nearTwin;
+			// The classify inputs, in registration order (an index is the input's id).
+			std::vector<ClassifyInputEntry> classifyInputs;
 			// The vertex stream (entry class Count: none). Resolved at the end (ResolveVertexStream).
 			Api::VertexStreamContribution vertexStream{};
 			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
@@ -115,12 +121,12 @@ namespace DCLF::Extensions
 
 		/**
 		 * @brief Adds a_range by its slot, refused (a_who's) for a slot or order already registered, no name, a depth prepass on an
-		 * appended slot, or a feature's class with no registered toggle (Core's built-ins have none: Count).
+		 * appended slot, or a feature's class with no registered toggle (a held group's range has none: Count).
 		 */
-		void AddMainRange(Lists& a_lists, std::string_view a_who, const Api::MainRangeContribution& a_range, bool a_builtIn)
+		void AddMainRange(Lists& a_lists, std::string_view a_who, const Api::MainRangeContribution& a_range, bool a_heldGroup)
 		{
-			const bool classValid = a_builtIn ? a_range.objectClass == Api::ObjectClass::Count :
-			                                    a_range.objectClass < Api::ObjectClass::Count && a_lists.objectClasses[static_cast<std::size_t>(a_range.objectClass)];
+			const bool classValid = a_heldGroup ? a_range.objectClass == Api::ObjectClass::Count :
+			                                      a_range.objectClass < Api::ObjectClass::Count && a_lists.objectClasses[static_cast<std::size_t>(a_range.objectClass)];
 			if (a_range.slot >= Api::MainRangeSlot::Count || a_range.name.empty() || !classValid ||
 				(a_range.depthPrepass && a_range.slot >= Api::MainRangeSlot::Appended0))
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete main range", a_who));
@@ -132,6 +138,33 @@ namespace DCLF::Extensions
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes main range slot {}, which another registration has", a_who,
 					static_cast<std::uint32_t>(a_range.slot)));
 			entry = a_range;
+		}
+
+		/**
+		 * @brief Adds a_group and its main range (AddMainRange's refusals), refused (a_who's) for a slot not appended, no name or property
+		 * flags, or an input not registered.
+		 */
+		void AddHeldGroup(Lists& a_lists, std::string_view a_who, const Api::HeldGroupContribution& a_group)
+		{
+			if (a_group.slot < Api::MainRangeSlot::Appended0 || a_group.slot >= Api::MainRangeSlot::Count || a_group.name.empty() || !a_group.propertyFlags ||
+				a_group.heldWhile.index >= a_lists.classifyInputs.size())
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete held group", a_who));
+			AddMainRange(a_lists, a_who, { .slot = a_group.slot, .name = a_group.name, .order = a_group.order }, true);
+			const auto group = static_cast<std::uint32_t>(a_group.slot) - static_cast<std::uint32_t>(Api::MainRangeSlot::Appended0) + 1;
+			a_lists.heldGroups.push_back({ a_group.heldWhile, group, a_group.propertyFlags, a_group.toggle });
+		}
+
+		/** @brief Sets a_twin, refused (a_who's) for a second one, or one without a name, debug name, resource, target or near test. */
+		void SetNearTwin(Lists& a_lists, std::string_view a_who, const Api::NearTwinContribution& a_twin)
+		{
+			if (a_twin.name.empty() || a_twin.debugName.empty() || a_twin.resource.empty() || !a_twin.target || !a_twin.nearTest)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete near twin", a_who));
+			// Appended0's twin buckets draw into one target.
+			if (a_lists.nearTwin.target)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered near twin {}, which {} has", a_who, a_twin.name, a_lists.nearTwin.name));
+			const std::string name(a_twin.name);
+			a_lists.nearTwin = { name, std::string(a_twin.debugName), std::string(a_twin.resource), name + " cannot be described", name + " could not be imported",
+				a_twin.target, a_twin.nearTest };
 		}
 
 		/**
@@ -244,7 +277,7 @@ namespace DCLF::Extensions
 			if (a_lists.frameTextures.size() >= kFrameTextureSlots)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} is one past kFrameTextureSlots: grow it first", a_who, a_texture.name));
 			a_lists.frameTextureIndices[r] = static_cast<std::uint8_t>(a_lists.frameTextures.size());
-			a_lists.frameTextures.push_back({ std::string(a_texture.name), r, a_texture.view });
+			a_lists.frameTextures.push_back({ std::string(a_texture.name), r, a_texture.view, a_texture.capturedWhenNull });
 		}
 
 		Lists& Registered()
@@ -337,6 +370,17 @@ namespace DCLF::Extensions
 			Api::ToggleId RegisterToggle(const Api::FeatureToggle& a_toggle) override
 			{
 				return DCLF::RegisterToggle(a_toggle, feature);
+			}
+
+			Api::ClassifyInputId RegisterClassifyInput(const Api::ClassifyInputContribution& a_input) override
+			{
+				if (a_input.name.empty() || !a_input.sample)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete classify input", feature));
+				// A set holds each input in a bit (ClassifyInputSet).
+				if (lists.classifyInputs.size() >= kClassifyInputSlots)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s classify input {} is one past kClassifyInputSlots: grow it first", feature, a_input.name));
+				lists.classifyInputs.push_back({ std::string(a_input.name), a_input.sample });
+				return { static_cast<std::uint32_t>(lists.classifyInputs.size() - 1) };
 			}
 
 			void RegisterReportLines(const Api::ReportLines& a_lines) override
@@ -450,7 +494,7 @@ namespace DCLF::Extensions
 				auto& entry = lists.techniques[a_technique.technique];
 				if (entry.toggle)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes technique {}, which another feature has", feature, a_technique.technique));
-				entry = { a_technique.toggle, a_technique.objectFlags };
+				entry = { a_technique.toggle, a_technique.objectFlags, a_technique.extras };
 				// Its property flag rule, once for the techniques that share it (LODLand and LODLandNoise: one rule).
 				if (a_technique.propertyFlags) {
 					const PropertyFlagRule rule{ a_technique.propertyFlags, a_technique.geometryType, a_technique.toggle };
@@ -461,6 +505,18 @@ namespace DCLF::Extensions
 					if (!known)
 						lists.propertyFlagRules[lists.propertyFlagRuleCount++] = rule;
 				}
+			}
+
+			void RegisterTechniqueGate(const Api::TechniqueGate& a_gate) override
+			{
+				// It gates a contribution registered before (an integration's gates a feature's technique).
+				if (a_gate.technique >= kTechniqueSlots || !lists.techniques[a_gate.technique].toggle || a_gate.whileOn.index >= lists.classifyInputs.size() || !a_gate.needs)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete technique gate", feature));
+				auto& entry = lists.techniques[a_gate.technique];
+				if (entry.gateNeeds)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} gates technique {}, which another gate has", feature, a_gate.technique));
+				entry.gateWhile = a_gate.whileOn;
+				entry.gateNeeds = a_gate.needs;
 			}
 
 			void RegisterGeometryType(const Api::GeometryTypeContribution& a_type) override
@@ -661,6 +717,8 @@ namespace DCLF::Extensions
 			}
 
 			void RegisterMainRange(const Api::MainRangeContribution& a_range) override { AddMainRange(lists, feature, a_range, false); }
+			void RegisterHeldGroup(const Api::HeldGroupContribution& a_group) override { AddHeldGroup(lists, feature, a_group); }
+			void RegisterNearTwin(const Api::NearTwinContribution& a_twin) override { SetNearTwin(lists, feature, a_twin); }
 
 			void RegisterVertexStream(const Api::VertexStreamContribution& a_stream) override
 			{
@@ -729,9 +787,6 @@ namespace DCLF::Extensions
 		auto& lists = Registered();
 		if (std::exchange(lists.installed, true))
 			stl::report_and_fail("Drawcall Limit Fix: the features were installed twice");
-		// Core's own main ranges first: a feature's on their slots or orders is refused.
-		for (const auto& range : CoreMainRanges())
-			AddMainRange(lists, "Core", range, true);
 		// Lighting's space and rules as kind 0; the features' material ports take kinds from 1 in their registration order, which the records
 		// they write name (RegisterMaterialPort returns it).
 		lists.materialPorts[lists.materialPortCount++] = CoreLightingPort();
@@ -804,6 +859,9 @@ namespace DCLF::Extensions
 	const ObjectClassToggles& RegisteredObjectClasses() { return Registered().objectClasses; }
 	std::span<const ShadingContributionEntry> RegisteredShadingContributions() { return Registered().shadingContributions; }
 	std::span<const FrameGlobalsEntry> RegisteredFrameGlobals() { return Registered().frameGlobals; }
+	std::span<const ClassifyInputEntry> RegisteredClassifyInputs() { return Registered().classifyInputs; }
+	std::span<const HeldGroupEntry> HeldGroups() { return Registered().heldGroups; }
+	const NearTwinEntry& NearTwin() { return Registered().nearTwin; }
 
 	bool EntryClassTaken(Api::EntryClass a_class)
 	{

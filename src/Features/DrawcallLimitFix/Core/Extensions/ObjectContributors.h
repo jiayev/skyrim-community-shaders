@@ -9,6 +9,7 @@
 
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 
@@ -45,11 +46,17 @@ namespace DCLF::Extensions
 	/** @brief The floats the frame globals hold for the features' contributions (FrameGlobals::features): grow it before more are registered. */
 	inline constexpr std::uint32_t kFrameGlobalsFloats = 8;
 
-	/** @brief A technique's contribution (none: no toggle, no flags). */
+	/**
+	 * @brief A technique's contribution (none: no toggle, no flags), with its gate (Api::TechniqueGate) resolved into it (gateNeeds none:
+	 * no gate).
+	 */
 	struct TechniqueEntry
 	{
 		Api::ToggleId toggle;
 		std::uint32_t objectFlags = 0;
+		Api::ObjectExtras extras = Api::ObjectExtras::None;
+		Api::ClassifyInputId gateWhile;
+		Api::ToggleId gateNeeds;
 	};
 	using TechniqueEntries = std::array<TechniqueEntry, kTechniqueSlots>;
 
@@ -60,6 +67,25 @@ namespace DCLF::Extensions
 	inline std::uint32_t TechniqueObjectFlags(const TechniqueEntries& a_techniques, std::uint32_t a_technique)
 	{
 		return a_technique < a_techniques.size() ? a_techniques[a_technique].objectFlags : 0u;
+	}
+
+	/**
+	 * @brief Whether a_technique's objects are DCLF's under a_toggles: its contribution's toggle on and, while its gate's input holds (the
+	 * scene pass's snapshot: ClassifyInputOn), its gate's toggle too; false for none.
+	 */
+	inline bool TechniqueOn(const TechniqueEntries& a_techniques, const ToggleSet& a_toggles, std::uint32_t a_technique)
+	{
+		if (a_technique >= a_techniques.size())
+			return false;
+		const auto& entry = a_techniques[a_technique];
+		return entry.toggle && a_toggles.On(entry.toggle) && (!entry.gateNeeds || !ClassifyInputOn(entry.gateWhile) || a_toggles.On(entry.gateNeeds));
+	}
+
+	/** @brief Core's extras rows a_technique's objects take (its contribution's; None for none), per join. */
+	inline Api::ObjectExtras TechniqueExtras(std::uint32_t a_technique)
+	{
+		const auto& techniques = RegisteredTechniques();
+		return a_technique < techniques.size() ? techniques[a_technique].extras : Api::ObjectExtras::None;
 	}
 
 	/** @brief The geometry types a contribution may name (RE::BSGeometry::Type's values below it). */

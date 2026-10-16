@@ -42,7 +42,7 @@ namespace DCLF
 		SkinShape,           // a skin the skinned path does not take: dismember instance, several partitions, too many bones
 		Billboard,           // under an NiBillboardNode (the main cull turns it to the camera)
 		Switch,              // under an NiSwitchNode not selecting it (or its leaves not admitted: Features/SwitchNodes)
-		TerrainNoBlend,      // Terrain Blending redraws it after its terrain: CS_DCLF_TB_TERRAIN off, or a decal
+		Held,                // a CS feature redraws it after the opaque pass (Api::HeldGroupContribution): its group's toggle off, or a decal
 		MultiIndex,          // BSMultiIndexTriShape: its main pass is the engine's (the snow layer), its shadow a tri-shape's
 		EffectOpaque,        // CS_DCLF_EFFECTS: an effect without a blending alpha property
 		EffectVariant,       // CS_DCLF_EFFECTS: an effect permutation not ported
@@ -68,7 +68,7 @@ namespace DCLF
 		"skin-shape",
 		"billboard",
 		"switch",
-		"terrain-no-blend",
+		"terrain-no-blend",  // Held's: Integrations/TerrainBlending's groups, the only held ones (the census's text kept)
 		"multi-index",
 		"effect-opaque",
 		"effect-variant",
@@ -281,38 +281,8 @@ namespace DCLF
 		return (a_subPass == 1 || a_subPass == 3 || a_subPass == 4) ? (a_descriptor | kPassDoAlphaTest) : a_descriptor;
 	}
 
-	/**
-	 * @brief MTLand and MTLandLODBlend (terrain) are eligible when the mtLand toggle is on and, while Terrain Blending holds the
-	 * terrain (it redraws every terrain pass blended with its own depth state, which an opaque draw would break), tbTerrain too: DCLF
-	 * then draws it as that feature does, in terrain group 1.
-	 */
-	bool MtLandEnabled();
 	/** @brief The engine's alphaBlendWriteMode for the blended group (FUN_1414b3390 sets 11 before FUN_1414b39d0's draws). */
 	inline constexpr std::uint32_t kForwardWriteMode = 11;
-
-	/** @brief Whether Terrain Blending draws its terrain after the opaque pass, into a frame DCLF draws in (or this thread's snapshot). */
-	bool TerrainBlendingDefersTerrain();
-	/**
-	 * @brief TerrainBlendingDefersTerrain's answer as a scene pass took it at its start, installed per thread
-	 * (TerrainBlendingSnapshotScope): the menu may switch Terrain Blending while the pass's pool evaluations run.
-	 */
-	inline thread_local const bool* terrainDefersSnapshot = nullptr;
-	/** @brief a_defers is this thread's TerrainBlendingDefersTerrain while the scope lives (null: the feature's). */
-	class TerrainBlendingSnapshotScope
-	{
-	public:
-		explicit TerrainBlendingSnapshotScope(const bool* a_defers) :
-			previous(terrainDefersSnapshot)
-		{
-			terrainDefersSnapshot = a_defers;
-		}
-		~TerrainBlendingSnapshotScope() { terrainDefersSnapshot = previous; }
-		TerrainBlendingSnapshotScope(const TerrainBlendingSnapshotScope&) = delete;
-		TerrainBlendingSnapshotScope& operator=(const TerrainBlendingSnapshotScope&) = delete;
-
-	private:
-		const bool* previous;
-	};
 
 	/**
 	 * @brief The native main pass's descriptors for this geometry, derived without running GetRenderPasses; returns why the object

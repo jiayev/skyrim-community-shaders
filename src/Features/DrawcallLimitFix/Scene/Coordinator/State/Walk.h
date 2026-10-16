@@ -7,6 +7,8 @@
 // A private base of Scene::Coordinator, included by Coordinator.h: names, types and initialisers are the coordinator's own,
 // and the functions over them are declared there.
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
+
 namespace DCLF::Scene
 {
 	struct CoordinatorWalk
@@ -120,11 +122,11 @@ namespace DCLF::Scene
 			const void* moveKey = nullptr;
 			const void* moveKeyOuter = nullptr;
 		};
-		/** @brief What a pass's evaluations read in place of the live toggles and Terrain Blending. */
+		/** @brief What a pass's evaluations read in place of the live toggles and classify inputs (Api/ClassifyInputs.h). */
 		struct PassSnapshot
 		{
 			ToggleSet toggles;
-			bool terrainDefers = false;
+			Extensions::ClassifyInputSet inputs;
 		};
 		PassSnapshot passSnapshot;
 		std::shared_ptr<const FrameGlobals> passGlobals;  // the frame globals the pass binds, on the pool too
