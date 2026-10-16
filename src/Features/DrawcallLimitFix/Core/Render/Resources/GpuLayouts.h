@@ -1,7 +1,7 @@
 #pragma once
 
-// IndirectDraws' capacities and the layouts the GPU reads, which must match the HLSL (BuildDrawsCS, HzbCS, Lighting.hlsl's DCLF
-// paths). Included by Internal.h, after the headers these declarations use.
+// IndirectDraws' capacities and the layouts the GPU reads, which must match the HLSL (BuildDrawsCS, Lighting.hlsl's DCLF paths).
+// Included by Internal.h, after the headers these declarations use.
 
 namespace DCLF::Draws
 {
@@ -94,7 +94,6 @@ namespace DCLF::Draws
 	// Byte offsets of the count words the indirect draws read; must match BuildDrawsCS.hlsl.
 	constexpr std::uint64_t kCountDrawnPhaseTwoBytes = 68;
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
-	constexpr const char* kHzbShader = "DrawcallLimitFix/HzbCS.hlsl";
 	constexpr const char* kSortSequencesShader = "DrawcallLimitFix/SortSequencesCS.hlsl";
 	// The foliage record (Policy::RecordFoliagePixels, CS_DCLF_FOLIAGE_PARITY; Diagnostics/Draws/Foliage.cpp): alpha-tested colour
 	// draws write each shaded pixel's object (index + 1, low 24 bits; the frame's low 8 above) and albedo and diffuse. The compare
@@ -203,12 +202,6 @@ namespace DCLF::Draws
 	{
 		return (kVisibilityEventHeaderWords + std::uint64_t(a_events) * 4) * sizeof(std::uint32_t);
 	}
-	// HzbCS.hlsl's constants (PassHelpers.h, HzbConstants): the source, its valid and padded extents, the levels and descriptors.
-	constexpr std::uint32_t kHzbConstantWords = 24;
-	// The levels one single-pass downsample (FidelityFX SPD) writes: a 4096-texel domain to one texel.
-	constexpr std::uint32_t kHzbDispatchMips = 12;
-	// Its group's tile of the source.
-	constexpr std::uint32_t kHzbTile = 64;
 
 
 	// BuildDrawsCS.hlsl's inputs (byte-address buffers).

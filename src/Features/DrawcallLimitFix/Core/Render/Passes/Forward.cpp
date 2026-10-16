@@ -162,7 +162,7 @@ namespace DCLF::Draws
 	/**
 	 * The refraction pass (drawcall-limit-fix.md): the refraction range's draws, drawn in the forward epoch into kREFRACTION_NORMALS
 	 * with one plain indexed indirect draw (DCLF_REFRACTION), testing the main depth. The target is first cleared to FUN_1414b4860's
-	 * colour (0.5, 0.5, 0, 0: no offset, no mask), as the engine does before its group 5; ExecuteForward then marks the normals
+	 * colour (0.5, 0.5, 0, 0: no offset, no mask), as the engine does before its group 5; Features/Forward's blended-draw hook then marks the normals
 	 * begun so the engine's later draws add to DCLF's.
 	 */
 	struct RefractionBindings

@@ -8,6 +8,8 @@
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
+#include "Features/DrawcallLimitFix/Features/Forward/Forward.h"
+#include "Features/DrawcallLimitFix/Features/GpuOcclusion/GpuOcclusion.h"
 #include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
 #include "Features/DrawcallLimitFix/Features/Landscape/Landscape.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/LocalLights.h"
@@ -55,6 +57,11 @@ namespace DCLF::Features
 		// before the particles'); its switch is listed after the skin partitions', before tree wind's and the decals' (which follow it
 		// there); it registers no pool, stage or product. Tree wind next:
 		// its seeds' pool runs right after the frame values' built-in parts, before the texture transforms' pool.
+		// Forward before effects: its switches are listed where Core's were (right before the projected UV's, the effects' after its
+		// forward epoch's, the particles' and billboards' after its refraction's), its "forward" toggle where Core's was (before the shadows',
+		// after the projected's chain), which the effects' toggle needs by name, its "refraction" toggle after the effects'; its two engine
+		// points (the main pass's blended draw, Main::Draw's refraction point) installed from its install, which no other hook shares; no
+		// early hook, pool, stage or product.
 		// Effects before particles and billboards: their toggles need its toggle, listed before theirs (after the forward epoch's); its
 		// opaque effects' switch is listed after tree wind's list-all (both after the primary exclusion's); its report lines are alone among
 		// the forward epoch's; no early hook, pool, stage or product.
@@ -66,6 +73,7 @@ namespace DCLF::Features
 		// the gates'), before the decals' and faces'; the gates' engine channel is the first (the segments' follows), their adoption guard and
 		// reserved hidden site the only ones, their report lines alone at their points, their switch before the shadows'; tree LOD's scene resources and commit hook
 		// after tree wind's (its tables' uploads after the trees'), its stages alone at the depth segment's draw-family slots; no pool or product.
+		// GPU occlusion right after tree LOD: the depth pyramid (the HZB) the shared cull's occlusion mode tests, tree LOD's cull among them.
 		// Hidden nodes' early hooks after billboards' and tree LOD's (no order between them). Decals' early hooks (the decal array edits)
 		// after hidden nodes' (no order between them: no shared site); its node capture is the only one. Decals
 		// after tree wind: its switches and toggles are listed after the trees' (after the actors' and the skinned), and its candidates'
@@ -85,12 +93,14 @@ namespace DCLF::Features
 			Actors::Feature(),
 			TreeWind::Feature(),
 			TextureTransforms::Feature(),
+			Forward::Feature(),
 			Effects::Feature(),
 			Particles::Feature(),
 			Billboards::Feature(),
 			SwitchNodes::Feature(),
 			Lod::Feature(),
 			TreeLod::Feature(),
+			GpuOcclusion::Feature(),
 			HiddenNodes::Feature(),
 			Decals::Feature(),
 			Landscape::Feature(),

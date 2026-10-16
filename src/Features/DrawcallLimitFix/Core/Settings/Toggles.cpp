@@ -17,14 +17,8 @@ namespace DCLF
 			// (Features/Skins' "skinned", which opens the "Object classes" heading, is listed here, before the projected's, with
 			// Features/TreeWind's "trees" and Features/Decals' toggles after it.)
 			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV (CS_DCLF_PROJECTED_UV)", nullptr, true, {} },
-			// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's here.)
-			{ &S::forward, Switch::Forward, kOn, "forward", {}, "Blended objects: the forward epoch (CS_DCLF_FORWARD)",
-				"T7d: DCLF draws blended Lighting geometry itself, sorted back to front on the GPU, just before the engine's own blended draws (effects, particles). On by default (validated w174/w175).",
-				true, {} },
-			// (Features/Effects' "effects" follows the forward epoch's here.)
-			{ &S::refraction, Switch::Refraction, kOn, "refraction", {}, "Refraction: heat haze, invisibility (CS_DCLF_REFRACTION)",
-				"T7d: DCLF draws refraction geometry's normals into the refraction normals the engine's refraction effect warps the frame by, in the forward epoch. On by default (validated w174/w175).",
-				true, { &S::forward } },
+			// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's here; then
+			// Features/Forward's "forward", Features/Effects' "effects" after it, and Features/Forward's "refraction" after that.)
 			// (Features/Particles', Features/Billboards' and Features/SwitchNodes' toggles follow the refraction's here, then Features/Lod's
 			// "object LOD" and "terrain LOD" and Features/TreeLod's "tree LOD"; then Features/Skins' "skin partitions" after the tree LOD's,
 			// and Features/Actors' "actors" after it.)

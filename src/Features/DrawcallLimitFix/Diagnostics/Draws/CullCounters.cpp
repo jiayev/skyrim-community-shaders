@@ -10,6 +10,7 @@
 #include "CullCounters.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 
 namespace DCLF::Diagnostics
 {
@@ -239,9 +240,10 @@ namespace DCLF::Diagnostics
 		auto& sample = counters.sample.emplace();
 		sample.on = readback;
 		sample.forwardEngine = forwardEngine;
-		sample.forwardObserved = Diagnostics::Observe().claims && ActiveToggles().forward;
+		sample.forwardObserved = Diagnostics::Observe().claims && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward);
 		sample.refractionEngine = refractionEngine;
-		sample.refractionObserved = Diagnostics::Observe().claims && ActiveToggles().forward && ActiveToggles().refraction;
+		sample.refractionObserved = Diagnostics::Observe().claims && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) &&
+		                            Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction);
 		const auto& terrainNearUpload = DrawsState::Get().terrainNearUpload;
 		sample.terrainCpu = Diagnostics::Observe().claims && terrainNearUpload[3] > 0.0f;
 		// The CPU's side over the same frame's colour inputs and the same planes, off the render thread (the window is open until

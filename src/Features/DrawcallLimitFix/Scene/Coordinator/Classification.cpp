@@ -1036,7 +1036,9 @@ namespace DCLF::Scene
 		const bool ordered = a_tracked.parentReason == Ineligible::UnsupportedParent;
 		if (a_tracked.parentReason != Ineligible::None && !underSwitch && !ordered && !underBillboard)
 			return a_tracked.parentReason;
-		const auto orderedLeaf = [&] { return !ActiveToggles().forward && Eligibility::OrderedLeaf(mirror.Leaf(a_tracked.geometry.get())); };
+		const auto orderedLeaf = [&] {
+			return !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) && Eligibility::OrderedLeaf(mirror.Leaf(a_tracked.geometry.get()));
+		};
 		if (ordered && orderedLeaf())
 			return Ineligible::UnsupportedParent;
 

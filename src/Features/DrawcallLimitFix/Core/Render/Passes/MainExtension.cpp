@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/IndexPoolPass.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
@@ -90,9 +91,12 @@ namespace DCLF::Draws
 				Register(a_graph, org::ResourceIdentifier(Extensions::NearTwin().resource), resources->terrainDepth);
 			if (resources->refractionNormals)
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.refraction-normals"), resources->refractionNormals);
+			// The depth pyramid under its producer's names (a texture only with a producer: Extensions::DepthPyramidOf).
 			if (resources->hzb) {
-				Register(a_graph, org::ResourceIdentifier("cs.dclf.hzb"), resources->hzb);
-				Register(a_graph, org::ResourceIdentifier("cs.dclf.hzb-counter"), resources->hzbCounter);
+				const auto& pyramid = *Extensions::DepthPyramidOf();
+				Register(a_graph, org::ResourceIdentifier(pyramid.resource), resources->hzb);
+				if (resources->hzbScratch)
+					Register(a_graph, org::ResourceIdentifier(pyramid.scratchResource), resources->hzbScratch);
 			}
 			if (resources->sort)
 				resources->sort->Register(a_graph);
@@ -173,11 +177,13 @@ namespace DCLF::Draws
 			AddPass(a_out, PassKind::Render, "cs.dclf.main-opaque", MakeMainOpaquePass(resources, colourSegment), colour);
 			Diagnostics::Notify(Diagnostics::MainGraphPasses{ Diagnostics::MainGraphPasses::kAfterColour, resources, colour, a_out });
 			// The two-phase tail, in the depth segment, in this order: build-draws (phase 1, last frame's HZB), depth draw, hzb
-			// (rebuilt from it), build-draws-phase2 and the phase 2 stages (Api::GpuStageSlot::DepthSegmentPhaseTwoBeforeDraw:
-			// tree-lod-cull-phase2; phase 1's rejects retested), depth-phase2 (the rescues). Phase 1's frame-old HZB misses what just
+			// (rebuilt from it by the depth pyramid's producer, Api/DepthPyramid.h), build-draws-phase2 and the phase 2 stages
+			// (Api::GpuStageSlot::DepthSegmentPhaseTwoBeforeDraw: tree-lod-cull-phase2; phase 1's rejects retested), depth-phase2 (the
+			// rescues). Phase 1's frame-old HZB misses what just
 			// came out from behind an occluder; phase 2 takes those back.
 			if (resources->hzb) {
-				AddPass(a_out, PassKind::Compute, "cs.dclf.hzb", MakeHzbPass(resources, depthSegment), depth);
+				const auto& pyramid = *Extensions::DepthPyramidOf();
+				AddPass(a_out, PassKind::Compute, pyramid.passName, pyramid.makePass({ resources, resources->hzbState }), depth);
 				AddPass(a_out, PassKind::Compute, "cs.dclf.build-draws-phase2", MakeBuildDrawsPass(resources, depthSegment, 2), depth);
 				AddStages(a_out, resources, Api::GpuStageSlot::DepthSegmentPhaseTwoBeforeDraw, depth);
 				AddPass(a_out, PassKind::Render, "cs.dclf.depth-phase2", MakeMainOpaquePass(resources, depthSegment, true), depth);

@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
@@ -80,29 +81,32 @@ namespace DCLF
 		RunEpoch(false);
 	}
 
-	void IndirectDraws::ExecuteForward()
+	bool IndirectDraws::ExecuteForward()
 	{
 		ZoneScopedN("CS.DCLF.ExecuteForward");
-		if (!impl || failed || !ActiveToggles().forward)
-			return;
+		if (!impl || failed)
+			return false;
+		const ToggleSet toggles = ActiveToggles();
+		if (!Extensions::ObjectClassOn(toggles, Api::ObjectClass::Forward))
+			return false;
 		auto& f = impl->forwardEpoch;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		// Once a frame (the engine's blended draw has two call sites: the camera under water draws it first, else after the water).
 		if (f.submittedFrame == frame)
-			return;
+			return false;
 		++f.reached;
 		// What it draws is what this frame's colour epoch built and sorted: nothing without it (no claims: the engine drew everything,
 		// the forward objects' passes included).
 		const MainPayload* colour = impl->committedPayload[kAsyncColour];
 		if (!colour || impl->committedFrame[kAsyncColour] != frame || Scene::FrameView::Get().SetWithdrawn()) {
 			++f.noColour;
-			return;
+			return false;
 		}
 		// The selected revision's forward recording (DecideCoverage required it for the frame's claims while the toggle is on).
 		const auto revision = impl->RevisionOf(Epoch::Forward);
 		if (!revision) {
 			++f.noRecording;
-			return;
+			return false;
 		}
 		// Held until this execution retires (its draws read what the colour commit bound): the colour payload's bindings, the frame
 		// textures its frame record names, the adopted snapshot whole.
@@ -110,13 +114,13 @@ namespace DCLF
 		const auto owners = impl->EpochOwners(payloads);
 		if (!owners) {
 			++f.failed;
-			return;
+			return false;
 		}
 		// Refraction: the pipeline asked for and its inputs posted (each once, or when they change), and whether this recording draws
 		// the refraction normals (RefractionDrawPass: the colour shape has refraction slots and the refraction pipeline of the imported
 		// normals' format).
 		bool refraction = false;
-		if (ActiveToggles().refraction) {
+		if (Extensions::ObjectClassOn(toggles, Api::ObjectClass::Refraction)) {
 			const auto& resources = impl->resources;
 			auto& pipelines = DrawPipelines::Get();
 			pipelines.RequestRefraction();
@@ -143,23 +147,17 @@ namespace DCLF
 		}, owners);
 		if (!ok) {
 			++f.failed;
-			return;
+			return false;
 		}
 		f.submittedFrame = frame;
 		++f.epochs;
-		// Refraction: the epoch cleared and drew the refraction normals, ahead of Main::Draw's own group 5 (FUN_1414b4860). Marked
-		// begun and drawn, as that function marks them (0x1435ef130, 0x1435ef131): the engine's later draws into them then add to DCLF's
-		// instead of clearing them, and ISRefraction (its IsActive reads 0x1435ef131, 0x1414f95a0) warps the frame by them. Its render
-		// clears both. Main::Draw's group 6 is cleared for it at the refraction point (DrawcallLimitFix's Main_Draw_RefractionCheck), where
-		// the engine would never have drawn it.
+		// Refraction: the epoch cleared and drew the refraction normals, ahead of Main::Draw's own group 5 (FUN_1414b4860). The caller
+		// (Features/Forward's blended-draw point) marks them begun and drawn, as that function does, before the engine's blended draws.
 		if (refraction) {
-			static REL::Relocation<std::uint8_t*> normalsBegun{ REL::Offset(Engine::Address::kRefractionNormalsBegun) };
-			static REL::Relocation<std::uint8_t*> normalsDrawn{ REL::Offset(Engine::Address::kRefractionNormalsDrawn) };
-			*normalsBegun = 1;
-			*normalsDrawn = 1;
 			f.refractionFrame = frame;
 			++f.refractionDrawn;
 		}
+		return refraction;
 	}
 
 	bool IndirectDraws::RefractionDrawnThisFrame() const

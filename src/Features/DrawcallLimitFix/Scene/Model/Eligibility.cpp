@@ -140,7 +140,7 @@ namespace DCLF::Eligibility
 
 		// GetRenderPasses treats material alpha below one as transparent (the record's: 1 without a material): blended, the forward
 		// epoch's with CS_DCLF_FORWARD (DeriveLightingDescriptors), else native.
-		if (property->materialAlpha < 1.0f && !ActiveToggles().forward)
+		if (property->materialAlpha < 1.0f && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
 			return Ineligible::AlphaBlend;
 
 		LightingDescriptors descriptors;
@@ -193,7 +193,7 @@ namespace DCLF::Eligibility
 			return false;
 		// A blended member is DCLF's too (the forward epoch: blended Lighting, the Effect port, its billboards), so its entry can be whole;
 		// its eligibility (the entry's reason) already says whether the forward toggles take it.
-		if (ActiveToggles().forward)
+		if (Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
 			return true;
 		return decal || !a_leaf.AlphaBlending();
 	}

@@ -61,12 +61,8 @@ namespace DCLF
 			{ Cull, "CS_DCLF_CULL", F, Reduced::Cull, false, "off|frustum|occlusion (default): GPU culling, the live toggle's seed" },
 			// (Features/Skins' CS_DCLF_SKINNED, then its CS_DCLF_SKIN_PARTITIONS, are listed here, after CS_DCLF_CULL; Features/Actors',
 			// Features/TreeWind's and Features/Decals' switches after CS_DCLF_SKIN_PARTITIONS; then Features/Landscape's CS_DCLF_MTLAND and
-			// Integrations/TerrainBlending's CS_DCLF_TB_TERRAIN, before CS_DCLF_FORWARD.)
-			{ Forward, "CS_DCLF_FORWARD", F, Reduced::UnlessOne, false,
-				"1: blended Lighting geometry drawn by DCLF's forward epoch (T7d: a GPU depth sort, back to front, before the engine's blended draws); 0 it stays native (live toggle's seed)" },
-			// (Features/Effects' CS_DCLF_EFFECTS is listed here, after CS_DCLF_FORWARD.)
-			{ Refraction, "CS_DCLF_REFRACTION", F, Reduced::UnlessOne, false,
-				"1: refraction (kRefraction, kTempRefraction Lighting geometry: heat haze, invisibility) drawn by DCLF into the refraction normals in the forward epoch (T7d; needs CS_DCLF_FORWARD); 0 it stays native (live toggle's seed)" },
+			// Integrations/TerrainBlending's CS_DCLF_TB_TERRAIN, before Features/Forward's CS_DCLF_FORWARD; then Features/Effects'
+			// CS_DCLF_EFFECTS after it, and Features/Forward's CS_DCLF_REFRACTION, before CS_DCLF_PROJECTED_UV.)
 			{ ProjectedUv, "CS_DCLF_PROJECTED_UV", F, Reduced::UnlessOne, false, "0: projected-UV objects stay native (live toggle's seed)" },
 			// (Features/Lod's CS_DCLF_LOD_OBJECTS and CS_DCLF_LOD_TERRAIN, then Features/TreeLod's CS_DCLF_LOD_TREES, then Features/Lod's
 			// CS_DCLF_LOD_GATES, are listed here, before CS_DCLF_SHADOWS.)

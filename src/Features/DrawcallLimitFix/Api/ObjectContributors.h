@@ -242,6 +242,13 @@ namespace DCLF::Api
 		// A skin of several partitions, or a BSDismemberSkinInstance (LOD trees, actor bodies): one draw per partition the engine would draw
 		// (Ineligible::SkinShape without the class; needs Skinned's toggle: Features/Skins).
 		SkinPartitions,
+		// A blended object the forward epoch draws (Lighting alpha-blended or material alpha < 1, the Effect port's meshes, a view's forward
+		// decals); the class gates the forward epoch itself (its coverage, recording and execution) and the other forward classes' toggles
+		// (Features/Forward).
+		Forward,
+		// A refraction object (kRefraction, kTempRefraction): its Utility RENDER_NORMAL pass, drawn into the refraction normals by the forward
+		// epoch's refraction range (needs Forward's toggle: Features/Forward).
+		Refraction,
 		Count,
 	};
 

@@ -662,11 +662,11 @@ namespace DCLF
 		// The sort's counts start at zero; afterwards the scan clears them.
 		if (epochResources->sort)
 			epochResources->sort->ZeroCountsOnce(uploads);
-		// Likewise the HZB's group counter.
-		if (depthOnly && epochResources->hzbCounter && !epochResources->hzbCounterZeroed) {
+		// Likewise the depth pyramid's scratch (Api::DepthPyramid::scratch: the HZB's group counter).
+		if (depthOnly && epochResources->hzbScratch && !epochResources->hzbScratchZeroed) {
 			static constexpr std::uint32_t kZero = 0;
-			uploads(epochResources->hzbCounter, &kZero, sizeof(kZero), 0);
-			epochResources->hzbCounterZeroed = true;
+			uploads(epochResources->hzbScratch, &kZero, sizeof(kZero), 0);
+			epochResources->hzbScratchZeroed = true;
 		}
 		// Colour segment only: each decal group's slot count, and the tallies zeroed.
 		if (!depthOnly) {

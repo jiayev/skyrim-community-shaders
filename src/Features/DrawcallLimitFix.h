@@ -178,32 +178,6 @@ private:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		/**
-		 * @brief The main pass's blended draw (AE FUN_1414b39d0, BSShaderAccumulator's sorted blended list interleaved with the
-		 * geometry groups' stack, after the deferred composite), at both its call sites in FinishAccumulatingPostResolveDepth's render
-		 * mode 0 (FUN_1414b3390: +0x51, first when the camera is under water; +0x543, after the water otherwise). For the main
-		 * camera's accumulator the forward epoch draws DCLF's blended objects first (IndirectDraws::ExecuteForward).
-		 */
-		template <int N>
-		struct Accumulator_BlendedDraw
-		{
-			static void thunk(void* a_accumulator, std::uint32_t a_renderFlags);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		/**
-		 * @brief Main::Draw's refraction point (AE 0x140644d20, its call of FUN_1414b4840: the main accumulator's
-		 * geometry group 5 count, which decides whether FUN_1414ce1d0 draws the refraction normals, FUN_1414b4860). When DCLF's forward
-		 * epoch drew them this frame (it marked them begun, so the engine's draw adds to them), group 6 is cleared first: the engine never
-		 * draws it there (the normals are never begun at that point without DCLF), and still clears it, as FUN_1414b4860 does.
-		 */
-		struct Main_Draw_RefractionCheck
-		{
-			static std::uint32_t thunk(void* a_accumulator);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-
 		/** @brief The call sites of BSBatchRenderer::RenderPassImmediately, as Light Limit Fix hooks them. */
 		template <int N>
 		struct BSBatchRenderer_RenderPassImmediately

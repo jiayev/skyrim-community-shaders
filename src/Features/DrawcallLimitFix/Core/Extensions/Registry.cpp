@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
@@ -109,6 +110,8 @@ namespace DCLF::Extensions
 			Api::VertexStreamContribution vertexStream{};
 			// The main cull input (no name: none). Resolved at the end (ResolveMainCullInput).
 			Api::MainCullInputContribution mainCullInput{};
+			// The depth pyramid (no setup: none). Resolved at the end (ResolveDepthPyramid).
+			Api::DepthPyramidContribution depthPyramid{};
 			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
 			std::array<Api::PaletteRowsContribution, Api::kPaletteRowsClasses> paletteRows{};
 			// The shading fields, in registration order; whether a field is taken. Resolved at the end (ResolveShadingFields).
@@ -888,6 +891,16 @@ namespace DCLF::Extensions
 				lists.mainCullInput = a_input;
 			}
 
+			void RegisterDepthPyramid(const Api::DepthPyramidContribution& a_pyramid) override
+			{
+				if (a_pyramid.resource.empty() || a_pyramid.scratchResource.empty() || a_pyramid.passName.empty() || !a_pyramid.setup || !a_pyramid.makePass)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete depth pyramid", feature));
+				// The cull tests one pyramid.
+				if (lists.depthPyramid.setup)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes depth pyramid {}, which another feature has", feature, a_pyramid.resource));
+				lists.depthPyramid = a_pyramid;
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -938,7 +951,7 @@ namespace DCLF::Extensions
 		ResolveAncestorValue(lists.ancestorValue);
 		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
-		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the palette rows classes'; the shading fields'
+		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the depth pyramid's; the palette rows classes'; the shading fields'
 		// (and the published entry classes); the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
 		ResolveViews(lists.views, lists.viewWork, lists.viewRoots);
@@ -948,6 +961,7 @@ namespace DCLF::Extensions
 		ResolveMainRanges(lists.mainRanges);
 		ResolveVertexStream(lists.vertexStream);
 		ResolveMainCullInput(lists.mainCullInput);
+		ResolveDepthPyramid(lists.depthPyramid);
 		ResolvePaletteRows(lists.paletteRows);
 		ResolveShadingFields(lists.shadingFields);
 		ResolveMaterialPorts(lists.materialPorts, lists.materialPortCount);

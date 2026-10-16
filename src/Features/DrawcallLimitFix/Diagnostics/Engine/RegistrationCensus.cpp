@@ -316,7 +316,8 @@ namespace DCLF::RegistrationCensus
 			const auto* lighting = SceneCapture::LeafView::Lighting(leaf.view.property);
 			// An ordered node rejects only a blended leaf (Coordinator's OrderedLeaf), and with the forward epoch none (ClassifyFrame); a
 			// billboard any.
-			const bool blended = !ActiveToggles().forward && (leaf.view.AlphaBlending() || (lighting && lighting->materialAlpha < 1.0f));
+			const bool blended = !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) &&
+			                     (leaf.view.AlphaBlending() || (lighting && lighting->materialAlpha < 1.0f));
 			Ineligible parentReason = Ineligible::None;
 			bool tracked = false;
 			// The billboard parent's contributions (Features/Billboards): an effect BSTriShape without a skin under one billboard node is
