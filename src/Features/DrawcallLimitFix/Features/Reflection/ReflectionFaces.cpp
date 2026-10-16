@@ -12,6 +12,12 @@ namespace DCLF::Features::Reflection::ReflectionFaces
 
 	namespace
 	{
+		// AE 1.6.1170 (module offsets) of the engine state the update reads.
+		namespace Address
+		{
+			inline constexpr std::uintptr_t kReflectSky = 0x20104e8;  // bool: the water reflection draws the sky
+		}
+
 		// Render thread only: the update and the face render run there, and so does everything that asks.
 		const RE::NiCamera* camera = nullptr;
 		std::uint32_t faceMask = 0;
@@ -31,7 +37,7 @@ namespace DCLF::Features::Reflection::ReflectionFaces
 				// Its flags (+0x10): bit 12 renders without the LOD roots, bit 4 with silhouettes (render mode 0x1B); without bit 12 and
 				// bReflectSky (0x1420104e8) the faces suppress the sky (0x19). Only mode 0 is plain.
 				const auto flags = *reinterpret_cast<const std::uint16_t*>(static_cast<const std::byte*>(a_reflection) + 0x10);
-				static const REL::Relocation<const bool*> reflectSky{ REL::Offset(Engine::Address::kReflectSky) };
+				static const REL::Relocation<const bool*> reflectSky{ REL::Offset(Address::kReflectSky) };
 				const bool silhouettes = (flags >> 4) & 1;
 				const bool noSky = !((flags >> 12) & 1) && !*reflectSky.get();
 				skipRoots = rootsOwned ? rootsOwned(!silhouettes && !noSky) : 0u;

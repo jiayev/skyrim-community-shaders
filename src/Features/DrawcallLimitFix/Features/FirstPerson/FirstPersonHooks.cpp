@@ -18,6 +18,7 @@ namespace DCLF::Features::FirstPerson
 		{
 			inline constexpr std::uintptr_t kDepthFirstPersonDraw = 0x14cd47e;   // its call at RenderDepth's first-person draw
 			inline constexpr std::uintptr_t kFirstPersonViewDraw = 0x14cb7d1;    // its call in FUN_1414cb6d0 (the first-person view)
+			inline constexpr std::uintptr_t kAccumulatorRender = 0x14a90f0;      // the accumulator render (FUN_1414a90f0)
 		}
 
 		/**
@@ -72,8 +73,8 @@ namespace DCLF::Features::FirstPerson
 	{
 		// The first-person view's two points (FUN_1414a90f0, the accumulator render, at RenderDepth's first-person draw and at
 		// FUN_1414cb6d0's), always installed: one compare a frame each while CS_DCLF_FIRST_PERSON is off.
-		if (Engine::CallsTo(REL::Offset(Address::kDepthFirstPersonDraw).address(), REL::Offset(Engine::Address::kAccumulatorRender).address()) &&
-			Engine::CallsTo(REL::Offset(Address::kFirstPersonViewDraw).address(), REL::Offset(Engine::Address::kAccumulatorRender).address())) {
+		if (Engine::CallsTo(REL::Offset(Address::kDepthFirstPersonDraw).address(), REL::Offset(Address::kAccumulatorRender).address()) &&
+			Engine::CallsTo(REL::Offset(Address::kFirstPersonViewDraw).address(), REL::Offset(Address::kAccumulatorRender).address())) {
 			stl::write_thunk_call<RenderDepth_FirstPersonDraw>(REL::Offset(Address::kDepthFirstPersonDraw).address());
 			stl::write_thunk_call<RenderFirstPersonView_Draw>(REL::Offset(Address::kFirstPersonViewDraw).address());
 		} else {
