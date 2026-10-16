@@ -78,12 +78,13 @@ namespace DCLF::Extensions
 	const std::shared_ptr<org::VersionedBuffer>* FrameBindingBuffer(std::size_t a_binding, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame);
 
 	/**
-	 * @brief The most frame textures there may be: a colour commit samples their views into a fixed array (ResolveFrameTextures). A
-	 * texture past them fails the install: grow this first.
+	 * @brief The most frame textures there may be: one a frame register (t16-t127), as no two share one, so a colour commit's fixed array
+	 * of their views (ResolveFrameTextures) holds every registration there can be. The install still fails one past it.
 	 */
-	inline constexpr std::size_t kFrameTextureSlots = 4;
+	inline constexpr std::size_t kFrameTextureSlots = kTextureRegisters - kPixelTextureSlots;
 	/** @brief A register no frame texture has (FrameTextureIndices). */
 	inline constexpr std::uint8_t kNoFrameTexture = 0xFF;
+	static_assert(kFrameTextureSlots < kNoFrameTexture, "a frame texture's index (FrameTextureIndices) would reach kNoFrameTexture");
 	/** @brief Any thread, after InstallFeatures: by texture register, its frame texture's index (RegisteredFrameTextures), or kNoFrameTexture. */
 	std::span<const std::uint8_t> FrameTextureIndices();
 

@@ -413,7 +413,20 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
   b13 (lighting, LOD fades, fog, extras, the frame constant rows), all this frame's. The faces' programs read no other frame
   slot. The frame textures (t16 and up) they read are t18, t19, t25, t30, t31, t35-t37, t50, t53, t55, t60, t65, t76-t79, t98
   and t125; a source of this frame's exists for the character light (t125) and the registered frame textures (Terrain
-  Blending's mask, t55); the rest read null, and the report's "frame textures without a source" names them. The frame lighting
+  Blending's mask, t55; and, from round 3, the CS features' own views, each registered by an integration under the conditions
+  CS binds it, so the engine's own face draws had them too: Volumetric Shadows' t18 (the shared shadow map as CS last bound it,
+  `VolumetricShadows::boundSharedShadowMap`), Exponential Height Fog's t19, Cloud Shadows' t25, Dynamic Cubemaps' t30 (the
+  reflections view as CS last bound it, `DynamicCubemaps::boundReflectionsView`) and t31, Skylighting's t50 and t53, Terrain
+  Shadows' t60, Water Effects' t65, IBL's t76-t79). A persistent texture holds the content CS last wrote: the faces draw at the
+  depth commit, after the reflection prepass, the early prepass (Terrain Shadows' update) and the shadow maps, before the main
+  prepass (Skylighting's probes, IBL's SH, Exponential Height Fog's volume) and the deferred pass (Dynamic Cubemaps' cubemaps),
+  so those are a frame old, as they were older still for the engine's faces; Volumetric Shadows' copy is the last shadow mask
+  draw's. Deferred's t98 (the sun cascades) is a frame buffer, a CPU-written structured buffer: the faces have copies of their
+  own of the main frame buffers (`ViewResources::frameBuffers`, made with the main ones' shape), which their commit fills from
+  the buffer bound at the register then (CS writes and binds it at the early prepass and again at the reflection prepass) and
+  its CPU mirror, this frame's contents, as the main colour commit fills its own (`LatchFrameBuffer`). Only Light Limit Fix's
+  t35-t37 read null, on purpose (the main camera's clusters, culled after the faces); the report's "frame textures without a
+  source" names any register left null. The frame lighting
   (PS b13) is the main pass's: a difference in about the fifth digit of the sun direction, the size capture parity measured
   between a face's draws and the main rows.
 

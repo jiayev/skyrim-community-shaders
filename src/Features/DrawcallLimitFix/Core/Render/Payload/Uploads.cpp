@@ -345,7 +345,8 @@ namespace DCLF
 			frameTextureGeneration = textures.Generation();
 		}
 		// The frame textures (Api::FrameTexture: the soft effects' depth, the kPOST_ZPREPASS_COPY a Soft pass reads; Integrations/
-		// TerrainBlending's mask, t55, bound by its replay after this epoch, so named rather than captured), each view once a colour
+		// TerrainBlending's mask, t55, bound by its replay after this epoch, so named rather than captured; the CS features' views the
+		// integrations name for the views with frame constants of their own, each the one CS bound when not null), each view once a colour
 		// commit; their registers read them. A null view with capturedWhenNull leaves the captured one (the mask while not deferred).
 		const auto frameTextures = Extensions::RegisteredFrameTextures();
 		const auto frameTextureAt = Extensions::FrameTextureIndices();
@@ -370,18 +371,11 @@ namespace DCLF
 			auto* buffer = BufferOf(capture.psViews[frameBuffer.textureRegister]);
 			mirror.Watch(buffer);
 			const auto contents = mirror.Contents(buffer);
-			const std::size_t offset = std::size_t(frameBuffer.firstElement) * frameBuffer.stride;
-			const std::size_t bytes = std::size_t(frameBuffer.elements) * frameBuffer.stride;
-			if (contents.size() < offset + bytes) {
+			if (!LatchFrameBuffer(a_commit.latched, frameBuffer, contents)) {
 				// Unfillable: its copy reads zero (still written, as the shape's latched copies name it).
 				Diagnostics::Notify(Diagnostics::FrameBufferUnfilled{ frameBuffer.textureRegister, frameBuffer.elements, frameBuffer.stride, contents.size() });
-				static std::vector<std::byte> zeros;
-				if (zeros.size() < bytes)
-					zeros.resize(bytes);
-				a_commit.latched(frameBuffer.copy, zeros.data(), bytes, 0);
 				continue;  // not written since it is watched
 			}
-			a_commit.latched(frameBuffer.copy, contents.data() + offset, bytes, 0);
 			a_frameTextures[frameBuffer.textureRegister] = frameBuffer.copy->GetSRVInfo(0).slot.index;
 		}
 	}

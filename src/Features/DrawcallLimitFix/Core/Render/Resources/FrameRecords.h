@@ -2,8 +2,8 @@
 
 // The frame record and the frame-wide rows of a frame-constants buffer (Resources/FrameSlots.h's layout), written from this frame's
 // sources: the one writer of every commit that draws with frame constants - the main commits (Payload/Uploads.cpp), the shadow commit's
-// record (Shadow/ShadowEpochs.cpp) and a view's commit with frame constants of its own (CommitView: the reflection's faces). Render
-// thread. Self-contained.
+// record (Shadow/ShadowEpochs.cpp) and a view's commit with frame constants of its own (CommitView: the reflection's faces); and the
+// frame buffers' copies of the main colour commits and that view's. Render thread. Self-contained.
 
 // volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
@@ -13,6 +13,9 @@
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 
 #include <Resources/Buffers/Buffer.h>
+
+#include <d3d11.h>
+#include <winrt/base.h>
 
 #include <array>
 #include <cstddef>
@@ -61,6 +64,15 @@ namespace DCLF::Draws
 	void LatchFrameRows(LatchedUploads& a_latched, const std::shared_ptr<org::Buffer>& a_target);
 	/** @brief Each write LatchFrameRows makes, in its order: a_add(a_context, bytes, offset) (a shape's latched copies). */
 	void FrameRowWrites(void (*a_add)(void* a_context, std::size_t a_bytes, std::uint64_t a_offset), void* a_context);
+
+	/**
+	 * @brief A frame buffer's copy (FrameBuffer: a CPU-written structured buffer the pipelines read at t16 and up) latched from a_contents,
+	 * its buffer's CPU mirror: its elements from firstElement. False when the mirror holds less (unfillable): its copy reads zero, still
+	 * written, as the shape's latched copies name it.
+	 */
+	bool LatchFrameBuffer(LatchedUploads& a_latched, const FrameBuffer& a_frameBuffer, std::span<const std::byte> a_contents);
+	/** @brief The buffer bound now at pixel register a_register through a buffer view (null: none). Render thread. */
+	winrt::com_ptr<ID3D11Buffer> BoundPixelBuffer(std::uint32_t a_register);
 
 	/** @brief Community Shaders' SharedData (PS b5) and FeatureData (PS b6) as it last uploaded them (empty: none). */
 	std::span<const std::byte> SharedDataBlock();

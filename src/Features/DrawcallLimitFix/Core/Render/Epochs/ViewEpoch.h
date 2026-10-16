@@ -191,6 +191,10 @@ namespace DCLF::Draws
 		std::shared_ptr<org::Buffer> frameConstants;
 		std::uint64_t frameConstantsAddress = 0;
 		bool sharedLightZeroed = false;
+		// With them, its copies of the main pass's frame buffers (Resources::frameBuffers' shape: Deferred's sun cascades at t98), which its
+		// commit fills from each buffer's CPU mirror (this frame's contents) and names at their registers. Made by SetupView, made again by
+		// Setup when the main frame buffers' shape changes, replaced whole (the revision producer reads them); null without frame constants.
+		std::atomic<std::shared_ptr<const std::vector<FrameBuffer>>> frameBuffers;
 		// The reflection's: DCLF's depth for the faces (cleared per face) and the engine's cube target. First person's: the colour
 		// epoch's depth, the engine's kPOST_ZPREPASS_COPY (FUN_1414cb6d0 binds it as the first-person pass's depth).
 		std::shared_ptr<org::PixelBuffer> depth;
@@ -383,8 +387,9 @@ namespace DCLF
 		// By family, whether the faces' draws are DCLF's this frame (PassCapture::SetViewFamilyOwned; the roots they own: ViewRoots.cpp).
 		std::array<bool, Extensions::kDrawFamilies> facesOwned{};
 		// A view with frame constants of its own (Draws::OwnsFrameConstants): its frame textures (t16 and up) as its last commit resolved
-		// them from this frame's sources (IndirectDraws::SubmitViewEpoch), each register's binding kept while it names the same view (of
-		// the textures' generation), and the registers its frame record left null.
+		// them from this frame's sources (IndirectDraws::SubmitViewEpoch) and its commit named its frame buffers' copies at theirs (CommitView),
+		// each register's binding kept while it names the same view (of the textures' generation), and the registers its frame record left
+		// null.
 		std::array<std::uint32_t, kTextureRegisters> frameTextures{};
 		std::array<ID3D11ShaderResourceView*, kTextureRegisters> frameTextureViews{};
 		std::array<GpuTextures::Binding, kTextureRegisters> frameTextureBindings{};

@@ -324,6 +324,7 @@ void VolumetricShadows::CopyShadowLightData()
 
 void VolumetricShadows::SetSharedShadowMapSRV(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_srv)
 {
+	boundSharedShadowMap = a_srv;
 	a_context->PSSetShaderResources(kSharedShadowMapShaderSlot, 1, &a_srv);
 }
 

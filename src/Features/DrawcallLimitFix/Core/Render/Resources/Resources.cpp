@@ -32,6 +32,27 @@ namespace DCLF::Draws
 			return created;
 		}
 
+		/**
+		 * @brief A view with frame constants of its own (its frame record's): its copies of the main frame buffers (a_main's shape), made
+		 * again only when that shape changes, replaced whole (the revision producer reads them).
+		 */
+		void MatchViewFrameBuffers(ViewResources& a_view, const std::vector<FrameBuffer>& a_main)
+		{
+			if (!a_view.frameConstants)
+				return;
+			const auto held = a_view.frameBuffers.load(std::memory_order_acquire);
+			if (held && held->size() == a_main.size() &&
+				std::equal(a_main.begin(), a_main.end(), held->begin(), [](const auto& a, const auto& b) { return a.SameShape(b); }))
+				return;
+			auto copies = std::make_shared<std::vector<FrameBuffer>>(a_main);
+			for (auto& frameBuffer : *copies) {
+				std::uint32_t index = 0;
+				frameBuffer.copy = StructuredBuffer(frameBuffer.elements, frameBuffer.stride,
+					fmt::format("{}.frame-buffer.t{}", a_view.traits->prefix, frameBuffer.textureRegister).c_str(), index);
+			}
+			a_view.frameBuffers.store(std::move(copies), std::memory_order_release);
+		}
+
 		/** @brief A D3D11 view of a word buffer's first a_bytes, for immediate-context readbacks; words past it read as zero. */
 		auto WrapWords(org::Buffer& a_buffer, std::uint64_t a_bytes)
 		{
@@ -310,11 +331,13 @@ namespace DCLF
 		formats = targets;
 		width = target.Width;
 		height = target.Height;
-		// The views draw from the main resources: rebuilt at their next import, before the graph is built (on the render thread).
+		// The views draw from the main resources: rebuilt at their next import, before the graph is built (on the render thread). A view with
+		// frame constants of its own copies the main frame buffers at their shape.
 		for (const auto& slot : kViewSlots)
 			if (const auto& view = View(slot.view).resources) {
 				view->main = state;
 				view->rebuildPending = true;
+				MatchViewFrameBuffers(*view, state->frameBuffers);
 			}
 		PostRevisionInputs();
 		// The graph is rebuilt with the new resources on its next epoch.
@@ -718,12 +741,14 @@ namespace DCLF
 		state->blocksAddress = AddressOf(device, *state->blocks);
 		if (!state->blocksAddress)
 			return fail("blocks have no device address");
-		// A view drawing with frame constants of its own (the faces'): laid out as the main ones, written by its commit.
+		// A view drawing with frame constants of its own (the faces'): laid out as the main ones, written by its commit, with its copies of
+		// the main frame buffers.
 		if (OwnsFrameConstants(traits)) {
 			state->frameConstants = DeviceBuffer(kFrameConstantBytes, name("frame-constants").c_str());
 			state->frameConstantsAddress = AddressOf(device, *state->frameConstants);
 			if (!state->frameConstantsAddress)
 				return fail("frame constants have no device address");
+			MatchViewFrameBuffers(*state, resources->frameBuffers);
 		}
 		// The forward part draws through the main colour signature with an explicit preprocess, as ForwardDrawPass.
 		if (traits.forwardPart)

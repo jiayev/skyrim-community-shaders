@@ -26,8 +26,13 @@ namespace DCLF::Features::Reflection
 		 * @brief The frame textures (t16 and up) the faces' forward programs read (the LOD Lighting techniques without Deferred, and the
 		 * DistantTree forward program; their sources' declarations): Volumetric Shadows' t18 and t98, Exponential Height Fog's t19, Cloud
 		 * Shadows' t25, Dynamic Cubemaps' t30 and t31, Light Limit Fix's t35-t37, Skylighting's t50 and t53, Terrain Blending's t55, Terrain
-		 * Shadows' t60, Water Effects' t65, IBL's t76-t79 and the character light's t125. Their commit gives each a source of this frame's
-		 * where it has one (the character light, a registered frame texture); the report names the others, which read null.
+		 * Shadows' t60, Water Effects' t65, IBL's t76-t79 and the character light's t125. Their commit gives each a source of this frame's:
+		 * the character light; a registered frame texture (Integrations/VolumetricShadows' t18, its shared shadow map as bound;
+		 * ExponentialHeightFog's t19; CloudShadows' t25; DynamicCubemaps' t30, its reflections view as bound, and t31; Skylighting's t50 and
+		 * t53; TerrainBlending's t55; TerrainShadows' t60; WaterEffects' t65; IBL's t76-t79), each null where CS may have bound another
+		 * there; and t98, Deferred's sun cascades, a frame buffer: the faces' own copy, filled by their commit from this frame's contents.
+		 * Only Light Limit Fix's t35-t37 read null, on purpose (the main camera's clusters, culled after the faces); the report names any
+		 * register left null.
 		 */
 		constexpr std::uint32_t kFaceFrameTextures[] = { 18, 19, 25, 30, 31, 35, 36, 37, 50, 53, 55, 60, 65, 76, 77, 78, 79, 98, 125 };
 

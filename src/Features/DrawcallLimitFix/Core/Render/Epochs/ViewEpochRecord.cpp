@@ -182,6 +182,10 @@ namespace DCLF
 					// Read through device addresses; declared so the graph orders them after their uploads.
 					// The view's own frame slots (the faces': its commit's) or the colour segment's, by address.
 					a_builder.ShaderResource(resources->frameConstants ? resources->frameConstants : main.frameConstants, noViews);
+					// With its own frame constants, its copies of the main frame buffers (its commit's), named by its frame record.
+					if (const auto frameBuffers = resources->frameBuffers.load(std::memory_order_acquire))
+						for (const auto& frameBuffer : *frameBuffers)
+							a_builder.ShaderResource(frameBuffer.copy, noViews);
 					if (scene.vertexStream)
 						a_builder.ShaderResource(*scene.vertexStream, noViews);
 					a_builder.ShaderResource(resources->blocks, noViews);
@@ -421,6 +425,9 @@ namespace DCLF
 					Register(a_graph, id(traits.blocks), resources->blocks);
 					if (resources->frameConstants)
 						Register(a_graph, id("frame-constants"), resources->frameConstants);
+					if (const auto frameBuffers = resources->frameBuffers.load(std::memory_order_acquire))
+						for (const auto& frameBuffer : *frameBuffers)
+							Register(a_graph, id(fmt::format("frame-buffer.t{}", frameBuffer.textureRegister)), frameBuffer.copy);
 					if (resources->depth)
 						Register(a_graph, id("depth"), resources->depth);
 					Register(a_graph, id(traits.target), resources->target);
@@ -448,8 +455,8 @@ namespace DCLF
 			};
 
 			/**
-			 * @brief The targets the view's latched copies write: the draw count, the blocks, a view's own frame constants, each face's bucket
-			 * counts and draw families' rows and lists.
+			 * @brief The targets the view's latched copies write: the draw count, the blocks, a view's own frame constants and frame buffers'
+			 * copies, each face's bucket counts and draw families' rows and lists.
 			 */
 			std::function<std::vector<LatchedTarget>()> LatchedTargets(std::shared_ptr<ViewResources> a_resources)
 			{
@@ -457,6 +464,9 @@ namespace DCLF
 					std::vector<LatchedTarget> out{ { resources->count, nullptr }, { resources->blocks, nullptr } };
 					if (resources->frameConstants)
 						out.push_back({ resources->frameConstants, nullptr });
+					if (const auto frameBuffers = resources->frameBuffers.load(std::memory_order_acquire))
+						for (const auto& frameBuffer : *frameBuffers)
+							out.push_back({ frameBuffer.copy, nullptr });
 					std::array<bool, Extensions::kDrawFamilies> families{};
 					for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
 						families[d] = FamilySetUp(*resources->main->scene, static_cast<Api::DrawFamily>(d)) && resources->faceLists[d][0];

@@ -41,11 +41,19 @@
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/AdvancedSkin.h"
+#include "Features/DrawcallLimitFix/Integrations/CloudShadows/CloudShadows.h"
+#include "Features/DrawcallLimitFix/Integrations/DynamicCubemaps/DynamicCubemaps.h"
+#include "Features/DrawcallLimitFix/Integrations/ExponentialHeightFog/ExponentialHeightFog.h"
+#include "Features/DrawcallLimitFix/Integrations/IBL/IBL.h"
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
 #include "Features/DrawcallLimitFix/Integrations/LinearLighting/LinearLighting.h"
+#include "Features/DrawcallLimitFix/Integrations/Skylighting/Skylighting.h"
 #include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
 #include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
+#include "Features/DrawcallLimitFix/Integrations/TerrainShadows/TerrainShadows.h"
 #include "Features/DrawcallLimitFix/Integrations/TruePBR/TruePBRIntegration.h"
+#include "Features/DrawcallLimitFix/Integrations/VolumetricShadows/VolumetricShadows.h"
+#include "Features/DrawcallLimitFix/Integrations/WaterEffects/WaterEffects.h"
 
 #include <array>
 #include <cstddef>
@@ -79,11 +87,27 @@ namespace DCLF::Features
 		}
 
 		// Every frame texture's register (Api::FrameTexture; its HLSL declares the same: Effects' soft depth, Effect.hlsl's
-		// DCLFEffectSoftDepth; Integrations/TerrainBlending's mask, TerrainBlending.hlsli's TerrainBlendingMaskTexture): none Core's, a frame
+		// DCLFEffectSoftDepth; Integrations/TerrainBlending's mask, TerrainBlending.hlsli's TerrainBlendingMaskTexture; the CS features'
+		// views, their own HLSL's: Volumetric Shadows' SharedShadowMap, Cloud Shadows' CloudShadowsTexture, Exponential Height Fog's
+		// ExponentialHeightFogIntegratedLightScattering, Dynamic Cubemaps' EnvReflectionsTexture and EnvTexture, Skylighting's SkylightingProbeArray and ShadowVisibilityProbeArray, Terrain Shadows' ShadowHeightTexture, Water Effects'
+		// WaterCaustics, IBL's EnvIBLTexture, SkyIBLTexture, StaticDiffuseIBLTexture and StaticSpecularIBLTexture): none Core's, a frame
 		// binding's or another's.
 		constexpr std::uint32_t kFrameTextureRegisters[] = {
 			Effects::kSoftDepthRegister,
 			Integrations::TerrainBlending::kMaskRegister,
+			Integrations::VolumetricShadows::kSharedShadowMapRegister,
+			Integrations::CloudShadows::kCloudOcclusionRegister,
+			Integrations::ExponentialHeightFog::kLightScatteringRegister,
+			Integrations::DynamicCubemaps::kReflectionsRegister,
+			Integrations::DynamicCubemaps::kEnvironmentRegister,
+			Integrations::Skylighting::kProbeArrayRegister,
+			Integrations::Skylighting::kShadowVisibilityRegister,
+			Integrations::TerrainShadows::kShadowHeightRegister,
+			Integrations::WaterEffects::kCausticsRegister,
+			Integrations::IBL::kEnvironmentRegister,
+			Integrations::IBL::kSkyRegister,
+			Integrations::IBL::kStaticDiffuseRegister,
+			Integrations::IBL::kStaticSpecularRegister,
 		};
 
 		constexpr bool FrameTextureRegistersValid()

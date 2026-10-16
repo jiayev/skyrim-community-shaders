@@ -9765,6 +9765,17 @@ is still the frame before's. Their staleness rule is now: this frame's depth com
     colour commit, they were covered on 9-17 of 300 frames once a payload was installed nearly every frame.
 -   Measured: before, 4 of 7 motion runs (m196-m202) lost the device; after, 4 of 4 (m203-m206) did not, the faces drawn
     as before (600 of 600 a window once settled), the bridge (y85) with 0 of 600 face cameras differing.
+-   Their frame textures (t16 and up) came only from the registered frame textures and the character light, so the CS
+    features' views the engine's own face draws had (CS binds them in its prepasses) read null. Since round 3 an integration
+    per CS feature registers its own view (`Integrations/{VolumetricShadows,ExponentialHeightFog,CloudShadows,DynamicCubemaps,
+    Skylighting,TerrainShadows,WaterEffects,IBL}`: t18, t19, t25, t30, t31, t50, t53, t60, t65, t76-t79; t18 and t30 the views
+    CS last bound there, `VolumetricShadows::boundSharedShadowMap` and `DynamicCubemaps::boundReflectionsView`), null wherever
+    CS may have bound another there, and with `capturedWhenNull`, so the main view's colour draws read what they captured as
+    before. Deferred's t98 (the sun cascades, a CPU-written structured buffer) is a frame buffer: the faces have copies of
+    their own of the main frame buffers (`ViewResources::frameBuffers`, made again when the main ones' shape changes), filled
+    by their commit from the buffer bound at the register then and its CPU mirror, this frame's contents
+    (`LatchFrameBuffer`, shared with the main colour commit). Left null, on purpose: Light Limit Fix's t35-t37
+    (dclf-lod.md, "Water reflections").
 
 ## Point lights' culls: the category filter, and the light candidates (2026-10-01)
 
