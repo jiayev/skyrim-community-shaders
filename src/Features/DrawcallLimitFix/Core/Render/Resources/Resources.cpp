@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/ScheduleDump.h"
 
 namespace DCLF::Draws
 {
@@ -317,7 +318,7 @@ namespace DCLF
 			}
 		PostRevisionInputs();
 		// The graph is rebuilt with the new resources on its next epoch.
-		host->AddExtension(kExtensionId, [state] { return MakeMainOpaqueExtension(state); });
+		host->AddExtension(kExtensionId, [state] { return Diagnostics::ScheduleDumped(kExtensionId, MakeMainOpaqueExtension(state)); });
 		logger::info("[DCLF] Main-pass graph resources: {} targets {}x{}, depth format {}", targets.colorCount, width, height, static_cast<int>(targets.depth));
 		return true;
 	}
@@ -635,7 +636,7 @@ namespace DCLF
 			return ShadowNotReady(2, "no device address for the shadow buffers");
 		}
 		shadow = state;
-		host->AddExtension(kShadowExtensionId, [state] { return MakeShadowExtension(state); });
+		host->AddExtension(kShadowExtensionId, [state] { return Diagnostics::ScheduleDumped(kShadowExtensionId, MakeShadowExtension(state)); });
 		logger::info("[DCLF] shadow view graph resources created");
 		PostRevisionInputs();
 		return true;
@@ -647,7 +648,7 @@ namespace DCLF
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (const auto request = shadowSlotsSlot.Take(); request && host && shadow && request->slots > shadow->sequences.size()) {
 			AddShadowViewSlots(*shadow, request->slots, request->sequenceDraws, request->bucketCountWords);
-			host->AddExtension(kShadowExtensionId, [state = shadow] { return MakeShadowExtension(state); });
+			host->AddExtension(kShadowExtensionId, [state = shadow] { return Diagnostics::ScheduleDumped(kShadowExtensionId, MakeShadowExtension(state)); });
 			PostRevisionInputs();
 		}
 	}
@@ -764,7 +765,7 @@ namespace DCLF
 		r.targetTexture = a_texture;
 		r.width = info.image.extent.width;
 		r.height = info.image.extent.height;
-		host->AddExtension(kViewSlots[ViewIndex(a_kind)].extensionId, [state = view.resources] { return MakeViewExtension(state); });
+		host->AddExtension(kViewSlots[ViewIndex(a_kind)].extensionId, [state = view.resources, id = kViewSlots[ViewIndex(a_kind)].extensionId] { return Diagnostics::ScheduleDumped(id, MakeViewExtension(state)); });
 		logger::info("[DCLF] {} {} imported: {}x{}, {} faces, format {}", traits.name, traits.target, r.width, r.height, info.image.arrayLayers, static_cast<int>(view.targets.colour));
 		PostRevisionInputs();
 		return true;
@@ -812,7 +813,7 @@ namespace DCLF
 			logger::info("[DCLF] {} depth imported: {}x{}, format {}", traits.name, info.image.extent.width, info.image.extent.height, static_cast<int>(dsvDesc.Format));
 		}
 		r.rebuildPending = false;
-		host->AddExtension(kViewSlots[ViewIndex(a_kind)].extensionId, [state = view.resources] { return MakeViewExtension(state); });
+		host->AddExtension(kViewSlots[ViewIndex(a_kind)].extensionId, [state = view.resources, id = kViewSlots[ViewIndex(a_kind)].extensionId] { return Diagnostics::ScheduleDumped(id, MakeViewExtension(state)); });
 		PostRevisionInputs();
 		return true;
 	}
@@ -855,7 +856,7 @@ namespace DCLF
 		shadow->depthTexture[a_index] = a_texture;
 		shadow->depthLayers[a_index] = info.image.arrayLayers;
 		// A new resource for the passes to bind: the graph is rebuilt on the next epoch.
-		host->AddExtension(kShadowExtensionId, [state = shadow] { return MakeShadowExtension(state); });
+		host->AddExtension(kShadowExtensionId, [state = shadow] { return Diagnostics::ScheduleDumped(kShadowExtensionId, MakeShadowExtension(state)); });
 		logger::info("[DCLF] shadow map {} imported: {}x{}, {} slices, format {}", a_label, info.image.extent.width, info.image.extent.height,
 			info.image.arrayLayers, static_cast<int>(dsvDesc.Format));
 		return true;
