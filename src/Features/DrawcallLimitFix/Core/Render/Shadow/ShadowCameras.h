@@ -80,8 +80,8 @@ namespace DCLF::ShadowCameras
 	 * are the observers' alone (Diagnostics::ShadowViewTally).
 	 *
 	 * Render thread: written by the sun's camera hook (CalculateActiveShadowCasterLights, before the full-frustum cull and Accumulate),
-	 * read by the shadow views' capture and the inputs' preparation on the same thread; SunAccumulation's registration threads read the
-	 * cascades only after its bitsReady release, which follows.
+	 * read by the shadow views' capture and the inputs' preparation on the same thread; the Sun source's accumulation (Features/Shadows/Sun)
+	 * reads the cascades on its registration threads only after its bitsReady release, which follows.
 	 */
 	struct SunFrame
 	{

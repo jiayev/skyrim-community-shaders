@@ -26,7 +26,7 @@ if(DCLF_TEST_SHARED_GRAPH)
 endif()
 add_executable(DclfKeptStateTests KeptStateTests.cpp ../../src/Features/DrawcallLimitFix/Core/Runtime/KeptState.h ../../src/Features/DrawcallLimitFix/Core/Runtime/SlotTable.h)
 target_compile_features(DclfKeptStateTests PRIVATE cxx_std_20)
-target_sources(DclfKeptStateTests PRIVATE ../../src/Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h)
+target_sources(DclfKeptStateTests PRIVATE ../../src/Features/DrawcallLimitFix/Integrations/AdvancedSkin/OwnerValues.h)
 target_include_directories(DclfKeptStateTests PRIVATE ../../src)
 find_package(Threads REQUIRED)
 target_link_libraries(DclfKeptStateTests PRIVATE Threads::Threads)  # the concurrent writes after PrepareWrites

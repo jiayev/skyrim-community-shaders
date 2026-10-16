@@ -172,18 +172,18 @@ namespace DCLF::Diagnostics
 				return a_list;
 			};
 			if (slots.shadowKeysUsed.size() != dense.shadowKeysUsed.size() || sorted(slots.shadowTextureSet) != sorted(dense.shadowTextureSet) ||
-				slots.actorObjects.size() != dense.actorObjects.size()) {
+				slots.classMembers[static_cast<std::size_t>(Api::EntryClass::ActorOwned)].objects.size() != dense.classMembers[static_cast<std::size_t>(Api::EntryClass::ActorOwned)].objects.size()) {
 				++walkParity.differ;
 				note("a per-frame list", nullptr);
 			} else {
 				std::vector<const RE::BSGeometry*> slotActors, denseActors;
-				for (const auto o : slots.actorObjects)
+				for (const auto o : slots.classMembers[static_cast<std::size_t>(Api::EntryClass::ActorOwned)].objects)
 					slotActors.push_back(slots.objectGeometry[o]);
-				for (const auto o : dense.actorObjects)
+				for (const auto o : dense.classMembers[static_cast<std::size_t>(Api::EntryClass::ActorOwned)].objects)
 					denseActors.push_back(dense.objectGeometry[o]);
 				std::sort(slotActors.begin(), slotActors.end());
 				std::sort(denseActors.begin(), denseActors.end());
-				if (slotActors != denseActors || !std::is_sorted(slots.actorObjects.begin(), slots.actorObjects.end())) {
+				if (slotActors != denseActors || !std::is_sorted(slots.classMembers[static_cast<std::size_t>(Api::EntryClass::ActorOwned)].objects.begin(), slots.classMembers[static_cast<std::size_t>(Api::EntryClass::ActorOwned)].objects.end())) {
 					++walkParity.differ;
 					note("the actor list", nullptr);
 				}

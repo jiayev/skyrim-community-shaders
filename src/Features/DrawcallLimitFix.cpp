@@ -11,6 +11,7 @@
 #	include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #	include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #	include "Features/DrawcallLimitFix/Features/FeatureList.h"
+#	include "Features/DrawcallLimitFix/Integrations/IntegrationList.h"
 #	include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #	include "DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #	include "DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -20,7 +21,6 @@
 #	include "DrawcallLimitFix/Diagnostics/TestHarness.h"
 #	include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#	include "DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #	include "DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #	include "DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
 #	include "Features/Skylighting.h"
@@ -89,7 +89,8 @@ void DrawcallLimitFix::PostPostLoad()
 	// their engine hooks (after DCLF's own: Features/TreeWind's tree manager hooks follow the primary cull's stand-in; Features/Particles'
 	// snapshots of NiParticleSystem's update; Features/Lod's LOD gates, the engine's LOD swaps gated on DCLF's claims; Features/Faces'
 	// thunks in the face morphing).
-	DCLF::Extensions::InstallFeatures(DCLF::Features::List());
+	// The integrations after them (Integrations/IntegrationList.cpp: Integrations/AdvancedSkin's wetness).
+	DCLF::Extensions::InstallFeatures(DCLF::Features::List(), DCLF::Integrations::List());
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();

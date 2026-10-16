@@ -14,8 +14,8 @@ namespace DCLF::Api
 	/** @brief Where in the report a feature's lines go; lines at one point run in registration order. */
 	enum class ReportPoint : std::uint8_t
 	{
-		// The render thread's report (Reports::RenderThread, at Present, once a frame number), after the sun accumulation's lines, before
-		// the primary cull's: every frame, so the lines test their own report frames (Reports::Due) and conditions. Logged lines, handed
+		// The render thread's report (Reports::RenderThread, at Present, once a frame number), first (Features/Shadows/Sun's accumulation
+		// lines), before the primary cull's: every frame, so the lines test their own report frames (Reports::Due) and conditions. Logged lines, handed
 		// the frame.
 		RenderThread,
 		// The primary cull's lines (Reports::PrimaryCullLines), after its scene lists' and culls-off lines, before the point lights':

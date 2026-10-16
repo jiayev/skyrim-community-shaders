@@ -84,7 +84,7 @@ namespace DCLF::Eligibility
 		}
 
 		if (g.skin) {
-			if (!ActiveToggles().skinned)
+			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Skinned))
 				return Ineligible::Skinned;
 			// The skinned path (engine notes: skinning): a NiSkinInstance, or with CS_DCLF_SKIN_PARTITIONS a
 			// BSDismemberSkinInstance or several partitions, and a palette the native shader could index (240
@@ -99,7 +99,7 @@ namespace DCLF::Eligibility
 			const auto partitions = static_cast<std::uint32_t>(g.partitions.size());
 			if (!g.skinPartition || !g.skinData || partitions == 0 || g.boneCount == 0 || g.boneCount * 3 > 240)
 				return Ineligible::SkinShape;
-			if ((partitions > 1 || dismember) && !ActiveToggles().skinPartitions)
+			if ((partitions > 1 || dismember) && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::SkinPartitions))
 				return Ineligible::SkinShape;
 			if (partitions > kMaxSkinPartitions)
 				return Ineligible::SkinShape;

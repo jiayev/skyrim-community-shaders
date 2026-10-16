@@ -26,8 +26,6 @@ namespace DCLF
 		std::uint8_t cullMode = 0;
 
 		// The object classes (LightingDescriptors):
-		// single-partition NiSkinInstance shapes, palettes from the engine;
-		bool skinned = false;
 		// kProjectedUV objects (snow and moss projection);
 		bool projectedUv = false;
 		// terrain, the MTLand and MTLandLODBlend techniques (MtLandEnabled adds the Terrain Blending condition);
@@ -42,8 +40,6 @@ namespace DCLF
 		// the refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward;
 		// on by default: CS_DCLF_REFRACTION=0 seeds it off);
 		bool refraction = false;
-		// skins of several partitions (LOD trees, actor bodies), one draw per partition the engine would draw;
-		bool skinPartitions = false;
 
 		// The shadow views are drawn by the render graph.
 		bool shadows = false;
@@ -54,7 +50,8 @@ namespace DCLF
 		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull).
 		bool excludePrimaryEntries = false;
 
-		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/TreeWind: trees;
+		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/Skins: the skinned and
+		// skins of several partitions; Features/TreeWind: trees;
 		// Features/Effects, Features/Particles, Features/Billboards, Features/SwitchNodes, Features/Decals, Features/Actors: theirs; Features/Lod: object and
 		// terrain LOD; Features/TreeLod: tree LOD; Features/FirstPerson: a view; Features/OcclusionMaps: its maps), ...
 		std::uint32_t registered = 0;
@@ -102,14 +99,14 @@ namespace DCLF
 
 	/**
 	 * @brief Every flag of ToggleSet, in menu order; a flag comes after the flags it needs. The features' toggles are among them (each
-	 * after the Core toggle it names) once they registered; read-only after the install.
+	 * after or before the toggle it names) once every feature registered (Toggles::SeedRegistered); read-only after the install.
 	 */
 	std::span<const ToggleInfo> ToggleTable();
 
 	/**
-	 * @brief Main thread, at install (Extensions::InstallFeatures, for a_feature): a feature's toggle, into the table after the Core
-	 * toggle its after names. Fails the install past the packed word's bits, for an after Core does not have, or a need not listed before it
-	 * (Core's, or a feature's registered earlier).
+	 * @brief Main thread, at install (Extensions::InstallFeatures, for a_feature): a feature's toggle, its bit taken now; Toggles::
+	 * SeedRegistered places it in the table by its after or before (Core's toggle or a feature's, registered before it or after) once every
+	 * feature registered. Fails the install past the packed word's bits, for a name taken, or both an after and a before.
 	 */
 	Api::ToggleId RegisterToggle(const Api::FeatureToggle& a_toggle, std::string_view a_feature);
 	/** @brief A toggle by its name (ToggleInfo::name): a feature's id (none: no such toggle, or Core's). Any thread after the install. */
@@ -150,8 +147,10 @@ namespace DCLF
 		bool Editable(const ToggleInfo& a_info) const;
 
 		/**
-		 * @brief Main thread, after the features' install: the Core flags' needs by name resolved (ToggleInfo::needNames; fails the install
-		 * for one listed after its flag), then the features' toggles seeded from their switches, into both sets.
+		 * @brief Main thread, after the features' install: the features' toggles placed in the table by their anchors and their needs
+		 * resolved (fails the install for an anchor no toggle is, anchors that loop, or a need not listed before its toggle), the Core
+		 * flags' needs by name resolved (ToggleInfo::needNames; fails the install for one listed after its flag), then the features'
+		 * toggles seeded from their switches, into both sets.
 		 */
 		void SeedRegistered();
 

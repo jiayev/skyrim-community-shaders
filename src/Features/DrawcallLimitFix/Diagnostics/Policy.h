@@ -22,9 +22,6 @@ namespace DCLF::Policy
 	/** @brief The local light culls are filtered by DCLF's exclusion on frame a_frame (else the engine culls every candidate). Normal path: true. */
 	bool FilterLightCulls(std::uint32_t a_frame);
 
-	/** @brief The sun's cascades skip the entries DCLF excludes on frame a_frame (else the engine accumulates them). Normal path: true. */
-	bool ExcludeSun(std::uint32_t a_frame);
-
 	/** @brief The engine's scene lists are kept as DCLF's filter leaves them on frame a_frame (else the engine builds them whole). Normal path: true. */
 	bool FilterSceneLists(std::uint32_t a_frame);
 

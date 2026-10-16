@@ -1,13 +1,13 @@
 #pragma once
 
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
 
-namespace DCLF::Diagnostics
+namespace DCLF::Features::Shadows::Sun
 {
 	/** @brief The sun observers' read-only view of SunAccumulation's frame state (SunAccumulation befriends it). Render thread. */
 	struct SunAccumulationView
 	{
-		/** @brief The cascade culls skip the excluded entries this frame (else nothing: Policy::ExcludeSun). */
+		/** @brief The cascade culls skip the excluded entries this frame (else nothing: ExcludeSun, SunAccumulation.cpp). */
 		static bool SkipExcluded() { return SunAccumulation::Get().frameState.skipExcluded; }
 		static bool ExclusionLive() { return SunAccumulation::Get().exclusionLive.load(std::memory_order_relaxed); }
 		/** @brief a_geometry under an entry this frame's exclusion excludes. */

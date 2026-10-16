@@ -1,5 +1,7 @@
 #pragma once
 
+// Advanced Skin's owner index: the actors' wetness, one value per actor fanned out to its meshes. Render thread.
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -8,12 +10,13 @@
 #include <utility>
 #include <vector>
 
-namespace DCLF
+namespace DCLF::Integrations::AdvancedSkin
 {
-	// Actor-owned slots grouped by actor, with one sampled value per actor fanned out to its slots. The coordinator keeps one in its
-	// tables (membership only) and the render thread its own from the published changes (FrameView, where values are sampled).
+	// Actor-owned slots grouped by actor, with one sampled value per actor fanned out to its slots. The render thread keeps one from the
+	// published membership changes (the wetness field's membership; the coordinator's tables keep membership only: SceneTables::
+	// classMembers), where values are sampled (its capture).
 	// IDs include incarnations; no engine pointers or deferred engine reads are stored here. Consume only after a writer batch.
-	class ActorValueIndex
+	class OwnerValues
 	{
 	public:
 		using Value = std::array<float, 4>;

@@ -9,6 +9,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ProgramFamilySlots.h"
+#include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 
@@ -290,18 +291,8 @@ namespace DCLF::Diagnostics
 						held.emissiveMult);
 				}
 			}
-			// The wetness, as the frame's start captured it (Skin::GetWetness's same-frame value: no second advance): a mesh named this
-			// frame (joined, or its record rewritten) takes its value with the next frame's capture.
-			auto& skin = globals::features::skin;
-			const bool wetness = skin.loaded && skin.settings.EnableSkin;
-			for (const auto o : tables.actorObjects) {
-				if (o >= rows->size() || o >= named.size() || named[o] || !tables.objectGeometry[o])
-					continue;
-				++sp.wetness;
-				const float4 value = wetness ? skin.GetWetness(tables.objectGeometry[o]) : float4{};
-				const float expected[4] = { value.x, value.y, value.z, value.w };
-				sp.wetnessDiffer += std::memcmp(expected, (*rows)[o].skinPerGeometry, sizeof(expected)) != 0;
-			}
+			// The wetness, as the frame's start captured it: Integrations/AdvancedSkin's.
+			Integrations::AdvancedSkin::CheckRowWetness(tables, *rows, named);
 		}
 
 		void OnPrepassBegin(const On<ScenePoint::PrepassConstantsBegin>&)

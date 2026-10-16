@@ -394,7 +394,8 @@ namespace DCLF::Scene
 	void Coordinator::SweepObjectSlots()
 	{
 		// Consumers look objects up in the per-frame index lists by binary search (the capture check's actor check).
-		std::sort(tables.actorObjects.begin(), tables.actorObjects.end());
+		for (auto& members : tables.classMembers)
+			std::sort(members.objects.begin(), members.objects.end());
 		if (denseWalk) {
 			tables.liveObjects = static_cast<std::uint32_t>(tables.objects.size());
 			return;

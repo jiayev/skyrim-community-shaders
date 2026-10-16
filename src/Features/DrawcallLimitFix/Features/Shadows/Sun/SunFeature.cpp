@@ -1,10 +1,11 @@
-// Shadows/Sun: the Sun source, its hooks (the accumulation's, still Core's SunAccumulation, and the camera hook, SunViews), and their
-// parity (Diagnostics/).
+// Shadows/Sun: the Sun source, its hooks (the accumulation's, SunAccumulation, and the camera hook, SunViews), their report lines and
+// their parity (Diagnostics/).
 
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunViews.h"
 
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/Diagnostics/SunCasters.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
@@ -39,12 +40,18 @@ namespace DCLF::Features::Shadows::Sun
 		{
 			// The directional views draw while the source is registered; its cameras are the hook's (the Sun board).
 			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Sun, .fullFrustumWindowEnd = &FullFrustumWindowEnd });
+			// The accumulation's lines, every frame (they test their report frames and the install themselves).
+			a_context.RegisterReportLines({ .name = "sun accumulation", .point = Api::ReportPoint::RenderThread, .lines = &SunAccumulationLines });
 			// CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the sun views, the accumulation's cascades and the entry rule's planes
 			// against the engine's.
 			if (Diagnostics::Observe().claimsOrScene) {
 				SubscribeSunViewParity();
 				SubscribeSunEntryPlanesParity();
 			}
+			// CS_DCLF_PERSISTENT_PARITY: the sun exclusion's watch, an unclaimed caster under an excluded entry on the frames the cascades
+			// skip nothing.
+			if (Diagnostics::Observe().scene)
+				SunCasters::Install();
 		}
 	}
 

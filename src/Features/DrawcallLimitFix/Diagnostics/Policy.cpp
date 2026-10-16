@@ -25,12 +25,6 @@ namespace DCLF::Policy
 		return !(Diagnostics::Observe().scene && Diagnostics::ParityDue(a_frame));
 	}
 
-	bool ExcludeSun(std::uint32_t a_frame)
-	{
-		// The sun exclusion's check watches the excluded entries' registrations on its frames.
-		return !(Diagnostics::Observe().scene && Diagnostics::ParityDue(a_frame));
-	}
-
 	bool FilterSceneLists(std::uint32_t a_frame)
 	{
 		// The scene lists' check compares the engine's whole lists against DCLF's enumeration on its frames.

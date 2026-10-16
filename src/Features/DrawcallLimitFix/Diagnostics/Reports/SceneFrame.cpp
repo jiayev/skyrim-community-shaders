@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
+#include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 
 // The render thread's scene lines: what it keeps of the scene (the pipeline constants, the shading and extras checks, tree LOD's mirror,
@@ -34,10 +35,10 @@ namespace DCLF::Reports
 			auto& sp = diagnostics.shading;
 			text += fmt::format("[DCLF] shading (sampled at the frame's start for the slots its events name): {:.1f} LOD fade events, {:.1f} emittance events, {:.1f} "
 								"named a frame; parity at Prepass against the frame's rows: {} checks, {} slots compared, changed since the frame's start: {} named for "
-								"the next frame, {} queued, {} missed{}{}; wetness {} meshes, {} differ{}\n",
+								"the next frame, {} queued, {} missed{}{}{}\n",
 				static_cast<double>(ss.lodFadeEvents) / frames, static_cast<double>(ss.emittanceEvents) / frames, static_cast<double>(ss.resampled) / frames, sp.checks,
-				sp.slots, sp.named, sp.late, sp.missing, sp.checks ? (sp.missing ? " <- MISSED; first: " : " <- OK") : "", sp.first, sp.wetness, sp.wetnessDiffer,
-				sp.wetness ? (sp.wetnessDiffer ? " <- DIFFER" : " <- OK") : "");
+				sp.slots, sp.named, sp.late, sp.missing, sp.checks ? (sp.missing ? " <- MISSED; first: " : " <- OK") : "", sp.first,
+				Integrations::AdvancedSkin::TakeRowWetnessText());
 			ss = {};
 			sp = {};
 		}

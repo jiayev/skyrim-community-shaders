@@ -154,7 +154,9 @@ namespace DCLF
 		std::uint32_t slot = kNoObjectSlot;
 		std::uint32_t pass = 0;   // its pipeline's pass descriptor
 		bool member = false;      // a resident record's (SampleShading's a_member)
-		bool actor = false;       // owned by an actor: its wetness is CaptureWetness's; else zero
+		// The shading fields it owns (SceneTables::ShadingFieldsOwned, a bit by Api::ShadingRowField: a member of the field's class, its
+		// value the field's capture's); every other field zero.
+		std::uint8_t fieldsOwned = 0;
 	};
 
 	/**
@@ -170,12 +172,8 @@ namespace DCLF
 		std::uint32_t row = 0;
 	};
 
-	/** @brief One actor-owned slot's wetness, as the frame's start captured it (Skin::GetWetness). */
-	struct WetnessValue
-	{
-		std::uint32_t slot = kNoObjectSlot;
-		std::array<float, 4> value{};
-	};
+	/** @brief One member slot's shading field value, as the frame's start captured it (Extensions::CaptureShadingFields). */
+	using ShadingFieldValue = Api::ShadingFieldValue;
 
 	// The light entries (IsLightEntry): a key of lightDependents gaining its first geometry, losing its last, or every key gone, as
 	// the coordinator's changes (onto the log: PublicationDeltas::lightEntries) and the render thread's set kept from them. Changes, not
@@ -191,7 +189,7 @@ namespace DCLF
 	 * the publication's order: the main claims' changes against the publication before it (taken up to the installed one), and the
 	 * frame inputs (taken up to the newest one taken): the walks' placement plans, the slots named for their shading, the fade and
 	 * components' seed requests, the switches the walks applied (switchResync: PrimaryCull reads them all), the import leases of the geometry
-	 * slots cleared, and the actors' wetness membership changes.
+	 * slots cleared, and the published entry classes' membership changes (the shading fields' members: the actors' wetness).
 	 */
 	struct PublicationDeltas
 	{
@@ -209,7 +207,8 @@ namespace DCLF
 		std::vector<const RE::NiAVObject*> switches;
 		bool switchResync = false;
 		std::vector<std::shared_ptr<const void>> retiredImports;
-		std::vector<SceneTables::ActorWetnessChange> actorWetness;
+		// By published entry class (Api::EntryClass): its membership writes (SceneTables::ClassMembers::changes), for the shading fields.
+		std::array<std::vector<Api::ClassMemberChange>, Extensions::kPublishedEntryClasses> classMembers;
 		std::vector<LightEntryChange> lightEntries;
 		// By coordinator component (Api::CoordinatorComponentId): the deltas its passes published (CoordinatorComponentContext::PublishDelta),
 		// handed to its adoption.

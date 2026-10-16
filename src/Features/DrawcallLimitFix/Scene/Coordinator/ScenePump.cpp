@@ -343,7 +343,7 @@ namespace DCLF::Scene
 	{
 		return !publicationJoined.empty() || !publicationLeft.empty() || placementPlanReady || !placementPlansHeld.empty() || !shadingNamed.empty() ||
 		       !fadeSeedRequests.empty() || !componentSeedRequests.empty() || !switchesApplied.empty() || switchResync || !retiredImports.empty() ||
-		       !tables.actorWetnessChanges.empty() || !lightEntryChanges.empty() || !componentDeltaRequests.empty();
+		       tables.ClassMemberChangesPending() || !lightEntryChanges.empty() || !componentDeltaRequests.empty();
 	}
 
 	Coordinator::PublishKey Coordinator::CurrentPublishKey() const

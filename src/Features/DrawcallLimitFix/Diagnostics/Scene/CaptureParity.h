@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 
 namespace DCLF
@@ -153,14 +154,11 @@ namespace DCLF
 		std::uint64_t inheritedFilters = 0;    // bound material textures whose filter mode neither SetupTechnique nor SetupMaterial sets
 		std::uint64_t lightChecks = 0;
 		std::uint64_t lightMismatches = 0;  // StrictLightData (LLF, PS b3) differs
-		// Advanced Skin: its per-material textures (PS t71, t74) against the material record, its wetness (PS b7)
-		// against the frame's shading row, and whether the object's actor ownership (Coordinator::Tracked::actorOwned) still holds.
+		// Advanced Skin: its per-material textures (PS t71, t74) against the material record; its wetness (PS b7) against the frame's
+		// shading row, and whether the object's actor ownership still holds (Integrations/AdvancedSkin's parity).
 		std::uint64_t skinTextureChecks = 0;
 		std::uint64_t skinTextureMismatches = 0;
-		std::uint64_t skinWetnessChecks = 0;
-		std::uint64_t skinWetnessMismatches = 0;
-		std::uint64_t skinWetDraws = 0;  // checked draws with sweat or water wetness (x or y)
-		std::uint64_t skinOwnerMismatches = 0;
+		Integrations::AdvancedSkin::DrawWetnessParity skinWetness;
 		// TruePBR: its landscape layers (PS t80-t91) against the material record.
 		std::uint64_t truePBRTextureChecks = 0;
 		std::uint64_t truePBRTextureMismatches = 0;

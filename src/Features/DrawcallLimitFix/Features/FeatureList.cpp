@@ -15,6 +15,7 @@
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/Local.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
+#include "Features/DrawcallLimitFix/Features/Skins/Skins.h"
 #include "Features/DrawcallLimitFix/Features/SwitchNodes/SwitchNodes.h"
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
@@ -34,10 +35,14 @@ namespace DCLF::Features
 		// Reflection next: its early hooks (the water reflection's update, add-roots and face render) run before every other feature's and
 		// Core's observers, where the shell installed them; its toggle's bit follows
 		// the maps', where Core's was; its switch and toggle are listed after the precipitation mask's, before the first person's (which
-		// follow them there); it registers no pool, stage or product. Actors next: its early hooks (Actor::SetAlpha and the actors' move
-		// writers) right after the reflection's, its three move writers reserved first (slots 2-4, before the particles'); its switch is
-		// listed after the skin partitions', before tree wind's and the decals' (which follow it there); it registers no pool, stage or
-		// product. Tree wind next:
+		// follow them there); it registers no pool, stage or product. Skins next: before the features that read skins (DEPENDS: Effects,
+		// first person); its switches are listed after the culling's, the skin partitions' after the skinned's (the actors', tree wind's and
+		// the decals' follow it there), its skinned toggle before the projected's (tree wind's and the decals' follow it there) and its skin
+		// partitions' after the tree LOD's (the actors' follow it there); its toggles' bits follow the reflection's; its report line is the
+		// first at the coordinator's last pass (before the decals'); no early hook, pool, stage or product. Actors next: its early hooks
+		// (Actor::SetAlpha and the actors' move writers) right after the reflection's, its three move writers reserved first (slots 2-4,
+		// before the particles'); its switch is listed after the skin partitions', before tree wind's and the decals' (which follow it
+		// there); it registers no pool, stage or product. Tree wind next:
 		// its seeds' pool runs right after the frame values' built-in parts, before the texture transforms' pool.
 		// Effects before particles and billboards: their toggles need its toggle, listed before theirs (after the forward epoch's); its
 		// opaque effects' switch is listed after tree wind's list-all (both after the primary exclusion's); its report lines are alone among
@@ -52,15 +57,17 @@ namespace DCLF::Features
 		// after tree wind's (its tables' uploads after the trees'), its stages alone at the depth segment's draw-family slots; no pool or product.
 		// Hidden nodes' early hooks after billboards' and tree LOD's (no order between them). Decals' early hooks (the decal array edits)
 		// after hidden nodes' (no order between them: no shared site); its node capture is the only one. Decals
-		// after tree wind: its switches and toggles are listed after the trees' (after the actors' and the skinned). Faces after them: its
+		// after tree wind: its switches and toggles are listed after the trees' (after the actors' and the skinned), and its candidates'
+		// report line after the skinned's. Faces after them: its
 		// coordinator component's hooks after the others' at the points they share (the slot tables' reset). First person last, after the
-		// actors (its toggle needs theirs) and after billboards (its report lines follow theirs at the draws' async work); its switches and toggle
+		// skins and the actors (its toggle needs the skinned and theirs) and after billboards (its report lines follow theirs at the draws' async work); its switches and toggle
 		// are listed after the reflection's.
 		static const std::array kFeatures{
 			OcclusionMaps::Feature(),
 			Shadows::Sun::Feature(),
 			Shadows::Local::Feature(),
 			Reflection::Feature(),
+			Skins::Feature(),
 			Actors::Feature(),
 			TreeWind::Feature(),
 			TextureTransforms::Feature(),

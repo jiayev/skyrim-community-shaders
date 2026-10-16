@@ -1,7 +1,7 @@
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/Retirement.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
-#include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
+#include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/OwnerValues.h"
 #include <cassert>
 #include <map>
 #include <random>
@@ -12,8 +12,8 @@ namespace
 {
     void TestActorValueMembership()
     {
-        DCLF::ActorValueIndex index;
-        using Value = DCLF::ActorValueIndex::Value;
+        DCLF::Integrations::AdvancedSkin::OwnerValues index;
+        using Value = DCLF::Integrations::AdvancedSkin::OwnerValues::Value;
         std::array<Value, 6> rows{};
         Value current{1, 2, 3, 4};
         unsigned sampled = 0;

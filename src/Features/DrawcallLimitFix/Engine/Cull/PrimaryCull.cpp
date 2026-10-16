@@ -13,7 +13,7 @@
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
@@ -420,7 +420,7 @@ namespace DCLF
 			return;
 		}
 		// The sun's exclusion is not a precondition: listed roots' fade is DCLF's alone, and a whole entry the sun's cull reaches
-		// without it has its casters' passes withheld (SunAccumulation, PassCapture).
+		// without it has its casters' passes withheld (the Sun source's accumulation, PassCapture).
 		if (!candidates) {
 			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
@@ -530,7 +530,7 @@ namespace DCLF
 	void PrimaryCull::NoteSetChanges(const std::vector<const RE::BSGeometry*>& a_joined, const std::vector<const RE::BSGeometry*>& a_left)
 	{
 		// A joining geometry is not main-registered, so nothing clears the light bits it gathered as the engine's: cleared once here,
-		// then kept 0 (SunAccumulation, ClearOwnedMask). Only those the installed publication claims (and so holds alive).
+		// then kept 0 (the Sun source's registration hook, ClearOwnedMask). Only those the installed publication claims (and so holds alive).
 		for (const auto* geometry : a_joined)
 			if (Scene::FrameView::Get().HeldByInstalled(geometry))
 				if (const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get())
@@ -1191,7 +1191,7 @@ namespace DCLF
 			s.switchStale += out.switchStale;
 			s.unselected += out.unselected;
 		}
-		// No activeLightMask clear: the shadow lights' registrations leave an owned geometry's 0 (SunAccumulation, ClearOwnedMask).
+		// No activeLightMask clear: the shadow lights' registrations leave an owned geometry's 0 (the Sun source's registration hook, ClearOwnedMask).
 		Diagnostics::Notify<Diagnostics::EnginePoint::ListJobsMerged>();
 		cutStats.afterTicks += Now() - start;
 	}

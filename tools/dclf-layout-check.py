@@ -10,6 +10,8 @@ Rules (always errors):
   2. No file outside the DCLF tree includes a header inside it: the rest of CS calls DCLF through the shell.
   3. Api/ includes only Api/. Core/ includes only Api/ and Core/. Features/<X>/ includes Api/, Core/, its own folder and the
      features DEPENDS names for it. Integrations/<X>/ includes Api/ and Core/.
+  4. Every feature DEPENDS names is listed in Features/FeatureList.cpp before the feature that depends on it (its registrations
+     run first: toggles, classes, report lines).
 
 Baselines (errors when exceeded, shrunk with --update):
   - the include edges into the legacy top-level folders (Runtime, Engine, Scene, Draws) from any other folder: the layering the
@@ -38,11 +40,15 @@ SHELL = {SRC / "Features" / "DrawcallLimitFix.h", SRC / "Features" / "DrawcallLi
 BASELINE = ROOT / "tools" / "dclf-layout-baseline.json"
 
 LEGACY = {"Runtime", "Engine", "Scene", "Draws"}
-# Features/<X> -> the other features it may include.
+# Features/<X> -> the other features it may include (and that are listed before it in Features/FeatureList.cpp).
 DEPENDS = {
     "Shadows/Sun": set(),
     "Shadows/Local": set(),
+    "FirstPerson": {"Actors", "Skins"},
+    "Effects": {"Skins"},
 }
+FEATURE_LIST = TREE / "Features" / "FeatureList.cpp"
+FEATURE_ENTRY = re.compile(r"^\s*((?:\w+::)+)Feature\(\),")
 MAX_NLOC = 120
 MAX_CCN = 40
 
@@ -95,6 +101,30 @@ def allowed(source, target):
     return True  # legacy folders and Diagnostics: counted, not ruled
 
 
+def feature_order():
+    """Features/FeatureList.cpp's features in list order, by folder (Shadows::Sun -> Shadows/Sun)."""
+    order = []
+    for line in FEATURE_LIST.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = FEATURE_ENTRY.match(line)
+        if m:
+            order.append(m.group(1).rstrip(":").replace("::", "/"))
+    return order
+
+
+def depends_order_errors():
+    """Rule 4: each DEPENDS entry listed, and listed before its dependent."""
+    errors = []
+    order = feature_order()
+    for dependent, needed in sorted(DEPENDS.items()):
+        for feature in sorted(needed | {dependent}):
+            if feature not in order:
+                errors.append(f"Features/FeatureList.cpp: {feature} (DEPENDS) is not listed")
+        for feature in sorted(needed):
+            if feature in order and dependent in order and order.index(feature) > order.index(dependent):
+                errors.append(f"Features/FeatureList.cpp: {dependent} is listed before {feature}, which it depends on (DEPENDS)")
+    return errors
+
+
 def complexity():
     try:
         out = subprocess.run([sys.executable, "-m", "lizard", "--csv", str(TREE), str(SRC / "Features" / "DrawcallLimitFix.cpp")],
@@ -140,6 +170,8 @@ def main():
                 errors.append(f"{rel}:{number}: {source_module} includes {target_module} ({target.relative_to(TREE).as_posix()})")
             if target_module in LEGACY and source_module != target_module and source_module not in ("Diagnostics", "."):
                 edges[f"{source_module} -> {target_module}"] += 1
+
+    errors += depends_order_errors()
 
     over = complexity()
     baseline = json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() else {}

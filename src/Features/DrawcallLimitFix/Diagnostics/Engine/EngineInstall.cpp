@@ -10,7 +10,6 @@
 #include "Registrations.h"
 #include "RegistrationCensus.h"
 #include "ReleaseGuard.h"
-#include "SunCasters.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 namespace DCLF::Diagnostics
@@ -32,13 +31,11 @@ namespace DCLF::Diagnostics
 		// CS_DCLF_CENSUS: the passes the registration hooks hand on to the engine.
 		RegistrationCensus::Install();
 		// The portal views and the light selection against the engine's (both parities; the shadow views' are their sources' features':
-		// their install) and the sun exclusion's watch (CS_DCLF_PERSISTENT_PARITY).
+		// their install, as is the sun exclusion's watch).
 		if (o.claimsOrScene) {
 			PortalParity::Install();
 			LightSelectionParity::Install();
 		}
-		if (o.scene)
-			SunCasters::Install();
 		// CS_DCLF_SET_PARITY: the members' withheld forward and refraction passes (the particle members' and the Effect Lighting ones are their
 		// features').
 		if (o.claims)

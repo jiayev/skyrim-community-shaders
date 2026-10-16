@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
-#include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Scene/Channels.h"
 #include "Features/DrawcallLimitFix/Scene/Model/FrameTables.h"
 
@@ -287,10 +286,10 @@ namespace DCLF::Scene
 		/** @brief Render thread, frame start: the slots named since the last take, once (from the publication log). */
 		std::vector<ShadingItem> TakeShadingItems() { return std::exchange(frameShading, {}); }
 		/**
-		 * @brief Render thread, frame start: every actor's wetness (Skin::GetWetness, whose first call a frame advances the actor's
-		 * fade: not thread-safe), fanned out to meshes whose value changed or that joined.
+		 * @brief Render thread: the newest publication's geometry by object slot (empty without one), held by it until the next install
+		 * (the shading fields' captures: Extensions::CaptureShadingFields).
 		 */
-		std::vector<WetnessValue> CaptureWetness();
+		std::span<RE::BSGeometry* const> NewestObjectGeometry() const;
 		/** @brief Render thread, frame start: the walks' plans since the last take, oldest first (FrameValues draws with the newest). */
 		std::vector<std::shared_ptr<const PlacementPlan>> TakePlacementPlans() { return std::exchange(framePlans, {}); }
 		/**
@@ -381,9 +380,6 @@ namespace DCLF::Scene
 		std::vector<std::vector<FadeSeedItem>> frameComponentSeeds;  // by coordinator component
 		ankerl::unordered_dense::set<const RE::NiAVObject*> frameLightEntrySet;
 		std::shared_ptr<const ankerl::unordered_dense::set<RE::NiNode*>> frameCategoryNodes;  // the installed publication's (IsCategoryNode)
-		// CaptureWetness's actor index: membership from the coordinator's walks (SceneTables::actorWetnessChanges, via the log);
-		// values and fan-out are the render thread's.
-		ActorValueIndex frameActorWetness;
 		// The main camera's accumulator, latched non-null.
 		RE::BSGraphics::BSShaderAccumulator* latchedAccumulator = nullptr;
 		// HandOverAtFrameStart: the installed publication's lookups and catalog, the newest published while none is installed.

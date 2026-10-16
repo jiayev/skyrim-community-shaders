@@ -30,7 +30,6 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/GeometryPort.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneMirror.h"
 #include "Features/DrawcallLimitFix/Api/EntryRanges.h"
-#include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneIdentity.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
@@ -464,7 +463,6 @@ namespace DCLF
 		using PlacementPlan = DCLF::PlacementPlan;
 		using ShadingItem = DCLF::ShadingItem;
 		using FadeSeedItem = DCLF::FadeSeedItem;
-		using WetnessValue = DCLF::WetnessValue;
 		/** @brief Diagnostics (inline passes): the plan the last walk made, not yet published. */
 		const PlacementPlan* PeekPlacementPlan() const { return placementPlanReady.get(); }
 

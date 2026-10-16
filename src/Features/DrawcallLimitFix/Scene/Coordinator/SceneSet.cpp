@@ -935,7 +935,8 @@ namespace DCLF::Scene
 		a_deltas.switches = std::exchange(switchesApplied, {});
 		a_deltas.switchResync = std::exchange(switchResync, false);
 		a_deltas.retiredImports = std::exchange(retiredImports, {});
-		a_deltas.actorWetness = std::exchange(tables.actorWetnessChanges, {});
+		for (std::size_t c = 0; c < a_deltas.classMembers.size(); ++c)
+			a_deltas.classMembers[c] = std::exchange(tables.classMembers[c].changes, {});
 		a_deltas.lightEntries = std::exchange(lightEntryChanges, {});
 		// The components' published hooks before their deltas are taken (the LOD gates' observers read the flips pending).
 		ComponentsPublished();
@@ -1342,7 +1343,8 @@ namespace DCLF::Scene
 			a_column(a_left.layerOf, a_right.layerOf, kNoObjectSlot);
 		};
 		// Not published: the coordinator's alone - its walk stamps and templates, the slot tables' reference counts and free lists, the
-		// writers' scratch (shadow texture transitions, freed stream rows, the wetness index the frame keeps from the log's changes), and
+		// writers' scratch (shadow texture transitions, freed stream rows, the class members' owners and changes the frame's fields keep
+		// from the log), and
 		// what is retiring. No reader of a publication reads them; a publication's stay as they were made (empty).
 		auto unpublished = [](Tables& a_left, Tables& a_right, auto&& a_column) {
 			a_column(a_left.objectSeen, a_right.objectSeen);
@@ -1357,8 +1359,10 @@ namespace DCLF::Scene
 			a_column(a_left.extraFree, a_right.extraFree);
 			a_column(a_left.streamRowFree, a_right.streamRowFree);
 			a_column(a_left.streamRowsReleased, a_right.streamRowsReleased);
-			a_column(a_left.actorWetness, a_right.actorWetness);
-			a_column(a_left.actorWetnessChanges, a_right.actorWetnessChanges);
+			for (std::size_t c = 0; c < a_left.classMembers.size(); ++c) {
+				a_column(a_left.classMembers[c].owners, a_right.classMembers[c].owners);
+				a_column(a_left.classMembers[c].changes, a_right.classMembers[c].changes);
+			}
 			a_column(a_left.shadowTextureSeen, a_right.shadowTextureSeen);
 			a_column(a_left.shadowTextureChanges, a_right.shadowTextureChanges);
 			a_column(a_left.retiring, a_right.retiring);

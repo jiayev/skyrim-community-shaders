@@ -1,5 +1,5 @@
-// The render thread's frame report (Reports::RenderThread, from FrameDriver::EndFrame at Present): the sun and primary cull lines,
-// the leak line, GPU timings and, with CS_DCLF_STATS, the frame's statistics.
+// The render thread's frame report (Reports::RenderThread, from FrameDriver::EndFrame at Present): the features' render-thread lines
+// (the sun accumulation's), the primary cull lines, the leak line, GPU timings and, with CS_DCLF_STATS, the frame's statistics.
 #include "Schedule.h"
 #include "Scene.h"
 #include "Engine.h"
@@ -23,7 +23,6 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -37,7 +36,6 @@ namespace DCLF::Reports
 
 	void RenderThread(std::uint32_t a_frame)
 	{
-		SunAccumulationLines(a_frame);
 		DCLF::Extensions::ReportLinesAt(DCLF::Api::ReportPoint::RenderThread, a_frame);
 		PrimaryCullLines(a_frame);
 		Stats(a_frame, FrameDriver::Get().ReportCounters());

@@ -13,6 +13,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
@@ -92,6 +93,9 @@ namespace DCLF::Extensions
 			Api::VertexStreamContribution vertexStream{};
 			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
 			std::array<Api::PaletteRowsContribution, Api::kPaletteRowsClasses> paletteRows{};
+			// The shading fields, in registration order; whether a field is taken. Resolved at the end (ResolveShadingFields).
+			std::vector<Api::ShadingFieldContribution> shadingFields;
+			std::array<bool, kShadingRowFields> shadingFieldTaken{};
 			// By kind: Lighting's (0), then the features' ports, in order (materialPorts first unset). Resolved at the end
 			// (ResolveMaterialPorts).
 			std::array<Api::MaterialPortContribution, kMaterialKinds> materialPorts{};
@@ -691,6 +695,18 @@ namespace DCLF::Extensions
 			void RegisterFrameConstantRow(const Api::FrameConstantRow& a_row) override { AddFrameConstantRow(lists, feature, a_row); }
 			void RegisterFrameTexture(const Api::FrameTexture& a_texture) override { AddFrameTexture(lists, feature, a_texture); }
 
+			Api::ShadingFieldId RegisterShadingField(const Api::ShadingFieldContribution& a_field) override
+			{
+				if (a_field.field >= Api::ShadingRowField::Count || a_field.name.empty() || !a_field.membership || !a_field.capture ||
+					a_field.members == Api::EntryClass::None || a_field.members >= Api::EntryClass::Count)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shading field", feature));
+				if (std::exchange(lists.shadingFieldTaken[static_cast<std::size_t>(a_field.field)], true))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes shading field {} ({}), which another registration has", feature,
+						a_field.name, static_cast<std::uint32_t>(a_field.field)));
+				lists.shadingFields.push_back(a_field);
+				return { static_cast<std::uint32_t>(lists.shadingFields.size() - 1) };
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -708,7 +724,7 @@ namespace DCLF::Extensions
 				feature.earlyHooks();
 	}
 
-	void InstallFeatures(std::span<const Api::Feature> a_features)
+	void InstallFeatures(std::span<const Api::Feature> a_features, std::span<const Api::Feature> a_integrations)
 	{
 		auto& lists = Registered();
 		if (std::exchange(lists.installed, true))
@@ -725,11 +741,22 @@ namespace DCLF::Extensions
 			if (feature.install)
 				feature.install(context);
 		}
+		// The integrations after every feature (Integrations/IntegrationList.cpp): what they register may name what a feature registered
+		// (Integrations/AdvancedSkin's wetness: Features/Actors' published actor-owned class). They have no early or source hooks (the
+		// shell installs those for the features alone).
+		for (const auto& integration : a_integrations) {
+			if (integration.earlyHooks || integration.sourceHooks)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: integration {} has early or source hooks", integration.name));
+			context.feature = integration.name;
+			if (integration.install)
+				integration.install(context);
+		}
 		// The features' switches' anchors, which may name a switch a later feature registered.
 		CheckSwitchAnchors();
 		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
-		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the palette rows classes'; the material ports'
+		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the palette rows classes'; the shading fields'
+		// (and the published entry classes); the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
 		ResolveViews(lists.views, lists.viewWork, lists.viewRoots);
 		ResolveShadowViews(lists.occlusionMaps, lists.shadowSources);
@@ -738,10 +765,12 @@ namespace DCLF::Extensions
 		ResolveMainRanges(lists.mainRanges);
 		ResolveVertexStream(lists.vertexStream);
 		ResolvePaletteRows(lists.paletteRows);
+		ResolveShadingFields(lists.shadingFields);
 		ResolveMaterialPorts(lists.materialPorts, lists.materialPortCount);
 		ResolveProgramFamilies(lists.programFamilies);
 		std::ranges::sort(lists.frameConstantRows, {}, &FrameConstantRowEntry::row);
-		// The features' toggles seeded from their switches, into the requested and active sets.
+		// The features' toggles placed in the menu's table by their anchors (which may name a toggle a later feature registered), then
+		// seeded from their switches, into the requested and active sets.
 		Toggles::Get().SeedRegistered();
 	}
 

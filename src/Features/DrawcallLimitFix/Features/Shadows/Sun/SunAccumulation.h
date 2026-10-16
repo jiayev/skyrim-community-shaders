@@ -11,13 +11,10 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 
-namespace DCLF::Diagnostics
+namespace DCLF::Features::Shadows::Sun
 {
 	struct SunAccumulationView;
-}
 
-namespace DCLF
-{
 	/**
 	 * @brief The engine's work for the sun's cascades, removed where DCLF already draws the result (skyrim-engine-notes.md, "The
 	 * sun's accumulation"). AE only. Render thread, plus the registration thunks on job threads.
@@ -108,7 +105,7 @@ namespace DCLF
 
 		struct Hooks;
 		friend struct Hooks;
-		friend struct Diagnostics::SunAccumulationView;
+		friend struct SunAccumulationView;
 
 		/**
 		 * @brief Render thread, before the full-frustum cull: arms the published exclusion's veto (Hooks::AppendNonAccum), which keeps
@@ -160,7 +157,7 @@ namespace DCLF
 		{
 			std::shared_ptr<SunExclusion> exclusion;  // kept alive until the next full-frustum cull
 			std::uint32_t stamp = 0;
-			// The cascade culls skip excluded entries they reach anyway (Policy::ExcludeSun).
+			// The cascade culls skip excluded entries they reach anyway (ExcludeSun, SunAccumulation.cpp).
 			bool skipExcluded = true;
 			// Grown in the sun's Accumulate while bitsReady is clear (no reader sees it move); the first cascadeCount are this frame's.
 			std::vector<Cascade> cascades;

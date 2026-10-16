@@ -6,14 +6,11 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/PortalParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/ReleaseGuard.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Engine/SunCasters.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 
@@ -102,34 +99,5 @@ namespace DCLF::Reports
 		return fmt::format("[DCLF] anim rate (T7b2): {} predictions, {:.1f} stood-in roots a frame ({:.1f} written visible){}{}{}\n", r.predictions,
 			r.predictions ? double(r.roots) / double(r.predictions) : 0.0, r.predictions ? double(r.set) / double(r.predictions) : 0.0, sites,
 			!r.predictions ? " <- NOT COMPARED" : differ ? " <- ANIM RATE" : " <- OK", first);
-	}
-
-	void SunAccumulationLines(std::uint32_t a_frame)
-	{
-		auto& sun = SunAccumulation::Get();
-		if (!sun.Installed() || !Due(a_frame))
-			return;
-		const auto stats = sun.TakeStats();
-		const auto watch = Diagnostics::SunCasters::TakeWatch();
-		if (!stats.frames)
-			return;
-		const double toMs = MsPerTick();
-		const double frames = stats.frames;
-		const auto timing = fmt::format("; per frame, render thread: full-frustum cull {:.3f} ms (max {:.3f}), Accumulate {:.3f} ms (max {:.3f})",
-			stats.fullFrustumTicks * toMs / frames, stats.fullFrustumMax * toMs, stats.accumulateTicks * toMs / frames, stats.accumulateMax * toMs);
-		logger::info("[DCLF] sun accumulation: skipping registration on {} of {} frames; {:.0f} claimed geometries a frame not registered, {:.0f} registered by the engine, {} sun registrations outside Accumulate{}",
-			stats.activeFrames, stats.frames, stats.skipped / frames, stats.registered / frames, stats.offThread, timing);
-		if (stats.exclusionFrames || stats.exclusionStale || stats.exclusionMissing || stats.exclusionUnforwarded) {
-			const double applied = std::max<double>(stats.exclusionFrames, 1.0);
-			const auto c = sun.TakeExclusionCounts();
-			logger::info("[DCLF] sun entry exclusion: applied on {} frames ({} stale, {} with none; the builder's translation taken at {} frame starts, none for the frame's candidates at {}); per frame {:.0f} of {:.0f} objectArray entries removed, "
-						 "{:.0f} of {:.0f} candidates excluded, filter {:.3f} ms; {:.0f} registrations took DCLF's bits ({:.0f} with a cascade), {} before the cascades, "
-						 "{} cascade registrations under a removed entry; excluded entries the cascades reached anyway and skipped {:.0f} a frame, parity {} frames: {} unclaimed casters under an excluded entry{}",
-				stats.exclusionFrames, stats.exclusionStale, stats.exclusionMissing, stats.exclusionForwarded, stats.exclusionUnforwarded,
-				stats.entriesRemoved / applied, stats.entriesSeen / applied, stats.excluded / applied, stats.candidates / applied,
-				stats.filterTicks * toMs / applied, c.written / applied, c.withBits / applied, c.notReady, stats.cascadeRegistrationsUnderRemoved,
-				c.skipped / applied, watch.frames, watch.lost,
-				watch.frames ? (watch.lost ? " <- SUN EXCLUSION; first " + watch.first + " (" + Scene::Coordinator::Get().DescribeSunCandidate(watch.firstGeometry) + ")" : std::string(" <- OK")) : std::string());
-		}
 	}
 }

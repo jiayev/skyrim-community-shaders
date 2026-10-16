@@ -15,6 +15,7 @@
 #include "Features/DrawcallLimitFix/Api/Payload.h"
 #include "Features/DrawcallLimitFix/Api/Reports.h"
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
+#include "Features/DrawcallLimitFix/Api/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 #include "Features/DrawcallLimitFix/Api/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
@@ -165,6 +166,11 @@ namespace DCLF::Api
 		 * texture's, no name or no view, or past Extensions::kFrameTextureSlots textures.
 		 */
 		virtual void RegisterFrameTexture(const FrameTexture& a_texture) = 0;
+		/**
+		 * @brief Fails the install for a field another registration has (or Count), no name, membership or capture, or members None or
+		 * past the entry classes.
+		 */
+		virtual ShadingFieldId RegisterShadingField(const ShadingFieldContribution& a_field) = 0;
 
 	protected:
 		~InstallContext() = default;
