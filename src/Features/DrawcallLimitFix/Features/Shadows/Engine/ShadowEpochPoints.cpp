@@ -1,6 +1,7 @@
-// The shadow and occlusion epochs' frame points (Api::ShadowEpochsContribution), called by Core's FrameDriver from the shell's hooks: the
-// frame's shadow views' coverage and the shadow frame, the shadow epoch under shadow-maps.after, the occlusion maps' readiness and their
-// epoch under occlusion.draw, over Core's commits (IndirectDraws: ShadowCapture.cpp, ShadowEpochs.cpp).
+// The shadow and occlusion epochs' frame points (Api::ShadowEpochsContribution), called by Core's FrameDriver from the shell's hooks and the
+// feature's own (ShadowCasterPoints.cpp): the frame's shadow views' coverage, before the engine's shadow lights register, and the shadow
+// frame, the shadow epoch under shadow-maps.after, the occlusion maps' readiness and their epoch under occlusion.draw, over Core's commits
+// (IndirectDraws: ShadowCapture.cpp, ShadowEpochs.cpp).
 
 #include "Features/DrawcallLimitFix/Features/Shadows/Engine/Engine.h"
 
@@ -17,14 +18,18 @@ namespace DCLF::Features::Shadows::Engine
 		// Render thread, after the install: the epochs' triggers.
 		Api::TriggerId shadowMapsAfter, occlusionDraw;
 
+		void BeforeShadowCasters()
+		{
+			// The shadow epoch commits the installed publication's shadow payload (built ahead with it): the frame's views are DCLF's only
+			// while the selected revision recorded it, decided before any of them registers.
+			if (ActiveToggles().shadows)
+				IndirectDraws::Get().DecideShadowCoverage();
+		}
+
 		void BeforeShadowMaps()
 		{
-			// The shadow epoch commits the installed publication's shadow payload (built ahead with it).
-			if (ActiveToggles().shadows) {
-				auto& draws = IndirectDraws::Get();
-				draws.DecideShadowCoverage();
-				draws.BeginShadowFrame();
-			}
+			if (ActiveToggles().shadows)
+				IndirectDraws::Get().BeginShadowFrame();
 		}
 
 		void AfterShadowMaps()
@@ -48,6 +53,7 @@ namespace DCLF::Features::Shadows::Engine
 		shadowMapsAfter = a_context.FindTrigger("shadow-maps.after");
 		occlusionDraw = a_context.FindTrigger("occlusion.draw");
 		a_context.RegisterShadowEpochs(
-			{ .beforeShadowMaps = &BeforeShadowMaps, .afterShadowMaps = &AfterShadowMaps, .occlusionReady = &OcclusionReady, .drawOcclusion = &DrawOcclusion });
+			{ .beforeShadowCasters = &BeforeShadowCasters, .beforeShadowMaps = &BeforeShadowMaps, .afterShadowMaps = &AfterShadowMaps, .occlusionReady = &OcclusionReady,
+				.drawOcclusion = &DrawOcclusion });
 	}
 }

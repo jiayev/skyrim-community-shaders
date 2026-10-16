@@ -60,7 +60,7 @@ enforces the layout and its include rules (dclf-layout.md, "The rules").
 | `Core/Handoff/` | Where the engine's cull, registration and views meet DCLF: `PassCapture` (withholds claimed passes), `PrimaryCull` (stands in for DCLF's references in the list jobs), `SceneLists`, `ShadowViews` | render thread and the engine's cull jobs |
 | `Core/Shading/` | What a record is derived from, ported from the engine's shaders and functions: `MaterialPort*`, `MaterialHookFrame`, `MaterialWrites` (Lighting's material write hooks and the material-write sink), `MaterialSources`, `GeometryPort`, `LightingConstants`, `LightingDescriptors`, `FrameGlobals`, `ConstantEvaluator`, `EngineShaders.h`, `VertexInput` | the writer's thread (material writes); coordinator (records); render thread (frame values) |
 | `Core/Gpu/` | `FrameValues` (placements, palettes, shading and tree seeds per frame, made on the pool into pooled backings), `PooledBackings` (DCLF's ties to ORGModuleServices' `BackingPool`: allocation, release on the cleanup lane, warm spares), `FrameData`, `GpuResources`, `GpuTextures`, `BuildExecutor`, `PlacementRows/`; `Pipelines/`: `DrawPipelines` (+ `Rhi`; split by draw family into `DrawPipelines.cpp`, `DrawPipelinesImpl.h` and `{Main,Shadow,Forward,Family}Pipelines.cpp`), `ShaderPrograms`, `SpirvReflection`, `EngineStates` | render thread, pool, compile workers |
-| `Core/Render/` | The draws: `FrameDriver` (the frame's DCLF work at each engine point), `IndirectDraws.h` (their public face), `IndirectDrawStats.h`, and their implementation behind the `Internal.h` umbrella and `Impl.h` (an umbrella over `Impl/{SnapshotBuilder,Producer,Views,Stats}.h`, one base of `Impl` each): `Snapshot/` (the snapshot builder), `Revision/` (the epoch table, shapes, the revision producer and its requirements of the set `Requirements.cpp`, the revision's assembly, coverage), `Resources/` (GPU layouts, the scene's set of growable buffers `SceneBufferSet`, frame slots, resources), `Payload/` (the kept stores, the main build, growable rows, uploads, the payload's pooled versions `PayloadVersions`), `Shadow/` (the shadow engine's scene side, build, cameras and commits: `ShadowEngine`, `ShadowRevision`, `ShadowEpochs` (the commits, which Features/Shadows/Engine submits), `ShadowCapture`, `ShadowShape`, `ShadowIndexPool`, `ShadowCapability`, `ShadowPoints` (the shadow views listed at BeforeShadowMaps)), `Epochs/` (the main epochs; reflection and first person as one `ViewEpoch`, recorded in `ViewEpochRecord.cpp`), `Passes/` (the render graph passes, a file per pass group: `Common`, `Forward` (the forward sort), `Build`, `Readbacks`, `Shadow` (the shadow extension and the shadow index pool's factory), `VisibilityEvents`, and `MainExtension`, which adds the passes `PassesInternal.h`'s `Make*Pass` factories make; `IndexPoolPass.h`), `Readback/` (the visibility decode), `Views/` (the views' roots, faces and slots), `Main/` (the main frame layout and resources), `DrawFamilies/` (the family decisions and slots) | pool (builds, snapshot builder); render thread (adoption, commit, submit); GPU |
+| `Core/Render/` | The draws: `FrameDriver` (the frame's DCLF work at each engine point), `IndirectDraws.h` (their public face), `IndirectDrawStats.h`, and their implementation behind the `Internal.h` umbrella and `Impl.h` (an umbrella over `Impl/{SnapshotBuilder,Producer,Views,Stats}.h`, one base of `Impl` each): `Snapshot/` (the snapshot builder), `Revision/` (the epoch table, shapes, the revision producer and its requirements of the set `Requirements.cpp`, the revision's assembly, coverage), `Resources/` (GPU layouts, the scene's set of growable buffers `SceneBufferSet`, frame slots, resources), `Payload/` (the kept stores, the main build, growable rows, uploads, the payload's pooled versions `PayloadVersions`), `Shadow/` (the shadow engine's scene side, build, cameras and commits: `ShadowEngine`, `ShadowRevision`, `ShadowEpochs` (the commits, which Features/Shadows/Engine submits), `ShadowCapture`, `ShadowShape`, `ShadowIndexPool`, `ShadowCapability`, `ShadowPoints` (the shadow views' points: begun, each kept light, listed, in the engine's shadow-light selection; the revision inputs at BeforeShadowMaps)), `Epochs/` (the main epochs; reflection and first person as one `ViewEpoch`, recorded in `ViewEpochRecord.cpp`), `Passes/` (the render graph passes, a file per pass group: `Common`, `Forward` (the forward sort), `Build`, `Readbacks`, `Shadow` (the shadow extension and the shadow index pool's factory), `VisibilityEvents`, and `MainExtension`, which adds the passes `PassesInternal.h`'s `Make*Pass` factories make; `IndexPoolPass.h`), `Readback/` (the visibility decode), `Views/` (the views' roots, faces and slots), `Main/` (the main frame layout and resources), `DrawFamilies/` (the family decisions and slots) | pool (builds, snapshot builder); render thread (adoption, commit, submit); GPU |
 | `Core/Extensions/` | The extension registry (`Registry`: what the features registered at install, read-only after) and the Core half of each `Api/` contract, read where its extension point runs | the extension point's |
 | `Features/<X>/` | One feature each, listed in `Features/FeatureList.cpp` and installed by its `<X>Feature.cpp`, with its own observers in `Features/<X>/Diagnostics/`. Among them: `Effects` (the effect write hooks and constants), `HiddenNodes` (the hidden stores), `Faces` (the face snapshots), `Particles` (the particle snapshots), `Billboards`, `Actors` (`ActorRate.cpp`, the actors' animation stamp), `Fades` (the writers' hooks `FadeWriters` and `FadeEvents`, the fade port `FadeState`, the fade roots, seeds, resources, commit, passes and write-back), `Lod` (`LodGates`), `Portals` (`PortalViews`, `PortalShapes.h`, `RoomVisibility`), `Reflection` (`ReflectionFaces`), `LocalLights` (`LightSelection`, `LocalShadowLights`), `Shadows/Engine` (the shadow and occlusion epochs: their passes, `ShadowBuildDrawsPass` and `ShadowViewPass`, and their frame points and triggers, through `Api/ShadowEpochs.h`; namespace `DCLF::Features::Shadows::Engine`), `Shadows/Sun` (`SunAccumulation`, `SunViews`; namespace `DCLF::Features::Shadows::Sun`), `Shadows/Local` (`LocalLightCull`, `LightViews`, `FocusViews`; namespace `DCLF::Features::Shadows::Local`), `TreeWind` (`TreeList`, `TreeAnimation`), `TreeLod`, `Decals` (`DecalOrder`), `MainView` (the main view's draw passes, `MainOpaquePass`, and the main pass's capture and colour epoch at its two points, through `Api/PrimaryView.h`), `Forward`, `FirstPerson`, `GpuOcclusion`, `OcclusionMaps`, `Skins`, `SwitchNodes`, `TextureTransforms`, `Landscape` | the extension point's |
 | `Integrations/<X>/` | DCLF's side of another Community Shaders feature, listed in `Integrations/IntegrationList.cpp`: `AdvancedSkin` (`OwnerValues.h`, the owners' value index), `ExtendedTranslucency`, `LightLimitFix`, `LinearLighting`, `SubsurfaceScattering`, `TerrainBlending`, `TruePBR` | the extension point's |
@@ -4164,7 +4164,7 @@ The checklist's item 7, as far as it went. Each new behaviour has a switch. The 
 | 2b. Particle systems under billboard nodes, every view | `CS_DCLF_BILLBOARD_PARTICLES` (on) | `pFireballCore04` and `pFireEmberCloud01` (the Flames hand) members (r2, r6) |
 | 3. First-person decals | `CS_DCLF_FIRST_PERSON_DECALS` (on) | the arms' `SkinnedDecal` a member (r2, r6); a weapon's Lighting `BloodLighting`: built, not exercised (no later run put visible blood on the first-person weapon) |
 | 4. Opaque effects (hint 0) | `CS_DCLF_OPAQUE_EFFECTS` (on) | `effect-opaque` gone from the main and main depth views (r4 against r5: `Slag (Mould)`, `Slag (Bucket)`, 6 members) |
-| 5. Untracked particle systems | none | not tracked: under parentless `BSMasterParticleSystem` roots (below) |
+| 5. Untracked particle systems | `CS_DCLF_MASTER_PARTICLES` (designed) | not tracked: under parentless `BSMasterParticleSystem` roots; traced and designed, not implemented (below) |
 
 **The first-person census** (Riverwood, sword and Flames). Before (fp13): 5 passes a frame left with the engine: `pFireballCore04`,
 `pFireEmberCloud01`, `BrightGlowMesh`, `HeatRefraction` and a `SkinnedDecal`. After (r6): `HeatRefraction` alone, 1 a frame.
@@ -4277,11 +4277,60 @@ The census names an untracked geometry's chain top (`[chain N deep: ...]`, the t
 nodes' shared master systems. The engine draws them, but not through the scene graph. The weather's snow (`PCloud06*`) hangs under the
 `ShadowSceneNode`'s `Weather` node.
 
-Tracking them is not a contained change. It needs:
+**What owns them, and how the engine draws them** (AE 1.6.1170, Ghidra, round 3 phase 5; skyrim-engine-notes.md, "The master
+particle systems"):
 
--   a category root per master system, like the first-person root;
--   its lifetime events from whatever owns the masters;
--   where the masters are culled, which was not traced.
+-   **One master per addon node type, shared by every emitter of that type.** A torch holds no master: its 3D has a `BSValueNode`
+    (value `+0x12C`, the `BGSAddonNode`), which `FUN_1402df8a0`/`BSValueNode::sub` registers as an **emitter** of the master at the
+    addon's index (`addon +0x68`): appended to `master +0x128` (count `+0x138`) when the master is loaded, otherwise queued on the
+    manager's pending loads (`+0x128`). The value node holds the master (`+0x130`).
+-   **Creation.** `Job_Post_reset` (`0x1406d3750`, the post-render stage's last job) takes each finished load's model root
+    **uncloned** (the NIF's `BSMasterParticleSystem`), sets its index (`+0x158`), cap (`+0x164`) and removable flag (`+0x166`), and
+    hands it to `BSParticleSystemManager::AttachChild` (`0x140e29f90`, under the write lock `0x143284b90`), which stores it at
+    `children[index]` with the plain array set and **never sets `parent`**: the census's parentless root. The manager
+    (`0x143284b88`) is `ShadowSceneNode` child 5 (`kAlwaysDraw`).
+-   **Cull and registration.** Not through child 5 (`DrawWorld_BuildSceneLists` skips it): the manager is in the cell's portal
+    graph's `alwaysRenderChildren` (`graph +0x58`, added by `FUN_1402b7620`), which list job 0 (`FirstListAccumulationJob`) culls when
+    the entry's `visibleUnboundSpace` is set. They register into the main accumulator only, through the hint-1 insertion at
+    `0x1414b2478`: PassCapture's `MainListHook`. Not in main depth, not in any shadow view (the census agrees).
+-   **Lifetime.** `Job_Particles` updates each master on worker threads (`UpdateDownwardPass`: emitters pruned, particles advanced,
+    `NiPSysData` and bounds rewritten every frame, whatever the cull). It drops a removable master with no emitter and no live
+    particle (**refcount < 3**) with the plain array set at `0x140e2a589`: no vfunc, so DCLF's DetachChild detours never see it. The
+    world reset clears the array (`FUN_140d1d630` at `0x140649254`). Both stages finish inside the frame cycle, before the next
+    `BeginFrame`.
+-   **What DCLF has.** `Features/Particles` draws an eligible `NiParticleSystem` from snapshots, and the masters' children update
+    through the snapshot thunks' slots, so their data reaches DCLF unchanged. The census already classes them eligible. Missing is
+    membership: `GatherCategoryNodes` keeps only parentless `alwaysRenderChildren` (the manager has a parent), and the masters are not
+    in that list.
+
+**Design (not implemented).** Each master is a category root filed under itself, like the view roots, **held by key only**: the
+engine's removal test is a reference count, so any lasting reference DCLF kept would stop the removal (leaked masters). Its lifetime
+comes from events pushed before the engine lets go.
+
+-   **Signature and gather** (render thread, frame start): the manager and its children below `freeIdx` (`+0x122`) mixed, the manager
+    watched; each master into `current` and `currentRoots` with no `held` entry (an unheld `Root`, and an unheld `AlwaysRenderRoot` in
+    the coordinator), in the drawn roots, its geometry filed under it by the classification's established path.
+-   **Attach:** the manager's `AttachChild` is already detoured (`SceneTracker`), but its `NoteEdit` tests `a_child->parent`. The
+    contract is fixed in the shared component: the seven detours pass `a_this` (`NoteEdit(child, parent)`).
+-   **Removal:** a thunk at `0x140e2a589` (checked with `CallsTo`) pushes `NoteEdit(master, manager)` and `PushDetached(master)` before
+    the original clears the slot, while the subtree is still live. **Reset:** a thunk at `0x140649254` pushes the same for every child.
+-   **Withholding and per-frame data:** no change (`WithholdMain` at `MainListHook`; the existing snapshots, at most a frame behind).
+-   Pins of a master's subtree may be taken for the frame-start job; the master node goes back through `EngineReleases` when it ends.
+
+Risks: any lasting reference on a master (the guard is a parity observer); the first category root whose array owner is not its
+`parent` (a detach with no ancestors); the removal runs inside the engine-read window (counted, expected); the interior route (if
+`visibleUnboundSpace` is clear) and the emitter modifier not traced; a master has no fade node (alpha 1, unverified as the engine's).
+
+Steps, each gated by one 60 s run (motion, `CS_DCLF_PERSISTENT_PARITY`, `CS_DCLF_SET_PARITY`, torches in view at night):
+
+1.  `NoteEdit(child, parent)` in the seven detours: no behaviour change, schedule diff clean.
+2.  The removal and reset thunks, pushing detaches and counting removals: removals > 0 after leaving an area and coming back.
+3.  The unheld `Root` and `AlwaysRenderRoot`: existing roots unchanged in parity.
+4.  The signature and gather behind `CS_DCLF_MASTER_PARTICLES` (on, under `CS_DCLF_PARTICLES`): no `MPS*` chain in the census's
+    `effect: untracked, eligible`, no member drawn by the engine in main.
+5.  Visual: torch fire and candle flames the same with the switch on, off and on again; embers drift and are sorted.
+6.  Parity observers: `<- MASTER SET` (every master a category root), `<- MASTER REFS` (no reference held at frame end), `<- PARTICLES`
+    uncovered 0 for master members.
 
 The blood impact particles (`pBloodSplat02` and others) did not appear in these runs, so their chain was not read.
 
@@ -5979,7 +6028,8 @@ ms) covered it.
 
 1.  an `NiUpdateData` update, `FUN_1406452c0`, its first call (`+0xD3`);
 2.  the main camera's cull jobs (`DrawWorld_BuildSceneLists`);
-3.  `CalculateAndDrawShadowCasterLights` and the first-person cull;
+3.  `CalculateAndDrawShadowCasterLights` and the first-person cull (since round 3 the shadow views are listed, their
+    renderer maps published and their coverage decided around this call: "Shadow views and lights from DCLF");
 4.  `RenderShadowMaps` (`+0x2EC`, Deferred's hook).
 
 From steps 1 to 4 is about 1.2 ms in the exterior. `DrawcallLimitFix::BeginSceneFrame` now runs from a hook on
@@ -9371,6 +9421,21 @@ view's draw for them. The engine's values are the parity's alone (`CS_DCLF_SET_P
         hemisphere 0's slice, not the slice it holds (which is stale). Predicting the held slice put two views on one placement
         (s3: `<- HOLES`).
     -   Reads at Rebuild: the descriptors' assignments and clear flags and the free mask: allocation state, not a cull.
+-   **When the list, its renderer map and its coverage are decided (round 3, phase 3).** In the engine's shadow-light
+    selection, not at `BeforeShadowMaps` (skyrim-engine-notes.md, "The shadow lights' selection"), so that the withholding,
+    the sun's claims (`SunAccumulation`'s `call.claims`) and the census all test this frame's coverage.
+    Features/Shadows/Engine hooks Main::Draw's call of `CalculateAndDrawShadowCasterLights` (`ShadowCasterPoints.cpp`):
+    -   Before it (`FrameDriver::BeforeShadowCasters`): Core begins the views (`Draws::BeginShadowViews`: the view capacity,
+        `ShadowViews::BeginCasters`), then the shadow epochs' `beforeShadowCasters` decides their coverage
+        (`IndirectDraws::DecideShadowCoverage`, view-independent: `ShadowViews::SetDrawable(false)` while the selected revision
+        has no shadow recording or the installed publication no shadow payload).
+    -   At each light kept (both calls of `FUN_1414a3fb0`, which writes the light into its `shadowLightsAccum` slots right before
+        its Accumulate: the sun's, then each kept light's): `FrameDriver::ShadowCasterKept` -> `ShadowViews::AddCaster`, the
+        light's views covered and the renderer maps republished before its registrations.
+    -   When it returns (`FrameDriver::ShadowCastersSelected`): `Draws::ListShadowViews` = `ShadowViews::Rebuild` from DCLF's
+        selection, which publishes the maps (empty with no selection).
+    -   `BeforeShadowMaps` keeps the revision inputs (`Draws::NoteShadowRevisionInputs`) and `BeginShadowFrame` (which counts a
+        frame whose views DCLF would draw but does not, `ShadowViews::Unrecorded`).
 -   **Still the engine's:** the scissor rectangle (`+0x544..`; no DCLF reader), the raster state at the draw (T7), and
     UpdateCamera and sub themselves (T2b, deferred to T7).
 

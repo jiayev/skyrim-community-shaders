@@ -136,7 +136,7 @@ namespace DCLF
 	 *
 	 * The views list's input (ShadowViews::LightSlots, Core's: the list is built from it), which the selection publishes. Render thread:
 	 * invalidated at the selection's start and published at its end (an early return leaves it invalid), read by the shadow views' rebuild
-	 * later in the frame.
+	 * right after (the end of CalculateAndDrawShadowCasterLights).
 	 */
 	struct LightSlotFrame
 	{
@@ -145,6 +145,7 @@ namespace DCLF
 		std::span<const RE::BSShadowLight* const> focusHosts;
 		std::uint32_t focusCount = 0;  // the focus views each host draws (the targets, at most 4)
 		bool valid = false;
+		bool published = false;  // the selection has published once (its hook is in): the views' renderers may be published light by light
 
 		void Invalidate()
 		{
@@ -161,6 +162,7 @@ namespace DCLF
 			focusHosts = a_focusHosts;
 			focusCount = a_focusCount;
 			valid = true;
+			published = true;
 		}
 		/** @brief This frame's slots, or null before the selection has run this frame. */
 		const LightSlotFrame* Current(std::uint32_t a_sceneFrame) const { return valid && sceneFrame == a_sceneFrame ? this : nullptr; }
@@ -171,15 +173,19 @@ namespace DCLF
 	 *
 	 * One view per `ShadowmapDescriptor`: a cascade of the sun, a spot light's frustum, one hemisphere of
 	 * a paraboloid light, or one of the four focus shadows (engine notes: shadow maps). The list is
-	 * rebuilt at `BeforeShadowMaps` from the shadow scene node's caster array, which is the same order
-	 * and the same set the engine's own `Render` loop walks a moment later.
+	 * rebuilt when CalculateAndDrawShadowCasterLights returns, from DCLF's selection of the shadow scene
+	 * node's caster array, which is the same order and the same set the engine's own `Render` loop walks
+	 * at the shadow draw. Before that, as the engine keeps each light and before it accumulates it
+	 * (`AddCaster`), the light's views are covered and their renderers published, so that every
+	 * registration is withheld by this frame's coverage (engine notes: "The shadow lights' selection").
 	 *
 	 * A view is identified downstream by its accumulator and by its batch renderer: the accumulator is
 	 * what `FinishAccumulatingPreResolveDepth` is called on when the view is drawn, and the batch renderer
 	 * is what the engine registers the view's Utility passes with - which is how a captured registration
 	 * is attributed to a view, as the diagnostics' `mainBatchRenderers` attributes the main camera's.
 	 *
-	 * Render thread only, and valid only between BeforeShadowMaps and the end of the frame's shadow draws.
+	 * Render thread only, and valid only between the end of CalculateAndDrawShadowCasterLights and the end of the frame's shadow
+	 * draws.
 	 */
 	class ShadowViews
 	{
@@ -240,20 +246,32 @@ namespace DCLF
 		/** @brief The selection's slots the list is rebuilt from (render thread; see LightSlotFrame). */
 		static LightSlotFrame& LightSlots();
 
-		/** @brief How many shadow views DCLF can draw this frame (its view slots' buffers); UINT32_MAX: no bound. Before Rebuild. */
+		/** @brief How many shadow views DCLF can draw this frame (its view slots' buffers); UINT32_MAX: no bound. Before BeginCasters. */
 		void SetViewCapacity(std::uint32_t a_views) { viewCapacity = a_views; }
 		/** @brief The frame's shadow-mode views DCLF would draw with slots enough (covered or not): what its slots grow to. */
 		std::uint32_t Candidates() const { return candidates; }
 
-		/** @brief Rebuilds the list from the shadow scene node; call at BeforeShadowMaps. */
+		/**
+		 * @brief Before the engine keeps its first shadow light (CalculateAndDrawShadowCasterLights' call): the list dropped, the frame's
+		 * views DCLF's until SetDrawable, and no renderer published.
+		 */
+		void BeginCasters();
+		/**
+		 * @brief After BeginCasters, before the first light is kept: whether the frame's views are DCLF's (IndirectDraws::DecideShadowCoverage:
+		 * false while the scene revision has no shape for their layout). When not, the engine draws every one whole; nothing is withheld.
+		 */
+		void SetDrawable(bool a_drawable);
+		/**
+		 * @brief The engine kept a_light in a_slots slots from a_firstSlot (FUN_1414a3fb0) and accumulates it next: its views covered and
+		 * the renderers published with them, before its registrations.
+		 */
+		void AddCaster(const RE::BSShadowLight* a_light, std::uint32_t a_firstSlot, std::uint32_t a_slots);
+		/** @brief Rebuilds the list from DCLF's selection and publishes its renderers; call once the engine's selection is done. */
 		void Rebuild();
 		/** @brief Drops the list (the frame's shadow draws are over, or the feature is off). */
 		void Clear();
-		/**
-		 * @brief After Rebuild, before the engine draws a view: none of the frame's views is DCLF's (IndirectDraws::DecideShadowCoverage:
-		 * the scene revision has no shape for their layout). The engine draws every one whole; nothing is withheld.
-		 */
-		void UncoverAll();
+		/** @brief The frame's list has views DCLF would draw, but not this frame (SetDrawable): the engine draws them (the report's count). */
+		bool Unrecorded() const { return unrecorded; }
 
 		std::span<const View> All() const { return views; }
 		bool Valid() const { return valid; }
@@ -274,10 +292,18 @@ namespace DCLF
 		std::vector<View> views;
 		std::vector<std::uint32_t> captures;  // by view, this frame
 		void PredictTargets();
+		/** @brief Appends a_light's views at a_lightIndex: its descriptors', then a_focusCount focus views. */
+		void AddLightViews(RE::BSShadowLight& a_light, std::uint32_t a_lightIndex, std::uint32_t a_focusCount);
+		/** @brief Decides the coverage of the views from a_first on, continuing the candidates' count; whether one is covered. */
+		bool CoverFrom(std::size_t a_first);
+		/** @brief The covered views' renderers to PassCapture (the registration hook's withholding), whole. */
+		void PublishRenderers();
 		ankerl::unordered_dense::map<const RE::BSBatchRenderer*, std::uint32_t> batchToView;
 		ankerl::unordered_dense::map<const void*, std::uint32_t> accumulatorToView;
 		bool valid = false;
 		std::uint32_t viewCapacity = UINT32_MAX;
 		std::uint32_t candidates = 0;
+		bool drawable = true;     // the frame's views are DCLF's (SetDrawable)
+		bool unrecorded = false;  // a view would be covered but the frame's are not DCLF's
 	};
 }

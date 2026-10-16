@@ -1,7 +1,8 @@
-// ShadowViews: the caster verdicts (ShadowCasterReject, on whichever thread classifies) and the frame's shadow view list (Rebuild,
-// render thread at BeforeShadowMaps).
+// ShadowViews: the caster verdicts (ShadowCasterReject, on whichever thread classifies) and the frame's shadow view list (render thread:
+// BeginCasters and AddCaster as the engine selects its shadow lights, Rebuild once the selection is done).
 
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
@@ -173,6 +174,103 @@ namespace DCLF
 		accumulatorToView.clear();
 		valid = false;
 		candidates = 0;
+		unrecorded = false;
+	}
+
+	void ShadowViews::BeginCasters()
+	{
+		// Before the first shadow light's Accumulate: none of the frame's lights is in yet, so nothing registered from here on is withheld
+		// by the last frame's renderers. The frame's verdict is DCLF's until the coverage decision says otherwise (SetDrawable).
+		Clear();
+		drawable = true;
+		PublishRenderers();
+	}
+
+	void ShadowViews::AddCaster(const RE::BSShadowLight* a_light, std::uint32_t a_firstSlot, std::uint32_t a_slots)
+	{
+		// The engine has just kept a_light (FUN_1414a3fb0, its slots in shadowLightsAccum), its UpdateCamera run and its focus flag set, and
+		// is about to Accumulate it: its views, as Rebuild will list them from DCLF's selection (a slot each, the focus views once, after
+		// the first's), are covered and their renderers published before any of its registrations. Not before the selection has published
+		// once (LightSlotFrame::published): without it Rebuild lists no view, so nothing may be withheld.
+		auto* light = const_cast<RE::BSShadowLight*>(a_light);
+		if (!light || !LightSlots().published)
+			return;
+		const std::size_t first = views.size();
+		const std::uint32_t focusCount = std::min<std::uint32_t>(Engine::Global<std::uint32_t>(Engine::Address::kFocusTargetCount), 4u);
+		for (std::uint32_t s = 0; s < a_slots; ++s)
+			AddLightViews(*light, a_firstSlot + s, s == 0 && light->GetRuntimeData().drawFocusShadows ? focusCount : 0u);
+		if (CoverFrom(first))
+			PublishRenderers();
+	}
+
+	void ShadowViews::AddLightViews(RE::BSShadowLight& a_light, std::uint32_t a_lightIndex, std::uint32_t a_focusCount)
+	{
+		auto* light = &a_light;
+		const std::uint32_t lightIndex = a_lightIndex;
+		const Kind kind = light->GetIsDirectionalLight() ? Kind::Directional :
+		                  light->GetIsFrustumLight()     ? Kind::Frustum :
+		                  light->GetIsParabolicLight()   ? Kind::Parabolic :
+		                                                   Kind::Other;
+		auto& data = light->GetRuntimeData();
+		const auto add = [&](const RE::BSShadowLight::ShadowmapDescriptor& a_descriptor, std::uint32_t a_index, bool a_focus) {
+			View view;
+			view.light = light;
+			view.lightIndex = lightIndex;
+			view.kind = kind;
+			view.descriptor = a_index;
+			view.focus = a_focus;
+			auto* accumulator = a_descriptor.shaderAccumulator.get();
+			view.accumulator = accumulator;
+			auto* accumulatorData = accumulator ? accumulator->GetRuntimeData() : nullptr;
+			view.batch = accumulatorData ? accumulatorData->batchRenderer : nullptr;
+			view.renderMode = accumulatorData ? static_cast<std::uint32_t>(accumulatorData->renderMode) : 0u;
+			view.renderTarget = static_cast<std::uint32_t>(a_descriptor.renderTarget);
+			view.slice = a_descriptor.shadowmapIndex;
+			static_assert(sizeof(a_descriptor.port) == sizeof(Port));
+			std::memcpy(&view.port, &a_descriptor.port, sizeof(view.port));
+			view.clear = a_descriptor.clearRenderTarget;
+			view.enabled = a_descriptor.isEnabled;
+			const auto id = static_cast<std::uint32_t>(views.size());
+			if (accumulator)
+				accumulatorToView.try_emplace(accumulator, id);
+			if (view.batch) {
+				batchToView.try_emplace(view.batch, id);
+				// A geometry group sorts its passes in a batch renderer of its own, as the main
+				// camera's does; a registration into one of those belongs to this view too.
+				for (auto* group : view.batch->geometryGroups) {
+					if (group && group->batchRenderer)
+						batchToView.try_emplace(group->batchRenderer, id);
+				}
+			}
+			views.push_back(view);
+		};
+		for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d)
+			add(data.shadowmapDescriptors[d], d, false);
+		// A focus host's focus views (Render draws descriptors 0..count-1).
+		for (std::uint32_t d = 0; d < a_focusCount; ++d)
+			add(data.focusShadowmapDescriptors[d], d, true);
+	}
+
+	bool ShadowViews::CoverFrom(std::size_t a_first)
+	{
+		// DCLF's views: its candidates in the engine's order, within the slots its buffers hold (SetViewCapacity); a view of a source no
+		// feature takes (Extensions::ShadowViewSet::sourceOf) is the engine's. On a frame whose views are not DCLF's (SetDrawable), none
+		// is covered: the engine draws every one whole and nothing is withheld.
+		bool covered = false;
+		const auto& shadowViews = Extensions::ShadowViewsSet();
+		for (std::size_t i = a_first; i < views.size(); ++i) {
+			auto& view = views[i];
+			const auto source = shadowViews.sourceOf[static_cast<std::size_t>(view.kind)][view.focus ? 1 : 0];
+			const bool candidate = view.renderMode >= PassCapture::kFirstShadowMode &&
+			                       view.renderMode < PassCapture::kFirstShadowMode + PassCapture::kShadowModes &&
+			                       (source == Api::ShadowSource::Count || shadowViews.sources[static_cast<std::size_t>(source)].registered);
+			const bool wouldCover = candidate && candidates < viewCapacity;
+			view.covered = wouldCover && drawable;
+			unrecorded = unrecorded || (wouldCover && !drawable);
+			covered = covered || view.covered;
+			candidates += candidate ? 1u : 0u;
+		}
+		return covered;
 	}
 
 	void ShadowViews::Rebuild()
@@ -180,10 +278,13 @@ namespace DCLF
 		Clear();
 		// DCLF's selection's slots (the LightSlots board, Features/LocalLights' selection publishes it): shadowLightsAccum as
 		// CalculateActiveShadowCasterLights fills it, the array GetShadowCasterLightArrayEntry indexes - the lights, in the sequence,
-		// the engine renders a moment later. None this frame (no selection ran): no views, and the engine draws them.
+		// the engine renders a moment later. None this frame (no selection ran): no views, and the engine draws them, with no renderer
+		// published (not the last list's, nor the ones AddCaster published).
 		const auto* selection = LightSlots().Current(Scene::FrameView::Get().GetFrame());
-		if (!selection)
+		if (!selection) {
+			PublishRenderers();
 			return;
+		}
 		std::uint32_t lightIndex = 0;
 		std::vector<const RE::BSShadowLight*> focusAdded;
 		for (const auto* selected : selection->slots) {
@@ -192,69 +293,23 @@ namespace DCLF
 				++lightIndex;
 				continue;
 			}
-			const Kind kind = light->GetIsDirectionalLight() ? Kind::Directional :
-			                  light->GetIsFrustumLight()     ? Kind::Frustum :
-			                  light->GetIsParabolicLight()   ? Kind::Parabolic :
-			                                                   Kind::Other;
-			auto& data = light->GetRuntimeData();
-			const auto add = [&](const RE::BSShadowLight::ShadowmapDescriptor& a_descriptor, std::uint32_t a_index, bool a_focus) {
-				View view;
-				view.light = light;
-				view.lightIndex = lightIndex;
-				view.kind = kind;
-				view.descriptor = a_index;
-				view.focus = a_focus;
-				auto* accumulator = a_descriptor.shaderAccumulator.get();
-				view.accumulator = accumulator;
-				auto* accumulatorData = accumulator ? accumulator->GetRuntimeData() : nullptr;
-				view.batch = accumulatorData ? accumulatorData->batchRenderer : nullptr;
-				view.renderMode = accumulatorData ? static_cast<std::uint32_t>(accumulatorData->renderMode) : 0u;
-				view.renderTarget = static_cast<std::uint32_t>(a_descriptor.renderTarget);
-				view.slice = a_descriptor.shadowmapIndex;
-				static_assert(sizeof(a_descriptor.port) == sizeof(Port));
-				std::memcpy(&view.port, &a_descriptor.port, sizeof(view.port));
-				view.clear = a_descriptor.clearRenderTarget;
-				view.enabled = a_descriptor.isEnabled;
-				const auto id = static_cast<std::uint32_t>(views.size());
-				if (accumulator)
-					accumulatorToView.try_emplace(accumulator, id);
-				if (view.batch) {
-					batchToView.try_emplace(view.batch, id);
-					// A geometry group sorts its passes in a batch renderer of its own, as the main
-					// camera's does; a registration into one of those belongs to this view too.
-					for (auto* group : view.batch->geometryGroups) {
-						if (group && group->batchRenderer)
-							batchToView.try_emplace(group->batchRenderer, id);
-					}
-				}
-				views.push_back(view);
-			};
-			for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d)
-				add(data.shadowmapDescriptors[d], d, false);
-			// A focus host's focus views (the LightSlots board: DCLF's hosts and target count: Render draws descriptors 0..count-1), once per light.
-			if (std::find(selection->focusHosts.begin(), selection->focusHosts.end(), light) != selection->focusHosts.end() &&
-				std::find(focusAdded.begin(), focusAdded.end(), light) == focusAdded.end()) {
+			// A focus host's focus views (the LightSlots board: DCLF's hosts and target count), once per light.
+			const bool focusHost = std::find(selection->focusHosts.begin(), selection->focusHosts.end(), light) != selection->focusHosts.end() &&
+			                       std::find(focusAdded.begin(), focusAdded.end(), light) == focusAdded.end();
+			if (focusHost)
 				focusAdded.push_back(light);
-				for (std::uint32_t d = 0; d < selection->focusCount; ++d)
-					add(data.focusShadowmapDescriptors[d], d, true);
-			}
+			AddLightViews(*light, lightIndex, focusHost ? selection->focusCount : 0u);
 			++lightIndex;
 		}
 		PredictTargets();
 		captures.assign(views.size(), 0);
 		valid = true;
-		// DCLF's views: its candidates in the engine's order, within the slots its buffers hold (SetViewCapacity); a view of a source no
-		// feature takes (Extensions::ShadowViewSet::sourceOf) is the engine's.
-		candidates = 0;
-		const auto& shadowViews = Extensions::ShadowViewsSet();
-		for (auto& view : views) {
-			const auto source = shadowViews.sourceOf[static_cast<std::size_t>(view.kind)][view.focus ? 1 : 0];
-			const bool candidate = view.renderMode >= PassCapture::kFirstShadowMode &&
-			                       view.renderMode < PassCapture::kFirstShadowMode + PassCapture::kShadowModes &&
-			                       (source == Api::ShadowSource::Count || shadowViews.sources[static_cast<std::size_t>(source)].registered);
-			view.covered = candidate && candidates < viewCapacity;
-			candidates += candidate ? 1u : 0u;
-		}
+		(void)CoverFrom(0);
+		PublishRenderers();
+	}
+
+	void ShadowViews::PublishRenderers()
+	{
 		// The shadow renderers by render mode, for the registration hook's withholding (the set's shadow phases): DCLF's views'.
 		// Published whole; the hook runs on the engine's registration threads.
 		auto renderers = std::make_shared<PassCapture::ShadowRendererMap>();
@@ -353,12 +408,10 @@ namespace DCLF
 		}
 	}
 
-	void ShadowViews::UncoverAll()
+	void ShadowViews::SetDrawable(bool a_drawable)
 	{
-		for (auto& view : views)
-			view.covered = false;
-		PassCapture::Get().SetShadowBatchRenderers(std::make_shared<PassCapture::ShadowRendererMap>());
-		PassCapture::Get().SetFocusBatchRenderers(std::make_shared<PassCapture::ShadowRendererMap>());
+		// Decided at BeginCasters, before any light is in: the views AddCaster and Rebuild list from here are covered by it.
+		drawable = a_drawable;
 	}
 
 	std::uint32_t ShadowViews::ViewOfAccumulator(const void* a_accumulator) const

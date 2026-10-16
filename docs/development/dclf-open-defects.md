@@ -329,8 +329,15 @@ Times are inclusive ms a frame, median frame (9.4 ms) / worst 30 frames (30.7 ms
     -   Particle effects (3).
     -   DistantTree (about 2, plus about 2 each in two unnamed views).
 -   **Sun cascades: about 12 passes, about 4.6 of them DCLF members the engine still draws.** The census flags these
-    `<- DEFECT`, and point shadows the same way (0.7 a frame).
+    `<- DEFECT`, and point shadows the same way (0.7 a frame). **Cause found and fixed (round 3, phase 3; validated in census run d23):** the
+    registrations were tested against the last frame's shadow coverage and renderer map, the census against this frame's (see
+    "T7a census" below).
 -   **Occlusion, Skylighting occlusion, precipitation occlusion and first person:** a few passes each.
+
+**After round 3 (2026-10-16, census):** the engine keeps about 110 passes a frame, and none of them is a DCLF member's.
+-   Main: about 75 (water, sky, grass, about 3 particle effects).
+-   The reflection faces: only the sky, about 21. DCLF draws the faces on every frame.
+-   Sun cascades: about 5, none a member.
 
 **Engine work on the render thread:**
 -   **The water reflection: 1.66 / 5.3 ms** (`TESWaterReflections::Update`, two `BSCubeMapCamera::RenderFace` a frame).
@@ -408,6 +415,17 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
     established). Open: an exclusion for every
     frame (the last one translated to the frame's candidates, or the cascades drawn from the kept state) would remove the engine's
     cascade culls there too.
+    **Cause (round 3, phase 3):** the shadow views' renderer map (`ShadowViews::Rebuild`) and their coverage
+    (`IndirectDraws::DecideShadowCoverage`) were decided at `BeforeShadowMaps`, after every shadow light had registered in
+    `CalculateAndDrawShadowCasterLights`. So the withholding and the sun's claims tested the last frame's map and coverage while the
+    census tested this frame's: on a frame turning covered (startup, a load: no shadow recording or payload yet, then one) every member
+    registered unwithheld (`MEMBER drawn by the engine`); on one turning uncovered the members were withheld from views DCLF did not draw
+    (lost casters for a frame); and a point light kept this frame was in no map. `Rebuild` with no selection also left the last map
+    published. **Fixed (validated, census run d23):** the coverage is decided before Main::Draw calls `CalculateAndDrawShadowCasterLights`,
+    each kept light's views are covered and their renderers published at `FUN_1414a3fb0`, before its `Accumulate`, and the list is
+    rebuilt from DCLF's selection when the call returns (`Features/Shadows/Engine/ShadowCasterPoints.cpp`; skyrim-engine-notes.md, "The
+    shadow lights' selection"); `Rebuild` with no selection publishes an empty map. **Measured (d23):** 0 member passes drawn by the
+    engine in every window, the first after the load included; full capture parity clean apart from the known defects.
 -   **T7b1 `<- ACCUMULATED DIFFER`** (w159): on compared frames, roots the engine alone sets are effect and untracked roots
     ('FXAmbWaterfallSalmon01.nif') and geometry the engine alone sets is mostly stale under a root the engine failed; 'Emerald'
     is DCLF's alone every frame. (The readback's missing batches are structural and being fixed.)
@@ -428,6 +446,8 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
 -   **`<- FADE STATE` (w169, interiors):** 1 differ of 320 root updates (currentFade 0.982 against 0.990); new since T7b4's milestone
     key change (LOD level, transition state) - check the port's key.
 -   **Census `<- DEFECT` in point shadows** (w168: 50 member passes in a window, 'MountainCliffSlope:0'), beside the sun cascades'.
+    **Fixed with them (round 3, phase 3; validated in census run d23):** a point light newly kept this frame was in no renderer map at its
+    registration; its views are now covered at its `FUN_1414a3fb0`, before its `Accumulate`.
 -   **`<- TREE MANAGER` coverage:** the tree list compared only 0-1 BSTreeNode a frame at Riverwood (all skipped both ways); the
     animation list's clock compared 3 nodes in a window (most leaf roots are not DCLF's). Needs a cell with BSTreeNode trees (T7f: none
     found in five exteriors, below).

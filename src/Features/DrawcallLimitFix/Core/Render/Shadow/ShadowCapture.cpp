@@ -248,22 +248,22 @@ namespace DCLF
 
 	void IndirectDraws::DecideShadowCoverage()
 	{
+		// Before the engine keeps its first shadow light (ShadowViews::BeginCasters), so that every registration and the sun's claims
+		// test this frame's verdict. Nothing it reads changes before the shadow draw: the frame's start adopted the revision and installed
+		// the publication.
 		if (failed || !impl->shadowEngine->shadow || impl->shadowEngine->shadowPlacements.empty())
-			return;
-		auto& views = ShadowViews::Get();
-		const auto all = views.All();
-		if (std::none_of(all.begin(), all.end(), [](const ShadowViews::View& a_view) { return a_view.covered; }))
 			return;
 		// The views are DCLF's once the selected revision has the shadow epoch's recording (shaped for all placements) on the built
 		// graph and the installed publication has a shadow payload; until then (startup, a toggle) the engine's. Both are trusted.
-		if (!impl->EpochCovered(EpochOfShape(ShapeKind::Shadow, kShadowShape)) || !impl->installedDraws || !impl->installedDraws->shadow) {
-			++impl->shadowUnrecorded;
-			views.UncoverAll();
-		}
+		if (!impl->EpochCovered(EpochOfShape(ShapeKind::Shadow, kShadowShape)) || !impl->installedDraws || !impl->installedDraws->shadow)
+			ShadowViews::Get().SetDrawable(false);
 	}
 
 	void IndirectDraws::BeginShadowFrame()
 	{
+		// A frame whose listed views DCLF would draw but does not (DecideShadowCoverage).
+		if (ShadowViews::Get().Unrecorded())
+			++impl->shadowUnrecorded;
 		impl->shadowEngine->pendingViews.clear();
 	}
 
