@@ -163,6 +163,11 @@ Next steps:
 -   Check whether the `DetachChild2At` thunk reads the child after the original call.
 -   The dump is kept as scratch `refactor2/v3-motion.dmp`.
 
+It happened again on 2026-10-16, in a motion timing run (fdt2) of the Fades F3 build, about 100 s into the run, with the same stack:
+`DetachChild2At<0>::thunk+0x65`, then `SkyrimSE+0xd1d32e`, `call qword ptr [rax+1B8h]` through the child's vtable, read as float
+data (`3f8000003f800000`). So the child is already freed when the engine's original detach runs inside the thunk. Its dump is kept as
+scratch `refactor2/fdt2-motion.dmp`.
+
 ## Accumulated writes parity (A5): an intermittent entry write the incremental pass skips (found 2026-10-15; not investigated)
 
 In one `CS_DCLF_PERSISTENT_PARITY` run (v2-pp), 2 of the 5 compared frames differed. Both were the same entry root (4466): the
