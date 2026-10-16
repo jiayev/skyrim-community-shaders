@@ -181,6 +181,9 @@ change under test (the view contract, stage V2) does not touch this path.
 Under motion it reproduces every time (`verify.sh mpp`: `CS_DCLF_TEST_MOVE` with `CS_DCLF_PERSISTENT_PARITY`). On the B1 build it
 appeared in 3 windows (root 4466 again), and with the gate parity build in 9 windows, where the first was root 3953 (`set
 (reference's alone)`). Both builds leave this path unchanged. The motion run is the reproduction to use when it is investigated.
+In the material integrations' run (mat-fullc, 2026-10-16) one difference persisted about 20 s: roots 2463 and 2464 set wide in the
+reference alone, with six geometries cleared, in 23 of the windows from frame 881 to 2203, then gone; the run of the build before
+(matbase-fullc) showed none. That step does not touch the visibility write-back.
 
 ## LOD gates: an intermittent flipped incoming geometry missing from its flip's publication (found 2026-10-15; not investigated)
 
