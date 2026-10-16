@@ -66,7 +66,7 @@ namespace DCLF::SceneCapture
 			kFadeType = 1u << 13,    // the LOD type (+0x153 & 0xF)
 			kTreeLodSwitch = 1u << 14,
 			kName = 1u << 15,        // for the logs only: not compared (Differ)
-			kExtra = 1u << 16,       // a fade node's BSX flags; the reference's emittance source; an actor's race keyword (BeastRaceFace)
+			kExtra = 1u << 16,       // a fade node's BSX flags; the reference's emittance source; the reference facts (Api::ReferenceFact)
 			kFadeCurrent = 1u << 17, // a fade node's currentFade (+0x130): the cull's and the fade update's, every frame while it fades
 			kFadeLevel = 1u << 18,   // its LOD level (+0x152 & 0xF): FUN_14147a430's
 			kFadeDoor = 1u << 19,    // its screen-door byte (+0x154)
@@ -106,11 +106,11 @@ namespace DCLF::SceneCapture
 		// kKindCaptured: the list its node capture contribution captures (Api::NodeCaptureContribution: what OnVisible visits in the
 		// children's place, in the contribution's order).
 		std::vector<const void*> captured;
-		// kExtra. bsx: a fade node's BSX value, -1 none. emittance: the reference has an ExtraEmittanceSource with a source. beast:
-		// BeastRaceFace's answer (true without an actor or race).
+		// kExtra. bsx: a fade node's BSX value, -1 none. emittance: the reference has an ExtraEmittanceSource with a source. facts:
+		// the reference facts, a bit by Api::ReferenceFactId (Extensions::ReferenceFactsOf; each fact's none without a reference).
 		std::int32_t bsx = -1;
 		bool emittance = false;
-		bool beast = true;
+		std::uint32_t facts = ~0u;
 		float currentFade = 1.0f;
 		std::uint8_t fadeLevel = 0, fadeDoor = 0;
 		float fadeAmount = 1.0f;
@@ -140,7 +140,7 @@ namespace DCLF::SceneCapture
 			kProperty = 1u << 4,
 			kAlpha = 1u << 5,
 			kLayer = 1u << 6,       // the additional property, the alt index buffer and its count
-			kExtra = 1u << 7,       // the AnisotropicAlphaMaterial extra data (ExtendedTranslucency::MaterialModelOf)
+			kExtra = 1u << 7,       // the declared geometry extra data (Api: DeclareGeometryExtra; Extended Translucency's AnisotropicAlphaMaterial)
 			kMultiParams = 1u << 8, // a multi-index shape's material projection, parameters, scale and normal dampener
 			kRanges = 1u << 9,      // a ranged type's drawn ranges (Api::GeometryTypeContribution::ranges: object LOD's segments)
 			kFieldCount = 10,
@@ -181,7 +181,7 @@ namespace DCLF::SceneCapture
 		std::uint32_t altPrimCount = 0;
 		// kExtra: the extra data's value (an NiIntegerExtraData's), kNoExtra none, kWrongExtra another type.
 		static constexpr std::int64_t kNoExtra = -1, kWrongExtra = -2;
-		std::int64_t anisotropic = kNoExtra;
+		std::int64_t extraValue = kNoExtra;
 		// kMultiParams: materialProjection (16), materialParams (4), materialScale, normalDampener.
 		std::array<float, 22> multiParams{};
 		// kRanges: what the engine's draw of a ranged type draws (compared by triangles: object LOD's rebuild moves run starts, not
@@ -222,7 +222,7 @@ namespace DCLF::SceneCapture
 			kFlags = 1u << 1,
 			kMaterial = 1u << 2,
 			kMaterialAlpha = 1u << 3,
-			kMaterialOther = 1u << 4,  // the material's feature, PBR glints, the diffuse view
+			kMaterialOther = 1u << 4,  // the material's feature, the contributor bits, the diffuse view
 			kFadeNode = 1u << 5,
 			kEmissive = 1u << 6,
 			kControllers = 1u << 7,
@@ -246,7 +246,8 @@ namespace DCLF::SceneCapture
 		const void* material = nullptr;
 		float materialAlpha = 1.0f;
 		std::uint32_t feature = 0;
-		bool glints = false;
+		// A Lighting property's with a material: the property bits' captures (Api::PropertyBits; TruePBR's glints).
+		std::uint8_t contributorBits = 0;
 		const void* diffuseView = nullptr;
 		// A reference on diffuseView, taken while the material holds it: a texture swap may free the view before the scene work
 		// binds it (SharedBindings). Not compared; assigned with diffuseView.

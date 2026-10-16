@@ -5,6 +5,7 @@
 #if defined(CS_HAS_DCLF)
 
 #	include "Deferred.h"
+#	include "Features/DrawcallLimitFix/Api/MaterialWrites.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #	include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
@@ -464,7 +465,8 @@ void DrawcallLimitFix::DrawSettings()
 
 void DrawcallLimitFix::NoteMaterialWritten(const RE::BSShaderMaterial* a_material)
 {
-	DCLF::MaterialWrites::NoteWritten(a_material);
+	// CS's PBR materials (src/TruePBR) reach Core through the material-write sink, as the features' write hooks do.
+	DCLF::Api::NoteMaterialWritten(a_material);
 }
 
 void DrawcallLimitFix::PrecompileShader(const RE::BSShader& a_shader, bool a_pixel, std::uint32_t a_descriptor)

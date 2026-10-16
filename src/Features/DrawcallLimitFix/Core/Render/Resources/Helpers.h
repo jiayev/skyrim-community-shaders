@@ -74,14 +74,9 @@ namespace DCLF::Draws
 		return buffer;
 	}
 
-	// Constant buffers the native draw rebinds per object (b0-b2 are the Lighting groups): everything
-	// else bound in the main pass is per frame and comes from its CPU mirror.
-	constexpr std::uint32_t kPerDrawVS = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 4) | (1u << 9) | (1u << 10);
-	// b7 is Advanced Skin's SkinPerGeometry: bound per draw, for the actor the engine drew last (kSkinRegister).
-	constexpr std::uint32_t kPerDrawPS = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 7) | (1u << 8) | (1u << 11);
+	// The constant buffers the native draw rebinds per object are Extensions::PerDrawMask's (Core's, plus the features' per-draw
+	// buffers: Api::PerDrawBuffer); everything else bound in the main pass is per frame and comes from its CPU mirror.
 
-	constexpr std::uint32_t kLinearLightingRegister = 8;  // LLPerGeometry: Linear Lighting's per-object emissive multiplier
-	constexpr std::uint32_t kSkinRegister = 7;             // SkinPerGeometry: Advanced Skin's per-object wetness
 	constexpr std::uint32_t kStrictLightDataBytes = 1216;  // LightLimitFix.hlsli StrictLightData (15 lights)
 	constexpr std::uint32_t kCharacterLightMaterialRegister = 11;  // the engine's register of the character light's noise (kCharacterLightRegister)
 	constexpr std::uint32_t kInvalidIndex = GpuTextures::kInvalid;

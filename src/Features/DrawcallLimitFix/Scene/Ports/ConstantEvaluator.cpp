@@ -17,19 +17,12 @@
 #include <ankerl/unordered_dense.h>
 
 #include "FrameAnnotations.h"
-#include "Features/Skin.h"
 #include "State.h"
-#include "TruePBR.h"
 
 namespace DCLF
 {
 	namespace
 	{
-		// featureTextures' entries are Advanced Skin's two, then TruePBR's slots in register order.
-		static_assert(std::tuple_size_v<Skin::MaterialTextures> == kSkinFeatureTextures);
-		static_assert(kTruePBRFeatureTextures + TruePBR::NumExtendedTextures == kFeatureMaterialTextures &&
-					  kFeatureMaterialRegisters[kTruePBRFeatureTextures] == TruePBR::FirstExtendedTexture);
-
 		// Lighting's variables of more than 4 floats and the ones nothing reads: World, PreviousWorld and TextureProj are float3x4; Bones
 		// (skinned only) never needs real storage. DirectionalAmbient is float3x4; PointLightPosition/Color[7] (1, 2) are unused with Light
 		// Limit Fix.

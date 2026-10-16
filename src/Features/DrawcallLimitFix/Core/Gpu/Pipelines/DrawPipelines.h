@@ -78,7 +78,8 @@ namespace DCLF
 	 * (written at upload) and descriptor indices, which the layout's indirect ranges read.
 	 *
 	 * Material row (SceneTables::materials, keyed {material, pass descriptor}): PerMaterial (b1), its textures and samplers, projected
-	 * textures (t3, t8, t10, t11), feature textures (kFeatureMaterialRegisters: t71, t74, t80-t91). Pipeline row: technique blocks
+	 * textures (t3, t8, t10, t11), feature textures (the material contributors', by slot: Extensions::FeatureTextureRegister, today
+	 * t71, t74, t80-t91). Pipeline row: technique blocks
 	 * (b0), PerGeometry template (b2), permutation (b4), shadow mask (t14, s14), vertex layout.
 	 */
 	inline constexpr std::uint32_t kMaterialRowBytes = 1024;
@@ -89,7 +90,7 @@ namespace DCLF
 		std::uint64_t vsMaterial = 0, psMaterial = 0;  // b1: the row's own blocks
 		std::uint32_t textures[kPixelTextureSlots]{};
 		std::uint32_t samplers[16]{};
-		std::uint32_t features[kFeatureMaterialTextures]{};
+		std::uint32_t features[Extensions::kFeatureTextureSlots]{};
 	};
 	static_assert(kMaterialRowHeader + sizeof(MaterialRowHeader) <= kMaterialRowBytes);
 	// DCLFMaterialTextureIndex (DCLFObjects.hlsli) reads the features from the 32nd word after the addresses, in register order.

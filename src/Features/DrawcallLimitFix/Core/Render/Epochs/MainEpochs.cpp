@@ -397,8 +397,9 @@ namespace DCLF
 		if (!a_depthOnly && !loggedFrameConstants) {
 			loggedFrameConstants = true;
 			std::string text;
+			const std::uint32_t perDrawPS = Extensions::PerDrawMask(Api::ShaderStage::Pixel);
 			for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
-				if ((kPerDrawPS >> slot) & 1)
+				if ((perDrawPS >> slot) & 1)
 					continue;
 				text += fmt::format("{}b{}={}/{}", text.empty() ? "" : " ", slot, a_capture.psBuffers[slot] ? "bound" : "unbound",
 					((a_out.psMask >> slot) & 1) ? "supplied" : "empty");
@@ -414,16 +415,20 @@ namespace DCLF
 		// has not bound the main pass's yet, and the DCLF_DEPTH_ONLY build of the pixel stage compiles
 		// away everything that would read them.
 		auto& mirror = ConstantMirror::Get();
+		// Core's per-draw registers and the features' (Api::PerDrawBuffer: Light Limit Fix's PS b3, Advanced Skin's b7, Linear
+		// Lighting's b8). Resolved data.
+		const std::uint32_t perDrawVS = Extensions::PerDrawMask(Api::ShaderStage::Vertex);
+		const std::uint32_t perDrawPS = Extensions::PerDrawMask(Api::ShaderStage::Pixel);
 		if (a_depthOnly)
 			for (auto& bytes : prepassVS)
 				bytes.clear();
 		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
-			if (a_replayVertexInputs && !((kPerDrawVS >> slot) & 1)) {
+			if (a_replayVertexInputs && !((perDrawVS >> slot) & 1)) {
 				const auto& bytes = prepassVS[slot];
 				if (!bytes.empty())
 					a_out.vs[slot].assign(bytes.begin(), bytes.end());
 			}
-			for (auto [buffers, perDraw, out] : { std::tuple{ &a_capture.vsBuffers, kPerDrawVS, &a_out.vs }, std::tuple{ &a_capture.psBuffers, kPerDrawPS, &a_out.ps } }) {
+			for (auto [buffers, perDraw, out] : { std::tuple{ &a_capture.vsBuffers, perDrawVS, &a_out.vs }, std::tuple{ &a_capture.psBuffers, perDrawPS, &a_out.ps } }) {
 				if (a_depthOnly && out == &a_out.ps)
 					continue;
 				if (a_replayVertexInputs && out == &a_out.vs)

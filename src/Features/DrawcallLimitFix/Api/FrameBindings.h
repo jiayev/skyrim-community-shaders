@@ -3,7 +3,8 @@
 // The frame binding contract (Api::InstallContext::RegisterFrameBinding): a buffer every DCLF draw reads at a declared texture register,
 // given by the frame record (DrawBindings) because it changes by frame: the version of a feature's buffer the frame's draws read. And the
 // frame texture contract (RegisterFrameTexture): an engine render target's view the frame record names at a declared texture register.
-// And the frame graph buffers' (RegisterFrameGraphBuffers): another CS feature's graph buffers, read at declared texture registers.
+// And the frame graph buffers' (RegisterFrameGraphBuffers): another CS feature's graph buffers, read at declared texture registers. And
+// the per-draw buffers' (DeclarePerDrawBuffer): another CS feature's constant buffers bound per draw, which no frame block mirrors.
 
 #include <array>
 #include <cstdint>
@@ -74,5 +75,32 @@ namespace DCLF::Api
 		std::uint32_t firstRegister = ~0u;
 		std::array<std::string_view, 4> resources{};
 		bool (*indices)(std::span<std::uint32_t> a_out) = nullptr;
+	};
+
+	/** @brief A shader stage a per-draw buffer is bound to. */
+	enum class ShaderStage : std::uint8_t
+	{
+		Vertex,
+		Pixel,
+	};
+
+	/**
+	 * @brief A per-draw buffer (Api::InstallContext::DeclarePerDrawBuffer): a constant buffer another CS feature binds per draw at a declared
+	 * register of a stage (Integrations/LinearLighting's LLPerGeometry, PS b8; Integrations/AdvancedSkin's SkinPerGeometry, PS b7;
+	 * Integrations/LightLimitFix's, PS b3): what the main pass has bound there is the last drawn object's, never the frame's, so the main
+	 * pass's frame blocks do not mirror it (DCLF's draws take such values per object, from their records and rows), and the capture checks
+	 * leave it out (Extensions::PerDrawMask). Declared only: nothing is called.
+	 *
+	 * The register is the feature's compile-time constant, with its HLSL declaration; Features/Manifest.cpp checks it against Core's and the
+	 * others', the install against those (Extensions::CorePerDrawMask) and the other declarations.
+	 *
+	 * - name: the install's failures' name for it.
+	 * - stage, constantRegister: where it is bound (below D3D11's 14 constant buffer slots).
+	 */
+	struct PerDrawBuffer
+	{
+		std::string_view name;
+		ShaderStage stage = ShaderStage::Pixel;
+		std::uint32_t constantRegister = ~0u;
 	};
 }

@@ -6,6 +6,9 @@
 // them as data: a type's property flags, item class, movers, entry class and range capture, a class's category root), the owner classes
 // by form type (OwnerClassOf), what a shading
 // contribution is handed and the feature block's rule, and the calls the Lighting port's shading sample and the frame globals' capture make.
+// And the Lighting join rules' (section 5): what their callbacks are handed (LightingJoinView), the calls the captures, joins and derives
+// make (ReferenceFactsOf, CapturePropertyBits, LightingObjectFlagsOf, LightingKeyBitsOf, LightingKeyPermutation, DeriveLightingPass), and
+// the data the per-frame readers take (LightingRecordFlagsOf, LightingPixelDropped, LightingRawTechnique, GeometryExtraName).
 
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
@@ -17,12 +20,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace RE
 {
 	class BSShaderProperty;
 	class NiNode;
+	class TESObjectREFR;
 }
 
 namespace DCLF::Api
@@ -36,6 +41,28 @@ namespace DCLF::Api
 	public:
 		const RE::BSShaderProperty& property;
 		std::span<float, kShadingBlockWords> block;
+	};
+
+	/**
+	 * @brief What a Lighting join rule reads of an object (section 5): its records (the property's, the leaf's), and the contributor facts
+	 * its join takes from them (the caller fills them from the records: the geometry's declared extra value, its node's reference facts, its
+	 * property's contributor bits). Built per join (the join pool) and per derive; read-only.
+	 */
+	class LightingJoinView
+	{
+	public:
+		const SceneCapture::PropertyRecord& property;  // the Lighting property the object draws with
+		const SceneCapture::LeafView& leaf;            // its leaf's records (alpha, geometry, node, the leaf's own property)
+		std::int64_t geometryExtra = SceneCapture::GeometryRecord::kNoExtra;  // DeclareGeometryExtra's value (kNoExtra, kWrongExtra)
+		std::uint32_t referenceFacts = 0;  // the node record's facts (a bit by ReferenceFactId)
+		std::uint8_t contributorBits = 0;  // the property record's contributor bits (PropertyBits)
+
+		std::uint64_t PropertyFlags() const { return property.flags; }  // BSShaderProperty::EShaderPropertyFlag bits
+		float PropertyAlpha() const { return property.alpha; }
+		std::uint32_t MaterialFeature() const { return property.feature; }  // BSShaderMaterial::Feature
+		bool HasMaterial() const { return property.material != nullptr; }
+		bool Fact(ReferenceFactId a_fact) const { return a_fact.index < 32 && ((referenceFacts >> a_fact.index) & 1u); }
+		bool Skinned() const { return leaf.Skinned(); }
 	};
 }
 
@@ -273,4 +300,103 @@ namespace DCLF::Extensions
 	const ShadingBlock& ShadingBlockRule();
 	/** @brief Render thread, FrameGlobals::Capture: every frame-globals contribution's floats into a_out (kFrameGlobalsFloats, zeroed). */
 	void CaptureFrameGlobals(std::array<float, kFrameGlobalsFloats>& a_out);
+
+	// ---- Section 5: the Lighting join rules, as registered (Api::InstallContext::RegisterReferenceFact, DeclareGeometryExtra,
+	// RegisterPropertyBits, RegisterLightingObjectFlag, RegisterLightingKeyBits, RegisterLightingPassRules).
+
+	/** @brief The reference facts there may be (SceneCapture::NodeRecord's facts bits): grow it before more are registered. */
+	inline constexpr std::size_t kReferenceFactSlots = 4;
+	/** @brief The property bits registrations there may be (SceneCapture::PropertyRecord's 8 contributor bits between them). */
+	inline constexpr std::size_t kPropertyBitsSlots = 4;
+	/** @brief The Lighting object flags there may be (the record flags' pairs, read per record): grow it before more are registered. */
+	inline constexpr std::size_t kLightingObjectFlagSlots = 2;
+	/** @brief The pass rules' derivePass callbacks there may be (called per derive). */
+	inline constexpr std::size_t kLightingPassDeriveSlots = 2;
+	/** @brief The pass descriptor bits the engine's GetPixelTechnique drops (3-8: the light counts); a pass rule's pixelKeep keeps some back. */
+	inline constexpr std::uint32_t kLightingPixelSplitBits = 0x1f8u;
+	/** @brief The Lighting key's spare bits (Records.h, kRasterLightingSpareShift: 3 bits): LightingKeyBits' keyBits are below 1 << this. */
+	inline constexpr std::uint32_t kLightingKeySpareBits = 3;
+
+	/** @brief A registered reference fact (its name owned). */
+	struct ReferenceFactEntry
+	{
+		std::string name;
+		bool none = true;
+		decltype(Api::ReferenceFact::sample) sample = nullptr;
+	};
+	/** @brief A registered property bits capture (its name owned). */
+	struct PropertyBitsEntry
+	{
+		std::string name;
+		std::uint8_t bits = 0;
+		decltype(Api::PropertyBits::capture) capture = nullptr;
+	};
+	/** @brief The pass rules' masks, ORed over the registrations (Api::LightingPassRules'; none: all 0). */
+	struct LightingPassMasks
+	{
+		std::uint32_t pixelKeep = 0;
+		std::uint32_t rawWhen = 0, rawSet = 0, rawFlip = 0;
+	};
+	/** @brief Every Lighting join rule registered, written only during InstallFeatures (each registration in place), read-only after. */
+	struct LightingJoinRules
+	{
+		std::array<ReferenceFactEntry, kReferenceFactSlots> facts{};  // by ReferenceFactId::index
+		std::uint32_t factCount = 0;
+		std::uint32_t factsNone = 0;  // bit f: fact f's none
+		std::string geometryExtra;    // the declared extra data's name (empty: none)
+		std::array<PropertyBitsEntry, kPropertyBitsSlots> propertyBits{};
+		std::uint32_t propertyBitsCount = 0;
+		std::uint8_t propertyBitsTaken = 0;
+		std::array<Api::LightingObjectFlag, kLightingObjectFlagSlots> objectFlags{};
+		std::uint32_t objectFlagCount = 0;
+		Api::LightingKeyBits keyBits{};  // keyBits null: none
+		LightingPassMasks passMasks{};
+		std::array<decltype(Api::LightingPassRules::derivePass), kLightingPassDeriveSlots> derives{};
+		std::uint32_t deriveCount = 0;
+	};
+	/** @brief Any thread, after InstallFeatures (all none before): the Lighting join rules. */
+	const LightingJoinRules& RegisteredLightingJoinRules();
+
+	/**
+	 * @brief The node capture (SceneCapture's node record, the capturing thread, inside the engine-read window): every reference fact of
+	 * a_reference (null: none of them, each its none), a bit each.
+	 */
+	std::uint32_t ReferenceFactsOf(const RE::TESObjectREFR* a_reference);
+	/** @brief The facts of a node without a reference (each fact's none): a node record's default. */
+	inline std::uint32_t ReferenceFactsNone() { return RegisteredLightingJoinRules().factsNone; }
+	/** @brief The geometry extra data's name the geometry capture reads (GeometryRecord's extra value; empty: none, every value kNoExtra). */
+	inline std::string_view GeometryExtraName() { return RegisteredLightingJoinRules().geometryExtra; }
+	/** @brief The Lighting property capture (with a material): every property bits capture's bits of a_property, within its own. */
+	std::uint8_t CapturePropertyBits(const RE::BSShaderProperty& a_property);
+	/** @brief Per join (the join pool): the object flags whose applies holds for a_view (0 for none registered). */
+	std::uint32_t LightingObjectFlagsOf(const Api::LightingJoinView& a_view);
+	/** @brief Per record (data): the record flags of a_objectFlags' Lighting object flags (each registration's pair). */
+	inline std::uint32_t LightingRecordFlagsOf(std::uint32_t a_objectFlags)
+	{
+		const auto& rules = RegisteredLightingJoinRules();
+		std::uint32_t flags = 0;
+		for (std::uint32_t i = 0; i < rules.objectFlagCount; ++i)
+			flags |= (a_objectFlags & rules.objectFlags[i].objectFlag) ? rules.objectFlags[i].recordFlag : 0u;
+		return flags;
+	}
+	/** @brief Per join (the join pool): the Lighting key's spare bits for a_view (the claimant's keyBits, below 8; 0 without one). */
+	std::uint32_t LightingKeyBitsOf(const Api::LightingJoinView& a_view);
+	/** @brief Per new pipeline key: the permutation's extraFeatureDescriptor for a key with a_keyBits (the claimant's; 0 without one). */
+	std::uint32_t LightingKeyPermutation(std::uint32_t a_keyBits);
+	/** @brief The pass rules' masks (data, per frame per pipeline: the pixel split, the raw technique). */
+	inline const LightingPassMasks& LightingPassRule() { return RegisteredLightingJoinRules().passMasks; }
+	/** @brief The pixel split's dropped bits (kLightingPixelSplitBits less the rules' pixelKeep): PixelDescriptorFromPass clears them. */
+	inline std::uint32_t LightingPixelDropped() { return kLightingPixelSplitBits & ~LightingPassRule().pixelKeep; }
+	/** @brief SetupGeometry's raw technique a_raw with the pass rule applied: with any of rawWhen it gains rawSet, then flips rawFlip. */
+	inline std::uint32_t LightingRawTechnique(std::uint32_t a_raw)
+	{
+		const auto& rule = LightingPassRule();
+		if (a_raw & rule.rawWhen) {
+			a_raw |= rule.rawSet;
+			a_raw ^= rule.rawFlip;
+		}
+		return a_raw;
+	}
+	/** @brief Per derive (Core's Lighting descriptors): a_pass after every derivePass, in registration order (a_pass for none). */
+	std::uint32_t DeriveLightingPass(std::uint32_t a_pass, const Api::LightingJoinView& a_view);
 }

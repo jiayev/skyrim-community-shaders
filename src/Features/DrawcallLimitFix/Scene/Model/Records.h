@@ -29,9 +29,7 @@ namespace DCLF
 		kObjectAlphaTest = 1u << 0,  // alpha test on, reference = threshold / 255 (as the native draw's AlphaTestRef)
 		kObjectTwoSided = 1u << 1,   // no culling (the native main pass culls back faces otherwise)
 		kObjectSuppressExternalEmittance = 1u << 2,  // ExtraShaderDescriptors::SuppressExternalEmittance in the permutation buffer
-		// Subsurface Scattering's IsBeastRace for a face (BSLightingShader_SetupSkin: kFace or kFaceGenRGBTint, its actor's race
-		// keyword): per actor, so the record's, not the permutation's.
-		kObjectBeastRace = 1u << 3,
+		// 1u << 3: a feature's (kFeatureObjectFlags; a Lighting object flag, Api::LightingObjectFlag).
 		// A palette block: rows at BindlessObject::boneOffset / previousBoneOffset. A skin's (CS_DCLF_SKINNED: vertices from the skin
 		// partition's own buffer, bone palette rows) or a particle member's quads. The shaders' name is kObjectSkinned.
 		kObjectPaletteBlock = 1u << 4,
@@ -92,9 +90,10 @@ namespace DCLF
 	 * its feature's header and checked by Features/Manifest.cpp against Core's and each other's: Features/TreeWind's kObjectTreeAnim
 	 * (technique 12, whose TreeParams and WindTimers are per object; for anything else they are the pipeline template's, which a zeroed
 	 * per-object copy would clobber); and the root test's bits a root states contribution sets (Api::RootStatesContribution::objectFlags):
-	 * the fade roots' kObjectFadeTest (27) and kObjectHeightTest (28), still declared in Core's enum until Features/Fades holds them.
+	 * the fade roots' kObjectFadeTest (27) and kObjectHeightTest (28), still declared in Core's enum until Features/Fades holds them;
+	 * and the Lighting object flags (Api::LightingObjectFlag: Integrations/SubsurfaceScattering's kObjectBeastRace, 3).
 	 */
-	inline constexpr std::uint32_t kFeatureObjectFlags = (1u << 6) | (1u << 27) | (1u << 28);
+	inline constexpr std::uint32_t kFeatureObjectFlags = (1u << 3) | (1u << 6) | (1u << 27) | (1u << 28);
 
 	/** @brief The high bit of a draw's object-index word: the draw misses every sun cascade (kObjectSunTest). */
 	inline constexpr std::uint32_t kObjectSunMiss = 1u << 31;
@@ -259,13 +258,14 @@ namespace DCLF
 		// (Features/Effects): the Effect program family's key bit (ProgramFamilySlots.h, KeyFamily). Not an engine state index:
 		// RasterStateBits leaves it out.
 		kRasterEffect = 1u << 17,
-		// Main keys only, 3 bits: Extended Translucency's material model XOR DescriptorDisabled (ExtendedTranslucency::
-		// MaterialModelOf; the permutation's ExtraFeatureDescriptor). Non-zero only for blended geometry (e.g. NPC hairlines).
-		kRasterTranslucencyShift = 21,
+		// Lighting keys only, 3 bits: the Lighting key bits' claimant's (Api::LightingKeyBits; Integrations/ExtendedTranslucency's
+		// material model XOR DescriptorDisabled, the permutation's ExtraFeatureDescriptor: non-zero only for blended geometry, e.g. NPC
+		// hairlines).
+		kRasterLightingSpareShift = 21,
 		// Effect keys only, same 3 bits: billboard mode + 1 of a leaf under an NiBillboardNode (CS_DCLF_BILLBOARDS), else 0. The
 		// vertex stage turns the leaf to its view's camera (DCLFBillboardWorld); the record carries the mode (FamilyRecordFlagsOf). The
 		// Effect family's spare key bits (ProgramFamilySlots.h; Extensions::FamilyRules' turnedKeyBits).
-		kRasterEffectBillboardShift = kRasterTranslucencyShift,
+		kRasterEffectBillboardShift = kRasterLightingSpareShift,
 		// 2 bits, ObjectTerrainGroup. Group 1: blend and write modes 1 and 1, LESS_EQUAL with depth writes; group 2: write mode 1,
 		// no blending, EQUAL. No depth bias.
 		kRasterTerrainGroupShift = 24,
@@ -281,16 +281,16 @@ namespace DCLF
 		kRasterRefractionFalloff = 1u << 30,
 		kRasterRefractionClamp = 1u << 31,
 	};
-	inline constexpr std::uint32_t kRasterTranslucencyMask = 7u << kRasterTranslucencyShift;
+	inline constexpr std::uint32_t kRasterLightingSpareMask = 7u << kRasterLightingSpareShift;
 
 	inline constexpr std::uint32_t RasterDecalGroup(std::uint32_t a_flags) { return (a_flags >> kRasterDecalGroupShift) & 3u; }
 	inline constexpr std::uint32_t RasterDepthBiasMode(std::uint32_t a_flags) { return (a_flags >> kRasterDepthBiasShift) & 15u; }
 	inline constexpr std::uint32_t RasterBlendMode(std::uint32_t a_flags) { return (a_flags >> kRasterBlendModeShift) & 7u; }
 	inline constexpr std::uint32_t RasterWriteMode(std::uint32_t a_flags) { return (a_flags >> kRasterWriteModeShift) & 15u; }
 	inline constexpr std::uint32_t RasterTerrainGroup(std::uint32_t a_flags) { return (a_flags >> kRasterTerrainGroupShift) & 3u; }
-	/** @brief What selects the engine's state objects: everything but two-sidedness, the translucency model and the shader class. */
-	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterTranslucencyMask | kRasterEffect); }
-	inline constexpr std::uint32_t RasterTranslucency(std::uint32_t a_flags) { return (a_flags & kRasterTranslucencyMask) >> kRasterTranslucencyShift; }
+	/** @brief What selects the engine's state objects: everything but two-sidedness, the Lighting key bits and the shader class. */
+	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterLightingSpareMask | kRasterEffect); }
+	inline constexpr std::uint32_t RasterLightingSpare(std::uint32_t a_flags) { return (a_flags & kRasterLightingSpareMask) >> kRasterLightingSpareShift; }
 
 	/** @brief Packs a decal's state indices (EngineStates.h says where each comes from). */
 	inline constexpr std::uint32_t PackDecalRasterFlags(std::uint32_t a_group, std::uint32_t a_depthBiasMode, std::uint32_t a_blendMode,

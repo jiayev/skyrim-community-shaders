@@ -5,6 +5,8 @@
 #include "DrawsView.h"
 #include "Observers.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+
 namespace DCLF::Diagnostics
 {
 	void CheckCapturePoint()
@@ -22,10 +24,12 @@ namespace DCLF::Diagnostics
 			++p.differ[std::move(a_what)];
 			any = true;
 		};
+		const std::uint32_t perDrawVS = Extensions::PerDrawMask(Api::ShaderStage::Vertex);
+		const std::uint32_t perDrawPS = Extensions::PerDrawMask(Api::ShaderStage::Pixel);
 		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
-			if (!((kPerDrawVS >> slot) & 1) && captured.vsBuffers[slot] != now.vsBuffers[slot])
+			if (!((perDrawVS >> slot) & 1) && captured.vsBuffers[slot] != now.vsBuffers[slot])
 				note(fmt::format("VS b{}", slot));
-			if (!((kPerDrawPS >> slot) & 1) && captured.psBuffers[slot] != now.psBuffers[slot])
+			if (!((perDrawPS >> slot) & 1) && captured.psBuffers[slot] != now.psBuffers[slot])
 				note(fmt::format("PS b{}", slot));
 		}
 		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t)

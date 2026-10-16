@@ -12,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/NodeCaptures.h"
@@ -30,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <functional>
 #include <vector>
 
@@ -138,8 +140,25 @@ namespace DCLF::Extensions
 				indices.fill(kNoFrameTexture);
 				return indices;
 			}();
+			// The material contributors, in registration order, and their registers and witness words so far. Resolved at the end
+			// (ResolveMaterialContributors).
+			std::vector<MaterialContributorEntry> materialContributors;
+			std::uint32_t materialTextureRegisters = 0, materialWitnessWords = 0;
+			// The Lighting join rules, each registration in place (read as registered: RegisteredLightingJoinRules).
+			LightingJoinRules lightingJoinRules;
+			// By stage (Api::ShaderStage): the per-draw constant buffer registers, Core's and the declared ones (PerDrawMask).
+			std::array<std::uint32_t, 2> perDrawMasks{ kCorePerDrawVS, kCorePerDrawPS };
 			bool installed = false;
 		};
+
+		/** @brief The material contributor registered so far that binds a_register (null: none). */
+		const MaterialContributorEntry* MaterialRegisterAt(const Lists& a_lists, std::uint32_t a_register)
+		{
+			for (const auto& contributor : a_lists.materialContributors)
+				if (std::ranges::find(contributor.registers, a_register) != contributor.registers.end())
+					return &contributor;
+			return nullptr;
+		}
 
 		/**
 		 * @brief Adds a_range by its slot, refused (a_who's) for a slot or order already registered, no name, a depth prepass on an
@@ -316,6 +335,8 @@ namespace DCLF::Extensions
 						a_lists.frameTextures[texture].name));
 				if (const auto* other = GraphBuffersAt(a_lists, r))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame graph buffers {} take t{}, which {} has", a_who, a_buffers.name, r, other->name));
+				if (const auto* contributor = MaterialRegisterAt(a_lists, r))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame graph buffers {} take t{}, which {} has", a_who, a_buffers.name, r, contributor->name));
 			}
 			// A commit keeps each registration's indices in a fixed array (FrameGraphBufferValues).
 			if (a_lists.frameGraphBuffers.size() >= kFrameGraphBufferSlots)
@@ -347,11 +368,177 @@ namespace DCLF::Extensions
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} takes t{}, which {} has", a_who, a_texture.name, r, a_lists.frameTextures[other].name));
 			if (const auto* buffers = GraphBuffersAt(a_lists, r))
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} takes t{}, which {} has", a_who, a_texture.name, r, buffers->name));
+			if (const auto* contributor = MaterialRegisterAt(a_lists, r))
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} takes t{}, which {} has", a_who, a_texture.name, r, contributor->name));
 			// A colour commit samples every view into a fixed array (ResolveFrameTextures).
 			if (a_lists.frameTextures.size() >= kFrameTextureSlots)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} is one past kFrameTextureSlots: grow it first", a_who, a_texture.name));
 			a_lists.frameTextureIndices[r] = static_cast<std::uint8_t>(a_lists.frameTextures.size());
 			a_lists.frameTextures.push_back({ std::string(a_texture.name), r, a_texture.view, a_texture.capturedWhenNull });
+		}
+
+		/**
+		 * @brief Whether a_contributor is complete: a name, sample and evaluate; its stage's callback alone (Replace: takesPass, After:
+		 * covers); a material class's callbacks all or none; its registers strictly ascending within the frame textures' (t16-t127).
+		 */
+		bool MaterialContributorComplete(const Api::MaterialContributor& a_contributor)
+		{
+			const bool stageValid = a_contributor.stage == Api::MaterialStage::Replace ? a_contributor.takesPass && !a_contributor.covers :
+			                        a_contributor.stage == Api::MaterialStage::After  ? a_contributor.covers && !a_contributor.takesPass :
+			                                                                            false;
+			const auto& materialClass = a_contributor.materialClass;
+			const int classCallbacks = (materialClass.owns ? 1 : 0) + (materialClass.bytes ? 1 : 0) + (materialClass.textureFields ? 1 : 0);
+			const auto registers = a_contributor.textureRegisters;
+			bool registersValid = true;
+			for (std::size_t i = 0; i < registers.size(); ++i)
+				registersValid = registersValid && registers[i] >= kPixelTextureSlots && registers[i] < kTextureRegisters && (i == 0 || registers[i] > registers[i - 1]);
+			return !a_contributor.name.empty() && a_contributor.sample && a_contributor.evaluate && stageValid && (classCallbacks == 0 || classCallbacks == 3) &&
+			       registersValid;
+		}
+
+		/**
+		 * @brief Adds a_contributor, refused (a_who's) when incomplete (MaterialContributorComplete), for a register Core's, a frame
+		 * binding's, a frame texture's or graph buffers', a register range overlapping another contributor's (each contributor's registers
+		 * take consecutive slots), or one past kFeatureTextureSlots registers, kMaterialContributorWitnessWords words or
+		 * kMaterialContributorSlots contributors.
+		 */
+		void AddMaterialContributor(Lists& a_lists, std::string_view a_who, const Api::MaterialContributor& a_contributor)
+		{
+			if (!MaterialContributorComplete(a_contributor))
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete material contributor", a_who));
+			const auto registers = a_contributor.textureRegisters;
+			for (const std::uint32_t r : registers) {
+				if (CoreFrameRegister(r))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material contributor {} takes t{}, which Core keeps", a_who, a_contributor.name, r));
+				for (const auto& binding : a_lists.frameBindings)
+					if (binding.textureRegister == r)
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material contributor {} takes t{}, which {} has", a_who, a_contributor.name, r, binding.name));
+				if (const auto texture = a_lists.frameTextureIndices[r]; texture != kNoFrameTexture)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material contributor {} takes t{}, which {} has", a_who, a_contributor.name, r,
+						a_lists.frameTextures[texture].name));
+				if (const auto* buffers = GraphBuffersAt(a_lists, r))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material contributor {} takes t{}, which {} has", a_who, a_contributor.name, r, buffers->name));
+			}
+			if (!registers.empty())
+				for (const auto& other : a_lists.materialContributors)
+					if (!other.registers.empty() && registers.front() <= other.registers.back() && other.registers.front() <= registers.back())
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material contributor {} takes t{}-t{}, which overlap {}'s", a_who, a_contributor.name,
+							registers.front(), registers.back(), other.name));
+			// MaterialRecord::featureTextures' slots are the row header's (frozen with the HLSL decode).
+			if (a_lists.materialTextureRegisters + registers.size() > kFeatureTextureSlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material contributor {} takes registers past kFeatureTextureSlots", a_who, a_contributor.name));
+			// The frame witness holds every contributor's words (MaterialContributorSamples::words).
+			if (a_lists.materialWitnessWords + a_contributor.witnessWords > kMaterialContributorWitnessWords)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material contributor {} writes witness words past kMaterialContributorWitnessWords: grow it first",
+					a_who, a_contributor.name));
+			// A frame's samples hold one a contributor (MaterialContributorSamples::contributors).
+			if (a_lists.materialContributors.size() >= kMaterialContributorSlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material contributor {} is one past kMaterialContributorSlots: grow it first", a_who,
+					a_contributor.name));
+			a_lists.materialTextureRegisters += static_cast<std::uint32_t>(registers.size());
+			a_lists.materialWitnessWords += a_contributor.witnessWords;
+			auto& entry = a_lists.materialContributors.emplace_back();
+			entry.name = std::string(a_contributor.name);
+			entry.stage = a_contributor.stage;
+			entry.order = a_contributor.order;
+			entry.registers = registers;
+			entry.witnessWords = a_contributor.witnessWords;
+			entry.signatureBits = a_contributor.signatureBits;
+			entry.materialClass = a_contributor.materialClass;
+			entry.sample = a_contributor.sample;
+			entry.takesPass = a_contributor.takesPass;
+			entry.covers = a_contributor.covers;
+			entry.evaluate = a_contributor.evaluate;
+		}
+
+		/** @brief Adds a_fact as the next facts bit, which it returns, refused (a_who's) for no name or sample, or past kReferenceFactSlots. */
+		Api::ReferenceFactId AddReferenceFact(Lists& a_lists, std::string_view a_who, const Api::ReferenceFact& a_fact)
+		{
+			auto& rules = a_lists.lightingJoinRules;
+			if (a_fact.name.empty() || !a_fact.sample)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete reference fact", a_who));
+			// The node record holds each fact in a bit (NodeRecord's facts).
+			if (rules.factCount >= kReferenceFactSlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s reference fact {} is one past kReferenceFactSlots: grow it first", a_who, a_fact.name));
+			const std::uint32_t index = rules.factCount++;
+			rules.facts[index] = { std::string(a_fact.name), a_fact.none, a_fact.sample };
+			rules.factsNone |= a_fact.none ? 1u << index : 0u;
+			return { index };
+		}
+
+		/** @brief Adds a_bits, refused (a_who's) for no name, bits or capture, bits another registration has, or past kPropertyBitsSlots. */
+		void AddPropertyBits(Lists& a_lists, std::string_view a_who, const Api::PropertyBits& a_bits)
+		{
+			auto& rules = a_lists.lightingJoinRules;
+			if (a_bits.name.empty() || !a_bits.bits || !a_bits.capture)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete property bits", a_who));
+			if (a_bits.bits & rules.propertyBitsTaken)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s property bits {} ({:#x}) take bits another registration has", a_who, a_bits.name, a_bits.bits));
+			if (rules.propertyBitsCount >= kPropertyBitsSlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s property bits {} are one past kPropertyBitsSlots: grow it first", a_who, a_bits.name));
+			rules.propertyBits[rules.propertyBitsCount++] = { std::string(a_bits.name), a_bits.bits, a_bits.capture };
+			rules.propertyBitsTaken = static_cast<std::uint8_t>(rules.propertyBitsTaken | a_bits.bits);
+		}
+
+		/**
+		 * @brief Adds a_flag, refused (a_who's) for an object or record flag not one bit or another registration's, no applies, or past
+		 * kLightingObjectFlagSlots.
+		 */
+		void AddLightingObjectFlag(Lists& a_lists, std::string_view a_who, const Api::LightingObjectFlag& a_flag)
+		{
+			auto& rules = a_lists.lightingJoinRules;
+			if (!std::has_single_bit(a_flag.objectFlag) || !std::has_single_bit(a_flag.recordFlag) || !a_flag.applies)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete Lighting object flag", a_who));
+			for (std::uint32_t i = 0; i < rules.objectFlagCount; ++i)
+				if (rules.objectFlags[i].objectFlag == a_flag.objectFlag || rules.objectFlags[i].recordFlag == a_flag.recordFlag)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s Lighting object flag {:#x} (record flag {:#x}) is another registration's", a_who,
+						a_flag.objectFlag, a_flag.recordFlag));
+			// The record flags' pairs are read per record (LightingRecordFlagsOf).
+			if (rules.objectFlagCount >= kLightingObjectFlagSlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s Lighting object flag {:#x} is one past kLightingObjectFlagSlots: grow it first", a_who,
+					a_flag.objectFlag));
+			rules.objectFlags[rules.objectFlagCount++] = a_flag;
+		}
+
+		/**
+		 * @brief Adds a_rules' masks and derivePass, refused (a_who's) for nothing to apply, a pixelKeep outside kLightingPixelSplitBits, a
+		 * raw rule without rawWhen or when another registration has one, or derivePass past kLightingPassDeriveSlots.
+		 */
+		void AddLightingPassRules(Lists& a_lists, std::string_view a_who, const Api::LightingPassRules& a_rules)
+		{
+			auto& rules = a_lists.lightingJoinRules;
+			auto& masks = rules.passMasks;
+			const bool empty = !a_rules.pixelKeep && !a_rules.rawWhen && !a_rules.rawSet && !a_rules.rawFlip && !a_rules.derivePass;
+			if (empty || (a_rules.pixelKeep & ~kLightingPixelSplitBits) || ((a_rules.rawSet || a_rules.rawFlip) && !a_rules.rawWhen))
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete Lighting pass rules", a_who));
+			// SetupGeometry's raw technique takes one rule (LightingRawTechnique).
+			if (a_rules.rawWhen && masks.rawWhen)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s Lighting pass rules give a raw technique rule, which another registration has", a_who));
+			if (a_rules.derivePass && rules.deriveCount >= kLightingPassDeriveSlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s Lighting pass rules' derivePass is one past kLightingPassDeriveSlots: grow it first", a_who));
+			masks.pixelKeep |= a_rules.pixelKeep;
+			if (a_rules.rawWhen)
+				masks = { masks.pixelKeep, a_rules.rawWhen, a_rules.rawSet, a_rules.rawFlip };
+			if (a_rules.derivePass)
+				rules.derives[rules.deriveCount++] = a_rules.derivePass;
+		}
+
+		/**
+		 * @brief Adds a_buffer's register to its stage's per-draw mask, refused (a_who's) for no name, a stage or register out of range,
+		 * Core's or another declaration's.
+		 */
+		void AddPerDrawBuffer(Lists& a_lists, std::string_view a_who, const Api::PerDrawBuffer& a_buffer)
+		{
+			const auto stage = static_cast<std::size_t>(a_buffer.stage);
+			if (a_buffer.name.empty() || stage >= a_lists.perDrawMasks.size() || a_buffer.constantRegister >= kConstantBufferRegisters)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} declared an incomplete per-draw buffer", a_who));
+			const std::uint32_t bit = 1u << a_buffer.constantRegister;
+			if (CorePerDrawMask(a_buffer.stage) & bit)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s per-draw buffer {} takes b{}, which Core binds per draw", a_who, a_buffer.name, a_buffer.constantRegister));
+			if (a_lists.perDrawMasks[stage] & bit)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s per-draw buffer {} takes b{}, which another declaration has", a_who, a_buffer.name,
+					a_buffer.constantRegister));
+			a_lists.perDrawMasks[stage] |= bit;
 		}
 
 		Lists& Registered()
@@ -433,6 +620,9 @@ namespace DCLF::Extensions
 				if (const auto* buffers = GraphBuffersAt(lists, a_binding.textureRegister))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} takes t{}, which {} has", feature, a_binding.name, a_binding.textureRegister,
 						buffers->name));
+				if (const auto* contributor = MaterialRegisterAt(lists, a_binding.textureRegister))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} takes t{}, which {} has", feature, a_binding.name, a_binding.textureRegister,
+						contributor->name));
 				// A build embeds every binding's value (ResourceAddresses::frameBindings).
 				if (lists.frameBindings.size() >= kFrameBindingSlots)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} is one past kFrameBindingSlots: grow it first", feature, a_binding.name));
@@ -950,6 +1140,37 @@ namespace DCLF::Extensions
 				lists.rootStates = a_states;
 			}
 
+			void RegisterMaterialContributor(const Api::MaterialContributor& a_contributor) override { AddMaterialContributor(lists, feature, a_contributor); }
+			Api::ReferenceFactId RegisterReferenceFact(const Api::ReferenceFact& a_fact) override { return AddReferenceFact(lists, feature, a_fact); }
+
+			void DeclareGeometryExtra(std::string_view a_extraName) override
+			{
+				if (a_extraName.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} declared a geometry extra without a name", feature));
+				// The geometry record keeps one extra value.
+				auto& declared = lists.lightingJoinRules.geometryExtra;
+				if (!declared.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} declared geometry extra {}, but {} is declared", feature, a_extraName, declared));
+				declared = std::string(a_extraName);
+			}
+
+			void RegisterPropertyBits(const Api::PropertyBits& a_bits) override { AddPropertyBits(lists, feature, a_bits); }
+			void RegisterLightingObjectFlag(const Api::LightingObjectFlag& a_flag) override { AddLightingObjectFlag(lists, feature, a_flag); }
+
+			void RegisterLightingKeyBits(const Api::LightingKeyBits& a_bits) override
+			{
+				if (!a_bits.keyBits || !a_bits.permutation)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete Lighting key bits", feature));
+				// The Lighting key has one set of spare bits.
+				auto& claimed = lists.lightingJoinRules.keyBits;
+				if (claimed.keyBits)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered Lighting key bits, which another registration has", feature));
+				claimed = a_bits;
+			}
+
+			void RegisterLightingPassRules(const Api::LightingPassRules& a_rules) override { AddLightingPassRules(lists, feature, a_rules); }
+			void DeclarePerDrawBuffer(const Api::PerDrawBuffer& a_buffer) override { AddPerDrawBuffer(lists, feature, a_buffer); }
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -1018,6 +1239,8 @@ namespace DCLF::Extensions
 		ResolvePaletteRows(lists.paletteRows);
 		ResolveShadingFields(lists.shadingFields);
 		ResolveMaterialPorts(lists.materialPorts, lists.materialPortCount);
+		// The material contributors' order (stage, order, registration), feature texture slots, witness words and classes.
+		ResolveMaterialContributors(lists.materialContributors);
 		ResolveProgramFamilies(lists.programFamilies);
 		std::ranges::sort(lists.frameConstantRows, {}, &FrameConstantRowEntry::row);
 		// The Core flags' needs by name resolved, then the features' toggles placed in the menu's table by their anchors (which may
@@ -1059,6 +1282,13 @@ namespace DCLF::Extensions
 	std::span<const ClassifyInputEntry> RegisteredClassifyInputs() { return Registered().classifyInputs; }
 	std::span<const HeldGroupEntry> HeldGroups() { return Registered().heldGroups; }
 	const NearTwinEntry& NearTwin() { return Registered().nearTwin; }
+	const LightingJoinRules& RegisteredLightingJoinRules() { return Registered().lightingJoinRules; }
+
+	std::uint32_t PerDrawMask(Api::ShaderStage a_stage)
+	{
+		const auto stage = static_cast<std::size_t>(a_stage);
+		return stage < Registered().perDrawMasks.size() ? Registered().perDrawMasks[stage] : 0u;
+	}
 
 	bool EntryClassTaken(Api::EntryClass a_class)
 	{

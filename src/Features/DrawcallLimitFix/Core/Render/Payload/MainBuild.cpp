@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
@@ -109,7 +110,7 @@ namespace DCLF::Draws
 		struct TextureClasses
 		{
 			std::array<std::uint64_t, 2> shadowMask{}, material{}, buffers{}, frame{}, characterLight{};
-			std::array<std::uint32_t, kFeatureMaterialTextures> featureRegister{};
+			std::array<std::uint32_t, Extensions::kFeatureTextureSlots> featureRegister{};
 		};
 		static_assert(kTextureRegisters == 128 && kPixelTextureSlots <= 32 && kSamplerRegisters <= 32 && kConstantBufferRegisters <= 32);
 		const TextureClasses& TextureClassesOf()
@@ -123,7 +124,7 @@ namespace DCLF::Draws
 						c.shadowMask[w] |= bit;
 					else if (t < kPixelTextureSlots)
 						c.material[w] |= bit;
-					else if (const int f = FeatureMaterialSlot(t); f >= 0)
+					else if (const int f = Extensions::FeatureTextureSlotOf(t); f >= 0)
 						c.featureRegister[f] = t;
 					else if (t == kObjectBufferRegister || t == kExtrasBufferRegister || Extensions::FrameBindingRegister(t) || t == kPlacementBufferRegister ||
 							 t == kPaletteBufferRegister || t == kShadingBufferRegister)
@@ -689,7 +690,7 @@ namespace DCLF::Draws
 			for (std::uint32_t features = material.features; features;) {
 				const auto f = static_cast<std::uint32_t>(std::countr_zero(features));
 				features &= features - 1;
-				if (f < kFeatureMaterialTextures) {
+				if (f < Extensions::kFeatureTextureSlots) {
 					const std::uint32_t t = classes.featureRegister[f];
 					given[t / 64] |= 1ull << (t % 64);
 				}
@@ -869,13 +870,13 @@ namespace DCLF::Draws
 			header.textures[t] = index == kInvalidIndex ? 0u : index;
 			state.textures |= index == kInvalidIndex ? 0u : (1u << t);
 		}
-		for (std::uint32_t f = 0; f < kFeatureMaterialTextures && state.texturesOk; ++f) {
+		for (std::uint32_t f = 0; f < Extensions::kFeatureTextureSlots && state.texturesOk; ++f) {
 			std::uint32_t index = lookups.nullTexture;
 			if (material.featureTextures[f]) {
 				if (!resolved) {
 					state.texturesOk = false;
 					state.deferred = true;
-					state.missingTexture = kFeatureMaterialRegisters[f];
+					state.missingTexture = Extensions::FeatureTextureRegister(f);
 					break;
 				}
 				index = lookup->featureIndex[f];

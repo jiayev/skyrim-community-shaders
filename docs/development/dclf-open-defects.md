@@ -214,6 +214,14 @@ The fixed frame on the fixed `CS_DCLF_TEST_MOVE` path makes it a one-frame cell-
 snow members joined. Parity runs walk everything, so it draws there; normal play would drop these for that frame. It predates the
 modular-layout feature steps that showed it.
 
+## Capture parity: LOD techniques and one pixel permutation bit mismatch (found 2026-10-16; not investigated)
+
+`CS_DCLF_CAPTURE_PARITY` with `CS_DCLF_PARITY_BOTH` (the tables against the engine's own lighting draws) reports MISMATCH every window:
+about 44k of 153k draws (29k material, 315 per-geometry, 7k technique), and every LODObjects, LODObjectHD and LODLandNoise draw
+(`capture parity by technique`), plus the permutation parity's `pixel 800000` on about 7.5k draws. The build before the material
+integrations (e686aa1f, run matbase-fullc) and the one after (mat-fullc) give the same counts, so it predates that step; the refactor's
+validation runs did not include capture parity until then. TruePBR texture, skin, light data and face capture parity are OK.
+
 ## Pooled payload: open items (2026-10-14)
 
 The payload ring was replaced by pooled versions published once per snapshot (dclf-architecture.md, "The payload"). These

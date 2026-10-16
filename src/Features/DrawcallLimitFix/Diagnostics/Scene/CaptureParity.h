@@ -9,8 +9,10 @@
 #include <string>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/TextureParity.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
+#include "Features/DrawcallLimitFix/Integrations/TruePBR/Diagnostics/TextureParity.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 
 namespace DCLF
@@ -156,13 +158,11 @@ namespace DCLF
 		// Light Limit Fix: its StrictLightData (PS b3) against the tables' room (Integrations/LightLimitFix's parity).
 		Integrations::LightLimitFix::DrawLightDataParity lightData;
 		// Advanced Skin: its per-material textures (PS t71, t74) against the material record; its wetness (PS b7) against the frame's
-		// shading row, and whether the object's actor ownership still holds (Integrations/AdvancedSkin's parity).
-		std::uint64_t skinTextureChecks = 0;
-		std::uint64_t skinTextureMismatches = 0;
+		// shading row, and whether the object's actor ownership still holds (Integrations/AdvancedSkin's parities).
+		Integrations::AdvancedSkin::DrawSkinTextureParity skinTextures;
 		Integrations::AdvancedSkin::DrawWetnessParity skinWetness;
-		// TruePBR: its landscape layers (PS t80-t91) against the material record.
-		std::uint64_t truePBRTextureChecks = 0;
-		std::uint64_t truePBRTextureMismatches = 0;
+		// TruePBR: its landscape layers (PS t80-t91) against the material record (Integrations/TruePBR's parity).
+		Integrations::TruePBR::DrawTextureParity truePBRTextures;
 		std::uint64_t permutationChecks = 0;
 		std::uint64_t permutationMismatches = 0;
 		// Bindings Community Shaders owns (constant buffers b3 and up, shader resources outside the
@@ -170,7 +170,6 @@ namespace DCLF
 		// frame, so that DCLF can bind them once per pass. Baseline = the frame's first eligible draw.
 		void CompareFeatureBindings(ID3D11DeviceContext* a_context);
 		void CompareSkin(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex);
-		void CompareTruePBR(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex);
 		static constexpr std::uint32_t kFirstFeatureConstantBuffer = 3;
 		static constexpr std::uint32_t kConstantBufferSlots = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
 		static constexpr std::uint32_t kResourceSlots = 128;

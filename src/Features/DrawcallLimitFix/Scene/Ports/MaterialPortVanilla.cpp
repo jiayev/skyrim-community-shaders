@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 
 #include <array>
@@ -289,15 +290,16 @@ namespace DCLF::MaterialPort
 	{
 		if (!a_frame.sampled || !a_frame.shaderKnown)
 			return false;
-		// CS's PBR classes reach here when TruePBR hands the pass back (CHECK_PBR_TEXTURE): vanilla code on a Base-derived object, its
-		// texture fields the base's, its size its own.
+		// A contributor's class reaches here when its Replace hands the pass back (TruePBR's CHECK_PBR_TEXTURE): vanilla code on a
+		// Base-derived object, its texture fields the base's, its size its own.
+		const bool asBase = Extensions::MaterialClassVanillaAsBase(a_snapshot.materialClass);
 		VanillaClass pbrBase;
-		if (a_snapshot.pbr) {
+		if (asBase) {
 			pbrBase.size = a_snapshot.size;
 			for (const auto offset : { kDiffuse, kNormal, kRimSoftLighting, kSpecularBackLighting })
 				pbrBase.textures[pbrBase.textureCount++] = offset;
 		}
-		const auto* c = a_snapshot.pbr ? &pbrBase : ClassOf(a_snapshot.vtable);
+		const auto* c = asBase ? &pbrBase : ClassOf(a_snapshot.vtable);
 		if (!c || a_snapshot.size < c->size)
 			return false;
 

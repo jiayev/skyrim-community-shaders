@@ -5,6 +5,7 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
@@ -68,8 +69,10 @@ namespace DCLF::Scene
 		a_out.same = false;
 		if (!MaterialPort::Evaluate(a_snapshot, a_pass, a_sources, a_out.record)) {
 			// An input the frame's sources do not have yet (Advanced Skin's textures for a key it has not set up): again with a later
-			// pass's. Else a class the port does not cover.
-			a_out.outcome = !MaterialPort::FeatureHooksCovered(a_snapshot, a_sources.feature) ? Outcome::Retry : Outcome::Uncovered;
+			// pass's (an After contributor's covers false: Extensions::MaterialRetryable). Else a class the port does not cover.
+			a_out.outcome = Extensions::MaterialRetryable({ a_snapshot, a_snapshot.materialClass, a_pass, a_sources.hook, a_sources.contributors }) ?
+			                    Outcome::Retry :
+			                    Outcome::Uncovered;
 			return;
 		}
 		a_out.outcome = Outcome::Made;

@@ -27,8 +27,8 @@ namespace DCLF
 {
 	/**
 	 * @brief BSLightingShader::SetupMaterial ported (engine notes, "BSLightingShader::SetupMaterial: where every material
-	 * constant comes from"), Community Shaders' hooks on it included (TruePBR's replacement, Advanced Skin's and TerrainHelper's
-	 * extra textures).
+	 * constant comes from"), Community Shaders' hooks on it included as the material contributors (Core/Extensions/Materials.h:
+	 * a Replace around vanilla, such as TruePBR's, and the hooks After it, such as Advanced Skin's extra textures).
 	 *
 	 * The port is a pure function of two inputs, so the scene work can make a material record without the engine:
 	 *
@@ -57,7 +57,7 @@ namespace DCLF
 			const void* key = nullptr;     // the material
 			const void* vtable = nullptr;  // its class
 			std::uint32_t feature = 0;     // BSShaderMaterial::GetFeature()
-			bool pbr = false;              // CS's BSLightingShaderMaterialPBR
+			std::uint8_t materialClass = Extensions::kNoMaterialClass;  // a material contributor's class (Extensions::MaterialClassOf)
 			std::uint8_t port = 0;         // its material port's kind (Extensions::PortOfVtable: EvaluatePort), 0 for Lighting's classes
 			std::uint32_t size = 0;        // bytes taken (the class's size)
 			std::array<std::byte, kMaxMaterialBytes> bytes{};
@@ -139,16 +139,10 @@ namespace DCLF
 		// The parts Evaluate composes (each file owns its own).
 		/** @brief Vanilla BSLightingShader::SetupMaterial (1414dc310) for the vanilla material classes (MaterialPortVanilla.cpp). */
 		bool EvaluateVanilla(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const VanillaFrame& a_frame, MaterialRecord& a_out);
-		/** @brief TruePBR::BSLightingShader_SetupMaterial for CS's PBR materials (MaterialPortFeature.cpp). */
-		bool EvaluatePBR(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const MaterialFrame& a_frame, MaterialRecord& a_out);
-		/** @brief Advanced Skin's and TerrainHelper's hooks: featureTextures' Advanced Skin entries and anything else they bind (MaterialPortFeature.cpp). */
-		void EvaluateFeatureHooks(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const FeatureFrame& a_frame, MaterialRecord& a_out);
 		/** @brief The vanilla classes' texture fields (offsets; a_count is set, not added to), for Capture (MaterialPortVanilla.cpp). */
 		void VanillaTextureFields(const RE::BSShaderMaterial& a_material, std::uint16_t* a_out, std::uint32_t& a_count);
 		/** @brief A vanilla class's size (its Create's allocation), 0 for any other class (MaterialPortVanilla.cpp). */
 		std::uint32_t VanillaClassSize(const RE::BSShaderMaterial& a_material);
-		/** @brief The PBR class's texture fields (MaterialPortFeature.cpp). */
-		void PBRTextureFields(const RE::BSShaderMaterial& a_material, std::uint16_t* a_out, std::uint32_t& a_count);
 		/** @brief The view SetupMaterial binds for a texture object (NiSourceTexture -> renderer texture -> view), or null. */
 		ID3D11ShaderResourceView* ViewOf(const void* a_texture);
 	}

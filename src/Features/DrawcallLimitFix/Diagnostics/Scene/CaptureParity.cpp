@@ -14,14 +14,15 @@
 #include <cstring>
 
 #include "Deferred.h"
-#include "Features/Skin.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
+#include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "TruePBR.h"
 
 namespace DCLF
 {
@@ -29,11 +30,12 @@ namespace DCLF
 	{
 		constexpr std::size_t kMaxSamples = 24;
 
-		// Constant buffers that change per draw by design: LLF's StrictLightData (PS b3, Integrations/LightLimitFix's parity), the
-		// permutation (b4, checked separately), bone palettes (VS b9, b10; SKINNED), Skin's SkinPerGeometry (PS b7; SKIN), Linear
-		// Lighting's LLPerGeometry (PS b8) and the alpha-test reference (PS b11).
-		constexpr std::uint32_t kPerDrawVSBuffers = (1u << 4) | (1u << 9) | (1u << 10);
-		constexpr std::uint32_t kPerDrawPSBuffers = (1u << 3) | (1u << 4) | (1u << 7) | (1u << 8) | (1u << 11);
+		// Constant buffers that change per draw by design, from b3 (Extensions::PerDrawMask): the permutation (b4, checked separately),
+		// bone palettes (VS b9, b10; SKINNED) and the alpha-test reference (PS b11), Core's; and the integrations' declared per-draw
+		// buffers: LLF's StrictLightData (PS b3, Integrations/LightLimitFix's parity), Skin's SkinPerGeometry (PS b7; SKIN) and Linear
+		// Lighting's LLPerGeometry (PS b8).
+		std::uint32_t PerDrawVSBuffers() { return Extensions::PerDrawMask(Api::ShaderStage::Vertex) & ~0x7u; }
+		std::uint32_t PerDrawPSBuffers() { return Extensions::PerDrawMask(Api::ShaderStage::Pixel) & ~0x7u; }
 
 		/**
 		 * @brief Descriptor bits a DCLF draw decides on the GPU rather than in its pipeline (excluded from the comparison):
@@ -171,10 +173,12 @@ namespace DCLF
 	{
 		lastMappedAny[a_resource] = a_data;
 		if (baselineValid) {
+			const std::uint32_t perDrawVS = PerDrawVSBuffers();
+			const std::uint32_t perDrawPS = PerDrawPSBuffers();
 			for (std::uint32_t slot = kFirstFeatureConstantBuffer; slot < kConstantBufferSlots; ++slot) {
-				if (!((kPerDrawVSBuffers >> slot) & 1) && reinterpret_cast<ID3D11Resource*>(baseline.vsBuffers[slot]) == a_resource)
+				if (!((perDrawVS >> slot) & 1) && reinterpret_cast<ID3D11Resource*>(baseline.vsBuffers[slot]) == a_resource)
 					pendingRewrites |= 1u << slot;
-				if (!((kPerDrawPSBuffers >> slot) & 1) && reinterpret_cast<ID3D11Resource*>(baseline.psBuffers[slot]) == a_resource)
+				if (!((perDrawPS >> slot) & 1) && reinterpret_cast<ID3D11Resource*>(baseline.psBuffers[slot]) == a_resource)
 					pendingRewrites |= 1u << (16 + slot);
 			}
 		}
@@ -450,7 +454,7 @@ namespace DCLF
 		                                        static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) | static_cast<std::uint32_t>(Extra::AdditiveLighting);
 		const std::uint32_t extra = (expected.extraShaderDescriptor & lightingExtraBits) |
 		                            ((object.flags & kObjectSuppressExternalEmittance) ? static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) : 0u) |
-		                            (face && (object.flags & kObjectBeastRace) ? static_cast<std::uint32_t>(Extra::IsBeastRace) : 0u);
+		                            (face && (object.flags & Integrations::SubsurfaceScattering::kObjectBeastRace) ? static_cast<std::uint32_t>(Extra::IsBeastRace) : 0u);
 		// Excluded: hair's ProjectedUV bit (DCLF drops it: HairProjection) and PerDrawBits.
 		const std::uint32_t hairProjection = HairProjection(native.VertexShaderDescriptor) ? kPassProjectedUV : 0u;
 		const PerDrawBits perDraw = PerDrawBitsOf(tables, a_objectIndex, tables.pipelines[object.pipelineIndex].passDescriptor);
@@ -480,69 +484,18 @@ namespace DCLF
 
 	void CaptureParity::CompareSkin(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex)
 	{
-		auto& skin = globals::features::skin;
-		if (!skin.loaded)
+		if (!Integrations::AdvancedSkin::Loaded())
 			return;
 		const auto& tables = Scene::FrameView::Get().GetTables();
-		const auto& object = tables.objects[a_objectIndex];
+		auto note = [](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) {
+			static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message));
+		};
 
-		// t71 and t74, bound by State::Draw from the SetupMaterial hook's pending binding.
-		if (!(object.flags & kObjectNoBindings) && object.materialIndex < tables.materials.size()) {
-			const auto& features = tables.materials[object.materialIndex].featureTextures;
-			const std::array<ID3D11ShaderResourceView*, kSkinFeatureTextures> expected{ features[0], features[1] };
-			if (expected[0] || expected[1]) {
-				std::array<ID3D11ShaderResourceView*, kSkinFeatureTextures> native{};
-				for (std::uint32_t f = 0; f < kSkinFeatureTextures; ++f)
-					a_context->PSGetShaderResources(kFeatureMaterialRegisters[f], 1, &native[f]);
-				++skinTextureChecks;
-				if (native != expected) {
-					++skinTextureMismatches;
-					NoteMismatch(fmt::format("{} skin textures: DCLF t71 {} t74 {}, native t71 {} t74 {}", Describe(a_geometry), fmt::ptr(expected[0]),
-						fmt::ptr(expected[1]), fmt::ptr(native[0]), fmt::ptr(native[1])));
-				}
-				for (auto* bound : native) {
-					if (bound)
-						bound->Release();
-				}
-			}
-		}
+		// t71 and t74, bound by State::Draw from the SetupMaterial hook's pending binding: Integrations/AdvancedSkin's.
+		skinTextures.Compare(a_context, a_geometry, a_objectIndex, tables, note, this);
 
 		// b7 and the actor ownership: Integrations/AdvancedSkin's.
-		skinWetness.Compare(a_geometry, a_objectIndex, tables, FrameValues::Get().ShadingIfDone(true),
-			[](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) {
-				static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message));
-			},
-			this);
-	}
-
-	void CaptureParity::CompareTruePBR(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex)
-	{
-		if (!globals::features::truePBR.loaded)
-			return;
-		const auto& tables = Scene::FrameView::Get().GetTables();
-		const auto& object = tables.objects[a_objectIndex];
-		if ((object.flags & kObjectNoBindings) || object.materialIndex >= tables.materials.size())
-			return;
-		// t80-t91, bound by State::Draw from TruePBR's landscape hook (other materials leave the previous draw's: not compared).
-		const auto& features = tables.materials[object.materialIndex].featureTextures;
-		const auto first = features.begin() + kTruePBRFeatureTextures;
-		if (std::none_of(first, features.end(), [](const auto* a_view) { return a_view != nullptr; }))
-			return;
-		std::array<ID3D11ShaderResourceView*, TruePBR::NumExtendedTextures> native{};
-		a_context->PSGetShaderResources(TruePBR::FirstExtendedTexture, TruePBR::NumExtendedTextures, native.data());
-		++truePBRTextureChecks;
-		for (std::uint32_t i = 0; i < TruePBR::NumExtendedTextures; ++i) {
-			if (native[i] != first[i]) {
-				++truePBRTextureMismatches;
-				NoteMismatch(fmt::format("{} TruePBR texture t{}: DCLF {}, native {}", Describe(a_geometry), TruePBR::FirstExtendedTexture + i, fmt::ptr(first[i]),
-					fmt::ptr(native[i])));
-				break;
-			}
-		}
-		for (auto* bound : native) {
-			if (bound)
-				bound->Release();
-		}
+		skinWetness.Compare(a_geometry, a_objectIndex, tables, FrameValues::Get().ShadingIfDone(true), note, this);
 	}
 
 	void CaptureParity::CompareFeatureBindings(ID3D11DeviceContext* a_context)
@@ -553,15 +506,17 @@ namespace DCLF
 		a_context->VSGetShaderResources(0, kResourceSlots, current.vsResources.data());
 		a_context->PSGetShaderResources(0, kResourceSlots, current.psResources.data());
 
-		// Skipped: per-material feature textures (kFeatureMaterialRegisters; CompareSkin and CompareTruePBR check them) and
-		// Skin's per-geometry t75 (SKIN only).
-		constexpr std::uint64_t kSkinResources = [] {
-			std::uint64_t bits = 1ull << (75 - 64);
-			for (const std::uint32_t t : kFeatureMaterialRegisters)
-				bits |= 1ull << (t - 64);
+		// Skipped: per-material feature textures (the material contributors' registers, Extensions::FeatureTextureRegister; the
+		// integrations' texture parities check them) and Skin's per-geometry t75 (SKIN only). By register: t0-t63, t64-t127. Resolved at
+		// install, so built once at the first check.
+		static const std::array<std::uint64_t, 2> kSkinResources = [] {
+			std::array<std::uint64_t, 2> bits{ 0, 1ull << (75 - 64) };
+			for (std::uint32_t f = 0; f < Extensions::FeatureTextureCount(); ++f) {
+				const std::uint32_t t = Extensions::FeatureTextureRegister(f);
+				bits[t / 64] |= 1ull << (t % 64);
+			}
 			return bits;
 		}();
-		static_assert(kFeatureMaterialRegisters.front() >= 64 && kFeatureMaterialRegisters.back() < 128);
 		auto compare = [&](const auto& a_current, const auto& a_baseline, std::uint32_t a_first, std::uint64_t a_skip, const char* a_what,
 						   std::uint64_t a_skipHigh = 0) {
 			for (std::uint32_t slot = a_first; slot < a_current.size(); ++slot) {
@@ -581,10 +536,10 @@ namespace DCLF
 			baselineValid = true;
 		} else {
 			// PS t0-t15 are the engine's (covered by the material and technique checks; unsampled slots keep leftovers).
-			compare(current.vsBuffers, baseline.vsBuffers, kFirstFeatureConstantBuffer, kPerDrawVSBuffers, "VS b");
-			compare(current.psBuffers, baseline.psBuffers, kFirstFeatureConstantBuffer, kPerDrawPSBuffers, "PS b");
+			compare(current.vsBuffers, baseline.vsBuffers, kFirstFeatureConstantBuffer, PerDrawVSBuffers(), "VS b");
+			compare(current.psBuffers, baseline.psBuffers, kFirstFeatureConstantBuffer, PerDrawPSBuffers(), "PS b");
 			compare(current.vsResources, baseline.vsResources, 0, 0, "VS t");
-			compare(current.psResources, baseline.psResources, 0, 0xffffull, "PS t", kSkinResources);
+			compare(current.psResources, baseline.psResources, 0, 0xffffull | kSkinResources[0], "PS t", kSkinResources[1]);
 		}
 
 		auto release = [](auto& a_array) {
@@ -703,7 +658,12 @@ namespace DCLF
 			this);
 
 		CompareSkin(a_context, geometry, static_cast<std::uint32_t>(index));
-		CompareTruePBR(a_context, geometry, static_cast<std::uint32_t>(index));
+		// t80-t91: Integrations/TruePBR's.
+		truePBRTextures.Compare(a_context, geometry, static_cast<std::uint32_t>(index), tables,
+			[](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) {
+				static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message));
+			},
+			this);
 
 		CompareFeatureBindings(a_context);
 
@@ -1051,7 +1011,7 @@ namespace DCLF
 
 		const auto& stats = Scene::Coordinator::Get().GetStats();
 		const bool ok = mismatchedDraws == 0 && untrackedEligible == 0 && drawMismatches == 0 && permutationMismatches == 0 && lightData.Ok() &&
-		                skinTextureMismatches == 0 && skinWetness.Ok() && truePBRTextureMismatches == 0;
+		                skinTextures.Ok() && skinWetness.Ok() && truePBRTextures.Ok();
 		std::string flags;
 		for (auto value : renderFlagsSeen)
 			flags += fmt::format(" {:X}", value);
@@ -1105,10 +1065,9 @@ namespace DCLF
 			drawsChecked, drawMismatches);
 		lightData.Report();
 		logger::info("[DCLF] skin parity {}: {} draws' t71/t74 checked, {} differ; {} draws' wetness checked ({} wet), {} differ, {} with a different actor ownership",
-			skinTextureMismatches == 0 && skinWetness.Ok() ? "OK" : "MISMATCH", skinTextureChecks, skinTextureMismatches, skinWetness.checks,
+			skinTextures.Ok() && skinWetness.Ok() ? "OK" : "MISMATCH", skinTextures.checks, skinTextures.mismatches, skinWetness.checks,
 			skinWetness.wetDraws, skinWetness.mismatches, skinWetness.ownerMismatches);
-		logger::info("[DCLF] TruePBR texture parity {}: {} landscape draws' t80-t91 checked, {} differ", truePBRTextureMismatches == 0 ? "OK" : "MISMATCH",
-			truePBRTextureChecks, truePBRTextureMismatches);
+		truePBRTextures.Report();
 		std::string diffs;
 		static constexpr const char* kFieldNames[] = { "vertex", "pixel", "extra", "feature" };
 		for (const auto& [key, count] : permutationDiffs)
@@ -1167,9 +1126,9 @@ namespace DCLF
 		drawMismatches = drawsChecked = 0;
 		techniqueMismatches = inheritedFilters = permutationChecks = permutationMismatches = 0;
 		lightData.Reset();
-		skinTextureChecks = skinTextureMismatches = 0;
+		skinTextures.Reset();
 		skinWetness.Reset();
-		truePBRTextureChecks = truePBRTextureMismatches = 0;
+		truePBRTextures.Reset();
 		permutationDiffs.clear();
 		unevaluated.clear();
 		bindingChanges.clear();
