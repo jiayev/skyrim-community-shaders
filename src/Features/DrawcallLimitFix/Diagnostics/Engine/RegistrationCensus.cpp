@@ -239,6 +239,17 @@ namespace DCLF::RegistrationCensus
 			bool recordsMade = false;
 		};
 
+		std::string ViewName(std::uint16_t a_view)
+		{
+			if (a_view < kFirstOther)
+				return std::string(kViewNames[a_view]);
+			// Any other batch renderer by its address too, to match against the views' renderer logs.
+			for (const auto& [batch, view] : census.others)
+				if (view == a_view)
+					return fmt::format("other #{} ({})", a_view - kFirstOther, static_cast<const void*>(batch));
+			return fmt::format("other #{}", a_view - kFirstOther);
+		}
+
 		std::uint16_t ViewOf(const Noted& a_noted, const Frame& a_frame)
 		{
 			if (a_noted.site == Site::Occlusion) {
@@ -430,7 +441,7 @@ namespace DCLF::RegistrationCensus
 				key = kLightingKey | (static_cast<std::uint64_t>(port) << kPortKeyShift) | cls;
 				if (cls == kMemberDefect && census.defects++ == 0)
 					census.firstDefect = fmt::format("{} in {}", Describe(*geometry, true),
-						view < kFirstOther ? std::string(kViewNames[view]) : fmt::format("other #{}", view - kFirstOther));
+						ViewName(view));
 			} else {
 				rtti = geometry->GetRTTI();
 				attributed = a_noted.shaderType > RE::BSShader::Type::None && a_noted.shaderType < RE::BSShader::Type::Total && rtti;
@@ -442,7 +453,7 @@ namespace DCLF::RegistrationCensus
 				const bool covered = view == kMainDepth || view == kMain || view == kSun || view == kSpot || view == kPoint;
 				if ((covered ? census.underWhole : census.underWholeElsewhere)++ == 0)
 					(covered ? census.firstUnderWhole : census.firstUnderWholeElsewhere) = fmt::format("{} in {}", Describe(*geometry, true),
-						view < kFirstOther ? std::string(kViewNames[view]) : fmt::format("other #{}", view - kFirstOther));
+						ViewName(view));
 			}
 			++census.passes;
 			census.attributed += attributed ? 1 : 0;
@@ -475,11 +486,6 @@ namespace DCLF::RegistrationCensus
 				}
 			}
 			++it->second.passes;
-		}
-
-		std::string ViewName(std::uint16_t a_view)
-		{
-			return a_view < kFirstOther ? std::string(kViewNames[a_view]) : fmt::format("other #{}", a_view - kFirstOther);
 		}
 
 		std::string ClassName(std::uint64_t a_key, const ClassWindow& a_class)

@@ -2453,7 +2453,7 @@ the reads of the geometry; nothing is read on DCLF's threads. The window's maps 
 **Views.** By batch renderer: the Z-prepass's accumulator (`main depth`), the main camera's (`main`), first person's
 (`0x14338c820`), the frame's shadow views by kind (`sun cascades`, `spot shadows`, `point shadows`, `focus shadows`, from
 `ShadowViews`, covered or not), the `reflection faces`, the occlusion maps by phase. Any other batch renderer is
-`other #k`, numbered by when it was first seen in the session (the local map, the water reflection, a menu's 3D, a
+`other #k (<address>)`, numbered by when it was first seen in the session (the local map, the water reflection, a menu's 3D, a
 geometry group's renderer of an accumulator the census does not know). The top names tell which view it is.
 
 **Classes.** A geometry whose shader property is a `BSLightingShaderProperty` gets DCLF's class, whatever its pass's

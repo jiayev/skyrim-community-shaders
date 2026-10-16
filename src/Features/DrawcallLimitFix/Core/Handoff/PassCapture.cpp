@@ -124,6 +124,25 @@ namespace DCLF
 		return lastDrain;
 	}
 
+	namespace
+	{
+		// An accumulator's batch renderers: its own, its geometry groups' and its alpha group's, in that order. The engine makes groups as
+		// geometry first uses them, so a set made from these is made again whenever the list changes, not only when the accumulators do.
+		void CollectRenderers(const void* a_accumulator, std::vector<const RE::BSBatchRenderer*>& a_out)
+		{
+			const auto* accumulator = static_cast<const RE::BSGraphics::BSShaderAccumulator*>(a_accumulator);
+			const auto* batch = accumulator ? accumulator->GetRuntimeData().batchRenderer : nullptr;
+			if (!batch)
+				return;
+			a_out.push_back(batch);
+			for (const auto* group : batch->geometryGroups)
+				if (group && group->batchRenderer)
+					a_out.push_back(group->batchRenderer);
+			if (batch->alphaGroup && batch->alphaGroup->batchRenderer)
+				a_out.push_back(batch->alphaGroup->batchRenderer);
+		}
+	}
+
 	void PassCapture::RefreshMainRenderers()
 	{
 		// The Z-prepass's accumulator (render mode 0xC) and the main camera's (render mode 0), as the registration jobs
@@ -136,38 +155,27 @@ namespace DCLF
 		// member's (WithholdMain).
 		const auto& views = Extensions::Views();
 		std::array<Api::ViewAccumulators, Extensions::kEngineViews> viewAccumulators{};
-		bool same = accumulators == mainAccumulators;
+		std::vector<const RE::BSBatchRenderer*> sources;
+		for (const void* accumulator : accumulators)
+			CollectRenderers(accumulator, sources);
+		std::array<std::size_t, Extensions::kEngineViews + 1> viewSourcesAt{};
 		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i) {
 			const auto v = static_cast<std::size_t>(views.mainRendererViews[i]);
 			views.views[v].accumulators(viewAccumulators[v]);
-			same = same && viewAccumulators[v] == viewRenderers[v].accumulators;
+			viewSourcesAt[i] = sources.size();
+			for (std::uint32_t a = 0; a < viewAccumulators[v].count; ++a)
+				CollectRenderers(viewAccumulators[v].accumulators[a], sources);
 		}
-		if (same && std::atomic_load(&mainRenderers))
+		viewSourcesAt[views.mainRendererCount] = sources.size();
+		if (sources == mainSources && std::atomic_load(&mainRenderers))
 			return;
 		mainAccumulators = accumulators;
+		mainSources = sources;
+		auto renderers = std::make_shared<RendererSet>(sources.begin(), sources.end());
 		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i) {
 			const auto v = static_cast<std::size_t>(views.mainRendererViews[i]);
 			viewRenderers[v].accumulators = viewAccumulators[v];
-		}
-		auto renderers = std::make_shared<RendererSet>();
-		auto add = [](RendererSet& a_set, RE::BSGraphics::BSShaderAccumulator* a_accumulator) {
-			auto* batch = a_accumulator ? a_accumulator->GetRuntimeData().batchRenderer : nullptr;
-			if (!batch)
-				return;
-			a_set.insert(batch);
-			for (auto* group : batch->geometryGroups)
-				if (group && group->batchRenderer)
-					a_set.insert(group->batchRenderer);
-		};
-		for (auto* accumulator : { *depthAccumulator, *mainAccumulator })
-			add(*renderers, accumulator);
-		for (std::uint32_t i = 0; i < views.mainRendererCount; ++i) {
-			const auto v = static_cast<std::size_t>(views.mainRendererViews[i]);
-			auto viewSet = std::make_shared<RendererSet>();
-			const auto& viewAccumulator = viewAccumulators[v];
-			for (std::uint32_t a = 0; a < viewAccumulator.count; ++a)
-				add(*viewSet, static_cast<RE::BSGraphics::BSShaderAccumulator*>(const_cast<void*>(viewAccumulator.accumulators[a])));
-			renderers->insert(viewSet->begin(), viewSet->end());
+			auto viewSet = std::make_shared<RendererSet>(sources.begin() + viewSourcesAt[i], sources.begin() + viewSourcesAt[i + 1]);
 			std::atomic_store(&viewRenderers[v].renderers, std::shared_ptr<const RendererSet>(std::move(viewSet)));
 		}
 		logger::info("[DCLF] the main camera's views: {} batch renderers (Z-prepass accumulator {}, main {})", renderers->size(), accumulators[0], accumulators[1]);
@@ -219,26 +227,24 @@ namespace DCLF
 
 	void PassCapture::SetViewRenderers(Api::EngineView a_view, const Api::ViewAccumulators& a_accumulators)
 	{
-		// The view's accumulators (the reflection's: BSCubeMapCamera's two, the faces cull into the first): their batch renderers and their
-		// geometry groups'.
+		// The view's accumulators (the reflection's: BSCubeMapCamera's two, the faces cull into the first): their batch renderers, their
+		// geometry groups' and their alpha groups', made again whenever any of them changes.
 		auto& view = viewRenderers[static_cast<std::size_t>(a_view)];
-		if (a_accumulators == view.accumulators && std::atomic_load(&view.renderers))
+		std::vector<const RE::BSBatchRenderer*> sources;
+		for (std::uint32_t a = 0; a < a_accumulators.count; ++a)
+			CollectRenderers(a_accumulators.accumulators[a], sources);
+		if (a_accumulators == view.accumulators && sources == view.sources && std::atomic_load(&view.renderers))
 			return;
 		view.accumulators = a_accumulators;
-		auto renderers = std::make_shared<RendererSet>();
-		std::string sources;
-		for (std::uint32_t a = 0; a < a_accumulators.count; ++a) {
-			sources += fmt::format("{}{}", a ? ", " : "", a_accumulators.accumulators[a]);
-			const auto* accumulator = static_cast<const RE::BSGraphics::BSShaderAccumulator*>(a_accumulators.accumulators[a]);
-			auto* batch = accumulator ? accumulator->GetRuntimeData().batchRenderer : nullptr;
-			if (!batch)
-				continue;
-			renderers->insert(batch);
-			for (auto* group : batch->geometryGroups)
-				if (group && group->batchRenderer)
-					renderers->insert(group->batchRenderer);
-		}
-		logger::info("[DCLF] the {} faces: {} batch renderers (accumulators {})", Extensions::ViewEntryOf(a_view).name, renderers->size(), sources);
+		view.sources = sources;
+		auto renderers = std::make_shared<RendererSet>(sources.begin(), sources.end());
+		std::string accumulators;
+		for (std::uint32_t a = 0; a < a_accumulators.count; ++a)
+			accumulators += fmt::format("{}{}", a ? ", " : "", a_accumulators.accumulators[a]);
+		std::string batches;
+		for (const auto* batch : sources)
+			batches += fmt::format("{}{}", batches.empty() ? "" : ", ", static_cast<const void*>(batch));
+		logger::info("[DCLF] the {} faces: {} batch renderers (accumulators {}; renderers {})", Extensions::ViewEntryOf(a_view).name, renderers->size(), accumulators, batches);
 		std::atomic_store(&view.renderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
 	}
 
