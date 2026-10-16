@@ -1,27 +1,4 @@
 {
- "legacyEdges": {
-  "Core -> Engine": 13,
-  "Core -> Scene": 34,
-  "Engine -> Scene": 14,
-  "Features/Actors -> Scene": 1,
-  "Features/Billboards -> Scene": 3,
-  "Features/Faces -> Scene": 2,
-  "Features/Fades -> Engine": 5,
-  "Features/Fades -> Scene": 16,
-  "Features/FirstPerson -> Engine": 1,
-  "Features/FirstPerson -> Scene": 1,
-  "Features/HiddenNodes -> Engine": 1,
-  "Features/LocalLights -> Scene": 2,
-  "Features/Portals -> Scene": 1,
-  "Features/Shadows/Local -> Engine": 2,
-  "Features/Shadows/Local -> Scene": 6,
-  "Features/Shadows/Sun -> Engine": 2,
-  "Features/Shadows/Sun -> Scene": 3,
-  "Integrations/AdvancedSkin -> Scene": 4,
-  "Integrations/LightLimitFix -> Scene": 1,
-  "Integrations/TruePBR -> Scene": 3,
-  "Scene -> Engine": 23
- },
  "overThresholds": {
   "DCLF::CaptureParity::OnNativeLightingDraw": [
    205,
@@ -78,10 +55,6 @@
   "DCLF::Eligibility::Static": [
    89,
    56
-  ],
-  "DCLF::Features::HiddenNodes::HiddenStoreSites": [
-   470,
-   1
   ],
   "DCLF::IndirectDraws::ExecuteShadowFrame": [
    287,
