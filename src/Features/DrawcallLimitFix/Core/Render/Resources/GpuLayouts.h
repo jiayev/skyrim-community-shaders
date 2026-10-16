@@ -155,8 +155,8 @@ namespace DCLF::Draws
 		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0;
 		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
 		std::uint32_t outIndices[2]{};  // the published states, by the scene frame's parity
-		std::uint32_t programsIndex = 0;      // ByteAddressBuffer: the main camera's portal programs (Records.h, kPortal*)
-		std::uint32_t rootProgramsIndex = 0;  // StructuredBuffer<uint>: each root's program (PortalViews::ProgramOf)
+		std::uint32_t programsIndex = 0;      // ByteAddressBuffer: the main cull input's programs (Features/Portals: PortalPrograms.h)
+		std::uint32_t rootProgramsIndex = 0;  // StructuredBuffer<uint>: each root's program (the input's judge)
 		std::uint32_t animatedIndex = 0;    // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
 		std::uint32_t eventsIndex = 0;      // RWStructuredBuffer<uint>: the write-back's events (Records.h, FadeEvent)
 		std::uint32_t reportedIndex = 0;    // RWStructuredBuffer<uint2>: per root, the generation and milestone last reported
@@ -340,8 +340,8 @@ namespace DCLF::Draws
 		std::uint32_t pipelineRowStride;
 		// Depth phase 1 and shadow views: the fade roots' static rows. 0 elsewhere.
 		std::uint32_t fadeRootsIndex;
-		// Depth phase 1: the portal programs (kPortal*), tested after the frustum. 0 elsewhere.
-		std::uint32_t portalProgramsIndex;
+		// Depth phase 1: the main cull input's programs (the HLSL's PortalProgramsIndex), tested after the frustum. 0 elsewhere.
+		std::uint32_t cullProgramsIndex;
 		// A shadow view's bucket counts, or the depth phases' (a word per pipeline slot). 0 elsewhere.
 		std::uint32_t bucketCountsIndex;
 		// Shadow views and the depth segment: each geometry slot's first index in the index pool (IndexPool::firsts). 0 elsewhere.

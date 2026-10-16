@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Api/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Api/Commits.h"
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Api/CullInputs.h"
 #include "Features/DrawcallLimitFix/Api/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
@@ -186,6 +187,11 @@ namespace DCLF::Api
 		 * past the entry classes.
 		 */
 		virtual ShadingFieldId RegisterShadingField(const ShadingFieldContribution& a_field) = 0;
+		/**
+		 * @brief Fails the install for a second input (Core's main cull reads one walk), or one without a name, programs name, header words
+		 * or any of its callbacks.
+		 */
+		virtual void RegisterMainCullInput(const MainCullInputContribution& a_input) = 0;
 
 	protected:
 		~InstallContext() = default;
@@ -197,7 +203,8 @@ namespace DCLF::Api
 	 * - install: see InstallContext.
 	 * - earlyHooks (optional): the main thread at PostPostLoad, before DCLF's own engine side and observers install (the shell's
 	 *   Extensions::InstallEarlyHooks, in the list's order): engine hooks that must be in before Core's engine side reads what they
-	 *   change (a vtable slot the primary cull takes at its install; the source of an engine event channel Core follows, after Core's
+	 *   change (a vtable slot the primary cull takes at its install; a call site the primary cull requires, the main walk's, noted with
+	 *   Extensions::NoteMainWalkInstalled; the source of an engine event channel Core follows, after Core's
 	 *   own scene events are in; a writer completing Core's movers, on a slot it reserves first: Extensions::ReserveMoveWriter). Registers
 	 *   nothing; Core's switches and Diagnostics::Observe are readable.
 	 * - sourceHooks (optional): the main thread at PostPostLoad, where the shadow sources' hooks install (the shell's

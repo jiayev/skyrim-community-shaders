@@ -1,8 +1,8 @@
 // RoomVisibility: the detour of Main::IsRoomVisible's three calls (job threads), answered from PortalViews' VisibleSet while DCLF runs.
-#include "Features/DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
+#include "Features/DrawcallLimitFix/Features/Portals/RoomVisibility.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 
 #include <array>
 #include <atomic>

@@ -13,10 +13,6 @@ namespace DCLF::Reports
 	/** @brief Render thread, Present (Reports::RenderThread): the primary cull's lines, with the scene lists', the culls off, the tree list's and the point lights' culls. */
 	void PrimaryCullLines(std::uint32_t a_frame);
 
-	/** @brief The portal views' parity line, logged (every 300 builds with CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY). */
-	void PortalViewsLine();
-	/** @brief Main::IsRoomVisible's answers, logged (every 300 published VisibleSets). */
-	void RoomVisibilityLines();
 	/** @brief The light rooms' and light selection's parity lines, logged (every 300 selections with either parity). */
 	void LightSelectionLines();
 

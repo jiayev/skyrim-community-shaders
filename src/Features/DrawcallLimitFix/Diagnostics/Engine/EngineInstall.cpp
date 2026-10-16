@@ -6,7 +6,6 @@
 #include "CutObservers.h"
 #include "LightCulls.h"
 #include "LightSelectionParity.h"
-#include "PortalParity.h"
 #include "Registrations.h"
 #include "RegistrationCensus.h"
 #include "ReleaseGuard.h"
@@ -30,12 +29,10 @@ namespace DCLF::Diagnostics
 			LightCulls::Install();
 		// CS_DCLF_CENSUS: the passes the registration hooks hand on to the engine.
 		RegistrationCensus::Install();
-		// The portal views and the light selection against the engine's (both parities; the shadow views' are their sources' features':
-		// their install, as is the sun exclusion's watch).
-		if (o.claimsOrScene) {
-			PortalParity::Install();
+		// The light selection against the engine's (both parities; the portal views' are Features/Portals', the shadow views' their
+		// sources' features': their install, as is the sun exclusion's watch).
+		if (o.claimsOrScene)
 			LightSelectionParity::Install();
-		}
 		// CS_DCLF_SET_PARITY: the members' withheld forward and refraction passes (the particle members' and the Effect Lighting ones are their
 		// features').
 		if (o.claims)

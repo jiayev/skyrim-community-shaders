@@ -13,6 +13,7 @@
 #include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
+#include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/Reflection.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/Local.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
@@ -28,14 +29,18 @@ namespace DCLF::Features
 {
 	std::span<const Api::Feature> List()
 	{
-		// The occlusion maps first: their toggles are the first registered, so their bits in the packed toggle word are where Core's were
+		// Portals first: its early hooks (Main::Update's portal walk, the call site the primary cull requires) before every other feature's,
+		// and its install's room visibility (its install log right after the primary cull's, where the shell installed it) and stand-in
+		// observer (Main::Update's entry, before the others', where the shell set it live); it registers the main cull input and no
+		// switch, toggle, pool, stage or product.
+		// The occlusion maps next: their toggles are the first registered, so their bits in the packed toggle word are where Core's were
 		// (right after Core's flags), and their switches and toggles are listed before the reflection's and the first person's (which follow
 		// them there); no early hooks, no pool, stage or product. The shadow sources next, sun then local (Shadows/Sun, Shadows/Local): they
 		// register their sources (resolved by source, whatever the order) and source hooks (installed by source: the sun's accumulation and
 		// camera, Core's light selection, then the focus cameras, whatever the list's order); the sun also its switches and toggles (anchored
 		// after the shadows'); no early hook, pool, stage or product.
-		// Reflection next: its early hooks (the water reflection's update, add-roots and face render) run before every other feature's and
-		// Core's observers, where the shell installed them; its toggle's bit follows
+		// Reflection next: its early hooks (the water reflection's update, add-roots and face render) run right after Portals', before every
+		// other feature's and Core's observers, where the shell installed them; its toggle's bit follows
 		// the maps', where Core's was; its switch and toggle are listed after the precipitation mask's, before the first person's (which
 		// follow them there); it registers no pool, stage or product. Skins next: before the features that read skins (DEPENDS: Effects,
 		// first person); its switches are listed after the culling's, the skin partitions' after the skinned's (the actors', tree wind's and
@@ -66,6 +71,7 @@ namespace DCLF::Features
 		// skins and the actors (its toggle needs the skinned and theirs) and after billboards (its report lines follow theirs at the draws' async work); its switches and toggle
 		// are listed after the reflection's.
 		static const std::array kFeatures{
+			Portals::Feature(),
 			OcclusionMaps::Feature(),
 			Shadows::Sun::Feature(),
 			Shadows::Local::Feature(),

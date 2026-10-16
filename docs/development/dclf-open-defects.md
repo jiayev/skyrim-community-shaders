@@ -198,6 +198,15 @@ engine's 0 ops 0 sets`. In that window the engine listed one unbound-space occlu
 it in state 0. The same motion path on the B1 build, and the earlier motion runs, showed none. The gates change did not touch
 portals.
 
+## Stand-in walk parity: three snow geometries missed at frame 868 under motion (found 2026-10-15; not investigated)
+
+About one `verify.sh` full run in three (b2c, w1, w3a, w3b, the Portals step) reports, in one window only, `3 geometries handed to
+the registration from entries the stand-in would not walk <- STAND-IN WALK`, always `[frame 868]` and always the same three:
+'objHD-LargeRef', 'objsnow' and 'objsnowHD-LargeRef' (resident, set phases 0x0, claimed 0x0, admitted 1). The next window is `<- OK`.
+The fixed frame on the fixed `CS_DCLF_TEST_MOVE` path makes it a one-frame cell-crossing case, likely the walk decided before the
+snow members joined. Parity runs walk everything, so it draws there; normal play would drop these for that frame. It predates the
+modular-layout feature steps that showed it.
+
 ## Pooled payload: open items (2026-10-14)
 
 The payload ring was replaced by pooled versions published once per snapshot (dclf-architecture.md, "The payload"). These

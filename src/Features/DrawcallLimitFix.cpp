@@ -22,7 +22,6 @@
 #	include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #	include "DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#	include "DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
 #	include "Features/Skylighting.h"
 
 #	include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
@@ -65,11 +64,12 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::PassCapture::Get().Install();
 	// Whether DCLF runs, for the engine hooks outside the shell (the features' own thunks), before any of them is installed.
 	DCLF::ShellState::InstallRunningQuery([] { return globals::features::drawcallLimitFix.Running(); });
-	// The features' engine hooks that must precede DCLF's own engine side (Features/Reflection: the water reflection's update, add-roots
-	// and face render, first, right after the pass capture; Features/Actors: Actor::SetAlpha and the actors' move writers, on the slots
-	// it reserves, where Core's scene events installed them; Features/Billboards: its parity's NiBillboardNode::OnVisible thunk, before the
-	// primary cull takes the slot; Features/Lod: object LOD's segment writers, its engine channel's source; Features/TreeLod: tree LOD's
-	// channel's source, the refill's, block update's and group slots' hooks;
+	// The features' engine hooks that must precede DCLF's own engine side (Features/Portals: Main::Update's portal walk, first, the call
+	// site the primary cull requires; Features/Reflection: the water reflection's update, add-roots and face render, right after it;
+	// Features/Actors: Actor::SetAlpha and the actors' move writers, on the slots it reserves, where Core's scene events installed them;
+	// Features/Billboards: its parity's NiBillboardNode::OnVisible thunk, before the primary cull takes the slot; Features/Lod: object
+	// LOD's segment writers, its engine channel's source; Features/TreeLod: tree LOD's channel's source, the refill's, block update's and
+	// group slots' hooks;
 	// Features/HiddenNodes: the hidden stores, right after the scene events as before; Features/Decals: the decal array edits, which Core's
 	// scene events installed (no other hook shares their sites)), then the observers
 	// this run's switches ask for, and the engine hooks only they use (before DCLF's threads start).
@@ -83,12 +83,10 @@ void DrawcallLimitFix::PostPostLoad()
 	// selection, then Features/Shadows/Local's focus cameras, in that order.
 	DCLF::Extensions::InstallSourceHooks(DCLF::Features::List());
 	DCLF::PrimaryCull::Get().Install();
-	// Main::IsRoomVisible answered from PortalViews' VisibleSet while DCLF runs.
-	DCLF::RoomVisibility::Install();
 	// The features' extension points (Features/FeatureList.cpp), registered before DCLF's threads start and read-only after, and
-	// their engine hooks (after DCLF's own: Features/TreeWind's tree manager hooks follow the primary cull's stand-in; Features/Particles'
-	// snapshots of NiParticleSystem's update; Features/Lod's LOD gates, the engine's LOD swaps gated on DCLF's claims; Features/Faces'
-	// thunks in the face morphing).
+	// their engine hooks (after DCLF's own: Features/Portals' Main::IsRoomVisible detours, first; Features/TreeWind's tree manager hooks
+	// follow the primary cull's stand-in; Features/Particles' snapshots of NiParticleSystem's update; Features/Lod's LOD gates, the engine's
+	// LOD swaps gated on DCLF's claims; Features/Faces' thunks in the face morphing).
 	// The integrations after them (Integrations/IntegrationList.cpp: Integrations/AdvancedSkin's wetness).
 	DCLF::Extensions::InstallFeatures(DCLF::Features::List(), DCLF::Integrations::List());
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
@@ -177,11 +175,8 @@ void DrawcallLimitFix::Hooks::Main_Update_Entry::thunk(void* a_stages)
 {
 	func(a_stages);
 	auto& feature = globals::features::drawcallLimitFix;
-	if (feature.installed) {
-		// The frame's Main::IsRoomVisible calls answered by DCLF only while it runs.
-		DCLF::RoomVisibility::SetLive(feature.Running());
+	if (feature.installed)
 		DCLF::PrimaryCull::Get().AtUpdateEntry(feature.Running());
-	}
 }
 
 std::int64_t DrawcallLimitFix::Hooks::Main_Draw_Early::thunk(void* a_main)

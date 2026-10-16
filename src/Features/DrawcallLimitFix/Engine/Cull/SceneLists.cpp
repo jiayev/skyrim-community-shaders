@@ -2,9 +2,9 @@
 // thread (PublishListFilter, RestoreSceneLists), the build's job (DrawWorld_BuildSceneLists' detour: kept, rebuilt or the engine's
 // build filtered), and the attach/detach detours' structure events (any thread). PrimaryCull.h, PublishListFilter, describes the modes.
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -121,8 +121,9 @@ namespace DCLF
 		if (!sceneNode || !processes || !processes[0] || !tes || !count || count > listSentinels.size())
 			return fail(1);
 		// The interior branch (and with no unbound space, the water's) does not walk the object root. Whether the walk reached
-		// unbound space is DCLF's walk's (PortalViews, after Main::Update's).
-		if (!PortalViews::Get().VisibleUnbound())
+		// unbound space is DCLF's walk's (the main cull input's, after Main::Update's: Features/Portals). The primary cull is installed
+		// only with its walk, so an input is registered here.
+		if (const auto* input = Extensions::MainCullInput(); input && !input->contribution.unboundVisible())
 			return fail(2);
 		if (tes->interiorCell)
 			return fail(3);
@@ -626,7 +627,8 @@ namespace DCLF
 	void PrimaryCull::NoteListStructure(const RE::NiNode* a_parent, RE::NiAVObject* a_child, bool a_attached)
 	{
 		LocalLightCull::NoteStructure(a_parent, a_child, a_attached);
-		PortalViews::Get().NoteStructure(a_parent);
+		if (const auto* input = Extensions::MainCullInput())
+			input->contribution.structure(a_parent);
 		const auto* objectRoot = listObjectRoot.load(std::memory_order_acquire);
 		if (!a_parent || !objectRoot)
 			return;

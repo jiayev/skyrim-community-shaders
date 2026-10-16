@@ -23,7 +23,7 @@ namespace DCLF::RoomVisibility
 	 * no engine memory. The detour's answer.
 	 */
 	bool DclfAnswer(const void* a_key);
-	/** @brief The calls answered since the last Take, by DCLF's VisibleSet and by the engine (Reports::RoomVisibilityLines). */
+	/** @brief The calls answered since the last Take, by DCLF's VisibleSet and by the engine (Features::Portals::RoomVisibilityLines). */
 	struct Answers
 	{
 		std::uint64_t dclf = 0, engine = 0;

@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
@@ -97,6 +98,8 @@ namespace DCLF::Extensions
 			std::vector<ClassifyInputEntry> classifyInputs;
 			// The vertex stream (entry class Count: none). Resolved at the end (ResolveVertexStream).
 			Api::VertexStreamContribution vertexStream{};
+			// The main cull input (no name: none). Resolved at the end (ResolveMainCullInput).
+			Api::MainCullInputContribution mainCullInput{};
 			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
 			std::array<Api::PaletteRowsContribution, Api::kPaletteRowsClasses> paletteRows{};
 			// The shading fields, in registration order; whether a field is taken. Resolved at the end (ResolveShadingFields).
@@ -765,6 +768,17 @@ namespace DCLF::Extensions
 				return { static_cast<std::uint32_t>(lists.shadingFields.size() - 1) };
 			}
 
+			void RegisterMainCullInput(const Api::MainCullInputContribution& a_input) override
+			{
+				if (a_input.name.empty() || a_input.programsName.empty() || !a_input.headerWords || !a_input.unboundVisible || !a_input.structure || !a_input.programs ||
+					!a_input.programsVersion || !a_input.judge)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete main cull input", feature));
+				// The scene lists' keep check and the depth commits' programs read one walk.
+				if (!lists.mainCullInput.name.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes main cull input {}, which {} has", feature, a_input.name, lists.mainCullInput.name));
+				lists.mainCullInput = a_input;
+			}
+
 			std::string_view feature;  // the feature installing
 
 		private:
@@ -810,7 +824,7 @@ namespace DCLF::Extensions
 		CheckSwitchAnchors();
 		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
-		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the palette rows classes'; the shading fields'
+		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the palette rows classes'; the shading fields'
 		// (and the published entry classes); the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
 		ResolveViews(lists.views, lists.viewWork, lists.viewRoots);
@@ -819,6 +833,7 @@ namespace DCLF::Extensions
 		ResolveDrawFamilies(lists.drawFamilies);
 		ResolveMainRanges(lists.mainRanges);
 		ResolveVertexStream(lists.vertexStream);
+		ResolveMainCullInput(lists.mainCullInput);
 		ResolvePaletteRows(lists.paletteRows);
 		ResolveShadingFields(lists.shadingFields);
 		ResolveMaterialPorts(lists.materialPorts, lists.materialPortCount);
