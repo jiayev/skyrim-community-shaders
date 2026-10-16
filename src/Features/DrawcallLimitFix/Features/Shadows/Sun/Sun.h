@@ -1,8 +1,9 @@
 #pragma once
 
 // Shadows/Sun: the sun's shadow views, drawn by Core's shadow engine. The feature registers the Sun source (Api::ShadowSourceContribution,
-// Api/ShadowViews.h: the directional views draw while it is registered) and its camera hook (SunViews: BSShadowDirectionalLight::
-// UpdateCamera, which writes the sun's cascades and full-frustum planes into Core's board, ShadowCameras::Sun, from the cameras it set up).
+// Api/ShadowViews.h: the directional views draw while it is registered) and its source hooks: the accumulation's (SunAccumulation's,
+// installed from here), then its camera hook (SunViews: BSShadowDirectionalLight::UpdateCamera, which writes the sun's cascades and
+// full-frustum planes into Core's board, ShadowCameras::Sun, from the cameras it set up).
 // Its parity is its own (Diagnostics/): the sun views' line, the accumulation's cascades against the cascade culls' and the entry rule's
 // planes against the full-frustum processes', under CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY.
 //

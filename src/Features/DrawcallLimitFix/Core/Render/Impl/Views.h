@@ -44,12 +44,18 @@ namespace DCLF
 		// Whether the main set's forward pipelines can draw into the view's forward part (its depth format the main pass's), published
 		// for the slot readiness (IndirectDraws::ViewSlotReady).
 		std::atomic<bool> forwardCompatible{ false };
-		// A trees view's tree LOD per face (Api::ViewShape::trees, the view engine's: IndirectDraws::ResolveViewTreeLod,
-		// DecideViewTreeLod): its forward pipeline for the view's targets, and whether the faces' tree LOD is DCLF's this frame
-		// (PassCapture::SetViewTreeLodOwned).
-		rhi::PipelineHandle treePipeline{};
-		bool treeReady = false;
-		bool treeOwned = false;
+		// A trees view's draw families per face (Api::ViewShape::trees, the view engine's: IndirectDraws::ResolveViewFaces,
+		// DecideViewFaces), by family: its forward pipeline for the view's targets; the commit's row (faces.row's: Impl::ViewFaceRows,
+		// and the decision's query) and a face's row and list header (faces.face's: CommitView), sized once at the family's faces'.
+		struct FamilyFaces
+		{
+			rhi::PipelineHandle pipeline{};
+			bool ready = false;
+			std::vector<std::byte> row, faceRow, faceHeader;
+		};
+		std::array<FamilyFaces, Extensions::kDrawFamilies> faces;
+		// By family, whether the faces' draws are DCLF's this frame (PassCapture::SetViewFamilyOwned; the roots they own: ViewRoots.cpp).
+		std::array<bool, Extensions::kDrawFamilies> facesOwned{};
 	};
 
 	// The views' frame state (ViewEpoch.cpp, the view engine): each view slot's, and their revision pipelines.
@@ -78,10 +84,10 @@ namespace DCLF
 			const float range = View(a_kind).depthRange;
 			return range > 0.0f ? range : Extensions::ViewEntryOf(a_kind).shape.depthRange;
 		}
-		// Revision code, per view: each pipeline slot's forward pipeline from its request's catalog, the trees view's tree LOD pipeline,
-		// the forward part's forward slots.
+		// Revision code, per view: each pipeline slot's forward pipeline from its request's catalog, the trees view's draw families'
+		// pipelines (by family), the forward part's forward slots.
 		std::array<std::vector<rhi::PipelineHandle>, kViews> viewRevisionPipelines;
-		rhi::PipelineHandle viewRevisionTree{};
+		std::array<rhi::PipelineHandle, Extensions::kDrawFamilies> viewRevisionFaces{};
 		std::vector<std::uint8_t> viewForwardSlots;
 	};
 }

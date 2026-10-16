@@ -80,6 +80,10 @@ namespace DCLF
 		Api::ToggleId registered{};       // a feature's toggle: its bit (ToggleSet::registered); member is null
 		Api::SwitchId registeredSeed{};   // ... and its seed, a feature's switch
 		Api::ToggleId registeredNeeds[2]{};  // the features' toggles it needs on, earlier in the table (none when unused)
+		// A Core flag's needs by name, which may be a feature's toggle: Toggles::SeedRegistered resolves each into needs or registeredNeeds
+		// at the same index (so that slot's member pointer stays null); empty when unused.
+		std::string_view needNames[2]{};
+		bool needsMissing = false;  // a named need no feature registered: the flag never takes effect
 	};
 
 	/** @brief A flag's value in a_set (its member, or a feature's bit). */
@@ -145,7 +149,10 @@ namespace DCLF
 		/** @brief Whether a flag of the requested set would take effect: every flag it needs, directly or not, is on. */
 		bool Editable(const ToggleInfo& a_info) const;
 
-		/** @brief Main thread, after the features' install: their toggles seeded from their switches, into both sets. */
+		/**
+		 * @brief Main thread, after the features' install: the Core flags' needs by name resolved (ToggleInfo::needNames; fails the install
+		 * for one listed after its flag), then the features' toggles seeded from their switches, into both sets.
+		 */
 		void SeedRegistered();
 
 	private:

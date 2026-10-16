@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
@@ -1200,8 +1201,10 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.AfterFullFrustum");
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;
-		SunAccumulation::Get().EndFullFrustumWindow();
-		if (ListsFiltered() && !SunAccumulation::Get().ExclusionLive() && !Global<std::uint8_t>(Engine::Address::kSunOff))
+		// The Sun source ends its frame's state (Features/Shadows/Sun) and says whether its exclusion applied.
+		const auto& sun = Extensions::ShadowSourceOf(Api::ShadowSource::Sun);
+		const bool live = sun.registered && sun.fullFrustumWindowEnd();
+		if (ListsFiltered() && !live && !Global<std::uint8_t>(Engine::Address::kSunOff))
 			++listStats.unexcluded;
 		// CS_DCLF_PARITY_BOTH: the engine culls and registers everything.
 		if (!!Policy::WithholdFromEngine())

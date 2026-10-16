@@ -31,7 +31,7 @@ namespace DCLF::Draws
 	{
 		ViewKind kind;
 		std::uint32_t faces;
-		bool trees;        // tree LOD drawn per face
+		bool trees;        // the draw families' faces drawn per face (tree LOD's)
 		bool forwardPart;  // a forward range, sorted by the depth epoch and drawn after the buckets by the colour epoch
 		bool depthPass;    // the depth epoch draws the buckets' depth pipelines into the main depth (the colour epoch then their colour ones)
 		std::uint32_t viewBits;
@@ -50,7 +50,8 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief A view's latch block's region per frame slot: each face's BuildDrawsLatch, the slots' map, each face's bucket table
-	 * (first, capacity), then each face's values its latched copies take (its block, and with tree LOD its row and list header).
+	 * (first, capacity), then each face's values its latched copies take (its block, and in a trees view each draw family's row and
+	 * list header with faces: Extensions::DrawFamilyFaceLayout, at DrawFamilyFaceBytes a face).
 	 */
 	struct ViewLatchLayout
 	{
@@ -58,10 +59,7 @@ namespace DCLF::Draws
 		std::uint32_t slots = 0;    // pipeline slots the map holds a word for
 		std::uint32_t buckets = 0;  // entries a face's table holds
 		std::uint32_t faceBytes = kViewBlockBytes;
-		static constexpr std::uint32_t kTreeRowInFace = kViewBlockBytes;
-		static constexpr std::uint32_t kTreeHeaderInFace = kTreeRowInFace + static_cast<std::uint32_t>(sizeof(TreeInstances::DrawRow));
-		static constexpr std::uint32_t kTreeFaceBytes = (kTreeHeaderInFace + static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader)) + 255u) & ~255u;
-		static ViewLatchLayout Initial(const ViewTraits& a_traits) { return { a_traits.faces, 64, 4, a_traits.trees ? kTreeFaceBytes : kViewBlockBytes }; }
+		static ViewLatchLayout Initial(const ViewTraits& a_traits) { return { a_traits.faces, 64, 4, a_traits.trees ? Extensions::DrawFamilyFaceBytes() : kViewBlockBytes }; }
 		std::uint32_t MapOffset() const { return faces * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t TableOffset(std::uint32_t a_face) const { return MapOffset() + slots * 4 + a_face * buckets * 8; }
 		std::uint32_t FaceOffset(std::uint32_t a_face) const { return ((TableOffset(faces) + 255u) & ~255u) + a_face * faceBytes; }
@@ -97,10 +95,16 @@ namespace DCLF::Draws
 		std::uint32_t forwardFirst = 0, forwardCapacity = 0, forwardEntry = 0;
 		// Per face, the frame push data: the colour segment's frame constants with VS and PS b12 the face's block.
 		std::vector<std::array<std::uint32_t, kFramePushWords>> push;
-		// Tree LOD: the forward pipeline and its draw's signature (invalid: none), the cull's groups.
-		rhi::PipelineHandle tree{};
-		rhi::CommandSignatureHandle treeSignature{};
-		std::uint32_t treeGroups = 0;
+		// Per draw family, its faces (a trees view's; tree LOD's): the forward pipeline and its draw's signature (invalid: none), the
+		// cull's groups.
+		struct Faces
+		{
+			rhi::PipelineHandle pipeline{};
+			rhi::CommandSignatureHandle signature{};
+			std::uint32_t groups = 0;
+			bool operator==(const Faces& o) const { return SameHandle(pipeline, o.pipeline) && SameHandle(signature, o.signature) && groups == o.groups; }
+		};
+		std::array<Faces, Extensions::kDrawFamilies> faces;
 		// The latched copies (LatchedCopiesPass): the faces' values from the latch, and the counters' zeros.
 		std::array<LatchedList, 2> latched;
 		// Not compared (implied by the latch block and the buckets): its layout, and each pipeline slot's bucket.
@@ -112,15 +116,14 @@ namespace DCLF::Draws
 			return latch == o.latch && latched == o.latched && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) &&
 			       SameIndirect(indirect, o.indirect) && width == o.width && height == o.height && depthRange == o.depthRange &&
 			       sequenceDraws == o.sequenceDraws && buckets == o.buckets && push == o.push && forwardFirst == o.forwardFirst &&
-			       forwardCapacity == o.forwardCapacity && forwardEntry == o.forwardEntry && SameHandle(tree, o.tree) && SameHandle(treeSignature, o.treeSignature) &&
-			       treeGroups == o.treeGroups;
+			       forwardCapacity == o.forwardCapacity && forwardEntry == o.forwardEntry && faces == o.faces;
 		}
 	};
 
 	/**
 	 * @brief A view's graph resources. Its buffers are the scene's set's: a face's range of the sequences (a unit: a draw in every
-	 * face), a face's bucket count words, and the faces' tree lists (the scene's tree LOD shape slots, grown with its tables), each
-	 * required by the revision producer to hold the view's plan (Impl::RequireView).
+	 * face), a face's bucket count words, and the faces' draw family lists (each family's units: tree LOD's shape slots, grown with its
+	 * tables), each required by the revision producer to hold the view's plan (Impl::RequireView).
 	 */
 	struct ViewResources
 	{
@@ -138,10 +141,11 @@ namespace DCLF::Draws
 		std::shared_ptr<org::ExternalTextureResource> target;
 		ID3D11Texture2D* targetTexture = nullptr;
 		std::uint32_t width = 0, height = 0;
-		// Tree LOD: per face a draw row (its visible list the face's) and a visible list, for the scene's shape slots.
-		std::array<std::shared_ptr<org::Buffer>, kMaxViewFaces> treeRows;
-		std::array<Versioned, kMaxViewFaces> treeVisible;
-		std::array<std::uint64_t, kMaxViewFaces> treeRowsAddress{};
+		// Per draw family with faces (a trees view's), per face a row (its list the face's) and a list, for the family's units (tree LOD's:
+		// a draw row and a visible list for the scene's shape slots); named its rowName and listName with the face's index.
+		std::array<std::array<std::shared_ptr<org::Buffer>, kMaxViewFaces>, Extensions::kDrawFamilies> faceRows;
+		std::array<std::array<Versioned, kMaxViewFaces>, Extensions::kDrawFamilies> faceLists;
+		std::array<std::array<std::uint64_t, kMaxViewFaces>, Extensions::kDrawFamilies> faceRowsAddress{};
 		// The passes are to be declared again (new main resources): at the view's own import, never mid-frame.
 		bool rebuildPending = false;
 		std::shared_ptr<const ComputeProgram> buildDraws;
@@ -187,10 +191,15 @@ namespace DCLF::Draws
 		std::uint64_t frameConstantsAddress = 0;  // the colour segment's, which the push data names
 		std::uint32_t width = 0, height = 0;
 		float depthRange = 1.0f;
-		// Tree LOD in the faces: its forward pipeline and draw signature, and the scene's shape slots (none: invalid pipeline).
-		rhi::PipelineHandle tree{};
-		rhi::CommandSignatureHandle treeSignature{};
-		std::uint32_t treeShapes = 0;
+		// Per draw family in the faces: its forward pipeline and draw signature, and the units its lists hold (tree LOD's shape slots;
+		// none: invalid pipeline).
+		struct Faces
+		{
+			rhi::PipelineHandle pipeline{};
+			rhi::CommandSignatureHandle signature{};
+			std::uint32_t units = 0;
+		};
+		std::array<Faces, Extensions::kDrawFamilies> faces;
 	};
 	std::shared_ptr<ViewFrame> MakeViewShape(const ViewResources& a_resources, const ViewShapeInputs& a_in);
 
@@ -229,6 +238,18 @@ namespace DCLF::Draws
 	std::span<const std::byte> FrameBlockNow();
 	/** @brief The inverse of a row-major 4x4 (cofactors, in double); zero when singular. */
 	std::array<float, 16> Inverse(const std::array<float, 16>& a_m);
+
+	/**
+	 * @brief A trees view's commit's rows (Impl::ViewFaceRows): per draw family its faces.row's (rowBytes), empty for a family without
+	 * faces.
+	 */
+	using ViewFamilyRows = std::array<std::span<const std::byte>, Extensions::kDrawFamilies>;
+	/** @brief Whether a_family draws in a trees view's faces: taken, with faces (Api::DrawFamilyContribution::faces). */
+	inline bool FamilyHasFaces(Api::DrawFamily a_family)
+	{
+		const auto& entry = Extensions::DrawFamilyOf(a_family);
+		return entry.taken && entry.contribution.faces.face;
+	}
 
 	/** @brief A face's values a view's commit writes (WriteViewLatch). */
 	struct ViewFace

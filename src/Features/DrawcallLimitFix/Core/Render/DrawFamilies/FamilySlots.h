@@ -7,25 +7,23 @@
 // epochs' (ViewEpochRecord.cpp), its part of the revisions' shapes key the trees view's key group (MixViewShapesKey), its ownership
 // PassCapture's (IndirectDraws::DecideDrawFamilies publishes the feature's decision), and its pipelines' publication the scene's
 // (SceneBuffers::familyPipelines). A new family is the enum value, its slot here and its lane slot, then the feature's registration
-// (Extensions::DrawFamilies). The TreeInstances family's GPU layout is TreeInstancesLayout.h.
+// (Extensions::DrawFamilies). A family's GPU layout is its feature's (TreeInstances': Features/TreeLod/TreeInstancesLayout.h), sized for
+// Core by its faces' data.
 // Part of IndirectDraws' implementation: included by Internal.h after Views/ViewSlots.h.
 
 namespace DCLF::Draws
 {
 	/**
-	 * @brief A family's slot: the forward key flags of a trees view's pipeline for it (ForwardPipelineKey: the lane's key), its cull pass
-	 * in a trees view's depth epoch (after the view's pass prefix), and the root PassCapture's view withholding owns while a trees view's
-	 * faces draw it (ViewLodRootsOwned).
+	 * @brief A family's slot: the forward key flags of a trees view's pipeline for it (ForwardPipelineKey: the lane's key). (Its faces'
+	 * cull pass and root are its registration's: faces.cullName, faces.root.)
 	 */
 	struct FamilySlot
 	{
 		Api::DrawFamily family;
 		std::uint32_t forwardFlags;
-		const char* facesCull;
-		std::uint32_t lodRoot;
 	};
 	inline constexpr std::array<FamilySlot, Extensions::kDrawFamilies> kFamilySlots = { {
-		{ Api::DrawFamily::TreeInstances, DrawFamilyLaneSlotOf(Api::DrawFamily::TreeInstances).forwardFlags, "tree-lod-cull", PassCapture::kTreeRoot },
+		{ Api::DrawFamily::TreeInstances, DrawFamilyLaneSlotOf(Api::DrawFamily::TreeInstances).forwardFlags },
 	} };
 	static_assert(kFamilySlots[static_cast<std::size_t>(Api::DrawFamily::TreeInstances)].family == Api::DrawFamily::TreeInstances, "kFamilySlots is by family");
 

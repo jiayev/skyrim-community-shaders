@@ -7,7 +7,8 @@
 
 namespace DCLF::Features::Reflection::ReflectionFaces
 {
-	static_assert(kLodRoots == PassCapture::kLodRoots && kTreeRoot == PassCapture::kTreeRoot, "ReflectionFaces' root bits are PassCapture's");
+	static_assert(kLodRoots == Api::ViewRootBit(Api::ViewRoot::LodLandAndObjects) && kTreeRoot == Api::ViewRootBit(Api::ViewRoot::LodTrees),
+		"ReflectionFaces' root bits are Api::ViewRootBit's");
 
 	namespace
 	{

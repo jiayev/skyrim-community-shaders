@@ -256,10 +256,10 @@ namespace DCLF::Scene
 		// A taken class whose records follow its component's per-frame state is classified every frame (Features/Faces: a face shape's head's
 		// snapshot and the actor's state).
 		const bool classifiedEveryFrame = entryTaken && Extensions::EntryClassRuleOf(entryClassOf).perFrame;
-		// Actor-owned as Skin::GetWetness decides it; resolved once.
-		if (!entry.actorOwnedResolved) {
-			d.actorOwnedSet = true;
-			d.actorOwned = leaf.node->IsActorCharacter();
+		// Its owner class by its reference's form type (actor-owned as Skin::GetWetness decides it); resolved once.
+		if (!entry.ownerResolved) {
+			d.ownerSet = true;
+			d.owner = Extensions::OwnerClassOf(*leaf.node);
 		}
 		Ineligible reason;
 		bool shadowOnly = false;  // not the main pass's, but a caster the shadow epochs draw (kObjectShadowOnly)
@@ -267,7 +267,7 @@ namespace DCLF::Scene
 		// per-frame entry class's entry is classified every frame (a face shape's record depends on the head's snapshot and the actor's
 		// state), as are an actor's and other per-frame entries' frame verdicts. The dense rebuild classifies from scratch and leaves the
 		// caches alone.
-		const bool rereads = entry.perFrame && (!entry.lightTraits || (entry.lightTraits & kTraitActor));
+		const bool rereads = entry.perFrame && (!entry.lightTraits || (entry.lightTraits & kTraitOwnerClass));
 		bool cached = !denseWalk && !classifiedEveryFrame && entry.candidateFrame != 0;
 		if (cached) {
 			reason = entry.candidateReason;
@@ -445,9 +445,9 @@ namespace DCLF::Scene
 		// The component that follows its entry class lists it (Features/Faces: a face shape under its head).
 		if (trackedEntry->entryClass != Api::EntryClass::None)
 			ComponentsListed(*geometry, *trackedEntry, trackedEntry->entryClass);
-		if (d.actorOwnedSet) {
-			trackedEntry->actorOwnedResolved = true;
-			trackedEntry->actorOwned = d.actorOwned;
+		if (d.ownerSet) {
+			trackedEntry->ownerResolved = true;
+			trackedEntry->owner = d.owner;
 		}
 		if (d.verdictSet)
 			trackedEntry->verdict = d.verdict;
@@ -627,9 +627,9 @@ namespace DCLF::Scene
 			tables.lights[objectId] = ObjectLights{};
 			tables.fadeDistance[objectId] = 0.0f;
 		}
-		tables.SetActorWetness(objectId, trackedEntry->actorOwned ? trackedEntry->groupIdentity : 0,
+		tables.SetActorWetness(objectId, trackedEntry->owner.published ? trackedEntry->groupIdentity : 0,
 			trackedEntry->identity);
-		if (trackedEntry->actorOwned)
+		if (trackedEntry->owner.published)
 			tables.actorObjects.push_back(objectId);
 		// The features' components follow the rewrite (Features/Decals: a member decal may have moved in the scene graph, and its slots
 		// follow its partitions).
@@ -1301,18 +1301,19 @@ namespace DCLF::Scene
 
 	std::uint32_t Coordinator::PerFrameTraits(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const
 	{
-		return PerFrameTraitsOf(PerFrameEntryClass(a_tracked.entryClass), a_tracked.actorOwned, a_tracked.categoryNode, a_geometry);
+		return PerFrameTraitsOf(PerFrameEntryClass(a_tracked.entryClass), a_tracked.owner.everyFrame, a_tracked.categoryNode, a_geometry);
 	}
 
-	std::uint32_t Coordinator::PerFrameTraitsOf(bool a_entryClassTrait, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const
+	std::uint32_t Coordinator::PerFrameTraitsOf(bool a_entryClassTrait, bool a_ownerClassTrait, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const
 	{
 		// The movable set (dclf-event-driven-tables.md): a static reference never moves in place, so what moves is actor-owned,
 		// controller-animated or Havok-simulated. Skin palettes and face snapshots change without moving. A controller on the shader or
 		// alpha property animates the material alpha the shadow verdict reads (kTraitAnimatedShading: its events name it, never per frame).
-		// a_entryClassTrait: a per-frame entry class's entry (PerFrameEntryClass: a face shape), its trait kTraitEntryClass.
+		// a_entryClassTrait: a per-frame entry class's entry (PerFrameEntryClass: a face shape), its trait kTraitEntryClass;
+		// a_ownerClassTrait: a per-frame owner class's (EntryClassContribution::everyFrame: an actor's), its trait kTraitOwnerClass.
 		std::uint32_t traits = 0;
 		traits |= a_entryClassTrait ? kTraitEntryClass : 0u;
-		traits |= a_actorOwned ? kTraitActor : 0u;
+		traits |= a_ownerClassTrait ? kTraitOwnerClass : 0u;
 		const auto leaf = mirror.Leaf(&a_geometry);
 		traits |= leaf.Skinned() ? kTraitSkin : 0u;
 		// A geometry type whose objects change every frame invisibly to the walk (Api::GeometryTypeContribution::moves: a particle system's
@@ -1342,7 +1343,8 @@ namespace DCLF::Scene
 		// An unselected switch child gets a record by event when selected (ApplySwitchEvents).
 		const bool mayRecord = a_reason == Ineligible::None || Eligibility::DeferredToAccumulate(a_reason) || Eligibility::ShadowOnlyCaster(a_reason, mirror.Leaf(&a_geometry));
 		std::uint32_t traits = PerFrameTraits(a_tracked, a_geometry);
-		if (mayRecord && !(traits & (kTraitEntryClass | kTraitActor)) && a_tracked.sunEntryNode) {
+		// An owner class's own motion (an actor's) places it every frame: its root's motion is never read.
+		if (mayRecord && !(traits & kTraitEntryClass) && !a_tracked.owner.ownMotion && a_tracked.sunEntryNode) {
 			bool moves = false;
 			if (a_freshMotion) {
 				const auto [motion, inserted] = a_freshMotion->try_emplace(a_tracked.sunEntryNode, false);
@@ -1367,13 +1369,13 @@ namespace DCLF::Scene
 		const std::uint32_t traits = a_traits;
 		const std::uint32_t moving = traits & ~kTraitAnimatedShading;
 		const bool frameVerdict = a_reason == Ineligible::Hidden || a_reason == Ineligible::Switch || a_reason == Ineligible::Actor;
-		const bool perFrame = (a_mayRecord && moving && moving != kTraitRootMoves && moving != kTraitEntryClass) || (traits & kTraitActor) ||
+		const bool perFrame = (a_mayRecord && moving && moving != kTraitRootMoves && moving != kTraitEntryClass) || (traits & kTraitOwnerClass) ||
 		                      (frameVerdict && (traits & kTraitMoves));
-		// The light path takes only an actor's verdict recheck (ActorRecordKept) and a skin's partitions (KeepSkin), when an event names
-		// the entry (MoverDue); placement and palette are the plan's (moverSet), face positions follow the head's publications. An entry
-		// that cannot have a record is written in full.
+		// The light path takes only an owner class's verdict recheck (FrameVerdictKept: an actor's) and a skin's partitions (KeepSkin),
+		// when an event names the entry (MoverDue); placement and palette are the plan's (moverSet), face positions follow the head's
+		// publications. An entry that cannot have a record is written in full.
 		const std::uint32_t light = perFrame && a_mayRecord &&
-		                                    !(traits & ~(kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin | kTraitActor | kTraitEntryClass)) ?
+		                                    !(traits & ~(kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin | kTraitOwnerClass | kTraitEntryClass)) ?
 		                                traits :
 		                                0u;
 		return { perFrame, light };
@@ -1383,7 +1385,7 @@ namespace DCLF::Scene
 	{
 		// PerFrameOf from the evaluation's traits; root motion from rootMotion, else the evaluation's fresh read (inserted here).
 		std::uint32_t traits = a_result.traits;
-		if (a_result.mayRecord && !(traits & (kTraitEntryClass | kTraitActor)) && a_tracked.sunEntryNode) {
+		if (a_result.mayRecord && !(traits & kTraitEntryClass) && !a_tracked.owner.ownMotion && a_tracked.sunEntryNode) {
 			const bool* now = a_tracked.sunEntryNode == a_result.rootCandidate ? &a_result.rootMovesNow : nullptr;
 			if (RootMoves(a_tracked.sunEntryNode, now))
 				traits |= kTraitRootMoves;
@@ -1391,10 +1393,10 @@ namespace DCLF::Scene
 		return PerFrameFrom(traits, a_tracked.candidateReason, a_result.mayRecord);
 	}
 
-	bool Coordinator::ActorRecordKept(const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const
+	bool Coordinator::FrameVerdictKept(const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const
 	{
-		// Pure. An actor's frame verdict, as WriteObject's cached branch would retake it; the same verdict writes the same record but
-		// for placement and palette, which the light path takes.
+		// Pure. A per-frame owner class's (an actor's) frame verdict, as WriteObject's cached branch would retake it; the same verdict
+		// writes the same record but for placement and palette, which the light path takes.
 		const Ineligible cached = a_tracked.candidateReason;
 		const bool frameVerdict = cached == Ineligible::None || cached == Ineligible::Switch || cached == Ineligible::Hidden || cached == Ineligible::Actor;
 		if (!frameVerdict)
@@ -1446,11 +1448,11 @@ namespace DCLF::Scene
 		auto& r = a_out;
 		a_timer.Add(BuildPart::LoopTail);
 		// Profiling bucket.
-		r.kind = entry.lightTraits && entry.perFrame       ? EvaluateKind::Light :
-		         !entry.perFrame                           ? EvaluateKind::Event :
-		         entry.entryClass != Api::EntryClass::None ? EvaluateKind::EntryClass :
-		         entry.actorOwned                          ? (entry.candidateReason == Ineligible::None ? EvaluateKind::Actor : EvaluateKind::ActorNoRecord) :
-		                                                     EvaluateKind::PerFrame;
+		r.kind = entry.lightTraits && entry.perFrame             ? EvaluateKind::Light :
+		         !entry.perFrame                                 ? EvaluateKind::Event :
+		         entry.entryClass != Api::EntryClass::None       ? EvaluateKind::EntryClass :
+		         entry.owner.ownerClass != Api::EntryClass::None ? (entry.candidateReason == Ineligible::None ? EvaluateKind::Owned : EvaluateKind::OwnedNoRecord) :
+		                                                           EvaluateKind::PerFrame;
 		const bool profileKinds = a_light && Diagnostics::Observe().profile;
 		struct KindSample
 		{
@@ -1467,8 +1469,8 @@ namespace DCLF::Scene
 		if (a_light && entry.lightTraits && entry.perFrame && entry.fullWalk != walkSerial && entry.candidateFrame != 0) {
 			const bool recorded = entry.slot != kNoObjectSlot && entry.objectStamp == objectStamp;
 			bool kept = true;
-			if (entry.lightTraits & kTraitActor)
-				kept = recorded && ActorRecordKept(entry, a_counters, r);
+			if (entry.lightTraits & kTraitOwnerClass)
+				kept = recorded && FrameVerdictKept(entry, a_counters, r);
 			else
 				kept = recorded;
 			// Last, only for a kept record: KeepSkin's record half (its slot half is the merge's).
@@ -1508,9 +1510,10 @@ namespace DCLF::Scene
 		if (a_out.classified) {
 			// PerFrameOf's inputs as the merge will see them; root motion is read fresh here, PerFrameMerge prefers rootMotion.
 			const Api::EntryClass entryClass = d.entryClassSet ? d.entryClass : entry.entryClass;
-			a_out.traits = PerFrameTraitsOf(PerFrameEntryClass(entryClass), d.actorOwnedSet ? d.actorOwned : entry.actorOwned, entry.categoryNode, *geometry);
+			const auto& owner = d.ownerSet ? d.owner : entry.owner;
+			a_out.traits = PerFrameTraitsOf(PerFrameEntryClass(entryClass), owner.everyFrame, entry.categoryNode, *geometry);
 			a_out.mayRecord = reason == Ineligible::None || Eligibility::DeferredToAccumulate(reason) || Eligibility::ShadowOnlyCaster(reason, a_out.leaf);
-			if (a_out.mayRecord && !(a_out.traits & (kTraitEntryClass | kTraitActor))) {
+			if (a_out.mayRecord && !(a_out.traits & kTraitEntryClass) && !owner.ownMotion) {
 				// The resolved sun entry, or the one ResolveSunEntry will resolve at the write.
 				a_out.rootCandidate = entry.sunEntryResolved ? entry.sunEntryNode : static_cast<const RE::NiAVObject*>(MirrorSunEntry(geometry));
 				if (a_out.rootCandidate) {
@@ -1574,11 +1577,11 @@ namespace DCLF::Scene
 					stats.lightByTrait[bit] += (entry.lightTraits >> bit) & 1u;
 				const bool recorded = r.lightRecorded;
 				// Tables::actorObjects: kept across walks, this walk's evaluations added (DeltaWalk).
-				if (recorded && entry.actorOwned)
+				if (recorded && entry.owner.published)
 					tables.actorObjects.push_back(entry.slot);
-				// An actor's skeleton moves with no controller or body on its chain (Havok's behaviour graph). FrameValues places
-				// every recorded mover each frame from the newest plan (moverSet).
-				if (recorded && (entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin | kTraitActor))) {
+				// An actor's skeleton moves with no controller or body on its chain (Havok's behaviour graph: its owner class's own
+				// motion). FrameValues places every recorded mover each frame from the newest plan (moverSet).
+				if (recorded && ((entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin)) || ((entry.lightTraits & kTraitOwnerClass) && entry.owner.ownMotion))) {
 					++stats.lightPlaced;
 					++delta.moved;
 				} else {
@@ -2044,12 +2047,12 @@ namespace DCLF::Scene
 		}
 		FinishDeltaWalk(timer);
 		if (!keptActors.empty()) {
-			// Still an actor-owned entry's record in that slot.
+			// Still a published owner class's (an actor-owned) entry's record in that slot.
 			for (const std::uint32_t o : keptActors) {
 				if (o >= tables.objects.size() || !tables.objectGeometry[o] || (tables.objects[o].flags & kObjectFree))
 					continue;
 				const auto it = tracked.find(const_cast<RE::BSGeometry*>(tables.objectGeometry[o]));
-				if (it != tracked.end() && it->second.actorOwned && it->second.slot == o && it->second.objectStamp == objectStamp)
+				if (it != tracked.end() && it->second.owner.published && it->second.slot == o && it->second.objectStamp == objectStamp)
 					tables.actorObjects.push_back(o);
 			}
 			std::sort(tables.actorObjects.begin(), tables.actorObjects.end());

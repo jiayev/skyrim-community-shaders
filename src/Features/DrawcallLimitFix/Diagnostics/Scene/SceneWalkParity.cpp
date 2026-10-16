@@ -146,8 +146,9 @@ namespace DCLF::Diagnostics
 						continue;
 					std::uint32_t traits = 0;
 					const auto [perFrame, light] = V::PerFrameOfFresh(store, entry, *geometry, it->second, traits, freshMotion);
-					// An actor's light path places its record every frame: motion it gained since is served already.
-					if (entry.lightTraits & V::kTraitActor)
+					// An actor's light path places its record every frame (its owner class's own motion): motion it gained since is served
+					// already.
+					if ((entry.lightTraits & V::kTraitOwnerClass) && entry.owner.ownMotion)
 						traits &= ~(V::kTraitMoves | V::kTraitRootMoves);
 					if (!perFrame || (entry.perFrame && (!entry.lightTraits || (light && !(traits & ~entry.lightTraits)))))
 						continue;

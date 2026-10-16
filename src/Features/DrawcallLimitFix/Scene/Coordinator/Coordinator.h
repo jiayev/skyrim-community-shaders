@@ -1084,7 +1084,7 @@ namespace DCLF
 			PartTimer& a_timer);
 		std::uint32_t PerFrameTraits(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const;
 		/** @brief PerFrameTraits from what the entry's evaluation has. */
-		std::uint32_t PerFrameTraitsOf(bool a_entryClassTrait, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const;
+		std::uint32_t PerFrameTraitsOf(bool a_entryClassTrait, bool a_ownerClassTrait, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const;
 		/**
 		 * @brief Whether an entry with this verdict is per frame, and its light-path traits (a_traits: all traits). a_freshMotion: walk
 		 * parity's root motion from scratch.
@@ -1099,10 +1099,10 @@ namespace DCLF
 		 */
 		bool KeepSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked, const EvalResult& a_result);
 		/**
-		 * @brief Whether an actor's earlier record is what WriteObject would write again but for placement and palette (its verdict
-		 * stands).
+		 * @brief Whether a per-frame owner class's (an actor's) earlier record is what WriteObject would write again but for placement and
+		 * palette (its verdict stands).
 		 */
-		bool ActorRecordKept(const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const;
+		bool FrameVerdictKept(const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const;
 		/** @brief Evaluates the entry this walk with its classification retaken. */
 		void Reclassify(RE::BSGeometry* a_geometry, Tracked& a_tracked);
 		void MoveBucket(Tracked& a_tracked, Ineligible a_bucket);

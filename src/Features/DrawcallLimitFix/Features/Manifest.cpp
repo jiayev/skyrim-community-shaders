@@ -190,9 +190,19 @@ namespace DCLF::Features
 	static_assert(FirstPerson::kViewFirstPerson == 1u << 11, "FirstPerson's view bit is not BuildDrawsCS's kViewFirstPerson");
 	// The reflection's faces: Core's per-view capacity (ViewEpoch.h).
 	static_assert(Reflection::kFaces <= Draws::kMaxViewFaces, "the reflection's faces are past Core's kMaxViewFaces");
-	// TreeWind's: DCLFObjectRecord's DCLFWindTimers.zw (the record's TreeParams and WindTimers, xy the record's own).
-	static_assert(offsetof(BindlessObject, tree) + offsetof(ObjectTreeAnim, windTimers) + 2 * sizeof(float) == TreeWind::kTreeRecordWord * 4,
-		"TreeWind's record word is not DCLFWindTimers.z");
+	// The feature block: BindlessObject and BindlessShading are the C++ mirrors of the frozen DCLFObjects.hlsli (DCLFObjectRecord words 4-11,
+	// DCLFShadingRow words 16-23), so neither size nor the block's place moves.
+	static_assert(sizeof(BindlessObject) == 64 && sizeof(BindlessShading) == 96, "an object row is not DCLFObjects.hlsli's size");
+	static_assert(sizeof(BindlessObject::featureBlock) == Api::kShadingBlockWords * 4 && sizeof(BindlessShading::featureBlock) == Api::kShadingBlockWords * 4,
+		"the feature block is not Api::kShadingBlockWords");
+	static_assert(offsetof(BindlessObject, featureBlock) == TreeWind::kRecordBlockWord * 4, "TreeWind's record block word is not DCLFTreeParams");
+	static_assert(offsetof(BindlessShading, featureBlock) == TreeWind::kShadingBlockWord * 4, "TreeWind's shading block word is not DCLFShadingTreeParams");
+	static_assert(TreeWind::kBlockWords <= Api::kShadingBlockWords && TreeWind::kTreeParamsVariable == kVSTreeParams && TreeWind::kWindTimersVariable == kVSWindTimers,
+		"TreeWind's block is past the feature block, or its variables are not the Lighting VS TreeParams and WindTimers");
+	// TreeWind's: DCLFObjectRecord's DCLFWindTimers.zw (the record's TreeParams and WindTimers, xy the record's own), inside the record block.
+	static_assert(TreeWind::kTreeRecordWord >= TreeWind::kRecordBlockWord && TreeWind::kTreeRecordWord + 2 <= TreeWind::kRecordBlockWord + Api::kShadingBlockWords,
+		"TreeWind's record word is outside the record's feature block");
+	static_assert(TreeWind::kTreeRecordWord == TreeWind::kRecordBlockWord + TreeWind::kBlockWindTimers + 2, "TreeWind's record word is not DCLFWindTimers.z");
 	// The main range slots (Api::MainRangeSlot) are BuildDrawsCS's ranges: the fixed ones the decal groups' (count words 19, 20 and 27),
 	// the appended ones the terrain groups' (28, 29).
 	static_assert(Draws::kMainRangeSlotCount == static_cast<std::uint32_t>(Api::MainRangeSlot::Count) && Draws::kDecalGroups == Api::kFixedMainRanges,

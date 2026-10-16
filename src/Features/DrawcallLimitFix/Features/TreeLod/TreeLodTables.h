@@ -1,18 +1,19 @@
 #pragma once
 
-// Tree LOD's scene resources (Api::SceneResources): the TreeInstances family's tables (Core's layout, TreeInstancesLayout.h), its cull
+// Tree LOD's scene resources (Api::SceneResources): the TreeInstances family's tables (its layout, TreeInstancesLayout.h), its cull
 // program and counts' readbacks, held with the scene's tables, and what the depth commit's uploads keep. Included first by the feature's
 // sources that use them (Internal.h first: volk must precede every Vulkan header of the translation unit).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/TreeInstancesLayout.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeInstancesLayout.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 
 namespace DCLF::Features::TreeLod
 {
 	// Tree LOD's cull (TreeLodCullCS.hlsl) in the depth segment's two phases and a trees view's faces: a thread per instance (phase 1)
-	// or retest entry (2), Draws::kTreeLodCullGroup a group.
+	// or retest entry (2), kTreeLodCullGroup a group (the faces report it: their cullGroup, which sizes a trees view's per-face dispatch).
 	inline constexpr const char* kTreeLodCullShader = "DrawcallLimitFix/Features/TreeLod/TreeLodCullCS.hlsl";
+	inline constexpr std::uint32_t kTreeLodCullGroup = 64;
 	struct TreeLodCullConstants
 	{
 		std::uint32_t shapesIndex = 0, instancesIndex = 0, visibleIndex = 0, latchIndex = 0, latchOffset = 0, drawIndex = 0;

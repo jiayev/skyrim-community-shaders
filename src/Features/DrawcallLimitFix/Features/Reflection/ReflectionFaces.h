@@ -2,6 +2,8 @@
 
 // The water reflection's engine hooks (Features/Reflection's early hooks): render thread. Included by the feature's sources only.
 
+#include "Features/DrawcallLimitFix/Api/Views.h"
+
 #include <cstdint>
 
 namespace RE
@@ -50,13 +52,13 @@ namespace DCLF::Features::Reflection::ReflectionFaces
 	/**
 	 * @brief The cube camera's LOD roots DCLF draws in this update's faces (no face cull of them), asked once an update before
 	 * the add-roots with whether its face renders are plain: kLodRoots (LOD land and LOD objects: the reflection phase), kTreeRoot
-	 * (LOD trees: the faces' tree LOD). Their add-root calls are skipped; the sky's stays. The values are PassCapture's kLodRoots and
-	 * kTreeRoot (Core's: IndirectDraws::ViewLodRootsOwned and the residue watch name them).
+	 * (LOD trees: the faces' tree LOD). Their add-root calls are skipped; the sky's stays. The values are Api::ViewRootBit's (Core's:
+	 * IndirectDraws::ViewLodRootsOwned and the residue watch name them).
 	 */
 	enum RootBits : std::uint32_t
 	{
-		kLodRoots = 1u << 0,
-		kTreeRoot = 1u << 1,
+		kLodRoots = Api::ViewRootBit(Api::ViewRoot::LodLandAndObjects),
+		kTreeRoot = Api::ViewRootBit(Api::ViewRoot::LodTrees),
 	};
 	using RootsOwned = std::uint32_t (*)(bool a_plain);
 	void SetRootsOwned(RootsOwned a_callback);

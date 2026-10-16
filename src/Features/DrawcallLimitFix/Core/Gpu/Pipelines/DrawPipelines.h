@@ -451,12 +451,6 @@ namespace DCLF
 		void NoteFamilyWait(Api::DrawFamily a_family, bool a_waited) { stats.drawFamilies[static_cast<std::size_t>(a_family)].waits += a_waited ? 1u : 0u; }
 		/** @brief Render thread: counts a frame whose forward view waited for a pipeline. */
 		void NoteForwardWait(bool a_waited) { stats.forwardWaits += a_waited ? 1u : 0u; }
-		/** @brief NoteForwardWait, as ReflectionView still calls it (a_treeLod: the TreeInstances family's wait). */
-		void NoteFrameWaits(bool a_treeLod, bool a_forward)
-		{
-			NoteFamilyWait(Api::DrawFamily::TreeInstances, a_treeLod);
-			NoteForwardWait(a_forward);
-		}
 
 		/**
 		 * @brief Render thread: reads the engine's rasterizer/blend states the lane asked for (PipelineRasterFlags), the opaque write

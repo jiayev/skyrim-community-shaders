@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
@@ -124,8 +125,11 @@ namespace DCLF::Eligibility
 	/** @brief A sun candidate geometry row's primary verdict (EntrySpace::primaryGeometry; PrimaryCull::PlanOf reads it). */
 	inline constexpr std::uint8_t kPrimaryEngine = 0, kPrimaryMember = 1, kPrimaryHiddenStatic = 2;
 
-	/** @brief A leaf that is no part of an actor: hidden, its hidden bit changes by its events alone (an actor's parts are shown and hidden by its behaviour graph). */
-	inline bool HiddenStatic(const SceneCapture::LeafView& a_leaf) { return !(a_leaf.node && a_leaf.node->IsActorCharacter()); }
+	/**
+	 * @brief A leaf of no per-frame owner class (Api::EntryClassContribution::everyFrame: an actor's): hidden, its hidden bit changes by its
+	 * events alone (an actor's parts are shown and hidden by its behaviour graph).
+	 */
+	inline bool HiddenStatic(const SceneCapture::LeafView& a_leaf) { return !(a_leaf.node && Extensions::OwnerClassOf(*a_leaf.node).everyFrame); }
 
 	/**
 	 * @brief Whether a tracked geometry lets its sun entry leave the cascade culls (the coordinator's UpdateSunCandidates). a_leaf() gives the

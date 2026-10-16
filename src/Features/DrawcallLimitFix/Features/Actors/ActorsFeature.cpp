@@ -1,5 +1,5 @@
 // Actors: the geometry under an actor's 3D and the actor techniques DCLF draws. Their switch and the actors toggle, the actor parent's
-// contribution and the actor techniques'; the actors' engine events at the early hooks and the animation stamp.
+// contribution and the actor techniques'; the actor-owned entry class, the actors' engine events at the early hooks and the animation stamp.
 
 #include "Features/DrawcallLimitFix/Features/Actors/Actors.h"
 
@@ -29,6 +29,11 @@ namespace DCLF::Features::Actors
 			// material VS constants): all written by SetupMaterial. A face part's positions are its head's snapshots' (Features/Faces).
 			for (const auto technique : { Technique::FacegenRGBTint, Technique::Facegen, Technique::Hair, Technique::Eye })
 				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = actors });
+			// Actor-owned entries (an ActorCharacter's 3D, carried items too), whatever the toggle: per frame (equipment shown, hidden and
+			// swapped with no event), moving with no controller or body (the skeleton: Havok's behaviour graph), published (Advanced Skin's
+			// wetness). The timing report's "actor".
+			a_context.RegisterEntryClass({ .entryClass = Api::EntryClass::ActorOwned, .name = "actor",
+				.ownerFormType = static_cast<std::uint8_t>(RE::FormType::ActorCharacter), .everyFrame = true, .ownMotion = true, .published = true });
 			// The high actors' animation stamp from DCLF's shadow views, whatever the toggle.
 			RegisterActorRate(a_context);
 		}

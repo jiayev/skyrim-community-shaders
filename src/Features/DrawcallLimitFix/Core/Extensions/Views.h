@@ -160,6 +160,8 @@ namespace DCLF::Extensions
 		Api::EngineView plainKeyView = Api::EngineView::Count;
 		// By root: its view root contribution's owned (null: none; a draw family's faces' root is the family's entry's).
 		std::array<bool (*)(const Api::ViewRootFrame&), kViewRoots> rootOwned{};
+		// The view root contributions' roots (Api::ViewRootBit; 0: none): a residue watch's roots besides those owned.
+		std::uint32_t rootBits = 0;
 		// The view bits by phase are both families' (ViewCommon.h: ResolvedViewBits).
 	};
 

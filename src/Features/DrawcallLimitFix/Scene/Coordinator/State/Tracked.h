@@ -29,7 +29,7 @@ namespace DCLF::Scene
 			bool leafWaiting = false;
 			std::uint64_t identity = 0;
 			std::uint64_t groupIdentity = 0;
-			const RE::TESObjectREFR* actorOwner = nullptr;  // lookup only, never published
+			const RE::TESObjectREFR* ownerReference = nullptr;  // its owner class's reference; lookup only, never published
 			const RE::NiNode* roomNode = nullptr;  // lookup key, refreshed on structural attachment
 			std::uint64_t roomMapGeneration = 0;
 			int roomIndex = -1;
@@ -106,10 +106,11 @@ namespace DCLF::Scene
 			// Its commit veto (Api::kVetoHold, kVetoObserve; 0: none), a component's (CoordinatorComponentContext::SetEntryVeto): read by the
 			// commit as data (VetoedPhases), counted in vetoHeld and vetoObserved.
 			std::uint8_t veto = 0;
-			// Owned by an actor (GetUserData is an ActorCharacter): Advanced Skin gives its draws the actor's wetness
-			// (Tables::skinWetness). Resolved once by the walk.
-			bool actorOwned = false;
-			bool actorOwnedResolved = false;
+			// Its owner class and rules (Api::EntryClassContribution, by its leaf's reference's form type: Features/Actors' actor-owned, whose
+			// draws Advanced Skin gives the actor's wetness, Tables::skinWetness), apart from entryClass (a face shape is both). Resolved once by
+			// the walk (Extensions::OwnerClassOf).
+			Extensions::OwnerClassRule owner;
+			bool ownerResolved = false;
 			// The joins' verdict when they left it unbound (Diagnostics::CensusVerdictOf reads this frame's).
 			Ineligible accumulateReason = Ineligible::None;
 			std::uint32_t accumulateReasonFrame = 0;  // the frame it was taken

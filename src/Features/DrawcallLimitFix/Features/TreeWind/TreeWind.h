@@ -74,6 +74,19 @@ namespace DCLF::Features::TreeWind
 	// The record word the tree slot is carried in, its generation in the next (DCLFObjectRecord's DCLFWindTimers.zw: DCLFTreeWind).
 	inline constexpr std::uint32_t kTreeRecordWord = 10;
 
+	// The feature block the shading contribution claims (Api::ShadingContribution::blockWords; checked by Features/Manifest.cpp): its first
+	// word in the record (BindlessObject::featureBlock: DCLFObjectRecord's DCLFTreeParams, kTreeRecordWord inside) and in the shading row
+	// (BindlessShading::featureBlock: DCLFShadingRow's DCLFShadingTreeParams). TreeParams in words 0-3, WindTimers in 4-7 (the row keeps
+	// xy: kBlockWords; zw the record's tree slot and generation).
+	inline constexpr std::uint32_t kRecordBlockWord = 4;
+	inline constexpr std::uint32_t kShadingBlockWord = 16;
+	inline constexpr std::uint32_t kBlockTreeParams = 0;
+	inline constexpr std::uint32_t kBlockWindTimers = 4;
+	inline constexpr std::uint32_t kBlockWords = 6;
+	// Their Lighting VS variables (ShaderConstants::LightingVS: Scene/Ports/LightingConstants.h's kVSTreeParams, kVSWindTimers).
+	inline constexpr std::uint32_t kTreeParamsVariable = 4;
+	inline constexpr std::uint32_t kWindTimersVariable = 5;
+
 	/** @brief t124: the trees' wind (DCLFTreeWind in Common/DCLFObjects.hlsli; TreeWindCS), vertex stage. It alternates by frame. */
 	inline constexpr std::uint32_t kWindRegister = kTextureRegisters - 4;
 

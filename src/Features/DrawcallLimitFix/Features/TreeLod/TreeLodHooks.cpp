@@ -14,7 +14,7 @@ namespace DCLF::Features::TreeLod
 {
 	namespace
 	{
-		// The family's records (Core's layout: TreeInstancesLayout.h) and engine shapes.
+		// The family's records (its layout: TreeInstancesLayout.h) and engine shapes.
 		namespace Layout = ::DCLF::TreeInstances;
 
 		constexpr std::uintptr_t kRefill = 0x504a40;            // FUN_140504a40(block, group)

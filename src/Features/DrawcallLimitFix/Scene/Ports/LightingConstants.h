@@ -136,8 +136,9 @@ namespace DCLF
 		std::uint32_t psMaterialData = ~0u, psMaterialDataSize = 0;
 		std::uint32_t psEmitColor = ~0u, psEmitColorSize = 0;
 		std::uint32_t psSSRParams = ~0u, psSSRParamsSize = 0;
-		std::uint32_t vsTreeParams = ~0u, vsTreeParamsSize = 0;
-		std::uint32_t vsWindTimers = ~0u, vsWindTimersSize = 0;
+		// The feature block's variables (Extensions::ShadingBlockRule's, in its order; a word each at most).
+		std::array<std::uint32_t, 8> vsBlock{ ~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u };
+		std::array<std::uint32_t, 8> vsBlockSize{};
 		std::uint32_t vsLandBlendParams = ~0u, vsLandBlendParamsSize = 0;
 		std::uint32_t vsTextureProj = ~0u, vsTextureProjSize = 0;
 		std::array<std::uint32_t, 3> psProjectedUVParams{ ~0u, ~0u, ~0u };
@@ -199,8 +200,9 @@ namespace DCLF
 		// The LOD fades the pass applies (kLodFade*), from LodFadeFrame, while the placement's fade node has them apply
 		// (LodFadesApply); else MaterialData's fades are the shading row's.
 		std::uint32_t lodFades;
-		// Tree animation (technique 12): per object, so not in the pipeline's shared PerGeometry block.
-		ObjectTreeAnim tree;
+		// The feature block (words 4-11; DCLFTreeParams, DCLFWindTimers): zero bar a table family's reference (Api::TableFamily::recordWord:
+		// Features/TreeWind's tree slot and generation in words 10-11); the variables it supplies are the shading row's and the feature's.
+		std::uint32_t featureBlock[8];
 		// Skinning (kObjectPaletteBlock): current and previous palette rows in the frame's palettes (VS t122, DCLFPalettes; PaletteRowsOf)
 		// and the row count (three a bone). Absolute, like World. 0/0/0 otherwise.
 		std::uint32_t boneOffset;
@@ -226,10 +228,10 @@ namespace DCLF
 		// A bit per ObjectShading float SetupGeometry writes (kShadingWritten*), for CPU comparisons; the shader reads none.
 		std::uint32_t written;
 		std::uint32_t padding[2];
-		// SetupGeometry's TreeParams and WindTimers (xy) for a TreeAnim property (the shading contributions: Features/TreeWind's): what a
-		// member draws with until TreeWindCS has an entry for its tree (DCLFTreeParamsOf).
-		float treeParams[4];
-		float windTimers[4];
+		// The feature block (DCLFShadingTreeParams, DCLFShadingWindTimers): the shading contribution claiming it derives its first blockWords
+		// (Extensions::ShadingBlockRule: Features/TreeWind's SetupGeometry TreeParams and WindTimers.xy for a TreeAnim property, what a
+		// member draws with until TreeWindCS has an entry for its tree: DCLFTreeParamsOf); the rest zero.
+		float featureBlock[8];
 	};
 	static_assert(sizeof(BindlessShading) == 96);
 

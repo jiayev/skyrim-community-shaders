@@ -28,7 +28,7 @@ namespace DCLF::Scene
 		enum PerFrameTrait : std::uint32_t
 		{
 			kTraitEntryClass = 1u << 0,  // a per-frame entry class's entry (a face shape; the report's "face")
-			kTraitActor = 1u << 1,
+			kTraitOwnerClass = 1u << 1,  // a per-frame owner class's entry (EntryClassContribution::everyFrame; the report's "actor")
 			// 1u << 2 unused (the report names the bits).
 			kTraitSkin = 1u << 3,
 			kTraitAnimatedShading = 1u << 4,  // a controller on its shader or alpha property: its shading is named by events, never per frame
@@ -61,7 +61,8 @@ namespace DCLF::Scene
 		{
 			bool entryClassSet = false;                        // resolved once
 			Api::EntryClass entryClass = Api::EntryClass::None;
-			bool actorOwnedSet = false, actorOwned = false;    // resolved once
+			bool ownerSet = false;                             // resolved once
+			Extensions::OwnerClassRule owner;
 			bool verdictSet = false;
 			CoordinatorTracked::Tracked::StaticVerdict verdict;
 			bool candidateSet = false;                         // classified, or its frame verdict changed

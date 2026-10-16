@@ -1,14 +1,16 @@
 #pragma once
 
 // The object contributor contracts (Api::InstallContext::RegisterTechnique, RegisterGeometryType, RegisterParent, RegisterObjectClass,
-// RegisterShading, RegisterFrameGlobals): what a feature adds to the objects DCLF draws. Three kinds, a section each below:
+// RegisterEntryClass, RegisterShading, RegisterFrameGlobals): what a feature adds to the objects DCLF draws. Three kinds, a section each
+// below:
 //
 // 1. Membership by an engine key: the objects of an engine technique or geometry type the feature ports (TechniqueContribution,
 //    GeometryTypeContribution). The key is the engine's own value, so nothing here grows with a feature.
 // 2. Membership by a Core class: objects Core recognises but rejects, or holds back, until a feature takes them - the leaves under an
 //    engine parent (EngineParent and ParentLeaves: ParentContribution), an object class Core's ports derive (ObjectClass:
 //    ObjectClassContribution), and an entry class whose records wait on a coordinator component (EntryClass: the component's
-//    entryClass.follows and takes, Api/CoordinatorComponents.h). A view is the same pattern for an engine view (EngineView, Api/Views.h).
+//    entryClass.follows and takes, Api/CoordinatorComponents.h; or an owner class, by its entries' reference's form type:
+//    EntryClassContribution). A view is the same pattern for an engine view (EngineView, Api/Views.h).
 // 3. Derivations: the per-object values the Lighting port derives from a property of the feature's (ShadingContribution), and the engine
 //    globals that derivation reads, captured with the frame's (FrameGlobalsContribution).
 // 4. Material ports: an engine shader other than Lighting whose objects Core classifies, captures and draws through the feature's port
@@ -17,8 +19,8 @@
 //    shading sample).
 //
 // A membership is read as data where Core decides (Core/Extensions/ObjectContributors.h: Extensions::TechniqueObjectFlags,
-// PropertyFlagRules, GeometryTypeOn, GeometryTypeMoves, PlannedItemClass, EntryClassOf, ParentAdmits, ObjectClassOn, CategoryRoots;
-// Core/Extensions/CoordinatorComponents.h: EntryClassTaken), never called per object (a class's category root: per frame). A derivation
+// PropertyFlagRules, GeometryTypeOn, GeometryTypeMoves, PlannedItemClass, EntryClassOf, OwnerClassOf, ParentAdmits, ObjectClassOn,
+// CategoryRoots; Core/Extensions/CoordinatorComponents.h: EntryClassTaken), never called per object (a class's category root: per frame). A derivation
 // is called per sampled property or per frame, never per object.
 //
 // Adding a Core class for a feature (section 2) is the same three steps whichever enum it goes in:
@@ -237,24 +239,78 @@ namespace DCLF::Api
 		// engine's face morphing, not its buffers'. Its record waits for its second vertex stream (Features/Faces: matched by its geometry
 		// type contribution's entry rule, classified every frame, its head held).
 		FaceShape,
+		// A tracked entry owned by an actor (its leaf's reference an ActorCharacter): the actor's 3D, carried items too. An owner class
+		// (EntryClassContribution: Features/Actors, whatever its toggle), apart from the type-matched class (a face shape is both).
+		ActorOwned,
 		Count,
 	};
 
+	/**
+	 * @brief An entry class contribution: an owner class, the tracked entries whose leaf's reference (the mirror's NodeRecord::userData) is
+	 * of form type ownerFormType (RE::FormType). Resolved once per tracked entry by the walk from the mirror, whatever toggle
+	 * (Extensions::OwnerClassOf: a table by form type, built at the install), and kept apart from the type-matched entry class
+	 * (GeometryTypeContribution::entry), which an entry may also have. Read as data where Core decides, never called.
+	 *
+	 * - entryClass: the class (not None; one contribution's, and no geometry type's entry class).
+	 * - name: what the walk's timing report calls its entries (EvaluateKind::Owned: "<name>", "<name> without a record").
+	 * - ownerFormType: the form type (one contribution's).
+	 * - everyFrame: its entries' records change with no event (an actor's equipment shown, hidden and swapped): per frame whatever their
+	 *   traits (the walk's owner class trait), their frame verdict retaken by the light path (FrameVerdictKept), a hidden verdict never
+	 *   static (Eligibility::HiddenStatic).
+	 * - ownMotion: its entries move with no controller or body on their chain (an actor's skeleton: Havok's behaviour graph): placed every
+	 *   frame (FrameValues' movers), their root motion never read, node and motion events never reclassify them. Needs everyFrame.
+	 * - published: its members are listed for the frame (SceneTables::actorObjects and actorWetness: Advanced Skin's wetness).
+	 */
+	struct EntryClassContribution
+	{
+		EntryClass entryClass = EntryClass::None;
+		std::string_view name;
+		std::uint8_t ownerFormType = 0;
+		bool everyFrame = false;
+		bool ownMotion = false;
+		bool published = false;
+	};
+
 	// ---- 3. Derivations.
+
+	/**
+	 * @brief The feature block's words: the shading row's and the object record's (BindlessShading::featureBlock, BindlessObject::
+	 * featureBlock; DCLFObjects.hlsli's, frozen). One contribution claims it.
+	 */
+	inline constexpr std::uint32_t kShadingBlockWords = 8;
+
+	/**
+	 * @brief A Lighting VS PerGeometry variable a block supplies per object (ShadingContribution::vsVariables): the variable
+	 * (ShaderConstants::LightingVS index), its first word in the block, the floats it takes from there (the rest of the variable the
+	 * pipeline template's), and the first `compared` of those a capture parity compares with the engine's (the rest depend on native draw
+	 * order).
+	 */
+	struct ShadingVariable
+	{
+		std::uint32_t variable = 0;
+		std::uint8_t firstWord = 0, floats = 0, compared = 0;
+	};
 
 	/**
 	 * @brief A shading contribution: the per-object values SetupGeometry derives for a property of the feature's (the shading rows' tree
 	 * parameters and wind timers), what a member draws with until the feature's GPU stage has its own.
 	 *
 	 * - derive: FrameValues' pool (a shading sample: the slots shading events named, inside the engine-read window and the frame's
-	 *   FrameGlobals scope) or a parity's sample, for a property with any of propertyFlags: writes ShadingDerivation::out. Called per
-	 *   sampled property that has the flags, never per object per frame.
+	 *   FrameGlobals scope) or a parity's sample, for a property with any of propertyFlags: writes ShadingDerivation::block (zero-filled
+	 *   before). Called per sampled property that has the flags, never per object per frame.
+	 * - objectFlags, blockWords, vsVariables: the feature block (one contribution's; a second claimant fails the install). The shading row
+	 *   keeps the first blockWords words derive wrote (the rest zero); for an object with any of objectFlags (its technique contribution's)
+	 *   the Lighting port draws vsVariables from them, not from the pipeline template. Read as data, resolved once
+	 *   (Extensions::ShadingBlockRule); vsVariables kept as given (static storage).
 	 */
 	struct ShadingContribution
 	{
 		std::string_view name;
 		std::uint64_t propertyFlags = 0;  // BSShaderProperty::EShaderPropertyFlag bits
 		void (*derive)(const ShadingDerivation& a_derivation) = nullptr;
+		std::uint32_t objectFlags = 0;
+		std::uint32_t blockWords = 0;
+		std::span<const ShadingVariable> vsVariables;
 	};
 
 	/** @brief A registered frame-globals contribution (RegisterFrameGlobals' result): its first float in FrameGlobals::features. */

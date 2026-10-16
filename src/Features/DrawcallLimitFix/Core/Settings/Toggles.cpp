@@ -70,6 +70,8 @@ namespace DCLF
 
 		bool NeedsMet(const ToggleInfo& a_info, const ToggleSet& a_set)
 		{
+			if (a_info.needsMissing)
+				return false;
 			for (const auto need : a_info.needs)
 				if (need && !(a_set.*need))
 					return false;
@@ -209,6 +211,28 @@ namespace DCLF
 
 	void Toggles::SeedRegistered()
 	{
+		// The Core flags' needs by name, now every feature registered: before the flag (Normalised resolves chains in table order), or
+		// missing (no feature registered it), which holds the flag off.
+		auto& table = Table();
+		for (std::size_t i = 0; i < table.size(); ++i) {
+			auto& toggle = table[i];
+			for (std::size_t n = 0; n < std::size(toggle.needNames); ++n) {
+				if (toggle.needNames[n].empty())
+					continue;
+				const auto need = ToggleAt(toggle.needNames[n]);
+				if (need < 0) {
+					toggle.needsMissing = true;
+					continue;
+				}
+				if (static_cast<std::size_t>(need) >= i)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the toggle {} needs {}, which is not listed before it", toggle.name, toggle.needNames[n]));
+				const auto& needed = table[static_cast<std::size_t>(need)];
+				if (needed.member)
+					toggle.needs[n] = needed.member;
+				else
+					toggle.registeredNeeds[n] = needed.registered;
+			}
+		}
 		requested.registered = FromSwitches().registered;
 		active.store(Pack(Normalised(requested)), std::memory_order_relaxed);
 	}

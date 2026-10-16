@@ -85,15 +85,29 @@ namespace DCLF
 	{
 		Light,        // the light path kept or moved it
 		LightMissed,  // the light path tried and fell through to the full write
-		Actor,        // written in full: an actor's (kTraitActor) whose verdict lets it have a record
-		ActorNoRecord,  // written in full: an actor's whose verdict gives it none (hidden, fading, ...)
+		Owned,        // written in full: an owner class's (kTraitOwnerClass: an actor's) whose verdict lets it have a record
+		OwnedNoRecord,  // written in full: an owner class's whose verdict gives it none (hidden, fading, ...)
 		EntryClass,   // written in full: an entry class's (a face shape; the report's "face")
 		PerFrame,     // written in full: any other per-frame entry
 		Event,        // written in full: scheduled by an event, a pending evaluation or a full walk
 		Count
 	};
 
-	inline constexpr std::array<const char*, static_cast<std::size_t>(EvaluateKind::Count)> kEvaluateKindNames{
-		"light path", "light path missed", "actor", "actor without a record", "face", "other per-frame", "event"
+	/**
+	 * @brief EvaluateKind's report names, by kind: the owned kinds' are the registered owner classes' (Extensions::OwnedEntriesLabel:
+	 * "actor", "actor without a record").
+	 */
+	struct EvaluateKindNames
+	{
+		std::string_view operator[](std::size_t a_kind) const
+		{
+			constexpr std::array<std::string_view, static_cast<std::size_t>(EvaluateKind::Count)> kNames{
+				"light path", "light path missed", "", "", "face", "other per-frame", "event"
+			};
+			return a_kind == static_cast<std::size_t>(EvaluateKind::Owned)         ? Extensions::OwnedEntriesLabel(false) :
+			       a_kind == static_cast<std::size_t>(EvaluateKind::OwnedNoRecord) ? Extensions::OwnedEntriesLabel(true) :
+			                                                                         kNames[a_kind];
+		}
 	};
+	inline constexpr EvaluateKindNames kEvaluateKindNames{};
 }

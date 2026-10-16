@@ -80,7 +80,7 @@ namespace DCLF::Draws
 				constants.hzbMips = resources->hzbMips;
 			}
 			// Dispatched for full capacity; the shader stops at the real counts.
-			prepared.groups = static_cast<std::uint32_t>((records + kTreeLodCullGroup - 1) / kTreeLodCullGroup);
+			prepared.groups = static_cast<std::uint32_t>((records + Features::TreeLod::kTreeLodCullGroup - 1) / Features::TreeLod::kTreeLodCullGroup);
 			return prepared;
 		}
 

@@ -49,7 +49,6 @@ namespace DCLF::Features::Effects
 		row.emissiveMult = 1.0f;
 		row.written = 4u | 0x70u;
 		row.padding[0] = row.padding[1] = 0u;
-		std::fill(std::begin(row.treeParams), std::end(row.treeParams), 0.0f);
-		std::fill(std::begin(row.windTimers), std::end(row.windTimers), 0.0f);
+		std::fill(std::begin(row.featureBlock), std::end(row.featureBlock), 0.0f);
 	}
 }

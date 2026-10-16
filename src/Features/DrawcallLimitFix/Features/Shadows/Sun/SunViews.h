@@ -15,7 +15,7 @@ namespace DCLF::Features::Shadows::Sun
 	 * kCullSunEntry).
 	 *
 	 * Render thread: written in the hook (CalculateActiveShadowCasterLights, before the full-frustum cull and Accumulate). Installed from
-	 * the feature's camera hooks, for the Sun source (Api::Feature::cameraHooks).
+	 * the feature's source hooks, for the Sun source (Api::Feature::sourceHooks).
 	 */
 	class SunViews
 	{

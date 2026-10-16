@@ -1,8 +1,8 @@
 // The view engine (IndirectDraws.h, "The view engine"): Core's calls for the features that take an engine view - the view slot's state,
 // targets, depth range, pipelines, resources and target import at the frame's start, its epochs' inputs and submission, its coverage,
 // and its phase's capability and slot readiness. Each is what Core did for the view itself, over the slot the view names. Render thread,
-// but for ViewDrawable and ViewSlotReady (the scene lane's commit) and ViewCovered. (A trees view's tree LOD per face and the cube camera's
-// LOD roots: ViewTreeLod.cpp.)
+// but for ViewDrawable and ViewSlotReady (the scene lane's commit) and ViewCovered. (A trees view's draw families per face: ViewFaces.cpp; the
+// roots its faces draw: ViewRoots.cpp.)
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
@@ -156,15 +156,15 @@ namespace DCLF
 		const auto owners = impl->EpochOwners(std::span<const MainPayload* const>(a_listed.owners.data(), a_listed.ownerCount));
 		if (!owners)
 			return ViewSubmit::NoOwners;
-		// A trees view's tree LOD row (ViewTreeLod.cpp), its texture held with the owners.
-		TreeInstances::DrawRow treeRow{};
+		// A trees view's draw families' rows (ViewFaces.cpp), their textures held with the owners.
+		ViewFamilyRows rows{};
 		const bool trees = !a_faces.empty() && TraitsOf(a_view).trees;
 		if (trees)
-			treeRow = impl->ViewTreeRow(a_view, *shape, *owners);
+			rows = impl->ViewFaceRows(a_view, *shape, *owners);
 		std::uint32_t drawn = 0;
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(slot.segments[a_epoch], [&](org::RenderGraph&) {
 			if (!a_faces.empty())
-				drawn = impl->CommitView(*shape, a_faces, a_listed.inputs, trees ? &treeRow : nullptr);
+				drawn = impl->CommitView(*shape, a_faces, a_listed.inputs, trees ? &rows : nullptr);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, 0);
 		}, owners);
 		if (!ok)

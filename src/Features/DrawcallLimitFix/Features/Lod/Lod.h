@@ -9,11 +9,11 @@
 // (Api::TechniqueContribution, GeometryTypeContribution: the LOD flags and the geometry type each class's objects are), which Core reads as
 // data: the Lighting port's techniques and its LOD flags' eligibility (Ineligible::Lod: Extensions::PropertyFlagRules), the sub-index
 // shapes' eligibility, the LOD root listed as a category node (the classes' categoryRoot, TES::lodLandRoot), and a view's LOD roots
-// drawn in the engine's place (IndirectDraws::ViewLodRootsOwned: the cube camera's LOD land and objects roots, while both classes are on
-// and the swaps gated). And the LOD gates (CS_DCLF_LOD_GATES): the engine's LOD swaps held until DCLF's claims
-// cover the incoming level (LodGates.h: the swap thunks and detours, installed by the feature's install, the show veto, the render thread's
-// flip; LodGateComponent.h: the gate events on a SceneStack channel, the coordinator component's marks, vetoes, settle, publication and
-// adoption, its report lines, observers and parity).
+// drawn in the engine's place (the view root contribution, LodRootsOwned: the cube camera's LOD land and objects roots, while both
+// classes are on and the swaps gated; IndirectDraws::ViewLodRootsOwned reads it). And the LOD gates (CS_DCLF_LOD_GATES): the engine's
+// LOD swaps held until DCLF's claims cover the incoming level (LodGates.h: the swap thunks and detours, installed by the feature's
+// install, the show veto, the render thread's flip; LodGateComponent.h: the gate events on a SceneStack channel, the coordinator
+// component's marks, vetoes, settle, publication and adoption, its report lines, observers and parity).
 //
 // The feature captures object LOD's drawn ranges (its sub-index shapes' contribution's ranges, Api::GeometryTypeContribution: LodSegments.h,
 // the segments' layout). Core keeps them for the walk (the coordinator's entryRanges: the attach's capture, the range slots), and keeps

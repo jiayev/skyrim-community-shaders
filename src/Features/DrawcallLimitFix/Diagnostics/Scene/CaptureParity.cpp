@@ -78,19 +78,11 @@ namespace DCLF
 			return bits;
 		}
 
-		/** @brief The record flags of technique 12's objects, whose TreeParams and WindTimers are per object (its contribution's). */
-		std::uint32_t PerObjectWindFlags()
-		{
-			static const std::uint32_t flags = Extensions::TechniqueObjectFlags(Extensions::RegisteredTechniques(),
-				static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderTechniques::TreeAnim));
-			return flags;
-		}
-
 		/**
-		 * @brief A member whose TreeParams and WindTimers a feature's GPU stage writes: its record carries a table family's reference
+		 * @brief A member whose feature block variables a feature's GPU stage writes: its record carries a table family's reference
 		 * (Api::TableFamily::recordWord; Features/TreeWind's: a member listed under its tree, whose wind TreeWindCS writes).
 		 */
-		bool GpuWrittenWind(const SceneTables& a_tables, std::uint32_t a_object)
+		bool GpuWrittenBlock(const SceneTables& a_tables, std::uint32_t a_object)
 		{
 			if (!Scene::FrameView::Get().IsMember(static_cast<std::int32_t>(a_object)))
 				return false;
@@ -342,11 +334,14 @@ namespace DCLF
 			shadowState.previousPosAdjust.getEye());
 		const auto& vsLayout = LightingVSLayout();
 		const auto& psLayout = LightingPSLayout();
-		// WindTimers.y (previous timer) is not compared: SetupGeometry (AE 1414dd040, case 0xc) copies the tree node's current timer
-		// over its previous one (+0x168 = +0x164) after every native draw, so it depends on native draw order, and DCLF does not
-		// write engine nodes. Lighting.hlsl reads it only into the unused previousInputPosition.
-		if (vsLayout.size[kVSWindTimers] > 1)
-			expected.vs.floats[vsLayout.offset[kVSWindTimers] + 1] = std::bit_cast<float>(kUnwrittenBits);
+		// A block variable's floats past its compared ones are not compared (Api::ShadingVariable::compared): Features/TreeWind's
+		// WindTimers.y (previous timer), which SetupGeometry (AE 1414dd040, case 0xc) copies from the tree node's current timer
+		// (+0x168 = +0x164) after every native draw, so it depends on native draw order, and DCLF does not write engine nodes.
+		// Lighting.hlsl reads it only into the unused previousInputPosition.
+		const auto& block = Extensions::ShadingBlockRule();
+		for (const auto& variable : block.variables)
+			for (std::uint32_t c = variable.compared; c < variable.floats && c < vsLayout.size[variable.variable]; ++c)
+				expected.vs.floats[vsLayout.offset[variable.variable] + c] = std::bit_cast<float>(kUnwrittenBits);
 		// A multi-index shape's ProjectedUVParams2.zw: FUN_1414e00c0 writes only xy (normalDampener, materialScale); zw is leftover.
 		if ((object.flags & kObjectProjectedUV) && const_cast<RE::BSGeometry*>(a_geometry)->GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape &&
 			psLayout.size[kPSProjectedUVParams + 1] > 3) {
@@ -359,11 +354,11 @@ namespace DCLF
 		bool ok = true;
 		compareContext = fmt::format(" (pipeline descriptor {:08X}, skinned object {})", tables.pipelines[object.pipelineIndex].passDescriptor,
 			(object.flags & kObjectPaletteBlock) != 0);
-		// TreeParams and WindTimers: SetupGeometry writes them for technique 12 only (otherwise leftover, unread), and a member
-		// tree's come from a feature's GPU stage (TreeWindCS: its own parity checks those). World and PreviousWorld: SetupGeometry skips them
-		// for skinned objects (engine notes); the SKINNED vertex shader positions from the palette.
+		// The block's variables (TreeParams and WindTimers): SetupGeometry writes them for its objects only (technique 12; otherwise
+		// leftover, unread), and a member tree's come from a feature's GPU stage (TreeWindCS: its own parity checks those). World and
+		// PreviousWorld: SetupGeometry skips them for skinned objects (engine notes); the SKINNED vertex shader positions from the palette.
 		const std::uint64_t vsMask = kVSGroups[kPerGeometry] &
-		                             ((object.flags & PerObjectWindFlags()) && !GpuWrittenWind(tables, a_objectIndex) ? ~0ull : ~((1ull << kVSTreeParams) | (1ull << kVSWindTimers))) &
+		                             ((object.flags & block.objectFlags) && !GpuWrittenBlock(tables, a_objectIndex) ? ~0ull : ~block.vsMask) &
 		                             ((object.flags & kObjectPaletteBlock) ? ~((1ull << kVSWorld) | (1ull << kVSPreviousWorld)) : ~0ull);
 		if (vs)
 			ok &= CompareBlock(a_geometry, "VS PerGeometry", expected.vs, vsLayout, vs->constantTable.data(),

@@ -4,6 +4,7 @@
 
 #include "Internal.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 
@@ -766,8 +767,9 @@ namespace DCLF::Scene
 			return;
 		// Non-null: FindCategoryNode found it.
 		const auto* record = mirror.Node(a_node);
-		// An actor's entries are per frame (its placement the plan's, its verdict its hidden events'), and its sun entry is never tested.
-		if (record->IsActorCharacter())
+		// An actor's entries are per frame (its placement the plan's, its verdict its hidden events'), and its sun entry is never tested:
+		// its owner class's own motion.
+		if (Extensions::OwnerClassOf(*record).ownMotion)
 			return;
 		++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::NodeEvent)];
 		Diagnostics::Notify(Diagnostics::TrackedBelowRead{ *this, MirrorRead::NodeEvent, a_node });
@@ -804,8 +806,8 @@ namespace DCLF::Scene
 		bool unmirrored = false;
 		if (!record || !MirrorCategoryNode(a_node, reason, unmirrored))
 			return;
-		// An actor's entries are per frame whatever their traits (kTraitActor).
-		if (record->IsActorCharacter())
+		// An actor's entries are per frame whatever their traits (kTraitOwnerClass): its owner class's own motion.
+		if (Extensions::OwnerClassOf(*record).ownMotion)
 			return;
 		// Roots above it: their motion (RootMoves) is judged again with their dependents.
 		for (const void* key = a_node; key;) {
@@ -883,12 +885,12 @@ namespace DCLF::Scene
 	{
 		// Keys only; the addresses are never read.
 		auto& primary = PrimaryCull::Get();
-		// A static with a chain event is reclassified; an actor's light-path entry retakes its frame verdict (ActorRecordKept).
+		// A static with a chain event is reclassified; an actor's light-path entry retakes its frame verdict (FrameVerdictKept).
 		ankerl::unordered_dense::set<RE::BSGeometry*> retake;
 		ankerl::unordered_dense::set<const void*> categoryEvents;
 		auto announce = [&](RE::BSGeometry* a_geometry, Tracked& a_entry) {
 			a_entry.hiddenEventOwed = true;
-			if (!(a_entry.lightTraits & kTraitActor))
+			if (!(a_entry.lightTraits & kTraitOwnerClass))
 				retake.insert(a_geometry);
 		};
 		auto announceKey = [&](const void* a_key) {

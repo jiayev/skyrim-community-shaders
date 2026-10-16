@@ -243,17 +243,20 @@ namespace DCLF
 		bool LodPhaseReady(std::uint8_t a_phase, const SceneTables& a_tables, std::uint32_t a_slot) const;
 		/** @brief A ColourWithOwnDepth view's target, the engine's a_texture, imported (again when it changes) with DCLF's own depth. */
 		bool ImportViewColourTarget(ViewKind a_kind, ID3D11Texture2D* a_texture);
-		/** @brief A trees view's tree LOD row for an epoch's commit (IndirectDraws::SubmitViewEpoch): none unless its faces' tree LOD is DCLF's. */
-		TreeInstances::DrawRow ViewTreeRow(ViewKind a_kind, const ViewFrame& a_shape, std::vector<std::shared_ptr<const void>>& a_owners);
-		/** @brief A view's commit (render thread): its map, faces and tree LOD rows into the shape's latch; returns faces drawn. */
-		std::uint32_t CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const TreeInstances::DrawRow* a_treeRow);
+		/**
+		 * @brief A trees view's draw families' rows for an epoch's commit (IndirectDraws::SubmitViewEpoch), in its state: each naming
+		 * nothing unless the faces' family is DCLF's.
+		 */
+		ViewFamilyRows ViewFaceRows(ViewKind a_kind, const ViewFrame& a_shape, std::vector<std::shared_ptr<const void>>& a_owners);
+		/** @brief A view's commit (render thread): its map, faces and draw families' face rows into the shape's latch; returns faces drawn. */
+		std::uint32_t CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const ViewFamilyRows* a_rows);
 		/** @brief What an epoch's execution holds besides its shape (binding owners, the adopted snapshot). */
 		std::shared_ptr<std::vector<std::shared_ptr<const void>>> EpochOwners(std::span<const MainPayload* const> a_payloads);
 		/** @brief The scene buffers, created once (render thread). False when they have no device address. */
 		bool EnsureSceneBuffers(rhi::Device a_device);
 		/**
 		 * @brief Revision code: the scene's tables required to hold a_tables (and the frame's posted counts), with the per-object
-		 * buffers (the objects and the input demand) and the faces' tree lists.
+		 * buffers (the objects and the input demand) and the faces' draw family lists.
 		 */
 		void RequireSceneTables(GrowthBuild& a_build, SceneBuffers& a_scene, const SceneTables& a_tables);
 		ObjectRecordStore objectStore;
@@ -383,10 +386,12 @@ namespace DCLF
 		void DecideViewCoverage(ViewKind a_kind, org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame);
 		void SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index);
 		std::string RevisionReport();
+		// By draw family, its pipelines as the request's catalog has them (null: none).
+		using FamilyPipelinesSet = std::array<const FamilyPipelines*, Extensions::kDrawFamilies>;
 		ShapesKey RevisionShapesKey(const NamedVersions& a_sealed, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups,
-			std::size_t a_pipelines, const FamilyPipelines* a_treeLod) const;
-		/** @brief RevisionShapesKey's views' part: each view's inputs into its slot's key group, tree LOD's, the DropWhenOff views' toggles. */
-		void MixViewShapesKey(ShapesKeyMixer& a_mixer, const FamilyPipelines* a_treeLod) const;
+			std::size_t a_pipelines, const FamilyPipelinesSet& a_families) const;
+		/** @brief RevisionShapesKey's views' part: each view's inputs into its slot's key group, the draw families' faces', the DropWhenOff views' toggles. */
+		void MixViewShapesKey(ShapesKeyMixer& a_mixer, const FamilyPipelinesSet& a_families) const;
 		/**
 		 * @brief Whether the last shadow and occlusion shapes hold a_bounds (capacities and buckets enough, no row at the bucket words
 		 * they were made for). Capacities only grow, so a shape remade from a bound they hold is the same shape.

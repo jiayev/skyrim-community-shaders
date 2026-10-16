@@ -38,6 +38,7 @@ namespace DCLF::Reports
 	void RenderThread(std::uint32_t a_frame)
 	{
 		SunAccumulationLines(a_frame);
+		DCLF::Extensions::ReportLinesAt(DCLF::Api::ReportPoint::RenderThread, a_frame);
 		PrimaryCullLines(a_frame);
 		Stats(a_frame, FrameDriver::Get().ReportCounters());
 	}

@@ -14,8 +14,8 @@
 //
 // Core keeps the family's slot (Core/Render/DrawFamilies/FamilySlots.h): its pipelines on the lane (DrawPipelines' tree LOD family,
 // ForwardPipelineKey::kForwardTreeLod) from the program source, the ownership it publishes from the decision (PassCapture's withholding of
-// the engine's tree LOD passes), the shapes key's part, a trees view's lists, rows and latch (with the cull's thread group,
-// Draws::kTreeLodCullGroup) and the GPU layout the shaders mirror (TreeInstancesLayout.h).
+// the engine's tree LOD passes), the shapes key's part, and a trees view's lists, rows and latch (sized by the family's faces data: the
+// rows, list header and units of the GPU layout the shaders mirror, TreeInstancesLayout.h, and the cull's thread group, kTreeLodCullGroup).
 // Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"

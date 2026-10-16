@@ -71,26 +71,48 @@ namespace DCLF::Extensions
 				FillRegistered(set.maps[v], a_maps[v]);
 		for (std::size_t s = 0; s < a_sources.size(); ++s) {
 			if (a_sources[s].source < Api::ShadowSource::Count)
-				set.sources[s] = { true, a_sources[s].lightKept };
+				set.sources[s] = { true, a_sources[s].lightKept, a_sources[s].fullFrustumWindowEnd };
 		}
 		DeriveShadowOrders(set);
 		Detail::resolvedShadowViews = std::move(set);
 	}
 
-	void InstallCameraHooks(std::span<const Api::Feature> a_features)
+	namespace
+	{
+		// Main thread, written by the sources' hooks (ShadowSourceHooks::CullsInstalled), read by the engine side's installs after them.
+		std::array<bool, kShadowSources> sourceCullsInstalled{};
+	}
+
+	bool SourceCullsInstalled(Api::ShadowSource a_source)
+	{
+		return sourceCullsInstalled[static_cast<std::size_t>(a_source)];
+	}
+
+	void InstallSourceHooks(std::span<const Api::Feature> a_features)
 	{
 		static bool installed = false;
 		if (std::exchange(installed, true))
-			stl::report_and_fail("Drawcall Limit Fix: the shadow cameras' hooks were installed twice");
-		// By source, in ShadowSource order (the install log's): the sun's UpdateCamera (Features/Shadows/Sun), the light selection (Core's,
-		// whatever the sources: it hands the Spot and Point sources their kept lights), then the focus cameras (Features/Shadows/Local).
+			stl::report_and_fail("Drawcall Limit Fix: the shadow sources' hooks were installed twice");
+		// By source, in ShadowSource order (the install log's): the sun's accumulation and UpdateCamera (Features/Shadows/Sun), the light
+		// selection (Core's, whatever the sources: it hands the Spot and Point sources their kept lights), then the focus cameras
+		// (Features/Shadows/Local).
 		for (std::size_t s = 0; s < kShadowSources; ++s) {
 			const auto source = static_cast<Api::ShadowSource>(s);
+			Api::ShadowSourceHooks hooks{ source };
 			for (const auto& feature : a_features)
-				if (feature.cameraHooks)
-					feature.cameraHooks(source);
+				if (feature.sourceHooks)
+					feature.sourceHooks(hooks);
 			if (source == Api::ShadowSource::Sun)
 				LightSelection::Get().Install();
 		}
+	}
+}
+
+namespace DCLF::Api
+{
+	void ShadowSourceHooks::CullsInstalled()
+	{
+		if (source < ShadowSource::Count)
+			Extensions::sourceCullsInstalled[static_cast<std::size_t>(source)] = true;
 	}
 }

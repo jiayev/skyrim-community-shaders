@@ -40,6 +40,13 @@ namespace DCLF
 					return f;
 			return Extensions::kDrawFamilies;
 		}
+
+		// A draw family's faces' root in a view's roots (Api::ViewRootBit; 0: none).
+		std::uint32_t FacesRootBit(std::size_t a_family)
+		{
+			const auto root = Extensions::DrawFamilies()[a_family].contribution.faces.root;
+			return root < Api::ViewRoot::Count ? Api::ViewRootBit(root) : 0u;
+		}
 	}
 
 	PassCapture& PassCapture::Get()
@@ -278,8 +285,9 @@ namespace DCLF
 			const auto set = std::atomic_load(&frameSet);
 			const std::uint8_t phase = views.views[v].phase;
 			if (!set || !(set->drawn & phase) || !(set->PhasesOf(a_pass->geometry) & phase)) {
-				// The residue watch: tree LOD under the tree root, anything else but the sky under the LOD land and objects roots.
-				if (const auto watch = view.residueWatch.load(std::memory_order_acquire); watch & (treeLod ? kTreeRoot : kLodRoots))
+				// The residue watch: a draw family's engine shape under its faces' root, anything else but the sky under the view root
+				// contributions' roots (the LOD land and objects').
+				if (const auto watch = view.residueWatch.load(std::memory_order_acquire); watch & (treeLod ? FacesRootBit(family) : views.rootBits))
 					NoteViewResidue(view, a_pass, treeLod);
 				return false;
 			}
