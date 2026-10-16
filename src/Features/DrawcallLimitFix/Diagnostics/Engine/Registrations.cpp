@@ -4,7 +4,7 @@
 
 #include "Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 
 #include <array>
 #include <atomic>

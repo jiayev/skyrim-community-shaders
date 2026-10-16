@@ -1,7 +1,7 @@
 // The material ports' table and calls (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialPort.h"
 
 #include <algorithm>
 #include <cstring>

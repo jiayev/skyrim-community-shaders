@@ -37,7 +37,7 @@ namespace DCLF::Extensions
 	/**
 	 * @brief A store of the feature's own to a_node's a_fields (Api::kNodeField* bits): the mirror's update of them, captured on the storing
 	 * thread after the store (inside the engine-read window), in order with what that thread pushed before. Nothing for null.
-	 * Engine/Capture/SceneEvents.cpp.
+	 * Core/Engine/Capture/SceneEvents.cpp.
 	 */
 	void PushNodeUpdate(const RE::NiAVObject* a_node, std::uint32_t a_fields);
 }

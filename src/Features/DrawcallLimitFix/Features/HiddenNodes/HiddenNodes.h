@@ -5,7 +5,7 @@
 // in right after Core's scene events, before Core's engine side reads HiddenStoresLive) - and CS_DCLF_HIDDEN_WATCH, the hardware watch
 // that names a store the source misses (Diagnostics/HiddenWatch.cpp: its switch, its observer and its report lines).
 //
-// Core keeps the hidden-bit vocabulary every object is judged by: the channel (Engine/Capture/SceneEvents.h: Scene::PushHiddenUpdate,
+// Core keeps the hidden-bit vocabulary every object is judged by: the channel (Core/Engine/Capture/SceneEvents.h: Scene::PushHiddenUpdate,
 // hiddenEventsInstalled, the reserved sites' Extensions::PushReservedHidden; the mirror update's hiddenSite), the coordinator's chains and
 // their drain (hiddenDependents, DrainHiddenEvents: the walk's dependency tracking for the Hidden verdict, as propertyDependents is for the
 // property events), the frame's capture of the culls' bits (FrameGlobals::cullHidden), the Hidden verdict itself (Coordinator::ClassifyFrame,

@@ -13,10 +13,10 @@
 
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PlacementRows/BillboardRow.h"
-#include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include <bit>
@@ -28,7 +28,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"

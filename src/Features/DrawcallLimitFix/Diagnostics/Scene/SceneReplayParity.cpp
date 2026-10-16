@@ -5,7 +5,7 @@
 #include "SceneObservers.h"
 #include "SceneState.h"
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 
 namespace DCLF::Diagnostics

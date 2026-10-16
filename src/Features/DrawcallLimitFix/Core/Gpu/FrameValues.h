@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include <array>
 #include <atomic>
 #include <cstdint>

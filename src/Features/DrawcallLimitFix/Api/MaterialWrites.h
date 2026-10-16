@@ -4,7 +4,7 @@
 // (Features/Effects' effect controllers and material rewrite), so the coordinator's records follow the write (the material captured for
 // them, MaterialPort::PushCapture) and the shading resampled. The frame patch of the ports' frame VS variable, which leaves a capture
 // whose texture transforms alone moved to the frame (Features/TextureTransforms), is registered through the install context
-// (InstallContext::RegisterFrameVSVariablePatch). Implemented by Core (Engine/Capture/MaterialWrites.cpp, Core/Extensions/MaterialWrites.h).
+// (InstallContext::RegisterFrameVSVariablePatch). Implemented by Core (Core/Shading/MaterialWrites.cpp, Core/Extensions/MaterialWrites.h).
 
 namespace RE
 {

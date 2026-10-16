@@ -1,10 +1,10 @@
 #pragma once
 
-// Fades' records beside Core's root-state rows (Scene/Model/Records.h: FadeNodeState, FadeRootStatic, FadeFrame, the kFadeVerdict* and
+// Fades' records beside Core's root-state rows (Core/Scene/Model/Records.h: FadeNodeState, FadeRootStatic, FadeFrame, the kFadeVerdict* and
 // kFadeRoot* bits, which the cull reads): the animation job's inputs the fade writers record, the parity's log entry and the write-back's
 // events.
 
-#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
 #include <cstdint>
 

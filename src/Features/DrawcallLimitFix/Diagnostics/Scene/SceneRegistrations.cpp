@@ -5,8 +5,8 @@
 #include "SceneObservers.h"
 #include "SceneState.h"
 
-#include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
 
 namespace DCLF::Diagnostics
 {

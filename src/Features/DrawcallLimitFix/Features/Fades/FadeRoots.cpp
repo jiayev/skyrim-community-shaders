@@ -8,11 +8,11 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"  // NoteFadeRootUnmirrored
-#include "Features/DrawcallLimitFix/Scene/Model/Publication.h"
-#include "Features/DrawcallLimitFix/Scene/Model/SceneMirror.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"  // NoteFadeRootUnmirrored
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Publication.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/SceneMirror.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
 #include <algorithm>
 #include <cstddef>

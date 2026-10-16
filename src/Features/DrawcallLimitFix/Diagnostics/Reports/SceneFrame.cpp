@@ -7,7 +7,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
 
 // The render thread's scene lines: what it keeps of the scene (the pipeline constants, the shading and extras checks, tree LOD's mirror,
 // the frame capture), and the lines at the gate releases' point.

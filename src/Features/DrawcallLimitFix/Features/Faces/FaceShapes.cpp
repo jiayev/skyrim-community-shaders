@@ -6,8 +6,8 @@
 #include "Features/DrawcallLimitFix/Features/Faces/FaceSnapshots.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
-#include "Features/DrawcallLimitFix/Scene/Model/SceneMirror.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/SceneMirror.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 
 #include <ankerl/unordered_dense.h>
 

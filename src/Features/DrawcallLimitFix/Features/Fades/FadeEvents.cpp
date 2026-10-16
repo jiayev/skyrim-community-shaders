@@ -7,7 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/NodeCaptures.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"  // the fade node's fields (kFadeStatics, kFadeState)
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"  // the fade node's fields (kFadeStatics, kFadeState)
 
 namespace DCLF::Features::Fades
 {

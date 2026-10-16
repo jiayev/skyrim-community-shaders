@@ -3,8 +3,8 @@
 
 #include "Features/DrawcallLimitFix/Integrations/TruePBR/TruePBRIntegration.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/MaterialHookFrame.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialHookFrame.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialPort.h"
 
 #include <cstddef>
 #include <cstring>

@@ -2,7 +2,7 @@
 
 // The draws area's observers (Diagnostics/Draws/*.cpp), subscribed by InstallDraws (DrawsInstall.cpp) to the hook points of Events.h.
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 
 namespace DCLF::Diagnostics
 {

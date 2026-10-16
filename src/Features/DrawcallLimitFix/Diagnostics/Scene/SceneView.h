@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 namespace DCLF::Diagnostics
 {

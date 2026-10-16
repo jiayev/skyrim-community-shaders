@@ -5,7 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Diagnostics/SunCasters.h"
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 
 #include <algorithm>
 

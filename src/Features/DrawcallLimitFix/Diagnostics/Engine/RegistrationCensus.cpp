@@ -12,12 +12,12 @@
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
-#include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 #include <ankerl/unordered_dense.h>
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"

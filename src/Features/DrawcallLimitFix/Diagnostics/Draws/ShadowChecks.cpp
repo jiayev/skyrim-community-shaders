@@ -4,7 +4,7 @@
 // Features/Shadows/Sun/Diagnostics.)
 
 #include "DrawsState.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Events.h"
 #include "Observers.h"

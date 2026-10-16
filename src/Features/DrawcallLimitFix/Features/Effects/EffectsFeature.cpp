@@ -41,7 +41,7 @@ namespace DCLF::Features::Effects
 			RegisterPrograms(a_context);
 			RegisterFrame(a_context);
 			RegisterReport(a_context);
-			// The port's material-write hooks (once Core's Lighting write hooks are in: Engine/Capture/MaterialWrites).
+			// The port's material-write hooks (once Core's Lighting write hooks are in: Core/Shading/MaterialWrites).
 			InstallWrites();
 			// CS_DCLF_SET_PARITY: the members' withheld Lighting-variant passes.
 			if (Diagnostics::Observe().claims)

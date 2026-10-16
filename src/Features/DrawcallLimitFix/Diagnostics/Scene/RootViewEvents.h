@@ -5,7 +5,7 @@
 // commit parity's decisions that leave a slot out of it. Core announces them; the view's feature keeps the counts, logs and report lines.
 
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneView.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
 #include <cstdint>
 #include <span>

@@ -7,8 +7,8 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Engine/SkinPartitions.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 
 #include <algorithm>
 #include <cstring>
@@ -17,10 +17,10 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialSources.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialWrites.h"
 #include "ShaderCache.h"
 #include "State.h"
 

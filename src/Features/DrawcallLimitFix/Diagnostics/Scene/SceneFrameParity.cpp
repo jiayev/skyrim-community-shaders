@@ -4,14 +4,14 @@
 
 #include "SceneObservers.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ProgramFamilySlots.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Shading/ConstantEvaluator.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
 
 namespace DCLF::Diagnostics
 {

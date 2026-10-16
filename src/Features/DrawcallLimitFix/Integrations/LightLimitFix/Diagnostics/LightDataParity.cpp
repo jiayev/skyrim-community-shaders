@@ -1,7 +1,7 @@
 // Light Limit Fix's StrictLightData parity (LightLimitFix.h's DrawLightDataParity), CaptureParity's. Render thread.
 
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 
 #include "Features/LightLimitFix.h"
 

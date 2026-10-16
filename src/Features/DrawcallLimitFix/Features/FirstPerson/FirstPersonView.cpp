@@ -6,7 +6,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
 
 namespace DCLF::Features::FirstPerson
 {

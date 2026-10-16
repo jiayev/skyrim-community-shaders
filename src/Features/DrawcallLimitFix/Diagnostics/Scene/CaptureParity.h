@@ -13,7 +13,7 @@
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
 #include "Features/DrawcallLimitFix/Integrations/TruePBR/Diagnostics/TextureParity.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
+#include "Features/DrawcallLimitFix/Core/Shading/ConstantEvaluator.h"
 
 namespace DCLF
 {

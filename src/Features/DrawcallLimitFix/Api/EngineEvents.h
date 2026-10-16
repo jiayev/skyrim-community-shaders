@@ -1,7 +1,7 @@
 #pragma once
 
 // The engine event contracts: what DCLF's engine side tells a feature that follows the engine state DCLF takes over, as it changes
-// (Api::InstallContext::RegisterStandInObserver: the primary cull's stood-in roots, Engine/Cull/PrimaryCull), and the engine event
+// (Api::InstallContext::RegisterStandInObserver: the primary cull's stood-in roots, Core/Handoff/PrimaryCull), and the engine event
 // channels a feature's own engine hooks feed, which the coordinator drains into its passes (Api::InstallContext::RegisterEngineChannel).
 
 #include <atomic>
@@ -55,7 +55,7 @@ namespace DCLF::Api
 	};
 
 	/**
-	 * @brief Where a pass applies a channel's keys (Scene/Coordinator/ApplyEvents.cpp, ApplyBatch's structural events), and so where
+	 * @brief Where a pass applies a channel's keys (Core/Scene/Coordinator/ApplyEvents.cpp, ApplyBatch's structural events), and so where
 	 * CollectEvents drains its queue among Core's own (each queue drained up to where it stands at its turn: what is pushed after is the
 	 * next pass's).
 	 *
@@ -179,7 +179,7 @@ namespace DCLF::Api
 
 	/**
 	 * @brief A move writer of a feature's own (Extensions::ReserveMoveWriter): an engine writer whose hook pushes move events (Core's
-	 * MoveEvents, Engine/Capture/SceneEvents.h) through Extensions::PushReservedMove, counted under its name in the report's move writers'
+	 * MoveEvents, Core/Engine/Capture/SceneEvents.h) through Extensions::PushReservedMove, counted under its name in the report's move writers'
 	 * calls.
 	 */
 	struct MoveWriterId

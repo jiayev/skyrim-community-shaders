@@ -4,7 +4,7 @@
 #include "MirrorWatch.h"
 
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 
 #include <TlHelp32.h>
 

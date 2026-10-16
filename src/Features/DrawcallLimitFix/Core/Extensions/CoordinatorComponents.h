@@ -2,7 +2,7 @@
 
 // The coordinator component contract's Core side (Api/CoordinatorComponents.h): what a component's hooks are handed - the live tables,
 // its state, and the few coordinator services a residency change or a walk's phase needs, never the coordinator itself; the walk's
-// scheduling and entry writes; whether an entry class is taken. Implemented by the coordinator (Scene/Coordinator/Components.cpp), which
+// scheduling and entry writes; whether an entry class is taken. Implemented by the coordinator (Core/Scene/Coordinator/Components.cpp), which
 // calls the hooks, and the registry (EntryClassTaken).
 
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
@@ -242,7 +242,7 @@ namespace DCLF::Extensions
 	/**
 	 * @brief Render thread, the frame's start (after its claims are installed or withdrawn): every component's adoption hook
 	 * (Api::CoordinatorComponent::Adoption), in registration order, handed a_frame, a_claims (null: withdrawn) and its deltas
-	 * (a_deltas by component: the publications installed since the last call; none past it). Scene/Coordinator/Components.cpp.
+	 * (a_deltas by component: the publications installed since the last call; none past it). Core/Scene/Coordinator/Components.cpp.
 	 */
 	void ComponentsAdopt(std::uint32_t a_frame, const void* a_claims, std::span<const std::vector<std::shared_ptr<const void>>> a_deltas);
 }

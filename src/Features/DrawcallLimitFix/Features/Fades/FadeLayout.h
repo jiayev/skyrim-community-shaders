@@ -1,7 +1,7 @@
 #pragma once
 
 // FadeStateCS's layout (the fade roots' step on the GPU: its shader, constants, group and the root buffers' first capacity), which must
-// match the HLSL. The rows it reads and writes (FadeRootStatic, FadeNodeState, FadeFrame) are Core's (Scene/Model/Records.h): the cull
+// match the HLSL. The rows it reads and writes (FadeRootStatic, FadeNodeState, FadeFrame) are Core's (Core/Scene/Model/Records.h): the cull
 // reads them too.
 
 #include <cstdint>

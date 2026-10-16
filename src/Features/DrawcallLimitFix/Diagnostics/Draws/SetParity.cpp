@@ -4,7 +4,7 @@
 
 #include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Events.h"
 #include "Observers.h"
 

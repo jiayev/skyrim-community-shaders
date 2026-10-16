@@ -1,7 +1,7 @@
 // The root states' entry, list view and calls (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 
 namespace DCLF::Extensions
 {

@@ -2,7 +2,7 @@
 
 // The palette rows contract's Core side (Api/FrameValues.h, PaletteRowsContribution): the classes' entries, resolved once at
 // InstallFeatures; what their callbacks are handed (made by FrameValues and the walk for each call, valid for that call only); and the
-// calls Core makes where the walk sizes a block and writes a record (Scene/Coordinator/Walk.cpp) and at the frame's start
+// calls Core makes where the walk sizes a block and writes a record (Core/Scene/Coordinator/Walk.cpp) and at the frame's start
 // (FrameDriver::BeginFrame). FrameValues (Core/Gpu/FrameValues.cpp) runs the kick, the run and the chunks.
 
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"

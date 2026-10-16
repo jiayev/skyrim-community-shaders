@@ -9,7 +9,7 @@
 #include "Features/DrawcallLimitFix/Features/Portals/RoomVisibility.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 #include <algorithm>
 #include <bit>
