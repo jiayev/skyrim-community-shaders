@@ -1,6 +1,6 @@
 // FrameView's frame start and hand-over: the frame inputs posted, the adopted publication installed with the log walked up to it,
-// the claims installed or withdrawn, the components' deltas gathered for their adoption, load screens noted and the actors' wetness
-// captured. Render thread.
+// the claims installed or withdrawn, the components' deltas and the published classes' membership writes (the shading fields') gathered
+// for their adoption, and load screens noted. Render thread.
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -13,7 +13,7 @@
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
-#include "Features/Skin.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 
 namespace DCLF::Scene
 {
@@ -91,13 +91,12 @@ namespace DCLF::Scene
 			append(frameSwitchChanges, deltas.switches);
 			frameSwitchResync = frameSwitchResync || std::exchange(deltas.switchResync, false);
 			append(frameRetiredImports, deltas.retiredImports);
-			for (const auto& change : deltas.actorWetness) {
-				if (change.clear)
-					frameActorWetness.Clear();
-				else
-					frameActorWetness.Set(change.slot, change.group, change.identity, change.resetValue);
+			// The published classes' membership writes, to the shading fields whose members they are (their own indexes of owners).
+			for (std::size_t c = 0; c < deltas.classMembers.size(); ++c) {
+				if (!deltas.classMembers[c].empty())
+					Extensions::ForwardClassMembers(static_cast<Api::EntryClass>(c), deltas.classMembers[c]);
+				deltas.classMembers[c].clear();
 			}
-			deltas.actorWetness.clear();
 			for (const auto& change : deltas.lightEntries) {
 				if (change.kind > 0)
 					frameLightEntrySet.insert(change.node);
@@ -329,28 +328,9 @@ namespace DCLF::Scene
 		return true;
 	}
 
-	std::vector<WetnessValue> FrameView::CaptureWetness()
+	std::span<RE::BSGeometry* const> FrameView::NewestObjectGeometry() const
 	{
-		// Advanced Skin's wetness, per actor-owned object. Skin::GetWetness keeps each actor's fading state and computes it once a
-		// frame (the first call; later ones, including its own SetupGeometry hook for the draws the engine still makes this frame,
-		// return the same value), so calling it here for every actor in the tables advances every actor's fade once a frame,
-		// whether or not the engine draws it. Its cache is not thread-safe: the render thread's, at the frame's start.
-		ZoneScopedN("CS.DCLF.Capture.Wetness");
-		std::vector<WetnessValue> values;
-		auto& skin = globals::features::skin;
-		const bool wetness = skin.loaded && skin.settings.EnableSkin;
-		// The actors' membership is the render thread's own index (the log's changes, HandOverAtFrameStart), their geometries the
-		// newest publication's (held by it), never the coordinator's tables.
-		const auto latest = Newest();
-		const Tables* source = latest ? latest->tables.get() : nullptr;
-		const auto wetnessStats = frameActorWetness.Update([&](std::uint32_t o) {
-			auto* geometry = source && o < source->objectGeometry.size() ? source->objectGeometry[o] : nullptr;
-			const float4 value = wetness && geometry ? skin.GetWetness(geometry) : float4{};
-			return ActorValueIndex::Value{ value.x, value.y, value.z, value.w };
-		}, [&](std::uint32_t o, const auto& row) { values.push_back({ o, row }); });
-		TracyPlot("CS.DCLF.Wetness.Actors", static_cast<std::int64_t>(wetnessStats.actors));
-		TracyPlot("CS.DCLF.Wetness.ChangedActors", static_cast<std::int64_t>(wetnessStats.changed));
-		TracyPlot("CS.DCLF.Wetness.VisitedMeshes", static_cast<std::int64_t>(wetnessStats.visited));
-		return values;
+		const Tables* source = installed ? installed->tables.get() : nullptr;
+		return source ? std::span<RE::BSGeometry* const>(source->objectGeometry) : std::span<RE::BSGeometry* const>{};
 	}
 }

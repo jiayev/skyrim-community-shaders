@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
@@ -183,9 +184,11 @@ namespace DCLF
 		RunViewWork(Api::ViewPoint::FrameStartAfterTreeLod);
 		PrimaryCull::Get().PublishListFilter();
 		// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the plans and named
-		// slots the installed publications carried, and waited for by the GPU; the wetness captured here (Skin's cache is the render
-		// thread's). The scene payload is not the frame's to send: the installed snapshot carries it, ready (PayloadVersions).
-		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), view.CaptureWetness(), view.TakeFadeSeeds(), view.FrameGlobalsOfFrame());
+		// slots the installed publications carried, and waited for by the GPU; the shading fields captured here (Integrations/AdvancedSkin's
+		// wetness: Skin's cache is the render thread's). The scene payload is not the frame's to send: the installed snapshot carries it,
+		// ready (PayloadVersions).
+		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), Extensions::CaptureShadingFields(view), view.TakeFadeSeeds(),
+			view.FrameGlobalsOfFrame());
 		// Under the parities the scene pass runs here, inline, so the render thread's observers keep their placement; the normal path
 		// never waits for a pass.
 		if (inlinePass)

@@ -327,7 +327,7 @@ namespace DCLF
 			}
 		}
 		// kSkinned selects the SKINNED permutation, whose palette comes from the geometry's skin instance: without one, native.
-		if ((f & Bit(Flag::kSkinned)) && !(ActiveToggles().skinned && a_leaf.Skinned()))
+		if ((f & Bit(Flag::kSkinned)) && !(Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Skinned) && a_leaf.Skinned()))
 			return Ineligible::Skinned;
 		if ((f & Bit(Flag::kProjectedUV)) && !ActiveToggles().projectedUv)
 			return Ineligible::ProjectedUV;

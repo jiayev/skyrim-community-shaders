@@ -148,7 +148,7 @@ namespace DCLF
 
 	void SceneTables::ResetObject(std::uint32_t a_slot)
 	{
-		SetActorWetness(a_slot, 0, 0);
+		SetClassMembers(a_slot, Api::EntryClass::None, 0, 0);
 		const auto before = ColumnsOf(a_slot);
 		FreeExtras(a_slot);
 		FreeBones(a_slot);
@@ -228,7 +228,7 @@ namespace DCLF
 	void SceneTables::ClearFrame(bool a_keepObjects)
 	{
 		if (!a_keepObjects) {
-			ClearActorWetness();
+			ClearClassMembers();
 			objects.clear();
 			objectGeometry.clear();
 			objectIdentity.clear();
@@ -278,7 +278,8 @@ namespace DCLF
 			rangeCount = {};
 		}
 		// The per-frame lists: every walk refills them, and the slots' offsets into them are rewritten with them.
-		actorObjects.clear();
+		for (auto& members : classMembers)
+			members.objects.clear();
 		shadowTextureSet.clear();
 		shadowTextureSeen.clear();
 		shadowKeysUsed.clear();
@@ -288,7 +289,7 @@ namespace DCLF
 
 	void SceneTables::Clear()
 	{
-		ClearActorWetness();
+		ClearClassMembers();
 		auto clear = [](auto& a_column, auto&&...) { a_column.clear(); };
 		GeometryColumns(clear);
 		PipelineColumns(clear);
@@ -321,7 +322,8 @@ namespace DCLF
 		fadeRootSwitch.clear();
 		objectFadeRoot.clear();
 		fadeRootsJournal.Resync();
-		actorObjects.clear();
+		for (auto& members : classMembers)
+			members.objects.clear();
 		skinPartitions.clear();
 		skinLodPartitions.clear();
 		geometryTemplate.clear();

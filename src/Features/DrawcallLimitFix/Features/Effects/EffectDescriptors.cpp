@@ -195,7 +195,7 @@ namespace DCLF::Features::Effects
 		}
 		// The palette path (CS_DCLF_SKINNED) draws a skinned effect when the descriptor's Skinned bit (EffectSkinned) matches the
 		// leaf having a skin instance. kSkinned on a static shape without skinned vertices is no variant; any other mismatch is.
-		if (EffectSkinned(a_property, a_leaf) != a_leaf.Skinned() || (a_leaf.Skinned() && !ActiveToggles().skinned))
+		if (EffectSkinned(a_property, a_leaf) != a_leaf.Skinned() || (a_leaf.Skinned() && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Skinned)))
 			variants |= kEffectVariantSkinned;
 		// Effect decals (hints 2 and 3) go to DCLF's decal groups (G-buffer pass, DEFERRED). kTempRefraction with kDynamicDecal
 		// registers no pass at all (GetRenderPasses), so it stays a variant.

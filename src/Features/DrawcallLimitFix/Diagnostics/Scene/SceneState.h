@@ -92,7 +92,7 @@ namespace DCLF::Diagnostics
 	 */
 	struct ShadingParityState
 	{
-		std::uint64_t checks = 0, slots = 0, missing = 0, named = 0, late = 0, wetness = 0, wetnessDiffer = 0;
+		std::uint64_t checks = 0, slots = 0, missing = 0, named = 0, late = 0;
 		std::string first;
 	};
 

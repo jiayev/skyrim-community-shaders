@@ -14,7 +14,6 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 
 #include <array>
 #include <atomic>
@@ -530,7 +529,7 @@ namespace DCLF::LocalLightCull
 		}
 		if (installed)
 			return;
-		// A cut entry's geometries take the lights' bits from the Sun source's registration and mask-clear hooks (SunAccumulation's).
+		// A cut entry's geometries take the lights' bits from the Sun source's registration and mask-clear hooks (Features/Shadows/Sun).
 		if (!Extensions::SourceCullsInstalled(Api::ShadowSource::Sun)) {
 			logger::warn("[DCLF] point lights' shadow culls: the sun's accumulation hooks are not installed; they keep culling everything");
 			return;

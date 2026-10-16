@@ -363,7 +363,7 @@ namespace DCLF::Scene
 		a_out.partitionMask = partitionMask;
 		a_out.lodChain = lodChain;
 		// Palette rows from the bone count; the merge places the block.
-		if (leaf.Skinned() && ActiveToggles().skinned) {
+		if (leaf.Skinned() && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Skinned)) {
 			a_out.skinCandidate = true;
 			const std::uint32_t rows = SkinPalettes::RowsOf(*leaf.geometry);
 			if (SkinPalettes::Fits(rows))
@@ -627,10 +627,10 @@ namespace DCLF::Scene
 			tables.lights[objectId] = ObjectLights{};
 			tables.fadeDistance[objectId] = 0.0f;
 		}
-		tables.SetActorWetness(objectId, trackedEntry->owner.published ? trackedEntry->groupIdentity : 0,
+		tables.SetClassMembers(objectId, trackedEntry->owner.ownerClass, trackedEntry->owner.published ? trackedEntry->groupIdentity : 0,
 			trackedEntry->identity);
 		if (trackedEntry->owner.published)
-			tables.actorObjects.push_back(objectId);
+			tables.classMembers[static_cast<std::size_t>(trackedEntry->owner.ownerClass)].objects.push_back(objectId);
 		// The features' components follow the rewrite (Features/Decals: a member decal may have moved in the scene graph, and its slots
 		// follow its partitions).
 		ComponentsRewritten(objectId, true, tables.skinPartitions[objectId], partitionMask);
@@ -720,7 +720,7 @@ namespace DCLF::Scene
 			tables.lights[slot] = ObjectLights{};
 			tables.fadeDistance[slot] = 0.0f;
 		}
-		tables.SetActorWetness(slot, 0, a_tracked.identity);
+		tables.SetClassMembers(slot, Api::EntryClass::None, 0, a_tracked.identity);
 		tables.skinPartitions[slot] = 0;
 		tables.skinLodPartitions[slot] = 0;
 		tables.draws[slot] = DrawTemplateOf(tables.geometries[geometrySlot], keepMember ? keptPipeline : 0);
@@ -1477,7 +1477,7 @@ namespace DCLF::Scene
 			if (kept && recorded && (entry.lightTraits & kTraitSkin)) {
 				const auto* record = mirror.Geometry(geometry);
 				const std::uint32_t rows = record ? SkinPalettes::RowsOf(*record) : 0u;
-				kept = record && record->skin && ActiveToggles().skinned && SkinPalettes::Fits(rows);
+				kept = record && record->skin && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Skinned) && SkinPalettes::Fits(rows);
 				if (kept) {
 					r.lightSkin = true;
 					r.skinRows = rows;
@@ -1576,9 +1576,9 @@ namespace DCLF::Scene
 				for (std::uint32_t bit = 0; bit < stats.lightByTrait.size(); ++bit)
 					stats.lightByTrait[bit] += (entry.lightTraits >> bit) & 1u;
 				const bool recorded = r.lightRecorded;
-				// Tables::actorObjects: kept across walks, this walk's evaluations added (DeltaWalk).
+				// Tables::classMembers' objects: kept across walks, this walk's evaluations added (DeltaWalk).
 				if (recorded && entry.owner.published)
-					tables.actorObjects.push_back(entry.slot);
+					tables.classMembers[static_cast<std::size_t>(entry.owner.ownerClass)].objects.push_back(entry.slot);
 				// An actor's skeleton moves with no controller or body on its chain (Havok's behaviour graph: its owner class's own
 				// motion). FrameValues places every recorded mover each frame from the newest plan (moverSet).
 				if (recorded && ((entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin)) || ((entry.lightTraits & kTraitOwnerClass) && entry.owner.ownMotion))) {
@@ -1880,8 +1880,11 @@ namespace DCLF::Scene
 		} else {
 			++pumpStats.eventWalks;
 		}
-		// The actors' slots, kept through the walk (the light path takes only the actors an event names); its evaluations add theirs.
-		std::vector<std::uint32_t> keptActors = std::move(tables.actorObjects);
+		// The published classes' slots (the actors'), kept through the walk (the light path takes only the actors an event names); its
+		// evaluations add theirs.
+		std::array<std::vector<std::uint32_t>, Extensions::kPublishedEntryClasses> keptMembers;
+		for (std::size_t c = 0; c < keptMembers.size(); ++c)
+			keptMembers[c] = std::move(tables.classMembers[c].objects);
 		// Before a full evaluation drops the node events, which name movers too.
 		DrainMoveEvents(full);
 		DrainHiddenEvents();
@@ -2046,17 +2049,21 @@ namespace DCLF::Scene
 			tables.occlusionKeysUsed = std::move(keptOcclusionKeys);
 		}
 		FinishDeltaWalk(timer);
-		if (!keptActors.empty()) {
-			// Still a published owner class's (an actor-owned) entry's record in that slot.
-			for (const std::uint32_t o : keptActors) {
+		for (std::size_t c = 0; c < keptMembers.size(); ++c) {
+			if (keptMembers[c].empty())
+				continue;
+			// Still that published owner class's (an actor-owned) entry's record in that slot.
+			auto& members = tables.classMembers[c].objects;
+			for (const std::uint32_t o : keptMembers[c]) {
 				if (o >= tables.objects.size() || !tables.objectGeometry[o] || (tables.objects[o].flags & kObjectFree))
 					continue;
 				const auto it = tracked.find(const_cast<RE::BSGeometry*>(tables.objectGeometry[o]));
-				if (it != tracked.end() && it->second.owner.published && it->second.slot == o && it->second.objectStamp == objectStamp)
-					tables.actorObjects.push_back(o);
+				if (it != tracked.end() && it->second.owner.published && static_cast<std::size_t>(it->second.owner.ownerClass) == c && it->second.slot == o &&
+					it->second.objectStamp == objectStamp)
+					members.push_back(o);
 			}
-			std::sort(tables.actorObjects.begin(), tables.actorObjects.end());
-			tables.actorObjects.erase(std::unique(tables.actorObjects.begin(), tables.actorObjects.end()), tables.actorObjects.end());
+			std::sort(members.begin(), members.end());
+			members.erase(std::unique(members.begin(), members.end()), members.end());
 		}
 		if (full) {
 			DCLF_SCENE_PART(ObjectSweep, "CS.DCLF.Scene.ObjectSweep");
@@ -2218,7 +2225,8 @@ namespace DCLF::Scene
 		TracyCZoneEnd(roundsZone);
 		roundsScope.reset();
 		DCLF_SCENE_PART(ShadowSets, "CS.DCLF.Scene.ShadowSets");
-		std::sort(tables.actorObjects.begin(), tables.actorObjects.end());
+		for (auto& members : tables.classMembers)
+			std::sort(members.objects.begin(), members.objects.end());
 		tables.liveObjects = tables.CountLive();
 		if (!shadowSetsDirty) {
 			stats.shadowCasters = keptShadowCasters;

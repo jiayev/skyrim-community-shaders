@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 
@@ -342,7 +343,7 @@ namespace DCLF
 		ankerl::unordered_dense::map<const void*, Plan::Item> firstPersonMovers;
 		std::vector<std::shared_ptr<const Plan>> unsampled;           // plans no producer has applied (and sampled the written slots of) yet
 		std::vector<ShadingItem> unsampledShading;        // not yet taken by a producer
-		std::vector<WetnessValue> unsampledWetness;
+		std::vector<ShadingFieldValue> unsampledFieldValues;
 		std::vector<SeedCopy> unsentSeeds;  // not yet taken by a producer, in request order
 		std::uint32_t seedRows = 0;         // highest named FadeSeedRow + 1
 		std::deque<std::pair<std::uint64_t, std::shared_ptr<const Plan>>> plans;  // held per kicked producer's sequence
@@ -462,7 +463,7 @@ namespace DCLF
 			bool parity = false;           // Policy::SampleEveryMover
 			std::vector<const Plan*> written;  // plans whose written slots it also samples (oldest first)
 			std::vector<ShadingItem> shadingItems;  // newest last
-			std::vector<WetnessValue> wetness;      // in capture order
+			std::vector<ShadingFieldValue> fieldValues;  // in capture order
 			std::vector<SeedCopy> seedValues;  // copied at the frame's start, in request order
 			std::uint32_t seedRows = 0;
 			std::shared_ptr<const FrameGlobals> globals;  // the frame's engine globals (the shading rows' contributions)
@@ -1740,6 +1741,19 @@ namespace DCLF
 			ReleaseLater(copy.node);
 	}
 
+	namespace
+	{
+		// The shading fields' bytes in a row (by Api::ShadingRowField: BindlessShading's layout).
+		struct ShadingFieldRange
+		{
+			std::size_t offset = 0, bytes = 0;
+		};
+		constexpr std::array<ShadingFieldRange, Extensions::kShadingRowFields> kShadingFieldRanges{ {
+			{ offsetof(BindlessShading, skinPerGeometry), sizeof(BindlessShading::skinPerGeometry) },
+		} };
+		static_assert(sizeof(BindlessShading::skinPerGeometry) <= sizeof(ShadingFieldValue::value));
+	}
+
 	void FrameValues::Impl::SampleShadingRows(const Job& a_job, std::size_t a_slots)
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.Shading");
@@ -1760,6 +1774,7 @@ namespace DCLF
 		constexpr std::size_t kGrain = 128;
 		std::vector<std::vector<std::uint32_t>> changed((items.size() + kGrain - 1) / kGrain);
 		std::atomic<std::uint64_t> refusedHere{ 0 };
+		const auto fields = Extensions::ShadingFields();
 		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.Shading", items.size(), kGrain, [&](std::size_t a_begin, std::size_t a_end) {
 			ZoneScopedN("CS.DCLF.FrameValues.Shading");
 			FrameGlobals::Scope scope(a_job.globals);  // the features' globals (SampleShading: the shading contributions)
@@ -1773,9 +1788,12 @@ namespace DCLF
 				}
 				BindlessShading row = out[item.slot];
 				SampleShading(*item.property.get(), item.pass, item.member, row);
-				// Only actors have wetness (from the capture, below).
-				if (!item.actor)
-					std::fill(std::begin(row.skinPerGeometry), std::end(row.skinPerGeometry), 0.0f);
+				// A shading field is its owner's (from the capture, below): zero for a slot it names no member (only actors have wetness).
+				for (const auto& field : fields) {
+					const auto which = static_cast<std::uint32_t>(field.contribution.field);
+					if (!(item.fieldsOwned & (1u << which)))
+						std::memset(reinterpret_cast<std::byte*>(&row) + kShadingFieldRanges[which].offset, 0, kShadingFieldRanges[which].bytes);
+				}
 				if (std::memcmp(&row, &out[item.slot], sizeof(row)) != 0) {
 					out[item.slot] = row;
 					mine.push_back(item.slot);
@@ -1788,10 +1806,14 @@ namespace DCLF
 				shading.Mark(slot);
 			marked += slots.size();
 		}
-		for (const auto& [slot, value] : a_job.wetness) {
-			if (slot >= out.size() || std::memcmp(out[slot].skinPerGeometry, value.data(), sizeof(value)) == 0)
+		for (const auto& [slot, field, value] : a_job.fieldValues) {
+			if (slot >= out.size())
 				continue;
-			std::memcpy(out[slot].skinPerGeometry, value.data(), sizeof(value));
+			const auto& range = kShadingFieldRanges[static_cast<std::size_t>(field)];
+			auto* fieldBytes = reinterpret_cast<std::byte*>(&out[slot]) + range.offset;
+			if (std::memcmp(fieldBytes, value.data(), range.bytes) == 0)
+				continue;
+			std::memcpy(fieldBytes, value.data(), range.bytes);
 			shading.Mark(slot);
 			++wetMarked;
 		}
@@ -2071,7 +2093,7 @@ namespace DCLF
 	}
 
 	bool FrameValues::Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
-		std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::shared_ptr<const FrameGlobals> a_globals)
+		std::vector<ShadingFieldValue> a_fieldValues, std::vector<FadeSeedItem> a_seeds, std::shared_ptr<const FrameGlobals> a_globals)
 	{
 		auto& s = *impl;
 		s.kicked = false;
@@ -2084,7 +2106,7 @@ namespace DCLF
 		Impl::FrameStartRegistered(a_globals);
 		// Appended after any not yet taken (newest last).
 		s.unsampledShading.insert(s.unsampledShading.end(), std::make_move_iterator(a_shading.begin()), std::make_move_iterator(a_shading.end()));
-		s.unsampledWetness.insert(s.unsampledWetness.end(), a_wetness.begin(), a_wetness.end());
+		s.unsampledFieldValues.insert(s.unsampledFieldValues.end(), a_fieldValues.begin(), a_fieldValues.end());
 		s.ApplyFirstPersonPlans(a_plans);
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
@@ -2124,7 +2146,7 @@ namespace DCLF
 		}
 		s.unsampled.clear();
 		job.shadingItems = std::exchange(s.unsampledShading, {});
-		job.wetness = std::exchange(s.unsampledWetness, {});
+		job.fieldValues = std::exchange(s.unsampledFieldValues, {});
 		job.seedValues = std::exchange(s.unsentSeeds, {});
 		job.seedRows = s.seedRows;
 		job.globals = a_globals;

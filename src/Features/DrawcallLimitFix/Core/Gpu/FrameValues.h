@@ -28,7 +28,7 @@ namespace DCLF
 	 * - they sample the kept movers and roots that moved, and the slots the walks wrote in full (once), across the pool, under
 	 *   engine-read leases: a skin's palette after the engine's palette update (which the native draw's bone setter would have run),
 	 *   into the rows kept by object slot and the palette rows kept by block (journalled KeptArrays); and the shading of the slots the
-	 *   walk and the accumulate phase named (ShadingItem), with the wetness the frame's start captured;
+	 *   walk and the accumulate phase named (ShadingItem), with the shading fields' values the frame's start captured (the wetness);
 	 * - what moved is what the move writers pushed (FrameValueMoves, the producer the queues' one consumer), looked up in an index from
 	 *   move key to the kept movers and roots, patched as plans add, change and remove them: a mover or root is sampled when one of its
 	 *   keys moved this frame or the last, when a plan added or changed it, and on the frame after a sample of it changed a row or palette
@@ -73,12 +73,13 @@ namespace DCLF
 		 * @brief Render thread, at the scene's start (the engine's update done, the window open): the frame's producer, from a_plans
 		 * (the walks' plans the publication log brought since the last frame, oldest first: each applied onto the kept set in order and its
 		 * written slots sampled; none: the set as it was), the slots named for their shading (a_shading, the newest last) and
-		 * the wetness captured (a_wetness). Sets the host's frame wait to its sequence number. False when it cannot run (no render
+		 * the shading fields' values captured (a_fieldValues: Extensions::CaptureShadingFields). Sets the host's frame wait to its sequence
+		 * number. False when it cannot run (no render
 		 * graph, no dedicated upload queue): the frame waits for nothing, and its draws have no rows; what it was handed waits for the
 		 * first producer.
 		 */
 		bool Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
-			std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::shared_ptr<const FrameGlobals> a_globals);
+			std::vector<ShadingFieldValue> a_fieldValues, std::vector<FadeSeedItem> a_seeds, std::shared_ptr<const FrameGlobals> a_globals);
 		/**
 		 * @brief Render thread, before Kick: the claims whose CategoryRoot views' members the frame draws (null: none, those views'
 		 * epochs do not draw this frame: the first person's). Kick samples those members' rows and skin palettes itself, before Main::Draw

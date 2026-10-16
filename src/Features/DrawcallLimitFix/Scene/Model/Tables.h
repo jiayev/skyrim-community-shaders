@@ -18,10 +18,10 @@
 
 #include "Features/DrawcallLimitFix/Api/MainRanges.h"
 #include "Features/DrawcallLimitFix/Api/VertexStreams.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
-#include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Records.h"
@@ -142,30 +142,63 @@ namespace DCLF
 			a_member(a_left.fadeRootSwitch, a_right.fadeRootSwitch);
 			a_member(a_left.objectFadeRoot, a_right.objectFadeRoot);
 		}
-		// Advanced Skin's SkinPerGeometry (PS b7, Skin::GetWetness: the owning actor's sweat, wetness, height, water depth); zero
-		// without an actor. Values are FrameValues' (CaptureWetness); these say who has one.
-		std::vector<std::uint32_t> actorObjects;  // sorted by object index (the walk sorts it)
-		ActorValueIndex actorWetness;
-		// actorWetness's membership writes in order, moved onto the publication log for the render thread's index. Write only
-		// through SetActorWetness / ClearActorWetness.
-		struct ActorWetnessChange
+		// The published entry classes' members (Api::EntryClassContribution::published: Features/Actors' actor-owned), by class: the slots
+		// whose shading fields are their owner's (Api/ShadingFields.h: Integrations/AdvancedSkin's SkinPerGeometry, the owning actor's
+		// wetness); zero for every other slot. Values are FrameValues' (the fields' captures); these say who has one.
+		struct ClassMembers
 		{
-			std::uint32_t slot = 0;
-			std::uint64_t group = 0, identity = 0;
-			bool resetValue = false;
-			bool clear = false;  // the index cleared (the slot ignored)
+			std::vector<std::uint32_t> objects;  // sorted by object index (the walk sorts it)
+			// By slot: its owner's group (0: not a member) and its identity (incarnations included). Membership only: the render thread's
+			// fields keep their own from the changes.
+			struct Owner
+			{
+				std::uint64_t group = 0, identity = 0;
+			};
+			std::vector<Owner> owners;
+			// The membership writes in order, moved onto the publication log for the render thread's fields (PublicationDeltas::classMembers).
+			std::vector<Api::ClassMemberChange> changes;
+			/** @brief Whether the slot is a member (in an owner's group). */
+			bool Grouped(std::uint32_t a_slot) const { return a_slot < owners.size() && owners[a_slot].group; }
 		};
-		std::vector<ActorWetnessChange> actorWetnessChanges;
-		void SetActorWetness(std::uint32_t a_slot, std::uint64_t a_group, std::uint64_t a_identity, bool a_resetValue = false)
+		// Write only through SetClassMembers / ClearClassMembers (the objects: the walk's).
+		std::array<ClassMembers, Extensions::kPublishedEntryClasses> classMembers;
+		/** @brief a_slot's membership of every published class: a_class's in a_group (0 or None: no class's), every other's none. */
+		void SetClassMembers(std::uint32_t a_slot, Api::EntryClass a_class, std::uint64_t a_group, std::uint64_t a_identity, bool a_resetValue = false)
 		{
-			actorWetness.Set(a_slot, a_group, a_identity, a_resetValue);
-			actorWetnessChanges.push_back({ a_slot, a_group, a_identity, a_resetValue, false });
+			for (const auto c : Extensions::PublishedEntryClasses()) {
+				auto& members = classMembers[static_cast<std::size_t>(c)];
+				const std::uint64_t group = c == a_class ? a_group : 0;
+				if (members.owners.size() <= a_slot)
+					members.owners.resize(std::size_t(a_slot) + 1);
+				members.owners[a_slot] = { group, a_identity };
+				members.changes.push_back({ a_slot, group, a_identity, a_resetValue, false });
+			}
 		}
-		void ClearActorWetness()
+		void ClearClassMembers()
 		{
-			actorWetness.Clear();
-			actorWetnessChanges.clear();
-			actorWetnessChanges.push_back({ 0, 0, 0, false, true });
+			for (const auto c : Extensions::PublishedEntryClasses()) {
+				auto& members = classMembers[static_cast<std::size_t>(c)];
+				members.owners.clear();
+				members.changes.clear();
+				members.changes.push_back({ 0, 0, 0, false, true });
+			}
+		}
+		/** @brief Whether a published class has membership writes not yet moved onto the log. */
+		bool ClassMemberChangesPending() const
+		{
+			for (const auto& members : classMembers)
+				if (!members.changes.empty())
+					return true;
+			return false;
+		}
+		/** @brief The shading fields a_slot owns (a bit by Api::ShadingRowField): each whose members' class has it as a member. */
+		std::uint8_t ShadingFieldsOwned(std::uint32_t a_slot) const
+		{
+			std::uint8_t owned = 0;
+			for (const auto& entry : Extensions::ShadingFields())
+				if (classMembers[static_cast<std::size_t>(entry.contribution.members)].Grouped(a_slot))
+					owned |= static_cast<std::uint8_t>(1u << static_cast<std::uint32_t>(entry.contribution.field));
+			return owned;
 		}
 		// Multi-partition skins (CS_DCLF_SKIN_PARTITIONS): bit i draws partition i along nextPartition from geometryIndex; 0 for
 		// one geometry. A LOD skin's (kMeshLOD under a fade node) is the cumulative superset (row 3), narrowed by the draw.

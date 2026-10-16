@@ -59,7 +59,10 @@ namespace DCLF::Api
 
 	/**
 	 * @brief A live toggle (Toggles.h): seeded from its switch, edited from the menu, in force from the next frame's start. Shown, and
-	 * named on the menu's "This frame" line, right after the Core toggle named by after (empty: last).
+	 * named on the menu's "This frame" line, right after the toggle named by after, or right before the one named by before (after the
+	 * features' listed after the toggle before it); empty both: last. The toggle named is Core's or a feature's (registered before this
+	 * one or after: the install places the features' toggles once every feature registered), so a feature's toggle listed where Core's
+	 * was keeps the features' toggles listed around it. Features' toggles at one place are listed in their registration order.
 	 */
 	struct FeatureToggle
 	{
@@ -72,6 +75,7 @@ namespace DCLF::Api
 		bool entersClassification = false;  // a change drops the classification caches (Coordinator::InvalidateVerdicts)
 		bool offByDefault = false;          // unset seeds it off: only onValue turns it on
 		std::string_view after;
-		std::string_view needs[2];  // the toggles it needs on (their names: Core's, or a feature's registered before it), or empty
+		std::string_view before;    // or empty (one of after and before)
+		std::string_view needs[2];  // the toggles it needs on (their names: Core's, or a feature's, listed before it), or empty
 	};
 }

@@ -59,7 +59,7 @@ namespace DCLF::Draws
 		// whose entry (SceneTables::sunEntryNode) is outside every one is no candidate of the sun's cascade culls. However
 		// many there are: the sun views' latches name them in a shared region of the latch block (ReserveShadowLatch).
 		std::vector<SunEntryProcess> sunEntryProcesses;
-		// The sun entries DCLF can take out of the cascade culls (SunAccumulation): the build turns them into the next
+		// The sun entries DCLF can take out of the cascade culls (the Sun source's accumulation): the build turns them into the next
 		// frame's exclusion.
 		std::shared_ptr<const EntrySpace> sunCandidates;
 		// And those it could take out of the point lights' culls (LocalLightCull): the paraboloid exclusion's.

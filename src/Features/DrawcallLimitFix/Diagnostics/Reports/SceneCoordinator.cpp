@@ -428,9 +428,7 @@ namespace DCLF::Reports
 					V::projectedTextures().valid ? "captured" : "not seen yet");
 			if (const auto [fading, fadingFrames] = s.TakeFadingDrawn(); fading)
 				logger::info("[DCLF] fading: {} screen-door fading objects drawn by DCLF over {} frames", fading, fadingFrames);
-			if (stats.skinned)
-				logger::info("[DCLF] skinned (the last pass): {} candidates, {} palette rows (FrameValues')", stats.skinned, stats.boneRows);
-			// The features' lines here (Features/Decals' candidates), the components' with their context.
+			// The features' lines here (Features/Skins' skinned line, then Features/Decals' candidates), the components' with their context.
 			V::componentsReportLines(s, Api::ReportPoint::SceneCoordinatorLastPass, a_sceneFrame);
 			logger::info("[DCLF] derived cache (the last pass): {} served, {} recomputed and compared, {} differ{}; slots alive {} geometries / {} pipelines / {} materials, {} swept, {} geometries refreshed in place, {} slot violations{}",
 				stats.derivedHits, stats.derivedChecked, stats.derivedDiffers, stats.derivedDiffers ? " <- STALE" : "",

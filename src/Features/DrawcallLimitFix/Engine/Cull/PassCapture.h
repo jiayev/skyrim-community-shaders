@@ -196,7 +196,7 @@ namespace DCLF
 		bool ShadowModeOfBatch(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const;
 		/**
 		 * @brief The set Withhold tests a pass into a_batch against: the frame's when a_batch is a shadow view's and DCLF draws the shadow
-		 * views this frame, else null. SunAccumulation uses the same test.
+		 * views this frame, else null. The Sun source's accumulation uses the same test.
 		 */
 		std::shared_ptr<const SetSnapshot> CastersForBatch(const RE::BSBatchRenderer* a_batch, std::uint8_t* a_phase = nullptr) const;
 		/** @brief Whether the frame's set withholds a shadow phase's members from its views (DCLF draws them this frame). */

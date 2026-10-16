@@ -1,7 +1,7 @@
 // SunAccumulation: the sun's entry exclusion (render thread, after the full-frustum cull), the registration-free accumulation's
 // thunks on the sun's Accumulate and its registrations (the render thread and the registration jobs), and the sun's bits for removed
 // entries.
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
@@ -23,9 +23,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 
-namespace DCLF
+namespace DCLF::Features::Shadows::Sun
 {
 	namespace
 	{
@@ -62,6 +61,16 @@ namespace DCLF
 		{
 			return a_toggles.skipSunAccumulation && PassCapture::ShadowWithholdingEnabled() &&
 			       !PassCapture::Get().Bypassed();
+		}
+
+		/**
+		 * @brief The sun's cascades skip the entries DCLF excludes on frame a_frame (else the engine accumulates them): the feature's
+		 * Policy question. Normal path: true.
+		 */
+		bool ExcludeSun(std::uint32_t a_frame)
+		{
+			// The sun exclusion's check (Diagnostics/SunCasters) watches the excluded entries' registrations on its frames.
+			return !(Diagnostics::Observe().scene && Diagnostics::ParityDue(a_frame));
 		}
 
 		/** @brief Whether a bound lies outside any of the active planes (the engine's sphere test: n.c - d < -r). */
@@ -214,7 +223,7 @@ namespace DCLF
 		stats.excluded += exclusion->excludedCount;
 		frameState.exclusion = std::move(exclusion);
 		frameState.stamp = stamp;
-		frameState.skipExcluded = Policy::ExcludeSun(Scene::FrameView::Get().GetFrame());
+		frameState.skipExcluded = ExcludeSun(Scene::FrameView::Get().GetFrame());
 		Diagnostics::Notify(Diagnostics::SunExclusionApplied{ frameState.skipExcluded });
 		exclusionLive.store(true, std::memory_order_release);
 		stats.filterTicks += Now() - start;

@@ -80,7 +80,7 @@ namespace DCLF
 		 * compound frustum is not tested. On the frames the culls keep whole the engine's bits stand (the observer compares them).
 		 */
 		/**
-		 * @brief SunAccumulation's registration hook, a main registration (+0x160 0xFFFF: it reads the mask, then clears it) of
+		 * @brief The Sun source's registration hook (Features/Shadows/Sun), a main registration (+0x160 0xFFFF: it reads the mask, then clears it) of
 		 * a geometry DCLF does not draw in the main pass, before the call: a cut entry's takes the lights' bits.
 		 */
 		void NoteMainRegistration(RE::BSGeometry* a_geometry);

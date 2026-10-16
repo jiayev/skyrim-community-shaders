@@ -3,12 +3,12 @@
 // culls' planes, the cascades without DCLF's views; the line every 300 frames with sun views.
 
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/Diagnostics/SunAccumulationView.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Engine/SunAccumulationView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 
@@ -74,7 +74,7 @@ namespace DCLF::Features::Shadows::Sun
 			if ((cascadesChecked & bit) || Engine::At<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>(a_event.fullProcess, kProcessObjectArray).empty())
 				return;
 			cascadesChecked |= bit;
-			const auto& cascade = Diagnostics::SunAccumulationView::Cascade(a_event.cascade);
+			const auto& cascade = SunAccumulationView::Cascade(a_event.cascade);
 			auto& p = Diagnostics::ShadowViewTally(ShadowView::Sun);
 			++p.cascades;
 			ShadowCameras::Planes engine, mine;

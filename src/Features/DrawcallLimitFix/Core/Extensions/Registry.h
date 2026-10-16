@@ -13,10 +13,11 @@ namespace DCLF::Extensions
 {
 	/**
 	 * @brief Main thread, at PostPostLoad, before DCLF's threads start (the shell, after DCLF's own engine hooks, before
-	 * SceneScheduler::Graph and the shell's hooks): every feature's install, in a_features' order, then the resolutions. Once; a second
-	 * call fails.
+	 * SceneScheduler::Graph and the shell's hooks): every feature's install, in a_features' order, then every integration's (Integrations/,
+	 * written against Api/ like a feature: no early or source hooks), in a_integrations' order, then the resolutions. Once; a second call
+	 * fails.
 	 */
-	void InstallFeatures(std::span<const Api::Feature> a_features);
+	void InstallFeatures(std::span<const Api::Feature> a_features, std::span<const Api::Feature> a_integrations);
 	/**
 	 * @brief Main thread, at PostPostLoad, before DCLF's own engine hooks and observers install (the shell, before Diagnostics::Install):
 	 * every feature's early hooks (Api::Feature::earlyHooks), in a_features' order. Once, before InstallFeatures.

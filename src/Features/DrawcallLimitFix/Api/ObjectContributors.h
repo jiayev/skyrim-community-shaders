@@ -204,6 +204,12 @@ namespace DCLF::Api
 		// without its bias (Ineligible::EffectOpaque without the class, or while Decal is off). Read whether it is taken, whatever its toggle
 		// (Extensions::ObjectClassTaken): the Effect port is reached only while Effect is on (Features/Effects).
 		OpaqueEffect,
+		// A skinned shape: a single-partition NiSkinInstance, drawn with its palette from the engine (Ineligible::Skinned without the class;
+		// the Lighting port's kSkinned, the walk's palette rows, the Effect port's skinned effects; Features/Skins).
+		Skinned,
+		// A skin of several partitions, or a BSDismemberSkinInstance (LOD trees, actor bodies): one draw per partition the engine would draw
+		// (Ineligible::SkinShape without the class; needs Skinned's toggle: Features/Skins).
+		SkinPartitions,
 		Count,
 	};
 
