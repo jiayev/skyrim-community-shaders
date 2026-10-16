@@ -141,8 +141,9 @@ namespace DCLF
 		 * @brief The forward epoch (CS_DCLF_FORWARD), at the engine's blended draw (FUN_1414b39d0, after the deferred composite and
 		 * the water): the visible forward objects, sorted back to front by the colour epoch, drawn before the engine's own blended
 		 * draws. Render thread; only after this frame's colour epoch, whose commit wrote everything these draws read.
+		 * @return whether this execution drew the refraction normals (the caller marks them for the engine: Features/Forward).
 		 */
-		void ExecuteForward();
+		bool ExecuteForward();
 		/** @brief The forward epoch's report line, its counters reset. */
 		std::string ForwardReport();
 		/**

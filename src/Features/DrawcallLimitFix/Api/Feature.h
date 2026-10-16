@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Api/Commits.h"
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Api/CullInputs.h"
+#include "Features/DrawcallLimitFix/Api/DepthPyramid.h"
 #include "Features/DrawcallLimitFix/Api/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
@@ -213,6 +214,11 @@ namespace DCLF::Api
 		 * or any of its callbacks.
 		 */
 		virtual void RegisterMainCullInput(const MainCullInputContribution& a_input) = 0;
+		/**
+		 * @brief Fails the install for a second contribution (Core's cull tests one pyramid), or one without a resource, scratch resource or
+		 * pass name, setup or makePass.
+		 */
+		virtual void RegisterDepthPyramid(const DepthPyramidContribution& a_pyramid) = 0;
 
 	protected:
 		~InstallContext() = default;

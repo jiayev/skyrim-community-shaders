@@ -1254,12 +1254,13 @@ namespace DCLF
 		} else if (flags & 0x8004ull) {
 			// Refraction (kRefraction, kTempRefraction): one Utility RENDER_NORMAL pass, hint 4 (group 5), whatever the alpha; drawn
 			// by the forward epoch from the refraction range (CS_DCLF_REFRACTION).
-			if (!ActiveToggles().refraction || !ActiveToggles().forward)
+			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction) ||
+			    !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
 				return false;
 			hint = 4;
 		} else if (flags & 0xc000000ull)
 			hint = translucent ? 3 : 2;  // the decal groups
-		else if (translucent && !ActiveToggles().forward)
+		else if (translucent && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
 			return false;
 		else if (translucent)
 			hint = 1;  // the blended group (FUN_1414b2330's hint 1), drawn by the forward epoch

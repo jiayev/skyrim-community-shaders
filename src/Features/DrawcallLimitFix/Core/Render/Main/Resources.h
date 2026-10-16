@@ -87,12 +87,14 @@ namespace DCLF::Draws
 		std::shared_ptr<PreprocessStates> preprocessMain;
 		std::shared_ptr<PreprocessStates> preprocessForward;
 		std::shared_ptr<const ComputeProgram> forwardSort;
-		// The HZB. nativeDepth is imported with SRV and DSV so the graph sees one depth resource for draws and build.
+		// The HZB, the depth pyramid's (Api/DepthPyramid.h; null without its producer). nativeDepth is imported with SRV and DSV so the
+		// graph sees one depth resource for draws and build.
 		std::shared_ptr<org::PixelBuffer> hzb;
-		std::shared_ptr<const ComputeProgram> hzbProgram;
-		// The downsample's finished-group count: zeroed by the first depth commit, then by each dispatch's last group.
-		std::shared_ptr<org::Buffer> hzbCounter;
-		bool hzbCounterZeroed = false;
+		// The producer's state (its setup's result), handed to its pass factory.
+		std::shared_ptr<const void> hzbState;
+		// The producer's scratch words (the downsample's finished-group count): zeroed by the first depth commit, then by the producer.
+		std::shared_ptr<org::Buffer> hzbScratch;
+		bool hzbScratchZeroed = false;
 		std::uint32_t hzbWidth = 0, hzbHeight = 0, hzbMips = 0;
 		std::uint32_t width = 0, height = 0;
 		// The frame graph buffers registered on the graph (Api::FrameGraphBuffers, a bit per registration: Integrations/LightLimitFix's,

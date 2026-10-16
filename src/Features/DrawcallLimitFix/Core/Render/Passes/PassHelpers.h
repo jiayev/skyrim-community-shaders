@@ -22,22 +22,6 @@ namespace DCLF::Draws
 	void RecordLatchedDispatch(BuildDrawsConstants a_constants, const org::LatchBlock& a_latch,
 		rhi::CommandSignatureHandle a_signature, std::uint32_t a_latchOffset, org::PassRecordContext& a_recording);
 
-	/** @brief HzbCS.hlsl's constants: one single-pass downsample of the chain. */
-	struct HzbConstants
-	{
-		std::uint32_t sourceIndex;
-		std::uint32_t fromDepth;
-		std::uint32_t validSize[2];   // the source texels holding depth
-		std::uint32_t domainSize[2];  // the source's power-of-two extent; past validSize it reads the far plane
-		std::uint32_t targetSize[2];  // the first written level's
-		std::uint32_t mips;
-		std::uint32_t workGroups;
-		std::uint32_t counterIndex;
-		std::uint32_t padding;
-		std::uint32_t targetIndices[kHzbDispatchMips];
-	};
-	static_assert(sizeof(HzbConstants) / 4 == kHzbConstantWords);
-
 	// MainPayload::objectState values besides the Skip reasons.
 	constexpr std::uint8_t kObjectStateDrawable = 0xF0;
 	constexpr std::uint8_t kObjectStateDecal = 0xF1;

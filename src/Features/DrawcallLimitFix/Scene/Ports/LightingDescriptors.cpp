@@ -343,7 +343,8 @@ namespace DCLF
 			// none past its refraction LOD fade's end. The forward epoch draws it (drawcall-limit-fix.md, "Refraction"), fading as
 			// GetRenderPasses would. A material alpha of 0 registers nothing: left native (so not drawn).
 			if (f & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) {
-				if (!ActiveToggles().refraction || !ActiveToggles().forward || a_out.decalGroup || a_layer || a_out.terrainGroup || a_property.materialAlpha <= 0.0f) {
+				if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction) || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) ||
+				    a_out.decalGroup || a_layer || a_out.terrainGroup || a_property.materialAlpha <= 0.0f) {
 					a_out.rejectedTechnique = kRefractionReject;
 					return Ineligible::Technique;
 				}
@@ -365,7 +366,8 @@ namespace DCLF
 			const bool translucent = blending || a_property.materialAlpha < 1.0f;
 			if (a_out.refraction) {
 				// The refraction draw's forward state (above): alpha property not applied.
-			} else if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 && ActiveToggles().forward) {
+			} else if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 &&
+			           Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward)) {
 				const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 0u;
 				if (blending && blendMode == 0)
 					return Ineligible::AlphaBlend;

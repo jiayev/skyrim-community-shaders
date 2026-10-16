@@ -11,7 +11,7 @@
 // The chain is built by AMD's single-pass downsampler (FidelityFX/ffx_spd.h): one dispatch writes every
 // mip, each group reducing a 64x64 tile of the source through mip 5 and the last group to finish carrying
 // on from mip 5 to the end. That needs a source whose every level halves evenly, which the depth is not.
-// The HZB is defined over a power-of-two domain instead (Core/Resources.cpp: mip 0 is half the next power of two
+// The HZB is defined over a power-of-two domain instead (Features/GpuOcclusion/HzbPass.cpp: mip 0 is half the next power of two
 // of the depth), and the loads answer for the texels the depth does not have:
 //
 //   - inside the domain but past the rendered area (the padding): the far plane, 1.0, which suppresses
@@ -25,7 +25,7 @@
 // take: its mip 5 is wider than the last group's 64x64. HzbPass then splits the chain, each dispatch reading
 // the previous one's last level (FromDepth 0).
 
-// Must match HzbConstants (Draws/IndirectDraws/Passes/PassHelpers.h).
+// Must match HzbConstants (Features/GpuOcclusion/HzbLayout.h).
 cbuffer HzbConstants : register(b0)
 {
 	uint SourceIndex;   // FromDepth: Texture2D<float> of the scene depth. Otherwise RWTexture2D<float> of an HZB level.

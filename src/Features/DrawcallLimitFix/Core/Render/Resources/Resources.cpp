@@ -2,6 +2,7 @@
 // SetupShadow, SetupView), each versioned buffer registered with the scene's set (its extent, growth policy and contents), the
 // scene's draw bound and the main latch the revision code keeps.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
@@ -229,41 +230,18 @@ namespace DCLF::Draws
 		}
 
 		/**
-		 * @brief The HZB: mip 0 is half the depth's next power of two, so a mip is chosen from a screen extent by log2 alone. Padded
-		 * texels are filled with the far plane, which suppresses culling rather than causing it.
+		 * @brief The HZB, from the depth pyramid's producer (Api/DepthPyramid.h: its setup's texture, extent, levels and scratch, and its
+		 * state). Without one, or without its texture, none: culling stays frustum-only, with no phase 2 passes.
 		 */
-		void CreateHzb(Resources& a_state, rhi::Device a_device)
+		void SetUpHzb(Resources& a_state, rhi::Device a_device)
 		{
-			auto nextPowerOfTwo = [](std::uint32_t a_value) {
-				std::uint32_t result = 1;
-				while (result < a_value)
-					result <<= 1;
-				return result;
-			};
-			a_state.hzbWidth = std::max(1u, nextPowerOfTwo(a_state.width) / 2);
-			a_state.hzbHeight = std::max(1u, nextPowerOfTwo(a_state.height) / 2);
-			a_state.hzbMips = 1;
-			for (std::uint32_t size = std::max(a_state.hzbWidth, a_state.hzbHeight); size > 1; size >>= 1)
-				++a_state.hzbMips;
-
-			org::TextureDescription hzbDesc{};
-			for (std::uint32_t mip = 0; mip < a_state.hzbMips; ++mip)
-				hzbDesc.imageDimensions.push_back({ std::max(1u, a_state.hzbWidth >> mip), std::max(1u, a_state.hzbHeight >> mip), 0, 0 });
-			hzbDesc.format = rhi::Format::R32_Float;
-			hzbDesc.channels = 1;
-			hzbDesc.hasUAV = true;
-			hzbDesc.uavFormat = hzbDesc.format;
-			hzbDesc.hasSRV = true;
-			hzbDesc.srvFormat = hzbDesc.format;
-			a_state.hzb = org::PixelBuffer::CreateSharedUnmaterialized(hzbDesc);
-			a_state.hzb->SetName("cs.dclf.hzb");
-			a_state.hzbCounter = CreateWords(1, true, "cs.dclf.hzb-counter");
-
-			a_state.hzbProgram = ComputeProgram::Load(a_device, { .source = kHzbShader, .constantWords = kHzbConstantWords });
-			if (!a_state.hzbProgram) {
-				logger::warn("[DCLF] The HZB compute program could not be created; occlusion culling stays off");
-				a_state.hzb.reset();
-			}
+			Api::DepthPyramid pyramid{};
+			a_state.hzbState = Extensions::SetUpDepthPyramid(a_device, a_state.width, a_state.height, pyramid);
+			a_state.hzb = std::move(pyramid.texture);
+			a_state.hzbWidth = pyramid.width;
+			a_state.hzbHeight = pyramid.height;
+			a_state.hzbMips = pyramid.mips;
+			a_state.hzbScratch = std::move(pyramid.scratch);
 		}
 	}
 }
@@ -317,7 +295,7 @@ namespace DCLF
 			return false;
 		ImportRefractionNormals(*state, device);
 
-		CreateHzb(*state, device);
+		SetUpHzb(*state, device);
 
 		state->graphBuffers = graphBuffers;
 		for (auto& frameBuffer : frameBuffers) {

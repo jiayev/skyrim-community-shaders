@@ -2,6 +2,7 @@
 // it decides at FrameDriver::BeginFrame, before the engine draws: which epochs the adopted snapshot's revision covers.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 
 namespace DCLF
 {
@@ -137,7 +138,7 @@ namespace DCLF
 		// The main epochs decide the frame's claims: without their recordings the frame is the engine's (FrameView::WithdrawSet).
 		// With the forward toggle on, the forward epoch's too: its members' passes are withheld with the frame's claims, and only the
 		// forward epoch draws them (a frame without its recording would lose them).
-		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape] && (!ActiveToggles().forward || rv.covered[Epoch::Forward]);
+		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape] && (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) || rv.covered[Epoch::Forward]);
 		rv.withdrawn += main ? 0 : 1;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		// Each registered view's, in slot order, by its feature's callback.

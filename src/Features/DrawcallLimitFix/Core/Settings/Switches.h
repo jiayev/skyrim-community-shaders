@@ -23,8 +23,6 @@ namespace DCLF
 		Fanout,
 		Precompile,
 		Cull,
-		Forward,
-		Refraction,
 		ProjectedUv,
 		Shadows,
 		PrimaryExclude,

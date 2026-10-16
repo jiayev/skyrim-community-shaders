@@ -2,6 +2,7 @@
 // recordings requested for them on ORG's host thread, sealed; and the render thread's use of the selected revision (RevisionOf).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 
 namespace DCLF
 {
@@ -67,7 +68,7 @@ namespace DCLF
 					// The shared shape's own value (a recording kept for this epoch stays while the shape does); none while the forward
 					// toggle is off.
 					const auto& source = draft.Get(R::kShapeSlot + traits.sharesWith);
-					const bool on = source && (e != Epoch::Forward || toggles.forward);
+					const bool on = source && (e != Epoch::Forward || Extensions::ObjectClassOn(toggles, Api::ObjectClass::Forward));
 					auto share = [&]<class Frame>() {
 						const auto shared = on ? source->Value<Frame>() : nullptr;
 						if (shared == (current ? current->Value<Frame>() : nullptr))

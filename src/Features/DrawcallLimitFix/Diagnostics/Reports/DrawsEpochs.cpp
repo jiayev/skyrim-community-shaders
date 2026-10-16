@@ -1,4 +1,5 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 #include "Engine.h"
@@ -13,16 +14,18 @@ namespace DCLF
 		if (!impl)
 			return {};
 		auto& f = impl->forwardEpoch;
-		if (!f.reached && !ActiveToggles().forward)
+		if (!f.reached && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
 			return {};
 		std::string text = fmt::format("[DCLF] forward epoch (T7d, CS_DCLF_FORWARD {}): reached {} frames, {} epochs; not submitted: {} without this frame's colour epoch, "
 									   "{} without a forward recording{}, {} failed{}\n",
-			ActiveToggles().forward ? "on" : "off", f.reached, f.epochs, f.noColour, f.noRecording, f.noRecording ? " <- NO FORWARD RECORDING" : "", f.failed,
+			Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) ? "on" : "off", f.reached, f.epochs, f.noColour, f.noRecording,
+			f.noRecording ? " <- NO FORWARD RECORDING" : "", f.failed,
 			f.failed ? " <- EPOCH FAILED" : "");
-		if (f.refractionDrawn || f.refractionNotReady || ActiveToggles().refraction)
+		if (f.refractionDrawn || f.refractionNotReady || Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction))
 			text += fmt::format("[DCLF] refraction (T7d, CS_DCLF_REFRACTION {}): {} forward epochs drew the refraction normals, {} with refraction slots could not "
 								"(no refraction pipeline yet, or no refraction normals){}\n",
-				ActiveToggles().refraction ? "on" : "off", f.refractionDrawn, f.refractionNotReady, f.refractionNotReady && !f.refractionDrawn ? " <- NO REFRACTION DRAW" : "");
+				Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction) ? "on" : "off", f.refractionDrawn, f.refractionNotReady,
+				f.refractionNotReady && !f.refractionDrawn ? " <- NO REFRACTION DRAW" : "");
 		// The forward epoch's features' lines here (Features/Effects: the Effect port's members and its Lighting variant's parity).
 		Extensions::ReportTextAt(Api::ReportPoint::AsyncWorkForward, text);
 		const std::uint32_t submitted = f.submittedFrame;

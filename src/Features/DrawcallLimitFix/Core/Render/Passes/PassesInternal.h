@@ -18,8 +18,7 @@ namespace DCLF::Draws
 	std::shared_ptr<org::RenderPass> MakeBuildDrawsPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, std::uint32_t a_phase = 0);
 	std::shared_ptr<org::RenderPass> MakeSortSequencesPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment);
 
-	// Occlusion.cpp: the HZB rebuild and the visibility events.
-	std::shared_ptr<org::RenderPass> MakeHzbPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment);
+	// VisibilityEvents.cpp: the visibility events.
 	std::shared_ptr<org::RenderPass> MakeVisibilityEventsPass(std::shared_ptr<Resources> a_resources);
 
 	// SceneState.cpp: next frame's fade states.

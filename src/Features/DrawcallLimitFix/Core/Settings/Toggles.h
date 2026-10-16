@@ -28,14 +28,8 @@ namespace DCLF
 		// The object classes (LightingDescriptors):
 		// kProjectedUV objects (snow and moss projection);
 		bool projectedUv = false;
-		// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's in the table.)
-		// blended Lighting geometry (alpha-blended, or a material alpha below one), drawn by the forward epoch: a GPU depth sort of
-		// the visible set, back to front, before the engine's own blended draws (on by default: CS_DCLF_FORWARD=0 seeds it off);
-		bool forward = false;
-		// refraction: Lighting geometry with kRefraction or kTempRefraction, whose one main pass is a Utility RENDER_NORMAL pass into
-		// the refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward;
-		// on by default: CS_DCLF_REFRACTION=0 seeds it off);
-		bool refraction = false;
+		// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's in the table;
+		// then Features/Forward's "forward", Features/Effects' "effects" and Features/Forward's "refraction".)
 
 		// The shadow views are drawn by the render graph.
 		bool shadows = false;

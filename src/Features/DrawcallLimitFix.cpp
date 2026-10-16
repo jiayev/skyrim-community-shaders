@@ -86,9 +86,11 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::PrimaryCull::Get().Install();
 	// The features' extension points (Features/FeatureList.cpp), registered before DCLF's threads start and read-only after, and
 	// their engine hooks (after DCLF's own: Features/Portals' Main::IsRoomVisible detours, first; Features/TreeWind's tree manager hooks
-	// follow the primary cull's stand-in; Features/Particles' snapshots of NiParticleSystem's update; Features/Lod's LOD gates, the engine's
-	// LOD swaps gated on DCLF's claims; Features/Faces' thunks in the face morphing).
-	// The integrations after them (Integrations/IntegrationList.cpp: Integrations/AdvancedSkin's wetness).
+	// follow the primary cull's stand-in; Features/Forward's main pass blended draw and Main::Draw's refraction point, before Hooks::Install's;
+	// Features/Particles' snapshots of NiParticleSystem's update; Features/Lod's LOD gates, the engine's LOD swaps gated on DCLF's claims;
+	// Features/Faces' thunks in the face morphing).
+	// The integrations after them (Integrations/IntegrationList.cpp: Integrations/AdvancedSkin's wetness, Integrations/TerrainBlending's
+	// classify input, toggle and held groups, Integrations/LightLimitFix's room index and light buffers).
 	DCLF::Extensions::InstallFeatures(DCLF::Features::List(), DCLF::Integrations::List());
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
@@ -341,36 +343,6 @@ void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::
 		DCLF::IndirectDraws::Get().CaptureShadowView(view, mode);
 }
 
-template <int N>
-void DrawcallLimitFix::Hooks::Accumulator_BlendedDraw<N>::thunk(void* a_accumulator, std::uint32_t a_renderFlags)
-{
-	// DCLF's blended objects first, behind every blended draw of the engine's (the ordering contract: drawcall-limit-fix.md, "The
-	// forward epoch"), for the main camera's accumulator alone (the same function draws every render mode 0 accumulator's).
-	static REL::Relocation<void**> mainAccumulator{ REL::Offset(DCLF::Engine::Address::kMainAccumulator) };
-	const bool main = a_accumulator && a_accumulator == *mainAccumulator;
-	if (main)
-		DCLF::Diagnostics::Notify(DCLF::Diagnostics::TargetPoint{ "before forward" });
-	if (main && globals::features::drawcallLimitFix.Running())
-		DCLF::IndirectDraws::Get().ExecuteForward();
-	if (main)
-		DCLF::Diagnostics::Notify(DCLF::Diagnostics::TargetPoint{ "after DCLF forward" });
-	func(a_accumulator, a_renderFlags);
-	if (main)
-		DCLF::Diagnostics::Notify(DCLF::Diagnostics::TargetPoint{ "after engine blended" });
-}
-
-
-std::uint32_t DrawcallLimitFix::Hooks::Main_Draw_RefractionCheck::thunk(void* a_accumulator)
-{
-	// FUN_1414b4ae0(accumulator, 6): the group's pass list cleared (FUN_1414f1940), undrawn.
-	if (a_accumulator && globals::features::drawcallLimitFix.Running() && DCLF::IndirectDraws::Get().RefractionDrawnThisFrame()) {
-		using ClearGroup = void (*)(void*, std::int32_t);
-		static REL::Relocation<ClearGroup> clearGroup{ REL::Offset(DCLF::Engine::Address::kClearGroup) };
-		clearGroup(a_accumulator, 6);
-	}
-	return func(a_accumulator);
-}
-
 void DrawcallLimitFix::Hooks::Install()
 {
 	// Always installed: the shadow views are a live toggle (Toggles.h), and the thunk costs one compare per
@@ -396,20 +368,8 @@ void DrawcallLimitFix::Hooks::Install()
 		stl::write_thunk_call<Main_Update_Entry>(REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address());
 	else
 		logger::warn("[DCLF] Main::Update's first call is not where expected; the stood-in roots' kAccumulated is not written (T7b2)");
-	// The main pass's blended draw (FUN_1414b39d0), at both its call sites in FUN_1414b3390.
-	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kBlendedUnderWater).address(), REL::Offset(DCLF::Engine::Address::kBlendedDraw).address()) &&
-		DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kBlendedAfterWater).address(), REL::Offset(DCLF::Engine::Address::kBlendedDraw).address())) {
-		stl::write_thunk_call<Accumulator_BlendedDraw<0>>(REL::Offset(DCLF::Engine::Address::kBlendedUnderWater).address());
-		stl::write_thunk_call<Accumulator_BlendedDraw<1>>(REL::Offset(DCLF::Engine::Address::kBlendedAfterWater).address());
-	} else {
-		logger::warn("[DCLF] the main pass's blended draw is not where expected; the forward epoch (T7d) never runs, and CS_DCLF_FORWARD must stay off");
-	}
-	// Main::Draw's refraction point (its group 5 count, FUN_1414b4840).
-	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kRefractionCheck).address(), REL::Offset(DCLF::Engine::Address::kGroupFiveCount).address()))
-		stl::write_thunk_call<Main_Draw_RefractionCheck>(REL::Offset(DCLF::Engine::Address::kRefractionCheck).address());
-	else
-		logger::warn("[DCLF] Main::Draw's refraction point is not where expected; CS_DCLF_REFRACTION must stay off");
-	// (The first-person view's two points are Features/FirstPerson's, installed with the features.)
+	// (The main pass's blended draw and Main::Draw's refraction point are Features/Forward's, the first-person view's two points
+	// Features/FirstPerson's, installed with the features.)
 	logger::info("[DCLF] Native pass hooks installed");
 }
 
