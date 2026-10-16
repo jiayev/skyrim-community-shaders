@@ -2,7 +2,8 @@
 
 // The fade roots: the fade-root table as a journaled table family (FadeRootTables, its columns) and the coordinator component that lists
 // and steps its rows (FadeRoots.cpp: RegisterScene, which holds their ids; the channels' are FadesFeature.cpp's). The coordinator
-// counts an unmirrored root and reports the stood-in count through it (Scene/Coordinator/Residents.cpp).
+// counts an unmirrored root (NoteFadeRootUnmirrored: Scene/Coordinator/Coordinator.h, Residents.cpp) and reports the stood-in count
+// through it.
 
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
@@ -65,6 +66,4 @@ namespace DCLF::Scene
 
 	/** @brief The report (EnginePrimaryCull): the admitted roots the primary cull stands in for (kFadeRootStoodIn). */
 	std::size_t FadeRootsStoodIn();
-	/** @brief Residents.cpp: a root listed with no mirror record (the coordinator's placement statistics count it). */
-	void NoteFadeRootUnmirrored();
 }

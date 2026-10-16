@@ -4,7 +4,6 @@
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
 
