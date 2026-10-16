@@ -2,7 +2,7 @@
 
 // The frame's DCLF work at each engine point, render thread: the scene frame's start (the publication installed, its claims, the
 // coordinator's requests served, the frame values kicked), the shadow views, the depth commit, EarlyPrepass and Prepass, the occlusion
-// maps, the main pass's points (their bookkeeping, and the main view's handlers there: Api/PrimaryView.h, Features/MainView's capture and
+// maps (the shadow views' and the maps' through the shadow engine's points: Shadow/ShadowPoints.h), the main pass's points (their bookkeeping, and the main view's handlers there: Api/PrimaryView.h, Features/MainView's capture and
 // colour epoch), the views' work at their points (Api::ViewPoint), and Present's end of frame. The feature file's hooks call it; it reads the scene through
 // Scene::FrameView and drives IndirectDraws.
 

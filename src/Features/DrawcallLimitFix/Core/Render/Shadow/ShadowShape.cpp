@@ -335,7 +335,7 @@ namespace DCLF
 		return out;
 	}
 
-	const RowBuckets& IndirectDraws::Impl::ShadowRowBuckets(RowBucketsCache& a_cache, std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups,
+	const RowBuckets& ShadowEngine::ShadowRowBuckets(RowBucketsCache& a_cache, std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups,
 		const ShadowIndirectState& a_indirect)
 	{
 		auto& cache = a_cache;

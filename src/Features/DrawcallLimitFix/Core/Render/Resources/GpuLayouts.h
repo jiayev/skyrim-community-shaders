@@ -24,7 +24,7 @@ namespace DCLF::Draws
 	inline constexpr std::uint32_t OcclusionModeOf(std::uint32_t a_view) { return kFirstOcclusionMode + a_view; }
 	// The shadow epoch's view slots: occlusion views first, then the frame's shadow views (the exterior has four: two cascades,
 	// twice; an interior two hemispheres per shadow-casting point light). These and the following capacities are grown before the
-	// epoch (Impl::ReserveShadowLatch). Key slots: Lookups::shadowSlotKeys, one per caster key, one per occlusion key.
+	// epoch (ShadowEngine::ReserveShadowLatch). Key slots: Lookups::shadowSlotKeys, one per caster key, one per occlusion key.
 	constexpr std::uint32_t kInitialShadowViewSlots = 8;
 	inline constexpr std::uint32_t OcclusionSlot(std::uint32_t a_view) { return a_view; }
 	constexpr std::uint32_t kFirstShadowViewSlot = kOcclusionViews;
@@ -489,7 +489,7 @@ namespace DCLF::Draws
 	/**
 	 * @brief The shadow latch block's region per frame slot: the view slots' latches, a pipeline map row per render mode and view
 	 * rasterizer state (DrawPipelines::ShadowRasterStateId, 1 to rasterStates), then the sun's full-frustum processes. Each
-	 * dimension is grown before the epoch (Impl::ReserveShadowLatch).
+	 * dimension is grown before the epoch (ShadowEngine::ReserveShadowLatch).
 	 */
 	struct ShadowLatchLayout
 	{

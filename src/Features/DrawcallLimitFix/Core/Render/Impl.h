@@ -4,7 +4,8 @@
 // adopted snapshot and its payload, the epochs' commits), the coordinator's copy of the ahead context, the snapshot builder
 // (builds ahead and the revision producer, on the preparation pool) and the report counters. Each member says whose it is.
 // The umbrella: Impl's cohesive groups of types and members are its bases, one per header of Impl/ (SnapshotBuilder, Views,
-// Producer, Stats); the functions over them, and the rest of the state, are here. Included by Internal.h, last.
+// Producer, Stats); the functions over them, and the rest of the state, are here. The shadow and occlusion views' state is the
+// shadow engine's (shadowEngine: Shadow/ShadowEngine.h), which reaches Impl through ShadowHost alone. Included by Internal.h, last.
 
 namespace DCLF
 {
@@ -16,16 +17,17 @@ namespace DCLF
 #include "Features/DrawcallLimitFix/Core/Render/Impl/Views.h"
 #include "Features/DrawcallLimitFix/Core/Render/Impl/Producer.h"
 #include "Features/DrawcallLimitFix/Core/Render/Impl/Stats.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Participant.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEngine.h"
 
 namespace DCLF
 {
 	namespace Draws
 	{
 		struct MainCommit;  // CommitMainPayload's shared locals (Payload/Uploads.cpp)
-		struct ShapesKeyMixer;  // RevisionShapesKey's hash by group (Revision/Producer.cpp)
 	}
 
-	struct IndirectDraws::Impl : ImplSnapshotBuilder, ImplViews, ImplProducer, ImplStats
+	struct IndirectDraws::Impl final : ImplSnapshotBuilder, ImplViews, ImplProducer, ImplStats, ShadowHost
 	{
 		std::shared_ptr<Resources> resources;
 		// What the resources were created for; a change rebuilds them (and the graph).
@@ -33,85 +35,9 @@ namespace DCLF
 		std::uint32_t width = 0, height = 0;
 		std::optional<Capture> pending;  // this frame's main-pass bindings, until the epoch runs
 
-		// The shadow views (CS_DCLF_SHADOWS): their own resources, apart from the main epochs'.
-		std::shared_ptr<ShadowResources> shadow;
-		bool shadowSetupFailed = false;
-		// The shadow epochs counted for the culling counters' samples (ReadShadowCullCounters: one in 127).
-		std::uint32_t shadowCullEpochs = 0;
-		std::uint32_t shadowLoggedTargets = 0;
-		void ReadShadowCullCounters(std::uint32_t a_frame, IndirectDraws::ShadowStats& a_stats);
-		using PendingView = Draws::PendingView;
-		std::vector<PendingView> pendingViews;
-		// Per occlusion view: its view, its pipelines' state and format, and the frame whose commit uploaded its occluders.
-		struct OcclusionState
-		{
-			PendingView view;
-			std::uint32_t capturedFrame = ~0u;
-			std::uint32_t rasterState = 0;
-			DXGI_FORMAT dsvFormat = DXGI_FORMAT_UNKNOWN;
-			std::uint32_t committedFrame = ~0u;
-			std::uint32_t inputs = 0, skipped = 0;
-		};
-		std::array<OcclusionState, kOcclusionViews> occlusion;
-		/** @brief The occlusion views' formats, for the scene lane's shadow pipelines (PostLookupInputs). */
-		std::array<DXGI_FORMAT, kOcclusionViews> OcclusionFormats() const
-		{
-			std::array<DXGI_FORMAT, kOcclusionViews> viewFormats{};
-			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-				viewFormats[v] = occlusion[v].dsvFormat;
-			return viewFormats;
-		}
-		/** @brief A shadow view this frame's epoch cannot draw: its withheld casters are a hole (flagged); the capability stays. */
-		void ShadowsNotDrawn(IndirectDraws::ShadowStats& a_stats);
-		/**
-		 * The shadow capability: the modes DCLF draws and the state catalog their pipelines are built for; changed only by a toggle,
-		 * a failure, an occlusion map's first capture, or a defect ("<- PHASES"). Render thread; the set reads the published phases.
-		 */
-		std::array<bool, kShadowModeCount> readyModes{};
-		std::array<ModeRasterStates, kShadowModeCount> readyStates{};
-		std::atomic<std::uint8_t> shadowCapability{ 0 };
-		bool shadowCatalogBuilt = false;
-		DXGI_FORMAT shadowTargetFormat = DXGI_FORMAT_UNKNOWN;
-		/** @brief The catalog: every solid-fill state of the engine's table its shadow views can draw with, and the cascades' clones. */
-		void BuildShadowCatalog();
-		/** @brief The capability changed: the readiness serial moves and every caster is decided again. a_defect: an unforeseen view. */
-		void NoteCapability(bool a_defect, std::string a_cause);
+		// The shadow and occlusion views' state and the functions over it alone: the shadow engine's (Shadow/ShadowEngine.h).
+		std::unique_ptr<ShadowEngine> shadowEngine = std::make_unique<ShadowEngine>(*this);
 		// The report counters: Impl/Stats.h (ImplStats).
-		/** @brief The shadow payload the frame's epoch committed, read by the occlusion epoch until the next commit. */
-		std::shared_ptr<ShadowPayload> committedShadow;
-		std::vector<std::shared_ptr<ShadowPayload>> shadowPayloadPool;  // the snapshot builder's
-		std::shared_ptr<ShadowPayload> AcquireShadowPayload();
-		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
-		/** @brief The capability's modes and states and the shadow targets' format that the builds ahead and shadow lookups are for. */
-		struct LastShadow
-		{
-			std::array<bool, kShadowModeCount> modes{};
-			std::array<ModeRasterStates, kShadowModeCount> rasterStates{};
-			DXGI_FORMAT dsvFormat = DXGI_FORMAT_UNKNOWN;
-			bool known = false;
-		} lastShadow;
-		// What the scene lane's shadow pipelines are resolved for, latest wins (postedShadowLookups: the render thread's copy).
-		std::atomic<std::shared_ptr<const ShadowLookupInputs>> shadowLookupInputs;
-		ShadowLookupInputs postedShadowLookups;
-		/**
-		 * @brief The shadow views' placements (built at setup): every place the engine's shadow maps can take a view (cascade slices
-		 * and their volumetric copies, a light map slice whole or as a paraboloid pair's halves), each with its mode, state and slot.
-		 * The shadow epoch's shape is all of them; an empty slot does no work. A view at no placement, under another state or twice in
-		 * a frame is a defect (ShadowNotReady::Placement), flagged.
-		 */
-		std::vector<ShadowViewLayout> shadowPlacements;
-		bool BuildShadowPlacements();
-		/** @brief The placement a captured view drew at (its target, slice and viewport), or SIZE_MAX. */
-		std::size_t PlacementOf(const PendingView& a_view) const;
-		std::uint32_t placementDefectsLogged = 0;
-		/** @brief The occlusion maps' layouts as last captured: what revisions make occlusion shapes for and OcclusionReady checks. */
-		std::vector<ShadowViewLayout> PredictedOcclusion() const;
-		static constexpr std::size_t kRecentOcclusionLayouts = 4;
-		/** @brief A view rasterizer state's map row's buckets, from a_cache (the revision producer's). */
-		static const RowBuckets& ShadowRowBuckets(RowBucketsCache& a_cache, std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups,
-			const ShadowIndirectState& a_indirect);
-		/** @brief Revision code: the producer's draw bound brought up to date with a_tables' change log. */
-		void UpdateDrawBound(const SceneTables& a_tables, std::uint32_t a_generation);
 		/**
 		 * @brief Revision code: the main layout (RevisionProducer::mainLayout) brought up to the draw bound, and a_resources' sequences,
 		 * bucket counts and rows required to hold it. A bound over the device's max sequence count or the sort's rank field is a hard
@@ -120,14 +46,6 @@ namespace DCLF
 		void RequireMain(GrowthBuild& a_build, Resources& a_resources, const SceneTables& a_tables, std::uint32_t a_generation);
 		/** @brief Revision code: the index pool's room for every geometry the tables have, and a relayout of a fragmented one. */
 		void RequireIndexPool(GrowthBuild& a_build, SceneBuffers& a_scene, const SceneTables& a_tables, std::uint32_t a_generation);
-		/** @brief Revision code: every shadow view slot's sequences required to hold the scene's draw bound. */
-		void RequireShadowSequences(GrowthBuild& a_build, const SceneTables& a_tables, std::uint32_t a_generation);
-		/**
-		 * @brief Revision code: view slots and map rows grown (more slots rebuild the graph; either growth is a new latch layout), the
-		 * view blocks and every slot's bucket counts required to hold them.
-		 */
-		void ReserveShadowLatch(GrowthBuild& a_build, ShadowResources& a_shadow, std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates,
-			std::uint32_t a_sunProcesses);
 		// Revision code: the main latch's layout grown when it holds fewer cascades, volumes or buckets than asked (RequireLatches
 		// asks the set for a block of it).
 		void ReserveMainLatch(std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets = 0);
@@ -136,26 +54,6 @@ namespace DCLF
 		 * with the zeros the shadow and view latched copies take. Once per make, after every reserve.
 		 */
 		void RequireLatches(GrowthBuild& a_build);
-		ShadowInputs PrepareShadowInputs(const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
-			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const;
-		// ExecuteShadowFrame's stages (Shadow/ShadowEpochs.cpp): the pending views' modes and states noted against the catalog, and
-		// a submitted epoch's results.
-		void NoteShadowViewModes(std::array<bool, kShadowModeCount>& a_modeUsed, std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates);
-		void NoteShadowEpochDrawn(const ShadowPayload& a_payload, const std::array<bool, kShadowModeCount>& a_modeUsed, std::uint32_t a_frame,
-			IndirectDraws::ShadowStats& a_stats);
-		std::uint32_t shadowLoggedReasons = 0;
-		bool ShadowNotReady(std::uint32_t a_reason, const char* a_what)
-		{
-			if (!((shadowLoggedReasons >> a_reason) & 1)) {
-				shadowLoggedReasons |= 1u << a_reason;
-				logger::info("[DCLF] shadow views not ready: {}", a_what);
-			}
-			return false;
-		}
-		bool SetupShadow();
-		bool ImportShadowDepth(std::uint32_t a_index, std::uint32_t a_target);
-		/** @brief Imports a_texture through a_view as depth target a_index (a_label: for the log). */
-		bool ImportDepthTexture(std::uint32_t a_index, ID3D11Texture2D* a_texture, ID3D11DepthStencilView* a_view, std::uint32_t a_label);
 
 		// The volatile t16+ inputs keep a live import only while their register keeps naming that SRV: reuse is bounded without an
 		// age-based import cache.
@@ -210,10 +108,6 @@ namespace DCLF
 		/** @brief The snapshot builder: a publication's stream views and payloads (on the pool, in publication order). */
 		std::shared_ptr<const DrawPublication> RunAhead(std::shared_ptr<const SceneTables> a_tables, const AheadContext& a_context, const Lookups& a_lookups,
 			std::uint32_t a_generation, std::uint32_t a_frame, std::shared_ptr<const EntrySpace> a_sunCandidates, std::shared_ptr<const EntrySpace> a_lightCandidates);
-		/** @brief RunAhead's shadow stage: the shadow payload into a_out, from the same tables, stream views and lookups, and its exclusions. */
-		void BuildAheadShadow(DrawPublication& a_out, const AheadContext& a_context, const SceneTables& a_tables, const Lookups& a_lookups, std::uint32_t a_generation,
-			std::uint32_t a_frame, const std::shared_ptr<const EntrySpace>& a_sunCandidates, const std::shared_ptr<const EntrySpace>& a_lightCandidates,
-			const TablesContentEpochs& a_oldestTables);
 		/** @brief Waits until no build ahead runs (DrainAsync; never per frame). */
 		void WaitAhead();
 		/**
@@ -259,6 +153,8 @@ namespace DCLF
 		std::shared_ptr<std::vector<std::shared_ptr<const void>>> EpochOwners(std::span<const MainPayload* const> a_payloads);
 		/** @brief The scene buffers, created once (render thread). False when they have no device address. */
 		bool EnsureSceneBuffers(rhi::Device a_device);
+		/** @brief ShadowHost: the scene buffers for the shadow resources (SetupShadow). */
+		std::shared_ptr<SceneBuffers> ShadowSceneBuffers(rhi::Device a_device) override { return EnsureSceneBuffers(a_device) ? scene : nullptr; }
 		/**
 		 * @brief Revision code: the scene's tables required to hold a_tables (and the frame's posted counts), with the per-object
 		 * buffers (the objects and the input demand) and the faces' draw family lists.
@@ -284,10 +180,6 @@ namespace DCLF
 		std::array<const MainPayload*, 2> committedPayload{};
 		std::array<std::uint32_t, 2> committedFrame{};
 		MainRows mainRows;  // both main segments' (MainRows)
-		ShadowKept shadowKept;  // the shadow epoch's inputs and records
-		ShadowKept* ShadowKeptState() { return &shadowKept; }
-		SunExclusionCache sunExclusionCache;  // the shadow builds', in frame order
-		SunExclusionCache parabolicExclusionCache;  // likewise, the paraboloid mode's (the Point source's culls)
 		std::array<std::uint32_t, 5> decalWords{};  // the count buffer's decal words (19-22, then 27), uploaded per colour epoch
 
 		/** @brief An epoch's per-frame constant blocks from the capture's mirrors (render thread; keeps the Z-prepass's bytes). */
@@ -352,20 +244,18 @@ namespace DCLF
 
 		// The revision producer's and the scene revisions' types and state: Impl/Producer.h (ImplProducer).
 		void ServeRevisionRequests();
-		/** @brief Render thread: posts the revision inputs when anything moved. Called where each value is captured. */
-		void PostRevisionInputs();
+		/** @brief Render thread: posts the revision inputs when anything moved. Called where each value is captured (and ShadowHost's). */
+		void PostRevisionInputs() override;
 		/**
 		 * @brief The snapshot builder: a scene revision's shapes, reserved and made from a_publication and the producer's inputs
 		 * alone, then assembled. a_frame: the publication's commitFrame.
 		 */
 		void MakeRevision(const ScenePublication& a_publication, std::uint32_t a_frame);
-		/** @brief MakeRevision's stages (Producer.cpp): the make's publication and what its requirements hand its shapes. */
-		struct RevisionMake;
+		/** @brief MakeRevision's stages (Producer.cpp): the main participant's and the views' steps (MainParticipant, ViewParticipant below). */
 		void RequireRevisionSet(RevisionMake& a_make, GrowthBuild& a_build);
 		void RequireRevisionViews(RevisionMake& a_make, GrowthBuild& a_build);
 		void RequireRevisionLatched(RevisionMake& a_make, GrowthBuild& a_build);
 		void MakeMainShapes(RevisionMake& a_make, const NamedVersions& a_sealed, const MainLayout& a_layout);
-		void MakeShadowShapes(const RevisionMake& a_make, const NamedVersions& a_sealed);
 		void MakeViewShapes(const RevisionMake& a_make, const NamedVersions& a_sealed, const MainLayout& a_layout);
 		/** @brief Revision code: the latch blocks' handles registered (once), and each latch laid out at its first sizes once its resources are. */
 		void EnsureRevisionLatches();
@@ -393,15 +283,39 @@ namespace DCLF
 		std::string RevisionReport();
 		// By draw family, its pipelines as the request's catalog has them (null: none).
 		using FamilyPipelinesSet = std::array<const FamilyPipelines*, Extensions::kDrawFamilies>;
-		ShapesKey RevisionShapesKey(const NamedVersions& a_sealed, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups,
-			std::size_t a_pipelines, const FamilyPipelinesSet& a_families) const;
+		/** @brief What the make's shapes are made from: what every shape names, then each participant's parts (MixShapesKey). */
+		ShapesKey RevisionShapesKey(const NamedVersions& a_sealed, const RevisionMake& a_make, std::size_t a_pipelines) const;
+		/** @brief RevisionShapesKey's main part: the main pipeline set into the pipelines group, the main segments' latch and captures into theirs. */
+		void MixMainShapesKey(const RevisionMake& a_make, ShapesKeyMixer& a_mixer) const;
 		/** @brief RevisionShapesKey's views' part: each view's inputs into its slot's key group, the draw families' faces', the DropWhenOff views' toggles. */
 		void MixViewShapesKey(ShapesKeyMixer& a_mixer, const FamilyPipelinesSet& a_families) const;
-		/**
-		 * @brief Whether the last shadow and occlusion shapes hold a_bounds (capacities and buckets enough, no row at the bucket words
-		 * they were made for). Capacities only grow, so a shape remade from a bound they hold is the same shape.
-		 */
-		bool ShadowShapesHold(const ShadowBounds& a_bounds) const;
+		// The scene revisions' participants (Revision/Participant.h), by ShapeKind: the main segments' (Impl's main steps above), the
+		// shadow engine (shadowEngine), the views' (Impl's view steps). Registered here, at construction, in ShapeKind's order, which
+		// every loop over them keeps.
+		struct MainParticipant final : RevisionParticipant
+		{
+			explicit MainParticipant(Impl& a_owner) :
+				owner(a_owner)
+			{}
+			Impl& owner;
+			void RequireSequences(RevisionMake& a_make, GrowthBuild& a_build) override { owner.RequireRevisionSet(a_make, a_build); }
+			void RequireLatched(RevisionMake& a_make, GrowthBuild& a_build) override { owner.RequireRevisionLatched(a_make, a_build); }
+			void MixShapesKey(const RevisionMake& a_make, ShapesKeyMixer& a_mixer) const override { owner.MixMainShapesKey(a_make, a_mixer); }
+			void MakeShapes(RevisionMake& a_make, const NamedVersions& a_sealed, const MainLayout& a_layout) override { owner.MakeMainShapes(a_make, a_sealed, a_layout); }
+		};
+		struct ViewParticipant final : RevisionParticipant
+		{
+			explicit ViewParticipant(Impl& a_owner) :
+				owner(a_owner)
+			{}
+			Impl& owner;
+			void RequireSequences(RevisionMake& a_make, GrowthBuild& a_build) override { owner.RequireRevisionViews(a_make, a_build); }
+			void MixShapesKey(const RevisionMake& a_make, ShapesKeyMixer& a_mixer) const override;
+			void MakeShapes(RevisionMake& a_make, const NamedVersions& a_sealed, const MainLayout& a_layout) override { owner.MakeViewShapes(a_make, a_sealed, a_layout); }
+		};
+		MainParticipant mainParticipant{ *this };
+		ViewParticipant viewParticipant{ *this };
+		std::array<RevisionParticipant*, 3> participants{ &mainParticipant, shadowEngine.get(), &viewParticipant };
 
 		std::uint32_t loggedReasons = 0;
 

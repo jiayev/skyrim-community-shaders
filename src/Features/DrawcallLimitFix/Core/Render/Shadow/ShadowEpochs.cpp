@@ -125,15 +125,16 @@ namespace DCLF
 	bool IndirectDraws::OcclusionReady(std::uint32_t a_view) const
 	{
 		// Ready when this frame's shadow commit uploaded the occluders and the map's target is imported.
-		if (a_view >= kOcclusionViews || failed || !ActiveToggles().shadows || !Extensions::OcclusionOn(ActiveToggles(), a_view) || !impl->shadow)
+		const auto& engine = *impl->shadowEngine;
+		if (a_view >= kOcclusionViews || failed || !ActiveToggles().shadows || !Extensions::OcclusionOn(ActiveToggles(), a_view) || !engine.shadow)
 			return false;
-		const auto& occlusion = impl->occlusion[a_view];
+		const auto& occlusion = engine.occlusion[a_view];
 		// Not while the built graph lacks the map's import, nor without the selected revision's recorded shape for the maps' layout
 		// (the engine draws the map meanwhile).
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!host || host->RebuildRequested())
 			return false;
-		const auto layouts = impl->PredictedOcclusion();
+		const auto layouts = engine.PredictedOcclusion();
 		bool shaped = false;
 		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kOcclusionShape);
 		if (impl->EpochCovered(epoch))
@@ -146,7 +147,7 @@ namespace DCLF
 			++impl->occlusionUnrecorded;
 			return false;
 		}
-		return occlusion.rasterState && occlusion.committedFrame == Scene::FrameView::Get().GetFrame() && impl->shadow->depth[OcclusionDepthTarget(a_view)];
+		return occlusion.rasterState && occlusion.committedFrame == Scene::FrameView::Get().GetFrame() && engine.shadow->depth[OcclusionDepthTarget(a_view)];
 	}
 
 	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t a_views)
@@ -154,12 +155,13 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.ExecuteOcclusion");
 		const auto start = std::chrono::steady_clock::now();
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
+		auto& engine = *impl->shadowEngine;
 		// The requested views that are ready and captured this frame; a map the engine did not draw draws nothing.
 		std::uint32_t drawable = 0;
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 			if (!(a_views & (1u << v)))
 				continue;
-			if (OcclusionReady(v) && impl->occlusion[v].capturedFrame == frameNumber)
+			if (OcclusionReady(v) && engine.occlusion[v].capturedFrame == frameNumber)
 				drawable |= 1u << v;
 			else
 				++shadowStats.occlusionNotReady[v];
@@ -171,12 +173,12 @@ namespace DCLF
 			return 0;
 		}
 		ScopedPerfEvent event("CS DCLF: occlusion maps (CPU)");
-		auto resources = impl->shadow;
+		auto resources = engine.shadow;
 		// The revision's variant for the drawable maps and the payload the shadow commit read: trusted, nothing is checked here.
 		std::vector<ShadowViewLayout> layouts;
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 			if (drawable & (1u << v))
-				layouts.push_back(LayoutOf(impl->occlusion[v].view, OcclusionSlot(v), OcclusionModeOf(v), OcclusionDepthTarget(v)));
+				layouts.push_back(LayoutOf(engine.occlusion[v].view, OcclusionSlot(v), OcclusionModeOf(v), OcclusionDepthTarget(v)));
 		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kOcclusionShape);
 		const auto revision = impl->RevisionOf(epoch);
 		std::shared_ptr<const ShadowFrame> revisionShape;
@@ -188,7 +190,7 @@ namespace DCLF
 						revisionShape = variants->shapes[v];
 						revisionVariant = v;
 					}
-		const auto committed = impl->committedShadow;
+		const auto committed = engine.committedShadow;
 		if (!revisionShape || !committed) {
 			// A layout the revision lacks (one map drawn without the other): the engine draws them.
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
@@ -209,7 +211,7 @@ namespace DCLF
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 				if (!(drawable & (1u << v)))
 					continue;
-				const auto& view = impl->occlusion[v].view;
+				const auto& view = engine.occlusion[v].view;
 				const auto& shapeView = target.views[index];
 				const auto& buckets = (*target.rows)[index++];
 				const std::uint32_t slot = OcclusionSlot(v), mode = OcclusionModeOf(v);
@@ -233,7 +235,7 @@ namespace DCLF
 				++shadowStats.occlusionDrawn[v];
 			}
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, revisionVariant);
-		}, impl->shadowExecutionOwner);
+		}, engine.shadowExecutionOwner);
 		shadowStats.occlusionMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		++shadowStats.occlusionEpochs;
 		if (!ok) {
@@ -480,7 +482,8 @@ namespace DCLF
 	void IndirectDraws::ExecuteShadowFrame()
 	{
 		ZoneScopedN("CS.DCLF.ExecuteShadowFrame");
-		auto& pending = impl->pendingViews;
+		auto& engine = *impl->shadowEngine;
+		auto& pending = engine.pendingViews;
 		if (!ActiveToggles().shadows || failed || pending.empty()) {
 			pending.clear();
 			return;
@@ -491,32 +494,32 @@ namespace DCLF
 			shadowStats.notReady += static_cast<std::uint32_t>(pending.size());
 			shadowStats.notReadyReasons[static_cast<std::size_t>(a_reason)] += static_cast<std::uint32_t>(pending.size());
 			if (!pending.empty())
-				impl->ShadowsNotDrawn(shadowStats);
+				engine.ShadowsNotDrawn(shadowStats);
 			pending.clear();
 		};
 		auto& pipelines = DrawPipelines::Get();
 		auto* utility = globals::game::utilityShader;
-		if (!pipelines.Enabled() || !utility || !impl->shadow || impl->shadowPlacements.empty())
+		if (!pipelines.Enabled() || !utility || !engine.shadow || engine.shadowPlacements.empty())
 			return notReady(ShadowNotReady::Setup);
 		const auto indirect = FrameShadowIndirectState();
 		if (!indirect.valid) {
-			impl->ShadowNotReady(6, "no shadow pipeline in the set yet");
+			engine.ShadowNotReady(6, "no shadow pipeline in the set yet");
 			return notReady(ShadowNotReady::Pipelines);
 		}
 		const auto& tables = Scene::FrameView::Get().GetTables();
 		if (tables.objects.empty() || tables.shadowTechnique.size() != tables.objects.size())
 			return notReady(ShadowNotReady::Tables);
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
-		auto resources = impl->shadow;
+		auto resources = engine.shadow;
 		std::array<bool, kShadowModeCount> modeUsed{};
 		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
-		impl->NoteShadowViewModes(modeUsed, modeRasterStates);
+		engine.NoteShadowViewModes(modeUsed, modeRasterStates);
 		double prepareMs = 0.0, inputsMs = 0.0, blocksMs = 0.0, bodyMs = 0.0;
 
-		ShadowInputs in = impl->PrepareShadowInputs(*resources, modeUsed, modeRasterStates);
+		ShadowInputs in = engine.PrepareShadowInputs(*resources, modeUsed, modeRasterStates);
 		// The revision's shape and recording and the installed payload: trusted, nothing is checked here. The epoch covers every
 		// placement; a slot without a view does no work (zero latch, counters zeroed, its render pass loads and stores the engine's).
-		const std::vector<ShadowViewLayout>& layouts = impl->shadowPlacements;
+		const std::vector<ShadowViewLayout>& layouts = engine.shadowPlacements;
 		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kShadowShape);
 		const auto revision = impl->RevisionOf(epoch);
 		const std::shared_ptr<ShadowPayload> ahead = impl->installedDraws ? impl->installedDraws->shadow : nullptr;
@@ -553,7 +556,7 @@ namespace DCLF
 			++async.used;
 			// The publication was built before the frame's full-frustum cull.
 			ahead->inputs.sunEntryProcesses = in.sunEntryProcesses;
-			impl->committedShadow = ahead;
+			engine.committedShadow = ahead;
 			ShadowPayload& payload = *ahead;
 			// The payload's buffers are the installed publication's (a covered frame has a ready one, with its shadow parts); only the
 			// arena is uploaded here. The occlusion epoch reads the same payload.
@@ -566,7 +569,7 @@ namespace DCLF
 			// Cleared geometry slots' buffers, held until this execution retires.
 			for (auto& owner : Scene::FrameView::Get().TakeRetiredImports())
 				frameOwners->push_back(std::move(owner));
-			impl->shadowExecutionOwner = frameOwners;
+			engine.shadowExecutionOwner = frameOwners;
 			prepareMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
 			TracyCZoneEnd(shadowPrepareZone);
 
@@ -598,7 +601,7 @@ namespace DCLF
 		shadowStats.blocksMs += blocksMs;
 		shadowStats.executeMs += totalMs - bodyMs;  // the graph's own compile, prepare and record
 		if (ok) {
-			impl->NoteShadowEpochDrawn(payload, modeUsed, frameNumber, shadowStats);
+			engine.NoteShadowEpochDrawn(payload, modeUsed, frameNumber, shadowStats);
 		} else {
 			logger::error("[DCLF] the shadow epoch failed; the render graph is disabled");
 			notReady(ShadowNotReady::Epoch);
@@ -606,7 +609,7 @@ namespace DCLF
 		shadowStats.cpuMs += totalMs;
 	}
 
-	void IndirectDraws::Impl::NoteShadowViewModes(std::array<bool, kShadowModeCount>& a_modeUsed, std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates)
+	void ShadowEngine::NoteShadowViewModes(std::array<bool, kShadowModeCount>& a_modeUsed, std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates)
 	{
 		auto& modeUsed = a_modeUsed;
 		// Inputs and pipelines cover every catalog state per mode (UpdateShadowCapability), so which views a frame draws (cascades
@@ -638,7 +641,7 @@ namespace DCLF
 		}
 	}
 
-	void IndirectDraws::Impl::NoteShadowEpochDrawn(const ShadowPayload& a_payload, const std::array<bool, kShadowModeCount>& a_modeUsed, std::uint32_t a_frame,
+	void ShadowEngine::NoteShadowEpochDrawn(const ShadowPayload& a_payload, const std::array<bool, kShadowModeCount>& a_modeUsed, std::uint32_t a_frame,
 		IndirectDraws::ShadowStats& a_stats)
 	{
 		const auto& payload = a_payload;
@@ -673,7 +676,7 @@ namespace DCLF
 		pendingViews.clear();
 	}
 
-	ShadowInputs IndirectDraws::Impl::PrepareShadowInputs(const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
+	ShadowInputs ShadowEngine::PrepareShadowInputs(const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 		const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const
 	{
 		ZoneScopedN("CS.DCLF.PrepareShadowInputs");
@@ -717,7 +720,7 @@ namespace DCLF
 		return in;
 	}
 
-	std::shared_ptr<ShadowPayload> IndirectDraws::Impl::AcquireShadowPayload()
+	std::shared_ptr<ShadowPayload> ShadowEngine::AcquireShadowPayload()
 	{
 		// Idle payloads are reset so they hold nothing, as AcquirePayload does.
 		std::shared_ptr<ShadowPayload> free;
@@ -730,7 +733,7 @@ namespace DCLF
 		return free ? free : shadowPayloadPool.emplace_back(std::make_shared<ShadowPayload>());
 	}
 
-	void IndirectDraws::Impl::ReadShadowCullCounters(std::uint32_t a_frame, IndirectDraws::ShadowStats& a_stats)
+	void ShadowEngine::ReadShadowCullCounters(std::uint32_t a_frame, IndirectDraws::ShadowStats& a_stats)
 	{
 		// Right after the epoch's submission: its counters are copied each execution into the frame slot's host buffer
 		// (CounterReadback, the cs.dclf.shadow.cull-counters pass). A sample is read once its execution's GPU point is reached,
@@ -777,7 +780,7 @@ namespace DCLF
 		armed = { true, frameSlot, view.slot, CounterReadback::StampOf(a_frame), view.viewId, view.renderMode, host->SubmittedPoint() };
 	}
 
-	void IndirectDraws::Impl::ShadowsNotDrawn(IndirectDraws::ShadowStats& a_stats)
+	void ShadowEngine::ShadowsNotDrawn(IndirectDraws::ShadowStats& a_stats)
 	{
 		if (const auto set = Scene::FrameView::Get().FrameClaims(); set && (set->drawn & (kSetCaster | kSetCasterPoint)) && PassCapture::ShadowWithholdingEnabled())
 			++a_stats.notReadyWithheld;

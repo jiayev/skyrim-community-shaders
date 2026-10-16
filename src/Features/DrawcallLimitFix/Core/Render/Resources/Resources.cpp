@@ -441,7 +441,7 @@ namespace DCLF
 		return out;
 	}
 
-	void IndirectDraws::Impl::UpdateDrawBound(const SceneTables& a_tables, std::uint32_t a_generation)
+	void ImplProducer::UpdateDrawBound(const SceneTables& a_tables, std::uint32_t a_generation)
 	{
 		auto& s = producer.drawBound;
 		const std::size_t count = a_tables.objects.size();
@@ -583,7 +583,7 @@ namespace DCLF
 		// flight keep the block their set names.
 	}
 
-	bool IndirectDraws::Impl::SetupShadow()
+	bool ShadowEngine::SetupShadow()
 	{
 		if (shadow)
 			return true;
@@ -597,11 +597,12 @@ namespace DCLF
 		state->constants = DeviceBuffer(kShadowConstantBytes, "cs.dclf.shadow.constants");
 		// The shadow commit latches into the constants alone, known before any graph declares the pass.
 		state->latchedTargets.store(std::make_shared<const std::vector<const void*>>(1, state->constants.get()), std::memory_order_release);
-		if (!EnsureSceneBuffers(device)) {
+		auto scene = shadowHost.ShadowSceneBuffers(device);
+		if (!scene) {
 			shadowSetupFailed = true;
 			return ShadowNotReady(2, "no device address for the face positions");
 		}
-		state->scene = scene;
+		state->scene = std::move(scene);
 		// The first view slots, as many as the initial latch layout (the latch is the producer's).
 		const bool smallSlots = SwitchValue(Switch::TableStart) == "small";
 		const auto firstLayout = InitialShadowLatchLayout();
@@ -638,7 +639,7 @@ namespace DCLF
 		shadow = state;
 		host->AddExtension(kShadowExtensionId, [state] { return Diagnostics::ScheduleDumped(kShadowExtensionId, MakeShadowExtension(state)); });
 		logger::info("[DCLF] shadow view graph resources created");
-		PostRevisionInputs();
+		shadowHost.PostRevisionInputs();
 		return true;
 	}
 
@@ -646,6 +647,7 @@ namespace DCLF
 	{
 		// Makes the shadow view slots the revision code asked for (render thread) and rebuilds the graph; the revision code waits.
 		auto* host = RenderGraphRuntime::Get().Host();
+		auto& shadow = shadowEngine->shadow;
 		if (const auto request = shadowSlotsSlot.Take(); request && host && shadow && request->slots > shadow->sequences.size()) {
 			AddShadowViewSlots(*shadow, request->slots, request->sequenceDraws, request->bucketCountWords);
 			host->AddExtension(kShadowExtensionId, [state = shadow] { return Diagnostics::ScheduleDumped(kShadowExtensionId, MakeShadowExtension(state)); });
@@ -818,7 +820,7 @@ namespace DCLF
 		return true;
 	}
 
-	bool IndirectDraws::Impl::ImportShadowDepth(std::uint32_t a_index, std::uint32_t a_target)
+	bool ShadowEngine::ImportShadowDepth(std::uint32_t a_index, std::uint32_t a_target)
 	{
 		auto* renderer = globals::game::renderer;
 		if (!renderer)
@@ -827,7 +829,7 @@ namespace DCLF
 		return ImportDepthTexture(a_index, data.texture, data.views[0], a_target);
 	}
 
-	bool IndirectDraws::Impl::ImportDepthTexture(std::uint32_t a_index, ID3D11Texture2D* a_texture, ID3D11DepthStencilView* a_view, std::uint32_t a_label)
+	bool ShadowEngine::ImportDepthTexture(std::uint32_t a_index, ID3D11Texture2D* a_texture, ID3D11DepthStencilView* a_view, std::uint32_t a_label)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!host || !shadow || a_index >= kShadowDepthTargets)

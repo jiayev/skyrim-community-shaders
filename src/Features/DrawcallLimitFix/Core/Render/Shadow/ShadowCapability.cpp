@@ -7,7 +7,7 @@
 
 namespace DCLF
 {
-	void IndirectDraws::Impl::BuildShadowCatalog()
+	void ShadowEngine::BuildShadowCatalog()
 	{
 		// The engine's table is filled once the renderer is up; until then the catalog waits.
 		auto& table = EngineRasterStates();
@@ -56,7 +56,7 @@ namespace DCLF
 			readyStates[kFirstOcclusionMode].All().size());
 	}
 
-	bool IndirectDraws::Impl::BuildShadowPlacements()
+	bool ShadowEngine::BuildShadowPlacements()
 	{
 		auto* renderer = globals::game::renderer;
 		auto* plain = renderer ? EngineRasterStates()[0][1][0][0] : nullptr;
@@ -105,12 +105,12 @@ namespace DCLF
 			return false;
 		shadowPlacements = std::move(placements);
 		// A revision input: the next revision reserves the latch and slots (ReserveShadowLatch).
-		PostRevisionInputs();
+		shadowHost.PostRevisionInputs();
 		logger::info("[DCLF] shadow view placements: {} (slots {} to {})", shadowPlacements.size(), shadowPlacements.front().slot, shadowPlacements.back().slot);
 		return true;
 	}
 
-	std::size_t IndirectDraws::Impl::PlacementOf(const PendingView& a_view) const
+	std::size_t ShadowEngine::PlacementOf(const PendingView& a_view) const
 	{
 		for (std::size_t p = 0; p < shadowPlacements.size(); ++p) {
 			const auto& placement = shadowPlacements[p];
@@ -121,7 +121,7 @@ namespace DCLF
 		return SIZE_MAX;
 	}
 
-	void IndirectDraws::Impl::NoteCapability(bool a_defect, std::string a_cause)
+	void ShadowEngine::NoteCapability(bool a_defect, std::string a_cause)
 	{
 		++capabilityStats.changes;
 		if (a_defect) {
@@ -135,7 +135,7 @@ namespace DCLF
 
 	void IndirectDraws::UpdateShadowCapability()
 	{
-		auto& i = *impl;
+		auto& i = *impl->shadowEngine;
 		std::uint8_t phases = 0;
 		if (!failed && ActiveToggles().shadows && DrawPipelines::Get().Enabled() && globals::game::utilityShader && i.SetupShadow()) {
 			if (!i.shadowCatalogBuilt) {
@@ -205,7 +205,7 @@ namespace DCLF
 
 	std::uint8_t IndirectDraws::ShadowCapability() const
 	{
-		return failed ? 0 : impl->shadowCapability.load(std::memory_order_acquire);
+		return failed ? 0 : impl->shadowEngine->shadowCapability.load(std::memory_order_acquire);
 	}
 
 	bool IndirectDraws::PhaseReady(const void* a_tables, const Lookups& a_lookups, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why) const

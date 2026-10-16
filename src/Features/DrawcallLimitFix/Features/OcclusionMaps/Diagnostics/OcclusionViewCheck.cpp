@@ -24,7 +24,7 @@ namespace DCLF::Features::OcclusionMaps
 			const std::uint32_t a_view = a_captured.view;
 			if (a_view >= kOcclusionViews || !ActiveToggles().shadows || IndirectDraws::Get().Failed() || !Extensions::OcclusionOn(ActiveToggles(), a_view))
 				return;
-			const auto& occlusion = Diagnostics::DrawsView::Get().occlusion[a_view];
+			const auto& occlusion = Diagnostics::DrawsView::Get().shadowEngine->occlusion[a_view];
 			if (occlusion.capturedFrame != Scene::Coordinator::Get().GetFrame())
 				return;
 			auto& s = Diagnostics::DrawsState::Get().occlusionViews[a_view];

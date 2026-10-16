@@ -363,7 +363,7 @@ namespace DCLF::Draws
 			return std::make_shared<ShadowViewPass>(a_context.Shadow(), Sky);
 		}
 
-		// The views' culling counters, to the host (IndirectDraws::Impl::ReadShadowCullCounters).
+		// The views' culling counters, to the host (ShadowEngine::ReadShadowCullCounters).
 		std::shared_ptr<org::RenderPass> CullCounters(const Api::PassContext& a_context)
 		{
 			return MakeShadowCullCounterPass(a_context.Shadow());

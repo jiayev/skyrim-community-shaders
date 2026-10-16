@@ -38,14 +38,9 @@ namespace DCLF
 			c.build[j] = true;
 		}
 		c.target = impl->resources;
-		// The shadow payload's, for the last epoch's views; the shadow lookups the scene lane resolves for them (PostLookupInputs).
-		const auto& tables = Scene::FrameView::Get().GetTables();
-		if (ActiveToggles().shadows && impl->shadow && impl->lastShadow.known && globals::game::utilityShader && !tables.objects.empty() &&
-			tables.shadowTechnique.size() == tables.objects.size()) {
-			c.shadowInputs = impl->PrepareShadowInputs(*impl->shadow, impl->lastShadow.modes, impl->lastShadow.rasterStates);
-			c.shadowTarget = impl->shadow;
-			c.shadow = true;
-		}
+		// The participants' parts (Revision/Participant.h: the shadow engine's payload inputs, for the last epoch's views).
+		for (auto* participant : impl->participants)
+			participant->PrepareAhead(c);
 		c.valid = c.build[kAsyncZPrepass] || c.build[kAsyncColour] || c.shadow;
 		impl->PostAhead();
 	}
@@ -75,6 +70,7 @@ namespace DCLF
 		// What the commit's set may claim (FitsScene): the buffers' versions the adopted set names (none before the first adoption).
 		const auto& adopted = Adopted();
 		const auto units = [&](const Versioned& a_buffer) { return static_cast<std::uint32_t>(std::min<std::uint64_t>(NamedUnits(adopted, a_buffer), UINT32_MAX)); };
+		const auto& shadow = shadowEngine->shadow;
 		const std::array<SceneFit, 2> fit{ SceneFitOf(adopted, *resources->scene, std::min(units(resources->visibility), units(resources->frustum))),
 			shadow && shadow->scene ? SceneFitOf(adopted, *shadow->scene, units(shadow->visibility)) : SceneFit{} };
 		if (fit != postedFit) {
@@ -305,67 +301,19 @@ namespace DCLF
 		}
 		mainBuild.Finish(out->streams);
 		pairStats.stagesMs += msSince(stagesStart);
-		// The shadow payload, from the same tables, stream views and lookups, with the publication's candidates, and the
-		// next frame's exclusions from it.
-		if (c.shadow && c.shadowTarget && c.shadowTarget->scene)
-			BuildAheadShadow(*out, c, *a_tables, a_lookups, a_generation, a_frame, a_sunCandidates, a_lightCandidates, oldestTables);
+		// The participants' payloads (Revision/Participant.h), from the same tables, stream views and lookups: the shadow engine's, with
+		// the publication's candidates, and the next frame's exclusions from it.
+		{
+			const AheadBuild build{ *out, c, *a_tables, a_lookups, a_generation, a_frame, a_sunCandidates, a_lightCandidates, oldestTables, payloadBuilder, mainCache.region,
+				pairStats };
+			for (auto* participant : participants)
+				participant->BuildPayload(build);
+		}
 		// Every payload of the publication holds the scene list's region as both builds left it: the shadow payload's view, taken
 		// after its words, or without it the main region's; and the shadow payload where its own frame inputs follow the main ones'.
 		ShareAheadRegion(*out, mainCache);
 		Diagnostics::Notify(Diagnostics::DrawsBuiltAhead{ *out, *a_tables, a_frame });
 		return out;
-	}
-
-	void IndirectDraws::Impl::BuildAheadShadow(DrawPublication& a_out, const AheadContext& a_context, const SceneTables& a_tables, const Lookups& a_lookups,
-		std::uint32_t a_generation, std::uint32_t a_frame, const std::shared_ptr<const EntrySpace>& a_sunCandidates,
-		const std::shared_ptr<const EntrySpace>& a_lightCandidates, const TablesContentEpochs& a_oldestTables)
-	{
-		// As RunAhead's: the journals' oldest content epochs, the stages' times.
-		const auto oldest = [this](PayloadPart a_part) { return payloadBuilder.OldestContentEpoch(a_part).value_or(~std::uint64_t{ 0 }); };
-		auto& pairStats = mainRows.pairStats;
-		const auto msSince = [](std::chrono::steady_clock::time_point a_start) {
-			return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a_start).count();
-		};
-		ShadowInputs in = a_context.shadowInputs;
-		in.frameNumber = a_frame;
-		in.tablesGeneration = a_generation;
-		in.lookupGeneration = a_lookups.shadowGeneration;
-		in.sunCandidates = a_sunCandidates;
-		in.lightCandidates = a_lightCandidates;
-		in.tablesOldestContentEpochs = a_oldestTables;
-		// What the shadow journals keep changes back to.
-		in.materialRowsOldestContentEpoch = oldest(PayloadPart::ShadowRows);
-		in.inputsOldestContentEpoch = oldest(PayloadPart::Inputs);  // the scene list's region
-		auto payload = AcquireShadowPayload();
-		const auto shadowStart = std::chrono::steady_clock::now();
-		BuildShadowPayload(in, a_tables, a_lookups, *payload, a_out.streams, ShadowKeptState(), Policy::ReuseResidentRegion() ? &mainCache.region : nullptr);
-		pairStats.shadowMs += msSince(shadowStart);
-		// The publication holds the views; the payload, which the epochs may hold past it, does not.
-		payload->streams.reset();
-		if (PassCapture::ShadowWithholdingEnabled()) {
-			ZoneScopedN("CS.DCLF.BuildShadow.Exclusions");
-			const auto exclusionsStart = std::chrono::steady_clock::now();
-			// The sun's and the paraboloid lights' exclusions read the payload and each its own cache: two pool tasks.
-			const bool sun = in.modeUsed[kSunShadowMode], parabolic = in.modeUsed[kParabolicShadowMode];
-			const auto exclusion = [&](std::size_t a_which) {
-				if (a_which == 0 && sun)
-					payload->sunExclusion = BuildSunExclusion(in.sunCandidates, *payload, kSunShadowMode, a_tables, &sunExclusionCache);
-				else if (a_which == 1 && parabolic)
-					payload->parabolicExclusion = BuildSunExclusion(in.lightCandidates, *payload, kParabolicShadowMode, a_tables, &parabolicExclusionCache);
-			};
-			if (sun && parabolic && !Policy::SerialFanout()) {
-				SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildShadow.Exclusions", 2, 1, [&](std::size_t a_begin, std::size_t a_end) {
-					ZoneScopedN("CS.DCLF.BuildShadow.ExclusionsShards");
-					for (std::size_t x = a_begin; x < a_end; ++x)
-						exclusion(x);
-				});
-			} else {
-				exclusion(0);
-				exclusion(1);
-			}
-			pairStats.exclusionsMs += msSince(exclusionsStart);
-		}
-		a_out.shadow = std::move(payload);
 	}
 
 	namespace

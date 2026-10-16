@@ -51,7 +51,7 @@ namespace DCLF::Draws
 		bool claims = false;       // !IndirectDraws::Failed
 		std::uint32_t shadowRasterStates = 0;  // DrawPipelines::ShadowRasterStateCount
 		// BeforeShadowMaps: the shadow views' candidates (ShadowViews::Candidates, the last Rebuild's). The occlusion maps' layout
-		// as last captured (Impl::PredictedOcclusion: the enabled maps'), and the shadow views' placements (BuildShadowPlacements).
+		// as last captured (ShadowEngine::PredictedOcclusion: the enabled maps'), and the shadow views' placements (BuildShadowPlacements).
 		std::uint32_t shadowCandidates = 0;
 		std::vector<ShadowViewLayout> occlusionLayouts;
 		std::vector<ShadowViewLayout> shadowPlacements;

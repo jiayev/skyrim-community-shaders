@@ -229,14 +229,15 @@ namespace DCLF
 	std::uint32_t IndirectDraws::ShadowViewCapacity()
 	{
 		// None when DCLF draws no shadows: the engine draws every view.
-		if (failed || !impl->SetupShadow() || impl->shadowPlacements.empty())
+		auto& engine = *impl->shadowEngine;
+		if (failed || !engine.SetupShadow() || engine.shadowPlacements.empty())
 			return 0;
 		// Re-import shadow maps the engine replaced; a new import is built at the next build point.
 		if (auto* renderer = globals::game::renderer) {
 			using T = RE::RENDER_TARGETS_DEPTHSTENCIL;
 			for (const auto [index, target] : { std::pair{ 0u, T::kSHADOWMAPS_ESRAM }, std::pair{ 1u, T::kSHADOWMAPS }, std::pair{ 2u, T::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM } })
 				if (renderer->GetDepthStencilData().depthStencils[target].texture)
-					(void)impl->ImportShadowDepth(index, target);
+					(void)engine.ImportShadowDepth(index, target);
 		}
 		// None while the built graph lacks a new import, or the frame has no claims.
 		if (auto* host = RenderGraphRuntime::Get().Host(); !host || host->RebuildRequested() || Scene::FrameView::Get().SetWithdrawn())
@@ -247,7 +248,7 @@ namespace DCLF
 
 	void IndirectDraws::DecideShadowCoverage()
 	{
-		if (failed || !impl->shadow || impl->shadowPlacements.empty())
+		if (failed || !impl->shadowEngine->shadow || impl->shadowEngine->shadowPlacements.empty())
 			return;
 		auto& views = ShadowViews::Get();
 		const auto all = views.All();
@@ -263,7 +264,7 @@ namespace DCLF
 
 	void IndirectDraws::BeginShadowFrame()
 	{
-		impl->pendingViews.clear();
+		impl->shadowEngine->pendingViews.clear();
 	}
 
 	void IndirectDraws::CaptureShadowView(std::uint32_t a_viewId, std::uint32_t a_renderMode)
@@ -273,6 +274,7 @@ namespace DCLF
 			return;
 		ScopedPerfEvent event("CS DCLF: shadow view capture");
 		const auto start = std::chrono::steady_clock::now();
+		auto& engine = *impl->shadowEngine;
 		++shadowStats.views;
 		auto& pipelines = DrawPipelines::Get();
 		auto* utility = globals::game::utilityShader;
@@ -280,9 +282,9 @@ namespace DCLF
 			++shadowStats.notReady;
 			++shadowStats.notReadyReasons[static_cast<std::size_t>(a_reason)];
 			if (a_renderMode >= PassCapture::kFirstShadowMode)
-				impl->ShadowsNotDrawn(shadowStats);
+				engine.ShadowsNotDrawn(shadowStats);
 		};
-		if (!pipelines.Enabled() || !utility || !impl->SetupShadow())
+		if (!pipelines.Enabled() || !utility || !engine.SetupShadow())
 			return notReady(ShadowNotReady::Setup);
 		// The tables are not read while the engine draws the shadow maps: ExecuteShadowFrame checks them.
 		const auto* shadowView = ShadowViews::Get().At(a_viewId);
@@ -308,10 +310,10 @@ namespace DCLF
 		                                                                                                                     ~0u;
 		// The volumetric copy holds only volumetric-only casters (batch group 15, all the engine's flag-0x100 draw renders): casterClass 1.
 		const bool volumetricCopy = target == RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM;
-		if (targetIndex == ~0u || !impl->ImportShadowDepth(targetIndex, target)) {
+		if (targetIndex == ~0u || !engine.ImportShadowDepth(targetIndex, target)) {
 			// Logged once per target: a view the design has not met.
-			if (target < 32 && !((impl->shadowLoggedTargets >> target) & 1)) {
-				impl->shadowLoggedTargets |= 1u << target;
+			if (target < 32 && !((engine.shadowLoggedTargets >> target) & 1)) {
+				engine.shadowLoggedTargets |= 1u << target;
 				logger::info("[DCLF] shadow view {} ({}, light {} descriptor {}, mode {:#x}) draws into depth target {} slice {}; it stays native",
 					a_viewId, ShadowViews::KindName(shadowView->kind), shadowView->lightIndex, shadowView->descriptor, a_renderMode, target, slice);
 			}
@@ -330,7 +332,7 @@ namespace DCLF
 		if (rasterState == 0)
 			return notReady(ShadowNotReady::Pipelines);
 
-		auto& view = impl->pendingViews.emplace_back();
+		auto& view = engine.pendingViews.emplace_back();
 		view.viewId = a_viewId;
 		view.renderMode = a_renderMode;
 		view.modeIndex = a_renderMode - PassCapture::kFirstShadowMode;
@@ -357,22 +359,22 @@ namespace DCLF
 			}
 		// The placement slot: foreseen by setup, under its state, the frame's only view there; else a defect (a hole).
 		{
-			const std::size_t placement = impl->PlacementOf(view);
+			const std::size_t placement = engine.PlacementOf(view);
 			std::string defect;
 			if (placement == SIZE_MAX)
 				defect = "at no placement";
-			else if (const auto& p = impl->shadowPlacements[placement]; p.rasterState != rasterState || p.modeIndex != view.modeIndex)
+			else if (const auto& p = engine.shadowPlacements[placement]; p.rasterState != rasterState || p.modeIndex != view.modeIndex)
 				defect = fmt::format("at placement {} (mode {}, state {}) with mode {}, state {}", placement, p.modeIndex, p.rasterState, view.modeIndex, rasterState);
-			else if (std::any_of(impl->pendingViews.begin(), impl->pendingViews.end() - 1, [&](const PendingView& a_other) { return a_other.slot == p.slot; }))
+			else if (std::any_of(engine.pendingViews.begin(), engine.pendingViews.end() - 1, [&](const PendingView& a_other) { return a_other.slot == p.slot; }))
 				defect = fmt::format("at placement {}, which a view of the frame already drew at", placement);
 			if (!defect.empty()) {
-				if (impl->placementDefectsLogged++ < 16)
+				if (engine.placementDefectsLogged++ < 16)
 					logger::warn("[DCLF] shadow view {} ({}, mode {:#x}) drew into target {} slice {} at ({} {}) {}x{} {} <- PLACEMENT", a_viewId,
 						ShadowViews::KindName(shadowView->kind), a_renderMode, targetIndex, slice, view.x, view.y, view.width, view.height, defect);
-				impl->pendingViews.pop_back();
+				engine.pendingViews.pop_back();
 				return notReady(ShadowNotReady::Placement);
 			}
-			view.slot = impl->shadowPlacements[placement].slot;
+			view.slot = engine.shadowPlacements[placement].slot;
 		}
 		CaptureCasterVolume(view, *shadowView);
 		// PerTechnique (b0): HighDetailRange (LOD landscape only; zero until owned) and ParabolaParam from the engine's two globals as
@@ -407,21 +409,22 @@ namespace DCLF
 		// (Skylighting swaps its own texture in for the sky map), slice 0; back-face culling, solid fill, no bias or scissor (the
 		// Utility shader's state but for two-sided keys). Computed every frame the map renders, drawn or not: next frame's build
 		// prepares pipelines for its state and format.
-		if (a_view >= kOcclusionViews || !ActiveToggles().shadows || failed || !Extensions::OcclusionOn(ActiveToggles(), a_view) || !impl->SetupShadow())
+		auto& engine = *impl->shadowEngine;
+		if (a_view >= kOcclusionViews || !ActiveToggles().shadows || failed || !Extensions::OcclusionOn(ActiveToggles(), a_view) || !engine.SetupShadow())
 			return;
 		constexpr auto target = static_cast<std::uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP);
 		const std::uint32_t rasterState = EngineRasterStateId(0, 1, 0, 0, kOcclusionRenderMode);
-		if (!rasterState || !impl->ImportShadowDepth(OcclusionDepthTarget(a_view), target))
+		if (!rasterState || !engine.ImportShadowDepth(OcclusionDepthTarget(a_view), target))
 			return;
-		auto& occlusion = impl->occlusion[a_view];
+		auto& occlusion = engine.occlusion[a_view];
 		const std::uint32_t mode = OcclusionModeOf(a_view);
-		if (!impl->readyModes[mode]) {
-			impl->readyModes[mode] = true;
-			impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("occlusion map {} set up before its setup", a_view));
+		if (!engine.readyModes[mode]) {
+			engine.readyModes[mode] = true;
+			engine.NoteCapability(engine.shadowCatalogBuilt, fmt::format("occlusion map {} set up before its setup", a_view));
 		}
-		if (const auto& states = impl->readyStates[mode].Of(false); !std::binary_search(states.begin(), states.end(), rasterState)) {
-			impl->readyStates[mode].Add(rasterState, false);
-			impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("occlusion map {} draws with rasterizer state {}, not in the catalog", a_view, rasterState));
+		if (const auto& states = engine.readyStates[mode].Of(false); !std::binary_search(states.begin(), states.end(), rasterState)) {
+			engine.readyStates[mode].Add(rasterState, false);
+			engine.NoteCapability(engine.shadowCatalogBuilt, fmt::format("occlusion map {} draws with rasterizer state {}, not in the catalog", a_view, rasterState));
 		}
 		const auto& depth = globals::game::renderer->GetDepthStencilData().depthStencils[target];
 		if (!depth.texture || !depth.views[0])
@@ -455,7 +458,7 @@ namespace DCLF
 		view.hasViewProj = true;
 		occlusion.rasterState = rasterState;
 		if (view.dsvFormat != occlusion.dsvFormat) {
-			impl->NoteCapability(impl->shadowCatalogBuilt && occlusion.dsvFormat != DXGI_FORMAT_UNKNOWN,
+			engine.NoteCapability(engine.shadowCatalogBuilt && occlusion.dsvFormat != DXGI_FORMAT_UNKNOWN,
 				fmt::format("occlusion map {} draws into format {}, not {}", a_view, static_cast<int>(view.dsvFormat), static_cast<int>(occlusion.dsvFormat)));
 			occlusion.dsvFormat = view.dsvFormat;
 		}
@@ -470,7 +473,7 @@ namespace DCLF
 		Diagnostics::Notify(Diagnostics::OcclusionCaptured{ a_view });
 	}
 
-	std::vector<ShadowViewLayout> IndirectDraws::Impl::PredictedOcclusion() const
+	std::vector<ShadowViewLayout> ShadowEngine::PredictedOcclusion() const
 	{
 		std::vector<ShadowViewLayout> out;
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {

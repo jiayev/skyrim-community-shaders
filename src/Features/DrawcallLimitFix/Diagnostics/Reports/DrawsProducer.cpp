@@ -203,7 +203,7 @@ namespace DCLF
 			store->updates = store->rewritten = store->resyncs = store->collisions = 0;
 			parity.Reset();
 		}
-		if (auto& k = shadowKept; k.builds) {
+		if (auto& k = shadowEngine->shadowKept; k.builds) {
 			// The objects it holds (their words are the scene list's entries'; its own region only under CS_DCLF_BUILD_PARITY).
 			const std::size_t entries = static_cast<std::size_t>(std::count_if(k.heldModes.begin(), k.heldModes.end(), [](std::uint8_t a_modes) { return a_modes != 0; }));
 			text += fmt::format(
@@ -235,7 +235,8 @@ namespace DCLF
 			store->updates = store->rewritten = store->resyncs = 0;
 			kept.geometry.Reset();
 		}
-		for (auto* cache : { &sunExclusionCache, &parabolicExclusionCache }) {
+		auto& sunExclusionCache = shadowEngine->sunExclusionCache;
+		for (auto* cache : { &sunExclusionCache, &shadowEngine->parabolicExclusionCache }) {
 			if (auto& c = *cache; c.builds) {
 				auto& parity = cache == &sunExclusionCache ? kept.sunExclusion : kept.parabolicExclusion;
 				text += fmt::format("[DCLF] {} exclusion: {} builds: {} the same exclusion again (nothing moved), {} updated by what moved ({} for newer candidates), {} judged whole; "

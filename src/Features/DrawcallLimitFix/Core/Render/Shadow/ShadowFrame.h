@@ -10,7 +10,7 @@ namespace DCLF::Draws
 	{
 		std::uint32_t viewId = 0, renderMode = 0, modeIndex = 0, targetIndex = 0, slice = 0;
 		std::uint32_t x = 0, y = 0, width = 0, height = 0;
-		std::uint32_t slot = 0;  // its placement's (Impl::shadowPlacements)
+		std::uint32_t slot = 0;  // its placement's (ShadowEngine::shadowPlacements)
 		float minDepth = 0.0f, maxDepth = 1.0f;
 		RE::NiPoint3 eye;
 		bool hasViewProj = false;
