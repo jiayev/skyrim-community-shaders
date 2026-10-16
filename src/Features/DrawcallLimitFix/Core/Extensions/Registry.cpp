@@ -1170,7 +1170,8 @@ namespace DCLF::Extensions
 
 			void RegisterShadowEpochs(const Api::ShadowEpochsContribution& a_epochs) override
 			{
-				if (!a_epochs.beforeShadowMaps || !a_epochs.afterShadowMaps || !a_epochs.occlusionReady || !a_epochs.drawOcclusion)
+				if (!a_epochs.beforeShadowCasters || !a_epochs.beforeShadowMaps || !a_epochs.afterShadowMaps || !a_epochs.occlusionReady ||
+					!a_epochs.drawOcclusion)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete shadow epochs", feature));
 				// FrameDriver's shadow and occlusion points call one shadow engine's epochs.
 				if (lists.shadowEpochs.afterShadowMaps)

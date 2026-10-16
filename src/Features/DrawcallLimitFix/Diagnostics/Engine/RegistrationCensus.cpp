@@ -550,7 +550,8 @@ namespace DCLF::RegistrationCensus
 			}
 			census.inFlight = false;
 		}
-		// The frame's shadow views (ShadowViews::Rebuild at BeforeShadowMaps; their lights live until the next update).
+		// The frame's shadow views (ShadowViews::Rebuild, when CalculateAndDrawShadowCasterLights returns; their lights live until the next
+		// update).
 		if (const auto& views = ShadowViews::Get(); views.Valid())
 			for (const auto& view : views.All()) {
 				const std::uint16_t id = view.focus                                          ? kFocus :

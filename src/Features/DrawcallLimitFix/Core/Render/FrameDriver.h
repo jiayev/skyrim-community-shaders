@@ -2,19 +2,22 @@
 
 // The frame's DCLF work at each engine point, render thread: the scene frame's start (the publication installed, its claims, the
 // coordinator's requests served, the frame values kicked), the shadow views, the depth commit, EarlyPrepass and Prepass, the occlusion
-// maps (the shadow views listed through Core's Shadow/ShadowPoints.h; the views' coverage, the shadow epoch, the maps' readiness and their
-// epoch through the shadow epochs' handlers there: Api/ShadowEpochs.h, Features/Shadows/Engine's), the main pass's points (their bookkeeping, and the main view's handlers there: Api/PrimaryView.h, Features/MainView's capture and
+// maps (the shadow views listed through Core's Shadow/ShadowPoints.h, from the engine's shadow-light selection, which Features/Shadows/Engine's
+// hooks reach; the views' coverage, the shadow epoch, the maps' readiness and their epoch through the shadow epochs' handlers there:
+// Api/ShadowEpochs.h, Features/Shadows/Engine's), the main pass's points (their bookkeeping, and the main view's handlers there: Api/PrimaryView.h, Features/MainView's capture and
 // colour epoch), the views' work at their points (Api::ViewPoint), and Present's end of frame. The feature file's hooks call it; it reads the scene through
 // Scene::FrameView and drives IndirectDraws.
 
 #include "Features/DrawcallLimitFix/Api/Views.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 
 namespace RE
 {
 	class BSRenderPass;
+	class BSShadowLight;
 }
 
 namespace DCLF
@@ -32,7 +35,7 @@ namespace DCLF
 				double eventsMs = 0.0;  // Present's, and the frame start's requests and captures (ServeFrameRequests)
 				double buildMs = 0.0;   // EarlyPrepass's posts and material serving
 				double buildMaxMs = 0.0;
-				double sceneMs = 0.0;  // BeforeShadowMaps' views (the scene passes are the coordinator's, timed by its pump)
+				double sceneMs = 0.0;  // the shadow views' points, a frame's counted at BeforeShadowMaps (the scene passes are the coordinator's, timed by its pump)
 				double sceneMaxMs = 0.0;
 				std::uint32_t frames = 0;
 			} timing;
@@ -60,6 +63,15 @@ namespace DCLF
 		bool BeginFrame(bool a_running, bool a_installed);
 		/** @brief Present (in menus too, once installed): the frame's ends, its report, a load screen noted, the engine references released. */
 		void EndFrame(bool a_running);
+		/**
+		 * @brief The engine's shadow-light selection (NiCamera::CalculateAndDrawShadowCasterLights, Features/Shadows/Engine's hooks), while
+		 * DCLF runs: before it keeps its first light, the frame's shadow views begun and their coverage decided (the epochs'
+		 * beforeShadowCasters); as it keeps each light, before its Accumulate, the light's views; once it returns, the views listed from
+		 * DCLF's selection. Every shadow view's registration is thus withheld by this frame's coverage.
+		 */
+		void BeforeShadowCasters();
+		void ShadowCasterKept(const RE::BSShadowLight* a_light, std::uint32_t a_firstSlot, std::uint32_t a_slots);
+		void ShadowCastersSelected();
 		void BeforeShadowMaps();
 		void AfterShadowMaps();
 		/**
@@ -83,7 +95,11 @@ namespace DCLF
 		/** @brief Every view's work at a_point (Extensions::ViewEntry::work), the views in slot order. */
 		void RunViewWork(Api::ViewPoint a_point);
 
+		/** @brief The shadow views' time this frame so far (from BeforeShadowCasters), counted whole at BeforeShadowMaps. */
+		void AddShadowViewsTime(std::chrono::steady_clock::time_point a_start);
+
 		Counters counters;
+		double shadowViewsMs = 0.0;       // the shadow views' points this frame, until BeforeShadowMaps counts them
 		OcclusionFrames occlusionFrames;  // native and engine only: the rest is read at the take
 		std::uint32_t toggleGeneration = 0;
 		bool frameRan = false;            // a scene frame ran since the last Present

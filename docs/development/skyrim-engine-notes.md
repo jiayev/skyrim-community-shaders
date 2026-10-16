@@ -986,6 +986,44 @@ draws. It is accumulated by `BSShadowDirectionalLight::sub` (`0x1414f0480`, call
 `CalculateAndDrawShadowCasterLights` when the setting byte `0x142032fd0` is set and `DAT_14332a498`
 counts focus descriptors). It is drawn by `Render`'s third loop (gated on `unk558`, view type 4).
 
+### The shadow lights' selection: where each light's views are decided (AE 1.6.1170, Ghidra, 2026-10-16)
+
+Read for DCLF's round 3, phase 3: where the shadow views' coverage and the renderer map PassCapture withholds by must be decided so that
+every registration into a view tests this frame's. **There is no single point after the selection and before the first registration:**
+the engine selects and accumulates each light in turn, so the decision is made light by light.
+
+-   **`Main::Draw`** (`0x1406444b0`) calls `NiCamera::CalculateAndDrawShadowCasterLights` (`0x1414cbb90`) unconditionally at
+    `0x140644674` (`E8`, `Main::Draw +0x1C4`), after the scene lists are built and before `Main::unk_FPCulling` and `FUN_1414cbff0`
+    (CS's `Main_RenderShadowMaps` thunk, `+0x30A`). Nothing between its return and `FUN_1414cbff0` touches the shadow lights.
+-   **`CalculateAndDrawShadowCasterLights`**, in order:
+    1.  `FUN_1414a4030` clears `shadowLightsAccum` (`ShadowSceneNode +0x230`, every slot's light `+0x520` = `0xFF`); the slot count
+        (`0x14338c904`) and the light mask (`0x14338c90c`) are zeroed.
+    2.  **The sun, when `DAT_14338c911` (the sun off) is clear:** its `drawFocusShadows` (`+0x558`) set to the focus setting, its
+        `UpdateCamera` (vfunc 0x10), the focus camera (`BSShadowDirectionalLight::sub`, `0x1414f0480`), then
+        **`FUN_1414a3fb0(node, sun, slot, shadowMapCount)` at `0x1414cbc66`**, which writes the light into its slots, then the
+        full-frustum cull (`FUN_141511f30`, `0x1414cbcb6`). With the sun off, its `ReturnShadowmaps` (vfunc 0xC) instead.
+    3.  `FUN_1414a0840` (`0x1414cbcea`), the main camera's list accumulation jobs queued, `JobList::Begin`.
+    4.  **`CalculateActiveShadowCasterLights`** (`0x1414cc570`, called at `0x1414cbf41`), then `JobList::Finish`.
+-   **`CalculateActiveShadowCasterLights`:** the sun's **`Accumulate` (vfunc 9) first** (`0x1414cc5e5`, sun on), then each of
+    `activeShadowLights` (up to 4 kept) in turn: `UpdateCamera` (vfunc 0x10, which sets the light's camera and, for a spot light, creates its
+    accumulator on first use) and the room test; for a kept light the focus host (`drawFocusShadows`), its portal walk (`FUN_1414a2530`),
+    **`FUN_1414a3fb0(node, light, slot, 1)` at `0x1414cc7e1`**, the scissor, then its **`Accumulate`** (`0x1414cc9ce`). A light not kept
+    gets its portal entry's visibility cleared and `ReturnShadowmaps`, which hands its slices back to the free mask (`0x142035798`).
+-   **`Accumulate` registers synchronously:** `BSShadowDirectionalLight::Accumulate` (`0x141511c80`), `BSShadowFrustumLight::Accumulate`
+    (`0x14151aa60`) and `BSShadowParabolicLight::Accumulate` (`0x14151b960`) set the accumulator's light index and bit (`+0x160`, `+0x164`)
+    and cull each descriptor (`FUN_1414f0920`, which increments the slot count), registering as they go. Nothing registers into a shadow
+    view before its light's `Accumulate`.
+-   **So** a light's views (its descriptors' accumulators and batch renderers, its focus views) are known at its `FUN_1414a3fb0` call and
+    not before (a spot light's accumulator may not exist until that frame's `UpdateCamera`); the frame-wide coverage (the revision's
+    recording, the installed payload, the capacity) is known before `CalculateAndDrawShadowCasterLights`; and DCLF's own selection
+    (`Features/LocalLights`' detour of `CalculateActiveShadowCasterLights`, which ports it after the engine's runs) is complete when
+    `CalculateAndDrawShadowCasterLights` returns. The free mask, the descriptors' targets and slices and `0x142033498` are not written
+    between that return and `Render` (writers of `0x142035798`: `ReturnShadowmaps`, `FUN_1414f01d0` from `SetShadowMapCount` and the
+    destructor, and `RenderShadowmap`).
+-   **DCLF** (`Features/Shadows/Engine/ShadowCasterPoints.cpp`): Main::Draw's call is hooked to begin the frame's views and decide their
+    coverage before it and to list them from DCLF's selection after it; both `FUN_1414a3fb0` calls are hooked to cover the kept light's
+    views and publish their renderers before its `Accumulate`. `FUN_1414a3fb0` has one other caller, `FUN_140973210`, not hooked.
+
 ## The sun's accumulation: what it writes, and who reads it
 
 `NiCamera::CalculateAndDrawShadowCasterLights` (`0x1414cbb90`), for the sun, in order:
@@ -1522,13 +1560,54 @@ their portal's room. With no graph, the lists clear the map instead.
 -   **`ShadowSceneNode` children** (set in the world's init, `FUN_140643060`, `SetAt` vfunc `0x1E0`): 0-3 there, 5 the
     `BSParticleSystemManager` (`0x140643b23`), 6 the grass root (`GrassManager::ctor`, `0x1402010c0`, `kAlwaysDraw`).
     The lists take children 0 and 1 and child 2's first four children (the extra list) and child 3 (the object
-    root). So **particles and grass are not in the lists**; their main-camera cull was not found (*unverified*).
+    root). **Grass is in the lists:** children 6 and 7 go into the extra list (`0x14338c888`, at `0x14064c51c` and
+    `0x14064c54e`). **Child 5 (the particle manager) is skipped:** the master particle systems' main cull is the portal
+    graph's always-render list (below).
 -   **Water** is in the lists (cell category 6, and the water system's node in list 0 for interiors). Its reflections
     use the water system's own processes (`FUN_140644f60`, `0x14338c648`).
 -   **First person** has its own cull (`Main::unk_FPCulling`, `0x140645d30`: process `0x14338c640`, accumulator
     `0x14338c820`, the first-person root unhidden around it).
 -   **`BSFadeNodeCuller::Process1`** and **`HighActorCuller`** are separate cullers and keep running.
 -   **Not written by any cull:** `kRenderUse`, `kNotVisible`, face morphing, the skin palette.
+
+### The master particle systems (AE 1.6.1170, Ghidra, round 3 phase 5)
+
+-   **Ownership: one `BSMasterParticleSystem` per addon node type** (`MPSTorchFire01.nif`, `MPSCandleFlame01.nif`, ...), shared by
+    every emitter of that type, not pooled. A reference's addon node is a `BSValueNode` (value `+0x12C`, the `BGSAddonNode`).
+    `FUN_1402df8a0` / `BSValueNode::sub` (`0x140256700`), for an addon with the master flag (`+0x7A` bit 0), clears the node's
+    `kHidden` and registers it with `BSParticleSystemManager::sub` (`0x140e2a2f0`) at the master index (`addon +0x68`): appended to
+    the master's **emitter list** (`master +0x128`, count `+0x138`, a reference taken; `FUN_140e36150`) when it is loaded, otherwise
+    queued on the manager's pending loads (`+0x128`; `FUN_140256390` requests the model, `FUN_140e2aa30` queues it with the cap
+    `addon +0x78` and "always loaded" `addon +0x7A` bit 1). The value node holds the master at `+0x130`.
+-   **Creation.** `Job_Post_reset` (`0x1406d3750`, the post-render stage's last job) runs `FUN_1402c74e0` → `FUN_140e2a6c0` (spin
+    `0x143284b98`): each finished load's model root, **uncloned** (the NIF's `BSMasterParticleSystem`), its markers hidden
+    (`FUN_140e2b000`), `+0x166` removable, `+0x158` index, `+0x164` cap, attached by the manager's `AttachChild` (vfunc `0x1A8`), the
+    queued value nodes added as emitters.
+-   **The manager** (`0x143284b88`) is `ShadowSceneNode` child 5 (`SetAt` at `0x140643b4d`, `kAlwaysDraw` at `0x140643aff`).
+    `BSParticleSystemManager::AttachChild` (`0x140e29f90`, write lock `0x143284b90`) takes only a master with an index, grows the
+    array and stores it at `children[index]` with the plain array set (`FUN_140d1ee40`); **it never sets `parent`**. The master lists
+    its particle systems at `+0x140` (count `+0x150`).
+-   **Cull.** `FUN_1402b7620` adds child 5 to a cell's portal graph's **`alwaysRenderChildren`** (`BSPortalGraph +0x58`, count `+0x68`;
+    `FUN_140e152b0` at `0x1402b76bb`), from a cell's attach (`FUN_1402b7280`, interiors) and the sky cell's graph (`FUN_14019d210`,
+    exteriors). List job 0 (`FirstListAccumulationJob`, `0x1414cc260`) culls that list (`0x1414cc308`, `FUN_1414bf320`) when the
+    entry's `visibleUnboundSpace` (`+0x131`) is set, before the extra list: `NiNode::OnVisible` on the manager, each master (a bound
+    test), its emitter nodes and particle systems. With `visibleUnboundSpace` clear (an interior room) the route is not traced
+    (`ShadowSceneNode::OnVisible` culls children 4+ on its portal path, `0x1414a03b0`).
+-   **Registration.** `DoSceneListAccumRegisterJob` (`0x1414bf7a0`) into the main accumulator (`0x14338c830`) only; a particle
+    system's pass hint is 1, so `FUN_1414b2330` inserts it at `0x1414b2478` (the hint-1 list insertion `FUN_1414f50b0`). Not in main
+    depth or any shadow view.
+-   **Update.** `Job_Particles` (`0x1406d31a0`, the "render 1st person" stage, job list 10), under the manager's read lock, queues
+    one `UpdateParticleSystemManagerJob` (`0x1402c7470`) per slot below `freeIdx` (`+0x122`): `FUN_140e2a520` → the master's
+    `UpdateDownwardPass` (`0x140e35f40`): emitters pruned (`FUN_140e36630`: a value node only the master holds, or hidden; `+0x160`
+    active = min(count, `+0x162`)); with none and no live particle it returns; else its clock (`+0x15C`) and each child's
+    `NiParticleSystem::UpdateDownwardPass`. The particle data is rewritten every frame on workers, whatever the cull
+    (`kAccumulated` is not read).
+-   **Removal.** `FUN_140e2a520` drops a master that is removable, has **refcount < 3** (the array and the model's handle, no emitter)
+    and no live particle (`0x140e2b430` == 0), with the plain array set at **`0x140e2a589`** (`FUN_140d1ee40(children, index, null)`),
+    on the job thread: no vfunc, so no DetachChild override sees it. The world reset clears the whole array (`FUN_140648cd0` →
+    `FUN_140d1d630(manager)` at `0x140649254`); `FUN_140e2a470` (cell changes) only resets the particles.
+-   **Order.** Both stages finish inside the frame cycle (`FUN_1405fc210` at `0x14064694d` waits for all stages), so neither runs
+    at the next frame's `BeginFrame` (`0x140644583`). *Unverified:* that the post-render stage cannot overlap Present.
 
 ### What DCLF must produce before the culls stop
 

@@ -236,16 +236,49 @@ namespace DCLF
 		counters.timing.eventsMs += MillisecondsSince(start);
 	}
 
+	void FrameDriver::AddShadowViewsTime(std::chrono::steady_clock::time_point a_start)
+	{
+		shadowViewsMs += MillisecondsSince(a_start);
+	}
+
+	void FrameDriver::BeforeShadowCasters()
+	{
+		const auto start = std::chrono::steady_clock::now();
+		shadowViewsMs = 0.0;
+		// The frame's shadow views begun (Core's), then their coverage decided (the shadow epochs': Features/Shadows/Engine), before the
+		// engine keeps its first light: its registrations, the sun's claims and the census test this frame's coverage.
+		Draws::BeginShadowViews();
+		if (const auto* epochs = Extensions::ShadowEpochs())
+			epochs->beforeShadowCasters();
+		AddShadowViewsTime(start);
+	}
+
+	void FrameDriver::ShadowCasterKept(const RE::BSShadowLight* a_light, std::uint32_t a_firstSlot, std::uint32_t a_slots)
+	{
+		const auto start = std::chrono::steady_clock::now();
+		Draws::ShadowLightKept(a_light, a_firstSlot, a_slots);
+		AddShadowViewsTime(start);
+	}
+
+	void FrameDriver::ShadowCastersSelected()
+	{
+		const auto start = std::chrono::steady_clock::now();
+		// The frame's shadow views listed from DCLF's selection (Core's), in the order the engine renders them at the shadow draw.
+		Draws::ListShadowViews();
+		AddShadowViewsTime(start);
+	}
+
 	void FrameDriver::BeforeShadowMaps()
 	{
 		ScopedPerfEvent event("CS DCLF: shadow views");
 		const auto start = std::chrono::steady_clock::now();
 		Diagnostics::Notify<Diagnostics::FramePoint::ShadowViewsBegin>();
-		// The frame's shadow views listed (Core's), then decided and begun (the shadow epochs': Features/Shadows/Engine).
-		Draws::ListShadowViews();
+		// The revision inputs the listed views move (Core's), then the shadow frame begun (the shadow epochs': Features/Shadows/Engine).
+		Draws::NoteShadowRevisionInputs();
 		if (const auto* epochs = Extensions::ShadowEpochs())
 			epochs->beforeShadowMaps();
-		const double ms = MillisecondsSince(start);
+		// The frame's shadow views' points, whole (BeforeShadowCasters on).
+		const double ms = std::exchange(shadowViewsMs, 0.0) + MillisecondsSince(start);
 		counters.timing.sceneMs += ms;
 		counters.timing.sceneMaxMs = std::max(counters.timing.sceneMaxMs, ms);
 	}
