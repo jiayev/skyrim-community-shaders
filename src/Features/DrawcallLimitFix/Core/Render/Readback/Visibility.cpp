@@ -5,7 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/EntrySpaceTable.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/EntrySpaceTable.h"
 
 namespace DCLF
 {

@@ -5,7 +5,7 @@
 // its members draw under in the scene's tables (the fade roots: a journaled table family, written by its coordinator component:
 // FadeRoots), steps their OnVisible on the GPU (FadeStateCS.hlsl: a stage at the depth segment's cull state, its scene resources, seeds
 // pool and depth commit hook), writes the stood-in roots' milestones back onto the nodes and records the engine's own fade writers (the
-// fade writers' hooks and channels). Core keeps the root-state vocabulary (the rows and bits in Scene/Model/Records.h) and reads the roots
+// fade writers' hooks and channels). Core keeps the root-state vocabulary (the rows and bits in Core/Scene/Model/Records.h) and reads the roots
 // as data. Listed last in Features/FeatureList.cpp: every shared point keeps its order.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"

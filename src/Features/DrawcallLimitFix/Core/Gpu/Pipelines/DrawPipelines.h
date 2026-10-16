@@ -18,8 +18,8 @@
 #include <utility>
 #include <vector>
 
-#include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Core/Shading/ConstantEvaluator.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Api/Views.h"
 

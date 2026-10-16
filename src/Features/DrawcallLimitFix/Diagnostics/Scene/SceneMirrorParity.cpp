@@ -11,7 +11,7 @@
 
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
 
 #include <fmt/ranges.h>
 

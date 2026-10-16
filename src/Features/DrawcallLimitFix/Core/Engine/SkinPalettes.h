@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 
 namespace DCLF::SkinPalettes
 {

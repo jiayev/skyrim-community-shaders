@@ -1,8 +1,8 @@
 // Advanced Skin's wetness parities (see the header). Render thread.
 
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
 #include "Features/Skin.h"
 

@@ -3,7 +3,7 @@
 // appended after the colour draws, and the report of each frame's results.
 
 #include "DrawsState.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Events.h"
 #include "Observers.h"
 

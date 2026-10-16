@@ -4,7 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/AdvancedSkin.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/MaterialHookFrame.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialHookFrame.h"
 
 #include <algorithm>
 #include <cstddef>

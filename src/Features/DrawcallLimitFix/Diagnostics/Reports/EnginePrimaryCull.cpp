@@ -7,8 +7,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/PrimaryCullView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 #include <ranges>
 

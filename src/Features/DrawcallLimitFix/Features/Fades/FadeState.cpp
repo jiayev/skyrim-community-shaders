@@ -4,8 +4,8 @@
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
 #include <cmath>
 #include <cstring>

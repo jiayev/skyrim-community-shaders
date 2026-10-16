@@ -14,7 +14,7 @@
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 
 #include <array>
 #include <cstddef>

@@ -11,9 +11,9 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 
 #include <array>
 #include <atomic>

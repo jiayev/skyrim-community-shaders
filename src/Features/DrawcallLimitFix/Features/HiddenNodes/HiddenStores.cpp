@@ -3,7 +3,7 @@
 // veto (Api::ShowVeto, through Core's cells). Installed on the render thread, at the feature's early hooks.
 
 #include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include <xbyak/xbyak.h>

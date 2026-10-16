@@ -3,7 +3,7 @@
 // The registration census's question to the coordinator and its answer: Diagnostics/Engine/RegistrationCensus asks on the render
 // thread, SceneCensus.cpp answers in the next scene pass.
 
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 
 #include <cstdint>
 #include <memory>

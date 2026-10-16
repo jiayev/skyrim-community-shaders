@@ -25,7 +25,7 @@ namespace DCLF::Extensions
 	 * variable). Of the two shadow builds, the kept one rewrites a material row on events, so it needs every move (its rows read the
 	 * transform on the CPU in every configuration); the plain one rereads every row each build (ShadowTexcoord) and drains nothing. The
 	 * records do not use this channel (they follow the writes' captures, or the frame VS variable's patch: FrameVSVariablePatched).
-	 * Defined with the hooks (Engine/Capture/MaterialWrites.cpp).
+	 * Defined with the hooks (Core/Shading/MaterialWrites.cpp).
 	 */
 	void DrainTransformMoves(std::vector<const RE::BSShaderMaterial*>& a_out);
 }

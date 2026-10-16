@@ -7,8 +7,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
 // The engine area's report lines (Engine.h), but the primary cull's (EnginePrimaryCull.cpp).
 

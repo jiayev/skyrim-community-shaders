@@ -12,7 +12,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 namespace DCLF::Features::Fades
 {

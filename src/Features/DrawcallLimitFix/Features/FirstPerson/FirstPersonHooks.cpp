@@ -7,7 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
 namespace DCLF::Features::FirstPerson
 {

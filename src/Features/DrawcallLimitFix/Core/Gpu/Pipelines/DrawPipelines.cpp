@@ -21,11 +21,11 @@
 
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/SpirvReflection.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/VertexInput.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Lookups.h"
+#include "Features/DrawcallLimitFix/Core/Shading/VertexInput.h"
 #include "ShaderCache.h"
 
 #include <Tracy/Tracy.hpp>

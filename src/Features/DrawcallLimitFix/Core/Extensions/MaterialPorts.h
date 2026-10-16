@@ -178,7 +178,7 @@ namespace DCLF::Extensions
 	};
 	using MaterialPortEntries = std::array<MaterialPortEntry, kMaterialKinds>;
 
-	/** @brief Core's Lighting as kind 0's entry: its constant space and rules, no callbacks (Scene/Ports/ConstantEvaluator.cpp). */
+	/** @brief Core's Lighting as kind 0's entry: its constant space and rules, no callbacks (Core/Shading/ConstantEvaluator.cpp). */
 	const Api::MaterialPortContribution& CoreLightingPort();
 	/** @brief Main thread, the end of InstallFeatures: the entries from the registrations by kind (a_byKind[0] Lighting's), a_count of them. */
 	void ResolveMaterialPorts(std::span<const Api::MaterialPortContribution> a_byKind, std::size_t a_count);

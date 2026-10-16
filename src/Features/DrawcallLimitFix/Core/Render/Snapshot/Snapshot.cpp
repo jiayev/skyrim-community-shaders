@@ -4,8 +4,8 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF

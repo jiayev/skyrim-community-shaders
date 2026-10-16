@@ -3,7 +3,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 
 namespace DCLF::Extensions
 {

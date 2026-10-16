@@ -10,10 +10,10 @@
 
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
 #include <bit>
 

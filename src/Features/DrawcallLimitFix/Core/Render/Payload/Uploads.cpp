@@ -8,7 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Draws.h"
 

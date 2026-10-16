@@ -4,7 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
 
 namespace DCLF::Features::Fades
 {

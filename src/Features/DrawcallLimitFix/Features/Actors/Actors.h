@@ -21,7 +21,7 @@
 //   particles, the skin partitions and their LOD in the tables and the walk, kObjectPaletteBlock and the vertex stages' bones;
 // - an owner class's entry's classification: Tracked::owner, the per-frame owner class trait and its verdict recheck (Coordinator::
 //   FrameVerdictKept), SceneTables::classMembers, the mirror's actor bit (NodeRecord::actor);
-// - the animation path's move writer (Engine/Capture/SceneEvents: FUN_14066afa0, every reference's animation) and the fadeAmount channel;
+// - the animation path's move writer (Core/Engine/Capture/SceneEvents: FUN_14066afa0, every reference's animation) and the fadeAmount channel;
 // - Advanced Skin's coupling is Integrations/AdvancedSkin's (its wetness: a shading field of the published actor-owned class; FrameValues'
 //   fan-out into the shading rows' SkinPerGeometry); its material textures (t71/t74) are its After material contributor (SkinTextures.cpp).
 // Included by the feature's sources only.

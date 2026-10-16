@@ -11,7 +11,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawFamilyLaneSlots.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
 namespace DCLF
 {

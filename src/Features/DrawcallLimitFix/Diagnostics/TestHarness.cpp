@@ -3,7 +3,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "TestHarness.h"
 
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Globals.h"
 #include "State.h"

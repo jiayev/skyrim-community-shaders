@@ -2,12 +2,12 @@
 
 // The fade roots: the fade-root table as a journaled table family (FadeRootTables, its columns) and the coordinator component that lists
 // and steps its rows (FadeRoots.cpp: RegisterScene, which holds their ids; the channels' are FadesFeature.cpp's). The coordinator
-// counts an unmirrored root (NoteFadeRootUnmirrored: Scene/Coordinator/Coordinator.h, Residents.cpp) and reports the stood-in count
+// counts an unmirrored root (NoteFadeRootUnmirrored: Core/Scene/Coordinator/Coordinator.h, Residents.cpp) and reports the stood-in count
 // through it.
 
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
 #include <ankerl/unordered_dense.h>
 

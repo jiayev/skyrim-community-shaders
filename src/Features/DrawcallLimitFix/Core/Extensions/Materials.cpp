@@ -1,7 +1,7 @@
 // The material contributors' table, sample, capture and chain calls (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialPort.h"
 
 #include <algorithm>
 #include <cstring>

@@ -9,10 +9,10 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
 #include <atomic>
 #include <cmath>

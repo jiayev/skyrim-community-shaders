@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneView.h"

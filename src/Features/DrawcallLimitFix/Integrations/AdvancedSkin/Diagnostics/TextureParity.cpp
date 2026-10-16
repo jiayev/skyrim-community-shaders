@@ -3,7 +3,7 @@
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/TextureParity.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/AdvancedSkin.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 
 #include <array>
 

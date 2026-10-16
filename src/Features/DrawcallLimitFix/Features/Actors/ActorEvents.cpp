@@ -1,6 +1,6 @@
 // Actors' engine events (the feature's early hooks): Actor::SetAlpha's fadeAmount writes into the fade amounts channel (needed by name at
 // install: InstallContext::NeedEngineChannel), and the actors'
-// move writers Core's own complete (MoveEvents, Engine/Capture/SceneEvents.h), on reserved slots of the report's move writers' calls.
+// move writers Core's own complete (MoveEvents, Core/Engine/Capture/SceneEvents.h), on reserved slots of the report's move writers' calls.
 
 #include "Features/DrawcallLimitFix/Features/Actors/Actors.h"
 

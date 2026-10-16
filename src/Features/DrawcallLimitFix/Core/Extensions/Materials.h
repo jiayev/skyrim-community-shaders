@@ -26,7 +26,7 @@ namespace RE
 
 namespace DCLF
 {
-	// Core's record and the port's inputs (Scene/Ports: ConstantEvaluator.h, MaterialPort.h, the hook frame's header).
+	// Core's record and the port's inputs (Core/Shading: ConstantEvaluator.h, MaterialPort.h, the hook frame's header).
 	struct MaterialRecord;
 	namespace MaterialPort
 	{

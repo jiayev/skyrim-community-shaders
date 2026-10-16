@@ -8,7 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneObservers.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
 
 #include <ranges>
 #include <sstream>

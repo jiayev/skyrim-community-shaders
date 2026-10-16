@@ -20,7 +20,7 @@
 #include "ShaderCache.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
+#include "Features/DrawcallLimitFix/Core/Shading/ConstantEvaluator.h"
 
 #include <ORGModuleServices/ShaderCompiler.h>
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"

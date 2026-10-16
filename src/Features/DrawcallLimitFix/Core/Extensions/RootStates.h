@@ -6,7 +6,7 @@
 // its points (the join's root test, the membership witness, the frame's write-back task and its join).
 
 #include "Features/DrawcallLimitFix/Api/RootStates.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
 #include <ankerl/unordered_dense.h>
 

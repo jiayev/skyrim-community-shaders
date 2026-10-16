@@ -4,7 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 
 namespace DCLF
 {

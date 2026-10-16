@@ -4,7 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/PlacementRows/BillboardRow.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
 #include <cmath>
 

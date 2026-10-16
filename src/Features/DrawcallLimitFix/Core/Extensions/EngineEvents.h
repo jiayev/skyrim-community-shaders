@@ -92,7 +92,7 @@ namespace DCLF::Extensions
 	void NoteHiddenSourceSites(std::uint32_t a_sites);
 	std::uint32_t HiddenSourceSites();
 
-	// The features' engine hooks' pushes (Engine/Capture/SceneEvents.cpp), any thread, after InstallFeatures.
+	// The features' engine hooks' pushes (Core/Engine/Capture/SceneEvents.cpp), any thread, after InstallFeatures.
 	/**
 	 * @brief A SceneStack channel's event (Api::Stacked) onto the scene's event stack, after what this thread pushed before it: a_pinned
 	 * pinned by the event until its batch is released (render thread), a_named keys alone (nulls dropped from both); stamped and the pass

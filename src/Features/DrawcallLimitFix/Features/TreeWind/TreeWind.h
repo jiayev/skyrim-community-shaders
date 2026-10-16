@@ -83,7 +83,7 @@ namespace DCLF::Features::TreeWind
 	inline constexpr std::uint32_t kBlockTreeParams = 0;
 	inline constexpr std::uint32_t kBlockWindTimers = 4;
 	inline constexpr std::uint32_t kBlockWords = 6;
-	// Their Lighting VS variables (ShaderConstants::LightingVS: Scene/Ports/LightingConstants.h's kVSTreeParams, kVSWindTimers).
+	// Their Lighting VS variables (ShaderConstants::LightingVS: Core/Shading/LightingConstants.h's kVSTreeParams, kVSWindTimers).
 	inline constexpr std::uint32_t kTreeParamsVariable = 4;
 	inline constexpr std::uint32_t kWindTimersVariable = 5;
 

@@ -3,7 +3,7 @@
 #include "Features/DrawcallLimitFix/Integrations/TruePBR/Diagnostics/TextureParity.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Integrations/TruePBR/TruePBRIntegration.h"
-#include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 
 #include <algorithm>
 #include <array>

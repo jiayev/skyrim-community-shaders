@@ -3,7 +3,7 @@
 // The scene area's observers (Diagnostics/Scene/*.cpp): what SceneInstall.cpp registers, and what one observer shares with another.
 
 #include "SceneView.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 

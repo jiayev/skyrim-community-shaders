@@ -4,7 +4,7 @@
 #include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PlacementRows/BillboardRow.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
 #include <array>
 #include <atomic>

@@ -11,8 +11,8 @@
 #include "Deferred.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Feature/TargetDump.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/TerrainBlending.h"
 
 namespace DCLF::Reports

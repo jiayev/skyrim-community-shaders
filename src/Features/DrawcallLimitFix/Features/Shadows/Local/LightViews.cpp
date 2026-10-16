@@ -5,7 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 #include "State.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
