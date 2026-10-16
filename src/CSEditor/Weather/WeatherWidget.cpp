@@ -136,16 +136,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Settings,
 	clouds,
 	featureSettings)
 
-WeatherWidget::~WeatherWidget()
-{
-	for (auto& [layerIndex, srv] : cloudTextureCache) {
-		if (srv) {
-			srv->Release();
-		}
-	}
-	cloudTextureCache.clear();
-}
-
 void WeatherWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
@@ -2127,8 +2117,8 @@ std::vector<Widget::SearchResult> WeatherWidget::CollectSearchableSettings() con
 
 ID3D11ShaderResourceView* WeatherWidget::GetCloudTexture(int layerIndex)
 {
-	if (cloudTextureCache.contains(layerIndex)) {
-		return cloudTextureCache[layerIndex];
+	if (auto it = cloudTextureCache.find(layerIndex); it != cloudTextureCache.end()) {
+		return it->second.get();
 	}
 
 	const auto& texturePath = settings.clouds[layerIndex].texturePath;
@@ -2144,7 +2134,7 @@ ID3D11ShaderResourceView* WeatherWidget::GetCloudTexture(int layerIndex)
 	ImVec2 textureSize;
 
 	if (Util::LoadDDSTextureFromFile(globals::d3d::device, resourcePath.c_str(), &srv, textureSize)) {
-		cloudTextureCache[layerIndex] = srv;
+		cloudTextureCache[layerIndex].attach(srv);
 		return srv;
 	}
 
