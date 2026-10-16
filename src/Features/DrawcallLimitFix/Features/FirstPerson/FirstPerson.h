@@ -15,7 +15,7 @@
 // Core keeps what every bucketed view shares, keyed by the view's slot or its membership (Core/Render/Views/ViewSlots.h,
 // Core/Extensions/Views.h):
 // - the epochs' segments and Tracy zones' passes (ViewEpoch*.cpp: the view's passes and its forward part), their revisions (the
-//   shape, key group, coverage inputs), the slot's state (Impl/Views.h's ViewEpochState: targets, resources, depth range, forward
+//   shape, key group, coverage inputs), the slot's state (Epochs/ViewEpoch.h's ViewEpochState: targets, resources, depth range, forward
 //   compatibility), the forward keys' targets by view (DrawPipelines::SetViewForwardTargets, keyed by kForwardKeyFirstPerson);
 // - the scene's side of a CategoryRoot view: its root as a category node (the classification's root stop, its hidden verdicts and
 //   misfiled entries announced: RootViewHidden, ViewMisfiled), the set's decisions (SetParticipation, the slot readiness, the

@@ -2,7 +2,18 @@
 
 // The scene's growable buffers (SceneBufferSet): one org::services::GrowableBufferSet every versioned buffer DCLF makes registers
 // with, grown as graph work on DCLF's state graph to the revision producer's requirements and named by the sets it seals (the
-// snapshot). Unit groups: one requirement over buffers indexed alike. Included by Internal.h.
+// snapshot). Unit groups: one requirement over buffers indexed alike. Self-contained (features include it); Internal.h includes it.
+
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+
+#include <ORGModuleServices/GrowableBufferSet.h>
+#include <Render/Runtime/IUploadService.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace DCLF::Draws
 {

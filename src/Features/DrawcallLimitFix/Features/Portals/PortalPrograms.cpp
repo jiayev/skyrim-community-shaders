@@ -2,16 +2,28 @@
 // required to the words the revision's inputs posted), the depth commit's upload of the frame's encoding (the commit hook), the cull
 // binding Core's cull reads it by (Api::CullBindingSlot::Programs), and PortalTest on the CPU (the main cull input's test).
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+// Helpers.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Uploads.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
+
+#include <ORGModuleServices/GrowableBufferTypes.h>
 
 #include <array>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
 
 namespace DCLF::Features::Portals
 {

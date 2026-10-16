@@ -2,14 +2,15 @@
 // component's seeds, the listed roots' nodes copied on the render thread at each Kick and made into rows (FadeState::StaticOf) by
 // FrameValues' producer; FadeStateCS and the builds read them as the cull binding RootSeeds.
 
-// Internal.h first: volk must precede every Vulkan header of the translation unit (the frame's tables, FrameView's seeds).
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
 #include <cstring>

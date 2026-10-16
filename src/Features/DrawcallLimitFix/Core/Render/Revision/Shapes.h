@@ -1,7 +1,21 @@
 #pragma once
 
-// The shapes a revision's recording of an epoch is prepared for, as its passes read them.
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// The shapes a revision's recording of an epoch is prepared for, as its passes read them. A feature's pass reads its own epoch's
+// (the segment of the Api::PassContext it was made with). Self-contained (features include it); Internal.h includes it in its order.
+
+// volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Epochs.h"
+
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+
+#include <array>
+#include <cstdint>
+#include <memory>
 
 namespace DCLF::Draws
 {

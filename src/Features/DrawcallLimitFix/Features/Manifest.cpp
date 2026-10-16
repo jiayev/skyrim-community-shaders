@@ -18,11 +18,20 @@
 // per-draw buffer (Api::PerDrawBuffer) its register (the install checks those too: InstallContext::RegisterMaterialContributor,
 // RegisterLightingObjectFlag, DeclarePerDrawBuffer).
 
-// TreeWindScene.h first: volk must precede every Vulkan header of the translation unit (the record layout).
+// ViewEpoch.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ViewEpoch.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ViewCommon.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/SceneSet.h"
+#include "Features/DrawcallLimitFix/Core/Shading/ConstantEvaluator.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"

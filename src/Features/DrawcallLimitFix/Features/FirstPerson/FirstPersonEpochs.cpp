@@ -4,6 +4,14 @@
 
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPersonView.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/SceneSet.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
@@ -43,9 +51,9 @@ namespace DCLF::Features::FirstPerson
 			view.eye = { eye.x, eye.y, eye.z };
 			// VS_PerFrame (b12) for the camera, as the engine's SetCameraData builds it for the first-person draws (the accumulator renders'
 			// flags 3 and 0x43: jittered), over the renderer's last block; the motion vectors' previous camera last frame's, its own on the first.
-			const PreviousCamera current{ view.viewProj, eye };
+			const Draws::PreviousCamera current{ view.viewProj, eye };
 			f.perFrame.fill(std::byte{ 0 });
-			PerFrameBlock(view, FrameBlockNow(), true, f.havePrevious ? &f.previous : &current, f.perFrame.data());
+			Draws::PerFrameBlock(view, Draws::FrameBlockNow(), true, f.havePrevious ? &f.previous : &current, f.perFrame.data());
 			f.viewProj = view.viewProj;
 			f.eye = eye;
 			f.previous = current;
@@ -85,7 +93,7 @@ namespace DCLF::Features::FirstPerson
 		case IndirectDraws::ViewInputsTaken::Taken:
 			break;
 		}
-		const std::array<ViewFace, 1> faces{ ViewFace{ true, std::span<const std::byte>(f.perFrame.data(), f.perFrame.size()), f.viewProj, f.eye } };
+		const std::array<Draws::ViewFace, 1> faces{ Draws::ViewFace{ true, std::span<const std::byte>(f.perFrame.data(), f.perFrame.size()), f.viewProj, f.eye } };
 		switch (draws.SubmitViewEpoch(kView, 0, listed, faces)) {
 		case ViewSubmit::NoRevision:
 			return skip(1);

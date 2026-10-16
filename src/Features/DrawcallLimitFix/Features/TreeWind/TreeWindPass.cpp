@@ -1,8 +1,20 @@
 // Tree wind's pass: the next frame's wind (TreeWindCS), on the compute queue in the depth epoch beside its raster work, from the
 // scene resources' rows and the depth commit's frame row.
 
+// Shapes.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <rhi.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace DCLF::Draws
 {

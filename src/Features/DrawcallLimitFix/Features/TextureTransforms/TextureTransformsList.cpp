@@ -2,8 +2,14 @@
 // the main build's Finish, counted as a payload carries them, installed for the pool at adoption (TextureTransformsPool.cpp).
 
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PayloadProducts.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/MainRows.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
 
 namespace DCLF::Features::TextureTransforms
 {

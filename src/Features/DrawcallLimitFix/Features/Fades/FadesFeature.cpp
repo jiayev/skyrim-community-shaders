@@ -3,7 +3,6 @@
 // the passes, the frame and cull bindings), the root states (the family's view, the root test, the write-back's kick and wait, the fade
 // test's frame start and latch words), the diagnostics, the fade writers (the stand-in observer and engine hooks, last) and the early hook (FadeSnap).
 
-// FadeScene.h first: volk before every Vulkan header (the write-back's kick and wait).
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 #include "Features/DrawcallLimitFix/Features/Fades/Fades.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"

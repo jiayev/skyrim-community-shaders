@@ -4,7 +4,18 @@
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+
+#include <chrono>
+#include <memory>
+#include <vector>
 
 namespace DCLF::Features::Fades
 {

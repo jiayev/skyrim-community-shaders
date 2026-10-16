@@ -1,7 +1,46 @@
 #pragma once
 
-// The views drawn by epochs of their own: the reflection's faces and the first-person view (one set of types, ViewTraits).
-// Captured and committed on the render thread; their shapes are the revision producer's. Included by Internal.h, in its order.
+// The views drawn by epochs of their own: the reflection's faces and the first-person view (one set of types, ViewTraits), and a view's
+// frame state (ViewEpochState, which IndirectDraws::ViewState hands the view features). Captured and committed on the render thread;
+// their shapes are the revision producer's. Self-contained (features include it); Internal.h includes it in its order.
+
+// volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Api/Passes.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Epochs.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <Render/LatchBlock.h>
+#include <Render/RenderGraph/RenderGraph.h>
+#include <Resources/Buffers/Buffer.h>
+#include <Resources/ExternalTextureResource.h>
+#include <Resources/PixelBuffer.h>
+#include <rhi.h>
+
+#include <d3d11.h>
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <vector>
+
+namespace DCLF
+{
+	struct SceneTables;
+}
 
 namespace DCLF::Draws
 {
@@ -270,5 +309,60 @@ namespace DCLF::Draws
 		std::uint32_t width = 0, height = 0;
 		float depthRange = 1.0f;
 		bool operator==(const ViewInputs&) const = default;
+	};
+}
+
+namespace DCLF
+{
+	/**
+	 * @brief A view's frame state (ViewEpoch.cpp and the view engine, ViewEngine.cpp; render thread). The scene lane reads only the
+	 * published LaneTargets and forwardCompatible, never `targets`. `covered` is decided at the frame's start, before the engine draws
+	 * the view (ImplViews::ViewCovered reads it).
+	 */
+	struct ViewEpochState
+	{
+		ForwardTargets targets;
+		std::atomic<std::uint64_t> laneColours{ 0 }, laneDepth{ 0 };  // colour in the low 32 bits, colour2 in the high
+		void PublishTargets()
+		{
+			const std::uint64_t colours = std::uint64_t(static_cast<std::uint32_t>(targets.colour)) | (std::uint64_t(static_cast<std::uint32_t>(targets.colour2)) << 32);
+			if (laneColours.load(std::memory_order_relaxed) != colours)
+				laneColours.store(colours, std::memory_order_release);
+			if (laneDepth.load(std::memory_order_relaxed) != static_cast<std::uint64_t>(targets.depth))
+				laneDepth.store(static_cast<std::uint64_t>(targets.depth), std::memory_order_release);
+		}
+		ForwardTargets LaneTargets() const
+		{
+			const std::uint64_t colours = laneColours.load(std::memory_order_acquire);
+			ForwardTargets out;
+			out.colour = static_cast<DXGI_FORMAT>(colours & 0xFFFFFFFFu);
+			out.colour2 = static_cast<DXGI_FORMAT>(colours >> 32);
+			out.depth = static_cast<DXGI_FORMAT>(laneDepth.load(std::memory_order_acquire));
+			return out;
+		}
+		std::vector<rhi::PipelineHandle> slotPipelines;
+		std::shared_ptr<Draws::ViewResources> resources;
+		bool setupFailed = false;
+		// Until the first coverage decided it (coverageDecided), the view's coveredInitially stands for it (ImplViews::ViewCovered).
+		bool covered = false;
+		bool coverageDecided = false;
+		// The engine's viewport depth range for the view (a revision input: the shapes' viewport); 0 until the view's work sets one
+		// (IndirectDraws::SetViewDepthRange), the shape's (Api::ViewShape::depthRange) until then.
+		float depthRange = 0.0f;
+		// Whether the main set's forward pipelines can draw into the view's forward part (its depth format the main pass's), published
+		// for the slot readiness (IndirectDraws::ViewSlotReady).
+		std::atomic<bool> forwardCompatible{ false };
+		// A trees view's draw families per face (Api::ViewShape::trees, the view engine's: IndirectDraws::ResolveViewFaces,
+		// DecideViewFaces), by family: its forward pipeline for the view's targets; the commit's row (faces.row's: Impl::ViewFaceRows,
+		// and the decision's query) and a face's row and list header (faces.face's: CommitView), sized once at the family's faces'.
+		struct FamilyFaces
+		{
+			rhi::PipelineHandle pipeline{};
+			bool ready = false;
+			std::vector<std::byte> row, faceRow, faceHeader;
+		};
+		std::array<FamilyFaces, Extensions::kDrawFamilies> faces;
+		// By family, whether the faces' draws are DCLF's this frame (PassCapture::SetViewFamilyOwned; the roots they own: ViewRoots.cpp).
+		std::array<bool, Extensions::kDrawFamilies> facesOwned{};
 	};
 }

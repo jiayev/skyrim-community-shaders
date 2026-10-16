@@ -18,6 +18,10 @@ Rules (always errors):
      PASS_ADDERS (the executor, AddPass's definition) and in Diagnostics/ (its MainGraphPasses observers append finished descs), and
      host->AddExtension only in EXTENSION_ADDERS. Schedule/ (the frame's schedule) includes only Api/ (and CS's RenderGraphRuntime.h),
      and only the shell includes it.
+  8. Features own no part of Core's renderer: a file under Features/ or Integrations/ includes none of IndirectDraws' implementation
+     internals (RENDER_INTERNALS: Core/Render/Internal.h, Impl.h, Impl/, Passes/PassesInternal.h; it includes the self-contained headers
+     it uses), and names no RenderGraphRuntime::Segment:: value (a pass reads its epoch from the Api::PassContext it was made with: the
+     schedule decides where it runs). Only Schedule/ and Core/ may; Diagnostics/ stays exempt.
 
 Diagnostics/ may be included from anywhere: production code reaches it only through its observer contract (Hooks.h, Observation,
 Policy), which the parity rework will redefine.
@@ -68,6 +72,11 @@ PASS_ADDERS = {TREE / "Core" / "Render" / "Epochs" / "ScheduleExecutor.cpp", TRE
 EXTENSION_ADDERS = {TREE / "Core" / "Render" / "Resources" / "Resources.cpp"}
 PASS_ADD = re.compile(r"\bAddPass\(|\.Epoch\(")
 EXTENSION_ADD = re.compile(r"host->AddExtension\b")
+
+# Rule 8: IndirectDraws' implementation internals, which features and integrations never include, and the literal segments they never name.
+RENDER_INTERNALS = (TREE / "Core" / "Render" / "Internal.h", TREE / "Core" / "Render" / "Impl.h", TREE / "Core" / "Render" / "Passes" / "PassesInternal.h")
+RENDER_INTERNAL_DIRS = (TREE / "Core" / "Render" / "Impl",)
+LITERAL_SEGMENT = re.compile(r"\bRenderGraphRuntime::Segment::")
 
 INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^">]+)[">]')
 DEPENDENCY_MACRO = re.compile(r"\b(CS_HAS_RENDER_GRAPH|CS_HAS_ORG_MODULE_SERVICES|CS_HAS_DCLF|ORG_MODULE_SERVICES_HAS_DXC)\b")
@@ -144,6 +153,25 @@ def pass_adder_errors(path, rel, text):
     return errors
 
 
+def feature_side(path):
+    """Rule 8: whether a_path is a feature's or an integration's (Features/ and Integrations/, their own Diagnostics/ folders included)."""
+    source = module(path)
+    return source == "Features" or source.startswith(("Features/", "Integrations/"))
+
+
+def render_internal(target):
+    """Rule 8: whether an included DCLF file is one of IndirectDraws' implementation internals."""
+    return target in RENDER_INTERNALS or any(folder in target.parents for folder in RENDER_INTERNAL_DIRS)
+
+
+def literal_segment_errors(path, rel, text):
+    """Rule 8: a feature or integration names no RenderGraphRuntime::Segment:: value."""
+    if not feature_side(path):
+        return []
+    return [f"{rel}:{number}: names a literal segment (a pass takes its epoch from its Api::PassContext; only Schedule/ and Core/ may)"
+            for number, line in enumerate(text.splitlines(), 1) if LITERAL_SEGMENT.search(line)]
+
+
 def depends_order_errors():
     """Rule 4: each DEPENDS entry listed, and listed before its dependent."""
     errors = []
@@ -204,6 +232,7 @@ def main():
             errors.append(f"{rel}: tests a dependency macro (only the shell may: CS_HAS_DCLF)")
         if inside:
             errors += pass_adder_errors(path, rel, text)
+            errors += literal_segment_errors(path, rel, text)
         for number, line in enumerate(text.splitlines(), 1):
             m = INCLUDE.match(line)
             if not m:
@@ -218,6 +247,9 @@ def main():
             source_module, target_module = module(path), module(target)
             if not allowed(source_module, target_module):
                 errors.append(f"{rel}:{number}: {source_module} includes {target_module} ({target.relative_to(TREE).as_posix()})")
+            if feature_side(path) and render_internal(target):
+                errors.append(f"{rel}:{number}: includes {target.relative_to(TREE).as_posix()}, an IndirectDraws internal (include the self-contained "
+                              f"headers used; dclf-layout.md rule 8)")
 
     errors += depends_order_errors()
 

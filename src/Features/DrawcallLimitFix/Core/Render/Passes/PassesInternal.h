@@ -21,9 +21,6 @@ namespace DCLF::Draws
 	// VisibilityEvents.cpp: the visibility events.
 	std::shared_ptr<org::RenderPass> MakeVisibilityEventsPass(std::shared_ptr<Resources> a_resources);
 
-	// Readbacks.cpp: an event ring's copy to the host.
-	std::shared_ptr<org::RenderPass> MakeEventReadbackPass(std::shared_ptr<SceneBuffers> a_scene, Versioned a_events, std::shared_ptr<HostEventRing> a_ring);
-
 	// MainExtension.cpp: the buffers a main commit may latch into (LatchedUploads); its latched copies declare them.
 	std::vector<LatchedTarget> MainLatchedTargets(const Resources& a_resources);
 

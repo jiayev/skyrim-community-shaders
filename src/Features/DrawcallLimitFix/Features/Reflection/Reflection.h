@@ -12,7 +12,7 @@
 // feature's, on the view engine's calls (IndirectDraws.h, "The view engine").
 //
 // Core keeps what every bucketed view shares, keyed by the view's slot or its membership (Core/Render/Views/ViewSlots.h,
-// Core/Extensions/Views.h): the epoch's segment and passes (ViewEpoch*.cpp), its revisions, the slot's state (Impl/Views.h's
+// Core/Extensions/Views.h): the epoch's segment and passes (ViewEpoch*.cpp), its revisions, the slot's state (Epochs/ViewEpoch.h's
 // ViewEpochState), a LodTechniques view's slot readiness and phase readiness, the colour target's import, and PassCapture's withholding in a
 // view's own renderers. It keeps a trees view's tree LOD per face, the view engine's under the tree LOD class (Api::ObjectClass::TreeLod,
 // Features/TreeLod's): its pipeline, ownership and row (IndirectDraws::ResolveViewFaces, DecideViewFaces and SubmitViewEpoch's rows);

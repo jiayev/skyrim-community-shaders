@@ -1,9 +1,22 @@
 // The texture transforms' pass: this frame's TexcoordOffset into the installed payload's material rows (TextureTransformsCS), first
 // in the depth segment, from the pool's rows the depth latch's stage word names.
 
+// Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <Render/LatchBlock.h>
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <rhi.h>
+
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <vector>
 
 namespace DCLF::Draws
 {
@@ -43,8 +56,9 @@ namespace DCLF::Draws
 	class TextureTransformsPass final : public org::TypedRenderGraphPass<TextureTransformsPass, TextureTransformsPrepared, TextureTransformsBindings>
 	{
 	public:
-		TextureTransformsPass(std::shared_ptr<Resources> a_resources, std::shared_ptr<const ComputeProgram> a_program) :
-			resources(std::move(a_resources)), program(std::move(a_program)) {}
+		// a_segment: its epoch's (the depth epoch's: the PassContext it was made with).
+		TextureTransformsPass(std::shared_ptr<Resources> a_resources, std::shared_ptr<const ComputeProgram> a_program, RenderGraphRuntime::Segment a_segment) :
+			resources(std::move(a_resources)), program(std::move(a_program)), segment(a_segment) {}
 
 		TextureTransformsBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -57,17 +71,17 @@ namespace DCLF::Draws
 		// The recording depends on the depth shape (its latch); the rows, the entries and their count are the latch's and the entries'.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
+			const auto frame = CurrentFrame(a_preparation, segment);
 			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass) ? 1u : 0u);
+			a_out.push_back(BuildsDraws(a_preparation, *resources, segment) ? 1u : 0u);
 		}
 
 		TextureTransformsPrepared Prepare(const TextureTransformsBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			TextureTransformsPrepared prepared{};
 			// Where the depth build runs: its commit wrote the latch (the payload's rows, the pool's entries) in the frame slot.
-			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
-			if (!program || !frame || !frame->latch || !BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass))
+			const auto frame = CurrentFrame(a_preparation, segment);
+			if (!program || !frame || !frame->latch || !BuildsDraws(a_preparation, *resources, segment))
 				return prepared;
 			prepared.program = program;
 			prepared.latch = frame->latch;
@@ -93,6 +107,7 @@ namespace DCLF::Draws
 	private:
 		std::shared_ptr<Resources> resources;
 		std::shared_ptr<const ComputeProgram> program;
+		RenderGraphRuntime::Segment segment;
 	};
 }
 
@@ -111,7 +126,7 @@ namespace DCLF::Features::TextureTransforms
 
 		std::shared_ptr<org::RenderPass> MakePass(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::TextureTransformsPass>(a_context.Main(), a_context.State<ComputeProgram>());
+			return std::make_shared<Draws::TextureTransformsPass>(a_context.Main(), a_context.State<ComputeProgram>(), a_context.segment);
 		}
 	}
 

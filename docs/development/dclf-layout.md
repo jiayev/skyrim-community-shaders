@@ -769,6 +769,19 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
 7. **Complexity may only shrink.** The functions over the thresholds (120 lines or cyclomatic complexity 40) are counted
    against a baseline, which each split lowers (`--update`). A function not in the baseline may not cross them. `EXEMPT`
    names the ones not counted, each with its reason (a data table, a flat verdict chain a split would only fragment).
+8. **Features don't reach into Core's renderer.**
+   - No file under `Features/` or `Integrations/` (their own `Diagnostics/` folders included) includes IndirectDraws'
+     implementation internals: `Core/Render/Internal.h`, `Core/Render/Impl.h`, `Core/Render/Impl/` or
+     `Core/Render/Passes/PassesInternal.h`.
+   - A feature includes the self-contained Core headers it uses instead: `Main/Resources.h`, `Revision/Shapes.h`,
+     `Resources/Helpers.h`, `Resources/SceneBuffers.h`, `Payload/Versioned.h`, `Payload/Uploads.h`, `Payload/MainRows.h`,
+     `Epochs/ViewEpoch.h` and so on. The pass authoring helpers (`Draws::Register`, `Draws::RecordDispatch`) are
+     `Core/Extensions/PassContext.h`'s.
+   - A feature or integration names no `RenderGraphRuntime::Segment::` value. A pass reads its epoch from the `Api::PassContext`
+     it was made with (`segment`, captured by its make), so the schedule alone decides where it runs. Only `Schedule/` and Core
+     may name one.
+   - `Internal.h` stays Core's umbrella. The top-level `Diagnostics/` is exempt (its `Draws/DrawsView.h` names the
+     implementation for the observers).
 
 ## The order
 

@@ -1,12 +1,27 @@
 #pragma once
 
 // Tree LOD's scene resources (Api::SceneResources): the TreeInstances family's tables (its layout, TreeInstancesLayout.h), its cull
-// program and counts' readbacks, held with the scene's tables, and what the depth commit's uploads keep. Included first by the feature's
-// sources that use them (Internal.h first: volk must precede every Vulkan header of the translation unit).
+// program and counts' readbacks, held with the scene's tables, and what the depth commit's uploads keep. Included by the feature's
+// sources that use them.
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeInstancesLayout.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include <ORGModuleServices/GrowableBufferTypes.h>
+#include <Resources/Buffers/Buffer.h>
+
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+namespace DCLF::Draws
+{
+	struct SceneBuffers;
+}
 
 namespace DCLF::Features::TreeLod
 {

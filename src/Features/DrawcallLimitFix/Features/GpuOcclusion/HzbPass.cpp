@@ -1,11 +1,25 @@
 // GpuOcclusion's depth pyramid (Api/DepthPyramid.h): the HZB, its program and its downsample's counter, made with the main view's
 // resources, and the pass rebuilding it from the main depth in the depth epoch.
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+// Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
 #include "Features/DrawcallLimitFix/Features/GpuOcclusion/GpuOcclusion.h"
 #include "Features/DrawcallLimitFix/Features/GpuOcclusion/HzbLayout.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <Resources/PixelBuffer.h>
+#include <rhi.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace DCLF::Features::GpuOcclusion
 {
@@ -75,10 +89,9 @@ namespace DCLF::Draws
 		{
 			using namespace Features::GpuOcclusion;
 			HzbFrame prepared{};
-			// Only in the Z-prepass segment, where the depth is the world's final depth.
+			// Its epoch is the schedule's (the depth epoch's phase 2 block: the PassContext it was made with), where the depth is the
+			// world's final depth.
 			const auto now = segment;
-			if (now != RenderGraphRuntime::Segment::ZPrepass)
-				return prepared;
 			if (!resources->hzb || !state->program || !resources->hzbScratch)
 				return prepared;
 			// The depth commit zeroed the group counter (hzbScratchZeroed).
@@ -209,7 +222,7 @@ namespace DCLF::Features::GpuOcclusion
 		{
 			if (!a_context.PhaseTwo())
 				return nullptr;
-			return std::make_shared<Draws::HzbPass>(a_context.Main(), Extensions::DepthPyramidState<HzbState>(a_context), RenderGraphRuntime::Segment::ZPrepass);
+			return std::make_shared<Draws::HzbPass>(a_context.Main(), Extensions::DepthPyramidState<HzbState>(a_context), a_context.segment);
 		}
 	}
 

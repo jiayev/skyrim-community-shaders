@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodEvents.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodParity.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsView.h"
 

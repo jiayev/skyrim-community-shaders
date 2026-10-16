@@ -103,28 +103,6 @@ namespace DCLF::Draws
 	constexpr std::uint64_t FrameConstantRowOffset(std::uint32_t a_row) { return std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + std::uint64_t(a_row) * 16; }
 	static_assert(sizeof(FrameFog) == 3 * 16);
 
-	/**
-	 * @brief Where a write at a_offset into the frame-constants buffer goes, named for FrameData: a stage's register slot, the
-	 * shared light block, the lighting slot's parts (the frame lighting, the LOD fades' inputs, the foliage record's) or the record.
-	 */
-	std::string FrameConstantsPart(std::uint64_t a_offset);
-	/** @brief FrameData's name of a write to a_target at a_offset, as a_route ("latched", "staged"). */
-	template <class Target>
-	std::string FrameDataWhere(std::string_view a_route, const Target& a_target, std::uint64_t a_offset)
-	{
-		std::string where(a_route);
-		where += ": ";
-		if constexpr (requires { a_target->GetName(); }) {
-			const auto& name = a_target ? a_target->GetName() : std::string();
-			if (name == "cs.dclf.frame-constants")
-				return where + FrameConstantsPart(a_offset);
-			where += name.empty() ? std::string("unnamed") : name;
-		} else {
-			where += "other";
-		}
-		return where;
-	}
-
 	/** @brief The frame push word of a stage's constant buffer register (FramePushWords' order), or ~0u when it is not pushed. */
 	inline std::uint32_t FramePushWord(bool a_pixel, std::uint32_t a_register)
 	{

@@ -2,7 +2,23 @@
 // registration, each revision's requirements, the fit of the roots they hold, and the write-back's staging for each sealed set.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <OpenRenderGraph/PersistentGraphHost.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
 
 namespace DCLF::Features::Fades
 {

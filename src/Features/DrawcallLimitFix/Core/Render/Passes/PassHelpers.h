@@ -1,9 +1,11 @@
 #pragma once
 
-// What the passes and the graph extensions share: recording helpers, registration, the latched copies pass, attachments.
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// What the passes and the graph extensions share: recording helpers, registration, the latched copies pass, attachments (the ones features
+// use too, Register and RecordDispatch, are Core/Extensions/PassContext.h's). Part of IndirectDraws' implementation: included by
+// Internal.h, in its order.
 
 #include "Features/DrawcallLimitFix/Api/Passes.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF::Draws
 {
@@ -52,19 +54,6 @@ namespace DCLF::Draws
 	std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeMainOpaqueExtension(std::shared_ptr<Resources> a_resources);
 	std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeShadowExtension(std::shared_ptr<ShadowResources> a_resources);
 
-	/**
-	 * @brief Registers a graph resource under a_id. A versioned buffer is not registered: its passes declare it (its resolver), and a
-	 * registration would hold the version registered for as long as the graph, where a version should go when nothing uses it. Nothing
-	 * looks these identifiers up, but the registration is not only a name: the graph holds the resource strongly and tracks it (an
-	 * unregistered one gets a weak anonymous handle, pinned a frame at a time) and tags its memory with the identifier.
-	 */
-	template <class T>
-	void Register(org::RenderGraph& a_graph, org::ResourceIdentifier a_id, const std::shared_ptr<T>& a_resource)
-	{
-		if constexpr (!std::is_same_v<T, org::VersionedBuffer>)
-			if (a_resource)
-				a_graph.RegisterResource(std::move(a_id), a_resource);
-	}
 	/** @brief The scene tables, which every extension registers (the same identifiers: a second registration is an update). */
 	void RegisterSceneBuffers(org::RenderGraph& a_graph, const SceneBuffers& a_scene);
 
@@ -188,15 +177,6 @@ namespace DCLF::Draws
 		static thread_local std::vector<std::uint32_t> none;
 		none.assign(a_slots - a_map.size(), kNoBucket);
 		LatchWrite(a_latch, a_what, a_slot, a_offset + static_cast<std::uint32_t>(a_map.size() * sizeof(std::uint32_t)), std::as_bytes(std::span(none)));
-	}
-	/** @brief One compute dispatch of a_program with its push constants. */
-	template <class Constants>
-	void RecordDispatch(rhi::CommandList& a_commands, const ComputeProgram& a_program, const Constants& a_constants, std::uint32_t a_groups)
-	{
-		a_commands.BindLayout(a_program.layout->GetHandle());
-		a_commands.BindPipeline(a_program.pipeline->GetHandle());
-		a_commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, static_cast<std::uint32_t>(sizeof(Constants) / 4), reinterpret_cast<const std::uint32_t*>(&a_constants));
-		a_commands.Dispatch(a_groups, 1, 1);
 	}
 	/** @brief A pass's colour attachments, loaded and stored: a_count of a_views, each with its resource (a_tokens). */
 	template <std::size_t N>

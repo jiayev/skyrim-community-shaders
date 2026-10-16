@@ -178,8 +178,7 @@ namespace DCLF::Draws
 
 	// BSGraphics::VertexDesc: the position attribute's flag in the second stream (bit 54 + attribute 0).
 	constexpr std::uint64_t kPositionInSecondStream = 1ull << 54;
-	// A stream vertex: float4.
-	constexpr std::uint32_t kStreamVertexBytes = 16;
+	// A stream vertex: kStreamVertexBytes (Resources/GpuLayouts.h).
 
 	// The GeometryDraw of object a_object's stream row, or ~0u: no row, or no stream buffer. AppendStreamRows writes them at these
 	// indices, after the slots (the geometry table holds both: RequireSceneTables).

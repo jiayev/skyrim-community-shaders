@@ -1,7 +1,31 @@
 #pragma once
 
 // A main segment's shape (PassFrame), the frame buffers, the sorts' constants and programs, the DGC preprocess state lists.
-// Made by the commits and the shape producer, recorded against on the render thread. Included by Internal.h, in its order.
+// Made by the commits and the shape producer, recorded against on the render thread. Self-contained (features include it); Internal.h
+// includes it in its order.
+
+// volk must precede every Vulkan header in this translation unit.
+#include <rhi_interop_vulkan.h>
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+
+#include "RenderGraph/ComputeProgram.h"
+#include "RenderGraph/PrefixSum.h"
+#include <Render/LatchBlock.h>
+#include <Render/RenderGraph/RenderGraph.h>
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <Resources/Buffers/Buffer.h>
+#include <rhi.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace DCLF::Draws
 {

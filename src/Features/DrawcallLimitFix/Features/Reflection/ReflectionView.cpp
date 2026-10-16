@@ -5,8 +5,13 @@
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
 namespace DCLF::Features::Reflection
 {
@@ -75,7 +80,7 @@ namespace DCLF::Features::Reflection
 		// a face: no jitter, no previous camera).
 		ShadowCameras::Camera view;
 		ShadowCameras::CameraMatrices(a_camera, view);
-		PerFrameBlock(view, FrameBlockNow(), false, nullptr, face.perFrame.data());
+		Draws::PerFrameBlock(view, Draws::FrameBlockNow(), false, nullptr, face.perFrame.data());
 		face.perFrameBytes = ShadowCameras::kBlockBytes;
 		const auto* floats = reinterpret_cast<const float*>(face.perFrame.data());
 		std::memcpy(face.viewProj.data(), floats + 32, sizeof(float) * 16);

@@ -2,7 +2,8 @@
 
 // IndirectDraws' implementation umbrella, included by the sources of this folder only (IndirectDraws.h is the interface): the
 // headers of Core/, Revision/, Main/, Shadow/, Builders/, Passes/ and Epochs/ in dependency order, then Impl.h, and Views/ViewSlots.h
-// (it names the producer's key groups) and DrawFamilies/FamilySlots.h last.
+// (it names the producer's key groups) and DrawFamilies/FamilySlots.h last. Features and integrations never include it (nor Impl.h,
+// Impl/ or Passes/PassesInternal.h): they include the self-contained headers they use (dclf-layout.md, rule 8).
 
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>

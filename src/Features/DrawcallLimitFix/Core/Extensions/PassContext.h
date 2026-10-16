@@ -2,11 +2,15 @@
 
 // The pass contract's Core side (Api/Passes.h): what a pass's setup is handed, what a scheduled pass is made from, and where an anchor
 // adds its passes. The schedule's executor (Core/Render/Epochs/ScheduleExecutor) runs the setups and fills the others at the graph's build.
+// And the authoring helpers a pass or a scene resource uses (Draws::Register, Draws::RecordDispatch). A pass reads its epoch from the
+// context it was made with (segment), never a literal one: the schedule decides where it runs.
 
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 
+#include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include <Render/RenderGraph/RenderGraph.h>
+#include <Resources/Buffers/VersionedBuffer.h>
 #include <rhi.h>
 
 #include <cassert>
@@ -14,6 +18,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace DCLF::Draws
@@ -95,4 +101,31 @@ namespace DCLF::Api
 		std::vector<org::RenderGraph::ExternalPassDesc>& out;
 		std::uint32_t epoch;
 	};
+}
+
+namespace DCLF::Draws
+{
+	/**
+	 * @brief Registers a graph resource under a_id. A versioned buffer is not registered: its passes declare it (its resolver), and a
+	 * registration would hold the version registered for as long as the graph, where a version should go when nothing uses it. Nothing
+	 * looks these identifiers up, but the registration is not only a name: the graph holds the resource strongly and tracks it (an
+	 * unregistered one gets a weak anonymous handle, pinned a frame at a time) and tags its memory with the identifier.
+	 */
+	template <class T>
+	void Register(org::RenderGraph& a_graph, org::ResourceIdentifier a_id, const std::shared_ptr<T>& a_resource)
+	{
+		if constexpr (!std::is_same_v<T, org::VersionedBuffer>)
+			if (a_resource)
+				a_graph.RegisterResource(std::move(a_id), a_resource);
+	}
+
+	/** @brief One compute dispatch of a_program with its push constants. */
+	template <class Constants>
+	void RecordDispatch(rhi::CommandList& a_commands, const ComputeProgram& a_program, const Constants& a_constants, std::uint32_t a_groups)
+	{
+		a_commands.BindLayout(a_program.layout->GetHandle());
+		a_commands.BindPipeline(a_program.pipeline->GetHandle());
+		a_commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, static_cast<std::uint32_t>(sizeof(Constants) / 4), reinterpret_cast<const std::uint32_t*>(&a_constants));
+		a_commands.Dispatch(a_groups, 1, 1);
+	}
 }

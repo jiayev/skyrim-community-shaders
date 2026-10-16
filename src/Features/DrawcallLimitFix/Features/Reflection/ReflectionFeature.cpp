@@ -2,11 +2,13 @@
 // view's contribution and its work after tree LOD's decision and at the depth commit, its engine hooks (the feature's early hooks), its
 // report lines, the faces' camera parity and the residue's classes.
 
-// ReflectionView.h first (Internal.h): volk must precede every Vulkan header of the translation unit.
+// ReflectionView.h first (Epochs/ViewEpoch.h): volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include <string>

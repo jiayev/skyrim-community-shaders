@@ -2,7 +2,11 @@
 // pipelines, and with CS_DCLF_SET_PARITY its Lighting variant's passes against the sun light.
 
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ProgramFamilySlots.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
 

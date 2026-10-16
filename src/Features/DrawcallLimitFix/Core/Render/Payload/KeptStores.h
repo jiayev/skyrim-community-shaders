@@ -5,28 +5,7 @@
 
 namespace DCLF::Draws
 {
-	/** @brief Every table family's rows unbounded (SceneFit::familyRows before a fit bounds them). */
-	inline constexpr std::array<std::uint32_t, Extensions::kTableFamilySlots> kUnboundedFamilyRows = [] {
-		std::array<std::uint32_t, Extensions::kTableFamilySlots> rows{};
-		rows.fill(~0u);
-		return rows;
-	}();
-
-	/**
-	 * @brief What the named versions of the scene's buffers hold (the per-object buffers' objects): an object past them - its per-object
-	 * rows, its table families' rows (the fade roots' among them), its vertex stream row's vertices - waits for the requirement that grows them, drawing nothing and
-	 * culling nothing (ObjectFits). The payload's parts are not among them: it holds every row of its publication.
-	 */
-	struct SceneFit
-	{
-		std::uint32_t objects = ~0u;
-		// The vertex stream's vertices (its scene resources' fit: Features/Faces' face positions), unbounded without one.
-		std::uint32_t streamVertices = ~0u;
-		// The table families' rows a draw reads by its reference, by registration (Extensions::TableFamilyColumns::objectRow): what the
-		// features' scene resources hold of them (their fit: Features/TreeWind's wind entries), unbounded without one.
-		std::array<std::uint32_t, Extensions::kTableFamilySlots> familyRows = kUnboundedFamilyRows;
-		bool operator==(const SceneFit&) const = default;
-	};
+	// SceneFit (what the named versions of the scene's buffers hold) is Core/Extensions/SceneResources.h's.
 
 	// What a build addresses in an epoch's buffers (a versioned buffer's address, SRV index and capacity: the sealed set's,
 	// IndirectDraws::Impl::AddressesOf); a change means the resources were recreated under it.

@@ -2,12 +2,13 @@
 // MergeTreeSeed), read on the render thread at the frame's start, written and sent by FrameValues' producer, read by TreeWindCS
 // through the depth commit's frame row.
 
-// Internal.h first: volk must precede every Vulkan header of the translation unit (the frame's tables, FrameView's seeds).
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
 #include <cstring>
 #include <utility>
