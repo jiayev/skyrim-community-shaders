@@ -321,6 +321,175 @@ namespace DCLF::Scene
 			w.windowRender = w.windowOther = 0;
 			w.windowThread = 0;
 		}
+
+		/**
+		 * @brief CaptureCategories' category signature (render thread): read again on a forced capture, a watched edit or a moved input;
+		 * otherwise (CS_DCLF_PERSISTENT_PARITY) checked against a full read.
+		 */
+		std::uint64_t RefreshCategorySignature(bool a_force, std::uint32_t a_frame)
+		{
+			// The edits first: one made while the signature is read moves them again, and the next frame reads it again.
+			auto& watch = categoryWatch;
+			const std::uint64_t edits = SceneTracker::CategoryEdits();
+			const std::uint64_t inputs = CategoryInputs();
+			if (a_force || !watch.read || edits != watch.edits || inputs != watch.inputs) {
+				std::vector<const void*> watched;
+				watch.signature = ReadCategorySignature(&watched);
+				SceneTracker::WatchCategoryNodes(std::move(watched));
+				watch.read = true;
+				watch.edits = edits;
+				watch.inputs = inputs;
+				++watch.reads;
+			} else if (Diagnostics::Observe().scene) {
+				// CS_DCLF_PERSISTENT_PARITY: a signature that moved with no edit seen and no input moved (an event the watch lacks).
+				++watch.checked;
+				static std::uint64_t flagged = 0;
+				if (const std::uint64_t full = ReadCategorySignature(nullptr); full != watch.signature && std::exchange(flagged, full) != full)
+					if (watch.missed++ < 8)
+						logger::warn("[DCLF] category signature (C2 parity): moved with no watched edit and no input moved (frame {}) <- FLAG", a_frame);
+			}
+			return watch.signature;
+		}
+
+		/**
+		 * @brief The capture's category nodes, parentless roots and view roots (render thread): ObjectLODRoot's multibounds, the listed
+		 * classes' category roots, every loaded cell's category nodes, multibound and portal graph, then the CategoryRoot views' roots.
+		 */
+		void GatherCategoryNodes(CategoryCapture& a_capture)
+		{
+			auto& current = a_capture.nodes;
+			auto& currentRoots = a_capture.roots;
+
+			auto addCell = [&](RE::TESObjectCELL* a_cell) {
+				if (!a_cell || !a_cell->IsAttached())
+					return;
+				auto* loaded = a_cell->GetRuntimeData().loadedData;
+				if (!loaded || !loaded->cell3D)
+					return;
+				auto& children = loaded->cell3D->GetChildren();
+				for (auto category : kDrawnCategories) {
+					const auto index = static_cast<std::uint16_t>(category);
+					if (index < children.free_idx() && children[index]) {
+						if (auto* node = children[index]->AsNode())
+							current.insert(node);
+					}
+				}
+				// References the engine moves out of the category nodes into multibounds (exteriors) and portal graph rooms
+				// (interiors), all under ObjectLODRoot (engine notes: cell multibounds and rooms).
+				if (auto* multiBound = loaded->multiBoundNode.get())
+					current.insert(multiBound);
+				if (auto* graph = loaded->portalGraph.get()) {
+					for (auto& room : graph->rooms) {
+						if (room)
+							current.insert(room.get());
+					}
+					if (auto* shared = graph->portalSharedNode.get()) {
+						current.insert(shared);
+						// Parentless references the graph draws (e.g. Bleak Falls Barrow's chamber pieces), filed under the shared node
+						// (FindCategoryNode). Held, so a root that leaves the list can still be walked when its tracked content is dropped.
+						for (const auto& child : graph->alwaysRenderChildren) {
+							if (child && !child->parent)
+								currentRoots.try_emplace(child.get(), CategoryCapture::Root{ child, shared });
+						}
+					}
+				}
+			};
+
+			if (auto* tes = RE::TES::GetSingleton()) {
+				// BSMultiBoundNodes under ObjectLODRoot (TES::objRoot), in exteriors and (holding the rooms) interiors.
+				if (auto* objRoot = tes->objRoot) {
+					for (auto& child : objRoot->GetChildren()) {
+						if (auto* multiBound = child ? netimmerse_cast<RE::BSMultiBoundNode*>(child.get()) : nullptr)
+							current.insert(multiBound);
+					}
+				}
+				// The classes' category roots while a class that lists one is on (Api::ObjectClassContribution::categoryRoot: Features/Lod's
+				// TES::lodLandRoot, the terrain manager's LOD blocks): category nodes, their content tracked by the usual structural events. A
+				// root two classes list is one node.
+				if (const std::uint32_t rootListing = RootListing(ActiveToggles())) {
+					const auto& roots = Extensions::RegisteredCategoryRoots();
+					for (std::uint32_t c = 0; c < kObjectClasses; ++c)
+						if (rootListing & (1u << c))
+							if (auto* root = roots[c]())
+								current.insert(root);
+				}
+				Engine::ForEachLoadedCell(*tes, addCell);
+			}
+			// The CategoryRoot views' roots while their toggles are on (their callbacks, in slot order: Features/FirstPerson's, the player's
+			// first-person skeleton, PlayerCharacter +0x8F8, Load3D: no parent; Main::unk_FPCulling and RenderDepth cull it alone). A root is
+			// a category node and a parentless root filed under itself, so the mirror counts it in the world (SetDrawnRoots) and its equipment
+			// attaches reach the tracker as events. Its kHidden is view-scoped: ClassifyFrame stops at it.
+			{
+				const auto& views = Extensions::Views();
+				for (std::uint32_t i = 0; i < views.rootCount; ++i) {
+					const auto view = views.rootViews[i];
+					if (!Extensions::ViewOn(ActiveToggles(), view))
+						continue;
+					Api::ViewRootCapture root;
+					Extensions::ViewEntryOf(view).captureRoot(root);
+					if (auto* node = root.root) {
+						current.insert(node);
+						currentRoots.try_emplace(node, CategoryCapture::Root{ RE::NiPointer<RE::NiAVObject>(node), node });
+						a_capture.viewRoots[static_cast<std::size_t>(view)] = node;
+					}
+				}
+			}
+		}
+
+		/**
+		 * @brief What the job pins (RunFrameStartItem): category nodes new to the scene work's set (children's keys, subtrees) and new roots'
+		 * subtrees. Its set is the capture it applied last (a_applied), read from the render thread's own copy; none applied, or a rescan, makes
+		 * all new.
+		 */
+		void PlanCategoryPins(FrameStartJob& a_job, const CategoryCapture& a_capture, const std::deque<std::shared_ptr<const CategoryCapture>>& a_held,
+			std::uint64_t a_applied, bool a_rescanAll)
+		{
+			const CategoryCapture* base = nullptr;
+			for (const auto& held : a_held)
+				if (held->generation == a_applied)
+					base = held.get();
+			const bool all = a_rescanAll || !base;
+			for (auto* node : a_capture.nodes)
+				if (all || !base->nodes.contains(node))
+					a_job.pinNodes.push_back(node);
+			for (const auto& [root, entry] : a_capture.roots)
+				if (all || !base->roots.contains(root) || !base->nodes.contains(entry.category))
+					a_job.pinRoots.push_back(entry.root.get());
+		}
+
+		/**
+		 * @brief The parentless roots are the mirror's world from now on: each new one captured whole, each gone one detached (a_previous, the
+		 * last capture, still holds it), pushed onto the tracker's stack mirror-only, here (each read and pushed at once, as the hooks do theirs:
+		 * other threads attach and detach inside the window), before the job posts the capture.
+		 */
+		void PushCategoryRoots(const CategoryCapture& a_capture, const CategoryCapture* a_previous, std::uint64_t& a_records, std::uint64_t& a_captures)
+		{
+			const auto& currentRoots = a_capture.roots;
+			auto& tracker = SceneTracker::Get();
+			std::vector<const RE::NiAVObject*> roots;
+			for (const auto& [root, entry] : currentRoots)
+				roots.push_back(root);
+			SceneCapture::SetDrawnRoots(roots);
+			if (a_previous)
+				for (const auto& [root, entry] : a_previous->roots)
+					if (!currentRoots.contains(root)) {
+						auto* event = new SceneTracker::Event{};
+						event->type = SceneTracker::EventType::Detached;
+						SceneTracker::CollectGeometry(entry.root.get(), event->removed, &event->removedNodes);
+						event->detachedRoot = root;
+						tracker.PushCaptured(event);
+					}
+			for (const auto& [root, entry] : currentRoots)
+				if (!a_previous || !a_previous->roots.contains(root))
+					if (auto records = SceneCapture::CaptureAttached(*root)) {
+						a_records += records->nodes.size();
+						++a_captures;
+						auto* event = new SceneTracker::Event{};
+						event->type = SceneTracker::EventType::Attached;
+						event->captured = std::move(records);
+						tracker.PushCaptured(event);
+					}
+		}
 	}
 
 	void FrameView::ServeFrameRequests(bool a_running)
@@ -485,159 +654,21 @@ namespace DCLF::Scene
 		const std::uint64_t applied = channels.categoryAppliedGeneration.load(std::memory_order_acquire);
 		while (categoryCapturesHeld.size() > 1 && categoryCapturesHeld.front()->generation < applied)
 			categoryCapturesHeld.pop_front();
-		// The edits first: one made while the signature is read moves them again, and the next frame reads it again.
-		auto& watch = categoryWatch;
-		const std::uint64_t edits = SceneTracker::CategoryEdits();
-		const std::uint64_t inputs = CategoryInputs();
-		if (a_force || !watch.read || edits != watch.edits || inputs != watch.inputs) {
-			std::vector<const void*> watched;
-			watch.signature = ReadCategorySignature(&watched);
-			SceneTracker::WatchCategoryNodes(std::move(watched));
-			watch.read = true;
-			watch.edits = edits;
-			watch.inputs = inputs;
-			++watch.reads;
-		} else if (Diagnostics::Observe().scene) {
-			// CS_DCLF_PERSISTENT_PARITY: a signature that moved with no edit seen and no input moved (an event the watch lacks).
-			++watch.checked;
-			static std::uint64_t flagged = 0;
-			if (const std::uint64_t full = ReadCategorySignature(nullptr); full != watch.signature && std::exchange(flagged, full) != full)
-				if (watch.missed++ < 8)
-					logger::warn("[DCLF] category signature (C2 parity): moved with no watched edit and no input moved (frame {}) <- FLAG", frame);
-		}
-		const std::uint64_t signature = watch.signature;
+		const std::uint64_t signature = RefreshCategorySignature(a_force, frame);
 		if (!a_force && categoryCapture && signature == categoryCapture->signature)
 			return timed();
 		++categoryCapturesMade;
 		auto capture = std::make_shared<CategoryCapture>();
 		capture->generation = ++categoryCaptures;
 		capture->signature = signature;
-		auto& current = capture->nodes;
-		auto& currentRoots = capture->roots;
-
-		auto addCell = [&](RE::TESObjectCELL* a_cell) {
-			if (!a_cell || !a_cell->IsAttached())
-				return;
-			auto* loaded = a_cell->GetRuntimeData().loadedData;
-			if (!loaded || !loaded->cell3D)
-				return;
-			auto& children = loaded->cell3D->GetChildren();
-			for (auto category : kDrawnCategories) {
-				const auto index = static_cast<std::uint16_t>(category);
-				if (index < children.free_idx() && children[index]) {
-					if (auto* node = children[index]->AsNode())
-						current.insert(node);
-				}
-			}
-			// References the engine moves out of the category nodes into multibounds (exteriors) and portal graph rooms
-			// (interiors), all under ObjectLODRoot (engine notes: cell multibounds and rooms).
-			if (auto* multiBound = loaded->multiBoundNode.get())
-				current.insert(multiBound);
-			if (auto* graph = loaded->portalGraph.get()) {
-				for (auto& room : graph->rooms) {
-					if (room)
-						current.insert(room.get());
-				}
-				if (auto* shared = graph->portalSharedNode.get()) {
-					current.insert(shared);
-					// Parentless references the graph draws (e.g. Bleak Falls Barrow's chamber pieces), filed under the shared node
-					// (FindCategoryNode). Held, so a root that leaves the list can still be walked when its tracked content is dropped.
-					for (const auto& child : graph->alwaysRenderChildren) {
-						if (child && !child->parent)
-							currentRoots.try_emplace(child.get(), CategoryCapture::Root{ child, shared });
-					}
-				}
-			}
-		};
-
-		if (auto* tes = RE::TES::GetSingleton()) {
-			// BSMultiBoundNodes under ObjectLODRoot (TES::objRoot), in exteriors and (holding the rooms) interiors.
-			if (auto* objRoot = tes->objRoot) {
-				for (auto& child : objRoot->GetChildren()) {
-					if (auto* multiBound = child ? netimmerse_cast<RE::BSMultiBoundNode*>(child.get()) : nullptr)
-						current.insert(multiBound);
-				}
-			}
-			// The classes' category roots while a class that lists one is on (Api::ObjectClassContribution::categoryRoot: Features/Lod's
-			// TES::lodLandRoot, the terrain manager's LOD blocks): category nodes, their content tracked by the usual structural events. A
-			// root two classes list is one node.
-			if (const std::uint32_t rootListing = RootListing(ActiveToggles())) {
-				const auto& roots = Extensions::RegisteredCategoryRoots();
-				for (std::uint32_t c = 0; c < kObjectClasses; ++c)
-					if (rootListing & (1u << c))
-						if (auto* root = roots[c]())
-							current.insert(root);
-			}
-			Engine::ForEachLoadedCell(*tes, addCell);
-		}
-		// The CategoryRoot views' roots while their toggles are on (their callbacks, in slot order: Features/FirstPerson's, the player's
-		// first-person skeleton, PlayerCharacter +0x8F8, Load3D: no parent; Main::unk_FPCulling and RenderDepth cull it alone). A root is
-		// a category node and a parentless root filed under itself, so the mirror counts it in the world (SetDrawnRoots) and its equipment
-		// attaches reach the tracker as events. Its kHidden is view-scoped: ClassifyFrame stops at it.
-		{
-			const auto& views = Extensions::Views();
-			for (std::uint32_t i = 0; i < views.rootCount; ++i) {
-				const auto view = views.rootViews[i];
-				if (!Extensions::ViewOn(ActiveToggles(), view))
-					continue;
-				Api::ViewRootCapture root;
-				Extensions::ViewEntryOf(view).captureRoot(root);
-				if (auto* node = root.root) {
-					current.insert(node);
-					currentRoots.try_emplace(node, CategoryCapture::Root{ RE::NiPointer<RE::NiAVObject>(node), node });
-					capture->viewRoots[static_cast<std::size_t>(view)] = node;
-				}
-			}
-		}
-		capture->held.reserve(current.size());
-		for (auto* node : current)
+		GatherCategoryNodes(*capture);
+		capture->held.reserve(capture->nodes.size());
+		for (auto* node : capture->nodes)
 			capture->held.emplace_back(node);
-		// What the job pins (RunFrameStartItem): category nodes new to the scene work's set (children's keys, subtrees) and new roots'
-		// subtrees. Its set is the capture it applied last, read from the render thread's own copy; none applied, or a rescan, makes all new.
 		auto& job = *frameStartJob;
 		job.capture = capture;
-		{
-			const CategoryCapture* base = nullptr;
-			for (const auto& held : categoryCapturesHeld)
-				if (held->generation == applied)
-					base = held.get();
-			const bool all = rescanCaptureAll || !base;
-			for (auto* node : current)
-				if (all || !base->nodes.contains(node))
-					job.pinNodes.push_back(node);
-			for (const auto& [root, entry] : currentRoots)
-				if (all || !base->roots.contains(root) || !base->nodes.contains(entry.category))
-					job.pinRoots.push_back(entry.root.get());
-		}
-		// The parentless roots are the mirror's world from now on: each new one captured whole, each gone one detached (the last
-		// capture still holds it), pushed onto the tracker's stack mirror-only, here (each read and pushed at once, as the hooks do theirs:
-		// other threads attach and detach inside the window), before the job posts the capture.
-		{
-			auto& tracker = SceneTracker::Get();
-			std::vector<const RE::NiAVObject*> roots;
-			for (const auto& [root, entry] : currentRoots)
-				roots.push_back(root);
-			SceneCapture::SetDrawnRoots(roots);
-			if (categoryCapture)
-				for (const auto& [root, entry] : categoryCapture->roots)
-					if (!currentRoots.contains(root)) {
-						auto* event = new SceneTracker::Event{};
-						event->type = SceneTracker::EventType::Detached;
-						SceneTracker::CollectGeometry(entry.root.get(), event->removed, &event->removedNodes);
-						event->detachedRoot = root;
-						tracker.PushCaptured(event);
-					}
-			for (const auto& [root, entry] : currentRoots)
-				if (!categoryCapture || !categoryCapture->roots.contains(root))
-					if (auto records = SceneCapture::CaptureAttached(*root)) {
-						categoryMirrorRecords += records->nodes.size();
-						++categoryMirrorCaptures;
-						auto* event = new SceneTracker::Event{};
-						event->type = SceneTracker::EventType::Attached;
-						event->captured = std::move(records);
-						tracker.PushCaptured(event);
-					}
-		}
+		PlanCategoryPins(job, *capture, categoryCapturesHeld, applied, rescanCaptureAll);
+		PushCategoryRoots(*capture, categoryCapture.get(), categoryMirrorRecords, categoryMirrorCaptures);
 		// Held until superseded by an applied one; posted by the job after its pins.
 		categoryCapturesHeld.push_back(capture);
 		categoryCapture = std::move(capture);

@@ -508,7 +508,7 @@ None of them writes a world or bone transform. The probe found one exception, wh
 | With the scene placement job | 1.03-1.06 ms | the job: 0.81-0.83 ms on the worker, joined with 0.000 ms waited |
 
 **Movers by event.** The engine's move writers push a key into an event queue (`MoveEvents` in
-`Scene/Coordinator/Internal.h`), from whichever job thread runs them, after the write:
+`Core/Scene/Coordinator/Internal.h`), from whichever job thread runs them, after the write:
 
 | Writer | Key | Calls a frame, Whiterun |
 | --- | --- | --- |

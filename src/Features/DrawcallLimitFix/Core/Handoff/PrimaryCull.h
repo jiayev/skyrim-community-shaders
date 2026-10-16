@@ -321,6 +321,12 @@ namespace DCLF
 		 * (filterDirty) and those whose exclusion bit moved are judged again, their roots inserted or erased.
 		 */
 		std::shared_ptr<const ListFilter> CurrentListFilter();
+		/** @brief CurrentListFilter's preconditions, the cut brought to the frame's candidates, and the exclusion it is judged with. False: no filter. */
+		bool ListFilterReady(bool& a_sunOff, std::shared_ptr<const SunExclusion>& a_exclusion);
+		/** @brief CurrentListFilter: the entries judged again queued (filterDirty), a_exclusion taken as filterExclusion. True: all are. */
+		bool MarkFilterDirty(std::uint32_t a_entries, bool a_sunOff, std::shared_ptr<const SunExclusion>& a_exclusion);
+		/** @brief CurrentListFilter: the queued entries judged, their roots erased then inserted in the next version (null: none moved). */
+		std::shared_ptr<ListFilter> JudgeFilterEntries(std::uint32_t a_entries, bool a_sunOff, bool a_all);
 		/** @brief Render thread: entry a_e's verdict may have moved (admission, walk, plan): judged again by the next filter. */
 		void NoteFilterEntry(std::uint32_t a_e) { filterDirty.push_back(a_e); }
 		/** @brief The build's job, Keep: a_filter's delta from listFilterKept applied to the kept lists. False when one needs a rebuild. */
@@ -434,6 +440,9 @@ namespace DCLF
 		 * (the pool's under a lease); reads nothing of the cut.
 		 */
 		EntryPlan PlanEntry(const EntrySpace& a_candidates, const RE::NiAVObject* a_root, PlannedEntry& a_out) const;
+		/** @brief PlanEntry's verdict from its walk's tallies: the census names, and the plan (a_out's lists cleared when Rejected). */
+		static EntryPlan ConcludePlan(const RE::NiAVObject* a_root, const char* a_rejected, const RE::BSGeometry* a_mixedBy, std::uint32_t a_ours,
+			std::uint32_t a_hidden, PlannedEntry& a_out);
 		/** @brief Render thread: a_planned (entry a_e, let go, its plan made for its current root) put into the cut. */
 		void SplicePlan(std::uint32_t a_e, PlannedEntry& a_planned);
 		/** @brief Render thread, before the cut is read: the pool's plans spliced in (those still for their entry's let-go). */

@@ -138,7 +138,7 @@ namespace DCLF
 		return true;
 	}
 
-	std::shared_ptr<const PrimaryCull::ListFilter> PrimaryCull::CurrentListFilter()
+	bool PrimaryCull::ListFilterReady(bool& a_sunOff, std::shared_ptr<const SunExclusion>& a_exclusion)
 	{
 		// Entries to judge again pile up while no filter is made: past the index space, all are.
 		if (filterDirty.size() > std::max<std::size_t>(cut.plans.size(), 1024)) {
@@ -148,7 +148,7 @@ namespace DCLF
 		const auto toggles = ActiveToggles();
 		if (!Policy::WithholdFromEngine() || !toggles.excludePrimaryEntries) {
 			++listStats.notToggled;
-			return nullptr;
+			return false;
 		}
 		// Precipitation::SetupMask culls every list when the engine draws an occlusion map: every map must be DCLF's.
 		bool everyMap = true;
@@ -156,13 +156,13 @@ namespace DCLF
 			everyMap = Extensions::OcclusionOn(ActiveToggles(), v);
 		if (!everyMap) {
 			++listStats.noOcclusion;
-			return nullptr;
+			return false;
 		}
 		// The cut as the last frame left it, brought up to the frame's candidates (it plans again only the entries that moved).
 		TakePlans();
 		if (const auto candidates = Scene::FrameView::Get().GetSunCandidates(); !candidates) {
 			++listStats.notCurrent;
-			return nullptr;
+			return false;
 		} else if (candidates != cut.candidates) {
 			std::vector<std::uint32_t> changed;
 			ChangedEntriesByLog(cut.candidates.get(), *candidates, changed);
@@ -176,27 +176,38 @@ namespace DCLF
 		auto exclusion = sunOff ? nullptr : SunExclusionSlot::Get().Pending();
 		if (!sunOff && (!exclusion || exclusion->candidates != cut.candidates || exclusion->excluded.size() != cut.plans.size())) {
 			++listStats.noExclusion;
-			return nullptr;
+			return false;
 		}
-		const auto entries = static_cast<std::uint32_t>(cut.plans.size());
+		a_sunOff = sunOff;
+		a_exclusion = std::move(exclusion);
+		return true;
+	}
+
+	bool PrimaryCull::MarkFilterDirty(std::uint32_t a_entries, bool a_sunOff, std::shared_ptr<const SunExclusion>& a_exclusion)
+	{
 		// Judged again: the entries the cut changed (NoteFilterEntry) and those whose exclusion bit moved; all for a first filter.
-		bool all = filterDirtyAll || !listFilterBuilt || sunOff != filterSunOff || (!sunOff && !filterExclusion);
-		if (!all && !sunOff && exclusion != filterExclusion) {
+		bool all = filterDirtyAll || !listFilterBuilt || a_sunOff != filterSunOff || (!a_sunOff && !filterExclusion);
+		if (!all && !a_sunOff && a_exclusion != filterExclusion) {
 			const auto& was = filterExclusion->excluded;
-			const auto& now = exclusion->excluded;
-			for (std::uint32_t e = 0; e < entries; ++e)
+			const auto& now = a_exclusion->excluded;
+			for (std::uint32_t e = 0; e < a_entries; ++e)
 				if (e >= was.size() || was[e] != now[e])
 					filterDirty.push_back(e);
 		}
 		// Entries past a shrunk index space leave the filter.
 		if (!all)
-			for (std::uint32_t e = entries; e < listReason.size(); ++e)
+			for (std::uint32_t e = a_entries; e < listReason.size(); ++e)
 				filterDirty.push_back(e);
 		filterDirtyAll = false;
-		filterSunOff = sunOff;
-		filterExclusion = std::move(exclusion);
+		filterSunOff = a_sunOff;
+		filterExclusion = std::move(a_exclusion);
+		return all;
+	}
+
+	std::shared_ptr<PrimaryCull::ListFilter> PrimaryCull::JudgeFilterEntries(std::uint32_t a_entries, bool a_sunOff, bool a_all)
+	{
 		const auto reasonOf = [&](std::uint32_t a_e) -> std::uint8_t {
-			if (a_e >= entries || !cut.roots[a_e] || cut.plans[a_e] == EntryPlan::Rejected)
+			if (a_e >= a_entries || !cut.roots[a_e] || cut.plans[a_e] == EntryPlan::Rejected)
 				return kNoEntry;
 			if (!cut.admitted[a_e])
 				return kNotAdmitted;
@@ -204,7 +215,7 @@ namespace DCLF
 				return kMixed;
 			if (cut.walk[a_e])
 				return kWalked;
-			if (!sunOff && !filterExclusion->excluded[a_e])
+			if (!a_sunOff && !filterExclusion->excluded[a_e])
 				return kNotExcluded;
 			return kRemovable;
 		};
@@ -212,26 +223,26 @@ namespace DCLF
 		const auto edit = [&]() -> ListFilter& {
 			if (!next) {
 				next = std::make_shared<ListFilter>();
-				if (listFilterBuilt && !all) {
+				if (listFilterBuilt && !a_all) {
 					next->roots = listFilterBuilt->roots;
 					next->base = listFilterBuilt->version;
 				}
 			}
 			return *next;
 		};
-		if (all) {
+		if (a_all) {
 			edit();
-			listReason.assign(entries, kNoEntry);
-			listReasonRoot.assign(entries, nullptr);
+			listReason.assign(a_entries, kNoEntry);
+			listReasonRoot.assign(a_entries, nullptr);
 			listReasonCount = {};
-			listReasonCount[kNoEntry] = entries;
-			for (std::uint32_t e = 0; e < entries; ++e)
+			listReasonCount[kNoEntry] = a_entries;
+			for (std::uint32_t e = 0; e < a_entries; ++e)
 				filterDirty.push_back(e);
 		}
-		if (listReason.size() < entries) {
-			listReasonCount[kNoEntry] += entries - listReason.size();
-			listReason.resize(entries, kNoEntry);
-			listReasonRoot.resize(entries, nullptr);
+		if (listReason.size() < a_entries) {
+			listReasonCount[kNoEntry] += a_entries - listReason.size();
+			listReason.resize(a_entries, kNoEntry);
+			listReasonRoot.resize(a_entries, nullptr);
 		}
 		// Erased first, then inserted: a root that moved to another index within the delta stays in.
 		std::vector<std::pair<std::uint32_t, std::uint8_t>> judged;
@@ -240,7 +251,7 @@ namespace DCLF
 			if (e >= listReason.size())
 				continue;
 			const std::uint8_t reason = reasonOf(e);
-			const auto* root = e < entries ? cut.roots[e] : nullptr;
+			const auto* root = e < a_entries ? cut.roots[e] : nullptr;
 			++listStats.filterJudged;
 			if (reason == listReason[e] && root == listReasonRoot[e])
 				continue;
@@ -266,6 +277,18 @@ namespace DCLF
 				++listStats.filterInserted;
 			}
 		}
+		return next;
+	}
+
+	std::shared_ptr<const PrimaryCull::ListFilter> PrimaryCull::CurrentListFilter()
+	{
+		bool sunOff = false;
+		std::shared_ptr<const SunExclusion> exclusion;
+		if (!ListFilterReady(sunOff, exclusion))
+			return nullptr;
+		const auto entries = static_cast<std::uint32_t>(cut.plans.size());
+		const bool all = MarkFilterDirty(entries, sunOff, exclusion);
+		auto next = JudgeFilterEntries(entries, sunOff, all);
 		// Entries past the index space are gone from it.
 		if (listReason.size() > entries) {
 			for (std::uint32_t e = entries; e < listReason.size(); ++e)

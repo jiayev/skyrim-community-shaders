@@ -267,7 +267,7 @@ namespace DCLF
 		std::uint32_t generation = 0;         // a target change starts a new set; every earlier index is stale
 		std::uint32_t targetsGeneration = 0;  // DrawPipelines::Generation the set is built for
 		std::uint64_t revision = 0;           // new with each publication
-		std::shared_ptr<const void> setVersion;  // holds every setIndex above (DrawPipelines.cpp, SetVersion)
+		std::shared_ptr<const void> setVersion;  // holds every setIndex above (DrawPipelinesImpl.h, SetVersion)
 
 		struct ShadowEntry
 		{

@@ -509,26 +509,37 @@ under the new toggles is installed. Switching DCLF off clears every claim and by
 ## Where the code is
 
 The module tree, the threads, a frame's data flow and the diagnostics contract are in the **Code map** of
-[drawcall-limit-fix.md](./drawcall-limit-fix.md#code-map). In short: `src/Features/DrawcallLimitFix.{h,cpp}` is the feature
-(its hooks, lifecycle and menu, and the one file that decides whether DCLF is built: `CS_HAS_DCLF`, set by
-`cmake/RenderGraph.cmake` when the render graph and ORGModuleServices are present; the rest of CS calls DCLF only through it).
-Under `src/Features/DrawcallLimitFix/`, `Core/` holds what every feature builds on (`Core/Runtime/`: the building blocks and
-the scene executor; `Core/Engine/`: engine access, the read window, the releases and the render-thread budget;
-`Core/Settings/`: the switches and toggles; `Core/Scene/`: the scene pump's wake; `Core/Gpu/`: frame values, pooled backings,
-GPU resources and textures, pipelines; `Core/Render/`: `IndirectDraws` and `FrameDriver`, with the snapshot builder, revisions,
-payloads, resources, readbacks, epochs and passes, the shadow views' among them until they move to their feature). The layout is moving to `Core/` plus one
-folder per feature ([dclf-layout.md](./dclf-layout.md)); until each piece moves, `Engine/{Capture,Cull,Views}` touch the engine,
-`Scene/{Model,Ports,Coordinator,FrameView}` and `Scene/Channels.h` keep the scene, and `Diagnostics/` holds every parity check, probe and report.
-`tools/dclf-layout-check.py` checks the include rules.
+[drawcall-limit-fix.md](./drawcall-limit-fix.md#code-map); the layout and its rules are [dclf-layout.md](./dclf-layout.md).
+In short: `src/Features/DrawcallLimitFix.{h,cpp}` is the shell (its hooks, lifecycle and menu, and the one file that decides
+whether DCLF is built: `CS_HAS_DCLF`, set by `cmake/RenderGraph.cmake` when the render graph and ORGModuleServices are
+present; the rest of CS calls DCLF only through it). Under `src/Features/DrawcallLimitFix/`, `Api/` is the extension API and
+`Core/` what every feature builds on:
 
-Inside `Scene/Coordinator/` and `Core/Render/`, `Internal.h` is shared by that folder's files only. The layouts the
+-   `Core/Runtime/`: the building blocks and the scene executor.
+-   `Core/Engine/`: engine access, the read window, the releases and the render-thread budget; `Capture/`, the engine's
+    writers hooked, record reads and the event channels.
+-   `Core/Settings/`: the switches and toggles.
+-   `Core/Scene/`: the scene. `Coordinator/` (the coordinator's core, its components in `State/`), `FrameView/` (the render
+    thread's half), `Model/` (records, tables, publication, the mirror), and `Channels.h`, the entry space and the pump's wake.
+-   `Core/Handoff/`: taking objects from the engine: the primary cull, scene lists, pass capture and shadow views.
+-   `Core/Shading/`: the material ports, material sources and writes, constants, lighting descriptors, frame globals.
+-   `Core/Gpu/`: frame values, pooled backings, GPU resources and textures, pipelines (`Pipelines/`, split by family).
+-   `Core/Render/`: `IndirectDraws` and `FrameDriver`, with the snapshot, revisions, payloads, epochs, passes, shadow,
+    readbacks, views, the main view and the draw families.
+-   `Core/Extensions/`: the extension registry and the Core halves of `Api/`'s contracts.
+
+`Features/`, `Integrations/` and `Diagnostics/` are areas, not layers: one folder per engine feature DCLF ports, one per CS
+feature it supports, and every parity check, probe and report. `tools/dclf-layout-check.py` checks the include rules and
+keeps the top level closed.
+
+Inside `Core/Scene/Coordinator/` and `Core/Render/`, `Internal.h` is shared by that folder's files only. The layouts the
 shaders read are in `Core/Render/Resources/GpuLayouts.h`, and must match `BuildDrawsCS.hlsl` and `Lighting.hlsl`. The
 scene's set of growable buffers is `Core/Render/Resources/SceneBufferSet.{h,cpp}`, and what a revision requires of it is
 `Core/Render/Revision/Requirements.cpp`. The payload's pooled versions are `Core/Render/Payload/PayloadVersions.{h,cpp}`,
 DCLF's ties to the pools `Core/Gpu/PooledBackings.{h,cpp}`, and its retirement clock `Core/Runtime/FrameRetirement.{h,cpp}`.
 
 Includes within a folder use bare names. Includes across folders are rooted at `src/`
-(`Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h`).
+(`Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h`).
 
 ## Two modes: trusted, and parity
 

@@ -222,6 +222,15 @@ namespace DCLF
 		       a_node->worldBound.center.z - Global<float>(kTreeHeightBase) > Global<float>(kTreeHeightLimit);
 	}
 
+	namespace
+	{
+		const char* PlanNameOf(const RE::NiAVObject* a_object)
+		{
+			const auto* rtti = a_object->GetRTTI();
+			return rtti && rtti->name ? rtti->name : "no RTTI";
+		}
+	}
+
 	PrimaryCull::EntryPlan PrimaryCull::PlanEntry(const EntrySpace& a_candidates, const RE::NiAVObject* a_root, PlannedEntry& a_out) const
 	{
 		// Each node and geometry is judged by its OnVisible slot (wideOnVisible), not its RTTI. A geometry the snapshot has as DCLF's
@@ -230,10 +239,6 @@ namespace DCLF
 		const char* rejected = nullptr;
 		const RE::BSGeometry* mixedBy = nullptr;
 		std::uint32_t ours = 0, hidden = 0;
-		const auto nameOf = [](const RE::NiAVObject* a_object) {
-			const auto* rtti = a_object->GetRTTI();
-			return rtti && rtti->name ? rtti->name : "no RTTI";
-		};
 		const auto visit = [&](const auto& a_self, const RE::NiAVObject* a_object, bool a_isRoot) -> void {
 			if (rejected || !a_object)
 				return;
@@ -242,7 +247,7 @@ namespace DCLF
 				const bool appends = onVisible == geometryOnVisible || onVisible == wideOnVisible.dynamic || onVisible == wideOnVisible.subIndex ||
 				                     onVisible == wideOnVisible.segmented;
 				if (!appends) {
-					rejected = nameOf(a_object);
+					rejected = PlanNameOf(a_object);
 					return;
 				}
 				const auto it = a_candidates.geometries.find(geometry);
@@ -279,19 +284,25 @@ namespace DCLF
 			const bool plain = onVisible == wideOnVisible.node || onVisible == wideOnVisible.engineNode || onVisible == wideOnVisible.multiBound ||
 			                   onVisible == wideOnVisible.billboard || onVisible == wideOnVisible.ordered;
 			if (!node || !(plain || fadeRoot)) {
-				rejected = nameOf(a_object);
+				rejected = PlanNameOf(a_object);
 				return;
 			}
 			for (const auto& child : node->GetChildren())
 				a_self(a_self, child.get(), false);
 		};
 		visit(visit, a_root, true);
+		return ConcludePlan(a_root, rejected, mixedBy, ours, hidden, a_out);
+	}
+
+	PrimaryCull::EntryPlan PrimaryCull::ConcludePlan(const RE::NiAVObject* a_root, const char* a_rejected, const RE::BSGeometry* a_mixedBy, std::uint32_t a_ours,
+		std::uint32_t a_hidden, PlannedEntry& a_out)
+	{
 		// Nothing of DCLF's: the engine's, unless it holds only hidden statics (a marker), which nobody draws until unhidden.
-		const bool empty = !ours && !(hidden && !mixedBy);
-		a_out.rejectReason = rejected ? rejected : empty ? "no DCLF geometry" : nullptr;
-		a_out.mixedBy = rejected || empty || !mixedBy ? std::string() :
-		                                                fmt::format("'{}' ({})", mixedBy->name.c_str() ? mixedBy->name.c_str() : "", nameOf(mixedBy));
-		if (rejected || empty) {
+		const bool empty = !a_ours && !(a_hidden && !a_mixedBy);
+		a_out.rejectReason = a_rejected ? a_rejected : empty ? "no DCLF geometry" : nullptr;
+		a_out.mixedBy = a_rejected || empty || !a_mixedBy ? std::string() :
+		                                                    fmt::format("'{}' ({})", a_mixedBy->name.c_str() ? a_mixedBy->name.c_str() : "", PlanNameOf(a_mixedBy));
+		if (a_rejected || empty) {
 			a_out.members.clear();
 			a_out.memberObject.clear();
 			a_out.switchPaths.clear();

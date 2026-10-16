@@ -46,7 +46,7 @@ namespace DCLF::Features::Effects
 	inline constexpr std::uint32_t kEffectPSBaseColorScale = 16;
 	inline constexpr std::uint32_t kEffectPSLightingInfluence = 17;
 
-	/** @brief Effect.hlsl's member names, by variable (DrawPipelines.cpp, ConstantTableOf, for an effect key: the port's space's names). */
+	/** @brief Effect.hlsl's member names, by variable (MainPipelines.cpp, ConstantTableOf, for an effect key: the port's space's names). */
 	inline constexpr std::array<std::string_view, kEffectVSVariables> kEffectVSNames{ "World", "PreviousWorld", "Bones", "EyePosition", "FogParam", "FogNearColor",
 		"FogFarColor", "FalloffData", "SoftMateralVSParams", "TexcoordOffset", "TexcoordOffsetMembrane", "SubTexOffset", "PosAdjust", "MatProj" };
 	inline constexpr std::array<std::string_view, kEffectPSVariables> kEffectPSNames{ "PropertyColor", "AlphaTestRef", "MembraneRimColor", "MembraneVars",

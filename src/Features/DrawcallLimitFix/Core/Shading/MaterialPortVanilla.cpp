@@ -214,6 +214,241 @@ namespace DCLF::MaterialPort
 				return frame.renderTargetViews[static_cast<std::size_t>(a_index)];
 			}
 		};
+
+		/** @brief The record before SetupMaterial: nothing written. */
+		void ResetRecord(MaterialRecord& a_out)
+		{
+			a_out.vs.Reset();
+			a_out.ps.Reset();
+			a_out.textures.fill(nullptr);
+			a_out.addressModes.fill(0);
+			a_out.filterModes.fill(kUnwrittenFilterMode);
+			a_out.textureWritten = 0;
+			a_out.featureTextures = {};
+		}
+
+		/** @brief The +0x94 the draw has: SetupTechnique's remap (1414db810), idempotent, so a descriptor already remapped passes unchanged. */
+		std::uint32_t RemapDescriptor(std::uint32_t a_passDescriptor, const VanillaFrame& a_frame)
+		{
+			std::uint32_t d = a_passDescriptor;
+			if ((d & 0x3f000000u) == 0x12000000u) {
+				if (!a_frame.techniqueByte12)
+					d = (d & 0xc9ffffffu) | 0x9000000u;
+			} else if ((d & 0x3f000000u) == 0x7000000u && !a_frame.techniqueByte7) {
+				d &= 0xc0ffffffu;
+			}
+			return d;
+		}
+
+		/** @brief Techniques 8 (MTLand) and 0x13 (MTLandLODBlend). False: the engine would read past the layer arrays. */
+		bool EvaluateLandscape(Port& p, std::uint32_t d, const VanillaFrame& a_frame)
+		{
+			p.PSCopy(kPSLODTexParams, 0, 0x148);
+			p.PSCopy(kPSLODTexParams, 1, 0x14c);
+			p.PS(kPSLODTexParams, 2, a_frame.lodTexParamsZ ? kOneBits : kZeroBits);
+			p.PSCopy(kPSLODTexParams, 3, 0x150);
+			// Base diffuse t0 and normal t7, inline with no address mode: SetupTechnique (1414db810, techniques 8/0x13) set every
+			// slot's to 3 just before.
+			p.SetTexture(0, p.Texture(kDiffuse));
+			p.SetAddress(0, 3);
+			p.SetTexture(7, p.Texture(kNormal));
+			p.SetAddress(7, 3);
+			// Layers: diffuse[i] (+0xa8) to t(i+1), normal[i] (+0xd0) to t(i+8), clamp mode 3; numLandscapeTextures (+0xa0) of them.
+			const std::uint32_t count = p.Bits(0xa0);
+			if (count > 5)
+				return false;  // the engine would read past the arrays (diffuse[5] is normal[0])
+			for (std::uint32_t i = 0; i < count; ++i) {
+				p.SetTexture(i + 1, p.Texture(static_cast<std::uint16_t>(0xa8 + 8 * i)));
+				p.SetAddress(i + 1, 3);
+				p.SetTexture(i + 8, p.Texture(static_cast<std::uint16_t>(0xd0 + 8 * i)));
+				p.SetAddress(i + 8, 3);
+			}
+			if (p.Has(0xf8)) {  // overlay: t13, clamp mode 0
+				p.SetTexture(13, p.m.View(0xf8));
+				p.SetAddress(13, 0);
+			}
+			if (p.Has(0x100))  // noise: t15 through FUN_1414e0460
+				p.Bind(15, 0x100);
+			// LandscapeTexture1to4IsSpecPower = +0x130..+0x13c; 5to6 = (+0x140, +0x144, 0, 0).
+			p.PSCopy(kPSLandscape1to4IsSpecPower, 1, 0x134);
+			p.PSCopy(kPSLandscape1to4IsSpecPower, 2, 0x138);
+			p.PSCopy(kPSLandscape1to4IsSpecPower, 3, 0x13c);
+			p.PSCopy(kPSLandscape1to4IsSpecPower, 0, 0x130);
+			p.PSCopy(kPSLandscape5to6IsSpecPower, 1, 0x144);
+			p.PSCopy(kPSLandscape5to6IsSpecPower, 0, 0x140);
+			p.PS(kPSLandscape5to6IsSpecPower, 2, kZeroBits);
+			p.PS(kPSLandscape5to6IsSpecPower, 3, kZeroBits);
+			if (d & kSnow) {
+				// 1to4IsSnow = +0x118..+0x124; 5to6IsSnow = (+0x128, +0x12c, byte 0x142035548, 1 / (float)int 0x1420355f0).
+				p.PSCopy(kPSLandscape1to4IsSnow, 1, 0x11c);
+				p.PSCopy(kPSLandscape1to4IsSnow, 2, 0x120);
+				p.PSCopy(kPSLandscape1to4IsSnow, 3, 0x124);
+				p.PSCopy(kPSLandscape1to4IsSnow, 0, 0x118);
+				p.PSCopy(kPSLandscape5to6IsSnow, 1, 0x12c);
+				p.PS(kPSLandscape5to6IsSnow, 2, a_frame.landSnowZ ? kOneBits : kZeroBits);
+				p.PSCopy(kPSLandscape5to6IsSnow, 0, 0x128);
+				// cvtdq2ps then divss (1414dc8d9).
+				p.PSFloat(kPSLandscape5to6IsSnow, 3, std::bit_cast<float>(kOneBits) / static_cast<float>(a_frame.landSnowDivisor));
+			}
+			return true;
+		}
+
+		/**
+		 * @brief The technique's own textures and constants. a_bindBase: t0/t1 at the end (every technique but MTLand). False: the
+		 * landscape's layer count is past its arrays.
+		 */
+		bool EvaluateTechnique(Port& p, std::uint32_t d, const VanillaFrame& a_frame, bool& a_bindBase)
+		{
+			const std::uint32_t technique = (d >> 24) & 0x3f;
+			switch (technique) {
+			case 1:  // Envmap: cube, mask; EnvmapData.xy = (envMapScale +0xb0, the mask exists)
+				p.BindCube(0xa0);
+				p.BindMask(0xa8);
+				p.PS(kPSEnvmapData, 1, p.Has(0xa8) ? kOneBits : kZeroBits);
+				p.PSCopy(kPSEnvmapData, 0, 0xb0);
+				break;
+			case 2:  // Glowmap
+				p.Bind(6, 0xa0);
+				break;
+			case 3:  // Parallax
+				p.Bind(3, 0xa0);
+				break;
+			case 4:  // FaceGen: tint t3, detail t4, subsurface t12
+				p.Bind(3, 0xa0);
+				p.Bind(4, 0xa8);
+				p.Bind(12, 0xb0);
+				break;
+			case 5:  // FaceGenRGBTint
+			case 6:  // Hair: TintColor.xyz = +0xa0..+0xa8 (w unwritten)
+				p.PSCopy(kPSTintColor, 2, 0xa8);
+				p.PSCopy(kPSTintColor, 1, 0xa4);
+				p.PSCopy(kPSTintColor, 0, 0xa0);
+				break;
+			case 7:  // ParallaxOcc: ParallaxOccData.xy = (+0xac scale, +0xa8 max passes)
+				p.Bind(3, 0xa0);
+				p.PSCopy(kPSParallaxOccData, 1, 0xa8);
+				p.PSCopy(kPSParallaxOccData, 0, 0xac);
+				break;
+			case 8:     // MTLand
+			case 0x13:  // MTLandLODBlend
+				if (!EvaluateLandscape(p, d, a_frame))
+					return false;
+				a_bindBase = false;
+				break;
+			case 9:     // LODLand
+			case 0x12:  // LODLandNoise: LODTexParams = (+0xb8, +0xbc, byte 0x142032fda, +0xc0)
+				p.PSCopy(kPSLODTexParams, 0, 0xb8);
+				p.PSCopy(kPSLODTexParams, 1, 0xbc);
+				p.PS(kPSLODTexParams, 2, a_frame.lodTexParamsZ ? kOneBits : kZeroBits);
+				p.PSCopy(kPSLODTexParams, 3, 0xc0);
+				if ((d & 0x3f000000u) == 0x12000000u) {
+					// The noise texture (+0xb0) when there is one; t15's clamp mode 3 and filter mode 1 either way.
+					if (p.Has(0xb0))
+						p.Bind(15, 0xb0);
+					p.SetAddress(15, 3);
+					p.SetFilter(15, 1);
+				}
+				break;
+			case 0xb:  // MultilayerParallax: layer t8; MultiLayerParallaxData = +0xb8..+0xc4; cube, mask; EnvmapData.xy = (+0xc8, mask exists)
+				p.Bind(8, 0xa0);
+				p.PSCopy(kPSMultiLayerParallaxData, 1, 0xbc);
+				p.PSCopy(kPSMultiLayerParallaxData, 2, 0xc0);
+				p.PSCopy(kPSMultiLayerParallaxData, 3, 0xc4);
+				p.PSCopy(kPSMultiLayerParallaxData, 0, 0xb8);
+				p.BindCube(0xa8);
+				p.BindMask(0xb0);
+				p.PS(kPSEnvmapData, 1, p.Has(0xb0) ? kOneBits : kZeroBits);
+				p.PSCopy(kPSEnvmapData, 0, 0xc8);
+				break;
+			case 0xe:  // MultiIndexSparkle: SparkleParams = +0xa0..+0xac
+				p.PSCopy(kPSSparkleParams, 2, 0xa8);
+				p.PSCopy(kPSSparkleParams, 3, 0xac);
+				p.PSCopy(kPSSparkleParams, 1, 0xa4);
+				p.PSCopy(kPSSparkleParams, 0, 0xa0);
+				break;
+			case 0x10:  // Eye: cube, mask; Left/RightEyeCenter.xyz = +0xb4.., +0xc0..; EnvmapData.xy = (+0xb0, mask exists)
+				p.BindCube(0xa0);
+				p.BindMask(0xa8);
+				p.VSCopy(kVSLeftEyeCenter, 1, 0xb8);
+				p.VSCopy(kVSLeftEyeCenter, 2, 0xbc);
+				p.VSCopy(kVSLeftEyeCenter, 0, 0xb4);
+				p.VSCopy(kVSRightEyeCenter, 1, 0xc4);
+				p.VSCopy(kVSRightEyeCenter, 2, 0xc8);
+				p.VSCopy(kVSRightEyeCenter, 0, 0xc0);
+				p.PS(kPSEnvmapData, 1, p.Has(0xa8) ? kOneBits : kZeroBits);
+				p.PSCopy(kPSEnvmapData, 0, 0xb0);
+				break;
+			default:  // 0, TreeAnim, LODObjects, LODObjectHD, Cloud, and anything above 0x13: nothing
+				break;
+			}
+			return true;
+		}
+
+		/** @brief After the technique: the texcoord offset, then the feature flags' writes, the base textures and the IBL colour, in SetupMaterial's order. */
+		void EvaluateFeatures(Port& p, std::uint32_t d, const VanillaFrame& a_frame, bool a_bindBase)
+		{
+			// TexcoordOffset: offset (+0xc/+0x10) and scale (+0x1c/+0x20) of the buffer the frame reads, 8 bytes per buffer.
+			const std::size_t buffer = static_cast<std::size_t>(a_frame.textureTransformBuffer) * 8;
+			p.VSCopy(kVSTexcoordOffset, 0, 0xc + buffer);
+			p.VSCopy(kVSTexcoordOffset, 1, 0x10 + buffer);
+			p.VSCopy(kVSTexcoordOffset, 2, 0x1c + buffer);
+			p.VSCopy(kVSTexcoordOffset, 3, 0x20 + buffer);
+
+			if (d & kSpecular) {
+				// SpecularColor = (specularColor +0x38..+0x40 times specularColorScale +0x8c (mulss each), specularPower +0x88).
+				const float scale = p.Float(0x8c);
+				p.PSFloat(kPSSpecularColor, 0, p.Float(0x38) * scale);
+				p.PSFloat(kPSSpecularColor, 1, p.Float(0x3c) * scale);
+				p.PSFloat(kPSSpecularColor, 2, p.Float(0x40) * scale);
+				p.PSCopy(kPSSpecularColor, 3, 0x88);
+				if (d & kModelSpaceNormals) {
+					// The specular map in t2 (FUN_1414e0460, then the same inline), filter mode 3.
+					p.Bind(2, kSpecularBackLighting);
+					p.Bind(2, kSpecularBackLighting);
+					p.SetFilter(2, 3);
+				}
+			}
+			if ((d & kAmbientSpecular) && a_frame.ambientSpecularWritten)
+				for (std::uint32_t i = 0; i < 4; ++i)
+					p.PSFloat(kPSAmbientSpecular, i, a_frame.ambientSpecular[i]);
+			// Soft and rim lighting: the rim/soft texture in t12 (inline, textureClampMode), LightingEffectParams.xy = +0x90, +0x94.
+			for (const auto flag : { kSoftLighting, kRimLighting }) {
+				if (!(d & flag))
+					continue;
+				p.Bind(12, kRimSoftLighting);
+				p.PSCopy(kPSLightingEffectParams, 0, 0x90);
+				p.PSCopy(kPSLightingEffectParams, 1, 0x94);
+			}
+			if (d & kBackLighting)  // the back-lighting texture in t9 (inline)
+				p.Bind(9, kSpecularBackLighting);
+			if (d & kSnow) {
+				for (std::uint32_t i = 0; i < 3; ++i)
+					p.PSFloat(kPSSnowRimLightParameters, i, a_frame.snowRim[i]);
+				p.PS(kPSSnowRimLightParameters, 3, a_frame.snowRimW ? kOneBits : kZeroBits);
+			}
+			if (a_bindBase) {
+				// t0: the diffuse texture, or the render target the material names (+0x50); t1: the normal map. Both textureClampMode.
+				const auto target = static_cast<std::int32_t>(p.Bits(kDiffuseRenderTarget));
+				if (target == -1) {
+					p.Bind(0, kDiffuse);
+				} else {
+					p.SetTexture(0, p.RenderTarget(target));
+					p.SetAddress(0, p.Bits(kTextureClampMode));
+				}
+				p.Bind(1, kNormal);
+			}
+			for (std::uint32_t i = 0; i < 4; ++i)
+				p.PSFloat(kPSIBLParams, i, a_frame.ibl[i]);
+			if (d & kCharacterLight) {
+				// t11: the character light's render target while its index is not negative, clamp mode 0.
+				if (a_frame.characterLightTarget >= 0) {
+					p.SetTexture(11, p.RenderTarget(a_frame.characterLightTarget));
+					p.SetAddress(11, 0);
+				}
+				for (std::uint32_t i = 0; i < 4; ++i)
+					p.PSFloat(kPSCharacterLightParams, i, a_frame.fullBright ? a_frame.characterLight[i] : 0.0f);
+			}
+		}
 	}
 
 	VanillaFrame SampleVanillaFrame()
@@ -303,217 +538,14 @@ namespace DCLF::MaterialPort
 		if (!c || a_snapshot.size < c->size)
 			return false;
 
-		a_out.vs.Reset();
-		a_out.ps.Reset();
-		a_out.textures.fill(nullptr);
-		a_out.addressModes.fill(0);
-		a_out.filterModes.fill(kUnwrittenFilterMode);
-		a_out.textureWritten = 0;
-		a_out.featureTextures = {};
+		ResetRecord(a_out);
 
-		// The +0x94 the draw has: SetupTechnique's remap (1414db810), idempotent, so a descriptor already remapped passes unchanged.
-		std::uint32_t d = a_passDescriptor;
-		if ((d & 0x3f000000u) == 0x12000000u) {
-			if (!a_frame.techniqueByte12)
-				d = (d & 0xc9ffffffu) | 0x9000000u;
-		} else if ((d & 0x3f000000u) == 0x7000000u && !a_frame.techniqueByte7) {
-			d &= 0xc0ffffffu;
-		}
-		const std::uint32_t technique = (d >> 24) & 0x3f;
-
+		const std::uint32_t d = RemapDescriptor(a_passDescriptor, a_frame);
 		Port p(a_snapshot, *c, a_frame, a_out);
 		bool bindBase = true;  // t0/t1 at the end: every technique but MTLand
-
-		switch (technique) {
-		case 1:  // Envmap: cube, mask; EnvmapData.xy = (envMapScale +0xb0, the mask exists)
-			p.BindCube(0xa0);
-			p.BindMask(0xa8);
-			p.PS(kPSEnvmapData, 1, p.Has(0xa8) ? kOneBits : kZeroBits);
-			p.PSCopy(kPSEnvmapData, 0, 0xb0);
-			break;
-		case 2:  // Glowmap
-			p.Bind(6, 0xa0);
-			break;
-		case 3:  // Parallax
-			p.Bind(3, 0xa0);
-			break;
-		case 4:  // FaceGen: tint t3, detail t4, subsurface t12
-			p.Bind(3, 0xa0);
-			p.Bind(4, 0xa8);
-			p.Bind(12, 0xb0);
-			break;
-		case 5:  // FaceGenRGBTint
-		case 6:  // Hair: TintColor.xyz = +0xa0..+0xa8 (w unwritten)
-			p.PSCopy(kPSTintColor, 2, 0xa8);
-			p.PSCopy(kPSTintColor, 1, 0xa4);
-			p.PSCopy(kPSTintColor, 0, 0xa0);
-			break;
-		case 7:  // ParallaxOcc: ParallaxOccData.xy = (+0xac scale, +0xa8 max passes)
-			p.Bind(3, 0xa0);
-			p.PSCopy(kPSParallaxOccData, 1, 0xa8);
-			p.PSCopy(kPSParallaxOccData, 0, 0xac);
-			break;
-		case 8:     // MTLand
-		case 0x13:  // MTLandLODBlend
-		{
-			p.PSCopy(kPSLODTexParams, 0, 0x148);
-			p.PSCopy(kPSLODTexParams, 1, 0x14c);
-			p.PS(kPSLODTexParams, 2, a_frame.lodTexParamsZ ? kOneBits : kZeroBits);
-			p.PSCopy(kPSLODTexParams, 3, 0x150);
-			// Base diffuse t0 and normal t7, inline with no address mode: SetupTechnique (1414db810, techniques 8/0x13) set every
-			// slot's to 3 just before.
-			p.SetTexture(0, p.Texture(kDiffuse));
-			p.SetAddress(0, 3);
-			p.SetTexture(7, p.Texture(kNormal));
-			p.SetAddress(7, 3);
-			// Layers: diffuse[i] (+0xa8) to t(i+1), normal[i] (+0xd0) to t(i+8), clamp mode 3; numLandscapeTextures (+0xa0) of them.
-			const std::uint32_t count = p.Bits(0xa0);
-			if (count > 5)
-				return false;  // the engine would read past the arrays (diffuse[5] is normal[0])
-			for (std::uint32_t i = 0; i < count; ++i) {
-				p.SetTexture(i + 1, p.Texture(static_cast<std::uint16_t>(0xa8 + 8 * i)));
-				p.SetAddress(i + 1, 3);
-				p.SetTexture(i + 8, p.Texture(static_cast<std::uint16_t>(0xd0 + 8 * i)));
-				p.SetAddress(i + 8, 3);
-			}
-			if (p.Has(0xf8)) {  // overlay: t13, clamp mode 0
-				p.SetTexture(13, a_snapshot.View(0xf8));
-				p.SetAddress(13, 0);
-			}
-			if (p.Has(0x100))  // noise: t15 through FUN_1414e0460
-				p.Bind(15, 0x100);
-			bindBase = false;
-			// LandscapeTexture1to4IsSpecPower = +0x130..+0x13c; 5to6 = (+0x140, +0x144, 0, 0).
-			p.PSCopy(kPSLandscape1to4IsSpecPower, 1, 0x134);
-			p.PSCopy(kPSLandscape1to4IsSpecPower, 2, 0x138);
-			p.PSCopy(kPSLandscape1to4IsSpecPower, 3, 0x13c);
-			p.PSCopy(kPSLandscape1to4IsSpecPower, 0, 0x130);
-			p.PSCopy(kPSLandscape5to6IsSpecPower, 1, 0x144);
-			p.PSCopy(kPSLandscape5to6IsSpecPower, 0, 0x140);
-			p.PS(kPSLandscape5to6IsSpecPower, 2, kZeroBits);
-			p.PS(kPSLandscape5to6IsSpecPower, 3, kZeroBits);
-			if (d & kSnow) {
-				// 1to4IsSnow = +0x118..+0x124; 5to6IsSnow = (+0x128, +0x12c, byte 0x142035548, 1 / (float)int 0x1420355f0).
-				p.PSCopy(kPSLandscape1to4IsSnow, 1, 0x11c);
-				p.PSCopy(kPSLandscape1to4IsSnow, 2, 0x120);
-				p.PSCopy(kPSLandscape1to4IsSnow, 3, 0x124);
-				p.PSCopy(kPSLandscape1to4IsSnow, 0, 0x118);
-				p.PSCopy(kPSLandscape5to6IsSnow, 1, 0x12c);
-				p.PS(kPSLandscape5to6IsSnow, 2, a_frame.landSnowZ ? kOneBits : kZeroBits);
-				p.PSCopy(kPSLandscape5to6IsSnow, 0, 0x128);
-				// cvtdq2ps then divss (1414dc8d9).
-				p.PSFloat(kPSLandscape5to6IsSnow, 3, std::bit_cast<float>(kOneBits) / static_cast<float>(a_frame.landSnowDivisor));
-			}
-			break;
-		}
-		case 9:     // LODLand
-		case 0x12:  // LODLandNoise: LODTexParams = (+0xb8, +0xbc, byte 0x142032fda, +0xc0)
-			p.PSCopy(kPSLODTexParams, 0, 0xb8);
-			p.PSCopy(kPSLODTexParams, 1, 0xbc);
-			p.PS(kPSLODTexParams, 2, a_frame.lodTexParamsZ ? kOneBits : kZeroBits);
-			p.PSCopy(kPSLODTexParams, 3, 0xc0);
-			if ((d & 0x3f000000u) == 0x12000000u) {
-				// The noise texture (+0xb0) when there is one; t15's clamp mode 3 and filter mode 1 either way.
-				if (p.Has(0xb0))
-					p.Bind(15, 0xb0);
-				p.SetAddress(15, 3);
-				p.SetFilter(15, 1);
-			}
-			break;
-		case 0xb:  // MultilayerParallax: layer t8; MultiLayerParallaxData = +0xb8..+0xc4; cube, mask; EnvmapData.xy = (+0xc8, mask exists)
-			p.Bind(8, 0xa0);
-			p.PSCopy(kPSMultiLayerParallaxData, 1, 0xbc);
-			p.PSCopy(kPSMultiLayerParallaxData, 2, 0xc0);
-			p.PSCopy(kPSMultiLayerParallaxData, 3, 0xc4);
-			p.PSCopy(kPSMultiLayerParallaxData, 0, 0xb8);
-			p.BindCube(0xa8);
-			p.BindMask(0xb0);
-			p.PS(kPSEnvmapData, 1, p.Has(0xb0) ? kOneBits : kZeroBits);
-			p.PSCopy(kPSEnvmapData, 0, 0xc8);
-			break;
-		case 0xe:  // MultiIndexSparkle: SparkleParams = +0xa0..+0xac
-			p.PSCopy(kPSSparkleParams, 2, 0xa8);
-			p.PSCopy(kPSSparkleParams, 3, 0xac);
-			p.PSCopy(kPSSparkleParams, 1, 0xa4);
-			p.PSCopy(kPSSparkleParams, 0, 0xa0);
-			break;
-		case 0x10:  // Eye: cube, mask; Left/RightEyeCenter.xyz = +0xb4.., +0xc0..; EnvmapData.xy = (+0xb0, mask exists)
-			p.BindCube(0xa0);
-			p.BindMask(0xa8);
-			p.VSCopy(kVSLeftEyeCenter, 1, 0xb8);
-			p.VSCopy(kVSLeftEyeCenter, 2, 0xbc);
-			p.VSCopy(kVSLeftEyeCenter, 0, 0xb4);
-			p.VSCopy(kVSRightEyeCenter, 1, 0xc4);
-			p.VSCopy(kVSRightEyeCenter, 2, 0xc8);
-			p.VSCopy(kVSRightEyeCenter, 0, 0xc0);
-			p.PS(kPSEnvmapData, 1, p.Has(0xa8) ? kOneBits : kZeroBits);
-			p.PSCopy(kPSEnvmapData, 0, 0xb0);
-			break;
-		default:  // 0, TreeAnim, LODObjects, LODObjectHD, Cloud, and anything above 0x13: nothing
-			break;
-		}
-
-		// TexcoordOffset: offset (+0xc/+0x10) and scale (+0x1c/+0x20) of the buffer the frame reads, 8 bytes per buffer.
-		const std::size_t buffer = static_cast<std::size_t>(a_frame.textureTransformBuffer) * 8;
-		p.VSCopy(kVSTexcoordOffset, 0, 0xc + buffer);
-		p.VSCopy(kVSTexcoordOffset, 1, 0x10 + buffer);
-		p.VSCopy(kVSTexcoordOffset, 2, 0x1c + buffer);
-		p.VSCopy(kVSTexcoordOffset, 3, 0x20 + buffer);
-
-		if (d & kSpecular) {
-			// SpecularColor = (specularColor +0x38..+0x40 times specularColorScale +0x8c (mulss each), specularPower +0x88).
-			const float scale = p.Float(0x8c);
-			p.PSFloat(kPSSpecularColor, 0, p.Float(0x38) * scale);
-			p.PSFloat(kPSSpecularColor, 1, p.Float(0x3c) * scale);
-			p.PSFloat(kPSSpecularColor, 2, p.Float(0x40) * scale);
-			p.PSCopy(kPSSpecularColor, 3, 0x88);
-			if (d & kModelSpaceNormals) {
-				// The specular map in t2 (FUN_1414e0460, then the same inline), filter mode 3.
-				p.Bind(2, kSpecularBackLighting);
-				p.Bind(2, kSpecularBackLighting);
-				p.SetFilter(2, 3);
-			}
-		}
-		if ((d & kAmbientSpecular) && a_frame.ambientSpecularWritten)
-			for (std::uint32_t i = 0; i < 4; ++i)
-				p.PSFloat(kPSAmbientSpecular, i, a_frame.ambientSpecular[i]);
-		// Soft and rim lighting: the rim/soft texture in t12 (inline, textureClampMode), LightingEffectParams.xy = +0x90, +0x94.
-		for (const auto flag : { kSoftLighting, kRimLighting }) {
-			if (!(d & flag))
-				continue;
-			p.Bind(12, kRimSoftLighting);
-			p.PSCopy(kPSLightingEffectParams, 0, 0x90);
-			p.PSCopy(kPSLightingEffectParams, 1, 0x94);
-		}
-		if (d & kBackLighting)  // the back-lighting texture in t9 (inline)
-			p.Bind(9, kSpecularBackLighting);
-		if (d & kSnow) {
-			for (std::uint32_t i = 0; i < 3; ++i)
-				p.PSFloat(kPSSnowRimLightParameters, i, a_frame.snowRim[i]);
-			p.PS(kPSSnowRimLightParameters, 3, a_frame.snowRimW ? kOneBits : kZeroBits);
-		}
-		if (bindBase) {
-			// t0: the diffuse texture, or the render target the material names (+0x50); t1: the normal map. Both textureClampMode.
-			const auto target = static_cast<std::int32_t>(p.Bits(kDiffuseRenderTarget));
-			if (target == -1) {
-				p.Bind(0, kDiffuse);
-			} else {
-				p.SetTexture(0, p.RenderTarget(target));
-				p.SetAddress(0, p.Bits(kTextureClampMode));
-			}
-			p.Bind(1, kNormal);
-		}
-		for (std::uint32_t i = 0; i < 4; ++i)
-			p.PSFloat(kPSIBLParams, i, a_frame.ibl[i]);
-		if (d & kCharacterLight) {
-			// t11: the character light's render target while its index is not negative, clamp mode 0.
-			if (a_frame.characterLightTarget >= 0) {
-				p.SetTexture(11, p.RenderTarget(a_frame.characterLightTarget));
-				p.SetAddress(11, 0);
-			}
-			for (std::uint32_t i = 0; i < 4; ++i)
-				p.PSFloat(kPSCharacterLightParams, i, a_frame.fullBright ? a_frame.characterLight[i] : 0.0f);
-		}
+		if (!EvaluateTechnique(p, d, a_frame, bindBase))
+			return false;
+		EvaluateFeatures(p, d, a_frame, bindBase);
 
 		if (p.failed)
 			return false;

@@ -138,6 +138,11 @@ namespace DCLF
 		void RequireLatches(GrowthBuild& a_build);
 		ShadowInputs PrepareShadowInputs(const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const;
+		// ExecuteShadowFrame's stages (Shadow/ShadowEpochs.cpp): the pending views' modes and states noted against the catalog, and
+		// a submitted epoch's results.
+		void NoteShadowViewModes(std::array<bool, kShadowModeCount>& a_modeUsed, std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates);
+		void NoteShadowEpochDrawn(const ShadowPayload& a_payload, const std::array<bool, kShadowModeCount>& a_modeUsed, std::uint32_t a_frame,
+			IndirectDraws::ShadowStats& a_stats);
 		std::uint32_t shadowLoggedReasons = 0;
 		bool ShadowNotReady(std::uint32_t a_reason, const char* a_what)
 		{

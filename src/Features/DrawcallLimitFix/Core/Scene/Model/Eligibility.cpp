@@ -34,6 +34,55 @@ namespace DCLF::Eligibility
 		}
 	}
 
+	namespace
+	{
+		/**
+		 * @brief Static's buffer verdict: a skinned shape's skin instance, partitions and palette, or an unskinned one's renderer data
+		 * (None: drawable buffers).
+		 */
+		Ineligible BufferVerdict(const SceneCapture::GeometryRecord& a_geometry)
+		{
+			const auto& g = a_geometry;
+			if (g.skin) {
+				if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Skinned))
+					return Ineligible::Skinned;
+				// The skinned path (engine notes: skinning): a NiSkinInstance, or with CS_DCLF_SKIN_PARTITIONS a
+				// BSDismemberSkinInstance or several partitions, and a palette the native shader could index (240
+				// rows). Each partition the engine draws is one draw of that PARTITION's buffer, not the geometry's
+				// rendererData, which for a skinned shape is a different TriShape; which partitions it draws is
+				// SkinPartitionMask's, per frame.
+				static const REL::Relocation<const RE::NiRTTI*> niSkinInstance{ RE::NiSkinInstance::Ni_RTTI };
+				static const REL::Relocation<const RE::NiRTTI*> dismemberSkinInstance{ RE::BSDismemberSkinInstance::Ni_RTTI };
+				const bool dismember = g.skinRtti == dismemberSkinInstance.get();
+				if (g.skinRtti != niSkinInstance.get() && !dismember)
+					return Ineligible::SkinShape;
+				const auto partitions = static_cast<std::uint32_t>(g.partitions.size());
+				if (!g.skinPartition || !g.skinData || partitions == 0 || !SkinPalettes::Fits(g.boneCount * SkinPalettes::kRowsPerBone))
+					return Ineligible::SkinShape;
+				if ((partitions > 1 || dismember) && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::SkinPartitions))
+					return Ineligible::SkinShape;
+				if (partitions > kMaxSkinPartitions)
+					return Ineligible::SkinShape;
+				// The engine indexes the dismember flags by partition; a flag array of another length is not one it
+				// could have drawn from either.
+				if (dismember && !g.shown.empty() && g.shown.size() != partitions)
+					return Ineligible::SkinShape;
+				// Every partition is drawn with the first one's pipeline, so they share its vertex layout; a LOD
+				// byte past 2 would index the next row of the engine's table.
+				const auto& first = g.partitions[0];
+				for (const auto& p : g.partitions) {
+					if (!p.vertexBuffer || !p.indexBuffer)
+						return Ineligible::NoRendererData;
+					if (p.vertexDesc != first.vertexDesc || p.lodByte > 2)
+						return Ineligible::SkinShape;
+				}
+			} else if (!g.rendererData || !g.vertexBuffer || !g.indexBuffer) {
+				return Ineligible::NoRendererData;
+			}
+			return Ineligible::None;
+		}
+	}
+
 	Ineligible Static(const SceneCapture::LeafView& a_leaf, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated)
 	{
 		if (!a_leaf)
@@ -84,42 +133,8 @@ namespace DCLF::Eligibility
 				return Ineligible::NotTriShape;
 		}
 
-		if (g.skin) {
-			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Skinned))
-				return Ineligible::Skinned;
-			// The skinned path (engine notes: skinning): a NiSkinInstance, or with CS_DCLF_SKIN_PARTITIONS a
-			// BSDismemberSkinInstance or several partitions, and a palette the native shader could index (240
-			// rows). Each partition the engine draws is one draw of that PARTITION's buffer, not the geometry's
-			// rendererData, which for a skinned shape is a different TriShape; which partitions it draws is
-			// SkinPartitionMask's, per frame.
-			static const REL::Relocation<const RE::NiRTTI*> niSkinInstance{ RE::NiSkinInstance::Ni_RTTI };
-			static const REL::Relocation<const RE::NiRTTI*> dismemberSkinInstance{ RE::BSDismemberSkinInstance::Ni_RTTI };
-			const bool dismember = g.skinRtti == dismemberSkinInstance.get();
-			if (g.skinRtti != niSkinInstance.get() && !dismember)
-				return Ineligible::SkinShape;
-			const auto partitions = static_cast<std::uint32_t>(g.partitions.size());
-			if (!g.skinPartition || !g.skinData || partitions == 0 || !SkinPalettes::Fits(g.boneCount * SkinPalettes::kRowsPerBone))
-				return Ineligible::SkinShape;
-			if ((partitions > 1 || dismember) && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::SkinPartitions))
-				return Ineligible::SkinShape;
-			if (partitions > kMaxSkinPartitions)
-				return Ineligible::SkinShape;
-			// The engine indexes the dismember flags by partition; a flag array of another length is not one it
-			// could have drawn from either.
-			if (dismember && !g.shown.empty() && g.shown.size() != partitions)
-				return Ineligible::SkinShape;
-			// Every partition is drawn with the first one's pipeline, so they share its vertex layout; a LOD
-			// byte past 2 would index the next row of the engine's table.
-			const auto& first = g.partitions[0];
-			for (const auto& p : g.partitions) {
-				if (!p.vertexBuffer || !p.indexBuffer)
-					return Ineligible::NoRendererData;
-				if (p.vertexDesc != first.vertexDesc || p.lodByte > 2)
-					return Ineligible::SkinShape;
-			}
-		} else if (!g.rendererData || !g.vertexBuffer || !g.indexBuffer) {
-			return Ineligible::NoRendererData;
-		}
+		if (const Ineligible buffers = BufferVerdict(g); buffers != Ineligible::None)
+			return buffers;
 
 		const auto* property = SceneCapture::LeafView::Lighting(a_leaf.property);
 		if (!property) {
