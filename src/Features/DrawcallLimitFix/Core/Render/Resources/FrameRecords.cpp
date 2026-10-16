@@ -1,4 +1,5 @@
-// FrameRecords.h's writers: a frame record and the frame-wide rows of a frame-constants buffer, from this frame's sources (render thread).
+// FrameRecords.h's writers: a frame record, the frame-wide rows of a frame-constants buffer and the frame buffers' copies, from this
+// frame's sources (render thread).
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 
@@ -80,6 +81,36 @@ namespace DCLF::Draws
 		a_add(a_context, sizeof(ExtrasFrame::projectedGlobals), kExtrasPixelFrameOffset);
 		for (const auto& row : Extensions::RegisteredFrameConstantRows())
 			a_add(a_context, sizeof(float[4]), FrameConstantRowOffset(row.row));
+	}
+
+	bool LatchFrameBuffer(LatchedUploads& a_latched, const FrameBuffer& a_frameBuffer, std::span<const std::byte> a_contents)
+	{
+		const std::size_t offset = std::size_t(a_frameBuffer.firstElement) * a_frameBuffer.stride;
+		const std::size_t bytes = std::size_t(a_frameBuffer.elements) * a_frameBuffer.stride;
+		if (a_contents.size() < offset + bytes) {
+			static std::vector<std::byte> zeros;
+			if (zeros.size() < bytes)
+				zeros.resize(bytes);
+			a_latched(a_frameBuffer.copy, zeros.data(), bytes, 0);
+			return false;
+		}
+		a_latched(a_frameBuffer.copy, a_contents.data() + offset, bytes, 0);
+		return true;
+	}
+
+	winrt::com_ptr<ID3D11Buffer> BoundPixelBuffer(std::uint32_t a_register)
+	{
+		winrt::com_ptr<ID3D11ShaderResourceView> view;
+		globals::d3d::context->PSGetShaderResources(a_register, 1, view.put());
+		if (!view)
+			return nullptr;
+		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+		view->GetDesc(&desc);
+		if (desc.ViewDimension != D3D11_SRV_DIMENSION_BUFFER && desc.ViewDimension != D3D11_SRV_DIMENSION_BUFFEREX)
+			return nullptr;
+		winrt::com_ptr<ID3D11Resource> resource;
+		view->GetResource(resource.put());
+		return resource.try_as<ID3D11Buffer>();
 	}
 
 	std::span<const std::byte> SharedDataBlock()

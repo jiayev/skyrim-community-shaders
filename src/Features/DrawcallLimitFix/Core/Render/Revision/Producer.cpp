@@ -122,21 +122,26 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief A view's own frame values' latched copies (into a_key, its frame constants), in CommitView's order, packed from a_at (its
-		 * latch layout's FrameOffset): the record, CS's SharedData and FeatureData at the depth commit's sizes (a_depth: the same blocks,
-		 * this frame's), the frame-wide rows. The faces' programs read no other frame slot.
+		 * @brief A view's own frame values' latched copies, in CommitView's order, packed from a_at (its latch layout's FrameOffset): its
+		 * copies of the main frame buffers (a_frameBuffers, whole; null: none), then into a_key, its frame constants, the record, CS's
+		 * SharedData and FeatureData at the depth commit's sizes (a_depth: the same blocks, this frame's), the frame-wide rows. The faces'
+		 * programs read no other frame slot.
 		 */
-		std::vector<LatchedCopy> ViewFrameLatched(const void* a_key, const FrameBlockSizes& a_depth, std::uint32_t a_at)
+		std::vector<LatchedCopy> ViewFrameLatched(const void* a_key, const std::vector<FrameBuffer>* a_frameBuffers, const FrameBlockSizes& a_depth, std::uint32_t a_at)
 		{
 			std::vector<LatchedCopy> out;
 			std::size_t used = 0;
-			auto add = [&](std::size_t a_bytes, std::uint64_t a_offset) {
+			auto addTo = [&](const void* a_target, std::size_t a_bytes, std::uint64_t a_offset) {
 				if (!a_bytes)
 					return;
 				const std::size_t at = (used + 15) & ~std::size_t(15);
-				out.push_back({ a_key, static_cast<std::uint32_t>(a_at + at), static_cast<std::uint32_t>(a_bytes), a_offset });
+				out.push_back({ a_target, static_cast<std::uint32_t>(a_at + at), static_cast<std::uint32_t>(a_bytes), a_offset });
 				used = at + a_bytes;
 			};
+			auto add = [&](std::size_t a_bytes, std::uint64_t a_offset) { addTo(a_key, a_bytes, a_offset); };
+			for (const auto& frameBuffer : a_frameBuffers ? std::span<const FrameBuffer>(*a_frameBuffers) : std::span<const FrameBuffer>())
+				if (frameBuffer.copy)
+					addTo(frameBuffer.copy.get(), std::size_t(frameBuffer.elements) * frameBuffer.stride, 0);
 			add(sizeof(DrawBindings), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 			add(a_depth.ps[kSharedDataRegister], FrameSlotOffset(true, kSharedDataRegister));
 			add(a_depth.ps[kFeatureDataRegister], FrameSlotOffset(true, kFeatureDataRegister));
@@ -378,10 +383,11 @@ namespace DCLF
 			}
 			if (!view.resources || (traits.depthPass && !viewOn[v]))
 				continue;
-			// A view's own frame values (the faces'): its latch's frame region holds them at the depth commit's block sizes, grown by a page
-			// (another layout: a new block at the seal).
+			// A view's own frame values (the faces': its frame buffers' copies, then its frame constants'): its latch's frame region holds them
+			// at the depth commit's block sizes, grown by a page (another layout: a new block at the seal).
 			if (OwnsFrameConstants(traits) && view.resources->frameConstants && producer.latches.viewsLaidOut[v]) {
-				const auto bytes = static_cast<std::uint32_t>(LatchedBytes(ViewFrameLatched(view.resources->frameConstants.get(), inputs.blockSizes[kDepthShape], 0)));
+				const auto frameBuffers = view.resources->frameBuffers.load(std::memory_order_acquire);
+				const auto bytes = static_cast<std::uint32_t>(LatchedBytes(ViewFrameLatched(view.resources->frameConstants.get(), frameBuffers.get(), inputs.blockSizes[kDepthShape], 0)));
 				if (auto& layout = producer.latches.views[v]; bytes > layout.frameBytes)
 					layout.frameBytes = (bytes + 4095u) & ~4095u;
 			}
@@ -491,7 +497,8 @@ namespace DCLF
 			const auto& own = view.resources->frameConstants;
 			in.frameConstantsAddress = own ? view.resources->frameConstantsAddress : r.frameConstantsAddress;
 			if (own && viewLatches.latch && viewLatches.layout.frameBytes) {
-				in.frameCopies = ViewFrameLatched(own.get(), inputs.blockSizes[kDepthShape], viewLatches.layout.FrameOffset());
+				const auto frameBuffers = view.resources->frameBuffers.load(std::memory_order_acquire);
+				in.frameCopies = ViewFrameLatched(own.get(), frameBuffers.get(), inputs.blockSizes[kDepthShape], viewLatches.layout.FrameOffset());
 				if (LatchedBytes(in.frameCopies) > viewLatches.layout.Bytes())
 					in.frameCopies.clear();  // laid out for smaller blocks: the commit stages them
 			}
@@ -599,6 +606,9 @@ namespace DCLF
 			if (!view.resources)
 				continue;
 			a_mixer.Ptr(view.resources.get());
+			// A view's own frame buffers' copies (its frame values' latched copies name them), made again with the main frame buffers' shape.
+			if (const auto frameBuffers = view.resources->frameBuffers.load(std::memory_order_acquire))
+				a_mixer.Ptr(frameBuffers.get());
 			a_mixer.Mix(latches.viewsLaidOut[v]);
 			a_mixer.Raw(latches.views[v]);
 			a_mixer.Raw(view.targets);

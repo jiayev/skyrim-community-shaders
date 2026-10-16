@@ -138,6 +138,7 @@ public:
 
 	Texture2D* envTextureBC6H = nullptr;
 	Texture2D* envReflectionsTextureBC6H = nullptr;
+	ID3D11ShaderResourceView* boundReflectionsView = nullptr;  // the view PostDeferred last bound at t30 (DCLF names it to its views)
 	Texture2D* bc6hScratchTexture = nullptr;
 	Texture2D* bc6hTailScratchTexture = nullptr;
 

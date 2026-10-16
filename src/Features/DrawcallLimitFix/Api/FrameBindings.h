@@ -35,16 +35,21 @@ namespace DCLF::Api
 	};
 
 	/**
-	 * @brief A frame texture (Api::InstallContext::RegisterFrameTexture): an engine view every DCLF colour draw reads at a declared texture
-	 * register, which the frame record names because it is a render target (a material row never holds one).
+	 * @brief A frame texture (Api::InstallContext::RegisterFrameTexture): a view every DCLF colour draw reads at a declared texture
+	 * register, which the frame record names because it is a render target or a CS feature's own per-frame texture (a material row never
+	 * holds one): Effects' soft depth, Integrations/TerrainBlending's mask, and the CS features' views (Integrations/VolumetricShadows,
+	 * CloudShadows, ExponentialHeightFog, DynamicCubemaps, Skylighting, TerrainShadows, WaterEffects, IBL), which also give a view with
+	 * frame constants of its own (the reflection's faces) its sources of this frame's.
 	 *
 	 * The register is the feature's compile-time constant, with its HLSL declaration; Features/Manifest.cpp checks it against Core's and the
 	 * frame bindings', the install against those and the other frame textures'.
 	 *
-	 * - view: render thread, once per colour commit before its frame textures are resolved: the engine's shader resource view
-	 *   (ID3D11ShaderResourceView*) the register reads (null: the null texture, or with capturedWhenNull the captured view).
-	 * - capturedWhenNull: a null view leaves the register the engine view the commit captured there (a texture the feature names only
-	 *   while it binds it itself after the epoch, and the engine's binding stands otherwise: Integrations/TerrainBlending's mask).
+	 * - view: render thread, once per colour commit before its frame textures are resolved, and once per epoch of a view with frame
+	 *   constants of its own: the shader resource view (ID3D11ShaderResourceView*) the register reads (null: the null texture, or with
+	 *   capturedWhenNull in a colour commit the captured view).
+	 * - capturedWhenNull: a null view leaves the register the view the colour commit captured there (a texture the feature names only
+	 *   while it binds it itself after the epoch, and the engine's or CS's binding stands otherwise: Integrations/TerrainBlending's mask;
+	 *   a CS feature's view the integration names only while it is the one CS binds there).
 	 */
 	struct FrameTexture
 	{

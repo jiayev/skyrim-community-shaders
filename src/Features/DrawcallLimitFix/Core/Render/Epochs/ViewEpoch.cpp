@@ -378,6 +378,22 @@ namespace DCLF
 			const auto& adopted = Adopted();
 			CommitUploads uploads(commitStagedPool, adopted);
 			LatchedUploads frame(a_shape.latched[ViewFrame::kFrameList], uploads, latchSlot);
+			// Its copies of the main frame buffers (Deferred's sun cascades at t98, written at EarlyPrepasses and again before the cube's faces),
+			// each from the buffer bound at its register now and that buffer's CPU mirror: this frame's contents, named at the register.
+			// Unfillable (nothing bound there, or the mirror holds less): the copy reads zero and the register null.
+			if (const auto frameBuffers = own->frameBuffers.load(std::memory_order_acquire)) {
+				auto& mirror = ConstantMirror::Get();
+				for (const auto& frameBuffer : *frameBuffers) {
+					std::span<const std::byte> contents;
+					const auto buffer = BoundPixelBuffer(frameBuffer.textureRegister);
+					if (buffer) {
+						mirror.Watch(buffer.get());
+						contents = mirror.Contents(buffer.get());
+					}
+					if (LatchFrameBuffer(frame, frameBuffer, contents))
+						state.frameTextures[frameBuffer.textureRegister] = frameBuffer.copy->GetSRVInfo(0).slot.index;
+				}
+			}
 			const auto shared = SharedDataBlock(), feature = FeatureDataBlock();
 			const std::uint32_t vsMask = (1u << kPerFrameVertexRegister) | (1u << kFrameFogRegister);
 			const std::uint32_t psMask = (1u << kPerFrameVertexRegister) | (shared.empty() ? 0u : 1u << kSharedDataRegister) | (feature.empty() ? 0u : 1u << kFeatureDataRegister);

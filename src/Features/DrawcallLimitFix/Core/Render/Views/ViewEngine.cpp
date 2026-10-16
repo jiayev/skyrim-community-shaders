@@ -143,7 +143,8 @@ namespace DCLF
 		 * @brief A view's frame textures (t16 and up) for its own frame record, from this frame's sources alone: the character light, the
 		 * registered frame textures' views (Api::FrameTexture). Nothing the colour pass captured (that is the frame before's by the time
 		 * the faces draw), nor the frame graph buffers (Light Limit Fix's clusters are the main camera's, culled after the faces' epoch):
-		 * those read null. Each binding is held by a_owners for the execution.
+		 * those read null. The frame buffers (t98) are the view's own copies, which its commit fills and names (CommitView). Each binding is
+		 * held by a_owners for the execution.
 		 */
 		void ResolveViewFrameTextures(ViewEpochState& a_state, std::vector<std::shared_ptr<const void>>& a_owners)
 		{
