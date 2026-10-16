@@ -33,6 +33,7 @@
 #include <cstring>
 #include <thread>
 #include <vector>
+#include <fmt/ranges.h>
 
 namespace
 {
@@ -971,6 +972,8 @@ bool RenderGraphRuntime::Initialize()
 		if (EpochsEnabled())
 			desc.epochOrder = { EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::Reflection), EpochOf(Segment::FirstPersonDepth),
 				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward), EpochOf(Segment::FirstPerson) };
+		if (!desc.epochOrder.empty())
+			logger::info("[ORG] epoch order: {}", fmt::join(desc.epochOrder, ","));
 		const bool closed = desc.closedExecutions;
 		state->host = std::make_unique<org::PersistentGraphHost>(std::move(desc));
 		// The frame-wait timeline, before anything builds the graph (its packets bind it when prepared): only with a queue of the
@@ -1004,6 +1007,7 @@ bool RenderGraphRuntime::Initialize()
 			// selected (the commit trusts it), so no live ticket is prepared for them. Light culling's stays live.
 			std::vector<std::uint32_t> revisionEpochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass),
 				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward), EpochOf(Segment::FirstPersonDepth), EpochOf(Segment::FirstPerson) };
+			logger::info("[ORG] async epochs: {}; revision-driven: {}", fmt::join(epochs, ","), fmt::join(revisionEpochs, ","));
 			state->host->SetAsyncEpochs(std::move(epochs), std::move(revisionEpochs));
 			logger::info("[ORG] Async epochs: each epoch is prepared and recorded ahead on the graph host's thread; the render thread submits (DCLF's from its scene revisions)");
 		} catch (const std::exception& e) {

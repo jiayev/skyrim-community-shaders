@@ -62,6 +62,7 @@ namespace DCLF
 		FoliageParity,
 		ShadowDebugOutput,
 		ReleaseGuard,
+		ScheduleDump,
 
 		// Test harness: scripted input for unattended runs.
 		TestCommands,
