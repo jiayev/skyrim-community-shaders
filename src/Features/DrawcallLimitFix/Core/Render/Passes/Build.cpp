@@ -11,7 +11,7 @@ namespace DCLF::Draws
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
 		org::DeclaredViewToken fadeRoots;
 		org::DeclaredViewToken bucketCounts, poolFirsts;  // the depth segment's buckets (Resources::zBucketCounts) and the pool's firsts
-		org::DeclaredViewToken cullPrograms, rootPrograms;  // the main camera's first phase: its cull input's programs, each root's
+		org::DeclaredViewToken cullPrograms, rootPrograms;  // the main camera's first phase: the cull binding Programs, each root's
 	};
 
 	struct BuildDrawsFrame
@@ -49,9 +49,10 @@ namespace DCLF::Draws
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(*resources->frustum).View();
-			// Phase 1 tests a member against its root's program (the main cull input's: Features/Portals' portal programs).
-			if (resources->frustum && resources->scene->cullPrograms && resources->scene->fadeRootPrograms) {
-				bindings.cullPrograms = a_builder.ShaderResource(*resources->scene->cullPrograms).View();
+			// Phase 1 tests a member against its root's program (the cull binding Programs: Features/Portals' portal programs).
+			const auto& programs = Extensions::CullBindingBuffer(Api::CullBindingSlot::Programs, *resources->scene);
+			if (resources->frustum && programs && resources->scene->fadeRootPrograms) {
+				bindings.cullPrograms = a_builder.ShaderResource(*programs).View();
 				bindings.rootPrograms = a_builder.ShaderResource(*resources->scene->fadeRootPrograms).View();
 			}
 			// Every phase reads the fade roots' static rows (phase 1's fade verdicts, LOD skin partitions). The states FadeStateCS

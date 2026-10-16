@@ -196,7 +196,9 @@ fills. This predates the B2/wave-3 moves, which only renamed the queue.
 In one `verify.sh mpp` run (the B2 gate parity build), one window reported `<- PORTAL VIEW; first: unbound space: 4 ops 1 sets, the
 engine's 0 ops 0 sets`. In that window the engine listed one unbound-space occluder plane (state 2, flags `0x1000001`), and DCLF had
 it in state 0. The same motion path on the B1 build, and the earlier motion runs, showed none. The gates change did not touch
-portals.
+portals. It showed again in a wave 3 run (w3a, the same text), and in the Fades F1 run (f1-fullf, 2 of 21 windows) as another variant:
+`first: unbound space: set 0 mask 0x3d, the engine's 0x39` (and `0x35`), so DCLF keeps one more of the set's planes than the engine. F1
+moved only the programs buffer's upload into Features/Portals; the walk and its comparison are CPU-side and unchanged.
 
 ## Stand-in walk parity: three snow geometries missed at frame 868 under motion (found 2026-10-15; not investigated)
 

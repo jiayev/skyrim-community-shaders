@@ -536,10 +536,6 @@ namespace DCLF
 				buffers->fadeStatesOut[h] = MakeVersioned(StructuredBuffer(roots, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0", unused, true),
 					{ .extent = { 0, sizeof(FadeNodeState), sizeof(FadeNodeState) }, .contents = GrowableContents::Zero });
 			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
-			// The main cull input's programs, named by it (none without one: the roots take the frustum alone).
-			if (const auto* input = Extensions::MainCullInput())
-				buffers->cullPrograms = MakeVersioned(CreateWords(smallStart ? input->contribution.headerWords : 4096u, false, input->programsName.c_str()),
-					{ .extent = { 0, 4, 4 } });
 			buffers->fadeRootPrograms = MakeVersioned(StructuredBuffer(roots, sizeof(std::uint32_t), "cs.dclf.fade-root-programs", unused), { .extent = { 0, 4, 4 } });
 			buffers->fadeAnimated = MakeVersioned(StructuredBuffer(roots, sizeof(std::uint32_t), "cs.dclf.fade-animated", unused), { .extent = { 0, 4, 4 } });
 			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);

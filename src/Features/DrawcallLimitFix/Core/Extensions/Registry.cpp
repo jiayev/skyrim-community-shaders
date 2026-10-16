@@ -110,6 +110,8 @@ namespace DCLF::Extensions
 			Api::VertexStreamContribution vertexStream{};
 			// The main cull input (no name: none). Resolved at the end (ResolveMainCullInput).
 			Api::MainCullInputContribution mainCullInput{};
+			// By slot: its cull binding (no select: none). Resolved at the end (ResolveCullBindings).
+			std::array<Api::CullBinding, kCullBindingSlots> cullBindings{};
 			// The depth pyramid (no setup: none). Resolved at the end (ResolveDepthPyramid).
 			Api::DepthPyramidContribution depthPyramid{};
 			// By palette rows class (its index - 1): its registration (itemClass Count: none). Resolved at the end (ResolvePaletteRows).
@@ -882,13 +884,24 @@ namespace DCLF::Extensions
 
 			void RegisterMainCullInput(const Api::MainCullInputContribution& a_input) override
 			{
-				if (a_input.name.empty() || a_input.programsName.empty() || !a_input.headerWords || !a_input.unboundVisible || !a_input.structure || !a_input.programs ||
-					!a_input.programsVersion || !a_input.judge)
+				if (a_input.name.empty() || !a_input.unboundVisible || !a_input.structure || !a_input.programsVersion || !a_input.judge || !a_input.test)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete main cull input", feature));
 				// The scene lists' keep check and the depth commits' programs read one walk.
 				if (!lists.mainCullInput.name.empty())
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes main cull input {}, which {} has", feature, a_input.name, lists.mainCullInput.name));
 				lists.mainCullInput = a_input;
+			}
+
+			void RegisterCullBinding(const Api::CullBinding& a_binding) override
+			{
+				if (a_binding.slot >= Api::CullBindingSlot::Count || a_binding.name.empty() || !a_binding.select)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete cull binding", feature));
+				// Core's cull reads each slot at one descriptor word.
+				auto& taken = lists.cullBindings[static_cast<std::size_t>(a_binding.slot)];
+				if (taken.select)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s cull binding {} takes slot {}, which {} has", feature, a_binding.name,
+						static_cast<std::uint32_t>(a_binding.slot), taken.name));
+				taken = a_binding;
 			}
 
 			void RegisterDepthPyramid(const Api::DepthPyramidContribution& a_pyramid) override
@@ -951,7 +964,7 @@ namespace DCLF::Extensions
 		ResolveAncestorValue(lists.ancestorValue);
 		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
-		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the depth pyramid's; the palette rows classes'; the shading fields'
+		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the palette rows classes'; the shading fields'
 		// (and the published entry classes); the material ports'
 		// (their engine addresses and spaces); the program families' (their ports' kinds); the frame constant rows, in row order.
 		ResolveViews(lists.views, lists.viewWork, lists.viewRoots);
@@ -961,6 +974,7 @@ namespace DCLF::Extensions
 		ResolveMainRanges(lists.mainRanges);
 		ResolveVertexStream(lists.vertexStream);
 		ResolveMainCullInput(lists.mainCullInput);
+		ResolveCullBindings(lists.cullBindings);
 		ResolveDepthPyramid(lists.depthPyramid);
 		ResolvePaletteRows(lists.paletteRows);
 		ResolveShadingFields(lists.shadingFields);

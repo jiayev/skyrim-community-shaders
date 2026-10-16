@@ -1,7 +1,7 @@
 #pragma once
 
-// The portal programs' encoding (PortalViews::Encode, PortalViews::Visible), which PortalPrograms.hlsli's PortalTest reads: Core sends the
-// words as the main cull input's programs (Api/CullInputs.h) and never reads them.
+// The portal programs' encoding (PortalViews::Encode, PortalViews::Visible), which PortalPrograms.hlsli's PortalTest reads: the feature's
+// buffer sends the words (PortalPrograms.cpp), which Core binds by its cull binding (Api/CullInputs.h) and never reads.
 
 #include <cstdint>
 
@@ -9,7 +9,7 @@ namespace DCLF
 {
 	/**
 	 * @brief The main camera's portal and occluder programs (Features/Portals/PortalViews), for FadeStateCS's and BuildDrawsCS's main
-	 * view tests: a ByteAddressBuffer uploaded with the depth commit.
+	 * view tests: a ByteAddressBuffer uploaded with the depth commit (PortalPrograms.cpp).
 	 *
 	 * Layout (bytes): the camera's view planes (NiFrustumPlanes: six {n, d}, the active mask at +96; kPortalSetBytes), then a header
 	 * {program count, 0, 0, 0}, then a directory entry per program (kPortalDirectoryBytes: flags, operator count, set count, first

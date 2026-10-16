@@ -210,10 +210,11 @@ namespace DCLF::Api
 		 */
 		virtual ShadingFieldId RegisterShadingField(const ShadingFieldContribution& a_field) = 0;
 		/**
-		 * @brief Fails the install for a second input (Core's main cull reads one walk), or one without a name, programs name, header words
-		 * or any of its callbacks.
+		 * @brief Fails the install for a second input (Core's main cull reads one walk), or one without a name or any of its callbacks.
 		 */
 		virtual void RegisterMainCullInput(const MainCullInputContribution& a_input) = 0;
+		/** @brief Fails the install for a slot another binding has (Core's cull reads each at one word), Count, or no name or select. */
+		virtual void RegisterCullBinding(const CullBinding& a_binding) = 0;
 		/**
 		 * @brief Fails the install for a second contribution (Core's cull tests one pyramid), or one without a resource, scratch resource or
 		 * pass name, setup or makePass.
