@@ -97,6 +97,9 @@ namespace DCLF
 	namespace Scene
 	{
 		class Coordinator;
+
+		/** @brief Residents.cpp: a root listed with no mirror record (the coordinator's placement statistics count it; FadeRoots.cpp calls it). */
+		void NoteFadeRootUnmirrored();
 	}
 
 	/**

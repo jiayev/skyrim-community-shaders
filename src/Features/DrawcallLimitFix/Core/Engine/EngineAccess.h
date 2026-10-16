@@ -170,6 +170,21 @@ namespace DCLF::Engine
 	/** @brief Whether a node is app-culled (kHidden). */
 	inline bool IsHidden(const void* a_node) { return (FlagsOf(a_node) & kFlagHidden) != 0; }
 
+	// NiAVObject's vtable slot of OnVisible: the fade nodes' class is told by it (FadeState::PlanOf).
+	constexpr std::size_t kOnVisibleSlot = 0x34;
+
+	/**
+	 * @brief The tree's LOD switch (+0x180), whose selection changes by switch event (kFadeRootTreeLod), or null: a node whose
+	 * OnVisible is not BSTreeNode's has none. The capture reads it; the fade roots key their switch events by it.
+	 */
+	inline const RE::NiAVObject* TreeLodSwitch(const RE::NiAVObject& a_node)
+	{
+		const auto onVisible = (*reinterpret_cast<const std::uintptr_t* const*>(&a_node))[kOnVisibleSlot];
+		if (onVisible != REL::Module::get().base() + Address::kTreeOnVisible)
+			return nullptr;
+		return At<const RE::NiAVObject*>(&a_node, 0x180);
+	}
+
 	/**
 	 * @brief A ShadowSceneNode's object root: its child 3, the cells' parent (DrawWorld_BuildSceneLists' walk), or null. The tree must be
 	 * held (the render or main thread inside the frame).

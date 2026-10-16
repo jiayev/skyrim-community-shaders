@@ -15,7 +15,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
-#include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
+#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 #include "Globals.h"
 
 #include <atomic>
@@ -443,7 +443,7 @@ namespace DCLF::SceneCapture
 			r.fadeFar = At<float>(node, 0x12C);
 			r.fade109 = At<std::uint8_t>(node, 0x109) & ~kFade109FrameBits;
 			r.fadeType = At<std::uint8_t>(node, 0x153) & 0xF;
-			r.treeLodSwitch = FadeState::TreeLodSwitch(*node);
+			r.treeLodSwitch = Engine::TreeLodSwitch(*node);
 			r.bsx = BsxOf(*node);
 			CaptureFadeState(*node, r);
 			r.fadeAmount = At<float>(node, 0x100);

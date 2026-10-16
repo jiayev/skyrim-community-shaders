@@ -48,8 +48,7 @@ namespace DCLF
 		FadeRootStatic StaticOf(const RE::NiAVObject& a_node);
 		/** @brief kFadeRootTreeLod: a tree whose LOD switch selects past child 0 (BSTreeNode::OnVisible's LOD fix-up). */
 		bool TreeLodSelected(const RE::NiAVObject& a_node);
-		/** @brief The tree's LOD switch (+0x180), whose selection changes by switch event (kFadeRootTreeLod), or null. */
-		const RE::NiAVObject* TreeLodSwitch(const RE::NiAVObject& a_node);
+		// The tree's LOD switch itself is an engine read: Engine::TreeLodSwitch (Core/Engine/EngineAccess.h).
 
 		/**
 		 * @brief CS_DCLF_FADE_PARITY, render thread, before the list jobs: the port against the engine's own functions, run on

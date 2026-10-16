@@ -21,7 +21,7 @@ namespace DCLF::FadeState
 		constexpr std::uintptr_t kTreeRtti = 0x332a2d8;           // NiRTTI of BSTreeNode
 		constexpr std::uintptr_t kLogf = 0x153d086;               // the engine's CRT logf
 		constexpr std::uintptr_t kPowf = 0x153d014;               // ... and powf
-		constexpr std::size_t kOnVisibleSlot = 0x34;
+		using Engine::kOnVisibleSlot;
 
 		/** @brief MINSS a, b: a when a < b, else b (b when either is NaN). */
 		float MinSS(float a_a, float a_b) { return a_a < a_b ? a_a : a_b; }
@@ -376,16 +376,9 @@ namespace DCLF::FadeState
 		       onVisible == base + Engine::Address::kTreeOnVisible ? kFadeRootTree : kFadeRootOther;
 	}
 
-	const RE::NiAVObject* TreeLodSwitch(const RE::NiAVObject& a_node)
-	{
-		if (PlanOf(a_node) != kFadeRootTree)
-			return nullptr;
-		return At<const RE::NiAVObject*>(&a_node, 0x180);
-	}
-
 	bool TreeLodSelected(const RE::NiAVObject& a_node)
 	{
-		const auto* lod = TreeLodSwitch(a_node);
+		const auto* lod = Engine::TreeLodSwitch(a_node);
 		return lod && At<std::int32_t>(lod, 0x12C) > 0;
 	}
 
