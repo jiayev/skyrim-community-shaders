@@ -45,7 +45,7 @@ namespace DCLF::Scene
 		/**
 		 * @brief GeometryScan's index (geometry slot to object slots), keys only and checked again at the scan: an entry may go stale, none
 		 * is missing. Every object slot under the head geometry slot its last write gave it (MergeWrite, WriteLayer), and every geometry
-		 * slot under each slot its nextPartition link was ever written to name (MergeWrite's partitions, ResolveLodRangeSlots): a stale
+		 * slot under each slot its nextPartition link was ever written to name (MergeWrite's partitions, ResolveEntryRangeSlots): a stale
 		 * slot's objects are those under the heads its links lead back to. The dense walk's tables are put back, so it indexes nothing.
 		 */
 		ankerl::unordered_dense::map<std::uint32_t, std::vector<std::uint32_t>> headObjects;

@@ -3,7 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/PlacementRows/BillboardRow.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 
 #include <array>
@@ -15,8 +15,8 @@ namespace DCLF::Features::Billboards
 {
 	namespace
 	{
-		using DCLF::Billboards::FaceMode;
-		using DCLF::Billboards::SampleRow;
+		using DCLF::PlacementRows::BillboardFaceMode;
+		using DCLF::PlacementRows::SampleBillboardRow;
 
 		// NiBillboardNode's vtable slot OnVisible and what it holds (AE 0x140d3f720).
 		constexpr std::size_t kOnVisibleSlot = 0x34;
@@ -47,7 +47,7 @@ namespace DCLF::Features::Billboards
 		void CheckLeaf(const RE::BSGeometry& a_leaf, const RE::NiBillboardNode& a_node, const Camera& a_camera)
 		{
 			BindlessPlacement row{};
-			if (!SampleRow(a_leaf, row))
+			if (!SampleBillboardRow(a_leaf, row))
 				return;
 			// Only the leaves this node turns (SampleRow finds the nearest billboard: a nested one's leaves are its).
 			const RE::NiNode* nearest = a_leaf.parent;
@@ -59,7 +59,7 @@ namespace DCLF::Features::Billboards
 				{ row.previousWorld[4], row.previousWorld[5], row.previousWorld[6] }, { row.previousWorld[8], row.previousWorld[9], row.previousWorld[10] } };
 			const float pivot[3]{ row.bound[0], row.bound[1], row.bound[2] };
 			float turn[3][3];
-			Orient(base, pivot, FaceMode(&a_node), a_camera, turn);
+			Orient(base, pivot, BillboardFaceMode(&a_node), a_camera, turn);
 			// The vertex stage's (DCLFBillboardWorld): G = turn * R0^T applied to the unturned world about the pivot.
 			float g[3][3];
 			for (int i = 0; i < 3; ++i)
@@ -102,7 +102,7 @@ namespace DCLF::Features::Billboards
 					const auto written = fmt::format_to_n(first.data(), first.size() - 1,
 						"'{}' under '{}' (mode {}): rotation {:.6f}, translation {:.4f}; the node's turn {:.6f}: port {}, engine {}, base {}, base now {}; camera forward "
 						"{:.3f} {:.3f} {:.3f} up {:.3f} {:.3f} {:.3f} right {:.3f} {:.3f} {:.3f}",
-						a_leaf.name.c_str() ? a_leaf.name.c_str() : "", a_node.name.c_str() ? a_node.name.c_str() : "", FaceMode(&a_node), rotationError, translationError,
+						a_leaf.name.c_str() ? a_leaf.name.c_str() : "", a_node.name.c_str() ? a_node.name.c_str() : "", BillboardFaceMode(&a_node), rotationError, translationError,
 						nodeError, m3(turn), m3(engineTurn), m3(base), m3(parentBase), a_camera.forward[0], a_camera.forward[1], a_camera.forward[2], a_camera.up[0],
 						a_camera.up[1], a_camera.up[2], a_camera.right[0], a_camera.right[1], a_camera.right[2]);
 					*written.out = '\0';

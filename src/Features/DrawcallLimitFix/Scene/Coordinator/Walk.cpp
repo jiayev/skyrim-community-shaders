@@ -7,6 +7,8 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
+#include "Features/DrawcallLimitFix/Core/Engine/SkinPartitions.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 
 #include <atomic>
@@ -348,11 +350,12 @@ namespace DCLF::Scene
 		const auto& g = *leaf.geometry;
 		// The skin partitions the engine draws: every LOD level's for a LOD skin (the draw narrows to its root's level); none at any
 		// level is a member that draws nothing (kNoPartitions).
-		std::uint16_t partitionMask = SkinPartitionsOf(g);
-		// Object LOD (dclf-lod.md): the ranges its hidden cells leave. Whole: the TriShape's own slot; none: kNoPartitions; else a
-		// chain of range slots (kPartitionChain), resolved again at each segment event.
-		const auto* shapeRanges = g.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape) ? LodRangesOf(geometry) : nullptr;
-		const bool lodChain = shapeRanges && !shapeRanges->empty() && !LodSegments::Whole(g.triangleCount, *shapeRanges);
+		std::uint16_t partitionMask = SkinPartitions::Of(g);
+		// A ranged geometry type's drawn ranges (Api::GeometryTypeContribution::ranges; object LOD, dclf-lod.md: the ranges its hidden
+		// cells leave). Whole: the TriShape's own slot; none: kNoPartitions; else a chain of range slots (kPartitionChain), resolved
+		// again at each ranges event.
+		const auto* shapeRanges = Extensions::GeometryTypeRanged(g.type) ? EntryRangesOf(geometry) : nullptr;
+		const bool lodChain = shapeRanges && !shapeRanges->empty() && !Api::EntryRangesWhole(g.triangleCount, *shapeRanges);
 		if (shapeRanges && shapeRanges->empty())
 			partitionMask = static_cast<std::uint16_t>(kNoPartitions);
 		else if (lodChain)
@@ -362,8 +365,8 @@ namespace DCLF::Scene
 		// Palette rows from the bone count; the merge places the block.
 		if (leaf.Skinned() && ActiveToggles().skinned) {
 			a_out.skinCandidate = true;
-			const std::uint32_t rows = leaf.geometry->skinData ? leaf.geometry->boneCount * 3 : 0u;
-			if (rows && rows <= 240)
+			const std::uint32_t rows = SkinPalettes::RowsOf(*leaf.geometry);
+			if (SkinPalettes::Fits(rows))
 				a_out.boneRows = rows;
 		}
 		// A palette rows member's block: its geometry type's item class's rule (Api::GeometryTypeContribution::itemClass,
@@ -414,7 +417,7 @@ namespace DCLF::Scene
 			if (occlusion & 0x80)
 				sampleDiffuse();
 		}
-		a_out.skinLodWord = lodChain ? 0u : SkinLodPartitionsOf(leaf);
+		a_out.skinLodWord = lodChain ? 0u : SkinPartitions::LodOf(leaf);
 	}
 
 	bool Coordinator::MergeWrite(RE::BSGeometry* geometry, Tracked& a_tracked, EvalResult& a_result, PartTimer& timer, Ineligible& a_bucket)
@@ -472,10 +475,10 @@ namespace DCLF::Scene
 		const SceneCapture::GeometryRecord::Partition* skinPartition = skinned ? &g.partitions[0] : nullptr;
 		const std::uint16_t partitionMask = r.partitionMask;
 		const bool lodChain = r.lodChain;
-		// lodRanges is written only by events, never during the walk.
-		const auto* shapeRanges = lodChain ? LodRangesOf(geometry) : nullptr;
+		// entryRanges is written only by events, never during the walk.
+		const auto* shapeRanges = lodChain ? EntryRangesOf(geometry) : nullptr;
 		assert(!lodChain || shapeRanges);
-		const std::uint32_t geometrySlot = lodChain ? ResolveLodRangeSlots(g, *shapeRanges, timer) : ResolveGeometrySlot(g, skinPartition, timer);
+		const std::uint32_t geometrySlot = lodChain ? ResolveEntryRangeSlots(g, *shapeRanges, timer) : ResolveGeometrySlot(g, skinPartition, timer);
 		if (geometrySlot == Tables::kSlotFree) {
 			--stats.ineligible[static_cast<std::size_t>(reason)];
 			++stats.ineligible[static_cast<std::size_t>(Ineligible::UnstableBuffer)];
@@ -535,16 +538,16 @@ namespace DCLF::Scene
 			skinnedObjects.push_back(geometry);
 			if (r.boneRows) {
 				objectBoneRows = r.boneRows;
-				object.flags |= kObjectSkinned;
+				object.flags |= kObjectPaletteBlock;
 				++stats.skinned;
 				stats.boneRows += r.boneRows;
 			}
 			timer.Add(BuildPart::Skinning);
 		}
-		// A particle member's quads take a palette block like a skin (kObjectSkinned), filled from the system's snapshot.
+		// A particle member's quads take a palette block like a skin (kObjectPaletteBlock), filled from the system's snapshot.
 		if (r.particleRows) {
 			objectBoneRows = r.particleRows;
-			object.flags |= kObjectSkinned;
+			object.flags |= kObjectPaletteBlock;
 		}
 		// Past the last early return, so a slot is only taken by a record that is written.
 		const std::uint32_t slotBefore = trackedEntry->slot;
@@ -775,7 +778,7 @@ namespace DCLF::Scene
 		return ResolveGeometrySource(source, a_timer);
 	}
 
-	std::uint32_t Coordinator::ResolveLodRangeSlots(const SceneCapture::GeometryRecord& a_geometry, const std::vector<LodSegments::Range>& a_ranges, PartTimer& a_timer)
+	std::uint32_t Coordinator::ResolveEntryRangeSlots(const SceneCapture::GeometryRecord& a_geometry, const std::vector<Api::EntryRange>& a_ranges, PartTimer& a_timer)
 	{
 		// The engine draw (FUN_1414f2ad0 type 8): the renderer data's buffers, DrawIndexed(count, first, 0) per range.
 		if (!a_geometry.rendererData || a_ranges.empty())
@@ -1042,7 +1045,7 @@ namespace DCLF::Scene
 		// palette.
 		const std::uint32_t slot = a_tracked.slot;
 		const std::uint32_t rows = a_result.skinRows;
-		if (!(tables.objects[slot].flags & kObjectSkinned) || rows != tables.boneRows[slot])
+		if (!(tables.objects[slot].flags & kObjectPaletteBlock) || rows != tables.boneRows[slot])
 			return false;
 		skinnedObjects.push_back(a_geometry);
 		++stats.lightSkins;
@@ -1471,13 +1474,13 @@ namespace DCLF::Scene
 			// Last, only for a kept record: KeepSkin's record half (its slot half is the merge's).
 			if (kept && recorded && (entry.lightTraits & kTraitSkin)) {
 				const auto* record = mirror.Geometry(geometry);
-				const std::uint32_t rows = record && record->skinData ? record->boneCount * 3 : 0u;
-				kept = record && record->skin && ActiveToggles().skinned && rows && rows <= 240;
+				const std::uint32_t rows = record ? SkinPalettes::RowsOf(*record) : 0u;
+				kept = record && record->skin && ActiveToggles().skinned && SkinPalettes::Fits(rows);
 				if (kept) {
 					r.lightSkin = true;
 					r.skinRows = rows;
-					r.skinPartitions = SkinPartitionsOf(*record);
-					r.skinLodPartitions = SkinLodPartitionsOf(mirror.Leaf(geometry));
+					r.skinPartitions = SkinPartitions::Of(*record);
+					r.skinLodPartitions = SkinPartitions::LodOf(mirror.Leaf(geometry));
 				}
 			}
 			if (kept) {
@@ -2115,7 +2118,7 @@ namespace DCLF::Scene
 				const std::uint32_t links = (tables.skinPartitions[s] & kPartitionChain) ? (tables.skinPartitions[s] & kPartitionChainCount) : kMaxSkinPartitions;
 				for (std::uint32_t link = 0; !stale && link < links && g != kNoPartition; ++link) {
 					stale = g >= tables.geometries.size() || std::binary_search(staleGeometrySlots.begin(), staleGeometrySlots.end(), g);
-					if (!stale && !tables.skinPartitions[s] && !(object.flags & kObjectSkinned))
+					if (!stale && !tables.skinPartitions[s] && !(object.flags & kObjectPaletteBlock))
 						break;
 					g = stale ? g : tables.geometries[g].nextPartition;
 				}

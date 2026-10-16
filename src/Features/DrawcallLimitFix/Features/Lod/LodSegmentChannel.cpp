@@ -3,6 +3,7 @@
 // ranges (the walk reads them as data: each range a geometry slot of the shape's chain); and its report line.
 
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegmentEvents.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodSegments.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
@@ -33,7 +34,7 @@ namespace DCLF::Features::Lod
 				if (!kept)
 					continue;
 				const auto* mirrored = a_context.MirroredRanges(key);
-				std::vector<LodSegments::Range> next = mirrored ? *mirrored : std::vector<LodSegments::Range>{};
+				std::vector<Api::EntryRange> next = mirrored ? *mirrored : std::vector<Api::EntryRange>{};
 				// Changed by an event: rewrite the record (its range slot chain) this frame.
 				const bool changed = next != *kept;
 				if (changed)

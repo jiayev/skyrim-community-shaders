@@ -29,7 +29,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/GeometryPort.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneMirror.h"
-#include "Features/DrawcallLimitFix/Core/Engine/LodSegments.h"
+#include "Features/DrawcallLimitFix/Api/EntryRanges.h"
 #include "Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneIdentity.h"
@@ -366,19 +366,6 @@ namespace DCLF
 		std::shared_ptr<const EntrySpace> CoordinatorLightCandidates() const { return lightCandidates; }
 
 
-		/**
-		 * @brief Which skin partitions the engine draws for this LOD row (bit i = partition i): BSDismemberSkinInstance::Unk_25 (AE
-		 * 140d31f40) skips a partition whose flag (Data byte 0) is clear, then NiSkinPartition::Unk_25 applies the table. 0 when it draws
-		 * none.
-		 */
-		static std::uint32_t SkinPartitionMask(const RE::NiSkinInstance& a_skin, std::uint32_t a_lodRow);
-		/** @brief SkinPartitionMask from the geometry's record: its partitions' LOD bytes and a dismember skin's shown flags. */
-		static std::uint32_t SkinPartitionMask(const SceneCapture::GeometryRecord& a_geometry, std::uint32_t a_lodRow);
-		/** @brief Tables::skinPartitions: 0 for none or a single drawn partition, kNoPartitions when row 3 draws none, else the mask. */
-		static std::uint16_t SkinPartitionsOf(const SceneCapture::GeometryRecord& a_geometry);
-		/** @brief Tables::skinLodPartitions for a geometry: a kMeshLOD skin's masks per level (byte L: row L), 0 for any other. */
-		static std::uint32_t SkinLodPartitionsOf(const SceneCapture::LeafView& a_leaf);
-
 		/** @brief The geometry's object slot in this walk's tables, or -1 when DCLF does not draw it. */
 		std::int32_t FindObject(const RE::BSGeometry* a_geometry) const;
 		/** @brief The geometry's layer object (Tracked::layerSlot) in this walk's tables, or -1. */
@@ -446,11 +433,11 @@ namespace DCLF
 		void ReseedFadeRoot(const void* a_node);
 		/** @brief Whether the geometry sits under a tracked category node (the tracked map, read on the caller's thread). */
 		bool IsTracked(const RE::BSGeometry* a_geometry) const;
-		/** @brief Object LOD: the index ranges a tracked BSSubIndexTriShape draws (its visible segments' runs), or null. */
-		const std::vector<LodSegments::Range>* LodRangesOf(const RE::BSGeometry* a_shape) const
+		/** @brief The index ranges a tracked entry of a ranged geometry type draws (object LOD: its visible segments' runs), or null. */
+		const std::vector<Api::EntryRange>* EntryRangesOf(const RE::BSGeometry* a_shape) const
 		{
-			const auto it = lodRanges.find(a_shape);
-			return it != lodRanges.end() ? &it->second : nullptr;
+			const auto it = entryRanges.find(a_shape);
+			return it != entryRanges.end() ? &it->second : nullptr;
 		}
 
 		/** @brief How a tracked geometry came to be tracked (diagnostics; State/Tracked.h). */
@@ -941,10 +928,10 @@ namespace DCLF
 		/** @brief The geometry slot of a geometry's TriShape, or of skin partition a_partition. */
 		std::uint32_t ResolveGeometrySlot(const SceneCapture::GeometryRecord& a_geometry, const SceneCapture::GeometryRecord::Partition* a_partition, PartTimer& a_timer);
 		/**
-		 * @brief Object LOD: geometry slots for a partly hidden shape's visible ranges, linked by nextPartition from the returned first
-		 * (Tables::kSlotFree if one fails), each keyed by its range's first segment record.
+		 * @brief A ranged entry (object LOD: a partly hidden shape): geometry slots for its drawn ranges, linked by nextPartition from the
+		 * returned first (Tables::kSlotFree if one fails), each keyed by its range's key (object LOD: its first segment record).
 		 */
-		std::uint32_t ResolveLodRangeSlots(const SceneCapture::GeometryRecord& a_geometry, const std::vector<LodSegments::Range>& a_ranges, PartTimer& a_timer);
+		std::uint32_t ResolveEntryRangeSlots(const SceneCapture::GeometryRecord& a_geometry, const std::vector<Api::EntryRange>& a_ranges, PartTimer& a_timer);
 
 		/** @brief The walk's prologue: reference changes counted, unused materials retired, idle geometry and pipeline slots expired. */
 		void SweepSlots();

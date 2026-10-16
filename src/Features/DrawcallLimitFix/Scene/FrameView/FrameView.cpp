@@ -11,7 +11,7 @@
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/Skin.h"
 
@@ -215,7 +215,7 @@ namespace DCLF::Scene
 		auto none = std::make_shared<SetSnapshot>();
 		none->frame = frame;
 		PublishFrameClaims(std::move(none));
-		SunAccumulation::Get().PublishExclusion(nullptr);
+		SunExclusionSlot::Get().Publish(nullptr);
 		if (!left.empty())
 			PrimaryCull::Get().NoteSetChanges({}, left);
 	}

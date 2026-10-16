@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegmentEvents.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodSegments.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
@@ -14,6 +15,7 @@
 #include "ShaderCache.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace DCLF::Features::Lod
 {
@@ -38,6 +40,15 @@ namespace DCLF::Features::Lod
 		{
 			const auto* tes = RE::TES::GetSingleton();
 			return tes ? tes->lodLandRoot : nullptr;
+		}
+
+		/**
+		 * @brief An object LOD shape's drawn ranges (its geometry type contribution's ranges: the capturing thread, inside the engine-read
+		 * window, per record capture): what the engine's sub-index draw draws now (LodSegments::DrawnRanges).
+		 */
+		void CaptureDrawnRanges(const void* a_geometry, std::vector<Api::EntryRange>& a_out)
+		{
+			LodSegments::DrawnRanges(a_geometry, a_out);
 		}
 
 		/**
@@ -78,11 +89,12 @@ namespace DCLF::Features::Lod
 			a_context.RegisterViewRoot({ .root = kOwnedRoot, .owned = &LodRootsOwned });
 			// Object LOD, drawn by visible segment ranges: its techniques, only for a BSSubIndexTriShape with the LOD object flags; and the
 			// sub-index shapes with those flags, drawn as tri-shapes over the ranges LodSegments mirrors (Ineligible::Lod while the toggle is
-			// off). Any other sub-index shape is not one DCLF draws.
+			// off; the ranges captured whatever it). Any other sub-index shape is not one DCLF draws.
 			for (const auto technique : { Technique::LODObjects, Technique::LODObjectHD })
 				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = objects, .propertyFlags = kObjectLodFlags,
 					.geometryType = kSubIndexTriShape });
-			a_context.RegisterGeometryType({ .geometryType = kSubIndexTriShape, .toggle = objects, .propertyFlags = kObjectLodFlags });
+			a_context.RegisterGeometryType({ .geometryType = kSubIndexTriShape, .toggle = objects, .propertyFlags = kObjectLodFlags,
+				.ranges = &CaptureDrawnRanges });
 			// Terrain LOD: its techniques, only for a land block's shape under the LOD root (a BSTriShape with the LOD landscape flag).
 			for (const auto technique : { Technique::LODLand, Technique::LODLandNoise })
 				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = terrain, .propertyFlags = kTerrainLodFlags,

@@ -11,7 +11,7 @@
 #include <variant>
 #include <vector>
 
-#include "Features/DrawcallLimitFix/Core/Engine/LodSegments.h"
+#include "Features/DrawcallLimitFix/Api/EntryRanges.h"
 
 struct ID3D11Buffer;
 
@@ -142,7 +142,7 @@ namespace DCLF::SceneCapture
 			kLayer = 1u << 6,       // the additional property, the alt index buffer and its count
 			kExtra = 1u << 7,       // the AnisotropicAlphaMaterial extra data (ExtendedTranslucency::MaterialModelOf)
 			kMultiParams = 1u << 8, // a multi-index shape's material projection, parameters, scale and normal dampener
-			kSegments = 1u << 9,    // a sub-index shape's drawn ranges (LodSegments::DrawnRanges)
+			kRanges = 1u << 9,      // a ranged type's drawn ranges (Api::GeometryTypeContribution::ranges: object LOD's segments)
 			kFieldCount = 10,
 		};
 		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "type", "renderer", "skin", "dismember", "property", "alpha", "layer", "extra",
@@ -184,8 +184,9 @@ namespace DCLF::SceneCapture
 		std::int64_t anisotropic = kNoExtra;
 		// kMultiParams: materialProjection (16), materialParams (4), materialScale, normalDampener.
 		std::array<float, 22> multiParams{};
-		// kSegments: what the engine's sub-index draw draws (compared by triangles: its rebuild moves run starts, not triangles).
-		std::vector<LodSegments::Range> segments;
+		// kRanges: what the engine's draw of a ranged type draws (compared by triangles: object LOD's rebuild moves run starts, not
+		// triangles).
+		std::vector<Api::EntryRange> ranges;
 		/**
 		 * @brief kRenderer: a particle geometry's (NiParticles, types 1 and 2) inputs to PaletteItemClassOf
 		 * (Scene/Ports/LightingDescriptors.h); the particles are ParticleSnapshots'. vertexDesc is the geometry's own

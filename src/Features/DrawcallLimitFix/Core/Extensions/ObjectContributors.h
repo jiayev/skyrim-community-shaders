@@ -3,8 +3,8 @@
 // The object contributor contracts' Core side (Api/ObjectContributors.h): the technique contributions by technique (the Lighting port's
 // eligibility and the joins' record flags read them as data) and their property flag rules, the geometry type, parent and object class
 // contributions' toggles and rules (the eligibility, the walk, the captures, the classification, the plans and the category capture read
-// them as data: a type's property flags, item class, movers and entry class, a class's category root), what a shading contribution is
-// handed, and the calls the Lighting port's shading sample and the frame globals' capture make.
+// them as data: a type's property flags, item class, movers, entry class and range capture, a class's category root), what a shading
+// contribution is handed, and the calls the Lighting port's shading sample and the frame globals' capture make.
 
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
@@ -98,6 +98,18 @@ namespace DCLF::Extensions
 		return type.moves && a_toggles.On(type.toggle);
 	}
 
+	/** @brief a_type's range capture (its contribution's ranges; null: its objects draw whole). */
+	inline auto GeometryRangesOf(std::uint8_t a_type)
+	{
+		return GeometryTypeContributionOf(a_type).ranges;
+	}
+
+	/** @brief Whether a_type's objects draw captured ranges (its contribution's ranges), whatever its toggle: kept by the coordinator. */
+	inline bool GeometryTypeRanged(std::uint8_t a_type)
+	{
+		return GeometryRangesOf(a_type) != nullptr;
+	}
+
 	/** @brief The item class a_type's skinless objects are under a_toggles (its contribution's itemClass, its toggle on; None for none). */
 	inline Api::FrameValueItemClass GeometryItemClassOn(const ToggleSet& a_toggles, std::uint8_t a_type)
 	{
@@ -107,7 +119,7 @@ namespace DCLF::Extensions
 
 	/**
 	 * @brief The item class the coordinator plans a record as (Coordinator::PlacedKeyOf), which the frame values' parity tests too: for a
-	 * record with a palette block (a_paletteBlock: kObjectSkinned with bone rows) of a skinless geometry of a_type, its contribution's
+	 * record with a palette block (a_paletteBlock: kObjectPaletteBlock with bone rows) of a skinless geometry of a_type, its contribution's
 	 * itemClass, whatever the toggle (the block says it is one); else None (a skin's palette, or no block).
 	 */
 	inline Api::FrameValueItemClass PlannedItemClass(bool a_paletteBlock, std::uint8_t a_type, bool a_skinned)

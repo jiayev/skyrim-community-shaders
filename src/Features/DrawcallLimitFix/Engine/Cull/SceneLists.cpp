@@ -11,7 +11,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 
 #include <algorithm>
 #include <atomic>
@@ -171,7 +171,7 @@ namespace DCLF
 		// the sun's cascades only when that exclusion takes it out too. With the sun off (an interior) no full-frustum cull
 		// reads the lists, and no exclusion is needed.
 		const bool sunOff = Global<std::uint8_t>(Engine::Address::kSunOff) != 0;
-		auto exclusion = sunOff ? nullptr : SunAccumulation::Get().PendingExclusion();
+		auto exclusion = sunOff ? nullptr : SunExclusionSlot::Get().Pending();
 		if (!sunOff && (!exclusion || exclusion->candidates != cut.candidates || exclusion->excluded.size() != cut.plans.size())) {
 			++listStats.noExclusion;
 			return nullptr;

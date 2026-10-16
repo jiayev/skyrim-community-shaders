@@ -551,7 +551,7 @@ namespace DCLF
 			if (PassCapture::ShadowWithholdingEnabled()) {
 				// The cascades' casters decide which sun entries the next frame's cascade culls may skip.
 				if (modeUsed[kSunShadowMode])
-					SunAccumulation::Get().PublishExclusion(payload.sunExclusion);
+					SunExclusionSlot::Get().Publish(payload.sunExclusion);
 				// Likewise the paraboloids for point-light culls (none when no point light drew: a new light is the engine's).
 				LocalLightCull::Publish(modeUsed[kParabolicShadowMode] ? payload.parabolicExclusion : nullptr);
 			}

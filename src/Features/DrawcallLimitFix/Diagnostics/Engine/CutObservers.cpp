@@ -8,7 +8,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -41,6 +40,7 @@ namespace DCLF::Diagnostics::CutObservers
 		// The cut parity: the roots of the entries that differed from the whole plan at the last check (CheckCut).
 		ankerl::unordered_dense::set<const RE::NiAVObject*> cutDiffering;
 		std::uint32_t sunBits = 0;  // the sun's cascade bits as the list jobs ended (the light masks')
+		std::uint32_t sunBitsNow = 0;  // ... as last set (SunBitsSet)
 		std::uint64_t frames = 0;   // PrepareFrame's frames (the fade port's every 30th)
 		std::uint32_t fadePortCursor = 0;
 		std::vector<FadeNodeState> nodeSnapshot;
@@ -190,9 +190,14 @@ namespace DCLF::Diagnostics::CutObservers
 			slot.filterMissed += Dry(e) ? 1 : 0;
 		}
 
+		void NoteSunBits(const SunBitsSet& a_event)
+		{
+			sunBitsNow = a_event.bits;
+		}
+
 		void Merge(const On<EnginePoint::ListJobsMerged>&)
 		{
-			sunBits = SunAccumulation::Get().SunBits();
+			sunBits = sunBitsNow;
 			const auto count = PrimaryCullView::Cut().processCount;
 			for (std::uint32_t i = 0; i < count && i < slots.size(); ++i) {
 				auto& slot = slots[i];
@@ -396,6 +401,7 @@ namespace DCLF::Diagnostics::CutObservers
 		}
 		if (a_scene || a_fade) {
 			Subscribe<CutSlotsReset>(ResetSlots);
+			Subscribe<SunBitsSet>(NoteSunBits);
 			Subscribe<EnginePoint::ListJobsMerged>(Merge);
 		}
 	}

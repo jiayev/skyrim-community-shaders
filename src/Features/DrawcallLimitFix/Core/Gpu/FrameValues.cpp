@@ -8,9 +8,10 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
 
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/PlacementRows/BillboardRow.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
@@ -163,8 +164,8 @@ namespace DCLF
 		StoreSunEntry(a_sunEntryNode, a_out.sunEntry);
 		StoreFadeNode(a_fadeProperty, a_out.lodFadeNode);
 		StoreForwardSort(a_geometry, a_out.forwardSort);
-		// A billboard's unturned world, base and pivot (Billboards.h), sampled regardless of the toggle so rows never depend on it.
-		Billboards::SampleRow(a_geometry, a_out);
+		// A billboard's unturned world, base and pivot (BillboardRow.h), sampled regardless of the toggle so rows never depend on it.
+		PlacementRows::SampleBillboardRow(a_geometry, a_out);
 	}
 
 	bool FrameValues::SampleSlot(const SceneTables& a_tables, std::uint32_t a_slot, BindlessPlacement& a_out)
@@ -182,18 +183,6 @@ namespace DCLF
 	{
 		using Plan = PlacementPlan;
 		using PaletteRow = FrameValues::PaletteRow;
-
-		/**
-		 * @brief The engine's per-frame palette update (AE FUN_140e4ff90), which the native draw's bone setter runs and an owned skin
-		 * misses. Idempotent per frame (frameID) under the skin's critical section, so any thread may run it; copies current to
-		 * previous, then writes three float4 rows per bone in absolute world space.
-		 */
-		void UpdateSkin(RE::NiSkinInstance* a_skin, const RE::NiTransform& a_world)
-		{
-			using UpdateSkinInstance = void (*)(RE::NiSkinInstance*, const RE::NiTransform*);
-			static const REL::Relocation<UpdateSkinInstance> updateSkinInstance{ REL::Offset(Engine::Address::kUpdateSkinInstance) };
-			updateSkinInstance(a_skin, &a_world);
-		}
 
 		using FrameLeases = std::array<org::services::BackingLease, FrameValues::kBuiltInPools>;
 
@@ -273,15 +262,9 @@ namespace DCLF
 		}
 	}
 
-	// The skin's palettes after this frame's update; false when its size mismatches its block (the walk rewrites it: KeepSkin).
 	bool FrameValues::SkinPalettes(const RE::BSGeometry& a_geometry, std::uint32_t a_rows, const float*& a_current, const float*& a_previous)
 	{
-		auto* skin = a_geometry.GetGeometryRuntimeData().skinInstance.get();
-		if (!skin)
-			return false;
-		a_current = static_cast<const float*>(skin->boneMatrices);
-		a_previous = static_cast<const float*>(skin->prevBoneMatrices);
-		return a_current && a_previous && skin->numMatrices * 3 == a_rows;
+		return DCLF::SkinPalettes::Of(a_geometry, a_rows, a_current, a_previous);
 	}
 
 	struct FrameValues::Impl
@@ -1463,11 +1446,9 @@ namespace DCLF
 		// Run the engine's palette update, then copy rows that differ (the frame after its motion stops, the update copies the
 		// current palette to the previous: the change that keeps the skin due once more, so its motion vectors settle).
 		auto& geometry = *item.geometry;
-		if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
-			UpdateSkin(skin, geometry.world);
 		const float* current = nullptr;
 		const float* previous = nullptr;
-		if (!SkinPalettes(geometry, item.boneRows, current, previous)) {
+		if (!DCLF::SkinPalettes::Sample(geometry, item.boneRows, current, previous)) {
 			++a_mine.defects;
 			return false;
 		}
@@ -1601,11 +1582,9 @@ namespace DCLF
 				if (!item.boneRows || std::size_t(item.boneOffset) + item.boneRows > paletteOut.size() / 2)
 					continue;
 				auto& geometry = *item.geometry;
-				if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
-					UpdateSkin(skin, geometry.world);
 				const float* current = nullptr;
 				const float* previous = nullptr;
-				if (!SkinPalettes(geometry, item.boneRows, current, previous))
+				if (!DCLF::SkinPalettes::Sample(geometry, item.boneRows, current, previous))
 					continue;
 				++a_palettesChecked;
 				const auto at = PaletteRowsOf(item.boneOffset, item.boneRows);
@@ -2073,11 +2052,9 @@ namespace DCLF
 			if (!a_item.boneRows)
 				return;
 			auto& geometry = *a_item.geometry;
-			if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
-				UpdateSkin(skin, geometry.world);
 			const float* current = nullptr;
 			const float* previous = nullptr;
-			if (!SkinPalettes(geometry, a_item.boneRows, current, previous))
+			if (!DCLF::SkinPalettes::Sample(geometry, a_item.boneRows, current, previous))
 				return;
 			sample.boneOffset = a_item.boneOffset;
 			sample.boneRows = a_item.boneRows;

@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
@@ -593,14 +594,15 @@ namespace DCLF
 		// The Z-prepass's plain draws: their layout and a DrawSequence tail's signature.
 		rhi::PipelineLayoutPtr zLayout;
 		rhi::CommandSignaturePtr zDrawSignature;
-		// Tree LOD's draw signature: a plain DrawInstanced under zLayout. Its pipelines are the lane's (Lane::TreeLod).
-		rhi::CommandSignaturePtr treeLodDrawSignature;
-		struct TreeLodBuilt
+		// The draw families' draw signatures, by family (Api::DrawFamilySignature::DrawInstanced: a plain DrawInstanced under zLayout). Their
+		// pipelines are the lane's (Lane::families).
+		std::array<rhi::CommandSignaturePtr, kDrawFamilyLanes> familySignatures;
+		struct FamilyBuilt
 		{
 			rhi::PipelinePtr depth, colour;
 		};
 		// Render thread: what it has asked of the lane already, so it asks each once.
-		bool treeLodAsked = false;
+		std::array<bool, kDrawFamilyLanes> familyAsked{};  // by draw family (RequestFamily)
 		bool refractionAsked = false;  // the refraction pipeline (RequestRefraction)
 		ankerl::unordered_dense::set<ForwardPipelineKey, ForwardPipelineKeyHash> forwardAsked;
 		rhi::PipelineLayoutHandle ShadowLayout() const { return shadowLayout->GetHandle(); }
@@ -626,7 +628,7 @@ namespace DCLF
 			std::uint32_t generation = 0;
 			org::services::PipelineArtifact artifact;
 		};
-		struct TreeLodDone
+		struct FamilyDone
 		{
 			std::uint32_t generation = 0;
 			org::services::PipelineArtifact artifact;
@@ -647,14 +649,14 @@ namespace DCLF
 		{
 			EventQueue<MainDone, 1024> main;
 			EventQueue<ShadowDone, 1024> shadow;
-			EventQueue<TreeLodDone, 16> treeLod;
+			std::array<EventQueue<FamilyDone, 16>, kDrawFamilyLanes> family;  // by draw family
 			EventQueue<ForwardDone, 256> forward;
 			EventQueue<RefractionDone, 16> refraction;
 			// Requests to the lane, and the lane's engine-state requests to the render thread (CaptureEngineStates replies).
 			EventQueue<LightingRequest, 1024> requests;
 			EventQueue<ShadowRequest, 1024> shadowRequests;
 			EventQueue<ForwardPipelineKey, 256> forwardRequests;
-			std::atomic<bool> treeLodRequest{ false };
+			std::array<std::atomic<bool>, kDrawFamilyLanes> familyRequest{};  // by draw family
 			std::atomic<bool> refractionRequest{ false };
 			EventQueue<std::uint32_t, 64> stateRequests;
 		};
@@ -817,8 +819,9 @@ namespace DCLF
 			RE::BSShader* utility = nullptr;
 			DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
 			std::shared_ptr<const std::vector<ShadowRasterState>> shadowStates;
-			// SetTreeLodInputs (DistantTree: tree LOD's and the forward tree program); SetViewForwardTargets, by view (its keys').
-			RE::BSShader* distantTree = nullptr;
+			// SetFamilyInputs, by draw family (its programs' and its forward program's shader: tree LOD's DistantTree); SetViewForwardTargets,
+			// by view (its keys').
+			std::array<RE::BSShader*, kDrawFamilyLanes> drawFamilySource{};
 			std::array<ForwardTargets, Extensions::kEngineViews> viewTargets{};
 			// SetRefractionInputs.
 			RE::BSShader* refractionUtility = nullptr;
@@ -956,10 +959,10 @@ namespace DCLF
 				std::string recreatedBy;  // the set's last recreation, for NearestShadowKey's warnings
 			};
 			Shadow shadow;
-			/** @brief Tree LOD's two pipelines, rebuilt with each new main set (RecreateMainSet), under the main set's generation. */
-			struct TreeLod
+			/** @brief A draw family's two pipelines, rebuilt with each new main set (RecreateMainSet), under the main set's generation. */
+			struct FamilyLane
 			{
-				bool asked = false;          // RequestTreeLod has arrived: built from here on, for every generation
+				bool asked = false;          // RequestFamily has arrived: built from here on, for every generation
 				bool requested = false;      // this generation's build is queued
 				bool failed = false;         // this generation's build failed, or the program did
 				bool programFailed = false;  // for good
@@ -972,7 +975,7 @@ namespace DCLF
 				};
 				Counters counters;
 			};
-			TreeLod treeLod;
+			std::array<FamilyLane, kDrawFamilyLanes> families;  // by draw family
 			/** @brief The refraction pipeline, rebuilt with each new main set (RecreateMainSet) or new normals format / write mask. */
 			struct Refraction
 			{
@@ -1003,11 +1006,11 @@ namespace DCLF
 			Refraction refraction;
 			/**
 			 * @brief The forward pipelines, built for the forward targets (rebuilt by RecreateForward). No set: recordings bind each by
-			 * handle, so every build is kept for the process. Programs by ShaderPrograms::ForwardProgramId, the forward tree's by kTreeProgram.
+			 * handle, so every build is kept for the process. Programs by ShaderPrograms::ForwardProgramId, a draw family's by its lane slot's
+			 * forwardProgramId.
 			 */
 			struct Forward : PipelineFamily<ForwardPipelineKey, ForwardPipelineKeyHash, ForwardEntry, ankerl::unordered_dense::set<ForwardPipelineKey, ForwardPipelineKeyHash>>
 			{
-				static constexpr std::uint64_t kTreeProgram = ~0ull;
 				std::vector<org::services::PipelinePayload> retired;  // earlier targets' builds, kept for the process
 			};
 			Forward forward;
@@ -1054,16 +1057,22 @@ namespace DCLF
 		void RecreateShadowSet(DXGI_FORMAT a_from, DXGI_FORMAT a_to);
 		/** @brief The lane: AdmitLane for the shadow views' set. */
 		void AdmitShadow();
-		/** @brief The lane: TryRequest for tree LOD, once asked for. */
-		void TryRequestTreeLod();
+		/** @brief The lane: TryRequest for a draw family's pipelines, once asked for. */
+		void TryRequestFamily(Api::DrawFamily a_family);
+		/** @brief The lane: TryRequestFamily for every draw family. */
+		void TryRequestFamilies();
+		/** @brief The lane: the draw families RequestFamily has asked for since the last pass, asked from here on. */
+		void TakeFamilyRequests();
+		/** @brief The lane: the draw families' keys and pipelines that waited on the programs a_finished names, tried again. */
+		void RetryFamilyPrograms(const ShaderPrograms::Finished& a_finished);
 		/** @brief The lane: TryRequest for a forward key. */
 		void TryRequestForward(const ForwardPipelineKey& a_key);
 		/** @brief The lane: TryRequest for the refraction pipeline, once asked for. */
 		void TryRequestRefraction();
 		/** @brief The lane: the forward targets changed; every forward key is built again. */
 		void RecreateForward(const ForwardTargets& a_from, const ForwardTargets& a_to);
-		/** @brief The lane: admits completed tree LOD and forward builds. */
-		void AdmitTreeLodAndForward();
+		/** @brief The lane: admits completed draw family and forward builds. */
+		void AdmitFamiliesAndForward();
 		void PublishCatalog();
 		/** @brief The lane: NearestKey for a shadow view key, among the shadow keys requested. */
 		std::string NearestShadowKey(const ShadowPipelineKey& a_key) const;
@@ -1159,13 +1168,18 @@ namespace DCLF
 				logger::error("[DCLF] Could not create the Z-prepass's draw signature");
 				return false;
 			}
-			rhi::IndirectArg treeDraw{};
-			treeDraw.kind = rhi::IndirectArgKind::Draw;
-			rhi::CommandSignatureDesc treeDesc{};
-			treeDesc.args = { &treeDraw, 1 };
-			treeDesc.byteStride = 4 * sizeof(std::uint32_t);
-			if (device.CreateCommandSignature(treeDesc, zLayout->GetHandle(), treeLodDrawSignature) != rhi::Result::Ok)
-				logger::warn("[DCLF] Could not create tree LOD's draw signature; tree LOD stays native");
+			// Every draw family slot's signature, whether a feature takes it or not (this may run before InstallFeatures resolves them).
+			rhi::IndirectArg familyDraw{};
+			familyDraw.kind = rhi::IndirectArgKind::Draw;
+			rhi::CommandSignatureDesc familyDesc{};
+			familyDesc.args = { &familyDraw, 1 };
+			familyDesc.byteStride = 4 * sizeof(std::uint32_t);
+			for (std::size_t f = 0; f < kDrawFamilyLanes; ++f)
+				if (device.CreateCommandSignature(familyDesc, zLayout->GetHandle(), familySignatures[f]) != rhi::Result::Ok) {
+					const auto& family = Extensions::DrawFamilies()[f];
+					logger::warn("[DCLF] Could not create {}'s draw signature; {}", family.taken ? std::string_view(family.label) : std::string_view("a draw family"),
+						family.taken ? std::string_view(family.nativeNote) : std::string_view("it stays native"));
+				}
 			return true;
 		}
 
@@ -1227,14 +1241,17 @@ namespace DCLF
 			return out;
 		}
 
-		/** @brief Tree LOD's pipelines (TryRequestTreeLod). */
-		static org::services::PipelinePayload BuildTreeLod(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::TreeLodProgram* a_program,
-			TargetFormats a_targets, rhi::BlendState a_blend, bool a_frontCCW)
+		/**
+		 * @brief A draw family's pipelines (TryRequestFamily), as Api::DrawFamilyBuild::DepthThenEqualColour builds them; named with its
+		 * label ("tree LOD colour", "tree LOD depth").
+		 */
+		static org::services::PipelinePayload BuildDrawFamily(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::DrawProgram* a_program,
+			TargetFormats a_targets, rhi::BlendState a_blend, bool a_frontCCW, std::string_view a_label)
 		{
 			auto stages = Parse<4>({ &a_program->vertex, &a_program->pixel, &a_program->depthVertex, &a_program->depthPixel });
 			for (std::size_t i = 0; i < stages.size(); ++i)
 				CheckPulledBindings(stages[i], i % 2 == 1);
-			auto built = std::make_shared<TreeLodBuilt>();
+			auto built = std::make_shared<FamilyBuilt>();
 			for (const bool colour : { false, true }) {
 				PipelineDesc desc(a_zLayout, colour ? a_program->vertex : a_program->depthVertex, colour ? a_program->pixel : a_program->depthPixel, a_targets.depth);
 				desc.raster.rs.cull = rhi::CullMode::None;  // the engine draws tree LOD with culling off (cull mode 0) in both passes
@@ -1246,7 +1263,7 @@ namespace DCLF
 					desc.blend.bs = a_blend;
 					desc.Colours(a_targets);
 				}
-				desc.Create(a_device, colour ? built->colour : built->depth, colour ? "tree LOD colour" : "tree LOD depth");
+				desc.Create(a_device, colour ? built->colour : built->depth, fmt::format("{} {}", a_label, colour ? "colour" : "depth"));
 			}
 			return built;
 		}
@@ -1575,7 +1592,7 @@ namespace DCLF
 					text += fmt::format("{} ", static_cast<int>(a_formats.colors[i]));
 				return text + fmt::format("depth {}", static_cast<int>(a_formats.depth));
 			};
-			// The lane rebuilds (RecreateMainSet); until the frame's catalog catches up, GetIndirectState and TreeLodPipelinesOf give none.
+			// The lane rebuilds (RecreateMainSet); until the frame's catalog catches up, GetIndirectState and CatalogFamilyPipelines give none.
 			logger::info("[DCLF] Main pass targets changed ({} -> {}); the indirect pipelines and tree LOD's are built again", describe(targets), describe(a_formats));
 			++stats.targetChanges;
 			++generation;
@@ -1591,21 +1608,22 @@ namespace DCLF
 		WakePipelineLane();
 	}
 
-	void DrawPipelines::RequestTreeLod()
+	void DrawPipelines::RequestFamily(Api::DrawFamily a_family)
 	{
-		if (impl->treeLodAsked)
+		const auto f = static_cast<std::size_t>(a_family);
+		if (impl->familyAsked[f])
 			return;
-		impl->treeLodAsked = true;
-		impl->completions->treeLodRequest.store(true, std::memory_order_release);
+		impl->familyAsked[f] = true;
+		impl->completions->familyRequest[f].store(true, std::memory_order_release);
 		WakePipelineLane();
 	}
 
-	void DrawPipelines::SetTreeLodInputs(RE::BSShader& a_distantTree)
+	void DrawPipelines::SetFamilyInputs(Api::DrawFamily a_family, RE::BSShader& a_shader)
 	{
-		auto& input = impl->renderInput;
-		if (input.distantTree == &a_distantTree || !Enabled())
+		auto& source = impl->renderInput.drawFamilySource[static_cast<std::size_t>(a_family)];
+		if (source == &a_shader || !Enabled())
 			return;
-		input.distantTree = &a_distantTree;
+		source = &a_shader;
 		impl->PostInput(*this);
 	}
 
@@ -1674,10 +1692,15 @@ namespace DCLF
 		result.shadowFailed = shadowCounters.failed.load(std::memory_order_relaxed);
 		result.shadowSetPublishes = shadowCounters.setPublishes.load(std::memory_order_relaxed);
 		result.shadowSetWaits = shadowCounters.setWaits.load(std::memory_order_relaxed);
-		const auto& treeCounters = impl->lane.treeLod.counters;
-		result.treeLodRequested = treeCounters.requested.load(std::memory_order_relaxed);
-		result.treeLodReady = treeCounters.ready.load(std::memory_order_relaxed);
-		result.treeLodFailed = treeCounters.failed.load(std::memory_order_relaxed);
+		for (std::size_t f = 0; f < kDrawFamilyLanes; ++f) {
+			const auto& family = Extensions::DrawFamilies()[f];
+			const auto& familyCounters = impl->lane.families[f].counters;
+			auto& out = result.drawFamilies[f];
+			out.label = family.taken ? family.label.c_str() : nullptr;
+			out.requested = familyCounters.requested.load(std::memory_order_relaxed);
+			out.ready = familyCounters.ready.load(std::memory_order_relaxed);
+			out.failed = familyCounters.failed.load(std::memory_order_relaxed);
+		}
 		const auto& forwardCounters = impl->lane.forward.counters;
 		result.forwardRequested = forwardCounters.requested.load(std::memory_order_relaxed);
 		result.forwardReady = forwardCounters.ready.load(std::memory_order_relaxed);
@@ -1772,6 +1795,15 @@ namespace DCLF
 
 	namespace
 	{
+		/** @brief The draw family whose lane slot's forward flags a_flags (a forward key's) carry, or Count for a Lighting key. */
+		Api::DrawFamily ForwardFamilyOf(std::uint32_t a_flags)
+		{
+			for (const auto& slot : kDrawFamilyLaneSlots)
+				if (a_flags & slot.forwardFlags)
+					return slot.family;
+			return Api::DrawFamily::Count;
+		}
+
 		/** @brief A shadow request's casters, for the on-demand warnings. */
 		std::string DescribeShadowCasters(const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion)
 		{
@@ -1791,8 +1823,8 @@ namespace DCLF
 		auto& l = lane;
 		auto& s = l.shadow;
 		auto& f = l.forward;
-		// New inputs: new targets restart the main set and tree LOD, a new shadow format the shadow set, new forward targets the forward
-		// pipelines; anything new may unpark keys waiting on an input.
+		// New inputs: new targets restart the main set and the draw families', a new shadow format the shadow set, new forward targets the
+		// forward pipelines; anything new may unpark keys waiting on an input.
 		bool inputsChanged = false;
 		if (auto input = inputSlot.Take()) {
 			if (l.input && l.input->targets.colorCount != 0 && !(l.input->targets == input->targets))
@@ -1824,8 +1856,7 @@ namespace DCLF
 			if (f.asked.insert(a_key).second)
 				TryRequestForward(a_key);
 		});
-		if (completions->treeLodRequest.exchange(false, std::memory_order_acq_rel))
-			l.treeLod.asked = true;
+		TakeFamilyRequests();
 		if (completions->refractionRequest.exchange(false, std::memory_order_acq_rel))
 			l.refraction.asked = true;
 		if (inputsChanged) {
@@ -1833,8 +1864,8 @@ namespace DCLF
 			s.RetryBlocked([&](const auto& a_key) { TryRequestShadow(a_key); });
 			f.RetryBlocked([&](const auto& a_key) { TryRequestForward(a_key); });
 		}
-		// Tree LOD and refraction wait on nothing a list holds: tried every pass (cheap once requested, built or failed).
-		TryRequestTreeLod();
+		// The draw families and refraction wait on nothing a list holds: tried every pass (cheap once requested, built or failed).
+		TryRequestFamilies();
 		TryRequestRefraction();
 		// Programs finished since the last pass: their keys go on to their pipelines. Loop until none: a program found complete at once
 		// (every stage cached) finishes with no completion to wake the lane.
@@ -1853,16 +1884,13 @@ namespace DCLF
 				s.RetryProgram(technique, [&](const auto& a_key) { TryRequestShadow(a_key); });
 			for (const std::uint64_t id : finished.forward)
 				f.RetryProgram(id, [&](const auto& a_key) { TryRequestForward(a_key); });
-			if (finished.forwardTreeLod)
-				f.RetryProgram(Lane::Forward::kTreeProgram, [&](const auto& a_key) { TryRequestForward(a_key); });
-			if (finished.treeLod)
-				TryRequestTreeLod();
+			RetryFamilyPrograms(finished);
 			if (!finished.shadow.empty())
 				TryRequestRefraction();
 		}
 		AdmitLane();
 		AdmitShadow();
-		AdmitTreeLodAndForward();
+		AdmitFamiliesAndForward();
 		if (l.dirty)
 			PublishCatalog();
 		// Completed builds become the service's active pipelines (a later request completes at once).
@@ -1990,16 +2018,17 @@ namespace DCLF
 			for (auto* counter : { &programCounters.requested, &programCounters.ready, &programCounters.failed })
 				counter->store(0, std::memory_order_relaxed);
 		l.recreatedBy = fmt::format("main pass targets {} -> {}", describe(a_from), describe(a_to));
-		// Tree LOD depends on the targets too: rebuilt (TryRequestTreeLod), the last kept for the process.
-		auto& t = l.treeLod;
-		if (t.built)
-			t.retired.push_back(std::move(t.built));
-		t.built = {};
-		t.requested = false;
-		t.failed = t.programFailed;
-		for (auto* counter : { &t.counters.requested, &t.counters.ready, &t.counters.failed })
-			counter->store(0, std::memory_order_relaxed);
-		t.counters.failed.store(t.programFailed ? 1u : 0u, std::memory_order_relaxed);
+		// The draw families depend on the targets too: rebuilt (TryRequestFamily), the last kept for the process.
+		for (auto& t : l.families) {
+			if (t.built)
+				t.retired.push_back(std::move(t.built));
+			t.built = {};
+			t.requested = false;
+			t.failed = t.programFailed;
+			for (auto* counter : { &t.counters.requested, &t.counters.ready, &t.counters.failed })
+				counter->store(0, std::memory_order_relaxed);
+			t.counters.failed.store(t.programFailed ? 1u : 0u, std::memory_order_relaxed);
+		}
 		// The refraction pipeline tests the main depth.
 		l.refraction.Reset();
 		l.dirty = true;
@@ -2184,18 +2213,43 @@ namespace DCLF
 		}, [](const ShadowPipelineKey&) {});
 	}
 
-	void DrawPipelines::Impl::TryRequestTreeLod()
+	void DrawPipelines::Impl::TryRequestFamilies()
 	{
-		auto& t = lane.treeLod;
+		for (std::size_t f = 0; f < kDrawFamilyLanes; ++f)
+			TryRequestFamily(static_cast<Api::DrawFamily>(f));
+	}
+
+	void DrawPipelines::Impl::TakeFamilyRequests()
+	{
+		for (std::size_t f = 0; f < kDrawFamilyLanes; ++f)
+			if (completions->familyRequest[f].exchange(false, std::memory_order_acq_rel))
+				lane.families[f].asked = true;
+	}
+
+	void DrawPipelines::Impl::RetryFamilyPrograms(const ShaderPrograms::Finished& a_finished)
+	{
+		for (std::size_t f = 0; f < kDrawFamilyLanes; ++f) {
+			if (a_finished.drawFamilyForward[f])
+				lane.forward.RetryProgram(kDrawFamilyLaneSlots[f].forwardProgramId, [&](const auto& a_key) { TryRequestForward(a_key); });
+			if (a_finished.drawFamily[f])
+				TryRequestFamily(static_cast<Api::DrawFamily>(f));
+		}
+	}
+
+	void DrawPipelines::Impl::TryRequestFamily(Api::DrawFamily a_family)
+	{
+		const auto f = static_cast<std::size_t>(a_family);
+		auto& t = lane.families[f];
 		if (!t.asked || t.requested || t.built || t.failed)
 			return;
-		// What it lacks arrives with the frame's inputs or its program (Finished::treeLod); DrainLane retries each pass.
+		const auto& family = Extensions::DrawFamilyOf(a_family);
+		// What it lacks arrives with the frame's inputs or its program (Finished::drawFamily); DrainLane retries each pass.
 		const auto* input = lane.input.get();
-		if (!input || !input->distantTree || input->targets.colorCount == 0 || input->targets.depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW || !input->states ||
-			!zLayout || !treeLodDrawSignature)
+		if (!input || !input->drawFamilySource[f] || input->targets.colorCount == 0 || input->targets.depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW || !input->states ||
+			!zLayout || !familySignatures[f])
 			return;
-		// The engine draws tree LOD colour in write mode 1: its blend, read unasked by CaptureEngineStates. If inexpressible, tree
-		// LOD stays native.
+		// The engine draws tree LOD colour in write mode 1: its blend, read unasked by CaptureEngineStates. If inexpressible, the family
+		// stays native.
 		const auto state = input->states->find(kOpaqueWriteMode << kRasterWriteModeShift);
 		if (state == input->states->end())
 			return;
@@ -2203,11 +2257,11 @@ namespace DCLF
 			t.failed = true;
 			t.counters.failed.fetch_add(1, std::memory_order_relaxed);
 			lane.dirty = true;
-			logger::warn("[DCLF] tree LOD's pipelines cannot be built: the opaque write mode's state cannot be read; tree LOD stays native");
+			logger::warn("[DCLF] {}'s pipelines cannot be built: the opaque write mode's state cannot be read; {}", family.label, family.nativeNote);
 			return;
 		}
 		bool programFailed = false;
-		const auto* program = ShaderPrograms::Get().FindTreeLod(*input->distantTree, &programFailed);
+		const auto* program = ShaderPrograms::Get().FindDrawFamily(a_family, *input->drawFamilySource[f], &programFailed);
 		if (programFailed) {
 			t.failed = t.programFailed = true;
 			t.counters.failed.fetch_add(1, std::memory_order_relaxed);
@@ -2219,16 +2273,18 @@ namespace DCLF
 		const auto& inputTargets = input->targets;
 		const auto blend = state->second.blend;
 		org::services::PipelineRecipe recipe;
-		recipe.id = "dclf.tree-lod";
+		recipe.id = fmt::format("dclf.{}", family.keyName);
+		// The depth vertex stage is left out of the key, as it always was (the pipeline cache's keys stay the same).
 		recipe.shaderKey = ModuleHash(program->vertex) ^ ModuleHash(program->pixel) * 0x9E3779B97F4A7C15ull ^ ModuleHash(program->depthPixel);
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&inputTargets, sizeof(inputTargets)) ^
 		                          ankerl::unordered_dense::detail::wyhash::hash(&blend, sizeof(blend)) * 0x9E3779B97F4A7C15ull;
-		recipe.build = [device = device, zLayout = zLayout->GetHandle(), program, formats = inputTargets, blend, frontCCW = *input->frontCCW] {
-			return BuildTreeLod(device, zLayout, program, formats, blend, frontCCW);
+		recipe.build = [device = device, zLayout = zLayout->GetHandle(), program, formats = inputTargets, blend, frontCCW = *input->frontCCW,
+						   label = std::string_view(family.label)] {
+			return BuildDrawFamily(device, zLayout, program, formats, blend, frontCCW, label);
 		};
 		t.requested = true;
-		(void)service.Request(std::move(recipe), [completions = completions, generation = lane.generation](const org::services::PipelineArtifact& a_artifact) {
-			completions->treeLod.Push({ generation, a_artifact });
+		(void)service.Request(std::move(recipe), [completions = completions, f, generation = lane.generation](const org::services::PipelineArtifact& a_artifact) {
+			completions->family[f].Push({ generation, a_artifact });
 			WakePipelineLane();
 		});
 		t.counters.requested.fetch_add(1, std::memory_order_relaxed);
@@ -2280,20 +2336,23 @@ namespace DCLF
 		auto& f = lane.forward;
 		if (f.entries.contains(a_key))
 			return;  // requested, or failed for good
-		const bool tree = (a_key.flags & ForwardPipelineKey::kForwardTreeLod) != 0;
+		// A draw family's key (its lane slot's forward flags: tree LOD's) draws its forward program.
+		const auto family = ForwardFamilyOf(a_key.flags);
+		const bool familyKey = family != Api::DrawFamily::Count;
+		const auto d = static_cast<std::size_t>(family);
 		// A key draws into its view's targets (Extensions::ForwardKeyView), with its view's culling (a plain projection's back faces).
 		const auto view = Extensions::ForwardKeyView(a_key.flags);
 		const bool cullBack = view != Api::EngineView::Count && Extensions::ViewEntryOf(view).keys.cullBackFaces;
 		const auto* input = lane.input.get();
 		const ForwardTargets* keyTargets = input && view != Api::EngineView::Count ? &input->viewTargets[static_cast<std::size_t>(view)] : nullptr;
 		if (!input || !keyTargets || keyTargets->colour == DXGI_FORMAT_UNKNOWN || keyTargets->depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW ||
-			!(tree ? input->distantTree : input->lighting) || !zLayout) {
+			!(familyKey ? input->drawFamilySource[d] : input->lighting) || !zLayout) {
 			f.blocked.push_back(a_key);
 			return;
 		}
 		bool programFailed = false;
-		const auto* program = tree ? ShaderPrograms::Get().FindForwardTreeLod(*input->distantTree, &programFailed) :
-		                             ShaderPrograms::Get().FindForward(a_key.vertexDescriptor, a_key.pixelDescriptor, *input->lighting, &programFailed);
+		const auto* program = familyKey ? ShaderPrograms::Get().FindDrawFamilyForward(family, *input->drawFamilySource[d], &programFailed) :
+		                                  ShaderPrograms::Get().FindForward(a_key.vertexDescriptor, a_key.pixelDescriptor, *input->lighting, &programFailed);
 		if (programFailed) {
 			// Its objects stay out of the reflection phase (the engine draws them).
 			f.FailForGood(a_key);
@@ -2302,13 +2361,14 @@ namespace DCLF
 			return;
 		}
 		if (!program) {
-			f.programWaiters[tree ? Lane::Forward::kTreeProgram : ShaderPrograms::ForwardProgramId(a_key.vertexDescriptor, a_key.pixelDescriptor)].push_back(a_key);
+			f.programWaiters[familyKey ? kDrawFamilyLaneSlots[d].forwardProgramId : ShaderPrograms::ForwardProgramId(a_key.vertexDescriptor, a_key.pixelDescriptor)].push_back(a_key);
 			return;
 		}
 		const ForwardTargets forwardTargets = *keyTargets;
 		const auto cull = (a_key.flags & ForwardPipelineKey::kForwardTwoSided) ? rhi::CullMode::None : cullBack ? rhi::CullMode::Back : rhi::CullMode::Front;
 		org::services::PipelineRecipe recipe;
-		recipe.id = tree ? std::string("dclf.forward.tree-lod") : fmt::format("dclf.forward.{:08X}.{:08X}.{:X}", a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.flags);
+		recipe.id = familyKey ? fmt::format("dclf.forward.{}", Extensions::DrawFamilyOf(family).keyName) :
+		                        fmt::format("dclf.forward.{:08X}.{:08X}.{:X}", a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.flags);
 		recipe.shaderKey = ModuleHash(program->vertex) ^ ModuleHash(program->pixel) * 0x9E3779B97F4A7C15ull;
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&forwardTargets, sizeof(forwardTargets)) ^
 		                          static_cast<std::uint64_t>(cull) * 0x9E3779B97F4A7C15ull;
@@ -2338,23 +2398,26 @@ namespace DCLF
 		lane.dirty = true;
 	}
 
-	void DrawPipelines::Impl::AdmitTreeLodAndForward()
+	void DrawPipelines::Impl::AdmitFamiliesAndForward()
 	{
-		auto& t = lane.treeLod;
-		completions->treeLod.Drain([&](TreeLodDone&& a_done) {
-			if (a_done.generation != lane.generation)
-				return;  // from before a target change (RecreateMainSet)
-			lane.dirty = true;
-			if (!a_done.artifact) {
-				t.failed = true;
-				t.counters.failed.fetch_add(1, std::memory_order_relaxed);
-				logger::warn("[DCLF] tree LOD's pipelines failed: {}; tree LOD stays native", a_done.artifact.error);
-				return;
-			}
-			t.built = a_done.artifact.payload;
-			t.counters.ready.fetch_add(1, std::memory_order_relaxed);
-			logger::info("[DCLF] tree LOD pipelines ready");
-		});
+		for (std::size_t d = 0; d < kDrawFamilyLanes; ++d) {
+			auto& t = lane.families[d];
+			const auto& family = Extensions::DrawFamilies()[d];
+			completions->family[d].Drain([&](FamilyDone&& a_done) {
+				if (a_done.generation != lane.generation)
+					return;  // from before a target change (RecreateMainSet)
+				lane.dirty = true;
+				if (!a_done.artifact) {
+					t.failed = true;
+					t.counters.failed.fetch_add(1, std::memory_order_relaxed);
+					logger::warn("[DCLF] {}'s pipelines failed: {}; {}", family.label, a_done.artifact.error, family.nativeNote);
+					return;
+				}
+				t.built = a_done.artifact.payload;
+				t.counters.ready.fetch_add(1, std::memory_order_relaxed);
+				logger::info("[DCLF] {} pipelines ready", family.label);
+			});
+		}
 		auto& r = lane.refraction;
 		completions->refraction.Drain([&](RefractionDone&& a_done) {
 			if (a_done.generation != lane.generation || a_done.format != r.format || !r.requested || r.built)
@@ -2423,8 +2486,8 @@ namespace DCLF
 		catalog->shadowGeneration = s.generation;
 		catalog->shadowFormat = l.input ? l.input->shadowFormat : DXGI_FORMAT_UNKNOWN;
 		catalog->shadowSetVersion = s.versions.published.load();
-		catalog->treeLod.pipelines = l.treeLod.built;
-		catalog->treeLod.failed = l.treeLod.failed;
+		for (std::size_t d = 0; d < kDrawFamilyLanes; ++d)
+			catalog->families[d] = { l.families[d].built, l.families[d].failed };
 		catalog->refraction.pipeline = l.refraction.built;
 		catalog->refraction.format = l.refraction.built ? l.refraction.format : DXGI_FORMAT_UNKNOWN;
 		catalog->refraction.failed = l.refraction.failed;
@@ -2446,27 +2509,28 @@ namespace DCLF
 
 	struct ForwardPipelineAccess
 	{
-		static bool TreeLod(const PipelineCatalog* a_catalog, std::uint32_t a_targetsGeneration, TreeLodPipelines& a_out)
+		static bool Family(const PipelineCatalog* a_catalog, Api::DrawFamily a_family, std::uint32_t a_targetsGeneration, FamilyPipelines& a_out)
 		{
 			auto& drawPipelines = DrawPipelines::Get();
 			const auto& impl = *drawPipelines.impl;
+			const auto f = static_cast<std::size_t>(a_family);
 			// None once the targets changed after the catalog was built (as GetIndirectState).
-			if (!a_catalog || !a_catalog->treeLod.pipelines || a_catalog->targetsGeneration != a_targetsGeneration || !impl.treeLodDrawSignature)
+			if (!a_catalog || !a_catalog->families[f].pipelines || a_catalog->targetsGeneration != a_targetsGeneration || !impl.familySignatures[f])
 				return false;
-			const auto* built = static_cast<const DrawPipelines::Impl::TreeLodBuilt*>(a_catalog->treeLod.pipelines.get());
-			a_out = TreeLodPipelines{ built->depth->GetHandle(), built->colour->GetHandle(), impl.treeLodDrawSignature->GetHandle() };
+			const auto* built = static_cast<const DrawPipelines::Impl::FamilyBuilt*>(a_catalog->families[f].pipelines.get());
+			a_out = FamilyPipelines{ built->depth->GetHandle(), built->colour->GetHandle(), impl.familySignatures[f]->GetHandle() };
 			return true;
 		}
 	};
 
-	bool TreeLodPipelinesOf(const PipelineCatalog* a_catalog, TreeLodPipelines& a_out)
+	bool CatalogFamilyPipelines(const PipelineCatalog* a_catalog, Api::DrawFamily a_family, FamilyPipelines& a_out)
 	{
-		return ForwardPipelineAccess::TreeLod(a_catalog, DrawPipelines::Get().Generation(), a_out);
+		return ForwardPipelineAccess::Family(a_catalog, a_family, DrawPipelines::Get().Generation(), a_out);
 	}
 
-	bool TreeLodPipelinesOf(const PipelineCatalog* a_catalog, std::uint32_t a_targetsGeneration, TreeLodPipelines& a_out)
+	bool CatalogFamilyPipelines(const PipelineCatalog* a_catalog, Api::DrawFamily a_family, std::uint32_t a_targetsGeneration, FamilyPipelines& a_out)
 	{
-		return ForwardPipelineAccess::TreeLod(a_catalog, a_targetsGeneration, a_out);
+		return ForwardPipelineAccess::Family(a_catalog, a_family, a_targetsGeneration, a_out);
 	}
 
 	rhi::PipelineHandle ForwardPipelineOf(const PipelineCatalog* a_catalog, const ForwardPipelineKey& a_key, const ForwardTargets& a_targets)

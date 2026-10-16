@@ -3,7 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 
 namespace DCLF::Draws
 {
@@ -49,6 +49,58 @@ namespace DCLF::Draws
 			return { casterKey == ~0u ? 0u : casterKey, a_record, object.geometryIndex, (object.flags & ~(kObjectDecal | kObjectForward)) | kInputDrawable,
 				{ mask, casterKey, { occlusionKey[0], occlusionKey[1] } }, a_object, 0, PartitionsOf(a_tables, a_object), a_stream, FadeRootOf(a_tables, a_object),
 				a_record, LodPartitionsOf(a_tables, a_object) };
+		}
+
+		/** @brief The texture-transform buffer the frame reads (textureTransformCurrentBuffer, flipped by Main::Update): ShadowTexcoord's. */
+		std::uint32_t ShadowTransformBuffer()
+		{
+			return globals::game::smState ? (globals::game::smState->textureTransformCurrentBuffer & 1) : 0u;
+		}
+
+		/**
+		 * @brief A shadow material row's texcoord (offset xy, scale zw): a_material's texture transform in a_buffer (ShadowTransformBuffer).
+		 * Read now, not from the walk: BSLightingShaderPropertyFloatController::Update moves it between Main::Draw and BeforeShadowMaps. Use
+		 * the buffer the frame reads, as BSUtilityShader::SetupMaterial does; the controllers write the other.
+		 */
+		std::array<float, 4> ShadowTexcoord(const RE::BSShaderMaterial& a_material, std::uint32_t a_buffer)
+		{
+			return { a_material.texCoordOffset[a_buffer].x, a_material.texCoordOffset[a_buffer].y, a_material.texCoordScale[a_buffer].x,
+				a_material.texCoordScale[a_buffer].y };
+		}
+
+		/**
+		 * @brief The kept build's transform watch: the transform moves since the last build (Extensions::DrainTransformMoves) watch their
+		 * material's slot, and a watched slot's row is marked (a_markRow) while its two buffers (flipped each frame) differ or for 2 builds
+		 * after its last move, so both buffers' values reach the row.
+		 */
+		template <class MarkRow>
+		void WatchTransformMoves(ShadowKept& k, std::uint64_t a_build, MarkRow&& a_markRow)
+		{
+			std::vector<const RE::BSShaderMaterial*> moved;
+			Extensions::DrainTransformMoves(moved);
+			if (k.transformWatchBuild.size() < k.slotMaterial.size())
+				k.transformWatchBuild.resize(k.slotMaterial.size(), 0);
+			for (const auto* material : moved)
+				if (const auto it = k.slotOf.find(material); it != k.slotOf.end()) {
+					if (!k.transformWatchBuild[it->second])
+						k.transformWatch.push_back(it->second);
+					k.transformWatchBuild[it->second] = a_build;
+				}
+			for (std::size_t w = 0; w < k.transformWatch.size();) {
+				const std::uint32_t slot = k.transformWatch[w];
+				const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(k.slotMaterial[slot]);
+				const bool keep = material && k.transformWatchBuild[slot] &&
+				                  (a_build - k.transformWatchBuild[slot] <= 2 || material->texCoordOffset[0] != material->texCoordOffset[1] ||
+									  material->texCoordScale[0] != material->texCoordScale[1]);
+				if (!keep) {
+					k.transformWatchBuild[slot] = 0;
+					k.transformWatch[w] = k.transformWatch.back();
+					k.transformWatch.pop_back();
+					continue;
+				}
+				a_markRow(slot);
+				++w;
+			}
 		}
 	}
 
@@ -117,9 +169,9 @@ namespace DCLF::Draws
 			k.slotOwner.emplace_back();
 		}
 		writeRow(0, a_plain);
-		const std::uint32_t transformBuffer = globals::game::smState ? (globals::game::smState->textureTransformCurrentBuffer & 1) : 0u;
+		const std::uint32_t transformBuffer = ShadowTransformBuffer();
 		auto materialRow = [&](std::uint32_t a_slot) {
-			// Read the texture offset off the material now (controllers move it after the walk; see below).
+			// Read the texture offset off the material now (controllers move it after the walk: ShadowTexcoord).
 			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(k.slotMaterial[a_slot]);
 			const auto textureIt = k.slotDiffuse[a_slot] ? a_lookups.shadowTextures.find(k.slotDiffuse[a_slot]) : a_lookups.shadowTextures.end();
 			const bool ready = textureIt != a_lookups.shadowTextures.end() && textureIt->second != Lookups::kNone;
@@ -127,8 +179,7 @@ namespace DCLF::Draws
 			if (!ready)
 				return false;
 			ShadowMaterialRow row;
-			row.texcoord = { material->texCoordOffset[transformBuffer].x, material->texCoordOffset[transformBuffer].y, material->texCoordScale[transformBuffer].x,
-				material->texCoordScale[transformBuffer].y };
+			row.texcoord = ShadowTexcoord(*material, transformBuffer);
 			row.diffuse = textureIt->second;
 			writeRow(a_slot, row);
 			const auto owner = a_lookups.shadowTextureOwners.find(k.slotDiffuse[a_slot]);
@@ -371,31 +422,7 @@ namespace DCLF::Draws
 					markRow(slot);
 		}
 		// Texture-transform events watch a slot: it is reread while the two buffers (flipped each frame) differ.
-		std::vector<const RE::BSShaderMaterial*> moved;
-		DCLF::MaterialWrites::DrainShadowTransformChanges(moved);
-		if (k.transformWatchBuild.size() < k.slotMaterial.size())
-			k.transformWatchBuild.resize(k.slotMaterial.size(), 0);
-		for (const auto* material : moved)
-			if (const auto it = k.slotOf.find(material); it != k.slotOf.end()) {
-				if (!k.transformWatchBuild[it->second])
-					k.transformWatch.push_back(it->second);
-				k.transformWatchBuild[it->second] = build;
-			}
-		for (std::size_t w = 0; w < k.transformWatch.size();) {
-			const std::uint32_t slot = k.transformWatch[w];
-			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(k.slotMaterial[slot]);
-			const bool keep = material && k.transformWatchBuild[slot] &&
-			                  (build - k.transformWatchBuild[slot] <= 2 || material->texCoordOffset[0] != material->texCoordOffset[1] ||
-								  material->texCoordScale[0] != material->texCoordScale[1]);
-			if (!keep) {
-				k.transformWatchBuild[slot] = 0;
-				k.transformWatch[w] = k.transformWatch.back();
-				k.transformWatch.pop_back();
-				continue;
-			}
-			markRow(slot);
-			++w;
-		}
+		WatchTransformMoves(k, build, markRow);
 		// An unwritten slot (texture unresolved) stays for the next build.
 		for (std::size_t d = 0; d < k.rowDirty.size();) {
 			const std::uint32_t slot = k.rowDirty[d];
@@ -1068,13 +1095,9 @@ namespace DCLF::Draws
 				++a_out.skippedTexture;
 				continue;
 			}
-			// Read now, not from the walk: BSLightingShaderPropertyFloatController::Update moves it between Main::Draw and
-			// BeforeShadowMaps. Use the buffer the frame reads (textureTransformCurrentBuffer, flipped by Main::Update), as
-			// BSUtilityShader::SetupMaterial does; the controllers write the other.
-			const std::uint32_t transformBuffer = globals::game::smState ? (globals::game::smState->textureTransformCurrentBuffer & 1) : 0u;
+			// Read now, not from the walk (ShadowTexcoord).
 			ShadowMaterialRow row;
-			row.texcoord = { material->texCoordOffset[transformBuffer].x, material->texCoordOffset[transformBuffer].y, material->texCoordScale[transformBuffer].x,
-				material->texCoordScale[transformBuffer].y };
+			row.texcoord = ShadowTexcoord(*material, ShadowTransformBuffer());
 			row.diffuse = textureIt->second;
 			if (const auto owner = a_lookups.shadowTextureOwners.find(srv); owner != a_lookups.shadowTextureOwners.end())
 				a_out.bindingOwners.push_back(owner->second);

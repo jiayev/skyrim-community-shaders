@@ -386,7 +386,7 @@ namespace DCLF::Draws
 		float treeHeight[2];
 		// Depth segment: the camera's position and LOD factor (NiCamera +0x184), as BSFadeNode::OnVisible measures distance.
 		float fadeEye[4];
-		// Colour pass: the sun cascades (a SunRegion of SunAccumulation::GpuCascade), bytes into the latch block.
+		// Colour pass: the sun cascades (a SunRegion of GpuCascade), bytes into the latch block.
 		std::uint32_t sunCascadeOffset;
 		// A sun view (kCullSunEntry): the full-frustum processes (SunRegion of SunEntryProcess); an input whose entry sphere is
 		// outside every one is no sun caster. 0: no entry test.
@@ -445,7 +445,7 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief A sun plane set in a latch block (a SunRegion: a 16-byte count header, then records): the full-frustum processes here,
-	 * the cascades (SunAccumulation::GpuCascade) in the main block. The engine bounds neither, so they grow.
+	 * the cascades (GpuCascade) in the main block. The engine bounds neither, so they grow.
 	 */
 	struct SunEntryProcess
 	{
@@ -455,7 +455,14 @@ namespace DCLF::Draws
 
 		bool operator==(const SunEntryProcess&) const = default;
 	};
-	static_assert(sizeof(SunEntryProcess) == 112 && sizeof(SunAccumulation::GpuCascade) == 208);
+	/** @brief One sun cascade as BuildDraws tests it: plane masks (custom 0: none), 6 planes and 6 custom planes. */
+	struct GpuCascade
+	{
+		std::uint32_t masks[2]{};
+		std::uint32_t pad[2]{};
+		float planes[12][4]{};
+	};
+	static_assert(sizeof(SunEntryProcess) == 112 && sizeof(GpuCascade) == 208);
 	constexpr std::uint32_t kSunRegionHeader = 16;
 	template <class Record>
 	constexpr std::uint32_t SunRegionBytes(std::uint32_t a_records)
@@ -482,8 +489,8 @@ namespace DCLF::Draws
 		return true;
 	}
 
-	/** @brief SunAccumulation's sphere test against one cascade (as BuildDrawsCS does it). */
-	inline bool InSunCascade(const SunAccumulation::GpuCascade& a_cascade, const float a_centre[3], float a_radius)
+	/** @brief The sun's sphere test against one cascade (as BuildDrawsCS does it). */
+	inline bool InSunCascade(const GpuCascade& a_cascade, const float a_centre[3], float a_radius)
 	{
 		for (std::uint32_t set = 0; set < 2; ++set) {
 			const std::uint32_t mask = a_cascade.masks[set];
@@ -554,7 +561,7 @@ namespace DCLF::Draws
 		// table (first, capacity), and the slots' map to them.
 		std::uint32_t buckets = 0;
 		static constexpr std::uint32_t CascadeOffset() { return static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
-		std::uint32_t ShadowVolumeOffset() const { return CascadeOffset() + SunRegionBytes<SunAccumulation::GpuCascade>(cascades); }
+		std::uint32_t ShadowVolumeOffset() const { return CascadeOffset() + SunRegionBytes<GpuCascade>(cascades); }
 		std::uint32_t BucketTableOffset() const { return ShadowVolumeOffset() + SunRegionBytes<GpuShadowVolume>(shadowVolumes); }
 		std::uint32_t PhaseTwoBucketTableOffset() const { return BucketTableOffset() + buckets * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		std::uint32_t BucketMapOffset() const { return PhaseTwoBucketTableOffset() + buckets * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }

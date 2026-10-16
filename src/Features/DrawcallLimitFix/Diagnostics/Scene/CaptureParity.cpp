@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Engine/SkinPartitions.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
@@ -357,13 +358,13 @@ namespace DCLF
 		auto* ps = *globals::game::currentPixelShader;
 		bool ok = true;
 		compareContext = fmt::format(" (pipeline descriptor {:08X}, skinned object {})", tables.pipelines[object.pipelineIndex].passDescriptor,
-			(object.flags & kObjectSkinned) != 0);
+			(object.flags & kObjectPaletteBlock) != 0);
 		// TreeParams and WindTimers: SetupGeometry writes them for technique 12 only (otherwise leftover, unread), and a member
 		// tree's come from a feature's GPU stage (TreeWindCS: its own parity checks those). World and PreviousWorld: SetupGeometry skips them
 		// for skinned objects (engine notes); the SKINNED vertex shader positions from the palette.
 		const std::uint64_t vsMask = kVSGroups[kPerGeometry] &
 		                             ((object.flags & PerObjectWindFlags()) && !GpuWrittenWind(tables, a_objectIndex) ? ~0ull : ~((1ull << kVSTreeParams) | (1ull << kVSWindTimers))) &
-		                             ((object.flags & kObjectSkinned) ? ~((1ull << kVSWorld) | (1ull << kVSPreviousWorld)) : ~0ull);
+		                             ((object.flags & kObjectPaletteBlock) ? ~((1ull << kVSWorld) | (1ull << kVSPreviousWorld)) : ~0ull);
 		if (vs)
 			ok &= CompareBlock(a_geometry, "VS PerGeometry", expected.vs, vsLayout, vs->constantTable.data(),
 				vs->constantTable.size(), Slot(0, kPerGeometry), reinterpret_cast<ID3D11Resource*>(vs->constantBuffers[kPerGeometry].buffer), kVSWorld, vsMask, 0);
@@ -685,7 +686,7 @@ namespace DCLF
 		// Skinned: the bone setter's b10 (current) and b9 (previous) against the frame's palettes (sampled after the same update);
 		// skipped while the producer runs.
 		const auto* framePalettes = FrameValues::Get().PalettesIfDone();
-		if ((object.flags & kObjectSkinned) && static_cast<std::size_t>(index) < tables.boneOffset.size() && tables.boneRows[index] && framePalettes) {
+		if ((object.flags & kObjectPaletteBlock) && static_cast<std::size_t>(index) < tables.boneOffset.size() && tables.boneRows[index] && framePalettes) {
 			ID3D11Buffer* boneBuffers[2] = {};
 			a_context->VSGetConstantBuffers(9, 2, boneBuffers);
 			const std::uint32_t rows = tables.boneRows[index];
@@ -976,7 +977,7 @@ namespace DCLF
 		pendingSlotCount = pendingSlotCursor = 0;
 		const auto* skin = geometry->GetGeometryRuntimeData().skinInstance.get();
 		const std::uint32_t partitions = skin && skin->skinPartition && skin->skinPartition->numPartitions > 1 ?
-		                                     Scene::Coordinator::SkinPartitionMask(*skin, SceneCapture::LodRowOf(*a_pass)) :
+		                                     SkinPartitions::Mask(*skin, SceneCapture::LodRowOf(*a_pass)) :
 		                                     0u;
 		if (skin && skin->skinPartition && skin->skinPartition->numPartitions > 1 && !partitions) {
 			pendingObject = -1;  // the engine draws no partition of it with this pass

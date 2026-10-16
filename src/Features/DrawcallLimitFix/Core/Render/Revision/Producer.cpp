@@ -238,7 +238,7 @@ namespace DCLF
 		const PipelineCatalog* catalog = nullptr;
 		IndirectState indirect;
 		ShadowIndirectState shadowIndirect;
-		TreeLodPipelines treeLodPipelines;
+		FamilyPipelines treeLodPipelines;
 		bool treeLod = false;
 		std::array<bool, kViews> viewOn{};
 		std::array<ZBucketPlan, 2> zPlans;
@@ -379,7 +379,7 @@ namespace DCLF
 		// from the one main layout, its buffers required to hold that plan: the shape made below from the same layout and the set sealed
 		// with those requirements can never index past its buffers. Their maps for every pipeline slot the tables have, as the
 		// Z-prepass's (above).
-		a_make.treeLod = TreeLodPipelinesOf(a_make.catalog, inputs.targetsGeneration, a_make.treeLodPipelines);
+		a_make.treeLod = CatalogFamilyPipelines(a_make.catalog, Api::DrawFamily::TreeInstances, inputs.targetsGeneration, a_make.treeLodPipelines);
 		auto& viewOn = a_make.viewOn;
 		for (const auto& slot : kViewSlots) {
 			const auto kind = slot.view;
@@ -628,7 +628,7 @@ namespace DCLF
 	}
 
 	IndirectDraws::Impl::ShapesKey IndirectDraws::Impl::RevisionShapesKey(const NamedVersions& a_sealed, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect,
-		const Lookups& a_lookups, std::size_t a_pipelines, const TreeLodPipelines* a_treeLod) const
+		const Lookups& a_lookups, std::size_t a_pipelines, const FamilyPipelines* a_treeLod) const
 	{
 		ShapesKey key;
 		key.fill(0xcbf29ce484222325ull);
@@ -701,7 +701,7 @@ namespace DCLF
 		return key;
 	}
 
-	void IndirectDraws::Impl::MixViewShapesKey(ShapesKeyMixer& a_mixer, const TreeLodPipelines* a_treeLod) const
+	void IndirectDraws::Impl::MixViewShapesKey(ShapesKeyMixer& a_mixer, const FamilyPipelines* a_treeLod) const
 	{
 		const auto& inputs = producer.inputs;
 		const auto& latches = producer.latches;

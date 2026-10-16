@@ -1,6 +1,6 @@
-// Object LOD's segment writers (Core/Engine/LodSegments.h): each patched call makes the write, then names the shape on the feature's engine
+// Object LOD's segment writers (LodSegments.h): each patched call makes the write, then names the shape on the feature's engine
 // channel (its queue, drained by the coordinator's passes: LodSegmentChannel.cpp) and pushes the mirror's update (Core's channel:
-// Extensions::PushSegmentsUpdate). Installed on the render thread, at the feature's early hooks.
+// Extensions::PushRangesUpdate). Installed on the render thread, at the feature's early hooks.
 
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegmentEvents.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -22,7 +22,7 @@ namespace DCLF::Features::Lod
 			{
 				func(a_shape, a_segment);
 				segmentEvents.Push(a_shape);
-				Extensions::PushSegmentsUpdate(a_shape);
+				Extensions::PushRangesUpdate(a_shape);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -32,7 +32,7 @@ namespace DCLF::Features::Lod
 			{
 				func(a_shape, a_segment);
 				segmentEvents.Push(a_shape);
-				Extensions::PushSegmentsUpdate(a_shape);
+				Extensions::PushRangesUpdate(a_shape);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -42,7 +42,7 @@ namespace DCLF::Features::Lod
 			{
 				func(a_shape);
 				segmentEvents.Push(a_shape);
-				Extensions::PushSegmentsUpdate(a_shape);
+				Extensions::PushRangesUpdate(a_shape);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};

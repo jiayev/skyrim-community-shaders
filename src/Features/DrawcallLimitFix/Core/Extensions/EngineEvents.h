@@ -96,10 +96,11 @@ namespace DCLF::Extensions
 	 */
 	bool HiddenEventsLive();
 	/**
-	 * @brief A store of the feature's own to a_geometry's segments (a BSSubIndexTriShape's drawn ranges): the mirror's update of them, on
-	 * the storing thread after the store, in order with what that thread pushed before. Nothing for null.
+	 * @brief A store of the feature's own to what a_geometry's ranged type captures (Api::GeometryTypeContribution::ranges: a
+	 * BSSubIndexTriShape's segments): the mirror's update of its drawn ranges, on the storing thread after the store, in order with what
+	 * that thread pushed before. Nothing for null.
 	 */
-	void PushSegmentsUpdate(const RE::BSGeometry* a_geometry);
+	void PushRangesUpdate(const RE::BSGeometry* a_geometry);
 	/**
 	 * @brief A store of the feature's own to a_root's fadeAmount (+0x100; Actor::SetAlpha's, Features/Actors), on the storing thread after
 	 * the store: Core's fadeAmount event (Coordinator::RefreshFadeAmount rereads the node) and, for a fade node, the mirror's value.

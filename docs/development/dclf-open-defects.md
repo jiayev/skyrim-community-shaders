@@ -185,6 +185,12 @@ claimed 0x0, flipped 0x21 <- GATE HOLE (publication)`. If real, the incoming blo
 publication, while the outgoing one is already hidden. No earlier log shows it, but moving set-parity runs are new. The B2 gate
 rewrite runs `msp` at every sub-step, which shows if the rate changes.
 
+## Material transform moves: nothing drains the queue without the kept shadow build (found 2026-10-15; not investigated)
+
+`TransformMoves` (Engine/Capture/MaterialWrites.cpp, drained by `Extensions::DrainTransformMoves`) has one consumer, the kept shadow
+build's `WatchTransformMoves`. In a configuration that never runs the kept build, nothing drains it, and the EventQueue spills when it
+fills. This predates the B2/wave-3 moves, which only renamed the queue.
+
 ## Portal parity: one unbound-space occluder mismatch under motion (found 2026-10-15; not investigated)
 
 In one `verify.sh mpp` run (the B2 gate parity build), one window reported `<- PORTAL VIEW; first: unbound space: 4 ops 1 sets, the

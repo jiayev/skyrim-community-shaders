@@ -8,24 +8,24 @@ namespace DCLF::Api
 {
 	bool DrawFamilyFrame::Pipelines(bool a_drawable) const
 	{
-		// The lane builds the slot's pipelines from the family's program source (TreeInstances': the DistantTree shader, the lane's
-		// tree LOD family); until the frame's catalog has them the engine draws the family.
+		// The lane builds the slot's pipelines from the family's program source (TreeInstances': the DistantTree shader); until the
+		// frame's catalog has them the engine draws the family.
 		auto& drawPipelines = DrawPipelines::Get();
 		if (auto* shader = static_cast<RE::BSShader*>(const_cast<void*>(Extensions::DrawFamilyOf(family).contribution.frame.programSource()))) {
-			drawPipelines.SetTreeLodInputs(*shader);  // the lane only reads it
-			drawPipelines.RequestTreeLod();
+			drawPipelines.SetFamilyInputs(family, *shader);  // the lane only reads it
+			drawPipelines.RequestFamily(family);
 		}
 		const auto* catalog = FrameCatalog();
-		TreeLodPipelines pipelines;
-		const bool built = TreeLodPipelinesOf(catalog, pipelines);
+		FamilyPipelines pipelines;
+		const bool built = CatalogFamilyPipelines(catalog, family, pipelines);
 		const bool owned = built && a_drawable;
 		if (owned) {
 			auto& published = scene->familyPipelines[static_cast<std::size_t>(family)];
 			const auto current = published.load(std::memory_order_acquire);
 			if (!current || !Draws::SameHandle(current->depth, pipelines.depth) || !Draws::SameHandle(current->colour, pipelines.colour))
-				published.store(std::make_shared<const TreeLodPipelines>(pipelines), std::memory_order_release);
+				published.store(std::make_shared<const FamilyPipelines>(pipelines), std::memory_order_release);
 		}
-		drawPipelines.NoteFrameWaits(!built && !(catalog && catalog->treeLod.failed), false);
+		drawPipelines.NoteFamilyWait(family, !built && !(catalog && catalog->families[static_cast<std::size_t>(family)].failed));
 		return owned;
 	}
 }

@@ -58,7 +58,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kStructureCauses = kChangeStructure;
 
 	/** @brief The scene phase's flags the accumulate phase's patch keeps; the rest of an object's flags are the patch's. */
-	inline constexpr std::uint32_t kSceneKeptFlags = kObjectSkinned | kObjectNoShadow | kObjectVolumetricOnly | kObjectShadowOnly;
+	inline constexpr std::uint32_t kSceneKeptFlags = kObjectPaletteBlock | kObjectNoShadow | kObjectVolumetricOnly | kObjectShadowOnly;
 
 	/**
 	 * @brief The scene's tables: the object, geometry, pipeline and material records and every column parallel to them. The

@@ -10,7 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/TreeInstancesLayout.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 
 #include <span>
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
@@ -25,6 +25,21 @@ namespace DCLF
 		constexpr std::uint64_t kFlagList4 = 1ull << 54;  // -> list 4 on its own
 		constexpr std::uint64_t kFlagList2 = 1ull << 36;  // -> adds 2
 		constexpr std::uint16_t kAlphaTestingFlag = 1u << 9;
+
+		// A draw family's engine shapes are known by their shader property's vtable (DrawFamilyEntry::engineShapeVtable, resolved at
+		// install; an untaken family's is 0, which no property's is).
+		const void* ShaderPropertyOf(const RE::BSGeometry* a_geometry) { return a_geometry->GetGeometryRuntimeData().shaderProperty.get(); }
+
+		/** @brief The draw family whose engine shape a_geometry is (kDrawFamilies: none). */
+		std::size_t EngineShapeFamily(const RE::BSGeometry* a_geometry)
+		{
+			const void* property = ShaderPropertyOf(a_geometry);
+			const auto& families = Extensions::DrawFamilies();
+			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
+				if (Engine::VtableIs(property, families[f].engineShapeVtable))
+					return f;
+			return Extensions::kDrawFamilies;
+		}
 	}
 
 	PassCapture& PassCapture::Get()
@@ -90,12 +105,14 @@ namespace DCLF
 		stats.volumetricWithheld = volumetricWithheld.exchange(0, std::memory_order_relaxed);
 		stats.directWithheld = directWithheld.exchange(0, std::memory_order_relaxed);
 		stats.mainWithheld = mainWithheld.exchange(0, std::memory_order_relaxed);
-		stats.treeLodWithheld = treeLodWithheld.exchange(0, std::memory_order_relaxed);
+		for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
+			stats.familyWithheld[f] = familyWithheld[f].exchange(0, std::memory_order_relaxed);
 		const auto& views = Extensions::Views();
 		for (std::uint32_t i = 0; i < views.ownRendererCount; ++i) {
 			const auto v = static_cast<std::size_t>(views.ownRendererViews[i]);
 			stats.viewWithheld[v] = viewRenderers[v].ownWithheld.exchange(0, std::memory_order_relaxed);
-			stats.viewTreeLodWithheld[v] = viewRenderers[v].ownTreeLodWithheld.exchange(0, std::memory_order_relaxed);
+			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
+				stats.viewFamilyWithheld[v][f] = viewRenderers[v].ownFamilyWithheld[f].exchange(0, std::memory_order_relaxed);
 		}
 		stats.occlusionWithheld = occlusionWithheld.exchange(0, std::memory_order_relaxed);
 		lastDrain = { entries.data(), count };
@@ -158,11 +175,12 @@ namespace DCLF
 			return false;
 		// Tree LOD (dclf-lod.md, "Tree LOD: the draws"): DCLF draws every instance the mirror holds this frame, so the engine's
 		// passes of every tree LOD shape (its Z-prepass's, hint 7 into group 1 through the shadow modes' registration; its colour
-		// pass's, hint 7 into group 1) are withheld.
-		if (familyOwned[static_cast<std::size_t>(Api::DrawFamily::TreeInstances)].load(std::memory_order_acquire) && TreeInstances::IsEngineShape(a_pass->geometry)) {
-			treeLodWithheld.fetch_add(1, std::memory_order_relaxed);
-			return true;
-		}
+		// pass's, hint 7 into group 1) are withheld. So for every draw family DCLF draws this frame: its engine shapes' passes.
+		for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
+			if (familyOwned[f].load(std::memory_order_acquire) && Engine::VtableIs(ShaderPropertyOf(a_pass->geometry), Extensions::DrawFamilies()[f].engineShapeVtable)) {
+				familyWithheld[f].fetch_add(1, std::memory_order_relaxed);
+				return true;
+			}
 		const auto set = std::atomic_load(&frameSet);
 		const std::uint8_t phases = set ? set->PhasesOf(a_pass->geometry) : std::uint8_t{ 0 };
 		const auto& views = Extensions::Views();
@@ -250,9 +268,11 @@ namespace DCLF
 			const auto renderers = std::atomic_load(&view.renderers);
 			if (!renderers || !renderers->contains(a_batch))
 				continue;
-			const bool treeLod = TreeInstances::IsEngineShape(a_pass->geometry);
-			if (treeLod && view.treeLodOwned.load(std::memory_order_acquire)) {
-				view.ownTreeLodWithheld.fetch_add(1, std::memory_order_relaxed);
+			// A draw family's engine shape (tree LOD's), withheld while the view's faces draw the family.
+			const std::size_t family = EngineShapeFamily(a_pass->geometry);
+			const bool treeLod = family < Extensions::kDrawFamilies;
+			if (treeLod && (view.familyOwned.load(std::memory_order_acquire) & (1u << family))) {
+				view.ownFamilyWithheld[family].fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
 			const auto set = std::atomic_load(&frameSet);

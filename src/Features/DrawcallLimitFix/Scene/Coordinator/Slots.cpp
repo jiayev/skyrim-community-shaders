@@ -380,7 +380,7 @@ namespace DCLF::Scene
 			if (const std::uint8_t veto = it->second.veto)
 				--(veto == Api::kVetoHold ? vetoHeld : vetoObserved);
 			sceneIdentity.Detach(a_geometry);
-			lodRanges.erase(a_geometry);
+			entryRanges.erase(a_geometry);
 			HandBack(std::move(it->second.geometry));
 			HandBack(std::move(it->second.property));
 			HandBack(std::move(it->second.layerProperty));

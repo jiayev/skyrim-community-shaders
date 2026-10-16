@@ -46,7 +46,7 @@ namespace DCLF::Scene
 			const RE::NiNode* roomNode = nullptr;
 			const RE::NiNode* source = nullptr;  // its entry class's held parent (EntryRule::holdsParent: a face shape's head)
 			bool mirrored = false;
-			bool subIndex = false;
+			bool ranged = false;
 			bool resolved = false;
 			const void* sunEntry = nullptr;
 			const RE::NiAVObject* lightActorRoot = nullptr;
@@ -57,10 +57,10 @@ namespace DCLF::Scene
 			// Of the sun entry (when resolved): its record's reference, and whether a category node owns it (CategoryNodeOwn).
 			const RE::TESObjectREFR* sunEntryReference = nullptr;
 			bool sunEntryCategory = false;
-			// The nearest marked root up its chain to the category node (rootMarks; none: no mark), and an object LOD's drawn ranges (as its
-			// events' component takes them).
+			// The nearest marked root up its chain to the category node (rootMarks; none: no mark), and a ranged entry's drawn ranges (object
+			// LOD's: as its events' component takes them).
 			Api::Mark mark;
-			std::vector<LodSegments::Range> segments;
+			std::vector<Api::EntryRange> ranges;
 		};
 		/** @brief One subtree's prepare (PrepareSubtree): its category node (none: nothing tracked), and its geometries in walk order. */
 		struct SubtreePrep

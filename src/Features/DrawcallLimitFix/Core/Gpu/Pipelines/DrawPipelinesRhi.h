@@ -84,18 +84,21 @@ namespace DCLF
 	 */
 	rhi::PipelineHandle ForwardPipelineOf(const PipelineCatalog* a_catalog, const ForwardPipelineKey& a_key, const ForwardTargets& a_targets);
 
-	/** @brief Tree LOD's pipelines and its draw's signature (DrawPipelines::RequestTreeLod). */
-	struct TreeLodPipelines
+	/**
+	 * @brief A draw family's pipelines and its draws' signature (DrawPipelines::RequestFamily; the slot's signature,
+	 * Api::DrawFamilySignature::DrawInstanced).
+	 */
+	struct FamilyPipelines
 	{
 		rhi::PipelineHandle depth{}, colour{};
 		rhi::CommandSignatureHandle drawSignature{};  // one non-indexed DrawInstanced's arguments (16 bytes)
 	};
 
 	/**
-	 * @brief Tree LOD's pipelines as a_catalog (the frame's: FrameCatalog) has them: false while they wait, when they failed, and once the
+	 * @brief a_family's pipelines as a_catalog (the frame's: FrameCatalog) has them: false while they wait, when they failed, and once the
 	 * targets changed after that catalog's were built for them (as GetIndirectState). Kept by the lane for the process, as the forward ones.
 	 */
-	bool TreeLodPipelinesOf(const PipelineCatalog* a_catalog, TreeLodPipelines& a_out);
+	bool CatalogFamilyPipelines(const PipelineCatalog* a_catalog, Api::DrawFamily a_family, FamilyPipelines& a_out);
 	/** @brief As above, for the targets of generation a_targetsGeneration (a revision's inputs'): any thread. */
-	bool TreeLodPipelinesOf(const PipelineCatalog* a_catalog, std::uint32_t a_targetsGeneration, TreeLodPipelines& a_out);
+	bool CatalogFamilyPipelines(const PipelineCatalog* a_catalog, Api::DrawFamily a_family, std::uint32_t a_targetsGeneration, FamilyPipelines& a_out);
 }

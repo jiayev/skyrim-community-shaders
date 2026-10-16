@@ -5,7 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/FrameClock.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
-#include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/PlacementRows/BillboardRow.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -159,7 +159,7 @@ namespace DCLF::SceneCapture
 		d |= (layerProperty != a_o.layerProperty || altIndexList != a_o.altIndexList || altIndexBuffer != a_o.altIndexBuffer || altPrimCount != a_o.altPrimCount) ? kLayer : 0u;
 		d |= anisotropic != a_o.anisotropic ? kExtra : 0u;
 		d |= std::memcmp(multiParams.data(), a_o.multiParams.data(), sizeof(multiParams)) != 0 ? kMultiParams : 0u;
-		d |= segments != a_o.segments ? kSegments : 0u;
+		d |= ranges != a_o.ranges ? kRanges : 0u;
 		return d;
 	}
 
@@ -283,8 +283,8 @@ namespace DCLF::SceneCapture
 			anisotropic = a_o.anisotropic;
 		if (a_f & kMultiParams)
 			multiParams = a_o.multiParams;
-		if (a_f & kSegments)
-			segments = a_o.segments;
+		if (a_f & kRanges)
+			ranges = a_o.ranges;
 	}
 
 	void PropertyRecord::Assign(const PropertyRecord& a_o, std::uint32_t a_f)
@@ -440,7 +440,7 @@ namespace DCLF::SceneCapture
 			CaptureSwitch(*node, r);
 		}
 		if (netimmerse_cast<RE::NiBillboardNode*>(node))
-			r.kind |= kKindBillboard | static_cast<std::uint16_t>(Billboards::FaceMode(node) << kKindBillboardModeShift);
+			r.kind |= kKindBillboard | static_cast<std::uint16_t>(PlacementRows::BillboardFaceMode(node) << kKindBillboardModeShift);
 		r.kind |= netimmerse_cast<RE::BSOrderedNode*>(node) ? kKindOrdered : 0u;
 		r.kind |= netimmerse_cast<RE::BSMultiBoundNode*>(node) ? kKindMultiBound : 0u;
 		r.kind |= netimmerse_cast<RE::BSFaceGenNiNode*>(node) ? kKindFaceGen : 0u;
@@ -548,8 +548,9 @@ namespace DCLF::SceneCapture
 			r.multiParams[21] = multi.normalDampener;
 		}
 		r.anisotropic = AnisotropicOf(a_geometry);
-		if (r.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape))
-			LodSegments::DrawnRanges(&a_geometry, r.segments);
+		// A ranged type's drawn ranges (its contribution's capture: object LOD's segments, Features/Lod).
+		if (const auto ranges = Extensions::GeometryRangesOf(r.type))
+			ranges(&a_geometry, r.ranges);
 		return r;
 	}
 

@@ -18,10 +18,10 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
@@ -134,7 +134,7 @@ namespace DCLF
 		// latch, targets, pipelines and resources).
 		RunViewWork(Api::ViewPoint::FrameStartBeforeCoverage);
 		// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand.
-		SunAccumulation::Get().BeginFrame(view.GetSunCandidates());
+		SunExclusionSlot::Get().BeginFrame(view.GetSunCandidates());
 		// The lookups are the installed publication's; what only the frame has goes to the scene lane (PostLookupInputs).
 		Diagnostics::Notify<Diagnostics::FramePoint::LookupsInstalled>();
 		draws.PostLookupInputs();

@@ -29,6 +29,4 @@ namespace DCLF::MaterialWrites
 	 */
 	bool Drain(ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& a_out);
 	void DrainShadingChanges(std::vector<const void*>& a_out);
-	/** @brief The same events, for the kept shadow build (its one consumer): materials whose texture transform a controller moved. */
-	void DrainShadowTransformChanges(std::vector<const RE::BSShaderMaterial*>& a_out);
 }

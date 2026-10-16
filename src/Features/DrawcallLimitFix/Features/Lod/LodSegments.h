@@ -5,6 +5,7 @@
 #include <cstring>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Api/EntryRanges.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 
 namespace DCLF::LodSegments
@@ -38,18 +39,6 @@ namespace DCLF::LodSegments
 	inline constexpr std::size_t kDirty = 0x170;          // the runs need rebuilding
 	inline constexpr std::size_t kNonSegmented = 0x171;   // drawn whole
 
-	struct Range
-	{
-		std::uint32_t firstIndex = 0;
-		std::uint32_t indexCount = 0;
-		// The range's geometry slot key (Coordinator::ResolveLodRangeSlots): its first segment's record, unique while the shape lives
-		// and never a TriShape's address; null for a non-segmented shape's whole range.
-		const void* key = nullptr;
-		// The triangles alone: a run's start moves to an empty segment before it when the engine rebuilds the runs (FUN_140e31180),
-		// so the same range can come with another key.
-		bool operator==(const Range& a_other) const { return firstIndex == a_other.firstIndex && indexCount == a_other.indexCount; }
-	};
-
 	template <class T>
 	const T& At(const void* a_object, std::size_t a_offset)
 	{
@@ -60,7 +49,7 @@ namespace DCLF::LodSegments
 	 * @brief The index ranges the engine's draw of a_shape draws now, contiguous ones merged: the runs, or (dirty) the enabled
 	 * segments the rebuild will merge into runs, which cover the same triangles.
 	 */
-	inline void DrawnRanges(const void* a_shape, std::vector<Range>& a_out)
+	inline void DrawnRanges(const void* a_shape, std::vector<Api::EntryRange>& a_out)
 	{
 		EngineReadWindow::Touch("LodSegments::DrawnRanges");
 		a_out.clear();
@@ -94,12 +83,8 @@ namespace DCLF::LodSegments
 	}
 
 	/** @brief Whether a_ranges are the shape's whole index list in one range: drawn as the TriShape's own geometry slot. */
-	inline bool Whole(std::uint32_t a_triangles, const std::vector<Range>& a_ranges)
+	inline bool Whole(const void* a_shape, const std::vector<Api::EntryRange>& a_ranges)
 	{
-		return a_ranges.size() == 1 && a_ranges[0].firstIndex == 0 && a_ranges[0].indexCount == a_triangles * 3u;
-	}
-	inline bool Whole(const void* a_shape, const std::vector<Range>& a_ranges)
-	{
-		return Whole(At<std::uint16_t>(a_shape, kTriangleCount), a_ranges);
+		return Api::EntryRangesWhole(At<std::uint16_t>(a_shape, kTriangleCount), a_ranges);
 	}
 }

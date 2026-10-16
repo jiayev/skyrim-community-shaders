@@ -39,7 +39,7 @@ namespace DCLF::Features::Effects
 								tables.pipelines[object.pipelineIndex].passDescriptor);
 						}
 						// A particle member's block is its quads', not a skin's palette.
-						skinned += (object.flags & kObjectSkinned) && !(tables.pipelines[object.pipelineIndex].passDescriptor & EffectFlag::Particles) ? 1u : 0u;
+						skinned += (object.flags & kObjectPaletteBlock) && !(tables.pipelines[object.pipelineIndex].passDescriptor & EffectFlag::Particles) ? 1u : 0u;
 					}
 				}
 				for (std::uint32_t m = 0; m < tables.materials.size(); ++m)
