@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drawcall Limit Fix's layout and complexity check (docs/development/dclf-architecture.md, "Layout").
+"""Drawcall Limit Fix's layout and complexity check (docs/development/dclf-layout.md, "The rules").
 
     python tools/dclf-layout-check.py            check; exit 1 on a rule broken or a baseline exceeded
     python tools/dclf-layout-check.py --update   rewrite the baselines from the tree (after a step that shrank them)
@@ -12,16 +12,16 @@ Rules (always errors):
      features DEPENDS names for it. Integrations/<X>/ includes Api/ and Core/.
   4. Every feature DEPENDS names is listed in Features/FeatureList.cpp before the feature that depends on it (its registrations
      run first: toggles, classes, report lines).
-
-Baselines (errors when exceeded, shrunk with --update):
-  - the include edges into the legacy top-level folders (Runtime, Engine, Scene, Draws) from any other folder: the layering the
-    refactor removes (Core and the features still reach into the hubs they have not left yet); the total may only fall (moves shift
-    edges between folder pairs, so the pairs are reported, not ruled);
+  5. The top level is closed: every file under the DCLF tree is in one of TOP_LEVEL's folders (none at its root), and Core/ holds
+     only its documented subfolders (CORE_SUBFOLDERS, dclf-layout.md's tree): no new layer folder grows back.
 
 Diagnostics/ may be included from anywhere: production code reaches it only through its observer contract (Hooks.h, Observation,
 Policy), which the parity rework will redefine.
+
+Baseline (an error when exceeded, shrunk with --update):
   - the functions over the complexity thresholds (lizard, when installed: pip install lizard): their number may only fall, and
-    a function not in the baseline may not cross them.
+    a function not in the baseline may not cross them. EXEMPT names the functions that are not counted, each with its reason
+    (a data table, a flat verdict chain a split would only fragment).
 """
 import csv
 import io
@@ -30,7 +30,6 @@ import os
 import re
 import subprocess
 import sys
-from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,7 +38,9 @@ TREE = SRC / "Features" / "DrawcallLimitFix"
 SHELL = {SRC / "Features" / "DrawcallLimitFix.h", SRC / "Features" / "DrawcallLimitFix.cpp"}
 BASELINE = ROOT / "tools" / "dclf-layout-baseline.json"
 
-LEGACY = {"Runtime", "Engine", "Scene", "Draws"}
+# Rule 5: the DCLF tree's top-level folders, and Core's subfolders (docs/development/dclf-layout.md, "The target").
+TOP_LEVEL = {"Api", "Core", "Features", "Integrations", "Diagnostics"}
+CORE_SUBFOLDERS = {"Runtime", "Engine", "Settings", "Scene", "Handoff", "Shading", "Gpu", "Render", "Extensions"}
 # Features/<X> -> the other features it may include (and that are listed before it in Features/FeatureList.cpp).
 DEPENDS = {
     "Shadows/Sun": {"Shadows/Local"},
@@ -53,6 +54,10 @@ FEATURE_LIST = TREE / "Features" / "FeatureList.cpp"
 FEATURE_ENTRY = re.compile(r"^\s*((?:\w+::)+)Feature\(\),")
 MAX_NLOC = 120
 MAX_CCN = 40
+# Functions over the thresholds that are not counted (by lizard's qualified name), each with its reason.
+EXEMPT = {
+    "DCLF::Features::HiddenNodes::HiddenStoreSites": "data table",
+}
 
 INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^">]+)[">]')
 DEPENDENCY_MACRO = re.compile(r"\b(CS_HAS_RENDER_GRAPH|CS_HAS_ORG_MODULE_SERVICES|CS_HAS_DCLF|ORG_MODULE_SERVICES_HAS_DXC)\b")
@@ -78,7 +83,7 @@ def resolve(path, target):
 
 
 def module(path):
-    """Api, Core, Features/<X> (Features/Shadows/<X> for the shadow features), Integrations/<X>, or a legacy top-level folder."""
+    """Api, Core, Features/<X> (Features/Shadows/<X> for the shadow features), Integrations/<X> or Diagnostics."""
     parts = path.relative_to(TREE).parts
     if len(parts) == 1:
         return "."
@@ -90,8 +95,8 @@ def module(path):
 
 
 def allowed(source, target):
-    if source == target or target in LEGACY or target == "Diagnostics":
-        return True  # an edge into a legacy folder is counted against the baseline instead
+    if source == target or target == "Diagnostics":
+        return True
     if source == "Api":
         return target == "Api"
     if source == "Core":
@@ -100,7 +105,7 @@ def allowed(source, target):
         return target in ("Api", "Core") or target.removeprefix("Features/") in DEPENDS.get(source.removeprefix("Features/"), ())
     if source.startswith("Integrations/"):
         return target in ("Api", "Core")
-    return True  # legacy folders and Diagnostics: counted, not ruled
+    return True  # Diagnostics (and a stray folder, which rule 5 reports)
 
 
 def feature_order():
@@ -127,6 +132,22 @@ def depends_order_errors():
     return errors
 
 
+def top_level_errors():
+    """Rule 5: every file under the tree in a TOP_LEVEL folder, and Core/'s files in a CORE_SUBFOLDERS folder."""
+    errors = []
+    for dirpath, _, files in os.walk(TREE):
+        for name in files:
+            parts = (Path(dirpath) / name).relative_to(TREE).parts
+            rel = (Path(dirpath) / name).relative_to(ROOT).as_posix()
+            if len(parts) == 1:
+                errors.append(f"{rel}: a file at the DCLF tree's root (top level: {', '.join(sorted(TOP_LEVEL))})")
+            elif parts[0] not in TOP_LEVEL:
+                errors.append(f"{rel}: {parts[0]}/ is not a top-level folder ({', '.join(sorted(TOP_LEVEL))})")
+            elif parts[0] == "Core" and (len(parts) == 2 or parts[1] not in CORE_SUBFOLDERS):
+                errors.append(f"{rel}: not in one of Core's subfolders ({', '.join(sorted(CORE_SUBFOLDERS))}; dclf-layout.md)")
+    return errors
+
+
 def complexity():
     try:
         out = subprocess.run([sys.executable, "-m", "lizard", "--csv", str(TREE), str(SRC / "Features" / "DrawcallLimitFix.cpp")],
@@ -140,15 +161,14 @@ def complexity():
         if len(cols) < 10 or not cols[0].isdigit():
             continue
         nloc, ccn = int(cols[0]), int(cols[1])
-        if nloc > MAX_NLOC or ccn > MAX_CCN:
+        if (nloc > MAX_NLOC or ccn > MAX_CCN) and cols[7] not in EXEMPT:
             over[cols[7]] = [nloc, ccn]  # by qualified name, so a moved file keeps its baseline
     return over
 
 
 def main():
     update = "--update" in sys.argv
-    errors = []
-    edges = Counter()
+    errors = top_level_errors()
 
     for path in sources(SRC):
         inside = TREE in path.parents
@@ -170,34 +190,27 @@ def main():
             source_module, target_module = module(path), module(target)
             if not allowed(source_module, target_module):
                 errors.append(f"{rel}:{number}: {source_module} includes {target_module} ({target.relative_to(TREE).as_posix()})")
-            if target_module in LEGACY and source_module != target_module and source_module not in ("Diagnostics", "."):
-                edges[f"{source_module} -> {target_module}"] += 1
 
     errors += depends_order_errors()
 
     over = complexity()
     baseline = json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() else {}
     if update:
-        BASELINE.write_text(json.dumps({"legacyEdges": dict(sorted(edges.items())),
-                                        "overThresholds": dict(sorted((over or baseline.get("overThresholds", {})).items()))},
-                                       indent=1) + "\n", encoding="utf-8")
-        print(f"baseline written: {sum(edges.values())} legacy edges, {len(over or {})} functions over the thresholds")
+        kept = over if over is not None else {k: v for k, v in baseline.get("overThresholds", {}).items() if k not in EXEMPT}
+        BASELINE.write_text(json.dumps({"overThresholds": dict(sorted(kept.items()))}, indent=1) + "\n", encoding="utf-8")
+        print(f"baseline written: {len(kept)} functions over the thresholds" + ("" if over is not None else " (lizard not installed: kept)"))
     else:
-        if sum(edges.values()) > sum(baseline.get("legacyEdges", {}).values()):
-            for pair, count in sorted(edges.items()):
-                print(f"  {pair}: {count} (baseline {baseline.get('legacyEdges', {}).get(pair, 0)})")
-            errors.append(f"legacy include edges: {sum(edges.values())} > baseline {sum(baseline.get('legacyEdges', {}).values())}")
         if over is None:
             print("complexity: skipped (lizard not installed)")
         else:
-            known = baseline.get("overThresholds", {})
+            known = {k: v for k, v in baseline.get("overThresholds", {}).items() if k not in EXEMPT}
             for name, (nloc, ccn) in sorted(over.items()):
                 if name not in known:
                     errors.append(f"{name}: {nloc} lines, CCN {ccn} (thresholds {MAX_NLOC} / {MAX_CCN}; split it)")
             if len(over) > len(known):
                 errors.append(f"functions over the thresholds: {len(over)} > baseline {len(known)}")
-            print(f"complexity: {len(over)} functions over {MAX_NLOC} lines or CCN {MAX_CCN} (baseline {len(known)})")
-        print(f"legacy include edges: {sum(edges.values())} (baseline {sum(baseline.get('legacyEdges', {}).values())})")
+            print(f"complexity: {len(over)} functions over {MAX_NLOC} lines or CCN {MAX_CCN} (baseline {len(known)}, "
+                  f"{len(EXEMPT)} exempt)")
 
     for error in errors:
         print("ERROR", error)
