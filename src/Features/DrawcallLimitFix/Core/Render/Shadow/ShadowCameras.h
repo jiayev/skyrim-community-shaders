@@ -1,12 +1,14 @@
 #pragma once
 
 // The shadow views' cameras as DCLF computes them: the ports of the engine's camera, plane and viewport arithmetic, and the
-// render-thread boards the shadow sources' camera hooks write (the sun's cascades, the kept local lights' views, the focus views) and
-// the shadow engine reads (the views' capture, the inputs' preparation, the sun's accumulation, the local shadows, the actors' rate).
+// render-thread boards the shadow sources' camera hooks and the light selection write (the sun's cascades, the selection's slots, the kept
+// local lights' views, the focus views) and the shadow engine reads (the views' capture, the inputs' preparation, the sun's accumulation,
+// the light volumes, the actors' rate).
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -104,11 +106,12 @@ namespace DCLF::ShadowCameras
 
 	/**
 	 * @brief The local shadow lights' views: spot (BSShadowFrustumLight) and point (BSShadowParabolicLight, one view per hemisphere)
-	 * lights, from the cameras their UpdateCamera has set up, for the lights DCLF selects (LightSelection: the lights it kept, at
-	 * CalculateActiveShadowCasterLights' return). Per descriptor: the camera, and the planes the light's culling process tests.
+	 * lights, from the cameras their UpdateCamera has set up, for the lights DCLF selects (the lights it kept, at
+	 * CalculateActiveShadowCasterLights' return: Features/LocalLights' selection). Per descriptor: the camera, and the planes the light's
+	 * culling process tests.
 	 *
-	 * Render thread: written as the selection keeps each light, read by the shadow views' capture and LocalShadowLights later in the
-	 * frame; Features/Actors' actor rate (ActorRate.cpp) reads the last scene frame's.
+	 * Render thread: written as the selection keeps each light, read by the shadow views' capture and the light volumes' sample
+	 * (Api::LightVolumesContribution) later in the frame; Features/Actors' actor rate (ActorRate.cpp) reads the last scene frame's.
 	 */
 	struct LightFrame
 	{
@@ -146,6 +149,43 @@ namespace DCLF::ShadowCameras
 					if (view.valid)
 						a_visit(view, entry.sphere);
 		}
+	};
+
+	/**
+	 * @brief The selection's slots: shadowLightsAccum as DCLF's light selection fills it (CalculateActiveShadowCasterLights ported:
+	 * Features/LocalLights' selection), the array GetShadowCasterLightArrayEntry indexes: the sun per slot, then the lights (null: a slot a
+	 * light took but did not fill); and the focus shadows' hosts (the drawn lights with the focus flag) and the focus views each draws. The
+	 * spans are into the selection's own frame, which stays put until its next selection, which invalidates the board first.
+	 *
+	 * Render thread: invalidated at the selection's start and published at its end (an early return leaves it invalid), read by the shadow
+	 * views' rebuild later in the frame.
+	 */
+	struct LightSlotFrame
+	{
+		std::uint32_t sceneFrame = ~0u;
+		std::span<const RE::BSShadowLight* const> slots;
+		std::span<const RE::BSShadowLight* const> focusHosts;
+		std::uint32_t focusCount = 0;  // the focus views each host draws (the targets, at most 4)
+		bool valid = false;
+
+		void Invalidate()
+		{
+			valid = false;
+			slots = {};
+			focusHosts = {};
+			focusCount = 0;
+		}
+		void Publish(std::uint32_t a_sceneFrame, std::span<const RE::BSShadowLight* const> a_slots, std::span<const RE::BSShadowLight* const> a_focusHosts,
+			std::uint32_t a_focusCount)
+		{
+			sceneFrame = a_sceneFrame;
+			slots = a_slots;
+			focusHosts = a_focusHosts;
+			focusCount = a_focusCount;
+			valid = true;
+		}
+		/** @brief This frame's slots, or null before the selection has run this frame. */
+		const LightSlotFrame* Current(std::uint32_t a_sceneFrame) const { return valid && sceneFrame == a_sceneFrame ? this : nullptr; }
 	};
 
 	/**
@@ -190,6 +230,7 @@ namespace DCLF::ShadowCameras
 
 	/** @brief The boards (render thread; see each). Written in place by the sources' camera hooks: their storage is reused. */
 	SunFrame& Sun();
+	LightSlotFrame& LightSlots();
 	LightFrame& Lights();
 	FocusFrame& Focus();
 }

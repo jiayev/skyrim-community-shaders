@@ -62,7 +62,7 @@ namespace DCLF::Draws
 		// The sun entries DCLF can take out of the cascade culls (the Sun source's accumulation): the build turns them into the next
 		// frame's exclusion.
 		std::shared_ptr<const EntrySpace> sunCandidates;
-		// And those it could take out of the point lights' culls (LocalLightCull): the paraboloid exclusion's.
+		// And those it could take out of the point lights' culls (the Point source's): the paraboloid exclusion's.
 		std::shared_ptr<const EntrySpace> lightCandidates;
 		ResourceAddresses addresses{};
 		// Community Shaders' SharedData (b5) and FeatureData (b6), copied from the structs CS keeps.
@@ -145,7 +145,7 @@ namespace DCLF::Draws
 		// The build ahead also builds the next frame's exclusions, which the epoch publishes; empty for a build made at the epoch,
 		// which builds them at the publish.
 		std::shared_ptr<SunExclusion> sunExclusion;  // from the cascades' mode (BuildSunExclusion)
-		std::shared_ptr<SunExclusion> parabolicExclusion;  // and from the paraboloid mode (LocalLightCull)
+		std::shared_ptr<SunExclusion> parabolicExclusion;  // and from the paraboloid mode (the Point source's culls)
 
 		void Reset()
 		{

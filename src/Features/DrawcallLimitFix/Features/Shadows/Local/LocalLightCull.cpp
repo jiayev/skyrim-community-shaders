@@ -1,6 +1,6 @@
 // LocalLightCull: the point lights' shadow culls without DCLF's entries (LocalLightCull.h describes it): the frame's exclusion and
 // category filter (render thread), the Process1 skip and NiNode::OnVisible filter inside the lights' culls, and the lights' bits.
-#include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -21,11 +21,11 @@
 #include <cmath>
 #include <Tracy/Tracy.hpp>
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Engine/LocalLightCullView.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/Diagnostics/LocalLightCullView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 
-namespace DCLF::LocalLightCull
+namespace DCLF::Features::Shadows::Local::LocalLightCull
 {
 	const std::array<const char*, kReachKindCount + 1> kReachNames{ "untested", "sphere", "portals", "not reached" };
 
@@ -35,9 +35,8 @@ namespace DCLF::LocalLightCull
 		constexpr std::uint32_t kParabolicMode = 0xF - PassCapture::kFirstShadowMode;
 
 		bool installed = false;
-		// The exclusion the next frame applies (render thread), and this frame's, held until the next selection: the culls
-		// that read it run between the two on the render thread.
-		std::shared_ptr<SunExclusion> pending;
+		// This frame's exclusion (the one the next frame applies waits in Core's ParabolicExclusionSlot), held until the next
+		// selection: the culls that read it run between the two on the render thread.
 		std::shared_ptr<SunExclusion> frameHeld;
 		std::atomic<const SunExclusion*> frameExclusion{ nullptr };
 		std::atomic<bool> cullsWhole{ false };  // this frame's culls skip nothing (Policy::FilterLightCulls)
@@ -554,20 +553,16 @@ namespace DCLF::LocalLightCull
 		logger::info("[DCLF] point lights' shadow culls without DCLF's entries{}", filterInstalled ? ", their category nodes filtered" : "");
 	}
 
-	void Publish(std::shared_ptr<SunExclusion> a_exclusion)
-	{
-		if (installed)
-			pending = std::move(a_exclusion);
-	}
+	bool Installed() { return installed; }
 
-	void SelectFrame(std::uint32_t a_frame)
+	void SelectFrame(std::uint32_t a_frame, std::shared_ptr<SunExclusion> a_pending)
 	{
 		if (!installed)
 			return;
 		ResetFrameLights();
 		++stats.frames;
 		// The culls of the frame read this one; the previous frame's culls are over (they ran before its shadow epoch).
-		std::shared_ptr<SunExclusion> next = pending;
+		std::shared_ptr<SunExclusion> next = std::move(a_pending);
 		if (!next || !next->candidates)
 			++stats.noExclusion, next.reset();
 		else if (!PassCapture::Get().CastersWithheld(kSetCasterPoint))
@@ -608,9 +603,10 @@ namespace DCLF::LocalLightCull
 		frameHeld = std::move(next);
 	}
 
-	void NoteStructure(const RE::NiNode* a_parent, RE::NiAVObject*, bool)
+	void NoteStructure(const void* a_node)
 	{
 		// A child of a filtered category node attached or detached: the node is walked natively until the next selection.
+		const auto* a_parent = static_cast<const RE::NiNode*>(a_node);
 		const auto* filter = filterInstalled && a_parent ? filterCurrent.load(std::memory_order_acquire) : nullptr;
 		if (!filter)
 			return;
@@ -690,7 +686,7 @@ namespace DCLF::LocalLightCull
 	}
 }
 
-namespace DCLF::Diagnostics
+namespace DCLF::Features::Shadows::Local
 {
 	using namespace LocalLightCull;
 

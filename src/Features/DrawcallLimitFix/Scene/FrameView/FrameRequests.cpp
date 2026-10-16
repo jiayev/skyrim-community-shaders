@@ -1,5 +1,5 @@
 // FrameView's service of the coordinator's requests and its engine captures: switch catch-ups, fade node and material requests,
-// the category capture, the mirror's capture requests, the EarlyPrepass inputs (capture drain, room map) and the Lighting shader and
+// the category capture, the mirror's capture requests, the EarlyPrepass inputs (capture drain, ancestor map) and the Lighting shader and
 // accumulator latches. Render thread: everything here reads or writes live engine state.
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -24,7 +24,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
-#include "Features/LightLimitFix.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
 
 namespace DCLF::Scene
 {
@@ -704,7 +704,7 @@ namespace DCLF::Scene
 		ZoneScopedN("CS.DCLF.Accumulate.Inputs");
 		DrainCapture();
 		Diagnostics::Notify<Diagnostics::FramePoint::RegistrationsDone>();
-		PostRoomMap();
+		PostAncestorMap();
 	}
 
 	void FrameView::DrainCapture()
@@ -718,25 +718,24 @@ namespace DCLF::Scene
 		Diagnostics::Notify(Diagnostics::CaptureDrained{ *this, entries });
 	}
 
-	void FrameView::PostRoomMap()
+	void FrameView::PostAncestorMap()
 	{
-		// Light Limit Fix's map is the render thread's (it swaps it at its own point): only a copy is posted.
-		auto& lightFix = globals::features::lightLimitFix;
-		if (!lightFix.loaded)
+		// The contribution's map is the render thread's (Light Limit Fix swaps its room map at its own point): only a copy is posted.
+		if (!Extensions::AncestorValueOn())
 			return;
-		const std::uint64_t generation = lightFix.GetRoomMapGeneration();
-		if (generation == roomMapPostedGeneration)
+		const auto& value = *Extensions::AncestorValue();
+		const std::uint64_t generation = value.generation();
+		if (generation == ancestorMapPostedGeneration)
 			return;
-		auto map = std::make_shared<ankerl::unordered_dense::map<const RE::NiNode*, int>>();
-		map->reserve(lightFix.roomNodes.size());
-		for (const auto& [node, index] : lightFix.roomNodes)
-			map->emplace(node, index);
-		auto input = std::make_shared<RoomMapInput>();
+		auto map = std::make_shared<Extensions::AncestorValueMap>();
+		Api::AncestorMapSink sink(*map);
+		value.fill(sink);
+		auto input = std::make_shared<AncestorMapInput>();
 		input->map = std::move(map);
 		input->generation = generation;
-		channels.roomMapPosted.store(std::shared_ptr<const RoomMapInput>(std::move(input)), std::memory_order_release);
-		roomMapPostedGeneration = generation;
-		channels.accumulateInputs.roomMapsPosted.fetch_add(1, std::memory_order_relaxed);
+		channels.ancestorMapPosted.store(std::shared_ptr<const AncestorMapInput>(std::move(input)), std::memory_order_release);
+		ancestorMapPostedGeneration = generation;
+		channels.accumulateInputs.ancestorMapsPosted.fetch_add(1, std::memory_order_relaxed);
 		// No wake: the frame's next pass takes it.
 	}
 

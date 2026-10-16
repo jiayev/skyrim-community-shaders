@@ -14,8 +14,8 @@ namespace DCLF::Features::Shadows::Sun
 	namespace
 	{
 		/**
-		 * @brief The Sun source's hooks (by source: Core installs the light selection right after them): the accumulation's (its cascade
-		 * culls and registrations, which the local light culls' install requires), then the camera hook.
+		 * @brief The Sun source's hooks (by source: first, before the Spot's light selection): the accumulation's (its cascade culls and
+		 * registrations, which the point lights' culls' install at the Point source requires: Features/Shadows/Local), then the camera hook.
 		 */
 		void SourceHooks(Api::ShadowSourceHooks& a_hooks)
 		{

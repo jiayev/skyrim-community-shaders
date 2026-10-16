@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -626,7 +627,8 @@ namespace DCLF
 
 	void PrimaryCull::NoteListStructure(const RE::NiNode* a_parent, RE::NiAVObject* a_child, bool a_attached)
 	{
-		LocalLightCull::NoteStructure(a_parent, a_child, a_attached);
+		// The stand-in observers' structure first (the point lights' category filter, Features/Shadows/Local), then the cull input's.
+		Extensions::StandInStructure(a_parent);
 		if (const auto* input = Extensions::MainCullInput())
 			input->contribution.structure(a_parent);
 		const auto* objectRoot = listObjectRoot.load(std::memory_order_acquire);

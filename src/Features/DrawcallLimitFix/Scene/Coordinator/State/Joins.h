@@ -18,7 +18,7 @@ namespace DCLF::Scene
 		{
 			std::uint32_t object = 0, material = 0, pipeline = 0, flags = 0;
 			float fadeDistance = 0.0f;
-			ObjectLights lights{};
+			ObjectAncestorValue ancestorValue{};
 			bool projectedUV = false, landBlend = false;
 			std::uint64_t decalKey = 0;
 		};
@@ -68,8 +68,8 @@ namespace DCLF::Scene
 			LightingDescriptors descriptors;
 			PipelineKey key{};
 			std::uint32_t staticFlags = 0;
-			bool roomSet = false;  // Light Limit Fix's room index retaken (the room map moved on)
-			int roomIndex = -1;
+			bool ancestorSet = false;  // the ancestor value retaken (the ancestor map moved on: Light Limit Fix's room map)
+			std::int32_t ancestorValue = -1;
 		};
 		std::vector<JoinPre> joinPres;
 		std::vector<JoinResult> joinResults;

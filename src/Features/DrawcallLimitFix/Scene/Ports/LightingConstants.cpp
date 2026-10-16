@@ -350,8 +350,7 @@ namespace DCLF
 	void BuildObjectRecord(const SceneTables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessObject& a_out)
 	{
 		const auto& object = a_tables.objects[a_objectIndex];
-		const auto& lights = a_tables.lights[a_objectIndex];
-		a_out.roomIndex = lights.roomIndex;
+		a_out.ancestorValue = a_tables.ancestorValue[a_objectIndex].value;
 		a_out.recordFlags = RecordFlagsOf(object.flags, a_objectIndex < a_tables.objectFadeRoot.size() ? a_tables.objectFadeRoot[a_objectIndex] : kNoFadeRoot);
 		// The same reference the native draw's AlphaTestRefBuffer carries: threshold / 255, and 0 when the
 		// object is not alpha tested (the shader's test is then compiled out anyway).

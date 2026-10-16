@@ -34,6 +34,23 @@ namespace DCLF::Extensions
 				a_textures[bindings[i].textureRegister] = a_values[i];
 	}
 
+	bool FrameGraphBufferRegister(std::uint32_t a_register)
+	{
+		for (const auto& buffers : RegisteredFrameGraphBuffers())
+			if (a_register >= buffers.firstRegister && a_register - buffers.firstRegister < buffers.count)
+				return true;
+		return false;
+	}
+
+	bool FrameGraphBufferIndices(std::size_t a_buffers, std::span<std::uint32_t, kFrameGraphBufferRegisters> a_out)
+	{
+		const auto registered = RegisteredFrameGraphBuffers();
+		if (a_buffers >= registered.size())
+			return false;
+		const auto& buffers = registered[a_buffers];
+		return buffers.indices(a_out.first(buffers.count));
+	}
+
 	bool FrameBindingRegister(std::uint32_t a_register)
 	{
 		for (const auto& binding : RegisteredFrameBindings())

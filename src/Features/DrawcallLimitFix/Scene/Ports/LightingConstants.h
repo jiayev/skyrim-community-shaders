@@ -191,9 +191,9 @@ namespace DCLF
 	 */
 	struct BindlessObject
 	{
-		// Values native shaders read from their own constant buffers: Light Limit Fix's room index (PS b3; its shadow mask is the
-		// draw's object word) and the alpha test reference (PS b11).
-		std::int32_t roomIndex;
+		// Values native shaders read from their own constant buffers: the ancestor value (Api::AncestorValueContribution::recordWord 0:
+		// Light Limit Fix's room index, PS b3; its shadow mask is the draw's object word) and the alpha test reference (PS b11).
+		std::int32_t ancestorValue;
 		// kRecord* bits; bits 8-31 the fade root slot + 1 (0: none), by which the pixel stage reads FadeStateCS's fade (DCLFAlphaFade).
 		std::uint32_t recordFlags;
 		float alphaTestRef;

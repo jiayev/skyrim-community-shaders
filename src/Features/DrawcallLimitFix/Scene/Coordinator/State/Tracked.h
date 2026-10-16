@@ -30,9 +30,9 @@ namespace DCLF::Scene
 			std::uint64_t identity = 0;
 			std::uint64_t groupIdentity = 0;
 			const RE::TESObjectREFR* ownerReference = nullptr;  // its owner class's reference; lookup only, never published
-			const RE::NiNode* roomNode = nullptr;  // lookup key, refreshed on structural attachment
-			std::uint64_t roomMapGeneration = 0;
-			int roomIndex = -1;
+			const void* ancestorKey = nullptr;  // the ancestor value's lookup key (AncestorKeyOf), refreshed on structural attachment
+			std::uint64_t ancestorMapGeneration = 0;
+			std::int32_t ancestorValue = -1;
 			RE::NiNode* categoryNode = nullptr;
 			// UnsupportedParent, Billboard or Switch (decided per frame) for what lies between the leaf and its category node; else None.
 			Ineligible parentReason = Ineligible::None;

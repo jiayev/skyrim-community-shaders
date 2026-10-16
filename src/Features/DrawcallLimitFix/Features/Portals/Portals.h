@@ -12,7 +12,7 @@
 //
 // Core keeps the category filing of the portal graphs' nodes, the programs buffer and the fade roots' programs (created among the fade
 // buffers, uploaded with the depth commit) and the event PortalWalkBuilt on its bus. No switch, toggle, GPU stage or table. The light
-// selection's per-light walks (Engine/Views/LightSelection: WalkLight, SharesRoom) are static calls into PortalViews. Included by the
+// selection's per-light walks (Features/LocalLights' LightSelection, DEPENDS {Portals}: WalkLight, SharesRoom) are static calls into PortalViews. Included by the
 // feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"

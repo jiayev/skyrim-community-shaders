@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
+#include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 
 namespace DCLF
@@ -152,8 +153,8 @@ namespace DCLF
 		std::uint64_t shadingSinceStart = 0;
 		std::uint64_t techniqueMismatches = 0; // ... in PerTechnique constants or filter modes
 		std::uint64_t inheritedFilters = 0;    // bound material textures whose filter mode neither SetupTechnique nor SetupMaterial sets
-		std::uint64_t lightChecks = 0;
-		std::uint64_t lightMismatches = 0;  // StrictLightData (LLF, PS b3) differs
+		// Light Limit Fix: its StrictLightData (PS b3) against the tables' room (Integrations/LightLimitFix's parity).
+		Integrations::LightLimitFix::DrawLightDataParity lightData;
 		// Advanced Skin: its per-material textures (PS t71, t74) against the material record; its wetness (PS b7) against the frame's
 		// shading row, and whether the object's actor ownership still holds (Integrations/AdvancedSkin's parity).
 		std::uint64_t skinTextureChecks = 0;

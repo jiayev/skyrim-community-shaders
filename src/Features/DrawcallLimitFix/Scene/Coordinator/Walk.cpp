@@ -142,7 +142,7 @@ namespace DCLF::Scene
 			tables.objects.reserve(tracked.size());
 			tables.objectGeometry.reserve(tracked.size());
 			tables.draws.reserve(tracked.size());
-			tables.lights.reserve(tracked.size());
+			tables.ancestorValue.reserve(tracked.size());
 			tables.skinPartitions.reserve(tracked.size());
 		}
 
@@ -624,7 +624,7 @@ namespace DCLF::Scene
 			// The accumulate phase allocates extras rows (it derives the descriptors that need them).
 			tables.FreeExtras(objectId);
 			tables.objects[objectId] = object;
-			tables.lights[objectId] = ObjectLights{};
+			tables.ancestorValue[objectId] = ObjectAncestorValue{};
 			tables.fadeDistance[objectId] = 0.0f;
 		}
 		tables.SetClassMembers(objectId, trackedEntry->owner.ownerClass, trackedEntry->owner.published ? trackedEntry->groupIdentity : 0,
@@ -717,7 +717,7 @@ namespace DCLF::Scene
 		} else {
 			tables.FreeExtras(slot);
 			tables.objects[slot] = object;
-			tables.lights[slot] = ObjectLights{};
+			tables.ancestorValue[slot] = ObjectAncestorValue{};
 			tables.fadeDistance[slot] = 0.0f;
 		}
 		tables.SetClassMembers(slot, Api::EntryClass::None, 0, a_tracked.identity);

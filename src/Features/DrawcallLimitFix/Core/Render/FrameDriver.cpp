@@ -21,7 +21,6 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
@@ -177,7 +176,8 @@ namespace DCLF
 				view.ServeFrameRequests(true);
 			counters.timing.eventsMs += MillisecondsSince(eventsStart);
 		}
-		LocalLightCull::SelectFrame(view.GetFrame());
+		// The shadow sources' frame start, in source order (Features/Shadows/Local's point-light culls: this frame's paraboloid exclusion).
+		Extensions::ShadowSourcesFrameStart(view.GetFrame());
 		PassCapture::Get().RefreshMainRenderers();
 		// The draw families' for the frame (Features/TreeLod's), before the main camera's cull registers its passes; the views' work after
 		// it (Features/Reflection's: the water reflection's forward pipelines).

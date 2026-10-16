@@ -43,7 +43,7 @@ namespace DCLF::Scene
 			RE::BSGeometry* geometry = nullptr;
 			Ineligible reason = Ineligible::None;  // what the nodes between the category node and it make of it (MirrorSubtree's)
 			const RE::TESObjectREFR* ownerReference = nullptr;  // its owner class's reference (Extensions::OwnerClassOf), or null
-			const RE::NiNode* roomNode = nullptr;
+			const void* ancestorKey = nullptr;   // AncestorKeyOf
 			const RE::NiNode* source = nullptr;  // its entry class's held parent (EntryRule::holdsParent: a face shape's head)
 			bool mirrored = false;
 			bool ranged = false;

@@ -44,8 +44,8 @@ namespace DCLF
 	 * still a candidate, else the first kept light whose vfunc 0x20 is true (a directional or spot light). The flag persists across
 	 * frames, so DCLF keeps its own per light, written where the engine writes +0x558; the engine's is the observer's.
 	 *
-	 * Render thread: written in the detour, read by the Spot and Point sources (their lightKept), ShadowViews and LocalShadowLights later in
-	 * the frame.
+	 * Render thread: written in the detour, read by the Spot and Point sources (their lightKept), ShadowViews (the LightSlots board) and
+	 * LocalShadowLights later in the frame.
 	 */
 	class LightSelection
 	{

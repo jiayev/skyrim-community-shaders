@@ -18,9 +18,12 @@ namespace DCLF::Api
 		// lines), before the primary cull's: every frame, so the lines test their own report frames (Reports::Due) and conditions. Logged lines, handed
 		// the frame.
 		RenderThread,
-		// The primary cull's lines (Reports::PrimaryCullLines), after its scene lists' and culls-off lines, before the point lights':
+		// The primary cull's lines (Reports::PrimaryCullLines), after its scene lists' and culls-off lines, before PrimaryCullSources':
 		// only on a report frame whose window had cut frames, with the primary cull installed.
 		PrimaryCull,
+		// The shadow sources' culls' lines (Reports::PrimaryCullLines; Features/Shadows/Local's point culls), right after PrimaryCull's,
+		// before the stand-in walk parity: on the same report frames. Logged lines, handed the frame.
+		PrimaryCullSources,
 		// The views' lines in the draws' async work (IndirectDraws::AsyncReport), after the visibility lines and the reflection's, before
 		// the forward epoch's: every report. Text lines (ReportLines::text).
 		AsyncWorkViews,

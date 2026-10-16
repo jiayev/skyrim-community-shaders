@@ -18,7 +18,7 @@ namespace DCLF
 		objectGeometry.resize(a_count, nullptr);
 		objectIdentity.resize(a_count, 0);
 		objectGroup.resize(a_count, 0);
-		lights.resize(a_count, ObjectLights{});
+		ancestorValue.resize(a_count, ObjectAncestorValue{});
 		skinPartitions.resize(a_count, 0);
 		skinLodPartitions.resize(a_count, 0);
 		draws.resize(a_count, DrawSequence{});
@@ -49,7 +49,7 @@ namespace DCLF
 			return columns;
 		columns.object = objects[a_slot];
 		columns.draw = draws[a_slot];
-		columns.lights = lights[a_slot];
+		columns.ancestorValue = ancestorValue[a_slot];
 		columns.sunEntryNode = sunEntryNode[a_slot];
 		columns.hasFadeNode = hasFadeNode[a_slot];
 		columns.extraOffset = extraOffset[a_slot];
@@ -85,8 +85,8 @@ namespace DCLF
 		if (x.flags != y.flags || x.materialIndex != y.materialIndex || x.pipelineIndex != y.pipelineIndex || a.draw.pipelineIndex != b.draw.pipelineIndex ||
 			!same(a.fadeDistance, b.fadeDistance) || a.sceneFlags != b.sceneFlags || a.hasFadeNode != b.hasFadeNode)
 			causes |= kChangeBindings;
-		if (!same(a.lights, b.lights))
-			causes |= kChangeLights;
+		if (!same(a.ancestorValue, b.ancestorValue))
+			causes |= kChangeAncestorValue;
 		if (a.skinPartitions != b.skinPartitions || a.skinLodPartitions != b.skinLodPartitions || a.boneOffset != b.boneOffset || a.boneRows != b.boneRows)
 			causes |= kChangeSkin;
 		if (a.extraOffset != b.extraOffset || !same(a.extras, b.extras))
@@ -162,7 +162,7 @@ namespace DCLF
 		}
 		objectIdentity[a_slot] = 0;
 		objectGroup[a_slot] = 0;
-		lights[a_slot] = ObjectLights{};
+		ancestorValue[a_slot] = ObjectAncestorValue{};
 		skinPartitions[a_slot] = 0;
 		skinLodPartitions[a_slot] = 0;
 		draws[a_slot] = DrawSequence{};
@@ -233,7 +233,7 @@ namespace DCLF
 			objectGeometry.clear();
 			objectIdentity.clear();
 			objectGroup.clear();
-			lights.clear();
+			ancestorValue.clear();
 			skinPartitions.clear();
 			skinLodPartitions.clear();
 			draws.clear();
@@ -311,7 +311,7 @@ namespace DCLF
 		materials.clear();
 		materialVersion.clear();
 		pipelineBindingVersion.clear();
-		lights.clear();
+		ancestorValue.clear();
 		families.Clear();
 		NoteFadeRootsWrite();
 		fadeRoots.clear();

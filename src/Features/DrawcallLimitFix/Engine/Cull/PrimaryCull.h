@@ -24,8 +24,8 @@ namespace DCLF::SceneCapture
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneSet.h"
@@ -35,6 +35,7 @@ namespace DCLF
 {
 	struct EntrySpace;
 	struct FrameGlobals;
+	struct SunExclusion;
 
 	/**
 	 * @brief The main camera's cull, and taking DCLF's objects out of it (dclf-gpu-driven-frame.md). AE only. Owns the scene
@@ -255,10 +256,10 @@ namespace DCLF
 			kNotExcluded,  // the sun's exclusion keeps it in the cascades
 		};
 		static constexpr std::array<const char*, 6> kListReasonNames{ "left out", "not eligible", "not admitted", "mixed", "walked", "not sun-excluded" };
-		/** @brief At Present, render thread. */
+		/** @brief At Present, render thread: the shadow sources' frameEnd first (Api::ShadowSourceContribution). */
 		void EndFrame()
 		{
-			LocalLightCull::EndFrame();
+			Extensions::ShadowSourcesFrameEnd();
 			listFilter.store(nullptr, std::memory_order_release);
 			listMode.store(ListMode::Engine, std::memory_order_release);
 			// Roots the build's job let go of, released where the engine unloads (one may hold a detached cell's last reference).

@@ -1,6 +1,7 @@
 // The extension registry (see the header): the install context the features register with, and the lists it fills.
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
@@ -8,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
@@ -94,8 +96,15 @@ namespace DCLF::Extensions
 			// The held groups, in registration order (HeldGroups); the near twin (target null: none).
 			std::vector<HeldGroupEntry> heldGroups;
 			NearTwinEntry nearTwin;
-			// The classify inputs, in registration order (an index is the input's id).
+			// The classify inputs, in registration order (an index is the input's id); the names needed (by need slot), bound at the end
+			// (BindClassifyInputNeeds).
 			std::vector<ClassifyInputEntry> classifyInputs;
+			std::vector<std::string> classifyInputNeeds;
+			// The frame graph buffers, in registration order.
+			std::vector<FrameGraphBuffersEntry> frameGraphBuffers;
+			// The light volumes and the ancestor value (no name: none). Resolved at the end (ResolveLightVolumes, ResolveAncestorValue).
+			Api::LightVolumesContribution lightVolumes{};
+			Api::AncestorValueContribution ancestorValue{};
 			// The vertex stream (entry class Count: none). Resolved at the end (ResolveVertexStream).
 			Api::VertexStreamContribution vertexStream{};
 			// The main cull input (no name: none). Resolved at the end (ResolveMainCullInput).
@@ -260,6 +269,56 @@ namespace DCLF::Extensions
 			a_lists.frameConstantRows.push_back({ std::string(a_row.name), a_row.row, a_row.sample });
 		}
 
+		/** @brief The frame graph buffers registered so far that read a_register (null: none). */
+		const FrameGraphBuffersEntry* GraphBuffersAt(const Lists& a_lists, std::uint32_t a_register)
+		{
+			for (const auto& buffers : a_lists.frameGraphBuffers)
+				if (a_register >= buffers.firstRegister && a_register - buffers.firstRegister < buffers.count)
+					return &buffers;
+			return nullptr;
+		}
+
+		/**
+		 * @brief Adds a_buffers, refused (a_who's) for no name, resources or indices, a non-empty resource after an empty one, a register
+		 * below the frame textures or past t127, Core's, a frame binding's, a frame texture's or other graph buffers', or one past
+		 * kFrameGraphBufferSlots.
+		 */
+		void AddFrameGraphBuffers(Lists& a_lists, std::string_view a_who, const Api::FrameGraphBuffers& a_buffers)
+		{
+			std::uint32_t count = 0;
+			while (count < a_buffers.resources.size() && !a_buffers.resources[count].empty())
+				++count;
+			bool gap = false;
+			for (std::size_t r = count; r < a_buffers.resources.size(); ++r)
+				gap = gap || !a_buffers.resources[r].empty();
+			const auto first = a_buffers.firstRegister;
+			if (a_buffers.name.empty() || !a_buffers.indices || !count || gap || first < kPixelTextureSlots || first >= kTextureRegisters ||
+				count > kTextureRegisters - first)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete frame graph buffers", a_who));
+			for (std::uint32_t r = first; r < first + count; ++r) {
+				if (CoreFrameRegister(r))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame graph buffers {} take t{}, which Core keeps", a_who, a_buffers.name, r));
+				for (const auto& binding : a_lists.frameBindings)
+					if (binding.textureRegister == r)
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame graph buffers {} take t{}, which {} has", a_who, a_buffers.name, r, binding.name));
+				if (const auto texture = a_lists.frameTextureIndices[r]; texture != kNoFrameTexture)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame graph buffers {} take t{}, which {} has", a_who, a_buffers.name, r,
+						a_lists.frameTextures[texture].name));
+				if (const auto* other = GraphBuffersAt(a_lists, r))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame graph buffers {} take t{}, which {} has", a_who, a_buffers.name, r, other->name));
+			}
+			// A commit keeps each registration's indices in a fixed array (FrameGraphBufferValues).
+			if (a_lists.frameGraphBuffers.size() >= kFrameGraphBufferSlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame graph buffers {} are one past kFrameGraphBufferSlots: grow it first", a_who, a_buffers.name));
+			auto& entry = a_lists.frameGraphBuffers.emplace_back();
+			entry.name = std::string(a_buffers.name);
+			entry.firstRegister = first;
+			entry.count = count;
+			for (std::uint32_t r = 0; r < count; ++r)
+				entry.resources[r] = std::string(a_buffers.resources[r]);
+			entry.indices = a_buffers.indices;
+		}
+
 		/**
 		 * @brief Adds a_texture, refused (a_who's) for a register below the frame textures or past t127, Core's, a frame binding's or another
 		 * frame texture's, no name or no view, or one past kFrameTextureSlots.
@@ -276,6 +335,8 @@ namespace DCLF::Extensions
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} takes t{}, which {} has", a_who, a_texture.name, r, binding.name));
 			if (const auto other = a_lists.frameTextureIndices[r]; other != kNoFrameTexture)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} takes t{}, which {} has", a_who, a_texture.name, r, a_lists.frameTextures[other].name));
+			if (const auto* buffers = GraphBuffersAt(a_lists, r))
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} takes t{}, which {} has", a_who, a_texture.name, r, buffers->name));
 			// A colour commit samples every view into a fixed array (ResolveFrameTextures).
 			if (a_lists.frameTextures.size() >= kFrameTextureSlots)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame texture {} is one past kFrameTextureSlots: grow it first", a_who, a_texture.name));
@@ -359,6 +420,9 @@ namespace DCLF::Extensions
 				if (const auto texture = lists.frameTextureIndices[a_binding.textureRegister]; texture != kNoFrameTexture)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} takes t{}, which {} has", feature, a_binding.name, a_binding.textureRegister,
 						lists.frameTextures[texture].name));
+				if (const auto* buffers = GraphBuffersAt(lists, a_binding.textureRegister))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} takes t{}, which {} has", feature, a_binding.name, a_binding.textureRegister,
+						buffers->name));
 				// A build embeds every binding's value (ResourceAddresses::frameBindings).
 				if (lists.frameBindings.size() >= kFrameBindingSlots)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s frame binding {} is one past kFrameBindingSlots: grow it first", feature, a_binding.name));
@@ -382,8 +446,53 @@ namespace DCLF::Extensions
 				// A set holds each input in a bit (ClassifyInputSet).
 				if (lists.classifyInputs.size() >= kClassifyInputSlots)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s classify input {} is one past kClassifyInputSlots: grow it first", feature, a_input.name));
+				// The needs bind by name (NeedClassifyInput).
+				for (const auto& input : lists.classifyInputs)
+					if (input.name == a_input.name)
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s classify input {} has a name another input has", feature, a_input.name));
 				lists.classifyInputs.push_back({ std::string(a_input.name), a_input.sample });
 				return { static_cast<std::uint32_t>(lists.classifyInputs.size() - 1) };
+			}
+
+			Api::ClassifyInputId NeedClassifyInput(std::string_view a_name) override
+			{
+				if (a_name.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} needs a classify input without a name", feature));
+				// A name needed twice is one need.
+				std::size_t slot = 0;
+				while (slot < lists.classifyInputNeeds.size() && lists.classifyInputNeeds[slot] != a_name)
+					++slot;
+				if (slot == lists.classifyInputNeeds.size()) {
+					// The bound table holds each need in a slot (ClassifyInputs.h).
+					if (slot >= kClassifyInputNeedSlots)
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s need of classify input {} is one past kClassifyInputNeedSlots: grow it first", feature, a_name));
+					lists.classifyInputNeeds.emplace_back(a_name);
+				}
+				return { kClassifyInputNeedBit | static_cast<std::uint32_t>(slot) };
+			}
+
+			void RegisterFrameGraphBuffers(const Api::FrameGraphBuffers& a_buffers) override { AddFrameGraphBuffers(lists, feature, a_buffers); }
+
+			void RegisterLightVolumes(const Api::LightVolumesContribution& a_volumes) override
+			{
+				if (a_volumes.name.empty() || !a_volumes.sample)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete light volumes contribution", feature));
+				// BuildDraws tests one list of volumes.
+				if (!lists.lightVolumes.name.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes light volumes {}, which {} has", feature, a_volumes.name, lists.lightVolumes.name));
+				lists.lightVolumes = a_volumes;
+			}
+
+			void RegisterAncestorValue(const Api::AncestorValueContribution& a_value) override
+			{
+				// Its input registered before (an integration registers its own first).
+				if (a_value.name.empty() || (!a_value.ancestorRtti[0] && !a_value.ancestorRtti[1]) || !a_value.generation || !a_value.fill ||
+					a_value.whileOn.index >= lists.classifyInputs.size())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete ancestor value", feature));
+				// The record has one ancestor value column.
+				if (!lists.ancestorValue.name.empty())
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes ancestor value {}, which {} has", feature, a_value.name, lists.ancestorValue.name));
+				lists.ancestorValue = a_value;
 			}
 
 			void RegisterReportLines(const Api::ReportLines& a_lines) override
@@ -822,6 +931,11 @@ namespace DCLF::Extensions
 		}
 		// The features' switches' anchors, which may name a switch a later feature registered.
 		CheckSwitchAnchors();
+		// The classify inputs needed by name, which a later feature or an integration may register; then the light volumes and the ancestor
+		// value (its key classes' RTTI).
+		BindClassifyInputNeeds(lists.classifyInputNeeds);
+		ResolveLightVolumes(lists.lightVolumes);
+		ResolveAncestorValue(lists.ancestorValue);
 		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps' and shadow sources', from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
 		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the palette rows classes'; the shading fields'
@@ -852,6 +966,7 @@ namespace DCLF::Extensions
 	std::span<const FrameBindingEntry> RegisteredFrameBindings() { return Registered().frameBindings; }
 	std::span<const FrameConstantRowEntry> RegisteredFrameConstantRows() { return Registered().frameConstantRows; }
 	std::span<const FrameTextureEntry> RegisteredFrameTextures() { return Registered().frameTextures; }
+	std::span<const FrameGraphBuffersEntry> RegisteredFrameGraphBuffers() { return Registered().frameGraphBuffers; }
 	std::span<const std::uint8_t> FrameTextureIndices() { return Registered().frameTextureIndices; }
 	std::span<const ReportLinesEntry> RegisteredReportLines() { return Registered().reportLines; }
 	std::span<const Api::StandInObserver> RegisteredStandInObservers() { return Registered().standInObservers; }

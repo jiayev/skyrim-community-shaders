@@ -2,7 +2,7 @@
 
 // The frame binding contract's Core side (Api/FrameBindings.h): what a registered binding's select is handed, the values the frame
 // records take from the bindings, and the texture registers Core keeps for itself (which no binding or frame texture may take). And the
-// frame textures' (Api::FrameTexture): their registers' indices.
+// frame textures' (Api::FrameTexture): their registers' indices. And the frame graph buffers' (Api::FrameGraphBuffers): their entries.
 
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
+#include <tuple>
 
 namespace org
 {
@@ -81,4 +83,31 @@ namespace DCLF::Extensions
 	inline constexpr std::uint8_t kNoFrameTexture = 0xFF;
 	/** @brief Any thread, after InstallFeatures: by texture register, its frame texture's index (RegisteredFrameTextures), or kNoFrameTexture. */
 	std::span<const std::uint8_t> FrameTextureIndices();
+
+	/**
+	 * @brief The most frame graph buffers registrations there may be (a commit keeps each one's indices in a fixed array), and each one's
+	 * registers (Api::FrameGraphBuffers::resources). One past them fails the install: grow this first.
+	 */
+	inline constexpr std::size_t kFrameGraphBufferSlots = 2;
+	inline constexpr std::size_t kFrameGraphBufferRegisters = std::tuple_size_v<decltype(Api::FrameGraphBuffers::resources)>;
+	/** @brief Each registration's indices for one commit (FrameGraphBufferIndices), by registration then register. */
+	using FrameGraphBufferValues = std::array<std::array<std::uint32_t, kFrameGraphBufferRegisters>, kFrameGraphBufferSlots>;
+	/** @brief A registered frame graph buffers (its names owned): registers [firstRegister, firstRegister + count). */
+	struct FrameGraphBuffersEntry
+	{
+		std::string name;
+		std::uint32_t firstRegister = ~0u;
+		std::uint32_t count = 0;                                            // the leading non-empty resources
+		std::array<std::string, kFrameGraphBufferRegisters> resources;      // the graph ids, owned (c_str for ORG's ResourceIdentifier)
+		decltype(Api::FrameGraphBuffers::indices) indices = nullptr;
+	};
+	/** @brief Any thread, after InstallFeatures (empty before): the registrations, in order. */
+	std::span<const FrameGraphBuffersEntry> RegisteredFrameGraphBuffers();
+	/** @brief Whether a_register is a registered frame graph buffer's (the captured frame buffers skip it while it is registered). */
+	bool FrameGraphBufferRegister(std::uint32_t a_register);
+	/**
+	 * @brief Render thread (the main resources' check, each colour commit): registration a_buffers's indices into a_out (its indices),
+	 * whether they are registered; false past the registrations.
+	 */
+	bool FrameGraphBufferIndices(std::size_t a_buffers, std::span<std::uint32_t, kFrameGraphBufferRegisters> a_out);
 }

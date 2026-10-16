@@ -22,7 +22,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include <Tracy/Tracy.hpp>
-#include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
@@ -1499,7 +1498,6 @@ namespace DCLF
 		// The stand-in observers' engine hooks go in with the features' install (Api::InstallContext::RegisterStandInObserver).
 		Extensions::NoteStandInInstalled();
 		Diagnostics::Notify<Diagnostics::EnginePoint::PrimaryCullInstalled>();
-		LocalLightCull::Install();
 		// Fade OnVisibles leave DCLF-written roots alone (detours, not vtable slots, so subclass tables and FadeState::PlanOf keep
 		// the engine's addresses).
 		stl::detour_thunk<FadeOnVisible>(base + Engine::Address::kFadeOnVisible);
@@ -1508,7 +1506,7 @@ namespace DCLF
 		REL::Relocation<std::uintptr_t> triShape{ RE::VTABLE_BSTriShape[0] };
 		geometryOnVisible = reinterpret_cast<const std::uintptr_t*>(triShape.address())[0x34];
 		// The OnVisibles PlanOf stands for, from the classes' vtables. A slot may hold a hook ending in the engine's function
-		// (NiNode's: LocalLightCull's category filter; NiBillboardNode's: the billboard observer under CS_DCLF_SET_PARITY), so both
+		// (NiNode's: the point lights' category filter, Features/Shadows/Local; NiBillboardNode's: the billboard observer under CS_DCLF_SET_PARITY), so both
 		// the slot and the engine's NiNode::OnVisible (which subclasses keep) count. The startup log names each slot's module.
 		const auto slot = [](std::uintptr_t a_vtable) { return reinterpret_cast<const std::uintptr_t*>(a_vtable)[0x34]; };
 		wideOnVisible.node = slot(REL::Relocation<std::uintptr_t>{ RE::VTABLE_NiNode[0] }.address());

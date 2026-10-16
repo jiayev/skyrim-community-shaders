@@ -113,6 +113,8 @@ namespace DCLF::Extensions
 		bool registered = false;
 		void (*lightKept)(const Api::ShadowLightKept&) = nullptr;
 		bool (*fullFrustumWindowEnd)() = nullptr;  // the Sun's: Registry refused a Sun source without it
+		void (*frameStart)(std::uint32_t) = nullptr;
+		void (*frameEnd)() = nullptr;
 	};
 	/** @brief Every map's and source's entry, and what the shadow engine reads of them. */
 	struct ShadowViewSet
@@ -155,9 +157,16 @@ namespace DCLF::Extensions
 		std::span<const Api::ShadowSourceContribution, kShadowSources> a_sources);
 	/**
 	 * @brief Main thread, from the source's hooks on (InstallSourceHooks): whether a_source's feature installed its engine culls' hooks
-	 * (Api::ShadowSourceHooks::CullsInstalled; LocalLightCull installs only after the Sun's).
+	 * (Api::ShadowSourceHooks::CullsInstalled; Features/Shadows/Local's point culls install only after the Sun's).
 	 */
 	bool SourceCullsInstalled(Api::ShadowSource a_source);
+	/**
+	 * @brief Render thread, once a frame (FrameDriver, after the frame requests are served, before the main renderers are refreshed): each
+	 * registered source's frameStart, in source order.
+	 */
+	void ShadowSourcesFrameStart(std::uint32_t a_frame);
+	/** @brief Render thread, at Present (first in PrimaryCull::EndFrame): each registered source's frameEnd, in source order. */
+	void ShadowSourcesFrameEnd();
 
 	/**
 	 * @brief Whether DCLF draws occlusion map a_map under a_toggles: taken, available (its load-time flag: Features/OcclusionMaps' is

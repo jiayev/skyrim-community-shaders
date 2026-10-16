@@ -3,6 +3,7 @@
 // the row tables; the epoch's payload (PayloadVersions) places them, recorded when the check is armed.
 
 #include "DrawsState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "DrawsView.h"
 #include "Events.h"
@@ -14,7 +15,7 @@ namespace DCLF::Diagnostics
 	{
 		const auto& a_resources = a_epoch.resources;
 		const MainPayload& a_payload = a_epoch.payload;
-		const auto& localShadows = DrawsView::Get().localShadows;
+		const auto& shadowVolumes = DrawsView::Get().shadowVolumes;
 		auto& state = DrawsState::Get();
 		auto& parity = state.parity;
 		auto& parityEpochs = state.parityEpochs;
@@ -253,9 +254,10 @@ namespace DCLF::Diagnostics
 			for (auto& expected : readback.expected)
 				place(expected);
 		}
-		// The CPU's local shadow selection for every object the epoch drew, with the volumes it uploaded (none on the Z-prepass).
+		// The CPU's local shadow selection for every object the epoch drew, with the volumes it sampled (none on the Z-prepass).
 		if (!a_payload.inputs.depthOnly) {
 			const auto& tables = Scene::FrameView::Get().GetTables();
+			const std::uint64_t landscapeFlags = Extensions::LightVolumes().landscapeFlags;
 			for (const auto& input : inputs) {
 				if (!(input.flags & kInputDrawable) || input.objectIndex >= tables.objects.size() || input.objectIndex >= tables.objectGeometry.size())
 					continue;
@@ -264,7 +266,8 @@ namespace DCLF::Diagnostics
 				if (!geometry)
 					continue;
 				const float center[3]{ geometry->worldBound.center.x, geometry->worldBound.center.y, geometry->worldBound.center.z };
-				readback.expectedLocalShadows[input.objectIndex] = localShadows.MaskOf(property, center, geometry->worldBound.radius) & 0xFu;
+				const bool landscape = property && (property->flags.underlying() & landscapeFlags);
+				readback.expectedLocalShadows[input.objectIndex] = ShadowVolumeMaskOf(shadowVolumes, landscape, center, geometry->worldBound.radius) & 0xFu;
 			}
 		}
 		readback.sequencesNamed = sequencesNamed;

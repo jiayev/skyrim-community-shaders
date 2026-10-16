@@ -4,13 +4,14 @@
 #include <cstdint>
 #include <string>
 
-namespace DCLF::Diagnostics::LightCulls
+namespace DCLF::Features::Shadows::Local::LightCulls
 {
 	/**
 	 * @brief The point lights' culls' parity (CS_DCLF_PERSISTENT_PARITY): on the frames the culls skip nothing (Policy::FilterLightCulls),
 	 * a paraboloid pass the registration did not withhold under an excluded entry is one the skip would lose (<- LIGHT EXCLUSION, by the
 	 * object's shadow reject, the first named), a caster under a filtered category node must hang from a child the filter keeps
-	 * (<- LIGHT FILTER), and a cut entry's geometry's point light bits are compared with the engine's (<- LIGHT BITS).
+	 * (<- LIGHT FILTER), and a cut entry's geometry's point light bits are compared with the engine's (<- LIGHT BITS). Subscribed by the
+	 * feature's install.
 	 */
 	void Install();
 

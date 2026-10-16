@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
@@ -45,10 +46,13 @@ namespace DCLF::Scene
 		Extensions::AdoptionGenerations adoptionGuards{};  // the adoption guards' generations at the frame's start (ScenePublication's)
 	};
 
-	/** @brief Light Limit Fix's room map (its room nodes' indices), copied by the render thread when its generation moves. */
-	struct RoomMapInput
+	/**
+	 * @brief The ancestor value's map (Api::AncestorValueContribution: Light Limit Fix's room nodes' indices), filled by the render
+	 * thread when its generation moves.
+	 */
+	struct AncestorMapInput
 	{
-		std::shared_ptr<const ankerl::unordered_dense::map<const RE::NiNode*, int>> map;
+		std::shared_ptr<const Extensions::AncestorValueMap> map;
 		std::uint64_t generation = 0;
 	};
 
@@ -158,7 +162,7 @@ namespace DCLF::Scene
 	/** @brief The joins' frame inputs since the last report: posted (render thread) and taken (coordinator), the blocks made from them. */
 	struct AccumulateInputCounters
 	{
-		std::atomic<std::uint64_t> roomMapsPosted{ 0 }, roomMapsTaken{ 0 }, pipelineFramesPosted{ 0 }, pipelineFramesTaken{ 0 };
+		std::atomic<std::uint64_t> ancestorMapsPosted{ 0 }, ancestorMapsTaken{ 0 }, pipelineFramesPosted{ 0 }, pipelineFramesTaken{ 0 };
 		std::atomic<std::uint64_t> pipelineBlocksMade{ 0 }, pipelineBlocksWaited{ 0 };
 	};
 
@@ -174,7 +178,7 @@ namespace DCLF::Scene
 		LatestSlot<FrameInputs> frameInputs;
 		LatestSlot<std::shared_ptr<const CategoryCapture>> categoryPosted;
 		std::atomic<std::shared_ptr<const GeometryPort::PipelineFrame>> pipelineFramePosted;
-		std::atomic<std::shared_ptr<const RoomMapInput>> roomMapPosted;
+		std::atomic<std::shared_ptr<const AncestorMapInput>> ancestorMapPosted;
 		std::atomic<std::shared_ptr<const SharedBindings::ProjectedCapture>> projectedPosted;
 		// The fade root rows the depth commit holds (latest wins), PrimaryCull's fade ownership (a whole set: latest wins).
 		static constexpr std::uint64_t kNoFadeRootsSent = ~0ull;

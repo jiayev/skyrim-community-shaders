@@ -3,6 +3,8 @@
 // shadow dependency index refreshed.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
@@ -26,6 +28,14 @@ namespace DCLF::Scene
 		{
 			static const auto& techniques = Extensions::RegisteredTechniques();
 			return Extensions::TechniqueObjectFlags(techniques, a_technique);
+		}
+
+		// The property flags whose objects take only the light volumes that light land (Api::LightVolumesContribution::landscapeFlags:
+		// Features/LocalLights' kLandscape and kNoLODLandFade; none without the contribution). Read once, like the techniques.
+		std::uint64_t LandscapeLightFlags()
+		{
+			static const std::uint64_t flags = Extensions::LightVolumes().landscapeFlags;
+			return flags;
 		}
 
 		/**
@@ -87,7 +97,7 @@ namespace DCLF::Scene
 		object.flags = a_patch.flags;
 		tables.fadeDistance[objectId] = a_patch.fadeDistance;
 		tables.draws[objectId].pipelineIndex = a_patch.pipeline;
-		tables.lights[objectId] = a_patch.lights;
+		tables.ancestorValue[objectId] = a_patch.ancestorValue;
 		bool extrasWritten = false;
 		if (a_patch.projectedUV || a_patch.landBlend) {
 			stats.projectedUV += a_patch.projectedUV ? 1 : 0;
@@ -113,10 +123,10 @@ namespace DCLF::Scene
 	void Coordinator::TakeAccumulateInputs()
 	{
 		// Latest wins (a replaced post is dropped on the render thread; neither holds engine references).
-		if (auto posted = channels.roomMapPosted.exchange(nullptr, std::memory_order_acq_rel)) {
-			roomMap = posted->map;
-			roomMapGeneration = posted->generation;
-			channels.accumulateInputs.roomMapsTaken.fetch_add(1, std::memory_order_relaxed);
+		if (auto posted = channels.ancestorMapPosted.exchange(nullptr, std::memory_order_acq_rel)) {
+			ancestorMap = posted->map;
+			ancestorMapGeneration = posted->generation;
+			channels.accumulateInputs.ancestorMapsTaken.fetch_add(1, std::memory_order_relaxed);
 		}
 		if (auto posted = channels.pipelineFramePosted.exchange(nullptr, std::memory_order_acq_rel)) {
 			scenePipelineFrame = std::move(posted);
@@ -162,8 +172,8 @@ namespace DCLF::Scene
 	{
 		auto& c = channels.accumulateInputs;
 		AccumulateInputStats s;
-		s.roomMapsPosted = c.roomMapsPosted.exchange(0, std::memory_order_relaxed);
-		s.roomMapsTaken = c.roomMapsTaken.exchange(0, std::memory_order_relaxed);
+		s.ancestorMapsPosted = c.ancestorMapsPosted.exchange(0, std::memory_order_relaxed);
+		s.ancestorMapsTaken = c.ancestorMapsTaken.exchange(0, std::memory_order_relaxed);
 		s.pipelineFramesPosted = c.pipelineFramesPosted.exchange(0, std::memory_order_relaxed);
 		s.pipelineFramesTaken = c.pipelineFramesTaken.exchange(0, std::memory_order_relaxed);
 		s.pipelineBlocksMade = c.pipelineBlocksMade.exchange(0, std::memory_order_relaxed);
@@ -213,7 +223,7 @@ namespace DCLF::Scene
 		const bool interior = frameInterior;
 		const auto& decalBiasMode = frameDecalBias;
 		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8) | (decalBiasMode[3] << 16);
-		const bool lightLimitFixLoaded = globals::features::lightLimitFix.loaded;
+		const bool ancestorValueOn = Extensions::AncestorValueOn();
 		// The cached derivation is served and also recomputed, and the two compared.
 		const bool derivedProbe = Policy::RecomputeCachedVerdicts(Policy::Verdicts::Derivation, passSerial);
 
@@ -492,13 +502,13 @@ namespace DCLF::Scene
 				++setStats.patchedMember;
 			patch.fadeDistance = accumulated->fadeDistance;
 			timer.Add(BuildPart::Record);
-			if (lightLimitFixLoaded) {
-				// The evaluation's room, when the room map moved on.
-				if (a_result.roomSet) {
-					trackedEntry->roomIndex = a_result.roomIndex;
-					trackedEntry->roomMapGeneration = roomMapGeneration;
+			if (ancestorValueOn) {
+				// The evaluation's ancestor value, when the ancestor map moved on.
+				if (a_result.ancestorSet) {
+					trackedEntry->ancestorValue = a_result.ancestorValue;
+					trackedEntry->ancestorMapGeneration = ancestorMapGeneration;
 				}
-				patch.lights.roomIndex = trackedEntry->roomIndex;
+				patch.ancestorValue.value = trackedEntry->ancestorValue;
 			}
 			timer.Add(BuildPart::CapturePatch);
 			if (descriptors.pass & kPassAdditionalAlphaMask) {
@@ -877,16 +887,16 @@ namespace DCLF::Scene
 			                (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
 			                (descriptors.terrainGroup << kObjectTerrainGroupShift) |
 			                (descriptors.forward ? kObjectForward : 0u) |
-			                (!descriptors.port && (propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
+			                (!descriptors.port && (propertyRecord->flags & LandscapeLightFlags()) ? kObjectLandscapeLights : 0u) |
 			                (!descriptors.port && BeastRaceFace(*propertyRecord, r.leaf) ? kObjectBeastRace : 0u);
 		}
-		// Light Limit Fix's room, when the room map moved on (read-only here).
-		if (globals::features::lightLimitFix.loaded && entry.roomMapGeneration != roomMapGeneration) {
-			r.roomSet = true;
-			r.roomIndex = -1;
-			if (roomMap && entry.roomNode)
-				if (const auto room = roomMap->find(entry.roomNode); room != roomMap->end())
-					r.roomIndex = room->second;
+		// The ancestor value (Light Limit Fix's room), when the ancestor map moved on (read-only here).
+		if (Extensions::AncestorValueOn() && entry.ancestorMapGeneration != ancestorMapGeneration) {
+			r.ancestorSet = true;
+			r.ancestorValue = Extensions::AncestorValue()->none;
+			if (ancestorMap && entry.ancestorKey)
+				if (const auto found = ancestorMap->find(entry.ancestorKey); found != ancestorMap->end())
+					r.ancestorValue = found->second;
 		}
 	}
 
@@ -915,7 +925,7 @@ namespace DCLF::Scene
 		object.materialIndex = 0;
 		object.pipelineIndex = 0;
 		tables.draws[a_slot].pipelineIndex = 0;
-		tables.lights[a_slot] = ObjectLights{};
+		tables.ancestorValue[a_slot] = ObjectAncestorValue{};
 		tables.FreeExtras(a_slot);
 		tables.fadeDistance[a_slot] = 0.0f;
 		tables.NoteWrite(a_slot, columnsBefore);

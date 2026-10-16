@@ -56,6 +56,13 @@ namespace DCLF::Extensions
 				observer.afterWrites(a_running);
 	}
 
+	void StandInStructure(const void* a_parent)
+	{
+		for (const auto& observer : RegisteredStandInObservers())
+			if (observer.structure)
+				observer.structure(a_parent);
+	}
+
 	bool StandInVerdict(const void* a_root) { return IndirectDraws::Get().AccumulatedVerdict(a_root); }
 	bool ListedVerdictOf(const void* a_root, bool& a_visible) { return IndirectDraws::Get().AccumulatedVerdictOf(a_root, a_visible); }
 }

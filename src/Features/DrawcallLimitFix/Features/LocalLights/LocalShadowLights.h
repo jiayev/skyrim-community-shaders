@@ -44,7 +44,5 @@ namespace DCLF
 
 		/** @brief This frame's, from DCLF's selection and light views (render thread, after the lights accumulated). */
 		static LocalShadowLights Sample();
-		/** @brief The LLF ShadowBitMask the selection gives an object with this property and world bound. */
-		std::uint32_t MaskOf(const RE::BSShaderProperty* a_property, const float a_center[3], float a_radius) const;
 	};
 }

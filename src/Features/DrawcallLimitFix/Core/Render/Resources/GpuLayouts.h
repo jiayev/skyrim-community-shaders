@@ -533,8 +533,9 @@ namespace DCLF::Draws
 		bool operator==(const ShadowLatchLayout&) const = default;
 	};
 	/**
-	 * @brief One cull volume of a local shadow light (LocalShadowLights::Light::Volume) as BuildDraws tests it: the light's sphere,
-	 * then a shadowmap descriptor's frustum and custom planes. A light of several descriptors has a record each, same mask bit.
+	 * @brief One cull volume of a local shadow light (Api::LightVolume, sampled by the light volumes' contribution: Features/LocalLights')
+	 * as BuildDraws tests it: the light's sphere, then a shadowmap descriptor's frustum and custom planes. A light of several descriptors
+	 * has a record each, same mask bit.
 	 */
 	struct GpuShadowVolume
 	{
@@ -545,6 +546,33 @@ namespace DCLF::Draws
 		float planes[12][4];        // (normal, constant), inside where dot(normal, p) - constant >= 0
 	};
 	static_assert(sizeof(GpuShadowVolume) == 224);
+	/**
+	 * @brief The shadow mask BuildDraws gives an object of this world bound from a_volumes, on the CPU (the build parity's reference):
+	 * the OR of the mask bits of the volumes whose sphere and active planes the bound reaches. a_landscape: the object's property has
+	 * the light volumes' landscapeFlags, so it takes only the affectsLand volumes.
+	 */
+	inline std::uint32_t ShadowVolumeMaskOf(std::span<const GpuShadowVolume> a_volumes, bool a_landscape, const float a_center[3], float a_radius)
+	{
+		std::uint32_t mask = 0;
+		for (const auto& volume : a_volumes) {
+			if (a_landscape && !volume.affectsLand)
+				continue;
+			const float dx = a_center[0] - volume.sphere[0], dy = a_center[1] - volume.sphere[1], dz = a_center[2] - volume.sphere[2];
+			const float reach = volume.sphere[3] + a_radius;
+			if (dx * dx + dy * dy + dz * dz > reach * reach)
+				continue;
+			bool inside = true;
+			for (std::uint32_t p = 0; p < 12 && inside; ++p) {
+				if (!((volume.masks[p / 6] >> (p % 6)) & 1))
+					continue;
+				const auto& plane = volume.planes[p];
+				inside = plane[0] * a_center[0] + plane[1] * a_center[1] + plane[2] * a_center[2] - plane[3] >= -a_radius;
+			}
+			if (inside)
+				mask |= volume.maskBit;
+		}
+		return mask;
+	}
 
 	/**
 	 * @brief The main latch block's region per frame slot: the passes' BuildDrawsLatch, then the colour pass's cascades and local

@@ -1,11 +1,11 @@
 // The light selection's parity (LightSelectionParity.h): at LightSelection's detour of CalculateActiveShadowCasterLights, render thread.
 
-#include "LightSelectionParity.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/Diagnostics/LightSelectionParity.h"
 
-#include "Events.h"
-#include "LightSelectionView.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/LocalLights.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/Diagnostics/LightSelectionView.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Reports/Engine.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
@@ -249,7 +249,7 @@ namespace DCLF::Diagnostics::LightSelectionParity
 					p.first = fmt::format("frame {}: {}", frame.sceneFrame, detail);
 			}
 			if (window.Tick())
-				Reports::LightSelectionLines();
+				Features::LocalLights::LightSelectionLines();
 		}
 	}
 

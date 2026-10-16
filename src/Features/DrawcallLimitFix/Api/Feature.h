@@ -3,6 +3,7 @@
 // DCLF's extension API: a feature is a name and an install function that registers the extension points it fills. Api/ names only
 // Api/, standard and ORG types; the contexts its callbacks receive are Core's (Core/Extensions/), which the features inside DCLF include.
 
+#include "Features/DrawcallLimitFix/Api/AncestorValues.h"
 #include "Features/DrawcallLimitFix/Api/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Api/Commits.h"
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
@@ -12,6 +13,7 @@
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Api/GpuStages.h"
+#include "Features/DrawcallLimitFix/Api/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Api/MainRanges.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Api/Payload.h"
@@ -58,6 +60,12 @@ namespace DCLF::Api
 		virtual ToggleId RegisterToggle(const FeatureToggle& a_toggle) = 0;
 		/** @brief Fails the install for no name or sample, or past Extensions::kClassifyInputSlots inputs. */
 		virtual ClassifyInputId RegisterClassifyInput(const ClassifyInputContribution& a_input) = 0;
+		/**
+		 * @brief The input registered (by any feature or integration) under a_name, bound once every install ran (as a toggle's needs by
+		 * name are); until then, and for good when none has the name, it reads false. Fails the install for no name or past
+		 * Extensions::kClassifyInputNeedSlots needs. Not for a technique gate or a held group, which take a registered input.
+		 */
+		virtual ClassifyInputId NeedClassifyInput(std::string_view a_name) = 0;
 		virtual void RegisterReportLines(const ReportLines& a_lines) = 0;
 		/** @brief Whether the primary cull is installed: false, and the observer is never called, without it (its engine hooks failed). */
 		virtual bool RegisterStandInObserver(const StandInObserver& a_observer) = 0;
@@ -183,6 +191,19 @@ namespace DCLF::Api
 		 */
 		virtual void RegisterFrameTexture(const FrameTexture& a_texture) = 0;
 		/**
+		 * @brief Fails the install for no name, resources or indices, a non-empty resource after an empty one, a register below the frame
+		 * textures (t16) or past t127, Core's, a frame binding's, a frame texture's or other graph buffers', or past
+		 * Extensions::kFrameGraphBufferSlots registrations.
+		 */
+		virtual void RegisterFrameGraphBuffers(const FrameGraphBuffers& a_buffers) = 0;
+		/** @brief Fails the install for a second contribution, or one without a name or sample. */
+		virtual void RegisterLightVolumes(const LightVolumesContribution& a_volumes) = 0;
+		/**
+		 * @brief Fails the install for a second contribution, or one without a name, an ancestor RTTI, generation or fill, or a registered
+		 * whileOn input.
+		 */
+		virtual void RegisterAncestorValue(const AncestorValueContribution& a_value) = 0;
+		/**
 		 * @brief Fails the install for a field another registration has (or Count), no name, membership or capture, or members None or
 		 * past the entry classes.
 		 */
@@ -211,7 +232,7 @@ namespace DCLF::Api
 	 *   Extensions::InstallSourceHooks, before the primary cull's): the engine hooks of a shadow source, its culls' (calling
 	 *   ShadowSourceHooks::CullsInstalled once they are in) and those that write its cameras into Core's boards
 	 *   (Core/Render/Shadow/ShadowCameras.h). Called once per source, in ShadowSource order (Sun, Spot, Point, Focus; at each source the
-	 *   features in the list's order), with Core's light selection installed right after the Sun's: a feature installs the hooks of
+	 *   features in the list's order; Features/LocalLights' light selection at the Spot's): a feature installs the hooks of
 	 *   a_hooks.source (none for a source it does not take), so the hooks' install order (and the install log's) is the sources',
 	 *   whatever the features' places in the list. Registers nothing.
 	 */

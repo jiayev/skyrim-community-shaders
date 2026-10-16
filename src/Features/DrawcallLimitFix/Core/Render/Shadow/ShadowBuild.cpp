@@ -641,7 +641,7 @@ namespace DCLF::Draws
 		/**
 		 * @brief An object blocks its entry when the engine would cast it here and this build does not draw it (volumetric-only too: a
 		 * paraboloid light registers them). A point light's registration also sets its activeLightMask bit on every geometry its
-		 * cull reaches; LocalLightCull writes those for a skipped entry itself. A fading object (ShadowReject::Faded) counts as a
+		 * cull reaches; the Point source's culls (Features/Shadows/Local) write those for a skipped entry themselves. A fading object (ShadowReject::Faded) counts as a
 		 * caster: the exclusion is used a frame later and the culls update the fade themselves (BSFadeNode::OnVisible).
 		 */
 		bool EngineCaster(const SceneTables& a_tables, std::size_t a_object)
@@ -700,7 +700,7 @@ namespace DCLF::Draws
 					ends.push_back(end);
 					continue;
 				}
-				// The paraboloid's translation keeps the version (LocalLightCull's filter stands); the sun's takes a new one when an
+				// The paraboloid's translation keeps the version (the point-light culls' filter stands); the sun's takes a new one when an
 				// entry leaves (the scene lists' filter is judged again), as the frame's translation did.
 				auto next = TranslateExclusion(end, a_built->candidates, !a_paraboloid, a_paraboloid, &a_index.changed, a_built.get());
 				next->forwardChanged = a_index.changed;

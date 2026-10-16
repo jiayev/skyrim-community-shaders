@@ -2,6 +2,7 @@
 // object classes' contributions, the Effect port's registrations and write hooks, the report lines and the parity.
 
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
+#include "Features/DrawcallLimitFix/Features/Effects/EffectDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
@@ -33,6 +34,8 @@ namespace DCLF::Features::Effects
 			// only while the effects are on; the decals' toggle is its own test).
 			if (SwitchValue(opaque) != "0")
 				a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::OpaqueEffect, .toggle = effectsToggle });
+			// The variants' Light Limit Fix (Integrations/LightLimitFix's input, by name: the integrations install after the features).
+			NeedLightLimitFix(a_context);
 			// The Effect port, after its class: the material port (kind 1), its program family, its frame constant rows and soft depth.
 			RegisterPort(a_context);
 			RegisterPrograms(a_context);

@@ -3,11 +3,11 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 
 namespace DCLF
 {
@@ -552,8 +552,10 @@ namespace DCLF
 				// The cascades' casters decide which sun entries the next frame's cascade culls may skip.
 				if (modeUsed[kSunShadowMode])
 					SunExclusionSlot::Get().Publish(payload.sunExclusion);
-				// Likewise the paraboloids for point-light culls (none when no point light drew: a new light is the engine's).
-				LocalLightCull::Publish(modeUsed[kParabolicShadowMode] ? payload.parabolicExclusion : nullptr);
+				// Likewise the paraboloids for point-light culls (none when no point light drew: a new light is the engine's), while the Point
+				// source's culls are in to take it.
+				if (Extensions::SourceCullsInstalled(Api::ShadowSource::Point))
+					ParabolicExclusionSlot::Get().Publish(modeUsed[kParabolicShadowMode] ? payload.parabolicExclusion : nullptr);
 			}
 			pending.clear();
 		} else {

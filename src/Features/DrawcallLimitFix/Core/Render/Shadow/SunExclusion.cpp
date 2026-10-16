@@ -1,4 +1,4 @@
-// The entry exclusions (see the header): their translations to later candidates, and the sun's slot.
+// The entry exclusions (see the header): their translations to later candidates, and their slots.
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 
@@ -9,6 +9,12 @@ namespace DCLF
 	SunExclusionSlot& SunExclusionSlot::Get()
 	{
 		static SunExclusionSlot instance;
+		return instance;
+	}
+
+	ParabolicExclusionSlot& ParabolicExclusionSlot::Get()
+	{
+		static ParabolicExclusionSlot instance;
 		return instance;
 	}
 

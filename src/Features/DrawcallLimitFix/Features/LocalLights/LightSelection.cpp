@@ -1,6 +1,6 @@
 // LightSelection: the CalculateActiveShadowCasterLights detour (render thread) and its port of the engine's selection.
 
-#include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
@@ -187,6 +187,8 @@ namespace DCLF
 
 	void LightSelection::Select()
 	{
+		// The slots' board first: an early return leaves it invalid (no views this frame), as the frame below.
+		ShadowCameras::LightSlots().Invalidate();
 		frame = {};
 		frame.sceneFrame = Scene::FrameView::Get().GetFrame();
 		auto* node = SceneNode();
@@ -282,6 +284,8 @@ namespace DCLF
 			lightRooms = std::move(live);
 		}
 		frame.valid = true;
+		// The slots and focus hosts to the shadow views (the LightSlots board: spans into frame, stable until the next Select).
+		ShadowCameras::LightSlots().Publish(frame.sceneFrame, frame.slots, frame.focusHosts, frame.focusCount);
 		TellKeptLights(frame);
 		Diagnostics::Notify<Diagnostics::EnginePoint::LightSelectionMade>();
 	}

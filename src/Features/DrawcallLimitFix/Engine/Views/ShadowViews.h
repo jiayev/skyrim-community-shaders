@@ -55,7 +55,7 @@ namespace DCLF
 		/**
 		 * A DecalNoZWrite decal without bit 18. By the reading of FUN_1414b2a60 above a paraboloid light would cast it, but it
 		 * never does (observed with the point lights' culls whole, every insertion watched: no paraboloid pass). So it is no
-		 * caster of any mode; LocalLightCull's observer reports one if a scene ever registers it.
+		 * caster of any mode; the point lights' culls' observer (Features/Shadows/Local) reports one if a scene ever registers it.
 		 */
 		DecalPointLight,
 		// A multi-index shape's layer object (Coordinator::Tracked::layerSlot): the shadow modes register the main property's

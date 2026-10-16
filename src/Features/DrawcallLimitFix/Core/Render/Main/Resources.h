@@ -95,7 +95,9 @@ namespace DCLF::Draws
 		bool hzbCounterZeroed = false;
 		std::uint32_t hzbWidth = 0, hzbHeight = 0, hzbMips = 0;
 		std::uint32_t width = 0, height = 0;
-		bool lightLimitFix = false;  // LLF's graph buffers are registered (they are read at t35-t37)
+		// The frame graph buffers registered on the graph (Api::FrameGraphBuffers, a bit per registration: Integrations/LightLimitFix's,
+		// t35-t37), read at their registers instead of the captured frame buffers.
+		std::uint32_t graphBuffers = 0;
 		rhi::CommandSignaturePtr dispatchSignature;
 		// The pipeline sort of phase 1's and the colour segment's sequences; null when off.
 		std::shared_ptr<DrawSort> sort;
