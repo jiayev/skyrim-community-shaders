@@ -596,7 +596,7 @@ namespace DCLF
 		const std::size_t latchedShape = depthOnly ? kDepthShape : kColourShape;
 		// The selected revision's shape is trusted: the commit writes the frame's values into its latch, bucket plan and latched
 		// copies, and submits its recording. Nothing is checked against it.
-		const auto revisionEpoch = static_cast<std::uint32_t>(latchedShape);
+		const auto revisionEpoch = EpochOfShape(ShapeKind::Main, static_cast<std::uint32_t>(latchedShape));
 		const auto revisionShape = a_revision.shape->Value<PassFrame>();
 		const PassFrame& shape = *revisionShape;
 		CommitShadowInputs(depthOnly, shape, revisionEpoch);

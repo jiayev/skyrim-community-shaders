@@ -1,6 +1,9 @@
 #pragma once
 
-// The frame's schedule (Schedule/Frame.cpp): each epoch DCLF adds passes to, and its passes' keys (Api/Passes.h) in order.
+// The frame's schedule (Schedule/Frame.cpp): each epoch DCLF adds passes to, its definition (its shape, the shape it shares, its gate and
+// whether the frame's claims need it) and its passes' keys (Api/Passes.h) in order; the epochs outside DCLF; the frame and async orders.
+
+#include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 
 #include <cstdint>
 #include <span>
@@ -16,22 +19,51 @@ namespace DCLF::Api
 		View,
 	};
 
+	/** @brief The main view's shapes (EpochDef::shapeIndex of a Main epoch): the depth (Z-prepass) segment's, the colour segment's. */
+	enum class MainShape : std::uint32_t
+	{
+		Depth,
+		Colour,
+	};
+
 	/**
-	 * @brief An epoch: its passes' keys, added in this order. A later phase adds its traits, its trigger and the frame and async orders
-	 * here.
+	 * @brief An epoch: what Core records it against, and its passes' keys, added in this order. Its row's index in FrameSchedule::epochs
+	 * is its index in the scene revisions (their shape and recording slots, the per-epoch counters, the coverage, the reports).
 	 */
 	struct EpochDef
 	{
-		std::string_view id;                       // "main.depth", "main.colour", "forward", "shadow", "occlusion", "reflection", "fp.depth", "fp.colour"
+		std::string_view id;                       // "main.depth", "main.colour", "shadow", "occlusion", "reflection", "forward", "fp.depth", "fp.colour"
+		std::string_view label;                    // the reports' name
 		std::uint32_t segment = 0;                 // RenderGraphRuntime::Segment, as its value
 		EpochShape shape = EpochShape::Main;
-		std::uint32_t view = 0;                    // View shape: its Api::EngineView, as its value
+		// Its index in its shape: Main, MainShape; Shadow, 0 the shadow views, 1 the occlusion maps; View, its Api::EngineView. As its value.
+		std::uint32_t shapeIndex = 0;
+		// The id of the epoch whose shape this one records against (the forward epoch, the colour shape's forward passes; first person's
+		// colour epoch, its depth epoch's shape). Empty: its own shape.
+		std::string_view sharesWith;
+		// While this class is off, the shared shape is not taken and the frame's claims do not need the epoch (Count: none).
+		ObjectClass gate = ObjectClass::Count;
+		bool claims = false;    // the frame's claims need the epoch's recordings (while its gate is on)
+		bool revision = true;   // revision-driven: each submission carries the scene revision's recording, no live ticket is prepared
 		std::span<const std::string_view> passes;  // pass keys, in order
 	};
 
-	/** @brief The frame's epochs, in the schedule's order (within an epoch, its passes' order is the graph's; across epochs ORG orders them). */
+	/** @brief An epoch outside DCLF (another feature's segment): only in the frame and async orders, never revision-driven. */
+	struct ForeignEpoch
+	{
+		std::string_view id;
+		std::uint32_t segment = 0;  // RenderGraphRuntime::Segment, as its value
+	};
+
+	/**
+	 * @brief The frame's epochs, in the revisions' slot order (within an epoch, its passes' order is the graph's; across epochs ORG orders
+	 * them by frameOrder); the foreign ones; the frame's order and the host's async order, by id, every epoch and foreign epoch once.
+	 */
 	struct FrameSchedule
 	{
 		std::span<const EpochDef> epochs;
+		std::span<const ForeignEpoch> foreign;
+		std::span<const std::string_view> frameOrder;  // the order a frame runs them (PersistentGraphHost::Desc::epochOrder)
+		std::span<const std::string_view> asyncOrder;  // the host's async epochs, in its ticket loop's order (the revision-driven ones: those with revision)
 	};
 }

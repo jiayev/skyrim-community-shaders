@@ -42,7 +42,7 @@ namespace DCLF
 			std::atomic<std::uint64_t>*recorded = nullptr, *failedCount = nullptr, *droppedCount = nullptr, *shapes = nullptr;
 			std::atomic<std::uint32_t>* logged = nullptr;
 			std::atomic<std::uint32_t>* outstanding = nullptr;
-			const char* name = "";
+			std::string_view name;
 		};
 
 		using Revisions = ImplProducer::SceneRevisions;
@@ -60,15 +60,15 @@ namespace DCLF
 			// The producer's newest shapes (MakeRevision's), by the epochs' traits.
 			const auto& shapes = a_shapes;
 			const auto& toggles = a_toggles;
-			for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
-				const auto& traits = kEpochTraits[e];
+			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
+				const auto& traits = EpochTraitsOf(e);
 				const auto& current = draft.Get(R::kShapeSlot + e);
 				bool changed = false;
-				if (traits.sharesWith != Epoch::Count) {
-					// The shared shape's own value (a recording kept for this epoch stays while the shape does); none while the forward
-					// toggle is off.
+				if (traits.sharesWith != kNoEpoch) {
+					// The shared shape's own value (a recording kept for this epoch stays while the shape does); none while the epoch's
+					// gate class is off.
 					const auto& source = draft.Get(R::kShapeSlot + traits.sharesWith);
-					const bool on = source && (e != Epoch::Forward || Extensions::ObjectClassOn(toggles, Api::ObjectClass::Forward));
+					const bool on = source && (traits.gate == Api::ObjectClass::Count || Extensions::ObjectClassOn(toggles, traits.gate));
 					auto share = [&]<class Frame>() {
 						const auto shared = on ? source->Value<Frame>() : nullptr;
 						if (shared == (current ? current->Value<Frame>() : nullptr))
@@ -192,7 +192,7 @@ namespace DCLF
 				requests.push_back(std::move(data));
 			};
 			// The epoch's passes prepare against its shape (the forward epoch's, the colour shape: CurrentFrame's MainOpaque).
-			const auto& traits = kEpochTraits[e];
+			const auto& traits = EpochTraitsOf(e);
 			if (traits.shape == ShapeKind::Main)
 				request([&](RevisionShapes& a_shapes) { a_shapes.main[traits.index] = shapeFragment->Value<PassFrame>(); });
 			else if (traits.shape == ShapeKind::View)
@@ -212,8 +212,8 @@ namespace DCLF
 			work->shapes = &a_rv.epochs[e].shapes;
 			work->logged = &a_rv.failuresLogged;
 			work->outstanding = &a_outstanding;
-			work->name = kEpochTraits[e].name;
-			const auto epoch = RenderGraphRuntime::EpochOf(kEpochTraits[e].segment);
+			work->name = traits.name;
+			const auto epoch = RenderGraphRuntime::EpochOf(traits.segment);
 			bool refused = false;
 			for (std::size_t i = 0; i < requests.size() && !refused; ++i) {
 				a_outstanding.fetch_add(1, std::memory_order_acq_rel);
@@ -266,7 +266,7 @@ namespace DCLF
 		// one is dropped (the epoch has none in the revision) and not asked for again until its shape or the versions change.
 		auto* host = RenderGraphRuntime::Get().Host();
 		const bool recordable = host && producer.inputs.asyncEpochs;
-		for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
+		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
 			const std::uint32_t slot = R::kRecordingSlot + e;
 			const auto& shapeFragment = draft.Get(R::kShapeSlot + e);
 			const auto current = draft.Get(slot);
@@ -323,7 +323,7 @@ namespace DCLF
 		}
 		if (!out) {
 			if (revisions.unrevised[a_epoch]++ == 0)
-				logger::warn("[DCLF] the {} epoch of frame {} has no shape or recording in the selected revision: not submitted <- UNREVISED", kEpochTraits[a_epoch].name,
+				logger::warn("[DCLF] the {} epoch of frame {} has no shape or recording in the selected revision: not submitted <- UNREVISED", EpochTraitsOf(a_epoch).name,
 					Scene::FrameView::Get().GetFrame());
 			return {};
 		}

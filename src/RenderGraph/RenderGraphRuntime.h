@@ -98,6 +98,20 @@ public:
 	/** @brief Asks DXVK to enable the device features BasicRHI needs. Call before the D3D11 device exists. */
 	static void RequestDeviceFeatures(HMODULE a_dxvkD3D11);
 
+	/**
+	 * @brief The frame's epochs, as Segment values: the order a frame runs them (PersistentGraphHost::Desc::epochOrder), the host's async
+	 * epochs in its ticket loop's order, and the revision-driven ones among them (their submissions carry a recording, no live ticket).
+	 */
+	struct FrameConfig
+	{
+		std::vector<std::uint32_t> epochOrder, asyncOrder, revisionEpochs;
+	};
+	/**
+	 * @brief Once, before Initialize (Drawcall Limit Fix's shell, from its schedule, when it installs): the frame's epochs, which Initialize
+	 * uses. Without one (a build without Drawcall Limit Fix, or Drawcall Limit Fix off), Initialize uses the built-in orders.
+	 */
+	static void ConfigureFrame(FrameConfig a_config);
+
 	/** @brief Adopts DXVK's Vulkan device. Safe to call repeatedly; returns whether the runtime is active. */
 	bool Initialize();
 
@@ -221,4 +235,6 @@ private:
 	EpochCpuTotals epochTotals;
 	Segment segment = Segment::LightCulling;
 	bool attempted = false;
+	FrameConfig frameConfig;  // ConfigureFrame's (frameConfigured)
+	bool frameConfigured = false;
 };

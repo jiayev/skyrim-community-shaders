@@ -38,8 +38,8 @@ namespace DCLF
 		const std::uint32_t submitted = RenderGraphRuntime::Get().TakeSubmittedSegments();
 		// Recordings outstanding: an atomic the completions count down (never the assembler's pending list, the coordinator's).
 		if (explicitBuilds && impl->recordingsOutstanding.load(std::memory_order_acquire))
-			for (std::uint32_t e = 0; e < Impl::SceneRevisions::kEpochs; ++e)
-				if (const auto segment = kEpochTraits[e].segment; !(submitted & (1u << static_cast<std::uint32_t>(segment))))
+			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
+				if (const auto segment = EpochTraitsOf(e).segment; !(submitted & (1u << static_cast<std::uint32_t>(segment))))
 					rv.ticketsReleased += host->ReleaseEpochTicket(RenderGraphRuntime::EpochOf(segment)) ? 1 : 0;
 	}
 
@@ -134,10 +134,13 @@ namespace DCLF
 		}
 		auto* host = RenderGraphRuntime::Get().Host();
 		impl->DecideEpochCoverage(host);
-		// The main epochs decide the frame's claims: without their recordings the frame is the engine's (FrameView::WithdrawSet).
-		// With the forward toggle on, the forward epoch's too: its members' passes are withheld with the frame's claims, and only the
-		// forward epoch draws them (a frame without its recording would lose them).
-		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape] && (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) || rv.covered[Epoch::Forward]);
+		// The epochs flagged claims decide the frame's claims (the main ones): without their recordings the frame is the engine's
+		// (FrameView::WithdrawSet). A gated one's only while its class is on (the forward epoch's: its members' passes are withheld with the
+		// frame's claims, and only the forward epoch draws them; a frame without its recording would lose them).
+		bool main = true;
+		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs && main; ++e)
+			if (const auto& traits = EpochTraitsOf(e); traits.claims && !rv.covered[e])
+				main = traits.gate != Api::ObjectClass::Count && !Extensions::ObjectClassOn(ActiveToggles(), traits.gate);
 		rv.withdrawn += main ? 0 : 1;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		// Each registered view's, in slot order, by its feature's callback.
@@ -184,13 +187,13 @@ namespace DCLF
 			growthAdoptedFrame = ~0u;
 		}
 		if (current && snapshot)
-			for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
+			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
 				// An epoch's recordings are all of the build its versions were made at (AssembleRevision asks for them again after one).
 				const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + e);
 				rv.covered[e] = recordings && !recordings->recordings.empty() && recordings->recordings.front() &&
 				                host->EpochRecordingCurrent(*recordings->recordings.front());
 			}
-		for (std::uint32_t e = 0; e < R::kEpochs; ++e)
+		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
 			rv.uncovered[e] += rv.covered[e] ? 0 : 1;
 	}
 
@@ -201,13 +204,13 @@ namespace DCLF
 		// engine draws it, whose claims stand, both epochs' recordings in the revision and its target imported into the graph as built; the
 		// reflection's: on a frame whose claims stand, drawing the frame before's colour inputs, its cube imported into the graph as built).
 		const auto& rv = revisions;
-		const auto& slot = kViewSlots[ViewIndex(a_kind)];
+		const auto& epochs = ViewEpochsOf(a_kind).epochs;
 		auto& view = View(a_kind);
 		const auto& r = view.resources;
 		Api::ViewCoverage coverage;
 		coverage.main = a_main;
 		coverage.on = Extensions::ViewOn(ActiveToggles(), a_kind);
-		coverage.epochsCovered = rv.covered[slot.epochs[0]] && (slot.epochs[1] == Epoch::Count || rv.covered[slot.epochs[1]]);
+		coverage.epochsCovered = rv.covered[epochs[0]] && (epochs[1] == kNoEpoch || rv.covered[epochs[1]]);
 		coverage.targetImported = r && r->target;
 		coverage.rebuildPending = r && r->rebuildPending;
 		coverage.mainResourcesCurrent = r && r->main && r->main == resources && r->main->native[1];

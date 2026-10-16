@@ -94,6 +94,12 @@ void DrawcallLimitFix::PostPostLoad()
 	// The integrations after them (Integrations/IntegrationList.cpp: Integrations/AdvancedSkin's wetness, Integrations/TerrainBlending's
 	// classify input, toggle and held groups, Integrations/LightLimitFix's room index and light buffers).
 	DCLF::Extensions::InstallFeatures(DCLF::Features::List(), DCLF::Integrations::List(), DCLF::Schedule::Frame());
+	// The frame's epoch orders are the schedule's, handed to the render graph before it initializes (State::Setup, at the renderer's
+	// targets' creation, after PostPostLoad).
+	{
+		const auto& orders = DCLF::Extensions::ScheduledFrameOrders();
+		RenderGraphRuntime::ConfigureFrame({ orders.epochOrder, orders.asyncOrder, orders.revisionEpochs });
+	}
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();

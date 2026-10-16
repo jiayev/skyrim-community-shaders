@@ -50,6 +50,16 @@ namespace
 		{ VK_EXT_DEVICE_GENERATED_COMMANDS_EXTENSION_NAME, "deviceGeneratedCommands" },
 	};
 
+	// ConfigureFrame's segments (their values) as the epochs they run as.
+	std::vector<std::uint32_t> EpochsOf(const std::vector<std::uint32_t>& a_segments)
+	{
+		std::vector<std::uint32_t> epochs;
+		epochs.reserve(a_segments.size());
+		for (const auto segment : a_segments)
+			epochs.push_back(RenderGraphRuntime::EpochOf(static_cast<RenderGraphRuntime::Segment>(segment)));
+		return epochs;
+	}
+
 	bool EnvDisabled()
 	{
 		char buf[8] = {};
@@ -966,10 +976,13 @@ bool RenderGraphRuntime::Initialize()
 		// shape instead of being prepared again (a render-thread wait). Kept recordings carry no Tracy GPU zones: turn it off
 		// to profile the epochs' passes on the GPU with Tracy.
 		desc.reuseRecordings = !EnvEquals("CS_ORG_REUSE_RECORDINGS", "0");
-		// The segments in the order a frame runs them: the shadow views at AfterShadowMaps, the Z-prepass at the depth pass, the water
-		// reflection's faces after it, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main pass's
-		// opaque batches end, and the forward epoch (T7d) at the engine's blended draw after the deferred composite.
-		if (EpochsEnabled())
+		// The segments in the order a frame runs them: Drawcall Limit Fix's schedule's (ConfigureFrame), else the built-in order - the
+		// shadow views at AfterShadowMaps, the Z-prepass at the depth pass, the water reflection's faces after it, Skylighting's map, Light
+		// Limit Fix's culling at Prepass, the colour pass where the main pass's opaque batches end, and the forward epoch (T7d) at the
+		// engine's blended draw after the deferred composite.
+		if (EpochsEnabled() && frameConfigured)
+			desc.epochOrder = EpochsOf(frameConfig.epochOrder);
+		else if (EpochsEnabled())
 			desc.epochOrder = { EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::Reflection), EpochOf(Segment::FirstPersonDepth),
 				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward), EpochOf(Segment::FirstPerson) };
 		if (!desc.epochOrder.empty())
@@ -1007,6 +1020,11 @@ bool RenderGraphRuntime::Initialize()
 			// selected (the commit trusts it), so no live ticket is prepared for them. Light culling's stays live.
 			std::vector<std::uint32_t> revisionEpochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass),
 				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward), EpochOf(Segment::FirstPersonDepth), EpochOf(Segment::FirstPerson) };
+			// Drawcall Limit Fix's schedule's lists instead, when it configured the frame.
+			if (frameConfigured) {
+				epochs = EpochsOf(frameConfig.asyncOrder);
+				revisionEpochs = EpochsOf(frameConfig.revisionEpochs);
+			}
 			logger::info("[ORG] async epochs: {}; revision-driven: {}", fmt::join(epochs, ","), fmt::join(revisionEpochs, ","));
 			state->host->SetAsyncEpochs(std::move(epochs), std::move(revisionEpochs));
 			logger::info("[ORG] Async epochs: each epoch is prepared and recorded ahead on the graph host's thread; the render thread submits (DCLF's from its scene revisions)");
@@ -1186,6 +1204,13 @@ bool RenderGraphRuntime::EpochsEnabled()
 std::uint32_t RenderGraphRuntime::EpochOf(Segment a_segment)
 {
 	return EpochsEnabled() ? static_cast<std::uint32_t>(a_segment) : UINT32_MAX;
+}
+
+void RenderGraphRuntime::ConfigureFrame(FrameConfig a_config)
+{
+	auto& runtime = Get();
+	runtime.frameConfig = std::move(a_config);
+	runtime.frameConfigured = true;
 }
 
 bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare,
@@ -1410,6 +1435,7 @@ RenderGraphRuntime& RenderGraphRuntime::Get()
 }
 
 void RenderGraphRuntime::RequestDeviceFeatures(HMODULE) {}
+void RenderGraphRuntime::ConfigureFrame(FrameConfig) {}
 
 bool RenderGraphRuntime::Initialize()
 {

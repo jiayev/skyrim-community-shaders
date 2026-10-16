@@ -35,7 +35,7 @@ namespace DCLF::Draws
 		bool forwardPart;  // a forward range, sorted by the depth epoch and drawn after the buckets by the colour epoch
 		bool depthPass;    // the depth epoch draws the buckets' depth pipelines into the main depth (the colour epoch then their colour ones)
 		std::uint32_t viewBits;
-		std::array<std::uint32_t, 2> epochs;  // the depth (or only) epoch, then the colour one (Epoch::Count: none)
+		std::array<std::uint32_t, 2> epochs;  // the depth (or only) epoch, then the colour one (kNoEpoch: none): the schedule's (ViewEpochsOf)
 		RenderGraphRuntime::Segment segments[2];
 		const char* name;    // for the log
 		const char* prefix;  // its graph resources' and passes' identifiers, and its extension's
