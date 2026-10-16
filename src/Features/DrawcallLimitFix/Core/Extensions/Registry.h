@@ -75,6 +75,7 @@ namespace DCLF::Extensions
 		decltype(Api::SceneResources::postInputs) postInputs = nullptr;
 		std::uint32_t firstInput = 0, inputWords = 0;
 		decltype(Api::SceneResources::latched) latched = nullptr;
+		decltype(Api::SceneResources::sealed) sealed = nullptr;
 	};
 	/** @brief A registered commit hook. */
 	struct CommitHookEntry

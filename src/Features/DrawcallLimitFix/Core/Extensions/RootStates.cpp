@@ -19,6 +19,9 @@ namespace DCLF::Extensions
 			static Resolved resolved;
 			return resolved;
 		}
+
+		// Written only by NoteRootStatesInstalled (the early hooks, before DCLF's threads exist), read-only after.
+		bool rootStatesInstalled = false;
 	}
 
 	void ResolveRootStates(const Api::RootStatesContribution& a_registered)
@@ -38,6 +41,9 @@ namespace DCLF::Extensions
 		const auto& resolved = State();
 		return resolved.registered ? &resolved.entry : nullptr;
 	}
+
+	void NoteRootStatesInstalled() { rootStatesInstalled = true; }
+	bool RootStatesInstalled() { return rootStatesInstalled; }
 
 	Api::RootListView RootListOf(const TableFamilies& a_families)
 	{

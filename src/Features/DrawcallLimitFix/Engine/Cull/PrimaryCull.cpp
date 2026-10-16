@@ -1,5 +1,5 @@
 // PrimaryCull: the list jobs' stand-in (Process1, AppendVirtual; job threads), the render thread's frame around them, the cut's
-// plans and admission, the synthetic membership passes (any thread), and the fade writer's hooks.
+// plans and admission, and the synthetic membership passes (any thread).
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
@@ -25,7 +25,6 @@
 #include <Tracy/Tracy.hpp>
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 
 #include <algorithm>
 #include <ranges>
@@ -51,29 +50,15 @@ namespace DCLF
 		// The main camera: the world scene graph's (+0x128), carried by the list processes; FUN_1406452c0 (Main::Draw's camera
 		// setup, before BeginSceneFrame) sets the tree height base from it.
 		constexpr std::size_t kSceneGraphCamera = 0x128;
-		// NiAVObject / BSFadeNode fields BSFadeNode::OnVisible (AE 0x141479f50) reads before its fade update.
-		constexpr std::uint32_t kFlagFadeSettled = 1u << 15;
-		constexpr std::size_t kFadeAmount = 0x100;
-		constexpr std::size_t kCurrentFade = 0x130;
-		constexpr std::size_t kLastVisibleFrame = 0x13C;
-		constexpr std::uint32_t kFlagFadeTargetReached = 1u << 14;
 		constexpr std::size_t kCameraLodAdjust = 0x184;
-		constexpr std::uintptr_t kAnimatedFadeCallSite = 0x2d0044;  // FUN_1402cff60 (UpdateAnimationJob) -> FUN_14147a160
 		// BSTreeNode::OnVisible (AE 0x14147d3c0): the height test and the LOD fix-up.
 		constexpr std::size_t kProcessTreeHeightTest = 0x121;     // byte on the culling process
 		constexpr std::uintptr_t kTreeHeightTestOn = 0x2032fb8;   // byte
 		constexpr std::uintptr_t kTreeHeightBase = 0x332a2f0;     // float
 		constexpr std::uintptr_t kTreeHeightLimit = 0x2032fa0;    // float
 		constexpr std::size_t kTreeLodData = 0x180;               // pointer; its +0x12C count
-		// The NiNode OnVisible BSFadeNode's ends in (its children's cull), and fields the fade OnVisible detours read.
+		// The NiNode OnVisible BSFadeNode's ends in (its children's cull).
 		constexpr std::uintptr_t kNodeOnVisible = 0xd1e2c0;       // NiNode::OnVisible
-		constexpr std::size_t kNodeWorldZ = 0xEC;                 // NiAVObject::world.translate.z
-		constexpr std::size_t kProcessCameraUpdates = 0x11C;      // byte: NiCullingProcess::cameraRelatedUpdates
-		constexpr std::size_t kFadeLodType = 0x153;               // byte: the LOD type in its low nibble
-		// FUN_14147b110 (the fade value) and FUN_14147a160 (the fade update): what the fade-out distance is made of.
-		constexpr std::size_t kFadeNear = 0x128;                  // float, on the fade node
-		constexpr std::size_t kFadeFar = 0x12C;                   // float
-		constexpr std::size_t kFadeAlwaysOut = 0x109;             // byte: bit 0 fades the node out whatever its distance
 		// The camera cut: a move past any locomotion (a sprinting horse ~20 units/frame at 60 fps), or a turn past 30 degrees (a
 		// fast mouse flick ~15).
 		constexpr float kCutDistance = 256.0f;
@@ -159,31 +144,6 @@ namespace DCLF
 			return false;
 		a_out.resident = true;
 		return true;
-	}
-
-	float PrimaryCull::FadeDistanceOf(const SceneCapture::NodeRecord& a_root)
-	{
-		// From the fade node's record and the frame's captured globals, never the engine's.
-		const auto& g = FrameGlobals::Current();
-		// No fade update at all, or no distance term in the fade value (FUN_14147b110 returns 1).
-		if (!g.fadesOn || !g.fadeLodUpdates)
-			return 0.0f;
-		const std::uint32_t type = a_root.fadeType;
-		// Type 8 fades gradually even out of view (FUN_14147a160) and OnVisible's type-6 branch never fades out (ServiceFade): the
-		// engine draws either the frame it comes into view.
-		if (type == 8 || (type == 6 && g.fadeSpecialA == g.fadeSpecialB))
-			return 0.0f;
-		const float mult = g.fadeDistanceMult;
-		const float nearDistance = mult * a_root.fadeNear;
-		const float farDistance = mult * a_root.fadeFar;
-		if (!(farDistance > nearDistance))
-			return 0.0f;  // the fade value never falls below 1
-		// The fade value 1 - (x - near) / (far - near), x the scaled distance, reaches the threshold at x = limit.
-		const float limit = nearDistance + (1.0f - g.fadeOutThreshold) * (farDistance - nearDistance);
-		const float divisor = g.fadeTypeDivisors[type];
-		// x = distance * lodFactor / divisor, or distance * the default scale when the divisor is not positive.
-		const float distance = divisor > 0.0f ? limit * divisor : -(limit / g.fadeDefaultScale);
-		return std::isfinite(distance) ? distance : 0.0f;
 	}
 
 	std::uint32_t PrimaryCull::MembershipWitness(const FrameGlobals& a_g)
@@ -472,49 +432,6 @@ namespace DCLF
 		// The list jobs are queued after this returns, which orders everything above before their reads.
 		frameLive.store(true, std::memory_order_release);
 		gpuSunFrame = true;
-	}
-
-	bool PrimaryCull::NoteAnimatedFade(const void* a_node, const float* a_camera)
-	{
-		// One lookup in the writer tables (FadeWrittenByDclf's): the root's slot for the batch, and whether DCLF writes it. A node they
-		// do not list is no root of DCLF's this update (one listed later is seeded from the node, this update included).
-		bool written = false;
-		if (const auto* tables = static_cast<const SceneTables*>(fadeWriterTables.load(std::memory_order_acquire))) {
-			// Interim (Fades F2): the root list through the root states' view; F3 moves this hook into Features/Fades, reading its columns.
-			const auto roots = Extensions::RootListOf(*tables);
-			if (const auto slot = roots.Find(a_node); slot < roots.Size()) {
-				const auto& row = roots.rows[slot];
-				written = (row.bits & kFadeRootWritten) != 0;
-				animatedNodes.Push({ a_node, slot, row.generation });
-			}
-		}
-		// FUN_14147a160's inputs: the camera FUN_1402cff60 passes (world root camera's position, lodAdjust) and the fade globals;
-		// the same for every call of one animation update.
-		if (!a_camera)
-			return written;
-		const AnimatedFadeInputs inputs{ { a_camera[0], a_camera[1], a_camera[2] }, a_camera[3], Global<std::int32_t>(Engine::Address::kFadeFrameCounter), Global<float>(Engine::Address::kFadeStepTime), 1u };
-		std::uint32_t state = animatedState.load(std::memory_order_acquire);
-		if (state == kAnimatedEmpty && animatedState.compare_exchange_strong(state, kAnimatedWriting, std::memory_order_acquire)) {
-			animatedInputs = inputs;
-			animatedState.store(kAnimatedPublished, std::memory_order_release);
-			return written;
-		}
-		if (state == kAnimatedPublished) {
-			if (std::memcmp(&inputs, &animatedInputs, offsetof(AnimatedFadeInputs, valid)) != 0)
-				animatedVaried.store(1, std::memory_order_relaxed);
-			return written;
-		}
-		// Claimed, not yet published: compared once the jobs are done.
-		animatedUnpublished.Push(inputs);
-		return written;
-	}
-
-	void PrimaryCull::TakeAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs)
-	{
-		// Render thread, as AfterListJobs, which made the batch.
-		a_roots.swap(animatedBatch);
-		animatedBatch.clear();
-		a_inputs = std::exchange(batchInputs, {});
 	}
 
 	bool PrimaryCull::Owned(const RE::BSGeometry& a_geometry) const
@@ -1014,32 +931,11 @@ namespace DCLF
 		// Roots no longer stood in are left to the engine's cull this frame.
 		IndirectDraws::Get().WriteAccumulated(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); });
 		// The stand-in observers (the tree manager's loop, later in this Main::Update, takes the stood-in trees' visibility from those
-		// writes); the fade writers' last (WriteFadeWriters).
+		// writes); Features/Fades' fade writers last.
 		Extensions::StandInUpdateEntry(a_running);
 		Diagnostics::Notify(Diagnostics::UpdateEntry{ a_running });
 		// The stand-in observers' late point, after the writes (Features/Actors: the high actors' animation stamp from DCLF's shadow views).
 		Extensions::StandInAfterWrites(a_running);
-	}
-
-	void PrimaryCull::WriteFadeWriters(bool a_running)
-	{
-		// The fade write-back on every root the accepted tables list with kFadeRootWritten, published first as the set the gate
-		// and fade OnVisibles skip.
-		PublishWriterTables(a_running);
-		IndirectDraws::Get().WriteFadeStores(a_running, [this](const void* a_root) { return FadeWrittenByDclf(a_root); });
-	}
-
-	PrimaryCull::FadeWriterCounts PrimaryCull::TakeFadeWriterCounts()
-	{
-		FadeWriterCounts c;
-		c.onVisibleSkipped = onVisibleFadeSkipped.exchange(0, std::memory_order_relaxed);
-		c.gateSkipped = gateFadeSkipped.exchange(0, std::memory_order_relaxed);
-		const auto* tables = static_cast<const SceneTables*>(fadeWriterTables.load(std::memory_order_acquire));
-		if (tables) {
-			const auto roots = Extensions::RootListOf(*tables);
-			c.roots = roots.index ? roots.index->size() : 0;
-		}
-		return c;
 	}
 
 	std::uint64_t PrimaryCull::MemberSignature(std::uint32_t a_e) const
@@ -1153,28 +1049,9 @@ namespace DCLF
 		return true;
 	}
 
-	void PrimaryCull::DrainAnimatedFades()
-	{
-		// The animation job runs between two culls, so its updates are complete now: its queued nodes and published inputs become
-		// the batch, and the record is free for the next update.
-		animatedBatch.clear();
-		animatedNodes.Drain([&](AnimatedFadeRoot&& a_root) { animatedBatch.push_back(a_root); });
-		batchInputs = {};
-		if (animatedState.load(std::memory_order_acquire) == kAnimatedPublished) {
-			batchInputs = animatedInputs;
-			batchInputs.varied = animatedVaried.load(std::memory_order_relaxed);
-		}
-		animatedUnpublished.Drain([&](AnimatedFadeInputs&& a_inputs) {
-			if (batchInputs.valid && std::memcmp(&a_inputs, &batchInputs, offsetof(AnimatedFadeInputs, valid)) != 0)
-				batchInputs.varied = 1;
-		});
-		animatedVaried.store(0, std::memory_order_relaxed);
-		animatedState.store(kAnimatedEmpty, std::memory_order_release);
-	}
-
 	void PrimaryCull::AfterListJobs()
 	{
-		// The stand-in observers' list jobs point (the animated fades' batch: DrainAnimatedFades).
+		// The stand-in observers' list jobs point (Features/Fades: the animated fades' batch).
 		Extensions::StandInListJobsDone();
 		Diagnostics::Notify<Diagnostics::EnginePoint::ListJobsDone>();
 		if (!frameLive.exchange(false, std::memory_order_acq_rel))
@@ -1332,26 +1209,6 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		/**
-		 * @brief FUN_1402cff60's call of FUN_14147a160: the animation job updates an animated reference's fade node the cull did not
-		 * reach (kAccumulated clear), from the main camera.
-		 */
-		struct AnimatedFade
-		{
-			static void thunk(void* a_node, float a_amount, const float* a_camera)
-			{
-				auto& cull = PrimaryCull::Get();
-				// FadeStateCS makes the same update on the GPU (the animated batch), for every root.
-				// One writer: the root keeps the write-back's state; the gate reads its currentFade.
-				if (cull.NoteAnimatedFade(a_node, a_camera)) {
-					cull.gateFadeSkipped.fetch_add(1, std::memory_order_relaxed);
-					return;
-				}
-				func(a_node, a_amount, a_camera);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
 		/** @brief CalculateAndDrawShadowCasterLights' call of FUN_1414a0840, right after the full-frustum cull. */
 		struct AfterFullFrustum
 		{
@@ -1381,106 +1238,6 @@ namespace DCLF
 		};
 	};
 
-	namespace
-	{
-		/**
-		 * @brief BSFadeNode::OnVisible (AE 0x141479f50) without its stores, for a root DCLF writes. Control flow kept (fades off, or
-		 * settled with kIgnoreFade at fade and amount 1: children; camera updates with a LOD-type-6 node in its special state:
-		 * children; faded out or zero amount: none), but the fade update (FUN_14147a160 or the type-6 step) and +0x13C are skipped.
-		 */
-		void WrittenFadeOnVisible(void* a_node, RE::NiCullingProcess* a_process, std::int32_t a_arg)
-		{
-			using NodeOnVisible = void (*)(void*, RE::NiCullingProcess*, std::int32_t);
-			static const auto children = reinterpret_cast<NodeOnVisible>(REL::Module::get().base() + kNodeOnVisible);
-			const float one = Global<float>(Engine::Address::kFloatOne);
-			const float amount = At<float>(a_node, kFadeAmount);
-			const bool settled = (At<std::uint32_t>(a_node, kObjectFlags) & kFlagFadeSettled) && amount == one && At<float>(a_node, kCurrentFade) == one;
-			if (!Global<std::uint8_t>(Engine::Address::kFadesOn) || settled) {
-				children(a_node, a_process, a_arg);
-				return;
-			}
-			if (At<std::uint8_t>(a_process, kProcessCameraUpdates) && (At<std::uint8_t>(a_node, kFadeLodType) & 0xF) == 6 &&
-				!(Global<float>(Engine::Address::kFadeSpecialA) != Global<float>(Engine::Address::kFadeSpecialB))) {
-				children(a_node, a_process, a_arg);
-				return;
-			}
-			if (At<float>(a_node, kCurrentFade) <= 0.0f || amount == 0.0f)
-				return;
-			children(a_node, a_process, a_arg);
-		}
-
-		struct FadeOnVisible
-		{
-			static void thunk(void* a_node, RE::NiCullingProcess* a_process, std::int32_t a_arg)
-			{
-				auto& cull = PrimaryCull::Get();
-				if (!cull.FadeWrittenByDclf(a_node)) {
-					func(a_node, a_process, a_arg);
-					return;
-				}
-				cull.NoteOnVisibleFadeSkipped();
-				WrittenFadeOnVisible(a_node, a_process, a_arg);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		/** @brief BSLeafAnimNode::OnVisible (AE 0x14147c9c0): for a root DCLF writes, its leaf LOD step and +0x13C store skipped. */
-		struct LeafOnVisible
-		{
-			static void thunk(void* a_node, RE::NiCullingProcess* a_process, std::int32_t a_arg)
-			{
-				auto& cull = PrimaryCull::Get();
-				if (!cull.FadeWrittenByDclf(a_node)) {
-					func(a_node, a_process, a_arg);
-					return;
-				}
-				cull.NoteOnVisibleFadeSkipped();
-				WrittenFadeOnVisible(a_node, a_process, a_arg);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		/**
-		 * @brief BSTreeNode::OnVisible (AE 0x14147d3c0): for a root DCLF writes, the engine's height test kept (a tree above the limit is
-		 * not visited), BSLeafAnimNode's without its stores, and the LOD fix-up's stores (+0x153, +0x14C) skipped.
-		 */
-		struct TreeOnVisible
-		{
-			static void thunk(void* a_node, RE::NiCullingProcess* a_process, std::int32_t a_arg)
-			{
-				auto& cull = PrimaryCull::Get();
-				if (!cull.FadeWrittenByDclf(a_node)) {
-					func(a_node, a_process, a_arg);
-					return;
-				}
-				cull.NoteOnVisibleFadeSkipped();
-				if (At<std::uint8_t>(a_process, kProcessTreeHeightTest) && Global<std::uint8_t>(kTreeHeightTestOn) &&
-					At<float>(a_node, kNodeWorldZ) - Global<float>(kTreeHeightBase) > Global<float>(kTreeHeightLimit))
-					return;
-				WrittenFadeOnVisible(a_node, a_process, a_arg);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-	}
-
-	bool PrimaryCull::WrittenByTables(const void* a_tables, const void* a_node)
-	{
-		const auto& tables = *static_cast<const SceneTables*>(a_tables);
-		const auto roots = Extensions::RootListOf(tables);
-		const auto slot = roots.Find(a_node);
-		return slot < roots.Size() && (roots.rows[slot].bits & kFadeRootWritten);
-	}
-
-	void PrimaryCull::PublishWriterTables(bool a_running)
-	{
-		// The replaced tables are released after publication: the last cycle was waited for, so no OnVisible or gate reads them.
-		std::shared_ptr<const void> tables;
-		if (a_running)
-			tables = Scene::FrameView::Get().AcceptedTables();
-		fadeWriterTables.store(tables.get(), std::memory_order_release);
-		fadeWriterTablesHeld = std::move(tables);
-	}
-
 	void PrimaryCull::Install()
 	{
 		if (installed)
@@ -1488,8 +1245,10 @@ namespace DCLF
 		const auto base = REL::Module::get().base();
 		const auto afterFullFrustum = base + kAfterFullFrustumCallSite;
 		const auto finish = base + kListJobsFinishCallSite;
-		// The main walk's hook (Api::MainCullInputContribution: Features/Portals' early hooks) is in, or nothing would build its programs.
-		if (!CallsTo(afterFullFrustum, base + kAfterFullFrustum) || !CallsTo(finish, base + Engine::Address::kListJobsFinish) || !Extensions::MainWalkInstalled()) {
+		// The main walk's hook (Api::MainCullInputContribution: Features/Portals' early hooks) is in, or nothing would build its programs;
+		// and the root states' (Api::RootStatesContribution: Features/Fades' early hooks), or nothing would list the roots it stands in for.
+		if (!CallsTo(afterFullFrustum, base + kAfterFullFrustum) || !CallsTo(finish, base + Engine::Address::kListJobsFinish) || !Extensions::MainWalkInstalled() ||
+			!Extensions::RootStatesInstalled()) {
 			logger::warn("[DCLF] primary cull: the calls are not where expected; the engine keeps the primary's cull");
 			return;
 		}
@@ -1501,21 +1260,13 @@ namespace DCLF
 		}
 		stl::write_thunk_call<Hooks::AfterFullFrustum>(afterFullFrustum);
 		stl::write_thunk_call<Hooks::ListJobsFinish>(finish);
-		if (CallsTo(base + kAnimatedFadeCallSite, base + Engine::Address::kFadeUpdate))
-			stl::write_thunk_call<Hooks::AnimatedFade>(base + kAnimatedFadeCallSite);
-		else
-			logger::warn("[DCLF] primary cull: the animation job's fade update is not where expected");
 		stl::write_vfunc<0x16, Hooks::Process1>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		stl::write_vfunc<0x18, Hooks::AppendVirtual>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		InstallSceneLists();
-		// The stand-in observers' engine hooks go in with the features' install (Api::InstallContext::RegisterStandInObserver).
+		// The stand-in observers' engine hooks go in with the features' install (Api::InstallContext::RegisterStandInObserver: Features/Fades'
+		// animation job's fade update and fade OnVisibles too).
 		Extensions::NoteStandInInstalled();
 		Diagnostics::Notify<Diagnostics::EnginePoint::PrimaryCullInstalled>();
-		// Fade OnVisibles leave DCLF-written roots alone (detours, not vtable slots, so subclass tables and FadeState::PlanOf keep
-		// the engine's addresses).
-		stl::detour_thunk<FadeOnVisible>(base + Engine::Address::kFadeOnVisible);
-		stl::detour_thunk<LeafOnVisible>(base + Engine::Address::kLeafOnVisible);
-		stl::detour_thunk<TreeOnVisible>(base + Engine::Address::kTreeOnVisible);
 		REL::Relocation<std::uintptr_t> triShape{ RE::VTABLE_BSTriShape[0] };
 		geometryOnVisible = reinterpret_cast<const std::uintptr_t*>(triShape.address())[0x34];
 		// The OnVisibles PlanOf stands for, from the classes' vtables. A slot may hold a hook ending in the engine's function

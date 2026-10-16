@@ -348,7 +348,7 @@ namespace DCLF
 	/**
 	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; drawcall-limit-fix.md, "Fades on the GPU"). A member's fade node is a root:
 	 * a FadeRootStatic row (CPU, when listed) and a FadeNodeState row (GPU, reseeded from `initial` on a new generation). The pass
-	 * runs the node's OnVisible for the main camera whenever its bound is in view (C++ port: Scene/Ports/FadeState.h).
+	 * runs the node's OnVisible for the main camera whenever its bound is in view (C++ port: Features/Fades/FadeState.h).
 	 * FadeNodeState holds BSFadeNode's own fields (skyrim-engine-notes.md, "Fade state").
 	 */
 	struct FadeNodeState
@@ -409,7 +409,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeRootPreprocessHidden = 1u << 22;
 	// An owned root with no engine-drawn part, culled by the stand-in: its state is FadeStateCS's alone and its node takes the
 	// GPU's milestones and LOD levels from the fade write-back (FadeEvent; the animation gate skips it,
-	// PrimaryCull::FadeWrittenByDclf). DCLF's readers take the GPU's state (BuildDrawsCS) or the settled one (ShadowCasterReject,
+	// Features/Fades' FadeWrittenByDclf). DCLF's readers take the GPU's state (BuildDrawsCS) or the settled one (ShadowCasterReject,
 	// the synthetic pass). An owned root with engine-drawn parts is culled by the engine; FadeStateCS runs the same update for its
 	// DCLF members (CS_DCLF_FADE_PARITY compares).
 	inline constexpr std::uint32_t kFadeRootStoodIn = 1u << 19;
@@ -418,7 +418,7 @@ namespace DCLF
 	// and reseed toggles it, so a new seed never overwrites the row the installed tables' generation still reads.
 	inline constexpr std::uint32_t kFadeRootSeedOdd = 1u << 23;
 	// The node is DCLF's alone to write (the write-back stores FadeStateCS's milestones at Main::Update's entry; neither OnVisible
-	// nor the animation gate steps it). Every listed root; PrimaryCull::FadeWrittenByDclf reads it from the accepted tables.
+	// nor the animation gate steps it). Every listed root; Features/Fades' FadeWrittenByDclf reads it from the accepted tables.
 	inline constexpr std::uint32_t kFadeRootWritten = 1u << 24;
 	// The bits the seed holds (the node's, as FrameValues samples it in the frame) and those the coordinator's row holds (its inputs).
 	inline constexpr std::uint32_t kFadeRootNodeBits = kFadeRootPlanMask | (0xFFu << kFadeRootBitsShift) | kFadeRootTreeThresholds | kFadeRootAlwaysDraw |
@@ -498,47 +498,6 @@ namespace DCLF
 		return (a_frame << kFadeAnimatedCountBits) | (a_count < kFadeAnimatedCountMask ? a_count : kFadeAnimatedCountMask);
 	}
 	static_assert(sizeof(FadeFrame) == 240);
-	/** @brief One animation update's inputs, as PrimaryCull records them (FadeFrame anim*). */
-	struct AnimatedFadeInputs
-	{
-		float eye[3]{};
-		float lodAdjust = 0.0f;
-		std::int32_t counter = 0;
-		float deltaTime = 0.0f;
-		std::uint32_t valid = 0;
-		std::uint32_t varied = 0;  // a later update of the batch had other inputs (the first's stand for all)
-	};
-
-	/** @brief CS_DCLF_FADE_PARITY: one root's update as FadeStateCS made it, for the C++ port to make again. */
-	struct FadeLogEntry
-	{
-		FadeNodeState before;
-		FadeNodeState after;
-		float centre[3]{};
-		std::uint32_t root = ~0u;
-	};
-	static_assert(sizeof(FadeLogEntry) == 112);
-	inline constexpr std::uint32_t kFadeLogEntries = 64;
-
-	/**
-	 * @brief The fade write-back (drawcall-limit-fix.md, "The fade write-back"): a stood-in root whose fade crossed a milestone
-	 * (faded out, fading, faded in) or whose leaf LOD level or transition changed. Appended after a header (count, the depth
-	 * commit's scene frame - always written - and two of padding); the host writes them onto the nodes in frame order.
-	 */
-	struct FadeEvent
-	{
-		std::uint32_t root = 0;        // the root slot
-		std::uint32_t generation = 0;  // its static row's: a slot listed again since is not the event's
-		std::uint32_t flags = 0;       // the state's (kFadeFlagMask)
-		float currentFade = 0.0f;
-		std::uint32_t levels = 0;      // the state's +0x152 | +0x153 << 8 (FadeNodeState::levels)
-		float blend = 0.0f;            // +0x14C, the LOD cross-fade
-		std::uint32_t padding[2]{};
-	};
-	static_assert(sizeof(FadeEvent) == 32);
-	inline constexpr std::uint32_t kFadeEventWords = sizeof(FadeEvent) / sizeof(std::uint32_t);
-	inline constexpr std::uint32_t kFadeEventHeaderWords = 4;
-	inline constexpr std::uint32_t kInitialFadeEvents = 1024;
 
 	/**
 	 * @brief One indirect draw, in the command signature's argument order (BasicRHI packs arguments like D3D12, 4-byte aligned):

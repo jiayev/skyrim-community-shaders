@@ -17,6 +17,7 @@ namespace DCLF::Api
 	class SceneResourcesRequirements;
 	class SceneResourcesFit;
 	class SceneResourcesLatch;
+	class SceneResourcesSealed;
 
 	/** @brief Registered scene resources (RegisterSceneResources' result): Extensions::SceneResourcesOf finds their state by it. */
 	struct SceneResourcesId
@@ -45,9 +46,12 @@ namespace DCLF::Api
 	 * - latched (optional): render thread, where the main view's latched targets are listed (MainLatchedTargets: the graph's build) and
 	 *   the depth shape's latch is laid out (MainLatchedLayout): the buffers the depth commit latches (CommitContext::latched), each with
 	 *   its bytes from offset 0, after the frame buffers' and before the draw count's.
+	 * - sealed (optional): the snapshot builder, once a revision's set is sealed (Impl::MakeRevision), before any shape of it, in the
+	 *   same order: what the feature keeps by the versions the set names (Features/Fades: its event list's host staging for the capacity
+	 *   the set names, HostEventRing::AddSet).
 	 *
-	 * The state is the render thread's (its commits: Api/Commits.h), but for what registerGraph, require and fit read: the handles setup
-	 * made, never replaced.
+	 * The state is the render thread's (its commits: Api/Commits.h), but for what registerGraph, require, fit and sealed read: the handles
+	 * setup made, never replaced.
 	 */
 	struct SceneResources
 	{
@@ -59,5 +63,6 @@ namespace DCLF::Api
 		void (*postInputs)(std::span<std::uint32_t> a_words) = nullptr;
 		std::uint32_t inputWords = 0;
 		void (*latched)(SceneResourcesLatch& a_latch) = nullptr;
+		void (*sealed)(const SceneResourcesSealed& a_sealed) = nullptr;
 	};
 }

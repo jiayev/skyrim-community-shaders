@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
-
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -18,15 +16,10 @@ namespace DCLF::Diagnostics::CutObservers
 	 *     walk's decision (Cut::walk) leaves alone;
 	 *   - <- LIGHT MASKS: the owned members in view whose activeLightMask is not 0 after the registration jobs;
 	 *   - <- LIST FILTER: on the frames the engine builds its scene lists whole (Policy::FilterSceneLists), the roots the filter would
-	 *     have left out must be ones the stand-in does nothing for (the dry run), and the engine's lists must hold DCLF's enumeration;
-	 * - CS_DCLF_FADE_PARITY:
-	 *   - <- FADE PORT: every 30th frame, up to 64 fade roots, the port against the engine's functions on node copies;
-	 *   - the fade roots' nodes at the list jobs' end every 30th frame, for the fade state's comparison (NodeSnapshot).
+	 *     have left out must be ones the stand-in does nothing for (the dry run), and the engine's lists must hold DCLF's enumeration.
+	 * (CS_DCLF_FADE_PARITY's port check and node snapshot are Features/Fades/Diagnostics'.)
 	 */
-	void Install(bool a_scene, bool a_fade);
-
-	/** @brief The fade roots' nodes as the list jobs left them in a_frame (null: not taken that frame). */
-	const std::vector<FadeNodeState>* NodeSnapshot(std::uint32_t a_frame);
+	void Install(bool a_scene);
 
 	/** @brief The observers' counts since the last Take (render thread, the report). */
 	struct Counts
@@ -43,7 +36,6 @@ namespace DCLF::Diagnostics::CutObservers
 		// The kept lists against a rebuild's (KeptSceneListsBuilt): missing, a root a rebuild lists; extra, one it does not.
 		std::uint64_t keptChecks = 0, keptMissing = 0, keptExtra = 0;
 		std::string keptFirst;
-		FadeState::PortCheck fadePort;
 	};
 	Counts Take();
 }

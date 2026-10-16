@@ -1,12 +1,13 @@
-// Next frame's cull state in the depth epoch: Core's fade roots' GPU stages at Api::GpuStageSlot::DepthSegmentCullState (the fade
-// states, on the compute queue beside the epoch's raster work, then their write-back events' copy to the host; Features/Fades' in F3).
+// Fades' GPU stages at Api::GpuStageSlot::DepthSegmentCullState: the fade roots' states for the next frame's cull (FadeStateCS), on the
+// compute queue beside the depth epoch's raster work, then their write-back events' copy to the host.
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"  // MakeEventReadbackPass
 
 namespace DCLF::Draws
 {
+	// In DCLF::Draws, where they were defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 	struct FadeStateBindings
 	{
 		org::DeclaredViewToken roots, states, frame, log, programs, rootPrograms, animated, events, reported;
@@ -26,7 +27,7 @@ namespace DCLF::Draws
 	{
 	public:
 		explicit FadeStatePass(std::shared_ptr<Resources> a_resources) :
-			resources(std::move(a_resources)), fades(SharedFadeSceneOf(*resources->scene)) {}
+			resources(std::move(a_resources)), fades(Features::Fades::SharedSceneOf(*resources->scene)) {}
 
 		FadeStateBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -118,20 +119,18 @@ namespace DCLF::Draws
 
 	private:
 		std::shared_ptr<Resources> resources;
-		std::shared_ptr<const FadeScene> fades;  // Core's fade roots' scene resources (the stage's setup required them)
+		std::shared_ptr<const Features::Fades::FadeScene> fades;  // Fades' scene resources (the stage's setup required them)
 	};
+}
 
-	std::shared_ptr<org::RenderPass> MakeFadeStatePass(std::shared_ptr<Resources> a_resources)
-	{
-		return std::make_shared<FadeStatePass>(std::move(a_resources));
-	}
-
+namespace DCLF::Features::Fades
+{
 	namespace
 	{
 		// The scene's GPU setup: the fade roots' scene resources when they made the program (else out of the graph).
 		std::shared_ptr<const void> SetUpFadeState(const Api::GpuStageSetup& a_setup)
 		{
-			auto fades = SharedFadeSceneOf(a_setup.scene);
+			auto fades = SharedSceneOf(a_setup.scene);
 			if (!fades || !fades->fadeState || !fades->fadeRoots)
 				return nullptr;
 			return fades;
@@ -139,13 +138,13 @@ namespace DCLF::Draws
 
 		std::shared_ptr<org::RenderPass> MakeFadeStateStage(const Api::GpuStageContext& a_context)
 		{
-			return MakeFadeStatePass(a_context.resources);
+			return std::make_shared<Draws::FadeStatePass>(a_context.resources);
 		}
 
 		// Its write-back events' copy: only with the list and its staging sets.
 		std::shared_ptr<const void> SetUpFadeEvents(const Api::GpuStageSetup& a_setup)
 		{
-			auto fades = SharedFadeSceneOf(a_setup.scene);
+			auto fades = SharedSceneOf(a_setup.scene);
 			if (!fades || !fades->fadeState || !fades->fadeRoots || !fades->fadeEvents || !fades->fadeWriteBack)
 				return nullptr;
 			return fades;
@@ -154,11 +153,11 @@ namespace DCLF::Draws
 		std::shared_ptr<org::RenderPass> MakeFadeEventsStage(const Api::GpuStageContext& a_context)
 		{
 			const auto fades = a_context.State<FadeScene>();
-			return MakeEventReadbackPass(a_context.resources->scene, fades->fadeEvents, fades->fadeWriteBack);
+			return Draws::MakeEventReadbackPass(a_context.resources->scene, fades->fadeEvents, fades->fadeWriteBack);
 		}
 	}
 
-	void RegisterFadeStages(Api::InstallContext& a_context)
+	void RegisterStages(Api::InstallContext& a_context)
 	{
 		// Fade roots' state for the next frame's culling, beside the depth epoch's raster work; then its write-back events, to the host.
 		a_context.RegisterGpuStage({ .passName = "cs.dclf.z.fade-state", .slot = Api::GpuStageSlot::DepthSegmentCullState, .queue = Api::GpuQueue::Compute,

@@ -446,8 +446,8 @@ namespace DCLF::Scene
 		// The property's fade node, for the fade-root owners and the components' (an attach's capture pins every ancestor).
 		const auto* property = record->property ? mirror.Property(record->property) : nullptr;
 		keys.fadeNode = property ? property->fadeNode : nullptr;
-		// The engine's "no fade node" sentinel is no root.
-		static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
+		// The engine's "no fade node" sentinel is no root (Features/Fades' switch, default on: read by name, as the fade roots read it).
+		static const bool emptyIsNone = RegisteredSwitchValue("CS_DCLF_EMPTY_FADE_NODE") != "0";
 		if (emptyIsNone && keys.fadeNode == Engine::EmptyFadeNode())
 			keys.fadeNode = nullptr;
 		keys.propertyPin = PinOf(keys.property);

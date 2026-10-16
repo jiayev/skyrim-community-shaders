@@ -49,7 +49,7 @@ already do (`DrawPipelines::ReadEngineState`).
 
 ## Stood-in animated references that never fade freeze (found by T7b0, 2026-10-11; fixed by T7b2, pending validation)
 
-`SyncFadeOwnership` (`Engine/Cull/PrimaryCull.cpp` ~773-790) clears kAccumulated (bit 26) on the roots DCLF stands in for, and nothing
+`SyncRootOwnership` (formerly `SyncFadeOwnership`; `Engine/Cull/PrimaryCull.cpp` ~828) clears kAccumulated (bit 26) on the roots DCLF stands in for, and nothing
 sets it again while they are stood in. `FUN_1402cff60` (`UpdateAnimationJob`'s and the managed nodes' gate, on `ref->Get3D()`)
 then takes its "not accumulated" path (`skyrim-engine-notes.md`, "T7b0"):
 
@@ -83,7 +83,7 @@ validate: the `tree animation list` line's "loops given DCLF's verdicts" > 0 whe
 
 ## The fade write-back reads its events only on frames that record a revision (found by T7b1, 2026-10-11; fixed by T7b6, pending validation)
 
-`FadeEventReadbackPass` (`Core/Render/Passes/Readbacks.cpp`) reads its buffer in `Record`. The depth epoch is revision-driven
+`FadeEventReadbackPass` (now the generic `MakeEventReadbackPass`, `Core/Render/Passes/Readbacks.cpp`, made by Features/Fades' `cs.dclf.z.fade-events` stage, `Features/Fades/FadeStage.cpp`) read its buffer in `Record`. The depth epoch is revision-driven
 (each ring slot recorded once per revision and replayed: `extern/OpenRenderGraph/docs/persistent-epochs.md`), so on replayed frames
 no fade events are read back and the write-back sees only the recording frames' events (T7b1's visibility readback had the same
 flaw: 59 of 300 frames in motion, none in interiors). Fix: T7b6, the fade events moved onto the visibility readback's scheme (a

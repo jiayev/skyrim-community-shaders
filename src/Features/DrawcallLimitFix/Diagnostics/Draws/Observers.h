@@ -13,7 +13,6 @@ namespace DCLF::Diagnostics
 	struct FadeInputsVaried;
 	struct ShortBuffersDrawn;
 	struct MainCullingSetup;
-	struct FadeLogWindow;
 	struct ExtrasSending;
 	struct ExtrasSent;
 	template <class Store>
@@ -45,9 +44,6 @@ namespace DCLF::Diagnostics
 	void LogCullingSetup(const MainCullingSetup& a_setup);
 	// CS_DCLF_BUILD_PARITY (BuildParity.cpp).
 	void CheckBuildParity(const MainEpochDone& a_epoch);
-	// CS_DCLF_FADE_PARITY (FadeLog.cpp).
-	void NextFadeLog(const FadeLogWindow& a_window);
-	void ReadFadeLog(const MainEpochDone& a_epoch);
 	// CS_DCLF_SET_PARITY (SetParity.cpp).
 	void CheckSetParity(const MainEpochDone& a_epoch);
 	// CS_DCLF_PERSISTENT_PARITY: the frame values' rows and palettes against the engine's (FrameValuesParity.cpp; render thread, waits for

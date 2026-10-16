@@ -3,7 +3,7 @@
 // The engine updates a BSFadeNode's fade and LOD state in its OnVisible, for the main camera's cull, whenever the node's bound
 // passes the cull's frustum test. This pass does the same for every fade root a DCLF member draws under, from the depth
 // segment's view-projection: one thread per root slot. A state row whose generation is not its static row's is new (a listed
-// node) and starts from the node's values. The update is Scene/Ports/FadeState.cpp's port of the engine's functions, instruction
+// node) and starts from the node's values. The update is Features/Fades/FadeState.cpp's port of the engine's functions, instruction
 // for instruction; keep the two the same.
 //
 // A frame ahead, on the compute queue in the Z-prepass epoch: the state rows are this pass's alone, and every root's state
@@ -12,7 +12,7 @@
 
 #include "DrawcallLimitFix/PortalPrograms.hlsli"
 
-// Must match FadeStateConstants (Draws/IndirectDraws/Core/GpuLayouts.h).
+// Must match FadeStateConstants (Features/Fades/FadeLayout.h).
 cbuffer FadeStateConstants : register(b0)
 {
 	uint RootsIndex;    // StructuredBuffer<FadeRootStatic>
@@ -26,13 +26,14 @@ cbuffer FadeStateConstants : register(b0)
 	uint ProgramsIndex;      // ByteAddressBuffer: the main camera's portal programs (Records.h, kPortal*; PortalPrograms.hlsli)
 	uint RootProgramsIndex;  // StructuredBuffer<uint>: each root's program (its room's; kPortalNoProgram: the frustum alone)
 	uint AnimatedIndex;    // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
-	uint EventsIndex;      // RWStructuredBuffer<uint>: the write-back's events, after a count word (Records.h, FadeEvent)
+	uint EventsIndex;      // RWStructuredBuffer<uint>: the write-back's events, after a count word (FadeRecords.h, FadeEvent)
 	uint ReportedIndex;    // RWStructuredBuffer<uint2>: per root, the generation and the milestone last reported
 	uint EventCapacity;    // the events the list holds (and every readback of it)
 	uint Padding3;
 }
 
-// FadeNodeState, FadeRootStatic, FadeFrame and FadeLogEntry must match Records.h's (and VisibilityEventsCS.hlsl's copies).
+// FadeNodeState, FadeRootStatic and FadeFrame must match Records.h's (and VisibilityEventsCS.hlsl's copies), FadeLogEntry
+// Features/Fades/FadeRecords.h's.
 struct FadeNodeState
 {
 	uint Flags;
@@ -144,7 +145,7 @@ static const uint kObjectFadeNodeRow = 8;
 static const uint kNoObject = 0xFFFFFFFFu;
 static const uint kFadeRootStoodIn = 1u << 19;
 static const uint kFadeEventHeaderWords = 4;
-static const uint kFadeEventWords = 8;  // Records.h, FadeEvent
+static const uint kFadeEventWords = 8;  // Features/Fades/FadeRecords.h, FadeEvent
 
 static FadeFrame F;
 

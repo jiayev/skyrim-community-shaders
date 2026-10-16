@@ -105,7 +105,7 @@ namespace DCLF
 		// No shading (MaterialData, EmitColor, SSRParams.w, emissive multiplier, wetness): FrameValues' rows (BindlessShading),
 		// sampled at frame start for the slots the walk names (ShadingItem).
 		std::vector<ObjectAncestorValue> ancestorValue;       // parallel to objects
-		// The features' table families (Api::TableFamily; Features/TreeWind's trees, the fade roots: Scene/Coordinator/FadeRoots.h): their
+		// The features' table families (Api::TableFamily; Features/TreeWind's trees, the fade roots: Features/Fades/FadeRoots.h): their
 		// columns, stamps, the objects' references into them and their rows' tags. Published with the rest: a family is copied only when its
 		// stamp moved.
 		Extensions::TableFamilies families;

@@ -13,8 +13,11 @@ namespace DCLF::Reports
 	/** @brief Render thread, Present (Reports::RenderThread): the primary cull's lines, with the scene lists', the culls off, the tree list's and the point lights' culls. */
 	void PrimaryCullLines(std::uint32_t a_frame);
 
-	/** @brief The fade writers' line (newline-terminated); empty while nothing was skipped. */
-	std::string FadeWritersLine();
+	/**
+	 * @brief Render thread, inside PrimaryCullLines (its report points' lines): the entries with engine-drawn parts the engine's culls took
+	 * a frame, over the window the primary cull's lines just took (the cut's counters; Features/Fades' fade roots line prints it).
+	 */
+	double CutMixedPerFrame();
 
 	/** @brief The engine-read window's closes, waits and refused leases; empty while nothing happened. */
 	std::string EngineReadWindowLine();

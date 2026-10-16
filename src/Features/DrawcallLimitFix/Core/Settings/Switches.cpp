@@ -72,8 +72,7 @@ namespace DCLF
 			// (Features/TreeWind's CS_DCLF_TREE_LIST_ALL, then Features/Effects' CS_DCLF_OPAQUE_EFFECTS, are listed here, after
 			// CS_DCLF_PRIMARY_EXCLUDE: Features/OcclusionMaps' CS_DCLF_SKYLIGHT and CS_DCLF_PRECIPITATION, Features/Reflection's and
 			// Features/FirstPerson's switches before CS_DCLF_OPAQUE_EFFECTS, Features/Billboards' CS_DCLF_BILLBOARD_PARTICLES after it.)
-			{ EmptyFadeNode, "CS_DCLF_EMPTY_FADE_NODE", F, Reduced::Zero, false,
-				"default on (T7f item 7): the engine's empty fade node (the BSFadeNode 0x14332a2a0 holds, which every BSShaderProperty starts with and the engine reads as none) is no fade root: such geometry (terrain, object LOD, some clutter) takes its entry's root; 0: it is listed as one fade root of all of them, outside the scene graph" },
+			// (Features/Fades' CS_DCLF_EMPTY_FADE_NODE is listed here, before CS_ORG_EPOCHS.)
 			{ OrgEpochs, "CS_ORG_EPOCHS", F, Reduced::Zero, true, "0: the render graph runs without epochs, and DCLF does not install" },
 			{ OrgAsyncEpochs, "CS_ORG_ASYNC_EPOCHS", F, Reduced::Zero, true, "0: epochs are recorded on the render thread" },
 			{ OrgClosed, "CS_ORG_CLOSED", F, Reduced::Zero, true, "0: epochs do not return their resources to their home states" },
@@ -84,7 +83,7 @@ namespace DCLF
 			{ WalkParity, "CS_DCLF_WALK_PARITY", P, N, false, "1: the delta walk against a dense walk, every 60 frames" },
 			{ ChangeLogParity, "CS_DCLF_CHANGE_LOG_PARITY", P, N, false, "1: the change log against a diff of the tables" },
 			{ ResidentParity, "CS_DCLF_RESIDENT_PARITY", P, N, false, "1: resident records against the engine's registrations" },
-			{ FadeParity, "CS_DCLF_FADE_PARITY", P, N, false, "1: the fade port against the engine's functions, and FadeStateCS against the port" },
+			// (Features/Fades' CS_DCLF_FADE_PARITY is listed here, after CS_DCLF_RESIDENT_PARITY.)
 			{ BuildParity, "CS_DCLF_BUILD_PARITY", P, N, false, "1: the build cache against a fresh build" },
 			{ SetParity, "CS_DCLF_SET_PARITY", P, N, false, "1: the per-object visibility words read back after the colour epoch against the CPU's decisions" },
 			{ MirrorParity, "CS_DCLF_MIRROR_PARITY", P, N, false, "1: the scene mirror against the live objects, a slice of the tracked set a frame (step 6e F3)" },
@@ -318,6 +317,15 @@ namespace DCLF
 	{
 		const auto& registered = RegisteredSwitches();
 		return a_switch.index < registered.size() && registered[a_switch.index].enabled;
+	}
+
+	const std::string& RegisteredSwitchValue(std::string_view a_name)
+	{
+		static const std::string kUnset;
+		for (const auto& entry : RegisteredSwitches())
+			if (entry.name == a_name)
+				return entry.value;
+		return kUnset;
 	}
 
 	std::string ReducedFeatures()

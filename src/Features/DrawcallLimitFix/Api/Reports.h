@@ -24,6 +24,15 @@ namespace DCLF::Api
 		// The shadow sources' culls' lines (Reports::PrimaryCullLines; Features/Shadows/Local's point culls), right after PrimaryCull's,
 		// before the stand-in walk parity: on the same report frames. Logged lines, handed the frame.
 		PrimaryCullSources,
+		// The primary cull's parity lines (Reports::PrimaryCullLines), after the light masks' line, before the frame camera's
+		// (Features/Fades' fade port parity): on the same report frames. Logged lines, handed the frame.
+		PrimaryCullParity,
+		// The primary cull's last lines (Reports::PrimaryCullLines), after the frame camera's (Features/Fades' fade roots line, with the
+		// cut's engine-culled entries a frame: Reports::CutMixedPerFrame): on the same report frames. Logged lines, handed the frame.
+		PrimaryCullLast,
+		// The write-backs' lines in the draws' async work (IndirectDraws::AsyncReport), right after the engine read window's line, before
+		// the visibility lines (Features/Fades' fade write-back and fade writers): every report. Text lines.
+		AsyncWorkWriteBack,
 		// The views' lines in the draws' async work (IndirectDraws::AsyncReport), after the visibility lines and the reflection's, before
 		// the forward epoch's: every report. Text lines (ReportLines::text).
 		AsyncWorkViews,
@@ -75,7 +84,7 @@ namespace DCLF::Api
 	/** @brief Whether a_point composes its lines into the report's text (ReportLines::text), not logs them (ReportLines::lines). */
 	constexpr bool ReportPointComposesText(ReportPoint a_point)
 	{
-		return a_point == ReportPoint::AsyncWorkViews || a_point == ReportPoint::AccumulatedWrites || a_point == ReportPoint::AsyncWorkForward || a_point == ReportPoint::AsyncWork ||
+		return a_point == ReportPoint::AsyncWorkWriteBack || a_point == ReportPoint::AsyncWorkViews || a_point == ReportPoint::AccumulatedWrites || a_point == ReportPoint::AsyncWorkForward || a_point == ReportPoint::AsyncWork ||
 		       a_point == ReportPoint::AsyncWorkFamilies || a_point == ReportPoint::SceneFrame || a_point == ReportPoint::SceneCoordinatorSegments ||
 		       a_point == ReportPoint::SceneCoordinatorMaterials || a_point == ReportPoint::SceneCoordinatorDelta;
 	}

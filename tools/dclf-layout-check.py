@@ -47,6 +47,7 @@ DEPENDS = {
     "LocalLights": {"Portals"},
     "FirstPerson": {"Actors", "Skins"},
     "Effects": {"Skins"},
+    "Fades": set(),
 }
 FEATURE_LIST = TREE / "Features" / "FeatureList.cpp"
 FEATURE_ENTRY = re.compile(r"^\s*((?:\w+::)+)Feature\(\),")

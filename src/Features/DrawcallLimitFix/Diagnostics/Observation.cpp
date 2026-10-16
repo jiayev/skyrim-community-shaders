@@ -17,7 +17,6 @@ namespace DCLF::Diagnostics
 			o.walkOrScene = o.walk || o.scene;
 			o.changeLog = SwitchEnabled(Switch::ChangeLogParity);
 			o.residents = SwitchEnabled(Switch::ResidentParity);
-			o.fade = SwitchEnabled(Switch::FadeParity);
 			o.builds = SwitchEnabled(Switch::BuildParity);
 			o.mirror = SwitchEnabled(Switch::MirrorParity);
 			o.capture = SwitchEnabled(Switch::CaptureParity);

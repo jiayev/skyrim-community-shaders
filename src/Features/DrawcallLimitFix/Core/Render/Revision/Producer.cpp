@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
@@ -288,9 +289,8 @@ namespace DCLF
 		const auto& sealed = *seal.named;
 		// The event lists' staging sets for the capacities the set names, before any shape of it.
 		if (const auto& s = inputs.scene) {
-			// Core's fade roots' write-back (its scene resources: no contract hands a scene resource the sealed set yet).
-			if (const auto* fades = FadeSceneOf(*s); fades && fades->fadeEvents && fades->fadeWriteBack)
-				fades->fadeWriteBack->AddSet(static_cast<std::uint32_t>(sealed.Of(fades->fadeEvents).units));
+			// The features' scene resources' (Api::SceneResources::sealed: Features/Fades' write-back).
+			Extensions::SealSceneResources(sealed, s->sceneResources);
 			if (s->visibilityEvents && s->visibilityReadback)
 				s->visibilityReadback->AddSet(static_cast<std::uint32_t>(sealed.Of(s->visibilityEvents).units));
 		}

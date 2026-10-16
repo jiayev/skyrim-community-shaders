@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 
 namespace DCLF::Diagnostics
 {
@@ -209,7 +210,7 @@ namespace DCLF::Diagnostics
 				a_stats.fadeTested = words[kCountFadeTestedWord];
 				a_stats.fadeHidden = words[kCountFadeHiddenWord];
 				if (impl.scene) {
-					if (const auto* fades = Draws::FadeSceneOf(*impl.scene))
+					if (const auto* fades = Features::Fades::SceneOf(*impl.scene))
 						a_stats.fadeRoots = fades->fadeRootCount;
 				}
 				a_stats.sunCpuTested = cpu.sunTested;

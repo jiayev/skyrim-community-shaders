@@ -1,5 +1,5 @@
-// The registered scene resources' setup, graph registration, requirements, fit, posted inputs and latched buffers, and their states'
-// lookup (see the header).
+// The registered scene resources' setup, graph registration, requirements, fit, posted inputs, latched buffers and sealed sets, and
+// their states' lookup (see the header).
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
@@ -87,6 +87,14 @@ namespace DCLF::Extensions
 				Api::SceneResourcesFit fit{ a_sealed, a_states[i], a_fit };
 				registered[i].fit(fit);
 			}
+	}
+
+	void SealSceneResources(const org::services::NamedVersions& a_sealed, const SceneResourceStates& a_states)
+	{
+		const auto registered = RegisteredSceneResources();
+		for (const std::uint32_t i : SceneResourcesOrder())
+			if (i < a_states.size() && a_states[i] && registered[i].sealed)
+				registered[i].sealed({ a_sealed, a_states[i] });
 	}
 
 	const std::shared_ptr<void>& SceneResourcesStateOf(const Draws::SceneBuffers& a_scene, Api::SceneResourcesId a_id)

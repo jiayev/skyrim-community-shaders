@@ -33,15 +33,6 @@
 #include <functional>
 #include <vector>
 
-namespace DCLF::Scene
-{
-	/**
-	 * @brief Interim (Fades F2): Core's fade roots' registrations through the contracts (Scene/Coordinator/FadeRegistration.cpp), at the
-	 * end of the features' installs, before the integrations': Features/Fades' place. Gone with F3 (Features/Fades in FeatureList, last).
-	 */
-	void RegisterCoreFades(Api::InstallContext& a_context);
-}
-
 namespace DCLF::Extensions
 {
 	namespace
@@ -414,7 +405,7 @@ namespace DCLF::Extensions
 				if (lists.sceneResourceInputs + a_resources.inputWords > kSceneResourceInputWords)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s scene resources {} post words past kSceneResourceInputWords: grow it first", feature, a_resources.name));
 				lists.sceneResources.push_back({ std::string(a_resources.name), a_resources.setup, a_resources.registerGraph, a_resources.require, a_resources.fit,
-					a_resources.postInputs, lists.sceneResourceInputs, a_resources.inputWords, a_resources.latched });
+					a_resources.postInputs, lists.sceneResourceInputs, a_resources.inputWords, a_resources.latched, a_resources.sealed });
 				lists.sceneResourceInputs += a_resources.inputWords;
 				return { static_cast<std::uint32_t>(lists.sceneResources.size() - 1) };
 			}
@@ -990,10 +981,6 @@ namespace DCLF::Extensions
 			if (feature.install)
 				feature.install(context);
 		}
-		// Interim (Fades F2): Core's fade roots register through the contracts at Fades' place, last among the features, until
-		// Features/Fades takes them (Scene/Coordinator/FadeRegistration.cpp).
-		context.feature = "Fades";
-		Scene::RegisterCoreFades(context);
 		// The integrations after every feature (Integrations/IntegrationList.cpp): what they register may name what a feature registered
 		// (Integrations/AdvancedSkin's wetness: Features/Actors' published actor-owned class). They have no early or source hooks (the
 		// shell installs those for the features alone).

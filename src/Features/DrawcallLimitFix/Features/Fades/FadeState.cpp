@@ -1,7 +1,7 @@
 // FadeState.h's port of the fade roots' OnVisible (pure, any thread), the render thread's node reads and writes and frame sample,
 // and the parity check that runs the engine's own functions on a copy of a node.
 
-#include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"

@@ -15,7 +15,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Globals.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
