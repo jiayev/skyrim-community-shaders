@@ -1,12 +1,38 @@
-// The main opaque pass: DCLF's draws in the Z-prepass (depth, both phases) and the main colour pass, and the draw families' draws
-// (Api/DrawFamilies.h: tree LOD's).
+// The main opaque pass: DCLF's draws in the Z-prepass (depth, both phases: main-view.z.depth, main-view.depth-phase2) and the main colour
+// pass (main-view.colour), and the draw families' draws (Api/DrawFamilies.h: tree LOD's) and the main ranges' (Api/MainRanges.h).
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
+// Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Features/MainView/MainView.h"
+#include "Features/DrawcallLimitFix/Api/Epochs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/FamilySlots.h"
+#include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/IndexPool.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Epochs.h"
+#include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
+
+#include "RenderGraph/NvPerfBridge.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <RenderPasses/Base/TypedRenderGraphPass.h>
+#include <rhi.h>
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <utility>
+#include <vector>
 
 namespace DCLF::Draws
 {
+	// In DCLF::Draws, where it was defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
+
 	namespace
 	{
 		/** @brief A draw family's draw in this execution (Api::DrawFamilyContribution::main.record), for a family prepared with its pipelines. */
@@ -292,9 +318,10 @@ namespace DCLF::Draws
 	class MainOpaquePass final : public org::TypedRenderGraphPass<MainOpaquePass, PreparedDraws, PassBindings>
 	{
 	public:
-		// phaseTwo: the second depth draw, of what the rebuilt HZB brought back (the sequence buffer's reserved part).
-		MainOpaquePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, bool a_phaseTwo = false) :
-			resources(std::move(a_resources)), segment(a_segment), phaseTwo(a_phaseTwo) {}
+		// depth: the epoch records the main depth shape (the Z-prepass's draws; else the colour pass's). phaseTwo: the second depth draw, of
+		// what the rebuilt HZB brought back (the sequence buffer's reserved part).
+		MainOpaquePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, bool a_depth, bool a_phaseTwo = false) :
+			resources(std::move(a_resources)), segment(a_segment), depth(a_depth), phaseTwo(a_phaseTwo) {}
 
 		PassBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -306,7 +333,7 @@ namespace DCLF::Draws
 			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
 			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
 			bindings.count = a_builder.IndirectArguments(resources->count);
-			if (segment == RenderGraphRuntime::Segment::ZPrepass) {
+			if (depth) {
 				// The plain draws (DCLF_PULLED) read sequences and the vertex stream (face positions) by address and index the pool.
 				a_builder.ShaderResource(*resources->sequences, noViews);
 				if (resources->scene->vertexStream)
@@ -365,14 +392,14 @@ namespace DCLF::Draws
 			if (!frame || (!frame->drawCapacity && !frame->decalCapacity[0] && !frame->decalCapacity[1] && !frame->decalCapacity[2]) || !frame->indirect.valid)
 				return prepared;
 			// The rescue draw belongs to the depth segment only.
-			if (phaseTwo && now != RenderGraphRuntime::Segment::ZPrepass)
+			if (phaseTwo && !depth)
 				return prepared;
 			prepared.phaseTwo = phaseTwo;
-			prepared.zPrepass = now == RenderGraphRuntime::Segment::ZPrepass;
+			prepared.zPrepass = depth;
 			prepared.stats = resources->passStats.get();
 			if (!prepared.zPrepass)
 				prepared.preprocess = resources->preprocessMain.get();
-			prepared.framePushWords = FramePushWords(resources->frameConstantsAddress);
+			prepared.framePushWords = MainFramePushWords(resources->frameConstantsAddress);
 			// The draw families set up: their slots' pipelines (null until published: nothing drawn) and draw rows.
 			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
 				if (const auto family = static_cast<Api::DrawFamily>(f); FamilySetUp(*resources->scene, family))
@@ -424,11 +451,39 @@ namespace DCLF::Draws
 	private:
 		std::shared_ptr<Resources> resources;
 		RenderGraphRuntime::Segment segment;
+		bool depth = false;
 		bool phaseTwo = false;
 	};
+}
 
-	std::shared_ptr<org::RenderPass> MakeMainOpaquePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, bool a_phaseTwo)
+namespace DCLF::Features::MainView
+{
+	namespace
 	{
-		return std::make_shared<MainOpaquePass>(std::move(a_resources), a_segment, a_phaseTwo);
+		// Whether a_context's epoch records the main depth shape (Api::MainShape::Depth): the Z-prepass's draws, else the colour pass's. A
+		// search, at the graph's build.
+		bool DepthShape(const Api::PassContext& a_context)
+		{
+			const std::uint32_t row = Draws::EpochById(a_context.epochId);
+			return row != Draws::kNoEpoch && Draws::EpochTraitsOf(row).index == static_cast<std::uint32_t>(Api::MainShape::Depth);
+		}
+
+		std::shared_ptr<org::RenderPass> MainDraws(const Api::PassContext& a_context)
+		{
+			return std::make_shared<Draws::MainOpaquePass>(a_context.Main(), a_context.segment, DepthShape(a_context));
+		}
+
+		// Phase 2's rescues, in the depth epoch's two-phase tail after the retest (core.build-draws-phase2), only while the HZB exists.
+		std::shared_ptr<org::RenderPass> DepthDrawPhaseTwo(const Api::PassContext& a_context)
+		{
+			return a_context.PhaseTwo() ? std::make_shared<Draws::MainOpaquePass>(a_context.Main(), a_context.segment, DepthShape(a_context), true) : nullptr;
+		}
+	}
+
+	void RegisterPasses(Api::InstallContext& a_context)
+	{
+		a_context.RegisterPass({ .key = "main-view.z.depth", .passName = "cs.dclf.z.depth", .kind = Api::PassKind::Render, .make = &MainDraws });
+		a_context.RegisterPass({ .key = "main-view.depth-phase2", .passName = "cs.dclf.depth-phase2", .kind = Api::PassKind::Render, .make = &DepthDrawPhaseTwo });
+		a_context.RegisterPass({ .key = "main-view.colour", .passName = "cs.dclf.main-opaque", .kind = Api::PassKind::Render, .make = &MainDraws });
 	}
 }

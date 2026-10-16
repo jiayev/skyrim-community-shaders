@@ -1,8 +1,8 @@
 #pragma once
 
 // What the passes and the graph extensions share: recording helpers, registration, the latched copies pass (the ones features use too:
-// Register and RecordDispatch, Core/Extensions/PassContext.h's; the draw passes' attachments, frame buffers and preprocessed draw,
-// Passes/DrawHelpers.h's). Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// Register and RecordDispatch, Core/Extensions/PassContext.h's; the draw passes' attachments, frame buffers, preprocessed and bucket
+// draws, Passes/DrawHelpers.h's). Part of IndirectDraws' implementation: included by Internal.h, in its order.
 
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
@@ -134,24 +134,6 @@ namespace DCLF::Draws
 		a_latch.materialRowsLo = static_cast<std::uint32_t>(shadowRows);
 		a_latch.materialRowsHi = static_cast<std::uint32_t>(shadowRows >> 32);
 		a_latch.pipelineRowsLo = a_latch.pipelineRowsHi = 0;
-	}
-	/**
-	 * @brief One bucket's plain indexed indirect draws (DCLF_PULLED): its range of the sequences from slot a_first, its pipeline, its
-	 * push words (kZDrawPush*: the range's first sequence, a_offsetDepth) and its count word a_bucket of a_counts. The vertex stage
-	 * fetches each draw's vertices and rows through the sequence its instance names, as a plain draw binds no vertex buffer or push
-	 * data of its own.
-	 */
-	inline void RecordBucketDraw(rhi::CommandList& a_commands, rhi::CommandSignatureHandle a_signature, rhi::ResourceHandle a_sequences, std::uint64_t a_sequencesAddress,
-		std::uint64_t a_first, rhi::PipelineHandle a_pipeline, rhi::ResourceHandle a_counts, std::uint32_t a_bucket, std::uint32_t a_capacity, bool a_offsetDepth = false)
-	{
-		const std::uint64_t first = a_first * sizeof(DrawSequence);
-		std::uint32_t words[kDrawPushWords]{};
-		words[kZDrawPushSequences] = static_cast<std::uint32_t>(a_sequencesAddress + first);
-		words[kZDrawPushSequences + 1] = static_cast<std::uint32_t>((a_sequencesAddress + first) >> 32);
-		words[kZDrawPushOffsetDepth] = a_offsetDepth ? 1u : 0u;
-		a_commands.BindPipeline(a_pipeline);
-		a_commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
-		a_commands.ExecuteIndirect(a_signature, a_sequences, first + kSequenceDrawOffset, a_counts, std::uint64_t(a_bucket) * sizeof(std::uint32_t), a_capacity);
 	}
 	/**
 	 * @brief A bucket map into a latch slot at a_offset: a_map, then kNoBucket for the pipeline slots past it up to a_slots (gained since

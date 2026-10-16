@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Features/Landscape/Landscape.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/LocalLights.h"
 #include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
+#include "Features/DrawcallLimitFix/Features/MainView/MainView.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
 #include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
@@ -59,6 +60,9 @@ namespace DCLF::Features
 		// before the particles'); its switch is listed after the skin partitions', before tree wind's and the decals' (which follow it
 		// there); it registers no pool, pass or product. Tree wind next:
 		// its seeds' pool runs right after the frame values' built-in parts, before the texture transforms' pool.
+		// The main view before forward: its draw passes (main-view.*, no setup: their place among the registrations changes no order) and the
+		// main pass's points (the primary view, the only one; the opaque.after trigger, found by name); no switch, toggle, hook, pool, product
+		// or report line.
 		// Forward before effects: its switches are listed where Core's were (right before the projected UV's, the effects' after its
 		// forward epoch's, the particles' and billboards' after its refraction's), its "forward" toggle where Core's was (before the shadows',
 		// after the projected's chain), which the effects' toggle needs by name, its "refraction" toggle after the effects'; its two engine
@@ -102,6 +106,7 @@ namespace DCLF::Features
 			Actors::Feature(),
 			TreeWind::Feature(),
 			TextureTransforms::Feature(),
+			MainView::Feature(),
 			Forward::Feature(),
 			Effects::Feature(),
 			Particles::Feature(),
