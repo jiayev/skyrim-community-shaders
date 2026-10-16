@@ -17,7 +17,7 @@
 
 namespace DCLF::Features::TreeWind
 {
-	// AE 1.6.1170 (module offsets) of the engine's tree manager this feature alone reads.
+	// AE 1.6.1170 (module offsets) of the engine's tree manager and globals this feature alone reads.
 	namespace Address
 	{
 		inline constexpr std::uintptr_t kTreeManager = 0x20f6a18;  // BSTreeManager*
@@ -25,6 +25,7 @@ namespace DCLF::Features::TreeWind
 		inline constexpr std::uintptr_t kTreeWindFadeStart = 0x2033100;  // float: the tree wind fade start
 		inline constexpr std::uintptr_t kTreeWindFadeEnd = 0x2033104;  // float: the tree wind fade end
 		inline constexpr std::uintptr_t kTreeWindTimerScale = 0x1ad28bc;  // float: the tree wind timer scale
+		inline constexpr std::uintptr_t kFrameSeconds = 0x31cc288;  // float: the frame's seconds (GetSecondsPassed)
 	}
 
 	// The Lighting technique the feature ports (SIE::ShaderCache::LightingShaderTechniques::TreeAnim), and the record flag its objects

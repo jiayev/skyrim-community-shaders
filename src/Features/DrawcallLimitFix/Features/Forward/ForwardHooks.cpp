@@ -15,6 +15,20 @@ namespace DCLF::Features::Forward
 {
 	namespace
 	{
+		// AE 1.6.1170 (module offsets) of the engine code and state the epoch's hooks take and mark; the hook sites are each checked with
+		// CallsTo before they are patched.
+		namespace Address
+		{
+			inline constexpr std::uintptr_t kBlendedDraw = 0x14b39d0;            // the main pass's blended draw (FUN_1414b39d0)
+			inline constexpr std::uintptr_t kBlendedUnderWater = 0x14b33e1;      // its call sites in FUN_1414b3390
+			inline constexpr std::uintptr_t kBlendedAfterWater = 0x14b38d3;
+			inline constexpr std::uintptr_t kRefractionCheck = 0x644d20;         // Main::Draw's refraction point
+			inline constexpr std::uintptr_t kGroupFiveCount = 0x14b4840;         // what it calls: the accumulator's group 5 count (FUN_1414b4840)
+			inline constexpr std::uintptr_t kRefractionNormalsBegun = 0x35ef130;  // byte: the refraction normals were cleared this frame
+			inline constexpr std::uintptr_t kRefractionNormalsDrawn = 0x35ef131;  // byte: drawn (ISRefraction's IsActive reads it)
+			inline constexpr std::uintptr_t kClearGroup = 0x14b4ae0;      // FUN_1414b4ae0(accumulator, group): a group's pass list cleared, undrawn
+		}
+
 		/**
 		 * @brief Refraction: the forward epoch cleared and drew the refraction normals, ahead of Main::Draw's own group 5 (FUN_1414b4860).
 		 * Marked begun and drawn, as that function marks them (0x1435ef130, 0x1435ef131): the engine's later draws into them then add to
@@ -24,8 +38,8 @@ namespace DCLF::Features::Forward
 		 */
 		void MarkRefractionNormals()
 		{
-			static REL::Relocation<std::uint8_t*> normalsBegun{ REL::Offset(Engine::Address::kRefractionNormalsBegun) };
-			static REL::Relocation<std::uint8_t*> normalsDrawn{ REL::Offset(Engine::Address::kRefractionNormalsDrawn) };
+			static REL::Relocation<std::uint8_t*> normalsBegun{ REL::Offset(Address::kRefractionNormalsBegun) };
+			static REL::Relocation<std::uint8_t*> normalsDrawn{ REL::Offset(Address::kRefractionNormalsDrawn) };
 			*normalsBegun = 1;
 			*normalsDrawn = 1;
 		}
@@ -71,7 +85,7 @@ namespace DCLF::Features::Forward
 				// FUN_1414b4ae0(accumulator, 6): the group's pass list cleared (FUN_1414f1940), undrawn.
 				if (a_accumulator && ShellState::Running() && IndirectDraws::Get().RefractionDrawnThisFrame()) {
 					using ClearGroup = void (*)(void*, std::int32_t);
-					static REL::Relocation<ClearGroup> clearGroup{ REL::Offset(Engine::Address::kClearGroup) };
+					static REL::Relocation<ClearGroup> clearGroup{ REL::Offset(Address::kClearGroup) };
 					clearGroup(a_accumulator, 6);
 				}
 				return func(a_accumulator);
@@ -83,16 +97,16 @@ namespace DCLF::Features::Forward
 	void InstallHooks()
 	{
 		// The main pass's blended draw (FUN_1414b39d0), at both its call sites in FUN_1414b3390.
-		if (Engine::CallsTo(REL::Offset(Engine::Address::kBlendedUnderWater).address(), REL::Offset(Engine::Address::kBlendedDraw).address()) &&
-			Engine::CallsTo(REL::Offset(Engine::Address::kBlendedAfterWater).address(), REL::Offset(Engine::Address::kBlendedDraw).address())) {
-			stl::write_thunk_call<Accumulator_BlendedDraw<0>>(REL::Offset(Engine::Address::kBlendedUnderWater).address());
-			stl::write_thunk_call<Accumulator_BlendedDraw<1>>(REL::Offset(Engine::Address::kBlendedAfterWater).address());
+		if (Engine::CallsTo(REL::Offset(Address::kBlendedUnderWater).address(), REL::Offset(Address::kBlendedDraw).address()) &&
+			Engine::CallsTo(REL::Offset(Address::kBlendedAfterWater).address(), REL::Offset(Address::kBlendedDraw).address())) {
+			stl::write_thunk_call<Accumulator_BlendedDraw<0>>(REL::Offset(Address::kBlendedUnderWater).address());
+			stl::write_thunk_call<Accumulator_BlendedDraw<1>>(REL::Offset(Address::kBlendedAfterWater).address());
 		} else {
 			logger::warn("[DCLF] the main pass's blended draw is not where expected; the forward epoch (T7d) never runs, and CS_DCLF_FORWARD must stay off");
 		}
 		// Main::Draw's refraction point (its group 5 count, FUN_1414b4840).
-		if (Engine::CallsTo(REL::Offset(Engine::Address::kRefractionCheck).address(), REL::Offset(Engine::Address::kGroupFiveCount).address()))
-			stl::write_thunk_call<Main_Draw_RefractionCheck>(REL::Offset(Engine::Address::kRefractionCheck).address());
+		if (Engine::CallsTo(REL::Offset(Address::kRefractionCheck).address(), REL::Offset(Address::kGroupFiveCount).address()))
+			stl::write_thunk_call<Main_Draw_RefractionCheck>(REL::Offset(Address::kRefractionCheck).address());
 		else
 			logger::warn("[DCLF] Main::Draw's refraction point is not where expected; CS_DCLF_REFRACTION must stay off");
 	}

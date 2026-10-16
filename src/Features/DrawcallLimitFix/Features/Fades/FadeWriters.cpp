@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadesAddresses.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -111,7 +112,7 @@ namespace DCLF::Features::Fades
 			// the same for every call of one animation update.
 			if (!a_camera)
 				return written;
-			const AnimatedFadeInputs inputs{ { a_camera[0], a_camera[1], a_camera[2] }, a_camera[3], Global<std::int32_t>(Engine::Address::kFadeFrameCounter), Global<float>(Engine::Address::kFadeStepTime), 1u };
+			const AnimatedFadeInputs inputs{ { a_camera[0], a_camera[1], a_camera[2] }, a_camera[3], Global<std::int32_t>(Address::kFadeFrameCounter), Global<float>(Address::kFadeStepTime), 1u };
 			std::uint32_t state = animatedState.load(std::memory_order_acquire);
 			if (state == kAnimatedEmpty && animatedState.compare_exchange_strong(state, kAnimatedWriting, std::memory_order_acquire)) {
 				animatedInputs = inputs;
@@ -156,7 +157,7 @@ namespace DCLF::Features::Fades
 		{
 			using NodeOnVisible = void (*)(void*, RE::NiCullingProcess*, std::int32_t);
 			static const auto children = reinterpret_cast<NodeOnVisible>(REL::Module::get().base() + kNodeOnVisible);
-			const float one = Global<float>(Engine::Address::kFloatOne);
+			const float one = Global<float>(Address::kFloatOne);
 			const float amount = At<float>(a_node, kFadeAmount);
 			const bool settled = (At<std::uint32_t>(a_node, kObjectFlags) & kFlagFadeSettled) && amount == one && At<float>(a_node, kCurrentFade) == one;
 			if (!Global<std::uint8_t>(Engine::Address::kFadesOn) || settled) {
@@ -233,8 +234,8 @@ namespace DCLF::Features::Fades
 				logger::warn("[DCLF] primary cull: the animation job's fade update is not where expected");
 			// Fade OnVisibles leave DCLF-written roots alone (detours, not vtable slots, so subclass tables and FadeState::PlanOf keep
 			// the engine's addresses).
-			stl::detour_thunk<FadeOnVisible>(base + Engine::Address::kFadeOnVisible);
-			stl::detour_thunk<LeafOnVisible>(base + Engine::Address::kLeafOnVisible);
+			stl::detour_thunk<FadeOnVisible>(base + Address::kFadeOnVisible);
+			stl::detour_thunk<LeafOnVisible>(base + Address::kLeafOnVisible);
 			stl::detour_thunk<TreeOnVisible>(base + Engine::Address::kTreeOnVisible);
 		}
 	}

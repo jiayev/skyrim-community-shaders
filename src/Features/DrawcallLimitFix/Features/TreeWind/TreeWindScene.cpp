@@ -22,7 +22,7 @@ namespace DCLF::Features::TreeWind
 		// BSTreeManager* (+0x78 the gust's speed, +0x80 the squared range of its update), and the frame's seconds it advances the
 		// clocks by (FUN_140437d40's argument; GetSecondsPassed reads it).
 		REL::Relocation<std::uintptr_t> treeManager{ REL::Offset(Address::kTreeManager) };
-		REL::Relocation<std::uintptr_t> frameSeconds{ REL::Offset(Engine::Address::kFrameSeconds) };
+		REL::Relocation<std::uintptr_t> frameSeconds{ REL::Offset(Address::kFrameSeconds) };
 
 		float GlobalFloat(const REL::Relocation<std::uintptr_t>& a_at)
 		{

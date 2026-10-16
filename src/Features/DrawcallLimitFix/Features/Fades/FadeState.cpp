@@ -2,6 +2,7 @@
 // and the parity check that runs the engine's own functions on a copy of a node.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadesAddresses.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
@@ -292,31 +293,31 @@ namespace DCLF::FadeState
 			frame.eye[2] = a_camera->world.translate.z;
 			frame.lodAdjust = At<float>(a_camera, 0x184);
 		}
-		frame.counter = Global<std::int32_t>(Engine::Address::kFadeFrameCounter);
-		frame.deltaTime = Global<float>(Engine::Address::kFadeStepTime);
+		frame.counter = Global<std::int32_t>(Features::Fades::Address::kFadeFrameCounter);
+		frame.deltaTime = Global<float>(Features::Fades::Address::kFadeStepTime);
 		frame.fadesOn = Global<std::uint8_t>(Engine::Address::kFadesOn) ? 1u : 0u;
 		frame.lodUpdates = Global<std::uint8_t>(Engine::Address::kFadeLodUpdates) ? 1u : 0u;
-		frame.fadeInTime = Global<float>(Engine::Address::kFadeStepDivisor);
-		frame.fadeOutTime = Global<float>(Engine::Address::kFadeOutTime);
-		frame.fadeInAbove = Global<float>(Engine::Address::kFadeInAbove);
+		frame.fadeInTime = Global<float>(Features::Fades::Address::kFadeStepDivisor);
+		frame.fadeOutTime = Global<float>(Features::Fades::Address::kFadeOutTime);
+		frame.fadeInAbove = Global<float>(Features::Fades::Address::kFadeInAbove);
 		frame.fadeOutBelow = Global<float>(Engine::Address::kFadeOutThreshold);
-		frame.blendTime = Global<float>(Engine::Address::kFadeBlendTime);
+		frame.blendTime = Global<float>(Features::Fades::Address::kFadeBlendTime);
 		frame.distanceMult = Global<float>(Engine::Address::kFadeDistanceMult);
-		frame.stepMax = Global<float>(Engine::Address::kFadeStepMax);
-		frame.amountTime = Global<float>(Engine::Address::kFadeAmountTime);
+		frame.stepMax = Global<float>(Features::Fades::Address::kFadeStepMax);
+		frame.amountTime = Global<float>(Features::Fades::Address::kFadeAmountTime);
 		frame.metricScale = Global<float>(Engine::Address::kMetricScale);
 		frame.defaultScale = Global<float>(Engine::Address::kFadeDefaultScale);
 		frame.metricOverride = Global<float>(Engine::Address::kFadeSpecialA);
 		frame.overridden = UnorderedEqual(Global<float>(Engine::Address::kFadeSpecialA), Global<float>(Engine::Address::kFadeSpecialB)) ? 0u : 1u;
-		frame.lodFar = Global<float>(Engine::Address::kLodFadeFar);
-		frame.lodNear = Global<float>(Engine::Address::kLodFadeNear);
-		frame.treeLodFar = Global<float>(Engine::Address::kTreeLodFadeFar);
-		frame.treeLodNear = Global<float>(Engine::Address::kTreeLodFadeNear);
-		frame.lodMinimum = Global<float>(Engine::Address::kLodFadeMinimum);
-		frame.one = Global<float>(Engine::Address::kFloatOne);
-		frame.amountSnapAbove = Global<float>(Engine::Address::kFadeAmountSnapAbove);
-		frame.amountSnapOffset = Global<float>(Engine::Address::kFadeAmountSnapOffset);
-		frame.snapRadiusLimit = Global<float>(Engine::Address::kFadeSnapRadiusLimit);
+		frame.lodFar = Global<float>(Features::Fades::Address::kLodFadeFar);
+		frame.lodNear = Global<float>(Features::Fades::Address::kLodFadeNear);
+		frame.treeLodFar = Global<float>(Features::Fades::Address::kTreeLodFadeFar);
+		frame.treeLodNear = Global<float>(Features::Fades::Address::kTreeLodFadeNear);
+		frame.lodMinimum = Global<float>(Features::Fades::Address::kLodFadeMinimum);
+		frame.one = Global<float>(Features::Fades::Address::kFloatOne);
+		frame.amountSnapAbove = Global<float>(Features::Fades::Address::kFadeAmountSnapAbove);
+		frame.amountSnapOffset = Global<float>(Features::Fades::Address::kFadeAmountSnapOffset);
+		frame.snapRadiusLimit = Global<float>(Features::Fades::Address::kFadeSnapRadiusLimit);
 		// BSTreeNode::OnVisible's height test as the list processes have it this frame (+infinity: off).
 		const auto treeHeight = PrimaryCull::Get().TreeHeightTest();
 		frame.treeHeightBase = treeHeight[0];
@@ -371,8 +372,8 @@ namespace DCLF::FadeState
 	{
 		const auto base = REL::Module::get().base();
 		const auto onVisible = (*reinterpret_cast<const std::uintptr_t* const*>(&a_node))[kOnVisibleSlot];
-		return onVisible == base + Engine::Address::kFadeOnVisible ? kFadeRootFade :
-		       onVisible == base + Engine::Address::kLeafOnVisible ? kFadeRootLeaf :
+		return onVisible == base + Features::Fades::Address::kFadeOnVisible ? kFadeRootFade :
+		       onVisible == base + Features::Fades::Address::kLeafOnVisible ? kFadeRootLeaf :
 		       onVisible == base + Engine::Address::kTreeOnVisible ? kFadeRootTree : kFadeRootOther;
 	}
 
@@ -454,7 +455,7 @@ namespace DCLF::FadeState
 			void* node = scratch;
 			if ((plan == kFadeRootLeaf || plan == kFadeRootTree) && Global<std::uint8_t>(Engine::Address::kFadeLodUpdates)) {
 				float distance = 0.0f;
-				reinterpret_cast<FadeValueFn>(base + Engine::Address::kFadeDistance)(node, camera, &distance);
+				reinterpret_cast<FadeValueFn>(base + Features::Fades::Address::kFadeDistance)(node, camera, &distance);
 				reinterpret_cast<LodStepFn>(base + Engine::Address::kLodLevelUpdate)(node, distance);
 				At<std::int32_t>(node, 0x13C) = frame.counter;
 			}
