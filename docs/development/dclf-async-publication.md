@@ -359,7 +359,7 @@ changes with the scene:
   skipped. A missing pipeline clears it, so the next refresh asks again.
 - **The views' bucket rows** (`BucketsOfRow`: sort, partition and map the pipelines of a state's map row) were rebuilt for
   each state in each frame (11 µs in the shadow epoch, the same per occlusion view). They are kept per state
-  (`Impl::ShadowRowBuckets`) while the lookups (`Lookups::instance`, new on a reset), their shadow generation (which every
+  (`ShadowEngine::ShadowRowBuckets`) while the lookups (`Lookups::instance`, new on a reset), their shadow generation (which every
   map-row change advances) and the published shadow pipeline version are the same.
 
 | Render thread, µs (median) | Before | After |

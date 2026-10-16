@@ -5,15 +5,10 @@
 
 namespace DCLF
 {
-	// The report counters: each says whose it is and what it counts since the last report.
+	// The report counters: each says whose it is and what it counts since the last report (the shadow capability's: the shadow
+	// engine's, ShadowEngine::capabilityStats).
 	struct ImplStats
 	{
-		struct CapabilityStats
-		{
-			std::uint32_t changes = 0;  // every change of the modes or the catalog, setup's included
-			std::uint32_t defects = 0;  // of them, a view the capability did not foresee
-			std::string lastCause;
-		} capabilityStats;
 		std::uint64_t shadowUnbuilt = 0;  // covered frames whose installed publication had no shadow payload (<- UNBUILT), since the last report
 		// Frames whose views were left to the engine (no shape or payload yet), since the last report.
 		std::uint64_t shadowUnrecorded = 0;

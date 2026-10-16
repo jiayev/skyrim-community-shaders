@@ -73,7 +73,10 @@ namespace DCLF
 		// Everything a revision reads of the frame, as the frame has it now (render thread).
 		RevisionInputs next;
 		next.main = resources;
-		next.shadow = shadow;
+		// The participants' parts (Revision/Participant.h: the shadow engine's, its resources, pipelines' format and states, layouts and
+		// slots); the main segments' and the views' are below.
+		for (auto* participant : participants)
+			participant->PostInputs(next);
 		next.scene = scene;
 		if (auto* host = RenderGraphRuntime::Get().Host()) {
 			next.buildGeneration = host->BuildGeneration();
@@ -86,14 +89,10 @@ namespace DCLF
 		}
 		auto& drawPipelines = DrawPipelines::Get();
 		next.targetsGeneration = drawPipelines.Generation();
-		next.shadowFormat = drawPipelines.ShadowFormat();
-		next.shadowRasterStates = drawPipelines.ShadowRasterStateCount();
 		next.toggles = ActiveToggles();
 		next.togglesGeneration = Toggles::Get().Generation();
 		next.claims = !IndirectDraws::Get().Failed();
 		next.shadowCandidates = ShadowViews::Get().Candidates();
-		next.occlusionLayouts = PredictedOcclusion();
-		next.shadowPlacements = shadowPlacements;
 		next.mainKnown = mainEpochInputs.known;
 		next.viewport = mainEpochInputs.viewport;
 		next.blockSizes = mainEpochInputs.blockSizes;
@@ -108,9 +107,6 @@ namespace DCLF
 				target ? (view.resources ? view.resources->height : 0u) : mainEpochInputs.viewport[kColourShape].height, DepthRangeOf(slot.view) };
 		}
 		Extensions::PostSceneResourceInputs(next.resourceInputs);
-		if (shadow && (!postedShadowSlots || postedShadowSlots->sequences.size() != shadow->sequences.size()))
-			postedShadowSlots = std::make_shared<const ShadowSlotBuffers>(ShadowSlotBuffers{ shadow->sequences, shadow->bucketCounts });
-		next.shadowSlots = shadow ? postedShadowSlots : nullptr;
 		const auto& previous = postedInputs;
 		next.mainGeneration = previous.mainGeneration + (next.main != previous.main ? 1u : 0u);
 		const bool same = SameRevisionInputs(next, previous);

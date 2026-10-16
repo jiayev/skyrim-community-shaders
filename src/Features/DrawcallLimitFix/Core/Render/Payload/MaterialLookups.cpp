@@ -285,7 +285,7 @@ namespace DCLF
 			}
 		}
 		// The shadow pipelines for the views the frame's start last posted, once the walk has classified the casters.
-		auto inputs = impl->shadowLookupInputs.load(std::memory_order_acquire);
+		auto inputs = impl->shadowEngine->shadowLookupInputs.load(std::memory_order_acquire);
 		if (inputs && !inputs->enabled)
 			inputs.reset();
 		// The inputs the lookups' shadow pipelines are for, held by the lookups (the set commit's shadow readiness reads them, PhaseReady):
@@ -314,24 +314,25 @@ namespace DCLF
 		// The shadow views' frame inputs of the pipeline lane: the format its shadow set is built for (the views' depth
 		// targets', or an occlusion map's while no shadow view has drawn) and the Utility shader. The lane builds the keys the scene lane
 		// asks for, and its next catalog has what it built.
-		auto& views = impl->lastShadow;
+		auto& engine = *impl->shadowEngine;
+		auto& views = engine.lastShadow;
 		ShadowLookupInputs inputs;
 		inputs.enabled = ActiveToggles().shadows && views.known && globals::game::utilityShader;
 		if (inputs.enabled) {
 			DXGI_FORMAT shadowFormat = views.dsvFormat;
-			for (const DXGI_FORMAT occlusionFormat : impl->OcclusionFormats())
+			for (const DXGI_FORMAT occlusionFormat : engine.OcclusionFormats())
 				if (shadowFormat == DXGI_FORMAT_UNKNOWN)
 					shadowFormat = occlusionFormat;
 			DrawPipelines::Get().SetShadowInputs(shadowFormat, *globals::game::utilityShader);
 			inputs.modes = views.modes;
 			inputs.rasterStates = views.rasterStates;
 			inputs.dsvFormat = views.dsvFormat;
-			inputs.occlusionFormats = impl->OcclusionFormats();
+			inputs.occlusionFormats = engine.OcclusionFormats();
 		}
 		// To the scene lane when they changed (latest wins): its shadow pipelines are resolved for them from its next pass on.
-		if (inputs == impl->postedShadowLookups)
+		if (inputs == engine.postedShadowLookups)
 			return;
-		impl->postedShadowLookups = inputs;
-		impl->shadowLookupInputs.store(std::make_shared<const ShadowLookupInputs>(std::move(inputs)), std::memory_order_release);
+		engine.postedShadowLookups = inputs;
+		engine.shadowLookupInputs.store(std::make_shared<const ShadowLookupInputs>(std::move(inputs)), std::memory_order_release);
 	}
 }

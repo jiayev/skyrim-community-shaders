@@ -79,7 +79,7 @@ namespace DCLF::Draws
 	/**
 	 * @brief Copies each drawn source's count words and its culling latch's stamp into the frame slot's host buffer (CounterReadback):
 	 * a fixed copy, so the recording depends on the shape and the slot alone. The epochs harvest it (CullCounters.cpp, the colour
-	 * commit; IndirectDraws::Impl::ReadShadowCullCounters).
+	 * commit; ShadowEngine::ReadShadowCullCounters).
 	 */
 	class CounterReadbackPass final : public org::TypedRenderGraphPass<CounterReadbackPass, CounterReadbackPrepared, CounterReadbackBindings>
 	{

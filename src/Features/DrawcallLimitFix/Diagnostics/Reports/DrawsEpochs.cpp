@@ -110,7 +110,7 @@ namespace DCLF
 
 	std::string IndirectDraws::ShadowCapabilityReport() const
 	{
-		const auto& c = impl->capabilityStats;
+		const auto& c = impl->shadowEngine->capabilityStats;
 		return fmt::format("[DCLF] shadow capability: phases {:#x}, {} rasterizer states in the catalog; {} changes since startup, {} of them views it did not foresee{}{}",
 			ShadowCapability(), DrawPipelines::Get().ShadowRasterStateCount(), c.changes, c.defects, c.defects ? " <- PHASES" : " <- OK",
 			c.lastCause.empty() ? "" : " (last: " + c.lastCause + ")");

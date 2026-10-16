@@ -178,9 +178,9 @@ namespace DCLF
 		}
 	}
 
-	void IndirectDraws::Impl::RequireShadowSequences(GrowthBuild& a_build, const SceneTables& a_tables, std::uint32_t a_generation)
+	void ShadowEngine::RequireShadowSequences(ImplProducer& a_producer, GrowthBuild& a_build)
 	{
-		UpdateDrawBound(a_tables, a_generation);
+		const auto& producer = a_producer.producer;
 		const std::uint32_t draws = producer.drawBound.Draws();
 		CheckSequenceLimits("a shadow view", draws, false);
 		// Every slot the frame made (as posted) holds the scene's draw bound: a view's claims always fit the slot they draw in.
@@ -191,9 +191,10 @@ namespace DCLF
 		slots.Require(a_build, draws);
 	}
 
-	void IndirectDraws::Impl::ReserveShadowLatch(GrowthBuild& a_build, ShadowResources& a_shadow, std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates,
-		std::uint32_t a_sunProcesses)
+	void ShadowEngine::ReserveShadowLatch(ImplProducer& a_producer, GrowthBuild& a_build, ShadowResources& a_shadow, std::uint32_t a_views, std::uint32_t a_keys,
+		std::uint32_t a_rasterStates, std::uint32_t a_sunProcesses)
 	{
+		auto& producer = a_producer.producer;
 		auto& latches = producer.latches;
 		if (!latches.shadowLaidOut)
 			return;
@@ -238,7 +239,7 @@ namespace DCLF
 			if (const auto& slotBuffers = producer.inputs.shadowSlots)
 				for (const auto& sequences : slotBuffers->sequences)
 					draws = std::max(draws, buffers.Asked(a_build, sequences));
-			shadowSlotsSlot.Post(std::make_unique<ShadowSlotsRequest>(
+			a_producer.shadowSlotsSlot.Post(std::make_unique<ShadowSlotsRequest>(
 				ShadowSlotsRequest{ layout.viewSlots, static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX)), std::max(layout.keySlots, 64u) }));
 			producer.buildWanted = producer.inputs.buildGeneration + 1;
 		}

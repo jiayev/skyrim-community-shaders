@@ -24,10 +24,10 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowPoints.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
@@ -240,18 +240,8 @@ namespace DCLF
 		ScopedPerfEvent event("CS DCLF: shadow views");
 		const auto start = std::chrono::steady_clock::now();
 		Diagnostics::Notify<Diagnostics::FramePoint::ShadowViewsBegin>();
-		// The frame's shadow views, in the order the engine is about to render them. Everything downstream - the capture's attribution,
-		// the withholding, the epochs - identifies a view by this list.
-		auto& draws = IndirectDraws::Get();
-		ShadowViews::Get().SetViewCapacity(ActiveToggles().shadows ? draws.ShadowViewCapacity() : UINT32_MAX);
-		ShadowViews::Get().Rebuild();
-		// The shadow views' candidates: a scene revision's input (its main latch holds a cascade and a shadow volume each).
-		draws.NoteRevisionInputs();
-		// The shadow epoch commits the installed publication's shadow payload (built ahead with it).
-		if (ActiveToggles().shadows) {
-			draws.DecideShadowCoverage();
-			draws.BeginShadowFrame();
-		}
+		// The frame's shadow views listed, decided and begun (the shadow engine's).
+		Draws::ShadowEnginePoints().BeforeShadowMaps();
 		const double ms = MillisecondsSince(start);
 		counters.timing.sceneMs += ms;
 		counters.timing.sceneMaxMs = std::max(counters.timing.sceneMaxMs, ms);
@@ -261,7 +251,7 @@ namespace DCLF
 	{
 		// The frame's shadow epoch: every view the accumulator hook captured, drawn in one graph execution.
 		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::ShadowMapsAfter));
-		IndirectDraws::Get().ExecuteShadowFrame();
+		Draws::ShadowEnginePoints().AfterShadowMaps();
 	}
 
 	void FrameDriver::EarlyPrepass()
@@ -296,7 +286,7 @@ namespace DCLF
 		if (!a_running || !Extensions::OcclusionOn(ActiveToggles(), a_map))
 			return false;
 		// DCLF draws the map's members of the set this frame (none until its phase is drawn: a frame after the first that drew it).
-		const bool ready = IndirectDraws::Get().OcclusionReady(a_map);
+		const bool ready = Draws::ShadowEnginePoints().OcclusionReady(a_map);
 		occlusionFrames.native[a_map] += ready ? 0 : 1;
 		occlusionWanted |= ready ? 1u << a_map : 0u;
 		const std::uint8_t phase = Extensions::OcclusionMapOf(a_map).phase;
@@ -335,7 +325,7 @@ namespace DCLF
 		const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
 		PassCapture::Get().SetOcclusionPhase(0);
 		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::OcclusionDraw));
-		const std::uint32_t drawn = wanted ? IndirectDraws::Get().ExecuteOcclusion(wanted) : 0u;
+		const std::uint32_t drawn = wanted ? Draws::ShadowEnginePoints().DrawOcclusion(wanted) : 0u;
 		Diagnostics::Notify(Diagnostics::OcclusionMapsDrawn{ drawn });
 	}
 

@@ -28,7 +28,7 @@ namespace DCLF
 			RevisionLatchLayouts latches;
 			RevisionLatchHandles latchHandles;
 			MadeShapes made;
-			// The occlusion maps' recent layouts (newest first, kRecentOcclusionLayouts): a revision makes a shape for each.
+			// The occlusion maps' recent layouts (newest first, ShadowEngine::kRecentOcclusionLayouts): a revision makes a shape for each.
 			std::vector<std::vector<ShadowViewLayout>> recentOcclusionLayouts;
 			// The scene's draw bound and the index pool's, kept from the tables' logs.
 			DrawBoundStore drawBound;
@@ -42,10 +42,11 @@ namespace DCLF
 			// The graph build a frame request needs (0 none): nothing is sealed before it, or its recordings would lack its declarations.
 			std::uint64_t buildWanted = 0;
 		} producer;
+		/** @brief Revision code: the producer's draw bound brought up to date with a_tables' change log (Resources/Resources.cpp). */
+		void UpdateDrawBound(const SceneTables& a_tables, std::uint32_t a_generation);
 		/** @brief Render thread: the newest RevisionInputs posted, latest wins; the producer takes it at each make's start. */
 		LatestSlot<RevisionInputs> revisionInputsSlot;
-		RevisionInputs postedInputs;  // the render thread's: what it last posted
-		std::shared_ptr<const ShadowSlotBuffers> postedShadowSlots;  // the render thread's: the slots' buffers as last posted
+		RevisionInputs postedInputs;  // the render thread's: what it last posted (the shadow slots' buffers: ShadowEngine::postedShadowSlots)
 		/** @brief The revision code's requests of the render thread (shadow view slots), served at the build point before its build. */
 		LatestSlot<ShadowSlotsRequest> shadowSlotsSlot;
 		/**
