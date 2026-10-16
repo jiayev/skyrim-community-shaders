@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/IndexPoolPass.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 
 namespace DCLF::Draws
@@ -86,7 +87,7 @@ namespace DCLF::Draws
 			if (resources->nativeDepth)
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.native-depth"), resources->nativeDepth);
 			if (resources->terrainDepth)
-				Register(a_graph, org::ResourceIdentifier("cs.dclf.terrain-blending-depth"), resources->terrainDepth);
+				Register(a_graph, org::ResourceIdentifier(Extensions::NearTwin().resource), resources->terrainDepth);
 			if (resources->refractionNormals)
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.refraction-normals"), resources->refractionNormals);
 			if (resources->hzb) {

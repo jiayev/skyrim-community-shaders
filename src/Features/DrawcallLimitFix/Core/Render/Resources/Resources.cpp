@@ -3,10 +3,10 @@
 // scene's draw bound and the main latch the revision code keeps.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/GpuStages.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/LightLimitFix/ORGLightCulling.h"
-#include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
@@ -426,15 +426,16 @@ namespace DCLF
 		a_state.nativeDepth = ImportImage(a_device, info.image, depthDesc, "DCLF native depth");
 		if (!a_state.nativeDepth)
 			return NotReady(11, "the main-pass depth could not be imported");
-		// Terrain Blending's terrain depth shares the main depth's description; the Z-prepass draws near terrain blocks into it
-		// as that feature's depth hook does.
-		if (const auto& terrainBlending = globals::features::terrainBlending; terrainBlending.loaded && terrainBlending.terrainDepth.texture) {
+		// The near twin's target (Api::NearTwinContribution: Integrations/TerrainBlending's terrain depth) shares the main depth's
+		// description; the Z-prepass draws Appended0's near objects into it as that feature's depth hook does.
+		const auto& nearTwin = Extensions::NearTwin();
+		if (auto* const twinTarget = static_cast<ID3D11Texture2D*>(nearTwin.target ? nearTwin.target() : nullptr)) {
 			DxvkOrgInteropResourceInfo terrainInfo{};
-			if (!RenderGraphRuntime::Get().DescribeResource(terrainBlending.terrainDepth.texture, terrainInfo) || terrainInfo.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
-				return NotReady(12, "Terrain Blending's terrain depth cannot be described");
-			a_state.terrainDepth = ImportImage(a_device, terrainInfo.image, depthDesc, "DCLF terrain blending depth");
+			if (!RenderGraphRuntime::Get().DescribeResource(twinTarget, terrainInfo) || terrainInfo.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+				return NotReady(12, nearTwin.cannotDescribe.c_str());
+			a_state.terrainDepth = ImportImage(a_device, terrainInfo.image, depthDesc, nearTwin.debugName.c_str());
 			if (!a_state.terrainDepth)
-				return NotReady(12, "Terrain Blending's terrain depth could not be imported");
+				return NotReady(12, nearTwin.cannotImport.c_str());
 		}
 		return true;
 	}

@@ -475,7 +475,8 @@ namespace DCLF::Scene
 			}
 
 			// The patch into the scene phase's record, applied once and kept.
-			const bool landBlendRecord = descriptors.technique == 8 || descriptors.technique == 19;
+			// A technique whose objects take the land blend rows (Api::ObjectExtras::LandBlend: Features/Landscape's MTLand, MTLandLODBlend).
+			const bool landBlendRecord = Extensions::TechniqueExtras(descriptors.technique) == Api::ObjectExtras::LandBlend;
 			AccumulatePatch patch;
 			patch.object = objectId;
 			patch.material = materialSlot;

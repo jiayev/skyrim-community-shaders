@@ -77,7 +77,7 @@ namespace DCLF::Scene
 			return;
 		}
 		// Snapshotted for the whole pass (pool and joins): the render thread may switch either while it runs.
-		passSnapshot = { ActiveToggles(), TerrainBlendingDefersTerrain() };
+		passSnapshot = { ActiveToggles(), Extensions::SampleClassifyInputs() };
 		ShardScope passScope(*this, false);
 		PartTimer timer(stats.partMs);
 		{

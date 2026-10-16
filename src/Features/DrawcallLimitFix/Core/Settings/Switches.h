@@ -23,8 +23,6 @@ namespace DCLF
 		Fanout,
 		Precompile,
 		Cull,
-		MtLand,
-		TbTerrain,
 		Forward,
 		Refraction,
 		ProjectedUv,

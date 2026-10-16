@@ -17,10 +17,7 @@ namespace DCLF
 			// (Features/Skins' "skinned", which opens the "Object classes" heading, is listed here, before the projected's, with
 			// Features/TreeWind's "trees" and Features/Decals' toggles after it.)
 			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV (CS_DCLF_PROJECTED_UV)", nullptr, true, {} },
-			{ &S::mtLand, Switch::MtLand, kOn, "terrain", {}, "Terrain (CS_DCLF_MTLAND)", nullptr, true, {} },
-			{ &S::tbTerrain, Switch::TbTerrain, kOn, "terrain under TB", {}, "Terrain under Terrain Blending (CS_DCLF_TB_TERRAIN)",
-				"With Terrain Blending on, DCLF draws the terrain as that feature does: its near blocks' depth into its terrain depth and, offset, into the main depth, and its colour blended after the opaque and decal draws, then the meshes it redraws after the terrain.",
-				true, { &S::mtLand } },
+			// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's here.)
 			{ &S::forward, Switch::Forward, kOn, "forward", {}, "Blended objects: the forward epoch (CS_DCLF_FORWARD)",
 				"T7d: DCLF draws blended Lighting geometry itself, sorted back to front on the GPU, just before the engine's own blended draws (effects, particles). On by default (validated w174/w175).",
 				true, {} },

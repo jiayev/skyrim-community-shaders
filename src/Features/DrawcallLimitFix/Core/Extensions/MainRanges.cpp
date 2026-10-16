@@ -14,17 +14,7 @@ namespace DCLF::Extensions
 			static MainRangeTable table;
 			return table;
 		}
-
-		// Terrain Blending's groups (CS_DCLF_TB_TERRAIN; Records.h's terrain group bits): its terrain blocks (blend mode 1, LESS_EQUAL with
-		// depth writes) and the no-blend meshes after it (EQUAL), as that feature replays them before the blended decals
-		// (Deferred::Hooks::Main_RenderWorld_BlendedDecals).
-		constexpr Api::MainRangeContribution kCoreRanges[] = {
-			{ .slot = Api::MainRangeSlot::Appended0, .name = "terrain", .order = 2 },
-			{ .slot = Api::MainRangeSlot::Appended1, .name = "terrain-no-blend", .order = 3 },
-		};
 	}
-
-	std::span<const Api::MainRangeContribution> CoreMainRanges() { return kCoreRanges; }
 
 	void ResolveMainRanges(const std::array<Api::MainRangeContribution, kMainRangeSlots>& a_registered)
 	{

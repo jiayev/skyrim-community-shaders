@@ -8,9 +8,10 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "State.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
-#include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
@@ -27,12 +28,14 @@ namespace DCLF
 		constexpr std::uint64_t Bit(Flag a_flag) { return static_cast<std::uint64_t>(a_flag); }
 		constexpr std::uint32_t Bit(LightingFlag a_flag) { return static_cast<std::uint32_t>(a_flag); }
 
-		// A technique a feature contributes (Api::TechniqueContribution; Features/TreeWind's TreeAnim) is DCLF's while its toggle is on.
-		// The contributions are read once, the features installed before any scene work.
+		// A technique a feature contributes (Api::TechniqueContribution; Features/TreeWind's TreeAnim) is DCLF's while its toggle is on and,
+		// while its gate's input holds (Api::TechniqueGate: Integrations/TerrainBlending holding the terrain, which it redraws every terrain
+		// pass of blended with its own depth state, so an opaque draw would break it), its gate's toggle too: DCLF then draws it as that
+		// feature does. The contributions are read once, the features installed before any scene work.
 		bool ContributedTechniqueOn(std::uint32_t a_technique)
 		{
 			static const auto& techniques = Extensions::RegisteredTechniques();
-			return a_technique < techniques.size() && techniques[a_technique].toggle && ActiveToggles().On(techniques[a_technique].toggle);
+			return Extensions::TechniqueOn(techniques, ActiveToggles(), a_technique);
 		}
 
 		// Techniques DCLF supports. The rest stay native.
@@ -52,11 +55,9 @@ namespace DCLF
 			// projected textures replace the slot-10 texture SetupTechnique binds.
 			case Technique::MultiIndexSparkle:
 				return Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Layer);
-			case Technique::MTLand:
-			case Technique::MTLandLODBlend:
-				return MtLandEnabled();
-			// The features' (Features/Actors: actor skin, faces, hair and eyes; Features/TreeWind: TreeAnim; Features/Lod: object LOD's
-			// LODObjects and LODObjectHD, terrain LOD's LODLand and LODLandNoise, each only for its flags' geometry type: the flag rules).
+			// The features' (Features/Actors: actor skin, faces, hair and eyes; Features/TreeWind: TreeAnim; Features/Landscape: MTLand and
+			// MTLandLODBlend; Features/Lod: object LOD's LODObjects and LODObjectHD, terrain LOD's LODLand and LODLandNoise, each only for its
+			// flags' geometry type: the flag rules).
 			default:
 				return ContributedTechniqueOn(a_technique);
 			}
@@ -242,20 +243,6 @@ namespace DCLF
 		return t;
 	}
 
-	bool TerrainBlendingDefersTerrain()
-	{
-		if (terrainDefersSnapshot)
-			return *terrainDefersSnapshot;
-		const auto& terrainBlending = globals::features::terrainBlending;
-		return terrainBlending.loaded && terrainBlending.settings.Enabled;
-	}
-
-	bool MtLandEnabled()
-	{
-		const auto toggles = ActiveToggles();
-		return toggles.mtLand && (!TerrainBlendingDefersTerrain() || toggles.tbTerrain);
-	}
-
 	std::uint32_t AlphaBlendModeOf(const SceneCapture::AlphaRecord& a_alpha)
 	{
 		// NiAlphaProperty::GetSrcBlendMode, GetDestBlendMode: the flags' bits 1-4 and 5-8.
@@ -274,119 +261,128 @@ namespace DCLF
 		return 0;
 	}
 
-	Ineligible DeriveLightingDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf,
-		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out, bool a_layer)
+	namespace
 	{
-		std::uint64_t f = a_property.flags;
+		// DeriveLightingDescriptors' stages, in its order: each returns why the object stays native, or None to go on.
 
-		// The techniques' property flag rules (Api::TechniqueContribution::propertyFlags: Features/Lod's terrain LOD, a land block's
-		// BSTriShape, and object LOD, a BSSubIndexTriShape drawn by LodSegments' ranges): a flagged object only of its geometry type, while
-		// its toggle is on.
-		for (const auto& rule : Extensions::PropertyFlagRules())
-			if ((f & rule.propertyFlags) && !(ActiveToggles().On(rule.toggle) && a_leaf.Type() == rule.geometryType))
-				return Ineligible::Lod;
-		const auto* alpha = a_leaf.alpha;
-		const bool blending = a_leaf.AlphaBlending();
-		if (a_layer) {
-			// A multi-index shape's layer (engine notes, "The main modes' registration"): every pass goes into geometry group 2 with
-			// hint 12, and FUN_1414b3bb0 draws it after the opaque decals with their state (depth test+write, bias mode 8 + b, no
-			// blending, write mode 10, render flags 0x41: alpha property not applied). DCLF's decal group 3, between opaque and blended.
-			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal))
-				return Ineligible::Decal;
-			a_out.decalGroup = 3;
-			a_out.decalBlendMode = 0;
-			a_out.decalWriteMode = 10;
-		} else if (f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) {
-			// Decals (engine notes: decals). The accumulation hint picks the geometry group and state:
-			//   hint 2: depth test+write, opaque decal bias, no blending, write mode 10, render flags 0x41 (alpha property NOT applied);
-			//   hint 3: depth test only, blended decal bias, render flags 0x45 (alpha property applied: blend mode from its functions,
-			//           alpha test from its flag), write mode 1 with kZBufferWrite (SetupGeometry forces it), else 11 (the group's).
-			// Neither occludes anything its host does not, so DCLF draws them in a second pass without depth writes. Without an
-			// accumulated pass the hint is GetRenderPasses' for the settled object: 2 + (material alpha < 1 or blending).
-			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal) || !(f & Bit(Flag::kZBufferTest)))
-				return Ineligible::Decal;
-			const std::uint32_t hint = a_accumulated ? a_accumulated->hint : (a_property.materialAlpha < 1.0f || blending) ? 3u : 2u;
-			if (hint == 2) {
-				if (blending)
-					return Ineligible::Decal;  // not measured in this group; the state would be a guess
-				a_out.decalGroup = 1;
+		// The decal and layer groups (a_out.decalGroup and its state).
+		Ineligible DeriveDecalGroup(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, const AccumulatedPass* a_accumulated,
+			LightingDescriptors& a_out, bool a_layer, std::uint64_t f, bool blending)
+		{
+			const auto* alpha = a_leaf.alpha;
+			if (a_layer) {
+				// A multi-index shape's layer (engine notes, "The main modes' registration"): every pass goes into geometry group 2 with
+				// hint 12, and FUN_1414b3bb0 draws it after the opaque decals with their state (depth test+write, bias mode 8 + b, no
+				// blending, write mode 10, render flags 0x41: alpha property not applied). DCLF's decal group 3, between opaque and blended.
+				if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal))
+					return Ineligible::Decal;
+				a_out.decalGroup = 3;
 				a_out.decalBlendMode = 0;
 				a_out.decalWriteMode = 10;
-			} else if (hint == 3) {
-				// The fading case (alpha < 1 without blending; engine blend mode 1) stays native.
-				if (!blending)
+			} else if (f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) {
+				// Decals (engine notes: decals). The accumulation hint picks the geometry group and state:
+				//   hint 2: depth test+write, opaque decal bias, no blending, write mode 10, render flags 0x41 (alpha property NOT applied);
+				//   hint 3: depth test only, blended decal bias, render flags 0x45 (alpha property applied: blend mode from its functions,
+				//           alpha test from its flag), write mode 1 with kZBufferWrite (SetupGeometry forces it), else 11 (the group's).
+				// Neither occludes anything its host does not, so DCLF draws them in a second pass without depth writes. Without an
+				// accumulated pass the hint is GetRenderPasses' for the settled object: 2 + (material alpha < 1 or blending).
+				if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal) || !(f & Bit(Flag::kZBufferTest)))
 					return Ineligible::Decal;
-				const std::uint32_t blendMode = AlphaBlendModeOf(*alpha);
-				if (blendMode == 0)
-					return Ineligible::Decal;  // a blend function pair the engine's setup leaves as it finds it
-				a_out.decalGroup = 2;
-				a_out.decalBlendMode = blendMode;
-				a_out.decalWriteMode = (f & Bit(Flag::kZBufferWrite)) ? 1u : 11u;
-			} else {
-				return Ineligible::Decal;
+				const std::uint32_t hint = a_accumulated ? a_accumulated->hint : (a_property.materialAlpha < 1.0f || blending) ? 3u : 2u;
+				if (hint == 2) {
+					if (blending)
+						return Ineligible::Decal;  // not measured in this group; the state would be a guess
+					a_out.decalGroup = 1;
+					a_out.decalBlendMode = 0;
+					a_out.decalWriteMode = 10;
+				} else if (hint == 3) {
+					// The fading case (alpha < 1 without blending; engine blend mode 1) stays native.
+					if (!blending)
+						return Ineligible::Decal;
+					const std::uint32_t blendMode = AlphaBlendModeOf(*alpha);
+					if (blendMode == 0)
+						return Ineligible::Decal;  // a blend function pair the engine's setup leaves as it finds it
+					a_out.decalGroup = 2;
+					a_out.decalBlendMode = blendMode;
+					a_out.decalWriteMode = (f & Bit(Flag::kZBufferWrite)) ? 1u : 11u;
+				} else {
+					return Ineligible::Decal;
+				}
 			}
-		}
-		// kSkinned selects the SKINNED permutation, whose palette comes from the geometry's skin instance: without one, native.
-		if ((f & Bit(Flag::kSkinned)) && !(Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Skinned) && a_leaf.Skinned()))
-			return Ineligible::Skinned;
-		if ((f & Bit(Flag::kProjectedUV)) && !ActiveToggles().projectedUv)
-			return Ineligible::ProjectedUV;
-		// Terrain Blending replays every kMultiTextureLandscape pass after the opaque pass, blended over what lies beneath, then the
-		// passes of meshes opting out with the otherwise unused kNoTransparencyMultiSample, testing EQUAL. DCLF draws both as it
-		// does, in terrain groups 1 and 2 after its opaque and decal groups; without CS_DCLF_TB_TERRAIN both stay native (DCLF would
-		// draw the meshes before the terrain blends over them). A decal or layer has a group of its own.
-		if (TerrainBlendingDefersTerrain()) {
-			const bool terrain = (f & Bit(Flag::kMultiTextureLandscape)) != 0;
-			const bool noBlend = !terrain && (f & Bit(Flag::kNoTransparencyMultiSample));
-			if ((terrain || noBlend) && a_out.decalGroup)
-				return Ineligible::TerrainNoBlend;
-			if (noBlend && !ActiveToggles().tbTerrain)
-				return Ineligible::TerrainNoBlend;
-			a_out.terrainGroup = terrain ? 1u : noBlend ? 2u : 0u;
-		}
-		// Refraction (GetRenderPasses, AE 0x1414adfb0): kRefraction / kTempRefraction has one main pass, a Utility RENDER_NORMAL pass
-		// (hint 4: geometry group 5) Main::Draw draws into the refraction normals after the world (FUN_1414b4860) for ISRefraction,
-		// none past its refraction LOD fade's end. The forward epoch draws it (drawcall-limit-fix.md, "Refraction"), fading as
-		// GetRenderPasses would. A material alpha of 0 registers nothing: left native (so not drawn).
-		if (f & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) {
-			if (!ActiveToggles().refraction || !ActiveToggles().forward || a_out.decalGroup || a_layer || a_out.terrainGroup || a_property.materialAlpha <= 0.0f) {
-				a_out.rejectedTechnique = kRefractionReject;
-				return Ineligible::Technique;
-			}
-			a_out.refraction = true;
-			a_out.refractionFalloff = (f & Bit(Flag::kRefractionFalloff)) != 0;
-			a_out.refractionClamp = (f & Bit(Flag::kNonProjectiveShadows)) != 0;
-			// The draw's state (FUN_1414b4860): depth mode 1, tested and not written; blending off.
-			a_out.forward = true;
-			a_out.forwardBlendMode = 0;
-			a_out.forwardDepthTest = true;
-			a_out.forwardDepthWrite = false;
+			return Ineligible::None;
 		}
 
-		// Blended geometry draws after the deferred composite (except the blended decal group, above). CS_DCLF_FORWARD: the forward
-		// epoch draws it as the engine's blended draw (FUN_1414b39d0) does: hint 1 (blended, or material alpha below one), alpha
-		// property applied (render flag 4: FUN_14150bc80's mode; none for alpha below one without blending, whose property alpha is
-		// the fade's), write mode 11, SetupGeometry's depth mode from kZBufferTest / kZBufferWrite, the forward pixel stage. A pair
-		// FUN_14150bc80 leaves as it finds it (stale state) stays native, as does anything Terrain Blending holds.
-		const bool translucent = blending || a_property.materialAlpha < 1.0f;
-		if (a_out.refraction) {
-			// The refraction draw's forward state (above): alpha property not applied.
-		} else if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 && ActiveToggles().forward) {
-			const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 0u;
-			if (blending && blendMode == 0)
+		// The held group the object joins (a_out.terrainGroup).
+		Ineligible DeriveHeldGroup(LightingDescriptors& a_out, std::uint64_t f)
+		{
+			// The held groups (Api::HeldGroupContribution): a CS feature replays them after the opaque pass (Integrations/TerrainBlending:
+			// every kMultiTextureLandscape pass, blended over what lies beneath, then the passes of meshes opting out with the otherwise
+			// unused kNoTransparencyMultiSample, testing EQUAL). DCLF draws them as it does, in terrain groups 1 and 2 after its opaque and
+			// decal groups; with a group's toggle off they stay native (DCLF would draw the meshes before the terrain blends over them). The
+			// first group whose flags match takes the object. A decal or layer has a group of its own.
+			for (const auto& group : Extensions::HeldGroups()) {
+				if (!(f & group.propertyFlags) || !Extensions::ClassifyInputOn(group.heldWhile))
+					continue;
+				if (a_out.decalGroup)
+					return Ineligible::Held;
+				if (group.toggle && !ActiveToggles().On(group.toggle))
+					return Ineligible::Held;
+				a_out.terrainGroup = group.group;
+				break;
+			}
+			return Ineligible::None;
+		}
+
+		// Refraction and the forward epoch's blended draws (a_out.refraction, a_out.forward and their state).
+		Ineligible DeriveForward(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, LightingDescriptors& a_out, bool a_layer,
+			std::uint64_t f, bool blending)
+		{
+			const auto* alpha = a_leaf.alpha;
+			// Refraction (GetRenderPasses, AE 0x1414adfb0): kRefraction / kTempRefraction has one main pass, a Utility RENDER_NORMAL pass
+			// (hint 4: geometry group 5) Main::Draw draws into the refraction normals after the world (FUN_1414b4860) for ISRefraction,
+			// none past its refraction LOD fade's end. The forward epoch draws it (drawcall-limit-fix.md, "Refraction"), fading as
+			// GetRenderPasses would. A material alpha of 0 registers nothing: left native (so not drawn).
+			if (f & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) {
+				if (!ActiveToggles().refraction || !ActiveToggles().forward || a_out.decalGroup || a_layer || a_out.terrainGroup || a_property.materialAlpha <= 0.0f) {
+					a_out.rejectedTechnique = kRefractionReject;
+					return Ineligible::Technique;
+				}
+				a_out.refraction = true;
+				a_out.refractionFalloff = (f & Bit(Flag::kRefractionFalloff)) != 0;
+				a_out.refractionClamp = (f & Bit(Flag::kNonProjectiveShadows)) != 0;
+				// The draw's state (FUN_1414b4860): depth mode 1, tested and not written; blending off.
+				a_out.forward = true;
+				a_out.forwardBlendMode = 0;
+				a_out.forwardDepthTest = true;
+				a_out.forwardDepthWrite = false;
+			}
+
+			// Blended geometry draws after the deferred composite (except the blended decal group, above). CS_DCLF_FORWARD: the forward
+			// epoch draws it as the engine's blended draw (FUN_1414b39d0) does: hint 1 (blended, or material alpha below one), alpha
+			// property applied (render flag 4: FUN_14150bc80's mode; none for alpha below one without blending, whose property alpha is
+			// the fade's), write mode 11, SetupGeometry's depth mode from kZBufferTest / kZBufferWrite, the forward pixel stage. A pair
+			// FUN_14150bc80 leaves as it finds it (stale state) stays native, as does anything a held group takes.
+			const bool translucent = blending || a_property.materialAlpha < 1.0f;
+			if (a_out.refraction) {
+				// The refraction draw's forward state (above): alpha property not applied.
+			} else if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 && ActiveToggles().forward) {
+				const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 0u;
+				if (blending && blendMode == 0)
+					return Ineligible::AlphaBlend;
+				a_out.forward = true;
+				a_out.forwardBlendMode = blendMode;
+				a_out.forwardDepthTest = (f & Bit(Flag::kZBufferTest)) != 0;
+				a_out.forwardDepthWrite = (f & Bit(Flag::kZBufferWrite)) != 0;
+			} else if (blending && a_out.decalGroup != 2 && !a_layer) {
 				return Ineligible::AlphaBlend;
-			a_out.forward = true;
-			a_out.forwardBlendMode = blendMode;
-			a_out.forwardDepthTest = (f & Bit(Flag::kZBufferTest)) != 0;
-			a_out.forwardDepthWrite = (f & Bit(Flag::kZBufferWrite)) != 0;
-		} else if (blending && a_out.decalGroup != 2 && !a_layer) {
-			return Ineligible::AlphaBlend;
+			}
+			return Ineligible::None;
 		}
 
-		// The descriptor as GetRenderPasses builds it for an opaque object whose specular and envmap LOD fades have not run out
-		// (the draw fades them, LodFadeFrame), so it is the same at every distance.
-		std::uint32_t derived = 0;
-		const Ineligible derivedReason = [&] {
+		// The descriptor as GetRenderPasses builds it (a_derived), or why the object stays native.
+		Ineligible DeriveRenderPassDescriptor(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, LightingDescriptors& a_out,
+			std::uint64_t f, std::uint32_t& a_derived)
+		{
 			// Without a fade node GetRenderPasses never computes the LOD fades, so the fields the draw reads may be stale: native.
 			if (!a_property.fadeNode && (f & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap))))
 				return Ineligible::Fading;
@@ -435,9 +431,41 @@ namespace DCLF
 				if (a_property.glints)
 					d |= Bit(LightingFlag::AnisoLighting);
 			}
-			derived = d;
+			a_derived = d;
 			return Ineligible::None;
-		}();
+		}
+	}
+
+	Ineligible DeriveLightingDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf,
+		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out, bool a_layer)
+	{
+		std::uint64_t f = a_property.flags;
+
+		// The techniques' property flag rules (Api::TechniqueContribution::propertyFlags: Features/Lod's terrain LOD, a land block's
+		// BSTriShape, and object LOD, a BSSubIndexTriShape drawn by LodSegments' ranges): a flagged object only of its geometry type, while
+		// its toggle is on.
+		for (const auto& rule : Extensions::PropertyFlagRules())
+			if ((f & rule.propertyFlags) && !(ActiveToggles().On(rule.toggle) && a_leaf.Type() == rule.geometryType))
+				return Ineligible::Lod;
+		const bool blending = a_leaf.AlphaBlending();
+		if (const Ineligible reason = DeriveDecalGroup(a_property, a_leaf, a_accumulated, a_out, a_layer, f, blending); reason != Ineligible::None)
+			return reason;
+		// kSkinned selects the SKINNED permutation, whose palette comes from the geometry's skin instance: without one, native.
+		if ((f & Bit(Flag::kSkinned)) && !(Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Skinned) && a_leaf.Skinned()))
+			return Ineligible::Skinned;
+		if ((f & Bit(Flag::kProjectedUV)) && !ActiveToggles().projectedUv)
+			return Ineligible::ProjectedUV;
+		// The held groups a CS feature replays after the opaque pass (DeriveHeldGroup).
+		if (const Ineligible reason = DeriveHeldGroup(a_out, f); reason != Ineligible::None)
+			return reason;
+		// Refraction, then blended geometry (DeriveForward).
+		if (const Ineligible reason = DeriveForward(a_property, a_leaf, a_out, a_layer, f, blending); reason != Ineligible::None)
+			return reason;
+
+		// The descriptor as GetRenderPasses builds it for an opaque object whose specular and envmap LOD fades have not run out
+		// (the draw fades them, LodFadeFrame), so it is the same at every distance.
+		std::uint32_t derived = 0;
+		const Ineligible derivedReason = DeriveRenderPassDescriptor(a_property, a_leaf, a_out, f, derived);
 
 		if (derivedReason != Ineligible::None)
 			return derivedReason;

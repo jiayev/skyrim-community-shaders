@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
+#include "Features/DrawcallLimitFix/Features/Landscape/Landscape.h"
 #include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
 #include "Features/DrawcallLimitFix/Features/Particles/Particles.h"
@@ -59,7 +60,8 @@ namespace DCLF::Features
 		// Hidden nodes' early hooks after billboards' and tree LOD's (no order between them). Decals' early hooks (the decal array edits)
 		// after hidden nodes' (no order between them: no shared site); its node capture is the only one. Decals
 		// after tree wind: its switches and toggles are listed after the trees' (after the actors' and the skinned), and its candidates'
-		// report line after the skinned's. Faces after them: its
+		// report line after the skinned's. Landscape after them: its switch is listed right before the forward epoch's (after the decals'),
+		// its toggle right after the projected's (Integrations/TerrainBlending's after each); no hook, pool, stage or product. Faces after it: its
 		// coordinator component's hooks after the others' at the points they share (the slot tables' reset). First person last, after the
 		// skins and the actors (its toggle needs the skinned and theirs) and after billboards (its report lines follow theirs at the draws' async work); its switches and toggle
 		// are listed after the reflection's.
@@ -80,6 +82,7 @@ namespace DCLF::Features
 			TreeLod::Feature(),
 			HiddenNodes::Feature(),
 			Decals::Feature(),
+			Landscape::Feature(),
 			Faces::Feature(),
 			FirstPerson::Feature(),
 		};

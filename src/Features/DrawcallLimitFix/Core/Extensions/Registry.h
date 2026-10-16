@@ -102,6 +102,7 @@ namespace DCLF::Extensions
 		std::string name;
 		std::uint32_t textureRegister = ~0u;
 		decltype(Api::FrameTexture::view) view = nullptr;
+		bool capturedWhenNull = false;
 	};
 	/** @brief A feature's registered report lines. */
 	struct ReportLinesEntry

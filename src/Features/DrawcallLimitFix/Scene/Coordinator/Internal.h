@@ -370,7 +370,7 @@ namespace DCLF
 
 	/**
 	 * @brief What a scene pass's evaluations read on whichever thread runs them. Always the pass's snapshot of the toggles and of
-	 * Terrain Blending (Coordinator::passSnapshot), and the chunk's mirror-read counters when given. On a pool thread (a_worker) also the
+	 * the classify inputs (Coordinator::passSnapshot), and the chunk's mirror-read counters when given. On a pool thread (a_worker) also the
 	 * pass's frame globals (FrameGlobals::Current is per thread) and the scene work's flags (sceneWorkThread, EngineReadWindow::sceneWork),
 	 * as the sun candidates' verdicts (DirtyVerdicts) and the fan-outs take them: an engine read from there without a lease is counted. One per chunk; the
 	 * pass's own thread holds one (not a worker's) over a whole round, its merges included, so both halves read the same snapshot.
@@ -379,7 +379,7 @@ namespace DCLF
 	{
 		ShardScope(const Coordinator& a_store, bool a_worker, MirrorReadStats* a_mirror = nullptr) :
 			toggles(&a_store.passSnapshot.toggles),
-			terrain(&a_store.passSnapshot.terrainDefers),
+			inputs(&a_store.passSnapshot.inputs),
 			worker(a_worker),
 			sink(std::exchange(mirrorReadSink, a_mirror ? a_mirror : mirrorReadSink))
 		{
@@ -402,7 +402,7 @@ namespace DCLF
 
 	private:
 		ToggleSnapshotScope toggles;
-		TerrainBlendingSnapshotScope terrain;
+		Extensions::ClassifyInputsScope inputs;
 		std::optional<FrameGlobals::Scope> globalsScope;
 		bool worker = false;
 		bool marked = false;
