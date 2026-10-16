@@ -53,8 +53,6 @@ namespace DCLF::Api
 	 *   import (the main resources changed).
 	 * - mainResourcesCurrent: the view's resources draw from the current main resources, with the engine's second colour target imported.
 	 * - rebuildRequested: the graph asked for a rebuild (it is not built as the revision recorded it).
-	 * - frameBeforeColourHeld: the main resources' depth and colour commits are of one frame, this one or the one before, of the adopted
-	 *   set, after the installed payload (what a view drawing the frame before's colour inputs needs).
 	 * - frame: FrameView's number.
 	 */
 	class ViewCoverage
@@ -67,7 +65,6 @@ namespace DCLF::Api
 		bool rebuildPending = false;
 		bool mainResourcesCurrent = false;
 		bool rebuildRequested = false;
-		bool frameBeforeColourHeld = false;
 		std::uint32_t frame = 0;
 	};
 

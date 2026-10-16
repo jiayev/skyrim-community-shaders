@@ -353,20 +353,21 @@ namespace DCLF
 		};
 		/**
 		 * @brief Which of the frame's commits a view's epoch draws from. DepthThisFrame: the frame's scene list with this frame's depth
-		 * commit (its index pool, inputs, records, geometry rows); DepthThisFrameColourBefore: the same with the frame before's colour
-		 * commit's frame record, both commits of the adopted set (the view's work sets up and imports its target after); ColourThisFrame:
-		 * this frame's colour commit's payload and frame constants.
+		 * commit (its index pool, inputs, records, geometry rows) of the adopted set, the view's target imported before (its frame start);
+		 * DepthThisFrameTargetAfter: the same, the view's work setting up and importing its target after taking them (the reflection's cube,
+		 * known only at its faces' capture), its frame constants its own commit's; ColourThisFrame: this frame's colour commit's payload and
+		 * frame constants.
 		 */
 		enum class ViewInputsFrom : std::uint8_t
 		{
 			DepthThisFrame,
-			DepthThisFrameColourBefore,
+			DepthThisFrameTargetAfter,
 			ColourThisFrame,
 		};
 		enum class ViewInputsTaken : std::uint8_t
 		{
 			Taken,
-			Stale,     // the commits are not the frame's (or the frame before's), or nothing is listed
+			Stale,     // the commit is not the frame's, or nothing is listed
 			NoTarget,  // the view's resources or its imported target are missing (DepthThisFrame)
 		};
 		ViewInputsTaken TakeViewInputs(Api::EngineView a_view, ViewInputsFrom a_from, ViewListed& a_listed);
@@ -381,10 +382,12 @@ namespace DCLF
 		 * @brief The view's epoch a_epoch (0 the depth or only one, 1 the colour one) submitted: its recording from the adopted revision,
 		 * with a commit of a_faces (its cameras: none commits nothing) into its shape, holding a_listed's payloads; a_drawn: the faces the
 		 * commit drew. A trees view's commit takes each draw family's row (tree LOD's as the last depth commit uploaded it) while the faces'
-		 * family is DCLF's (DecideViewFaces) and the shape draws it, its texture bound again for the execution.
+		 * family is DCLF's (DecideViewFaces) and the shape draws it, its texture bound again for the execution. A view with frame constants
+		 * of its own (Draws::OwnsFrameConstants: the reflection's) commits them too, from this frame's sources, its frame textures held for
+		 * the execution; a_nullTextures: the frame texture registers (t16 and up) its frame record left null, a bit each (none committed: untouched).
 		 */
 		ViewSubmit SubmitViewEpoch(Api::EngineView a_view, std::uint32_t a_epoch, const ViewListed& a_listed, std::span<const Draws::ViewFace> a_faces,
-			std::uint32_t* a_drawn = nullptr);
+			std::uint32_t* a_drawn = nullptr, std::array<std::uint64_t, 2>* a_nullTextures = nullptr);
 		/** @brief Any thread: whether the view's epochs draw its members this frame (its coverage, decided at the frame's start). */
 		bool ViewCovered(Api::EngineView a_view) const;
 		/**

@@ -351,10 +351,11 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
 ### The design (L5b, L5c, as built)
 
 - **When the faces render.** `TESWaterReflections::Update` runs after the scene phase and before the shadow maps, so before
-  this frame's Z-prepass and colour builds. The newest complete draw data on the GPU is the frame before's: the depth
-  segment's inputs, the main rows, the object records and geometry, the index pool, the colour segment's frame constants,
-  tree LOD's tables. The tables are stable then (written again at the placement join, BeforeShadowMaps), but this frame's
-  rows don't exist yet. So the faces draw from the frame before's, and the design follows from that.
+  this frame's Z-prepass and colour builds. The faces' epoch runs right after this frame's depth commit, which brings the
+  index pool, the depth inputs, the object records and geometry rows and tree LOD's tables to the frame's publication. The
+  faces are a snapshot component of this frame, like everything else: the frame's scene list with that depth commit, and
+  frame constants of their own (`ViewResources::frameConstants`), which their commit (`CommitView`) writes from this
+  frame's sources (2026-10-16; before, they read the main frame constants as the frame before's colour commit left them).
 - **Programs** (L5b). `ShaderPrograms::FindForward(vertex, pixel)`: a main pipeline's pulled vertex stage and the pulled
   colour pixel stage of its pixel descriptor without `Deferred`. `FindDrawFamilyForward`: DistantTree's `DistantTreeBlock` with
   `AlphaTest`, pulled.
@@ -390,8 +391,8 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
   the water reads the cube (`FUN_140e44c60` after it only restores four renderer words; the cube has one mip). An epoch
   per update was two a frame: each epoch is a slot of the host's ring (render-graph.md, "Frames in flight"). It draws only
   with the installed payload (the scene list and its rows; the frame's ring entry until 2026-10-14), after this frame's depth commit (the index pool, the depth
-  inputs, the object records and geometry rows at the frame's publication), and while the colour commit whose frame
-  record it reads is the frame before's, into the same backings (`Resources::committed`). The shape always has all six faces, so the recordings hold
+  inputs, the object records and geometry rows at the frame's publication: `Resources::depthCommitted`), with its own frame
+  constants written by its commit. No earlier commit is held, so its coverage does not depend on payload installs. The shape always has all six faces, so the recordings hold
   across frames; a face the frame doesn't render culls and draws nothing (zero dispatch, no tree slots).
   - **Culling:** BuildDraws over the scene list's main part (its view bits `kViewReflection`) in its single phase, frustum
     only, one latched dispatch per face. The
@@ -405,9 +406,16 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
     the forward tree pipeline. LOD drawn after the sky is the engine's result: the sky writes no depth and lies at the far
     plane.
 - **Constants** (measured: "The constants" below). The material and pipeline rows are the main view's. The frame push data is
-  the colour segment's frame constants as the frame before left them, with VS and PS b12 the face's block. The frame
-  lighting (PS b13) stays the main pass's: its sun direction is a frame old, a difference in about the fifth digit, the
-  size capture parity measured between a face's draws and the main rows.
+  the view's own frame constants, laid out as the main frame slots, with VS and PS b12 the face's block. The view's commit
+  writes them through Core's one frame record writer (`Core/Render/Resources/FrameRecords.h`, shared with the main and shadow
+  commits): the record (the installed payload's objects and extras, FrameValues' buffers, the frame bindings, the frame
+  textures), CS's SharedData and FeatureData (PS b5, b6), the zeroed light block (PS b3), and the lighting slot's rows and VS
+  b13 (lighting, LOD fades, fog, extras, the frame constant rows), all this frame's. The faces' programs read no other frame
+  slot. The frame textures (t16 and up) they read are t18, t19, t25, t30, t31, t35-t37, t50, t53, t55, t60, t65, t76-t79, t98
+  and t125; a source of this frame's exists for the character light (t125) and the registered frame textures (Terrain
+  Blending's mask, t55); the rest read null, and the report's "frame textures without a source" names them. The frame lighting
+  (PS b13) is the main pass's: a difference in about the fifth digit of the sun direction, the size capture parity measured
+  between a face's draws and the main rows.
 
 ### The constants (L5b, 2026-10-04)
 

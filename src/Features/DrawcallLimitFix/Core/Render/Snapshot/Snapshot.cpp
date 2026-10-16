@@ -595,7 +595,6 @@ namespace DCLF
 		s.installedDraws = snapshot->draws;
 		if (s.installedPayload != snapshot->payload) {
 			s.installedPayload = snapshot->payload;  // the snapshot holds it too: its release is the builder's
-			s.installedPayloadFrame = Scene::FrameView::Get().GetFrame();
 			if (s.installedPayload)
 				s.payloadsInstalled.fetch_add(1, std::memory_order_relaxed);
 			// Its products, for the features that registered them (Api::PayloadProduct::install).

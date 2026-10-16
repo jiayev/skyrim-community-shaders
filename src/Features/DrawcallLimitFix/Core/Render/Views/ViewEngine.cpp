@@ -5,7 +5,9 @@
 // roots its faces draw: ViewRoots.cpp.)
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 namespace DCLF
@@ -114,15 +116,10 @@ namespace DCLF
 			return ViewInputsTaken::Taken;
 		}
 		// The frame's scene list (the installed payload) with this frame's depth commit's index pool, inputs, object records and geometry
-		// rows - the frame's publication whole - and, from the frame before, its colour commit's frame record, in the backing it was written
-		// to (both commits of the adopted set).
+		// rows - the frame's publication whole - of the adopted set.
 		const auto main = impl->resources;
-		const auto& depthCommit = main ? main->committed[kDepthShape] : Resources::Committed{};
-		const std::uint64_t adoptedSerial = impl->Adopted().Serial();
-		if (!main || !impl->scene || depthCommit.frame != frameNumber || depthCommit.adoptedSerial != adoptedSerial)
-			return ViewInputsTaken::Stale;
-		const bool colourBefore = a_from == ViewInputsFrom::DepthThisFrameColourBefore;
-		if (colourBefore && (main->committed[kColourShape].frame + 1 != frameNumber || main->committed[kColourShape].adoptedSerial != adoptedSerial))
+		const auto& depthCommit = main ? main->depthCommitted : Resources::Committed{};
+		if (!main || !impl->scene || depthCommit.frame != frameNumber || depthCommit.adoptedSerial != impl->Adopted().Serial())
 			return ViewInputsTaken::Stale;
 		const auto& draws = impl->installedDraws;
 		const MainPayload* listed = impl->InstalledPayload() && draws ? draws->payloads[kAsyncZPrepass].get() : nullptr;
@@ -130,18 +127,63 @@ namespace DCLF
 			return ViewInputsTaken::Stale;
 		// The main part of the scene list: its region and the main frame inputs (the shadow frame inputs after them are no main input).
 		a_listed.inputs = static_cast<std::uint32_t>(listed->resident.Count() + listed->inputList.size());
-		// The view's target: a DepthThisFrame view's imported before (its frame start); a DepthThisFrameColourBefore view's work imports it
+		// The view's target: a DepthThisFrame view's imported before (its frame start); a DepthThisFrameTargetAfter view's work imports it
 		// after taking its inputs.
 		const auto& resources = impl->View(a_view).resources;
-		if (!colourBefore && (!resources || !resources->target))
+		if (a_from == ViewInputsFrom::DepthThisFrame && (!resources || !resources->target))
 			return ViewInputsTaken::NoTarget;
 		a_listed.owners = { draws->payloads[0].get(), draws->payloads[1].get() };
 		a_listed.ownerCount = 2;
 		return ViewInputsTaken::Taken;
 	}
 
+	namespace
+	{
+		/**
+		 * @brief A view's frame textures (t16 and up) for its own frame record, from this frame's sources alone: the character light, the
+		 * registered frame textures' views (Api::FrameTexture). Nothing the colour pass captured (that is the frame before's by the time
+		 * the faces draw), nor the frame graph buffers (Light Limit Fix's clusters are the main camera's, culled after the faces' epoch):
+		 * those read null. Each binding is held by a_owners for the execution.
+		 */
+		void ResolveViewFrameTextures(ViewEpochState& a_state, std::vector<std::shared_ptr<const void>>& a_owners)
+		{
+			auto& textures = GpuTextures::Get();
+			if (a_state.frameTextureGeneration != textures.Generation()) {
+				a_state.frameTextureViews = {};
+				a_state.frameTextureBindings = {};
+				a_state.frameTextureGeneration = textures.Generation();
+			}
+			a_state.frameTextures.fill(kInvalidIndex);
+			const auto frameTextures = Extensions::RegisteredFrameTextures();
+			const auto frameTextureAt = Extensions::FrameTextureIndices();
+			for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t) {
+				const auto at = frameTextureAt[t];
+				auto* const view = t == kCharacterLightRegister                               ? Scene::FrameView::Get().GetFrameCapture().characterLightView :
+				                   at != Extensions::kNoFrameTexture && at < frameTextures.size() ? static_cast<ID3D11ShaderResourceView*>(frameTextures[at].view()) :
+				                                                                                  nullptr;
+				a_state.frameTextures[t] = HoldFrameTexture(a_state.frameTextureViews[t], a_state.frameTextureBindings[t], view, t, view ? 0u : textures.NullIndex(), a_owners);
+			}
+		}
+
+		/** @brief What a view with frame constants of its own holds for its execution: its payloads' bindings and the adopted snapshot (its frame textures: ResolveViewFrameTextures). */
+		std::shared_ptr<std::vector<std::shared_ptr<const void>>> OwnFrameOwners(std::span<const MainPayload* const> a_payloads, const std::shared_ptr<const void>& a_snapshot)
+		{
+			auto* host = RenderGraphRuntime::Get().Host();
+			const auto cleanup = host ? host->ResourceCleanup() : nullptr;
+			if (!cleanup)
+				return nullptr;
+			auto owners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
+			for (const auto* payload : a_payloads)
+				if (payload)
+					owners->insert(owners->end(), payload->bindingOwners.begin(), payload->bindingOwners.end());
+			if (a_snapshot)
+				owners->push_back(a_snapshot);
+			return owners;
+		}
+	}
+
 	IndirectDraws::ViewSubmit IndirectDraws::SubmitViewEpoch(Api::EngineView a_view, std::uint32_t a_epoch, const ViewListed& a_listed,
-		std::span<const ViewFace> a_faces, std::uint32_t* a_drawn)
+		std::span<const ViewFace> a_faces, std::uint32_t* a_drawn, std::array<std::uint64_t, 2>* a_nullTextures)
 	{
 		const auto& epochs = ViewEpochsOf(a_view);
 		const std::uint32_t epoch = epochs.epochs[a_epoch];
@@ -153,9 +195,15 @@ namespace DCLF
 		std::shared_ptr<const ViewFrame> shape;
 		if (!a_faces.empty())
 			shape = revision.shape->Value<ViewFrame>();
-		const auto owners = impl->EpochOwners(std::span<const MainPayload* const>(a_listed.owners.data(), a_listed.ownerCount));
+		// A view with frame constants of its own holds its commit's frame textures, not the colour segment's.
+		auto& state = impl->View(a_view);
+		const bool ownFrame = !a_faces.empty() && state.resources && state.resources->frameConstants;
+		const std::span<const MainPayload* const> payloads(a_listed.owners.data(), a_listed.ownerCount);
+		const auto owners = ownFrame ? OwnFrameOwners(payloads, impl->adoptedSnapshot) : impl->EpochOwners(payloads);
 		if (!owners)
 			return ViewSubmit::NoOwners;
+		if (ownFrame)
+			ResolveViewFrameTextures(state, *owners);
 		// A trees view's draw families' rows (ViewFaces.cpp), their textures held with the owners.
 		ViewFamilyRows rows{};
 		const bool trees = !a_faces.empty() && TraitsOf(a_view).trees;
@@ -171,6 +219,8 @@ namespace DCLF
 			return ViewSubmit::Failed;
 		if (a_drawn)
 			*a_drawn = drawn;
+		if (a_nullTextures && ownFrame)
+			*a_nullTextures = state.nullTextures;
 		return ViewSubmit::Submitted;
 	}
 

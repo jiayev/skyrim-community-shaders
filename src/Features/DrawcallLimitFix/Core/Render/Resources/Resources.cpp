@@ -718,6 +718,13 @@ namespace DCLF
 		state->blocksAddress = AddressOf(device, *state->blocks);
 		if (!state->blocksAddress)
 			return fail("blocks have no device address");
+		// A view drawing with frame constants of its own (the faces'): laid out as the main ones, written by its commit.
+		if (OwnsFrameConstants(traits)) {
+			state->frameConstants = DeviceBuffer(kFrameConstantBytes, name("frame-constants").c_str());
+			state->frameConstantsAddress = AddressOf(device, *state->frameConstants);
+			if (!state->frameConstantsAddress)
+				return fail("frame constants have no device address");
+		}
 		// The forward part draws through the main colour signature with an explicit preprocess, as ForwardDrawPass.
 		if (traits.forwardPart)
 			state->preprocessForward = PreprocessStates::Create(device, host->FrameSlots(), fmt::format("the {} forward part", traits.name).c_str());

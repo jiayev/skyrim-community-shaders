@@ -139,14 +139,14 @@ namespace DCLF::Draws
 		rhi::CommandSignaturePtr dispatchSignature;
 		// The pipeline sort of phase 1's and the colour segment's sequences; null when off.
 		std::shared_ptr<DrawSort> sort;
-		// Per segment, its last commit. The reflection's faces reuse the previous frame's depth inputs and colour frame record
-		// only while the adopted set is the one they were committed against (nothing has grown since).
+		// The last depth commit. A view drawing this frame's depth commit (the reflection's faces: TakeViewInputs) draws only on its frame
+		// and while the adopted set is the one it was committed against (nothing has grown since).
 		struct Committed
 		{
 			std::uint32_t frame = ~0u, inputs = 0;
 			std::uint64_t adoptedSerial = 0;  // the adopted set's serial
 		};
-		std::array<Committed, 2> committed;
+		Committed depthCommitted;
 	};
 
 	struct PassBindings

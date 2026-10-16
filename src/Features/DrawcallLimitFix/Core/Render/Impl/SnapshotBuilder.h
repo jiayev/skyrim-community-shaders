@@ -102,7 +102,6 @@ namespace DCLF
 		// The frame's: the adopted snapshot's payload, installed with its draws (the snapshot holds it too, so the builder releases it),
 		// bound after the frame's last submission (BindAdopted). The epochs read its parts by value.
 		std::shared_ptr<const PayloadVersions> installedPayload;
-		std::uint32_t installedPayloadFrame = 0;  // the frame it was installed at (a frame record of an earlier frame names another)
 		/** @brief The frame: the installed payload (null: none; a covered epoch always has one, ready: DecideCoverage). */
 		const PayloadVersions* InstalledPayload() const { return installedPayload.get(); }
 		// The snapshot builder's: the payloads' pools (D5), on DCLF's retirement clock; their single acquirer is the builder. Census is

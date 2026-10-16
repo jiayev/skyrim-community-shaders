@@ -9694,6 +9694,10 @@ changing under the draws: one epoch's draws read two publications.
 **Fix.** The faces draw right after the depth commit (the depth pass's hook, `Segment::Reflection` after `ZPrepass` in the
 epoch order), which brings the pool and the scene's buffers to the frame's publication; the colour frame record they read
 is still the frame before's. Their staleness rule is now: this frame's depth commit, the frame before's colour commit.
+-   Superseded (2026-10-16): the faces have frame constants of their own, written by their commit from this frame's sources
+    (dclf-lod.md, "Water reflections"). The colour commit's stamp and the coverage input that held it
+    (`frameBeforeColourHeld`) are gone: the faces' rule is this frame's depth commit alone. Held behind the frame before's
+    colour commit, they were covered on 9-17 of 300 frames once a payload was installed nearly every frame.
 -   Measured: before, 4 of 7 motion runs (m196-m202) lost the device; after, 4 of 4 (m203-m206) did not, the faces drawn
     as before (600 of 600 a window once settled), the bridge (y85) with 0 of 600 face cameras differing.
 

@@ -158,13 +158,12 @@ namespace DCLF::Features::Reflection
 
 	bool Covered(const Api::ViewCoverage& a_coverage)
 	{
-		// The faces' withholding (PassCapture), before the engine renders them: the claims stand and the cube the epoch draws into is
-		// in the graph as built (its import, at the epoch, is built at the next build point). The faces draw from the frame's scene list
-		// and the frame before's colour frame record (Execute): not after a frame whose main epochs were not submitted (no claims), nor
-		// once another set was adopted since (this frame's selection) or another payload installed since (the frame record names the
-		// payload's objects and extras), which leaves those addresses on versions nothing holds. Whatever the toggle: off, the set has no
-		// reflection members to withhold.
+		// The faces' withholding (PassCapture), before the engine renders them: the claims stand, the faces' recording is in the revision
+		// and the cube the epoch draws into is in the graph as built (its import, at the epoch, is built at the next build point). The faces
+		// are a snapshot component of this frame (Execute): the frame's scene list with this frame's depth commit, and frame constants of
+		// their own that their commit writes from this frame's sources, so no earlier commit has to be held. Whatever the toggle: off, the
+		// set has no reflection members to withhold.
 		const auto& c = a_coverage;
-		return c.main && c.frameBeforeColourHeld && c.epochsCovered && c.targetImported && !c.rebuildRequested;
+		return c.main && c.epochsCovered && c.targetImported && !c.rebuildRequested;
 	}
 }

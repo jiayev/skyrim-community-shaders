@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
 #include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
@@ -47,8 +48,8 @@ namespace DCLF::Draws
 	/*
 	 * The views (ViewEpoch.cpp and ViewEpochRecord.cpp, with their captures in Features/Reflection and Features/FirstPerson): epochs that
 	 * cull the frame's scene list through BuildDraws' bucket path, frustum only, for faces with a camera of their own, and draw the
-	 * buckets into the view's targets. Each face's VS_PerFrame (b12) is its camera's (PerFrameBlock); the colour segment's frame
-	 * constants otherwise.
+	 * buckets into the view's targets. Each face's VS_PerFrame (b12) is its camera's (PerFrameBlock); the frame constants otherwise
+	 * the faces' own (OwnsFrameConstants: their commit's, from this frame's sources) or first person's, the colour segment's.
 	 * - The water reflection's cube faces (dclf-lod.md, "Water reflections"): one epoch per reflection update, after the engine's
 	 *   face loop. Six faces, each drawing its LOD slots' forward pipelines into its slice of the engine's cube with DCLF's depth, and
 	 *   tree LOD from a list of its own. The shape always has all six faces, so the recordings hold across updates: a face the update
@@ -87,10 +88,14 @@ namespace DCLF::Draws
 	};
 	const ViewTraits& TraitsOf(ViewKind a_kind);
 
+	/** @brief Whether a view draws with frame constants of its own (the faces': a view without a depth pass), not the main resources'. */
+	inline bool OwnsFrameConstants(const ViewTraits& a_traits) { return !a_traits.depthPass; }
+
 	/**
 	 * @brief A view's latch block's region per frame slot: each face's BuildDrawsLatch, the slots' map, each face's bucket table
 	 * (first, capacity), then each face's values its latched copies take (its block, and in a trees view each draw family's row and
-	 * list header with faces: Extensions::DrawFamilyFaceLayout, at DrawFamilyFaceBytes a face).
+	 * list header with faces: Extensions::DrawFamilyFaceLayout, at DrawFamilyFaceBytes a face), then a view with frame constants of its
+	 * own its frame values (ViewFrame::kFrameList's copies: frameBytes, grown by the revision producer to what they take).
 	 */
 	struct ViewLatchLayout
 	{
@@ -98,11 +103,13 @@ namespace DCLF::Draws
 		std::uint32_t slots = 0;    // pipeline slots the map holds a word for
 		std::uint32_t buckets = 0;  // entries a face's table holds
 		std::uint32_t faceBytes = kViewBlockBytes;
+		std::uint32_t frameBytes = 0;  // the frame values' (none: a view drawing with the main frame constants)
 		static ViewLatchLayout Initial(const ViewTraits& a_traits) { return { a_traits.faces, 64, 4, a_traits.trees ? Extensions::DrawFamilyFaceBytes() : kViewBlockBytes }; }
 		std::uint32_t MapOffset() const { return faces * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t TableOffset(std::uint32_t a_face) const { return MapOffset() + slots * 4 + a_face * buckets * 8; }
 		std::uint32_t FaceOffset(std::uint32_t a_face) const { return ((TableOffset(faces) + 255u) & ~255u) + a_face * faceBytes; }
-		std::uint32_t Bytes() const { return FaceOffset(faces); }
+		std::uint32_t FrameOffset() const { return (FaceOffset(faces) + 255u) & ~255u; }
+		std::uint32_t Bytes() const { return frameBytes ? FrameOffset() + frameBytes : FaceOffset(faces); }
 		bool operator==(const ViewLatchLayout&) const = default;
 	};
 
@@ -132,7 +139,7 @@ namespace DCLF::Draws
 		// The forward range: forwardCapacity staging slots at forwardFirst, the sorted half after them; its table entry and bucket count
 		// word forwardEntry (buckets.size()), drawn through the main colour signature. 0 capacity: none.
 		std::uint32_t forwardFirst = 0, forwardCapacity = 0, forwardEntry = 0;
-		// Per face, the frame push data: the colour segment's frame constants with VS and PS b12 the face's block.
+		// Per face, the frame push data: the view's frame constants (its own, or the colour segment's) with VS and PS b12 the face's block.
 		std::vector<std::array<std::uint32_t, kFramePushWords>> push;
 		// Per draw family, its faces (a trees view's; tree LOD's): the forward pipeline and its draw's signature (invalid: none), the
 		// cull's groups.
@@ -144,8 +151,11 @@ namespace DCLF::Draws
 			bool operator==(const Faces& o) const { return SameHandle(pipeline, o.pipeline) && SameHandle(signature, o.signature) && groups == o.groups; }
 		};
 		std::array<Faces, Extensions::kDrawFamilies> faces;
-		// The latched copies (LatchedCopiesPass): the faces' values from the latch, and the counters' zeros.
-		std::array<LatchedList, 2> latched;
+		// The latched copies (LatchedCopiesPass): the faces' values from the latch, the counters' zeros, and a view with frame constants
+		// of its own its frame values from the latch (kFrameList: what its commit writes through LatchedUploads, so its unwritten copies are
+		// zeroed apart from the faces' values).
+		static constexpr std::size_t kFrameList = 2;
+		std::array<LatchedList, 3> latched;
 		// Not compared (implied by the latch block and the buckets): its layout, and each pipeline slot's bucket.
 		ViewLatchLayout latchLayout;
 		std::shared_ptr<const std::vector<std::uint32_t>> map;
@@ -167,13 +177,20 @@ namespace DCLF::Draws
 	struct ViewResources
 	{
 		const ViewTraits* traits = nullptr;
-		// The main pass's (its depth inputs, targets, rows, visibility, frame constants) and, through it, the scene's.
+		// The main pass's (its depth inputs, targets, rows, visibility, and the frame constants of a view without its own) and, through it,
+		// the scene's.
 		std::shared_ptr<Resources> main;
 		Versioned sequences;  // faces * a face's range
 		std::shared_ptr<org::Buffer> count;
 		std::array<Versioned, kMaxViewFaces> bucketCounts;
 		std::shared_ptr<org::Buffer> blocks;  // kViewBlockBytes per face
 		std::uint64_t blocksAddress = 0;
+		// A view with frame constants of its own (OwnsFrameConstants: the faces'): laid out as the main frame slots (FrameSlots.h), with
+		// what the faces' programs read (the record, PS b5/b6, the shared light block, the lighting slot's rows, VS b13), written by its
+		// commit from this frame's sources. Null for a view drawing with the main resources' (first person's).
+		std::shared_ptr<org::Buffer> frameConstants;
+		std::uint64_t frameConstantsAddress = 0;
+		bool sharedLightZeroed = false;
 		// The reflection's: DCLF's depth for the faces (cleared per face) and the engine's cube target. First person's: the colour
 		// epoch's depth, the engine's kPOST_ZPREPASS_COPY (FUN_1414cb6d0 binds it as the first-person pass's depth).
 		std::shared_ptr<org::PixelBuffer> depth;
@@ -229,7 +246,8 @@ namespace DCLF::Draws
 		ViewPlan plan;
 		std::uint32_t sequenceDraws = 0;  // a face's range: the sequences' named units (the revision's set), at least plan.draws
 		const ViewLatches* latches = nullptr;
-		std::uint64_t frameConstantsAddress = 0;  // the colour segment's, which the push data names
+		std::uint64_t frameConstantsAddress = 0;  // the view's own (OwnsFrameConstants) or the colour segment's, which the push data names
+		std::vector<LatchedCopy> frameCopies;     // a view's own frame values' latched copies (ViewFrame::kFrameList), at the latch layout's FrameOffset
 		std::uint32_t width = 0, height = 0;
 		float depthRange = 1.0f;
 		// Per draw family in the faces: its forward pipeline and draw signature, and the units its lists hold (tree LOD's shape slots;
@@ -364,5 +382,13 @@ namespace DCLF
 		std::array<FamilyFaces, Extensions::kDrawFamilies> faces;
 		// By family, whether the faces' draws are DCLF's this frame (PassCapture::SetViewFamilyOwned; the roots they own: ViewRoots.cpp).
 		std::array<bool, Extensions::kDrawFamilies> facesOwned{};
+		// A view with frame constants of its own (Draws::OwnsFrameConstants): its frame textures (t16 and up) as its last commit resolved
+		// them from this frame's sources (IndirectDraws::SubmitViewEpoch), each register's binding kept while it names the same view (of
+		// the textures' generation), and the registers its frame record left null.
+		std::array<std::uint32_t, kTextureRegisters> frameTextures{};
+		std::array<ID3D11ShaderResourceView*, kTextureRegisters> frameTextureViews{};
+		std::array<GpuTextures::Binding, kTextureRegisters> frameTextureBindings{};
+		std::uint32_t frameTextureGeneration = ~0u;
+		std::array<std::uint64_t, 2> nullTextures{};
 	};
 }

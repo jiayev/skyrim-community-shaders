@@ -3,6 +3,7 @@
 // features' (Features/Reflection, Features/FirstPerson), on the view engine's calls (ViewEngine.cpp).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 
 #include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 
@@ -155,7 +156,8 @@ namespace DCLF
 				frame->faces[d].signature = in.signature;
 				frame->faces[d].groups = static_cast<std::uint32_t>((std::uint64_t(in.units) * faces.unitWords + faces.cullGroup - 1) / faces.cullGroup);
 			}
-			// Per face, the colour segment's frame constants (the frame lighting at PS b13, the frame record) with VS and PS b12 its block.
+			// Per face, the view's frame constants (its own or the colour segment's: the frame lighting at PS b13, the frame record) with VS and
+			// PS b12 its block.
 			const auto base = FramePushWords(a_in.frameConstantsAddress);
 			frame->push.assign(traits.faces, base);
 			for (std::uint32_t f = 0; f < traits.faces; ++f) {
@@ -184,6 +186,12 @@ namespace DCLF
 						fromLatch.copies.push_back({ a_resources.faceRows[d][f].get(), face + entry.faceLayout.rowInFace, entry.contribution.faces.rowBytes, 0 });
 						fromLatch.copies.push_back({ a_resources.faceLists[d][f]->Key(), face + entry.faceLayout.headerInFace, entry.contribution.faces.headerBytes, 0 });
 					}
+			}
+			// A view's own frame values (its commit's, from this frame's sources) from the latch.
+			if (!a_in.frameCopies.empty()) {
+				auto& fromFrame = frame->latched[ViewFrame::kFrameList];
+				fromFrame.latch = latches.latch;
+				fromFrame.copies = a_in.frameCopies;
 			}
 			return frame;
 		}
@@ -362,6 +370,34 @@ namespace DCLF
 			}
 			drawn += face.drawn ? 1u : 0u;
 		}
+		if (auto* own = state.resources.get(); own && own->frameConstants) {
+			// The view's own frame constants, from this frame's sources (a snapshot component of the frame, as the shadow views' record):
+			// the record (its frame textures as SubmitViewEpoch resolved them, the installed payload, FrameValues' buffers, the frame
+			// bindings), CS's SharedData and FeatureData (PS b5, b6), the shared light block and the frame-wide rows. The faces' programs
+			// read no other frame slot (VS and PS b12 are each face's block).
+			const auto& adopted = Adopted();
+			CommitUploads uploads(commitStagedPool, adopted);
+			LatchedUploads frame(a_shape.latched[ViewFrame::kFrameList], uploads, latchSlot);
+			const auto shared = SharedDataBlock(), feature = FeatureDataBlock();
+			const std::uint32_t vsMask = (1u << kPerFrameVertexRegister) | (1u << kFrameFogRegister);
+			const std::uint32_t psMask = (1u << kPerFrameVertexRegister) | (shared.empty() ? 0u : 1u << kSharedDataRegister) | (feature.empty() ? 0u : 1u << kFeatureDataRegister);
+			auto& textures = GpuTextures::Get();
+			const std::uint32_t nullIndex = textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u;
+			const DrawBindings record = FrameRecordOf(own->frameConstantsAddress, vsMask, psMask, state.frameTextures, nullIndex, *InstalledPayload(),
+				{ FrameValues::Get().PlacementsIndex(), FrameValues::Get().PalettesIndex(), FrameValues::Get().ShadingIndex() }, adopted, *scene, frameNumber);
+			frame(own->frameConstants, &record, sizeof(record), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
+			frame(own->frameConstants, shared.data(), shared.size(), FrameSlotOffset(true, kSharedDataRegister));
+			frame(own->frameConstants, feature.data(), feature.size(), FrameSlotOffset(true, kFeatureDataRegister));
+			ZeroSharedLightOnce(uploads, own->frameConstants, own->sharedLightZeroed);
+			LatchFrameRows(frame, own->frameConstants);
+			(void)frame.Finish();
+			revisions.latchedMisses += frame.Misses();
+			// The frame texture registers left null (no source of this frame's), for the view's report.
+			state.nullTextures = {};
+			for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t)
+				if (record.textures[t] == nullIndex)
+					state.nullTextures[t / 64] |= 1ull << (t % 64);
+		}
 		return drawn;
 	}
 
@@ -375,7 +411,9 @@ namespace DCLF
 		for (const auto* payload : a_payloads)
 			if (payload)
 				owners->insert(owners->end(), payload->bindingOwners.begin(), payload->bindingOwners.end());
-		// The colour segment's frame record names the frame textures it resolved, held by their bindings since (frameTextureBindings).
+		// The colour segment's frame record names the frame textures it resolved, held by their bindings since (frameTextureBindings): what
+		// the shared epochs and a view drawing with the main frame constants (first person's) read. A view with its own holds its commit's
+		// (SubmitViewEpoch).
 		for (const auto& held : frameTextureBindings)
 			if (held.binding.owner)
 				owners->push_back(held.binding.owner);
