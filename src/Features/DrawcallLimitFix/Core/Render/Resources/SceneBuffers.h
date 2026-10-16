@@ -25,11 +25,6 @@ namespace DCLF::Draws
 		// Fade roots (FadeStateCS): static rows by root slot, GPU state rows, the frame's inputs, and CS_DCLF_FADE_PARITY's log.
 		Versioned fadeRoots, fadeStates;
 		std::shared_ptr<org::Buffer> fadeFrameBuffer, fadeLog;
-		// The main cull input's programs (Api::MainCullInputContribution::programs) and a mirror of what was sent into the version
-		// filled. Null without an input.
-		Versioned cullPrograms;
-		org::services::FilledVersion cullProgramsFilled;
-		std::vector<std::uint32_t> cullProgramsSent;
 		Versioned fadeRootPrograms;  // per root slot: its program (Api::MainCullInputContribution::judge)
 		Versioned fadeAnimated;    // per root slot: the scene frame whose animation batch updated it
 		org::services::FilledVersion fadeAnimatedFilled;
@@ -94,11 +89,11 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief The depth commit's fade uploads into the versions a_sealed (the adopted set) names: missing static rows, and once a frame
-	 * the inputs and changed cull program words (a_programs: the main cull input's).
+	 * the inputs (the main cull input's programs are its scene resources', sent by its commit hook).
 	 */
 	template <class Uploads>
 	void UploadFadeRoots(const NamedVersions& a_sealed, const SceneTables& a_tables, std::uint32_t a_frame, const FadeFrame& a_inputs, std::uint32_t a_logBase,
-		SceneBuffers& a_scene, Uploads& a_uploads, std::span<const std::uint32_t> a_programs)
+		SceneBuffers& a_scene, Uploads& a_uploads)
 	{
 		if (!a_scene.fadeState || !a_scene.fadeRoots)
 			return;
@@ -116,29 +111,6 @@ namespace DCLF::Draws
 		if (a_scene.fadeFrameNumber != a_frame) {
 			a_scene.fadeFrameNumber = a_frame;
 			a_scene.fadeFrame = a_inputs;
-			// Past the named version's words (an encoding newer than the revision's requirement), send an empty header: roots take
-			// the frustum alone that frame.
-			// The buffer is made only with an input (EnsureSceneBuffers), whose zero header is resolved once.
-			if (a_scene.cullPrograms) {
-				const auto& none = Extensions::MainCullInput()->zeroHeader;
-				const auto& programs = a_sealed.Of(a_scene.cullPrograms);
-				const bool fits = a_programs.size() <= programs.units;
-				const auto* words = fits ? a_programs.data() : none.data();
-				const std::size_t count = fits ? a_programs.size() : none.size();
-				auto& sent = a_scene.cullProgramsSent;
-				if (!a_scene.cullProgramsFilled.Holds(programs)) {
-					sent.clear();
-					a_scene.cullProgramsFilled.Filled(programs);
-				}
-				std::vector<std::uint32_t> differing;
-				for (std::uint32_t w = 0; w < count; ++w)
-					if (w >= sent.size() || sent[w] != words[w])
-						differing.push_back(w);
-				SendWordRuns(differing, [&](std::uint32_t a_first, std::uint32_t a_count) {
-					a_uploads(a_scene.cullPrograms, words + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
-				});
-				sent.assign(words, words + count);
-			}
 			a_scene.fadeLogBase = a_logBase;
 		}
 		a_scene.fadeFrame.rootCount = a_scene.fadeRootCount;

@@ -638,7 +638,7 @@ namespace DCLF
 		FadeFrame inputs = buffers.fadeFrame;
 		if (buffers.fadeFrameNumber != Scene::FrameView::Get().GetFrame())
 			SampleFadeInputs(a_commit, buffers, rootSlots, inputs, logBase);
-		UploadFadeRoots(adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), inputs, logBase, buffers, uploads, Extensions::MainCullPrograms());
+		UploadFadeRoots(adopted, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), inputs, logBase, buffers, uploads);
 		Scene::FrameView::Get().FadeRootsSent(buffers.FadeRootsContentEpoch(adopted));
 		// The fade events' header and readback slot (its last execution harvested first).
 		ArmFadeReadback(buffers, uploads);

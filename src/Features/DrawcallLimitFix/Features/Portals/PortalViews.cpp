@@ -1499,7 +1499,7 @@ namespace DCLF
 		a_words.insert(a_words.end(), setWords.begin(), setWords.end());
 	}
 
-	int PortalViews::Visible(const std::vector<std::uint32_t>& a_words, std::uint32_t a_program, const float a_centre[3], float a_radius, std::uint32_t a_nodeFlags,
+	int PortalViews::Visible(std::span<const std::uint32_t> a_words, std::uint32_t a_program, const float a_centre[3], float a_radius, std::uint32_t a_nodeFlags,
 		std::string& a_why)
 	{
 		constexpr std::size_t kHeader = kPortalSetBytes / 4, kDirectory = kPortalHeaderBytes / 4, kEntry = kPortalDirectoryBytes / 4, kOp = kPortalOpBytes / 4,

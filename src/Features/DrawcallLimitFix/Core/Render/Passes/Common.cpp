@@ -65,8 +65,6 @@ namespace DCLF::Draws
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states-out0"), a_scene.fadeStatesOut[0]);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states-out1"), a_scene.fadeStatesOut[1]);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
-			if (const auto* input = Extensions::MainCullInput())
-				Register(a_graph, org::ResourceIdentifier(input->programsName), a_scene.cullPrograms);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-root-programs"), a_scene.fadeRootPrograms);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
 			if (a_scene.fadeEvents) {

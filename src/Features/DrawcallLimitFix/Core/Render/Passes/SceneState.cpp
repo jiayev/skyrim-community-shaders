@@ -37,9 +37,9 @@ namespace DCLF::Draws
 			for (std::uint32_t h = 0; h < 2; ++h)
 				bindings.published[h] = a_builder.UnorderedAccess(*scene.fadeStatesOut[h]).View();
 			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
-			// The main cull input's programs (none without one: FadeStateCS takes the frustum alone at ProgramsIndex 0).
-			if (scene.cullPrograms)
-				bindings.programs = a_builder.ShaderResource(*scene.cullPrograms).View();
+			// The cull binding Programs (none without one: FadeStateCS takes the frustum alone at ProgramsIndex 0).
+			if (const auto& programs = Extensions::CullBindingBuffer(Api::CullBindingSlot::Programs, scene))
+				bindings.programs = a_builder.ShaderResource(*programs).View();
 			bindings.rootPrograms = a_builder.ShaderResource(*scene.fadeRootPrograms).View();
 			bindings.animated = a_builder.ShaderResource(*scene.fadeAnimated).View();
 			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
@@ -55,7 +55,8 @@ namespace DCLF::Draws
 		{
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
 			const auto& scene = *resources->scene;
-			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &scene.fadeStatesOut[0], &scene.fadeStatesOut[1], &scene.cullPrograms, &scene.fadeRootPrograms,
+			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &scene.fadeStatesOut[0], &scene.fadeStatesOut[1],
+					 &Extensions::CullBindingBuffer(Api::CullBindingSlot::Programs, scene), &scene.fadeRootPrograms,
 					 &scene.fadeAnimated, &scene.fadeEvents, &scene.fadeReported })
 				a_out.push_back(NamedSerial(a_preparation, *buffer));
 			a_out.push_back(frame ? frame->generation : 0);
@@ -80,7 +81,7 @@ namespace DCLF::Draws
 			constants.rootsIndex = CaptureViewIndex(a_preparation, a_bindings.roots);
 			constants.statesIndex = CaptureViewIndex(a_preparation, a_bindings.states);
 			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
-			if (scene.cullPrograms)
+			if (a_bindings.programs.layout)
 				constants.programsIndex = CaptureViewIndex(a_preparation, a_bindings.programs);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
 			constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);

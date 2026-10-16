@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -109,7 +110,7 @@ namespace DCLF
 		 * @brief PortalPrograms.hlsli's PortalTest on the CPU (a_nodeFlags: always-draw bit 11, preprocessed 12, preprocess-hidden 20).
 		 * 1 in view, 0 culled, -1 no program; a_why names the deciding test.
 		 */
-		static int Visible(const std::vector<std::uint32_t>& a_words, std::uint32_t a_program, const float a_centre[3], float a_radius, std::uint32_t a_nodeFlags,
+		static int Visible(std::span<const std::uint32_t> a_words, std::uint32_t a_program, const float a_centre[3], float a_radius, std::uint32_t a_nodeFlags,
 			std::string& a_why);
 		/**
 		 * @brief The program a node is culled through: 1 + its nearest BSMultiBoundRoom ancestor's room index, 0 (unbound space) with
