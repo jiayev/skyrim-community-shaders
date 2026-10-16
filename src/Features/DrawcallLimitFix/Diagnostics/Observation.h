@@ -23,7 +23,6 @@ namespace DCLF::Diagnostics
 		bool walkOrScene = false;    // either of the two: the hidden witness
 		bool changeLog = false;      // CS_DCLF_CHANGE_LOG_PARITY: the change log against a diff of the tables
 		bool residents = false;      // CS_DCLF_RESIDENT_PARITY: the resident records against their passes built again
-		bool fade = false;           // CS_DCLF_FADE_PARITY: the fade port against the engine's functions, FadeStateCS against the port
 		bool builds = false;         // CS_DCLF_BUILD_PARITY: BuildDraws' output and the index ranges against the CPU's
 		bool mirror = false;         // CS_DCLF_MIRROR_PARITY: the scene mirror's reads against the live objects
 		bool capture = false;        // CS_DCLF_CAPTURE_PARITY: the tables against the engine's own lighting draws

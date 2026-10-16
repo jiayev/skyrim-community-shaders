@@ -38,7 +38,7 @@ namespace DCLF::Features
 	namespace
 	{
 		// Every feature's frame-binding register (its HLSL declares the same: TreeWind's DCLFTreeWind, Common/DCLFObjects.hlsli), and Core's
-		// fade roots' (their states and roots, FadeRenderRegistration.cpp).
+		// fade roots' (their states and roots, Features/Fades/FadeRender.cpp).
 		constexpr std::uint32_t kFrameBindingRegisters[] = {
 			TreeWind::kWindRegister,
 			kFadeStatesRegister,

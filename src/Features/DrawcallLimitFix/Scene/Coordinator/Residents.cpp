@@ -1,10 +1,10 @@
 // The coordinator's residents (scene lane): the resident set's slots marked, dropped and kept alive, and the fade nodes held for the
-// slots' listings (the components list theirs at the same points: Components.cpp; the fade roots': FadeRoots.cpp).
+// slots' listings (the components list theirs at the same points: Components.cpp; the fade roots': Features/Fades/FadeRoots.cpp).
 
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/FadeRoots.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
 
@@ -217,11 +217,6 @@ namespace DCLF::Scene
 		// Asked of the render thread: listed when its answer comes (ApplyFadeNodeAnswers).
 		++referenceStats.fadeRootsUnowned;
 		return nullptr;
-	}
-
-	std::size_t Coordinator::StoodInFadeRoots() const
-	{
-		return FadeRootsStoodIn();
 	}
 
 	void NoteFadeRootUnmirrored()

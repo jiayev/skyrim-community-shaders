@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
+#include "Features/DrawcallLimitFix/Features/Fades/Fades.h"
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/Forward/Forward.h"
@@ -82,6 +83,13 @@ namespace DCLF::Features
 		// coordinator component's hooks after the others' at the points they share (the slot tables' reset). First person last, after the
 		// skins and the actors (its toggle needs the skinned and theirs) and after billboards (its report lines follow theirs at the draws' async work); its switches and toggle
 		// are listed after the reflection's.
+		// Fades last, where Core's fade code registered (after every feature, before the integrations): its family after the trees' (the
+		// tables' report: "trees kept a, fade roots kept b"), its component after every other at the points they share (the slot tables'
+		// reset, then the fade roots' owners handed back), its channels the last BeforeStructural ones (snaps, then amounts), its pool,
+		// scene resources, commit hook and stages after the others', its stand-in observer last (Main::Update's entry: the writer tables
+		// and stores after Portals' and tree wind's); its switches are listed where Core's were (the empty fade node's right before the
+		// render graph's, the parity's after the resident parity's); its early hook (FadeSnap) after every other feature's (no shared site).
+		// Features/Actors needs its fade amounts channel by name.
 		static const std::array kFeatures{
 			Portals::Feature(),
 			OcclusionMaps::Feature(),
@@ -106,6 +114,7 @@ namespace DCLF::Features
 			Landscape::Feature(),
 			Faces::Feature(),
 			FirstPerson::Feature(),
+			Fades::Feature(),
 		};
 		return kFeatures;
 	}

@@ -99,7 +99,7 @@ namespace DCLF
 		// The engine's update is done: workers may read its scene graph until Present (EngineReadWindow).
 		EngineReadWindow::Open();
 		// The coordinator's pump runs the scene passes whenever its producers wake it. The frame's posts below (the frame inputs, the ahead
-		// context, the captures, the fade write-back's) wake it once, when this scope ends.
+		// context, the captures, the root states' task's) wake it once, when this scope ends.
 		ScenePassWakeBatch wakes;
 		scene.SetScenePassMode(true, inlinePass);
 		// The frame's toggles, before anything reads them. A change that enters the classification drops the cached verdicts (the
@@ -166,7 +166,8 @@ namespace DCLF
 		FrameValues::Get().SetRootViewClaims(rootViewsCovered ? view.FrameClaims() : nullptr);
 		// What the next builds ahead take from the frame.
 		draws.PostAheadContext();
-		// The root states' task (the stood-in fade roots' write-back) and the visibility readbacks: tasks on DCLF's executor, never joined.
+		// The root states' task (Features/Fades' write-back of the stood-in roots) and the visibility readbacks: tasks on DCLF's executor,
+		// never joined.
 		Extensions::RootStatesKick();
 		draws.KickVisibilityReadback();
 		// What the coordinator's passes asked of the render thread, served, and its captures posted for them (not while a load screen is

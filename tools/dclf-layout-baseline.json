@@ -1,23 +1,25 @@
 {
  "legacyEdges": {
-  "Core -> Engine": 19,
-  "Core -> Scene": 29,
-  "Engine -> Scene": 25,
-  "Features/Billboards -> Engine": 1,
+  "Core -> Engine": 13,
+  "Core -> Scene": 33,
+  "Engine -> Scene": 14,
+  "Features/Actors -> Scene": 1,
   "Features/Billboards -> Scene": 3,
-  "Features/Decals -> Scene": 2,
-  "Features/Effects -> Scene": 1,
   "Features/Faces -> Scene": 2,
+  "Features/Fades -> Engine": 5,
+  "Features/Fades -> Scene": 16,
   "Features/FirstPerson -> Engine": 1,
   "Features/FirstPerson -> Scene": 1,
   "Features/HiddenNodes -> Engine": 1,
-  "Features/Lod -> Engine": 4,
-  "Features/Lod -> Scene": 1,
-  "Features/Particles -> Engine": 1,
-  "Features/Shadows/Local -> Scene": 2,
-  "Features/Shadows/Sun -> Scene": 1,
-  "Features/TextureTransforms -> Scene": 1,
-  "Scene -> Engine": 29
+  "Features/LocalLights -> Scene": 2,
+  "Features/Portals -> Scene": 1,
+  "Features/Shadows/Local -> Engine": 2,
+  "Features/Shadows/Local -> Scene": 6,
+  "Features/Shadows/Sun -> Engine": 2,
+  "Features/Shadows/Sun -> Scene": 3,
+  "Integrations/AdvancedSkin -> Scene": 2,
+  "Integrations/LightLimitFix -> Scene": 1,
+  "Scene -> Engine": 23
  },
  "overThresholds": {
   "DCLF::CaptureParity::OnNativeLightingDraw": [
@@ -25,24 +27,20 @@
    100
   ],
   "DCLF::CaptureParity::Report": [
-   171,
-   75
-  ],
-  "DCLF::DeriveLightingDescriptors": [
-   141,
-   79
+   172,
+   72
   ],
   "DCLF::Diagnostics::Check": [
    123,
    67
   ],
   "DCLF::Diagnostics::CheckBuildParity": [
-   228,
-   76
+   230,
+   77
   ],
   "DCLF::Diagnostics::CheckSetParity": [
-   387,
-   226
+   386,
+   222
   ],
   "DCLF::Diagnostics::CheckShapeCapacities": [
    92,
@@ -50,35 +48,23 @@
   ],
   "DCLF::Diagnostics::CheckWalkParity": [
    175,
-   82
+   83
   ],
   "DCLF::Diagnostics::FoliageParityReport": [
    167,
    61
   ],
-  "DCLF::Diagnostics::LightCulls::Registered": [
-   83,
-   48
-  ],
   "DCLF::Diagnostics::OnTablesReplayed": [
-   102,
-   64
-  ],
-  "DCLF::Diagnostics::PortalParity::Check": [
-   197,
-   100
-  ],
-  "DCLF::Diagnostics::ReadFadeLog": [
-   158,
-   64
+   100,
+   60
   ],
   "DCLF::Draws::BuildKeptShadow": [
-   415,
-   147
+   390,
+   136
   ],
   "DCLF::Draws::BuildShadowPayload": [
-   168,
-   56
+   166,
+   55
   ],
   "DCLF::Draws::BuildSunExclusion": [
    186,
@@ -90,55 +76,55 @@
   ],
   "DCLF::Eligibility::Static": [
    89,
-   58
+   56
   ],
   "DCLF::Features::HiddenNodes::HiddenStoreSites": [
    470,
    1
   ],
   "DCLF::IndirectDraws::ExecuteShadowFrame": [
-   284,
-   78
+   287,
+   79
   ],
   "DCLF::JudgeObject": [
-   92,
-   48
+   93,
+   47
   ],
   "DCLF::MaterialPort::EvaluateVanilla": [
    212,
    60
   ],
   "DCLF::PrepareWrites": [
-   145,
-   56
+   146,
+   57
   ],
   "DCLF::PrimaryCull::CurrentListFilter": [
-   133,
-   54
+   136,
+   55
   ],
   "DCLF::PrimaryCull::PlanEntry": [
    75,
    47
   ],
   "DCLF::ReferenceWrites": [
-   124,
-   67
+   125,
+   66
   ],
   "DCLF::Reports::Coordinator": [
-   216,
-   89
+   202,
+   82
   ],
   "DCLF::Reports::SceneLines": [
-   141,
-   69
+   136,
+   66
   ],
   "DCLF::Reports::Stats": [
-   225,
-   91
+   220,
+   90
   ],
   "DCLF::Scene::Coordinator::ApplyBatch": [
-   203,
-   46
+   199,
+   44
   ],
   "DCLF::Scene::Coordinator::ApplyMirrorEvents": [
    147,
@@ -146,19 +132,19 @@
   ],
   "DCLF::Scene::Coordinator::BuildAccumulatePhase": [
    370,
-   96
+   95
   ],
   "DCLF::Scene::Coordinator::CheckPacedPublication": [
    64,
-   44
+   43
   ],
   "DCLF::Scene::Coordinator::CommitSet": [
    239,
    93
   ],
   "DCLF::Scene::Coordinator::DeltaWalk": [
-   197,
-   54
+   203,
+   57
   ],
   "DCLF::Scene::Coordinator::EvaluateJoin": [
    91,
@@ -169,24 +155,24 @@
    28
   ],
   "DCLF::Scene::Coordinator::EvaluateWrite": [
-   149,
+   161,
    72
   ],
   "DCLF::Scene::Coordinator::FinishDeltaWalk": [
-   151,
-   50
+   152,
+   51
   ],
   "DCLF::Scene::Coordinator::MergeEntry": [
    132,
-   61
+   63
   ],
   "DCLF::Scene::Coordinator::MergeWrite": [
-   200,
+   199,
    65
   ],
   "DCLF::Scene::Coordinator::PublishTables": [
-   377,
-   88
+   371,
+   86
   ],
   "DCLF::Scene::Coordinator::RefreshCategoryNodes": [
    128,
@@ -209,8 +195,8 @@
    58
   ],
   "DCLF::Scene::FrameView::CaptureCategories": [
-   141,
-   59
+   146,
+   61
   ],
   "DCLF::SceneMirror::ApplyCapture": [
    78,

@@ -90,6 +90,14 @@ namespace DCLF::Extensions
 	/** @brief Any thread, after InstallFeatures (null before): the contribution's entry, or null without one. */
 	const RootStatesEntry* RootStates();
 
+	/** @brief Main thread at PostPostLoad, from the producer's early hooks: its engine hooks' early part is in (the feature is listed). */
+	void NoteRootStatesInstalled();
+	/**
+	 * @brief Main thread at PostPostLoad (PrimaryCull::Install, before InstallFeatures, so before RootStates()): whether
+	 * NoteRootStatesInstalled came; the primary cull requires it.
+	 */
+	bool RootStatesInstalled();
+
 	/**
 	 * @brief Any thread holding a_tables, per decode, commit or parity check (never per object): the listed roots of a_tables (the
 	 * producer's view of its family's columns, with the family's object references and journal epoch). Empty without a producer or before

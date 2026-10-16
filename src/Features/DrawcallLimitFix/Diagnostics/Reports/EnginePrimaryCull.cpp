@@ -16,6 +16,9 @@ namespace DCLF::Reports
 {
 	namespace
 	{
+		// The last primary cull lines' entries with engine-drawn parts culled by the engine a frame (CutMixedPerFrame).
+		double mixedPerFrame = 0.0;
+
 		/** @brief The scene lists' line's filter part: why entries stay in the lists, and the filter's deltas. */
 		std::string ListReasons(const PrimaryCull::ListCounters& a_l)
 		{
@@ -147,29 +150,20 @@ namespace DCLF::Reports
 		if (d.maskChecked)
 			logger::info("[DCLF] light masks (owned members in view, which no main registration clears): {} checked, {} with the sun's bits, {} with other lights' bits{}{}",
 				d.maskChecked, d.maskSun, d.maskOther, d.maskSun || d.maskOther ? " <- LIGHT MASKS" : " <- OK", d.maskFirst.empty() ? "" : "; first: " + d.maskFirst);
-		const double mixedPerFrame = s.mixed / applied;
-		if (d.fadePort.checked)
-			logger::info("[DCLF] fade port parity (the port against the engine's functions on node copies): {} roots, {} differ{}{}", d.fadePort.checked, d.fadePort.differ,
-				d.fadePort.differ ? " <- FADE PORT" : " <- OK", d.fadePort.first.empty() ? "" : "; first: " + d.fadePort.first);
+		mixedPerFrame = s.mixed / applied;
+		// The features' parity lines here (Features/Fades: the fade port's).
+		Extensions::ReportLinesAt(Api::ReportPoint::PrimaryCullParity, a_frame);
 		// CS_DCLF_ACCUMULATED_PARITY: BeginFrameCamera's main camera against the list processes'.
 		if (const auto camera = Diagnostics::Accumulated::TakeFrameCamera(); camera.checked)
 			logger::info("[DCLF] frame camera (T7f preparation: FadeEye, the camera cut and the height test from the main camera at BeginSceneFrame): {} frames, {} with "
 						 "another camera on the list processes{}",
 				camera.checked, camera.differ, camera.differ ? " <- FRAME CAMERA" : " <- OK");
-		// LOD skins: records whose partitions BuildDraws picks by their root's level in FadeStateCS's state.
-		const auto& lodTables = Scene::FrameView::Get().GetTables();
-		const auto lodSkins = std::count_if(lodTables.skinLodPartitions.begin(), lodTables.skinLodPartitions.end(), [](std::uint32_t a_word) { return a_word != 0; });
-		logger::info("[DCLF] fade roots: {} stood in; {} LOD skins (partitions by their root's level on the GPU); {:.0f} entries with engine-drawn parts culled by the engine a frame",
-			Scene::Coordinator::Get().StoodInFadeRoots(), lodSkins, mixedPerFrame);
+		// The features' last lines here (Features/Fades: the fade roots', with mixedPerFrame).
+		Extensions::ReportLinesAt(Api::ReportPoint::PrimaryCullLast, a_frame);
 	}
 
-	std::string FadeWritersLine()
+	double CutMixedPerFrame()
 	{
-		const auto c = PrimaryCull::Get().TakeFadeWriterCounts();
-		if (!c.gateSkipped && !c.onVisibleSkipped)
-			return {};
-		return fmt::format("[DCLF] fade writers (T7b4; T7f: every listed root): {} fade updates of the animation gate skipped on roots DCLF writes, {} OnVisible fade steps "
-						   "skipped ({} roots in the set)\n",
-			c.gateSkipped, c.onVisibleSkipped, c.roots);
+		return mixedPerFrame;
 	}
 }

@@ -413,8 +413,6 @@ namespace DCLF
 		SetStats TakeSetStats() { return std::exchange(setStats, {}); }
 		/** @brief A report: why a tracked geometry's sun entry rule allows it, or that it is not tracked (looked up by address). */
 		std::string DescribeSunCandidate(const void* a_geometry) const;
-		/** @brief The report: the admitted fade roots the primary cull stands in for (the fade roots' component: FadeRoots.cpp). */
-		std::size_t StoodInFadeRoots() const;
 		/** @brief The fade roots' component (scene lane): a root listed with no mirror record (the placement statistics). */
 		void NoteFadeRootUnmirrored() { ++placementStats.fadeRootsUnmirrored; }
 		/** @brief Whether the geometry sits under a tracked category node (the tracked map, read on the caller's thread). */

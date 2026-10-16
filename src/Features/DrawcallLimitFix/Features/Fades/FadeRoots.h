@@ -1,8 +1,8 @@
 #pragma once
 
-// Core's fade roots (interim, Fades stage F2): the fade-root table as a journaled table family (FadeRootTables, its columns) and the
-// coordinator component that lists and steps its rows (FadeRoots.cpp), registered through the Fades contracts at Fades' place in the
-// feature list (FadeRegistration.cpp, which holds the ids). Stage F3 moves both into Features/Fades.
+// The fade roots: the fade-root table as a journaled table family (FadeRootTables, its columns) and the coordinator component that lists
+// and steps its rows (FadeRoots.cpp: RegisterScene, which holds their ids; the channels' are FadesFeature.cpp's). The coordinator
+// counts an unmirrored root and reports the stood-in count through it (Scene/Coordinator/Residents.cpp).
 
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Api/TableFamilies.h"
@@ -39,7 +39,7 @@ namespace DCLF::Scene
 		std::uint32_t fadeRootGenerations = 0;
 	};
 
-	// The ids the registration took (FadeRegistration.cpp; none before InstallFeatures).
+	// The ids Fades' install took (FadeRoots.cpp: the family and the component; FadesFeature.cpp: the channels; none before InstallFeatures).
 	Api::TableFamilyId FadeRootFamilyId();
 	Api::CoordinatorComponentId FadeRootComponentId();
 	Api::EngineChannelId FadeSnapsChannelId();

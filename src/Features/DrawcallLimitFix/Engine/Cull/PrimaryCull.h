@@ -27,7 +27,6 @@ namespace DCLF::SceneCapture
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneSet.h"
 #include "Features/DrawcallLimitFix/Scene/Channels.h"
@@ -40,7 +39,7 @@ namespace DCLF
 
 	/**
 	 * @brief The main camera's cull, and taking DCLF's objects out of it (dclf-gpu-driven-frame.md). AE only. Owns the scene
-	 * lists' build (SceneLists.cpp), the list jobs' stand-in, the fade-writer set and the camera values BuildDraws reads.
+	 * lists' build (SceneLists.cpp), the list jobs' stand-in and the camera values BuildDraws reads.
 	 *
 	 * The scene lists (`DAT_14338c870`, `DAT_14338c868` of them) are BSTArray<NiPointer<NiAVObject>> that
 	 * DrawWorld_BuildSceneLists fills with reference roots, round robin. NiCamera::CalculateAndDrawShadowCasterLights hands them
@@ -88,8 +87,6 @@ namespace DCLF
 		static Membership MembershipPass(const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached);
 		/** @brief MembershipPass for a_leaf's layer (LayerPropertyOf): its property's pass with hint 12. */
 		static Membership MembershipLayerPass(const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached);
-		/** @brief A fade root's fade-out distance for kObjectFadeTest, 0 when it has none. */
-		static float MembershipFadeDistance(const SceneCapture::NodeRecord& a_root) { return FadeDistanceOf(a_root); }
 		/** @brief The frame globals a membership pass reads (static sun bits, fade distances): a change rebinds every object. */
 		static std::uint32_t MembershipWitness(const FrameGlobals& a_globals);
 		/**
@@ -107,36 +104,11 @@ namespace DCLF
 		 * @brief Main thread at Main::Update's entry, the safe point (last frame's job cycle waited for, this one's not started, so no
 		 * list cull, cell animation or animation job writes the flags): writes the stood-in roots' and their geometry's kAccumulated
 		 * from DCLF's visibility (IndirectDraws::WriteAccumulated; skyrim-engine-notes.md, "who sets kAccumulated"), then calls the
-		 * stand-in observers (the fade writers' last: WriteFadeWriters). a_running false drops the writes.
+		 * stand-in observers (Features/Fades' fade writers last). a_running false drops the writes.
 		 */
 		void AtUpdateEntry(bool a_running);
-		/**
-		 * @brief Main thread, at Main::Update's entry (the fade writers' stand-in observer, updateEntry, last): publishes the fade-writer
-		 * set, then writes the fade stores back. a_running false drops the writes.
-		 */
-		void WriteFadeWriters(bool a_running);
 		/** @brief Whether the cut stands in for a_root (admitted, unmixed). Render (main) thread. */
 		bool StoodIn(const void* a_root) const { return standInRoots.contains(a_root); }
-		/**
-		 * @brief Any thread: whether DCLF is a_node's one fade writer this frame (kFadeRootWritten in the tables published at
-		 * Main::Update's entry). The gate's fade update (FUN_1402cff60 -> FUN_14147a160) and FadeOnVisible skip their stores on
-		 * those; FadeStateCS makes the update on the GPU and the write-back carries it to the node.
-		 */
-		bool FadeWrittenByDclf(const void* a_node) const
-		{
-			const auto* tables = fadeWriterTables.load(std::memory_order_acquire);
-			return tables && WrittenByTables(tables, a_node);
-		}
-		void NoteOnVisibleFadeSkipped() { onVisibleFadeSkipped.fetch_add(1, std::memory_order_relaxed); }
-		/** @brief a_node listed by a_tables (SceneTables) with kFadeRootWritten. Any thread; the tables are immutable. */
-		static bool WrittenByTables(const void* a_tables, const void* a_node);
-		/** @brief Since the last call: the gate's fade updates and OnVisible fade steps skipped. */
-		struct FadeWriterCounts
-		{
-			std::uint64_t gateSkipped = 0, onVisibleSkipped = 0;
-			std::size_t roots = 0;  // the roots in the writer set
-		};
-		FadeWriterCounts TakeFadeWriterCounts();
 		/** @brief Render thread (census): a_geometry is under an entry the cut has whole (admitted, unmixed, not walked). */
 		bool DrawsWhole(const RE::NiAVObject* a_geometry) const
 		{
@@ -149,29 +121,6 @@ namespace DCLF
 		}
 		/** @brief Whether a_node is an eligible entry's root in the cut's snapshot. */
 		bool IsEntry(const RE::NiAVObject* a_node) const { return cut.eligible.contains(a_node); }
-		/**
-		 * @brief One animation-job fade update, its root resolved on the job thread through the writer tables (the SceneTables
-		 * accepted at Main::Update's entry, immutable and held until the next entry, so stable through the animation job): the slot in
-		 * those tables, its row's generation and the node. A consumer reading other tables (the frame's, after a swap at frame start)
-		 * takes the slot only where its root list's nodes[slot] is the node and rows[slot].generation the generation (Extensions::RootListOf);
-		 * no hashing.
-		 */
-		struct AnimatedFadeRoot
-		{
-			const void* node = nullptr;
-			std::uint32_t slot = 0;
-			std::uint32_t generation = 0;
-		};
-		/**
-		 * @brief Render thread, after the list jobs: the animation job's fade updates since the previous list jobs (roots listed by
-		 * the writer tables, one per update, and inputs), which FadeStateCS repeats before its cull test (Records.h, FadeFrame anim*).
-		 */
-		void TakeAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs);
-		/**
-		 * @brief Render thread, at the list jobs' Finish (the fade writers' stand-in observer, listJobsDone): the animation job's queued
-		 * updates and inputs become the batch TakeAnimatedBatch hands out.
-		 */
-		void DrainAnimatedFades();
 		/** @brief BSTreeNode::OnVisible's height test for kObjectHeightTest: base and limit (+infinity: off). */
 		std::array<float, 2> TreeHeightTest() const { return treeHeight; }
 		/** @brief Why this thread's last SyntheticPass failed (kSyntheticFailNames index; 0: it succeeded). */
@@ -338,11 +287,6 @@ namespace DCLF
 		std::uint64_t MemberSignature(std::uint32_t a_e) const;
 		/** @brief Render thread, before the list jobs: entry a_e's memberLive from the switches. */
 		void RefreshLive(std::uint32_t a_e);
-		/**
-		 * @brief Where FUN_14147b110's fade value falls below BSFadeNode::OnVisible's fade-out threshold (kObjectFadeTest). > 0:
-		 * scaled by the camera's LOD factor; < 0: by a constant, folded in; 0: never fades out by distance.
-		 */
-		static float FadeDistanceOf(const SceneCapture::NodeRecord& a_root);
 		PrimaryCull() = default;
 
 		struct Hooks;
@@ -631,26 +575,6 @@ namespace DCLF
 		const void* frameCamera = nullptr;  // BeginFrameCamera's camera
 		std::shared_ptr<const SetSnapshot> frameSet;  // the frame's set, for Owned (PrepareFrame)
 		std::array<float, 2> treeHeight{ 0.0f, std::numeric_limits<float>::infinity() };  // TreeHeightTest, captured in BeginFrameCamera
-		// The animation job's fade updates (FUN_1402cff60's call of FUN_14147a160, Hooks::AnimatedFade) since the last list jobs,
-		// with their inputs; at the list jobs' end (AfterListJobs, render thread) they become the batch FadeStateCS applies before its
-		// cull test. Lock-free: the nodes are queued; the inputs, the same for every call of one animation update, are a single-writer
-		// record (the first caller claims it, writes it, then publishes it), later callers compare against it and set animatedVaried.
-		// A caller that finds the record claimed but not yet published queues its inputs for AfterListJobs to compare.
-		EventQueue<AnimatedFadeRoot> animatedNodes;
-		std::vector<AnimatedFadeRoot> animatedBatch;  // render thread
-		enum : std::uint32_t
-		{
-			kAnimatedEmpty,
-			kAnimatedWriting,
-			kAnimatedPublished
-		};
-		std::atomic<std::uint32_t> animatedState{ kAnimatedEmpty };
-		AnimatedFadeInputs animatedInputs{};  // written by the claimer only, read once published (and by AfterListJobs)
-		std::atomic<std::uint32_t> animatedVaried{ 0 };
-		EventQueue<AnimatedFadeInputs, 64> animatedUnpublished;  // compared by AfterListJobs
-		AnimatedFadeInputs batchInputs{};  // render thread
-		/** @brief The animation job's hook: the update noted (a_node's root in the writer tables); returns whether DCLF writes the root. */
-		bool NoteAnimatedFade(const void* a_node, const float* a_camera);
 		bool standInLive = false;        // this frame's snapshot is current: the stand-in runs
 		bool liveStale = true;                             // a frame skipped the switch changes: memberLive is read again
 		// SyncRootOwnership's state per entry index: what of the sets below holds its root (ownRoot, as judged).
@@ -678,14 +602,6 @@ namespace DCLF
 		ankerl::unordered_dense::set<const void*> standInRoots;
 		std::vector<const void*> standInList;
 		ankerl::unordered_dense::map<const void*, std::uint32_t> standInPosition;
-		// FadeWrittenByDclf's set: immutable SceneTables from Main::Update's entry, held by the main thread until the next entry
-		// (no OnVisible or gate runs then). Lock-free.
-		std::atomic<const void*> fadeWriterTables{ nullptr };
-		std::shared_ptr<const void> fadeWriterTablesHeld;
-		std::atomic<std::uint64_t> onVisibleFadeSkipped{ 0 };
-		/** @brief Main::Update's entry: publishes the accepted tables as the writer set (a_running false: none). */
-		void PublishWriterTables(bool a_running);
-		std::atomic<std::uint64_t> gateFadeSkipped{ 0 };
 		// The camera cut test: the main camera's last position and rotation.
 		std::array<float, 12> cutCamera{};
 		bool cutCameraKnown = false;

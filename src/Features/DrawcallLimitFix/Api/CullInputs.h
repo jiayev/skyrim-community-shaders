@@ -34,6 +34,8 @@ namespace DCLF::Api
 	 * - test: parity only (the fade log's CPU re-check), any thread a parity observer runs on: the GPU's test on the CPU, of program
 	 *   a_program in the programs a_programs (the words a readback saved), for the sphere (a_centre, a_radius) of a node with a_nodeFlags:
 	 *   1 in view, 0 culled, -1 no program; a_why names the deciding test.
+	 * - programWords: parity only (the fade log, with test), render thread: the programs test reads, as the walk encoded them now (the
+	 *   words a log window saves for its re-check).
 	 */
 	struct MainCullInputContribution
 	{
@@ -45,6 +47,7 @@ namespace DCLF::Api
 		void (*judge)(RootProgramsJudge& a_roots) = nullptr;
 		int (*test)(std::span<const std::uint32_t> a_programs, std::uint32_t a_program, const float a_centre[3], float a_radius, std::uint32_t a_nodeFlags,
 			std::string& a_why) = nullptr;
+		std::span<const std::uint32_t> (*programWords)() = nullptr;
 	};
 
 	/**

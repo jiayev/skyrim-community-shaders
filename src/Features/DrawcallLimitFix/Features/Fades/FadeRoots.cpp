@@ -1,18 +1,20 @@
-// Core's fade roots (scene lane; interim, Fades stage F2): the fade-root family's columns and the coordinator component that lists the
-// rows for the slots whose records name a fade node, with their owned engine nodes and seed requests, and steps them on their input
-// events (snaps, fade amounts, tree LOD switches, the primary cull's admitted roots). Stage F3 moves it into Features/Fades.
+// The fade roots (scene lane): the fade-root family's columns and the coordinator component that lists the rows for the slots whose
+// records name a fade node, with their owned engine nodes and seed requests, and steps them on their input events (snaps, fade amounts,
+// tree LOD switches, the primary cull's admitted roots); their registration (RegisterScene).
 
-#include "Features/DrawcallLimitFix/Scene/Coordinator/FadeRoots.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
-#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Publication.h"
 #include "Features/DrawcallLimitFix/Scene/Model/SceneMirror.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <type_traits>
 
@@ -228,7 +230,7 @@ namespace DCLF::Scene
 			// The engine's "no fade node" (Engine::EmptyFadeNode: terrain, object LOD, references whose root is no BSFadeNode) is no root: it
 			// is one node shared by thousands of geometries, outside the scene graph, so no chain reaches it and FadeStateCS and the write-back
 			// would write a static engine node. Such a geometry takes its entry's root as any plain one.
-			static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
+			static const bool emptyIsNone = Features::Fades::EmptyFadeNodeIsNone();
 			if (emptyIsNone && node == Engine::EmptyFadeNode())
 				node = nullptr;
 			const auto live = LiveRootsOf(a_context);
@@ -369,6 +371,28 @@ namespace DCLF::Scene
 		}
 	}
 
+	namespace
+	{
+		// Install; read-only after.
+		Api::TableFamilyId fadeRootFamily;
+		Api::CoordinatorComponentId fadeRootComponent;
+
+		// The record word the root reference rides in: BindlessObject::recordFlags, bits 8-31 the root + 1 (RecordFlagsOf's Core bits stay
+		// below them).
+		constexpr std::uint32_t kFadeRootRecordWord = static_cast<std::uint32_t>(offsetof(BindlessObject, recordFlags) / 4);
+		static_assert(kRecordFadeRootShift == 8, "the fade roots' record reference is bits 8-31 of recordFlags");
+	}
+
+	Api::TableFamilyId FadeRootFamilyId()
+	{
+		return fadeRootFamily;
+	}
+
+	Api::CoordinatorComponentId FadeRootComponentId()
+	{
+		return fadeRootComponent;
+	}
+
 	std::shared_ptr<void> MakeFadeRoots()
 	{
 		return std::make_shared<FadeRootTables>();
@@ -431,5 +455,28 @@ namespace DCLF::Scene
 		if (!liveState)
 			return 0;
 		return static_cast<std::size_t>(std::count_if(liveState->owned.begin(), liveState->owned.end(), [](const auto& a_root) { return a_root.second; }));
+	}
+}
+
+namespace DCLF::Features::Fades
+{
+	void RegisterScene(Api::InstallContext& a_context)
+	{
+		// The family: registered after TreeWind's trees, so the tables' report reads "trees kept a, fade roots kept b". The record's root
+		// reference is (root + 1) << 8 in recordFlags, none past 24 bits (RecordFlagsOf's cut-off); a row carries its generation, so no tag.
+		Scene::fadeRootFamily = a_context.RegisterTableFamily({ .name = "fade roots",
+			.make = &Scene::MakeFadeRoots,
+			.assign = &Scene::AssignFadeRoots,
+			.same = &Scene::SameFadeRoots,
+			.clear = &Scene::ClearFadeRoots,
+			.recycle = &Scene::RecycleFadeRoot,
+			.recordWord = Scene::kFadeRootRecordWord,
+			.recordShift = 8,
+			.recordBias = 1,
+			.recordTag = false,
+			.journaled = true,
+			.rows = &Scene::FadeRootRows });
+		// The component, last of the components: every shared point (ResetSlotTables' resets, then the owners' hand-back) keeps its order.
+		Scene::fadeRootComponent = a_context.RegisterCoordinatorComponent(Scene::FadeRootComponent());
 	}
 }

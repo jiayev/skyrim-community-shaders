@@ -212,8 +212,9 @@ namespace DCLF
 		/** @brief Waits until no build ahead runs (DrainAsync; never per frame). */
 		void WaitAhead();
 		/**
-		 * @brief The depth commit, after the commit hooks (Core's fade roots' arm their write-back there: Draws::CommitFadeRoots): harvests the
-		 * frame slot's last visibility events for the decode task, resets the list, arms the slot (the reported words zeroed once per backing).
+		 * @brief The depth commit, after the commit hooks (the root states' producer arms its write-back there: Features/Fades' hook):
+		 * harvests the frame slot's last visibility events for the decode task, resets the list, arms the slot (the reported words zeroed
+		 * once per backing).
 		 */
 		void ArmVisibilityReadback(SceneBuffers& a_scene, CommitUploads& a_uploads);
 		/** @brief Waits for the visibility decode task (DrainAsync; never per frame). */

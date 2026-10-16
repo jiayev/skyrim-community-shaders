@@ -8,7 +8,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -42,10 +41,6 @@ namespace DCLF::Diagnostics::CutObservers
 		ankerl::unordered_dense::set<const RE::NiAVObject*> cutDiffering;
 		std::uint32_t sunBits = 0;  // the sun's cascade bits as the list jobs ended (the light masks')
 		std::uint32_t sunBitsNow = 0;  // ... as last set (SunBitsSet)
-		std::uint64_t frames = 0;   // PrepareFrame's frames (the fade port's every 30th)
-		std::uint32_t fadePortCursor = 0;
-		std::vector<FadeNodeState> nodeSnapshot;
-		std::uint32_t nodeSnapshotFrame = ~0u;
 
 		// ---- The cut.
 
@@ -227,48 +222,6 @@ namespace DCLF::Diagnostics::CutObservers
 						}
 		}
 
-		// ---- The fade.
-
-		void CountFrame(const CutFrameBegin&)
-		{
-			++frames;
-		}
-
-		/** @brief The port against the engine's functions on copies of the snapshot's fade roots (nothing writes them until the list jobs). */
-		void CheckFadePort(const On<EnginePoint::FullFrustumDone>&)
-		{
-			if (!PrimaryCullView::StandInLive() || (frames % 30) != 0)
-				return;
-			const auto& cut = PrimaryCullView::Cut();
-			auto** processes = Global<RE::NiCullingProcess**>(Engine::Address::kListProcesses);
-			const auto* camera = processes && cut.processCount ? processes[0]->camera : nullptr;
-			if (!camera)
-				return;
-			std::uint32_t checked = 0;
-			const auto entries = static_cast<std::uint32_t>(cut.roots.size());
-			for (std::uint32_t n = 0; n < entries && checked < 64; ++n) {
-				const std::uint32_t e = (fadePortCursor + n) % entries;
-				if (!PrimaryCullView::FadePlan(e))
-					continue;
-				FadeState::CheckPort(*cut.roots[e], *camera, counts.fadePort);
-				++checked;
-			}
-			fadePortCursor = entries ? (fadePortCursor + 64) % entries : 0;
-		}
-
-		/** @brief The fade roots' nodes now, after this cull's OnVisible and before the next animation job's updates. */
-		void SnapshotNodes(const On<EnginePoint::ListJobsDone>&)
-		{
-			const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
-			if ((frame % 30) != 0)
-				return;
-			const auto roots = Extensions::RootListOf(Scene::FrameView::Get().GetTables()).nodes;
-			nodeSnapshot.resize(roots.size());
-			for (std::size_t r = 0; r < roots.size(); ++r)
-				nodeSnapshot[r] = roots[r] ? FadeState::ReadNode(*static_cast<const RE::NiAVObject*>(roots[r])) : FadeNodeState{};
-			nodeSnapshotFrame = frame;
-		}
-
 		// ---- The scene lists.
 
 		void ListsPublishing(const On<EnginePoint::SceneListsPublishing>&)
@@ -382,7 +335,7 @@ namespace DCLF::Diagnostics::CutObservers
 		}
 	}
 
-	void Install(bool a_scene, bool a_fade)
+	void Install(bool a_scene)
 	{
 		if (a_scene) {
 			Subscribe<EnginePoint::CutSynced>(CheckCut);
@@ -395,21 +348,11 @@ namespace DCLF::Diagnostics::CutObservers
 			Subscribe<EnginePoint::EngineSceneListsBuilt>(CheckLists);
 			Subscribe<KeptSceneListsBuilt>(CheckKeptLists);
 		}
-		if (a_fade) {
-			Subscribe<CutFrameBegin>(CountFrame);
-			Subscribe<EnginePoint::FullFrustumDone>(CheckFadePort);
-			Subscribe<EnginePoint::ListJobsDone>(SnapshotNodes);
-		}
-		if (a_scene || a_fade) {
+		if (a_scene) {
 			Subscribe<CutSlotsReset>(ResetSlots);
 			Subscribe<SunBitsSet>(NoteSunBits);
 			Subscribe<EnginePoint::ListJobsMerged>(Merge);
 		}
-	}
-
-	const std::vector<FadeNodeState>* NodeSnapshot(std::uint32_t a_frame)
-	{
-		return nodeSnapshotFrame == a_frame ? &nodeSnapshot : nullptr;
 	}
 
 	Counts Take()

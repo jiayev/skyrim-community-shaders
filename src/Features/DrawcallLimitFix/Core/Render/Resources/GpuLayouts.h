@@ -138,7 +138,6 @@ namespace DCLF::Draws
 							kFoliageLandSampleBase = kFoliageWhiteSampleBase + kFoliageWhiteSamples;
 	constexpr std::uint32_t kFoliageResultWords = kFoliageCounters + (kFoliageLandSampleBase + kFoliageLandSamples) * kFoliageSampleWords;
 	constexpr std::uint32_t kFoliageColourWords = 4;  // a pixel's: albedo, diffuse, motion error, motion vector
-	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";
 	constexpr const char* kIndexPoolShader = "DrawcallLimitFix/IndexPoolCS.hlsl";
 	// IndexPoolCS.hlsl's constants: the latch block and its copies' dispatch (ShadowLatchLayout::PoolOffset), the copies, the pool.
 	struct IndexPoolConstants
@@ -148,24 +147,8 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kIndexPoolConstantWords = sizeof(IndexPoolConstants) / 4;
 	// The copies' dispatch: a group per copy, rows of IndexPoolCS's kGroupsX.
 	constexpr std::uint32_t kIndexPoolGroupsX = 65535;
-	// FadeStateCS.hlsl's constants: the depth latch (view-projection), the parity log's first root (~0u: none). Must match the HLSL.
-	struct FadeStateConstants
-	{
-		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0;
-		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
-		std::uint32_t outIndices[2]{};  // the published states, by the scene frame's parity
-		std::uint32_t programsIndex = 0;      // ByteAddressBuffer: the main cull input's programs (Features/Portals: PortalPrograms.h)
-		std::uint32_t rootProgramsIndex = 0;  // StructuredBuffer<uint>: each root's program (the input's judge)
-		std::uint32_t animatedIndex = 0;    // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
-		std::uint32_t eventsIndex = 0;      // RWStructuredBuffer<uint>: the write-back's events (Records.h, FadeEvent)
-		std::uint32_t reportedIndex = 0;    // RWStructuredBuffer<uint2>: per root, the generation and milestone last reported
-		std::uint32_t eventCapacity = 0;    // the events the list and every frame slot's readback hold
-		std::uint32_t padding[2]{};
-	};
-	static_assert(sizeof(FadeStateConstants) == 64);
-	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;
-	constexpr std::uint32_t kFadeStateGroup = 64;
-	constexpr std::uint32_t kInitialFadeRoots = 4096;
+	// The visibility readback's root rows at the start (by root slot, as the root states' buffers start; grown with the family's rows).
+	constexpr std::uint32_t kInitialVisibilityRoots = 4096;
 	// VisibilityEventsCS.hlsl: per-root and per-object main-camera visibility as change events; threads: root slots, then objects.
 	constexpr const char* kVisibilityEventsShader = "DrawcallLimitFix/VisibilityEventsCS.hlsl";
 	struct VisibilityEventsConstants

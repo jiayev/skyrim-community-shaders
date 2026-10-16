@@ -81,25 +81,6 @@ namespace DCLF::Scene
 	}
 
 	/**
-	 * @brief Placement snaps: FUN_14147aa20 (node, camera), from the cell attach (FUN_1402d1280, FUN_1402d5090), sets a fade
-	 * node's fade, faded-in flag, snap radius (+0x134) and last visible frame. A root listed before its snap is reseeded from
-	 * the node (the fade roots' component's ReseedFadeRoot, FadeRoots.cpp). Identity only; drained after the attach and detach
-	 * events, by the "fade snaps" engine channel (FadeEngineRegistration.cpp), the queue its keys are in.
-	 */
-	// No wake: a snap comes with its cell's attach, whose event wakes the pass.
-	inline EventQueue<const void*> fadeSnapEvents;
-
-	/**
-	 * @brief fadeAmount events: Actor::SetAlpha (vfunc 0xE1, 0x1406c1a50) wrote an actor's 3D root's fadeAmount (+0x100)
-	 * (FadeRootStatic::fadeAmount). Actor::UpdateAlpha calls it each frame of a fade (FUN_1406eb630 steps ActorProcess's alpha
-	 * 0 to 1 after MoveToHigh, Enable or a resurrection); without it an actor listed mid-fade keeps that alpha. Identity only
-	 * (the fade roots' component's RefreshFadeAmount, FadeRoots.cpp, rereads the node). The "fade amounts" engine channel's
-	 * queue (FadeEngineRegistration.cpp: pushed through the channel's push, Extensions::PushChannelKey, drained by the channel).
-	 */
-	// No wake: written every frame of a fade; the next pass takes them.
-	inline EventQueue<const void*> fadeAmountEvents;
-
-	/**
 	 * @brief SceneEvents: structural events (dclf-event-driven-tables.md), pushed on any thread, drained by the scene pass
 	 * (Coordinator::CollectEvents, ApplyEvents).
 	 * - Property: BSShaderProperty::SetFlags (0x14147bee0) or SetMaterial (0x14147bff0) changed a shader property, or a

@@ -1,8 +1,8 @@
 #pragma once
 
-// Host sides of the event lists the depth epoch's GPU work appends to (fade write-back, visibility events), read back without a
-// stall. The render thread arms and harvests, a task on DCLF's executor decodes, the main thread makes the engine writes at
-// Main::Update's entry. Included by Internal.h, in its order.
+// Host sides of the event lists the depth epoch's GPU work appends to (the visibility events; Features/Fades' write-back is another),
+// read back without a stall. The render thread arms and harvests, a task on DCLF's executor decodes, the main thread makes the engine
+// writes at Main::Update's entry. Included by Internal.h, in its order.
 
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 
@@ -96,76 +96,6 @@ namespace DCLF::Draws
 			missed.fetch_add(1, std::memory_order_relaxed);
 			return false;
 		}
-	};
-
-	/**
-	 * @brief The fade write-back's host side (drawcall-limit-fix.md, "The fade write-back"): its events handed to the write-back task
-	 * in batches through a lock-free stack. A frame whose epoch did not run is counted missed: FadeStateCS did not run either, so
-	 * nothing is lost.
-	 */
-	struct FadeWriteBack : HostEventRing
-	{
-		FadeWriteBack() :
-			HostEventRing(&BytesFor) {}
-		struct Batch
-		{
-			std::vector<FadeEvent> events;
-			std::uint32_t frame = 0;  // the scene frame whose FadeStateCS appended them (the list's header)
-			Batch* next = nullptr;
-		};
-		// Render thread: each frame slot's last arm.
-		struct Armed
-		{
-			bool armed = false;
-			std::uint32_t frame = 0;
-		};
-		std::vector<Armed> armed;
-		std::atomic<Batch*> batches{ nullptr };
-		// The write-back task's alone (one at a time, never joined): per root slot the scene frame of the event last taken, so an
-		// older one (a list read late) is not written over it.
-		std::vector<std::uint32_t> appliedFrame;
-		std::atomic<bool> running{ false };
-		/**
-		 * @brief What a task found to write: the stores in event order, and the tables they were judged against, held until the main
-		 * thread makes them (WriteFadeStores) so no node they name is let go first. The task touches no engine memory.
-		 */
-		struct Stores
-		{
-			struct Store
-			{
-				void* node = nullptr;
-				std::uint32_t flags = 0;  // the fade bits (kFadeFlagMask) only
-				float fade = 0.0f;
-				// A leaf or tree root's LOD state (+0x152, +0x153, +0x14C), written with the fade (lod false: a plain fade root's
-				// levels are the node's own, not written).
-				bool lod = false;
-				std::uint32_t levels = 0;
-				float blend = 0.0f;
-			};
-			std::shared_ptr<const SceneTables> tables;
-			std::vector<Store> stores;
-		};
-		std::atomic<Stores*> ready{ nullptr };
-		// Since the last report; notWritten: stores left because DCLF does not write the root (the engine's cull steps it: one writer).
-		std::atomic<std::uint64_t> applied{ 0 }, stale{ 0 }, busy{ 0 }, storeNs{ 0 }, notWritten{ 0 }, dropped{ 0 };
-		// Since the last report: frames harvested (and those with events), events.
-		std::atomic<std::uint64_t> harvested{ 0 }, harvestedWithEvents{ 0 }, events{ 0 };
-
-		void Push(Batch* a_batch)
-		{
-			a_batch->next = batches.load(std::memory_order_relaxed);
-			while (!batches.compare_exchange_weak(a_batch->next, a_batch, std::memory_order_release, std::memory_order_relaxed)) {}
-		}
-		~FadeWriteBack()
-		{
-			delete ready.exchange(nullptr);
-			for (Batch* b = batches.exchange(nullptr); b;) {
-				Batch* following = b->next;
-				delete b;
-				b = following;
-			}
-		}
-		static std::uint64_t BytesFor(std::uint32_t a_events) { return (kFadeEventHeaderWords + std::uint64_t(a_events) * kFadeEventWords) * sizeof(std::uint32_t); }
 	};
 
 	/**

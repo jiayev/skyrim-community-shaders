@@ -58,8 +58,8 @@ namespace DCLF
 		if (inputs.shadow)
 			objects.Add(inputs.shadow->visibility);
 		objects.Require(a_build, a_tables.objects.size());
-		// The features' scene resources (Api::SceneResources::require: the vertex stream's first, its rows' vertices; Core's fade roots'
-		// buffers last, RequireFadeScene).
+		// The features' scene resources (Api::SceneResources::require: the vertex stream's first, its rows' vertices; Features/Fades'
+		// buffers last).
 		Extensions::RequireSceneResources(a_build, a_tables, s.sceneResources, inputs.resourceInputs);
 		// The visibility readback's words by root slot, to the root states' family's rows.
 		if (s.visibilityRootReported)
@@ -83,20 +83,6 @@ namespace DCLF
 						faces.Add(list);
 			faces.Require(a_build, lists.required);
 		}
-	}
-
-	void Draws::RequireFadeScene(const Api::SceneResourcesRequirements& a_requirements)
-	{
-		const auto& s = a_requirements.State<FadeScene>();
-		// By root slot, to the root states' family's rows: the static rows, the GPU state, the programs, the animation stamps and the
-		// write-back's words.
-		UnitGroup roots;
-		roots.Add(s.fadeRoots).Add(s.fadeRootPrograms).Add(s.fadeAnimated).Add(s.fadeStates).Add(s.fadeReported);
-		roots.Add(s.fadeStatesOut[0]).Add(s.fadeStatesOut[1]);
-		roots.Require(a_requirements.build, Extensions::TableFamilyRows(a_requirements.tables.families, Extensions::RootStatesFamily()));
-		// The event list, to the most a frame wanted (dropped roots append again); its staging sets follow the named capacity.
-		if (s.fadeEvents && s.fadeWriteBack)
-			SceneBufferSet::Get().Require(a_requirements.build, s.fadeEvents, s.fadeWriteBack->wanted.load(std::memory_order_acquire));
 	}
 
 	void IndirectDraws::Impl::RequireMain(GrowthBuild& a_build, Resources& a_resources, const SceneTables& a_tables, std::uint32_t a_generation)

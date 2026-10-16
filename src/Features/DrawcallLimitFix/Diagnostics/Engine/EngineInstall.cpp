@@ -21,7 +21,7 @@ namespace DCLF::Diagnostics
 			Accumulated::Install();
 		// The primary cull's observers: the cut, the stand-in walk, the light masks and the scene lists (CS_DCLF_PERSISTENT_PARITY), the
 		// fade port and node snapshots (CS_DCLF_FADE_PARITY).
-		CutObservers::Install(o.scene, o.fade);
+		CutObservers::Install(o.scene);
 		// CS_DCLF_CENSUS: the passes the registration hooks hand on to the engine.
 		RegistrationCensus::Install();
 		// The light selection's parity is Features/LocalLights', the point lights' culls' Features/Shadows/Local's, the portal views'

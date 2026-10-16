@@ -26,7 +26,6 @@ namespace DCLF
 		ProjectedUv,
 		Shadows,
 		PrimaryExclude,
-		EmptyFadeNode,
 		OrgEpochs,
 		OrgAsyncEpochs,
 		OrgClosed,
@@ -38,7 +37,6 @@ namespace DCLF
 		WalkParity,
 		ChangeLogParity,
 		ResidentParity,
-		FadeParity,
 		BuildParity,
 		SetParity,
 		MirrorParity,
@@ -115,6 +113,11 @@ namespace DCLF
 	const std::string& SwitchValue(Api::SwitchId a_switch);
 	/** @brief Whether a feature's switch is set to "1". */
 	bool SwitchEnabled(Api::SwitchId a_switch);
+	/**
+	 * @brief A feature's switch's value by its name (empty: unset, or no such switch); any thread after its registration. For a reader
+	 * outside the feature that has no id (Core's held fade node reads Features/Fades' CS_DCLF_EMPTY_FADE_NODE).
+	 */
+	const std::string& RegisteredSwitchValue(std::string_view a_name);
 
 	/** @brief The directory the switches file lives in (the SKSE log directory), outside MO2's virtual file system. */
 	std::filesystem::path SwitchesDirectory();

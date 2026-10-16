@@ -20,6 +20,12 @@ namespace DCLF::Features::Portals
 		constexpr std::uintptr_t kPortalWalkCallSite = 0x64685f;  // Main::Update -> FUN_1401a43c0, the main camera's portal walk
 		constexpr std::uintptr_t kPortalWalk = 0x1a43c0;
 
+		// The main cull input's programWords (parity only): the walk's programs as encoded now, which a fade log window saves.
+		std::span<const std::uint32_t> ProgramWords()
+		{
+			return PortalViews::Get().Encoded();
+		}
+
 		/** @brief Main::Update's portal walk (FUN_1401a43c0): DCLF's walk follows, same camera, before the list build. */
 		struct PortalWalk
 		{
@@ -77,7 +83,8 @@ namespace DCLF::Features::Portals
 				.structure = &Structure,
 				.programsVersion = &ProgramsVersion,
 				.judge = &Judge,
-				.test = &PortalTest });
+				.test = &PortalTest,
+				.programWords = &ProgramWords });
 			// The programs buffer: its scene resources, the depth commit's upload and the Programs cull binding (PortalPrograms.cpp).
 			RegisterPrograms(a_context);
 			// The frame's Main::IsRoomVisible calls answered by DCLF only while it runs (Main::Update's entry, where the shell set it).

@@ -39,6 +39,7 @@ namespace DCLF
 	namespace Draws
 	{
 		struct MainPayload;
+		struct SceneBuffers;
 		struct ViewFace;
 	}
 	namespace TreeInstances
@@ -64,7 +65,7 @@ namespace DCLF
 	 *   - the coordinator (scene lane): PhaseReady, FitsScene, the slot readiness checks, ResolveLookups, PostSnapshotWork;
 	 *   - the snapshot builder (DCLF's preparation pool, one pass at a time): a publication's payloads and scene revision, the
 	 *     complete snapshot posted for the frame's start (AdoptSnapshot);
-	 *   - the main thread at Main::Update's entry: WriteFadeStores, WriteAccumulated and the verdicts;
+	 *   - the main thread at Main::Update's entry: WriteAccumulated and the verdicts;
 	 *   - the render thread: everything else.
 	 * The hand-offs between them are latest-wins slots and atomics.
 	 */
@@ -204,19 +205,11 @@ namespace DCLF
 		void PostAheadContext();
 
 		/**
-		 * @brief Render thread, the frame's start (the root states' kick: Extensions::RootStatesKick): hands the fade events read back since the last kick to a task on DCLF's executor
-		 * that judges them into the stores WriteFadeStores makes (drawcall-limit-fix.md, "The fade write-back"). Without it a stood-in
-		 * root's node stays as the engine last wrote it for its readers (tree LOD crossfade, occlusion cull, animation gate).
+		 * @brief The scene's tables (null until the render thread made them, EnsureSceneBuffers; then kept until IndirectDraws goes): a
+		 * feature's scene resources outside its callbacks (Extensions::SceneResourcesOf), read on the render thread or on the main thread at
+		 * Main::Update's entry (Features/Fades' write-back: its root states' kick and wait, and its stores).
 		 */
-		void KickFadeWriteBack();
-		/** @brief Render thread (DrainAsync's root states' wait; never per frame): waits for the fade write-back task, drops what it found. */
-		void WaitFadeWriteBack();
-		/**
-		 * @brief Main thread at Main::Update's entry (no list cull, cell animation or animation job runs): makes the last task's
-		 * stores on the roots DCLF writes (a_written: PrimaryCull::FadeWrittenByDclf; other roots are left to the engine's cull).
-		 * a_live false (DCLF does not run): dropped.
-		 */
-		void WriteFadeStores(bool a_live, const std::function<bool(const void*)>& a_written);
+		const Draws::SceneBuffers* Scene() const;
 		/**
 		 * @brief Render thread, at the frame's start: hands the harvested, undecoded visibility readback batches to the decode task on
 		 * DCLF's executor, never joined, and frees the batches the last task decoded (drawcall-limit-fix.md, "visibility events").
@@ -396,7 +389,7 @@ namespace DCLF
 		/** @brief Whether DCLF cannot draw (set once, by the render thread): the frame then has no claims. */
 		bool Failed() const { return failed.load(std::memory_order_relaxed); }
 
-		/** @brief Waits for the builds ahead, the root states' task (the fade write-back) and the visibility decode; lets go of the frame's stream views. */
+		/** @brief Waits for the builds ahead, the root states' task (Features/Fades' write-back) and the visibility decode; lets go of the frame's stream views. */
 		void DrainAsync();
 
 		/** @brief The `[DCLF] async` report lines for the interval; resets its counters. */

@@ -110,48 +110,9 @@ namespace DCLF::Diagnostics
 		// The colour commit's last culling latch (sun test), and the depth commit's last terrain near test.
 		BuildDrawsLatch sunUpload{};
 		std::array<float, 4> terrainNearUpload{};
-		/**
-		 * @brief CS_DCLF_FADE_PARITY: FadeStateCS against the C++ port (Scene/Ports/FadeState.h). Every 30th frame the depth commit
-		 * logs kFadeLogEntries roots from a rotating cursor (NextFadeLog); ReadFadeLog checks three frames later that the port,
-		 * from each update's starting state and the GPU's frustum verdict, reproduces it.
-		 */
-		struct FadeReadback
-		{
-			winrt::com_ptr<ID3D11Buffer> log;
-			std::uint32_t frame = 0, base = 0, framesLeft = 0;
-			std::vector<FadeRootStatic> roots;  // static rows from base, as uploaded that frame
-			FadeFrame inputs{};
-			// For a root with engine-drawn parts (not stood in): its node after the engine's OnVisible that frame, which
-			// FadeStateCS's update must equal.
-			std::vector<FadeNodeState> nodes;
-			std::vector<std::uint8_t> engine;
-			std::array<float, 4> worldCamera{};
-			std::vector<std::array<float, 3>> nodeCentres;  // world bound centres, read with the nodes
-			std::vector<std::string> nodeNames;
-			std::vector<std::uint32_t> nodeFlags;
-			// FadeStateCS's inputs that frame: portal programs, each root's program and radius (the sun entry row).
-			std::vector<std::uint32_t> programs;
-			std::vector<std::uint32_t> rootPrograms;
-			std::vector<float> radii, nodeRadii;  // the engine's world root camera when the nodes were read: position, lodAdjust
-		};
-		std::optional<FadeReadback> fadeReadback;
-		std::uint32_t fadeLogCursor = 0;
-		struct FadeParity
-		{
-			std::uint64_t logs = 0, updates = 0, inView = 0, serviced = 0, exact = 0, rounding = 0, differ = 0;
-			std::uint64_t engineChecked = 0, engineExact = 0, engineRounding = 0, engineDiffer = 0;  // GPU state against the engine's node
-			// Skipped log entries: wrong row, another frame's update, another listing's (or none).
-			std::uint64_t skippedRoot = 0, skippedFrame = 0, skippedGeneration = 0;
-			// Row inputs against the nodes (fadeAmount, +0x109): a steady node whose row differs has a writer without an event.
-			std::uint64_t inputChecks = 0, inputRoots = 0, inputMoving = 0, inputDiffer = 0;
-			std::string first, engineFirst, skippedFirst, inputFirst;
-		};
-		FadeParity fadeParity;
-		// Per node: fadeAmount and +0x109 at the last input check.
-		ankerl::unordered_dense::map<const void*, std::pair<float, std::uint8_t>> fadeInputsSeen;
-		// Every other log window focuses on a root the set parity saw fade-rejected with its live bound in view (CS_DCLF_SET_PARITY).
+		// CS_DCLF_SET_PARITY: a root the set parity saw fade-rejected with its live bound in view, which every other window of the fade
+		// log (Features/Fades/Diagnostics/FadeLog.cpp) focuses on.
 		std::atomic<std::uint32_t> fadeLogFocus{ ~0u };
-		std::uint32_t fadeLogTurn = 0;
 
 		// CS_DCLF_SET_PARITY: one snapshot per frame in flight, read back a few frames later.
 		struct SetParityFrame

@@ -321,9 +321,14 @@ namespace DCLF
 	void IndirectDraws::DrainAsync()
 	{
 		impl->WaitAhead();
-		// The root states' task (Core's fade roots': the fade write-back).
+		// The root states' task (Features/Fades': its write-back).
 		Extensions::RootStatesWait();
 		impl->WaitVisibilityReadback();
+	}
+
+	const Draws::SceneBuffers* IndirectDraws::Scene() const
+	{
+		return impl->scene.get();
 	}
 
 	namespace

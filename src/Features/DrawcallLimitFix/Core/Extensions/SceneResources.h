@@ -1,8 +1,8 @@
 #pragma once
 
-// The scene resources contract's Core side (Api/SceneResources.h): what a feature's setup, graph registration, requirement, fit and
-// latched buffers are handed, the calls Core makes where the scene's tables are made, registered with a graph, required, fitted and
-// latched and where the revision's inputs are posted, and the lookup of a feature's state in the scene's tables.
+// The scene resources contract's Core side (Api/SceneResources.h): what a feature's setup, graph registration, requirement, fit,
+// latched buffers and sealed set are handed, the calls Core makes where the scene's tables are made, registered with a graph, required,
+// fitted, latched and sealed and where the revision's inputs are posted, and the lookup of a feature's state in the scene's tables.
 
 #include "Features/DrawcallLimitFix/Api/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
@@ -118,6 +118,20 @@ namespace DCLF::Api
 		void Latch(const std::shared_ptr<org::Buffer>& a_buffer, std::size_t a_bytes) const { sink(context, a_buffer, nullptr, a_bytes); }
 		void Latch(const std::shared_ptr<org::VersionedBuffer>& a_buffer, std::size_t a_bytes) const { sink(context, nullptr, a_buffer, a_bytes); }
 	};
+
+	/** @brief Scene resources' sealed set (snapshot builder, MakeRevision): the versions a revision's sealed set names, and the state. */
+	class SceneResourcesSealed
+	{
+	public:
+		const org::services::NamedVersions& sealed;
+		const std::shared_ptr<void>& state;
+
+		template <class T>
+		const T& State() const
+		{
+			return *static_cast<const T*>(state.get());
+		}
+	};
 }
 
 namespace DCLF::Extensions
@@ -146,6 +160,8 @@ namespace DCLF::Extensions
 		void (*a_sink)(void*, const std::shared_ptr<org::Buffer>&, const std::shared_ptr<org::VersionedBuffer>&, std::size_t), void* a_context);
 	/** @brief SceneFitOf: what every state's buffers hold, as a_sealed names them, into a_fit. */
 	void FitSceneResources(const org::services::NamedVersions& a_sealed, const SceneResourceStates& a_states, Draws::SceneFit& a_fit);
+	/** @brief Snapshot builder (MakeRevision, once a revision's set is sealed, before any shape of it): every state's sealed, in order. */
+	void SealSceneResources(const org::services::NamedVersions& a_sealed, const SceneResourceStates& a_states);
 
 	/** @brief a_id's state in a_scene's tables (empty: none made, or no such registration). */
 	const std::shared_ptr<void>& SceneResourcesStateOf(const Draws::SceneBuffers& a_scene, Api::SceneResourcesId a_id);

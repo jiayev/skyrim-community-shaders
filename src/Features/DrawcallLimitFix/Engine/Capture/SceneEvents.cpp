@@ -41,7 +41,7 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// Actor::SetAlpha's fadeAmount writes are Features/Actors' (its early hooks; the fade amounts channel's push, FadeEngineRegistration.cpp).
+	// Actor::SetAlpha's fadeAmount writes are Features/Actors' (its early hooks; the fade amounts channel's push, Features/Fades).
 
 	/**
 	 * @brief FUN_14147a430 (node, level): the only writer of the fade node's LOD level (+0x152 & 0xF, the skin partitions' row);
@@ -93,24 +93,6 @@ namespace DCLF::Scene
 			} else if (emissiveOf && emissiveOf(*shaderProperty) != before) {
 				PushProperty(shaderProperty);
 				PushPropertyUpdate(shaderProperty, SceneCapture::PropertyRecord::kEmissive);
-			}
-			return result;
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	// FUN_14147aa20: a fade node's placement snap. The cell attaches (FUN_1402d1280, FUN_1402d5090) call it after writing the
-	// fade statics (LOD type `and`/`or` at +0x153, range through FUN_14021f200), so its update carries them. Its key goes to the
-	// fade snaps channel's queue (fadeSnapEvents, drained by the channel: FadeEngineRegistration.cpp).
-	struct FadeSnap
-	{
-		static std::uint64_t thunk(RE::NiAVObject* a_node, void* a_camera)
-		{
-			const auto result = func(a_node, a_camera);
-			if (a_node) {
-				fadeSnapEvents.Push(a_node);
-				if (netimmerse_cast<RE::BSFadeNode*>(a_node))
-					PushNodeUpdate(a_node, kFadeStatics | kFadeState);
 			}
 			return result;
 		}
@@ -844,8 +826,7 @@ namespace DCLF::Scene
 		constexpr std::uintptr_t kHavokNodeTransform = 0xea55a0;    // FUN_140ea55a0: a node's transform from its rigid body
 		stl::detour_thunk<FadeUpdate>(REL::Offset(Engine::Address::kFadeUpdate).address());
 		stl::detour_thunk<LodLevelUpdate>(REL::Offset(Engine::Address::kLodLevelUpdate).address());
-		constexpr std::uintptr_t kFadeSnap = 0x147aa20;             // FUN_14147aa20: a fade node's placement snap
-		stl::detour_thunk<FadeSnap>(REL::Offset(kFadeSnap).address());
+		// FUN_14147aa20, a fade node's placement snap, is Features/Fades' (its early hooks; the fade snaps channel's source).
 		// Actor::SetAlpha's slot (0xE1) is Features/Actors' (its early hooks); no other hook takes it.
 		constexpr std::uintptr_t kFadeSetRange = 0x147a9b0;         // FUN_14147a9b0: a fade node's near and far
 		constexpr std::uintptr_t kFadeSetLodType = 0x147aa00;       // FUN_14147aa00: a fade node's LOD type
