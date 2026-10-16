@@ -13,6 +13,7 @@
 #	include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #	include "Features/DrawcallLimitFix/Features/FeatureList.h"
 #	include "Features/DrawcallLimitFix/Integrations/IntegrationList.h"
+#	include "Features/DrawcallLimitFix/Schedule/Schedule.h"
 #	include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
 #	include "DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -92,7 +93,7 @@ void DrawcallLimitFix::PostPostLoad()
 	// Features/Faces' thunks in the face morphing).
 	// The integrations after them (Integrations/IntegrationList.cpp: Integrations/AdvancedSkin's wetness, Integrations/TerrainBlending's
 	// classify input, toggle and held groups, Integrations/LightLimitFix's room index and light buffers).
-	DCLF::Extensions::InstallFeatures(DCLF::Features::List(), DCLF::Integrations::List());
+	DCLF::Extensions::InstallFeatures(DCLF::Features::List(), DCLF::Integrations::List(), DCLF::Schedule::Frame());
 	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();

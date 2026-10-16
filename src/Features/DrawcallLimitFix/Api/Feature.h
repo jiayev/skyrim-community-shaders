@@ -18,6 +18,7 @@
 #include "Features/DrawcallLimitFix/Api/MainRanges.h"
 #include "Features/DrawcallLimitFix/Api/Materials.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Api/Payload.h"
 #include "Features/DrawcallLimitFix/Api/Reports.h"
 #include "Features/DrawcallLimitFix/Api/RootStates.h"
@@ -47,6 +48,11 @@ namespace DCLF::Api
 	public:
 		virtual FrameValuePoolId RegisterFrameValuePool(const FrameValuePool& a_pool) = 0;
 		virtual void RegisterGpuStage(const GpuStage& a_stage) = 0;
+		/**
+		 * @brief A pass the frame's schedule names by its key (Schedule/Frame.cpp). Fails the install for no key, a key another pass has, or
+		 * neither or both of make and emit; a key the schedule names that nobody registered fails it at the end.
+		 */
+		virtual void RegisterPass(const PassDef& a_pass) = 0;
 		virtual void RegisterPayloadProduct(const PayloadProduct& a_product) = 0;
 		virtual SceneResourcesId RegisterSceneResources(const SceneResources& a_resources) = 0;
 		virtual void RegisterCommitHook(const CommitHook& a_hook) = 0;

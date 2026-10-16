@@ -1,7 +1,11 @@
-// The shadow (and sky occlusion) views' passes and their graph extension: culling, the views' draws, and their latched copies.
+// The shadow (and sky occlusion) views' passes and their graph extension: culling, the views' draws, and their latched copies; their
+// PassDefs (shadows.*), which CorePasses.cpp registers.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/IndexPoolPass.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF::Draws
 {
@@ -303,31 +307,22 @@ namespace DCLF::Draws
 
 		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 		{
-			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::ShadowView);
-			AddPass(a_out, PassKind::Copy, "cs.dclf.shadow.latched-copies", ShadowLatchedCopies(false), epoch);
-			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.index-pool",
-				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [shadow = resources](const org::PassPrepareContext& a_preparation) {
-					const auto frame = CurrentShadowFrame(a_preparation, false);
-					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
-				})))
-					.PreferQueue(org::QueueKind::Graphics)
-					.Epoch(epoch));
-			AddPass(a_out, PassKind::Compute, "cs.dclf.shadow.build-draws", std::make_shared<ShadowBuildDrawsPass>(resources, false), epoch);
-			AddPass(a_out, PassKind::Render, "cs.dclf.shadow.view", std::make_shared<ShadowViewPass>(resources, false), epoch);
-			// The views' culling counters, to the host (IndirectDraws::Impl::ReadShadowCullCounters).
-			AddPass(a_out, PassKind::Copy, "cs.dclf.shadow.cull-counters", MakeShadowCullCounterPass(resources), epoch, PassQueue::None);
-			// Skylighting's occlusion map: the same passes in its own epoch after RenderMask.
-			const auto skyEpoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::SkyOcclusion);
-			AddPass(a_out, PassKind::Copy, "cs.dclf.sky.latched-copies", ShadowLatchedCopies(true), skyEpoch);
-			AddPass(a_out, PassKind::Compute, "cs.dclf.sky.build-draws", std::make_shared<ShadowBuildDrawsPass>(resources, true), skyEpoch);
-			AddPass(a_out, PassKind::Render, "cs.dclf.sky.view", std::make_shared<ShadowViewPass>(resources, true), skyEpoch);
+			// The shadow and occlusion epochs' passes (Schedule/Frame.cpp).
+			Api::PassContext context{};
+			context.shadow = &resources;
+			GatherScheduled(Api::EpochShape::Shadow, {}, context, a_out);
 		}
 
 	private:
+		std::shared_ptr<ShadowResources> resources;
+	};
+
+	namespace
+	{
 		/** @brief The views' latched copies: blocks, counters, and the commit's values in the constants. */
-		std::shared_ptr<org::RenderPass> ShadowLatchedCopies(bool a_sky) const
+		std::shared_ptr<org::RenderPass> ShadowLatchedCopies(const std::shared_ptr<ShadowResources>& a_resources, bool a_sky)
 		{
-			auto targets = [shadow = resources] {
+			auto targets = [shadow = a_resources] {
 				std::vector<LatchedTarget> out{ { nullptr, shadow->viewBlocks.buffer }, { shadow->constants, nullptr } };
 				for (std::size_t s = 0; s < shadow->count.size(); ++s) {
 					out.push_back({ shadow->count[s], nullptr });
@@ -341,9 +336,56 @@ namespace DCLF::Draws
 			});
 		}
 
-	private:
-		std::shared_ptr<ShadowResources> resources;
-	};
+		template <bool Sky>
+		std::shared_ptr<org::RenderPass> LatchedCopies(const Api::PassContext& a_context)
+		{
+			return ShadowLatchedCopies(a_context.Shadow(), Sky);
+		}
+
+		std::shared_ptr<org::RenderPass> IndexPoolCopies(const Api::PassContext& a_context)
+		{
+			const auto& resources = a_context.Shadow();
+			return std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [shadow = resources](const org::PassPrepareContext& a_preparation) {
+				const auto frame = CurrentShadowFrame(a_preparation, false);
+				return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
+			}));
+		}
+
+		template <bool Sky>
+		std::shared_ptr<org::RenderPass> BuildDraws(const Api::PassContext& a_context)
+		{
+			return std::make_shared<ShadowBuildDrawsPass>(a_context.Shadow(), Sky);
+		}
+
+		template <bool Sky>
+		std::shared_ptr<org::RenderPass> ViewDraws(const Api::PassContext& a_context)
+		{
+			return std::make_shared<ShadowViewPass>(a_context.Shadow(), Sky);
+		}
+
+		// The views' culling counters, to the host (IndirectDraws::Impl::ReadShadowCullCounters).
+		std::shared_ptr<org::RenderPass> CullCounters(const Api::PassContext& a_context)
+		{
+			return MakeShadowCullCounterPass(a_context.Shadow());
+		}
+
+		// The shadow epoch's, then Skylighting's occlusion map: the same passes in its own epoch after RenderMask.
+		constexpr Api::PassDef kShadowPasses[] = {
+			{ .key = "shadows.latched-copies", .passName = "cs.dclf.shadow.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies<false> },
+			{ .key = "shadows.index-pool", .passName = "cs.dclf.shadow.index-pool", .make = &IndexPoolCopies },
+			{ .key = "shadows.build-draws", .passName = "cs.dclf.shadow.build-draws", .make = &BuildDraws<false> },
+			{ .key = "shadows.view", .passName = "cs.dclf.shadow.view", .kind = PassKind::Render, .make = &ViewDraws<false> },
+			{ .key = "shadows.cull-counters", .passName = "cs.dclf.shadow.cull-counters", .kind = PassKind::Copy, .queue = PassQueue::None, .make = &CullCounters },
+			{ .key = "shadows.sky.latched-copies", .passName = "cs.dclf.sky.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies<true> },
+			{ .key = "shadows.sky.build-draws", .passName = "cs.dclf.sky.build-draws", .make = &BuildDraws<true> },
+			{ .key = "shadows.sky.view", .passName = "cs.dclf.sky.view", .kind = PassKind::Render, .make = &ViewDraws<true> },
+		};
+	}
+
+	std::span<const Api::PassDef> ShadowPassDefs()
+	{
+		return kShadowPasses;
+	}
 
 	std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeShadowExtension(std::shared_ptr<ShadowResources> a_resources)
 	{

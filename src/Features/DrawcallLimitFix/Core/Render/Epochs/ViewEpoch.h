@@ -155,6 +155,8 @@ namespace DCLF::Draws
 	};
 
 	std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeViewExtension(std::shared_ptr<ViewResources> a_resources);
+	/** @brief The views' epochs' passes (view.*: ViewEpochRecord.cpp), which Passes/CorePasses.cpp registers. */
+	std::span<const Api::PassDef> ViewPassDefs();
 
 	/**
 	 * @brief A view's buckets: per pair of pipelines (the depth one only with a depth pass), the slots that draw with it, each slot's
