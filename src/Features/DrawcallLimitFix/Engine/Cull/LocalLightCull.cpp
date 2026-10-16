@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -529,8 +530,8 @@ namespace DCLF::LocalLightCull
 		}
 		if (installed)
 			return;
-		// A cut entry's geometries take the lights' bits from SunAccumulation's registration and mask-clear hooks.
-		if (!SunAccumulation::Get().Installed()) {
+		// A cut entry's geometries take the lights' bits from the Sun source's registration and mask-clear hooks (SunAccumulation's).
+		if (!Extensions::SourceCullsInstalled(Api::ShadowSource::Sun)) {
 			logger::warn("[DCLF] point lights' shadow culls: the sun's accumulation hooks are not installed; they keep culling everything");
 			return;
 		}

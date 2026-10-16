@@ -79,10 +79,9 @@ void DrawcallLimitFix::PostPostLoad()
 	// The frame-sourced float positions built now, off the render thread's first frame.
 	(void)DCLF::MaterialSources::FramePSFloats();
 	(void)DCLF::MaterialSources::FrameVSFloats();
-	DCLF::SunAccumulation::Get().Install();
-	// The shadow cameras' hooks, by source (Api::Feature::cameraHooks): Features/Shadows/Sun's UpdateCamera, Core's light selection, then
-	// Features/Shadows/Local's focus cameras, in that order.
-	DCLF::Extensions::InstallCameraHooks(DCLF::Features::List());
+	// The shadow sources' hooks, by source (Api::Feature::sourceHooks): Features/Shadows/Sun's accumulation and UpdateCamera, Core's light
+	// selection, then Features/Shadows/Local's focus cameras, in that order.
+	DCLF::Extensions::InstallSourceHooks(DCLF::Features::List());
 	DCLF::PrimaryCull::Get().Install();
 	// Main::IsRoomVisible answered from PortalViews' VisibleSet while DCLF runs.
 	DCLF::RoomVisibility::Install();

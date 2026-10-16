@@ -102,7 +102,7 @@ namespace DCLF
 		 * into them are withheld (the faces' plain mode, 0: the only one whose registrations the hooks see; mode 0x19's are FUN_1414b2b90's).
 		 * SetViewRendering: around the view's render, whatever its mode (the observers: OwnViewRendering). SetViewFamilyOwned: once a
 		 * frame, a trees view's draw family per face DCLF's (its engine shapes' passes into its renderers withheld; Core's while the family
-		 * is taken; SetViewTreeLodOwned: tree LOD's).
+		 * is taken: IndirectDraws::DecideViewFaces).
 		 */
 		void SetViewRenderers(Api::EngineView a_view, const Api::ViewAccumulators& a_accumulators);
 		void SetViewWithholdActive(Api::EngineView a_view, bool a_active) { viewRenderers[static_cast<std::size_t>(a_view)].withholdActive.store(a_active, std::memory_order_release); }
@@ -116,7 +116,6 @@ namespace DCLF
 			else
 				owned.fetch_and(~bit, std::memory_order_release);
 		}
-		void SetViewTreeLodOwned(Api::EngineView a_view, bool a_owned) { SetViewFamilyOwned(a_view, Api::DrawFamily::TreeInstances, a_owned); }
 		/** @brief Whether a_batch is one of an OwnRenderers view's batch renderers (for the census). */
 		bool IsOwnViewRenderer(Api::EngineView a_view, const RE::BSBatchRenderer* a_batch) const { return IsViewRenderer(a_view, a_batch); }
 		/** @brief Render thread: whether an OwnRenderers view's render runs (a reflection face render: the capture parity's face draws). */
@@ -138,19 +137,15 @@ namespace DCLF
 				view.registered.exchange(0, std::memory_order_relaxed) };
 		}
 		/**
-		 * @brief A view's LOD roots (IndirectDraws::ViewLodRootsOwned; the cube camera's: Features/Reflection's ReflectionFaces::RootBits):
-		 * LOD land and objects (the view's phase), LOD trees (its tree LOD per face). Core's while tree LOD and the LOD gates are.
-		 */
-		static constexpr std::uint32_t kLodRoots = 1u << 0, kTreeRoot = 1u << 1;
-		/**
 		 * @brief An OwnRenderers view's residue watch (IndirectDraws::ViewLodRootsOwned, on the renders its residueDue keeps the roots):
-		 * render thread, at a render's start, the view's LOD roots to watch (0: none). While set, passes into the view's renderers that are
-		 * not withheld (geometry the engine still draws) are counted by root (not the sky's). Core's while tree LOD and the LOD gates are.
+		 * render thread, at a render's start, the view's roots to watch (Api::ViewRootBit; 0: none). While set, passes into the view's
+		 * renderers that are not withheld (geometry the engine still draws) are counted by root (not the sky's): a draw family's engine
+		 * shape under its faces' root, anything else under the view root contributions' roots.
 		 */
 		void WatchViewResidue(Api::EngineView a_view, std::uint32_t a_roots) { viewRenderers[static_cast<std::size_t>(a_view)].residueWatch.store(a_roots, std::memory_order_release); }
 		struct ViewResidue
 		{
-			std::uint32_t lodPasses = 0, treePasses = 0;  // under the LOD land and objects roots, under the tree root
+			std::uint32_t lodPasses = 0, treePasses = 0;  // under the view root contributions' roots, under a draw family's faces' root
 			std::string first;
 		};
 		/** @brief A view's residue since the last call. */

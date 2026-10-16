@@ -1,7 +1,7 @@
 #pragma once
 
 // Tree LOD's channel and mirror: the engine's tree LOD groups by events (pushed by the feature's hooks, TreeLodHooks.cpp), and the render
-// thread's mirror of them in slots for the TreeInstances family's tables (Core/Render/DrawFamilies/TreeInstancesLayout.h), drained at the
+// thread's mirror of them in slots for the TreeInstances family's tables (TreeInstancesLayout.h), drained at the
 // frame requests (the family's serve) and uploaded by the depth commit (TreeLodTables.cpp). Included by the feature's sources only.
 
 #include <array>
@@ -13,7 +13,7 @@
 
 #include <winrt/base.h>
 
-#include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/TreeInstancesLayout.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeInstancesLayout.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 
 struct ID3D11Buffer;

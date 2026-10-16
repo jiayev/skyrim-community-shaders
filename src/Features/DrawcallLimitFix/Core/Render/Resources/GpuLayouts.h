@@ -140,9 +140,6 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kFoliageResultWords = kFoliageCounters + (kFoliageLandSampleBase + kFoliageLandSamples) * kFoliageSampleWords;
 	constexpr std::uint32_t kFoliageColourWords = 4;  // a pixel's: albedo, diffuse, motion error, motion vector
 	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";
-	// Tree LOD's cull's thread group (Features/TreeLod's TreeLodCullCS.hlsl: a thread per instance or retest entry), which a trees view's
-	// per-face dispatch is sized by (ViewEpoch.cpp).
-	constexpr std::uint32_t kTreeLodCullGroup = 64;
 	constexpr const char* kIndexPoolShader = "DrawcallLimitFix/IndexPoolCS.hlsl";
 	// IndexPoolCS.hlsl's constants: the latch block and its copies' dispatch (ShadowLatchLayout::PoolOffset), the copies, the pool.
 	struct IndexPoolConstants

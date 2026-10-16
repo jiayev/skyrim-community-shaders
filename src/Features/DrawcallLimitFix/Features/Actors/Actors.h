@@ -5,6 +5,8 @@
 // Features/FirstPerson's needs), the actor parent's contribution (Api::EngineParent::Actor: the classification's chain
 // test reads it as data) and the actor techniques' contributions (the Lighting port's eligibility reads them as data).
 // Whatever the toggle, it also owns:
+// - the actor-owned entry class (Api::EntryClass::ActorOwned, an owner class by the ActorCharacter form type: per frame, its own motion,
+//   published), which Core's walk resolves and reads as data;
 // - the actors' engine events, at its early hooks (ActorEvents.cpp): Actor::SetAlpha's fadeAmount writes into Core's fadeAmount events
 //   (Extensions::PushFadeAmount; their channel is Core's until Features/Fades), and the move writers of Actor::UpdateActor3DPosition, the
 //   sky cell's skin job and the ragdoll job on reserved move-writer slots (Extensions::ReserveMoveWriter), which every mover's placement
@@ -16,8 +18,8 @@
 // - the skinned geometry, any NiSkinInstance's (creatures, effects, LOD trees, the first-person arms): the bone palettes FrameValues samples
 //   into the palette part it shares with the particles, the skin partitions and their LOD in the tables and the walk, the skinned and skin
 //   partitions toggles, kObjectPaletteBlock and the vertex stages' bones;
-// - an actor-owned entry's classification: Tracked::actorOwned, the per-frame actor trait and its verdict recheck (Coordinator::
-//   ActorRecordKept), SceneTables::actorObjects, the mirror's actor bit (NodeRecord::actor);
+// - an owner class's entry's classification: Tracked::owner, the per-frame owner class trait and its verdict recheck (Coordinator::
+//   FrameVerdictKept), SceneTables::actorObjects, the mirror's actor bit (NodeRecord::actor);
 // - the animation path's move writer (Engine/Capture/SceneEvents: FUN_14066afa0, every reference's animation) and the fadeAmount channel;
 // - Advanced Skin's coupling: the actors' wetness (SceneTables::actorWetness, FrameView::CaptureWetness, FrameValues' fan-out into the shading
 //   rows' SkinPerGeometry) and its material textures (MaterialPortFeature's SkinTextures).

@@ -552,11 +552,11 @@ namespace DCLF::Scene
 			it = tracked.try_emplace(a_geometry).first;
 		trackedLayout += inserted ? 1 : 0;
 		auto& entry = it->second;
-		const auto* actorOwner = a_prep.actorOwner;
-		const auto identity = sceneIdentity.Attach(a_geometry, actorOwner);
+		const auto* ownerReference = a_prep.ownerReference;
+		const auto identity = sceneIdentity.Attach(a_geometry, ownerReference);
 		if (identity.replaced) {
 			ReleaseObjectSlot(entry);
-			entry.actorOwnedResolved = false;
+			entry.ownerResolved = false;
 			entry.entryClassResolved = false;
 		}
 		if (inserted) {
@@ -565,7 +565,7 @@ namespace DCLF::Scene
 		}
 		entry.identity = identity.member;
 		entry.groupIdentity = identity.group;
-		entry.actorOwner = actorOwner;
+		entry.ownerReference = ownerReference;
 		entry.roomNode = a_prep.roomNode;
 		entry.roomMapGeneration = 0;
 		entry.geometry = std::move(reference);
@@ -648,14 +648,15 @@ namespace DCLF::Scene
 
 	const RE::NiAVObject* Coordinator::LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_live) const
 	{
-		// An actor's root (the category node's child it hangs from) is the light entry for everything under it, carried items too.
+		// An actor's root (the category node's child it hangs from, its reference an owner class's: Extensions::OwnerClassOf) is the light
+		// entry for everything under it, carried items too.
 		if (const auto* category = a_tracked.categoryNode) {
 			++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::LightEntry)];
 			const void* root = &a_geometry;
 			for (const void* node = mirror.Parent(&a_geometry); node && node != category; node = mirror.Parent(node))
 				root = node;
 			const auto* record = root != &a_geometry ? mirror.Node(root) : nullptr;
-			const bool actorRoot = record && record->parent == category && record->IsActorCharacter();
+			const bool actorRoot = record && record->parent == category && Extensions::OwnerClassOf(*record).ownerClass != Api::EntryClass::None;
 			// The mirror's, or on a live walk the live chain's; observers compare the two.
 			if (!a_live) {
 				Diagnostics::Notify(Diagnostics::LightEntryRead{ *this, a_geometry, category, root, actorRoot, nullptr, false, false });
@@ -679,7 +680,7 @@ namespace DCLF::Scene
 		for (const auto* node = a_geometry.parent; node && node != a_category; node = node->parent)
 			live = node;
 		const auto* reference = live != &a_geometry && live->parent == a_category ? live->GetUserData() : nullptr;
-		a_actor = reference && reference->GetFormType() == RE::FormType::ActorCharacter;
+		a_actor = reference && Extensions::OwnerClassOfForm(static_cast<std::uint8_t>(reference->GetFormType())).ownerClass != Api::EntryClass::None;
 		return live;
 	}
 
@@ -741,9 +742,9 @@ namespace DCLF::Scene
 		a_out.reason = a_reason;
 		const auto* record = mirror.Node(a_geometry);
 		a_out.mirrored = record != nullptr;
-		a_out.actorOwner = record && record->IsActorCharacter() ?
-		                       static_cast<const RE::TESObjectREFR*>(record->userData) :
-		                       nullptr;
+		a_out.ownerReference = record && Extensions::OwnerClassOf(*record).ownerClass != Api::EntryClass::None ?
+		                           static_cast<const RE::TESObjectREFR*>(record->userData) :
+		                           nullptr;
 		a_out.roomNode = RoomNodeOf(a_geometry);
 		// Its entry class's held parent: the parent its geometry type's rule matches under and holds (Api::GeometryTypeContribution::entry:
 		// a face shape's head, a dynamic shape's BSFaceGenNiNode).
@@ -788,7 +789,7 @@ namespace DCLF::Scene
 			for (const void* node = mirror.Parent(a_geometry); node && node != a_category; node = mirror.Parent(node))
 				root = node;
 			const auto* rootRecord = root != static_cast<const void*>(a_geometry) ? mirror.Node(root) : nullptr;
-			if (rootRecord && rootRecord->parent == a_category && rootRecord->IsActorCharacter())
+			if (rootRecord && rootRecord->parent == a_category && Extensions::OwnerClassOf(*rootRecord).ownerClass != Api::EntryClass::None)
 				a_out.lightActorRoot = static_cast<const RE::NiAVObject*>(root);
 		}
 	}

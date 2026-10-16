@@ -1,6 +1,7 @@
 // Tree LOD drawn per face by a trees view (Api::ViewShape::trees: the TreeInstances family's faces): the per-face cull (TreeLodCullCS's
 // phase 1 into each face's list), the faces' draw pass's declarations and draw, each epoch commit's row, and the units the faces' lists
-// hold with the tables. The lists, rows and latch are Core's view machinery's (ViewResources, ViewLatchLayout).
+// hold with the tables. The lists, rows and latch are Core's view machinery's (ViewResources' faceRows and faceLists at the family's
+// slot, ViewLatchLayout), sized by the faces' data.
 
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
@@ -10,6 +11,9 @@ namespace DCLF::Draws
 	// In DCLF::Draws' anonymous namespace, where it was defined before the feature moved: ORG's recipe telemetry names a pass by its type.
 	namespace
 	{
+		// The family's slot in a view's resources and shape (ViewResources::faceRows, faceLists; ViewFrame::faces).
+		constexpr std::size_t kFamily = static_cast<std::size_t>(Api::DrawFamily::TreeInstances);
+
 		std::shared_ptr<const ViewFrame> CurrentViewFrame(const org::PassPrepareContext& a_preparation, ViewKind a_kind)
 		{
 			if (const auto* shapes = RevisionShapesOf(a_preparation))
@@ -50,8 +54,8 @@ namespace DCLF::Draws
 				bindings.shapes = a_builder.ShaderResource(*tables->shapes).View();
 				bindings.instances = a_builder.ShaderResource(*tables->instances).View();
 				for (std::uint32_t f = 0; f < resources->traits->faces; ++f) {
-					bindings.rows[f] = a_builder.ShaderResource(resources->treeRows[f]).View();
-					bindings.visible[f] = a_builder.UnorderedAccess(*resources->treeVisible[f]).View();
+					bindings.rows[f] = a_builder.ShaderResource(resources->faceRows[kFamily][f]).View();
+					bindings.visible[f] = a_builder.UnorderedAccess(*resources->faceLists[kFamily][f]).View();
 				}
 				return bindings;
 			}
@@ -63,18 +67,18 @@ namespace DCLF::Draws
 				a_out.push_back(NamedSerial(a_preparation, tables->shapes));
 				a_out.push_back(NamedSerial(a_preparation, tables->instances));
 				for (std::uint32_t f = 0; f < resources->traits->faces; ++f)
-					a_out.push_back(NamedSerial(a_preparation, resources->treeVisible[f]));
+					a_out.push_back(NamedSerial(a_preparation, resources->faceLists[kFamily][f]));
 			}
 
 			TreePrepared Prepare(const TreeBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 			{
 				TreePrepared prepared{};
 				const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
-				if (!frame || !frame->latch || !frame->treeGroups || !tables->cull)
+				if (!frame || !frame->latch || !frame->faces[kFamily].groups || !tables->cull)
 					return prepared;
 				prepared.program = tables->cull;
 				prepared.latch = frame->latch;
-				prepared.groups = frame->treeGroups;
+				prepared.groups = frame->faces[kFamily].groups;
 				prepared.faces = resources->traits->faces;
 				auto& constants = prepared.constants;
 				constants.shapesIndex = CaptureViewIndex(a_preparation, a_bindings.shapes);
@@ -132,16 +136,17 @@ namespace DCLF::Features::TreeLod
 		{
 			const auto* tables = TablesOf(a_declare.scene);
 			const auto& view = *a_declare.view;
-			if (!tables || !view.treeVisible[0])
+			constexpr std::size_t family = static_cast<std::size_t>(Api::DrawFamily::TreeInstances);
+			if (!tables || !view.faceLists[family][0])
 				return;
 			const std::span<const org::SrvView> noViews{};
 			auto& builder = a_declare.builder;
 			for (const auto& table : { tables->shapes, tables->instances, tables->meshes })
 				builder.ShaderResource(*table, noViews);
 			for (std::uint32_t f = 0; f < view.traits->faces; ++f) {
-				builder.ShaderResource(view.treeRows[f], noViews);
-				a_declare.arguments[f] = builder.IndirectArguments(*view.treeVisible[f]).Resource();
-				builder.ShaderResource(*view.treeVisible[f], noViews);
+				builder.ShaderResource(view.faceRows[family][f], noViews);
+				a_declare.arguments[f] = builder.IndirectArguments(*view.faceLists[family][f]).Resource();
+				builder.ShaderResource(*view.faceLists[family][f], noViews);
 			}
 		}
 
@@ -162,13 +167,16 @@ namespace DCLF::Features::TreeLod
 			const auto& scene = a_row.scene;
 			const auto* tables = TablesOf(scene);
 			const auto treeLod = Draws::FamilyPipelinesOf(scene, Api::DrawFamily::TreeInstances);
-			a_row.row = tables ? tables->row : TreeInstances::DrawRow{};
+			TreeInstances::DrawRow row = tables ? tables->row : TreeInstances::DrawRow{};
 			const bool trees = a_row.viewDraws && treeLod && tables;
-			if (!a_row.owners)
-				return trees && a_row.row.shapeSlots;
-			if (!(trees && a_row.row.shapeSlots && TreeLodTextureBinding(a_row.row, *a_row.owners)))
-				a_row.row.shapeSlots = 0;
-			return a_row.row.shapeSlots != 0;
+			if (!a_row.owners) {
+				std::memcpy(a_row.row.data(), &row, sizeof(row));
+				return trees && row.shapeSlots;
+			}
+			if (!(trees && row.shapeSlots && TreeLodTextureBinding(row, *a_row.owners)))
+				row.shapeSlots = 0;
+			std::memcpy(a_row.row.data(), &row, sizeof(row));
+			return row.shapeSlots != 0;
 		}
 
 		// A face's list holds a unit per shape slot of the tables (the shape rows, the records and the main view's list, one unit group),
@@ -216,11 +224,11 @@ namespace DCLF::Features::TreeLod
 			.rowBytes = static_cast<std::uint32_t>(sizeof(TreeInstances::DrawRow)),
 			.headerBytes = static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader)),
 			.unitWords = TreeInstances::kMaxGroupInstances,
-			.cullGroup = Draws::kTreeLodCullGroup,
+			.cullGroup = kTreeLodCullGroup,
 			.root = kFacesRoot,
 			.face = &FacesFace };
 	}
 	static_assert(sizeof(TreeInstances::DrawRow) == 64 && sizeof(TreeInstances::VisibleHeader) == 64 && TreeInstances::kMaxGroupInstances == 75 &&
-	                  Draws::kTreeLodCullGroup == 64,
-		"tree LOD's faces' sizes are not the view latch's (ViewLatchLayout::kTreeRowInFace, kTreeHeaderInFace) and the faces' lists' and cull's");
+	                  kTreeLodCullGroup == 64,
+		"tree LOD's faces' sizes are not the shaders' (TreeInstancesLayout.h, TreeLodCullCS.hlsl)");
 }

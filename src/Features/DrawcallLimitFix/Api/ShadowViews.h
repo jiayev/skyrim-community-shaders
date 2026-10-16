@@ -96,14 +96,29 @@ namespace DCLF::Api
 	/**
 	 * @brief A shadow source contribution: the source's views are drawn while it is registered (a view of a source none registered stays
 	 * the engine's). Its cameras are the feature's to compute, into Core's boards (Core/Render/Shadow/ShadowCameras.h), from its
-	 * Feature::cameraHooks (called with the source, in ShadowSource order: the Sun's, Core's light selection, then the others').
+	 * Feature::sourceHooks (called with the source, in ShadowSource order: the Sun's, Core's light selection, then the others').
 	 *
 	 * - lightKept (Spot and Point, required): render thread, at the end of the light selection, once per kept light of the source's kind,
 	 *   in the selection's order.
+	 * - fullFrustumWindowEnd (Sun, required; none for the others): render thread, once a frame, after the main camera's full-frustum cull call site
+	 *   (PrimaryCull::AfterFullFrustum); whether this frame's full-frustum cull applied the source's entry exclusion.
 	 */
 	struct ShadowSourceContribution
 	{
 		ShadowSource source = ShadowSource::Count;
 		void (*lightKept)(const ShadowLightKept& a_light) = nullptr;
+		bool (*fullFrustumWindowEnd)() = nullptr;
+	};
+
+	/**
+	 * @brief What Feature::sourceHooks is handed: the source whose hooks install now, and the call that says its engine culls' hooks are
+	 * in (Core's local light culls take a cut entry's lights' bits from the Sun's registration hooks, so they install only after those).
+	 */
+	class ShadowSourceHooks
+	{
+	public:
+		ShadowSource source = ShadowSource::Count;
+		/** @brief Main thread, in the call: the source's cull hooks are installed (Extensions::SourceCullsInstalled). */
+		void CullsInstalled();
 	};
 }

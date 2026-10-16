@@ -251,8 +251,9 @@ namespace DCLF::Diagnostics
 				++sp.slots;
 				BindlessShading now = (*rows)[o];
 				SampleShading(*property, tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor, V::IsResidentSlot(a_store, o), now);
-				// The tree's wind is the row's as the slot was named (a member's until its tree's entry), not kept current: not compared.
-				if (std::memcmp(&now, &(*rows)[o], offsetof(BindlessShading, treeParams)) != 0)
+				// The feature block (the tree's wind) is the row's as the slot was named (a member's until its tree's entry), not kept current:
+				// not compared.
+				if (std::memcmp(&now, &(*rows)[o], offsetof(BindlessShading, featureBlock)) != 0)
 					changed.push_back(o);
 			}
 			// A write after the walk took the events (the animation job runs the controllers alongside the render thread; the culls'

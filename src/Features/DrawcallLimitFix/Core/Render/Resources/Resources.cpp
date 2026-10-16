@@ -732,20 +732,27 @@ namespace DCLF
 				{ .extent = { 0, 4, 4 }, .policy = org::services::GrowthPolicy::Headroom(0) });
 		state->sequences = MakeVersioned(CreateWords(std::uint64_t(traits.faces) * 64u * sizeof(DrawSequence) / 4, true, name("sequences").c_str()),
 			{ .extent = { 0, traits.faces * sizeof(DrawSequence), 4 }, .policy = org::services::GrowthPolicy::Doubling(64) });
-		// The faces' tree LOD rows and lists, at the TreeInstances family's units (its faces.lists: tree LOD's shape slots): the lists grow
-		// with its tables (RequireSceneTables).
-		const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances).contribution.faces;
-		for (std::uint32_t f = 0; f < traits.faces && traits.trees; ++f) {
-			state->treeRows[f] = CreateWords(sizeof(TreeInstances::DrawRow) / 4, false, name(fmt::format("tree-row{}", f)).c_str());
-			state->treeRowsAddress[f] = AddressOf(device, *state->treeRows[f]);
-			if (!state->treeRowsAddress[f])
-				return fail("tree LOD rows have no device address");
-			if (trees.lists && FamilySetUp(*scene, Api::DrawFamily::TreeInstances)) {
-				Api::DrawFamilyLists lists{ *scene };
-				trees.lists(lists);
-				const std::uint32_t words = TreeInstances::kVisibleHeaderWords + lists.current * TreeInstances::kMaxGroupInstances;
-				state->treeVisible[f] = MakeVersioned(CreateWords(words, true, name(fmt::format("tree-visible{}", f)).c_str()),
-					{ .extent = { TreeInstances::kVisibleHeaderWords * 4, TreeInstances::kMaxGroupInstances * 4, 4 } });
+		// The faces' draw families' rows and lists (each family with faces: its rowName and listName, the face's index appended), at the
+		// family's units (its faces.lists: tree LOD's shape slots): the lists grow with its tables (RequireSceneTables).
+		for (std::size_t d = 0; d < Extensions::kDrawFamilies && traits.trees; ++d) {
+			const auto family = static_cast<Api::DrawFamily>(d);
+			if (!FamilyHasFaces(family))
+				continue;
+			const auto& entry = Extensions::DrawFamilyOf(family);
+			const auto& faces = entry.contribution.faces;
+			const std::uint32_t headerWords = faces.headerBytes / 4;
+			for (std::uint32_t f = 0; f < traits.faces; ++f) {
+				state->faceRows[d][f] = CreateWords(faces.rowBytes / 4, false, name(fmt::format("{}{}", entry.rowName, f)).c_str());
+				state->faceRowsAddress[d][f] = AddressOf(device, *state->faceRows[d][f]);
+				if (!state->faceRowsAddress[d][f])
+					return fail(fmt::format("{} rows have no device address", entry.label).c_str());
+				if (faces.lists && FamilySetUp(*scene, family)) {
+					Api::DrawFamilyLists lists{ *scene };
+					faces.lists(lists);
+					const std::uint32_t words = headerWords + lists.current * faces.unitWords;
+					state->faceLists[d][f] = MakeVersioned(CreateWords(words, true, name(fmt::format("{}{}", entry.listName, f)).c_str()),
+						{ .extent = { faces.headerBytes, faces.unitWords * 4, 4 } });
+				}
 			}
 		}
 		state->blocks = DeviceBuffer(std::uint64_t(traits.faces) * kViewBlockBytes, name(traits.blocks).c_str());

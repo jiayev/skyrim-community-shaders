@@ -94,6 +94,11 @@ namespace DCLF::Api
 		virtual void RegisterParent(const ParentContribution& a_parent) = 0;
 		/** @brief Fails the install for a class another feature has, or without a registered toggle. */
 		virtual void RegisterObjectClass(const ObjectClassContribution& a_class) = 0;
+		/**
+		 * @brief Fails the install for a class or form type another contribution has, a class a geometry type's entry rule names (or None),
+		 * no name, or ownMotion without everyFrame.
+		 */
+		virtual void RegisterEntryClass(const EntryClassContribution& a_class) = 0;
 		virtual void RegisterShading(const ShadingContribution& a_shading) = 0;
 		/** @brief Fails the install past Extensions::kFrameGlobalsFloats floats in all. */
 		virtual FrameGlobalsSlot RegisterFrameGlobals(const FrameGlobalsContribution& a_globals) = 0;
@@ -111,7 +116,10 @@ namespace DCLF::Api
 		 * or view bit Core or another view has (or none, checked once all are in), or an ImportedTexture map without importTarget.
 		 */
 		virtual void RegisterOcclusionMap(const OcclusionMapContribution& a_map) = 0;
-		/** @brief Fails the install for a source another feature has, or a Spot or Point source without lightKept. */
+		/**
+		 * @brief Fails the install for a source another feature has, a Spot or Point source without lightKept, or a Sun source without
+		 * fullFrustumWindowEnd (another source with one).
+		 */
 		virtual void RegisterShadowSource(const ShadowSourceContribution& a_source) = 0;
 		/**
 		 * @brief Fails the install for a family another registration has, a class with no registered toggle, or without its scene
@@ -171,18 +179,19 @@ namespace DCLF::Api
 	 *   change (a vtable slot the primary cull takes at its install; the source of an engine event channel Core follows, after Core's
 	 *   own scene events are in; a writer completing Core's movers, on a slot it reserves first: Extensions::ReserveMoveWriter). Registers
 	 *   nothing; Core's switches and Diagnostics::Observe are readable.
-	 * - cameraHooks (optional): the main thread at PostPostLoad, where the shadow cameras' hooks install (the shell's
-	 *   Extensions::InstallCameraHooks, after SunAccumulation's, before the primary cull's): the engine hooks that write a shadow
-	 *   source's cameras into Core's boards (Core/Render/Shadow/ShadowCameras.h). Called once per source, in ShadowSource order (Sun,
-	 *   Spot, Point, Focus; at each source the features in the list's order), with Core's light selection installed right after the
-	 *   Sun's: a feature installs the hooks of a_source's cameras (none for a source it does not take), so the hooks' install order
-	 *   (and the install log's) is the sources', whatever the features' places in the list. Registers nothing.
+	 * - sourceHooks (optional): the main thread at PostPostLoad, where the shadow sources' hooks install (the shell's
+	 *   Extensions::InstallSourceHooks, before the primary cull's): the engine hooks of a shadow source, its culls' (calling
+	 *   ShadowSourceHooks::CullsInstalled once they are in) and those that write its cameras into Core's boards
+	 *   (Core/Render/Shadow/ShadowCameras.h). Called once per source, in ShadowSource order (Sun, Spot, Point, Focus; at each source the
+	 *   features in the list's order), with Core's light selection installed right after the Sun's: a feature installs the hooks of
+	 *   a_hooks.source (none for a source it does not take), so the hooks' install order (and the install log's) is the sources',
+	 *   whatever the features' places in the list. Registers nothing.
 	 */
 	struct Feature
 	{
 		std::string_view name;
 		void (*install)(InstallContext& a_context) = nullptr;
 		void (*earlyHooks)() = nullptr;
-		void (*cameraHooks)(ShadowSource a_source) = nullptr;
+		void (*sourceHooks)(ShadowSourceHooks& a_hooks) = nullptr;
 	};
 }

@@ -85,7 +85,7 @@ namespace DCLF::Diagnostics
 			}, [&store, key = static_cast<const void*>(&a_geometry), category, live = static_cast<const void*>(live), liveActor] {
 				const auto chain = V::MirrorChain(store, key, category);
 				const auto* record = chain.size() > 1 ? V::mirror(store).Node(chain.back()) : nullptr;
-				const bool actor = record && record->parent == category && record->IsActorCharacter();
+				const bool actor = record && record->parent == category && Extensions::OwnerClassOf(*record).ownerClass != Api::EntryClass::None;
 				return actor == liveActor && (!actor || chain.back() == live);
 			});
 		}

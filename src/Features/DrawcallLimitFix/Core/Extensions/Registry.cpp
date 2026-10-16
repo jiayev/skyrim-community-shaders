@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <vector>
 
 namespace DCLF::Extensions
@@ -65,6 +66,10 @@ namespace DCLF::Extensions
 			// By type: its contribution (geometryType 0xFF: none); by entry class: the rule a contribution names it with.
 			GeometryTypeContributions geometryTypeContributions{};
 			EntryClassRules entryClassRules{};
+			// The owner classes by form type (OwnerClassOf), whether a class is one, and their entries' timing labels (OwnedEntriesLabel).
+			OwnerClasses ownerClasses{};
+			std::array<bool, static_cast<std::size_t>(Api::EntryClass::Count)> ownerClassRegistered{};
+			std::string ownedLabel = "owned", ownedWithoutRecordLabel = "owned without a record";
 			ParentToggles parents{};
 			ObjectClassToggles objectClasses{};
 			CategoryRoots categoryRoots{};
@@ -472,6 +477,9 @@ namespace DCLF::Extensions
 				lists.geometryTypes[a_type.geometryType] = a_type.toggle;
 				// One rule an entry class: a second type naming it names it alike.
 				if (entry.entryClass != Api::EntryClass::None) {
+					if (lists.ownerClassRegistered[static_cast<std::size_t>(entry.entryClass)])
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s geometry type {} names entry class {}, an owner class", feature,
+							static_cast<std::uint32_t>(a_type.geometryType), static_cast<std::uint32_t>(entry.entryClass)));
 					auto& rule = lists.entryClassRules[static_cast<std::size_t>(entry.entryClass)];
 					if (rule.entryClass != Api::EntryClass::None && (rule.perFrame != entry.perFrame || rule.holdsParent != entry.holdsParent))
 						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s geometry type {} names entry class {} unlike another contribution", feature,
@@ -503,11 +511,49 @@ namespace DCLF::Extensions
 				lists.categoryRoots[static_cast<std::size_t>(a_class.objectClass)] = a_class.categoryRoot;
 			}
 
+			void RegisterEntryClass(const Api::EntryClassContribution& a_class) override
+			{
+				// Its own motion (every frame, no event) makes its entries per frame.
+				if (a_class.entryClass == Api::EntryClass::None || a_class.entryClass >= Api::EntryClass::Count || a_class.name.empty() ||
+					(a_class.ownMotion && !a_class.everyFrame))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete entry class contribution", feature));
+				const auto index = static_cast<std::size_t>(a_class.entryClass);
+				auto& owner = lists.ownerClasses[a_class.ownerFormType];
+				if (lists.ownerClassRegistered[index] || owner.ownerClass != Api::EntryClass::None ||
+					lists.entryClassRules[index].entryClass != Api::EntryClass::None)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes entry class {} (form type {}), which another contribution has", feature,
+						static_cast<std::uint32_t>(a_class.entryClass), static_cast<std::uint32_t>(a_class.ownerFormType)));
+				// The timing report's labels: the registered names, in registration order.
+				const bool first = std::ranges::none_of(lists.ownerClassRegistered, std::identity{});
+				lists.ownerClassRegistered[index] = true;
+				owner = { a_class.entryClass, a_class.everyFrame, a_class.ownMotion, a_class.published };
+				lists.ownedLabel = first ? std::string(a_class.name) : lists.ownedLabel + "/" + std::string(a_class.name);
+				lists.ownedWithoutRecordLabel = lists.ownedLabel + " without a record";
+			}
+
 			void RegisterShading(const Api::ShadingContribution& a_shading) override
 			{
-				if (a_shading.name.empty() || !a_shading.propertyFlags || !a_shading.derive)
+				// A block's variables lie in its words, each one at most a word (a variable mask bit each: Extensions::ShadingBlock::vsMask).
+				const auto blockValid = [&] {
+					if (a_shading.blockWords > Api::kShadingBlockWords || (a_shading.blockWords && !a_shading.objectFlags) ||
+						a_shading.vsVariables.size() > a_shading.blockWords)
+						return false;
+					for (const auto& variable : a_shading.vsVariables)
+						if (variable.variable >= 64 || !variable.floats || variable.compared > variable.floats ||
+							std::uint32_t(variable.firstWord) + variable.floats > a_shading.blockWords)
+							return false;
+					return true;
+				};
+				if (a_shading.name.empty() || !a_shading.propertyFlags || !a_shading.derive || !blockValid())
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shading contribution", feature));
-				lists.shadingContributions.push_back({ std::string(a_shading.name), a_shading.propertyFlags, a_shading.derive });
+				// One block slot.
+				if (a_shading.blockWords)
+					for (const auto& other : lists.shadingContributions)
+						if (other.blockWords)
+							stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s shading contribution {} claims the feature block, which {} has", feature,
+								a_shading.name, other.name));
+				lists.shadingContributions.push_back({ std::string(a_shading.name), a_shading.propertyFlags, a_shading.derive, a_shading.objectFlags,
+					a_shading.blockWords, a_shading.vsVariables });
 			}
 
 			Api::FrameGlobalsSlot RegisterFrameGlobals(const Api::FrameGlobalsContribution& a_globals) override
@@ -571,9 +617,10 @@ namespace DCLF::Extensions
 
 			void RegisterShadowSource(const Api::ShadowSourceContribution& a_source) override
 			{
-				// A local light source is told of each light the selection keeps.
+				// A local light source is told of each light the selection keeps; the Sun alone ends the full-frustum window.
 				const bool local = a_source.source == Api::ShadowSource::Spot || a_source.source == Api::ShadowSource::Point;
-				if (a_source.source >= Api::ShadowSource::Count || (local && !a_source.lightKept))
+				const bool sun = a_source.source == Api::ShadowSource::Sun;
+				if (a_source.source >= Api::ShadowSource::Count || (local && !a_source.lightKept) || sun != !!a_source.fullFrustumWindowEnd)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shadow source contribution", feature));
 				auto& entry = lists.shadowSources[static_cast<std::size_t>(a_source.source)];
 				if (entry.source != Api::ShadowSource::Count)
@@ -720,6 +767,8 @@ namespace DCLF::Extensions
 	const GeometryTypeToggles& RegisteredGeometryTypes() { return Registered().geometryTypes; }
 	const GeometryTypeContributions& RegisteredGeometryTypeContributions() { return Registered().geometryTypeContributions; }
 	const EntryClassRules& RegisteredEntryClassRules() { return Registered().entryClassRules; }
+	const OwnerClasses& RegisteredOwnerClasses() { return Registered().ownerClasses; }
+	std::string_view OwnedEntriesLabel(bool a_withoutRecord) { return a_withoutRecord ? Registered().ownedWithoutRecordLabel : Registered().ownedLabel; }
 	std::span<const PropertyFlagRule> PropertyFlagRules() { return std::span(Registered().propertyFlagRules).first(Registered().propertyFlagRuleCount); }
 	const CategoryRoots& RegisteredCategoryRoots() { return Registered().categoryRoots; }
 	const ParentToggles& RegisteredParents() { return Registered().parents; }

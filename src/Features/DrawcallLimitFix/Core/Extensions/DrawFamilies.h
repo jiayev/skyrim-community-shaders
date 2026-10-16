@@ -34,10 +34,6 @@ namespace DCLF
 		struct ViewResources;
 		struct UnitGroup;
 	}
-	namespace TreeInstances
-	{
-		struct DrawRow;
-	}
 }
 
 namespace DCLF::Api
@@ -129,16 +125,16 @@ namespace DCLF::Api
 
 	/**
 	 * @brief A trees view's epoch commit (render thread): the scene's tables, whether the view draws the family this execution (its
-	 * shape's pipeline, its own pipeline and the faces' ownership: DecideViewTreeLod), the row the faces' latch takes (out), and what
-	 * the execution holds (a texture the row binds). Without owners, the faces' decision (DecideViewTreeLod, viewDraws true): only
-	 * whether the last depth commit's row draws, nothing bound.
+	 * shape's pipeline, its own pipeline and the faces' ownership: DecideViewFaces), the row the faces' latch takes (out, rowBytes,
+	 * zeroed), and what the execution holds (a texture the row binds). Without owners, the faces' decision (DecideViewFaces, viewDraws
+	 * true): only whether the last depth commit's row draws, nothing bound.
 	 */
 	class DrawFamilyFaceRow
 	{
 	public:
 		const Draws::SceneBuffers& scene;
 		bool viewDraws;
-		TreeInstances::DrawRow& row;
+		std::span<std::byte> row;
 		std::vector<std::shared_ptr<const void>>* owners;
 	};
 

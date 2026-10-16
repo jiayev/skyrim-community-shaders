@@ -238,8 +238,9 @@ namespace DCLF
 		const PipelineCatalog* catalog = nullptr;
 		IndirectState indirect;
 		ShadowIndirectState shadowIndirect;
-		FamilyPipelines treeLodPipelines;
-		bool treeLod = false;
+		// By draw family, its pipelines as the catalog has them, and whether it has them.
+		std::array<FamilyPipelines, Extensions::kDrawFamilies> familyPipelines;
+		std::array<bool, Extensions::kDrawFamilies> familyOn{};
 		std::array<bool, kViews> viewOn{};
 		std::array<ZBucketPlan, 2> zPlans;
 		std::array<std::vector<LatchedCopy>, 2> mainLatched;
@@ -303,7 +304,10 @@ namespace DCLF
 			if (!ShadowShapesHold(ShadowBoundsOf(producer.drawBound, lookups)))
 				++shadowBoundOutgrown;
 		}
-		const auto key = RevisionShapesKey(sealed, make.indirect, make.shadowIndirect, lookups, request.pipelines, make.treeLod ? &make.treeLodPipelines : nullptr);
+		FamilyPipelinesSet families{};
+		for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
+			families[d] = make.familyOn[d] ? &make.familyPipelines[d] : nullptr;
+		const auto key = RevisionShapesKey(sealed, make.indirect, make.shadowIndirect, lookups, request.pipelines, families);
 		if (key == revisionShapesKey) {
 			++shapesKept;
 			AssembleRevision(a_frame);
@@ -375,11 +379,12 @@ namespace DCLF
 		const auto& request = a_make.publication.revision;
 		const auto& tables = a_make.tables;
 		const auto& inputs = producer.inputs;
-		// The views' forward pipelines (and the faces' tree LOD's), as the request's catalog has them for its tables, and each view's plan
+		// The views' forward pipelines (and the faces' draw families'), as the request's catalog has them for its tables, and each view's plan
 		// from the one main layout, its buffers required to hold that plan: the shape made below from the same layout and the set sealed
 		// with those requirements can never index past its buffers. Their maps for every pipeline slot the tables have, as the
 		// Z-prepass's (above).
-		a_make.treeLod = CatalogFamilyPipelines(a_make.catalog, Api::DrawFamily::TreeInstances, inputs.targetsGeneration, a_make.treeLodPipelines);
+		for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
+			a_make.familyOn[d] = CatalogFamilyPipelines(a_make.catalog, static_cast<Api::DrawFamily>(d), inputs.targetsGeneration, a_make.familyPipelines[d]);
 		auto& viewOn = a_make.viewOn;
 		for (const auto& slot : kViewSlots) {
 			const auto kind = slot.view;
@@ -392,10 +397,12 @@ namespace DCLF
 			ViewPipelinesOf(kind, a_make.catalog, tables, view.targets, viewOn[v], viewRevisionPipelines[v]);
 			if (traits.forwardPart)
 				ViewForwardSlotsOf(tables, viewOn[v], viewForwardSlots);
-			if (traits.trees)
-				viewRevisionTree = viewOn[v] && Extensions::DrawFamilyOn(inputs.toggles, Api::DrawFamily::TreeInstances) ?
-				                       ForwardPipelineOf(a_make.catalog, ForwardPipelineKey{ 0, 0, FamilySlotOf(Api::DrawFamily::TreeInstances).forwardFlags }, view.targets) :
-				                       rhi::PipelineHandle{};
+			for (std::size_t d = 0; traits.trees && d < Extensions::kDrawFamilies; ++d) {
+				const auto family = static_cast<Api::DrawFamily>(d);
+				viewRevisionFaces[d] = viewOn[v] && Extensions::DrawFamilyOn(inputs.toggles, family) ?
+				                           ForwardPipelineOf(a_make.catalog, ForwardPipelineKey{ 0, 0, FamilySlotOf(family).forwardFlags }, view.targets) :
+				                           rhi::PipelineHandle{};
+			}
 			if (!view.resources || (traits.depthPass && !viewOn[v]))
 				continue;
 			ViewPlan plan;
@@ -549,19 +556,22 @@ namespace DCLF
 		const auto& viewOn = a_make.viewOn;
 		const rhi::DescriptorHeapHandle resourceHeap = inputs.resourceHeap, samplerHeap = inputs.samplerHeap;
 		// The views', from their resources and the main layout (the heaps the graph's); first person's render area is the colour commit's
-		// viewport. The faces' lists hold the TreeInstances family's units (its faces.lists: tree LOD's shape slots; one unit group with its
+		// viewport. The faces' lists hold each draw family's units (its faces.lists: tree LOD's shape slots; one unit group with its
 		// tables: the least any of them holds).
-		std::uint32_t treeShapes = 0;
-		const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances).contribution.faces;
-		if (const auto& s = inputs.scene; s && trees.lists && FamilySetUp(*s, Api::DrawFamily::TreeInstances)) {
-			UnitGroup shapes;
-			Api::DrawFamilyLists lists{ *s, {}, &shapes };
-			trees.lists(lists);
-			for (const auto& view : inputs.views)
-				if (view.resources)
-					for (const auto& visible : view.resources->treeVisible)
-						shapes.Add(visible);
-			treeShapes = static_cast<std::uint32_t>(std::min<std::uint64_t>(shapes.Units(a_sealed), UINT32_MAX));
+		std::array<std::uint32_t, Extensions::kDrawFamilies> familyUnits{};
+		for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d) {
+			const auto family = static_cast<Api::DrawFamily>(d);
+			const auto& faces = Extensions::DrawFamilyOf(family).contribution.faces;
+			if (const auto& s = inputs.scene; s && faces.lists && FamilySetUp(*s, family)) {
+				UnitGroup units;
+				Api::DrawFamilyLists lists{ *s, {}, &units };
+				faces.lists(lists);
+				for (const auto& view : inputs.views)
+					if (view.resources)
+						for (const auto& list : view.resources->faceLists[d])
+							units.Add(list);
+				familyUnits[d] = static_cast<std::uint32_t>(std::min<std::uint64_t>(units.Units(a_sealed), UINT32_MAX));
+			}
 		}
 		for (const auto& slot : kViewSlots) {
 			const std::size_t v = ViewIndex(slot.view);
@@ -588,11 +598,9 @@ namespace DCLF
 			in.depthRange = view.depthRange;
 			// The range the named version holds: the set holds this plan's draws (RequireView), so the plan never reaches past it.
 			in.sequenceDraws = static_cast<std::uint32_t>(std::min<std::uint64_t>(a_sealed.Of(view.resources->sequences).units, UINT32_MAX));
-			if (traits.trees && viewRevisionTree.valid() && a_make.treeLod && treeShapes) {
-				in.tree = viewRevisionTree;
-				in.treeSignature = a_make.treeLodPipelines.drawSignature;
-				in.treeShapes = treeShapes;
-			}
+			for (std::size_t d = 0; traits.trees && d < Extensions::kDrawFamilies; ++d)
+				if (viewRevisionFaces[d].valid() && a_make.familyOn[d] && familyUnits[d])
+					in.faces[d] = { viewRevisionFaces[d], a_make.familyPipelines[d].drawSignature, familyUnits[d] };
 			if (!traits.depthPass || ((!in.plan.buckets.empty() || in.plan.forwardCapacity) && viewLatches.zeros))
 				shape = MakeViewShape(*view.resources, in);
 		}
@@ -628,7 +636,7 @@ namespace DCLF
 	}
 
 	IndirectDraws::Impl::ShapesKey IndirectDraws::Impl::RevisionShapesKey(const NamedVersions& a_sealed, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect,
-		const Lookups& a_lookups, std::size_t a_pipelines, const FamilyPipelines* a_treeLod) const
+		const Lookups& a_lookups, std::size_t a_pipelines, const FamilyPipelinesSet& a_families) const
 	{
 		ShapesKey key;
 		key.fill(0xcbf29ce484222325ull);
@@ -697,16 +705,16 @@ namespace DCLF
 		}
 		group = kKeyBound;
 		mix(shadowBoundOutgrown);
-		MixViewShapesKey(mixer, a_treeLod);
+		MixViewShapesKey(mixer, a_families);
 		return key;
 	}
 
-	void IndirectDraws::Impl::MixViewShapesKey(ShapesKeyMixer& a_mixer, const FamilyPipelines* a_treeLod) const
+	void IndirectDraws::Impl::MixViewShapesKey(ShapesKeyMixer& a_mixer, const FamilyPipelinesSet& a_families) const
 	{
 		const auto& inputs = producer.inputs;
 		const auto& latches = producer.latches;
 		// The views': their resources, latch layouts, targets, render area and depth range, the slots' pipelines, first person's forward slots,
-		// the faces' tree LOD's (the request's catalog's).
+		// the faces' draw families' (the request's catalog's).
 		for (const auto& slot : kViewSlots) {
 			const auto kind = slot.view;
 			const std::size_t v = ViewIndex(kind);
@@ -728,24 +736,27 @@ namespace DCLF
 			if (TraitsOf(kind).forwardPart)
 				for (const std::uint8_t forward : viewForwardSlots)
 					a_mixer.Mix(forward);
-			if (TraitsOf(kind).trees) {
-				a_mixer.Mix(viewRevisionTree.index);
-				a_mixer.Mix(viewRevisionTree.generation);
-			}
+			if (TraitsOf(kind).trees)
+				for (const auto& pipeline : viewRevisionFaces) {
+					a_mixer.Mix(pipeline.index);
+					a_mixer.Mix(pipeline.generation);
+				}
 		}
-		// Tree LOD's, in the group of the view that draws it per face; each view whose shape is dropped while it is off, its toggle.
+		// Every draw family slot's (tree LOD's), in the group of the view that draws them per face; each view whose shape is dropped while
+		// it is off, its toggle.
 		for (const auto& slot : kViewSlots) {
 			if (!TraitsOf(slot.view).trees)
 				continue;
 			a_mixer.group = slot.keyGroup;
-			if (const auto& sceneState = inputs.scene) {
-				if (a_treeLod) {
-					a_mixer.Mix(a_treeLod->drawSignature.index);
-					a_mixer.Mix(a_treeLod->drawSignature.generation);
+			if (const auto& sceneState = inputs.scene)
+				for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d) {
+					if (const auto* family = a_families[d]) {
+						a_mixer.Mix(family->drawSignature.index);
+						a_mixer.Mix(family->drawSignature.generation);
+					}
+					a_mixer.Mix(a_families[d] ? 1u : 0u);
+					a_mixer.Mix(FamilySetUp(*sceneState, static_cast<Api::DrawFamily>(d)) ? 1u : 0u);
 				}
-				a_mixer.Mix(a_treeLod ? 1u : 0u);
-				a_mixer.Mix(FamilySetUp(*sceneState, Api::DrawFamily::TreeInstances) ? 1u : 0u);
-			}
 		}
 		for (const auto& slot : kViewSlots)
 			if (Extensions::Views().views[ViewIndex(slot.view)].life == Api::ViewShapeLife::DropWhenOff) {

@@ -1,9 +1,9 @@
 #pragma once
 
-// The TreeInstances draw family's GPU layout (Api::DrawFamily::TreeInstances; dclf-lod.md): the records, rows and list header Core's slot
-// reads - TreeLodCullCS.hlsl (the depth segment's cull and a trees view's per-face cull), DistantTree.hlsl's DCLF_PULLED path, a trees view's
-// faces' rows and lists in its latch (ViewLatchLayout) and their sizing - and the engine shapes PassCapture withholds while the family is
-// DCLF's. The shaders mirror it, so it stays compile-time and Core's; the feature that takes the family (Features/TreeLod) fills it.
+// The TreeInstances draw family's GPU layout (Api::DrawFamily::TreeInstances; dclf-lod.md): the records, rows and list header its draws
+// read - TreeLodCullCS.hlsl (the depth segment's cull and a trees view's per-face cull), DistantTree.hlsl's DCLF_PULLED path, a trees view's
+// faces' rows and lists (sized for Core by the family's faces data: rowBytes, headerBytes, unitWords) - and its engine shapes. The shaders
+// mirror it, so it stays compile-time. Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 

@@ -144,10 +144,15 @@ namespace DCLF
 			frame->forwardEntry = static_cast<std::uint32_t>(a_in.plan.buckets.size());
 			frame->latchLayout = latches.layout;
 			frame->map = std::make_shared<const std::vector<std::uint32_t>>(a_in.plan.map);
-			if (a_in.tree.valid()) {
-				frame->tree = a_in.tree;
-				frame->treeSignature = a_in.treeSignature;
-				frame->treeGroups = static_cast<std::uint32_t>((std::uint64_t(a_in.treeShapes) * TreeInstances::kMaxGroupInstances + kTreeLodCullGroup - 1) / kTreeLodCullGroup);
+			// Each draw family's faces: its cull a thread per word its lists' units hold, cullGroup a group.
+			for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d) {
+				const auto& in = a_in.faces[d];
+				if (!in.pipeline.valid())
+					continue;
+				const auto& faces = Extensions::DrawFamilies()[d].contribution.faces;
+				frame->faces[d].pipeline = in.pipeline;
+				frame->faces[d].signature = in.signature;
+				frame->faces[d].groups = static_cast<std::uint32_t>((std::uint64_t(in.units) * faces.unitWords + faces.cullGroup - 1) / faces.cullGroup);
 			}
 			// Per face, the colour segment's frame constants (the frame lighting at PS b13, the frame record) with VS and PS b12 its block.
 			const auto base = FramePushWords(a_in.frameConstantsAddress);
@@ -160,7 +165,7 @@ namespace DCLF
 						frame->push[f][word + 1] = static_cast<std::uint32_t>(block >> 32);
 					}
 			}
-			// The latched copies: each face's block (and tree LOD row and list header) from the latch, the counters zeroed.
+			// The latched copies: each face's block (and each draw family's row and list header) from the latch, the counters zeroed.
 			auto& fromLatch = frame->latched[0];
 			auto& fromZeros = frame->latched[1];
 			fromLatch.latch = latches.latch;
@@ -172,10 +177,12 @@ namespace DCLF
 				const std::uint32_t face = latches.layout.FaceOffset(f);
 				fromZeros.copies.push_back({ a_resources.bucketCounts[f]->Key(), 0, bucketBytes, 0 });
 				fromLatch.copies.push_back({ a_resources.blocks.get(), face, kViewBlockBytes, std::uint64_t(f) * kViewBlockBytes });
-				if (frame->tree.valid() && a_resources.treeRows[f] && a_resources.treeVisible[f]) {
-					fromLatch.copies.push_back({ a_resources.treeRows[f].get(), face + ViewLatchLayout::kTreeRowInFace, static_cast<std::uint32_t>(sizeof(TreeInstances::DrawRow)), 0 });
-					fromLatch.copies.push_back({ a_resources.treeVisible[f]->Key(), face + ViewLatchLayout::kTreeHeaderInFace, static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader)), 0 });
-				}
+				for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
+					if (frame->faces[d].pipeline.valid() && a_resources.faceRows[d][f] && a_resources.faceLists[d][f]) {
+						const auto& entry = Extensions::DrawFamilies()[d];
+						fromLatch.copies.push_back({ a_resources.faceRows[d][f].get(), face + entry.faceLayout.rowInFace, entry.contribution.faces.rowBytes, 0 });
+						fromLatch.copies.push_back({ a_resources.faceLists[d][f]->Key(), face + entry.faceLayout.headerInFace, entry.contribution.faces.headerBytes, 0 });
+					}
 			}
 			return frame;
 		}
@@ -286,7 +293,7 @@ namespace DCLF
 		}
 	}
 
-	std::uint32_t IndirectDraws::Impl::CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const TreeInstances::DrawRow* a_treeRow)
+	std::uint32_t IndirectDraws::Impl::CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const ViewFamilyRows* a_rows)
 	{
 		const auto& traits = TraitsOf(a_shape.kind);
 		const auto& labels = traits.labels;
@@ -300,7 +307,8 @@ namespace DCLF
 		const std::uint32_t slots = std::min(std::max(static_cast<std::uint32_t>(map.size()), InstalledPipelineSlots()), layout.slots);
 		WriteBucketMap(latchBlock, labels.map, latchSlot, layout.MapOffset(), map, slots);
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
-		const auto* view = View(a_shape.kind).resources.get();
+		auto& state = View(a_shape.kind);
+		const auto* view = state.resources.get();
 		std::vector<std::uint32_t> table;
 		std::uint32_t drawn = 0;
 		for (std::uint32_t f = 0; f < a_faces.size() && f < traits.faces; ++f) {
@@ -336,15 +344,19 @@ namespace DCLF
 			LatchWriteValue(latchBlock, labels.latches, latchSlot, f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 			if (!face.block.empty())
 				LatchWrite(latchBlock, labels.blocks, latchSlot, layout.FaceOffset(f), face.block);
-			if (a_treeRow && a_shape.tree.valid() && view) {
-				// The face's row (its own list), naming no slot when the face is not drawn or the faces' tree LOD is the engine's.
-				TreeInstances::DrawRow row = *a_treeRow;
-				row.visible = Adopted().Of(view->treeVisible[f]).deviceAddress + TreeInstances::kVisibleHeaderWords * sizeof(std::uint32_t);
-				row.shapeSlots = face.drawn ? a_treeRow->shapeSlots : 0u;
-				LatchWriteValue(latchBlock, labels.trees, latchSlot, layout.FaceOffset(f) + ViewLatchLayout::kTreeRowInFace, row);
-				TreeInstances::VisibleHeader header{};
-				header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = std::max(row.maxIndices, 1u);
-				LatchWriteValue(latchBlock, labels.trees, latchSlot, layout.FaceOffset(f) + ViewLatchLayout::kTreeHeaderInFace, header);
+			for (std::size_t d = 0; a_rows && view && d < Extensions::kDrawFamilies; ++d) {
+				if ((*a_rows)[d].empty() || !a_shape.faces[d].pipeline.valid())
+					continue;
+				// The family's face (its faces.face: the face's row, its own list, naming nothing when the face is not drawn or the faces'
+				// family is the engine's, and its list's header).
+				const auto& entry = Extensions::DrawFamilies()[d];
+				auto& written = state.faces[d];
+				written.faceRow.resize(entry.contribution.faces.rowBytes);
+				written.faceHeader.resize(entry.contribution.faces.headerBytes);
+				Api::DrawFamilyFaceWrite write{ (*a_rows)[d], Adopted().Of(view->faceLists[d][f]).deviceAddress, face.drawn, written.faceRow, written.faceHeader };
+				entry.contribution.faces.face(write);
+				LatchWrite(latchBlock, labels.trees, latchSlot, layout.FaceOffset(f) + entry.faceLayout.rowInFace, write.row);
+				LatchWrite(latchBlock, labels.trees, latchSlot, layout.FaceOffset(f) + entry.faceLayout.headerInFace, write.header);
 			}
 			drawn += face.drawn ? 1u : 0u;
 		}

@@ -19,15 +19,6 @@ namespace DCLF
 {
 	namespace
 	{
-		// The record flags of the objects whose TreeParams and WindTimers are their own, not the pipeline template's: technique 12's
-		// (its contribution's: Features/TreeWind's kObjectTreeAnim). Read once, the features installed before any scene work.
-		std::uint32_t PerObjectWindFlags()
-		{
-			static const std::uint32_t flags = Extensions::TechniqueObjectFlags(Extensions::RegisteredTechniques(),
-				static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderTechniques::TreeAnim));
-			return flags;
-		}
-
 		void StoreRelative(float* a_out, const float (&a_world)[12], const RE::NiPoint3& a_posAdjust)
 		{
 			std::memcpy(a_out, a_world, sizeof(a_world));
@@ -227,10 +218,12 @@ namespace DCLF
 		std::memcpy(&constants.ps.floats[psLayout.offset[kPSMaterialData]], shading.materialData, sizeof(shading.materialData));
 		std::memcpy(&constants.ps.floats[psLayout.offset[kPSEmitColor]], shading.emitColor, sizeof(shading.emitColor));
 		constants.ps.floats[psLayout.offset[kPSSSRParams] + 3] = shading.ssrSpecular;
-		if (object.flags & PerObjectWindFlags()) {
-			std::memcpy(&constants.vs.floats[vsLayout.offset[kVSTreeParams]], a_shading.treeParams, sizeof(a_shading.treeParams));
-			std::memcpy(&constants.vs.floats[vsLayout.offset[kVSWindTimers]], a_shading.windTimers, 2 * sizeof(float));
-		}
+		// The feature block's variables, for the objects whose they are, not the pipeline template's (Extensions::ShadingBlockRule:
+		// Features/TreeWind's TreeParams and WindTimers.xy for technique 12's).
+		const auto& block = Extensions::ShadingBlockRule();
+		if (object.flags & block.objectFlags)
+			for (const auto& variable : block.variables)
+				std::memcpy(&constants.vs.floats[vsLayout.offset[variable.variable]], a_shading.featureBlock + variable.firstWord, variable.floats * sizeof(float));
 		// The extras rows, as the draw completes them. ProjectedUVParams.y is never written by the engine, so it keeps whatever the
 		// template left - the unwritten sentinel.
 		float completed[kExtraRows * 4];
@@ -268,10 +261,11 @@ namespace DCLF
 		offsets.psEmitColorSize = psLayout.size[kPSEmitColor];
 		offsets.psSSRParams = OffsetOf(a_psTable, kPSSSRParams, kPSFirstVariable[kPerGeometry]);
 		offsets.psSSRParamsSize = psLayout.size[kPSSSRParams];
-		offsets.vsTreeParams = OffsetOf(a_vsTable, kVSTreeParams, kVSFirstVariable[kPerGeometry]);
-		offsets.vsTreeParamsSize = vsLayout.size[kVSTreeParams];
-		offsets.vsWindTimers = OffsetOf(a_vsTable, kVSWindTimers, kVSFirstVariable[kPerGeometry]);
-		offsets.vsWindTimersSize = vsLayout.size[kVSWindTimers];
+		const auto& block = Extensions::ShadingBlockRule();
+		for (std::size_t i = 0; i < block.variables.size(); ++i) {
+			offsets.vsBlock[i] = OffsetOf(a_vsTable, block.variables[i].variable, kVSFirstVariable[kPerGeometry]);
+			offsets.vsBlockSize[i] = vsLayout.size[block.variables[i].variable];
+		}
 		offsets.vsLandBlendParams = OffsetOf(a_vsTable, kVSLandBlendParams, kVSFirstVariable[kPerGeometry]);
 		offsets.vsLandBlendParamsSize = vsLayout.size[kVSLandBlendParams];
 		offsets.vsTextureProj = OffsetOf(a_vsTable, kVSTextureProj, kVSFirstVariable[kPerGeometry]);
@@ -316,10 +310,10 @@ namespace DCLF
 			static_cast<std::uint32_t>(std::size(shading.materialData)));
 		write(a_psOut, a_offsets.psEmitColor, a_offsets.psEmitColorSize, shading.emitColor,
 			static_cast<std::uint32_t>(std::size(shading.emitColor)));
-		if (object.flags & PerObjectWindFlags()) {
-			write(a_vsOut, a_offsets.vsTreeParams, a_offsets.vsTreeParamsSize, a_shading.treeParams, 4);
-			write(a_vsOut, a_offsets.vsWindTimers, a_offsets.vsWindTimersSize, a_shading.windTimers, 2);
-		}
+		const auto& block = Extensions::ShadingBlockRule();
+		if (object.flags & block.objectFlags)
+			for (std::size_t i = 0; i < block.variables.size(); ++i)
+				write(a_vsOut, a_offsets.vsBlock[i], a_offsets.vsBlockSize[i], a_shading.featureBlock + block.variables[i].firstWord, block.variables[i].floats);
 		if (const float* rows = ExtraRowsOf(a_tables, a_objectIndex)) {
 			if (object.flags & kObjectLandBlend)
 				write(a_vsOut, a_offsets.vsLandBlendParams, a_offsets.vsLandBlendParamsSize, rows + kExtraRowLandBlend * 4, 4);
@@ -363,8 +357,9 @@ namespace DCLF
 		// object is not alpha tested (the shader's test is then compiled out anyway).
 		// A Blood effect's is its threshold whatever its alpha test (AlphaTestRefOf: SetupGeometry's AlphaTestRef.x).
 		a_out.alphaTestRef = AlphaTestRefOf(object.flags, object.pipelineIndex < a_tables.pipelines.size() ? &a_tables.pipelines[object.pipelineIndex] : nullptr);
-		// The tree words are zero bar the family's record word below (the wind is the shading row's and DCLFTreeWind's).
-		a_out.tree = ObjectTreeAnim{};
+		// The feature block is zero bar the family's record word below (its variables are the shading row's and the feature's: Features/
+		// TreeWind's wind, DCLFTreeWind).
+		std::fill(std::begin(a_out.featureBlock), std::end(a_out.featureBlock), 0u);
 		// The table families' references the record carries, each its row and the row's tag (Api::TableFamily::recordWord: Features/
 		// TreeWind's tree slot and listing generation, never 0, for its wind: DCLFTreeWind).
 		for (const auto& family : a_tables.families.All())
@@ -431,13 +426,13 @@ namespace DCLF
 		shading.emitColor[2] = emissive ? emissive->blue * mult : 0.0f;
 		shading.ssrSpecular = ((GeometryPort::kMainPassRenderFlags & 2) ? 0.0f : 1.0f) * (specular ? a_property.specularLODFade : 0.0f);
 		a_out.padding[0] = a_out.padding[1] = 0u;
-		// The tree's wind, as SetupGeometry's case 0xc makes it now (the shading contributions: Features/TreeWind's, for a TreeAnim property).
-		ObjectTreeAnim tree{};
-		Extensions::DeriveShading(a_property, tree);
-		std::memcpy(a_out.treeParams, tree.treeParams, sizeof(a_out.treeParams));
-		a_out.windTimers[0] = tree.windTimers[0];
-		a_out.windTimers[1] = tree.windTimers[1];
-		a_out.windTimers[2] = a_out.windTimers[3] = 0.0f;
+		// The feature block as its contribution derives it now (Extensions::ShadingBlockRule: Features/TreeWind's tree wind, as
+		// SetupGeometry's case 0xc makes it for a TreeAnim property): its blockWords, the rest zero.
+		float block[Api::kShadingBlockWords]{};
+		Extensions::DeriveShading(a_property, block);
+		const std::uint32_t words = Extensions::ShadingBlockRule().blockWords;
+		std::memcpy(a_out.featureBlock, block, words * sizeof(float));
+		std::fill(std::begin(a_out.featureBlock) + words, std::end(a_out.featureBlock), 0.0f);
 	}
 
 	std::uint32_t PackedPositionOf(const StageLayout& a_layout, std::span<const std::uint8_t> a_table, std::uint64_t a_variables, std::uint32_t a_firstVariable,

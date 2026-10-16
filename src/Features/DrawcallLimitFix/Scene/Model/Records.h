@@ -331,19 +331,6 @@ namespace DCLF
 	};
 	static_assert(sizeof(ObjectShading) == 32);
 
-	/**
-	 * @brief Tree animation's two PerGeometry variables (technique 12), per object, not per pipeline: TreeParams is the tree's own
-	 * amplitude and leaf frequency, WindTimers a per-tree clock. windTimers is a float4 (xy used) so HLSL keeps the same layout.
-	 */
-	struct ObjectTreeAnim
-	{
-		float treeParams[4]{};   // 0, wind magnitude, amplitude, leaf frequency
-		// Wind timer, previous wind timer; zw in the GPU record a table family's reference (Api::TableFamily::recordWord: Features/
-		// TreeWind's tree slot and generation, as bits).
-		float windTimers[4]{};
-	};
-	static_assert(sizeof(ObjectTreeAnim) == 32);
-
 
 	/**
 	 * @brief The occlusion maps DCLF draws from its tables, each a view of the precipitation accumulator (render mode 0x1C) the

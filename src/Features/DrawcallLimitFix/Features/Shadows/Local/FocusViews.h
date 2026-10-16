@@ -18,8 +18,8 @@ namespace DCLF::Features::Shadows::Local
 	 * And target i's node (0x14332a488: {distance, node}), whose subtree the engine registers whole.
 	 *
 	 * Render thread: written in the detour (from CalculateAndDrawShadowCasterLights and CalculateActiveShadowCasterLights), read by
-	 * the shadow views' capture later in the frame. Installed from the feature's camera hooks, for the Focus source
-	 * (Api::Feature::cameraHooks); the targets are read through EngineFocusTarget.
+	 * the shadow views' capture later in the frame. Installed from the feature's source hooks, for the Focus source
+	 * (Api::Feature::sourceHooks); the targets are read through EngineFocusTarget.
 	 */
 	class FocusViews
 	{

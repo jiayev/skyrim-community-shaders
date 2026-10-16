@@ -172,7 +172,7 @@ namespace DCLF::Diagnostics
 		static auto& mirrorUpdated(SceneMirror& m) { return m.updated; }
 
 		// The private reads the observers make.
-		static constexpr std::uint32_t kTraitActor = Scene::Coordinator::kTraitActor, kTraitMoves = Scene::Coordinator::kTraitMoves, kTraitRootMoves = Scene::Coordinator::kTraitRootMoves;
+		static constexpr std::uint32_t kTraitOwnerClass = Scene::Coordinator::kTraitOwnerClass, kTraitMoves = Scene::Coordinator::kTraitMoves, kTraitRootMoves = Scene::Coordinator::kTraitRootMoves;
 		static bool ResidentObject(const Store& s, std::int32_t a_object) { return s.ResidentObject(a_object); }
 		static bool HiddenForWalk(const Store& s, const RE::NiAVObject* a_object) { return s.HiddenForWalk(a_object); }
 		static std::uint32_t PerFrameTraits(const Store& s, const Tracked& a_tracked, const RE::BSGeometry& a_geometry) { return s.PerFrameTraits(a_tracked, a_geometry); }

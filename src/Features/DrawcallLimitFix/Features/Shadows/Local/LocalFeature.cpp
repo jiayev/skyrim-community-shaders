@@ -16,9 +16,9 @@ namespace DCLF::Features::Shadows::Local
 		void LightKept(const Api::ShadowLightKept& a_light) { LightViews::Get().Update(a_light.light); }
 
 		/** @brief The Focus source's camera hook (by source: after the Sun's and Core's light selection). */
-		void CameraHooks(Api::ShadowSource a_source)
+		void SourceHooks(Api::ShadowSourceHooks& a_hooks)
 		{
-			if (a_source == Api::ShadowSource::Focus)
+			if (a_hooks.source == Api::ShadowSource::Focus)
 				FocusViews::Get().Install();
 		}
 
@@ -41,6 +41,6 @@ namespace DCLF::Features::Shadows::Local
 
 	Api::Feature Feature()
 	{
-		return { .name = "local shadows", .install = &Install, .cameraHooks = &CameraHooks };
+		return { .name = "local shadows", .install = &Install, .sourceHooks = &SourceHooks };
 	}
 }

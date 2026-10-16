@@ -139,8 +139,10 @@ namespace DCLF::Extensions
 		DeriveOrders(set);
 		DeriveForwardKeyViews(set);
 		// The view root contributions (Registry refused incomplete ones and a second for a root).
-		for (std::size_t r = 0; r < kViewRoots; ++r)
+		for (std::size_t r = 0; r < kViewRoots; ++r) {
 			set.rootOwned[r] = a_roots[r].root < Api::ViewRoot::Count ? a_roots[r].owned : nullptr;
+			set.rootBits |= set.rootOwned[r] ? Api::ViewRootBit(static_cast<Api::ViewRoot>(r)) : 0u;
+		}
 		Detail::resolvedViews = std::move(set);
 		// The shapes' views into the strings where they now stand.
 		for (auto& entry : Detail::resolvedViews.views)

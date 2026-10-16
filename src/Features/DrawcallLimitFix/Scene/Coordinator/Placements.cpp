@@ -101,8 +101,8 @@ namespace DCLF::Scene
 			a_why = 2;
 			return true;
 		}
-		// First-person chains (a CategoryRoot view's entries') are recaptured every frame (ActorRecordKept takes their verdict every frame).
-		if ((a_tracked.lightTraits & kTraitActor) && ViewRootEntry(a_tracked.categoryNode)) {
+		// First-person chains (a CategoryRoot view's entries') are recaptured every frame (FrameVerdictKept takes their verdict every frame).
+		if ((a_tracked.lightTraits & kTraitOwnerClass) && ViewRootEntry(a_tracked.categoryNode)) {
 			a_why = 3;
 			return true;
 		}
@@ -162,9 +162,10 @@ namespace DCLF::Scene
 	bool Coordinator::IsPlacedMover(const Tracked& a_tracked) const
 	{
 		// A recorded light-path entry that moves, is skinned or is an actor's (an actor's skeleton moves with no controller or body on its
-		// chain: Havok's behaviour graph). FrameValues places every one each frame from the set the plans left.
-		return a_tracked.perFrame && (a_tracked.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin | kTraitActor)) && a_tracked.geometry &&
-		       a_tracked.slot != kNoObjectSlot && a_tracked.objectStamp == objectStamp && a_tracked.slot < tables.objects.size();
+		// chain: Havok's behaviour graph, its owner class's own motion). FrameValues places every one each frame from the set the plans left.
+		return a_tracked.perFrame &&
+		       ((a_tracked.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin)) || ((a_tracked.lightTraits & kTraitOwnerClass) && a_tracked.owner.ownMotion)) &&
+		       a_tracked.geometry && a_tracked.slot != kNoObjectSlot && a_tracked.objectStamp == objectStamp && a_tracked.slot < tables.objects.size();
 	}
 
 	bool Coordinator::NoteMover(RE::BSGeometry* a_geometry, const Tracked& a_tracked, bool a_written)

@@ -23,11 +23,11 @@ namespace DCLF::Extensions
 	 */
 	void InstallEarlyHooks(std::span<const Api::Feature> a_features);
 	/**
-	 * @brief Main thread, at PostPostLoad, where the shadow cameras' hooks install (the shell, after SunAccumulation's, before the primary
-	 * cull's): by source, in Api::ShadowSource order, every feature's camera hooks for it (Api::Feature::cameraHooks, in a_features'
-	 * order), with Core's light selection right after the Sun's (Extensions/ShadowViews.cpp). Once, before InstallFeatures.
+	 * @brief Main thread, at PostPostLoad, where the shadow sources' hooks install (the shell, before the primary cull's): by source, in
+	 * Api::ShadowSource order, every feature's source hooks for it (Api::Feature::sourceHooks, in a_features' order), with Core's light
+	 * selection right after the Sun's (Extensions/ShadowViews.cpp). Once, before InstallFeatures.
 	 */
-	void InstallCameraHooks(std::span<const Api::Feature> a_features);
+	void InstallSourceHooks(std::span<const Api::Feature> a_features);
 
 	/** @brief A registered frame-value pool (its descriptor, the name owned). */
 	struct FrameValuePoolEntry
@@ -163,6 +163,8 @@ namespace DCLF::Extensions
 		std::string name;
 		std::uint64_t propertyFlags = 0;
 		decltype(Api::ShadingContribution::derive) derive = nullptr;
+		std::uint32_t objectFlags = 0, blockWords = 0;
+		std::span<const Api::ShadingVariable> vsVariables;
 	};
 	/** @brief A registered frame-globals contribution: its floats at FrameGlobals::features[first, first + floats). */
 	struct FrameGlobalsEntry

@@ -3,17 +3,20 @@
 // The object contributor contracts' Core side (Api/ObjectContributors.h): the technique contributions by technique (the Lighting port's
 // eligibility and the joins' record flags read them as data) and their property flag rules, the geometry type, parent and object class
 // contributions' toggles and rules (the eligibility, the walk, the captures, the classification, the plans and the category capture read
-// them as data: a type's property flags, item class, movers, entry class and range capture, a class's category root), what a shading
-// contribution is handed, and the calls the Lighting port's shading sample and the frame globals' capture make.
+// them as data: a type's property flags, item class, movers, entry class and range capture, a class's category root), the owner classes
+// by form type (OwnerClassOf), what a shading
+// contribution is handed and the feature block's rule, and the calls the Lighting port's shading sample and the frame globals' capture make.
 
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace RE
 {
@@ -21,22 +24,17 @@ namespace RE
 	class NiNode;
 }
 
-namespace DCLF
-{
-	struct ObjectTreeAnim;
-}
-
 namespace DCLF::Api
 {
 	/**
-	 * @brief A shading contribution's derive: the property sampled, and the shading row's per-object PerGeometry pair it writes
-	 * (BindlessShading's TreeParams and WindTimers; the sample keeps xy of the timers, zero-filled before).
+	 * @brief A shading contribution's derive: the property sampled, and the feature block it writes (zero-filled before; the shading row
+	 * keeps its contribution's blockWords of it: BindlessShading::featureBlock).
 	 */
 	class ShadingDerivation
 	{
 	public:
 		const RE::BSShaderProperty& property;
-		ObjectTreeAnim& out;
+		std::span<float, kShadingBlockWords> block;
 	};
 }
 
@@ -146,6 +144,41 @@ namespace DCLF::Extensions
 	}
 
 	/**
+	 * @brief An owner class as the walk keeps it (Api::EntryClassContribution: its class and rules; ownerClass None, every rule false, for
+	 * none). Tracked holds a copy, resolved once.
+	 */
+	struct OwnerClassRule
+	{
+		Api::EntryClass ownerClass = Api::EntryClass::None;
+		bool everyFrame = false;
+		bool ownMotion = false;
+		bool published = false;
+	};
+	/** @brief The owner classes by their entries' reference's form type (RE::FormType: every value of the byte). */
+	using OwnerClasses = std::array<OwnerClassRule, 256>;
+	/** @brief Any thread, after InstallFeatures (all none before): the owner classes, by form type. */
+	const OwnerClasses& RegisteredOwnerClasses();
+
+	/** @brief The owner class of a reference of form type a_formType (none for none). */
+	inline const OwnerClassRule& OwnerClassOfForm(std::uint8_t a_formType)
+	{
+		return RegisteredOwnerClasses()[a_formType];
+	}
+
+	/** @brief The owner class of a mirrored node's reference (its userData and formType; none without a reference). */
+	inline const OwnerClassRule& OwnerClassOf(const SceneCapture::NodeRecord& a_record)
+	{
+		static constexpr OwnerClassRule kNone{};
+		return a_record.userData ? OwnerClassOfForm(a_record.formType) : kNone;
+	}
+
+	/**
+	 * @brief What the walk's timing report calls the owner classes' entries (EvaluateKind::Owned, OwnedNoRecord: the registered names,
+	 * "<name>" and "<name> without a record"; "owned" while none is registered).
+	 */
+	std::string_view OwnedEntriesLabel(bool a_withoutRecord);
+
+	/**
 	 * @brief A Lighting property flag rule (Api::TechniqueContribution::propertyFlags): an object whose property has any of propertyFlags
 	 * is DCLF's only while toggle is on and its geometry is geometryType (else Ineligible::Lod).
 	 */
@@ -196,9 +229,22 @@ namespace DCLF::Extensions
 
 	/**
 	 * @brief The shading sample (SampleShading): every shading contribution whose property flags a_property has, in registration order,
-	 * deriving a_out (left as it is by none).
+	 * deriving a_block (left as it is by none).
 	 */
-	void DeriveShading(const RE::BSShaderProperty& a_property, ObjectTreeAnim& a_out);
+	void DeriveShading(const RE::BSShaderProperty& a_property, std::span<float, Api::kShadingBlockWords> a_block);
+	/**
+	 * @brief The feature block's rule (the shading contribution claiming it: Api::ShadingContribution's objectFlags, blockWords and
+	 * vsVariables, and a bit per variable), none (no flags, no words) when no feature does.
+	 */
+	struct ShadingBlock
+	{
+		std::uint32_t objectFlags = 0;
+		std::uint32_t blockWords = 0;
+		std::span<const Api::ShadingVariable> variables;
+		std::uint64_t vsMask = 0;
+	};
+	/** @brief Any thread, after InstallFeatures: the rule, resolved once (the features installed before any scene work). */
+	const ShadingBlock& ShadingBlockRule();
 	/** @brief Render thread, FrameGlobals::Capture: every frame-globals contribution's floats into a_out (kFrameGlobalsFloats, zeroed). */
 	void CaptureFrameGlobals(std::array<float, kFrameGlobalsFloats>& a_out);
 }

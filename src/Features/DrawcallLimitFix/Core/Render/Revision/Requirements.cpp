@@ -74,17 +74,20 @@ namespace DCLF
 			buffers.Require(a_build, s.fadeEvents, s.fadeWriteBack->wanted.load(std::memory_order_acquire));
 		if (s.visibilityEvents && s.visibilityReadback)
 			buffers.Require(a_build, s.visibilityEvents, s.visibilityReadback->wanted.load(std::memory_order_acquire));
-		// The views' faces' tree lists hold the TreeInstances family's units, as its scene resources posted them (its faces.lists: tree
-		// LOD's shape slots; its tables are required by its scene resources, Api::SceneResources::require).
-		const auto& trees = Extensions::DrawFamilyOf(Api::DrawFamily::TreeInstances);
-		if (trees.contribution.faces.lists && FamilySetUp(s, Api::DrawFamily::TreeInstances)) {
-			Api::DrawFamilyLists lists{ s, Extensions::SceneResourceInputsOf(inputs.resourceInputs, trees.contribution.resources) };
-			trees.contribution.faces.lists(lists);
+		// The views' faces' lists hold each draw family's units, as its scene resources posted them (its faces.lists: tree LOD's shape
+		// slots; its tables are required by its scene resources, Api::SceneResources::require).
+		for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d) {
+			const auto family = static_cast<Api::DrawFamily>(d);
+			const auto& entry = Extensions::DrawFamilyOf(family);
+			if (!entry.contribution.faces.lists || !FamilySetUp(s, family))
+				continue;
+			Api::DrawFamilyLists lists{ s, Extensions::SceneResourceInputsOf(inputs.resourceInputs, entry.contribution.resources) };
+			entry.contribution.faces.lists(lists);
 			UnitGroup faces;
 			for (const auto& view : inputs.views)
 				if (view.resources)
-					for (const auto& visible : view.resources->treeVisible)
-						faces.Add(visible);
+					for (const auto& list : view.resources->faceLists[d])
+						faces.Add(list);
 			faces.Require(a_build, lists.required);
 		}
 	}

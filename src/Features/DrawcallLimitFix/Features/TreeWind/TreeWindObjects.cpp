@@ -19,6 +19,13 @@ namespace DCLF::Features::TreeWind
 		// The frame globals' floats (FrameGlobals::features from slot.first): the wind source's magnitude (ShadowSceneNode +0x304), the
 		// fade band, the timer scale.
 		Api::FrameGlobalsSlot globalsSlot;  // install
+
+		// The block's variables (static storage: the registry keeps the span). WindTimers.y, the previous timer, is not compared: the engine
+		// copies the node's current timer over it after every native draw (CaptureParity).
+		constexpr Api::ShadingVariable kBlockVariables[] = {
+			{ .variable = kTreeParamsVariable, .firstWord = kBlockTreeParams, .floats = 4, .compared = 4 },
+			{ .variable = kWindTimersVariable, .firstWord = kBlockWindTimers, .floats = 2, .compared = 1 },
+		};
 		enum WindGlobal : std::uint32_t
 		{
 			kWindMagnitude,
@@ -73,13 +80,14 @@ namespace DCLF::Features::TreeWind
 		 */
 		void DeriveTreeAnim(const Api::ShadingDerivation& a_derivation)
 		{
-			auto& out = a_derivation.out;
+			float* const treeParams = a_derivation.block.data() + kBlockTreeParams;
+			float* const windTimers = a_derivation.block.data() + kBlockWindTimers;
 			const void* node = AsTreeNode(a_derivation.property.fadeNode);
 
 			const auto& g = FrameGlobals::Current().features;
 			const std::uint32_t at = globalsSlot.first;
-			out.treeParams[0] = 0.0f;
-			out.treeParams[1] = g[at + kWindMagnitude];
+			treeParams[0] = 0.0f;
+			treeParams[1] = g[at + kWindMagnitude];
 
 			// Amplitude falls off with distance. The engine takes the squared distance at +0x158 through the 0x5f3759df fast inverse
 			// square root (one Newton step) times x, not sqrtf; std::sqrt differs for trees inside the fade band.
@@ -90,15 +98,15 @@ namespace DCLF::Features::TreeWind
 			float amplitude = (1.0f - (distance - fadeStart) / span) * maxAmplitude;
 			amplitude = std::max(amplitude, 0.0f);
 			amplitude = std::min(amplitude, maxAmplitude);
-			out.treeParams[2] = amplitude;
-			out.treeParams[3] = node ? TreeNodeFloat(node, 0x160) : 1.0f;
+			treeParams[2] = amplitude;
+			treeParams[3] = node ? TreeNodeFloat(node, 0x160) : 1.0f;
 
 			const float scale = g[at + kWindTimerScale];
-			out.windTimers[0] = node ? TreeNodeFloat(node, 0x164) * scale : 0.0f;
-			out.windTimers[1] = node ? TreeNodeFloat(node, 0x168) * scale : 0.0f;
-			// Diagnostics only (the shader reads xy): the amplitude's raw inputs, so a parity mismatch can tell node from distance.
-			out.windTimers[2] = node ? TreeNodeFloat(node, 0x158) : -1.0f;
-			out.windTimers[3] = node ? TreeNodeFloat(node, 0x15c) : -1.0f;
+			windTimers[0] = node ? TreeNodeFloat(node, 0x164) * scale : 0.0f;
+			windTimers[1] = node ? TreeNodeFloat(node, 0x168) * scale : 0.0f;
+			// Diagnostics only, past kBlockWords (the row keeps xy): the amplitude's raw inputs, so a parity mismatch can tell node from distance.
+			windTimers[2] = node ? TreeNodeFloat(node, 0x158) : -1.0f;
+			windTimers[3] = node ? TreeNodeFloat(node, 0x15c) : -1.0f;
 		}
 	}
 
@@ -107,8 +115,9 @@ namespace DCLF::Features::TreeWind
 		// The TreeAnim technique, whose vertex animation reads TreeParams and WindTimers per object (the record's and the shading row's):
 		// an object class under the trees toggle.
 		a_context.RegisterTechnique({ .technique = kTechniqueTreeAnim, .toggle = a_trees, .objectFlags = kObjectTreeAnim });
+		// Its wind, the feature block's (kBlockWords: TreeParams and WindTimers.xy) for its objects.
 		a_context.RegisterShading({ .name = "tree-anim", .propertyFlags = static_cast<std::uint64_t>(RE::BSShaderProperty::EShaderPropertyFlag::kTreeAnim),
-			.derive = &DeriveTreeAnim });
+			.derive = &DeriveTreeAnim, .objectFlags = kObjectTreeAnim, .blockWords = kBlockWords, .vsVariables = kBlockVariables });
 		globalsSlot = a_context.RegisterFrameGlobals({ .name = "tree-wind", .floats = kWindGlobals, .capture = &CaptureWindGlobals });
 	}
 }
