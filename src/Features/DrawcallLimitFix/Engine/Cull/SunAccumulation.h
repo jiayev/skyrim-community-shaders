@@ -9,7 +9,7 @@
 
 #include <ankerl/unordered_dense.h>
 
-#include "Features/DrawcallLimitFix/Core/Scene/EntrySpace.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 
 namespace DCLF::Diagnostics
 {
@@ -18,66 +18,6 @@ namespace DCLF::Diagnostics
 
 namespace DCLF
 {
-	/**
-	 * @brief One shadow epoch's verdict: the entries whose casters it all drew, which the next frame's full-frustum cull leaves out of
-	 * the cascade culls. Built by the shadow build; immutable once published (but for its stamped words and its forward link), and
-	 * the same one is published again while nothing it was judged from moved.
-	 */
-	struct SunExclusion
-	{
-		SunExclusion() = default;
-		SunExclusion(const SunExclusion&) = delete;
-		SunExclusion& operator=(const SunExclusion&) = delete;
-
-		std::shared_ptr<const EntrySpace> candidates;
-		std::vector<std::uint8_t> excluded;  // per candidate index
-		std::uint32_t excludedCount = 0;
-		// Changes only when excluded does: the scene lists' filter compares it.
-		std::uint64_t version = 0;
-		// The stamped words: pooled, shared by the versions of one mode's exclusions (the builder's, and their translations) and never
-		// reset. Every word holds the stamp of the frame (or cull) that wrote it, which only that frame's own readers compare with, and
-		// one version per mode is stamped a frame (the frame's), so a word another version wrote never reads as this frame's. Grown by
-		// replacing them: a version holds what it was made with, at least removedCount and clearedCount long.
-		// Per candidate, the stamp of the full-frustum cull that took it out: the registration thunks' test. Written on the render
-		// thread, read by the registration jobs.
-		std::shared_ptr<std::atomic<std::uint32_t>[]> removed;
-		// Per geometry, the stamp of the frame whose main registration cleared its mask (+0x160 = 0xFFFF: reads, then zeroes it), so
-		// DCLF's sun bits are not written again that frame.
-		std::shared_ptr<std::atomic<std::uint32_t>[]> cleared;
-		// Paraboloid mode (LocalLightCull): per candidate, three stamped words (reach kinds) of the point lights whose cull reached and
-		// skipped the entry this frame. Null for the sun's.
-		std::shared_ptr<std::atomic<std::uint64_t>[]> lightReach;
-		std::uint32_t removedCount = 0;  // entries removed and lightReach (times 3) hold
-		std::uint32_t clearedCount = 0;  // geometries cleared holds
-		// The scene frame of the shadow build it came from, and whether it reused that cache's verdict (diagnostics).
-		std::uint32_t builtFrame = 0;
-		bool reused = false;
-
-		// The forward link (ForwardExclusion): this verdict translated to the next candidates the builder judged with, made by the
-		// builder once it built for them. Written once (forwardOwned, then forward released); read by any thread after forward.
-		std::shared_ptr<SunExclusion> forwardOwned;
-		std::atomic<const SunExclusion*> forward{ nullptr };
-		// A forward translation's: the entries changed between its predecessor's candidates and its own, which it does not exclude.
-		std::vector<std::uint32_t> forwardChanged;
-	};
-
-	/**
-	 * @brief a_exclusion (made for an earlier snapshot) as a verdict on a_to: changed entries are not excluded, the rest keep theirs.
-	 * a_newVersion: a new version when the content differs, else the original's. a_lightReach: with the paraboloid reach words.
-	 * a_stamps: an exclusion for a_to whose stamped words the translation shares (else a_exclusion's when long enough, else new ones).
-	 * The builder makes them (ForwardExclusion follows what it made); a reader translating itself pays O(changes + candidates).
-	 */
-	std::shared_ptr<SunExclusion> TranslateExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const EntrySpace>& a_to,
-		bool a_newVersion, bool a_lightReach, std::vector<std::uint32_t>* a_changed = nullptr, const SunExclusion* a_stamps = nullptr);
-
-	/**
-	 * @brief a_exclusion as a verdict on a_to, as the builder translated it (its forward links, made when it built for a_to: the same
-	 * verdict TranslateExclusion gives); a_exclusion itself when it is for a_to. Null when the builder made none for a_to (it did not
-	 * build that mode's exclusion for those candidates). a_changed: appends each link's changed entries. O(links), any thread.
-	 */
-	std::shared_ptr<SunExclusion> ForwardExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const EntrySpace>& a_to,
-		std::vector<std::uint32_t>* a_changed = nullptr);
-
 	/**
 	 * @brief The engine's work for the sun's cascades, removed where DCLF already draws the result (skyrim-engine-notes.md, "The
 	 * sun's accumulation"). AE only. Render thread, plus the registration thunks on job threads.
@@ -102,32 +42,10 @@ namespace DCLF
 		bool Installed() const { return installed; }
 
 
-		/** @brief Render thread, after the shadow epoch: the exclusion the next full-frustum cull applies once (null: none). */
-		void PublishExclusion(std::shared_ptr<SunExclusion> a_exclusion) { pendingExclusion = std::move(a_exclusion); }
-		/** @brief Render thread: the exclusion the next full-frustum cull will apply (null: none published). */
-		std::shared_ptr<const SunExclusion> PendingExclusion() const { return pendingExclusion; }
-		/**
-		 * @brief Render thread, frame start (before the scene lists' filter): the pending exclusion as the builder translated it to
-		 * a_candidates (ForwardExclusion: a pointer swap). None made (the builder did not build the mode for them): the pending one stays
-		 * as it is, a verdict on other candidates, which the full-frustum cull does not apply (stale).
-		 */
-		void BeginFrame(const std::shared_ptr<const EntrySpace>& a_candidates);
-
-		/** @brief One cascade as BuildDraws tests it (GpuLayouts.h): plane masks (custom 0: none), 6 planes and 6 custom planes. */
-		struct GpuCascade
-		{
-			std::uint32_t masks[2]{};
-			std::uint32_t pad[2]{};
-			float planes[12][4]{};
-		};
-		/** @brief This frame's cascades from DCLF's views (the Sun board). Render thread, after the sun's UpdateCamera; empty without views. */
-		void GpuCascades(std::vector<GpuCascade>& a_out) const;
 		/** @brief Whether this frame's full-frustum cull applied the entry exclusion. */
 		bool ExclusionLive() const { return exclusionLive.load(std::memory_order_acquire); }
 		/** @brief Render thread, after the full-frustum call site: on a frame it did not run, clears cascades, exclusion and sun bits. */
 		void EndFullFrustumWindow();
-		/** @brief After the sun's Accumulate: every cascade's activeLightMask bit. */
-		std::uint32_t SunBits() const { return frameState.sunBits; }
 		/** @brief Whether a_node is an entry this frame's exclusion excludes (render thread, while it is live). */
 		bool Excluded(const void* a_node) const
 		{
@@ -152,7 +70,7 @@ namespace DCLF
 			std::uint32_t exclusionFrames = 0;        // full-frustum culls that applied one
 			std::uint32_t exclusionStale = 0;         // ... built for other candidates
 			std::uint32_t exclusionMissing = 0;       // ... with none published
-			std::uint32_t exclusionForwarded = 0;     // frame starts that took the builder's translation (BeginFrame)
+			std::uint32_t exclusionForwarded = 0;     // frame starts that took the builder's translation (SunExclusionSlot)
 			std::uint32_t exclusionUnforwarded = 0;   // ... that found none for the frame's candidates
 			std::uint64_t entriesSeen = 0;            // objectArray entries the applied culls found
 			std::uint64_t entriesRemoved = 0;         // ... and took out
@@ -250,7 +168,6 @@ namespace DCLF
 			std::uint32_t cascadesFrame = ~0u;        // the scene frame whose Accumulate captured them
 			std::uint32_t sunBits = 0;                // every cascade's bit
 		};
-		std::shared_ptr<SunExclusion> pendingExclusion;  // render thread
 		std::shared_ptr<SunExclusion> previousExclusion;  // the last frame's, kept alive for a straggling registration
 		/**
 		 * @brief One full-frustum process while the veto is armed. Its appends come from the one job culling it (and, after the jobs,

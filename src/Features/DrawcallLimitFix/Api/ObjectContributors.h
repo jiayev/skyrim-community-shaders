@@ -29,6 +29,7 @@
 // object flags) stays compile-time: the feature declares the bits in its own header, and Features/Manifest.cpp checks them against Core's
 // and each other's; its record words go with its table family (Api/TableFamilies.h).
 
+#include "Features/DrawcallLimitFix/Api/EntryRanges.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 
 #include <cstdint>
@@ -105,6 +106,10 @@ namespace DCLF::Api
 	 *   - perFrame: its entries' records follow what the following component publishes: classified every frame while the class is taken,
 	 *     and given the walk's per-frame entry-class trait (no root motion of their own; the light path's).
 	 *   - holdsParent: an entry's parent is held from the attach's pins as its source node (EntryWrite::source: a face shape's head).
+	 * - ranges (optional): its objects draw the index ranges this captures (Api/EntryRanges.h: object LOD's visible segments' runs,
+	 *   Features/Lod), whatever toggle: called on the capturing thread inside the engine-read window, per record capture (an attach, or the
+	 *   type's ranges update: Extensions::PushRangesUpdate), never per frame; a_out arrives empty. The coordinator keeps
+	 *   them by tracked entry from its attach (Extensions::GeometryTypeRanged), and the walk draws them as a chain of range slots.
 	 */
 	struct GeometryTypeContribution
 	{
@@ -122,6 +127,7 @@ namespace DCLF::Api
 		FrameValueItemClass itemClass{};
 		bool moves = false;
 		EntryRule entry;
+		void (*ranges)(const void* a_geometry, std::vector<EntryRange>& a_out) = nullptr;
 	};
 
 	// ---- 2. Membership by a Core class (a value per class a feature takes: see the steps above).

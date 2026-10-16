@@ -12,63 +12,6 @@
 
 namespace DCLF::Scene
 {
-	std::uint32_t Coordinator::SkinPartitionMask(const RE::NiSkinInstance& a_skin, std::uint32_t a_lodRow)
-	{
-		const auto* partition = a_skin.skinPartition.get();
-		if (!partition || a_lodRow >= 8)
-			return 0;
-		static const REL::Relocation<const RE::NiRTTI*> dismemberSkinInstance{ RE::BSDismemberSkinInstance::Ni_RTTI };
-		const RE::BSDismemberSkinInstance::Data* shown = a_skin.GetRTTI() == dismemberSkinInstance.get() ?
-		                                                     static_cast<const RE::BSDismemberSkinInstance&>(a_skin).GetRuntimeData().partitions :
-		                                                     nullptr;
-		std::uint32_t mask = 0;
-		for (std::uint32_t i = 0; i < partition->numPartitions && i < kMaxSkinPartitions; ++i) {
-			if (shown && !shown[i].editorVisible)
-				continue;
-			const std::uint32_t lodByte = partition->partitions[i].pad42 & 0xFF;
-			if (lodByte <= 2 && kPartitionLodTable[a_lodRow * 3 + lodByte])
-				mask |= 1u << i;
-		}
-		return mask;
-	}
-
-	std::uint32_t Coordinator::SkinPartitionMask(const SceneCapture::GeometryRecord& a_geometry, std::uint32_t a_lodRow)
-	{
-		if (!a_geometry.skinPartition || a_lodRow >= 8)
-			return 0;
-		// A dismember skin's shown flags (empty otherwise).
-		const auto& shown = a_geometry.shown;
-		std::uint32_t mask = 0;
-		for (std::uint32_t i = 0; i < a_geometry.partitions.size() && i < kMaxSkinPartitions; ++i) {
-			if (i < shown.size() && !shown[i])
-				continue;
-			const std::uint32_t lodByte = a_geometry.partitions[i].lodByte;
-			if (lodByte <= 2 && kPartitionLodTable[a_lodRow * 3 + lodByte])
-				mask |= 1u << i;
-		}
-		return mask;
-	}
-
-	std::uint16_t Coordinator::SkinPartitionsOf(const SceneCapture::GeometryRecord& a_geometry)
-	{
-		if (!a_geometry.skin || !a_geometry.skinPartition)
-			return 0;
-		// Row 3 (cumulative over levels); a LOD skin's draw narrows it (SkinLodPartitionsOf).
-		const std::uint32_t mask = SkinPartitionMask(a_geometry, 3);
-		return static_cast<std::uint16_t>(!mask ? kNoPartitions : a_geometry.partitions.size() > 1 ? mask : 0u);
-	}
-
-	std::uint32_t Coordinator::SkinLodPartitionsOf(const SceneCapture::LeafView& a_leaf)
-	{
-		if (!a_leaf || !a_leaf.geometry->skin || !a_leaf.geometry->skinPartition || !(a_leaf.node->flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kMeshLOD)) ||
-			!a_leaf.property || !a_leaf.property->fadeNode)
-			return 0;
-		std::uint32_t word = 0;
-		for (std::uint32_t level = 0; level < 4; ++level)
-			word |= (SkinPartitionMask(*a_leaf.geometry, level) & 0xFFu) << (8 * level);
-		return word;
-	}
-
 	RE::NiNode* Coordinator::FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason, bool* a_unmirrored) const
 	{
 		constexpr auto kRead = static_cast<std::size_t>(MirrorRead::CategoryNode);
@@ -694,9 +637,9 @@ namespace DCLF::Scene
 				MarkLightEntryDirty(lightEntry);
 			}
 		}
-		// Object LOD: drawn ranges from here on follow its segment events (the prepare's copy, as their component takes it).
-		if (a_prep.subIndex)
-			lodRanges[a_geometry] = std::move(a_prep.segments);
+		// A ranged entry (object LOD): drawn ranges from here on follow its ranges events (the prepare's copy, as their component takes it).
+		if (a_prep.ranged)
+			entryRanges[a_geometry] = std::move(a_prep.ranges);
 		pendingEvaluation.push_back(a_geometry);
 		// Under a root marked earlier (a LOD gate's): the marking component's (the nearest, found by the prepare's mark walk).
 		if (a_prep.mark)
@@ -809,13 +752,13 @@ namespace DCLF::Scene
 		const auto entryClass = parent && g ? Extensions::EntryClassOf(g->type, parent->kind) : Api::EntryClass::None;
 		const bool held = entryClass != Api::EntryClass::None && Extensions::EntryClassRuleOf(entryClass).holdsParent;
 		a_out.source = held ? static_cast<const RE::NiNode*>(record->parent) : nullptr;
-		a_out.subIndex = g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape);
-		// The batch's pins (frozen while the batch's adds prepare and merge), HoldProperties' reads, an object LOD's ranges.
+		a_out.ranged = g && Extensions::GeometryTypeRanged(g->type);
+		// The batch's pins (frozen while the batch's adds prepare and merge), HoldProperties' reads, a ranged entry's (object LOD's) ranges.
 		a_out.geometryPin = PinOf(a_geometry);
 		a_out.sourcePin = a_out.source ? PinOf(a_out.source) : nullptr;
 		a_out.held = HeldKeysOf(a_geometry);
-		if (a_out.subIndex && g)
-			a_out.segments = g->segments;
+		if (a_out.ranged && g)
+			a_out.ranges = g->ranges;
 		// The prepare's mark walk: the mirror's chain up to the category node, the nearest marked root on it (the marks change only with the
 		// mirror's events, before the adds: the parallel prepares read them as data).
 		if (!rootMarks.empty())

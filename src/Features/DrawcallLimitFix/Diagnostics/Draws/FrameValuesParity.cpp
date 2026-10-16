@@ -31,7 +31,7 @@ namespace DCLF::Diagnostics
 			// A palette rows member's row is its class's (a particle system's snapshot's, Features/Particles), not the engine's transforms
 			// now: the item class the coordinator plans it as (Coordinator::PlacedKeyOf: a palette block of a skinless geometry of the class's
 			// type).
-			const bool paletteBlock = (a_tables.objects[slot].flags & kObjectSkinned) && slot < a_tables.boneRows.size() && a_tables.boneRows[slot];
+			const bool paletteBlock = (a_tables.objects[slot].flags & kObjectPaletteBlock) && slot < a_tables.boneRows.size() && a_tables.boneRows[slot];
 			if (auto* geometry = a_tables.objectGeometry[slot]; geometry &&
 				Extensions::PlannedItemClass(paletteBlock, static_cast<std::uint8_t>(geometry->GetType().get()), geometry->GetGeometryRuntimeData().skinInstance != nullptr) !=
 					Api::FrameValueItemClass::None)
@@ -53,7 +53,7 @@ namespace DCLF::Diagnostics
 					what, expected.world[3], expected.bound[3], got.world[3], got.bound[3]);
 			}
 			// A skinned record's palettes, as this frame's update left them.
-			if (!(a_tables.objects[slot].flags & kObjectSkinned) || slot >= a_tables.boneRows.size() || !a_tables.boneRows[slot])
+			if (!(a_tables.objects[slot].flags & kObjectPaletteBlock) || slot >= a_tables.boneRows.size() || !a_tables.boneRows[slot])
 				continue;
 			const std::uint32_t boneRows = a_tables.boneRows[slot];
 			const auto at = PaletteRowsOf(a_tables.boneOffset[slot], boneRows);

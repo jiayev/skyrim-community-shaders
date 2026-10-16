@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawFamilyLaneSlots.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 
 namespace DCLF
@@ -49,7 +50,7 @@ namespace DCLF
 	 * all completed gets its program. Nothing polls a compile.
 	 *
 	 * One consumer owns the programs: the pipeline lane (BuildExecutor.h, WakePipelineLane), which a completion
-	 * wakes: every kind's entries (Find, FindShadow, FindTreeLod, FindForward, FindForwardTreeLod) are made and finished on it
+	 * wakes: every kind's entries (Find, FindShadow, FindDrawFamily, FindForward, FindDrawFamilyForward) are made and finished on it
 	 * (UpdateLane). The stage cache also accepts CS compilation workers.
 	 */
 	class ShaderPrograms
@@ -127,16 +128,18 @@ namespace DCLF
 			std::uint8_t* a_onDemand = nullptr, bool* a_failed = nullptr);
 
 		/**
-		 * @brief Tree LOD's programs (dclf-lod.md, "Tree LOD: the draws"): `Data/Shaders/DistantTree.hlsl`'s pulled builds
-		 * (DCLF_PULLED), the colour technique (deferred) and the depth technique, each a vertex and a pixel stage. Requested on the
-		 * first call; null until all four are compiled. Never freed. The pipeline lane's, as the other Find* below; a_failed as Find's.
+		 * @brief A draw family's programs (Api::DrawFamilyProgram; tree LOD's: dclf-lod.md, "Tree LOD: the draws"): its source's
+		 * (Extensions::DrawFamilies' sourcePath: `Data/Shaders/DistantTree.hlsl`) pulled builds (DCLF_PULLED: its lane slot's pulled) of
+		 * its colour descriptor (DistantTree's deferred technique) and its depth descriptor (the depth technique), each a vertex and a
+		 * pixel stage, a_shader's (its programSource). Requested on the first call; null until all four are compiled. Never freed. The
+		 * pipeline lane's, as the other Find* below; a_failed as Find's.
 		 */
-		struct TreeLodProgram
+		struct DrawProgram
 		{
-			std::vector<std::byte> vertex, pixel;            // DistantTreeBlock, deferred
-			std::vector<std::byte> depthVertex, depthPixel;  // Depth (RENDER_DEPTH)
+			std::vector<std::byte> vertex, pixel;            // colour (DistantTreeBlock, deferred)
+			std::vector<std::byte> depthVertex, depthPixel;  // depth (RENDER_DEPTH)
 		};
-		const TreeLodProgram* FindTreeLod(RE::BSShader& a_distantTree, bool* a_failed = nullptr);
+		const DrawProgram* FindDrawFamily(Api::DrawFamily a_family, RE::BSShader& a_shader, bool* a_failed = nullptr);
 
 		/**
 		 * @brief A forward view's program (the water reflection's cube map faces: dclf-lod.md, "Water reflections"): one forward
@@ -168,8 +171,11 @@ namespace DCLF
 		 * LightingProgramId.
 		 */
 		static std::uint64_t FamilyProgramId(Api::ProgramFamily a_family, const PipelineKey& a_key) { return LightingProgramId(a_key) | ProgramFamilySlotOf(a_family).programIdBit; }
-		/** @brief Tree LOD's forward program: DistantTree's DistantTreeBlock technique with AlphaTest and without Deferred, pulled. */
-		const ForwardProgram* FindForwardTreeLod(RE::BSShader& a_distantTree, bool* a_failed = nullptr);
+		/**
+		 * @brief A draw family's forward program: its forward descriptor's pulled builds (tree LOD's: DistantTree's DistantTreeBlock
+		 * technique with AlphaTest and without Deferred).
+		 */
+		const ForwardProgram* FindDrawFamilyForward(Api::DrawFamily a_family, RE::BSShader& a_shader, bool* a_failed = nullptr);
 
 		/** @brief The programs one UpdateLane made or failed, by kind, so the lane retries the keys that waited on them. */
 		struct Finished
@@ -178,14 +184,18 @@ namespace DCLF
 			std::vector<std::uint32_t> shadow;    // Utility techniques
 			std::vector<std::uint64_t> forward;   // ForwardProgramId
 			std::array<std::vector<std::uint64_t>, Extensions::kProgramFamilies> families;  // by family: FamilyProgramId
-			bool treeLod = false, forwardTreeLod = false;
+			// By draw family: its programs (FindDrawFamily) and its forward program (FindDrawFamilyForward).
+			std::array<bool, kDrawFamilyLanes> drawFamily{}, drawFamilyForward{};
 
 			bool Empty() const
 			{
 				for (const auto& ids : families)
 					if (!ids.empty())
 						return false;
-				return lighting.empty() && shadow.empty() && forward.empty() && !treeLod && !forwardTreeLod;
+				for (std::size_t f = 0; f < kDrawFamilyLanes; ++f)
+					if (drawFamily[f] || drawFamilyForward[f])
+						return false;
+				return lighting.empty() && shadow.empty() && forward.empty();
 			}
 			void Clear()
 			{
@@ -194,7 +204,8 @@ namespace DCLF
 				forward.clear();
 				for (auto& ids : families)
 					ids.clear();
-				treeLod = forwardTreeLod = false;
+				drawFamily.fill(false);
+				drawFamilyForward.fill(false);
 			}
 		};
 		/** @brief The pipeline lane: admits the compilations that completed since the last call, and appends the programs made or failed to a_finished. */
@@ -228,7 +239,7 @@ namespace DCLF
 		struct ProgramEntry;
 		using Entry = ProgramEntry<Program, 5>;  // vertex, pixel, depth pixel, pulled vertex, pulled depth pixel
 		using ShadowEntry = ProgramEntry<ShadowProgram, 2>;
-		using TreeLodEntry = ProgramEntry<TreeLodProgram, 4>;  // vertex, pixel, depth vertex, depth pixel
+		using DrawFamilyEntry = ProgramEntry<DrawProgram, 4>;  // vertex, pixel, depth vertex, depth pixel
 		using ForwardEntry = ProgramEntry<ForwardProgram, 2>;
 		using FamilyEntry = ProgramEntry<Program, 2>;  // vertex and pixel alone (ProgramStages::VertexPixel)
 		struct StageCache;
@@ -247,25 +258,30 @@ namespace DCLF
 		 */
 		template <class E, class LogFailure>
 		void FinishEntry(E& a_entry, std::atomic<std::uint32_t>* a_ready, std::atomic<std::uint32_t>& a_failed, LogFailure&& a_logFailure);
+		/** @brief UpdateLane: a draw family's entry whose stages all completed (a_user: its StageUser, its programs' or its forward program's). */
+		void FinishDrawFamily(std::uint8_t a_user, Finished& a_finished);
 
 		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<Entry>> entries;
 		ankerl::unordered_dense::map<std::uint32_t, std::unique_ptr<ShadowEntry>> shadowEntries;
-		std::unique_ptr<TreeLodEntry> treeLodEntry;
 		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<ForwardEntry>> forwardEntries;
-		std::unique_ptr<ForwardEntry> forwardTreeLodEntry;
+		// By draw family: its programs' entry and its forward program's.
+		std::array<std::unique_ptr<DrawFamilyEntry>, kDrawFamilyLanes> drawFamilyEntries;
+		std::array<std::unique_ptr<ForwardEntry>, kDrawFamilyLanes> drawFamilyForwardEntries;
 		// By family: its entries, and its source (Extensions::ProgramFamilies' sourcePath: Data/Shaders/Effect.hlsl; empty when missing or
 		// not taken).
 		std::array<ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<FamilyEntry>>, Extensions::kProgramFamilies> familyEntries;
 		std::array<std::vector<std::byte>, Extensions::kProgramFamilies> familySources;
-		std::vector<std::byte> distantTreeSource;
+		// By draw family: its source (Extensions::DrawFamilies' sourcePath: Data/Shaders/DistantTree.hlsl; empty when missing or not taken).
+		std::array<std::vector<std::byte>, kDrawFamilyLanes> drawFamilySources;
 		std::vector<std::byte> source;
 		std::vector<std::byte> pulledSource;  // source for the pulled builds (PulledMaterialSource); empty when it could not be made
 		std::vector<std::byte> utilitySource;
 		std::vector<std::filesystem::path> dependencies;
 		// Each source's ShaderCompiler::FingerprintInputs with the dependencies, taken once when they load: every request's key
 		// starts from it instead of hashing the source and checking the dependency files again (thousands of keys a launch).
-		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0, distantTreeFingerprint = 0;
+		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0;
 		std::array<std::uint64_t, Extensions::kProgramFamilies> familyFingerprints{};
+		std::array<std::uint64_t, kDrawFamilyLanes> drawFamilyFingerprints{};
 		bool sourcesLoaded = false;
 		std::atomic<bool> sourcesMissing{ false };
 		std::atomic<std::uint32_t> loggedFailures{ 0 };

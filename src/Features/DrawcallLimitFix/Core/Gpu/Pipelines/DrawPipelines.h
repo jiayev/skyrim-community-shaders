@@ -210,7 +210,8 @@ namespace DCLF
 
 	/**
 	 * @brief A forward view's pipeline (DrawPipelines::RequestForward): a Lighting forward program's descriptors (the pixel one
-	 * without Deferred), or tree LOD's (kForwardTreeLod, descriptors 0). Culls front faces unless two-sided: a cube face's projection
+	 * without Deferred), or a draw family's (its lane slot's forwardFlags: tree LOD's kForwardTreeLod; descriptors 0). Culls front faces
+	 * unless two-sided: a cube face's projection
 	 * mirrors the image, and the engine culls front faces there (dclf-lod.md, "The state").
 	 */
 	struct ForwardPipelineKey
@@ -224,6 +225,8 @@ namespace DCLF
 		bool operator==(const ForwardPipelineKey&) const = default;
 	};
 	static_assert(std::has_unique_object_representations_v<ForwardPipelineKey>);
+	static_assert(DrawFamilyLaneSlotOf(Api::DrawFamily::TreeInstances).forwardFlags == ForwardPipelineKey::kForwardTreeLod,
+		"the TreeInstances family's lane slot is not ForwardPipelineKey::kForwardTreeLod");
 	struct ForwardPipelineKeyHash
 	{
 		using is_avalanching = void;
@@ -244,8 +247,8 @@ namespace DCLF
 	 * @brief The pipeline lane's results: immutable, published whole after each pass that changed it, latest-wins (TakeCatalog).
 	 *
 	 * A set index is handed out only once a published set version holds its pipeline, and setVersion holds every index here, so
-	 * indices and set agree by construction; the frame binds this version (GetIndirectState). Likewise the shadow set. Tree LOD and
-	 * forward pipelines are in no set: the lane keeps them for the process (TreeLodPipelinesOf, ForwardPipelineOf).
+	 * indices and set agree by construction; the frame binds this version (GetIndirectState). Likewise the shadow set. The draw
+	 * families' and forward pipelines are in no set: the lane keeps them for the process (CatalogFamilyPipelines, ForwardPipelineOf).
 	 */
 	struct PipelineCatalog
 	{
@@ -275,14 +278,14 @@ namespace DCLF
 		DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;     // the shadow map format the set is built for
 		std::shared_ptr<const void> shadowSetVersion;       // holds every setIndex of shadowEntries
 
-		// Tree LOD's two pipelines for targetsGeneration: built (TreeLodBuilt) or failed (program: for good; build: until the next
+		// By draw family: its two pipelines for targetsGeneration: built (FamilyBuilt) or failed (program: for good; build: until the next
 		// target change). Neither while waiting.
-		struct TreeLodEntry
+		struct FamilyEntry
 		{
 			std::shared_ptr<const void> pipelines;
 			bool failed = false;
 		};
-		TreeLodEntry treeLod;
+		std::array<FamilyEntry, kDrawFamilyLanes> families{};
 		// The refraction pipeline for targetsGeneration and its normals format: built (an rhi::PipelinePtr) or failed.
 		struct RefractionEntry
 		{
@@ -329,7 +332,7 @@ namespace DCLF
 	 *
 	 * One owner, the pipeline lane (BuildExecutor.h): it takes requests, programs and build completions, admits them, publishes set
 	 * versions and then the catalog. Render-thread state reaches it only as frame inputs (SetTargetFormats, CaptureEngineStates,
-	 * SetShadowInputs, ShadowRasterStateId, SetTreeLodInputs, SetViewForwardTargets, ...). The render thread only posts and reads its
+	 * SetShadowInputs, ShadowRasterStateId, SetFamilyInputs, SetViewForwardTargets, ...). The render thread only posts and reads its
 	 * frame's catalog (FrameCatalog).
 	 */
 	class DrawPipelines
@@ -351,11 +354,17 @@ namespace DCLF
 			std::uint32_t shadowFailed = 0;
 			// Set versions published, and admissions that waited because every version was still held.
 			std::uint32_t setPublishes = 0, setWaits = 0, shadowSetPublishes = 0, shadowSetWaits = 0;
-			// Tree LOD and forward pipelines (this target generation), and frames that wanted one not yet in their catalog
-			// (NoteFrameWaits: they draw natively meanwhile).
-			std::uint32_t treeLodRequested = 0, treeLodReady = 0, treeLodFailed = 0;
+			// By draw family, and the forward pipelines: built this target generation, and frames that wanted one not yet in their catalog
+			// (NoteFamilyWait, NoteForwardWait: they draw natively meanwhile). A family's label: its reports' (Extensions::DrawFamilies';
+			// null: not taken).
+			struct DrawFamilyCounters
+			{
+				const char* label = nullptr;
+				std::uint32_t requested = 0, ready = 0, failed = 0, waits = 0;
+			};
+			std::array<DrawFamilyCounters, kDrawFamilyLanes> drawFamilies{};
 			std::uint32_t forwardRequested = 0, forwardReady = 0, forwardFailed = 0;
-			std::uint32_t treeLodWaits = 0, forwardWaits = 0;
+			std::uint32_t forwardWaits = 0;
 			// By program family: its keys (KeyFamily; the Effect port's kRasterEffect) among requested, ready and failed.
 			struct Family
 			{
@@ -411,13 +420,14 @@ namespace DCLF
 		std::uint32_t ShadowRasterStateCount() const;
 
 		/**
-		 * @brief Render thread: asks for tree LOD's two pulled pipelines (dclf-lod.md): Z-prepass (DistantTree depth technique, LESS
-		 * with writes) and colour (deferred technique, EQUAL, opaque write mode 1), both two-sided as the engine's. Once; rebuilt after
-		 * a target change. Arrives in PipelineCatalog::treeLod once SetTreeLodInputs, targets, winding and write mode are in.
+		 * @brief Render thread: asks for a draw family's two pulled pipelines (Api::DrawFamilyBuild::DepthThenEqualColour; tree LOD's:
+		 * dclf-lod.md): Z-prepass (its depth program, LESS with writes) and colour (its colour program, EQUAL, opaque write mode 1), both
+		 * two-sided as the engine's. Once; rebuilt after a target change. Arrives in PipelineCatalog::families once SetFamilyInputs,
+		 * targets, winding and write mode are in.
 		 */
-		void RequestTreeLod();
-		/** @brief Render thread: the DistantTree shader for tree LOD's programs (frame input; posted on change). */
-		void SetTreeLodInputs(RE::BSShader& a_distantTree);
+		void RequestFamily(Api::DrawFamily a_family);
+		/** @brief Render thread: the engine shader a draw family's programs are of (its programSource: the DistantTree shader; frame input; posted on change). */
+		void SetFamilyInputs(Api::DrawFamily a_family, RE::BSShader& a_shader);
 		/**
 		 * @brief Render thread: asks for the refraction pipeline: Utility's pulled RENDER_NORMAL build (kRefractionTechnique) under the
 		 * shadow views' layout, one colour attachment with the engine's write mode 2 mask, main depth LESS_EQUAL without writes
@@ -437,11 +447,15 @@ namespace DCLF
 		 * forward pipeline).
 		 */
 		void SetViewForwardTargets(Api::EngineView a_view, const ForwardTargets& a_targets);
-		/** @brief Render thread: counts a frame whose tree LOD or forward view waited for a pipeline. */
+		/** @brief Render thread: counts a frame whose draw family waited for its pipelines. */
+		void NoteFamilyWait(Api::DrawFamily a_family, bool a_waited) { stats.drawFamilies[static_cast<std::size_t>(a_family)].waits += a_waited ? 1u : 0u; }
+		/** @brief Render thread: counts a frame whose forward view waited for a pipeline. */
+		void NoteForwardWait(bool a_waited) { stats.forwardWaits += a_waited ? 1u : 0u; }
+		/** @brief NoteForwardWait, as ReflectionView still calls it (a_treeLod: the TreeInstances family's wait). */
 		void NoteFrameWaits(bool a_treeLod, bool a_forward)
 		{
-			stats.treeLodWaits += a_treeLod ? 1u : 0u;
-			stats.forwardWaits += a_forward ? 1u : 0u;
+			NoteFamilyWait(Api::DrawFamily::TreeInstances, a_treeLod);
+			NoteForwardWait(a_forward);
 		}
 
 		/**
@@ -478,12 +492,12 @@ namespace DCLF
 		Stats stats;
 
 		friend struct IndirectState GetIndirectState(const PipelineCatalog&, std::uint32_t);
-		friend struct ForwardPipelineAccess;  // TreeLodPipelinesOf (DrawPipelinesRhi.h)
+		friend struct ForwardPipelineAccess;  // CatalogFamilyPipelines (DrawPipelinesRhi.h)
 		friend struct ShadowIndirectState GetShadowIndirectState(const PipelineCatalog&, DXGI_FORMAT);
 	};
 
 	/**
-	 * @brief Render thread: the frame's catalog (HoldCatalog at HandOverAtFrameStart), which tree LOD, forward views,
+	 * @brief Render thread: the frame's catalog (HoldCatalog at HandOverAtFrameStart), which the draw families, forward views,
 	 * FrameIndirectState and FrameShadowIndirectState all resolve from.
 	 */
 	inline const PipelineCatalog* FrameCatalog()

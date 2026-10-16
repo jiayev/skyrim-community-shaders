@@ -98,6 +98,12 @@ namespace DCLF::Diagnostics
 		bool skipExcluded;
 	};
 
+	/** @brief The sun's cascade bits (every cascade's activeLightMask bit): after its Accumulate, and 0 where the frame's are reset. */
+	struct SunBitsSet
+	{
+		std::uint32_t bits;
+	};
+
 	/** @brief A cascade of the sun's Accumulate without DCLF's view (the Sun board has none for its descriptor this frame). */
 	struct SunCascadeMissing
 	{

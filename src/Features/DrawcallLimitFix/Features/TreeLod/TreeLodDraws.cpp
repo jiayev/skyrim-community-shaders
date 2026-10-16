@@ -53,13 +53,13 @@ namespace DCLF::Features::TreeLod
 			.build = Api::DrawFamilyBuild::DepthThenEqualColour,
 			.signature = Api::DrawFamilySignature::DrawInstanced };
 		static_assert(kProgram.descriptors.colour == 0x10100 && kProgram.descriptors.depth == 0x10001 && kProgram.descriptors.forward == 0x10000,
-			"tree LOD's descriptors are not ShaderPrograms' kDistantTree* (Deferred | AlphaTest, Depth | AlphaTest, AlphaTest)");
+			"tree LOD's descriptors are not the engine's (Deferred | AlphaTest, Depth | AlphaTest, AlphaTest)");
 
 		/**
 		 * @brief Records tree LOD's draw (dclf-lod.md): push data is the draw row's address and whether this is phase 2's depth draw;
 		 * arguments come from the list's header (TreeInstances::VisibleHeader).
 		 */
-		void RecordTreeLodDraw(rhi::CommandList& a_commands, const TreeLodPipelines& a_pipelines, bool a_colour, bool a_phaseTwo, std::uint64_t a_draw,
+		void RecordTreeLodDraw(rhi::CommandList& a_commands, const FamilyPipelines& a_pipelines, bool a_colour, bool a_phaseTwo, std::uint64_t a_draw,
 			rhi::ResourceHandle a_visible)
 		{
 			using TreeInstances::VisibleHeader;
@@ -94,7 +94,7 @@ namespace DCLF::Features::TreeLod
 		// The depth passes: one instanced draw of the phase's culled records; the colour pass: EQUAL against its Z-prepass draw.
 		void MainRecord(const Api::DrawFamilyRecord& a_record)
 		{
-			RecordTreeLodDraw(a_record.commands, a_record.Drawn<TreeLodPipelines>(), a_record.pass == Api::DrawFamilyPass::Colour,
+			RecordTreeLodDraw(a_record.commands, a_record.Drawn<FamilyPipelines>(), a_record.pass == Api::DrawFamilyPass::Colour,
 				a_record.pass == Api::DrawFamilyPass::DepthPhaseTwo, a_record.row, a_record.arguments);
 		}
 	}

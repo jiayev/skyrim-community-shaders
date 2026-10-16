@@ -61,10 +61,12 @@ namespace DCLF
 			std::uint32_t directWithheld = 0;      // shadow passes of hints 11, 7 and 3, which bypass RegisterPass too
 			std::uint32_t mainWithheld = 0;
 			std::uint32_t occlusionWithheld = 0;
-			std::uint32_t treeLodWithheld = 0;    // tree LOD into the main views while DCLF draws it
-			// By view, an OwnRenderers view's (the water reflection's faces): its members' passes, and tree LOD's while DCLF draws its tree
-			// LOD per face.
-			std::array<std::uint32_t, Extensions::kEngineViews> viewWithheld{}, viewTreeLodWithheld{};
+			// By draw family: its engine shapes' passes into the main views while DCLF draws the family (tree LOD's).
+			std::array<std::uint32_t, static_cast<std::size_t>(Api::DrawFamily::Count)> familyWithheld{};
+			// By view, an OwnRenderers view's (the water reflection's faces): its members' passes, and by draw family its engine shapes'
+			// while DCLF draws the family per face (tree LOD's).
+			std::array<std::uint32_t, Extensions::kEngineViews> viewWithheld{};
+			std::array<std::array<std::uint32_t, static_cast<std::size_t>(Api::DrawFamily::Count)>, Extensions::kEngineViews> viewFamilyWithheld{};
 		};
 
 		/**
@@ -98,13 +100,23 @@ namespace DCLF
 		 * engine hooks. SetViewRenderers: render thread, the accumulators whose batch renderers (and their geometry groups') are the view's
 		 * (the cube camera's), rebuilt only when they change. SetViewWithholdActive: around the view's render while its members' passes
 		 * into them are withheld (the faces' plain mode, 0: the only one whose registrations the hooks see; mode 0x19's are FUN_1414b2b90's).
-		 * SetViewRendering: around the view's render, whatever its mode (the observers: OwnViewRendering). SetViewTreeLodOwned: once a
-		 * frame, a trees view's tree LOD per face DCLF's (its tree LOD passes into its renderers withheld; Core's while TreeLod is).
+		 * SetViewRendering: around the view's render, whatever its mode (the observers: OwnViewRendering). SetViewFamilyOwned: once a
+		 * frame, a trees view's draw family per face DCLF's (its engine shapes' passes into its renderers withheld; Core's while the family
+		 * is taken; SetViewTreeLodOwned: tree LOD's).
 		 */
 		void SetViewRenderers(Api::EngineView a_view, const Api::ViewAccumulators& a_accumulators);
 		void SetViewWithholdActive(Api::EngineView a_view, bool a_active) { viewRenderers[static_cast<std::size_t>(a_view)].withholdActive.store(a_active, std::memory_order_release); }
 		void SetViewRendering(Api::EngineView a_view, bool a_rendering) { viewRenderers[static_cast<std::size_t>(a_view)].rendering.store(a_rendering, std::memory_order_release); }
-		void SetViewTreeLodOwned(Api::EngineView a_view, bool a_owned) { viewRenderers[static_cast<std::size_t>(a_view)].treeLodOwned.store(a_owned, std::memory_order_release); }
+		void SetViewFamilyOwned(Api::EngineView a_view, Api::DrawFamily a_family, bool a_owned)
+		{
+			auto& owned = viewRenderers[static_cast<std::size_t>(a_view)].familyOwned;
+			const std::uint32_t bit = 1u << static_cast<std::uint32_t>(a_family);
+			if (a_owned)
+				owned.fetch_or(bit, std::memory_order_release);
+			else
+				owned.fetch_and(~bit, std::memory_order_release);
+		}
+		void SetViewTreeLodOwned(Api::EngineView a_view, bool a_owned) { SetViewFamilyOwned(a_view, Api::DrawFamily::TreeInstances, a_owned); }
 		/** @brief Whether a_batch is one of an OwnRenderers view's batch renderers (for the census). */
 		bool IsOwnViewRenderer(Api::EngineView a_view, const RE::BSBatchRenderer* a_batch) const { return IsViewRenderer(a_view, a_batch); }
 		/** @brief Render thread: whether an OwnRenderers view's render runs (a reflection face render: the capture parity's face draws). */
@@ -238,8 +250,9 @@ namespace DCLF
 		std::atomic<std::uint32_t> volumetricWithheld{ 0 };
 		std::atomic<std::uint32_t> directWithheld{ 0 };
 		std::atomic<std::uint32_t> mainWithheld{ 0 }, occlusionWithheld{ 0 };
-		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
+		std::array<std::atomic<std::uint32_t>, static_cast<std::size_t>(Api::DrawFamily::Count)> familyWithheld{};
 		std::array<std::atomic<bool>, static_cast<std::size_t>(Api::DrawFamily::Count)> familyOwned{};
+		static_assert(static_cast<std::size_t>(Api::DrawFamily::Count) <= 32, "ViewRenderers::familyOwned is a 32-bit mask by family");
 		/**
 		 * @brief The OwnRenderers views' test at every main-mode insertion point, after WithholdMain: a member's pass of the view's phase
 		 * into its renderers while its render withholds and its epochs draw (the reflection faces'), or tree LOD's while its tree LOD is DCLF's.
@@ -254,7 +267,7 @@ namespace DCLF
 		std::array<const void*, 2> mainAccumulators{};  // what mainRenderers was made from (render thread)
 		// By view: its renderers (an InMainRenderers view's accumulators', also in mainRenderers; an OwnRenderers view's, SetViewRenderers),
 		// their source (render thread) and its coverage (0: not set yet, its coveredInitially standing for it; 1 not covered; 2 covered).
-		// An InMainRenderers view's counts; an OwnRenderers view's render's gates (rendering, withholding), its tree LOD's ownership, its
+		// An InMainRenderers view's counts; an OwnRenderers view's render's gates (rendering, withholding), its draw families' ownership, its
 		// counts (Drain takes them) and its residue watch (the roots watched; the passes by root, the first and the geometries, the last
 		// two under residueLock).
 		struct ViewRenderers
@@ -263,8 +276,10 @@ namespace DCLF
 			Api::ViewAccumulators accumulators;
 			std::atomic<std::uint8_t> coverage{ 0 };
 			std::atomic<std::uint32_t> withheld{ 0 }, memberKept{ 0 }, registered{ 0 };
-			std::atomic<bool> rendering{ false }, withholdActive{ false }, treeLodOwned{ false };
-			std::atomic<std::uint32_t> ownWithheld{ 0 }, ownTreeLodWithheld{ 0 };
+			std::atomic<bool> rendering{ false }, withholdActive{ false };
+			std::atomic<std::uint32_t> familyOwned{ 0 };  // by draw family, a bit (SetViewFamilyOwned)
+			std::atomic<std::uint32_t> ownWithheld{ 0 };
+			std::array<std::atomic<std::uint32_t>, static_cast<std::size_t>(Api::DrawFamily::Count)> ownFamilyWithheld{};
 			std::atomic<std::uint32_t> residueWatch{ 0 }, residueLod{ 0 }, residueTree{ 0 };
 			std::mutex residueLock;
 			std::string residueFirst;

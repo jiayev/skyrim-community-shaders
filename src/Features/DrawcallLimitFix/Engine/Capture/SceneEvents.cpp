@@ -951,9 +951,9 @@ namespace DCLF::Extensions
 		return Scene::hiddenEventsInstalled;
 	}
 
-	void PushSegmentsUpdate(const RE::BSGeometry* a_geometry)
+	void PushRangesUpdate(const RE::BSGeometry* a_geometry)
 	{
-		Scene::PushGeometryUpdate(a_geometry, SceneCapture::GeometryRecord::kSegments);
+		Scene::PushGeometryUpdate(a_geometry, SceneCapture::GeometryRecord::kRanges);
 	}
 
 	void PushFadeAmount(RE::NiAVObject* a_root)

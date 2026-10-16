@@ -8,7 +8,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/PrimaryCullView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -73,7 +73,7 @@ namespace DCLF::Reports
 			ankerl::unordered_dense::map<const char*, std::pair<std::uint64_t, const RE::NiAVObject*>> reasons;
 			std::string mixedFirst;
 			std::uint32_t mixedNamed = 0;
-			const auto exclusion = SunAccumulation::Get().PendingExclusion();
+			const auto exclusion = SunExclusionSlot::Get().Pending();
 			const bool exclusionCurrent = exclusion && exclusion->candidates == cut.candidates && exclusion->excluded.size() >= cut.plans.size();
 			const auto nameOf = [](const RE::NiAVObject* a_node) { return a_node && a_node->name.c_str() ? a_node->name.c_str() : ""; };
 			for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {

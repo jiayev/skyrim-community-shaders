@@ -15,8 +15,9 @@
 // flip; LodGateComponent.h: the gate events on a SceneStack channel, the coordinator component's marks, vetoes, settle, publication and
 // adoption, its report lines, observers and parity).
 //
-// Core keeps the drawn ranges the walk reads (the coordinator's lodRanges: the attach's capture, Core/Engine/LodSegments.h, the range
-// slots), the generic structures the gates use (Api/EngineEvents.h, Api/CoordinatorComponents.h), the LOD fades, and the shadow and
+// The feature captures object LOD's drawn ranges (its sub-index shapes' contribution's ranges, Api::GeometryTypeContribution: LodSegments.h,
+// the segments' layout). Core keeps them for the walk (the coordinator's entryRanges: the attach's capture, the range slots), and keeps
+// the generic structures the gates use (Api/EngineEvents.h, Api/CoordinatorComponents.h), the LOD fades, and the shadow and
 // previous-transform predicates (IsLodLand, IsLodObject). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"

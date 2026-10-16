@@ -15,7 +15,7 @@
 // Core keeps the path an actor's objects take whatever the toggle:
 // - the skinned geometry, any NiSkinInstance's (creatures, effects, LOD trees, the first-person arms): the bone palettes FrameValues samples
 //   into the palette part it shares with the particles, the skin partitions and their LOD in the tables and the walk, the skinned and skin
-//   partitions toggles, kObjectSkinned and the vertex stages' bones;
+//   partitions toggles, kObjectPaletteBlock and the vertex stages' bones;
 // - an actor-owned entry's classification: Tracked::actorOwned, the per-frame actor trait and its verdict recheck (Coordinator::
 //   ActorRecordKept), SceneTables::actorObjects, the mirror's actor bit (NodeRecord::actor);
 // - the animation path's move writer (Engine/Capture/SceneEvents: FUN_14066afa0, every reference's animation) and the fadeAmount channel;

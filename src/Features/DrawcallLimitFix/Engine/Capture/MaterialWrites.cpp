@@ -35,8 +35,8 @@ namespace DCLF::MaterialWrites
 			static EventQueue<const void*, 8192> queue;
 			return queue;
 		}
-		// The same events for the kept shadow build (ShadowKept), which runs before the main pass drains its own.
-		EventQueue<const RE::BSShaderMaterial*, 8192>& ShadowTransformQueue()
+		// The transform moves (Extensions::DrainTransformMoves): the kept shadow build's (ShadowKept), whatever patches the records'.
+		EventQueue<const RE::BSShaderMaterial*, 8192>& TransformMoves()
 		{
 			static EventQueue<const RE::BSShaderMaterial*, 8192> queue;
 			return queue;
@@ -78,9 +78,9 @@ namespace DCLF::MaterialWrites
 		// BSLightingShaderPropertyFloatController::Update (AE 14150dde0, vtable slot 0x27). Type 0xb writes the
 		// property's emissive multiplier (per-object shading, resampled every frame at Prepass) and types above
 		// 0x13 the texture-transform buffers; every other type a material field.
-		// The texture transforms are no record's: the frame values read every material row's TexcoordOffset from the buffer the frame
-		// reads and the GPU patches the rows (Features/TextureTransforms, registered as the frame VS variable's patch), so a write that moved
-		// only them captures nothing; the kept shadow build still hears of it (its rows read the transform themselves).
+		// While a feature patches the frame VS variable (InstallContext::RegisterFrameVSVariablePatch), the texture transforms are no
+		// record's: the GPU patches every material row's TexcoordOffset from the buffer the frame reads, so a write that moved only them
+		// captures nothing; the kept shadow build still hears of it (TransformMoves: its rows read the transform themselves).
 		struct FloatControllerUpdate
 		{
 			static void thunk(RE::NiTimeController* a_this, void* a_data)
@@ -106,7 +106,7 @@ namespace DCLF::MaterialWrites
 					if (moved && property->material == material && !Extensions::FrameVSVariablePatched())
 						NoteWritten(material);
 					if (moved)
-						ShadowTransformQueue().Push(material);
+						TransformMoves().Push(material);
 				} else if (type <= 0x13 && type != 0xb && property && property->material && ControllerDestinationTablesKnown()) {
 					auto* material = property->material;
 					const auto offset = std::size_t(FloatDestinations()[type]) * sizeof(float);
@@ -248,10 +248,14 @@ namespace DCLF::MaterialWrites
 	{
 		ShadingQueue().Drain([&](const void* a_property) { a_out.push_back(a_property); });
 	}
+}
 
-	void DrainShadowTransformChanges(std::vector<const RE::BSShaderMaterial*>& a_out)
+namespace DCLF::Extensions
+{
+	// The transform moves' consumer side (Core/Extensions/MaterialWrites.h); the queue is the hooks'.
+	void DrainTransformMoves(std::vector<const RE::BSShaderMaterial*>& a_out)
 	{
-		ShadowTransformQueue().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.push_back(a_material); });
+		MaterialWrites::TransformMoves().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.push_back(a_material); });
 	}
 }
 

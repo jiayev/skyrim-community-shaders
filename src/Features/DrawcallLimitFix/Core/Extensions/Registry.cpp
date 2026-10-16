@@ -461,7 +461,8 @@ namespace DCLF::Extensions
 				const bool entryValid = entry.entryClass < Api::EntryClass::Count &&
 				                        (entry.entryClass == Api::EntryClass::None ? !entry.parentKind && !entry.perFrame && !entry.holdsParent : entry.parentKind != 0);
 				const bool classValid = a_type.toggle ||
-				                        (!a_type.propertyFlags && a_type.itemClass == Api::FrameValueItemClass::None && !a_type.moves && entry.entryClass != Api::EntryClass::None);
+				                        (!a_type.propertyFlags && a_type.itemClass == Api::FrameValueItemClass::None && !a_type.moves && !a_type.ranges &&
+				                            entry.entryClass != Api::EntryClass::None);
 				if (a_type.geometryType >= kGeometryTypeSlots || a_type.itemClass >= Api::FrameValueItemClass::Count || !entryValid || !classValid)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete geometry type contribution", feature));
 				auto& contribution = lists.geometryTypeContributions[a_type.geometryType];

@@ -2,6 +2,7 @@
 // pass, once in it, after the pass's segment events. Reported with the segments' line (LodSegmentChannel.cpp).
 
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegmentEvents.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodSegments.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 
@@ -18,13 +19,13 @@ namespace DCLF::Features::Lod
 		void OnSegmentsApplied(const SegmentsApplied& a_event)
 		{
 			const auto& context = a_event.context;
-			const auto& lodRanges = context.EntryRanges();
+			const auto& entryRanges = context.EntryRanges();
 			auto& l = context.State<SegmentState>().parity;
-			if (lodRanges.empty() || !Diagnostics::ParityDue(context.PassSerial()) || std::exchange(l.pass, context.PassStamp()) == context.PassStamp())
+			if (entryRanges.empty() || !Diagnostics::ParityDue(context.PassSerial()) || std::exchange(l.pass, context.PassStamp()) == context.PassStamp())
 				return;
 			++l.checks;
-			std::vector<LodSegments::Range> live;
-			for (const auto& [shape, ranges] : lodRanges) {
+			std::vector<Api::EntryRange> live;
+			for (const auto& [shape, ranges] : entryRanges) {
 				// An item's lease (the scene work may run beside the engine's update).
 				const EngineReadWindow::Lease lease;
 				if (!lease)

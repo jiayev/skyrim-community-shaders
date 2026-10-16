@@ -20,7 +20,7 @@
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/SunExclusion.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/VertexInput.h"

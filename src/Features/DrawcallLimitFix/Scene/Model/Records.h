@@ -32,9 +32,9 @@ namespace DCLF
 		// Subsurface Scattering's IsBeastRace for a face (BSLightingShader_SetupSkin: kFace or kFaceGenRGBTint, its actor's race
 		// keyword): per actor, so the record's, not the permutation's.
 		kObjectBeastRace = 1u << 3,
-		// CS_DCLF_SKINNED: vertices from the skin partition's own buffer, bone palette rows at BindlessObject::boneOffset /
-		// previousBoneOffset.
-		kObjectSkinned = 1u << 4,
+		// A palette block: rows at BindlessObject::boneOffset / previousBoneOffset. A skin's (CS_DCLF_SKINNED: vertices from the skin
+		// partition's own buffer, bone palette rows) or a particle member's quads. The shaders' name is kObjectSkinned.
+		kObjectPaletteBlock = 1u << 4,
 		// A culling candidate only: materialIndex and pipelineIndex mean nothing; check before indexing. The tables may be empty
 		// (first frame after a teleport), so even index 0 is unsafe.
 		kObjectNoBindings = 1u << 5,

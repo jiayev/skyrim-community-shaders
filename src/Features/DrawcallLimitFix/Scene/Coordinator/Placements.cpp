@@ -131,7 +131,7 @@ namespace DCLF::Scene
 		PlannedKey key{ a_geometry, slot, slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot, 0, 0, a_tracked.sunEntryNode,
 			ViewRootEntry(a_tracked.categoryNode), Api::FrameValueItemClass::None };
 		// A skinned record's palette: its block, which the record addresses.
-		if (slot < tables.boneRows.size() && (tables.objects[slot].flags & kObjectSkinned) && tables.boneRows[slot]) {
+		if (slot < tables.boneRows.size() && (tables.objects[slot].flags & kObjectPaletteBlock) && tables.boneRows[slot]) {
 			key.boneOffset = tables.boneOffset[slot];
 			key.boneRows = tables.boneRows[slot];
 			// A palette rows member's block holds its class's rows (a particle system's quads: Api::PaletteRowsContribution), not a skin's

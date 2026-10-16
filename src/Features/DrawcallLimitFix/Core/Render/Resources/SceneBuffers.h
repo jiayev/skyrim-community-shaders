@@ -66,9 +66,9 @@ namespace DCLF::Draws
 		std::array<org::services::FilledVersion, 2> visibilityReportedFollowed;
 		std::shared_ptr<const ComputeProgram> visibilityEventsProgram;
 		std::shared_ptr<VisibilityReadback> visibilityReadback;
-		// The draw families' pipelines on their lane (Api::DrawFamily, by family; the TreeInstances lane's TreeLodPipelines), published
-		// by the frame's decision once built (DrawFamilyFrame::Pipelines); read on the graph host's thread (FamilyPipelinesOf).
-		std::array<std::atomic<std::shared_ptr<const TreeLodPipelines>>, Extensions::kDrawFamilies> familyPipelines;
+		// The draw families' pipelines on their lane (Api::DrawFamily, by family), published by the frame's decision once built
+		// (DrawFamilyFrame::Pipelines); read on the graph host's thread (FamilyPipelinesOf).
+		std::array<std::atomic<std::shared_ptr<const FamilyPipelines>>, Extensions::kDrawFamilies> familyPipelines;
 	};
 
 	/** @brief Sends sorted word indices as runs a_send(first, count), merging gaps up to kFadeRunGap. */

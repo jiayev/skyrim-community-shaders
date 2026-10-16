@@ -14,6 +14,7 @@
 #include <Tracy/Tracy.hpp>
 
 #include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -33,24 +34,33 @@ namespace DCLF
 		{
 			Lighting,
 			Shadow,
-			TreeLod,
 			Forward,
-			ForwardTreeLod,
-			Family  // FindFamily: the first family's (Api::ProgramFamily 0); a family's is Family + its index
+			// FindDrawFamily and FindDrawFamilyForward: the first draw family's (Api::DrawFamily 0); a family's is DrawFamily (or
+			// DrawFamilyForward) + its index.
+			DrawFamily,
+			DrawFamilyForward = DrawFamily + kDrawFamilyLanes,
+			Family = DrawFamilyForward + kDrawFamilyLanes  // FindFamily: the first family's (Api::ProgramFamily 0); a family's is Family + its index
 		};
 
 		StageUser FamilyUser(Api::ProgramFamily a_family) { return static_cast<StageUser>(static_cast<std::uint8_t>(StageUser::Family) + static_cast<std::uint8_t>(a_family)); }
 		std::size_t FamilyIndexOf(StageUser a_user) { return static_cast<std::size_t>(a_user) - static_cast<std::size_t>(StageUser::Family); }
+		StageUser DrawFamilyUser(Api::DrawFamily a_family, bool a_forward)
+		{
+			return static_cast<StageUser>(static_cast<std::uint8_t>(a_forward ? StageUser::DrawFamilyForward : StageUser::DrawFamily) + static_cast<std::uint8_t>(a_family));
+		}
+		// Whether a_user is a draw family's (its programs' or its forward program's), and which.
+		bool IsDrawFamilyUser(StageUser a_user) { return a_user >= StageUser::DrawFamily && a_user < StageUser::Family; }
+		bool IsDrawFamilyForward(StageUser a_user) { return a_user >= StageUser::DrawFamilyForward && a_user < StageUser::Family; }
+		std::size_t DrawFamilyIndexOf(StageUser a_user)
+		{
+			return static_cast<std::size_t>(a_user) - static_cast<std::size_t>(IsDrawFamilyForward(a_user) ? StageUser::DrawFamilyForward : StageUser::DrawFamily);
+		}
 	}
 
 	namespace
 	{
 		constexpr const char* kSourcePath = "Data/Shaders/Lighting.hlsl";
 		constexpr const char* kUtilitySourcePath = "Data/Shaders/Utility.hlsl";
-		constexpr const char* kDistantTreeSourcePath = "Data/Shaders/DistantTree.hlsl";
-		// DistantTree's descriptors (ShaderCache.h, DistantTreeShaderTechniques and DistantTreeShaderFlags): the technique in bit 0
-		// (1: Depth), Deferred and AlphaTest, as the engine's main view draws tree LOD (BSDistantTreeShader::SetupTechnique).
-		constexpr std::uint32_t kDistantTreeDepth = 1, kDistantTreeDeferred = 1u << 8, kDistantTreeAlphaTest = 1u << 16;
 		constexpr const char* kShaderDirectory = RenderGraphRuntime::kShaderDirectory;
 		constexpr std::size_t kMaxLoggedFailures = 8;
 
@@ -366,14 +376,18 @@ namespace DCLF
 			else
 				logger::warn("[DCLF] {} is missing; the shadow views stay native", kUtilitySourcePath);
 		}
-		{
-			std::ifstream distantTree(kDistantTreeSourcePath, std::ios::binary);
-			std::vector<char> treeBytes((std::istreambuf_iterator<char>(distantTree)), std::istreambuf_iterator<char>());
-			distantTreeSource.resize(treeBytes.size());
-			if (!treeBytes.empty())
-				std::memcpy(distantTreeSource.data(), treeBytes.data(), treeBytes.size());
+		// The draw families' sources (Extensions::DrawFamilies: tree LOD's DistantTree.hlsl), in family order, before the program families'.
+		for (std::size_t f = 0; f < kDrawFamilyLanes; ++f) {
+			const auto& family = Extensions::DrawFamilies()[f];
+			if (!family.taken)
+				continue;
+			std::ifstream familyFile(family.sourcePath, std::ios::binary);
+			std::vector<char> familyBytes((std::istreambuf_iterator<char>(familyFile)), std::istreambuf_iterator<char>());
+			drawFamilySources[f].resize(familyBytes.size());
+			if (!familyBytes.empty())
+				std::memcpy(drawFamilySources[f].data(), familyBytes.data(), familyBytes.size());
 			else
-				logger::warn("[DCLF] {} is missing; tree LOD stays native", kDistantTreeSourcePath);
+				logger::warn("[DCLF] {} is missing; {}", family.sourcePath, family.nativeNote);
 		}
 		// The program families' sources (Extensions::ProgramFamilies: the Effect port's Effect.hlsl), in family order.
 		for (std::size_t f = 0; f < Extensions::kProgramFamilies; ++f) {
@@ -394,7 +408,8 @@ namespace DCLF
 				familyFingerprints[f] = familySources[f].empty() ? 0 : compiler->FingerprintInputs(familySources[f], dependencies);
 			pulledFingerprint = pulledSource.empty() ? 0 : compiler->FingerprintInputs(pulledSource, dependencies);
 			utilityFingerprint = utilitySource.empty() ? 0 : compiler->FingerprintInputs(utilitySource, dependencies);
-			distantTreeFingerprint = distantTreeSource.empty() ? 0 : compiler->FingerprintInputs(distantTreeSource, dependencies);
+			for (std::size_t f = 0; f < kDrawFamilyLanes; ++f)
+				drawFamilyFingerprints[f] = drawFamilySources[f].empty() ? 0 : compiler->FingerprintInputs(drawFamilySources[f], dependencies);
 		}
 		sourcesLoaded = true;
 		logger::info("[DCLF] SPIR-V builds of {}: {} shader files tracked as dependencies", kSourcePath, dependencies.size());
@@ -405,7 +420,8 @@ namespace DCLF
 
 	namespace
 	{
-		// The logs' name of a source: Lighting, Utility, a program family's (Extensions::ProgramFamilies' name: Effect) or DistantTree.
+		// The logs' name of a source: Lighting, Utility, a program family's (Extensions::ProgramFamilies' name: Effect) or a draw family's
+		// (Extensions::DrawFamilies' name: DistantTree), the families' by their owned sourcePath (Request names a source by it).
 		const char* SourceLogName(const char* a_sourceName)
 		{
 			if (a_sourceName == kSourcePath)
@@ -415,13 +431,21 @@ namespace DCLF
 			for (const auto& family : Extensions::ProgramFamilies())
 				if (family.taken && family.sourcePath.c_str() == a_sourceName)
 					return family.name.c_str();
-			return "DistantTree";
+			for (const auto& family : Extensions::DrawFamilies())
+				if (family.taken && family.sourcePath.c_str() == a_sourceName)
+					return family.name.c_str();
+			return a_sourceName;
 		}
 
 		// A family's stages' bit in the stage cache's key (its slot's), 0 for none.
 		std::uint64_t StageKeyBitOf(Api::ProgramFamily a_family)
 		{
 			return a_family == Api::ProgramFamily::Count ? 0ull : ProgramFamilySlotOf(a_family).stageKeyBit;
+		}
+		// A draw family's stages' bit in the stage cache's key (its lane slot's), 0 for none.
+		std::uint64_t DrawStageKeyBitOf(Api::DrawFamily a_family)
+		{
+			return a_family == Api::DrawFamily::Count ? 0ull : DrawFamilyLaneSlotOf(a_family).stageKeyBit;
 		}
 
 		// Requests a_stage's compile; the completion callback fills it and pushes its key to StageCompletions.
@@ -520,14 +544,17 @@ namespace DCLF
 			bool pulled = false)
 		{
 			const bool utility = shader.shaderType.get() == RE::BSShader::Type::Utility;
-			const bool distantTree = shader.shaderType.get() == RE::BSShader::Type::DistantTree;
+			// A draw family's builds (its shader's: tree LOD's DistantTree.hlsl), pulled as its lane slot says, its slot's bit in the key.
+			const auto drawFamily = Extensions::DrawFamilyOfShader(static_cast<std::uint8_t>(shader.shaderType.get()));
+			const bool drawBuild = drawFamily != Api::DrawFamily::Count;
+			const auto d = static_cast<std::size_t>(drawFamily);
 			// A program family's builds (its shader's: the Effect port's Effect.hlsl), never pulled (FindFamily), its slot's bit in the key.
 			const auto family = Extensions::FamilyOfShader(static_cast<std::uint8_t>(shader.shaderType.get()));
 			const bool familyBuild = family != Api::ProgramFamily::Count;
 			const auto f = static_cast<std::size_t>(family);
-			pulled = !familyBuild && (pulled || utility || distantTree);
+			pulled = !familyBuild && (pulled || utility || (drawBuild && DrawFamilyLaneSlotOf(drawFamily).pulled));
 			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34) |
-			                          (std::uint64_t(pulled) << 35) | (std::uint64_t(distantTree) << 36) | StageKeyBitOf(family);
+			                          (std::uint64_t(pulled) << 35) | DrawStageKeyBitOf(drawFamily) | StageKeyBitOf(family);
 			{
 				std::lock_guard lock(mutex);
 				if (const auto found = stages.find(key); found != stages.end())
@@ -540,8 +567,8 @@ namespace DCLF
 				if (const auto found = stages.find(key); found != stages.end())
 					return found->second;
 			}
-			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()) || (distantTree && owner.distantTreeSource.empty()) ||
-				(familyBuild && owner.familySources[f].empty()) || (pulled && !utility && !distantTree && owner.pulledSource.empty()))
+			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()) || (drawBuild && owner.drawFamilySources[d].empty()) ||
+				(familyBuild && owner.familySources[f].empty()) || (pulled && !utility && !drawBuild && owner.pulledSource.empty()))
 				return {};
 			auto* compiler = RenderGraphRuntime::Get().ShaderCompiler();
 			if (configured != compiler) {
@@ -555,11 +582,11 @@ namespace DCLF
 			auto stage = std::make_shared<Stage>();
 			stage->key = key;
 			RequestStage(*compiler, stage,
-				utility ? owner.utilitySource : distantTree ? owner.distantTreeSource : familyBuild ? owner.familySources[f] : pulled ? owner.pulledSource : owner.source,
+				utility ? owner.utilitySource : drawBuild ? owner.drawFamilySources[d] : familyBuild ? owner.familySources[f] : pulled ? owner.pulledSource : owner.source,
 				owner.dependencies,
-				utility ? owner.utilityFingerprint : distantTree ? owner.distantTreeFingerprint : familyBuild ? owner.familyFingerprints[f] : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
+				utility ? owner.utilityFingerprint : drawBuild ? owner.drawFamilyFingerprints[d] : familyBuild ? owner.familyFingerprints[f] : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
 				shader, pixel, descriptor, depth, pulled,
-				utility ? kUtilitySourcePath : distantTree ? kDistantTreeSourcePath : familyBuild ? Extensions::ProgramFamilyOf(family).sourcePath.c_str() : kSourcePath);
+				utility ? kUtilitySourcePath : drawBuild ? Extensions::DrawFamilyOf(drawFamily).sourcePath.c_str() : familyBuild ? Extensions::ProgramFamilyOf(family).sourcePath.c_str() : kSourcePath);
 			{
 				std::lock_guard lock(mutex);
 				stages.emplace(key, stage);
@@ -742,17 +769,19 @@ namespace DCLF
 		return Found(slot.get(), a_failed);
 	}
 
-	const ShaderPrograms::TreeLodProgram* ShaderPrograms::FindTreeLod(RE::BSShader& a_distantTree, bool* a_failed)
+	const ShaderPrograms::DrawProgram* ShaderPrograms::FindDrawFamily(Api::DrawFamily a_family, RE::BSShader& a_shader, bool* a_failed)
 	{
 		if (!Enabled())
-			return Found<TreeLodEntry>(nullptr, a_failed);
-		if (!treeLodEntry)
-			MakeEntry(treeLodEntry, static_cast<std::uint8_t>(StageUser::TreeLod), 0, nullptr, laneStats.failed, [&](bool*) {
-				const std::uint32_t colour = kDistantTreeDeferred | kDistantTreeAlphaTest, depth = kDistantTreeDepth | kDistantTreeAlphaTest;
-				return std::array<StagePtr, 4>{ stages->Request(*this, a_distantTree, false, colour), stages->Request(*this, a_distantTree, true, colour),
-					stages->Request(*this, a_distantTree, false, depth), stages->Request(*this, a_distantTree, true, depth) };
+			return Found<DrawFamilyEntry>(nullptr, a_failed);
+		auto& slot = drawFamilyEntries[static_cast<std::size_t>(a_family)];
+		if (!slot)
+			MakeEntry(slot, static_cast<std::uint8_t>(DrawFamilyUser(a_family, false)), 0, nullptr, laneStats.failed, [&](bool*) {
+				const auto& descriptors = Extensions::DrawFamilyOf(a_family).contribution.program.descriptors;
+				const std::uint32_t colour = descriptors.colour, depth = descriptors.depth;
+				return std::array<StagePtr, 4>{ stages->Request(*this, a_shader, false, colour), stages->Request(*this, a_shader, true, colour),
+					stages->Request(*this, a_shader, false, depth), stages->Request(*this, a_shader, true, depth) };
 			});
-		return Found(treeLodEntry.get(), a_failed);
+		return Found(slot.get(), a_failed);
 	}
 
 	const ShaderPrograms::ForwardProgram* ShaderPrograms::FindForward(std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor, RE::BSShader& a_lighting,
@@ -771,16 +800,17 @@ namespace DCLF
 		return Found(slot.get(), a_failed);
 	}
 
-	const ShaderPrograms::ForwardProgram* ShaderPrograms::FindForwardTreeLod(RE::BSShader& a_distantTree, bool* a_failed)
+	const ShaderPrograms::ForwardProgram* ShaderPrograms::FindDrawFamilyForward(Api::DrawFamily a_family, RE::BSShader& a_shader, bool* a_failed)
 	{
 		if (!Enabled())
 			return Found<ForwardEntry>(nullptr, a_failed);
-		if (!forwardTreeLodEntry)
-			MakeEntry(forwardTreeLodEntry, static_cast<std::uint8_t>(StageUser::ForwardTreeLod), 0, nullptr, laneStats.failed, [&](bool*) {
-				return std::array<StagePtr, 2>{ stages->Request(*this, a_distantTree, false, kDistantTreeAlphaTest),
-					stages->Request(*this, a_distantTree, true, kDistantTreeAlphaTest) };
+		auto& slot = drawFamilyForwardEntries[static_cast<std::size_t>(a_family)];
+		if (!slot)
+			MakeEntry(slot, static_cast<std::uint8_t>(DrawFamilyUser(a_family, true)), 0, nullptr, laneStats.failed, [&](bool*) {
+				const std::uint32_t forward = Extensions::DrawFamilyOf(a_family).contribution.program.descriptors.forward;
+				return std::array<StagePtr, 2>{ stages->Request(*this, a_shader, false, forward), stages->Request(*this, a_shader, true, forward) };
 			});
-		return Found(forwardTreeLodEntry.get(), a_failed);
+		return Found(slot.get(), a_failed);
 	}
 
 	namespace
@@ -848,17 +878,43 @@ namespace DCLF
 		laneStats.fromCache.fetch_add(cached, std::memory_order_relaxed);
 	}
 
+	void ShaderPrograms::FinishDrawFamily(std::uint8_t a_user, Finished& a_finished)
+	{
+		const auto user = static_cast<StageUser>(a_user);
+		const auto f = DrawFamilyIndexOf(user);
+		const auto& family = Extensions::DrawFamilies()[f];
+		if (IsDrawFamilyForward(user)) {
+			// A forward view's program of the family's (tree LOD's: DistantTree's forward descriptor).
+			FinishEntry(*drawFamilyForwardEntries[f], nullptr, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+				if (loggedFailures++ < kMaxLoggedFailures)
+					logger::warn("[DCLF] SPIR-V build of the forward {} {} failed:\n{}", family.name, a_stage ? "PS" : "VS", a_artifact.diagnostics.substr(0, 1500));
+			});
+			a_finished.drawFamilyForward[f] = true;
+			return;
+		}
+		// The family's programs: its four stages (tree LOD's: DistantTree's).
+		auto& entry = *drawFamilyEntries[f];
+		FinishEntry(entry, nullptr, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+			static constexpr const char* kStages[] = { "VS", "PS", "VS (depth)", "PS (depth)" };
+			logger::warn("[DCLF] SPIR-V build of {} {} failed; {}:\n{}", family.name, kStages[a_stage], family.nativeNote, a_artifact.diagnostics.substr(0, 1500));
+		});
+		if (entry.program)
+			logger::info("[DCLF] {} programs ready ({}, pulled)", family.label, family.name);
+		a_finished.drawFamily[f] = true;
+	}
+
 	void ShaderPrograms::UpdateLane(Finished& a_finished)
 	{
 		FanOut(stages->waiting, stages->ready, [&](const StageWaiter& a_waiter) -> std::uint8_t& {
 			switch (a_waiter.user) {
 			case StageUser::Shadow: return shadowEntries.find(static_cast<std::uint32_t>(a_waiter.id))->second->remaining;
-			case StageUser::TreeLod: return treeLodEntry->remaining;
 			case StageUser::Forward: return forwardEntries.find(a_waiter.id)->second->remaining;
-			case StageUser::ForwardTreeLod: return forwardTreeLodEntry->remaining;
 			case StageUser::Lighting: return entries.find(a_waiter.id)->second->remaining;
 			default: break;
 			}
+			if (IsDrawFamilyUser(a_waiter.user))
+				return IsDrawFamilyForward(a_waiter.user) ? drawFamilyForwardEntries[DrawFamilyIndexOf(a_waiter.user)]->remaining :
+				                                            drawFamilyEntries[DrawFamilyIndexOf(a_waiter.user)]->remaining;
 			return familyEntries[FamilyIndexOf(a_waiter.user)].find(a_waiter.id)->second->remaining;
 		});
 		for (const auto& waiter : std::exchange(stages->ready, {})) {
@@ -879,36 +935,22 @@ namespace DCLF
 					a_finished.shadow.push_back(technique);
 				}
 				continue;
-			case StageUser::TreeLod:
-				// Tree LOD's programs: DistantTree's four stages.
-				FinishEntry(*treeLodEntry, nullptr, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
-					static constexpr const char* kStages[] = { "VS", "PS", "VS (depth)", "PS (depth)" };
-					logger::warn("[DCLF] SPIR-V build of DistantTree {} failed; tree LOD stays native:\n{}", kStages[a_stage], a_artifact.diagnostics.substr(0, 1500));
-				});
-				if (treeLodEntry->program)
-					logger::info("[DCLF] tree LOD programs ready (DistantTree, pulled)");
-				a_finished.treeLod = true;
-				continue;
 			case StageUser::Forward:
-			case StageUser::ForwardTreeLod:
-				{
-					// The forward views' programs: a Lighting pair, or tree LOD's.
-					const bool tree = waiter.user == StageUser::ForwardTreeLod;
-					FinishEntry(tree ? *forwardTreeLodEntry : *forwardEntries.find(id)->second, nullptr, laneStats.failed,
-						[&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
-							if (loggedFailures++ < kMaxLoggedFailures)
-								logger::warn("[DCLF] SPIR-V build of the forward {} {} failed:\n{}", tree ? std::string("DistantTree") : fmt::format("Lighting VS {:08X} PS {:08X}", vertex, pixel),
-								a_stage ? "PS" : "VS", a_artifact.diagnostics.substr(0, 1500));
-						});
-					if (tree)
-						a_finished.forwardTreeLod = true;
-					else
-						a_finished.forward.push_back(id);
-				}
+				// The forward views' programs: a Lighting pair (a draw family's: FinishDrawFamily).
+				FinishEntry(*forwardEntries.find(id)->second, nullptr, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+					if (loggedFailures++ < kMaxLoggedFailures)
+						logger::warn("[DCLF] SPIR-V build of the forward {} {} failed:\n{}", fmt::format("Lighting VS {:08X} PS {:08X}", vertex, pixel), a_stage ? "PS" : "VS",
+							a_artifact.diagnostics.substr(0, 1500));
+				});
+				a_finished.forward.push_back(id);
 				continue;
 			case StageUser::Lighting:
 				break;
 			default:
+				if (IsDrawFamilyUser(waiter.user)) {
+					FinishDrawFamily(static_cast<std::uint8_t>(waiter.user), a_finished);
+					continue;
+				}
 				{
 					// A program family's vertex and pixel stages (the Effect port's Effect.hlsl), a Program of those two alone; its id's
 					// vertex part without the family's program-id bit.

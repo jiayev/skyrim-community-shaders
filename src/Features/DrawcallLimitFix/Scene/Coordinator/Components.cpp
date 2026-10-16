@@ -165,26 +165,26 @@ namespace DCLF::Api
 
 	const CoordinatorComponentContext::EntryRangesMap& CoordinatorComponentContext::EntryRanges() const
 	{
-		return coordinator.lodRanges;
+		return coordinator.entryRanges;
 	}
 
-	const std::vector<LodSegments::Range>* CoordinatorComponentContext::EntryRangesOf(const void* a_entry) const
+	const std::vector<EntryRange>* CoordinatorComponentContext::EntryRangesOf(const void* a_entry) const
 	{
-		return coordinator.LodRangesOf(static_cast<const RE::BSGeometry*>(a_entry));
+		return coordinator.EntryRangesOf(static_cast<const RE::BSGeometry*>(a_entry));
 	}
 
-	const std::vector<LodSegments::Range>* CoordinatorComponentContext::MirroredRanges(const void* a_entry) const
+	const std::vector<EntryRange>* CoordinatorComponentContext::MirroredRanges(const void* a_entry) const
 	{
 		const auto* record = coordinator.mirror.Geometry(a_entry);
-		return record ? &record->segments : nullptr;
+		return record ? &record->ranges : nullptr;
 	}
 
-	void CoordinatorComponentContext::SetEntryRanges(const void* a_entry, std::vector<LodSegments::Range>&& a_ranges, bool a_rewrite) const
+	void CoordinatorComponentContext::SetEntryRanges(const void* a_entry, std::vector<EntryRange>&& a_ranges, bool a_rewrite) const
 	{
 		auto* geometry = static_cast<RE::BSGeometry*>(const_cast<void*>(a_entry));
 		if (a_rewrite)
 			coordinator.pendingEvaluation.push_back(geometry);
-		coordinator.lodRanges[geometry] = std::move(a_ranges);
+		coordinator.entryRanges[geometry] = std::move(a_ranges);
 	}
 
 	Mark CoordinatorComponentContext::MarkRoot(const void* a_key, std::uint64_t a_token, std::uint8_t a_side, bool a_ownHide) const

@@ -467,12 +467,42 @@ namespace DCLF
 		}
 	}
 
+	namespace
+	{
+		/** @brief This frame's cascades from DCLF's views (the Sun board). Render thread, after the sun's UpdateCamera; empty without views. */
+		void GpuCascades(std::vector<GpuCascade>& a_out)
+		{
+			// This frame's cascades, whether or not the entry exclusion ran: the colour pass's sun test needs them every frame (without them
+			// every pass with the sun's bits would miss, and draw unshadowed). From DCLF's own views (the Sun board, from the cameras UpdateCamera
+			// set up for the sun this frame), so the test does not depend on the engine's Accumulate running. None when UpdateCamera did not
+			// run for the sun this frame (the sun does not draw: an interior), when the engine gives no pass the sun's bits either. Each
+			// cascade's planes are those Accumulate's hook copies from the same views (the bits' cascades), in descriptor order.
+			a_out.clear();
+			const auto& views = ShadowCameras::Sun();
+			const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
+			if (!views.valid || views.sceneFrame != frame)
+				return;
+			for (std::uint32_t d = 0; d < views.count && d < views.cascades.size(); ++d) {
+				const auto* cascade = ShadowCameras::Sun().CascadeOf(d, frame);
+				if (!cascade)
+					continue;
+				auto& out = a_out.emplace_back();
+				for (std::uint32_t p = 0; p < 6; ++p) {
+					std::memcpy(out.planes[p], cascade->cull.plane[p].data(), sizeof(float) * 4);
+					std::memcpy(out.planes[6 + p], cascade->caster.plane[p].data(), sizeof(float) * 4);
+				}
+				out.masks[0] = cascade->cull.mask;
+				out.masks[1] = cascade->caster.mask;
+			}
+		}
+	}
+
 	// The colour pass's cascades and local shadow volumes (the sun has accumulated, shadow maps are drawn), clamped to the latch
 	// the producer sized (ReserveMainLatch).
 	void IndirectDraws::Impl::CommitShadowInputs(bool a_depthOnly, const PassFrame& a_shape, std::uint32_t a_revisionEpoch)
 	{
 		if (!a_depthOnly) {
-			SunAccumulation::Get().GpuCascades(sunCascades);
+			GpuCascades(sunCascades);
 			// Frames with no cascades draw sun-lit passes unshadowed (right only when the sun did not accumulate).
 			sunTestEmpty += sunCascades.empty() ? 1 : 0;
 			if (sunTestWindow.Tick())

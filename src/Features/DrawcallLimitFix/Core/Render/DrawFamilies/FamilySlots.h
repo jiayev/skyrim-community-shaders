@@ -1,13 +1,13 @@
 #pragma once
 
 // Core's fixed slot per draw family (Api::DrawFamily): what Core reserves for each, whichever feature takes it. The family's catalog
-// pipelines are the pipeline lane's (DrawPipelines: its depth and colour pair, TreeLodPipelinesOf, and a view's forward pipeline by the
-// slot's key flags), its main pass points are the main extension's and MainOpaquePass's (the stages around its draws at the depth
-// segment's GpuStageSlots), its faces' points the view epochs' (ViewEpochRecord.cpp), its part of the revisions' shapes key the trees
-// view's key group (MixViewShapesKey), its ownership PassCapture's (IndirectDraws::DecideDrawFamilies publishes the feature's decision),
-// and its pipelines' publication the scene's (SceneBuffers::familyPipelines). A new family is the enum value, its slot here and its
-// pipelines on the lane, then the feature's registration (Extensions::DrawFamilies). The TreeInstances family's GPU layout is
-// TreeInstancesLayout.h.
+// pipelines are the pipeline lane's (DrawPipelines: its depth and colour pair, CatalogFamilyPipelines, and a view's forward pipeline by
+// the slot's key flags; the lane's part of the slot is Core/Gpu/Pipelines/DrawFamilyLaneSlots.h), its main pass points are the main
+// extension's and MainOpaquePass's (the stages around its draws at the depth segment's GpuStageSlots), its faces' points the view
+// epochs' (ViewEpochRecord.cpp), its part of the revisions' shapes key the trees view's key group (MixViewShapesKey), its ownership
+// PassCapture's (IndirectDraws::DecideDrawFamilies publishes the feature's decision), and its pipelines' publication the scene's
+// (SceneBuffers::familyPipelines). A new family is the enum value, its slot here and its lane slot, then the feature's registration
+// (Extensions::DrawFamilies). The TreeInstances family's GPU layout is TreeInstancesLayout.h.
 // Part of IndirectDraws' implementation: included by Internal.h after Views/ViewSlots.h.
 
 namespace DCLF::Draws
@@ -25,7 +25,7 @@ namespace DCLF::Draws
 		std::uint32_t lodRoot;
 	};
 	inline constexpr std::array<FamilySlot, Extensions::kDrawFamilies> kFamilySlots = { {
-		{ Api::DrawFamily::TreeInstances, ForwardPipelineKey::kForwardTreeLod, "tree-lod-cull", PassCapture::kTreeRoot },
+		{ Api::DrawFamily::TreeInstances, DrawFamilyLaneSlotOf(Api::DrawFamily::TreeInstances).forwardFlags, "tree-lod-cull", PassCapture::kTreeRoot },
 	} };
 	static_assert(kFamilySlots[static_cast<std::size_t>(Api::DrawFamily::TreeInstances)].family == Api::DrawFamily::TreeInstances, "kFamilySlots is by family");
 
@@ -42,7 +42,7 @@ namespace DCLF::Draws
 	}
 
 	/** @brief a_family's pipelines as the lane published them for the passes (DrawFamilyFrame::Pipelines; null: none yet). Any thread. */
-	inline std::shared_ptr<const TreeLodPipelines> FamilyPipelinesOf(const SceneBuffers& a_scene, Api::DrawFamily a_family)
+	inline std::shared_ptr<const FamilyPipelines> FamilyPipelinesOf(const SceneBuffers& a_scene, Api::DrawFamily a_family)
 	{
 		return a_scene.familyPipelines[static_cast<std::size_t>(a_family)].load(std::memory_order_acquire);
 	}

@@ -6,8 +6,8 @@
 // calls the hooks, and the registry (EntryClassTaken).
 
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
+#include "Features/DrawcallLimitFix/Api/EntryRanges.h"
 #include "Features/DrawcallLimitFix/Api/MainRanges.h"
-#include "Features/DrawcallLimitFix/Core/Engine/LodSegments.h"
 
 #include <ankerl/unordered_dense.h>
 
@@ -110,17 +110,18 @@ namespace DCLF::Api
 		/** @brief The pass's stamp (Coordinator::PassStamp: never 0), for a check run once a pass. */
 		std::uint32_t PassStamp() const;
 
-		// The drawn index ranges the coordinator keeps by tracked entry (object LOD's sub-index shapes: the attach's capture, then their
-		// events), which the walk reads as data (each range a geometry slot of the entry's chain); erased with the entry.
-		using EntryRangesMap = ankerl::unordered_dense::map<const RE::BSGeometry*, std::vector<LodSegments::Range>>;
+		// The drawn index ranges the coordinator keeps by tracked entry (a ranged geometry type's, Api::GeometryTypeContribution::ranges:
+		// object LOD's sub-index shapes: the attach's capture, then their events), which the walk reads as data (each range a geometry slot
+		// of the entry's chain); erased with the entry.
+		using EntryRangesMap = ankerl::unordered_dense::map<const RE::BSGeometry*, std::vector<EntryRange>>;
 		/** @brief Every entry's kept ranges. */
 		const EntryRangesMap& EntryRanges() const;
 		/** @brief a_entry's kept ranges; null when it keeps none (not a tracked entry with ranges: only such a key is known alive). */
-		const std::vector<LodSegments::Range>* EntryRangesOf(const void* a_entry) const;
-		/** @brief The ranges the mirror's record of a_entry holds (SceneCapture::GeometryRecord::segments; null: no record). */
-		const std::vector<LodSegments::Range>* MirroredRanges(const void* a_entry) const;
+		const std::vector<EntryRange>* EntryRangesOf(const void* a_entry) const;
+		/** @brief The ranges the mirror's record of a_entry holds (SceneCapture::GeometryRecord::ranges; null: no record). */
+		const std::vector<EntryRange>* MirroredRanges(const void* a_entry) const;
 		/** @brief a_entry's kept ranges replaced; a_rewrite: its record (its range slot chain) is written again this walk. */
-		void SetEntryRanges(const void* a_entry, std::vector<LodSegments::Range>&& a_ranges, bool a_rewrite) const;
+		void SetEntryRanges(const void* a_entry, std::vector<EntryRange>&& a_ranges, bool a_rewrite) const;
 
 		// The marks on scene roots (Api::Mark), the coordinator's map read as data by the prepares (written only while the mirror's events
 		// are applied, before the adds).

@@ -201,7 +201,7 @@ namespace DCLF
 		std::uint32_t lodFades;
 		// Tree animation (technique 12): per object, so not in the pipeline's shared PerGeometry block.
 		ObjectTreeAnim tree;
-		// Skinning (kObjectSkinned): current and previous palette rows in the frame's palettes (VS t122, DCLFPalettes; PaletteRowsOf)
+		// Skinning (kObjectPaletteBlock): current and previous palette rows in the frame's palettes (VS t122, DCLFPalettes; PaletteRowsOf)
 		// and the row count (three a bone). Absolute, like World. 0/0/0 otherwise.
 		std::uint32_t boneOffset;
 		std::uint32_t previousBoneOffset;

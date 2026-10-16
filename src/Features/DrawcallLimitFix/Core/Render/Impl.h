@@ -334,7 +334,7 @@ namespace DCLF
 		bool loggedFrameConstants = false;
 
 		// The sun cascades the colour commit's BuildDraws tests against (its latch's).
-		std::vector<SunAccumulation::GpuCascade> sunCascades;
+		std::vector<GpuCascade> sunCascades;
 		// The local shadow lights its BuildDraws selected against (LocalShadowLights), and their volumes as uploaded.
 		LocalShadowLights localShadows;
 		std::vector<GpuShadowVolume> shadowVolumes;
@@ -384,9 +384,9 @@ namespace DCLF
 		void SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index);
 		std::string RevisionReport();
 		ShapesKey RevisionShapesKey(const NamedVersions& a_sealed, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups,
-			std::size_t a_pipelines, const TreeLodPipelines* a_treeLod) const;
+			std::size_t a_pipelines, const FamilyPipelines* a_treeLod) const;
 		/** @brief RevisionShapesKey's views' part: each view's inputs into its slot's key group, tree LOD's, the DropWhenOff views' toggles. */
-		void MixViewShapesKey(ShapesKeyMixer& a_mixer, const TreeLodPipelines* a_treeLod) const;
+		void MixViewShapesKey(ShapesKeyMixer& a_mixer, const FamilyPipelines* a_treeLod) const;
 		/**
 		 * @brief Whether the last shadow and occlusion shapes hold a_bounds (capacities and buckets enough, no row at the bucket words
 		 * they were made for). Capacities only grow, so a shape remade from a bound they hold is the same shape.

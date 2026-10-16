@@ -1,23 +1,21 @@
-// Billboards: the billboard row (SampleRow, FrameValues' producer inside the engine-read window) and the face mode (FaceMode, the scene
-// capture's). The CPU port of the engine's turn is the feature's (Features/Billboards, Orient: for its parity).
+// BillboardRow: the billboard row (SampleBillboardRow, FrameValues' producer inside the engine-read window) and the face mode
+// (BillboardFaceMode, the scene capture's). The CPU port of the engine's turn is the feature's (Features/Billboards, Orient: for its parity).
 
-#include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/PlacementRows/BillboardRow.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
-#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 
 #include <cmath>
 
-namespace DCLF::Billboards
+namespace DCLF::PlacementRows
 {
-	std::uint32_t FaceMode(const void* a_node)
+	std::uint32_t BillboardFaceMode(const void* a_node)
 	{
 		return Engine::At<std::uint16_t>(a_node, 0x128) & 7u;
 	}
 
-	bool SampleRow(const RE::BSGeometry& a_geometry, BindlessPlacement& a_out)
+	bool SampleBillboardRow(const RE::BSGeometry& a_geometry, BindlessPlacement& a_out)
 	{
 		static const REL::Relocation<const RE::NiRTTI*> effectRtti{ RE::BSEffectShaderProperty::Ni_RTTI };
 		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();

@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/FrameDriver.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/RegistrationCensus.h"
 
 #include "Deferred.h"
@@ -101,10 +102,15 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 		for (const auto& sample : leaks.samples)
 			samples += fmt::format("{}{}", samples.empty() ? "" : ", ", sample);
 		const auto leaked = leaks.leakedInDepth + leaks.leakedInOpaque;
+		// By taken draw family: its engine shapes' passes withheld (tree LOD's).
+		std::string familiesWithheld;
+		for (std::size_t f = 0; f < DCLF::Extensions::kDrawFamilies; ++f)
+			if (const auto& family = DCLF::Extensions::DrawFamilies()[f]; family.taken)
+				familiesWithheld += fmt::format("; {} {} passes withheld", capture.familyWithheld[f], family.label);
 		logger::info("[DCLF] main camera since the last report: {} native passes drawn, {} of them set members' ({} depth, {} opaque){}{}; last frame's registrations: {} "
-					 "member passes withheld; {} tree LOD passes withheld",
+					 "member passes withheld{}",
 			leaks.offered, leaked, leaks.leakedInDepth, leaks.leakedInOpaque, leaked ? " <- LEAK" : " <- OK", samples.empty() ? "" : "; first: " + samples,
-			capture.mainWithheld, capture.treeLodWithheld);
+			capture.mainWithheld, familiesWithheld);
 		leaks = {};
 	}
 	// What the GPU spent on each segment, measured by the graph itself; the menu shows the latest window.
@@ -120,13 +126,17 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 		logger::info("[DCLF] SPIR-V programs: {} requested, {} ready ({} stages from cache), {} failed; shadow (Utility): {} requested, {} ready, {} failed",
 			shaders.requested, shaders.ready, shaders.fromCache, shaders.failed, shaders.shadowRequested, shaders.shadowReady, shaders.shadowFailed);
 		const auto& indirect = DCLF::DrawPipelines::Get().GetStats();
+		// Each taken draw family's lane ("tree LOD (lane): ..."), in family order.
+		std::string familyLanes;
+		for (const auto& family : indirect.drawFamilies)
+			if (family.label)
+				familyLanes += fmt::format("{} (lane): {} requested, {} built, {} failed{}, frames waited {}; ", family.label, family.requested, family.ready, family.failed,
+					family.failed ? " <- FAILED" : "", family.waits);
 		logger::info("[DCLF] indirect pipelines: {} requested, {} in the set, {} failed ({} Z-prepass pipelines, {} without a pixel stage); target changes {}; shadow: {} requested, {} in the set, {} failed; "
-					 "set versions published {} (waited {} frames), shadow {} (waited {}); tree LOD (lane): {} requested, {} built, {} failed{}, frames waited {}; forward (lane): {} "
-					 "requested, {} built, {} failed{}, frames waited {}",
+					 "set versions published {} (waited {} frames), shadow {} (waited {}); {}forward (lane): {} requested, {} built, {} failed{}, frames waited {}",
 			indirect.requested, indirect.ready, indirect.failed, indirect.zPipelines, indirect.zDepthOnly, indirect.targetChanges, indirect.shadowRequested, indirect.shadowReady, indirect.shadowFailed,
-			indirect.setPublishes, indirect.setWaits, indirect.shadowSetPublishes, indirect.shadowSetWaits, indirect.treeLodRequested, indirect.treeLodReady, indirect.treeLodFailed,
-			indirect.treeLodFailed ? " <- FAILED" : "", indirect.treeLodWaits, indirect.forwardRequested, indirect.forwardReady, indirect.forwardFailed,
-			indirect.forwardFailed ? " <- FAILED" : "", indirect.forwardWaits);
+			indirect.setPublishes, indirect.setWaits, indirect.shadowSetPublishes, indirect.shadowSetWaits, familyLanes, indirect.forwardRequested, indirect.forwardReady,
+			indirect.forwardFailed, indirect.forwardFailed ? " <- FAILED" : "", indirect.forwardWaits);
 		// The constant tables the builds pack by are the lane's (DCLF's modules reflected); ShaderCache's are the observers'.
 		DCLF::Reports::ConstantTableLines();
 		const auto& draws = DCLF::IndirectDraws::Get().GetStats();

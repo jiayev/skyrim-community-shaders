@@ -10,9 +10,10 @@ namespace DCLF::Scene
 {
 	struct CoordinatorEvents
 	{
-		// Object LOD (dclf-lod.md): each tracked BSSubIndexTriShape's drawn index ranges, from its attach's capture, then as its channel's
-		// component sets them (Api::CoordinatorComponentContext::SetEntryRanges: Features/Lod's segment events).
-		ankerl::unordered_dense::map<const RE::BSGeometry*, std::vector<LodSegments::Range>> lodRanges;
+		// Each tracked entry of a ranged geometry type's drawn index ranges (Api::GeometryTypeContribution::ranges; object LOD's
+		// BSSubIndexTriShapes, dclf-lod.md), from its attach's capture, then as its channel's component sets them
+		// (Api::CoordinatorComponentContext::SetEntryRanges: Features/Lod's segment events).
+		ankerl::unordered_dense::map<const RE::BSGeometry*, std::vector<Api::EntryRange>> entryRanges;
 		// The structural events (SceneEvents) ApplyEvents applies: properties by key, nodes held.
 		std::vector<const void*> propertyChanged;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodeChanged;

@@ -373,7 +373,7 @@ namespace DCLF
 				std::memcpy(reinterpret_cast<std::byte*>(&a_out) + std::size_t(family.recordWord) * 4, words.data(), sizeof(words));
 			}
 		// Skinning: the palette block's rows in the frame's palettes (FrameValues, PaletteRowsOf).
-		const bool skinned = (object.flags & kObjectSkinned) && a_objectIndex < a_tables.boneOffset.size();
+		const bool skinned = (object.flags & kObjectPaletteBlock) && a_objectIndex < a_tables.boneOffset.size();
 		const auto palette = skinned ? PaletteRowsOf(a_tables.boneOffset[a_objectIndex], a_tables.boneRows[a_objectIndex]) : PaletteRows{};
 		a_out.boneOffset = palette.current;
 		a_out.previousBoneOffset = palette.previous;
