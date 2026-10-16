@@ -50,7 +50,7 @@ namespace DCLF::GeometryPort
 		float worldMapVS[4]{};
 		float worldMapPS[4]{};
 		// PS AmbientSpecularTintAndFresnelPower (6) for passes whose raw technique has AmbientSpecular (0x20000; every True PBR pass
-		// gains it in True PBR's hook): not vanilla SetupGeometry's but SSE Engine Fixes' BSLightingAmbientSpecular fix, which patches
+		// gains it by the pass rules' raw rule, Integrations/TruePBR's): not vanilla SetupGeometry's but SSE Engine Fixes' BSLightingAmbientSpecular fix, which patches
 		// SetupGeometry before its Specular test (around 0x1414ddb5c) to copy BSShaderManager::State+0xfc (0x14203315c: the tint, then
 		// the Fresnel power; written with the directional ambient by FUN_141480340) over PerGeometry PS 6. ambientSpecularFix: the
 		// patch is there (SetupGeometry's bytes around the site differ from the engine's).
@@ -96,8 +96,9 @@ namespace DCLF::GeometryPort
 	void RefreshFrameValues(std::uint32_t a_passDescriptor, const PipelineFrame& a_frame, GeometryConstants& a_inOut);
 
 	/**
-	 * @brief Whether SetupGeometry (0x1414dd040) writes VS EyePosition for a pass descriptor: its rule on the raw technique, so True
-	 * PBR's hook (TruePBR.cpp: a TruePbr pass gains AmbientSpecular, 0x20000) included. LightingConstants.h's WritesEyePosition reads
+	 * @brief Whether SetupGeometry (0x1414dd040) writes VS EyePosition for a pass descriptor: its rule on the raw technique, so the
+	 * pass rules' raw rule (Api::LightingPassRules; Integrations/TruePBR's: a TruePbr pass gains AmbientSpecular, 0x20000) included.
+	 * LightingConstants.h's WritesEyePosition reads
 	 * the pass descriptor, which has no AmbientSpecular for a TruePbr pass, so it misses those.
 	 */
 	bool PassWritesEyePosition(std::uint32_t a_passDescriptor);

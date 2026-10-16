@@ -15,6 +15,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -134,7 +135,7 @@ namespace DCLF
 
 		bool PulledMaterialTexture(std::uint32_t a_register)
 		{
-			return (a_register < kPixelTextureSlots && a_register != kShadowMaskSlot) || FeatureMaterialSlot(a_register) >= 0;
+			return (a_register < kPixelTextureSlots && a_register != kShadowMaskSlot) || Extensions::FeatureTextureSlotOf(a_register) >= 0;
 		}
 
 		// PulledLightingSource's output, and the block it is in.

@@ -1,5 +1,5 @@
 // Advanced Skin's wetness field: its membership hook (the actors' index, from the publications' writes) and its capture (each actor's
-// value at the frame's start, fanned out). Render thread.
+// value at the frame's start, fanned out). Render thread. Its material textures are SkinTextures.cpp's.
 
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/AdvancedSkin.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
@@ -59,6 +59,8 @@ namespace DCLF::Integrations::AdvancedSkin
 			// Features/Actors' class, registered published whatever its toggle.
 			a_context.RegisterShadingField({ .name = "wetness", .field = Api::ShadingRowField::SkinPerGeometry, .members = Api::EntryClass::ActorOwned,
 				.membership = &Membership, .capture = &Capture });
+			// Its t71/t74 hook on SetupMaterial and SkinPerGeometry's per-draw buffer (SkinTextures.cpp).
+			InstallMaterialTextures(a_context);
 		}
 	}
 

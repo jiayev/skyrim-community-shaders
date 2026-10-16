@@ -16,9 +16,6 @@
 
 #include <cassert>
 
-#include "Features/ExtendedTranslucency.h"
-#include "Features/SubsurfaceScattering.h"
-
 namespace DCLF::Scene
 {
 	namespace
@@ -39,38 +36,6 @@ namespace DCLF::Scene
 			return flags;
 		}
 
-		/**
-		 * @brief Subsurface Scattering's IsBeastRace (BSLightingShader_SetupSkin) for a face property (kFace or kFaceGenRGBTint), from the
-		 * node record (BeastOf). Lighting.hlsl reads it only under SKIN.
-		 */
-		bool BeastRaceFace(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf)
-		{
-			using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-			const auto& sss = globals::features::subsurfaceScattering;
-			if (!sss.loaded || !sss.isBeastRaceKeyword || !(a_property.flags & (static_cast<std::uint64_t>(Flag::kFace) | static_cast<std::uint64_t>(Flag::kFaceGenRGBTint))))
-				return false;
-			return a_leaf.node->beast;
-		}
-
-		/** @brief ExtendedTranslucency::MaterialModelOf, from the records. */
-		std::uint32_t TranslucencyModelOf(const SceneCapture::LeafView& a_leaf)
-		{
-			using Model = ExtendedTranslucency::MaterialModel;
-			const auto* alpha = a_leaf.alpha && a_leaf.alpha->rtti == globals::rtti::NiAlphaPropertyRTTI.get() ? a_leaf.alpha : nullptr;
-			const auto* light = a_leaf.property && a_leaf.property->rtti == globals::rtti::BSLightingShaderPropertyRTTI.get() ? a_leaf.property : nullptr;
-			// Only blended geometry: an alpha property that blends, or a Lighting property's alpha below one.
-			if (!(light && light->alpha < 0.999f) && (!alpha || !(alpha->flags & 1u)))
-				return Model::DescriptorDisabled;
-			const auto value = a_leaf.geometry->anisotropic;
-			if (value == SceneCapture::GeometryRecord::kNoExtra) {
-				const auto& feature = globals::features::extendedTranslucency;
-				return !feature.settings.SkinnedOnly || a_leaf.geometry->skin ? Model::DescriptorUseDefault : Model::DescriptorDisabled;
-			}
-			if (value == SceneCapture::GeometryRecord::kWrongExtra)
-				return Model::DescriptorDisabled;
-			const auto material = static_cast<std::uint32_t>(value) & ExtendedTranslucency::ExtraFeatureDescriptorMask;
-			return material == Model::Disabled ? Model::DescriptorDisabled : material;
-		}
 	}
 
 	const AccumulatedPass* Coordinator::FindAccumulatedPass(const RE::BSGeometry* a_geometry) const
@@ -356,11 +321,9 @@ namespace DCLF::Scene
 					if ((descriptors.decalGroup == 2 || descriptors.forward) && alphaBlending &&
 						static_cast<RE::NiAlphaProperty::AlphaFunction>((alpha->flags >> 5) & 0xF) == RE::NiAlphaProperty::AlphaFunction::kOne)  // GetDestBlendMode
 						permutation.extraShaderDescriptor |= static_cast<std::uint32_t>(State::ExtraShaderDescriptors::AdditiveLighting);
-					// Extended Translucency's material model, as its SetupGeometry hook sets it (the key carries it).
-					permutation.extraFeatureDescriptor = globals::features::extendedTranslucency.loaded ?
-					                                         (ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ RasterTranslucency(key.rasterFlags))
-					                                             << ExtendedTranslucency::ExtraFeatureDescriptorShift :
-					                                         0u;
+					// The Lighting key bits' feature word, as their claimant's SetupGeometry hook sets it (the key carries the bits;
+					// Integrations/ExtendedTranslucency's material model).
+					permutation.extraFeatureDescriptor = Extensions::LightingKeyPermutation(RasterLightingSpare(key.rasterFlags));
 					// A raw-permutation port's pass, as BSShader_BeginTechnique sets it (the Effect port's): raw vertex descriptor (Effect.hlsl
 					// tests SkyObject), the raw pixel bits the lookup dropped (GrayscaleToColor/ToAlpha, IgnoreTexAlpha), InWorld, no feature bits.
 					if (rules.rawPermutation) {
@@ -843,6 +806,8 @@ namespace DCLF::Scene
 		r.kind = JoinResult::Kind::Joined;
 		if (r.classified) {
 			const auto& descriptors = r.descriptors;
+			// What the Lighting join rules read (Api::LightingJoinView; read for Lighting keys only).
+			const Api::LightingJoinView view{ *propertyRecord, r.leaf, r.leaf.geometry->extraValue, r.leaf.node->facts, propertyRecord->contributorBits };
 			using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
 			const bool twoSided = (propertyRecord->flags & static_cast<std::uint64_t>(PropertyFlag::kTwoSided)) != 0;
 			// A layer's draws apply no alpha property (render flags 0x41, engine notes).
@@ -866,8 +831,9 @@ namespace DCLF::Scene
 				rasterFlags |= (decalBiasMode[descriptors.forwardDecalGroup & 3] & 15u) << kRasterDepthBiasShift;
 			if (descriptors.refraction)
 				rasterFlags |= PackRefractionRasterFlags(descriptors.refractionFalloff, descriptors.refractionClamp);
-			if (globals::features::extendedTranslucency.loaded && !descriptors.port)
-				rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ TranslucencyModelOf(r.leaf)) & 7u) << kRasterTranslucencyShift;
+			// The Lighting key bits' claimant's (Integrations/ExtendedTranslucency's material model; 0 while it isn't loaded).
+			if (!descriptors.port)
+				rasterFlags |= Extensions::LightingKeyBitsOf(view) << kRasterLightingSpareShift;
 			// A port's key carries its program family's key bit (the Effect port's kRasterEffect; none for Lighting's).
 			const auto& family = Extensions::FamilyRulesOfKind(descriptors.port);
 			rasterFlags |= family.keyBit;
@@ -892,7 +858,7 @@ namespace DCLF::Scene
 			                (descriptors.terrainGroup << kObjectTerrainGroupShift) |
 			                (descriptors.forward ? kObjectForward : 0u) |
 			                (!descriptors.port && (propertyRecord->flags & LandscapeLightFlags()) ? kObjectLandscapeLights : 0u) |
-			                (!descriptors.port && BeastRaceFace(*propertyRecord, r.leaf) ? kObjectBeastRace : 0u);
+			                (!descriptors.port ? Extensions::LightingObjectFlagsOf(view) : 0u);  // Integrations/SubsurfaceScattering's kObjectBeastRace
 		}
 		// The ancestor value (Light Limit Fix's room), when the ancestor map moved on (read-only here).
 		if (Extensions::AncestorValueOn() && entry.ancestorMapGeneration != ancestorMapGeneration) {

@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -29,8 +30,7 @@ namespace DCLF::MaterialSources
 	namespace
 	{
 		// Pass descriptor flags (ShaderCache.h LightingShaderFlags) that decide which frame-sourced groups
-		// SetupMaterial writes.
-		constexpr std::uint32_t kTruePbr = 1u << 3;
+		// SetupMaterial writes (with the material contributors' own: Extensions::MaterialSignatureBits, TruePBR's TruePbr).
 		constexpr std::uint32_t kAmbientSpecular = 1u << 17;
 		constexpr std::uint32_t kSnow = 1u << 21;
 		constexpr std::uint32_t kCharacterLight = 1u << 22;
@@ -83,7 +83,7 @@ namespace DCLF::MaterialSources
 
 	std::uint32_t Signature(std::uint32_t a_passDescriptor)
 	{
-		std::uint32_t signature = a_passDescriptor & (kTruePbr | kAmbientSpecular | kSnow | kCharacterLight);
+		std::uint32_t signature = a_passDescriptor & (kAmbientSpecular | kSnow | kCharacterLight | Extensions::MaterialSignatureBits());
 		const std::uint32_t technique = (a_passDescriptor >> 24) & 0x3f;
 		if (technique == 8 || technique == 0x13)
 			signature |= 1u << 24;  // MTLand, MTLandLODBlend: LODTexParams.z, the snow flags
@@ -189,9 +189,9 @@ namespace DCLF::MaterialSources
 		if (vanilla.characterLightTarget >= 0 && static_cast<std::uint32_t>(vanilla.characterLightTarget) < MaterialPort::kVanillaRenderTargets)
 			if (auto* view = vanilla.renderTargetViews[static_cast<std::size_t>(vanilla.characterLightTarget)])
 				return view;
-		const auto& feature = a_frame.feature;
-		if (feature.characterLightTarget >= 0 && static_cast<std::uint32_t>(feature.characterLightTarget) < MaterialPort::kFeatureRenderTargets)
-			return feature.renderTargetViews[static_cast<std::size_t>(feature.characterLightTarget)];
+		const auto& hook = a_frame.hook;
+		if (hook.characterLightTarget >= 0 && static_cast<std::uint32_t>(hook.characterLightTarget) < MaterialPort::kHookRenderTargets)
+			return hook.renderTargetViews[static_cast<std::size_t>(hook.characterLightTarget)];
 		return nullptr;
 	}
 }

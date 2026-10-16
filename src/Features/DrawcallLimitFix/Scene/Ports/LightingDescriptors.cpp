@@ -7,7 +7,6 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "State.h"
-#include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
@@ -83,11 +82,11 @@ namespace DCLF
 			return (d & 0x48007u) | ((d & 0x20a00u) ? 0x200u : 0u) | (d & 0x3f000000u);
 		}
 
-		// Community Shaders' pixel split (TruePBR.cpp, BSLightingShader_GetPixelTechnique) keeps bits 3-5 (TruePbr/Deferred);
-		// only the shadow light count (bits 6-8) is dropped.
-		constexpr std::uint32_t PixelDescriptorFromPass(std::uint32_t d)
+		// The pixel split drops bits 3-8 but what the pass rules keep (Api::LightingPassRules::pixelKeep: Integrations/TruePBR's
+		// GetPixelTechnique hook keeps bits 3-5, TruePbr/Deferred; only the shadow light count, bits 6-8, is dropped). Resolved data.
+		std::uint32_t PixelDescriptorFromPass(std::uint32_t d)
 		{
-			std::uint32_t p = d & ~0x1c0u;
+			std::uint32_t p = d & ~Extensions::LightingPixelDropped();
 			if ((p & 0x4u) == 0)  // Skinned is kept only with ModelSpaceNormals
 				p &= ~0x2u;
 			return p | 1u;  // VC is always set
@@ -423,16 +422,11 @@ namespace DCLF
 			if (f & Bit(Flag::kCharacterLighting))
 				d |= Bit(LightingFlag::CharacterLight);
 
-			// Community Shaders' GetRenderPasses hook (TruePBR.cpp): PBR swaps Specular for TruePbr; glint adds AnisoLighting.
-			const auto feature = static_cast<RE::BSShaderMaterial::Feature>(a_property.feature);
-			const bool isPbr = (f & Bit(Flag::kVertexLighting)) && a_property.material &&
-			                   (feature == RE::BSShaderMaterial::Feature::kDefault || feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend);
-			if (isPbr) {
-				d |= Bit(LightingFlag::TruePbr);
-				d &= ~Bit(LightingFlag::Specular);
-				if (a_property.glints)
-					d |= Bit(LightingFlag::AnisoLighting);
-			}
+			// The pass rules' GetRenderPasses hooks (Api::LightingPassRules::derivePass; Integrations/TruePBR's: PBR swaps Specular for
+			// TruePbr, glint adds AnisoLighting).
+			const Api::LightingJoinView view{ a_property, a_leaf, a_leaf.geometry ? a_leaf.geometry->extraValue : SceneCapture::GeometryRecord::kNoExtra,
+				a_leaf.node ? a_leaf.node->facts : Extensions::ReferenceFactsNone(), a_property.contributorBits };
+			d = Extensions::DeriveLightingPass(d, view);
 			a_derived = d;
 			return Ineligible::None;
 		}

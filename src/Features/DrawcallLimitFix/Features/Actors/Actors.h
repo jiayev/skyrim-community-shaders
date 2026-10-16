@@ -23,7 +23,7 @@
 //   FrameVerdictKept), SceneTables::classMembers, the mirror's actor bit (NodeRecord::actor);
 // - the animation path's move writer (Engine/Capture/SceneEvents: FUN_14066afa0, every reference's animation) and the fadeAmount channel;
 // - Advanced Skin's coupling is Integrations/AdvancedSkin's (its wetness: a shading field of the published actor-owned class; FrameValues'
-//   fan-out into the shading rows' SkinPerGeometry); its material textures are still MaterialPortFeature's SkinTextures.
+//   fan-out into the shading rows' SkinPerGeometry); its material textures (t71/t74) are its After material contributor (SkinTextures.cpp).
 // Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"

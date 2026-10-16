@@ -1,8 +1,10 @@
 // MaterialPort's snapshot capture (any thread where the material is alive), the capture queue's producer side and Evaluate's
-// dispatch to the vanilla, PBR and feature-hook ports and the material ports (Extensions::MaterialPorts: the Effect port).
+// dispatch to the vanilla port, the material contributors' chain (Extensions: Materials.h) and the material ports
+// (Extensions::MaterialPorts: the Effect port).
 
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
@@ -10,46 +12,30 @@
 #include <algorithm>
 #include <bit>
 
-extern "C" IMAGE_DOS_HEADER __ImageBase;
-
 namespace DCLF::MaterialPort
 {
-	namespace
-	{
-		/** @brief Whether a vtable is this DLL's: CS's own material classes (BSLightingShaderMaterialPBR, ...PBRLandscape). */
-		bool OwnClass(const void* a_vtable)
-		{
-			static const auto [begin, end] = [] {
-				const auto base = reinterpret_cast<std::uintptr_t>(&__ImageBase);
-				const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + __ImageBase.e_lfanew);
-				return std::pair{ base, base + nt->OptionalHeader.SizeOfImage };
-			}();
-			const auto address = reinterpret_cast<std::uintptr_t>(a_vtable);
-			return address >= begin && address < end;
-		}
-	}
-
 	bool Capture(const RE::BSShaderMaterial& a_material, MaterialSnapshot& a_out)
 	{
 		EngineReadWindow::Touch("MaterialPort::Capture");
 		a_out.key = &a_material;
 		a_out.vtable = *reinterpret_cast<const void* const*>(&a_material);
 		a_out.feature = static_cast<std::uint32_t>(a_material.GetFeature());
-		a_out.pbr = OwnClass(a_out.vtable);
+		// A material contributor's class (TruePBR's own classes) is Lighting's, its size and texture fields the contributor's.
+		a_out.materialClass = Extensions::MaterialClassOf(a_out.vtable);
 		// A material port's class (its vtable, resolved at install), its size and texture fields the port's.
-		a_out.port = a_out.pbr ? std::uint8_t(0) : Extensions::PortOfVtable(a_out.vtable);
+		a_out.port = a_out.materialClass ? std::uint8_t(0) : Extensions::PortOfVtable(a_out.vtable);
 		const auto& port = Extensions::MaterialPorts()[a_out.port];
 		if (a_out.port)
-			a_out.feature = 0;  // no Lighting material feature (FeatureHooksCovered: none of Advanced Skin's)
-		a_out.size = a_out.pbr ? PBRMaterialBytes(a_material) : a_out.port ? port.materialBytes : VanillaClassSize(a_material);
+			a_out.feature = 0;  // no Lighting material feature (an After contributor's covers: none of Advanced Skin's)
+		a_out.size = a_out.materialClass ? Extensions::MaterialClassBytes(a_out.materialClass, a_material) : a_out.port ? port.materialBytes : VanillaClassSize(a_material);
 		a_out.textureCount = 0;
 		if (!a_out.size || a_out.size > kMaxMaterialBytes)
 			return false;
 		std::memcpy(a_out.bytes.data(), &a_material, a_out.size);
 		std::array<std::uint16_t, kMaxTextureFields> fields{};
 		std::uint32_t count = 0;
-		if (a_out.pbr)
-			PBRTextureFields(a_material, fields.data(), count);
+		if (a_out.materialClass)
+			Extensions::MaterialClassTextureFields(a_out.materialClass, a_material, fields.data(), count);
 		else if (a_out.port)
 			for (std::size_t i = 0; i < port.textureFields.size() && count < kMaxTextureFields; ++i)
 				fields[count++] = port.textureFields[i];
@@ -89,7 +75,7 @@ namespace DCLF::MaterialPort
 		// BSIntrusiveRefCounted's count (+0x8, 4 bytes), then BSShaderMaterial's texCoordOffset/texCoordScale (+0xc, two buffers of 8 bytes
 		// each: +0xc..+0x2c, the texture transforms' fields).
 		constexpr std::size_t kCount = 0x8, kTransforms = 0xc, kTransformsEnd = 0x2c;
-		if (a_held.key != a_new.key || a_held.vtable != a_new.vtable || a_held.feature != a_new.feature || a_held.pbr != a_new.pbr ||
+		if (a_held.key != a_new.key || a_held.vtable != a_new.vtable || a_held.feature != a_new.feature || a_held.materialClass != a_new.materialClass ||
 			a_held.port != a_new.port || a_held.size != a_new.size || a_held.textureCount != a_new.textureCount)
 			return SnapshotChange::Fields;
 		for (std::uint32_t i = 0; i < a_new.textureCount && i < kMaxTextureFields; ++i)
@@ -105,7 +91,7 @@ namespace DCLF::MaterialPort
 		return same(kTransforms, kTransformsEnd) ? SnapshotChange::None : SnapshotChange::Transforms;
 	}
 
-	FrameComponentsWitness WitnessOf(const VanillaFrame& a_vanilla, const FeatureFrame& a_feature)
+	FrameComponentsWitness WitnessOf(const VanillaFrame& a_vanilla, const HookFrame& a_hook, const Extensions::MaterialContributorSamples& a_contributors)
 	{
 		// Each value as the port reads it: a byte tested for non-zero as a bit, a float by its bits, and a value the port writes only
 		// under a flag (the character light's params, PS 6) zero while the flag is off. The character light's target is its class (none,
@@ -126,22 +112,25 @@ namespace DCLF::MaterialPort
 			put(bits(c));
 		for (const float c : v.characterLight)
 			put(v.fullBright ? bits(c) : 0u);
-		const auto& f = a_feature;
-		put(std::uint32_t(f.truePBR) | std::uint32_t(f.skin) << 1 | std::uint32_t(f.characterLightEnabled) << 2 | targetClass(f.characterLightTarget, kFeatureRenderTargets) << 4 |
-			std::uint32_t(f.techniqueByte12) << 16 | std::uint32_t(f.techniqueByte7) << 24);
-		for (const float c : f.characterLightParams)
-			put(f.characterLightEnabled ? bits(c) : 0u);
-		// Advanced Skin's keys (FeatureHooksCovered): the table is shared between frames while unchanged, so its identity is the witness.
-		const auto table = reinterpret_cast<std::uintptr_t>(f.skinTextures.get());
-		put(static_cast<std::uint32_t>(table));
-		put(static_cast<std::uint32_t>(static_cast<std::uint64_t>(table) >> 32));
+		const auto& h = a_hook;
+		put(std::uint32_t(h.characterLightEnabled) << 2 | targetClass(h.characterLightTarget, kHookRenderTargets) << 4 | std::uint32_t(h.techniqueByte12) << 16 |
+			std::uint32_t(h.techniqueByte7) << 24);
+		for (const float c : h.characterLightParams)
+			put(h.characterLightEnabled ? bits(c) : 0u);
+		// Which contributors run (TruePBR's and Advanced Skin's loaded flags), then their own words: Advanced Skin's keys (its covers) are
+		// its table's identity, shared between frames while unchanged.
+		put(a_contributors.ActiveBits());
+		for (const std::uint32_t word : a_contributors.words)
+			put(word);
 		return w;
 	}
 
 	MaterialFrame SampleFrame()
 	{
-		MaterialFrame frame{ SampleVanillaFrame(), SampleFeatureFrame() };
-		frame.components = WitnessOf(frame.vanilla, frame.feature);
+		MaterialFrame frame{ SampleVanillaFrame(), SampleHookFrame() };
+		// The contributors after the hook frame (Advanced Skin's table resolves against its default black view).
+		Extensions::SampleMaterialContributors(frame.hook, frame.contributors);
+		frame.components = WitnessOf(frame.vanilla, frame.hook, frame.contributors);
 		return frame;
 	}
 
@@ -150,13 +139,16 @@ namespace DCLF::MaterialPort
 		// A material port's material is its shader's (the Effect port's: BSEffectShader's, no Community Shaders hook on its SetupMaterial).
 		if (a_snapshot.port)
 			return Extensions::EvaluatePort(a_snapshot.port, a_snapshot, a_passDescriptor, a_frame, a_out);
-		// The hooks' chain (installed in feature order): Advanced Skin and TerrainHelper around TruePBR around vanilla. TruePBR's
-		// replacement takes the passes it takes (and hands back to vanilla what it does not draw: EvaluatePBR).
-		const bool covered = PBRTakesPass(a_passDescriptor, a_frame.feature) ? EvaluatePBR(a_snapshot, a_passDescriptor, a_frame, a_out) :
-		                                                                        EvaluateVanilla(a_snapshot, a_passDescriptor, a_frame.vanilla, a_out);
-		if (!covered || !FeatureHooksCovered(a_snapshot, a_frame.feature))
+		// The hooks' chain (installed in feature order): the After contributors (Advanced Skin) around the Replace (TruePBR) around
+		// vanilla. A Replace takes the passes it takes (and hands back to vanilla what it does not draw); an After contributor whose
+		// input is not set up yet makes the material uncovered for now (Retry).
+		const Extensions::MaterialContributorInputs inputs{ a_snapshot, a_snapshot.materialClass, a_passDescriptor, a_frame.hook, a_frame.contributors };
+		const auto outcome = Extensions::EvaluateReplace(inputs, a_out);
+		const bool covered = outcome == Api::MaterialOutcome::Made ||
+		                     (outcome == Api::MaterialOutcome::HandBack && EvaluateVanilla(a_snapshot, a_passDescriptor, a_frame.vanilla, a_out));
+		if (!covered || Extensions::MaterialRetryable(inputs))
 			return false;
-		EvaluateFeatureHooks(a_snapshot, a_passDescriptor, a_frame.feature, a_out);
+		Extensions::EvaluateAfter(inputs, a_out);
 		return true;
 	}
 }

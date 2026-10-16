@@ -31,8 +31,6 @@
 #include <exception>
 #include <optional>
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
-#include "Features/ExtendedTranslucency.h"
-#include "Features/Skin.h"
 #include "Features/Skylighting.h"
 #include "State.h"
 #include "Utils/ExternalEmittance.h"

@@ -1,5 +1,5 @@
-// Light Limit Fix: the "light limit fix" classify input, the room index (an ancestor value) and the graph buffers at t35-t37. The render
-// thread's callbacks read the feature live.
+// Light Limit Fix: the "light limit fix" classify input, the room index (an ancestor value), the graph buffers at t35-t37 and its
+// StrictLightData (PS b3), a per-draw buffer. The render thread's callbacks read the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
@@ -14,6 +14,9 @@ namespace DCLF::Integrations::LightLimitFix
 {
 	namespace
 	{
+		// PS b3: StrictLightData (LightLimitFix.hlsli's), a per-draw buffer (Features/Manifest.cpp).
+		constexpr std::uint32_t kStrictLightDataRegister = 3;
+
 		// Whether Light Limit Fix is loaded. Any thread.
 		bool Loaded()
 		{
@@ -61,6 +64,8 @@ namespace DCLF::Integrations::LightLimitFix
 			// t35-t37, which the colour passes declare.
 			a_context.RegisterFrameGraphBuffers({ .name = "light limit fix", .firstRegister = kLightsRegister,
 				.resources = { "cs.llf.lights", "cs.llf.light-index-list", "cs.llf.light-grid" }, .indices = &GraphBufferIndices });
+			// StrictLightData, bound per draw: the main pass's frame blocks and the capture checks leave PS b3 out.
+			a_context.DeclarePerDrawBuffer({ .name = "StrictLightData", .stage = Api::ShaderStage::Pixel, .constantRegister = kStrictLightDataRegister });
 		}
 	}
 

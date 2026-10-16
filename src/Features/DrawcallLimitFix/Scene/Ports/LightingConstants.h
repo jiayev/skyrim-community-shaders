@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
@@ -241,8 +242,8 @@ namespace DCLF
 	 * engine-read window. A material port's property (Extensions::PortOfRtti) is its port's (SamplePortShading).
 	 */
 	void SampleShading(const RE::BSShaderProperty& a_property, std::uint32_t a_pass, bool a_member, BindlessShading& a_out);
-	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): Subsurface Scattering's IsBeastRace (kObjectBeastRace).
-	inline constexpr std::uint32_t kRecordBeastRace = 1u << 0;
+	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): bit 0 a Lighting object flag's record bit
+	// (Api::LightingObjectFlag: Integrations/SubsurfaceScattering's IsBeastRace, kRecordBeastRace) ...
 	// ... and an alpha-tested object whose alpha property blends (kObjectAlphaBlended): the depth pass's reference (Utility.hlsl).
 	inline constexpr std::uint32_t kRecordAlphaBlended = 1u << 1;
 	// Refraction (Utility.hlsl DCLF_REFRACTION): a refraction object and the RENDER_NORMAL variants (GetRenderPasses, AE 0x1414adfb0)
@@ -297,7 +298,7 @@ namespace DCLF
 	 */
 	inline std::uint32_t RecordFlagsOf(std::uint32_t a_objectFlags, std::uint32_t a_fadeRoot)
 	{
-		return ((a_objectFlags & kObjectBeastRace) ? kRecordBeastRace : 0u) | ((a_objectFlags & kObjectAlphaBlended) ? kRecordAlphaBlended : 0u) |
+		return Extensions::LightingRecordFlagsOf(a_objectFlags) | ((a_objectFlags & kObjectAlphaBlended) ? kRecordAlphaBlended : 0u) |
 		       (a_fadeRoot < (1u << (32 - kRecordFadeRootShift)) - 1 ? (a_fadeRoot + 1) << kRecordFadeRootShift : 0u);
 	}
 

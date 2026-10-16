@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Api/GpuStages.h"
 #include "Features/DrawcallLimitFix/Api/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Api/MainRanges.h"
+#include "Features/DrawcallLimitFix/Api/Materials.h"
 #include "Features/DrawcallLimitFix/Api/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Api/Payload.h"
 #include "Features/DrawcallLimitFix/Api/Reports.h"
@@ -237,6 +238,37 @@ namespace DCLF::Api
 		 * family registered before, view or test.
 		 */
 		virtual void RegisterRootStates(const RootStatesContribution& a_states) = 0;
+		/**
+		 * @brief Fails the install for no name, sample or evaluate, a Replace contributor without takesPass (or with covers), an After one
+		 * without covers (or with takesPass), only some of a material class's callbacks, registers not strictly ascending, below the frame
+		 * textures (t16) or past t127, Core's, a frame binding's, a frame texture's or graph buffers', or whose range overlaps another
+		 * contributor's, registers past Extensions::kFeatureTextureSlots in all, witness words past Extensions::kMaterialContributorWitnessWords
+		 * in all, or one past Extensions::kMaterialContributorSlots.
+		 */
+		virtual void RegisterMaterialContributor(const MaterialContributor& a_contributor) = 0;
+		/** @brief Fails the install for no name or sample, or past Extensions::kReferenceFactSlots facts. */
+		virtual ReferenceFactId RegisterReferenceFact(const ReferenceFact& a_fact) = 0;
+		/** @brief Fails the install for no name, or a second declaration (the geometry record has one extra value). */
+		virtual void DeclareGeometryExtra(std::string_view a_extraName) = 0;
+		/** @brief Fails the install for no name, bits or capture, bits another registration has, or past Extensions::kPropertyBitsSlots. */
+		virtual void RegisterPropertyBits(const PropertyBits& a_bits) = 0;
+		/**
+		 * @brief Fails the install for an object or record flag not one bit, or another registration's, no applies, or past
+		 * Extensions::kLightingObjectFlagSlots.
+		 */
+		virtual void RegisterLightingObjectFlag(const LightingObjectFlag& a_flag) = 0;
+		/** @brief Fails the install for a second claimant, or one without keyBits or permutation. */
+		virtual void RegisterLightingKeyBits(const LightingKeyBits& a_bits) = 0;
+		/**
+		 * @brief Fails the install for nothing to apply, a pixelKeep outside Extensions::kLightingPixelSplitBits, a raw rule with rawWhen
+		 * when another registration has one (or rawSet or rawFlip without rawWhen), or derivePass past Extensions::kLightingPassDeriveSlots.
+		 */
+		virtual void RegisterLightingPassRules(const LightingPassRules& a_rules) = 0;
+		/**
+		 * @brief Fails the install for no name, a register past the stage's constant buffer slots (b13), Core's
+		 * (Extensions::CorePerDrawMask) or another declaration's of the stage.
+		 */
+		virtual void DeclarePerDrawBuffer(const PerDrawBuffer& a_buffer) = 0;
 
 	protected:
 		~InstallContext() = default;

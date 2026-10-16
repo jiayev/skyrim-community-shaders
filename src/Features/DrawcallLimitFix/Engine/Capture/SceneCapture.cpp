@@ -16,9 +16,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
-#include "Features/SubsurfaceScattering.h"
 #include "Globals.h"
-#include "TruePBR/BSLightingShaderMaterialPBR.h"
 
 #include <atomic>
 #include <chrono>
@@ -56,9 +54,13 @@ namespace DCLF::SceneCapture
 			return extra ? static_cast<std::int32_t>(static_cast<const RE::BSXFlags*>(extra)->value) : -1;
 		}
 
-		std::int64_t AnisotropicOf(const RE::BSGeometry& a_geometry)
+		// The declared geometry extra's value (Api: DeclareGeometryExtra). The name is built at first use, after the install.
+		std::int64_t ExtraValueOf(const RE::BSGeometry& a_geometry)
 		{
-			static const RE::BSFixedString name{ "AnisotropicAlphaMaterial" };
+			const std::string_view declared = Extensions::GeometryExtraName();
+			if (declared.empty())
+				return GeometryRecord::kNoExtra;
+			static const RE::BSFixedString name{ std::string(declared).c_str() };
 			const auto* extra = const_cast<RE::BSGeometry&>(a_geometry).GetExtraData(name);
 			if (!extra)
 				return GeometryRecord::kNoExtra;
@@ -71,17 +73,6 @@ namespace DCLF::SceneCapture
 		{
 			const auto* source = a_reference.extraList.GetByType<RE::ExtraEmittanceSource>();
 			return source && source->source;
-		}
-
-		bool BeastOf(const RE::TESObjectREFR& a_reference)
-		{
-			const auto& sss = globals::features::subsurfaceScattering;
-			if (!sss.loaded || !sss.isBeastRaceKeyword)
-				return true;
-			if (auto* actor = const_cast<RE::TESObjectREFR&>(a_reference).As<RE::Actor>())
-				if (auto* race = actor->GetRace())
-					return race->HasKeyword(sss.isBeastRaceKeyword);
-			return true;
 		}
 
 		// A fade node's per-frame state: currentFade (+0x130), the LOD level (+0x152 & 0xF), the screen-door byte (+0x154).
@@ -127,7 +118,7 @@ namespace DCLF::SceneCapture
 		d |= body != a_o.body ? kBody : 0u;
 		d |= children != a_o.children ? kChildren : 0u;
 		d |= (switchIndex != a_o.switchIndex || switchFlags != a_o.switchFlags || switchCurrent != a_o.switchCurrent || switchChild != a_o.switchChild) ? kSwitch : 0u;
-		d |= (bsx != a_o.bsx || emittance != a_o.emittance || beast != a_o.beast) ? kExtra : 0u;
+		d |= (bsx != a_o.bsx || emittance != a_o.emittance || facts != a_o.facts) ? kExtra : 0u;
 		d |= std::bit_cast<std::uint32_t>(currentFade) != std::bit_cast<std::uint32_t>(a_o.currentFade) ? kFadeCurrent : 0u;
 		d |= fadeLevel != a_o.fadeLevel ? kFadeLevel : 0u;
 		d |= fadeDoor != a_o.fadeDoor ? kFadeDoor : 0u;
@@ -157,7 +148,7 @@ namespace DCLF::SceneCapture
 		d |= property != a_o.property ? kProperty : 0u;
 		d |= alpha != a_o.alpha ? kAlpha : 0u;
 		d |= (layerProperty != a_o.layerProperty || altIndexList != a_o.altIndexList || altIndexBuffer != a_o.altIndexBuffer || altPrimCount != a_o.altPrimCount) ? kLayer : 0u;
-		d |= anisotropic != a_o.anisotropic ? kExtra : 0u;
+		d |= extraValue != a_o.extraValue ? kExtra : 0u;
 		d |= std::memcmp(multiParams.data(), a_o.multiParams.data(), sizeof(multiParams)) != 0 ? kMultiParams : 0u;
 		d |= ranges != a_o.ranges ? kRanges : 0u;
 		return d;
@@ -170,7 +161,7 @@ namespace DCLF::SceneCapture
 		d |= flags != a_o.flags ? kFlags : 0u;
 		d |= material != a_o.material ? kMaterial : 0u;
 		d |= std::bit_cast<std::uint32_t>(materialAlpha) != std::bit_cast<std::uint32_t>(a_o.materialAlpha) ? kMaterialAlpha : 0u;
-		d |= (feature != a_o.feature || glints != a_o.glints || diffuseView != a_o.diffuseView) ? kMaterialOther : 0u;
+		d |= (feature != a_o.feature || contributorBits != a_o.contributorBits || diffuseView != a_o.diffuseView) ? kMaterialOther : 0u;
 		d |= fadeNode != a_o.fadeNode ? kFadeNode : 0u;
 		d |= emissive != a_o.emissive ? kEmissive : 0u;
 		d |= controllers != a_o.controllers ? kControllers : 0u;
@@ -219,7 +210,7 @@ namespace DCLF::SceneCapture
 		if (a_f & kExtra) {
 			bsx = a_o.bsx;
 			emittance = a_o.emittance;
-			beast = a_o.beast;
+			facts = a_o.facts;
 		}
 		if (a_f & kFadeCurrent)
 			currentFade = a_o.currentFade;
@@ -280,7 +271,7 @@ namespace DCLF::SceneCapture
 			altPrimCount = a_o.altPrimCount;
 		}
 		if (a_f & kExtra)
-			anisotropic = a_o.anisotropic;
+			extraValue = a_o.extraValue;
 		if (a_f & kMultiParams)
 			multiParams = a_o.multiParams;
 		if (a_f & kRanges)
@@ -302,7 +293,7 @@ namespace DCLF::SceneCapture
 			materialAlpha = a_o.materialAlpha;
 		if (a_f & kMaterialOther) {
 			feature = a_o.feature;
-			glints = a_o.glints;
+			contributorBits = a_o.contributorBits;
 			diffuseView = a_o.diffuseView;
 			diffuseHeld = a_o.diffuseHeld;
 		}
@@ -416,8 +407,8 @@ namespace DCLF::SceneCapture
 			r.formType = static_cast<std::uint8_t>(reference->GetFormType());
 			r.actor = const_cast<RE::TESObjectREFR*>(reference)->IsActor();
 			r.emittance = EmittanceOf(*reference);
-			r.beast = BeastOf(*reference);
 		}
+		r.facts = Extensions::ReferenceFactsOf(a_object.GetUserData());  // without a reference, each fact's none
 		if (object.AsGeometry()) {
 			r.kind |= kKindGeometry;
 			return r;
@@ -547,7 +538,7 @@ namespace DCLF::SceneCapture
 			r.multiParams[20] = multi.materialScale;
 			r.multiParams[21] = multi.normalDampener;
 		}
-		r.anisotropic = AnisotropicOf(a_geometry);
+		r.extraValue = ExtraValueOf(a_geometry);
 		// A ranged type's drawn ranges (its contribution's capture: object LOD's segments, Features/Lod).
 		if (const auto ranges = Extensions::GeometryRangesOf(r.type))
 			ranges(&a_geometry, r.ranges);
@@ -582,10 +573,8 @@ namespace DCLF::SceneCapture
 				r.diffuseHeld.copy_from(static_cast<ID3D11ShaderResourceView*>(const_cast<void*>(r.diffuseView)));
 				const auto feature = const_cast<RE::BSLightingShaderMaterialBase*>(material)->GetFeature();
 				r.feature = static_cast<std::uint32_t>(feature);
-				// LightingDescriptors' PBR test (Community Shaders' GetRenderPasses: TruePBR.cpp).
-				const bool pbr = a_property.flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) &&
-				                 (feature == RE::BSShaderMaterial::Feature::kDefault || feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend);
-				r.glints = pbr && static_cast<const BSLightingShaderMaterialPBR*>(a_property.material)->glintParameters.enabled;
+				// What the derive's pass rules read of the material (Api::PropertyBits: TruePBR's glints).
+				r.contributorBits = Extensions::CapturePropertyBits(a_property);
 				// The land blend's material (techniques 8 and 19, the landscape materials).
 				if (feature == RE::BSShaderMaterial::Feature::kMultiTexLand || feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend) {
 					const auto& blend = static_cast<const RE::BSLightingShaderMaterialLandscape*>(material)->landBlendParams;

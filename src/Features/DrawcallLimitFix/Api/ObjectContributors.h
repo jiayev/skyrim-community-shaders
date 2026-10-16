@@ -1,7 +1,7 @@
 #pragma once
 
 // The object contributor contracts (Api::InstallContext::RegisterTechnique, RegisterGeometryType, RegisterParent, RegisterObjectClass,
-// RegisterEntryClass, RegisterShading, RegisterFrameGlobals): what a feature adds to the objects DCLF draws. Three kinds, a section each
+// RegisterEntryClass, RegisterShading, RegisterFrameGlobals, RegisterMaterialPort and section 5's): what a feature adds to the objects DCLF draws. Three kinds, a section each
 // below:
 //
 // 1. Membership by an engine key: the objects of an engine technique or geometry type the feature ports (TechniqueContribution,
@@ -17,6 +17,11 @@
 //    (MaterialPortContribution, Api::InstallContext::RegisterMaterialPort): its property and material classes, its constant space, the rules
 //    Core's classification and builds read as data, and the callbacks Core makes per event (a capture, a classification, an evaluation, a
 //    shading sample).
+// 5. Lighting join rules: what a CS feature's hooks on the Lighting shader (kind 0: GetRenderPasses, GetPixelTechnique, SetupGeometry,
+//    SetupSkin) add to its objects' captures, descriptors, keys and record flags (ReferenceFact, DeclareGeometryExtra, PropertyBits,
+//    LightingObjectFlag, LightingKeyBits, LightingPassRules): a capture's callback per capture, a join's per join, a pass rule's per derive,
+//    and what Core reads per frame per object or pipeline resolved once at install (the record bit pair, the pixel split, the raw
+//    technique rule). The material hooks (SetupMaterial) are the material contributors' (Api/Materials.h).
 //
 // A membership is read as data where Core decides (Core/Extensions/ObjectContributors.h: Extensions::TechniqueObjectFlags,
 // PropertyFlagRules, GeometryTypeOn, GeometryTypeMoves, GeometryTypeRanged, PlannedItemClass, EntryClassOf, OwnerClassOf, ParentAdmits,
@@ -44,12 +49,14 @@ namespace RE
 {
 	class BSShaderProperty;
 	class NiNode;
+	class TESObjectREFR;
 }
 
 namespace DCLF::Api
 {
 	// Defined by Core (Core/Extensions/ObjectContributors.h), which the features inside DCLF include for it.
 	class ShadingDerivation;
+	class LightingJoinView;
 	// Defined by Core (Core/Extensions/MaterialPorts.h), likewise.
 	class MaterialPortCapture;
 	class MaterialPortDerivation;
@@ -459,5 +466,100 @@ namespace DCLF::Api
 		std::uint32_t (*variants)(const MaterialPortDerivation& a_derivation) = nullptr;
 		std::span<const std::string_view> variantNames;
 		const void* (*emissiveOf)(const RE::BSShaderProperty& a_property) = nullptr;
+	};
+
+	// ---- 5. Lighting join rules (Lighting's objects only: LightingDescriptors::port 0). The view their callbacks get (LightingJoinView,
+	// Core's) holds the object's records: its property's flags, alpha, material feature and contributor bits, its leaf's alpha property, its
+	// geometry's declared extra value and skin, its node's reference facts.
+
+	/** @brief A registered reference fact (RegisterReferenceFact's result): its bit in the node record's facts (LightingJoinView::Fact). */
+	struct ReferenceFactId
+	{
+		std::uint32_t index = ~0u;
+		explicit operator bool() const { return index != ~0u; }
+	};
+
+	/**
+	 * @brief A reference fact (Api::InstallContext::RegisterReferenceFact): a per-reference engine fact a feature's join rule reads, captured
+	 * with the node's record (SceneCapture::NodeRecord's facts: one bit each; a change is the record's kExtra difference, as the BSX
+	 * flags'). Called per node capture (the capturing thread, inside the engine-read window), never per frame.
+	 *
+	 * - name: the install's failures' name for it.
+	 * - none: its value for a node without a reference.
+	 * - sample: its value for the node's reference (Integrations/SubsurfaceScattering's beast race: the actor's race keyword, true
+	 *   otherwise).
+	 */
+	struct ReferenceFact
+	{
+		std::string_view name;
+		bool none = true;
+		bool (*sample)(const RE::TESObjectREFR& a_reference) = nullptr;
+	};
+
+	/**
+	 * @brief A Lighting property's contributor bits (Api::InstallContext::RegisterPropertyBits): a per-property fact captured with the
+	 * property's record (SceneCapture::PropertyRecord's contributor bits; a change is its kMaterialOther difference), which a pass rule or a
+	 * join rule reads (LightingJoinView::PropertyBits). Called per Lighting property capture with a material (the capturing thread, inside
+	 * the engine-read window, or under the engine call that holds it), never per frame.
+	 *
+	 * - name: the install's failures' name for it.
+	 * - bits: the contributor bits it owns (none another registration's).
+	 * - capture: its bits of a_property (within bits; Integrations/TruePBR's glints: a PBR material's glintParameters.enabled).
+	 */
+	struct PropertyBits
+	{
+		std::string_view name;
+		std::uint8_t bits = 0;
+		std::uint8_t (*capture)(const RE::BSShaderProperty& a_property) = nullptr;
+	};
+
+	/**
+	 * @brief A Lighting object flag (Api::InstallContext::RegisterLightingObjectFlag): a per-object fact a feature's hook sets on the draw,
+	 * carried by the object's static flags and its record's flags (Integrations/SubsurfaceScattering's IsBeastRace: SetupSkin).
+	 *
+	 * - objectFlag: its object flag (one bit, within Records.h's kFeatureObjectFlags; the feature's compile-time constant, which
+	 *   Features/Manifest.cpp checks against Core's and the others').
+	 * - recordFlag: the record flag the object's record carries for it (one bit of BindlessObject::recordFlags, DCLFRecordFlags, which the
+	 *   shaders read; Manifest-checked likewise). Resolved once into the record flags' pair (Extensions::LightingRecordFlagsOf: data).
+	 * - applies: per join (the join pool), whether the object has it. Pure, but for the feature's live state (its loaded flag).
+	 */
+	struct LightingObjectFlag
+	{
+		std::uint32_t objectFlag = 0;
+		std::uint32_t recordFlag = 0;
+		bool (*applies)(const LightingJoinView& a_view) = nullptr;
+	};
+
+	/**
+	 * @brief The Lighting key's spare bits (Api::InstallContext::RegisterLightingKeyBits; one claimant): Core's 3 spare bits of a Lighting
+	 * key's raster flags (Records.h, kRasterLightingSpareShift), which make a pipeline of their own, and the permutation word they give it.
+	 *
+	 * - keyBits: per join (the join pool), the object's bits (below 8). Pure, but for the feature's live state.
+	 * - permutation: per new pipeline key, the permutation's extraFeatureDescriptor for a key with a_keyBits (CS's b4 layout; Integrations/
+	 *   ExtendedTranslucency's material model). Pure.
+	 */
+	struct LightingKeyBits
+	{
+		std::uint32_t (*keyBits)(const LightingJoinView& a_view) = nullptr;
+		std::uint32_t (*permutation)(std::uint32_t a_keyBits) = nullptr;
+	};
+
+	/**
+	 * @brief Lighting pass rules (Api::InstallContext::RegisterLightingPassRules): what a feature's hooks on the Lighting shader change in a
+	 * pass descriptor (Integrations/TruePBR's GetRenderPasses, GetPixelTechnique and SetupGeometry hooks). The masks are data, resolved once
+	 * into Core's (read per frame per pipeline: Extensions::LightingPassRule); derivePass is called per derive.
+	 *
+	 * - pixelKeep: the bits of the engine's pixel split (Extensions::kLightingPixelSplitBits) the pixel descriptor keeps (ORed over the
+	 *   registrations).
+	 * - rawWhen, rawSet, rawFlip: SetupGeometry's raw technique: one with any of rawWhen gains rawSet, then flips rawFlip (one
+	 *   registration's; none while rawWhen is 0).
+	 * - derivePass (optional): per derive (Core's Lighting descriptors, any thread), the pass descriptor after Core's flags (a_pass) as the
+	 *   feature's GetRenderPasses hook leaves it. Pure. Called in registration order.
+	 */
+	struct LightingPassRules
+	{
+		std::uint32_t pixelKeep = 0;
+		std::uint32_t rawWhen = 0, rawSet = 0, rawFlip = 0;
+		std::uint32_t (*derivePass)(std::uint32_t a_pass, const LightingJoinView& a_view) = nullptr;
 	};
 }

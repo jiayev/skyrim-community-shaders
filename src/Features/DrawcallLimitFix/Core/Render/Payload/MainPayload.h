@@ -41,7 +41,7 @@ namespace DCLF::Draws
 			std::uint32_t missingTexture = 0;
 			std::uint32_t textures = 0;  // t0-t15 the row gives a descriptor (bit per register)
 			std::uint32_t samplers = 0;  // s0-s15 likewise
-			std::uint32_t features = 0;  // kFeatureMaterialRegisters likewise
+			std::uint32_t features = 0;  // the feature texture slots likewise (Extensions::FeatureTextureRegister)
 			std::uint64_t tables = 0;    // the constant tables its blocks were packed with (a hash)
 			bool blocksOk = false;       // both blocks fit their places
 			// Where its VS block placed TexcoordOffset (the frame's, which a feature patches on the GPU from a payload product): the packed

@@ -161,7 +161,7 @@ namespace DCLF
 		struct MaterialOwners
 		{
 			std::array<std::shared_ptr<const void>, kTextureSlots> textures{};
-			std::array<std::shared_ptr<const void>, kFeatureMaterialTextures> features{};
+			std::array<std::shared_ptr<const void>, Extensions::kFeatureTextureSlots> features{};
 			std::shared_ptr<const void> lease;
 		};
 
@@ -180,9 +180,9 @@ namespace DCLF
 			bool resolved = false;
 			// What textureIndex was resolved from, so an unchanged material is not resolved again.
 			std::array<ID3D11ShaderResourceView*, kTextureSlots> views{};
-			// The feature textures (MaterialRecord::featureTextures, kFeatureMaterialRegisters): indices and views.
-			std::array<std::uint32_t, kFeatureMaterialTextures> featureIndex{};
-			std::array<ID3D11ShaderResourceView*, kFeatureMaterialTextures> featureViews{};
+			// The feature textures (MaterialRecord::featureTextures, by slot: Extensions::FeatureTextureRegister): indices and views.
+			std::array<std::uint32_t, Extensions::kFeatureTextureSlots> featureIndex{};
+			std::array<ID3D11ShaderResourceView*, Extensions::kFeatureTextureSlots> featureViews{};
 			std::uint32_t written = 0;
 			std::uint32_t texturesGeneration = 0;
 			std::uint64_t recordVersion = 0;  // last material record inspected for texture bindings

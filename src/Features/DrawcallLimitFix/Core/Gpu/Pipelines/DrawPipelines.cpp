@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -153,7 +154,7 @@ namespace DCLF
 				const std::uint32_t b = binding.binding - kBindingShiftB, t = binding.binding - kBindingShiftT;
 				const bool row = (binding.kind == Kind::ConstantBuffer && (b <= 2 || b == 4)) ||
 				                 ((binding.kind == Kind::Texture || binding.kind == Kind::StorageBuffer) && InRange(binding.binding, kBindingShiftT, kTextureRegisters) &&
-									 (t < kPixelTextureSlots || FeatureMaterialSlot(t) >= 0)) ||
+									 (t < kPixelTextureSlots || Extensions::FeatureTextureSlotOf(t) >= 0)) ||
 				                 binding.kind == Kind::Sampler;
 				if (row)
 					throw std::runtime_error(fmt::format("pulled {} {} at binding {} is a row's", a_pixel ? "pixel" : "vertex", KindName(binding.kind), binding.binding));
@@ -425,8 +426,10 @@ namespace DCLF
 				}
 			}
 			std::uint32_t first = kPixelTextureSlots;
-			for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
-				const std::uint32_t t = kFeatureMaterialRegisters[f];
+			// The feature slots' registers ascend (Extensions::ResolveMaterialContributors), as the ranges between them need.
+			const std::uint32_t featureTextures = Extensions::FeatureTextureCount();
+			for (std::uint32_t f = 0; f < featureTextures; ++f) {
+				const std::uint32_t t = Extensions::FeatureTextureRegister(f);
 				if (t > first)
 					mainRanges.push_back(FromFrameRecord(LayoutRange(kBindingShiftT + first, t - first, pixelStage, index, offsetof(DrawBindings, textures) + 4 * std::size_t{ first })));
 				if (!a_pulled)

@@ -1,7 +1,7 @@
 {
  "legacyEdges": {
   "Core -> Engine": 13,
-  "Core -> Scene": 33,
+  "Core -> Scene": 34,
   "Engine -> Scene": 14,
   "Features/Actors -> Scene": 1,
   "Features/Billboards -> Scene": 3,
@@ -17,8 +17,9 @@
   "Features/Shadows/Local -> Scene": 6,
   "Features/Shadows/Sun -> Engine": 2,
   "Features/Shadows/Sun -> Scene": 3,
-  "Integrations/AdvancedSkin -> Scene": 2,
+  "Integrations/AdvancedSkin -> Scene": 4,
   "Integrations/LightLimitFix -> Scene": 1,
+  "Integrations/TruePBR -> Scene": 3,
   "Scene -> Engine": 23
  },
  "overThresholds": {
@@ -27,8 +28,8 @@
    100
   ],
   "DCLF::CaptureParity::Report": [
-   172,
-   72
+   171,
+   71
   ],
   "DCLF::Diagnostics::Check": [
    123,
@@ -91,7 +92,7 @@
    47
   ],
   "DCLF::MaterialPort::EvaluateVanilla": [
-   212,
+   213,
    60
   ],
   "DCLF::PrepareWrites": [
@@ -131,8 +132,8 @@
    65
   ],
   "DCLF::Scene::Coordinator::BuildAccumulatePhase": [
-   370,
-   95
+   367,
+   94
   ],
   "DCLF::Scene::Coordinator::CheckPacedPublication": [
    64,
@@ -147,8 +148,8 @@
    57
   ],
   "DCLF::Scene::Coordinator::EvaluateJoin": [
-   91,
-   66
+   92,
+   64
   ],
   "DCLF::Scene::Coordinator::EvaluateRound": [
    137,

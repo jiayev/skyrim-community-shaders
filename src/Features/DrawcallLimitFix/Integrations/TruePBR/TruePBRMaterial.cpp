@@ -1,22 +1,24 @@
-// MaterialPort's Community Shaders part: TruePBR's SetupMaterial replacement, Advanced Skin's textures and the FeatureFrame sample
-// (render thread, the frame's start). Evaluation is pure.
+// TruePBR's material contributor: its SetupMaterial replacement (EvaluatePBR, pure), its classes' capture (any thread the material is
+// alive on) and its frame sample (render thread, the frame's start).
 
+#include "Features/DrawcallLimitFix/Integrations/TruePBR/TruePBRIntegration.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/MaterialHookFrame.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 
-#include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
-
-#include <algorithm>
 #include <cstddef>
 #include <cstring>
-#include <iterator>
+#include <utility>
 
-#include "Features/Skin.h"
 #include "Globals.h"
 #include "ShaderCache.h"
+#include "TruePBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBRLandscape.h"
 
-namespace DCLF::MaterialPort
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+
+namespace DCLF::Integrations::TruePBR
 {
 	namespace
 	{
@@ -24,15 +26,18 @@ namespace DCLF::MaterialPort
 		using PBRLandscape = BSLightingShaderMaterialPBRLandscape;
 		using Technique = SIE::ShaderCache::LightingShaderTechniques;
 		using Flag = SIE::ShaderCache::LightingShaderFlags;
+		using Evaluation = Api::MaterialContributorEvaluation;
+		using MaterialPort::kMaxMaterialBytes;
+		using MaterialPort::kMaxTextureFields;
 
 		static_assert(sizeof(PBR) <= kMaxMaterialBytes);
 		static_assert(sizeof(PBRLandscape) <= kMaxMaterialBytes);
-		static_assert(static_cast<std::uint32_t>(RE::RENDER_TARGETS::kTOTAL) <= kFeatureRenderTargets);
+		// Its registers are TruePBR's extended textures, in register order.
+		static_assert(kTextureRegisters.size() == ::TruePBR::NumExtendedTextures && kTextureRegisters.front() == ::TruePBR::FirstExtendedTexture &&
+					  kTextureRegisters.back() == ::TruePBR::FirstExtendedTexture + ::TruePBR::NumExtendedTextures - 1);
 
 		constexpr std::uint32_t Bit(Flag a_flag) { return static_cast<std::uint32_t>(a_flag); }
 
-		constexpr auto kFaceGen = static_cast<std::uint32_t>(RE::BSShaderMaterial::Feature::kFaceGen);
-		constexpr auto kFaceGenRGBTint = static_cast<std::uint32_t>(RE::BSShaderMaterial::Feature::kFaceGenRGBTint);
 		constexpr auto kLandscapeFeature = static_cast<std::uint32_t>(RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend);  // PBRLandscape::GetFeature
 
 		constexpr auto kAnisotropic = static_cast<std::uint32_t>(RE::BSGraphics::TextureFilterMode::kAnisotropic);
@@ -48,7 +53,6 @@ namespace DCLF::MaterialPort
 		constexpr std::uint16_t Off(std::size_t a_offset) { return static_cast<std::uint16_t>(a_offset); }
 		constexpr std::uint16_t kTexCoordOffset = Off(offsetof(RE::BSShaderMaterial, texCoordOffset));
 		constexpr std::uint16_t kTexCoordScale = Off(offsetof(RE::BSShaderMaterial, texCoordScale));
-		constexpr std::uint16_t kHashKey = Off(offsetof(RE::BSShaderMaterial, hashKey));
 		constexpr std::uint16_t kSpecularColor = Off(offsetof(RE::BSLightingShaderMaterialBase, specularColor));
 		constexpr std::uint16_t kDiffuse = Off(offsetof(RE::BSLightingShaderMaterialBase, diffuseTexture));
 		constexpr std::uint16_t kDiffuseTarget = Off(offsetof(RE::BSLightingShaderMaterialBase, diffuseRenderTargetSourceIndex));
@@ -93,6 +97,8 @@ namespace DCLF::MaterialPort
 		constexpr std::uint16_t kLandGlint = Off(offsetof(PBRLandscape, glintParameters));
 
 		constexpr std::uint32_t kTiles = PBRLandscape::NumTiles;
+		// The landscape's displacement layers are its feature textures from local 0, its RMAOS layers from local kTiles.
+		static_assert(2 * kTiles == kTextureRegisters.size());
 
 		/** @brief Element a_index of an array field (a_stride bytes each). */
 		constexpr std::uint16_t Element(std::uint16_t a_base, std::uint32_t a_index, std::size_t a_stride)
@@ -104,7 +110,7 @@ namespace DCLF::MaterialPort
 		constexpr std::uint16_t GlintOf(std::uint16_t a_base, std::uint32_t a_index) { return Element(a_base, a_index, sizeof(GlintParameters)); }
 
 		/** @brief SetupTechniqueDescriptor (LightingDescriptors.cpp) from the frame's bytes; idempotent, so a held descriptor passes unchanged. */
-		std::uint32_t HeldDescriptor(std::uint32_t a_pass, const FeatureFrame& a_frame)
+		std::uint32_t HeldDescriptor(std::uint32_t a_pass, const MaterialPort::HookFrame& a_frame)
 		{
 			const std::uint32_t technique = a_pass & 0x3f000000u;
 			if (technique == 0x12000000u && !a_frame.techniqueByte12)
@@ -116,57 +122,34 @@ namespace DCLF::MaterialPort
 
 		Technique TechniqueOf(std::uint32_t a_held) { return static_cast<Technique>((a_held >> 24) & 0x3f); }
 
-		void ResetRecord(MaterialRecord& a_out)
-		{
-			// A record with nothing written: unwritten constants, no textures, unwritten filter modes.
-			a_out.vs.Reset();
-			a_out.ps.Reset();
-			a_out.textures = {};
-			a_out.addressModes = {};
-			a_out.filterModes.fill(kUnwrittenFilterMode);
-			a_out.textureWritten = 0;
-			a_out.featureTextures = {};
-		}
-
-		/** @brief RendererShadowState's Set* calls, in MaterialRecord's terms. */
+		/** @brief RendererShadowState's Set* calls, in the evaluation's record terms. */
 		struct Writer
 		{
-			MaterialRecord& out;
+			Evaluation& out;
 
 			// SetPSConstant<T>: sizeof(T) bytes at the variable's offset, the rest of the float4 untouched.
 			void PS(std::uint32_t a_variable, const float* a_values, std::uint32_t a_count)
 			{
-				std::memcpy(&out.ps.floats[LightingPSLayout().offset[a_variable]], a_values, a_count * sizeof(float));
+				std::memcpy(out.PSFloats() + LightingPSLayout().offset[a_variable], a_values, a_count * sizeof(float));
 			}
 			void PSBits(std::uint32_t a_variable, std::uint32_t a_bits)
 			{
-				std::memcpy(&out.ps.floats[LightingPSLayout().offset[a_variable]], &a_bits, sizeof(a_bits));
+				std::memcpy(out.PSFloats() + LightingPSLayout().offset[a_variable], &a_bits, sizeof(a_bits));
 			}
 			void VS(std::uint32_t a_variable, const float* a_values, std::uint32_t a_count)
 			{
-				std::memcpy(&out.vs.floats[LightingVSLayout().offset[a_variable]], a_values, a_count * sizeof(float));
+				std::memcpy(out.VSFloats() + LightingVSLayout().offset[a_variable], a_values, a_count * sizeof(float));
 			}
 			// SetPSTexture + SetPSTextureAddressMode (+ SetPSTextureFilterMode).
-			void Texture(std::uint32_t a_slot, ID3D11ShaderResourceView* a_view, std::uint32_t a_address)
-			{
-				out.textures[a_slot] = a_view;
-				out.addressModes[a_slot] = a_address;
-				out.textureWritten |= 1u << a_slot;
-			}
+			void Texture(std::uint32_t a_slot, ID3D11ShaderResourceView* a_view, std::uint32_t a_address) { out.BindTexture(a_slot, a_view, a_address); }
 			void Texture(std::uint32_t a_slot, ID3D11ShaderResourceView* a_view, std::uint32_t a_address, std::uint32_t a_filter)
 			{
 				Texture(a_slot, a_view, a_address);
-				out.filterModes[a_slot] = a_filter;
+				out.SetFilterMode(a_slot, a_filter);
 			}
-			// A feature's own slot (kFeatureMaterialRegisters): TruePBR's extendedRendererState.SetPSTexture.
-			void FeatureTexture(std::uint32_t a_entry, ID3D11ShaderResourceView* a_view) { out.featureTextures[a_entry] = a_view; }
+			// Its own register (kTextureRegisters' a_local): TruePBR's extendedRendererState.SetPSTexture.
+			void FeatureTexture(std::uint32_t a_local, ID3D11ShaderResourceView* a_view) { out.FeatureTexture(a_local, a_view); }
 		};
-
-		ID3D11ShaderResourceView* RenderTargetView(const FeatureFrame& a_frame, std::int32_t a_index)
-		{
-			// The engine indexes renderTargets unchecked; an index past the array has no defined view.
-			return a_index >= 0 && static_cast<std::uint32_t>(a_index) < kFeatureRenderTargets ? a_frame.renderTargetViews[a_index] : nullptr;
-		}
 
 		/** @brief GlintParameters (TruePBR.h) at a_offset: enabled, then four floats. */
 		struct Glint
@@ -174,7 +157,7 @@ namespace DCLF::MaterialPort
 			bool enabled;
 			float values[4];  // screenSpaceScale, 40 - logMicrofacetDensity, microfacetRoughness, densityRandomization
 		};
-		Glint ReadGlint(const MaterialSnapshot& a_snapshot, std::uint16_t a_offset)
+		Glint ReadGlint(const Evaluation& a_snapshot, std::uint16_t a_offset)
 		{
 			Glint glint{};
 			glint.enabled = a_snapshot.At<bool>(a_offset + offsetof(GlintParameters, enabled));
@@ -186,20 +169,20 @@ namespace DCLF::MaterialPort
 		}
 
 		// TruePBR::BSLightingShader_SetupMaterial, MTLand and MTLandLODBlend (BSLightingShaderMaterialPBRLandscape).
-		void Landscape(const MaterialSnapshot& a_snapshot, const FeatureFrame& a_frame, Writer& a_write)
+		void Landscape(const Evaluation& a_snapshot, const MaterialPort::HookFrame& a_frame, Writer& a_write)
 		{
 			const auto& ps = ShaderConstants::LightingPS::Get();
 			// Every tile's slots, a missing texture by the default; the displacement (black) and RMAOS (white) layers go to TruePBR's own
-			// t80-t91 (extendedRendererState: views only, sampled through the colour sampler, s0), MaterialRecord::featureTextures
-			// from kTruePBRFeatureTextures. Without them a full-PBR tile samples no RMAOS: AO 0 (no ambient), roughness 0.
+			// t80-t91 (extendedRendererState: views only, sampled through the colour sampler, s0), its feature textures (kTextureRegisters).
+			// Without them a full-PBR tile samples no RMAOS: AO 0 (no ambient), roughness 0.
 			const auto orDefault = [&](std::uint16_t a_offset, ID3D11ShaderResourceView* a_default) {
 				return a_snapshot.HasTexture(a_offset) ? a_snapshot.View(a_offset) : a_default;
 			};
 			for (std::uint32_t tile = 0; tile < kTiles; ++tile) {
 				a_write.Texture(tile, orDefault(Pointer(kLandBaseColor, tile), a_frame.defaultBlackView), kWrap, kAnisotropic);
 				a_write.Texture(kNormalStart + tile, orDefault(Pointer(kLandNormal, tile), a_frame.defaultNormalMapView), kWrap, kAnisotropic);
-				a_write.FeatureTexture(kTruePBRFeatureTextures + tile, orDefault(Pointer(kLandDisplacement, tile), a_frame.defaultBlackView));
-				a_write.FeatureTexture(kTruePBRFeatureTextures + kTiles + tile, orDefault(Pointer(kLandRmaos, tile), a_frame.defaultWhiteView));
+				a_write.FeatureTexture(tile, orDefault(Pointer(kLandDisplacement, tile), a_frame.defaultBlackView));
+				a_write.FeatureTexture(kTiles + tile, orDefault(Pointer(kLandRmaos, tile), a_frame.defaultWhiteView));
 			}
 			if (a_snapshot.HasTexture(kLandOverlay))
 				a_write.Texture(13, a_snapshot.View(kLandOverlay), kClamp, kAnisotropic);
@@ -232,12 +215,12 @@ namespace DCLF::MaterialPort
 		}
 
 		// TruePBR::BSLightingShader_SetupMaterial, None and TreeAnim (BSLightingShaderMaterialPBR), its textures checked present.
-		void Object(const MaterialSnapshot& a_snapshot, std::uint32_t a_lightingFlags, const FeatureFrame& a_frame, Writer& a_write)
+		void Object(const Evaluation& a_snapshot, std::uint32_t a_lightingFlags, const MaterialPort::HookFrame& a_frame, Writer& a_write)
 		{
 			const auto& ps = ShaderConstants::LightingPS::Get();
 			const auto clampMode = static_cast<std::uint32_t>(a_snapshot.At<std::int32_t>(kClampMode));
 			const auto diffuseTarget = a_snapshot.At<std::int32_t>(kDiffuseTarget);
-			a_write.Texture(0, diffuseTarget != -1 ? RenderTargetView(a_frame, diffuseTarget) : a_snapshot.View(kDiffuse), clampMode, kAnisotropic);
+			a_write.Texture(0, diffuseTarget != -1 ? MaterialPort::RenderTargetView(a_frame, diffuseTarget) : a_snapshot.View(kDiffuse), clampMode, kAnisotropic);
 			a_write.Texture(1, a_snapshot.View(kNormal), clampMode, kAnisotropic);
 			a_write.Texture(5, a_snapshot.View(kRmaos), clampMode, kAnisotropic);
 
@@ -316,176 +299,78 @@ namespace DCLF::MaterialPort
 			const float params1[3]{ a_snapshot.At<float>(kSpecularColorScale), a_snapshot.At<float>(kRimLightPower), a_snapshot.At<float>(kSpecularPower) };
 			a_write.PS(ps.PBRParams1, params1, 3);
 		}
-
-		ID3D11ShaderResourceView* ViewOfTexture(const RE::NiSourceTexture* a_texture)
-		{
-			const auto* texture = a_texture ? a_texture->rendererTexture : nullptr;
-			return texture ? reinterpret_cast<ID3D11ShaderResourceView*>(texture->resourceView) : nullptr;
-		}
-
-		/** @brief Skin::skinExtraTextures as MaterialTexturesOf resolves each entry; render thread (the map's only user). */
-		std::shared_ptr<const std::vector<SkinTextures>> SampleSkinTextures(ID3D11ShaderResourceView* a_black)
-		{
-			static std::shared_ptr<const std::vector<SkinTextures>> held;
-			static std::vector<SkinTextures> scratch;
-			scratch.clear();
-			for (const auto& [hashKey, entry] : globals::features::skin.skinExtraTextures) {
-				SkinTextures textures{ hashKey, a_black, a_black };
-				if (entry.hasExtraTexture || entry.hasWetnessTexture) {
-					textures.rfaos = ViewOfTexture(entry.rfaosTexture.get());
-					textures.wetness = ViewOfTexture(entry.wetnessTexture.get());
-				}
-				scratch.push_back(textures);
-			}
-			std::sort(scratch.begin(), scratch.end(), [](const SkinTextures& a, const SkinTextures& b) { return a.hashKey < b.hashKey; });
-			const auto same = [](const SkinTextures& a, const SkinTextures& b) { return a.hashKey == b.hashKey && a.rfaos == b.rfaos && a.wetness == b.wetness; };
-			if (!held || !std::equal(held->begin(), held->end(), scratch.begin(), scratch.end(), same))
-				held = std::make_shared<const std::vector<SkinTextures>>(scratch);
-			return held;
-		}
-
-		const SkinTextures* FindSkinTextures(const FeatureFrame& a_frame, std::uint32_t a_hashKey)
-		{
-			if (!a_frame.skinTextures)
-				return nullptr;
-			const auto& table = *a_frame.skinTextures;
-			const auto it = std::lower_bound(table.begin(), table.end(), a_hashKey, [](const SkinTextures& a, std::uint32_t k) { return a.hashKey < k; });
-			return it != table.end() && it->hashKey == a_hashKey ? &*it : nullptr;
-		}
-
-		bool SkinApplies(const MaterialSnapshot& a_snapshot, const FeatureFrame& a_frame)
-		{
-			return a_frame.skin && (a_snapshot.feature == kFaceGen || a_snapshot.feature == kFaceGenRGBTint);
-		}
 	}
 
-	FeatureFrame SampleFeatureFrame()
+	bool OwnClass(const void* a_vtable)
 	{
-		FeatureFrame frame;
-		frame.truePBR = globals::features::truePBR.loaded;
-		frame.skin = globals::features::skin.loaded;
-
-		const auto& frameGlobals = FrameGlobals::Current();
-		frame.techniqueByte12 = frameGlobals.techniqueByte12;
-		frame.techniqueByte7 = frameGlobals.techniqueByte7;
-
-		if (const auto* smState = globals::game::smState) {
-			frame.textureTransformBuffer = smState->textureTransformCurrentBuffer;
-			frame.characterLightEnabled = smState->characterLightEnabled;
-			std::copy_n(smState->characterLightParams, 4, frame.characterLightParams.data());
-		}
-		static const REL::Relocation<RE::ImageSpaceTexture*> characterLightTexture{ RELOCATION_ID(513464, 391302) };
-		frame.characterLightTarget = static_cast<std::int32_t>(characterLightTexture->renderTarget);
-
-		if (const auto* renderer = globals::game::renderer) {
-			const auto& targets = renderer->GetRuntimeData().renderTargets;
-			const std::size_t count = std::min<std::size_t>(std::size(targets), kFeatureRenderTargets);
-			for (std::size_t i = 0; i < count; ++i)
-				frame.renderTargetViews[i] = reinterpret_cast<ID3D11ShaderResourceView*>(targets[i].SRV);
-		}
-
-		if (const auto* graphicsState = globals::game::graphicsState) {
-			const auto& state = graphicsState->GetRuntimeData();
-			frame.defaultBlack = state.defaultTextureBlack.get();
-			frame.defaultWhite = state.defaultTextureWhite.get();
-			frame.defaultNormalMap = state.defaultTextureNormalMap.get();
-			frame.defaultBlackView = ViewOfTexture(state.defaultTextureBlack.get());
-			frame.defaultWhiteView = ViewOfTexture(state.defaultTextureWhite.get());
-			frame.defaultNormalMapView = ViewOfTexture(state.defaultTextureNormalMap.get());
-		}
-
-		if (frame.skin)
-			frame.skinTextures = SampleSkinTextures(frame.defaultBlackView);
-		return frame;
+		static const auto [begin, end] = [] {
+			const auto base = reinterpret_cast<std::uintptr_t>(&__ImageBase);
+			const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + __ImageBase.e_lfanew);
+			return std::pair{ base, base + nt->OptionalHeader.SizeOfImage };
+		}();
+		const auto address = reinterpret_cast<std::uintptr_t>(a_vtable);
+		return address >= begin && address < end;
 	}
 
-	bool PBRTakesPass(std::uint32_t a_passDescriptor, const FeatureFrame& a_frame)
+	void SampleFrame(Api::MaterialContributorFrame& a_frame)
 	{
-		if (!a_frame.truePBR)
-			return false;
-		const std::uint32_t held = HeldDescriptor(a_passDescriptor, a_frame);
+		// Which hook is installed and runs (Feature::loaded; the hooks are installed only for loaded features).
+		a_frame.SetActive(globals::features::truePBR.loaded);
+	}
+
+	bool PBRTakesPass(const Evaluation& a_evaluation)
+	{
+		const std::uint32_t held = HeldDescriptor(a_evaluation.Pass(), a_evaluation.hook);
 		const auto technique = TechniqueOf(held);
 		return technique != Technique::LODLand && technique != Technique::LODLandNoise && (held & Bit(Flag::TruePbr)) != 0;
 	}
 
-	bool EvaluatePBR(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const MaterialFrame& a_frame, MaterialRecord& a_out)
+	Api::MaterialOutcome EvaluatePBR(Evaluation& a_evaluation)
 	{
-		const auto& frame = a_frame.feature;
-		if (!PBRTakesPass(a_passDescriptor, frame))
-			return false;
-		const std::uint32_t held = HeldDescriptor(a_passDescriptor, frame);
+		// Called only for a pass PBRTakesPass took, while TruePBR is loaded (Extensions::EvaluateReplace).
+		const auto& frame = a_evaluation.hook;
+		const std::uint32_t held = HeldDescriptor(a_evaluation.Pass(), frame);
 		const std::uint32_t lightingFlags = held & 0xffffffu;
 		const auto technique = TechniqueOf(held);
 
 		const bool landscape = technique == Technique::MTLand || technique == Technique::MTLandLODBlend;
 		const bool object = technique == Technique::None || technique == Technique::TreeAnim;
 		// The hook casts by technique; the port covers only the class that cast is right for.
-		if (landscape && (a_snapshot.feature != kLandscapeFeature || a_snapshot.size < sizeof(PBRLandscape)))
-			return false;
+		if (landscape && (a_evaluation.Feature() != kLandscapeFeature || a_evaluation.Size() < sizeof(PBRLandscape)))
+			return Api::MaterialOutcome::Uncovered;
 		if (object) {
-			if (!a_snapshot.pbr || a_snapshot.size < sizeof(PBR))
-				return false;
+			if (!a_evaluation.OwnClass() || a_evaluation.Size() < sizeof(PBR))
+				return Api::MaterialOutcome::Uncovered;
 			// CHECK_PBR_TEXTURE: a missing diffuse, normal or RMAOS returns to the vanilla function (nothing written before it).
-			if (!a_snapshot.HasTexture(kDiffuse) || !a_snapshot.HasTexture(kNormal) || !a_snapshot.HasTexture(kRmaos))
-				return EvaluateVanilla(a_snapshot, a_passDescriptor, a_frame.vanilla, a_out);
+			if (!a_evaluation.HasTexture(kDiffuse) || !a_evaluation.HasTexture(kNormal) || !a_evaluation.HasTexture(kRmaos))
+				return Api::MaterialOutcome::HandBack;
 		}
-		if (a_snapshot.size < sizeof(RE::BSLightingShaderMaterialBase))
-			return false;
+		if (a_evaluation.Size() < sizeof(RE::BSLightingShaderMaterialBase))
+			return Api::MaterialOutcome::Uncovered;
 
-		ResetRecord(a_out);
-		Writer write{ a_out };
+		a_evaluation.ResetRecord();
+		Writer write{ a_evaluation };
 		if (landscape)
-			Landscape(a_snapshot, frame, write);
+			Landscape(a_evaluation, frame, write);
 		else if (object)
-			Object(a_snapshot, lightingFlags, frame, write);
+			Object(a_evaluation, lightingFlags, frame, write);
 
 		// TexcoordOffset: the buffer index unmasked, as the hook reads it.
 		const std::size_t buffer = frame.textureTransformBuffer;
-		const float texcoord[4]{ a_snapshot.At<float>(kTexCoordOffset + buffer * 8), a_snapshot.At<float>(kTexCoordOffset + buffer * 8 + 4),
-			a_snapshot.At<float>(kTexCoordScale + buffer * 8), a_snapshot.At<float>(kTexCoordScale + buffer * 8 + 4) };
+		const float texcoord[4]{ a_evaluation.At<float>(kTexCoordOffset + buffer * 8), a_evaluation.At<float>(kTexCoordOffset + buffer * 8 + 4),
+			a_evaluation.At<float>(kTexCoordScale + buffer * 8), a_evaluation.At<float>(kTexCoordScale + buffer * 8 + 4) };
 		write.VS(kVSTexcoordOffset, texcoord, 4);
 
 		if (lightingFlags & Bit(Flag::CharacterLight)) {
 			// t11 only while the character light has a render target (its filter mode left alone); the params zero while disabled.
 			if (frame.characterLightTarget >= 0)
-				write.Texture(kCharacterLightSlot, RenderTargetView(frame, frame.characterLightTarget), kClamp);
+				write.Texture(kCharacterLightSlot, MaterialPort::RenderTargetView(frame, frame.characterLightTarget), kClamp);
 			std::array<float, 4> params{};
 			if (frame.characterLightEnabled)
 				params = frame.characterLightParams;
 			write.PS(ShaderConstants::LightingPS::Get().CharacterLightParams, params.data(), 4);
 		}
-		return true;
-	}
-
-	bool FeatureHooksCovered(const MaterialSnapshot& a_snapshot, const FeatureFrame& a_frame)
-	{
-		if (!SkinApplies(a_snapshot, a_frame))
-			return true;
-		const auto hashKey = a_snapshot.At<std::uint32_t>(kHashKey);
-		return hashKey == 0 || FindSkinTextures(a_frame, hashKey) != nullptr;
-	}
-
-	void EvaluateFeatureHooks(const MaterialSnapshot& a_snapshot, std::uint32_t, const FeatureFrame& a_frame, MaterialRecord& a_out)
-	{
-		// Advanced Skin (Skin::MaterialTexturesOf, outermost on slot 4): FaceGen and FaceGenRGBTint materials only; no hash key, or
-		// no extra texture, binds black to both. Its entries only: TruePBR's (EvaluatePBR) are the rest. TerrainHelper's t92-t97 and
-		// ExtraFeatureDescriptor bits are not in the record (no shader samples t92-t97), so nothing of it is ported here.
-		const auto skin = [&](ID3D11ShaderResourceView* a_rfaos, ID3D11ShaderResourceView* a_wetness) {
-			a_out.featureTextures[0] = a_rfaos;
-			a_out.featureTextures[1] = a_wetness;
-		};
-		static_assert(kSkinFeatureTextures == 2);
-		skin(nullptr, nullptr);
-		if (!SkinApplies(a_snapshot, a_frame))
-			return;
-		const auto hashKey = a_snapshot.At<std::uint32_t>(kHashKey);
-		if (hashKey == 0) {
-			skin(a_frame.defaultBlackView, a_frame.defaultBlackView);
-			return;
-		}
-		if (const auto* textures = FindSkinTextures(a_frame, hashKey))
-			skin(textures->rfaos, textures->wetness);
-		// A key Advanced Skin has not set up yet: left null (FeatureHooksCovered is false for it).
+		return Api::MaterialOutcome::Made;
 	}
 
 	void PBRTextureFields(const RE::BSShaderMaterial& a_material, std::uint16_t* a_out, std::uint32_t& a_count)

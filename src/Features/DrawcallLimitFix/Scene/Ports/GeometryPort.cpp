@@ -4,6 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 
@@ -77,9 +78,7 @@ namespace DCLF::GeometryPort
 		constexpr std::uint32_t kPSAmbientSpecular = 6;
 
 		// Pass descriptor flags (ShaderCache.h LightingShaderFlags).
-		constexpr std::uint32_t kTruePbr = 1u << 3;
 		constexpr std::uint32_t kSpecular = 1u << 9;
-		constexpr std::uint32_t kAnisoLighting = 1u << 16;
 		constexpr std::uint32_t kAmbientSpecular = 1u << 17;
 		constexpr std::uint32_t kWorldMap = 1u << 18;
 		constexpr std::uint32_t kEyeFlags = 0x21c00u;  // SoftLighting, RimLighting, BackLighting, AmbientSpecular
@@ -89,16 +88,13 @@ namespace DCLF::GeometryPort
 
 		/**
 		 * @brief The descriptor SetupGeometry reads at BSLightingShader+0x94 for a pass descriptor: SetupTechnique's
-		 * (SetupTechniqueDescriptor), then True PBR's SetupGeometry hook (TruePBR.cpp): a TruePbr pass gains AmbientSpecular and flips
-		 * AnisoLighting, and bits 3-5 become min(numLights - 1, 7), the template pass's 0.
+		 * (SetupTechniqueDescriptor), then the pass rules' SetupGeometry hook (Api::LightingPassRules' raw rule, resolved data;
+		 * Integrations/TruePBR's: a TruePbr pass gains AmbientSpecular and flips AnisoLighting), and bits 3-5 become
+		 * min(numLights - 1, 7), the template pass's 0.
 		 */
 		std::uint32_t RawTechniqueOf(std::uint32_t a_passDescriptor)
 		{
-			std::uint32_t raw = SetupTechniqueDescriptor(a_passDescriptor);
-			if (raw & kTruePbr) {
-				raw |= kAmbientSpecular;
-				raw ^= kAnisoLighting;
-			}
+			std::uint32_t raw = Extensions::LightingRawTechnique(SetupTechniqueDescriptor(a_passDescriptor));
 			raw &= ~0x38u;
 			raw |= static_cast<std::uint32_t>(std::min(kTemplateLights - 1, 7)) << 3;
 			return raw;

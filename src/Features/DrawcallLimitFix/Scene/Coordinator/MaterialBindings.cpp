@@ -160,7 +160,7 @@ namespace DCLF::Scene
 			else
 				clear(entry.textureIndex[t], false, t, entry.views[t]);
 		}
-		for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
+		for (std::uint32_t f = 0; f < Extensions::kFeatureTextureSlots; ++f) {
 			if (material.featureTextures[f])
 				bind(material.featureTextures[f], kFeatureSourceTag + f, entry.featureIndex[f], true, f, entry.featureViews[f]);
 			else
