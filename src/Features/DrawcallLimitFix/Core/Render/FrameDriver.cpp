@@ -338,12 +338,14 @@ namespace DCLF
 		const std::uint8_t phase = a_map < Extensions::kOcclusionMaps ? Extensions::OcclusionMapOf(a_map).phase : std::uint8_t{ 0 };
 		auto& view = Scene::FrameView::Get();
 		const auto set = view.FrameClaims();
-		const bool needed = !a_running || !Extensions::OcclusionOn(ActiveToggles(), a_map) || !(occlusionWanted & (1u << a_map)) || !set || !(set->drawn & phase) ||
-		                    view.SetLacking(phase) > 0;
+		// Occluders not yet members of the map's phase (joining) are left out of DCLF's map until they join: the engine's cull is no
+		// fallback for them (it would cull the whole scene for a few objects).
+		const bool needed = !a_running || !Extensions::OcclusionOn(ActiveToggles(), a_map) || !(occlusionWanted & (1u << a_map)) || !set || !(set->drawn & phase);
 		// The engine's cull of the map reads the scene lists: whole again.
 		if (needed)
 			PrimaryCull::Get().RestoreSceneLists();
 		occlusionFrames.engine[a_map] += needed ? 1 : 0;
+		occlusionFrames.joining[a_map] += !needed && view.SetLacking(phase) > 0 ? 1 : 0;
 		return needed;
 	}
 

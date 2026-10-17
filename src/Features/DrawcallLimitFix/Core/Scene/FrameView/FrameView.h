@@ -233,8 +233,8 @@ namespace DCLF::Scene
 			return a_object >= 0 && static_cast<std::size_t>(a_object) < phases.size() ? phases[a_object] : std::uint8_t{ 0 };
 		}
 		/**
-		 * @brief Objects in a phase that are not yet its members. Non-zero: the engine must register the map's scene, withholding
-		 * members (PassCapture); 0: the engine's cull of the map can be skipped.
+		 * @brief Objects in a phase that are not yet its members (joining). An occlusion map DCLF draws leaves them out until they
+		 * join (FrameDriver::OcclusionNeedsEngine counts those frames); the engine's cull is no fallback for them.
 		 */
 		std::uint32_t SetLacking(std::uint8_t a_phase) const
 		{

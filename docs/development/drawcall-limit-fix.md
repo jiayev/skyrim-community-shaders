@@ -1147,8 +1147,11 @@ draw is a defect, counted and reported (set parity, "members a shadow build coul
   is the engine's; a fade DCLF does not model (blended, or a decal's) is left to the engine and its member leaves the set
   at the next commit until the fade ends.
 - the shadow views': the same hooks, by the view's render mode's phase.
-- the occlusion maps': `FUN_1414b2c20`'s one insertion (group 14). The engine still culls and registers a map's scene when
-  some occluder of it is not a member (`SetLacking`); when every one is, `SetupMask` is skipped as before.
+- the occlusion maps': `FUN_1414b2c20`'s one insertion (group 14). `SetupMask` is skipped on every frame DCLF draws
+  the map. An occluder not yet a member of the map's phase (`SetLacking`: in steady state a newly loaded object, such
+  as an NPC's animation object, waiting a commit for a pipeline) is left out of the map until it joins. Before
+  2026-10-17 such a frame fell back to `SetupMask` with the scene lists restored, a cull of the whole scene for a few
+  objects (Whiterun: 5-18 of 300 frames while pipelines compiled, ~1 of 300 after).
 
 The stand-in's admission (PrimaryCull), the leaf exclusion, the list filter, the sun's cascade skip and the point lights'
 exclusion are optimisations keyed by the same snapshot. Correctness does not depend on them.

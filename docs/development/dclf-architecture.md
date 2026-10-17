@@ -500,8 +500,8 @@ a frame happens to have.
     accumulate phase reads it) but never reaches the batch renderer, so the native loop has nothing to draw. A claim is
     the whole object: it joins the set in every phase it takes part in (`SetParticipation`) once everything every one
     of them draws it with is ready (`MainReady`, `PhaseReady`), and leaves all of them together. One that is not ready
-    waits, the engine's in every view. An occlusion map with such an occluder is registered by the engine too
-    (`SetLacking`).
+    waits, the engine's in every view except the occlusion maps: DCLF's map leaves it out until it joins (`SetLacking`
+    counts it), rather than handing the map's whole scene back to the engine's cull.
 -   **Shadow views.** The same, per shadow render mode, from the shadow build's claim sets. This includes the direct
     group insertions the registration makes without `RegisterPass`.
 -   **The sun's registrations.** `SunAccumulation` skips the registration of a claimed caster in the sun's
