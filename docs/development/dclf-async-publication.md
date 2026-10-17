@@ -2505,7 +2505,7 @@ resident-draw, set and fade parity; motion m28/m29).
     - **Registration.** Features/Lod's install (`Gates::RegisterGates`, `Features/Lod/LodGateChannel.cpp`) installs the engine side's
       hooks, then registers, while `LodGates::Enabled()`, the channel (`ChannelApply::AfterBatch`), the show veto (`Api::ShowVeto`: the open word, `Vetoes` and
       `NoteEngineHide`, kept in Core's install-resolved cells, which the hidden-node source's stubs load), a reserved hidden site
-      (`ReserveHiddenSite`, for the gates' own stores' `Extensions::PushReservedHidden`), the adoption guard, the coordinator component
+      (`ReserveHiddenSite`, for the gates' own stores' `Extensions::PushReservedHidden`), the coordinator component
       and its report lines. The component's state (`Features::Lod::Gates::GateState`, `Features/Lod/LodGateComponent.h`) is made by its
       `make` hook; it reaches the coordinator only through its context.
     - **Mirror.** `ApplyMirrorEvents` applies the event in order (the component's `Events.stacked`). Each incoming root is gated in the
@@ -2575,11 +2575,13 @@ resident-draw, set and fade parity; motion m28/m29).
       an area comes into LOD range. Outside a load screen (`DAT_14315b6a0`) their attaches are gated like the swaps' (pre-hidden,
       vetoed) and the gate, with no outgoing, is emitted right after the attach. Under a load screen they pass through: its last LOD
       update is a full rebuild, which flushes every gate before that drain, and DCLF withdraws there.
-    - **Forced generation.** The gates' adoption guard (`Api::AdoptionGuard`: `LodGates::ForcedGeneration`). The frame start samples
-      each registered guard once a frame into the frame inputs' slots (`Extensions::kAdoptionGuardSlots`). The coordinator stamps each
-      publication with the generations of the inputs its pass took before its drains. A generation the last publication was not built
-      for forces one (`PublicationNeeded`). The frame withdraws while an installed guard is older than the frame's
-      (`Extensions::AdoptionGuarded`), beside the toggles compare.
+    - **Forced releases keep the claims** (2026-10-17). The gates had an adoption guard (`Api::AdoptionGuard`, a forced-release
+      generation): every frame withdrew its claims until a publication built after the last forced release was installed. Removed, with
+      the guard API: a withdrawn frame left the engine skipping the stood-in entries DCLF no longer drew (the near world missing for the
+      frame), forced releases are frequent in motion (supersessions, while flips take up to ~230 ms), and DCLF never withdraws its set.
+      A forced release's stores (the pending blocks shown, the held ones released and detached) reach the scene as the hidden-node
+      source's and the tracker's events, and its outcome wakes a pass, so the next publication follows it as any scene change does. The
+      frames until then are what `<- GATE HOLE` and `<- GATE COVERAGE` (below) name.
     - **Observers.**
       - Under `CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`, the adoption checks the installed claims against each flip:
         an incoming geometry not claimed with the flip's phases is `<- GATE HOLE` (a later publication's legitimate change reads as

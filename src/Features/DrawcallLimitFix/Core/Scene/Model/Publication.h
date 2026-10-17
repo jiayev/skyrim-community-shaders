@@ -45,10 +45,6 @@ namespace DCLF
 		std::uint64_t sequence = 0;
 		std::uint32_t commitFrame = 0;        // the scene frame of the commit it applies (CommitSet's; stats and the install delay)
 		std::uint32_t togglesGeneration = 0;  // the toggles that commit was made under (FrameInputs): the toggle reinstall waits for one
-		// The adoption guards' generations its pass's events were complete for (FrameInputs::adoptionGuards): a frame whose own are newer
-		// withdraws until one built after them is installed (Extensions::AdoptionGuarded). The LOD gates': an older publication may claim
-		// the outgoing blocks a forced release detached.
-		Extensions::AdoptionGenerations adoptionGuards{};
 		std::uint32_t tablesGeneration = 0;   // the tables' generation (GetTablesGeneration while it is the frame's)
 		std::shared_ptr<const SceneTables> tables;
 		std::shared_ptr<const SetSnapshot> claims;

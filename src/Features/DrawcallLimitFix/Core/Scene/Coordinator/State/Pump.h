@@ -20,7 +20,6 @@ namespace DCLF::Scene
 		using PublishKey = DCLF::PublishKey;
 		PublishKey publishedKey;
 		bool publishedKeyValid = false;
-		Extensions::AdoptionGenerations publishedAdoptionGuards{};  // the adoption guards' generations of the last publication (NotePublished)
 		bool publishForced = false;  // an input TakeCoordinatorInputs took publishes
 		// Publication pacing: a pass that needs a publication makes it only when the snapshot builder took the last one, for the frame's
 		// own pass (new frame inputs or a FrameInput wake: NoteScenePassDone's gate), inline, or for the first; else it defers, and its
@@ -46,7 +45,7 @@ namespace DCLF::Scene
 			std::array<std::uint64_t, static_cast<std::size_t>(PublishReason::Count)> byReason{};
 			// What made the passes that needed a publication need one (PublicationNeeded), each cause counted: the conditions, then the
 			// publish key's words (CurrentPublishKey's order), its lookups and its catalog.
-			std::array<std::uint64_t, 6> neededBy{};
+			std::array<std::uint64_t, 5> neededBy{};
 			std::array<std::uint64_t, std::tuple_size_v<decltype(PublishKey::words)> + 2> keyMoved{};
 			// DeltasPending's terms (its order), and the lookups key's words (Lookups::ChangeKey's order), each counted when it moved.
 			std::array<std::uint64_t, 12> deltaPending{};

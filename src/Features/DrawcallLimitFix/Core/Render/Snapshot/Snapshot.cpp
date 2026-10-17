@@ -166,7 +166,7 @@ namespace DCLF
 				next.sunCandidates != prior.sunCandidates || next.lightCandidates != prior.lightCandidates || next.categoryNodes != prior.categoryNodes)
 				return false;
 			if (next.tablesGeneration != prior.tablesGeneration || next.togglesGeneration != prior.togglesGeneration || next.lackingCount != prior.lackingCount ||
-				next.adoptionGuards != prior.adoptionGuards || next.lightEntriesAppeared != prior.lightEntriesAppeared || next.revision.pipelines != prior.revision.pipelines ||
+				next.lightEntriesAppeared != prior.lightEntriesAppeared || next.revision.pipelines != prior.revision.pipelines ||
 				next.revision.shadowSlotKeys != prior.revision.shadowSlotKeys || next.revision.shadowKeys != prior.revision.shadowKeys)
 				return false;
 			if (a_work.sun != a_posted.sun || a_work.light != a_posted.light)

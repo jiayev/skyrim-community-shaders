@@ -50,15 +50,6 @@ namespace DCLF::Extensions
 	void NoteHiddenSourceSites(std::uint32_t a_sites) { hiddenSourceSites = a_sites; }
 	std::uint32_t HiddenSourceSites() { return hiddenSourceSites; }
 
-	AdoptionGenerations SampleAdoptionGuards()
-	{
-		AdoptionGenerations generations{};
-		const auto guards = RegisteredAdoptionGuards();
-		for (std::size_t g = 0; g < guards.size(); ++g)
-			generations[g] = guards[g].generation();
-		return generations;
-	}
-
 	void StandInRootsChanged(const Api::StandInRootsChange& a_change)
 	{
 		for (const auto& observer : RegisteredStandInObservers())

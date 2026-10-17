@@ -68,22 +68,6 @@ namespace DCLF::Extensions
 	 * before the needs are bound, for an unbound need, or a channel without a push.
 	 */
 	void PushChannelKey(Api::EngineChannelId a_channel, const void* a_key);
-	/**
-	 * @brief The adoption guards the frame inputs and a publication carry the generations of (Scene::FrameInputs::adoptionGuards,
-	 * ScenePublication::adoptionGuards), by registration order: grow it before more are registered.
-	 */
-	inline constexpr std::uint32_t kAdoptionGuardSlots = 2;
-	using AdoptionGenerations = std::array<std::uint64_t, kAdoptionGuardSlots>;
-	/** @brief Any thread, after InstallFeatures: every registered guard's generation (Api::AdoptionGuard::generation), 0 past them. */
-	AdoptionGenerations SampleAdoptionGuards();
-	/** @brief Whether any of a_installed's guards is older than a_frame's (the frame withdraws its claims). */
-	inline bool AdoptionGuarded(const AdoptionGenerations& a_installed, const AdoptionGenerations& a_frame)
-	{
-		for (std::uint32_t g = 0; g < kAdoptionGuardSlots; ++g)
-			if (a_installed[g] < a_frame[g])
-				return true;
-		return false;
-	}
 
 	/**
 	 * @brief Main thread, at PostPostLoad, before InstallFeatures (the hidden-node source's install, in the early hooks): its stores' sites;

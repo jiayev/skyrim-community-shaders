@@ -62,7 +62,6 @@ namespace DCLF::Extensions
 			std::vector<EngineChannelEntry> engineChannels;
 			// The engine channels needed by name (by need slot), bound at the end (BindEngineChannelNeeds).
 			std::vector<std::string> engineChannelNeeds;
-			std::vector<AdoptionGuardEntry> adoptionGuards;
 			// The show veto's cells (RegisteredShowVeto: their address fixed for the session), its hide sites owned.
 			Api::ShowVeto showVeto{ &kShowVetoClosed, &NoShowVeto, nullptr, {} };
 			std::vector<std::uint32_t> showVetoHideSites;
@@ -786,16 +785,6 @@ namespace DCLF::Extensions
 				lists.showVeto = { a_veto.open, a_veto.vetoes, a_veto.engineHid, lists.showVetoHideSites };
 			}
 
-			void RegisterAdoptionGuard(const Api::AdoptionGuard& a_guard) override
-			{
-				if (a_guard.name.empty() || !a_guard.generation)
-					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete adoption guard", feature));
-				// The frame inputs and a publication carry each guard's generation in a slot of their own (AdoptionGenerations).
-				if (lists.adoptionGuards.size() >= kAdoptionGuardSlots)
-					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s adoption guard {} is one past kAdoptionGuardSlots: grow it first", feature, a_guard.name));
-				lists.adoptionGuards.push_back({ std::string(a_guard.name), a_guard.generation });
-			}
-
 			std::uint32_t ReserveHiddenSite() override { return HiddenSourceSites() + lists.reservedHiddenSites++; }
 			void RegisterNodeCapture(const Api::NodeCaptureContribution& a_capture) override { AddNodeCapture(feature, a_capture); }
 			Api::MoveWriterId ReserveMoveWriter(std::string_view a_name) override { return Extensions::ReserveMoveWriter(a_name); }
@@ -1334,7 +1323,6 @@ namespace DCLF::Extensions
 	std::span<const ReportLinesEntry> RegisteredReportLines() { return Registered().reportLines; }
 	std::span<const Api::StandInObserver> RegisteredStandInObservers() { return Registered().standInObservers; }
 	std::span<const EngineChannelEntry> RegisteredEngineChannels() { return Registered().engineChannels; }
-	std::span<const AdoptionGuardEntry> RegisteredAdoptionGuards() { return Registered().adoptionGuards; }
 	const Api::ShowVeto& RegisteredShowVeto() { return Registered().showVeto; }
 	bool ShowVetoRegistered() { return Registered().showVetoRegistered; }
 	std::uint32_t ReservedHiddenSites() { return Registered().reservedHiddenSites; }

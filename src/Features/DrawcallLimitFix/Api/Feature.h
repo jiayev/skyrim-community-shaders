@@ -103,8 +103,6 @@ namespace DCLF::Api
 		virtual EngineChannelId NeedEngineChannel(std::string_view a_name) = 0;
 		/** @brief Fails the install for a second show veto, or one without open or vetoes. */
 		virtual void RegisterShowVeto(const ShowVeto& a_veto) = 0;
-		/** @brief Fails the install for no name or generation, or past Extensions::kAdoptionGuardSlots guards. */
-		virtual void RegisterAdoptionGuard(const AdoptionGuard& a_guard) = 0;
 		/**
 		 * @brief A hidden-event site of the feature's own, past the hidden-node source's sites (its stores' events carry it:
 		 * Extensions::PushReservedHidden), in reservation order.

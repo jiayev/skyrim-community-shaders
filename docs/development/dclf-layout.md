@@ -365,13 +365,13 @@ name is still "segments") and the range slots (`ResolveEntryRangeSlots`). The se
 (`Features/Lod/LodSegments.h`), registered as the `kSubIndexTriShape` contribution's `ranges` (`CaptureDrawnRanges`; `Api/EntryRanges.h`);
 Core no longer tests `kSubIndexTriShape` in the capture, the walk or the attach's prepare (`Extensions::GeometryTypeRanged`).
 The LOD gates followed into Features/Lod, once the generic structures they use existed (`Api/EngineEvents.h`: the `SceneStack` channel kind,
-the show veto, adoption guards, reserved hidden sites; `Api/CoordinatorComponents.h`: root marks, entry vetoes and observed slots, the
+the show veto, reserved hidden sites; `Api/CoordinatorComponents.h`: root marks, entry vetoes and observed slots, the
 commit's settle, take and publication hooks, the adoption hook). The feature now registers their switch (`CS_DCLF_LOD_GATES`, listed where
 Core's was: before `CS_DCLF_SHADOWS`, after Lod's two and TreeLod's, which name it), installs their engine hooks at its install
 (`LodGates.cpp`: the swaps' thunks, the LOD drain's and retirement's detours, the forced paths; `ShellState::Running` for the running
 query; no other hook shares their sites, so the move from the shell, right before the features, changed no patch), and registers, while
 they are installed and first of its registrations (where Core registered them, before every feature), their SceneStack channel, show
-veto, reserved hidden site, adoption guard, coordinator component (`LodGateComponent.cpp`, `LodGateAdoption.cpp`; after tree wind's,
+veto, reserved hidden site, coordinator component (`LodGateComponent.cpp`, `LodGateAdoption.cpp`; after tree wind's,
 which shares no hook with it, and before the segments') and report lines (`LodGateReports.cpp`: `SceneCoordinatorGates`, `GateReleases`,
 alone at both), all in `LodGateChannel.cpp`; their observers and parity (`Diagnostics/LodGateObservers.cpp`, `LodGateParity.cpp`) are
 subscribed under the switches Core's observer install used. What they leave Core is the generic structures, the show veto's cells the

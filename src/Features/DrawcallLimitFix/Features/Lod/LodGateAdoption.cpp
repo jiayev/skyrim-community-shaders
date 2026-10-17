@@ -1,5 +1,5 @@
-// The LOD gates' publication and adoption: their adoption guard, the flips' publication (scene lane) and their release by the frame
-// installing them (render thread).
+// The LOD gates' publication and adoption: the flips' publication (scene lane) and their release by the frame installing them (render
+// thread).
 
 #include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
@@ -14,8 +14,6 @@ namespace DCLF::Features::Lod::Gates
 	{
 		ReleaseStats releaseStats;  // render thread
 	}
-
-	std::uint64_t ForcedGeneration() { return LodGates::ForcedGeneration(); }
 
 	ReleaseStats& Releases() { return releaseStats; }
 

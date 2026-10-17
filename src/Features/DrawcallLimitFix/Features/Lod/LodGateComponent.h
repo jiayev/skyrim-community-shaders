@@ -204,8 +204,6 @@ namespace DCLF::Features::Lod::Gates
 	void ForgotAll(const Api::CoordinatorComponentContext& a_context);
 
 	// LodGateAdoption.cpp: the publication and the adoption.
-	/** @brief The gates' adoption guard (Api::AdoptionGuard::generation): LodGates::ForcedGeneration. */
-	std::uint64_t ForcedGeneration();
 	/** @brief Commit::published: the GateFlipsPublished observers, against the publication's claims. */
 	void Published(const Api::CoordinatorComponentContext& a_context);
 	/**

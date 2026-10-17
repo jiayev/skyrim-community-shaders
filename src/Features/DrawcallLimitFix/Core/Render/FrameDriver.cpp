@@ -128,8 +128,7 @@ namespace DCLF
 			// guard's generation (a LOD gate's forced release), has no claims: the engine draws everything, and the next covered frame
 			// installs the whole set again.
 			RenderThreadBudget::Part exchange(RenderThreadBudget::Bucket::Exchange);
-			if (!draws.DecideCoverage() || !view.HasInstalled() || view.InstalledToggles() < toggleGeneration ||
-				Extensions::AdoptionGuarded(view.InstalledAdoptionGuards(), view.FrameAdoptionGuards()))
+			if (!draws.DecideCoverage() || !view.HasInstalled() || view.InstalledToggles() < toggleGeneration)
 				view.WithdrawSet();
 			else
 				view.InstallClaims();
