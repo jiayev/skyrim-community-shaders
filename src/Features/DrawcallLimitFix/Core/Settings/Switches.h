@@ -21,6 +21,7 @@ namespace DCLF
 		AsyncPriority,
 		Workers,
 		Fanout,
+		PayloadAppend,
 		Precompile,
 		Cull,
 		ProjectedUv,

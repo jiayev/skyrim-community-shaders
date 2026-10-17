@@ -397,6 +397,199 @@ namespace DCLF
 			}
 			return true;
 		}
+
+		// CS_DCLF_PERSISTENT_PARITY's report: the first field a kept shape and the one made again differ in, field by field as their
+		// SameShape compares (empty: none). Only on a difference.
+		template <class H>
+		std::string HandleText(const H& a_handle)
+		{
+			return fmt::format("{}:{}", a_handle.index, a_handle.generation);
+		}
+
+		template <class H>
+		std::string HandleDifference(const char* a_what, const H& a_old, const H& a_new)
+		{
+			return SameHandle(a_old, a_new) ? std::string() : fmt::format("{} {} -> {}", a_what, HandleText(a_old), HandleText(a_new));
+		}
+
+		template <class T>
+		std::string ValueDifference(const char* a_what, const T& a_old, const T& a_new)
+		{
+			return a_old == a_new ? std::string() : fmt::format("{} {} -> {}", a_what, a_old, a_new);
+		}
+
+		std::string LatchedDifference(const char* a_what, const LatchedList& a_old, const LatchedList& a_new)
+		{
+			if (a_old.latch != a_new.latch)
+				return fmt::format("{}: latch block {} -> {}", a_what, fmt::ptr(a_old.latch.get()), fmt::ptr(a_new.latch.get()));
+			if (a_old.fixed != a_new.fixed)
+				return fmt::format("{}: fixed {} -> {}", a_what, a_old.fixed, a_new.fixed);
+			if (a_old.copies.size() != a_new.copies.size())
+				return fmt::format("{}: copies {} -> {}", a_what, a_old.copies.size(), a_new.copies.size());
+			for (std::size_t c = 0; c < a_old.copies.size(); ++c)
+				if (const auto &o = a_old.copies[c], &n = a_new.copies[c]; !(o == n))
+					return fmt::format("{}: copy {} (target {} at {} bytes {} to {}) -> (target {} at {} bytes {} to {})", a_what, c, fmt::ptr(o.target), o.latchOffset,
+						o.bytes, o.dstOffset, fmt::ptr(n.target), n.latchOffset, n.bytes, n.dstOffset);
+			return {};
+		}
+
+		std::string IndirectDifference(const IndirectState& a_old, const IndirectState& a_new)
+		{
+			if (a_old.valid != a_new.valid)
+				return fmt::format("indirect valid {} -> {}", a_old.valid, a_new.valid);
+			for (std::size_t i = 0; i < a_old.sets.size(); ++i) {
+				if (auto d = HandleDifference("indirect set", a_old.sets[i], a_new.sets[i]); !d.empty())
+					return fmt::format("{} (variant {})", d, i);
+				if (auto d = HandleDifference("indirect signature", a_old.signatures[i], a_new.signatures[i]); !d.empty())
+					return fmt::format("{} (variant {})", d, i);
+			}
+			for (auto d : { HandleDifference("indirect layout", a_old.layout, a_new.layout), HandleDifference("indirect zLayout", a_old.zLayout, a_new.zLayout),
+					 HandleDifference("indirect zDrawSignature", a_old.zDrawSignature, a_new.zDrawSignature),
+					 HandleDifference("indirect refraction pipeline", a_old.refraction, a_new.refraction),
+					 ValueDifference("indirect refraction format", static_cast<int>(a_old.refractionFormat), static_cast<int>(a_new.refractionFormat)) })
+				if (!d.empty())
+					return d;
+			return {};
+		}
+
+		std::string ShapeDifference(const PassFrame& a_old, const PassFrame& a_new)
+		{
+			if (!(a_old.zCalls == a_new.zCalls)) {
+				if (a_old.zCalls.size() != a_new.zCalls.size())
+					return fmt::format("zCalls {} -> {}", a_old.zCalls.size(), a_new.zCalls.size());
+				for (std::size_t c = 0; c < a_old.zCalls.size(); ++c)
+					if (const auto &o = a_old.zCalls[c], &n = a_new.zCalls[c]; !(o == n))
+						return fmt::format("zCall {} (bucket {} first {} capacity {} pipeline {} near {}) -> (bucket {} first {} capacity {} pipeline {} near {})", c, o.bucket,
+							o.first, o.capacity, HandleText(o.pipeline), o.terrainNear, n.bucket, n.first, n.capacity, HandleText(n.pipeline), n.terrainNear);
+			}
+			if (auto d = LatchedDifference("latched", a_old.latched, a_new.latched); !d.empty())
+				return d;
+			for (std::size_t g = 0; g < a_old.decalCapacity.size(); ++g)
+				if (auto d = ValueDifference("decalCapacity", a_old.decalCapacity[g], a_new.decalCapacity[g]); !d.empty())
+					return fmt::format("{} (group {})", d, g);
+			for (std::size_t g = 0; g < a_old.terrainCapacity.size(); ++g)
+				if (auto d = ValueDifference("terrainCapacity", a_old.terrainCapacity[g], a_new.terrainCapacity[g]); !d.empty())
+					return fmt::format("{} (group {})", d, g);
+			for (auto d : { ValueDifference("drawCapacity", a_old.drawCapacity, a_new.drawCapacity),
+					 ValueDifference("forwardCapacity", a_old.forwardCapacity, a_new.forwardCapacity),
+					 ValueDifference("refractionCapacity", a_old.refractionCapacity, a_new.refractionCapacity),
+					 ValueDifference("sequenceDraws", a_old.sequenceDraws, a_new.sequenceDraws), ValueDifference("sequenceDecals", a_old.sequenceDecals, a_new.sequenceDecals),
+					 ValueDifference("cullMode", a_old.cullMode, a_new.cullMode), ValueDifference("width", a_old.width, a_new.width),
+					 ValueDifference("height", a_old.height, a_new.height), ValueDifference("minDepth", a_old.minDepth, a_new.minDepth),
+					 ValueDifference("maxDepth", a_old.maxDepth, a_new.maxDepth), HandleDifference("resourceHeap", a_old.resourceHeap, a_new.resourceHeap),
+					 HandleDifference("samplerHeap", a_old.samplerHeap, a_new.samplerHeap), IndirectDifference(a_old.indirect, a_new.indirect) })
+				if (!d.empty())
+					return d;
+			if (a_old.latch != a_new.latch)
+				return fmt::format("latch block {} -> {}", fmt::ptr(a_old.latch.get()), fmt::ptr(a_new.latch.get()));
+			return {};
+		}
+
+		std::string ShapeDifference(const ViewFrame& a_old, const ViewFrame& a_new)
+		{
+			if (a_old.latch != a_new.latch)
+				return fmt::format("latch block {} -> {}", fmt::ptr(a_old.latch.get()), fmt::ptr(a_new.latch.get()));
+			for (std::size_t l = 0; l < a_old.latched.size(); ++l)
+				if (auto d = LatchedDifference(l == 0 ? "latched (from latch)" : l == 1 ? "latched (zeros)" : "latched (frame)", a_old.latched[l], a_new.latched[l]); !d.empty())
+					return d;
+			for (auto d : { HandleDifference("resourceHeap", a_old.resourceHeap, a_new.resourceHeap), HandleDifference("samplerHeap", a_old.samplerHeap, a_new.samplerHeap),
+					 IndirectDifference(a_old.indirect, a_new.indirect), ValueDifference("width", a_old.width, a_new.width), ValueDifference("height", a_old.height, a_new.height),
+					 ValueDifference("depthRange", a_old.depthRange, a_new.depthRange), ValueDifference("sequenceDraws", a_old.sequenceDraws, a_new.sequenceDraws) })
+				if (!d.empty())
+					return d;
+			if (a_old.buckets.size() != a_new.buckets.size())
+				return fmt::format("buckets {} -> {}", a_old.buckets.size(), a_new.buckets.size());
+			for (std::size_t b = 0; b < a_old.buckets.size(); ++b)
+				if (const auto &o = a_old.buckets[b], &n = a_new.buckets[b]; !(o == n))
+					return fmt::format("bucket {} (depth {} colour {} first {} capacity {}) -> (depth {} colour {} first {} capacity {})", b, HandleText(o.depth), HandleText(o.colour),
+						o.first, o.capacity, HandleText(n.depth), HandleText(n.colour), n.first, n.capacity);
+			if (a_old.push.size() != a_new.push.size())
+				return fmt::format("push faces {} -> {}", a_old.push.size(), a_new.push.size());
+			for (std::size_t f = 0; f < a_old.push.size(); ++f)
+				for (std::size_t w = 0; w < a_old.push[f].size(); ++w)
+					if (a_old.push[f][w] != a_new.push[f][w])
+						return fmt::format("push face {} word {} {:#x} -> {:#x}", f, w, a_old.push[f][w], a_new.push[f][w]);
+			for (auto d : { ValueDifference("forwardFirst", a_old.forwardFirst, a_new.forwardFirst), ValueDifference("forwardCapacity", a_old.forwardCapacity, a_new.forwardCapacity),
+					 ValueDifference("forwardEntry", a_old.forwardEntry, a_new.forwardEntry) })
+				if (!d.empty())
+					return d;
+			for (std::size_t d = 0; d < a_old.faces.size(); ++d)
+				if (const auto &o = a_old.faces[d], &n = a_new.faces[d]; !(o == n))
+					return fmt::format("faces of family {} (pipeline {} signature {} groups {}) -> (pipeline {} signature {} groups {})", d, HandleText(o.pipeline),
+						HandleText(o.signature), o.groups, HandleText(n.pipeline), HandleText(n.signature), n.groups);
+			return {};
+		}
+
+		std::string ShapeDifference(const ShadowFrame& a_old, const ShadowFrame& a_new)
+		{
+			if (a_old.latch != a_new.latch)
+				return fmt::format("latch block {} -> {}", fmt::ptr(a_old.latch.get()), fmt::ptr(a_new.latch.get()));
+			for (std::size_t l = 0; l < a_old.latched.size(); ++l)
+				if (auto d = LatchedDifference(l == 0 ? "latched (from latch)" : l == 1 ? "latched (zeros)" : "latched (commit)", a_old.latched[l], a_new.latched[l]); !d.empty())
+					return d;
+			for (auto d : { HandleDifference("resourceHeap", a_old.resourceHeap, a_new.resourceHeap), HandleDifference("samplerHeap", a_old.samplerHeap, a_new.samplerHeap),
+					 ValueDifference("indirect valid", a_old.indirect.valid, a_new.indirect.valid), HandleDifference("indirect layout", a_old.indirect.layout, a_new.indirect.layout) })
+				if (!d.empty())
+					return d;
+			if (a_old.indirect.version != a_new.indirect.version)
+				return fmt::format("indirect version {} -> {}", fmt::ptr(a_old.indirect.version.get()), fmt::ptr(a_new.indirect.version.get()));
+			if (a_old.views.size() != a_new.views.size())
+				return fmt::format("views {} -> {}", a_old.views.size(), a_new.views.size());
+			for (std::size_t v = 0; v < a_old.views.size(); ++v) {
+				const auto &o = a_old.views[v], &n = a_new.views[v];
+				if (o == n)
+					continue;
+				const auto inView = [&](const std::string& a_field) { return fmt::format("view {} (slot {} mode {}): {}", v, o.slot, o.modeIndex, a_field); };
+				for (auto d : { ValueDifference("slot", o.slot, n.slot), ValueDifference("modeIndex", o.modeIndex, n.modeIndex),
+						 ValueDifference("capacity", o.capacity, n.capacity), ValueDifference("x", o.x, n.x), ValueDifference("y", o.y, n.y),
+						 ValueDifference("width", o.width, n.width), ValueDifference("height", o.height, n.height), ValueDifference("minDepth", o.minDepth, n.minDepth),
+						 ValueDifference("maxDepth", o.maxDepth, n.maxDepth), ValueDifference("target", o.target, n.target), ValueDifference("slice", o.slice, n.slice),
+						 ValueDifference("sequenceDraws", o.sequenceDraws, n.sequenceDraws), ValueDifference("rasterState", o.rasterState, n.rasterState) })
+					if (!d.empty())
+						return inView(d);
+				for (std::size_t w = 0; w < o.push.size(); ++w)
+					if (o.push[w] != n.push[w])
+						return inView(fmt::format("push word {} {:#x} -> {:#x}", w, o.push[w], n.push[w]));
+				if (o.buckets.size() != n.buckets.size())
+					return inView(fmt::format("buckets {} -> {}", o.buckets.size(), n.buckets.size()));
+				for (std::size_t b = 0; b < o.buckets.size(); ++b)
+					if (const auto &ob = o.buckets[b], &nb = n.buckets[b]; !(ob == nb))
+						return inView(fmt::format("bucket {} (pipeline {} first {} capacity {}) -> (pipeline {} first {} capacity {})", b, ob.pipeline, ob.first, ob.capacity,
+							nb.pipeline, nb.first, nb.capacity));
+			}
+			return {};
+		}
+
+		/**
+		 * @brief CS_DCLF_PERSISTENT_PARITY's report: which participant's shape made again differs from a_kept's (the main segment, the
+		 * shadow or occlusion epoch's layout, the view) and the first field it differs in. Called only when SameMadeShapes found one.
+		 */
+		std::string MadeShapesDifference(const MadeShapes& a_kept, const MadeShapes& a_made)
+		{
+			const auto shape = [](const std::string& a_what, const auto& a_old, const auto& a_new) -> std::string {
+				if (a_old == a_new)
+					return {};
+				if (!a_old || !a_new)
+					return fmt::format("{}: {} -> {}", a_what, a_old ? "a shape" : "none", a_new ? "a shape" : "none");
+				auto field = ShapeDifference(*a_old, *a_new);
+				return field.empty() ? std::string() : fmt::format("{}: {}", a_what, field);
+			};
+			std::string out;
+			for (std::size_t s = 0; s < a_kept.main.size() && out.empty(); ++s)
+				out = shape(s == kDepthShape ? "main depth" : "main colour", a_kept.main[s], a_made.main[s]);
+			for (std::size_t kind = 0; kind < a_kept.shadow.size() && out.empty(); ++kind) {
+				const char* epoch = kind == 0 ? "shadow" : "occlusion";
+				if (a_kept.shadow[kind].size() != a_made.shadow[kind].size()) {
+					out = fmt::format("{}: layouts {} -> {}", epoch, a_kept.shadow[kind].size(), a_made.shadow[kind].size());
+					break;
+				}
+				for (std::size_t i = 0; i < a_kept.shadow[kind].size() && out.empty(); ++i)
+					out = shape(fmt::format("{} layout {}", epoch, i), a_kept.shadow[kind][i], a_made.shadow[kind][i]);
+			}
+			for (std::size_t v = 0; v < a_kept.views.size() && out.empty(); ++v)
+				out = shape(ImplProducer::kKeyGroupNames[kViewSlots[v].keyGroup], a_kept.views[v], a_made.views[v]);
+			return "a shape differs from the kept one: " + (out.empty() ? std::string("(no field found)") : out);
+		}
 	}
 
 	void IndirectDraws::Impl::EnsureRevisionLatches()
@@ -563,7 +756,7 @@ namespace DCLF
 				const MadeShapes kept = made;
 				for (auto* participant : participants)
 					participant->MakeShapes(make, sealed, mainLayout);
-				reuse.shapesParity.Check(SameMadeShapes(kept, made), [] { return std::string("a shape differs from the kept one"); });
+				reuse.shapesParity.Check(SameMadeShapes(kept, made), [&] { return MadeShapesDifference(kept, made); });
 				made = kept;
 			}
 			assemble(true);
@@ -806,6 +999,13 @@ namespace DCLF
 		mix(a_make.lookupsWitness);
 		mix(ShadowRowsWitness(lookups, inputs.shadowPlacements, producer.recentOcclusionLayouts));
 		mix(a_pipelines);  // the request's pipeline slots (the publication's tables, not the coordinator's)
+		// CS's SharedData and FeatureData sizes the shadow shapes' arena blocks take (ShadowArenaBlocksOf: the views' push data, the
+		// commit's latched copies), which no shadow input carries.
+		if (inputs.shadow) {
+			group = kKeyShadow;
+			const auto blocks = ShadowArenaBlocksOf();
+			mix((std::uint64_t(blocks.sharedBytes) << 32) | blocks.featureBytes);
+		}
 		// Each participant's parts, in order: the main segments', the shadow engine's, the views'.
 		for (const auto* participant : participants)
 			participant->MixShapesKey(a_make, mixer);
@@ -820,10 +1020,14 @@ namespace DCLF
 		auto raw = [&a_mixer]<class T>(const T& a_value) { a_mixer.Raw(a_value); };
 		const auto& inputs = producer.inputs;
 		const auto& latches = producer.latches;
-		// The main pipeline set.
+		// The main pipeline set, and the refraction draw the main and view shapes' indirect state names (SameIndirect): the catalog's own,
+		// not its set version's, so a catalog publishing it under the same version moves only this.
 		group = kKeyPipelines;
 		ptr(a_make.indirect.version.get());
 		mix(a_make.indirect.valid);
+		mix(a_make.indirect.refraction.index);
+		mix(a_make.indirect.refraction.generation);
+		mix(static_cast<std::uint64_t>(a_make.indirect.refractionFormat));
 		// The main segments': their latch's layout, latched targets, and what their commits captured (viewport, frame blocks). The
 		// blocks are the set's (its serial).
 		group = kKeyMain;
