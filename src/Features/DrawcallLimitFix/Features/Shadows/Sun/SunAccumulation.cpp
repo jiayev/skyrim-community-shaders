@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
@@ -385,7 +386,8 @@ namespace DCLF::Features::Shadows::Sun
 			static void thunk(RE::BSShadowDirectionalLight* a_light, std::uint32_t* a_count, std::uint32_t* a_arg2, RE::NiAVObject* a_arg3)
 			{
 				auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
-				if (!node || node->GetRuntimeData().sunShadowDirLight != a_light) {
+				// DCLF switched off: the engine's own Accumulate (no claims, no bits of DCLF's).
+				if (!node || node->GetRuntimeData().sunShadowDirLight != a_light || !ShellState::Running()) {
 					func(a_light, a_count, a_arg2, a_arg3);
 					return;
 				}
@@ -545,6 +547,11 @@ namespace DCLF::Features::Shadows::Sun
 				auto& self = SunAccumulation::Get();
 				self.ResetFrameSun();
 				self.fullFrustumRan = true;
+				// DCLF switched off: the engine's whole cull (no exclusion, no whole skip: the views' coverage is not decided while off).
+				if (!ShellState::Running()) {
+					func(a_light, a_lists, a_arg);
+					return;
+				}
 				auto* light = static_cast<RE::BSShadowDirectionalLight*>(a_light);
 				if (self.ArmWhole(light)) {
 					// The engine's cull with no scene list in it (each empty) and an empty extra list (in place of the main camera's portal
