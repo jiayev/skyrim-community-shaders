@@ -4,9 +4,11 @@
 
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
 #include "Features/DrawcallLimitFix/Api/MaterialWrites.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
 
 #include <array>
 #include <cstddef>
@@ -26,7 +28,7 @@ namespace DCLF::Features::Effects
 		// texture-transform buffers (+0x0c..+0x2c: UV scroll, types 6 and up), the falloff (+0x38..+0x44, types 0-4) and the base colour
 		// (+0x48..+0x54: the colour, type 5's alpha through SetMaterialAlpha).
 		constexpr std::size_t kEffectWrittenFirst = 0x0c, kEffectWrittenEnd = 0x58;
-		constexpr std::size_t kEffectTransformsEnd = 0x2c;  // the texture-transform buffers lead the written span
+		constexpr std::size_t kEffectBaseAlpha = 0x54;  // baseColor.alpha: what an effect member's shading reads of them (SampleEffectShading)
 		using EffectWritten = std::array<std::byte, kEffectWrittenEnd - kEffectWrittenFirst>;
 		EffectWritten EffectWrittenOf(const RE::BSShaderMaterial* a_material)
 		{
@@ -35,9 +37,9 @@ namespace DCLF::Features::Effects
 				std::memcpy(out.data(), reinterpret_cast<const std::byte*>(a_material) + kEffectWrittenFirst, out.size());
 			return out;
 		}
-		// An effect controller's update: the material captured when it moved (its records), and the property's shading resampled (an effect
-		// member's PropertyColor: the material's alpha, the emittance colour). A colour controller of any other type writes a property colour
-		// (its table 0x1435ef2e8): its shading is resampled.
+		// An effect controller's update: the material captured when what its records read moved, and the property's shading resampled when
+		// what that reads did (an effect member's PropertyColor: the material's alpha, the emittance colour). A colour controller of any other
+		// type writes a property colour (its table 0x1435ef2e8): its shading is resampled.
 		void EffectControllerUpdate(RE::NiTimeController* a_this, bool a_propertyColour, void (*a_func)(RE::NiTimeController*, void*), void* a_data)
 		{
 			// Nothing is captured while the toggle is off: no effect record exists then (the scene work asks for a material it lacks:
@@ -52,20 +54,21 @@ namespace DCLF::Features::Effects
 			a_func(a_this, a_data);
 			if (!property)
 				return;
-			// The texture transforms alone (a UV scroll) are the frame values' while a feature patches the frame VS variable
-			// (Features/TextureTransforms, InstallContext::RegisterFrameVSVariablePatch): neither the record nor the shading reads them, so such a
-			// write captures nothing. Unpatched, they are the record's: compared with the rest.
+			// The bytes the frame owns while a feature patches them (Features/TextureTransforms, InstallContext::RegisterFrameVSVariablePatch:
+			// the texture transforms, a UV scroll, and the port's frame variables, the falloff and the base colour: Extensions' frame spans)
+			// are the frame values': no record reads them, so a write confined to them captures nothing. Unpatched, they are the record's:
+			// compared with the rest. A swapped material is captured whatever moved.
 			const auto after = material ? EffectWrittenOf(material) : EffectWritten{};
-			const std::size_t transforms = Extensions::FrameVSVariablePatched() ? kEffectTransformsEnd - kEffectWrittenFirst : 0;
-			const bool fields = property->material != material ||
-			                    (material && std::memcmp(after.data() + transforms, before.data() + transforms, after.size() - transforms) != 0);
-			if (fields) {
-				if (property->material)
-					Api::NoteMaterialWritten(property->material);
+			const bool swapped = property->material != material;
+			const bool moved = material && (Extensions::FrameVSVariablePatched() ?
+			                                       Extensions::DifferOutsideFrameSpans(kMaterialKindEffect, before.data(), after.data(), kEffectWrittenFirst, kEffectWrittenEnd) :
+			                                       std::memcmp(after.data(), before.data(), after.size()) != 0);
+			if ((swapped || moved) && property->material)
+				Api::NoteMaterialWritten(property->material);
+			// The shading reads the base colour's alpha of them (a falloff or colour write leaves it alone).
+			const auto alpha = kEffectBaseAlpha - kEffectWrittenFirst;
+			if (swapped || a_propertyColour || (material && std::memcmp(after.data() + alpha, before.data() + alpha, sizeof(float)) != 0))
 				Api::NotePropertyShading(property);
-			} else if (a_propertyColour) {
-				Api::NotePropertyShading(property);
-			}
 		}
 		struct EffectFloatControllerUpdate
 		{

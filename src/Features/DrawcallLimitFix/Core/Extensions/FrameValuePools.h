@@ -79,13 +79,15 @@ namespace DCLF::Api
 		{
 			a_rows.BeginBuild(oldestContentEpoch ? *oldestContentEpoch : a_rows.ContentEpoch());
 		}
-		/** @brief Send: a_rows' runs the frame's backing lacks, into it (throws when it cannot: the frame's values fail). */
+		/**
+		 * @brief Send: a_rows' runs the frame's backing lacks, into it (throws when it cannot: the frame's values fail). Emitted from the
+		 * rows themselves (KeptArray::Emit: no view's copies), which nothing writes while the producer sends.
+		 */
 		template <class Row>
 		void Send(const KeptWholeArray<Row>& a_rows) const
 		{
-			const auto view = a_rows.View();
-			send(owner, pool, view.Count(), view.ContentEpoch(), &view, [](const void* a_view, std::uint64_t a_contentEpoch, const RowSink& a_sink) {
-				static_cast<const KeptView<Row>*>(a_view)->Emit(a_contentEpoch, a_sink);
+			send(owner, pool, a_rows.Size(), a_rows.ContentEpoch(), &a_rows, [](const void* a_view, std::uint64_t a_contentEpoch, const RowSink& a_sink) {
+				static_cast<const KeptWholeArray<Row>*>(a_view)->Emit(a_contentEpoch, a_sink);
 			});
 		}
 		/** @brief Sample: a_rows rows seeded from what the frame's start read of the engine, counted with the frame values' own seeds. */

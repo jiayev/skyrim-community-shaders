@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstring>
 
 namespace DCLF::MaterialPort
 {
@@ -72,9 +73,9 @@ namespace DCLF::MaterialPort
 
 	SnapshotChange SnapshotChangeOf(const MaterialSnapshot& a_held, const MaterialSnapshot& a_new)
 	{
-		// BSIntrusiveRefCounted's count (+0x8, 4 bytes), then BSShaderMaterial's texCoordOffset/texCoordScale (+0xc, two buffers of 8 bytes
-		// each: +0xc..+0x2c, the texture transforms' fields).
-		constexpr std::size_t kCount = 0x8, kTransforms = 0xc, kTransformsEnd = 0x2c;
+		// BSIntrusiveRefCounted's count (+0x8, 4 bytes), then the fields: the bytes a frame patch owns (Extensions' frame spans: BSShaderMaterial's
+		// texture-transform buffers, +0xc..+0x2c, and the port's declared frame variables') apart from the rest.
+		constexpr std::size_t kCount = 0x8, kFields = 0xc;
 		if (a_held.key != a_new.key || a_held.vtable != a_new.vtable || a_held.feature != a_new.feature || a_held.materialClass != a_new.materialClass ||
 			a_held.port != a_new.port || a_held.size != a_new.size || a_held.textureCount != a_new.textureCount)
 			return SnapshotChange::Fields;
@@ -82,13 +83,15 @@ namespace DCLF::MaterialPort
 			if (a_held.textures[i].offset != a_new.textures[i].offset || a_held.textures[i].view != a_new.textures[i].view)
 				return SnapshotChange::Fields;
 		const std::size_t size = std::min<std::size_t>(a_new.size, kMaxMaterialBytes);
-		auto same = [&](std::size_t a_begin, std::size_t a_end) {
-			a_end = std::min(a_end, size);
-			return a_begin >= a_end || std::memcmp(a_held.bytes.data() + a_begin, a_new.bytes.data() + a_begin, a_end - a_begin) == 0;
-		};
-		if (!same(0, kCount) || !same(kTransformsEnd, size))
+		if (std::memcmp(a_held.bytes.data(), a_new.bytes.data(), std::min(kCount, size)) != 0)
 			return SnapshotChange::Fields;
-		return same(kTransforms, kTransformsEnd) ? SnapshotChange::None : SnapshotChange::Transforms;
+		if (size <= kFields)
+			return SnapshotChange::None;
+		const auto* held = a_held.bytes.data() + kFields;
+		const auto* now = a_new.bytes.data() + kFields;
+		if (Extensions::DifferOutsideFrameSpans(a_new.port, held, now, kFields, size))
+			return SnapshotChange::Fields;
+		return Extensions::DifferInFrameSpans(a_new.port, held, now, kFields, size) ? SnapshotChange::Transforms : SnapshotChange::None;
 	}
 
 	FrameComponentsWitness WitnessOf(const VanillaFrame& a_vanilla, const HookFrame& a_hook, const Extensions::MaterialContributorSamples& a_contributors)

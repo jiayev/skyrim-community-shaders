@@ -6,6 +6,8 @@
 
 #include "Features/DrawcallLimitFix/Core/Extensions/PayloadProducts.h"
 
+#include "Render/Runtime/StreamingUploadTypes.h"
+
 namespace DCLF::Draws
 {
 	/** @brief The payload's buffers: one pool each (org::services::JournaledBufferSet's parts, in this order). */
@@ -53,9 +55,10 @@ namespace DCLF::Draws
 		Extensions::PayloadProducts products;
 		// Every part's uploads (null: nothing was sent). The snapshot posts its Recordings stage only once this completed.
 		std::shared_ptr<const org::async::GpuSubmissionSet> ready;
-		// What the publication sent, per part (diagnostics: catch-up bytes and runs, whether a backing was made).
+		// What the publication sent, per part (diagnostics: catch-up bytes and runs, whether a backing was made, whether the part is the
+		// last publication's version, shared: nothing sent).
 		std::array<std::uint64_t, kPayloadParts> bytes{}, runs{};
-		std::array<bool, kPayloadParts> allocated{};
+		std::array<bool, kPayloadParts> allocated{}, shared{};
 
 		[[nodiscard]] const PayloadBuffer& operator[](PayloadPart a_part) const { return parts[static_cast<std::size_t>(a_part)]; }
 		/** @brief Any thread: the uploads completed (or there were none). */
@@ -73,7 +76,9 @@ namespace DCLF::Draws
 	 * FrameRetirement()'s clock, with no caps. Publish runs on the snapshot builder once its draws are built: each present part leases the
 	 * free backing nearest its journal (preferEpoch = the journal's ContentEpoch()) and emits the runs since that backing's contentEpoch
 	 * into it (rows patched with that backing's address, the inputs' tails written whole), then sets the contentEpoch; `ready` is
-	 * built from the upload tickets. Nothing waits on the GPU.
+	 * built from the upload tickets. Nothing waits on the GPU. A part unchanged since the last publication (its journal at the epoch
+	 * that publication's backing holds, the same units and whole tails, its uploads complete) is not leased again: the publication
+	 * shares that version (a second lease of its backing, back in its pool once both payloads let it go) and sends nothing for it.
 	 *
 	 * Single thread: the snapshot builder's (the pools' single acquirer). The payloads it returns are released from any thread.
 	 */
@@ -110,14 +115,37 @@ namespace DCLF::Draws
 		struct Stats
 		{
 			std::uint64_t publications = 0;
-			std::array<std::uint64_t, kPayloadParts> bytes{}, runs{}, allocated{};
+			std::array<std::uint64_t, kPayloadParts> bytes{}, runs{}, allocated{}, shared{};
 			std::array<org::services::BackingPool::Census, kPayloadParts> pools{};
 		};
 		Stats TakeStats();
 
 	private:
+		/**
+		 * @brief Publish: the parts of a_requests whose last publication's version (a_previous) is what this publication would make,
+		 * their requests emptied (absent from the set's publication: no lease, nothing sent).
+		 */
+		std::array<bool, kPayloadParts> ShareUnchanged(std::span<org::services::JournaledPartRequest> a_requests, const PayloadVersions* a_previous,
+			const std::vector<GeometryDraw>& a_streamRows, const std::vector<DrawInput>* a_mainList, const std::vector<DrawInput>* a_shadowList);
+		/** @brief Publish: the whole tails the parts written (not a_shared) now hold, for the next publication's ShareUnchanged. */
+		void KeepTails(const std::array<bool, kPayloadParts>& a_shared, const std::vector<GeometryDraw>& a_streamRows, const std::vector<DrawInput>* a_mainList,
+			const std::vector<DrawInput>* a_shadowList);
+
 		std::unique_ptr<org::services::JournaledBufferSet> set;
 		std::uint64_t serial = 0;
 		Stats stats;
+		// The last publication (not held: its snapshots hold it), and per part what its version holds (the journal position and the
+		// request's units; 0: none to share), with the whole tails it wrote: what the next publication's unchanged parts share.
+		std::weak_ptr<const PayloadVersions> last;
+		struct KeptPart
+		{
+			std::uint64_t contentEpoch = 0, units = 0;
+		};
+		std::array<KeptPart, kPayloadParts> kept{};
+		std::vector<GeometryDraw> keptStreamRows;
+		std::vector<DrawInput> keptMainList, keptShadowList;
+		// The catch-up's scratch (RangeGather: a part's runs, and the bytes of the runs it copies), reused part to part.
+		std::vector<org::StreamingUploadRange> uploadRanges;
+		std::vector<std::byte> uploadBytes;
 	};
 }

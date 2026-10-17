@@ -3,6 +3,7 @@
 // The main rows (MainRows): written by the main build (DCLF's pool), read by the commit on the render thread and by the payload
 // products (Api::PayloadProductBuild::rows). Self-contained (features include it); MainPayload.h includes it.
 
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -40,6 +42,13 @@ namespace DCLF::Draws
 	{
 		KeptArray<MaterialRow> material;
 		KeptArray<PipelineRow> pipeline;
+		/** @brief Where a row's block placed a frame variable (PlaceFrameVariables): its first component's byte in the row, the components (bit c). */
+		struct FramePlacement
+		{
+			std::uint16_t rowByte = 0;
+			std::uint8_t mask = 0;  // 0: not placed
+			bool operator==(const FramePlacement&) const = default;
+		};
 		struct MaterialState
 		{
 			std::array<std::uint32_t, 8> key{};
@@ -56,6 +65,9 @@ namespace DCLF::Draws
 			// dword, ~0 none, and the components the record wrote.
 			std::uint32_t texcoordDword = ~0u;
 			std::uint8_t texcoordMask = 0;
+			// Where its blocks placed its kind's declared frame variables (Api::MaterialFrameVariable, by declaration), which the same feature
+			// patches likewise.
+			std::array<FramePlacement, Api::kMaxMaterialFrameVariables> frameVariables{};
 		};
 		struct PipelineState
 		{
@@ -106,4 +118,21 @@ namespace DCLF::Draws
 	};
 	/** @brief The `[DCLF] main pairs` report line from a_rows.pairStats, which it resets (the snapshot builder's, with StoresReport). */
 	std::string MainPairsReport(MainRows& a_rows);
+
+	/** @brief One stage of a material row's packing (MainBuild::PackMaterialBlocks'): the record's space, the pipeline's table, the group. */
+	struct MaterialRowStage
+	{
+		const StageLayout& layout;
+		std::span<const std::uint8_t> table;
+		std::uint64_t group = 0;
+		std::uint32_t first = 0;
+	};
+	/**
+	 * @brief Where a material row's packed blocks placed the variables the frame owns, which a feature patches on the GPU from a payload
+	 * product (Features/TextureTransforms): its kind's TexcoordOffset (rules.frameVSVariable: a_state.texcoordDword, texcoordMask) and its
+	 * declared frame variables (a_state.frameVariables). Each takes the components the record wrote that sit at consecutive packed dwords
+	 * from the first inside the block. MainBuild::PackMaterialBlocks, the blocks packed (they fit, the record's kind a_kind the key's).
+	 */
+	void PlaceFrameVariables(const MaterialRecord& a_material, std::uint8_t a_kind, const MaterialRowStage& a_vs, const MaterialRowStage& a_ps,
+		MainRows::MaterialState& a_state);
 }

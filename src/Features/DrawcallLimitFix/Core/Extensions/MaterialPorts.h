@@ -149,12 +149,19 @@ namespace DCLF::Extensions
 		std::uint32_t first[3]{};
 		std::span<const std::string_view> names;
 	};
-	/** @brief A kind's space: both stages, and the VS floats a record takes from the frame (rules.frameVSVariable's, at most 4). */
+	/**
+	 * @brief A kind's space: both stages, the VS floats a record takes from the frame (rules.frameVSVariable's, at most 4), and the declared
+	 * frame variables' floats by stage (Api::MaterialFrameVariable): what a comparison of records leaves out (MaterialSources::
+	 * CopyFrameComponents).
+	 */
 	struct MaterialSpace
 	{
 		MaterialStageEntry vs, ps;
 		std::vector<std::uint32_t> frameVSFloats;
+		std::vector<std::uint32_t> declaredVSFloats, declaredPSFloats;
 	};
+	/** @brief A material byte span [first, end). */
+	using MaterialSpan = std::pair<std::uint16_t, std::uint16_t>;
 
 	/** @brief A kind's entry: its contribution's, with the RTTI, vtable and space resolved (kind 0's: Lighting's space and rules alone). */
 	struct MaterialPortEntry
@@ -168,6 +175,10 @@ namespace DCLF::Extensions
 		std::span<const std::uint16_t> textureFields;
 		MaterialSpace space;
 		Api::MaterialPortRules rules;
+		std::span<const Api::MaterialFrameVariable> frameVariables;
+		// The material bytes a frame patch owns, sorted and disjoint: BSShaderMaterial's texture-transform buffers (+0xc..+0x2c, every
+		// kind's), then the declared frame variables' spans.
+		std::vector<MaterialSpan> frameSpans;
 		decltype(Api::MaterialPortContribution::capture) capture = nullptr;
 		decltype(Api::MaterialPortContribution::derive) derive = nullptr;
 		decltype(Api::MaterialPortContribution::evaluate) evaluate = nullptr;
@@ -228,6 +239,19 @@ namespace DCLF::Extensions
 	inline const Api::MaterialPortRules& PortRules(std::uint8_t a_kind) { return MaterialPorts()[a_kind].rules; }
 	/** @brief Kind a_kind's constant space (0: Lighting's): a record's of that kind (MaterialRecord::kind), a key's of that shader. */
 	inline const MaterialSpace& MaterialSpaceOf(std::uint8_t a_kind) { return MaterialPorts()[a_kind].space; }
+	/** @brief Kind a_kind's frame variables (none for 0 and past the kinds): Api::MaterialPortContribution::frameVariables. */
+	inline std::span<const Api::MaterialFrameVariable> FrameVariablesOf(std::uint8_t a_kind)
+	{
+		return a_kind < kMaterialKinds ? MaterialPorts()[a_kind].frameVariables : std::span<const Api::MaterialFrameVariable>{};
+	}
+	/**
+	 * @brief Pure: whether two copies of kind a_kind's material bytes [a_first, a_end) differ outside the bytes a frame patch owns
+	 * (MaterialPortEntry::frameSpans; a_left and a_right point at byte a_first). Whether a feature patches them is the caller's test
+	 * (FrameVSVariablePatched).
+	 */
+	bool DifferOutsideFrameSpans(std::uint8_t a_kind, const std::byte* a_left, const std::byte* a_right, std::size_t a_first, std::size_t a_end);
+	/** @brief Pure: whether they differ inside those bytes (the same arguments). */
+	bool DifferInFrameSpans(std::uint8_t a_kind, const std::byte* a_left, const std::byte* a_right, std::size_t a_first, std::size_t a_end);
 
 	/** @brief Port a_kind's capture of a_property into the record's emissive and feature (CaptureProperty). */
 	void CapturePort(std::uint8_t a_kind, const RE::BSShaderProperty& a_property, const void*& a_emissive, std::uint32_t& a_feature);

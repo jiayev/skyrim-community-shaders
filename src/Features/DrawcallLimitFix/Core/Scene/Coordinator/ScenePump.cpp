@@ -283,6 +283,29 @@ namespace DCLF::Scene
 				p.claimsReplayed, static_cast<double>(p.claimsKeys) / static_cast<double>((std::max)(p.claimsReplayed, std::uint64_t(1))), p.claimsWhole,
 				p.claimsShared, p.claimsRevoked, p.restMs / publications, p.parityChecks, p.parityTables, p.parityClaims,
 				!p.parityChecks ? "" : (p.parityTables || p.parityClaims) ? " <- PACED PUBLICATION DIFFERS; first: " : " <- OK", p.parityFirst);
+			// The key's words in CurrentPublishKey's order.
+			static constexpr std::array<const char*, std::tuple_size_v<decltype(PublishKey::words)> + 2> kKeyNames{ "tables generation", "change log",
+				"geometry log", "material log", "extras log", "version counter", "constants stamp", "family stamps", "objects", "geometries", "pipelines",
+				"materials", "sun candidates", "light candidates", "light entries appeared", "commit toggles", "pipelines applied", "lookups", "catalog" };
+			std::string moved;
+			for (std::size_t w = 0; w < kKeyNames.size(); ++w)
+				if (p.keyMoved[w])
+					moved += fmt::format("{}{} {}", moved.empty() ? "" : ", ", kKeyNames[w], p.keyMoved[w]);
+			static constexpr std::array<const char*, 12> kDeltaNames{ "joined", "left", "placement plan", "plans held", "shading named", "seed requests",
+				"switches applied", "switch resync", "retired imports", "class member changes", "light entry changes", "component deltas" };
+			static constexpr std::array<const char*, 6> kLookupsNames{ "instance", "versions/generation", "shadow/shared", "material log", "changes",
+				"chunk writes" };
+			std::string deltas, lookupsWords;
+			for (std::size_t d = 0; d < kDeltaNames.size(); ++d)
+				if (p.deltaPending[d])
+					deltas += fmt::format("{}{} {}", deltas.empty() ? "" : ", ", kDeltaNames[d], p.deltaPending[d]);
+			for (std::size_t w = 0; w < kLookupsNames.size(); ++w)
+				if (p.lookupsMoved[w])
+					lookupsWords += fmt::format("{}{} {}", lookupsWords.empty() ? "" : ", ", kLookupsNames[w], p.lookupsMoved[w]);
+			logger::info("[DCLF] publication causes (the passes that needed one, each cause counted): {} forced or first, {} set applications, {} set snapshot "
+						 "or node sets, {} deltas ({}), {} adoption guards, {} publish key moved ({}; lookups: {})",
+				p.neededBy[0], p.neededBy[1], p.neededBy[2], p.neededBy[3], deltas.empty() ? "none" : deltas, p.neededBy[4], p.neededBy[5],
+				moved.empty() ? "none" : moved, lookupsWords.empty() ? "none" : lookupsWords);
 			const double columns = static_cast<double>(p.replayColumns + p.replaySkipped);
 			logger::info("[DCLF] publication replay (W6: the logs collected once, the columns and records by jobs, the nearest pooled snapshot): per publication {:.1f} "
 						 "log entries for {:.1f} object slots, {:.1f} material-log entries for {:.1f} records; slot columns {:.1f} copied in {:.1f} runs, {:.1f}% skipped (no "
@@ -365,11 +388,35 @@ namespace DCLF::Scene
 		// seeds, switches, imports, wetness, light entries), the category nodes, the toggles its commit was made under, an input the
 		// coordinator took for the frame, or an adoption guard's generation (a LOD gate's forced release) the last publication was not built
 		// for (the frames withdraw until one is). A pass that changed none publishes nothing: the snapshot of the last publication stands.
-		const bool needed = !publishedKeyValid || publishForced || !setApply.empty() || setSnapshotDirty || nodeSetsDirty || DeltasPending() ||
-		                    sceneInputs.adoptionGuards != publishedAdoptionGuards || !(CurrentPublishKey() == publishedKey);
-		if (!needed)
+		const PublishKey key = CurrentPublishKey();
+		const std::array<bool, 6> causes{ !publishedKeyValid || publishForced, !setApply.empty(), setSnapshotDirty || nodeSetsDirty, DeltasPending(),
+			sceneInputs.adoptionGuards != publishedAdoptionGuards, !(key == publishedKey) };
+		bool needed = false;
+		for (std::size_t c = 0; c < causes.size(); ++c)
+			if (causes[c]) {
+				needed = true;
+				++paceStats.neededBy[c];
+			}
+		if (!needed) {
 			++pumpStats.unchanged;
-		return needed;
+			return false;
+		}
+		if (causes[3]) {
+			const std::array<bool, 12> deltas{ !publicationJoined.empty(), !publicationLeft.empty(), static_cast<bool>(placementPlanReady), !placementPlansHeld.empty(),
+				!shadingNamed.empty(), !componentSeedRequests.empty(), !switchesApplied.empty(), switchResync, !retiredImports.empty(),
+				tables.ClassMemberChangesPending(), !lightEntryChanges.empty(), !componentDeltaRequests.empty() };
+			for (std::size_t d = 0; d < deltas.size(); ++d)
+				paceStats.deltaPending[d] += deltas[d];
+		}
+		if (causes.back() && publishedKeyValid) {
+			for (std::size_t w = 0; w < key.words.size(); ++w)
+				paceStats.keyMoved[w] += key.words[w] != publishedKey.words[w];
+			paceStats.keyMoved[key.words.size()] += key.lookups != publishedKey.lookups;
+			for (std::size_t w = 0; w < key.lookups.size(); ++w)
+				paceStats.lookupsMoved[w] += key.lookups[w] != publishedKey.lookups[w];
+			paceStats.keyMoved[key.words.size() + 1] += key.catalog != publishedKey.catalog;
+		}
+		return true;
 	}
 
 	void Coordinator::NotePublished()

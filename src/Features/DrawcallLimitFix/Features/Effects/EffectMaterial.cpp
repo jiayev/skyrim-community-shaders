@@ -36,6 +36,22 @@ namespace DCLF::Features::Effects
 		// The texture fields a snapshot resolves: the source and the greyscale palette.
 		constexpr std::uint16_t kEffectTextureFields[] = { kSourceTexture, kGreyscaleTexture };
 
+		/**
+		 * @brief The variables the frame owns (Api::MaterialFrameVariable), which the effect controllers move every frame (EffectWrites.cpp):
+		 * FalloffData, the four falloff floats (+0x38..+0x48) as EvaluateEffect copies them (its rows place it only under Falloff, where the
+		 * record writes it), and BaseColor (+0x48..+0x58): the colour times baseColorScale and the raw alpha, or under GrayscaleToColor the
+		 * raw colour (the scale is BaseColorScale's, the record's: a write of it is captured). No other record value reads those bytes.
+		 */
+		constexpr std::uint16_t kNoScale = Api::MaterialFrameComponent::kNoScale;
+		constexpr Api::MaterialFrameVariable kEffectFrameVariables[] = {
+			{ .pixel = false, .variable = kEffectVSFalloffData, .first = kFalloff, .end = kFalloff + 16,
+				.components = { { { kFalloff, kNoScale }, { kFalloff + 4, kNoScale }, { kFalloff + 8, kNoScale }, { kFalloff + 12, kNoScale } } } },
+			{ .pixel = true, .variable = kEffectPSBaseColor, .first = kBaseColor, .end = kBaseColor + 16,
+				.components = { { { kBaseColor, kBaseColorScale }, { kBaseColor + 4, kBaseColorScale }, { kBaseColor + 8, kBaseColorScale }, { kBaseColor + 12, kNoScale } } },
+				.alternateBits = EffectFlag::GrayscaleToColor,
+				.alternate = { { { kBaseColor, kNoScale }, { kBaseColor + 4, kNoScale }, { kBaseColor + 8, kNoScale }, { kBaseColor + 12, kNoScale } } } },
+		};
+
 		/** @brief Where each Effect variable lives in an effect MaterialRecord's blocks (the port's space: MakeStageLayout of its rows). */
 		const StageLayout& EffectVSLayout()
 		{
@@ -104,6 +120,7 @@ namespace DCLF::Features::Effects
 			}
 
 			// BaseColor: the base colour times its scale, or with GrayscaleToColor the raw colour and the scale apart (the palette's).
+			// A frame variable, as FalloffData is (kEffectFrameVariables): the frame values read the same values from the live material for its rows.
 			const float scale = a_port.At<float>(kBaseColorScale);
 			if (!(pass & EffectFlag::GrayscaleToColor)) {
 				setPS(kEffectPSBaseColor, 0, scale * a_port.At<float>(kBaseColor));
@@ -170,6 +187,8 @@ namespace DCLF::Features::Effects
 			.rules = { .passEnumBase = kEffectPassEnumBase, .deferredPixelBit = EffectFlag::Deferred, .projectedPassBit = 0, .frameVSVariable = kEffectVSTexcoordOffset,
 				.techniqueRows = false, .rawPermutation = true, .signatureComponents = false, .emissiveAlwaysListed = true, .turnedByBillboards = true,
 				.particleGeometry = true },
+			// The falloff and the base colour: the frame's (Features/TextureTransforms patches their rows every frame).
+			.frameVariables = kEffectFrameVariables,
 			.capture = &CaptureEffectProperty,
 			.derive = &DeriveEffect,
 			.evaluate = &EvaluateEffectPort,

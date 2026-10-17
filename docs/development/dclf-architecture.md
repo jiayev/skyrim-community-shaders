@@ -126,8 +126,9 @@ elsewhere (2026-10-14; the record is dclf-async-publication.md, "Polls become ev
     frame), and calls `UpdateSkin` only for those skins.
 -   **Materials and residents.** `RefreshMaterialSignatures` evaluates every signature only when the frame's material
     witness (`FrameComponentsWitness`) changes; `KeepResidentsAlive` refreshes the geometry template only for the
-    pipelines whose membership changed. A texture transform is no record's: the frame values patch the rows on the GPU
-    ("Pooled versions and the retirement clock"), and a controller write that moved only the transforms is not captured.
+    pipelines whose membership changed. A texture transform is no record's, nor a port's declared frame variable (the effect
+    falloff and base colour): the frame values patch the rows on the GPU ("Pooled versions and the retirement clock"), and a
+    controller write that moved only those is not captured.
 -   **Publication.** Each candidate snapshot carries its change log (`EntrySpaceChanges`; readers call
     `ChangedEntriesByLog`). `PublishTables` replays the per-object columns by slot (`SceneTables::publicationLog`,
     `NotePublished`, and the change log's causes) and the material records by the material log, and copies the pipeline
@@ -354,7 +355,13 @@ transforms) and the set's growth all lease their backings from ORGModuleServices
     its pass `cs.dclf.z.texture-transforms` (`texture-transforms.apply`, an `Api::PassDef`, `TextureTransformsCS`), first in
     the Z-prepass epoch, stores them into the installed payload's material rows; the pool's descriptor reaches the shader
     through the depth segment's `BuildDrawsLatch::stageWord` (the pass's `latchWord`). Every such row is written every frame, so a pooled backing holds the frame's value
-    whatever its journal sent it.
+    whatever its journal sent it. The same list, pool and pass carry a port's declared frame variables
+    (`MaterialPortContribution::frameVariables`, `Api::MaterialFrameVariable`: the Effect port's `FalloffData` and `BaseColor`,
+    which the effect controllers move every frame): the main build records where a row placed each
+    (`MainRows::MaterialState::frameVariables`, `PlaceFrameVariables`), the list holds an entry per placed variable with its
+    port's read for the row's pass (data: a source float, optionally times a scale float), and the pool reads it from the live
+    material. A capture or controller write confined to the frame-owned bytes (the transform buffers and the declared spans,
+    `Extensions::DifferOutsideFrameSpans`) captures nothing and rewrites no record.
 
 The readback staging is not pooled: it is GPU-to-host and rewritten whole every frame, one host buffer per frame slot for
 each list capacity a sealed set names (`HostEventRing::AddSet`). What else could move into the pools is in

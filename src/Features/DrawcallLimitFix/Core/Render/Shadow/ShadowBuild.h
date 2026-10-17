@@ -98,10 +98,11 @@ namespace DCLF::Draws
 		return (IsOcclusionMode(a_mode) ? 2u + OcclusionOfMode(a_mode) : 1u) << kCullKeyShift;
 	}
 	/** @brief The key slot a mode's views draw a shadow input by (KeyWordOf). */
-	inline std::uint32_t ShadowKeyOf(std::uint32_t a_mode, const DrawInput& a_input)
+	inline std::uint32_t ShadowKeyOf(std::uint32_t a_mode, const DrawInput::ViewWords& a_view)
 	{
-		return IsOcclusionMode(a_mode) ? a_input.view.occlusionKey[OcclusionOfMode(a_mode)] : a_input.view.shadowKey;
+		return IsOcclusionMode(a_mode) ? a_view.occlusionKey[OcclusionOfMode(a_mode)] : a_view.shadowKey;
 	}
+	inline std::uint32_t ShadowKeyOf(std::uint32_t a_mode, const DrawInput& a_input) { return ShadowKeyOf(a_mode, a_input.view); }
 
 	/**
 	 * @brief The technique object a_object's key slot names under mode a_mode (Lookups::shadowSlots): an occlusion view's own, or
@@ -199,22 +200,42 @@ namespace DCLF::Draws
 		std::vector<std::uint8_t> heldModes;  // per object: the modes whose region inputs it is (bit m)
 		std::vector<std::uint8_t> touchedMark;  // a build's scratch: the objects whose entry it writes again
 		std::uint64_t sceneResets = ~0ull;      // the scene region's resets its parts were written after
+		/**
+		 * @brief CountModeDraws' counts of the scene region's entries, for every mode (a build reads its used modes'), kept across builds
+		 * and brought up to the region by its journal: a build recounts the entries changed since, not the list. The payload's own inputs
+		 * (inputList, the frame's) are counted every build.
+		 */
+		struct ModeCounts
+		{
+			struct Entry
+			{
+				DrawInput::ViewWords view;  // what the entry was counted as (its mask 0: nothing)
+				std::uint32_t partitions = 0;
+			};
+			const void* source = nullptr;    // the region counted (the scene list, or this state's own)
+			std::uint64_t contentEpoch = 0;  // the region's journal position counted (0: counted whole every build)
+			std::array<std::uint32_t, kShadowModeCount> modeBits{};
+			std::vector<Entry> entries;  // per region entry
+			std::array<std::uint64_t, kShadowModeCount> draws{};
+			std::array<std::uint32_t, kShadowModeCount> inputs{};
+			std::array<std::vector<std::uint32_t>, kShadowModeCount> keyDraws, keyInputs;  // per mode, by key slot
+		} modeCounts;
 		bool Holds(std::uint32_t a_mode, std::uint32_t a_object) const { return a_object < heldModes.size() && ((heldModes[a_object] >> a_mode) & 1); }
 		/** @brief Empty, for every object to be read again; the journals count on and the report's counters stay. */
 		void Reset()
 		{
 			auto keptRows = std::move(rows);
 			auto keptInputs = std::move(scene.inputs);
-			const auto counters = std::tuple{ build, builds, entriesWritten, rowsWritten, resyncs };
+			const auto counters = std::tuple{ build, builds, entriesWritten, rowsWritten, resyncs, entriesCounted };
 			*this = ShadowKept{};
 			rows = std::move(keptRows);
 			rows.Clear();
 			scene.inputs = std::move(keptInputs);
 			scene.inputs.Clear();
-			std::tie(build, builds, entriesWritten, rowsWritten, resyncs) = counters;
+			std::tie(build, builds, entriesWritten, rowsWritten, resyncs, entriesCounted) = counters;
 		}
-		// Since the last report.
-		std::uint64_t builds = 0, entriesWritten = 0, rowsWritten = 0, resyncs = 0;
+		// Since the last report (entriesCounted: the region entries CountModeDraws recounted).
+		std::uint64_t builds = 0, entriesWritten = 0, rowsWritten = 0, resyncs = 0, entriesCounted = 0;
 	};
 
 	/**

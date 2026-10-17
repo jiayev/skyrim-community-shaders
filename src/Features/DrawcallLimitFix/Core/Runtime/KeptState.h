@@ -118,7 +118,7 @@ namespace DCLF
 		{
 			std::uint64_t contentEpoch = 0;  // 0: not a kept array's, sent whole
 			std::uint64_t floor = 0;
-			std::vector<Entry> entries;
+			std::vector<Entry> entries;  // in content epoch order, as the journal keeps them (ForEachRun relies on it)
 
 			/** @brief Whether a holder at a_contentEpoch has this snapshot's contents. */
 			bool Holds(std::uint64_t a_contentEpoch) const { return contentEpoch && a_contentEpoch == contentEpoch; }
@@ -129,68 +129,7 @@ namespace DCLF
 			template <class Run>
 			std::uint64_t ForEachRun(std::uint64_t a_contentEpoch, std::uint64_t a_count, Run&& a_run) const
 			{
-				if (!a_count || Holds(a_contentEpoch))
-					return 0;
-				if (!contentEpoch || a_contentEpoch < floor || a_contentEpoch > contentEpoch) {
-					a_run(std::uint64_t{ 0 }, a_count);
-					return a_count;
-				}
-				// Dense dirty tables: a bitmap avoids sorting thousands of single-element entries. Sparse or large arenas sort ranges.
-				if (reuseKeptStorage && entries.size() >= 128 && a_count <= (1u << 20) && a_count <= entries.size() * 64) {
-					std::vector<std::uint64_t> bits(static_cast<std::size_t>((a_count + 63) / 64), 0);
-					for (const auto& entry : entries) {
-						if (entry.contentEpoch <= a_contentEpoch || !entry.count || entry.first >= a_count)
-							continue;
-						const auto lastIndex = entry.first + std::min(entry.count, a_count - entry.first) - 1;
-						const auto firstWord = entry.first / 64, lastWord = lastIndex / 64;
-						const auto head = ~std::uint64_t{0} << (entry.first % 64);
-						const auto tail = ~std::uint64_t{0} >> (63 - lastIndex % 64);
-						if (firstWord == lastWord)
-							bits[firstWord] |= head & tail;
-						else {
-							bits[firstWord] |= head;
-							for (auto word = firstWord + 1; word < lastWord; ++word)
-								bits[word] = ~std::uint64_t{0};
-							bits[lastWord] |= tail;
-						}
-					}
-					std::uint64_t first = 0, end = 0, sent = 0;
-					for (std::size_t i = 0; i < bits.size(); ++i) {
-						auto word = bits[i];
-						while (word) {
-							const auto startBit = std::countr_zero(word);
-							const auto endBit = startBit + std::countr_one(word >> startBit);
-							const std::uint64_t start = i * 64 + startBit;
-							if (start != end) {
-								if (first < end) { a_run(first, end - first); sent += end - first; }
-								first = start;
-							}
-							end = i * 64 + endBit;
-							word = endBit == 64 ? 0 : word & (~std::uint64_t{0} << endBit);
-						}
-					}
-					if (first < end) { a_run(first, end - first); sent += end - first; }
-					return sent;
-				}
-				std::vector<std::pair<std::uint64_t, std::uint64_t>> runs;
-				runs.reserve(entries.size());
-				for (const auto& entry : entries)
-					if (entry.contentEpoch > a_contentEpoch)
-						runs.emplace_back(entry.first, entry.first + entry.count);
-				std::sort(runs.begin(), runs.end());
-				std::uint64_t sent = 0;
-				for (std::size_t k = 0; k < runs.size();) {
-					const std::uint64_t first = runs[k].first;
-					std::uint64_t end = runs[k].second;
-					while (++k < runs.size() && runs[k].first <= end)
-						end = std::max(end, runs[k].second);
-					end = std::min(end, a_count);
-					if (first < end) {
-						a_run(first, end - first);
-						sent += end - first;
-					}
-				}
-				return sent;
+				return Runs(contentEpoch, floor, entries, a_contentEpoch, a_count, a_run);
 			}
 			void Reset() { *this = {}; }
 		};
@@ -246,8 +185,106 @@ namespace DCLF
 		/** @brief Whether this build changed anything. */
 		bool Changed() const { return changed; }
 		Snapshot Take() const { return { contentEpoch, floor, entries }; }
+		/**
+		 * @brief Snapshot::ForEachRun on the journal itself, nothing copied: only while no build changes it (its owner, between
+		 * builds).
+		 */
+		template <class Run>
+		std::uint64_t ForEachRun(std::uint64_t a_contentEpoch, std::uint64_t a_count, Run&& a_run) const
+		{
+			return Runs(contentEpoch, floor, entries, a_contentEpoch, a_count, a_run);
+		}
 
 	private:
+		/** @brief ForEachRun over a journal's content epoch, floor and entries (a snapshot's or the journal's own). */
+		template <class Run>
+		static std::uint64_t Runs(std::uint64_t a_epoch, std::uint64_t a_floor, std::span<const Entry> a_entries, std::uint64_t a_contentEpoch,
+			std::uint64_t a_count, Run&& a_run)
+		{
+			if (!a_count || (a_epoch && a_contentEpoch == a_epoch))
+				return 0;
+			if (!a_epoch || a_contentEpoch < a_floor || a_contentEpoch > a_epoch) {
+				a_run(std::uint64_t{ 0 }, a_count);
+				return a_count;
+			}
+			// The entries are in content epoch order (a build's marks follow the last build's): the holder lacks those from the first
+			// newer than it on, however far back the floor keeps the rest.
+			const auto newer = a_entries.subspan(static_cast<std::size_t>(std::partition_point(a_entries.begin(), a_entries.end(),
+															 [&](const Entry& a_entry) { return a_entry.contentEpoch <= a_contentEpoch; }) -
+														 a_entries.begin()));
+			// Dense dirty tables: a bitmap avoids sorting thousands of single-element entries. Sparse or large arenas sort ranges.
+			if (reuseKeptStorage && newer.size() >= 128 && a_count <= (1u << 20) && a_count <= newer.size() * 64) {
+				// The thread's scratch, taken for the call (a nested call on the thread makes its own).
+				auto bits = std::exchange(BitsScratch(), {});
+				bits.assign(static_cast<std::size_t>((a_count + 63) / 64), 0);
+				for (const auto& entry : newer) {
+					if (!entry.count || entry.first >= a_count)
+						continue;
+					const auto lastIndex = entry.first + std::min(entry.count, a_count - entry.first) - 1;
+					const auto firstWord = entry.first / 64, lastWord = lastIndex / 64;
+					const auto head = ~std::uint64_t{0} << (entry.first % 64);
+					const auto tail = ~std::uint64_t{0} >> (63 - lastIndex % 64);
+					if (firstWord == lastWord)
+						bits[firstWord] |= head & tail;
+					else {
+						bits[firstWord] |= head;
+						for (auto word = firstWord + 1; word < lastWord; ++word)
+							bits[word] = ~std::uint64_t{0};
+						bits[lastWord] |= tail;
+					}
+				}
+				std::uint64_t first = 0, end = 0, sent = 0;
+				for (std::size_t i = 0; i < bits.size(); ++i) {
+					auto word = bits[i];
+					while (word) {
+						const auto startBit = std::countr_zero(word);
+						const auto endBit = startBit + std::countr_one(word >> startBit);
+						const std::uint64_t start = i * 64 + startBit;
+						if (start != end) {
+							if (first < end) { a_run(first, end - first); sent += end - first; }
+							first = start;
+						}
+						end = i * 64 + endBit;
+						word = endBit == 64 ? 0 : word & (~std::uint64_t{0} << endBit);
+					}
+				}
+				if (first < end) { a_run(first, end - first); sent += end - first; }
+				BitsScratch() = std::move(bits);
+				return sent;
+			}
+			auto runs = std::exchange(RunsScratch(), {});
+			runs.clear();
+			runs.reserve(newer.size());
+			for (const auto& entry : newer)
+				runs.emplace_back(entry.first, entry.first + entry.count);
+			std::sort(runs.begin(), runs.end());
+			std::uint64_t sent = 0;
+			for (std::size_t k = 0; k < runs.size();) {
+				const std::uint64_t first = runs[k].first;
+				std::uint64_t end = runs[k].second;
+				while (++k < runs.size() && runs[k].first <= end)
+					end = std::max(end, runs[k].second);
+				end = std::min(end, a_count);
+				if (first < end) {
+					a_run(first, end - first);
+					sent += end - first;
+				}
+			}
+			RunsScratch() = std::move(runs);
+			return sent;
+		}
+		// Runs' per-thread scratch: no allocation per call once warm.
+		static std::vector<std::uint64_t>& BitsScratch()
+		{
+			static thread_local std::vector<std::uint64_t> bits;
+			return bits;
+		}
+		static std::vector<std::pair<std::uint64_t, std::uint64_t>>& RunsScratch()
+		{
+			static thread_local std::vector<std::pair<std::uint64_t, std::uint64_t>> runs;
+			return runs;
+		}
+
 		void Touch()
 		{
 			if (!changed) {
@@ -466,6 +503,12 @@ namespace DCLF
 		std::shared_ptr<const KeptChunks<T>> chunks;
 	};
 
+	/**
+	 * @brief The most bytes between two runs of one emit (KeptView::Spans) that go with them as one span: a 16-byte row's gap of 16
+	 * rows costs less than another upload's bookkeeping.
+	 */
+	inline constexpr std::size_t kKeptMergeGapBytes = 256;
+
 	/** @brief A build's view of a kept array: the elements (shared with the array, copy-on-write by chunk) and their changes. */
 	template <class T>
 	struct KeptView
@@ -480,22 +523,13 @@ namespace DCLF
 		std::uint64_t ContentEpoch() const { return changes.contentEpoch; }
 		/**
 		 * @brief The elements a holder at a_contentEpoch lacks (ChangeJournal::ForEachRun's runs), as chunk-bounded spans:
-		 * a_span(data, count, first). None past a_capacity. Returns the elements.
+		 * a_span(data, count, first); runs of one chunk at most kKeptMergeGapBytes apart go as one span. None past a_capacity.
+		 * Returns the elements.
 		 */
 		template <class Span>
 		std::size_t ForEachSpan(std::uint64_t a_contentEpoch, Span&& a_span, std::size_t a_capacity = ~std::size_t(0)) const
 		{
-			if (!elements)
-				return 0;
-			std::size_t sent = 0;
-			changes.ForEachRun(a_contentEpoch, Count(), [&](std::uint64_t a_first, std::uint64_t a_count) {
-				if (a_first >= a_capacity)
-					return;
-				a_count = std::min<std::uint64_t>(a_count, a_capacity - a_first);
-				elements->ForEachSpan(static_cast<std::size_t>(a_first), static_cast<std::size_t>(a_count), a_span);
-				sent += static_cast<std::size_t>(a_count);
-			});
-			return sent;
+			return elements ? Spans(*elements, changes, a_contentEpoch, a_span, a_capacity) : 0;
 		}
 		/**
 		 * @brief The uploads a holder at a_contentEpoch lacks: a_emit(data, bytes, offset), a run cut where a chunk ends. Returns the bytes
@@ -505,12 +539,73 @@ namespace DCLF
 		template <class Emit>
 		std::size_t Emit(std::uint64_t a_contentEpoch, Emit&& a_emit, std::size_t a_capacity = ~std::size_t(0)) const
 		{
+			return elements ? EmitSpans(*elements, changes, a_contentEpoch, a_emit, a_capacity) : 0;
+		}
+		void Reset() { *this = {}; }
+
+		/**
+		 * @brief ForEachSpan over any elements (KeptChunks, or a kept array's own std::vector) and changes (a snapshot, or a live
+		 * ChangeJournal: KeptArray::Emit). Two runs in one chunk at most kKeptMergeGapBytes apart go as one span: the elements between
+		 * them are unchanged since a_contentEpoch, so the holder has them already and ends the same, in one upload instead of two.
+		 */
+		template <class Elements, class Changes, class Span>
+		static std::size_t Spans(const Elements& a_elements, const Changes& a_changes, std::uint64_t a_contentEpoch, Span&& a_span, std::size_t a_capacity)
+		{
+			const std::size_t chunk = ChunkOf(a_elements);
+			struct Pending
+			{
+				const T* data = nullptr;
+				std::size_t count = 0, first = 0;
+			} pending;
+			std::size_t sent = 0;
+			const auto flush = [&] {
+				if (pending.count) {
+					a_span(pending.data, pending.count, pending.first);
+					sent += pending.count;
+				}
+			};
+			// The runs come in order and apart, each a chunk's spans in order.
+			const auto add = [&](const T* a_data, std::size_t a_count, std::size_t a_first) {
+				if (pending.count && a_first / chunk == pending.first / chunk && (a_first - (pending.first + pending.count)) * sizeof(T) <= kKeptMergeGapBytes) {
+					pending.count = a_first + a_count - pending.first;
+					return;
+				}
+				flush();
+				pending = { a_data, a_count, a_first };
+			};
+			a_changes.ForEachRun(a_contentEpoch, a_elements.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+				if (a_first >= a_capacity)
+					return;
+				a_count = std::min<std::uint64_t>(a_count, a_capacity - a_first);
+				SpansOf(a_elements, static_cast<std::size_t>(a_first), static_cast<std::size_t>(a_count), add);
+			});
+			flush();
+			return sent;
+		}
+		/** @brief Emit over any elements and changes (Spans). */
+		template <class Elements, class Changes, class EmitFn>
+		static std::size_t EmitSpans(const Elements& a_elements, const Changes& a_changes, std::uint64_t a_contentEpoch, EmitFn&& a_emit, std::size_t a_capacity)
+		{
 			const auto emit = [&](const T* a_data, std::size_t a_count, std::size_t a_first) {
 				a_emit(static_cast<const void*>(a_data), a_count * sizeof(T), a_first * sizeof(T));
 			};
-			return sizeof(T) * ForEachSpan(a_contentEpoch, emit, a_capacity);
+			return sizeof(T) * Spans(a_elements, a_changes, a_contentEpoch, emit, a_capacity);
 		}
-		void Reset() { *this = {}; }
+
+	private:
+		static std::size_t ChunkOf(const KeptChunks<T>& a_elements) { return a_elements.ChunkElements(); }
+		static std::size_t ChunkOf(const std::vector<T>&) { return ~std::size_t(0); }
+		template <class Span>
+		static void SpansOf(const KeptChunks<T>& a_elements, std::size_t a_first, std::size_t a_count, Span& a_span)
+		{
+			a_elements.ForEachSpan(a_first, a_count, a_span);
+		}
+		template <class Span>
+		static void SpansOf(const std::vector<T>& a_elements, std::size_t a_first, std::size_t a_count, Span& a_span)
+		{
+			if (const std::size_t n = a_first < a_elements.size() ? std::min(a_count, a_elements.size() - a_first) : 0)
+				a_span(a_elements.data() + a_first, n, a_first);
+		}
 	};
 
 	/**
@@ -856,6 +951,15 @@ namespace DCLF
 		std::uint64_t ContentEpoch() const { return journal.ContentEpoch(); }
 		bool Changed() const { return journal.Changed(); }
 		KeptView<T> View() const { return { KeptElements<T>(elements.Share()), journal.Take() }; }
+		/**
+		 * @brief View().Emit without the view's copies (no journal entries copied, no elements shared): the live journal's runs over the
+		 * array's own elements. Only while nothing writes the array (its owner, between builds).
+		 */
+		template <class EmitFn>
+		std::size_t Emit(std::uint64_t a_contentEpoch, EmitFn&& a_emit, std::size_t a_capacity = ~std::size_t(0)) const
+		{
+			return KeptView<T>::EmitSpans(elements.Get(), journal, a_contentEpoch, a_emit, a_capacity);
+		}
 		/** @brief The elements themselves, for a view that is not journalled (content epoch 0: sent whole). */
 		KeptElements<T> Shared() const { return KeptElements<T>(elements.Share()); }
 		const KeptCopyStats& CopyStats() const { return elements.Stats(); }

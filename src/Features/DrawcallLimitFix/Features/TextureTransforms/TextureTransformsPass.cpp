@@ -1,5 +1,5 @@
-// The texture transforms' pass: this frame's TexcoordOffset into the installed payload's material rows (TextureTransformsCS), first
-// in the depth segment, from the pool's rows the depth latch's stage word names.
+// The texture transforms' pass: this frame's TexcoordOffset and declared frame variables into the installed payload's material rows
+// (TextureTransformsCS: the same row format for both), first in the depth segment, from the pool's rows the depth latch's stage word names.
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"

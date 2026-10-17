@@ -80,7 +80,10 @@ namespace DCLF
 		 */
 		ID3D11ShaderResourceView* FrameCharacterLightView(const MaterialPort::MaterialFrame& a_frame);
 
-		/** @brief Copies the frame-sourced components (floats, and t11 whole: written or not, its view and modes) of a_from over a_to, for comparisons. */
+		/**
+		 * @brief Copies the frame-sourced components (floats, and t11 whole: written or not, its view and modes; a port's TexcoordOffset and,
+		 * while patched, its declared frame variables) of a_from over a_to, for comparisons.
+		 */
 		void CopyFrameComponents(const MaterialRecord& a_from, MaterialRecord& a_to, std::uint32_t a_passDescriptor);
 		/**
 		 * @brief Copies the floats a record keeps from its first evaluation (IBLParams, PS 29: the shader object's, drifting with the time

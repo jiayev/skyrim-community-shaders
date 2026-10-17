@@ -69,7 +69,8 @@ namespace DCLF::Api
 		// Core keeps a change journal of the rows beside the stamp (Extensions::TableFamilyColumns::Mark marks a row and moves the stamp),
 		// copied with every publication, kept family or not. A commit hook sends the rows the journal names since what its buffer holds
 		// (TableFamilyColumns::Journal) and reports the content epoch it sent (Extensions::TableFamilySent; render thread, latest wins); the
-		// scene lane trims the journal to it at the pass's coordinator inputs (TableFamilies::TakeSent, forcing a publication).
+		// scene lane trims the journal to it at the pass's coordinator inputs (TableFamilies::TakeSent). The trim forces no publication: the
+		// published journal only lists more than the holder lacks until the next publication that changed something carries it.
 		bool journaled = false;
 		// Optional, per revision (render thread, never per object): the rows the resources sized by the family must hold for a_columns
 		// (Extensions::TableFamilyRows: Core's buffers sized by the family's rows, its visibility rows, besides the feature's own).

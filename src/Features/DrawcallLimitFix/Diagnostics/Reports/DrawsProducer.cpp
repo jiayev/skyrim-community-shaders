@@ -86,6 +86,11 @@ namespace DCLF
 		if (!madeBy.empty())
 			madeBy += ")";
 		std::string text = fmt::format("[DCLF] revision shapes: made at {} makes{}, kept at {}\n", std::exchange(shapesMade, 0), madeBy, std::exchange(shapesKept, 0));
+		// The builder's wakes: its passes, those that found nothing, the publications it passed through (only deltas moved: the last
+		// snapshot posted again), and the scene passes' ends that woke nobody (no publication waiting).
+		text += fmt::format("[DCLF] snapshot builder: {} passes, {} found nothing to do, {} publications passed through (deltas only); scene pass ends not waking it: {}\n",
+			std::exchange(snapshotBuilder.passes, 0), std::exchange(snapshotBuilder.idlePasses, 0), std::exchange(snapshotBuilder.passedThrough, 0),
+			passDoneWakesSkipped.exchange(0, std::memory_order_relaxed));
 		text += fmt::format("[DCLF] scene revisions (R3c, the snapshot builder's): {} sealed ({} version sets), {} pending; assembler {} published, {} failed, {} superseded, "
 							"{} abandoned; {}{}\n",
 			rv.seals, rv.versionSets, rv.assembler.Pending(), assembled.published, assembled.failed, assembled.superseded, assembled.abandoned, epochs,
@@ -162,8 +167,9 @@ namespace DCLF
 		}
 		text += Draws::MainPairsReport(mainRows);
 		{
-			// The payload's pools (PayloadBuilder, D5): what each publication caught up per part, the backings made, the live census and
-			// the journal floor; under CS_DCLF_PERSISTENT_PARITY, the leased count against the lease-leak bound.
+			// The payload's pools (PayloadBuilder, D5): what each publication caught up per part, the backings made, the parts shared with
+			// the last publication (unchanged: nothing sent), the live census and the journal floor; under CS_DCLF_PERSISTENT_PARITY, the
+			// leased count against the lease-leak bound.
 			static constexpr std::array<const char*, Draws::kPayloadParts> kParts{ "objects", "extras", "geometries", "material rows", "pipeline rows", "inputs", "shadow rows" };
 			const auto pool = payloadBuilder.TakeStats();
 			const double publications = static_cast<double>(std::max<std::uint64_t>(pool.publications, 1));
@@ -173,8 +179,8 @@ namespace DCLF
 			for (std::size_t p = 0; p < Draws::kPayloadParts; ++p) {
 				const auto& census = pool.pools[p];
 				const auto floor = payloadBuilder.OldestContentEpoch(static_cast<Draws::PayloadPart>(p));
-				sent += fmt::format("{}{} {:.1f} KB in {:.1f} runs ({} made)", p ? ", " : "", kParts[p], pool.bytes[p] / 1024.0 / publications, pool.runs[p] / publications,
-					pool.allocated[p]);
+				sent += fmt::format("{}{} {:.1f} KB in {:.1f} runs ({} made, {} shared)", p ? ", " : "", kParts[p], pool.bytes[p] / 1024.0 / publications, pool.runs[p] / publications,
+					pool.allocated[p], pool.shared[p]);
 				backings += fmt::format("{}{} {} live ({} leased, {} free, {:.1f} MB), floor {}{}", p ? "; " : "", kParts[p], census.live, census.leased, census.free,
 					census.bytes / (1024.0 * 1024.0), floor ? fmt::format("{}", *floor) : std::string("none"), watch ? watches[p].Window(census.leased) : "");
 			}
@@ -208,9 +214,10 @@ namespace DCLF
 			// The objects it holds (their words are the scene list's entries'; its own region only under CS_DCLF_BUILD_PARITY).
 			const std::size_t entries = static_cast<std::size_t>(std::count_if(k.heldModes.begin(), k.heldModes.end(), [](std::uint8_t a_modes) { return a_modes != 0; }));
 			text += fmt::format(
-				"[DCLF] persistent shadow state: {} builds, {:.1f} entries and {:.1f} material rows written a build, {} entries and {} material rows held, "
-				"{} resyncs; parity {} inputs checked, {} differ{}\n",
-				k.builds, static_cast<double>(k.entriesWritten) / k.builds, static_cast<double>(k.rowsWritten) / k.builds, entries, k.rows.Size(), k.resyncs, kept.shadow.checks, kept.shadow.mismatches, kept.shadow.Verdict(true));
+				"[DCLF] persistent shadow state: {} builds, {:.1f} entries and {:.1f} material rows written a build, {:.1f} list entries recounted a build, {} entries "
+				"and {} material rows held, {} resyncs; parity {} inputs checked, {} differ{}\n",
+				k.builds, static_cast<double>(k.entriesWritten) / k.builds, static_cast<double>(k.rowsWritten) / k.builds, static_cast<double>(k.entriesCounted) / k.builds,
+				entries, k.rows.Size(), k.resyncs, kept.shadow.checks, kept.shadow.mismatches, kept.shadow.Verdict(true));
 			if (!kept.shadowMissingBy.empty()) {
 				std::string why;
 				for (const auto& [reason, count] : kept.shadowMissingBy)
@@ -219,7 +226,7 @@ namespace DCLF
 				kept.shadowMissingBy.clear();
 				kept.shadowMissingFirst.clear();
 			}
-			k.builds = k.entriesWritten = k.rowsWritten = k.resyncs = 0;
+			k.builds = k.entriesWritten = k.rowsWritten = k.resyncs = k.entriesCounted = 0;
 			kept.shadow.Reset();
 		}
 		if (auto* store = &extrasStore; store->updates || kept.extras.checks) {

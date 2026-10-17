@@ -604,8 +604,97 @@ namespace DCLF::Draws
 		constexpr std::size_t kCountFanoutMin = 8192;
 		constexpr std::size_t kCountGrain = 4096;
 
-		/** @brief Per used mode, the draws its inputs can produce (a skin once per partition), total and per key slot (bucket sizes). */
-		void CountModeDraws(ShadowPayload& a_out)
+		/**
+		 * @brief The kept counts (ShadowKept::ModeCounts) brought up to a_out's region: the entries its journal changed since the position
+		 * counted, each taken out as it was counted and put back as it is (every mode's: the modes a build uses are only read), and the
+		 * entries past the region's end taken out. Counted whole for another region, the first time, or one without a journal. Sums mod
+		 * 2^32 as the whole count's (the key slots, the inputs), so the counts are the same whatever the order.
+		 */
+		void UpdateRegionCounts(ShadowKept::ModeCounts& a_counts, const ShadowPayload& a_out, const void* a_source, std::uint64_t& a_counted)
+		{
+			auto& c = a_counts;
+			const auto& region = a_out.regionInputs;
+			const std::size_t regionCount = region.elements ? region.elements->size() : 0;
+			if (!c.contentEpoch || c.source != a_source || c.modeBits != a_out.modeBits) {
+				c.source = a_source;
+				c.modeBits = a_out.modeBits;
+				c.entries.clear();
+				c.draws = {};
+				c.inputs = {};
+				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+					c.keyDraws[m].clear();
+					c.keyInputs[m].clear();
+				}
+				c.contentEpoch = 0;
+			}
+			const auto apply = [&](const ShadowKept::ModeCounts::Entry& a_entry, bool a_add) {
+				const std::uint32_t draws = PartitionDraws(a_entry.partitions);
+				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+					if (!(a_entry.view.mask & c.modeBits[m]))
+						continue;
+					const std::uint32_t key = ShadowKeyOf(m, a_entry.view);
+					if (key == ~0u)
+						continue;
+					auto& slots = c.keyDraws[m];
+					auto& inputs = c.keyInputs[m];
+					if (key >= slots.size()) {
+						slots.resize(std::size_t(key) + 1, 0u);
+						inputs.resize(std::size_t(key) + 1, 0u);
+					}
+					if (a_add) {
+						++c.inputs[m];
+						c.draws[m] += draws;
+						slots[key] += draws;
+						++inputs[key];
+					} else {
+						--c.inputs[m];
+						c.draws[m] -= draws;
+						slots[key] -= draws;
+						--inputs[key];
+					}
+				}
+			};
+			const auto recount = [&](std::size_t a_entry) {
+				auto& entry = c.entries[a_entry];
+				apply(entry, false);
+				const DrawInput& input = (*region.elements)[a_entry];
+				entry = { input.view, input.partitions };
+				apply(entry, true);
+				++a_counted;
+			};
+			const std::size_t held = c.entries.size();
+			for (std::size_t n = regionCount; n < held; ++n)
+				apply(c.entries[n], false);
+			c.entries.resize(regionCount);  // an appended entry counts nothing until recounted (mask 0)
+			if (!c.contentEpoch) {
+				for (std::size_t n = 0; n < regionCount; ++n)
+					recount(n);
+			} else {
+				region.changes.ForEachRun(c.contentEpoch, regionCount, [&](std::uint64_t a_first, std::uint64_t a_count) {
+					for (std::uint64_t n = a_first; n < a_first + a_count; ++n)
+						recount(static_cast<std::size_t>(n));
+				});
+				// The appended entries are the journal's too; recounted here whatever it names (a recount is idempotent).
+				for (std::size_t n = held; n < regionCount; ++n)
+					recount(n);
+			}
+			c.contentEpoch = region.ContentEpoch();
+			// The key slots end at the last one an entry is counted in (the whole count's sizes).
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+				auto& slots = c.keyDraws[m];
+				auto& inputs = c.keyInputs[m];
+				while (!inputs.empty() && !inputs.back()) {
+					inputs.pop_back();
+					slots.pop_back();
+				}
+			}
+		}
+
+		/**
+		 * @brief Per used mode, the draws its inputs can produce (a skin once per partition), total and per key slot (bucket sizes). With
+		 * a_counts (the kept build), the region's from the kept counts (UpdateRegionCounts) and the payload's own inputs counted.
+		 */
+		void CountModeDraws(ShadowPayload& a_out, ShadowKept::ModeCounts* a_counts = nullptr, const void* a_source = nullptr, std::uint64_t* a_counted = nullptr)
 		{
 			ZoneScopedN("CS.DCLF.BuildShadow.CountModeDraws");
 			// One pass for every used mode (each input's mask names its modes): a reduce, each chunk counting into its own totals, summed
@@ -648,8 +737,21 @@ namespace DCLF::Draws
 					}
 				}
 			};
-			std::vector<Counts> chunks((std::max<std::size_t>(count, 1) + kCountGrain - 1) / kCountGrain);
-			if (count >= kCountFanoutMin && !Policy::SerialFanout()) {
+			std::vector<Counts> chunks;
+			if (a_counts) {
+				// The region's entries from the kept counts (their used modes'), then the payload's own inputs: two chunks.
+				UpdateRegionCounts(*a_counts, a_out, a_source, *a_counted);
+				chunks.resize(2);
+				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+					if (!((used >> m) & 1))
+						continue;
+					chunks[0].draws[m] = a_counts->draws[m];
+					chunks[0].inputs[m] = a_counts->inputs[m];
+					chunks[0].keySlots[m] = a_counts->keyDraws[m];
+				}
+				countRange(regionCount, count, chunks[1]);
+			} else if (count >= kCountFanoutMin && !Policy::SerialFanout()) {
+				chunks.resize((count + kCountGrain - 1) / kCountGrain);
 				SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildShadow.CountModeDraws", count, kCountGrain, [&](std::size_t a_begin, std::size_t a_end) {
 					ZoneScopedN("CS.DCLF.BuildShadow.CountModeDrawsShards");
 					countRange(a_begin, a_end, chunks[a_begin / kCountGrain]);
@@ -876,7 +978,7 @@ namespace DCLF::Draws
 		plain.diffuse = nullIndex;
 		if (a_kept) {
 			BuildKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept, plain, a_scene);
-			CountModeDraws(a_out);
+			CountModeDraws(a_out, &a_kept->modeCounts, a_scene ? static_cast<const void*>(a_scene) : &a_kept->scene, &a_kept->entriesCounted);
 			Diagnostics::Notify(Diagnostics::ShadowBuilt{ a_in, a_tables, a_lookups, a_out, *a_kept });
 			return;
 		}

@@ -193,6 +193,23 @@ namespace DCLF::Reports
 				text += fmt::format("[DCLF] material captures (T6b2a: the scene work's records): {} captured ({} replacing an older one, {} older than the held one), {} "
 									"let go unused, {} held; {} records made by the scene work, {} uncovered, {} asked of the render thread{}\n",
 					ms.captured, ms.replaced, ms.stale, ms.aged, V::materialSnapshots(s).size(), ms.made, ms.uncovered, ms.requested, ms.uncovered ? " <- MATERIAL PORT" : "");
+				if (ms.fieldsMoved) {
+					// The words that moved most (offset: count), the reference count's (+0x8) aside.
+					std::vector<std::pair<std::uint32_t, std::uint32_t>> words;
+					for (std::uint32_t w = 0; w < ms.wordMoved.size(); ++w)
+						if (ms.wordMoved[w] && w != 2)
+							words.emplace_back(ms.wordMoved[w], w * 4);
+					std::sort(words.begin(), words.end(), std::greater<>());
+					std::string classes;
+					for (const auto& [vtable, count] : ms.fieldsMovedBy)
+						if (vtable)
+							classes += fmt::format("{}image+{:#x}: {}", classes.empty() ? "" : ", ", reinterpret_cast<std::uintptr_t>(vtable) - REL::Module::get().base(), count);
+					std::string list;
+					for (std::size_t k = 0; k < words.size() && k < 12; ++k)
+						list += fmt::format("{}{:#x}: {}", k ? ", " : "", words[k].second, words[k].first);
+					text += fmt::format("[DCLF] material captures whose fields moved: {} (first vtable image+{:#x}); words moved {}; by vtable {}\n", ms.fieldsMoved,
+						reinterpret_cast<std::uintptr_t>(ms.fieldsMovedVtable) - REL::Module::get().base(), list, classes);
+				}
 				ms = {};
 			}
 			// The material bindings the scene work makes.

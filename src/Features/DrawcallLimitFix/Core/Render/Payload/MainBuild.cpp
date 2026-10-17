@@ -155,7 +155,8 @@ namespace DCLF::Draws
 			return a_left.written == a_right.written && a_left.texturesOk == a_right.texturesOk && a_left.deferred == a_right.deferred &&
 			       a_left.missingTexture == a_right.missingTexture && a_left.textures == a_right.textures && a_left.samplers == a_right.samplers &&
 			       a_left.features == a_right.features && a_left.tables == a_right.tables && a_left.blocksOk == a_right.blocksOk &&
-			       a_left.texcoordDword == a_right.texcoordDword && a_left.texcoordMask == a_right.texcoordMask;
+			       a_left.texcoordDword == a_right.texcoordDword && a_left.texcoordMask == a_right.texcoordMask &&
+		       a_left.frameVariables == a_right.frameVariables;
 		}
 
 		/**
@@ -824,22 +825,9 @@ namespace DCLF::Draws
 		if (state.blocksOk) {
 			PackConstantGroup(material.vs, vsLayout, blocks.vsTable, vsGroup, vsFirst, std::span(row.bytes.data() + kMaterialRowVS, kMaterialRowVSBytes));
 			PackConstantGroup(material.ps, psLayout, blocks.psTable, psGroup, psFirst, std::span(row.bytes.data() + kMaterialRowPS, kMaterialRowPSBytes));
-			// TexcoordOffset's place: the row holds the record's (capture-time) value, which a feature's frame patch overwrites with the
-			// buffer the frame's shaders read (a payload product names the place: texcoordDword, texcoordMask).
-			const std::uint32_t variable = Extensions::PortRules(keyKind).frameVSVariable;
-			if (variable < vsLayout.count && ((vsGroup >> variable) & 1)) {
-				const std::uint32_t first = vsLayout.offset[variable];
-				const std::uint32_t dword = PackedPositionOf(vsLayout, blocks.vsTable, vsGroup, vsFirst, first);
-				std::uint8_t mask = 0;
-				for (std::uint32_t c = 0; dword != ~0u && c < vsLayout.size[variable] && c < 4; ++c)
-					if (material.vs.Written(first + c) && PackedPositionOf(vsLayout, blocks.vsTable, vsGroup, vsFirst, first + c) == dword + c &&
-						(dword + c) * 4 + 4 <= kMaterialRowVSBytes)
-						mask |= static_cast<std::uint8_t>(1u << c);
-				if (mask) {
-					state.texcoordDword = dword;
-					state.texcoordMask = mask;
-				}
-			}
+			// The frame-owned variables' places (TexcoordOffset, the port's declared frame variables): the row holds the record's values,
+			// which a feature's frame patch overwrites (a payload product names the places).
+			PlaceFrameVariables(material, keyKind, { vsLayout, blocks.vsTable, vsGroup, vsFirst }, { psLayout, blocks.psTable, psGroup, psFirst }, state);
 		}
 	}
 
