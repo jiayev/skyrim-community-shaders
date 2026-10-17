@@ -411,9 +411,6 @@ struct RenderGraphRuntime::Impl
 
 	void OnCompletedFrame(std::uint64_t a_frameNumber, const org::runtime::IStatisticsService& a_stats)
 	{
-		// The execution is complete on the GPU (the host reports them in submission order): DCLF's pooled versions bound up to it
-		// may be reused.
-		DrawcallLimitFix::OnGraphFrameCompleted(a_frameNumber);
 		CompletedEpoch epoch;
 		ReadCompletedEpoch(a_frameNumber, a_stats, epoch);
 		if (!asyncEpochs) {
@@ -1012,6 +1009,8 @@ bool RenderGraphRuntime::Initialize()
 	state->host->SetCompletedFrameCallback([self = state.get()](std::uint64_t a_frameNumber, const org::runtime::IStatisticsService& a_stats) {
 		self->OnCompletedFrame(a_frameNumber, a_stats);
 	});
+	// Every submission up to a_submissions is complete on the GPU: DCLF's pooled versions bound up to it may be reused.
+	state->host->SetRetiredCallback([](std::uint64_t a_submissions) { DrawcallLimitFix::OnGraphSubmissionsRetired(a_submissions); });
 	if (state->asyncEpochs) {
 		try {
 			std::vector<std::uint32_t> epochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion),
