@@ -22,13 +22,16 @@ namespace DCLF::Reports
 	{
 		using V = Diagnostics::SceneView;
 
-		/** @brief The table families' kept counts ("<name> kept N", joined by ", ": Features/TreeWind's trees, then the fade roots). */
+		/**
+		 * @brief The table families' kept counts and the publications that replayed their marked rows instead of copying them whole ("<name>
+		 * kept N (M replayed)", joined by ", ": Features/TreeWind's trees, then the fade roots).
+		 */
 		std::string FamiliesKept(const std::array<std::uint64_t, Extensions::kTableFamilySlots>& a_kept)
 		{
 			std::string line;
 			const auto families = Extensions::RegisteredTableFamilies();
 			for (std::size_t f = 0; f < families.size(); ++f)
-				line += fmt::format("{}{} kept {}", f ? ", " : "", families[f].name, a_kept[f]);
+				line += fmt::format("{}{} kept {} ({} replayed)", f ? ", " : "", families[f].name, a_kept[f], Extensions::TakeTableFamilyReplays(static_cast<std::uint32_t>(f)));
 			return line;
 		}
 

@@ -104,6 +104,13 @@ namespace DCLF::Features::TreeWind
 			static_cast<TreeTables*>(a_columns)->treeFree.push_back(a_row);
 		}
 
+		// The rows the scene resources' tree buffers hold (their requirement's: TreeWindScene.cpp), so a revision's reuse witnesses them
+		// rather than every write of the family (TableFamilies::RequirementsWitness).
+		std::uint32_t TreeRows(const void* a_columns)
+		{
+			return static_cast<std::uint32_t>(static_cast<const TreeTables*>(a_columns)->trees.size());
+		}
+
 		// The component's hooks (Api::CoordinatorComponent).
 		std::shared_ptr<void> MakeComponent() { return std::make_shared<TreeComponent>(); }
 
@@ -289,7 +296,7 @@ namespace DCLF::Features::TreeWind
 	void RegisterTables(Api::InstallContext& a_context)
 	{
 		treeFamily = a_context.RegisterTableFamily({ .name = "trees", .make = &MakeTrees, .assign = &AssignTrees, .same = &SameTrees, .clear = &ClearTrees,
-			.recycle = &RecycleTree, .rowsEnd = kNodelessTree, .recordWord = kTreeRecordWord });
+			.recycle = &RecycleTree, .rowsEnd = kNodelessTree, .recordWord = kTreeRecordWord, .rows = &TreeRows });
 		component = a_context.RegisterCoordinatorComponent(
 			{ .name = "tree-wind",
 				.make = &MakeComponent,

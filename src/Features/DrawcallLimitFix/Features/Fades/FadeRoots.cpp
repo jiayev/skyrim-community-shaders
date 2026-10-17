@@ -404,6 +404,17 @@ namespace DCLF::Scene
 		*static_cast<FadeRootTables*>(a_to) = *static_cast<const FadeRootTables*>(a_from);
 	}
 
+	void AssignFadeRootRow(void* a_to, const void* a_from, std::uint32_t a_row)
+	{
+		// A marked row's own column (its listing, references and index are written under NoteWrite: the family is then copied whole), and
+		// the generations a reseed's mark counts on (RequestFadeSeed).
+		auto& to = *static_cast<FadeRootTables*>(a_to);
+		const auto& from = *static_cast<const FadeRootTables*>(a_from);
+		if (a_row < to.fadeRoots.size() && a_row < from.fadeRoots.size())
+			to.fadeRoots[a_row] = from.fadeRoots[a_row];
+		to.fadeRootGenerations = from.fadeRootGenerations;
+	}
+
 	bool SameFadeRoots(const void* a_left, const void* a_right)
 	{
 		const auto& x = *static_cast<const FadeRootTables*>(a_left);
@@ -468,6 +479,7 @@ namespace DCLF::Features::Fades
 		Scene::fadeRootFamily = a_context.RegisterTableFamily({ .name = "fade roots",
 			.make = &Scene::MakeFadeRoots,
 			.assign = &Scene::AssignFadeRoots,
+			.assignRow = &Scene::AssignFadeRootRow,
 			.same = &Scene::SameFadeRoots,
 			.clear = &Scene::ClearFadeRoots,
 			.recycle = &Scene::RecycleFadeRoot,

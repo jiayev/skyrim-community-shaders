@@ -21,12 +21,22 @@ namespace DCLF::Extensions
 	inline constexpr std::uint32_t kTableFamilySlots = 4;
 	/** @brief An object's reference to no row of a family (TableFamilyColumns::objectRow). */
 	inline constexpr std::uint32_t kNoFamilyRow = ~0u;
+	/** @brief The most marks a family's replay log keeps (TableFamilyColumns::markedRows): a copy further behind is copied whole. */
+	inline constexpr std::size_t kMarkedRowsKept = 1u << 14;
 
 	/** @brief One family of a tables: its stamp, the feature's columns, and what Core keeps of it beside them (Api::TableFamily). */
 	struct TableFamilyColumns
 	{
-		std::uint64_t stamp = 0;  // moved by every write (NoteWrite): the publication copies the family only when it moved
-		void NoteWrite() { ++stamp; }
+		std::uint64_t stamp = 0;  // moved by every write (NoteWrite, Mark): the publication copies the family only when it moved
+		// Moved by NoteWrite alone, not by Mark: a copy whose own stands at it differs from these columns only in the rows marked since,
+		// which the publication replays (Api::TableFamily::assignRow) instead of copying the family whole.
+		std::uint64_t written = 0;
+		/** @brief Any write but a marked row's own columns (Mark): the stamp moved, and the family copied whole by the next publication. */
+		void NoteWrite()
+		{
+			++stamp;
+			++written;
+		}
 		std::shared_ptr<void> columns;  // the feature's (Api::TableFamily::make), this tables' own: never shared with another tables
 		// By object slot: the row each object references (kNoFamilyRow: none; at or past rowsEnd: no row, the feature's meaning).
 		std::vector<std::uint32_t> objectRow;
@@ -39,12 +49,20 @@ namespace DCLF::Extensions
 		// A journaled family's rows written since what its commit hook's buffer holds (Api::TableFamily::journaled): Mark marks them,
 		// TakeSent trims what the hook reported sent. Copied with every publication, kept family or not; unused otherwise.
 		ChangeJournal journal;
+		// Every row Mark marked, in order, its chunks shared with the publications' copies (as the tables' logs): what a copy whose
+		// written stands replays (TableFamilies::Publish). Trimmed past kMarkedRowsKept.
+		SharedEventLog<std::uint32_t> markedRows;
 
-		/** @brief A journaled family's row a_row written: marked in the journal (once a build), and the stamp moved. */
+		/**
+		 * @brief A journaled family's row a_row written, that row's own columns alone (any other write is NoteWrite's): marked in the
+		 * journal (once a build) and in the replay log, and the stamp moved.
+		 */
 		void Mark(std::uint32_t a_row)
 		{
 			journal.Mark(a_row);
-			NoteWrite();
+			markedRows.Push(a_row);
+			markedRows.Trim(kMarkedRowsKept);
+			++stamp;
 		}
 		/** @brief The journal a commit hook sends a journaled family's rows by (ForEachRun from what its buffer holds). */
 		const ChangeJournal& Journal() const { return journal; }
@@ -134,11 +152,19 @@ namespace DCLF::Extensions
 		void Recycle(std::uint32_t a_family, std::uint32_t a_row);
 		/** @brief The stamps' sum (the publication key's: any write moves it). */
 		std::uint64_t StampSum() const;
+		/**
+		 * @brief What a revision's requirements read of the families, as one value (the revision reuse's witness: Impl::MakeRevision): each
+		 * family's rows when it counts them (Api::TableFamily::rows, what the resources sized by it hold), else its stamp (anything a
+		 * requirement reads of it, any write moves).
+		 */
+		std::uint64_t RequirementsWitness() const;
 		/** @brief Whether every family's stamp is a_other's (a family neither holds stands at 0). */
 		bool SameStamps(const TableFamilies& a_other) const;
 		/**
 		 * @brief The publication's copy (PublishTables): each family copied from a_from unless a_replayable and its stamp stood since this
-		 * snapshot's (then a_kept counts it). Returns the kept families, a bit by registration.
+		 * snapshot's (then a_kept counts it), or only marks moved it, all of them still in a_from's replay log (then the marked rows are
+		 * replayed: Api::TableFamily::assignRow; TakeTableFamilyReplays counts it). Returns the kept and replayed families, a bit by
+		 * registration (the replay parity checks them alike).
 		 */
 		std::uint32_t Publish(const TableFamilies& a_from, bool a_replayable, std::array<std::uint64_t, kTableFamilySlots>& a_kept);
 		/** @brief Whether a_family holds the same rows, references and tags as a_other's (the replay parity of a kept family). */
@@ -157,6 +183,8 @@ namespace DCLF::Extensions
 	private:
 		void MakeAll();
 		void Assign(std::size_t a_family, const TableFamilyColumns& a_from);
+		/** @brief Publish's replay: a_family brought up to a_from by the rows marked since its copy; false (nothing done) when it cannot be. */
+		bool ReplayMarked(std::size_t a_family, const TableFamilyColumns& a_from);
 
 		std::vector<TableFamilyColumns> entries;
 	};
@@ -172,4 +200,6 @@ namespace DCLF::Extensions
 	 * (Api::TableFamily::rows); 0 without the callback or the family.
 	 */
 	std::uint32_t TableFamilyRows(const TableFamilies& a_tables, Api::TableFamilyId a_family);
+	/** @brief The tables' report (any thread): the publications that replayed a_family's marked rows (TableFamilies::Publish) since the last call. */
+	std::uint64_t TakeTableFamilyReplays(std::uint32_t a_family);
 }

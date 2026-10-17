@@ -38,6 +38,10 @@ namespace DCLF::Api
 	 *
 	 * - make: an empty family's columns.
 	 * - assign: a_to's columns made equal to a_from's (the publication's copy of a moved family, the dense walk's save and restore).
+	 * - assignRow (optional, a journaled family's): a_to's row a_row made equal to a_from's - its entry in each per-row column, and any
+	 *   value its writes move beside them (a generation counter) - where a_to differs from a_from only in rows marked since
+	 *   (Extensions::TableFamilyColumns::Mark, which a write of a row's own columns alone takes; any other write is NoteWrite's). The
+	 *   publication's copy of a family only marks moved replays the marked rows by it instead of assign.
 	 * - same (optional): whether two families' columns hold the same rows (CS_DCLF_PERSISTENT_PARITY's replay check of a kept family).
 	 * - clear: every row gone (SceneTables::Clear), the family's content epochs moved on.
 	 * - recycle: a retired row back on the family's free list.
@@ -50,6 +54,7 @@ namespace DCLF::Api
 		std::string_view name;  // plural: the report's "<name> kept" and the replay parity's "the <name> were kept"
 		std::shared_ptr<void> (*make)() = nullptr;
 		void (*assign)(void* a_to, const void* a_from) = nullptr;
+		void (*assignRow)(void* a_to, const void* a_from, std::uint32_t a_row) = nullptr;
 		bool (*same)(const void* a_left, const void* a_right) = nullptr;
 		void (*clear)(void* a_columns) = nullptr;
 		void (*recycle)(void* a_columns, std::uint32_t a_row) = nullptr;

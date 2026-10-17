@@ -54,8 +54,7 @@ namespace DCLF
 		// The shadow buffers for what the revisions' shapes name, required at every make.
 		const auto& shadowState = inputs.shadow;
 		if (shadowState && scratch.indirect.valid) {
-			// The slots hold every draw the scene can produce (the draw bound brought up to date first).
-			a_make.producer.UpdateDrawBound(a_make.tables, a_make.publication.tablesGeneration);
+			// The slots hold every draw the scene can produce (the draw bound as the make brought it up to date: MakeRevision).
 			RequireShadowSequences(a_make.producer, a_build);
 			// The latch for what the frame's epochs can name (over every mode): its views, key slots, the states registered and the
 			// sun's processes, a view's each at most. The key slots of the publication's lookups (the scene lane resolved

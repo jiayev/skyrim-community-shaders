@@ -146,6 +146,7 @@ namespace DCLF::Extensions
 		std::string name;
 		decltype(Api::TableFamily::make) make = nullptr;
 		decltype(Api::TableFamily::assign) assign = nullptr;
+		decltype(Api::TableFamily::assignRow) assignRow = nullptr;
 		decltype(Api::TableFamily::same) same = nullptr;
 		decltype(Api::TableFamily::clear) clear = nullptr;
 		decltype(Api::TableFamily::recycle) recycle = nullptr;

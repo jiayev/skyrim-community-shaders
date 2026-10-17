@@ -303,13 +303,79 @@ namespace DCLF
 			return hash;
 		}
 
-		bool SameRequirements(const ImplSnapshotBuilder::RevisionReuse::Key& a_last, const ImplSnapshotBuilder::RevisionReuse::Key& a_next)
+		/**
+		 * @brief What the requirement pass reads of a_tables (RevisionReuse::Key::tables), by value: the object slots' count; the draw bound
+		 * a_bound brought up to date from them (UpdateDrawBound: its draws, by pipeline slot, and its casting shares' version - RequireMain's
+		 * sequences, buckets and ranges, the shadow slots' sequences, the casting bound's shapes); the pipeline slots' keys and used set (the
+		 * views' forward pipelines and slots, the Z buckets' and the main layout's raster rules; the lookups' entries are LookupsWitness'); the
+		 * main ranges' counts (the decal sequences); the geometry slots and their log's end (the index pool's bound, RequireIndexPool, follows
+		 * that log); and what the features' scene resources require from (Api::SceneResources::require: the table families' rows or stamps,
+		 * TableFamilies::RequirementsWitness - Core's visibility rows by the root states' among them - and the vertex stream's rows' ranges).
+		 */
+		std::uint64_t TablesWitness(const SceneTables& a_tables, const Draws::DrawBoundStore& a_bound)
 		{
+			std::uint64_t hash = 0xcbf29ce484222325ull;
+			MixWitness(hash, a_tables.objects.size());
+			MixWitness(hash, a_bound.draws);
+			MixWitness(hash, a_bound.shadowVersion);
+			MixWitness(hash, a_bound.perPipeline.size());
+			for (const std::uint64_t draws : a_bound.perPipeline)
+				MixWitness(hash, draws);
+			MixWitness(hash, a_tables.pipelines.size());
+			for (const auto& key : a_tables.pipelines) {
+				MixWitness(hash, (std::uint64_t(key.vertexDescriptor) << 32) | key.pixelDescriptor);
+				MixWitness(hash, (std::uint64_t(key.rasterFlags) << 32) | key.passDescriptor);
+				MixWitness(hash, key.vertexLayout);
+			}
+			MixWitness(hash, a_tables.usedPipelineBits.size());
+			for (const std::uint64_t word : a_tables.usedPipelineBits)
+				MixWitness(hash, word);
+			for (const std::uint32_t count : a_tables.rangeCount)
+				MixWitness(hash, count);
+			MixWitness(hash, a_tables.geometries.size());
+			MixWitness(hash, a_tables.geometryLog.End());
+			MixWitness(hash, a_tables.families.RequirementsWitness());
+			MixWitness(hash, a_tables.streamRows.size());
+			for (const auto& row : a_tables.streamRows)
+				MixWitness(hash, row.object != Api::VertexStreamRow::kNoObject ? (std::uint64_t(row.first) << 32) | row.count : ~std::uint64_t{ 0 });
+			return hash;
+		}
+
+		/** @brief The parts of a_next that moved from a_last (a bit by RevisionReuse::Moved); none: the same requirements. */
+		std::uint32_t MovedRequirements(const ImplSnapshotBuilder::RevisionReuse::Key& a_last, const ImplSnapshotBuilder::RevisionReuse::Key& a_next)
+		{
+			using Reuse = ImplSnapshotBuilder::RevisionReuse;
 			const auto same = [](const auto& a_left, const auto& a_right) { return !a_left.owner_before(a_right) && !a_right.owner_before(a_left); };
-			return same(a_last.tables, a_next.tables) && same(a_last.catalog, a_next.catalog) && a_last.tablesGeneration == a_next.tablesGeneration &&
-			       a_last.request.pipelines == a_next.request.pipelines && a_last.request.shadowSlotKeys == a_next.request.shadowSlotKeys &&
-			       a_last.request.shadowKeys == a_next.request.shadowKeys && a_last.inputs == a_next.inputs && a_last.lookups == a_next.lookups &&
-			       a_last.shadowRows == a_next.shadowRows && a_last.volatiles == a_next.volatiles;
+			std::uint32_t moved = 0;
+			const auto note = [&moved](bool a_moved, Reuse::Moved a_part) { moved |= a_moved ? 1u << a_part : 0u; };
+			note(a_last.tables != a_next.tables, Reuse::kMovedTables);
+			note(!same(a_last.catalog, a_next.catalog), Reuse::kMovedCatalog);
+			note(a_last.tablesGeneration != a_next.tablesGeneration, Reuse::kMovedGeneration);
+			note(a_last.request.pipelines != a_next.request.pipelines || a_last.request.shadowSlotKeys != a_next.request.shadowSlotKeys ||
+					 a_last.request.shadowKeys != a_next.request.shadowKeys,
+				Reuse::kMovedRequest);
+			note(a_last.inputs != a_next.inputs, Reuse::kMovedInputs);
+			note(a_last.lookups != a_next.lookups, Reuse::kMovedLookups);
+			note(a_last.shadowRows != a_next.shadowRows, Reuse::kMovedShadowRows);
+			note(a_last.volatiles != a_next.volatiles, Reuse::kMovedVolatiles);
+			return moved;
+		}
+
+		/**
+		 * @brief MakeRevision's reuse key for a_publication into a_key (a_producer's draw bound brought up to date from its tables first:
+		 * the requirement pass reads it so), and the parts of it that moved from the last sealed revision's (~0u: none stands to keep).
+		 */
+		std::uint32_t RequirementsMoved(ImplProducer& a_producer, const ImplSnapshotBuilder::RevisionReuse& a_reuse, const ScenePublication& a_publication,
+			const Lookups& a_lookups, ImplSnapshotBuilder::RevisionReuse::Key& a_key)
+		{
+			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Key");
+			const auto& tables = *a_publication.tables;
+			const auto& producer = a_producer.producer;
+			const auto& inputs = producer.inputs;
+			a_producer.UpdateDrawBound(tables, a_publication.tablesGeneration);
+			a_key = { TablesWitness(tables, producer.drawBound), a_publication.catalog, a_publication.tablesGeneration, a_publication.revision, inputs.generation,
+				LookupsWitness(a_lookups, tables), ShadowRowsWitness(a_lookups, inputs.shadowPlacements, producer.recentOcclusionLayouts), VolatileWitness(inputs) };
+			return a_reuse.valid ? MovedRequirements(a_reuse.key, a_key) : ~0u;
 		}
 
 		/** @brief CS_DCLF_PERSISTENT_PARITY: whether every shape of a_made is a_kept's (the same object or the same shape). */
@@ -413,21 +479,23 @@ namespace DCLF
 		// The requirement pass reads the publication's tables, catalog and request, the lookups' pipeline slots, the revision inputs and
 		// a few values the frames move (RevisionReuse::Key). All of them as the last make that sealed a revision read them: this make
 		// would seal the same set and assemble the same revision, so that one is kept (its recordings stand; SnapshotPass takes it as
-		// sealed). CS_DCLF_PERSISTENT_PARITY makes it anyway and compares.
-		ImplSnapshotBuilder::RevisionReuse::Key key{ a_publication.tables, a_publication.catalog, a_publication.tablesGeneration, request, inputs.generation,
-			LookupsWitness(lookups, tables), ShadowRowsWitness(lookups, inputs.shadowPlacements, producer.recentOcclusionLayouts), VolatileWitness(inputs) };
-		const bool unchanged = reuse.valid && SameRequirements(reuse.key, key);
+		// sealed). CS_DCLF_PERSISTENT_PARITY makes it anyway and compares. The tables by what the pass reads of them (TablesWitness), the
+		// draw bound among it brought up to date from them first (the pass reads it as updated; a kept make's update is the next one's).
+		ImplSnapshotBuilder::RevisionReuse::Key key;
+		const std::uint32_t moved = RequirementsMoved(*this, reuse, a_publication, lookups, key);
+		const bool unchanged = moved == 0;
 		const bool parity = Diagnostics::Observe().scene;
 		if (unchanged && !parity) {
 			++reuse.kept;
 			reuse.reusedNow = true;
 			return;
 		}
-		++reuse.ran;
+		reuse.NoteRan(moved);
 		reuse.valid = false;
 		const std::uint64_t sequenceBefore = revisions.assembler.LatestSequence();
 		// The revision assembled from this make's set and shapes; once sealed, what it was made from is the key a later make compares.
 		const auto assemble = [&](bool a_shapesKept) {
+			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Assemble");
 			AssembleRevision(a_frame);
 			if (revisions.assembler.LatestSequence() == sequenceBefore) {
 				if (parity && unchanged)
@@ -448,14 +516,20 @@ namespace DCLF
 		RevisionMake make{ *this, a_publication, tables, lookups, catalog };
 		make.lookupsWitness = key.lookups;
 		auto build = buffers.Begin();
-		for (auto* participant : participants)
-			participant->RequireSequences(make, build);
-		for (auto* participant : participants)
-			participant->RequireLatched(make, build);
-		RequireLatches(build);
+		{
+			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Require");
+			for (auto* participant : participants)
+				participant->RequireSequences(make, build);
+			for (auto* participant : participants)
+				participant->RequireLatched(make, build);
+			RequireLatches(build);
+		}
 		// The set: sealed once it holds every requirement; else a growth batch is in flight and the builder makes the revision again when
 		// it settles (it wakes the builder). The same set (its serial, its fragment) while nothing changed.
-		auto seal = buffers.Seal(std::move(build));
+		auto seal = [&] {
+			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Seal");
+			return buffers.Seal(std::move(build));
+		}();
 		if (!seal) {
 			++revisions.growthWaits;
 			if (parity && unchanged)
@@ -478,7 +552,10 @@ namespace DCLF
 		// make keeps the last ones. What the participants note of the make first (the shadow engine's casting bound outgrown).
 		for (auto* participant : participants)
 			participant->NoteSealed(make);
-		const auto shapesKey = RevisionShapesKey(sealed, make, request.pipelines);
+		const auto shapesKey = [&] {
+			ZoneScopedN("CS.DCLF.MakeRevisionShapes.ShapesKey");
+			return RevisionShapesKey(sealed, make, request.pipelines);
+		}();
 		if (shapesKey == revisionShapesKey) {
 			++shapesKept;
 			// CS_DCLF_PERSISTENT_PARITY: the shapes made anyway, against the kept ones (which stay the revision's).
@@ -496,8 +573,11 @@ namespace DCLF
 			shapesMadeBy[g] += shapesKey[g] != revisionShapesKey[g] ? 1 : 0;
 		revisionShapesKey = shapesKey;
 		++shapesMade;
-		for (auto* participant : participants)
-			participant->MakeShapes(make, sealed, mainLayout);
+		{
+			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Shapes");
+			for (auto* participant : participants)
+				participant->MakeShapes(make, sealed, mainLayout);
+		}
 		Diagnostics::Notify(Diagnostics::RevisionShapesMade{ sealed, mainLayout, made, inputs, tables.geometries.size() });
 		// The revision of these shapes: assembled, its changed epochs recorded for it.
 		assemble(false);

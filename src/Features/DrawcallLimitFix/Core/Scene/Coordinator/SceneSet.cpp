@@ -2005,26 +2005,47 @@ namespace DCLF::Scene
 		ReplayTableColumns(snapshot, plan.replay);
 		if (plan.replay)
 			FinishObjectReplay(snapshot, tables, replaySlots, replaySlotCauses, objectSlots, publication, pace);
-		// The extras, the families and the geometry columns.
+		// The extras, the families and the geometry columns (each its own zone: what the families' zone spends, by part).
 		ZoneNamedN(familiesZone, "CS.DCLF.Scene.PublishTables.Families", true);
-		ReplayExtras(snapshot, tables, plan);
+		{
+			ZoneScopedN("CS.DCLF.Scene.PublishTables.Extras");
+			ReplayExtras(snapshot, tables, plan);
+		}
 		auto assign = [](auto& a_to, auto& a_from) { a_to = a_from; };
-		const std::uint32_t keptFamilies = snapshot.families.Publish(tables.families, tablesPoolReplayable[index] != 0, publication.familiesKept);
-		if (!plan.keepConstants)
+		std::uint32_t keptFamilies = 0;
+		{
+			// The table families: kept by stamp, their marked rows replayed, or copied whole (TableFamilies::Publish).
+			ZoneScopedN("CS.DCLF.Scene.PublishTables.TableFamilies");
+			keptFamilies = snapshot.families.Publish(tables.families, tablesPoolReplayable[index] != 0, publication.familiesKept);
+		}
+		if (!plan.keepConstants) {
+			ZoneScopedN("CS.DCLF.Scene.PublishTables.Constants");
 			ForConstantsFamily(snapshot, tables, assign);
-		if (!plan.keepPipelines)
+		}
+		if (!plan.keepPipelines) {
+			ZoneScopedN("CS.DCLF.Scene.PublishTables.PipelineFamily");
 			ForPipelineFamily(snapshot, tables, assign);
-		ReplayGeometryColumns(snapshot, tables, plan, replayGeometryMarks, publication);
+		}
+		{
+			ZoneScopedN("CS.DCLF.Scene.PublishTables.Geometry");
+			ReplayGeometryColumns(snapshot, tables, plan, replayGeometryMarks, publication);
+		}
 		tablesPoolReplayable[index] = 1;
 
 		Diagnostics::Notify(Diagnostics::TablesReplayed{ *this, snapshot, publication.published, plan.position, plan.geometryPosition, keptFamilies, plan.keepConstants });
 		// The publication log's readers are the snapshots alone (one behind the bound is copied whole).
 		tables.publicationLog.Trim(1u << 16);
 		// Its node collects what is freed after it.
-		snapshot.retirementHold = retirement.Publish();
+		{
+			ZoneScopedN("CS.DCLF.Scene.PublishTables.Retirement");
+			snapshot.retirementHold = retirement.Publish();
+		}
 		publishedTables = target;
 		++publication.published;
-		DispatchTablesSpare(tablesPool, tablesPoolReplayable, publishedTables);
+		{
+			ZoneScopedN("CS.DCLF.Scene.PublishTables.SpareDispatch");
+			DispatchTablesSpare(tablesPool, tablesPoolReplayable, publishedTables);
+		}
 		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		publication.ms += ms;
 		publication.maxMs = std::max(publication.maxMs, ms);
