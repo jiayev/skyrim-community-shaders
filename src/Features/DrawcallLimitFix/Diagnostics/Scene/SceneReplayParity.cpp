@@ -114,10 +114,8 @@ namespace DCLF::Diagnostics
 				sameColumn("decalOrdinal", snapshot.rangeOrdinal, tables.rangeOrdinal);
 				sameColumn("layerBase", snapshot.layerBase, tables.layerBase);
 				sameColumn("layerOf", snapshot.layerOf, tables.layerOf);
-				auto sameLog = [](const auto& a_left, const auto& a_right) {
-					return a_left.base == a_right.base && a_left.entries.size() == a_right.entries.size() &&
-					       (a_left.entries.empty() || std::memcmp(a_left.entries.data(), a_right.entries.data(), a_left.entries.size() * sizeof(a_left.entries[0])) == 0);
-				};
+				// The logs compare their base and entries (SharedEventLog's equality).
+				auto sameLog = [](const auto& a_left, const auto& a_right) { return a_left == a_right; };
 				if (!sameLog(snapshot.changeLog, tables.changeLog) || !sameLog(snapshot.geometryLog, tables.geometryLog) || !sameLog(snapshot.materialLog, tables.materialLog) ||
 					!sameLog(snapshot.publicationLog, tables.publicationLog) ||
 					!sameLog(snapshot.extrasBlockLog, tables.extrasBlockLog) || snapshot.extraRows.size() != tables.extraRows.size() ||

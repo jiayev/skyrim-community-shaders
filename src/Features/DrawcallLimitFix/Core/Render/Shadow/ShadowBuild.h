@@ -247,6 +247,35 @@ namespace DCLF::Draws
 		std::shared_ptr<const StreamViews> a_streams = nullptr, ShadowKept* a_kept = nullptr, ResidentRegion* a_scene = nullptr);
 
 	/**
+	 * @brief What BuildShadowPayloadShared hands BuildShadowPayloadRegion: the objects it read again (the modes take them again), the
+	 * objects whose entries the region half writes, in the order they were touched (the region's entry order follows it), and the
+	 * build's numbers. Its vectors are reused across builds (the snapshot builder's).
+	 */
+	struct ShadowBuildSplit
+	{
+		std::vector<std::uint32_t> changed;
+		std::vector<std::uint32_t> touched;
+		std::uint64_t build = 0;  // ShadowKept::build
+		std::uint32_t transformBuffer = 0;
+		bool resync = false;   // the kept state was emptied: the region half clears the shadow words first
+		bool pending = false;  // the shared half ran, the region half has not
+	};
+
+	/**
+	 * @brief BuildShadowPayload in two halves, called in order on one thread at a time (the second may run on another thread, after the
+	 * first). The shared half needs no region: from the tables, the lookups and the stream views alone it writes a_out's shared blocks
+	 * (WriteSharedBlocks: its reset, the geometry table, the arena's frame record and blocks), the material rows and the kept state's
+	 * records (TakeChangedRecords, UpdateMaterialRows); it writes a_kept and a_out only, never the main build's region, so it may run
+	 * beside the main build (a_sharedRegion: whether the region half is handed it). The region half writes the shadow words into
+	 * a_scene (the main build's region, once its build finished; null: the kept state's own), the modes' holdings, the frame's list,
+	 * the counts and the kept parity's event.
+	 */
+	void BuildShadowPayloadShared(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
+		std::shared_ptr<const StreamViews> a_streams, ShadowKept* a_kept, bool a_sharedRegion, ShadowBuildSplit& a_split);
+	void BuildShadowPayloadRegion(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept* a_kept,
+		ResidentRegion* a_scene, ShadowBuildSplit& a_split);
+
+	/**
 	 * @brief What the shadow pipelines are resolved for that only the frame knows: the capability's modes with their
 	 * views' rasterizer states, and the targets' formats. Posted by the frame's start when it changes (IndirectDraws::PostLookupInputs),
 	 * read by the scene lane (latest wins); `enabled` false while DCLF draws no shadow view (the shadow pipelines then stand as they are).

@@ -97,11 +97,20 @@ namespace DCLF
 		std::atomic<std::uint32_t> snapshotTakenFrame{ 0 };
 		std::atomic<std::uint64_t> snapshotTaken{ 0 };
 		std::atomic<std::uint32_t> scenePassDoneFrame{ 0 };
-		// The builder's: a sealed snapshot's publication waits on the gate above, so the scene pass's end wakes it; else that end wakes
+		// The builder's: a sealed snapshot's publication, or work held for its build, waits on the gate above, so the scene pass's end wakes it; else that end wakes
 		// nobody (a pass ends several times a frame). Set before the builder reads the gate again, and the pass's frame stored before
 		// it is read (both seq_cst): one of them sees the other, so no end is missed. The wakes it skipped (the report's).
 		std::atomic<bool> publicationGated{ false };
 		std::atomic<std::uint64_t> passDoneWakesSkipped{ 0 };
+		/**
+		 * @brief The builder: the gate above is closed - the frame has yet to take the last snapshot posted, or the scene pass of the
+		 * frame that took it has not ended. A payload waits on it (PublishPayload), and no build starts while it is closed (SnapshotPass).
+		 */
+		bool PublicationGateClosed() const
+		{
+			const std::uint64_t taken = snapshotTaken.load(std::memory_order_acquire);
+			return taken < snapshotBuilder.serial || scenePassDoneFrame.load(std::memory_order_seq_cst) < snapshotTakenFrame.load(std::memory_order_acquire);
+		}
 		// The frame's: the adopted snapshot, and whether the newest found was stale (no claims until a current one).
 		std::shared_ptr<const SceneSnapshot> adoptedSnapshot;
 		// The frame's: the adopted snapshot's payload, installed with its draws (the snapshot holds it too, so the builder releases it),
@@ -132,13 +141,17 @@ namespace DCLF
 				Idle,        // a snapshot of work stands (or none yet): made again when the frame's inputs move
 				Make,        // its revision to make (again), then its draws for the versions the revision names
 				Waiting,     // made, none sealed (a growth or a build pending): made again when woken
-				// Sealed, draws built: its recordings awaited, its payload published once the frame will adopt it (PublishPayload; newer
-				// work replaces it until then, nothing sent for it) and its uploads awaited (their completions and the frame's take wake
-				// the builder).
+				// Sealed, draws built: its recordings awaited, its payload published once the frame will adopt it (PublishPayload; no
+				// newer work replaces it: a build starts only while the gate is open) and its uploads awaited (their completions and the
+				// frame's take wake the builder).
 				Recordings,
 			};
 			Stage stage = Stage::Idle;
 			std::unique_ptr<SnapshotWork> work;
+			// Work taken from the slot while the publication gate is closed, not started (latest wins): taken once the gate opens, unless
+			// it passes through at once (PassesThrough). The coordinator is not told it was taken (SnapshotWorkTaken), so it publishes no
+			// more meanwhile.
+			std::unique_ptr<SnapshotWork> held;
 			std::shared_ptr<const DrawPublication> draws;
 			// draws' payload (PublishPayload), published once per draws: a snapshot made again for the same draws keeps it.
 			std::shared_ptr<const PayloadVersions> payload;
@@ -154,6 +167,10 @@ namespace DCLF
 			// The report's (ProducerReport): the builder's passes, and those that found nothing to do (no work, or a standing snapshot
 			// whose inputs had not moved); the publications passed through (PassThrough: only deltas moved).
 			std::uint64_t passes = 0, idlePasses = 0, passedThrough = 0;
+			// The report's (ProducerReport): draws built (BuildSnapshotDraws) and those replaced before a snapshot posted them; the passes
+			// that held work for the gate; the builds whose stages ran on this thread for a small change (RunAhead) and on the pool.
+			std::uint64_t buildsStarted = 0, buildsDiscarded = 0, heldPasses = 0, stagesInline = 0, stagesPooled = 0;
+			bool drawsPosted = false;  // draws were posted in a snapshot (buildsDiscarded counts those that were not)
 			bool fresh = false;  // work taken and not yet made (PassThrough is tried once, for it)
 			/**
 			 * @brief The last snapshot posted with a revision and complete draws, and what it was built from: a publication whose
@@ -177,7 +194,41 @@ namespace DCLF
 				std::array<std::uint32_t, 2> vsMask{}, psMask{};
 			} posted;
 		} snapshotBuilder;
+		/**
+		 * @brief The builder's (MakeRevision): what the requirement pass (Begin, the participants' requirements, Seal, AssembleRevision)
+		 * of the last make that sealed a revision read. A make with the same key would seal the same set and assemble the same revision,
+		 * so it keeps that one (reusedNow); CS_DCLF_PERSISTENT_PARITY runs the pass anyway and compares.
+		 */
+		struct RevisionReuse
+		{
+			struct Key
+			{
+				// The publication's tables and catalog (immutable: the same objects hold the same contents; held weakly, so a freed one is
+				// never taken for a new one at its address), its tables' generation and its request.
+				std::weak_ptr<const SceneTables> tables;
+				std::weak_ptr<const PipelineCatalog> catalog;
+				std::uint32_t tablesGeneration = 0;
+				RevisionRequest request;
+				std::uint64_t inputs = 0;     // RevisionInputs::generation
+				std::uint64_t lookups = 0;    // the lookups' entries the pass reads (RevisionMake::lookupsWitness)
+				std::uint64_t shadowRows = 0; // and the shadow map rows the shapes read (ShadowRowsWitness)
+				std::uint64_t volatiles = 0;  // what the pass reads besides the inputs and the publication (the event lists' asks, ...)
+			} key;
+			bool valid = false;      // key is the last sealed revision's, which stands (not failed since)
+			bool reusedNow = false;  // this make kept the last revision (SnapshotPass takes it as sealed)
+			std::uint64_t setSerial = 0;  // the set's serial the last seal named (the parity's)
+			// The report's (ProducerReport): the makes that kept the last revision and that ran the pass; the parities (the pass run
+			// anyway for an unchanged key; the shapes made anyway for an unchanged shapes key).
+			std::uint64_t kept = 0, ran = 0;
+			Diagnostics::ParityCounter parity, shapesParity;
+		} revisionReuse;
 		std::atomic<bool> snapshotInputsMoved{ false };  // the frame posted revision inputs since the builder's last make
+		/**
+		 * @brief The builder (SnapshotPass, Snapshot.cpp): the newest work posted, once a build may start from it - the publication gate
+		 * open, or the work passing through the last snapshot posted (PassesThrough); else null, the work held (SnapshotBuilder::held)
+		 * and the gate's opening armed to wake the builder (publicationGated).
+		 */
+		std::unique_ptr<SnapshotWork> WorkToBuild();
 		std::atomic<bool> producerReportWanted{ false };
 		LatestSlot<std::string> producerReportSlot;      // the builder's report lines, for the frame's report
 		std::string producerReport;                      // the frame's: the newest taken

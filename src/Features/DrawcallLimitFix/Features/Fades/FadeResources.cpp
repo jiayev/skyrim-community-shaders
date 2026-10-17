@@ -19,12 +19,18 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <span>
 
 namespace DCLF::Features::Fades
 {
 	namespace
 	{
 		Api::SceneResourcesId sceneId;  // install
+		// The revision inputs' words (postInputs): the event list's ask, so a growth is a new revision's inputs (a kept make, Impl::MakeRevision's
+		// reuse, runs the requirements again for it).
+		constexpr std::uint32_t kEventsWantedInput = 0, kInputWords = 1;
+		// The scene's write-back (render thread: Setup, PostInputs), for the ask PostInputs posts; the scene holds it.
+		std::weak_ptr<FadeWriteBack> postedWriteBack;
 
 		std::shared_ptr<void> Setup(const Api::SceneResourcesSetup& a_setup)
 		{
@@ -61,6 +67,7 @@ namespace DCLF::Features::Fades
 				writeBack->frameSlots = host->FrameSlots();
 				writeBack->armed.resize(writeBack->frameSlots);
 				writeBack->AddSet(events);
+				postedWriteBack = writeBack;
 				scene->fadeWriteBack = std::move(writeBack);
 			}
 			return scene;
@@ -91,9 +98,17 @@ namespace DCLF::Features::Fades
 			roots.Add(s.fadeRoots).Add(s.fadeRootPrograms).Add(s.fadeAnimated).Add(s.fadeStates).Add(s.fadeReported);
 			roots.Add(s.fadeStatesOut[0]).Add(s.fadeStatesOut[1]);
 			roots.Require(a_requirements.build, Extensions::TableFamilyRows(a_requirements.tables.families, Extensions::RootStatesFamily()));
-			// The event list, to the most a frame wanted (dropped roots append again); its staging sets follow the named capacity.
+			// The event list, to the most a frame wanted (dropped roots append again), as posted with the revision's inputs; its staging sets
+			// follow the named capacity.
 			if (s.fadeEvents && s.fadeWriteBack)
-				Draws::SceneBufferSet::Get().Require(a_requirements.build, s.fadeEvents, s.fadeWriteBack->wanted.load(std::memory_order_acquire));
+				Draws::SceneBufferSet::Get().Require(a_requirements.build, s.fadeEvents, a_requirements.inputs[kEventsWantedInput]);
+		}
+
+		// The event list's ask (the most a frame wanted: the write-back's harvest grows it).
+		void PostInputs(std::span<std::uint32_t> a_words)
+		{
+			if (const auto writeBack = postedWriteBack.lock())
+				a_words[kEventsWantedInput] = writeBack->wanted.load(std::memory_order_acquire);
 		}
 
 		// What the versions a set names hold of the roots (the root states' family's rows): one past them waits for their growth. Without
@@ -131,6 +146,6 @@ namespace DCLF::Features::Fades
 	void RegisterResources(Api::InstallContext& a_context)
 	{
 		sceneId = a_context.RegisterSceneResources({ .name = "fade roots", .setup = &Setup, .registerGraph = &RegisterGraph, .require = &Require,
-			.fit = &Fit, .sealed = &Sealed });
+			.fit = &Fit, .postInputs = &PostInputs, .inputWords = kInputWords, .sealed = &Sealed });
 	}
 }

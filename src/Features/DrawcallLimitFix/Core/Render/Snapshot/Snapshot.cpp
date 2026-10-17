@@ -122,7 +122,8 @@ namespace DCLF
 		work->light = store.CoordinatorLightCandidates();
 		work->aheadNumber = s.aheadKicked.fetch_add(1, std::memory_order_acq_rel) + 1;
 		// Latest wins: one the builder has not taken yet is replaced (dropped here, on the coordinator, as a returned publication is).
-		// The builder takes the newest once idle (one build in flight), so the publications made during a build coalesce here.
+		// The builder takes the newest once idle and the frame took its last snapshot (one build per adoption: WorkToBuild), so the
+		// publications made meanwhile coalesce here.
 		s.snapshotWorkSlot.Post(std::move(work));
 		(void)s.SnapshotPump();
 		WakeSnapshotBuilder();
@@ -130,6 +131,10 @@ namespace DCLF
 
 	namespace
 	{
+		// RunAhead's: the most unread change-log entries (object records and geometry rows together) for which its two stages run on
+		// the builder's thread, one after the other, instead of on two pool tasks.
+		constexpr std::uint64_t kInlineStageChanges = 128;
+
 		template <class Resources>
 		void NamedAddressesOf(const NamedVersions& a_sealed, const Resources& a_resources, std::uint32_t a_frame, ResourceAddresses& a_out)
 		{
@@ -189,9 +194,29 @@ namespace DCLF
 					payload->resident = region;
 			if (a_out.shadow) {
 				const auto* main = ImplSnapshotBuilder::NewestMainPayload(a_out);
-				a_out.shadow->mainTail = main ? main->inputList.size() : 0;
+				a_out.shadow->mainTail = main ? main->body->inputList.size() : 0;
 			}
 		}
+	}
+
+	std::unique_ptr<ImplSnapshotBuilder::SnapshotWork> ImplSnapshotBuilder::WorkToBuild()
+	{
+		auto& b = snapshotBuilder;
+		if (auto next = snapshotWorkSlot.Take())
+			b.held = std::move(next);
+		if (!b.held)
+			return nullptr;
+		bool closed = PublicationGateClosed();
+		if (closed) {
+			// The scene pass's end wakes the builder only while it waits (NoteScenePassDone); the gate read again after saying so.
+			publicationGated.store(true, std::memory_order_seq_cst);
+			closed = PublicationGateClosed();
+		}
+		// A publication that moved only deltas, while the last snapshot stands unchanged: passed through at once (nothing built).
+		if (!closed || (b.stage == SnapshotBuilder::Stage::Idle && !snapshotInputsMoved.load(std::memory_order_acquire) && PassesThrough(b.posted, *b.held)))
+			return std::move(b.held);
+		++b.heldPasses;
+		return nullptr;
 	}
 
 	void IndirectDraws::Impl::AddressesOf(const NamedVersions& a_sealed, const MainLayout& a_layout, const Resources& a_resources, std::uint32_t a_frame, ResourceAddresses& a_out)
@@ -241,6 +266,8 @@ namespace DCLF
 		aheadDone.store(work.aheadNumber, std::memory_order_release);
 		aheadDone.notify_all();
 		b.draws = std::move(built);
+		b.drawsPosted = false;
+		++b.buildsStarted;
 		b.payload.reset();  // new draws: their payload is published with the snapshot (PublishPayload)
 		b.publicationWaited = false;
 		b.timing.ahead = true;
@@ -312,17 +339,26 @@ namespace DCLF
 				pairStats.mainMs += msSince(start);
 			}
 		};
-		if (buildMain && !Policy::SerialFanout()) {
+		// A small change runs both stages here: the stream views catch up only the change log's unread entries (the object records'
+		// and the geometry rows', both stores continuing), so overlapping them with the main build saves less than this thread's wait
+		// on the helper costs.
+		const auto unread = [a_generation](const LogCursor& a_cursor, const auto& a_log) -> std::uint64_t {
+			return a_cursor.Continues(a_log, a_generation) ? a_cursor.Unread(a_log).size() : kInlineStageChanges + 1;
+		};
+		const bool smallChange = unread(objectStore.cursor, a_tables->changeLog) + unread(geometryStore.cursor, a_tables->geometryLog) <= kInlineStageChanges;
+		if (buildMain && !smallChange && !Policy::SerialFanout()) {
 			SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildAhead.Stages", 2, 1, [&](std::size_t a_begin, std::size_t a_end) {
 				ZoneScopedN("CS.DCLF.BuildAhead.StagesShards");
 				for (std::size_t s = a_begin; s < a_end; ++s)
 					stage(s);
 			});
 			++pairStats.overlapped;
+			++snapshotBuilder.stagesPooled;
 		} else {
 			stage(0);
 			if (buildMain)
 				stage(1);
+			snapshotBuilder.stagesInline += buildMain && smallChange ? 1u : 0u;
 		}
 		++pairStats.aheads;
 		// CS_DCLF_PERSISTENT_PARITY: the extras rows are checked by each backing that holds them, as it is caught up (PayloadBuilder).
@@ -397,6 +433,7 @@ namespace DCLF
 			// The coordinator publishes again once this one is taken (SnapshotWorkTaken: publication pacing).
 			snapshotWorkTaken.store(sequence, std::memory_order_release);
 			b.work = std::move(a_next);
+			b.buildsDiscarded += b.draws && !b.drawsPosted ? 1u : 0u;
 			b.draws.reset();
 			b.timing = {};
 			b.stage = Stage::Make;
@@ -419,16 +456,10 @@ namespace DCLF
 						payloadBuilder.Discard(*b.payload);
 						b.payload.reset();
 					}
-					if (!b.payload && PayloadWanted()) {
-						// Not published yet (the frame would not adopt it yet): newer work replaces it, nothing sent for it; else it is
-						// published once the frame will adopt it (the frame's take and the scene pass's end wake the builder).
-						if (auto next = snapshotWorkSlot.Take()) {
-							++b.replacedUnpublished;
-							takeWork(std::move(next));
-							continue;
-						}
+					// Not published yet: published once the frame will adopt it (the frame's take and the scene pass's end wake the
+					// builder). No newer work replaces it: it waits held (a build starts only while the gate is open).
+					if (!b.payload && PayloadWanted())
 						PublishPayload();
-					}
 					(void)rv.assembler.TrySelect();
 					auto lease = rv.assembler.AcquireActive();
 					const bool payloadReady = b.payload ? b.payload->Ready() : !PayloadWanted();
@@ -438,18 +469,20 @@ namespace DCLF
 						b.stage = Stage::Idle;
 					} else if (failedHere) {
 						// A recording failed or was dropped by a graph build: made again (a failed epoch has none in it until its inputs
-						// change; a dropped one is asked again once the inputs carry the new build).
+						// change; a dropped one is asked again once the inputs carry the new build), never kept (RevisionReuse).
+						revisionReuse.valid = false;
 						b.stage = Stage::Make;
 					} else {
 						return;
 					}
 					continue;
 				}
-				// One build in flight, the next started as soon as the builder is idle, from the newest work. A sealed build waits for the
-				// frame to take the last posted snapshot before its payload is published (PublishPayload), and newer work replaces it until
-				// then; the build's own time is the rate (publications come only on a change), and an unchanged revision is cheap (its
-				// recordings kept).
-				if (auto next = snapshotWorkSlot.Take())
+				// One build in flight, and one build per adoption: the next starts from the newest work only while the publication gate
+				// is open (the frame took the last snapshot posted and its scene pass ended: PublishPayload's), so a sealed build never
+				// waits there for newer work to replace it. Work posted meanwhile is held untaken (latest wins); the coordinator publishes
+				// no more until it is taken (SnapshotWorkTaken), so its passes fold into the frame's own publication, and the gate's
+				// opening wakes the builder (publicationGated). A publication that moved only deltas passes through at once.
+				if (auto next = WorkToBuild())
 					takeWork(std::move(next));
 				if (!b.work || !b.work->publication) {
 					++b.idlePasses;
@@ -488,7 +521,8 @@ namespace DCLF
 				const auto& publication = *b.work->publication;
 				MakeRevision(publication, publication.commitFrame);
 				b.timing.shapesMs += msSince(start);
-				if (rv.assembler.LatestSequence() != before) {
+				// Sealed, or the last revision kept (its requirement pass unchanged: RevisionReuse), which is the assembler's latest.
+				if (rv.assembler.LatestSequence() != before || revisionReuse.reusedNow) {
 					b.sealedSequence = rv.assembler.LatestSequence();
 					b.sealedAt = std::chrono::steady_clock::now();
 					// The draws, for exactly the versions the sealed revision names (its adoption makes them current): built now, while its
@@ -539,17 +573,13 @@ namespace DCLF
 		if (b.payload || !PayloadWanted())
 			return;
 		// Only a snapshot the frame will adopt is published, so every publication is installed and none is sent for nothing: not while
-		// the last one posted is still in the slot (the frame's take wakes the builder; newer work replaces these draws meanwhile), nor
-		// before the scene pass of the frame that took it has ended (a publication it makes is posted first and replaces them; its end
-		// wakes the builder). Posted on its uploads' completion, the snapshot is the frame's next.
-		const auto gated = [&] {
-			const std::uint64_t taken = snapshotTaken.load(std::memory_order_acquire);
-			return taken < b.serial || scenePassDoneFrame.load(std::memory_order_seq_cst) < snapshotTakenFrame.load(std::memory_order_acquire);
-		};
-		if (gated()) {
+		// the last one posted is still in the slot (the frame's take wakes the builder), nor before the scene pass of the frame that took
+		// it has ended (its end wakes the builder). A build starts only while that gate is open (SnapshotPass), so only draws made again
+		// for a snapshot already posted wait here. Posted on its uploads' completion, the snapshot is the frame's next.
+		if (PublicationGateClosed()) {
 			// The scene pass's end wakes the builder only while it waits here (NoteScenePassDone); the gate read again after saying so.
 			publicationGated.store(true, std::memory_order_seq_cst);
-			if (gated()) {
+			if (PublicationGateClosed()) {
 				b.publicationsWaited += std::exchange(b.publicationWaited, true) ? 0u : 1u;
 				return;
 			}
@@ -574,6 +604,7 @@ namespace DCLF
 		snapshot->serial = ++b.serial;
 		snapshot->publication = b.work->publication;
 		snapshot->draws = b.draws;
+		b.drawsPosted = true;
 		snapshot->payload = b.payload;
 		snapshot->revision = std::move(a_revision);
 		// Its draws: both main payloads, for the main resources its revision is of. The builder's verdict: without, its frames have no

@@ -14,6 +14,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 #include <algorithm>
+#include <atomic>
 #include <span>
 
 namespace DCLF::Scene
@@ -1323,9 +1324,10 @@ namespace DCLF::Scene
 	namespace
 	{
 		// PublishTables' column sets. Each logged column with the causes that cover it (CausesBetween): a replayed slot copies it only when a
-		// cause it was noted with covers it (kChangeAll: any). A slot the publication log names takes every column.
-		template <class Column>
-		void ForLoggedColumns(SceneTables& a_left, SceneTables& a_right, Column&& a_column)
+		// cause it was noted with covers it (kChangeAll: any). A slot the publication log names takes every column. a_right may be a
+		// published snapshot (const: the spare's source).
+		template <class Right, class Column>
+		void ForLoggedColumns(SceneTables& a_left, Right& a_right, Column&& a_column)
 		{
 			a_column(a_left.objects, a_right.objects, kChangeAll);
 			a_column(a_left.draws, a_right.draws, kChangeAll);
@@ -1354,8 +1356,8 @@ namespace DCLF::Scene
 		}
 
 		// Logged per-object columns sized apart from the objects (resized to the tables', then replayed by slot).
-		template <class Column>
-		void ForSidedColumns(SceneTables& a_left, SceneTables& a_right, Column&& a_column)
+		template <class Right, class Column>
+		void ForSidedColumns(SceneTables& a_left, Right& a_right, Column&& a_column)
 		{
 			a_column(a_left.setPhases, a_right.setPhases, std::uint8_t{ 0 });
 			a_column(a_left.rangeOrdinal, a_right.rangeOrdinal, ~0u);
@@ -1472,7 +1474,7 @@ namespace DCLF::Scene
 			bool keepConstants = false, keepPipelines = false;
 		};
 
-		TablesReplayPlan PlanTablesReplay(SceneTables& a_snapshot, SceneTables& a_tables, std::uint8_t a_replayable)
+		TablesReplayPlan PlanTablesReplay(const SceneTables& a_snapshot, const SceneTables& a_tables, std::uint8_t a_replayable)
 		{
 			TablesReplayPlan plan;
 			auto& snapshot = a_snapshot;
@@ -1621,23 +1623,11 @@ namespace DCLF::Scene
 				causes[slot] = 0;
 			a_publication.objectsReplayed += slots.size();
 			a_pace.replaySlots += slots.size();
-			// Drop the trimmed head, append what was gained.
-			auto replayLog = [](auto& a_to, const auto& a_from) {
-				const std::uint64_t end = a_to.End();
-				if (!a_from.Readable(end) || a_to.base > a_from.base) {
-					a_to = a_from;
-					return;
-				}
-				const std::size_t dropped = static_cast<std::size_t>(std::min<std::uint64_t>(a_from.base - a_to.base, a_to.entries.size()));
-				a_to.entries.erase(a_to.entries.begin(), a_to.entries.begin() + std::ptrdiff_t(dropped));
-				a_to.base = a_from.base;
-				const auto gained = a_from.From(end);
-				a_to.entries.insert(a_to.entries.end(), gained.begin(), gained.end());
-			};
-			replayLog(snapshot.changeLog, tables.changeLog);
-			replayLog(snapshot.publicationLog, tables.publicationLog);
-			replayLog(snapshot.geometryLog, tables.geometryLog);
-			replayLog(snapshot.materialLog, tables.materialLog);
+			// The logs: the tables' chunks shared (SharedEventLog), whatever the snapshot held let go.
+			snapshot.changeLog = tables.changeLog;
+			snapshot.publicationLog = tables.publicationLog;
+			snapshot.geometryLog = tables.geometryLog;
+			snapshot.materialLog = tables.materialLog;
 		}
 
 		// Extras rows by the blocks the block log names; else the rows and the log whole.
@@ -1651,11 +1641,7 @@ namespace DCLF::Scene
 				for (const std::uint32_t offset : tables.extrasBlockLog.From(extrasPosition))
 					if ((std::size_t(offset) + kExtraRows) * 4 <= tables.extraRows.size())
 						std::copy_n(tables.extraRows.begin() + std::ptrdiff_t(offset) * 4, std::size_t(kExtraRows) * 4, snapshot.extraRows.begin() + std::ptrdiff_t(offset) * 4);
-				const auto gained = tables.extrasBlockLog.From(extrasPosition);
-				const std::size_t dropped = static_cast<std::size_t>(std::min<std::uint64_t>(tables.extrasBlockLog.base - snapshot.extrasBlockLog.base, snapshot.extrasBlockLog.entries.size()));
-				snapshot.extrasBlockLog.entries.erase(snapshot.extrasBlockLog.entries.begin(), snapshot.extrasBlockLog.entries.begin() + std::ptrdiff_t(dropped));
-				snapshot.extrasBlockLog.base = tables.extrasBlockLog.base;
-				snapshot.extrasBlockLog.entries.insert(snapshot.extrasBlockLog.entries.end(), gained.begin(), gained.end());
+				snapshot.extrasBlockLog = tables.extrasBlockLog;  // the chunks shared
 			} else {
 				snapshot.extraRows = tables.extraRows;
 				snapshot.extrasBlockLog = tables.extrasBlockLog;
@@ -1778,6 +1764,197 @@ namespace DCLF::Scene
 		pace.replayMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - replayStart).count();
 	}
 
+	namespace
+	{
+		/**
+		 * @brief PublishTables' spare (EntrySpaceTable's pattern): after each publication the free pooled snapshot nearest the logs is
+		 * brought up to the published one on the preparation pool, from it alone (immutable: the spare holds it until the lane takes the
+		 * spare), so the next publication replays one publication's changes on the lane, not every change since the snapshot's own
+		 * publication. What it brings up is what the logs name: the logged and sided object columns (with the layer links' other ends), the
+		 * material records, the extras rows, and the change, publication, material and extras logs (their chunks shared). The geometry
+		 * columns stay the publication's (a lease a snapshot drops is let go on the lane), as does everything copied whole or kept by
+		 * stamp. One spare at a time; the coordinator's thread but for the catch-up, which its job or the lane runs.
+		 */
+		struct TablesSpare
+		{
+			/** @brief One catch-up, shared with its job (a new one per dispatch): whichever of the job and the lane claims it runs it. */
+			struct State
+			{
+				std::atomic<bool> claimed{ false };
+				std::atomic<bool> busy{ false };  // released once done: the snapshot's writes with it
+			};
+			SceneTables* target = nullptr;              // the pool's (which never lets go of its snapshots)
+			std::shared_ptr<const SceneTables> source;  // the publication it is brought up to
+			std::shared_ptr<State> state;
+			// The catch-up's scratch (the job's while busy).
+			std::vector<std::uint32_t> slots, causes;
+			std::vector<std::uint8_t> marks;
+			// Since startup: spares dispatched, run by the lane (not started), waited for (running).
+			std::uint64_t dispatched = 0, runByLane = 0, waited = 0;
+
+			TablesSpare() = default;
+			TablesSpare(const TablesSpare&) = delete;
+			TablesSpare& operator=(const TablesSpare&) = delete;
+			/** @brief A running catch-up waited for (one not started is left: nothing reads it again). */
+			~TablesSpare()
+			{
+				if (state && state->busy.load(std::memory_order_acquire) && state->claimed.exchange(true, std::memory_order_acq_rel))
+					state->busy.wait(true, std::memory_order_acquire);
+			}
+		};
+
+		/** @brief The spare, made at the first publication (after the coordinator: gone before it). */
+		TablesSpare& Spare()
+		{
+			static TablesSpare spare;
+			return spare;
+		}
+
+		/** @brief a_spare brought up to a_source (a published snapshot) by what its logs name since a_spare's ends: pure on a_spare and a_scratch. */
+		void CatchUpTables(SceneTables& a_spare, const SceneTables& a_source, TablesSpare& a_scratch)
+		{
+			ZoneScopedN("CS.DCLF.Scene.PublishTables.Spare");
+			auto& s = a_spare;
+			const auto& p = a_source;
+			const TablesReplayPlan plan = PlanTablesReplay(s, p, 1);
+			if (plan.replay) {
+				const std::size_t objectSlots = p.objects.size();
+				s.GrowObjects(objectSlots);
+				ForSidedColumns(s, p, [](auto& a_to, const auto& a_from, auto a_initial) { a_to.resize(a_from.size(), a_initial); });
+				auto& slots = a_scratch.slots;
+				auto& causes = a_scratch.causes;
+				slots.clear();
+				if (causes.size() < objectSlots)
+					causes.resize(objectSlots, 0);
+				auto name = [&](std::uint32_t a_slot, std::uint32_t a_causes) {
+					if (a_slot >= objectSlots)
+						return;
+					if (!causes[a_slot])
+						slots.push_back(a_slot);
+					causes[a_slot] |= a_causes;
+				};
+				for (const auto& change : p.changeLog.From(plan.position))
+					name(change.slot, change.causes ? change.causes : kChangeAll);
+				for (const std::uint32_t slot : p.publicationLog.From(plan.publicationPosition))
+					name(slot, kChangeAll);
+				// As ReplayTableColumns' jobs, slot by slot: a column where a cause the slot gathered covers it.
+				ForLoggedColumns(s, p, [&](auto& a_to, const auto& a_from, std::uint32_t a_gate) {
+					const std::size_t limit = (std::min)(a_to.size(), a_from.size());
+					for (const std::uint32_t slot : slots)
+						if (slot < limit && (causes[slot] & a_gate))
+							a_to[slot] = a_from[slot];
+				});
+				ForSidedColumns(s, p, [&](auto& a_to, const auto& a_from, auto) {
+					const std::size_t limit = (std::min)(a_to.size(), a_from.size());
+					for (const std::uint32_t slot : slots)
+						if (slot < limit)
+							a_to[slot] = a_from[slot];
+				});
+				// A layer link's other end: the layer's write notes only the layer.
+				for (const std::uint32_t slot : slots)
+					for (const std::uint32_t end : { p.layerBase[slot], p.layerOf[slot] })
+						if (end < objectSlots && !causes[end]) {
+							s.layerBase[end] = p.layerBase[end];
+							s.layerOf[end] = p.layerOf[end];
+						}
+				for (const std::uint32_t slot : slots)
+					causes[slot] = 0;
+				s.changeLog = p.changeLog;
+				s.publicationLog = p.publicationLog;
+			}
+			if (plan.replayMaterials) {
+				const std::size_t materialCount = p.materials.size();
+				s.materials.resize(materialCount);
+				s.materialVersion.resize(materialCount, 0);
+				s.materialFrameVersion.resize(materialCount, 0);
+				auto& marks = a_scratch.marks;
+				marks.assign(materialCount, 0);
+				for (const std::uint32_t slot : p.materialLog.From(plan.materialPosition)) {
+					if (slot >= materialCount || std::exchange(marks[slot], std::uint8_t{ 1 }))
+						continue;
+					s.materials[slot] = p.materials[slot];
+					if (slot < p.materialVersion.size())
+						s.materialVersion[slot] = p.materialVersion[slot];
+					if (slot < p.materialFrameVersion.size())
+						s.materialFrameVersion[slot] = p.materialFrameVersion[slot];
+				}
+				s.materialLog = p.materialLog;
+			}
+			if (plan.replayExtras) {
+				s.extraRows.resize(p.extraRows.size(), 0.0f);
+				for (const std::uint32_t offset : p.extrasBlockLog.From(plan.extrasPosition))
+					if ((std::size_t(offset) + kExtraRows) * 4 <= p.extraRows.size())
+						std::copy_n(p.extraRows.begin() + std::ptrdiff_t(offset) * 4, std::size_t(kExtraRows) * 4, s.extraRows.begin() + std::ptrdiff_t(offset) * 4);
+				s.extrasBlockLog = p.extrasBlockLog;
+			}
+		}
+
+		/** @brief The publication's start: the spare's catch-up done (run here if its job has not started, else waited for), its source let go. */
+		void FinishTablesSpare()
+		{
+			auto& spare = Spare();
+			if (spare.state && spare.state->busy.load(std::memory_order_acquire)) {
+				if (!spare.state->claimed.exchange(true, std::memory_order_acq_rel)) {
+					// Not started (the pool is busy): the lane runs it, the job finding it claimed.
+					CatchUpTables(*spare.target, *spare.source, spare);
+					spare.state->busy.store(false, std::memory_order_relaxed);
+					++spare.runByLane;
+				} else {
+					// Running on a worker: waited for, as ParallelFor waits for a claimed chunk.
+					spare.state->busy.wait(true, std::memory_order_acquire);
+					++spare.waited;
+				}
+			}
+			spare.source.reset();
+			spare.target = nullptr;
+		}
+
+		/**
+		 * @brief After a publication (a_published): the free pooled snapshot nearest the logs that they still reach (none free: no spare),
+		 * brought up to it on the preparation pool (here under Policy::SerialFanout, or when the pool refuses the job).
+		 */
+		void DispatchTablesSpare(const std::vector<std::shared_ptr<SceneTables>>& a_pool, const std::vector<std::uint8_t>& a_replayable,
+			const std::shared_ptr<SceneTables>& a_published)
+		{
+			std::size_t index = a_pool.size();
+			std::uint64_t nearest = 0;
+			for (std::size_t i = 0; i < a_pool.size(); ++i) {
+				const auto& pooled = a_pool[i];
+				if (pooled.use_count() != 1 || pooled == a_published || !a_replayable[i])
+					continue;
+				const TablesReplayPlan plan = PlanTablesReplay(*pooled, *a_published, 1);
+				if (!plan.replay && !plan.replayMaterials && !plan.replayExtras)
+					continue;
+				const std::uint64_t reach = pooled->changeLog.End() + pooled->materialLog.End() + 1;
+				if (index == a_pool.size() || reach > nearest) {
+					index = i;
+					nearest = reach;
+				}
+			}
+			if (index == a_pool.size())
+				return;
+			auto& spare = Spare();
+			spare.target = a_pool[index].get();
+			spare.source = a_published;
+			auto state = std::make_shared<TablesSpare::State>();
+			state->busy.store(true, std::memory_order_relaxed);
+			spare.state = state;
+			++spare.dispatched;
+			// The job reads the snapshots by address: the pool holds the spare, and the spare's source the publication, until the lane
+			// finishes it (FinishTablesSpare, at the next publication).
+			auto job = [target = spare.target, source = spare.source.get(), state = std::move(state)]() {
+				if (state->claimed.exchange(true, std::memory_order_acq_rel))
+					return;
+				CatchUpTables(*target, *source, Spare());
+				state->busy.store(false, std::memory_order_release);
+				state->busy.notify_all();
+			};
+			if (Policy::SerialFanout() || !SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu,
+											  "DCLF tables spare", [job](const auto&) { job(); }))
+				job();
+		}
+	}
+
 	void Coordinator::PublishTables()
 	{
 		ZoneScopedN("CS.DCLF.Scene.PublishTables");
@@ -1789,6 +1966,8 @@ namespace DCLF::Scene
 			ZoneScopedN("CS.DCLF.Scene.PublishTables.Pool");
 			// Frees since the last publication go into the chain's open node, which this publication closes.
 			RetireIntoChain();
+			// The spare brought up to the last publication first (its source let go): the nearest snapshot, one publication behind.
+			FinishTablesSpare();
 			index = NearestPooledTables(tablesPool, tablesPoolReplayable, publishedTables, tables, pace);
 		}
 		if (index < tablesPool.size()) {
@@ -1845,6 +2024,7 @@ namespace DCLF::Scene
 		snapshot.retirementHold = retirement.Publish();
 		publishedTables = target;
 		++publication.published;
+		DispatchTablesSpare(tablesPool, tablesPoolReplayable, publishedTables);
 		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		publication.ms += ms;
 		publication.maxMs = std::max(publication.maxMs, ms);

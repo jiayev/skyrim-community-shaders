@@ -359,8 +359,8 @@ namespace DCLF::Diagnostics
 		// The frame the epochs drew (their visibility stamps), not the one the payloads were built in (ahead).
 		snapshot.frame = Scene::FrameView::Get().GetFrame();
 		snapshot.framesLeft = 3;
-		snapshot.depthState = a_depth.objectState;
-		snapshot.colourState = a_colour.objectState;
+		snapshot.depthState = a_depth.body->objectState;
+		snapshot.colourState = a_colour.body->objectState;
 		// Only a publication's tables: the coordinator's own (none accepted yet) are not the render thread's to hold.
 		snapshot.tables = Scene::FrameView::Get().AcceptedTables();
 		if (!snapshot.tables) {

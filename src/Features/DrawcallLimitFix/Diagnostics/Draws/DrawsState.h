@@ -120,7 +120,7 @@ namespace DCLF::Diagnostics
 			winrt::com_ptr<ID3D11Buffer> staging;
 			std::uint32_t frame = 0;
 			std::uint32_t framesLeft = 0;
-			std::vector<std::uint8_t> depthState, colourState;  // MainPayload::objectState of the two builds
+			std::vector<std::uint8_t> depthState, colourState;  // MainBody::objectState of the two builds
 			// Per object: bit 0 in the frame's main set, bit 1 bound, bit 2 alpha tested, bit 3 kObjectMember disagrees with the set.
 			std::vector<std::uint8_t> flags;
 			std::vector<const RE::BSGeometry*> geometry;

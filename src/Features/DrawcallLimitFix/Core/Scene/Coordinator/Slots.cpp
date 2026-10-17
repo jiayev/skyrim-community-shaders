@@ -171,6 +171,8 @@ namespace DCLF::Scene
 		// Released at Present (the last reference deletes the engine's material), once no publication names the slot.
 		retirement.Open().materials.push_back(std::move(materialOwners[a_slot]));
 		tables.materialSlotKey[a_slot] = { nullptr, 0u };
+		// Logged: what follows the material log (the texture-transform list) drops the slot's entries.
+		tables.NoteMaterial(a_slot);
 		tables.UnmarkMaterial(a_slot);
 		tables.Retire(Tables::kRetiredMaterialLookup, a_slot);
 	}

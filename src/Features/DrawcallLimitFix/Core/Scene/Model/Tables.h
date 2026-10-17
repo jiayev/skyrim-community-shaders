@@ -257,7 +257,7 @@ namespace DCLF
 		std::vector<std::uint32_t> extraOffset;  // parallel to objects
 		std::vector<std::uint32_t> extraFree;    // freed blocks' row offsets
 		// Every block written, allocated or freed (row offset), for the published tables to replay.
-		EventLog<std::uint32_t> extrasBlockLog;
+		SharedEventLog<std::uint32_t> extrasBlockLog;
 		void NoteExtrasBlock(std::uint32_t a_offset) { extrasBlockLog.Push(a_offset); }
 		std::uint32_t AllocateExtras()
 		{
@@ -307,12 +307,13 @@ namespace DCLF
 		std::vector<std::uint8_t> setPhases;  // parallel to objects
 		// The change log (drawcall-limit-fix.md, "Persistent draw state"): each write that changes a slot's columns appends the
 		// slot and causes. Consumers read from their own LogCursor; one behind the trim, or on a new tables generation, rereads all.
+		// The tables' logs are SharedEventLogs: every published snapshot shares their chunks (PublishTables assigns them).
 		struct Change
 		{
 			std::uint32_t slot = 0;
 			std::uint32_t causes = 0;  // ChangeCause bits
 		};
-		EventLog<Change> changeLog;
+		SharedEventLog<Change> changeLog;
 		std::array<std::uint64_t, kChangeCauseCount> changeCounts{};  // notes by cause, for the report
 		void NoteChange(std::uint32_t a_slot, std::uint32_t a_causes)
 		{
@@ -323,15 +324,15 @@ namespace DCLF
 				++changeCounts[std::countr_zero(bits)];
 		}
 		// Every write of a geometry slot's columns, which the published tables replay and GeometryStore repacks by.
-		EventLog<std::uint32_t> geometryLog;
+		SharedEventLog<std::uint32_t> geometryLog;
 		void NoteGeometry(std::uint32_t a_slot) { geometryLog.Push(a_slot); }
 		// Material slots whose versions changed (every write of a record), for MainBuild::UpdateRegionPairs and the publication's replay.
-		EventLog<std::uint32_t> materialLog;
+		SharedEventLog<std::uint32_t> materialLog;
 		void NoteMaterial(std::uint32_t a_slot) { materialLog.Push(a_slot); }
 		// Object slots whose published columns changed with no change-log note: the columns no change-log consumer reads (setPhases,
 		// layerBase and layerOf of a link's other end, rangeOrdinal) where the write notes nothing. The publication replays them with
 		// the logged slots; nothing else reads it.
-		EventLog<std::uint32_t> publicationLog;
+		SharedEventLog<std::uint32_t> publicationLog;
 		void NotePublished(std::uint32_t a_slot) { publicationLog.Push(a_slot); }
 		/** @brief Every reader of the change log resyncs. */
 		void InvalidateChangeLog()

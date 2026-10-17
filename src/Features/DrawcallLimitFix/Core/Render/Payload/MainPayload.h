@@ -6,6 +6,8 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/PayloadProducts.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/MainRows.h"
 
+#include <span>
+
 namespace DCLF::Draws
 {
 	/**
@@ -111,34 +113,33 @@ namespace DCLF::Draws
 		std::uint64_t materialRowsOldestContentEpoch = 0, pipelineRowsOldestContentEpoch = 0;
 	};
 
-	struct MainPayload
+	/**
+	 * @brief What a main build makes for both segments alike: one per build, shared by its segments' payloads (MainPayload::body),
+	 * immutable once the build's Finish hands it over. Pooled by the build cache (BuildCache::bodies): a body no payload holds is reset
+	 * and written again, its storage kept.
+	 */
+	struct MainBody
 	{
-		MainInputs inputs;
 		std::vector<std::shared_ptr<const void>> bindingOwners;  // exact roots used by this payload, including clean kept rows
 		std::vector<DrawSequence> sequences;  // CPU templates of BuildDraws' output
 		std::array<std::vector<DrawSequence>, kDecalGroups> decalTemplates;  // by group and slot
 		std::vector<DrawInput> inputList;
 		GeometryDrawsOut geometryDraws;
-		std::vector<Api::VertexStreamRow> streamRows;  // the tables' vertex stream rows, for the commit's uploads
+		// The tables' vertex stream rows, for the commit's uploads (empty without a stream buffer): the publication's tables' own, which
+		// the draws holding this payload hold (ImplSnapshotBuilder::DrawPublication::tables), not a copy.
+		std::span<const Api::VertexStreamRow> streamRows;
 		// The rows (MainRows), kept across frames and shared by both segments: uploaded as the rows changed since the content epoch
 		// the tables hold.
 		KeptView<MaterialRow> materialRows;
 		KeptView<PipelineRow> pipelineRows;
-		std::uint64_t materialRowsWritten = 0, pipelineRowsWritten = 0;
 		// The features' payload products (Api::PayloadProduct, by registration), built at MainBuild::Finish.
 		Extensions::PayloadProducts products;
 		// The frame's stream views the build read (its geometry slots), held with the payload.
 		std::shared_ptr<const StreamViews> streams;
-		// The frame's textures (t16 and up) the drawn pipelines read, which only the commit can resolve (into the frame
-		// record): the commit counts the ones it could not.
-		std::array<std::uint64_t, 2> frameRegisters{};
 		// Per object in the tables: what this build did with it - kObjectStateDrawable, kObjectStateDecal,
 		// a Skip reason, or kObjectStateAbsent when it never reached the inputs (the set parity explains its mismatches
 		// with this).
 		std::vector<std::uint8_t> objectState;
-		// The culling's ViewProj (the latch's, the eye folded in) when the commit culled: set parity tests the live bounds with it.
-		std::array<float, 16> cullViewProj{};
-		bool culled = false;
 		std::array<std::uint32_t, kDecalGroups> decalCount{};
 		// The build's stats, merged into IndirectDraws::Stats by the commit.
 		std::array<std::uint32_t, static_cast<std::size_t>(IndirectDraws::Skip::Count)> skipped{};
@@ -146,36 +147,27 @@ namespace DCLF::Draws
 		std::uint32_t missingNext = 0;
 		std::uint32_t missingVertexConstants = 0, missingPixelConstants = 0;
 		std::uint32_t decalsDrawn = 0, shortBuffers = 0, deferredTextures = 0;
-		std::uint32_t rowTableConflicts = 0;  // pairs whose pipeline's constant tables are not the ones its material row was packed with
-		std::array<double, 7> partMs{};
 		// The first draw past its buffers, for the commit to log with the geometry's name.
 		struct ShortBuffer
 		{
 			std::uint32_t object = ~0u;
 			std::uint64_t vertexNeeded = 0, indexNeeded = 0;
 		} shortBuffer;
-		// The segment's resident region (ResidentRegion): its inputs lead the payload's scene list (caught up from what its backing
-		// holds); inputList follows them.
-		KeptView<DrawInput> resident;
-		std::uint32_t residentDraws = 0, residentPairs = 0, residentUndrawable = 0, residentResyncs = 0;
-		std::uint32_t residentResyncReasons = 0;  // bit k: kResyncReasons' k
-		std::uint32_t residentDecalRetakes = 0;   // builds whose decal groups' counts moved (no resync: UpdateRegionEntries)
+		// The resident region's draws (ResidentRegion), the inputs of which lead the payload's scene list (MainPayload::resident).
+		std::uint32_t residentDraws = 0, residentPairs = 0, residentUndrawable = 0;
 
 		void Reset()
 		{
-			resident.Reset();
-			residentDraws = residentPairs = residentUndrawable = residentResyncs = residentResyncReasons = residentDecalRetakes = 0;
+			residentDraws = residentPairs = residentUndrawable = 0;
 			bindingOwners.clear();
 			sequences.clear();
 			inputList.clear();
 			geometryDraws.Reset();
 			streams.reset();
-			streamRows.clear();
-			frameRegisters = {};
+			streamRows = {};
 			objectState.clear();
 			materialRows.Reset();
 			pipelineRows.Reset();
-			materialRowsWritten = pipelineRowsWritten = 0;
 			for (auto& product : products)
 				product.reset();
 			for (auto& templates : decalTemplates)
@@ -186,9 +178,50 @@ namespace DCLF::Draws
 			missingNext = 0;
 			missingVertexConstants = missingPixelConstants = 0;
 			decalsDrawn = shortBuffers = deferredTextures = 0;
+			shortBuffer = {};
+		}
+	};
+	/** @brief The body of a payload no build wrote (MainPayload::Reset): empty, never written. */
+	inline const std::shared_ptr<const MainBody>& EmptyMainBody()
+	{
+		static const std::shared_ptr<const MainBody> kEmpty = std::make_shared<MainBody>();
+		return kEmpty;
+	}
+
+	/**
+	 * @brief One segment's payload: its own inputs, frame registers and one-off counts, and the build's body both segments share (one
+	 * build makes both: MainBuild::Finish).
+	 */
+	struct MainPayload
+	{
+		MainInputs inputs;
+		std::shared_ptr<const MainBody> body = EmptyMainBody();  // never null
+		// The frame's textures (t16 and up) the drawn pipelines read, which only the commit can resolve (into the frame
+		// record): the commit counts the ones it could not. The depth segment's resolves none.
+		std::array<std::uint64_t, 2> frameRegisters{};
+		// The culling's ViewProj (the latch's, the eye folded in) when the commit culled: set parity tests the live bounds with it.
+		std::array<float, 16> cullViewProj{};
+		bool culled = false;
+		// The build's one-off counts, the primary segment's alone (the other's are zero), merged into IndirectDraws::Stats by the commit.
+		std::uint64_t materialRowsWritten = 0, pipelineRowsWritten = 0;
+		std::uint32_t rowTableConflicts = 0;  // pairs whose pipeline's constant tables are not the ones its material row was packed with
+		std::array<double, 7> partMs{};
+		// The segment's resident region (ResidentRegion): its inputs lead the payload's scene list (caught up from what its backing
+		// holds); the body's inputList follows them.
+		KeptView<DrawInput> resident;
+		std::uint32_t residentResyncs = 0;
+		std::uint32_t residentResyncReasons = 0;  // bit k: kResyncReasons' k
+		std::uint32_t residentDecalRetakes = 0;   // builds whose decal groups' counts moved (no resync: UpdateRegionEntries)
+
+		void Reset()
+		{
+			body = EmptyMainBody();
+			resident.Reset();
+			residentResyncs = residentResyncReasons = residentDecalRetakes = 0;
+			frameRegisters = {};
+			materialRowsWritten = pipelineRowsWritten = 0;
 			rowTableConflicts = 0;
 			partMs = {};
-			shortBuffer = {};
 		}
 	};
 }

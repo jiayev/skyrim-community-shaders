@@ -4,6 +4,7 @@
 // products (Api::PayloadProductBuild::rows). Self-contained (features include it); MainPayload.h includes it.
 
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PayloadProducts.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 
@@ -96,6 +97,44 @@ namespace DCLF::Draws
 			std::uint64_t hash = 0;
 		};
 		std::vector<TablesHashOf> tablesHashes;
+		/**
+		 * @brief The material slots whose payload products may have moved since their last build (Api::PayloadProductBuild: the dirty
+		 * slots, the previous products): a row's state written again (WriteMaterialRow; a pool chunk's through MergeWork), a slot the tables'
+		 * material log names (a record written, a slot keyed or let go), every slot after a resync or a log the cursor cannot continue.
+		 * The builder's thread alone; cleared when the products are built (MainBuild::Finish).
+		 */
+		struct ProductDirty
+		{
+			std::vector<std::uint32_t> slots;  // unique, in marking order
+			std::vector<std::uint8_t> marked;  // per material slot: in slots
+			bool every = true;
+			LogCursor cursor;  // the tables' material log
+			void Mark(std::uint32_t a_slot)
+			{
+				if (every)
+					return;
+				if (marked.size() <= a_slot)
+					marked.resize(std::size_t(a_slot) + 1, 0);
+				if (!marked[a_slot]) {
+					marked[a_slot] = 1;
+					slots.push_back(a_slot);
+				}
+			}
+			void MarkEvery()
+			{
+				Clear();
+				every = true;
+			}
+			void Clear()
+			{
+				for (const std::uint32_t slot : slots)
+					marked[slot] = 0;
+				slots.clear();
+				every = false;
+			}
+		} productDirty;
+		// The products the last build made (MainBody::products): what the next build's are made from (Api::PayloadProductBuild::previous).
+		Extensions::PayloadProducts products;
 		// The region's pair work and the builder's stages (MainBuild::UpdateRegionPairs, RunAhead), since the last report (MainPairsReport).
 		struct PairStats
 		{
@@ -108,6 +147,7 @@ namespace DCLF::Draws
 			std::uint64_t entriesRewritten = 0;       // region entries Pairs.Inputs rewrote
 			std::uint64_t bundles = 0;                // owner bundles made again
 			std::uint64_t resyncs = 0, resyncsFannedOut = 0;
+			std::uint64_t loopListed = 0;             // the region's loop list (RunObjectLoop's slots), summed over its builds
 			double resolveMs = 0, resolveMaxMs = 0, inputsMs = 0, bundleMs = 0;
 			// RunAhead: the stages, and the builds whose stream views and main build overlapped on the pool.
 			std::uint64_t aheads = 0, overlapped = 0;

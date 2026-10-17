@@ -258,7 +258,7 @@ namespace DCLF
 			++async.used;
 			committed = payload;
 			// Copied: a frame that keeps the publication commits the payload again.
-			*frameOwners = payload->bindingOwners;
+			*frameOwners = payload->body->bindingOwners;
 			frameOwners->push_back(ahead);
 			// The adopted snapshot whole (its versions, its draws, what they embed), until this execution retires: released on ORG's
 			// host thread through the cleanup queue, never before the GPU is done with the frame (the builder's drop of a replaced one is a

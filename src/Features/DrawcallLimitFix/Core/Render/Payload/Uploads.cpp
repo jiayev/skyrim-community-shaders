@@ -167,9 +167,9 @@ namespace DCLF
 			const bool depthOnly = a_commit.depthOnly;
 			stats.residentInputs = static_cast<std::uint32_t>(payload.resident.Count());
 			if (!depthOnly) {
-				stats.residentDraws = payload.residentDraws;
-				stats.residentPairs = payload.residentPairs;
-				stats.residentUndrawable = payload.residentUndrawable;
+				stats.residentDraws = payload.body->residentDraws;
+				stats.residentPairs = payload.body->residentPairs;
+				stats.residentUndrawable = payload.body->residentUndrawable;
 			}
 			stats.residentEpochs += payload.resident.ContentEpoch() != stats.residentLastEpoch[depthOnly ? 0 : 1] ? 1 : 0;
 			stats.residentLastEpoch[depthOnly ? 0 : 1] = payload.resident.ContentEpoch();
@@ -184,26 +184,26 @@ namespace DCLF
 		{
 			const auto& payload = a_commit.payload;
 			auto& stats = a_commit.stats;
-			stats.skipped = payload.skipped;
-			stats.missingTextures = payload.missingTextures;
-			stats.missingVertexConstants = payload.missingVertexConstants;
-			stats.missingPixelConstants = payload.missingPixelConstants;
-			stats.deferredTextures = payload.deferredTextures;
+			stats.skipped = payload.body->skipped;
+			stats.missingTextures = payload.body->missingTextures;
+			stats.missingVertexConstants = payload.body->missingVertexConstants;
+			stats.missingPixelConstants = payload.body->missingPixelConstants;
+			stats.deferredTextures = payload.body->deferredTextures;
 			stats.rowTableConflicts += payload.rowTableConflicts;
 			for (std::size_t i = 0; i < payload.partMs.size(); ++i)
 				stats.partMs[i] = payload.partMs[i];
 			if (!a_commit.depthOnly)
-				stats.decalsDrawn = payload.decalsDrawn;
-			if (payload.shortBuffers) {
+				stats.decalsDrawn = payload.body->decalsDrawn;
+			if (payload.body->shortBuffers) {
 				const bool first = stats.shortBuffers == 0;
-				stats.shortBuffers += payload.shortBuffers;
+				stats.shortBuffers += payload.body->shortBuffers;
 				if (first)
 					Diagnostics::Notify(Diagnostics::ShortBuffersDrawn{ a_commit.tables, payload });
 			}
 			// The build's writes (what the payload's catch-up sent is the snapshot builder's: PayloadVersions::bytes).
 			stats.uploadBytes = (payload.materialRowsWritten * sizeof(MaterialRow)) + (payload.pipelineRowsWritten * sizeof(PipelineRow)) +
-			                      payload.inputList.size() * sizeof(DrawInput);
-			stats.records = static_cast<std::uint32_t>(payload.materialRows.Count());
+			                      payload.body->inputList.size() * sizeof(DrawInput);
+			stats.records = static_cast<std::uint32_t>(payload.body->materialRows.Count());
 		}
 
 		// What the culling latch is made from: the counts and the draws' ViewProj.
@@ -221,10 +221,10 @@ namespace DCLF
 			const auto& shape = a_commit.shape;
 			const bool depthOnly = a_commit.depthOnly;
 			// The resident region's draws and inputs lead the frame's own.
-			const std::uint32_t drawCount = static_cast<std::uint32_t>(payload.sequences.size() + payload.residentDraws);
-			const auto decalCount = depthOnly ? std::array<std::uint32_t, kDecalGroups>{} : payload.decalCount;
+			const std::uint32_t drawCount = static_cast<std::uint32_t>(payload.body->sequences.size() + payload.body->residentDraws);
+			const auto decalCount = depthOnly ? std::array<std::uint32_t, kDecalGroups>{} : payload.body->decalCount;
 			// Inputs the culling covers; in the depth segment more than drawCount (cull-only candidates).
-			a_cull.inputCount = static_cast<std::uint32_t>(payload.inputList.size() + (payload.resident.Count()));
+			a_cull.inputCount = static_cast<std::uint32_t>(payload.body->inputList.size() + (payload.resident.Count()));
 			// The shape's ranges hold the scene's draw bound, and the sequences' named version holds the ranges (the revision required
 			// them): a count past them is a defect of that bound.
 			if (drawCount > shape.sequenceDraws)
@@ -387,7 +387,7 @@ namespace DCLF
 		const auto& adopted = a_commit.adopted;
 		const auto& epochResources = a_commit.resources;
 		const bool depthOnly = a_commit.depthOnly;
-		Extensions::UploadVertexStream(adopted, a_commit.payload.streamRows, *epochResources->scene, a_commit.uploads);
+		Extensions::UploadVertexStream(adopted, a_commit.payload.body->streamRows, *epochResources->scene, a_commit.uploads);
 		Extensions::RunCommitHooks({ depthOnly ? Api::CommitKind::Depth : Api::CommitKind::Colour, adopted, Scene::FrameView::Get().GetTables(),
 			Scene::FrameView::Get().GetFrame(), *epochResources->scene, a_commit.uploads, &a_commit.latched, a_commit.bindingOwners });
 	}
@@ -416,7 +416,7 @@ namespace DCLF
 		}
 		// Colour segment only: each decal group's slot count, and the tallies zeroed.
 		if (!depthOnly) {
-			decalWords = { payload.decalCount[0], payload.decalCount[1], 0u, 0u, payload.decalCount[2] };
+			decalWords = { payload.body->decalCount[0], payload.body->decalCount[1], 0u, 0u, payload.body->decalCount[2] };
 			latched(epochResources->count, decalWords.data(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
 			latched(epochResources->count, &decalWords[4], sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
 			// The terrain groups' counts.

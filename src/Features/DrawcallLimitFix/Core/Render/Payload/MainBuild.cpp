@@ -167,7 +167,7 @@ namespace DCLF::Draws
 		struct PairWork
 		{
 			bool deferred = false;  // a pool chunk's: rows written unmarked into prepared storage, marked by MergeWork
-			std::vector<std::pair<std::uint32_t, std::uint64_t>> rowMarks;  // (material, its parts written)
+			std::vector<std::pair<std::uint32_t, std::uint64_t>> rowMarks;  // (material, its parts written): every row it wrote, its bytes moved or not
 			std::array<std::uint64_t, 8> keyMoved{};
 			std::uint64_t materialsWritten = 0, materialRowsWritten = 0;
 			std::uint32_t missingVertexConstants = 0, missingPixelConstants = 0;
@@ -197,11 +197,24 @@ namespace DCLF::Draws
 			}
 		};
 
+		/** @brief A body no payload holds, reset (the build cache's; a new one when it has none free, or with no cache). */
+		std::shared_ptr<MainBody> AcquireBody(BuildCache* a_cache)
+		{
+			if (!a_cache)
+				return std::make_shared<MainBody>();
+			for (auto& held : a_cache->bodies)
+				if (held.use_count() == 1) {
+					held->Reset();
+					return held;
+				}
+			return a_cache->bodies.emplace_back(std::make_shared<MainBody>());
+		}
+
 		/**
 		 * @brief One build of the main segments' payloads (BuildMainPayloads); Run calls the parts in order. Both segments draw the
 		 * frame's DCLF set and nothing else. They read one list: each main candidate once, its view mask choosing the segments
 		 * (MainMaskOf), drawable only when every built segment can draw its pair, so a member is drawn by both or neither. The
-		 * other segment's payload is a copy of the primary's with its own inputs (Finish).
+		 * other segment's payload shares the primary's body with its own inputs (Finish).
 		 */
 		class MainBuild final
 		{
@@ -209,7 +222,7 @@ namespace DCLF::Draws
 			MainBuild(const std::array<const MainInputs*, 2>& a_in, const SceneTables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups,
 				const std::array<MainPayload*, 2>& a_out, MainRows& a_rows, BuildCache* a_cache) :
 				segmentIn(a_in), segmentOut(a_out), primary(PrimarySegment(a_in)), in(*a_in[primary]), tables(a_tables), frame(a_frame), lookups(a_lookups),
-				out(*a_out[primary]), rows(a_rows), cache(a_cache)
+				out(*a_out[primary]), rows(a_rows), cache(a_cache), heldBody(AcquireBody(a_cache)), body(*heldBody)
 			{}
 
 			/** @brief The build but what reads the stream views (Finish). */
@@ -230,6 +243,9 @@ namespace DCLF::Draws
 			MainPayload& out;  // the primary segment's
 			MainRows& rows;
 			BuildCache* cache;
+			// The build's body (MainBody): what both segments' payloads hold, handed to them by Reset and Finish.
+			const std::shared_ptr<MainBody> heldBody;
+			MainBody& body;
 			std::shared_ptr<const StreamViews> streams;  // the frame's (Finish), or none: the build packs its own geometry slots
 			// The parts' timings (partMs) are the report's alone: the clock is read only when it is wanted.
 			const bool timeParts = Diagnostics::Observe().stats || Diagnostics::Observe().profile;
@@ -242,10 +258,10 @@ namespace DCLF::Draws
 			ankerl::unordered_dense::map<std::uint32_t, std::pair<std::uint32_t, std::array<std::uint64_t, 3>>> packingSeen;
 			PairWork loopWork;  // the object loop's resolutions (merged after each)
 
-			decltype(MainPayload::sequences)& sequences = out.sequences;
-			decltype(MainPayload::inputList)& drawInputs = out.inputList;
-			decltype(MainPayload::decalCount)& decalCount = out.decalCount;
-			decltype(MainPayload::decalTemplates)& decalTemplates = out.decalTemplates;
+			decltype(MainBody::sequences)& sequences = body.sequences;
+			decltype(MainBody::inputList)& drawInputs = body.inputList;
+			decltype(MainBody::decalCount)& decalCount = body.decalCount;
+			decltype(MainBody::decalTemplates)& decalTemplates = body.decalTemplates;
 			const bool colourBuilt = segmentIn[kAsyncColour] != nullptr;
 			const std::uint32_t frameNumber = in.frameNumber;
 			static constexpr auto renderFlags = GeometryPort::kMainPassRenderFlags;
@@ -397,8 +413,9 @@ namespace DCLF::Draws
 		TracyCZoneN(resetMainZone, "CS.DCLF.BuildMain.Reset", true);
 		out.Reset();
 		out.inputs = in;
+		out.body = heldBody;
 		if (lookups.sharedBindingBlock)
-			out.bindingOwners.push_back(lookups.sharedBindingBlock);
+			body.bindingOwners.push_back(lookups.sharedBindingBlock);
 		BeginRows();
 		TracyCZoneEnd(resetMainZone);
 	}
@@ -418,6 +435,7 @@ namespace DCLF::Draws
 			rows.identity = in.addresses.identity;
 			rows.generation = in.tablesGeneration;
 			++rows.resyncs;
+			rows.productDirty.MarkEvery();
 		}
 		++rows.builds;
 		if (rows.material.Size() < tables.materials.size())
@@ -556,7 +574,7 @@ namespace DCLF::Draws
 	{
 		// Per-object states are the diagnostics' alone.
 		if (Diagnostics::Observe().claims)
-			out.objectState.assign(tables.objects.size(), kObjectStateAbsent);
+			body.objectState.assign(tables.objects.size(), kObjectStateAbsent);
 	}
 
 	void MainBuild::PrepareObjects()
@@ -578,9 +596,9 @@ namespace DCLF::Draws
 
 	void MainBuild::Skipped(Skip a_reason)
 	{
-		++out.skipped[static_cast<std::size_t>(a_reason)];
-		if (currentObject < out.objectState.size())
-			out.objectState[currentObject] = static_cast<std::uint8_t>(a_reason);
+		++body.skipped[static_cast<std::size_t>(a_reason)];
+		if (currentObject < body.objectState.size())
+			body.objectState[currentObject] = static_cast<std::uint8_t>(a_reason);
 	}
 
 	void MainBuild::Mark(std::size_t a_part)
@@ -600,9 +618,9 @@ namespace DCLF::Draws
 		if (newResolved) {
 			const std::uint32_t m = object.materialIndex, p = object.pipelineIndex;
 			if (m < lookups.materials.size() && lookups.materials[m].bindingBlock)
-				out.bindingOwners.push_back(lookups.materials[m].bindingBlock);
+				body.bindingOwners.push_back(lookups.materials[m].bindingBlock);
 			if (p < lookups.pipelines.size() && lookups.pipelines[p].shadowMaskOwner)
-				out.bindingOwners.push_back(lookups.pipelines[p].shadowMaskOwner);
+				body.bindingOwners.push_back(lookups.pipelines[p].shadowMaskOwner);
 			if (checkPacking) {
 				const auto [seen, first] = packingSeen.try_emplace(m, std::pair{ p, PackingOf(p) });
 				if (!first && seen->second.second != PackingOf(p))
@@ -620,10 +638,10 @@ namespace DCLF::Draws
 		}
 		Mark(4);
 		if (resolved.skipReason != kNoSkip) {
-			if (resolved.skipReason == static_cast<std::uint32_t>(Skip::Texture) && out.missingNext < out.missingTextures.size())
-				out.missingTextures[out.missingNext++] = resolved.missingTexture;
+			if (resolved.skipReason == static_cast<std::uint32_t>(Skip::Texture) && body.missingNext < body.missingTextures.size())
+				body.missingTextures[body.missingNext++] = resolved.missingTexture;
 			if (resolved.deferred)
-				++out.deferredTextures;
+				++body.deferredTextures;
 			Skipped(static_cast<Skip>(resolved.skipReason));  // per draw, not once per pair
 			return kNoRecord;
 		}
@@ -632,26 +650,28 @@ namespace DCLF::Draws
 
 	void MainBuild::MergeWork(PairWork& a_work)
 	{
-		for (const auto& [m, parts] : a_work.rowMarks)
+		for (const auto& [m, parts] : a_work.rowMarks) {
 			MarkKeptParts(rows.material, m, parts, kMaterialRowParts);
+			rows.productDirty.Mark(m);
+		}
 		for (std::size_t k = 0; k < rows.keyMoved.size(); ++k)
 			rows.keyMoved[k] += a_work.keyMoved[k];
 		rows.materialsWritten += a_work.materialsWritten;
 		out.materialRowsWritten += a_work.materialRowsWritten;
-		out.missingVertexConstants |= a_work.missingVertexConstants;
-		out.missingPixelConstants |= a_work.missingPixelConstants;
+		body.missingVertexConstants |= a_work.missingVertexConstants;
+		body.missingPixelConstants |= a_work.missingPixelConstants;
 		if (a_work.rowTableConflicts) {
 			if (out.rowTableConflicts == 0)
 				logger::warn("[DCLF] material slot {} was packed with other constant tables than pipeline slot {} has; its draws stay native", a_work.conflictMaterial,
 					a_work.conflictPipeline);
 			out.rowTableConflicts += a_work.rowTableConflicts;
 		}
-		for (std::size_t reason = 0; reason < out.skipped.size(); ++reason)
-			out.skipped[reason] += a_work.skipped[reason];
+		for (std::size_t reason = 0; reason < body.skipped.size(); ++reason)
+			body.skipped[reason] += a_work.skipped[reason];
 		for (const std::uint32_t texture : a_work.missingTextures)
-			if (out.missingNext < out.missingTextures.size())
-				out.missingTextures[out.missingNext++] = texture;
-		out.deferredTextures += a_work.deferredTextures;
+			if (body.missingNext < body.missingTextures.size())
+				body.missingTextures[body.missingNext++] = texture;
+		body.deferredTextures += a_work.deferredTextures;
 		a_work.Clear();
 	}
 
@@ -795,12 +815,15 @@ namespace DCLF::Draws
 		PackMaterialRow(m, p, blocks, key, state, row);
 		// Only the parts that moved are marked (an animated effect's TexcoordOffset or falloff moves one, not the row): a backing catches up
 		// those parts alone (EmitMainRowParts).
+		// Its state moved with it (the products read it: MainRows::productDirty, marked here or by MergeWork).
 		if (!a_work.deferred) {
 			if (rows.material.SetParts(m, row, kMaterialRowParts))
 				++a_work.materialRowsWritten;
-		} else if (const std::uint64_t parts = WriteKeptParts(rows.material, m, row, kMaterialRowParts)) {
+			rows.productDirty.Mark(m);
+		} else {
+			const std::uint64_t parts = WriteKeptParts(rows.material, m, row, kMaterialRowParts);
 			a_work.rowMarks.emplace_back(m, parts);
-			++a_work.materialRowsWritten;
+			a_work.materialRowsWritten += parts ? 1u : 0u;
 		}
 		++a_work.materialsWritten;
 	}
@@ -1600,7 +1623,7 @@ namespace DCLF::Draws
 	{
 		auto& r = *region;
 		for (std::size_t reason = 0; reason < r.skipCounts.size(); ++reason)
-			out.skipped[reason] += r.skipCounts[reason];
+			body.skipped[reason] += r.skipCounts[reason];
 		// Every pair's owners in one list, made again only when an owner joined or left (the counts follow each resolution).
 		if (r.ownersChanged) {
 			r.ownersChanged = false;
@@ -1614,7 +1637,7 @@ namespace DCLF::Draws
 		out.frameRegisters[0] |= r.frameRegisters[0];
 		out.frameRegisters[1] |= r.frameRegisters[1];
 		if (r.owners)
-			out.bindingOwners.push_back(r.owners);
+			body.bindingOwners.push_back(r.owners);
 	}
 
 	void MainBuild::RewriteChangedEntries(const std::vector<std::uint32_t>& a_changedPipelines, const std::vector<std::uint64_t>& a_changedPairs)
@@ -1838,25 +1861,25 @@ namespace DCLF::Draws
 		auto& r = *region;
 		// Per-object states, for the set parity alone.
 		const auto& inputs = r.inputs.Get();
-		if (!out.objectState.empty()) {
+		if (!body.objectState.empty()) {
 			for (std::uint32_t i = 0; i < inputs.size(); ++i)
-				if ((r.sideOf[i] & kSideMain) && inputs[i].objectIndex < out.objectState.size())
-					out.objectState[inputs[i].objectIndex] = r.drawsOf[i] == kRegionDecal ? kObjectStateDecal :
+				if ((r.sideOf[i] & kSideMain) && inputs[i].objectIndex < body.objectState.size())
+					body.objectState[inputs[i].objectIndex] = r.drawsOf[i] == kRegionDecal ? kObjectStateDecal :
 					                                         r.drawsOf[i]                  ? kObjectStateDrawable :
 					                                         r.pairOf[i] == kNoPair        ? static_cast<std::uint8_t>(Skip::CandidateOnly) :
 					                                         !InSet(inputs[i].objectIndex) ? static_cast<std::uint8_t>(Skip::NotInSet) :
 					                                                                         static_cast<std::uint8_t>(Skip::Pipeline);
-			for (std::uint32_t o = 0; o < r.candidate.size() && o < out.objectState.size(); ++o)
-				if (r.candidate[o] && out.objectState[o] == kObjectStateAbsent)
-					out.objectState[o] = static_cast<std::uint8_t>(Skip::CandidateOnly);
+			for (std::uint32_t o = 0; o < r.candidate.size() && o < body.objectState.size(); ++o)
+				if (r.candidate[o] && body.objectState[o] == kObjectStateAbsent)
+					body.objectState[o] = static_cast<std::uint8_t>(Skip::CandidateOnly);
 		}
 		// Every candidate counts, whether the loop sees it or not.
-		out.skipped[static_cast<std::size_t>(Skip::CandidateOnly)] += static_cast<std::uint32_t>(r.candidates);
-		out.residentUndrawable = static_cast<std::uint32_t>(r.undrawable);
+		body.skipped[static_cast<std::size_t>(Skip::CandidateOnly)] += static_cast<std::uint32_t>(r.candidates);
+		body.residentUndrawable = static_cast<std::uint32_t>(r.undrawable);
 		// Not the region's view: the shadow build writes the scene list after this; RunAhead hands out the view once both have.
-		out.residentDraws = static_cast<std::uint32_t>(r.draws);
-		out.decalsDrawn += static_cast<std::uint32_t>(r.decals);
-		out.residentPairs = static_cast<std::uint32_t>(r.pairs.size());
+		body.residentDraws = static_cast<std::uint32_t>(r.draws);
+		body.decalsDrawn += static_cast<std::uint32_t>(r.decals);
+		body.residentPairs = static_cast<std::uint32_t>(r.pairs.size());
 		regionInputs = inputs.size();
 		regionDraws = r.draws;
 	}
@@ -1867,6 +1890,8 @@ namespace DCLF::Draws
 		// With a region, the loop visits only its loopList; the region counted the candidates.
 		const std::vector<std::uint32_t>* loopObjects = region ? &region->loopList : nullptr;
 		const std::size_t loopCount = loopObjects ? loopObjects->size() : tables.objects.size();
+		if (loopObjects)
+			rows.pairStats.loopListed += loopCount;
 		for (std::size_t n = 0; n < loopCount; ++n) {
 			const std::uint32_t o = loopObjects ? (*loopObjects)[n] : static_cast<std::uint32_t>(n);
 			if (o < tables.objects.size())
@@ -1976,12 +2001,12 @@ namespace DCLF::Draws
 			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, object.flags | kInputDrawable, { MainMaskOf(tables, o) },
 				static_cast<std::uint32_t>(o), ordinal, partitions, streamIndex });
 			decalTemplates[decalGroup - 1][ordinal] = sequence;
-			++out.decalsDrawn;
-			if (o < out.objectState.size())
-				out.objectState[o] = kObjectStateDecal;
+			++body.decalsDrawn;
+			if (o < body.objectState.size())
+				body.objectState[o] = kObjectStateDecal;
 		} else {
-			if (o < out.objectState.size())
-				out.objectState[o] = kObjectStateDrawable;
+			if (o < body.objectState.size())
+				body.objectState[o] = kObjectStateDrawable;
 			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, object.flags | kInputDrawable, { MainMaskOf(tables, o) },
 				static_cast<std::uint32_t>(o), 0, partitions, streamIndex });
 			SetFadeRow(drawInputs.back(), objectRoots, tables, o);
@@ -2000,8 +2025,8 @@ namespace DCLF::Draws
 		const std::uint64_t vertexNeeded = std::uint64_t(geometry.vertexCount) * geometry.vertexStride;
 		const std::uint64_t indexNeeded = (std::uint64_t(geometry.firstIndex) + geometry.indexCount) * sizeof(std::uint16_t);
 		if (geometry.vertexBytes < vertexNeeded || geometry.indexBytes < indexNeeded) {
-			if (out.shortBuffers++ == 0)
-				out.shortBuffer = { o, vertexNeeded, indexNeeded };
+			if (body.shortBuffers++ == 0)
+				body.shortBuffer = { o, vertexNeeded, indexNeeded };
 		}
 		Mark(3);
 	}
@@ -2010,31 +2035,51 @@ namespace DCLF::Draws
 	{
 		ZoneScopedN("CS.DCLF.BuildMain.Finish");
 		streams = std::move(a_streams);
-		TakeGeometryDraws(streams.get(), tables, in.tablesGeneration, frameNumber, out.geometryDraws);
-		out.streams = streams;
-		AppendStreamRows(tables, in.addresses.streamBuffer, out.geometryDraws);
+		TakeGeometryDraws(streams.get(), tables, in.tablesGeneration, frameNumber, body.geometryDraws);
+		body.streams = streams;
+		// The stream rows' draws, and the rows the commit uploads: the tables' own (the draws holding the payload hold the tables).
+		TracyCZoneN(streamRowsZone, "CS.DCLF.BuildMain.StreamRows", true);
+		AppendStreamRows(tables, in.addresses.streamBuffer, body.geometryDraws);
 		if (in.addresses.streamBuffer)
-			out.streamRows = tables.streamRows;
-		out.materialRows = rows.material.View();
-		out.pipelineRows = rows.pipeline.View();
-		// The features' payload products, from the rows and tables as this build left them (Api::PayloadProduct).
-		Extensions::BuildPayloadProducts({ rows, tables }, out.products);
+			body.streamRows = tables.streamRows;
+		TracyCZoneEnd(streamRowsZone);
+		body.materialRows = rows.material.View();
+		body.pipelineRows = rows.pipeline.View();
+		// The features' payload products, from the rows and tables as this build left them (Api::PayloadProduct), each from its last build
+		// and the material slots that moved since: the rows written (marked as they were), and the slots the tables' material log names
+		// since the last build (every slot when the log cannot be continued).
+		TracyCZoneN(textureListZone, "CS.DCLF.BuildMain.TextureList", true);
+		auto& dirty = rows.productDirty;
+		if (!dirty.cursor.Continues(tables.materialLog, in.tablesGeneration)) {
+			dirty.MarkEvery();
+			dirty.cursor.Restart(in.tablesGeneration);
+		} else {
+			for (const std::uint32_t m : dirty.cursor.Unread(tables.materialLog))
+				dirty.Mark(m);
+		}
+		dirty.cursor.Advance(tables.materialLog);
+		Extensions::BuildPayloadProducts({ rows, tables, dirty.slots, dirty.every, nullptr, Policy::CheckBuilderPairs(rows.builds) }, rows.products, body.products);
+		rows.products = body.products;
+		dirty.Clear();
+		TracyCZoneEnd(textureListZone);
 		Mark(5);
-		// The other segment's payload: the same products, rows and templates with its own inputs. One-off counts stay the primary's;
-		// the depth variant resolves no frame textures.
+		// The other segment's payload: the same body (products, rows and templates) with its own inputs. One-off counts stay the
+		// primary's; the depth variant resolves no frame textures.
+		TracyCZoneN(zCopyZone, "CS.DCLF.BuildMain.ZCopy", true);
 		for (std::size_t j = 0; j < segmentOut.size(); ++j) {
 			if (j == primary || !segmentOut[j] || !segmentIn[j])
 				continue;
 			auto& other = *segmentOut[j];
-			other = out;
+			other.Reset();
 			other.inputs = *segmentIn[j];
-			if (j == kAsyncZPrepass)
-				other.frameRegisters = {};
-			other.residentResyncs = other.residentResyncReasons = other.residentDecalRetakes = 0;
-			other.rowTableConflicts = 0;
-			other.materialRowsWritten = other.pipelineRowsWritten = 0;
-			other.partMs = {};
+			other.body = heldBody;
+			if (j != kAsyncZPrepass)
+				other.frameRegisters = out.frameRegisters;
+			other.cullViewProj = out.cullViewProj;
+			other.culled = out.culled;
+			other.resident = out.resident;
 		}
+		TracyCZoneEnd(zCopyZone);
 	}
 
 	void BuildMainPayloads(const std::array<const MainInputs*, 2>& a_in, const SceneTables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups,
@@ -2079,11 +2124,11 @@ namespace DCLF::Draws
 		std::string text;
 		if (s.builds || s.aheads) {
 			const double builds = static_cast<double>(std::max<std::uint64_t>(s.builds, 1)), aheads = static_cast<double>(std::max<std::uint64_t>(s.aheads, 1));
-			text = fmt::format("[DCLF] main pairs: {} builds; a build: {:.1f} pairs checked, {:.1f} resolved, {:.1f} entries rewritten; {} checked every pair, {} pipelines "
+			text = fmt::format("[DCLF] main pairs: {} builds; a build: {:.1f} pairs checked, {:.1f} resolved, {:.1f} entries rewritten, {:.1f} loop list slots; {} checked every pair, {} pipelines "
 							   "moved; Pairs.Resolve {:.3f} ms a build (max {:.3f}), {} on the pool in {} chunks; bundle {:.3f} ms, {} made; inputs {:.3f} ms; resyncs {} ({} on "
 							   "the pool); stages: {} aheads, {} overlapped, stream views {:.3f} ms, main {:.3f} ms, both {:.3f} ms, shadow {:.3f} ms, exclusions {:.3f} ms; "
 							   "parity {} checks, {} differ, packing {} checks, {} conflicts{}\n",
-				s.builds, s.checked / builds, s.resolved / builds, s.entriesRewritten / builds, s.everyPair, s.pipelinesMoved, s.resolveMs / builds, s.resolveMaxMs,
+				s.builds, s.checked / builds, s.resolved / builds, s.entriesRewritten / builds, s.loopListed / builds, s.everyPair, s.pipelinesMoved, s.resolveMs / builds, s.resolveMaxMs,
 				s.fannedOut, s.chunks, s.bundleMs / builds, s.bundles, s.inputsMs / builds, s.resyncs, s.resyncsFannedOut, s.aheads, s.overlapped, s.streamsMs / aheads,
 				s.mainMs / aheads, s.stagesMs / aheads, s.shadowMs / aheads, s.exclusionsMs / aheads, s.parityChecks, s.parityMismatches, s.packingChecks,
 				s.packingConflicts, s.parityMismatches ? " <- PAIRS NARROWED" : s.packingConflicts ? " <- ROW PACKING CONFLICT" : "");

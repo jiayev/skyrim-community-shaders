@@ -24,7 +24,7 @@ namespace DCLF::Diagnostics
 	void LogShortBuffers(const ShortBuffersDrawn& a_drawn)
 	{
 		const auto& tables = a_drawn.tables;
-		const auto& shortBuffer = a_drawn.payload.shortBuffer;
+		const auto& shortBuffer = a_drawn.payload.body->shortBuffer;
 		if (shortBuffer.object >= tables.objects.size())
 			return;
 		const auto& geometry = tables.geometries[tables.objects[shortBuffer.object].geometryIndex];

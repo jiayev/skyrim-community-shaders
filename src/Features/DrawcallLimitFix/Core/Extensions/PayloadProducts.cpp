@@ -14,12 +14,14 @@ namespace DCLF::Extensions
 		}
 	}
 
-	void BuildPayloadProducts(const Api::PayloadProductBuild& a_build, PayloadProducts& a_out)
+	void BuildPayloadProducts(const Api::PayloadProductBuild& a_build, const PayloadProducts& a_previous, PayloadProducts& a_out)
 	{
 		const auto products = RegisteredProducts();
 		a_out.resize(products.size());
-		for (std::size_t i = 0; i < products.size(); ++i)
-			a_out[i] = products[i].build(a_build);
+		for (std::size_t i = 0; i < products.size(); ++i) {
+			const Api::PayloadProductBuild build{ a_build.rows, a_build.tables, a_build.dirtyMaterials, a_build.everyMaterial, &ProductAt(&a_previous, i), a_build.check };
+			a_out[i] = products[i].build(build);
+		}
 	}
 
 	void CarryPayloadProducts(const PayloadProducts& a_main)

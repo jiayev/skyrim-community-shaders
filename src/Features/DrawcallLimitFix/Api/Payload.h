@@ -15,8 +15,10 @@ namespace DCLF::Api
 	 * @brief A payload product.
 	 *
 	 * - build: the snapshot builder (DCLF's pool), at the end of each main build (MainBuild::Finish), given read access to the build's
-	 *   rows and tables. Its result (null allowed) is immutable from here and shared by both segments' payloads; it may hold engine
-	 *   pointers only while the publication the payload belongs to holds them.
+	 *   rows and tables, its previous result and the material slots that may have moved since. Its result (null allowed) is immutable
+	 *   from here and shared by both segments' payloads; it may hold engine pointers only while the publication the payload belongs to
+	 *   holds them. Nothing moved: it may return its previous result (the same object), whose pointers the moves it was told of keep
+	 *   current.
 	 * - carried (optional): the snapshot builder, when a payload with main parts is published (PayloadBuilder::Publish), with the main
 	 *   payload's product (null when its build made none).
 	 * - install: render thread, when the frame adopts a snapshot whose payload is not the installed one (AdoptSnapshot), with the

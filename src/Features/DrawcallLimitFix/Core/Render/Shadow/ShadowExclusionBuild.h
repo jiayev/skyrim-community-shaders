@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace DCLF
@@ -44,6 +45,11 @@ namespace DCLF::Api
 		std::uint64_t membership = 0;           // ShadowPayload::membership of the mode (0 without the kept state)
 		std::uint32_t frameNumber = 0;          // the payload's inputs' frame
 		std::uint32_t tablesGeneration = 0;     // and tables generation
+		// The objects that joined and left the mode's region inputs in the kept build keptBuild (ShadowPayload::keptBuild, joined, left;
+		// 0: none): what a cache that read the inputs as of the build before follows. movesValid false: the build retook the mode whole.
+		std::uint64_t keptBuild = 0;
+		bool movesValid = false;
+		std::span<const std::uint32_t> joined, left;
 		std::shared_ptr<void> result;           // the build's answer, the contribution's own type (null: none)
 
 		/** @brief The paraboloid mode's (the Point source's culls' reach words). */
@@ -56,6 +62,23 @@ namespace DCLF::Api
 				for (const auto& input : *region.elements)
 					if (input.view.mask & modeBits)
 						a_visit(input);
+			for (const auto& input : list)
+				if (input.view.mask & modeBits)
+					a_visit(input);
+		}
+		/** @brief ForEachInput's first part: the mode's inputs of the region. */
+		template <class F>
+		void ForEachRegionInput(F&& a_visit) const
+		{
+			if (region.elements)
+				for (const auto& input : *region.elements)
+					if (input.view.mask & modeBits)
+						a_visit(input);
+		}
+		/** @brief ForEachInput's second part: the mode's inputs of the frame's own list (face shapes; a few). */
+		template <class F>
+		void ForEachListInput(F&& a_visit) const
+		{
 			for (const auto& input : list)
 				if (input.view.mask & modeBits)
 					a_visit(input);

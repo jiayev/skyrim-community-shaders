@@ -7,6 +7,7 @@
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,12 @@ namespace DCLF::Features::TextureTransforms
 		};
 		std::vector<Entry> entries;
 		std::size_t variables = 0;  // the entries of declared frame variables
+		// The build's own (TextureTransformsList.cpp), so the next one rewrites only the slots that moved and keeps the rest: each entry's
+		// material slot (ascending, parallel to entries), each covered slot's verdict, and the slots left out by reason (unpacked, without
+		// TexcoordOffset or a frame variable, free, stale).
+		std::vector<std::uint32_t> entrySlots;
+		std::vector<std::uint8_t> slotVerdicts;
+		std::array<std::uint64_t, 4> leftOut{};
 	};
 
 	/**
@@ -84,6 +91,9 @@ namespace DCLF::Features::TextureTransforms
 	std::uint32_t RowsIndex();
 	// TextureTransformsList.cpp: the payload product.
 	void RegisterProduct(Api::InstallContext& a_context);
+	// Diagnostics/TextureTransformsParity.cpp, the builder's parity (Api::PayloadProductBuild::check): the list a build made from its previous
+	// one against the list made whole from the same rows and tables.
+	void CheckListParity(const TextureTransformList& a_built, const TextureTransformList& a_whole);
 	// TextureTransformsPass.cpp: the pass (texture-transforms.apply).
 	void RegisterPass(Api::InstallContext& a_context);
 }

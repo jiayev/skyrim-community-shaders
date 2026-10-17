@@ -253,7 +253,7 @@ namespace DCLF::Diagnostics
 		// Present; a task that finds it closed drops the sample).
 		auto cpu = std::make_shared<CpuSide>();
 		cpu->resident = a_payload.resident.elements;
-		cpu->inputs = a_payload.inputList;
+		cpu->inputs = a_payload.body->inputList;
 		cpu->tables = Scene::FrameView::Get().AcceptedTables();
 		cpu->cascades = impl.sunCascades;
 		cpu->sunOn = (DrawsState::Get().sunUpload.sunState & kSunTestOn) != 0;

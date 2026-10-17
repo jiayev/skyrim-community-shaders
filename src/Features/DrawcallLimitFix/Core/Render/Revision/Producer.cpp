@@ -205,6 +205,134 @@ namespace DCLF
 
 	}
 
+	namespace
+	{
+		void MixWitness(std::uint64_t& a_hash, std::uint64_t a_value)
+		{
+			a_hash = (a_hash ^ a_value) * 0x100000001b3ull;
+			a_hash ^= a_hash >> 29;
+		}
+
+		/**
+		 * @brief What the requirements and the shapes read of a_lookups' pipeline slots (RevisionMake::lookupsWitness): each entry's set
+		 * index (PlanZBuckets, the views' Z groups), whether it holds the tables' key, the tables' raster flags there (the buckets' family
+		 * and terrain rules), and the shadow key slots' count (append-only per instance: the shadow latch's keys, ShadowBoundsOf's slots).
+		 * The lookups' versions and generations are none of it: a material lookup's write moves those alone.
+		 */
+		std::uint64_t LookupsWitness(const Lookups& a_lookups, const SceneTables& a_tables)
+		{
+			std::uint64_t hash = 0xcbf29ce484222325ull;
+			const std::size_t slots = a_lookups.pipelines.size(), tabled = a_tables.pipelines.size();
+			MixWitness(hash, a_lookups.instance);
+			MixWitness(hash, slots);
+			MixWitness(hash, tabled);
+			for (std::size_t p = 0; p < slots; ++p) {
+				const auto& entry = a_lookups.pipelines[p];
+				const bool keyed = p < tabled && entry.key == a_tables.pipelines[p];
+				MixWitness(hash, (std::uint64_t(entry.setIndex) << 1) | (keyed ? 1u : 0u));
+				if (p < tabled)
+					MixWitness(hash, a_tables.pipelines[p].rasterFlags);
+			}
+			MixWitness(hash, a_lookups.shadowSlotKeys.size());
+			return hash;
+		}
+
+		/**
+		 * @brief The map rows of every (mode, rasterizer state) the shadow layouts draw (a_placements, the occlusion maps' a_recent):
+		 * what the shadow shapes' row buckets are made of (ShadowRowBuckets), by content. Each pair once while few are seen.
+		 */
+		template <class Recent>
+		std::uint64_t ShadowRowsWitness(const Lookups& a_lookups, const std::vector<ShadowViewLayout>& a_placements, const Recent& a_recent)
+		{
+			std::uint64_t hash = 0xcbf29ce484222325ull;
+			std::array<std::uint64_t, 16> seen{};
+			std::size_t pairs = 0;
+			const auto rows = [&](const std::vector<ShadowViewLayout>& a_layouts) {
+				for (const auto& view : a_layouts) {
+					const std::uint64_t pair = (std::uint64_t(view.modeIndex) << 32) | view.rasterState;
+					if (std::find(seen.begin(), seen.begin() + pairs, pair) != seen.begin() + pairs)
+						continue;
+					if (pairs < seen.size())
+						seen[pairs++] = pair;
+					const auto row = a_lookups.ShadowMapRow(view.modeIndex, view.rasterState);
+					MixWitness(hash, pair);
+					MixWitness(hash, row.size());
+					for (const std::uint32_t pipeline : row)
+						MixWitness(hash, pipeline);
+				}
+			};
+			rows(a_placements);
+			for (const auto& layouts : a_recent)
+				rows(layouts);
+			return hash;
+		}
+
+		/**
+		 * @brief What the requirement pass reads besides the revision inputs and the publication: the visibility events the frames
+		 * asked for, the index pool's fragmentation, the latched targets the passes declared (main, shadow) and the views' frame buffers'
+		 * copies, by content.
+		 */
+		std::uint64_t VolatileWitness(const RevisionInputs& a_inputs)
+		{
+			std::uint64_t hash = 0xcbf29ce484222325ull;
+			const auto targets = [&hash](const auto& a_latched) {
+				const auto keys = a_latched.load(std::memory_order_acquire);
+				MixWitness(hash, keys ? keys->size() + 1 : 0);
+				if (keys)
+					for (const void* key : *keys)
+						MixWitness(hash, reinterpret_cast<std::uintptr_t>(key));
+			};
+			if (const auto& s = a_inputs.scene) {
+				MixWitness(hash, s->visibilityEvents && s->visibilityReadback ? s->visibilityReadback->wanted.load(std::memory_order_acquire) : 0u);
+				MixWitness(hash, s->pool ? s->pool->fragmentedAt.load(std::memory_order_relaxed) : 0u);
+			}
+			if (a_inputs.main)
+				targets(a_inputs.main->latchedTargets);
+			if (a_inputs.shadow)
+				targets(a_inputs.shadow->latchedTargets);
+			for (const auto& view : a_inputs.views) {
+				const auto frameBuffers = view.resources ? view.resources->frameBuffers.load(std::memory_order_acquire) : nullptr;
+				MixWitness(hash, frameBuffers ? frameBuffers->size() + 1 : 0);
+				if (!frameBuffers)
+					continue;
+				for (const auto& frameBuffer : *frameBuffers) {
+					MixWitness(hash, reinterpret_cast<std::uintptr_t>(frameBuffer.copy.get()));
+					MixWitness(hash, (std::uint64_t(frameBuffer.elements) << 32) | frameBuffer.stride);
+				}
+			}
+			return hash;
+		}
+
+		bool SameRequirements(const ImplSnapshotBuilder::RevisionReuse::Key& a_last, const ImplSnapshotBuilder::RevisionReuse::Key& a_next)
+		{
+			const auto same = [](const auto& a_left, const auto& a_right) { return !a_left.owner_before(a_right) && !a_right.owner_before(a_left); };
+			return same(a_last.tables, a_next.tables) && same(a_last.catalog, a_next.catalog) && a_last.tablesGeneration == a_next.tablesGeneration &&
+			       a_last.request.pipelines == a_next.request.pipelines && a_last.request.shadowSlotKeys == a_next.request.shadowSlotKeys &&
+			       a_last.request.shadowKeys == a_next.request.shadowKeys && a_last.inputs == a_next.inputs && a_last.lookups == a_next.lookups &&
+			       a_last.shadowRows == a_next.shadowRows && a_last.volatiles == a_next.volatiles;
+		}
+
+		/** @brief CS_DCLF_PERSISTENT_PARITY: whether every shape of a_made is a_kept's (the same object or the same shape). */
+		bool SameMadeShapes(const MadeShapes& a_kept, const MadeShapes& a_made)
+		{
+			const auto same = [](const auto& a_old, const auto& a_new) { return a_old == a_new || (a_old && a_new && a_old->SameShape(*a_new)); };
+			for (std::size_t s = 0; s < a_kept.main.size(); ++s)
+				if (!same(a_kept.main[s], a_made.main[s]))
+					return false;
+			for (std::size_t v = 0; v < a_kept.views.size(); ++v)
+				if (!same(a_kept.views[v], a_made.views[v]))
+					return false;
+			for (std::size_t kind = 0; kind < a_kept.shadow.size(); ++kind) {
+				if (a_kept.shadow[kind].size() != a_made.shadow[kind].size())
+					return false;
+				for (std::size_t i = 0; i < a_kept.shadow[kind].size(); ++i)
+					if (!same(a_kept.shadow[kind][i], a_made.shadow[kind][i]))
+						return false;
+			}
+			return true;
+		}
+	}
+
 	void IndirectDraws::Impl::EnsureRevisionLatches()
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
@@ -260,6 +388,8 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.MakeRevisionShapes");
 		// The frame's inputs as last posted (RevisionInputs): with the request, all the revision reads.
 		auto& made = producer.made;
+		auto& reuse = revisionReuse;
+		reuse.reusedNow = false;
 		revisionInputsSlot.TakeInto(producer.inputs);
 		producer.frame = a_frame;
 		auto& buffers = SceneBufferSet::Get();
@@ -267,8 +397,10 @@ namespace DCLF
 		buffers.SetUploads(producer.inputs.uploads);
 		const auto& inputs = producer.inputs;
 		auto* host = RenderGraphRuntime::Get().Host();
-		if (!inputs.claims || !inputs.main || !inputs.main->scene || !host || !a_publication.tables)
+		if (!inputs.claims || !inputs.main || !inputs.main->scene || !host || !a_publication.tables) {
+			reuse.valid = false;
 			return;
+		}
 		const auto& tables = *a_publication.tables;
 		// The revision is its publication's alone - its tables, its lookups and the catalog they were resolved from (named explicitly:
 		// GetIndirectState, GetShadowIndirectState of it, for the generations its inputs hold) - never the frame's installed lookups and
@@ -278,10 +410,43 @@ namespace DCLF
 		const Lookups& lookups = a_publication.lookups ? *a_publication.lookups : kNoLookups;
 		const PipelineCatalog* catalog = a_publication.catalog.get();
 		EnsureRevisionLatches();
+		// The requirement pass reads the publication's tables, catalog and request, the lookups' pipeline slots, the revision inputs and
+		// a few values the frames move (RevisionReuse::Key). All of them as the last make that sealed a revision read them: this make
+		// would seal the same set and assemble the same revision, so that one is kept (its recordings stand; SnapshotPass takes it as
+		// sealed). CS_DCLF_PERSISTENT_PARITY makes it anyway and compares.
+		ImplSnapshotBuilder::RevisionReuse::Key key{ a_publication.tables, a_publication.catalog, a_publication.tablesGeneration, request, inputs.generation,
+			LookupsWitness(lookups, tables), ShadowRowsWitness(lookups, inputs.shadowPlacements, producer.recentOcclusionLayouts), VolatileWitness(inputs) };
+		const bool unchanged = reuse.valid && SameRequirements(reuse.key, key);
+		const bool parity = Diagnostics::Observe().scene;
+		if (unchanged && !parity) {
+			++reuse.kept;
+			reuse.reusedNow = true;
+			return;
+		}
+		++reuse.ran;
+		reuse.valid = false;
+		const std::uint64_t sequenceBefore = revisions.assembler.LatestSequence();
+		// The revision assembled from this make's set and shapes; once sealed, what it was made from is the key a later make compares.
+		const auto assemble = [&](bool a_shapesKept) {
+			AssembleRevision(a_frame);
+			if (revisions.assembler.LatestSequence() == sequenceBefore) {
+				if (parity && unchanged)
+					reuse.parity.Check(false, [] { return std::string("nothing sealed for an unchanged key"); });
+				return;
+			}
+			const std::uint64_t setSerial = revisions.sealed.named->Serial();
+			if (parity && unchanged)
+				reuse.parity.Check(a_shapesKept && setSerial == reuse.setSerial,
+					[&] { return fmt::format("set serial {} -> {}, shapes {}", reuse.setSerial, setSerial, a_shapesKept ? "kept" : "made again"); });
+			reuse.key = std::move(key);
+			reuse.setSerial = setSerial;
+			reuse.valid = true;
+		};
 		// What the set must hold for the tables as the publication holds them (Begin, the requirements, Seal): the shapes are made from
 		// a set that holds every one. Each participant's (Revision/Participant.h: the main segments', the shadow engine's, the views'),
 		// then their latched blocks, then every latch at its layout as the reserves left it.
 		RevisionMake make{ *this, a_publication, tables, lookups, catalog };
+		make.lookupsWitness = key.lookups;
 		auto build = buffers.Begin();
 		for (auto* participant : participants)
 			participant->RequireSequences(make, build);
@@ -293,6 +458,8 @@ namespace DCLF
 		auto seal = buffers.Seal(std::move(build));
 		if (!seal) {
 			++revisions.growthWaits;
+			if (parity && unchanged)
+				reuse.parity.Check(false, [] { return std::string("a growth for an unchanged key"); });
 			return;
 		}
 		const auto& sealed = *seal.named;
@@ -311,21 +478,29 @@ namespace DCLF
 		// make keeps the last ones. What the participants note of the make first (the shadow engine's casting bound outgrown).
 		for (auto* participant : participants)
 			participant->NoteSealed(make);
-		const auto key = RevisionShapesKey(sealed, make, request.pipelines);
-		if (key == revisionShapesKey) {
+		const auto shapesKey = RevisionShapesKey(sealed, make, request.pipelines);
+		if (shapesKey == revisionShapesKey) {
 			++shapesKept;
-			AssembleRevision(a_frame);
+			// CS_DCLF_PERSISTENT_PARITY: the shapes made anyway, against the kept ones (which stay the revision's).
+			if (parity) {
+				const MadeShapes kept = made;
+				for (auto* participant : participants)
+					participant->MakeShapes(make, sealed, mainLayout);
+				reuse.shapesParity.Check(SameMadeShapes(kept, made), [] { return std::string("a shape differs from the kept one"); });
+				made = kept;
+			}
+			assemble(true);
 			return;
 		}
-		for (std::size_t g = 0; g < key.size(); ++g)
-			shapesMadeBy[g] += key[g] != revisionShapesKey[g] ? 1 : 0;
-		revisionShapesKey = key;
+		for (std::size_t g = 0; g < shapesKey.size(); ++g)
+			shapesMadeBy[g] += shapesKey[g] != revisionShapesKey[g] ? 1 : 0;
+		revisionShapesKey = shapesKey;
 		++shapesMade;
 		for (auto* participant : participants)
 			participant->MakeShapes(make, sealed, mainLayout);
 		Diagnostics::Notify(Diagnostics::RevisionShapesMade{ sealed, mainLayout, made, inputs, tables.geometries.size() });
 		// The revision of these shapes: assembled, its changed epochs recorded for it.
-		AssembleRevision(a_frame);
+		assemble(false);
 	}
 
 	void IndirectDraws::Impl::RequireRevisionSet(RevisionMake& a_make, GrowthBuild& a_build)
@@ -544,11 +719,12 @@ namespace DCLF
 		mix(inputs.samplerHeap.index);
 		mix(inputs.samplerHeap.generation);
 		mix(inputs.toggles.cullMode);
+		// What the shapes read of them: the pipeline slots' entries (the bucket plans' set indices, the shadow key slots' count:
+		// RevisionMake::lookupsWitness) and the map rows the shadow layouts draw, not the lookups' versions and generations (a material
+		// lookup's write moves those alone).
 		group = kKeyLookups;
-		mix(lookups.instance);
-		mix(lookups.generation);
-		mix(lookups.versionCounter);
-		mix(lookups.shadowGeneration);
+		mix(a_make.lookupsWitness);
+		mix(ShadowRowsWitness(lookups, inputs.shadowPlacements, producer.recentOcclusionLayouts));
 		mix(a_pipelines);  // the request's pipeline slots (the publication's tables, not the coordinator's)
 		// Each participant's parts, in order: the main segments', the shadow engine's, the views'.
 		for (const auto* participant : participants)
