@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunViews.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
@@ -47,6 +48,21 @@ namespace DCLF::Features::Shadows::Sun
 		// The engine's AppendNonAccum (Hooks::AppendNonAccum's original), for an entry the veto gives back.
 		void (*appendNonAccum)(void*, RE::NiAVObject*, std::uint64_t, std::uint64_t) = nullptr;
 		constexpr std::size_t kDescriptorAccumulator = 0x48;  // ShadowmapDescriptor::shaderAccumulator
+		// The full-frustum cull's lists (its second argument points at their base: one BSTArray<NiPointer<NiAVObject>> of 0x18 bytes per
+		// scene list, kSceneListCount of them); the whole skip passes as many empty ones.
+		constexpr std::size_t kSceneListBytes = 0x18;
+		constexpr std::uint32_t kMaxSceneLists = 32;
+		// FUN_1414f0920's fourth argument: the light's full-frustum processes, as the BSTArray<NiPointer<BSCullingProcess>> it reads (data,
+		// then the size at +0x10). The whole skip passes one of its own, of the processes holding entries.
+		struct ProcessList
+		{
+			RE::BSCullingProcess* const* data = nullptr;
+			std::uint32_t capacity = 0;
+			std::uint32_t pad0C = 0;
+			std::uint32_t size = 0;
+			std::uint32_t pad14 = 0;
+		};
+		static_assert(sizeof(ProcessList) == 0x18 && offsetof(ProcessList, size) == 0x10);
 
 		// BSShaderAccumulator fields the sun's Accumulate sets per cascade (FUN_1414b2140 reads them).
 		constexpr std::size_t kAccumulatorLightIndex = 0x160;  // shadow-light count + 1; 0xFFFF clears masks; 0 writes none
@@ -193,6 +209,56 @@ namespace DCLF::Features::Shadows::Sun
 		vetoExclusion.store(armedExclusion.get(), std::memory_order_release);
 	}
 
+	bool SunAccumulation::ArmWhole(RE::BSShadowDirectionalLight* a_light)
+	{
+		const auto toggles = ActiveToggles();
+		if (!toggles.On(excludeToggle) || !M1Active(toggles) || !a_light)
+			return false;
+		auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
+		if (!node || node->GetRuntimeData().sunShadowDirLight != a_light)
+			return false;
+		// Every cascade view of the sun DCLF's this frame (AddCaster, before this call site, covered them) and its casters the set's: then
+		// nothing the engine's cascades would register is drawn by them. Parity frames keep the exclusion (SunCasters watches them).
+		std::uint32_t cascades = 0;
+		bool covered = ExcludeSun(Scene::FrameView::Get().GetFrame()) && Global<std::uint32_t>(Address::kSceneListCount) <= kMaxSceneLists;
+		for (const auto& view : ShadowViews::Get().All()) {
+			if (view.light != a_light || view.kind != ShadowViews::Kind::Directional || view.focus)
+				continue;
+			++cascades;
+			covered = covered && view.covered && PassCapture::Get().CastersForBatch(view.batch);
+		}
+		if (!covered || cascades < a_light->GetRuntimeData().shadowmapDescriptors.size()) {
+			++stats.wholeDeclined;
+			return false;
+		}
+		// The builder's exclusion is not needed: taken as ArmExclusion would, so the slot's hand-off stays the same.
+		previousExclusion = Local::SunExclusionSlot::Get().Take();
+		frameState.exclusion.reset();
+		armedExclusion.reset();
+		vetoStamp = stampCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+		// No registration reads the set now (the last frame's ended at its mask clear).
+		wholeCleared.NewRound();
+		frameState.stamp = vetoStamp;
+		frameState.whole = true;
+		frameState.skipExcluded = true;
+		++stats.wholeFrames;
+		return true;
+	}
+
+	void SunAccumulation::WholeApplied()
+	{
+		Diagnostics::Notify(Diagnostics::SunExclusionApplied{ true });
+		exclusionLive.store(true, std::memory_order_release);
+	}
+
+	bool SunAccumulation::ClearedThisFrame(const void* a_geometry, bool a_clears)
+	{
+		const auto found = wholeCleared.Test(a_geometry, a_clears);
+		if (found == FrameAddressSet::Found::kFull)
+			bitStats.wholeUnstamped.fetch_add(1, std::memory_order_relaxed);
+		return found == FrameAddressSet::Found::kYes;
+	}
+
 	void SunAccumulation::ExcludeEntries()
 	{
 		// The cull's jobs are done (JobList::Finish): their appends and counts are visible here.
@@ -244,6 +310,7 @@ namespace DCLF::Features::Shadows::Sun
 	{
 		bitsReady.store(false, std::memory_order_relaxed);
 		exclusionLive.store(false, std::memory_order_relaxed);
+		frameState.whole = false;
 		for (auto& cascade : frameState.cascades)
 			cascade = {};
 		frameState.cascadeCount = 0;
@@ -279,15 +346,22 @@ namespace DCLF::Features::Shadows::Sun
 		void* lightData = At<void*>(property, kPropertyLightData);
 		if (!lightData)
 			return;
-		const std::uint32_t index = RemovedGeometryIndex(a_geometry);
-		if (index == ~0u)
-			return;
 		const auto& state = frameState;
-		auto& cleared = state.exclusion->cleared[index];
-		if (cleared.load(std::memory_order_relaxed) == state.stamp)
-			return;
-		if (a_clears)
-			cleared.store(state.stamp, std::memory_order_relaxed);
+		// The whole skip: every geometry the main camera registers (none was culled into a cascade), once a frame until its clearing one.
+		const bool whole = state.whole;
+		if (whole) {
+			if (ClearedThisFrame(a_geometry, a_clears))
+				return;
+		} else {
+			const std::uint32_t index = RemovedGeometryIndex(a_geometry);
+			if (index == ~0u)
+				return;
+			auto& cleared = state.exclusion->cleared[index];
+			if (cleared.load(std::memory_order_relaxed) == state.stamp)
+				return;
+			if (a_clears)
+				cleared.store(state.stamp, std::memory_order_relaxed);
+		}
 		const auto& bound = a_geometry->worldBound;
 		std::uint32_t bits = 0;
 		for (std::uint32_t c = 0; c < state.cascadeCount && c < state.cascades.size(); ++c) {
@@ -298,9 +372,9 @@ namespace DCLF::Features::Shadows::Sun
 		}
 		auto& mask = At<std::uint32_t>(lightData, kLightDataActiveMask);
 		mask |= bits;
-		bitStats.written.fetch_add(1, std::memory_order_relaxed);
+		(whole ? bitStats.wholeWritten : bitStats.written).fetch_add(1, std::memory_order_relaxed);
 		if (bits)
-			bitStats.withBits.fetch_add(1, std::memory_order_relaxed);
+			(whole ? bitStats.wholeWithBits : bitStats.withBits).fetch_add(1, std::memory_order_relaxed);
 	}
 
 	struct SunAccumulation::Hooks
@@ -471,7 +545,27 @@ namespace DCLF::Features::Shadows::Sun
 				auto& self = SunAccumulation::Get();
 				self.ResetFrameSun();
 				self.fullFrustumRan = true;
-				self.ArmExclusion(static_cast<RE::BSShadowDirectionalLight*>(a_light));
+				auto* light = static_cast<RE::BSShadowDirectionalLight*>(a_light);
+				if (self.ArmWhole(light)) {
+					// The engine's cull with no scene list in it (each empty): its processes' setup and its closing cull (the extra list) as the
+					// engine does them, nothing appended. With the list culls' job list null for the call, their empty culls run inline (the
+					// engine's own path without one): no jobs queued, and no wait behind the job threads' other work. Only the render thread
+					// reads the job list while the game runs (Main::Draw, CalculateAndDrawShadowCasterLights, this cull; then shutdown).
+					static const std::array<std::uint8_t, kSceneListBytes * kMaxSceneLists> emptyLists{};
+					auto lists = reinterpret_cast<std::uintptr_t>(emptyLists.data());
+					auto& jobs = Global<void*>(Address::kListCullJobs);
+					void* const held = jobs;
+					const std::int64_t start = Now();
+					jobs = nullptr;
+					func(a_light, &lists, a_arg);
+					jobs = held;
+					self.WholeApplied();
+					const std::int64_t ticks = Now() - start;
+					self.stats.fullFrustumTicks += ticks;
+					self.stats.fullFrustumMax = std::max(self.stats.fullFrustumMax, ticks);
+					return;
+				}
+				self.ArmExclusion(light);
 				const std::int64_t start = Now();
 				func(a_light, a_lists, a_arg);
 				const std::int64_t ticks = Now() - start;
@@ -547,7 +641,26 @@ namespace DCLF::Features::Shadows::Sun
 						cascade.bit = At<std::uint32_t>(accumulator, kAccumulatorLightBit);
 					}
 				}
-				func(a_light, a_descriptor, a_count, a_processes, a_arg);
+				// The whole skip: the scene lists were culled into nothing, so only the processes holding the closing cull's entries (the extra
+				// list's) are culled into the cascade; an empty one would cost a cull's set-up and a registration under the context's lock
+				// (FUN_140e28af0) for nothing.
+				if (call && self.frameState.whole && a_processes) {
+					std::array<RE::BSCullingProcess*, kMaxSceneLists> held{};
+					ProcessList kept{ held.data() };
+					std::uint32_t left = 0;
+					for (auto& process : *static_cast<RE::BSTArray<RE::NiPointer<RE::BSCullingProcess>>*>(a_processes)) {
+						if (process && !process->objectArray.empty() && kept.size < held.size())
+							held[kept.size++] = process.get();
+						else
+							++left;
+					}
+					kept.capacity = kept.size;
+					self.stats.wholeProcessesCulled += kept.size;
+					self.stats.wholeProcessesLeft += left;
+					func(a_light, a_descriptor, a_count, &kept, a_arg);
+				} else {
+					func(a_light, a_descriptor, a_count, a_processes, a_arg);
+				}
 				if (call)
 					call->cascade = -1;
 			}
@@ -649,6 +762,9 @@ namespace DCLF::Features::Shadows::Sun
 		c.withBits = take(bitStats.withBits);
 		c.notReady = take(bitStats.notReady);
 		c.skipped = take(skipStats.skipped);
+		c.wholeWritten = take(bitStats.wholeWritten);
+		c.wholeWithBits = take(bitStats.wholeWithBits);
+		c.wholeUnstamped = take(bitStats.wholeUnstamped);
 		return c;
 	}
 }

@@ -148,7 +148,8 @@ namespace DCLF::Diagnostics
 	/**
 	 * @brief LocalLightCull::NoteMainRegistration on a frame the culls keep whole (any registration thread): a geometry's main
 	 * registration with the bits DCLF would give it (`entry`: its excluded entry, ~0u none; `reach`: the lights by reach kind) and the
-	 * point lights' bits the engine's culls left in its mask (`engine`).
+	 * point lights' bits the engine's culls left in its mask (`engine`); `first`: the geometry's first clearing main registration of the
+	 * frame, when `sphere` holds the bits an empty cull of every light would give it.
 	 */
 	struct PointLightBits
 	{
@@ -157,6 +158,8 @@ namespace DCLF::Diagnostics
 		std::uint32_t bits;
 		const std::array<std::uint32_t, 3>& reach;
 		std::uint32_t engine;
+		bool first;
+		std::uint32_t sphere;
 	};
 
 	// The shadow lights' views (render thread).

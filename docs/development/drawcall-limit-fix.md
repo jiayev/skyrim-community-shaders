@@ -7315,6 +7315,66 @@ cache held the last reference, the database kept a pointer to freed memory, and 
 it called into it. The cache now holds its references through `SceneStore::MaterialReference`, which releases through
 the engine's manager (AE only; the cache is off on SE and VR).
 
+## The sun with no engine cull (whole skip, 2026-10-17)
+
+At uGrids 21 (Whiterun, camera turning) the exclusion's residue still cost the render thread about 3.4 ms a frame (the
+full-frustum cull 1.7 ms, max 9.5, mostly waiting on the scene-list jobs behind the animated-node jobs; `Accumulate`
+1.7 ms, max 6.1) for 0.3 engine passes kept a frame in the cascades (the census): casters joining the set for a commit
+or two, and two signs DCLF does not track. The residue was ~1,200 mixed entries, 258 rejected ones and ~60 actors.
+
+**The rule** (the occlusion maps' joining rule, "Precipitation's mask"): while DCLF draws every sun cascade, the engine
+culls nothing for the sun. A caster not yet a member casts no sun shadow until it joins.
+
+-   **When** (`SunAccumulation::ArmWhole`, at the full-frustum call site): the exclusion's toggle and M1 on, every cascade
+    view of the sun (`ShadowViews`, which `AddCaster` filled before this call site: `FUN_1414a3fb0` precedes the cull)
+    covered and its casters the frame's set's (`CastersForBatch`), and not a parity frame (those keep the exclusion, for
+    the `SunCasters` watch). Otherwise the exclusion as before.
+-   **The cull** runs with every scene list empty (an array of empty `BSTArray`s in place of `&DAT_14338c870`'s base): the
+    processes' setup and the closing extra-list cull stay the engine's, and nothing is appended. The scene-list cull job
+    list (`_gJobList_SceneListAccumCulling`, `0x14338c630`) is null for the call, so the empty list culls run inline (the
+    engine's own path without one): no jobs, and no `JobList::Finish` behind the job threads' animation work (the
+    telemetry's `BSShadowDirectionalLight::UpdateShadowMap`, ID 108492, is this function). Only the render thread reads that
+    global while the game runs.
+-   **`Accumulate`** keeps its bookkeeping (the cascades' accumulator fields, the shadow-light count later lights' bits are
+    offset by). Each cascade's `FUN_1414f0920` gets a process list of DCLF's holding only the full-frustum processes with
+    entries (the extra list's), so an empty one costs no cull set-up and no registration (`FUN_140e28af0` takes the
+    accumulation context's lock, which the main camera's list jobs hold while `CalculateActiveShadowCasterLights` runs
+    beside them). No placeholder entry is needed.
+-   **The bits:** every geometry the main camera registers takes DCLF's cascade bits (the same cascade volumes, from the
+    Sun board), once a frame until its first clearing registration. The once-a-frame rule is a `FrameAddressSet`
+    (`Core/Engine`, a lock-free set of addresses with a round a frame), as candidate geometries no longer carry the
+    exclusion's index.
+-   **Report:** `[DCLF] sun whole skip`: frames applied and declined, the processes culled into the cascades and left
+    out, main registrations given DCLF's bits, and any the set had no slot for (must be 0).
+
+### The point lights with no engine cull (empty culls)
+
+The same rule for each point light (`LocalLightCull::CullEmpty`, in its `Accumulate` thunk). Their culls were ~4.8 ms a
+frame of the render thread at uGrids 21 in Whiterun (2.9 lights, ~41k entries visited a frame with the exclusion and
+category filter), while the census showed no engine pass kept in any paraboloid view. Telemetry names the walk
+`BSFaceGenNiNode::OnVisible`, which is `NiNode::OnVisible` (`0x140d1e2c0`, every NiNode's slot 0x34; the faces' node
+does not override it).
+
+-   **What the cull serves** (Ghidra): the paraboloid registrations, all withheld while the light's views are DCLF's,
+    and the point lights' bits in the main passes' `activeLightMask` (`FUN_1414b2140` ORs the light's bit into every
+    geometry it reaches). The process runs with `cameraRelatedUpdates` off (descriptor `+0x60`, written 0), so
+    `BSFadeNode` and `BSLeafAnimNode::OnVisible` do no fade or LOD work; `updateAccumulateFlag` (`+0x62`) is left at the
+    constructor's default.
+-   **When:** the exclusion live, not a parity frame, the light within the mask's 32, every view of it covered with its
+    casters the set's, and the light not portal-strict (its cull also tests the portals' compound frustum, which the
+    sphere test below does not). Otherwise it is culled as before (exclusion and category filter).
+-   **The bookkeeping** as `BSShadowParabolicLight::Accumulate` (`0x14151b960`) does it: the first accumulator's light
+    index (`+0x160`, the count + 1) and bit (`+0x164`), and the count + 1 (or 2 with two maps). No cull, and no
+    registration under the accumulation context's lock.
+-   **The bits:** at every geometry's first clearing main registration of the frame (a second `FrameAddressSet`), the
+    bit of each empty-culled light whose sphere its bound is in. The sphere is the one the cull would test
+    (`FUN_141519d20`: the first view's camera position and the light's radius), known before the cull.
+-   **Parity frames** cull as before and compare: the predicted sphere with the one the cull captured
+    (`<- SPHERES`), and, at each geometry's first clearing main registration, the bits every light's sphere gives with
+    the engine's (`<- EMPTY CULL BITS` for an engine bit the spheres do not give; DCLF-only bits are counted, such as a
+    geometry in a light's sphere that its cull did not reach).
+-   **Report:** `[DCLF] point lights' empty culls`.
+
 ## Skylighting's occlusion map, drawn by DCLF
 
 Community Shaders' Skylighting renders a sky occlusion height map every exterior frame, through the engine's
