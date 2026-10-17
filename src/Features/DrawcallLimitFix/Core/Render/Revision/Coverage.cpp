@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
 {
@@ -191,6 +192,8 @@ namespace DCLF
 			}
 		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
 			rv.uncovered[e] += rv.covered[e] ? 0 : 1;
+		Diagnostics::Notify(Diagnostics::EpochCoverageDecided{ Scene::FrameView::Get().GetFrame(), std::span<const bool>(rv.covered.data(), EpochCount()),
+			adoptedSnapshot ? adoptedSnapshot->serial : 0, adoptedSnapshot && adoptedSnapshot->drawsComplete, snapshotStale, payload, versions != nullptr, current });
 	}
 
 	void IndirectDraws::Impl::DecideViewCoverage(ViewKind a_kind, org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame)

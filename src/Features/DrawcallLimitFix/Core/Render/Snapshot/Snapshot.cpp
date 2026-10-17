@@ -726,6 +726,10 @@ namespace DCLF
 		}
 		s.snapshotStale = false;
 		++s.snapshotsAdopted;
+		if (Diagnostics::Armed<Diagnostics::SnapshotAdopted>()) {
+			const std::uint32_t frameNow = Scene::FrameView::Get().GetFrame();
+			Diagnostics::Notify(Diagnostics::SnapshotAdopted{ frameNow, snapshot->serial, versions.get(), snapshot->payload.get(), s.growthAdoptedFrame == frameNow });
+		}
 		if (const auto& publication = snapshot->publication) {
 			const std::uint32_t frameNow = Scene::FrameView::Get().GetFrame();
 			s.adoptionLatency.push_back(frameNow >= publication->commitFrame ? frameNow - publication->commitFrame : 0u);
@@ -763,6 +767,8 @@ namespace DCLF
 		if (!impl)
 			return;
 		const std::uint64_t point = SubmittedRetirementPoint();
+		if (Diagnostics::Armed<Diagnostics::AdoptedBound>())
+			Diagnostics::Notify(Diagnostics::AdoptedBound{ Scene::FrameView::Get().GetFrame(), point, FrameRetirement()->Completed() });
 		if (impl->adoptedSet)
 			impl->adoptedSet->Bind(point);
 		if (impl->installedPayload)

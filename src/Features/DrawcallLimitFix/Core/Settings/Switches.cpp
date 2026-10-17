@@ -118,6 +118,8 @@ namespace DCLF
 			{ ReleaseGuard, "CS_DCLF_RELEASE_GUARD", D, N, false,
 				"1: the engine objects' last releases on DCLF's threads (the scene lane, the pool) counted and named by class (NiRefObject::DeleteThis patched; T6b3e)" },
 			{ ScheduleDump, "CS_DCLF_SCHEDULE_DUMP", D, N, false, "1: each epoch's passes as gathered, logged whenever a list changes (tools/dclf-schedule-diff.py)" },
+			{ FrameTrace, "CS_DCLF_FRAME_TRACE", D, N, false,
+				"1: every frame's adoption, epoch coverage, main epoch outcomes, colour culling counts and retirement point, and F10 as a marker, for finding corrupt frames (tools/dclf-corrupt-frames.py)" },
 
 			{ TestCommands, "CS_DCLF_TEST_COMMANDS", T, N, false, "<frame>:<console command>;...: console commands at given frames" },
 			{ TestMove, "CS_DCLF_TEST_MOVE", T, N, false, "<start>:<end>:<units per frame>;...: carries the player forward" },

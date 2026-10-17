@@ -64,6 +64,7 @@ namespace DCLF
 		ShadowDebugOutput,
 		ReleaseGuard,
 		ScheduleDump,
+		FrameTrace,
 
 		// Test harness: scripted input for unattended runs.
 		TestCommands,

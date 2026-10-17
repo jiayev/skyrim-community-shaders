@@ -146,7 +146,14 @@ namespace DCLF
 		const auto start = std::chrono::steady_clock::now();
 		const bool depthOnly = a_depthOnly;
 		const std::size_t jobIndex = depthOnly ? kAsyncZPrepass : kAsyncColour;
+		// The epoch's outcome, every frame (Diagnostics' MainEpochOutcome): why it was not submitted, or how its execution went.
+		const auto outcome = [&](const char* a_outcome, bool a_executed = false) {
+			if (Diagnostics::Armed<Diagnostics::MainEpochOutcome>())
+				Diagnostics::Notify(Diagnostics::MainEpochOutcome{ Scene::FrameView::Get().GetFrame(), a_outcome, impl->InstalledPayload(),
+					impl->adoptedSnapshot ? impl->adoptedSnapshot->serial : 0, depthOnly, a_executed, Scene::FrameView::Get().SetWithdrawn() });
+		};
 		if (!impl->pending) {
+			outcome("no capture, not submitted");
 			return;
 		}
 		auto capture = std::move(*impl->pending);
@@ -154,6 +161,7 @@ namespace DCLF
 		auto& pipelines = DrawPipelines::Get();
 		auto* lighting = EngineShaders::Lighting();
 		if (failed || !lighting || !pipelines.Enabled() || !FrameIndirectState().valid) {
+			outcome("failed, no lighting, pipelines off or indirect state invalid, not submitted");
 			capture.Release();
 			return;
 		}
@@ -173,6 +181,7 @@ namespace DCLF
 			failed = true;
 		}
 		if (!ready) {
+			outcome("Setup not ready, not submitted");
 			capture.Release();
 			++stats.notReady;
 			return;
@@ -222,6 +231,7 @@ namespace DCLF
 		}
 		// A frame without claims (Coordinator::WithdrawSet: no revision covers it) has nothing of DCLF's to draw, and is not submitted.
 		if (Scene::FrameView::Get().SetWithdrawn()) {
+			outcome("withdrawn, not submitted");
 			capture.Release();
 			return;
 		}
@@ -236,6 +246,7 @@ namespace DCLF
 			if (revision && resources == resourcesBefore && impl->unbuilt[jobIndex]++ == 0)
 				logger::warn("[DCLF] the {} epoch of frame {} has no payload for its resources in the installed publication: not submitted <- UNBUILT",
 					depthOnly ? "Z-prepass" : "colour", Scene::FrameView::Get().GetFrame());
+			outcome(!revision ? "no revision, not submitted" : !ahead ? "no installed payload, not submitted" : "payload for other resources, not submitted");
 			capture.Release();
 			return;
 		}
@@ -245,6 +256,7 @@ namespace DCLF
 
 		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
 		if (!cleanup) {
+			outcome("no cleanup lane, not submitted");
 			capture.Release();
 			++stats.notReady;
 			return;
@@ -271,6 +283,7 @@ namespace DCLF
 		impl->committedFrame[jobIndex] = Scene::FrameView::Get().GetFrame();
 		capture.Release();
 		++stats.epochs;
+		outcome(!ok ? "FAILED" : committed ? "submitted" : "NOT COMMITTED", true);
 		if (!committed) {
 			stats.cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 			return;

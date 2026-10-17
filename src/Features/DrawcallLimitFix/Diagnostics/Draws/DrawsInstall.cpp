@@ -73,6 +73,13 @@ namespace DCLF::Diagnostics
 		}
 		if (!o.targetProbe.empty())
 			Subscribe<MainCullViewProj>(&ProbeTarget);
+		// The frame trace, the corrupt-frame tool (its colour counts are NoteCullLatch's, above).
+		if (o.frameTrace) {
+			Subscribe<SnapshotAdopted>(&TraceSnapshotAdopted);
+			Subscribe<EpochCoverageDecided>(&TraceEpochCoverage);
+			Subscribe<MainEpochOutcome>(&TraceMainEpoch);
+			Subscribe<AdoptedBound>(&TraceAdoptedBound);
+		}
 		// The frame values' rows and palettes against the engine's now.
 		if (o.scene)
 			Subscribe<FramePoint::ShadowViewsBegin>([](const On<FramePoint::ShadowViewsBegin>&) {
