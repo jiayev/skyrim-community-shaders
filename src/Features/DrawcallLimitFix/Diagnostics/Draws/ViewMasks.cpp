@@ -53,7 +53,7 @@ namespace DCLF::Diagnostics
 					++differ;
 				}
 			}
-			for (const auto& input : payload->inputList)
+			for (const auto& input : payload->body->inputList)
 				checkMain(input);
 		}
 		// The shadow list: an input's mask is the views of the modes that hold it (ModeViewBits), never outside its object's phases,

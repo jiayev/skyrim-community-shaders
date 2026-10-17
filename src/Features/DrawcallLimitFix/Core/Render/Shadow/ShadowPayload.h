@@ -102,6 +102,13 @@ namespace DCLF::Draws
 		// Per mode, the build version at which an object last joined or left its inputs (ShadowKept::Mode::membership);
 		// 0 without the kept state.
 		std::array<std::uint64_t, kShadowModeCount> membership{};
+		// Per mode, the objects that joined and left its region inputs (ShadowKept::heldModes) in this kept build (keptBuild, the
+		// ShadowKept::build it was): what the exclusions' inputs follow (BuildSunExclusion) instead of reading the region again. A mode
+		// the build retook whole (a resync, its view states changed) has movesValid false: its inputs are read whole. 0 and empty
+		// without the kept state.
+		std::uint64_t keptBuild = 0;
+		std::array<std::vector<std::uint32_t>, kShadowModeCount> joined, left;
+		std::array<bool, kShadowModeCount> movesValid{};
 		// The scene list: the main payloads' tail (their frame's own inputs) sits between the region and this one's, all one
 		// buffer; the shadow views scan all of it (their bits select their own).
 		std::size_t mainTail = 0;
@@ -137,7 +144,9 @@ namespace DCLF::Draws
 			return out;
 		}
 		GeometryDrawsOut geometries;
-		std::vector<Api::VertexStreamRow> streamRows;  // the tables' vertex stream rows, for the commit's uploads
+		// The tables' vertex stream rows, for the commit's uploads: the publication's tables', which the draws holding the payload hold
+		// (DrawPublication::tables), as the main payload's.
+		std::span<const Api::VertexStreamRow> streamRows;
 		std::uint32_t skippedTexture = 0, skippedPipeline = 0, deferredTextures = 0, deferredPipelines = 0;
 		// Set members a mode could not draw (waiting on a pipeline or a texture): a defect, the engine having withheld them.
 		std::uint32_t setWaiting = 0;
@@ -171,9 +180,15 @@ namespace DCLF::Draws
 			modeBits = {};
 			modeInputs = {};
 			membership = {};
+			keptBuild = 0;
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+				joined[m].clear();
+				left[m].clear();
+			}
+			movesValid = {};
 			geometries.Reset();
 			streams.reset();
-			streamRows.clear();
+			streamRows = {};
 			skippedTexture = skippedPipeline = deferredTextures = deferredPipelines = 0;
 		}
 	};

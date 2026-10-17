@@ -63,8 +63,111 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief A reader's place in an EventLog, and the tables generation it read from. It continues only in the same
-	 * generation and while its position is readable; otherwise the reader rebuilds from the tables and restarts.
+	 * @brief An EventLog whose entries sit in fixed chunks its copies share (the tables' logs, which every published snapshot holds):
+	 * copying one, bringing a copy up to another (assigning) and trimming cost O(chunks), not O(entries). The entries a copy holds never
+	 * change: only the copy at a chunk's end appends to it in place (its fill, claimed atomically); another copy appending there takes
+	 * its own copy of the chunk first. From gives a range (LogRange) for range-for, not a span.
+	 */
+	template <class E>
+	struct SharedEventLog
+	{
+		static_assert(std::is_trivially_copyable_v<E>);
+		static constexpr std::size_t kChunk = 4096;
+		struct Chunk
+		{
+			std::array<E, kChunk> entries;
+			std::atomic<std::uint32_t> filled{ 0 };  // the entries appended: a copy whose end reaches it appends in place
+		};
+		/** @brief Entries [first, first + count) across the chunks (indices from the first chunk's start). */
+		struct LogRange
+		{
+			const std::shared_ptr<Chunk>* chunks = nullptr;
+			std::size_t first = 0, count = 0;
+
+			struct iterator
+			{
+				const std::shared_ptr<Chunk>* chunks = nullptr;
+				std::size_t at = 0;
+				const E& operator*() const { return chunks[at / kChunk]->entries[at % kChunk]; }
+				iterator& operator++()
+				{
+					++at;
+					return *this;
+				}
+				bool operator==(const iterator& a_other) const { return at == a_other.at; }
+			};
+			iterator begin() const { return { chunks, first }; }
+			iterator end() const { return { chunks, first + count }; }
+			std::size_t size() const { return count; }
+			bool empty() const { return count == 0; }
+		};
+
+		std::vector<std::shared_ptr<Chunk>> chunks;
+		std::uint64_t base = 0;
+		std::size_t head = 0;   // the base entry's index in the first chunk
+		std::size_t count = 0;
+
+		std::uint64_t End() const { return base + count; }
+		std::size_t Size() const { return count; }
+		void Push(const E& a_entry)
+		{
+			const std::size_t at = head + count;
+			const std::size_t c = at / kChunk, slot = at % kChunk;
+			if (c == chunks.size()) {
+				chunks.push_back(std::make_shared<Chunk>());
+				chunks.back()->filled.store(1, std::memory_order_relaxed);
+			} else if (auto expected = static_cast<std::uint32_t>(slot);
+					   !chunks[c]->filled.compare_exchange_strong(expected, static_cast<std::uint32_t>(slot + 1), std::memory_order_relaxed)) {
+				// Another copy appended past this one's end here: this one's own chunk, with its entries.
+				auto own = std::make_shared<Chunk>();
+				std::copy_n(chunks[c]->entries.begin(), slot, own->entries.begin());
+				own->filled.store(static_cast<std::uint32_t>(slot + 1), std::memory_order_relaxed);
+				chunks[c] = std::move(own);
+			}
+			chunks[c]->entries[slot] = a_entry;
+			++count;
+		}
+		bool Readable(std::uint64_t a_position) const { return a_position >= base && a_position <= End(); }
+		LogRange From(std::uint64_t a_position) const
+		{
+			const auto skip = static_cast<std::size_t>(a_position - base);
+			return { chunks.data(), head + skip, count - skip };
+		}
+		void Invalidate()
+		{
+			base += count + 1;
+			chunks.clear();
+			head = 0;
+			count = 0;
+		}
+		/** @brief Drops the older half once the log holds more than a_max entries: whole chunks let go (a copy holding them keeps them). */
+		void Trim(std::size_t a_max)
+		{
+			if (count <= a_max)
+				return;
+			const std::size_t half = count / 2;
+			const std::size_t at = head + half;
+			chunks.erase(chunks.begin(), chunks.begin() + static_cast<std::ptrdiff_t>(at / kChunk));
+			head = at % kChunk;
+			base += half;
+			count -= half;
+		}
+		/** @brief The same base and entries (the replay parity's). */
+		bool operator==(const SharedEventLog& a_other) const
+		{
+			if (base != a_other.base || count != a_other.count)
+				return false;
+			auto left = From(base), right = a_other.From(base);
+			for (auto l = left.begin(), r = right.begin(); l != left.end(); ++l, ++r)
+				if (std::memcmp(&*l, &*r, sizeof(E)) != 0)
+					return false;
+			return true;
+		}
+	};
+
+	/**
+	 * @brief A reader's place in an EventLog (or a SharedEventLog), and the tables generation it read from. It continues only in the
+	 * same generation and while its position is readable; otherwise the reader rebuilds from the tables and restarts.
 	 */
 	struct LogCursor
 	{
@@ -72,8 +175,8 @@ namespace DCLF
 		std::uint32_t generation = 0;
 		std::uint64_t position = 0;
 
-		template <class E>
-		bool Continues(const EventLog<E>& a_log, std::uint32_t a_generation) const
+		template <class Log>
+		bool Continues(const Log& a_log, std::uint32_t a_generation) const
 		{
 			return active && generation == a_generation && a_log.Readable(position);
 		}
@@ -82,13 +185,14 @@ namespace DCLF
 			active = true;
 			generation = a_generation;
 		}
-		template <class E>
-		std::span<const E> Unread(const EventLog<E>& a_log) const
+		template <class Log>
+		auto Unread(const Log& a_log) const
 		{
-			return a_log.Readable(position) ? a_log.From(position) : std::span<const E>{};
+			using Range = decltype(a_log.From(position));
+			return a_log.Readable(position) ? a_log.From(position) : Range{};
 		}
-		template <class E>
-		void Advance(const EventLog<E>& a_log)
+		template <class Log>
+		void Advance(const Log& a_log)
 		{
 			position = a_log.End();
 		}

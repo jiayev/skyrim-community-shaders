@@ -22,6 +22,10 @@ namespace DCLF
 			build.membership = a_payload.kept ? a_payload.membership[a_mode] : 0;
 			build.frameNumber = a_payload.inputs.frameNumber;
 			build.tablesGeneration = a_payload.inputs.tablesGeneration;
+			build.keptBuild = a_payload.keptBuild;
+			build.movesValid = a_payload.movesValid[a_mode];
+			build.joined = a_payload.joined[a_mode];
+			build.left = a_payload.left[a_mode];
 			Extensions::BuildShadowExclusion(build);
 			return std::move(build.result);
 		}
@@ -265,19 +269,16 @@ namespace DCLF
 		}
 	}
 
-	void ShadowEngine::BuildPayload(const AheadBuild& a_build)
+	void ShadowEngine::BuildPayloadShared(const AheadBuild& a_build)
 	{
 		const auto& c = a_build.context;
 		if (!c.shadow || !c.shadowTarget || !c.shadowTarget->scene)
 			return;
-		// As RunAhead's: the journals' oldest content epochs, the stages' times.
+		// As RunAhead's: the journals' oldest content epochs, the stage's time.
 		const auto oldest = [&a_build](PayloadPart a_part) { return a_build.payloads.OldestContentEpoch(a_part).value_or(~std::uint64_t{ 0 }); };
-		auto& pairStats = a_build.stats;
-		const auto msSince = [](std::chrono::steady_clock::time_point a_start) {
-			return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a_start).count();
-		};
-		const auto& tables = a_build.tables;
-		ShadowInputs in = c.shadowInputs;
+		auto& a = aheadShadow;
+		auto& in = a.in;
+		in = c.shadowInputs;
 		in.frameNumber = a_build.frame;
 		in.tablesGeneration = a_build.generation;
 		in.lookupGeneration = a_build.lookups.shadowGeneration;
@@ -287,10 +288,39 @@ namespace DCLF
 		// What the shadow journals keep changes back to.
 		in.materialRowsOldestContentEpoch = oldest(PayloadPart::ShadowRows);
 		in.inputsOldestContentEpoch = oldest(PayloadPart::Inputs);  // the scene list's region
-		auto payload = AcquireShadowPayload();
+		a.payload = AcquireShadowPayload();
+		a.sharedRegion = Policy::ReuseResidentRegion();
+		a.publication = &a_build.out;
+		a.frame = a_build.frame;
 		const auto shadowStart = std::chrono::steady_clock::now();
-		BuildShadowPayload(in, tables, a_build.lookups, *payload, a_build.out.streams, ShadowKeptState(), Policy::ReuseResidentRegion() ? &a_build.mainRegion : nullptr);
-		pairStats.shadowMs += msSince(shadowStart);
+		BuildShadowPayloadShared(in, a_build.tables, a_build.lookups, *a.payload, a_build.out.streams, ShadowKeptState(), a.sharedRegion, a.split);
+		a_build.stats.shadowMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - shadowStart).count();
+	}
+
+	void ShadowEngine::BuildPayload(const AheadBuild& a_build)
+	{
+		const auto& c = a_build.context;
+		if (!c.shadow || !c.shadowTarget || !c.shadowTarget->scene)
+			return;
+		auto& pairStats = a_build.stats;
+		const auto msSince = [](std::chrono::steady_clock::time_point a_start) {
+			return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a_start).count();
+		};
+		const auto& tables = a_build.tables;
+		auto& a = aheadShadow;
+		{
+			ZoneScopedN("CS.DCLF.BuildShadowPayload");
+			// The shared half, unless RunAhead ran it for this build (BuildPayloadShared); then the region half, into the main build's
+			// region as it left it.
+			if (!a.split.pending || a.publication != &a_build.out || a.frame != a_build.frame)
+				BuildPayloadShared(a_build);
+			const auto shadowStart = std::chrono::steady_clock::now();
+			BuildShadowPayloadRegion(a.in, tables, a_build.lookups, *a.payload, ShadowKeptState(), a.sharedRegion ? &a_build.mainRegion : nullptr, a.split);
+			pairStats.shadowMs += msSince(shadowStart);
+		}
+		a.publication = nullptr;
+		const auto& in = a.in;
+		auto payload = std::move(a.payload);
 		// The publication holds the views; the payload, which the epochs may hold past it, does not.
 		payload->streams.reset();
 		if (PassCapture::ShadowWithholdingEnabled()) {

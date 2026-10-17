@@ -126,7 +126,7 @@ namespace DCLF
 		if (!listed)
 			return ViewInputsTaken::Stale;
 		// The main part of the scene list: its region and the main frame inputs (the shadow frame inputs after them are no main input).
-		a_listed.inputs = static_cast<std::uint32_t>(listed->resident.Count() + listed->inputList.size());
+		a_listed.inputs = static_cast<std::uint32_t>(listed->resident.Count() + listed->body->inputList.size());
 		// The view's target: a DepthThisFrame view's imported before (its frame start); a DepthThisFrameTargetAfter view's work imports it
 		// after taking its inputs.
 		const auto& resources = impl->View(a_view).resources;
@@ -176,7 +176,7 @@ namespace DCLF
 			auto owners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 			for (const auto* payload : a_payloads)
 				if (payload)
-					owners->insert(owners->end(), payload->bindingOwners.begin(), payload->bindingOwners.end());
+					owners->insert(owners->end(), payload->body->bindingOwners.begin(), payload->body->bindingOwners.end());
 			if (a_snapshot)
 				owners->push_back(a_snapshot);
 			return owners;

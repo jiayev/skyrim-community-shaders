@@ -91,8 +91,9 @@ namespace DCLF
 		/**
 		 * @brief The builder: the payload of its draws (PayloadBuilder::Publish), kept when the draws are (a snapshot made again for
 		 * them uploads nothing); its uploads' completion wakes the builder. Published only for a snapshot the frame will adopt: none
-		 * while the last snapshot posted is still in the slot, nor before the scene pass of the frame that took it has ended (a
-		 * publication of that pass replaces these draws first); the frame's take and the pass's end wake the builder.
+		 * while the last snapshot posted is still in the slot, nor before the scene pass of the frame that took it has ended (a build
+		 * starts only while that gate is open, ImplSnapshotBuilder::WorkToBuild, so only draws made again for a posted snapshot wait
+		 * here); the frame's take and the pass's end wake the builder.
 		 */
 		void PublishPayload();
 		/** @brief The builder: its draws have something to draw, so their snapshot needs a payload (PublishPayload). */

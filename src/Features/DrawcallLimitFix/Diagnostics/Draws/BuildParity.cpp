@@ -20,9 +20,9 @@ namespace DCLF::Diagnostics
 		auto& parity = state.parity;
 		auto& parityEpochs = state.parityEpochs;
 		using ParityReadback = DrawsState::ParityReadback;
-		const auto& sequences = a_payload.sequences;
-		const auto& decalTemplates = a_payload.decalTemplates;
-		const auto& inputs = a_payload.inputList;
+		const auto& sequences = a_payload.body->sequences;
+		const auto& decalTemplates = a_payload.body->decalTemplates;
+		const auto& inputs = a_payload.body->inputList;
 		auto* context = globals::d3d::context;
 		// Every main epoch's payload, while the check is on (by the colour epochs counted): where a row outside its epoch's tables came from.
 		if (const auto* seen = a_epoch.payloadVersions; seen && seen->main) {

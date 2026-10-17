@@ -296,6 +296,10 @@ namespace DCLF::Draws
 				if (o < k.heldModes.size() && k.Holds(m, o) != a_held) {
 					k.heldModes[o] ^= static_cast<std::uint8_t>(1u << m);
 					k.modes[m].membership = build;
+					// The exclusions' moves (ShadowPayload::joined, left) while the mode is not retaken whole: an object flips at most once
+					// a build there (Evaluate reads nothing the modes write).
+					if (out.movesValid[m])
+						(a_held ? out.joined[m] : out.left[m]).push_back(o);
 				}
 				Touch(o);
 			}
@@ -374,40 +378,23 @@ namespace DCLF::Draws
 		};
 
 		/**
-		 * @brief The kept build's start: the journals begun, and on a resync (log trimmed, identity or scene buffers moved) the shadow
-		 * words cleared and ShadowKept emptied. Returns whether it resynced.
+		 * @brief The kept build's start: the journals begun (the main build's region's at BeginRegion), and on a resync (log trimmed,
+		 * identity or scene buffers moved) ShadowKept emptied (the shadow words are cleared at BeginRegion). a_sharedRegion: the shadow
+		 * words are the main build's region's. Returns whether it resynced.
 		 */
-		bool BeginKeptBuild(KeptShadowBuild& b)
+		bool BeginKeptBuild(KeptShadowBuild& b, bool a_sharedRegion)
 		{
 			const auto& in = b.in;
 			auto& k = b.k;
 			// The journal keeps what the oldest payload backing lacks; each backing is sent the rows changed since its content epoch.
 			k.rows.BeginBuild(in.materialRowsOldestContentEpoch);
 			// Shadow words in the main build's region, or a region of its own (Policy::ReuseResidentRegion off).
-			if (b.scene)
-				b.scene->Begin(in.inputsOldestContentEpoch);
-			else
+			if (!a_sharedRegion)
 				k.scene.inputs.BeginBuild(in.inputsOldestContentEpoch);
 			// Scene buffer growth (ObjectFits moved) also rereads every object.
 			const bool resync = !k.cursor.Continues(b.tables.changeLog, in.tablesGeneration) || k.identity != in.addresses.identity ||
 			                    k.objectRecord.size() > b.objects || k.fit != in.addresses.fit;
 			if (resync) {
-				// Clear its words from the scene list; every held object is retaken below.
-				if (b.scene) {
-					auto& r = *b.scene;
-					for (std::uint32_t i = static_cast<std::uint32_t>(r.sideOf.size()); i-- > 0;) {
-						if (!(r.sideOf[i] & kSideShadow))
-							continue;
-						if (r.sideOf[i] & kSideMain) {
-							DrawInput entry = r.inputs.Get()[i];
-							ClearShadowPart(entry);
-							r.sideOf[i] = kSideMain;
-							r.inputs.Set(i, entry);
-						} else {
-							r.RemoveEntry(r.inputs.Get()[i].objectIndex);
-						}
-					}
-				}
 				k.Reset();
 				k.cursor.Restart(in.tablesGeneration);
 				k.identity = in.addresses.identity;
@@ -419,6 +406,32 @@ namespace DCLF::Draws
 				k.objectMaterial.resize(b.objects, nullptr);
 			}
 			return resync;
+		}
+
+		/**
+		 * @brief The region half's start: the main build's region's journal begun, and on a resync (a_resync: BeginKeptBuild's) its
+		 * shadow words cleared; every held object is retaken by the modes.
+		 */
+		void BeginRegion(KeptShadowBuild& b, bool a_resync)
+		{
+			if (!b.scene)
+				return;
+			auto& r = *b.scene;
+			r.Begin(b.in.inputsOldestContentEpoch);
+			if (!a_resync)
+				return;
+			for (std::uint32_t i = static_cast<std::uint32_t>(r.sideOf.size()); i-- > 0;) {
+				if (!(r.sideOf[i] & kSideShadow))
+					continue;
+				if (r.sideOf[i] & kSideMain) {
+					DrawInput entry = r.inputs.Get()[i];
+					ClearShadowPart(entry);
+					r.sideOf[i] = kSideMain;
+					r.inputs.Set(i, entry);
+				} else {
+					r.RemoveEntry(r.inputs.Get()[i].objectIndex);
+				}
+			}
 		}
 
 		/**
@@ -488,7 +501,8 @@ namespace DCLF::Draws
 				auto& mode = k.modes[m];
 				const ModeRasterStates states = b.in.modeUsed[m] ? b.in.modeRasterStates[m] : ModeRasterStates{};
 				if (!mode.active || mode.rasterStates != states) {
-					// View states changed: every object again (none held without views).
+					// View states changed: every object again (none held without views), and the exclusions read the mode's inputs whole.
+					b.out.movesValid[m] = false;
 					mode.Reset();
 					mode.active = true;
 					mode.rasterStates = states;
@@ -551,16 +565,35 @@ namespace DCLF::Draws
 		}
 	}
 
-	/** @brief BuildShadowPayload's kept path: material rows and inputs updated incrementally in ShadowKept. */
-	void BuildKeptShadow(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept& k,
-		const ShadowMaterialRow& a_plain, ResidentRegion* a_scene)
+	/**
+	 * @brief BuildShadowPayload's kept path, its region-independent half: material rows and records updated incrementally in ShadowKept,
+	 * the objects to read again noted (a_split) for the region half.
+	 */
+	void BuildKeptShadowShared(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept& k,
+		const ShadowMaterialRow& a_plain, bool a_sharedRegion, ShadowBuildSplit& a_split)
 	{
-		ZoneScopedN("CS.DCLF.BuildShadow.Kept");
+		ZoneScopedN("CS.DCLF.BuildShadow.KeptShared");
 		const std::uint32_t objects = static_cast<std::uint32_t>(a_tables.objects.size());
 		++k.builds;
 		const std::uint64_t build = ++k.build;
-		KeptShadowBuild b{ a_in, a_tables, a_lookups, a_out, k, a_scene, objects, build };
-		const bool resync = BeginKeptBuild(b);
+		KeptShadowBuild b{ a_in, a_tables, a_lookups, a_out, k, nullptr, objects, build };
+		// A shared half whose region half never ran (its build ahead abandoned) is carried into this one: its touched objects (marked)
+		// and the objects it read again are still to be written and taken.
+		const bool carried = a_split.pending;
+		b.touched.swap(a_split.touched);
+		if (!carried) {
+			b.touched.clear();
+			a_split.changed.clear();
+		}
+		const bool resync = BeginKeptBuild(b, a_sharedRegion);
+		if (resync) {
+			// Emptied (its marks too): every object is read and touched again below.
+			b.touched.clear();
+			a_split.changed.clear();
+		}
+		// The exclusions' moves: every mode's, unless the build retakes it whole (UpdateModes clears a mode's whose view states changed).
+		a_out.keptBuild = build;
+		a_out.movesValid.fill(!resync);
 		// ---- Material rows: the plain one, and each material's.
 		if (k.slotMaterial.empty()) {
 			k.slotMaterial.push_back(nullptr);  // slot 0: the plain record
@@ -575,11 +608,30 @@ namespace DCLF::Draws
 		// ---- Modes: which hold each object (heldModes), and the list entry from that.
 		if (k.heldModes.size() < objects)
 			k.heldModes.resize(objects, 0);
-		std::vector<std::uint32_t> changed;
+		auto& changed = a_split.changed;
 		TakeChangedRecords(b, resync, changed);
 		UpdateMaterialRows(b);
 		for (const std::uint32_t o : changed)
 			b.Touch(o);
+		a_split.build = build;
+		a_split.transformBuffer = b.transformBuffer;
+		a_split.resync = resync || (carried && a_split.resync);
+		b.touched.swap(a_split.touched);
+	}
+
+	/**
+	 * @brief BuildShadowPayload's kept path, its region half (after BuildKeptShadowShared's a_split): each mode's holdings, the entries
+	 * written into the scene list's region, and the frame's list.
+	 */
+	void BuildKeptShadowRegion(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept& k,
+		ResidentRegion* a_scene, ShadowBuildSplit& a_split)
+	{
+		ZoneScopedN("CS.DCLF.BuildShadow.Kept");
+		const std::uint32_t objects = static_cast<std::uint32_t>(a_tables.objects.size());
+		KeptShadowBuild b{ a_in, a_tables, a_lookups, a_out, k, a_scene, objects, a_split.build };
+		b.transformBuffer = a_split.transformBuffer;
+		b.touched.swap(a_split.touched);
+		BeginRegion(b, a_split.resync);
 		// The main build's resync emptied the scene list: rewrite every held object.
 		if (a_scene && k.sceneResets != a_scene->resets) {
 			k.sceneResets = a_scene->resets;
@@ -587,15 +639,17 @@ namespace DCLF::Draws
 				if (k.heldModes[o])
 					b.Touch(o);
 		}
-		UpdateModes(b, changed);
+		UpdateModes(b, a_split.changed);
 		for (const std::uint32_t o : b.touched) {
 			b.WriteEntry(o);
 			k.touchedMark[o] = 0;
 		}
+		b.touched.clear();
 		a_out.regionInputs = a_scene ? a_scene->inputs.View() : k.scene.inputs.View();
 		BuildFaceList(b);
 		a_out.kept = true;
 		a_out.materialRows = k.rows.View();
+		b.touched.swap(a_split.touched);
 	}
 
 	namespace
@@ -805,7 +859,7 @@ namespace DCLF::Draws
 			a_out.streams = std::move(a_streams);
 			AppendStreamRows(a_tables, a_in.addresses.streamBuffer, a_out.geometries);
 			if (a_in.addresses.streamBuffer)
-				a_out.streamRows = a_tables.streamRows;
+				a_out.streamRows = a_tables.streamRows;  // a view: the publication's tables outlive the draws' payload
 			// The frame record heads the arena, then the shared blocks. No register the Utility shaders declare may be at address
 			// zero (a late-compiled pipeline reading one would lose the device); unsupplied ones read zeros. CS's SharedData (b5;
 			// alpha testing uses MipBias) and FeatureData (b6) sit at fixed places, filled by the commit's latched copies.
@@ -968,22 +1022,42 @@ namespace DCLF::Draws
 		}
 	}
 
-	void BuildShadowPayload(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
-		std::shared_ptr<const StreamViews> a_streams, ShadowKept* a_kept, ResidentRegion* a_scene)
+	void BuildShadowPayloadShared(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
+		std::shared_ptr<const StreamViews> a_streams, ShadowKept* a_kept, bool a_sharedRegion, ShadowBuildSplit& a_split)
 	{
-		ZoneScopedN("CS.DCLF.BuildShadowPayload");
+		ZoneScopedN("CS.DCLF.BuildShadowPayload.Shared");
 		const std::uint32_t nullIndex = WriteSharedBlocks(a_in, a_tables, a_lookups, a_out, a_streams);
 		// Row 0: every caster without alpha testing (no texture offset, the null texture).
 		ShadowMaterialRow plain;
 		plain.diffuse = nullIndex;
+		if (a_kept)
+			BuildKeptShadowShared(a_in, a_tables, a_lookups, a_out, *a_kept, plain, a_sharedRegion, a_split);
+		else
+			BuildMaterialRows(a_in, a_tables, a_lookups, a_out, plain);
+		a_split.pending = true;
+	}
+
+	void BuildShadowPayloadRegion(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept* a_kept,
+		ResidentRegion* a_scene, ShadowBuildSplit& a_split)
+	{
+		ZoneScopedN("CS.DCLF.BuildShadowPayload.Region");
+		a_split.pending = false;
 		if (a_kept) {
-			BuildKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept, plain, a_scene);
+			BuildKeptShadowRegion(a_in, a_tables, a_lookups, a_out, *a_kept, a_scene, a_split);
 			CountModeDraws(a_out, &a_kept->modeCounts, a_scene ? static_cast<const void*>(a_scene) : &a_kept->scene, &a_kept->entriesCounted);
 			Diagnostics::Notify(Diagnostics::ShadowBuilt{ a_in, a_tables, a_lookups, a_out, *a_kept });
 			return;
 		}
-		BuildMaterialRows(a_in, a_tables, a_lookups, a_out, plain);
 		BuildModeInputs(a_in, a_tables, a_lookups, a_out);
 		CountModeDraws(a_out);
+	}
+
+	void BuildShadowPayload(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
+		std::shared_ptr<const StreamViews> a_streams, ShadowKept* a_kept, ResidentRegion* a_scene)
+	{
+		ZoneScopedN("CS.DCLF.BuildShadowPayload");
+		ShadowBuildSplit split;
+		BuildShadowPayloadShared(a_in, a_tables, a_lookups, a_out, std::move(a_streams), a_kept, a_scene != nullptr, split);
+		BuildShadowPayloadRegion(a_in, a_tables, a_lookups, a_out, a_kept, a_scene, split);
 	}
 }

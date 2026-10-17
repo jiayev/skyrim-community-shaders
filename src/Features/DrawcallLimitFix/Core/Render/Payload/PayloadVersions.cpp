@@ -118,7 +118,7 @@ namespace DCLF::Draws
 		auto out = std::make_shared<PayloadVersions>();
 		out->main = a_main != nullptr;
 		if (a_main) {
-			out->products = a_main->products;
+			out->products = a_main->body->products;
 			Extensions::CarryPayloadProducts(out->products);
 		}
 		out->shadow = a_shadow != nullptr;
@@ -140,7 +140,7 @@ namespace DCLF::Draws
 												   return a_views.extras.ContentEpoch();
 											   } };
 		// The geometry table: the main payloads' and the shadow payload's are the same (the publication's stream views and face streams).
-		const GeometryDrawsOut& geometries = a_main ? a_main->geometryDraws : a_shadow->geometries;
+		const GeometryDrawsOut& geometries = a_main ? a_main->body->geometryDraws : a_shadow->geometries;
 		units[Part(PayloadPart::Geometries)] = geometries.Count();
 		requests[Part(PayloadPart::Geometries)] = { Words<GeometryDraw>(geometries.Count()), geometries.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
 													   RangeGather gather{ uploadRanges, uploadBytes, false };
@@ -151,27 +151,27 @@ namespace DCLF::Draws
 		// The main rows (the material rows by part: kMaterialRowParts), their headers made absolute for the backing they go to (a
 		// backing at another address is written whole: a fresh one holds nothing).
 		if (a_main) {
-			units[Part(PayloadPart::MaterialRows)] = a_main->materialRows.Count();
-			requests[Part(PayloadPart::MaterialRows)] = { a_main->materialRows.Count(), a_main->materialRows.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
+			units[Part(PayloadPart::MaterialRows)] = a_main->body->materialRows.Count();
+			requests[Part(PayloadPart::MaterialRows)] = { a_main->body->materialRows.Count(), a_main->body->materialRows.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
 															 RangeGather gather{ uploadRanges, uploadBytes, true };
-															 EmitMainRowParts(a_main->materialRows, kMaterialRowParts, a_target.contentEpoch, a_target.address, a_target.capacityUnits,
+															 EmitMainRowParts(a_main->body->materialRows, kMaterialRowParts, a_target.contentEpoch, a_target.address, a_target.capacityUnits,
 																 [](MaterialRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, gather);
 															 gather.Send(a_to);
-															 return a_main->materialRows.ContentEpoch();
+															 return a_main->body->materialRows.ContentEpoch();
 														 } };
-			units[Part(PayloadPart::PipelineRows)] = a_main->pipelineRows.Count();
-			requests[Part(PayloadPart::PipelineRows)] = { a_main->pipelineRows.Count(), a_main->pipelineRows.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
+			units[Part(PayloadPart::PipelineRows)] = a_main->body->pipelineRows.Count();
+			requests[Part(PayloadPart::PipelineRows)] = { a_main->body->pipelineRows.Count(), a_main->body->pipelineRows.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
 															 RangeGather gather{ uploadRanges, uploadBytes, true };
-															 EmitMainRows(a_main->pipelineRows, a_target.contentEpoch, a_target.address, a_target.capacityUnits,
+															 EmitMainRows(a_main->body->pipelineRows, a_target.contentEpoch, a_target.address, a_target.capacityUnits,
 																 [](PipelineRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, gather);
 															 gather.Send(a_to);
-															 return a_main->pipelineRows.ContentEpoch();
+															 return a_main->body->pipelineRows.ContentEpoch();
 														 } };
 		}
 		// The scene list: the region every payload of the publication holds at its head (what changed since), then the main payloads'
 		// frame inputs, then the shadow payload's (both written whole: they are the frame's).
 		const KeptView<DrawInput>& region = a_main ? a_main->resident : a_shadow->regionInputs;
-		const std::vector<DrawInput>* mainList = a_main ? &a_main->inputList : nullptr;
+		const std::vector<DrawInput>* mainList = a_main ? &a_main->body->inputList : nullptr;
 		const std::vector<DrawInput>* shadowList = a_shadow ? &a_shadow->inputList : nullptr;
 		out->regionCount = region.Count();
 		out->mainInputsAt = out->regionCount;

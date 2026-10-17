@@ -55,6 +55,35 @@ namespace DCLF::Features::TextureTransforms
 		}
 	}
 
+	// The builder's (one build at a time): a list made from its previous one and the moved slots against the list made whole. A difference is
+	// a move the builder was not told of (a row's state written unmarked, a material slot keyed or let go with no log entry).
+	void CheckListParity(const TextureTransformList& a_built, const TextureTransformList& a_whole)
+	{
+		static std::uint64_t checks = 0, differ = 0;
+		static std::string first;
+		++checks;
+		if (a_built.entries != a_whole.entries || a_built.entrySlots != a_whole.entrySlots || a_built.slotVerdicts != a_whole.slotVerdicts ||
+			a_built.leftOut != a_whole.leftOut || a_built.variables != a_whole.variables) {
+			++differ;
+			if (first.empty()) {
+				std::size_t at = 0;
+				while (at < a_built.entries.size() && at < a_whole.entries.size() && a_built.entries[at] == a_whole.entries[at] && a_built.entrySlots[at] == a_whole.entrySlots[at])
+					++at;
+				std::size_t slot = 0;
+				while (slot < a_built.slotVerdicts.size() && slot < a_whole.slotVerdicts.size() && a_built.slotVerdicts[slot] == a_whole.slotVerdicts[slot])
+					++slot;
+				first = fmt::format("{} entries against {} whole, first differing entry {} (slot {}), first differing verdict at slot {} ({} slots against {})",
+					a_built.entries.size(), a_whole.entries.size(), at, at < a_whole.entrySlots.size() ? a_whole.entrySlots[at] : ~0u, slot, a_built.slotVerdicts.size(),
+					a_whole.slotVerdicts.size());
+			}
+		}
+		if (checks >= 5 || differ) {
+			logger::info("[DCLF] texture transforms' list (parity): {} builds checked, {} differ{}{}", checks, differ, differ ? " <- DIFFER; first: " : " <- OK", first);
+			checks = differ = 0;
+			first.clear();
+		}
+	}
+
 	// What the rows carrying TexcoordOffset or a declared frame variable cost a frame and how many moved.
 	void CountPoolLine(std::size_t a_count, std::uint64_t a_changed, std::uint64_t a_refused, std::size_t a_variables, std::uint64_t a_variablesChanged)
 	{

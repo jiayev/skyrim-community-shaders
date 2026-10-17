@@ -22,14 +22,15 @@ namespace DCLF::Features::Shadows::Local
 	/**
 	 * @brief The last sun exclusion's inputs and verdicts, kept up to date by what moved (BuildSunExclusion): the candidates (the
 	 * entries whose versions moved), the change log (an object's flags, shadow reject or geometry) and the mode's inputs (the objects
-	 * that joined or left them, while ShadowKept::Mode::membership moves). Judged whole only for a new cache or tables generation,
-	 * or behind the log's trim.
+	 * that joined or left them, while ShadowKept::Mode::membership moves: the kept build's moves, read whole only when the cache missed
+	 * a build). Judged whole only for a new cache or tables generation, or behind the log's trim.
 	 */
 	struct SunExclusionCache
 	{
 		std::shared_ptr<const EntrySpace> candidates;
 		LogCursor cursor;
 		std::uint64_t membership = 0;
+		std::uint64_t keptBuild = 0;  // the kept shadow build its inputs are as of (Api::ShadowExclusionBuild::keptBuild)
 		std::vector<std::uint8_t> excluded;
 		std::uint32_t excludedCount = 0;
 		std::uint64_t version = 0;  // SunExclusion::version of excluded

@@ -57,7 +57,7 @@ namespace DCLF::Diagnostics
 		std::uint32_t frame;
 	};
 
-	/** @brief A main commit's payload drew past a geometry's buffers (MainPayload::shortBuffer), the first time in the stats window. */
+	/** @brief A main commit's payload drew past a geometry's buffers (MainBody::shortBuffer), the first time in the stats window. */
 	struct ShortBuffersDrawn
 	{
 		const SceneTables& tables;

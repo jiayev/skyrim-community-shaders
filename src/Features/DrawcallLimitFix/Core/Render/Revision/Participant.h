@@ -27,6 +27,8 @@ namespace DCLF
 		std::array<bool, kViews> viewOn{};
 		std::array<ZBucketPlan, 2> zPlans;
 		std::array<std::vector<LatchedCopy>, 2> mainLatched;
+		// The lookups' entries the requirements and the shapes read of the pipeline slots, as one witness (LookupsWitness, Producer.cpp).
+		std::uint64_t lookupsWitness = 0;
 	};
 
 	namespace Draws
@@ -100,6 +102,15 @@ namespace DCLF
 		virtual void PostInputs(RevisionInputs&) {}
 		/** @brief Render thread (PostAheadContext, the frame's start): its part of the ahead context the next builds take. */
 		virtual void PrepareAhead(ImplSnapshotBuilder::AheadContext&) {}
+		/**
+		 * @brief The snapshot builder (RunAhead): the half of its payload that needs no main build, ahead of BuildPayload (which runs it
+		 * itself when RunAhead did not). It reads of a_build only the stream views (out.streams, made), the context, the tables, the
+		 * lookups, the frame and generation, the candidates, the oldest content epochs (oldestTables, payloads: read only) and adds to
+		 * its own stats; it never touches mainRegion or the main payloads, and writes nothing into a_build.out (BuildPayload does), so it
+		 * may run beside the main build. Every call is followed by BuildPayload of the same build ahead (one abandoned is carried into the
+		 * next build's).
+		 */
+		virtual void BuildPayloadShared(const AheadBuild&) {}
 		/** @brief The snapshot builder (RunAhead, after the main build): its payload of the publication, into a_build.out. */
 		virtual void BuildPayload(const AheadBuild&) {}
 

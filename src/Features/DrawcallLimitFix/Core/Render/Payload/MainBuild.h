@@ -298,12 +298,14 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief What the main build keeps across publications: the resident region, which both segments share (one list).
+	 * @brief What the main build keeps across publications: the resident region, which both segments share (one list), and the bodies.
 	 * The blocks and descriptors a draw reads are the rows' (MainRows). Used by one build at a time.
 	 */
 	struct BuildCache
 	{
 		ResidentRegion region;
+		// The builds' bodies (MainBody), each held by the payloads it was built for: one no payload holds is the next build's.
+		std::vector<std::shared_ptr<MainBody>> bodies;
 	};
 
 	/**

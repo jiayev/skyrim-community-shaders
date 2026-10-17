@@ -41,8 +41,26 @@ namespace DCLF
 		void MakeShapes(RevisionMake& a_make, const NamedVersions& a_sealed, const MainLayout& a_layout) override;
 		void PostInputs(RevisionInputs& a_next) override;
 		void PrepareAhead(ImplSnapshotBuilder::AheadContext& a_context) override;
-		/** @brief The shadow payload, from the build's tables, stream views and lookups, with the publication's candidates, and its exclusions. */
+		/**
+		 * @brief The shadow payload's shared half (BuildShadowPayloadShared: the shared blocks, the material rows and records), from the
+		 * build's tables, stream views and lookups alone.
+		 */
+		void BuildPayloadShared(const AheadBuild& a_build) override;
+		/**
+		 * @brief The shadow payload, from the build's tables, stream views and lookups, with the publication's candidates, and its exclusions:
+		 * the shared half first unless BuildPayloadShared ran it for this build, then the region half and the exclusions.
+		 */
 		void BuildPayload(const AheadBuild& a_build) override;
+		/** @brief The snapshot builder's: the build ahead's shadow payload between its halves (BuildPayloadShared, BuildPayload). */
+		struct AheadShadow
+		{
+			std::shared_ptr<ShadowPayload> payload;
+			ShadowInputs in;
+			ShadowBuildSplit split;
+			bool sharedRegion = false;            // the region half writes into the main build's region (Policy::ReuseResidentRegion)
+			const void* publication = nullptr;    // the build ahead's (AheadBuild::out) whose shared half ran
+			std::uint32_t frame = 0;
+		} aheadShadow;
 		/** @brief The snapshot builder's, per make (RequireSequences, RequireLatched): the make's shadow pipelines and the shadow commit's latched copies. */
 		struct RevisionScratch
 		{

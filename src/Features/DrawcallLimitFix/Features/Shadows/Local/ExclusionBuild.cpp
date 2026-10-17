@@ -12,6 +12,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <numeric>
+#include <span>
 #include <Tracy/Tracy.hpp>
 
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -35,13 +37,15 @@ namespace DCLF::Features::Shadows::Local
 		std::vector<const RE::BSGeometry*> objectGeometry;
 		std::vector<std::uint32_t> nextObject;
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> firstObject;
-		// The mode's inputs as of the last build: per object bit 0 (bit 1: a build's scratch), and the list of them.
+		// The mode's inputs as of the last build, per object: kInput, of them kRegion (the region's, kept by the kept build's moves) and
+		// kList (the frame's list's: a few, read again whenever the inputs may have moved), kScratch a build's; and the list's ones.
+		static constexpr std::uint8_t kInput = 1, kScratch = 2, kRegion = 4, kList = 8;
 		std::vector<std::uint8_t> inputMark;
-		std::vector<std::uint32_t> inputs;
+		std::vector<std::uint32_t> faces;
 		std::uint32_t modeBits = 0;
-		// A build's scratch: the objects it looks at again, the entries it judges again.
+		// A build's scratch: the objects it looks at again, the entries it judges again, the inputs it looks at again.
 		std::vector<std::uint8_t> objectMark, entryMark;
-		std::vector<std::uint32_t> objects, entries, changed;
+		std::vector<std::uint32_t> objects, entries, changed, moved;
 		// The stamped words, grown by replacing them (the versions made before hold theirs).
 		std::shared_ptr<std::atomic<std::uint32_t>[]> removed, cleared;
 		std::shared_ptr<std::atomic<std::uint64_t>[]> lightReach;
@@ -299,24 +303,101 @@ namespace DCLF::Features::Shadows::Local
 			x.objects.clear();
 		}
 
-		/** @brief The mode's inputs again: the geometries of the objects that joined or left them noted. */
-		void NoteMovedInputs(SunExclusionBuild& b)
+		/** @brief The input marks of a_moved settled (kInput from kRegion, kList; kScratch cleared): each that joined or left noted (a_note). */
+		void SettleInputs(SunExclusionBuild& b, std::span<const std::uint32_t> a_moved, bool a_note)
 		{
 			auto& x = b.x;
-			std::vector<std::uint32_t> inputs;
-			inputs.reserve(x.inputs.size());
-			CollectInputs(b.build, x.inputMark, 2, inputs);
-			for (const std::uint32_t o : x.inputs)
-				if (!(x.inputMark[o] & 2)) {
-					x.inputMark[o] = 0;  // left
+			constexpr std::uint8_t kHeld = SunExclusionIndex::kRegion | SunExclusionIndex::kList;
+			for (const std::uint32_t o : a_moved) {
+				auto& mark = x.inputMark[o];
+				const bool was = (mark & SunExclusionIndex::kInput) != 0, now = (mark & kHeld) != 0;
+				if (a_note && was != now && o < x.objectGeometry.size())
 					b.NoteGeometry(x.objectGeometry[o]);
-				}
-			for (const std::uint32_t o : inputs) {
-				if (!(x.inputMark[o] & 1))
-					b.NoteGeometry(x.objectGeometry[o]);  // joined
-				x.inputMark[o] = 1;
+				mark = static_cast<std::uint8_t>((mark & kHeld) | (now ? SunExclusionIndex::kInput : 0));
 			}
-			x.inputs = std::move(inputs);
+		}
+
+		/**
+		 * @brief The mode's inputs read whole: the region's and the list's marks set again from the build's inputs, every object's
+		 * settled (O(objects): a new cache, or one that missed a kept build). a_note: the geometries of those that joined or left noted.
+		 */
+		void CollectWhole(SunExclusionBuild& b, bool a_note)
+		{
+			auto& x = b.x;
+			auto& mark = x.inputMark;
+			for (auto& m : mark)
+				m = (m & SunExclusionIndex::kInput) ? SunExclusionIndex::kInput : std::uint8_t{ 0 };
+			x.faces.clear();
+			b.build.ForEachRegionInput([&](const Draws::DrawInput& a_input) {
+				if (const std::uint32_t o = a_input.objectIndex; o < mark.size())
+					mark[o] |= SunExclusionIndex::kRegion;
+			});
+			b.build.ForEachListInput([&](const Draws::DrawInput& a_input) {
+				if (const std::uint32_t o = a_input.objectIndex; o < mark.size() && !(mark[o] & SunExclusionIndex::kList)) {
+					mark[o] |= SunExclusionIndex::kList;
+					x.faces.push_back(o);
+				}
+			});
+			auto& all = x.moved;
+			all.resize(mark.size());
+			std::iota(all.begin(), all.end(), 0u);
+			SettleInputs(b, all, a_note);
+			all.clear();
+		}
+
+		/**
+		 * @brief The mode's inputs by the kept build's moves (the region's joined and left, since the build the cache read last) and its
+		 * list's again (a few): only the objects they name are looked at; those that joined or left have their geometries noted.
+		 */
+		void ApplyMovedInputs(SunExclusionBuild& b)
+		{
+			auto& x = b.x;
+			auto& mark = x.inputMark;
+			auto& moved = x.moved;
+			const auto look = [&](std::uint32_t a_object) {
+				if (a_object >= mark.size())
+					return false;
+				if (!(mark[a_object] & SunExclusionIndex::kScratch)) {
+					mark[a_object] |= SunExclusionIndex::kScratch;
+					moved.push_back(a_object);
+				}
+				return true;
+			};
+			// An object joins or leaves at most once a build: the lists are disjoint.
+			for (const std::uint32_t o : b.build.left)
+				if (look(o))
+					mark[o] &= static_cast<std::uint8_t>(~SunExclusionIndex::kRegion);
+			for (const std::uint32_t o : b.build.joined)
+				if (look(o))
+					mark[o] |= SunExclusionIndex::kRegion;
+			for (const std::uint32_t o : x.faces)
+				if (look(o))
+					mark[o] &= static_cast<std::uint8_t>(~SunExclusionIndex::kList);
+			x.faces.clear();
+			b.build.ForEachListInput([&](const Draws::DrawInput& a_input) {
+				const std::uint32_t o = a_input.objectIndex;
+				if (look(o) && !(mark[o] & SunExclusionIndex::kList)) {
+					mark[o] |= SunExclusionIndex::kList;
+					x.faces.push_back(o);
+				}
+			});
+			SettleInputs(b, moved, true);
+			moved.clear();
+		}
+
+		/**
+		 * @brief The mode's inputs again: the geometries of the objects that joined or left them noted. By the kept build's moves when the
+		 * cache read the inputs as of the build before, else read whole (CollectWhole).
+		 */
+		void NoteMovedInputs(SunExclusionBuild& b)
+		{
+			ZoneScopedN("CS.DCLF.BuildSunExclusion.Inputs");
+			auto& x = b.x;
+			const auto& build = b.build;
+			if (b.membership && build.movesValid && build.keptBuild && b.c.keptBuild + 1 == build.keptBuild && b.modeBits == x.modeBits)
+				ApplyMovedInputs(b);
+			else
+				CollectWhole(b, true);
 			x.modeBits = b.modeBits;
 		}
 
@@ -407,11 +488,7 @@ namespace DCLF::Features::Shadows::Local
 			auto& x = b.x;
 			x.Grow(b.objects, b.count);
 			x.Reindex(b.tables);
-			for (const std::uint32_t o : x.inputs)
-				if (o < x.inputMark.size())
-					x.inputMark[o] = 0;
-			x.inputs.clear();
-			CollectInputs(b.build, x.inputMark, 1, x.inputs);
+			CollectWhole(b, false);
 			x.modeBits = b.modeBits;
 			if (!a_judgedWhole)
 				JudgeAll(b.candidates, b.tables, x.inputMark, 1, a_whole);
@@ -464,6 +541,7 @@ namespace DCLF::Features::Shadows::Local
 			flipped = UpdateKeptVerdicts(b, candidatesMoved);
 		c.cursor.Advance(tables.changeLog);
 		c.membership = membership;
+		c.keptBuild = a_build.keptBuild;
 		// Policy::ReuseShadowExclusion may judge every object to compare against the kept verdicts.
 		std::vector<std::uint8_t> whole;
 		bool judgedWhole = false;

@@ -426,7 +426,7 @@ namespace DCLF
 		auto owners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 		for (const auto* payload : a_payloads)
 			if (payload)
-				owners->insert(owners->end(), payload->bindingOwners.begin(), payload->bindingOwners.end());
+				owners->insert(owners->end(), payload->body->bindingOwners.begin(), payload->body->bindingOwners.end());
 		// The colour segment's frame record names the frame textures it resolved, held by their bindings since (frameTextureBindings): what
 		// the shared epochs and a view drawing with the main frame constants (first person's) read. A view with its own holds its commit's
 		// (SubmitViewEpoch).
