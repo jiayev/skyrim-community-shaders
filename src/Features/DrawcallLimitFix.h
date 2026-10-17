@@ -77,9 +77,9 @@ struct DrawcallLimitFix : Feature
 	bool OcclusionReady(OcclusionMap a_map);
 	/**
 	 * @brief After OcclusionReady: whether the engine must still cull and register the map's scene (Precipitation::SetupMask): DCLF
-	 * does not draw the map, or some occluder of it is not a member of the set's phase for it yet. The registration then withholds
-	 * the members (PassCapture::SetOcclusionPhase), so each occluder is drawn once, by one of the two. The scene lists the frame's
-	 * filter left out are put back first.
+	 * does not draw the map this frame (not ready, or the set does not draw its phase yet); the scene lists the frame's filter left
+	 * out are put back first. An occluder not yet a member of the map's phase (joining: FrameView::SetLacking) is left out of the
+	 * map until it joins, never handed to the engine's cull.
 	 */
 	bool OcclusionNeedsEngine(OcclusionMap a_map);
 	/**

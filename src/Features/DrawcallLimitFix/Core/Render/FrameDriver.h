@@ -46,9 +46,10 @@ namespace DCLF
 		struct OcclusionFrames
 		{
 			// Per occlusion view (kOcclusionSky, kOcclusionPrecipitation): the maps left to the engine (DCLF not ready), and the frames the
-			// engine registered the map's other occluders.
+			// engine culled and registered the map's scene, and the frames DCLF drew it while some occluder was not yet a member.
 			std::array<std::uint32_t, 2> native{};
 			std::array<std::uint32_t, 2> engine{};
+			std::array<std::uint32_t, 2> joining{};
 			// Per occlusion view, now: the map's phase's members the frame's set lacks (FrameView::SetLacking).
 			std::array<std::uint32_t, 2> lacking{};
 			std::uint32_t withheld = 0;  // the maps' member passes withheld (PassCapture's, last frame)

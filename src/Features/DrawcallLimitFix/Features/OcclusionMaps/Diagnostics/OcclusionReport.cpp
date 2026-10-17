@@ -18,9 +18,10 @@ namespace DCLF::Features::OcclusionMaps
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 				if (shadow.occlusionDrawn[v] || shadow.occlusionNotReady[v] || frames.native[v])
 					logger::info("[DCLF] {} occlusion: DCLF drew {} maps ({} of the set's occluders, last), {} it could not draw, {} left to the engine whole; the engine "
-								 "registered the map's other occluders on {} frames ({} not members now); {} member passes withheld (last frame)",
+								 "culled the map's scene on {} frames; {} frames drawn while occluders were still joining (left out until members; {} now); "
+								 "{} member passes withheld (last frame)",
 						Extensions::OcclusionMapOf(v).report, shadow.occlusionDrawn[v], shadow.occlusionInputs[v], shadow.occlusionNotReady[v],
-						frames.native[v], frames.engine[v], frames.lacking[v], frames.withheld);
+						frames.native[v], frames.engine[v], frames.joining[v], frames.lacking[v], frames.withheld);
 			if (shadow.occlusionEpochs)
 				logger::info("[DCLF] occlusion maps: {} epochs, render thread {:.3f} ms per epoch", shadow.occlusionEpochs, shadow.occlusionMs / shadow.occlusionEpochs);
 		}
