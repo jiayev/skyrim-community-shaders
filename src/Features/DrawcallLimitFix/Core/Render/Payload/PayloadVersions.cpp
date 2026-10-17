@@ -31,6 +31,10 @@ namespace DCLF::Draws
 			return parts;
 		}
 
+		/** @brief Each part's element (PayloadBuffer::units) in bytes, in PayloadPart order: the bytes a payload names of its backing. */
+		constexpr std::array<std::uint64_t, kPayloadParts> kElementBytes{ sizeof(BindlessObject), 16, sizeof(GeometryDraw), kMaterialRowBytes, kPipelineRowBytes,
+			sizeof(DrawInput), sizeof(ShadowMaterialRow) };
+
 		template <class T>
 		constexpr std::uint64_t Words(std::uint64_t a_elements) { return a_elements * sizeof(T) / 4; }
 
@@ -96,12 +100,75 @@ namespace DCLF::Draws
 		}
 	}
 
+	/**
+	 * @brief The runs a holder of a part at a content epoch lacks, by bytes as its emit sends them (the journals' runs, then the
+	 * whole tails): a_run(offset, bytes). Nothing merged or copied: for judging an append against its head (AppendClasses), not for
+	 * sending.
+	 */
+	struct PayloadBuilder::PartRuns
+	{
+		const StreamViews& views;
+		const GeometryDrawsOut& geometries;
+		const MainPayload* main;
+		const ShadowPayload* shadow;
+		const KeptView<DrawInput>& region;
+		const std::vector<DrawInput>* mainList;
+		const std::vector<DrawInput>* shadowList;
+		std::uint64_t mainInputsAt = 0, shadowInputsAt = 0;
+
+		template <class Run>
+		void operator()(PayloadPart a_part, std::uint64_t a_contentEpoch, Run&& a_run) const
+		{
+			const auto rows = [&](const auto& a_changes, std::uint64_t a_count, std::uint64_t a_bytes) {
+				a_changes.ForEachRun(a_contentEpoch, a_count, [&](std::uint64_t a_first, std::uint64_t a_n) { a_run(a_first * a_bytes, a_n * a_bytes); });
+			};
+			const auto tail = [&](const auto* a_list, std::uint64_t a_at) {
+				using Row = typename std::remove_cvref_t<decltype(*a_list)>::value_type;
+				if (a_list && !a_list->empty())
+					a_run(a_at * sizeof(Row), a_list->size() * sizeof(Row));
+			};
+			switch (a_part) {
+			case PayloadPart::Objects:
+				rows(views.objects.changes, views.objects.Count(), sizeof(BindlessObject));
+				break;
+			case PayloadPart::Extras:
+				if (views.extras.extras)
+					rows(views.extras.changes, views.extras.Rows(), 16);
+				break;
+			case PayloadPart::Geometries:
+				rows(geometries.slots.changes, geometries.SlotCount(), sizeof(GeometryDraw));
+				tail(&geometries.streamRows, geometries.SlotCount());
+				break;
+			case PayloadPart::MaterialRows:
+				if (main)
+					rows(main->body->materialRows.changes, main->body->materialRows.Count() * kMaterialRowParts, sizeof(MaterialRow) / kMaterialRowParts);
+				break;
+			case PayloadPart::PipelineRows:
+				if (main)
+					rows(main->body->pipelineRows.changes, main->body->pipelineRows.Count(), sizeof(PipelineRow));
+				break;
+			case PayloadPart::Inputs:
+				rows(region.changes, region.Count(), sizeof(DrawInput));
+				tail(mainList, mainInputsAt);
+				tail(shadowList, shadowInputsAt);
+				break;
+			case PayloadPart::ShadowRows:
+				if (shadow)
+					rows(shadow->materialRows.changes, shadow->materialRows.Count(), sizeof(ShadowMaterialRow));
+				break;
+			default:
+				break;
+			}
+		}
+	};
+
 	PayloadBuilder::PayloadBuilder(std::shared_ptr<org::services::RetirementClock> a_clock) :
 		// DCLF's allocate (structured buffers with their SRV, device addresses for the row tables) and retire (released backings are
 		// destroyed on the graph host's cleanup lane, never on the thread that let them go). No caps: a backing is made whenever none is
 		// reusable, and the retirement clock (exact GPU completion) frees them.
 		set(std::make_unique<org::services::JournaledBufferSet>(PartConfigs(), PooledBackings::Hooks(), std::move(a_clock),
-			org::services::BackingPool::Config{ .name = "cs.dclf.payload", .maxPerClass = 0, .spareFree = PooledBackings::PerFrameSpares() }))
+			org::services::BackingPool::Config{ .name = "cs.dclf.payload", .maxPerClass = 0, .spareFree = PooledBackings::PerFrameSpares() })),
+		appendInPlace(SwitchEnabled(Switch::PayloadAppend))
 	{}
 
 	PayloadBuilder::~PayloadBuilder() = default;
@@ -201,14 +268,9 @@ namespace DCLF::Draws
 		// The parts unchanged since the last publication share its versions (ShareUnchanged): absent from the set's publication.
 		const auto previous = last.lock();
 		const auto shared = ShareUnchanged(requests, previous.get(), geometries.streamRows, mainList, shadowList);
+		JudgeAppends(requests, shared, previous.get(), { a_views, geometries, a_main, a_shadow, region, mainList, shadowList, out->mainInputsAt, out->shadowInputsAt });
 		auto publication = set->Publish(requests, a_uploads);
-		// CS_DCLF_PERSISTENT_PARITY: the extras rows are checked by the backing that holds them, as they are caught up into it (the
-		// observer's mirror of that backing, replayed from what it held before; null without the observer). A shared backing is
-		// caught up from where it is (nothing to replay) and checked again.
-		if (const auto& extras = publication.parts[Part(PayloadPart::Extras)]; shared[Part(PayloadPart::Extras)])
-			CheckExtras(a_views.extras, previous->leases[Part(PayloadPart::Extras)], kept[Part(PayloadPart::Extras)].contentEpoch);
-		else if (extras.lease)
-			CheckExtras(a_views.extras, extras.lease, extras.caughtUpFrom);
+		CheckExtrasBacking(a_views.extras, publication, shared, previous.get());
 		for (std::size_t k = 0; k < kPayloadParts; ++k) {
 			if (shared[k]) {
 				out->parts[k] = { previous->parts[k].srvIndex, previous->parts[k].address, units[k] };
@@ -226,11 +288,13 @@ namespace DCLF::Draws
 			out->bytes[k] = version.bytes;
 			out->runs[k] = version.runs;
 			out->allocated[k] = version.allocated;
+			out->appended[k] = version.appended;
 			out->leases[k] = std::move(version.lease);
 			stats.bytes[k] += version.bytes;
 			stats.runs[k] += version.runs;
 			stats.allocated[k] += version.allocated ? 1 : 0;
 		}
+		CheckAppends(*out, publication);
 		KeepTails(shared, geometries.streamRows, mainList, shadowList);
 		out->ready = std::move(publication.ready);
 		out->serial = ++serial;
@@ -263,6 +327,89 @@ namespace DCLF::Draws
 			request = {};
 		}
 		return shared;
+	}
+
+	void PayloadBuilder::JudgeAppends(std::span<org::services::JournaledPartRequest> a_requests, const std::array<bool, kPayloadParts>& a_shared,
+		const PayloadVersions* a_previous, const PartRuns& a_runs)
+	{
+		if (!appendInPlace && !Diagnostics::Observe().stats)
+			return;
+		ZoneScopedN("CS.DCLF.Payload.JudgeAppends");
+		// The head is the last publication's backing of the part, once its uploads are done (an append's payload waits for its own
+		// uploads only: what the head held before must have landed). A run straddling the mark counts on both sides.
+		const bool headsReady = a_previous && a_previous->Ready() && !(a_previous->ready && a_previous->ready->Failed());
+		for (std::size_t k = 0; k < kPayloadParts; ++k) {
+			auto& request = a_requests[k];
+			if (a_shared[k] || (!request.units && !request.emit))
+				continue;
+			auto& classes = stats.appends[k];
+			const auto* head = headsReady && a_previous->leases[k] ? &a_previous->leases[k] : nullptr;
+			if (!head) {
+				++classes.headless;
+				continue;
+			}
+			const std::uint64_t mark = (*head)->sealedBytes.load(std::memory_order_relaxed);
+			std::uint64_t past = 0, below = 0;
+			a_runs(static_cast<PayloadPart>(k), (*head)->contentEpoch.load(std::memory_order_acquire), [&](std::uint64_t a_offset, std::uint64_t a_bytes) {
+				const std::uint64_t under = a_offset < mark ? std::min(a_bytes, mark - a_offset) : 0;
+				below += under;
+				past += a_bytes - under;
+			});
+			if (below && past) {
+				++classes.mixed;
+				classes.mixedBytes += below + past;
+			} else if (below) {
+				++classes.rewrites;
+				classes.rewriteBytes += below;
+			} else if (request.units > (*head)->capacityClass) {
+				++classes.grown;
+				classes.grownBytes += past;
+			} else {
+				++classes.pure;
+				classes.pureBytes += past;
+				if (appendInPlace) {
+					request.appendInto = *head;
+					++classes.appended;
+				}
+			}
+		}
+	}
+
+	void PayloadBuilder::CheckExtrasBacking(const ExtrasOut& a_rows, const org::services::JournaledPublication& a_publication, const std::array<bool, kPayloadParts>& a_shared,
+		const PayloadVersions* a_previous) const
+	{
+		// CS_DCLF_PERSISTENT_PARITY: the extras rows are checked by the backing that holds them, as they are caught up into it (the
+		// observer's mirror of that backing, replayed from what it held before; null without the observer). A shared backing is
+		// caught up from where it is (nothing to replay) and checked again; an appended one from where it was.
+		if (const auto& extras = a_publication.parts[Part(PayloadPart::Extras)]; a_shared[Part(PayloadPart::Extras)])
+			CheckExtras(a_rows, a_previous->leases[Part(PayloadPart::Extras)], kept[Part(PayloadPart::Extras)].contentEpoch);
+		else if (extras.lease)
+			CheckExtras(a_rows, extras.lease, extras.caughtUpFrom);
+	}
+
+	void PayloadBuilder::CheckAppends(const PayloadVersions& a_payload, const org::services::JournaledPublication& a_publication)
+	{
+		if (!Diagnostics::Observe().scene)
+			return;
+		// Every append's first byte against the most the payloads named of its backing (kept here from the units published, apart
+		// from the set's mark), then what this payload names: a shared or appended part adds to its backing's, a leased one starts it.
+		for (std::size_t k = 0; k < kPayloadParts; ++k) {
+			const auto& lease = a_payload.leases[k];
+			if (!lease)
+				continue;
+			auto& mark = namedMarks[k];
+			const bool same = mark.generation == lease->generation;
+			if (a_payload.appended[k]) {
+				const std::uint64_t first = a_publication.parts[k].firstByte;
+				const bool above = same && (first == ~std::uint64_t{ 0 } || first >= mark.bytes);
+				++stats.appendChecks;
+				if (!above && stats.appendsBelowMark++ == 0)
+					stats.firstBelowMark = fmt::format("{} backing {}: first byte {} against {} bytes named{}", set->Part(k).name, lease->generation, first,
+						same ? mark.bytes : 0, same ? "" : " (not the head)");
+			}
+			const std::uint64_t named = a_payload.parts[k].units * kElementBytes[k];
+			mark = { lease->generation, same && (a_payload.shared[k] || a_payload.appended[k]) ? std::max(mark.bytes, named) : named };
+		}
 	}
 
 	void PayloadBuilder::KeepTails(const std::array<bool, kPayloadParts>& a_shared, const std::vector<GeometryDraw>& a_streamRows, const std::vector<DrawInput>* a_mainList,

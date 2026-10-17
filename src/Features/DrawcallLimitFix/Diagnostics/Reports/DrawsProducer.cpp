@@ -195,14 +195,21 @@ namespace DCLF
 		{
 			// The payload's pools (PayloadBuilder, D5): what each publication caught up per part, the backings made, the parts shared with
 			// the last publication (unchanged: nothing sent), the live census and the journal floor; under CS_DCLF_PERSISTENT_PARITY, the
-			// leased count against the lease-leak bound.
+			// leased count against the lease-leak bound. Then each part's changed publications against the last publication's backing
+			// (AppendClasses: where the runs since its contentEpoch lie against its sealed mark, with the KB a catch-up from it would
+			// send each), the appends made, and under CS_DCLF_PERSISTENT_PARITY each append's first byte against the mark.
 			static constexpr std::array<const char*, Draws::kPayloadParts> kParts{ "objects", "extras", "geometries", "material rows", "pipeline rows", "inputs", "shadow rows" };
 			const auto pool = payloadBuilder.TakeStats();
 			const double publications = static_cast<double>(std::max<std::uint64_t>(pool.publications, 1));
 			const bool watch = Diagnostics::Observe().scene;
 			auto& watches = Diagnostics::DrawsState::Get().payloadPools;
-			std::string sent, backings;
+			std::string sent, backings, appends;
+			const auto each = [](std::uint64_t a_bytes, std::uint64_t a_count) { return a_count ? a_bytes / 1024.0 / static_cast<double>(a_count) : 0.0; };
 			for (std::size_t p = 0; p < Draws::kPayloadParts; ++p) {
+				const auto& a = pool.appends[p];
+				appends += fmt::format("{}{} {} pure ({:.1f} KB), {} past capacity ({:.1f} KB), {} mixed ({:.1f} KB), {} rewrites ({:.1f} KB), {} without a head, {} appended",
+					p ? "; " : "", kParts[p], a.pure, each(a.pureBytes, a.pure), a.grown, each(a.grownBytes, a.grown), a.mixed, each(a.mixedBytes, a.mixed), a.rewrites,
+					each(a.rewriteBytes, a.rewrites), a.headless, a.appended);
 				const auto& census = pool.pools[p];
 				const auto floor = payloadBuilder.OldestContentEpoch(static_cast<Draws::PayloadPart>(p));
 				sent += fmt::format("{}{} {:.1f} KB in {:.1f} runs ({} made, {} shared)", p ? ", " : "", kParts[p], pool.bytes[p] / 1024.0 / publications, pool.runs[p] / publications,
@@ -213,10 +220,13 @@ namespace DCLF
 			// Publications against the payloads the frame installed (each is for a snapshot the frame takes), the sealed draws whose
 			// publication waited for the frame, and those newer work replaced before it.
 			auto& b = snapshotBuilder;
+			const std::string appendParity = !pool.appendChecks ? std::string() :
+				fmt::format("; appends checked against the mark {}, {} below{}", pool.appendChecks, pool.appendsBelowMark,
+					pool.appendsBelowMark ? " <- APPEND BELOW MARK; first: " + pool.firstBelowMark : std::string(" <- OK"));
 			text += fmt::format("[DCLF] payload pools (D5): {} publications, {} installed; {} draws waited for the frame to publish, {} replaced unpublished; "
-								"catch-up a publication: {}\n",
+								"catch-up a publication: {}; changed parts against the head (CS_DCLF_PAYLOAD_APPEND {}): {}{}\n",
 				pool.publications, payloadsInstalled.exchange(0, std::memory_order_relaxed), std::exchange(b.publicationsWaited, 0),
-				std::exchange(b.replacedUnpublished, 0), sent);
+				std::exchange(b.replacedUnpublished, 0), sent, payloadBuilder.AppendsInPlace() ? "on" : "off", appends, appendParity);
 			text += fmt::format("[DCLF] payload pools' backings: {}\n", backings);
 		}
 		auto& kept = Diagnostics::DrawsState::Get().kept;

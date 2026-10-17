@@ -59,6 +59,8 @@ namespace DCLF::Draws
 		// last publication's version, shared: nothing sent).
 		std::array<std::uint64_t, kPayloadParts> bytes{}, runs{};
 		std::array<bool, kPayloadParts> allocated{}, shared{};
+		// Parts appended into the last publication's backing (CS_DCLF_PAYLOAD_APPEND: past what any payload names of it).
+		std::array<bool, kPayloadParts> appended{};
 
 		[[nodiscard]] const PayloadBuffer& operator[](PayloadPart a_part) const { return parts[static_cast<std::size_t>(a_part)]; }
 		/** @brief Any thread: the uploads completed (or there were none). */
@@ -79,6 +81,9 @@ namespace DCLF::Draws
 	 * built from the upload tickets. Nothing waits on the GPU. A part unchanged since the last publication (its journal at the epoch
 	 * that publication's backing holds, the same units and whole tails, its uploads complete) is not leased again: the publication
 	 * shares that version (a second lease of its backing, back in its pool once both payloads let it go) and sends nothing for it.
+	 * Under CS_DCLF_PAYLOAD_APPEND a changed part whose runs since that backing's contentEpoch all lie at or past its sealed mark (the
+	 * most any published payload names of it: no frame reads there) and fit its capacity appends into it instead (JournaledPartRequest::
+	 * appendInto); any change below the mark leases one as before.
 	 *
 	 * Single thread: the snapshot builder's (the pools' single acquirer). The payloads it returns are released from any thread.
 	 */
@@ -111,14 +116,32 @@ namespace DCLF::Draws
 		/** @brief Any thread: a part's pool census (BackingPool::Count: atomics, approximate while leases move). */
 		[[nodiscard]] org::services::BackingPool::Census Census(PayloadPart a_part) const noexcept;
 
+		/**
+		 * @brief A part's changed publications against the last publication's backing (the head), by where the runs since its
+		 * contentEpoch lie against its sealed mark: all at or past it and within its capacity (pure: an append could take them),
+		 * all past it but outgrowing it, some on each side, all below; or no head to judge by (none, or its uploads not done). The
+		 * bytes are what a catch-up from the head would send.
+		 */
+		struct AppendClasses
+		{
+			std::uint64_t pure = 0, grown = 0, mixed = 0, rewrites = 0, headless = 0;
+			std::uint64_t pureBytes = 0, grownBytes = 0, mixedBytes = 0, rewriteBytes = 0;
+			std::uint64_t appended = 0;  // pure ones appended (CS_DCLF_PAYLOAD_APPEND)
+		};
 		/** @brief Pool stats for the report (counters since the last call; the census is current). */
 		struct Stats
 		{
 			std::uint64_t publications = 0;
 			std::array<std::uint64_t, kPayloadParts> bytes{}, runs{}, allocated{}, shared{};
+			std::array<AppendClasses, kPayloadParts> appends{};
+			// CS_DCLF_PERSISTENT_PARITY: appends whose first byte is at or past the mark the payloads named of the backing.
+			std::uint64_t appendChecks = 0, appendsBelowMark = 0;
+			std::string firstBelowMark;
 			std::array<org::services::BackingPool::Census, kPayloadParts> pools{};
 		};
 		Stats TakeStats();
+		/** @brief Whether changed parts append into their head when they can (CS_DCLF_PAYLOAD_APPEND). */
+		[[nodiscard]] bool AppendsInPlace() const noexcept { return appendInPlace; }
 
 	private:
 		/**
@@ -127,12 +150,36 @@ namespace DCLF::Draws
 		 */
 		std::array<bool, kPayloadParts> ShareUnchanged(std::span<org::services::JournaledPartRequest> a_requests, const PayloadVersions* a_previous,
 			const std::vector<GeometryDraw>& a_streamRows, const std::vector<DrawInput>* a_mainList, const std::vector<DrawInput>* a_shadowList);
+		/** @brief Publish: a part's runs by bytes, as its emit sends them (PayloadVersions.cpp). */
+		struct PartRuns;
+		/**
+		 * @brief Publish: the changed parts of a_requests (not a_shared) against the last publication's backings (AppendClasses), and
+		 * under CS_DCLF_PAYLOAD_APPEND each pure one's request pointed at its head (appendInto). Only with the switch or the stats.
+		 */
+		void JudgeAppends(std::span<org::services::JournaledPartRequest> a_requests, const std::array<bool, kPayloadParts>& a_shared,
+			const PayloadVersions* a_previous, const PartRuns& a_runs);
+		/** @brief Publish: the extras backing a_publication (or a_previous, a_shared) holds a_rows in, to the parity observer. */
+		void CheckExtrasBacking(const ExtrasOut& a_rows, const org::services::JournaledPublication& a_publication, const std::array<bool, kPayloadParts>& a_shared,
+			const PayloadVersions* a_previous) const;
+		/**
+		 * @brief Publish, CS_DCLF_PERSISTENT_PARITY: each of a_payload's appends (a_publication's versions) begins at or past the most the
+		 * payloads named of its backing (namedMarks; a miss: <- APPEND BELOW MARK), then a_payload's parts are named.
+		 */
+		void CheckAppends(const PayloadVersions& a_payload, const org::services::JournaledPublication& a_publication);
 		/** @brief Publish: the whole tails the parts written (not a_shared) now hold, for the next publication's ShareUnchanged. */
 		void KeepTails(const std::array<bool, kPayloadParts>& a_shared, const std::vector<GeometryDraw>& a_streamRows, const std::vector<DrawInput>* a_mainList,
 			const std::vector<DrawInput>* a_shadowList);
 
 		std::unique_ptr<org::services::JournaledBufferSet> set;
 		std::uint64_t serial = 0;
+		const bool appendInPlace;  // CS_DCLF_PAYLOAD_APPEND
+		// CS_DCLF_PERSISTENT_PARITY: per part, the head backing (its generation) and the most bytes the payloads named of it, kept
+		// here from the units published, apart from the set's own mark.
+		struct NamedMark
+		{
+			std::uint64_t generation = 0, bytes = 0;
+		};
+		std::array<NamedMark, kPayloadParts> namedMarks{};
 		Stats stats;
 		// The last publication (not held: its snapshots hold it), and per part what its version holds (the journal position and the
 		// request's units; 0: none to share), with the whole tails it wrote: what the next publication's unchanged parts share.
