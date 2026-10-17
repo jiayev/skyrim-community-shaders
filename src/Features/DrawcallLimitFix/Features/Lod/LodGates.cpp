@@ -331,7 +331,6 @@ namespace DCLF::Features::Lod::LodGates
 		std::atomic<std::uint32_t> openGates{ 0 };  // gates in Open: the stubs' fast test
 		std::atomic<std::uint32_t> flipActive{ 0 };  // the render thread between a flip's exchange and its Flipped
 		std::atomic<std::uint32_t> engineWork{ 0 };  // open + pending + deferred: the hooks' fast test (no lock taken at 0)
-		std::atomic<std::uint64_t> forcedGeneration{ 0 };
 		// The feature's registration (NoteRegistered, its install: before any gate opens): the gates' SceneStack channel and their stores'
 		// hidden site.
 		Api::EngineChannelId gatesChannel;
@@ -640,7 +639,6 @@ namespace DCLF::Features::Lod::LodGates
 
 		void NoteForced(Gate& a_gate)
 		{
-			forcedGeneration.fetch_add(1, std::memory_order_acq_rel);
 			PostOutcome({ a_gate.token, true });
 			counters.forced.fetch_add(1, std::memory_order_relaxed);
 		}
@@ -1402,11 +1400,6 @@ namespace DCLF::Features::Lod::LodGates
 			delete oldest;
 			oldest = next;
 		}
-	}
-
-	std::uint64_t ForcedGeneration()
-	{
-		return forcedGeneration.load(std::memory_order_acquire);
 	}
 
 	Totals Take()

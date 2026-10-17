@@ -1,5 +1,5 @@
 // The LOD gates' install (the feature's): the engine side's hooks, then their registrations on the generic structures (Api/EngineEvents.h:
-// SceneStack channel, show veto, adoption guard, reserved hidden site; Api/CoordinatorComponents.h: the component's marks, vetoes, commit
+// SceneStack channel, show veto, reserved hidden site; Api/CoordinatorComponents.h: the component's marks, vetoes, commit
 // and adoption hooks), first of the feature's: their channel and component before the segments'.
 
 #include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
@@ -32,9 +32,9 @@ namespace DCLF::Features::Lod::Gates
 			.hideSites = LodGates::kEngineHideSites });
 		// Their own stores (a flip, a forced release's unhide) carry a hidden site past the source's.
 		LodGates::NoteRegistered(channel, a_context.ReserveHiddenSite());
-		// The frames withdraw their claims while the installed publication predates a forced release (an older one may claim the
-		// outgoing blocks it detached).
-		a_context.RegisterAdoptionGuard({ .name = "LOD gates' forced releases", .generation = &ForcedGeneration });
+		// No adoption guard: a forced release's stores (the pending blocks shown, the held ones released and detached) reach the scene as
+		// the hidden-node source's and the tracker's events, and its outcome wakes a pass (Extensions::WakeChannel), so the next publication
+		// follows it as any scene change does; the frames keep their claims until then (DCLF never withdraws them).
 		// The gates' component: gate events applied in stack order, their roots marked (detached, rescanned, entries tagged under them, the
 		// tags forgotten with their entries), their incoming observed and their flipped outgoing held by the commit's vetoes, flips made by
 		// the commit's settle and published by its publication, outcomes taken before the batch and applied after it, released by the frame

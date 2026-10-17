@@ -44,7 +44,6 @@ namespace DCLF::Scene
 		std::uint32_t membershipWitness = 0;
 		std::uint32_t togglesGeneration = 0;
 		std::uint32_t verdictsGeneration = 0;
-		Extensions::AdoptionGenerations adoptionGuards{};  // the adoption guards' generations at the frame's start (ScenePublication's)
 	};
 
 	/**

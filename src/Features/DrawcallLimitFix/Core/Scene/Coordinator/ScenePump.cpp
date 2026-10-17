@@ -303,8 +303,8 @@ namespace DCLF::Scene
 				if (p.lookupsMoved[w])
 					lookupsWords += fmt::format("{}{} {}", lookupsWords.empty() ? "" : ", ", kLookupsNames[w], p.lookupsMoved[w]);
 			logger::info("[DCLF] publication causes (the passes that needed one, each cause counted): {} forced or first, {} set applications, {} set snapshot "
-						 "or node sets, {} deltas ({}), {} adoption guards, {} publish key moved ({}; lookups: {})",
-				p.neededBy[0], p.neededBy[1], p.neededBy[2], p.neededBy[3], deltas.empty() ? "none" : deltas, p.neededBy[4], p.neededBy[5],
+						 "or node sets, {} deltas ({}), {} publish key moved ({}; lookups: {})",
+				p.neededBy[0], p.neededBy[1], p.neededBy[2], p.neededBy[3], deltas.empty() ? "none" : deltas, p.neededBy[4],
 				moved.empty() ? "none" : moved, lookupsWords.empty() ? "none" : lookupsWords);
 			const double columns = static_cast<double>(p.replayColumns + p.replaySkipped);
 			logger::info("[DCLF] publication replay (W6: the logs collected once, the columns and records by jobs, the nearest pooled snapshot): per publication {:.1f} "
@@ -386,11 +386,10 @@ namespace DCLF::Scene
 		// A pass publishes only what changed since the last publication - the tables (their logs, stamps and sizes), the lookups and their
 		// catalog, the candidates, the claims (the commit's applications and its snapshot), the deltas the frame takes (plans, shading,
 		// seeds, switches, imports, wetness, light entries), the category nodes, the toggles its commit was made under, an input the
-		// coordinator took for the frame, or an adoption guard's generation (a LOD gate's forced release) the last publication was not built
-		// for (the frames withdraw until one is). A pass that changed none publishes nothing: the snapshot of the last publication stands.
+		// coordinator took for the frame. A pass that changed none publishes nothing: the snapshot of the last publication stands.
 		const PublishKey key = CurrentPublishKey();
-		const std::array<bool, 6> causes{ !publishedKeyValid || publishForced, !setApply.empty(), setSnapshotDirty || nodeSetsDirty, DeltasPending(),
-			sceneInputs.adoptionGuards != publishedAdoptionGuards, !(key == publishedKey) };
+		const std::array<bool, 5> causes{ !publishedKeyValid || publishForced, !setApply.empty(), setSnapshotDirty || nodeSetsDirty, DeltasPending(),
+			!(key == publishedKey) };
 		bool needed = false;
 		for (std::size_t c = 0; c < causes.size(); ++c)
 			if (causes[c]) {
@@ -424,7 +423,6 @@ namespace DCLF::Scene
 		publishedKey = CurrentPublishKey();
 		publishedKeyValid = true;
 		publishForced = false;
-		publishedAdoptionGuards = sceneInputs.adoptionGuards;
 	}
 
 }

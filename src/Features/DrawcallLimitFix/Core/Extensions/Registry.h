@@ -133,12 +133,6 @@ namespace DCLF::Extensions
 		decltype(Api::EngineChannel::drain) drain = nullptr;
 		decltype(Api::EngineChannel::push) push = nullptr;
 	};
-	/** @brief A registered adoption guard. */
-	struct AdoptionGuardEntry
-	{
-		std::string name;
-		decltype(Api::AdoptionGuard::generation) generation = nullptr;
-	};
 
 	/** @brief A registered table family. */
 	struct TableFamilyEntry
@@ -207,7 +201,6 @@ namespace DCLF::Extensions
 	std::span<const ReportLinesEntry> RegisteredReportLines();
 	std::span<const Api::StandInObserver> RegisteredStandInObservers();
 	std::span<const EngineChannelEntry> RegisteredEngineChannels();
-	std::span<const AdoptionGuardEntry> RegisteredAdoptionGuards();
 	/**
 	 * @brief The show veto's cells, at a fixed address for the session (the stubs load them): the registered veto's, else open a zero
 	 * word and vetoes a function answering false (engineHid null, no hide sites). Whether one is registered: ShowVetoRegistered.

@@ -193,6 +193,30 @@ claimed 0x0, flipped 0x21 <- GATE HOLE (publication)`. If real, the incoming blo
 publication, while the outgoing one is already hidden. No earlier log shows it, but moving set-parity runs are new. The B2 gate
 rewrite runs `msp` at every sub-step, which shows if the rate changes.
 
+## Extras rows: a projected-UV or land-blend row changed without a journal entry (found 2026-10-17; not investigated)
+
+The persistent parity's payload backings check (`CheckExtras`, Diagnostics/Draws/KeptChecks.cpp: each extras backing's rows as its
+catch-ups sent them, against the tables' rows) reports `<- DIFFER` in one or two report windows of a moving `verify.sh full` run
+since the LOD gates' adoption guard was removed (the frames no longer withdraw after a forced release). For example:
+`extras backing 4: row 1523 of 11732 (version 339): uploaded (0.5 0 0.02 0.49999997), tables (0.29341206 0 0.00066666666 0.41317594)`.
+- **What it means.** The extras journal (`UpdateExtras`, Core/Render/Payload/KeptStores.cpp) never marked those rows: every backing
+  caught up past the change still holds the row's old value. On the GPU that object draws with stale projected-UV or land-blend
+  parameters until the row changes again.
+- **The pattern.** The tables' value is the same in every run and on every row reported (`0.29341206 0 0.00066666666 0.41317594`).
+  The uploaded values differ (`0.46/0.3/0.5, 0, 0.02, 0.2-0.5`). So one writer sets rows to that value without a `kChangeExtras`
+  note, or on a block whose offset the journal does not read (`UpdateExtras` marks the object's current `extraOffset`, so a block
+  freed or moved without a change on a live owner is never marked).
+- **A/B (runs ng1, ng2, ab1, ab2).**
+  - Guard removed: DIFFER in both runs.
+  - Guard in place: clean in all 20 windows.
+  - Guard kept as a publication cause, with only the withdrawal removed: DIFFER.
+
+  So the withdrawals masked it; the forced full publication did not.
+- **Where to look.** The writers are `WriteObjectExtras` after `Accumulate` (AccumulatePhase.cpp: allocated or kept block, noted only
+  when the write changed a row), the shading resample (FrameConstants.cpp), and `FreeExtras`/`AllocateExtras` (Tables), with the
+  table diff's `kChangeExtras` (Tables.cpp). A withdrawn frame's reinstall joins every claim again (`InstallClaims`, whole), which
+  may be what covered it.
+
 ## Material transform moves: nothing drains the queue without the kept shadow build (found 2026-10-15; not investigated)
 
 `TransformMoves` (Core/Shading/MaterialWrites.cpp, drained by `Extensions::DrainTransformMoves`) has one consumer, the kept shadow

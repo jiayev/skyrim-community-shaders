@@ -38,7 +38,7 @@ namespace DCLF::Features::Lod::LodGates
 	 * Gates are lock-free: each gate's state is one atomic, the swapping thread and Flip racing by compare-exchange (a forced release
 	 * on unload, LOD off, the interior early return, a full rebuild, the map or DCLF stopping wins or loses as one; so does a later swap
 	 * that retires a gate's pending blocks, which supersedes it). The engine-side structures are the terrain manager's lock's, as the
-	 * quadtree they mirror; DCLF adds no lock. Forced releases bump ForcedGeneration and post Outcome{token, true}. A held block the
+	 * quadtree they mirror; DCLF adds no lock. Forced releases post Outcome{token, true}. A held block the
 	 * engine reuses (reattached by a later swap while its gate lives, or referenced by its node again at its release) posts
 	 * Outcome{token, false, kept}: Flip leaves a reattached block shown (the two race per block by compare-exchange on its handoff).
 	 */
@@ -114,11 +114,6 @@ namespace DCLF::Features::Lod::LodGates
 		DrainOutcomes([](void* a_context, const Outcome& a_outcome) { (*static_cast<F*>(a_context))(a_outcome); }, &a_visit);
 	}
 
-	/**
-	 * @brief Generation of forced releases, read by the render thread at the frame's start into the frame inputs: a snapshot built
-	 * before a forced release may still claim the detached outgoing blocks, so adoption withdraws until one built after it arrives.
-	 */
-	std::uint64_t ForcedGeneration();
 
 	/** @brief The engine side's counters since the last Take (gates opened, flipped, forced, held blocks released, vetoes, the oldest open gate's age), reset (the gates' release lines: Gates::ReleaseLines). Empty (installed false) while not installed. */
 	inline constexpr std::size_t kFlushKinds = 9;

@@ -36,9 +36,6 @@ namespace DCLF::Scene
 		frameGlobals = FrameGlobals::Capture();
 		SceneCapture::SetMainThread(::GetCurrentThreadId());
 		SceneCapture::SetFrame(frame);
-		// The adoption guards' generations (the LOD gates' forced releases so far), once a frame: the frame inputs carry them to the
-		// coordinator, and the frame withdraws its claims while the installed publication was built for an older one (FrameDriver).
-		frameAdoptionGuards = Extensions::SampleAdoptionGuards();
 		captureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - captureStart).count());
 		++captureFrames;
 		// What the coordinator's passes take of the frame: posted after the capture; the post wakes the pump (folded with
@@ -56,7 +53,6 @@ namespace DCLF::Scene
 		inputs->membershipWitness = PrimaryCull::Get().SampleMembershipWitness();
 		inputs->togglesGeneration = Toggles::Get().Generation();
 		inputs->verdictsGeneration = verdictsRequested;
-		inputs->adoptionGuards = frameAdoptionGuards;
 		channels.frameInputs.Post(std::move(inputs));
 		WakeScenePass(SceneWake::FrameInput);
 	}

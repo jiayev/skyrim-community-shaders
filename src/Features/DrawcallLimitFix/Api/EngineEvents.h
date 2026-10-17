@@ -145,20 +145,6 @@ namespace DCLF::Api
 	};
 
 	/**
-	 * @brief An adoption guard (InstallContext::RegisterAdoptionGuard): a generation the frame samples at its start and every publication
-	 * carries (the frame inputs' it was made under); a frame whose installed publication carries an older one than the frame's withdraws
-	 * its claims (the engine draws) until one made after it is installed. At most Extensions::kAdoptionGuardSlots.
-	 *
-	 * - name: the guard's (the install's failures).
-	 * - generation: any thread (the render thread at the frame's start): the current generation, never decreasing.
-	 */
-	struct AdoptionGuard
-	{
-		std::string_view name;
-		std::uint64_t (*generation)() = nullptr;
-	};
-
-	/**
 	 * @brief The show veto (InstallContext::RegisterShowVeto; one): the hidden-node source's stubs on the engine's vetoable show stores
 	 * test open (one dword compare) and, while it is not 0, call vetoes; a vetoed store returns unrun, without a hidden event. Core keeps
 	 * the cells the stubs load (open defaults to a zero word, vetoes to a function answering false), so the stubs' shape does not depend

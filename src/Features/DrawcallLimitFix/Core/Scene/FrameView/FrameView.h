@@ -146,9 +146,6 @@ namespace DCLF::Scene
 		bool HasInstalled() const { return installed != nullptr; }
 		/** @brief The toggles generation the installed publication's commit was made under, 0 without one. */
 		std::uint32_t InstalledToggles() const { return installed ? installed->togglesGeneration : 0u; }
-		/** @brief The adoption guards' generations the installed publication was built for, and the frame's (BeginFrame's sample). */
-		Extensions::AdoptionGenerations InstalledAdoptionGuards() const { return installed ? installed->adoptionGuards : Extensions::AdoptionGenerations{}; }
-		const Extensions::AdoptionGenerations& FrameAdoptionGuards() const { return frameAdoptionGuards; }
 		/**
 		 * @brief Render thread, frame start after InstallClaims or WithdrawSet, before the culls (Extensions::ComponentsAdopt): the claims
 		 * the frame installed (null when withdrawn), and by component the deltas of the publications installed since the last adoption,
@@ -351,7 +348,6 @@ namespace DCLF::Scene
 		std::uint64_t categoryMirrorCaptures = 0, categoryMirrorRecords = 0;  // CaptureCategories' captures for the mirror
 		// The frame's engine globals (FrameGlobals::Capture at BeginFrame; FrameValues binds them for its seeds).
 		std::shared_ptr<const FrameGlobals> frameGlobals;
-		Extensions::AdoptionGenerations frameAdoptionGuards{};  // the frame's adoption guards' generations (BeginFrame)
 		std::uint64_t ancestorMapPostedGeneration = ~0ull;  // render thread: the ancestor map's generation last posted
 		// Render thread: the first frame after a load catches up every switch in the world (CatchUpSwitches) and forces its category
 		// capture (as after a detach: categoryDetachSeen).

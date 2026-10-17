@@ -906,12 +906,12 @@ namespace DCLF::Scene
 	{
 		ZoneScopedN("CS.DCLF.Scene.PublishScene");
 		// A pass whose only change is deltas the frame takes and nothing a snapshot is built from reads (the placement plans, the shading
-		// names, the retired imports, the light entries: no claim, table, lookup, toggle or guard moved since the last publication, and
+		// names, the retired imports, the light entries: no claim, table, lookup or toggle moved since the last publication, and
 		// the claims shared again unrevoked) publishes the last tables again: the snapshot builder then posts the last snapshot again for
 		// it (PassesThrough: the same objects), and the frame takes its deltas. Its tables would be a copy of the same content.
 		const auto& pace = paceStats;
 		bool deltasOnly = publishedKeyValid && !publishForced && publishedTables && setApply.empty() && !setSnapshotDirty && !nodeSetsDirty &&
-		                  sceneInputs.adoptionGuards == publishedAdoptionGuards && publicationJoined.empty() && publicationLeft.empty() &&
+		                  publicationJoined.empty() && publicationLeft.empty() &&
 		                  componentSeedRequests.empty() && switchesApplied.empty() && !switchResync && !tables.ClassMemberChangesPending() &&
 		                  componentDeltaRequests.empty() && CurrentPublishKey() == publishedKey;
 		const auto sharedBefore = pace.claimsShared, wholeBefore = pace.claimsWhole, revokedBefore = pace.claimsRevoked;
@@ -937,8 +937,6 @@ namespace DCLF::Scene
 		publication->sequence = ++publicationSequence;
 		publication->commitFrame = publicationCommitFrame;
 		publication->togglesGeneration = publicationCommitToggles;
-		// The adoption guards' generations (the LOD forced releases) this pass's events are complete for (taken before its drains).
-		publication->adoptionGuards = sceneInputs.adoptionGuards;
 		publication->tablesGeneration = tablesGeneration;
 		publication->tables = publishedTables;
 		publication->claims = publicationClaims ? publicationClaims : std::make_shared<const SetSnapshot>();
