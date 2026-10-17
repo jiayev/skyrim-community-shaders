@@ -819,7 +819,7 @@ namespace DCLF::Extensions
 				// The reference must leave a bit above its shift, and a shifted or biased reference needs a word to ride in.
 				if (a_family.recordShift >= 32 || ((a_family.recordShift || a_family.recordBias || !a_family.recordTag) && a_family.recordWord == ~0u))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s table family {} packs its record reference past the word, or into none", feature, a_family.name));
-				lists.tableFamilies.push_back({ std::string(a_family.name), a_family.make, a_family.assign, a_family.same, a_family.clear, a_family.recycle, a_family.rowsEnd,
+				lists.tableFamilies.push_back({ std::string(a_family.name), a_family.make, a_family.assign, a_family.assignRow, a_family.same, a_family.clear, a_family.recycle, a_family.rowsEnd,
 					a_family.recordWord, a_family.recordShift, a_family.recordBias, a_family.recordTag, a_family.journaled, a_family.rows });
 				return { static_cast<std::uint32_t>(lists.tableFamilies.size() - 1) };
 			}

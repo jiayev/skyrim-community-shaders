@@ -321,27 +321,37 @@ namespace DCLF
 			segmentIn[j] = &in;
 			segmentOut[j] = out->payloads[j].get();
 		}
-		// The publication's stream views (the stores are this task's alone: no build in the frame updates them) beside the main build, which
-		// reads them only in its Finish: two pool tasks, unless the parity keeps the fan-outs on this thread (Policy::SerialFanout).
+		// The publication's stream views (the stores are this task's alone: no build in the frame updates them), then the participants' shared
+		// halves, beside the main build, which reads the views only in its Finish: two pool tasks, unless the parity keeps the fan-outs on
+		// this thread (Policy::SerialFanout).
 		auto& pairStats = mainRows.pairStats;
 		const auto msSince = [](std::chrono::steady_clock::time_point a_start) {
 			return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a_start).count();
 		};
 		const auto stagesStart = std::chrono::steady_clock::now();
 		Draws::MainBuildStages mainBuild(segmentIn, *a_tables, Scene::FrameView::Get().GetFrameTables(), a_lookups, segmentOut, mainRows, &mainCache);
+		// The participants' build (Revision/Participant.h), from the same tables, stream views and lookups: the shadow engine's, with the
+		// publication's candidates. Their shared halves run in the first stage, after the stream views they read and beside the main build
+		// (BuildPayloadShared's contract: they touch neither its region nor its payloads); their payloads after it (BuildPayload).
+		const AheadBuild build{ *out, c, *a_tables, a_lookups, a_generation, a_frame, a_sunCandidates, a_lightCandidates, oldestTables, payloadBuilder, mainCache.region,
+			pairStats };
 		const auto stage = [&](std::size_t a_stage) {
 			const auto start = std::chrono::steady_clock::now();
 			if (a_stage == 0) {
 				out->streams = MakeStreamViews(objectStore, extrasStore, geometryStore, oldestTables, a_tables, *a_tables, a_generation, a_frame);
 				pairStats.streamsMs += msSince(start);
+				// Only for a build whose participants' payloads follow (BuildPayload after the main build): every shared half is.
+				if (buildMain)
+					for (auto* participant : participants)
+						participant->BuildPayloadShared(build);
 			} else {
 				mainBuild.Run();
 				pairStats.mainMs += msSince(start);
 			}
 		};
-		// A small change runs both stages here: the stream views catch up only the change log's unread entries (the object records'
-		// and the geometry rows', both stores continuing), so overlapping them with the main build saves less than this thread's wait
-		// on the helper costs.
+		// A small change runs both stages here, in order: the stream views (and the shadow engine's kept records after them) catch up only
+		// the change log's unread entries (the object records' and the geometry rows', both stores continuing), so overlapping them with the
+		// main build saves less than this thread's wait on the helper costs.
 		const auto unread = [a_generation](const LogCursor& a_cursor, const auto& a_log) -> std::uint64_t {
 			return a_cursor.Continues(a_log, a_generation) ? a_cursor.Unread(a_log).size() : kInlineStageChanges + 1;
 		};
@@ -368,14 +378,10 @@ namespace DCLF
 		}
 		mainBuild.Finish(out->streams);
 		pairStats.stagesMs += msSince(stagesStart);
-		// The participants' payloads (Revision/Participant.h), from the same tables, stream views and lookups: the shadow engine's, with
-		// the publication's candidates, and the next frame's exclusions from it.
-		{
-			const AheadBuild build{ *out, c, *a_tables, a_lookups, a_generation, a_frame, a_sunCandidates, a_lightCandidates, oldestTables, payloadBuilder, mainCache.region,
-				pairStats };
-			for (auto* participant : participants)
-				participant->BuildPayload(build);
-		}
+		// The participants' payloads: their halves after the main build (the shadow engine's region half, into the main region as it left
+		// it), and the next frame's exclusions from it.
+		for (auto* participant : participants)
+			participant->BuildPayload(build);
 		// Every payload of the publication holds the scene list's region as both builds left it: the shadow payload's view, taken
 		// after its words, or without it the main region's; and the shadow payload where its own frame inputs follow the main ones'.
 		ShareAheadRegion(*out, mainCache);

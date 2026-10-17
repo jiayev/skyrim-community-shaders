@@ -203,9 +203,11 @@ namespace DCLF
 		{
 			struct Key
 			{
-				// The publication's tables and catalog (immutable: the same objects hold the same contents; held weakly, so a freed one is
-				// never taken for a new one at its address), its tables' generation and its request.
-				std::weak_ptr<const SceneTables> tables;
+				// What the pass reads of the publication's tables, by value (TablesWitness, Producer.cpp), never by the tables' identity:
+				// the coordinator pools them, so the same object comes back with other rows and a new one may hold the same rows. The
+				// catalog (immutable: the same object holds the same contents; held weakly, so a freed one is never taken for a new one at
+				// its address), the tables' generation and the request.
+				std::uint64_t tables = 0;
 				std::weak_ptr<const PipelineCatalog> catalog;
 				std::uint32_t tablesGeneration = 0;
 				RevisionRequest request;
@@ -220,6 +222,35 @@ namespace DCLF
 			// The report's (ProducerReport): the makes that kept the last revision and that ran the pass; the parities (the pass run
 			// anyway for an unchanged key; the shapes made anyway for an unchanged shapes key).
 			std::uint64_t kept = 0, ran = 0;
+			// The report's: the makes that ran it with no last revision to keep (none sealed yet, or one failed since), and the others by
+			// what of the key moved (each part that did: Moved).
+			enum Moved : std::size_t
+			{
+				kMovedTables,
+				kMovedCatalog,
+				kMovedGeneration,
+				kMovedRequest,
+				kMovedInputs,
+				kMovedLookups,
+				kMovedShadowRows,
+				kMovedVolatiles,
+				kMovedParts
+			};
+			static constexpr std::array<const char*, kMovedParts> kMovedNames{ "tables", "catalog", "tables generation", "request", "inputs", "lookups", "shadow rows",
+				"volatiles" };
+			std::uint64_t ranUnkept = 0;
+			std::array<std::uint64_t, kMovedParts> movedBy{};
+			/** @brief A make that ran the pass: counted, by the parts of the key that moved (a_moved, a bit by Moved; ~0u: none to keep). */
+			void NoteRan(std::uint32_t a_moved)
+			{
+				++ran;
+				if (!valid) {
+					++ranUnkept;
+					return;
+				}
+				for (std::size_t part = 0; part < movedBy.size(); ++part)
+					movedBy[part] += (a_moved >> part) & 1u;
+			}
 			Diagnostics::ParityCounter parity, shapesParity;
 		} revisionReuse;
 		std::atomic<bool> snapshotInputsMoved{ false };  // the frame posted revision inputs since the builder's last make

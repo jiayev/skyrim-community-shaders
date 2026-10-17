@@ -17,6 +17,13 @@ namespace DCLF::Extensions
 			std::atomic<std::uint64_t> contentEpoch{ kNoneSent };
 		};
 		std::array<SentSlot, kTableFamilySlots> sentPosted;
+		// By family: the publications that replayed its marked rows since the report last took them (scene lane -> the report).
+		std::array<std::atomic<std::uint64_t>, kTableFamilySlots> replays{};
+	}
+
+	std::uint64_t TakeTableFamilyReplays(std::uint32_t a_family)
+	{
+		return a_family < replays.size() ? replays[a_family].exchange(0, std::memory_order_relaxed) : 0;
 	}
 
 	void TableFamilySent(Api::TableFamilyId a_id, std::uint64_t a_contentEpoch)
@@ -96,6 +103,8 @@ namespace DCLF::Extensions
 			MakeAll();
 		auto& to = entries[a_family];
 		to.stamp = a_from.stamp;
+		to.written = a_from.written;
+		to.markedRows = a_from.markedRows;  // the chunks shared
 		to.objectRow = a_from.objectRow;
 		to.rowTag = a_from.rowTag;
 		to.rowsEnd = a_from.rowsEnd;
@@ -151,6 +160,19 @@ namespace DCLF::Extensions
 		return sum;
 	}
 
+	std::uint64_t TableFamilies::RequirementsWitness() const
+	{
+		const auto registered = RegisteredTableFamilies();
+		std::uint64_t hash = 0xcbf29ce484222325ull;
+		for (std::size_t f = 0; f < registered.size(); ++f) {
+			const auto* held = f < entries.size() ? &entries[f] : nullptr;
+			const std::uint64_t value = registered[f].rows ? (held && held->columns ? registered[f].rows(held->columns.get()) : 0u) : StampOf(static_cast<std::uint32_t>(f));
+			hash = (hash ^ ((value << 1) | (registered[f].rows ? 1u : 0u))) * 0x100000001b3ull;
+			hash ^= hash >> 29;
+		}
+		return hash;
+	}
+
 	bool TableFamilies::SameStamps(const TableFamilies& a_other) const
 	{
 		for (std::size_t f = 0; f < std::max(entries.size(), a_other.entries.size()); ++f)
@@ -175,10 +197,42 @@ namespace DCLF::Extensions
 			}
 			// The live tables hold every family from their first write on, and their stamps only move: one they do not hold yet is one
 			// neither side wrote.
-			if (f < a_from.entries.size())
-				Assign(f, a_from.entries[f]);
+			if (f >= a_from.entries.size())
+				continue;
+			// Moved by marks alone: the rows they name (a few a publication: the fade roots' seeds, owned bits and inputs), not the family.
+			if (a_replayable && ReplayMarked(f, a_from.entries[f])) {
+				replays[f].fetch_add(1, std::memory_order_relaxed);
+				kept |= 1u << f;
+				continue;
+			}
+			Assign(f, a_from.entries[f]);
 		}
 		return kept;
+	}
+
+	bool TableFamilies::ReplayMarked(std::size_t a_family, const TableFamilyColumns& a_from)
+	{
+		const auto registered = RegisteredTableFamilies();
+		if (a_family >= registered.size() || a_family >= entries.size() || !registered[a_family].assignRow)
+			return false;
+		auto& to = entries[a_family];
+		// Nothing written since this copy but marked rows (its written stands: the references, the tags' count and the feature's other
+		// columns are a_from's), every mark since still in a_from's log (one trimmed past this copy's end: copied whole).
+		if (to.written != a_from.written || !to.columns || !a_from.columns || to.markedRows.base > a_from.markedRows.base ||
+			!a_from.markedRows.Readable(to.markedRows.End()))
+			return false;
+		const auto assignRow = registered[a_family].assignRow;
+		for (const std::uint32_t row : a_from.markedRows.From(to.markedRows.End())) {
+			assignRow(to.columns.get(), a_from.columns.get(), row);
+			if (row < to.rowTag.size() && row < a_from.rowTag.size())
+				to.rowTag[row] = a_from.rowTag[row];
+		}
+		to.stamp = a_from.stamp;
+		to.markedRows = a_from.markedRows;
+		// The journal with it, as for a kept family.
+		if (a_from.journaled)
+			to.journal = a_from.journal;
+		return true;
 	}
 
 	bool TableFamilies::Same(std::uint32_t a_family, const TableFamilies& a_other) const

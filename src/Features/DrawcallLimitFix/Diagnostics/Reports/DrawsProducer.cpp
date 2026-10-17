@@ -100,14 +100,20 @@ namespace DCLF
 				std::exchange(b.buildsStarted, 0), std::exchange(b.buildsDiscarded, 0), std::exchange(b.heldPasses, 0), std::exchange(b.stagesInline, 0),
 				std::exchange(b.stagesPooled, 0));
 		}
-		// The makes that kept the last revision (their requirement pass's inputs unchanged: RevisionReuse) and those that ran it, and the
-		// parities (CS_DCLF_PERSISTENT_PARITY): the pass run anyway for an unchanged key, the shapes made anyway for an unchanged shapes key.
+		// The makes that kept the last revision (their requirement pass's inputs unchanged: RevisionReuse) and those that ran it (with no
+		// last revision to keep, or by what of the key moved), and the parities (CS_DCLF_PERSISTENT_PARITY): the pass run anyway for an
+		// unchanged key, the shapes made anyway for an unchanged shapes key.
 		if (auto& reuse = revisionReuse; reuse.kept || reuse.ran) {
-			text += fmt::format("[DCLF] revision reuse: {} makes kept the last revision (requirement pass unchanged), {} ran it; parity: unchanged passes {} checked, "
-								"{} differ{}; kept shapes {} checked, {} differ{}\n",
-				reuse.kept, reuse.ran, reuse.parity.checks, reuse.parity.mismatches, reuse.parity.Verdict(true), reuse.shapesParity.checks, reuse.shapesParity.mismatches,
-				reuse.shapesParity.Verdict(true));
-			reuse.kept = reuse.ran = 0;
+			std::string moved;
+			for (std::size_t part = 0; part < reuse.movedBy.size(); ++part)
+				if (reuse.movedBy[part])
+					moved += fmt::format("{}{} {}", moved.empty() ? "" : ", ", reuse.kMovedNames[part], reuse.movedBy[part]);
+			text += fmt::format("[DCLF] revision reuse: {} makes kept the last revision (requirement pass unchanged), {} ran it ({} with none to keep; moved: {}); "
+								"parity: unchanged passes {} checked, {} differ{}; kept shapes {} checked, {} differ{}\n",
+				reuse.kept, reuse.ran, reuse.ranUnkept, moved.empty() ? std::string("nothing") : moved, reuse.parity.checks, reuse.parity.mismatches,
+				reuse.parity.Verdict(true), reuse.shapesParity.checks, reuse.shapesParity.mismatches, reuse.shapesParity.Verdict(true));
+			reuse.kept = reuse.ran = reuse.ranUnkept = 0;
+			reuse.movedBy = {};
 			reuse.parity.Reset();
 			reuse.shapesParity.Reset();
 		}

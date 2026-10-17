@@ -62,7 +62,8 @@ namespace DCLF::Draws
 	/**
 	 * @brief The draws the scene's objects can produce (SceneDrawBound), in all and per pipeline slot, kept from the change log:
 	 * a slot the log names has its share taken out and put back, so a reserve reads what changed rather than every slot. Owned
-	 * by the revision producer (Impl::RevisionProducer::drawBound): each of its reserves brings it up to date before reading it.
+	 * by the revision producer (Impl::RevisionProducer::drawBound): each make brings it up to date once, before the reuse key
+	 * (Impl::MakeRevision); RequireMain and the shadow engine's RequireSequences only read it.
 	 */
 	struct DrawBoundStore
 	{

@@ -49,6 +49,7 @@ namespace DCLF::Scene
 	// The family's callbacks (Api::TableFamily; FadeRoots.cpp).
 	std::shared_ptr<void> MakeFadeRoots();
 	void AssignFadeRoots(void* a_to, const void* a_from);
+	void AssignFadeRootRow(void* a_to, const void* a_from, std::uint32_t a_row);
 	bool SameFadeRoots(const void* a_left, const void* a_right);
 	void ClearFadeRoots(void* a_columns);
 	void RecycleFadeRoot(void* a_columns, std::uint32_t a_row);

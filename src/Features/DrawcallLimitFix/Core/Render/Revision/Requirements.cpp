@@ -85,11 +85,11 @@ namespace DCLF
 		}
 	}
 
-	void IndirectDraws::Impl::RequireMain(GrowthBuild& a_build, Resources& a_resources, const SceneTables& a_tables, std::uint32_t a_generation)
+	void IndirectDraws::Impl::RequireMain(GrowthBuild& a_build, Resources& a_resources, const SceneTables& a_tables, std::uint32_t)
 	{
 		auto& buffers = SceneBufferSet::Get();
 		auto& r = a_resources;
-		UpdateDrawBound(a_tables, a_generation);
+		// The draw bound as the make brought it up to date from a_tables (MakeRevision, before the reuse key reads it).
 		const auto& drawBound = producer.drawBound;
 		std::uint32_t draws = drawBound.Draws();
 		auto& layout = producer.mainLayout;

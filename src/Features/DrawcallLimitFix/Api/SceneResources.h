@@ -37,7 +37,11 @@ namespace DCLF::Api
 	 *   order: the buffers its passes declare, each under its name.
 	 * - require (optional): the snapshot builder, each revision's requirements (RequireSceneTables), in the same order: the
 	 *   units its versioned buffers must hold for the publication's tables (and the words postInputs posted for the revision:
-	 *   SceneResourcesRequirements::inputs). A set is sealed only once they hold them.
+	 *   SceneResourcesRequirements::inputs). A set is sealed only once they hold them. Of the tables it reads only the table families
+	 *   (a family's rows, Api::TableFamily::rows, where it counts them; anything of one that does not, which its stamp follows) and the
+	 *   vertex stream's rows' ranges (SceneTables::streamRows: object, first, count): a make whose witnesses of those, of the posted
+	 *   words and of the rest of the requirement pass stood keeps the last revision without calling it (Impl::MakeRevision). Anything
+	 *   else it would read goes through postInputs.
 	 * - fit (optional): the snapshot builder or the render thread, wherever a SceneFit is made from the versions a set names: what its
 	 *   buffers hold of the slots the objects read them by. An object past them waits (ObjectFits).
 	 * - postInputs (optional, with inputWords): render thread, wherever Core posts the revision's inputs (PostRevisionInputs): the
