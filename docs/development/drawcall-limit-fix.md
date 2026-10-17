@@ -7329,17 +7329,21 @@ culls nothing for the sun. A caster not yet a member casts no sun shadow until i
     view of the sun (`ShadowViews`, which `AddCaster` filled before this call site: `FUN_1414a3fb0` precedes the cull)
     covered and its casters the frame's set's (`CastersForBatch`), and not a parity frame (those keep the exclusion, for
     the `SunCasters` watch). Otherwise the exclusion as before.
--   **The cull** runs with every scene list empty (an array of empty `BSTArray`s in place of `&DAT_14338c870`'s base): the
-    processes' setup and the closing extra-list cull stay the engine's, and nothing is appended. The scene-list cull job
-    list (`_gJobList_SceneListAccumCulling`, `0x14338c630`) is null for the call, so the empty list culls run inline (the
+-   **The cull** runs with every scene list empty (an array of empty `BSTArray`s in place of `&DAT_14338c870`'s base)
+    and an empty extra list: the processes' setup stays the engine's, and nothing is appended. The extra list (the third
+    argument, `BSPortalGraph::alwaysRenderChildren` of the main camera's portal graph) holds every loaded cell's actor
+    node and `DynamicNode` (always-draw, bound radius 1; 882 entries at uGrids 21) and the `BSParticleSystemManager`. A
+    probe found ~470 cascade registrations a frame from it, 83% casters DCLF claims (actors, their weapons, arrows,
+    animated lanterns) and the rest geometry that builds no shadow pass (eyes, `EnbParticleLight01`) or casters still
+    joining; it cost ~1.5-2.3 ms a frame of cascade culls. The scene-list cull job list
+    (`_gJobList_SceneListAccumCulling`, `0x14338c630`) is null for the call, so the empty list culls run inline (the
     engine's own path without one): no jobs, and no `JobList::Finish` behind the job threads' animation work (the
     telemetry's `BSShadowDirectionalLight::UpdateShadowMap`, ID 108492, is this function). Only the render thread reads that
     global while the game runs.
 -   **`Accumulate`** keeps its bookkeeping (the cascades' accumulator fields, the shadow-light count later lights' bits are
     offset by). Each cascade's `FUN_1414f0920` gets a process list of DCLF's holding only the full-frustum processes with
-    entries (the extra list's), so an empty one costs no cull set-up and no registration (`FUN_140e28af0` takes the
-    accumulation context's lock, which the main camera's list jobs hold while `CalculateActiveShadowCasterLights` runs
-    beside them). No placeholder entry is needed.
+    entries (none now), so it culls nothing and registers nothing (`FUN_140e28af0` takes the accumulation context's lock,
+    which the main camera's list jobs hold while `CalculateActiveShadowCasterLights` runs beside them).
 -   **The bits:** every geometry the main camera registers takes DCLF's cascade bits (the same cascade volumes, from the
     Sun board), once a frame until its first clearing registration. The once-a-frame rule is a `FrameAddressSet`
     (`Core/Engine`, a lock-free set of addresses with a round a frame), as candidate geometries no longer carry the

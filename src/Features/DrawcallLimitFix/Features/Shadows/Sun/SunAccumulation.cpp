@@ -547,17 +547,19 @@ namespace DCLF::Features::Shadows::Sun
 				self.fullFrustumRan = true;
 				auto* light = static_cast<RE::BSShadowDirectionalLight*>(a_light);
 				if (self.ArmWhole(light)) {
-					// The engine's cull with no scene list in it (each empty): its processes' setup and its closing cull (the extra list) as the
-					// engine does them, nothing appended. With the list culls' job list null for the call, their empty culls run inline (the
-					// engine's own path without one): no jobs queued, and no wait behind the job threads' other work. Only the render thread
-					// reads the job list while the game runs (Main::Draw, CalculateAndDrawShadowCasterLights, this cull; then shutdown).
+					// The engine's cull with no scene list in it (each empty) and an empty extra list (in place of the main camera's portal
+					// graph's alwaysRenderChildren: every loaded cell's actor and dynamic nodes, and the particle manager): its processes' setup
+					// as the engine does it, nothing appended, so the cascade culls cull nothing. With the list culls' job list null for the
+					// call, their empty culls run inline (the engine's own path without one): no jobs queued, and no wait behind the job
+					// threads' other work. Only the render thread reads the job list while the game runs (Main::Draw,
+					// CalculateAndDrawShadowCasterLights, this cull; then shutdown).
 					static const std::array<std::uint8_t, kSceneListBytes * kMaxSceneLists> emptyLists{};
 					auto lists = reinterpret_cast<std::uintptr_t>(emptyLists.data());
 					auto& jobs = Global<void*>(Address::kListCullJobs);
 					void* const held = jobs;
 					const std::int64_t start = Now();
 					jobs = nullptr;
-					func(a_light, &lists, a_arg);
+					func(a_light, &lists, const_cast<std::uint8_t*>(emptyLists.data()));
 					jobs = held;
 					self.WholeApplied();
 					const std::int64_t ticks = Now() - start;
@@ -641,9 +643,9 @@ namespace DCLF::Features::Shadows::Sun
 						cascade.bit = At<std::uint32_t>(accumulator, kAccumulatorLightBit);
 					}
 				}
-				// The whole skip: the scene lists were culled into nothing, so only the processes holding the closing cull's entries (the extra
-				// list's) are culled into the cascade; an empty one would cost a cull's set-up and a registration under the context's lock
-				// (FUN_140e28af0) for nothing.
+				// The whole skip: the scene lists and the extra list were culled into nothing, so only processes holding entries (none, unless
+				// another caller appended) are culled into the cascade; an empty one would cost a cull's set-up and a registration under the
+				// context's lock (FUN_140e28af0) for nothing.
 				if (call && self.frameState.whole && a_processes) {
 					std::array<RE::BSCullingProcess*, kMaxSceneLists> held{};
 					ProcessList kept{ held.data() };
