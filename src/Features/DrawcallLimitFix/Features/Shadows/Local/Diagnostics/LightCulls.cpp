@@ -28,6 +28,8 @@ namespace DCLF::Features::Shadows::Local::LightCulls
 		{
 			std::atomic<std::uint64_t> passes{ 0 }, lost{ 0 }, filterChecked{ 0 }, filterMissed{ 0 };
 			std::atomic<std::uint64_t> compared{ 0 }, agree{ 0 }, engineOnly{ 0 }, dclfOnly{ 0 }, unhandled{ 0 };
+			// The empty culls' bits (every light's sphere) against the engine's, at each geometry's first clearing main registration.
+			std::atomic<std::uint64_t> sphereCompared{ 0 }, sphereAgree{ 0 }, sphereEngineOnly{ 0 }, sphereDclfOnly{ 0 };
 			// By the reach of the light that differs (the last: it did not reach the entry).
 			std::array<std::atomic<std::uint64_t>, kReachKindCount + 1> engineOnlyBy{}, dclfOnlyBy{};
 		};
@@ -38,6 +40,38 @@ namespace DCLF::Features::Shadows::Local::LightCulls
 		std::array<std::uint64_t, 16> lostByReject{};
 		std::string filterFirstMissed;
 		std::uint32_t bitsLogged = 0;
+		std::uint32_t sphereLogged = 0;
+		std::string sphereFirstEngineOnly;
+
+		/** @brief The empty culls' bits against the engine's: an engine-only bit is one an empty cull of that light would lose. */
+		void CompareSphere(const Diagnostics::PointLightBits& a_event)
+		{
+			const std::uint32_t engine = a_event.engine, sphere = a_event.sphere;
+			counts.sphereCompared.fetch_add(1, std::memory_order_relaxed);
+			if (engine == sphere) {
+				counts.sphereAgree.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+			if (!(engine & ~sphere)) {
+				counts.sphereDclfOnly.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+			counts.sphereEngineOnly.fetch_add(1, std::memory_order_relaxed);
+			const auto* geometry = a_event.geometry;
+			std::string detail;
+			const std::uint32_t lights = View::FrameLights();
+			for (std::uint32_t light = 0; light < lights; ++light) {
+				const auto frameLight = View::FrameLight(light);
+				if (!(engine & ~sphere & frameLight.bit))
+					continue;
+				const auto& bound = geometry->worldBound;
+				const float dx = bound.center.x - frameLight.centre[0], dy = bound.center.y - frameLight.centre[1], dz = bound.center.z - frameLight.centre[2];
+				detail += fmt::format(" light {} (distance {:.0f}, bound {:.0f}, radius {:.0f})", light, std::sqrt(dx * dx + dy * dy + dz * dz), bound.radius, frameLight.radius);
+			}
+			std::scoped_lock lock(firstMutex);
+			if (sphereLogged++ == 0)
+				sphereFirstEngineOnly = fmt::format("'{}' engine {:#x}, spheres {:#x}:{}", geometry->name.c_str() ? geometry->name.c_str() : "?", engine, sphere, detail);
+		}
 
 		void Selected(const Diagnostics::LightCullsSelected& a_event)
 		{
@@ -178,6 +212,8 @@ namespace DCLF::Features::Shadows::Local::LightCulls
 			const auto* a_geometry = a_event.geometry;
 			const std::uint32_t entry = a_event.entry, bits = a_event.bits, engine = a_event.engine;
 			const auto& reach = a_event.reach;
+			if (a_event.first)
+				CompareSphere(a_event);
 			const auto* exclusion = View::FrameExclusion();
 			const auto& candidates = *exclusion->candidates;
 			if (entry == ~0u) {
@@ -248,6 +284,8 @@ namespace DCLF::Features::Shadows::Local::LightCulls
 		c.passes = take(counts.passes), c.lost = take(counts.lost), c.filterChecked = take(counts.filterChecked), c.filterMissed = take(counts.filterMissed);
 		c.compared = take(counts.compared), c.agree = take(counts.agree), c.engineOnly = take(counts.engineOnly), c.dclfOnly = take(counts.dclfOnly);
 		c.unhandled = take(counts.unhandled);
+		c.sphereCompared = take(counts.sphereCompared), c.sphereAgree = take(counts.sphereAgree);
+		c.sphereEngineOnly = take(counts.sphereEngineOnly), c.sphereDclfOnly = take(counts.sphereDclfOnly);
 		for (std::uint32_t k = 0; k <= kReachKindCount; ++k) {
 			c.engineOnlyBy[k] = take(counts.engineOnlyBy[k]);
 			c.dclfOnlyBy[k] = take(counts.dclfOnlyBy[k]);
@@ -257,6 +295,8 @@ namespace DCLF::Features::Shadows::Local::LightCulls
 		c.firstLost = std::exchange(firstLost, {});
 		c.filterFirstMissed = std::exchange(filterFirstMissed, {});
 		bitsLogged = 0;
+		sphereLogged = 0;
+		c.sphereFirstEngineOnly = std::exchange(sphereFirstEngineOnly, {});
 		return c;
 	}
 }

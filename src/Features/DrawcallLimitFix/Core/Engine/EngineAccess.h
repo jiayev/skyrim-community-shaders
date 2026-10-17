@@ -74,6 +74,7 @@ namespace DCLF::Engine
 		inline constexpr std::uintptr_t kSceneListCount = 0x338c868;  // std::uint32_t: the scene lists
 		inline constexpr std::uintptr_t kSceneLists = 0x338c870;  // BSTArray<NiPointer<NiAVObject>>*: the scene lists
 		inline constexpr std::uintptr_t kExtraList = 0x338c888;  // BSTArray<NiPointer<NiAVObject>>: culled by the first list job only
+		inline constexpr std::uintptr_t kListCullJobs = 0x338c630;  // JobList*: _gJobList_SceneListAccumCulling (null: the list culls run inline)
 		inline constexpr std::uintptr_t kListProcesses = 0x338c8a0;  // BSGeometryListCullingProcess**: one per scene list
 		inline constexpr std::uintptr_t kDrawWorldEye = 0x338c8c0;  // Main::DrawWorld's camera position (float[3])
 		inline constexpr std::uintptr_t kWorldSceneGraph = 0x338c8e8;  // the world scene graph; its camera at +0x128

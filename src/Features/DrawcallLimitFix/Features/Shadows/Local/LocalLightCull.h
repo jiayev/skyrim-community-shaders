@@ -61,6 +61,10 @@ namespace DCLF::Features::Shadows::Local
 			std::size_t filterNodes = 0;
 			// The lights' bits.
 			std::uint64_t bitLights = 0, overflow = 0, given = 0, withBits = 0;
+			// The empty culls: lights culled empty, and those that could not be (a view not DCLF's; portal-strict); main registrations given
+			// their bits (with one), without a slot in the frame's set; parity spheres checked against the cull's, and differing.
+			std::uint64_t emptyLights = 0, emptyNotCovered = 0, emptyPortalStrict = 0, emptyGiven = 0, emptyWithBits = 0, emptyUnstamped = 0;
+			std::uint64_t spheresChecked = 0, spheresDiffer = 0;
 		};
 		Counters Take();
 
@@ -85,6 +89,14 @@ namespace DCLF::Features::Shadows::Local
 		 * the filter, or the entry where Process1 skipped it), the light's bit when the geometry's bound passes the light's
 		 * test (FUN_14151a1e0, its sphere), or untested where the cull reached it untested (cull mode 1). A portal-strict light's
 		 * compound frustum is not tested. On the frames the culls keep whole the engine's bits stand (the observer compares them).
+		 *
+		 * The empty culls: a light whose every view DCLF draws this frame, with its casters claimed by the set, is not culled at all - its
+		 * Accumulate keeps only its bookkeeping (the first accumulator's light index and bit, the shadow-light count). Its cull would serve
+		 * nothing else: the paraboloid registrations are all withheld, and a point light's process runs with cameraRelatedUpdates off (no
+		 * fades, no leaf LOD in OnVisible). Every geometry's first clearing main registration of the frame then takes the bit of each such
+		 * light whose sphere (its first view's camera position and its radius, as FUN_141519d20 sets them) its bound is in. Portal-strict
+		 * lights, the parity frames, a light past the mask's 32 and frames without the exclusion are culled as before; the parity frames
+		 * compare the predicted spheres with the culls' and the sphere bits with the engine's.
 		 */
 		/**
 		 * @brief The Sun source's registration hook (Features/Shadows/Sun), a main registration (+0x160 0xFFFF: it reads the mask, then clears it) of

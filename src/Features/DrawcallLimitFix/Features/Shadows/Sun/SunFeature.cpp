@@ -50,7 +50,7 @@ namespace DCLF::Features::Shadows::Sun
 				.tooltip = "The engine stops building sun shadow passes for the casters DCLF draws; it still sets their shadow bits for the main pass.",
 				.seed = skipSwitch, .after = "shadows", .needs = { "shadows" } });
 			const auto exclude = a_context.RegisterToggle({ .name = "exclude sun entries", .label = "Take DCLF's objects out of the engine's sun culls (CS_DCLF_SUN_EXCLUDE)",
-				.tooltip = "The sun's cascade culls skip every reference whose shadows DCLF draws entirely; DCLF sets those objects' sun shadow bits for the main pass.",
+				.tooltip = "The sun's cascade culls skip every reference whose shadows DCLF draws entirely, and while DCLF draws every cascade the engine culls nothing for the sun; DCLF sets the objects' sun shadow bits for the main pass.",
 				.seed = excludeSwitch, .after = "skip sun accumulation", .needs = { "skip sun accumulation" } });
 			SunAccumulation::SetToggles(skip, exclude);
 			// The directional views draw while the source is registered; its cameras are the hook's (the Sun board), which Core reads through

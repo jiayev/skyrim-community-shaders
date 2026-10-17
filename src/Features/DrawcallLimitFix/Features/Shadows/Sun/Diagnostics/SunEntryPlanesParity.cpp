@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
 
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunViews.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
@@ -27,7 +28,8 @@ namespace DCLF::Features::Shadows::Sun
 			}
 			auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
 			auto* sun = node ? node->GetRuntimeData().sunShadowDirLight : nullptr;
-			if (!sun)
+			// The whole skip's frames: the processes culled no entry, so the engine set none of their planes up (the parity frames keep the cull).
+			if (!sun || SunAccumulation::Get().WholeFrame())
 				return;
 			std::size_t index = 0;
 			for (const auto& process : sun->GetShadowDirectionalLightRuntimeData().fullFrustumCullingProcessArray) {
