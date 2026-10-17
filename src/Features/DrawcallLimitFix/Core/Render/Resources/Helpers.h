@@ -45,11 +45,12 @@ namespace DCLF::Draws
 	}
 
 	// A draw's ExecuteIndirect max count: a power of two that only grows, so the recording settles while
-	// the preprocess memory stays near what the frame draws (the GPU count buffer says how many run).
+	// the preprocess memory stays near what the frame draws (the GPU count buffer says how many run). Never past a_limit, the
+	// buffer's draws, even when the buffer is sized down under the current count.
 	inline std::uint32_t GrowCapacity(std::uint32_t a_current, std::uint32_t a_needed, std::uint32_t a_limit)
 	{
 		if (a_needed <= a_current)
-			return a_current;
+			return std::min(a_current, a_limit);
 		return std::min(a_limit, std::max(256u, std::bit_ceil(a_needed)));
 	}
 
