@@ -17,6 +17,6 @@ namespace DCLF
 	std::uint64_t SubmittedRetirementPoint()
 	{
 		const auto* host = RenderGraphRuntime::Get().Host();
-		return host ? RetirementPoint(host->LastHostFrame()) : 0;
+		return host ? host->SubmissionsMade() : 0;
 	}
 }

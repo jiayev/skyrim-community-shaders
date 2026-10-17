@@ -513,9 +513,9 @@ void DrawcallLimitFix::TargetDumpPoint(const char* a_label, ID3D11Texture2D* a_e
 	DCLF::TargetDump::Point(a_label, a_extra);
 }
 
-void DrawcallLimitFix::OnGraphFrameCompleted(std::uint64_t a_hostFrame)
+void DrawcallLimitFix::OnGraphSubmissionsRetired(std::uint64_t a_submissions)
 {
-	DCLF::FrameRetirement()->Advance(DCLF::RetirementPoint(a_hostFrame));
+	DCLF::FrameRetirement()->Advance(a_submissions);
 }
 
 #else  // !CS_HAS_DCLF: built without the render graph or ORGModuleServices; nothing is installed and every entry point is inert.
@@ -552,6 +552,6 @@ void DrawcallLimitFix::OnUnmap(ID3D11Resource*) {}
 void DrawcallLimitFix::OnUpdateSubresource(ID3D11Resource*, const D3D11_BOX*, const void*) {}
 bool DrawcallLimitFix::TargetDumpArmed() { return false; }
 void DrawcallLimitFix::TargetDumpPoint(const char*, ID3D11Texture2D*) {}
-void DrawcallLimitFix::OnGraphFrameCompleted(std::uint64_t) {}
+void DrawcallLimitFix::OnGraphSubmissionsRetired(std::uint64_t) {}
 
 #endif

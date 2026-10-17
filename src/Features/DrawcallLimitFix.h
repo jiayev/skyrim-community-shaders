@@ -115,8 +115,8 @@ struct DrawcallLimitFix : Feature
 	/** @brief CS_DCLF_TARGET_DUMP's points from other features (Upscaling): see DCLF::TargetDump. */
 	static bool TargetDumpArmed();
 	static void TargetDumpPoint(const char* a_label, ID3D11Texture2D* a_extra = nullptr);
-	/** @brief The render graph host completed execution a_hostFrame on the GPU (in submission order): DCLF's retirement clock. */
-	static void OnGraphFrameCompleted(std::uint64_t a_hostFrame);
+	/** @brief Every render graph submission up to a_submissions completed on the GPU (PersistentGraphHost's retired callback): DCLF's retirement clock. */
+	static void OnGraphSubmissionsRetired(std::uint64_t a_submissions);
 
 private:
 	struct Hooks
