@@ -487,9 +487,12 @@ struct IDXGISwapChain_Present
 		NvPerf::OnPresentBegin();
 
 		ZoneScopedN("CS.Present");
-		GpuIdleTrace::OnPresent();
-		GpuEventTimers::OnPresent();
-		NvPerfBridge::OnPresent();
+		{
+			ZoneScopedN("CS.Present.Begin");
+			GpuIdleTrace::OnPresent();
+			GpuEventTimers::OnPresent();
+			NvPerfBridge::OnPresent();
+		}
 
 		// DLSS-G on Vulkan requires SyncInterval 0.
 		{
@@ -513,7 +516,10 @@ struct IDXGISwapChain_Present
 		streamline->SetPCLMarker(Streamline::PclMarker::TriggerFlash);
 		streamline->SetPCLMarker(Streamline::PclMarker::PresentStart);
 
-		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
+		HRESULT retval;
+		{
+		ZoneScopedN("CS.Present.Chain");
+		retval = globals::features::hdrDisplay.HandleSwapChainPresent(
 			This,
 			SyncInterval,
 			Flags,
@@ -525,19 +531,26 @@ struct IDXGISwapChain_Present
 						return func(sc, si, f);
 					});
 			});
+		}
 
 		streamline->SetPCLMarker(Streamline::PclMarker::PresentEnd);
 
 		auto* dxvk = DXVKInterop::GetSingleton();
 		const bool presentSucceeded = SUCCEEDED(retval);
-		if (presentSucceeded)
-			dxvk->RefreshPresenterSurfaceState();
-		streamline->CaptureDLSSGPresentState();
+		{
+			ZoneScopedN("CS.Present.SurfaceState");
+			if (presentSucceeded)
+				dxvk->RefreshPresenterSurfaceState();
+			streamline->CaptureDLSSGPresentState();
+		}
 
 		// Collect the overlay's frame metrics here rather than from its draw path, so hiding the
 		// overlay does not stop measurement and then feed the whole hidden interval back as a
 		// single frame. Cheap, and self-limiting to once per game frame.
-		globals::features::performanceOverlay.UpdateMetrics();
+		{
+			ZoneScopedN("CS.Present.Metrics");
+			globals::features::performanceOverlay.UpdateMetrics();
+		}
 
 		// Ground-truth present rate. The overlay's numbers only exist while it is being drawn, so
 		// when the question is "why does the frame rate never exceed the refresh rate" there was
@@ -569,7 +582,10 @@ struct IDXGISwapChain_Present
 		}
 
 		// After Present (upstream #2354): frameCount and every feature's Reset (DCLF's EndFrame among them) belong to the frame just presented.
-		globals::state->Reset();
+		{
+			ZoneScopedN("CS.Present.Reset");
+			globals::state->Reset();
+		}
 
 		NvPerf::OnPresentEnd();
 
