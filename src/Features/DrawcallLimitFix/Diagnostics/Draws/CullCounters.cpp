@@ -1,6 +1,7 @@
 // The culling's own counters (always on): the colour epoch's count words, copied to the host each execution (CounterReadback) and
 // sampled every 120th epoch, read when the sample's frame slot comes round, with the CPU's side of the sun test and, under
-// CS_DCLF_SET_PARITY, of the terrain near test (a task on DCLF's executor) and the forward and refraction registrations.
+// CS_DCLF_SET_PARITY, of the terrain near test (a task on DCLF's executor) and the forward and refraction registrations. Under
+// CS_DCLF_FRAME_TRACE every colour commit also logs its slot's last counts (FrameTrace.cpp).
 
 #include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
@@ -146,6 +147,9 @@ namespace DCLF::Diagnostics
 		counters.colourStamp = a_written.latch.visibilityStamp;
 		counters.colourNoted = true;
 		const auto readback = Draws::CullCounterReadback(Draws::CullCounterView::kColour);
+		// CS_DCLF_FRAME_TRACE: the slot's last colour execution's counts, every frame.
+		if (Diagnostics::Observe().frameTrace && readback)
+			TraceColourCounts(*readback, counters.colourSlot);
 		auto& sample = counters.sample;
 		if (!readback || !readback->armed.armed || readback->armed.frameSlot != counters.colourSlot || !sample || sample->read || sample->on.lock() != readback)
 			return;

@@ -38,6 +38,7 @@ namespace DCLF::Diagnostics
 		bool passStats = false;        // CS_DCLF_PASS_STATS: per-pass counts
 		bool profile = false;          // CS_DCLF_PROFILE: scene-phase timings
 		bool releaseGuard = false;     // CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads
+		bool frameTrace = false;       // CS_DCLF_FRAME_TRACE: the corrupt-frame tool: per frame, what it adopted, its coverage, its main epochs, its colour culling counts, its retirement point
 		std::string targetProbe;       // CS_DCLF_TARGET_PROBE: x,y
 	};
 

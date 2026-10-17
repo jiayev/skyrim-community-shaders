@@ -32,6 +32,7 @@ namespace DCLF::Diagnostics
 			o.passStats = SwitchEnabled(Switch::PassStats);
 			o.profile = SwitchEnabled(Switch::Profile);
 			o.releaseGuard = SwitchEnabled(Switch::ReleaseGuard);
+			o.frameTrace = SwitchEnabled(Switch::FrameTrace);
 			o.targetProbe = SwitchValue(Switch::TargetProbe);
 			return o;
 		}

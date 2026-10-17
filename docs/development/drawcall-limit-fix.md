@@ -112,6 +112,31 @@ The observers read the modules' private state through read-only views (`SceneVie
 `Diagnostics/Reports/Schedule.h`'s schedule. Each area's observers are under `Diagnostics/{Scene,Draws,Engine,Feature}/`; the report
 formatting is under `Diagnostics/Reports/`.
 
+### Finding a corrupt frame: `CS_DCLF_FRAME_TRACE`
+
+A frame that flashes wrong for a single frame is invisible to the reports, which aggregate. `CS_DCLF_FRAME_TRACE=1` logs, every
+frame, what the frame drew with, one line per point, each `[DCLF] frame trace: frame N ...` (`Diagnostics/Draws/FrameTrace.cpp`, on
+the hook points `SnapshotAdopted`, `EpochCoverageDecided`, `MainEpochOutcome` and `AdoptedBound`):
+- `adopts snapshot S (versions, set P[ GROWTH]), payload Q ready R p0[srv units bytes NEW shared] ...`: the snapshot the frame
+  adopted, its set's address (`GROWTH`: the first versions a growth made current) and each payload part (`NEW`: a backing was
+  made for it; `shared`: nothing was sent);
+- `coverage 1101... (snapshot drawsComplete stale payload ready versions current)`: each epoch's coverage, in epoch order, and
+  what it was decided from;
+- `Z-prepass epoch: ...` and `colour epoch: ...`: `submitted`, `FAILED` or `NOT COMMITTED` with the payload, its inputs and the
+  snapshot, or why the epoch was not submitted (withdrawn, not ready, no payload for its resources...) with the frame's claims;
+- `colour exec stamp S (slot n): drawn rejected tested occluded phase2 drawn rescued`: the culling counts of the slot's last colour
+  execution, read in the colour commit (`NoteCullLatch`);
+- `binds point P (clock C)`: the retirement point the frame bound its set and payload at, against the clock's completed point:
+  `<- BOUND AT A RETIRED POINT` (P <= C: the binding kept nothing from reuse) and `<- POINT WENT BACK` (P below the last frame's);
+- `===== USER MARK (F10) at frame N =====`: F10 pressed, for the user to mark a corrupt frame they saw.
+
+A frame in the steady state has every epoch covered and both main epochs `submitted`. To find which frames were corrupt,
+`tools/dclf-capture-burst.ps1 -Out DIR` captures the screen continuously alongside the run (960x540 JPEGs named by local time,
+`HH-mm-ss.fff`, once the log shows gameplay), and `tools/dclf-corrupt-frames.py DIR CommunityShaders.log` finds the single-capture
+outliers (a thumbnail unlike both neighbours that are like each other), and prints, for each, the frame trace lines logged in the
+250 ms before it, marking the ones that are not the steady state; `--sheets DIR` writes a prev | cur | next contact sheet per outlier.
+The game window must stay in front for the captures.
+
 ## Phase 1: scene capture
 
 Source: `src/Features/DrawcallLimitFix.{h,cpp}` and `src/Features/DrawcallLimitFix/`.

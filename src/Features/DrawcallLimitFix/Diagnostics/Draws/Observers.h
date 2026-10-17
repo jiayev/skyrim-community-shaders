@@ -4,6 +4,11 @@
 
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 
+namespace DCLF::Draws
+{
+	struct CounterReadback;
+}
+
 namespace DCLF::Diagnostics
 {
 	struct MainEpochDone;
@@ -31,6 +36,10 @@ namespace DCLF::Diagnostics
 	struct MainCullViewProj;
 	struct FoliageRecordMade;
 	struct MainGraphPasses;
+	struct SnapshotAdopted;
+	struct EpochCoverageDecided;
+	struct MainEpochOutcome;
+	struct AdoptedBound;
 
 	// The culling's counters, every run (CullCounters.cpp).
 	void NoteCullLatch(const CullLatchWritten& a_written);
@@ -79,6 +88,13 @@ namespace DCLF::Diagnostics
 	// CS_DCLF_FOLIAGE_PARITY: the compare pass's program and readbacks, its passes after the colour draws (Foliage.cpp).
 	void MakeFoliageCompare(const FoliageRecordMade& a_made);
 	void AppendFoliagePasses(const MainGraphPasses& a_passes);
+	// CS_DCLF_FRAME_TRACE: every frame's adoption, coverage, main epochs, retirement point and the F10 marker (FrameTrace.cpp); the colour
+	// commit's slot's last colour counts, from NoteCullLatch.
+	void TraceSnapshotAdopted(const SnapshotAdopted& a_adopted);
+	void TraceEpochCoverage(const EpochCoverageDecided& a_decided);
+	void TraceMainEpoch(const MainEpochOutcome& a_outcome);
+	void TraceAdoptedBound(const AdoptedBound& a_bound);
+	void TraceColourCounts(const Draws::CounterReadback& a_readback, std::uint32_t a_slot);
 	// CS_DCLF_PERSISTENT_PARITY: the catalog's constant tables against ShaderCache's (ConstantTables.cpp).
 	void CheckConstantTables(const RE::BSShader& a_lighting, const Lookups& a_lookups);
 }

@@ -136,6 +136,58 @@ namespace DCLF::Diagnostics
 		std::vector<org::RenderGraph::ExternalPassDesc>& out;
 	};
 
+	// ---- The frame's adoption, coverage, main epochs and retirement point (render thread, in frame order).
+
+	/** @brief The frame adopted a snapshot whole (IndirectDraws::AdoptSnapshot): its set (null: none) and payload (null: none) are now the frame's. */
+	struct SnapshotAdopted
+	{
+		std::uint32_t frame;
+		std::uint64_t snapshot;  // the snapshot's serial
+		const Draws::NamedVersions* set;
+		const Draws::PayloadVersions* payload;
+		bool growth;  // its set's versions are the first a growth made current (the frame noted as the growth's adoption)
+	};
+
+	/**
+	 * @brief The frame's main coverage decided (Impl::DecideEpochCoverage): each epoch's (EpochCount() of them), and what it was decided
+	 * from (the adopted snapshot, the installed payload, the active revision's set against the adopted one).
+	 */
+	struct EpochCoverageDecided
+	{
+		std::uint32_t frame;
+		std::span<const bool> covered;
+		std::uint64_t snapshot;  // the adopted snapshot's serial (0: none)
+		bool drawsComplete, stale;
+		const Draws::PayloadVersions* payload;  // the installed payload (null: none)
+		bool versions;  // the active revision names a set
+		bool current;   // ... the adopted one, with the snapshot current and its payload ready
+	};
+
+	/**
+	 * @brief A main epoch's outcome (IndirectDraws::RunEpoch), every frame each: why it was not submitted, or (executed) whether its
+	 * execution failed, committed nothing or was submitted, with the installed payload and the adopted snapshot it ran with.
+	 */
+	struct MainEpochOutcome
+	{
+		std::uint32_t frame;
+		const char* outcome;
+		const Draws::PayloadVersions* payload;  // the installed payload (null: none)
+		std::uint64_t snapshot;                 // the adopted snapshot's serial (0: none)
+		bool depthOnly;
+		bool executed;   // the epoch reached its execution (outcome: "submitted", "FAILED" or "NOT COMMITTED")
+		bool withdrawn;  // the frame's claims are withdrawn (FrameView::SetWithdrawn)
+	};
+
+	/**
+	 * @brief The frame bound its adopted set and payload (IndirectDraws::BindAdopted, after its last submission) at `point`, with the
+	 * retirement clock's completed point then: a point at or below it binds nothing.
+	 */
+	struct AdoptedBound
+	{
+		std::uint32_t frame;
+		std::uint64_t point, completed;
+	};
+
 	// ---- The shadow epochs (render thread).
 
 	/** @brief The scene's index pool brought up to the tables' first `count` geometry slots (UpdateIndexPool). */
