@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
@@ -1092,6 +1093,15 @@ namespace DCLF
 		const bool live = sun.registered && sun.fullFrustumWindowEnd();
 		if (ListsFiltered() && !live && !Global<std::uint8_t>(Engine::Address::kSunOff))
 			++listStats.unexcluded;
+		// DCLF switched off (this hook runs every frame): the main camera's cull is the engine's alone - no entry stood in, no owned
+		// geometry withheld from its registration (frameLive stays false) - until DCLF runs again.
+		if (!ShellState::Running()) {
+			standInLive = false;
+			// Nothing is owned: the engine draws every main pass, which takes its light bits from the shadow lights' registrations.
+			frameSet = {};
+			Diagnostics::Notify<Diagnostics::EnginePoint::FullFrustumDone>();
+			return;
+		}
 		// CS_DCLF_PARITY_BOTH: the engine culls and registers everything.
 		if (!!Policy::WithholdFromEngine())
 			PrepareFrame();

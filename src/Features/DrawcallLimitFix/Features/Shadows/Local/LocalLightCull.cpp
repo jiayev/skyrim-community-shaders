@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Engine/FrameAddressSet.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
@@ -555,9 +556,10 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			{
 				LARGE_INTEGER start{}, end{};
 				QueryPerformanceCounter(&start);
-				// A light DCLF cannot give its bits to (past the mask's 32) culls everything.
+				// A light DCLF cannot give its bits to (past the mask's 32) culls everything, as does every light while DCLF is switched off
+				// (no selection ran: the frame's exclusion, filter and empty culls are a running frame's).
 				std::uint32_t ordinal = kNoLight;
-				if (installed) {
+				if (installed && ShellState::Running()) {
 					ordinal = frameLightNext.fetch_add(1, std::memory_order_relaxed);
 					if (ordinal >= kMaxLights) {
 						bitStats.overflow.fetch_add(1, std::memory_order_relaxed);
@@ -733,7 +735,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 
 	void NoteMainRegistration(RE::BSGeometry* a_geometry)
 	{
-		if (!installed || !a_geometry || !lightsReady.load(std::memory_order_acquire))
+		if (!installed || !a_geometry || !lightsReady.load(std::memory_order_acquire) || !ShellState::Running())
 			return;
 		const auto* exclusion = frameExclusion.load(std::memory_order_acquire);
 		const std::uint32_t empty = emptyLights.load(std::memory_order_relaxed);
