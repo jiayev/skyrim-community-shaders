@@ -30,6 +30,12 @@ namespace DCLF::Scene
 			// Captures equal to the held one (no rewrite), those of which only the transform buffers moved (the watch alone), and captures
 			// of a material already listed since the last rewrite.
 			std::uint64_t deduped = 0, transformsOnly = 0, relisted = 0;
+			// Captures whose fields moved against the held one: by 4-byte word of the material, how often it differed (the report names the
+			// words that move most: what a controller writes every frame), and the first such material's vtable.
+			std::uint64_t fieldsMoved = 0;
+			std::array<std::uint32_t, MaterialPort::kMaxMaterialBytes / 4> wordMoved{};
+			const void* fieldsMovedVtable = nullptr;
+			std::array<std::pair<const void*, std::uint32_t>, 8> fieldsMovedBy{};  // by vtable, the first eight seen
 		} materialSnapshotStats;
 		// The parity's (CS_DCLF_PERSISTENT_PARITY, its passes): materials whose captures DrainMaterialCaptures deduplicated, evaluated as
 		// a rewrite would and compared with their slots' records (RewriteCapturedMaterials). Empty otherwise.

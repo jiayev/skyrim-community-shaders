@@ -145,6 +145,37 @@ namespace DCLF
 			a_out.fit = SceneFitOf(a_sealed, scene, objects);
 		}
 
+		/**
+		 * @brief SnapshotPass: whether a_work's publication would build into the last snapshot posted (a_posted): the coordinator
+		 * publishes its tables, lookups, claims, category nodes and candidates again only when they changed (a pass whose only change is
+		 * the frame's deltas shares them all), so the same objects with the same generations, revision counts and ahead context's
+		 * shape are the same build. The frame number a build reads moves on as it does for a snapshot no publication replaced.
+		 */
+		bool PassesThrough(const ImplSnapshotBuilder::SnapshotBuilder::Posted& a_posted, const ImplSnapshotBuilder::SnapshotWork& a_work)
+		{
+			if (!a_posted.publication || !a_posted.revision || !a_work.publication)
+				return false;
+			const auto& next = *a_work.publication;
+			const auto& prior = *a_posted.publication;
+			if (next.tables != prior.tables || next.lookups != prior.lookups || next.catalog != prior.catalog || next.claims != prior.claims ||
+				next.sunCandidates != prior.sunCandidates || next.lightCandidates != prior.lightCandidates || next.categoryNodes != prior.categoryNodes)
+				return false;
+			if (next.tablesGeneration != prior.tablesGeneration || next.togglesGeneration != prior.togglesGeneration || next.lackingCount != prior.lackingCount ||
+				next.adoptionGuards != prior.adoptionGuards || next.lightEntriesAppeared != prior.lightEntriesAppeared || next.revision.pipelines != prior.revision.pipelines ||
+				next.revision.shadowSlotKeys != prior.revision.shadowSlotKeys || next.revision.shadowKeys != prior.revision.shadowKeys)
+				return false;
+			if (a_work.sun != a_posted.sun || a_work.light != a_posted.light)
+				return false;
+			const auto& c = a_work.context;
+			if (c.valid != a_posted.valid || c.shadow != a_posted.shadow || c.build != a_posted.build || c.target.get() != a_posted.target ||
+				c.shadowTarget.get() != a_posted.shadowTarget)
+				return false;
+			for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
+				if (c.inputs[j].vsFrameMask != a_posted.vsMask[j] || c.inputs[j].psFrameMask != a_posted.psMask[j])
+					return false;
+			return true;
+		}
+
 		/** @brief RunAhead's: every payload of a_out given the scene list's region as both builds left it (see there). */
 		void ShareAheadRegion(ImplSnapshotBuilder::DrawPublication& a_out, BuildCache& a_mainCache)
 		{
@@ -369,7 +400,10 @@ namespace DCLF
 			b.draws.reset();
 			b.timing = {};
 			b.stage = Stage::Make;
+			b.fresh = true;
+			publicationGated.store(false, std::memory_order_relaxed);  // new draws: the scene pass's end wakes nobody until they wait
 		};
+		++b.passes;
 		try {
 			for (;;) {
 				if (b.stage == Stage::Recordings) {
@@ -417,13 +451,34 @@ namespace DCLF
 				// recordings kept).
 				if (auto next = snapshotWorkSlot.Take())
 					takeWork(std::move(next));
-				if (!b.work || !b.work->publication)
+				if (!b.work || !b.work->publication) {
+					++b.idlePasses;
 					return;
+				}
+				// Only deltas moved since the last snapshot posted (PassesThrough): that snapshot again for this publication, whose deltas
+				// reach the frame with it (HandOverAtFrameStart walks the log up to the publication installed). Nothing built, sealed or
+				// uploaded: a build would make these draws, this revision and this payload again from the same objects.
+				if (b.stage == Stage::Make && std::exchange(b.fresh, false) && !snapshotInputsMoved.load(std::memory_order_acquire) &&
+					PassesThrough(b.posted, *b.work)) {
+					b.draws = b.posted.draws;
+					b.payload = b.posted.payload;
+					b.drawsSerial = b.posted.drawsSerial;
+					b.publicationWaited = false;
+					// The builds ahead done up to this item's number (as BuildSnapshotDraws: the frame's fallback streams wait on it).
+					aheadDone.store(b.work->aheadNumber, std::memory_order_release);
+					aheadDone.notify_all();
+					++b.passedThrough;
+					PostSnapshot(b.posted.revision);
+					b.stage = Stage::Idle;
+					continue;
+				}
 				if (b.stage == Stage::Idle) {
 					// A snapshot of the work stands: made again when the frame's inputs moved (a graph build, a capture, a toggle, new
 					// resources), so its revision is the frame's as it is now.
-					if (!snapshotInputsMoved.exchange(false, std::memory_order_acq_rel))
+					if (!snapshotInputsMoved.exchange(false, std::memory_order_acq_rel)) {
+						++b.idlePasses;
 						return;
+					}
 					b.timing = {};
 				}
 				// The revision (Stage::Make, or Waiting: made again at every wake - a growth settled, the inputs moved).
@@ -487,11 +542,19 @@ namespace DCLF
 		// the last one posted is still in the slot (the frame's take wakes the builder; newer work replaces these draws meanwhile), nor
 		// before the scene pass of the frame that took it has ended (a publication it makes is posted first and replaces them; its end
 		// wakes the builder). Posted on its uploads' completion, the snapshot is the frame's next.
-		const std::uint64_t taken = snapshotTaken.load(std::memory_order_acquire);
-		if (taken < b.serial || scenePassDoneFrame.load(std::memory_order_acquire) < snapshotTakenFrame.load(std::memory_order_acquire)) {
-			b.publicationsWaited += std::exchange(b.publicationWaited, true) ? 0u : 1u;
-			return;
+		const auto gated = [&] {
+			const std::uint64_t taken = snapshotTaken.load(std::memory_order_acquire);
+			return taken < b.serial || scenePassDoneFrame.load(std::memory_order_seq_cst) < snapshotTakenFrame.load(std::memory_order_acquire);
+		};
+		if (gated()) {
+			// The scene pass's end wakes the builder only while it waits here (NoteScenePassDone); the gate read again after saying so.
+			publicationGated.store(true, std::memory_order_seq_cst);
+			if (gated()) {
+				b.publicationsWaited += std::exchange(b.publicationWaited, true) ? 0u : 1u;
+				return;
+			}
 		}
+		publicationGated.store(false, std::memory_order_relaxed);
 		const auto* mainPayload = NewestMainPayload(*b.draws);
 		const auto* shadowPayload = b.draws->shadow.get();
 		const auto uploads = producer.inputs.uploads.lock();
@@ -526,6 +589,30 @@ namespace DCLF
 		snapshot->mainGeneration = inputs.mainGeneration;
 		snapshot->targetsGeneration = inputs.targetsGeneration;
 		snapshot->shadowFormat = inputs.shadowFormat;
+		// What a publication changing only deltas passes through to (PassesThrough): a snapshot with a revision, complete draws and
+		// their payload, and what it was built from.
+		auto& posted = b.posted;
+		if (snapshot->revision && snapshot->drawsComplete && snapshot->payload) {
+			const auto& context = b.work->context;
+			posted.publication = b.work->publication;
+			posted.sun = b.work->sun;
+			posted.light = b.work->light;
+			posted.draws = b.draws;
+			posted.payload = b.payload;
+			posted.revision = snapshot->revision;
+			posted.drawsSerial = b.drawsSerial;
+			posted.valid = context.valid;
+			posted.shadow = context.shadow;
+			posted.build = context.build;
+			posted.target = context.target.get();
+			posted.shadowTarget = context.shadowTarget.get();
+			for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
+				posted.vsMask[j] = context.inputs[j].vsFrameMask;
+				posted.psMask[j] = context.inputs[j].psFrameMask;
+			}
+		} else {
+			posted = {};
+		}
 		// Latest wins: one the frame has not taken is dropped here, on the builder.
 		snapshotSlot.Post(std::move(snapshot));
 		snapshotsBuilt.fetch_add(1, std::memory_order_relaxed);
@@ -618,9 +705,13 @@ namespace DCLF
 	{
 		if (!impl)
 			return;
-		// A builder holding a sealed snapshot's publication for this frame's pass publishes now (or has taken the pass's publication).
-		impl->scenePassDoneFrame.store(a_frame, std::memory_order_release);
-		WakeSnapshotBuilder();
+		// A builder holding a sealed snapshot's publication for this frame's pass publishes now; the pass's own publication woke it
+		// already (PostSnapshotWork). Any other builder has nothing to do for the pass's end: not woken (publicationGated).
+		impl->scenePassDoneFrame.store(a_frame, std::memory_order_seq_cst);
+		if (impl->publicationGated.load(std::memory_order_seq_cst))
+			WakeSnapshotBuilder();
+		else
+			impl->passDoneWakesSkipped.fetch_add(1, std::memory_order_relaxed);
 	}
 
 	std::uint64_t IndirectDraws::SnapshotWorkTaken() const

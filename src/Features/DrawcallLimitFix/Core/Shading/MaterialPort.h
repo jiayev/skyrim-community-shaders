@@ -116,13 +116,15 @@ namespace DCLF
 		enum class SnapshotChange : std::uint8_t
 		{
 			None,        // the same fields and views (the reference count aside)
-			Transforms,  // only the two texture-transform buffers (BSShaderMaterial +0xc..+0x2c, the texture transforms' fields)
+			Transforms,  // only the bytes a frame patch owns (Extensions::DifferInFrameSpans: the two texture-transform buffers, BSShaderMaterial
+			             // +0xc..+0x2c, and the port's declared frame variables' spans)
 			Fields,      // anything else
 		};
 		/**
 		 * @brief Pure: how a_new differs from a_held, two captures of the same material. The reference count (+0x8) is left out: every
-		 * capture moves it. A record's only input from the transform buffers is TexcoordOffset, which a feature's frame patch may own
-		 * (Extensions::FrameVSVariablePatched: then Transforms rewrites no record).
+		 * capture moves it. A record's only input from the transform buffers is TexcoordOffset, and from a declared frame variable's bytes
+		 * that variable (Api::MaterialFrameVariable), which a feature's frame patch may own (Extensions::FrameVSVariablePatched: then
+		 * Transforms rewrites no record).
 		 */
 		SnapshotChange SnapshotChangeOf(const MaterialSnapshot& a_held, const MaterialSnapshot& a_new);
 

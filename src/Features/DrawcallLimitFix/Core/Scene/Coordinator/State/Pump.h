@@ -44,6 +44,13 @@ namespace DCLF::Scene
 		{
 			std::uint64_t passes = 0, published = 0, deferred = 0, folded = 0;  // full passes, publications, deferred passes, of them folded
 			std::array<std::uint64_t, static_cast<std::size_t>(PublishReason::Count)> byReason{};
+			// What made the passes that needed a publication need one (PublicationNeeded), each cause counted: the conditions, then the
+			// publish key's words (CurrentPublishKey's order), its lookups and its catalog.
+			std::array<std::uint64_t, 6> neededBy{};
+			std::array<std::uint64_t, std::tuple_size_v<decltype(PublishKey::words)> + 2> keyMoved{};
+			// DeltasPending's terms (its order), and the lookups key's words (Lookups::ChangeKey's order), each counted when it moved.
+			std::array<std::uint64_t, 12> deltaPending{};
+			std::array<std::uint64_t, 6> lookupsMoved{};
 			std::uint32_t frames = 0, lastFrame = ~0u, passesThisFrame = 0, maxPasses = 0, publishedThisFrame = 0, maxPublished = 0;
 			// The claims (PublishClaims): replayed from the phases log (keys replayed), copied whole, or the last shared again.
 			std::uint64_t claimsReplayed = 0, claimsKeys = 0, claimsWhole = 0, claimsShared = 0, claimsRevoked = 0;

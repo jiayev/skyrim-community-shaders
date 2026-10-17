@@ -40,6 +40,8 @@
 #include "Features/DrawcallLimitFix/Api/EntryRanges.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string_view>
@@ -423,6 +425,45 @@ namespace DCLF::Api
 		bool particleGeometry = false;        // the particle geometry types' leaves with its property are its to classify (Eligibility::Static)
 	};
 
+	/** @brief The most frame variables a port declares (MaterialPortContribution::frameVariables; a material row's places: grow it first). */
+	inline constexpr std::size_t kMaxMaterialFrameVariables = 4;
+
+	/**
+	 * @brief A frame variable's component read (MaterialFrameVariable): the float at `source` bytes into the live material, times the float
+	 * at `scale` unless it is kNoScale (one product, or the bits copied: what the port's evaluate writes, bit for bit).
+	 */
+	struct MaterialFrameComponent
+	{
+		static constexpr std::uint16_t kNoScale = 0xFFFF;
+		std::uint16_t source = 0;
+		std::uint16_t scale = kNoScale;
+	};
+
+	/**
+	 * @brief A variable of a port's records whose value the frame owns (MaterialPortContribution::frameVariables), as TexcoordOffset is
+	 * (MaterialPortRules::frameVSVariable): while a feature patches the frame's material variables (InstallContext::
+	 * RegisterFrameVSVariablePatch: Features/TextureTransforms), every material row placing it is written from the live material each
+	 * frame, so the record's value is never drawn and a write confined to its bytes captures nothing (no record rewrite, no publication).
+	 * Read as data (no call per row per frame).
+	 *
+	 * - pixel, variable: its stage (false: VS) and variable in the port's space; the components the record writes are the row's.
+	 * - first, end: the material bytes a write of which is the frame's: the values' sources the record reads for nothing else.
+	 * - components: the read under a pass descriptor with none of alternateBits; alternate with any of them (the port's evaluate's split).
+	 */
+	struct MaterialFrameVariable
+	{
+		bool pixel = false;
+		std::uint32_t variable = 0;
+		std::uint16_t first = 0, end = 0;
+		std::array<MaterialFrameComponent, 4> components{};
+		std::uint32_t alternateBits = 0;
+		std::array<MaterialFrameComponent, 4> alternate{};
+		const std::array<MaterialFrameComponent, 4>& ComponentsFor(std::uint32_t a_passDescriptor) const
+		{
+			return (a_passDescriptor & alternateBits) ? alternate : components;
+		}
+	};
+
 	/**
 	 * @brief A material port: the objects of an engine shader (other than Lighting, which is Core's) whose property and material Core captures
 	 * and whose objects it classifies, joins and draws through the port while its class is on. Read where the objects are captured,
@@ -436,6 +477,8 @@ namespace DCLF::Api
 	 * - materialBytes, textureFields: the material bytes a snapshot keeps, and its NiSourceTexture fields (offsets).
 	 * - vs, ps: its constant space (at most 64 variables a stage).
 	 * - rules: what Core reads as data.
+	 * - frameVariables: the variables of its records the frame owns (MaterialFrameVariable, at most kMaxMaterialFrameVariables; kept as
+	 *   given: static storage).
 	 * - capture: the property's capture (SceneCapture::CaptureProperty, in the engine-read window or under the engine call that holds it):
 	 *   what the port's derive and shading read of the property and its material into the record.
 	 * - derive: per classification, join or membership pass (any thread): the object's descriptors from its records, or why it stays
@@ -459,6 +502,7 @@ namespace DCLF::Api
 		std::span<const std::uint16_t> textureFields;
 		MaterialStageSpace vs, ps;
 		MaterialPortRules rules;
+		std::span<const MaterialFrameVariable> frameVariables;
 		void (*capture)(const MaterialPortCapture& a_capture) = nullptr;
 		void (*derive)(MaterialPortDerivation& a_derivation) = nullptr;
 		bool (*evaluate)(MaterialPortEvaluation& a_evaluation) = nullptr;

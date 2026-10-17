@@ -33,6 +33,67 @@ namespace DCLF::Draws
 
 		template <class T>
 		constexpr std::uint64_t Words(std::uint64_t a_elements) { return a_elements * sizeof(T) / 4; }
+
+		/**
+		 * @brief A part's runs, gathered as its emit makes them and sent in one batched upload (JournaledSink's ranges: one ticket, the
+		 * staging page mapped once) instead of one upload each. The runs point into the views, which nothing writes while the
+		 * publication is made; a_copy for the emits that patch each run into a scratch they reuse (the rows' addresses): those are copied
+		 * into the builder's scratch, offsets until Send resolves them.
+		 */
+		struct RangeGather
+		{
+			std::vector<org::StreamingUploadRange>& ranges;
+			std::vector<std::byte>& bytes;
+			const bool copy;
+
+			RangeGather(std::vector<org::StreamingUploadRange>& a_ranges, std::vector<std::byte>& a_bytes, bool a_copy) :
+				ranges(a_ranges), bytes(a_bytes), copy(a_copy)
+			{
+				ranges.clear();
+				bytes.clear();
+			}
+			void operator()(const void* a_data, std::size_t a_bytes, std::size_t a_offset)
+			{
+				if (!a_bytes)
+					return;
+				if (!copy) {
+					ranges.push_back({ a_data, a_bytes, a_offset });
+					return;
+				}
+				const std::size_t at = bytes.size();
+				const auto* data = static_cast<const std::byte*>(a_data);
+				bytes.insert(bytes.end(), data, data + a_bytes);
+				ranges.push_back({ reinterpret_cast<const void*>(at), a_bytes, a_offset });
+			}
+			void Send(org::services::JournaledSink& a_sink)
+			{
+				if (copy)
+					for (auto& range : ranges)
+						range.data = bytes.data() + reinterpret_cast<std::uintptr_t>(range.data);
+				a_sink.Write(std::span<const org::StreamingUploadRange>(ranges));
+			}
+		};
+
+		/** @brief A kept whole tail against a publication's, bytewise (padding that differs only fails a share). */
+		template <class T>
+		bool SameRows(const std::vector<T>& a_kept, const T* a_data, std::size_t a_count)
+		{
+			return a_kept.size() == a_count && (!a_count || std::memcmp(a_kept.data(), a_data, a_count * sizeof(T)) == 0);
+		}
+		bool SameList(const std::vector<DrawInput>& a_kept, const std::vector<DrawInput>* a_list)
+		{
+			return a_list ? SameRows(a_kept, a_list->data(), a_list->size()) : a_kept.empty();
+		}
+
+		/** @brief CS_DCLF_PERSISTENT_PARITY: the extras backing a_lease, caught up from a_caughtUpFrom to a_rows, against its mirror. */
+		void CheckExtras(const ExtrasOut& a_rows, const org::services::BackingLease& a_lease, std::uint64_t a_caughtUpFrom)
+		{
+			std::vector<float>* mirror = nullptr;
+			Diagnostics::Notify(Diagnostics::ExtrasSending{ a_lease, mirror });
+			if (mirror)
+				EmitExtras(a_rows, a_caughtUpFrom, mirror, [](const void*, std::size_t, std::size_t) {});
+			Diagnostics::Notify(Diagnostics::ExtrasSent{ a_lease, a_rows });
+		}
 	}
 
 	PayloadBuilder::PayloadBuilder(std::shared_ptr<org::services::RetirementClock> a_clock) :
@@ -65,35 +126,45 @@ namespace DCLF::Draws
 
 		// The objects' records and the extras rows: the publication's stream views.
 		units[Part(PayloadPart::Objects)] = a_views.objects.Count();
-		requests[Part(PayloadPart::Objects)] = { a_views.objects.Count(), a_views.objects.ContentEpoch(), [&](const Target& a_target, Sink& a_sink) {
-													 a_views.objects.Emit(a_target.contentEpoch, a_sink);
+		requests[Part(PayloadPart::Objects)] = { a_views.objects.Count(), a_views.objects.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
+													 RangeGather gather{ uploadRanges, uploadBytes, false };
+													 a_views.objects.Emit(a_target.contentEpoch, gather);
+													 gather.Send(a_to);
 													 return a_views.objects.ContentEpoch();
 												 } };
 		units[Part(PayloadPart::Extras)] = a_views.extras.Rows();
-		requests[Part(PayloadPart::Extras)] = { a_views.extras.Rows(), a_views.extras.ContentEpoch(), [&](const Target& a_target, Sink& a_sink) {
-												   EmitExtras(a_views.extras, a_target.contentEpoch, nullptr, a_sink);
+		requests[Part(PayloadPart::Extras)] = { a_views.extras.Rows(), a_views.extras.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
+												   RangeGather gather{ uploadRanges, uploadBytes, false };
+												   EmitExtras(a_views.extras, a_target.contentEpoch, nullptr, gather);
+												   gather.Send(a_to);
 												   return a_views.extras.ContentEpoch();
 											   } };
 		// The geometry table: the main payloads' and the shadow payload's are the same (the publication's stream views and face streams).
 		const GeometryDrawsOut& geometries = a_main ? a_main->geometryDraws : a_shadow->geometries;
 		units[Part(PayloadPart::Geometries)] = geometries.Count();
-		requests[Part(PayloadPart::Geometries)] = { Words<GeometryDraw>(geometries.Count()), geometries.ContentEpoch(), [&](const Target& a_target, Sink& a_sink) {
-													   EmitGeometryDraws(geometries, a_target.contentEpoch, a_sink);
+		requests[Part(PayloadPart::Geometries)] = { Words<GeometryDraw>(geometries.Count()), geometries.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
+													   RangeGather gather{ uploadRanges, uploadBytes, false };
+													   EmitGeometryDraws(geometries, a_target.contentEpoch, gather);
+													   gather.Send(a_to);
 													   return geometries.ContentEpoch();
 												   } };
 		// The main rows (the material rows by part: kMaterialRowParts), their headers made absolute for the backing they go to (a
 		// backing at another address is written whole: a fresh one holds nothing).
 		if (a_main) {
 			units[Part(PayloadPart::MaterialRows)] = a_main->materialRows.Count();
-			requests[Part(PayloadPart::MaterialRows)] = { a_main->materialRows.Count(), a_main->materialRows.ContentEpoch(), [&](const Target& a_target, Sink& a_sink) {
+			requests[Part(PayloadPart::MaterialRows)] = { a_main->materialRows.Count(), a_main->materialRows.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
+															 RangeGather gather{ uploadRanges, uploadBytes, true };
 															 EmitMainRowParts(a_main->materialRows, kMaterialRowParts, a_target.contentEpoch, a_target.address, a_target.capacityUnits,
-																 [](MaterialRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, a_sink);
+																 [](MaterialRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, gather);
+															 gather.Send(a_to);
 															 return a_main->materialRows.ContentEpoch();
 														 } };
 			units[Part(PayloadPart::PipelineRows)] = a_main->pipelineRows.Count();
-			requests[Part(PayloadPart::PipelineRows)] = { a_main->pipelineRows.Count(), a_main->pipelineRows.ContentEpoch(), [&](const Target& a_target, Sink& a_sink) {
+			requests[Part(PayloadPart::PipelineRows)] = { a_main->pipelineRows.Count(), a_main->pipelineRows.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
+															 RangeGather gather{ uploadRanges, uploadBytes, true };
 															 EmitMainRows(a_main->pipelineRows, a_target.contentEpoch, a_target.address, a_target.capacityUnits,
-																 [](PipelineRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, a_sink);
+																 [](PipelineRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, gather);
+															 gather.Send(a_to);
 															 return a_main->pipelineRows.ContentEpoch();
 														 } };
 		}
@@ -106,35 +177,49 @@ namespace DCLF::Draws
 		out->mainInputsAt = out->regionCount;
 		out->shadowInputsAt = out->mainInputsAt + (mainList ? mainList->size() : 0);
 		units[Part(PayloadPart::Inputs)] = out->shadowInputsAt + (shadowList ? shadowList->size() : 0);
-		requests[Part(PayloadPart::Inputs)] = { Words<DrawInput>(units[Part(PayloadPart::Inputs)]), region.ContentEpoch(), [&](const Target& a_target, Sink& a_sink) {
-												   region.Emit(a_target.contentEpoch, a_sink);
+		requests[Part(PayloadPart::Inputs)] = { Words<DrawInput>(units[Part(PayloadPart::Inputs)]), region.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
+												   RangeGather gather{ uploadRanges, uploadBytes, false };
+												   region.Emit(a_target.contentEpoch, gather);
 												   if (mainList && !mainList->empty())
-													   a_sink(mainList->data(), mainList->size() * sizeof(DrawInput), out->mainInputsAt * sizeof(DrawInput));
+													   gather(mainList->data(), mainList->size() * sizeof(DrawInput), out->mainInputsAt * sizeof(DrawInput));
 												   if (shadowList && !shadowList->empty())
-													   a_sink(shadowList->data(), shadowList->size() * sizeof(DrawInput), out->shadowInputsAt * sizeof(DrawInput));
+													   gather(shadowList->data(), shadowList->size() * sizeof(DrawInput), out->shadowInputsAt * sizeof(DrawInput));
+												   gather.Send(a_to);
 												   return region.ContentEpoch();
 											   } };
 		// The shadow payload's rows.
 		if (a_shadow) {
 			units[Part(PayloadPart::ShadowRows)] = a_shadow->materialRows.Count();
-			requests[Part(PayloadPart::ShadowRows)] = { a_shadow->materialRows.Count(), a_shadow->materialRows.ContentEpoch(), [&](const Target& a_target, Sink& a_sink) {
-														   a_shadow->materialRows.Emit(a_target.contentEpoch, a_sink);
+			requests[Part(PayloadPart::ShadowRows)] = { a_shadow->materialRows.Count(), a_shadow->materialRows.ContentEpoch(), [&](const Target& a_target, Sink& a_to) {
+														   RangeGather gather{ uploadRanges, uploadBytes, false };
+														   a_shadow->materialRows.Emit(a_target.contentEpoch, gather);
+														   gather.Send(a_to);
 														   return a_shadow->materialRows.ContentEpoch();
 													   } };
 		}
 
+		// The parts unchanged since the last publication share its versions (ShareUnchanged): absent from the set's publication.
+		const auto previous = last.lock();
+		const auto shared = ShareUnchanged(requests, previous.get(), geometries.streamRows, mainList, shadowList);
 		auto publication = set->Publish(requests, a_uploads);
 		// CS_DCLF_PERSISTENT_PARITY: the extras rows are checked by the backing that holds them, as they are caught up into it (the
-		// observer's mirror of that backing, replayed from what it held before; null without the observer).
-		if (const auto& extras = publication.parts[Part(PayloadPart::Extras)]; extras.lease) {
-			std::vector<float>* mirror = nullptr;
-			Diagnostics::Notify(Diagnostics::ExtrasSending{ extras.lease, mirror });
-			if (mirror)
-				EmitExtras(a_views.extras, extras.caughtUpFrom, mirror, [](const void*, std::size_t, std::size_t) {});
-			Diagnostics::Notify(Diagnostics::ExtrasSent{ extras.lease, a_views.extras });
-		}
+		// observer's mirror of that backing, replayed from what it held before; null without the observer). A shared backing is
+		// caught up from where it is (nothing to replay) and checked again.
+		if (const auto& extras = publication.parts[Part(PayloadPart::Extras)]; shared[Part(PayloadPart::Extras)])
+			CheckExtras(a_views.extras, previous->leases[Part(PayloadPart::Extras)], kept[Part(PayloadPart::Extras)].contentEpoch);
+		else if (extras.lease)
+			CheckExtras(a_views.extras, extras.lease, extras.caughtUpFrom);
 		for (std::size_t k = 0; k < kPayloadParts; ++k) {
+			if (shared[k]) {
+				out->parts[k] = { previous->parts[k].srvIndex, previous->parts[k].address, units[k] };
+				out->leases[k] = previous->leases[k];
+				out->shared[k] = true;
+				++stats.shared[k];
+				continue;
+			}
 			auto& version = publication.parts[k];
+			// What the next publication may share: this part's version (none when absent).
+			kept[k] = version.lease ? KeptPart{ version.contentEpoch, version.units } : KeptPart{};
 			if (!version.lease)
 				continue;
 			out->parts[k] = { version.srvIndex, version.address, units[k] };
@@ -146,18 +231,61 @@ namespace DCLF::Draws
 			stats.runs[k] += version.runs;
 			stats.allocated[k] += version.allocated ? 1 : 0;
 		}
+		KeepTails(shared, geometries.streamRows, mainList, shadowList);
 		out->ready = std::move(publication.ready);
 		out->serial = ++serial;
 		++stats.publications;
+		last = out;
 		return out;
+	}
+
+	std::array<bool, kPayloadParts> PayloadBuilder::ShareUnchanged(std::span<org::services::JournaledPartRequest> a_requests, const PayloadVersions* a_previous,
+		const std::vector<GeometryDraw>& a_streamRows, const std::vector<DrawInput>* a_mainList, const std::vector<DrawInput>* a_shadowList)
+	{
+		// A part shares the last publication's version when that version is what a catch-up would make: its journal at the position the
+		// backing still holds (a discarded one holds 0), the same units and whole tails, its uploads done (a failed one's backings were
+		// discarded). A catch-up into another backing would only send that backing's lag again.
+		std::array<bool, kPayloadParts> shared{};
+		if (!a_previous || !a_previous->Ready() || (a_previous->ready && a_previous->ready->Failed()))
+			return shared;
+		for (std::size_t k = 0; k < kPayloadParts; ++k) {
+			auto& request = a_requests[k];
+			const auto& held = kept[k];
+			const auto& lease = a_previous->leases[k];
+			if (!request.emit || !lease || !held.contentEpoch || held.contentEpoch != request.preferEpoch || held.units != request.units ||
+				lease->contentEpoch.load(std::memory_order_acquire) != held.contentEpoch)
+				continue;
+			if (k == Part(PayloadPart::Geometries) && !SameRows(keptStreamRows, a_streamRows.data(), a_streamRows.size()))
+				continue;
+			if (k == Part(PayloadPart::Inputs) && !(SameList(keptMainList, a_mainList) && SameList(keptShadowList, a_shadowList)))
+				continue;
+			shared[k] = true;
+			request = {};
+		}
+		return shared;
+	}
+
+	void PayloadBuilder::KeepTails(const std::array<bool, kPayloadParts>& a_shared, const std::vector<GeometryDraw>& a_streamRows, const std::vector<DrawInput>* a_mainList,
+		const std::vector<DrawInput>* a_shadowList)
+	{
+		// The whole tails the versions written now hold (a shared one's are the same already).
+		if (!a_shared[Part(PayloadPart::Geometries)])
+			keptStreamRows.assign(a_streamRows.begin(), a_streamRows.end());
+		if (!a_shared[Part(PayloadPart::Inputs)]) {
+			a_mainList ? keptMainList.assign(a_mainList->begin(), a_mainList->end()) : keptMainList.clear();
+			a_shadowList ? keptShadowList.assign(a_shadowList->begin(), a_shadowList->end()) : keptShadowList.clear();
+		}
 	}
 
 	void PayloadBuilder::Discard(const PayloadVersions& a_payload)
 	{
-		// The backings hold nothing a later publication may catch up from: written whole when next leased.
+		// The backings hold nothing a later publication may catch up from: written whole when next leased (a shared one too: the
+		// publication that wrote it keeps its bytes, which only lose their journal position), and none is shared again.
 		for (const auto& lease : a_payload.leases)
 			if (lease)
 				lease->contentEpoch.store(0, std::memory_order_release);
+		kept = {};
+		last.reset();
 	}
 
 	std::optional<std::uint64_t> PayloadBuilder::OldestContentEpoch(PayloadPart a_part) const

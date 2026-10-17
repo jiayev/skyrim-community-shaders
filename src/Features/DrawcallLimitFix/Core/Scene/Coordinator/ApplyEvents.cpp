@@ -178,14 +178,30 @@ namespace DCLF::Scene
 				return;
 			}
 			// A capture equal to the held one (every attached leaf captures its shared material; a controller rewrites the same value)
-			// changes no record: the newer is kept, nothing is rewritten. One whose transform buffers alone moved is counted as watched
-			// while a feature patches TexcoordOffset every frame (Extensions::FrameVSVariablePatched: Features/TextureTransforms, the one
-			// writer of it; a rewrite keeps the slots' own); unpatched, the transforms are the records': it is rewritten.
+			// changes no record: the newer is kept, nothing is rewritten. One whose frame-owned bytes alone moved (the transform buffers, a
+			// port's declared frame variables: the Effect port's falloff and base colour) is counted as watched while a feature patches them
+			// every frame (Extensions::FrameVSVariablePatched: Features/TextureTransforms, the one writer of them; a rewrite keeps the slots'
+			// own); unpatched, they are the records': it is rewritten.
 			auto change = MaterialPort::SnapshotChange::Fields;
 			if (entry.held)
 				change = MaterialPort::SnapshotChangeOf(entry.held->snapshot, a_held->snapshot);
 			if (change == MaterialPort::SnapshotChange::Transforms && !Extensions::FrameVSVariablePatched())
 				change = MaterialPort::SnapshotChange::Fields;
+			if (entry.held && change == MaterialPort::SnapshotChange::Fields && entry.held->snapshot.size == a_held->snapshot.size) {
+				++s.fieldsMoved;
+				if (!s.fieldsMovedVtable)
+					s.fieldsMovedVtable = a_held->snapshot.vtable;
+				for (auto& [vtable, count] : s.fieldsMovedBy)
+					if (!vtable || vtable == a_held->snapshot.vtable) {
+						vtable = a_held->snapshot.vtable;
+						++count;
+						break;
+					}
+				const auto& was = entry.held->snapshot.bytes;
+				const auto& now = a_held->snapshot.bytes;
+				for (std::size_t w = 0; w < s.wordMoved.size() && w * 4 + 4 <= a_held->snapshot.size; ++w)
+					s.wordMoved[w] += std::memcmp(was.data() + w * 4, now.data() + w * 4, 4) != 0;
+			}
 			if (entry.held) {
 				++s.replaced;
 				HandBackHeld(std::move(entry.held));

@@ -37,10 +37,9 @@ namespace DCLF::Extensions
 		return registered[a_family.index].rows(family->columns.get());
 	}
 
-	bool TableFamilies::TakeSent()
+	void TableFamilies::TakeSent()
 	{
 		const auto registered = RegisteredTableFamilies();
-		bool taken = false;
 		for (std::size_t f = 0; f < registered.size(); ++f) {
 			if (!registered[f].journaled)
 				continue;
@@ -50,9 +49,7 @@ namespace DCLF::Extensions
 			// The live tables hold every family from their first write on (Mutable); none held: nothing was sent from them.
 			if (f < entries.size())
 				entries[f].journal.BeginBuild(contentEpoch);
-			taken = true;
 		}
-		return taken;
 	}
 
 	TableFamilies::TableFamilies(const TableFamilies& a_other)

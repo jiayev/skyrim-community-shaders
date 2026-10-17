@@ -290,11 +290,13 @@ The motion run after it: the average pass 559 us (target 0.4 ms), the worst 30 p
     segment's (`other = out`) before giving it its own inputs; `PackPipelines` still compares every pipeline (O(P)).
 -   **Texture transforms before the Z-prepass epoch.** `cs.dclf.z.texture-transforms` runs first in the Z-prepass epoch, so an
     epoch that reads the main material rows before it (the reflection, Skylighting's occlusion) draws with the previous
-    frame's `TexcoordOffset`. A scrolling material is a frame behind there. No GPU readback checks the patched bytes either;
+    frame's `TexcoordOffset` (and effect falloff and base colour). A scrolling material is a frame behind there. No GPU readback checks the patched bytes either;
     the parity checks are the producer's re-read and the builder's packing position.
 -   **Capture parity's `CompareMaterial` must leave out VS variable 11.** A record now keeps its capture-time `TexcoordOffset`
     (the GPU patches the rows), so under `CS_DCLF_CAPTURE_PARITY` every scrolling material mismatches there. Leave out the
-    variable in that `CompareBlock`, or compare it with FrameValues' entry for the slot (`TextureTransformList`). Comments
+    variable in that `CompareBlock`, or compare it with FrameValues' entry for the slot (`TextureTransformList`). The same holds
+    for a port's declared frame variables (the Effect port's VS `FalloffData` and PS `BaseColor`: `MaterialSpace::declaredVSFloats`,
+    `declaredPSFloats` name their floats). Comments
     still naming `RefreshMaterialTransforms` or the transform watch: `Core/Scene/Model/Tables.h`, `Core/Shading/MaterialPortFrame.h`.
 -   **Mirror parity under lane mode flags late or missed node fields with movement.** Likely asynchronous timing rather than a
     missed writer; not attributed. The parity system is to be reworked for the asynchronous scene.

@@ -904,10 +904,22 @@ namespace DCLF::Scene
 	void Coordinator::PublishScene()
 	{
 		ZoneScopedN("CS.DCLF.Scene.PublishScene");
+		// A pass whose only change is deltas the frame takes and nothing a snapshot is built from reads (the placement plans, the shading
+		// names, the retired imports, the light entries: no claim, table, lookup, toggle or guard moved since the last publication, and
+		// the claims shared again unrevoked) publishes the last tables again: the snapshot builder then posts the last snapshot again for
+		// it (PassesThrough: the same objects), and the frame takes its deltas. Its tables would be a copy of the same content.
+		const auto& pace = paceStats;
+		bool deltasOnly = publishedKeyValid && !publishForced && publishedTables && setApply.empty() && !setSnapshotDirty && !nodeSetsDirty &&
+		                  sceneInputs.adoptionGuards == publishedAdoptionGuards && publicationJoined.empty() && publicationLeft.empty() &&
+		                  componentSeedRequests.empty() && switchesApplied.empty() && !switchResync && !tables.ClassMemberChangesPending() &&
+		                  componentDeltaRequests.empty() && CurrentPublishKey() == publishedKey;
+		const auto sharedBefore = pace.claimsShared, wholeBefore = pace.claimsWhole, revokedBefore = pace.claimsRevoked;
 		// Apply the committed set and revoke what cannot be drawn, so the publication draws exactly what it claims.
 		ApplySet();
 		PublishClaims();
 		RevokeUndrawnClaims();
+		deltasOnly = deltasOnly && pace.claimsShared != sharedBefore && pace.claimsWhole == wholeBefore && pace.claimsRevoked == revokedBefore &&
+		             CurrentPublishKey() == publishedKey;
 		// The lookups are the pass's (ResolveLookups before the commit judged readiness by them): a second resolve here could take a newer
 		// catalog or shadow inputs than the commit judged.
 		PublicationDeltas deltas;
@@ -915,7 +927,8 @@ namespace DCLF::Scene
 			ZoneScopedN("CS.DCLF.Scene.TakeDeltas");
 			TakeDeltas(deltas);
 		}
-		PublishTables();
+		if (!deltasOnly)
+			PublishTables();
 		PublishLookups();
 		// The publication made and posted (the snapshot builder takes it).
 		ZoneNamedN(postSnapshotZone, "CS.DCLF.Scene.PostSnapshotWork", true);
@@ -1016,10 +1029,9 @@ namespace DCLF::Scene
 	void Coordinator::TakeCoordinatorInputs()
 	{
 		ZoneScopedN("CS.DCLF.Scene.TakeCoordinatorInputs");
-		// In order: the content epochs the commit hooks sent of the journaled families (the depth commit's fade roots), then PrimaryCull's
-		// admitted roots. Each forces a publication.
-		if (tables.families.TakeSent())
-			publishForced = true;
+		// In order: the content epochs the commit hooks sent of the journaled families (the depth commit's fade roots: a trim, which publishes
+		// nothing by itself, since the hook posts every frame), then PrimaryCull's admitted roots, which force a publication.
+		tables.families.TakeSent();
 		if (const auto roots = channels.standInRootsPosted.Take()) {
 			ComponentsAdmitted(*roots);
 			publishForced = true;

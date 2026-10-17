@@ -1,12 +1,14 @@
 #pragma once
 
-// The texture transforms (TexcoordOffset) the frame patches into the main material rows: the snapshot's list of rows that carry one
-// (the payload product, built with the main payload), the rows the feature's frame-value pool samples for it, and the pass that
-// writes them into the rows (TextureTransformsCS.hlsl). Included by the feature's sources only.
+// The texture transforms (TexcoordOffset) and the ports' declared frame variables (Api::MaterialFrameVariable: the Effect port's falloff
+// and base colour) the frame patches into the main material rows: the snapshot's list of rows that carry one (the payload product,
+// built with the main payload), the rows the feature's frame-value pool samples for it, and the pass that writes them into the rows
+// (TextureTransformsCS.hlsl). Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -16,13 +18,19 @@ namespace RE
 	class BSShaderMaterial;
 }
 
+namespace DCLF::Api
+{
+	struct MaterialFrameComponent;
+}
+
 namespace DCLF::Features::TextureTransforms
 {
 	/**
 	 * @brief One row of the pool's texture transform buffer (TextureTransformsCS.hlsl's TextureTransformRow; must match). Row 0 is
 	 * the header: rowOffset holds the entry count. Entry i is row i + 1: the material row's TexcoordOffset as the frame's shaders read
-	 * it (the material's texCoordOffset / texCoordScale of the frame's buffer), stored at rowOffset bytes past the material rows'
-	 * address, component c where mask bit c is set (a component the record never wrote stays the row's).
+	 * it (the material's texCoordOffset / texCoordScale of the frame's buffer), or a declared frame variable's live value (its read),
+	 * stored at rowOffset bytes past the material rows' address, component c where mask bit c is set (a component the record never wrote
+	 * stays the row's).
 	 */
 	struct TextureTransformRow
 	{
@@ -34,10 +42,11 @@ namespace DCLF::Features::TextureTransforms
 	static_assert(sizeof(TextureTransformRow) == 32);
 
 	/**
-	 * @brief The rows of one main payload that carry TexcoordOffset (the product's build, immutable): every packed row of a live slot
-	 * whose VS block places it. The frame patches all of them, not only the scrolling ones, so a payload backing holds this frame's
-	 * value whatever its history (a patched value the builder's journal does not know of is overwritten every frame). The material
-	 * pointers are the slots' keys, alive while the publication the payload belongs to lives (the coordinator's material references).
+	 * @brief The rows of one main payload that carry TexcoordOffset or a declared frame variable (the product's build, immutable): an
+	 * entry per variable a packed row of a live slot places (MainRows::MaterialState: texcoordDword, frameVariables). The frame patches all
+	 * of them, not only the moving ones, so a payload backing holds this frame's value whatever its history (a patched value the builder's
+	 * journal does not know of is overwritten every frame). The material pointers are the slots' keys, alive while the publication the
+	 * payload belongs to lives (the coordinator's material references).
 	 */
 	struct TextureTransformList
 	{
@@ -46,9 +55,13 @@ namespace DCLF::Features::TextureTransforms
 			const RE::BSShaderMaterial* material = nullptr;
 			std::uint32_t rowOffset = 0;  // bytes from the material rows' address to the first component
 			std::uint32_t mask = 0;       // the components the record wrote (bit c)
+			// A declared frame variable's read under the row's pass (Api::MaterialFrameVariable::ComponentsFor: 4, the port's static
+			// storage); null: TexcoordOffset, from the frame's texture-transform buffer.
+			const Api::MaterialFrameComponent* components = nullptr;
 			bool operator==(const Entry&) const = default;
 		};
 		std::vector<Entry> entries;
+		std::size_t variables = 0;  // the entries of declared frame variables
 	};
 
 	/**
@@ -57,7 +70,7 @@ namespace DCLF::Features::TextureTransforms
 	 */
 	namespace TextureTransformStats
 	{
-		inline std::atomic<std::uint64_t> built{ 0 }, builtEntries{ 0 }, rowsUnpacked{ 0 }, rowsNoTexcoord{ 0 }, rowsFreeSlot{ 0 }, rowsStale{ 0 };
+		inline std::atomic<std::uint64_t> built{ 0 }, builtEntries{ 0 }, builtVariables{ 0 }, rowsUnpacked{ 0 }, rowsNoTexcoord{ 0 }, rowsFreeSlot{ 0 }, rowsStale{ 0 };
 		inline std::atomic<std::uint64_t> published{ 0 }, publishedEntries{ 0 }, publishedNone{ 0 };
 		inline std::atomic<std::uint64_t> adopted{ 0 }, adoptedEntries{ 0 }, adoptedNone{ 0 };
 	}

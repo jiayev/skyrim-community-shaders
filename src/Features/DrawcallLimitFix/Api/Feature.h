@@ -119,9 +119,10 @@ namespace DCLF::Api
 		virtual MoveWriterId ReserveMoveWriter(std::string_view a_name) = 0;
 		/**
 		 * @brief The feature writes every material row's frame VS variable (the ports' MaterialPortRules::frameVSVariable, the texture
-		 * transforms' TexcoordOffset) with the frame's value every frame. A capture whose texture-transform buffers alone moved then
-		 * rewrites no record, and a write that moved only them captures nothing; without it they are the records' (rewritten from the
-		 * capture). Once or more; read as Extensions::FrameVSVariablePatched.
+		 * transforms' TexcoordOffset) and the ports' declared frame variables (MaterialPortContribution::frameVariables: the Effect port's
+		 * falloff and base colour) with the frame's value every frame. A capture whose texture-transform buffers or declared frame
+		 * variables' bytes alone moved then rewrites no record, and a write that moved only them captures nothing; without it they are the
+		 * records' (rewritten from the capture). Once or more; read as Extensions::FrameVSVariablePatched.
 		 */
 		virtual void RegisterFrameVSVariablePatch() = 0;
 		/** @brief Fails the install past Extensions::kTableFamilySlots families. */

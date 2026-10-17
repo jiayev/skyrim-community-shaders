@@ -2,6 +2,7 @@
 #include "Features/DrawcallLimitFix/Core/Runtime/Retirement.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/OwnerValues.h"
+#include <algorithm>
 #include <cassert>
 #include <map>
 #include <random>
@@ -428,7 +429,7 @@ namespace
         }
     }
 
-    // ForEachRun's runs are exactly what was marked, and the chunked spans (KeptView::ForEachSpan/Emit) cover exactly those runs, each
+    // ForEachRun's runs are exactly what was marked, and the chunked spans (KeptView::ForEachSpan/Emit) cover those runs (and the small gaps between runs of one chunk), each
     // within one chunk.
     void TestRunsMatchMarks()
     {
@@ -464,7 +465,17 @@ namespace
                     spans.insert(a_first + k);
                 }
             });
-            assert(runs == marked && spans == marked && sent == marked.size());
+            // The spans cover the marked elements, plus only the gaps between two runs of one chunk at most kKeptMergeGapBytes wide
+            // (unchanged since the holder's epoch: the holder has them).
+            assert(runs == marked && sent == spans.size() && std::includes(spans.begin(), spans.end(), marked.begin(), marked.end()));
+            for (const auto k : spans)
+                if (!marked.contains(k)) {
+                    const auto next = marked.upper_bound(k);
+                    auto previous = marked.lower_bound(k);
+                    assert(next != marked.end() && previous != marked.begin());
+                    --previous;
+                    assert(*previous / kSmallChunk == *next / kSmallChunk && (*next - *previous - 1) * sizeof(std::uint32_t) <= DCLF::kKeptMergeGapBytes);
+                }
             holder = view.ContentEpoch();
         }
     }
@@ -621,6 +632,8 @@ int main()
         const std::uint64_t count = 1 + random() % 8192;
         for (unsigned n = 0; n < 256; ++n)
             changes.entries.push_back({1 + random() % 10, random() % 9000, random() % 180});
+        // As a journal keeps them: in content-epoch order (ForEachRun searches for the first entry newer than the holder).
+        std::stable_sort(changes.entries.begin(), changes.entries.end(), [](const auto& a, const auto& b) { return a.contentEpoch < b.contentEpoch; });
         const auto holderEpoch = random() % 12;
         std::vector<std::pair<std::uint64_t, std::uint64_t>> reference, actual;
         DCLF::reuseKeptStorage = false;

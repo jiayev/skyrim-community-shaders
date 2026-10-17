@@ -148,10 +148,11 @@ namespace DCLF::Extensions
 		/**
 		 * @brief The scene lane, the pass's coordinator inputs (Coordinator::TakeCoordinatorInputs, first there), on the live tables: each
 		 * journaled family's sent content epoch posted since the last call (TableFamilySent, latest wins) taken, its journal trimmed to it
-		 * (ChangeJournal::BeginBuild). Whether any was (the pass then forces a publication). A family these tables do not hold yet takes
-		 * nothing (its post is dropped: no row of it was ever written).
+		 * (ChangeJournal::BeginBuild). No publication is forced: the hook posts every depth commit, and a trim changes no row, so the
+		 * published journal (copied by the next publication that changed something) only lists runs the holder already has, which ForEachRun
+		 * skips. A family these tables do not hold yet takes nothing (its post is dropped: no row of it was ever written).
 		 */
-		bool TakeSent();
+		void TakeSent();
 
 	private:
 		void MakeAll();

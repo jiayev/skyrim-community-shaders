@@ -97,6 +97,11 @@ namespace DCLF
 		std::atomic<std::uint32_t> snapshotTakenFrame{ 0 };
 		std::atomic<std::uint64_t> snapshotTaken{ 0 };
 		std::atomic<std::uint32_t> scenePassDoneFrame{ 0 };
+		// The builder's: a sealed snapshot's publication waits on the gate above, so the scene pass's end wakes it; else that end wakes
+		// nobody (a pass ends several times a frame). Set before the builder reads the gate again, and the pass's frame stored before
+		// it is read (both seq_cst): one of them sees the other, so no end is missed. The wakes it skipped (the report's).
+		std::atomic<bool> publicationGated{ false };
+		std::atomic<std::uint64_t> passDoneWakesSkipped{ 0 };
 		// The frame's: the adopted snapshot, and whether the newest found was stale (no claims until a current one).
 		std::shared_ptr<const SceneSnapshot> adoptedSnapshot;
 		// The frame's: the adopted snapshot's payload, installed with its draws (the snapshot holds it too, so the builder releases it),
@@ -146,6 +151,31 @@ namespace DCLF
 			// draws), and draws newer work replaced before their payload was published.
 			std::uint64_t publicationsWaited = 0, replacedUnpublished = 0;
 			bool publicationWaited = false;  // the draws' publication has waited (publicationsWaited counted)
+			// The report's (ProducerReport): the builder's passes, and those that found nothing to do (no work, or a standing snapshot
+			// whose inputs had not moved); the publications passed through (PassThrough: only deltas moved).
+			std::uint64_t passes = 0, idlePasses = 0, passedThrough = 0;
+			bool fresh = false;  // work taken and not yet made (PassThrough is tried once, for it)
+			/**
+			 * @brief The last snapshot posted with a revision and complete draws, and what it was built from: a publication whose
+			 * tables, lookups, catalog, claims and candidates are the same objects (the coordinator publishes them again only when they
+			 * changed), with the same ahead context's shape and the frame's revision inputs unmoved, would be built into exactly this
+			 * snapshot; it is posted again for that publication instead (PassThrough), which carries the publication's deltas to the frame.
+			 */
+			struct Posted
+			{
+				std::shared_ptr<const ScenePublication> publication;
+				std::shared_ptr<const EntrySpace> sun, light;
+				std::shared_ptr<const DrawPublication> draws;
+				std::shared_ptr<const PayloadVersions> payload;
+				org::async::RevisionAssembler::Lease revision;
+				std::uint64_t drawsSerial = 0;
+				// The ahead context's shape (which builds ran, for which resources and frame slots).
+				bool valid = false, shadow = false;
+				std::array<bool, 2> build{};
+				const void* target = nullptr;
+				const void* shadowTarget = nullptr;
+				std::array<std::uint32_t, 2> vsMask{}, psMask{};
+			} posted;
 		} snapshotBuilder;
 		std::atomic<bool> snapshotInputsMoved{ false };  // the frame posted revision inputs since the builder's last make
 		std::atomic<bool> producerReportWanted{ false };

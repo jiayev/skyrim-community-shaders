@@ -226,7 +226,8 @@ namespace DCLF::Extensions
 		/**
 		 * @brief Adds a_port at the next kind, which it returns, refused (a_who's) for no name, property RTTI, material vtable or callbacks,
 		 * Lighting's or no shader type, a space past kMaxStageVariables or with names not one a variable, a class with no registered toggle,
-		 * a shader type another port has, or a kind past kMaterialKinds.
+		 * frame variables past kMaxMaterialFrameVariables or outside its space or material, a shader type another port has, or a kind past
+		 * kMaterialKinds.
 		 */
 		std::uint8_t AddMaterialPort(Lists& a_lists, std::string_view a_who, const Api::MaterialPortContribution& a_port)
 		{
@@ -237,6 +238,19 @@ namespace DCLF::Extensions
 			if (a_port.shaderType == RE::BSShader::Type::Lighting || a_port.shaderType >= RE::BSShader::Type::Total || !classValid || a_port.name.empty() || !a_port.propertyRtti ||
 				!a_port.materialVtable || !a_port.capture || !a_port.derive || !a_port.evaluate || !a_port.shading || !spaceValid(a_port.vs) || !spaceValid(a_port.ps))
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete material port", a_who));
+			// Its frame variables: a material row's places, each a variable of its stage read from bytes its material has.
+			const auto readable = [&](const std::array<Api::MaterialFrameComponent, 4>& a_components) {
+				return std::all_of(a_components.begin(), a_components.end(), [&](const Api::MaterialFrameComponent& a_component) {
+					return a_component.source + 4u <= a_port.materialBytes &&
+					       (a_component.scale == Api::MaterialFrameComponent::kNoScale || a_component.scale + 4u <= a_port.materialBytes);
+				});
+			};
+			if (a_port.frameVariables.size() > Api::kMaxMaterialFrameVariables)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material port declares more than kMaxMaterialFrameVariables frame variables: grow it first", a_who));
+			for (const auto& variable : a_port.frameVariables)
+				if (variable.variable >= (variable.pixel ? a_port.ps.variables : a_port.vs.variables) || variable.first >= variable.end ||
+					variable.end > a_port.materialBytes || !readable(variable.components) || !readable(variable.alternate))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material port declares a frame variable outside its space or material", a_who));
 			for (std::size_t kind = 1; kind < a_lists.materialPortCount; ++kind)
 				if (a_lists.materialPorts[kind].shaderType == a_port.shaderType)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s material port takes shader type {}, which another port has", a_who,

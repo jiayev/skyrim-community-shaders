@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialPort.h"
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
@@ -74,7 +75,7 @@ namespace DCLF::MaterialSources
 			return out;
 		}
 
-		// A port's record's TexcoordOffset (its rules' frame VS variable: BSEffectShader's VS variable 9), the only frame part it has.
+		// A port's record's TexcoordOffset (its rules' frame VS variable: BSEffectShader's VS variable 9).
 		const std::vector<std::uint32_t>& PortVSPositions(std::uint8_t a_kind)
 		{
 			return Extensions::MaterialSpaceOf(a_kind).frameVSFloats;
@@ -107,11 +108,22 @@ namespace DCLF::MaterialSources
 	void CopyFrameComponents(const MaterialRecord& a_from, MaterialRecord& a_to, std::uint32_t a_passDescriptor)
 	{
 		if (a_to.kind != kMaterialKindLighting || a_from.kind != kMaterialKindLighting) {
-			// A port's record's one frame part is TexcoordOffset (the transform watch's); its pass descriptor's bits are not Lighting's.
-			if (a_to.kind == a_from.kind)
-				for (const auto position : PortVSPositions(a_to.kind))
-					if (a_to.vs.Written(position) && a_from.vs.Written(position))
-						a_to.vs.floats[position] = a_from.vs.floats[position];
+			// A port's record's frame parts are TexcoordOffset (the transform watch's) and, while a feature patches them, its declared frame
+			// variables (Api::MaterialFrameVariable: the Effect port's FalloffData and BaseColor; the frame values write their rows); its pass
+			// descriptor's bits are not Lighting's.
+			if (a_to.kind == a_from.kind) {
+				const auto copy = [](const std::vector<std::uint32_t>& a_positions, const ConstantBlock& a_source, ConstantBlock& a_target) {
+					for (const auto position : a_positions)
+						if (a_target.Written(position) && a_source.Written(position))
+							a_target.floats[position] = a_source.floats[position];
+				};
+				const auto& space = Extensions::MaterialSpaceOf(a_to.kind);
+				copy(PortVSPositions(a_to.kind), a_from.vs, a_to.vs);
+				if (Extensions::FrameVSVariablePatched()) {
+					copy(space.declaredVSFloats, a_from.vs, a_to.vs);
+					copy(space.declaredPSFloats, a_from.ps, a_to.ps);
+				}
+			}
 			return;
 		}
 		for (const auto position : FramePSFloats())

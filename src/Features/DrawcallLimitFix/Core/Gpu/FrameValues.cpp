@@ -475,7 +475,21 @@ namespace DCLF
 			std::vector<const Plan::Item*> settling;
 			std::vector<const void*> owed;  // movers due again next frame (owedKeys)
 			std::uint64_t skins = 0, defects = 0;
+			void Clear()
+			{
+				slots.clear();
+				paletteRuns.clear();
+				settling.clear();
+				owed.clear();
+				skins = defects = 0;
+			}
 		};
+		// The producers' scratch, kept warm across frames (no allocation per frame once grown): Sample's items and per-chunk changes,
+		// SampleShadingRows' items, SendRows' runs for one backing.
+		std::vector<Listed> sampleItems;
+		std::vector<Changed> sampleChanged;
+		std::vector<const ShadingItem*> shadingItemsScratch;
+		std::vector<org::StreamingUploadRange> uploadRanges;
 		// The build's rows and palettes, after its one Mutable() each (written from many threads after it).
 		struct SampleOut
 		{
@@ -525,7 +539,7 @@ namespace DCLF
 		static void SampleChunk(const Job& a_job, const std::vector<Listed>& a_items, const PaletteRuns& a_runs, std::size_t a_begin, std::size_t a_end,
 			const SampleOut& a_out, Changed& a_mine, std::atomic<std::uint64_t>& a_refused);
 		static void SampleListed(const Listed& a_listed, const PaletteRuns& a_runs, const SampleOut& a_out, Changed& a_mine, ItemScratch& a_scratch,
-			std::atomic<std::uint64_t>& a_refused);
+			bool a_leased, std::atomic<std::uint64_t>& a_refused);
 		static Deferred& Defer(const Listed& a_listed, std::uint32_t a_class, const Api::PaletteRowsItem& a_classItem, ItemScratch& a_scratch);
 		static void WriteDeferred(const Job& a_job, const PaletteRuns& a_runs, DeferredChunk& a_deferred);
 		static void FinishDeferred(const SampleOut& a_out, Changed& a_mine, DeferredChunk& a_deferred);
@@ -986,30 +1000,23 @@ namespace DCLF
 				drainedKeys.push_back(a_key);
 		});
 		moveNodes += FrameValueMoves::nodes.Drain([&](RE::NiPointer<RE::NiAVObject>&& a_node) { owedNodes.push_back(std::move(a_node)); });
-		// Once a lease is refused (the window closed), the rest wait for the next producer.
-		bool closed = false;
-		std::size_t kept = 0;
-		for (std::size_t i = 0; i < owedNodes.size(); ++i) {
-			if (!closed) {
-				EngineReadWindow::Lease lease;
-				if (lease) {
-					const RE::NiAVObject* node = owedNodes[i].get();
+		// One lease for them all: refused (the window closed), they wait for the next producer.
+		if (!owedNodes.empty()) {
+			EngineReadWindow::Lease lease;
+			if (lease) {
+				for (auto& owed : owedNodes) {
+					const RE::NiAVObject* node = owed.get();
 					drainedKeys.push_back(node);
 					for (const RE::NiAVObject* at = node; at; at = at->parent)
 						if (const void* owner = at->GetUserData()) {
 							drainedKeys.push_back(owner);
 							break;
 						}
-					ReleaseLater(owedNodes[i]);
-					continue;
+					ReleaseLater(owed);
 				}
-				closed = true;
+				owedNodes.clear();
 			}
-			if (kept != i)
-				owedNodes[kept] = std::move(owedNodes[i]);
-			++kept;
 		}
-		owedNodes.resize(kept);
 		for (const void* key : drainedKeys)
 			markKey(key);
 		for (const void* key : lastKeys)
@@ -1089,7 +1096,8 @@ namespace DCLF
 		// The movers and roots that moved (MarkDue).
 		MarkDue(a_job);
 		// Each slot and palette block once, by its newest item.
-		std::vector<Listed> items;
+		auto& items = sampleItems;
+		items.clear();
 		items.reserve(dueMovers.size() + (a_job.written.empty() ? 0 : a_job.written.back()->written.size()) + settling.size());
 		// The marks grow with the rows; only those set are cleared (at the end).
 		const std::size_t blocks = paletteOut.size() / 2;
@@ -1124,7 +1132,10 @@ namespace DCLF
 		const SampleOut sampleOut{ out, paletteOut };
 		std::uint64_t rootViewMarked = 0, rootViewPaletteMarked = 0;
 		ApplyRootViewSamples(a_job, sampleOut, rootViewMarked, rootViewPaletteMarked);
-		std::vector<Changed> changed((items.size() + kSampleGrain - 1) / kSampleGrain);
+		auto& changed = sampleChanged;
+		for (auto& chunk : changed)
+			chunk.Clear();
+		changed.resize((items.size() + kSampleGrain - 1) / kSampleGrain);
 		std::atomic<std::uint64_t> refusedHere{ 0 };
 		SampleItems(a_job, items, sampleOut, changed, refusedHere);
 		// Roots: their dependents' sun entries and fade nodes, after the items wrote theirs.
@@ -1267,8 +1278,16 @@ namespace DCLF
 				[](const Api::PaletteRowsItem& a_item, std::size_t a_listed) { return a_item.listed < a_listed; });
 			scratch.cursors[c] = static_cast<std::size_t>(first - items.begin());
 		}
-		for (std::size_t i = a_begin; i < a_end; ++i)
-			SampleListed(a_items[i], a_runs, a_out, a_mine, scratch, a_refused);
+		{
+			// One engine-read lease for the chunk's items, taken at its first item that reads the engine (a first-person class item
+			// reads none): refused, every such item of the chunk is refused. Let go before the classes' writes, which read no engine.
+			std::optional<EngineReadWindow::Lease> lease;
+			for (std::size_t i = a_begin; i < a_end; ++i) {
+				if (!lease && !a_items[i].item->firstPerson)
+					lease.emplace();
+				SampleListed(a_items[i], a_runs, a_out, a_mine, scratch, lease && *lease, a_refused);
+			}
+		}
 		if (!scratch.deferred)
 			return;
 		WriteDeferred(a_job, a_runs, *scratch.deferred);
@@ -1276,7 +1295,7 @@ namespace DCLF
 	}
 
 	void FrameValues::Impl::SampleListed(const Listed& a_listed, const PaletteRuns& a_runs, const SampleOut& a_out, Changed& a_mine, ItemScratch& a_scratch,
-		std::atomic<std::uint64_t>& a_refused)
+		bool a_leased, std::atomic<std::uint64_t>& a_refused)
 	{
 		auto& out = a_out.out;
 		auto& row = a_scratch.row;
@@ -1288,12 +1307,10 @@ namespace DCLF
 		const auto paletteClass = static_cast<std::uint32_t>(item.itemClass);
 		const bool deferred = palette && paletteClass != 0 && paletteClass <= a_runs.size() && a_runs[paletteClass - 1].entry;
 		const Api::PaletteRowsItem* classItem = deferred ? &a_runs[paletteClass - 1].items[a_scratch.cursors[paletteClass - 1]++] : nullptr;
-		// A first-person class item reads no engine memory here: no lease, never settling.
+		// A first-person class item reads no engine memory here: no lease, never settling. Any other is read under its chunk's
+		// lease (a_leased: held).
 		const bool firstPerson = item.firstPerson;
-		std::optional<EngineReadWindow::Lease> lease;
-		if (!firstPerson)
-			lease.emplace();
-		if (lease && !*lease) {
+		if (!firstPerson && !a_leased) {
 			++a_refused;
 			if (settles)
 				a_mine.settling.push_back(&item);  // not sampled: the next producer takes it
@@ -1440,9 +1457,10 @@ namespace DCLF
 		auto& out = a_out.out;
 		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.Roots", dueRoots.size(), 16, [&](std::size_t a_begin, std::size_t a_end) {
 			ZoneScopedN("CS.DCLF.FrameValues.Roots");
+			// One engine-read lease for the chunk: refused, each of its roots is.
+			EngineReadWindow::Lease lease;
 			for (std::size_t r = a_begin; r < a_end; ++r) {
 				const auto& root = keptRoots[dueRoots[r]];
-				EngineReadWindow::Lease lease;
 				if (!lease) {
 					++a_refused;
 					a_rootRefused[r] = 1;
@@ -1690,13 +1708,18 @@ namespace DCLF
 			out.resize(a_slots, BindlessShading{});
 			shading.MarkRange(first, a_slots - first);
 		}
-		// Each slot once, by its newest item (the slot may have been reused since).
-		std::vector<const ShadingItem*> items;
+		// Each slot once, by its newest item (the slot may have been reused since). The marks grow with the rows; only those set are
+		// cleared (the items' slots).
+		auto& items = shadingItemsScratch;
+		items.clear();
 		items.reserve(a_job.shadingItems.size());
-		shadingListed.assign(out.size(), 0);
+		if (shadingListed.size() < out.size())
+			shadingListed.resize(out.size(), 0);
 		for (auto it = a_job.shadingItems.rbegin(); it != a_job.shadingItems.rend(); ++it)
 			if (it->slot < out.size() && it->property && !std::exchange(shadingListed[it->slot], 1))
 				items.push_back(&*it);
+		for (const auto* item : items)
+			shadingListed[item->slot] = 0;
 		constexpr std::size_t kGrain = 128;
 		std::vector<std::vector<std::uint32_t>> changed((items.size() + kGrain - 1) / kGrain);
 		std::atomic<std::uint64_t> refusedHere{ 0 };
@@ -1705,9 +1728,10 @@ namespace DCLF
 			ZoneScopedN("CS.DCLF.FrameValues.Shading");
 			FrameGlobals::Scope scope(a_job.globals);  // the features' globals (SampleShading: the shading contributions)
 			auto& mine = changed[a_begin / kGrain];
+			// One engine-read lease for the chunk: refused, each of its items is.
+			EngineReadWindow::Lease lease;
 			for (std::size_t i = a_begin; i < a_end; ++i) {
 				const auto& item = *items[i];
-				EngineReadWindow::Lease lease;
 				if (!lease) {
 					++refusedHere;
 					continue;
@@ -1752,28 +1776,38 @@ namespace DCLF
 
 	// The catch-up: the journal's runs since the backing's content (all of them for a backing that holds nothing, or less than the
 	// journal's floor), into the leased backing (PooledBackingLease: no frame reads it before the one that leased it, which waits for
-	// this producer's signal); then the backing is at the journal's content epoch. a_view is the rows' KeptView, a_emit its Emit.
+	// this producer's signal); then the backing is at the journal's content epoch. a_view is the rows (a KeptWholeArray), a_emit its Emit.
 	void FrameValues::Impl::SendRows(const org::services::BackingLease& a_lease, Pool& a_pool, std::string_view a_name, const Job& a_job, std::size_t a_count,
 		std::uint64_t a_contentEpoch, const void* a_view, Api::FrameValuePoolProducer::EmitRowsFn a_emit)
 	{
 		auto& backing = *a_lease;  // the lease holder fills it (contentEpoch is its)
 		if (a_count > backing.capacityClass)
 			throw std::runtime_error(fmt::format("its {} backing holds {} rows of {}", a_name, backing.capacityClass, a_count));
-		std::uint64_t sent = 0, sentBytes = 0;
-		auto put = [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			const org::StreamingUploadSegment segment{ a_data, a_bytes };
-			auto ticket = a_job.uploads->QueueTrackedStreamingUploadSegments({ &segment, 1 }, segment.size,
-				org::WorkerOwnedDestination{ backing.buffer, org::WorkerOwnedDestination::Ownership::PooledBackingLease }, a_offset);
+		// The runs gathered (the scratch keeps its capacity), then one batched upload into the backing: one ticket, its staging page
+		// mapped once, one wake of the uploader, a copy region per run. The runs point into the rows, which nothing writes meanwhile.
+		auto& ranges = uploadRanges;
+		ranges.clear();
+		std::uint64_t sentBytes = 0;
+		{
+			ZoneScopedN("CS.DCLF.FrameValues.Send.Emit");
+			auto put = [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+				ranges.push_back({ a_data, a_bytes, a_offset });
+				sentBytes += a_bytes;
+			};
+			using Put = decltype(put);
+			const Api::FrameValuePoolProducer::RowSink sink{ &put, [](void* a_owner, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+																(*static_cast<Put*>(a_owner))(a_data, a_bytes, a_offset);
+															} };
+			a_emit(a_view, backing.contentEpoch.load(std::memory_order_acquire), sink);
+		}
+		if (!ranges.empty()) {
+			ZoneScopedN("CS.DCLF.FrameValues.Send.Queue");
+			auto ticket = a_job.uploads->QueueTrackedStreamingUploadRanges(ranges,
+				org::WorkerOwnedDestination{ backing.buffer, org::WorkerOwnedDestination::Ownership::PooledBackingLease });
 			if (!ticket || ticket->state.load(std::memory_order_acquire) == org::TrackedUploadTicketState::Cancelled)
 				throw std::runtime_error("the dedicated uploader refused its rows");
-			++sent;
-			sentBytes += segment.size;
-		};
-		using Put = decltype(put);
-		const Api::FrameValuePoolProducer::RowSink sink{ &put, [](void* a_owner, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-															(*static_cast<Put*>(a_owner))(a_data, a_bytes, a_offset);
-														} };
-		a_emit(a_view, backing.contentEpoch.load(std::memory_order_acquire), sink);
+		}
+		const std::uint64_t sent = ranges.size();
 		backing.contentEpoch.store(a_contentEpoch, std::memory_order_release);
 		a_pool.newestContentEpoch.store(a_contentEpoch, std::memory_order_release);
 		a_pool.runs += sent;
@@ -1782,13 +1816,13 @@ namespace DCLF
 		bytes += sentBytes;
 	}
 
+	// Emitted from the rows themselves (KeptArray::Emit: no view's copy of the journal), which no producer writes while it sends.
 	template <class T>
 	void FrameValues::Impl::Send(const Job& a_job, Part a_part, const KeptWholeArray<T>& a_rows)
 	{
-		const auto view = a_rows.View();
-		SendRows(a_job.leases[a_part], pools[a_part], kPartNames[a_part], a_job, view.Count(), view.ContentEpoch(), &view,
+		SendRows(a_job.leases[a_part], pools[a_part], kPartNames[a_part], a_job, a_rows.Size(), a_rows.ContentEpoch(), &a_rows,
 			[](const void* a_view, std::uint64_t a_contentEpoch, const Api::FrameValuePoolProducer::RowSink& a_sink) {
-				static_cast<const KeptView<T>*>(a_view)->Emit(a_contentEpoch, a_sink);
+				static_cast<const KeptWholeArray<T>*>(a_view)->Emit(a_contentEpoch, a_sink);
 			});
 	}
 
@@ -1826,10 +1860,24 @@ namespace DCLF
 	void FrameValues::Impl::Upload(const Job& a_job)
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.Upload");
-		Send(a_job, kPlacements, rows);
-		Send(a_job, kPalettes, palettes);
-		Send(a_job, kShading, shading);
-		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) { a_entry.send(a_producer); });
+		{
+			ZoneScopedN("CS.DCLF.FrameValues.Send.placements");
+			Send(a_job, kPlacements, rows);
+		}
+		{
+			ZoneScopedN("CS.DCLF.FrameValues.Send.palettes");
+			Send(a_job, kPalettes, palettes);
+		}
+		{
+			ZoneScopedN("CS.DCLF.FrameValues.Send.shading");
+			Send(a_job, kShading, shading);
+		}
+		// A registered pool's send: one zone name (Tracy's are static), the pool's name its text.
+		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) {
+			ZoneScopedN("CS.DCLF.FrameValues.Send.Registered");
+			ZoneText(a_entry.name.data(), a_entry.name.size());
+			a_entry.send(a_producer);
+		});
 	}
 
 	FrameValues::FrameValues() :

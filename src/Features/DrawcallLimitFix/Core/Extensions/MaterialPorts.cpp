@@ -34,6 +34,9 @@ namespace DCLF::Extensions
 {
 	namespace
 	{
+		// BSShaderMaterial's texCoordOffset/texCoordScale (two buffers of 8 bytes each): the texture transforms' fields, every kind's.
+		constexpr std::uint16_t kTransformsFirst = 0xc, kTransformsEnd = 0x2c;
+
 		// Written only by ResolveMaterialPorts (InstallFeatures, before DCLF's threads exist), read-only after.
 		MaterialPortEntries& Table()
 		{
@@ -73,6 +76,24 @@ namespace DCLF::Extensions
 			if (const std::uint32_t variable = port.rules.frameVSVariable; variable < vs.count)
 				for (std::uint32_t c = 0; c < vs.size[variable] && c < 4; ++c)
 					entry.space.frameVSFloats.push_back(vs.offset[variable] + c);
+			// The declared frame variables' floats, and the bytes the frame owns: the texture transforms' and the declared spans, merged.
+			entry.frameVariables = port.frameVariables;
+			entry.frameSpans = { { kTransformsFirst, kTransformsEnd } };
+			for (const auto& variable : port.frameVariables) {
+				const auto& layout = variable.pixel ? entry.space.ps.layout : vs;
+				auto& floats = variable.pixel ? entry.space.declaredPSFloats : entry.space.declaredVSFloats;
+				for (std::uint32_t c = 0; variable.variable < layout.count && c < layout.size[variable.variable] && c < 4; ++c)
+					floats.push_back(layout.offset[variable.variable] + c);
+				entry.frameSpans.push_back({ variable.first, variable.end });
+			}
+			std::sort(entry.frameSpans.begin(), entry.frameSpans.end());
+			std::vector<MaterialSpan> merged;
+			for (const auto& span : entry.frameSpans)
+				if (!merged.empty() && span.first <= merged.back().second)
+					merged.back().second = std::max(merged.back().second, span.second);
+				else
+					merged.push_back(span);
+			entry.frameSpans = std::move(merged);
 			entry.rules = port.rules;
 			entry.capture = port.capture;
 			entry.derive = port.derive;
@@ -85,6 +106,35 @@ namespace DCLF::Extensions
 	}
 
 	const MaterialPortEntries& MaterialPorts() { return Table(); }
+
+	bool DifferOutsideFrameSpans(std::uint8_t a_kind, const std::byte* a_left, const std::byte* a_right, std::size_t a_first, std::size_t a_end)
+	{
+		const auto differ = [&](std::size_t a_begin, std::size_t a_stop) {
+			return a_begin < a_stop && std::memcmp(a_left + (a_begin - a_first), a_right + (a_begin - a_first), a_stop - a_begin) != 0;
+		};
+		std::size_t at = a_first;
+		if (a_kind < kMaterialKinds)
+			for (const auto& [first, end] : Table()[a_kind].frameSpans) {
+				if (first >= a_end)
+					break;
+				if (differ(at, first))
+					return true;
+				at = std::max<std::size_t>(at, end);
+			}
+		return differ(at, a_end);
+	}
+
+	bool DifferInFrameSpans(std::uint8_t a_kind, const std::byte* a_left, const std::byte* a_right, std::size_t a_first, std::size_t a_end)
+	{
+		if (a_kind >= kMaterialKinds)
+			return false;
+		for (const auto& [first, end] : Table()[a_kind].frameSpans) {
+			const std::size_t begin = std::max<std::size_t>(first, a_first), stop = std::min<std::size_t>(end, a_end);
+			if (begin < stop && std::memcmp(a_left + (begin - a_first), a_right + (begin - a_first), stop - begin) != 0)
+				return true;
+		}
+		return false;
+	}
 
 	void CapturePort(std::uint8_t a_kind, const RE::BSShaderProperty& a_property, const void*& a_emissive, std::uint32_t& a_feature)
 	{

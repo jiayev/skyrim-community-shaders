@@ -12,8 +12,8 @@ namespace DCLF::Extensions
 {
 	/**
 	 * @brief Any thread, lock-free (false before the features' install): whether a feature patches every material row's frame VS variable
-	 * with the frame's value (Api::InstallContext::RegisterFrameVSVariablePatch: Features/TextureTransforms), so the texture transforms
-	 * are no record's.
+	 * and the ports' declared frame variables with the frame's value (Api::InstallContext::RegisterFrameVSVariablePatch:
+	 * Features/TextureTransforms), so the texture transforms and those variables are no record's.
 	 */
 	bool FrameVSVariablePatched();
 	/** @brief Main thread, at the features' install (the registry's RegisterFrameVSVariablePatch): a feature patches it. Once or more. */
