@@ -178,7 +178,8 @@ namespace DCLF
 		org::services::PipelineRecipe recipe;
 		recipe.id = fmt::format("dclf.shadow.{:08X}.{:X}.{:016X}.{}", a_key.technique, a_key.rasterFlags, a_key.vertexLayout, a_key.viewState);
 		recipe.shaderKey = ShadowPipelineKeyHash{}(a_key);
-		recipe.fixedFunctionKey = static_cast<std::uint64_t>(depthFormat);
+		// No vertex input: never an artifact built with an input layout (kPulledVerticesSalt).
+		recipe.fixedFunctionKey = static_cast<std::uint64_t>(depthFormat) ^ kPulledVerticesSalt;
 		recipe.build = [device = device, layout = ShadowLayout(), key = a_key, program, depthFormat, rasterState] {
 			return BuildShadow(device, layout, key, program, depthFormat, rasterState);
 		};
@@ -255,9 +256,9 @@ namespace DCLF
 		auto built = std::make_shared<Built>();
 		AddUsage(vertex, false, built->usage[kColorVariant]);
 		AddUsage(pixel, true, built->usage[kColorVariant]);
+		// The pulling vertex stage (DCLF_PULLED) has no vertex inputs, so the pipeline has no vertex input state; it is bound by its
+		// draws, not from an execution set.
 		PipelineDesc desc(a_layout, a_program->vertex, a_program->pixel, a_depthFormat);
-		// The pulling vertex stage (DCLF_PULLED) has no vertex inputs; the pipeline is bound by its draws, not from an execution set.
-		desc.input.il = BuildInputLayout(vertex, a_key.vertexLayout);
 		desc.raster.rs.cull = (a_key.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : a_state.cull;
 		desc.raster.rs.frontCCW = a_state.frontCCW;
 		// The integer DepthBias passes through as the constant factor: the shadow maps are D16_UNORM, where Vulkan's default

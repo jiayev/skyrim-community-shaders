@@ -129,14 +129,20 @@ namespace DCLF
 		attempted = true;
 		device = RenderGraphRuntime::Get().Host()->GetDesc().device;
 
+		// No vertex buffer arguments: the vertex stages pull their attributes through the buffers' views in the draw's push data
+		// (kDrawPushWords).
 		::IndirectCommandsFeatureInfo indirect{};
 		supported = device.QueryFeatureInfo(&indirect.header) == rhi::Result::Ok && indirect.pipelineSets && indirect.indexBufferArguments &&
-		            indirect.vertexBufferArguments && indirect.indirectBindings && indirect.maxPipelineSetCount >= kMaxPipelines;
+		            indirect.indirectBindings && indirect.maxPipelineSetCount >= kMaxPipelines;
 		if (!supported) {
-			logger::warn("[DCLF] Indirect pipelines unavailable: pipeline sets {}, index buffers {}, vertex buffers {}, indirect bindings {}, up to {} pipelines",
-				indirect.pipelineSets, indirect.indexBufferArguments, indirect.vertexBufferArguments, indirect.indirectBindings, indirect.maxPipelineSetCount);
+			logger::warn("[DCLF] Indirect pipelines unavailable: pipeline sets {}, index buffers {}, indirect bindings {}, up to {} pipelines", indirect.pipelineSets,
+				indirect.indexBufferArguments, indirect.indirectBindings, indirect.maxPipelineSetCount);
 			return false;
 		}
+		// The layouts' push data, the draw's words then the pass's (the frame push; the shadow views', kShadowPushWords, fewer): BasicRHI refuses
+		// a layout whose push data exceeds the device's (VK_EXT_descriptor_heap's maxPushDataSize), and the indirect pipelines are then
+		// unavailable, as above.
+		constexpr std::uint32_t kPushBytes = 4 * (kDrawPushWords + kFramePushWords);
 
 		// A draw's push data (kDrawPushWords).
 		rhi::PushConstantRangeDesc drawPush{};
@@ -152,20 +158,21 @@ namespace DCLF
 
 		const auto mainRanges = MainLayoutRanges(false);
 		const auto zRanges = MainLayoutRanges(true);
+		// No input assembler: every vertex stage pulls its attributes (DCLF_PULLED_VERTICES).
 		const rhi::PipelineLayoutDesc desc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ mainRanges.data(), static_cast<std::uint32_t>(mainRanges.size()) },
-			.pushConstants = { pushConstants, 2u }, .staticSamplers = {}, .flags = rhi::PF_AllowInputAssembler };
+			.pushConstants = { pushConstants, 2u }, .staticSamplers = {}, .flags = rhi::PF_None };
 		logger::info("[DCLF] main layout: {} ranges, {} frame push words", mainRanges.size(), kFramePushWords);
 		if (device.CreatePipelineLayout(desc, layout) != rhi::Result::Ok) {
 			supported = false;
-			logger::error("[DCLF] Could not create the indirect draw pipeline layout");
+			logger::error("[DCLF] Indirect pipelines unavailable: could not create the indirect draw pipeline layout ({} push data bytes)", kPushBytes);
 			return false;
 		}
-		// The Z-prepass's plain draws: the main ranges minus the rows', no input assembler.
+		// The Z-prepass's plain draws: the main ranges minus the rows'.
 		const rhi::PipelineLayoutDesc zDesc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ zRanges.data(), static_cast<std::uint32_t>(zRanges.size()) },
 			.pushConstants = { pushConstants, 2u }, .staticSamplers = {}, .flags = rhi::PF_None };
 		if (device.CreatePipelineLayout(zDesc, zLayout) != rhi::Result::Ok) {
 			supported = false;
-			logger::error("[DCLF] Could not create the Z-prepass's pipeline layout");
+			logger::error("[DCLF] Indirect pipelines unavailable: could not create the Z-prepass's pipeline layout ({} push data bytes)", kPushBytes);
 			return false;
 		}
 		// The shadow views (kShadowPushWords): the draw's words name its material row (pipeline row words unused), the view's the rest.
@@ -173,10 +180,10 @@ namespace DCLF
 		shadowPush[1].num32BitValues = kShadowPushWords;
 		const auto shadowRanges = ShadowLayoutRanges();
 		const rhi::PipelineLayoutDesc shadowDesc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ shadowRanges.data(), static_cast<std::uint32_t>(shadowRanges.size()) },
-			.pushConstants = { shadowPush, 2u }, .staticSamplers = {}, .flags = rhi::PF_AllowInputAssembler };
+			.pushConstants = { shadowPush, 2u }, .staticSamplers = {}, .flags = rhi::PF_None };
 		if (device.CreatePipelineLayout(shadowDesc, shadowLayout) != rhi::Result::Ok) {
 			supported = false;
-			logger::error("[DCLF] Could not create the shadow views' pipeline layout");
+			logger::error("[DCLF] Indirect pipelines unavailable: could not create the shadow views' pipeline layout ({} push data bytes)", 4 * (kDrawPushWords + kShadowPushWords));
 			return false;
 		}
 		return CreateDrawSignatures();

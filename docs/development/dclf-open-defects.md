@@ -40,8 +40,6 @@ Core validation reports these at `coc RiverwoodSleepingGiantInn` with first pers
 
 -   `VUID-vkUpdateIndirectExecutionSetPipelineEXT-initialPipeline-11147`: the main indirect set mixes fragment output
     interfaces. Pipelines that write locations 0-2 (forward) are added to a set whose initial pipeline writes 0-7 (deferred).
--   `VUID-VkGeneratedCommandsInfoEXT-indirectCommandsLayout-11079`: a vertex-buffer token is used with a pipeline that lacks
-    `VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE`.
 
 -   **Fixed-function state differs within a set.** `VK_EXT_device_generated_commands` lets an execution set's pipelines differ in
     their shaders only ("no pipeline state may be changed"), and BasicRHI binds the set's pipeline 0 before every call. DCLF's main
@@ -49,9 +47,8 @@ Core validation reports these at `coc RiverwoodSleepingGiantInn` with first pers
     effect per pipeline in testing (a decal pipeline switched to ALWAYS drew so), which is driver latitude, not a guarantee. Decals
     no longer carry rasterizer bias; they take a vertex-stage offset (dclf-architecture.md, "Decals and pass layers").
 
-**Next:** give forward pipelines their own execution set (or a compatible initial pipeline), and add the stride dynamic state to
-every pipeline that a vertex-buffer token can select. Partition the sets by fixed-function state (one set and one call per state
-class) so every set's pipelines differ in shaders only.
+**Next:** give forward pipelines their own execution set (or a compatible initial pipeline). Partition the sets by fixed-function
+state (one set and one call per state class) so every set's pipelines differ in shaders only.
 
 ## Open crashes
 

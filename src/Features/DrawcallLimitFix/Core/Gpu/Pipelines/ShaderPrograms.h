@@ -43,7 +43,9 @@ namespace DCLF
 	 * Each pipeline key's vertex and pixel descriptors are compiled once, asynchronously, by the render
 	 * graph runtime's ORGModuleServices compiler, from the same source, includes and defines the D3D11
 	 * build uses (ShaderCache::GetCompileDefines), plus DCLF_ORG. Artifacts are content-addressed on the
-	 * source, every shader file under Data/Shaders and the defines, and cached on disk.
+	 * source, every shader file under Data/Shaders and the defines, and cached on disk. Every vertex stage pulls its
+	 * attributes: the device-generated draws' (Program::vertex, a family's vertex stage) with DCLF_PULLED_VERTICES, the plain
+	 * draws' with DCLF_PULLED.
 	 *
 	 * The compiles run on DCLF's build executor (BuildExecutor.h). Each stage's completion callback pushes its key to a
 	 * lock-free queue, which the consumer drains: the entries waiting for the stage are told, and an entry whose stages have
@@ -58,13 +60,19 @@ namespace DCLF
 	public:
 		struct Program
 		{
-			std::vector<std::byte> vertex;  // SPIR-V
+			// SPIR-V. The vertex stage pulls its attributes from the buffers in its draw's push data (DCLF_PULLED_VERTICES): no DCLF
+			// pipeline has input assembly. Both variants (colour, depth) draw with it.
+			std::vector<std::byte> vertex;
 			std::vector<std::byte> pixel;
 			std::vector<std::byte> depthPixel;  // the same permutation built with DCLF_DEPTH_ONLY
 			// The Z-prepass's plain draws' stages (DCLF_PULLED; MainOpaquePass): the vertex stage fetching its draw's vertices and
 			// rows itself, and the depth pixel stage reading its material row's inputs itself (PulledMaterialSource).
 			std::vector<std::byte> pulledVertex;
 			std::vector<std::byte> pulledDepthPixel;
+			// The attributes (BSGraphics::Vertex::Attribute, a bit each) the vertex stages read, from their defines (ShaderPrograms.cpp,
+			// VertexAttributesOf): a key whose vertex layout lacks one fails (VertexLayoutAttributes), as the input assembler's layout
+			// did. Set once the stages are in (UpdateLane), not by FinishEntry's aggregate.
+			std::uint32_t vertexAttributes = 0;
 		};
 
 		struct Stats

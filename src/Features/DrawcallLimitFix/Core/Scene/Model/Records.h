@@ -508,26 +508,30 @@ namespace DCLF
 
 	/**
 	 * @brief One indirect draw, in the command signature's argument order (BasicRHI packs arguments like D3D12, 4-byte aligned):
-	 * pipeline set index, push data (pipeline row and material row addresses, object word), two vertex buffer views, index buffer
-	 * view (D3D12 VBV / IBV layouts), DrawIndexed.
+	 * pipeline set index, push data (words 0-12: pipeline row and material row addresses, object word, two vertex buffer views in
+	 * D3D12's VBV layout), index buffer view (D3D12's IBV layout), DrawIndexed.
 	 *
-	 * Slot 1 is a dynamic shape's positions (Features/Faces' snapshots; where the engine binds BSDynamicTriShape::dynamicData); other draws
-	 * repeat slot 0. The tables hold a template with the pipeline's table index; the epoch substitutes the set index and rows.
+	 * No DCLF pipeline has input assembly: the vertex stages pull their attributes through the vertex buffer views, the device-generated
+	 * draws' from their push data (DrawPipelines.h, kDrawPushWords; DCLF_PULLED_VERTICES), the plain draws' from the sequence itself
+	 * (DCLF_PULLED). No draw reads the views' sizes. Slot 1 is a dynamic shape's positions (Features/Faces' snapshots; where
+	 * the engine binds BSDynamicTriShape::dynamicData); other draws repeat slot 0. The tables hold a template with the pipeline's table
+	 * index; the epoch substitutes the set index and rows.
 	 */
 #pragma pack(push, 4)
 	struct DrawSequence
 	{
 		std::uint32_t pipelineIndex;
-		// The draw's rows (the pipeline row's registers and the material row) and the object's index in SceneTables::objects.
-		// The five words are one contiguous Constant indirect argument (the per-draw push data): keep them together, in order.
+		// The draw's rows (the pipeline row's registers and the material row) and the object's index in SceneTables::objects, then
+		// the two vertex buffer views: thirteen words, one contiguous Constant indirect argument (the per-draw push data, whose
+		// packoffsets are DCLFObjects.hlsli's DCLFPushData): keep them together, in order.
 		std::uint64_t pipelineRowAddress;
 		std::uint64_t materialRowAddress;
 		std::uint32_t objectIndex;
 		std::uint64_t vertexBufferAddress;  // GeometryBuffers::vertexAddress (0 without the render graph)
-		std::uint32_t vertexBufferSize;
+		std::uint32_t vertexBufferSize;  // written; no draw reads it
 		std::uint32_t vertexStride;
 		std::uint64_t streamBufferAddress;  // slot 1: a face shape's positions, else the slot 0 view again
-		std::uint32_t streamBufferSize;
+		std::uint32_t streamBufferSize;  // written; no draw reads it
 		std::uint32_t streamStride;
 		std::uint64_t indexBufferAddress;  // GeometryBuffers::indexAddress
 		std::uint32_t indexBufferSize;
