@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 #include <xbyak/xbyak.h>
@@ -222,7 +223,8 @@ namespace DCLF::Scene
 	};
 
 	// FUN_1402ad0e0 (land): after the cell's attach, each quad's landscape material takes LOD blend textures (+0xF8, +0x100) and
-	// landBlendParams (+0x108). Each quad's property after the call.
+	// landBlendParams (+0x108). Each quad's material (a write: its record takes the LOD blend textures, MTLandLODBlend's t13 and t15,
+	// which it otherwise holds null from the attach's capture) and property after the call.
 	struct LandBlendParams
 	{
 		static void thunk(RE::TESObjectLAND* a_land)
@@ -235,8 +237,12 @@ namespace DCLF::Scene
 				const auto* node = loaded[quad];
 				if (!node || node->GetChildren().empty() || !node->GetChildren()[0])
 					continue;
-				if (auto* geometry = node->GetChildren()[0]->AsGeometry())
-					PushPropertyUpdate(geometry->GetGeometryRuntimeData().shaderProperty.get(), SceneCapture::PropertyRecord::kLandBlend);
+				if (auto* geometry = node->GetChildren()[0]->AsGeometry()) {
+					const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
+					if (property)
+						MaterialWrites::NoteWritten(property->material);
+					PushPropertyUpdate(property, SceneCapture::PropertyRecord::kLandBlend);
+				}
 			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
