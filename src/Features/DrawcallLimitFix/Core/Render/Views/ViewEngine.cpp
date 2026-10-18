@@ -230,13 +230,14 @@ namespace DCLF
 		return impl && impl->ViewCovered(a_view);
 	}
 
-	bool IndirectDraws::ViewDrawable(Api::EngineView a_view) const
+	bool IndirectDraws::ViewDrawable(Api::EngineView a_view, const ToggleSet& a_toggles) const
 	{
 		// A capability (Coordinator::SetCapability, the scene lane's commit), not whether the last epoch drew nor what the view's resources
-		// or pipelines are yet: the toggle, and the view's targets published, never the render thread's own copy (the first person's colour
-		// epoch's formats, known once the main pass's targets were captured; the reflection's faces', known at the first frame). Each member
-		// then waits for its own pipelines (ViewSlotReady), and the engine draws it until the frame's epochs are covered (PassCapture).
-		return impl && Extensions::ViewOn(ActiveToggles(), a_view) && !failed && impl->View(a_view).LaneTargets().colour != DXGI_FORMAT_UNKNOWN;
+		// or pipelines are yet: the toggle (in a_toggles: the commit's, or the frame's for the frame's own decisions), and the view's
+		// targets published, never the render thread's own copy (the first person's colour epoch's formats, known once the main pass's
+		// targets were captured; the reflection's faces', known at the first frame). Each member then waits for its own pipelines
+		// (ViewSlotReady), and the engine draws it until the frame's epochs are covered (PassCapture).
+		return impl && Extensions::ViewOn(a_toggles, a_view) && !failed && impl->View(a_view).LaneTargets().colour != DXGI_FORMAT_UNKNOWN;
 	}
 
 	bool IndirectDraws::ViewSlotReady(Api::EngineView a_view, const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot,

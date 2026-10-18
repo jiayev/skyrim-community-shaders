@@ -16,6 +16,8 @@ namespace DCLF
 	{
 		auto& c = impl->aheadContext;
 		c = {};
+		// For the coordinator's next commit, made under the newest toggles (the frame inputs': SceneToggles), not the frame's.
+		c.toggles = SceneToggles();
 		if (failed || !impl->resources || !impl->resources->scene) {
 			// The cleared context, the fits as they stood (the coordinator builds nothing ahead from it).
 			if (impl)
@@ -241,6 +243,15 @@ namespace DCLF
 		// adoption, and the old one is released once its last holder goes: a shader reading it loses the device). Every one is taken from
 		// the sealed set, so draws and revision are one consistent build.
 		AheadContext context = work.context;
+		// A context made under other toggles than the publication's commit (its pass took the frame inputs and the ahead context of two
+		// frame starts with a toggle between them): its shadow part was prepared for those (the shadow toggle, the occlusion maps' modes),
+		// so it is dropped, the publication's frames leave the shadow views to the engine, and its snapshot is never passed through to
+		// (PostSnapshot): the next publication's builds take a context of its own toggles.
+		if (context.toggles != publication.toggles) {
+			context.shadow = false;
+			context.shadowTarget.reset();
+			context.valid = context.build[kAsyncZPrepass] || context.build[kAsyncColour];
+		}
 		if (a_sealed && a_layout) {
 			for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
 				if (context.build[j] && context.target && context.target->scene)
@@ -512,7 +523,7 @@ namespace DCLF
 					continue;
 				}
 				if (b.stage == Stage::Idle) {
-					// A snapshot of the work stands: made again when the frame's inputs moved (a graph build, a capture, a toggle, new
+					// A snapshot of the work stands: made again when the frame's inputs moved (a graph build, a capture, new
 					// resources), so its revision is the frame's as it is now.
 					if (!snapshotInputsMoved.exchange(false, std::memory_order_acq_rel)) {
 						++b.idlePasses;
@@ -627,9 +638,9 @@ namespace DCLF
 		snapshot->targetsGeneration = inputs.targetsGeneration;
 		snapshot->shadowFormat = inputs.shadowFormat;
 		// What a publication changing only deltas passes through to (PassesThrough): a snapshot with a revision, complete draws and
-		// their payload, and what it was built from.
+		// their payload, and what it was built from (a context of its publication's toggles: BuildSnapshotDraws).
 		auto& posted = b.posted;
-		if (snapshot->revision && snapshot->drawsComplete && snapshot->payload) {
+		if (snapshot->revision && snapshot->drawsComplete && snapshot->payload && b.work->context.toggles == b.work->publication->toggles) {
 			const auto& context = b.work->context;
 			posted.publication = b.work->publication;
 			posted.sun = b.work->sun;
@@ -656,7 +667,7 @@ namespace DCLF
 		snapshotTimings.Push(b.timing);
 	}
 
-	std::shared_ptr<const void> IndirectDraws::AdoptSnapshot(std::uint32_t a_togglesGeneration)
+	std::shared_ptr<const void> IndirectDraws::AdoptSnapshot()
 	{
 		if (!impl)
 			return nullptr;
@@ -675,8 +686,9 @@ namespace DCLF
 			s.snapshotTaken.store(taken->serial, std::memory_order_release);
 		}
 		// The one check: what a snapshot cannot know ahead, by generation. Its recordings of the graph as built now, its pipeline sets for the
-		// targets and the shadow format as they are, its draws and shapes for the main resources as they are, its commit's toggles the
-		// frame's. One without a revision (the publication alone) is adopted for its tables whatever the graph.
+		// targets and the shadow format as they are, its draws and shapes for the main resources as they are. Its commit's toggles are
+		// none of it: installed, they become the frame's (Toggles::Adopt), and its revision was made for them (MakeRevision). One without
+		// a revision (the publication alone) is adopted for its tables whatever the graph.
 		using Stale = Impl::SnapshotStale;
 		std::size_t stale = Stale::kStaleKinds;
 		if (taken->revision) {
@@ -691,16 +703,13 @@ namespace DCLF
 			else if (taken->mainGeneration != s.postedInputs.mainGeneration)
 				stale = Stale::kStaleMain;
 		}
-		if (taken->publication && taken->publication->togglesGeneration < a_togglesGeneration)
-			stale = Stale::kStaleToggles;
 		if (stale != Stale::kStaleKinds) {
 			// Not adopted: the frame has no claims until a current one (the adopted one is older still). The builder makes the snapshot
-			// again for the frame's inputs (a toggle waits for the coordinator's publication under it instead).
+			// again for the frame's inputs.
 			++s.snapshotsStale[stale];
 			s.snapshotStale = true;
 			s.retiredSnapshots.Push(std::shared_ptr<const Impl::SceneSnapshot>(std::move(taken)));
-			if (stale != Stale::kStaleToggles)
-				s.snapshotInputsMoved.store(true, std::memory_order_release);
+			s.snapshotInputsMoved.store(true, std::memory_order_release);
 			WakeSnapshotBuilder();
 			return adoptedPublication();
 		}

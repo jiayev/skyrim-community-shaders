@@ -400,7 +400,7 @@ namespace DCLF::Features::Particles
 				record->writing.store(false, std::memory_order_release);
 				captures.fetch_add(1, std::memory_order_relaxed);
 				// The system's move event (MoveEvents, keyed by the geometry): the scene pass's light path takes it then, not every frame.
-				if (Extensions::GeometryTypeOn(ActiveToggles(), static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))) {
+				if (Extensions::GeometryTypeOn(SceneToggles(), static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))) {
 					Extensions::PushReservedMove(moveWriter, &a_system, Api::MoveReach::ScenePass);
 				}
 			}

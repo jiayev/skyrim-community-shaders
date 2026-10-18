@@ -40,9 +40,13 @@ namespace DCLF
 		auto& scratch = revisionScratch;
 		scratch.latched.clear();
 		scratch.indirect = a_make.catalog ? GetShadowIndirectState(*a_make.catalog, inputs.shadowFormat) : ShadowIndirectState{};
-		// The occlusion maps' layout as last captured: one the revisions make a shape for (OcclusionReady asks for it).
+		// The occlusion maps' layout as last captured: one the revisions make a shape for (OcclusionReady asks for it). The inputs carry
+		// every captured map's; the maps on under the publication's toggles are the revision's (the frame's once it is installed).
 		{
 			auto layouts = inputs.occlusionLayouts;
+			std::erase_if(layouts, [&producer](const ShadowViewLayout& a_layout) {
+				return !Extensions::OcclusionOn(producer.toggles, OcclusionOfMode(a_layout.modeIndex));
+			});
 			auto& recent = producer.recentOcclusionLayouts;
 			if (!layouts.empty() && (recent.empty() || recent.front() != layouts)) {
 				std::erase(recent, layouts);
@@ -248,7 +252,7 @@ namespace DCLF
 		auto& drawPipelines = DrawPipelines::Get();
 		a_next.shadowFormat = drawPipelines.ShadowFormat();
 		a_next.shadowRasterStates = drawPipelines.ShadowRasterStateCount();
-		a_next.occlusionLayouts = PredictedOcclusion();
+		a_next.occlusionLayouts = PredictedOcclusion(nullptr);
 		a_next.shadowPlacements = shadowPlacements;
 		if (shadow && (!postedShadowSlots || postedShadowSlots->sequences.size() != shadow->sequences.size()))
 			postedShadowSlots = std::make_shared<const ShadowSlotBuffers>(ShadowSlotBuffers{ shadow->sequences, shadow->bucketCounts });
@@ -257,10 +261,11 @@ namespace DCLF
 
 	void ShadowEngine::PrepareAhead(ImplSnapshotBuilder::AheadContext& a_context)
 	{
-		// The shadow payload's, for the last epoch's views; the shadow lookups the scene lane resolves for them (PostLookupInputs).
+		// The shadow payload's, for the last epoch's views; the shadow lookups the scene lane resolves for them (PostLookupInputs). Under
+		// the context's toggles (the next commit's), as lastShadow's modes are (UpdateShadowCapability).
 		auto& c = a_context;
 		const auto& tables = Scene::FrameView::Get().GetTables();
-		if (ActiveToggles().shadows && shadow && lastShadow.known && globals::game::utilityShader && !tables.objects.empty() &&
+		if (c.toggles.shadows && shadow && lastShadow.known && globals::game::utilityShader && !tables.objects.empty() &&
 			tables.shadowTechnique.size() == tables.objects.size()) {
 			c.shadowInputs = PrepareShadowInputs(*shadow, lastShadow.modes, lastShadow.rasterStates);
 			c.shadowTarget = shadow;

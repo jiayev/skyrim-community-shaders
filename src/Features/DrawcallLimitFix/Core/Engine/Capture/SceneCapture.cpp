@@ -624,7 +624,7 @@ namespace DCLF::SceneCapture
 		// A Lighting (or an on material port's) property's material, for the scene work's records (the property holds it here): an attach's
 		// or a swap's (a_pins). A material shared by several leaves is pushed by each; the scene work keeps the newest.
 		auto pushMaterial = [&](const PropertyRecord& a_property) {
-			if (a_pins && (a_property.lighting || Extensions::PortOn(ActiveToggles(), a_property.port)) && a_property.material)
+			if (a_pins && (a_property.lighting || Extensions::PortOn(SceneToggles(), a_property.port)) && a_property.material)
 				MaterialPort::PushCapture(static_cast<const RE::BSShaderMaterial*>(a_property.material));
 		};
 		if (g.property) {

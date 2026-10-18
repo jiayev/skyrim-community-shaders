@@ -102,7 +102,6 @@ namespace DCLF
 		Counters counters;
 		double shadowViewsMs = 0.0;       // the shadow views' points this frame, until BeforeShadowMaps counts them
 		OcclusionFrames occlusionFrames;  // native and engine only: the rest is read at the take
-		std::uint32_t toggleGeneration = 0;
 		bool frameRan = false;            // a scene frame ran since the last Present
 		std::uint32_t occlusionWanted = 0;  // the maps OcclusionReady said DCLF draws this frame
 		std::uint32_t captureFrame = ~0u;   // the frame whose main-pass bindings have been captured (Api::PrimaryViewContribution::beforeOpaque)

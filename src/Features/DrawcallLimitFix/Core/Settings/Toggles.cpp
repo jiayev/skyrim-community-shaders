@@ -235,6 +235,7 @@ namespace DCLF
 		requested(FromSwitches())
 	{
 		active.store(Pack(Normalised(requested)), std::memory_order_relaxed);
+		frame.store(active.load(std::memory_order_relaxed), std::memory_order_relaxed);
 	}
 
 	void Toggles::SeedRegistered()
@@ -265,6 +266,8 @@ namespace DCLF
 		}
 		requested.registered = FromSwitches().registered;
 		active.store(Pack(Normalised(requested)), std::memory_order_relaxed);
+		// The frames' until the first publication is installed.
+		frame.store(active.load(std::memory_order_relaxed), std::memory_order_relaxed);
 	}
 
 	std::uint32_t Toggles::Pack(const ToggleSet& a_set)

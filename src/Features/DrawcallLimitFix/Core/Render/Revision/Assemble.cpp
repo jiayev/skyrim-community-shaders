@@ -265,7 +265,7 @@ namespace DCLF
 		const auto versions = versionsFragment->Value<NamedVersions>();
 
 		// Each epoch's shape (MakeRevision's): its fragment kept while the shape is the same.
-		AssembleShapes(rv, draft, producer.made, producer.inputs.toggles);
+		AssembleShapes(rv, draft, producer.made, producer.toggles);
 
 		// Each epoch's recording: kept while it requires exactly the draft's shape and versions; else requested for them. A failed
 		// one is dropped (the epoch has none in the revision) and not asked for again until its shape or the versions change.

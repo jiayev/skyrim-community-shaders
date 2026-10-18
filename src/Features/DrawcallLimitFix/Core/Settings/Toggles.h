@@ -102,12 +102,15 @@ namespace DCLF
 	Api::ToggleId FindToggle(std::string_view a_name);
 
 	/**
-	 * @brief The requested and the active toggle sets.
+	 * @brief The requested, the active and the frame's toggle sets.
 	 *
-	 * The menu edits the REQUESTED set. The render thread copies it into the ACTIVE set once per frame, at
-	 * the frame's start (FrameDriver), so a toggle never changes under a running frame. The active set is one
-	 * packed word behind a relaxed atomic, because hooks on the engine's job threads and DCLF's threads read it:
-	 * a toggle is a standing statement, not a synchronisation point, and one word makes every read a single load.
+	 * The menu edits the REQUESTED set. The render thread copies it into the ACTIVE set once per frame, at the frame's start
+	 * (FrameDriver); the frame inputs carry it to the scene side, which commits its next publication under it (ScenePublication::
+	 * toggles). The FRAME's set is the installed publication's (FrameView::HandOverAtFrameStart: Adopt), so a toggle never changes
+	 * under a running frame and takes effect for the frames only with a publication committed under it: until then they draw,
+	 * withhold and cover as the installed one's toggles say (a toggle withdraws nothing). Each set is one packed word behind a
+	 * relaxed atomic, because hooks on the engine's job threads and DCLF's threads read them: a toggle is a standing statement, not a
+	 * synchronisation point, and one word makes every read a single load.
 	 *
 	 * A change to a toggle that enters the classification (the object classes) invalidates every cached verdict and
 	 * derivation (Coordinator::InvalidateVerdicts), because those caches witness the object, not the switches.
@@ -120,8 +123,14 @@ namespace DCLF
 		/** @brief The set the menu edits; render thread. */
 		ToggleSet& Requested() { return requested; }
 
-		/** @brief The set in force for the current frame; any thread. */
+		/** @brief The newest set applied, which the next publication is committed under (SceneToggles); any thread. */
 		ToggleSet Active() const { return Unpack(active.load(std::memory_order_relaxed)); }
+
+		/** @brief The installed publication's set, the active one before the first (FrameToggles); any thread. */
+		ToggleSet Frame() const { return Unpack(frame.load(std::memory_order_relaxed)); }
+
+		/** @brief Render thread, frame start (FrameView::HandOverAtFrameStart): a_set, an installed publication's, is the frames'. */
+		void Adopt(const ToggleSet& a_set) { frame.store(Pack(a_set), std::memory_order_relaxed); }
 
 		/**
 		 * @brief Render thread, once per frame, before anything reads the toggles: applies the requested set.
@@ -151,20 +160,34 @@ namespace DCLF
 
 		ToggleSet requested;
 		std::atomic<std::uint32_t> active{ 0 };
+		std::atomic<std::uint32_t> frame{ 0 };
 		std::atomic<std::uint32_t> generation{ 0 };
 	};
 
 	/**
-	 * @brief A thread's snapshot of the active set, which ActiveToggles reads in its place while installed (ToggleSnapshotScope):
-	 * a scene pass's evaluations read the set the pass took at its start on whichever thread they run, though the render thread may
-	 * change the active one meanwhile.
+	 * @brief A thread's snapshot of the toggles, which ActiveToggles reads in its place while installed (ToggleSnapshotScope): a scene
+	 * pass's evaluations, its commit and its publication read the set its frame inputs carried (the one it commits under) on whichever
+	 * thread they run, though the render thread may change the active one meanwhile.
 	 */
 	inline thread_local const ToggleSet* activeToggleSnapshot = nullptr;
 
-	/** @brief The toggles in force for the current frame (Toggles::Active), or this thread's snapshot of them; any thread. */
-	inline ToggleSet ActiveToggles() { return activeToggleSnapshot ? *activeToggleSnapshot : Toggles::Get().Active(); }
+	/** @brief The frame's toggles (Toggles::Frame): the installed publication's; any thread. */
+	inline ToggleSet FrameToggles() { return Toggles::Get().Frame(); }
 
-	/** @brief a_set is this thread's ActiveToggles while the scope lives (null: the active set). */
+	/**
+	 * @brief The newest toggles (Toggles::Active), which the next publication is committed under: the scene side's producers that run
+	 * outside a scene pass read these (the captures, the frame requests, the lookup and shadow inputs, the builds ahead's context); any
+	 * thread.
+	 */
+	inline ToggleSet SceneToggles() { return Toggles::Get().Active(); }
+
+	/**
+	 * @brief The toggles in force where they are read: this thread's snapshot inside a scene pass (the committed set), else the frame's
+	 * (FrameToggles: the render thread, the engine's hooks, the epochs, the coverage); any thread.
+	 */
+	inline ToggleSet ActiveToggles() { return activeToggleSnapshot ? *activeToggleSnapshot : FrameToggles(); }
+
+	/** @brief a_set is this thread's ActiveToggles while the scope lives (null: the frame's set). */
 	class ToggleSnapshotScope
 	{
 	public:

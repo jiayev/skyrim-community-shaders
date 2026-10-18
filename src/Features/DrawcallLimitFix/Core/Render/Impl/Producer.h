@@ -23,6 +23,9 @@ namespace DCLF
 		struct RevisionProducer
 		{
 			RevisionInputs inputs;
+			// The toggles the make's publication was committed under (MakeRevision): its view, family and cull mode choices are the
+			// frames' that install it (never the frame's toggles when the inputs were posted).
+			ToggleSet toggles{};
 			std::uint32_t frame = 0;  // the frame the make is for (MakeRevision's a_frame)
 			// The latches' layouts, and their blocks' handles in the scene's set (the sealed set names the blocks).
 			RevisionLatchLayouts latches;

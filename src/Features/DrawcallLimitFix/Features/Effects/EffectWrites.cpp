@@ -44,7 +44,7 @@ namespace DCLF::Features::Effects
 		{
 			// Nothing is captured while the toggle is off: no effect record exists then (the scene work asks for a material it lacks:
 			// FrameView::ServeMaterialRequests).
-			if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Effect)) {
+			if (!Extensions::ObjectClassOn(SceneToggles(), Api::ObjectClass::Effect)) {
 				a_func(a_this, a_data);
 				return;
 			}

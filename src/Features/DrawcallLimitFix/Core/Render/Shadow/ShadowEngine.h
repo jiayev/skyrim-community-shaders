@@ -145,8 +145,12 @@ namespace DCLF
 		/** @brief The placement a captured view drew at (its target, slice and viewport), or SIZE_MAX. */
 		std::size_t PlacementOf(const PendingView& a_view) const;
 		std::uint32_t placementDefectsLogged = 0;
-		/** @brief The occlusion maps' layouts as last captured: what revisions make occlusion shapes for and OcclusionReady checks. */
-		std::vector<ShadowViewLayout> PredictedOcclusion() const;
+		/**
+		 * @brief The occlusion maps' layouts as last captured, each map's while on in a_toggles: what OcclusionReady checks (the frame's
+		 * toggles); null, every captured map's: the revision input, which each revision narrows to its publication's toggles
+		 * (RequireSequences).
+		 */
+		std::vector<ShadowViewLayout> PredictedOcclusion(const ToggleSet* a_toggles) const;
 		static constexpr std::size_t kRecentOcclusionLayouts = 4;
 		/** @brief A view rasterizer state's map row's buckets, from a_cache (the revision producer's). */
 		static const RowBuckets& ShadowRowBuckets(RowBucketsCache& a_cache, std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups,

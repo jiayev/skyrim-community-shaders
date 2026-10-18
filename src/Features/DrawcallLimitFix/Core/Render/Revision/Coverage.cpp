@@ -58,8 +58,7 @@ namespace DCLF
 			return a_next.main == a_previous.main && a_next.shadow == a_previous.shadow && a_next.views == a_previous.views && a_next.scene == a_previous.scene &&
 			       a_next.buildGeneration == a_previous.buildGeneration && SameHandle(a_next.resourceHeap, a_previous.resourceHeap) &&
 			       SameHandle(a_next.samplerHeap, a_previous.samplerHeap) && a_next.targetsGeneration == a_previous.targetsGeneration &&
-			       a_next.shadowFormat == a_previous.shadowFormat && a_next.shadowRasterStates == a_previous.shadowRasterStates && a_next.toggles == a_previous.toggles &&
-			       a_next.togglesGeneration == a_previous.togglesGeneration && a_next.claims == a_previous.claims &&
+			       a_next.shadowFormat == a_previous.shadowFormat && a_next.shadowRasterStates == a_previous.shadowRasterStates && a_next.claims == a_previous.claims &&
 			       a_next.shadowCandidates == a_previous.shadowCandidates && a_next.occlusionLayouts == a_previous.occlusionLayouts &&
 			       a_next.shadowPlacements == a_previous.shadowPlacements && a_next.mainKnown == a_previous.mainKnown && a_next.viewport == a_previous.viewport &&
 			       a_next.blockSizes == a_previous.blockSizes &&
@@ -90,8 +89,6 @@ namespace DCLF
 		}
 		auto& drawPipelines = DrawPipelines::Get();
 		next.targetsGeneration = drawPipelines.Generation();
-		next.toggles = ActiveToggles();
-		next.togglesGeneration = Toggles::Get().Generation();
 		next.claims = !IndirectDraws::Get().Failed();
 		next.shadowCandidates = ShadowViews::Get().Candidates();
 		next.mainKnown = mainEpochInputs.known;

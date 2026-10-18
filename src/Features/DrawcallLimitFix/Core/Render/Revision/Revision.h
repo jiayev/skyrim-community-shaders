@@ -27,8 +27,9 @@ namespace DCLF::Draws
 	 * value is captured: BuildPoint, Setup, BeforeShadowMaps, the occlusion views, the shadow placements, the main epochs' captures,
 	 * the views' work (IndirectDraws::PostViewInputs); and, while the revision is made on the render thread, before each make). Immutable once posted, latest wins
 	 * (Impl::revisionInputsSlot); the revision code reads its copy and its request alone, never the frame's state. generation moves with
-	 * every post; the generations it carries (the graph's build, the targets, the shadow format, the toggles, the main resources) are
-	 * what a snapshot's adoption compares.
+	 * every post; the generations it carries (the graph's build, the targets, the shadow format, the main resources) are what a
+	 * snapshot's adoption compares. The toggles are none of it: a revision follows its publication's (RevisionProducer::toggles), which
+	 * are the frame's once it is installed.
 	 */
 	struct RevisionInputs
 	{
@@ -45,13 +46,11 @@ namespace DCLF::Draws
 		// The pipeline generations a catalog's sets must be built for (GetIndirectState, GetShadowIndirectState, CatalogFamilyPipelines).
 		std::uint32_t targetsGeneration = 0;
 		DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
-		// The toggles (the cull mode, the reflections and tree LOD, the occlusion maps), their generation, and the switches read.
-		ToggleSet toggles{};
-		std::uint32_t togglesGeneration = 0;
 		bool claims = false;       // !IndirectDraws::Failed
 		std::uint32_t shadowRasterStates = 0;  // DrawPipelines::ShadowRasterStateCount
 		// BeforeShadowMaps: the shadow views' candidates (ShadowViews::Candidates, the last Rebuild's). The occlusion maps' layout
-		// as last captured (ShadowEngine::PredictedOcclusion: the enabled maps'), and the shadow views' placements (BuildShadowPlacements).
+		// as last captured (ShadowEngine::PredictedOcclusion: every captured map's, each revision taking its publication's maps), and
+		// the shadow views' placements (BuildShadowPlacements).
 		std::uint32_t shadowCandidates = 0;
 		std::vector<ShadowViewLayout> occlusionLayouts;
 		std::vector<ShadowViewLayout> shadowPlacements;

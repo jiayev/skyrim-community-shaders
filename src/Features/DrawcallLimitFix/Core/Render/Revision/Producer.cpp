@@ -354,7 +354,7 @@ namespace DCLF
 			note(a_last.request.pipelines != a_next.request.pipelines || a_last.request.shadowSlotKeys != a_next.request.shadowSlotKeys ||
 					 a_last.request.shadowKeys != a_next.request.shadowKeys,
 				Reuse::kMovedRequest);
-			note(a_last.inputs != a_next.inputs, Reuse::kMovedInputs);
+			note(a_last.inputs != a_next.inputs || a_last.toggles != a_next.toggles, Reuse::kMovedInputs);
 			note(a_last.lookups != a_next.lookups, Reuse::kMovedLookups);
 			note(a_last.shadowRows != a_next.shadowRows, Reuse::kMovedShadowRows);
 			note(a_last.volatiles != a_next.volatiles, Reuse::kMovedVolatiles);
@@ -374,7 +374,8 @@ namespace DCLF
 			const auto& inputs = producer.inputs;
 			a_producer.UpdateDrawBound(tables, a_publication.tablesGeneration);
 			a_key = { TablesWitness(tables, producer.drawBound), a_publication.catalog, a_publication.tablesGeneration, a_publication.revision, inputs.generation,
-				LookupsWitness(a_lookups, tables), ShadowRowsWitness(a_lookups, inputs.shadowPlacements, producer.recentOcclusionLayouts), VolatileWitness(inputs) };
+				a_publication.toggles, LookupsWitness(a_lookups, tables), ShadowRowsWitness(a_lookups, inputs.shadowPlacements, producer.recentOcclusionLayouts),
+				VolatileWitness(inputs) };
 			return a_reuse.valid ? MovedRequirements(a_reuse.key, a_key) : ~0u;
 		}
 
@@ -650,6 +651,8 @@ namespace DCLF
 		auto& reuse = revisionReuse;
 		reuse.reusedNow = false;
 		revisionInputsSlot.TakeInto(producer.inputs);
+		// The toggles are the publication's, never the inputs': its revision is drawn by the frames that install it, under them.
+		producer.toggles = a_publication.toggles;
 		producer.frame = a_frame;
 		auto& buffers = SceneBufferSet::Get();
 		// The uploader a growth's fills go through, as posted.
@@ -819,13 +822,13 @@ namespace DCLF
 			const std::size_t v = ViewIndex(kind);
 			const auto& traits = TraitsOf(kind);
 			const auto& view = inputs.views[v];
-			viewOn[v] = view.targets.colour != DXGI_FORMAT_UNKNOWN && Extensions::ViewOn(inputs.toggles, kind) && inputs.claims;
+			viewOn[v] = view.targets.colour != DXGI_FORMAT_UNKNOWN && Extensions::ViewOn(producer.toggles, kind) && inputs.claims;
 			ViewPipelinesOf(kind, a_make.catalog, tables, view.targets, viewOn[v], viewRevisionPipelines[v]);
 			if (traits.forwardPart)
 				ViewForwardSlotsOf(tables, viewOn[v], viewForwardSlots);
 			for (std::size_t d = 0; traits.trees && d < Extensions::kDrawFamilies; ++d) {
 				const auto family = static_cast<Api::DrawFamily>(d);
-				viewRevisionFaces[d] = viewOn[v] && Extensions::DrawFamilyOn(inputs.toggles, family) ?
+				viewRevisionFaces[d] = viewOn[v] && Extensions::DrawFamilyOn(producer.toggles, family) ?
 				                           ForwardPipelineOf(a_make.catalog, ForwardPipelineKey{ 0, 0, FamilySlotOf(family).forwardFlags }, view.targets) :
 				                           rhi::PipelineHandle{};
 			}
@@ -879,7 +882,7 @@ namespace DCLF
 			if (!inputs.mainKnown[shape] || !a_make.indirect.valid)
 				continue;
 			const bool depthOnly = shape == kDepthShape;
-			auto in = MainShapeInputsOf(r, a_layout, a_sealed, depthOnly, inputs.toggles.cullMode);
+			auto in = MainShapeInputsOf(r, a_layout, a_sealed, depthOnly, producer.toggles.cullMode);
 			in.latch = a_sealed.Latch(handles.main);
 			in.latchLayout = producer.latches.main;
 			in.viewport = inputs.viewport[shape];
@@ -991,7 +994,7 @@ namespace DCLF
 		mix(inputs.resourceHeap.generation);
 		mix(inputs.samplerHeap.index);
 		mix(inputs.samplerHeap.generation);
-		mix(inputs.toggles.cullMode);
+		mix(producer.toggles.cullMode);
 		// What the shapes read of them: the pipeline slots' entries (the bucket plans' set indices, the shadow key slots' count:
 		// RevisionMake::lookupsWitness) and the map rows the shadow layouts draw, not the lookups' versions and generations (a material
 		// lookup's write moves those alone).
@@ -1107,7 +1110,7 @@ namespace DCLF
 		for (const auto& slot : kViewSlots)
 			if (Extensions::Views().views[ViewIndex(slot.view)].life == Api::ViewShapeLife::DropWhenOff) {
 				a_mixer.group = slot.keyGroup;
-				a_mixer.Mix(Extensions::ViewOn(inputs.toggles, slot.view));
+				a_mixer.Mix(Extensions::ViewOn(producer.toggles, slot.view));
 			}
 	}
 }

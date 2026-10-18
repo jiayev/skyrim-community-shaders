@@ -135,9 +135,11 @@ namespace DCLF
 
 	void IndirectDraws::UpdateShadowCapability()
 	{
+		// The scene side's alone (the commit's capability, the scene lane's shadow lookups, the builds ahead): under the newest toggles,
+		// which the next publication is committed under; the frame's shadow epochs read the frame's (ActiveToggles) and readyModes.
 		auto& i = *impl->shadowEngine;
 		std::uint8_t phases = 0;
-		if (!failed && ActiveToggles().shadows && DrawPipelines::Get().Enabled() && globals::game::utilityShader && i.SetupShadow()) {
+		if (!failed && SceneToggles().shadows && DrawPipelines::Get().Enabled() && globals::game::utilityShader && i.SetupShadow()) {
 			if (!i.shadowCatalogBuilt) {
 				i.BuildShadowCatalog();
 				if (i.shadowCatalogBuilt) {
@@ -187,7 +189,7 @@ namespace DCLF
 				for (std::uint32_t m = 0; m < kFirstOcclusionMode; ++m)
 					phases |= i.readyModes[m] ? phaseOfMode[m] : 0;
 				for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-					phases |= i.readyModes[OcclusionModeOf(v)] && i.occlusion[v].dsvFormat != DXGI_FORMAT_UNKNOWN && Extensions::OcclusionOn(ActiveToggles(), v) ?
+					phases |= i.readyModes[OcclusionModeOf(v)] && i.occlusion[v].dsvFormat != DXGI_FORMAT_UNKNOWN && Extensions::OcclusionOn(SceneToggles(), v) ?
 					              phaseOfMode[OcclusionModeOf(v)] :
 					              0;
 			}
@@ -196,7 +198,7 @@ namespace DCLF
 		auto& views = i.lastShadow;
 		views.known = phases != 0;
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-			views.modes[m] = phases && i.readyModes[m] && (!IsOcclusionMode(m) || Extensions::OcclusionOn(ActiveToggles(), OcclusionOfMode(m)));
+			views.modes[m] = phases && i.readyModes[m] && (!IsOcclusionMode(m) || Extensions::OcclusionOn(SceneToggles(), OcclusionOfMode(m)));
 			views.rasterStates[m] = views.modes[m] ? i.readyStates[m] : ModeRasterStates{};
 		}
 		views.dsvFormat = i.shadowTargetFormat;

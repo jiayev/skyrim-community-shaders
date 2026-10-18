@@ -62,9 +62,9 @@ directly behind an epoch: see `render-graph.md`, "Hazard: external Vulkan work d
 an epoch or moving one late in the frame.
 
 A frame's set is **withdrawn** (the engine draws everything, and the next covered frame installs the whole set again) only
-when no publication applies: startup until the first one, a toggle until a publication committed under the new toggles
-is installed, a load, or `failed`. Every other frame draws the
-installed publication's claims.
+when no publication applies: startup until the first one, a load, or `failed`. Every other frame draws the installed
+publication's claims. A toggle withdraws nothing: it takes effect for the frames only when a publication committed under it is
+installed (below, "Ownership").
 
 ## The data
 
@@ -513,8 +513,15 @@ a frame happens to have.
     the per-object state the cull maintains (fades, LOD, the tree clock's bit), so the engine never traverses those
     references. The cut it stands in with is kept per candidate entry, planned again only for the entries that moved.
 
-The menu's toggles (`Core/Settings/Toggles`) change all of this live: a toggle withdraws the set until a publication committed
-under the new toggles is installed. Switching DCLF off clears every claim and bypasses the capture.
+The menu's toggles (`Core/Settings/Toggles`) change all of this live, applied at adoption. The frame start applies the
+requested set (`Toggles::BeginFrame`), and the frame inputs carry it to the scene side (`FrameInputs::toggles`): the whole scene
+pass evaluates, commits and publishes under that set (a `ToggleSnapshotScope` over `RunSceneWork`), and the publication carries it
+(`ScenePublication::toggles`), its revision made for it (`RevisionProducer::toggles`, never the revision inputs). The frames keep
+the installed publication's set (`FrameToggles`, `Toggles::Adopt` at `HandOverAtFrameStart`): until one committed under the new
+toggles is installed they draw, withhold and cover exactly as the installed one's toggles say, and nothing is withdrawn.
+`ActiveToggles()` is the pass's set inside a scene pass and the frame's everywhere else; the scene side's producers that run
+outside a pass (the captures, the frame requests, the lookup and shadow inputs, the builds ahead's context) read the newest
+(`SceneToggles`). Switching DCLF off clears every claim and bypasses the capture.
 
 ## Where the code is
 

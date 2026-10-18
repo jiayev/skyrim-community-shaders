@@ -51,6 +51,8 @@ namespace DCLF::Scene
 		// The membership witness, sampled here (PrimaryCull reads the same sample this frame): the binds' (BindByMembership, the
 		// commit after them reads none).
 		inputs->membershipWitness = PrimaryCull::Get().SampleMembershipWitness();
+		// The toggles the coordinator's next commit is made under (the newest, applied at this frame's start), with their generation.
+		inputs->toggles = Toggles::Get().Active();
 		inputs->togglesGeneration = Toggles::Get().Generation();
 		inputs->verdictsGeneration = verdictsRequested;
 		channels.frameInputs.Post(std::move(inputs));
@@ -154,8 +156,10 @@ namespace DCLF::Scene
 		frameCatalog = installed ? installed->catalog : nullptr;
 		frameTablesGeneration = installed ? installed->tablesGeneration : 0u;
 		DrawPipelines::Get().HoldCatalog(frameCatalog);
-		// The candidates the installed publication carries (the coordinator's as its pass left them).
+		// The candidates the installed publication carries (the coordinator's as its pass left them), and the toggles its commit was made
+		// under, the frame's from here (FrameToggles: a toggle takes effect for the frames with the first publication committed under it).
 		if (installed) {
+			Toggles::Get().Adopt(installed->toggles);
 			frameSunCandidates = installed->sunCandidates;
 			frameLightCandidates = installed->lightCandidates;
 			frameLightEntriesAppeared = installed->lightEntriesAppeared;
