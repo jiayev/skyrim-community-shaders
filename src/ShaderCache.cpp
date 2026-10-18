@@ -3460,7 +3460,7 @@ namespace SIE
 			result.emplace_back("PSHADER", "");
 		else if (shaderClass == ShaderClass::Compute)
 			result.emplace_back("CSHADER", "");
-		if (auto* stateDefines = globals::state->GetDefines()) {
+		if (const auto stateDefines = globals::state->GetDefines()) {
 			for (const auto& define : *stateDefines)
 				result.push_back(define);
 		}
