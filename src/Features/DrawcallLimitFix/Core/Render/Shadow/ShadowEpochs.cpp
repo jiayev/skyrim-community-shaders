@@ -228,7 +228,17 @@ namespace DCLF
 				// (kCullFadeOnVisible): never a root the main camera faded out or has not seen yet.
 				auto latch = ShadowViewLatch(view, inputCount, frameNumber, seedsIndex);
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(Engine::Address::kFadesOn) };
-				latch.cullFlags = 1u | (Extensions::OcclusionMapOf(v).minRadius ? kCullMinRadius : 0u) | (*fadesOn.get() ? kCullFadeOnVisible : 0u) | KeyWordOf(mode);
+				const auto& map = Extensions::OcclusionMapOf(v);
+				latch.cullFlags = 1u | (map.minRadius ? kCullMinRadius : 0u) | (*fadesOn.get() ? kCullFadeOnVisible : 0u) | KeyWordOf(mode);
+				// The map's floor (Skylighting's probe grid test): a cull plane facing up, this frame's height. An occlusion view
+				// leaves its cull planes otherwise unused (its frustum is the view-projection's).
+				if (map.floorHeight) {
+					latch.cullPlanes[0][0] = 0.0f;
+					latch.cullPlanes[0][1] = 0.0f;
+					latch.cullPlanes[0][2] = 1.0f;
+					latch.cullPlanes[0][3] = map.floorHeight();
+					latch.cullPlaneMask = 1u;
+				}
 				latch.viewBits = ShadowViewBits(mode, false);
 				latch.fadeStatesIndex = statesIndex;
 				ShadowPayloadLatch(*impl->InstalledPayload(), latch);
