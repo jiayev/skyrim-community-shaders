@@ -41,7 +41,10 @@ namespace DCLF::Features::FirstPerson
 					.target = "depth-copy",
 					.labels = { "first-person bucket map", "first-person bucket table", "first-person culling latch", "first-person per-frame data",
 						"first-person tree rows" },
-					.depthRange = 0.1f },
+					.depthRange = 0.1f,
+					// A handful of objects, always before the first-person camera: drawn untested. The frustum test dropped the weapon in
+					// some places and orientations (its skinned bound against the first-person camera's frustum).
+					.frustumCull = false },
 				.life = Api::ViewShapeLife::DropWhenOff,
 				.area = Api::ViewArea::MainColourViewport,
 				.withholding = Api::ViewWithholding::InMainRenderers,

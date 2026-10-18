@@ -61,6 +61,9 @@ namespace DCLF::Api
 	 * - name (the log), prefix (its graph resources', passes' and extension's identifiers), blocks (its blocks' resource) and target (its
 	 *   target's resource); labels: its latch writes, as FrameData counts them. Copied at install.
 	 * - depthRange: the viewport's maximum depth until the view's work sets one (IndirectDraws::SetViewDepthRange).
+	 * - frustumCull: the view's cull tests each member's bound against its faces' frustums; false draws every member of the view
+	 *   untested (a view of a handful of objects always before its camera: first person, whose skinned bounds did not follow its
+	 *   camera in every orientation).
 	 */
 	struct ViewShape
 	{
@@ -75,6 +78,7 @@ namespace DCLF::Api
 			std::string_view map, tables, latches, blocks, trees;
 		} labels;
 		float depthRange = 1.0f;
+		bool frustumCull = true;
 	};
 	/** @brief Whether a view's shape stands while its toggle is off (KeepLast) or is dropped from the revision (DropWhenOff). */
 	enum class ViewShapeLife : std::uint8_t

@@ -2288,7 +2288,9 @@ engine, `Core/Render/Epochs/ViewEpoch*.cpp`, `Core/Render/Views/ViewSlots.h`, sh
     space. The first-person epochs' `CameraPosAdjust` is the world eye, not the first-person camera's translate: the rows are world
     space (`Features/FirstPerson/FirstPersonEpochs.cpp`, `CaptureCamera`). DCLF never reads the skeleton while the engine has it
     shifted: FrameValues takes the members' rows and palettes at the frame start, and the producer never samples a first-person item.
--   **Depth epoch** (`fp.depth`, at RenderDepth's first-person draw): culls with the first-person camera (frustum only) and draws the
+-   **Depth epoch** (`fp.depth`, at RenderDepth's first-person draw): draws every member untested (`ViewShape::frustumCull` false:
+    a handful of objects, always before the camera; the frustum test against the members' bounds dropped the weapon in some places
+    and orientations) and draws the
     buckets' Z-prepass depth pipelines into the main depth, after the HZB build (the HZB leaves the arms out) and before
     `kPOST_ZPREPASS_COPY` is taken; it sorts the forward range back to front (`view.forward-sort`).
 -   **Colour epoch** (`fp.colour`, `Main::RenderFirstPersonView`'s accumulator render): the same sequences with each bucket's
