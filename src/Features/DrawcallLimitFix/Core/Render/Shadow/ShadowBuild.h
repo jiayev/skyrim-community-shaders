@@ -7,7 +7,7 @@ namespace DCLF::Draws
 {
 	/**
 	 * @brief Whether an object is of the volumetric-only class in mode a_mode: drawn only by the views of the sun's
-	 * volumetric lighting copy. A point light registers a volumetric-only caster like any other (drawcall-limit-fix.md,
+	 * volumetric lighting copy. A point light registers a volumetric-only caster like any other (dclf-architecture.md,
 	 * "Point lights' shadow culls without DCLF's entries"), so in the paraboloid mode it is an ordinary caster.
 	 */
 	inline bool VolumetricClass(std::uint32_t a_mode, std::uint32_t a_flags)
@@ -141,7 +141,7 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief The shadow epoch's inputs and binding records, kept across frames (drawcall-limit-fix.md, "Persistent draw
+	 * @brief The shadow epoch's inputs and binding records, kept across frames (dclf-architecture.md, "Persistent draw
 	 * state"). Per render mode, a region of the casters' inputs, changed only by the change log's entries for them,
 	 * by a mode's views changing their rasterizer states, and by what was waiting (a pipeline or a diffuse texture not yet
 	 * resolved) becoming ready; the per-frame list is only the face shapes. The material rows (ShadowMaterialRow): the plain

@@ -1,4 +1,4 @@
-// The visibility readback (Readbacks.h, VisibilityReadback; drawcall-limit-fix.md): the main camera's visibility as GPU change
+// The visibility readback (Readbacks.h, VisibilityReadback; dclf-architecture.md, "The visibility events"): the main camera's visibility as GPU change
 // events (VisibilityEventsCS), armed and harvested by the depth commit (render thread), decoded into verdicts by a task on DCLF's
 // executor, and written as kAccumulated by the main thread at Main::Update's entry on the roots DCLF lists and their geometry.
 // The <- ACCUMULATED observer against the engine's bit runs only under CS_DCLF_ACCUMULATED_PARITY.
@@ -833,7 +833,7 @@ namespace DCLF
 		 * @brief Decode task: the kAccumulated writes that differ from the last asked (all on a full write). Reads no engine
 		 * memory. Null when there is nothing to write.
 		 *
-		 * The conservative rule (drawcall-limit-fix.md): visible when in view in either of the last two decoded frames, when the
+		 * The conservative rule (dclf-architecture.md, "kAccumulated written by DCLF"): visible when in view in either of the last two decoded frames, when the
 		 * listing has no verdict yet (visible until FadeStateCS's first), or while a camera cut has no decoded batch of its frame or
 		 * later.
 		 *
@@ -996,7 +996,7 @@ namespace DCLF
 			auto* objectRoot = root ? root->AsNode() : nullptr;
 			if (!objectRoot || Engine::IsHidden(objectRoot))
 				return;
-			// The engine's build (DrawWorld_BuildSceneLists, AE 0x14064bc20; drawcall-limit-fix.md): in an exterior it sets every
+			// The engine's build (DrawWorld_BuildSceneLists, AE 0x14064bc20; dclf-architecture.md, "kAccumulated written by DCLF"): in an exterior it sets every
 			// non-hidden child from the third on; children 0 and 1 are list entries (appended to list 0) whose bit the main camera's
 			// list cull sets or clears. In an interior only the cell's 3D is a cell root. Containers are set too (receivers then test
 			// the levels below; nothing else reads them).

@@ -8,7 +8,7 @@
 namespace DCLF::RegistrationCensus
 {
 	/**
-	 * @brief The registration census (CS_DCLF_CENSUS; drawcall-limit-fix.md, "what the engine still draws"): every pass a
+	 * @brief The registration census (CS_DCLF_CENSUS; dclf-validation.md, "The registration census"): every pass a
 	 * registration hook hands on to a batch renderer (PassCapture: RegisterPass and the direct group insertions), withheld ones
 	 * not, by view and class, reported every report interval. An observer: it decides nothing and changes nothing.
 	 *

@@ -128,7 +128,7 @@ namespace DCLF
 			std::uint8_t* a_onDemand = nullptr, bool* a_failed = nullptr);
 
 		/**
-		 * @brief A draw family's programs (Api::DrawFamilyProgram; tree LOD's: dclf-lod.md, "Tree LOD: the draws"): its source's
+		 * @brief A draw family's programs (Api::DrawFamilyProgram; tree LOD's: dclf-architecture.md, "Tree LOD: the draws"): its source's
 		 * (Extensions::DrawFamilies' sourcePath: `Data/Shaders/DistantTree.hlsl`) pulled builds (DCLF_PULLED: its lane slot's pulled) of
 		 * its colour descriptor (DistantTree's deferred technique) and its depth descriptor (the depth technique), each a vertex and a
 		 * pixel stage, a_shader's (its programSource). Requested on the first call; null until all four are compiled. Never freed. The
@@ -142,7 +142,7 @@ namespace DCLF
 		const DrawProgram* FindDrawFamily(Api::DrawFamily a_family, RE::BSShader& a_shader, bool* a_failed = nullptr);
 
 		/**
-		 * @brief A forward view's program (the water reflection's cube map faces: dclf-lod.md, "Water reflections"): one forward
+		 * @brief A forward view's program (the water reflection's cube map faces: dclf-architecture.md, "Water reflections"): one forward
 		 * pass, colour and depth together, drawn with plain draws like the Z-prepass's. So both stages are pulled builds (DCLF_PULLED):
 		 * the vertex stage of a main pipeline's vertex descriptor, and the colour pixel stage of its forward pixel descriptor (the
 		 * main one without Deferred: LightingShaderDescriptors).

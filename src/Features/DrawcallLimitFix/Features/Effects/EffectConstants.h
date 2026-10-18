@@ -11,7 +11,7 @@
 namespace DCLF::Features::Effects
 {
 	/*
-	 * The Effect port (CS_DCLF_EFFECTS; drawcall-limit-fix.md, "The Effect shader in the forward epoch"): BSEffectShader's constants in
+	 * The Effect port (CS_DCLF_EFFECTS; dclf-architecture.md, "The Effect shader in the forward epoch"): BSEffectShader's constants in
 	 * the engine's own variable space. BSEffectShader's Setup functions write VS variable i through the vertex shader's constant table at
 	 * +0x50 + i and PS variable i through the pixel shader's at +0x40 + i (SetupTechnique 0x1414ea2c0, SetupMaterial 0x1414ea6c0,
 	 * SetupGeometry 0x1414eab10), the order Community Shaders reflects Effect.hlsl into (ShaderCache.cpp, effectVS / effectPS). An effect

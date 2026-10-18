@@ -1,4 +1,4 @@
-// Tree LOD's draw family (Api::DrawFamily::TreeInstances, dclf-lod.md): the mirror's drain, the frame's decision and its program source,
+// Tree LOD's draw family (Api::DrawFamily::TreeInstances, dclf-architecture.md, "Tree LOD: the draws"): the mirror's drain, the frame's decision and its program source,
 // and its draws in the main passes (the depth segment's two phases and the colour segment); a trees view's faces are TreeLodFaces.cpp's.
 
 // volk must precede every Vulkan header of the translation unit (DrawPipelinesRhi.h's FamilyPipelines).
@@ -68,7 +68,7 @@ namespace DCLF::Features::TreeLod
 			"tree LOD's descriptors are not the engine's (Deferred | AlphaTest, Depth | AlphaTest, AlphaTest)");
 
 		/**
-		 * @brief Records tree LOD's draw (dclf-lod.md): push data is the draw row's address and whether this is phase 2's depth draw;
+		 * @brief Records tree LOD's draw (dclf-architecture.md, "Tree LOD: the draws"): push data is the draw row's address and whether this is phase 2's depth draw;
 		 * arguments come from the list's header (TreeInstances::VisibleHeader).
 		 */
 		void RecordTreeLodDraw(rhi::CommandList& a_commands, const FamilyPipelines& a_pipelines, bool a_colour, bool a_phaseTwo, std::uint64_t a_draw,

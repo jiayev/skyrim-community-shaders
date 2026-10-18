@@ -72,7 +72,7 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief What FrameValues samples (dclf-async-publication.md, "FrameValues"): the placements and palettes of the per-frame
+	 * @brief What FrameValues samples (dclf-architecture.md, "FrameValues"): the placements and palettes of the per-frame
 	 * movers (the walk's kept movers, every one), the sun entries of the roots the walk took, and the slots the walk wrote in
 	 * full - each an object's slot and the engine objects its row is read from, held. Made by the walk on the scene task, taken
 	 * by the render thread at the next frame's start (FrameView::TakePlacementPlans) and released there: its references are the engine's to

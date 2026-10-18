@@ -203,7 +203,7 @@ namespace DCLF
 	void LightingShaderDescriptors(std::uint32_t a_pass, bool a_deferred, std::uint32_t& a_vertex, std::uint32_t& a_pixel);
 	/** @brief The pixel descriptor's Deferred bit (ShaderCache.h, LightingShaderFlags::Deferred): the G-buffer variant. */
 	inline constexpr std::uint32_t kLightingPixelDeferred = 1u << 4;
-	/** @brief Whether the technique is one the water reflection's cube map draws (dclf-lod.md, "The census"). */
+	/** @brief Whether the technique is one the water reflection's cube map draws (dclf-architecture.md, "The census"). */
 	inline constexpr bool LodLightingTechnique(std::uint32_t a_passDescriptor)
 	{
 		const std::uint32_t technique = (a_passDescriptor >> 24) & 0x3f;
@@ -261,7 +261,7 @@ namespace DCLF
 
 	/**
 	 * @brief Hair (6) with ProjectedUV: SetupGeometry writes the projected-UV constants (VS TextureProj, PS ProjectedUVParams 1-3) for
-	 * every technique but Hair, so the native draw uses stale ones (bugs-found-by-parity.md). DCLF draws such hair without projection.
+	 * every technique but Hair, so the native draw uses stale ones (dclf-validation.md, "In the engine"). DCLF draws such hair without projection.
 	 */
 	inline bool HairProjection(std::uint32_t a_descriptor)
 	{
@@ -305,7 +305,7 @@ namespace DCLF
 	inline constexpr bool ParticleGeometryType(std::uint8_t a_type) { return a_type == 1 || a_type == 2; }
 	/**
 	 * @brief The palette rows class a member's block is its geometry type's (Api::GeometryTypeContribution::itemClass, while the
-	 * contribution's toggle is on; None for none): a skinless leaf whose capture is a complete particle system (drawcall-limit-fix.md,
+	 * contribution's toggle is on; None for none): a skinless leaf whose capture is a complete particle system (dclf-architecture.md,
 	 * "Particles"), exactly an NiParticleSystem with particle data, local or world space (a world-space system's transform is the identity
 	 * with its parent's scale, FUN_140dd4db0), for aspect flags (FUN_140e51320's other path) an NiPSysData with velocities, and a capacity
 	 * (the block's units).

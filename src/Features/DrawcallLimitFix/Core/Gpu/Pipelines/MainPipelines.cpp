@@ -261,7 +261,7 @@ namespace DCLF
 			// An opaque key: the engine's blend state for its group's write mode.
 			constexpr std::uint32_t kDoAlphaTest = 1u << 20;
 			// LOD (LODLand 9, LODObjects 13, LODObjectHD 15, LODLandNoise 18) draws in write mode 1 even alpha-tested, as the engine's
-			// main pass does (dclf-lod.md), so the G-buffer alphas keep what lies beneath.
+			// main pass does (dclf-architecture.md, "LOD"), so the G-buffer alphas keep what lies beneath.
 			const std::uint32_t technique = (a_key.passDescriptor >> 24) & 0x3f;
 			const bool lod = technique == 9 || technique == 13 || technique == 15 || technique == 18;
 			const std::uint32_t writeMode = (a_key.pixelDescriptor & kDoAlphaTest) && !lod ? kAlphaTestedWriteMode : kOpaqueWriteMode;

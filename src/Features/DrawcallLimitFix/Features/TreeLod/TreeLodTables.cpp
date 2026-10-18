@@ -184,7 +184,7 @@ namespace DCLF::Features::TreeLod
 			row.visible = visible.deviceAddress + kVisibleHeaderWords * sizeof(std::uint32_t);
 			row.alphaRef = 128.0f / 255.0f;
 			row.maxIndices = std::max(a_mirror.MaxIndices(), 1u);
-			// The engine's tree LOD draws use the worldspace's atlas and alpha reference 128/255 (dclf-lod.md).
+			// The engine's tree LOD draws use the worldspace's atlas and alpha reference 128/255 (dclf-architecture.md, "Tree LOD: the draws").
 			if (a_draw && a_mirror.MaxIndices() && TreeLodTextureBinding(row, a_owners))
 				row.shapeSlots = shapeSlots;
 			a_uploads(a_tables.draw, &row, sizeof(row), 0);
@@ -196,7 +196,7 @@ namespace DCLF::Features::TreeLod
 				a_tables.ready.store(true, std::memory_order_release);
 		}
 
-		// Tree LOD (dclf-lod.md): the mirror's changes, draw row and list arguments, for the depth cull and both passes' draws; the depth
+		// Tree LOD (dclf-architecture.md, "Tree LOD: the draws"): the mirror's changes, draw row and list arguments, for the depth cull and both passes' draws; the depth
 		// commit's only, after the other features' hooks (its uploads go through the commit's latched uploads).
 		void Commit(const Api::CommitContext& a_commit)
 		{

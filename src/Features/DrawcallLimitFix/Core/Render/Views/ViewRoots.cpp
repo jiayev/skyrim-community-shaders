@@ -1,6 +1,6 @@
 // A covered view's engine roots its faces draw in the engine's place (IndirectDraws.h, "The view engine"): the cube camera's
 // (ViewLodRootsOwned), read of the draw families' faces (their faces' roots) and the view root contributions (the LOD land and objects
-// roots: Features/Lod's, dclf-lod.md, "Water reflections"). Render thread.
+// roots: Features/Lod's, dclf-architecture.md, "Water reflections"). Render thread.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 

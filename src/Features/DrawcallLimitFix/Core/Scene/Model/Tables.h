@@ -305,7 +305,7 @@ namespace DCLF
 		// (kObjectMember is the main phase's copy for the GPU). Every write notes the slot (the change log with the record's
 		// kObjectMember, else publicationLog).
 		std::vector<std::uint8_t> setPhases;  // parallel to objects
-		// The change log (drawcall-limit-fix.md, "Persistent draw state"): each write that changes a slot's columns appends the
+		// The change log (dclf-architecture.md, "Persistent draw state"): each write that changes a slot's columns appends the
 		// slot and causes. Consumers read from their own LogCursor; one behind the trim, or on a new tables generation, rereads all.
 		// The tables' logs are SharedEventLogs: every published snapshot shares their chunks (PublishTables assigns them).
 		struct Change

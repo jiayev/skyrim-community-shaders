@@ -1,6 +1,6 @@
 #pragma once
 
-// The TreeInstances draw family's GPU layout (Api::DrawFamily::TreeInstances; dclf-lod.md): the records, rows and list header its draws
+// The TreeInstances draw family's GPU layout (Api::DrawFamily::TreeInstances; dclf-architecture.md, "Tree LOD: the draws"): the records, rows and list header its draws
 // read - TreeLodCullCS.hlsl (the depth segment's cull and a trees view's per-face cull), DistantTree.hlsl's DCLF_PULLED path, a trees view's
 // faces' rows and lists (sized for Core by the family's faces data: rowBytes, headerBytes, unitWords) - and its engine shapes. The shaders
 // mirror it, so it stays compile-time. Included by the feature's sources only.
@@ -13,7 +13,7 @@
 namespace DCLF::TreeInstances
 {
 	/*
-	 * The engine's instanced shapes (AE 1.6.1170; dclf-lod.md, "Tree LOD: what the engine does"): each BGSDistantTreeBlock's TreeGroup
+	 * The engine's instanced shapes (AE 1.6.1170; dclf-architecture.md, "Tree LOD: what the engine does"): each BGSDistantTreeBlock's TreeGroup
 	 * becomes one BSMultiStreamInstanceTriShape under the LOD trees root, drawn instanced from one instance group, whose records the
 	 * refill (FUN_140504a40) packs, at most 75 of them, into 32-byte records.
 	 */

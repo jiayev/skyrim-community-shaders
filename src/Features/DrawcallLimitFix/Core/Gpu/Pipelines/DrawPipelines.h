@@ -199,7 +199,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kShadowDiscards = 1;
 	inline constexpr std::uint32_t kShadowClasses = 2;
 
-	/** @brief A forward view's target formats (water reflection cube faces: dclf-lod.md); depth is the DSV format, not typeless. */
+	/** @brief A forward view's target formats (water reflection cube faces: dclf-architecture.md, "Water reflections"); depth is the DSV format, not typeless. */
 	struct ForwardTargets
 	{
 		DXGI_FORMAT colour = DXGI_FORMAT_UNKNOWN;
@@ -214,7 +214,7 @@ namespace DCLF
 	 * @brief A forward view's pipeline (DrawPipelines::RequestForward): a Lighting forward program's descriptors (the pixel one
 	 * without Deferred), or a draw family's (its lane slot's forwardFlags: tree LOD's kForwardTreeLod; descriptors 0). Culls front faces
 	 * unless two-sided: a cube face's projection
-	 * mirrors the image, and the engine culls front faces there (dclf-lod.md, "The state").
+	 * mirrors the image, and the engine culls front faces there (dclf-architecture.md, "The state").
 	 */
 	struct ForwardPipelineKey
 	{
@@ -423,7 +423,7 @@ namespace DCLF
 
 		/**
 		 * @brief Render thread: asks for a draw family's two pulled pipelines (Api::DrawFamilyBuild::DepthThenEqualColour; tree LOD's:
-		 * dclf-lod.md): Z-prepass (its depth program, LESS with writes) and colour (its colour program, EQUAL, opaque write mode 1), both
+		 * dclf-architecture.md, "Tree LOD: the draws"): Z-prepass (its depth program, LESS with writes) and colour (its colour program, EQUAL, opaque write mode 1), both
 		 * two-sided as the engine's. Once; rebuilt after a target change. Arrives in PipelineCatalog::families once SetFamilyInputs,
 		 * targets, winding and write mode are in.
 		 */

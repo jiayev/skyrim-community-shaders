@@ -1,6 +1,6 @@
 #pragma once
 
-// Lod (CS_DCLF_LOD_OBJECTS, CS_DCLF_LOD_TERRAIN; dclf-lod.md): the terrain manager's LOD blocks under TES::lodLandRoot DCLF draws, object
+// Lod (CS_DCLF_LOD_OBJECTS, CS_DCLF_LOD_TERRAIN; dclf-architecture.md, "LOD"): the terrain manager's LOD blocks under TES::lodLandRoot DCLF draws, object
 // LOD (a BSSubIndexTriShape with the LOD object flags, drawn by its visible segments: the LODObjects and LODObjectHD techniques) and terrain
 // LOD (a land block's shape: the LODLand and LODLandNoise techniques). The feature registers their switches and live toggles, object LOD's
 // segment events (LodSegmentEvents.h: the writers' hooks at its early hooks, an engine channel applied after the switch events, the

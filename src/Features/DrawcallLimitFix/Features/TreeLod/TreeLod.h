@@ -58,7 +58,7 @@ namespace DCLF::Features::TreeLod
 	// Diagnostics/TreeLodAudit.cpp: CS_DCLF_TREE_LOD_AUDIT=1 (a_switch), main thread at the scene frame's start (FrameBegin), with or
 	// without DCLF: the attached tree LOD blocks' instances (BGSDistantTreeBlock) against their references. An instance shown while its
 	// reference's full tree is loaded and visible is drawn over it (counted apart while the tree's fade is above 0: the engine crossfades
-	// the two, the instance's alpha 1 - the fade); one hidden without a visible full tree leaves a hole (dclf-lod.md, "Tree instance
+	// the two, the instance's alpha 1 - the fade); one hidden without a visible full tree leaves a hole (dclf-architecture.md, "Tree instance
 	// hiding").
 	void SubscribeAudit(Api::SwitchId a_switch);
 }

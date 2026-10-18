@@ -6,16 +6,12 @@
 - **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 - **[Nsight Perf](./nsight-perf.md)** - GPU hardware counters per render pass, D3D11 and DXVK/Vulkan backends (Developer Tools, `NVPERF_SUPPORT`, `CS_NVPERF_*`)
 - **[OpenRenderGraph on DXVK](./render-graph.md)** - How features run render-graph work on DXVK's Vulkan device
-- **[DCLF architecture](./dclf-architecture.md)** - Drawcall Limit Fix as it is: the frame by thread, the data from engine events to GPU draws, ownership, the code's layout, switches and parity gates
-- **[DCLF status](./dclf-status.md)** - What DCLF draws, and what the engine still does on the render thread
+- **[DCLF architecture](./dclf-architecture.md)** - Drawcall Limit Fix's design: the frame by thread, the scene from engine events to GPU draws, ownership and withholding, shading, fades, object classes and views
+- **[DCLF layout](./dclf-layout.md)** - DCLF's code layout: the folders, the extension points, the view and schedule contracts, and the rules `tools/dclf-layout-check.py` enforces
+- **[DCLF validation](./dclf-validation.md)** - DCLF's switches, parity checks, diagnostics and probes, how to validate a change, crash triage, and the bugs parity found
 - **[DCLF open defects](./dclf-open-defects.md)** - Defects and failing parity checks under investigation, with their evidence
-- **[DCLF pool follow-ups](./dclf-pool-followups.md)** - What should move into the pooled versions next (latched values, staged commit uploads, animated material values), and what stays a frame-slot ring
-- **[Drawcall Limit Fix](./drawcall-limit-fix.md)** - The historical record of how DCLF was built, with the measurements behind each decision
+- **[DCLF roadmap](./dclf-roadmap.md)** - The work left, by priority: engine work still on the render thread, the scene lane, GPU cost, coverage, integrations and tooling
 - **[Skyrim engine notes](./skyrim-engine-notes.md)** - What the decompiled game binary does, where features depend on it
-- **[Crash catalog](./crash-catalog.md)** - Crashes met during development, their stacks and what is known about each
-- **[DCLF: a GPU-driven frame](./dclf-gpu-driven-frame.md)** - Investigation: what taking DCLF's objects out of every engine per-view walk would require
-- **[DCLF: object tables built from events](./dclf-event-driven-tables.md)** - Investigation: replacing the per-frame scene walk with persistent tables changed by engine events, the walk kept as a synchronous validation
-- **[Bugs found by parity](./bugs-found-by-parity.md)** - Bugs in other features (each a separate PR) and in the engine (with DCLF's rule for each) that DCLF's parity checks found
 
 ## Subsystems
 

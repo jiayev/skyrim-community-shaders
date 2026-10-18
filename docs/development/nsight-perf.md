@@ -24,9 +24,9 @@ NVIDIA GPU the SDK supports, and is a developer build option.
 The SDK is a login-gated NVIDIA download, so the build never fetches it.
 
 -   **In SARP:** `NVPERF_SUPPORT` defaults on, with `NVPERF_SDK_ROOT` pointing at the SDK
-    BasicRenderer ships (`../../BasicRenderer/ThirdParty/NVPerf`). Nothing to configure. A build
-    tree configured before this default (cached `NVPERF_SUPPORT=OFF` with an empty root) gets it
-    applied once on its next configure.
+    BasicRenderer ships (`../../BasicRenderer/ThirdParty/NVPerf`) in a fresh build tree. A tree
+    configured before this default keeps its cached `NVPERF_SUPPORT=OFF`; reconfigure it with
+    `-DNVPERF_SUPPORT=ON -DNVPERF_SDK_ROOT=<that path>`.
 -   **Elsewhere:** download and extract the Nsight Perf SDK, then configure with
     `NVPERF_SUPPORT=ON` and `NVPERF_SDK_ROOT=<the directory holding include/nvperf_host.h>` (in
     the SDK archive this is `NvPerf/`). The `ALL-WITH-NVPERF` preset in
@@ -120,8 +120,7 @@ On Vulkan, a graph pass's range is written into its command list when the pass i
 revision's recordings for as long as the revision stands, so a pass recorded before the capture armed has no range and is not
 measured. In a stationary or turning run, DCLF's colour pass (`cs.dclf.main-opaque`) and its parts are not measured; the engine's
 perf events are. The fix would be to have arming force the graph to re-record its revisions; until then, measure DCLF's passes
-while the scene changes, e.g. under `CS_DCLF_TEST_MOVE`. First seen 2026-10-18: a turning run captured 56 `RenderBatches` ranges
-and no `cs.dclf.*` pass.
+while the scene changes, e.g. under `CS_DCLF_TEST_MOVE`.
 
 ## In game
 

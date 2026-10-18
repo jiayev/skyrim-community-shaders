@@ -3772,7 +3772,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(DCLF_SHADOW_DEBUG) && defined(DEFERRED)
 	// [TEMP] Native and DCLF alike: the sun's shadow terms in place of the colour, read back with CS_DCLF_TARGET_PROBE
-	// (dclf-open-defects.md, "The VSM soft shadow differs"): x the VSM soft shadow, y its detailed term, z the detailed
+	// (dclf-validation.md, "Shader debug output (`CS_DCLF_SHADOW_DEBUG_OUTPUT`)"): x the VSM soft shadow, y its detailed term, z the detailed
 	// shadow the lighting uses.
 	psout.Diffuse = float4(dirSoftShadow, dirVSMDetailedShadow, dirDetailedShadow, 1);
 #		endif

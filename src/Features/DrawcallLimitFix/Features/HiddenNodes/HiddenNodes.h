@@ -1,6 +1,6 @@
 #pragma once
 
-// Hidden nodes (dclf-event-driven-tables.md, "Hidden bits by event"): the source of the hidden events - every engine store that can change
+// Hidden nodes (dclf-architecture.md, "Hidden bits by event"): the source of the hidden events - every engine store that can change
 // NiAVObject::flags' kHidden bit patched to push the node's mirror update with its site (HiddenStores.cpp, at the feature's early hooks:
 // in right after Core's scene events, before Core's engine side reads HiddenStoresLive) - and CS_DCLF_HIDDEN_WATCH, the hardware watch
 // that names a store the source misses (Diagnostics/HiddenWatch.cpp: its switch, its observer and its report lines).

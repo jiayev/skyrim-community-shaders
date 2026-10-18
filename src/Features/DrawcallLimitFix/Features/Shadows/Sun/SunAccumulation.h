@@ -26,7 +26,7 @@ namespace DCLF::Features::Shadows::Sun
 	 * passes and ORs the cascade's bit into activeLightMask (the main pass reads it). For a member the thunks replicate the early-outs
 	 * and mask write and skip the passes; anything else calls the original.
 	 *
-	 * Entry exclusion (toggle "exclude sun entries", CS_DCLF_SUN_EXCLUDE; drawcall-limit-fix.md, "The sun's cascades without DCLF's objects"):
+	 * Entry exclusion (toggle "exclude sun entries", CS_DCLF_SUN_EXCLUDE; dclf-architecture.md, "The sun's cascades without DCLF's objects"):
 	 * the cascade culls walk only the full-frustum processes' objectArray, so after the full-frustum cull every entry DCLF draws
 	 * entirely is removed from it. DCLF writes the sun's mask bits at the main registration instead: the cascades the bound meets,
 	 * against the planes the engine's cascade cull used.

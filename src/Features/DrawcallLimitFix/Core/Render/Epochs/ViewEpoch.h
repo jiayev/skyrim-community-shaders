@@ -50,11 +50,11 @@ namespace DCLF::Draws
 	 * cull the frame's scene list through BuildDraws' bucket path, frustum only, for faces with a camera of their own, and draw the
 	 * buckets into the view's targets. Each face's VS_PerFrame (b12) is its camera's (PerFrameBlock); the frame constants otherwise
 	 * the faces' own (OwnsFrameConstants: their commit's, from this frame's sources) or first person's, the colour segment's.
-	 * - The water reflection's cube faces (dclf-lod.md, "Water reflections"): one epoch per reflection update, after the engine's
+	 * - The water reflection's cube faces (dclf-architecture.md, "Water reflections"): one epoch per reflection update, after the engine's
 	 *   face loop. Six faces, each drawing its LOD slots' forward pipelines into its slice of the engine's cube with DCLF's depth, and
 	 *   tree LOD from a list of its own. The shape always has all six faces, so the recordings hold across updates: a face the update
 	 *   does not render culls nothing (its latch's dispatch is 0, its tree row names no slots).
-	 * - The first-person view (drawcall-limit-fix.md, "First person as a view bit"): two epochs a frame the engine draws first person,
+	 * - The first-person view (dclf-architecture.md, "First person as a view bit"): two epochs a frame the engine draws first person,
 	 *   both recorded against one shape. The depth epoch at RenderDepth's first-person draw culls with the first-person camera and
 	 *   draws the buckets' Z-prepass depth pipelines into the main depth; the colour epoch at Main::RenderFirstPersonView's
 	 *   accumulator render draws the same sequences with each bucket's first-person forward pipeline into kMAIN and the motion

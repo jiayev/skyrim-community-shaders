@@ -60,11 +60,11 @@ namespace DCLF::Scene
 			}
 		};
 
-		/** @brief The component's state: the roots' members, the admitted set and the listed nodes' references by root slot. */
+		/** @brief The component's state: the roots' members, which listed roots are stood in, and the listed nodes' references by root slot. */
 		struct FadeRootState
 		{
 			RootMembers members;
-			// The admitted set (kFadeRootOwned), by node: whether each is stood in (kFadeRootStoodIn).
+			// The listed roots (kFadeRootOwned), by node: whether each is stood in (kFadeRootStoodIn).
 			ankerl::unordered_dense::map<const void*, bool> owned;
 			// Owned while listed (a published version that names it keeps it, through the retirement chain).
 			std::vector<RE::NiPointer<RE::NiAVObject>> owners;

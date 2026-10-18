@@ -1,6 +1,6 @@
 #pragma once
 
-// Fades (drawcall-limit-fix.md, "Fades on the GPU"; skyrim-engine-notes.md, "Fade state: inputs, outputs and their other readers"): the
+// Fades (dclf-architecture.md, "Fades on the GPU"; skyrim-engine-notes.md, "Fade state: inputs, outputs and their other readers"): the
 // BSFadeNode/BSLeafAnimNode/BSTreeNode OnVisible port and the producer of root states (Api/RootStates.h). The feature lists the fade nodes
 // its members draw under in the scene's tables (the fade roots: a journaled table family, written by its coordinator component:
 // FadeRoots), steps their OnVisible on the GPU (FadeStateCS.hlsl: a pass at the depth segment's cull state, its scene resources, seeds

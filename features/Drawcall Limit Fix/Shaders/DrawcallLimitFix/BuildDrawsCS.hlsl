@@ -727,7 +727,7 @@ bool MainFrustumRejected(ByteAddressBuffer a_inputs, uint a_inputOffset, float4 
 }
 
 // Decal, forward and refraction inputs (culled once by the colour segment) still need the main camera's cull for kAccumulated
-// (drawcall-limit-fix.md): phase 1 stamps their frustum verdict and nothing else. GpuLayouts.h's bits.
+// (dclf-architecture.md, "BuildDraws"): phase 1 stamps their frustum verdict and nothing else. GpuLayouts.h's bits.
 static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)

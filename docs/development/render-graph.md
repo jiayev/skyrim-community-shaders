@@ -183,7 +183,7 @@ Where the timings come from now:
 | `CS_ORG_SUBMIT=flush` | Use the flush-and-lock submission path even when DXVK supports the stream path. |
 | `CS_ORG_LLF_PARITY=1` | Every 300 frames, also run LLF's D3D11 culling and compare each cluster's light set with the graph's (logs `LLF parity OK` / `MISMATCH`). |
 | `CS_ORG_EPOCH_STATS=1` | Log render-thread CPU time per epoch (average and maximum every 600 epochs). |
-| `CS_ORG_ASYNC_EPOCHS=0` | Run the epochs synchronously. By default each epoch is prepared and recorded ahead on the graph host's thread, and the render thread only submits ("Epochs that only submit" in `drawcall-limit-fix.md`). |
+| `CS_ORG_ASYNC_EPOCHS=0` | Run the epochs synchronously. By default each epoch is prepared and recorded ahead on the graph host's thread, and the render thread only submits ("Revisions and recordings" in `dclf-architecture.md`). |
 | `CS_GPU_IDLE_TRACE=<frames>` | Every that many frames, log one complete frame's GPU idle gaps and what the render thread was doing during each (`[GpuIdle]`). DXVK timestamps every submission on its queue (`dxvkSetSubmissionTrace`, two extra timestamp-only submissions per submission), the Streamline ring's buffers add their own spans, and the render thread's perf events are the CPU markers. Forces Frame Annotations on for the session (without saving it) but leaves out the per-draw geometry events, whose formatting would dominate the timeline. Diagnostics only: the trace's own overhead makes gaps somewhat longer than in a normal run. |
 | `CS_PROFILER_LOG=<frames>` | Log the profiling window's rolling averages every that many collected frames, sorted by cost, with `[split N%]` on timers that straddle DXVK submissions. For comparing two configurations from their logs. |
 
@@ -192,6 +192,23 @@ Every `CS_*` switch can also be set in `CommunityShaders.env`, beside `Community
 when the plugin loads. This covers launches that do not pass a new environment to the game, such as an MO2
 instance that was already running. A variable set in the real environment wins, and every value taken
 from the file is logged (`[DevEnv]`).
+
+## DXVK fork: allocation-pool locking
+
+`DxvkResourceAllocationPool` is an unsynchronized free list that `DxvkMemoryAllocator` may touch only under `m_mutex`
+(`extern/dxvk/src/dxvk/dxvk_memory.cpp`). Upstream DXVK has three paths that call `m_allocationPool.create` without the lock:
+-   `importBufferResource`: ORG's interop reaches it through `RenderGraphRuntime::WrapBuffer` → `dxvkCreateBufferFromVkBuffer`.
+-   `importImageResource`: swapchain images and D3D11on12.
+-   `createAllocation(DxvkSparsePageTable*, ...)`: every sparse or tiled resource.
+
+**The crash.** When one of these runs while another thread allocates or releases under the lock (Skyrim's loading thread
+creating buffers), both threads can take the same storage. The symptom is an access violation reading `0x1` in
+`DxvkResourceAllocationPool::alloc`, inside an engine `CreateBuffer`.
+
+**The fix.** The fork takes `m_mutex` around the pool access on those three paths only. None of their callers holds the lock,
+which is not recursive.
+
+**Status.** The patch is not yet listed in `extern/dxvk/FORK.md` or offered upstream. Keep it when rebasing the fork.
 
 ## Building and tests
 

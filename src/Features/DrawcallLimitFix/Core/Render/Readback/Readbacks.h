@@ -130,7 +130,7 @@ namespace DCLF::Draws
 	std::shared_ptr<org::RenderPass> MakeEventReadbackPass(std::shared_ptr<SceneBuffers> a_scene, Versioned a_events, std::shared_ptr<HostEventRing> a_ring);
 
 	/**
-	 * @brief The visibility readback (drawcall-limit-fix.md, "visibility events", "kAccumulated written by DCLF"): the
+	 * @brief The visibility readback (dclf-architecture.md, "The visibility events", "kAccumulated written by DCLF"): the
 	 * VisibilityEventsCS list, its decoder's state, and the kAccumulated writes it prepares. Normal path; CS_DCLF_ACCUMULATED_PARITY
 	 * adds only the observers. Harvested batches (heap-allocated, none dropped) go to the decode task in frame order.
 	 *

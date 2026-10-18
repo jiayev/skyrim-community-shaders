@@ -16,7 +16,7 @@ namespace DCLF::Features::TreeWind
 		{
 			const auto s = TreeAnimation::Take();
 			if (!s.installed)
-				return fmt::format("[DCLF] tree animation list: off (CS_DCLF_TREE_LIST=0): {} on the list (the manager's last update {:.3f} ms)", s.listed, s.updateMs);
+				return fmt::format("[DCLF] tree animation list: off (not installed without the primary cull): {} on the list (the manager's last update {:.3f} ms)", s.listed, s.updateMs);
 			const auto text = fmt::format("[DCLF] tree animation list: {} on the list, {} owned trees off it (the manager's last update {:.3f} ms); {} syncs: {} taken off, {} put back; engine: {} adds ({} taken off again), {} removes of trees off the list, {} clears; parity {} checks, {} owned trees on the list{}; "
 										  "tree list (T7b5 fix): {} stood-in BSTreeNodes, {} loops given DCLF's verdicts: {} in / {} out (replacing the engine's {} stale / {} in / {} out), {} without a multibound",
 				s.listed, s.held, s.updateMs, s.syncs, s.takenOff, s.putBack, s.engineAdds, s.takenOffAgain, s.engineRemoves, s.clears, a_checks, a_onList,

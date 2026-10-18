@@ -1,6 +1,6 @@
 #pragma once
 
-// Faces (drawcall-limit-fix.md, "NPC faces: positions published by the engine's own writer" and "NPC face parts in the main pass"): the
+// Faces (dclf-architecture.md, "NPC faces: positions published by the engine's own writer"): the
 // NPC face shapes (a BSDynamicTriShape under a BSFaceGenNiNode: head, mouth, hair, brows), whose positions DCLF never reads from the
 // shape. The feature installs the face morphing's thunks (FaceSnapshots: the heads' snapshots, published by the engine's own writer) and
 // registers the coordinator component that follows the face shapes' writes (FaceShapes.cpp; Api::EntryClass::FaceShape, taken while

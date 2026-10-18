@@ -14,7 +14,7 @@ namespace org::async
 namespace DCLF
 {
 	/**
-	 * @brief DCLF's threads (dclf-async-publication.md, "The design"): one executor for the whole feature.
+	 * @brief DCLF's threads (dclf-architecture.md, "The design"): one executor for the whole feature.
 	 *
 	 * - The coordinator: one thread, its lane serialized. The frame's jobs run there in the order they are submitted. Above normal
 	 *   priority unless CS_DCLF_ASYNC_PRIORITY=normal.

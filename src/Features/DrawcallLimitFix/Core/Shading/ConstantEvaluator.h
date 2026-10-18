@@ -103,7 +103,7 @@ namespace DCLF
 
 	/**
 	 * @brief Terrain LOD's HighDetailRange (VS PerTechnique) as DCLF draws it: the loaded grid's centre, absolute (the engine's less
-	 * posAdjust; DCLF's vertex shader takes the draw's eye off it), and its half extents less 15 (dclf-lod.md, "Terrain LOD").
+	 * posAdjust; DCLF's vertex shader takes the draw's eye off it), and its half extents less 15 (dclf-architecture.md, "Terrain LOD").
 	 */
 	void LodHighDetailRange(float* a_out);
 

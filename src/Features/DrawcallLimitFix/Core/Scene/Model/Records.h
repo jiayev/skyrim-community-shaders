@@ -346,7 +346,7 @@ namespace DCLF
 
 
 	/**
-	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; drawcall-limit-fix.md, "Fades on the GPU"). A member's fade node is a root:
+	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; dclf-architecture.md, "Fades on the GPU"). A member's fade node is a root:
 	 * a FadeRootStatic row (CPU, when listed) and a FadeNodeState row (GPU, reseeded from `initial` on a new generation). The pass
 	 * runs the node's OnVisible for the main camera whenever its bound is in view (C++ port: Features/Fades/FadeState.h).
 	 * FadeNodeState holds BSFadeNode's own fields (skyrim-engine-notes.md, "Fade state").
@@ -398,8 +398,8 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeRootBitsShift = 8;    // +0x109
 	inline constexpr std::uint32_t kFadeRootTreeLod = 1u << 16;     // a tree whose LOD switch selects past child 0 (+0x180's +0x12C)
 	inline constexpr std::uint32_t kFadeRootTreeThresholds = 1u << 17;  // a BSTreeNode: a type-4 node takes the tree LOD thresholds
-	// A root of PrimaryCull's admitted entries, whose members follow FadeStateCS's state. The engine updates other roots; their
-	// members keep the distance test (kObjectFadeTest).
+	// A listed root (every one FadeRoots.cpp lists, admitted by PrimaryCull or not), whose members follow FadeStateCS's state. The
+	// engine updates roots DCLF does not list; their members keep the distance test (kObjectFadeTest).
 	inline constexpr std::uint32_t kFadeRootOwned = 1u << 18;
 	// The node's own flags BSCullingProcess::Process1 (AE 0x140e28390) reads before OnVisible: kAlwaysDraw (bit 11) skips
 	// the bound tests; kPreProcessedNode (bit 12) skips them too unless the process ignores preprocessing, and with bit 20

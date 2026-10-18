@@ -8,7 +8,7 @@
 namespace DCLF
 {
 	/**
-	 * @brief DCLF's render-thread time a frame, by what the asynchronous scene leaves on it (dclf-async-publication.md,
+	 * @brief DCLF's render-thread time a frame, by what the asynchronous scene leaves on it (dclf-architecture.md,
 	 * "The render thread").
 	 *
 	 * Every DCLF hook the render thread enters is a Hook: its whole time is counted, by site. Parts nested in it are counted to

@@ -1,36 +1,59 @@
 # DCLF code layout
 
-This is the layout Drawcall Limit Fix's code is moving to, the rules it keeps, and the order of the move. The present
-architecture is in [dclf-architecture.md](./dclf-architecture.md).
+This is how Drawcall Limit Fix's code is laid out, the extension points its features build on, and the rules
+`tools/dclf-layout-check.py` enforces. How DCLF works, and why, is [dclf-architecture.md](./dclf-architecture.md). The
+switches, parity checks and run procedure are [dclf-validation.md](./dclf-validation.md). Work not built yet is
+[dclf-roadmap.md](./dclf-roadmap.md).
 
 ## The target
+
+The tree as it is. Rule 5 keeps its top level and `Core/`'s subfolders closed (`TOP_LEVEL`, `CORE_SUBFOLDERS` in the check).
 
 ```
 src/Features/DrawcallLimitFix.{h,cpp}   the shell: CS's one integration point (Feature overrides, hook thunks, menu)
 src/Features/DrawcallLimitFix/
-  Api/            the extension API: the only DCLF headers other CS features include
+  Api/            the extension API: the contracts features and integrations build on (standard and ORG types only)
   Core/           what every feature builds on, with no feature knowledge
-    Runtime/        the building blocks (KeptState, SlotTable, EventQueue, Retirement, ...) and the scene executor
-    Engine/         engine access, the read window, the releases, the render-thread budget, hook helpers
-      Capture/        the engine's writers hooked, record reads, the event channels (SceneCapture, SceneEvents, SceneTracker)
+    Runtime/        the building blocks (KeptState, SlotTable, EventQueue, Retirement, LatestSlot, ...) and the scene
+                    executor, graph and scheduler
+    Engine/         engine access, the read window, the releases, the render-thread budget, shell state, the frame clock,
+                    skin palettes and partitions, walkers
+      Capture/        the engine's writers hooked, record reads, the event channels (SceneCapture, SceneEvents, SceneTracker,
+                      ConstantMirror)
     Settings/       the switches and toggles
     Scene/          the scene: the channels, the entry space, the pump's wake
       Coordinator/    the coordinator's core: tracked entries, slots, walk, set and claims, pump (State/: its components)
       FrameView/      the render thread's half of the scene
       Model/          records, tables, publication, the mirror, eligibility, lookups
     Handoff/        taking objects from the engine: primary cull, scene lists, pass capture, shadow views
-    Shading/        the material port framework, material sources and writes, constants, lighting descriptors, frame globals
-    Gpu/            frame values, pooled backings, GPU resources and textures, pipelines (Pipelines/: one file per family)
-    Render/         the snapshot builder, revisions, payloads, the epoch framework, common passes, the views' shared parts, the frame driver
-    Extensions/     the extension registry and the Core halves of Api/'s contracts
+    Shading/        the material port framework (Lighting's and the geometry port), material sources and writes, constants,
+                    lighting descriptors, frame globals, vertex input
+    Gpu/            frame values, frame data, pooled backings, the build executor, GPU resources and textures,
+                    Pipelines/ (one file per family), PlacementRows/
+    Render/         IndirectDraws (IndirectDraws.h; its implementation: Impl.h, Impl/, Internal.h), the frame driver,
+                    Snapshot/, Revision/, Payload/, Epochs/ (the epoch framework and the schedule's executor), Passes/,
+                    Main/, Views/, Shadow/ (the shadow engine), DrawFamilies/, Readback/, Resources/
+    Extensions/     the extension registry (Registry) and the Core halves of Api/'s contracts
   Features/       one folder per engine feature DCLF ports (MainView, Forward, FirstPerson, Reflection, OcclusionMaps,
                   Shadows/{Engine,Sun,Local}, Portals, GpuOcclusion, LocalLights, Skins, Actors, Faces, Particles, Billboards,
-                  Decals, Effects, Landscape, Fades, Lod, TreeLod, TreeWind, TextureTransforms, HiddenNodes, SwitchNodes)
-  Integrations/   one folder per CS feature DCLF supports, written against Api/ (AdvancedSkin, TerrainBlending, LightLimitFix, TruePBR, SubsurfaceScattering, ExtendedTranslucency, LinearLighting,
-                  VolumetricShadows, CloudShadows, ExponentialHeightFog, DynamicCubemaps, Skylighting, TerrainShadows, WaterEffects, IBL)
-  Diagnostics/    the observer infrastructure and the parity checks that span features
-  Schedule/       the frame's schedule: its triggers, every epoch and its passes' keys in order (Frame.cpp), which only the shell includes
+                  Decals, Effects, Landscape, Fades, Lod, TreeLod, TreeWind, TextureTransforms, HiddenNodes, SwitchNodes),
+                  each with its own Diagnostics/ where it has parity checks; FeatureList.cpp (the install order) and
+                  Manifest.cpp (the shared shader constants' overlap check)
+  Integrations/   one folder per CS feature DCLF supports, written against Api/ (AdvancedSkin, TerrainBlending,
+                  LightLimitFix, TruePBR, SubsurfaceScattering, ExtendedTranslucency, LinearLighting, VolumetricShadows,
+                  CloudShadows, ExponentialHeightFog, DynamicCubemaps, Skylighting, TerrainShadows, WaterEffects, IBL);
+                  IntegrationList.cpp
+  Diagnostics/    the observer infrastructure (Hooks.h, Observation, Policy, Install), the parity checks that span
+                  features (Scene/, Engine/, Draws/), the feature-level probes (Feature/), the periodic report (Reports/),
+                  the schedule dump and the test harness
+  Schedule/       the frame's schedule: its triggers, every epoch and its passes' keys in order (Frame.cpp), which only
+                  the shell includes
 ```
+
+A feature's shaders are under `features/Drawcall Limit Fix/Shaders/DrawcallLimitFix/Features/<X>/` (Fades, GpuOcclusion,
+TextureTransforms, TreeLod, TreeWind); Core's (BuildDrawsCS, VisibilityEventsCS, the sorts, the index pool, the foliage parity)
+are beside that folder.
+
 
 The main view's own work is a feature, `Features/MainView`: its draw passes (`MainOpaquePass`: `main-view.z.depth`,
 `main-view.depth-phase2`, `main-view.colour`) and the main pass's capture and colour epoch, which `FrameDriver` calls at the main
@@ -41,7 +64,7 @@ frame constants, the z-bucket counts, the native targets and depth (first person
 view engine (`Core/Render/{Main,Epochs/MainEpochs.cpp,Passes/CorePasses.cpp,Passes/MainExtension.cpp}`).
 
 The shadow engine's epoch half is a feature too, `Features/Shadows/Engine` ("shadow-epochs", namespace
-`DCLF::Features::Shadows::Engine`): the shadow and occlusion epochs' passes (`ShadowBuildDrawsPass`, `ShadowViewPass`, still in
+`DCLF::Features::Shadows::Engine`): the shadow and occlusion epochs' passes (`ShadowBuildDrawsPass`, `ShadowViewPass`, in
 `namespace DCLF::Draws`; the latched copies; the index pool's copies and the culling counters' readback through Core's factories:
 `shadows.*`, `shadows.sky.*`) and their frame points, which `FrameDriver` calls at the engine's shadow and occlusion points through the
 shadow epochs contract (`Api/ShadowEpochs.h`): the views' coverage and the shadow frame begun, the shadow epoch, the occlusion maps'
@@ -49,21 +72,20 @@ readiness and their epoch. Shadows/Sun, Shadows/Local and OcclusionMaps build on
 "Remaining architectural flaws").
 
 `Features/`, `Integrations/` and `Diagnostics/` are areas, not layers: one folder per feature or integration, and the checks.
-`Diagnostics/{Scene,Engine,Draws}` keep the old layer names until the parity rework.
+`Diagnostics/{Scene,Engine,Draws}` keep layer names (see "Not yet in place").
 
 A feature's folder owns everything about that feature:
 - its engine hooks;
 - its coordinator state;
 - its table columns and records;
 - its frame-value pool;
-- its passes and HLSL;
+- its passes (and its shaders, in the shader tree's `Features/<X>/`);
 - its toggles;
 - its parity checks and report lines.
 
 Features register at install, before DCLF's threads start. Their callbacks run per phase or per chunk, never per object (the exceptions
 run per event or per walked entry, where Core already classifies: a material port's callbacks, an occlusion map's occluder rule).
-The bits that shaders share stay compile-time: each feature declares its own, and a core manifest checks that they don't
-overlap.
+The bits that shaders share stay compile-time ("The extension points").
 
 ## The extension points
 
@@ -167,427 +189,6 @@ The shaders' shared constants stay compile-time: a feature declares its own (a f
 declaration, its object flag bits within `kFeatureObjectFlags`, its family's record word), and `Features/Manifest.cpp`
 checks them against Core's and each other's.
 
-`Features/TextureTransforms/` was the first feature built on them: a pool, a pass and a product. It also registers the frame VS
-variable's patch (`InstallContext::RegisterFrameVSVariablePatch`), the one condition of Core's transform-only skips (the coordinator's
-capture drain, the Lighting float controller's types above 0x13, the effect controllers' UV scroll, falloff and base colour: the ports'
-declared frame variables, `MaterialPortContribution::frameVariables`, patched by the same list, pool and pass; the coordinator's transform watch is
-gone, its "watched transforms" counter, `MaterialRecordStats::transformsWatched`, counted where the watch was called), and keeps its pool's
-parity and stats line (`Diagnostics/TextureTransformsParity.cpp`); it reads the frame through the frame-value pool contract
-(`FrameValuePoolProducer::TextureTransformBuffer`, `Extensions::FrameValuePoolIndex`), including neither FrameGlobals.h nor
-`Core/Gpu/FrameValues.h`. Its shadow UV scroll stays Core's ("Not generalised", below). `Features/TreeWind/` was
-the second: a pool with frame-start reads, scene resources with their commit hook and frame binding, a next-frame pass on
-the compute queue, its switches and toggle, a report line, a stand-in observer with its engine hooks, its parity, and its
-table family (the tree slots), coordinator component (listing them as members join and leave) and object contributions
-(technique 12's eligibility and record flag, its shading derivation, its frame globals). Its tree list takes the BSTreeNodes from the
-stand-in's roots that left and joined, and the mirror's tree kind reaches it as a node kind bit (`Api::kMirroredKindTree`, which
-`MirroredFadeNode` reports); its per-object data is the feature block (below: the record's and the shading row's
-`featureBlock`, `objectFlags = kObjectTreeAnim`, six words; the dead `treeAnim` column is gone). `Features/Particles/` and
-`Features/Billboards/` followed: their switches and toggles, report lines at the draws' async work and parity, a geometry type
-contribution (the particle types) and parent contributions (the leaves under an NiBillboardNode), the particle snapshots' engine
-hooks, and the billboard parity's early hooks. `Features/SwitchNodes` (its switch and toggle, and the switch parent's contribution) and
-`Features/HiddenNodes` (the hidden events' source, the engine's kHidden stores patched at its early hooks, and its watch: a switch, an
-observer and report lines at the statistics) followed. `Features/Decals` followed: its switches and toggles (the layers' needing the decals'),
-the decal and layer object classes' contributions, the member decals' order as a coordinator component (joined by its patches' chains,
-re-keyed by the walk's rewrites, ordered when the joins are done, writing the tables' ordinals), its groups' ranges of the colour segment's
-second pass on the main range contract (`Api/MainRanges.h`: `Fixed0` "decals-opaque", order 0, with the depth prepass; `Fixed2`
-"decals-layers", order 1; `Fixed1` "decals-blended", order 4, after Integrations/TerrainBlending's held groups at 2 and 3) and its parity. Its report lines
-followed, with the order parity's state in its component (`SceneCoordinatorMaterials`: the order parity; `SceneCoordinatorLastPass`: the
-candidates, which it counts), then the decal array edits' hooks (`DecalHooks.cpp`, its early hooks, after the hidden nodes': no shared
-site) and the decal node's capture, its node capture contribution; `DecalOrder` reads the mirror and the tables through the context only.
-What it leaves Core is the main pass's structure: the ports' decal groups and states (the patch's decal key, `kObjectDecal` and its group
-bits, the raster
-keys), the tables' ordinal columns (`rangeOrdinal`, `rangeCount`), the main build's decal inputs and templates, the sequence buffer's range
-slots and count words (`GpuLayouts.h`, `BuildDrawsCS`), the colour passes that draw the registered ranges in their order (Features/MainView's `MainViewPasses.cpp`),
-and the generic node capture field and kind (`kKindCaptured`, `NodeRecord::captured`), whose parity name stays "decals"
-(`NodeRecord::kFieldNames`), so the mirror parity's text is unchanged. What SwitchNodes and HiddenNodes leave Core is the visibility every
-object is judged by: the switch
-selections the primary cull follows under every stood-in root whatever the toggle (the index stores' and child edits' events, without
-which DCLF does not run; the pending switches, the catch-ups, the cut's selection reads, tree LOD's switch), and the hidden-bit
-vocabulary (the channel, the chains and their drain, the frame's capture of the culls' bits, the Hidden verdict, the LOD gates' veto).
-`Features/Faces` followed: the face morphing's thunks and the head snapshots (`FaceSnapshots`), and the face shapes as a coordinator component following
-their entry class (`EntryClass::FaceShape`, taken once the thunks are in): their heads' lists, the heads' publications taken as each walk
-begins and applied as the delta walk schedules, each written shape's snapshot, region of the positions buffer and stream, and the regions
-retired as their streams go. Its vertex stream followed, on the vertex stream contract (`Api/VertexStreams.h`): the positions buffer as
-scene resources (`face-positions`: set up, registered and required first, its fit), the commits' uploads into it (the stream's `upload`,
-with what each positions version holds), and the stream's registration (`EntryClass::FaceShape`, named "face positions" for the
-named-address parity). What it leaves Core is what every draw of the stream reads, generic: the stream rows in the scene's tables
-(`streamRows`, the objects' `streamRow`, `kRetiredStreamRow`, the released rows its component frees regions by) and the payloads' copies of
-them, the builds' second-stream geometry draws (`StreamGeometry`, `AppendStreamRows`, `SetSequenceStream`), the fit's test, and the passes'
-bindings (`SceneBuffers::vertexStream`). The face shapes' classification is contribution data: a geometry type contribution for
-`kDynamicTriShape` whose entry rule is `FaceShape` under `kMirroredKindFaceGen` (`perFrame`, `holdsParent`); Core keeps the entry's class
-(`Tracked::entryClass`, resolved once), its held source node (`Tracked::sourceRef`, handed as `EntryWrite::source`), the per-frame
-entry-class trait (`kTraitEntryClass`) and the reports' "face" names. Its publications' counts and their fragment of the scene delta line
-are the component's (`SceneCoordinatorDelta`). The rows are Core's columns, not a table family's: a family is copied only when its stamp
-moves and its stamp is in the
-publication key, so a head's new snapshot taken in place would publish where it does not now, and the replay line would gain its count.
-`Features/Actors` followed: its switch and toggle (which the first person's needs), the
-actor parent's contribution (`EngineParent::Actor`, `ParentLeaves::AllLeaves`: the classification's chain test) and the actor techniques'
-(actor skin, faces, hair, eyes). Its engine events followed: Actor::SetAlpha's hook and the three actor move writers
-(ActorUpdate3DPosition, SkyCellSkin, RagdollJob) at its early hooks (`ActorEvents.cpp`, right after the reflection's), pushing into Features/Fades'
-"fade amounts" channel (needed by name, `InstallContext::NeedEngineChannel`, `Extensions::PushChannelKey`) and reserved move-writer slots 2-4; and the high actors'
-animation stamp from DCLF's shadow views with its "actor rate" line (`ActorRate.cpp`: the stand-in observer's `afterWrites`,
-`ReportPoint::AccumulatedWrites`). What it leaves Core is the path an actor's objects take whatever the toggle: the skinned geometry, which is
-any NiSkinInstance's and not the actors' alone (the bone palettes in FrameValues' palette part, the skin partitions in the tables and the walk),
-whose switches, toggles and classes are `Features/Skins`' (below); an owner class's entry's classification (`Tracked::owner`, the per-frame
-owner class trait `kTraitOwnerClass`, `Coordinator::FrameVerdictKept`, `SceneTables::classMembers`), whose class is the feature's
-registration (`EntryClass::ActorOwned`, below); and Core's own movers (FUN_14066afa0, Update3DPosition, the graph animation and update-pass
-writers). Advanced Skin's wetness is `Integrations/AdvancedSkin`'s (below); its material textures (t71/t74) and
-their parity are its material contributor's (below).
-`Features/FirstPerson` followed: its switches and toggle (which needs the skinned and the actors), its report lines at the draws' async work
-and the skeleton's parity; then, on the view contract, the whole first-person view: its set phase and view bit (`kSetFirstPerson`,
-`kViewFirstPerson`), its contribution (a category root, the first-person root, with its root capture; one face with a forward part and a
-depth pass; dropped while off; the main colour viewport; withheld in the main accumulators, with the first-person accumulator; drawn into
-kPOST_ZPREPASS_COPY), its coverage callback, its frame-start work (the latch, targets, skeleton walk, pipelines and resources), its two epochs
-on the view engine's inputs and submission (the same skip causes and log lines), its state and report counters (`FirstPersonFrame`), and the
-two engine hooks that run the epochs (RenderDepth's first-person draw and Main::RenderFirstPersonView's accumulator render, installed from its
-install, their addresses `kDepthFirstPersonDraw` and `kFirstPersonViewDraw` in `FirstPersonHooks.cpp`; they read `ShellState`). Its
-diagnostics followed (`Diagnostics/RootViewChecks.cpp`): the subtree parity, the subtree chain and hidden-geometry logs, the hidden verdict
-log, the misfiled filing and the left-out slots (the commit's `SetSlotDecided`, the commit parity's `SetSlotRedecided`), with their three
-report lines at `SceneCoordinatorSet`. What it leaves Core is what every bucketed view shares, keyed by its slot or its membership: the epochs'
-passes and forward part (`ViewEpoch*.cpp`), their revisions (`ViewKind`, `Epoch::FirstPersonDepth`/`FirstPersonColour`, the shape, key group
-and coverage inputs), the slot's state (`ViewEpochState`) and the per-view forward targets (`DrawPipelines::SetViewForwardTargets`, keyed
-by the feature's `kForwardKeyFirstPerson`); a CategoryRoot view's scene side (the root as a category node, the classification's root stop,
-the root view hook points it announces on instead of logging, `Diagnostics/Scene/RootViewEvents.h`: `RootSubtreeSynced`, `RootViewHidden`,
-`SetSlotRedecided`; FrameGlobals' capture of the view's subtree through `captureRoot`, `FrameGlobals.h`'s `RootSubtreeNode`; the set's
-decisions and their parity, the decals' forward keys, the placements' per-frame chains, the frame requests' root, the
-frame globals' culled bits); FrameValues' root-view rows, palettes and particles; `PassCapture`'s withholding (InMainRenderers) and the
-census's view. BuildDrawsCS mirrors `kViewFirstPerson` (the manifest checks it).
-`Features/Reflection` followed, the second view on the contract: its switch and toggle (listed where Core's were, after the precipitation
-mask's, and registered right after the occlusion maps' toggles, so the toggle's bit in the packed word is where Core's was), its set phase and view bit (`kSetReflection`,
-`kViewReflection`; no HLSL mirror), its contribution (the LOD techniques of the main set, a LOD Lighting technique's slots only; six faces
-with tree LOD; its last shape kept while off; its imported target's area; withheld in renderers of its own; drawn into the engine's cube
-with DCLF's own depth; covered before its first coverage and on a failed graph), its coverage callback, its work after tree LOD's decision
-(the faces' targets, the LOD slots' forward pipelines, its resources) and at the depth commit (the frame's faces in one epoch,
-`CS.DCLF.ExecuteReflection`, with the same skip causes and log lines), its state and report counters (`ReflectionFrame`, its lines at
-`AsyncWorkViews`), the faces' camera parity, and the water reflection's engine hooks (`ReflectionFaces`: the update, its LOD add-roots, the
-face render with its orientation and draws; the feature's early hooks, first of them, gated by `ShellState::Running`; the face render names
-the cube camera's accumulators as the view's renderers, `PassCapture::SetViewRenderers`, and its plain mode as their withholding,
-`SetViewWithholdActive`). What it leaves Core is what every bucketed view shares (the epoch's passes, its revisions, the slot's state, a
-LodTechniques view's slot and phase readiness, the colour target's import, `PassCapture`'s OwnRenderers withholding and the census's view)
-and the view engine's parts that read tree LOD and the LOD gates (the classes' contributions as data once `Features/Lod` and `Features/TreeLod`
-moved; the feature includes neither): the draw families drawn per face (their pipelines, ownership and rows: `IndirectDraws::ResolveViewFaces`,
-`DecideViewFaces`, `SubmitViewEpoch`'s rows), the cube camera's roots its faces draw in the engine's place (`IndirectDraws::ViewLodRootsOwned`,
-from the draw families' faces' roots and the view root contributions: Features/Lod's reads the LOD gates' show veto,
-`Extensions::ShowVetoRegistered`), an OwnRenderers view's residue watch
-(`PassCapture::WatchViewResidue`, `TakeViewResidue`, `TakeViewResidueGeometries`, per view) on the renders its `residueDue` keeps the
-roots (the feature's `ResidueDue`), and the per-view forward targets the faces' pipelines are built for (`DrawPipelines::SetViewForwardTargets`).
-The residue classification and its classes are the feature's (`Diagnostics/Residue.cpp`: drained at CaptureDrained, classified at
-JoinsBegin, `ResidueKinds` for the third line).
-`Features/OcclusionMaps` followed, the first feature on the shadow-view contract: its switches (`CS_DCLF_SKYLIGHT`, `CS_DCLF_PRECIPITATION`,
-listed where Core's were: before `CS_DCLF_OPAQUE_EFFECTS`, after the trees' list-all switch, with the reflection's and the first person's
-following them there) and its two toggles (which need the shadows; the first feature toggles registered, so their bits in the packed word
-are where Core's were, the feature listed first), the maps' set phases and view bits (`kSetOccluderSky`, `kSetOccluderPrecipitation`,
-`kViewSkyOccluder`, `kViewPrecipOccluder`, their values unchanged; no HLSL mirror; the manifest checks them and Core's `kCoreSetPhases` and
-`kCoreViewBits` no longer hold them), and the two `RegisterOcclusionMap` contributions: the sky map (Skylighting's occluder rule, its target
-Skylighting's own occlusion texture, imported by `importTarget`) and the precipitation mask (its rule, the engine's mask), both available
-while Skylighting is loaded (`skylighting.loaded`, read as data), both with the size test (`minRadius`: the mask's cull has always taken
-Skylighting's) and the precipitation accumulator's camera and accumulator (the sky map's while Skylighting draws it, `inOcclusion`), with
-their labels and reference parity (`ReferenceDue`, CS_DCLF_SKYLIGHT_PARITY's). The rules themselves are the feature's (`OccluderRules.cpp`:
-`SkylightingTechnique`, `PrecipitationTechnique`). What it leaves Core is the shadow engine's: the occlusion epoch on the shadow commit, the
-maps' modes, view slots, depth targets and technique columns, the walk that hands each object to the rules (`Api::OccluderLeaf`,
-`Coordinator::NearestFadeNodeBsx`), the set decisions and the reports but the maps' two lines, all reading the maps' entries. The shell keeps
-its six occlusion methods and the 0x1C capture's thunk, which ask the maps' `camera` and `ownsAccumulator` (in slot order)
-(`DrawcallLimitFix::OcclusionReady` and its siblings). Its diagnostics followed: `CS_DCLF_SKYLIGHT_PARITY` and `CS_DCLF_SKYLIGHT_DUMP_DIR`
-(registered by the feature, listed where Core's were: after `CS_DCLF_CAPTURE_POINT_PARITY` and `CS_DCLF_TABLE_START`), the compare and its
-observers (`Diagnostics/SkylightParity.cpp`; no `Observation` flag, no Policy question), the maps' report lines
-(`Diagnostics/OcclusionReport.cpp`, at `ReportPoint::ShadowViews`, reading the driver's `FrameDriver::TakeOcclusionFrames`) and the maps'
-view check against the engine's (`Diagnostics/OcclusionViewCheck.cpp`, under either parity switch).
-`Features/Shadows/Sun` and `Features/Shadows/Local` followed, the shadow sources: the sun's (`RegisterShadowSource({Sun})`, and its camera
-hook, BSShadowDirectionalLight::UpdateCamera, writing the `Sun` board, its own since phase 10) and the spot, point and focus sources (the spot and point sources'
-`lightKept`, each kept light's views into the `Lights` board, and the focus cameras' hook, BSShadowDirectionalLight::sub, writing the
-`Focus` board). The sources own no phase or view bit (the sun's switches and toggles came with its accumulation, below), and their hooks
-install by source (`Api::Feature::sourceHooks`), so the install log keeps its order: the sun's accumulation and views, the light
-selection, the point lights' culls, the focus views. What they leave Core is the shadow engine (both epochs, the capability and captures,
-the views list), the camera math (and, until phase 10, the boards), the views' tallies the shadow epochs' checks fill (`Diagnostics::ShadowViewTally`), the
-caster phases and modes, and the shadows' toggles. The engine's focus targets and each source's parity followed into its feature ("The
-shadow-view contract", "Where it stands").
-The point lights' culls followed into `Features/Shadows/Local` (`LocalLightCull.{h,cpp}`, namespace `DCLF::Features::Shadows::Local`: the
-Point source's culls without DCLF's entries, their category filter, their bits for cut entries and the portal-strict lights' reach,
-`kReachPortal`), on the source's `frameStart` (`SelectFrame`, with the paraboloid exclusion the shadow epoch published,
-`ParabolicExclusionSlot::Pending`) and `frameEnd` (`EndFrame`), a stand-in observer's `structure` (`NoteStructure`: the category filter's
-attaches and detaches), installed by its source hooks at the Point source, before the primary cull reads NiNode's OnVisible slot (then
-`CullsInstalled`, read as `Extensions::SourceCullsInstalled(Point)`); its lines at `ReportPoint::PrimaryCullSources`
-(`Diagnostics/PointCullLines.cpp`, formerly `LocalLightLines`) and its parity (`Diagnostics/LightCulls`, `LocalLightCullView.h`, under
-`Observe().scene`). What it left Core then was the paraboloid exclusion's build and slot (`ParabolicExclusionSlot`, published by ShadowEpochs
-only while the Point source's culls are installed; formerly `LocalLightCull::Publish`; both the feature's since phase 10b) and the diagnostics
-events the parity takes. The Sun's registration thunk calls its `NoteMainRegistration` directly (Shadows/Sun DEPENDS
-{Shadows/Local}, listed before it).
-`Features/LocalLights` followed, the selection and receiver side of the local shadow lights: the light selection (`LightSelection.{h,cpp}`,
-the CalculateActiveShadowCasterLights port, formerly `Engine/Views/`; installed by its source hooks at the Spot source; handing the Spot and
-Point sources their kept lights, `lightKept`, and publishing the frame's slots on Core's `LightSlots`), its room test through Portals
-(`PortalViews::WalkLight`, `SharesRoom`: static calls, LocalLights DEPENDS {Portals}), each object's main-pass shadow mask
-(`LocalShadowLights.{h,cpp}`, formerly `Scene/Ports/LocalShadows`: the kept lights' volumes, sampled per colour commit on the light volumes
-contract, "local shadow lights", with its landscape rule as data, `kLandscapeFlags`), and its parity and lines
-(`Diagnostics/LightSelectionParity`, `LightSelectionView.h`, under `Observe().claimsOrScene`; `Diagnostics/LightSelectionLines.cpp`,
-self-scheduled every 300 selections). It has no switch, toggle, pool, pass or product. What it leaves Core is the light candidates
-(`LightEntryOf`, with the sun's), the selection's slots (`ShadowViews::LightSlots`, formerly `ShadowCameras::LightSlots`: render thread, invalidated at the selection's start, published at
-its end, `Current(frame)` for the shadow views' rebuild, with the focus hosts), the light volumes' test, latch and clamp, and BuildDraws'
-receiver test. The character light is the Lighting port's, not a local light.
-The boards and the exclusion build followed (round 2, phase 10). The `Sun`, `Lights` and `Focus` boards moved from Core's
-`ShadowCameras.h` to the features that write them (`Features/Shadows/Sun/SunViews.h`: `SunFrame`, `SunBoard`;
-`Features/Shadows/Local/LightViews.h` and `FocusViews.h`: `LightFrame`, `LightsBoard`, `FocusFrame`, `FocusBoard`); Core reads them through
-the sources' `camera` (the capture, Features/LocalLights' volumes) and the sun volume (`Api/SunVolume.h`: Uploads.cpp's cascades, formerly
-`GpuCascades`, and the inputs' full-frustum planes), and Features/Actors' actor rate includes them (DEPENDS {Shadows/Sun, Shadows/Local}).
-`ShadowCameras.h` keeps the camera math alone; the selection's `LightSlots` went to the views list it feeds (`Core/Handoff/ShadowViews.h`).
-The exclusions' build (`SunExclusionIndex`, `SunExclusionCache`, `BuildSunExclusion`, formerly `ShadowBuild.{h,cpp}`) and both caches
-(formerly `ShadowEngine`'s) went to `Features/Shadows/Local/ExclusionBuild.{h,cpp}`, called by the shadow participant's payload through the
-shadow exclusion contribution. Phase 10b moved the rest: the exclusions' type, translations and slots (`SunExclusion.{h,cpp}`, formerly
-`Core/Render/Shadow/`, namespace `DCLF::Features::Shadows::Local`) are the feature's; the shadow payload holds the exclusions opaquely and
-hands them back through the contribution's `publish` (formerly ShadowEpochs' and `FrameView::WithdrawSet`'s slot writes), the frame driver
-calls its `frameStart` where `SunExclusionSlot::BeginFrame` ran, and the primary cull's scene-list filter (`SceneLists.cpp`,
-`PrimaryCull::filterExclusion`) and the culls-off report line read the sun's pending one through its `listExclusion` view; the
-`kNotExcluded` reason and its report text stay Core's. Core keeps the candidates (see "Remaining architectural flaws") and the list filter.
-The listed root is named for what it is (`SceneTables::listedRoot`, `PlacementPlan::Item::listedRoot`, `MarkListedRootDirty`, formerly
-`sunEntryNode` and `MarkSunEntryDirty`); the tracked entry's resolved root is `Tracked::entryRoot`, apart from its `listedRoot` (the
-rootDependents key, cleared when unlisted, while `ResolveSunEntry` may resolve the root without listing it). The GPU row's `sunEntry` and
-every report string keep their names.
-`Features/Lod` and `Features/TreeLod` followed. Lod: object and terrain LOD's switches (`CS_DCLF_LOD_OBJECTS`, `CS_DCLF_LOD_TERRAIN`, listed
-where Core's were, before `CS_DCLF_LOD_GATES`) and toggles (after the refraction's, behind the particles', billboards' and switch nodes'),
-two object classes (`ObjectClass::LodObjects`, `LodTerrain`, both with `categoryRoot = TES::lodLandRoot`), its four techniques with
-their property flag rules (LODObjects and LODObjectHD with the LOD object flags on `kSubIndexTriShape`; LODLand and LODLandNoise with the
-LOD landscape flag on `kTriShape`) and the `kSubIndexTriShape` geometry type with the LOD object flags, which Core reads as data
-(`Ineligible::Lod`, `Extensions::PropertyFlagRules`, the category capture's roots, the cube camera's LOD land and objects roots,
-`ViewLodRootsOwned`); Core no longer names the LOD techniques, flags or root (`LightingDescriptors.cpp`, `Eligibility.cpp`,
-`FrameRequests.cpp`). TreeLod: its switches (`CS_DCLF_LOD_TREES` after Lod's, `CS_DCLF_TREE_LOD_AUDIT`
-after the texture paths' trace) and toggle (after Lod's), the tree LOD class (`ObjectClass::TreeLod`: the draw family's gate, the revisions' trees
-pipeline, a trees view's `ResolveViewFaces`), the source of Core's tree LOD channel at its early hooks (the refill, block update, AddGroup
-and RemoveGroup hooks, pushing through `Push`, where Core's scene events installed them; between the billboards' early hooks and
-the hidden nodes') and the tree LOD audit. Both are listed after SwitchNodes, Lod first, so the toggles' and switches' order is Core's.
-What they left Core then: the LOD gates whole, which needed an engine event channel contract for a gated swap (its capture, flip, outcomes
-and veto); they followed (below). Object LOD's segment events followed
-on the engine channel contract (`Api/EngineEvents.h`, `RegisterEngineChannel`): the writers' hooks at Lod's early hooks (between the billboards'
-and tree LOD's; `LodSegmentHooks.cpp`), its keyed channel ("object LOD segments": `AfterSwitches`, drained after the switch events as Core's
-queue was; `KeepKeys`; `namesKeys`, as the mirror parity counted them), its coordinator component (`events.keys`: each named tracked shape's
-ranges taken again from the mirror into Core's kept ranges, `SetEntryRanges`, the shape's rewrite on a change), its report line at
-`SceneCoordinatorSegments` (`componentText`) and its parity (`Diagnostics/LodSegmentParity.cpp`). What it leaves Core is what the walk reads, generic since:
-the kept ranges (`entryRanges`, from the attach's capture, erased with the entry), `GeometryRecord::ranges` (`kRanges`; the printed field
-name is still "segments") and the range slots (`ResolveEntryRangeSlots`). The segments' layout and capture are the feature's
-(`Features/Lod/LodSegments.h`), registered as the `kSubIndexTriShape` contribution's `ranges` (`CaptureDrawnRanges`; `Api/EntryRanges.h`);
-Core no longer tests `kSubIndexTriShape` in the capture, the walk or the attach's prepare (`Extensions::GeometryTypeRanged`).
-The LOD gates followed into Features/Lod, once the generic structures they use existed (`Api/EngineEvents.h`: the `SceneStack` channel kind,
-the show veto, reserved hidden sites; `Api/CoordinatorComponents.h`: root marks, entry vetoes and observed slots, the
-commit's settle, take and publication hooks, the adoption hook). The feature now registers their switch (`CS_DCLF_LOD_GATES`, listed where
-Core's was: before `CS_DCLF_SHADOWS`, after Lod's two and TreeLod's, which name it), installs their engine hooks at its install
-(`LodGates.cpp`: the swaps' thunks, the LOD drain's and retirement's detours, the forced paths; `ShellState::Running` for the running
-query; no other hook shares their sites, so the move from the shell, right before the features, changed no patch), and registers, while
-they are installed and first of its registrations (where Core registered them, before every feature), their SceneStack channel, show
-veto, reserved hidden site, coordinator component (`LodGateComponent.cpp`, `LodGateAdoption.cpp`; after tree wind's,
-which shares no hook with it, and before the segments') and report lines (`LodGateReports.cpp`: `SceneCoordinatorGates`, `GateReleases`,
-alone at both), all in `LodGateChannel.cpp`; their observers and parity (`Diagnostics/LodGateObservers.cpp`, `LodGateParity.cpp`) are
-subscribed under the switches Core's observer install used. What they leave Core is the generic structures, the show veto's cells the
-hidden-node source's stubs load, the view engine's read of the gates through the show veto (`ViewLodRootsOwned`), and the Diagnostics
-event their observers take (`SetCommitted::gatesLive`). The gates' hook points are the feature's (`Diagnostics/LodGateEvents.h`:
-`GateFlipsPublished`, and `GateReleasing` with its claims read opaquely through `Diagnostics::SceneView::ClaimedPhases`), the gates engage
-once the hidden-node source is installed (`Extensions::HiddenEventsLive`), and they stamp their frames with Core's frame clock.
-Tree LOD's renderer followed, on the draw family contract (`Api/DrawFamilies.h`): Features/TreeLod takes the `TreeInstances` family. It keeps
-the channel and the render thread's mirror (`TreeLodMirror`, drained by the family's `serve`, running or not), its tables as scene resources
-(the mirror's shape and mesh slots posted with the revision's inputs, `postInputs`; the draw row and list header the depth commit latches,
-`latched`) and their uploads as a commit hook (the depth commit's, through `CommitContext::latched`, with `TreeLodMissed`: its event, log
-and count, `Diagnostics/TreeLodEvents.h`, `TreeLodReport.cpp`), TreeLodCullCS's
-two phases and the counts' readback as its passes in the depth epoch (`cs.dclf.z.tree-lod-cull`, `cs.dclf.tree-lod-cull-phase2`,
-`cs.dclf.z.tree-lod-counts`), the family's decision (the mirror's shapes, the atlas, the lane's pipelines), program source and draws, a trees
-view's faces (the per-face cull, its pass `tree-lod.faces-cull`, the faces' declarations, draw and row, the lists' units), its report lines at `AsyncWorkFamilies` and
-`SceneFrame`, the mirror's parity, the atlas's address (`TreeLod::Address`), and the cull shader (`features/Drawcall Limit
-Fix/Shaders/DrawcallLimitFix/Features/TreeLod/TreeLodCullCS.hlsl`) with its constants and path (`TreeLodTables.h`: `kTreeLodCullShader`,
-`TreeLodCullConstants`, `kTreeLodCullConstantWords`). What it leaves Core is the family's slot, keyed by family: the pipelines on the lane, built from the family's program
-block (`FamilyPipelines`, `ForwardPipelineKey::kForwardTreeLod`), and their publication (`SceneBuffers::familyPipelines`), the ownership
-published from the decision (`IndirectDraws::DecideDrawFamilies`, `PassCapture`'s withholding of the family's engine shapes by their
-property's vtable), the shapes key's part, and a trees view's per-family state (`ViewFrame::faces[f]`: pipeline, signature, groups;
-`ViewResources::faceRows[f][face]`, `faceLists[f][face]`, named by the faces' `rowName`/`listName` and the face's index; `ViewLatchLayout`'s
-`faceBytes`, `Extensions::DrawFamilyFaceBytes()`, each family's row and header at its `DrawFamilyFaceLayout`; `CommitView` calling
-`faces.face` per face). The GPU layout the shaders mirror is the feature's (`Features/TreeLod/TreeInstancesLayout.h`), and so is the cull
-group (`Features::TreeLod::kTreeLodCullGroup`, `TreeLodTables.h`), reported to Core as `faces.cullGroup`.
-The particles' palette rows followed, on the palette rows contract (`Api/FrameValues.h`, `PaletteRowsContribution`): Features/Particles
-takes `FrameValueItemClass::ParticleSystem`. It keeps the snapshot store (`Features/Particles/ParticleSnapshots`: the writer's thunks, the
-followed records, the expansion), the class's rule (five rows a particle of its capacity bucket), the quads' geometry slot (the renderer's
-quads, one slot a bucket), the frame's cameras (the main one and the first person's, from its frame start and kick), and the run: the
-records followed at its start, each chunk's members expanded into their blocks with their placements, the table published at its end; and
-its move writer, a reserved slot ("particle update", reserved through `InstallContext::ReserveMoveWriter` in `ParticleSnapshots::Install`
-before its thunks). The class is the kParticles contribution's data (`itemClass`: the plans' class, the walk's block and the geometry slot;
-`moves`: the mover trait). What it leaves Core is where the class is decided (`Extensions::PlannedItemClass`; `PaletteItemClassOf` in
-`LightingDescriptors`, Core's capture-side acceptance: a complete particle record; the Effect port's particle descriptors), the class's
-items due every frame,
-the deferral in FrameValues' chunks (sampled in order, finished in place), and the first-person writes' counters the first person's report
-reads (so Features/FirstPerson includes no Particles header). `Features/Effects` followed: its switches (`CS_DCLF_EFFECTS` after the forward epoch's;
-`CS_DCLF_OPAQUE_EFFECTS` after the primary exclusion's, behind tree wind's list-all, with the occlusion maps', the reflection's and the first
-person's switches still listed before it and the billboard particles' after it: the switch contract's anchors may name a feature's switch,
-registered before or after, `CheckSwitchAnchors`), its toggle (right after the forward epoch's, before the particles' and billboards', which
-need it: the feature is listed before them), two object classes (`ObjectClass::Effect`, read where Core read the toggle: the eligibility, the
-primary cull's membership passes, the scene capture's and the effect controllers' material captures, the census; `ObjectClass::OpaqueEffect`,
-taken unless the switch is 0, read by the Effect port's opaque rule as taken, `Extensions::ObjectClassTaken`, the rule's toggle being the
-decals'), its report lines among the forward epoch's (`ReportPoint::AsyncWorkForward`, after Features/Forward's, printed by
-`IndirectDraws::SharedEpochReport`, so they print when the forward epoch's do) and the Lighting variant's parity (`<- EFFECT LIGHT`, its own observer of the withheld blended passes). The Effect port followed it
-there, on the material port, program family, frame constant row and frame texture contracts (Core classifies every effect-shader item through it
-before a feature sees it: the particle systems and the billboards' effect shapes too): its constants (`EffectConstants.h`: the variable space,
-`EffectFlag`, `kMaterialKindEffect`, the frame rows, `kSoftDepthRegister`, the record bits), its descriptors and variants (`EffectDescriptors`),
-its material records (`EffectMaterial.cpp`, kind 1: `RegisterMaterialPort` returns it and the feature checks it; the port's `name`, "effect",
-names the census's classes, and its `emissiveOf` follows SetExternalEmittance), its capture and shading (`EffectProperty.cpp`), its frame rows
-and soft depth (`EffectFrame.cpp`), its program family (`EffectPrograms.cpp`) and its engine addresses (`Effects::Address`,
-`EffectConstants.h`: the effect shader, camera and blood). The effect controllers' and the effect material's write hooks followed, on the
-material-write sink (`EffectWrites.cpp`: BSEffectShaderPropertyFloat/ColorController::Update, slot 0x27, and
-BSEffectShaderMaterial::CopyMembers, slot 2; installed at the feature's install, whatever the toggle, logged as "effect write hooks
-installed"). What it leaves Core is what Core decides by: the verdicts (`Ineligible::EffectOpaque`/`EffectVariant`), the Effect family's slot
-(`kRasterEffect`, its spare bits, its programs' and pipelines' counters), the builds and passes, Effect.hlsl (package/Shaders), and the
-Lighting controllers' and the 14 Lighting material vtables' write hooks (`Core/Shading/MaterialWrites`). `Features/TreeLod`'s draws followed onto contracts keyed by draw family: the family's program block and engine shapes (the lane's
-programs, pipelines and recipes, and PassCapture's withholding, by family), the faces' data and per-face write (the per-family view state
-above), and the view roots (`Api::ViewRoot`: the faces' `root`, `LodTrees`; Features/Lod's `LodLandAndObjects` contribution).
-`Features/Shadows/Sun` took the sun's engine side: the accumulation (`Features/Shadows/Sun/SunAccumulation.{h,cpp}`, namespace
-`DCLF::Features::Shadows::Sun`: Accumulate, its cascade culls and registrations, the full-frustum cull and the entry exclusion, with the
-feature's own `ExcludeSun`), installed by its source hooks before `SunViews` (then `ShadowSourceHooks::CullsInstalled`, which
-Features/Shadows/Local's `LocalLightCull::Install` reads as `Extensions::SourceCullsInstalled(Sun)`); the source's `fullFrustumWindowEnd`; its switches and toggles
-(`CS_DCLF_SUN_SKIP`, `CS_DCLF_SUN_EXCLUDE`, after `CS_DCLF_SHADOWS`; "skip sun accumulation", "exclude sun entries", after "shadows"), which
-Core's "exclude primary entries" needs by name; its report lines at `ReportPoint::RenderThread` (`Diagnostics/SunAccumulationReport.cpp`)
-and its diagnostics (`Diagnostics/SunCasters`, `SunAccumulationView.h`). Its registration thunk also does the main
-registration's other work (PrimaryCull's owned masks, Shadows/Local's `LocalLightCull::NoteMainRegistration`, a static call: Shadows/Sun
-DEPENDS {Shadows/Local}), so without the feature the point lights' culls stay off (LocalLightCull's install warning), as when the call
-sites fail their check: no fallback. The exclusion's data is Features/Shadows/Local's since phase 10b (`SunExclusion.{h,cpp}`:
-`SunExclusion`, `TranslateExclusion`, `ForwardExclusion`, and `SunExclusionSlot`: render thread, `Publish` through the exclusion
-contribution's `publish`, `Pending`, `Take` at the full-frustum cull, `BeginFrame` at the contribution's `frameStart`, `TakeForwardCounts`
-for the feature's stats; Shadows/Sun DEPENDS {Shadows/Local}). What it leaves Core is the
-cascades' GPU form (`Draws::GpuCascade`, `GpuLayouts.h`; since phase 10 put by the sun volume's `SunCascadeSink`), the entry index space the exclusion is over
-(`Core/Scene/EntrySpace.{h,cpp}`: `EntrySpace`, `EntrySpaceChanges`, the ChangedEntries readers; the table, `EntrySpaceTable`, in
-`Core/Scene/Coordinator`; formerly SunCandidates and CandidateTable), and the sun's cascade bits as a Diagnostics event (`Diagnostics::SunBitsSet`).
-`Features/Shadows/Engine` followed in round 2 (phase 11), the shadow engine's epoch half: the shadow and occlusion epochs' passes
-(`ShadowEpochPasses.cpp`, from `Core/Render/Passes/Shadow.cpp`: `ShadowBuildDrawsPass`, `ShadowViewPass`, the latched copies, and the
-`shadows.*` PassDefs Core registered; the index pool's copies and the culling counters' readback through Core's factories,
-`Draws::MakeShadowIndexPoolPass`, `MakeShadowCullCounterPass`), with `ShadowFrame.h` made self-contained (and `CurrentShadowFrame` in it) and
-the latched copies' and latched dispatch's declarations moved to `Passes/DrawHelpers.h`; and their frame points (`ShadowEpochPoints.cpp`,
-from `Shadow/ShadowPoints.cpp`, behind `Api/ShadowEpochs.h`): the coverage and the shadow frame, the shadow epoch under `shadow-maps.after`,
-the maps' readiness and epoch under `occlusion.draw` (both triggers its own; `CoreTrigger` keeps `depth.committed` alone). Core's
-`ShadowPoints` keeps the views list (`Draws::ListShadowViews`). Listed right after Portals, before the features that build on it
-(Shadows/Sun, Shadows/Local, OcclusionMaps DEPEND on it); it registers no switch, toggle, pool, product or report line. Since round 3 it
-installs hooks of its own (`ShadowCasterPoints.cpp`, from its install): Main::Draw's call of `CalculateAndDrawShadowCasterLights` and the
-engine's light-keeping calls (`FUN_1414a3fb0`), which reach `FrameDriver`'s shadow casters' points.
-`Features/Skins` followed, the policy of which skinned shapes are DCLF's: its switches (`CS_DCLF_SKINNED`, `CS_DCLF_SKIN_PARTITIONS`, after
-`CS_DCLF_CULL`), its toggles ("skinned", `.before = "projected"`, opening "Object classes"; "skin partitions", `.after = "tree LOD"`, needing
-"skinned"), two object classes (`ObjectClass::Skinned`, `SkinPartitions`, read through `Extensions::ObjectClassOn` by the eligibility, the
-Lighting descriptors, the walk and the Effect descriptors) and its report line at `SceneCoordinatorLastPass` (`Diagnostics/SkinsReport.cpp`).
-Its toggles needed the toggle contract's `before`, and `after`/`before` naming any feature's toggle. The features that read skins declare it
-(DEPENDS: FirstPerson = {Actors, Skins}, Effects = {Skins}), and the layout check keeps a dependency listed before its dependent (rule 4:
-Skins right after Reflection, before Actors). What it leaves Core is the path a skinned shape takes once its class is on, shared with the
-classes that read skins (Actors, the LOD chains, FirstPerson, Effects, the blood decals): the skin engine facts (`Core/Engine/SkinPartitions.h`:
-the LOD table, `Mask` from the live skin or its record, `Of` the record's skin partitions, `LodOf` its LOD partitions;
-`Core/Engine/SkinPalettes.h`: the palette rows, `kRowsPerBone` 3, `kMaxRows` 240, `RowsOf(record)`, `Fits`, the engine's palette update
-`Update`, `Of` the palettes, `Sample` the update then the read, under the caller's lease), the palette part FrameValues shares with the
-particles (`kObjectPaletteBlock`, the C++ name of HLSL's `kObjectSkinned`), the drawn-range column the LOD chains and the decals share, the
-vertex stages' bones, `kTraitSkin` and the Ineligible reasons. The palette sample stays a per-item engine read; Skins as a palette-rows class
-is optional, and only with a timing A/B.
-`Features/Actors`' owner class followed: `Api::EntryClass::ActorOwned` on the entry class contract (`EntryClassContribution`,
-`RegisterEntryClass`; `Extensions::OwnerClassOf(const NodeRecord&)`, `OwnerClassOfForm`, `RegisteredOwnerClasses`, `OwnedEntriesLabel`), read
-as data where Core tested for an actor (`Tracked::owner`, `ownerReference`, `kTraitOwnerClass`, `FrameVerdictKept`,
-`EvaluateKind::Owned`/`OwnedNoRecord`, the reports' "actor" from the registered name).
-`Integrations/AdvancedSkin` followed, the first integration: Advanced Skin's wetness as a shading field (`SkinPerGeometry`) of the published
-actor-owned class, its owners' values (`OwnerValues.h`, formerly `Scene/Model/ActorValueIndex.h`) kept from the membership writes and
-captured at the frame's start, and its parities (`Diagnostics/`: the draw wetness in CaptureParity's skin line, the row wetness in
-SceneFrameLines' shading line). Its material textures (t71/t74) and their parity followed with the material contributors (below).
-`Features/Landscape` and `Integrations/TerrainBlending` followed. Landscape: its switch (`CS_DCLF_MTLAND`, `.before = "CS_DCLF_FORWARD"`),
-its toggle ("terrain", `.after = "projected"`) and the MTLand and MTLandLODBlend techniques (8, 19) under it, taking the land-blend extras
-(`ObjectExtras::LandBlend`). Terrain Blending: its classify input ("terrain blending defers": loaded and enabled, which replaced
-`TerrainBlendingDefersTerrain` and its snapshot scope), its switch (`CS_DCLF_TB_TERRAIN`, after the MTLand's) and toggle ("terrain under TB",
-after the terrain's and needing it), the gates on techniques 8 and 19 (needing its toggle while it holds the terrain: `MtLandEnabled`'s
-rule), its two held groups (`Appended0` "terrain", order 2, `kMultiTextureLandscape`, always; `Appended1` "terrain-no-blend", order 3,
-`kNoTransparencyMultiSample`, under its toggle; formerly Core's built-in ranges, `CoreMainRanges`; `Ineligible::TerrainNoBlend` became
-`Ineligible::Held`, its census text kept), its mask (t55, a frame texture with `capturedWhenNull`) and its near twin (its terrain depth's
-import and the depth pass's near test). Core no longer includes `Features/TerrainBlending.h`; the integration does. What they leave Core:
-the MTLand material handling (the Lighting port's SetupMaterial replica, the Landscape and LODLandscape vtables, the source signature's
-landscape bit, the PS names: one evaluator over a shared class table and constant space, until the material contributors), the land quads'
-`LandSetupProperties`, the landscape lights (`kObjectLandscapeLights`), the land-blend extras (`kObjectLandBlend`, its rows shared with the
-projected UV's mode word, the LandBlendParams hook, the capture and its parity) and the main pass's structure (the appended slots, the twin
-buckets, the terrain depth pass, BuildDrawsCS's layout). The near-test parity and the install's t55 line stay in Diagnostics, reading the
-feature live. LOD terrain was already `Features/Lod`'s.
-`Integrations/LightLimitFix` followed: its classify input ("light limit fix": loaded), which Features/Effects' Lighting variant reads by
-name (`NeedClassifyInput`; `kEffectVariantLightingNoLlf` stays the Effects'), its room index as the ancestor value (the nearest
-BSMultiBoundRoom or BSPortalSharedNode, LLF's GetParentRoomNode, looked up in its room map by `GetRoomMapGeneration`; record word 0, -1
-outside rooms), its graph buffers (t35-t37, `cs.llf.lights`, `cs.llf.light-index-list`, `cs.llf.light-grid`, from its ORG culling's
-`GetShaderResourceIndices`) and its parity (`Diagnostics/LightDataParity.cpp`: CaptureParity's StrictLightData check, called from it as
-AdvancedSkin's is; the dead shadow mask printed as 0). `Features/Manifest.cpp` checks t35-t37 and word 0. What it leaves Core is the key
-walk, the map's post and the join's lookup, the column (formerly `ObjectLights`, its `shadowBitMask` dead; now `ObjectAncestorValue`), and
-the zeroed StrictLightData block every draw reads (PS b3, frame-slot layout). Without the integration DCLF draws as with LLF not loaded:
--1, t35-t37 left to the frame buffers, "lighting-without-llf".
-`Features/GpuOcclusion` followed, on the depth pyramid contract (`Api/DepthPyramid.h`): the HZB's producer, its texture (`cs.dclf.hzb`),
-its downsample's program (`HzbCS.hlsl`, FidelityFX SPD, in the feature's shader folder; `FidelityFX/` stays where it is), its finished-group
-counter (the pyramid's scratch, `cs.dclf.hzb-counter`) and its pass (`cs.dclf.hzb`), with `HzbLayout.h`. It registers no switch, toggle,
-report line or parity. What it leaves Core is the test, shared by everything the cull reads: `CS_DCLF_CULL` (mode 2 tests the pyramid when
-there is one), BuildDrawsCS's HZB branch and `HzbTest.hlsli`, the two-phase visibility words, the phase 2 block's own passes, the latch's
-mip-0 convention, the bindings of BuildDraws and the tree LOD cull, and the HZB and two-phase lines and SET_PARITY's reasons in Diagnostics.
-The visibility events (`Core/Render/Passes/VisibilityEvents.cpp`, formerly `Occlusion.cpp`), their readback and the kAccumulated write-back
-are not occlusion: they read the fade roots' InView and phase 1's frustum stamps, and are the stand-in's write-back, Handoff's (reading
-Features/Fades' rows and states through the root states' view and the cull bindings).
-Without the feature, culling is frustum-only, as when the program fails.
-`Features/Forward` followed: the forward epoch's switches (`CS_DCLF_FORWARD`, `CS_DCLF_REFRACTION`, before `CS_DCLF_PROJECTED_UV`) and toggles
-("forward", before "shadows"; "refraction", after "effects", needing "forward"), two object classes (`ObjectClass::Forward`, `Refraction`,
-read where Core read the toggles) and the engine's two forward points (the main pass's blended-draw thunks, which run
-`SubmitForwardEpoch`, and Main::Draw's refraction check, with the refraction normals' engine marks written once
-`SubmitForwardEpoch` says it drew them), installed at its install. It is listed right before Effects, whose toggle needs "forward".
-Round 2 gave it the epoch's passes and submission: `ForwardPasses.cpp` (`ForwardDrawPass`, `RefractionDrawPass`, in `DCLF::Draws` for
-ORG's recipe names; `forward.draw`, `forward.refraction`, registered at its install, reading the colour shape through
-`PassContext::ShapeSegment`) and `ForwardEpoch.cpp` (the epoch resolved once by id, the toggles, `IndirectDraws::SubmitSharedEpoch` with
-refraction's preparation as its `prepare`: `RequestRefraction`, `SetRefractionInputs` with the engine blend state's write mask, the
-readiness test on the shape's refraction slots; refraction's counters and `RefractionDrawnThisFrame`; the `[DCLF] forward epoch` and
-`[DCLF] refraction` lines at `ReportPoint::AsyncWorkForward`, first). What it leaves Core is what Lighting's blended objects, Effects (with
-Particles and Billboards) and FirstPerson share: the forward and refraction ranges, their keys and bits (`kRasterForward`, `kObjectForward`,
-`kViewForward`), the forward sort (`core.forward-sort`, `MakeForwardSortPass`, which the views' `view.forward-sort` uses too), the shared
-epoch's submission, recording, coverage and counters, refraction's pipeline (see "Remaining architectural flaws") and normals import,
-`DeriveForward`; and the views' forward parts, which are the view engine's (`TryRequestForward`, `ForwardTargets`).
-`Features/Fades` followed, last of the features (listed last, where Core's fade code registered, so every shared point keeps its order:
-its family after TreeWind's trees, its component's reset after the others', its channels' drain and apply, its stand-in observer's
-updateEntry after Portals' and TreeWind's): the BSFadeNode/BSLeafAnimNode/BSTreeNode OnVisible port (`FadeState.{h,cpp}`) and the
-producer of the root states (`Api/RootStates.h`). It owns the fade roots as a journaled table family and the coordinator component that
-lists and steps their rows (`FadeRoots.{h,cpp}`: listed at a slot's record write and its held fade node's answer, released with the slot,
-reseeded by the snaps, re-amounted, switched, admitted); the engine channels "fade snaps" and "fade amounts" and the writers' engine hooks
-(`FadeEvents.cpp`, `FadeWriters.{h,cpp}`: FadeSnap at its early hooks; AnimatedFade and the fade OnVisibles at its install; the writer
-tables and stores at its stand-in observer's updateEntry, the animated batch at its listJobsDone); its render side (`FadeScene.h`: the
-"fade-seeds" pool, the scene resources with FadeStateCS's buffers, the root programs and the write-back ring, the depth commit hook, the
-passes `cs.dclf.z.fade-state` and `cs.dclf.z.fade-events` at the depth epoch's cull state (`fades.state`, `fades.events`), FadeStateCS in
-`Shaders/DrawcallLimitFix/Features/Fades/`, the write-back task as the root states' kick and wait, the frame bindings t120/t119 and the root
-cull bindings); the root states' registration (its view, test and globals key); its switches (`CS_DCLF_EMPTY_FADE_NODE`,
-`CS_DCLF_FADE_PARITY`, listed where Core's were); and its diagnostics (`Diagnostics/`: FadeStateCS's log against the port, with the root
-rows' inputs against the nodes, `FadeLog.cpp`, whose CPU re-check asks the main cull input's `judge`, `test` and `programWords`, so Fades
-includes no Portals header; the port against the engine's functions on node copies and the nodes' snapshot the log compares,
-`FadePortParity.cpp`; its report lines, `FadeLines.cpp`: the fade port at `PrimaryCullParity`, the fade roots at `PrimaryCullLast`, the
-write-back and the writers at `AsyncWorkWriteBack`; installed by `RegisterDiagnostics`, the parity's observers under its own `CS_DCLF_FADE_PARITY`, `FadeParity()`; Diagnostics' `Observation`
-has no fade flag). Its early hooks note the root states' producer installed (`Extensions::NoteRootStatesInstalled`, `FadeEvents.cpp`), which
-the primary cull's install requires (`Extensions::RootStatesInstalled`: without Fades it stays off with its warning, as without Portals' walk).
-Core's held fade node reads the feature's `CS_DCLF_EMPTY_FADE_NODE` by name (`RegisteredSwitchValue`). Its files: `Fades.h` (the entry),
-`FadesInternal.h` (the registrations, one per source, and the switches), `FadesFeature.cpp` (the install, the settings, the root states'
-registration), `FadeState.{h,cpp}` (the port), `FadeRecords.h` and `FadeLayout.h` (its records and GPU layout: the log entry, the events,
-FadeStateCS's constants), `FadeRoots.{h,cpp}` (the family and component), `FadeEvents.cpp` (the channels and the early hook),
-`FadeWriters.{h,cpp}` (the writers' hooks and stand-in observer), `FadeScene.h` with `FadeRender.cpp`, `FadeSeeds.cpp`,
-`FadeResources.cpp`, `FadeCommit.cpp`, `FadeStage.cpp` and `FadeWriteBack.cpp` (the render side, in RegisterRender's order), and
-`Diagnostics/` (`FadeDiagnostics.{h,cpp}`, `FadeLog.cpp`, `FadePortParity.cpp`, `FadeLines.cpp`).
-What it leaves Core is what the root states' readers share: the root-state vocabulary (the row and state layouts, the verdict and root
-bits, the record's root reference and its packing; mirrored by `package/Shaders`, so they stay in `Core/Scene/Model/Records.h`) and its readers
-(BuildDrawsCS, the shadow, focus and LOD paths); the stand-in's write-back (VisibilityEventsCS, its readback and decode, the kAccumulated
-writes: Handoff's); the stand-in's ownership sync (`SyncRootOwnership`, which posts the admitted roots to the component's `admitted`); the
-held fade-node reference TreeWind shares (`HoldFadeNode`, `MirroredFadeNode`); the mirror's fade fields and their writers; and the
-Lighting port's material LOD fades (`hasFadeNode`, `LodFadeFrame`, FrameGlobals' fade globals). The parities that read the root list
-(the set parity's fade-log focus, the accumulated, replay and resident parities, the cull counters) stay in Diagnostics, through
-`Extensions::RootListOf`.
-The material integrations followed, on the material contributor, the Lighting join rules and the per-draw buffers (listed after
-Integrations/LightLimitFix: TruePBR, SubsurfaceScattering, ExtendedTranslucency, LinearLighting). `Integrations/TruePBR`
-(`TruePBRIntegration.h`: `TruePBR.h` is CS's): the Replace contributor (order 0; `TruePBRMaterial.cpp`: `PBRTakesPass`, `EvaluatePBR`,
-handing the pass back to vanilla at CHECK_PBR_TEXTURE), its classes captured as Lighting's (BSLightingShaderMaterialPBR, ...PBRLandscape:
-`OwnClass`, `PBRMaterialBytes`, `PBRTextureFields`), its landscape layers at t80-t91, the TruePbr signature bit, its "glints" property bits
-and its pass rules (GetRenderPasses' swap, GetPixelTechnique's kept bits 3-5, SetupGeometry's raw technique), which apply whether or not it
-is loaded, as its hooks' ports always did; the contributor is active while it is loaded. Its parity is `Diagnostics/TextureParity`
-(CaptureParity's t80-t91 line). Its writes to materials reach Core through the shell, which forwards them to the sink
-(`Api::NoteMaterialWritten`). `Integrations/AdvancedSkin`'s material textures followed into it: the After contributor (order 0;
-`SkinTextures.cpp`: t71 and t74, two witness words, the frame's skin texture table held), its PS b7 per-draw buffer and the t71/t74 half of
-CaptureParity's skin line (`Diagnostics/TextureParity`, the line's text unchanged). `Integrations/SubsurfaceScattering`: the "beast race"
-reference fact (the actor's race keyword) and the IsBeastRace object flag (`kObjectBeastRace`, bit 3, and record bit 0, `kRecordBeastRace`,
-Lighting.hlsl's), per join from the fact and the feature's live state. `Integrations/ExtendedTranslucency`: the geometry extra
-("AnisotropicAlphaMaterial") and the Lighting key's spare bits (its translucency model, while it is loaded) with their permutation word.
-`Integrations/LinearLighting`: declaration-only, its PS b8 per-draw buffer. The frame texture integrations followed (round 3, listed
-after LinearLighting): `Integrations/VolumetricShadows` (t18, the shared shadow map CS last bound), `CloudShadows` (t25),
-`ExponentialHeightFog` (t19), `DynamicCubemaps` (t30, the reflections view CS last bound, and t31), `Skylighting` (t50, t53),
-`TerrainShadows` (t60), `WaterEffects` (t65) and `IBL` (t76-t79), each the CS feature's own view under the conditions CS binds it (the
-reflection's faces draw before the main pass captures its frame). Deferred's t98 is a frame buffer: the faces latch a copy of their own
-from this frame's contents. `Features/Manifest.cpp` checks the feature texture registers
-against the frame registers and DCLFObjects.hlsli's decode, the object flag, the record bit and the per-draw registers. What they leave
-Core: the hook frame (the engine globals the hooks share), the vanilla SetupMaterial replica with MTLand, `MaterialRecord`'s frozen feature
-texture slots, the signature's vanilla bits, `FrameCharacterLightView`, CS's b4 permutation layout (`extraFeatureDescriptor`), the emissive
-multiplier sampled with emitColor (the value Linear Lighting's b8 carries) and the witness mechanism.
-
 Not generalised (each a deliberate Core part, not a contribution):
 - **Billboard placement row** (`Core/Gpu/PlacementRows/BillboardRow`: `PlacementRows::SampleBillboardRow`, `BillboardFaceMode`). An item has
   one class (a particle under an NiBillboardNode gets both treatments; a class would change its rows and make them due every frame); three
@@ -600,9 +201,6 @@ Not generalised (each a deliberate Core part, not a contribution):
   a material map; a ShadowViews row contribution would be a per-object-per-frame callback; and `ShadowMaterialRow` is Utility.hlsl's frozen
   layout. The hooks push every move to the `TransformMoves` queue (the Lighting float controller's, in `Core/Shading/MaterialWrites.cpp`)
   whatever patches the frame VS variable; the kept shadow build drains it (the plain build rereads every row each build).
-
-The extension points still to come, as the next features need them:
-- the shared-bit manifest (object and record flags).
 
 ## The view contract
 
@@ -732,7 +330,7 @@ volumes reach Core on the light volumes contract (`Api/LightVolumes.h`).
 - **Resolved once.** `Extensions::ResolveShadowViews` (in `InstallFeatures`, after the views) makes each entry and derives each mode's
   phase (`phaseOfMode`), the set decision's readiness order (the casters', then the maps'), each engine view kind's source and the
   import order. A second registration of a source fails the install.
-- **Where it stands.** The occlusion maps are `Features/OcclusionMaps`' (their switches, toggles, bits, Skylighting's flag and texture,
+- **Ownership.** The occlusion maps are `Features/OcclusionMaps`' (their switches, toggles, bits, Skylighting's flag and texture,
   occluder rules, camera and accumulator, their reference parity, view check and report lines). The sun source is `Features/Shadows/Sun`'s
   (the accumulation, `SunAccumulation`, with its switches, toggles, report lines at `ReportPoint::RenderThread` and `fullFrustumWindowEnd`;
   its UpdateCamera hook, `SunViews`, writing the `Sun` board, which it hands Core as the source's camera and the sun volume; the exclusion's
@@ -820,7 +418,7 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
   to their rows (`EpochTrigger`, `TriggerName`, `CoreTriggerOf`), runs the setups
   (`SetUpPassStates`, from `EnsureSceneBuffers`), gives the depth commit its latch word (`PassLatchWord`), and adds an extension's
   epochs' passes when its `GatherStructuralPasses` asks (`GatherScheduled`), epoch by epoch in table order. ORG orders the epochs;
-  within an epoch the passes keep the table's order. Each extension still registers its own resources in `PrepareForBuild`.
+  within an epoch the passes keep the table's order. Each extension registers its own resources in `PrepareForBuild`.
 - Rule 6 below keeps it the one way in: nothing else adds a pass.
 
 ## The rules
@@ -830,8 +428,9 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
 1. **Only the shell tests `CS_HAS_DCLF`.**
    - CMake defines it when the render graph and ORGModuleServices are present, and otherwise leaves the DCLF tree out of
      the build.
-   - No file in the tree tests a dependency macro.
-2. **The rest of CS reaches DCLF only through the shell.** Later it will also go through `Api/`.
+   - No file in the tree tests a dependency macro (`CS_HAS_DCLF`, `CS_HAS_RENDER_GRAPH`, `CS_HAS_ORG_MODULE_SERVICES`,
+     `ORG_MODULE_SERVICES_HAS_DXC`): the tree is not built without them (`cmake/RenderGraph.cmake`).
+2. **The rest of CS reaches DCLF only through the shell.** No file outside the tree includes a header inside it.
 3. **Includes point one way.**
    - `Api/` includes `Api/`.
    - `Core/` includes `Api/` and `Core/`.
@@ -840,7 +439,7 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
    - The dependencies are the check's `DEPENDS` (Shadows/Sun: Shadows/Engine, Shadows/Local; Shadows/Local: Shadows/Engine;
      OcclusionMaps: Shadows/Engine; LocalLights: Portals; FirstPerson: Actors, Skins; Effects: Skins; Actors: Shadows/Sun, Shadows/Local).
    - `Diagnostics/` may be included from anywhere. Production code reaches it only through its observer contract (`Hooks.h`,
-     `Observation`, `Policy`), which the parity rework will redefine.
+     `Observation`, `Policy`), which the parity rework redefines ("Not yet in place").
 4. **A dependency installs first.** Every feature `DEPENDS` names is listed in `Features/FeatureList.cpp` before the feature that
    depends on it, so its registrations (toggles, classes, report lines) run first.
 5. **The top level is closed.** Every file is in `Api/`, `Core/`, `Features/`, `Integrations/`, `Diagnostics/` or `Schedule/`,
@@ -849,9 +448,10 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
 6. **Passes reach the graph through the schedule's executor alone.**
    - Under the tree, `AddPass(` and `.Epoch(` appear only in `Core/Render/Epochs/ScheduleExecutor.cpp` (the gather and
      `PassOut::Add`), in `Core/Render/Passes/PassHelpers.h` (AddPass's definition) and in `Diagnostics/`, whose `MainGraphPasses`
-     observers append finished descs until a later step.
+     observers append finished descs at the `diag.*` anchors ("Remaining architectural flaws").
    - `host->AddExtension` appears only in `Core/Render/Resources/Resources.cpp`.
-   - `Schedule/` includes only `Api/` (and CS's `RenderGraph/RenderGraphRuntime.h`); nothing under the tree includes `Schedule/`.
+   - `Schedule/` includes only `Api/` (and CS's `RenderGraph/RenderGraphRuntime.h`); nothing under the tree includes `Schedule/`:
+     only the shell does.
 7. **Complexity may only shrink.** The functions over the thresholds (120 lines or cyclomatic complexity 40) are counted
    against a baseline, which each split lowers (`--update`). A function not in the baseline may not cross them. `EXEMPT`
    names the ones not counted, each with its reason (a data table, a flat verdict chain a split would only fragment).
@@ -869,29 +469,9 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
    - `Internal.h` stays Core's umbrella. The top-level `Diagnostics/` is exempt (its `Draws/DrawsView.h` names the
      implementation for the observers).
 
-## The order
-
-Each step is a move-only commit, then a commit that extracts the code. It is verified with:
-- the build, both with and without the render graph;
-- the CPU tests;
-- a normal run, plus `PERSISTENT_PARITY` and `SET_PARITY` runs;
-- the motion timing run, for steps that change code.
-
-The steps:
-1. Put the dependency guard in one place, and add the layout check. *Done.*
-2. `Core/Runtime`, `Core/Engine`, `Core/Settings`, `Core/Scene/SceneWake`. *Done.*
-3. Split `IndirectDraws` into `Core/Render`. *Done.*
-4. Split `Coordinator.h` into the coordinator's core plus one component per concern. *Done (`Core/Scene/Coordinator/State/`).*
-5. Two pilot features, `TextureTransforms` then `TreeWind`. Together they define the first extension points. *Done.*
-6. The other features, least entangled first, `Fades` last; then the integrations. *Done.* The main view's draws and points followed in
-   round 2 (`Features/MainView`; what Core keeps of it: "The target"), then the shadow engine's epoch half (`Features/Shadows/Engine`).
-7. Dissolve `Scene/` and `Engine/` into Core (`Core/Scene`, `Core/Engine/Capture`, `Core/Handoff`, `Core/Shading`), then split what
-   remains over the thresholds. *The move is done (no legacy includes left); the splits are landing.*
-
 ## Remaining architectural flaws
 
-What the round's moves left in Core that a feature alone uses, and why. The first is the largest, and the one the round did not
-attempt.
+What Core keeps that a feature alone uses, and why. The first is the largest.
 - **BuildDrawsCS composes every feature's cull logic in one Core shader.** One compute program (`kBuildDrawsShader`,
   `features/Drawcall Limit Fix/Shaders/DrawcallLimitFix/BuildDrawsCS.hlsl`) runs once per view and phase and holds, switched by latch
   words and bindings rather than by features registering code:
@@ -905,9 +485,9 @@ attempt.
     first-person forward branch, the HZB test TreeLod's cull shares (`HzbTest.hlsli`), and the one feature stage word
     (TextureTransforms' latch word).
 
-  So a feature's GPU behaviour in the cull is still Core's code: adding or changing one edits Core's shader and its latch layout
+  So a feature's GPU behaviour in the cull is Core's code: adding or changing one edits Core's shader and its latch layout
   (`BuildDrawsLatch`, `GpuLayouts.h`), and the latch has room for one stage word. It stays because it is one dispatch per view and phase:
-  giving a feature its own cull pass would walk the scene list and read the visibility words again (extra GPU work), which the round
+  giving a feature its own cull pass would walk the scene list and read the visibility words again (extra GPU work), which is
   ruled out. A fix keeps the single dispatch and moves the code: each feature contributes an `.hlsli` of stage functions plus a range of
   latch words, and the program is generated from the registered stages at shader-compile time (an include list and a stage table in
   feature order), so the features own their cull code and Core owns only the walk, the visibility words and the stage calls.
@@ -955,14 +535,13 @@ attempt.
   - the shadow extension and its resources' registration (`Passes/Shadow.cpp`, added from `Resources.cpp`, rule 6), as the main and view
     extensions';
   - the epochs' commits (`IndirectDraws::ExecuteShadowFrame`, `ExecuteOcclusion`, `Shadow/ShadowEpochs.cpp`), which the feature's handlers
-    call. Split as Features/Forward's submission was, nothing feature-specific is left in them: every step writes Core's private state
+    call. Like Features/Forward's shared-epoch submission, they hold nothing feature-specific: every step writes Core's private state
     (`failed`, `stats`, `shadowStats`, the revision's latch clamps and misses, the shadow engine's committed payload and execution owner),
     every early return counts into those counters, and the decision to submit is the toggles' and the revision's, which they read
     themselves. So the bodies stay Core's whole, each executed in its epoch's segment (`EpochTraitsOf(epoch).segment`, no literal), and
     the feature holds the calling and the triggers.
-- **Diagnostics' passes reach the graph through anchors.** The `diag.*` keys are the only anchors left: Diagnostics' `MainGraphPasses`
-  observers append finished descs (cull counters, the foliage compare) at three points, exempt from rule 6 until the parity rework
-  gives Diagnostics PassDefs of its own.
+- **Diagnostics' passes reach the graph through anchors.** The `diag.*` keys are the only anchors: Diagnostics' `MainGraphPasses`
+  observers append finished descs (cull counters, the foliage compare) at three points, exempt from rule 6 ("Not yet in place").
 - **Kept in Core on purpose (not flaws, recorded so they are not moved by accident):**
   - **Billboard rows** (`Core/Gpu/PlacementRows/BillboardRow.h`): sampled for every moving object whatever the toggle, read per slot
     by three parities, and laid out as Effect.hlsl's frozen `DCLFBillboardWorld` decode; the header gives the full reasoning.
@@ -976,3 +555,14 @@ attempt.
   - **The fixed-slot enums named after features** (`ObjectClass`, `EngineView`, `DrawFamily::TreeInstances`, `ProgramFamily::Effect`,
     `OcclusionMap`, `ShadowSource`, `MainRangeSlot`): Core's slot vocabulary, which features fill; adding a slot is a Core change by
     design.
+
+## Not yet in place
+
+Checked against the tree; the plans are in [dclf-roadmap.md](./dclf-roadmap.md).
+- **Diagnostics' own PassDefs.** Diagnostics adds its passes through the `diag.*` anchors and is exempt from rules 6 and 8 until
+  the parity rework gives it PassDefs and redefines its observer contract (`Hooks.h`, `Observation`, `Policy`).
+- **Diagnostics' area folders.** `Diagnostics/{Scene,Engine,Draws}` are named after layers, not areas; the parity
+  rework regroups them by area.
+- **The complexity splits.** 13 functions are over the thresholds (`tools/dclf-layout-baseline.json`); rule 7 lets the count
+  only fall.
+- **BuildDrawsCS's generated stages.** Every feature's cull logic is in Core's shader ("Remaining architectural flaws").

@@ -195,7 +195,7 @@ namespace DCLF
 		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::DepthCommitted));
 		IndirectDraws::Get().CaptureDepthPass();
 		// The views' work at the depth commit (Features/Reflection's: the frame's reflection faces, every TESWaterReflections::Update of the
-		// frame having run, two a frame, a face each, drawn by DCLF in one epoch before the water reads the cube; dclf-lod.md, "Water
+		// frame having run, two a frame, a face each, drawn by DCLF in one epoch before the water reads the cube; dclf-architecture.md, "Water
 		// reflections"). It must follow the depth commit, which brings
 		// the index pool and the scene's buffers to the frame's publication whose scene list the faces draw: against the frame before's
 		// pool, a slot the publication gave another geometry would draw its old indices against its new vertices (a device fault).

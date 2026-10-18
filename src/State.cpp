@@ -1148,7 +1148,7 @@ std::string State::GetDefinesString()
 
 std::shared_ptr<const std::vector<std::pair<std::string, std::string>>> State::GetDefines()
 {
-	// CS_DCLF_SHADOW_DEBUG_OUTPUT (dclf-open-defects.md): Lighting.hlsl writes chosen intermediate values into the Diffuse
+	// CS_DCLF_SHADOW_DEBUG_OUTPUT (dclf-validation.md, "Shader debug output (`CS_DCLF_SHADOW_DEBUG_OUTPUT`)"): Lighting.hlsl writes chosen intermediate values into the Diffuse
 	// target, native and DCLF alike (DCLF_SHADOW_DEBUG).
 	static const bool shadowDebug = Util::SwitchFile::Enabled("CS_DCLF_SHADOW_DEBUG_OUTPUT");
 	std::scoped_lock lock(shaderDefinesMutex);

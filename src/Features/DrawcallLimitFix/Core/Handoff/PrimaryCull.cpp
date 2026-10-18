@@ -396,7 +396,7 @@ namespace DCLF
 			SyncCut(candidates, changedEntries);
 		}
 		Diagnostics::Notify<Diagnostics::EnginePoint::CutSynced>();
-		// Switch events name the entries to read again (dclf-cull-job-elimination.md); a resync or skipped frame reads all.
+		// Switch events name the entries to read again (dclf-architecture.md, "Switch nodes"); a resync or skipped frame reads all.
 		cut.liveEvents = Scene::SwitchEventsLive();
 		if (cut.liveEvents) {
 			if (liveStale) {
@@ -971,7 +971,7 @@ namespace DCLF
 		Diagnostics::Notify(Diagnostics::StandInEntry{ a_slot, e, a_object });
 		const bool fadeRoot = plan == EntryPlan::FadeRoot || plan == EntryPlan::LeafRoot || plan == EntryPlan::TreeRoot;
 		// Fades and LOD cross-fades are FadeStateCS's; a faded-out root draws nothing. A cross-fade's hint-10 copy is not drawn
-		// (drawcall-limit-fix.md, "LOD cross-fades": none in SE's settings); crossing roots (+0x153 bits 4-6 not 2) are counted.
+		// (dclf-architecture.md, "LOD cross-fades": none in SE's settings); crossing roots (+0x153 bits 4-6 not 2) are counted.
 		if (fadeRoot && (At<std::uint8_t>(a_object, 0x153) & 0x70) != 0x20)
 			++out.notSettled;
 		if (!cut.admitted[e]) {

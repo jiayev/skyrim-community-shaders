@@ -938,7 +938,7 @@ namespace DCLF::Draws
 		state.written = true;
 	}
 
-	// The resident region (drawcall-limit-fix.md, "Persistent resident draws"): draw inputs kept across frames, changed only by
+	// The resident region (dclf-architecture.md, "Persistent resident draws"): draw inputs kept across frames, changed only by
 	// the tables' change log, a pipeline's set index or a pair's record failing. The loop skips its objects; PayloadBuilder sends
 	// a backing only what changed since its content epoch.
 	void MainBuild::BuildResidentRegion()

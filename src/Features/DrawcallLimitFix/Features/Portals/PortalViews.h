@@ -194,7 +194,7 @@ namespace DCLF
 
 		/**
 		 * @brief A shadow light's rooms as its own portal-graph entry holds them (FUN_1414a2530 -> FUN_1414a6400 ported; the cases are
-		 * in drawcall-limit-fix.md, "PortalViews::WalkLight"). Kept per light by the caller; an unwalked light keeps its entry. The
+		 * in dclf-architecture.md, "PortalViews::WalkLight"). Kept per light by the caller; an unwalked light keeps its entry. The
 		 * camera is the light's room process's (+0x128 -> +0x18, or the NiCamera constructor's before one exists); +0x30200 (a shadow
 		 * light's process) is read with it. Occluder states and boxes are the main walk's; edge flags persist only for a kept light.
 		 */

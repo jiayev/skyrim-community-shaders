@@ -36,7 +36,7 @@ namespace DCLF
 		/**
 		 * @brief The same comparisons for a Lighting draw of the water reflection's cube map faces (ReflectionFaces): the object's
 		 * main material, technique and PerGeometry constants against what the face binds, under labels of their own ("face ..."),
-		 * which say what a face's rows must hold differently (dclf-lod.md, "Water reflections").
+		 * which say what a face's rows must hold differently (dclf-architecture.md, "Water reflections").
 		 */
 		void OnFaceLightingDraw(const RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags);
 
@@ -150,7 +150,7 @@ namespace DCLF
 		std::map<std::string, std::uint32_t> materialMismatchResolved;
 		std::uint64_t geometryMismatches = 0;  // ... in PerGeometry constants
 		// Draws whose shading (MaterialData, EmitColor, SSRParams.w, the emissive multiplier) changed between the frame's start, when
-		// FrameValues sampled the row DCLF draws with, and the native draw: an accepted difference (dclf-async-publication.md,
+		// FrameValues sampled the row DCLF draws with, and the native draw: an accepted difference (dclf-architecture.md,
 		// "Accepted differences"). Those draws' PerGeometry is compared with the engine's shading now, which checks the sampling.
 		std::uint64_t shadingSinceStart = 0;
 		std::uint64_t techniqueMismatches = 0; // ... in PerTechnique constants or filter modes

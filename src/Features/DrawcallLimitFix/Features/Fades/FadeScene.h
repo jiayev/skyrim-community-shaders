@@ -34,7 +34,7 @@ namespace DCLF
 namespace DCLF::Features::Fades
 {
 	/**
-	 * @brief The fade write-back's host side (drawcall-limit-fix.md, "The fade write-back"): its events handed to the write-back task
+	 * @brief The fade write-back's host side (dclf-architecture.md, "The fade write-back"): its events handed to the write-back task
 	 * in batches through a lock-free stack. A frame whose epoch did not run is counted missed: FadeStateCS did not run either, so
 	 * nothing is lost.
 	 */
@@ -168,7 +168,7 @@ namespace DCLF::Features::Fades
 
 	/**
 	 * @brief Render thread, the frame's start (the root states' kick: Extensions::RootStatesKick): hands the fade events read back since the
-	 * last kick to a task on DCLF's executor that judges them into the stores WriteFadeStores makes (drawcall-limit-fix.md, "The fade
+	 * last kick to a task on DCLF's executor that judges them into the stores WriteFadeStores makes (dclf-architecture.md, "The fade
 	 * write-back"). Without it a stood-in root's node stays as the engine last wrote it for its readers (tree LOD crossfade, occlusion
 	 * cull, animation gate). FadeWriteBack.cpp.
 	 */

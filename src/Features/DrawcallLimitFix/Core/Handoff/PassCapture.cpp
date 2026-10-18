@@ -186,7 +186,7 @@ namespace DCLF
 	{
 		if (!a_pass || !a_pass->geometry || !Policy::WithholdFromEngine() || !IsMainRenderer(a_batch))
 			return false;
-		// Tree LOD (dclf-lod.md, "Tree LOD: the draws"): DCLF draws every instance the mirror holds this frame, so the engine's
+		// Tree LOD (dclf-architecture.md, "Tree LOD: the draws"): DCLF draws every instance the mirror holds this frame, so the engine's
 		// passes of every tree LOD shape (its Z-prepass's, hint 7 into group 1 through the shadow modes' registration; its colour
 		// pass's, hint 7 into group 1) are withheld. So for every draw family DCLF draws this frame: its engine shapes' passes.
 		for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)

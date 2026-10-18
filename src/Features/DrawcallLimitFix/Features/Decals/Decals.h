@@ -1,6 +1,6 @@
 #pragma once
 
-// Decals (CS_DCLF_DECALS, CS_DCLF_LAYERS; drawcall-limit-fix.md; engine notes, "decals"): the engine's decals (accumulation hints 2 and 3)
+// Decals (CS_DCLF_DECALS, CS_DCLF_LAYERS; dclf-architecture.md, "Decals and pass layers"; engine notes, "decals"): the engine's decals (accumulation hints 2 and 3)
 // and multi-index shapes' layers (hint 12), which DCLF draws in its decal groups after the opaque draws, each group in the engine's draw
 // order. The feature registers its switches and live toggles, the decal and layer object classes' contributions (Api::ObjectClass: the
 // Lighting and Effect ports' eligibility reads the toggles through them, as data), the decal nodes' arrays (their edits' engine hooks

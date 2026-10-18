@@ -33,7 +33,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeLogEntries = 64;
 
 	/**
-	 * @brief The fade write-back (drawcall-limit-fix.md, "The fade write-back"): a stood-in root whose fade crossed a milestone
+	 * @brief The fade write-back (dclf-architecture.md, "The fade write-back"): a stood-in root whose fade crossed a milestone
 	 * (faded out, fading, faded in) or whose leaf LOD level or transition changed. Appended after a header (count, the depth
 	 * commit's scene frame - always written - and two of padding); the host writes them onto the nodes in frame order.
 	 */

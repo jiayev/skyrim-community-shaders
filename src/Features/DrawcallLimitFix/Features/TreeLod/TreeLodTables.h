@@ -49,7 +49,7 @@ namespace DCLF::Features::TreeLod
 	};
 
 	/**
-	 * @brief Tree LOD's tables (dclf-lod.md; Api::SceneResources' state, render thread but for the handles, made once at setup): shape
+	 * @brief Tree LOD's tables (dclf-architecture.md, "Tree LOD: the draws"; Api::SceneResources' state, render thread but for the handles, made once at setup): shape
 	 * rows, instance records (75 per shape slot), mesh rows, draw row and visible list, read by address in the vertex stage (the draw
 	 * row's names the adopted set's versions). TreeLodCullPass fills the list in the depth epoch. ready: the row names its slots.
 	 *

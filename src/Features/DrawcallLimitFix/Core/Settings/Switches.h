@@ -46,7 +46,7 @@ namespace DCLF
 		CapturePointParity,
 		AccumulatedParity,
 
-		// Diagnostics: stats, shader debugging, and the probes of open investigations (dclf-open-defects.md).
+		// Diagnostics: stats, shader debugging, and the probes of open investigations (dclf-validation.md, "Probes and diagnostics").
 		Stats,
 		PassStats,
 		Profile,

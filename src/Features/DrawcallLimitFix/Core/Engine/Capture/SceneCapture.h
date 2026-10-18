@@ -18,7 +18,7 @@ struct ID3D11Buffer;
 namespace DCLF::SceneCapture
 {
 	/**
-	 * @brief Engine scene values as the scene work reads them (dclf-async-publication.md). The scene work reads no engine memory:
+	 * @brief Engine scene values as the scene work reads them (dclf-architecture.md, "The scene mirror"). The scene work reads no engine memory:
 	 * the hook that changed a value captures it on the writer's thread and the event applies it, in order, to the mirror. The
 	 * mirror parity (CS_DCLF_MIRROR_PARITY) probes with the same capture functions, so a field differing with no event names a
 	 * missed writer.

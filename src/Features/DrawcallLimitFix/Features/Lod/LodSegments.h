@@ -11,7 +11,7 @@
 namespace DCLF::LodSegments
 {
 	/**
-	 * @brief Object LOD's segments (AE 1.6.1170; dclf-lod.md, "Object LOD: segments").
+	 * @brief Object LOD's segments (AE 1.6.1170; dclf-architecture.md, "Object LOD: segments").
 	 *
 	 * A BSSubIndexTriShape (geometry type 8) of a LOD block has one segment per cell of its terrain node. While the node is in
 	 * the active grid, the terrain manager hides the segments of the cells that are attached (FUN_1405110b0, and

@@ -1,5 +1,5 @@
 // A trees view's draw families per face (IndirectDraws.h, "The view engine"): what the view features read of Core's draw families' faces
-// (Api/DrawFamilies.h: each family's slot and entry; tree LOD's), under each family's class (read as data; dclf-lod.md, "Water
+// (Api/DrawFamilies.h: each family's slot and entry; tree LOD's), under each family's class (read as data; dclf-architecture.md, "Water
 // reflections"). A trees view's families' pipelines, ownership and rows (ResolveViewFaces, DecideViewFaces, ViewFaceRows; none but in a
 // trees view) and a LodTechniques view's phase readiness (LodPhaseReady); the roots its faces draw are ViewRoots.cpp's. Render thread,
 // but for LodPhaseReady (the scene lane's commit).

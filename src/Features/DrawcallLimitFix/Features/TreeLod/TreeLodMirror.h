@@ -21,7 +21,7 @@ struct ID3D11Buffer;
 namespace DCLF::Features::TreeLod
 {
 	/*
-	 * Tree LOD (AE 1.6.1170; dclf-lod.md, "Tree LOD: what the engine does").
+	 * Tree LOD (AE 1.6.1170; dclf-architecture.md, "Tree LOD: what the engine does").
 	 *
 	 * Each BGSDistantTreeBlock's TreeGroup becomes one BSMultiStreamInstanceTriShape under the LOD trees root (0x14315b880),
 	 * made by the block's attach (FUN_140503630) from its tree type's base shape and drawn instanced from one instance group.
@@ -178,7 +178,7 @@ namespace DCLF::Features::TreeLod
 	};
 
 	/**
-	 * @brief The render thread's mirror (dclf-lod.md): the engine's tree LOD groups and their instance records, by events. Drained at the
+	 * @brief The render thread's mirror (dclf-architecture.md, "Tree LOD: the draws"): the engine's tree LOD groups and their instance records, by events. Drained at the
 	 * frame requests, running or not (the family's serve); the depth commit uploads what it changed.
 	 */
 	Mirror& RenderMirror();

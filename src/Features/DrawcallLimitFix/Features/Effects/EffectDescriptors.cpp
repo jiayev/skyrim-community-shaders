@@ -48,7 +48,7 @@ namespace DCLF::Features::Effects
 			// DEFERRED: forge coals, slag) drawn through decal group 1: depth by
 			// the decal depth pass (LESS_EQUAL, no bias), colour with write mode 1 and no blending. Only a pass that is hint 0 every frame:
 			// no Falloff, depth tested and written (SetupGeometry's mode 3). A property alpha below one makes the engine's pass hint 1,
-			// blended by the frame's alpha: DCLF keeps it opaque (drawcall-limit-fix.md, "Opaque effects").
+			// blended by the frame's alpha: DCLF keeps it opaque (dclf-architecture.md, "Opaque effects").
 			const bool opaqueEffects = Extensions::ObjectClassTaken(Api::ObjectClass::OpaqueEffect);
 			a_draw.opaque = !a_draw.blending && !a_draw.decal;
 			if (a_draw.opaque && (!opaqueEffects || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal) || (f & Bit(Flag::kFalloff)) || !(f & Bit(Flag::kZBufferTest)) ||
@@ -230,7 +230,7 @@ namespace DCLF::Features::Effects
 
 	Ineligible DeriveEffectDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, LightingDescriptors& a_out)
 	{
-		// drawcall-limit-fix.md, "The Effect shader in the forward epoch": whether and how the pass is drawn, its descriptor, and the
+		// dclf-architecture.md, "The Effect shader in the forward epoch": whether and how the pass is drawn, its descriptor, and the
 		// descriptors and group state it is drawn with.
 		EffectDraw draw;
 		if (const Ineligible reason = EffectDrawOf(a_property, a_leaf, draw); reason != Ineligible::None)

@@ -19,7 +19,7 @@ namespace DCLF::Features::Shadows::Local
 	struct SunExclusion;
 
 	/**
-	 * @brief The point lights' shadow culls without the entries DCLF draws (drawcall-limit-fix.md, "Point lights' shadow culls
+	 * @brief The point lights' shadow culls without the entries DCLF draws (dclf-architecture.md, "Point lights' shadow culls
 	 * without DCLF's entries"). AE only. The point lights' culls run on the render thread; the detours and registration hook on any.
 	 *
 	 * BSShadowParabolicLight::Accumulate (0x14151b960) culls through BSCullingProcess::Process (FUN_1414bf320) with the static

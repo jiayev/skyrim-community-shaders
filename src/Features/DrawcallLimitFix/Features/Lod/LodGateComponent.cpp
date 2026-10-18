@@ -1,4 +1,4 @@
-// The LOD gates' scene side (LodGates.h has the engine side; dclf-async-publication.md, "T6b5, the scene side"): the
+// The LOD gates' scene side (LodGates.h has the engine side; dclf-architecture.md, "LOD gates: the scene side"): the
 // component's gates, opened by their events, the commit's withholding and flips, and the outcomes that retire them (drained from the
 // engine side: LodGates::DrainOutcomes). Scene lane; the coordinator only through the hooks' context.
 

@@ -170,7 +170,7 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief One main segment's resident draws (drawcall-limit-fix.md, "Persistent resident draws"): the draw inputs of
+	 * @brief One main segment's resident draws (dclf-architecture.md, "Persistent resident draws"): the draw inputs of
 	 * the resident records (Coordinator's), dense, at the head of the segment's input buffer. Written by the main build only,
 	 * from the tables' change feed; the payloads share the inputs copy-on-write, and PayloadBuilder catches a backing up from
 	 * its content epoch.

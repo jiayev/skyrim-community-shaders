@@ -17,7 +17,7 @@ namespace DCLF
 {
 	/**
 	 * @brief The bytes the render thread writes for the GPU each frame, by where they go: what the frame's epochs carry through the
-	 * render thread (dclf-async-publication.md, "Frame data through the render thread"). Fed at the three ways a commit writes
+	 * render thread (dclf-architecture.md, "Frame data through the render thread"). Fed at the three ways a commit writes
 	 * per-frame data - a latched copy (LatchedUploads: "latched: <target>", the frame-constants buffer by slot), a staged upload
 	 * (CommitUploads: "staged: <target>") and a latch block's write (LatchWrite: "latch: <what>") - so nothing the render thread
 	 * sends is left out. What a worker or the pool sends (staged batches, FrameValues) is not the render thread's and is not counted.
