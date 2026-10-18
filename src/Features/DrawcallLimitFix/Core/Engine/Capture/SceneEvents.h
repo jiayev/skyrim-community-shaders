@@ -52,9 +52,16 @@ namespace DCLF::Scene
 			SceneTracker::Get().PushUpdate(SceneCapture::Update{ a_fields, SceneCapture::CaptureGeometry(*a_geometry) });
 	}
 
-	/** @brief A geometry whose property or alpha was swapped: its leaf, applied as a capture when the mirror holds it. */
+	/**
+	 * @brief A geometry whose property or alpha was swapped: its leaf, applied as a capture when the mirror holds it. In the world
+	 * only, as the mirror's records: a subtree out of it is captured whole at its world attach, and its pins could hold an object no
+	 * owner references yet (a clone's root under construction, or the projectile pool's master clone, which the pool keeps by a raw
+	 * pointer at refcount 0), whose release at Present would free it under its owner (dclf-architecture.md, "Engine references").
+	 */
 	inline void PushLeafUpdate(const RE::BSGeometry& a_geometry)
 	{
+		if (!SceneCapture::InWorld(&a_geometry))
+			return;
 		using G = SceneCapture::GeometryRecord;
 		// A capture too: numbered at its start.
 		const auto sequence = SceneCapture::NextSequence();

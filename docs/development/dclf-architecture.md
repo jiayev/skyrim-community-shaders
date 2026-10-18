@@ -256,6 +256,11 @@ When a worker may touch the engine's scene graph (`Core/Engine/EngineReadWindow.
     ancestors; the batch keeps them until the render thread releases it at Present. The scene work's engine references are
     copies of pins (`HoldProperties`, the root owners). A key the mirror names that nothing pins is refused: a key is never turned
     into a reference.
+-   **Pins only in the world.** A pin is taken only on an object in the world (`SceneCapture::InWorld`), where its parent holds
+    it. Out of the world an object may have no reference at all: the engine keeps a clone's root at refcount 0 while it builds it,
+    and the projectile clone pool keeps its master clone by a raw pointer for its whole life (`FUN_14021c800`, destroyed directly
+    by `FUN_14021d140`). A pin on such an object frees it at Present under its owner. Leaf updates (`PushLeafUpdate`) are dropped
+    out of the world, as the mirror's records are; the subtree is captured whole at its world attach.
 -   **Releases.** No engine object's last reference is dropped on a DCLF thread. The scene work hands references back
     (`EngineReleases`, a lock-free queue released at Present; `HandBack`); `CS_DCLF_RELEASE_GUARD` observes it. Why: engine
     destructors run Havok teardown and crash off the main thread.
