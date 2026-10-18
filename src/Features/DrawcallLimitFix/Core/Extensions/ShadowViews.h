@@ -123,6 +123,7 @@ namespace DCLF::Extensions
 		std::uint32_t viewBit = 0;                    // its view bit at the GPU cull
 		std::uint32_t (*technique)(const Api::OccluderLeaf&) = nullptr;  // its occluder rule, per walked entry
 		bool minRadius = false;                       // its cull's size test (kCullMinRadius)
+		float (*floorHeight)() = nullptr;             // its cull's floor (a cull plane at the epoch's latch), none: no floor
 		Api::OcclusionTarget target = Api::OcclusionTarget::EngineMask;
 		std::string list, report, targetName;         // its labels, owned here
 		void (*importTarget)(Api::OcclusionTargetImport&) = nullptr;

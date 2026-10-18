@@ -61,6 +61,9 @@ namespace DCLF::Api
 	 *   it occludes nothing.
 	 * - minRadius: the map's cull draws nothing of an object whose bound radius is at most 32 (Skylighting::OcclusionTechnique's size
 	 *   test).
+	 * - floorHeight (optional): render thread, as the map's epoch latches its view: a world height; the map's cull draws nothing of an
+	 *   object whose bound lies wholly below it (Skylighting::OcclusionTechnique's probe grid test: an occluder below every probe is on
+	 *   no probe's ray to the sky). None: no test.
 	 * - camera (required): render thread, as the map's view is set up (DrawcallLimitFix::OcclusionView) while DCLF runs: the camera the
 	 *   map is drawn from (none: the view is not set up).
 	 * - ownsAccumulator (required): render thread, as a 0x1C accumulator finishes accumulating while DCLF runs, in slot order until one
@@ -79,6 +82,7 @@ namespace DCLF::Api
 		ViewBits bits;
 		std::uint32_t (*technique)(const OccluderLeaf& a_leaf) = nullptr;
 		bool minRadius = false;
+		float (*floorHeight)() = nullptr;
 		OcclusionTarget target = OcclusionTarget::EngineMask;
 		OcclusionLabels labels;
 		void (*importTarget)(OcclusionTargetImport& a_import) = nullptr;

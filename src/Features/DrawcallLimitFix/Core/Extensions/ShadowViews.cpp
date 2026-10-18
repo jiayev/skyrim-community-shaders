@@ -24,6 +24,7 @@ namespace DCLF::Extensions
 			a_entry.viewBit = a_map.bits.viewBit;
 			a_entry.technique = a_map.technique;
 			a_entry.minRadius = a_map.minRadius;
+			a_entry.floorHeight = a_map.floorHeight;
 			a_entry.target = a_map.target;
 			a_entry.list = a_map.labels.list;
 			a_entry.report = a_map.labels.report;

@@ -24,6 +24,12 @@ namespace DCLF::Features::OcclusionMaps
 			}
 		}
 		bool SkyReferenceDue() { return ReferenceDue(kSky); }
+		// Skylighting::OcclusionTechnique's probe grid test: an occluder whose bound top is below the grid's bottom less the margin.
+		float SkyFloorHeight()
+		{
+			const auto& skylighting = globals::features::skylighting;
+			return skylighting.probeGridBottomZ - Skylighting::OCCLUSION_BELOW_GRID_MARGIN;
+		}
 		bool PrecipitationReferenceDue() { return ReferenceDue(kPrecipitation); }
 
 		/**
@@ -39,6 +45,7 @@ namespace DCLF::Features::OcclusionMaps
 				.bits = { kSetOccluderSky, kViewSkyOccluder },
 				.technique = &SkylightingTechnique,
 				.minRadius = true,
+				.floorHeight = &SkyFloorHeight,
 				.target = Api::OcclusionTarget::ImportedTexture,
 				.labels = { "sky occlusion", "Skylighting", "DCLF Skylighting occlusion map" },
 				.importTarget = &ImportSkyTarget,
