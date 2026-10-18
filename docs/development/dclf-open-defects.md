@@ -572,6 +572,19 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
 -   **`<- MATERIAL PORT` (w176):** 1 a window left on an effect's FalloffData (VS variable 7) after the retake - a controller
     write the retake missed.
 
+## Crashes observed, probably unrelated to DCLF
+
+Crashes seen in validation runs whose stacks have no DCLF or Community Shaders frames and that match known engine instability. They are
+recorded so a repeat is recognised. They are not chased unless one recurs with a DCLF or CS frame on the stack, or with a pattern that
+points at DCLF.
+-   **tbbmalloc read in an NPC's behaviour graph update (2026-10-17, run lod1-full, uGridsToLoad 5).** `EXCEPTION_ACCESS_VIOLATION` in
+    `rml::internal::MemoryPool::getFromLLOCache` (EngineFixes.dll's tbbmalloc, `cmp [rcx+0x48], r8`, rcx `0xAC1C37CF`) under
+    `BSSpeedSamplerModifier` / `hkbBehaviorGraph` "0_Master.hkb" for 'Talsgar the Wanderer' (`Character` 0xFF001323), on a moving
+    and turning run near Riverwood. A known engine bug. The parity report lines written before it carried only the standing flags
+    (frame values' DIFFER, the extras rows' DIFFER, above).
+-   **Havok null write in FUN_140b660c0 at uGridsToLoad 21 (2026-10-17, the Whiterun stress save under `CS_DCLF_TEST_MOVE`).** Radius 21
+    is unstable on its own. Runs there are judged by the report lines written before the crash.
+
 ## Accepted differences
 
 Differences from the engine that are known, measured and left as they are, with the reason. Each one names what would
