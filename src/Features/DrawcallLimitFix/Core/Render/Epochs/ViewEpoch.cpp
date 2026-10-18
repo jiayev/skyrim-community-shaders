@@ -24,7 +24,7 @@ namespace DCLF
 					const auto& epochs = ViewEpochsOf(slot.view);
 					traits[ViewIndex(slot.view)] = { slot.view, shape.faces, shape.trees, shape.forwardPart, shape.depthPass, shape.viewBits, epochs.epochs,
 						{ epochs.segments[0], epochs.segments[1] }, entry.name.c_str(), entry.prefix.c_str(), entry.blocks.c_str(), entry.target.c_str(),
-						{ entry.labels[0].c_str(), entry.labels[1].c_str(), entry.labels[2].c_str(), entry.labels[3].c_str(), entry.labels[4].c_str() } };
+						{ entry.labels[0].c_str(), entry.labels[1].c_str(), entry.labels[2].c_str(), entry.labels[3].c_str(), entry.labels[4].c_str() }, shape.frustumCull };
 				}
 				return traits;
 			}();
@@ -340,7 +340,7 @@ namespace DCLF
 			latch.dispatch[1] = 1;
 			latch.dispatch[2] = 1;
 			latch.drawCount = inputs;
-			latch.cullFlags = 1;  // the frustum alone, near plane included
+			latch.cullFlags = traits.frustumCull ? 1u : 0u;  // the frustum alone, near plane included; 0: untested (BuildDrawsCS CullMode)
 			latch.viewBits = traits.viewBits;  // the main list's members of the view
 			latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
 			latch.placementsIndex = FrameValues::Get().PlacementsIndex();

@@ -84,7 +84,8 @@ namespace DCLF::Draws
 		struct Labels
 		{
 			const char *map, *tables, *latches, *blocks, *trees;
-		} labels;  // its latch writes, as FrameData counts them
+		} labels;          // its latch writes, as FrameData counts them
+		bool frustumCull;  // its cull's frustum test (Api::ViewShape::frustumCull); false: every member drawn untested
 	};
 	const ViewTraits& TraitsOf(ViewKind a_kind);
 
