@@ -339,7 +339,7 @@ namespace DCLF
 			const auto* alpha = a_leaf.alpha;
 			// Refraction (GetRenderPasses, AE 0x1414adfb0): kRefraction / kTempRefraction has one main pass, a Utility RENDER_NORMAL pass
 			// (hint 4: geometry group 5) Main::Draw draws into the refraction normals after the world (FUN_1414b4860) for ISRefraction,
-			// none past its refraction LOD fade's end. The forward epoch draws it (drawcall-limit-fix.md, "Refraction"), fading as
+			// none past its refraction LOD fade's end. The forward epoch draws it (dclf-architecture.md, "Refraction"), fading as
 			// GetRenderPasses would. A material alpha of 0 registers nothing: left native (so not drawn).
 			if (f & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) {
 				if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction) || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) ||

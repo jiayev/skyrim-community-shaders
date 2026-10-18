@@ -1,6 +1,6 @@
 #pragma once
 
-// Particles (CS_DCLF_PARTICLES; drawcall-limit-fix.md, "Particles"; engine notes, "Particle systems"): the NiParticleSystem geometry with
+// Particles (CS_DCLF_PARTICLES; dclf-architecture.md, "Particles"; engine notes, "Particle systems"): the NiParticleSystem geometry with
 // a BSEffectShaderProperty DCLF draws in the forward epoch's sort, its quads built from snapshots taken at the engine's particle update.
 // The feature registers its switch and live toggle, the particle geometry types' contributions (Api::GeometryTypeContribution: the
 // eligibility, the walk's traits and the snapshots' captures read the toggle through them, as data; a particle system's item class and

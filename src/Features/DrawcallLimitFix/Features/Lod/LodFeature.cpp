@@ -24,7 +24,7 @@ namespace DCLF::Features::Lod
 		using Technique = SIE::ShaderCache::LightingShaderTechniques;
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 
-		// The Lighting property flags that mark object LOD (a BSSubIndexTriShape: dclf-lod.md) and terrain LOD (a land block's BSTriShape).
+		// The Lighting property flags that mark object LOD (a BSSubIndexTriShape: dclf-architecture.md, "Object LOD") and terrain LOD (a land block's BSTriShape).
 		constexpr std::uint64_t kObjectLodFlags = static_cast<std::uint64_t>(Flag::kLODObjects) | static_cast<std::uint64_t>(Flag::kHDLODObjects);
 		constexpr std::uint64_t kTerrainLodFlags = static_cast<std::uint64_t>(Flag::kLODLandscape);
 		constexpr auto kSubIndexTriShape = static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape);
@@ -33,7 +33,7 @@ namespace DCLF::Features::Lod
 		/**
 		 * @brief Both classes' category root (the category capture, render thread): TES::lodLandRoot holds the terrain manager's LOD blocks
 		 * (a BSMultiBoundNode each: object LOD's BSSubIndexTriShapes, one segment per cell, and the land's BSTriShapes), attached and detached
-		 * as the camera moves (dclf-lod.md). It is the category node; its content is tracked by the usual structural events. A class not
+		 * as the camera moves (dclf-architecture.md, "LOD"). It is the category node; its content is tracked by the usual structural events. A class not
 		 * taken, or whose toggle is off, classifies as Lod.
 		 */
 		RE::NiNode* LodLandRoot()

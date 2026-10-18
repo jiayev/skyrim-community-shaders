@@ -379,7 +379,7 @@ namespace DCLF::Scene
 		// The skin partitions the engine draws: every LOD level's for a LOD skin (the draw narrows to its root's level); none at any
 		// level is a member that draws nothing (kNoPartitions).
 		std::uint16_t partitionMask = SkinPartitions::Of(g);
-		// A ranged geometry type's drawn ranges (Api::GeometryTypeContribution::ranges; object LOD, dclf-lod.md: the ranges its hidden
+		// A ranged geometry type's drawn ranges (Api::GeometryTypeContribution::ranges; object LOD, dclf-architecture.md, "Object LOD: segments": the ranges its hidden
 		// cells leave). Whole: the TriShape's own slot; none: kNoPartitions; else a chain of range slots (kPartitionChain), resolved
 		// again at each ranges event.
 		const auto* shapeRanges = Extensions::GeometryTypeRanged(g.type) ? EntryRangesOf(geometry) : nullptr;
@@ -1369,7 +1369,7 @@ namespace DCLF::Scene
 
 	std::uint32_t Coordinator::PerFrameTraitsOf(bool a_entryClassTrait, bool a_ownerClassTrait, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const
 	{
-		// The movable set (dclf-event-driven-tables.md): a static reference never moves in place, so what moves is actor-owned,
+		// The movable set (dclf-architecture.md, "Movers by event"): a static reference never moves in place, so what moves is actor-owned,
 		// controller-animated or Havok-simulated. Skin palettes and face snapshots change without moving. A controller on the shader or
 		// alpha property animates the material alpha the shadow verdict reads (kTraitAnimatedShading: its events name it, never per frame).
 		// a_entryClassTrait: a per-frame entry class's entry (PerFrameEntryClass: a face shape), its trait kTraitEntryClass;

@@ -1,4 +1,4 @@
-// The DCLF set (SceneSet.h; drawcall-limit-fix.md, "The DCLF set"): who draws an object, decided by the commit of each scene pass.
+// The DCLF set (SceneSet.h; dclf-architecture.md, "The DCLF set"): who draws an object, decided by the commit of each scene pass.
 // Also the pass itself (RunSceneWork), its publication and the lookups and table snapshots it carries. Scene lane.
 
 #include "Internal.h"
@@ -51,7 +51,7 @@ namespace DCLF::Scene
 		std::uint32_t phases = 0;
 		if (!(flags & kObjectShadowOnly))
 			phases |= kSetMain;
-		// The LodTechniques views draw the LOD techniques (the reflection's faces: dclf-lod.md).
+		// The LodTechniques views draw the LOD techniques (the reflection's faces: dclf-architecture.md, "Water reflections").
 		if (const auto p = tables.objects[a_slot].pipelineIndex; !(flags & kObjectShadowOnly) && p < tables.pipelines.size() &&
 			LodLightingTechnique(tables.pipelines[p].passDescriptor))
 			phases |= Extensions::Views().lodPhases;

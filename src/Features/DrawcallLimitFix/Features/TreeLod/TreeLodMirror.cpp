@@ -45,7 +45,7 @@ namespace DCLF::Features::TreeLod
 			a_out.assign(count, {});
 			for (std::uint32_t i = 0; i < count; ++i) {
 				const auto& data = a_group.instances[i];
-				// The hidden byte's bit 0 (dclf-lod.md, "Tree instance hiding"); the block's allVisible ignores it.
+				// The hidden byte's bit 0 (dclf-architecture.md, "Tree instance hiding"); the block's allVisible ignores it.
 				const bool hidden = !a_allVisible && (reinterpret_cast<const std::uint8_t&>(data.hidden) & 1);
 				auto& s = a_out[i].shorts;
 				s[0] = data.x;

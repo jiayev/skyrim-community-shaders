@@ -1,4 +1,4 @@
-// Fades' write-back (drawcall-limit-fix.md, "The fade write-back"): the events the depth commit harvests (FadeCommit.cpp) judged on DCLF's
+// Fades' write-back (dclf-architecture.md, "The fade write-back"): the events the depth commit harvests (FadeCommit.cpp) judged on DCLF's
 // executor by the root states' kick (KickFadeWriteBack), joined by its wait, and the stores made on the main thread at Main::Update's
 // entry (WriteFadeStores).
 

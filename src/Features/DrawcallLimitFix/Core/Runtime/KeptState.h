@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-// The building blocks of DCLF's persistent draw state (drawcall-limit-fix.md, "Persistent draw state"): what the tables
+// The building blocks of DCLF's persistent draw state (dclf-architecture.md, "Persistent draw state"): what the tables
 // log as they change, and the arrays kept across frames from them that the GPU buffers mirror. Every kept structure is
 // one of these rather than its own copy of the protocol.
 namespace DCLF

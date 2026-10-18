@@ -100,7 +100,7 @@ void DrawcallLimitFix::PostPostLoad()
 		const auto& orders = DCLF::Extensions::ScheduledFrameOrders();
 		RenderGraphRuntime::ConfigureFrame({ orders.epochOrder, orders.asyncOrder, orders.revisionEpochs });
 	}
-	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
+	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-architecture.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();
 	installed = true;
@@ -364,7 +364,7 @@ void DrawcallLimitFix::Hooks::Install()
 	stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<1>>(REL::RelocationID(100877, 107667).address() + REL::Relocate(0x1E5, 0xED));
 	stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<2>>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
 	// A geometry group's pass list (FUN_1414f19d0, AE 1.6.1170): the main pass's groups 9, 8, 1, 0 and 13 when they hold a
-	// plain list, which is where terrain LOD's colour passes are drawn (dclf-lod.md, "Terrain LOD").
+	// plain list, which is where terrain LOD's colour passes are drawn (dclf-architecture.md, "Terrain LOD").
 	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kGeometryGroupDraw).address(), REL::Offset(DCLF::Engine::Address::kRenderPassImmediately).address()))
 		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<3>>(REL::Offset(DCLF::Engine::Address::kGeometryGroupDraw).address());
 	else

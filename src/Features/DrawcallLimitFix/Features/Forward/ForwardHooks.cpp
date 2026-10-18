@@ -58,7 +58,7 @@ namespace DCLF::Features::Forward
 		{
 			static void thunk(void* a_accumulator, std::uint32_t a_renderFlags)
 			{
-				// DCLF's blended objects first, behind every blended draw of the engine's (the ordering contract: drawcall-limit-fix.md, "The
+				// DCLF's blended objects first, behind every blended draw of the engine's (the ordering contract: dclf-architecture.md, "The
 				// forward epoch"), for the main camera's accumulator alone (the same function draws every render mode 0 accumulator's).
 				static REL::Relocation<void**> mainAccumulator{ REL::Offset(Engine::Address::kMainAccumulator) };
 				const bool main = a_accumulator && a_accumulator == *mainAccumulator;

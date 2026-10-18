@@ -4,7 +4,7 @@
 
 /**
  * @brief Drawcall Limit Fix: draws the scene the engine would draw per object with GPU-driven indirect draws, executed by
- * the render graph on DXVK's Vulkan device (docs/development/drawcall-limit-fix.md, dclf-architecture.md).
+ * the render graph on DXVK's Vulkan device (docs/development/dclf-architecture.md).
  *
  * This file is the feature's shell: install, the engine hook thunks, the render-thread lifecycle points (each forwards to
  * Draws/FrameDriver under a RenderThreadBudget hook), the menu toggle and the settings UI. Render thread unless noted.
@@ -45,7 +45,7 @@ struct DrawcallLimitFix : Feature
 	 */
 	void AfterOpaquePass();
 	/**
-	 * @brief CS_DCLF_TARGET_PROBE=x,y (dclf-open-defects.md): every bound G-buffer target, averaged over a 64 x 64 block
+	 * @brief CS_DCLF_TARGET_PROBE=x,y (dclf-validation.md, "The target probe"): every bound G-buffer target, averaged over a 64 x 64 block
 	 * at the pixel, where the opaque pass ends, DCLF on or off.
 	 */
 	void ProbeOpaqueTarget(std::uint32_t a_stage);
@@ -64,7 +64,7 @@ struct DrawcallLimitFix : Feature
 
 	/**
 	 * @brief The occlusion maps, drawn by DCLF (Skylighting::RenderOcclusion's variant while DCLF runs;
-	 * docs/development/drawcall-limit-fix.md, "The occlusion maps, drawn by DCLF"): Skylighting's sky map, and the
+	 * docs/development/dclf-architecture.md, "The occlusion maps, drawn by DCLF"): Skylighting's sky map, and the
 	 * precipitation mask its hook renders first. Render thread. OcclusionReady: DCLF draws this frame's map, so the engine's
 	 * SetupMask is skipped for it. DrawOcclusion: after both maps' RenderMask, which set each view up and cleared its map,
 	 * DCLF's occluders into every map whose OcclusionReady said so, in one epoch.

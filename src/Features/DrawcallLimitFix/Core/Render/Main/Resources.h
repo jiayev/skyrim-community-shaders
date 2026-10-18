@@ -161,7 +161,7 @@ namespace DCLF::Draws
 	};
 
 	/*
-	 * The main epochs' shape producers (Revision/Producer.cpp; dclf-async-publication.md). A segment's shape (PassFrame) is a function
+	 * The main epochs' shape producers (Revision/Producer.cpp; dclf-architecture.md, "Revisions and recordings"). A segment's shape (PassFrame) is a function
 	 * of what a scene revision names (resource versions, draw bound, pipeline set, lookups) and of engine setup (viewport, frame
 	 * block sizes); never of a frame's values, which the commit writes into the latch.
 	 */

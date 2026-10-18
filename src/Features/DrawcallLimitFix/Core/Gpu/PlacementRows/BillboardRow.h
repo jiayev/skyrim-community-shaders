@@ -12,7 +12,7 @@ namespace DCLF
 	struct BindlessPlacement;
 
 	/**
-	 * @brief Billboards (CS_DCLF_BILLBOARDS; drawcall-limit-fix.md, "Billboards and aligned particles"; engine notes, "Billboards"):
+	 * @brief Billboards (CS_DCLF_BILLBOARDS; dclf-architecture.md, "Billboards and aligned particles"; engine notes, "Billboards"):
 	 * BSEffectShaderProperty leaves under an NiBillboardNode, which DCLF draws turned to each view's camera on the GPU.
 	 *
 	 * The engine turns a billboard in its culls, not in its update: NiBillboardNode::OnVisible (0x140d3f720), when the culling process

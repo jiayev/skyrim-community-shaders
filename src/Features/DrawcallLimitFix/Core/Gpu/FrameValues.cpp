@@ -105,7 +105,7 @@ namespace DCLF
 			return false;
 		}
 
-		// The ordered-node interleave (BindlessPlacement::forwardSort; engine walk in drawcall-limit-fix.md): a blended leaf's nearest
+		// The ordered-node interleave (BindlessPlacement::forwardSort; dclf-architecture.md, "Ordered nodes"): a blended leaf's nearest
 		// BSOrderedNode (exact type, FUN_1415039f0) opens a group whose children draw in child order; the groups are sorted by the
 		// node's world-bound centre depth (comparator 0x1414f55e0) and interleaved with the blended list. Only blended leaves join a
 		// group (FUN_1414b2330), so an opaque leaf's row stays 0. The bound is live unless kFixedBound (0x141503a60). Read inside the

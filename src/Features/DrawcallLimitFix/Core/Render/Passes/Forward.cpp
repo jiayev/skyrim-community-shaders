@@ -7,7 +7,7 @@
 namespace DCLF::Draws
 {
 	/*
-	 * The forward epoch's passes (drawcall-limit-fix.md). The colour BuildDraws appends visible forward draws (kObjectForward) with
+	 * The forward epoch's passes (dclf-architecture.md, "The forward epoch"). The colour BuildDraws appends visible forward draws (kObjectForward) with
 	 * their view depth to the staging half; ForwardSortPass (colour epoch) sorts them back to front into the sorted half;
 	 * Features/Forward's ForwardDrawPass draws it in the forward epoch (the engine's blended draw, FUN_1414b39d0, after the deferred
 	 * composite) on the colour pass's attachments; forward pipelines write the main target alone.

@@ -85,7 +85,7 @@ namespace DCLF
 		// frustum under a fade root, and those it dropped past their fade-out distance.
 		std::uint32_t fadeTested = 0, fadeHidden = 0;
 		std::uint32_t fadeRoots = 0;  // the fade roots listed
-		// Persistent resident draws (drawcall-limit-fix.md): the colour region's inputs, sequences, pairs at stable record
+		// Persistent resident draws (dclf-architecture.md): the colour region's inputs, sequences, pairs at stable record
 		// slots and entries it cannot draw (last epoch); new region content epochs and resyncs, since the start.
 		std::uint32_t residentInputs = 0, residentDraws = 0, residentPairs = 0, residentUndrawable = 0;
 		std::uint64_t residentEpochs = 0, residentResyncs = 0;

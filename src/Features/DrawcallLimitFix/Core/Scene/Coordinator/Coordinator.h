@@ -262,7 +262,7 @@ namespace DCLF
 		/** @brief Whether a scene pass runs now: frame-side fallbacks that read what a pass writes refuse then. */
 		bool SceneTaskInFlight() const;
 
-		// Scene members (drawcall-limit-fix.md): a member's accumulated half is patched once from its membership pass and kept across
+		// Scene members (dclf-architecture.md, "Eligibility and classification"): a member's accumulated half is patched once from its membership pass and kept across
 		// frames until a rewrite breaks its binding, a release or a failed patch.
 		/** @brief Ends every membership (the frame globals a membership pass reads changed). */
 		void EndAllResidency();
@@ -375,7 +375,7 @@ namespace DCLF
 		/**
 		 * @brief Decides the DCLF set (SceneSet.h) after the joins: one decision (kObjectMember, the claims snapshot) for every phase of a
 		 * frame. An object joins once everything its phases draw with is ready, judged by events, never a scan; a member being rebound
-		 * leaves first. Records and Tables::setPhases change only at ApplySet (dclf-async-publication.md).
+		 * leaves first. Records and Tables::setPhases change only at ApplySet (dclf-architecture.md, "The DCLF set").
 		 */
 		void CommitSet();
 		/**
@@ -1082,7 +1082,7 @@ namespace DCLF
 		/**
 		 * @brief The walk: evaluates only entries whose inputs can have changed (per-frame entries, new or marked ones, dependents of
 		 * property, node and attach events, slots whose geometry slot went stale); every other slot keeps its record. A classification
-		 * stands until such an event (dclf-event-driven-tables.md); CS_DCLF_WALK_PARITY checks it against a from-scratch walk.
+		 * stands until such an event (dclf-architecture.md, "Eligibility and classification"); CS_DCLF_WALK_PARITY checks it against a from-scratch walk.
 		 */
 		void DeltaWalk();
 		/** @brief DeltaWalk's scheduling of a full evaluation: everything kept dropped, the whole tracked set into `order`. */

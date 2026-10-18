@@ -27,7 +27,7 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief The per-object records (BindlessObject) one objects buffer holds, kept across frames (drawcall-limit-fix.md,
+	 * @brief The per-object records (BindlessObject) one objects buffer holds, kept across frames (dclf-architecture.md,
 	 * "Persistent draw state"): a record is written again only when the change log names a column it is built from, and the
 	 * buffer is sent what changed since the content epoch it holds (KeptArray). One, for every epoch's builds (SceneBuffers),
 	 * updated by MakeStreamViews, which never runs twice at once; `collisions` counts it if anything ever does.

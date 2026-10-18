@@ -1,6 +1,6 @@
 #pragma once
 
-// Object LOD's segment events (dclf-lod.md, "Object LOD: segments"): the writers' hooks and the channel's queue (LodSegmentHooks.cpp), the
+// Object LOD's segment events (dclf-architecture.md, "Object LOD: segments"): the writers' hooks and the channel's queue (LodSegmentHooks.cpp), the
 // engine channel, its coordinator component and report line (LodSegmentChannel.cpp), and the parity (Diagnostics/LodSegmentParity.cpp).
 // The drawn ranges themselves are Core's (Api::CoordinatorComponentContext::EntryRanges: the attach's capture, the walk's range slots);
 // the component keeps them up to date as the writers name the shapes. Included by the feature's sources only.

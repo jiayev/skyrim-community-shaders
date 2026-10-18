@@ -26,7 +26,7 @@ namespace DCLF::Features::Reflection
 
 		/**
 		 * @brief The view's contribution: the LOD techniques of the main set; keys for a LOD Lighting technique's slot only, front faces culled
-		 * unless two-sided (dclf-lod.md, "Water reflections"); six faces with tree LOD; its last shape kept while off; its imported target's
+		 * unless two-sided (dclf-architecture.md, "Water reflections"); six faces with tree LOD; its last shape kept while off; its imported target's
 		 * area; withheld in renderers of its own (the cube camera's accumulators, ReflectionFaces); drawn into the engine's cube with DCLF's
 		 * own depth; covered before its first coverage and on a failed graph; its LOD roots kept for the residue watch on the updates the
 		 * parities ask for (Diagnostics/Residue.cpp).
@@ -86,7 +86,7 @@ namespace DCLF::Features::Reflection
 			// Where Core's was listed: after the precipitation mask's (Features/OcclusionMaps', registered earlier before the same Core switch).
 			const auto reflectionsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_REFLECTIONS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
 				.description = "0: the water reflection's faces stay native (live toggle's seed)", .before = "CS_DCLF_OPAQUE_EFFECTS" });
-			// The water reflection's cube map faces' LOD drawn by DCLF from its own tables (dclf-lod.md, "Water reflections"). Where Core's was
+			// The water reflection's cube map faces' LOD drawn by DCLF from its own tables (dclf-architecture.md, "Water reflections"). Where Core's was
 			// listed, after the precipitation occlusion's (Features/OcclusionMaps', registered earlier after the same Core toggle), opening its
 			// section; the first feature toggle registered after the maps', so its bit in the packed word is where Core's was.
 			const auto reflections = a_context.RegisterToggle({ .name = "reflections", .label = "Draw the water reflection's distant land, objects and trees (CS_DCLF_REFLECTIONS)",

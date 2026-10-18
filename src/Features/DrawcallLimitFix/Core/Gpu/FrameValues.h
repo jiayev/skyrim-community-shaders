@@ -17,7 +17,7 @@ namespace DCLF
 	struct BindlessShading;
 
 	/**
-	 * @brief FrameValues(N) (dclf-async-publication.md, "FrameValues"): the values a frame's draws need to be its own - the
+	 * @brief FrameValues(N) (dclf-architecture.md, "FrameValues"): the values a frame's draws need to be its own - the
 	 * claimed members' placements (BindlessPlacement), the skins' palettes and the objects' shading (BindlessShading) - made on
 	 * DCLF's pool while the frame runs, and waited for by the GPU, never by the render thread. The scene's tables hold none of
 	 * them: these are the only ones drawn with.

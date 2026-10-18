@@ -11,7 +11,7 @@
 namespace DCLF::Runtime
 {
 	/**
-	 * @brief The artifact kinds of DCLF's state graph (dclf-async-publication.md, "The design"). Only BufferVersion has a producer
+	 * @brief The artifact kinds of DCLF's state graph (dclf-architecture.md, "The design"). Only BufferVersion has a producer
 	 * (growth, registered here).
 	 *
 	 * SceneState and BufferVersion requests are exact and never coalesced; the other kinds are replaceable: a newer request

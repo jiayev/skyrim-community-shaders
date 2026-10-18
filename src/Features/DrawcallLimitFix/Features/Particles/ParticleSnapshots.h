@@ -27,7 +27,7 @@ namespace DCLF::Api
 namespace DCLF::Features::Particles
 {
 	/**
-	 * @brief The particle systems DCLF draws (CS_DCLF_PARTICLES; drawcall-limit-fix.md, "Particles"; engine notes, "Particle systems"),
+	 * @brief The particle systems DCLF draws (CS_DCLF_PARTICLES; dclf-architecture.md, "Particles"; engine notes, "Particle systems"),
 	 * their state published by the engine's own writer, so that DCLF never reads a system's particle data afterwards.
 	 *
 	 * The engine updates a particle system in its update pass (NiParticleSystem::UpdateDownwardPass and UpdateSelectedDownwardPass, vtable

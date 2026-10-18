@@ -15,7 +15,7 @@ namespace DCLF::Features::Reflection::ReflectionFaces
 {
 	/*
 	 * The water reflection's cube map faces (AE 1.6.1170; skyrim-engine-notes.md, "Water reflections: the cube map";
-	 * dclf-lod.md, "Water reflections"). TESWaterReflections::Update (0x140520570, called at 0x14052289c) adds the cube camera's
+	 * dclf-architecture.md, "Water reflections"). TESWaterReflections::Update (0x140520570, called at 0x14052289c) adds the cube camera's
 	 * roots (FUN_1405275e0: LOD land, LOD objects and LOD trees under their bReflectLOD* switches, then the sky) and renders its
 	 * faces through BSCubeMapCamera's vfunc 0x35 (0x1414ed4e0, a jump to FUN_1414ed920), a face mask a call, on the render
 	 * thread. Each face binds the cube target's face and depth target 6, clears them, orients the camera to the face

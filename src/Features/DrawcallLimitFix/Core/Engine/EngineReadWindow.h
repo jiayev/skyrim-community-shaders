@@ -8,7 +8,7 @@
 namespace DCLF
 {
 	/**
-	 * @brief When a worker may touch the engine's scene graph (dclf-async-publication.md, "The engine-read window").
+	 * @brief When a worker may touch the engine's scene graph (dclf-architecture.md, "The engine-read window").
 	 *
 	 * From Main::Draw to Present the engine reads its scene graph but does not write it (the writes that do happen there:
 	 * currentFade, billboards, texture transforms). The window is open over exactly that span: Open at FrameDriver::BeginFrame, Close at Present, both on the render thread. A worker touching engine memory takes a Lease per item, or per bounded chunk of items (a parallel loop's grain), and

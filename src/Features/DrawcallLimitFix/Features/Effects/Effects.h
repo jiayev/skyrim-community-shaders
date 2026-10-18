@@ -1,6 +1,6 @@
 #pragma once
 
-// Effects (CS_DCLF_EFFECTS, CS_DCLF_OPAQUE_EFFECTS; drawcall-limit-fix.md, "The Effect shader in the forward epoch", "Opaque effects"): the
+// Effects (CS_DCLF_EFFECTS, CS_DCLF_OPAQUE_EFFECTS; dclf-architecture.md, "The Effect shader in the forward epoch", "Opaque effects"): the
 // BSEffectShaderProperty objects DCLF draws through the Effect port - blended meshes in the forward epoch's sort, decals in the decal
 // groups, skinned ones through the skin palette, and the opaque ones (hint 0) through the opaque decal group without its bias. The feature
 // registers its switches and live toggle, the effect and opaque effect object classes' contributions (Api::ObjectClass::Effect: the

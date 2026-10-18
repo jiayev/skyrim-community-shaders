@@ -1,4 +1,4 @@
-// PrimaryCull's scene lists (drawcall-limit-fix.md, "The scene lists without DCLF's roots"): the filter published on the render
+// PrimaryCull's scene lists (dclf-architecture.md, "The scene lists without DCLF's roots"): the filter published on the render
 // thread (PublishListFilter, RestoreSceneLists), the build's job (DrawWorld_BuildSceneLists' detour: kept, rebuilt or the engine's
 // build filtered), and the attach/detach detours' structure events (any thread). PrimaryCull.h, PublishListFilter, describes the modes.
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
@@ -634,7 +634,7 @@ namespace DCLF
 			return;
 		// The filter's roots are alive: its candidates hold them (EntrySpace::held). One the engine detached since the snapshot
 		// was made stays out (it has left the scene); a hidden one is skipped by the cull. Taking a reference to a root the
-		// snapshot did not hold is what put freed roots into the lists, released at Present (crash-catalog.md).
+		// snapshot did not hold is what put freed roots into the lists, released at Present (dclf-architecture.md, "Engine references").
 		const auto* scene = SceneNode();
 		std::uint32_t l = 0;
 		for (const auto* root : filter->roots) {

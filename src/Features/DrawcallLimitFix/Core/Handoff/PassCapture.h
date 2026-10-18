@@ -96,7 +96,7 @@ namespace DCLF
 			return renderers && renderers->contains(a_batch);
 		}
 		/**
-		 * @brief An OwnRenderers view's renderers (the water reflection's faces, dclf-lod.md, "Water reflections"), named by its feature's
+		 * @brief An OwnRenderers view's renderers (the water reflection's faces, dclf-architecture.md, "Water reflections"), named by its feature's
 		 * engine hooks. SetViewRenderers: render thread, the accumulators whose batch renderers (and their geometry and alpha groups') are the
 		 * view's (the cube camera's), made again whenever any of those renderers changes (the engine makes groups as geometry first uses them). SetViewWithholdActive: around the view's render while its members' passes
 		 * into them are withheld (the faces' plain mode, 0: the only one whose registrations the hooks see; mode 0x19's are FUN_1414b2b90's).

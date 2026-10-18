@@ -29,7 +29,7 @@ namespace DCLF::Draws
 	// In DCLF::Draws, where they were defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 
 	/*
-	 * The forward epoch's draws (drawcall-limit-fix.md). The colour BuildDraws appends visible forward draws (kObjectForward) with their
+	 * The forward epoch's draws (dclf-architecture.md, "The forward epoch"). The colour BuildDraws appends visible forward draws (kObjectForward) with their
 	 * view depth to the staging half; Core's ForwardSortPass (colour epoch) sorts them back to front into the sorted half; ForwardDrawPass
 	 * draws it in the forward epoch (the engine's blended draw, FUN_1414b39d0, after the deferred composite) on the colour pass's
 	 * attachments; forward pipelines write the main target alone.
@@ -112,7 +112,7 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * The refraction pass (drawcall-limit-fix.md): the refraction range's draws, drawn in the forward epoch into kREFRACTION_NORMALS
+	 * The refraction pass (dclf-architecture.md, "Refraction"): the refraction range's draws, drawn in the forward epoch into kREFRACTION_NORMALS
 	 * with one plain indexed indirect draw (DCLF_REFRACTION), testing the main depth. The target is first cleared to FUN_1414b4860's
 	 * colour (0.5, 0.5, 0, 0: no offset, no mask), as the engine does before its group 5; Features/Forward's blended-draw hook then marks the normals
 	 * begun so the engine's later draws add to DCLF's.

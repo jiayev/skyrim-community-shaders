@@ -1,6 +1,6 @@
 #pragma once
 
-// Billboards (CS_DCLF_BILLBOARDS; drawcall-limit-fix.md, "Billboards and aligned particles"; engine notes, "Billboards"): the
+// Billboards (CS_DCLF_BILLBOARDS; dclf-architecture.md, "Billboards and aligned particles"; engine notes, "Billboards"): the
 // BSEffectShaderProperty leaves under an NiBillboardNode DCLF draws, turned to each view's camera by the vertex stage (Effect.hlsl,
 // DCLFBillboardWorld), and the particle systems under billboard nodes DCLF's particle path draws (CS_DCLF_BILLBOARD_PARTICLES). The
 // feature registers their switches and live toggle, the parent contributions that admit them (Api::ParentContribution: the classification

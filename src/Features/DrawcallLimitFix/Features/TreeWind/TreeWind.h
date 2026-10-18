@@ -1,6 +1,6 @@
 #pragma once
 
-// Tree wind (drawcall-limit-fix.md, "Tree wind on the GPU"): the GPU animation of the trees DCLF owns. The feature lists the trees
+// Tree wind (dclf-architecture.md, "Tree wind on the GPU"): the GPU animation of the trees DCLF owns. The feature lists the trees
 // its members draw under in the scene's tables (TreeStatic: its table family, written by its coordinator component as members join and
 // leave: TreeWindTables), ports their technique (technique 12: its eligibility, record flag, shading derivation and frame globals:
 // TreeWindObjects), takes their nodes at the frame's start (a frame-value pool, the seeds), clocks them on the GPU (TreeWindCS.hlsl: a
@@ -35,7 +35,7 @@ namespace DCLF::Features::TreeWind
 	inline constexpr std::uint32_t kObjectTreeAnim = 1u << 6;
 
 	/**
-	 * @brief A tree's static row: what tree wind (TreeWindCS.hlsl; drawcall-limit-fix.md, "Tree wind on the GPU") clocks a listed
+	 * @brief A tree's static row: what tree wind (TreeWindCS.hlsl; dclf-architecture.md, "Tree wind on the GPU") clocks a listed
 	 * BSTreeNode from. The scene's tables list the trees (the feature's table family, its component's ListTree); the feature owns the
 	 * rest of the wind (its clock rows, seeds, pass and wind rows).
 	 *

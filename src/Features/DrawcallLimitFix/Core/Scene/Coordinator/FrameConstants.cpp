@@ -492,7 +492,7 @@ namespace DCLF::Scene
 		// LOD fades and the alpha GetRenderPasses leaves on the property (an actor's fade among them; lodFadeEvents), and external
 		// emittance's shared colour (emittanceEvents). Their dependents are sampled at the next frame's start: a value that changes
 		// during this frame (a controller on the animation job, a cull's GetRenderPasses) is drawn from the next frame on, a frame
-		// after the engine's own draw would show it (dclf-async-publication.md, "Accepted differences").
+		// after the engine's own draw would show it (dclf-architecture.md, "Accepted differences").
 		lodFadeChanged.clear();
 		DrainLodFadeEvents(lodFadeChanged);
 		const std::size_t lodFades = lodFadeChanged.size();

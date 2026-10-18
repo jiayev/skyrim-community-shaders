@@ -915,7 +915,7 @@ static bool cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 			}
 		}
 	}
-	// CS_DCLF_TARGET_DUMP's frames: the constants, to compare a good frame with a corrupt one (dclf-open-defects.md, the inn).
+	// CS_DCLF_TARGET_DUMP's frames: the constants, to compare a good frame with a corrupt one (dclf-validation.md, "The target dump"; render-graph.md, "Hazard: external Vulkan work directly after a graph epoch").
 	if (DrawcallLimitFix::TargetDumpArmed())
 		logger::info("[Streamline] dump constants: posAdj ({:.3f} {:.3f} {:.3f}) prev ({:.3f} {:.3f} {:.3f}); near {} far {} fov {}; viewToClip [{:.4f} {:.4f} {:.4f} {:.4f} | {:.4f} {:.4f}]; curVP r0 [{:.5f} {:.5f} {:.5f} {:.5f}] r3 [{:.5f} {:.5f} {:.5f} {:.5f}]; prevVP r0 [{:.5f} {:.5f} {:.5f} {:.5f}] r3 [{:.5f} {:.5f} {:.5f} {:.5f}]; clipToPrevClip diag [{:.5f} {:.5f} {:.5f} {:.5f}] row3 [{:.5f} {:.5f} {:.5f}]; jitter ({:.4f} {:.4f}); finite {}",
 			posAdj.x, posAdj.y, posAdj.z, prevPosAdj.x, prevPosAdj.y, prevPosAdj.z, a_consts.cameraNear, a_consts.cameraFar, a_consts.cameraFOV, cameraViewToClip._11, cameraViewToClip._22,

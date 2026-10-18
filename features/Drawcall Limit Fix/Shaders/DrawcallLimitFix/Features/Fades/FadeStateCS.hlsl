@@ -1,4 +1,4 @@
-// Drawcall Limit Fix: the fade roots' state on the GPU (drawcall-limit-fix.md, "Fades on the GPU"; Records.h, FadeRootStatic).
+// Drawcall Limit Fix: the fade roots' state on the GPU (dclf-architecture.md, "Fades on the GPU"; Records.h, FadeRootStatic).
 //
 // The engine updates a BSFadeNode's fade and LOD state in its OnVisible, for the main camera's cull, whenever the node's bound
 // passes the cull's frustum test. This pass does the same for every fade root a DCLF member draws under, from the depth
@@ -457,7 +457,7 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_progr
 	return test < 0 ? FrustumInView(a_centre, a_radius, a_rootBits) : test != 0;
 }
 
-// The fade write-back (drawcall-limit-fix.md, "The fade write-back"): the engine reads a stood-in root's node (the
+// The fade write-back (dclf-architecture.md, "The fade write-back"): the engine reads a stood-in root's node (the
 // tree LOD's crossfade, the occlusion maps' cull, the animation gate, the next listing), which only this pass updates. Its
 // milestones: 0 faded out, 1 fading, 2 faded in; with them the leaf LOD's level (+0x152 & 0xF) and transition
 // (+0x153 & 0x70), so a level step or its settling is written too, not every blend step.

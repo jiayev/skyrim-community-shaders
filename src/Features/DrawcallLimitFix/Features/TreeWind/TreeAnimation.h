@@ -16,7 +16,7 @@ namespace RE
 namespace DCLF::Features::TreeWind::TreeAnimation
 {
 	/**
-	 * @brief The tree manager's animation list without DCLF's trees (drawcall-limit-fix.md, "Owned trees off the tree
+	 * @brief The tree manager's animation list without DCLF's trees (dclf-architecture.md, "Owned trees off the tree
 	 * manager's animation list"). AE only.
 	 *
 	 * BSTreeManager (0x1420F6A18) keeps every BSLeafAnimNode the cells load on a list (+0x50, count +0x60), which its

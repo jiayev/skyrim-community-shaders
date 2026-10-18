@@ -37,7 +37,7 @@ namespace DCLF
 	struct FrameGlobals;
 
 	/**
-	 * @brief The main camera's cull, and taking DCLF's objects out of it (dclf-gpu-driven-frame.md). AE only. Owns the scene
+	 * @brief The main camera's cull, and taking DCLF's objects out of it (dclf-architecture.md, "The main camera's stand-in"). AE only. Owns the scene
 	 * lists' build (SceneLists.cpp), the list jobs' stand-in and the camera values BuildDraws reads.
 	 *
 	 * The scene lists (`DAT_14338c870`, `DAT_14338c868` of them) are BSTArray<NiPointer<NiAVObject>> that
@@ -221,7 +221,7 @@ namespace DCLF
 
 		/**
 		 * @brief Render thread, FrameDriver at the scene phase's end (before Main::Draw queues DrawWorld_BuildSceneLists): this
-		 * frame's scene lists (drawcall-limit-fix.md, "The scene lists without DCLF's roots").
+		 * frame's scene lists (dclf-architecture.md, "The scene lists without DCLF's roots").
 		 *
 		 * Left out: admitted, unmixed entries with Cut::walk clear that this frame's full-frustum exclusion removes from the
 		 * cascades, while DCLF draws both occlusion maps. The object root's part (cell roots, its two whole entries) is kept

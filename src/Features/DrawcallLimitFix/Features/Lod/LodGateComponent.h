@@ -1,6 +1,6 @@
 #pragma once
 
-// The LOD gates' coordinator component (LodGates.h has the engine side; dclf-async-publication.md, "T6b5, the scene side"): its state
+// The LOD gates' coordinator component (LodGates.h has the engine side; dclf-architecture.md, "LOD gates: the scene side"): its state
 // (made by its make hook, held by the coordinator), its hooks (LodGateComponent.cpp: the gate events, the root marks' events, the commit's
 // settle, the outcomes; LodGateAdoption.cpp: the flips' publication and release, the adoption guard; LodGateReports.cpp: its report lines),
 // and what its observers read of it (Diagnostics/LodGateParity.cpp, LodGateObservers.cpp). Registered by the feature's install

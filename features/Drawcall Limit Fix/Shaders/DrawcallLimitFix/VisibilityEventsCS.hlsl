@@ -1,4 +1,4 @@
-// Drawcall Limit Fix: the main camera's visibility as change events (drawcall-limit-fix.md, "visibility events").
+// Drawcall Limit Fix: the main camera's visibility as change events (dclf-architecture.md, "The visibility events").
 //
 // The engine's main-camera cull leaves kAccumulated (NiAVObject flag bit 26) on what passed it: on a reference root when its
 // bound passed the cull's test, on a geometry when the cull reached it in view. Its readers (the animated references' update,
@@ -7,7 +7,7 @@
 // (the list processes' Process1 test through the root's portal program), a geometry's is depth phase 1's frustum stamp
 // (cs.dclf.frustum: stamped this frame, and not dropped by its root's fade). Neither is DCLF's HZB occlusion, which the engine's cull
 // does not make: kAccumulated means in the main camera's view (frustum, portals, occlusion planes), not app-culled, and for a geometry
-// not under a root whose OnVisible stops (drawcall-limit-fix.md, "what kAccumulated means"). Phase 1 stamps every main input,
+// not under a root whose OnVisible stops (dclf-architecture.md, "What kAccumulated means"). Phase 1 stamps every main input,
 // the decal, forward and refraction ones too, which the depth segment draws none of. This pass compares them, once a frame after both,
 // with what it last reported per slot, and appends only the changes to the event list, which the host reads back
 // asynchronously (VisibilityReadback) and decodes on DCLF's executor.
@@ -18,7 +18,7 @@
 // host resolves the occupant with the tables of the event's frame. A change that does not fit the list leaves its word as it
 // was, so it is appended again next frame; the count past the list tells the host to grow it (no change is ever dropped).
 //
-// The normal path runs this pass: DCLF writes kAccumulated on the roots the cut stands in for from these events (drawcall-limit-fix.md,
+// The normal path runs this pass: DCLF writes kAccumulated on the roots the cut stands in for from these events (dclf-architecture.md,
 // "kAccumulated written by DCLF"); CS_DCLF_ACCUMULATED_PARITY adds the observer against the engine's bits. InMargin (a verdict against
 // widened planes, for the readback's latency) stays reserved: this pass binds no camera planes (the host's rule keeps two decoded frames
 // instead).

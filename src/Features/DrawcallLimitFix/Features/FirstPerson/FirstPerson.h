@@ -1,6 +1,6 @@
 #pragma once
 
-// FirstPerson (CS_DCLF_FIRST_PERSON, CS_DCLF_FIRST_PERSON_DECALS; drawcall-limit-fix.md, "First person as a view bit"): the player's
+// FirstPerson (CS_DCLF_FIRST_PERSON, CS_DCLF_FIRST_PERSON_DECALS; dclf-architecture.md, "First person as a view bit"): the player's
 // first-person skeleton (arms, weapons, shield, magic hands) drawn by DCLF as a view of the one scene, while its toggle is on. The feature
 // registers its switches and live toggle (which needs the skinned and Features/Actors' actors) and the view's contribution
 // (Api::EngineView::FirstPerson): its set phase and view bit (kSetFirstPerson, kViewFirstPerson), its membership (a category root: the

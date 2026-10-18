@@ -21,7 +21,7 @@
 namespace DCLF::Features::FirstPerson
 {
 	/*
-	 * The first-person view (drawcall-limit-fix.md, "First person as a view bit"; skyrim-engine-notes.md, "The first-person
+	 * The first-person view (dclf-architecture.md, "First person as a view bit"; skyrim-engine-notes.md, "The first-person
 	 * view"). The first-person skeleton's geometry is tracked under its root (Coordinator::CaptureCategories, from CaptureRoot) and its
 	 * members (kSetFirstPerson) are inputs of the one main list with the view bit kViewFirstPerson alone (MainMaskOf). On a frame the engine
 	 * draws first person (the latch: Main::Draw's cVar23), two epochs draw them with the first-person camera as the engine set it up

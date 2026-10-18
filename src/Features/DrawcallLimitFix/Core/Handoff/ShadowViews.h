@@ -62,13 +62,13 @@ namespace DCLF
 		// passes alone (FUN_1414b2a60), so the additional property never casts.
 		Layer,
 		// Object and terrain LOD (under TES::lodLandRoot: IsLodObject, IsLodLand): no shadow cull reaches the LOD root, and no
-		// shadow mode ever registers either (observed: dclf-lod.md, the census).
+		// shadow mode ever registers either (observed: dclf-architecture.md, "The census").
 		Lod,
 		Count
 	};
 	const char* ShadowRejectName(ShadowReject a_reason);
 
-	/** @brief Object LOD: a BSSubIndexTriShape whose Lighting property has the LOD object flags (dclf-lod.md). */
+	/** @brief Object LOD: a BSSubIndexTriShape whose Lighting property has the LOD object flags (dclf-architecture.md, "Object LOD"). */
 	inline bool IsLodObject(std::uint64_t a_flags, std::uint8_t a_type)
 	{
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
@@ -87,7 +87,7 @@ namespace DCLF
 	 */
 	inline const RE::NiTransform& DrawnPreviousWorld(const RE::BSGeometry& a_geometry);
 
-	/** @brief Terrain LOD: a BSTriShape whose Lighting property has the LOD landscape flag (dclf-lod.md, "Terrain LOD"). */
+	/** @brief Terrain LOD: a BSTriShape whose Lighting property has the LOD landscape flag (dclf-architecture.md, "Terrain LOD"). */
 	inline bool IsLodLand(std::uint64_t a_flags, std::uint8_t a_type)
 	{
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
@@ -228,7 +228,7 @@ namespace DCLF
 			 */
 			std::uint32_t renderMode = 0;
 			/**
-			 * @brief DCLF's this frame: a shadow mode's view (not a focus one, its mode known) within the view slots DCLF's
+			 * @brief DCLF's this frame: a shadow mode's view (focus views too, its mode known) within the view slots DCLF's
 			 * buffers hold this frame (SetViewCapacity), in the engine's order. Only these are withheld (the registration hook's renderers)
 			 * and captured; the rest the engine draws alone, while DCLF's slots grow (SceneBufferSet) for them.
 			 */

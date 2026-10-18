@@ -1,6 +1,6 @@
 #pragma once
 
-// Reflection (CS_DCLF_REFLECTIONS; dclf-lod.md, "Water reflections"): the water reflection's cube map faces drawn by DCLF as a view of the
+// Reflection (CS_DCLF_REFLECTIONS; dclf-architecture.md, "Water reflections"): the water reflection's cube map faces drawn by DCLF as a view of the
 // one scene, while its toggle is on. The feature registers its switch and live toggle and the view's contribution
 // (Api::EngineView::Reflection): its set phase and view bit (kSetReflection, kViewReflection), its membership (the LOD techniques of the
 // main set), its key rule and shape (six faces with tree LOD), its life (the last shape kept while off), area (its imported target's),

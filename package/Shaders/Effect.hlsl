@@ -119,7 +119,7 @@ cbuffer VS_PerFrame : register(b12)
 };
 
 #	if defined(DCLF_BINDLESS)
-// Drawcall Limit Fix's draws (T7d's Effect port: drawcall-limit-fix.md, "The Effect shader in the forward epoch"): the fog is the
+// Drawcall Limit Fix's draws (T7d's Effect port: dclf-architecture.md, "The Effect shader in the forward epoch"): the fog is the
 // frame's, the same block every DCLF_BINDLESS draw reads (Lighting.hlsl, DCLFFrameFog: SetupTechnique writes the effect's fog exactly
 // as the Lighting technique's), so no pipeline row holds it.
 cbuffer DCLFFrameFog : register(b13)

@@ -1,6 +1,6 @@
 #pragma once
 
-// Switch nodes (CS_DCLF_SWITCH_NODES; drawcall-limit-fix.md, "Switch nodes"): the leaves under an NiSwitchNode DCLF draws, in the frames
+// Switch nodes (CS_DCLF_SWITCH_NODES; dclf-architecture.md, "Switch nodes"): the leaves under an NiSwitchNode DCLF draws, in the frames
 // every switch on their path selects their branch (trees' variants, harvestables). The feature registers their switch and live toggle, and
 // the parent contribution that admits them (Api::ParentContribution: the classification and the sun and light candidates read it as data).
 //

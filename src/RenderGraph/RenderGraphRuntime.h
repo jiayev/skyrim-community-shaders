@@ -63,7 +63,7 @@ public:
 	enum class Segment : std::uint32_t
 	{
 		LightCulling,  // Light Limit Fix, before the main pass
-		ZPrepass,      // Drawcall Limit Fix's depth, at the first draw of the main (deferred) pass
+		ZPrepass,      // Drawcall Limit Fix's depth, inside Main::RenderDepth after the world's depth draws, before kPOST_ZPREPASS_COPY
 		MainOpaque,    // Drawcall Limit Fix's colour, where the main pass's opaque batches end
 		ShadowView,    // Drawcall Limit Fix's shadow casters, inside one shadow view's draw
 		SkyOcclusion,  // Drawcall Limit Fix's variant of Skylighting's occlusion map, after the engine's RenderMask

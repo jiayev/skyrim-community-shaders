@@ -257,7 +257,7 @@ namespace DCLF
 		const Draws::SceneBuffers* Scene() const;
 		/**
 		 * @brief Render thread, at the frame's start: hands the harvested, undecoded visibility readback batches to the decode task on
-		 * DCLF's executor, never joined, and frees the batches the last task decoded (drawcall-limit-fix.md, "visibility events").
+		 * DCLF's executor, never joined, and frees the batches the last task decoded (dclf-architecture.md, "The visibility events").
 		 * Writes no engine memory.
 		 */
 		void KickVisibilityReadback();

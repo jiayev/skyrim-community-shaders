@@ -81,7 +81,7 @@ namespace DCLF::Scene
 	}
 
 	/**
-	 * @brief SceneEvents: structural events (dclf-event-driven-tables.md), pushed on any thread, drained by the scene pass
+	 * @brief SceneEvents: structural events (dclf-architecture.md, "Events, not polls"), pushed on any thread, drained by the scene pass
 	 * (Coordinator::CollectEvents, ApplyEvents).
 	 * - Property: BSShaderProperty::SetFlags (0x14147bee0) or SetMaterial (0x14147bff0) changed a shader property, or a
 	 *   controller was added to one. A key only, never dereferenced.
@@ -145,7 +145,7 @@ namespace DCLF::Scene
 
 	/**
 	 * @brief MoveEvents: keys of a reference whose 3D an update pass moved, or a category node whose subtree one did
-	 * (dclf-event-driven-tables.md, "Movers by event"), or a particle system that took a new snapshot. Movers are placed every
+	 * (dclf-architecture.md, "Movers by event"), or a particle system that took a new snapshot. Movers are placed every
 	 * frame regardless (FrameValues samples every mover of the newest placement plan); what the keys gate is the scene pass's light
 	 * path (a per-frame entry is evaluated only with an event naming one of its keys this frame or the last: Coordinator::MoverDue)
 	 * and which still roots the plan lists (QueueRoots). Pushed after the write from the animation and cell jobs.
@@ -200,7 +200,7 @@ namespace DCLF::Scene
 	}
 
 	/**
-	 * @brief SwitchEvents: an NiSwitchNode's selection may have changed (dclf-cull-job-elimination.md), drained by the scene pass
+	 * @brief SwitchEvents: an NiSwitchNode's selection may have changed (dclf-architecture.md, "Switch nodes"), drained by the scene pass
 	 * and applied by its walk (ApplySwitchEvents).
 	 *
 	 * NiSwitchNode::index (+0x12C) has no setter. Its only stores outside construction, cloning and loading (AE 1.6.1170, every

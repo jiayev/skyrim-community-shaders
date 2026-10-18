@@ -2,7 +2,7 @@
 
 namespace DCLF
 {
-	// The probes of the open defects (docs/development/dclf-open-defects.md). DrawcallLimitFix::ProbeOpaqueTarget is
+	// The probes of the open defects (docs/development/dclf-validation.md, "The target probe", "Set parity"). DrawcallLimitFix::ProbeOpaqueTarget is
 	// defined with them.
 	// (The tree LOD audit, CS_DCLF_TREE_LOD_AUDIT, is Features/TreeLod's.)
 	/**

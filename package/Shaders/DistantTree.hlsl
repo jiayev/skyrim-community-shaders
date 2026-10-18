@@ -18,7 +18,7 @@
 #endif
 
 #if defined(DCLF_PULLED)
-// Drawcall Limit Fix's tree LOD draws (dclf-lod.md, "Tree LOD: the draws"; Scene/TreeLod.h): one non-indexed instanced draw
+// Drawcall Limit Fix's tree LOD draws (dclf-architecture.md, "Tree LOD: the draws"; Scene/TreeLod.h): one non-indexed instanced draw
 // per pass, whose instances are the culled list's records. The vertex stage fetches its record, its shape's row, its mesh's
 // index and vertex through the device addresses in the draw row; the pixel stages take the texture, the sampler and the
 // alpha reference from it. The draw's push data (DrawPipelines.h, kDrawPushBinding) holds the draw row's address, and whether
