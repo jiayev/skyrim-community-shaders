@@ -124,6 +124,29 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		/**
+		 * @brief FUN_140d1d630 (AE): every child of a node let go at once, not through the DetachChild slots (each child's parent and
+		 * index cleared, its reference released, the count zeroed). Callers: Actor::DetachArrow (the nocked arrow at the release),
+		 * Actor::RemoveWeapon, BSTaskPool's queued removal (task 0x3e) and others. Each child's detach before the engine's.
+		 */
+		struct RemoveAllChildren
+		{
+			static void thunk(RE::NiNode* a_this)
+			{
+				if (a_this) {
+					const std::uint32_t count = a_this->GetChildren().free_idx();
+					for (std::uint32_t i = 0; i < count; ++i)
+						if (auto* child = ChildAt(a_this, i)) {
+							PrimaryCull::Get().NoteListStructure(a_this, child, false);
+							SceneTracker::Get().PushDetached(child);
+						}
+				}
+				func(a_this);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		constexpr std::uintptr_t kRemoveAllChildren = 0xd1d630;
+
 		template <class T>
 		void DetourNiNodeSlot(std::size_t a_slot)
 		{
@@ -210,6 +233,8 @@ namespace DCLF
 		DetourNiNodeSlot<DetachChildAt2At<0>>(kDetachChildAt2);
 		DetourNiNodeSlot<SetAt1At<0>>(kSetAt1);
 		DetourNiNodeSlot<SetAt2At<0>>(kSetAt2);
+		// The engine's remove-all, which bypasses the slots.
+		stl::detour_thunk<RemoveAllChildren>(REL::Offset(kRemoveAllChildren).address());
 		// The node classes that override them (without these, a particle system the manager moves is missed).
 		{
 			std::vector<std::uintptr_t> done;
