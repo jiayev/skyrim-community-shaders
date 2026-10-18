@@ -62,8 +62,8 @@ namespace DCLF::Draws
 				capture.psBuffers[a_slot] = a_buffer->CB();
 				capture.psBuffers[a_slot]->AddRef();  // Capture::Release owns what it holds
 			};
-			adopt(kSharedDataRegister, state->sharedDataCB);
-			adopt(kFeatureDataRegister, state->featureDataCB);
+			adopt(kSharedDataRegister, state->sharedDataCB.get());
+			adopt(kFeatureDataRegister, state->featureDataCB.get());
 		}
 		auto& shadowState = globals::game::shadowState->GetRuntimeData();
 		capture.eye = shadowState.posAdjust.getEye();
