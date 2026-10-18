@@ -350,6 +350,9 @@ times in 1,200 steady frames.
 -   **Structural events** (`Core/Engine/Capture/SceneEvents.h`, `SceneTracker`): a subtree attached or detached, pushed lock-free
     from any thread. Node classes that implement child edits themselves (`BSParticleSystemManager`, `BGSDecalNode`,
     `BSFaceGenNiNode`) are detoured, as is `NiAVObject::SetCollisionObject` (`SceneEvents.cpp`, `Features/Decals/DecalHooks.cpp`).
+    So is the engine's remove-all (`FUN_140d1d630`, `SceneTracker`'s `RemoveAllChildren`), which lets every child go without the
+    `DetachChild` slots: `Actor::DetachArrow` (the nocked arrow at the release; without it the arrow stayed drawn where it was
+    loosed), `Actor::RemoveWeapon` and `BSTaskPool`'s queued removal.
 -   **Moves are not exits.** The engine moves physics objects between a cell's dynamic and static nodes, each move a detach then an
     attach. A geometry back under a tracked category node by the end of the event batch keeps its entry (`detachMoves`; about
     3,000-10,000 moves per 5 s at Riverwood).
