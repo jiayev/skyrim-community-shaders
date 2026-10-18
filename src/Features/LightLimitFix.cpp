@@ -1,9 +1,9 @@
 #include "LightLimitFix.h"
 #include "CSEditor/EditorWindow.h"
+#include "DrawcallLimitFix.h"
 #include "Effects11.h"
 #include "LightLimitFix/Common.h"
 #include "LightLimitFix/LightAttach.h"
-#include "CSEditor/EditorWindow.h"
 #include "LightLimitFix/ORGLightCulling.h"
 #include "LinearLighting.h"
 
@@ -46,15 +46,29 @@ static int FindOptionIndex(const std::array<uint32_t, N>& a_options, uint32_t a_
 	return index;
 }
 
+bool LightLimitFix::LocalShadowsBlockedByDCLF()
+{
+	return globals::features::drawcallLimitFix.loaded;
+}
+
 void LightLimitFix::DrawLocalShadowSettings()
 {
 	ImGui::SeparatorText(T(TKEY("local_shadows"), "Local Light Shadows"));
 
+	const bool blockedByDCLF = LocalShadowsBlockedByDCLF();
+	ImGui::BeginDisabled(blockedByDCLF);
 	ImGui::Checkbox(T(TKEY("enable_local_shadows"), "(Experimental) Enable Local Light Shadows"), &settings.EnableLocalShadows);
+	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("enable_local_shadows_tooltip"),
 							  "Keeps a cache of the shadow maps the game renders for shadow-casting lights and rotates which lights the game renders each frame.\n"
 							  "More than four lights can cast shadows at once at the same rendering cost as vanilla. Lights with characters inside their radius are refreshed every frame, nearest to the camera first."));
+	}
+
+	if (blockedByDCLF) {
+		ImGui::TextDisabled("%s", T(TKEY("local_shadows_dclf_unavailable"), "Unavailable while Drawcall Limit Fix is loaded: it draws the shadow maps for the lights it selects itself, which the cache's light rotation would not reach."));
+		ImGui::Spacing();
+		return;
 	}
 
 	if (settings.EnableLocalShadows && !localShadowHooksInstalled)
@@ -553,7 +567,9 @@ void LightLimitFix::PostPostLoad()
 	particleLightConfigs.Load();
 	Hooks::Install();
 	LightAttach::Install();
-	if (settings.EnableLocalShadows) {
+	if (settings.EnableLocalShadows && LocalShadowsBlockedByDCLF())
+		logger::info("[LLF] Local light shadows stay off: Drawcall Limit Fix is loaded");
+	else if (settings.EnableLocalShadows) {
 		Hooks::InstallLocalShadows();
 		localShadowHooksInstalled = true;
 	}

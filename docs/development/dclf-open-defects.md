@@ -274,6 +274,27 @@ about 44k of 153k draws (29k material, 315 per-geometry, 7k technique), and ever
 integrations (e686aa1f, run matbase-fullc) and the one after (mat-fullc) give the same counts, so it predates that step; the refactor's
 validation runs did not include capture parity until then. TruePBR texture, skin, light data and face capture parity are OK.
 
+## Light Limit Fix's local shadow cache is off while DCLF is loaded (upstream #2757, merged 2026-10-17; not integrated)
+
+Upstream's cache (`LightLimitFix::EnableLocalShadows`, default off) rotates which shadow-casting lights the engine renders each
+frame. It vetoes lights through its `BSShadowParabolicLight` / `BSShadowFrustumLight` `UpdateCamera` hooks
+(`FilterLocalShadowCaster`, armed by its `CalculateActiveShadowCasterLights` detour). It also copies the maps the engine just
+rendered into its cache at `EarlyPrepass`.
+
+DCLF's light selection (`Features/LocalLights/LightSelection.cpp`) is a port of `CalculateActiveShadowCasterLights`. Its
+`Visible()` reimplements `UpdateCamera`'s test instead of calling it, and runs after the engine's call returns, by which time
+the cache's veto is disarmed. With the cache on, DCLF would draw the shadow maps of the lights it selects and the cache would copy
+and assign slices for the lights it chose, so the two would pick different lights.
+
+Until one of these is done, `LightLimitFix::LocalShadowsBlockedByDCLF()` keeps the cache's hooks uninstalled whenever DCLF is
+loaded, and the menu explains why:
+- DCLF takes the engine's actual selection instead of re-deriving it;
+- DCLF's port consults the cache's filter, through an Integrations extension;
+- the cache gets a DCLF-aware view of which slices were drawn.
+
+The cache's per-light `LocalShadow` flag, its `FirstPerson` / `WorldEyePosition` StrictLightData words and its
+`LocalShadowData` buffer are untested under DCLF. DCLF's own StrictLightData supplies only `RoomIndex` and `ShadowBitMask`.
+
 ## Pooled payload: open items (2026-10-14)
 
 The payload ring was replaced by pooled versions published once per snapshot (dclf-architecture.md, "The payload"). These

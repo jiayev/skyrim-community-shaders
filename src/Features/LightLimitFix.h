@@ -396,6 +396,12 @@ public:
 
 	/** @brief True when local shadows are enabled and their hooks were installed at startup. */
 	bool IsLocalShadowsEnabled() const { return settings.EnableLocalShadows && localShadowHooksInstalled; }
+	/**
+	 * @brief Whether Drawcall Limit Fix blocks the local shadow cache (its hooks are never installed). DCLF draws the shadow maps
+	 * for its own port of the engine's light selection, which the cache's caster rotation (FilterLocalShadowCaster, through
+	 * UpdateCamera) does not reach, so the two would choose different lights (dclf-open-defects.md).
+	 */
+	static bool LocalShadowsBlockedByDCLF();
 	/** @brief True when local shadows are enabled and the cache texture exists. */
 	bool IsLocalShadowCacheActive() const { return IsLocalShadowsEnabled() && localShadowCache; }
 	/** @brief Draws the experimental local shadow settings. */
