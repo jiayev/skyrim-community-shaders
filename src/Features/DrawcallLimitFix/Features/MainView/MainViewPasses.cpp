@@ -15,7 +15,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
-#include "RenderGraph/NvPerfBridge.h"
+#include "Features/RemoteControl/NvPerf.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include <OpenRenderGraph/PersistentGraphHost.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
@@ -227,8 +227,8 @@ namespace DCLF::Draws
 			const auto count = a_pass.count;
 			auto* stats = a_pass.stats;
 			const std::uint32_t statsSlot = a_pass.statsSlot;
-			auto subRange = [&](const char* a_name) { return a_nvCommands && NvPerfBridge::PushPassRange(a_nvCommands, a_name); };
-			auto endSubRange = [&](bool a_pushed) { if (a_nvCommands) NvPerfBridge::PopPassRange(a_nvCommands, a_pushed); };
+			auto subRange = [&](const char* a_name) { return a_nvCommands && NvPerf::PushCommandBufferRange(a_nvCommands, a_name); };
+			auto endSubRange = [&](bool a_pushed) { if (a_nvCommands) NvPerf::PopCommandBufferRange(a_nvCommands, a_pushed); };
 			if (a_passes.anyDecalDepth) {
 				const bool part = subRange("cs.dclf.colour.decal-depth");
 				BeginDrawPass(commands, a_passes.decalDepthBegin, frame, a_prepared);
@@ -294,7 +294,7 @@ namespace DCLF::Draws
 		{
 			const auto& frame = a_pass.frame;
 			// nvperf ranges around the colour pass's parts, when a capture selects them.
-			void* const nvCommands = NvPerfBridge::Active() ? rhi::vulkan::get_cmd_list(a_pass.commands) : nullptr;
+			void* const nvCommands = NvPerf::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(a_pass.commands) : nullptr;
 			// The colour passes, every target loaded.
 			ColourPasses passes{ .frame = frame, .mainBegin = a_pass.begin, .decalBegin = a_pass.begin, .decalDepthBegin = a_pass.begin,
 				.colourSignature = frame.indirect.signatures[kColorVariant] };

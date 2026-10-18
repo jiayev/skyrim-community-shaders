@@ -11,7 +11,7 @@
 #include "Globals.h"
 #include "Profiler.h"
 #include "RenderGraph/DxvkOrgInterop.h"
-#include "RenderGraph/NvPerfBridge.h"
+#include "Features/RemoteControl/NvPerf.h"
 #include "Features/DrawcallLimitFix.h"
 #include "GpuIdleTrace.h"
 #include "State.h"
@@ -1034,12 +1034,8 @@ bool RenderGraphRuntime::Initialize()
 	}
 	impl = std::move(state);
 	disabledReason.clear();
-	{
-		// CS_NVPERF_RANGES: Nsight Perf counters per range; nvperf_grfx_host.dll ships beside the DXVK DLLs.
-		wchar_t dxvkPath[MAX_PATH]{};
-		if (::GetModuleFileNameW(d3d11, dxvkPath, MAX_PATH))
-			NvPerfBridge::Initialize(info, d3d11, std::filesystem::path(dxvkPath).parent_path().c_str(), *impl->host);
-	}
+	// Nsight Perf's Vulkan backend: its captures run on DXVK's graphics queue, with the graph's passes as ranges.
+	NvPerf::RegisterVulkanDevice(info, d3d11, *impl->host);
 	logger::info("[ORG] Render graph adopted DXVK's Vulkan device (queue family {}, index {}); submissions {}",
 		info.graphicsQueueFamily, info.graphicsQueueIndex,
 		impl->enqueueSubmission ? "go through DXVK's command stream" : "flush DXVK each epoch");

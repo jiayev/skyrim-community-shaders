@@ -331,6 +331,7 @@ void RemoteControl::DrawNvPerfPanel()
 		return;
 	}
 	ImGui::TextColored(theme.SuccessColor, T(TKEY("device"), "%s (chip %s)"), device.deviceName.c_str(), device.chipName.c_str());
+	ImGui::TextDisabled(T(TKEY("backend"), "Backend: %s"), device.backend.c_str());
 
 	const auto defaults = NvPerf::DefaultMetrics();
 	if (panel.defaultMetricEnabled.size() != defaults.size())
@@ -355,8 +356,10 @@ void RemoteControl::DrawNvPerfPanel()
 	}
 	ImGui::SliderInt(T(TKEY("samples"), "Samples"), &panel.samples, 1, 16);
 	ImGui::SliderInt(T(TKEY("nesting"), "Nesting levels"), &panel.nestingLevels, 1, 4);
-	if (auto _tt = Util::HoverTooltipWrapper())
+	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("nesting_tooltip"), "Selected ranges nested this deep are measured too. Each level multiplies the passes."));
+		ImGui::Text("%s", T(TKEY("nesting_tooltip2"), "The Vulkan backend measures one level."));
+	}
 	ImGui::SliderInt(T(TKEY("delay"), "Delay (frames)"), &panel.delayFrames, 0, 600);
 
 	const auto status = NvPerf::GetStatus();

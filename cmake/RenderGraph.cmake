@@ -53,17 +53,8 @@ if(CS_RENDER_GRAPH)
         set(OPENRENDERGRAPH_ENABLE_D3D11_INTEROP OFF CACHE BOOL "" FORCE)
         set(OPENRENDERGRAPH_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
-        # Nsight Perf for OpenRenderGraph's Telemetry/NvPerfCapture (src/RenderGraph/NvPerfBridge.cpp, CS_NVPERF_RANGES): the
-        # SDK BasicRenderer ships, when this checkout sits in SARP. nvperf_grfx_host.dll is delay-loaded and installed beside
-        # the DXVK DLLs, so the plugin loads without it.
-        set(CS_NVPERF_ROOT "${CMAKE_SOURCE_DIR}/../../BasicRenderer/ThirdParty/NVPerf" CACHE PATH "Nsight Perf SDK root (include/, bin/x64/)")
-        set(CS_NVPERF_DLL)
-        if(EXISTS "${CS_NVPERF_ROOT}/include/nvperf_host.h" AND EXISTS "${CS_NVPERF_ROOT}/bin/x64/nvperf_grfx_host.dll")
-            set(ORG_ENABLE_NVPERF ON CACHE BOOL "" FORCE)
-            set(ORG_NVPERF_ROOT "${CS_NVPERF_ROOT}" CACHE PATH "" FORCE)
-            set(CS_NVPERF_DLL "${CS_NVPERF_ROOT}/bin/x64/nvperf_grfx_host.dll")
-            message(STATUS "CS_RENDER_GRAPH: Nsight Perf from ${CS_NVPERF_ROOT}")
-        endif()
+        # Nsight Perf for OpenRenderGraph's Telemetry/NvPerfCapture (NvPerf's Vulkan backend): ORG_ENABLE_NVPERF and the
+        # NVPerf::Host target come from CMakeLists.txt's NVPERF_SUPPORT block, which also delay-loads and installs the DLL.
         add_subdirectory("${CS_ORG_ROOT}/OpenRenderGraph" "${CMAKE_BINARY_DIR}/extern/OpenRenderGraph" EXCLUDE_FROM_ALL)
 
         # Runtime SPIR-V compilation (every render-graph shader): ORGModuleServices' content-addressed DXC service.
@@ -95,11 +86,6 @@ if(CS_RENDER_GRAPH)
             find_package(TBB CONFIG REQUIRED)
         endif()
         target_link_libraries(${PROJECT_NAME} PRIVATE TBB::tbb)
-        if(CS_NVPERF_DLL)
-            target_link_libraries(${PROJECT_NAME} PRIVATE delayimp)
-            target_link_options(${PROJECT_NAME} PRIVATE "/DELAYLOAD:nvperf_grfx_host.dll")
-            install(FILES "${CS_NVPERF_DLL}" DESTINATION SKSE/Plugins/CommunityShaders/bin COMPONENT DXVK)
-        endif()
         target_compile_definitions(${PROJECT_NAME} PRIVATE CS_HAS_RENDER_GRAPH=1)
 
         set(CS_HAS_RENDER_GRAPH ON)

@@ -64,13 +64,22 @@ option(
     ON
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+# Nsight Perf (Developer Tools' GPU counters; both NvPerf backends). On by default with the SDK BasicRenderer ships, when
+# this checkout sits in SARP; otherwise opt in with NVPERF_SDK_ROOT.
+set(_NVPERF_DEFAULT_ROOT "${CMAKE_SOURCE_DIR}/../../BasicRenderer/ThirdParty/NVPerf")
+if(EXISTS "${_NVPERF_DEFAULT_ROOT}/include/nvperf_host.h")
+    set(_NVPERF_DEFAULT ON)
+else()
+    set(_NVPERF_DEFAULT OFF)
+    set(_NVPERF_DEFAULT_ROOT "")
+endif()
 option(
     NVPERF_SUPPORT
     "Enable the Nsight Perf range profiler in Developer Tools (requires NVPERF_SDK_ROOT)"
-    OFF
+    ${_NVPERF_DEFAULT}
 )
 set(NVPERF_SDK_ROOT
-    ""
+    "${_NVPERF_DEFAULT_ROOT}"
     CACHE PATH
     "Nsight Perf SDK directory (the one holding include/nvperf_host.h)"
 )
@@ -305,9 +314,13 @@ if(DEVBENCH_BRIDGE)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
 endif()
 
-# Nsight Perf: opt-in via -DNVPERF_SUPPORT=ON -DNVPERF_SDK_ROOT=<sdk>. The SDK is a login-gated NVIDIA
-# download, so it is never fetched. nvperf_grfx_host.dll is delay-loaded (NvPerf.cpp loads it by path
-# before the first call), so the plugin still loads where the file is absent.
+# Nsight Perf: NVPERF_SUPPORT with NVPERF_SDK_ROOT (by default the SDK BasicRenderer ships, when present). The SDK is a
+# login-gated NVIDIA download, so it is never fetched. One SDK drives both NvPerf backends: the D3D11 one builds with
+# NVPERF_ENABLED; the Vulkan one also needs the render graph (cmake/RenderGraph.cmake), whose OpenRenderGraph
+# Telemetry/NvPerfCapture links the same SDK (NVPerf::Host, ORG_ENABLE_NVPERF). nvperf_grfx_host.dll is delay-loaded
+# and installed once, in CommunityShaders/bin beside the DXVK DLLs; NvPerf loads it by path before the first call, so
+# the plugin still loads where the file is absent.
+set(CS_NVPERF_DLL)
 if(NVPERF_SUPPORT)
     find_path(
         NVPERF_INCLUDE_DIR
@@ -335,17 +348,32 @@ if(NVPERF_SUPPORT)
             "nvperf_grfx_host.lib (${NVPERF_LIBRARY}) and bin/x64/nvperf_grfx_host.dll (${NVPERF_DLL})"
         )
     endif()
-    target_include_directories(
-        ${PROJECT_NAME}
-        SYSTEM
-        PRIVATE "${NVPERF_INCLUDE_DIR}"
-    )
-    target_link_libraries(${PROJECT_NAME} PRIVATE "${NVPERF_LIBRARY}" delayimp)
+    # The SDK as a target: the plugin links it, and OpenRenderGraph picks it up by name.
+    if(NOT TARGET NVPerf::Host)
+        add_library(NVPerf::Host UNKNOWN IMPORTED GLOBAL)
+        set_target_properties(
+            NVPerf::Host
+            PROPERTIES
+                IMPORTED_LOCATION "${NVPERF_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${NVPERF_INCLUDE_DIR}"
+        )
+    endif()
+    target_link_libraries(${PROJECT_NAME} PRIVATE NVPerf::Host delayimp)
     target_link_options(
         ${PROJECT_NAME}
         PRIVATE "/DELAYLOAD:nvperf_grfx_host.dll"
     )
     target_compile_definitions(${PROJECT_NAME} PRIVATE NVPERF_ENABLED)
+    set(CS_NVPERF_DLL "${NVPERF_DLL}")
+    install(
+        FILES "${NVPERF_DLL}"
+        DESTINATION SKSE/Plugins/CommunityShaders/bin
+        COMPONENT DXVK
+    )
+    set(ORG_ENABLE_NVPERF ON CACHE BOOL "" FORCE)
+    set(ORG_NVPERF_ROOT "${NVPERF_SDK_ROOT}" CACHE PATH "" FORCE)
+else()
+    set(ORG_ENABLE_NVPERF OFF CACHE BOOL "" FORCE)
 endif()
 
 # OpenRenderGraph on DXVK's Vulkan device; defines CS_HAS_RENDER_GRAPH.
@@ -773,19 +801,13 @@ install(
     DESTINATION ${LICENSES_DESTINATION}
     COMPONENT SKSE
 )
-if(NVPERF_SUPPORT)
-    install(
-        FILES "${NVPERF_DLL}"
-        DESTINATION SKSE/Plugins/CommunityShaders/NvPerf
-        COMPONENT SKSE
-    )
-endif()
 
 # Remove runtime directories superseded by the unified bin layout.
 install(CODE
     "file(REMOVE_RECURSE
         \"\${CMAKE_INSTALL_PREFIX}/SKSE/Plugins/CommunityShaders/dxvk\"
         \"\${CMAKE_INSTALL_PREFIX}/SKSE/Plugins/CommunityShaders/Streamline\"
+        \"\${CMAKE_INSTALL_PREFIX}/SKSE/Plugins/CommunityShaders/NvPerf\"
     )"
     COMPONENT Shaders
 )
@@ -1080,6 +1102,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         APPEND _prepare_aio_cmds
         COMMAND ${CMAKE_COMMAND} -E remove_directory "${AIO_DIR}/SKSE/Plugins/CommunityShaders/dxvk"
         COMMAND ${CMAKE_COMMAND} -E remove_directory "${AIO_DIR}/SKSE/Plugins/CommunityShaders/Streamline"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${AIO_DIR}/SKSE/Plugins/CommunityShaders/NvPerf"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_aio_runtime_dir}"
     )
 
@@ -1172,21 +1195,6 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         COMMENT "Copying built DLL, PDB and crash dump helper to AIO package"
         VERBATIM
     )
-    if(NVPERF_SUPPORT)
-        add_custom_command(
-            TARGET ${PROJECT_NAME}
-            POST_BUILD
-            COMMAND
-                ${CMAKE_COMMAND} -E make_directory
-                "${AIO_DIR}/SKSE/Plugins/CommunityShaders/NvPerf"
-            COMMAND
-                ${CMAKE_COMMAND} -E copy_if_different "${NVPERF_DLL}"
-                "${AIO_DIR}/SKSE/Plugins/CommunityShaders/NvPerf/nvperf_grfx_host.dll"
-            COMMENT "Copying nvperf_grfx_host.dll to AIO package"
-            VERBATIM
-        )
-    endif()
-
     # Only copy shaders when HLSL files change; copy individually so unchanged
     # files do not get their timestamps updated.
     file(

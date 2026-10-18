@@ -49,7 +49,6 @@
 #include "Deferred.h"
 #include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/DxvkOrgInterop.h"
-#include "RenderGraph/NvPerfBridge.h"
 #include "RenderGraph/PrefixSum.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
