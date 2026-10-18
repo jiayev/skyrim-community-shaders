@@ -313,6 +313,10 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 	vsout.Position = viewPos;
+#	if defined(DCLF_BINDLESS)
+	// A decal's depth toward the eye (DCLFObjects.hlsli, DCLFDecalNudged): the engine's decal bias, which DCLF's draws cannot carry.
+	vsout.Position = DCLFDecalNudged(vsout.Position, DCLFObjectIndex);
+#	endif
 
 #	if defined(SKINNED)
 #		if defined(DCLF_BINDLESS)

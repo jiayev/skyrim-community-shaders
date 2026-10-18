@@ -344,6 +344,10 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif  // SKINNED
 
 	vsout.Position = viewPos;
+#	if defined(DCLF_BINDLESS)
+	// A decal's depth toward the eye (DCLFObjects.hlsli, DCLFDecalNudged): the engine's decal bias, which DCLF's draws cannot carry.
+	vsout.Position = DCLFDecalNudged(vsout.Position, DCLFObjectIndex);
+#	endif
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
 	// Precise like viewPos: Drawcall Limit Fix's Z-prepass and colour pass compile this from two modules, and the colour pass tests

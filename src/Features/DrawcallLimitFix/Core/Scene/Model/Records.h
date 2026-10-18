@@ -249,7 +249,14 @@ namespace DCLF
 	{
 		kRasterTwoSided = 1u << 0,
 		kRasterDecalGroupShift = 1,  // 2 bits: ObjectDecalGroup
-		kRasterDepthBiasShift = 4,   // 4 bits: rasterStateDepthBiasMode (0-11)
+		// A decal's draw (a decal group's but an opaque effect's, a first-person forward decal's): the vertex stage moves it toward the
+		// eye (the record's kRecordDecalNudge, LightingConstants.h), in place of the depth bias below, which a device-generated command's
+		// pipeline switch does not carry (VK_EXT_device_generated_commands: an execution set's pipelines change shaders only). Not an
+		// engine state index: RasterStateBits leaves it out.
+		kRasterDecalNudge = 1u << 3,
+		// 4 bits: rasterStateDepthBiasMode (0-11). The engine's; its bias is not drawn (kRasterDecalNudge), the index keeps the key the
+		// engine's state.
+		kRasterDepthBiasShift = 4,
 		kRasterBlendModeShift = 8,   // 3 bits: alphaBlendMode (0-6)
 		kRasterAlphaToCoverage = 1u << 11,
 		kRasterWriteModeShift = 12,  // 4 bits: alphaBlendWriteMode (0-12)
@@ -289,7 +296,7 @@ namespace DCLF
 	inline constexpr std::uint32_t RasterWriteMode(std::uint32_t a_flags) { return (a_flags >> kRasterWriteModeShift) & 15u; }
 	inline constexpr std::uint32_t RasterTerrainGroup(std::uint32_t a_flags) { return (a_flags >> kRasterTerrainGroupShift) & 3u; }
 	/** @brief What selects the engine's state objects: everything but two-sidedness, the Lighting key bits and the shader class. */
-	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterLightingSpareMask | kRasterEffect); }
+	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterLightingSpareMask | kRasterEffect | kRasterDecalNudge); }
 	inline constexpr std::uint32_t RasterLightingSpare(std::uint32_t a_flags) { return (a_flags & kRasterLightingSpareMask) >> kRasterLightingSpareShift; }
 
 	/** @brief Packs a decal's state indices (EngineStates.h says where each comes from). */

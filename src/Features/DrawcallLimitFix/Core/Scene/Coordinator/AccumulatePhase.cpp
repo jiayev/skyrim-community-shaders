@@ -949,7 +949,8 @@ namespace DCLF::Scene
 		std::uint32_t rasterFlags = twoSided ? kRasterTwoSided : 0u;
 		if (descriptors.decalGroup)
 			rasterFlags |= PackDecalRasterFlags(descriptors.decalGroup, descriptors.opaqueInDecalGroup ? 0u : decalBiasMode[descriptors.decalGroup & 3], descriptors.decalBlendMode,
-				descriptors.decalWriteMode);  // an opaque effect in decal group 1 has no bias (DeriveEffectDescriptors)
+				               descriptors.decalWriteMode) |  // an opaque effect in decal group 1 has no bias (DeriveEffectDescriptors)
+			               (descriptors.opaqueInDecalGroup ? 0u : kRasterDecalNudge);
 		// As Terrain Blending's replay sets it: blend 1 / write 1 for terrain, blend off / write 1 for the no-blend meshes after it.
 		if (descriptors.terrainGroup)
 			rasterFlags |= PackTerrainRasterFlags(descriptors.terrainGroup, descriptors.terrainGroup == 1 ? 1u : 0u, 1u);
@@ -958,7 +959,7 @@ namespace DCLF::Scene
 			rasterFlags |= PackForwardRasterFlags(descriptors.forwardBlendMode, kForwardWriteMode, descriptors.forwardDepthTest, descriptors.forwardDepthWrite);
 		// A first-person decal's depth bias, in the bias bits a forward key leaves free.
 		if (descriptors.forward && descriptors.forwardDecalGroup)
-			rasterFlags |= (decalBiasMode[descriptors.forwardDecalGroup & 3] & 15u) << kRasterDepthBiasShift;
+			rasterFlags |= ((decalBiasMode[descriptors.forwardDecalGroup & 3] & 15u) << kRasterDepthBiasShift) | kRasterDecalNudge;
 		if (descriptors.refraction)
 			rasterFlags |= PackRefractionRasterFlags(descriptors.refractionFalloff, descriptors.refractionClamp);
 		// The Lighting key bits' claimant's (Integrations/ExtendedTranslucency's material model; 0 while it isn't loaded).

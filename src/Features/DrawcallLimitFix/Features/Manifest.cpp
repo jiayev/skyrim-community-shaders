@@ -275,7 +275,7 @@ namespace DCLF::Features
 			Integrations::SubsurfaceScattering::kRecordBeastRace,
 		};
 		constexpr std::uint32_t kCoreRecordFlags = kRecordAlphaBlended | kRecordRefraction | kRecordRefractionFalloff | kRecordRefractionClamp |
-		                                           kRecordRefractionNoNormals | kRecordRefractionVertexColors | kRecordRefractionTwoSided |
+		                                           kRecordRefractionNoNormals | kRecordRefractionVertexColors | kRecordRefractionTwoSided | kRecordDecalNudge |
 		                                           (~0u << kRecordFadeRootShift);
 
 		// Every per-draw buffer's register (Api::PerDrawBuffer, all of the pixel stage; its HLSL declares the same: Integrations/LightLimitFix's

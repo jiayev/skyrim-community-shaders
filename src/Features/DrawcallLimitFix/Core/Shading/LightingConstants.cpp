@@ -351,7 +351,7 @@ namespace DCLF
 	{
 		const auto& object = a_tables.objects[a_objectIndex];
 		a_out.ancestorValue = a_tables.ancestorValue[a_objectIndex].value;
-		// The fade root's reference (bits 8-31) is the root states' family's, ORed in with the families' words below.
+		// The fade root's reference (bits 9-31) is the root states' family's, ORed in with the families' words below.
 		a_out.recordFlags = RecordFlagsOf(object.flags, kNoFadeRoot);
 		// The same reference the native draw's AlphaTestRefBuffer carries: threshold / 255, and 0 when the
 		// object is not alpha tested (the shader's test is then compiled out anyway).
@@ -361,7 +361,7 @@ namespace DCLF
 		// TreeWind's wind, DCLFTreeWind).
 		std::fill(std::begin(a_out.featureBlock), std::end(a_out.featureBlock), 0u);
 		// The table families' references the record carries, ORed into their words after recordFlags (Api::TableFamily::recordWord:
-		// Features/TreeWind's tree slot and listing generation, never 0, for its wind: DCLFTreeWind; the fade roots' (root + 1) << 8 in
+		// Features/TreeWind's tree slot and listing generation, never 0, for its wind: DCLFTreeWind; the fade roots' (root + 1) << 9 in
 		// recordFlags, by which the pixel stage reads FadeStateCS's fade).
 		for (const auto& family : a_tables.families.All())
 			family.WriteRecordWords(reinterpret_cast<std::uint32_t*>(&a_out), a_objectIndex);
@@ -381,9 +381,12 @@ namespace DCLF
 			fades = ((pass & 0x200u) ? kLodFadeSpecular | ((a_renderFlags & 2) ? 0u : kLodFadeSsr) : 0u) | (((pass >> 24) & 0x3f) == 1 ? kLodFadeEnvmap : 0u);
 		}
 		a_out.lodFades = fades;
-		// A refraction object's variant bits (kRecordRefraction*), from its key; its family's (the Effect port's suppress and billboard bits).
-		if (!(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size())
-			a_out.recordFlags |= RefractionRecordFlagsOf(a_tables.pipelines[object.pipelineIndex]) | FamilyRecordFlagsOf(a_tables.pipelines[object.pipelineIndex], object.flags);
+		// A refraction object's variant bits (kRecordRefraction*), from its key; its family's (the Effect port's suppress and billboard bits);
+		// a decal's nudge (kRecordDecalNudge).
+		if (!(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size()) {
+			const auto& key = a_tables.pipelines[object.pipelineIndex];
+			a_out.recordFlags |= RefractionRecordFlagsOf(key) | FamilyRecordFlagsOf(key, object.flags) | DecalRecordFlagsOf(key);
+		}
 	}
 
 	void SampleShading(const RE::BSShaderProperty& a_base, std::uint32_t a_pass, bool a_member, BindlessShading& a_out)
