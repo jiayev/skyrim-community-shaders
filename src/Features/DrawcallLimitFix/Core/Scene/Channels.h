@@ -33,15 +33,16 @@ namespace DCLF::Scene
 	/**
 	 * @brief What the coordinator's passes take of the frame, posted latest-wins by the render thread after BeginFrame's capture and taken
 	 * at the start of each scene pass (TakeFrameInputs): the engine globals the passes read (FrameGlobals::Scope), the frame number
-	 * (sceneFrame), the membership witness the binds read, the toggles generation and the verdicts generation (a toggle that enters the
-	 * classification: the coordinator drops its cached verdicts). The post wakes the pump; a pass reads only what it took, and keeps the
-	 * last it took while none newer is posted.
+	 * (sceneFrame), the membership witness the binds read, the toggles (the set the pass evaluates and commits under, and its generation,
+	 * taken together) and the verdicts generation (a toggle that enters the classification: the coordinator drops its cached verdicts).
+	 * The post wakes the pump; a pass reads only what it took, and keeps the last it took while none newer is posted.
 	 */
 	struct FrameInputs
 	{
 		std::shared_ptr<const FrameGlobals> globals;
 		std::uint32_t frame = 0;
 		std::uint32_t membershipWitness = 0;
+		ToggleSet toggles{};
 		std::uint32_t togglesGeneration = 0;
 		std::uint32_t verdictsGeneration = 0;
 	};

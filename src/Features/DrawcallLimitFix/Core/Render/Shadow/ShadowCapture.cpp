@@ -473,12 +473,12 @@ namespace DCLF
 		Diagnostics::Notify(Diagnostics::OcclusionCaptured{ a_view });
 	}
 
-	std::vector<ShadowViewLayout> ShadowEngine::PredictedOcclusion() const
+	std::vector<ShadowViewLayout> ShadowEngine::PredictedOcclusion(const ToggleSet* a_toggles) const
 	{
 		std::vector<ShadowViewLayout> out;
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 			const auto& o = occlusion[v];
-			if (!Extensions::OcclusionOn(ActiveToggles(), v) || !o.rasterState || o.dsvFormat == DXGI_FORMAT_UNKNOWN)
+			if ((a_toggles && !Extensions::OcclusionOn(*a_toggles, v)) || !o.rasterState || o.dsvFormat == DXGI_FORMAT_UNKNOWN)
 				continue;
 			out.push_back(LayoutOf(o.view, OcclusionSlot(v), OcclusionModeOf(v), OcclusionDepthTarget(v)));
 		}

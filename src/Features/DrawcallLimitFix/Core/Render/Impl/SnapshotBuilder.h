@@ -35,6 +35,9 @@ namespace DCLF
 			bool shadow = false;
 			ShadowInputs shadowInputs;
 			std::shared_ptr<ShadowResources> shadowTarget;
+			// The toggles it was made under (SceneToggles: the next commit's): paired with a publication committed under others, its
+			// shadow part is not that publication's (BuildSnapshotDraws drops it, and the snapshot is not passed through to).
+			ToggleSet toggles{};
 		} aheadContext;  // the render thread's, made at the frame's start (PostAheadContext)
 		// Render thread (PostFit): the fits the builds ahead are made against (main, shadow), posted with aheadContext; changes counted.
 		std::array<SceneFit, 2> postedFit{};
@@ -75,7 +78,7 @@ namespace DCLF
 			// Both main payloads built for the main resources; without, its frames have no claims (DecideCoverage).
 			bool drawsComplete = false;
 			// The graph build its recordings are of, the targets and shadow format its pipeline sets are for, the main resources'
-			// generation. Its commit's toggles are its publication's.
+			// generation. Its toggles are its publication's (the frame's once installed: never stale).
 			std::uint64_t buildGeneration = 0, mainGeneration = 0;
 			std::uint32_t targetsGeneration = 0;
 			DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
@@ -212,6 +215,7 @@ namespace DCLF
 				std::uint32_t tablesGeneration = 0;
 				RevisionRequest request;
 				std::uint64_t inputs = 0;     // RevisionInputs::generation
+				ToggleSet toggles{};          // the publication's (RevisionProducer::toggles): moved with the inputs
 				std::uint64_t lookups = 0;    // the lookups' entries the pass reads (RevisionMake::lookupsWitness)
 				std::uint64_t shadowRows = 0; // and the shadow map rows the shapes read (ShadowRowsWitness)
 				std::uint64_t volatiles = 0;  // what the pass reads besides the inputs and the publication (the event lists' asks, ...)

@@ -129,7 +129,8 @@ namespace DCLF
 	{
 		// Ready when this frame's shadow commit uploaded the occluders and the map's target is imported.
 		const auto& engine = *impl->shadowEngine;
-		if (a_view >= kOcclusionViews || failed || !ActiveToggles().shadows || !Extensions::OcclusionOn(ActiveToggles(), a_view) || !engine.shadow)
+		const auto toggles = ActiveToggles();
+		if (a_view >= kOcclusionViews || failed || !toggles.shadows || !Extensions::OcclusionOn(toggles, a_view) || !engine.shadow)
 			return false;
 		const auto& occlusion = engine.occlusion[a_view];
 		// Not while the built graph lacks the map's import, nor without the selected revision's recorded shape for the maps' layout
@@ -137,7 +138,7 @@ namespace DCLF
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!host || host->RebuildRequested())
 			return false;
-		const auto layouts = engine.PredictedOcclusion();
+		const auto layouts = engine.PredictedOcclusion(&toggles);
 		bool shaped = false;
 		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kOcclusionShape);
 		if (impl->EpochCovered(epoch))

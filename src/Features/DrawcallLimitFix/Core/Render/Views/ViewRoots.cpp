@@ -18,9 +18,9 @@ namespace DCLF
 		//   and both LOD classes are DCLF's: Features/Lod's LodRootsOwned). Unowned, its roots stay, the members withheld (PassCapture).
 		auto& capture = PassCapture::Get();
 		capture.WatchViewResidue(a_view, 0);
-		if (!a_plain || !ViewDrawable(a_view) || !impl->ViewCovered(a_view) || !Policy::WithholdFromEngine())
-			return 0;
 		const auto toggles = ActiveToggles();
+		if (!a_plain || !ViewDrawable(a_view, toggles) || !impl->ViewCovered(a_view) || !Policy::WithholdFromEngine())
+			return 0;
 		std::uint32_t owned = 0;
 		const auto& facesOwned = impl->View(a_view).facesOwned;
 		for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f) {

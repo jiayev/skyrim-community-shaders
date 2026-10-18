@@ -53,7 +53,7 @@ namespace DCLF
 				Api::DrawFamilyFaceRow query{ *scene, true, own.row, nullptr };
 				return faces.row && faces.row(query);
 			};
-			state.facesOwned[d] = ViewDrawable(a_view) && impl->ViewCovered(a_view) && own.ready && impl->familyOwned[d] && scene && rowDraws();
+			state.facesOwned[d] = ViewDrawable(a_view, ActiveToggles()) && impl->ViewCovered(a_view) && own.ready && impl->familyOwned[d] && scene && rowDraws();
 			PassCapture::Get().SetViewFamilyOwned(a_view, family, state.facesOwned[d]);
 		}
 	}

@@ -210,6 +210,9 @@ namespace DCLF::Scene
 			// Kept for the pass's evaluations on the pool (ShardScope binds the same capture there).
 			passGlobals = sceneInputs.globals ? sceneInputs.globals : NoFrameGlobals();
 			FrameGlobals::Scope scope(passGlobals);
+			// The whole pass - events, walk, joins, commit, publication - reads the toggles its frame inputs carried (ActiveToggles: the
+			// set its publication is committed under), never the frame's or the live ones; its pool chunks bind the same (ShardScope).
+			ToggleSnapshotScope toggles(&passSnapshot.toggles);
 			RunSceneWork(!a_inline);
 		} catch (const std::exception& e) {
 			// Never out of the drain (the pump would close for good): the pass's flags put back, the next wake runs another.

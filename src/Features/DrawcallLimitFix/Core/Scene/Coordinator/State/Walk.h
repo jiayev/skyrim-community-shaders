@@ -122,7 +122,10 @@ namespace DCLF::Scene
 			const void* moveKey = nullptr;
 			const void* moveKeyOuter = nullptr;
 		};
-		/** @brief What a pass's evaluations read in place of the live toggles and classify inputs (Api/ClassifyInputs.h). */
+		/**
+		 * @brief What a pass's evaluations read in place of the live toggles and classify inputs (Api/ClassifyInputs.h): the toggles its
+		 * frame inputs carried (TakeFrameInputs; bound over the whole pass, ScenePass), the classify inputs sampled at its walk.
+		 */
 		struct PassSnapshot
 		{
 			ToggleSet toggles;

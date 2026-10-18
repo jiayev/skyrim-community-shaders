@@ -184,7 +184,7 @@ namespace DCLF::Scene
 			const auto& views = Extensions::Views();
 			for (std::uint32_t i = 0; i < views.rootCount; ++i) {
 				const auto view = views.rootViews[i];
-				if (!Extensions::ViewOn(ActiveToggles(), view))
+				if (!Extensions::ViewOn(SceneToggles(), view))
 					continue;
 				Api::ViewRootCapture capture;
 				Extensions::ViewEntryOf(view).captureRoot(capture);
@@ -202,9 +202,9 @@ namespace DCLF::Scene
 		{
 			Fnv1a hash;
 			const auto& views = Extensions::Views();
-			std::uint32_t listing = RootListing(ActiveToggles());
+			std::uint32_t listing = RootListing(SceneToggles());
 			for (std::uint32_t i = 0; i < views.rootCount; ++i)
-				listing |= Extensions::ViewOn(ActiveToggles(), views.rootViews[i]) ? 1u << (kObjectClasses + i) : 0u;
+				listing |= Extensions::ViewOn(SceneToggles(), views.rootViews[i]) ? 1u << (kObjectClasses + i) : 0u;
 			hash.Mix(listing);
 			// The classes' category roots, listed or not.
 			for (const auto root : Extensions::RegisteredCategoryRoots())
@@ -270,7 +270,7 @@ namespace DCLF::Scene
 				mix(tes->objRoot);
 				watch(tes->objRoot);
 				// The classes' category roots, with the classes that list them.
-				const std::uint32_t rootListing = RootListing(ActiveToggles());
+				const std::uint32_t rootListing = RootListing(SceneToggles());
 				const auto& roots = Extensions::RegisteredCategoryRoots();
 				for (std::uint32_t c = 0; c < kObjectClasses; ++c)
 					if (roots[c])
@@ -406,7 +406,7 @@ namespace DCLF::Scene
 				// The classes' category roots while a class that lists one is on (Api::ObjectClassContribution::categoryRoot: Features/Lod's
 				// TES::lodLandRoot, the terrain manager's LOD blocks): category nodes, their content tracked by the usual structural events. A
 				// root two classes list is one node.
-				if (const std::uint32_t rootListing = RootListing(ActiveToggles())) {
+				if (const std::uint32_t rootListing = RootListing(SceneToggles())) {
 					const auto& roots = Extensions::RegisteredCategoryRoots();
 					for (std::uint32_t c = 0; c < kObjectClasses; ++c)
 						if (rootListing & (1u << c))
@@ -423,7 +423,7 @@ namespace DCLF::Scene
 				const auto& views = Extensions::Views();
 				for (std::uint32_t i = 0; i < views.rootCount; ++i) {
 					const auto view = views.rootViews[i];
-					if (!Extensions::ViewOn(ActiveToggles(), view))
+					if (!Extensions::ViewOn(SceneToggles(), view))
 						continue;
 					Api::ViewRootCapture root;
 					Extensions::ViewEntryOf(view).captureRoot(root);

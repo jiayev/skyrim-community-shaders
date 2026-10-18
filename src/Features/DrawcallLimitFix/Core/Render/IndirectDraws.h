@@ -35,6 +35,7 @@ namespace DCLF
 	struct SceneTables;
 	struct ForwardTargets;
 	struct TargetFormats;
+	struct ToggleSet;
 	struct ViewEpochState;
 	namespace Draws
 	{
@@ -219,11 +220,11 @@ namespace DCLF
 		void NoteEventAdoption(double a_ms, std::uint32_t a_frames);
 		/**
 		 * @brief Render thread, the frame's start, after the build point: adopts the newest posted snapshot whole, unless stale for
-		 * what it could not know ahead (graph build, targets, shadow format, toggles older than a_togglesGeneration, main resources);
-		 * then the frame has no claims until the next. Returns its ScenePublication (installed by FrameView::HandOverAtFrameStart when
-		 * newer), null before the first.
+		 * what it could not know ahead (graph build, targets, shadow format, main resources); then the frame has no claims until the
+		 * next. Its publication's toggles are never stale: installed, they are the frame's (Toggles::Adopt). Returns its ScenePublication
+		 * (installed by FrameView::HandOverAtFrameStart when newer), null before the first.
 		 */
-		std::shared_ptr<const void> AdoptSnapshot(std::uint32_t a_togglesGeneration);
+		std::shared_ptr<const void> AdoptSnapshot();
 		/**
 		 * @brief Render thread, at Present (after the frame's last submission): binds the adopted set's pooled versions
 		 * (NamedVersions::Bind) and the installed payload's backings (PayloadVersions::Bind) to SubmittedRetirementPoint(), so no
@@ -393,10 +394,11 @@ namespace DCLF
 		/** @brief Any thread: whether the view's epochs draw its members this frame (its coverage, decided at the frame's start). */
 		bool ViewCovered(Api::EngineView a_view) const;
 		/**
-		 * @brief The scene lane's commit (Coordinator::SetCapability): whether the view's phase can be drawn - its toggle, and its targets
-		 * published (a capability: each member then waits for its own pipelines, ViewSlotReady).
+		 * @brief The scene lane's commit (Coordinator::SetCapability, under the commit's toggles) and the frame's view decisions (under
+		 * the frame's): whether the view's phase can be drawn - its toggle in a_toggles, and its targets published (a capability: each
+		 * member then waits for its own pipelines, ViewSlotReady).
 		 */
-		bool ViewDrawable(Api::EngineView a_view) const;
+		bool ViewDrawable(Api::EngineView a_view, const ToggleSet& a_toggles) const;
 		/**
 		 * @brief The scene lane's commit: whether a_slot's pipelines for the view are in a_catalog (the lane's), as the view's membership
 		 * reads it, from nothing the render thread writes per frame. CategoryRoot: a_why (the set parity's observer) 1 no catalog or

@@ -2582,6 +2582,17 @@ resident-draw, set and fade parity; motion m28/m29).
       A forced release's stores (the pending blocks shown, the held ones released and detached) reach the scene as the hidden-node
       source's and the tracker's events, and its outcome wakes a pass, so the next publication follows it as any scene change does. The
       frames until then are what `<- GATE HOLE` and `<- GATE COVERAGE` (below) name.
+    - **Toggles apply at adoption** (2026-10-17). A toggle withdrew the set too: every frame from the toggle until a publication
+      committed under the new generation was installed (`InstalledToggles() < toggleGeneration` in `FrameDriver`, and
+      `AdoptSnapshot`'s `kStaleToggles` refusing snapshots of older toggles), with the near world missing meanwhile as above. Now the
+      frame inputs carry the set with its generation, the publication carries the set its commit was made under, and the frames take
+      it when it is installed (`Toggles::Adopt`, read as `FrameToggles`); until then they draw, withhold and cover as the installed
+      one's toggles say. Revisions follow their publication's toggles (the revision inputs carry none; the reuse key holds them), the
+      occlusion layouts are posted for every captured map and narrowed to the publication's, and a builds-ahead context made under
+      other toggles than its publication's drops its shadow part and is never passed through to. The scene pass's toggle race is
+      fixed with it: the walk read the toggles at its own start while the events, the joins, `CommitSet` and `SetCapability` read the
+      live set, so a toggle applied mid-pass committed claims under one set and stamped the publication with the frame inputs'
+      generation; the whole pass now runs under the frame inputs' set (`ToggleSnapshotScope` in `ScenePass`).
     - **Observers.**
       - Under `CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`, the adoption checks the installed claims against each flip:
         an incoming geometry not claimed with the flip's phases is `<- GATE HOLE` (a later publication's legitimate change reads as

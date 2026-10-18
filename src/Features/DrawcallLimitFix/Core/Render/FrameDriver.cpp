@@ -81,17 +81,16 @@ namespace DCLF
 		// context, the captures, the root states' task's) wake it once, when this scope ends.
 		ScenePassWakeBatch wakes;
 		scene.SetScenePassMode(true, inlinePass);
-		// The frame's toggles, before anything reads them. A change that enters the classification drops the cached verdicts (the
-		// coordinator drops them at its next pass, told by the frame inputs); so does a classify input's (Api/ClassifyInputs.h: a CS feature
-		// switched on or off that holds objects back, moving them between their held groups and the native loop).
+		// The requested toggles applied, before the frame inputs carry them to the coordinator, which commits its next publication under
+		// them; the frames keep the installed publication's (Toggles::Adopt at the hand-over) until one committed under them is installed,
+		// drawing and covering as it says meanwhile (a toggle withdraws nothing). A change that enters the classification drops the cached
+		// verdicts (the coordinator drops them at its next pass, told by the frame inputs); so does a classify input's (Api/ClassifyInputs.h:
+		// a CS feature switched on or off that holds objects back, moving them between their held groups and the native loop).
 		static Extensions::ClassifyInputSet inputsSeen = Extensions::SampleClassifyInputs();
 		const auto inputs = Extensions::SampleClassifyInputs();
 		const bool togglesClassify = Toggles::Get().BeginFrame();
 		if (togglesClassify || inputs != std::exchange(inputsSeen, inputs))
 			view.RequestVerdictsInvalidated();
-		// The claims committed before a toggle are another capability's: the frames are the engine's from here until a publication
-		// committed under the new toggles is installed (its commit's toggles generation, which the frame inputs carry to the coordinator).
-		toggleGeneration = Toggles::Get().Generation();
 		ScopedPerfEvent event("CS DCLF: scene tables");
 		// The frame number, the frame's globals captured and the frame inputs posted (an engine capture: the budget's scene captures).
 		{
@@ -109,9 +108,10 @@ namespace DCLF
 		auto& draws = IndirectDraws::Get();
 		{
 			// The newest complete snapshot the builder posted, adopted whole - its revision, its draws and its publication (installed here
-			// with the log walked up to it). A stale one is not adopted and the frame is the engine's until the builder's next.
+			// with the log walked up to it, its toggles the frame's). A stale one is not adopted and the frame is the engine's until the
+			// builder's next.
 			RenderThreadBudget::Part exchange(RenderThreadBudget::Bucket::Exchange);
-			view.HandOverAtFrameStart(draws.AdoptSnapshot(toggleGeneration));
+			view.HandOverAtFrameStart(draws.AdoptSnapshot());
 			view.SyncFrameTables();
 		}
 		// The views' frame start before the coverage that decides whether their members are withheld (Features/FirstPerson's: the view's
@@ -124,11 +124,10 @@ namespace DCLF
 		Diagnostics::Notify<Diagnostics::FramePoint::LookupsInstalled>();
 		draws.PostLookupInputs();
 		{
-			// A frame the adopted snapshot does not cover, or whose publication was committed under older toggles or before an adoption
-			// guard's generation (a LOD gate's forced release), has no claims: the engine draws everything, and the next covered frame
-			// installs the whole set again.
+			// A frame the adopted snapshot does not cover has no claims: the engine draws everything, and the next covered frame installs
+			// the whole set again. A toggle withdraws nothing: the installed publication's toggles are the frame's.
 			RenderThreadBudget::Part exchange(RenderThreadBudget::Bucket::Exchange);
-			if (!draws.DecideCoverage() || !view.HasInstalled() || view.InstalledToggles() < toggleGeneration)
+			if (!draws.DecideCoverage() || !view.HasInstalled())
 				view.WithdrawSet();
 			else
 				view.InstallClaims();

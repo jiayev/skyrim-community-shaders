@@ -76,8 +76,9 @@ namespace DCLF::Scene
 			stats.materials = 0;
 			return;
 		}
-		// Snapshotted for the whole pass (pool and joins): the render thread may switch either while it runs.
-		passSnapshot = { ActiveToggles(), Extensions::SampleClassifyInputs() };
+		// Snapshotted for the whole pass (pool and joins): the render thread may switch them while it runs. The toggles are the frame
+		// inputs' (TakeFrameInputs), the set this pass commits under.
+		passSnapshot.inputs = Extensions::SampleClassifyInputs();
 		ShardScope passScope(*this, false);
 		PartTimer timer(stats.partMs);
 		{

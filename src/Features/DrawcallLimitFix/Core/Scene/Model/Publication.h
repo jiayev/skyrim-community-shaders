@@ -15,6 +15,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Lookups.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/SceneSet.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 namespace DCLF
 {
@@ -44,8 +45,10 @@ namespace DCLF
 	{
 		std::uint64_t sequence = 0;
 		std::uint32_t commitFrame = 0;        // the scene frame of the commit it applies (CommitSet's; stats and the install delay)
-		std::uint32_t togglesGeneration = 0;  // the toggles that commit was made under (FrameInputs): the toggle reinstall waits for one
-		std::uint32_t tablesGeneration = 0;   // the tables' generation (GetTablesGeneration while it is the frame's)
+		std::uint32_t togglesGeneration = 0;  // the toggles generation that commit was made under (FrameInputs)
+		// ... and the set: the frames' while it is installed (Toggles::Adopt), and its revision's (MakeRevision).
+		ToggleSet toggles{};
+		std::uint32_t tablesGeneration = 0;  // the tables' generation (GetTablesGeneration while it is the frame's)
 		std::shared_ptr<const SceneTables> tables;
 		std::shared_ptr<const SetSnapshot> claims;
 		std::array<std::uint32_t, 3> lackingCount{};

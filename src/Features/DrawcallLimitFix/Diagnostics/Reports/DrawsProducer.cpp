@@ -24,10 +24,10 @@ namespace DCLF
 			return adoptionLatency.empty() ? 0u : adoptionLatency[(std::min)(adoptionLatency.size() - 1, adoptionLatency.size() * a_percent / 100)];
 		};
 		std::string text = fmt::format("[DCLF] scene snapshots (T6b3b): {} built, {} publications coalesced by the builder, {} adopted, {} frames adopting nothing new; "
-									   "passed over as stale: build {}, targets {}, shadow format {}, toggles {}, main resources {}; built without draws for the main "
+									   "passed over as stale: build {}, targets {}, shadow format {}, main resources {}; built without draws for the main "
 									   "resources {}\n",
 			snapshotsBuilt.exchange(0, std::memory_order_relaxed), snapshotsCoalesced.exchange(0, std::memory_order_relaxed), snapshotsAdopted, snapshotFramesKept,
-			snapshotsStale[kStaleBuild], snapshotsStale[kStaleTargets], snapshotsStale[kStaleShadowFormat], snapshotsStale[kStaleToggles], snapshotsStale[kStaleMain],
+			snapshotsStale[kStaleBuild], snapshotsStale[kStaleTargets], snapshotsStale[kStaleShadowFormat], snapshotsStale[kStaleMain],
 			snapshotsWithoutDraws.exchange(0, std::memory_order_relaxed));
 		text += fmt::format("[DCLF] snapshot builds (ms, avg/p95/max): draws ahead {} ({} built), shapes {}, recordings wait {}; commit to adoption (frames): p50 {}, p95 {}, "
 							"max {}\n",

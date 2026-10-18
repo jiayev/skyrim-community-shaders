@@ -41,7 +41,7 @@ namespace DCLF::Features::FirstPerson
 					RenderThreadBudget::Hook budget(RenderThreadBudget::Site::ZPrepass);
 					// The first-person subtree's hidden bits as the engine's first-person culls (unk_FPCulling, this block's) saw them: the next
 					// frame's members' chains read these (FrameGlobals::NoteFirstPersonCulled).
-					if (Extensions::ViewOn(ActiveToggles(), kView))
+					if (Extensions::ViewOn(SceneToggles(), kView))
 						if (auto* player = RE::PlayerCharacter::GetSingleton())
 							FrameGlobals::NoteFirstPersonCulled(player->Get3D(true));
 					{

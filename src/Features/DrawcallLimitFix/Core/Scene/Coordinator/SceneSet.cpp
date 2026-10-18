@@ -22,11 +22,12 @@ namespace DCLF::Scene
 	std::uint32_t Coordinator::SetCapability()
 	{
 		// Main always; shadow/occlusion once set up (objects then wait on PhaseReady); each view's phase once it is drawable, in slot order
-		// (the reflection's, the first person's).
-		std::uint32_t phases = kSetMain | (ActiveToggles().shadows ? IndirectDraws::Get().ShadowCapability() : 0u);
+		// (the reflection's, the first person's). Under the commit's toggles (the pass's: ToggleSnapshotScope).
+		const auto toggles = ActiveToggles();
+		std::uint32_t phases = kSetMain | (toggles.shadows ? IndirectDraws::Get().ShadowCapability() : 0u);
 		const auto& views = Extensions::Views();
 		for (std::size_t v = 0; v < views.views.size(); ++v)
-			if (views.views[v].phase && IndirectDraws::Get().ViewDrawable(static_cast<Api::EngineView>(v)))
+			if (views.views[v].phase && IndirectDraws::Get().ViewDrawable(static_cast<Api::EngineView>(v), toggles))
 				phases |= views.views[v].phase;
 		return phases;
 	}
@@ -658,6 +659,7 @@ namespace DCLF::Scene
 		setWaitWhy.resize(objects, 0);
 		setCommitFrame = sceneFrame;
 		setCommitToggles = sceneInputs.togglesGeneration;
+		setCommitToggleSet = sceneInputs.toggles;
 		setGeometryNext.resize(objects, nullptr);
 		if (!setBuilding)
 			setBuilding = std::make_shared<SetSnapshot>();
@@ -767,6 +769,7 @@ namespace DCLF::Scene
 		}
 		publicationCommitFrame = setCommitFrame;
 		publicationCommitToggles = setCommitToggles;
+		publicationCommitToggleSet = setCommitToggleSet;
 	}
 
 	std::uint8_t Coordinator::VetoedPhases(std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait, std::uint32_t a_drawn, bool a_live)
@@ -937,6 +940,7 @@ namespace DCLF::Scene
 		publication->sequence = ++publicationSequence;
 		publication->commitFrame = publicationCommitFrame;
 		publication->togglesGeneration = publicationCommitToggles;
+		publication->toggles = publicationCommitToggleSet;
 		publication->tablesGeneration = tablesGeneration;
 		publication->tables = publishedTables;
 		publication->claims = publicationClaims ? publicationClaims : std::make_shared<const SetSnapshot>();
@@ -1013,7 +1017,13 @@ namespace DCLF::Scene
 	{
 		ZoneScopedN("CS.DCLF.Scene.TakeFrameInputs");
 		// Latest wins; none keeps the last. Once a pass, at its start, so its globals and inputs are one frame's.
-		if (!channels.frameInputs.TakeInto(sceneInputs))
+		const bool taken = channels.frameInputs.TakeInto(sceneInputs);
+		// The toggles the whole pass evaluates, commits and publishes under (ScenePass binds them: ToggleSnapshotScope), the frame inputs'
+		// (never the live ones, which the render thread may apply mid-pass); before the first frame inputs, the newest.
+		if (!sceneInputs.frame)
+			sceneInputs.toggles = Toggles::Get().Active();
+		passSnapshot.toggles = sceneInputs.toggles;
+		if (!taken)
 			return;
 		// The frame's own pass: it publishes whatever it changed (publication pacing, NoteScenePassDone's gate).
 		passTookFrameInputs = true;

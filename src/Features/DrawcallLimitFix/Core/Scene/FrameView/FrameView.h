@@ -144,8 +144,6 @@ namespace DCLF::Scene
 		 */
 		std::shared_ptr<const SetSnapshot> FrameClaims() const { return std::atomic_load(&frameClaims); }
 		bool HasInstalled() const { return installed != nullptr; }
-		/** @brief The toggles generation the installed publication's commit was made under, 0 without one. */
-		std::uint32_t InstalledToggles() const { return installed ? installed->togglesGeneration : 0u; }
 		/**
 		 * @brief Render thread, frame start after InstallClaims or WithdrawSet, before the culls (Extensions::ComponentsAdopt): the claims
 		 * the frame installed (null when withdrawn), and by component the deltas of the publications installed since the last adoption,

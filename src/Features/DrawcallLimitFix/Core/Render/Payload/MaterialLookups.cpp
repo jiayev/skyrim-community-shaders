@@ -317,7 +317,7 @@ namespace DCLF
 		auto& engine = *impl->shadowEngine;
 		auto& views = engine.lastShadow;
 		ShadowLookupInputs inputs;
-		inputs.enabled = ActiveToggles().shadows && views.known && globals::game::utilityShader;
+		inputs.enabled = SceneToggles().shadows && views.known && globals::game::utilityShader;
 		if (inputs.enabled) {
 			DXGI_FORMAT shadowFormat = views.dsvFormat;
 			for (const DXGI_FORMAT occlusionFormat : engine.OcclusionFormats())

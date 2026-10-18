@@ -32,6 +32,7 @@ namespace DCLF::Scene
 		std::uint64_t publicationSequence = 0;
 		std::uint32_t publicationCommitFrame = 0;    // the commit the next publication applies
 		std::uint32_t publicationCommitToggles = 0;  // the toggles generation that commit was made under
+		ToggleSet publicationCommitToggleSet{};      // ... and the set (ScenePublication::toggles)
 		std::shared_ptr<const SetSnapshot> publicationClaims;
 		std::vector<const RE::BSGeometry*> publicationJoined, publicationLeft;
 	};

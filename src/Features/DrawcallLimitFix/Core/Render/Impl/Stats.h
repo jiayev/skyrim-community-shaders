@@ -23,7 +23,6 @@ namespace DCLF
 			kStaleBuild,
 			kStaleTargets,
 			kStaleShadowFormat,
-			kStaleToggles,
 			kStaleMain,
 			kStaleKinds
 		};

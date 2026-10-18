@@ -32,6 +32,7 @@ namespace DCLF::Scene
 		std::vector<std::uint32_t> setApplyMark;  // per slot: its index in setApply + 1, 0 when absent
 		std::uint32_t setCommitFrame = 0;
 		std::uint32_t setCommitToggles = 0;  // the toggles generation the last commit was made under
+		ToggleSet setCommitToggleSet{};      // ... and the set (the frame inputs', which the pass evaluated under)
 		// The claims as applied (a freed slot clears Tables::setPhases): what RevokeUndrawnClaims checks against, with each base slot's
 		// geometry.
 		std::vector<std::uint8_t> setPhasesApplied;
