@@ -378,10 +378,10 @@ namespace DCLF::Scene
 		Api::TableFamilyId fadeRootFamily;
 		Api::CoordinatorComponentId fadeRootComponent;
 
-		// The record word the root reference rides in: BindlessObject::recordFlags, bits 8-31 the root + 1 (RecordFlagsOf's Core bits stay
+		// The record word the root reference rides in: BindlessObject::recordFlags, bits 9-31 the root + 1 (RecordFlagsOf's Core bits stay
 		// below them).
 		constexpr std::uint32_t kFadeRootRecordWord = static_cast<std::uint32_t>(offsetof(BindlessObject, recordFlags) / 4);
-		static_assert(kRecordFadeRootShift == 8, "the fade roots' record reference is bits 8-31 of recordFlags");
+		static_assert(kRecordFadeRootShift == 9, "the fade roots' record reference is bits 9-31 of recordFlags");
 	}
 
 	Api::TableFamilyId FadeRootFamilyId()
@@ -475,7 +475,7 @@ namespace DCLF::Features::Fades
 	void RegisterScene(Api::InstallContext& a_context)
 	{
 		// The family: registered after TreeWind's trees, so the tables' report reads "trees kept a, fade roots kept b". The record's root
-		// reference is (root + 1) << 8 in recordFlags, none past 24 bits (RecordFlagsOf's cut-off); a row carries its generation, so no tag.
+		// reference is (root + 1) << 9 in recordFlags, none past 23 bits (RecordFlagsOf's cut-off); a row carries its generation, so no tag.
 		Scene::fadeRootFamily = a_context.RegisterTableFamily({ .name = "fade roots",
 			.make = &Scene::MakeFadeRoots,
 			.assign = &Scene::AssignFadeRoots,
@@ -484,7 +484,7 @@ namespace DCLF::Features::Fades
 			.clear = &Scene::ClearFadeRoots,
 			.recycle = &Scene::RecycleFadeRoot,
 			.recordWord = Scene::kFadeRootRecordWord,
-			.recordShift = 8,
+			.recordShift = kRecordFadeRootShift,
 			.recordBias = 1,
 			.recordTag = false,
 			.journaled = true,

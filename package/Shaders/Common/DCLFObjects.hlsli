@@ -262,6 +262,19 @@ float2 DCLFWindTimersOf(uint a_object)
 // PreviousWorld[0].w the leaf's world bound radius, Bound.xyz the node's translation (the pivot).
 static const uint kDCLFRecordEffectBillboard = 1u << 4;
 
+// A decal's draw (LightingConstants.h, kRecordDecalNudge: bit 8): its clip position moved toward the eye by kDCLFDecalDepthNudge of the
+// depth range. The engine's decal depth bias is pipeline state, which a device-generated command's pipeline switch does not carry, and
+// where the engine's bias is none (interiors' modes 7 and 11) the decal sits on its host by an exact depth tie, which DCLF's two vertex
+// modules (the host's pulled Z-prepass, the decal's colour draw) do not keep to the bit. 2^-20: 16 steps of a D24 depth.
+static const uint kDCLFRecordDecalNudge = 1u << 8;
+static const float kDCLFDecalDepthNudge = 1.0 / 1048576.0;
+float4 DCLFDecalNudged(float4 a_position, uint a_object)
+{
+	if (DCLFObjects[a_object].DCLFRecordFlags & kDCLFRecordDecalNudge)
+		a_position.z -= kDCLFDecalDepthNudge * a_position.w;
+	return a_position;
+}
+
 // The node's world rotation as NiBillboardNode::OnVisible makes it for a camera (0x140d3e650: R0 times the turn its face mode makes from
 // the camera's axes, the base rotation dropped for BSROTATE_ABOUT_UP), a_forward, a_up and a_right the camera's world axes and a_eye its
 // position. The constants are the engine's (Billboards.cpp, whose Orient is this function's CPU twin for the observer).
@@ -401,11 +414,11 @@ StructuredBuffer<DCLFFadeNodeState> DCLFFadeStates : register(t120);
 StructuredBuffer<DCLFFadeRootStatic> DCLFFadeRoots : register(t119);
 // What GetRenderPasses and SetupGeometry put on a pass's alpha (MaterialData.z): the property's alpha times its fade node's
 // currentFade, and for a LOD cross-fade's copy (the draw's object word bit 30: BuildDrawsCS, kObjectCrossfadeCopy) the
-// cross-fade factor (+0x14C) instead. T1c: from the object's fade root (DCLFRecordFlags bits 8-31, its slot + 1) in
+// cross-fade factor (+0x14C) instead. T1c: from the object's fade root (DCLFRecordFlags bits 9-31, its slot + 1) in
 // FadeStateCS's state; 1 without a root, or with a row the frame does not hold (generation 0: none bound, or freed).
 float DCLFAlphaFade(uint a_object, bool a_copy)
 {
-	const uint root = DCLFObjects[a_object].DCLFRecordFlags >> 8;
+	const uint root = DCLFObjects[a_object].DCLFRecordFlags >> 9;
 	if (root == 0)
 		return 1;
 	const DCLFFadeRootStatic row = DCLFFadeRoots[root - 1];

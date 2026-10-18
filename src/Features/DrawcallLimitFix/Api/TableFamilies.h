@@ -66,7 +66,7 @@ namespace DCLF::Api
 		std::uint32_t recordWord = ~0u;
 		// The reference as recordWord carries it: (row + recordBias) << recordShift, ORed into the word (Core's own bits of the word stay
 		// below the shift), and 0 when it does not fit the word's bits above the shift (a root slot past 24 bits rides as none: the
-		// record's root reference, bits 8-31 = root + 1). 0 and 0 keep the row as is.
+		// record's root reference, bits 9-31 = root + 1). 0 and 0 keep the row as is.
 		std::uint32_t recordShift = 0, recordBias = 0;
 		// Whether the record carries the row's tag in the word after recordWord; false: one word, no tag (a family whose rows carry their
 		// generation themselves).

@@ -1782,8 +1782,16 @@ each group in the engine's order (Features/Decals; `CS_DCLF_DECALS`, `CS_DCLF_LA
     written, alpha test in the depth variant); then the main draws and draw families' colour; then the second pass: opaque decals and
     layers, Terrain Blending's held terrain and no-blend meshes, then blended decals (the `Api/MainRanges.h` order). Why the decal
     depth pass: every host fragment under an opaque decal texel then fails the colour pass's EQUAL test before shading.
--   **State** comes from the engine's own state objects (`CaptureEngineStates`), bias from `DecalDepthBiasMode` (interiors get the
-    no-bias modes). Additive blended decals take AdditiveLighting from the alpha property, by CS's rule.
+-   **State** comes from the engine's own state objects (`CaptureEngineStates`). Additive blended decals take AdditiveLighting from
+    the alpha property, by CS's rule.
+-   **Depth offset, not bias.** The key keeps the engine's bias mode (`DecalDepthBiasMode`, interiors' modes 7 and 11 hold none), but
+    no decal pipeline carries rasterizer bias: device-generated commands switch the pipelines, and an execution set's pipelines may
+    change shaders only, so a pipeline's own bias is not guaranteed to be drawn. Instead a decal's key has
+    `kRasterDecalNudge` (not an opaque effect in decal group 1; a first-person forward decal too), its record `kRecordDecalNudge`,
+    and the Lighting and Effect vertex stages move its clip position toward the eye by 2^-20 of the depth range
+    (`DCLFDecalNudged`, `DCLFObjects.hlsli`), in the depth variant as in the colour one. It also covers a bias-free decal's exact
+    depth tie with its host (an interior's `AlphaMoss` sub-shapes of a floor's NIF), which the engine keeps by running both through
+    the same vertex math and DCLF does not: the host's depth is its pulled Z-prepass module's, the decal's its colour module's.
 -   **Pass layers.** A `BSMultiIndexTriShape` with an additional property has two main passes, and the main camera's claims are by
     geometry, so DCLF takes both or neither. The second pass is a pass layer: an object of its own held by the base's entry
     (`Tracked::layerSlot`, `Tables::layerBase` / `layerOf`), classified by `LayerPropertyOf`, written by `WriteLayer` with its own

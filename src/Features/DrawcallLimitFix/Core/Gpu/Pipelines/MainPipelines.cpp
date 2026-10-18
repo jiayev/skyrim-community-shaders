@@ -429,13 +429,10 @@ namespace DCLF
 			depth.depthWrite = !depthOnly && write;
 			depth.depthEnable = depthOnly || test || write;
 			depth.depthFunc = (depthOnly || test) ? rhi::CompareOp::LessEqual : rhi::CompareOp::Always;
-			// Decal rules: bias on the colour variant and on the opaque group's depth variant; LESS_EQUAL; only the opaque group's depth
-			// variant writes depth. A first-person effect decal drawn forward (Coordinator::ViewDecalForward) keeps its group's bias.
-			if (decalGroup ? (!depthOnly || decalGroup == 1) : (!depthOnly && RasterDepthBiasMode(a_key.rasterFlags))) {
-				desc.raster.rs.depthBias = a_state.depthBias;
-				desc.raster.rs.depthBiasClamp = a_state.depthBiasClamp;
-				desc.raster.rs.slopeScaledDepthBias = a_state.slopeScaledDepthBias;
-			}
+			// Decal rules: LESS_EQUAL; only the opaque group's depth variant writes depth. No rasterizer bias: these pipelines are switched
+			// by device-generated commands, whose execution sets may change shaders only (VK_EXT_device_generated_commands); the vertex
+			// stage moves a decal toward the eye instead (kRasterDecalNudge), a first-person effect decal drawn forward
+			// (Coordinator::ViewDecalForward) too.
 			if (decalGroup) {
 				depth.depthEnable = true;
 				depth.depthWrite = depthOnly && decalGroup == 1;
@@ -499,13 +496,9 @@ namespace DCLF
 			desc.flags.flags = rhi::PipelineFlags_IndirectBindable;
 			auto& raster = desc.raster.rs;
 			raster.cull = (a_key.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : rhi::CullMode::Back;
-			// A decal's engine depth bias. The integer DepthBias passes through as the constant factor: for D24S8 Vulkan's default
-			// representation is the format's least representable value, which is what D3D11 (and DXVK, for UNORM formats) means by it.
-			if (engineDepth && (!depthOnly || decalGroup == 1)) {
-				raster.depthBias = a_state.depthBias;
-				raster.depthBiasClamp = a_state.depthBiasClamp;
-				raster.slopeScaledDepthBias = a_state.slopeScaledDepthBias;
-			}
+			// No rasterizer bias for a decal: its variants are switched by device-generated commands, whose execution sets may change
+			// shaders only (VK_EXT_device_generated_commands). The vertex stage moves a decal toward the eye instead (kRasterDecalNudge,
+			// DCLFDecalNudged), in its depth variant as in its colour one.
 			// The engine's winding (EngineFrontCCW); RasterState::frontCCW means the same on every backend.
 			raster.frontCCW = a_frontCCW;
 			auto& depth = desc.depth.ds;
