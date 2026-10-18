@@ -223,7 +223,7 @@ Small pieces still on the render thread, each with its route off it:
     -   Zeroings stay latched. The GPU-only state (`treeClocks`, `treeWindRows`, `fadeStates`) stays in the set. Once no
         write is left, `CommitUploads` and its batch pool go.
 -   **Needs.** The readers first: the recordings bind these versioned buffers directly (`ShaderResource(*scene->fadeRoots)`,
-    `VertexBuffer(*scene.facePositions)`, ...). A part needs its passes to read it by value (an SRV index or address through
+    `ShaderResource(*scene.vertexStream)`, ...). A part needs its passes to read it by value (an SRV index or address through
     the latch), and the draws' face stream addresses patched at emit time as `PatchRowAddresses` does for rows.
 
 ### 2.4 Animated material values

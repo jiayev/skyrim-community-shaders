@@ -344,9 +344,9 @@ namespace DCLF::Draws
 				if (resources->terrainDepth)
 					bindings.terrainDepth = a_builder.DepthReadWrite(resources->terrainDepth).View();
 			} else {
-				// The stream objects' (face shapes') second vertex stream.
+				// The stream objects' (face shapes') second vertex stream, which the vertex stages pull by address (DCLF_PULLED_VERTICES).
 				if (resources->scene->vertexStream)
-					a_builder.VertexBuffer(*resources->scene->vertexStream);
+					a_builder.ShaderResource(*resources->scene->vertexStream, noViews);
 				// The foliage record (Policy::RecordFoliagePixels): alpha-tested draws write per-pixel ids by address.
 				if (const auto& foliage = resources->foliage) {
 					const std::span<const org::UavView> noUavs{};

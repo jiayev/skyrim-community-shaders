@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -9,7 +10,9 @@
 #include <iterator>
 #include <mutex>
 #include <regex>
+#include <span>
 #include <sstream>
+#include <string_view>
 
 #include <Tracy/Tracy.hpp>
 
@@ -299,6 +302,8 @@ namespace DCLF
 			std::uint64_t key = 0;
 			std::shared_ptr<const org::services::ShaderArtifact> artifact;  // written once, before done
 			std::atomic<bool> done{ false };
+			// A DCLF_PULLED_VERTICES vertex stage's attributes (VertexAttributesOf), written before the stage is shared; 0 otherwise.
+			std::uint32_t vertexAttributes = 0;
 		};
 		using StagePtr = std::shared_ptr<Stage>;
 
@@ -449,10 +454,51 @@ namespace DCLF
 			return a_family == Api::DrawFamily::Count ? 0ull : DrawFamilyLaneSlotOf(a_family).stageKeyBit;
 		}
 
+		/*
+		 * The attributes (BSGraphics::Vertex::Attribute, a bit each: VertexInput.h, VertexLayoutAttributes) a DCLF_PULLED_VERTICES vertex
+		 * stage reads, from its defines: Lighting.hlsl's (a_lighting) or Effect.hlsl's (the one program family) DCLFPulledInput. Must match
+		 * those reads: kept by hand beside them, as the input layout the engine builds from the shader's inputs was (DrawPipelines'
+		 * check, MainPipelines.cpp). Lighting.hlsl defines VC itself under TREE_ANIM or LANDSCAPE.
+		 */
+		std::uint32_t VertexAttributesOf(std::span<const org::services::ShaderDefine> a_defines, bool a_lighting)
+		{
+			constexpr std::uint32_t kPosition = 1u << 0, kTexcoord0 = 1u << 1, kNormal = 1u << 3, kBinormal = 1u << 4, kColor = 1u << 5,
+									kSkinning = 1u << 6, kLandData = 1u << 7, kEyeData = 1u << 8;
+			auto has = [&](std::wstring_view a_name) { return std::ranges::any_of(a_defines, [&](const org::services::ShaderDefine& a_define) { return a_define.name == a_name; }); };
+			std::uint32_t attributes = 0;
+			if (a_lighting) {
+				attributes = kPosition | kTexcoord0;
+				if (!has(L"MODELSPACENORMALS"))
+					attributes |= kNormal | kBinormal;
+				if (has(L"VC") || has(L"TREE_ANIM") || has(L"LANDSCAPE"))
+					attributes |= kColor | (has(L"LANDSCAPE") ? kLandData : 0u);
+				if (has(L"SKINNED"))
+					attributes |= kSkinning;
+				if (has(L"EYE"))
+					attributes |= kEyeData;
+				return attributes;
+			}
+			// A particle system's quads read no stream (DCLF_PARTICLE_PULL: PARTICLES under DCLF_BINDLESS, which every DCLF build has).
+			if (has(L"PARTICLES"))
+				return 0;
+			attributes = kPosition;
+			if (has(L"TEXCOORD"))
+				attributes |= kTexcoord0;
+			if (has(L"NORMALS") || has(L"MOTIONVECTORS_NORMALS"))
+				attributes |= kNormal;
+			if (has(L"BINORMAL_TANGENT"))
+				attributes |= kBinormal;
+			if (has(L"VC"))
+				attributes |= kColor;
+			if (has(L"SKINNED"))
+				attributes |= kSkinning;
+			return attributes;
+		}
+
 		// Requests a_stage's compile; the completion callback fills it and pushes its key to StageCompletions.
 		void RequestStage(org::services::ShaderCompiler& a_compiler, const StagePtr& a_stage, std::span<const std::byte> a_source,
 			const std::vector<std::filesystem::path>& a_dependencies, std::uint64_t a_fingerprint, const RE::BSShader& a_lighting, bool a_pixel, std::uint32_t a_descriptor,
-			bool a_depthOnly, bool a_pulled, const char* a_sourceName)
+			bool a_depthOnly, bool a_pulled, bool a_family, const char* a_sourceName)
 		{
 			org::services::ShaderCompileRequest request{};
 			request.inputsFingerprint = a_fingerprint;
@@ -488,6 +534,14 @@ namespace DCLF
 			// other inputs (PulledLightingSource).
 			if (a_pulled && a_sourceName == kSourcePath)
 				request.defines.push_back({ L"DCLF_PULLED_ROWS", L"1" });
+			// The device-generated draws' vertex stages (Program::vertex, both variants'; a program family's) pull their attributes
+			// through the geometry's buffers in the draw's push data (Lighting.hlsl, Effect.hlsl): no DCLF pipeline has input assembly,
+			// whose vertex input state an execution set's pipelines would have to share. The stage cache's key needs no bit for it:
+			// every such stage has it, and the compiler's cache key hashes the defines.
+			if (!a_pixel && !a_pulled && (a_sourceName == kSourcePath || a_family)) {
+				request.defines.push_back({ L"DCLF_PULLED_VERTICES", L"1" });
+				a_stage->vertexAttributes = VertexAttributesOf(request.defines, a_sourceName == kSourcePath);
+			}
 			// The foliage record (Policy::RecordFoliagePixels): the colour pass's alpha-tested draws write what each pixel shows, and the
 			// Z-prepass's which of them owns its depth (Lighting.hlsl); every colour draw records with CS_DCLF_FOLIAGE_PARITY=land.
 			if (a_pixel && a_depthOnly == a_pulled && a_sourceName == kSourcePath && Policy::RecordFoliagePixels()) {
@@ -586,7 +640,7 @@ namespace DCLF
 				utility ? owner.utilitySource : drawBuild ? owner.drawFamilySources[d] : familyBuild ? owner.familySources[f] : pulled ? owner.pulledSource : owner.source,
 				owner.dependencies,
 				utility ? owner.utilityFingerprint : drawBuild ? owner.drawFamilyFingerprints[d] : familyBuild ? owner.familyFingerprints[f] : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
-				shader, pixel, descriptor, depth, pulled,
+				shader, pixel, descriptor, depth, pulled, familyBuild,
 				utility ? kUtilitySourcePath : drawBuild ? Extensions::DrawFamilyOf(drawFamily).sourcePath.c_str() : familyBuild ? Extensions::ProgramFamilyOf(family).sourcePath.c_str() : kSourcePath);
 			{
 				std::lock_guard lock(mutex);
@@ -958,11 +1012,14 @@ namespace DCLF
 					const auto f = FamilyIndexOf(waiter.user);
 					const auto& family = Extensions::ProgramFamilies()[f];
 					const auto familyVertex = static_cast<std::uint32_t>((id & ~kProgramFamilySlots[f].programIdBit) >> 32);
-					FinishEntry(*familyEntries[f].find(id)->second, &laneStats.ready, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+					auto& entry = *familyEntries[f].find(id)->second;
+					FinishEntry(entry, &laneStats.ready, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
 						if (loggedFailures++ < kMaxLoggedFailures)
 							logger::warn("[DCLF] SPIR-V build of {} {} {:08X} failed; its {}:\n{}", family.name, a_stage ? "PS" : "VS", a_stage ? pixel : familyVertex,
 								family.nativeNote, a_artifact.diagnostics.substr(0, 1500));
 					});
+					if (entry.program)
+						entry.program->vertexAttributes = entry.stages[0]->vertexAttributes;
 					a_finished.families[f].push_back(id);
 				}
 				continue;
@@ -977,6 +1034,9 @@ namespace DCLF
 				if (loggedFailures++ < kMaxLoggedFailures)
 					logger::warn("[DCLF] SPIR-V build of Lighting {} {:08X} failed:\n{}", kStages[a_stage], a_stage == 0 || a_stage == 3 ? vertex : pixel, a_artifact.diagnostics.substr(0, 1500));
 			});
+			// The vertex stage's attributes (its defines'): DrawPipelines checks the key's vertex layout has them.
+			if (entry.program)
+				entry.program->vertexAttributes = entry.stages[0]->vertexAttributes;
 		}
 	}
 }

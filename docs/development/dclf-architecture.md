@@ -960,9 +960,9 @@ as the dispatch's `LatchOffset` does.
 
 DCLF's colour draws are device-generated commands (`vkCmdExecuteGeneratedCommandsEXT`); the Z-prepass, the shadow views, the views'
 depth and the draw families use plain indirect draws.
--   **Explicit preprocessing.** The main colour signature (pipeline index, push constants, two vertex buffers, index buffer,
-    DrawIndexed; `DrawPipelines::Impl::CreateSignature`, `Core/Gpu/Pipelines/MainPipelines.cpp`) is created with
-    `explicitPreprocess`. Each recording site keeps a never-submitted state list per frame slot (`PreprocessStates`,
+-   **Explicit preprocessing.** The main colour signature (pipeline index, push data - the rows, the object word and the
+    geometry's two vertex buffer views, thirteen words - index buffer, DrawIndexed; no vertex buffer arguments:
+    `DrawPipelines::Impl::CreateSignature`, `Core/Gpu/Pipelines/MainPipelines.cpp`) is created with `explicitPreprocess`. Each recording site keeps a never-submitted state list per frame slot (`PreprocessStates`,
     `Core/Render/Main/FrameLayout.h`) holding the same BeginPass, heaps, layout, topology and push data as the execution, because
     `vkCmdPreprocessGeneratedCommandsEXT` is recorded outside a render pass but snapshots its state. Sites: the main segment, the
     forward epoch, each view's forward part. Why: implicit preprocessing cost NVIDIA about 170 us of idle GPU per call (colour pass
@@ -1383,8 +1383,10 @@ Records are absolute: `Lighting.hlsl` and `Utility.hlsl` subtract the drawing vi
 why no build reads the eye. Palettes are eye-relative like World, so the shader pivot is zero.
 
 **Main pass** (`Core/Gpu/Pipelines/DrawPipelines.h`, `kDrawPush*`):
--   **per draw:** six push words (`kDrawPushWords`; the Constant argument is five, `kDrawPushArgumentWords`): the pipeline row's
-    address (words 0-1), the material row's (2-3) and the object word (4), then a pad. `BuildDrawsCS` computes both addresses from
+-   **per draw:** fourteen push words (`kDrawPushWords`; the Constant argument is thirteen, `kDrawPushArgumentWords`: the sequence's
+    bytes 4-55): the pipeline row's address (words 0-1), the material row's (2-3), the object word (4), the geometry's vertex buffer
+    view (5-8: address, size, stride) and its second stream's (9-12), then a pad. `DCLFObjects.hlsli`'s `DCLFPushData` places its
+    members on these words. `BuildDrawsCS` computes both addresses from
     the input's `y` (`RowsOf`: the pipeline slot in the high 12 bits, the material slot in the low 20), the rows' strides in its
     constants and the tables' bases in its latch (the installed payload's `materialRowsLo`, `pipelineRowsLo`). The object word holds
     the object index (bits 0-25), the local shadow lights BuildDrawsCS selected (26-29, Light Limit Fix's `ShadowBitMask`) and
@@ -1414,7 +1416,9 @@ Shadow material rows live in one growable table every view reads (the payload's 
 blocks go in push data. Nothing caps the materials.
 
 **Push-data tokens.** BasicRHI's Vulkan backend splits push data into tokens of at most 16 bytes (`kMaxPushDataTokenBytes`), so the
-six-word draw push is two tokens: a 20-byte token lost the device on NVIDIA GA102.
+thirteen-word draw argument is four tokens: a 20-byte token lost the device on NVIDIA GA102. The layouts' push data (the draw's
+fourteen words and the frame push's: 184 bytes) must fit the device's `maxPushDataSize`; BasicRHI refuses a larger layout, and the
+indirect pipelines are then unavailable.
 
 **Scene tables.** One set of object records, extras rows and geometry rows - the installed payload's parts - and one face positions
 buffer (`SceneBuffers::facePositions`, the set's) serve every epoch. The set requires the face positions at the highest face region,
@@ -1431,22 +1435,36 @@ pass, so it was not kept.
 
 ### Vertex pulling and identical positions
 
+-   **No input assembly anywhere.** Every DCLF vertex stage pulls its attributes, so no DCLF pipeline has vertex input state, no
+    signature has vertex buffer arguments, and every layout is `PF_None`. Why: vertex input is static pipeline state, which every
+    pipeline of an execution set must share (`VK_EXT_device_generated_commands`), and the main set's pipelines span every vertex
+    layout. The decode is the engine's input layout for the vertex layout (`VertexInput.cpp`, `BuildVertexElements`): each attribute's
+    stream and offset from the layout, the element's format, and the input assembler's (0, 0, 0, 1) for an attribute the layout lacks,
+    without a load (`DCLFHasAttribute`, `DCLFPull*` in `Common/DCLFObjects.hlsli`).
+-   **Device-generated draws** (`DCLF_PULLED_VERTICES`: Lighting's and the program families' vertex stages, both variants): the
+    geometry's two vertex buffer views come in the draw's push data and the vertex layout from its pipeline row
+    (`DCLFPushedVertexLayout`); `SV_VertexID` is the geometry's vertex index (the index pool's indices, vertex offset 0). A
+    particle effect keeps its own pull (`DCLF_PARTICLE_PULL`). What a stage reads is a mask kept by hand from its defines
+    (`ShaderPrograms.cpp`, `VertexAttributesOf`, beside `DCLFPulledInput` in Lighting.hlsl and Effect.hlsl, "must match" on both
+    sides); a key whose vertex layout lacks an attribute in it fails its build (`CheckVertexAttributes`) and its objects stay native,
+    as the engine's input layout made the build fail before.
 -   **Pulled stages** (`DCLF_PULLED`; `PulledLightingSource` rewrites Lighting's source): the Z-prepass and the shadow views' vertex
     stages find their sequence by `SV_InstanceID` and decode the attributes from the pipeline row's vertex layout
     (`PipelineRowHeader::vertexLayout`); the Z-prepass and shadow views draw with plain indirect draws and fetch their own indices,
     vertices and per-draw words. The PerTechnique, PerMaterial and PerGeometry blocks become statics assigned from the rows, and the
     permutation block `Permutation.hlsli`'s statics (`DCLF_PULLED_ROWS`). `CheckPulledBindings` rejects any row binding.
--   **The Z-prepass and the colour pass compute bit-identical positions**, because the colour pass tests EQUAL: `viewPos` is
-    `precise` (`DCLF_PRECISE`) in both. 8-bit UNORM attributes decode through `DCLFUnorm4` (the product by 1/255, corrected by its
-    fused remainder), exact for all 256 values; `x / 255.0` is an ulp off on 126 inputs and striped foliage. The shadow views'
-    pulled Utility stages use the same decode.
+-   **The Z-prepass and the colour pass compute bit-identical positions**, because the colour pass tests EQUAL: both Lighting
+    builds decode through one function (`DCLFPulledInput`) and shade through one (`DCLFShade`), and `viewPos` is `precise`
+    (`DCLF_PRECISE`); they remain two SPIR-V modules. 8-bit UNORM attributes decode through `DCLFUnorm4` (the product by 1/255,
+    corrected by its fused remainder), exact for all 256 values, as the native draws' input assembler converts them; `x / 255.0` is
+    an ulp off on 126 inputs and striped foliage. The shadow views' pulled Utility stages use the same decode.
 -   `DCLF_DEPTH_ONLY` (the Z-prepass pixel stage) returns right after the alpha test, so it reads only what the discard needs.
 
 ### Shader programs and pipelines
 
 -   **DXC for DCLF's programs** (`Core/Gpu/Pipelines/ShaderPrograms.cpp`): SPIR-V, HLSL 2018, `vs_6_6`/`ps_6_6`, binding shifts,
     CS's `ShaderCache::GetCompileDefines` plus `DCLF_ORG`, `DCLF_BINDLESS`, `DCLF_BINDLESS_DRAW` (always), `DCLF_PULLED`,
-    `DCLF_PULLED_ROWS`, `DCLF_DEPTH_ONLY` and the families' own. CS's game shaders stay FXC.
+    `DCLF_PULLED_ROWS`, `DCLF_PULLED_VERTICES`, `DCLF_DEPTH_ONLY` and the families' own. CS's game shaders stay FXC.
 -   **Precompile.** CS's initial compilation workers also request DCLF's SPIR-V stages through ORGModuleServices; requests made
     before ORG setup are retained until `SetupResources`, and stage futures are shared by descriptor, stage and source family. An
     on-demand compile or pipeline build later is a warning naming what the precompile missed ("on-demand SPIR-V compile",

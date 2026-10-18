@@ -349,8 +349,9 @@ namespace DCLF
 					bindings.depth = a_builder.DepthReadWrite(resources->target).View();
 					bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
 					bindings.counts = a_builder.IndirectArguments(*resources->bucketCounts[0]).Resource();
+					// The face shapes' second vertex stream, pulled by address (DCLF_PULLED_VERTICES).
 					if (scene.vertexStream)
-						a_builder.VertexBuffer(*scene.vertexStream);
+						a_builder.ShaderResource(*scene.vertexStream, noViews);
 					a_builder.ShaderResource(resources->blocks, noViews);
 					DeclareFrameBuffers(a_builder, main);
 					a_builder.ShaderResource(main.frameConstants, noViews);

@@ -235,70 +235,21 @@ namespace DCLF
 			return a_pixel ? std::span<const std::string_view>(kLightingPSNames) : std::span<const std::string_view>(kLightingVSNames);
 		}
 
-		inline bool SameSemantic(std::string_view a_left, std::string_view a_right)
+		/*
+		 * No DCLF pipeline has input assembly: every vertex stage pulls its attributes (DCLF_PULLED_VERTICES, DCLF_PULLED), so the
+		 * pipelines have no vertex input state, which an execution set's pipelines would otherwise have to share. A key's vertex layout
+		 * must still hold every attribute its vertex stage reads (ShaderPrograms::Program::vertexAttributes), as the input layout the
+		 * engine builds for it had to: else the build fails and its objects stay native.
+		 */
+		inline void CheckVertexAttributes(std::uint32_t a_attributes, std::uint64_t a_vertexLayout)
 		{
-			return a_left.size() == a_right.size() && std::equal(a_left.begin(), a_left.end(), a_right.begin(), [](char a, char b) { return std::toupper(static_cast<unsigned char>(a)) == std::toupper(static_cast<unsigned char>(b)); });
+			if (const std::uint32_t missing = a_attributes & ~VertexLayoutAttributes(a_vertexLayout))
+				throw std::runtime_error(fmt::format("vertex attributes {:03X} (BSGraphics::Vertex::Attribute bits) are not in the geometry's layout {:016X}", missing,
+					a_vertexLayout));
 		}
-
-		// The vertex shader's input mask, as ShaderCache derives BSGraphics::VertexShader::vertexDesc.
-		inline std::uint64_t InputMask(const SpirvReflection& a_vertex)
-		{
-			std::uint64_t mask = 0b1111;
-			bool texcoord2 = false, texcoord3 = false;
-			for (const auto& input : a_vertex.inputs) {
-				const auto& name = input.semantic;
-				const auto index = input.semanticIndex;
-				if (SameSemantic(name, "POSITION") && index == 0)
-					AddVertexAttribute(mask, 0);
-				else if (SameSemantic(name, "TEXCOORD") && index <= 1)
-					AddVertexAttribute(mask, 1 + index);
-				else if (SameSemantic(name, "NORMAL") && index == 0)
-					AddVertexAttribute(mask, 3);
-				else if (SameSemantic(name, "BINORMAL") && index == 0)
-					AddVertexAttribute(mask, 4);
-				else if (SameSemantic(name, "COLOR") && index == 0)
-					AddVertexAttribute(mask, 5);
-				else if (SameSemantic(name, "BLENDWEIGHT") && index == 0)
-					AddVertexAttribute(mask, 6);
-				else if (SameSemantic(name, "TEXCOORD") && index >= 4 && index <= 7)
-					AddVertexAttribute(mask, 9);
-				else if (SameSemantic(name, "TEXCOORD") && index == 2)
-					texcoord2 = true;
-				else if (SameSemantic(name, "TEXCOORD") && index == 3)
-					texcoord3 = true;
-			}
-			if (texcoord2)
-				AddVertexAttribute(mask, texcoord3 ? 7 : 8);
-			return mask;
-		}
-
-		inline rhi::FinalizedInputLayout BuildInputLayout(const SpirvReflection& a_vertex, std::uint64_t a_vertexLayout)
-		{
-			const auto elements = BuildVertexElements(InputMask(a_vertex) & a_vertexLayout);
-			rhi::FinalizedInputLayout layout;
-			// The stride is dynamic (the VertexBuffer argument).
-			layout.bindings.push_back(rhi::InputBindingDesc{ 0, 16, rhi::InputRate::PerVertex, 1 });
-			bool secondStream = false;
-			for (const auto& input : a_vertex.inputs) {
-				const VertexElement* element = nullptr;
-				for (std::uint32_t i = 0; i < elements.count && !element; ++i) {
-					if (SameSemantic(elements.elements[i].semantic, input.semantic) && elements.elements[i].semanticIndex == input.semanticIndex)
-						element = &elements.elements[i];
-				}
-				if (!element)
-					throw std::runtime_error(fmt::format("vertex input {}{} is not in the geometry's layout {:016X}", input.semantic, input.semanticIndex, a_vertexLayout));
-				// Stream 1 is a dynamic shape's positions (BSDynamicTriShape::dynamicData, float4 per vertex): every draw binds a second
-				// vertex buffer (DrawSequence), the face shape's positions or its own buffer again.
-				if (element->slot > 1 || element->perInstance)
-					throw std::runtime_error(fmt::format("vertex input {}{} comes from stream {} (only the geometry's stream and a dynamic shape's positions are supported)",
-						input.semantic, input.semanticIndex, element->slot));
-				secondStream |= element->slot == 1;
-				layout.attributes.push_back(rhi::InputAttributeDesc{ element->slot, element->offset, rhi::helpers::ToRHI(element->format), element->semantic, element->semanticIndex, input.location });
-			}
-			if (secondStream)
-				layout.bindings.push_back(rhi::InputBindingDesc{ 1, 16, rhi::InputRate::PerVertex, 1 });
-			return layout;
-		}
+		// Mixed into the main and shadow recipes' fixedFunctionKey: a pipeline built with an input layout (before the vertex stages
+		// pulled their attributes) is never the artifact a recipe finds.
+		inline constexpr std::uint64_t kPulledVerticesSalt = 0x5055'4C4C'5645'5254ull;
 
 		// Initialize's pipeline layout ranges.
 		inline rhi::LayoutBindingRange LayoutRange(std::uint32_t a_binding, std::uint32_t a_count, rhi::ShaderStage a_stage, rhi::LayoutRangeSource a_source, std::size_t a_offset,
@@ -887,7 +838,10 @@ namespace DCLF
 		/** @brief Initialize's command signatures (false when a required one could not be made). */
 		bool CreateDrawSignatures();
 
-		/** @brief A triangle-list graphics pipeline description (no pixel stage when a_pixel is empty); Create throws on failure. */
+		/**
+		 * @brief A triangle-list graphics pipeline description (no pixel stage when a_pixel is empty), without vertex input; Create throws
+		 * on failure.
+		 */
 		struct PipelineDesc
 		{
 			PipelineDesc(rhi::PipelineLayoutHandle a_layout, std::span<const std::byte> a_vertex, std::span<const std::byte> a_pixel, DXGI_FORMAT a_depthFormat) :
@@ -905,7 +859,7 @@ namespace DCLF
 			rhi::SubobjBlend blend{};
 			rhi::SubobjRTVs targets{};
 			rhi::SubobjDSV depthFormat;
-			rhi::SubobjInputLayout input{};
+			rhi::SubobjInputLayout input{};  // always empty: the vertex stages pull their attributes (CheckVertexAttributes)
 			rhi::SubobjFlags flags{};
 
 			/** @brief Adds a colour target, blended per its index's blend attachment. */

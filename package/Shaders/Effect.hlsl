@@ -260,14 +260,16 @@ VS_INPUT DCLFParticleInput(uint a_vertex)
 #		endif
 	return input;
 }
+#	endif  // DCLF_PARTICLE_PULL
 
-VS_OUTPUT main(VS_PARTICLE_INPUT particleInput)
-{
-	VS_INPUT input = DCLFParticleInput(particleInput.VertexID);
+// Drawcall Limit Fix's builds have no input assembly: main pulls the vertex (DCLFParticleInput; DCLFPulledInput, below) and shades
+// it here.
+#	if defined(DCLF_PARTICLE_PULL) || defined(DCLF_PULLED_VERTICES)
+VS_OUTPUT DCLFShade(VS_INPUT input)
 #	else
 VS_OUTPUT main(VS_INPUT input)
+#	endif
 {
-#	endif  // DCLF_PARTICLE_PULL
 	VS_OUTPUT vsout;
 	precise float4 inputPosition = float4(input.Position.xyz, 1.0);
 
@@ -484,6 +486,58 @@ VS_OUTPUT main(VS_INPUT input)
 
 	return vsout;
 }
+
+#	if defined(DCLF_PARTICLE_PULL)
+// A particle system's quads keep priority over the vertex pull below: they have no vertex stream at all.
+VS_OUTPUT main(VS_PARTICLE_INPUT particleInput)
+{
+	return DCLFShade(DCLFParticleInput(particleInput.VertexID));
+}
+#	elif defined(DCLF_PULLED_VERTICES)
+// Drawcall Limit Fix's device-generated draws (Lighting.hlsl's DCLF_PULLED_VERTICES main): the vertex's attributes loaded from the
+// geometry's buffers in the draw's push data, decoded as the engine's input layout for the draw's vertex layout has them
+// (VertexInput.cpp, BuildVertexElements), the input assembler's defaults where it lacks one.
+// The attributes read here must match the mask the pipelines check the geometry's layout against (ShaderPrograms.cpp,
+// VertexAttributesOf: Effect's).
+VS_INPUT DCLFPulledInput(uint a_index, DCLFStream a_first, DCLFStream a_second)
+{
+	VS_INPUT input;
+	input.Position = DCLFPullFloat4(0, a_index, a_first, a_second);
+#		if defined(TEXCOORD)
+#			if defined(STRIP_PARTICLES)
+	// R16G16_FLOAT read as three components: the input assembler fills z with 0.
+	input.TexCoord0 = float3(DCLFPullHalf2(1, a_index, a_first, a_second), 0);
+#			else
+	input.TexCoord0 = DCLFPullHalf2(1, a_index, a_first, a_second);
+#			endif
+#		endif
+#		if defined(NORMALS) || defined(MOTIONVECTORS_NORMALS)
+	input.Normal = DCLFPullUnorm4(3, 0, a_index, a_first, a_second);
+#		endif
+#		if defined(BINORMAL_TANGENT)
+	input.Bitangent = DCLFPullUnorm4(4, 0, a_index, a_first, a_second);
+#		endif
+#		if defined(VC)
+	input.Color = DCLFPullUnorm4(5, 0, a_index, a_first, a_second);
+#		endif
+#		if defined(SKINNED)
+	input.BoneWeights = DCLFPullHalf4(6, a_index, a_first, a_second);
+	input.BoneIndices = DCLFPullUnorm4(6, 8, a_index, a_first, a_second);
+#		endif
+	return input;
+}
+
+VS_OUTPUT main(uint index : SV_VertexID)
+{
+	DCLFDrawVertexLayout = DCLFPushedVertexLayout();
+	DCLFStream first, second;
+	first.address = DCLFAddress(DCLFVertexBuffer.xy);
+	first.stride = DCLFVertexStride;
+	second.address = DCLFAddress(DCLFStreamBuffer.xy);
+	second.stride = DCLFStreamStride;
+	return DCLFShade(DCLFPulledInput(index, first, second));
+}
+#	endif  // DCLF_PARTICLE_PULL, DCLF_PULLED_VERTICES
 #endif
 
 typedef VS_OUTPUT PS_INPUT;

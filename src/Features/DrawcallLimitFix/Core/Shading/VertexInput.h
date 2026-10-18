@@ -19,6 +19,12 @@ namespace DCLF
 	 */
 	void AddVertexAttribute(std::uint64_t& a_mask, std::uint32_t a_attribute);
 
+	/**
+	 * @brief The attributes (BSGraphics::Vertex::Attribute, bit a for attribute a) a vertex layout has, in either stream (bit 44 + a
+	 * or 54 + a): those a pulled vertex stage can load (DCLFObjects.hlsli, DCLFHasAttribute).
+	 */
+	constexpr std::uint32_t VertexLayoutAttributes(std::uint64_t a_layout) { return static_cast<std::uint32_t>(((a_layout >> 44) | (a_layout >> 54)) & 0x3FFu); }
+
 	/** @brief One D3D11_INPUT_ELEMENT_DESC of an engine input layout. */
 	struct VertexElement
 	{

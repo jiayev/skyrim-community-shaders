@@ -284,7 +284,7 @@ float2 GetTreeShiftVector(float4 position, float4 color)
 }
 #	endif  // TREE_ANIM
 
-#	if defined(DCLF_PULLED)
+#	if defined(DCLF_PULLED) || defined(DCLF_PULLED_VERTICES)
 VS_OUTPUT DCLFShade(VS_INPUT input)
 #	else
 VS_OUTPUT main(VS_INPUT input)
@@ -455,13 +455,46 @@ VS_OUTPUT main(VS_INPUT input)
 	return vsout;
 }
 
+#	if defined(DCLF_PULLED) || defined(DCLF_PULLED_VERTICES)
+// Drawcall Limit Fix's draws have no input assembly: every vertex stage loads its vertex's attributes itself, decoded as the
+// engine's input layout for the draw's vertex layout has them (VertexInput.cpp, BuildVertexElements; DCLFDrawVertexLayout, set
+// first), then shades them as the input assembler's (DCLFShade). One function for the Z-prepass's build and the colour pass's, so
+// the two compute the same positions (the colour pass tests EQUAL against the prepass's depth). The draw is indexed from the index
+// pool (IndexPool) with no vertex offset, so a_index is the geometry's own vertex index.
+// The attributes read here must match the mask the pipelines check the geometry's layout against (ShaderPrograms.cpp,
+// VertexAttributesOf: Lighting's), or a pipeline is built for a layout that lacks one and draws its defaults.
+VS_INPUT DCLFPulledInput(uint a_index, DCLFStream a_first, DCLFStream a_second)
+{
+	VS_INPUT input;
+	input.Position = DCLFPullFloat4(0, a_index, a_first, a_second);
+	input.TexCoord0 = DCLFPullHalf2(1, a_index, a_first, a_second);
+#		if !defined(MODELSPACENORMALS)
+	input.Normal = DCLFPullUnorm4(3, 0, a_index, a_first, a_second);
+	input.Bitangent = DCLFPullUnorm4(4, 0, a_index, a_first, a_second);
+#		endif
+#		if defined(VC)
+	input.Color = DCLFPullUnorm4(5, 0, a_index, a_first, a_second);
+#			if defined(LANDSCAPE)
+	input.LandBlendWeights1 = DCLFPullUnorm4(7, 0, a_index, a_first, a_second);
+	input.LandBlendWeights2 = DCLFPullUnorm4(7, 4, a_index, a_first, a_second);
+#			endif
+#		endif
+#		if defined(SKINNED)
+	input.BoneWeights = DCLFPullHalf4(6, a_index, a_first, a_second);
+	input.BoneIndices = DCLFPullUnorm4(6, 8, a_index, a_first, a_second);
+#		endif
+#		if defined(EYE)
+	input.EyeParameter = DCLFPullFloat(8, a_index, a_first, a_second);
+#		endif
+	return input;
+}
+#	endif  // DCLF_PULLED || DCLF_PULLED_VERTICES
+
 #	if defined(DCLF_PULLED)
 // Drawcall Limit Fix's Z-prepass draws with plain indirect draws (MainOpaquePass): one per pipeline, which cannot bind a vertex
 // buffer, or push data, per draw. So this stage reads its draw's sequence (BuildDrawsCS: DrawSequence, at DCLFSequencesAddress
-// plus its instance's stride), and through it the draw's object word, material row and geometry. The draw is indexed from the
-// index pool (IndexPool), with no vertex offset, so the stage's vertex index is the geometry's own, and the stage loads
-// the attributes at it, decoded as the engine's input layout for the pipeline's vertex layout has them (VertexInput.cpp,
-// BuildVertexElements), then shades them as the input assembler's (DCLFShade).
+// plus its instance's stride), and through it the draw's object word, material row and geometry, whose attributes it pulls
+// (DCLFPulledInput).
 // The draw's rows (its sequence's: the pipeline row's address, then the material row's), and the blocks the pulled source reads
 // from them (ShaderPrograms.cpp, PulledLightingSource), before anything reads them.
 void DCLFRowStatics(uint4 a_rows)
@@ -488,31 +521,7 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	first.stride = vertexBuffer.w;
 	second.address = DCLFAddress(streamBuffer.xy);
 	second.stride = streamBuffer.w;
-
-	VS_INPUT input;
-	input.Position = asfloat(vk::RawBufferLoad<uint4>(DCLFAttribute(0, index, first, second)));
-	input.TexCoord0 = DCLFHalf2(vk::RawBufferLoad<uint>(DCLFAttribute(1, index, first, second)));
-#		if !defined(MODELSPACENORMALS)
-	input.Normal = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(3, index, first, second)));
-	input.Bitangent = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(4, index, first, second)));
-#		endif
-#		if defined(VC)
-	input.Color = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, index, first, second)));
-#			if defined(LANDSCAPE)
-	const uint64_t landData = DCLFAttribute(7, index, first, second);
-	input.LandBlendWeights1 = DCLFUnorm4(vk::RawBufferLoad<uint>(landData));
-	input.LandBlendWeights2 = DCLFUnorm4(vk::RawBufferLoad<uint>(landData + 4));
-#			endif
-#		endif
-#		if defined(SKINNED)
-	const uint64_t skinning = DCLFAttribute(6, index, first, second);
-	const uint2 weights = vk::RawBufferLoad<uint2>(skinning);
-	input.BoneWeights = float4(DCLFHalf2(weights.x), DCLFHalf2(weights.y));
-	input.BoneIndices = DCLFUnorm4(vk::RawBufferLoad<uint>(skinning + 8));
-#		endif
-#		if defined(EYE)
-	input.EyeParameter = asfloat(vk::RawBufferLoad<uint>(DCLFAttribute(8, index, first, second)));
-#		endif
+	const VS_INPUT input = DCLFPulledInput(index, first, second);
 
 	DCLFVertexObjectStatics();
 	VS_OUTPUT vsout = DCLFShade(input);
@@ -524,7 +533,22 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	vsout.DCLFDrawObject = DCLFObjectWord;
 	return vsout;
 }
-#	endif  // DCLF_PULLED
+#	elif defined(DCLF_PULLED_VERTICES)
+// Drawcall Limit Fix's device-generated draws (the colour pass, and the depth variants): one execution set's call switches
+// pipelines per draw, and so vertex layouts, which no input assembly can follow (an execution set's pipelines share their vertex
+// input state). The draw's push data carries its geometry's buffers (DCLFObjects.hlsli, DCLFPushData) and its pipeline row's
+// address, whose row holds the layout; the object statics above keep their initialisers (the object word is pushed too).
+VS_OUTPUT main(uint index : SV_VertexID)
+{
+	DCLFDrawVertexLayout = DCLFPushedVertexLayout();
+	DCLFStream first, second;
+	first.address = DCLFAddress(DCLFVertexBuffer.xy);
+	first.stride = DCLFVertexStride;
+	second.address = DCLFAddress(DCLFStreamBuffer.xy);
+	second.stride = DCLFStreamStride;
+	return DCLFShade(DCLFPulledInput(index, first, second));
+}
+#	endif  // DCLF_PULLED, DCLF_PULLED_VERTICES
 #endif  // VSHADER
 
 typedef VS_OUTPUT PS_INPUT;

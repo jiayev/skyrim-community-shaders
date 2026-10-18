@@ -43,9 +43,18 @@ namespace DCLF
 	inline constexpr std::uint32_t kFramePushRecord = 0;
 	inline constexpr std::uint32_t kFramePushRegisters = 2;
 	inline constexpr std::uint32_t kFramePushWords = kFramePushRegisters + 2 * (std::popcount(kFramePushVS) + std::popcount(kFramePushPS));
-	// A draw's push data (DrawSequence's Constant argument): pipeline row address, material row address, object word, and a pad so
-	// the pass's push data after it is 8-byte aligned (BasicRHI packs the ranges back to back).
-	inline constexpr std::uint32_t kDrawPushPipelineRow = 0, kDrawPushMaterialRow = 2, kDrawPushObject = 4, kDrawPushArgumentWords = 5, kDrawPushWords = 6;
+	// A draw's push data (DrawSequence's Constant argument: its bytes 4-55): pipeline row address, material row address, object word,
+	// then the geometry's two vertex buffer views (address, size, stride each), which the vertex stage pulls its attributes through
+	// (DCLF_PULLED_VERTICES; DCLFObjects.hlsli, DCLFPushData, whose packoffsets are these words), and a pad so the pass's push data
+	// after it is 8-byte aligned (BasicRHI packs the ranges back to back).
+	inline constexpr std::uint32_t kDrawPushPipelineRow = 0, kDrawPushMaterialRow = 2, kDrawPushObject = 4, kDrawPushVertexBuffer = 5, kDrawPushStreamBuffer = 9,
+								   kDrawPushArgumentWords = 13, kDrawPushWords = 14;
+	static_assert(kDrawPushWords % 2 == 0 && kDrawPushArgumentWords < kDrawPushWords);
+	// Push word w is the sequence's byte 4 + 4w, and the argument ends where the index buffer view starts.
+	static_assert(offsetof(DrawSequence, pipelineRowAddress) == 4 + 4 * kDrawPushPipelineRow && offsetof(DrawSequence, materialRowAddress) == 4 + 4 * kDrawPushMaterialRow &&
+				  offsetof(DrawSequence, objectIndex) == 4 + 4 * kDrawPushObject && offsetof(DrawSequence, vertexBufferAddress) == 4 + 4 * kDrawPushVertexBuffer &&
+				  offsetof(DrawSequence, streamBufferAddress) == 4 + 4 * kDrawPushStreamBuffer &&
+				  offsetof(DrawSequence, indexBufferAddress) == 4 + 4 * kDrawPushArgumentWords);
 	// Z-prepass plain draws' push word, per call: the first sequence's address. A call draws every pipeline slot sharing its depth
 	// pipeline (ZPipelineKey), so rows and vertex layout are read per draw through its sequence (Lighting.hlsl, DCLF_PULLED).
 	inline constexpr std::uint32_t kZDrawPushSequences = 0;
@@ -328,9 +337,10 @@ namespace DCLF
 	 * select them from.
 	 *
 	 * Main pipelines share one layout (kDrawPushWords + kFramePushWords) and are built asynchronously through PipelineService from a
-	 * key and its SPIR-V program: vertex input from the engine's layout (VertexInput.h), the native main pass's fixed-function state
-	 * and targets. A program using a register or vertex input the layout cannot supply fails; its objects stay native. Ready
-	 * pipelines get the next set index (DrawSequence::pipelineIndex).
+	 * key and its SPIR-V program: no vertex input (the vertex stages pull their attributes, decoded as the engine's input layout has
+	 * them: VertexInput.h), the native main pass's fixed-function state and targets. A program using a register the layout cannot
+	 * supply, or an attribute the key's vertex layout lacks, fails; its objects stay native. Ready pipelines get the next set index
+	 * (DrawSequence::pipelineIndex).
 	 *
 	 * One owner, the pipeline lane (BuildExecutor.h): it takes requests, programs and build completions, admits them, publishes set
 	 * versions and then the catalog. Render-thread state reaches it only as frame inputs (SetTargetFormats, CaptureEngineStates,

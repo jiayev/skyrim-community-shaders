@@ -279,6 +279,8 @@ namespace DCLF
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&inputTargets, sizeof(inputTargets));
 		// The blend state too: its write masks are the engine's, so other masks are another pipeline.
 		recipe.fixedFunctionKey ^= ankerl::unordered_dense::detail::wyhash::hash(&state.blend, sizeof(state.blend)) * 0x9E3779B97F4A7C15ull;
+		// No vertex input: never an artifact built with an input layout (kPulledVerticesSalt).
+		recipe.fixedFunctionKey ^= kPulledVerticesSalt;
 		recipe.build = [device = device, layout = layout->GetHandle(), zLayout = zLayout->GetHandle(), key = a_key, program, formats = inputTargets, state,
 							frontCCW = *input->frontCCW] {
 			return Build(device, layout, zLayout, key, program, formats, state, frontCCW);
@@ -407,6 +409,7 @@ namespace DCLF
 			throw std::runtime_error(fmt::format("an {} key without the forward or a decal group's state", a_keyName));
 		CheckBindings(vertex, false);
 		CheckBindings(pixel, true);
+		CheckVertexAttributes(a_program->vertexAttributes, a_key.vertexLayout);
 		auto built = std::make_shared<Built>();
 		for (const auto variant : { kColorVariant, kDepthVariant }) {
 			AddUsage(vertex, false, built->usage[variant]);
@@ -421,7 +424,6 @@ namespace DCLF
 		for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
 			const bool depthOnly = variant == kDepthVariant;
 			PipelineDesc desc(a_layout, a_program->vertex, a_program->pixel, a_targets.depth);
-			desc.input.il = BuildInputLayout(vertex, a_key.vertexLayout);
 			desc.flags.flags = rhi::PipelineFlags_IndirectBindable;
 			desc.raster.rs.cull = (a_key.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : rhi::CullMode::Back;
 			desc.raster.rs.frontCCW = a_frontCCW;
@@ -467,6 +469,8 @@ namespace DCLF
 		CheckBindings(depthPixel, true);
 		CheckPulledBindings(pulledVertex, false);
 		CheckPulledBindings(pulledDepthPixel, true);
+		// Both vertex stages (DCLF_PULLED_VERTICES, DCLF_PULLED) read the same attributes (Lighting.hlsl, DCLFPulledInput).
+		CheckVertexAttributes(a_program->vertexAttributes, a_key.vertexLayout);
 		auto built = std::make_shared<Built>();
 		// CS_DCLF_FOLIAGE_PARITY: terrain LOD's depth stage records its pixels (DCLF_OWNED_PARITY), so it keeps its pixel stage.
 		const std::uint32_t technique = (a_key.passDescriptor >> 24) & 0x3f;
@@ -492,7 +496,6 @@ namespace DCLF
 		for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
 			const bool depthOnly = variant == kDepthVariant;
 			PipelineDesc desc(a_layout, a_program->vertex, depthOnly ? a_program->depthPixel : a_program->pixel, a_targets.depth);
-			desc.input.il = BuildInputLayout(vertex, a_key.vertexLayout);
 			desc.flags.flags = rhi::PipelineFlags_IndirectBindable;
 			auto& raster = desc.raster.rs;
 			raster.cull = (a_key.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : rhi::CullMode::Back;
@@ -554,18 +557,18 @@ namespace DCLF
 
 	bool DrawPipelines::Impl::CreateSignature(SetVersion& a_version, std::uint32_t a_variant)
 	{
-		rhi::IndirectArg args[6]{};
+		// No vertex buffer arguments: the vertex stages pull their attributes through the buffers' views in the push data
+		// (DCLF_PULLED_VERTICES), so no pipeline has vertex bindings or a dynamic stride (VUID-VkGeneratedCommandsInfoEXT-
+		// indirectCommandsLayout-11079).
+		rhi::IndirectArg args[4]{};
 		args[0].kind = rhi::IndirectArgKind::PipelineIndex;
 		args[1].kind = rhi::IndirectArgKind::Constant;
-		args[1].u.rootConstants = { 0, 0, kDrawPushArgumentWords };  // the rows' addresses and the object word -> the layout's push data
-		args[2].kind = rhi::IndirectArgKind::VertexBuffer;
-		args[2].u.vertexBuffer.slot = 0;
-		args[3].kind = rhi::IndirectArgKind::VertexBuffer;  // a face shape's positions (DrawSequence::streamBuffer*)
-		args[3].u.vertexBuffer.slot = 1;
-		args[4].kind = rhi::IndirectArgKind::IndexBuffer;
-		args[5].kind = rhi::IndirectArgKind::DrawIndexed;
+		// The rows' addresses, the object word and both vertex buffer views (DrawSequence bytes 4-55) -> the layout's push data.
+		args[1].u.rootConstants = { 0, 0, kDrawPushArgumentWords };
+		args[2].kind = rhi::IndirectArgKind::IndexBuffer;
+		args[3].kind = rhi::IndirectArgKind::DrawIndexed;
 		rhi::CommandSignatureDesc desc{};
-		desc.args = { args, 6 };
+		desc.args = { args, 4 };
 		desc.byteStride = sizeof(DrawSequence);
 		desc.pipelineSet = a_version.sets[a_variant]->GetHandle();
 		desc.explicitPreprocess = true;
