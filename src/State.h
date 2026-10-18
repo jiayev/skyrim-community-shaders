@@ -22,6 +22,9 @@ using json = nlohmann::json;
 
 struct Feature;
 
+// lastSharedData (an alignas(16) block) pads the class.
+#pragma warning(push)
+#pragma warning(disable: 4324)
 class State
 {
 public:
@@ -667,6 +670,7 @@ private:
 	winrt::com_ptr<ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
 };
+#pragma warning(pop)
 
 /**
  * @brief A debugger event (Nsight, RenderDoc, PIX) around one scope of GPU work, emitted only while
