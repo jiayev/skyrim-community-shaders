@@ -113,9 +113,10 @@ namespace DCLF::Api
 	};
 
 	/**
-	 * @brief What the adoption hook is handed (render thread, the frame's start, after the frame's claims are installed or withdrawn):
-	 * the frame, the claims it installed (the installed publication's set snapshot; null when withdrawn), and the component's deltas
-	 * (CoordinatorComponentContext::PublishDelta) of the publications installed since the last call, oldest first.
+	 * @brief What the adoption hook is handed (render thread, the frame's start, after the frame's coverage decision: claims
+	 * installed, or none yet): the frame, the claims it installed (the installed publication's set snapshot; null before DCLF's first
+	 * covered frame, FrameView::NotDrawingYet), and the component's deltas (CoordinatorComponentContext::PublishDelta) of the
+	 * publications installed since the last call, oldest first.
 	 */
 	struct AdoptionContext
 	{

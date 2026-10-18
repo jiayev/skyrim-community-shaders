@@ -91,7 +91,7 @@ namespace DCLF::Diagnostics
 	enum class FramePoint : std::uint8_t
 	{
 		LookupsInstalled,   // the frame's lookups are the installed publication's, before the scene lane's inputs are posted
-		ClaimsInstalled,    // the frame's claims are installed (or withdrawn), before the culls
+		ClaimsInstalled,    // the frame's claims are installed (none before DCLF's first covered frame), before the culls
 		ShadowViewsBegin,   // BeforeShadowMaps (the frame's shadow views already listed, when CalculateAndDrawShadowCasterLights returned)
 		RegistrationsDone,  // EarlyPrepass: the frame's registrations drained (the registration jobs done)
 		PrepassEnd,         // Prepass, DCLF running, after the frame constants are refreshed

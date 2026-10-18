@@ -198,7 +198,7 @@ namespace DCLF::Extensions
 			exclusion(a_build);
 	}
 	/**
-	 * @brief Render thread, after the shadow epoch drew (and the Sun source's null at a withdrawn set): a_exclusion, the payload's opaque
+	 * @brief Render thread, after the shadow epoch drew (once DCLF draws): a_exclusion, the payload's opaque
 	 * exclusion of a_source, handed back to the exclusion contribution (publish; nothing without one).
 	 */
 	inline void PublishShadowExclusion(Api::ShadowSource a_source, std::shared_ptr<void> a_exclusion)

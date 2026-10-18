@@ -175,7 +175,7 @@ namespace DCLF::Diagnostics
 		std::uint64_t snapshot;                 // the adopted snapshot's serial (0: none)
 		bool depthOnly;
 		bool executed;   // the epoch reached its execution (outcome: "submitted", "FAILED" or "NOT COMMITTED")
-		bool withdrawn;  // the frame's claims are withdrawn (FrameView::SetWithdrawn)
+		bool notDrawingYet;  // no claims were installed yet (FrameView::NotDrawingYet): the only claims-less frames
 	};
 
 	/**

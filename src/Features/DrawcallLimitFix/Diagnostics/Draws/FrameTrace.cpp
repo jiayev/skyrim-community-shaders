@@ -55,7 +55,7 @@ namespace DCLF::Diagnostics
 	{
 		const char* epoch = a_outcome.depthOnly ? "Z-prepass" : "colour";
 		if (!a_outcome.executed) {
-			logger::info("[DCLF] frame trace: frame {} {} epoch: {} (set {})", a_outcome.frame, epoch, a_outcome.outcome, a_outcome.withdrawn ? "withdrawn" : "CLAIMS INSTALLED");
+			logger::info("[DCLF] frame trace: frame {} {} epoch: {} (set {})", a_outcome.frame, epoch, a_outcome.outcome, a_outcome.notDrawingYet ? "not drawing yet" : "CLAIMS INSTALLED");
 			return;
 		}
 		const auto* payload = a_outcome.payload;

@@ -174,8 +174,8 @@ namespace DCLF
 		/**
 		 * @brief Render thread, at a_epoch's trigger (its owner's hook: Features/Forward's blended draw for the forward epoch): epoch
 		 * a_epoch, which shares a main epoch's shape (Api::EpochDef::sharesWith), submitted once a frame. Only after this frame's
-		 * commit of the shared epoch (not withdrawn), whose commit wrote everything its draws read: the selected revision's recording,
-		 * the shared payload's owners held, a_submit's prepare, then the execution in the epoch's segment. Each early return counted.
+		 * commit of the shared epoch (DCLF drawing), whose commit wrote everything its draws read: the selected revision's recording, the
+		 * shared payload's owners held, a_submit's prepare, then the execution in the epoch's segment. Each early return counted.
 		 */
 		SharedEpochResult SubmitSharedEpoch(std::uint32_t a_epoch, const SharedEpochSubmit& a_submit);
 		/** @brief Render thread, at the report: a_epoch's shared epoch counters since the last report, reset (its submitted frame kept). */
@@ -220,11 +220,23 @@ namespace DCLF
 		void NoteEventAdoption(double a_ms, std::uint32_t a_frames);
 		/**
 		 * @brief Render thread, the frame's start, after the build point: adopts the newest posted snapshot whole, unless stale for
-		 * what it could not know ahead (graph build, targets, shadow format, main resources); then the frame has no claims until the
-		 * next. Its publication's toggles are never stale: installed, they are the frame's (Toggles::Adopt). Returns its ScenePublication
+		 * what it could not know ahead (graph build, targets, shadow format, main resources); then the one adopted before stands. Its
+		 * publication's toggles are never stale: installed, they are the frame's (Toggles::Adopt). Returns its ScenePublication
 		 * (installed by FrameView::HandOverAtFrameStart when newer), null before the first.
 		 */
 		std::shared_ptr<const void> AdoptSnapshot();
+		/**
+		 * @brief Render thread, the frame's start, after the build point and the frame's posts: AdoptSnapshot, then with a_wait (DCLF
+		 * draws: its first covered frame is past, and no load screen is up), while the adopted snapshot is not one the frame can draw
+		 * from (Impl::AdoptedCurrent: after a graph build, new main resources, new targets or shadow format), waits for the builder's
+		 * next and adopts it - a one-off stall on a rare event, so DCLF never hands a frame back to the engine. Nothing the builder needs
+		 * is posted later in the frame: the revision inputs are the build point's, the context for new main resources was posted at the
+		 * Setup that made them (PostResourcesAhead), the publication gate's scene pass half is open while it waits, and the owner thread's
+		 * requests (shadow view slots, a build, tickets a recording waits for) are served in the wait. Five seconds without one is a
+		 * defect (stl::report_and_fail, naming what it waited for), never a fallback. Counted (the strict epochs line). Returns the adopted
+		 * publication, as AdoptSnapshot.
+		 */
+		std::shared_ptr<const void> AdoptCurrentSnapshot(bool a_wait);
 		/**
 		 * @brief Render thread, at Present (after the frame's last submission): binds the adopted set's pooled versions
 		 * (NamedVersions::Bind) and the installed payload's backings (PayloadVersions::Bind) to SubmittedRetirementPoint(), so no
@@ -276,7 +288,7 @@ namespace DCLF
 		std::string VisibilityReport();
 		/**
 		 * @brief Render thread, the frame's first DCLF point, before the main camera's cull (FrameDriver): each taken draw family's decide
-		 * (Api/DrawFamilies.h: while it is set up, on and the frame's set not withdrawn; tree LOD's, with its pipelines from its program
+		 * (Api/DrawFamilies.h: while it is set up, on and the frame's claims installed; tree LOD's, with its pipelines from its program
 		 * source on the lane, DrawFamilyFrame::Pipelines), published: DrawFamilyOwned, and PassCapture withholds the engine's passes the
 		 * family's draws replace (SetFamilyOwned).
 		 */
@@ -419,10 +431,16 @@ namespace DCLF
 		 */
 		void BuildPoint();
 		/**
-		 * @brief Render thread, after AdoptSnapshot: whether the snapshot covers the main epochs (not stale, recordings of the graph as
-		 * built now). False: the frame has no claims (FrameView::WithdrawSet). Also decides the other epochs' coverage.
+		 * @brief Render thread, after AdoptCurrentSnapshot: whether the snapshot covers the main epochs (not stale, recordings of the
+		 * graph as built now). False only before DCLF's first covered frame (no claims: FrameView::NotDrawingYet) or under a load screen;
+		 * after it, a defect (FrameDriver::BeginFrame fails). Also decides the other epochs' coverage.
 		 */
 		bool DecideCoverage();
+		/**
+		 * @brief Render thread, after DecideCoverage: its inputs and verdicts as text (the adopted snapshot, each epoch's coverage), for
+		 * a defect's report.
+		 */
+		std::string CoverageState() const;
 		/** @brief Whether DCLF cannot draw (set once, by the render thread): the frame then has no claims. */
 		bool Failed() const { return failed.load(std::memory_order_relaxed); }
 

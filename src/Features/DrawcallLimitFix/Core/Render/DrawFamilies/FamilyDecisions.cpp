@@ -43,7 +43,7 @@ namespace DCLF
 			const auto family = static_cast<Api::DrawFamily>(f);
 			// A frame without claims is the engine's whole, the family's draws included; so is one whose family is not set up or off.
 			bool owned = false;
-			if (scene && Draws::FamilySetUp(*scene, family) && Extensions::DrawFamilyOn(toggles, family) && !Scene::FrameView::Get().SetWithdrawn())
+			if (scene && Draws::FamilySetUp(*scene, family) && Extensions::DrawFamilyOn(toggles, family) && !Scene::FrameView::Get().NotDrawingYet())
 				owned = entry.contribution.frame.decide({ a_frame, scene, family });
 			impl->familyOwned[f] = owned;
 			PassCapture::Get().SetFamilyOwned(family, owned);

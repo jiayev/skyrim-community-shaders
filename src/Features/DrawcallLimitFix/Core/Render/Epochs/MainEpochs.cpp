@@ -100,7 +100,7 @@ namespace DCLF
 		const bool mainSource = source != kNoEpoch && EpochTraitsOf(source).shape == ShapeKind::Main;
 		const std::size_t jobIndex = mainSource && EpochTraitsOf(source).index == kColourShape ? kAsyncColour : kAsyncZPrepass;
 		const MainPayload* shared = mainSource ? impl->committedPayload[jobIndex] : nullptr;
-		if (!shared || impl->committedFrame[jobIndex] != frame || Scene::FrameView::Get().SetWithdrawn()) {
+		if (!shared || impl->committedFrame[jobIndex] != frame || Scene::FrameView::Get().NotDrawingYet()) {
 			++f.noSharedPayload;
 			return {};
 		}
@@ -150,7 +150,7 @@ namespace DCLF
 		const auto outcome = [&](const char* a_outcome, bool a_executed = false) {
 			if (Diagnostics::Armed<Diagnostics::MainEpochOutcome>())
 				Diagnostics::Notify(Diagnostics::MainEpochOutcome{ Scene::FrameView::Get().GetFrame(), a_outcome, impl->InstalledPayload(),
-					impl->adoptedSnapshot ? impl->adoptedSnapshot->serial : 0, depthOnly, a_executed, Scene::FrameView::Get().SetWithdrawn() });
+					impl->adoptedSnapshot ? impl->adoptedSnapshot->serial : 0, depthOnly, a_executed, Scene::FrameView::Get().NotDrawingYet() });
 		};
 		if (!impl->pending) {
 			outcome("no capture, not submitted");
@@ -171,7 +171,8 @@ namespace DCLF
 			ready = impl->Setup(capture, depthOnly);
 			// New main resources (the targets or the frame buffers changed) under claims: the graph is built for them now, not at the
 			// next build point - the colour epoch, the frame's last, draws its own preparation with them; the next frame's revision
-			// recordings are then of the build before, and that frame is the engine's (DecideCoverage).
+			// recordings are then of the build before, and that frame waits at its start for a snapshot made for them
+			// (AdoptCurrentSnapshot; their context is posted for the builder below, PostResourcesAhead).
 			if (ready && impl->resources != resourcesBefore && resourcesBefore)
 				if (auto* host = RenderGraphRuntime::Get().Host())
 					(void)host->BuildIfRequested();
@@ -229,21 +230,33 @@ namespace DCLF
 		if (depthOnly) {
 			impl->prepassInputs = true;
 		}
-		// A frame without claims (Coordinator::WithdrawSet: no revision covers it) has nothing of DCLF's to draw, and is not submitted.
-		if (Scene::FrameView::Get().SetWithdrawn()) {
-			outcome("withdrawn, not submitted");
+		// Main resources made at this frame's Setup: their context, with this capture's masks, posted for the snapshot builder now, so the
+		// next frame's wait for a snapshot made for them needs nothing the frame posts after its adoption (the coordinator's context is
+		// the frame start's, after it).
+		const bool newResources = resources != resourcesBefore && resourcesBefore;
+		if (newResources)
+			impl->PostResourcesAhead(failed);
+		// Before DCLF's first covered frame (FrameView::NotDrawingYet) a frame has no claims and nothing of DCLF's to draw: not submitted.
+		if (Scene::FrameView::Get().NotDrawingYet()) {
+			outcome("not drawing yet, not submitted");
 			capture.Release();
 			return;
 		}
 		// The selected revision's shape and recording (DecideCoverage covered the main epochs), and the installed publication's
-		// payload (a snapshot without one for each epoch gives the frame no claims: DecideCoverage): trusted, nothing is built or checked here. A payload built
-		// for other main resources (made at this frame's Setup: a new render size) names their buffers: the frame is not submitted.
+		// payload (a snapshot without one for each epoch is not covered: DecideCoverage): trusted, nothing is built or checked here. A payload
+		// built for other main resources (made at this frame's Setup: a new render size) names their buffers: the epoch is not submitted.
 		const auto revision = impl->RevisionOf(EpochOfShape(ShapeKind::Main, static_cast<std::uint32_t>(depthOnly ? kDepthShape : kColourShape)));
 		std::shared_ptr<MainPayload> ahead = impl->installedDraws ? impl->installedDraws->payloads[jobIndex] : nullptr;
 		if (!revision || !ahead || ahead->inputs.addresses.identity != resources.get()) {
-			// Resources made at this frame's Setup are the only way here (the graph is built for them, and the frames until their
-			// revision are the engine's); anything else is a defect.
-			if (revision && resources == resourcesBefore && impl->unbuilt[jobIndex]++ == 0)
+			// Resources made at this frame's Setup are the only way here: no revision or payload the frame adopted at its start can be for
+			// resources that did not exist then, and one made now would be another publication's than the frame's claims (adopting it
+			// mid-frame would pair them). The frame's colour epoch is not DCLF's (its claimed objects miss this one frame's colour pass);
+			// the next frame waits at its start for a snapshot made for them. Anything else is a defect.
+			if (newResources)
+				logger::info("[DCLF] main resources made at frame {}'s colour pass ({}x{}): its colour epoch is not drawn (no revision of the frame's is for them); "
+							 "the next frame waits at its start for a snapshot made for them",
+					Scene::FrameView::Get().GetFrame(), resources->width, resources->height);
+			else if (revision && resources == resourcesBefore && impl->unbuilt[jobIndex]++ == 0)
 				logger::warn("[DCLF] the {} epoch of frame {} has no payload for its resources in the installed publication: not submitted <- UNBUILT",
 					depthOnly ? "Z-prepass" : "colour", Scene::FrameView::Get().GetFrame());
 			outcome(!revision ? "no revision, not submitted" : !ahead ? "no installed payload, not submitted" : "payload for other resources, not submitted");

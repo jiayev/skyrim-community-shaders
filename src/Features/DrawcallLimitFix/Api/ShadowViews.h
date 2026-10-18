@@ -157,8 +157,8 @@ namespace DCLF::Api
 	 *   exclusion into a_build.result. Per build, never per object.
 	 * - publish (required): render thread, once a frame, after the shadow epoch drew (ShadowEngine::NoteShadowEpochDrawn) while the
 	 *   shadow withholding is on: the Sun source's exclusion when its mode drew (the payload's, null: none), then the Point source's while
-	 *   its culls are installed (Extensions::SourceCullsInstalled; null when its mode drew nothing); and the Sun source's null when the
-	 *   frame's set is withdrawn (Scene::FrameView::WithdrawSet).
+	 *   its culls are installed (Extensions::SourceCullsInstalled; null when its mode drew nothing). None is published before DCLF's
+	 *   first covered frame (Scene::FrameView::NotDrawingYet), and claims once installed are never withdrawn.
 	 * - frameStart (required): render thread, once a frame, in the frame driver after the views' FrameStartBeforeCoverage work and before
 	 *   the lookups are installed: the pending exclusions brought to the frame's candidates.
 	 * - listExclusion (required): render thread, once a frame where the primary cull's scene-list filter is judged (and on its report

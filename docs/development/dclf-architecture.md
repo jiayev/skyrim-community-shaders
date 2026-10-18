@@ -41,7 +41,7 @@ it ([dclf-async-publication.md](./dclf-async-publication.md)).
 
 | Point in the frame | Render thread | Coordinator and pool | GPU |
 | --- | --- | --- | --- |
-| `Main::Draw`, before the main cull (`FrameDriver::BeginFrame`) | Applies the toggles, adopts the newest complete snapshot the snapshot builder posted (`IndirectDraws::AdoptSnapshot`: its revision, its draws and its publication, installed by `FrameView::HandOverAtFrameStart`), then installs its claims, list filter and sun exclusion (the builder's, followed along its forward links: `ForwardExclusion`), or withdraws the set (below). Serves the coordinator's requests (the switch catch-ups; the mirror's portal-root captures and capture requests; the pins walk and the fade nodes' answers go to a leased pool job, `FrameStartJob`) and kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, fade and tree seeds, texture transforms, each into a backing leased from its pool; the render thread copies the fade nodes' bytes and samples the tree seeds, the producer the rest) | **Scene pass** (`Coordinator::RunSceneWork`, whenever its producers wake the pump): the events applied, the walk, the set's commit; then, at the snapshot builder's pace, the publication (`PublishScene`), handed to the **snapshot builder** on the pool (`IndirectDraws::PostSnapshotWork`: the payloads built ahead, the revision made and sealed, the payload's pooled versions published) | The frame values' uploads, on the copy queue; the payload's catch-up, on the uploader |
+| `Main::Draw`, before the main cull (`FrameDriver::BeginFrame`) | Applies the toggles, adopts the newest complete snapshot the snapshot builder posted (`IndirectDraws::AdoptCurrentSnapshot`: its revision, its draws and its publication, installed by `FrameView::HandOverAtFrameStart`; once DCLF draws, after a graph build or new main resources it waits here for the builder's snapshot made for them, below), then installs its claims, list filter and sun exclusion (the builder's, followed along its forward links: `ForwardExclusion`); before DCLF's first covered frame it has none (below). Serves the coordinator's requests (the switch catch-ups; the mirror's portal-root captures and capture requests; the pins walk and the fade nodes' answers go to a leased pool job, `FrameStartJob`) and kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, fade and tree seeds, texture transforms, each into a backing leased from its pool; the render thread copies the fade nodes' bytes and samples the tree seeds, the producer the rest) | **Scene pass** (`Coordinator::RunSceneWork`, whenever its producers wake the pump): the events applied, the walk, the set's commit; then, at the snapshot builder's pace, the publication (`PublishScene`), handed to the **snapshot builder** on the pool (`IndirectDraws::PostSnapshotWork`: the payloads built ahead, the revision made and sealed, the payload's pooled versions published) | The frame values' uploads, on the copy queue; the payload's catch-up, on the uploader |
 | The engine's cull jobs | The engine registers the passes it keeps. `PassCapture` withholds DCLF's objects, `PrimaryCull` stands in for DCLF's references inside the list jobs, and the sun's cascades skip DCLF's entries | | |
 | `BeforeShadowMaps` | The frame's shadow views (`ShadowViews`), then, through Features/Shadows/Engine's handler, their coverage by the selected revision (`DecideShadowCoverage`) | | |
 | Each shadow view's `FinishAccumulating` | `CaptureShadowView`: where the engine drew, and with which constants | | The engine's own shadow draws |
@@ -61,10 +61,22 @@ An epoch's position in the frame matters to the work after it. Streamline's upsc
 directly behind an epoch: see `render-graph.md`, "Hazard: external Vulkan work directly after a graph epoch". Check that before adding
 an epoch or moving one late in the frame.
 
-A frame's set is **withdrawn** (the engine draws everything, and the next covered frame installs the whole set again) only
-when no publication applies: startup until the first one, a load, or `failed`. Every other frame draws the installed
-publication's claims. A toggle withdraws nothing: it takes effect for the frames only when a publication committed under it is
-installed (below, "Ownership").
+DCLF is persistent: once a frame installs claims, no frame hands drawing back to the engine until the user switches DCLF off. A
+frame has **no claims** (the engine draws everything) only before DCLF's first covered frame (`FrameView::NotDrawingYet`: the
+tables, the main resources and the first revision being made; the first installation applies the whole set), under a load screen
+(the set does not survive a load: `NoteLoadingScreen`), or when `failed`. Every other frame draws the installed publication's
+claims. What a snapshot cannot know ahead - a graph build (an extension added or removed, `BuildPoint`), new main resources (a new
+render size or frame buffers, made at the colour pass's `Setup`), new targets or shadow format - makes the snapshots made before it
+stale; the frame then **waits at its start** for the builder's snapshot made for the graph as built (`AdoptCurrentSnapshot`), a
+one-off stall on a rare event, counted on the strict epochs line ("waits at the frame's start"). Nothing the builder needs is posted
+after that point: the revision inputs are the build point's, the context for new main resources is posted for the builder at the
+`Setup` that made them (`PostResourcesAhead`; a work item made for other resources builds from it, `RefreshWorkContext`), the
+publication gate's scene-pass half is open while the frame waits (this frame's pass is woken only when its start ends), and the
+owner thread's requests (shadow view slots, a build, the tickets a recording waits for) are served in the wait. Five seconds without
+one, or a frame its adopted snapshot does not cover after the wait, is a defect (`stl::report_and_fail` with what it waited for or
+the coverage state), never a fallback. The one frame that cannot be covered is the one whose colour pass made new main resources:
+no revision it adopted at its start is for them, so its colour epoch is not drawn (logged); the next frame waits. A toggle withdraws
+nothing: it takes effect for the frames only when a publication committed under it is installed (below, "Ownership").
 
 ## The data
 

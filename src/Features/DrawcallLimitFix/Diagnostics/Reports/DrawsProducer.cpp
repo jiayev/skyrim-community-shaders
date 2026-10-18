@@ -96,9 +96,9 @@ namespace DCLF
 		{
 			auto& b = snapshotBuilder;
 			text += fmt::format("[DCLF] snapshot builder pacing: {} builds started, {} discarded unposted; {} passes held work for the frame's take; build stages on "
-								"the builder {} (a small change), on the pool {}\n",
+								"the builder {} (a small change), on the pool {}; {} work contexts replaced by the frame's for new main resources\n",
 				std::exchange(b.buildsStarted, 0), std::exchange(b.buildsDiscarded, 0), std::exchange(b.heldPasses, 0), std::exchange(b.stagesInline, 0),
-				std::exchange(b.stagesPooled, 0));
+				std::exchange(b.stagesPooled, 0), std::exchange(b.contextsReplaced, 0));
 		}
 		// The makes that kept the last revision (their requirement pass's inputs unchanged: RevisionReuse) and those that ran it (with no
 		// last revision to keep, or by what of the key moved), and the parities (CS_DCLF_PERSISTENT_PARITY): the pass run anyway for an
@@ -157,13 +157,15 @@ namespace DCLF
 			for (std::uint32_t e = 0, count = EpochCount(); e < count; ++e)
 				uncovered += fmt::format("{}{} {}", e ? ", " : "", EpochTraitsOf(e).name, std::exchange(rv.uncovered[e], 0));
 			const std::uint64_t unbuiltTotal = unbuilt[kAsyncZPrepass] + unbuilt[kAsyncColour] + shadowUnbuilt;
-			text += fmt::format("[DCLF] strict epochs: {} frames without the adopted snapshot's main recordings (claims withdrawn: the engine's), {} graph builds at the "
+			text += fmt::format("[DCLF] strict epochs: {} frames without the adopted snapshot's main recordings (DCLF not drawing yet, or a load screen up); "
+								"waits at the frame's start for a snapshot current for the graph as built: {} ({:.2f} ms, max {:.2f} ms); {} graph builds at the "
 								"build point, {} tickets of epochs not submitted given back for recordings; frames whose revision lacked an epoch's current recordings: {}; "
 								"shadow views left to the engine: {} frames without the revision's shadow recording or the installed shadow payload; occlusion maps "
 								"left to the engine for want of the revision's shape: {}; covered epochs without the installed publication's payload: Z-prepass {}, "
 								"colour {}, shadow {}{}\n",
-				std::exchange(rv.withdrawn, 0), std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered, std::exchange(shadowUnrecorded, 0),
-				std::exchange(occlusionUnrecorded, 0), unbuilt[kAsyncZPrepass], unbuilt[kAsyncColour], shadowUnbuilt, unbuiltTotal ? " <- UNBUILT" : "");
+				std::exchange(rv.uncoveredFrames, 0), std::exchange(snapshotWaits, 0), std::exchange(snapshotWaitMs, 0.0), std::exchange(snapshotWaitMaxMs, 0.0),
+				std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered, std::exchange(shadowUnrecorded, 0), std::exchange(occlusionUnrecorded, 0),
+				unbuilt[kAsyncZPrepass], unbuilt[kAsyncColour], shadowUnbuilt, unbuiltTotal ? " <- UNBUILT" : "");
 			unbuilt = {};
 			shadowUnbuilt = 0;
 		}

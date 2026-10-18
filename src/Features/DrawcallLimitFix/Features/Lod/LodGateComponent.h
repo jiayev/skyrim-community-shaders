@@ -207,16 +207,17 @@ namespace DCLF::Features::Lod::Gates
 	/** @brief Commit::published: the GateFlipsPublished observers, against the publication's claims. */
 	void Published(const Api::CoordinatorComponentContext& a_context);
 	/**
-	 * @brief Adoption::adopt (render thread, the frame's start, after InstallClaims or WithdrawSet, before the culls): releases the flips
-	 * the installed publications carried (LodGates::Flip: incoming shown, outgoing hidden, in the first post-swap frame), then wakes the
-	 * coordinator. Under set or persistent parity, checks the claims against each flip (<- GATE HOLE, <- GATE COVERAGE).
+	 * @brief Adoption::adopt (render thread, the frame's start, after the coverage decision - InstallClaims, or none yet - before the
+	 * culls): releases the flips the installed publications carried (LodGates::Flip: incoming shown, outgoing hidden, in the first
+	 * post-swap frame), then wakes the coordinator. Under set or persistent parity, checks the claims against each
+	 * flip (<- GATE HOLE, <- GATE COVERAGE).
 	 */
 	void Adopt(const Api::AdoptionContext& a_context);
 
 	/** @brief Render thread: the releases since the last report (ReleaseLines takes them), and their observers' checks. */
 	struct ReleaseStats
 	{
-		std::uint64_t released = 0, refused = 0, withdrawn = 0;
+		std::uint64_t released = 0, refused = 0, beforeDrawing = 0;  // beforeDrawing: in a frame before DCLF's first covered one (no claims)
 		std::vector<double> flipToReleaseMs, requestToReleaseMs;
 		std::vector<std::uint32_t> flipToReleaseFrames;
 		bool any = false;

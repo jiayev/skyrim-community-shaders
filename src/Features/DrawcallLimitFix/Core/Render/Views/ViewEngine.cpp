@@ -109,7 +109,7 @@ namespace DCLF
 		a_listed = {};
 		if (a_from == ViewInputsFrom::ColourThisFrame) {
 			// This frame's colour commit's payload and frame constants (the frame record, the lighting at PS b13).
-			if (impl->committedFrame[kAsyncColour] != frameNumber || Scene::FrameView::Get().SetWithdrawn())
+			if (impl->committedFrame[kAsyncColour] != frameNumber || Scene::FrameView::Get().NotDrawingYet())
 				return ViewInputsTaken::Stale;
 			a_listed.owners = { impl->committedPayload[kAsyncColour], nullptr };
 			a_listed.ownerCount = 1;

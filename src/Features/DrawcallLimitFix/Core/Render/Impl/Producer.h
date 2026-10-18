@@ -97,7 +97,9 @@ namespace DCLF
 			// Per epoch, whether the selected revision has its recordings of the graph as built now (DecideCoverage).
 			std::array<bool, kMaxEpochs> covered{};
 			bool explicitBuilds = false;
-			std::uint64_t builds = 0, withdrawn = 0, ticketsReleased = 0;
+			// Graph builds at the build point (and in a frame's wait for a current snapshot), frames whose main epochs were not covered
+			// (DCLF not drawing yet, or a load screen up: the only uncovered frames), tickets given back for recordings.
+			std::uint64_t builds = 0, uncoveredFrames = 0, ticketsReleased = 0;
 			std::array<std::uint64_t, kMaxEpochs> uncovered{};
 			// Per epoch, the inputs (versions, shape) whose recording failed: not asked again until they change.
 			std::array<std::pair<std::shared_ptr<const org::async::RevisionFragment>, std::shared_ptr<const org::async::RevisionFragment>>, kMaxEpochs> failedFor;
