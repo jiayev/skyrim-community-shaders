@@ -2593,6 +2593,41 @@ resident-draw, set and fade parity; motion m28/m29).
       fixed with it: the walk read the toggles at its own start while the events, the joins, `CommitSet` and `SetCapability` read the
       live set, so a toggle applied mid-pass committed claims under one set and stamped the publication with the frame inputs'
       generation; the whole pass now runs under the frame inputs' set (`ToggleSnapshotScope` in `ScenePass`).
+    - **Builds wait for a current snapshot; the set is never withdrawn** (2026-10-17). The last withdrawal: a graph build (at the
+      build point, or for new main resources at the colour pass's `Setup`) invalidates every recording, `AdoptSnapshot` refused the
+      snapshots made before it (`kStaleBuild`, `kStaleTargets`, `kStaleShadowFormat`, `kStaleMain`), and every frame until the builder
+      posted one for the new build was withdrawn (`FrameView::WithdrawSet`), with `PrimaryCull` still standing in for entries DCLF no
+      longer drew. Now, once DCLF draws, the frame waits at its start (`IndirectDraws::AdoptCurrentSnapshot`, after the build point
+      and the frame inputs' post, at the adoption) until the builder posts a snapshot current for the graph as built, the targets, the
+      shadow format and the main resources, polling `snapshotsPosted` (a timed wait: the wait is bounded and serves the owner thread
+      meanwhile, which `std::atomic::wait` cannot). What the builder could need from a frame that is not progressing, and why the
+      wait cannot deadlock on it:
+      - the revision inputs (the new build generation, heaps, main resources): posted by the build point, before the wait;
+      - the recordings (ORG's host thread, `RequestEpochRecording`): revision-driven epochs record the slot their unsubmitted ticket
+        holds, and in-flight slots complete on the GPU; a live epoch's slot waits for its ticket, so the wait gives the ready tickets
+        back every 16 ms while recordings are outstanding (`ReleaseTicketsForRecordings`, as the build point does for unsubmitted
+        epochs);
+      - a build a make asks for (shadow view slots: `buildWanted`) or an extension added meanwhile: served in the wait
+        (`ServeRevisionRequests`, `BuildIfAsked`), still before anything decides what the frame's recordings cover;
+      - the payload's publication gate: its scene-pass half waits for the scene pass of the frame that took the last snapshot, and
+        this frame's pass is woken only when the frame's start ends (`ScenePassWakeBatch`; inline under the parities); the half is open
+        while the frame waits (`frameWaiting`), since the frame adopts whatever is posted next;
+      - the payload's and a growth's uploads: the worker upload path (the copy queue's own submitter thread), never a render-thread
+        submission;
+      - the builds-ahead context for new main resources: the coordinator's is posted at the frame start after the adoption and reaches
+        the builder only with a new publication, so the `Setup` that made them posts their context for the builder alone
+        (`PostResourcesAhead`), and a work item whose context was made for other main resources than the revision inputs' builds from
+        it (`RefreshWorkContext`; counted on the builder pacing line, "work contexts replaced").
+      The frame whose colour pass made the new resources cannot be covered (its adopted revision and payload predate them, and a
+      snapshot made mid-frame would be another publication's than the frame's claims): its colour epoch is not drawn, logged as
+      `main resources made at frame N's colour pass`; the next frame waits. Five seconds without a current snapshot fails
+      (`stl::report_and_fail`, naming the generations waited for and the builder's atomics), as does a frame its snapshot does not cover
+      after the wait (with `IndirectDraws::CoverageState`): no silent fallback. `FrameView::WithdrawSet` and `SetWithdrawn` are gone;
+      the one claims-less state is before the first installation (`FrameView::NotDrawingYet`, which the epochs and the frame trace
+      read; the first `InstallClaims` applies the set whole), besides a load screen's frames (neither waited for nor required covered).
+      The strict epochs line counts the waits and their milliseconds; `CS_DCLF_TEST_COMMANDS="<frame>:dclf:rebuild"` requests a graph
+      rebuild (`PersistentGraphHost::RequestRebuild`) for the next build point, to exercise it. To watch in a run: one `frame N waited
+      X ms` line per rebuild, no withdrawal, sequences > 0 in the frames after it.
     - **Observers.**
       - Under `CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`, the adoption checks the installed claims against each flip:
         an incoming geometry not claimed with the flip's phases is `<- GATE HOLE` (a later publication's legitimate change reads as
@@ -2600,7 +2635,7 @@ resident-draw, set and fade parity; motion m28/m29).
       - The coordinator's line `[DCLF] LOD gates (T6b5): N opened, N flipped, N retired flipped, N forced (N before their flip), ...;
         request to flip: ms, frames; now N open (oldest X ms), N flipped awaiting their release's outcome; blockers: unmirrored roots N,
         unclassified N, no record N, not bound N, waiting (by the set's waiting-for index) ..., a phase short or its layer partner N`.
-      - The render thread's line `[DCLF] LOD gate releases (T6b5): N released, N refused, N in a withdrawn frame; flip to release: ms,
+      - The render thread's line `[DCLF] LOD gate releases (T6b5): N released, N refused, N in a frame before DCLF draws; flip to release: ms,
         frames; request to release ms; checked N: ...`, followed by the engine side's (`LodGates::Take`) once a report interval. The
         component registers both: the coordinator's at `ReportPoint::SceneCoordinatorGates` (`componentText`, logged as one line), the
         render thread's at `ReportPoint::GateReleases` (`lines`), each first at its point.

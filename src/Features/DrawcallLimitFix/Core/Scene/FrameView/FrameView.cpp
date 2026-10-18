@@ -1,6 +1,6 @@
 // FrameView's frame start and hand-over: the frame inputs posted, the adopted publication installed with the log walked up to it,
-// the claims installed or withdrawn, the components' deltas and the published classes' membership writes (the shading fields') gathered
-// for their adoption, and load screens noted. Render thread.
+// the claims installed (never withdrawn once installed), the components' deltas and the published classes' membership writes (the
+// shading fields') gathered for their adoption, and load screens noted. Render thread.
 
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
@@ -171,7 +171,8 @@ namespace DCLF::Scene
 	{
 		if (!installed)
 			return;
-		const bool whole = std::exchange(setWithdrawn, false);
+		// The first installation (NotDrawingYet ends here, for good: no claim is ever withdrawn after it).
+		const bool whole = !std::exchange(drawingStarted, true);
 		if (!whole && !installPending)
 			return;
 		installPending = false;
@@ -179,7 +180,7 @@ namespace DCLF::Scene
 		PublishFrameClaims(installed->claims);
 		frameLackingCount = installed->lackingCount;
 		if (whole) {
-			// After a withdrawal the engine's hooks hold no claim: every main claim joins.
+			// Before the first installation the engine's hooks hold no claim: every main claim joins.
 			std::vector<const RE::BSGeometry*> joined;
 			for (const auto& [geometry, phases] : installed->claims->phases)
 				if (phases & kSetMain)
@@ -193,29 +194,6 @@ namespace DCLF::Scene
 		}
 		installNotes.clear();
 		notedClaims = installed->claims;
-	}
-
-	void FrameView::WithdrawSet()
-	{
-		ZoneScopedN("CS.DCLF.Scene.WithdrawSet");
-		if (setWithdrawn)
-			return;
-		setWithdrawn = true;
-		// Every claim the engine's hooks were told of taken back (the frame's alone; the tables and the publications keep
-		// their set, and the next installation applies its claims whole).
-		std::vector<const RE::BSGeometry*> left;
-		if (notedClaims)
-			for (const auto& [geometry, phases] : notedClaims->phases)
-				if (phases & kSetMain)
-					left.push_back(geometry);
-		notedClaims.reset();
-		installNotes.clear();
-		auto none = std::make_shared<SetSnapshot>();
-		none->frame = frame;
-		PublishFrameClaims(std::move(none));
-		Extensions::PublishShadowExclusion(Api::ShadowSource::Sun, nullptr);
-		if (!left.empty())
-			PrimaryCull::Get().NoteSetChanges({}, left);
 	}
 
 	void FrameView::PublishFrameClaims(std::shared_ptr<const SetSnapshot> a_claims)
@@ -262,8 +240,8 @@ namespace DCLF::Scene
 
 	const SetSnapshot* FrameView::AdoptedClaims() const
 	{
-		// None when withdrawn: the frame is the engine's, and every later publication is post-swap.
-		return !setWithdrawn && installed && installed->claims ? installed->claims.get() : nullptr;
+		// None before the first installation (NotDrawingYet): the engine draws everything, and every later publication is post-swap.
+		return drawingStarted && installed && installed->claims ? installed->claims.get() : nullptr;
 	}
 
 	void FrameView::ClearAdoptedDeltas()

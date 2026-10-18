@@ -6,7 +6,10 @@
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Globals.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
+
+#include <OpenRenderGraph/PersistentGraphHost.h>
 
 namespace DCLF
 {
@@ -79,6 +82,16 @@ namespace DCLF
 								if (auto* player = RE::PlayerCharacter::GetSingleton())
 									player->DrawWeaponMagicHands(draw);
 							});
+						continue;
+					}
+					// "dclf:rebuild": a graph rebuild requested (PersistentGraphHost::RequestRebuild, here at Present on the graph's owner
+					// thread), which the next frame's build point performs: every recording invalidated, so that frame waits at its start for
+					// a snapshot recorded on the new build (IndirectDraws::AdoptCurrentSnapshot; the strict epochs line counts the waits).
+					if (command == "dclf:rebuild") {
+						if (auto* host = RenderGraphRuntime::Get().Host())
+							host->RequestRebuild();
+						else
+							logger::warn("[DCLF] test command: no render graph host to rebuild");
 						continue;
 					}
 					if (command.rfind("dclf:", 0) == 0) {

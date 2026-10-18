@@ -29,14 +29,15 @@ namespace DCLF::Features::Lod::Gates
 		if (a_context.deltas.empty())
 			return;
 		rs.any = true;
-		// The claims the frame installed (none when withdrawn: the frame is the engine's, and every later publication is post-swap).
+		// The claims the frame installed (none before DCLF's first covered frame: the frame is the engine's, and every later publication
+		// is post-swap).
 		const void* claims = a_context.claims;
 		const std::uint64_t now = GateNowNs();
 		for (const auto& delta : a_context.deltas) {
 			const auto& flip = *static_cast<const GateFlip*>(delta.get());
 			const bool released = LodGates::Flip(flip.token);
 			if (!claims)
-				++rs.withdrawn;
+				++rs.beforeDrawing;
 			else
 				Diagnostics::Notify(GateReleasing{ claims, flip.token, flip.incoming, flip.outgoing, released });
 			rs.flipToReleaseMs.push_back(GateMs(flip.flipNs, now));

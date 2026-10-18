@@ -136,18 +136,27 @@ namespace DCLF::Scene
 		 * pipelines' PerGeometry blocks (MakeNewPipelineConstants).
 		 */
 		void PostPipelineFrame(const GeometryPort::PipelineFrame& a_frame);
-		/** @brief Render thread, after HandOverAtFrameStart and the coverage decision: the installed publication's claims made the frame's. */
+		/**
+		 * @brief Render thread, after HandOverAtFrameStart and a covered coverage decision: the installed publication's claims made the
+		 * frame's (the first installation applies them whole: the engine's hooks hold none before it; NotDrawingYet ends).
+		 */
 		void InstallClaims();
 		/**
-		 * @brief Any thread: the frame's claims - the installed set, empty after WithdrawSet, null during a load or before the first.
+		 * @brief Any thread: the frame's claims - the installed set, null during a load or before the first installation (NotDrawingYet).
 		 * Immutable, swapped whole; PassCapture::PublishSet holds the same object for the engine-facing hooks.
 		 */
 		std::shared_ptr<const SetSnapshot> FrameClaims() const { return std::atomic_load(&frameClaims); }
 		bool HasInstalled() const { return installed != nullptr; }
 		/**
-		 * @brief Render thread, frame start after InstallClaims or WithdrawSet, before the culls (Extensions::ComponentsAdopt): the claims
-		 * the frame installed (null when withdrawn), and by component the deltas of the publications installed since the last adoption,
-		 * oldest first; cleared after it (ClearAdoptedDeltas).
+		 * @brief Render thread: no claims were installed yet - every frame before DCLF's first covered one (its tables, resources and first
+		 * revision being made), whose epochs draw nothing. The only claims-less state besides a load screen: once installed, the claims
+		 * are never withdrawn (a frame waits for a snapshot it can draw from instead, IndirectDraws::AdoptCurrentSnapshot).
+		 */
+		bool NotDrawingYet() const { return !drawingStarted; }
+		/**
+		 * @brief Render thread, frame start after the coverage decision (InstallClaims, or nothing while NotDrawingYet), before the culls
+		 * (Extensions::ComponentsAdopt): the claims the frame installed (null while NotDrawingYet), and by component the deltas of the
+		 * publications installed since the last adoption, oldest first; cleared after it (ClearAdoptedDeltas).
 		 */
 		const SetSnapshot* AdoptedClaims() const;
 		std::span<const std::vector<std::shared_ptr<const void>>> AdoptedDeltas() const { return frameComponentDeltas; }
@@ -203,13 +212,6 @@ namespace DCLF::Scene
 			const auto& resident = View().residentSlot;
 			return a_object >= 0 && static_cast<std::size_t>(a_object) < resident.size() && resident[a_object] != 0;
 		}
-		/**
-		 * @brief Render thread, in place of ApplySet when no scene revision covers the frame (IndirectDraws::DecideCoverage): every
-		 * claim taken back as if all members left, so the engine draws everything and DCLF nothing.
-		 */
-		void WithdrawSet();
-		/** @brief Whether the frame's claims were withdrawn (WithdrawSet) and not applied since. */
-		bool SetWithdrawn() const { return setWithdrawn; }
 		/**
 		 * @brief Render thread, frame start: the frame number, the frame's globals, the frame inputs posted (waking the pump). Then:
 		 * snapshot adopted and installed, claims installed, ServeFrameRequests, the filters. The frame reads only its own state,
@@ -390,7 +392,7 @@ namespace DCLF::Scene
 		std::shared_ptr<const SetSnapshot> frameClaims;
 		std::array<std::uint32_t, 3> frameLackingCount{};
 		PublicationStats publicationStats;
-		bool setWithdrawn = false;  // the frame's claims (WithdrawSet), until the next installation
+		bool drawingStarted = false;  // the first claims installed (InstallClaims; NotDrawingYet until then), never cleared
 		// The frame sample the held pipeline blocks were made from (RefreshFrameConstants' last with a sun; also PostPipelineFrame).
 		std::optional<GeometryPort::PipelineFrame> geometryPortFrame;
 		std::uint32_t geometryPortFrameNumber = ~0u;

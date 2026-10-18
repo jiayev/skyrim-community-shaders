@@ -1,6 +1,7 @@
 // The snapshot builder (one pass at a time on DCLF's preparation pool): the builds ahead of a publication's draws, from the context
 // the render thread posts at the frame's start, its revision made and sealed, the snapshot posted; and the render thread's adoption of
-// the newest one (AdoptSnapshot). PostSnapshotWork and the fits (FitsScene) are the coordinator's.
+// the newest one (AdoptSnapshot; once DCLF draws, AdoptCurrentSnapshot waits for a current one). PostSnapshotWork and the fits
+// (FitsScene) are the coordinator's.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
@@ -8,43 +9,75 @@
 #include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
+#include <thread>
+
 namespace DCLF
 {
 	using org::async::RevisionFragment;
 
 	void IndirectDraws::PostAheadContext()
 	{
-		auto& c = impl->aheadContext;
+		// Without main resources: the cleared context, the fits as they stood (the coordinator builds nothing ahead from it).
+		const bool fit = impl->MakeAheadContext(impl->aheadContext, failed);
+		impl->PostAhead(fit);
+	}
+
+	bool IndirectDraws::Impl::MakeAheadContext(AheadContext& a_out, bool a_failed)
+	{
+		auto& c = a_out;
 		c = {};
 		// For the coordinator's next commit, made under the newest toggles (the frame inputs': SceneToggles), not the frame's.
 		c.toggles = SceneToggles();
-		if (failed || !impl->resources || !impl->resources->scene) {
-			// The cleared context, the fits as they stood (the coordinator builds nothing ahead from it).
-			if (impl)
-				impl->PostAhead(false);
-			return;
-		}
+		if (a_failed || !resources || !resources->scene)
+			return false;
 		auto* lighting = EngineShaders::Lighting();
-		if (!lighting || !DrawPipelines::Get().Enabled() || !FrameIndirectState().valid) {
-			impl->PostAhead();
-			return;
-		}
+		if (!lighting || !DrawPipelines::Get().Enabled() || !FrameIndirectState().valid)
+			return true;
 		// The capacities the builds are made against are MakeRevision's (it reserves them from the newest publication's tables, the only
 		// tables the kept draw bound follows).
 		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
-			const auto& masks = impl->epochMasks[j];
+			const auto& masks = epochMasks[j];
 			// The frame slots the epochs last supplied; the colour build replays the Z-prepass's vertex inputs.
-			if (!masks.known || (j == kAsyncColour && !impl->prepassInputs))
+			if (!masks.known || (j == kAsyncColour && !prepassInputs))
 				continue;
-			c.inputs[j] = impl->PrepareMainInputs(j == kAsyncZPrepass, *impl->resources, masks.vsMask, masks.psMask);
+			c.inputs[j] = PrepareMainInputs(j == kAsyncZPrepass, *resources, masks.vsMask, masks.psMask);
 			c.build[j] = true;
 		}
-		c.target = impl->resources;
+		c.target = resources;
 		// The participants' parts (Revision/Participant.h: the shadow engine's payload inputs, for the last epoch's views).
-		for (auto* participant : impl->participants)
+		for (auto* participant : participants)
 			participant->PrepareAhead(c);
 		c.valid = c.build[kAsyncZPrepass] || c.build[kAsyncColour] || c.shadow;
-		impl->PostAhead();
+		return true;
+	}
+
+	void IndirectDraws::Impl::PostResourcesAhead(bool a_failed)
+	{
+		// The builder's alone: the coordinator's context stays the frame start's (a second post in a frame would read to it as the next
+		// frame's input). A context without both main builds builds no complete draws, so none is posted: the frame start's is the next.
+		auto context = std::make_unique<AheadContext>();
+		if (!MakeAheadContext(*context, a_failed) || !context->target || !context->build[kAsyncZPrepass] || !context->build[kAsyncColour])
+			return;
+		resourcesAheadSlot.Post(std::move(context));
+		(void)SnapshotPump();
+		snapshotInputsMoved.store(true, std::memory_order_release);
+		WakeSnapshotBuilder();
+	}
+
+	bool IndirectDraws::Impl::RefreshWorkContext()
+	{
+		resourcesAheadSlot.TakeInto(resourcesAhead);
+		auto& context = snapshotBuilder.work->context;
+		const auto& main = producer.inputs.main;
+		// Its draws are for the revision inputs' main resources already, or the frame posted no context for them yet (its post wakes the
+		// builder, which makes the snapshot again).
+		if (!main || context.target == main || resourcesAhead.target != main)
+			return false;
+		// The frame's context, under its toggles: one other than the publication's drops its shadow part (BuildSnapshotDraws) and is not
+		// passed through to.
+		context = resourcesAhead;
+		++snapshotBuilder.contextsReplaced;
+		return true;
 	}
 
 	void IndirectDraws::Impl::PostAhead(bool a_fit)
@@ -111,6 +144,7 @@ namespace DCLF
 			snapshot->publication = std::move(publication);
 			snapshot->drawsComplete = true;
 			s.snapshotSlot.Post(std::move(snapshot));
+			s.snapshotsPosted.fetch_add(1, std::memory_order_release);
 			return;
 		}
 		auto& store = Scene::Coordinator::Get();
@@ -544,9 +578,11 @@ namespace DCLF
 					b.sealedAt = std::chrono::steady_clock::now();
 					// The draws, for exactly the versions the sealed revision names (its adoption makes them current): built now, while its
 					// recordings are made, or again after a make whose set names other versions than the ones they embed (a growth became
-					// ready meanwhile). One consistent build: a snapshot never pairs draws and a revision of different versions.
+					// ready meanwhile), or for the frame's context when the work's was made for other main resources (RefreshWorkContext).
+					// One consistent build: a snapshot never pairs draws and a revision of different versions.
 					const auto& versions = rv.revisionVersions;
-					if (!b.draws || b.drawsSerial != versions->Serial())
+					const bool contextReplaced = RefreshWorkContext();
+					if (!b.draws || contextReplaced || b.drawsSerial != versions->Serial())
 						BuildSnapshotDraws(versions.get(), rv.revisionLayout.get());
 					if (b.draws)
 						Diagnostics::Notify(Diagnostics::SnapshotSealed{ *versions, *b.draws, b.work->context });
@@ -661,8 +697,9 @@ namespace DCLF
 		} else {
 			posted = {};
 		}
-		// Latest wins: one the frame has not taken is dropped here, on the builder.
+		// Latest wins: one the frame has not taken is dropped here, on the builder. Counted after the post (a waiting frame polls it).
 		snapshotSlot.Post(std::move(snapshot));
+		snapshotsPosted.fetch_add(1, std::memory_order_release);
 		snapshotsBuilt.fetch_add(1, std::memory_order_relaxed);
 		snapshotTimings.Push(b.timing);
 	}
@@ -685,27 +722,10 @@ namespace DCLF
 			s.snapshotTakenFrame.store(Scene::FrameView::Get().GetFrame(), std::memory_order_release);
 			s.snapshotTaken.store(taken->serial, std::memory_order_release);
 		}
-		// The one check: what a snapshot cannot know ahead, by generation. Its recordings of the graph as built now, its pipeline sets for the
-		// targets and the shadow format as they are, its draws and shapes for the main resources as they are. Its commit's toggles are
-		// none of it: installed, they become the frame's (Toggles::Adopt), and its revision was made for them (MakeRevision). One without
-		// a revision (the publication alone) is adopted for its tables whatever the graph.
 		using Stale = Impl::SnapshotStale;
-		std::size_t stale = Stale::kStaleKinds;
-		if (taken->revision) {
-			auto* host = RenderGraphRuntime::Get().Host();
-			auto& drawPipelines = DrawPipelines::Get();
-			if (host && taken->buildGeneration != host->BuildGeneration())
-				stale = Stale::kStaleBuild;
-			else if (taken->targetsGeneration != drawPipelines.Generation())
-				stale = Stale::kStaleTargets;
-			else if (taken->shadowFormat != drawPipelines.ShadowFormat())
-				stale = Stale::kStaleShadowFormat;
-			else if (taken->mainGeneration != s.postedInputs.mainGeneration)
-				stale = Stale::kStaleMain;
-		}
-		if (stale != Stale::kStaleKinds) {
-			// Not adopted: the frame has no claims until a current one (the adopted one is older still). The builder makes the snapshot
-			// again for the frame's inputs.
+		if (const std::size_t stale = s.StaleKindOf(*taken); stale != Stale::kStaleKinds) {
+			// Not adopted (the adopted one is older still): the frame waits for a current one once DCLF draws (AdoptCurrentSnapshot). The
+			// builder makes the snapshot again for the frame's inputs.
 			++s.snapshotsStale[stale];
 			s.snapshotStale = true;
 			s.retiredSnapshots.Push(std::shared_ptr<const Impl::SceneSnapshot>(std::move(taken)));
@@ -749,6 +769,114 @@ namespace DCLF
 		// The slot is free (a builder idle with inputs moved remakes for the frame as it is now).
 		WakeSnapshotBuilder();
 		return snapshot->publication;
+	}
+
+	std::size_t IndirectDraws::Impl::StaleKindOf(const SceneSnapshot& a_snapshot) const
+	{
+		// The one check: what a snapshot cannot know ahead, by generation. Its recordings of the graph as built now, its pipeline sets for the
+		// targets and the shadow format as they are, its draws and shapes for the main resources as they are. Its commit's toggles are
+		// none of it: installed, they become the frame's (Toggles::Adopt), and its revision was made for them (MakeRevision). One without
+		// a revision (the publication alone) is adopted for its tables whatever the graph.
+		if (!a_snapshot.revision)
+			return kStaleKinds;
+		auto* host = RenderGraphRuntime::Get().Host();
+		const auto& drawPipelines = DrawPipelines::Get();
+		if (host && a_snapshot.buildGeneration != host->BuildGeneration())
+			return kStaleBuild;
+		if (a_snapshot.targetsGeneration != drawPipelines.Generation())
+			return kStaleTargets;
+		if (a_snapshot.shadowFormat != drawPipelines.ShadowFormat())
+			return kStaleShadowFormat;
+		if (a_snapshot.mainGeneration != postedInputs.mainGeneration)
+			return kStaleMain;
+		return kStaleKinds;
+	}
+
+	bool IndirectDraws::Impl::AdoptedCurrent() const
+	{
+		// What DecideEpochCoverage asks of the snapshot before it looks at the epochs' recordings, the generations checked again: a
+		// snapshot adopted before this frame's build point is stale for a build it made.
+		const auto& adopted = adoptedSnapshot;
+		return adopted && adopted->revision && adopted->drawsComplete && StaleKindOf(*adopted) == kStaleKinds && installedPayload && installedPayload->Ready();
+	}
+
+	std::shared_ptr<const void> IndirectDraws::AdoptCurrentSnapshot(bool a_wait)
+	{
+		const std::uint64_t postedBefore = impl ? impl->snapshotsPosted.load(std::memory_order_acquire) : 0;
+		auto publication = AdoptSnapshot();
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!a_wait || !impl || failed || !host || impl->AdoptedCurrent())
+			return publication;
+		ZoneScopedN("CS.DCLF.WaitCurrentSnapshot");
+		auto& s = *impl;
+		using Clock = std::chrono::steady_clock;
+		// Generous: a snapshot made again for a build (its recordings, its draws for new main resources and their payload) takes
+		// milliseconds; five seconds without one is a builder that cannot make it, never a slow one.
+		constexpr auto kTimeout = std::chrono::seconds(5);
+		constexpr auto kSpin = std::chrono::milliseconds(2);
+		constexpr auto kTicketPeriod = std::chrono::milliseconds(16);
+		const auto start = Clock::now();
+		auto ticketsAt = start;  // the build point gave back the unsubmitted epochs' tickets just now
+		const auto staleBefore = s.snapshotsStale;
+		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
+		// The frame adopts whatever is posted next: the publication gate's scene pass half open (this frame's pass is woken only when its
+		// start ends), and the builder told to make its snapshot again for the inputs the build point posted.
+		s.frameWaiting.store(true, std::memory_order_seq_cst);
+		(void)s.SnapshotPump();
+		s.snapshotInputsMoved.store(true, std::memory_order_release);
+		WakeSnapshotBuilder();
+		std::uint64_t seen = postedBefore;
+		for (;;) {
+			// The owner thread's part of the build point, served while it waits: the shadow view slots a make asks for (sealed only once
+			// the inputs carry their build) and an extension added or removed (built here, still before anything decides what the frame's
+			// recordings cover); and the ready tickets a recording's slot waits for given back now and then (a released ticket is prepared
+			// again, so not every poll).
+			s.ServeRevisionRequests();
+			if (s.revisions.explicitBuilds && host->RebuildRequested())
+				s.BuildIfAsked(*host);
+			if (const auto now = Clock::now(); now - ticketsAt >= kTicketPeriod) {
+				s.ReleaseTicketsForRecordings(*host, 0);
+				ticketsAt = now;
+			}
+			if (const std::uint64_t posted = s.snapshotsPosted.load(std::memory_order_acquire); posted != seen) {
+				seen = posted;
+				publication = AdoptSnapshot();
+				if (s.AdoptedCurrent())
+					break;
+			}
+			const auto waited = Clock::now() - start;
+			if (waited > kTimeout) {
+				const auto& adopted = s.adoptedSnapshot;
+				std::string stale;
+				for (std::size_t k = 0; k < Impl::kStaleKinds; ++k)
+					stale += fmt::format("{}{}", k ? "/" : "", s.snapshotsStale[k] - staleBefore[k]);
+				stl::report_and_fail(fmt::format(
+					"Drawcall Limit Fix: frame {} waited {} s at its start for a scene snapshot current for the graph as built and never got one, and DCLF does "
+					"not hand drawing back to the engine. Waiting for: build generation {} (rebuild requested: {}), main resources generation {}, targets "
+					"generation {}. Stale snapshots taken meanwhile (build/targets/shadow format/main): {}; snapshots posted {}, recordings outstanding {}, "
+					"inputs moved {}, publication gated {}, build ahead running {}. Adopted snapshot: serial {}, revision {}, draws complete {}, build "
+					"generation {}, main generation {}, payload {}",
+					frame, std::chrono::duration_cast<std::chrono::seconds>(kTimeout).count(), host->BuildGeneration(), host->RebuildRequested(),
+					s.postedInputs.mainGeneration, DrawPipelines::Get().Generation(), stale, seen, s.recordingsOutstanding.load(std::memory_order_acquire),
+					s.snapshotInputsMoved.load(std::memory_order_acquire), s.publicationGated.load(std::memory_order_acquire),
+					s.aheadRunning.load(std::memory_order_acquire), adopted ? adopted->serial : 0, adopted && adopted->revision, adopted && adopted->drawsComplete,
+					adopted ? adopted->buildGeneration : 0, adopted ? adopted->mainGeneration : 0,
+					!s.installedPayload ? "none" : s.installedPayload->Ready() ? "ready" : "NOT READY"));
+			}
+			if (waited < kSpin)
+				std::this_thread::yield();
+			else
+				std::this_thread::sleep_for(std::chrono::microseconds(250));
+		}
+		s.frameWaiting.store(false, std::memory_order_release);
+		const double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+		++s.snapshotWaits;
+		s.snapshotWaitMs += ms;
+		s.snapshotWaitMaxMs = std::max(s.snapshotWaitMaxMs, ms);
+		logger::info("[DCLF] frame {} waited {:.2f} ms at its start for a snapshot current for the graph as built (build generation {}, main resources "
+					 "generation {}): adopted serial {}",
+			frame, ms, host->BuildGeneration(), s.postedInputs.mainGeneration, s.adoptedSnapshot->serial);
+		return publication;
 	}
 
 	void IndirectDraws::NoteScenePassDone(std::uint32_t a_frame)

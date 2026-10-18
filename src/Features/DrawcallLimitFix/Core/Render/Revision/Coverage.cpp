@@ -20,28 +20,39 @@ namespace DCLF
 		}
 		auto& rv = impl->revisions;
 		// Explicit while scene revisions draw: an extension added or removed during a frame waits for this point, so the graph a
-		// frame's revision was recorded on runs through that frame (a build invalidates every recording: the frame after one is the
-		// engine's, DecideCoverage). Failed, the graph builds at its next submission.
+		// frame's revision was recorded on runs through that frame (a build invalidates every recording: the frame waits at its start for
+		// a snapshot recorded on the new build, AdoptCurrentSnapshot). Failed, the graph builds at its next submission.
 		const bool explicitBuilds = !failed;
 		if (rv.explicitBuilds != explicitBuilds) {
 			rv.explicitBuilds = explicitBuilds;
 			host->SetExplicitBuilds(explicitBuilds);
 		}
+		impl->BuildIfAsked(*host);
+		// The epochs the last frame did not submit (no water in view) give their tickets back while a revision waits for recordings.
+		impl->ReleaseTicketsForRecordings(*host, RenderGraphRuntime::Get().TakeSubmittedSegments());
+	}
+
+	void IndirectDraws::Impl::BuildIfAsked(org::PersistentGraphHost& a_host)
+	{
 		// What the revision code asked of the owner thread (shadow view slots: their buffers and the extension declaring them), built
 		// here with the rest.
-		impl->ServeRevisionRequests();
-		if (explicitBuilds && host->BuildIfRequested())
-			++rv.builds;
+		ServeRevisionRequests();
+		if (revisions.explicitBuilds && a_host.BuildIfRequested())
+			++revisions.builds;
 		// The graph's build and its heaps, the pipelines' generations, the toggles: revision inputs, posted when they moved.
-		impl->PostRevisionInputs();
-		// A live epoch's recording waits for the slot its ready, unsubmitted ticket holds: an epoch the last frame did not submit (no
-		// water in view, a frame without claims) gives that ticket back while a revision waits for recordings, so none waits on it.
-		const std::uint32_t submitted = RenderGraphRuntime::Get().TakeSubmittedSegments();
-		// Recordings outstanding: an atomic the completions count down (never the assembler's pending list, the coordinator's).
-		if (explicitBuilds && impl->recordingsOutstanding.load(std::memory_order_acquire))
-			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
-				if (const auto segment = EpochTraitsOf(e).segment; !(submitted & (1u << static_cast<std::uint32_t>(segment))))
-					rv.ticketsReleased += host->ReleaseEpochTicket(RenderGraphRuntime::EpochOf(segment)) ? 1 : 0;
+		PostRevisionInputs();
+	}
+
+	void IndirectDraws::Impl::ReleaseTicketsForRecordings(org::PersistentGraphHost& a_host, std::uint32_t a_submitted)
+	{
+		// A live epoch's recording waits for the slot its ready, unsubmitted ticket holds: an epoch outside a_submitted gives that ticket
+		// back while a revision waits for recordings, so none waits on it. Recordings outstanding: an atomic the completions count down
+		// (never the assembler's pending list, the builder's).
+		if (!revisions.explicitBuilds || !recordingsOutstanding.load(std::memory_order_acquire))
+			return;
+		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
+			if (const auto segment = EpochTraitsOf(e).segment; !(a_submitted & (1u << static_cast<std::uint32_t>(segment))))
+				revisions.ticketsReleased += a_host.ReleaseEpochTicket(RenderGraphRuntime::EpochOf(segment)) ? 1 : 0;
 	}
 
 	void IndirectDraws::NoteRevisionInputs()
@@ -128,20 +139,38 @@ namespace DCLF
 		}
 		auto* host = RenderGraphRuntime::Get().Host();
 		impl->DecideEpochCoverage(host);
-		// The epochs flagged claims decide the frame's claims (the main ones): without their recordings the frame is the engine's
-		// (FrameView::WithdrawSet). A gated one's only while its class is on (the forward epoch's: its members' passes are withheld with the
-		// frame's claims, and only the forward epoch draws them; a frame without its recording would lose them).
+		// The epochs flagged claims decide the frame's claims (the main ones): without their recordings DCLF has nothing to draw them
+		// with, which only a frame before DCLF's first covered one may be (FrameDriver::BeginFrame; the frame waited for a current
+		// snapshot first, AdoptCurrentSnapshot). A gated one's only while its class is on (the forward epoch's: its members' passes are
+		// withheld with the frame's claims, and only the forward epoch draws them; a frame without its recording would lose them).
 		bool main = true;
 		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs && main; ++e)
 			if (const auto& traits = EpochTraitsOf(e); traits.claims && !rv.covered[e])
 				main = traits.gate != Api::ObjectClass::Count && !Extensions::ObjectClassOn(ActiveToggles(), traits.gate);
-		rv.withdrawn += main ? 0 : 1;
+		rv.uncoveredFrames += main ? 0 : 1;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		// Each registered view's, in slot order, by its feature's callback.
 		for (const auto& slot : kViewSlots)
 			if (Extensions::ViewEntryOf(slot.view).covered)
 				impl->DecideViewCoverage(slot.view, host, main, frame);
 		return main;
+	}
+
+	std::string IndirectDraws::CoverageState() const
+	{
+		const auto& s = *impl;
+		const auto& adopted = s.adoptedSnapshot;
+		const auto* payload = s.InstalledPayload();
+		auto* host = RenderGraphRuntime::Get().Host();
+		std::string epochs;
+		for (std::uint32_t e = 0, count = EpochCount(); e < count; ++e)
+			epochs += fmt::format("{}{} {}{}", e ? ", " : "", EpochTraitsOf(e).name, s.revisions.covered[e] ? "covered" : "UNCOVERED", EpochTraitsOf(e).claims ? " (claims)" : "");
+		return fmt::format("adopted snapshot serial {} (revision {}, draws complete {}, stale kind {} of {}, build generation {} against {}, main generation {} against {}), "
+						   "newest taken stale {}, payload {}, adopted set {}; epochs: {}",
+			adopted ? adopted->serial : 0, adopted && adopted->revision, adopted && adopted->drawsComplete, adopted ? s.StaleKindOf(*adopted) : static_cast<std::size_t>(Impl::kStaleKinds),
+			static_cast<std::size_t>(Impl::kStaleKinds), adopted ? adopted->buildGeneration : 0, host ? host->BuildGeneration() : 0,
+			adopted ? adopted->mainGeneration : 0, s.postedInputs.mainGeneration, s.snapshotStale, !payload ? "none" : payload->Ready() ? "ready" : "NOT READY",
+			s.adoptedSet ? "named" : "none", epochs);
 	}
 
 	void IndirectDraws::Impl::CoverFailedGraph()

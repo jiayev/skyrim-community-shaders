@@ -240,7 +240,7 @@ namespace DCLF
 					(void)engine.ImportShadowDepth(index, target);
 		}
 		// None while the built graph lacks a new import, or the frame has no claims.
-		if (auto* host = RenderGraphRuntime::Get().Host(); !host || host->RebuildRequested() || Scene::FrameView::Get().SetWithdrawn())
+		if (auto* host = RenderGraphRuntime::Get().Host(); !host || host->RebuildRequested() || Scene::FrameView::Get().NotDrawingYet())
 			return 0;
 		// Every view: each draws at its placement's slot.
 		return UINT32_MAX;

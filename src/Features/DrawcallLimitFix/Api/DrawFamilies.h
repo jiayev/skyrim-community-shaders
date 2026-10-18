@@ -92,8 +92,8 @@ namespace DCLF::Api
 	 * - frame.serve (optional): render thread, at the frame's start where the frame requests are served (running or not: FrameView's
 	 *   ServeFrameRequests, at its end), handed the frame: what the family mirrors of the engine, drained.
 	 * - frame.decide: render thread, once a frame before the main camera's cull (FrameDriver, before the FrameStartAfterTreeLod view
-	 *   work), only while the family is set up, on (its class's toggle) and the frame's set not withdrawn, handed the frame with the
-	 *   scene's tables: whether the family's draws are DCLF's this frame, which Core publishes (IndirectDraws::DrawFamilyOwned; then
+	 *   work), only while the family is set up, on (its class's toggle) and DCLF draws (not before its first covered frame), handed the
+	 *   frame with the scene's tables: whether the family's draws are DCLF's this frame, which Core publishes (IndirectDraws::DrawFamilyOwned; then
 	 *   PassCapture withholds the engine's passes they replace); else they are not. Its pipelines are Core's lane's
 	 *   (DrawFamilyFrame::Pipelines).
 	 * - frame.programSource: render thread, from DrawFamilyFrame::Pipelines: the engine shader its slot's pipelines are built from (null:

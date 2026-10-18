@@ -240,9 +240,10 @@ namespace DCLF::Extensions
 	 */
 	bool EntryClassTaken(Api::EntryClass a_class);
 	/**
-	 * @brief Render thread, the frame's start (after its claims are installed or withdrawn): every component's adoption hook
-	 * (Api::CoordinatorComponent::Adoption), in registration order, handed a_frame, a_claims (null: withdrawn) and its deltas
-	 * (a_deltas by component: the publications installed since the last call; none past it). Core/Scene/Coordinator/Components.cpp.
+	 * @brief Render thread, the frame's start (after its coverage decision: claims installed, or none yet): every component's
+	 * adoption hook (Api::CoordinatorComponent::Adoption), in registration order, handed a_frame, a_claims (null: none installed yet)
+	 * and its deltas (a_deltas by component: the publications installed since the last call; none past it).
+	 * Core/Scene/Coordinator/Components.cpp.
 	 */
 	void ComponentsAdopt(std::uint32_t a_frame, const void* a_claims, std::span<const std::vector<std::shared_ptr<const void>>> a_deltas);
 }

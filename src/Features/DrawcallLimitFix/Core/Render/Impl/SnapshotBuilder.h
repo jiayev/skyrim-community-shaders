@@ -51,6 +51,11 @@ namespace DCLF
 		};
 		LatestSlot<AheadPost> aheadSlot;
 		AheadPost aheadTaken;  // the coordinator's
+		// The render thread's context for main resources made at a frame's Setup (PostResourcesAhead), latest wins, and the builder's
+		// copy (RefreshWorkContext): a work item whose context was made for other main resources than the revision inputs' builds from
+		// it instead, so a snapshot for new resources never waits for a publication of the coordinator's.
+		LatestSlot<AheadContext> resourcesAheadSlot;
+		AheadContext resourcesAhead;  // the builder's
 		std::vector<std::shared_ptr<MainPayload>> payloadPool;  // the snapshot builder's
 		// Builds ahead posted (coordinator) and done (builder, covering skipped ones); fallback streams refused while one is pending.
 		std::atomic<std::uint64_t> aheadKicked{ 0 };
@@ -91,6 +96,13 @@ namespace DCLF
 		};
 		LatestSlot<SnapshotWork> snapshotWorkSlot;  // the coordinator -> the builder
 		LatestSlot<SceneSnapshot> snapshotSlot;     // the builder -> the frame's start
+		// The snapshots posted to snapshotSlot (the builder's increment after each post, release): what a frame waiting for a current
+		// snapshot polls (AdoptCurrentSnapshot), so it takes the slot only when something new is there.
+		std::atomic<std::uint64_t> snapshotsPosted{ 0 };
+		// The frame's (AdoptCurrentSnapshot): it waits at its start for a snapshot current for the graph as built. The publication
+		// gate's scene pass half is open meanwhile (PublicationGateClosed): the frame adopts whatever is posted next, and its own scene
+		// pass is woken only when its start ends, so a payload held for that pass would never be published.
+		std::atomic<bool> frameWaiting{ false };
 		// Publication pacing (SnapshotWorkTaken): the sequence of the newest publication the builder took from snapshotWorkSlot (the
 		// builder's store, release; the coordinator's load, acquire).
 		std::atomic<std::uint64_t> snapshotWorkTaken{ 0 };
@@ -107,12 +119,16 @@ namespace DCLF
 		std::atomic<std::uint64_t> passDoneWakesSkipped{ 0 };
 		/**
 		 * @brief The builder: the gate above is closed - the frame has yet to take the last snapshot posted, or the scene pass of the
-		 * frame that took it has not ended. A payload waits on it (PublishPayload), and no build starts while it is closed (SnapshotPass).
+		 * frame that took it has not ended (unless the frame waits at its start: frameWaiting). A payload waits on it (PublishPayload),
+		 * and no build starts while it is closed (SnapshotPass).
 		 */
 		bool PublicationGateClosed() const
 		{
 			const std::uint64_t taken = snapshotTaken.load(std::memory_order_acquire);
-			return taken < snapshotBuilder.serial || scenePassDoneFrame.load(std::memory_order_seq_cst) < snapshotTakenFrame.load(std::memory_order_acquire);
+			if (taken < snapshotBuilder.serial)
+				return true;
+			return !frameWaiting.load(std::memory_order_seq_cst) &&
+			       scenePassDoneFrame.load(std::memory_order_seq_cst) < snapshotTakenFrame.load(std::memory_order_acquire);
 		}
 		// The frame's: the adopted snapshot, and whether the newest found was stale (no claims until a current one).
 		std::shared_ptr<const SceneSnapshot> adoptedSnapshot;
@@ -125,6 +141,10 @@ namespace DCLF
 		// any thread's.
 		PayloadBuilder payloadBuilder{ FrameRetirement() };
 		bool snapshotStale = false;
+		// The frame's waits at its start for a current snapshot (AdoptCurrentSnapshot) since the last report: how many, their total and
+		// longest time.
+		std::uint64_t snapshotWaits = 0;
+		double snapshotWaitMs = 0.0, snapshotWaitMaxMs = 0.0;
 		// The adopted snapshot's revision's versions (held by it): what commits and latch writes take every versioned buffer's
 		// address, SRV index and capacity from (Adopted).
 		const NamedVersions* adoptedSet = nullptr;
@@ -173,6 +193,8 @@ namespace DCLF
 			// The report's (ProducerReport): draws built (BuildSnapshotDraws) and those replaced before a snapshot posted them; the passes
 			// that held work for the gate; the builds whose stages ran on this thread for a small change (RunAhead) and on the pool.
 			std::uint64_t buildsStarted = 0, buildsDiscarded = 0, heldPasses = 0, stagesInline = 0, stagesPooled = 0;
+			// The report's: work items whose context was the frame's for new main resources instead (RefreshWorkContext).
+			std::uint64_t contextsReplaced = 0;
 			bool drawsPosted = false;  // draws were posted in a snapshot (buildsDiscarded counts those that were not)
 			bool fresh = false;  // work taken and not yet made (PassThrough is tried once, for it)
 			/**

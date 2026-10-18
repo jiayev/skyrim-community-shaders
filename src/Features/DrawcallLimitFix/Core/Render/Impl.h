@@ -71,6 +71,33 @@ namespace DCLF
 		void PostFit();
 		/** @brief Render thread: posts the context and the fits as they are now (a_fit: PostFit first). */
 		void PostAhead(bool a_fit = true);
+		/**
+		 * @brief Render thread: a_out made from the frame as it is now (the main resources, the epochs' masks, the participants' parts),
+		 * under the newest toggles. False without main resources (a_failed, none yet): a_out holds the toggles alone and no fit is posted.
+		 */
+		bool MakeAheadContext(AheadContext& a_out, bool a_failed);
+		/**
+		 * @brief Render thread, RunEpoch: main resources made at this frame's Setup. Their context posted for the builder alone
+		 * (resourcesAheadSlot; the coordinator's is the frame start's), and the builder woken, so the next frame's wait for a snapshot
+		 * for them (AdoptCurrentSnapshot) needs no publication of the coordinator's.
+		 */
+		void PostResourcesAhead(bool a_failed);
+		/**
+		 * @brief The builder, before its draws are built for a sealed revision: a work item whose context was made for other main resources
+		 * than the revision inputs' (a publication of the coordinator's made before they changed) takes the render thread's for them
+		 * (PostResourcesAhead) instead. True when replaced: its draws are built again.
+		 */
+		bool RefreshWorkContext();
+		/**
+		 * @brief The stale kind of a_snapshot for the graph as built now, the targets, the shadow format and the main resources
+		 * (SnapshotStale), kStaleKinds when current. One without a revision (the publication alone) is never stale.
+		 */
+		std::size_t StaleKindOf(const SceneSnapshot& a_snapshot) const;
+		/**
+		 * @brief Render thread: the adopted snapshot is one a frame draws from - current (StaleKindOf), with a revision, complete
+		 * draws and their payload ready.
+		 */
+		bool AdoptedCurrent() const;
 
 		/**
 		 * @brief The addresses, SRV indices, capacities and fit a main (shadow) build embeds of its resources' versioned buffers, as
@@ -245,6 +272,13 @@ namespace DCLF
 
 		// The revision producer's and the scene revisions' types and state: Impl/Producer.h (ImplProducer).
 		void ServeRevisionRequests();
+		/**
+		 * @brief Render thread (the build point, and a frame's wait for a current snapshot): the revision code's requests served, the
+		 * graph built when an extension was added or removed (explicit builds), and the revision inputs posted when they moved.
+		 */
+		void BuildIfAsked(org::PersistentGraphHost& a_host);
+		/** @brief Render thread: while recordings are outstanding, every epoch's ready ticket outside a_submitted (segment bits) given back. */
+		void ReleaseTicketsForRecordings(org::PersistentGraphHost& a_host, std::uint32_t a_submitted);
 		/** @brief Render thread: posts the revision inputs when anything moved. Called where each value is captured (and ShadowHost's). */
 		void PostRevisionInputs() override;
 		/**

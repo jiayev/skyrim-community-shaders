@@ -106,12 +106,16 @@ namespace DCLF
 		// producer expands them for, and the renderer's quads once).
 		Extensions::PaletteRowsFrameStart();
 		auto& draws = IndirectDraws::Get();
+		// A load screen's frames are claims-less whatever their snapshot (NoteLoadingScreen): neither waited for nor required covered.
+		const bool loading = Scene::FrameView::IsLoadingScreenUp();
 		{
 			// The newest complete snapshot the builder posted, adopted whole - its revision, its draws and its publication (installed here
-			// with the log walked up to it, its toggles the frame's). A stale one is not adopted and the frame is the engine's until the
-			// builder's next.
+			// with the log walked up to it, its toggles the frame's). Once DCLF draws, a frame whose newest is stale or none for the graph
+			// as built (a graph build, new main resources, targets or shadow format) waits here for the builder's next current one: a
+			// one-off stall on a rare event, never a frame handed back to the engine. Everything the builder needs is posted by now (the
+			// build point's revision inputs, the frame inputs above; AdoptCurrentSnapshot says why nothing later is).
 			RenderThreadBudget::Part exchange(RenderThreadBudget::Bucket::Exchange);
-			view.HandOverAtFrameStart(draws.AdoptSnapshot());
+			view.HandOverAtFrameStart(draws.AdoptCurrentSnapshot(!view.NotDrawingYet() && !loading));
 			view.SyncFrameTables();
 		}
 		// The views' frame start before the coverage that decides whether their members are withheld (Features/FirstPerson's: the view's
@@ -124,13 +128,18 @@ namespace DCLF
 		Diagnostics::Notify<Diagnostics::FramePoint::LookupsInstalled>();
 		draws.PostLookupInputs();
 		{
-			// A frame the adopted snapshot does not cover has no claims: the engine draws everything, and the next covered frame installs
-			// the whole set again. A toggle withdraws nothing: the installed publication's toggles are the frame's.
+			// The claims are installed on every covered frame. Before the first (NotDrawingYet: tables, resources and the first revision
+			// being made) a frame has none, and the engine draws everything; after it, DCLF never hands drawing back: the frame waited for
+			// a snapshot it can draw from (AdoptCurrentSnapshot), so one it does not cover is a defect, reported with the coverage state
+			// (a load screen's frames aside: their claims are none anyway). A toggle withdraws nothing: the installed publication's toggles
+			// are the frame's.
 			RenderThreadBudget::Part exchange(RenderThreadBudget::Bucket::Exchange);
-			if (!draws.DecideCoverage() || !view.HasInstalled())
-				view.WithdrawSet();
-			else
+			if (draws.DecideCoverage() && view.HasInstalled())
 				view.InstallClaims();
+			else if (!view.NotDrawingYet() && !loading)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: frame {} is not covered by the snapshot it adopted after waiting for a current one, and DCLF "
+												 "does not hand drawing back to the engine once it draws: {}",
+					view.GetFrame(), draws.CoverageState()));
 			// The releases' report (the render thread's: the flip to its release), with the engine side's, once a report window.
 			Reports::GateReleases(view.GetFrame());
 			// The components' adoption of the installed publications' deltas, before the culls (in the frame whose claims are post-swap):
