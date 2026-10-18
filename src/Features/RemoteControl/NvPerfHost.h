@@ -23,8 +23,6 @@ namespace NvPerf::Host
 	void SetFrameAnnotations(bool enabled);
 	/// The directory of the plugin's log; the CSV is written there.
 	std::filesystem::path LogDirectory();
-	/// The plugin's data directory; nvperf_grfx_host.dll is loaded from its NvPerf folder.
-	std::filesystem::path DataDirectory();
 	/// How to build the plugin with Nsight Perf, reported by a build without it.
 	const char* BuildHint();
 }

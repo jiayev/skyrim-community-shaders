@@ -1,4 +1,8 @@
 #include "Features/RemoteControl/NvPerf.h"
+
+#include "Features/RemoteControl/NvPerfBackend.h"
+
+#include "DxvkLoader.h"
 #include "Features/RemoteControl/NvPerfHost.h"
 
 #include <algorithm>
@@ -6,31 +10,23 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
-#include <unordered_map>
-#include <unordered_set>
+#include <sstream>
 #include <utility>
 
-#ifdef NVPERF_ENABLED
-#	include <nvperf_d3d11_host.h>
-#	include <nvperf_d3d11_target.h>
-#	include <nvperf_host.h>
-#	include <nvperf_target.h>
-#endif
-
+// NvPerf's front end: requests, status, results, the CS_NVPERF_* switches, and the choice of backend
+// (NvPerfBackend.h). Every profiler call is the backend's.
 namespace NvPerf
 {
+	using namespace detail;
+
 	namespace
 	{
-		// NVPW's enums (nvperf_host.h), so the metric helpers below build without the SDK.
-		constexpr std::uint8_t kCounter = 0, kRatio = 1, kThroughput = 2;
-		constexpr std::uint8_t kRollupAvg = 0, kRollupSum = 3;
-		constexpr std::uint16_t kSubmetricNone = 0, kSubmetricPerCycleActive = 10, kSubmetricPctOfPeakActive = 15, kSubmetricPctOfPeakElapsed = 16,
-								kSubmetricRatio = 21;
-
 		constexpr std::array<std::string_view, 4> kRollupNames{ "avg", "max", "min", "sum" };
 		constexpr std::array<std::string_view, 22> kSubmetricNames{ "", "peak_sustained", "peak_sustained_active", "peak_sustained_active.per_second",
 			"peak_sustained_elapsed", "peak_sustained_elapsed.per_second", "peak_sustained_frame", "peak_sustained_frame.per_second", "peak_sustained_region",
@@ -133,14 +129,12 @@ namespace NvPerf
 		return label;
 	}
 
-	std::filesystem::path CsvPath()
+	namespace
 	{
-		return Host::LogDirectory() / "CommunityShaders-NvPerf.csv";
+		std::atomic<bool> g_rangesActive{ false };
 	}
 
-#ifdef NVPERF_ENABLED
-
-	namespace
+	namespace detail
 	{
 		std::string ToUtf8(const std::filesystem::path& a_path)
 		{
@@ -166,6 +160,30 @@ namespace NvPerf
 			return found == a_filters.end() ? nullptr : &*found;
 		}
 
+		bool PerfEventSelected(const std::vector<std::string>& a_filters, std::string_view a_name)
+		{
+			constexpr std::string_view kDrawMarkerPrefix = "Draw: CS ";
+			return a_filters.empty() ? !a_name.starts_with(kDrawMarkerPrefix) : MatchingFilter(a_filters, a_name) != nullptr;
+		}
+
+		void SetRangesActive(bool a_active) noexcept
+		{
+			g_rangesActive.store(a_active, std::memory_order_relaxed);
+		}
+
+		bool LoadHostLibrary(DeviceInfo& a_device)
+		{
+			a_device.libraryPath = DxvkLoader::GetRuntimeDir() / L"nvperf_grfx_host.dll";
+			if (::GetModuleHandleW(L"nvperf_grfx_host.dll") || ::LoadLibraryW(a_device.libraryPath.c_str()))
+				return true;
+			a_device.error = std::format("could not load {}", ToUtf8(a_device.libraryPath));
+			logger::info("[NvPerf] {}", a_device.error);
+			return false;
+		}
+	}
+
+	namespace
+	{
 		std::string CsvEscape(std::string_view a_text)
 		{
 			if (a_text.find_first_of("\",\r\n") == std::string_view::npos)
@@ -288,71 +306,51 @@ namespace NvPerf
 			csv << '\n';
 			for (const auto& range : a_result.rangeResults) {
 				csv << a_result.id << ',' << range.sample << ',' << a_result.startFrame << ',' << CsvEscape(range.name) << ',' << CsvEscape(range.path) << ','
-				    << range.occurrence;
+					<< range.occurrence;
 				for (double value : range.values)
 					csv << ',' << value;
 				csv << '\n';
 			}
 		}
 
-		constexpr std::size_t kMaxRangesPerPass = 2048;
-		constexpr std::size_t kAvgRangeNameLength = 96;
-		constexpr std::uint32_t kMaxRangeNameLength = 256;
-		constexpr std::uint32_t kFramesWithoutRangeLimit = 8;
-		constexpr std::uint32_t kDecodeFrameLimit = 240;
-
-		const char* StatusName(NVPA_Status a_status)
+#ifdef NVPERF_ENABLED
+		constexpr bool kBuilt = true;
+#else
+		constexpr bool kBuilt = false;
+#endif
+		std::string NotBuilt()
 		{
-			const char* statusName = nullptr;
-			const char* comment = nullptr;
-			NVPW_NVPAStatusToString(a_status, &statusName, &comment);
-			return statusName ? statusName : "NVPA_STATUS_UNKNOWN";
+			return std::format("built without Nsight Perf ({})", Host::BuildHint());
 		}
 
-		bool Failed(NVPA_Status a_status, const char* a_operation)
+		// The Win32 environment: the switches file is applied with SetEnvironmentVariable after the CRT copied its own.
+		std::string Env(const char* a_name)
 		{
-			if (a_status == NVPA_STATUS_SUCCESS)
-				return false;
-			logger::warn("[NvPerf] {} failed with {}", a_operation, StatusName(a_status));
-			return true;
+			char value[4096]{};
+			const DWORD length = ::GetEnvironmentVariableA(a_name, value, sizeof(value));
+			return length && length < sizeof(value) ? std::string(value, length) : std::string{};
 		}
 
-		struct SelectedMetric
+		std::vector<std::string> Split(const std::string& a_text)
 		{
-			MetricRequest spec;
-			NVPW_MetricEvalRequest request{};
-		};
-
-		// Render-thread state of the capture in flight.
-		struct Capture
-		{
-			std::uint64_t id = 0;
-			CaptureConfiguration configuration;
-			std::vector<SelectedMetric> metrics;
-			std::vector<std::uint8_t> configImage;
-			std::vector<std::uint8_t> counterDataPrefix;
-			std::vector<std::uint8_t> counterDataImage;
-			std::vector<std::uint8_t> counterDataScratch;
-			std::size_t passesPerSample = 0;
-			std::size_t traceBufferSize = 0;
-			std::size_t traceBufferCount = 0;
-			std::uint32_t delayFrames = 0;
-			std::uint32_t sample = 0;
-			std::size_t passesSubmitted = 0;
-			std::uint32_t decodeFrames = 0;
-			std::uint32_t framesWithoutRange = 0;
-			std::uint64_t rangesThisPass = 0;
-			bool sessionActive = false;
-			bool passActive = false;
-			bool previousFrameAnnotations = false;
-			CaptureResult result;
-		};
+			std::vector<std::string> parts;
+			std::stringstream stream(a_text);
+			for (std::string part; std::getline(stream, part, ',');) {
+				while (!part.empty() && part.front() == ' ')
+					part.erase(part.begin());
+				while (!part.empty() && part.back() == ' ')
+					part.pop_back();
+				if (!part.empty())
+					parts.push_back(part);
+			}
+			return parts;
+		}
 
 		struct Profiler
 		{
 			std::mutex mutex;  // everything below up to `capture`
 			DeviceInfo device;
-			std::size_t deviceIndex = 0;
+			Backend* vulkan = nullptr;  // registered once the render graph adopted DXVK's device
 			std::uint64_t nextCaptureId = 1;
 			std::optional<std::pair<std::uint64_t, CaptureConfiguration>> pending;
 			bool cancelRequested = false;
@@ -362,8 +360,8 @@ namespace NvPerf
 
 			// Render thread only.
 			std::optional<Capture> capture;
-			std::vector<bool> rangeStack;  // per open perf event: whether it was forwarded to the profiler
-			std::uint64_t unbalancedRanges = 0;
+			std::uint64_t presents = 0;
+			bool environmentHandled = false;  // the CS_NVPERF_RANGES capture was queued (or could not be)
 		};
 
 		Profiler& Get()
@@ -372,478 +370,85 @@ namespace NvPerf
 			return profiler;
 		}
 
-		std::atomic<bool> g_rangesActive{ false };
+		// The chosen backend. Never destroyed: the Vulkan backend's callbacks stay installed in DXVK and the graph host.
+		std::atomic<Backend*> g_backend{ nullptr };
 
-		ID3D11DeviceContext* Context()
+		// Chooses the backend, once: Vulkan when the render graph registered DXVK's device; never D3D11 under DXVK, whose
+		// D3D11 runtime the D3D11 profiler's driver cannot see (until the registration, nothing is chosen). Caller holds the
+		// mutex.
+		Backend* SelectLocked(Profiler& a_profiler)
 		{
-			return Host::Context();
+			if (auto* backend = g_backend.load(std::memory_order_acquire))
+				return backend;
+			Backend* backend = a_profiler.vulkan;
+			if (!backend && DxvkLoader::IsLoaded()) {
+				a_profiler.device.error = "DXVK is in use and the render graph has not adopted its Vulkan device (the D3D11 profiler cannot run under DXVK)";
+				return nullptr;
+			}
+			if (!backend)
+				backend = MakeD3D11Backend().release();
+			if (!backend)
+				return nullptr;
+			a_profiler.device.backend = backend->Name();
+			g_backend.store(backend, std::memory_order_release);
+			return backend;
 		}
 
-		// Loads and initializes the library and identifies the device. Caller holds the mutex.
+		// Chooses the backend, loads and initializes the library and identifies the device. Caller holds the mutex.
 		bool ProbeLocked(Profiler& a_profiler)
 		{
 			auto& device = a_profiler.device;
 			if (device.probed)
 				return device.gpuSupported;
-			if (!Host::Device()) {
-				device.error = "the D3D11 device is not created yet";
+			if (!kBuilt) {
+				device.error = NotBuilt();
 				return false;
 			}
-			device.probed = true;
-			device.libraryPath = Host::DataDirectory() / "NvPerf" / "nvperf_grfx_host.dll";
-			// The import is delay-loaded: it must be loaded by path before the first NVPW call, which would otherwise
-			// raise rather than fail.
-			if (!::GetModuleHandleW(L"nvperf_grfx_host.dll") && !::LoadLibraryW(device.libraryPath.c_str())) {
-				device.error = std::format("could not load {}", ToUtf8(device.libraryPath));
-				logger::info("[NvPerf] {}", device.error);
-				return false;
-			}
-			NVPW_InitializeHost_Params host{ NVPW_InitializeHost_Params_STRUCT_SIZE };
-			NVPW_InitializeTarget_Params target{ NVPW_InitializeTarget_Params_STRUCT_SIZE };
-			NVPW_D3D11_LoadDriver_Params load{ NVPW_D3D11_LoadDriver_Params_STRUCT_SIZE };
-			if (Failed(NVPW_InitializeHost(&host), "NVPW_InitializeHost") || Failed(NVPW_InitializeTarget(&target), "NVPW_InitializeTarget") ||
-				Failed(NVPW_D3D11_LoadDriver(&load), "NVPW_D3D11_LoadDriver")) {
-				device.error = "the Nsight Perf library could not be initialized (non-NVIDIA GPU or old driver?)";
-				return false;
-			}
-			device.available = true;
-			NVPW_D3D11_Device_GetDeviceIndex_Params index{ NVPW_D3D11_Device_GetDeviceIndex_Params_STRUCT_SIZE };
-			index.pDevice = Host::Device();
-			if (Failed(NVPW_D3D11_Device_GetDeviceIndex(&index), "NVPW_D3D11_Device_GetDeviceIndex")) {
-				device.error = "the D3D11 device is not an NVIDIA GPU the profiler knows";
-				return false;
-			}
-			a_profiler.deviceIndex = index.deviceIndex;
-			NVPW_Device_GetNames_Params names{ NVPW_Device_GetNames_Params_STRUCT_SIZE };
-			names.deviceIndex = index.deviceIndex;
-			if (!Failed(NVPW_Device_GetNames(&names), "NVPW_Device_GetNames")) {
-				device.deviceName = names.pDeviceName ? names.pDeviceName : "";
-				device.chipName = names.pChipName ? names.pChipName : "";
-			}
-			NVPW_D3D11_Profiler_IsGpuSupported_Params supported{ NVPW_D3D11_Profiler_IsGpuSupported_Params_STRUCT_SIZE };
-			supported.deviceIndex = index.deviceIndex;
-			device.gpuSupported = !Failed(NVPW_D3D11_Profiler_IsGpuSupported(&supported), "NVPW_D3D11_Profiler_IsGpuSupported") && supported.isSupported &&
-			                      !device.chipName.empty();
-			if (!device.gpuSupported)
-				device.error = "the range profiler does not support this GPU";
-			logger::info("[NvPerf] device {} '{}' chip '{}', range profiler supported: {}", index.deviceIndex, device.deviceName, device.chipName,
-				device.gpuSupported);
-			return device.gpuSupported;
+			auto* backend = SelectLocked(a_profiler);
+			return backend && backend->Probe(device);
 		}
 
-		NVPW_MetricsEvaluator* CreateEvaluator(std::vector<std::uint8_t>& a_scratch, const char* a_chipName, const std::vector<std::uint8_t>* a_image)
+		bool Validate(const CaptureConfiguration& a_configuration, bool a_limitDelay, std::string& a_error)
 		{
-			NVPW_D3D11_MetricsEvaluator_CalculateScratchBufferSize_Params size{ NVPW_D3D11_MetricsEvaluator_CalculateScratchBufferSize_Params_STRUCT_SIZE };
-			size.pChipName = a_chipName;
-			if (Failed(NVPW_D3D11_MetricsEvaluator_CalculateScratchBufferSize(&size), "NVPW_D3D11_MetricsEvaluator_CalculateScratchBufferSize"))
-				return nullptr;
-			a_scratch.assign(size.scratchBufferSize, 0);
-			NVPW_D3D11_MetricsEvaluator_Initialize_Params init{ NVPW_D3D11_MetricsEvaluator_Initialize_Params_STRUCT_SIZE };
-			init.pScratchBuffer = a_scratch.data();
-			init.scratchBufferSize = a_scratch.size();
-			init.pChipName = a_image ? nullptr : a_chipName;
-			init.pCounterDataImage = a_image ? a_image->data() : nullptr;
-			init.counterDataImageSize = a_image ? a_image->size() : 0;
-			if (Failed(NVPW_D3D11_MetricsEvaluator_Initialize(&init), "NVPW_D3D11_MetricsEvaluator_Initialize"))
-				return nullptr;
-			return init.pMetricsEvaluator;
-		}
-
-		void DestroyEvaluator(NVPW_MetricsEvaluator* a_evaluator)
-		{
-			NVPW_MetricsEvaluator_Destroy_Params destroy{ NVPW_MetricsEvaluator_Destroy_Params_STRUCT_SIZE };
-			destroy.pMetricsEvaluator = a_evaluator;
-			(void)NVPW_MetricsEvaluator_Destroy(&destroy);
-		}
-
-		void DestroyRawConfig(NVPW_RawCounterConfig* a_config)
-		{
-			NVPW_RawCounterConfig_Destroy_Params destroy{ NVPW_RawCounterConfig_Destroy_Params_STRUCT_SIZE };
-			destroy.pRawCounterConfig = a_config;
-			(void)NVPW_RawCounterConfig_Destroy(&destroy);
-		}
-
-		std::optional<std::size_t> FindMetricIndex(NVPW_MetricsEvaluator* a_evaluator, const MetricRequest& a_spec)
-		{
-			NVPW_MetricsEvaluator_GetMetricNames_Params names{ NVPW_MetricsEvaluator_GetMetricNames_Params_STRUCT_SIZE };
-			names.pMetricsEvaluator = a_evaluator;
-			names.metricType = a_spec.metricType;
-			if (Failed(NVPW_MetricsEvaluator_GetMetricNames(&names), "NVPW_MetricsEvaluator_GetMetricNames"))
-				return std::nullopt;
-			for (std::size_t i = 0; i < names.numMetrics; ++i) {
-				const char* metricName = names.pMetricNames + names.pMetricNameBeginIndices[i];
-				if (metricName && a_spec.name == metricName)
-					return i;
-			}
-			return std::nullopt;
-		}
-
-		std::vector<std::uint8_t> CounterAvailability()
-		{
-			std::vector<std::uint8_t> image;
-			NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability_Params params{ NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability_Params_STRUCT_SIZE };
-			params.pDeviceContext = Context();
-			if (Failed(NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability(&params), "NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability(size)"))
-				return image;
-			image.resize(params.counterAvailabilityImageSize);
-			params.pCounterAvailabilityImage = image.data();
-			if (Failed(NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability(&params), "NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability"))
-				image.clear();
-			return image;
-		}
-
-		// The metrics the chip has, the raw counters behind them, and the configuration and counter data prefix that
-		// collect them.
-		bool BuildConfig(Capture& a_capture, const std::string& a_chipName, std::string& a_error)
-		{
-			const char* chip = a_chipName.c_str();
-			std::vector<std::uint8_t> scratch;
-			NVPW_MetricsEvaluator* evaluator = CreateEvaluator(scratch, chip, nullptr);
-			if (!evaluator) {
-				a_error = "could not create the metrics evaluator";
+			if (a_configuration.samples < 1 || a_configuration.samples > 64) {
+				a_error = "samples must be between 1 and 64";
 				return false;
 			}
-			std::unordered_set<std::string> rawCounterNames;
-			const auto requested = a_capture.configuration.metrics.empty() ? DefaultMetrics() : a_capture.configuration.metrics;
-			for (const MetricRequest& spec : requested) {
-				const auto index = FindMetricIndex(evaluator, spec);
-				if (!index) {
-					logger::warn("[NvPerf] metric '{}' is unavailable on chip '{}'", FormatMetric(spec), a_chipName);
-					a_capture.result.unsupportedMetrics.push_back(spec);
-					continue;
-				}
-				SelectedMetric metric{};
-				metric.spec = spec;
-				metric.request.metricIndex = *index;
-				metric.request.metricType = spec.metricType;
-				metric.request.rollupOp = spec.rollupOp;
-				metric.request.submetric = spec.submetric;
-				NVPW_MetricsEvaluator_GetMetricRawDependencies_Params deps{ NVPW_MetricsEvaluator_GetMetricRawDependencies_Params_STRUCT_SIZE };
-				deps.pMetricsEvaluator = evaluator;
-				deps.pMetricEvalRequests = &metric.request;
-				deps.numMetricEvalRequests = 1;
-				deps.metricEvalRequestStructSize = NVPW_MetricEvalRequest_STRUCT_SIZE;
-				deps.metricEvalRequestStrideSize = sizeof(NVPW_MetricEvalRequest);
-				if (Failed(NVPW_MetricsEvaluator_GetMetricRawDependencies(&deps), "NVPW_MetricsEvaluator_GetMetricRawDependencies(count)"))
-					continue;
-				std::vector<const char*> dependencies(deps.numRawDependencies);
-				deps.ppRawDependencies = dependencies.data();
-				deps.numRawDependencies = dependencies.size();
-				if (Failed(NVPW_MetricsEvaluator_GetMetricRawDependencies(&deps), "NVPW_MetricsEvaluator_GetMetricRawDependencies"))
-					continue;
-				for (const char* dependency : dependencies)
-					if (dependency)
-						rawCounterNames.insert(dependency);
-				a_capture.metrics.push_back(metric);
-			}
-			DestroyEvaluator(evaluator);
-
-			std::vector<NVPW_RawCounterRequest> rawCounters;
-			rawCounters.reserve(rawCounterNames.size());
-			for (const std::string& name : rawCounterNames) {
-				NVPW_RawCounterRequest request{};
-				request.pRawCounterName = name.c_str();
-				request.domain = NVPW_RAW_COUNTER_DOMAIN_INVALID;
-				request.keepInstances = false;
-				rawCounters.push_back(request);
-			}
-			if (a_capture.metrics.empty() || rawCounters.empty()) {
-				a_error = "none of the requested metrics is available on this GPU";
+			if (a_configuration.nestingLevels < 1 || a_configuration.nestingLevels > 8) {
+				a_error = "nestingLevels must be between 1 and 8";
 				return false;
 			}
-
-			NVPW_D3D11_RawCounterConfig_Create_Params create{ NVPW_D3D11_RawCounterConfig_Create_Params_STRUCT_SIZE };
-			create.pChipName = chip;
-			create.activityKind = NVPA_ACTIVITY_KIND_PROFILER;
-			if (Failed(NVPW_D3D11_RawCounterConfig_Create(&create), "NVPW_D3D11_RawCounterConfig_Create")) {
-				a_error = "could not create the counter configuration";
+			if (a_limitDelay && a_configuration.delayFrames > 10000) {
+				a_error = "delayFrames must be at most 10000";
 				return false;
 			}
-			NVPW_RawCounterConfig* config = create.pRawCounterConfig;
-			const auto availability = CounterAvailability();
-			if (!availability.empty()) {
-				NVPW_RawCounterConfig_SetCounterAvailability_Params set{ NVPW_RawCounterConfig_SetCounterAvailability_Params_STRUCT_SIZE };
-				set.pRawCounterConfig = config;
-				set.pCounterAvailabilityImage = availability.data();
-				(void)NVPW_RawCounterConfig_SetCounterAvailability(&set);
-			}
-			NVPW_RawCounterConfig_GetAllAvailableRawCounterDomains_Params domainCount{ NVPW_RawCounterConfig_GetAllAvailableRawCounterDomains_Params_STRUCT_SIZE };
-			domainCount.pRawCounterConfig = config;
-			std::vector<NVPW_RawCounterDomain> domains;
-			bool built = !Failed(NVPW_RawCounterConfig_GetAllAvailableRawCounterDomains(&domainCount), "NVPW_RawCounterConfig_GetAllAvailableRawCounterDomains(count)");
-			if (built) {
-				domains.resize(domainCount.numAvailableDomains);
-				NVPW_RawCounterConfig_GetAllAvailableRawCounterDomains_Params domainValues{ NVPW_RawCounterConfig_GetAllAvailableRawCounterDomains_Params_STRUCT_SIZE };
-				domainValues.pRawCounterConfig = config;
-				domainValues.numAvailableDomains = domains.size();
-				domainValues.pAvailableDomains = domains.data();
-				built = !Failed(NVPW_RawCounterConfig_GetAllAvailableRawCounterDomains(&domainValues), "NVPW_RawCounterConfig_GetAllAvailableRawCounterDomains");
-				domains.resize(domainValues.numAvailableDomains);
-			}
-			if (built) {
-				NVPW_RawCounterConfig_BeginPassGroup_Params begin{ NVPW_RawCounterConfig_BeginPassGroup_Params_STRUCT_SIZE };
-				begin.pRawCounterConfig = config;
-				begin.numDomains = domains.size();
-				begin.pDomains = domains.data();
-				NVPW_RawCounterConfig_AddRawCounters_Params add{ NVPW_RawCounterConfig_AddRawCounters_Params_STRUCT_SIZE };
-				add.pRawCounterConfig = config;
-				add.rawCounterRequestStructSize = NVPW_RAW_COUNTER_REQUEST_STRUCT_SIZE;
-				add.numRawCounterRequests = rawCounters.size();
-				add.pRawCounterRequests = rawCounters.data();
-				NVPW_RawCounterConfig_EndPassGroup_Params end{ NVPW_RawCounterConfig_EndPassGroup_Params_STRUCT_SIZE };
-				end.pRawCounterConfig = config;
-				end.numDomains = domains.size();
-				end.pDomains = domains.data();
-				NVPW_RawCounterConfig_GenerateConfigImage_Params generate{ NVPW_RawCounterConfig_GenerateConfigImage_Params_STRUCT_SIZE };
-				generate.pRawCounterConfig = config;
-				built = !Failed(NVPW_RawCounterConfig_BeginPassGroup(&begin), "NVPW_RawCounterConfig_BeginPassGroup") &&
-				        !Failed(NVPW_RawCounterConfig_AddRawCounters(&add), "NVPW_RawCounterConfig_AddRawCounters") &&
-				        !Failed(NVPW_RawCounterConfig_EndPassGroup(&end), "NVPW_RawCounterConfig_EndPassGroup") &&
-				        !Failed(NVPW_RawCounterConfig_GenerateConfigImage(&generate), "NVPW_RawCounterConfig_GenerateConfigImage");
-			}
-			if (built) {
-				NVPW_RawCounterConfig_GetConfigImage_Params image{ NVPW_RawCounterConfig_GetConfigImage_Params_STRUCT_SIZE };
-				image.pRawCounterConfig = config;
-				built = !Failed(NVPW_RawCounterConfig_GetConfigImage(&image), "NVPW_RawCounterConfig_GetConfigImage(size)");
-				if (built) {
-					a_capture.configImage.resize(image.bytesCopied);
-					image.bytesAllocated = a_capture.configImage.size();
-					image.pBuffer = a_capture.configImage.data();
-					built = !Failed(NVPW_RawCounterConfig_GetConfigImage(&image), "NVPW_RawCounterConfig_GetConfigImage");
+			for (const auto& metric : a_configuration.metrics) {
+				if (metric.name.empty()) {
+					a_error = "metric name cannot be empty";
+					return false;
 				}
 			}
-			std::size_t passes = 0;
-			if (built) {
-				NVPW_RawCounterConfig_GetNumPasses_Params numPasses{ NVPW_RawCounterConfig_GetNumPasses_Params_STRUCT_SIZE };
-				numPasses.pRawCounterConfig = config;
-				built = !Failed(NVPW_RawCounterConfig_GetNumPasses(&numPasses), "NVPW_RawCounterConfig_GetNumPasses");
-				passes = numPasses.numPasses;
-			}
-			DestroyRawConfig(config);
-			if (!built || !passes) {
-				a_error = "could not build the counter configuration";
-				return false;
-			}
-			a_capture.passesPerSample = passes * a_capture.configuration.nestingLevels;
-
-			NVPW_CounterDataBuilder_Create_Params builderCreate{ NVPW_CounterDataBuilder_Create_Params_STRUCT_SIZE };
-			builderCreate.pChipName = chip;
-			if (Failed(NVPW_CounterDataBuilder_Create(&builderCreate), "NVPW_CounterDataBuilder_Create")) {
-				a_error = "could not create the counter data builder";
-				return false;
-			}
-			NVPA_CounterDataBuilder* builder = builderCreate.pCounterDataBuilder;
-			NVPW_CounterDataBuilder_AddRawCounters_Params builderAdd{ NVPW_CounterDataBuilder_AddRawCounters_Params_STRUCT_SIZE };
-			builderAdd.pCounterDataBuilder = builder;
-			builderAdd.rawCounterRequestStructSize = NVPW_RAW_COUNTER_REQUEST_STRUCT_SIZE;
-			builderAdd.numRawCounterRequests = rawCounters.size();
-			builderAdd.pRawCounterRequests = rawCounters.data();
-			NVPW_CounterDataBuilder_GetCounterDataPrefix_Params prefix{ NVPW_CounterDataBuilder_GetCounterDataPrefix_Params_STRUCT_SIZE };
-			prefix.pCounterDataBuilder = builder;
-			bool prefixOk = !Failed(NVPW_CounterDataBuilder_AddRawCounters(&builderAdd), "NVPW_CounterDataBuilder_AddRawCounters") &&
-			                !Failed(NVPW_CounterDataBuilder_GetCounterDataPrefix(&prefix), "NVPW_CounterDataBuilder_GetCounterDataPrefix(size)");
-			if (prefixOk) {
-				a_capture.counterDataPrefix.resize(prefix.bytesCopied);
-				prefix.bytesAllocated = a_capture.counterDataPrefix.size();
-				prefix.pBuffer = a_capture.counterDataPrefix.data();
-				prefixOk = !Failed(NVPW_CounterDataBuilder_GetCounterDataPrefix(&prefix), "NVPW_CounterDataBuilder_GetCounterDataPrefix");
-			}
-			NVPW_CounterDataBuilder_Destroy_Params destroy{ NVPW_CounterDataBuilder_Destroy_Params_STRUCT_SIZE };
-			destroy.pCounterDataBuilder = builder;
-			(void)NVPW_CounterDataBuilder_Destroy(&destroy);
-			if (!prefixOk) {
-				a_error = "could not build the counter data prefix";
-				return false;
-			}
-
-			NVPW_D3D11_Profiler_CalcTraceBufferSize_Params traceSize{ NVPW_D3D11_Profiler_CalcTraceBufferSize_Params_STRUCT_SIZE };
-			traceSize.maxRangesPerPass = kMaxRangesPerPass;
-			traceSize.avgRangeNameLength = kAvgRangeNameLength;
-			if (Failed(NVPW_D3D11_Profiler_CalcTraceBufferSize(&traceSize), "NVPW_D3D11_Profiler_CalcTraceBufferSize")) {
-				a_error = "could not size the trace buffer";
-				return false;
-			}
-			a_capture.traceBufferSize = traceSize.traceBufferSize;
-			// One per pass in flight: every pass is submitted before the first is decoded.
-			a_capture.traceBufferCount = std::max<std::size_t>(a_capture.passesPerSample + 2, 5);
-			logger::info("[NvPerf] capture {} configured: chip '{}', {} metrics, {} raw counters, {} passes per sample", a_capture.id, a_chipName,
-				a_capture.metrics.size(), rawCounters.size(), a_capture.passesPerSample);
-			return true;
+			if (const auto* backend = g_backend.load(std::memory_order_acquire))
+				a_error = backend->Validate(a_configuration);
+			return a_error.empty();
 		}
 
-		bool InitializeCounterData(Capture& a_capture)
+		bool Queue(Profiler& a_profiler, const CaptureConfiguration& a_configuration, std::uint64_t& a_captureId, std::string& a_error)
 		{
-			NVPW_D3D11_Profiler_CounterDataImageOptions options{ NVPW_D3D11_Profiler_CounterDataImageOptions_STRUCT_SIZE };
-			options.pCounterDataPrefix = a_capture.counterDataPrefix.data();
-			options.counterDataPrefixSize = a_capture.counterDataPrefix.size();
-			options.maxNumRanges = static_cast<std::uint32_t>(kMaxRangesPerPass);
-			options.maxNumRangeTreeNodes = static_cast<std::uint32_t>(kMaxRangesPerPass);
-			options.maxRangeNameLength = kMaxRangeNameLength;
-			NVPW_D3D11_Profiler_CounterDataImage_CalculateSize_Params size{ NVPW_D3D11_Profiler_CounterDataImage_CalculateSize_Params_STRUCT_SIZE };
-			size.counterDataImageOptionsSize = NVPW_D3D11_Profiler_CounterDataImageOptions_STRUCT_SIZE;
-			size.pOptions = &options;
-			if (Failed(NVPW_D3D11_Profiler_CounterDataImage_CalculateSize(&size), "NVPW_D3D11_Profiler_CounterDataImage_CalculateSize"))
-				return false;
-			a_capture.counterDataImage.assign(size.counterDataImageSize, 0);
-			NVPW_D3D11_Profiler_CounterDataImage_Initialize_Params init{ NVPW_D3D11_Profiler_CounterDataImage_Initialize_Params_STRUCT_SIZE };
-			init.counterDataImageOptionsSize = NVPW_D3D11_Profiler_CounterDataImageOptions_STRUCT_SIZE;
-			init.pOptions = &options;
-			init.counterDataImageSize = a_capture.counterDataImage.size();
-			init.pCounterDataImage = a_capture.counterDataImage.data();
-			if (Failed(NVPW_D3D11_Profiler_CounterDataImage_Initialize(&init), "NVPW_D3D11_Profiler_CounterDataImage_Initialize"))
-				return false;
-			NVPW_D3D11_Profiler_CounterDataImage_CalculateScratchBufferSize_Params scratchSize{
-				NVPW_D3D11_Profiler_CounterDataImage_CalculateScratchBufferSize_Params_STRUCT_SIZE
-			};
-			scratchSize.counterDataImageSize = a_capture.counterDataImage.size();
-			scratchSize.pCounterDataImage = a_capture.counterDataImage.data();
-			if (Failed(NVPW_D3D11_Profiler_CounterDataImage_CalculateScratchBufferSize(&scratchSize),
-					"NVPW_D3D11_Profiler_CounterDataImage_CalculateScratchBufferSize"))
-				return false;
-			a_capture.counterDataScratch.assign(scratchSize.counterDataScratchBufferSize, 0);
-			NVPW_D3D11_Profiler_CounterDataImage_InitializeScratchBuffer_Params scratchInit{
-				NVPW_D3D11_Profiler_CounterDataImage_InitializeScratchBuffer_Params_STRUCT_SIZE
-			};
-			scratchInit.counterDataImageSize = a_capture.counterDataImage.size();
-			scratchInit.pCounterDataImage = a_capture.counterDataImage.data();
-			scratchInit.counterDataScratchBufferSize = a_capture.counterDataScratch.size();
-			scratchInit.pCounterDataScratchBuffer = a_capture.counterDataScratch.data();
-			return !Failed(NVPW_D3D11_Profiler_CounterDataImage_InitializeScratchBuffer(&scratchInit),
-				"NVPW_D3D11_Profiler_CounterDataImage_InitializeScratchBuffer");
-		}
-
-		// A session per sample: its counter data, then the configuration every pass of it uses.
-		bool BeginSession(Capture& a_capture)
-		{
-			if (!InitializeCounterData(a_capture))
-				return false;
-			NVPW_D3D11_Profiler_DeviceContext_BeginSession_Params begin{ NVPW_D3D11_Profiler_DeviceContext_BeginSession_Params_STRUCT_SIZE };
-			begin.pDeviceContext = Context();
-			begin.numTraceBuffers = a_capture.traceBufferCount;
-			begin.traceBufferSize = a_capture.traceBufferSize;
-			begin.maxRangesPerPass = kMaxRangesPerPass;
-			begin.maxLaunchesPerPass = kMaxRangesPerPass;
-			if (const auto status = NVPW_D3D11_Profiler_DeviceContext_BeginSession(&begin); status != NVPA_STATUS_SUCCESS) {
-				logger::warn("[NvPerf] NVPW_D3D11_Profiler_DeviceContext_BeginSession failed with {}{}", StatusName(status),
-					status == NVPA_STATUS_INSUFFICIENT_PRIVILEGE ? " (enable GPU performance counters for all users: https://developer.nvidia.com/ERR_NVGPUCTRPERM)" :
-					status == NVPA_STATUS_RESOURCE_UNAVAILABLE   ? " (another profiler session is active on this GPU)" :
-																   "");
+			std::lock_guard lock(a_profiler.mutex);
+			const bool busy = a_profiler.pending || a_profiler.status.state == CaptureState::Waiting || a_profiler.status.state == CaptureState::Capturing ||
+			                  a_profiler.status.state == CaptureState::Decoding;
+			if (busy) {
+				a_error = std::format("capture {} is still in progress", a_profiler.pending ? a_profiler.pending->first : a_profiler.status.captureId);
 				return false;
 			}
-			a_capture.sessionActive = true;
-			// In-app replay: the profiler steps through the configuration's passes itself, from pass 0.
-			NVPW_D3D11_Profiler_DeviceContext_SetConfig_Params config{ NVPW_D3D11_Profiler_DeviceContext_SetConfig_Params_STRUCT_SIZE };
-			config.pDeviceContext = Context();
-			config.pConfig = a_capture.configImage.data();
-			config.configSize = a_capture.configImage.size();
-			config.minNestingLevel = 1;
-			config.numNestingLevels = a_capture.configuration.nestingLevels;
-			config.passIndex = 0;
-			config.targetNestingLevel = 1;
-			if (Failed(NVPW_D3D11_Profiler_DeviceContext_SetConfig(&config), "NVPW_D3D11_Profiler_DeviceContext_SetConfig"))
-				return false;
-			a_capture.passesSubmitted = 0;
-			a_capture.decodeFrames = 0;
-			return true;
-		}
-
-		void EndPass(Profiler& a_profiler, Capture& a_capture)
-		{
-			if (!a_capture.passActive)
-				return;
-			g_rangesActive.store(false, std::memory_order_relaxed);
-			// A perf event left open across Present: close what was forwarded so the pass stays balanced.
-			for (auto it = a_profiler.rangeStack.rbegin(); it != a_profiler.rangeStack.rend(); ++it) {
-				if (*it) {
-					NVPW_D3D11_Profiler_DeviceContext_PopRange_Params pop{ NVPW_D3D11_Profiler_DeviceContext_PopRange_Params_STRUCT_SIZE };
-					pop.pDeviceContext = Context();
-					(void)NVPW_D3D11_Profiler_DeviceContext_PopRange(&pop);
-				}
-			}
-			a_profiler.unbalancedRanges += a_profiler.rangeStack.size();
-			a_profiler.rangeStack.clear();
-			NVPW_D3D11_Profiler_DeviceContext_EndPass_Params end{ NVPW_D3D11_Profiler_DeviceContext_EndPass_Params_STRUCT_SIZE };
-			end.pDeviceContext = Context();
-			(void)Failed(NVPW_D3D11_Profiler_DeviceContext_EndPass(&end), "NVPW_D3D11_Profiler_DeviceContext_EndPass");
-			a_capture.passActive = false;
-			++a_capture.passesSubmitted;
-			a_capture.framesWithoutRange = a_capture.rangesThisPass ? 0 : a_capture.framesWithoutRange + 1;
-			a_capture.rangesThisPass = 0;
-		}
-
-		void EndSession(Profiler& a_profiler, Capture& a_capture)
-		{
-			EndPass(a_profiler, a_capture);
-			if (!a_capture.sessionActive)
-				return;
-			NVPW_D3D11_Profiler_DeviceContext_EndSession_Params end{ NVPW_D3D11_Profiler_DeviceContext_EndSession_Params_STRUCT_SIZE };
-			end.pDeviceContext = Context();
-			(void)Failed(NVPW_D3D11_Profiler_DeviceContext_EndSession(&end), "NVPW_D3D11_Profiler_DeviceContext_EndSession");
-			a_capture.sessionActive = false;
-		}
-
-		std::vector<std::string> RangePath(const std::vector<std::uint8_t>& a_image, std::size_t a_rangeIndex)
-		{
-			NVPW_Profiler_CounterData_GetRangeDescriptions_Params desc{ NVPW_Profiler_CounterData_GetRangeDescriptions_Params_STRUCT_SIZE };
-			desc.pCounterDataImage = a_image.data();
-			desc.rangeIndex = a_rangeIndex;
-			if (Failed(NVPW_Profiler_CounterData_GetRangeDescriptions(&desc), "NVPW_Profiler_CounterData_GetRangeDescriptions(count)"))
-				return {};
-			std::vector<const char*> descriptions(desc.numDescriptions);
-			desc.ppDescriptions = descriptions.data();
-			desc.numDescriptions = descriptions.size();
-			if (Failed(NVPW_Profiler_CounterData_GetRangeDescriptions(&desc), "NVPW_Profiler_CounterData_GetRangeDescriptions"))
-				return {};
-			std::vector<std::string> path;
-			for (const char* description : descriptions)
-				path.emplace_back(description ? description : "<unnamed>");
-			return path;
-		}
-
-		bool EvaluateRanges(Capture& a_capture, const std::string& a_chipName)
-		{
-			NVPW_CounterData_GetNumRanges_Params numRanges{ NVPW_CounterData_GetNumRanges_Params_STRUCT_SIZE };
-			numRanges.pCounterDataImage = a_capture.counterDataImage.data();
-			if (Failed(NVPW_CounterData_GetNumRanges(&numRanges), "NVPW_CounterData_GetNumRanges"))
-				return false;
-			if (!numRanges.numRanges)
-				return true;
-			std::vector<std::uint8_t> scratch;
-			NVPW_MetricsEvaluator* evaluator = CreateEvaluator(scratch, a_chipName.c_str(), &a_capture.counterDataImage);
-			if (!evaluator)
-				return false;
-			std::vector<NVPW_MetricEvalRequest> requests;
-			for (const auto& metric : a_capture.metrics)
-				requests.push_back(metric.request);
-			std::vector<double> values(requests.size());
-			std::unordered_map<std::string, std::uint32_t> occurrences;
-			for (std::size_t rangeIndex = 0; rangeIndex < numRanges.numRanges; ++rangeIndex) {
-				std::ranges::fill(values, 0.0);
-				NVPW_MetricsEvaluator_EvaluateToGpuValues_Params eval{ NVPW_MetricsEvaluator_EvaluateToGpuValues_Params_STRUCT_SIZE };
-				eval.pMetricsEvaluator = evaluator;
-				eval.pMetricEvalRequests = requests.data();
-				eval.numMetricEvalRequests = requests.size();
-				eval.metricEvalRequestStructSize = NVPW_MetricEvalRequest_STRUCT_SIZE;
-				eval.metricEvalRequestStrideSize = sizeof(NVPW_MetricEvalRequest);
-				eval.pCounterDataImage = a_capture.counterDataImage.data();
-				eval.counterDataImageSize = a_capture.counterDataImage.size();
-				eval.rangeIndex = rangeIndex;
-				eval.pMetricValues = values.data();
-				if (Failed(NVPW_MetricsEvaluator_EvaluateToGpuValues(&eval), "NVPW_MetricsEvaluator_EvaluateToGpuValues"))
-					continue;
-				const auto path = RangePath(a_capture.counterDataImage, rangeIndex);
-				RangeResult range;
-				range.sample = a_capture.sample;
-				range.name = path.empty() ? "<unnamed>" : path.back();
-				for (const auto& part : path)
-					range.path += range.path.empty() ? part : " / " + part;
-				if (!path.empty())
-					range.enclosing.assign(path.begin(), path.end() - 1);
-				range.occurrence = occurrences[range.path]++;
-				range.values = values;
-				a_capture.result.rangeResults.push_back(std::move(range));
-			}
-			DestroyEvaluator(evaluator);
+			a_captureId = a_profiler.nextCaptureId++;
+			a_profiler.pending.emplace(a_captureId, a_configuration);
+			a_profiler.cancelRequested = false;
+			a_profiler.status = Status{};
+			a_profiler.status.state = CaptureState::Waiting;
+			a_profiler.status.captureId = a_captureId;
+			a_profiler.status.samples = a_configuration.samples;
 			return true;
 		}
 
@@ -859,20 +464,19 @@ namespace NvPerf
 			a_profiler.status.error.clear();
 		}
 
-		// Ends the capture: closes its session, publishes its result, restores the annotations it forced on.
+		// Ends the capture: the backend closes what it opened, then its result is published and the annotations it forced
+		// on are restored.
 		void Finish(Profiler& a_profiler, std::string a_error)
 		{
 			auto& capture = *a_profiler.capture;
-			EndSession(a_profiler, capture);
+			if (auto* backend = g_backend.load(std::memory_order_acquire))
+				backend->End(capture);
 			Host::SetFrameAnnotations(capture.previousFrameAnnotations);
 
 			auto& result = capture.result;
 			result.endFrame = Host::FrameCount();
 			result.samples = capture.sample;
 			result.passesPerSample = capture.passesPerSample;
-			result.metrics.clear();
-			for (const auto& metric : capture.metrics)
-				result.metrics.push_back(metric.spec);
 			if (a_error.empty() && (result.droppedRanges || result.droppedTraceBytes))
 				a_error = std::format("the profiler dropped {} ranges and {} trace bytes; select fewer ranges", result.droppedRanges, result.droppedTraceBytes);
 			if (a_error.empty() && result.rangeResults.empty())
@@ -880,8 +484,6 @@ namespace NvPerf
 			result.success = a_error.empty();
 			result.error = std::move(a_error);
 			result.summary = Summarize(result);
-			if (a_profiler.unbalancedRanges)
-				logger::warn("[NvPerf] {} perf events were still open at Present", a_profiler.unbalancedRanges);
 			LogResult(result);
 			WriteCsv(result);
 
@@ -892,6 +494,9 @@ namespace NvPerf
 				a_profiler.status.state = published->success ? CaptureState::Done : CaptureState::Failed;
 				a_profiler.status.error = published->error;
 				a_profiler.result = published;
+				// The Vulkan backend names the chip at its first capture.
+				if (a_profiler.device.chipName.empty())
+					a_profiler.device.chipName = published->chipName;
 				onComplete = a_profiler.onComplete;
 			}
 			a_profiler.capture.reset();
@@ -899,18 +504,18 @@ namespace NvPerf
 				onComplete(*published);
 		}
 
-		// A pending request becomes the capture in flight: the device, its configuration, the annotations it needs.
+		// A pending request becomes the capture in flight: the device, the backend's configuration, the annotations it needs.
 		void Start(Profiler& a_profiler, std::uint64_t a_id, CaptureConfiguration a_configuration)
 		{
 			auto& capture = a_profiler.capture.emplace();
 			capture.id = a_id;
 			capture.configuration = std::move(a_configuration);
+			if (capture.configuration.metrics.empty())
+				capture.configuration.metrics = DefaultMetrics();
 			capture.delayFrames = capture.configuration.delayFrames;
 			capture.previousFrameAnnotations = Host::FrameAnnotations();
 			// Perf events are the ranges, and most are only emitted with annotations on.
 			Host::SetFrameAnnotations(true);
-			a_profiler.rangeStack.clear();
-			a_profiler.unbalancedRanges = 0;
 
 			auto& result = capture.result;
 			result.id = a_id;
@@ -920,14 +525,16 @@ namespace NvPerf
 
 			std::string chipName;
 			std::string error;
+			Backend* backend = nullptr;
 			{
 				std::lock_guard lock(a_profiler.mutex);
 				if (!ProbeLocked(a_profiler))
-					error = a_profiler.device.error;
+					error = a_profiler.device.error.empty() ? "Nsight Perf is unavailable" : a_profiler.device.error;
 				chipName = a_profiler.device.chipName;
+				backend = g_backend.load(std::memory_order_acquire);
 			}
 			result.chipName = chipName;
-			if (error.empty() && !BuildConfig(capture, chipName, error) && error.empty())
+			if (error.empty() && !backend->Begin(capture, chipName, error) && error.empty())
 				error = "could not configure the capture";
 			if (!error.empty()) {
 				Finish(a_profiler, std::move(error));
@@ -936,69 +543,75 @@ namespace NvPerf
 			SetStatus(a_profiler, capture, CaptureState::Waiting);
 		}
 
-		// Once per frame after Present: the sample's counters as soon as the GPU finished them, then the next pass.
+		// Once per frame after Present: the delay, then the backend's next step.
 		void Advance(Profiler& a_profiler)
 		{
 			auto& capture = *a_profiler.capture;
-			if (capture.sessionActive && capture.passesSubmitted) {
-				NVPW_D3D11_Profiler_DeviceContext_DecodeCounters_Params decode{ NVPW_D3D11_Profiler_DeviceContext_DecodeCounters_Params_STRUCT_SIZE };
-				decode.pDeviceContext = Context();
-				decode.counterDataImageSize = capture.counterDataImage.size();
-				decode.pCounterDataImage = capture.counterDataImage.data();
-				decode.counterDataScratchBufferSize = capture.counterDataScratch.size();
-				decode.pCounterDataScratchBuffer = capture.counterDataScratch.data();
-				if (Failed(NVPW_D3D11_Profiler_DeviceContext_DecodeCounters(&decode), "NVPW_D3D11_Profiler_DeviceContext_DecodeCounters")) {
-					Finish(a_profiler, "could not decode the counters");
-					return;
-				}
-				capture.result.droppedRanges += decode.numRangesDropped;
-				capture.result.droppedTraceBytes += decode.numTraceBytesDropped;
-				if (decode.allPassesCollected) {
-					EndSession(a_profiler, capture);
-					std::string chipName;
-					{
-						std::lock_guard lock(a_profiler.mutex);
-						chipName = a_profiler.device.chipName;
-					}
-					if (!EvaluateRanges(capture, chipName)) {
-						Finish(a_profiler, "could not evaluate the counters");
-						return;
-					}
-					if (++capture.sample >= capture.configuration.samples) {
-						Finish(a_profiler, {});
-						return;
-					}
-				} else if (capture.passesSubmitted >= capture.passesPerSample && ++capture.decodeFrames > kDecodeFrameLimit) {
-					Finish(a_profiler, "the GPU did not finish the profiler passes");
-					return;
-				}
-			}
-			if (capture.framesWithoutRange >= kFramesWithoutRangeLimit) {
-				Finish(a_profiler, std::format("no selected range was recorded within {} frames", kFramesWithoutRangeLimit));
-				return;
-			}
 			if (capture.delayFrames) {
 				--capture.delayFrames;
 				return;
 			}
-			if (!capture.sessionActive && !BeginSession(capture)) {
-				Finish(a_profiler, "could not begin a profiler session");
+			auto step = g_backend.load(std::memory_order_acquire)->Advance(capture);
+			if (step.finished)
+				Finish(a_profiler, std::move(step.error));
+			else
+				SetStatus(a_profiler, capture, step.state);
+		}
+
+		// CS_NVPERF_RANGES: a headless run's capture, queued as a RequestCapture once the backend is ready. Its result is
+		// logged per range filter like every capture's. CS_NVPERF_START_FRAME (default 1200) is the present it starts at,
+		// CS_NVPERF_SAMPLES (default 3) its samples, CS_NVPERF_METRICS its metrics (ParseMetric's form, comma-separated;
+		// default DefaultMetrics()), CS_NVPERF_CSV overrides CsvPath().
+		void QueueEnvironmentCapture(Profiler& a_profiler)
+		{
+			if (a_profiler.environmentHandled || !EnvironmentRequested())
 				return;
-			}
-			if (capture.passesSubmitted < capture.passesPerSample) {
-				NVPW_D3D11_Profiler_DeviceContext_BeginPass_Params begin{ NVPW_D3D11_Profiler_DeviceContext_BeginPass_Params_STRUCT_SIZE };
-				begin.pDeviceContext = Context();
-				if (Failed(NVPW_D3D11_Profiler_DeviceContext_BeginPass(&begin), "NVPW_D3D11_Profiler_DeviceContext_BeginPass")) {
-					Finish(a_profiler, "could not begin a profiler pass");
+			{
+				std::lock_guard lock(a_profiler.mutex);
+				if (!ProbeLocked(a_profiler)) {
+					// Under DXVK the render graph may not have registered yet: try again next frame.
+					if (a_profiler.device.probed || !kBuilt) {
+						a_profiler.environmentHandled = true;
+						logger::warn("[NvPerf] CS_NVPERF_RANGES: no capture: {}", a_profiler.device.error);
+					}
 					return;
 				}
-				capture.passActive = true;
-				g_rangesActive.store(true, std::memory_order_relaxed);
-				SetStatus(a_profiler, capture, CaptureState::Capturing);
-			} else {
-				SetStatus(a_profiler, capture, CaptureState::Decoding);
 			}
+			a_profiler.environmentHandled = true;
+			CaptureConfiguration configuration;
+			configuration.ranges = Split(Env("CS_NVPERF_RANGES"));
+			for (const auto& entry : Split(Env("CS_NVPERF_METRICS"))) {
+				MetricRequest metric;
+				std::string error;
+				if (ParseMetric(entry, metric, error))
+					configuration.metrics.push_back(std::move(metric));
+				else
+					logger::warn("[NvPerf] CS_NVPERF_METRICS: '{}' skipped: {}", entry, error);
+			}
+			std::uint64_t startFrame = 1200;
+			if (const auto start = Env("CS_NVPERF_START_FRAME"); !start.empty())
+				startFrame = std::strtoull(start.c_str(), nullptr, 10);
+			configuration.samples = 3;
+			if (const auto samples = Env("CS_NVPERF_SAMPLES"); !samples.empty())
+				configuration.samples = static_cast<std::uint32_t>(std::strtoul(samples.c_str(), nullptr, 10));
+			const std::uint64_t delay = startFrame > a_profiler.presents ? startFrame - a_profiler.presents : 0;
+			configuration.delayFrames = static_cast<std::uint32_t>(std::min<std::uint64_t>(delay, std::numeric_limits<std::uint32_t>::max()));
+			std::uint64_t captureId = 0;
+			std::string error;
+			if (!Validate(configuration, false, error) || !Queue(a_profiler, configuration, captureId, error)) {
+				logger::warn("[NvPerf] CS_NVPERF_RANGES: no capture: {}", error);
+				return;
+			}
+			logger::info("[NvPerf] CS_NVPERF_RANGES: capture {} of {} range filters from frame {}, {} samples, rows to {}", captureId, configuration.ranges.size(),
+				startFrame, configuration.samples, CsvPath().string());
 		}
+	}
+
+	std::filesystem::path CsvPath()
+	{
+		if (const auto csv = Env("CS_NVPERF_CSV"); !csv.empty())
+			return std::filesystem::path(csv);
+		return Host::LogDirectory() / "CommunityShaders-NvPerf.csv";
 	}
 
 	bool Probe()
@@ -1013,46 +626,41 @@ namespace NvPerf
 		auto& profiler = Get();
 		std::lock_guard lock(profiler.mutex);
 		DeviceInfo info = profiler.device;
-		info.built = true;
+		info.built = kBuilt;
+		if (!kBuilt)
+			info.error = NotBuilt();
 		return info;
+	}
+
+	void RegisterVulkanDevice(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::PersistentGraphHost& a_host)
+	{
+		auto backend = MakeVulkanBackend(a_info, a_dxvkModule, a_host);
+		if (!backend)
+			return;
+		auto& profiler = Get();
+		std::lock_guard lock(profiler.mutex);
+		// Its callbacks are installed: it lives on whether or not it is chosen.
+		Backend* registered = backend.release();
+		if (const auto* chosen = g_backend.load(std::memory_order_acquire)) {
+			logger::warn("[NvPerf] the {} backend was chosen before the render graph adopted DXVK's device; the Vulkan backend is not used", chosen->Name());
+			return;
+		}
+		profiler.vulkan = registered;
+	}
+
+	bool EnvironmentRequested()
+	{
+		static const bool requested = !Split(Env("CS_NVPERF_RANGES")).empty();
+		return requested;
 	}
 
 	bool RequestCapture(const CaptureConfiguration& a_configuration, std::uint64_t& a_captureId, std::string& a_error)
 	{
-		if (a_configuration.samples < 1 || a_configuration.samples > 64) {
-			a_error = "samples must be between 1 and 64";
+		if (!kBuilt) {
+			a_error = NotBuilt();
 			return false;
 		}
-		if (a_configuration.nestingLevels < 1 || a_configuration.nestingLevels > 8) {
-			a_error = "nestingLevels must be between 1 and 8";
-			return false;
-		}
-		if (a_configuration.delayFrames > 10000) {
-			a_error = "delayFrames must be at most 10000";
-			return false;
-		}
-		for (const auto& metric : a_configuration.metrics) {
-			if (metric.name.empty()) {
-				a_error = "metric name cannot be empty";
-				return false;
-			}
-		}
-		auto& profiler = Get();
-		std::lock_guard lock(profiler.mutex);
-		const bool busy = profiler.pending || profiler.status.state == CaptureState::Waiting || profiler.status.state == CaptureState::Capturing ||
-		                  profiler.status.state == CaptureState::Decoding;
-		if (busy) {
-			a_error = std::format("capture {} is still in progress", profiler.pending ? profiler.pending->first : profiler.status.captureId);
-			return false;
-		}
-		a_captureId = profiler.nextCaptureId++;
-		profiler.pending.emplace(a_captureId, a_configuration);
-		profiler.cancelRequested = false;
-		profiler.status = Status{};
-		profiler.status.state = CaptureState::Waiting;
-		profiler.status.captureId = a_captureId;
-		profiler.status.samples = a_configuration.samples;
-		return true;
+		return Validate(a_configuration, true, a_error) && Queue(Get(), a_configuration, a_captureId, a_error);
 	}
 
 	void CancelCapture()
@@ -1086,13 +694,17 @@ namespace NvPerf
 	void OnPresentBegin()
 	{
 		auto& profiler = Get();
-		if (profiler.capture)
-			EndPass(profiler, *profiler.capture);
+		if (auto* backend = g_backend.load(std::memory_order_acquire))
+			backend->PresentBegin(profiler.capture ? &*profiler.capture : nullptr);
 	}
 
 	void OnPresentEnd()
 	{
+		if (!kBuilt)
+			return;
 		auto& profiler = Get();
+		++profiler.presents;
+		QueueEnvironmentCapture(profiler);
 		std::optional<std::pair<std::uint64_t, CaptureConfiguration>> pending;
 		bool cancel = false;
 		{
@@ -1121,72 +733,33 @@ namespace NvPerf
 		auto& profiler = Get();
 		if (!RangesActive() || !profiler.capture)
 			return;
-		auto& capture = *profiler.capture;
-		const auto& filters = capture.configuration.ranges;
-		// State::Draw's per-shader-change events only wrap a marker: hundreds per frame of ranges without GPU work, so
-		// they are measured only when a filter names them.
-		constexpr std::string_view kDrawMarkerPrefix = "Draw: CS ";
-		const bool selected = filters.empty() ? !a_name.starts_with(kDrawMarkerPrefix) : MatchingFilter(filters, a_name) != nullptr;
-		bool pushed = false;
-		if (selected) {
-			NVPW_D3D11_Profiler_DeviceContext_PushRange_Params push{ NVPW_D3D11_Profiler_DeviceContext_PushRange_Params_STRUCT_SIZE };
-			push.pDeviceContext = Context();
-			push.pRangeName = a_name.data();
-			push.rangeNameLength = a_name.size();
-			pushed = NVPW_D3D11_Profiler_DeviceContext_PushRange(&push) == NVPA_STATUS_SUCCESS;
-			capture.rangesThisPass += pushed;
-		}
-		profiler.rangeStack.push_back(pushed);
+		g_backend.load(std::memory_order_relaxed)->PushRange(*profiler.capture, a_name);
 	}
 
 	void PopRange()
 	{
-		auto& profiler = Get();
-		if (!RangesActive() || profiler.rangeStack.empty())
+		if (!RangesActive())
 			return;
-		const bool pushed = profiler.rangeStack.back();
-		profiler.rangeStack.pop_back();
-		if (pushed) {
-			NVPW_D3D11_Profiler_DeviceContext_PopRange_Params pop{ NVPW_D3D11_Profiler_DeviceContext_PopRange_Params_STRUCT_SIZE };
-			pop.pDeviceContext = Context();
-			(void)NVPW_D3D11_Profiler_DeviceContext_PopRange(&pop);
-		}
+		g_backend.load(std::memory_order_relaxed)->PopRange();
 	}
 
-#else
-
-	namespace
+	bool CommandBufferRangesActive() noexcept
 	{
-		std::string NotBuilt()
-		{
-			return std::format("built without Nsight Perf ({})", Host::BuildHint());
-		}
+		const auto* backend = g_backend.load(std::memory_order_relaxed);
+		return backend && backend->CommandBufferRangesActive();
 	}
 
-	bool Probe() { return false; }
-
-	DeviceInfo GetDeviceInfo()
+	bool PushCommandBufferRange(void* a_nativeCommandBuffer, const char* a_name)
 	{
-		DeviceInfo info;
-		info.error = NotBuilt();
-		return info;
+		auto* backend = g_backend.load(std::memory_order_relaxed);
+		return backend && backend->PushCommandBufferRange(a_nativeCommandBuffer, a_name);
 	}
 
-	bool RequestCapture(const CaptureConfiguration&, std::uint64_t&, std::string& a_error)
+	void PopCommandBufferRange(void* a_nativeCommandBuffer, bool a_pushed)
 	{
-		a_error = NotBuilt();
-		return false;
+		if (!a_pushed)
+			return;
+		if (auto* backend = g_backend.load(std::memory_order_relaxed))
+			backend->PopCommandBufferRange(a_nativeCommandBuffer, a_pushed);
 	}
-
-	void CancelCapture() {}
-	Status GetStatus() { return {}; }
-	std::shared_ptr<const CaptureResult> LatestResult() { return nullptr; }
-	void SetCompletionCallback(std::function<void(const CaptureResult&)>) {}
-	void OnPresentBegin() {}
-	void OnPresentEnd() {}
-	bool RangesActive() noexcept { return false; }
-	void PushRange(std::string_view) {}
-	void PopRange() {}
-
-#endif
 }

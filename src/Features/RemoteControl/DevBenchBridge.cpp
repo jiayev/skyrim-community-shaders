@@ -662,7 +662,7 @@ namespace
 			NvPerf::Probe();
 			const auto device = NvPerf::GetDeviceInfo();
 			return json{ { "built", device.built }, { "available", device.available }, { "gpuSupported", device.gpuSupported },
-				{ "device", device.deviceName }, { "chip", device.chipName }, { "deviceError", device.error },
+				{ "backend", device.backend }, { "device", device.deviceName }, { "chip", device.chipName }, { "deviceError", device.error },
 				{ "library", Util::PathHelpers::ToUtf8(device.libraryPath) }, { "capture", StatusJson(NvPerf::GetStatus()) } };
 		}
 

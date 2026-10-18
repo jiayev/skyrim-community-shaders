@@ -1,7 +1,6 @@
 #include "Hooks.h"
 
 #include "GpuEventTimers.h"
-#include "RenderGraph/NvPerfBridge.h"
 #include "GpuIdleTrace.h"
 #include "ShaderTools/BSShaderHooks.h"
 #include "ShaderTools/LegacyGraphicsCompatibility.h"
@@ -491,7 +490,6 @@ struct IDXGISwapChain_Present
 			ZoneScopedN("CS.Present.Begin");
 			GpuIdleTrace::OnPresent();
 			GpuEventTimers::OnPresent();
-			NvPerfBridge::OnPresent();
 		}
 
 		// DLSS-G on Vulkan requires SyncInterval 0.
