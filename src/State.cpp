@@ -1421,7 +1421,7 @@ void State::ModifyShaderLookup(RE::BSShader::Type a_shaderType, uint& a_vertexDe
 			}
 			break;
 		}
-	} else if (a_shader.shaderType.get() == RE::BSShader::Type::Utility) {
+	} else if (a_shaderType == RE::BSShader::Type::Utility) {
 		a_vertexDescriptor &= ~(uint32_t)SIE::ShaderCache::UtilityShaderFlags::TruePbr;
 	}
 }
