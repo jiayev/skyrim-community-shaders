@@ -193,6 +193,31 @@ claimed 0x0, flipped 0x21 <- GATE HOLE (publication)`. If real, the incoming blo
 publication, while the outgoing one is already hidden. No earlier log shows it, but moving set-parity runs are new. The B2 gate
 rewrite runs `msp` at every sub-step, which shows if the rate changes.
 
+## A resolution or upscaler change leaves one colour pass undrawn under standing claims (found 2026-10-17; not fixed)
+
+Since 3af80a51 the set is never withdrawn: after a graph build or a main-resource change the frame waits at its start for a snapshot
+current for the graph as built (`IndirectDraws::AdoptCurrentSnapshot`). The main resources, though, are made at the colour epoch's
+`Setup` (Core/Render/Epochs/MainEpochs.cpp): it compares RT0's size and formats, the frame buffers' shapes and the graph buffers from the
+colour capture, so a change is only seen there, mid-frame.
+- **What happens.** That frame's adopted revision and payload predate the new resources, and a snapshot made mid-frame would belong to
+  another publication than the frame's claims. So that one colour epoch is not submitted (logged `main resources made at frame N's
+  colour pass ...`) while the frame's claims stand: the engine withholds DCLF's objects and nothing draws them, for one frame. The next
+  frame waits for a snapshot built for the new resources (the context posted at `Setup`, `Impl::PostResourcesAhead`) and is covered.
+- **A resolution change can cost two waits.** The views rebuild their imports at `FrameStartBeforeCoverage`, which requests another
+  build for the next build point.
+- **Fix direction.** Detect the main-resource change at the frame's start, before the adoption: from the engine's render-target
+  state the colour capture reads, or the upscaler's render size, if it is known by then. The frame would then build and wait like
+  any other build. Alternatively, record the frame's colour epoch synchronously for the new resources.
+
+## A target format change: no DCLF epoch until the rebuilt pipeline catalog is installed, under standing claims (pre-existing; found 2026-10-17)
+
+After `SetTargetFormats`, `FrameIndirectState()` stays invalid until a publication carrying the new pipeline catalog is installed.
+During those frames `RunEpoch` returns before `Setup` (`failed, no lighting, pipelines off or indirect state invalid`). Meanwhile the
+claims stand, and the snapshots look current by generation, so the frame neither waits nor fails. DCLF's objects can be missing for
+the frames in which the catalog is rebuilt. Waiting on the catalog at the frame's start, as for a build, could exceed the 5 s bound
+while the new pipelines compile. A fix needs its own design: for example, the old catalog's pipelines kept drawing into compatible
+formats until the new one is installed, or the format change made at a point where the catalog is already compiled.
+
 ## Extras rows: a projected-UV or land-blend row changed without a journal entry (found 2026-10-17; not investigated)
 
 The persistent parity's payload backings check (`CheckExtras`, Diagnostics/Draws/KeptChecks.cpp: each extras backing's rows as its
