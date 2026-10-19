@@ -69,6 +69,9 @@ public:
 	/** @brief Copies a registered engine group into the ordered preparation queue. */
 	void CaptureEngineGroup(RE::BSMultiStreamInstanceTriShape* shape, uint32_t engineGroup);
 
+	/** @brief Captures newly attached cache groups without duplicating groups already in preparation. */
+	void CaptureQueuedGroups();
+
 	/** @brief Retires an engine group's coverage and stages removal at the next frame boundary. */
 	void RemoveEngineGroup(RE::BSMultiStreamInstanceTriShape* shape, uint32_t engineGroup,
 		void (*remove)(RE::BSMultiStreamInstanceTriShape*, uint32_t));
@@ -147,6 +150,9 @@ private:
 	static void PackInstances(GrassChunk& slice, const void* sourceData);
 
 	static std::optional<PendingCapture> CaptureMetadata(RE::BSMultiStreamInstanceTriShape* shape, uint32_t count, uint32_t stride);
+
+	// The caller holds pendingMutex and EngineGroupLock while copying native group data.
+	void CaptureEngineGroup(const std::shared_ptr<GrassShape>& registration, uint32_t engineGroup);
 
 	// The caller holds pendingMutex while updating native group lifetimes.
 	void QueueEvent(PendingEvent event);

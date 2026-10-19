@@ -71,6 +71,7 @@ struct GrassShape
 	GrassBucket* current = nullptr;
 	std::unordered_map<uint32_t, std::unique_ptr<GrassChunk>> chunks;
 	uint32_t residentInstances = 0;
+	uint32_t residentGroups = 0;
 	bool admitted = false;
 };
 

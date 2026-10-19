@@ -66,12 +66,12 @@ cbuffer CullBucket : register(b1)
 	float MidLODEnabled;
 	float FarLODEnabled;
 	float ComplexThreshold;
-	float _bucketPad1;
+	float MidLODMeshCost;
 
 	float WavePeriod;
 	float TimeBase;
 	float PrevTimeBase;
-	float _bucketPad2;
+	float FarLODMeshCost;
 };
 
 ByteAddressBuffer Instances : register(t0);
@@ -129,16 +129,10 @@ uint CullInstance(uint idx, GrassInstance::CullGroup group, out float2 wind, out
 
 	const float3 dv = world - CameraPos.xyz;
 	const float distSq = dot(dv, dv);
+	if (distSq > MaxDistSq)
+		return TierCulled;
 
 	const float dist = sqrt(distSq);
-
-	const float costRamp = saturate((dist - CostBiasStartDist) / max(CostBiasStartDist, 1e-4));
-	const float effCostBias = MeshCostBias * costRamp;
-
-	const float dScale = lerp(1.0, DistScale, effCostBias);
-	const float effMaxDistSq = MaxDistSq * dScale * dScale;
-	if (distSq > effMaxDistSq)
-		return TierCulled;
 
 	// Bounds include the mesh's offset from its root, scale variation and deformation padding.
 	const float sizeVariance = data4.y;
@@ -153,23 +147,43 @@ uint CullInstance(uint idx, GrassInstance::CullGroup group, out float2 wind, out
 	const float instanceRadius = ModelRadius * (1.0 + max(sizeVariance, 0.0));
 
 	const float projPx = (instanceRadius / dist) * ProjScale;
-	const float pxScale = lerp(1.0, MinPixelScale, effCostBias);
-	const float effMinPx = MinPixelSize * pxScale;
-	if (projPx < effMinPx)
-		return TierCulled;
 
 	// Hash world positions so compaction preserves density and LOD choices.
 	const uint2 rand = Random::pcg2d(asuint(world.xy) ^ asuint(world.z));
+
+	// Choose the mesh before applying its distance and density penalties.
+	const float h = RandFloat(rand.y);
+	const float halfBand = MeshLODBandPx * 0.5;
+	const float bandRcp = 1.0 / max(MeshLODBandPx, 1e-4);
+
+	uint tier = 0;
+	if (MidLODEnabled > 0.5 && h < saturate((MidLODPixelSize + halfBand - projPx) * bandRcp))
+		tier = 1;
+	if (FarLODEnabled > 0.5 && h < saturate((FarLODPixelSize + halfBand - projPx) * bandRcp))
+		tier = 2;
+
+	const float meshCost = tier == 1 ? MidLODMeshCost : (tier == 2 ? FarLODMeshCost : MinPixelScale);
+	const float costRamp = saturate((dist - CostBiasStartDist) / max(CostBiasStartDist, 1e-4));
+	const float effCostBias = MeshCostBias * costRamp;
+	const float dScale = lerp(1.0, tier == 0 ? DistScale : rcp(meshCost), effCostBias);
+	const float effMaxDistSq = MaxDistSq * dScale * dScale;
+	if (distSq > effMaxDistSq)
+		return TierCulled;
+
+	const float pxScale = lerp(1.0, meshCost, effCostBias);
+	const float effMinPx = MinPixelSize * pxScale;
+	if (projPx < effMinPx)
+		return TierCulled;
 
 	float lodFade = 1.0;
 	const float effFullPx = FullDetailPixelSize * pxScale;
 	if (projPx < effFullPx) {
 		const float t = saturate((effFullPx - projPx) / max(effFullPx - effMinPx, 1e-4));
 		const float keep = lerp(1.0, LODMinKeep, t);
-		const float h = RandFloat(rand.x);
-		if (h > keep + LODFadeBand)
+		const float densityRandom = RandFloat(rand.x);
+		if (densityRandom > keep + LODFadeBand)
 			return TierCulled;
-		lodFade = saturate((keep + LODFadeBand - h) / LODFadeBand);
+		lodFade = saturate((keep + LODFadeBand - densityRandom) / LODFadeBand);
 	}
 
 	const float maxDist = sqrt(effMaxDistSq);
@@ -235,17 +249,6 @@ uint CullInstance(uint idx, GrassInstance::CullGroup group, out float2 wind, out
 		}
 	}
 
-	// Dither both LOD transitions with the same value to keep tier changes gradual and ordered.
-	const float h = RandFloat(rand.y);
-	const float halfBand = MeshLODBandPx * 0.5;
-	const float bandRcp = 1.0 / max(MeshLODBandPx, 1e-4);
-
-	uint tier = 0;
-	if (MidLODEnabled > 0.5 && h < saturate((MidLODPixelSize + halfBand - projPx) * bandRcp))
-		tier = 1;
-	if (FarLODEnabled > 0.5 && h < saturate((FarLODPixelSize + halfBand - projPx) * bandRcp))
-		tier = 2;
-
 	flags = tier << GrassInstance::FlagTierShift;
 	if (distSq < CollisionDistSq)
 		flags |= GrassInstance::FlagCollision;
@@ -258,7 +261,6 @@ uint CullInstance(uint idx, GrassInstance::CullGroup group, out float2 wind, out
 }
 
 [numthreads(64, 1, 1)] void main(uint3 groupId : SV_GroupID, uint threadIdx : SV_GroupIndex) {
-
 	if (threadIdx < TierCount)
 		GroupTierCount[threadIdx] = 0;
 

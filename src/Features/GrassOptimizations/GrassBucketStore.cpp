@@ -85,25 +85,52 @@ void GrassBucketStore::CaptureEngineGroup(RE::BSMultiStreamInstanceTriShape* sha
 	if (stopping || entry == shapes.end())
 		return;
 
+	EngineGroupLock engineLock;
+	CaptureEngineGroup(entry->second, engineGroup);
+}
+
+void GrassBucketStore::CaptureQueuedGroups()
+{
+	std::scoped_lock lifecycleLock(pendingMutex);
+	if (stopping)
+		return;
+
+	EngineGroupLock engineLock;
+	for (const auto& [native, registration] : shapes) {
+		const auto& data = native->GetMultiStreamTrishapeRuntimeData();
+		if (registration->groups.size() == data.activeGroupCount)
+			continue;
+
+		for (uint32_t index = 0; index < data.instanceGroups.size(); ++index) {
+			if (data.instanceGroups[index] && !registration->groups.contains(index))
+				CaptureEngineGroup(registration, index);
+		}
+	}
+}
+
+void GrassBucketStore::CaptureEngineGroup(const std::shared_ptr<GrassShape>& registration, uint32_t engineGroup)
+{
+	auto* shape = registration->native;
 	auto property = shape->GetGeometryRuntimeData().shaderProperty;
 	if (!property || property->GetRTTI() != globals::rtti::BSGrassShaderPropertyRTTI.get())
 		return;
 
-	EngineGroupLock engineLock;
 	const auto& groups = shape->GetMultiStreamTrishapeRuntimeData().instanceGroups;
 	const auto* group = engineGroup < groups.size() ? groups[engineGroup] : nullptr;
 	const auto* vertexBuffer = group ? group->vertexBuffer : nullptr;
 	if (!vertexBuffer || !vertexBuffer->m_data || !group->instanceCount)
 		return;
 
-	auto capture = CaptureMetadata(shape, group->instanceCount, (uint32_t)(vertexBuffer->byteWidth / group->instanceCount));
+	// The engine initializes only the low 32 bits of the vertex buffer's byte width.
+	const uint32_t byteWidth = (uint32_t)vertexBuffer->byteWidth;
+	auto capture = CaptureMetadata(shape, group->instanceCount, byteWidth / group->instanceCount);
 	if (!capture)
 		return;
 
-	capture->shape = entry->second;
-	capture->slice.owner = entry->second.get();
+	capture->shape = registration;
+	capture->slice.owner = registration.get();
 	capture->slice.engineGroup = engineGroup;
-	capture->asset.key.mesh = entry->second->mesh;
+	capture->asset.key.mesh = registration->mesh;
 	const auto* data = static_cast<const uint8_t*>(vertexBuffer->m_data);
 	capture->sourceData.assign(data, data + (size_t)group->instanceCount * kGrassStride);
 
@@ -632,7 +659,8 @@ std::shared_ptr<GrassShape> GrassBucketStore::FindRenderedShape(RE::BSMultiStrea
 bool GrassBucketStore::IsShapeOptimized(const GrassShape& shape)
 {
 	const auto& native = shape.native->GetMultiStreamTrishapeRuntimeData();
-	return !shape.pendingChanges.load(std::memory_order_acquire) && shape.current && shape.current->optimizedReady && shape.residentInstances == native.instanceCount &&
+	// Cached groups do not update the engine's total instance count.
+	return !shape.pendingChanges.load(std::memory_order_acquire) && shape.current && shape.current->optimizedReady && shape.residentGroups == native.activeGroupCount &&
 	       shape.chunks.size() == native.activeGroupCount;
 }
 
@@ -651,15 +679,18 @@ bool GrassBucketStore::IsGroupOptimized(const GrassShape& shape, uint32_t group)
 
 void GrassBucketStore::UpdateShapeResidency(const GrassChunk& slice, bool resident)
 {
-	auto& residentCount = slice.owner->residentInstances;
-	const bool wasResident = residentCount != 0;
+	auto& shape = *slice.owner;
+	const bool wasResident = shape.residentInstances != 0;
 
-	if (resident)
-		residentCount += slice.count;
-	else
-		residentCount -= slice.count;
+	if (resident) {
+		shape.residentInstances += slice.count;
+		++shape.residentGroups;
+	} else {
+		shape.residentInstances -= slice.count;
+		--shape.residentGroups;
+	}
 
-	if (wasResident != (residentCount != 0))
+	if (wasResident != (shape.residentInstances != 0))
 		snapshotDirty = true;
 }
 

@@ -334,7 +334,6 @@ void GrassOptimizations::DrawBucket(GrassBucket& b)
 	ctx1->VSSetConstantBuffers1(13, 1, &bucketCB, &bucketFirst, &bucketNum);
 
 	for (uint32_t tier = 0; tier < kTierCount; ++tier) {
-
 		ID3D11Buffer* vertexBuffer = meshVB;
 		ID3D11Buffer* indexBuffer = indexB;
 		UINT stride = meshStride;
@@ -392,6 +391,30 @@ std::uint32_t GrassOptimizations::Hooks::AddGroupGIDBuffer::thunk(RE::BSMultiStr
 	const auto index = func(a1, a2, a3);
 	globals::features::grassOptimizations.bucketStore.CaptureEngineGroup(a1, index);
 	return index;
+}
+
+void GrassOptimizations::Hooks::AddQueuedGroupGIDBuffer::thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSMultiStreamInstanceTriShape::GroupHeader* header, std::uint16_t* instanceData, RE::BSTArray<std::uint32_t>& groupIndices)
+{
+	AttachQueuedGroups::pendingCapture.store(true, std::memory_order_release);
+	func(shape, header, instanceData, groupIndices);
+	AttachQueuedGroups::pendingCapture.store(true, std::memory_order_release);
+}
+
+void GrassOptimizations::Hooks::AddQueuedGroupGIDFile::thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSStream* stream, RE::BSTArray<std::uint32_t>& groupIndices)
+{
+	AttachQueuedGroups::pendingCapture.store(true, std::memory_order_release);
+	func(shape, stream, groupIndices);
+	AttachQueuedGroups::pendingCapture.store(true, std::memory_order_release);
+}
+
+void GrassOptimizations::Hooks::AttachQueuedGroups::thunk()
+{
+	const bool pending = pendingCapture.exchange(false, std::memory_order_acq_rel);
+	func();
+
+	// Keep work queued during attachment pending for the next batch as well.
+	if (pending || pendingCapture.load(std::memory_order_acquire))
+		globals::features::grassOptimizations.bucketStore.CaptureQueuedGroups();
 }
 
 void GrassOptimizations::Hooks::AddGroupGIDFile::thunk(RE::BSMultiStreamInstanceTriShape* a1, RE::BSStream* a2)
@@ -553,7 +576,11 @@ void GrassOptimizations::Hooks::Install()
 	stl::write_vfunc<0x6, BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
 	stl::write_vfunc<0x4, BSGrassShader_SetupMaterial>(RE::VTABLE_BSGrassShader[0]);
 
-	// Capture loaded cache groups here. Queued cache-generation groups use engine draws until attached.
+	// Queued cache groups receive their native slots when the shared attachment queue is drained.
+	stl::write_thunk_call<AddQueuedGroupGIDBuffer>(REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x7FF, 0x756, 0x768));
+	stl::write_thunk_call<AddQueuedGroupGIDFile>(REL::RelocationID(15206, 15374).address() + REL::Relocate(0x394, 0x384));
+	stl::detour_thunk<AttachQueuedGroups>(REL::RelocationID(74603, 76335));
+
 	stl::write_thunk_call<AddGroupGIDBuffer>(REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x806, 0x75D, 0x76F));
 	stl::write_thunk_call<AddGroupGIDFile>(REL::RelocationID(15206, 15374).address() + REL::Relocate(0x39B, 0x38B));
 

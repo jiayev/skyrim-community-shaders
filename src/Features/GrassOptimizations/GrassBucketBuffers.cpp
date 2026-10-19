@@ -92,6 +92,10 @@ bool GrassOptimizations::UploadCullBucketConstants(ID3D11DeviceContext* ctx)
 		data.geometry.windVector[1] = draw.windDirection[1];
 		data.geometry.scaleMask[0] = data.geometry.scaleMask[1] = draw.uniformScale ? 1.0f : 0.0f;
 		data.material = bucket->asset.key.material.constants;
+		const auto lodMeshCost = [bucket](size_t tier) {
+			const auto* lod = bucket->lodMeshes[tier];
+			return lod ? std::sqrt(std::max(1.0f, (float)lod->indexCount / 24.0f)) : bucket->minPixelScale;
+		};
 		data.cull = {
 			.groupCount = bucket->groupCount,
 			.sliceTableOffset = bucket->sliceTableOffset,
@@ -107,9 +111,11 @@ bool GrassOptimizations::UploadCullBucketConstants(ID3D11DeviceContext* ctx)
 			.midLODEnabled = bucket->lodMeshes[0] ? 1.0f : 0.0f,
 			.farLODEnabled = bucket->lodMeshes[1] ? 1.0f : 0.0f,
 			.complexThreshold = globals::features::grassLighting.settings.ComplexGrassThreshold,
+			.midLODMeshCost = lodMeshCost(0),
 			.wavePeriod = draw.wavePeriod,
 			.timeBase = timeBase,
-			.prevTimeBase = prevTimeBase
+			.prevTimeBase = prevTimeBase,
+			.farLODMeshCost = lodMeshCost(1)
 		};
 		++slot;
 	}

@@ -35,7 +35,7 @@ public:
 		float MinPixelSize = 2.0f;
 		float FullDetailPixelSize = 16.0f;
 		float MinDensity = 0.03f;
-		float MeshCostBias = 0.4f;
+		float MeshCostBias = 0.25f;
 		float CostBiasStartDistance = 6000.0f;
 		float InvisibleFadeCull = 0.0f;
 		float RenderDistanceOverride = 0.0f;
@@ -141,17 +141,18 @@ private:
 		float midLODEnabled;
 		float farLODEnabled;
 		float complexThreshold;
-		float pad1;
+		float midLODMeshCost;
 
 		float wavePeriod;
 		float timeBase;
 		float prevTimeBase;
-		float pad2;
+		float farLODMeshCost;
 	};
 	STATIC_ASSERT_ALIGNAS_16(CullBucketCB);
 	// RunGrass.hlsl reads the draw marker, texture threshold and shared-page offset through this slot.
 	static_assert(sizeof(CullBucketCB) == 80 && offsetof(CullBucketCB, groupCount) == 0 && offsetof(CullBucketCB, complexThreshold) == 56 &&
-				  offsetof(CullBucketCB, outputOffset) == 20 && offsetof(CullBucketCB, argsOffset) == 24);
+				  offsetof(CullBucketCB, outputOffset) == 20 && offsetof(CullBucketCB, argsOffset) == 24 &&
+				  offsetof(CullBucketCB, midLODMeshCost) == 60 && offsetof(CullBucketCB, farLODMeshCost) == 76);
 
 	// Match the c16-c21 fields read by GRASS_OPTIMIZATIONS in RunGrass.hlsl.
 	struct alignas(16) GrassPerGeometry
@@ -391,6 +392,25 @@ private:
 		{
 			static std::uint32_t thunk(RE::BSMultiStreamInstanceTriShape* a1, RE::BSMultiStreamInstanceTriShape::GroupHeader* a2, std::uint16_t* a3);
 			inline static REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct AddQueuedGroupGIDBuffer
+		{
+			static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSMultiStreamInstanceTriShape::GroupHeader* header, std::uint16_t* instanceData, RE::BSTArray<std::uint32_t>& groupIndices);
+			inline static REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct AddQueuedGroupGIDFile
+		{
+			static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSStream* stream, RE::BSTArray<std::uint32_t>& groupIndices);
+			inline static REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct AttachQueuedGroups
+		{
+			static void thunk();
+			inline static REL::Relocation<decltype(thunk)> func;
+			inline static std::atomic<bool> pendingCapture{ false };
 		};
 
 		struct AddGroupGIDFile
