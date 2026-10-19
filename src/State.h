@@ -199,6 +199,12 @@ public:
 	 */
 	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred = false);
 
+	/**
+	 * @brief Pixel descriptor bits a shader type reads at runtime although they also take part in the lookup.
+	 * @param a_shader Shader whose descriptor is being uploaded.
+	 */
+	[[nodiscard]] static uint32_t GetRuntimePixelBits(const RE::BSShader& a_shader);
+
 	/** @brief Opens a named GPU performance event (D3D annotation + Tracy zone). */
 	void BeginPerfEvent(std::string_view title);
 	/** @brief Closes the most recent GPU performance event. */
