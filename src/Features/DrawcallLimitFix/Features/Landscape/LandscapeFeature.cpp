@@ -1,6 +1,7 @@
 // Landscape: the terrain DCLF draws. Its switch and the terrain toggle, and the MTLand and MTLandLODBlend techniques' contributions.
 
 #include "Features/DrawcallLimitFix/Features/Landscape/Landscape.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 #include "ShaderCache.h"
 
@@ -25,6 +26,11 @@ namespace DCLF::Features::Landscape
 			// Integrations/TerrainBlending's gate); their objects take the land-blend extras (LandBlendParams, Core's per-object VS rows).
 			for (const auto technique : { Technique::MTLand, Technique::MTLandLODBlend })
 				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = terrain, .extras = Api::ObjectExtras::LandBlend });
+			const auto trace = a_context.RegisterSwitch({ .name = "CS_DCLF_LAND_TRACE", .kind = Api::SwitchKind::Diagnostic, .reduced = Api::SwitchReduced::Never,
+				.description = "1: every loaded land quad's engine state (node, geometry, property, material, texture paths) when first seen and when it changes",
+				.after = "CS_DCLF_TREE_LOD_AUDIT" });
+			if (SwitchEnabled(trace))
+				SubscribeLandTrace();
 		}
 	}
 
