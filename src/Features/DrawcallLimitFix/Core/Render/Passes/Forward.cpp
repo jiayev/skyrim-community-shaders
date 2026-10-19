@@ -8,7 +8,7 @@ namespace DCLF::Draws
 {
 	/*
 	 * The forward epoch's passes (dclf-architecture.md, "The forward epoch"). The colour BuildDraws appends visible forward draws (kObjectForward) with
-	 * their view depth to the staging half; ForwardSortPass (colour epoch) sorts them back to front into the sorted half;
+	 * their view depth to their state class's staging half; ForwardSortPass (colour epoch) sorts each class's back to front into its sorted half;
 	 * Features/Forward's ForwardDrawPass draws it in the forward epoch (the engine's blended draw, FUN_1414b39d0, after the deferred
 	 * composite) on the colour pass's attachments; forward pipelines write the main target alone.
 	 */
@@ -19,11 +19,12 @@ namespace DCLF::Draws
 			org::DeclaredViewToken sequences, count;
 		};
 
+		// A dispatch per state class with a forward sub-range (ForwardSortSource::ranges).
 		struct ForwardSortFrame
 		{
 			std::shared_ptr<const ComputeProgram> program;
-			ForwardSortConstants constants{};
-			std::uint32_t groups = 0;
+			std::vector<ForwardSortConstants> constants;
+			std::vector<std::uint32_t> groups;
 		};
 
 		class ForwardSortPass final : public org::TypedRenderGraphPass<ForwardSortPass, ForwardSortFrame, ForwardSortBindings>
@@ -44,27 +45,35 @@ namespace DCLF::Draws
 			ForwardSortFrame Prepare(const ForwardSortBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 			{
 				ForwardSortFrame prepared{};
-				const auto range = source(a_preparation);
-				if (!range.program || !range.capacity)
+				const auto sorted = source(a_preparation);
+				if (!sorted.program || sorted.ranges.empty())
 					return prepared;
-				prepared.program = range.program;
-				auto& constants = prepared.constants;
-				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
-				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
-				constants.stagingBase = range.stagingBase;
-				constants.capacity = range.capacity;
-				constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
-				constants.countOffset = range.countOffset;
-				constants.options = range.countAtOffset ? ForwardSortConstants::kCountOffset : 0u;
-				// Full capacity; threads past the count return.
-				prepared.groups = (range.capacity + kForwardSortGroup - 1) / kForwardSortGroup;
+				prepared.program = sorted.program;
+				const std::uint32_t sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
+				const std::uint32_t countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
+				for (const auto& range : sorted.ranges) {
+					if (!range.capacity)
+						continue;
+					ForwardSortConstants constants{};
+					constants.sequencesIndex = sequencesIndex;
+					constants.countIndex = countIndex;
+					constants.stagingBase = range.stagingBase;
+					constants.capacity = range.capacity;
+					constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
+					// The class's count word (its classCounts word, a view's forward entry's bucket count).
+					constants.countOffset = range.countOffset;
+					constants.options = ForwardSortConstants::kCountOffset;
+					prepared.constants.push_back(constants);
+					// Full capacity; threads past the count return.
+					prepared.groups.push_back((range.capacity + kForwardSortGroup - 1) / kForwardSortGroup);
+				}
 				return prepared;
 			}
 
 			static void Record(const ForwardSortBindings&, const ForwardSortFrame& a_frame, org::PassRecordContext& a_recording)
 			{
-				if (a_frame.program && a_frame.groups)
-					RecordDispatch(a_recording.Commands(), *a_frame.program, a_frame.constants, a_frame.groups);
+				for (std::size_t r = 0; a_frame.program && r < a_frame.constants.size(); ++r)
+					RecordDispatch(a_recording.Commands(), *a_frame.program, a_frame.constants[r], a_frame.groups[r]);
 			}
 
 		private:

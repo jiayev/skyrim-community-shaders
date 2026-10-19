@@ -29,20 +29,23 @@ namespace DCLF::Diagnostics
 	{
 		const auto& o = Observe();
 		// A main epoch's readbacks, in this order: the build parity (both epochs), the culling's counters (always), the set parity (the
-		// colour epoch's, with the frame's Z-prepass payload); the features' after (their install: Features/TreeWind's tree wind, then
+		// colour epoch's, with the frame's Z-prepass payload) and the set class parity (the colour epoch's); the features' after (their install: Features/TreeWind's tree wind, then
 		// Features/Fades' fade log, the Z-prepass's).
 		if (o.builds)
 			Subscribe<MainEpochDone>(&CheckBuildParity);
 		Subscribe<CullLatchWritten>(&NoteCullLatch);
 		Subscribe<MainEpochDone>(&ReadCullCounters);
+		InstallDecalDump();  // TEMPORARY (decal loss): CS_DCLF_DECAL_DUMP
 		Subscribe<MainGraphPasses>(&AppendCullCounterPass);
 		Subscribe<FrameTextureUnresolved>(&DescribeUnresolvedFrameTexture);
 		Subscribe<FrameBufferUnfilled>(&LogUnfilledFrameBuffer);
 		Subscribe<FadeInputsVaried>(&LogFadeInputsVaried);
 		Subscribe<ShortBuffersDrawn>(&LogShortBuffers);
 		Subscribe<MainCullingSetup>(&LogCullingSetup);
-		if (o.claims)
+		if (o.claims) {
 			Subscribe<MainEpochDone>(&CheckSetParity);
+			Subscribe<MainEpochDone>(&CheckSetClassParity);
+		}
 		if (o.scene) {
 			Subscribe<ExtrasSending>(&MirrorExtras);
 			Subscribe<ExtrasSent>(&CheckExtras);

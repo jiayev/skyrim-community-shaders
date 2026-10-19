@@ -316,6 +316,12 @@ namespace DCLF
 		l.zGroups.clear();
 		l.usage.clear();
 		l.constantTables.clear();
+		// The state classes are the set's: the new one numbers its own.
+		l.classOf.clear();
+		l.classMembers.clear();
+		l.classIndex.clear();
+		l.stateClasses.store(0, std::memory_order_relaxed);
+		l.largestClass.store(0, std::memory_order_relaxed);
 		for (auto& programCounters : l.programFamilyCounters)
 			for (auto* counter : { &programCounters.requested, &programCounters.ready, &programCounters.failed })
 				counter->store(0, std::memory_order_relaxed);
@@ -370,6 +376,7 @@ namespace DCLF
 					l.counters.zDepthOnly.fetch_add(1, std::memory_order_relaxed);
 			}
 			l.zGroupOf.push_back(group->second);
+			AdmitToClass(*built, entry.slot);
 			l.setPipelines.push_back(artifact.payload);
 			l.usage.push_back(built->usage);
 			l.constantTables.push_back(built->tables);
@@ -377,17 +384,9 @@ namespace DCLF
 		const auto admitted = static_cast<std::uint32_t>(l.setPipelines.size());
 		if (!admitted)
 			return;
-		auto pipelineAt = [&](std::uint32_t a_variant) {
-			return [&, a_variant](std::uint32_t a_index) {
-				return static_cast<const Built*>(l.setPipelines[a_index].get())->pipelines[a_variant]->GetHandle();
-			};
-		};
-		PublishAdmitted(l, l.versions, admitted, "indirect pipeline sets", [&](SetVersion& a_version) {
-			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
-				if (!ApplyToSet(a_version.sets[variant], a_version.applied, admitted, variant == kDepthVariant ? "DCLF indirect pipelines (depth)" : "DCLF indirect pipelines",
-						pipelineAt(variant), [&] { return CreateSignature(a_version, variant); }))
-					return false;
-			}
+		const auto published = PublishAdmitted(l, l.versions, admitted, "indirect pipeline sets", [&](SetVersion& a_version) {
+			if (!ApplyClasses(a_version, admitted))
+				return false;
 			a_version.pipelines.assign(l.setPipelines.begin(), l.setPipelines.begin() + admitted);
 			a_version.zGroupOf.assign(l.zGroupOf.begin(), l.zGroupOf.begin() + admitted);
 			// A group's first pipeline is admitted before any other of it: the groups of [0, admitted) are a prefix.
@@ -398,6 +397,149 @@ namespace DCLF
 			if (const auto family = KeyFamily(a_key.rasterFlags); family != Api::ProgramFamily::Count)
 				l.programFamilyCounters[static_cast<std::size_t>(family)].ready.fetch_add(1, std::memory_order_relaxed);
 		});
+		if (published == Versions<SetVersion>::PublishResult::Published && Diagnostics::Observe().claims)
+			if (const auto version = l.versions.published.load())
+				CheckClasses(*version);
+	}
+
+	void DrawPipelines::Impl::AdmitToClass(const Built& a_built, std::uint32_t a_index)
+	{
+		auto& l = lane;
+		// Its state class: the first pipeline of equal state (both variants, SameState) made one, in admission order.
+		const auto [found, added] = l.classIndex.try_emplace(a_built.stateClass, static_cast<std::uint32_t>(l.classMembers.size()));
+		const std::uint32_t c = found->second;
+		if (added)
+			l.classMembers.emplace_back();
+		auto& members = l.classMembers[c];
+		l.classOf.resize(std::max<std::size_t>(l.classOf.size(), std::size_t(a_index) + 1), kNoSetClass);
+		l.classOf[a_index] = (c << kSetClassShift) | static_cast<std::uint32_t>(members.size());
+		members.push_back(a_index);
+		l.stateClasses.store(static_cast<std::uint32_t>(l.classMembers.size()), std::memory_order_relaxed);
+		l.largestClass.store(std::max(l.largestClass.load(std::memory_order_relaxed), static_cast<std::uint32_t>(members.size())), std::memory_order_relaxed);
+	}
+
+	bool DrawPipelines::Impl::ApplyClasses(SetVersion& a_version, std::uint32_t a_admitted)
+	{
+		auto& l = lane;
+		// Per state class, its own sets and signatures (its members only: a set's pipelines may differ in their shaders alone). A version
+		// brought up from an older generation catches up on every class; the classes it has not seen are made (initial pipeline: their
+		// first member). The classes' members are admitted in order, so those of [0, a_admitted) are a prefix of each.
+		a_version.classes.resize(l.classMembers.size());
+		for (std::size_t c = 0; c < l.classMembers.size(); ++c) {
+			const auto& members = l.classMembers[c];
+			auto& sets = a_version.classes[c];
+			const auto count = static_cast<std::uint32_t>(std::ranges::lower_bound(members, a_admitted) - members.begin());
+			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
+				const auto handleOf = [&](std::uint32_t a_member) {
+					return static_cast<const Built*>(l.setPipelines[members[a_member]].get())->pipelines[variant]->GetHandle();
+				};
+				const auto name = fmt::format("DCLF indirect pipelines class {}{}", c, variant == kDepthVariant ? " (depth)" : "");
+				if (!ApplyToSet(sets.sets[variant], sets.applied, count, name.c_str(), handleOf, [&] { return CreateSignature(sets, variant); }))
+					return false;
+				auto& written = sets.written[variant];
+				for (auto m = static_cast<std::uint32_t>(written.size()); m < count; ++m)
+					written.push_back(handleOf(m));
+			}
+			sets.applied = count;
+		}
+		a_version.classOf.assign(l.classOf.begin(), l.classOf.begin() + a_admitted);
+		return true;
+	}
+
+	template <class Check>
+	void DrawPipelines::Impl::CheckClassMembers(const SetVersion& a_version, std::uint32_t a_class, const std::vector<std::uint32_t>& a_members,
+		std::vector<std::uint8_t>& a_seen, Check&& a_check)
+	{
+		const auto& sets = a_version.classes[a_class];
+		const std::uint32_t applied = a_version.applied;
+		auto builtOf = [&](std::uint32_t a_index) {
+			return a_index < a_version.pipelines.size() ? static_cast<const Built*>(a_version.pipelines[a_index].get()) : nullptr;
+		};
+		const Built* initial = a_members.empty() ? nullptr : builtOf(a_members[0]);
+		for (std::uint32_t i = 0; i < sets.applied && i < a_members.size(); ++i) {
+			const std::uint32_t member = a_members[i];
+			const Built* built = builtOf(member);
+			a_check(member < applied && built, [&] { return fmt::format("class {} index {}: member {} past the version's {} pipelines", a_class, i, member, applied); });
+			if (member >= applied || !built)
+				continue;
+			++a_seen[member];
+			const std::uint32_t word = (a_class << kSetClassShift) | i;
+			const std::uint32_t stored = member < a_version.classOf.size() ? a_version.classOf[member] : kNoSetClass;
+			a_check(stored == word, [&] {
+				return fmt::format("pipeline {} at class {} index {}: class word {:#x}, expected {:#x}", member, a_class, i, stored, word);
+			});
+			// The original defect: a pipeline admitted into a set whose initial pipeline's fixed-function state is not its own.
+			if (initial && i != 0) {
+				KeyDifference fields;
+				a_check(SameState(built->stateClass, initial->stateClass, &fields), [&] {
+					return fmt::format("pipeline {} (class {} index {}) differs from the class's initial pipeline {}: {}", member, a_class, i, a_members[0], fields.fields);
+				});
+			}
+			for (std::uint32_t v = 0; v < kVariantCount; ++v) {
+				if (i >= sets.written[v].size() || !built->pipelines[v])
+					continue;
+				const auto expected = built->pipelines[v]->GetHandle();
+				const auto& written = sets.written[v][i];
+				a_check(written.index == expected.index && written.generation == expected.generation, [&] {
+					return fmt::format("class {} variant {} index {}: handle {}/{} written, pipeline {}'s is {}/{}", a_class, v, i, written.index, written.generation,
+						member, expected.index, expected.generation);
+				});
+			}
+		}
+	}
+
+	void DrawPipelines::Impl::CheckClasses(const SetVersion& a_version)
+	{
+		auto& l = lane;
+		auto& parity = l.classParity;
+		const std::uint32_t applied = a_version.applied;
+		std::uint32_t logged = 0;
+		// One comparison; a failure is logged at once (the first few of a version), its description the counter's first if it is.
+		auto check = [&](bool a_equal, auto&& a_describe) {
+			if (a_equal) {
+				parity.Check(true);
+				return;
+			}
+			const std::string text = a_describe();
+			parity.Check(false, [&] { return text; });
+			if (logged++ < kMaxLoggedFailures)
+				logger::warn("[DCLF] set class parity (version of {} pipelines, {} classes): {} <- SET CLASS", applied, a_version.classes.size(), text);
+		};
+		check(a_version.pipelines.size() == applied && a_version.classOf.size() == applied && a_version.classes.size() <= l.classMembers.size(),
+			[&] { return fmt::format("the version holds {} pipelines and {} class words for {} applied, {} classes of the lane's {}", a_version.pipelines.size(),
+					  a_version.classOf.size(), applied, a_version.classes.size(), l.classMembers.size()); });
+		std::vector<std::uint8_t> seen(applied, 0);
+		std::uint64_t members = 0;
+		// The classes' initial pipelines' keys, each class's own (none equal: StateClassEqual).
+		ankerl::unordered_dense::map<StateClassKey, std::uint32_t, StateClassHash, StateClassEqual> initials;
+		for (std::uint32_t c = 0; c < a_version.classes.size() && c < l.classMembers.size(); ++c) {
+			const auto& sets = a_version.classes[c];
+			const auto& classMembers = l.classMembers[c];
+			members += sets.applied;
+			check(sets.applied <= classMembers.size() && sets.applied > 0, [&] {
+				return fmt::format("class {} applies {} pipelines of its {} members", c, sets.applied, classMembers.size());
+			});
+			for (std::uint32_t v = 0; v < kVariantCount; ++v)
+				check(sets.written[v].size() == sets.applied && sets.sets[v] && sets.signatures[v], [&] {
+					return fmt::format("class {} variant {}: {} handles written for {} applied, set {}, signature {}", c, v, sets.written[v].size(), sets.applied,
+						sets.sets[v] ? "made" : "missing", sets.signatures[v] ? "made" : "missing");
+				});
+			if (!classMembers.empty() && classMembers[0] < a_version.pipelines.size()) {
+				const auto inserted = initials.try_emplace(static_cast<const Built*>(a_version.pipelines[classMembers[0]].get())->stateClass, c);
+				check(inserted.second, [&] {
+					const std::uint32_t other = inserted.first->second;
+					return fmt::format("classes {} and {} have equal state (their initial pipelines {} and {})", other, c, l.classMembers[other][0], classMembers[0]);
+				});
+			}
+			CheckClassMembers(a_version, c, classMembers, seen, check);
+		}
+		check(members == applied, [&] { return fmt::format("the classes apply {} pipelines in all, the version {}", members, applied); });
+		for (std::uint32_t g = 0; g < applied; ++g)
+			check(seen[g] == 1, [&] {
+				return fmt::format("pipeline {} is in {} classes (class word {:#x})", g, seen[g], g < a_version.classOf.size() ? a_version.classOf[g] : kNoSetClass);
+			});
+		l.classParityChecks.store(parity.checks, std::memory_order_relaxed);
+		l.classParityMismatches.store(parity.mismatches, std::memory_order_relaxed);
 	}
 
 	org::services::PipelinePayload DrawPipelines::Impl::BuildForwardOrDecal(const ProgramFamilySlot& a_slot, std::string_view a_keyName, rhi::Device a_device,
@@ -450,7 +592,12 @@ namespace DCLF
 					desc.blend.bs.attachments[i].writeMask = static_cast<rhi::ColorWriteEnable>(0);
 				}
 			}
+			if (!depthOnly && decalGroup && std::getenv("CS_DCLF_DECAL_NODEPTH"))  // TEMPORARY (decal loss)
+				depth.depthFunc = rhi::CompareOp::Always;
+			built->stateClass.variants[variant] = desc.State(pixel);
 			desc.Create(a_device, built->pipelines[variant], fmt::format("{} {}", a_keyName, depthOnly ? "depth" : "color"));
+			logger::info("[DCLF] MODULE-EXP effect v{} VS {:08X} PS {:08X} pass {:08X} raster {:08X} layout {:016X} vs {:016X} ps {:016X}", variant, a_key.vertexDescriptor,
+				a_key.pixelDescriptor, a_key.passDescriptor, a_key.rasterFlags, a_key.vertexLayout, ModuleHash(a_program->vertex), ModuleHash(a_program->pixel));  // TEMPORARY
 		}
 		return built;
 	}
@@ -528,7 +675,13 @@ namespace DCLF
 						desc.blend.bs.attachments[i].writeMask = static_cast<rhi::ColorWriteEnable>(0);
 					}
 			}
+			if (!depthOnly && decalGroup && std::getenv("CS_DCLF_DECAL_NODEPTH"))  // TEMPORARY (decal loss)
+				depth.depthFunc = rhi::CompareOp::Always;
+			built->stateClass.variants[variant] = desc.State(depthOnly ? depthPixel : pixel);
 			desc.Create(a_device, built->pipelines[variant], depthOnly ? "depth" : "color");
+			logger::info("[DCLF] MODULE-EXP lighting v{} VS {:08X} PS {:08X} pass {:08X} raster {:08X} layout {:016X} vs {:016X} ps {:016X}", variant, a_key.vertexDescriptor,
+				a_key.pixelDescriptor, a_key.passDescriptor, a_key.rasterFlags, a_key.vertexLayout, ModuleHash(a_program->vertex),
+				ModuleHash(depthOnly ? a_program->depthPixel : a_program->pixel));  // TEMPORARY
 			if (!depthOnly)
 				continue;
 			// The Z-prepass plain-draw pipeline: the depth variant's state, pulled stages, no vertex input, bound per call.
@@ -555,7 +708,7 @@ namespace DCLF
 		return built;
 	}
 
-	bool DrawPipelines::Impl::CreateSignature(SetVersion& a_version, std::uint32_t a_variant)
+	bool DrawPipelines::Impl::CreateSignature(SetVersion::ClassSets& a_class, std::uint32_t a_variant)
 	{
 		// No vertex buffer arguments: the vertex stages pull their attributes through the buffers' views in the push data
 		// (DCLF_PULLED_VERTICES), so no pipeline has vertex bindings or a dynamic stride (VUID-VkGeneratedCommandsInfoEXT-
@@ -570,9 +723,10 @@ namespace DCLF
 		rhi::CommandSignatureDesc desc{};
 		desc.args = { args, 4 };
 		desc.byteStride = sizeof(DrawSequence);
-		desc.pipelineSet = a_version.sets[a_variant]->GetHandle();
+		// One per state class and variant: a call that draws a class's sub-range selects from that class's set alone.
+		desc.pipelineSet = a_class.sets[a_variant]->GetHandle();
 		desc.explicitPreprocess = true;
-		return device.CreateCommandSignature(desc, layout->GetHandle(), a_version.signatures[a_variant]) == rhi::Result::Ok;
+		return device.CreateCommandSignature(desc, layout->GetHandle(), a_class.signatures[a_variant]) == rhi::Result::Ok;
 	}
 
 	IndirectState GetIndirectState(const PipelineCatalog& a_catalog, std::uint32_t a_targetsGeneration)
@@ -584,10 +738,16 @@ namespace DCLF
 		if (!a_catalog.setVersion || a_catalog.targetsGeneration != a_targetsGeneration || !impl.layout)
 			return state;
 		auto version = std::static_pointer_cast<const DrawPipelines::Impl::SetVersion>(a_catalog.setVersion);
-		for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
-			state.sets[variant] = version->sets[variant]->GetHandle();
-			state.signatures[variant] = version->signatures[variant]->GetHandle();
+		state.classes.resize(version->classes.size());
+		for (std::size_t c = 0; c < version->classes.size(); ++c) {
+			const auto& sets = version->classes[c];
+			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
+				state.classes[c].sets[variant] = sets.sets[variant]->GetHandle();
+				state.classes[c].signatures[variant] = sets.signatures[variant]->GetHandle();
+			}
+			state.classes[c].pipelines = sets.applied;
 		}
+		state.classOf = version->classOf;
 		state.zGroups = version->zGroupOf;
 		state.zPipelines.reserve(version->zGroupFirst.size());
 		for (const auto first : version->zGroupFirst) {

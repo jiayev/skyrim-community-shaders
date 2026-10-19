@@ -15,8 +15,21 @@ namespace DCLF
 	struct IndirectState
 	{
 		rhi::PipelineLayoutHandle layout{};
-		std::array<rhi::IndirectPipelineSetHandle, kVariantCount> sets{};  // by variant (DrawPipelines.h)
-		std::array<rhi::CommandSignatureHandle, kVariantCount> signatures{};
+		/**
+		 * @brief A state class (DrawPipelines.h, kSetClassShift): its indirect execution set and the signature that selects from it, by
+		 * variant, and how many pipelines the version's sets hold of it. Every device-generated call uses one class's signature and
+		 * draws one class's sub-range of a range, whose sequences name pipelines by their index in that class.
+		 */
+		struct Class
+		{
+			std::array<rhi::IndirectPipelineSetHandle, kVariantCount> sets{};
+			std::array<rhi::CommandSignatureHandle, kVariantCount> signatures{};
+			std::uint32_t pipelines = 0;
+		};
+		std::vector<Class> classes;  // in creation order (the calls' order within a range)
+		// By set index (DrawInput::pipelineIndex): class << kSetClassShift | index in the class. The class map BuildDraws routes every
+		// colour draw by, so a sequence's pipeline index and the sub-range it lands in come from one word.
+		std::vector<std::uint32_t> classOf;
 		// The Z-prepass's plain indirect draws (MainOpaquePass): every published pipeline's group (the pipelines that build the
 		// same pulled depth pipeline, DrawPipelinesImpl.h ZPipelineKey) by its index, each group's pulled depth pipeline, their
 		// layout and the signature of a DrawSequence's tail as a plain draw.

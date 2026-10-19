@@ -94,9 +94,10 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief A view's latch block's region per frame slot: each face's BuildDrawsLatch, the slots' map, each face's bucket table
-	 * (first, capacity), then each face's values its latched copies take (its block, and in a trees view each draw family's row and
-	 * list header with faces: Extensions::DrawFamilyFaceLayout, at DrawFamilyFaceBytes a face), then a view with frame constants of its
-	 * own its frame values (ViewFrame::kFrameList's copies: frameBytes, grown by the revision producer to what they take).
+	 * (first, capacity), the state classes' map (a view with a forward part: its forward range's entries are per class), then each face's
+	 * values its latched copies take (its block, and in a trees view each draw family's row and list header with faces:
+	 * Extensions::DrawFamilyFaceLayout, at DrawFamilyFaceBytes a face), then a view with frame constants of its own its frame values
+	 * (ViewFrame::kFrameList's copies: frameBytes, grown by the revision producer to what they take).
 	 */
 	struct ViewLatchLayout
 	{
@@ -105,10 +106,16 @@ namespace DCLF::Draws
 		std::uint32_t buckets = 0;  // entries a face's table holds
 		std::uint32_t faceBytes = kViewBlockBytes;
 		std::uint32_t frameBytes = 0;  // the frame values' (none: a view drawing with the main frame constants)
+		std::uint32_t classMapWords = 0;  // set indices the class map holds a word for (IndirectState::classOf; none: no forward part)
 		static ViewLatchLayout Initial(const ViewTraits& a_traits) { return { a_traits.faces, 64, 4, a_traits.trees ? Extensions::DrawFamilyFaceBytes() : kViewBlockBytes }; }
 		std::uint32_t MapOffset() const { return faces * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t TableOffset(std::uint32_t a_face) const { return MapOffset() + slots * 4 + a_face * buckets * 8; }
-		std::uint32_t FaceOffset(std::uint32_t a_face) const { return ((TableOffset(faces) + 255u) & ~255u) + a_face * faceBytes; }
+		// BuildDrawsLatch::classMapOffset's: [set indices, 0, 0, 0], then a word per set index (16-byte aligned: the table ends on 8).
+		std::uint32_t ClassMapOffset() const { return (TableOffset(faces) + 15u) & ~15u; }
+		std::uint32_t FaceOffset(std::uint32_t a_face) const
+		{
+			return ((ClassMapOffset() + (kClassHeaderWords + classMapWords) * 4 + 255u) & ~255u) + a_face * faceBytes;
+		}
 		std::uint32_t FrameOffset() const { return (FaceOffset(faces) + 255u) & ~255u; }
 		std::uint32_t Bytes() const { return frameBytes ? FrameOffset() + frameBytes : FaceOffset(faces); }
 		bool operator==(const ViewLatchLayout&) const = default;
@@ -120,7 +127,7 @@ namespace DCLF::Draws
 		std::uint64_t generation = 0;
 		ViewKind kind = ViewKind::Reflection;
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
-		IndirectState indirect{};  // zLayout and zDrawSignature, the colour signature (the version holds them)
+		IndirectState indirect{};  // zLayout and zDrawSignature, the state classes' colour signatures (the version holds them)
 		std::shared_ptr<const org::LatchBlock> latch;
 		std::uint32_t width = 0, height = 0;  // a face's render area
 		float depthRange = 1.0f;              // the viewport's maximum depth
@@ -137,9 +144,11 @@ namespace DCLF::Draws
 			}
 		};
 		std::vector<Bucket> buckets;
-		// The forward range: forwardCapacity staging slots at forwardFirst, the sorted half after them; its table entry and bucket count
-		// word forwardEntry (buckets.size()), drawn through the main colour signature. 0 capacity: none.
-		std::uint32_t forwardFirst = 0, forwardCapacity = 0, forwardEntry = 0;
+		// The forward range, per state class (IndirectState::classes; empty: none): capacity staging slots at first, the sorted half after
+		// them; its table entry and bucket count word forwardEntry + its class (forwardEntry: buckets.size()), drawn through its class's
+		// colour signature (a class without forward slots: capacity 0, no call).
+		std::vector<SetClassRanges::Range> forwardRanges;
+		std::uint32_t forwardEntry = 0;
 		// Per face, the frame push data: the view's frame constants (its own, or the colour segment's) with VS and PS b12 the face's block.
 		std::vector<std::array<std::uint32_t, kFramePushWords>> push;
 		// Per draw family, its faces (a trees view's; tree LOD's): the forward pipeline and its draw's signature (invalid: none), the
@@ -165,8 +174,8 @@ namespace DCLF::Draws
 		{
 			return latch == o.latch && latched == o.latched && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) &&
 			       SameIndirect(indirect, o.indirect) && width == o.width && height == o.height && depthRange == o.depthRange &&
-			       sequenceDraws == o.sequenceDraws && buckets == o.buckets && push == o.push && forwardFirst == o.forwardFirst &&
-			       forwardCapacity == o.forwardCapacity && forwardEntry == o.forwardEntry && faces == o.faces;
+			       sequenceDraws == o.sequenceDraws && buckets == o.buckets && push == o.push && forwardRanges == o.forwardRanges &&
+			       forwardEntry == o.forwardEntry && faces == o.faces;
 		}
 	};
 
@@ -222,17 +231,19 @@ namespace DCLF::Draws
 	/**
 	 * @brief A view's buckets: per pair of pipelines (the depth one only with a depth pass), the slots that draw with it, each slot's
 	 * range what its objects can produce (the Z-prepass's bucket capacity); each slot's bucket (kNoBucket: none); and the forward
-	 * range after them.
+	 * range after them, per state class (ViewFrame::forwardRanges).
 	 */
 	struct ViewPlan
 	{
 		std::vector<std::uint32_t> map;
 		std::vector<ViewFrame::Bucket> buckets;
 		std::uint32_t draws = 0;  // a face's, all buckets and the forward range
-		std::uint32_t forwardFirst = 0, forwardCapacity = 0;
+		std::vector<SetClassRanges::Range> forwardRanges;
 	};
 	/** @brief A pipeline slot's Z-prepass group (its lookup entry's set index's, IndirectState::zGroups); kNoBucket without one. */
 	std::uint32_t ZGroupOf(const Lookups* a_lookups, const IndirectState& a_indirect, std::uint32_t a_slot);
+	/** @brief A pipeline slot's state class word (its lookup entry's set index's, IndirectState::classOf); kNoSetClass without one. */
+	std::uint32_t SetClassOf(const Lookups* a_lookups, const IndirectState& a_indirect, std::uint32_t a_slot);
 	void PlanViewBuckets(const ViewTraits& a_traits, const MainLayout& a_main, const Lookups* a_lookups, const IndirectState& a_indirect,
 		std::span<const rhi::PipelineHandle> a_slotPipelines, std::span<const std::uint8_t> a_forwardSlots, ViewPlan& a_out);
 
@@ -278,7 +289,7 @@ namespace DCLF::Draws
 		std::vector<rhi::PipelineHandle>& a_slots);
 	/**
 	 * @brief First person's forward range: per pipeline slot, whether it is a forward key the view draws there (the main set's colour
-	 * pipeline through the colour signature): RasterForward, not refraction. None while a_on is false.
+	 * pipeline through its state class's colour signature): RasterForward, not refraction. None while a_on is false.
 	 */
 	void ViewForwardSlotsOf(const SceneTables& a_tables, bool a_on, std::vector<std::uint8_t>& a_slots);
 

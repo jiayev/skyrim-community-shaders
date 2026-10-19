@@ -64,7 +64,106 @@ namespace DCLF
 			}
 		}
 
-		std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets)
+		namespace
+		{
+			/**
+			 * @brief A pipeline slot's state class and the range of the colour segment its draws go to (BuildDrawsCS routes them by the same
+			 * key bits, as object flags: decal group, forward, terrain group); false for a slot without a pipeline of the set version, or
+			 * one whose draws no call of a class draws (refraction's plain draw).
+			 */
+			bool SlotClassRange(const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, std::uint32_t a_slot, std::uint32_t& a_class,
+				std::uint32_t& a_range)
+			{
+				if (a_slot >= a_lookups.pipelines.size() || a_slot >= a_tables.pipelines.size())
+					return false;
+				const auto& entry = a_lookups.pipelines[a_slot];
+				const auto& key = a_tables.pipelines[a_slot];
+				if (entry.setIndex == Lookups::kNone || !(entry.key == key) || entry.setIndex >= a_indirect.classOf.size() || a_indirect.classOf[entry.setIndex] == kNoSetClass)
+					return false;
+				a_class = a_indirect.classOf[entry.setIndex] >> kSetClassShift;
+				const std::uint32_t flags = key.rasterFlags;
+				if (const std::uint32_t group = RasterDecalGroup(flags))
+					a_range = ClassRangeOfSlot(group - 1);
+				else if (RasterForward(flags))
+					a_range = kClassRangeForward;
+				else if (const std::uint32_t terrain = RasterTerrainGroup(flags))
+					a_range = ClassRangeOfSlot(kDecalGroups + terrain - 1);
+				else
+					a_range = kClassRangeMain;
+				return a_class < a_indirect.classes.size() && !(a_range == kClassRangeForward && RasterRefraction(flags));
+			}
+
+			/** @brief a_plan's sub-ranges laid out from their capacities (PlanSetClasses), and its latch words. */
+			void LayOutSetClasses(const MainLayout& a_layout, const IndirectState& a_indirect, std::span<const std::array<bool, kDecalGroups>> a_decals, SetClassPlan& a_plan)
+			{
+				auto& classes = a_plan.classes;
+				std::uint32_t keys = 0, main = 0, decals = 0;
+				std::array<std::uint32_t, kTerrainGroups> terrain{ a_layout.sequenceDraws, a_layout.sequenceDraws + a_layout.terrainCapacity[0] };
+				std::uint32_t forward = a_layout.sequenceDraws + a_layout.terrainCapacity[0] + a_layout.terrainCapacity[1];
+				for (std::size_t c = 0; c < classes.size(); ++c) {
+					auto& ranges = classes[c].ranges;
+					classes[c].keyBase = keys;
+					classes[c].size = a_indirect.classes[c].pipelines;
+					keys += classes[c].size;
+					ranges[kClassRangeMain].first = main;
+					main += ranges[kClassRangeMain].capacity;
+					for (std::uint32_t g = 0; g < kTerrainGroups; ++g) {
+						auto& range = ranges[ClassRangeOfSlot(kDecalGroups + g)];
+						range.first = terrain[g];
+						terrain[g] += range.capacity;
+					}
+					// The forward pairs: the class's staging half, then its sorted half.
+					auto& pair = ranges[kClassRangeForward];
+					pair.first = forward;
+					forward += 2 * pair.capacity;
+				}
+				// The decal sub-ranges, group by group, each group's classes in order.
+				for (std::uint32_t g = 0; g < kDecalGroups; ++g)
+					for (std::size_t c = 0; c < classes.size(); ++c)
+						if (a_decals[c][g])
+							classes[c].ranges[ClassRangeOfSlot(g)] = { static_cast<std::uint32_t>(2ull * a_layout.sequenceDraws + std::uint64_t(decals++) * a_layout.sequenceDecals),
+								a_layout.sequenceDecals };
+				a_plan.decalRanges = decals;
+				a_plan.table.assign(kClassHeaderWords, 0u);
+				a_plan.table[0] = static_cast<std::uint32_t>(classes.size());
+				a_plan.table[1] = kClassRanges;
+				for (const auto& entry : classes) {
+					const std::size_t at = a_plan.table.size();
+					a_plan.table.resize(at + kClassWords, 0u);
+					a_plan.table[at] = entry.keyBase;
+					a_plan.table[at + 1] = entry.size;
+					for (std::uint32_t r = 0; r < kClassRanges; ++r) {
+						a_plan.table[at + 2 + 2 * r] = entry.ranges[r].first;
+						a_plan.table[at + 3 + 2 * r] = entry.ranges[r].capacity;
+					}
+				}
+				a_plan.map.assign(kClassHeaderWords, 0u);
+				a_plan.map[0] = static_cast<std::uint32_t>(a_indirect.classOf.size());
+				a_plan.map.insert(a_plan.map.end(), a_indirect.classOf.begin(), a_indirect.classOf.end());
+			}
+		}
+
+		void PlanSetClasses(const MainLayout& a_layout, const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, SetClassPlan& a_out)
+		{
+			a_out = {};
+			a_out.classes.resize(a_indirect.classes.size());
+			// Each slot's capacity into its class's sub-range of its range (a decal group's: whether the class has one).
+			std::vector<std::array<bool, kDecalGroups>> decals(a_indirect.classes.size());
+			const auto slots = static_cast<std::uint32_t>(std::min(a_layout.slotCapacity.size(), a_tables.pipelines.size()));
+			for (std::uint32_t p = 0; p < slots; ++p) {
+				std::uint32_t c = 0, r = 0;
+				if (!SlotClassRange(a_lookups, a_tables, a_indirect, p, c, r))
+					continue;
+				if (r >= ClassRangeOfSlot(0) && r < ClassRangeOfSlot(kDecalGroups))
+					decals[c][r - ClassRangeOfSlot(0)] = true;
+				else
+					a_out.classes[c].ranges[r].capacity += a_layout.slotCapacity[p];
+			}
+			LayOutSetClasses(a_layout, a_indirect, decals, a_out);
+		}
+
+		std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets,
+			std::uint32_t a_classWords)
 		{
 			std::vector<LatchedCopy> out;
 			const auto targets = a_resources.latchedTargets.load(std::memory_order_acquire);
@@ -108,6 +207,10 @@ namespace DCLF
 				add(a_resources.count.get(), kTerrainGroups * sizeof(std::uint32_t), kCountTerrainGroupWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountForwardWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountRefractionWord * sizeof(std::uint32_t));
+				add(a_resources.count.get(), 2 * sizeof(std::uint32_t), kCountClassUnplannedWord * sizeof(std::uint32_t));
+				// The state class sub-ranges' counts (the colour commit's class plan's).
+				if (a_resources.classCounts)
+					add(a_resources.classCounts->Key(), std::size_t(a_classWords) * sizeof(std::uint32_t), 0);
 			}
 			if (a_depthOnly && a_resources.pool && a_buckets)
 				for (const auto& counts : a_resources.zBucketCounts)
@@ -174,15 +277,16 @@ namespace DCLF
 			auto frame = std::make_shared<PassFrame>();
 			frame->sequenceDraws = a_in.sequenceDraws;
 			frame->sequenceDecals = a_in.sequenceDecals;
-			// The max counts: the sequence buffer's ranges, which hold every draw the scene can produce (RequireMain). Not the counts of
-			// the tables the shape was made from: a publication a revision covers may hold newer tables (a decal group's first decal,
-			// more draws), and its commit would find the shape short. They change with the layout alone, whose buffers the revision's set
-			// holds. The depth segment is given no decals (BuildDrawsCS).
-			frame->drawCapacity = a_in.sequenceDraws;
-			for (std::uint32_t group = 0; group < kDecalGroups; ++group)
-				frame->decalCapacity[group] = a_in.depthOnly ? 0u : a_in.sequenceDecals;
-			// The terrain groups' ranges, the colour segment's alone (BuildDrawsCS appends them there).
+			// The colour calls' sub-ranges and max counts: the state classes' (PlanSetClasses), from the slots' capacities, which hold
+			// every draw the scene can produce (RequireMain). Not the counts of the tables the shape was made from: a publication a
+			// revision covers may hold newer tables (a decal group's first decal, more draws), and its commit would find the shape short.
+			// They change with the layout and the slots' classes alone, whose buffers the revision's set holds. The depth segment has
+			// none: its draws are bucketed plain draws (zCalls), and it is given no decals (BuildDrawsCS).
+			// The terrain groups' and forward ranges, the colour segment's alone (BuildDrawsCS appends them there).
 			if (!a_in.depthOnly) {
+				frame->classPlan = a_in.classPlan;
+				if (a_in.classPlan)
+					frame->classes = a_in.classPlan->classes;
 				frame->terrainCapacity = a_in.terrainCapacity;
 				frame->forwardCapacity = a_in.forwardCapacity;  // the colour segment's and the forward epoch's
 				frame->refractionCapacity = a_in.refractionCapacity;  // likewise
@@ -438,11 +542,18 @@ namespace DCLF
 		{
 			if (a_old.valid != a_new.valid)
 				return fmt::format("indirect valid {} -> {}", a_old.valid, a_new.valid);
-			for (std::size_t i = 0; i < a_old.sets.size(); ++i) {
-				if (auto d = HandleDifference("indirect set", a_old.sets[i], a_new.sets[i]); !d.empty())
-					return fmt::format("{} (variant {})", d, i);
-				if (auto d = HandleDifference("indirect signature", a_old.signatures[i], a_new.signatures[i]); !d.empty())
-					return fmt::format("{} (variant {})", d, i);
+			if (a_old.classes.size() != a_new.classes.size())
+				return fmt::format("indirect state classes {} -> {}", a_old.classes.size(), a_new.classes.size());
+			for (std::size_t c = 0; c < a_old.classes.size(); ++c) {
+				const auto &o = a_old.classes[c], &n = a_new.classes[c];
+				if (auto d = ValueDifference("indirect class pipelines", o.pipelines, n.pipelines); !d.empty())
+					return fmt::format("{} (class {})", d, c);
+				for (std::size_t i = 0; i < o.sets.size(); ++i) {
+					if (auto d = HandleDifference("indirect set", o.sets[i], n.sets[i]); !d.empty())
+						return fmt::format("{} (class {} variant {})", d, c, i);
+					if (auto d = HandleDifference("indirect signature", o.signatures[i], n.signatures[i]); !d.empty())
+						return fmt::format("{} (class {} variant {})", d, c, i);
+				}
 			}
 			for (auto d : { HandleDifference("indirect layout", a_old.layout, a_new.layout), HandleDifference("indirect zLayout", a_old.zLayout, a_new.zLayout),
 					 HandleDifference("indirect zDrawSignature", a_old.zDrawSignature, a_new.zDrawSignature),
@@ -465,14 +576,21 @@ namespace DCLF
 			}
 			if (auto d = LatchedDifference("latched", a_old.latched, a_new.latched); !d.empty())
 				return d;
-			for (std::size_t g = 0; g < a_old.decalCapacity.size(); ++g)
-				if (auto d = ValueDifference("decalCapacity", a_old.decalCapacity[g], a_new.decalCapacity[g]); !d.empty())
-					return fmt::format("{} (group {})", d, g);
+			if (a_old.classes.size() != a_new.classes.size())
+				return fmt::format("state classes {} -> {}", a_old.classes.size(), a_new.classes.size());
+			for (std::size_t c = 0; c < a_old.classes.size(); ++c) {
+				const auto &o = a_old.classes[c], &n = a_new.classes[c];
+				if (o.keyBase != n.keyBase || o.size != n.size)
+					return fmt::format("class {} keys (first {} size {}) -> (first {} size {})", c, o.keyBase, o.size, n.keyBase, n.size);
+				for (std::size_t r = 0; r < o.ranges.size(); ++r)
+					if (!(o.ranges[r] == n.ranges[r]))
+						return fmt::format("class {} range {} (first {} capacity {}) -> (first {} capacity {})", c, r, o.ranges[r].first, o.ranges[r].capacity, n.ranges[r].first,
+							n.ranges[r].capacity);
+			}
 			for (std::size_t g = 0; g < a_old.terrainCapacity.size(); ++g)
 				if (auto d = ValueDifference("terrainCapacity", a_old.terrainCapacity[g], a_new.terrainCapacity[g]); !d.empty())
 					return fmt::format("{} (group {})", d, g);
-			for (auto d : { ValueDifference("drawCapacity", a_old.drawCapacity, a_new.drawCapacity),
-					 ValueDifference("forwardCapacity", a_old.forwardCapacity, a_new.forwardCapacity),
+			for (auto d : { ValueDifference("forwardCapacity", a_old.forwardCapacity, a_new.forwardCapacity),
 					 ValueDifference("refractionCapacity", a_old.refractionCapacity, a_new.refractionCapacity),
 					 ValueDifference("sequenceDraws", a_old.sequenceDraws, a_new.sequenceDraws), ValueDifference("sequenceDecals", a_old.sequenceDecals, a_new.sequenceDecals),
 					 ValueDifference("cullMode", a_old.cullMode, a_new.cullMode), ValueDifference("width", a_old.width, a_new.width),
@@ -510,10 +628,13 @@ namespace DCLF
 				for (std::size_t w = 0; w < a_old.push[f].size(); ++w)
 					if (a_old.push[f][w] != a_new.push[f][w])
 						return fmt::format("push face {} word {} {:#x} -> {:#x}", f, w, a_old.push[f][w], a_new.push[f][w]);
-			for (auto d : { ValueDifference("forwardFirst", a_old.forwardFirst, a_new.forwardFirst), ValueDifference("forwardCapacity", a_old.forwardCapacity, a_new.forwardCapacity),
-					 ValueDifference("forwardEntry", a_old.forwardEntry, a_new.forwardEntry) })
-				if (!d.empty())
-					return d;
+			if (auto d = ValueDifference("forwardEntry", a_old.forwardEntry, a_new.forwardEntry); !d.empty())
+				return d;
+			if (a_old.forwardRanges.size() != a_new.forwardRanges.size())
+				return fmt::format("forward classes {} -> {}", a_old.forwardRanges.size(), a_new.forwardRanges.size());
+			for (std::size_t c = 0; c < a_old.forwardRanges.size(); ++c)
+				if (const auto &o = a_old.forwardRanges[c], &n = a_new.forwardRanges[c]; !(o == n))
+					return fmt::format("forward class {} (first {} capacity {}) -> (first {} capacity {})", c, o.first, o.capacity, n.first, n.capacity);
 			for (std::size_t d = 0; d < a_old.faces.size(); ++d)
 				if (const auto &o = a_old.faces[d], &n = a_new.faces[d]; !(o == n))
 					return fmt::format("faces of family {} (pipeline {} signature {} groups {}) -> (pipeline {} signature {} groups {})", d, HandleText(o.pipeline),
@@ -788,7 +909,9 @@ namespace DCLF
 		const auto& latches = producer.latches;
 		if (inputs.scene)
 			RequireSceneTables(a_build, *inputs.scene, tables);
-		RequireMain(a_build, r, tables, a_make.publication.tablesGeneration);
+		// The request's catalog's set version first: the main layout's colour sub-ranges are its state classes' (RequireMain).
+		a_make.indirect = a_make.catalog ? GetIndirectState(*a_make.catalog, inputs.targetsGeneration) : IndirectState{};
+		RequireMain(a_build, r, a_make);
 		if (inputs.scene)
 			RequireIndexPool(a_build, *inputs.scene, tables, a_make.publication.tablesGeneration);
 		// The colour commit's sun cascades and local shadow light volumes, a shadow view each (the last Rebuild's candidates): the latch
@@ -800,7 +923,6 @@ namespace DCLF
 			const auto& layout = latches.main;
 			ReserveMainLatch(std::max(views, layout.cascades), std::max(views, layout.shadowVolumes), std::max(layout.buckets, request.pipelines));
 		}
-		a_make.indirect = a_make.catalog ? GetIndirectState(*a_make.catalog, inputs.targetsGeneration) : IndirectState{};
 	}
 
 	void IndirectDraws::Impl::RequireRevisionViews(RevisionMake& a_make, GrowthBuild& a_build)
@@ -844,9 +966,10 @@ namespace DCLF
 			}
 			ViewPlan plan;
 			PlanViewBuckets(traits, producer.mainLayout, &a_make.lookups, a_make.indirect, viewRevisionPipelines[v], traits.forwardPart ? std::span<const std::uint8_t>(viewForwardSlots) : std::span<const std::uint8_t>{}, plan);
-			// The forward range's table entry and count word after the buckets'.
+			// The forward range's table entries and count words after the buckets' (one per state class), and its class map's words.
 			RequireView(a_build, *view.resources, static_cast<std::uint32_t>(std::max<std::size_t>(plan.map.size(), request.pipelines)),
-				static_cast<std::uint32_t>(plan.buckets.size() + (plan.forwardCapacity ? 1 : 0)), plan.draws);
+				static_cast<std::uint32_t>(plan.buckets.size() + plan.forwardRanges.size()), plan.draws,
+				plan.forwardRanges.empty() ? 0u : static_cast<std::uint32_t>(a_make.indirect.classOf.size()));
 		}
 	}
 
@@ -863,7 +986,8 @@ namespace DCLF
 			const bool depthOnly = shape == kDepthShape;
 			if (depthOnly && r.pool)
 				PlanZBuckets(producer.mainLayout, a_make.lookups, a_make.tables, a_make.indirect, zPlans[shape]);
-			mainLatched[shape] = MainLatchedLayout(r, depthOnly, inputs.blockSizes[shape], static_cast<std::uint32_t>(zPlans[shape].calls.size()));
+			const std::uint32_t classWords = !depthOnly && a_make.classPlan ? a_make.classPlan->Words() : 0u;
+			mainLatched[shape] = MainLatchedLayout(r, depthOnly, inputs.blockSizes[shape], static_cast<std::uint32_t>(zPlans[shape].calls.size()), classWords);
 			RequireLatchedBlock(a_build, producer.latchHandles.mainLatched[shape], mainLatched[shape]);
 		}
 	}
@@ -891,6 +1015,7 @@ namespace DCLF
 			in.indirect = a_make.indirect;
 			in.zCalls = a_make.zPlans[shape].calls;
 			in.zPlan = std::make_shared<const ZBucketPlan>(std::move(a_make.zPlans[shape]));
+			in.classPlan = a_make.classPlan;
 			in.latched.copies = std::move(a_make.mainLatched[shape]);
 			if (!in.latched.copies.empty())
 				in.latched.latch = a_sealed.Latch(handles.mainLatched[shape]);
@@ -961,7 +1086,7 @@ namespace DCLF
 			for (std::size_t d = 0; traits.trees && d < Extensions::kDrawFamilies; ++d)
 				if (viewRevisionFaces[d].valid() && a_make.familyOn[d] && familyUnits[d])
 					in.faces[d] = { viewRevisionFaces[d], a_make.familyPipelines[d].drawSignature, familyUnits[d] };
-			if (!traits.depthPass || ((!in.plan.buckets.empty() || in.plan.forwardCapacity) && viewLatches.zeros))
+			if (!traits.depthPass || ((!in.plan.buckets.empty() || !in.plan.forwardRanges.empty()) && viewLatches.zeros))
 				shape = MakeViewShape(*view.resources, in);
 		}
 	}
@@ -986,8 +1111,11 @@ namespace DCLF
 		mix(a_sealed.Serial());
 		if (const auto& layout = revisions.layout) {
 			mix(layout->zBucketsLayout);
-			raw(std::array<std::uint32_t, 6>{ layout->sequenceDraws, layout->sequenceDecals, layout->terrainCapacity[0], layout->terrainCapacity[1], layout->forwardCapacity,
-				layout->refractionCapacity });
+			// The slots' capacities the state classes' sub-ranges are summed from (their classes are the pipeline set's and the lookups'),
+			// and the decal sub-ranges the sequences hold.
+			mix(layout->slotsLayout);
+			raw(std::array<std::uint32_t, 7>{ layout->sequenceDraws, layout->sequenceDecals, layout->decalRanges, layout->terrainCapacity[0], layout->terrainCapacity[1],
+				layout->forwardCapacity, layout->refractionCapacity });
 		}
 		group = kKeyPipelines;
 		mix(inputs.resourceHeap.index);

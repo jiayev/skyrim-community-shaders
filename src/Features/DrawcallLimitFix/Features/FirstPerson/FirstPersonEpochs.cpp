@@ -162,7 +162,7 @@ namespace DCLF::Features::FirstPerson
 		// The palette rows classes' first-person writes (Features/Particles' particle members), counted by Core's FrameValues.
 		const auto particles = FrameValues::TakeFirstPersonPaletteStats();
 		text += fmt::format("[DCLF] first person's forward part (T7e): {:.1f} forward members a frame (blended Lighting, effects, particles; the main set's pipelines "
-							"through the colour signature, sorted back to front); particle members: {} expansions of {} particles faced to the first-person eye, "
+							"through their state classes' colour signatures, sorted back to front); particle members: {} expansions of {} particles faced to the first-person eye, "
 							"their snapshots' bound at most {:.0f} units from it{}{}\n",
 			f.frames ? static_cast<double>(f.forwardMembers) / static_cast<double>(f.frames) : 0.0, particles.writes, particles.units, particles.farthest,
 			particles.farthest > 2000.0f ? " <- FIRST-PERSON PARTICLE SPACE" : "",

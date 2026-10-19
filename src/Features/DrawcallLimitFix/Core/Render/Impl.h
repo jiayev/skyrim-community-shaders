@@ -40,15 +40,21 @@ namespace DCLF
 		// The report counters: Impl/Stats.h (ImplStats).
 		/**
 		 * @brief Revision code: the main layout (RevisionProducer::mainLayout) brought up to the draw bound, and a_resources' sequences,
-		 * bucket counts and rows required to hold it. A bound over the device's max sequence count or the sort's rank field is a hard
-		 * failure.
+		 * bucket counts and rows required to hold it, with the colour segment's state class sub-ranges of a_make's set version
+		 * (a_make.classPlan) and their counts. A bound over the device's max sequence count or the sort's rank field is a hard failure.
 		 */
-		void RequireMain(GrowthBuild& a_build, Resources& a_resources, const SceneTables& a_tables, std::uint32_t a_generation);
+		void RequireMain(GrowthBuild& a_build, Resources& a_resources, RevisionMake& a_make);
+		/**
+		 * @brief RequireMain's stage: the colour segment's state class sub-ranges (PlanSetClasses) of the layout as it stands, the decal
+		 * sub-ranges it holds grown to them, their counts and the latch's class table and map reserved.
+		 */
+		void RequireMainClasses(GrowthBuild& a_build, Resources& a_resources, RevisionMake& a_make);
 		/** @brief Revision code: the index pool's room for every geometry the tables have, and a relayout of a fragmented one. */
 		void RequireIndexPool(GrowthBuild& a_build, SceneBuffers& a_scene, const SceneTables& a_tables, std::uint32_t a_generation);
-		// Revision code: the main latch's layout grown when it holds fewer cascades, volumes or buckets than asked (RequireLatches
-		// asks the set for a block of it).
-		void ReserveMainLatch(std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets = 0);
+		// Revision code: the main latch's layout grown when it holds fewer cascades, volumes, buckets, state classes or class map words
+		// than asked (RequireLatches asks the set for a block of it).
+		void ReserveMainLatch(std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets = 0, std::uint32_t a_classes = 0,
+			std::uint32_t a_classMapWords = 0);
 		/**
 		 * @brief Revision code: every latch block laid out, required of the set as its layout stands (another layout: a new block),
 		 * with the zeros the shadow and view latched copies take. Once per make, after every reserve.
@@ -159,8 +165,11 @@ namespace DCLF
 		// The views' frame state: Impl/Views.h (ImplViews).
 		/** @brief A view's graph resources, created once its targets are known (render thread). */
 		bool SetupView(ViewKind a_kind);
-		/** @brief Revision code: a view's latch layout for a_slots slots and a_buckets buckets, and its buffers required to hold them and a_draws a face. */
-		void RequireView(GrowthBuild& a_build, ViewResources& a_view, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws);
+		/**
+		 * @brief Revision code: a view's latch layout for a_slots slots, a_buckets buckets and a_classMapWords set indices in its class map,
+		 * and its buffers required to hold them and a_draws a face.
+		 */
+		void RequireView(GrowthBuild& a_build, ViewResources& a_view, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws, std::uint32_t a_classMapWords);
 		/** @brief A DepthTarget view's target, the engine's kPOST_ZPREPASS_COPY, imported (again when it changes), and its extension added. */
 		bool ImportViewDepthTarget(ViewKind a_kind);
 		/**
@@ -244,6 +253,7 @@ namespace DCLF
 		void ZeroCommitCounts(const MainCommit& a_commit);
 		void WriteDepthBuckets(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch);
 		void WriteShadowLatch(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch);
+		void WriteClassRegion(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch);
 
 		// The vertex-stage inputs the Z-prepass wrote its depth with: the colour pass tests EQUAL against it, and the engine rewrites
 		// the per-frame constants between the depth pass and the composite, so the colour pass reuses these bytes.
@@ -269,6 +279,8 @@ namespace DCLF
 		// The depth commit's scratch: its buckets (PlanZBuckets) and the zeros their count words take.
 		ZBucketPlan zBucketPlan;
 		std::vector<std::uint32_t> zBucketZeros;
+		// The colour commit's: the zeros its state class sub-ranges' count words take.
+		std::vector<std::uint32_t> classCountZeros;
 
 		// The revision producer's and the scene revisions' types and state: Impl/Producer.h (ImplProducer).
 		void ServeRevisionRequests();

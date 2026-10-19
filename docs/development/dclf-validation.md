@@ -232,6 +232,19 @@ them and read back three frames later (`Diagnostics/Draws/SetParity.cpp`).
 | first-person filing line | `<- FIRST-PERSON FILING` | A first-person slot filed under another category node. |
 | paced publication line (`Core/Scene/Coordinator/ScenePump.cpp`) | `<- PACED PUBLICATION DIFFERS` | A paced publication's tables or claims against one made at once. |
 
+Set parity also checks the main set's state classes: an indirect execution set's pipelines must agree in everything but their
+shaders, so DCLF keeps one set and signature per state class (both variants' fixed-function state and fragment interface) and draws
+each class's sub-range of every colour range with its own call. A draw in another class's sub-range would be drawn with that class's
+fixed-function state.
+
+| Line | Tag | Means |
+| --- | --- | --- |
+| `[DCLF] set class parity (version of N pipelines, N classes): ...` (logged when found) | `<- SET CLASS` | A published set version's class failed a check (`CheckClasses`, `Core/Gpu/Pipelines/MainPipelines.cpp`, after each publish): a member's class word is not its (class, index); its state differs from its class's initial pipeline's (the differing fields named: what the original single-set defect looked like); the handle written at its index is not its own pipeline's; a pipeline is in no class or two; two classes have equal state. |
+| `[DCLF] set classes (CPU, published versions so far): N checks, N failed` | `<- SET CLASS` | The count of the above over the run (`Reports/Frame.cpp`, with `CS_DCLF_STATS`). Cumulative: the failures were logged when found. It checks the keys the builds made (`PipelineDesc::State`); a field the key leaves out is invisible to it. |
+| `[DCLF] set classes (GPU, colour epoch N): N classes, N sub-ranges, N draws checked (...), N without a class sub-range, N over capacity; N checks, N failed` | `<- SET CLASS; first: ...` | Every 300th colour epoch (`Diagnostics/Draws/SetClassParity.cpp`): the sequences, count words and `classCounts` copied after the epoch and read without waiting a few colour epochs later, against the shape's class plan and indirect state. Per (range, class) sub-range, every sequence below its count with an index count (decals: the group's count; forward: the staging half and the sorted half) names a pipeline its class's sets hold, at the index one of its object's inputs' set indices maps to in that class; no count is past its capacity, no class without a sub-range counted a draw, the unplanned and overflow words are 0, the plan matches the shape (classes, map, sizes), and with DrawSort each class's main sub-range is in pipeline order. It does not cover the first-person view's forward range. |
+| `[DCLF] set classes (GPU, colour epoch N): the readback could not be mapped ...` | none | The copy was still in flight after 60 colour epochs, or a map failed: that window is not checked. |
+| `[DCLF] state classes (sampled frame): N colour draws without a class sub-range, N past their sub-range's capacity` | `<- SET CLASS DROP` | Every run with `CS_DCLF_STATS`, from the culling counters: BuildDraws dropped a colour draw (each one an object not drawn) for want of a class map word or sub-range, or past its sub-range's capacity. |
+
 Set parity also gates, together with persistent parity, the LOD gates' observers and the view parities below.
 
 ### Persistent parity

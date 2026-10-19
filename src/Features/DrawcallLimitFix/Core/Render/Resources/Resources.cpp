@@ -194,6 +194,7 @@ namespace DCLF::Draws
 				for (std::uint32_t i = 0; i < slots; ++i)
 					passStats->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(PassStats::kKinds) * PassStats::kFields * sizeof(std::uint64_t)));
 				passStats->written.resize(slots);
+				PassStats::live.store(passStats.get());  // TEMPORARY (decal loss)
 				a_state.passStats = std::move(passStats);
 				logger::info("[DCLF] pass statistics on: {} frame slots", slots);
 			}
@@ -352,9 +353,12 @@ namespace DCLF
 		// sized to the layout exactly (its ranges grow by doubling).
 		const bool smallTables = SwitchValue(Switch::TableStart) == "small";
 		const MainLayout firstLayout = InitialMainLayout();
-		a_state.sequences = MakeVersioned(CreateWords(SequenceSlots(firstLayout.sequenceDraws, firstLayout.sequenceDecals) * sizeof(DrawSequence) / 4, true, "cs.dclf.sequences"),
+		a_state.sequences = MakeVersioned(CreateWords(SequenceSlots(firstLayout.sequenceDraws, firstLayout.sequenceDecals, firstLayout.decalRanges) * sizeof(DrawSequence) / 4,
+											  true, "cs.dclf.sequences"),
 			{ .extent = { 0, sizeof(DrawSequence), 4 }, .policy = org::services::GrowthPolicy::Headroom(0) });
 		a_state.count = CreateWords(kCountWords, true, "cs.dclf.draw-count");
+		// The state class sub-ranges' count words, required to the class plan's (RequireMainClasses).
+		a_state.classCounts = MakeVersioned(CreateWords(64, true, "cs.dclf.class-counts"), { .extent = { 0, 4, 4 }, .policy = org::services::GrowthPolicy::Doubling(64) });
 		// One word per object: the depth segment's culling verdict, so the colour segment draws exactly the same set. The per-object
 		// buffers start at the scene's objects (and grow with them: RequireSceneTables).
 		const std::uint32_t objects = InitialObjectUnits();
@@ -581,12 +585,24 @@ namespace DCLF
 		return true;
 	}
 
-	void IndirectDraws::Impl::ReserveMainLatch(std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets)
+	void IndirectDraws::Impl::ReserveMainLatch(std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets, std::uint32_t a_classes,
+		std::uint32_t a_classMapWords)
 	{
 		auto& latches = producer.latches;
 		auto& layout = latches.main;
-		if (!latches.mainLaidOut || (a_cascades <= layout.cascades && a_shadowVolumes <= layout.shadowVolumes && a_buckets <= layout.buckets))
+		if (!latches.mainLaidOut || (a_cascades <= layout.cascades && a_shadowVolumes <= layout.shadowVolumes && a_buckets <= layout.buckets && a_classes <= layout.classes &&
+										a_classMapWords <= layout.classMapWords))
 			return;
+		if (a_classes > layout.classes) {
+			const std::uint32_t grown = org::services::GrowthPolicy::Doubling(16).NextAs(layout.classes, a_classes);
+			logger::info("[DCLF] state classes in the main latch: {} grown to {}", layout.classes, grown);
+			layout.classes = grown;
+		}
+		if (a_classMapWords > layout.classMapWords) {
+			const std::uint32_t grown = org::services::GrowthPolicy::Doubling(256).NextAs(layout.classMapWords, a_classMapWords);
+			logger::info("[DCLF] set indices in the main latch's class map: {} grown to {}", layout.classMapWords, grown);
+			layout.classMapWords = grown;
+		}
 		if (a_buckets > layout.buckets) {
 			const std::uint32_t grown = org::services::GrowthPolicy::Doubling(64).NextAs(layout.buckets, a_buckets);
 			logger::info("[DCLF] Z-prepass buckets in the main latch: {} grown to {}", layout.buckets, grown);
@@ -750,7 +766,7 @@ namespace DCLF
 				return fail("frame constants have no device address");
 			MatchViewFrameBuffers(*state, resources->frameBuffers);
 		}
-		// The forward part draws through the main colour signature with an explicit preprocess, as ForwardDrawPass.
+		// The forward part draws through the main set's state classes' colour signatures with an explicit preprocess, as ForwardDrawPass.
 		if (traits.forwardPart)
 			state->preprocessForward = PreprocessStates::Create(device, host->FrameSlots(), fmt::format("the {} forward part", traits.name).c_str());
 		v.resources = std::move(state);

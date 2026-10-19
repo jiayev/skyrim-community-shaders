@@ -67,8 +67,10 @@ namespace DCLF
 
 	namespace
 	{
-		// The main latch's regions the depth commits wrote the snapshot's bucket map and tables into (render thread).
+		// The main latch's regions the depth commits wrote the snapshot's bucket map and tables into, and those the colour commits wrote
+		// the revision's state class table and map into (render thread).
 		Draws::LatchRegionsHeld mainBucketRegions;
+		Draws::LatchRegionsHeld mainClassRegions;
 	}
 
 	// CommitMainPayload's locals, shared by its stages (render thread, one commit).
@@ -293,9 +295,6 @@ namespace DCLF
 				if (const auto nearTest = Extensions::NearTwin().nearTest)
 					nearTest(a_latch.terrainNear);
 				Diagnostics::Notify(Diagnostics::CullLatchWritten{ a_latch, true });
-			} else {
-				a_latch.terrainCapacity[0] = shape.terrainCapacity[0];
-				a_latch.terrainCapacity[1] = shape.terrainCapacity[1];
 			}
 			// Both segments read LOD skin levels from the same fade states (the cull binding RootStates: the frame's read parity).
 			a_latch.fadeStatesIndex = CullBindingIndex(Api::CullBindingSlot::RootStates, *resources->scene, frameNumber, a_commit.adopted);
@@ -425,6 +424,12 @@ namespace DCLF
 			latched(epochResources->count, kZeroCounts, 4 * sizeof(std::uint32_t), kCountForwardWord * sizeof(std::uint32_t));
 			// The refraction range's count and culling tallies.
 			latched(epochResources->count, kZeroCounts, 4 * sizeof(std::uint32_t), kCountRefractionWord * sizeof(std::uint32_t));
+			// The draws dropped for want of a state class sub-range, and every class sub-range's count (the revision's class plan's).
+			latched(epochResources->count, kZeroCounts, 2 * sizeof(std::uint32_t), kCountClassUnplannedWord * sizeof(std::uint32_t));
+			if (const auto words = static_cast<std::uint32_t>(a_commit.shape.classes.size()) * kClassRanges; words && epochResources->classCounts) {
+				classCountZeros.assign(words, 0u);
+				latched(epochResources->classCounts, classCountZeros.data(), std::size_t(words) * sizeof(std::uint32_t), 0);
+			}
 		}
 	}
 
@@ -484,6 +489,26 @@ namespace DCLF
 		a_latch.sunCascadeOffset = static_cast<std::uint32_t>(latchBlock.Offset(a_latchSlot)) + MainLatchLayout::CascadeOffset();
 		a_latch.localShadowOffset = static_cast<std::uint32_t>(latchBlock.Offset(a_latchSlot)) + layout.ShadowVolumeOffset();
 		Diagnostics::Notify(Diagnostics::CullLatchWritten{ a_latch, false });
+	}
+
+	// The colour segment's state class table and class map (the revision shape's class plan) in the latch: what BuildDraws routes every
+	// colour draw by, its set index to its class and index there, and its slot to that class's sub-range. Written into this frame slot's
+	// region only when it holds another revision shape's; none without a plan (every colour draw dropped, counted).
+	void IndirectDraws::Impl::WriteClassRegion(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch)
+	{
+		const auto& latchBlock = a_commit.latchBlock;
+		const auto& layout = a_commit.latchLayout;
+		const auto& plan = a_commit.shape.classPlan;
+		if (!plan || plan->classes.size() > layout.classes || plan->map.size() > kClassHeaderWords + layout.classMapWords)
+			return;  // never: the revision reserved its layout for its plan (RequireMainClasses)
+		auto& held = mainClassRegions.Of(a_latchSlot, a_commit.shape.latch, a_commit.revisionShape, 0);
+		if (!Draws::LatchRegionsHeld::Hold(held, 0)) {
+			LatchWrite(latchBlock, "main class table", a_latchSlot, layout.ClassTableOffset(), std::as_bytes(std::span(plan->table)));
+			LatchWrite(latchBlock, "main class map", a_latchSlot, layout.ClassMapOffset(), std::as_bytes(std::span(plan->map)));
+		}
+		const auto region = static_cast<std::uint32_t>(latchBlock.Offset(a_latchSlot));
+		a_latch.classTableOffset = region + layout.ClassTableOffset();
+		a_latch.classMapOffset = region + layout.ClassMapOffset();
 	}
 
 	bool IndirectDraws::Impl::CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, const MainInputs& a_frame, MainPayload& a_payload,
@@ -560,8 +585,10 @@ namespace DCLF
 		const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
 		if (depthOnly && a_resources->pool)
 			WriteDepthBuckets(commit, latchSlot, latch);
-		if (!depthOnly)
+		if (!depthOnly) {
 			WriteShadowLatch(commit, latchSlot, latch);
+			WriteClassRegion(commit, latchSlot, latch);
+		}
 		LatchWriteValue(latchBlock, "main culling latch", latchSlot, 0, latch);
 		// What a view drawing this frame's depth commit checks it against (TakeViewInputs): its frame and adopted set.
 		if (depthOnly)

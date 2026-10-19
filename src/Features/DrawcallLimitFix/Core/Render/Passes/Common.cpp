@@ -141,10 +141,12 @@ namespace DCLF::Draws
 					a_builder.ShaderResource(org::ResourceIdentifier(graphBuffers[b].resources[r].c_str()), noViews);
 	}
 
-	void RecordPreprocessedDraw(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,
-		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::CommandSignatureHandle a_signature,
-		rhi::ResourceHandle a_arguments, std::uint64_t a_argumentsOffset, rhi::ResourceHandle a_counts, std::uint64_t a_countOffset, std::uint32_t a_capacity)
+	void RecordPreprocessedDraws(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,
+		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::ResourceHandle a_arguments,
+		std::span<const IndirectCall> a_calls)
 	{
+		if (a_calls.empty())
+			return;
 		auto& commands = a_recording.Commands();
 		auto beginDrawPass = [&](rhi::CommandList& a_list) {
 			a_list.SetDescriptorHeaps(a_resourceHeap, a_samplerHeap);
@@ -153,14 +155,24 @@ namespace DCLF::Draws
 			a_list.BindLayout(a_layout);
 			a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_push.data());
 		};
-		// Preprocess before the pass, with the execution's exact state (as MainOpaquePass).
+		// Every call preprocessed before the pass, with the execution's exact state (as MainOpaquePass), then executed in order.
 		auto& state = a_preprocess.Begin(a_recording.FrameSlot());
 		beginDrawPass(state);
-		commands.PreprocessIndirect(state, a_signature, a_arguments, a_argumentsOffset, a_counts, a_countOffset, a_capacity);
+		for (const auto& call : a_calls)
+			commands.PreprocessIndirect(state, call.signature, a_arguments, call.argumentsOffset, call.counts, call.countOffset, call.capacity);
 		state.EndPass();
 		state.End();
 		beginDrawPass(commands);
-		commands.ExecuteIndirect(a_signature, a_arguments, a_argumentsOffset, a_counts, a_countOffset, a_capacity);
+		for (const auto& call : a_calls)
+			commands.ExecuteIndirect(call.signature, a_arguments, call.argumentsOffset, call.counts, call.countOffset, call.capacity);
 		commands.EndPass();
+	}
+
+	void RecordPreprocessedDraw(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,
+		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::CommandSignatureHandle a_signature,
+		rhi::ResourceHandle a_arguments, std::uint64_t a_argumentsOffset, rhi::ResourceHandle a_counts, std::uint64_t a_countOffset, std::uint32_t a_capacity)
+	{
+		const IndirectCall call{ a_signature, a_argumentsOffset, a_counts, a_countOffset, a_capacity };
+		RecordPreprocessedDraws(a_recording, a_preprocess, a_begin, a_resourceHeap, a_samplerHeap, a_layout, a_push, a_arguments, std::span(&call, 1));
 	}
 }

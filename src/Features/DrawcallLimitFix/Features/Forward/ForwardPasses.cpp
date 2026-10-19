@@ -30,7 +30,7 @@ namespace DCLF::Draws
 
 	/*
 	 * The forward epoch's draws (dclf-architecture.md, "The forward epoch"). The colour BuildDraws appends visible forward draws (kObjectForward) with their
-	 * view depth to the staging half; Core's ForwardSortPass (colour epoch) sorts them back to front into the sorted half; ForwardDrawPass
+	 * view depth to their state class's staging half; Core's ForwardSortPass (colour epoch) sorts each class's back to front into its sorted half; ForwardDrawPass
 	 * draws it in the forward epoch (the engine's blended draw, FUN_1414b39d0, after the deferred composite) on the colour pass's
 	 * attachments; forward pipelines write the main target alone.
 	 */
@@ -50,7 +50,8 @@ namespace DCLF::Draws
 				bindings.targets[i] = a_builder.RenderTarget(resources->native[i]).View();
 			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
 			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
-			bindings.count = a_builder.IndirectArguments(resources->count);
+			// Each state class's forward sub-range's count (its classCounts word).
+			bindings.classCounts = a_builder.IndirectArguments(*resources->classCounts).Resource();
 			// The face shapes' second vertex stream, pulled by address (DCLF_PULLED_VERTICES).
 			if (resources->scene->vertexStream)
 				a_builder.ShaderResource(*resources->scene->vertexStream, noViews);
@@ -99,12 +100,16 @@ namespace DCLF::Draws
 			begin.colors = { colors.data(), a_prepared.targetCount };
 			begin.debugName = "DCLF forward";
 			const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
-			const auto count = a_recording.Resolve(a_bindings.count).GetHandle();
-			// The sorted half, counted by the forward count word.
-			const std::uint64_t arguments = (ForwardStagingSlot(frame) + frame.forwardCapacity) * sizeof(DrawSequence);
-			const std::uint64_t countOffset = std::uint64_t(kCountForwardWord) * sizeof(std::uint32_t);
-			RecordPreprocessedDraw(a_recording, *a_prepared.preprocess, begin, frame.resourceHeap, frame.samplerHeap, frame.indirect.layout, a_prepared.framePushWords,
-				frame.indirect.signatures[kColorVariant], sequences, arguments, count, countOffset, frame.forwardCapacity);
+			const auto classCounts = a_recording.Resolve(a_bindings.classCounts).GetHandle();
+			// Per state class with a forward sub-range, its sorted half (after its staging half), counted by its classCounts word, with its
+			// class's signature; the classes in creation order. A class's blended draws keep the engine's order among themselves.
+			std::vector<IndirectCall> calls;
+			for (std::uint32_t c = 0; c < frame.classes.size() && c < frame.indirect.classes.size(); ++c)
+				if (const auto& range = frame.classes[c].ranges[kClassRangeForward]; range.capacity)
+					calls.push_back({ frame.indirect.classes[c].signatures[kColorVariant], (std::uint64_t(range.first) + range.capacity) * sizeof(DrawSequence), classCounts,
+						std::uint64_t(ClassCountWord(c, kClassRangeForward)) * sizeof(std::uint32_t), range.capacity });
+			RecordPreprocessedDraws(a_recording, *a_prepared.preprocess, begin, frame.resourceHeap, frame.samplerHeap, frame.indirect.layout, a_prepared.framePushWords, sequences,
+				calls);
 		}
 
 	private:

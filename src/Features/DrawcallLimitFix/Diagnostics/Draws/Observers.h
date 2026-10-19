@@ -55,6 +55,8 @@ namespace DCLF::Diagnostics
 	void CheckBuildParity(const MainEpochDone& a_epoch);
 	// CS_DCLF_SET_PARITY (SetParity.cpp).
 	void CheckSetParity(const MainEpochDone& a_epoch);
+	// CS_DCLF_SET_PARITY: the colour epoch's state class sub-ranges against its shape's class plan (SetClassParity.cpp).
+	void CheckSetClassParity(const MainEpochDone& a_epoch);
 	// CS_DCLF_PERSISTENT_PARITY: the frame values' rows and palettes against the engine's (FrameValuesParity.cpp; render thread, waits for
 	// the frame's producer). a_fresh: the plan the walk made this frame (its slots' rows are the next frame's).
 	void CheckFrameValues(const SceneTables& a_tables, const PlacementPlan* a_fresh);
@@ -95,6 +97,10 @@ namespace DCLF::Diagnostics
 	void TraceMainEpoch(const MainEpochOutcome& a_outcome);
 	void TraceAdoptedBound(const AdoptedBound& a_bound);
 	void TraceColourCounts(const Draws::CounterReadback& a_readback, std::uint32_t a_slot);
+	// TEMPORARY (decal loss): CS_DCLF_DECAL_DUMP=<frame>: every decal's pixel-stage inputs, logged once (DecalDump.cpp). InstallDecalDump
+	// subscribes DumpDecals (MainEpochDone) and the Present count when the switch is set.
+	void DumpDecals(const MainEpochDone& a_epoch);
+	void InstallDecalDump();
 	// CS_DCLF_PERSISTENT_PARITY: the catalog's constant tables against ShaderCache's (ConstantTables.cpp).
 	void CheckConstantTables(const RE::BSShader& a_lighting, const Lookups& a_lookups);
 }

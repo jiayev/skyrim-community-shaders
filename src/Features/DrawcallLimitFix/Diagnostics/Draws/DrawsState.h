@@ -77,12 +77,14 @@ namespace DCLF::Diagnostics
 		// CS_DCLF_BUILD_PARITY: GPU output copied to staging after an epoch, compared a few frames later.
 		struct ParityReadback
 		{
-			winrt::com_ptr<ID3D11Buffer> sequences, count;
+			winrt::com_ptr<ID3D11Buffer> sequences, count, classCounts;
+			// The templates, their pipeline index their set index's index in its state class (as BuildDrawsCS stores it: classOf).
 			std::vector<DrawSequence> expected;
 			// Per decal group, by slot (a culled slot reads back with index count zero, otherwise identical).
 			std::array<std::vector<DrawSequence>, kDecalGroups> expectedDecals;
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the buffer's ranges when copied
-			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
+			// The shape's state class sub-ranges (PassFrame::classes) whose sequences are compared, by class.
+			std::vector<SetClassRanges> classes;
 			std::uint32_t framesLeft = 0;
 			// The row tables of the payload the epoch committed with (PayloadVersions' PipelineRows and MaterialRows): the bases the
 			// CPU's table-relative row offsets were placed at.
@@ -95,7 +97,7 @@ namespace DCLF::Diagnostics
 		};
 		std::optional<ParityReadback> parity;
 		std::uint32_t parityEpochs = 0;
-		WrappedVersion paritySequences;
+		WrappedVersion paritySequences, parityClassCounts;
 		// The main epochs' payloads, newest last (every main epoch while the build parity is on; epoch: the colour epochs counted
 		// then): where a sequence's row address outside its epoch's tables came from.
 		struct ParityPayloadSeen
@@ -106,6 +108,28 @@ namespace DCLF::Diagnostics
 		};
 		std::array<ParityPayloadSeen, 32> parityPayloads{};
 		std::uint32_t parityPayloadsSeen = 0;
+
+		// CS_DCLF_SET_PARITY (SetClassParity.cpp): a colour epoch's state class sub-ranges, copied to staging after it and read a few colour
+		// epochs later (never waiting: a copy still in flight is tried again the next epoch), against the shape it recorded with.
+		struct SetClassReadback
+		{
+			winrt::com_ptr<ID3D11Buffer> sequences, count, classCounts;
+			// The shape's sub-ranges (PassFrame::classes) and class plan (the latch's table and map: SetClassPlan), and its indirect state's
+			// pipelines per class (each class's execution sets hold [0, pipelines)) and class words (IndirectState::classOf).
+			std::vector<SetClassRanges> classes;
+			std::shared_ptr<const SetClassPlan> plan;
+			std::vector<std::uint32_t> pipelines, classOf;
+			// By object: the set indices of the epoch's payload's inputs naming it (its resident region's and its list's; not refraction's,
+			// a plain draw): what each of its draws' class and index must come from.
+			ankerl::unordered_dense::map<std::uint32_t, std::vector<std::uint32_t>> setsOf;
+			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
+			bool sorted = false;  // the colour draws went through DrawSort: each class's main sub-range is in pipeline order
+			std::uint32_t framesLeft = 0, tries = 0;
+			std::uint32_t armedEpoch = 0;  // setClassEpochs when copied
+		};
+		std::optional<SetClassReadback> setClass;
+		std::uint32_t setClassEpochs = 0;
+		WrappedVersion setClassSequences, setClassCounts;
 
 		// The colour commit's last culling latch (sun test), and the depth commit's last terrain near test.
 		BuildDrawsLatch sunUpload{};

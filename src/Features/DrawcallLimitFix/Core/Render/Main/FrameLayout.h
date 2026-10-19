@@ -30,6 +30,23 @@
 namespace DCLF::Draws
 {
 	struct ZBucketPlan;
+	struct SetClassPlan;
+	/**
+	 * @brief A state class's sub-ranges of the colour segment's ranges (GpuLayouts.h, kClassRangeMain; SetClassPlan): per range its first
+	 * sequence slot and capacity (0: the class draws nothing there, and no call is made), and its sort keys (its first, and its size: the
+	 * pipelines the revision's set version holds of it).
+	 */
+	struct SetClassRanges
+	{
+		struct Range
+		{
+			std::uint32_t first = 0, capacity = 0;
+			bool operator==(const Range&) const = default;
+		};
+		std::array<Range, kClassRanges> ranges{};
+		std::uint32_t keyBase = 0, size = 0;
+		bool operator==(const SetClassRanges&) const = default;
+	};
 	/**
 	 * @brief What one segment's passes record against: everything their recorded commands depend on,
 	 * and nothing that changes every frame. The frame's own values (the counts, the view-projection, the
@@ -40,13 +57,14 @@ namespace DCLF::Draws
 	struct PassFrame
 	{
 		std::uint64_t generation = 0;
-		// ExecuteIndirect max counts (GrowCapacity, within the buffer's ranges): the phase-1/colour draws, and each decal group.
-		std::uint32_t drawCapacity = 0;
-		std::array<std::uint32_t, kDecalGroups> decalCapacity{};
-		// Each terrain group's (the colour segment's; MainLayout::terrainCapacity), group 1 from phase 2's base, group 2 after it.
+		// The colour segment's state classes' sub-ranges (SetClassPlan), by class in creation order: what its calls draw, each with its
+		// class's signature, and their max counts. None in the depth segment (its draws are bucketed plain draws).
+		std::vector<SetClassRanges> classes;
+		// Each terrain group's range (the colour segment's; MainLayout::terrainCapacity), group 1 from phase 2's base, group 2 after it,
+		// holding its classes' sub-ranges.
 		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
-		// Each half of the forward range (the colour segment's and the forward epoch's; MainLayout::forwardCapacity), after the
-		// terrain groups' ranges: the staging half BuildDraws appends to, then the sorted half the forward epoch draws.
+		// Each half of the forward range in all (the colour segment's and the forward epoch's; MainLayout::forwardCapacity), after the
+		// terrain groups' ranges: per class a staging half BuildDraws appends to, then a sorted half the forward epoch draws.
 		std::uint32_t forwardCapacity = 0;
 		// The refraction range (the colour segment's and the forward epoch's; MainLayout::refractionCapacity), after the
 		// forward halves (RefractionSlot).
@@ -79,14 +97,16 @@ namespace DCLF::Draws
 		std::vector<ZCall> zCalls;
 		// The commit's per-frame values the epoch's first pass copies from the latch (LatchedCopiesPass).
 		LatchedList latched;
-		// Not compared (the latch block's layout, and the bucket plan zCalls are the calls of): what a commit writing its values
-		// into this shape writes them against - a scene revision's shape, which that commit did not make.
+		// Not compared (the latch block's layout, and the bucket plan zCalls are the calls of, the class plan classes are the sub-ranges
+		// of): what a commit writing its values into this shape writes them against - a scene revision's shape, which that commit did not
+		// make.
 		MainLatchLayout latchLayout;
 		std::shared_ptr<const ZBucketPlan> zPlan;
+		std::shared_ptr<const SetClassPlan> classPlan;
 
 		bool SameShape(const PassFrame& o) const
 		{
-			return zCalls == o.zCalls && latched == o.latched && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity &&
+			return zCalls == o.zCalls && latched == o.latched && classes == o.classes &&
 			       terrainCapacity == o.terrainCapacity && forwardCapacity == o.forwardCapacity && refractionCapacity == o.refractionCapacity &&
 			       sequenceDraws == o.sequenceDraws &&
 			       sequenceDecals == o.sequenceDecals && cullMode == o.cullMode &&
@@ -136,17 +156,17 @@ namespace DCLF::Draws
 	};
 	constexpr std::uint32_t kSortSequencesConstantWords = sizeof(SortSequencesConstants) / 4;
 	/**
-	 * @brief ForwardSortCS.hlsl's push constants: the forward range's staging half (BuildDraws appended the visible forward draws
+	 * @brief ForwardSortCS.hlsl's push constants: a state class's forward staging half (BuildDraws appended its visible forward draws
 	 * there, each with its view depth in its firstInstance word) and its sorted half, which the forward epoch draws.
 	 */
 	struct ForwardSortConstants
 	{
-		std::uint32_t sequencesIndex;  // RWByteAddressBuffer: the main sequences
-		std::uint32_t countIndex;      // ByteAddressBuffer: the count words (kCountForwardWord)
+		std::uint32_t sequencesIndex;  // RWByteAddressBuffer: the main sequences (or a view's)
+		std::uint32_t countIndex;      // ByteAddressBuffer: the count words (the classCounts words, a view's bucket counts)
 		std::uint32_t stagingBase;     // the staging half's first slot
-		std::uint32_t capacity;        // each half's slots (PassFrame::forwardCapacity)
+		std::uint32_t capacity;        // each half's slots (the class's forward sub-range's)
 		std::uint32_t sequenceStride;  // bytes (sizeof(DrawSequence))
-		// With kCountOffset in options, the count is the word at countOffset bytes (the first-person forward range's bucket count).
+		// With kCountOffset in options, the count is the word at countOffset bytes (the class's: ClassCountWord, a view's forward entry).
 		std::uint32_t countOffset = 0;
 		std::uint32_t options = 0;
 		std::uint32_t padding = 0;
@@ -154,7 +174,7 @@ namespace DCLF::Draws
 	};
 	constexpr std::uint32_t kForwardSortConstantWords = sizeof(ForwardSortConstants) / 4;
 	constexpr std::uint32_t kForwardSortGroup = 64;  // ForwardSortCS.hlsl's
-	/** @brief The forward range's staging half's first slot in a colour shape's sequences (after phase 2's terrain ranges). */
+	/** @brief The forward range's first slot in a colour shape's sequences (after phase 2's terrain ranges): its first class's staging half. */
 	inline std::uint64_t ForwardStagingSlot(const PassFrame& a_frame)
 	{
 		return std::uint64_t(a_frame.sequenceDraws) + a_frame.terrainCapacity[0] + a_frame.terrainCapacity[1];
@@ -165,16 +185,16 @@ namespace DCLF::Draws
 		return ForwardStagingSlot(a_frame) + 2ull * a_frame.forwardCapacity;
 	}
 	constexpr std::uint32_t kSortSequencesGroup = 64;  // SortSequencesCS.hlsl's
-	// A sort's rank word holds the pipeline in its top 12 bits and the rank below (BuildDrawsCS.hlsl, kSortRankBits): a
+	// A sort's rank word holds the sort key in its top 12 bits and the rank below (BuildDrawsCS.hlsl, kSortRankBits): a
 	// draw range past this is a hard failure until the ranks get a word of their own.
 	constexpr std::uint32_t kSortRankLimit = 1u << 20;
 	static_assert(DrawPipelines::kMaxPipelines <= (1u << 12));
 
 	/**
-	 * @brief The sort by pipeline (DrawSort) of phase 1's and the colour segment's sequences. BuildDraws stages the sequences
-	 * and counts them per pipeline, PrefixSum turns the counts into each pipeline's first slot, and SortSequencesPass
-	 * (SortSequencesCS.hlsl) writes the sequences grouped by pipeline. The counts are zeroed once, by the first commit
-	 * (countsZeroed), and after that by the scan that reads them.
+	 * @brief The sort by pipeline (DrawSort) of the colour segment's sequences. BuildDraws stages the sequences and counts them per
+	 * sort key (a state class's keys contiguous: its first key plus the pipeline's index in it), PrefixSum turns the counts into each
+	 * key's first slot, and SortSequencesPass (SortSequencesCS.hlsl) writes each class's sequences grouped by pipeline into its main
+	 * sub-range. The counts are zeroed once, by the first commit (countsZeroed), and after that by the scan that reads them.
 	 *
 	 * Not the shadow views': sorting them (a part of these buffers per view slot, one scan over all of them) gained no measurable
 	 * draw time, and the scan over every view's counts costs more than it saves.

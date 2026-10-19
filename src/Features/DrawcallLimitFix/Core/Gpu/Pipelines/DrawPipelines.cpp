@@ -277,6 +277,10 @@ namespace DCLF
 		result.failed = counters.failed.load(std::memory_order_relaxed);
 		result.zPipelines = counters.zPipelines.load(std::memory_order_relaxed);
 		result.zDepthOnly = counters.zDepthOnly.load(std::memory_order_relaxed);
+		result.stateClasses = impl->lane.stateClasses.load(std::memory_order_relaxed);
+		result.largestClass = impl->lane.largestClass.load(std::memory_order_relaxed);
+		result.classParityChecks = impl->lane.classParityChecks.load(std::memory_order_relaxed);
+		result.classParityMismatches = impl->lane.classParityMismatches.load(std::memory_order_relaxed);
 		result.setPublishes = counters.setPublishes.load(std::memory_order_relaxed);
 		result.setWaits = counters.setWaits.load(std::memory_order_relaxed);
 		for (std::size_t f = 0; f < Extensions::kProgramFamilies; ++f) {

@@ -17,16 +17,19 @@
 // per tile rather than each thread on its own. A much larger class would take a radix or bitonic sort here; the contract (staging half
 // in, sorted half out, the count word) stays.
 //
-// The first-person view's forward range (IndirectDraws: FirstPerson.cpp) is sorted by the same program, its count the range's bucket
-// count word (kSortCountOffset), its keys staged by the first-person BuildDraws with the first-person camera's view depth.
+// The forward range is split by state class (GpuLayouts.h, kClassRangeForward): each class's staging and sorted halves are their own,
+// sorted by one dispatch of this program each, its count the class's word (kSortCountOffset): the colour segment's classCounts word,
+// the first-person view's forward range's class entry's bucket count word (its keys staged by the first-person BuildDraws with the
+// first-person camera's view depth). A class's blended draws keep the engine's order among themselves; across classes the order is the
+// classes' (each class's call draws after the one before).
 
 // Must match ForwardSortConstants (Draws/IndirectDraws/Main/FrameLayout.h).
 cbuffer ForwardSortConstants : register(b0)
 {
 	uint SequencesIndex;  // RWByteAddressBuffer: DrawSequence[], the main sequences
-	uint CountIndex;      // ByteAddressBuffer: the count words (kCountForward: the draws appended to the staging half)
+	uint CountIndex;      // ByteAddressBuffer: the count words (with kSortCountOffset, the class's: its draws appended to the staging half)
 	uint StagingBase;     // the staging half's first slot; the sorted half follows it, Capacity slots on
-	uint Capacity;        // each half's slots (PassFrame::forwardCapacity)
+	uint Capacity;        // each half's slots (the class's forward sub-range's capacity)
 	uint SequenceStride;  // bytes (sizeof(DrawSequence))
 	uint CountOffset;     // with kSortCountOffset, the byte offset of the count word in CountIndex (the first-person forward range's bucket count)
 	uint Options;         // kSortCountOffset

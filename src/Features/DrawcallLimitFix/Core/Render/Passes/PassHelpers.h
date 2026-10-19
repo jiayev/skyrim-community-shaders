@@ -77,17 +77,21 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief A forward range's sort, back to front (ForwardSortCS.hlsl), as of the shape its preparation is for: the staging half's first
-	 * slot and capacity (each half's), and where its count is. No program: nothing to sort.
+	 * @brief A forward range's sort, back to front (ForwardSortCS.hlsl), as of the shape its preparation is for: per state class with a
+	 * forward sub-range (GpuLayouts.h, kClassRangeForward), its staging half's first slot and capacity (each half's) and its count word's
+	 * byte offset, a dispatch each. No program: nothing to sort.
 	 */
 	struct ForwardSortSource
 	{
+		struct Range
+		{
+			std::uint32_t stagingBase = 0, capacity = 0, countOffset = 0;
+		};
 		std::uint64_t generation = 0;
 		std::shared_ptr<const ComputeProgram> program;
-		std::uint32_t stagingBase = 0, capacity = 0, countOffset = 0;
-		bool countAtOffset = false;  // the count is the word at countOffset, not the main count buffer's forward word
+		std::vector<Range> ranges;
 	};
-	/** @brief The sort of a forward range of a_sequences (the main one, a view's), its count read from a_counts. */
+	/** @brief The sort of a forward range of a_sequences (the main one, a view's), its classes' counts read from a_counts. */
 	std::shared_ptr<org::RenderPass> MakeForwardSortPass(Versioned a_sequences, LatchedTarget a_counts, std::function<ForwardSortSource(const org::PassPrepareContext&)> a_source);
 
 	/** @brief The rows' strides into BuildDraws' constants (BuildDrawsCS: RowsOf; the addresses are the latch's: PayloadLatch). */

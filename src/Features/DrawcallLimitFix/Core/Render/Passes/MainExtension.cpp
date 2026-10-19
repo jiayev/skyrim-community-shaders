@@ -20,6 +20,8 @@ namespace DCLF::Draws
 		for (const auto& counts : a_resources.zBucketCounts)
 			if (counts)
 				out.push_back({ nullptr, counts });
+		if (a_resources.classCounts)
+			out.push_back({ nullptr, a_resources.classCounts });
 		for (const auto& frameBuffer : a_resources.frameBuffers)
 			if (frameBuffer.copy)
 				out.push_back({ frameBuffer.copy, nullptr });
@@ -44,6 +46,7 @@ namespace DCLF::Draws
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.sequences"), resources->sequences);
 			RegisterSceneBuffers(a_graph, *resources->scene);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.draw-count"), resources->count);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.class-counts"), resources->classCounts);
 			// Read by address; readers declare it so the graph orders them after the latched copies.
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.frame-constants"), resources->frameConstants);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.z.bucket-counts"), resources->zBucketCounts[0]);

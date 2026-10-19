@@ -58,9 +58,26 @@ namespace DCLF::Draws
 	void DeclareFrameBuffers(org::PassBuilder& a_builder, const Resources& a_resources, bool a_lights = true);
 
 	/**
-	 * @brief One explicitly preprocessed draw pass (the forward ranges'): the preprocess on the frame slot's state list, set up as the
-	 * execution is (a_begin's attachments, the layout, the topology, the frame push data, the heaps), then the execution.
+	 * @brief One device-generated call of a draw pass: its signature (a state class's: each call draws one class's sub-range of a range),
+	 * where its sequences start in the arguments, its count word and its max count.
 	 */
+	struct IndirectCall
+	{
+		rhi::CommandSignatureHandle signature{};
+		std::uint64_t argumentsOffset = 0;
+		rhi::ResourceHandle counts{};
+		std::uint64_t countOffset = 0;
+		std::uint32_t capacity = 0;
+	};
+	/**
+	 * @brief One explicitly preprocessed draw pass (the forward ranges'): the preprocess of every call on the frame slot's state list, set
+	 * up as the execution is (a_begin's attachments, the layout, the topology, the frame push data, the heaps), then the pass executing
+	 * them in order. Nothing without a call.
+	 */
+	void RecordPreprocessedDraws(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,
+		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::ResourceHandle a_arguments,
+		std::span<const IndirectCall> a_calls);
+	/** @brief RecordPreprocessedDraws of one call. */
 	void RecordPreprocessedDraw(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,
 		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::CommandSignatureHandle a_signature,
 		rhi::ResourceHandle a_arguments, std::uint64_t a_argumentsOffset, rhi::ResourceHandle a_counts, std::uint64_t a_countOffset, std::uint32_t a_capacity);
