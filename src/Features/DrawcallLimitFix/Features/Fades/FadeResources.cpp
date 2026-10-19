@@ -1,7 +1,6 @@
 // Fades' scene resources ("fade roots", Api::SceneResources): FadeStateCS's program and buffers made with the scene's tables, their graph
 // registration, each revision's requirements, the fit of the roots they hold, and the write-back's staging for each sealed set.
 
-#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
@@ -11,6 +10,9 @@
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 
 #include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -28,7 +30,7 @@ namespace DCLF::Features::Fades
 		Api::SceneResourcesId sceneId;  // install
 		// The revision inputs' words (postInputs): the event list's ask, so a growth is a new revision's inputs (a kept make, Impl::MakeRevision's
 		// reuse, runs the requirements again for it).
-		constexpr std::uint32_t kEventsWantedInput = 0, kInputWords = 1;
+		constexpr std::uint32_t kEventsWantedInput = 0, kBucketsInput = 1, kInputWords = 2;
 		// The scene's write-back (render thread: Setup, PostInputs), for the ask PostInputs posts; the scene holds it.
 		std::weak_ptr<FadeWriteBack> postedWriteBack;
 
@@ -42,6 +44,12 @@ namespace DCLF::Features::Fades
 				return nullptr;
 			}
 			auto scene = std::make_shared<FadeScene>();
+			scene->portalBatch = Portals::CreateBatch(a_setup);
+			scene->portalQueries = ComputeProgram::Load(a_setup.device, { .source = Draws::kFadeStateShader, .entry = L"PreparePortalQueries", .constantWords = Draws::kFadeStateConstantWords });
+			if (!scene->portalBatch || !scene->portalQueries) {
+				logger::error("[DCLF] Fade root portal query pipeline is not ready");
+				return nullptr;
+			}
 			scene->fadeState = std::move(fadeState);
 			// By root slot. New state is reseeded from the static rows; the frame-ahead outputs are zero-filled.
 			const std::uint32_t roots = a_setup.smallStart ? 4u : Draws::kInitialFadeRoots;
@@ -76,6 +84,8 @@ namespace DCLF::Features::Fades
 		void RegisterGraph(const Api::SceneResourcesGraph& a_graph)
 		{
 			const auto& fades = a_graph.State<FadeScene>();
+			const auto& batch = *fades.portalBatch;
+			Portals::RegisterBatch(a_graph.graph, batch);
 			Draws::Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-roots"), fades.fadeRoots);
 			Draws::Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-states"), fades.fadeStates);
 			Draws::Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.fade-states-out0"), fades.fadeStatesOut[0]);
@@ -97,7 +107,11 @@ namespace DCLF::Features::Fades
 			Draws::UnitGroup roots;
 			roots.Add(s.fadeRoots).Add(s.fadeRootPrograms).Add(s.fadeAnimated).Add(s.fadeStates).Add(s.fadeReported);
 			roots.Add(s.fadeStatesOut[0]).Add(s.fadeStatesOut[1]);
+			const auto& batch = *s.portalBatch;
+			roots.Add(batch.queries).Add(batch.results).Add(batch.ranks).Add(batch.indices).Add(batch.tasks);
 			roots.Require(a_requirements.build, Extensions::TableFamilyRows(a_requirements.tables.families, Extensions::RootStatesFamily()));
+			Draws::SceneBufferSet::Get().Require(a_requirements.build, batch.counts, 2ull * std::max(1u, a_requirements.inputs[kBucketsInput]));
+			Draws::SceneBufferSet::Get().Require(a_requirements.build, batch.offsets, 2ull * std::max(1u, a_requirements.inputs[kBucketsInput]));
 			// The event list, to the most a frame wanted (dropped roots append again), as posted with the revision's inputs; its staging sets
 			// follow the named capacity.
 			if (s.fadeEvents && s.fadeWriteBack)
@@ -107,6 +121,8 @@ namespace DCLF::Features::Fades
 		// The event list's ask (the most a frame wanted: the write-back's harvest grows it).
 		void PostInputs(std::span<std::uint32_t> a_words)
 		{
+			const auto& encoded = PortalViews::Get().Encoded();
+			a_words[kBucketsInput] = encoded.size() > kPortalSetBytes / 4 ? encoded[kPortalSetBytes / 4] : 0u;
 			if (const auto writeBack = postedWriteBack.lock())
 				a_words[kEventsWantedInput] = writeBack->wanted.load(std::memory_order_acquire);
 		}
@@ -145,7 +161,6 @@ namespace DCLF::Features::Fades
 
 	void RegisterResources(Api::InstallContext& a_context)
 	{
-		sceneId = a_context.RegisterSceneResources({ .name = "fade roots", .setup = &Setup, .registerGraph = &RegisterGraph, .require = &Require,
-			.fit = &Fit, .postInputs = &PostInputs, .inputWords = kInputWords, .sealed = &Sealed });
+		sceneId = a_context.RegisterSceneResources({ .name = "fade roots", .setup = &Setup, .registerGraph = &RegisterGraph, .require = &Require, .fit = &Fit, .postInputs = &PostInputs, .inputWords = kInputWords, .sealed = &Sealed });
 	}
 }

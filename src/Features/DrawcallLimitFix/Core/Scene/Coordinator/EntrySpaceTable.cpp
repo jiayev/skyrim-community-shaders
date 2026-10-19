@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <numeric>
+#include <Tracy/Tracy.hpp>
 
 namespace DCLF::Scene
 {

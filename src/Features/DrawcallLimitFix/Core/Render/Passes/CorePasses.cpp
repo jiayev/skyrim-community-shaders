@@ -3,12 +3,12 @@
 // executor adds the pass. The features register their own passes (the main view's draws, main-view.*: Features/MainView; the forward
 // epoch's forward.*: Features/Forward; the shadow and occlusion epochs' shadows.*: Features/Shadows/Engine).
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Passes/IndexPoolPass.h"
-#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Passes/IndexPoolPass.h"
+#include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
 {
@@ -37,6 +37,11 @@ namespace DCLF::Draws
 		std::shared_ptr<org::RenderPass> BuildDraws(const Api::PassContext& a_context)
 		{
 			return MakeBuildDrawsPass(a_context.Main(), a_context.segment);
+		}
+
+		std::shared_ptr<org::RenderPass> MemberQueries(const Api::PassContext& a_context)
+		{
+			return MakeBuildDrawsPass(a_context.Main(), a_context.segment, 1, true);
 		}
 
 		// The pool copies the depth commit gave out (when the shadow epoch has not), before the draws read them.
@@ -117,6 +122,7 @@ namespace DCLF::Draws
 			// The main view's culling and copies (the main extension's resources).
 			{ .key = "core.z.latched-copies", .passName = "cs.dclf.z.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
 			{ .key = "core.latched-copies", .passName = "cs.dclf.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
+			{ .key = "core.z.portal-queries", .passName = "cs.dclf.z.member-portal-queries", .queue = Api::PassQueue::Compute, .make = &MemberQueries },
 			{ .key = "core.z.build-draws", .passName = "cs.dclf.z.build-draws", .make = &BuildDraws },
 			{ .key = "core.build-draws", .passName = "cs.dclf.build-draws", .make = &BuildDraws },
 			{ .key = "core.z.index-pool", .passName = "cs.dclf.z.index-pool", .make = &IndexPoolCopies },

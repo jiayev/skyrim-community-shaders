@@ -61,6 +61,8 @@ namespace DCLF::Api
 	 *   them; RootStates is the published copy a frame's cull reads).
 	 * - RootSeeds: the roots' seeds (a frame value pool's: by SRV index).
 	 * - RootFrame: the root states' frame inputs.
+	 * - MemberQueries/MemberResults: main-camera bound queries and tagged verdicts, indexed by stable object slot.
+	 * - MemberClaims: per-object atomic claims during query generation; reused as query ranks after that pass.
 	 */
 	enum class CullBindingSlot : std::uint8_t
 	{
@@ -71,6 +73,9 @@ namespace DCLF::Api
 		RootStepStates,
 		RootSeeds,
 		RootFrame,
+		MemberQueries,
+		MemberResults,
+		MemberClaims,
 		Count
 	};
 

@@ -186,9 +186,9 @@ namespace DCLF::Draws
 	};
 	static_assert(sizeof(VisibilityEvent) == 16);
 	constexpr std::uint32_t kVisibilityKindRoot = 0, kVisibilityKindObject = 1;
-	constexpr std::uint32_t kVisibilityBitVisible = 1u << 0;   // a root: InView (its kAccumulated); an object: stamped, not fade-hidden
-	constexpr std::uint32_t kVisibilityBitInMargin = 1u << 1;  // reserved: InView against widened planes (unimplemented)
-	constexpr std::uint32_t kVisibilityBitVerdict = 1u << 2;   // a root: FadeStateCS updated its listing this frame (else no DCLF verdict)
+	constexpr std::uint32_t kVisibilityBitVisible = 1u << 0;     // a root: InView (its kAccumulated); an object: stamped, not fade-hidden
+	constexpr std::uint32_t kVisibilityBitInMargin = 1u << 1;    // reserved: InView against widened planes (unimplemented)
+	constexpr std::uint32_t kVisibilityBitVerdict = 1u << 2;     // a root: FadeStateCS updated its listing this frame (else no DCLF verdict)
 	constexpr std::uint32_t kVisibilityBitFadeHidden = 1u << 3;  // an object: in view, dropped by its root's fade
 	// The list's header: the count appended (past the capacity: what the list grows to), the scene frame; two words spare.
 	constexpr std::uint32_t kVisibilityEventHeaderWords = 4;
@@ -201,7 +201,6 @@ namespace DCLF::Draws
 	// A stream vertex (the vertex stream: Payload/Geometry.h): float4.
 	constexpr std::uint32_t kStreamVertexBytes = 16;
 
-
 	// BuildDrawsCS.hlsl's inputs (byte-address buffers).
 	struct DrawInput
 	{
@@ -213,8 +212,8 @@ namespace DCLF::Draws
 		struct ViewWords
 		{
 			std::uint32_t mask = 0;
-			std::uint32_t shadowKey = ~0u;                      // a caster's key slot (Lookups::shadowSlots), every caster mode's
-			std::uint32_t occlusionKey[2]{ ~0u, ~0u };        // each occlusion map's key slot
+			std::uint32_t shadowKey = ~0u;              // a caster's key slot (Lookups::shadowSlots), every caster mode's
+			std::uint32_t occlusionKey[2]{ ~0u, ~0u };  // each occlusion map's key slot
 		} view;
 		// Index into the frame's object table: lets the colour segment find the visibility the depth segment published.
 		std::uint32_t objectIndex;
@@ -226,7 +225,7 @@ namespace DCLF::Draws
 		// The fade root slot (FadeStateCS's state row), ~0u when none: depth phase 1 drops it while its root's OnVisible stops, a
 		// shadow view while its root fades.
 		std::uint32_t fadeRoot = ~0u;
-		std::uint32_t shadowRow = 0;      // a caster's ShadowMaterialRow
+		std::uint32_t shadowRow = 0;  // a caster's ShadowMaterialRow
 		// A LOD skin's partitions per level: byte L masks level L (0-3), picked by its fade root's level; 0: partitions as is.
 		std::uint32_t lodPartitions = 0;
 		// kObjectFadeTest: the fade-out distance (SceneTables::fadeDistance).
@@ -236,17 +235,17 @@ namespace DCLF::Draws
 	// An input with a bindings record: the depth segment culls every candidate but records only those it may draw.
 	constexpr std::uint32_t kInputDrawable = 1u << 16;
 	// DrawInput::ViewWords::mask and BuildDrawsLatch::viewBits: the view types an object takes part in. BuildDrawsCS.hlsl.
-	constexpr std::uint32_t kViewMainCull = 1u << 0;       // a main-camera visibility candidate (the depth segment's inputs)
-	constexpr std::uint32_t kViewMain = 1u << 1;           // drawn by the main camera (the set's main phase)
-	constexpr std::uint32_t kViewSunCaster = 1u << 2;      // the sun's cascades
-	constexpr std::uint32_t kViewSpotCaster = 1u << 3;     // the other clamped views (spot lights)
-	constexpr std::uint32_t kViewPointCaster = 1u << 4;    // the point lights' paraboloids
+	constexpr std::uint32_t kViewMainCull = 1u << 0;     // a main-camera visibility candidate (the depth segment's inputs)
+	constexpr std::uint32_t kViewMain = 1u << 1;         // drawn by the main camera (the set's main phase)
+	constexpr std::uint32_t kViewSunCaster = 1u << 2;    // the sun's cascades
+	constexpr std::uint32_t kViewSpotCaster = 1u << 3;   // the other clamped views (spot lights)
+	constexpr std::uint32_t kViewPointCaster = 1u << 4;  // the point lights' paraboloids
 	// 1u << 5, 1u << 6: the occlusion maps' (Features/OcclusionMaps' kViewSkyOccluder, Skylighting's occlusion map, and
 	// kViewPrecipOccluder, the precipitation mask; Api::OcclusionMapContribution::bits, Features/Manifest.cpp).
 	// 1u << 7: a feature's view's (Features/Reflection's kViewReflection, the water reflection's faces).
-	constexpr std::uint32_t kViewDecal = 1u << 8;          // a decal: the colour segment's fixed ordinal slots only
-	constexpr std::uint32_t kViewForward = 1u << 9;        // a forward object: the colour segment's forward range only
-	constexpr std::uint32_t kViewRefraction = 1u << 10;    // a refraction object (kRasterRefraction): the refraction range only
+	constexpr std::uint32_t kViewDecal = 1u << 8;        // a decal: the colour segment's fixed ordinal slots only
+	constexpr std::uint32_t kViewForward = 1u << 9;      // a forward object: the colour segment's forward range only
+	constexpr std::uint32_t kViewRefraction = 1u << 10;  // a refraction object (kRasterRefraction): the refraction range only
 	// 1u << 11: a feature's view's (Features/FirstPerson's kViewFirstPerson, BuildDrawsCS's; Api::ViewShape::viewBits, Features/Manifest.cpp).
 	/**
 	 * @brief Core's view bits: a view's bit (a feature's own, of either view family) is none of them (Extensions::ResolveViewBits,
@@ -333,18 +332,18 @@ namespace DCLF::Draws
 	// BuildDrawsLatch, so the recorded dispatch never changes with the frame.
 	struct BuildDrawsConstants
 	{
-		std::uint32_t latchIndex;        // the latch block's SRV
+		std::uint32_t latchIndex;  // the latch block's SRV
 		std::uint32_t sequencesIndex;
 		std::uint32_t countIndex;
 		// The strides of the rows an input's y names (BuildDrawsCS.hlsl, RowsOf): the material rows (y's low 20 bits) and, below,
 		// the pipeline rows (its high 12; stride 0 for the shadow views). Their addresses are the payload's, in the latch.
 		std::uint32_t materialRowStride;
-		std::uint32_t phaseBits;         // the culling phase in bits 4-7 (CullFlags' phase field)
-		std::uint32_t visibilityIndex;   // RWByteAddressBuffer: one uint per object in the tables
-		std::uint32_t latchOffset;       // set at record time: the slot's region plus the dispatch's latch
-		std::uint32_t frustumIndex;      // RWByteAddressBuffer: per object, the stamp of its last in-frustum frame (depth phase 1 only)
-		std::uint32_t hzbIndex;        // 0 when there is no HZB to test against
-		std::uint32_t hzbSizePacked;   // mip 0: width in the low 16 bits, height in the high 16
+		std::uint32_t phaseBits;        // the culling phase in bits 4-7 (CullFlags' phase field)
+		std::uint32_t visibilityIndex;  // RWByteAddressBuffer: one uint per object in the tables
+		std::uint32_t latchOffset;      // set at record time: the slot's region plus the dispatch's latch
+		std::uint32_t frustumIndex;     // RWByteAddressBuffer: per object, the stamp of its last in-frustum frame (depth phase 1 only)
+		std::uint32_t hzbIndex;         // 0 when there is no HZB to test against
+		std::uint32_t hzbSizePacked;    // mip 0: width in the low 16 bits, height in the high 16
 		std::uint32_t hzbMips;
 		// The sort by pipeline (DrawSort). 0 when appending into the sequences directly (phase 2, or the sort off).
 		std::uint32_t sortCountsIndex;
@@ -358,7 +357,7 @@ namespace DCLF::Draws
 		std::uint32_t pipelineRowStride;
 		// Depth phase 1 and shadow views: the fade roots' static rows. 0 elsewhere.
 		std::uint32_t fadeRootsIndex;
-		// Depth phase 1: the main cull input's programs (the HLSL's PortalProgramsIndex), tested after the frustum. 0 elsewhere.
+		// Main query preparation: the main cull input's programs (the HLSL's PortalProgramsIndex). 0 in draw construction.
 		std::uint32_t cullProgramsIndex;
 		// A shadow view's bucket counts, or the depth phases' (a word per pipeline slot). 0 elsewhere.
 		std::uint32_t bucketCountsIndex;
@@ -372,8 +371,9 @@ namespace DCLF::Draws
 		std::uint32_t refractionCapacity;
 		// Colour segment: the state class sub-ranges' counts (Resources::classCounts, ClassCountWord). 0 elsewhere.
 		std::uint32_t classCountsIndex;
+		std::uint32_t memberQueriesIndex = 0, memberResultsIndex = 0, memberClaimsIndex = 0;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 108);
+	static_assert(sizeof(BuildDrawsConstants) == 120);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**
@@ -383,12 +383,12 @@ namespace DCLF::Draws
 	 */
 	struct BuildDrawsLatch
 	{
-		std::uint32_t dispatch[3];      // groups x, y, z
-		std::uint32_t drawCount;        // inputs to cull
-		std::uint32_t cullFlags;        // mode in bits 0-3, NoNearPlane at 9 (the phase is pushed)
-		std::uint32_t visibilityStamp;  // marks the verdicts as this frame's; see BuildDrawsCS.hlsl
-		std::uint32_t hzbUvScalePacked; // rendered area over the area the HZB covers, 16-bit fixed point
-		std::uint32_t cullPlaneMask;    // which of cullPlanes are tested; 0 for the main camera
+		std::uint32_t dispatch[3];       // groups x, y, z
+		std::uint32_t drawCount;         // inputs to cull
+		std::uint32_t cullFlags;         // mode in bits 0-3, NoNearPlane at 9 (the phase is pushed)
+		std::uint32_t visibilityStamp;   // marks the verdicts as this frame's; see BuildDrawsCS.hlsl
+		std::uint32_t hzbUvScalePacked;  // rendered area over the area the HZB covers, 16-bit fixed point
+		std::uint32_t cullPlaneMask;     // which of cullPlanes are tested; 0 for the main camera
 		// Row-major, as the shader's float4x4 with mul(M, v), camera translation folded in so an absolute world position projects
 		// directly.
 		float viewProj[16];
@@ -472,7 +472,7 @@ namespace DCLF::Draws
 	{
 		std::uint32_t mask = 0;  // the active planes
 		std::uint32_t pad[3]{};
-		float planes[6][4]{};    // (normal, constant), inside where dot(normal, p) - constant >= 0
+		float planes[6][4]{};  // (normal, constant), inside where dot(normal, p) - constant >= 0
 
 		bool operator==(const SunEntryProcess&) const = default;
 	};

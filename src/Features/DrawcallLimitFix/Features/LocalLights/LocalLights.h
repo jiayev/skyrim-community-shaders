@@ -11,7 +11,8 @@
 //
 // Core keeps the shadow engine: the light candidates, the views list, the latch's volumes and BuildDraws' receiver test. The caster side
 // (the point culls) and the kept lights' views are Shadows/Local's (LocalShadowLights reads them through the sources' cameras,
-// Extensions::SourceCamera). No switch, toggle, pool, stage or product. Included by the feature's sources only.
+// Extensions::SourceCamera). LightContextResources publishes immutable selected-light atlases from a GPU retirement pool.
+// Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 

@@ -5,12 +5,17 @@
 #include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalBytecode.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalShapes.h"
 #include "Features/DrawcallLimitFix/Features/Portals/RoomVisibility.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
-#include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
-#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
+#include <Tracy/Tracy.hpp>
 #include <algorithm>
 #include <bit>
 #include <cfloat>
@@ -18,9 +23,6 @@
 #include <cstring>
 #include <deque>
 #include <limits>
-#include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
 
 namespace DCLF
 {
@@ -135,7 +137,6 @@ namespace DCLF
 		// The box's faces (0x1419d2680): two triangles each; the plane is the first three, the quad (t0, t1, t2, t5).
 		constexpr std::array<std::array<std::uint32_t, 6>, 6> kBoxFaces{ { { 0, 1, 2, 0, 2, 3 }, { 5, 1, 0, 5, 0, 4 }, { 3, 2, 6, 3, 6, 7 }, { 6, 5, 4, 4, 6, 7 },
 			{ 0, 3, 7, 0, 7, 4 }, { 2, 1, 5, 2, 5, 6 } } };
-
 
 		/** @brief Calls a virtual of the engine's: slot a_slot of a_object's vtable, with a pointer argument. */
 		template <class R, class A>
@@ -503,7 +504,8 @@ namespace DCLF
 		const void* links[4];
 		for (std::size_t i = 0; i < 4; ++i)
 			links[i] = At<const void*>(a_plane, kPlaneLinks[i]);
-		const std::uint32_t type = (links[0] || links[2]) ? 2u : (links[1] || links[3]) ? 1u : 0u;
+		const std::uint32_t type = (links[0] || links[2]) ? 2u : (links[1] || links[3]) ? 1u :
+		                                                                                  0u;
 		const void* neighbour = type == 1 ? (links[1] ? links[1] : links[3]) : (links[0] ? links[0] : links[2]);
 		const Vec3 eye{ a_program.eye[0], a_program.eye[1], a_program.eye[2] };
 		if (neighbour) {
@@ -511,7 +513,8 @@ namespace DCLF
 				const auto c = Corners(a_quad);
 				const auto p = PlaneFromPoints(c[0].x, c[0].y, c[0].z, c[1].x, c[1].y, c[1].z, c[2].x, c[2].y, c[2].z);
 				const float d = Dist(p, eye.x, eye.y, eye.z);
-				return d < 0.0f ? 2 : d > 0.0f ? 1 : 0;
+				return d < 0.0f ? 2 : d > 0.0f ? 1 :
+				                                 0;
 			};
 			const int s1 = side(a_plane), s2 = side(neighbour);
 			if (states[neighbour] == 1 && s1 == s2) {
@@ -1314,6 +1317,7 @@ namespace DCLF
 		const std::uint32_t roomCount = graph ? At<std::uint32_t>(graph, kGraphRoomCount) : 0;
 		const auto* niLight = At<const std::byte*>(a_light, 0x48);
 		a_rooms.walk = kLightUntouched;
+		a_rooms.context.reset();
 		lightFlagsPending = false;
 		if (!roomCount || !niLight)
 			return;
@@ -1378,6 +1382,9 @@ namespace DCLF
 		std::swap(edgeFlags, lightEdgeFlags);
 		const ProgramCounts saved = std::exchange(programCounts, {});
 		parabolic = &sphere;
+		frame.graph = graph;
+		frame.valid = true;
+		frame.sceneFrame = Scene::FrameView::Get().GetFrame();
 		frame.roomKeys.clear();
 		frame.rooms.clear();
 		frame.accumulated.clear();
@@ -1397,6 +1404,21 @@ namespace DCLF
 		a_rooms.visibleUnbound = frame.visibleUnbound;
 		a_rooms.rooms = frame.accumulated;
 		a_rooms.walk = kLightWalked;
+		// Snapshot while the light's scratch and camera are active. Never expose lightFrame's reused vectors to a consumer.
+		auto context = std::make_shared<Portals::Context>();
+		context->kind = Portals::Context::Kind::PointLight;
+		context->frame = frame.sceneFrame;
+		context->generation = ++contextGeneration;
+		context->roomsGeneration = graphVersion;
+		context->sphere = { position.x, position.y, position.z, radius };
+		context->hemisphere = sphere.plane;
+		context->bothSides = sphere.bothSides;
+		context->strict = true;
+		Encode(context->programs);
+		// A strict point process starts in mode 4, not the main list process's mode 0.
+		if (context->programs[kPortalSetBytes / 4])
+			context->programs[kPortalHeaderBytes / 4 + 6] = 4;
+		a_rooms.context = std::move(context);
 		lightFlagsPending = true;
 		parabolic = nullptr;
 		programCounts = saved;
@@ -1414,7 +1436,7 @@ namespace DCLF
 		if (At<std::uint32_t>(a_roomProcess, 0x9C) != 0 || !planeZero)
 			return a_why = fmt::format("view mask {:#x}, plane 0 {} {} {} {}", At<std::uint32_t>(a_roomProcess, 0x9C), At<float>(a_roomProcess, 0x3C),
 					   At<float>(a_roomProcess, 0x40), At<float>(a_roomProcess, 0x44), At<float>(a_roomProcess, 0x48)),
-				   false;
+			       false;
 		// Its portal test (vfunc 0xD8) BSParabolicCullingProcess's TestBaseVisibility2 (the process has no RTTI name to read).
 		if (const std::uintptr_t test = (*reinterpret_cast<const std::uintptr_t* const*>(a_roomProcess))[0xD8 / 8]; test != REL::Offset(0x151a120).address())
 			return a_why = fmt::format("its vfunc 0xD8 at {:#x}", test - REL::Module::get().base() + 0x140000000), false;
@@ -1459,6 +1481,7 @@ namespace DCLF
 		};
 		// The directory: each program's records and sets after the last's.
 		std::uint32_t records = 0, sets = 0;
+		std::vector<PortalBytecode::Compiled> compiled(count);
 		for (std::uint32_t p = 0; p < count; ++p) {
 			const void* room = p ? graphRooms[p - 1] : nullptr;
 			const Program* program = programAt(p);
@@ -1471,12 +1494,15 @@ namespace DCLF
 			entry[0] = kPortalReached | (p && program->skipView ? kPortalSkipView : 0u);
 			const std::uint32_t ops = program->freeOp && program->finalized ? std::min<std::uint32_t>(program->freeOp + 3, static_cast<std::uint32_t>(program->ops.size())) : 0u;
 			const std::uint32_t planes = ops ? std::min<std::uint32_t>(program->freePlane, static_cast<std::uint32_t>(program->sets.size())) : 0u;
-			entry[1] = ops;
+			if (ops)
+				compiled[p] = PortalBytecode::Lower<Op>(std::span(program->ops).first(ops), program->firstOp, planes);
+			entry[1] = static_cast<std::uint32_t>(compiled[p].instructions.size());
 			entry[2] = planes;
-			entry[3] = program->firstOp;
+			entry[3] = 0;
 			entry[4] = records;
 			entry[5] = sets;
-			records += ops;
+			entry[7] = compiled[p].maxSteps;
+			records += entry[1];
 			sets += planes;
 		}
 		a_words[header + 1] = records;
@@ -1489,8 +1515,8 @@ namespace DCLF
 			if (!ops)
 				continue;
 			const Program& program = *programAt(p);
-			for (std::uint32_t i = 0; i < ops; ++i)
-				a_words.insert(a_words.end(), { program.ops[i].word, program.ops[i].yes, program.ops[i].no, 0u });
+			for (const auto& op : compiled[p].instructions)
+				a_words.insert(a_words.end(), { op.kind, op.set, op.yes, op.no });
 			for (std::uint32_t s = 0; s < planes; ++s) {
 				const auto* words = reinterpret_cast<const std::uint32_t*>(&program.sets[s]);
 				setWords.insert(setWords.end(), words, words + kPortalSetBytes / 4);
@@ -1541,19 +1567,19 @@ namespace DCLF
 		const std::size_t records = kDirectory + std::size_t(count) * kEntry + std::size_t(firstRecord) * kOp;
 		const std::size_t setsBase = kDirectory + std::size_t(count) * kEntry + std::size_t(word(kHeader + 1)) * kOp + std::size_t(firstSet) * kSet;
 		std::uint32_t op = firstOp;
-		for (std::uint32_t step = 0; step < 512; ++step) {
+		for (std::uint32_t step = 0; step < word(entry + 7); ++step) {
 			if (op >= ops)
-				return a_why = fmt::format("program {} ran off at op {}", a_program, op), 1;
-			const std::uint32_t type = word(records + std::size_t(op) * kOp), yes = word(records + std::size_t(op) * kOp + 1), no = word(records + std::size_t(op) * kOp + 2);
+				throw std::logic_error("portal bytecode: invalid instruction");
+			const std::uint32_t type = word(records + std::size_t(op) * kOp), yes = word(records + std::size_t(op) * kOp + 2), no = word(records + std::size_t(op) * kOp + 3);
 			if (type == 2)
 				return a_why = fmt::format("program {} accepted at op {}", a_program, op), 1;
 			if (type == 3)
 				return a_why = fmt::format("program {} rejected at op {}", a_program, op), 0;
 			bool result = false;
 			if (type == 7 || type == 8) {
-				const std::uint32_t set = op + 1 < ops ? word(records + std::size_t(op + 1) * kOp) : ~0u;
+				const std::uint32_t set = word(records + std::size_t(op) * kOp + 1);
 				if (set >= sets)
-					return a_why = fmt::format("program {} set {} past {}", a_program, set, sets), 1;
+					throw std::logic_error("portal bytecode: invalid plane set");
 				const std::size_t base = setsBase + std::size_t(set) * kSet;
 				const std::uint32_t mask = word(base + 24);
 				if (!mask) {
@@ -1574,7 +1600,7 @@ namespace DCLF
 			}
 			op = result ? yes : no;
 		}
-		return a_why = "program loop", 1;
+		throw std::logic_error("portal bytecode: validated path did not terminate");
 	}
 
 	std::uint32_t PortalViews::ProgramOf(const RE::NiAVObject* a_node) const
@@ -1630,6 +1656,12 @@ namespace DCLF
 	void PortalViews::AfterBuild()
 	{
 		Encode(encoded);
+		auto context = std::make_shared<Portals::Context>();
+		context->frame = frame.sceneFrame;
+		context->generation = ++contextGeneration;
+		context->roomsGeneration = graphVersion;
+		context->programs = encoded;
+		mainContext = std::move(context);
 		if (!publishVisible.load(std::memory_order_acquire))
 			return;
 		PublishVisible();

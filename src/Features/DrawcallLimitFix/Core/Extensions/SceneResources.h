@@ -101,6 +101,7 @@ namespace DCLF::Api
 		const SceneTables& tables;
 		const std::shared_ptr<void>& state;
 		std::span<const std::uint32_t> inputs;
+		std::uint32_t objectRows = 0;  // already witnessed by RequireSceneTables; stable object-slot high-water mark
 
 		template <class T>
 		const T& State() const

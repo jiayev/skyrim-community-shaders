@@ -11,6 +11,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalContext.h"
 
 namespace RE
 {
@@ -54,8 +55,8 @@ namespace DCLF
 		/** @brief A compound frustum: the token stream (Finalize makes it a branch program) and its plane sets. */
 		struct Program
 		{
-			std::vector<Op> ops;          // freeOp tokens, then (finalized) root, ACCEPT and REJECT
-			std::vector<PlaneSet> sets;   // freePlane in use
+			std::vector<Op> ops;         // freeOp tokens, then (finalized) root, ACCEPT and REJECT
+			std::vector<PlaneSet> sets;  // freePlane in use
 			std::uint32_t freeOp = 0, freePlane = 0, firstOp = 0;
 			bool skipView = false, finalized = false;
 			std::array<float, 3> eye{};  // the camera's position (Reset)
@@ -64,12 +65,12 @@ namespace DCLF
 		struct Frame
 		{
 			std::uint32_t sceneFrame = ~0u;
-			const void* graph = nullptr;    // the ShadowSceneNode's portal graph (+0x228); null: nothing built
+			const void* graph = nullptr;  // the ShadowSceneNode's portal graph (+0x228); null: nothing built
 			bool valid = false;
-			bool visibleUnbound = false;    // a walk reached unbound space
-			Program unbound;                // the portal-graph entry's own (+0x68): unbound space
-			std::vector<const void*> roomKeys;  // the visibility map's rooms, as inserted
-			std::vector<Program> rooms;          // by roomKeys
+			bool visibleUnbound = false;           // a walk reached unbound space
+			Program unbound;                       // the portal-graph entry's own (+0x68): unbound space
+			std::vector<const void*> roomKeys;     // the visibility map's rooms, as inserted
+			std::vector<Program> rooms;            // by roomKeys
 			std::vector<const void*> accumulated;  // rooms the walk popped (multiBoundRoomAccumList), in order
 			const void* cameraRoom = nullptr;      // first room holding the camera's near-plane centre
 		};
@@ -106,6 +107,8 @@ namespace DCLF
 		void Encode(std::vector<std::uint32_t>& a_words) const;
 		/** @brief This frame's Encode, made at Build (the GPU copy and CPU checks read the same words). */
 		const std::vector<std::uint32_t>& Encoded() const { return encoded; }
+		/** @brief Owned main-view context, independent of mutable walk scratch. Render thread. */
+		Portals::ContextHold MainContext() const { return mainContext; }
 		/**
 		 * @brief PortalPrograms.hlsli's PortalTest on the CPU (a_nodeFlags: always-draw bit 11, preprocessed 12, preprocess-hidden 20).
 		 * 1 in view, 0 culled, -1 no program; a_why names the deciding test.
@@ -203,6 +206,7 @@ namespace DCLF
 			bool visibleUnbound = true;      // +0x130
 			std::vector<const void*> rooms;  // multiBoundRoomAccumList (+0x18)
 			std::uint32_t walk = 0;          // how the last call left it: LightWalk
+			Portals::ContextHold context;
 		};
 		enum LightWalk : std::uint32_t
 		{
@@ -244,8 +248,8 @@ namespace DCLF
 		{
 			const std::byte* camera = nullptr;  // the NiCamera
 			Vec3 eye;
-			PlaneSet view;                       // NiCullingProcess::SetFrustum's planes
-			PlaneSet relative;                   // FUN_140e16f70's camera-relative copy (box refinement)
+			PlaneSet view;      // NiCullingProcess::SetFrustum's planes
+			PlaneSet relative;  // FUN_140e16f70's camera-relative copy (box refinement)
 		};
 
 		// The walk (FUN_1414a41e0) and its builders.
@@ -295,14 +299,16 @@ namespace DCLF
 		ankerl::unordered_dense::map<const void*, Flags> edgeFlags;
 		ankerl::unordered_dense::map<const void*, std::uint32_t> states;
 		ankerl::unordered_dense::map<const void*, BoxScratch> boxes;
-		ankerl::unordered_dense::set<const void*> crossed;  // portals keyed this frame
-		Program temp;                                       // the engine's temp frustum (0x14332a710)
-		const void* edgeGraph = nullptr;                    // the graph edgeFlags are for
+		ankerl::unordered_dense::set<const void*> crossed;                   // portals keyed this frame
+		Program temp;                                                        // the engine's temp frustum (0x14332a710)
+		const void* edgeGraph = nullptr;                                     // the graph edgeFlags are for
 		ankerl::unordered_dense::map<const void*, std::uint32_t> roomIndex;  // room -> index (ProgramOf)
-		std::uint64_t graphVersion = 0;                     // bumped with every new graph
-		std::atomic<std::uint64_t> structure{ 0 };          // NoteStructure
-		std::vector<std::uint32_t> encoded;                 // Encoded
-		std::atomic<bool> visibleUnbound{ true };           // VisibleUnbound (the engine entry's initial value)
+		std::uint64_t graphVersion = 0;                                      // bumped with every new graph
+		std::atomic<std::uint64_t> structure{ 0 };                           // NoteStructure
+		std::vector<std::uint32_t> encoded;                                  // Encoded
+		Portals::ContextHold mainContext;
+		std::uint64_t contextGeneration = 0;
+		std::atomic<bool> visibleUnbound{ true };  // VisibleUnbound (the engine entry's initial value)
 
 		// The published VisibleSet and replaced ones, freed at a publish that sees no reader (readers count themselves before loading).
 		std::atomic<bool> publishVisible{ false };
@@ -312,7 +318,7 @@ namespace DCLF
 		std::shared_ptr<const VisibleSet> visibleOwned;
 		std::vector<std::shared_ptr<const VisibleSet>> visibleRetired;
 		std::shared_ptr<const VisibleSet::GraphKeys> graphKeys;  // reused while the graph's counts hold
-		Reports::Window visibleReports;  // RoomVisibility's line every 300 sets
+		Reports::Window visibleReports;                          // RoomVisibility's line every 300 sets
 
 		/** @brief BSParabolicCullingProcess's view test (TestBaseVisibility3, 0x14151a050) for a light's walk. */
 		struct Parabolic

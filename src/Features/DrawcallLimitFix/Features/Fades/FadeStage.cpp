@@ -1,7 +1,6 @@
 // Fades' passes at the depth epoch's cull state (fades.state, fades.events): the fade roots' states for the next frame's cull
 // (FadeStateCS), on the compute queue beside the depth epoch's raster work, then their write-back events' copy to the host.
 
-#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
@@ -9,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 
 #include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -27,6 +27,7 @@ namespace DCLF::Draws
 	struct FadeStateBindings
 	{
 		org::DeclaredViewToken roots, states, frame, log, programs, rootPrograms, animated, events, reported;
+		org::DeclaredViewToken queries, results;
 		std::array<org::DeclaredViewToken, 2> published;
 	};
 
@@ -43,14 +44,18 @@ namespace DCLF::Draws
 	{
 	public:
 		// a_segment: its epoch's (the depth epoch's: the PassContext it was made with).
-		FadeStatePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment) :
-			resources(std::move(a_resources)), fades(Features::Fades::SharedSceneOf(*resources->scene)), segment(a_segment) {}
+		FadeStatePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, bool a_queries = false) :
+			resources(std::move(a_resources)), fades(Features::Fades::SharedSceneOf(*resources->scene)), segment(a_segment), queryStage(a_queries) {}
 
 		FadeStateBindings Declare(org::PassBuilder& a_builder)
 		{
 			a_builder.PreferQueue(org::QueueKind::Compute);
 			const auto& scene = *fades;
 			FadeStateBindings bindings{};
+			if (queryStage)
+				bindings.queries = a_builder.UnorderedAccess(*scene.portalBatch->queries).View();
+			else
+				bindings.results = a_builder.ShaderResource(*scene.portalBatch->results).View();
 			bindings.roots = a_builder.ShaderResource(*scene.fadeRoots).View();
 			bindings.states = a_builder.UnorderedAccess(*scene.fadeStates).View();
 			for (std::uint32_t h = 0; h < 2; ++h)
@@ -79,6 +84,9 @@ namespace DCLF::Draws
 					 &scene.fadeAnimated, &scene.fadeEvents, &scene.fadeReported })
 				a_out.push_back(NamedSerial(a_preparation, *buffer));
 			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(queryStage);
+			a_out.push_back(NamedSerial(a_preparation, scene.portalBatch->queries));
+			a_out.push_back(NamedSerial(a_preparation, scene.portalBatch->results));
 		}
 
 		FadeStatePrepared Prepare(const FadeStateBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -94,7 +102,7 @@ namespace DCLF::Draws
 				roots = std::min(roots, NamedUnitsOf(a_preparation, scene.fadeReported));
 			if (!scene.fadeState || !roots || !frame || !frame->latch)
 				return prepared;
-			prepared.program = scene.fadeState;
+			prepared.program = queryStage ? scene.portalQueries : scene.fadeState;
 			prepared.latch = frame->latch;
 			auto& constants = prepared.constants;
 			constants.rootsIndex = CaptureViewIndex(a_preparation, a_bindings.roots);
@@ -104,6 +112,10 @@ namespace DCLF::Draws
 				constants.programsIndex = CaptureViewIndex(a_preparation, a_bindings.programs);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
 			constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
+			if (queryStage)
+				constants.portalQueriesIndex = CaptureViewIndex(a_preparation, a_bindings.queries);
+			else
+				constants.portalResultsIndex = CaptureViewIndex(a_preparation, a_bindings.results);
 			constants.animatedIndex = CaptureViewIndex(a_preparation, a_bindings.animated);
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.outIndices[h] = CaptureViewIndex(a_preparation, a_bindings.published[h]);
@@ -131,18 +143,20 @@ namespace DCLF::Draws
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kFadeStateConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
-			commands.Dispatch(a_frame.groups, 1, 1);
+			commands.Dispatch(std::min(a_frame.groups, 65535u), (a_frame.groups + 65534u) / 65535u, 1);
 		}
 
 	private:
 		std::shared_ptr<Resources> resources;
 		std::shared_ptr<const Features::Fades::FadeScene> fades;  // Fades' scene resources (the pass's setup required them)
 		RenderGraphRuntime::Segment segment;
+		bool queryStage = false;
 	};
 }
 
 namespace DCLF::Features::Fades
 {
+	void RegisterPortalBatchPasses(Api::InstallContext& a_context);
 	namespace
 	{
 		// The scene's GPU setup: the fade roots' scene resources when they made the program (else out of the graph).
@@ -157,6 +171,10 @@ namespace DCLF::Features::Fades
 		std::shared_ptr<org::RenderPass> MakeFadeStateStage(const Api::PassContext& a_context)
 		{
 			return std::make_shared<Draws::FadeStatePass>(a_context.Main(), a_context.segment);
+		}
+		std::shared_ptr<org::RenderPass> MakeFadeQueryStage(const Api::PassContext& a_context)
+		{
+			return std::make_shared<Draws::FadeStatePass>(a_context.Main(), a_context.segment, true);
 		}
 
 		// Its write-back events' copy: only with the list and its staging sets.
@@ -177,10 +195,10 @@ namespace DCLF::Features::Fades
 
 	void RegisterPasses(Api::InstallContext& a_context)
 	{
+		RegisterPortalBatchPasses(a_context);
+		a_context.RegisterPass({ .key = "fades.portal-queries", .passName = "cs.dclf.z.fade-portal-queries", .queue = Api::PassQueue::Compute, .make = &MakeFadeQueryStage, .setup = &SetUpFadeState });
 		// Fade roots' state for the next frame's culling, beside the depth epoch's raster work; then its write-back events, to the host.
-		a_context.RegisterPass({ .key = "fades.state", .passName = "cs.dclf.z.fade-state", .queue = Api::PassQueue::Compute, .make = &MakeFadeStateStage,
-			.setup = &SetUpFadeState });
-		a_context.RegisterPass({ .key = "fades.events", .passName = "cs.dclf.z.fade-events", .kind = Api::PassKind::Copy, .queue = Api::PassQueue::None,
-			.make = &MakeFadeEventsStage, .setup = &SetUpFadeEvents });
+		a_context.RegisterPass({ .key = "fades.state", .passName = "cs.dclf.z.fade-state", .queue = Api::PassQueue::Compute, .make = &MakeFadeStateStage, .setup = &SetUpFadeState });
+		a_context.RegisterPass({ .key = "fades.events", .passName = "cs.dclf.z.fade-events", .kind = Api::PassKind::Copy, .queue = Api::PassQueue::None, .make = &MakeFadeEventsStage, .setup = &SetUpFadeEvents });
 	}
 }

@@ -14,14 +14,14 @@ namespace DCLF::Draws
 	{
 		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0;
 		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
-		std::uint32_t outIndices[2]{};  // the published states, by the scene frame's parity
+		std::uint32_t outIndices[2]{};        // the published states, by the scene frame's parity
 		std::uint32_t programsIndex = 0;      // ByteAddressBuffer: the main cull input's programs (Features/Portals: PortalPrograms.h)
 		std::uint32_t rootProgramsIndex = 0;  // StructuredBuffer<uint>: each root's program (the input's judge)
-		std::uint32_t animatedIndex = 0;    // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
-		std::uint32_t eventsIndex = 0;      // RWStructuredBuffer<uint>: the write-back's events (FadeRecords.h, FadeEvent)
-		std::uint32_t reportedIndex = 0;    // RWStructuredBuffer<uint2>: per root, the generation and milestone last reported
-		std::uint32_t eventCapacity = 0;    // the events the list and every frame slot's readback hold
-		std::uint32_t padding[2]{};
+		std::uint32_t animatedIndex = 0;      // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
+		std::uint32_t eventsIndex = 0;        // RWStructuredBuffer<uint>: the write-back's events (FadeRecords.h, FadeEvent)
+		std::uint32_t reportedIndex = 0;      // RWStructuredBuffer<uint2>: per root, the generation and milestone last reported
+		std::uint32_t eventCapacity = 0;      // the events the list and every frame slot's readback hold
+		std::uint32_t portalQueriesIndex = 0, portalResultsIndex = 0;
 	};
 	static_assert(sizeof(FadeStateConstants) == 64);
 	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;

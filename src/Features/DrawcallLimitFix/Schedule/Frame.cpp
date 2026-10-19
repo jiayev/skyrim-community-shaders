@@ -20,9 +20,9 @@
 // - Anchors exist only for diagnostics (diag.*): each adds the diagnostics' observers' passes at that point, any number of them.
 // A key nobody registered fails the install (Extensions::InstallFeatures).
 
-#include "Features/DrawcallLimitFix/Schedule/Schedule.h"
 #include "Features/DrawcallLimitFix/Api/Epochs.h"
 #include "Features/DrawcallLimitFix/Api/Views.h"
+#include "Features/DrawcallLimitFix/Schedule/Schedule.h"
 
 #include "RenderGraph/RenderGraphRuntime.h"
 
@@ -38,20 +38,13 @@ namespace DCLF::Schedule
 
 		// The engine points the epochs are submitted at, in the order a frame reaches them (kFrameOrder's).
 		constexpr Api::TriggerDef kTriggers[] = {
-			{ .id = "shadow-maps.after", .owner = "Features/Shadows/Engine",
-				.where = "Main::RenderShadowMaps returned, the shadow views drawn (Deferred's Main_RenderShadowMaps hook)" },
-			{ .id = "depth.committed", .owner = "Core",
-				.where = "Main::RenderDepth's world draw done (the shell's Main_RenderDepth_WorldDrawn hook), the views' work there with it" },
-			{ .id = "fp.depth-draw", .owner = "Features/FirstPerson",
-				.where = "RenderDepth's first-person draw (the accumulator render's call there, FirstPersonHooks.cpp)" },
-			{ .id = "occlusion.draw", .owner = "Features/Shadows/Engine",
-				.where = "Skylighting's occlusion mask rendered (its DrawOcclusion call, Skylighting.cpp)" },
-			{ .id = "opaque.after", .owner = "Features/MainView",
-				.where = "the main pass's opaque batches done (Deferred's Main_RenderWorld_BlendedDecals hook)" },
-			{ .id = "blended.draw", .owner = "Features/Forward",
-				.where = "the main pass's blended draw for the main accumulator (both its call sites, ForwardHooks.cpp)" },
-			{ .id = "fp.colour-render", .owner = "Features/FirstPerson",
-				.where = "Main::RenderFirstPersonView's accumulator render (FirstPersonHooks.cpp)" },
+			{ .id = "shadow-maps.after", .owner = "Features/Shadows/Engine", .where = "Main::RenderShadowMaps returned, the shadow views drawn (Deferred's Main_RenderShadowMaps hook)" },
+			{ .id = "depth.committed", .owner = "Core", .where = "Main::RenderDepth's world draw done (the shell's Main_RenderDepth_WorldDrawn hook), the views' work there with it" },
+			{ .id = "fp.depth-draw", .owner = "Features/FirstPerson", .where = "RenderDepth's first-person draw (the accumulator render's call there, FirstPersonHooks.cpp)" },
+			{ .id = "occlusion.draw", .owner = "Features/Shadows/Engine", .where = "Skylighting's occlusion mask rendered (its DrawOcclusion call, Skylighting.cpp)" },
+			{ .id = "opaque.after", .owner = "Features/MainView", .where = "the main pass's opaque batches done (Deferred's Main_RenderWorld_BlendedDecals hook)" },
+			{ .id = "blended.draw", .owner = "Features/Forward", .where = "the main pass's blended draw for the main accumulator (both its call sites, ForwardHooks.cpp)" },
+			{ .id = "fp.colour-render", .owner = "Features/FirstPerson", .where = "Main::RenderFirstPersonView's accumulator render (FirstPersonHooks.cpp)" },
 		};
 
 		// The depth (Z-prepass) epoch: the latched copies; the next frame's state (tree wind, on the compute queue beside the epoch's raster
@@ -62,9 +55,15 @@ namespace DCLF::Schedule
 		constexpr std::string_view kMainDepth[] = {
 			"core.z.latched-copies",
 			"tree-wind.next-frame",
+			"fades.portal-queries",
+			"fades.portal-batch",
+			"fades.portal-evaluate",
 			"fades.state",
 			"fades.events",
 			"texture-transforms.apply",
+			"core.z.portal-queries",
+			"portals.member-batch",
+			"portals.member-evaluate",
 			"core.z.build-draws",
 			"core.z.index-pool",
 			"tree-lod.cull",
@@ -131,24 +130,14 @@ namespace DCLF::Schedule
 		// frame's claims (the forward epoch's too while its class is on: its members' passes are withheld with the claims, and only it
 		// draws them).
 		constexpr Api::EpochDef kEpochs[] = {
-			{ .id = "main.depth", .label = "Z-prepass", .trigger = "depth.committed", .segment = SegmentOf(Segment::ZPrepass),
-				.shape = Api::EpochShape::Main, .shapeIndex = MainOf(Api::MainShape::Depth), .claims = true, .passes = kMainDepth },
-			{ .id = "main.colour", .label = "colour", .trigger = "opaque.after", .segment = SegmentOf(Segment::MainOpaque),
-				.shape = Api::EpochShape::Main, .shapeIndex = MainOf(Api::MainShape::Colour), .claims = true, .passes = kMainColour },
-			{ .id = "shadow", .label = "shadow", .trigger = "shadow-maps.after", .segment = SegmentOf(Segment::ShadowView),
-				.shape = Api::EpochShape::Shadow, .shapeIndex = 0, .passes = kShadow },
-			{ .id = "occlusion", .label = "occlusion", .trigger = "occlusion.draw", .segment = SegmentOf(Segment::SkyOcclusion),
-				.shape = Api::EpochShape::Shadow, .shapeIndex = 1, .passes = kOcclusion },
-			{ .id = "reflection", .label = "reflection", .trigger = "depth.committed", .segment = SegmentOf(Segment::Reflection),
-				.shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::Reflection), .passes = kReflection },
-			{ .id = "forward", .label = "forward", .trigger = "blended.draw", .segment = SegmentOf(Segment::Forward), .shape = Api::EpochShape::Main,
-				.shapeIndex = MainOf(Api::MainShape::Colour), .sharesWith = "main.colour", .gate = Api::ObjectClass::Forward, .claims = true,
-				.passes = kForward },
-			{ .id = "fp.depth", .label = "first-person depth", .trigger = "fp.depth-draw", .segment = SegmentOf(Segment::FirstPersonDepth),
-				.shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::FirstPerson), .passes = kFirstPersonDepth },
-			{ .id = "fp.colour", .label = "first-person colour", .trigger = "fp.colour-render", .segment = SegmentOf(Segment::FirstPerson),
-				.shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::FirstPerson), .sharesWith = "fp.depth",
-				.passes = kFirstPersonColour },
+			{ .id = "main.depth", .label = "Z-prepass", .trigger = "depth.committed", .segment = SegmentOf(Segment::ZPrepass), .shape = Api::EpochShape::Main, .shapeIndex = MainOf(Api::MainShape::Depth), .claims = true, .passes = kMainDepth },
+			{ .id = "main.colour", .label = "colour", .trigger = "opaque.after", .segment = SegmentOf(Segment::MainOpaque), .shape = Api::EpochShape::Main, .shapeIndex = MainOf(Api::MainShape::Colour), .claims = true, .passes = kMainColour },
+			{ .id = "shadow", .label = "shadow", .trigger = "shadow-maps.after", .segment = SegmentOf(Segment::ShadowView), .shape = Api::EpochShape::Shadow, .shapeIndex = 0, .passes = kShadow },
+			{ .id = "occlusion", .label = "occlusion", .trigger = "occlusion.draw", .segment = SegmentOf(Segment::SkyOcclusion), .shape = Api::EpochShape::Shadow, .shapeIndex = 1, .passes = kOcclusion },
+			{ .id = "reflection", .label = "reflection", .trigger = "depth.committed", .segment = SegmentOf(Segment::Reflection), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::Reflection), .passes = kReflection },
+			{ .id = "forward", .label = "forward", .trigger = "blended.draw", .segment = SegmentOf(Segment::Forward), .shape = Api::EpochShape::Main, .shapeIndex = MainOf(Api::MainShape::Colour), .sharesWith = "main.colour", .gate = Api::ObjectClass::Forward, .claims = true, .passes = kForward },
+			{ .id = "fp.depth", .label = "first-person depth", .trigger = "fp.depth-draw", .segment = SegmentOf(Segment::FirstPersonDepth), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::FirstPerson), .passes = kFirstPersonDepth },
+			{ .id = "fp.colour", .label = "first-person colour", .trigger = "fp.colour-render", .segment = SegmentOf(Segment::FirstPerson), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::FirstPerson), .sharesWith = "fp.depth", .passes = kFirstPersonColour },
 		};
 
 		// Light Limit Fix's light culling: live (its ticket prepared on the host's thread), not a revision's.

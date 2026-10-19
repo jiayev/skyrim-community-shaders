@@ -8,16 +8,18 @@ namespace DCLF::Draws
 	struct BuildDrawsBindings
 	{
 		org::DeclaredViewToken sequences, count, hzb, visibility, frustum;
+		org::DeclaredViewToken memberQueries, memberResults, memberClaims;
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
 		org::DeclaredViewToken fadeRoots;
-		org::DeclaredViewToken bucketCounts, poolFirsts;  // the depth segment's buckets (Resources::zBucketCounts) and the pool's firsts
+		org::DeclaredViewToken bucketCounts, poolFirsts;    // the depth segment's buckets (Resources::zBucketCounts) and the pool's firsts
 		org::DeclaredViewToken cullPrograms, rootPrograms;  // the main camera's first phase: the cull binding Programs, each root's
-		org::DeclaredViewToken classCounts;  // the colour segment's state class sub-ranges' counts (Resources::classCounts)
+		org::DeclaredViewToken classCounts;                 // the colour segment's state class sub-ranges' counts (Resources::classCounts)
 	};
 
 	struct BuildDrawsFrame
 	{
-		std::shared_ptr<const ComputeProgram> program;
+		std::shared_ptr<const ComputeProgram> program, clearQueries;
+		std::uint32_t queryGroups = 0;
 		BuildDrawsConstants constants{};
 		std::shared_ptr<const org::LatchBlock> latch;
 		rhi::CommandSignatureHandle signature{};
@@ -37,27 +39,34 @@ namespace DCLF::Draws
 	class BuildDrawsPass final : public org::TypedRenderGraphPass<BuildDrawsPass, BuildDrawsFrame, BuildDrawsBindings>
 	{
 	public:
-		BuildDrawsPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, std::uint32_t a_phase = 0) :
-			resources(std::move(a_resources)), segment(a_segment), fixedPhase(a_phase) {}
+		BuildDrawsPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, std::uint32_t a_phase = 0, bool a_queries = false) :
+			resources(std::move(a_resources)), segment(a_segment), fixedPhase(a_phase), queries(a_queries) {}
 
 		BuildDrawsBindings Declare(org::PassBuilder& a_builder)
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			BuildDrawsBindings bindings{};
+			if (queries) {
+				a_builder.PreferQueue(org::QueueKind::Compute);
+				const auto bind = [&](Api::CullBindingSlot slot, bool writable) {
+					const auto& buffer = Extensions::CullBindingBuffer(slot, *resources->scene);
+					return buffer ? (writable ? a_builder.UnorderedAccess(*buffer).View() : a_builder.ShaderResource(*buffer).View()) : org::DeclaredViewToken{};
+				};
+				bindings.memberQueries = bind(Api::CullBindingSlot::MemberQueries, true);
+				bindings.memberClaims = bind(Api::CullBindingSlot::MemberClaims, true);
+				bindings.cullPrograms = bind(Api::CullBindingSlot::Programs, false);
+				bindings.rootPrograms = bind(Api::CullBindingSlot::RootPrograms, false);
+				return bindings;
+			}
+			if (const auto& results = Extensions::CullBindingBuffer(Api::CullBindingSlot::MemberResults, *resources->scene); results && segment == RenderGraphRuntime::Segment::ZPrepass && fixedPhase != 2)
+				bindings.memberResults = a_builder.ShaderResource(*results).View();
+
 			// The scene list, the geometry table and the rows are the installed payload's (the latch names them): no recording binds them.
 			bindings.sequences = a_builder.UnorderedAccess(*resources->sequences).View();
 			bindings.count = a_builder.UnorderedAccess(resources->count).View();
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(*resources->frustum).View();
-			// Phase 1 tests a member against its root's program (the cull bindings Programs: Features/Portals' portal programs, and
-			// RootPrograms: each root's).
-			const auto& programs = Extensions::CullBindingBuffer(Api::CullBindingSlot::Programs, *resources->scene);
-			const auto& rootPrograms = Extensions::CullBindingBuffer(Api::CullBindingSlot::RootPrograms, *resources->scene);
-			if (resources->frustum && programs && rootPrograms) {
-				bindings.cullPrograms = a_builder.ShaderResource(*programs).View();
-				bindings.rootPrograms = a_builder.ShaderResource(*rootPrograms).View();
-			}
 			// Every phase reads the fade roots' static rows (the cull binding RootRows: phase 1's fade verdicts, LOD skin partitions). The
 			// states FadeStateCS published last frame (RootStates, the latch's) are undeclared: nothing this frame writes them.
 			if (const auto& roots = Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, *resources->scene))
@@ -90,6 +99,9 @@ namespace DCLF::Draws
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(fixedPhase);
+			a_out.push_back(queries);
+			for (const auto slot : { Api::CullBindingSlot::MemberQueries, Api::CullBindingSlot::MemberResults, Api::CullBindingSlot::MemberClaims })
+				a_out.push_back(NamedSerial(a_preparation, Extensions::CullBindingBuffer(slot, *resources->scene)));
 			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->firsts) : 0);
 		}
 
@@ -109,6 +121,26 @@ namespace DCLF::Draws
 			prepared.signature = resources->dispatchSignature->GetHandle();
 			auto& constants = prepared.constants;
 			constants.latchIndex = frame->latch->SrvIndex();
+			if (queries) {
+				if (!a_bindings.memberQueries.layout || !a_bindings.memberClaims.layout)
+					return {};
+				prepared.program = resources->preparePortalQueries;
+				prepared.clearQueries = resources->clearPortalQueries;
+				prepared.signature = resources->portalQuerySignature->GetHandle();
+				constants.phaseBits = 1u << 4;
+				constants.memberQueriesIndex = CaptureViewIndex(a_preparation, a_bindings.memberQueries);
+				constants.memberClaimsIndex = CaptureViewIndex(a_preparation, a_bindings.memberClaims);
+				const auto capacity = NamedUnitsOf(a_preparation, Extensions::CullBindingBuffer(Api::CullBindingSlot::MemberQueries, *resources->scene));
+				prepared.queryGroups = static_cast<std::uint32_t>((capacity + 63) / 64);
+				if (RootRowsCurrent(*resources->scene) && a_bindings.cullPrograms.layout && a_bindings.rootPrograms.layout) {
+					constants.cullProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.cullPrograms);
+					constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
+				}
+				return prepared;
+			}
+			if (phase == 1 && a_bindings.memberResults.layout)
+				constants.memberResultsIndex = CaptureViewIndex(a_preparation, a_bindings.memberResults);
+
 			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
 			SetRowStrides(constants);
@@ -117,12 +149,7 @@ namespace DCLF::Draws
 			// Frustum stamps: only depth phase 1 tests every candidate's frustum.
 			if (resources->frustum && phase == 1)
 				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
-			// A member whose root's program culls its bound is out of view. The roots' rows only while they hold the tables' roots.
 			const bool rootRows = RootRowsCurrent(*resources->scene);
-			if (resources->frustum && phase == 1 && a_bindings.cullPrograms.layout && rootRows) {
-				constants.cullProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.cullPrograms);
-				constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
-			}
 			if (rootRows) {
 				constants.fadeRootsIndex = CaptureViewIndex(a_preparation, a_bindings.fadeRoots);
 			}
@@ -166,6 +193,17 @@ namespace DCLF::Draws
 			if (!a_frame.program || !a_frame.latch)
 				return;
 			auto& commands = a_recording.Commands();
+			if (a_frame.clearQueries) {
+				auto constants = a_frame.constants;
+				constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
+				commands.BindLayout(a_frame.clearQueries->layout->GetHandle());
+				commands.BindPipeline(a_frame.clearQueries->pipeline->GetHandle());
+				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kBuildDrawsConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+				commands.Dispatch(std::min(a_frame.queryGroups, 65535u), (a_frame.queryGroups + 65534u) / 65535u, 1);
+				const auto barrier = rhi::FullMemoryBarrier();
+				commands.Barriers(rhi::BarrierBatch{ {}, {}, { &barrier, 1 } });
+			}
+
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
 			RecordLatchedDispatch(a_frame.constants, *a_frame.latch, a_frame.signature, 0, a_recording);
@@ -185,11 +223,12 @@ namespace DCLF::Draws
 		std::shared_ptr<Resources> resources;
 		RenderGraphRuntime::Segment segment;
 		std::uint32_t fixedPhase = 0;
+		bool queries = false;
 	};
 
-	std::shared_ptr<org::RenderPass> MakeBuildDrawsPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, std::uint32_t a_phase)
+	std::shared_ptr<org::RenderPass> MakeBuildDrawsPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, std::uint32_t a_phase, bool a_queries)
 	{
-		return std::make_shared<BuildDrawsPass>(std::move(a_resources), a_segment, a_phase);
+		return std::make_shared<BuildDrawsPass>(std::move(a_resources), a_segment, a_phase, a_queries);
 	}
 
 	struct SortSequencesBindings

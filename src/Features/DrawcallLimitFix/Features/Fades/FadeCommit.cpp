@@ -2,9 +2,8 @@
 // the engine's fade globals, the animation job's batch, the log window); the write-back's readback harvested and armed; each root's
 // program from the main cull input. Core's visibility readback is armed after the hooks (CommitMainPayload).
 
-#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
-#include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
-#include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
+#include <Tracy/Tracy.hpp>
+
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
@@ -14,9 +13,12 @@
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
-#include "RenderGraph/RenderGraphRuntime.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 
 #include <algorithm>
 #include <numeric>
@@ -260,6 +262,12 @@ namespace DCLF::Features::Fades
 			if (buffers.fadeFrameNumber != a_commit.frame)
 				SampleFadeInputs(adopted, uploads, buffers, rootSlots, inputs, logBase);
 			UploadFadeRoots(adopted, a_commit.tables, a_commit.frame, inputs, logBase, buffers, uploads);
+			// Query programs and scratch must describe the same admitted publication. Diagnose a growth race explicitly;
+			// the shader emits an invalid verdict rather than indexing past the bucket buffers or taking a frustum fallback.
+			if (buffers.portalBatch)
+				Portals::CheckMainBatchCapacity(*buffers.portalBatch, a_commit.frame,
+					std::min(adopted.Of(buffers.portalBatch->counts).units, adopted.Of(buffers.portalBatch->offsets).units) / 2);
+
 			Extensions::TableFamilySent(Extensions::RootStatesFamily(), buffers.FadeRootsContentEpoch(adopted));
 			// The fade events' header and readback slot (its last execution harvested first).
 			ArmFadeReadback(buffers, uploads);

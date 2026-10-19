@@ -5,10 +5,10 @@
 // Self-contained (features include it); Internal.h includes it in its order.
 
 // volk must precede every Vulkan header in this translation unit (FrameLayout.h first).
-#include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
@@ -91,7 +91,8 @@ namespace DCLF::Draws
 		Versioned classCounts;
 		std::array<Versioned, 2> zBucketCounts;
 		std::shared_ptr<IndexPool> pool;
-		std::shared_ptr<const ComputeProgram> buildDraws;
+		std::shared_ptr<const ComputeProgram> buildDraws, clearPortalQueries, preparePortalQueries;
+		rhi::CommandSignaturePtr portalQuerySignature;
 		winrt::com_ptr<ID3D11Buffer> countD3D11;  // the culling counters' readback
 		// The foliage record (Policy::RecordFoliagePixels): per frame parity, each pixel's object and colours, and the compare
 		// pass's results (Diagnostics/Draws/Foliage.cpp), read back per frame slot.
@@ -168,10 +169,10 @@ namespace DCLF::Draws
 		org::DeclaredViewToken depth;
 		org::DeclaredViewToken terrainDepth;  // the Z-prepass's, with Terrain Blending (Resources::terrainDepth)
 		org::ResourceBindingToken sequences, count;
-		org::ResourceBindingToken classCounts;  // the colour and forward calls' counts (Resources::classCounts)
-		org::ResourceBindingToken pool, bucketCounts;  // the depth segment's plain draws
+		org::ResourceBindingToken classCounts;                                             // the colour and forward calls' counts (Resources::classCounts)
+		org::ResourceBindingToken pool, bucketCounts;                                      // the depth segment's plain draws
 		std::array<org::ResourceBindingToken, Extensions::kDrawFamilies> familyArguments;  // each draw family's arguments (DrawFamilyDeclare)
-		std::array<std::uint64_t, Extensions::kDrawFamilies> familyRows{};                // and its draw row's address (DrawFamilyDeclare::row)
+		std::array<std::uint64_t, Extensions::kDrawFamilies> familyRows{};                 // and its draw row's address (DrawFamilyDeclare::row)
 	};
 
 	/*
@@ -205,9 +206,9 @@ namespace DCLF::Draws
 	struct SetClassPlan
 	{
 		std::vector<SetClassRanges> classes;
-		std::vector<std::uint32_t> table;  // [classes, kClassRanges, 0, 0], then kClassWords per class
-		std::vector<std::uint32_t> map;    // [set indices, 0, 0, 0], then IndirectState::classOf
-		std::uint32_t decalRanges = 0;     // the (group, class) decal sub-ranges present
+		std::vector<std::uint32_t> table;                                                                  // [classes, kClassRanges, 0, 0], then kClassWords per class
+		std::vector<std::uint32_t> map;                                                                    // [set indices, 0, 0, 0], then IndirectState::classOf
+		std::uint32_t decalRanges = 0;                                                                     // the (group, class) decal sub-ranges present
 		std::uint32_t Words() const { return static_cast<std::uint32_t>(classes.size()) * kClassRanges; }  // classCounts' words
 	};
 	void PlanSetClasses(const MainLayout& a_layout, const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, SetClassPlan& a_out);
@@ -248,9 +249,9 @@ namespace DCLF::Draws
 		std::uint32_t cullMode = 0;
 		std::shared_ptr<const org::LatchBlock> latch;  // the one the revision's set names (RequireLatches)
 		MainLatchLayout latchLayout;
-		std::vector<PassFrame::ZCall> zCalls;          // the depth segment's (PlanZBuckets)
+		std::vector<PassFrame::ZCall> zCalls;  // the depth segment's (PlanZBuckets)
 		std::shared_ptr<const ZBucketPlan> zPlan;
-		LatchedList latched;                           // MainLatchedLayout, in its reserved block
+		LatchedList latched;  // MainLatchedLayout, in its reserved block
 	};
 	/**
 	 * @brief A segment's shape inputs from the layout and the versions a_sealed names (ranges, a_cullMode). The caller fills
@@ -258,7 +259,6 @@ namespace DCLF::Draws
 	 */
 	MainShapeInputs MainShapeInputsOf(const Resources& a_resources, const MainLayout& a_layout, const NamedVersions& a_sealed, bool a_depthOnly, std::uint32_t a_cullMode);
 	std::shared_ptr<PassFrame> MakeMainShape(const MainShapeInputs& a_in);
-
 
 	/**
 	 * @brief CS_DCLF_PASS_STATS=1: the main draw passes' pipeline statistics per frame slot, read back when the slot comes round.
@@ -369,7 +369,7 @@ namespace DCLF::Draws
 
 	struct PreparedDraws
 	{
-		PassStats* stats = nullptr;  // CS_DCLF_PASS_STATS
+		PassStats* stats = nullptr;              // CS_DCLF_PASS_STATS
 		PreprocessStates* preprocess = nullptr;  // the frame slot's explicit DGC preprocess state list
 		std::array<std::uint32_t, kFramePushWords> framePushWords{};
 		std::shared_ptr<const PassFrame> frame;
