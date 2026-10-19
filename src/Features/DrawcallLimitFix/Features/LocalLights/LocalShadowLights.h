@@ -39,6 +39,9 @@ namespace DCLF
 				std::uint32_t masks[2]{};
 			};
 			std::vector<Volume> volumes;
+			// A portal-strict point light's entry in the frame's light context atlas + 1 (LightSelection::Selected::portalContextIndex): its
+			// receivers pass its strict gates (Portals/StrictGates.h). 0: not gated.
+			std::uint32_t portalContext = 0;
 		};
 		std::vector<Light> lights;
 

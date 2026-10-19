@@ -52,9 +52,10 @@ namespace DCLF::Features::Shadows::Local
 			list += fmt::format("\n[DCLF] point lights' bits for engine main passes under cut entries: {} lights ({} past the mask's 32), {} geometries given them ({} any); parity {} compared, {} agree, {} with engine-only bits{}, {} with DCLF-only bits{}, {} cut but not an excluded entry's{}",
 				c.bitLights, c.overflow, c.given, c.withBits, p.compared, p.agree, p.engineOnly, byReach(p.engineOnlyBy), p.dclfOnly, byReach(p.dclfOnlyBy), p.unhandled,
 				p.compared || p.unhandled ? (p.engineOnly || p.unhandled ? " <- LIGHT BITS" : " <- OK") : "");
-			list += fmt::format("\n[DCLF] point lights' empty culls (no engine cull: DCLF draws every paraboloid view): {} of {} lights ({} with a view not DCLF's, {} portal-strict, {} past the mask's 32); "
+			list += fmt::format("\n[DCLF] point lights' empty culls (no engine cull: DCLF draws every paraboloid view): {} of {} lights ({} with a view not DCLF's, {} portal-strict kept native, {} past the mask's 32; {} portal-strict, their bits' gates {} tested, {} refused, {} without a portal graph, {} without a context{}); "
 								"{} main registrations given their bits ({} any), {} without a slot{}; parity {} spheres checked, {} differ{}; {} geometries compared, {} agree, {} with engine-only bits{}, {} with DCLF-only bits{}",
-				c.emptyLights, c.bitLights + c.overflow, c.emptyNotCovered, c.emptyPortalStrict, c.overflow, c.emptyGiven, c.emptyWithBits, c.emptyUnstamped,
+				c.emptyLights, c.bitLights + c.overflow, c.emptyNotCovered, c.emptyPortalStrict, c.overflow, c.strictLights, c.strictTested, c.strictRefused, c.strictNoGraph, c.strictNoContext,
+				c.strictNoContext ? " <- STRICT CONTEXT" : "", c.emptyGiven, c.emptyWithBits, c.emptyUnstamped,
 				c.emptyUnstamped ? " <- STAMPS" : "", c.spheresChecked, c.spheresDiffer, c.spheresChecked ? (c.spheresDiffer ? " <- SPHERES" : " <- OK") : "",
 				p.sphereCompared, p.sphereAgree, p.sphereEngineOnly, p.sphereCompared ? (p.sphereEngineOnly ? " <- EMPTY CULL BITS" : " <- OK") : "", p.sphereDclfOnly,
 				p.sphereFirstEngineOnly.empty() ? "" : "; first engine-only: " + p.sphereFirstEngineOnly);

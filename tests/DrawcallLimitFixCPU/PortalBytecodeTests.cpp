@@ -197,6 +197,10 @@ namespace
 		const Set empty;
 		const float c[]{ 0, 0, 0 };
 		assert(Run<Set>(compact, std::span(&empty, 1), c, 1));
+		// A rejected stream's published replacement accepts every bound, in both traversals, without plane sets.
+		const auto accept = AcceptAll();
+		assert(accept.instructions.size() == 1 && accept.maxSteps == 1);
+		assert(Run<Set>(accept, {}, c, 1) && Run<Set>(accept, {}, c, 0, true));
 	}
 }
 
@@ -214,7 +218,7 @@ int main()
 		light->kind = Context::Kind::PointLight;
 		light->strict = true;
 		light->bothSides = false;
-		light->sphere = { 1, 2, 3, 4 };
+		light->walkSphere = { 1, 2, 3, 4 };
 		const std::array<ContextHold, 2> contexts{ camera, light };
 		const auto atlas = EncodeContexts(contexts, 0x12345678abcdef01ull);
 		assert(ValidateContexts(atlas, 17) == 0x12345678abcdef01ull);
@@ -271,7 +275,7 @@ int main()
 		std::copy_n(atlas.begin() + 20, 16, words.begin());
 		const auto second = std::bit_cast<ContextEntry>(words);
 		assert(second.firstBucket == 1 && second.flags == (kContextPoint | kContextStrict));
-		assert(second.sphere == light->sphere);
+		assert(second.walkSphere == light->walkSphere);
 		assert(second.programsBase == first.programsBase + camera->programs.size() * 4);
 		assert(std::equal(light->programs.begin(), light->programs.end(), atlas.begin() + second.programsBase / 4));
 		camera->programs[0] = 123;  // Published atlas owns its words independently of future snapshots.

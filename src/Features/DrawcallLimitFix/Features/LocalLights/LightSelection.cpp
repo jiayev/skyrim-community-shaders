@@ -191,8 +191,14 @@ namespace DCLF
 	{
 		// The slots' board first: an early return leaves it invalid (no views this frame), as the frame below.
 		ShadowViews::LightSlots().Invalidate();
+		// A second selection in the scene frame keeps the first's lights and atlas entries (Frame::FrameLight).
+		const std::uint32_t sceneFrame = Scene::FrameView::Get().GetFrame();
+		std::vector<FrameLight> frameLights = frame.sceneFrame == sceneFrame ? std::move(frame.frameLights) : std::vector<FrameLight>{};
+		const std::uint32_t selections = frame.sceneFrame == sceneFrame ? frame.selections + 1 : 1;
 		frame = {};
-		frame.sceneFrame = Scene::FrameView::Get().GetFrame();
+		frame.sceneFrame = sceneFrame;
+		frame.selections = selections;
+		frame.frameLights = std::move(frameLights);
 		auto* node = SceneNode();
 		const auto* camera = WorldCamera();
 		if (!node || !camera)
@@ -238,7 +244,8 @@ namespace DCLF
 				continue;
 			// Kept: the engine walks it here (FUN_1414a2530), its walk's edge flags left on the shapes.
 			PortalViews::Get().CommitLightWalk();
-			frame.locals.push_back({ light, slot, mask, lightRooms.at(light).context });
+			const auto& rooms = lightRooms.at(light);
+			frame.locals.push_back({ light, slot, mask, rooms.context, ~0u, rooms.walk });
 			// The focus host: a light with the flag, or the first that can host (vfunc 0x20: directional, spot) while none has.
 			{
 				auto& flag = focusFlags[light];
@@ -286,18 +293,43 @@ namespace DCLF
 					live.insert(std::move(*it));
 			lightRooms = std::move(live);
 		}
+		// The frame's lights: this selection's join the earlier ones' (a light kept again takes this walk's context), then the atlas of the
+		// camera and every frame light's context, entries in first-kept order.
+		for (const auto& selected : frame.locals) {
+			auto it = std::find_if(frame.frameLights.begin(), frame.frameLights.end(), [&](const auto& a_entry) { return a_entry.light == selected.light; });
+			if (it == frame.frameLights.end())
+				it = frame.frameLights.insert(frame.frameLights.end(), FrameLight{ selected.light });
+			it->portalContext = selected.portalContext;
+			it->portalWalk = selected.portalWalk;
+		}
 		std::vector<Portals::ContextHold> contexts;
 		if (auto cameraContext = PortalViews::Get().MainContext(); cameraContext && cameraContext->frame == frame.sceneFrame)
 			contexts.push_back(std::move(cameraContext));
-		for (auto& selected : frame.locals)
-			if (selected.portalContext) {
-				selected.portalContextIndex = static_cast<std::uint32_t>(contexts.size());
-				contexts.push_back(selected.portalContext);
+		for (auto& entry : frame.frameLights) {
+			entry.portalContextIndex = ~0u;
+			if (entry.portalContext) {
+				entry.portalContextIndex = static_cast<std::uint32_t>(contexts.size());
+				contexts.push_back(entry.portalContext);
 			}
-		static std::uint64_t publication = 0;  // render thread; identity also changes if selection runs twice in one scene frame
+		}
+		for (auto& selected : frame.locals)
+			if (const auto* entry = frame.LightOf(selected.light))
+				selected.portalContextIndex = entry->portalContextIndex;
+		// Render thread; identity also changes if selection runs twice in one scene frame. Zero is never an identity.
+		static std::uint64_t publication = 0;
 		if (++publication == 0)
-			throw std::overflow_error("point-light context publication identity exhausted");
-		frame.portalContexts = Portals::EncodeContexts(contexts, publication);
+			++publication;
+		// Inside the engine's detour: an atlas that cannot be encoded is not published (the commits then publish none).
+		try {
+			frame.portalContexts = Portals::EncodeContexts(contexts, publication);
+		} catch (const std::exception& e) {
+			frame.portalContexts.clear();
+			for (auto& selected : frame.locals)
+				selected.portalContextIndex = ~0u;
+			for (auto& entry : frame.frameLights)
+				entry.portalContextIndex = ~0u;
+			logger::error("[DCLF][structural-gap] point-light context atlas not encoded at frame {}: {}", frame.sceneFrame, e.what());
+		}
 		frame.valid = true;
 		// The slots and focus hosts to the shadow views (the LightSlots board: spans into frame, stable until the next Select).
 		ShadowViews::LightSlots().Publish(frame.sceneFrame, frame.slots, frame.focusHosts, frame.focusCount);

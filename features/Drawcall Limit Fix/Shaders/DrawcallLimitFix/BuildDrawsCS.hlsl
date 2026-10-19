@@ -48,13 +48,14 @@ cbuffer BuildDrawsConstants : register(b0)
 	// shadow view drops a caster while its root fades; every dispatch picks LOD partitions by the root's level (LodPartitions). Root
 	// state is FadeStateCS's model, not the node's. 0 where unbound.
 	uint FadeRootsIndex;
-	// Main query preparation: ByteAddressBuffer of portal programs (kPortal*) and StructuredBuffer<uint> of each root's program.
-	// Draw construction reads MemberResultsIndex instead.
-	uint PortalProgramsIndex;
+	// Shadow views and the colour segment: StructuredBuffer<uint> of each object's strict-light gate (the cull binding ObjectGates), which the
+	// latch's StrictGatesIndex verdicts are of. 0 elsewhere.
+	uint ObjectGatesIndex;
 	// Shadow views and depth phases: RWByteAddressBuffer of bucket counts, a word per bucket (BucketTableOffset). 0 elsewhere.
 	uint BucketCountsIndex;
 	// Shadow views and depth segment: ByteAddressBuffer of each geometry slot's first index in the index pool, ~0 without one.
 	uint PoolFirstsIndex;
+	// Main query preparation: StructuredBuffer<uint> of each root's program. Draw construction reads MemberResultsIndex instead.
 	uint RootProgramsIndex;
 	// Colour segment: the forward range (its classes' staging and sorted halves: the class table's), and its slots in all; visible
 	// forward draws append to their class's staging half with their view depth in firstInstance (ForwardSortCS.hlsl sorts them).
@@ -209,7 +210,7 @@ static const uint kSunEntryProcessBytes = 112;
 // Colour pass: local shadow lights' latch offset (a count, then per volume two plane masks, mask bit, landscape flag, sphere and
 // 12 planes: GpuShadowVolume). 0: none tested.
 static uint LocalShadowOffset;
-static const uint kShadowVolumeBytes = 224;
+static const uint kShadowVolumeBytes = 240;
 // Depth segment: the main camera's position and LOD factor (kObjectFadeTest).
 static float4 FadeEye;
 // Depth segment: the tree height test's base and limit (kObjectHeightTest); limit +infinity when off.
@@ -229,6 +230,10 @@ static float4 TerrainNear;
 // forward part), latch bytes. 0: none.
 static uint ClassTableOffset;
 static uint ClassMapOffset;
+// The frame's light context atlas and strict gates (0: none), and a portal-strict point light's view's atlas entry + 1 (0: not gated).
+static uint LightContextsIndex;
+static uint StrictGatesIndex;
+static uint StrictContext;
 
 // The placement rows the culling reads (BindlessPlacement): world bound, sun entry sphere, fade node centre, and the forward
 // sort's (nearest BSOrderedNode's centre, ordinal).
@@ -291,6 +296,10 @@ void LoadLatch()
 	ViewBits = payload.z;
 	FocusRoot = payload.w;
 	TerrainNear = asfloat(latch.Load4(LatchOffset + 304));
+	const uint3 strict = latch.Load3(LatchOffset + 324);
+	LightContextsIndex = strict.x;
+	StrictGatesIndex = strict.y;
+	StrictContext = strict.z;
 	const uint2 classRegions = latch.Load2(LatchOffset + 292);
 	ClassTableOffset = classRegions.x;
 	ClassMapOffset = classRegions.y;
@@ -301,8 +310,9 @@ void LoadLatch()
 }
 
 // Light Limit Fix's shadow mask of an input, as the main pass's selection (LocalShadowLights): local shadow lights whose sphere
-// its bound meets and whose planes it is inside, less those a landscape property does not take.
-uint LocalShadowMask(float3 a_centre, float a_radius, bool a_landscape)
+// its bound meets and whose planes it is inside, less those a landscape property does not take, and a portal-strict light's whose
+// gates the object (a_object) does not pass (GpuShadowVolume::portalContext).
+uint LocalShadowMask(float3 a_centre, float a_radius, bool a_landscape, uint a_object)
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
 	const uint volumes = latch.Load(LocalShadowOffset);
@@ -327,6 +337,9 @@ uint LocalShadowMask(float3 a_centre, float a_radius, bool a_landscape)
 			const float4 plane = asfloat(latch.Load4(record + 32 + p * 16));
 			inside = dot(plane.xyz, a_centre) - plane.w >= -a_radius;
 		}
+		const uint portalContext = latch.Load(record + 224);
+		if (inside && portalContext != 0 && StrictGateRejects(StrictGatesIndex, LightContextsIndex, ObjectGatesIndex, portalContext - 1, a_object, a_centre, a_radius))
+			inside = false;
 		if (inside)
 			mask |= head.z;
 	}
@@ -869,11 +882,14 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	query.Destination = objectIndex;
 	query.Generation = VisibilityStamp;
 	query.Program = Culled(query.Bound.xyz, query.Bound.w) ? 0u : 1u;
-	if (query.Program != 0 && PortalProgramsIndex != 0 && RootProgramsIndex != 0) {
+	// The frame's published programs (0: none this frame, the frustum alone).
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	const uint programsIndex = latch.Load(LatchOffset + kLatchPortalPrograms);
+	if (query.Program != 0 && programsIndex != 0 && RootProgramsIndex != 0) {
 		const uint root = inputs.Load(inputOffset + 48);
 		if (root != 0xFFFFFFFFu) {
 			StructuredBuffer<uint> rootPrograms = ResourceDescriptorHeap[RootProgramsIndex];
-			ByteAddressBuffer programs = ResourceDescriptorHeap[PortalProgramsIndex];
+			ByteAddressBuffer programs = ResourceDescriptorHeap[programsIndex];
 			const uint program = rootPrograms[root];
 			if (program < programs.Load(kPortalSetBytes)) {
 				query.Program = program;
@@ -933,7 +949,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	}
 	if (LocalShadowOffset != 0) {
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);
-		objectWord |= (LocalShadowMask(bound.xyz, bound.w, (input.w & kObjectLandscapeLights) != 0) & 0xFu) << kObjectLocalShadowShift;
+		objectWord |= (LocalShadowMask(bound.xyz, bound.w, (input.w & kObjectLandscapeLights) != 0, objectIndex) & 0xFu) << kObjectLocalShadowShift;
 	}
 	// The drawable bit is the main family's; a shadow view draws every input its bits select.
 	const bool drawable = keyWord != 0 || (input.w & kInputDrawable) != 0;
@@ -1095,6 +1111,9 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);  // centre (world), radius
 		// Phase 2 only revisits occlusion.
 		frustumRejected = phase == kPhaseOne ? MainFrustumRejected(objectIndex) : (phase != kPhaseTwo && Culled(bound.xyz, bound.w));
+		// A portal-strict point light's view: its cull's rooms, shared nodes and room frusta (StrictGateRejects), by the caster's gate.
+		if (!frustumRejected && phase == kPhaseSingle && StrictContext != 0)
+			frustumRejected = StrictGateRejects(StrictGatesIndex, LightContextsIndex, ObjectGatesIndex, StrictContext - 1, objectIndex, bound.xyz, bound.w);
 		if (frustumRejected) {
 			count.InterlockedAdd(kCountCulled, 1, scratch);
 		} else if (CullMode() >= 2 && Occluded(bound.xyz, bound.w)) {

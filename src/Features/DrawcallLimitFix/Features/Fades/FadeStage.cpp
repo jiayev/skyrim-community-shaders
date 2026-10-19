@@ -26,7 +26,7 @@ namespace DCLF::Draws
 	// In DCLF::Draws, where they were defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 	struct FadeStateBindings
 	{
-		org::DeclaredViewToken roots, states, frame, log, programs, rootPrograms, animated, events, reported;
+		org::DeclaredViewToken roots, states, frame, log, rootPrograms, animated, events, reported;
 		org::DeclaredViewToken queries, results;
 		std::array<org::DeclaredViewToken, 2> published;
 	};
@@ -61,9 +61,8 @@ namespace DCLF::Draws
 			for (std::uint32_t h = 0; h < 2; ++h)
 				bindings.published[h] = a_builder.UnorderedAccess(*scene.fadeStatesOut[h]).View();
 			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
-			// The cull binding Programs (none without one: FadeStateCS takes the frustum alone at ProgramsIndex 0).
-			if (const auto& programs = Extensions::CullBindingBuffer(Api::CullBindingSlot::Programs, *resources->scene))
-				bindings.programs = a_builder.ShaderResource(*programs).View();
+			// The cull binding Programs is the depth latch's portalProgramsIndex (a per-frame publication no pass declares; 0: none,
+			// the frustum alone).
 			bindings.rootPrograms = a_builder.ShaderResource(*scene.fadeRootPrograms).View();
 			bindings.animated = a_builder.ShaderResource(*scene.fadeAnimated).View();
 			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
@@ -79,8 +78,7 @@ namespace DCLF::Draws
 		{
 			const auto frame = CurrentFrame(a_preparation, segment);
 			const auto& scene = *fades;
-			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &scene.fadeStatesOut[0], &scene.fadeStatesOut[1],
-					 &Extensions::CullBindingBuffer(Api::CullBindingSlot::Programs, *resources->scene), &scene.fadeRootPrograms,
+			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &scene.fadeStatesOut[0], &scene.fadeStatesOut[1], &scene.fadeRootPrograms,
 					 &scene.fadeAnimated, &scene.fadeEvents, &scene.fadeReported })
 				a_out.push_back(NamedSerial(a_preparation, *buffer));
 			a_out.push_back(frame ? frame->generation : 0);
@@ -108,8 +106,6 @@ namespace DCLF::Draws
 			constants.rootsIndex = CaptureViewIndex(a_preparation, a_bindings.roots);
 			constants.statesIndex = CaptureViewIndex(a_preparation, a_bindings.states);
 			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
-			if (a_bindings.programs.layout)
-				constants.programsIndex = CaptureViewIndex(a_preparation, a_bindings.programs);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
 			constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
 			if (queryStage)

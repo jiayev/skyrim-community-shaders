@@ -1,4 +1,5 @@
 #include "Features/DrawcallLimitFix/Features/Portals/ParabolicCulling.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalBatchLayout.h"
 
 #include <cassert>
 #include <iostream>
@@ -120,6 +121,57 @@ namespace
 		const auto failed = Process(4, 0, false, true, true, true, 0);
 		assert(failed.visible == 0 && failed.writesHemispheres == 1);
 	}
+
+	void OrderedStateScan()
+	{
+		// Model the GPU's hierarchical exclusive maximum against serial native traversal state. Exercise partial blocks,
+		// multiple scan levels, writes of zero, visited rejections, skipped subtrees, and invalid upstream decisions.
+		std::mt19937 random(0x301f4);
+		for (const std::uint32_t count : { 0u, 1u, 255u, 256u, 257u, 258u, 65535u, 65536u, 65537u, 1000003u }) {
+			const auto layout = DCLF::Portals::ScanFor(count);
+			using State = std::array<std::uint32_t, 2>;
+			const auto combine = [](State a, State b) { return State{ std::max(a[0], b[0]), std::max(a[1], b[1]) }; };
+			std::vector<State> values(layout.units), prefix(layout.units);
+			std::vector<Decision> decisions(count);
+			std::vector<bool> visited(count);
+			for (std::uint32_t i = 0; i < count; ++i) {
+				decisions[i] = { random() & 1u, random() & 3u, random() & 1u, i == count / 2 ? 1u : 0u };
+				visited[i] = (random() & 3u) != 0;
+				values[i] = { visited[i] && decisions[i].writesHemispheres ? i + 1u : 0u, visited[i] ? decisions[i].invalid : 0u };
+			}
+			for (std::size_t level = 0; level < layout.levels.size(); ++level) {
+				const auto [base, elements] = layout.levels[level];
+				for (std::uint32_t block = 0; block < elements; block += 256) {
+					State state{};
+					for (std::uint32_t lane = 0; lane < 256 && block + lane < elements; ++lane) {
+						prefix[base + block + lane] = state;
+						state = combine(state, values[base + block + lane]);
+					}
+					if (level + 1 < layout.levels.size())
+						values[layout.levels[level + 1].base + block / 256] = state;
+				}
+			}
+			for (std::size_t level = layout.levels.size() - 1; level > 0; --level) {
+				const auto [base, elements] = layout.levels[level - 1];
+				for (std::uint32_t i = 0; i < elements; ++i)
+					prefix[base + i] = combine(prefix[base + i], prefix[layout.levels[level].base + i / 256]);
+			}
+			const auto initialMask = count % 4;
+			std::uint32_t mask = initialMask, invalid = 0, lastWriter = 0;
+			for (std::uint32_t i = 0; i < count; ++i) {
+				if (visited[i]) {
+					invalid |= decisions[i].invalid;
+					if (decisions[i].writesHemispheres) {
+						mask = decisions[i].hemispheres;
+						lastWriter = i + 1;
+					}
+				}
+				const auto scanned = combine(prefix[i], values[i]);
+				assert(scanned[0] == lastWriter && scanned[1] == invalid);
+				assert((scanned[0] ? decisions[scanned[0] - 1].hemispheres : initialMask) == mask);
+			}
+		}
+	}
 }
 
 int main()
@@ -127,5 +179,6 @@ int main()
 	Boundaries();
 	Differential();
 	StateEffects();
+	OrderedStateScan();
 	std::cout << "Parabolic culling reference, boundaries and state effects passed\n";
 }

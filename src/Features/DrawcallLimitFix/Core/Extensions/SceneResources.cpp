@@ -2,10 +2,11 @@
 // their states' lookup (see the header).
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 
 namespace DCLF::Api
 {

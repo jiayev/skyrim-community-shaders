@@ -12,8 +12,9 @@ namespace DCLF::Draws
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
 		org::DeclaredViewToken fadeRoots;
 		org::DeclaredViewToken bucketCounts, poolFirsts;    // the depth segment's buckets (Resources::zBucketCounts) and the pool's firsts
-		org::DeclaredViewToken cullPrograms, rootPrograms;  // the main camera's first phase: the cull binding Programs, each root's
+		org::DeclaredViewToken rootPrograms;  // the main member queries: each root's program (the programs are the latch's)
 		org::DeclaredViewToken classCounts;                 // the colour segment's state class sub-ranges' counts (Resources::classCounts)
+		org::DeclaredViewToken objectGates;                 // the colour segment: the objects' strict-light gates (the cull binding ObjectGates)
 	};
 
 	struct BuildDrawsFrame
@@ -54,7 +55,6 @@ namespace DCLF::Draws
 				};
 				bindings.memberQueries = bind(Api::CullBindingSlot::MemberQueries, true);
 				bindings.memberClaims = bind(Api::CullBindingSlot::MemberClaims, true);
-				bindings.cullPrograms = bind(Api::CullBindingSlot::Programs, false);
 				bindings.rootPrograms = bind(Api::CullBindingSlot::RootPrograms, false);
 				return bindings;
 			}
@@ -84,6 +84,10 @@ namespace DCLF::Draws
 				bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
 			if (segment == RenderGraphRuntime::Segment::MainOpaque && resources->classCounts)
 				bindings.classCounts = a_builder.UnorderedAccess(*resources->classCounts).View();
+			// The colour segment's receivers of portal-strict lights pass their gates (LocalShadowMask).
+			if (segment == RenderGraphRuntime::Segment::MainOpaque)
+				if (const auto& gates = Extensions::CullBindingBuffer(Api::CullBindingSlot::ObjectGates, *resources->scene))
+					bindings.objectGates = a_builder.ShaderResource(*gates).View();
 			if (Sorts()) {
 				bindings.sortCounts = a_builder.UnorderedAccess(resources->sort->counts).View();
 				bindings.sortStaging = a_builder.UnorderedAccess(*resources->sort->staging).View();
@@ -100,7 +104,7 @@ namespace DCLF::Draws
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(fixedPhase);
 			a_out.push_back(queries);
-			for (const auto slot : { Api::CullBindingSlot::MemberQueries, Api::CullBindingSlot::MemberResults, Api::CullBindingSlot::MemberClaims })
+			for (const auto slot : { Api::CullBindingSlot::MemberQueries, Api::CullBindingSlot::MemberResults, Api::CullBindingSlot::MemberClaims, Api::CullBindingSlot::ObjectGates })
 				a_out.push_back(NamedSerial(a_preparation, Extensions::CullBindingBuffer(slot, *resources->scene)));
 			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->firsts) : 0);
 		}
@@ -132,10 +136,9 @@ namespace DCLF::Draws
 				constants.memberClaimsIndex = CaptureViewIndex(a_preparation, a_bindings.memberClaims);
 				const auto capacity = NamedUnitsOf(a_preparation, Extensions::CullBindingBuffer(Api::CullBindingSlot::MemberQueries, *resources->scene));
 				prepared.queryGroups = static_cast<std::uint32_t>((capacity + 63) / 64);
-				if (RootRowsCurrent(*resources->scene) && a_bindings.cullPrograms.layout && a_bindings.rootPrograms.layout) {
-					constants.cullProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.cullPrograms);
+				// The programs are the depth latch's portalProgramsIndex (the frame's publication).
+				if (RootRowsCurrent(*resources->scene) && a_bindings.rootPrograms.layout)
 					constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
-				}
 				return prepared;
 			}
 			if (phase == 1 && a_bindings.memberResults.layout)
@@ -173,6 +176,8 @@ namespace DCLF::Draws
 			// The state class sub-ranges' counts: colour segment only (the latch's class table and map say where each class draws).
 			if (now == RenderGraphRuntime::Segment::MainOpaque && resources->classCounts)
 				constants.classCountsIndex = CaptureViewIndex(a_preparation, a_bindings.classCounts);
+			if (now == RenderGraphRuntime::Segment::MainOpaque && a_bindings.objectGates.layout)
+				constants.objectGatesIndex = CaptureViewIndex(a_preparation, a_bindings.objectGates);
 			// The forward range (its classes' halves: the class table's): colour segment only.
 			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->forwardCapacity) {
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));

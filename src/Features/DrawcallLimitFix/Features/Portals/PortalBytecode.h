@@ -24,6 +24,9 @@ namespace DCLF::PortalBytecode
 		std::uint32_t maxSteps = 0;
 	};
 
+	/** @brief The conservative program for a stream Lower rejects: a single ACCEPT. */
+	inline Compiled AcceptAll() { return { { { kAccept, 0, 0, 0 } }, 1 }; }
+
 	/** @brief Validate and lower reachable engine records; structural tokens must already be jump-threaded away. */
 	template <class Op>
 	Compiled Lower(std::span<const Op> a_ops, std::uint32_t a_first, std::uint32_t a_sets)

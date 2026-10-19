@@ -38,6 +38,8 @@ namespace DCLF::Features::Shadows::Local
 		void Install();
 		/** @brief Whether the skip went in (the Point source's culls: Api::ShadowSourceHooks::CullsInstalled). */
 		bool Installed();
+		/** @brief Install, CS_DCLF_STRICT_LIGHT_CULLS (unset or 1): the portal-strict point lights take the empty culls too. */
+		void SetStrictCulls(bool a_on);
 		/**
 		 * @brief Render thread, the Point source's frameStart (FrameDriver at the scene frame's start): this frame's exclusion, from the
 		 * one the shadow epoch published after it drew the paraboloid views (a_pending: ParabolicExclusionSlot::Pending; null: none).
@@ -65,6 +67,9 @@ namespace DCLF::Features::Shadows::Local
 			// their bits (with one), without a slot in the frame's set; parity spheres checked against the cull's, and differing.
 			std::uint64_t emptyLights = 0, emptyNotCovered = 0, emptyPortalStrict = 0, emptyGiven = 0, emptyWithBits = 0, emptyUnstamped = 0;
 			std::uint64_t spheresChecked = 0, spheresDiffer = 0;
+			// Portal-strict lights culled empty; their bits' gate tests, refused by the gates, tested without a portal graph (nothing to gate),
+			// and tested without the light's context otherwise.
+			std::uint64_t strictLights = 0, strictTested = 0, strictRefused = 0, strictNoGraph = 0, strictNoContext = 0;
 		};
 		Counters Take();
 
@@ -94,9 +99,11 @@ namespace DCLF::Features::Shadows::Local
 		 * Accumulate keeps only its bookkeeping (the first accumulator's light index and bit, the shadow-light count). Its cull would serve
 		 * nothing else: the paraboloid registrations are all withheld, and a point light's process runs with cameraRelatedUpdates off (no
 		 * fades, no leaf LOD in OnVisible). Every geometry's first clearing main registration of the frame then takes the bit of each such
-		 * light whose sphere (its first view's camera position and its radius, as FUN_141519d20 sets them) its bound is in. Portal-strict
-		 * lights, the parity frames, a light past the mask's 32 and frames without the exclusion are culled as before; the parity frames
-		 * compare the predicted spheres with the culls' and the sphere bits with the engine's.
+		 * light whose sphere (its first view's camera position and its radius, as FUN_141519d20 sets them) its bound is in, and for a
+		 * portal-strict light whose strict gates it passes (Portals/StrictGates.h: the rooms and shared nodes its walk reached, the room
+		 * frustum; the light's views and DCLF's receivers apply the same gates on the GPU). The parity frames, a light past the mask's 32 and
+		 * frames without the exclusion are culled as before (portal-strict lights too with CS_DCLF_STRICT_LIGHT_CULLS=0); the parity frames
+		 * compare the predicted spheres with the culls' and the sphere bits, gates included, with the engine's.
 		 */
 		/**
 		 * @brief The Sun source's registration hook (Features/Shadows/Sun), a main registration (+0x160 0xFFFF: it reads the mask, then clears it) of

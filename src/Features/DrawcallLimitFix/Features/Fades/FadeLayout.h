@@ -15,7 +15,7 @@ namespace DCLF::Draws
 		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0;
 		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
 		std::uint32_t outIndices[2]{};        // the published states, by the scene frame's parity
-		std::uint32_t programsIndex = 0;      // ByteAddressBuffer: the main cull input's programs (Features/Portals: PortalPrograms.h)
+		std::uint32_t reservedProgramsWord = 0;  // the programs are the depth latch's portalProgramsIndex (BuildDrawsLatch)
 		std::uint32_t rootProgramsIndex = 0;  // StructuredBuffer<uint>: each root's program (the input's judge)
 		std::uint32_t animatedIndex = 0;      // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
 		std::uint32_t eventsIndex = 0;        // RWStructuredBuffer<uint>: the write-back's events (FadeRecords.h, FadeEvent)

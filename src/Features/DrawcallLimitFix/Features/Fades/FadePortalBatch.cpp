@@ -13,8 +13,7 @@ namespace DCLF::Features::Fades
 		{
 			const auto resources = a_context.Main();
 			const auto scene = SharedSceneOf(*resources->scene);
-			return Portals::MakeBatchPass(resources, scene ? scene->portalBatch : nullptr,
-				Extensions::CullBindingBuffer(Api::CullBindingSlot::Programs, *resources->scene), a_context.segment, Evaluate);
+			return Portals::MakeBatchPass(resources, scene ? scene->portalBatch : nullptr, a_context.segment, Evaluate);
 		}
 	}
 

@@ -31,6 +31,9 @@ namespace DCLF::Api
 		float sphere[4]{};
 		float planes[12][4]{};
 		std::uint32_t masks[2]{};
+		// A portal-strict point light's entry in the frame's light context atlas + 1 (the cull binding LightContexts), whose strict gates a
+		// receiver must pass. 0: not gated.
+		std::uint32_t portalContext = 0;
 	};
 
 	/**

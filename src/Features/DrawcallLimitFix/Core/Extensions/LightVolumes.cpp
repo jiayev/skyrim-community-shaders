@@ -17,6 +17,8 @@ namespace DCLF::Api
 		volume.affectsLand = a_volume.affectsLand ? 1u : 0u;
 		std::memcpy(volume.sphere, a_volume.sphere, sizeof(volume.sphere));
 		std::memcpy(volume.planes, a_volume.planes, sizeof(volume.planes));
+		volume.portalContext = a_volume.portalContext;
+		volume.padding[0] = volume.padding[1] = volume.padding[2] = 0;
 	}
 }
 

@@ -18,9 +18,14 @@ namespace DCLF::Portals
 		Kind kind = Kind::Camera;
 		std::uint32_t frame = 0;
 		std::uint64_t generation = 0, roomsGeneration = 0;
-		std::array<float, 4> sphere{}, hemisphere{};
+		// The room walk's light sphere and its camera's equatorial plane. Not the accumulation process's: FUN_141519d20 sets
+		// those per shadow-map descriptor from its camera, so an accumulation consumer supplies its own.
+		std::array<float, 4> walkSphere{}, walkPlane{};
 		bool strict = false, bothSides = true;
 		std::vector<std::uint32_t> programs;
+		// A strict light's walk: the crossed portals' shared nodes, which its visibility map holds with an empty frustum (Traverse,
+		// 0x1414a4804). Identities only, never dereferenced.
+		std::vector<const void*> sharedNodes;
 	};
 	using ContextHold = std::shared_ptr<const Context>;
 

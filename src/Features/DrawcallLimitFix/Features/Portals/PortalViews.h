@@ -120,9 +120,11 @@ namespace DCLF
 		 * none, kPortalNoProgram with no graph. Render thread.
 		 */
 		std::uint32_t ProgramOf(const RE::NiAVObject* a_node) const;
+		/** @brief A room of the walked graph's program (1 + its room index), else kPortalNoProgram (not a room of it). Render thread. */
+		std::uint32_t ProgramOfRoom(const void* a_room) const;
 		/** @brief Changes when ProgramOf's answers may have (room child attached/detached, new graph). */
 		std::uint64_t ProgramsVersion() const { return structure.load(std::memory_order_relaxed) * 0x9E3779B97F4A7C15ull ^ graphVersion; }
-		/** @brief Any thread (attach/detach detours): a room's child changed. */
+		/** @brief Any thread (attach/detach detours): a room's, a portal shared node's or a multibound node's child changed. */
 		void NoteStructure(const RE::NiNode* a_parent);
 
 		/**
@@ -210,9 +212,10 @@ namespace DCLF
 		};
 		enum LightWalk : std::uint32_t
 		{
-			kLightUntouched,
+			kLightUntouched,  // not walked this frame (hidden, faded, on an object node): the engine keeps its last entry
 			kLightBounds,
 			kLightWalked,
+			kLightNoGraph,    // no portal graph with rooms: nothing for a strict light's walk to reach, nor to gate
 		};
 		/** @brief Render thread, after Build: a_light's entry as FUN_1414a2530 would leave it this frame. */
 		void WalkLight(const void* a_light, LightRooms& a_rooms);

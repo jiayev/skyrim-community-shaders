@@ -24,7 +24,7 @@ cbuffer FadeStateConstants : register(b0)
 	uint LogIndex;           // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
 	uint OutIndex0;          // RWStructuredBuffer<FadeNodeState>: the published states of the even frames
 	uint OutIndex1;          // and of the odd
-	uint ProgramsIndex;      // ByteAddressBuffer: the main camera's portal programs (Records.h, kPortal*; PortalPrograms.hlsli)
+	uint ReservedProgramsWord;  // the programs are the depth latch's portalProgramsIndex (kLatchPortalPrograms)
 	uint RootProgramsIndex;  // StructuredBuffer<uint>: each root's program (its room's; kPortalNoProgram: the frustum alone)
 	uint AnimatedIndex;      // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
 	uint EventsIndex;        // RWStructuredBuffer<uint>: the write-back's events, after a count word (FadeRecords.h, FadeEvent)
@@ -601,8 +601,10 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 				program = programs[(id.x + id.y * (64u * 65535u))];
 			}
 			uint programCount = 0;
-			if (ProgramsIndex != 0) {
-				ByteAddressBuffer programs = ResourceDescriptorHeap[ProgramsIndex];
+			// The frame's published programs, from the depth latch (0: none this frame, the frustum alone).
+			const uint programsIndex = latch.Load(LatchOffset + kLatchPortalPrograms);
+			if (programsIndex != 0) {
+				ByteAddressBuffer programs = ResourceDescriptorHeap[programsIndex];
 				programCount = programs.Load(kPortalSetBytes);
 			}
 			if (program >= programCount || (root.Bits & kFadeRootPreprocessed) != 0u) {

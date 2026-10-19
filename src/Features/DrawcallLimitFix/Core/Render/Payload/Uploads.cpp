@@ -262,6 +262,14 @@ namespace DCLF
 			a_latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 			// The root states' seeds (the cull binding RootSeeds: a pooled buffer's index).
 			a_latch.fadeSeedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, *resources->scene, frameNumber, a_commit.adopted);
+			// The depth segment's portal programs, as this frame's depth commit published them (the commit hooks ran before the latch).
+			a_latch.portalProgramsIndex = depthOnly ? CullBindingIndex(Api::CullBindingSlot::Programs, *resources->scene, frameNumber, a_commit.adopted) : 0u;
+			// The colour segment: the portal-strict lights' volumes gate their receivers (GpuShadowVolume::portalContext) by the frame's atlas
+			// and strict gates (0: none, nothing gated).
+			if (!depthOnly) {
+				a_latch.lightContextsIndex = CullBindingIndex(Api::CullBindingSlot::LightContexts, *resources->scene, frameNumber, a_commit.adopted);
+				a_latch.strictGatesIndex = CullBindingIndex(Api::CullBindingSlot::StrictGates, *resources->scene, frameNumber, a_commit.adopted);
+			}
 			// The depth segment: its stage word, for the feature pass before the depth build that reads one (Api::PassDef::latchWord).
 			a_latch.stageWord = depthOnly ? Draws::PassLatchWord() : 0u;
 			PayloadLatch(a_commit.parts, a_latch);

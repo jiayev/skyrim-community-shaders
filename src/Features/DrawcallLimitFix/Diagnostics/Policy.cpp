@@ -3,6 +3,8 @@
 
 #include "Observation.h"
 
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+
 namespace DCLF::Policy
 {
 	bool ScenePassInline()
@@ -21,8 +23,10 @@ namespace DCLF::Policy
 
 	bool FilterLightCulls(std::uint32_t a_frame)
 	{
-		// The light culls' check needs the engine's own cull of every candidate on its frames.
-		return !(Diagnostics::Observe().scene && Diagnostics::ParityDue(a_frame));
+		// The light culls' checks need the engine's own cull of every candidate on their frames (CS_DCLF_STRICT_LIGHT_PARITY: the
+		// portal-strict lights' model, Features/Shadows/Local).
+		static const bool strictLights = RegisteredSwitchValue("CS_DCLF_STRICT_LIGHT_PARITY") == "1";
+		return !((Diagnostics::Observe().scene || strictLights) && Diagnostics::ParityDue(a_frame));
 	}
 
 	bool FilterSceneLists(std::uint32_t a_frame)

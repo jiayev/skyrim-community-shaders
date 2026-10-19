@@ -36,9 +36,9 @@ namespace DCLF::Features::Portals
 	std::shared_ptr<Batch> CreateBatch(const Api::SceneResourcesSetup& a_setup, std::string a_name = "cs.dclf.portal", bool a_contextAtlas = false);
 	/** @brief Register a batch under the same unique prefix used for its resource names. */
 	void RegisterBatch(org::RenderGraph& a_graph, const Batch& a_batch);
-	/** @brief Shared count/scan/scatter or evaluation pass; its owner supplies the immutable program publication and query storage. */
+	/** @brief Shared count/scan/scatter or evaluation pass over its owner's query storage; the programs are the depth latch's publication. */
 	std::shared_ptr<org::RenderPass> MakeBatchPass(std::shared_ptr<Draws::Resources> a_resources, std::shared_ptr<const Batch> a_batch,
-		Draws::Versioned a_programs, RenderGraphRuntime::Segment a_segment, bool a_evaluate);
-	/** @brief Render-thread diagnostic for a main-camera snapshot that outgrew its adopted bucket publication. */
+		RenderGraphRuntime::Segment a_segment, bool a_evaluate);
+	/** @brief Render-thread diagnostic for a main-camera snapshot that outgrew its adopted bucket scratch (evaluated unbatched). */
 	void CheckMainBatchCapacity(Batch& a_batch, std::uint32_t a_frame, std::uint64_t a_capacity);
 }

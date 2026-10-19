@@ -15,7 +15,7 @@ namespace DCLF::Features::Portals
 		const auto count = programs.size() > kPortalSetBytes / 4 ? programs[kPortalSetBytes / 4] : 0u;
 		if (count > a_capacity) {
 			if (a_batch.reportedPrograms != count || a_batch.reportedBuckets != a_capacity)
-				logger::error("[DCLF][structural-gap] {} programs exceed publication buckets: programs={}, capacity={}, frame={}", a_batch.name, count, a_capacity, a_frame);
+				logger::warn("[DCLF] {} programs exceed publication buckets until growth is adopted; the excess is evaluated unbatched: programs={}, capacity={}, frame={}", a_batch.name, count, a_capacity, a_frame);
 			a_batch.reportedPrograms = count;
 			a_batch.reportedBuckets = a_capacity;
 		} else if (a_batch.reportedPrograms) {
@@ -45,8 +45,9 @@ namespace DCLF::Features::Portals
 		batch->name = std::move(a_name);
 		const wchar_t* entries[]{ L"Clear", L"Count", L"TaskCounts", L"Scan", L"AddOffsets", L"Scatter", L"MakeTasks", L"Evaluate" };
 		for (std::size_t i = 0; i < batch->programs.size(); ++i) {
-			ComputeProgram::Desc desc{ .source = "DrawcallLimitFix/PortalBatchCS.hlsl", .entry = entries[i], .constantWords = 16 };
-			if (i == 7 && a_contextAtlas)
+			ComputeProgram::Desc desc{ .source = "DrawcallLimitFix/PortalBatchCS.hlsl", .entry = entries[i], .constantWords = 20 };
+			// Count evaluates past-capacity queries itself, so it addresses programs as Evaluate does.
+			if ((i == 1 || i == 7) && a_contextAtlas)
 				desc.defines.emplace_back(L"DCLF_PORTAL_CONTEXT_ATLAS", L"1");
 			if (i == 7 && RegisteredSwitchValue("CS_DCLF_PORTAL_UNIFORM_SCAN") == "1")
 				desc.defines.emplace_back(L"DCLF_PORTAL_UNIFORM_SCAN", L"1");

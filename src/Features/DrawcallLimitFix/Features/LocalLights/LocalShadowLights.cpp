@@ -33,6 +33,9 @@ namespace DCLF
 			Light sampled;
 			sampled.maskBit = 1u << (selected.maskIndex & 31);
 			sampled.affectsLand = Engine::At<std::uint8_t>(shadowLight, 0x61) != 0;
+			// Gated only while the atlas holding its context was encoded (the commits publish that atlas).
+			if (selected.portalContext && selected.portalContextIndex != ~0u && !selection->portalContexts.empty())
+				sampled.portalContext = selected.portalContextIndex + 1;
 			if (const auto* niLight = shadowLight->light.get()) {
 				sampled.center[0] = niLight->world.translate.x;
 				sampled.center[1] = niLight->world.translate.y;

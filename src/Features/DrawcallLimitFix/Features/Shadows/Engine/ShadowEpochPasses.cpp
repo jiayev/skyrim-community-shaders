@@ -42,6 +42,7 @@ namespace DCLF::Draws
 		std::vector<org::DeclaredViewToken> sequences, count, bucketCounts;  // per view slot
 		org::DeclaredViewToken visibility, poolFirsts;
 		org::DeclaredViewToken fadeRoots;
+		org::DeclaredViewToken objectGates;  // the cull binding ObjectGates: a portal-strict light's casters' gates
 	};
 
 	struct ShadowBuildPrepared
@@ -80,6 +81,8 @@ namespace DCLF::Draws
 			// OnVisible (kCullFadeOnVisible). The states are last frame's (RootStates, the latch's), undeclared as in the depth segment.
 			if (const auto& roots = Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, *resources->scene))
 				bindings.fadeRoots = a_builder.ShaderResource(*roots).View();
+			if (const auto& gates = Extensions::CullBindingBuffer(Api::CullBindingSlot::ObjectGates, *resources->scene))
+				bindings.objectGates = a_builder.ShaderResource(*gates).View();
 			return bindings;
 		}
 
@@ -89,6 +92,7 @@ namespace DCLF::Draws
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(FadeRows() ? 1u : 0u);
 			a_out.push_back(NamedSerial(a_preparation, resources->pool->firsts));
+			a_out.push_back(NamedSerial(a_preparation, Extensions::CullBindingBuffer(Api::CullBindingSlot::ObjectGates, *resources->scene)));
 		}
 
 		ShadowBuildPrepared Prepare(const ShadowBuildBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -104,6 +108,7 @@ namespace DCLF::Draws
 			const auto poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
 			const bool fadeRows = FadeRows();
 			const auto fadeRootsIndex = fadeRows ? CaptureViewIndex(a_preparation, a_bindings.fadeRoots) : 0u;
+			const auto objectGatesIndex = a_bindings.objectGates.layout ? CaptureViewIndex(a_preparation, a_bindings.objectGates) : 0u;
 			for (const auto& view : frame->views) {
 				if (view.slot >= a_bindings.sequences.size() || view.modeIndex >= kShadowModeCount)
 					continue;
@@ -124,6 +129,7 @@ namespace DCLF::Draws
 				// Every dispatch writes the visibility words; nothing reads them here.
 				constants.visibilityIndex = visibilityIndex;
 				constants.fadeRootsIndex = fadeRootsIndex;
+				constants.objectGatesIndex = objectGatesIndex;
 				prepared.dispatches.push_back(dispatch);
 			}
 			return prepared;

@@ -135,7 +135,7 @@ namespace DCLF::Diagnostics
 				const auto it = parity->expectedLocalShadows.find(object);
 				const std::uint32_t cpu = it != parity->expectedLocalShadows.end() ? it->second : 0u;
 				++localChecked;
-				if (gpu != cpu && localDiffering++ == 0)
+				if ((gpu & ~parity->gatedLocalShadows) != (cpu & ~parity->gatedLocalShadows) && localDiffering++ == 0)
 					localFirst = fmt::format("object {}: GPU {:X}, CPU {:X}", object, gpu, cpu);
 			};
 			for (auto& sequence : built)
@@ -308,6 +308,10 @@ namespace DCLF::Diagnostics
 		if (!a_payload.inputs.depthOnly) {
 			const auto& tables = Scene::FrameView::Get().GetTables();
 			const std::uint64_t landscapeFlags = Extensions::LightVolumes().landscapeFlags;
+			readback.gatedLocalShadows = 0;
+			for (const auto& volume : shadowVolumes)
+				if (volume.portalContext)
+					readback.gatedLocalShadows |= volume.maskBit & 0xFu;
 			for (const auto& input : inputs) {
 				if (!(input.flags & kInputDrawable) || input.objectIndex >= tables.objects.size() || input.objectIndex >= tables.objectGeometry.size())
 					continue;

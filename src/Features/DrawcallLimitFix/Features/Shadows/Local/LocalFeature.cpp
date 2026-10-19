@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/Local.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/Diagnostics/LightCulls.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/Diagnostics/StrictLightParity.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
@@ -67,6 +68,12 @@ namespace DCLF::Features::Shadows::Local
 
 		void Install(Api::InstallContext& a_context)
 		{
+			const auto strictParity = a_context.RegisterSwitch({ .name = "CS_DCLF_STRICT_LIGHT_PARITY", .kind = Api::SwitchKind::Parity,
+				.description = "1: the portal-strict point lights' native culls against DCLF's model of them, on the parity frames (AE)" });
+			StrictLightParity::Configure(SwitchEnabled(strictParity));
+			const auto strictCulls = a_context.RegisterSwitch({ .name = "CS_DCLF_STRICT_LIGHT_CULLS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::Zero,
+				.description = "0: the portal-strict point lights keep the engine's culls (else DCLF's strict gates stand for them)" });
+			LocalLightCull::SetStrictCulls(SwitchValue(strictCulls) != "0");
 			// The frustum and parabolic views draw while their sources are registered, from the lights the selection keeps (the Lights
 			// board); the focus views, whatever their host, from the focus cameras' hook (the Focus board). Core reads both through the
 			// sources' cameras.

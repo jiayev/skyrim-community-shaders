@@ -53,7 +53,8 @@ namespace DCLF::Api
 	/**
 	 * @brief The cull bindings' slots: the buffers Core's cull reads at its fixed descriptor words (the shaders' constants), by what they are.
 	 *
-	 * - Programs: the main cull input's programs (BuildDraws' phase 1, FadeStateCS: Features/Portals' "cs.dclf.portal-programs").
+	 * - Programs: the main cull input's programs as the frame's depth commit published them (a pooled backing's SRV index, the depth
+	 *   latch's portalProgramsIndex: the member and fade query stages and their batches; Features/Portals' "cs.dclf.portal-programs").
 	 * - RootPrograms: each listed root's program (by root slot).
 	 * - RootRows: the listed roots' static rows (by root slot).
 	 * - RootStates: the roots' published states a frame's cull reads (by root slot; may alternate by frame).
@@ -63,6 +64,12 @@ namespace DCLF::Api
 	 * - RootFrame: the root states' frame inputs.
 	 * - MemberQueries/MemberResults: main-camera bound queries and tagged verdicts, indexed by stable object slot.
 	 * - MemberClaims: per-object atomic claims during query generation; reused as query ranks after that pass.
+	 * - LightContexts: the frame's portal context atlas (the camera's and the selected portal-strict lights' walks: a pooled backing's SRV
+	 *   index; Features/LocalLights' "cs.dclf.light-contexts"), which a strict light's views and the colour pass's volumes name an entry of.
+	 * - StrictGates: each strict-light gate's verdict per atlas context, this frame's (a pooled backing's SRV index; Portals/StrictGates.h's
+	 *   words).
+	 * - ObjectGates: each object's strict-light gate (by object slot: a versioned buffer of the feature's scene resources), which the
+	 *   StrictGates verdicts are of.
 	 */
 	enum class CullBindingSlot : std::uint8_t
 	{
@@ -76,6 +83,9 @@ namespace DCLF::Api
 		MemberQueries,
 		MemberResults,
 		MemberClaims,
+		LightContexts,
+		StrictGates,
+		ObjectGates,
 		Count
 	};
 

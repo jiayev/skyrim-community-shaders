@@ -57,17 +57,40 @@ namespace DCLF
 			std::uint32_t maskIndex = 0;             // +0x520
 			Portals::ContextHold portalContext;      // owned strict-light snapshot, never mutable walk scratch
 			std::uint32_t portalContextIndex = ~0u;  // directory entry in Frame::portalContexts; no strict context: ~0u
+			std::uint32_t portalWalk = 0;            // how this frame's walk left it (PortalViews::LightWalk)
+		};
+		/**
+		 * @brief A light some selection of the scene frame kept, with its walk's context and that context's entry in the frame's atlas. The
+		 * engine can run CalculateActiveShadowCasterLights twice in a frame; the lights the first call kept accumulated and drew their views
+		 * with its entries, so the frame's atlas holds every call's contexts and its entries stand for the whole frame.
+		 */
+		struct FrameLight
+		{
+			const RE::BSShadowLight* light = nullptr;
+			Portals::ContextHold portalContext;
+			std::uint32_t portalContextIndex = ~0u;
+			std::uint32_t portalWalk = 0;  // PortalViews::LightWalk
 		};
 		struct Frame
 		{
 			std::uint32_t sceneFrame = ~0u;
+			std::uint32_t selections = 0;                      // the selections of this scene frame (the last one's locals stand)
+			std::vector<FrameLight> frameLights;               // every light a selection of the scene frame kept, in first-kept order
+			/** @brief a_light's entry in frameLights (kept by some selection of the frame), or null. */
+			const FrameLight* LightOf(const RE::BSShadowLight* a_light) const
+			{
+				for (const auto& entry : frameLights)
+					if (entry.light == a_light)
+						return &entry;
+				return nullptr;
+			}
 			const RE::BSShadowLight* sun = nullptr;  // when it draws
 			std::uint32_t sunSlots = 0;
 			std::vector<Selected> locals;                      // the kept lights after the sun, in the engine's order
 			std::vector<const RE::BSShadowLight*> slots;       // shadowLightsAccum as DCLF fills it: the sun per slot, then the lights (null: a slot a light took but did not fill)
 			std::vector<const RE::BSShadowLight*> focusHosts;  // the drawn lights with the focus flag
 			std::uint32_t focusCount = 0;                      // the focus views each draws (the targets, at most 4)
-			std::vector<std::uint32_t> portalContexts;         // owned atlas of the camera and selected strict-light contexts
+			std::vector<std::uint32_t> portalContexts;         // owned atlas of the camera and the frame's strict-light contexts (frameLights)
 			bool valid = false;
 		};
 
