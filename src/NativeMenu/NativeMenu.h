@@ -50,6 +50,10 @@ namespace NativeMenu
 
 	void __stdcall CommitAndSave(float value);
 
+	/** @brief Whether a feature's base settings are editable from here; false for scene-controlled features,
+	 *  whose live settings the Scene Manager reverts on its next resolve. */
+	bool IsFeatureEditable(const std::string& featureShortName);
+
 	inline void AppendRows(std::vector<Row>& dest, std::vector<Row> src)
 	{
 		dest.insert(dest.end(), std::make_move_iterator(src.begin()), std::make_move_iterator(src.end()));

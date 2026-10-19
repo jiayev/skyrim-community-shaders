@@ -1,5 +1,7 @@
 #include "Vignette.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
+
 #include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
 #include "RasterPass.h"
@@ -25,9 +27,12 @@ void Vignette::DrawSettings()
 	}
 
 	ImGui::BeginDisabled(cam != nullptr);
-	ImGui::SliderFloat(T("feature.post_processing.vignette.focal_length", "Focal Length"), &focalLength, 0.1f, 2.f, "%.2f");
+	{
+		const SceneWidgetInterceptor::ProxyScope proxy(&settings.FocalLength, 1.0f);
+		ImGui::SliderFloat(T("feature.post_processing.vignette.focal_length", "Focal Length"), &focalLength, 0.1f, 2.f, "%.2f");
+	}
 	ImGui::EndDisabled();
-	if (!cam)
+	if (!cam && !SceneWidgetInterceptor::IsArmed())
 		settings.FocalLength = focalLength;
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.vignette.the_focal_length_of_the_lens_relative_to", "The focal length of the lens, relative to image width."));

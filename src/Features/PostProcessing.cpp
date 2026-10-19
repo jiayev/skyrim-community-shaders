@@ -1,9 +1,14 @@
 #include "PostProcessing.h"
 
+#include "CSEditor/EditorWindow.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "IconsFontAwesome5.h"
+#include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/PresetsPageRenderer.h"
 #include "imgui_stdlib.h"
 
 #include "Menu.h"
+#include "PostProcessingMode.h"
 #include "Profiler.h"
 #include "State.h"
 #include "Util.h"
@@ -15,10 +20,23 @@
 #include "Features/Upscaling.h"
 #include "Utils/ColorSpace.h"
 
+#include <algorithm>
+#include <array>
 #include <format>
 
 namespace
 {
+	constexpr std::array kPointerButtons{ ImGuiMouseButton_Left, ImGuiMouseButton_Right, ImGuiMouseButton_Middle };
+	constexpr std::array kActivateKeys{ ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space, ImGuiKey_GamepadFaceDown };
+
+	/** @brief Whether this frame's input could activate a control, so idle frames skip the settings diff. */
+	bool InputMayEditSettings()
+	{
+		return ImGui::IsAnyItemActive() ||
+		       std::ranges::any_of(kPointerButtons, [](auto button) { return ImGui::IsMouseClicked(button) || ImGui::IsMouseReleased(button); }) ||
+		       std::ranges::any_of(kActivateKeys, [](auto key) { return ImGui::IsKeyPressed(key); });
+	}
+
 	bool skipVanillaDoF = false;
 	bool skipVanillaBloom = false;
 	std::optional<bool> savedVanillaLensFlare;
@@ -48,69 +66,36 @@ namespace
 
 void PostProcessing::DrawSettings()
 {
+	json before;
+	// Unbound widgets (buttons, popup combos) bypass the interceptor, so a diff is their only edit signal.
+	const bool watchEdits = !SceneWidgetInterceptor::IsArmed() && InputMayEditSettings();
+	if (watchEdits)
+		SaveSettings(before);
 	static int pipelinePageNum = 0;
 	static int pipelineFeatIdx = 0;
-	static int presetIdx = -1;
 
-	ImGui::BeginGroup();
-	std::string currentPreset = (presetIdx >= 0 && presetIdx < presets.size()) ? presets[presetIdx] : T("feature.post_processing.select_a_preset", "Select a preset");
+	// Presets live on the Presets page like every other pack; a scene replica of this page edits a
+	// scene layer rather than the base settings a preset sets, so it leaves the row out.
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		PresetsPageRenderer::DrawOpenButton("##PostProcessingOpenPresets",
+			T("feature.post_processing.open_presets_tooltip",
+				"Apply Post Processing presets on the Presets page. To save your current settings as one, use "
+				"Export Preset in the CS Editor with Post Processing ticked."));
 
-	if (ImGui::BeginCombo("##PresetCombo", currentPreset.c_str())) {
-		presets = LoadPresets();
+		// Inside the CS Editor (its Base Settings window draws this page too) the editor is already open.
+		if (const auto* editor = EditorWindow::GetSingleton(); !editor || !editor->open)
+			PresetsPageRenderer::DrawOpenCSEditorButton("##PostProcessingOpenCSEditor");
 
-		for (int i = 0; i < presets.size(); ++i) {
-			bool isSelected = presetIdx == i;
-			if (ImGui::Selectable(presets[i].c_str(), isSelected))
-				presetIdx = i;
-			if (isSelected)
-				ImGui::SetItemDefaultFocus();
-		}
-		ImGui::EndCombo();
+		ImGui::Separator();
 	}
 
-	ImGui::SameLine();
-	if (ImGui::Button(T("feature.post_processing.load", "Load"))) {
-		if (presetIdx >= 0 && presetIdx < presets.size()) {
-			LoadPresetFrom(presets[presetIdx]);
-		}
-	}
-
-	ImGui::EndGroup();
-	ImGui::BeginGroup();
-	static std::string newPresetName = "";
-	ImGui::InputText("##NewPresetName", &newPresetName);
-
-	ImGui::SameLine();
-	if (ImGui::Button(T("feature.post_processing.save", "Save"))) {
-		if (!newPresetName.empty())
-			SavePresetTo(newPresetName);
-	}
-
-	ImGui::EndGroup();
+	PostProcessingMode::DrawSelector();
 
 	ImGui::Separator();
 
-	// Effects11 replaces the whole tonemap pass, so bypass has no effect while it owns the frame.
-	const bool tonemapTakenByEffects11 = IsTonemapOwnedByEffects11();
-
-	ImGui::BeginDisabled(tonemapTakenByEffects11);
-
-	// A disabled checkbox never reports a click, so bypass keeps its stored value while forced on.
-	bool bypassDisplay = bypass || tonemapTakenByEffects11;
-	if (ImGui::Checkbox(T("feature.post_processing.bypass", "Bypass"), &bypassDisplay))
-		bypass = bypassDisplay;
-
-	ImGui::EndDisabled();
-
-	if (tonemapTakenByEffects11) {
-		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
-		ImGui::TextWrapped("%s", T("feature.post_processing.tonemap_owned_by_effects11",
-									 "Tonemapping is currently handled by Effects 11. To use Post Processing tonemapping instead, either "
-									 "disable Effects 11 or enable its \"UseOriginalPostProcessing\" setting."));
-		ImGui::PopStyleColor();
-	}
-
-	ImGui::Separator();
+	// Effects 11 discards the pipeline output, so its controls would do nothing.
+	const Util::LockedSection effects11Lock(PostProcessingMode::Get() == PostProcessingMode::Mode::Effects11,
+		T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
 
 	{
 		auto& cam = cinematicCamera;
@@ -119,8 +104,8 @@ void PostProcessing::DrawSettings()
 			ImGui::Text("%s", T("feature.post_processing.cinematic_camera.description",
 								  "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));
 		ImGui::SameLine();
-		auto ccLabel = std::format("{} {}", ICON_FA_BARS, T("feature.post_processing.cinematic_camera.settings", "Settings"));
-		if (ImGui::Button(ccLabel.c_str()))
+		if (Icons::LabeledButton("##CinematicCameraSettings", Icons::FA(ICON_FA_BARS),
+				T("feature.post_processing.cinematic_camera.settings", "Settings")))
 			pipelinePageNum = 2;
 
 		if (const auto* state = cam.GetState()) {
@@ -143,18 +128,20 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	auto drawEnabled = [this](const char* label, PostProcessFeature& feature) {
+	// Draws a read-only checkbox for a forced-on sub-feature and returns true. Otherwise callers bind
+	// `&feat->enabled` themselves: the scene catalog generator only recognises that form as a scene toggle.
+	auto drawForcedEnabled = [this](const char* label, PostProcessFeature& feature) {
 		const bool automatic = feature.IsAutoEnabled() ||
 		                       (&feature == GetPipelineFeature<HistogramAutoExposure>(FeaturePipelineIndex::AutoExposure) && GetActivePhysicalCameraState());
+		if (!automatic)
+			return false;
 		bool active = feature.IsActive();
-		ImGui::BeginDisabled(automatic);
-		if (ImGui::Checkbox(label, &active))
-			feature.enabled = active;
+		ImGui::BeginDisabled();
+		ImGui::Checkbox(label, &active);
 		ImGui::EndDisabled();
-		if (automatic) {
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.exposure_required", "Exposure processing is required by Cinematic Camera. Disable Cinematic Camera to restore the saved enable state."));
-		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.exposure_required", "Exposure processing is required by Cinematic Camera. Disable Cinematic Camera to restore the saved enable state."));
+		return true;
 	};
 
 	if (pipelinePageNum == 0) {
@@ -164,9 +151,10 @@ void PostProcessing::DrawSettings()
 				auto displayName = feat->GetDisplayName();
 				auto description = feat->GetDesc();
 				ImGui::PushID(feat->GetType().c_str());
-				drawEnabled("##Enabled", *feat);
+				if (!drawForcedEnabled("##Enabled", *feat))
+					ImGui::Checkbox("##Enabled", &feat->enabled);
 				ImGui::SameLine();
-				if (ImGui::Button(ICON_FA_BARS)) {
+				if (Icons::Button("##Bars", Icons::FA(ICON_FA_BARS))) {
 					pipelineFeatIdx = i;
 					pipelinePageNum = 1;
 				}
@@ -180,8 +168,8 @@ void PostProcessing::DrawSettings()
 			}
 		}
 	} else if (pipelinePageNum == 1) {
-		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
-		if (ImGui::Button(backLabel.c_str())) {
+		if (Icons::LabeledButton("##BackToPipeline", Icons::FA(ICON_FA_ARROW_LEFT),
+				T("feature.post_processing.back_to_pipeline", "Back to Pipeline"))) {
 			pipelinePageNum = 0;
 		}
 		ImGui::Separator();
@@ -196,15 +184,16 @@ void PostProcessing::DrawSettings()
 				ImGui::TextWrapped("%s", description.c_str());
 
 				ImGui::Spacing();
-				auto recompileLabel = std::format("{} {}", ICON_FA_SYNC, T("feature.post_processing.recompile_shaders", "Recompile Shaders"));
-				if (ImGui::Button(recompileLabel.c_str())) {
+				if (Icons::LabeledButton("##RecompileShaders", Icons::FA(ICON_FA_SYNC),
+						T("feature.post_processing.recompile_shaders", "Recompile Shaders"))) {
 					feat->ClearShaderCache();
 				}
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T("feature.post_processing.recompile_shaders_for_this_sub_feature_only", "Recompile shaders for this sub-feature only."));
 				ImGui::Separator();
 				ImGui::Spacing();
-				drawEnabled(T("feature.post_processing.enabled", "Enabled"), *feat);
+				if (!drawForcedEnabled(T("feature.post_processing.enabled", "Enabled"), *feat))
+					ImGui::Checkbox(T("feature.post_processing.enabled", "Enabled"), &feat->enabled);
 				if (feat->IsActive()) {
 					ImGui::Indent();
 					feat->DrawSettings();
@@ -223,8 +212,8 @@ void PostProcessing::DrawSettings()
 			pipelinePageNum = 0;
 		}
 	} else if (pipelinePageNum == 2) {
-		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
-		if (ImGui::Button(backLabel.c_str())) {
+		if (Icons::LabeledButton("##BackToPipeline", Icons::FA(ICON_FA_ARROW_LEFT),
+				T("feature.post_processing.back_to_pipeline", "Back to Pipeline"))) {
 			pipelinePageNum = 0;
 		}
 		ImGui::Separator();
@@ -234,10 +223,9 @@ void PostProcessing::DrawSettings()
 									 "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));
 		ImGui::Spacing();
 
-		ImGui::Checkbox(T("feature.post_processing.enabled", "Enabled"), &cinematicCamera.settings.Enabled);
+		cinematicCamera.DrawSettings();
 		if (cinematicCamera.settings.Enabled) {
 			ImGui::Indent();
-			cinematicCamera.DrawSettings();
 			if (auto* exposure = GetPipelineFeature<HistogramAutoExposure>(FeaturePipelineIndex::AutoExposure)) {
 				ImGui::SeparatorText(T("feature.post_processing.cinematic_camera.exposure_meter", "Exposure Meter"));
 				exposure->DrawCameraExposureReadout();
@@ -271,7 +259,7 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	if (ImGui::TreeNode(T("feature.post_processing.debug", "Debug"))) {
+	if (Util::ShowDebugSections() && ImGui::TreeNode(T("feature.post_processing.debug", "Debug"))) {
 		if (ImGui::TreeNode(T("feature.post_processing.game_imagespace_values", "Game ImageSpace Values"))) {
 			ImGui::Text(T("feature.post_processing.base_amount", "Base Amount: %.3f"), imageSpaceManager->gameISData.baseAmount);
 			ImGui::Text("%s", T("feature.post_processing.base_data", "Base Data:"));
@@ -335,16 +323,27 @@ void PostProcessing::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
+	if (watchEdits) {
+		json after;
+		SaveSettings(after);
+		if (before != after)
+			SceneSettingsManager::GetSingleton()->CaptureExternalFeatureChanges(this, true);
+	}
 }
 
 void PostProcessing::LoadSettings(json& o_json)
 {
-	pendingSettings = o_json;
+	if (!pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)])
+		pendingSettings = o_json;
+	else
+		ProcessSettings(o_json);
 }
 
 void PostProcessing::ProcessSettings(json& o_json)
 {
-	logger::info("Loading post processing settings...");
+	// Scene blends reload every frame, so no info-level log and no per-load SetupResources:
+	// settings-dependent resources are reconciled in Draw.
+	logger::debug("Loading post processing settings...");
 
 	for (auto& feat : pipeline) {
 		if (feat && o_json.contains(feat->GetType())) {
@@ -352,8 +351,6 @@ void PostProcessing::ProcessSettings(json& o_json)
 				feat->enabled = o_json.value(feat->GetType(), json::object()).value("enabled", true);
 			json featSettings = o_json.value(feat->GetType(), json::object()).value("settings", json::object());
 			feat->LoadSettings(featSettings);
-			if (loaded)
-				feat->SetupResources();
 		}
 	}
 
@@ -373,6 +370,16 @@ void PostProcessing::SaveSettings(json& o_json)
 		return;
 	}
 
+	// The code defaults are captured before SetupResources, and Baseline files validate against their shape,
+	// so a default pipeline stands in until then.
+	const bool built = pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] != nullptr;
+	if (!built)
+		BuildPipeline();
+	const SKSE::stl::scope_exit dropDefaults([&]() noexcept {
+		if (!built)
+			pipeline = {};
+	});
+
 	for (auto& pipe : pipeline) {
 		if (pipe) {
 			json featureSetting{};
@@ -390,121 +397,47 @@ void PostProcessing::SaveSettings(json& o_json)
 	o_json.erase("ppsettings");
 }
 
-std::vector<std::string> PostProcessing::LoadPresets()
+void PostProcessing::BuildPipeline()
 {
-	std::vector<std::string> o_presets = {};
-
-	try {
-		std::filesystem::create_directories(ppPresetPath);
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating preset directory during Load ({}) : {}\n", ppPresetPath, e.what());
-		return o_presets;
-	}
-
-	for (const auto& entry : std::filesystem::directory_iterator(ppPresetPath)) {
-		if (entry.is_regular_file() && entry.path().extension() == ".json") {
-			o_presets.push_back(entry.path().stem().string());
-		}
-	}
-
-	return o_presets;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_shared<LocalExposure>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] = std::make_shared<HistogramAutoExposure>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] = std::make_shared<ColorGrading>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)] = std::make_shared<LUT>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_shared<MotionBlur>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_shared<DoF>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_shared<PhysicalGlare>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_shared<CODBloom>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_shared<LensFlare>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_shared<Composite>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_shared<Vignette>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_shared<Camera>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_shared<Border>();
+	ApplyDefaultEnabledStates();
 }
 
-void PostProcessing::LoadPresetFrom(std::string a_name)
+void PostProcessing::ApplyDefaultEnabledStates()
 {
-	json a_presets = {};
-
-	// if the name has .json, remove it
-	if (a_name.ends_with(".json"))
-		a_name = a_name.substr(0, a_name.size() - 5);
-
-	try {
-		logger::info("Loading preset: {}", a_name);
-		std::ifstream i{ std::format("{}\\{}.json", ppPresetPath, a_name) };
-		i >> a_presets;
-	} catch (const std::exception& e) {
-		logger::warn("Failed to load preset: {}. Error: {}", a_name, e.what());
-		return;
-	}
-
-	ProcessSettings(a_presets);
-}
-
-void PostProcessing::SavePresetTo(std::string a_name)
-{
-	// Check if the name is valid
-	if (a_name.empty()) {
-		logger::warn("Invalid preset name.");
-		return;
-	}
-
-	json a_presets = {};
-	SaveSettings(a_presets);
-	a_presets["preset_name"] = a_name;
-
-	try {
-		std::filesystem::create_directories(ppPresetPath);
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating preset directory during Save ({}) : {}\n", ppPresetPath, e.what());
-		return;
-	}
-
-	std::string presetPath = std::format("{}\\{}.json", ppPresetPath, a_name);
-	std::ofstream o{ presetPath };
-	if (!o.is_open() || !o.good()) {
-		logger::warn("Failed to open preset file for writing: {}", presetPath);
-		return;
-	}
-
-	try {
-		o << std::setw(4) << a_presets;
-		logger::info("Saving preset to {}", presetPath);
-	} catch (const std::exception& e) {
-		logger::warn("Failed to write preset to file: {}. Error: {}", presetPath, e.what());
+	using enum FeaturePipelineIndex;
+	constexpr std::array kOffByDefault = { LUT, MotionBlur, PhysicalGlare, Camera, Border };
+	for (size_t index = 0; index < pipeline.size(); ++index) {
+		if (auto& pipe = pipeline[index]; pipe && !pipe->IsAutoEnabled())
+			pipe->enabled = std::ranges::find(kOffByDefault, static_cast<FeaturePipelineIndex>(index)) == kOffByDefault.end();
 	}
 }
 
 void PostProcessing::RestoreDefaultSettings()
 {
-	// If pipeline isn't initialized yet (called during early loading before SetupResources),
-	// load default.json into pendingSettings for deferred application in SetupResources.
-	// This ensures first-startup defaults match what "Restore Defaults" produces later.
-	bool pipelineReady = pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] != nullptr;
-	if (!pipelineReady) {
-		try {
-			std::ifstream i{ std::format("{}\\{}.json", ppPresetPath, "default") };
-			json defaultPreset;
-			i >> defaultPreset;
-			pendingSettings = defaultPreset;
-			logger::info("Pipeline not ready, loaded default preset into pending settings");
-		} catch (const std::exception& e) {
-			logger::info("No default preset available during early load, C++ defaults will be used. Error: {}", e.what());
-			pendingSettings = {};
-		}
+	pendingSettings = {};
+	cinematicCamera.RestoreDefaultSettings();
+
+	// Before SetupResources there is no pipeline yet; it is built from these same defaults.
+	if (!pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)])
 		return;
-	}
 
-	try {
-		LoadPresetFrom("default");
-	} catch (const std::exception& e) {
-		logger::warn("Failed to load default preset. Error: {}", e.what());
-		cinematicCamera.RestoreDefaultSettings();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
-
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
-
-		for (auto& pipe : pipeline) {
-			if (pipe) {
-				pipe->RestoreDefaultSettings();
-			}
-		}
+	ApplyDefaultEnabledStates();
+	for (auto& pipe : pipeline) {
+		if (pipe)
+			pipe->RestoreDefaultSettings();
 	}
 }
 
@@ -574,33 +507,7 @@ void PostProcessing::SetupResources()
 	if (!fullscreenVS || !copyPS)
 		stl::report_and_fail("Post Processing requires its input/output shaders."sv);
 
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_shared<LocalExposure>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)].get()->enabled = false;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] = std::make_shared<HistogramAutoExposure>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] = std::make_shared<ColorGrading>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)] = std::make_shared<LUT>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
-
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_shared<MotionBlur>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_shared<DoF>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_shared<PhysicalGlare>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)].get()->enabled = false;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_shared<CODBloom>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_shared<LensFlare>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_shared<Composite>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)].get()->enabled = true;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_shared<Vignette>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_shared<Camera>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_shared<Border>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)].get()->enabled = false;
+	BuildPipeline();
 
 	for (auto& pipe : pipeline) {
 		if (pipe) {
@@ -859,6 +766,15 @@ bool PostProcessing::IsTonemapOwnedByEffects11() const
 	return globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11;
 }
 
+bool PostProcessing::WantsAutoHDR() const
+{
+	if (globals::state->GetTonemapOwner() != State::TonemapOwner::kPostProcessing)
+		return false;
+
+	auto* colorGrading = static_cast<const ColorGrading*>(pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get());
+	return colorGrading && colorGrading->IsActive() && colorGrading->WantsAutoHDR();
+}
+
 void PostProcessing::UpdateVanillaEffects(bool active)
 {
 	const bool runnable = active && loaded && !bypass && globals::shaderCache->IsEnabled();
@@ -905,6 +821,9 @@ void PostProcessing::Prepass()
 		pendingSettings = {};
 		UpdateVanillaEffects(globals::state->GetTonemapOwner() == State::TonemapOwner::kPostProcessing);
 	}
+
+	if (auto* lut = GetPipelineFeature<::LUT>(FeaturePipelineIndex::LUT))
+		lut->UpdateTexture();
 
 	{
 		auto graphicsState = globals::game::graphicsState;

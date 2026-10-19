@@ -47,7 +47,7 @@ struct MotionBlur : public PostProcessFeature
 	{
 		float VelocityScale = 300.0f;  // Will be mapped from MotionScale
 		int SampleCount = 8;           // Doubled internally before sending to shader
-		MotionScale ScalePreset = MotionScale::Medium;
+		MotionScale ScalePreset = MotionScale::VeryLong;
 	};
 	Settings settings;
 

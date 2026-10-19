@@ -68,15 +68,17 @@ struct ColorGrading : public PostProcessFeature
 
 		bool useOpenDrt = false;
 		std::string currentTonemapper = "GT7";
-		std::array<float4, 2> tonemapParams = { float4{ 1.f, 2.f, 0.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f } };
-		float3 gameCinematicBlend = { 1.0f, 1.0f, 1.0f };
+		std::array<float4, 2> tonemapParams = { float4{ 1.f, 1e-4f, 0.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f } };
+		float3 gameCinematicBlend = { 0.f, 0.f, 0.f };
 		float gameFadeBlend = 1.0f;
-		float gameTintBlend = 1.0f;
-		bool useLog = false;
+		float gameTintBlend = 0.f;
+		bool useLog = true;
 		uint logType = 0;
-		bool invertLog = false;
+		bool invertLog = true;
 		bool enableTonemap = true;
-		int processColorSpace = 0;
+		/// When HDR Display is on and the selected tonemapper is SDR-only, expand via Pumbo AutoHDR.
+		bool enableAutoHDR = true;
+		int processColorSpace = 5;
 
 		OpenDRTSettings odrtConfig;
 	} settings;
@@ -159,6 +161,9 @@ struct ColorGrading : public PostProcessFeature
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
+	/** @brief Drop in-memory PS/CS and recompile for the current tonemapper; keeps disk cache. */
+	void ReloadActiveShaders();
+	void ReleaseActiveShaders();
 	void CompileShaders();
 
 	virtual void RestoreDefaultSettings() override;
@@ -169,6 +174,12 @@ struct ColorGrading : public PostProcessFeature
 
 	virtual void Draw(TextureInfo&) override;
 	void UpdateColorSpaceTransforms(bool hdrEnabled = false);
+
+	/**
+	 * @brief True when HDR Display is on, tonemapping is enabled, the active tonemapper is
+	 *        SDR-only (not OpenDRT / not supportsHDR), and the user enabled AutoHDR.
+	 */
+	bool WantsAutoHDR() const;
 
 	void OutputTextures();
 

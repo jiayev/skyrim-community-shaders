@@ -10,6 +10,7 @@
 #include "Globals.h"
 #include "LightLimitFix/Common.h"
 #include "PostProcessing.h"
+#include "PostProcessingMode.h"
 #include "ShaderCache.h"
 #include "Utils/ColorSpace.h"
 #include "Utils/Game.h"
@@ -43,22 +44,31 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LinearLighting::DrawSettings()
 {
-	ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
-	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
-	if (globals::features::effects11.IsActive())
-		ImGui::TextDisabled("Effects 11 overrides Linear Lighting while UseEffect is enabled.");
+	using PostProcessingMode::Mode;
+	const Mode mode = PostProcessingMode::Get();
+	const bool overridden = mode != Mode::PostProcessing;
+	const Util::LockedSection modeLock(overridden, mode == Mode::Effects11 ?
+													   T(TKEY("overridden_by_effects11"), "Effects 11 overrides Linear Lighting.") :
+													   T(TKEY("off_in_vanilla"), "Vanilla post processing turns Linear Lighting off."));
 
-	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
+	// A disabled checkbox never reports a click, so the saved setting survives the forced-off display.
+	bool linearLightingDisplay = settings.enableLinearLighting && !overridden;
+	if (ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), &linearLightingDisplay))
+		settings.enableLinearLighting = linearLightingDisplay;
+	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
+	Util::Text::Secondary("%s", T(TKEY("startup_settings"), "Linear Lighting and working color space settings require a restart."));
+
+	if (Util::BeginPillTabBar("##LinearLightingTabs")) {
+		if (Util::BeginPillTabItem(T(TKEY("tab_general"), "General"))) {
 			ImGui::SeparatorText(T(TKEY("multipliers"), "Multipliers"));
 			ImGui::SliderFloat(T(TKEY("directional_light_multiplier"), "Directional Light Multiplier"), &settings.directionalLightMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("ambient_multiplier"), "Ambient Multiplier"), &settings.ambientMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("glowmap_multiplier"), "Glowmap Multiplier"), &settings.glowmapMult, 0.0f, 10.0f, "%.2f");
 
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("tab_advanced"), "Advanced"))) {
+		if (Util::BeginPillTabItem(T(TKEY("tab_advanced"), "Advanced"))) {
 			ImGui::SeparatorText(T(TKEY("color_calibration"), "Color Calibration"));
 			ImGui::InputFloat(T(TKEY("diffuse_gamma"), "Diffuse Gamma"), &settings.diffuseGamma, 0.0f, 0.0f, "%.3f");
 			ImGui::InputFloat(T(TKEY("diffuse_mid_reflectance"), "Diffuse Reflectance at 0.5"), &settings.diffuseMidReflectance, 0.0f, 0.0f, "%.6f");
@@ -85,14 +95,14 @@ void LinearLighting::DrawSettings()
 				ImGui::SliderFloat(T(TKEY("particle_effects_multiplier"), "Particle Effects Multiplier"), &settings.particleEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("light_sprite_effects_multiplier"), "Light Sprite Effects Multiplier"), &settings.lightSpriteEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("fire_effects_multiplier"), "Fire Effects Multiplier"), &settings.fireEffectMult, 0.0f, 10.0f, "%.2f");
-				ImGui::SliderFloat(T(TKEY("fire_effects_curve"), "Fire Effects Curve"), &settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax, "%.2f");
+				ImGui::SliderFloat(T(TKEY("fire_effects_curve"), "Fire Effects Curve"), &settings.fireEffectCurve, FireEffectCurveMin, FireEffectCurveMax, "%.2f");
 				ImGui::TreePop();
 			}
 
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		ImGui::EndTabBar();
+		Util::EndPillTabBar();
 	}
 }
 
@@ -107,7 +117,7 @@ void LinearLighting::LoadSettings(json& o_json)
 		if (!o_json.contains("diffuseWhiteReflectance"))
 			settings.diffuseWhiteReflectance = std::min(scale, 1.0f);
 	}
-	settings.fireEffectCurve = std::clamp(settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax);
+	settings.fireEffectCurve = std::clamp(settings.fireEffectCurve, FireEffectCurveMin, FireEffectCurveMax);
 	applyGameGamma = settings.gameGamma != configuredGameGamma;
 }
 
@@ -134,8 +144,9 @@ void LinearLighting::Reset()
 		return;
 	if (applyGameGamma && !IsLinearLightingActive())
 		ApplyGameGamma();
-	// Without Post Processing's display transform the toggle stays inert instead of failing at runtime.
-	const bool linearLighting = settings.enableLinearLighting && globals::features::postProcessing.loaded;
+	// Needs Post Processing's display transform, so Vanilla mode turns it off; Effects 11 gates it separately via IsActive.
+	const bool linearLighting = settings.enableLinearLighting && globals::features::postProcessing.loaded &&
+	                            PostProcessingMode::Get() != PostProcessingMode::Mode::Vanilla;
 	const bool acescg = linearLighting && settings.enableACEScg;
 	if (linearLighting != configuredLinearLighting || acescg != configuredACEScg || applyGameGamma)
 		globals::shaderCache->Reload([this, linearLighting, acescg] {

@@ -26,8 +26,6 @@ struct PostProcessing : Feature
 		return &singleton;
 	}
 
-	const std::string ppPresetPath = "Data\\SKSE\\Plugins\\CommunityShaders\\PostProcessing";
-
 	virtual inline std::string GetName() override { return "Post Processing"; }
 	virtual inline std::string GetDisplayName() override { return T("feature.post_processing.name", "Post Processing"); }
 	virtual inline std::string GetShortName() override { return "PostProcessing"; }
@@ -66,14 +64,22 @@ struct PostProcessing : Feature
 	 */
 	bool IsTonemapOwnedByEffects11() const;
 
+	/**
+	 * @brief Whether Color Grading wants Pumbo AutoHDR this frame (SDR tonemapper + HDR Display).
+	 */
+	bool WantsAutoHDR() const;
+
+	/// Settings loaded before the pipeline exists.
 	json pendingSettings = {};
 
 	void ProcessSettings(json& o_json);
 
-	std::vector<std::string> presets = {};
-	std::vector<std::string> LoadPresets();
-	void SavePresetTo(std::string a_name);
-	void LoadPresetFrom(std::string a_name);
+	/// Sets each sub-feature's on/off state to the shipped default. Their values default to their
+	/// Settings initializers, so this and RestoreDefaultSettings need no defaults file.
+	void ApplyDefaultEnabledStates();
+
+	/** @brief Creates every sub-feature at its shipped defaults, without GPU resources. */
+	void BuildPipeline();
 
 	enum class FeaturePipelineIndex : size_t
 	{

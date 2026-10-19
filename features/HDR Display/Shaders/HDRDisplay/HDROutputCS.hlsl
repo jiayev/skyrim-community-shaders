@@ -22,7 +22,7 @@ cbuffer PerFrame : register(b0)
 	float isMainOrLoadingMenu : packoffset(c1.z);
 	float fgTweenMenuMidAlphaBoost : packoffset(c1.w);  ///< TweenMenu: soften AA band when compositing here (UIBrightnessCS skips while paused)
 	float previewSDR : packoffset(c2.x);                ///< 1.0 = emit gamma 2.2 SDR (crop preview) instead of PQ HDR10
-	float applyAutoHDR : packoffset(c2.y);              ///< 1.0 = Effects11 replaced ISHDR, so expand its SDR result into HDR
+	float applyAutoHDR : packoffset(c2.y);              ///< 1.0 = expand SDR tonemap (Effects11 or PP SDR+AutoHDR) into HDR
 }
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {

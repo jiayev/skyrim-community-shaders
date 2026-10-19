@@ -16,6 +16,7 @@
 #include "Util.h"
 #include "Utils/ShaderDescriptor.h"
 
+#include "CSEditor/SceneManager/WeatherTransition.h"
 #include "Features/Effects11.h"
 #include "Features/GrassOptimizations.h"
 #include "Features/HDRDisplay.h"
@@ -349,6 +350,31 @@ namespace WaterBlendHistory
 
 namespace WeatherExtensions
 {
+	void DetachRetiredPrecipitation(const RE::NiPointer<RE::BSGeometry>& geometry, const RE::Precipitation* precipitation)
+	{
+		if (!geometry || (precipitation && (geometry == precipitation->currentPrecip || geometry == precipitation->lastPrecip)))
+			return;
+		if (auto* parent = geometry->parent) {
+			parent->DetachChild(geometry.get());
+			logger::warn("[Precipitation] Detached retired geometry {:X} from parent {:X}",
+				reinterpret_cast<std::uintptr_t>(geometry.get()), reinterpret_cast<std::uintptr_t>(parent));
+		}
+	}
+
+	struct Precipitation_Restore
+	{
+		static void thunk(RE::NiPointer<RE::BSGeometry>* geometry, RE::BGSShaderParticleGeometryData* data, float* cubeSize, float* density)
+		{
+			const auto previous = *geometry;
+			func(geometry, data, cubeSize, density);
+			if (previous != *geometry) {
+				auto* sky = RE::Sky::GetSingleton();
+				DetachRetiredPrecipitation(previous, sky ? sky->precip : nullptr);
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct Sky_UpdateColors
 	{
 		static void thunk(RE::Sky* sky, float a_delta)
@@ -359,6 +385,17 @@ namespace WeatherExtensions
 			if (globals::features::effects11.loaded)
 				globals::features::effects11.OnSkyUpdateColors(sky);
 			globals::features::skySync.OnSkyUpdateColors(sky);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct Sky_UpdateWeather
+	{
+		static void thunk(RE::Sky* sky)
+		{
+			WeatherTransition::BeforeUpdate(sky);
+			func(sky);
+			WeatherTransition::AfterUpdate(sky);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1153,7 +1190,9 @@ namespace Hooks
 		stl::write_thunk_call<TESWaterReflections_Update_Actor_GetLOSPosition>(REL::RelocationID(31373, 32160).address() + REL::Relocate(0x1AD, 0x1CA));
 
 		logger::info("Hooking weather extensions");
+		stl::detour_thunk<WeatherExtensions::Precipitation_Restore>(REL::RelocationID(25640, 26181));
 		stl::detour_thunk<WeatherExtensions::Sky_UpdateColors>(REL::RelocationID(25686, 26233));
+		stl::detour_thunk<WeatherExtensions::Sky_UpdateWeather>(REL::RelocationID(25684, 26231));
 		stl::detour_thunk<WeatherExtensions::Sky_SetDirectionalAmbientColors>(REL::RelocationID(98989, 105643));
 
 		logger::info("Hooking MenuManager::DrawInterfaceStart for menu TAA");

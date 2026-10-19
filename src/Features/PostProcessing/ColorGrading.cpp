@@ -1,5 +1,6 @@
 #include "ColorGrading.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "RasterPass.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -9,7 +10,6 @@
 #include "Features/HDRDisplay.h"
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
-#include "Menu.h"
 #include "OpenDRTIo.h"
 
 #include <DDSTextureLoader.h>
@@ -17,6 +17,7 @@
 #include <DirectXTex.h>
 
 #include "IconsFontAwesome5.h"
+#include "Menu/Icons/helpers/IconFonts.h"
 
 #define I18N_KEY_PREFIX "feature.post_processing.color_grading."
 
@@ -53,6 +54,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	logType,
 	invertLog,
 	enableTonemap,
+	enableAutoHDR,
 	processColorSpace)
 
 template <int num = 1>
@@ -82,8 +84,10 @@ void drawHDRStatus()
 {
 	auto& hdr = globals::features::hdrDisplay;
 	if (hdr.loaded && hdr.settings.enableHDR) {
-		auto hdrOutputActive = std::format("{} {}", ICON_FA_CHECK, T("feature.post_processing.color_grading.hdr_output_active", "HDR Output Active"));
-		ImGui::TextColored(Util::Colors::GetSuccess(), "%s", hdrOutputActive.c_str());
+		Icons::Text(Icons::FA(ICON_FA_CHECK));
+		ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+		ImGui::TextColored(Util::Colors::GetSuccess(), "%s",
+			T("feature.post_processing.color_grading.hdr_output_active", "HDR Output Active"));
 		ImGui::Text(T("feature.post_processing.color_grading.paper_white_nits_from_hdr_settings", "Paper White: %.0f nits (from HDR settings)"), static_cast<float>(hdr.settings.hdrPaperWhite));
 		ImGui::Text(T("feature.post_processing.color_grading.peak_brightness_nits_from_hdr_settings", "Peak Brightness: %.0f nits (from HDR settings)"), static_cast<float>(hdr.settings.hdrPeakNits));
 	} else {
@@ -315,11 +319,16 @@ void ColorGrading::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("convert_linear_to_log_before_hdr_color_grading"), "Convert Linear to Log Before HDR Color Grading"), &settings.useLog);
 	if (settings.useLog) {
-		bool invertLog = settings.invertLog || settings.enableTonemap;
-		ImGui::BeginDisabled(settings.enableTonemap);
-		if (ImGui::Checkbox(T(TKEY("convert_log_to_linear_after_hdr_color_grading"), "Convert Log to Linear After HDR Color Grading"), &invertLog))
-			settings.invertLog = invertLog;
-		ImGui::EndDisabled();
+		{
+			bool invertLog = settings.invertLog;
+			if (settings.enableTonemap)
+				invertLog = true;
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.invertLog, 1.0f);
+			ImGui::BeginDisabled(settings.enableTonemap);
+			if (ImGui::Checkbox(T(TKEY("convert_log_to_linear_after_hdr_color_grading"), "Convert Log to Linear After HDR Color Grading"), &invertLog) && !SceneWidgetInterceptor::IsArmed())
+				settings.invertLog = invertLog;
+			ImGui::EndDisabled();
+		}
 		ImGui::Combo(T(TKEY("log_type"), "Log Type"), (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
 	}
 
@@ -368,7 +377,10 @@ void ColorGrading::DrawSettings()
 
 					ImGui::PushID(i);
 					ImGui::PushStyleColor(ImGuiCol_Text, hues[i].Value);
-					ImGui::RadioButton(ICON_FA_SQUARE, &hueId, i);
+					{
+						Icons::FontGuard font(Icons::Family::FontAwesome);
+						ImGui::RadioButton(ICON_FA_SQUARE, &hueId, i);
+					}
 					ImGui::PopStyleColor();
 					ImGui::PopID();
 				}
@@ -427,29 +439,64 @@ void ColorGrading::DrawSettings()
 		} else {
 			auto& tonemappers = TonemapperInfo::GetTonemappers();
 
+			ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 			if (ImGui::BeginCombo(T(TKEY("tonemapper"), "Tonemapper"), tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
 				for (int i = 0; i < (int)tonemappers.size(); ++i) {
-					// Hide non-HDR tonemappers when HDR is active
-					if (hdrActive && !tonemappers[i].supportsHDR)
-						continue;
+					ImGui::PushID(i);
+					const bool selected = i == tonemapperType;
+					const bool supportsHDR = tonemappers[i].supportsHDR;
+					const char* tonemapperName = tonemappers[i].name.data();
 
-					if (ImGui::Selectable(tonemappers[i].name.data(), i == tonemapperType)) {
+					const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+					const ImVec2 nameSize = ImGui::CalcTextSize(tonemapperName);
+					const float badgeW = Util::MeasureHdrSdrCapabilityPillWidth(supportsHDR);
+					const float rowW = nameSize.x + gap + badgeW;
+
+					if (ImGui::Selectable("##tm", selected, 0, ImVec2(rowW, 0))) {
 						tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
 						settings.tonemapParams = tonemappers[i].cached_settings;
 						tonemapperType = i;
 						recompileFlag = true;
 					}
 
+					{
+						const ImVec2 min = ImGui::GetItemRectMin();
+						const float rowH = ImGui::GetItemRectSize().y;
+						const float textY = min.y + (rowH - nameSize.y) * 0.5f;
+						ImGui::GetWindowDrawList()->AddText(ImVec2(min.x, textY), ImGui::GetColorU32(ImGuiCol_Text), tonemapperName);
+						Util::DrawHdrSdrCapabilityPillAt(ImVec2(min.x + nameSize.x + gap, min.y), rowH, supportsHDR);
+					}
+
+					if (selected)
+						ImGui::SetItemDefaultFocus();
+
 					if (auto _tt = Util::HoverTooltipWrapper())
 						ImGui::Text(tonemappers[i].desc.data());
+					ImGui::PopID();
 				}
 				ImGui::EndCombo();
 			}
+			ImGui::EndDisabled();
+			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+			Util::DrawHdrSdrCapabilityPill(tonemappers[tonemapperType].supportsHDR);
 			ImGui::Spacing();
 			ImGui::TextWrapped(tonemappers[tonemapperType].desc.data());
 			ImGui::Spacing();
+
+			// SDR-only tonemappers need AutoHDR to recover peak highlights on an HDR display.
+			if (hdrActive && !tonemappers[tonemapperType].supportsHDR) {
+				ImGui::Checkbox(T(TKEY("enable_auto_hdr"), "Enable AutoHDR"), &settings.enableAutoHDR);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text(T(TKEY("enable_auto_hdr_tooltip"),
+						"This tonemapper outputs SDR (0-1). AutoHDR expands highlights toward your HDR peak brightness. "
+						"Disable if you prefer a strictly SDR look on an HDR display."));
+				ImGui::Spacing();
+			}
+
+			ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 			if (ImGui::Button(T(TKEY("reset"), "Reset"), { -1, 0 }))
 				settings.tonemapParams = tonemappers[tonemapperType].default_settings;
+			ImGui::EndDisabled();
 			ImGui::Spacing();
 
 			ImGui::PushID(tonemapperType);
@@ -594,8 +641,26 @@ void ColorGrading::RestoreDefaultSettings()
 	recompileFlag = true;
 }
 
+bool ColorGrading::WantsAutoHDR() const
+{
+	auto& hdr = globals::features::hdrDisplay;
+	if (!hdr.loaded || !hdr.settings.enableHDR)
+		return false;
+	if (!settings.enableTonemap || settings.useOpenDrt || !settings.enableAutoHDR)
+		return false;
+
+	auto& tonemappers = TonemapperInfo::GetTonemappers();
+	if (tonemapperType < 0 || tonemapperType >= (int)tonemappers.size())
+		return false;
+
+	return !tonemappers[tonemapperType].supportsHDR;
+}
+
 void ColorGrading::LoadSettings(json& o_json)
 {
+	const bool oldUseOpenDrt = settings.useOpenDrt;
+	const int oldTonemapperType = tonemapperType;
+
 	try {
 		settings = o_json;
 		auto& spaces = getAvailableColorSpaces();
@@ -611,6 +676,7 @@ void ColorGrading::LoadSettings(json& o_json)
 	} catch (const json::exception& e) {
 		logger::error("Failed to load Color Grading settings: {}", e.what());
 		RestoreDefaultSettings();
+		return;
 	}
 
 	try {
@@ -625,7 +691,8 @@ void ColorGrading::LoadSettings(json& o_json)
 		settings.odrtConfig = {};
 	}
 
-	recompileFlag = true;
+	// Recompiling drops the shaders until the async compile lands, so scene blends must not trigger it.
+	recompileFlag = recompileFlag || settings.useOpenDrt != oldUseOpenDrt || tonemapperType != oldTonemapperType;
 }
 
 void ColorGrading::SaveSettings(json& o_json)
@@ -825,27 +892,39 @@ void ColorGrading::SetupResources()
 	CompileShaders();
 }
 
-void ColorGrading::ClearShaderCache()
+void ColorGrading::ReleaseActiveShaders()
 {
 	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{ &colorgradingPS };
 	const auto computeShaderPtrs = std::array{ &lutgenCS };
 
-	{
-		std::lock_guard lock(shaderMutex);
-		for (auto shader : shaderPtrs)
-			if ((*shader)) {
-				(*shader)->Release();
-				shader->detach();
-			}
-		for (auto shader : computeShaderPtrs)
-			if ((*shader)) {
-				(*shader)->Release();
-				shader->detach();
-			}
-	}
+	std::lock_guard lock(shaderMutex);
+	for (auto shader : shaderPtrs)
+		if ((*shader)) {
+			(*shader)->Release();
+			shader->detach();
+		}
+	for (auto shader : computeShaderPtrs)
+		if ((*shader)) {
+			(*shader)->Release();
+			shader->detach();
+		}
+}
 
+void ColorGrading::ClearShaderCache()
+{
+	ReleaseActiveShaders();
+	// Explicit "Recompile Shaders" / force path: wipe ColorGrading disk variants so
+	// source edits and define changes are rebuilt from scratch.
 	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/ColorGrading");
+	CompileShaders();
+}
+
+void ColorGrading::ReloadActiveShaders()
+{
+	ReleaseActiveShaders();
+	// Tonemapper / OpenDRT switches only: keep other TONEMAP_FUNC disk variants so
+	// returning to a previously used tonemapper is a cache hit instead of a full rebuild.
 	CompileShaders();
 }
 
@@ -876,29 +955,8 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	auto context = globals::d3d::context;
 	auto state = globals::state;
 
-	// Auto-switch to an HDR-capable tonemapper if current one doesn't support HDR.
-	// This runs every frame so the switch happens immediately when HDR is toggled,
-	// regardless of which settings page the user is viewing.
-	{
-		auto& hdrRef = globals::features::hdrDisplay;
-		const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
-		auto& tonemappers = TonemapperInfo::GetTonemappers();
-
-		if (hdrActive && !tonemappers[tonemapperType].supportsHDR) {
-			for (int i = 0; i < (int)tonemappers.size(); ++i) {
-				if (tonemappers[i].supportsHDR) {
-					tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
-					settings.tonemapParams = tonemappers[i].cached_settings;
-					tonemapperType = i;
-					recompileFlag = true;
-					break;
-				}
-			}
-		}
-	}
-
 	if (recompileFlag)
-		ClearShaderCache();
+		ReloadActiveShaders();
 
 	if (!AllShadersReady({ &colorgradingPS }) || !AllShadersReady({ &lutgenCS }))
 		return;
@@ -1040,7 +1098,6 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	globals::profiler->EndPass();
 
 	const bool curveReadbackActive =
-		Menu::GetSingleton()->IsEnabled &&
 		curveReadbackRequested &&
 		ImGui::GetCurrentContext() &&
 		curveReadbackRequestFrame >= ImGui::GetFrameCount() - 1;

@@ -144,6 +144,9 @@ public:
 	 */
 	static std::string GetReleaseStageTag(ReleaseStage stage);
 
+	/** @brief Theme colour for a stage tag: Error for Alpha, Warning for Beta. */
+	static ImVec4 GetReleaseStageColor(ReleaseStage stage);
+
 	/**
 	 * Whether the feature is disabled at boot by default (before any user override).
 	 * Only pre-release CORE features start disabled, since they ship with the base mod
@@ -151,6 +154,12 @@ public:
 	 * so it starts enabled. Users can flip either via the "Disable at Boot" menu.
 	 */
 	virtual bool IsDisabledByDefault() const { return IsCore() && GetReleaseStage() != ReleaseStage::Release; }
+
+	/** @brief Whether the feature can never be disabled at boot, e.g. infrastructure other features rely on. */
+	virtual bool IsAlwaysEnabled() const { return false; }
+
+	/** @brief Whether the feature persists through the shared settings JSON rather than its own store. */
+	virtual bool UsesMainSettings() const { return true; }
 
 	/**
 	 * Whether the feature will show up in the GUI menu
@@ -236,12 +245,6 @@ public:
 	virtual bool ToggleAtBootSetting();
 
 	/**
-	 * @brief Reapplies override settings for this feature if available
-	 * @return True if overrides were found and applied, false otherwise
-	 */
-	virtual bool ReapplyOverrideSettings();
-
-	/**
 	 * Weather analysis configuration for features that want to provide weather analysis.
 	 * If sectionName is empty, the feature will not appear in weather analysis UI.
 	 * Features should populate this struct to opt-in to weather analysis display.
@@ -263,13 +266,6 @@ public:
 	 * Features should override this to provide their weather analysis section name and draw function.
 	 */
 	virtual WeatherAnalysisConfig GetWeatherAnalysisConfig() const { return {}; }
-
-	/**
-	 * @brief Called during feature initialization to register weather-controllable variables
-	 * Features should register their weather variables here using the WeatherVariables::GlobalWeatherRegistry
-	 * The weather system will automatically handle save/load/lerp for all registered variables
-	 */
-	virtual void RegisterWeatherVariables() {}
 
 	/**
 	 * @brief Returns constraints this feature imposes on other features' settings
