@@ -28,7 +28,9 @@
  *   close in one command buffer: at each DXVK flush the open engine ranges close and reopen in the next, so an event
  *   that spans one (e.g. around a graph epoch) is measured in pieces, summed in the summary.
  * - Ranges record from the capture's arming; its first pass begins the host's frame slots later, once every command
- *   buffer that can execute in it (the graph's epochs are recorded ahead) was recorded while armed.
+ *   buffer that can execute in it (the graph's epochs are recorded ahead) was recorded while armed. Arming rebuilds the
+ *   graph, so recordings kept across frames (a revision's epochs) are recorded again with their ranges, and so does
+ *   disarming, so that none carries a session's ranges into the next.
  * - A sample is one armed capture of the profiler; a capture of several samples arms it again after each one.
  *
  * Differences from the D3D11 backend: one nesting level (the profiler configures one; a request for more is refused),
@@ -106,6 +108,7 @@ namespace NvPerf::detail
 					deviceName = properties.deviceName;
 				}
 				lead = a_host.FrameSlots() + 1;
+				host = &a_host;
 
 				g_backend = this;
 				if (FAILED(setBoundaryCallbacks(globals::d3d::device, &CloseInDxvk, &ReopenInDxvk, nullptr)))
@@ -226,7 +229,12 @@ namespace NvPerf::detail
 					Collect(a_capture, *result);
 					if (++a_capture.sample >= a_capture.configuration.samples)
 						return Finished({});
+					// The next sample arms once every command buffer recorded under this one (its ranges in it) has executed:
+					// one executing in the next session's passes crashes the profiler.
+					nextArmFrame = frame + lead;
 				}
+				if (!armed && frame < nextArmFrame)
+					return Step{ .state = CaptureState::Waiting };
 				if (!armed) {
 					std::string error;
 					if (!nvperf::ArmCapture(a_capture.sample, error))
@@ -234,6 +242,10 @@ namespace NvPerf::detail
 					armed = true;
 					g_recording.store(true, std::memory_order_release);
 					SetRangesActive(true);
+					// A revision's epochs (DCLF's) are recorded once and submitted until the revision changes, so recordings
+					// made before arming would execute in the passes without their ranges: a rebuild records them all again,
+					// and the frame after it waits for the new ones, well within the lead.
+					host->RequestRebuild();
 					firstPassFrame = frame + lead;
 					misplacedPops.store(0, std::memory_order_relaxed);
 					a_capture.passesSubmitted = 0;
@@ -344,6 +356,9 @@ namespace NvPerf::detail
 				armed = false;
 				g_recording.store(false, std::memory_order_release);
 				SetRangesActive(false);
+				// The recordings kept across frames (a revision's epochs) recorded while armed hold this session's ranges: recorded
+				// again, so that none executes in a later session.
+				host->RequestRebuild();
 				for (auto pushed = events.rbegin(); pushed != events.rend(); ++pushed)
 					if (*pushed)
 						emitCommandBufferCallback(globals::d3d::device, &PopInDxvk, nullptr);
@@ -391,10 +406,12 @@ namespace NvPerf::detail
 			// Frames between arming and the first pass: every command buffer that executes in a pass must have been
 			// recorded while armed, and the graph host records its epochs up to its frame slots ahead.
 			std::uint64_t lead = 4;
+			org::PersistentGraphHost* host = nullptr;  // the graph host, rebuilt at arming and disarming
 
 			// Render thread.
 			std::uint64_t frame = 0;
 			std::uint64_t firstPassFrame = 0;
+			std::uint64_t nextArmFrame = 0;  // a capture's next sample arms from this frame
 			bool armed = false;     // ranges record while set
 			bool draining = false;  // a capture ended while the profiler was still armed
 			std::set<std::string> names;  // interned: the command buffer callbacks keep pointers into it
