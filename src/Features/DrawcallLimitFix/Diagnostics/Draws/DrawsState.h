@@ -203,8 +203,12 @@ namespace DCLF::Diagnostics
 		struct FrameValuesParity
 		{
 			std::uint64_t checks = 0, differs = 0, fresh = 0, paletteChecks = 0, paletteDiffers = 0;
-			std::string first, paletteFirst;
+			// Resident slots whose shading row no producer sampled (written 0) at two checks running.
+			std::uint64_t shadingChecks = 0, shadingUnsampled = 0;
+			std::string first, paletteFirst, shadingFirst;
 		} frameValues;
+		// The resident slots unsampled at the last check (kept across the report's reset of frameValues).
+		std::vector<std::uint8_t> shadingUnsampledBefore;
 
 		// CS_DCLF_PERSISTENT_PARITY: the kept stores' checks (KeptChecks.cpp), each on its store's thread; taken by the snapshot
 		// builder's StoresReport and ProducerReport.

@@ -44,6 +44,13 @@ namespace DCLF::Diagnostics
 		if (o.claims) {
 			Subscribe<MainEpochDone>(&CheckSetParity);
 			Subscribe<MainEpochDone>(&CheckSetClassParity);
+			// Every resident slot's shading row sampled, read without waiting for the producer: the persistent parity's wait leaves no
+			// engine-read lease refused, the race that left rows unsampled.
+			Subscribe<MainEpochDone>([](const MainEpochDone& a_epoch) {
+				static std::uint32_t epochs = 0;
+				if (!a_epoch.depthOnly && ++epochs % 60 == 0)
+					CheckShadingSampled(Scene::FrameView::Get().GetTables());
+			});
 		}
 		if (o.scene) {
 			Subscribe<ExtrasSending>(&MirrorExtras);

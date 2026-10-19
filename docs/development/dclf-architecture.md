@@ -241,7 +241,9 @@ push events, and the list jobs `PrimaryCull` stands in for.
 When a worker may touch the engine's scene graph (`Core/Engine/EngineReadWindow.h`): open from `FrameDriver::BeginFrame`
 (`Main::Draw`) to Present, both on the render thread.
 -   A worker touching engine memory takes a `Lease` per item or per `ParallelFor` chunk. A refused lease means the window closed,
-    and the rest waits for the next window. `Close` waits only for leases in flight. One atomic word holds the open bit and the
+    and the rest waits for the next window: nothing refused is dropped. FrameValues hands a refused shading item back to the next
+    Kick (`RefusedShading`): a static object's slot is named once, so a dropped item left its row zero for the session (alpha 0:
+    every blended or alpha-tested decal drew nothing). `Close` waits only for leases in flight. One atomic word holds the open bit and the
     lease count.
 -   **The window is not quiescent.** The engine writes `currentFade`, billboards and texture transforms inside it, and some update
     writers (Havok node transforms, `Update3DPosition`, `AnimationGraphPlace`) run inside the render phase. So per-frame values
@@ -967,6 +969,18 @@ depth and the draw families use plain indirect draws.
     `vkCmdPreprocessGeneratedCommandsEXT` is recorded outside a render pass but snapshots its state. Sites: the main segment, the
     forward epoch, each view's forward part. Why: implicit preprocessing cost NVIDIA about 170 us of idle GPU per call (colour pass
     1.54 against 2.10 ms).
+-   **One execution set per state class.** An indirect execution set's pipelines must share every static and dynamic state, the
+    fragment output interface and the use of FragDepth and SampleMask with its initial pipeline
+    (`VUID-vkUpdateIndirectExecutionSetPipelineEXT-None-11040`, `-11147`, `-11098`, `-11086`). A pipeline's state class
+    (`StateClassKey`, `DrawPipelinesImpl.h`) is everything but its shader modules, over both variants: rasterizer, depth-stencil and
+    blend state (write masks included), targets, and its pixel stages' outputs, exports and depth deferral. Each class has its own
+    set per variant and its own signature (`SetVersion::ClassSets`), and a pipeline its index in its class's set; the latch's class
+    map turns a draw's set index into its class and index (`SetClassOf`, BuildDrawsCS). Every DGC range is split per class: the
+    main range (the pipeline sort runs inside each class's sub-range), each decal group (every present class holds the group's
+    slots; a decal writes a zero-count filler in the classes not its own, so nothing stale executes), the terrain groups and the
+    forward range (ranked back to front within a class). Each (range, class) is one preprocess and one execution, classes in
+    creation order. Why: with one set, about half the sessions on NVIDIA drew decals with another class's state. Cross-class order
+    in the forward range and a decal group is not the engine's ("Accepted differences").
 -   **Pipeline set versions** (`SetVersion`, `ShadowSetVersion`, `Core/Gpu/Pipelines/DrawPipelinesImpl.h`): a frame shape holds the
     version its handles belong to; the pipeline lane writes new pipelines only into a version nothing references, at indices that
     version never held, then publishes an immutable `PipelineCatalog`. The frame start takes the newest and binds its set version
@@ -1287,6 +1301,10 @@ The engine's other readers of cull results are answered by DCLF, so none depends
 -   **Shading is sampled at the frame start**, so a value written while the frame renders (a controller on the animation job, a
     cull's `GetRenderPasses`) is drawn from the next frame. Capture parity counts those draws on their own line
     (`shadingSinceStart`).
+-   **Cross-class order in the forward range and the decal groups.** A DGC call executes one state class
+    ("One execution set per state class"), so the forward range is drawn class by class, back to front within a class, and a decal
+    group class by class in the engine's order within a class. Overlapping blended draws of different classes can composite in
+    another order than the engine's; order-independent transparency will replace the sort.
 -   **Fade verdicts lag one frame** (fade state runs a frame ahead), and an engine-drawn part under a written root reads the node's
     fade at the write-back's milestones, not every step.
 -   **Tree clocks always advance**, while the engine advances only visible trees within its budget, so out-of-view trees' phase
@@ -1533,7 +1551,7 @@ root's fade (Features/Fades; `Core/Scene/Model/Records.h`, `FadeRootStatic`; `Fa
     views drop a caster while its root fades (`RootFading`); `ShadowCasterReject` takes the material's alpha alone and reads no
     node.
 -   **Every draw's alpha takes its root's fade** (`DCLFAlphaFade`, `DCLFObjects.hlsli`). The member's shading row holds the
-    material's alpha; the object record names the root (`recordFlags` bits 8-31 = root slot + 1); the frame record binds the states
+    material's alpha; the object record names the root (`recordFlags` bits 9-31 = root slot + 1); the frame record binds the states
     at t120 and the static rows at t119. A generation-0 row means no fade. The Z-prepass reads the same row, so it tests the same
     alpha.
 -   **Blended fades** (hint 9) are drawn in their opaque group with the faded alpha: DCLF has no blended pass for them.
@@ -1807,9 +1825,10 @@ each group in the engine's order (Features/Decals; `CS_DCLF_DECALS`, `CS_DCLF_LA
     change shaders only, so a pipeline's own bias is not guaranteed to be drawn. Instead a decal's key has
     `kRasterDecalNudge` (not an opaque effect in decal group 1; a first-person forward decal too), its record `kRecordDecalNudge`,
     and the Lighting and Effect vertex stages move its clip position toward the eye by 2^-20 of the depth range
-    (`DCLFDecalNudged`, `DCLFObjects.hlsli`), in the depth variant as in the colour one. It also covers a bias-free decal's exact
+    (`DCLFDecalNudged`, `DCLFObjects.hlsli`), in the depth variant as in the colour one. It also settles a bias-free decal's exact
     depth tie with its host (an interior's `AlphaMoss` sub-shapes of a floor's NIF), which the engine keeps by running both through
-    the same vertex math and DCLF does not: the host's depth is its pulled Z-prepass module's, the decal's its colour module's.
+    the same vertex math: DCLF's host depth is its Z-prepass module's and the decal's its colour module's, the same pulled math
+    (`DCLFPulledInput`) but two modules.
 -   **Pass layers.** A `BSMultiIndexTriShape` with an additional property has two main passes, and the main camera's claims are by
     geometry, so DCLF takes both or neither. The second pass is a pass layer: an object of its own held by the base's entry
     (`Tracked::layerSlot`, `Tables::layerBase` / `layerOf`), classified by `LayerPropertyOf`, written by `WriteLayer` with its own

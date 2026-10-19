@@ -28,7 +28,16 @@ namespace DCLF::Reports
 			line += fmt::format("; parity against the engine: {} rows checked, {} differ{}{} ({} written this frame, the next frame's); {} palettes checked, {} differ{}{}",
 				s.checks, s.differs, s.differs ? " <- DIFFER; first: " : " <- OK", s.differs ? s.first : std::string(), s.fresh, s.paletteChecks, s.paletteDiffers,
 				s.paletteDiffers ? " <- DIFFER; first: " : " <- OK", s.paletteDiffers ? s.paletteFirst : std::string());
-			s = {};
+			s.checks = s.differs = s.fresh = s.paletteChecks = s.paletteDiffers = 0;
+			s.first.clear();
+			s.paletteFirst.clear();
+		}
+		// CS_DCLF_SET_PARITY (CheckShadingSampled).
+		if (auto& s = Diagnostics::DrawsState::Get().frameValues; s.shadingChecks) {
+			line += fmt::format("; {} resident shading rows checked, {} never sampled{}{}", s.shadingChecks, s.shadingUnsampled,
+				s.shadingUnsampled ? " <- UNSAMPLED; first: " : " <- OK", s.shadingUnsampled ? s.shadingFirst : std::string());
+			s.shadingChecks = s.shadingUnsampled = 0;
+			s.shadingFirst.clear();
 		}
 		// The row sets' pools (D6; the built-in parts', then the features' registered pools): a frame's acquires and catch-up, the backings
 		// made, the census and the journal floor; under CS_DCLF_PERSISTENT_PARITY, the leased count against the lease-leak bound.

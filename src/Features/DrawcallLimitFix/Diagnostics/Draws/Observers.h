@@ -97,10 +97,8 @@ namespace DCLF::Diagnostics
 	void TraceMainEpoch(const MainEpochOutcome& a_outcome);
 	void TraceAdoptedBound(const AdoptedBound& a_bound);
 	void TraceColourCounts(const Draws::CounterReadback& a_readback, std::uint32_t a_slot);
-	// TEMPORARY (decal loss): CS_DCLF_DECAL_DUMP=<frame>: every decal's pixel-stage inputs, logged once (DecalDump.cpp). InstallDecalDump
-	// subscribes DumpDecals (MainEpochDone) and the Present count when the switch is set.
-	void DumpDecals(const MainEpochDone& a_epoch);
-	void InstallDecalDump();
+	// CS_DCLF_SET_PARITY: every resident slot's shading row sampled, every 60 colour epochs (FrameValuesParity.cpp).
+	void CheckShadingSampled(const SceneTables& a_tables);
 	// CS_DCLF_PERSISTENT_PARITY: the catalog's constant tables against ShaderCache's (ConstantTables.cpp).
 	void CheckConstantTables(const RE::BSShader& a_lighting, const Lookups& a_lookups);
 }
