@@ -42,6 +42,7 @@
 #include <stdexcept>
 #include <string_view>
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 
 namespace DCLF
@@ -82,6 +83,33 @@ namespace DCLF
 				i += count;
 			}
 			return false;
+		}
+
+		/** @brief Which of FragDepth and SampleMask a fragment program writes (their BuiltIn decorations), for its state class. */
+		inline void FragmentExports(std::span<const std::byte> a_spirv, bool& a_depth, bool& a_sampleMask)
+		{
+			a_depth = a_sampleMask = false;
+			const std::size_t words = a_spirv.size() / 4;
+			auto word = [&](std::size_t i) {
+				std::uint32_t w;
+				std::memcpy(&w, a_spirv.data() + i * 4, 4);
+				return w;
+			};
+			constexpr std::uint32_t kOpDecorate = 71, kOpMemberDecorate = 72, kDecorationBuiltIn = 11, kBuiltInSampleMask = 20, kBuiltInFragDepth = 22;
+			for (std::size_t i = 5; i < words;) {
+				const std::uint32_t first = word(i);
+				const std::uint32_t count = first >> 16, op = first & 0xFFFF;
+				if (count == 0 || i + count > words)
+					return;
+				std::uint32_t builtIn = ~0u;
+				if (op == kOpDecorate && count >= 4 && word(i + 2) == kDecorationBuiltIn)
+					builtIn = word(i + 3);
+				else if (op == kOpMemberDecorate && count >= 5 && word(i + 3) == kDecorationBuiltIn)
+					builtIn = word(i + 4);
+				a_depth = a_depth || builtIn == kBuiltInFragDepth;
+				a_sampleMask = a_sampleMask || builtIn == kBuiltInSampleMask;
+				i += count;
+			}
 		}
 		inline constexpr std::uint32_t kMaxLoggedFailures = 8;
 
@@ -296,6 +324,115 @@ namespace DCLF
 				fields += fmt::format("{}{} {:X} -> {:X} (bits {:X})", fields.empty() ? "" : ", ", a_name, a_from, a_to, a_from ^ a_to);
 			}
 		};
+
+		/**
+		 * @brief Everything of one variant's pipeline but its two shader modules (PipelineDesc::State): the fixed-function state as the
+		 * build passes it, and the fragment interface of its pixel module. An indirect execution set's pipelines must agree in all of it
+		 * (VK_EXT_device_generated_commands: static and dynamic state, fragment outputs, FragDepth and SampleMask), so it is what a
+		 * state class is keyed by. No vertex input: no DCLF pipeline has any (CheckVertexAttributes).
+		 */
+		struct PipelineStateDesc
+		{
+			rhi::RasterState raster{};
+			rhi::DepthStencilState depth{};
+			rhi::BlendState blend{};
+			rhi::RenderTargets targets{};
+			rhi::Format depthFormat = rhi::Format::Unknown;
+			rhi::PrimitiveTopology topology = rhi::PrimitiveTopology::TriangleList;
+			rhi::PipelineFlags flags = rhi::PipelineFlags_None;
+			// The pixel module's: the attachments it writes, whether there is one, FragDepth and SampleMask, a deferred depth test.
+			std::uint32_t outputLocations = 0;
+			bool hasPixel = false, exportsDepth = false, exportsSampleMask = false, defersDepth = false;
+		};
+		/** @brief A state class's key: both variants' state, as a set index selects the same entry of both variants' sets. */
+		struct StateClassKey
+		{
+			std::array<PipelineStateDesc, kVariantCount> variants{};
+		};
+
+		/**
+		 * @brief Each field of a_state, a value apiece, as SameState compares them: the blend attachments as the Vulkan backend expands
+		 * them (max(targets, attachments) of them, an index past the last attachment reading the last: rhi_vulkan.cpp), the floats by bits.
+		 */
+		template <class Field>
+		void StateFields(const PipelineStateDesc& a_state, Field&& a_field)
+		{
+			const auto& r = a_state.raster;
+			a_field("fill", static_cast<std::uint64_t>(r.fill));
+			a_field("cull", static_cast<std::uint64_t>(r.cull));
+			a_field("frontCCW", r.frontCCW);
+			a_field("depthBias", std::bit_cast<std::uint32_t>(r.depthBias));
+			a_field("depthBiasClamp", std::bit_cast<std::uint32_t>(r.depthBiasClamp));
+			a_field("slopeScaledDepthBias", std::bit_cast<std::uint32_t>(r.slopeScaledDepthBias));
+			a_field("conservative", r.conservative);
+			a_field("depthEnable", a_state.depth.depthEnable);
+			a_field("depthWrite", a_state.depth.depthWrite);
+			a_field("depthFunc", static_cast<std::uint64_t>(a_state.depth.depthFunc));
+			const auto& b = a_state.blend;
+			a_field("alphaToCoverage", b.alphaToCoverage);
+			a_field("independentBlend", b.independentBlend);
+			const std::uint32_t attachments = std::min<std::uint32_t>(std::max(a_state.targets.count, b.numAttachments), 8);
+			a_field("blend attachments", attachments);
+			for (std::uint32_t i = 0; i < attachments; ++i) {
+				const auto& a = b.attachments[std::min(i, b.numAttachments ? b.numAttachments - 1 : 0u)];
+				a_field("blend enable", (std::uint64_t(i) << 32) | (a.enable ? 1u : 0u));
+				a_field("blend colour", (std::uint64_t(i) << 32) | (std::uint64_t(a.srcColor) << 16) | (std::uint64_t(a.dstColor) << 8) | std::uint64_t(a.colorOp));
+				a_field("blend alpha", (std::uint64_t(i) << 32) | (std::uint64_t(a.srcAlpha) << 16) | (std::uint64_t(a.dstAlpha) << 8) | std::uint64_t(a.alphaOp));
+				a_field("write mask", (std::uint64_t(i) << 32) | static_cast<std::uint64_t>(a.writeMask));
+			}
+			a_field("targets", a_state.targets.count);
+			for (std::uint32_t i = 0; i < a_state.targets.count && i < 8; ++i)
+				a_field("target format", (std::uint64_t(i) << 32) | static_cast<std::uint64_t>(a_state.targets.formats[i]));
+			a_field("depth format", static_cast<std::uint64_t>(a_state.depthFormat));
+			a_field("topology", static_cast<std::uint64_t>(a_state.topology));
+			a_field("flags", static_cast<std::uint64_t>(a_state.flags));
+			a_field("output locations", a_state.outputLocations);
+			a_field("pixel stage", a_state.hasPixel);
+			a_field("FragDepth", a_state.exportsDepth);
+			a_field("SampleMask", a_state.exportsSampleMask);
+			a_field("defers depth", a_state.defersDepth);
+		}
+
+		/**
+		 * @brief Whether two keys are one state class: every field of both variants (StateFields). a_fields, when given, gets the fields
+		 * that differ ("depth: depthFunc 3 -> 4"), for the set class parity.
+		 */
+		inline bool SameState(const StateClassKey& a_left, const StateClassKey& a_right, KeyDifference* a_fields = nullptr)
+		{
+			bool same = true;
+			for (std::uint32_t v = 0; v < kVariantCount; ++v) {
+				std::vector<std::pair<const char*, std::uint64_t>> left, right;
+				StateFields(a_left.variants[v], [&](const char* a_name, std::uint64_t a_value) { left.emplace_back(a_name, a_value); });
+				StateFields(a_right.variants[v], [&](const char* a_name, std::uint64_t a_value) { right.emplace_back(a_name, a_value); });
+				if (left == right)
+					continue;
+				same = false;
+				if (!a_fields)
+					break;
+				const std::size_t common = std::min(left.size(), right.size());
+				for (std::size_t f = 0; f < common; ++f)
+					if (left[f] != right[f])
+						a_fields->Field(fmt::format("{}: {}", v == kDepthVariant ? "depth" : "colour", left[f].first).c_str(), left[f].second, right[f].second);
+				if (left.size() != right.size())
+					a_fields->Field(v == kDepthVariant ? "depth: fields" : "colour: fields", left.size(), right.size());
+			}
+			return same;
+		}
+		struct StateClassHash
+		{
+			using is_avalanching = void;
+			std::uint64_t operator()(const StateClassKey& a_key) const noexcept
+			{
+				std::uint64_t hash = 0xcbf29ce484222325ull;
+				for (const auto& variant : a_key.variants)
+					StateFields(variant, [&](const char*, std::uint64_t a_value) { hash = ankerl::unordered_dense::detail::wyhash::mix(hash ^ a_value, 0x9E3779B97F4A7C15ull); });
+				return hash;
+			}
+		};
+		struct StateClassEqual
+		{
+			bool operator()(const StateClassKey& a_left, const StateClassKey& a_right) const { return SameState(a_left, a_right); }
+		};
 	}
 
 	struct DrawPipelines::Impl
@@ -321,7 +458,7 @@ namespace DCLF
 		};
 
 		/**
-		 * @brief A version of an indirect pipeline set group and its signatures, holding the admitted pipelines [0, applied).
+		 * @brief A version of the state classes' indirect pipeline sets and their signatures, holding the admitted pipelines [0, applied).
 		 *
 		 * Frames keep the version they record with (IndirectState::version). New pipelines are written only into a version nothing else
 		 * references, at indices it never held, then published. So a set is never written while a recording reads it or sizes preprocess
@@ -330,8 +467,20 @@ namespace DCLF
 		 */
 		struct SetVersion
 		{
-			std::array<rhi::IndirectPipelineSetPtr, kVariantCount> sets;  // one per variant; a key has the same index in both
-			std::array<rhi::CommandSignaturePtr, kVariantCount> signatures;
+			/**
+			 * @brief A state class's sets (one per variant: a pipeline has the same index in both) and their signatures, holding its first
+			 * applied members (Lane::classMembers), and the handles written at each index, which the set class parity reads.
+			 */
+			struct ClassSets
+			{
+				std::array<rhi::IndirectPipelineSetPtr, kVariantCount> sets;
+				std::array<rhi::CommandSignaturePtr, kVariantCount> signatures;
+				std::array<std::vector<rhi::PipelineHandle>, kVariantCount> written;
+				std::uint32_t applied = 0;
+			};
+			std::vector<ClassSets> classes;  // by state class, in creation order
+			// By set index in [0, applied): class << kSetClassShift | index in the class (IndirectState::classOf).
+			std::vector<std::uint32_t> classOf;
 			// [0, applied), held while a recording holds the version.
 			std::vector<org::services::PipelinePayload> pipelines;
 			// Each pipeline's Z-prepass group, and each group's first pipeline (whose pulled depth pipeline is the group's).
@@ -531,6 +680,9 @@ namespace DCLF
 			rhi::PipelinePtr pulledDepth;
 			ZPipelineKey zKey;
 			std::shared_ptr<const ConstantTables> tables;  // a main pipeline's stages' (ConstantTableOf)
+			// A main pipeline's both variants' state (PipelineDesc::State): the state class whose execution sets it goes in. Not the pulled
+			// depth pipeline's, which plain draws bind.
+			StateClassKey stateClass;
 		};
 
 		/** @brief The engine's state behind a key's RasterStateBits, read once and kept in RHI terms so builds never touch D3D11. */
@@ -689,6 +841,15 @@ namespace DCLF
 			ankerl::unordered_dense::map<ZPipelineKey, std::uint32_t, ZPipelineKeyHash> zGroups;
 			std::vector<std::array<RegisterUsage, kVariantCount>> usage;  // by set index, then variant
 			std::vector<std::shared_ptr<const ConstantTables>> constantTables;  // by set index
+			// State classes (Built::stateClass), numbered as first admitted: each pipeline's word (by set index: class << kSetClassShift |
+			// index in the class), each class's members (set indices, in admission order) and each key's class.
+			std::vector<std::uint32_t> classOf;
+			std::vector<std::vector<std::uint32_t>> classMembers;
+			ankerl::unordered_dense::map<StateClassKey, std::uint32_t, StateClassHash, StateClassEqual> classIndex;
+			std::atomic<std::uint32_t> stateClasses{ 0 }, largestClass{ 0 };  // Stats', relaxed
+			// CS_DCLF_SET_PARITY: each published version's classes against their members (CheckClasses), and its counts for Stats (relaxed).
+			Diagnostics::ParityCounter classParity;
+			std::atomic<std::uint64_t> classParityChecks{ 0 }, classParityMismatches{ 0 };
 			std::string recreatedBy;  // the set's last recreation, for NearestKey's warnings
 			std::uint64_t revision = 0;
 			bool dirty = false;  // the catalog to publish at the end of the pass
@@ -762,9 +923,12 @@ namespace DCLF
 		};
 		Lane lane;
 
-		/** @brief Publishes a family's admitted pipelines (Versions::Publish) and hands out the published indices (a_onReady per key). */
+		/**
+		 * @brief Publishes a family's admitted pipelines (Versions::Publish) and hands out the published indices (a_onReady per key).
+		 * Returns what the publication did (Published: a new version is the published one).
+		 */
 		template <class Family, class Version, class Publish, class OnReady>
-		void PublishAdmitted(Family& a_family, Versions<Version>& a_versions, std::uint32_t a_admitted, const char* a_what, Publish&& a_publish, OnReady&& a_onReady)
+		typename Versions<Version>::PublishResult PublishAdmitted(Family& a_family, Versions<Version>& a_versions, std::uint32_t a_admitted, const char* a_what, Publish&& a_publish, OnReady&& a_onReady)
 		{
 			using Result = typename Versions<Version>::PublishResult;
 			const auto result = a_versions.Publish(a_admitted, a_publish);
@@ -785,6 +949,7 @@ namespace DCLF
 				a_versions.failureLogged = true;
 				logger::warn("[DCLF] Could not publish the {} ({} pipelines admitted)", a_what, a_admitted);
 			}
+			return result;
 		}
 
 		/** @brief The lane's pass (SetPipelineLaneDrain). */
@@ -873,6 +1038,29 @@ namespace DCLF
 				for (std::uint32_t i = 0; i < a_targets.colorCount; ++i)
 					Colour(a_targets.colors[i]);
 			}
+			/**
+			 * @brief Its state class's part (PipelineStateDesc): everything Create passes but the two modules, and the fragment interface of
+			 * its pixel module (a_pixel, that module reflected).
+			 */
+			PipelineStateDesc State(const SpirvReflection& a_pixel) const
+			{
+				PipelineStateDesc state;
+				state.raster = raster.rs;
+				state.depth = depth.ds;
+				state.blend = blend.bs;
+				state.targets = targets.rt;
+				state.depthFormat = depthFormat.dsv;
+				state.topology = rhi::PrimitiveTopology::TriangleList;  // Create's
+				state.flags = flags.flags;
+				state.hasPixel = hasPixel;
+				if (hasPixel) {
+					const std::span<const std::byte> module(static_cast<const std::byte*>(pixel.bytecode.data), pixel.bytecode.size);
+					state.outputLocations = a_pixel.outputLocations;
+					FragmentExports(module, state.exportsDepth, state.exportsSampleMask);
+					state.defersDepth = FragmentDefersDepth(module);
+				}
+				return state;
+			}
 			void Create(rhi::Device a_device, rhi::PipelinePtr& a_out, std::string_view a_what) const
 			{
 				const rhi::SubobjPrimitiveTopology topology{ rhi::PrimitiveTopology::TriangleList };
@@ -937,8 +1125,26 @@ namespace DCLF
 		static org::services::PipelinePayload BuildShadow(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, ShadowPipelineKey a_key,
 			const ShaderPrograms::ShadowProgram* a_program, DXGI_FORMAT a_depthFormat, ShadowRasterState a_state);
 
-		// DrawSequence's command signature (Records.h), created with the set it selects from.
-		bool CreateSignature(SetVersion& a_version, std::uint32_t a_variant);
+		// DrawSequence's command signature (Records.h), created with the class's set it selects from.
+		bool CreateSignature(SetVersion::ClassSets& a_class, std::uint32_t a_variant);
+		/** @brief The lane (AdmitLane): a_index's place in its state class (Built::stateClass), the class made when it is the first of it. */
+		void AdmitToClass(const Built& a_built, std::uint32_t a_index);
+		/** @brief The lane (AdmitLane's publish): every class's sets of a_version brought up to its members among [0, a_admitted). */
+		bool ApplyClasses(SetVersion& a_version, std::uint32_t a_admitted);
+		/**
+		 * @brief The lane, CS_DCLF_SET_PARITY (AdmitLane, a version just published): every class of a_version against its members. Each
+		 * member's class word round-trips, its state equals its class's initial pipeline's (SameState: one that differs is drawn with the
+		 * initial's fixed-function state), the handle written at its index is its own, every pipeline is in exactly one class, and no two
+		 * classes are one state. Counted in Lane::classParity, each failure logged at once.
+		 */
+		void CheckClasses(const SetVersion& a_version);
+		/**
+		 * @brief CheckClasses' members of one class a_class of a_version (a_members: the lane's, in admission order): each one's class word,
+		 * its state against the class's initial pipeline's, the handles written at its index; a_seen counts each pipeline's classes.
+		 */
+		template <class Check>
+		static void CheckClassMembers(const SetVersion& a_version, std::uint32_t a_class, const std::vector<std::uint32_t>& a_members,
+			std::vector<std::uint8_t>& a_seen, Check&& a_check);
 
 		/** @brief Writes [a_applied, a_admitted) into a_set, creating it (initial pipeline 0) and its signatures if absent. */
 		template <class GetPipeline, class CreateSignatures>

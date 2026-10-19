@@ -42,6 +42,50 @@ namespace DCLF
 				SequenceLimitFailure(a_what, a_draws, kSortRankLimit);
 		}
 
+		/**
+		 * @brief The pipeline slots' capacities (MainLayout::slotCapacity: each slot's draws, kept while they fit and grown to a power of two
+		 * past them) and the phase 2 ranges summed from them: each terrain group's and the forward range's (their state classes' sub-ranges
+		 * are their slots', PlanSetClasses), and refraction's (a plain draw: a power of two past its slots' draws). Returns the main
+		 * sub-ranges' total, which the draw range must hold. A slot's range is its key's, as BuildDrawsCS routes its objects (PlanSetClasses'
+		 * SlotClassRange): a decal group's (no slot capacity: decal ranges are sequenceDecals), forward, a terrain group's, else main.
+		 */
+		std::uint64_t GrowSlotRanges(MainLayout& a_layout, const DrawBoundStore& a_bound, const SceneTables& a_tables)
+		{
+			const auto slots = static_cast<std::uint32_t>(a_tables.pipelines.size());
+			if (a_layout.slotCapacity.size() < slots) {
+				a_layout.slotCapacity.resize(slots, 0u);
+				++a_layout.slotsLayout;
+			}
+			std::uint64_t main = 0, forward = 0, refractionDraws = 0;
+			std::array<std::uint64_t, kTerrainGroups> terrain{};
+			for (std::uint32_t p = 0; p < slots; ++p) {
+				const std::uint32_t flags = a_tables.pipelines[p].rasterFlags;
+				const std::uint32_t draws = a_bound.PipelineDraws(p);
+				if (RasterDecalGroup(flags))
+					continue;
+				if (RasterForward(flags) && RasterRefraction(flags)) {
+					refractionDraws += draws;
+					continue;
+				}
+				auto& capacity = a_layout.slotCapacity[p];
+				if (draws > capacity) {
+					capacity = std::bit_ceil(std::min(draws, 1u << 30));
+					++a_layout.slotsLayout;
+				}
+				if (RasterForward(flags))
+					forward += capacity;
+				else if (const std::uint32_t group = RasterTerrainGroup(flags))
+					terrain[group - 1] += capacity;
+				else
+					main += capacity;
+			}
+			for (std::uint32_t g = 0; g < kTerrainGroups; ++g)
+				a_layout.terrainCapacity[g] = static_cast<std::uint32_t>(std::min<std::uint64_t>(terrain[g], 1u << 31));
+			a_layout.forwardCapacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(forward, 1u << 30));
+			if (refractionDraws > a_layout.refractionCapacity)
+				a_layout.refractionCapacity = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(refractionDraws, 1u << 30)));
+			return main;
+		}
 	}
 
 	void IndirectDraws::Impl::RequireSceneTables(GrowthBuild& a_build, SceneBuffers& a_scene, const SceneTables& a_tables)
@@ -85,11 +129,12 @@ namespace DCLF
 		}
 	}
 
-	void IndirectDraws::Impl::RequireMain(GrowthBuild& a_build, Resources& a_resources, const SceneTables& a_tables, std::uint32_t)
+	void IndirectDraws::Impl::RequireMain(GrowthBuild& a_build, Resources& a_resources, RevisionMake& a_make)
 	{
 		auto& buffers = SceneBufferSet::Get();
 		auto& r = a_resources;
-		// The draw bound as the make brought it up to date from a_tables (MakeRevision, before the reuse key reads it).
+		const SceneTables& tables = a_make.tables;
+		// The draw bound as the make brought it up to date from them (MakeRevision, before the reuse key reads it).
 		const auto& drawBound = producer.drawBound;
 		std::uint32_t draws = drawBound.Draws();
 		auto& layout = producer.mainLayout;
@@ -97,14 +142,14 @@ namespace DCLF
 			layout = InitialMainLayout();
 		// Z-prepass buckets: each pipeline slot's draws, capacity kept while they fit and grown to a power of two past them, so the
 		// recorded plain draws change only then.
-		const auto slots = static_cast<std::uint32_t>(a_tables.pipelines.size());
+		const auto slots = static_cast<std::uint32_t>(tables.pipelines.size());
 		bool moved = layout.zBucketCapacity.size() < slots;
 		if (moved)
 			layout.zBucketCapacity.resize(slots, 0u);
 		for (std::uint32_t p = 0; p < slots; ++p) {
 			// A family key not a depth segment input (ProgramBuild::ForwardOrDecal, the Effect port's) draws only in the forward range and
 			// has no Z-prepass pipeline.
-			if (!Extensions::FamilyRules(a_tables.pipelines[p].rasterFlags).depthSegment)
+			if (!Extensions::FamilyRules(tables.pipelines[p].rasterFlags).depthSegment)
 				continue;
 			if (const std::uint32_t pipelineDraws = drawBound.PipelineDraws(p); pipelineDraws > layout.zBucketCapacity[p]) {
 				layout.zBucketCapacity[p] = std::bit_ceil(pipelineDraws);
@@ -123,36 +168,19 @@ namespace DCLF
 		} else if (!layout.zBucketFirst.empty()) {
 			draws = std::max(draws, layout.zBucketFirst.back() + layout.zBucketCapacity.back());
 		}
-		// A terrain group 1 bucket has an equal twin for its near blocks (PlanZBuckets). The colour segment's terrain groups take
-		// ranges of phase 2's (kTerrainGroups), sized like buckets.
+		// A terrain group 1 bucket has an equal twin for its near blocks (PlanZBuckets).
 		std::uint64_t terrainTwins = 0, terrainSlots = 0;
-		std::array<std::uint64_t, kTerrainGroups> terrainDraws{};
-		for (std::uint32_t p = 0; p < slots; ++p) {
-			const std::uint32_t group = RasterTerrainGroup(a_tables.pipelines[p].rasterFlags);
-			if (!group)
-				continue;
-			terrainDraws[group - 1] += drawBound.PipelineDraws(p);
-			if (group == 1) {
+		for (std::uint32_t p = 0; p < slots; ++p)
+			if (RasterTerrainGroup(tables.pipelines[p].rasterFlags) == 1) {
 				terrainTwins += layout.zBucketCapacity[p];
 				++terrainSlots;
 			}
-		}
-		for (std::uint32_t g = 0; g < kTerrainGroups; ++g)
-			if (terrainDraws[g] > layout.terrainCapacity[g])
-				layout.terrainCapacity[g] = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(terrainDraws[g], 1u << 31)));
-		// The forward range, sized like the terrain ranges, twice over (staging and sorted halves), after them in phase 2's.
-		// Refraction slots' draws go to the refraction range after the forward halves, sized likewise.
-		std::uint64_t forwardDraws = 0, refractionDraws = 0;
-		for (std::uint32_t p = 0; p < slots; ++p)
-			if (RasterForward(a_tables.pipelines[p].rasterFlags))
-				(RasterRefraction(a_tables.pipelines[p].rasterFlags) ? refractionDraws : forwardDraws) += drawBound.PipelineDraws(p);
-		if (forwardDraws > layout.forwardCapacity)
-			layout.forwardCapacity = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(forwardDraws, 1u << 30)));
-		if (refractionDraws > layout.refractionCapacity)
-			layout.refractionCapacity = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(refractionDraws, 1u << 30)));
+		// The colour segment's ranges from the slots' capacities: the main draws' (in the draw range), the terrain groups' (ranges of phase
+		// 2's, kTerrainGroups), the forward range twice over (staging and sorted halves) after them, then refraction's.
+		const std::uint64_t mainDraws = GrowSlotRanges(layout, drawBound, tables);
 		const std::uint64_t phaseDraws = (layout.zBucketFirst.empty() ? 0ull : std::uint64_t(layout.zBucketFirst.back()) + layout.zBucketCapacity.back()) + terrainTwins;
 		const std::uint64_t terrainRange = std::uint64_t(layout.terrainCapacity[0]) + layout.terrainCapacity[1] + 2ull * layout.forwardCapacity + layout.refractionCapacity;
-		draws = static_cast<std::uint32_t>(std::min<std::uint64_t>(std::max<std::uint64_t>({ draws, phaseDraws, terrainRange }), UINT32_MAX));
+		draws = static_cast<std::uint32_t>(std::min<std::uint64_t>(std::max<std::uint64_t>({ draws, phaseDraws, terrainRange, mainDraws }), UINT32_MAX));
 		// The buckets' count words, each phase's.
 		layout.buckets = static_cast<std::uint32_t>(layout.zBucketCapacity.size() + terrainSlots);
 		UnitGroup{}.Add(r.zBucketCounts[0]).Add(r.zBucketCounts[1]).Require(a_build, layout.buckets);
@@ -160,7 +188,7 @@ namespace DCLF
 		ReserveMainLatch(producer.latches.main.cascades, producer.latches.main.shadowVolumes, layout.buckets);
 		std::uint32_t decals = 0;
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
-			decals = std::max(decals, a_tables.rangeCount[group]);
+			decals = std::max(decals, tables.rangeCount[group]);
 		CheckSequenceLimits("the main pass", draws, true);
 		CheckSequenceLimits("a decal group", decals, false);
 		// The sequence ranges: doubled past the bound, the buffers sized to them exactly.
@@ -171,11 +199,33 @@ namespace DCLF
 			layout.sequenceDraws = newDraws;
 			layout.sequenceDecals = newDecals;
 		}
-		buffers.Require(a_build, r.sequences, SequenceSlots(layout.sequenceDraws, layout.sequenceDecals));
+		// The state classes' sub-ranges of these ranges (their decal sub-ranges' count too), before the sequences are asked for them.
+		RequireMainClasses(a_build, r, a_make);
+		buffers.Require(a_build, r.sequences, SequenceSlots(layout.sequenceDraws, layout.sequenceDecals, layout.decalRanges));
 		if (r.sort) {
 			buffers.Require(a_build, r.sort->staging, layout.sequenceDraws);
 			buffers.Require(a_build, r.sort->ranks, layout.sequenceDraws);
 		}
+	}
+
+	void IndirectDraws::Impl::RequireMainClasses(GrowthBuild& a_build, Resources& a_resources, RevisionMake& a_make)
+	{
+		auto& layout = producer.mainLayout;
+		auto plan = std::make_shared<SetClassPlan>();
+		PlanSetClasses(layout, a_make.lookups, a_make.tables, a_make.indirect, *plan);
+		// The decal sub-ranges the sequences hold: doubled past the (group, class) pairs present, so a class's first decal of a group moves
+		// the decal region's size only now and then.
+		if (plan->decalRanges > layout.decalRanges) {
+			const std::uint32_t grown = org::services::GrowthPolicy::Doubling().NextAs(layout.decalRanges, plan->decalRanges);
+			logger::info("[DCLF] main sequences: {} decal sub-ranges grown to {} ({} decal groups' state classes)", layout.decalRanges, grown, plan->decalRanges);
+			layout.decalRanges = grown;
+		}
+		// A count word per (class, range), and the latch's class table and map for the set version's classes and set indices.
+		SceneBufferSet::Get().Require(a_build, a_resources.classCounts, std::max(plan->Words(), 1u));
+		const auto& latch = producer.latches.main;
+		ReserveMainLatch(latch.cascades, latch.shadowVolumes, latch.buckets, static_cast<std::uint32_t>(plan->classes.size()),
+			static_cast<std::uint32_t>(a_make.indirect.classOf.size()));
+		a_make.classPlan = std::move(plan);
 	}
 
 	void ShadowEngine::RequireShadowSequences(ImplProducer& a_producer, GrowthBuild& a_build)
@@ -245,7 +295,8 @@ namespace DCLF
 		}
 	}
 
-	void IndirectDraws::Impl::RequireView(GrowthBuild& a_build, ViewResources& a_view, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws)
+	void IndirectDraws::Impl::RequireView(GrowthBuild& a_build, ViewResources& a_view, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws,
+		std::uint32_t a_classMapWords)
 	{
 		const auto& traits = *a_view.traits;
 		const std::size_t v = ViewIndex(traits.kind);
@@ -257,10 +308,12 @@ namespace DCLF
 			layout.slots = org::services::GrowthPolicy::Doubling().NextAs(layout.slots, a_slots);
 		if (a_buckets > layout.buckets)
 			layout.buckets = org::services::GrowthPolicy::Doubling().NextAs(layout.buckets, a_buckets);
+		if (a_classMapWords > layout.classMapWords)
+			layout.classMapWords = org::services::GrowthPolicy::Doubling(256).NextAs(layout.classMapWords, a_classMapWords);
 		if (!(layout == producer.latches.views[v])) {
 			// A new layout: the next seal makes a new block (RequireLatches); frames in flight keep their own.
 			producer.latches.views[v] = layout;
-			logger::info("[DCLF] {} latch: {} pipeline slots, {} buckets", traits.name, layout.slots, layout.buckets);
+			logger::info("[DCLF] {} latch: {} pipeline slots, {} buckets, {} class map words", traits.name, layout.slots, layout.buckets, layout.classMapWords);
 		}
 		// A face's bucket count words for the latch's buckets, and a face's range of the sequences for the plan's draws (its buckets
 		// and forward range): a set that does not hold them is never sealed, so the view's shape never indexes past them.

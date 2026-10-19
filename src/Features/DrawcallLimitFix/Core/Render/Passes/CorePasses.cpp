@@ -98,11 +98,16 @@ namespace DCLF::Draws
 			const auto& resources = a_context.Main();
 			if (!resources->forwardSort)
 				return nullptr;
-			return MakeForwardSortPass(resources->sequences, { resources->count, nullptr }, [main = resources](const org::PassPrepareContext& a_preparation) {
+			return MakeForwardSortPass(resources->sequences, { nullptr, resources->classCounts }, [main = resources](const org::PassPrepareContext& a_preparation) {
 				const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
 				if (!frame || !BuildsDraws(a_preparation, *main, RenderGraphRuntime::Segment::MainOpaque))
 					return ForwardSortSource{ frame ? frame->generation : 0 };
-				return ForwardSortSource{ frame->generation, main->forwardSort, static_cast<std::uint32_t>(ForwardStagingSlot(*frame)), frame->forwardCapacity };
+				// Each state class's forward pair (its staging half, then its sorted half), counted by its classCounts word.
+				ForwardSortSource source{ frame->generation, main->forwardSort };
+				for (std::uint32_t c = 0; c < frame->classes.size(); ++c)
+					if (const auto& range = frame->classes[c].ranges[kClassRangeForward]; range.capacity)
+						source.ranges.push_back({ range.first, range.capacity, ClassCountWord(c, kClassRangeForward) * static_cast<std::uint32_t>(sizeof(std::uint32_t)) });
+				return source;
 			});
 		}
 

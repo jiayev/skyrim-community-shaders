@@ -18,11 +18,11 @@ namespace DCLF::Reports
 				ct.catalogOnly ? "; first: " + ct.catalogOnlyFirst : std::string(), ct.cacheOnly);
 	}
 
-	void PassStatsLine(const std::array<std::array<std::uint64_t, 4>, 3>& a_totals, const std::array<std::uint32_t, 3>& a_samples)
+	void PassStatsLine(const std::array<std::array<std::uint64_t, 4>, 4>& a_totals, const std::array<std::uint32_t, 4>& a_samples)
 	{
-		static constexpr const char* kNames[3] = { "Z-prepass", "Z-prepass phase 2", "colour" };
+		static constexpr const char* kNames[4] = { "Z-prepass", "Z-prepass phase 2", "colour", "decals" };
 		std::string text;
-		for (std::uint32_t k = 0; k < 3; ++k) {
+		for (std::uint32_t k = 0; k < 4; ++k) {
 			if (!a_samples[k])
 				continue;
 			const double n = a_samples[k];

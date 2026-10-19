@@ -81,6 +81,42 @@ namespace DCLF::Diagnostics
 				check(bindings[i].name.c_str(), even ? *even : kNone, value, value == oddIndex ? oddIndex : evenIndex);
 			}
 		}
+
+		/**
+		 * @brief A main shape's state class sub-ranges (PassFrame::classes): the classes the set version has, each class's keys its
+		 * pipelines, each sub-range in its own region of the sequences (the main ones in the draw range, the terrain and forward ones in
+		 * phase 2's before refraction, the decal ones past both), a count word per (class, range), the latch's table and map room.
+		 */
+		template <class Finding>
+		void CheckClassRanges(const PassFrame& a_frame, std::uint64_t a_sequences, std::uint64_t a_classWords, Finding&& a_finding)
+		{
+			const auto& classes = a_frame.classes;
+			if (classes.empty())
+				return;
+			if (classes.size() != a_frame.indirect.classes.size())
+				a_finding(fmt::format("{} classes planned, the set version has {}", classes.size(), a_frame.indirect.classes.size()));
+			if (std::uint64_t(classes.size()) * kClassRanges > a_classWords)
+				a_finding(fmt::format("{} classes' count words past the class counts' {}", classes.size(), a_classWords));
+			if (classes.size() > a_frame.latchLayout.classes || a_frame.indirect.classOf.size() > a_frame.latchLayout.classMapWords)
+				a_finding(fmt::format("{} classes and {} set indices past the latch's {} and {}", classes.size(), a_frame.indirect.classOf.size(), a_frame.latchLayout.classes,
+					a_frame.latchLayout.classMapWords));
+			const std::uint64_t draws = a_frame.sequenceDraws, refraction = Draws::RefractionSlot(a_frame);
+			for (std::size_t c = 0; c < classes.size(); ++c) {
+				if (c < a_frame.indirect.classes.size() && classes[c].size != a_frame.indirect.classes[c].pipelines)
+					a_finding(fmt::format("class {}'s keys {} for its {} pipelines", c, classes[c].size, a_frame.indirect.classes[c].pipelines));
+				for (std::uint32_t r = 0; r < kClassRanges; ++r) {
+					const auto& range = classes[c].ranges[r];
+					if (!range.capacity)
+						continue;
+					const bool decal = r >= Draws::ClassRangeOfSlot(0) && r < Draws::ClassRangeOfSlot(kDecalGroups);
+					const std::uint64_t end = std::uint64_t(range.first) + (r == Draws::kClassRangeForward ? 2ull : 1ull) * range.capacity;
+					const std::uint64_t from = r == Draws::kClassRangeMain ? 0 : decal ? 2 * draws : draws;
+					const std::uint64_t to = r == Draws::kClassRangeMain ? draws : decal ? a_sequences : refraction;
+					if (range.first < from || end > to || end > a_sequences)
+						a_finding(fmt::format("class {} range {} at {} of {} outside [{}, {}) (the sequences' {})", c, r, range.first, range.capacity, from, to, a_sequences));
+				}
+			}
+		}
 	}
 
 	void CheckSnapshotAddresses(const SnapshotSealed& a_sealed)
@@ -145,11 +181,11 @@ namespace DCLF::Diagnostics
 			std::uint64_t planned = 0;
 			for (const auto& bucket : frame->buckets)
 				planned = std::max<std::uint64_t>(planned, std::uint64_t(bucket.first) + bucket.capacity);
-			if (frame->forwardCapacity)
-				planned = std::max<std::uint64_t>(planned, std::uint64_t(frame->forwardFirst) + 2ull * frame->forwardCapacity);
+			for (const auto& range : frame->forwardRanges)
+				planned = std::max<std::uint64_t>(planned, std::uint64_t(range.first) + 2ull * range.capacity);
 			if (planned > frame->sequenceDraws)
 				finding(fmt::format("the {} view's plan reaches {} draws past a face's {}", traits.name, planned, frame->sequenceDraws));
-			const std::uint64_t words = frame->buckets.size() + (frame->forwardCapacity ? 1 : 0);
+			const std::uint64_t words = frame->buckets.size() + frame->forwardRanges.size();
 			for (std::uint32_t f = 0; f < traits.faces; ++f)
 				if (words > units(view->bucketCounts[f]))
 					finding(fmt::format("the {} view's {} bucket words past face {}'s {}", traits.name, words, f, units(view->bucketCounts[f])));
@@ -161,8 +197,9 @@ namespace DCLF::Diagnostics
 				if (!frame)
 					continue;
 				++c.shapes;
-				if (Draws::SequenceSlots(frame->sequenceDraws, frame->sequenceDecals) * kSequence > bytes(main->sequences))
-					finding(fmt::format("the main ranges of {} draws and {} decals past the sequences' {} bytes", frame->sequenceDraws, frame->sequenceDecals, bytes(main->sequences)));
+				if (Draws::SequenceSlots(frame->sequenceDraws, frame->sequenceDecals, 0) * kSequence > bytes(main->sequences))
+					finding(fmt::format("the main ranges of {} draws past the sequences' {} bytes", frame->sequenceDraws, bytes(main->sequences)));
+				CheckClassRanges(*frame, units(main->sequences), units(main->classCounts), finding);
 				if (frame->zPlan) {
 					std::uint64_t end = 0;
 					for (const auto& call : frame->zPlan->calls)

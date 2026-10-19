@@ -26,6 +26,8 @@ namespace DCLF
 		std::array<bool, Extensions::kDrawFamilies> familyOn{};
 		std::array<bool, kViews> viewOn{};
 		std::array<ZBucketPlan, 2> zPlans;
+		// The colour segment's state class sub-ranges (PlanSetClasses), from the main layout RequireMain left and indirect's classes.
+		std::shared_ptr<const SetClassPlan> classPlan;
 		std::array<std::vector<LatchedCopy>, 2> mainLatched;
 		// The lookups' entries the requirements and the shapes read of the pipeline slots, as one witness (LookupsWitness, Producer.cpp).
 		std::uint64_t lookupsWitness = 0;

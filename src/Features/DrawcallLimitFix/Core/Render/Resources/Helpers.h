@@ -62,11 +62,18 @@ namespace DCLF::Draws
 
 	inline bool SameIndirect(const IndirectState& a, const IndirectState& b)
 	{
-		if (a.valid != b.valid || !SameHandle(a.layout, b.layout))
+		if (a.valid != b.valid || !SameHandle(a.layout, b.layout) || a.classes.size() != b.classes.size())
 			return false;
-		for (std::size_t i = 0; i < a.sets.size(); ++i)
-			if (!SameHandle(a.sets[i], b.sets[i]) || !SameHandle(a.signatures[i], b.signatures[i]))
+		// Each state class's sets and signatures (what the calls bind) and how many pipelines they hold (what their preprocessing is
+		// sized against); the class map is the commit's, written into the latch.
+		for (std::size_t c = 0; c < a.classes.size(); ++c) {
+			const auto &left = a.classes[c], &right = b.classes[c];
+			if (left.pipelines != right.pipelines)
 				return false;
+			for (std::size_t v = 0; v < left.sets.size(); ++v)
+				if (!SameHandle(left.sets[v], right.sets[v]) || !SameHandle(left.signatures[v], right.signatures[v]))
+					return false;
+		}
 		return SameHandle(a.zLayout, b.zLayout) && SameHandle(a.zDrawSignature, b.zDrawSignature) && SameHandle(a.refraction, b.refraction) &&
 		       a.refractionFormat == b.refractionFormat;
 	}

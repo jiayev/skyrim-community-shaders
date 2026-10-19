@@ -67,7 +67,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
 	// under a fading root, [16] of its caster class.
-	constexpr std::uint32_t kCountWords = 40;
+	constexpr std::uint32_t kCountWords = 44;
 	/** @brief Zeros an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
 	// The sun test (kObjectSunTest): the colour dispatch's tested inputs, and those that missed every cascade.
@@ -82,12 +82,13 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kCountDecalsCulledWord = 21;
 	constexpr std::uint32_t kCountDecalsTestedWord = 22;
 	constexpr std::uint32_t kCountDecalLayerWord = 27;  // group 3 (the multi-index layers)
-	// The terrain groups' draws (ObjectTerrainGroup), then depth phase 1's group 1 inputs tested and near. Must match BuildDrawsCS.hlsl.
+	// The terrain groups' draws appended (ObjectTerrainGroup; a tally: each state class sub-range is counted in classCounts), then depth
+	// phase 1's group 1 inputs tested and near. Must match BuildDrawsCS.hlsl.
 	constexpr std::uint32_t kCountTerrainGroupWord = 28;  // group 1 at word 28, group 2 at word 29
 	constexpr std::uint32_t kCountTerrainNearTestedWord = 30;
 	constexpr std::uint32_t kCountTerrainNearWord = 31;
-	// The forward range's draw count, then forward inputs tested, in the frustum and HZB-rejected. Must match BuildDrawsCS.hlsl
-	// and ForwardSortCS.hlsl.
+	// The forward draws appended (a tally: each state class's staging half is counted in classCounts), then forward inputs tested, in
+	// the frustum and HZB-rejected. Must match BuildDrawsCS.hlsl and ForwardSortCS.hlsl.
 	constexpr std::uint32_t kCountForwardWord = 32;
 	constexpr std::uint32_t kCountForwardTestedWord = 33;
 	constexpr std::uint32_t kCountForwardInViewWord = 34;
@@ -97,6 +98,11 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kCountRefractionTestedWord = 37;
 	constexpr std::uint32_t kCountRefractionInViewWord = 38;
 	constexpr std::uint32_t kCountRefractionOccludedWord = 39;
+	// The colour draws (and the first-person forward ones) BuildDraws dropped for want of a state class sub-range: a draw whose set index
+	// the class map has no word for (a pipeline newer than the revision's set version), and a draw past its class sub-range's capacity.
+	// Neither is drawn with another class's state; both must stay 0. Must match BuildDrawsCS.hlsl.
+	constexpr std::uint32_t kCountClassUnplannedWord = 40;
+	constexpr std::uint32_t kCountClassOverflowWord = 41;
 	// Byte offsets of the count words the indirect draws read; must match BuildDrawsCS.hlsl.
 	constexpr std::uint64_t kCountDrawnPhaseTwoBytes = 68;
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
@@ -199,7 +205,7 @@ namespace DCLF::Draws
 	// BuildDrawsCS.hlsl's inputs (byte-address buffers).
 	struct DrawInput
 	{
-		std::uint32_t pipelineIndex;  // in the pipeline sets; a shadow input's key slot (Lookups::shadowSlots)
+		std::uint32_t pipelineIndex;  // the main set's index (its state class's: the latch's class map); a shadow input's key slot (Lookups::shadowSlots)
 		std::uint32_t recordIndex;    // DrawBindings record
 		std::uint32_t geometryIndex;  // GeometryDraw
 		std::uint32_t flags;          // object flags, plus kInputDrawable for this epoch
@@ -253,34 +259,60 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kColourViewBits = kViewMain | kViewDecal | kViewForward | kViewRefraction;
 	static_assert(offsetof(DrawInput, view) == 16 && offsetof(DrawInput, shadowRow) == 52 && offsetof(DrawInput, fadeDistance) == 60);
 	// The main sequence buffer's ranges: phase 1 and colour draws, phase 2's (fixed: the CPU records where its draw starts), then
-	// one per decal group. A decal goes to its ordinal's slot in its range's order (SceneTables::rangeOrdinal; Features/Decals: the
-	// engine's draw order), so decals keep that order; a culled one has zero indices.
+	// the decal sub-ranges, one per (decal group, state class) present (SetClassPlan). A decal goes to its ordinal's slot in its group's
+	// order (SceneTables::rangeOrdinal; Features/Decals: the engine's draw order) in every sub-range of its group, so decals keep that
+	// order class by class; a culled one, and its slot in another class's sub-range, has zero indices.
 	constexpr std::uint32_t kDecalGroups = 3;
-	/** @brief The count word a decal range's draw reads its slot count from. */
+	/** @brief The count word a decal group's draws read their slot count from (each of the group's class sub-ranges). */
 	constexpr std::uint32_t DecalCountWord(std::uint32_t a_range) { return a_range < 2 ? kCountDecalGroupWord + a_range : kCountDecalLayerWord; }
-	/** @brief The main sequence buffer's slots for a_draws per draw range and a_decals per decal group. */
-	constexpr std::uint64_t SequenceSlots(std::uint32_t a_draws, std::uint32_t a_decals) { return 2ull * a_draws + std::uint64_t(kDecalGroups) * a_decals; }
+	/** @brief The main sequence buffer's slots for a_draws per draw range and a_decals per decal sub-range, a_decalRanges of them. */
+	constexpr std::uint64_t SequenceSlots(std::uint32_t a_draws, std::uint32_t a_decals, std::uint32_t a_decalRanges)
+	{
+		return 2ull * a_draws + std::uint64_t(a_decalRanges) * a_decals;
+	}
 	// The terrain groups' colour draws reuse phase 2's range (the depth segment is done with it): group 1 from its start, group 2
-	// after group 1's capacity (MainLayout::terrainCapacity).
+	// after group 1's capacity (MainLayout::terrainCapacity), each split into its classes' sub-ranges.
 	constexpr std::uint32_t kTerrainGroups = 2;
 	// The second pass's range slots (Api::MainRangeSlot, as an index; Extensions::MainRanges orders them): the fixed slots are the
 	// decal groups' ranges (ObjectDecalGroup - 1), the appended ones the terrain groups' (ObjectTerrainGroup - 1). BuildDrawsCS's
 	// layout, so compile-time (Features/Manifest.cpp checks the slots against it).
 	constexpr std::uint32_t kMainRangeSlotCount = kDecalGroups + kTerrainGroups;
 	inline constexpr bool MainRangeFixed(std::uint32_t a_slot) { return a_slot < kDecalGroups; }
-	/** @brief The count word a range slot's draw reads its count from. */
+	/** @brief The count word of a range slot's draws: a decal group's, which its class sub-ranges' calls read; a terrain group's tally. */
 	inline constexpr std::uint32_t MainRangeCountWord(std::uint32_t a_slot)
 	{
 		return MainRangeFixed(a_slot) ? DecalCountWord(a_slot) : kCountTerrainGroupWord + (a_slot - kDecalGroups);
 	}
 	// The forward range, after the terrain ranges: a staging half BuildDraws appends visible forward draws to (view depth in the
-	// unexecuted firstInstance word), then a sorted half ForwardSortCS fills back to front. Each MainLayout::forwardCapacity.
+	// unexecuted firstInstance word), then a sorted half ForwardSortCS fills back to front, per state class (kClassRangeForward); all
+	// of them MainLayout::forwardCapacity.
 	constexpr const char* kForwardSortShader = "DrawcallLimitFix/ForwardSortCS.hlsl";
 	// The refraction range, after the forward halves: pooled sequences (StoreShadowSequence's) drawn into the refraction normals by
 	// RefractionDrawPass with one plain indexed indirect draw.
 	// BuildDrawsLatch::bucketMapOffset's entries: a terrain group 1 slot's bucket (PlanZBuckets), whose twin (the next bucket) takes
 	// the slot's near blocks (BuildDrawsLatch::terrainNear).
 	constexpr std::uint32_t kBucketTerrainPair = 1u << 31;
+
+	/*
+	 * The colour segment's state class sub-ranges (SetClassPlan; DrawPipelines.h, kSetClassShift): every range a device-generated call
+	 * draws is split by state class, one call per (range, class) with that class's signature, since an execution set's pipelines may
+	 * differ in their shaders alone. Range kClassRangeMain is the colour draws', ClassRangeOfSlot(slot) a second-pass range slot's (the
+	 * decal groups', then the terrain groups'), kClassRangeForward the forward staging half's (its sorted half follows each class's).
+	 * BuildDrawsCS routes a draw by its set index through the latch's class map (BuildDrawsLatch::classMapOffset: [count, 0, 0, 0], then
+	 * IndirectState::classOf) to its class and its index there, which the sequence stores, and takes its slot in the class's sub-range
+	 * from the latch's class table (classTableOffset: [classes, kClassRanges, 0, 0], then kClassWords per class: the class's first sort
+	 * key and size, then (first, capacity) per range). The counts of the main, terrain and forward sub-ranges are the classCounts words
+	 * (ClassCountWord); a decal sub-range's is its group's (DecalCountWord). Must match BuildDrawsCS.hlsl.
+	 */
+	constexpr std::uint32_t kClassRangeMain = 0;
+	inline constexpr std::uint32_t ClassRangeOfSlot(std::uint32_t a_slot) { return 1 + a_slot; }
+	constexpr std::uint32_t kClassRangeForward = 1 + kMainRangeSlotCount;
+	constexpr std::uint32_t kClassRanges = kClassRangeForward + 1;
+	constexpr std::uint32_t kClassHeaderWords = 4;
+	constexpr std::uint32_t kClassWords = 16;
+	static_assert(2 + 2 * kClassRanges <= kClassWords);
+	/** @brief The classCounts word of class a_class's sub-range a_range. */
+	inline constexpr std::uint32_t ClassCountWord(std::uint32_t a_class, std::uint32_t a_range) { return a_class * kClassRanges + a_range; }
 
 #pragma pack(push, 4)
 	struct GeometryDraw
@@ -318,7 +350,8 @@ namespace DCLF::Draws
 		std::uint32_t sortCountsIndex;
 		std::uint32_t sortStagingIndex;
 		std::uint32_t sortRanksIndex;
-		// Sequence buffer ranges, in sequences: phase 2's first slot, the first decal slot, each decal group's range.
+		// Sequence buffer ranges, in sequences: phase 2's first slot, the first decal slot, each decal sub-range's slots (where each
+		// one starts is the latch's class table's).
 		std::uint32_t phaseTwoBase;
 		std::uint32_t decalBase;
 		std::uint32_t decalStride;
@@ -337,8 +370,10 @@ namespace DCLF::Draws
 		std::uint32_t forwardCapacity;
 		// Colour segment: the refraction range's capacity (first slot forwardBase + 2 * forwardCapacity). 0 elsewhere.
 		std::uint32_t refractionCapacity;
+		// Colour segment: the state class sub-ranges' counts (Resources::classCounts, ClassCountWord). 0 elsewhere.
+		std::uint32_t classCountsIndex;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 104);
+	static_assert(sizeof(BuildDrawsConstants) == 108);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**
@@ -397,8 +432,11 @@ namespace DCLF::Draws
 		std::uint32_t materialRowsLo, materialRowsHi, pipelineRowsLo, pipelineRowsHi;
 		// The frame's fade seeds (FadeSeedRow): a root's node values and state until its first FadeStateCS update.
 		std::uint32_t fadeSeedsIndex;
-		// Colour segment: the terrain groups' capacities past phase 2's base. 0 elsewhere.
-		std::uint32_t terrainCapacity[2];
+		// The state classes' table (colour segment: each class's sub-ranges) and class map (colour segment and a view with a forward
+		// part: each set index's class and index in it), bytes into the latch block. 0: none (no colour draw is routed, every one counted
+		// in kCountClassUnplannedWord).
+		std::uint32_t classTableOffset;
+		std::uint32_t classMapOffset;
 		// The depth segment: the stage word of the feature pass before its build that asks for one (Api::PassDef::latchWord, at byte 300;
 		// e.g. the texture transforms' frame-value rows, which their pass stores into the material rows above). 0 elsewhere (and the word
 		// keeps terrainNear's 16-byte alignment). One word: a second pass needing one grows this latch (the shaders read it by byte offset).
@@ -409,7 +447,8 @@ namespace DCLF::Draws
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
-	static_assert(sizeof(BuildDrawsLatch) == 320 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, terrainCapacity) == 292 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
+	static_assert(sizeof(BuildDrawsLatch) == 320 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, classTableOffset) == 292 &&
+				  offsetof(BuildDrawsLatch, classMapOffset) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
 				  offsetof(BuildDrawsLatch, viewBits) == 264 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
 				  offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
@@ -561,7 +600,8 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief The main latch block's region per frame slot: the passes' BuildDrawsLatch, then the colour pass's cascades and local
-	 * shadow volumes, the Z-prepass's bucket tables and map, and the index pool's copies' dispatch.
+	 * shadow volumes, the Z-prepass's bucket tables and map, the index pool's copies' dispatch, and the colour pass's state class table
+	 * and class map.
 	 */
 	struct MainLatchLayout
 	{
@@ -570,6 +610,8 @@ namespace DCLF::Draws
 		// Z-prepass buckets: one per group of pipeline slots sharing a depth pipeline (IndirectState::zGroups), in each phase's
 		// table (first, capacity), and the slots' map to them.
 		std::uint32_t buckets = 0;
+		// The state classes the class table holds, and the set indices the class map holds a word for (IndirectState::classOf).
+		std::uint32_t classes = 0, classMapWords = 0;
 		static constexpr std::uint32_t CascadeOffset() { return static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t ShadowVolumeOffset() const { return CascadeOffset() + SunRegionBytes<GpuCascade>(cascades); }
 		std::uint32_t BucketTableOffset() const { return ShadowVolumeOffset() + SunRegionBytes<GpuShadowVolume>(shadowVolumes); }
@@ -577,7 +619,11 @@ namespace DCLF::Draws
 		std::uint32_t BucketMapOffset() const { return PhaseTwoBucketTableOffset() + buckets * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		// The index pool's copies' dispatch (IndexPool), as in the shadow latch, for the depth commit's pool update.
 		std::uint32_t PoolOffset() const { return BucketMapOffset() + buckets * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
-		std::uint32_t Bytes() const { return PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		// The colour pass's class table (BuildDrawsLatch::classTableOffset) and class map (classMapOffset), 16-byte aligned for their
+		// headers' Load4.
+		std::uint32_t ClassTableOffset() const { return (PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 15u) & ~15u; }
+		std::uint32_t ClassMapOffset() const { return ClassTableOffset() + (kClassHeaderWords + classes * kClassWords) * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		std::uint32_t Bytes() const { return ClassMapOffset() + (kClassHeaderWords + classMapWords) * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 	};
 	// cullFlags: a clamped shadow view (0xE) pancakes casters in front of its near plane onto it (Utility.hlsl:
 	// RENDER_SHADOWMAP_CLAMPED), so the near plane rejects nothing.

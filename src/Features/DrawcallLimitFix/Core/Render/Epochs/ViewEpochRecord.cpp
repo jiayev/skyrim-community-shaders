@@ -326,8 +326,8 @@ namespace DCLF
 			};
 
 			/**
-			 * @brief A view's forward range's sorted half drawn through the main colour signature (the main set's forward pipelines, a
-			 * pipeline per sequence: blended Lighting, the Effect port's meshes and particles), after the view's bucket draws, with the view's
+			 * @brief A view's forward range's sorted halves drawn through the main set's colour signatures, a call per state class (the main
+			 * set's forward pipelines, a pipeline per sequence: blended Lighting, the Effect port's meshes and particles), after the view's bucket draws, with the view's
 			 * frame push data and depth range, onto the main pass's attachments (every one loaded: the forward pipelines write the main target
 			 * alone) tested against the view's depth target, as the engine's first-person blended list is drawn after its opaque passes.
 			 */
@@ -368,7 +368,7 @@ namespace DCLF
 				{
 					ForwardPrepared prepared{};
 					auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
-					if (!frame || !frame->forwardCapacity || !frame->indirect.valid || !frame->width || !frame->height || !resources->preprocessForward ||
+					if (!frame || frame->forwardRanges.empty() || !frame->indirect.valid || !frame->width || !frame->height || !resources->preprocessForward ||
 						!resources->main->forwardSort)
 						return prepared;
 					prepared.preprocess = resources->preprocessForward.get();
@@ -397,10 +397,15 @@ namespace DCLF
 					begin.debugName = "DCLF first-person forward";
 					const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
 					const auto counts = a_recording.Resolve(a_bindings.counts).GetHandle();
-					const std::uint64_t arguments = std::uint64_t(frame.forwardFirst + frame.forwardCapacity) * sizeof(DrawSequence);
-					const std::uint64_t countOffset = std::uint64_t(frame.forwardEntry) * sizeof(std::uint32_t);
-					RecordPreprocessedDraw(a_recording, *a_prepared.preprocess, begin, frame.resourceHeap, frame.samplerHeap, frame.indirect.layout, frame.push[0],
-						frame.indirect.signatures[kColorVariant], sequences, arguments, counts, countOffset, frame.forwardCapacity);
+					// Per state class with forward slots, its sorted half (after its staging half), counted by its entry's bucket count word,
+					// with its class's colour signature; the classes in creation order.
+					std::vector<IndirectCall> calls;
+					for (std::uint32_t c = 0; c < frame.forwardRanges.size() && c < frame.indirect.classes.size(); ++c)
+						if (const auto& range = frame.forwardRanges[c]; range.capacity)
+							calls.push_back({ frame.indirect.classes[c].signatures[kColorVariant], (std::uint64_t(range.first) + range.capacity) * sizeof(DrawSequence), counts,
+								std::uint64_t(frame.forwardEntry + c) * sizeof(std::uint32_t), range.capacity });
+					RecordPreprocessedDraws(a_recording, *a_prepared.preprocess, begin, frame.resourceHeap, frame.samplerHeap, frame.indirect.layout, frame.push[0], sequences,
+						calls);
 				}
 
 			private:
@@ -522,9 +527,12 @@ namespace DCLF
 					const auto frame = CurrentViewFrame(a_preparation, view->traits->kind);
 					if (!frame || !frame->latch)
 						return ForwardSortSource{ frame ? frame->generation : 0 };
-					// Its count is the range's bucket count word, after the buckets'.
-					return ForwardSortSource{ frame->generation, view->main->forwardSort, frame->forwardFirst, frame->forwardCapacity,
-						frame->forwardEntry * static_cast<std::uint32_t>(sizeof(std::uint32_t)), true };
+					// Each state class's forward pair, its count its entry's bucket count word, after the buckets'.
+					ForwardSortSource source{ frame->generation, view->main->forwardSort };
+					for (std::uint32_t c = 0; c < frame->forwardRanges.size(); ++c)
+						if (const auto& range = frame->forwardRanges[c]; range.capacity)
+							source.ranges.push_back({ range.first, range.capacity, (frame->forwardEntry + c) * static_cast<std::uint32_t>(sizeof(std::uint32_t)) });
+					return source;
 				});
 			}
 

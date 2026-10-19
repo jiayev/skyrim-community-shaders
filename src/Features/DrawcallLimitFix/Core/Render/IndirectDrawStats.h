@@ -81,6 +81,9 @@ namespace DCLF
 		// registration handed in for members that frame (all withheld).
 		std::uint32_t refractionTested = 0, refractionInView = 0, refractionOccluded = 0, refractionDrawn = 0, refractionEngine = 0;
 		bool refractionObserved = false;
+		// Sampled likewise: the colour draws BuildDraws dropped for want of a state class sub-range (kCountClassUnplannedWord: no class map
+		// word for the set index, or no sub-range of the class there; kCountClassOverflowWord: past the sub-range's capacity).
+		std::uint32_t classUnplanned = 0, classOverflow = 0;
 		// The fade test (kObjectFadeTest), sampled likewise: resident inputs the depth segment's first phase found in the
 		// frustum under a fade root, and those it dropped past their fade-out distance.
 		std::uint32_t fadeTested = 0, fadeHidden = 0;

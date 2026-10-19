@@ -515,12 +515,13 @@ namespace DCLF
 	 * draws' from their push data (DrawPipelines.h, kDrawPushWords; DCLF_PULLED_VERTICES), the plain draws' from the sequence itself
 	 * (DCLF_PULLED). No draw reads the views' sizes. Slot 1 is a dynamic shape's positions (Features/Faces' snapshots; where
 	 * the engine binds BSDynamicTriShape::dynamicData); other draws repeat slot 0. The tables hold a template with the pipeline's table
-	 * index; the epoch substitutes the set index and rows.
+	 * index; the epoch substitutes the set index and rows, and BuildDrawsCS the set index's index in its state class (DrawPipelines.h,
+	 * kSetClassShift), which the class's execution set is indexed by.
 	 */
 #pragma pack(push, 4)
 	struct DrawSequence
 	{
-		std::uint32_t pipelineIndex;
+		std::uint32_t pipelineIndex;  // in its state class's execution sets (a device-generated draw's); 0 for a plain draw
 		// The draw's rows (the pipeline row's registers and the material row) and the object's index in SceneTables::objects, then
 		// the two vertex buffer views: thirteen words, one contiguous Constant indirect argument (the per-draw push data, whose
 		// packoffsets are DCLFObjects.hlsli's DCLFPushData): keep them together, in order.

@@ -271,7 +271,7 @@ namespace DCLF
 			return fail(1);
 		const std::uint32_t p = tables.objects[a_slot].pipelineIndex;
 		// The forward part: a forward key's slot draws with the main set's colour pipeline (main-ready: the commit's MainReady) through the
-		// colour signature, into the main pass's attachments with the view's depth, which must be the main pass's format.
+		// colour signature of its state class, into the main pass's attachments with the view's depth, which must be the main pass's format.
 		if (p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags))
 			return (!RasterRefraction(tables.pipelines[p].rasterFlags) && state.forwardCompatible.load(std::memory_order_acquire) &&
 			           GetIndirectState(*a_catalog, a_catalog->targetsGeneration).valid) ||

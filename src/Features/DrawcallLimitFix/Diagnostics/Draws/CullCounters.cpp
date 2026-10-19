@@ -234,6 +234,8 @@ namespace DCLF::Diagnostics
 				a_stats.refractionTested = words[kCountRefractionTestedWord];
 				a_stats.refractionInView = words[kCountRefractionInViewWord];
 				a_stats.refractionOccluded = words[kCountRefractionOccludedWord];
+				a_stats.classUnplanned = words[kCountClassUnplannedWord];
+				a_stats.classOverflow = words[kCountClassOverflowWord];
 				a_stats.refractionEngine = sample->refractionEngine;
 				a_stats.refractionObserved = sample->refractionObserved;
 			}

@@ -11,6 +11,46 @@
 
 namespace DCLF::Diagnostics
 {
+	namespace
+	{
+		/**
+		 * @brief The colour draws BuildDraws wrote: each state class's main and terrain sub-ranges (PassFrame::classes), as far as its
+		 * count reaches (its classCounts words; past the capacity: dropped, kCountClassOverflowWord). Not the forward ones (sorted there).
+		 */
+		std::vector<DrawSequence> ClassSequences(const DrawsState::ParityReadback& a_parity, const DrawSequence* a_gpu, const std::uint32_t* a_classCounts)
+		{
+			std::vector<DrawSequence> built;
+			for (std::uint32_t c = 0; c < a_parity.classes.size(); ++c)
+				for (const std::uint32_t r : { Draws::kClassRangeMain, Draws::ClassRangeOfSlot(kDecalGroups), Draws::ClassRangeOfSlot(kDecalGroups + 1) }) {
+					const auto& range = a_parity.classes[c].ranges[r];
+					const std::uint32_t drawn = std::min(a_classCounts[Draws::ClassCountWord(c, r)], range.capacity);
+					built.insert(built.end(), a_gpu + range.first, a_gpu + range.first + drawn);
+				}
+			return built;
+		}
+
+		/**
+		 * @brief A decal slot as BuildDraws wrote it: the sub-range of its group that draws it (its own class's: every other class's holds a
+		 * zero-count filler there), null when none does (culled, or a blank).
+		 */
+		const DrawSequence* DrawnDecal(const DrawsState::ParityReadback& a_parity, const DrawSequence* a_gpu, std::uint32_t a_group, std::size_t a_slot)
+		{
+			for (const auto& entry : a_parity.classes) {
+				const auto& range = entry.ranges[Draws::ClassRangeOfSlot(a_group)];
+				if (a_slot < range.capacity && a_gpu[range.first + a_slot].indexCount != 0)
+					return &a_gpu[range.first + a_slot];
+			}
+			return nullptr;
+		}
+
+		/** @brief A template's pipeline index (its set index) as BuildDraws stores it: its index in its state class (IndirectState::classOf). */
+		void ClassIndexOf(DrawSequence& a_template, const std::vector<std::uint32_t>& a_classOf)
+		{
+			if (a_template.pipelineIndex < a_classOf.size() && a_classOf[a_template.pipelineIndex] != kNoSetClass)
+				a_template.pipelineIndex = a_classOf[a_template.pipelineIndex] & kSetClassIndexMask;
+		}
+	}
+
 	void CheckBuildParity(const MainEpochDone& a_epoch)
 	{
 		const auto& a_resources = a_epoch.resources;
@@ -38,22 +78,24 @@ namespace DCLF::Diagnostics
 		if (parity) {
 			if (--parity->framesLeft)
 				return;
-			D3D11_MAPPED_SUBRESOURCE countMap{}, sequencesMap{};
+			D3D11_MAPPED_SUBRESOURCE countMap{}, sequencesMap{}, classCountsMap{};
 			if (FAILED(context->Map(parity->count.get(), 0, D3D11_MAP_READ, 0, &countMap)) ||
 				FAILED(context->Map(parity->sequences.get(), 0, D3D11_MAP_READ, 0, &sequencesMap))) {
+				parity.reset();
+				return;
+			}
+			if (FAILED(context->Map(parity->classCounts.get(), 0, D3D11_MAP_READ, 0, &classCountsMap))) {
+				context->Unmap(parity->count.get(), 0);
+				context->Unmap(parity->sequences.get(), 0);
 				parity.reset();
 				return;
 			}
 			const std::uint32_t count = static_cast<const std::uint32_t*>(countMap.pData)[0];
 			const std::uint32_t culled = static_cast<const std::uint32_t*>(countMap.pData)[1];
 			const auto* gpuSequences = static_cast<const DrawSequence*>(sequencesMap.pData);
-			std::vector<DrawSequence> built(gpuSequences, gpuSequences + std::min<std::size_t>(count, parity->sequenceDraws));
-			// And the terrain groups' draws, from their ranges in phase 2's (BuildDrawsCS appends them there, not to the draws').
-			for (std::uint32_t group = 0; group < kTerrainGroups; ++group) {
-				const std::uint32_t appended = std::min(static_cast<const std::uint32_t*>(countMap.pData)[kCountTerrainGroupWord + group], parity->terrainCapacity[group]);
-				const auto* range = gpuSequences + std::size_t(parity->sequenceDraws) + (group == 0 ? 0u : parity->terrainCapacity[0]);
-				built.insert(built.end(), range, range + appended);
-			}
+			// The colour draws and the terrain groups' (phase 2's range), from their state classes' sub-ranges.
+			std::vector<DrawSequence> built = ClassSequences(*parity, gpuSequences, static_cast<const std::uint32_t*>(classCountsMap.pData));
+			context->Unmap(parity->classCounts.get(), 0);
 			// A sequence against its template, field by field, with the rows as indices into the payload's tables ("-": outside).
 			// Outside: the recent payload whose tables hold it, if any (its serial, and how many colour epochs before the copy it was first seen).
 			auto originOf = [&](std::uint64_t a_address) -> std::string {
@@ -98,22 +140,22 @@ namespace DCLF::Diagnostics
 			};
 			for (auto& sequence : built)
 				takeLocalShadows(sequence);
-			// The decal slots: fixed, so they compare in place. A culled slot is the template with an index
-			// count of zero; anything else differing is a defect.
+			// The decal slots: fixed, so they compare in place, in the sub-range of their own state class (DrawnDecal). A culled slot is
+			// the template with an index count of zero; anything else differing is a defect.
 			std::size_t decalDiffering = 0, decalCulled = 0, decalSlots = 0;
 			std::string decalFirst;
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
 				const auto& expectedDecals = parity->expectedDecals[group];
-				const auto* slots = gpuSequences + 2 * std::size_t(parity->sequenceDraws) + std::size_t(group) * parity->sequenceDecals;
 				for (std::size_t slot = 0; slot < expectedDecals.size() && slot < parity->sequenceDecals; ++slot, ++decalSlots) {
 					// A zero-count slot draws nothing whatever its other fields hold: it is either a decal
 					// the culling rejected or a blank the epoch pushed for one it could not build a record
 					// for (whose template is then empty). Either way only the count matters.
-					if (slots[slot].indexCount == 0) {
+					const auto* drawn = DrawnDecal(*parity, gpuSequences, group, slot);
+					if (!drawn) {
 						++decalCulled;
 						continue;
 					}
-					DrawSequence decal = slots[slot];
+					DrawSequence decal = *drawn;
 					takeLocalShadows(decal);
 					decal.objectIndex &= ~kObjectSunMiss;  // as the draws below: the CPU's template has no cascade test
 					if (std::memcmp(&decal, &expectedDecals[slot], sizeof(DrawSequence)) != 0 && decalDiffering++ == 0)
@@ -217,17 +259,24 @@ namespace DCLF::Diagnostics
 			return;
 		readback.sequenceDraws = shape->sequenceDraws;
 		readback.sequenceDecals = shape->sequenceDecals;
-		readback.terrainCapacity = shape->terrainCapacity;
+		readback.classes = shape->classes;
+		// The state class sub-ranges' counts, the version the adopted set names (as the sequences').
+		auto* const classCountsView = state.parityClassCounts.Of(DrawsView::Get().Adopted().Find(*a_resources->classCounts));
+		if (!classCountsView)
+			return;
+		readback.classCounts = staging(classCountsView);
 		// The templates cover every candidate; the gate drops the ones the engine culled before BuildDraws
 		// writes a sequence for them, and it is a pure per-object flag test, so the expectation can apply it
 		// exactly. Frustum culling cannot be predicted here, which is why parity and culling are separate
 		// switches. inputs is parallel to sequences.
 		readback.expected.clear();
 		readback.expected.reserve(sequences.size());
-		// The templates' rows are offsets into the tables: placed at the payload's.
+		// The templates' rows are offsets into the tables: placed at the payload's. Their pipeline index is the set index, which BuildDraws
+		// stores as its index in its state class (the shape's set version's class map).
 		auto place = [&](DrawSequence& a_sequence) {
 			a_sequence.pipelineRowAddress += readback.pipelineRowsBase;
 			a_sequence.materialRowAddress += readback.materialRowsBase;
+			ClassIndexOf(a_sequence, shape->indirect.classOf);
 		};
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
 			readback.expectedDecals[group] = decalTemplates[group];
@@ -275,7 +324,7 @@ namespace DCLF::Diagnostics
 		readback.sequencesCurrent = sequencesCurrent;
 		readback.armedEpoch = parityEpochs;
 		readback.framesLeft = 3;
-		if (readback.sequences && readback.count)
+		if (readback.sequences && readback.count && readback.classCounts)
 			parity = std::move(readback);
 	}
 }

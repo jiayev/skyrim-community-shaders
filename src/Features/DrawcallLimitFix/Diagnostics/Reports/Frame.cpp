@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuResources.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
@@ -131,9 +132,11 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 			if (family.label)
 				familyLanes += fmt::format("{} (lane): {} requested, {} built, {} failed{}, frames waited {}; ", family.label, family.requested, family.ready, family.failed,
 					family.failed ? " <- FAILED" : "", family.waits);
-		logger::info("[DCLF] indirect pipelines: {} requested, {} in the set, {} failed ({} Z-prepass pipelines, {} without a pixel stage); target changes {}; shadow: {} requested, {} in the set, {} failed; "
+		logger::info("[DCLF] indirect pipelines: {} requested, {} in the set, {} failed ({} Z-prepass pipelines, {} without a pixel stage; {} state classes, the largest of {}); "
+					 "target changes {}; shadow: {} requested, {} in the set, {} failed; "
 					 "set versions published {} (waited {} frames), shadow {} (waited {}); {}forward (lane): {} requested, {} built, {} failed{}, frames waited {}",
-			indirect.requested, indirect.ready, indirect.failed, indirect.zPipelines, indirect.zDepthOnly, indirect.targetChanges, indirect.shadowRequested, indirect.shadowReady, indirect.shadowFailed,
+			indirect.requested, indirect.ready, indirect.failed, indirect.zPipelines, indirect.zDepthOnly, indirect.stateClasses, indirect.largestClass, indirect.targetChanges,
+			indirect.shadowRequested, indirect.shadowReady, indirect.shadowFailed,
 			indirect.setPublishes, indirect.setWaits, indirect.shadowSetPublishes, indirect.shadowSetWaits, familyLanes, indirect.forwardRequested, indirect.forwardReady,
 			indirect.forwardFailed, indirect.forwardFailed ? " <- FAILED" : "", indirect.forwardWaits);
 		// The constant tables the builds pack by are the lane's (DCLF's modules reflected); ShaderCache's are the observers'.
@@ -220,6 +223,8 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 			DCLF::Extensions::ReportLinesAt(DCLF::Api::ReportPoint::ShadowViews, frame);
 			DCLF::IndirectDraws::Get().ResetShadowStats();
 		}
+		if (auto* stats = DCLF::Draws::PassStats::live.load())
+			stats->LogDecals();  // TEMPORARY (decal loss)
 		if (draws.decalsDrawn || draws.decalsTested)
 			logger::info("[DCLF] decals (last frame; the candidates are the coordinator's line): {} submitted to the second pass, {} of {} tested were culled",
 				draws.decalsDrawn, draws.decalsCulled, draws.decalsTested);
@@ -242,6 +247,17 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 				!draws.forwardObserved ? std::string() :
 				fmt::format("; the engine registered {} blended passes of members{}", draws.forwardEngine,
 					draws.forwardInView >= draws.forwardEngine ? " <- OK" : " <- FORWARD"));
+		// The colour draws dropped for want of a state class sub-range: none may be (each one an object not drawn), and none is ever drawn
+		// with another class's fixed-function state.
+		if (indirect.stateClasses)
+			logger::info("[DCLF] state classes (sampled frame): {} colour draws without a class sub-range, {} past their sub-range's capacity{}", draws.classUnplanned,
+				draws.classOverflow, draws.classUnplanned || draws.classOverflow ? " <- SET CLASS DROP" : " <- OK");
+		// CS_DCLF_SET_PARITY: every published set version's classes against their members (DrawPipelines' CheckClasses: class words, each
+		// member's state against its class's initial pipeline's, the handles written, each pipeline in one class, no two classes one state).
+		// Cumulative; each failure was logged when found ("<- SET CLASS").
+		if (indirect.classParityChecks)
+			logger::info("[DCLF] set classes (CPU, published versions so far): {} checks, {} failed{}", indirect.classParityChecks, indirect.classParityMismatches,
+				indirect.classParityMismatches ? " <- SET CLASS" : " <- OK");
 		// Refraction, likewise: every refraction pass (hint 4) of a member the engine registered is a refraction input in view.
 		if (draws.refractionTested || draws.refractionDrawn || draws.refractionEngine)
 			logger::info("[DCLF] refraction (T7d, sampled frame): {} refraction inputs tested, {} in the frustum, {} occluded or under a faded root, {} draws "

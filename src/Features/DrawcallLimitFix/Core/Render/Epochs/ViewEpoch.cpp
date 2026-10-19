@@ -76,6 +76,36 @@ namespace DCLF
 			return setIndex != Lookups::kNone && setIndex < a_indirect.zGroups.size() ? a_indirect.zGroups[setIndex] : kNoBucket;
 		}
 
+		namespace
+		{
+			/**
+			 * @brief A view's forward range's state classes into its latch slot (CommitView): BuildDrawsCS takes a forward draw's class (its
+			 * table entry, and the index its sequence stores) from its set index through this map, the shape's set version's. False (no map:
+			 * every forward draw dropped, counted) without a forward range, or past what the latch holds (never: the revision reserved it).
+			 */
+			bool WriteViewClassMap(const ViewFrame& a_shape, std::string_view a_what, std::uint32_t a_latchSlot)
+			{
+				const auto& classOf = a_shape.indirect.classOf;
+				const auto& layout = a_shape.latchLayout;
+				if (a_shape.forwardRanges.empty() || classOf.size() > layout.classMapWords)
+					return false;
+				const std::uint32_t header[kClassHeaderWords] = { static_cast<std::uint32_t>(classOf.size()), 0, 0, 0 };
+				LatchWrite(*a_shape.latch, a_what, a_latchSlot, layout.ClassMapOffset(), std::as_bytes(std::span(header)));
+				if (!classOf.empty())
+					LatchWrite(*a_shape.latch, a_what, a_latchSlot, layout.ClassMapOffset() + kClassHeaderWords * 4, std::as_bytes(std::span(classOf)));
+				return true;
+			}
+		}
+
+		std::uint32_t SetClassOf(const Lookups* a_lookups, const IndirectState& a_indirect, std::uint32_t a_slot)
+		{
+			// As ZGroupOf: the slot's lookup entry's set index's word (IndirectState::classOf).
+			if (!a_lookups || a_slot >= a_lookups->pipelines.size())
+				return kNoSetClass;
+			const auto setIndex = a_lookups->pipelines[a_slot].setIndex;
+			return setIndex != Lookups::kNone && setIndex < a_indirect.classOf.size() ? a_indirect.classOf[setIndex] : kNoSetClass;
+		}
+
 		void PlanViewBuckets(const ViewTraits& a_traits, const MainLayout& a_main, const Lookups* a_lookups, const IndirectState& a_indirect,
 			std::span<const rhi::PipelineHandle> a_slotPipelines, std::span<const std::uint8_t> a_forwardSlots, ViewPlan& a_out)
 		{
@@ -105,21 +135,31 @@ namespace DCLF
 				bucket.first = a_out.draws;
 				a_out.draws += bucket.capacity;
 			}
-			// The forward range: every forward slot's map word names its table entry (after the buckets) with kFirstPersonForwardBucket
-			// (BuildDrawsCS.hlsl). It holds every draw the forward slots can produce (the main forward range's capacity), staged then
-			// sorted: two halves after the buckets' ranges.
-			a_out.forwardFirst = a_out.forwardCapacity = 0;
-			bool forward = false;
-			for (std::uint32_t p = 0; p < slots && p < a_forwardSlots.size(); ++p)
-				if (a_forwardSlots[p] && a_out.map[p] == kNoBucket) {
-					a_out.map[p] = kFirstPersonForwardBucket | static_cast<std::uint32_t>(a_out.buckets.size());
-					forward = true;
+			// The forward range, per state class (its draws are device-generated: one call per class, each with its class's execution set):
+			// every forward slot's map word names the first class's table entry (after the buckets) with kFirstPersonForwardBucket, and
+			// BuildDrawsCS adds the draw's class (from its set index, through the latch's class map). Each class's entry holds every draw
+			// its forward slots can produce (their capacities in the main layout), staged then sorted: two halves after the buckets' ranges.
+			a_out.forwardRanges.clear();
+			std::vector<std::uint32_t> capacity(a_indirect.classes.size(), 0u);
+			std::uint64_t forward = 0;
+			for (std::uint32_t p = 0; p < slots && p < a_forwardSlots.size(); ++p) {
+				if (!a_forwardSlots[p] || a_out.map[p] != kNoBucket)
+					continue;
+				const std::uint32_t setClass = SetClassOf(a_lookups, a_indirect, p);
+				if (setClass == kNoSetClass || (setClass >> kSetClassShift) >= capacity.size())
+					continue;  // no pipeline of the set version: none of its draws is the view's
+				a_out.map[p] = kFirstPersonForwardBucket | static_cast<std::uint32_t>(a_out.buckets.size());
+				const std::uint32_t slotCapacity = p < a_main.slotCapacity.size() ? a_main.slotCapacity[p] : 0u;
+				capacity[setClass >> kSetClassShift] += slotCapacity;
+				forward += slotCapacity;
+			}
+			if (forward) {
+				a_out.forwardRanges.resize(capacity.size());
+				for (std::size_t c = 0; c < capacity.size(); ++c) {
+					a_out.forwardRanges[c] = { a_out.draws, capacity[c] };
+					a_out.draws += 2 * capacity[c];
 				}
-			if (forward && a_main.forwardCapacity) {
-				a_out.forwardFirst = a_out.draws;
-				a_out.forwardCapacity = a_main.forwardCapacity;
-				a_out.draws += 2 * a_main.forwardCapacity;
-			} else if (forward) {
+			} else {
 				for (auto& word : a_out.map)
 					if (word != kNoBucket && (word & kFirstPersonForwardBucket))
 						word = kNoBucket;
@@ -141,8 +181,7 @@ namespace DCLF
 			frame->depthRange = a_in.depthRange;
 			frame->sequenceDraws = a_in.sequenceDraws;
 			frame->buckets = a_in.plan.buckets;
-			frame->forwardFirst = a_in.plan.forwardFirst;
-			frame->forwardCapacity = a_in.plan.forwardCapacity;
+			frame->forwardRanges = a_in.plan.forwardRanges;
 			frame->forwardEntry = static_cast<std::uint32_t>(a_in.plan.buckets.size());
 			frame->latchLayout = latches.layout;
 			frame->map = std::make_shared<const std::vector<std::uint32_t>>(a_in.plan.map);
@@ -175,7 +214,7 @@ namespace DCLF
 			fromZeros.latch = latches.zeros;
 			fromZeros.fixed = true;
 			fromZeros.copies.push_back({ a_resources.count.get(), 0, static_cast<std::uint32_t>(sizeof(kZeroCounts)), 0 });
-			const auto bucketBytes = static_cast<std::uint32_t>(std::max<std::size_t>(frame->buckets.size() + (frame->forwardCapacity ? 1 : 0), 1) * sizeof(std::uint32_t));
+			const auto bucketBytes = static_cast<std::uint32_t>(std::max<std::size_t>(frame->buckets.size() + frame->forwardRanges.size(), 1) * sizeof(std::uint32_t));
 			for (std::uint32_t f = 0; f < traits.faces; ++f) {
 				const std::uint32_t face = latches.layout.FaceOffset(f);
 				fromZeros.copies.push_back({ a_resources.bucketCounts[f]->Key(), 0, bucketBytes, 0 });
@@ -315,6 +354,7 @@ namespace DCLF
 		// gained since the map was made has no bucket (none of its draws is the frame's).
 		const std::uint32_t slots = std::min(std::max(static_cast<std::uint32_t>(map.size()), InstalledPipelineSlots()), layout.slots);
 		WriteBucketMap(latchBlock, labels.map, latchSlot, layout.MapOffset(), map, slots);
+		const bool classMap = WriteViewClassMap(a_shape, labels.map, latchSlot);
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
 		auto& state = View(a_shape.kind);
 		const auto* view = state.resources.get();
@@ -322,15 +362,15 @@ namespace DCLF
 		std::uint32_t drawn = 0;
 		for (std::uint32_t f = 0; f < a_faces.size() && f < traits.faces; ++f) {
 			const auto& face = a_faces[f];
-			// The face's bucket table, its forward range's entry after the buckets' (ViewFrame::forwardEntry).
+			// The face's bucket table, its forward range's entries (one per state class) after the buckets' (ViewFrame::forwardEntry).
 			table.clear();
 			for (const auto& bucket : a_shape.buckets) {
 				table.push_back(f * a_shape.sequenceDraws + bucket.first);
 				table.push_back(bucket.capacity);
 			}
-			if (a_shape.forwardCapacity) {
-				table.push_back(f * a_shape.sequenceDraws + a_shape.forwardFirst);
-				table.push_back(a_shape.forwardCapacity);
+			for (const auto& range : a_shape.forwardRanges) {
+				table.push_back(f * a_shape.sequenceDraws + range.first);
+				table.push_back(range.capacity);
 			}
 			if (!table.empty())
 				LatchWrite(latchBlock, labels.tables, latchSlot, layout.TableOffset(f), std::as_bytes(std::span(table)));
@@ -351,6 +391,7 @@ namespace DCLF
 			FoldEyeIntoViewProj(face.viewProj, face.eye, latch.viewProj);
 			latch.bucketMapOffset = region + layout.MapOffset();
 			latch.bucketTableOffset = region + layout.TableOffset(f);
+			latch.classMapOffset = classMap ? region + layout.ClassMapOffset() : 0u;
 			LatchWriteValue(latchBlock, labels.latches, latchSlot, f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 			if (!face.block.empty())
 				LatchWrite(latchBlock, labels.blocks, latchSlot, layout.FaceOffset(f), face.block);

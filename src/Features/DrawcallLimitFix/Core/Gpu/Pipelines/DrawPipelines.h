@@ -198,6 +198,13 @@ namespace DCLF
 	inline constexpr std::uint32_t kDepthVariant = 1;
 	inline constexpr std::uint32_t kVariantCount = 2;
 	/**
+	 * @brief A main pipeline's state class word (IndirectState::classOf, by set index; BuildDrawsCS's class map mirrors it): its class in
+	 * the high bits, its index in that class's indirect execution sets in the low ones. Every pipeline of a class has the same
+	 * fixed-function state and fragment interface in both variants, as an execution set's pipelines must
+	 * (VUID-vkUpdateIndirectExecutionSetPipelineEXT-None-11040 and its siblings); kNoSetClass: none (BuildDraws drops the draw).
+	 */
+	inline constexpr std::uint32_t kSetClassShift = 16, kSetClassIndexMask = 0xFFFFu, kNoSetClass = ~0u;
+	/**
 	 * @brief The refraction draw's Utility technique (UtilityShaderFlags): RenderNormal | Texture | Normals (Utility.hlsl,
 	 * DCLF_REFRACTION). The engine's technique (GetRenderPasses, AE 0x1414adfb0) also varies by Vc, Skinned, RenderNormalFalloff,
 	 * RenderNormalClamp and model-space normals; the pulled build reads those per draw, so one pipeline draws every refraction object.
@@ -340,7 +347,8 @@ namespace DCLF
 	 * key and its SPIR-V program: no vertex input (the vertex stages pull their attributes, decoded as the engine's input layout has
 	 * them: VertexInput.h), the native main pass's fixed-function state and targets. A program using a register the layout cannot
 	 * supply, or an attribute the key's vertex layout lacks, fails; its objects stay native. Ready pipelines get the next set index
-	 * (DrawSequence::pipelineIndex).
+	 * (DrawInput::pipelineIndex) and a place in their state class's sets (kSetClassShift: the index a sequence's pipelineIndex holds), one
+	 * execution set per class and variant, since a set's pipelines may differ in their shaders alone.
 	 *
 	 * One owner, the pipeline lane (BuildExecutor.h): it takes requests, programs and build completions, admits them, publishes set
 	 * versions and then the catalog. Render-thread state reaches it only as frame inputs (SetTargetFormats, CaptureEngineStates,
@@ -360,6 +368,10 @@ namespace DCLF
 			std::uint32_t failed = 0;
 			// Distinct Z-prepass pipelines (ZPipelineKey), and those without a pixel stage.
 			std::uint32_t zPipelines = 0, zDepthOnly = 0;
+			// The main set's state classes (one indirect execution set and signature per variant each), and the most pipelines one holds.
+			std::uint32_t stateClasses = 0, largestClass = 0;
+			// CS_DCLF_SET_PARITY: the published versions' class checks (each member against its class: CheckClasses), and those that failed.
+			std::uint64_t classParityChecks = 0, classParityMismatches = 0;
 			std::uint32_t targetChanges = 0;
 			std::uint32_t shadowRequested = 0;
 			std::uint32_t shadowReady = 0;

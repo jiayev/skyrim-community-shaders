@@ -12,6 +12,7 @@ namespace DCLF::Draws
 		org::DeclaredViewToken fadeRoots;
 		org::DeclaredViewToken bucketCounts, poolFirsts;  // the depth segment's buckets (Resources::zBucketCounts) and the pool's firsts
 		org::DeclaredViewToken cullPrograms, rootPrograms;  // the main camera's first phase: the cull binding Programs, each root's
+		org::DeclaredViewToken classCounts;  // the colour segment's state class sub-ranges' counts (Resources::classCounts)
 	};
 
 	struct BuildDrawsFrame
@@ -69,9 +70,11 @@ namespace DCLF::Draws
 				bindings.bucketCounts = a_builder.UnorderedAccess(*resources->zBucketCounts[fixedPhase == 2 ? 1 : 0]).View();
 				bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
 			}
-			// The colour segment's refraction draws are pooled too.
+			// The colour segment's refraction draws are pooled too; its other draws append through their state class sub-ranges' counts.
 			if (segment == RenderGraphRuntime::Segment::MainOpaque && resources->pool)
 				bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
+			if (segment == RenderGraphRuntime::Segment::MainOpaque && resources->classCounts)
+				bindings.classCounts = a_builder.UnorderedAccess(*resources->classCounts).View();
 			if (Sorts()) {
 				bindings.sortCounts = a_builder.UnorderedAccess(resources->sort->counts).View();
 				bindings.sortStaging = a_builder.UnorderedAccess(*resources->sort->staging).View();
@@ -140,7 +143,10 @@ namespace DCLF::Draws
 			constants.phaseTwoBase = frame->sequenceDraws;
 			constants.decalBase = 2 * frame->sequenceDraws;
 			constants.decalStride = frame->sequenceDecals;
-			// The forward staging half: colour segment only.
+			// The state class sub-ranges' counts: colour segment only (the latch's class table and map say where each class draws).
+			if (now == RenderGraphRuntime::Segment::MainOpaque && resources->classCounts)
+				constants.classCountsIndex = CaptureViewIndex(a_preparation, a_bindings.classCounts);
+			// The forward range (its classes' halves: the class table's): colour segment only.
 			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->forwardCapacity) {
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
 				constants.forwardCapacity = frame->forwardCapacity;

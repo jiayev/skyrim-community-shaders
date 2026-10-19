@@ -30,13 +30,15 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint HzbSizePacked;  // mip 0: width in the low 16 bits, height in the high 16
 	uint HzbMips;
 	// The sort by pipeline (DrawSort): with SortCountsIndex set, a sequence goes to the staging buffer with its rank among its
-	// pipeline's sequences (an atomic per pipeline); SortSequencesCS.hlsl scatters it after the prefix sum. 0: append directly.
+	// pipeline's sequences (an atomic per sort key: its state class's first key plus its index in the class); SortSequencesCS.hlsl
+	// scatters it into its class's sub-range after the prefix sum. 0: append directly.
 	uint SortCountsIndex;   // RWByteAddressBuffer: uint[kSortKeys], zero before the dispatch
 	uint SortStagingIndex;  // RWByteAddressBuffer: DrawSequence[PhaseTwoBase]
 	uint SortRanksIndex;    // RWByteAddressBuffer: uint[PhaseTwoBase]
 	// Sequence buffer ranges, in sequences (sized before each epoch for every draw it can produce). Phase 2 has its own fixed range:
-	// its draw is recorded on the CPU, which cannot know phase 1's count. The decal ranges follow: DecalStride slots per group, slot
-	// = the decal's ordinal in the engine's draw order.
+	// its draw is recorded on the CPU, which cannot know phase 1's count. The decal sub-ranges follow (one per decal group and state
+	// class, where each starts the latch's class table says): DecalStride slots each, slot = the decal's ordinal in the engine's draw
+	// order.
 	uint PhaseTwoBase;
 	uint DecalBase;
 	uint DecalStride;
@@ -53,13 +55,15 @@ cbuffer BuildDrawsConstants : register(b0)
 	// Shadow views and depth segment: ByteAddressBuffer of each geometry slot's first index in the index pool, ~0 without one.
 	uint PoolFirstsIndex;
 	uint RootProgramsIndex;
-	// Colour segment: the forward range's staging half; visible forward draws append here with their view depth in firstInstance
-	// (ForwardSortCS.hlsl sorts them).
+	// Colour segment: the forward range (its classes' staging and sorted halves: the class table's), and its slots in all; visible
+	// forward draws append to their class's staging half with their view depth in firstInstance (ForwardSortCS.hlsl sorts them).
 	uint ForwardBase;
 	uint ForwardCapacity;
 	// Colour segment: the refraction range (after the forward range's two halves); visible refraction draws append here, pooled
 	// as a shadow view's, for the forward epoch's plain draw into the refraction normals.
 	uint RefractionCapacity;
+	// Colour segment: RWByteAddressBuffer of the state class sub-ranges' counts, a word per (class, range) (ClassCountWord). 0 elsewhere.
+	uint ClassCountsIndex;
 }
 
 // StructuredBuffer<FadeNodeState>: FadeStateCS's states as the previous frame published them (latch fadeStatesIndex).
@@ -217,8 +221,10 @@ static uint ViewBits;
 static uint FocusRoot;
 // Depth segment while Terrain Blending holds the terrain: its eye, and in w its near distance (0: no terrain test).
 static float4 TerrainNear;
-// Colour segment: the terrain groups' range sizes past PhaseTwoBase, group 2's after group 1's.
-static uint2 TerrainCapacity;
+// The state classes (GpuLayouts.h, kClassRangeMain): the colour segment's class table, and the class map (colour segment, a view's
+// forward part), latch bytes. 0: none.
+static uint ClassTableOffset;
+static uint ClassMapOffset;
 
 // The placement rows the culling reads (BindlessPlacement): world bound, sun entry sphere, fade node centre, and the forward
 // sort's (nearest BSOrderedNode's centre, ordinal).
@@ -281,7 +287,9 @@ void LoadLatch()
 	ViewBits = payload.z;
 	FocusRoot = payload.w;
 	TerrainNear = asfloat(latch.Load4(LatchOffset + 304));
-	TerrainCapacity = latch.Load2(LatchOffset + 292);
+	const uint2 classRegions = latch.Load2(LatchOffset + 292);
+	ClassTableOffset = classRegions.x;
+	ClassMapOffset = classRegions.y;
 	MaterialRowsLo = rows.x;
 	MaterialRowsHi = rows.y;
 	PipelineRowsLo = rows.z;
@@ -434,8 +442,8 @@ static const uint kObjectHeightTest = 1u << 28;
 // A volumetric-only caster, drawn only by the volumetric lighting copy's views.
 static const uint kObjectVolumetricOnly = 1u << 23;
 // A decal, group in bits 20-21 (1 = the engine's opaque decal group, 2 = blended). Never occluders or depth inputs: the colour
-// segment tests them once against this frame's final HZB and writes fixed slots (DecalBase), so overlapping decals draw in the
-// engine's order.
+// segment tests them once against this frame's final HZB and writes fixed slots (the decal sub-ranges past DecalBase), so overlapping
+// decals draw in the engine's order.
 static const uint kObjectDecal = 1u << 7;
 static const uint kObjectDecalGroupShift = 20;
 // The same bits without kObjectDecal are a terrain group (ObjectTerrainGroup): 1 Terrain Blending's terrain, 2 the meshes it
@@ -495,12 +503,14 @@ static const uint kCountSunMissed = 96;
 // The fade test: inputs under a fade root phase 1 found in the frustum, and those it dropped.
 static const uint kCountFadeTested = 100;
 static const uint kCountFadeHidden = 104;
-// The terrain groups' draw counts (zeroed by the colour commit), then phase 1's terrain group 1 inputs and those found near
+// The terrain groups' draws appended, a tally (zeroed by the colour commit; each class sub-range's count is its classCounts word), then
+// phase 1's terrain group 1 inputs and those found near
 // (kCountTerrainGroupWord).
 static const uint kCountTerrainGroup1 = 112;
 static const uint kCountTerrainNearTested = 120;
 static const uint kCountTerrainNear = 124;
-// The forward draw count (zeroed by the colour commit), then forward inputs tested, in the frustum, HZB-rejected (kCountForwardWord).
+// The forward draws appended, a tally (zeroed by the colour commit; each class's staging half is counted in classCounts), then forward
+// inputs tested, in the frustum, HZB-rejected (kCountForwardWord).
 static const uint kCountForward = 128;
 static const uint kCountForwardTested = 132;
 static const uint kCountForwardInView = 136;
@@ -511,16 +521,93 @@ static const uint kCountRefraction = 144;
 static const uint kCountRefractionTested = 148;
 static const uint kCountRefractionInView = 152;
 static const uint kCountRefractionOccluded = 156;
+// Colour draws dropped for want of a state class sub-range (kCountClassUnplannedWord): no class map word for the draw's set index, or
+// past its class sub-range's capacity. Never drawn with another class's state.
+static const uint kCountClassUnplanned = 160;
+static const uint kCountClassOverflow = 164;
 
 // The frustum stamp word: the stamp in the low 28 bits, and whether the fade test dropped the object that frame
 // (VisibilityEventsCS.hlsl compares the low bits).
 static const uint kFrustumStampMask = 0x0FFFFFFFu;
 static const uint kFrustumFadeHidden = 0x80000000u;
 
-// Sort keys: the pipeline sets' capacity (DrawPipelines::kMaxPipelines). A rank word holds the key in its top 12 bits and the
-// rank below (the draws' range is capped at kSortRankLimit).
+// Sort keys: the main set's capacity (DrawPipelines::kMaxPipelines), which the state classes' keys (each class's first key and size,
+// the class table's) partition. A rank word holds the key in its top 12 bits and the rank below (the draws' range is capped at
+// kSortRankLimit).
 static const uint kSortKeys = 4096;
 static const uint kSortRankBits = 20;
+
+// The state classes (GpuLayouts.h; DrawPipelines.h, kSetClassShift). A class map word: class << kSetClassShift | the pipeline's index in
+// its class's execution sets (what a colour sequence's pipeline index is). A class table entry: the class's first sort key and its
+// size, then (first, capacity) per range: kClassRangeMain, ClassRangeOfSlot(slot) = 1 + slot (decal groups, then terrain groups),
+// kClassRangeForward.
+static const uint kSetClassShift = 16;
+static const uint kSetClassIndexMask = 0xFFFFu;
+static const uint kNoSetClass = 0xFFFFFFFFu;
+static const uint kClassRangeMain = 0;
+static const uint kClassRangeForward = 6;
+static const uint kClassRanges = 7;
+static const uint kClassHeaderBytes = 16;
+static const uint kClassBytes = 64;  // kClassWords words
+
+// A set index's state class and index in it, from the latch's class map; false without a map or a word for it (a pipeline the
+// revision's set version did not hold), whose draw is dropped (counted), never drawn with another class's state.
+bool SetClassOf(uint a_set, out uint a_class, out uint a_index)
+{
+	a_class = 0;
+	a_index = 0;
+	if (ClassMapOffset == 0)
+		return false;
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	if (a_set >= latch.Load(ClassMapOffset))
+		return false;
+	const uint word = latch.Load(ClassMapOffset + kClassHeaderBytes + a_set * 4);
+	if (word == kNoSetClass)
+		return false;
+	a_class = word >> kSetClassShift;
+	a_index = word & kSetClassIndexMask;
+	return true;
+}
+
+// The class table's classes (0 without one: no sub-range at all).
+uint ClassCount()
+{
+	if (ClassTableOffset == 0)
+		return 0;
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	return latch.Load(ClassTableOffset);
+}
+
+// A class's sub-range of a range: its first sequence slot and capacity (0: the class has none there).
+uint2 ClassRange(uint a_class, uint a_range)
+{
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	return latch.Load2(ClassTableOffset + kClassHeaderBytes + a_class * kClassBytes + 8 + a_range * 8);
+}
+
+// A class's first sort key: the classes' sizes before it, so a class's keys are contiguous and its draws sort within it.
+uint ClassKeyBase(uint a_class)
+{
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	return latch.Load(ClassTableOffset + kClassHeaderBytes + a_class * kClassBytes);
+}
+
+// The next slot of a class's sub-range (its classCounts word): its sequence slot, or false past the capacity (counted, dropped; the
+// count word then exceeds the capacity, which the call's max count clamps, so every executed slot is written).
+bool TakeClassSlot(uint a_class, uint a_range, out uint a_slot)
+{
+	const uint2 range = ClassRange(a_class, a_range);
+	RWByteAddressBuffer classCounts = ResourceDescriptorHeap[ClassCountsIndex];
+	uint taken;
+	classCounts.InterlockedAdd((a_class * kClassRanges + a_range) * 4, 1, taken);
+	a_slot = range.x + taken;
+	if (taken < range.y)
+		return true;
+	RWByteAddressBuffer count = ResourceDescriptorHeap[CountIndex];
+	uint scratch;
+	count.InterlockedAdd(kCountClassOverflow, 1, scratch);
+	return false;
+}
 
 // DrawInput (Core/GpuLayouts.h): 64 bytes (pipeline/record/geometry/flags, the world-space bounding sphere, the object index, the
 // decal ordinal, the skin partitions to draw, the GeometryDraw of a second vertex stream or ~0, and the fade row:
@@ -817,7 +904,10 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			count.InterlockedAdd(kCountTerrainNear, 1, scratch);
 	}
 
-	// Decals: fixed slots. Every decal writes its slot, culled or not (index count 0), so nothing stale is ever executed.
+	// Decals: fixed slots, in a sub-range per state class present in the group (each its own call, with its class's state). Every decal
+	// writes its slots in every sub-range of its group, culled or not: its own class's the real sequence (index count 0 when culled),
+	// every other class's a zero-count one naming that class's pipeline 0. So every slot below the group's count of every sub-range is
+	// written each frame, nothing stale is ever executed, and the decals keep the engine's order within each class.
 	const uint decalGroup = keyWord == 0 && (input.w & kObjectDecal) ? (input.w >> kObjectDecalGroupShift) & 3 : 0;
 	if (decalGroup != 0) {
 		if (phase != kPhaseColour && phase != kPhaseSingle)
@@ -833,6 +923,15 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			if (culled)
 				count.InterlockedAdd(kCountDecalsCulled, 1, scratch);
 		}
+		// The decal's own class and its pipeline's index there; a drawable decal whose class has no sub-range in its group (or no class map
+		// word) is dropped, counted: it writes fillers alone. The group's range slot is ClassRangeOfSlot(group - 1) = group.
+		const uint classes = ClassCount();
+		uint decalClass = 0, decalIndex = 0;
+		bool decalPlanned = drawable && SetClassOf(input.x, decalClass, decalIndex);
+		if (decalPlanned)
+			decalPlanned = decalClass < classes && ClassRange(min(decalClass, classes - 1), decalGroup).y != 0;
+		if (drawable && !decalPlanned)
+			count.InterlockedAdd(kCountClassUnplanned, 1, scratch);
 		const uint4 rows = RowsOf(input.y);
 		const uint decalStreamIndex = inputs.Load(inputOffset + 44);
 		// Blood decals: a multi-partition skinned decal (BSTempEffectGeometryDecal copies its actor's dismember skin) takes a slot per
@@ -851,8 +950,15 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			const uint4 indexBuffer = geometries.Load4(geometryOffset + 16);
 			const uint firstIndex = geometries.Load(geometryOffset + 32);
 			const uint4 decalStream = decalStreamIndex != kNoStream ? geometries.Load4(decalStreamIndex * kGeometryStride) : vertexBuffer;
-			StoreSequence(sequences, DecalBase + (decalGroup - 1) * DecalStride + decalOrdinal + k, input.x, rows, objectWord,
-				vertexBuffer, decalStream, indexBuffer, (culled || !partitionDrawn || decalGeometry == kNoPartition) ? 0 : indexBuffer.w, firstIndex);
+			const uint indexCount = (culled || !partitionDrawn || decalGeometry == kNoPartition) ? 0 : indexBuffer.w;
+			[loop] for (uint c = 0; c < classes; ++c) {
+				const uint2 range = ClassRange(c, decalGroup);
+				if (range.y == 0 || decalOrdinal + k >= range.y)
+					continue;  // no sub-range of the group (or, never, one short of the slot)
+				const bool own = decalPlanned && c == decalClass;
+				StoreSequence(sequences, range.x + decalOrdinal + k, own ? decalIndex : 0u, rows, objectWord, vertexBuffer, decalStream, indexBuffer,
+					own ? indexCount : 0u, firstIndex);
+			}
 			if (decalGeometry != kNoPartition)
 				decalGeometry = geometries.Load(geometryOffset + 36);  // GeometryDraw::nextPartition
 		}
@@ -986,6 +1092,24 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	bucketKey &= ~kBucketForward;
 	if (forwardBucket != firstPersonForward)
 		return;
+	// The draw's state class: the colour segment's ranges and a view's forward range are split by class (a device-generated call per
+	// class sub-range, with that class's execution set), and the sequence names its pipeline by its index in the class. Both come from
+	// the input's own set index through the latch's class map, so the stored index and the sub-range cannot disagree. Refraction draws
+	// are plain draws (no set). A draw without a class sub-range is dropped and counted, never drawn with another class's state.
+	const bool classed = (phase == kPhaseColour && keyWord == 0 && !refractionInput) || forwardBucket;
+	uint setClass = 0, classIndex = 0;
+	if (classed) {
+		bool planned = SetClassOf(drawKey, setClass, classIndex);
+		if (planned && !forwardBucket)
+			planned = setClass < ClassCount();
+		if (!planned) {
+			count.InterlockedAdd(kCountClassUnplanned, 1, scratch);
+			return;
+		}
+	}
+	// A view's forward range has an entry per class, from the one its map word names (PlanViewBuckets).
+	if (forwardBucket)
+		bucketKey += setClass;
 	// Terrain group 1's bucket and twin (PlanZBuckets): near blocks go to the twin (drawn into Terrain Blending's depth and, offset,
 	// the main depth), far blocks to the bucket (main depth alone), as Terrain Blending's depth hook does.
 	if ((bucketKey & kBucketTerrainPair) != 0) {
@@ -1003,7 +1127,9 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
 		bucket = latch.Load2(BucketTableOffset + bucketKey * 8);
 	}
-	if (sorted && pipeline >= kSortKeys)
+	// The sort key: the class's first key plus the pipeline's index in it, so a class's draws sort within its keys (SortSequencesCS).
+	const uint sortKey = classed ? ClassKeyBase(setClass) + classIndex : pipeline;
+	if (sorted && sortKey >= kSortKeys)
 		return;  // outside the sets, like kNoPipeline; before any slot is taken, so the sorted range has no hole
 
 	const uint4 rows = RowsOf(rowsWord);
@@ -1042,8 +1168,9 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 					count.InterlockedAdd(phase == kPhaseTwo ? kCountDrawnPhaseTwo : kCountDrawn, 1, drawn);
 					ByteAddressBuffer poolFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
 					if (forwardBucket) {
-						// First-person forward staging: a main-format sequence with its sort key, as the colour segment's forward draws below.
-						StoreSequence(sequences, bucket.x + slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+						// First-person forward staging: a main-format sequence with its sort key, as the colour segment's forward draws below,
+						// in its class's entry (its pipeline its index there).
+						StoreSequence(sequences, bucket.x + slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
 						StageForwardKey(sequences, bucket.x + slot, objectIndex);
 					} else {
 						StoreShadowSequence(sequences, bucket.x + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
@@ -1059,37 +1186,51 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 				StoreShadowSequence(sequences, ForwardBase + 2 * ForwardCapacity + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 					firstIndex, refractionFirsts.Load(geometryIndex * 4));
 			} else if (forwardInput) {
-				// The forward range's staging half, with the sort key (StageForwardKey).
-				count.InterlockedAdd(kCountForward, 1, slot);
-				if (slot >= ForwardCapacity)
+				// Its class's forward staging half, with the sort key (StageForwardKey); the forward inputs' draws tallied in kCountForward.
+				count.InterlockedAdd(kCountForward, 1, scratch);
+				if (!TakeClassSlot(setClass, kClassRangeForward, slot))
 					return;
-				StoreSequence(sequences, ForwardBase + slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
-				StageForwardKey(sequences, ForwardBase + slot, objectIndex);
+				StoreSequence(sequences, slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				StageForwardKey(sequences, slot, objectIndex);
 			} else if (terrainGroup != 0) {
-				// A terrain group's range (kTerrainGroups).
-				count.InterlockedAdd(kCountTerrainGroup1 + (terrainGroup - 1) * 4, 1, slot);
-				if (slot >= (terrainGroup == 1 ? TerrainCapacity.x : TerrainCapacity.y))
+				// Its class's sub-range of its terrain group's range (kTerrainGroups: range slot kDecalGroups + group - 1), unsorted; the
+				// group's draws tallied in its old count word.
+				count.InterlockedAdd(kCountTerrainGroup1 + (terrainGroup - 1) * 4, 1, scratch);
+				if (!TakeClassSlot(setClass, 3 + terrainGroup, slot))
 					return;
-				StoreSequence(sequences, PhaseTwoBase + (terrainGroup == 1 ? 0 : TerrainCapacity.x) + slot, pipeline, rows, drawWord, vertexBuffer,
-					secondStream, indexBuffer, indexBuffer.w, firstIndex);
-			} else {
-				count.InterlockedAdd(secondRange ? kCountDrawnPhaseTwo : kCountDrawn, 1, slot);
-				if (slot >= PhaseTwoBase)
+				StoreSequence(sequences, slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+			} else if (classed) {
+				// The colour draws: their class's main sub-range (its capacity first, so the staging below takes only what the scatter
+				// places), sorted within the class by pipeline; the draws tallied in kCountDrawn, which also counts the staged ones.
+				uint classSlot;
+				if (!TakeClassSlot(setClass, kClassRangeMain, classSlot))
 					return;
 				if (sorted) {
 					RWByteAddressBuffer sortCounts = ResourceDescriptorHeap[SortCountsIndex];
 					RWByteAddressBuffer staging = ResourceDescriptorHeap[SortStagingIndex];
 					RWByteAddressBuffer ranks = ResourceDescriptorHeap[SortRanksIndex];
-					// The scatter reads the key back from the rank word (key top 12 bits, rank low 20: PhaseTwoBase is kept within them).
-					const uint key = pipeline;
+					count.InterlockedAdd(kCountDrawn, 1, slot);
+					if (slot >= PhaseTwoBase)
+						return;  // never: the classes' main sub-ranges hold at most PhaseTwoBase draws (RequireMain)
+					// The scatter reads the key back from the rank word (key top 12 bits, rank low 20), and the class's first slot and first
+					// key from the staged instanceCount and firstInstance words, which it restores (1, 0).
 					uint rank;
-					sortCounts.InterlockedAdd(key * 4, 1, rank);
-					ranks.Store(slot * 4, (key << kSortRankBits) | rank);
-					StoreSequence(staging, slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+					sortCounts.InterlockedAdd(sortKey * 4, 1, rank);
+					ranks.Store(slot * 4, (sortKey << kSortRankBits) | rank);
+					StoreSequence(staging, slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+					staging.Store(slot * kSequenceStride + 76, ClassRange(setClass, kClassRangeMain).x);
+					staging.Store(slot * kSequenceStride + 88, ClassKeyBase(setClass));
 				} else {
-					StoreSequence(sequences, slot + (secondRange ? PhaseTwoBase : 0), pipeline, rows, drawWord, vertexBuffer,
-						secondStream, indexBuffer, indexBuffer.w, firstIndex);
+					count.InterlockedAdd(kCountDrawn, 1, scratch);
+					StoreSequence(sequences, classSlot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
 				}
+			} else {
+				// Any other unbucketed draw (none: every colour draw is classed, the depth phases and views are bucketed), appended unsorted.
+				count.InterlockedAdd(secondRange ? kCountDrawnPhaseTwo : kCountDrawn, 1, slot);
+				if (slot >= PhaseTwoBase)
+					return;
+				StoreSequence(sequences, slot + (secondRange ? PhaseTwoBase : 0), pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
+					firstIndex);
 			}
 		}
 		if (!chain && (partitions >> (partition + 1)) == 0)

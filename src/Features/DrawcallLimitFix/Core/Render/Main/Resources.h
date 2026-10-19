@@ -56,10 +56,20 @@ namespace DCLF::Draws
 		std::vector<std::uint32_t> zBucketCapacity, zBucketFirst;
 		std::uint64_t zBucketsLayout = 0;
 		std::uint32_t buckets = 0;
-		// Sequence buffer ranges (GpuLayouts.h, SequenceSlots): draws per draw range and per decal group.
+		// Sequence buffer ranges (GpuLayouts.h, SequenceSlots): draws per draw range and per decal sub-range, and the decal sub-ranges
+		// the buffer holds (one per decal group and state class present: SetClassPlan::decalRanges; doubled past them).
 		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
-		// Within sequenceDraws, power-of-two ranges in phase 2 (GpuLayouts.h): the terrain groups' (kTerrainGroups), then each
-		// forward half's (kForwardSortShader), then refraction's.
+		std::uint32_t decalRanges = kDecalGroups;
+		/*
+		 * Per pipeline slot, the draws its objects can produce (DrawBoundStore::PipelineDraws: decals count toward none), kept while they
+		 * fit and grown to a power of two past them; slotsLayout moves with them. A state class's sub-range of a range holds the
+		 * capacities of the slots its pipelines draw there (PlanSetClasses), so the colour calls change only when a slot grows or the
+		 * slots' classes move.
+		 */
+		std::vector<std::uint32_t> slotCapacity;
+		std::uint64_t slotsLayout = 0;
+		// Within sequenceDraws, the ranges in phase 2 (GpuLayouts.h): the terrain groups' (kTerrainGroups), then each forward half's
+		// (kForwardSortShader), each the sum of its slots' capacities (its classes' sub-ranges within it), then refraction's (a power of two).
 		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
 		std::uint32_t forwardCapacity = 0;
 		std::uint32_t refractionCapacity = 0;
@@ -76,6 +86,9 @@ namespace DCLF::Draws
 		// BuildDraws' out (its inputs, geometries and rows are the installed payload's: PayloadVersions).
 		Versioned sequences;
 		std::shared_ptr<org::Buffer> count;
+		// The colour segment's state class sub-ranges' counts, a word per (class, range) (GpuLayouts.h, ClassCountWord): BuildDraws
+		// appends through them, the colour and forward calls read them. Zeroed by the colour commit.
+		Versioned classCounts;
 		std::array<Versioned, 2> zBucketCounts;
 		std::shared_ptr<IndexPool> pool;
 		std::shared_ptr<const ComputeProgram> buildDraws;
@@ -155,6 +168,7 @@ namespace DCLF::Draws
 		org::DeclaredViewToken depth;
 		org::DeclaredViewToken terrainDepth;  // the Z-prepass's, with Terrain Blending (Resources::terrainDepth)
 		org::ResourceBindingToken sequences, count;
+		org::ResourceBindingToken classCounts;  // the colour and forward calls' counts (Resources::classCounts)
 		org::ResourceBindingToken pool, bucketCounts;  // the depth segment's plain draws
 		std::array<org::ResourceBindingToken, Extensions::kDrawFamilies> familyArguments;  // each draw family's arguments (DrawFamilyDeclare)
 		std::array<std::uint64_t, Extensions::kDrawFamilies> familyRows{};                // and its draw row's address (DrawFamilyDeclare::row)
@@ -180,6 +194,24 @@ namespace DCLF::Draws
 	};
 	void PlanZBuckets(const MainLayout& a_layout, const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out);
 
+	/**
+	 * @brief The colour segment's state class sub-ranges (GpuLayouts.h, kClassRangeMain): per class of the revision's set version
+	 * (IndirectState::classes), each range's sub-range from the capacities of the slots whose set index is the class's
+	 * (MainLayout::slotCapacity), by the slot's key: a decal group's (sequenceDecals each, one per group and class present), the forward
+	 * range's (not refraction's: a plain draw), a terrain group's, else the main one. The main sub-ranges from slot 0, the terrain groups'
+	 * and the forward pairs' (staging, sorted) in phase 2's range where MainLayout places those ranges, the decal ones from the decal
+	 * region. classes are the shape's (compared); table and map the latch's words (BuildDrawsLatch::classTableOffset, classMapOffset).
+	 */
+	struct SetClassPlan
+	{
+		std::vector<SetClassRanges> classes;
+		std::vector<std::uint32_t> table;  // [classes, kClassRanges, 0, 0], then kClassWords per class
+		std::vector<std::uint32_t> map;    // [set indices, 0, 0, 0], then IndirectState::classOf
+		std::uint32_t decalRanges = 0;     // the (group, class) decal sub-ranges present
+		std::uint32_t Words() const { return static_cast<std::uint32_t>(classes.size()) * kClassRanges; }  // classCounts' words
+	};
+	void PlanSetClasses(const MainLayout& a_layout, const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, SetClassPlan& a_out);
+
 	/** @brief A main epoch's frame block sizes (FrameBlocks) per stage and register, which its latched copies take. */
 	struct FrameBlockSizes
 	{
@@ -187,8 +219,9 @@ namespace DCLF::Draws
 		bool operator==(const FrameBlockSizes&) const = default;
 	};
 
-	/** @brief A main commit's latched copies, in write order and packed as LatchedUploads packs them. */
-	std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets);
+	/** @brief A main commit's latched copies, in write order and packed as LatchedUploads packs them (a_classWords: the colour commit's classCounts zeros). */
+	std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets,
+		std::uint32_t a_classWords);
 	/** @brief The bytes a layout takes of its latch block's slot. */
 	std::size_t LatchedBytes(const std::vector<LatchedCopy>& a_copies);
 
@@ -205,6 +238,7 @@ namespace DCLF::Draws
 	{
 		bool depthOnly = false;
 		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // MainLayout's ranges
+		std::shared_ptr<const SetClassPlan> classPlan;        // the colour segment's (PlanSetClasses)
 		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
 		std::uint32_t forwardCapacity = 0;
 		std::uint32_t refractionCapacity = 0;
@@ -236,6 +270,7 @@ namespace DCLF::Draws
 			kDepth,
 			kDepthPhaseTwo,
 			kColour,
+			kDecals,  // the colour segment's second pass
 			kKinds
 		};
 		static constexpr std::uint32_t kFields = 4;  // IA vertices, IA primitives, VS invocations, PS invocations
@@ -265,6 +300,10 @@ namespace DCLF::Draws
 					const auto* values = static_cast<const std::uint64_t*>(mapped) + std::size_t(a_kind) * kFields;
 					for (std::uint32_t f = 0; f < kFields; ++f)
 						totals[a_kind][f] += values[f];
+					// TEMPORARY (decal loss): recordings are reused, so the interval report rarely comes; each read of the decal pass.
+					if (a_kind == kDecals)
+						logger::info("[DCLF] DECAL-STATS slot {}: {} vertices, {} primitives, {} VS invocations, {} PS invocations", a_slot, values[0], values[1],
+							values[2], values[3]);
 					++samples[a_kind];
 					resource.Unmap(0, 0);
 				}
@@ -275,6 +314,26 @@ namespace DCLF::Draws
 				samples = {};
 			}
 			a_commands.ResetQueries(pool->GetHandle(), a_slot * kKinds + a_kind, 1);
+		}
+		static inline std::atomic<PassStats*> live{ nullptr };  // TEMPORARY (decal loss): for the report
+		// TEMPORARY (decal loss): every slot's last decal pass results, read whatever recording executed them.
+		void LogDecals()
+		{
+			const std::lock_guard lock(mutex);
+			std::string text;
+			for (std::size_t s = 0; s < readback.size(); ++s) {
+				if (!written[s][kDecals])
+					continue;
+				auto resource = readback[s]->GetAPIResource();
+				void* mapped = nullptr;
+				resource.Map(&mapped);
+				if (!mapped)
+					continue;
+				const auto* values = static_cast<const std::uint64_t*>(mapped) + std::size_t(kDecals) * kFields;
+				text += fmt::format(" [{}: {} {} {} {}]", s, values[0], values[1], values[2], values[3]);
+				resource.Unmap(0, 0);
+			}
+			logger::info("[DCLF] DECAL-LIVE{}", text);
 		}
 		void Begin(rhi::CommandList& a_commands, std::uint32_t a_slot, Kind a_kind) const
 		{
