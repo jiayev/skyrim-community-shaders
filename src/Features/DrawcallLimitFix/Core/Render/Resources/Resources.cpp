@@ -196,7 +196,6 @@ namespace DCLF::Draws
 				for (std::uint32_t i = 0; i < slots; ++i)
 					passStats->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(PassStats::kKinds) * PassStats::kFields * sizeof(std::uint64_t)));
 				passStats->written.resize(slots);
-				PassStats::live.store(passStats.get());  // TEMPORARY (decal loss)
 				a_state.passStats = std::move(passStats);
 				logger::info("[DCLF] pass statistics on: {} frame slots", slots);
 			}

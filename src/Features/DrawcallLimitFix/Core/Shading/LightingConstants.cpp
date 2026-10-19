@@ -387,10 +387,6 @@ namespace DCLF
 			const auto& key = a_tables.pipelines[object.pipelineIndex];
 			a_out.recordFlags |= RefractionRecordFlagsOf(key) | FamilyRecordFlagsOf(key, object.flags) | DecalRecordFlagsOf(key);
 		}
-		// TEMPORARY (decal loss): CS_DCLF_DECAL_NOFADE drops a decal's fade root, so its pixel stage's fade reads 1.
-		static const bool noDecalFade = std::getenv("CS_DCLF_DECAL_NOFADE") != nullptr;
-		if (noDecalFade && (object.flags & kObjectDecal))
-			a_out.recordFlags &= (1u << kRecordFadeRootShift) - 1u;
 	}
 
 	void SampleShading(const RE::BSShaderProperty& a_base, std::uint32_t a_pass, bool a_member, BindlessShading& a_out)
@@ -418,8 +414,7 @@ namespace DCLF
 		// GetRenderPasses leaves materialAlpha * the fade node's currentFade on the property, for whichever camera called it last. A
 		// member's is the material's alone: the draw multiplies its root's fade in (Lighting.hlsl DCLFAlphaFade).
 		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_property.material);
-		static const bool materialAlphaAlways = std::getenv("CS_DCLF_MATERIAL_ALPHA") != nullptr;  // TEMPORARY (decal loss)
-		shading.materialData[2] = (a_member || materialAlphaAlways) && material ? material->materialAlpha : a_property.alpha;
+		shading.materialData[2] = a_member && material ? material->materialAlpha : a_property.alpha;
 		shading.materialData[3] = refraction && material ? material->refractionPower : 0.0f;
 		a_out.written = (envmap ? 1u : 0u) | (specular ? 2u : 0u) | 4u | (a_property.emissiveColor ? 0x70u : 0u) | 0x80u;
 		// The same sample the emissive colour folds in: the shader divides it out again, so the two must never come from different
