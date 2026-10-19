@@ -827,7 +827,7 @@ PS_OUTPUT main(PS_INPUT input)
 		[branch] if (SharedData::enbSettings.VolumetricFogEnableLighting)
 		{
 			// The vertex tint only colours the fog here; brightness comes from the scene lighting
-			float3 volumetricFogTint = Color::Effect(BaseColor.xyz);
+			float3 volumetricFogTint = BaseColor.xyz;
 			volumetricFogTint /= max(max(max(volumetricFogTint.x, volumetricFogTint.y), volumetricFogTint.z), 1.0);
 			float3 volumetricFogLight = ShadowSampling::GetDirectionalLighting() * volumetricFogShadow + ShadowSampling::GetAmbientLighting();
 			baseColor.xyz = pow(max(volumetricFogTint * baseTexColor.xyz, 0.0), SharedData::enbSettings.VolumetricFogCurve) * volumetricFogLight * volumetricFogScale * 0.5;
