@@ -23,7 +23,9 @@ cbuffer PortalBatchConstants : register(b0)
 	// is 0. A context atlas batch binds its publication directly.
 	uint LatchIndex;
 	uint LatchOffset;
-	uint3 Padding;
+	// The portal bench's auxiliary table for an experimental evaluator (PortalEvaluators.hlsli); 0 in production.
+	uint AuxIndex;
+	uint2 Padding;
 }
 
 ByteAddressBuffer Programs()
@@ -40,6 +42,9 @@ ByteAddressBuffer Programs()
 // A query's verdict against its bucket's program: 1 in view, 0 culled, -1 no program, -2 an invalid atlas context.
 int QueryVerdict(PortalQuery query, uint bucket)
 {
+#ifdef DCLF_PORTAL_EXPERIMENTAL
+	PortalAuxIndex = AuxIndex;
+#endif
 	ByteAddressBuffer programs = Programs();
 	uint programsBase = 0, program = bucket;
 #ifdef DCLF_PORTAL_CONTEXT_ATLAS
@@ -179,4 +184,25 @@ groupshared uint2 ScanValues[256];
 	const PortalQuery query = queries[indices[task.First + lane]];
 	RWStructuredBuffer<uint2> results = ResourceDescriptorHeap[ResultsIndex];
 	results[query.Destination] = uint2(query.Generation, asuint(QueryVerdict(query, task.Program)));
+}
+
+// One thread per query, no batching: the verdict against the query's own program (the portal bench's inline variants; Count's
+// past-capacity path is the same evaluation). DCLF_PORTAL_FLOOR writes the program word as the verdict without evaluating it: the
+// dispatch's and the queries' memory cost alone.
+[numthreads(64, 1, 1)] void Inline(uint3 id : SV_DispatchThreadID)
+{
+	if ((id.x + id.y * (64u * 65535u)) >= QueryCount)
+		return;
+	StructuredBuffer<PortalQuery> queries = ResourceDescriptorHeap[QueriesIndex];
+	const PortalQuery query = queries[(id.x + id.y * (64u * 65535u))];
+	RWStructuredBuffer<uint2> results = ResourceDescriptorHeap[ResultsIndex];
+#ifdef DCLF_PORTAL_FLOOR
+	results[query.Destination] = uint2(query.Generation, query.Program);
+#else
+	if ((query.Flags & 0x80000000u) != 0u) {
+		results[query.Destination] = uint2(query.Generation, query.Program);
+		return;
+	}
+	results[query.Destination] = uint2(query.Generation, asuint(QueryVerdict(query, query.Program)));
+#endif
 }

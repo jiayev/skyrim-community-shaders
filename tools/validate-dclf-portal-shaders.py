@@ -34,7 +34,7 @@ def main():
     flags += ["-I", str(shader_root), "-I", str(root / "package/Shaders")]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     entries = {
-        "PortalBatchCS.hlsl": ["Clear", "Count", "TaskCounts", "Scan", "AddOffsets", "Scatter", "MakeTasks", "Evaluate"],
+        "PortalBatchCS.hlsl": ["Clear", "Count", "TaskCounts", "Scan", "AddOffsets", "Scatter", "MakeTasks", "Evaluate", "Inline"],
         "Features/Fades/FadeStateCS.hlsl": ["PreparePortalQueries", "main"],
         "BuildDrawsCS.hlsl": ["ClearPortalQueries", "PreparePortalQueries", "main"],
         "ParabolicQueriesCS.hlsl": ["main"],

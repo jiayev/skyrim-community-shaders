@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalProgramModel.h"
 
 #include <array>
 #include <cmath>
@@ -38,10 +39,16 @@ namespace DCLF::PortalShapes
 	constexpr float kLightFrustum[6]{ -0.5f, 0.5f, 0.5f, -0.5f, 1.0f, 2.0f };
 	constexpr float kLightViewport[4]{ 0.0f, 1.0f, 1.0f, 0.0f };
 
-	constexpr std::uint32_t kAnd = 4, kOr = 5, kClose = 6, kPortalTest = 7, kOccluderTest = 8;
-
-	inline bool IsTest(std::uint32_t a_word) { return a_word == kPortalTest || a_word == kOccluderTest; }
-	inline bool IsOpen(std::uint32_t a_word) { return a_word == kAnd || a_word == kOr; }
+	// The token words and the plane arithmetic are the program model's (PortalProgramModel.h).
+	using PortalModel::kAnd;
+	using PortalModel::kClose;
+	using PortalModel::kOccluderTest;
+	using PortalModel::kOr;
+	using PortalModel::kPortalTest;
+	using PortalModel::IsOpen;
+	using PortalModel::IsTest;
+	using PortalModel::Dist;
+	using PortalModel::PlaneFromPoints;
 
 	/** @brief BSOcclusionShape vfunc 0x25: a plane (or portal), else a box. */
 	inline bool IsPlane(const void* a_shape) { return static_cast<const RE::BSOcclusionShape*>(a_shape)->IsOcclusionPlane(); }
@@ -65,32 +72,6 @@ namespace DCLF::PortalShapes
 	inline V Sub(const V& a, const V& b) { return { a.x - b.x, a.y - b.y, a.z - b.z }; }
 	inline V Add(const V& a, const V& b) { return { a.x + b.x, a.y + b.y, a.z + b.z }; }
 	inline V Scale(const V& a, float s) { return { a.x * s, a.y * s, a.z * s }; }
-
-	/** @brief Every plane test's distance: ((n.y * p.y + n.x * p.x) + n.z * p.z) - d. */
-	inline float Dist(const std::array<float, 4>& a_plane, float a_x, float a_y, float a_z)
-	{
-		return ((a_plane[1] * a_y + a_plane[0] * a_x) + a_plane[2] * a_z) - a_plane[3];
-	}
-
-	/** @brief FUN_140d32ab0: the plane through a, b, c (n = (b - a) x (c - b), normalised; zero below 1e-6). */
-	inline std::array<float, 4> PlaneFromPoints(float ax, float ay, float az, float bx, float by, float bz, float cx, float cy, float cz)
-	{
-		const float e1x = bx - ax, e1y = by - ay, e1z = bz - az;
-		const float e2x = cx - bx, e2y = cy - by, e2z = cz - bz;
-		float nx = e2z * e1y - e2y * e1z;
-		float ny = e2x * e1z - e2z * e1x;
-		float nz = e2y * e1x - e2x * e1y;
-		const float length = std::sqrt((ny * ny + nx * nx) + nz * nz);
-		if (length <= 1e-6f) {
-			nx = ny = nz = 0.0f;
-		} else {
-			const float inverse = 1.0f / length;
-			nx *= inverse;
-			ny *= inverse;
-			nz *= inverse;
-		}
-		return { nx, ny, nz, (ny * ay + nx * ax) + nz * az };
-	}
 
 	/** @brief FUN_140e209e0: the box's eight corners from its centre, rotation columns and extents. */
 	inline std::array<V, 8> BoxCorners(const void* a_box)

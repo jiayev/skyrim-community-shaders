@@ -78,6 +78,9 @@ namespace DCLF::Features::Portals
 		void Install(Api::InstallContext& a_context)
 		{
 			a_context.RegisterSwitch({ .name = "CS_DCLF_PORTAL_UNIFORM_SCAN", .kind = Api::SwitchKind::Diagnostic, .description = "Evaluate portal batches with the diagnostic uniform instruction scan" });
+			a_context.RegisterSwitch({ .name = "CS_DCLF_PORTAL_EVALUATOR", .kind = Api::SwitchKind::Test,
+				.description = "Portal batches' evaluation: inline (one dispatch, the default) or batched (by program: count, scan, scatter, evaluate)" });
+			InstallPortalCapture(a_context);
 			a_context.RegisterMainCullInput({ .name = "portals",
 				.noProgram = kPortalNoProgram,
 				.unboundVisible = &UnboundVisible,

@@ -35,4 +35,8 @@ namespace DCLF::Features::Portals
 	// window).
 	void PortalViewsLine();
 	void RoomVisibilityLines();
+
+	// Diagnostics/PortalCapture.cpp: CS_DCLF_PORTAL_CAPTURE's switches and, when set, its subscription (the registered batches' queries
+	// and the frame's programs into corpus files for tests/DclfPortalBench).
+	void InstallPortalCapture(Api::InstallContext& a_context);
 }
