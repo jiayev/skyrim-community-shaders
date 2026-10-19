@@ -11,25 +11,27 @@
 // the frame before's (BuildDrawsLatch::fadeStatesIndex), so nothing waits for this pass.
 
 #include "DrawcallLimitFix/PortalPrograms.hlsli"
+#include "DrawcallLimitFix/PortalQueries.hlsli"
 
 // Must match FadeStateConstants (Features/Fades/FadeLayout.h).
 cbuffer FadeStateConstants : register(b0)
 {
-	uint RootsIndex;    // StructuredBuffer<FadeRootStatic>
-	uint StatesIndex;   // RWStructuredBuffer<FadeNodeState>
-	uint FrameIndex;    // StructuredBuffer<FadeFrame>, one row
-	uint LatchIndex;    // ByteAddressBuffer: the depth segment's BuildDrawsLatch (its view-projection)
+	uint RootsIndex;   // StructuredBuffer<FadeRootStatic>
+	uint StatesIndex;  // RWStructuredBuffer<FadeNodeState>
+	uint FrameIndex;   // StructuredBuffer<FadeFrame>, one row
+	uint LatchIndex;   // ByteAddressBuffer: the depth segment's BuildDrawsLatch (its view-projection)
 	uint LatchOffset;
-	uint LogIndex;      // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
-	uint OutIndex0;     // RWStructuredBuffer<FadeNodeState>: the published states of the even frames
-	uint OutIndex1;     // and of the odd
+	uint LogIndex;           // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
+	uint OutIndex0;          // RWStructuredBuffer<FadeNodeState>: the published states of the even frames
+	uint OutIndex1;          // and of the odd
 	uint ProgramsIndex;      // ByteAddressBuffer: the main camera's portal programs (Records.h, kPortal*; PortalPrograms.hlsli)
 	uint RootProgramsIndex;  // StructuredBuffer<uint>: each root's program (its room's; kPortalNoProgram: the frustum alone)
-	uint AnimatedIndex;    // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
-	uint EventsIndex;      // RWStructuredBuffer<uint>: the write-back's events, after a count word (FadeRecords.h, FadeEvent)
-	uint ReportedIndex;    // RWStructuredBuffer<uint2>: per root, the generation and the milestone last reported
-	uint EventCapacity;    // the events the list holds (and every readback of it)
-	uint Padding3;
+	uint AnimatedIndex;      // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
+	uint EventsIndex;        // RWStructuredBuffer<uint>: the write-back's events, after a count word (FadeRecords.h, FadeEvent)
+	uint ReportedIndex;      // RWStructuredBuffer<uint2>: per root, the generation and the milestone last reported
+	uint EventCapacity;      // the events the list holds (and every readback of it)
+	uint PortalQueriesIndex;
+	uint PortalResultsIndex;
 }
 
 // FadeNodeState, FadeRootStatic and FadeFrame must match Records.h's (and VisibilityEventsCS.hlsl's copies), FadeLogEntry
@@ -387,7 +389,8 @@ bool InView(float3 a_centre, float a_radius)
 	const float4 r2 = asfloat(latch.Load4(LatchOffset + 64));
 	const float4 r3 = asfloat(latch.Load4(LatchOffset + 80));
 	float4 planes[6] = { r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2 };
-	[unroll] for (uint p = 0; p < 6; ++p) {
+	[unroll] for (uint p = 0; p < 6; ++p)
+	{
 		if (p == 4 && (cullFlags & 0x200u) != 0)
 			continue;
 		const float length = sqrt(dot(planes[p].xyz, planes[p].xyz));
@@ -445,18 +448,6 @@ bool FrustumInView(float3 a_centre, float a_radius, uint a_rootBits)
 	return (a_rootBits & kFadeRootAlwaysDraw) != 0u || InView(a_centre, a_radius);
 }
 
-// The cull test of the root's program (kPortalNoProgram, or no programs: the frustum alone, FrustumInView).
-bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_program)
-{
-	// A preprocessed root (an actor's): the pre-cull's frustum test alone, no room's program (Process1 does not test it either).
-	if (ProgramsIndex == 0 || (a_rootBits & kFadeRootPreprocessed) != 0u)
-		return FrustumInView(a_centre, a_radius, a_rootBits);
-	ByteAddressBuffer programs = ResourceDescriptorHeap[ProgramsIndex];
-	const int test = PortalTest(programs, a_program, a_centre, a_radius, (a_rootBits & kFadeRootAlwaysDraw) != 0u, (a_rootBits & kFadeRootPreprocessed) != 0u,
-		(a_rootBits & kFadeRootPreprocessHidden) != 0u);
-	return test < 0 ? FrustumInView(a_centre, a_radius, a_rootBits) : test != 0;
-}
-
 // The fade write-back (dclf-architecture.md, "The fade write-back"): the engine reads a stood-in root's node (the
 // tree LOD's crossfade, the occlusion maps' cull, the animation gate, the next listing), which only this pass updates. Its
 // milestones: 0 faded out, 1 fading, 2 faded in; with them the leaf LOD's level (+0x152 & 0xF) and transition
@@ -501,9 +492,8 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 	reported[a_index] = uint2(a_root.Generation, milestone);
 }
 
-[numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
-{
-	const uint index = dispatchID.x;
+[numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
+	const uint index = dispatchID.x + dispatchID.y * (64u * 65535u);
 	StructuredBuffer<FadeFrame> frames = ResourceDescriptorHeap[FrameIndex];
 	F = frames[0];
 	// The dispatch covers every slot the buffers hold; the frame row's count ends it.
@@ -561,12 +551,9 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 			FadeUpdate(state, root, centre, root.FadeAmount);
 		F = frame;
 	}
-	uint program = kPortalNoProgram;
-	if (RootProgramsIndex != 0) {
-		StructuredBuffer<uint> rootPrograms = ResourceDescriptorHeap[RootProgramsIndex];
-		program = rootPrograms[index];
-	}
-	if (EngineInView(centre, radius, root.Bits, program))
+	StructuredBuffer<uint2> portalResults = ResourceDescriptorHeap[PortalResultsIndex];
+	const uint2 portalResult = portalResults[index];
+	if (portalResult.x == F.SceneFrame && portalResult.y == 1u)
 		state.Verdict = OnVisible(state, root, centre);
 	if (animated)
 		state.Verdict |= kFadeVerdictAnimated | (updates << 5);
@@ -583,4 +570,48 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 		entry.Root = index;
 		log[index - F.LogBase] = entry;
 	}
+}
+
+	// Read-only query preparation. MergeSeed changes only this invocation's local root copy.
+	[numthreads(64, 1, 1)] void PreparePortalQueries(uint3 id : SV_DispatchThreadID)
+{
+	RWStructuredBuffer<PortalQuery> queries = ResourceDescriptorHeap[PortalQueriesIndex];
+	uint capacity, stride;
+	queries.GetDimensions(capacity, stride);
+	if ((id.x + id.y * (64u * 65535u)) >= capacity)
+		return;
+	StructuredBuffer<FadeFrame> frames = ResourceDescriptorHeap[FrameIndex];
+	F = frames[0];
+	PortalQuery query = (PortalQuery)0;
+	query.Destination = (id.x + id.y * (64u * 65535u));
+	query.Generation = F.SceneFrame;
+	query.Flags = 0x80000000u;  // Immediate rejection unless a live, seeded root fills this slot.
+	if ((id.x + id.y * (64u * 65535u)) < F.RootCount) {
+		StructuredBuffer<FadeRootStatic> roots = ResourceDescriptorHeap[RootsIndex];
+		FadeRootStatic root = roots[(id.x + id.y * (64u * 65535u))];
+		if (root.Object != kNoObject && root.Generation != 0 && MergeSeed((id.x + id.y * (64u * 65535u)), root)) {
+			ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+			StructuredBuffer<PlacementRows> placements = ResourceDescriptorHeap[latch.Load(LatchOffset + 252)];
+			query.Bound.xyz = placements[root.Object].Rows[kObjectFadeNodeRow].xyz;
+			const float radius = placements[root.Object].Rows[kObjectSunEntryRow].w;
+			query.Bound.w = radius >= 0.0f && radius < 1e30f ? radius : root.Radius;
+			uint program = kPortalNoProgram;
+			if (RootProgramsIndex != 0) {
+				StructuredBuffer<uint> programs = ResourceDescriptorHeap[RootProgramsIndex];
+				program = programs[(id.x + id.y * (64u * 65535u))];
+			}
+			uint programCount = 0;
+			if (ProgramsIndex != 0) {
+				ByteAddressBuffer programs = ResourceDescriptorHeap[ProgramsIndex];
+				programCount = programs.Load(kPortalSetBytes);
+			}
+			if (program >= programCount || (root.Bits & kFadeRootPreprocessed) != 0u) {
+				query.Program = FrustumInView(query.Bound.xyz, query.Bound.w, root.Bits) ? 1u : 0u;
+			} else {
+				query.Program = program;
+				query.Flags = ((root.Bits & kFadeRootAlwaysDraw) != 0u ? 1u << 11 : 0u) | ((root.Bits & kFadeRootPreprocessed) != 0u ? 1u << 12 : 0u) | ((root.Bits & kFadeRootPreprocessHidden) != 0u ? 1u << 20 : 0u);
+			}
+		}
+	}
+	queries[(id.x + id.y * (64u * 65535u))] = query;
 }

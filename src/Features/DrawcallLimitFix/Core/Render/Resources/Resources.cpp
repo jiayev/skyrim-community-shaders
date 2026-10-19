@@ -1,12 +1,12 @@
 // IndirectDraws' GPU resources: the main, scene, shadow and view resources created on the render thread (Setup, EnsureSceneBuffers,
 // SetupShadow, SetupView), each versioned buffer registered with the scene's set (its extent, growth policy and contents), the
 // scene's draw bound and the main latch the revision code keeps.
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/ScheduleDump.h"
 
@@ -169,7 +169,8 @@ namespace DCLF::Draws
 			for (auto s = static_cast<std::uint32_t>(a_state.sequences.size()); s < a_slots; ++s) {
 				// A unit: a draw of every class (kShadowClasses ranges).
 				a_state.sequences.push_back(MakeVersioned(CreateWords(kShadowClasses * std::uint64_t(draws) * sizeof(DrawSequence) / 4, true,
-					fmt::format("cs.dclf.shadow.sequences{}", s).c_str()), { .extent = { 0, kShadowClasses * sizeof(DrawSequence), 4 } }));
+															  fmt::format("cs.dclf.shadow.sequences{}", s).c_str()),
+					{ .extent = { 0, kShadowClasses * sizeof(DrawSequence), 4 } }));
 				a_state.count.push_back(CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str()));
 				// A word per key slot: the latch layout's key slots exactly (doubled there).
 				a_state.bucketCounts.push_back(MakeVersioned(CreateWords(std::max(a_words, 64u), true, fmt::format("cs.dclf.shadow.bucket-counts{}", s).c_str()),
@@ -372,6 +373,14 @@ namespace DCLF
 		a_state.buildDraws = ComputeProgram::Load(a_device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
 		if (!a_state.buildDraws)
 			return NotReady(7, "the BuildDraws program could not be created");
+		a_state.clearPortalQueries = ComputeProgram::Load(a_device, { .source = kBuildDrawsShader, .entry = L"ClearPortalQueries", .constantWords = kBuildDrawsConstantWords });
+		a_state.preparePortalQueries = ComputeProgram::Load(a_device, { .source = kBuildDrawsShader, .entry = L"PreparePortalQueries", .constantWords = kBuildDrawsConstantWords });
+		if (!a_state.clearPortalQueries || !a_state.preparePortalQueries)
+			return NotReady(7, "the main member portal query programs could not be created");
+		a_state.portalQuerySignature = CreateDispatchSignature(a_device, a_state.preparePortalQueries->layout->GetHandle());
+		if (!a_state.portalQuerySignature)
+			return NotReady(7, "the main member portal query signature could not be created");
+
 		// Without the forward sort the forward epoch draws nothing.
 		a_state.forwardSort = ComputeProgram::Load(a_device, { .source = kForwardSortShader, .constantWords = kForwardSortConstantWords });
 		if (!a_state.forwardSort)

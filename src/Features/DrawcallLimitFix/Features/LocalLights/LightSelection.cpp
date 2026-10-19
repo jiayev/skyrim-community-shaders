@@ -1,18 +1,19 @@
 // LightSelection: the CalculateActiveShadowCasterLights detour (render thread) and its port of the engine's selection.
 
 #include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalContextAtlas.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
-#include "State.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "State.h"
 
 namespace DCLF
 {
@@ -237,7 +238,7 @@ namespace DCLF
 				continue;
 			// Kept: the engine walks it here (FUN_1414a2530), its walk's edge flags left on the shapes.
 			PortalViews::Get().CommitLightWalk();
-			frame.locals.push_back({ light, slot, mask });
+			frame.locals.push_back({ light, slot, mask, lightRooms.at(light).context });
 			// The focus host: a light with the flag, or the first that can host (vfunc 0x20: directional, spot) while none has.
 			{
 				auto& flag = focusFlags[light];
@@ -253,7 +254,8 @@ namespace DCLF
 			// held (not this frame's: a gap here).
 			auto* shadowLight = const_cast<RE::BSShadowLight*>(light);
 			const std::uint32_t maps = At<std::uint32_t>(light, kShadowMapCount);
-			const std::uint32_t taken = shadowLight->GetIsParabolicLight() ? (maps == 2 ? 2u : 1u) : shadowLight->GetIsDirectionalLight() ? maps : 1u;
+			const std::uint32_t taken = shadowLight->GetIsParabolicLight() ? (maps == 2 ? 2u : 1u) : shadowLight->GetIsDirectionalLight() ? maps :
+			                                                                                                                                1u;
 			frame.slots.push_back(light);
 			frame.slots.resize(frame.slots.size() + (taken ? taken - 1 : 0), nullptr);
 			slot += taken;
@@ -284,6 +286,18 @@ namespace DCLF
 					live.insert(std::move(*it));
 			lightRooms = std::move(live);
 		}
+		std::vector<Portals::ContextHold> contexts;
+		if (auto cameraContext = PortalViews::Get().MainContext(); cameraContext && cameraContext->frame == frame.sceneFrame)
+			contexts.push_back(std::move(cameraContext));
+		for (auto& selected : frame.locals)
+			if (selected.portalContext) {
+				selected.portalContextIndex = static_cast<std::uint32_t>(contexts.size());
+				contexts.push_back(selected.portalContext);
+			}
+		static std::uint64_t publication = 0;  // render thread; identity also changes if selection runs twice in one scene frame
+		if (++publication == 0)
+			throw std::overflow_error("point-light context publication identity exhausted");
+		frame.portalContexts = Portals::EncodeContexts(contexts, publication);
 		frame.valid = true;
 		// The slots and focus hosts to the shadow views (the LightSlots board: spans into frame, stable until the next Select).
 		ShadowViews::LightSlots().Publish(frame.sceneFrame, frame.slots, frame.focusHosts, frame.focusCount);
@@ -299,7 +313,8 @@ namespace DCLF
 		const auto& point = Extensions::ShadowSourceOf(Api::ShadowSource::Point);
 		for (const auto& selected : a_frame.locals) {
 			auto* light = const_cast<RE::BSShadowLight*>(selected.light);
-			const auto* source = light->GetIsFrustumLight() ? &spot : light->GetIsParabolicLight() ? &point : nullptr;
+			const auto* source = light->GetIsFrustumLight() ? &spot : light->GetIsParabolicLight() ? &point :
+			                                                                                         nullptr;
 			if (source && source->lightKept)
 				source->lightKept({ selected.light, a_frame.sceneFrame });
 		}

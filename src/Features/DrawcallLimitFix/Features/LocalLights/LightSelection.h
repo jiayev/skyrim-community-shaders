@@ -53,18 +53,21 @@ namespace DCLF
 		struct Selected
 		{
 			const RE::BSShadowLight* light = nullptr;
-			std::uint32_t slot = 0;       // its shadowLightsAccum slot
-			std::uint32_t maskIndex = 0;  // +0x520
+			std::uint32_t slot = 0;                  // its shadowLightsAccum slot
+			std::uint32_t maskIndex = 0;             // +0x520
+			Portals::ContextHold portalContext;      // owned strict-light snapshot, never mutable walk scratch
+			std::uint32_t portalContextIndex = ~0u;  // directory entry in Frame::portalContexts; no strict context: ~0u
 		};
 		struct Frame
 		{
 			std::uint32_t sceneFrame = ~0u;
-			const RE::BSShadowLight* sun = nullptr;   // when it draws
+			const RE::BSShadowLight* sun = nullptr;  // when it draws
 			std::uint32_t sunSlots = 0;
-			std::vector<Selected> locals;             // the kept lights after the sun, in the engine's order
-			std::vector<const RE::BSShadowLight*> slots;  // shadowLightsAccum as DCLF fills it: the sun per slot, then the lights (null: a slot a light took but did not fill)
+			std::vector<Selected> locals;                      // the kept lights after the sun, in the engine's order
+			std::vector<const RE::BSShadowLight*> slots;       // shadowLightsAccum as DCLF fills it: the sun per slot, then the lights (null: a slot a light took but did not fill)
 			std::vector<const RE::BSShadowLight*> focusHosts;  // the drawn lights with the focus flag
 			std::uint32_t focusCount = 0;                      // the focus views each draws (the targets, at most 4)
+			std::vector<std::uint32_t> portalContexts;         // owned atlas of the camera and selected strict-light contexts
 			bool valid = false;
 		};
 

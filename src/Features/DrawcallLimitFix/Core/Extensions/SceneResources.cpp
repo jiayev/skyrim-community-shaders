@@ -2,10 +2,10 @@
 // their states' lookup (see the header).
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
 namespace DCLF::Api
 {
@@ -49,7 +49,7 @@ namespace DCLF::Extensions
 		const auto registered = RegisteredSceneResources();
 		for (const std::uint32_t i : SceneResourcesOrder())
 			if (i < a_states.size() && a_states[i] && registered[i].require)
-				registered[i].require({ a_build, a_tables, a_states[i], std::span(a_inputs).subspan(registered[i].firstInput, registered[i].inputWords) });
+				registered[i].require({ a_build, a_tables, a_states[i], std::span(a_inputs).subspan(registered[i].firstInput, registered[i].inputWords), static_cast<std::uint32_t>(a_tables.objects.size()) });
 	}
 
 	void PostSceneResourceInputs(SceneResourceInputs& a_out)

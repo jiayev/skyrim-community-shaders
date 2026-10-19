@@ -8,7 +8,7 @@
 namespace DCLF::Draws
 {
 	// Build.cpp: BuildDraws (a_phase 0 follows the segment's shape; 2 is the phase 2 retest), the sort's scatter.
-	std::shared_ptr<org::RenderPass> MakeBuildDrawsPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, std::uint32_t a_phase = 0);
+	std::shared_ptr<org::RenderPass> MakeBuildDrawsPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, std::uint32_t a_phase = 0, bool a_queries = false);
 	std::shared_ptr<org::RenderPass> MakeSortSequencesPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment);
 
 	// VisibilityEvents.cpp: the visibility events.

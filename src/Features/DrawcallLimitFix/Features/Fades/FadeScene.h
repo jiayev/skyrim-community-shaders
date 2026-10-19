@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeLayout.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRecords.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalBatch.h"
 
 #include "RenderGraph/ComputeProgram.h"
 #include <ORGModuleServices/GrowableBufferTypes.h>
@@ -115,7 +116,7 @@ namespace DCLF::Features::Fades
 		Draws::Versioned fadeRoots, fadeStates;
 		std::shared_ptr<org::Buffer> fadeFrameBuffer, fadeLog;
 		Draws::Versioned fadeRootPrograms;  // per root slot: its program (Api::MainCullInputContribution::judge)
-		Draws::Versioned fadeAnimated;    // per root slot: the scene frame whose animation batch updated it
+		Draws::Versioned fadeAnimated;      // per root slot: the scene frame whose animation batch updated it
 		org::services::FilledVersion fadeAnimatedFilled;
 		// CPU mirrors: only differing runs go up.
 		std::vector<std::uint32_t> fadeAnimatedMirror;
@@ -146,6 +147,8 @@ namespace DCLF::Features::Fades
 		FadeFrame fadeFrame{};
 		std::uint32_t fadeLogBase = ~0u;
 		std::shared_ptr<const ComputeProgram> fadeState;
+		std::shared_ptr<const ComputeProgram> portalQueries;
+		std::shared_ptr<Portals::Batch> portalBatch;
 		// Fade write-back: event list (count zeroed by every depth commit), each root's last reported generation and milestone
 		// (every version zero-filled: no root reported yet, as a zero generation is never a listing's).
 		Draws::Versioned fadeEvents, fadeReported;

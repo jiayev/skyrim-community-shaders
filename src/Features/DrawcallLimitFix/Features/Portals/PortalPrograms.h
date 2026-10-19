@@ -13,8 +13,8 @@ namespace DCLF
 	 *
 	 * Layout (bytes): the camera's view planes (NiFrustumPlanes: six {n, d}, the active mask at +96; kPortalSetBytes), then a header
 	 * {program count, 0, 0, 0}, then a directory entry per program (kPortalDirectoryBytes: flags, operator count, set count, first
-	 * operator, first operator record, first set, cull mode, 0), then the operator records (the engine's {type, next if true, next if
-	 * false}, padded to 16 bytes; a test's set index is the next record's first word, relative to the program's first set) and the
+	 * operator, first operator record, first set, cull mode, maximum executable path length), then compact 16-byte operator records
+	 * {type, plane set index, next if true, next if false}. Only reachable tests and terminals are emitted, in forward topological order, and the
 	 * plane sets. Program 0 is unbound space; program 1 + i the portal graph's room i (graph +0x40). A root's program is
 	 * kPortalNoProgram when there is no walk this frame (the frustum alone).
 	 */

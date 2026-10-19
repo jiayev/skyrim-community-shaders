@@ -2,6 +2,7 @@
 // and the selection's parity (Diagnostics/).
 
 #include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/LightContextResources.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/LocalLights.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/LocalShadowLights.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/Diagnostics/LightSelectionParity.h"
@@ -49,6 +50,7 @@ namespace DCLF::Features::LocalLights
 
 		void Install(Api::InstallContext& a_context)
 		{
+			RegisterLightContexts(a_context);
 			// Each colour commit's volumes, from the selection's lights and the Lights board; the landscape properties take only the
 			// lights that affect land.
 			a_context.RegisterLightVolumes({ .name = "local shadow lights", .landscapeFlags = kLandscapeFlags, .sample = &Sample });

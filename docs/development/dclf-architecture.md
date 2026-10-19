@@ -2336,12 +2336,16 @@ engine, `Core/Render/Epochs/ViewEpoch*.cpp`, `Core/Render/Views/ViewSlots.h`, sh
 
 ### Portals
 
+The compact instruction encoding and fade-root GPU batching are described in
+[Portal query batches](./dclf-portal-query-batches.md), including validation status and the point-light consumers still requiring migration.
+
 The main camera's portals and occluders are DCLF's own (`Features/Portals/PortalViews`).
 -   **The walk** ports the engine's (`FUN_1401a43c0` -> Traverse `FUN_1414a41e0`) and the `BSCompoundFrustum` builders. It runs on the
     render thread right after `Main::Update`'s own walk (the feature's `PortalWalk` thunk) and writes nothing to an engine object.
 -   **The programs** (`kPortal*` in `Records.h`, `PortalPrograms.hlsli`) go to the GPU in one buffer a frame: view planes, a directory
-    and the records. Each fade root's program is its nearest room ancestor's (`PortalViews::ProgramOf`). FadeStateCS tests a root
-    through it (`EngineInView` -> `PortalTest`), and BuildDraws' main phase 1 rejects a member whose root's program culls its bound.
+    and the records. Each fade root's program is its nearest room ancestor's (`PortalViews::ProgramOf`). The fade-root query passes
+    batch roots by program before `FadeStateCS` consumes their verdicts. Main members use a separate object-indexed batch; BuildDraws' phase 1 consumes its tagged verdicts
+    and rejects a member whose root's program culls its bound.
 -   `PortalViews::VisibleSet` answers `Main::IsRoomVisible` ([Room visibility](#room-visibility-the-tree-list-the-actor-stamp)), and
     `PortalViews::VisibleUnbound()` the scene lists' branch.
 

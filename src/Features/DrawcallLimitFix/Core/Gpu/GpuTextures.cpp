@@ -338,7 +338,7 @@ namespace DCLF
 
 		// The import: marks the image stable in DXVK (a synchronous chunk on its CS thread), wraps it in BasicRHI and writes
 		// its view into ORG's heap. Any thread; the entry is the caller's until Settle.
-		static Reject Import(Entry& a_entry, const ImportContext& a_context, Counters& a_counters, std::uint32_t a_sourceTag)
+		static Reject Import(Entry& a_entry, const ImportContext& a_context, Counters& a_counters, [[maybe_unused]] std::uint32_t a_sourceTag)
 		{
 			auto* view = a_entry.view.get();
 			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};

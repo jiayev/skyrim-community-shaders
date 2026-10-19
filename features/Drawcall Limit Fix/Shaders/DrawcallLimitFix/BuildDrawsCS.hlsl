@@ -3,15 +3,16 @@
 
 #include "DrawcallLimitFix/HzbTest.hlsli"
 #include "DrawcallLimitFix/PortalPrograms.hlsli"
+#include "DrawcallLimitFix/PortalQueries.hlsli"
 
 // Push constants: only what is fixed for a pass across executions. Everything per-execution is read from the pass's region of
 // the latch block (org::LatchBlock), written just before submission, so recorded commands can be reused or recorded ahead.
 // Must match BuildDrawsConstants and BuildDrawsLatch in Core/GpuLayouts.h.
 cbuffer BuildDrawsConstants : register(b0)
 {
-	uint LatchIndex;       // ByteAddressBuffer: the latch block
-	uint SequencesIndex;   // RWByteAddressBuffer: DrawSequence[]
-	uint CountIndex;       // RWByteAddressBuffer: uint (zeroed before the dispatch)
+	uint LatchIndex;      // ByteAddressBuffer: the latch block
+	uint SequencesIndex;  // RWByteAddressBuffer: DrawSequence[]
+	uint CountIndex;      // RWByteAddressBuffer: uint (zeroed before the dispatch)
 	// The strides of the rows an input's y names (RowsOf): material row (low 20 bits), pipeline row (high 12; stride 0 for the
 	// shadow views). Their addresses are the payload's, in the latch.
 	uint MaterialRowStride;
@@ -47,8 +48,8 @@ cbuffer BuildDrawsConstants : register(b0)
 	// shadow view drops a caster while its root fades; every dispatch picks LOD partitions by the root's level (LodPartitions). Root
 	// state is FadeStateCS's model, not the node's. 0 where unbound.
 	uint FadeRootsIndex;
-	// Depth segment phase 1: ByteAddressBuffer of portal programs (kPortal*), and below StructuredBuffer<uint> of each fade root's
-	// program. A member whose root's program culls its bound is out of view. 0 elsewhere.
+	// Main query preparation: ByteAddressBuffer of portal programs (kPortal*) and StructuredBuffer<uint> of each root's program.
+	// Draw construction reads MemberResultsIndex instead.
 	uint PortalProgramsIndex;
 	// Shadow views and depth phases: RWByteAddressBuffer of bucket counts, a word per bucket (BucketTableOffset). 0 elsewhere.
 	uint BucketCountsIndex;
@@ -64,6 +65,9 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint RefractionCapacity;
 	// Colour segment: RWByteAddressBuffer of the state class sub-ranges' counts, a word per (class, range) (ClassCountWord). 0 elsewhere.
 	uint ClassCountsIndex;
+	uint MemberQueriesIndex;
+	uint MemberResultsIndex;
+	uint MemberClaimsIndex;
 }
 
 // StructuredBuffer<FadeNodeState>: FadeStateCS's states as the previous frame published them (latch fadeStatesIndex).
@@ -303,7 +307,8 @@ uint LocalShadowMask(float3 a_centre, float a_radius, bool a_landscape)
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
 	const uint volumes = latch.Load(LocalShadowOffset);
 	uint mask = 0;
-	[loop] for (uint v = 0; v < volumes; ++v) {
+	[loop] for (uint v = 0; v < volumes; ++v)
+	{
 		const uint record = LocalShadowOffset + kSunRegionHeader + v * kShadowVolumeBytes;
 		const uint4 head = latch.Load4(record);  // plane masks, mask bit, landscape
 		if ((mask & head.z) != 0 || (a_landscape && head.w == 0))
@@ -314,7 +319,8 @@ uint LocalShadowMask(float3 a_centre, float a_radius, bool a_landscape)
 		if (dot(offset, offset) > reach * reach)
 			continue;
 		bool inside = true;
-		[loop] for (uint p = 0; p < 12 && inside; ++p) {
+		[loop] for (uint p = 0; p < 12 && inside; ++p)
+		{
 			const uint planeMask = p < 6 ? head.x : head.y;
 			if ((planeMask & (1u << (p % 6))) == 0)
 				continue;
@@ -333,11 +339,13 @@ bool InSunCascades(float3 a_centre, float a_radius)
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
 	const uint cascades = latch.Load(SunCascadeOffset);
-	[loop] for (uint c = 0; c < cascades; ++c) {
+	[loop] for (uint c = 0; c < cascades; ++c)
+	{
 		const uint record = SunCascadeOffset + kSunRegionHeader + c * kSunCascadeBytes;
 		const uint2 masks = latch.Load2(record);
 		bool inside = true;
-		[loop] for (uint p = 0; p < 12 && inside; ++p) {
+		[loop] for (uint p = 0; p < 12 && inside; ++p)
+		{
 			const uint mask = p < 6 ? masks.x : masks.y;
 			if ((mask & (1u << (p % 6))) == 0)
 				continue;
@@ -359,11 +367,13 @@ bool OutsideSunEntry(float4 a_entry)
 	const uint processes = latch.Load(SunEntryOffset);
 	if (processes == 0)
 		return false;
-	[loop] for (uint process = 0; process < processes; ++process) {
+	[loop] for (uint process = 0; process < processes; ++process)
+	{
 		const uint record = SunEntryOffset + kSunRegionHeader + process * kSunEntryProcessBytes;
 		const uint mask = latch.Load(record);
 		bool outside = false;
-		[loop] for (uint p = 0; p < 6 && !outside; ++p) {
+		[loop] for (uint p = 0; p < 6 && !outside; ++p)
+		{
 			if ((mask & (1u << p)) == 0)
 				continue;
 			const float4 plane = asfloat(latch.Load4(record + 16 + p * 16));
@@ -469,20 +479,20 @@ bool TerrainNearOf(float4 a_bound) { return distance(a_bound.xyz, TerrainNear.xy
 static const uint kInputDrawable = 1u << 16;
 
 // Counter words in the count buffer (zeroed before the dispatch).
-static const uint kCountDrawn = 0;          // sequences written
-static const uint kCountCulled = 4;         // rejected by this frame's culling
-static const uint kCountTested = 8;         // looked at by the culling at all
+static const uint kCountDrawn = 0;   // sequences written
+static const uint kCountCulled = 4;  // rejected by this frame's culling
+static const uint kCountTested = 8;  // looked at by the culling at all
 // What a shadow view drops before culling: wrong caster class, outside the sun entry, at most the minimum radius, under a fading
 // root (occlusion map: a root its OnVisible stops at).
 static const uint kCountSunEntryOut = 12;
 static const uint kCountMinRadius = 16;
 static const uint kCountRootFading = 20;
 static const uint kCountCasterClass = 64;
-static const uint kCountOccluded = 24;      // rejected by the HZB rather than by the frustum
+static const uint kCountOccluded = 24;  // rejected by the HZB rather than by the frustum
 // What the HZB held under tested objects, to tell a suspicious rejection count from an empty or full HZB without a readback.
-static const uint kCountHzbNear = 28;       // the footprint's farthest depth was ~0: the build wrote nothing
-static const uint kCountHzbFar = 32;        // it was ~1: all far plane, so nothing can ever be occluded
-static const uint kCountHzbSampled = 36;    // footprints sampled, to give the two above a denominator
+static const uint kCountHzbNear = 28;     // the footprint's farthest depth was ~0: the build wrote nothing
+static const uint kCountHzbFar = 32;      // it was ~1: all far plane, so nothing can ever be occluded
+static const uint kCountHzbSampled = 36;  // footprints sampled, to give the two above a denominator
 // One rejection, recorded in full (see Occluded).
 static const uint kSampleTaken = 40;
 static const uint kSampleFarthest = 44;
@@ -490,7 +500,7 @@ static const uint kSampleNearestZ = 48;
 static const uint kSampleUvMin = 52;
 static const uint kSampleUvMax = 56;
 static const uint kSampleMip = 60;
-static const uint kCountDrawnPhaseTwo = 68;    // sequences phase 2 appended, and the count its draw reads
+static const uint kCountDrawnPhaseTwo = 68;      // sequences phase 2 appended, and the count its draw reads
 static const uint kCountRescuedByPhaseTwo = 72;  // objects phase 1 rejected and the rebuilt HZB brought back
 // Decals: the two groups' slot counts (uploaded by the CPU, read by their draws) and the culling's tallies.
 static const uint kCountDecalGroup1 = 76;
@@ -692,13 +702,15 @@ void StageForwardKey(RWByteAddressBuffer sequences, uint a_slot, uint a_object)
 bool Culled(float3 boundCentre, float boundRadius)
 {
 	const float3 centre = boundCentre;
-	[unroll] for (uint p = 0; p < 6; ++p) {
+	[unroll] for (uint p = 0; p < 6; ++p)
+	{
 		if ((CullPlaneMask & (1u << p)) && dot(CullPlanes[p].xyz, centre) - CullPlanes[p].w < -boundRadius)
 			return true;
 	}
 	float4 planes = float4(1, 1, 1, 1);  // all-corners-outside accumulators: -x, +x, -y, +y
 	float2 depthPlanes = float2(1, 1);   // near, far
-	[unroll] for (uint corner = 0; corner < 8; ++corner) {
+	[unroll] for (uint corner = 0; corner < 8; ++corner)
+	{
 		const float3 offset = float3((corner & 1) ? boundRadius : -boundRadius,
 			(corner & 2) ? boundRadius : -boundRadius,
 			(corner & 4) ? boundRadius : -boundRadius);
@@ -799,26 +811,80 @@ bool StampFrustum(ByteAddressBuffer a_inputs, uint a_inputOffset, uint a_flags, 
 
 // The main camera's cull before the HZB: the frustum, then the portals and occluders its root is culled through (the engine's
 // Process1 on the member after its root's; PortalPrograms.hlsli). Also the feedback verdict for kStampOnlyViews inputs.
-bool MainFrustumRejected(ByteAddressBuffer a_inputs, uint a_inputOffset, float4 a_bound)
+bool MainFrustumRejected(uint objectIndex)
 {
-	if (Culled(a_bound.xyz, a_bound.w))
+	if (MemberResultsIndex == 0)
 		return true;
-	if (PortalProgramsIndex == 0 || RootProgramsIndex == 0)
-		return false;
-	const uint portalRoot = a_inputs.Load(a_inputOffset + 48);
-	if (portalRoot == 0xFFFFFFFFu)
-		return false;
-	StructuredBuffer<uint> rootPrograms = ResourceDescriptorHeap[RootProgramsIndex];
-	ByteAddressBuffer portalPrograms = ResourceDescriptorHeap[PortalProgramsIndex];
-	return PortalTest(portalPrograms, rootPrograms[portalRoot], a_bound.xyz, a_bound.w, false, false, false) == 0;
+	StructuredBuffer<uint2> results = ResourceDescriptorHeap[MemberResultsIndex];
+	const uint2 result = results[objectIndex];
+	return result.x != VisibilityStamp || asint(result.y) != 1;
 }
 
 // Decal, forward and refraction inputs (culled once by the colour segment) still need the main camera's cull for kAccumulated
 // (dclf-architecture.md, "BuildDraws"): phase 1 stamps their frustum verdict and nothing else. GpuLayouts.h's bits.
 static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 
-[numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
+// Every slot is initialized before draw inputs claim their object. Shared skin-partition inputs perform just one bound test.
+[numthreads(64, 1, 1)] void ClearPortalQueries(uint3 id : SV_DispatchThreadID) {
+	LoadLatch();
+	RWStructuredBuffer<PortalQuery> queries = ResourceDescriptorHeap[MemberQueriesIndex];
+	RWStructuredBuffer<uint> claims = ResourceDescriptorHeap[MemberClaimsIndex];
+	uint capacity, stride;
+	queries.GetDimensions(capacity, stride);
+	const uint objectIndex = id.x + id.y * (64u * 65535u);
+	if (objectIndex >= capacity)
+		return;
+	PortalQuery query = (PortalQuery)0;
+	query.Flags = 0x80000000u;
+	query.Destination = objectIndex;
+	query.Generation = VisibilityStamp;
+	queries[objectIndex] = query;
+	claims[objectIndex] = 0;
+}
+
+	[numthreads(64, 1, 1)] void PreparePortalQueries(uint3 id : SV_DispatchThreadID)
 {
+	LoadLatch();
+	const uint draw = id.x;
+	if (draw >= DrawCount)
+		return;
+	ByteAddressBuffer inputs = ResourceDescriptorHeap[InputsBuffer];
+	const uint inputOffset = draw * kInputStride;
+	if (ViewBits != 0 && (inputs.Load(inputOffset + 16) & (ViewBits | kStampOnlyViews)) == 0)
+		return;
+	const uint objectIndex = inputs.Load(inputOffset + 32);
+	RWStructuredBuffer<PortalQuery> queries = ResourceDescriptorHeap[MemberQueriesIndex];
+	RWStructuredBuffer<uint> claims = ResourceDescriptorHeap[MemberClaimsIndex];
+	uint capacity, stride;
+	queries.GetDimensions(capacity, stride);
+	if (objectIndex >= capacity)
+		return;  // ObjectFits prevents admission beyond the published batch.
+	uint previous;
+	InterlockedCompareExchange(claims[objectIndex], 0u, 1u, previous);
+	if (previous != 0)
+		return;
+	PortalQuery query = (PortalQuery)0;
+	query.Bound = ObjectRow(objectIndex, kObjectBoundRow);
+	query.Flags = 0x80000000u;
+	query.Destination = objectIndex;
+	query.Generation = VisibilityStamp;
+	query.Program = Culled(query.Bound.xyz, query.Bound.w) ? 0u : 1u;
+	if (query.Program != 0 && PortalProgramsIndex != 0 && RootProgramsIndex != 0) {
+		const uint root = inputs.Load(inputOffset + 48);
+		if (root != 0xFFFFFFFFu) {
+			StructuredBuffer<uint> rootPrograms = ResourceDescriptorHeap[RootProgramsIndex];
+			ByteAddressBuffer programs = ResourceDescriptorHeap[PortalProgramsIndex];
+			const uint program = rootPrograms[root];
+			if (program < programs.Load(kPortalSetBytes)) {
+				query.Program = program;
+				query.Flags = 0;
+			}
+		}
+	}
+	queries[objectIndex] = query;
+}
+
+[numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	LoadLatch();
 	const uint draw = dispatchID.x;
 	if (draw >= DrawCount)
@@ -837,7 +903,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		// kStampOnlyViews: phase 1 stamps the frustum verdict.
 		if (FrustumIndex != 0 && CullPhase() == kPhaseOne && (inputs.Load(inputOffset + 16) & kStampOnlyViews) != 0) {
 			const uint stampObject = inputs.Load(inputOffset + 32);
-			if (CullMode() == 0 || !MainFrustumRejected(inputs, inputOffset, ObjectRow(stampObject, kObjectBoundRow)))
+			if (CullMode() == 0 || !MainFrustumRejected(stampObject))
 				StampFrustum(inputs, inputOffset, input.w, stampObject, false);
 		}
 		return;
@@ -938,10 +1004,12 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		// partition from its ordinal (OrderDecals, DecalSpanOf; encoding in word +40); a partition its mask leaves out writes a zero-count draw.
 		const uint decalPartitions = inputs.Load(inputOffset + 40);
 		const bool decalChain = (decalPartitions & kPartitionChain) != 0;
-		const uint decalSpan = decalChain ? (decalPartitions & kPartitionChainCount) :
-		                       (decalPartitions == 0 || decalPartitions == kNoPartitions) ? 1u : firstbithigh(decalPartitions & (kNoPartitions - 1)) + 1;
+		const uint decalSpan = decalChain                                                 ? (decalPartitions & kPartitionChainCount) :
+		                       (decalPartitions == 0 || decalPartitions == kNoPartitions) ? 1u :
+		                                                                                    firstbithigh(decalPartitions & (kNoPartitions - 1)) + 1;
 		uint decalGeometry = input.z;
-		[loop] for (uint k = 0; k < decalSpan; ++k) {
+		[loop] for (uint k = 0; k < decalSpan; ++k)
+		{
 			if (decalOrdinal + k >= DecalStride)
 				break;  // never: the range holds every slot of the group
 			const bool partitionDrawn = decalChain || decalPartitions == 0 || ((decalPartitions >> k) & 1) != 0;
@@ -951,7 +1019,8 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			const uint firstIndex = geometries.Load(geometryOffset + 32);
 			const uint4 decalStream = decalStreamIndex != kNoStream ? geometries.Load4(decalStreamIndex * kGeometryStride) : vertexBuffer;
 			const uint indexCount = (culled || !partitionDrawn || decalGeometry == kNoPartition) ? 0 : indexBuffer.w;
-			[loop] for (uint c = 0; c < classes; ++c) {
+			[loop] for (uint c = 0; c < classes; ++c)
+			{
 				const uint2 range = ClassRange(c, decalGroup);
 				if (range.y == 0 || decalOrdinal + k >= range.y)
 					continue;  // no sub-range of the group (or, never, one short of the slot)
@@ -1025,16 +1094,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		count.InterlockedAdd(kCountTested, 1, scratch);
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);  // centre (world), radius
 		// Phase 2 only revisits occlusion.
-		frustumRejected = phase != kPhaseTwo && Culled(bound.xyz, bound.w);
-		// The portals and occluders the main camera culls through (as MainFrustumRejected).
-		if (!frustumRejected && phase == kPhaseOne && PortalProgramsIndex != 0 && RootProgramsIndex != 0) {
-			const uint portalRoot = inputs.Load(inputOffset + 48);
-			if (portalRoot != 0xFFFFFFFFu) {
-				StructuredBuffer<uint> rootPrograms = ResourceDescriptorHeap[RootProgramsIndex];
-				ByteAddressBuffer portalPrograms = ResourceDescriptorHeap[PortalProgramsIndex];
-				frustumRejected = PortalTest(portalPrograms, rootPrograms[portalRoot], bound.xyz, bound.w, false, false, false) == 0;
-			}
-		}
+		frustumRejected = phase == kPhaseOne ? MainFrustumRejected(objectIndex) : (phase != kPhaseTwo && Culled(bound.xyz, bound.w));
 		if (frustumRejected) {
 			count.InterlockedAdd(kCountCulled, 1, scratch);
 		} else if (CullMode() >= 2 && Occluded(bound.xyz, bound.w)) {
@@ -1147,7 +1207,8 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	uint geometryIndex = input.z;
 	const bool chain = (partitions & kPartitionChain) != 0;
 	const uint links = chain ? (partitions & kPartitionChainCount) : kMaxPartitions;
-	[loop] for (uint partition = 0; partition < links && geometryIndex != kNoPartition; ++partition) {
+	[loop] for (uint partition = 0; partition < links && geometryIndex != kNoPartition; ++partition)
+	{
 		const uint geometryOffset = geometryIndex * kGeometryStride;
 		if (chain || partitions == 0 || ((partitions >> partition) & 1) != 0) {
 			const uint drawWord = ((copyPartitions >> partition) & 1) != 0 ? (objectWord | kObjectCrossfadeCopy) : objectWord;

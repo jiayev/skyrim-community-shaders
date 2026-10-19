@@ -1,11 +1,11 @@
 // Portals: the walk's thunk (early hooks), the main cull input and its programs buffer (PortalPrograms.cpp), RoomVisibility's detours
 // and live flag, and the parity (Diagnostics/).
 
-#include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
+#include "Features/DrawcallLimitFix/Features/Portals/Diagnostics/PortalParity.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
+#include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
 #include "Features/DrawcallLimitFix/Features/Portals/RoomVisibility.h"
-#include "Features/DrawcallLimitFix/Features/Portals/Diagnostics/PortalParity.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
@@ -77,6 +77,7 @@ namespace DCLF::Features::Portals
 
 		void Install(Api::InstallContext& a_context)
 		{
+			a_context.RegisterSwitch({ .name = "CS_DCLF_PORTAL_UNIFORM_SCAN", .kind = Api::SwitchKind::Diagnostic, .description = "Evaluate portal batches with the diagnostic uniform instruction scan" });
 			a_context.RegisterMainCullInput({ .name = "portals",
 				.noProgram = kPortalNoProgram,
 				.unboundVisible = &UnboundVisible,

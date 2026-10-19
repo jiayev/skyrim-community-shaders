@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <exception>
+#include <Tracy/Tracy.hpp>
 
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"

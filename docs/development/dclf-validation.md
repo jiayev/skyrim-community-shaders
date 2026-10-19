@@ -1,5 +1,8 @@
 # DCLF validation
 
+For compact portal bytecode and fade-root/member query batching tests and current integration limits, see
+[Portal query batches](./dclf-portal-query-batches.md).
+
 How Drawcall Limit Fix (DCLF) is checked: its switches, the parity checks and what each report line means, the diagnostics
 and probes, how a change is validated in game, crash triage, and the bugs parity found in the engine and in other features.
 
