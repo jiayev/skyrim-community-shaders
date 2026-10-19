@@ -234,8 +234,7 @@ namespace DCLF::Draws
 				state.EndPass();
 			}
 			BeginDrawPass(state, a_passes.mainBegin, frame, a_prepared);
-			if (!std::getenv("CS_DCLF_DECALS_ONLY"))  // TEMPORARY (decal loss)
-				a_passes.MainDraws([&](const IndirectCall& a_call) { PreprocessCall(commands, state, sequences, a_call); });
+			a_passes.MainDraws([&](const IndirectCall& a_call) { PreprocessCall(commands, state, sequences, a_call); });
 			state.EndPass();
 			if (a_passes.anyDecals) {
 				BeginDrawPass(state, a_passes.decalBegin, frame, a_prepared);
@@ -271,13 +270,12 @@ namespace DCLF::Draws
 				stats->Begin(commands, statsSlot, PassStats::kColour);
 			{
 				const bool drawPart = subRange("cs.dclf.colour.main-draws");
-				if (!std::getenv("CS_DCLF_DECALS_ONLY"))  // TEMPORARY (decal loss)
-					a_passes.MainDraws([&](const IndirectCall& a_call) { ExecuteCall(commands, sequences, a_call); });
+				a_passes.MainDraws([&](const IndirectCall& a_call) { ExecuteCall(commands, sequences, a_call); });
 				endSubRange(drawPart);
 			}
 			// A draw family's colour tests EQUAL against its Z-prepass draw, under the Z-prepass layout (same frame push data).
 			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
-				if (a_prepared.families[f].drawn && !std::getenv("CS_DCLF_DECALS_ONLY")) {  // TEMPORARY (decal loss)
+				if (a_prepared.families[f].drawn) {
 					const bool familyPart = subRange(Extensions::DrawFamilies()[f].colourRange.c_str());
 					commands.BindLayout(frame.indirect.zLayout);
 					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());

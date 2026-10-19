@@ -16,7 +16,6 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuResources.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
-#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
@@ -223,8 +222,6 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 			DCLF::Extensions::ReportLinesAt(DCLF::Api::ReportPoint::ShadowViews, frame);
 			DCLF::IndirectDraws::Get().ResetShadowStats();
 		}
-		if (auto* stats = DCLF::Draws::PassStats::live.load())
-			stats->LogDecals();  // TEMPORARY (decal loss)
 		if (draws.decalsDrawn || draws.decalsTested)
 			logger::info("[DCLF] decals (last frame; the candidates are the coordinator's line): {} submitted to the second pass, {} of {} tested were culled",
 				draws.decalsDrawn, draws.decalsCulled, draws.decalsTested);

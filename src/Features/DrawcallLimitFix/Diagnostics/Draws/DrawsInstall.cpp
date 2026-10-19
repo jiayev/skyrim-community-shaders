@@ -35,7 +35,6 @@ namespace DCLF::Diagnostics
 			Subscribe<MainEpochDone>(&CheckBuildParity);
 		Subscribe<CullLatchWritten>(&NoteCullLatch);
 		Subscribe<MainEpochDone>(&ReadCullCounters);
-		InstallDecalDump();  // TEMPORARY (decal loss): CS_DCLF_DECAL_DUMP
 		Subscribe<MainGraphPasses>(&AppendCullCounterPass);
 		Subscribe<FrameTextureUnresolved>(&DescribeUnresolvedFrameTexture);
 		Subscribe<FrameBufferUnfilled>(&LogUnfilledFrameBuffer);

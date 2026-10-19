@@ -592,12 +592,8 @@ namespace DCLF
 					desc.blend.bs.attachments[i].writeMask = static_cast<rhi::ColorWriteEnable>(0);
 				}
 			}
-			if (!depthOnly && decalGroup && std::getenv("CS_DCLF_DECAL_NODEPTH"))  // TEMPORARY (decal loss)
-				depth.depthFunc = rhi::CompareOp::Always;
 			built->stateClass.variants[variant] = desc.State(pixel);
 			desc.Create(a_device, built->pipelines[variant], fmt::format("{} {}", a_keyName, depthOnly ? "depth" : "color"));
-			logger::info("[DCLF] MODULE-EXP effect v{} VS {:08X} PS {:08X} pass {:08X} raster {:08X} layout {:016X} vs {:016X} ps {:016X}", variant, a_key.vertexDescriptor,
-				a_key.pixelDescriptor, a_key.passDescriptor, a_key.rasterFlags, a_key.vertexLayout, ModuleHash(a_program->vertex), ModuleHash(a_program->pixel));  // TEMPORARY
 		}
 		return built;
 	}
@@ -675,13 +671,8 @@ namespace DCLF
 						desc.blend.bs.attachments[i].writeMask = static_cast<rhi::ColorWriteEnable>(0);
 					}
 			}
-			if (!depthOnly && decalGroup && std::getenv("CS_DCLF_DECAL_NODEPTH"))  // TEMPORARY (decal loss)
-				depth.depthFunc = rhi::CompareOp::Always;
 			built->stateClass.variants[variant] = desc.State(depthOnly ? depthPixel : pixel);
 			desc.Create(a_device, built->pipelines[variant], depthOnly ? "depth" : "color");
-			logger::info("[DCLF] MODULE-EXP lighting v{} VS {:08X} PS {:08X} pass {:08X} raster {:08X} layout {:016X} vs {:016X} ps {:016X}", variant, a_key.vertexDescriptor,
-				a_key.pixelDescriptor, a_key.passDescriptor, a_key.rasterFlags, a_key.vertexLayout, ModuleHash(a_program->vertex),
-				ModuleHash(depthOnly ? a_program->depthPixel : a_program->pixel));  // TEMPORARY
 			if (!depthOnly)
 				continue;
 			// The Z-prepass plain-draw pipeline: the depth variant's state, pulled stages, no vertex input, bound per call.

@@ -301,10 +301,6 @@ namespace DCLF::Draws
 					const auto* values = static_cast<const std::uint64_t*>(mapped) + std::size_t(a_kind) * kFields;
 					for (std::uint32_t f = 0; f < kFields; ++f)
 						totals[a_kind][f] += values[f];
-					// TEMPORARY (decal loss): recordings are reused, so the interval report rarely comes; each read of the decal pass.
-					if (a_kind == kDecals)
-						logger::info("[DCLF] DECAL-STATS slot {}: {} vertices, {} primitives, {} VS invocations, {} PS invocations", a_slot, values[0], values[1],
-							values[2], values[3]);
 					++samples[a_kind];
 					resource.Unmap(0, 0);
 				}
@@ -315,26 +311,6 @@ namespace DCLF::Draws
 				samples = {};
 			}
 			a_commands.ResetQueries(pool->GetHandle(), a_slot * kKinds + a_kind, 1);
-		}
-		static inline std::atomic<PassStats*> live{ nullptr };  // TEMPORARY (decal loss): for the report
-		// TEMPORARY (decal loss): every slot's last decal pass results, read whatever recording executed them.
-		void LogDecals()
-		{
-			const std::lock_guard lock(mutex);
-			std::string text;
-			for (std::size_t s = 0; s < readback.size(); ++s) {
-				if (!written[s][kDecals])
-					continue;
-				auto resource = readback[s]->GetAPIResource();
-				void* mapped = nullptr;
-				resource.Map(&mapped);
-				if (!mapped)
-					continue;
-				const auto* values = static_cast<const std::uint64_t*>(mapped) + std::size_t(kDecals) * kFields;
-				text += fmt::format(" [{}: {} {} {} {}]", s, values[0], values[1], values[2], values[3]);
-				resource.Unmap(0, 0);
-			}
-			logger::info("[DCLF] DECAL-LIVE{}", text);
 		}
 		void Begin(rhi::CommandList& a_commands, std::uint32_t a_slot, Kind a_kind) const
 		{
