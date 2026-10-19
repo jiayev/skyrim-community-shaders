@@ -7,6 +7,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Presets/UnifiedPresetCatalog.h"
+#include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
@@ -150,8 +151,13 @@ namespace PostProcessingMode
 			addSegment(Mode::Effects11, T("ui.post_processing_mode.effects11", "Effects 11"));
 
 		// Re-clicking the active mode must not undo a manual Linear Lighting opt-out.
-		if (Util::SegmentedControl("PostProcessingMode", labels.data(), count, selected) && modes[selected] != current)
+		if (Util::SegmentedControl("PostProcessingMode", labels.data(), count, selected) && modes[selected] != current) {
 			Set(modes[selected]);
+			// The segmented control does not flag an ImGui edit, so the overlay's check never sees this change.
+			globals::state->CheckCoreSettingsChanged();
+			// Set() may have turned Linear Lighting on, which the host page's own feature check does not cover.
+			globals::state->CheckFeatureSettingsChanged(&globals::features::linearLighting);
+		}
 
 		Util::AddTooltip(T("ui.post_processing_mode.tooltip",
 			"Only one pipeline runs at a time. Vanilla uses the game's original post processing."));
