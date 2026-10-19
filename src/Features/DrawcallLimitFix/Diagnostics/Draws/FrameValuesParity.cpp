@@ -70,4 +70,30 @@ namespace DCLF::Diagnostics
 			}
 		}
 	}
+
+	void CheckShadingSampled(const SceneTables& a_tables)
+	{
+		// Every resident slot's shading row is sampled once named (NameShading: a static object's accumulate patch, the only time it is),
+		// and every sampler sets written. A row still zero at two checks running was never sampled, and draws with alpha 0: a refused
+		// engine-read lease's item, before FrameValues handed those back, left every decal of a session drawing nothing. CS_DCLF_SET_PARITY,
+		// on the colour epoch, never waiting for the producer (a frame whose rows are not done is skipped): waiting keeps every lease.
+		const auto* shading = FrameValues::Get().ShadingIfDone(false);
+		if (!shading)
+			return;
+		auto& s = DrawsState::Get().frameValues;
+		auto& before = DrawsState::Get().shadingUnsampledBefore;
+		const std::size_t count = std::min(a_tables.objects.size(), a_tables.residentSlot.size());
+		before.resize(count, 0);
+		for (std::uint32_t slot = 0; slot < count; ++slot) {
+			const bool resident = a_tables.residentSlot[slot] && !(a_tables.objects[slot].flags & (kObjectNoBindings | kObjectFree));
+			const bool unsampled = resident && (slot >= shading->size() || (*shading)[slot].written == 0);
+			s.shadingChecks += resident ? 1 : 0;
+			if (unsampled && before[slot] && s.shadingUnsampled++ == 0) {
+				const auto* geometry = slot < a_tables.objectGeometry.size() ? a_tables.objectGeometry[slot] : nullptr;
+				s.shadingFirst = fmt::format("slot {} '{}' (flags {:08X})", slot, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?",
+					a_tables.objects[slot].flags);
+			}
+			before[slot] = unsampled ? 1 : 0;
+		}
+	}
 }

@@ -8,6 +8,11 @@ and report lines named here are described in [dclf-validation.md](./dclf-validat
 
 The fixes below are in the code. No recorded run has yet shown the check that confirms each one.
 
+-   **The indirect execution sets split by state class.** Every pipeline in a set now shares its initial pipeline's fixed-function
+    state and fragment interface (dclf-architecture.md, "One execution set per state class"), so core validation's
+    `VUID-vkUpdateIndirectExecutionSetPipelineEXT-None-11040`, `-11147`, `-11098` and `-11086` should be gone. **Check:** a run
+    with the validation layer (`validation-layer-through-mo2`) shows none of them, and `CS_DCLF_SET_PARITY=1`'s `set classes (CPU)`
+    and `set classes (GPU)` lines read `<- OK`, as they did at Fort Greymoor.
 -   **Stood-in animated references that never fade freeze.** `SyncRootOwnership` (`Core/Handoff/PrimaryCull.cpp`) clears
     kAccumulated (bit 26) on stood-in roots. The engine's animation gate (`FUN_1402cff60`, which `UpdateAnimationJob` and the
     managed-node update call on `ref->Get3D()`) then stops updating roots that never fade: windmill sails, water wheels, flags,
@@ -33,22 +38,6 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     `CS_DCLF_TEST_COMMANDS='600:dclf:pov=third;900:dclf:pov=first;1200:dclf:pov=third;1500:dclf:pov=first'` from a save in first
     person. The `player 3D against the claims (set parity)` line should read `<- OK`, and the screenshots should show no body in
     first person.
-
-## Vulkan validation errors in DCLF's indirect execution sets
-
-Core validation reports these at `coc RiverwoodSleepingGiantInn` with first person on, on every run:
-
--   `VUID-vkUpdateIndirectExecutionSetPipelineEXT-initialPipeline-11147`: the main indirect set mixes fragment output
-    interfaces. Pipelines that write locations 0-2 (forward) are added to a set whose initial pipeline writes 0-7 (deferred).
-
--   **Fixed-function state differs within a set.** `VK_EXT_device_generated_commands` lets an execution set's pipelines differ in
-    their shaders only ("no pipeline state may be changed"), and BasicRHI binds the set's pipeline 0 before every call. DCLF's main
-    and forward sets mix depth compares (EQUAL, LESS_EQUAL, ALWAYS), depth writes, blend states and culling. On NVIDIA these take
-    effect per pipeline in testing (a decal pipeline switched to ALWAYS drew so), which is driver latitude, not a guarantee. Decals
-    no longer carry rasterizer bias; they take a vertex-stage offset (dclf-architecture.md, "Decals and pass layers").
-
-**Next:** give forward pipelines their own execution set (or a compatible initial pipeline). Partition the sets by fixed-function
-state (one set and one call per state class) so every set's pipelines differ in shaders only.
 
 ## Open crashes
 
