@@ -322,6 +322,37 @@ namespace DCLF
 		ankerl::unordered_dense::map<const void*, Plan::Item> rootViewMovers;
 		std::vector<std::shared_ptr<const Plan>> unsampled;           // plans no producer has applied (and sampled the written slots of) yet
 		std::vector<ShadingItem> unsampledShading;        // not yet taken by a producer
+		/**
+		 * @brief Shading items a producer could not sample (its engine-read lease refused), handed back to the next Kick: a slot is named
+		 * once (a static object's accumulate patch; NameShading), so an item dropped here would leave its row unsampled for good (a
+		 * zero row: MaterialData.z 0, and a blended decal draws nothing). A lock-free stack the producers push and Kick takes whole.
+		 */
+		struct RefusedShading
+		{
+			std::vector<ShadingItem> items;
+			RefusedShading* next = nullptr;
+		};
+		std::atomic<RefusedShading*> refusedShading{ nullptr };
+		void PushRefusedShading(std::vector<ShadingItem> a_items)
+		{
+			auto* node = new RefusedShading{ std::move(a_items), refusedShading.load(std::memory_order_relaxed) };
+			while (!refusedShading.compare_exchange_weak(node->next, node, std::memory_order_release, std::memory_order_relaxed)) {
+			}
+		}
+		/** @brief Every refused item, oldest first (the stack holds the newest push on top). */
+		std::vector<ShadingItem> TakeRefusedShading()
+		{
+			std::vector<RefusedShading*> nodes;
+			for (auto* node = refusedShading.exchange(nullptr, std::memory_order_acquire); node; node = node->next)
+				nodes.push_back(node);
+			std::vector<ShadingItem> items;
+			for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+				items.insert(items.end(), std::make_move_iterator((*it)->items.begin()), std::make_move_iterator((*it)->items.end()));
+				delete *it;
+			}
+			return items;
+		}
+		~Impl() { (void)TakeRefusedShading(); }
 		std::vector<ShadingFieldValue> unsampledFieldValues;
 		std::deque<std::pair<std::uint64_t, std::shared_ptr<const Plan>>> plans;  // held per kicked producer's sequence
 		std::uint64_t seq = 0;                                          // the last kicked
@@ -439,6 +470,12 @@ namespace DCLF
 			std::vector<const Plan*> written;  // plans whose written slots it also samples (oldest first)
 			std::vector<ShadingItem> shadingItems;  // newest last
 			std::vector<ShadingFieldValue> fieldValues;  // in capture order
+			// The shading rows the producer leaves: the plan's slots, or past them to the newest slot an item or field value names. A slot
+			// binds (and is named, once: the accumulate patch's NameShading) before a placement plan covers it, and a dropped item is never
+			// named again; its row would stay zero (MaterialData.z 0: a blended decal draws nothing).
+			std::size_t shadingSlots = 0;
+			// The shadingItems indices the producer's lease refusals left unsampled (RefusedShading), handed back once it is done.
+			mutable std::vector<std::size_t> refusedShading;
 			std::shared_ptr<const FrameGlobals> globals;  // the frame's engine globals (the shading rows' contributions)
 			// Per part: the backing the frame's draws read (leased until the producer is done), and the journal's trim floor (the
 			// oldest content a backing in circulation held at Kick; nullopt: none holds any, the journal keeps nothing).
@@ -1163,7 +1200,7 @@ namespace DCLF
 			blockListed[block] = 0;
 		listedSlots.clear();
 		listedBlocks.clear();
-		SampleShadingRows(a_job, work.slots);
+		SampleShadingRows(a_job, a_job.shadingSlots);
 		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) { a_entry.sample(a_producer); });
 	}
 
@@ -1722,18 +1759,20 @@ namespace DCLF
 			shadingListed[item->slot] = 0;
 		constexpr std::size_t kGrain = 128;
 		std::vector<std::vector<std::uint32_t>> changed((items.size() + kGrain - 1) / kGrain);
+		std::vector<std::vector<std::size_t>> refusedItems(changed.size());
 		std::atomic<std::uint64_t> refusedHere{ 0 };
 		const auto fields = Extensions::ShadingFields();
 		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.Shading", items.size(), kGrain, [&](std::size_t a_begin, std::size_t a_end) {
 			ZoneScopedN("CS.DCLF.FrameValues.Shading");
 			FrameGlobals::Scope scope(a_job.globals);  // the features' globals (SampleShading: the shading contributions)
 			auto& mine = changed[a_begin / kGrain];
-			// One engine-read lease for the chunk: refused, each of its items is.
+			// One engine-read lease for the chunk: refused, each of its items is, and goes back to the next frame's producer.
 			EngineReadWindow::Lease lease;
 			for (std::size_t i = a_begin; i < a_end; ++i) {
 				const auto& item = *items[i];
 				if (!lease) {
 					++refusedHere;
+					refusedItems[a_begin / kGrain].push_back(static_cast<std::size_t>(items[i] - a_job.shadingItems.data()));
 					continue;
 				}
 				BindlessShading row = out[item.slot];
@@ -1767,6 +1806,8 @@ namespace DCLF
 			shading.Mark(slot);
 			++wetMarked;
 		}
+		for (const auto& chunk : refusedItems)
+			a_job.refusedShading.insert(a_job.refusedShading.end(), chunk.begin(), chunk.end());
 		shadingSampled += items.size();
 		shadingChanged += marked;
 		wetnessChanged += wetMarked;
@@ -1955,7 +1996,7 @@ namespace DCLF
 
 	void FrameValues::Impl::LeaseBackings(Job& a_job)
 	{
-		const std::array<std::uint64_t, kBuiltInPools> needed{ plan ? plan->slots : 0u, plan ? 2ull * plan->boneCapacity : 0u, plan ? plan->slots : 0u };
+		const std::array<std::uint64_t, kBuiltInPools> needed{ plan ? plan->slots : 0u, plan ? 2ull * plan->boneCapacity : 0u, a_job.shadingSlots };
 		for (std::size_t part = 0; part < kBuiltInPools; ++part)
 			LeasePool(pools[part], kPartNames[part], kStrides[part], needed[part], frameLeases[part], a_job.leases[part], a_job.oldestContentEpochs[part]);
 		for (std::size_t i = 0; i < a_job.registered.size(); ++i) {
@@ -2059,7 +2100,9 @@ namespace DCLF
 		// The registered pools' frame-start reads (Api::FrameValuePool::frameStart), whether or not the frame has a producer: Features/Fades'
 		// seeds' the last.
 		Impl::FrameStartRegistered(a_globals);
-		// Appended after any not yet taken (newest last).
+		// The refused items first (the oldest), then those not yet taken, then the frame's (newest last).
+		if (auto refused = s.TakeRefusedShading(); !refused.empty())
+			s.unsampledShading.insert(s.unsampledShading.begin(), std::make_move_iterator(refused.begin()), std::make_move_iterator(refused.end()));
 		s.unsampledShading.insert(s.unsampledShading.end(), std::make_move_iterator(a_shading.begin()), std::make_move_iterator(a_shading.end()));
 		s.unsampledFieldValues.insert(s.unsampledFieldValues.end(), a_fieldValues.begin(), a_fieldValues.end());
 		s.ApplyRootViewPlans(a_plans);
@@ -2102,6 +2145,13 @@ namespace DCLF
 		s.unsampled.clear();
 		job.shadingItems = std::exchange(s.unsampledShading, {});
 		job.fieldValues = std::exchange(s.unsampledFieldValues, {});
+		job.shadingSlots = job.plan->slots;
+		for (const auto& item : job.shadingItems)
+			if (item.slot != kNoObjectSlot)
+				job.shadingSlots = std::max<std::size_t>(job.shadingSlots, std::size_t(item.slot) + 1);
+		for (const auto& value : job.fieldValues)
+			if (value.slot != kNoObjectSlot)
+				job.shadingSlots = std::max<std::size_t>(job.shadingSlots, std::size_t(value.slot) + 1);
 		job.globals = a_globals;
 		// The registered pools' inputs for the frame's producer, and the rows each asks for.
 		s.KickRegistered(job, a_globals.get());
@@ -2132,13 +2182,22 @@ namespace DCLF
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu,
 				"frame values", [&s, job = std::move(job)](const auto&) mutable {
 					s.Run(job);
+					// The items a lease refusal left unsampled, to the next producer (their engine references with them).
+					if (!job.refusedShading.empty()) {
+						std::vector<ShadingItem> refused;
+						refused.reserve(job.refusedShading.size());
+						for (const auto i : job.refusedShading)
+							refused.push_back(std::move(job.shadingItems[i]));
+						s.PushRefusedShading(std::move(refused));
+					}
 					// The producer's leases go; the frame's (frameLeases) keep the backings until EndFrame binds them.
 					job.leases = {};
 					for (auto& part : job.registered)
 						part.lease = org::services::BackingLease{};
 					// Engine references go to the render thread (EngineReleases, at Present), never dropped on this worker.
 					for (auto& item : job.shadingItems)
-						EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.property)));
+						if (item.property)  // a refused item's went back with it
+							EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.property)));
 				}))
 			stl::report_and_fail("Drawcall Limit Fix: the frame values' producer was refused by DCLF's executor");
 		return true;
