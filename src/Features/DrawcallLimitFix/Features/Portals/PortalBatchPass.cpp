@@ -46,7 +46,9 @@ namespace DCLF::Features::Portals
 				bindings.queries = a_builder.ShaderResource(*b.queries).View();
 				bindings.results = a_builder.UnorderedAccess(*b.results).View();
 				// The programs are the frame's publication, named by the depth latch: an immutable pooled backing no pass declares.
-				if (evaluate) {
+				if (evaluate && b.inlineEvaluation) {
+					// One Inline dispatch: the queries and the results alone.
+				} else if (evaluate) {
 					bindings.dispatch = a_builder.ShaderResource(b.dispatch).View();
 					bindings.indices = a_builder.ShaderResource(*b.indices).View();
 					bindings.tasks = a_builder.ShaderResource(*b.tasks).View();
@@ -95,7 +97,7 @@ namespace DCLF::Features::Portals
 				c.dispatch = index(a_bindings.dispatch);
 				c.queryCount = static_cast<std::uint32_t>(Draws::NamedUnitsOf(a_preparation, b.queries));
 				c.bucketCount = static_cast<std::uint32_t>(std::min(Draws::NamedUnitsOf(a_preparation, b.counts), Draws::NamedUnitsOf(a_preparation, b.offsets)) / 2);
-				if (evaluate)
+				if (evaluate && !b.inlineEvaluation)
 					prepared.indirect = a_preparation.CaptureResource(a_bindings.indirect);
 				return prepared;
 			}
@@ -114,6 +116,14 @@ namespace DCLF::Features::Portals
 					commands.BindPipeline(program.pipeline->GetHandle());
 					commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const std::uint32_t*>(&c));
 				};
+				if (a_prepared.evaluate && batch.inlineEvaluation) {
+					const auto shape = DCLF::Portals::DispatchFor(c.queryCount, 64u);
+					if (!shape.x)
+						return;
+					bind(8);
+					commands.Dispatch(shape.x, shape.y, 1);
+					return;
+				}
 				if (a_prepared.evaluate) {
 					bind(7);
 					commands.ExecuteIndirect(batch.signature->GetHandle(), a_recording.Resolve(a_prepared.indirect).GetHandle(), 0, {}, 0, 1);
@@ -161,7 +171,7 @@ namespace DCLF::Features::Portals
 	std::shared_ptr<org::RenderPass> MakeBatchPass(std::shared_ptr<Draws::Resources> a_resources, std::shared_ptr<const Batch> a_batch,
 		RenderGraphRuntime::Segment a_segment, bool a_evaluate)
 	{
-		if (!a_batch)
+		if (!a_batch || (!a_evaluate && a_batch->inlineEvaluation))
 			return nullptr;
 		return std::make_shared<BatchPass>(std::move(a_resources), std::move(a_batch), a_segment, a_evaluate);
 	}

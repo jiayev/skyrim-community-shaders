@@ -19,6 +19,10 @@ namespace DCLF::Features::Fades
 
 	void RegisterPortalBatchPasses(Api::InstallContext& a_context)
 	{
+		Portals::RegisterBatchCapture("fades", [](const Draws::SceneBuffers& a_scene) -> const Portals::Batch* {
+			const auto scene = SharedSceneOf(a_scene);
+			return scene ? scene->portalBatch.get() : nullptr;
+		});
 		a_context.RegisterPass({ .key = "fades.portal-batch", .passName = "cs.dclf.z.fade-portal-batch", .queue = Api::PassQueue::Compute, .make = &Make<false>, .setup = &Setup });
 		a_context.RegisterPass({ .key = "fades.portal-evaluate", .passName = "cs.dclf.z.fade-portal-evaluate", .queue = Api::PassQueue::Compute, .make = &Make<true>, .setup = &Setup });
 	}

@@ -12,6 +12,7 @@
 
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalContext.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalProgramModel.h"
 
 namespace RE
 {
@@ -36,31 +37,10 @@ namespace DCLF
 	class PortalViews
 	{
 	public:
-		/** @brief NiFrustumPlanes' layout: six planes {n, d} (dot(n, p) - d >= 0 inside), active mask, base mask. */
-		struct PlaneSet
-		{
-			std::array<std::array<float, 4>, 6> plane{};
-			std::uint32_t mask = 0;
-			std::uint32_t base = 0x3F;
-			std::uint32_t extra[2]{};
-		};
-		static_assert(sizeof(PlaneSet) == 0x70);
-
-		/** @brief A BSCompoundFrustum operator record: token (4 AND, 5 OR, 6 close, 7/8 a test whose next record is its set), branches. */
-		struct Op
-		{
-			std::uint32_t word = 0, yes = 0, no = 0;
-		};
-
-		/** @brief A compound frustum: the token stream (Finalize makes it a branch program) and its plane sets. */
-		struct Program
-		{
-			std::vector<Op> ops;         // freeOp tokens, then (finalized) root, ACCEPT and REJECT
-			std::vector<PlaneSet> sets;  // freePlane in use
-			std::uint32_t freeOp = 0, freePlane = 0, firstOp = 0;
-			bool skipView = false, finalized = false;
-			std::array<float, 3> eye{};  // the camera's position (Reset)
-		};
+		// The compound frustum's model (Portals/PortalProgramModel.h, engine-independent).
+		using PlaneSet = PortalModel::PlaneSet;
+		using Op = PortalModel::Op;
+		using Program = PortalModel::Program;
 
 		struct Frame
 		{
@@ -264,12 +244,12 @@ namespace DCLF
 		std::uint32_t AddRoom(const void* a_room);
 
 		void Reset(Program& a_program) const;
-		static void Emit(Program& a_program, std::uint32_t a_word);
-		static void EmitTest(Program& a_program, std::uint32_t a_type, std::uint32_t a_set);
-		static void Finalize(Program& a_program);
-		static void ReopenAsOr(Program& a_program);
-		static void CompactEmptyGroups(Program& a_program);
-		static void Merge(Program& a_destination, const Program& a_source);
+		static void Emit(Program& a_program, std::uint32_t a_word) { PortalModel::Emit(a_program, a_word); }
+		static void EmitTest(Program& a_program, std::uint32_t a_type, std::uint32_t a_set) { PortalModel::EmitTest(a_program, a_type, a_set); }
+		static void Finalize(Program& a_program) { PortalModel::Finalize(a_program); }
+		static void ReopenAsOr(Program& a_program) { PortalModel::ReopenAsOr(a_program); }
+		static void CompactEmptyGroups(Program& a_program) { PortalModel::CompactEmptyGroups(a_program); }
+		static void Merge(Program& a_destination, const Program& a_source) { PortalModel::Merge(a_destination, a_source); }
 		void CopyMasked(Program& a_out, const Program& a_parent, const void* a_portal);
 		void AddPortal(Program& a_program, const void* a_portal);
 		void AddOccluderTop(Program& a_program, const void* a_occluder, bool& a_needOpen);
@@ -279,7 +259,7 @@ namespace DCLF
 
 		// The shapes' tests.
 		static Quad Corners(const void* a_quad);
-		static PlaneSet& Grow(Program& a_program, std::uint32_t a_index);
+		static PlaneSet& Grow(Program& a_program, std::uint32_t a_index) { return PortalModel::Grow(a_program, a_index); }
 		PlaneSet PortalPlanes(const void* a_quad, const Vec3& a_eye);
 		bool TestQuadProgram(const Program& a_program, const void* a_quad);
 		bool TestShapeProgram(const Program& a_program, const void* a_shape) const;

@@ -217,6 +217,10 @@ checked against serial prefix sums across partial blocks and up to 1,000,003 buc
 and address-range overflow. Atlas tests also reject mixed frames, zero publication identities, truncated program data,
 and inconsistent ranges.
 
+`DclfPortalProgramModelTests` emits random AND/OR trees of portal and occluder tests through the program model's builders (with
+`ReopenAsOr`/`Merge` reached-again rooms and `CopyMasked` children), finalizes, encodes and evaluates them by `Visible` against the trees
+evaluated directly (200,000 queries), and checks the node rules (zero radius, always-draw, preprocessed, cull modes, unreached rooms).
+
 `DclfParabolicCullingTests` compares 100,000 sphere inputs against an independent native-helper transcription and exhaustively checks
 2,560 mode/flag/compound/mask combinations against native Process1 control flow. Boundaries include sphere tangency, zero radius, NaNs,
 one versus two accumulators, preprocessing versus always-draw, and ordered hemisphere-state writes, including writes of zero. The hierarchical maximum-prefix model is compared with serial state propagation across partial blocks and multiple levels up to 1,000,003 events, including skipped visits, rejected writers, initial masks, and invalid upstream state.
@@ -227,7 +231,7 @@ cmake --build build/dclf-cpu-tests --config Release
 ctest --test-dir build/dclf-cpu-tests -C Release --output-on-failure
 ```
 
-Compile all eight `PortalBatchCS.hlsl` entry points, `FadeStateCS.hlsl`'s `PreparePortalQueries` and `main`, and `BuildDrawsCS.hlsl`'s `ClearPortalQueries`, `PreparePortalQueries`, and `main`
+Compile all nine `PortalBatchCS.hlsl` entry points (with `Inline`), `FadeStateCS.hlsl`'s `PreparePortalQueries` and `main`, and `BuildDrawsCS.hlsl`'s `ClearPortalQueries`, `PreparePortalQueries`, and `main`
 with the runtime DXC SPIR-V configuration. Also compile `ParabolicQueriesCS.hlsl` with independent and uniform traversal, and all four `ParabolicStateCS` entry points. Compile `Evaluate` with all four combinations of standalone/atlas addressing and independent/uniform traversal. Compile `Count` with both standalone and atlas addressing.
 
 `python tools/validate-dclf-portal-shaders.py --dxc <path-to-runtime-dxc.exe>` performs these checks, reading descriptor bindings from
@@ -253,8 +257,65 @@ After the programs publication migration, the fail-open lowering, the unbatched 
 publication, `BuildDevFast.bat` and all four CPU tests passed, and the twenty-three combinations compiled and passed Vulkan 1.3
 `spirv-val` (Vulkan SDK 1.4.357 DXC, against the source shader tree). That build was not deployed or run.
 
-Neither SE nor AE runtime verification has been performed for this migration; the AE static audit is not runtime validation.
-No Skyrim runtime parity, GPU batch execution/readback comparison, vendor ISA inspection, or NVIDIA/AMD/Intel performance measurements
-have been completed. No measured speedup or shipping-backend selection is claimed. Compare original inline interpretation, grouped
-traversal, and uniform scan on identical captures, including preprocessing, scan and barrier costs. Require exact verdict parity,
-improved portal-heavy frame time, and no more than 5% median trivial-scene regression before accepting the optimization.
+## Portal culling bench
+
+`tests/DclfPortalBench` runs the portal evaluation outside the game: the production `PortalBatchCS` entry points, compiled at build
+time with the plugin's DXC flags, on a BasicRHI Vulkan device of its own, over **corpora** (`Portals/PortalCorpus.h`, `.dclfportal`:
+one frame's encoding and the queries a batch evaluated against it). Every variant's verdicts are read back and compared bit for bit
+with the CPU oracle, `PortalModel::Visible` (`Portals/PortalProgramModel.h`, the engine-independent half of `PortalViews`: the token
+builders, `Finalize`, the encoding and `PortalTestAt` on the CPU); a mismatch fails the run. Each corpus runs 20 warm-up and 200 timed
+repetitions, a timestamp pair and full barriers around each.
+
+```powershell
+cmake -S tests/DclfPortalBench -B build/dclf-portal-bench -DCMAKE_PREFIX_PATH=<build/ALL/vcpkg_installed/x64-windows-static-md-release>
+cmake --build build/dclf-portal-bench --config Release
+build/dclf-portal-bench/Release/DclfPortalBench.exe --synthetic --corpus <captures> --csv bench.csv [--programs-only] [--variants V1,V3]
+```
+
+-   **Real corpora:** `CS_DCLF_PORTAL_CAPTURE=<directory>` (every `CS_DCLF_PORTAL_CAPTURE_EVERY` depth epochs, default 300) writes the
+    fade-root and member batches' queries as the GPU prepared them, with the frame's encoding (`Portals/Diagnostics/PortalCapture.cpp`;
+    batches register with `RegisterBatchCapture`).
+-   **Synthetic corpora** (`Synthetic.h`): grid rooms with doors, doors to unbound space, occluder boxes and start-room occlusion
+    planes, walked by a port of `PortalViews`' walk through the model's builders (so the encodings are real; the portal-quad tests are
+    approximated by the quad's sphere). Families: corridor, hub, grid, occluders, deep (the 26-operator cap), exterior, open (wall-wide
+    openings: up to 35 programs, 459 sets, 44-step paths) and large (10x10 rooms, 60,000 queries). `--programs-only` keeps only the
+    queries that reach a program's records, repeated to 64k: the evaluators' own cost.
+-   **Variants:** V0 floor (queries read, verdicts written, nothing evaluated); V1 the batch (count, scan, scatter, tasks, indirect
+    evaluate); V2 the batch with the uniform scan; V3 inline (one thread per query, the short-circuit interpreter: `PortalBatchCS`'s
+    `Inline`); V3u inline uniform scan; V4 the hand-written baseline, each program's accepting paths flattened on the CPU into terms of
+    literals (exact: in a decision program exactly one path is taken); B1/B1b plane bits, inline and batched (each program's distinct
+    active planes once into two bit masks, then the records on bits). V4 and B1 are `PortalEvaluators.hlsli`, under
+    `DCLF_PORTAL_EXPERIMENTAL` only, with auxiliary tables the bench builds (`AuxTables.h`).
+
+**Results** (AE route Fort Greymoor, Bleak Falls Barrow, Dragonsreach, the Bannered Mare: 36 captures; RTX 3090 Ti, compute queue;
+median microseconds; every variant exact on every corpus):
+
+| Corpus | Queries (program) | V0 | V1 | V2 | V3 | V3u | V4 | B1 | B1b |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Captures, no program with records (24) | 4k-16k (0) | 3.6-4.1 | 28.4-30.0 | 28.5-30.2 | 4.9-5.2 | 4.9-5.1 | 4.9-5.1 | 4.9-5.1 | 28.6-30.0 |
+| Dragonsreach members (3 programs, 5 sets) | 16,384 (736) | 3.8 | 29.8 | 29.8 | 6.4 | 6.5 | 7.8 | 7.8 | 33.1 |
+| Synthetic occluders-1 | 10,800 (1,889) | 3.7 | 32.1 | 32.7 | 8.6 | 9.1 | 20.0 | 12.8 | 36.8 |
+| Synthetic open-2 (35 programs, 459 sets) | 10,800 (7,818) | 3.7 | 35.6 | 44.8 | 12.5 | 21.1 | 31.2 | 14.6 | 37.3 |
+| Synthetic large-1 | 60,000 (7,804) | 4.4 | 37.7 | 36.6 | 9.2 | 10.1 | 16.9 | 13.6 | 42.3 |
+| open-2, programs only | 66,339 | 4.4 | 48.0 | 61.0 | 15.6 | 30.5 | 49.3 | 22.7 | 52.4 |
+| hub-1, programs only (1 program) | 65,790 | 4.5 | 63.4 | 61.7 | 6.9 | 7.3 | 7.6 | 7.9 | 64.5 |
+
+-   **The batch costs ~25 us a batch over inline evaluation, on every corpus**, and never pays it back: its count, scan, scatter and
+    task dispatches, each behind a full barrier. It is worst with few programs: `Count`'s `InterlockedAdd` on one bucket counter
+    serialises (hub, one-program corpora: ~64 us). Two batches run a frame (fade roots, members): about 47 us of GPU time a frame on the
+    route.
+-   **The short-circuit interpreter beats the flatter evaluators.** The uniform scan and plane bits test every set (plane bits halve
+    the planes of the open graphs, 828 distinct of 1,787 active, but computing them all costs more than the short-circuit walk), and
+    the hand-written flattened paths repeat the prefixes the decision program shares (2-3x the interpreter on large programs).
+-   **Real programs are small**: at most 3 programs with records, 5 sets and a 4-step path on the route, and most queries are immediate
+    (frustum-rejected by `PreparePortalQueries`: members 37-99.7%, median 97%; fade roots 46-93%, median 70%). Evaluation is 1-3 us above the 3.6-4 us dispatch floor.
+
+**Decisions.** The batches evaluate inline: one `Inline` dispatch over the queries in the evaluate pass, no count/scan/scatter pass
+(`CS_DCLF_PORTAL_EVALUATOR`, default `inline`; `batched` restores the batch). In game, inline with `CS_DCLF_SET_PARITY=1` and
+`CS_DCLF_FADE_PARITY=1` over the route: 12 of 12 set parity windows OK (0 records disagreeing with the set) and 12 of 12 fade parity
+windows OK (0 differ). The flattened and plane-bit evaluators stay bench-only. Not pursued: a strict-light gate prepass, a CPU collapse
+of strict verdicts and three-state cluster culling: each adds at least a dispatch and a barrier (3-4 us alone) to save evaluation that
+costs 1-3 us a frame in total.
+
+ORG's pass timestamps read back nothing in this build (`0 epochs read back`, newest sample serial 0), so no in-game GPU timing was taken;
+the bench's timings are the measurement. Not measured: SE, AMD and Intel GPUs, and overlap with the graphics queue in game.

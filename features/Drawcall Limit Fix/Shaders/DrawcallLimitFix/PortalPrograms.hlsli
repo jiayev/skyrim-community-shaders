@@ -88,6 +88,17 @@ bool PortalProgramRun(ByteAddressBuffer a_programs, uint4 a_entry, uint4 a_entry
 #endif
 }
 
+// The program's evaluation for PortalTestAt: the interpreter, or (DCLF_PORTAL_EXPERIMENTAL: the portal bench's variants,
+// tests/DclfPortalBench) an evaluator of PortalEvaluators.hlsli over the same words and its auxiliary tables.
+#ifdef DCLF_PORTAL_EXPERIMENTAL
+#	include "DrawcallLimitFix/PortalEvaluators.hlsli"
+#else
+bool PortalProgramEvaluate(ByteAddressBuffer a_programs, uint a_base, uint a_program, uint4 a_entry, uint4 a_entry2, uint a_recordsBase, uint a_setsBase, float3 a_centre, float a_radius)
+{
+	return PortalProgramRun(a_programs, a_entry, a_entry2, a_recordsBase, a_setsBase, a_centre, a_radius);
+}
+#endif
+
 // 1 in view, 0 culled, -1 no program (the caller's frustum test). a_alwaysDraw, a_preprocessed, a_preprocessHidden: the node's
 // flags 11, 12 and 20.
 int PortalTestAt(ByteAddressBuffer a_programs, uint a_base, uint a_program, float3 a_centre, float a_radius, bool a_alwaysDraw, bool a_preprocessed, bool a_preprocessHidden)
@@ -117,7 +128,7 @@ int PortalTestAt(ByteAddressBuffer a_programs, uint a_base, uint a_program, floa
 		return 0;
 	const uint recordsBase = a_base + kPortalHeaderBytes + count * kPortalDirectoryBytes;
 	const uint setsBase = recordsBase + a_programs.Load(a_base + kPortalSetBytes + 4u) * kPortalOpBytes;
-	return PortalProgramRun(a_programs, entry, entry2, recordsBase, setsBase, a_centre, a_radius) ? 1 : 0;
+	return PortalProgramEvaluate(a_programs, a_base, a_program, entry, entry2, recordsBase, setsBase, a_centre, a_radius) ? 1 : 0;
 }
 
 // The standalone main-camera buffer is the same encoding at byte offset zero.
