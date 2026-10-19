@@ -16,10 +16,12 @@ namespace HorizonFix
 
 #if defined(UNDERWATERMASK)
 
+#	if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
 };
+#	endif
 
 struct VS_OUTPUT
 {
@@ -70,25 +72,27 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	include "Common/SharedData.hlsli"
 
+#	if defined(VSHADER)
 struct VS_INPUT
 {
-#	if defined(SPECULAR) || defined(UNDERWATER) || defined(STENCIL) || defined(SIMPLE)
+#		if defined(SPECULAR) || defined(UNDERWATER) || defined(STENCIL) || defined(SIMPLE)
 	float4 Position: POSITION0;
-#		if defined(NORMAL_TEXCOORD)
+#			if defined(NORMAL_TEXCOORD)
 	float2 TexCoord0: TEXCOORD0;
-#		endif
-#		if defined(VC)
+#			endif
+#			if defined(VC)
 	float4 Color: COLOR0;
+#			endif
 #		endif
-#	endif
 
-#	if defined(LOD)
+#		if defined(LOD)
 	float4 Position: POSITION0;
-#		if defined(VC)
+#			if defined(VC)
 	float4 Color: COLOR0;
+#			endif
 #		endif
-#	endif
 };
+#	endif
 
 struct VS_OUTPUT
 {

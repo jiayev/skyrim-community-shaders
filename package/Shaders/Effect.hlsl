@@ -20,31 +20,33 @@
 #	undef IBL
 #endif
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
-#if defined(TEXCOORD)
-#	if defined(STRIP_PARTICLES)
+#	if defined(TEXCOORD)
+#		if defined(STRIP_PARTICLES)
 	float3
-#	else
+#		else
 	float2
-#	endif
+#		endif
 		TexCoord0: TEXCOORD0;
-#endif
-#if defined(NORMALS) || defined(MOTIONVECTORS_NORMALS)
+#	endif
+#	if defined(NORMALS) || defined(MOTIONVECTORS_NORMALS)
 	float4 Normal: NORMAL0;
-#endif
-#if defined(BINORMAL_TANGENT)
+#	endif
+#	if defined(BINORMAL_TANGENT)
 	float4 Bitangent: BINORMAL0;
-#endif
-#if defined(VC)
+#	endif
+#	if defined(VC)
 	float4 Color: COLOR0;
-#endif
-#if defined(SKINNED)
+#	endif
+#	if defined(SKINNED)
 	float4 BoneWeights: BLENDWEIGHT0;
 	float4 BoneIndices: BLENDINDICES0;
-#endif
+#	endif
 };
+#endif
 
 struct VS_OUTPUT
 {

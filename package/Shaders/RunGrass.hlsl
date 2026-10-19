@@ -18,6 +18,7 @@
 #	undef IBL
 #endif
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
@@ -29,6 +30,7 @@ struct VS_INPUT
 	float4 InstanceData3: TEXCOORD6;
 	float4 InstanceData4: TEXCOORD7;
 };
+#endif
 
 // Both draw paths share the engine vertex layout and interpolate only the outputs needed by this pass.
 struct VS_OUTPUT
