@@ -17,6 +17,8 @@
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
+#include "Features/DrawcallLimitFix/Features/Portals/StrictGates.h"
 
 #include <array>
 #include <atomic>
@@ -25,6 +27,7 @@
 #include <Tracy/Tracy.hpp>
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/Diagnostics/LocalLightCullView.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Local/Diagnostics/StrictLightParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 
@@ -139,6 +142,10 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			float predictedCentre[3]{};
 			float predictedRadius = 0.0f;
 			bool predicted = false;
+			// The light, and whether it is portal-strict: its bits pass its strict gates too (Portals/StrictGates.h), from the selection's
+			// context of it (made after its Accumulate, before any main registration).
+			const RE::BSShadowLight* light = nullptr;
+			bool strict = false;
 		};
 		std::array<FrameLight, kMaxLights> frameLights;
 		std::atomic<std::uint32_t> frameLightNext{ 0 };      // the next light's ordinal (from the selection)
@@ -149,6 +156,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 
 		// ---- The empty culls (LocalLightCull.h): a light whose every paraboloid view DCLF draws is not culled at all.
 		constexpr std::size_t kLightPortalStrict = 0x47;    // BSLight::portalStrict: its cull tests the portals' compound frustum
+		bool strictCulls = true;                            // CS_DCLF_STRICT_LIGHT_CULLS: portal-strict lights take the empty culls too
 		std::atomic<bool> frameCullsEmpty{ false };         // the selection's: the exclusion live and not a parity frame
 		std::atomic<std::uint32_t> emptyLights{ 0 };        // the ordinals of the frame's lights culled empty
 		FrameAddressSet mainSeen;                           // the geometries whose first clearing main registration this frame was seen
@@ -156,6 +164,9 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		{
 			std::atomic<std::uint64_t> lights{ 0 }, notCovered{ 0 }, portalStrict{ 0 }, given{ 0 }, withBits{ 0 }, unstamped{ 0 };
 			std::atomic<std::uint64_t> spheresChecked{ 0 }, spheresDiffer{ 0 };
+			// Portal-strict lights culled empty; their sphere bits tested against their gates, and refused by them; tested without a portal
+			// graph (no rooms: nothing to gate, by design); tested without a context otherwise (not selected, or not walked: given, ungated).
+			std::atomic<std::uint64_t> strictLights{ 0 }, strictTested{ 0 }, strictRefused{ 0 }, strictNoGraph{ 0 }, strictNoContext{ 0 };
 		};
 		EmptyStats emptyStats;
 
@@ -176,8 +187,10 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			frameLightNext.store(0, std::memory_order_relaxed);
 			frameLightBits.store(0, std::memory_order_relaxed);
 			emptyLights.store(0, std::memory_order_relaxed);
-			for (auto& light : frameLights)
-				light.captured = light.predicted = false;
+			for (auto& light : frameLights) {
+				light.captured = light.predicted = light.strict = false;
+				light.light = nullptr;
+			}
 			// No registration reads it now: the last frame's main registrations ended at its Main::Draw.
 			mainSeen.NewRound();
 			if (lightStamp.fetch_add(1, std::memory_order_relaxed) + 1 == 0)
@@ -228,6 +241,36 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			const float dy = a_bound.center.y - a_light.centre[1];
 			const float dz = a_bound.center.z - a_light.centre[2];
 			return (std::sqrt(dx * dx + dy * dy + dz * dz) - a_bound.radius) - a_light.radius < 0.0f;
+		}
+
+		/**
+		 * @brief A portal-strict light's gates for a geometry in its sphere (Portals/StrictGates.h): its chain's verdict in the light's context and
+		 * its bound in the room frustum. Without a portal graph there is nothing to gate; without a context otherwise (not selected, or not
+		 * walked this frame) the bit stands, counted apart. Any thread: the selection's frame is not written between its Select and the next
+		 * frame's.
+		 */
+		bool StrictAdmits(const FrameLight& a_light, const RE::BSGeometry& a_geometry)
+		{
+			if (!a_light.strict)
+				return true;
+			emptyStats.strictTested.fetch_add(1, std::memory_order_relaxed);
+			Portals::ContextHold context;
+			std::uint32_t walk = PortalViews::kLightUntouched;
+			if (const auto* selection = LightSelection::Get().Current(Scene::FrameView::Get().GetFrame()))
+				if (const auto* entry = selection->LightOf(a_light.light)) {
+					context = entry->portalContext;
+					walk = entry->portalWalk;
+				}
+			if (!context) {
+				(walk == PortalViews::kLightNoGraph ? emptyStats.strictNoGraph : emptyStats.strictNoContext).fetch_add(1, std::memory_order_relaxed);
+				return true;
+			}
+			thread_local Portals::GateChain chain;
+			Portals::ChainOf(&a_geometry, chain);
+			const float centre[3]{ a_geometry.worldBound.center.x, a_geometry.worldBound.center.y, a_geometry.worldBound.center.z };
+			const bool admitted = Portals::Admit(*context, chain, centre, a_geometry.worldBound.radius);
+			emptyStats.strictRefused.fetch_add(admitted ? 0 : 1, std::memory_order_relaxed);
+			return admitted;
 		}
 
 		bool Hidden(const RE::NiAVObject* a_object) { return Engine::IsHidden(a_object); }
@@ -443,7 +486,8 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			std::uint32_t bits = 0;
 			for (std::uint32_t lights = a_reach[kReachAll] | a_reach[kReachTested] | a_reach[kReachPortal]; lights; lights &= lights - 1) {
 				const auto light = static_cast<std::uint32_t>(std::countr_zero(lights));
-				if (((a_reach[kReachAll] >> light) & 1) || InSphere(frameLights[light], a_geometry.worldBound))
+				// A portal-strict light reached the entry through its gates: the geometry's own bound still meets its room frustum.
+				if (((a_reach[kReachAll] >> light) & 1) || (InSphere(frameLights[light], a_geometry.worldBound) && StrictAdmits(frameLights[light], a_geometry)))
 					bits |= frameLights[light].bit;
 			}
 			return bits;
@@ -467,9 +511,13 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			return false;
 		}
 
-		/** @brief The bits a_lights (ordinals) give a geometry of a_bound: each light's whose predicted sphere it is in. */
-		std::uint32_t SphereBits(std::uint32_t a_lights, const RE::NiBound& a_bound)
+		/**
+		 * @brief The bits a_lights (ordinals) give a_geometry: each light's whose predicted sphere its bound is in, a portal-strict light's
+		 * through its gates too.
+		 */
+		std::uint32_t SphereBits(std::uint32_t a_lights, const RE::BSGeometry& a_geometry)
 		{
+			const auto& bound = a_geometry.worldBound;
 			std::uint32_t bits = 0;
 			for (; a_lights; a_lights &= a_lights - 1) {
 				const auto& light = frameLights[std::countr_zero(a_lights)];
@@ -478,7 +526,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				FrameLight sphere;
 				std::memcpy(sphere.centre, light.predictedCentre, sizeof(sphere.centre));
 				sphere.radius = light.predictedRadius;
-				if (InSphere(sphere, a_bound))
+				if (InSphere(sphere, bound) && StrictAdmits(light, a_geometry))
 					bits |= light.bit;
 			}
 			return bits;
@@ -532,10 +580,15 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				emptyStats.notCovered.fetch_add(1, std::memory_order_relaxed);
 				return false;
 			}
-			// Its cull tests the portals' compound frustum too, which the bits' sphere test does not: culled as before.
+			// Portal-strict: its cull's rooms, shared nodes and room frusta are DCLF's strict gates (Portals/StrictGates.h), on its views'
+			// casters (BuildDrawsLatch::strictContext), DCLF's receivers (GpuShadowVolume::portalContext) and the engine's receivers' bits
+			// (StrictAdmits). With CS_DCLF_STRICT_LIGHT_CULLS=0 culled as before.
 			if (Engine::At<bool>(&a_light, kLightPortalStrict)) {
-				emptyStats.portalStrict.fetch_add(1, std::memory_order_relaxed);
-				return false;
+				if (!strictCulls) {
+					emptyStats.portalStrict.fetch_add(1, std::memory_order_relaxed);
+					return false;
+				}
+				emptyStats.strictLights.fetch_add(1, std::memory_order_relaxed);
 			}
 			const std::uint32_t count = *a_count;
 			Engine::At<std::uint32_t>(accumulator, kAccumulatorLightIndex) = count + 1;
@@ -567,8 +620,11 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 					}
 				}
 				auto& light = *static_cast<RE::BSShadowLight*>(a_light);
-				if (ordinal != kNoLight)
+				if (ordinal != kNoLight) {
 					Predict(light, frameLights[ordinal]);
+					frameLights[ordinal].light = &light;
+					frameLights[ordinal].strict = Engine::At<bool>(&light, kLightPortalStrict);
+				}
 				const bool empty = ordinal != kNoLight && !a_arg3 && frameCullsEmpty.load(std::memory_order_relaxed) && CullEmpty(light, ordinal, a_count);
 				if (!empty) {
 					const Filter* filter = nullptr;
@@ -579,7 +635,13 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 					}
 					currentLight = ordinal;
 					lightFilter = filter;
+					// CS_DCLF_STRICT_LIGHT_PARITY: a portal-strict light's cull traced where nothing is skipped or filtered.
+					const auto frame = Scene::FrameView::Get().GetFrame();
+					const bool whole = !filter && (!frameExclusion.load(std::memory_order_acquire) || cullsWhole.load(std::memory_order_relaxed));
+					const bool traced = StrictLightParity::Begin(light, whole, frame);
 					func(a_light, a_count, a_arg2, a_arg3);
+					if (traced)
+						StrictLightParity::End(light, a_arg3, frame);
 					lightFilter = nullptr;
 					currentLight = kNoLight;
 				}
@@ -672,10 +734,14 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 
 	bool Installed() { return installed; }
 
+	void SetStrictCulls(bool a_on) { strictCulls = a_on; }
+
 	void SelectFrame(std::uint32_t a_frame, std::shared_ptr<SunExclusion> a_pending)
 	{
 		if (!installed)
 			return;
+		// The switches are read after the sources' hooks: the parity's trace goes in at the first frame, before any light's cull.
+		StrictLightParity::Install();
 		ResetFrameLights();
 		++stats.frames;
 		// The culls of the frame read this one; the previous frame's culls are over (they ran before its shadow epoch).
@@ -757,7 +823,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				emptyStats.unstamped.fetch_add(1, std::memory_order_relaxed);
 			first = found != FrameAddressSet::Found::kYes;
 			if (first)
-				sphereBits = SphereBits(empty ? empty : PredictedLights(), a_geometry->worldBound);
+				sphereBits = SphereBits(empty ? empty : PredictedLights(), *a_geometry);
 			if (first && empty) {
 				Engine::At<std::uint32_t>(lightData, Engine::kLightDataActiveMask) |= sphereBits;
 				emptyStats.given.fetch_add(1, std::memory_order_relaxed);
@@ -826,6 +892,8 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		c.emptyLights = e.lights.exchange(0), c.emptyNotCovered = e.notCovered.exchange(0), c.emptyPortalStrict = e.portalStrict.exchange(0);
 		c.emptyGiven = e.given.exchange(0), c.emptyWithBits = e.withBits.exchange(0), c.emptyUnstamped = e.unstamped.exchange(0);
 		c.spheresChecked = e.spheresChecked.exchange(0), c.spheresDiffer = e.spheresDiffer.exchange(0);
+		c.strictLights = e.strictLights.exchange(0), c.strictTested = e.strictTested.exchange(0), c.strictRefused = e.strictRefused.exchange(0);
+		c.strictNoGraph = e.strictNoGraph.exchange(0), c.strictNoContext = e.strictNoContext.exchange(0);
 		return c;
 	}
 }

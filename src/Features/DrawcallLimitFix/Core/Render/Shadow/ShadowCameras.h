@@ -47,6 +47,9 @@ namespace DCLF::ShadowCameras
 		Planes frustum;               // the camera's, as a culling process through it has them
 		Planes caster;                // UpdateCamera's caster volume (the culling process's customCullPlanes); mask 0: none
 		Planes cull;                  // what the camera's cull tests (Process2): the caster volume when there is one, else the frustum
+		// A portal-strict point light's view: its light's entry in the frame's light context atlas + 1 (BuildDrawsLatch::strictContext), whose
+		// strict gates its casters must pass. 0: not gated.
+		std::uint32_t portalContext = 0;
 		bool valid = false;
 	};
 

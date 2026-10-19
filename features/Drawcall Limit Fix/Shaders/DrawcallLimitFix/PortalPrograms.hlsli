@@ -13,6 +13,8 @@ static const uint kPortalOpBytes = 16;
 static const uint kPortalNoProgram = 0xFFFFFFFFu;
 static const uint kPortalReached = 1u << 0;
 static const uint kPortalSkipView = 1u << 1;
+// BuildDrawsLatch::portalProgramsIndex (GpuLayouts.h, kLatchPortalProgramsOffset): the depth segment's published programs.
+static const uint kLatchPortalPrograms = 320;
 
 // Every plane test's distance, in the engine's order: y, then x, then z, less the constant.
 float PortalDistance(float4 a_plane, float3 a_point)
@@ -122,6 +124,57 @@ int PortalTestAt(ByteAddressBuffer a_programs, uint a_base, uint a_program, floa
 int PortalTest(ByteAddressBuffer a_programs, uint a_program, float3 a_centre, float a_radius, bool a_alwaysDraw, bool a_preprocessed, bool a_preprocessHidden)
 {
 	return PortalTestAt(a_programs, 0u, a_program, a_centre, a_radius, a_alwaysDraw, a_preprocessed, a_preprocessHidden);
+}
+
+// A portal-strict point light's per-object gate (Portals/StrictGates.h): the object's gate (the ObjectGates column, by object slot), that
+// gate's verdict for the light's context in the frame's atlas (PortalContextAtlas.h), and the bound in the verdict's room frustum. The
+// verdicts' words: header {gates, contexts, atlas identity low, high, 0, 0, 0, 0}, then per gate per context a verdict: kStrictGateClosed,
+// kPortalNoProgram (the sphere alone, which the view's own culling is) or the program. A publication of another atlas, or a context it
+// does not hold, gates nothing.
+static const uint kStrictGateClosed = 0xFFFFFFFEu;
+static const uint kStrictGateHeaderBytes = 32;
+static const uint kContextEntryBytes = 64;
+
+// Process1's compound test on a strict light's room program: no view planes (a point process has none), operators or none.
+bool StrictProgramPass(ByteAddressBuffer a_atlas, uint a_base, uint a_program, float3 a_centre, float a_radius)
+{
+	const uint count = a_atlas.Load(a_base + kPortalSetBytes);
+	if (a_program >= count)
+		return true;
+	const uint directory = a_base + kPortalHeaderBytes + a_program * kPortalDirectoryBytes;
+	const uint4 entry = a_atlas.Load4(directory);
+	const uint4 entry2 = a_atlas.Load4(directory + 16u);
+	if (entry.y == 0u)
+		return true;
+	const uint recordsBase = a_base + kPortalHeaderBytes + count * kPortalDirectoryBytes;
+	const uint setsBase = recordsBase + a_atlas.Load(a_base + kPortalSetBytes + 4u) * kPortalOpBytes;
+	return PortalProgramRun(a_atlas, entry, entry2, recordsBase, setsBase, a_centre, a_radius);
+}
+
+// Whether a strict light (a_context: its atlas entry) culls object a_object of bound (a_centre, a_radius).
+bool StrictGateRejects(uint a_gatesIndex, uint a_atlasIndex, uint a_objectGatesIndex, uint a_context, uint a_object, float3 a_centre, float a_radius)
+{
+	if (a_gatesIndex == 0u || a_atlasIndex == 0u || a_objectGatesIndex == 0u)
+		return false;
+	ByteAddressBuffer gates = ResourceDescriptorHeap[a_gatesIndex];
+	ByteAddressBuffer atlas = ResourceDescriptorHeap[a_atlasIndex];
+	const uint4 head = gates.Load4(0);  // gates, contexts, atlas identity low, high
+	const uint4 atlasHead = atlas.Load4(0);  // contexts, buckets, identity low, high
+	if (head.z != atlasHead.z || head.w != atlasHead.w || a_context >= head.y || a_context >= atlasHead.x || head.x == 0u)
+		return false;
+	StructuredBuffer<uint> column = ResourceDescriptorHeap[a_objectGatesIndex];
+	uint objects, stride;
+	column.GetDimensions(objects, stride);
+	uint gate = a_object < objects ? column[a_object] : 0u;
+	gate = gate < head.x ? gate : 0u;
+	const uint verdict = gates.Load(kStrictGateHeaderBytes + (gate * head.y + a_context) * 4u);
+	if (verdict == kStrictGateClosed)
+		return true;
+	if (verdict == kPortalNoProgram)
+		return false;
+	// ContextEntry::programsBase (absolute bytes into the atlas).
+	const uint base = atlas.Load(16u + a_context * kContextEntryBytes + 24u);
+	return !StrictProgramPass(atlas, base, verdict, a_centre, a_radius);
 }
 
 #endif

@@ -6,6 +6,16 @@ The engine compound-frustum builder remains the source of the Boolean expression
 forward-topological 16-byte instructions `{kind, set, trueTarget, falseTarget}`. Lowering rejects cycles, invalid sets, branches outside
 the program, operand targets, and unthreaded structural tokens. Each directory entry's last word is its maximum executable path length.
 The plane-set ABI and room directory indexing are unchanged. The GPU no longer accepts bounds on exhaustion of a 512-step limit.
+`Encode` runs from `Build`'s exit guard (a destructor) and inside the light walk's swapped state, so a rejected stream must not throw:
+that program is published as a single `ACCEPT` (`PortalBytecode::AcceptAll`; the view test still applies), as the previous interpreter
+accepted a malformed stream, and a `[structural-gap]` line is logged at power-of-two occurrence counts.
+
+The main camera's encoding is published whole at each frame's first depth commit, into an immutable pooled backing sized to it
+(`PortalPrograms.cpp`, a uint structured buffer read as a `ByteAddressBuffer`); an unchanged encoding keeps the last backing. Every
+execution retains it until GPU retirement. The cull binding `Programs` answers its SRV index for that frame only, and the depth latch
+carries it (`BuildDrawsLatch::portalProgramsIndex`, byte 320, `kLatchPortalPrograms`). The member and fade query stages and both batches
+read it there; no pass declares it. There is no capacity substitution: the only descriptor-0 frame is an allocation failure, logged,
+where every reader takes the frustum alone (the "no programs" meaning).
 
 Fade roots use three passes before `fades.state`:
 
@@ -36,7 +46,8 @@ must be included in comparisons. Neither backend uses subgroup operations or ass
 `PortalContext.h` defines owned contexts, room identity, queries, tasks, and results. Main-camera and strict-light walk contexts own their
 encoded words. Strict lights are captured before restoring main-camera scratch; selected-light records retain their snapshots.
 `PortalContextAtlas.h` packs those snapshots into an owned atlas on the selected-light frame. Its 64-byte directory entries preserve
-64-bit context and room generations, sphere/hemisphere metadata, explicit program byte offsets, and dense bucket ranges across contexts.
+64-bit context and room generations, the room walk's light sphere and equatorial plane (`walkSphere`/`walkPlane`: never the
+accumulation process's, which each shadow-map descriptor's camera sets), explicit program byte offsets, and dense bucket ranges across contexts.
 `PortalTestAt` reads the existing program format at an explicit byte offset; the main-camera wrapper still uses offset zero. The optional
 context-atlas evaluator resolves a dense bucket with a workgroup-uniform directory search, handles empty contexts, and rejects mismatched
 frame identities. It is compiled and available to future atlas-backed batches; production batches still bind the standalone camera program.
@@ -46,11 +57,13 @@ mixed camera/light contexts, identities, offsets, bucket ranges, malformed direc
 ## Point-light publication and native contract
 
 `LightContextResources` publishes the selected-light atlas at commits. The atlas has its own 64-bit selection identity in header words
-2–3, independent of the 64-bit walk/context and room-map identities in its directories. Validation rejects mixed frames, malformed
+2 and 3, independent of the 64-bit walk/context and room-map identities in its directories. Validation rejects mixed frames, malformed
 context offsets, missing program data, incorrect bucket totals, and missing publication identities before allocating GPU storage.
-A pool leases an immutable raw buffer sized to the complete snapshot, using DCLF's existing backing-allocation and cleanup services.
+A pool leases an immutable uint structured buffer (the camera programs' view kind) sized to the complete snapshot, using DCLF's existing backing-allocation and cleanup services.
 Each execution retains the publication and its lease until GPU retirement. `CurrentLightContexts` rejects a previous frame or an earlier
 selection in the same frame. This upload has no revision-capacity substitution and does not reuse old contents on allocation failure.
+Commit hooks run unguarded on the render thread: a rejected atlas or failed allocation publishes nothing that frame (logged), and an
+atlas the selection cannot encode is not published either.
 It publishes walk snapshots; an accumulation consumer must still supply its own process/descriptor parameters.
 
 The AE executable was audited directly in Ghidra (`SkyrimSE.exe.unpacked.exe`), against these functions:
@@ -76,16 +89,124 @@ not reproduce these effects. The integration must preserve native traversal orde
 ordered prefix of the surviving write events after hierarchical visibility is resolved. Compound rejection, sphere rejection, and
 untested visits must remain distinct. This also requires respecting node-specific child traversal and descriptor constraints.
 
+`ParabolicStateCS` implements this prefix stage for replay and future graph integration. `Seed` records the last writer as its
+native traversal ordinal plus one, so a mask of zero remains a write. `Scan` and `AddOffsets` compute an exclusive maximum in the
+existing 256-wide hierarchical scratch layout; `Resolve` includes the current event and reads the last writer's mask. A separate
+prefix component propagates invalid upstream state. No subgroup operations or fixed wave width are required. Each stream must cover
+one descriptor traversal, start with its captured initial mask, and receive ancestry-resolved visited flags in native preorder.
+Visibility rejection alone must not remove a visited state-write event. These kernels are not scheduled in production: the
+strict gates do not need the state ("Strict point-light gates", the hemisphere code).
+Both hierarchical scan shaders reject surplus groups in a two-dimensional dispatch before barriers or scratch writes.
+
+### Strict point-light traversal (AE)
+
+Mapped from the AE executable for `CS_DCLF_STRICT_LIGHT_PARITY` (`Features/Shadows/Local/Diagnostics/StrictLightParity.cpp`), which
+models it on the CPU and compares every append with the engine's on the parity frames.
+
+-   **The request** (`BSShadowParabolicLight::Accumulate`, `0x14151b960`): cull mode `portalStrict + 3` (4 for a strict light),
+    `ignorePreprocess` set, `cameraRelatedUpdates` clear, no initial compound frustum, and the light's room process's portal graph
+    entry (`+0x30190`). The process (`0x14335bfa0`) takes descriptor 0's camera for the sphere's centre and plane and the light's
+    radius (`FUN_141519d20`), and descriptor 1's accumulator as the back hemisphere. `Process2` (`0x141519c90`) clears the active
+    view planes and culls the scene graph's object root (`ShadowSceneNode` child 3) when the light has no `sceneAccumArray`.
+-   **`Process1`** (`0x141519a90`): modes 1 and 2 first; a preprocessed node only when `ignorePreprocess` is clear; `kAlwaysDraw`
+    untested; without a compound frustum with operators (or in mode 3) the sphere wrapper (`FUN_141519fe0`) writes
+    `alphaGroupStopIndex` even on rejection; with one, `skipViewFrustum` decides whether the sphere or the frustum is tested first,
+    and only the sphere-first path leaves the state unwritten on rejection.
+-   **Registration** (`AppendVirtual`, `0x140e288e0`, then `AppendNonAccum`, `0x141519e60`): every geometry is appended with the
+    current `alphaGroupStopIndex`: codes 1 and 3 join the front list, 2 and 3 register into the back accumulator at once, 0 registers
+    nowhere. An untested geometry (mode 1, `kAlwaysDraw`) takes the last state written in traversal order, possibly by an earlier
+    sibling's subtree, or a rejection's zero.
+-   **Rooms** (`BSMultiBoundRoom::OnVisible`, `0x140e089f0`): the room's frustum is looked up in the entry's visibility map
+    (`FUN_140e14460`). Outside modes 1 and 3 a room without one is skipped whole. A room whose own culling mode is neither 1 nor 3
+    installs its frustum (or none); the mode is the room's only outside modes 3 and 4; both are restored after its children, the
+    frustum only when the outer mode was neither 1 nor 3. `BSPortalSharedNode::OnVisible` (`0x140e24740`) installs its own lookup
+    the same way; the light contexts do not carry shared nodes yet.
+-   **Multibounds** (`BSMultiBoundNode::OnVisible`, `0x140e2d710`): the shape test takes the process's planes (`+0x3c`), which
+    `Process2` leaves inactive, so a point light's multibound never rejects. `kAllPass` (outside mode 3) culls the children in mode 1.
+-   **Node types**: `NiNode` (`0x140d1e2c0`) walks its children only with a nonzero radius or `kAlwaysDraw`; `BSFadeNode`
+    (`0x141479f50`) and `BSLeafAnimNode` without camera updates skip a node whose fade is not settled at 1 while `currentFade <= 0`
+    or `fadeAmount == 0`; `BSTreeNode` applies its height test (process `+0x121`); `NiSwitchNode` culls its active child; geometries
+    append with a shader property (`BSSubIndexTriShape` with segments); `BSSegmentedTriShape` and `BSLODTriShape` append nothing.
+    `BSOrderedNode`'s and `BSMultiStreamInstanceTriShape`'s variants are not modelled (counted as excluded subtrees).
+    `NiBillboardNode` without camera updates is `NiNode`'s; `BGSDecalNode` culls its decals' objects (excluded: a point light
+    never casts a decal). The switch index is read at `+0x12c` as the engine does: CommonLib's `NiSwitchNode::index` does not
+    land there in the multi-runtime build.
+-   **Shared portal geometry**: `Traverse` stores each crossed portal's shared node with a newly allocated, empty frustum
+    (`0x1414a4804`), so its subtree takes the sphere alone; a shared node the walk did not cross is skipped. The light contexts
+    carry the crossed shared nodes (`Context::sharedNodes`); a shared node reached from two rooms appends its geometry twice.
+-   **Ordering**: the lights' `Accumulate` runs inside `CalculateActiveShadowCasterLights`, before DCLF's selection walks the
+    lights, so the parity compares at `LightSelectionMade` from a snapshot of each traced cull.
+
+**In-game parity** (AE 1.6.1170, `CS_DCLF_STRICT_LIGHT_PARITY=1`, Bleak Falls Barrow, Dragonsreach and the Bannered Mare, 3,900
+frames, camera turning): every traced portal-strict light's appends agreed with the model, 30,136 engine appends with their
+hemisphere codes and repeats, no room or shared node membership differing from the engine's own visibility map; 0 to 8 geometries
+a window of 10 lights were left out under `BSOrderedNode` and `BGSDecalNode` subtrees. No `kAllPass` multibound and no untested
+append occurred, and the per-object predicate (a geometry's own bound in its room's frustum, with the structural gates: hidden,
+zero-radius nodes, inactive switch children, unsettled fades, the tree height test, unreached rooms and shared nodes, and no
+ancestor bound test) agreed with the engine on every append. Dragonsreach's strict lights cull their `sceneAccumArray`; the
+Bannered Mare's lights have no rooms to walk. Not yet run: SE, exteriors with strict lights, scenes with `kAllPass` multibounds.
+
+### Strict point-light gates
+
+The per-object predicate above is what DCLF applies in place of a portal-strict light's native cull (`Portals/StrictGates.h`). An
+object's *chain* is its gating ancestors, top-down: `BSMultiBoundRoom` (its program, `1 + room index`, and culling mode),
+`BSPortalSharedNode`, `kAllPass` `BSMultiBoundNode`, and a multibound shape the engine would test outside modes 1, 3 and 4 (not
+modelled: open, counted). `Evaluate` runs the chain from mode 4 in a light's context: an unreached room or uncrossed shared node
+closes it, `kAllPass` makes it untested, and the verdict names the room program whose compound frustum the object's own bound must
+pass (none: the sphere alone, which every consumer already tests).
+
+-   **GPU column** (`LightContextResources`, cull binding `ObjectGates`): a versioned `uint` per object slot, its gate (an interned
+    chain id; gate 0 is the empty chain). An object takes its fade root's chain; an object without a listed root takes its own
+    geometry's chain. The column is rebuilt only when the objects, the roots or the gating structure move (`PortalViews::NoteStructure`
+    counts room, shared-node and multibound parents), and only differing words are uploaded to the adopted version. It is declared by
+    the shadow views' and the colour segment's BuildDraws passes and reaches them as `BuildDrawsConstants::objectGatesIndex`.
+-   **Verdicts** (cull binding `StrictGates`): per frame, a pooled publication of every gate's verdict per atlas context, under the
+    atlas identity (`kStrictGateClosed`, `kPortalNoProgram`, or the program). `StrictGateRejects` (`PortalPrograms.hlsli`) reads the
+    object's gate, its verdict, and runs the program in the light's atlas entry. A mismatched atlas, missing context, or object past
+    the column gates nothing.
+-   **Consumers:** a strict light's paraboloid views carry its atlas entry (`ShadowCameras::Camera::portalContext`,
+    `BuildDrawsLatch::strictContext`) and reject casters by their gate. The colour segment's shadow volumes carry it too
+    (`GpuShadowVolume::portalContext`, 240 bytes) and gate the receivers' shadow mask. The engine's own receivers take the light's
+    bit from `NoteMainRegistration` through `Admit` on the geometry's own chain.
+-   **The frame's lights:** `CalculateActiveShadowCasterLights` can run twice in a scene frame, and the first call's lights
+    accumulate and capture their views with that call's atlas entries. The selection keeps every light any call of the frame kept
+    (`Frame::frameLights`), and the atlas holds all their contexts with stable entries.
+-   **Native accumulation removed:** portal-strict point lights take the empty culls (no engine cull or registration) like every
+    other covered light; `CS_DCLF_STRICT_LIGHT_CULLS=0` keeps them native. A strict light in a cell without a portal graph has no
+    context and nothing to gate (`PortalViews::kLightNoGraph`, reported apart from a light without a context).
+
+**Coverage diagnostics** (`CS_DCLF_STRICT_LIGHT_PARITY=1`, the parity frames culling natively): for every geometry in a traced
+light's sphere under the structural gates, rooms and shared nodes descended whatever their verdict, DCLF's gates are compared with
+whether the engine appended it: by geometry (the receivers' bits) and by object column (the GPU's), each counting engine-only
+(a caster or receiver DCLF drops) and gates-only (one it adds) geometries, with the first difference's path and chain. The point
+lights' report line counts strict lights culled empty, their bits' gate tests and refusals, tests without a portal graph and
+without a context (`<- STRICT CONTEXT`).
+
+**In-game result** (the same route, 3,900 frames): strict lights culled empty on every non-parity frame; every window agreed
+exactly by geometry and by object column (0 engine-only, 0 gates-only; 15-138 rootless objects a window gated by their own chain),
+with 0 lights without a context: the Bannered Mare's strict lights have no portal graph. A first column keyed by fade root alone
+admitted rootless objects under unreached rooms (1-9 a window), which the object column fixed.
+
+**The hemisphere code is not needed** (the ordered prefix stage, `ParabolicStateCS`, stays a replay kernel). A tested append's
+code is never 0 or back-only: `FUN_14151a1e0` returns 1 for a bound wholly in front of the plane and 3 for any other bound inside the
+sphere. So the engine registers every tested append and draws it in both hemispheres unless it is wholly in front. DCLF's paraboloid
+views cull each hemisphere with its own camera, as for every other point light: they drop only a hemisphere's draws its camera cannot
+rasterize, and the receivers' bits take the light wherever the gate admits, which is the engine's registration. The code differs
+only for an untested append (mode 1 under `kAllPass`, `kAlwaysDraw`), which takes the last state written in traversal order: 1 or
+3 from an earlier sibling, or 0 after a sibling's sphere rejection, so the engine leaves it out of one hemisphere or casts and
+registers it nowhere, by sibling order alone. DCLF gives such an object the sphere test and its true hemispheres instead (outside
+the sphere it can neither occlude nor be lit). Reproducing the stale state would only drop shadows the geometry should cast.
+
 ## Remaining integration
 
-This is not the complete point-light migration. Point-light caster lists,
-receiver masks, ancestry/multibounds/`kAllPass`, registration side effects, and per-object ownership-gap diagnostics have not migrated.
-Native strict-light accumulation remains. A captured context alone does not establish consumer coverage.
+Untested appends (above) did not occur on the parity route. `BSOrderedNode` and `BGSDecalNode` subtrees are not modelled by the
+parity. Not yet run: SE, exteriors with strict lights, scenes with `kAllPass` multibounds.
 
-The batch integration currently serves main-camera fade roots and members. GPU context-atlas upload is implemented; hierarchy stages,
-ordered hemisphere-state propagation, and binding the publication identity to point-light queries/results remain necessary. `PortalPrograms.cpp` also retains its previous empty-header substitution when a snapshot exceeds
-publication capacity; the full publication migration must remove it. Batch bucket-capacity mismatches are separately logged as structural
-gaps, emit an invalid verdict rather than an out-of-bounds write, and log resolution when capacity catches up.
+The batch integration currently serves main-camera fade roots and members. GPU context-atlas upload is implemented, and the point lights' strict gates
+bind the atlas identity (above); hierarchy stages for the batches remain necessary.
+The main camera's programs publication has migrated (above). The batches' bucket scratch still grows with the revision's inputs: until
+growth is adopted, `Count` evaluates a query whose program lies past the adopted buckets itself, unbatched, with the same verdict (and
+the same context-atlas addressing), so a growth lag costs only batching. The lag is logged once per change and its resolution too.
 
 ## Validation
 
@@ -98,7 +219,7 @@ and inconsistent ranges.
 
 `DclfParabolicCullingTests` compares 100,000 sphere inputs against an independent native-helper transcription and exhaustively checks
 2,560 mode/flag/compound/mask combinations against native Process1 control flow. Boundaries include sphere tangency, zero radius, NaNs,
-one versus two accumulators, preprocessing versus always-draw, and ordered hemisphere-state writes, including writes of zero.
+one versus two accumulators, preprocessing versus always-draw, and ordered hemisphere-state writes, including writes of zero. The hierarchical maximum-prefix model is compared with serial state propagation across partial blocks and multiple levels up to 1,000,003 events, including skipped visits, rejected writers, initial masks, and invalid upstream state.
 
 ```powershell
 cmake -S tests/DrawcallLimitFixCPU -B build/dclf-cpu-tests
@@ -107,26 +228,30 @@ ctest --test-dir build/dclf-cpu-tests -C Release --output-on-failure
 ```
 
 Compile all eight `PortalBatchCS.hlsl` entry points, `FadeStateCS.hlsl`'s `PreparePortalQueries` and `main`, and `BuildDrawsCS.hlsl`'s `ClearPortalQueries`, `PreparePortalQueries`, and `main`
-with the runtime DXC SPIR-V configuration. Also compile `ParabolicQueriesCS.hlsl` with independent and uniform traversal. Compile `Evaluate` with all four combinations of standalone/atlas addressing and independent/uniform traversal.
+with the runtime DXC SPIR-V configuration. Also compile `ParabolicQueriesCS.hlsl` with independent and uniform traversal, and all four `ParabolicStateCS` entry points. Compile `Evaluate` with all four combinations of standalone/atlas addressing and independent/uniform traversal. Compile `Count` with both standalone and atlas addressing.
 
 `python tools/validate-dclf-portal-shaders.py --dxc <path-to-runtime-dxc.exe>` performs these checks, reading descriptor bindings from
 BasicRHI's ABI header. Its default shader directory is the prepared `build/ALL/aio/Shaders` tree; run `prepare_shaders` first.
 Add `--spirv-val <path-to-spirv-val.exe>` to validate every generated module against Vulkan 1.3 as well.
 These Shader Model 6.6/SPIR-V shaders require DXC; the repository's FXC-based hlslkit validator does not target them.
 
-All four CPU tests, compilation of the eighteen prepared-shader entry/permutation combinations, and Vulkan 1.3 SPIR-V validation
+All four CPU tests, compilation of the twenty-three prepared-shader entry/permutation combinations (`Count` also with atlas addressing), and Vulkan 1.3 SPIR-V validation
 passed during implementation. Modified
 C++ translation units were compiled separately initially. The original build failures were missing Tracy macro definitions in the
 non-profiling configuration and a profiling-only unused parameter. The common precompiled header now loads Tracy after selecting
 `TRACY_ENABLE`, so disabled builds get the intended no-op definitions; the profiling-only parameter is marked accordingly.
 The missing Streamline packaging dependency was rebuilt with `tools/build-streamline.ps1 -Required`; all four fork plugins were produced.
 The complete `BuildDevFast.bat` build subsequently passed. `prepare_shaders`, `COPY_SHADERS`, and `DEPLOY_ALL` passed for `ALL/Debug`.
-All 17 SHA-256 comparisons matched: the Debug plugin, six shaders checked from source to prepared output and from prepared output to
+All 23 SHA-256 comparisons matched: the Debug plugin, nine shaders checked from source to prepared output and from prepared output to
 the deployed files, and four Streamline plugins. The deployment directory is `C:/Modding/MO2/mods/Community Shaders DXVK ORG`.
 The machine-readable comparisons are in `build/portal-deployment-verification.json`. `COPY_SHADERS` alone does not deploy native dependencies; use `DEPLOY_ALL`
 after rebuilding Streamline. Run preparation and deployment serially in a given build directory: `prepare_shaders` can build the DLL,
-and concurrent MSBuild targets contend for the same tracking files. The final serial Debug deployment passed.
+and concurrent MSBuild targets contend for the same tracking files. The final serial Debug deployment passed. After adding shader files, finish CMake regeneration and rerun preparation before validation; an earlier staging run omitted the new parabolic files. The final prepared and deployed trees include both parabolic files.
 Dev-Fast intentionally has auto-deployment disabled in its preset.
+
+After the programs publication migration, the fail-open lowering, the unbatched overflow evaluation and the guarded light-context
+publication, `BuildDevFast.bat` and all four CPU tests passed, and the twenty-three combinations compiled and passed Vulkan 1.3
+`spirv-val` (Vulkan SDK 1.4.357 DXC, against the source shader tree). That build was not deployed or run.
 
 Neither SE nor AE runtime verification has been performed for this migration; the AE static audit is not runtime validation.
 No Skyrim runtime parity, GPU batch execution/readback comparison, vendor ISA inspection, or NVIDIA/AMD/Intel performance measurements

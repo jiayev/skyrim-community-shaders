@@ -262,11 +262,10 @@ namespace DCLF::Features::Fades
 			if (buffers.fadeFrameNumber != a_commit.frame)
 				SampleFadeInputs(adopted, uploads, buffers, rootSlots, inputs, logBase);
 			UploadFadeRoots(adopted, a_commit.tables, a_commit.frame, inputs, logBase, buffers, uploads);
-			// Query programs and scratch must describe the same admitted publication. Diagnose a growth race explicitly;
-			// the shader emits an invalid verdict rather than indexing past the bucket buffers or taking a frustum fallback.
+			// Programs past the adopted bucket scratch are evaluated unbatched by the count stage (same verdict); report the lag.
 			if (buffers.portalBatch)
 				Portals::CheckMainBatchCapacity(*buffers.portalBatch, a_commit.frame,
-					std::min(adopted.Of(buffers.portalBatch->counts).units, adopted.Of(buffers.portalBatch->offsets).units) / 2);
+					std::min(Draws::NamedUnits(adopted, buffers.portalBatch->counts), Draws::NamedUnits(adopted, buffers.portalBatch->offsets)) / 2);
 
 			Extensions::TableFamilySent(Extensions::RootStatesFamily(), buffers.FadeRootsContentEpoch(adopted));
 			// The fade events' header and readback slot (its last execution harvested first).

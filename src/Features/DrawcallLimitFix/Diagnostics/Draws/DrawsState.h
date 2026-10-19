@@ -91,6 +91,9 @@ namespace DCLF::Diagnostics
 			std::uint64_t pipelineRowsBase = 0, materialRowsBase = 0;
 			// By object: the CPU's local shadow light selection (kObjectLocalShadowMask); none on the Z-prepass.
 			ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> expectedLocalShadows;
+			// The mask bits of portal-strict lights' volumes (GpuShadowVolume::portalContext): BuildDraws gates them by the receiver's
+			// root (StrictGateRejects), which this reference does not model; the strict light parity compares those receivers.
+			std::uint32_t gatedLocalShadows = 0;
 			// The sequences' version the adopted set names (what the epoch's recording wrote) and the buffer's current one, when copied.
 			std::uint64_t sequencesNamed = 0, sequencesCurrent = 0;
 			std::uint32_t armedEpoch = 0;  // parityEpochs when copied

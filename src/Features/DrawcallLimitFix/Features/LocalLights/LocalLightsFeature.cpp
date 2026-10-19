@@ -43,6 +43,7 @@ namespace DCLF::Features::LocalLights
 					out.sphere[2] = light.center[2];
 					out.sphere[3] = light.radius;
 					std::memcpy(out.planes, volume.planes.data(), sizeof(out.planes));
+					out.portalContext = light.portalContext;
 					a_sink.Put(out);
 				}
 			}

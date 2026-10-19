@@ -131,6 +131,7 @@ namespace DCLF
 				return false;
 			Api::ShadowSourceCamera request{ a_view.light, a_view.descriptor, a_sceneFrame };
 			a_own = Extensions::SourceCamera(source, request);
+			a_pending.portalContext = a_own && a_own->valid ? a_own->portalContext : 0u;
 			switch (source) {
 			case Api::ShadowSource::Spot:
 			case Api::ShadowSource::Point:

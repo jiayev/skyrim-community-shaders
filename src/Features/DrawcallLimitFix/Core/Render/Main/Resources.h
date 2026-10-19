@@ -4,11 +4,12 @@
 // to the revision producer's requirements (SceneBufferSet), its layout (MainLayout) derived from the scene's draw bound.
 // Self-contained (features include it); Internal.h includes it in its order.
 
-// volk must precede every Vulkan header in this translation unit (FrameLayout.h first).
+// volk must precede every Vulkan header in this translation unit (FrameLayout.h first, in its own include block).
+#include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
+
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
-#include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"

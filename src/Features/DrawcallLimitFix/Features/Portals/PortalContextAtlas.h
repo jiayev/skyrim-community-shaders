@@ -16,7 +16,7 @@ namespace DCLF::Portals
 	{
 		std::uint32_t frame = 0, flags = 0, generationLo = 0, generationHi = 0;
 		std::uint32_t roomsGenerationLo = 0, roomsGenerationHi = 0, programsBase = 0, firstBucket = 0;
-		std::array<float, 4> sphere{}, hemisphere{};
+		std::array<float, 4> walkSphere{}, walkPlane{};  // Context::walkSphere/walkPlane, never the accumulation process's
 	};
 	static_assert(sizeof(ContextEntry) == 64);
 	inline constexpr std::uint32_t kContextPoint = 1, kContextStrict = 2, kContextBothSides = 4;
@@ -83,8 +83,8 @@ namespace DCLF::Portals
 			entry.roomsGenerationHi = static_cast<std::uint32_t>(context.roomsGeneration >> 32);
 			entry.programsBase = static_cast<std::uint32_t>(result.size() * 4);
 			entry.firstBucket = firstBucket;
-			entry.sphere = context.sphere;
-			entry.hemisphere = context.hemisphere;
+			entry.walkSphere = context.walkSphere;
+			entry.walkPlane = context.walkPlane;
 			const auto directory = std::bit_cast<std::array<std::uint32_t, 16>>(entry);
 			std::copy(directory.begin(), directory.end(), result.begin() + 4 + 16 * i);
 			result.insert(result.end(), context.programs.begin(), context.programs.end());

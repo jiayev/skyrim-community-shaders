@@ -19,7 +19,36 @@ cbuffer PortalBatchConstants : register(b0)
 	uint Elements;
 	uint SumsBase;
 	uint ParentBase;
-	uint Padding;
+	// The depth latch (BuildDrawsLatch in this frame slot), whose portalProgramsIndex names the frame's programs when ProgramsIndex
+	// is 0. A context atlas batch binds its publication directly.
+	uint LatchIndex;
+	uint LatchOffset;
+	uint3 Padding;
+}
+
+ByteAddressBuffer Programs()
+{
+	uint index = ProgramsIndex;
+	if (index == 0u && LatchIndex != 0u) {
+		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+		index = latch.Load(LatchOffset + kLatchPortalPrograms);
+	}
+	ByteAddressBuffer programs = ResourceDescriptorHeap[index];
+	return programs;
+}
+
+// A query's verdict against its bucket's program: 1 in view, 0 culled, -1 no program, -2 an invalid atlas context.
+int QueryVerdict(PortalQuery query, uint bucket)
+{
+	ByteAddressBuffer programs = Programs();
+	uint programsBase = 0, program = bucket;
+#ifdef DCLF_PORTAL_CONTEXT_ATLAS
+	uint contextFrame;
+	if (!PortalContextProgram(programs, bucket, programsBase, program, contextFrame) || contextFrame != query.Generation)
+		return -2;
+#endif
+	return PortalTestAt(programs, programsBase, program, query.Bound.xyz, query.Bound.w,
+		(query.Flags & (1u << 11)) != 0, (query.Flags & (1u << 12)) != 0, (query.Flags & (1u << 20)) != 0);
 }
 
 [numthreads(64, 1, 1)] void Clear(uint3 id : SV_DispatchThreadID) {
@@ -45,8 +74,9 @@ cbuffer PortalBatchConstants : register(b0)
 		results[query.Destination] = uint2(query.Generation, query.Program);
 		return;
 	}
+	// Programs past the adopted bucket capacity (a growth not yet adopted) are evaluated here, unbatched, with the same verdict.
 	if (query.Program >= BucketCount) {
-		results[query.Destination] = uint2(query.Generation, asuint(-2));
+		results[query.Destination] = uint2(query.Generation, asuint(QueryVerdict(query, query.Program)));
 		return;
 	}
 	RWStructuredBuffer<uint2> counts = ResourceDescriptorHeap[CountsIndex];
@@ -67,6 +97,10 @@ cbuffer PortalBatchConstants : register(b0)
 // Hierarchical exclusive scan of {queries, tasks}. The host records levels and reverse offset propagation, without readback.
 groupshared uint2 ScanValues[256];
 [numthreads(256, 1, 1)] void Scan(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
+	// A two-dimensional dispatch can contain surplus groups in its last row. Reject them uniformly before barriers.
+	const uint block = group.x + group.y * 65535u;
+	if (block >= Elements / 256u + (Elements % 256u != 0u ? 1u : 0u))
+		return;
 	RWStructuredBuffer<uint2> counts = ResourceDescriptorHeap[CountsIndex];
 	RWStructuredBuffer<uint2> offsets = ResourceDescriptorHeap[OffsetsIndex];
 	const uint i = (group.x + group.y * 65535u) * 256u + lane;
@@ -143,17 +177,6 @@ groupshared uint2 ScanValues[256];
 	StructuredBuffer<uint> indices = ResourceDescriptorHeap[IndicesIndex];
 	StructuredBuffer<PortalQuery> queries = ResourceDescriptorHeap[QueriesIndex];
 	const PortalQuery query = queries[indices[task.First + lane]];
-	ByteAddressBuffer programs = ResourceDescriptorHeap[ProgramsIndex];
-	uint programsBase = 0, program = task.Program;
-	bool valid = true;
-#ifdef DCLF_PORTAL_CONTEXT_ATLAS
-	uint contextFrame;
-	valid = PortalContextProgram(programs, task.Program, programsBase, program, contextFrame) && contextFrame == query.Generation;
-#endif
-	int verdict = -2;
-	if (valid)
-		verdict = PortalTestAt(programs, programsBase, program, query.Bound.xyz, query.Bound.w,
-			(query.Flags & (1u << 11)) != 0, (query.Flags & (1u << 12)) != 0, (query.Flags & (1u << 20)) != 0);
 	RWStructuredBuffer<uint2> results = ResourceDescriptorHeap[ResultsIndex];
-	results[query.Destination] = uint2(query.Generation, asuint(verdict));
+	results[query.Destination] = uint2(query.Generation, asuint(QueryVerdict(query, task.Program)));
 }

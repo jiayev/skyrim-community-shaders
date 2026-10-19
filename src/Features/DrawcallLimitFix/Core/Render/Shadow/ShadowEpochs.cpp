@@ -340,6 +340,9 @@ namespace DCLF
 				const std::uint32_t seedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, scene, frameNumber, adopted);
 				const std::uint32_t statesIndex = CullBindingIndex(Api::CullBindingSlot::RootStates, scene, frameNumber, adopted);
 				const auto roots = Extensions::RootListOf(Scene::FrameView::Get().GetTables());
+				// A portal-strict point light's casters pass its strict gates (the frame's atlas and gates; 0: none, nothing gated).
+				const std::uint32_t contextsIndex = CullBindingIndex(Api::CullBindingSlot::LightContexts, scene, frameNumber, adopted);
+				const std::uint32_t gatesIndex = CullBindingIndex(Api::CullBindingSlot::StrictGates, scene, frameNumber, adopted);
 				for (const auto& view : a_commit.pending) {
 					ZoneScopedN("CS.DCLF.ShadowInputs.View");
 					const std::uint32_t slot = view.slot;
@@ -362,6 +365,11 @@ namespace DCLF
 					latch.cullPlaneMask = view.cullPlaneMask;
 					std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));
 					latch.fadeStatesIndex = statesIndex;
+					if (view.portalContext && contextsIndex && gatesIndex) {
+						latch.lightContextsIndex = contextsIndex;
+						latch.strictGatesIndex = gatesIndex;
+						latch.strictContext = view.portalContext;
+					}
 					ShadowPayloadLatch(a_commit.parts, latch);
 					// Sun entry rule: BuildDraws tests each input's entry sphere against the full-frustum processes (written once per frame).
 					if (view.sunView) {

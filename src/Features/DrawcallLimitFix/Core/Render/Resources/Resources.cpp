@@ -1,12 +1,13 @@
 // IndirectDraws' GPU resources: the main, scene, shadow and view resources created on the render thread (Setup, EnsureSceneBuffers,
 // SetupShadow, SetupView), each versioned buffer registered with the scene's set (its extent, growth policy and contents), the
 // scene's draw bound and the main latch the revision code keeps.
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+
 #include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/ScheduleDump.h"
 

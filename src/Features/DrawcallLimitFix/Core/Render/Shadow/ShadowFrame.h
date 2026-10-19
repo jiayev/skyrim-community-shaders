@@ -56,6 +56,7 @@ namespace DCLF::Draws
 		bool sunView = false;  // the directional light's: its casters are its full-frustum entries' (kCullSunEntry)
 		bool focus = false;    // a focus shadow's: its casters are focusTarget's members (BuildDrawsLatch::focusRoot)
 		const void* focusTarget = nullptr;
+		std::uint32_t portalContext = 0;  // its source camera's (ShadowCameras::Camera::portalContext: BuildDrawsLatch::strictContext)
 		float viewBlock[12] = {};  // PerTechnique: HighDetailRange, ParabolaParam, EyeDelta
 		std::array<std::byte, 1024> perFrame{};
 		std::uint32_t perFrameBytes = 0;

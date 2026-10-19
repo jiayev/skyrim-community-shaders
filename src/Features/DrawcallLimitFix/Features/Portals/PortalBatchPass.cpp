@@ -13,17 +13,20 @@ namespace DCLF::Features::Portals
 		struct Constants
 		{
 			std::uint32_t queries, results, programs, counts, offsets, ranks, indices, tasks, dispatch;
-			std::uint32_t queryCount, bucketCount, base, elements, sumsBase, parentBase, padding;
+			std::uint32_t queryCount, bucketCount, base, elements, sumsBase, parentBase;
+			std::uint32_t latchIndex, latchOffset, padding[3];  // the depth latch, whose portalProgramsIndex names the programs
 		};
-		static_assert(sizeof(Constants) == 64);
+		static_assert(sizeof(Constants) == 80);
+		constexpr std::uint32_t kConstantWords = sizeof(Constants) / 4;
 		struct Bindings
 		{
-			org::DeclaredViewToken queries, results, programs, counts, offsets, ranks, indices, tasks, dispatch;
+			org::DeclaredViewToken queries, results, counts, offsets, ranks, indices, tasks, dispatch;
 			org::ResourceBindingToken indirect;
 		};
 		struct Prepared
 		{
 			std::shared_ptr<const Portals::Batch> batch;
+			std::shared_ptr<const org::LatchBlock> latch;
 			Constants constants{};
 			org::PreparedResourceReference indirect;
 			bool evaluate = false;
@@ -32,8 +35,8 @@ namespace DCLF::Features::Portals
 		class BatchPass final : public org::TypedRenderGraphPass<BatchPass, Prepared, Bindings>
 		{
 		public:
-			BatchPass(std::shared_ptr<Draws::Resources> a_resources, std::shared_ptr<const Batch> a_batch, Draws::Versioned a_programs, RenderGraphRuntime::Segment a_segment, bool a_evaluate) :
-				resources(std::move(a_resources)), batch(std::move(a_batch)), programs(std::move(a_programs)), segment(a_segment), evaluate(a_evaluate) {}
+			BatchPass(std::shared_ptr<Draws::Resources> a_resources, std::shared_ptr<const Batch> a_batch, RenderGraphRuntime::Segment a_segment, bool a_evaluate) :
+				resources(std::move(a_resources)), batch(std::move(a_batch)), segment(a_segment), evaluate(a_evaluate) {}
 
 			Bindings Declare(org::PassBuilder& a_builder)
 			{
@@ -42,8 +45,7 @@ namespace DCLF::Features::Portals
 				Bindings bindings{};
 				bindings.queries = a_builder.ShaderResource(*b.queries).View();
 				bindings.results = a_builder.UnorderedAccess(*b.results).View();
-				if (programs)
-					bindings.programs = a_builder.ShaderResource(*programs).View();
+				// The programs are the frame's publication, named by the depth latch: an immutable pooled backing no pass declares.
 				if (evaluate) {
 					bindings.dispatch = a_builder.ShaderResource(b.dispatch).View();
 					bindings.indices = a_builder.ShaderResource(*b.indices).View();
@@ -68,22 +70,23 @@ namespace DCLF::Features::Portals
 				const auto& b = *batch;
 				for (const auto* buffer : { &b.queries, &b.results, &b.counts, &b.offsets, &b.ranks, &b.indices, &b.tasks })
 					a_out.push_back(Draws::NamedSerial(a_preparation, *buffer));
-				a_out.push_back(Draws::NamedSerial(a_preparation, programs));
 			}
 
 			Prepared Prepare(const Bindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 			{
 				Prepared prepared{};
-				if (!Draws::CurrentFrame(a_preparation, segment))
+				const auto frame = Draws::CurrentFrame(a_preparation, segment);
+				if (!frame || !frame->latch)
 					return prepared;
 				prepared.batch = batch;
+				prepared.latch = frame->latch;
 				prepared.evaluate = evaluate;
 				const auto& b = *prepared.batch;
 				auto& c = prepared.constants;
 				const auto index = [&](const org::DeclaredViewToken& token) { return token.layout ? Draws::CaptureViewIndex(a_preparation, token) : 0u; };
 				c.queries = index(a_bindings.queries);
 				c.results = index(a_bindings.results);
-				c.programs = index(a_bindings.programs);
+				c.latchIndex = frame->latch->SrvIndex();
 				c.counts = index(a_bindings.counts);
 				c.offsets = index(a_bindings.offsets);
 				c.ranks = index(a_bindings.ranks);
@@ -104,11 +107,12 @@ namespace DCLF::Features::Portals
 				const auto& batch = *a_prepared.batch;
 				auto& commands = a_recording.Commands();
 				auto c = a_prepared.constants;
+				c.latchOffset = static_cast<std::uint32_t>(a_prepared.latch->Offset(a_recording.FrameSlot()));
 				const auto bind = [&](std::size_t stage) {
 					const auto& program = *batch.programs[stage];
 					commands.BindLayout(program.layout->GetHandle());
 					commands.BindPipeline(program.pipeline->GetHandle());
-					commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, 16, reinterpret_cast<const std::uint32_t*>(&c));
+					commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const std::uint32_t*>(&c));
 				};
 				if (a_prepared.evaluate) {
 					bind(7);
@@ -148,7 +152,6 @@ namespace DCLF::Features::Portals
 		private:
 			std::shared_ptr<Draws::Resources> resources;
 			std::shared_ptr<const Batch> batch;
-			Draws::Versioned programs;
 			RenderGraphRuntime::Segment segment;
 			bool evaluate;
 		};
@@ -156,10 +159,10 @@ namespace DCLF::Features::Portals
 	}
 
 	std::shared_ptr<org::RenderPass> MakeBatchPass(std::shared_ptr<Draws::Resources> a_resources, std::shared_ptr<const Batch> a_batch,
-		Draws::Versioned a_programs, RenderGraphRuntime::Segment a_segment, bool a_evaluate)
+		RenderGraphRuntime::Segment a_segment, bool a_evaluate)
 	{
-		if (!a_batch || !a_programs)
+		if (!a_batch)
 			return nullptr;
-		return std::make_shared<BatchPass>(std::move(a_resources), std::move(a_batch), std::move(a_programs), a_segment, a_evaluate);
+		return std::make_shared<BatchPass>(std::move(a_resources), std::move(a_batch), a_segment, a_evaluate);
 	}
 }

@@ -2140,7 +2140,7 @@ the parities.
 -   **The sun's full-frustum processes** (the engine culls the scene once per `fullFrustumCullingProcessArray` entry before the
     cascades, and a cascade walks only entries some process kept) are written once per frame slot into a region of the shadow latch
     block (`ShadowLatchLayout::SunEntryOffset`, 112-byte `SunEntryProcess` records), named by every sun view's latch
-    (`BuildDrawsLatch::sunEntryOffset`), any number of them. `BuildDrawsLatch` is 320 bytes, its payload block included.
+    (`BuildDrawsLatch::sunEntryOffset`), any number of them. `BuildDrawsLatch` is 336 bytes, its payload block included.
 
 #### The sun's cascades without DCLF's objects
 
@@ -2201,8 +2201,10 @@ the layout grows (`ReserveMainLatch`). A frame where the sun did not accumulate 
     portals), so portal-strict lights take it too. It is an immutable snapshot built at the selection, holding its node; a node with
     an attach or detach is walked natively until the next build.
 -   **Empty culls:** a light is not culled at all when the exclusion is live, the frame is not a parity frame, the light is within the
-    mask's 32, every view of it is covered with its casters in the set, and it is not portal-strict. The bookkeeping is done as
-    `BSShadowParabolicLight::Accumulate` does it (the light index `+0x160`, the bit `+0x164`, the count).
+    mask's 32, and every view of it is covered with its casters in the set. A portal-strict light takes them too: its casters,
+    DCLF's receivers and the engine's receivers' bits pass its strict gates (`dclf-portal-query-batches.md`, "Strict point-light
+    gates"; `CS_DCLF_STRICT_LIGHT_CULLS=0` keeps it native). The bookkeeping is done as `BSShadowParabolicLight::Accumulate` does it
+    (the light index `+0x160`, the bit `+0x164`, the count).
 -   **Light entries** (`LightEntryOf`, `Tracked::lightRoot`): an actor's geometry's light entry is its actor's root; any other
     geometry's is its sun entry, unless that is a category node, so entries never nest.
 -   **The lights' bits** (`LocalLightCull::NoteMainRegistration`): for the engine's main passes under a cut entry, DCLF writes a point
@@ -2342,8 +2344,10 @@ The compact instruction encoding and fade-root GPU batching are described in
 The main camera's portals and occluders are DCLF's own (`Features/Portals/PortalViews`).
 -   **The walk** ports the engine's (`FUN_1401a43c0` -> Traverse `FUN_1414a41e0`) and the `BSCompoundFrustum` builders. It runs on the
     render thread right after `Main::Update`'s own walk (the feature's `PortalWalk` thunk) and writes nothing to an engine object.
--   **The programs** (`kPortal*` in `Records.h`, `PortalPrograms.hlsli`) go to the GPU in one buffer a frame: view planes, a directory
-    and the records. Each fade root's program is its nearest room ancestor's (`PortalViews::ProgramOf`). The fade-root query passes
+-   **The programs** (`kPortal*` in `Records.h`, `PortalPrograms.hlsli`) go to the GPU whole each frame: view planes, a directory
+    and the records, in an immutable pooled backing sized to the encoding that the depth commit publishes and every execution
+    retains until GPU retirement. The depth latch names it (`BuildDrawsLatch::portalProgramsIndex`; 0 only when allocation failed,
+    the frustum alone). Each fade root's program is its nearest room ancestor's (`PortalViews::ProgramOf`). The fade-root query passes
     batch roots by program before `FadeStateCS` consumes their verdicts. Main members use a separate object-indexed batch; BuildDraws' phase 1 consumes its tagged verdicts
     and rejects a member whose root's program culls its bound.
 -   `PortalViews::VisibleSet` answers `Main::IsRoomVisible` ([Room visibility](#room-visibility-the-tree-list-the-actor-stamp)), and

@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
 
 #include "State.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
@@ -50,6 +51,11 @@ namespace DCLF::Features::Shadows::Local
 			light.sphere = { niLight->world.translate.x, niLight->world.translate.y, niLight->world.translate.z,
 				const_cast<RE::NiLight*>(niLight)->GetLightRuntimeData().radius.x };
 		light.views.resize(data.shadowmapDescriptors.size());
+		// A portal-strict point light's casters pass its strict gates: its entry in the selection's atlas (encoded: the commits publish it).
+		std::uint32_t portalContext = 0;
+		if (const auto* selection = LightSelection::Get().Current(frame); selection && !selection->portalContexts.empty())
+			if (const auto* entry = selection->LightOf(a_light); entry && entry->portalContext && entry->portalContextIndex != ~0u)
+				portalContext = entry->portalContextIndex + 1;
 		for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d) {
 			const auto& descriptor = data.shadowmapDescriptors[d];
 			const auto* camera = descriptor.camera.get();
@@ -65,6 +71,7 @@ namespace DCLF::Features::Shadows::Local
 			// A point light's process (BSParabolicCullingProcess) culls without planes: they stay zero, and nothing is outside them.
 			if (!const_cast<RE::BSShadowLight*>(a_light)->GetIsParabolicLight() || (process && process->doCustomCullPlanes))
 				ShadowCameras::CullPlanes(process, *camera, view.cull);
+			view.portalContext = portalContext;
 			view.valid = true;
 		}
 	}

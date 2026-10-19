@@ -357,8 +357,9 @@ namespace DCLF::Draws
 		std::uint32_t pipelineRowStride;
 		// Depth phase 1 and shadow views: the fade roots' static rows. 0 elsewhere.
 		std::uint32_t fadeRootsIndex;
-		// Main query preparation: the main cull input's programs (the HLSL's PortalProgramsIndex). 0 in draw construction.
-		std::uint32_t cullProgramsIndex;
+		// Shadow views and the colour segment: each object's strict-light gate (the cull binding ObjectGates, a versioned view captured at
+		// preparation), which the latch's strictGatesIndex verdicts are of. 0 elsewhere (nothing gated).
+		std::uint32_t objectGatesIndex;
 		// A shadow view's bucket counts, or the depth phases' (a word per pipeline slot). 0 elsewhere.
 		std::uint32_t bucketCountsIndex;
 		// Shadow views and the depth segment: each geometry slot's first index in the index pool (IndexPool::firsts). 0 elsewhere.
@@ -444,10 +445,22 @@ namespace DCLF::Draws
 		// Depth segment under Terrain Blending: its eye and near distance in w. A terrain group 1 draw within it goes to its slot's
 		// twin bucket (kBucketTerrainPair), drawn into the terrain depth and, offset, the main depth. w 0: no test.
 		float terrainNear[4];
+		// The depth segment: the frame's main-camera portal programs (the cull binding Programs: a pooled backing's SRV, published
+		// whole by the depth commit). 0: none this frame (every reader takes the frustum alone). 0 elsewhere.
+		std::uint32_t portalProgramsIndex;
+		// A portal-strict point light's views and the colour segment: the frame's light context atlas and strict gates (the cull bindings
+		// LightContexts and StrictGates: pooled backings' SRVs; 0 none, nothing is gated), and a view's light's atlas entry + 1 (0: its
+		// casters are not gated). PortalPrograms.hlsli's StrictGateRejects.
+		std::uint32_t lightContextsIndex;
+		std::uint32_t strictGatesIndex;
+		std::uint32_t strictContext;
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
-	static_assert(sizeof(BuildDrawsLatch) == 320 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, classTableOffset) == 292 &&
+	// BuildDrawsLatch::portalProgramsIndex's byte offset (BuildDrawsCS, FadeStateCS and PortalBatchCS read it as kLatchPortalPrograms).
+	constexpr std::uint32_t kLatchPortalProgramsOffset = 320;
+	static_assert(sizeof(BuildDrawsLatch) == 336 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
+				  offsetof(BuildDrawsLatch, lightContextsIndex) == 324 && offsetof(BuildDrawsLatch, strictContext) == 332 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, classTableOffset) == 292 &&
 				  offsetof(BuildDrawsLatch, classMapOffset) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
 				  offsetof(BuildDrawsLatch, viewBits) == 264 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
 				  offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
@@ -568,8 +581,12 @@ namespace DCLF::Draws
 		std::uint32_t affectsLand;  // 1: taken by landscape properties too (kObjectLandscapeLights)
 		float sphere[4];            // the light's centre and radius
 		float planes[12][4];        // (normal, constant), inside where dot(normal, p) - constant >= 0
+		// A portal-strict point light's: its entry in the frame's light context atlas + 1, whose gates (BuildDrawsLatch::strictGatesIndex)
+		// a receiver's root must pass. 0: not gated.
+		std::uint32_t portalContext;
+		std::uint32_t padding[3];
 	};
-	static_assert(sizeof(GpuShadowVolume) == 224);
+	static_assert(sizeof(GpuShadowVolume) == 240);
 	/**
 	 * @brief The shadow mask BuildDraws gives an object of this world bound from a_volumes, on the CPU (the build parity's reference):
 	 * the OR of the mask bits of the volumes whose sphere and active planes the bound reaches. a_landscape: the object's property has

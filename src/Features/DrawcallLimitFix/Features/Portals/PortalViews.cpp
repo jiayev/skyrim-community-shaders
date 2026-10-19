@@ -1319,7 +1319,11 @@ namespace DCLF
 		a_rooms.walk = kLightUntouched;
 		a_rooms.context.reset();
 		lightFlagsPending = false;
-		if (!roomCount || !niLight)
+		if (!roomCount) {
+			a_rooms.walk = kLightNoGraph;
+			return;
+		}
+		if (!niLight)
 			return;
 		// FUN_141509a00 (hidden, or faded under 0.05) and FUN_141509520 (on an object node) walk nothing.
 		if ((At<std::uint32_t>(niLight, 0xF4) & 1) || 0.05f > At<float>(niLight, 0x134) || At<const void*>(a_light, 0x130))
@@ -1410,11 +1414,12 @@ namespace DCLF
 		context->frame = frame.sceneFrame;
 		context->generation = ++contextGeneration;
 		context->roomsGeneration = graphVersion;
-		context->sphere = { position.x, position.y, position.z, radius };
-		context->hemisphere = sphere.plane;
+		context->walkSphere = { position.x, position.y, position.z, radius };
+		context->walkPlane = sphere.plane;
 		context->bothSides = sphere.bothSides;
 		context->strict = true;
 		Encode(context->programs);
+		context->sharedNodes.assign(crossed.begin(), crossed.end());
 		// A strict point process starts in mode 4, not the main list process's mode 0.
 		if (context->programs[kPortalSetBytes / 4])
 			context->programs[kPortalHeaderBytes / 4 + 6] = 4;
@@ -1494,8 +1499,18 @@ namespace DCLF
 			entry[0] = kPortalReached | (p && program->skipView ? kPortalSkipView : 0u);
 			const std::uint32_t ops = program->freeOp && program->finalized ? std::min<std::uint32_t>(program->freeOp + 3, static_cast<std::uint32_t>(program->ops.size())) : 0u;
 			const std::uint32_t planes = ops ? std::min<std::uint32_t>(program->freePlane, static_cast<std::uint32_t>(program->sets.size())) : 0u;
-			if (ops)
-				compiled[p] = PortalBytecode::Lower<Op>(std::span(program->ops).first(ops), program->firstOp, planes);
+			// Encode runs from Build's exit guard and inside the light walk's swapped state: a stream the lowering rejects must
+			// not throw. It accepts the bound, as the previous interpreter did on a malformed stream (the view test still applies).
+			if (ops) {
+				try {
+					compiled[p] = PortalBytecode::Lower<Op>(std::span(program->ops).first(ops), program->firstOp, planes);
+				} catch (const std::exception& e) {
+					compiled[p] = PortalBytecode::AcceptAll();
+					static std::uint64_t rejected = 0;  // render thread
+					if (std::has_single_bit(++rejected))
+						logger::error("[DCLF][structural-gap] portal program {} not lowered ({}); accepting its bounds. Occurrences: {}", p, e.what(), rejected);
+				}
+			}
 			entry[1] = static_cast<std::uint32_t>(compiled[p].instructions.size());
 			entry[2] = planes;
 			entry[3] = 0;
@@ -1613,10 +1628,19 @@ namespace DCLF
 		return 0;
 	}
 
+	std::uint32_t PortalViews::ProgramOfRoom(const void* a_room) const
+	{
+		const auto it = edgeGraph ? roomIndex.find(a_room) : roomIndex.end();
+		return it != roomIndex.end() ? 1 + it->second : kPortalNoProgram;
+	}
+
 	void PortalViews::NoteStructure(const RE::NiNode* a_parent)
 	{
+		// The rooms (ProgramOf), and the portals' shared nodes and multibound nodes a strict light's gates pass through (StrictGates.h).
 		static const std::uintptr_t roomVtable = RE::VTABLE_BSMultiBoundRoom[0].address();
-		if (Engine::VtableIs(a_parent, roomVtable))
+		static const std::uintptr_t sharedVtable = RE::VTABLE_BSPortalSharedNode[0].address();
+		static const std::uintptr_t multiBoundVtable = RE::VTABLE_BSMultiBoundNode[0].address();
+		if (Engine::VtableIs(a_parent, roomVtable) || Engine::VtableIs(a_parent, sharedVtable) || Engine::VtableIs(a_parent, multiBoundVtable))
 			structure.fetch_add(1, std::memory_order_relaxed);
 	}
 

@@ -38,6 +38,7 @@ def main():
         "Features/Fades/FadeStateCS.hlsl": ["PreparePortalQueries", "main"],
         "BuildDrawsCS.hlsl": ["ClearPortalQueries", "PreparePortalQueries", "main"],
         "ParabolicQueriesCS.hlsl": ["main"],
+        "ParabolicStateCS.hlsl": ["Seed", "Scan", "AddOffsets", "Resolve"],
     }
     count = 0
     for source, names in entries.items():
@@ -47,6 +48,9 @@ def main():
                 variants = [(False, False), (True, False)]
             elif entry == "Evaluate":
                 variants = [(uniform, atlas) for uniform in [False, True] for atlas in [False, True]]
+            elif source == "PortalBatchCS.hlsl" and entry == "Count":
+                # Count evaluates past-capacity queries itself, with Evaluate's program addressing.
+                variants = [(False, False), (False, True)]
             for uniform, atlas in variants:
                 variant = ("uniform" if uniform else "independent") + ("-atlas" if atlas else "")
                 output = args.output_dir / f"{Path(source).stem}-{entry}-{variant}.spv"
