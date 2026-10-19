@@ -171,11 +171,15 @@ bool DCLFHasAttribute(uint a_attribute) { return ((DCLFDrawVertexLayout.y >> (12
 
 // The address of attribute a_attribute (BSGraphics::Vertex::Attribute) of vertex a_index: its stream as the layout flags it
 // (bit 44 + a in stream 0, else bit 54 + a), and its offset the layout's nibble times four, except the position's (0). As the
-// engine's input layout for the vertex layout has them (VertexInput.cpp, BuildVertexElements).
+// engine's input layout for the vertex layout has them (VertexInput.cpp, BuildVertexElements). The nibble is bits 4a + 4 of the 64-bit
+// layout: from the land data's (7) on it is in the high word, and a 32-bit shift by 32 or more wraps (masked to five bits), which read
+// the land blend weights at the vertex size's nibble, the next vertex's position.
 uint64_t DCLFAttribute(uint a_attribute, uint a_index, DCLFStream a_first, DCLFStream a_second)
 {
 	const bool first = ((DCLFDrawVertexLayout.y >> (12 + a_attribute)) & 1) != 0;
-	const uint offset = a_attribute == 0 ? 0 : ((DCLFDrawVertexLayout.x >> (4 * a_attribute + 4)) & 0xF) * 4;
+	const uint shift = 4 * a_attribute + 4;
+	const uint nibble = shift < 32 ? (DCLFDrawVertexLayout.x >> shift) : (DCLFDrawVertexLayout.y >> (shift - 32));
+	const uint offset = a_attribute == 0 ? 0 : (nibble & 0xF) * 4;
 	const uint64_t address = first ? a_first.address : a_second.address;
 	const uint stride = first ? a_first.stride : a_second.stride;
 	return address + uint64_t(a_index) * stride + offset;

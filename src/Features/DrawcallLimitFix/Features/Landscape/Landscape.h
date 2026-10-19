@@ -17,4 +17,8 @@ namespace DCLF::Features::Landscape
 {
 	// LandscapeFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
+
+	// Diagnostics/LandTrace.cpp: CS_DCLF_LAND_TRACE=1, main thread at the scene frame's start (FrameBegin), with or without DCLF: every
+	// loaded land quad's engine state (node, geometry, property, material, texture paths), logged when first seen and when it changes.
+	void SubscribeLandTrace();
 }
