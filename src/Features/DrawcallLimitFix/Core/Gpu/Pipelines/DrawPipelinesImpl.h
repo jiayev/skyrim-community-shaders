@@ -678,6 +678,9 @@ namespace DCLF
 			bool discards = false;  // a shadow pipeline whose pixel stage defers the depth test (FragmentDefersDepth)
 			// A main pipeline's Z-prepass plain-draw pipeline (pulled stages) and its identity, shared by equal keys.
 			rhi::PipelinePtr pulledDepth;
+			// A forward or main key's plain colour draws' pipeline (the pulled stages, the colour variant's state; ForwardDrawPass, the colour
+			// pass): null for any other key, and for one whose pulled stages would not build (its range is then drawn device-generated).
+			rhi::PipelinePtr pulledColour;
 			ZPipelineKey zKey;
 			std::shared_ptr<const ConstantTables> tables;  // a main pipeline's stages' (ConstantTableOf)
 			// A main pipeline's both variants' state (PipelineDesc::State): the state class whose execution sets it goes in. Not the pulled
@@ -1113,7 +1116,14 @@ namespace DCLF
 		 * a_keyName ("effect color", "effect depth").
 		 */
 		static org::services::PipelinePayload BuildForwardOrDecal(const ProgramFamilySlot& a_slot, std::string_view a_keyName, rhi::Device a_device,
-			rhi::PipelineLayoutHandle a_layout, PipelineKey a_key, const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW);
+			rhi::PipelineLayoutHandle a_layout, rhi::PipelineLayoutHandle a_zLayout, PipelineKey a_key, const ShaderPrograms::Program* a_program, TargetFormats a_targets,
+			EngineState a_state, bool a_frontCCW);
+		/**
+		 * @brief A forward key's plain colour draws' pipeline into a_built (Built::pulledColour): a_vertex and a_pixel (pulled) under a_zLayout,
+		 * with a_colour's state. A pulled stage that would not build leaves it null, logged (a few): the key's other pipelines stand.
+		 */
+		static void BuildPulledColour(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const std::vector<std::byte>& a_vertex, const std::vector<std::byte>& a_pixel,
+			const PipelineDesc& a_colour, std::string_view a_name, Built& a_built);
 
 		static org::services::PipelinePayload Build(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, rhi::PipelineLayoutHandle a_zLayout, PipelineKey a_key,
 			const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW);

@@ -224,7 +224,7 @@ namespace DCLF
 		SceneBufferSet::Get().Require(a_build, a_resources.classCounts, std::max(plan->Words(), 1u));
 		const auto& latch = producer.latches.main;
 		ReserveMainLatch(latch.cascades, latch.shadowVolumes, latch.buckets, static_cast<std::uint32_t>(plan->classes.size()),
-			static_cast<std::uint32_t>(a_make.indirect.classOf.size()));
+			static_cast<std::uint32_t>(plan->map.size() - kClassHeaderWords));
 		a_make.classPlan = std::move(plan);
 	}
 

@@ -48,7 +48,7 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			BuildDrawsBindings bindings{};
 			if (queries) {
-				a_builder.PreferQueue(org::QueueKind::Compute);
+				a_builder.PreferQueue(AsyncComputeQueue());
 				const auto bind = [&](Api::CullBindingSlot slot, bool writable) {
 					const auto& buffer = Extensions::CullBindingBuffer(slot, *resources->scene);
 					return buffer ? (writable ? a_builder.UnorderedAccess(*buffer).View() : a_builder.ShaderResource(*buffer).View()) : org::DeclaredViewToken{};
@@ -183,6 +183,9 @@ namespace DCLF::Draws
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
 				constants.forwardCapacity = frame->forwardCapacity;
 			}
+			// The forward buckets' draws are pooled (CS_DCLF_FORWARD_PLAIN), as are refraction's.
+			if (now == RenderGraphRuntime::Segment::MainOpaque && resources->pool)
+				constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
 			// The refraction range follows the forward halves (forwardBase + 2 * forwardCapacity), so forwardBase is set even
 			// without forward capacity.
 			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->refractionCapacity && resources->pool) {
@@ -279,6 +282,10 @@ namespace DCLF::Draws
 		{
 			SortSequencesFrame prepared{};
 			if (!BuildsDraws(a_preparation, *resources, segment))
+				return prepared;
+			// The main buckets' plain draws (CS_DCLF_MAIN_PLAIN) stage nothing: BuildDraws writes them in place, and its draw count is no
+			// staged count, so a scatter would copy stale staging over the buckets.
+			if (const auto shape = CurrentFrame(a_preparation, segment); shape && shape->classPlan && !shape->classPlan->main.empty())
 				return prepared;
 			prepared.program = resources->sort->scatter;
 			auto& constants = prepared.constants;

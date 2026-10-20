@@ -149,6 +149,8 @@ namespace DCLF::Draws
 			rhi::PassBeginInfo decalBegin;
 			rhi::PassBeginInfo decalDepthBegin;
 			rhi::ResourceHandle count, classCounts;  // the decal groups' count words; every other sub-range's (ClassCountWord)
+			// The main buckets' plain draws (CS_DCLF_MAIN_PLAIN; SetClassPlan::main), which replace the classes' main calls.
+			bool plainMain = false;
 			bool anyDecals = false;  // any range of the second pass drawn
 			bool anyDecalDepth = false;  // any depth-prepass range drawn
 
@@ -179,11 +181,12 @@ namespace DCLF::Draws
 				RangeCalls(ClassRangeOfSlot(a_slot), kColorVariant, [&](const IndirectCall&) { drawn = true; });
 				return drawn;
 			}
-			// The main draws' calls.
+			// The main draws' calls (none with the main buckets' plain draws).
 			template <class Each>
 			void MainDraws(Each&& a_each) const
 			{
-				RangeCalls(kClassRangeMain, kColorVariant, a_each);
+				if (!plainMain)
+					RangeCalls(kClassRangeMain, kColorVariant, a_each);
 			}
 			// The second pass's calls in the ranges' order (Extensions::MainRanges: opaque decals and multi-index layers, Terrain
 			// Blending's terrain and the meshes it redraws - its replay follows the engine's opaque groups - then blended decals), each
@@ -271,6 +274,20 @@ namespace DCLF::Draws
 			{
 				const bool drawPart = subRange("cs.dclf.colour.main-draws");
 				a_passes.MainDraws([&](const IndirectCall& a_call) { ExecuteCall(commands, sequences, a_call); });
+				// The main buckets (CS_DCLF_MAIN_PLAIN): a plain draw per set index, its pulled colour pipeline under the Z-prepass's layout,
+				// each draw's sequence found by its instance (as the Z-prepass's buckets; the same pulled vertex stage, so EQUAL holds).
+				if (a_passes.plainMain) {
+					const auto& plan = *frame.classPlan;
+					commands.BindLayout(frame.indirect.zLayout);
+					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+					commands.SetIndexBuffer(rhi::IndexBufferView{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt });
+					auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+					const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
+					const auto counts = a_recording.Resolve(a_bindings.classCounts).GetHandle();
+					for (std::size_t b = 0; b < plan.main.size(); ++b)
+						RecordBucketDraw(commands, frame.indirect.zDrawSignature, sequences, sequencesAddress, plan.main[b].first, frame.indirect.plainColour[plan.main[b].set],
+							counts, plan.MainCountWord(b), plan.main[b].capacity);
+				}
 				endSubRange(drawPart);
 			}
 			// A draw family's colour tests EQUAL against its Z-prepass draw, under the Z-prepass layout (same frame push data).
@@ -335,6 +352,7 @@ namespace DCLF::Draws
 			passes.decalBegin.colors = { a_colors.data(), a_prepared.targetCount };
 			passes.decalBegin.debugName = "DCLF decals";
 			passes.decalDepthBegin.debugName = "DCLF decal depth";  // depth only
+			passes.plainMain = frame.classPlan && !frame.classPlan->main.empty() && a_bindings.pool.globalResourceID != 0;
 			// The second pass's ranges (Extensions::MainRanges) with any class's sub-range, and those of them with a depth prepass.
 			for (const auto& range : Extensions::MainRanges().drawn)
 				if (passes.RangeDrawn(range.slot)) {
@@ -342,7 +360,12 @@ namespace DCLF::Draws
 					passes.anyDecalDepth = passes.anyDecalDepth || range.depthPrepass;
 				}
 
-			RecordColourPreprocess(a_prepared, a_pass, passes);
+			{
+				const bool preprocessPart = nvCommands && NvPerf::PushCommandBufferRange(nvCommands, "cs.dclf.colour.preprocess");
+				RecordColourPreprocess(a_prepared, a_pass, passes);
+				if (nvCommands)
+					NvPerf::PopCommandBufferRange(nvCommands, preprocessPart);
+			}
 			RecordColourExecution(a_bindings, a_prepared, a_recording, a_pass, passes, nvCommands);
 		}
 	}
@@ -376,8 +399,13 @@ namespace DCLF::Draws
 				if (resources->terrainDepth)
 					bindings.terrainDepth = a_builder.DepthReadWrite(resources->terrainDepth).View();
 			} else {
-				// The state class sub-ranges' counts the colour calls read (the decal groups' are the count buffer's).
+				// The state class sub-ranges' counts the colour calls read (the decal groups' are the count buffer's), and the main buckets'.
 				bindings.classCounts = a_builder.IndirectArguments(*resources->classCounts).Resource();
+				// The main buckets' plain draws (CS_DCLF_MAIN_PLAIN) read the sequences by address and index the pool.
+				if (resources->pool) {
+					a_builder.ShaderResource(*resources->sequences, noViews);
+					bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
+				}
 				// The stream objects' (face shapes') second vertex stream, which the vertex stages pull by address (DCLF_PULLED_VERTICES).
 				if (resources->scene->vertexStream)
 					a_builder.ShaderResource(*resources->scene->vertexStream, noViews);

@@ -632,6 +632,36 @@ bool TakeClassSlot(uint a_class, uint a_range, out uint a_slot)
 	return false;
 }
 
+// The plain draws' buckets (the class map's tail: SetClassPlan::forward, CS_DCLF_FORWARD_PLAIN; SetClassPlan::main, CS_DCLF_MAIN_PLAIN):
+// how many of a section (0: the classes' sub-ranges take its draws), and a set index's bucket with its (first, capacity), false for none (the
+// draw is dropped, counted). The forward section follows the class words, the main one the forward one; a bucket's count word follows the
+// classes' (SetClassPlan::ForwardCountWord, MainCountWord).
+static const uint kNoPlainBucket = 0xFFFFFFFFu;  // GpuLayouts.h, kNoBucket
+static const uint kForwardSection = 1, kMainSection = 2;  // their header words
+uint PlainBuckets(uint a_section)
+{
+	if (ClassMapOffset == 0)
+		return 0;
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	return latch.Load(ClassMapOffset + 4 * a_section);
+}
+bool PlainBucketOf(uint a_section, uint a_set, out uint a_bucket, out uint2 a_range, out uint a_countWord)
+{
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	const uint sets = latch.Load(ClassMapOffset);
+	const uint forward = latch.Load(ClassMapOffset + 4 * kForwardSection);
+	uint section = ClassMapOffset + kClassHeaderBytes + sets * 4;
+	if (a_section == kMainSection && forward != 0)
+		section += (sets + 2 * forward) * 4;
+	a_bucket = latch.Load(section + a_set * 4);
+	a_range = uint2(0, 0);
+	a_countWord = ClassCount() * kClassRanges + (a_section == kMainSection ? forward : 0) + a_bucket;
+	if (a_bucket == kNoPlainBucket)
+		return false;
+	a_range = latch.Load2(section + (sets + 2 * a_bucket) * 4);
+	return true;
+}
+
 // DrawInput (Core/GpuLayouts.h): 64 bytes (pipeline/record/geometry/flags, the world-space bounding sphere, the object index, the
 // decal ordinal, the skin partitions to draw, the GeometryDraw of a second vertex stream or ~0, and the fade row:
 // the entry root's centre and the fade-out distance, for kObjectFadeTest).
@@ -1266,11 +1296,32 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 				StoreShadowSequence(sequences, ForwardBase + 2 * ForwardCapacity + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 					firstIndex, refractionFirsts.Load(geometryIndex * 4));
 			} else if (forwardInput) {
-				// Its class's forward staging half, with the sort key (StageForwardKey); the forward inputs' draws tallied in kCountForward.
+				// Its class's forward staging half, or its set index's forward bucket's (CS_DCLF_FORWARD_PLAIN: a pooled sequence, its plain
+				// draw's instance the sort's rank), with the sort key (StageForwardKey); the forward inputs' draws tallied in kCountForward.
 				count.InterlockedAdd(kCountForward, 1, scratch);
-				if (!TakeClassSlot(setClass, kClassRangeForward, slot))
-					return;
-				StoreSequence(sequences, slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				if (PlainBuckets(kForwardSection) != 0) {
+					uint bucket, countWord;
+					uint2 range;
+					if (!PlainBucketOf(kForwardSection, drawKey, bucket, range, countWord)) {
+						count.InterlockedAdd(kCountClassUnplanned, 1, scratch);
+						return;
+					}
+					RWByteAddressBuffer classCounts = ResourceDescriptorHeap[ClassCountsIndex];
+					uint taken;
+					classCounts.InterlockedAdd(countWord * 4, 1, taken);
+					if (taken >= range.y) {
+						count.InterlockedAdd(kCountClassOverflow, 1, scratch);
+						return;
+					}
+					slot = range.x + taken;
+					ByteAddressBuffer forwardFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
+					StoreShadowSequence(sequences, slot, 0, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex,
+						forwardFirsts.Load(geometryIndex * 4));
+				} else {
+					if (!TakeClassSlot(setClass, kClassRangeForward, slot))
+						return;
+					StoreSequence(sequences, slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				}
 				StageForwardKey(sequences, slot, objectIndex);
 			} else if (terrainGroup != 0) {
 				// Its class's sub-range of its terrain group's range (kTerrainGroups: range slot kDecalGroups + group - 1), unsorted; the
@@ -1279,6 +1330,26 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 				if (!TakeClassSlot(setClass, 3 + terrainGroup, slot))
 					return;
 				StoreSequence(sequences, slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+			} else if (classed && PlainBuckets(kMainSection) != 0) {
+				// The colour draws' main buckets (CS_DCLF_MAIN_PLAIN): their set index's, a pooled sequence its bucket slot the instance the
+				// plain draw finds it by (as the Z-prepass's), unsorted; the draws tallied in kCountDrawn.
+				uint bucket, countWord;
+				uint2 range;
+				if (!PlainBucketOf(kMainSection, drawKey, bucket, range, countWord)) {
+					count.InterlockedAdd(kCountClassUnplanned, 1, scratch);
+					return;
+				}
+				RWByteAddressBuffer classCounts = ResourceDescriptorHeap[ClassCountsIndex];
+				uint taken;
+				classCounts.InterlockedAdd(countWord * 4, 1, taken);
+				if (taken >= range.y) {
+					count.InterlockedAdd(kCountClassOverflow, 1, scratch);
+					return;
+				}
+				count.InterlockedAdd(kCountDrawn, 1, scratch);
+				ByteAddressBuffer mainFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
+				StoreShadowSequence(sequences, range.x + taken, taken, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex,
+					mainFirsts.Load(geometryIndex * 4));
 			} else if (classed) {
 				// The colour draws: their class's main sub-range (its capacity first, so the staging below takes only what the scatter
 				// places), sorted within the class by pipeline; the draws tallied in kCountDrawn, which also counts the staged ones.

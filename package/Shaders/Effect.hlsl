@@ -101,6 +101,12 @@ struct VS_OUTPUT
 	float3 ScreenSpaceNormal: TEXCOORD7;
 #	endif
 #endif
+#if defined(DCLF_PULLED)
+	// Drawcall Limit Fix's plain draws (DCLF_PULLED; Lighting.hlsl's): the draw's material and pipeline rows' addresses and its object
+	// word, which the pixel stage would otherwise have from the draw's push data.
+	nointerpolation uint4 DCLFDraw: TEXCOORD15;
+	nointerpolation uint DCLFDrawObject: TEXCOORD14;
+#endif
 };
 
 #ifdef VSHADER
@@ -170,7 +176,12 @@ cbuffer IndexedTexcoordBuffer : register(b11)
 // draw's camera as NiBillboardNode::OnVisible turns the node for the culling camera (DCLFObjects.hlsli, DCLFBillboardWorld): the camera's
 // axes are CameraView's rows (c0-c2, as SetCameraData copies the camera's world rotation: right, up, forward) and its eye the posAdjust
 // above. Its previous world is the same turn (the row holds no previous base): no motion of its own.
+#		if defined(DCLF_PULLED)
+// A plain draw's object word is its sequence's, which main reads first: these are assigned there (DCLFVertexObjectStatics).
+static bool DCLFBillboard;
+#		else
 static const bool DCLFBillboard = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & kDCLFRecordEffectBillboard) != 0;
+#		endif
 float3x4 DCLFEffectWorld(bool a_previous)
 {
 	const float3 eye = a_previous ? PreviousBonesPivot : BonesPivot;
@@ -183,8 +194,19 @@ float3x4 DCLFEffectWorld(bool a_previous)
 							placement.PreviousWorld[2] - float4(0, 0, 0, eye.z)) :
 	                    float3x4(placement.World[0] - float4(0, 0, 0, eye.x), placement.World[1] - float4(0, 0, 0, eye.y), placement.World[2] - float4(0, 0, 0, eye.z));
 }
+#		if defined(DCLF_PULLED)
+static precise float3x4 World;
+static precise float3x4 PreviousWorld;
+void DCLFVertexObjectStatics()
+{
+	DCLFBillboard = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & kDCLFRecordEffectBillboard) != 0;
+	World = DCLFEffectWorld(false);
+	PreviousWorld = DCLFEffectWorld(true);
+}
+#		else
 static precise float3x4 World = DCLFEffectWorld(false);
 static precise float3x4 PreviousWorld = DCLFEffectWorld(true);
+#		endif
 #	endif  // DCLF_BINDLESS
 
 #	if defined(PROJECTED_UV)
@@ -264,7 +286,7 @@ VS_INPUT DCLFParticleInput(uint a_vertex)
 
 // Drawcall Limit Fix's builds have no input assembly: main pulls the vertex (DCLFParticleInput; DCLFPulledInput, below) and shades
 // it here.
-#	if defined(DCLF_PARTICLE_PULL) || defined(DCLF_PULLED_VERTICES)
+#	if defined(DCLF_PARTICLE_PULL) || defined(DCLF_PULLED_VERTICES) || defined(DCLF_PULLED)
 VS_OUTPUT DCLFShade(VS_INPUT input)
 #	else
 VS_OUTPUT main(VS_INPUT input)
@@ -487,13 +509,13 @@ VS_OUTPUT main(VS_INPUT input)
 	return vsout;
 }
 
-#	if defined(DCLF_PARTICLE_PULL)
+#	if defined(DCLF_PARTICLE_PULL) && !defined(DCLF_PULLED)
 // A particle system's quads keep priority over the vertex pull below: they have no vertex stream at all.
 VS_OUTPUT main(VS_PARTICLE_INPUT particleInput)
 {
 	return DCLFShade(DCLFParticleInput(particleInput.VertexID));
 }
-#	elif defined(DCLF_PULLED_VERTICES)
+#	elif defined(DCLF_PULLED_VERTICES) || defined(DCLF_PULLED)
 // Drawcall Limit Fix's device-generated draws (Lighting.hlsl's DCLF_PULLED_VERTICES main): the vertex's attributes loaded from the
 // geometry's buffers in the draw's push data, decoded as the engine's input layout for the draw's vertex layout has them
 // (VertexInput.cpp, BuildVertexElements), the input assembler's defaults where it lacks one.
@@ -527,6 +549,51 @@ VS_INPUT DCLFPulledInput(uint a_index, DCLFStream a_first, DCLFStream a_second)
 	return input;
 }
 
+#		if defined(DCLF_PULLED)
+// The permutation block (b4) as the draw's pipeline row holds it (Permutation.hlsli, DCLF_PULLED_ROWS; Lighting.hlsl's).
+void DCLFPermutationStatics()
+{
+	Permutation::VertexShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock);
+	Permutation::PixelShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 4);
+	Permutation::ExtraShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 8);
+	Permutation::ExtraFeatureDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 12);
+	Permutation::EffectRadius = DCLFRowFloat(DCLFPipelineRowAddress, kDCLFPermutationBlock + 16);
+}
+
+// Drawcall Limit Fix's plain draws (DCLF_PULLED; ForwardDrawPass): one per pipeline, which cannot push data per draw. So this stage
+// reads its draw's sequence (BuildDrawsCS: DrawSequence, at DCLFSequencesAddress plus its instance's stride), and through it the draw's
+// object word, rows and geometry (Lighting.hlsl's pulled main); a particle system pulls its quads from its object's block. The rows'
+// blocks the pulled source reads (ShaderPrograms.cpp, PulledLightingSource) are assigned first; Effect's PerTechnique is the frame's
+// (DCLFFrameFog).
+VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	const uint64_t sequence = DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
+	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
+	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
+	DCLFMaterialRowAddress = DCLFAddress(rows.zw);
+	DCLFPerMaterialStatics();
+	DCLFPerGeometryStatics();
+	DCLFPermutationStatics();
+	DCLFVertexObjectStatics();
+#			if defined(DCLF_PARTICLE_PULL)
+	VS_OUTPUT vsout = DCLFShade(DCLFParticleInput(index));
+#			else
+	DCLFDrawVertexLayout = DCLFPipelineVertexLayout();
+	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
+	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
+	DCLFStream first, second;
+	first.address = DCLFAddress(vertexBuffer.xy);
+	first.stride = vertexBuffer.w;
+	second.address = DCLFAddress(streamBuffer.xy);
+	second.stride = streamBuffer.w;
+	VS_OUTPUT vsout = DCLFShade(DCLFPulledInput(index, first, second));
+#			endif
+	vsout.DCLFDraw = rows.zwxy;
+	vsout.DCLFDrawObject = DCLFObjectWord;
+	return vsout;
+}
+#		else
 VS_OUTPUT main(uint index : SV_VertexID)
 {
 	DCLFDrawVertexLayout = DCLFPushedVertexLayout();
@@ -537,7 +604,8 @@ VS_OUTPUT main(uint index : SV_VertexID)
 	second.stride = DCLFStreamStride;
 	return DCLFShade(DCLFPulledInput(index, first, second));
 }
-#	endif  // DCLF_PARTICLE_PULL, DCLF_PULLED_VERTICES
+#		endif  // DCLF_PULLED
+#	endif  // DCLF_PARTICLE_PULL, DCLF_PULLED_VERTICES, DCLF_PULLED
 #endif
 
 typedef VS_OUTPUT PS_INPUT;
@@ -584,7 +652,9 @@ struct PS_OUTPUT
 
 #ifdef PSHADER
 
-#	if defined(DCLF_BINDLESS_DRAW)
+#	if defined(DCLF_BINDLESS_DRAW) && defined(DCLF_PULLED)
+static float AlphaTestRefRS;  // the pulled main's
+#	elif defined(DCLF_BINDLESS_DRAW)
 // Drawcall Limit Fix: the alpha test reference is the object record's (as Lighting.hlsl's), not a buffer of its own.
 static const float AlphaTestRefRS = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
 #	else
@@ -650,14 +720,22 @@ cbuffer PerGeometry : register(b2)
 // Drawcall Limit Fix (T7d's Effect port): PropertyColor is the object's (SetupGeometry: its property's emittance colour, white without
 // one, and its alpha, which GetRenderPasses leaves as the material's times the fade node's currentFade): the shading row's (LightingConstants,
 // SampleShading) EmitColor and the material's alpha in MaterialData.z, times the object's fade (DCLFAlphaFade, as Lighting's MaterialData.z).
+#		if defined(DCLF_PULLED)
+static float4 PropertyColor;  // the pulled main's
+#		else
 static const float4 PropertyColor = float4(DCLFShading[DCLFObjectIndex].EmitColor.xyz,
 	DCLFShading[DCLFObjectIndex].MaterialData.z * DCLFAlphaFade(DCLFObjectIndex, (DCLFObjectWord & 0x40000000u) != 0));
+#		endif
 // The Lighting variant's DLightColor is the frame's (DCLFFrameLighting c18); its point lights are Light Limit Fix's clusters (the PLight
 // variables above are read only outside the world, which a DCLF draw never is: a Lighting effect without Light Limit Fix stays the engine's).
 static const float4 DLightColor = DCLFEffectDLightColor;
 // External Emittance's suppress bit (ExternalEmittance::UpdatePermutation in BSEffectShader::SetupGeometry's hook) is the object's, in its
 // record (LightingConstants.h, kRecordEffectSuppressEmittance), not the pipeline row's permutation block.
+#		if defined(DCLF_PULLED)
+static bool DCLFSuppressExternalEmittance;  // the pulled main's
+#		else
 static const bool DCLFSuppressExternalEmittance = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & 0x8u) != 0;
+#		endif
 #	endif  // DCLF_BINDLESS
 
 #	if defined(LIGHT_LIMIT_FIX)
@@ -825,7 +903,11 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 }
 #	endif
 
+#	if defined(DCLF_PULLED)
+PS_OUTPUT DCLFShadePS(PS_INPUT input)
+#	else
 PS_OUTPUT main(PS_INPUT input)
+#	endif
 {
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
@@ -1222,4 +1304,36 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 	return psout;
 }
+#	if defined(DCLF_PULLED)
+// The permutation block (b4) as the draw's pipeline row holds it (the vertex stage's DCLFPermutationStatics).
+void DCLFPermutationStatics()
+{
+	Permutation::VertexShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock);
+	Permutation::PixelShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 4);
+	Permutation::ExtraShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 8);
+	Permutation::ExtraFeatureDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 12);
+	Permutation::EffectRadius = DCLFRowFloat(DCLFPipelineRowAddress, kDCLFPermutationBlock + 16);
+}
+
+// Drawcall Limit Fix's plain draws (DCLF_PULLED): the draw's rows and object word are its vertex stage's (Lighting.hlsl's pulled pixel
+// main), and so the rows' blocks and the object's values, assigned before anything reads them.
+PS_OUTPUT main(PS_INPUT input)
+{
+	DCLFObjectWord = input.DCLFDrawObject;
+	DCLFPipelineRowAddress = DCLFAddress(input.DCLFDraw.zw);
+	DCLFMaterialRowAddress = DCLFAddress(input.DCLFDraw.xy);
+	DCLFPerMaterialStatics();
+	DCLFPerGeometryStatics();
+	DCLFPermutationStatics();
+#		if defined(DCLF_BINDLESS_DRAW)
+	AlphaTestRefRS = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
+#		endif
+#		if defined(DCLF_BINDLESS)
+	PropertyColor = float4(DCLFShading[DCLFObjectIndex].EmitColor.xyz,
+		DCLFShading[DCLFObjectIndex].MaterialData.z * DCLFAlphaFade(DCLFObjectIndex, (DCLFObjectWord & 0x40000000u) != 0));
+	DCLFSuppressExternalEmittance = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & 0x8u) != 0;
+#		endif
+	return DCLFShadePS(input);
+}
+#	endif  // DCLF_PULLED
 #endif

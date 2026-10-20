@@ -19,6 +19,9 @@ namespace DCLF
 		// Features: unset is DCLF's full featureset; the startup log names a run that narrows one.
 		Dclf,
 		AsyncPriority,
+		AsyncCompute,
+		ForwardPlain,
+		MainPlain,
 		Workers,
 		Fanout,
 		PayloadAppend,

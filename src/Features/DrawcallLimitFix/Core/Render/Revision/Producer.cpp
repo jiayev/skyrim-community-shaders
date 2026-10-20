@@ -94,7 +94,8 @@ namespace DCLF
 			}
 
 			/** @brief a_plan's sub-ranges laid out from their capacities (PlanSetClasses), and its latch words. */
-			void LayOutSetClasses(const MainLayout& a_layout, const IndirectState& a_indirect, std::span<const std::array<bool, kDecalGroups>> a_decals, SetClassPlan& a_plan)
+			void LayOutSetClasses(const MainLayout& a_layout, const IndirectState& a_indirect, std::span<const std::array<bool, kDecalGroups>> a_decals,
+				std::span<const std::uint32_t> a_forwardSets, std::span<const std::uint32_t> a_mainSets, SetClassPlan& a_plan)
 			{
 				auto& classes = a_plan.classes;
 				std::uint32_t keys = 0, main = 0, decals = 0;
@@ -140,6 +141,36 @@ namespace DCLF
 				a_plan.map.assign(kClassHeaderWords, 0u);
 				a_plan.map[0] = static_cast<std::uint32_t>(a_indirect.classOf.size());
 				a_plan.map.insert(a_plan.map.end(), a_indirect.classOf.begin(), a_indirect.classOf.end());
+				// The plain draws' buckets: a set index's slots' capacities, from a_first (a_halves each: the forward buckets' staging and sorted
+				// halves); none unless every set index with any has a plain colour pipeline (else one frame would draw some draws twice or not
+				// at all), then the section's words after the map's (the header's a_count word its buckets).
+				const auto plan = [&](bool a_on, std::span<const std::uint32_t> a_sets, std::uint32_t a_first, std::uint32_t a_halves,
+									  std::vector<SetClassPlan::ForwardBucket>& a_buckets, std::uint32_t a_count) {
+					a_buckets.clear();
+					bool plain = a_on && std::ranges::any_of(a_sets, [](std::uint32_t a_capacity) { return a_capacity != 0; });
+					for (std::uint32_t set = 0; plain && set < a_sets.size(); ++set)
+						plain = !a_sets[set] || (set < a_indirect.plainColour.size() && a_indirect.plainColour[set].valid());
+					if (!plain)
+						return;
+					std::vector<std::uint32_t> bucketOf(a_indirect.classOf.size(), kNoBucket);
+					for (std::uint32_t set = 0; set < a_sets.size(); ++set) {
+						if (!a_sets[set])
+							continue;
+						bucketOf[set] = static_cast<std::uint32_t>(a_buckets.size());
+						a_buckets.push_back({ set, a_first, a_sets[set] });
+						a_first += a_halves * a_sets[set];
+					}
+					a_plan.map[a_count] = static_cast<std::uint32_t>(a_buckets.size());
+					a_plan.map.insert(a_plan.map.end(), bucketOf.begin(), bucketOf.end());
+					for (const auto& bucket : a_buckets) {
+						a_plan.map.push_back(bucket.first);
+						a_plan.map.push_back(bucket.capacity);
+					}
+				};
+				// The forward buckets (CS_DCLF_FORWARD_PLAIN) over the forward range, then the main ones (CS_DCLF_MAIN_PLAIN) over the main range.
+				plan(SwitchOnUnlessZero(Switch::ForwardPlain), a_forwardSets, a_layout.sequenceDraws + a_layout.terrainCapacity[0] + a_layout.terrainCapacity[1], 2,
+					a_plan.forward, 1);
+				plan(SwitchOnUnlessZero(Switch::MainPlain), a_mainSets, 0, 1, a_plan.main, 2);
 			}
 		}
 
@@ -149,6 +180,8 @@ namespace DCLF
 			a_out.classes.resize(a_indirect.classes.size());
 			// Each slot's capacity into its class's sub-range of its range (a decal group's: whether the class has one).
 			std::vector<std::array<bool, kDecalGroups>> decals(a_indirect.classes.size());
+			// And each set index's forward and main slots' capacities (its buckets', CS_DCLF_FORWARD_PLAIN, CS_DCLF_MAIN_PLAIN).
+			std::vector<std::uint32_t> forwardSets(a_indirect.classOf.size(), 0u), mainSets(a_indirect.classOf.size(), 0u);
 			const auto slots = static_cast<std::uint32_t>(std::min(a_layout.slotCapacity.size(), a_tables.pipelines.size()));
 			for (std::uint32_t p = 0; p < slots; ++p) {
 				std::uint32_t c = 0, r = 0;
@@ -158,8 +191,12 @@ namespace DCLF
 					decals[c][r - ClassRangeOfSlot(0)] = true;
 				else
 					a_out.classes[c].ranges[r].capacity += a_layout.slotCapacity[p];
+				if (r == kClassRangeForward)
+					forwardSets[a_lookups.pipelines[p].setIndex] += a_layout.slotCapacity[p];
+				else if (r == kClassRangeMain)
+					mainSets[a_lookups.pipelines[p].setIndex] += a_layout.slotCapacity[p];
 			}
-			LayOutSetClasses(a_layout, a_indirect, decals, a_out);
+			LayOutSetClasses(a_layout, a_indirect, decals, forwardSets, mainSets, a_out);
 		}
 
 		std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets,

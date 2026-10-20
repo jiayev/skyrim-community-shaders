@@ -171,6 +171,8 @@ namespace DCLF::Draws
 		std::uint32_t options = 0;
 		std::uint32_t padding = 0;
 		static constexpr std::uint32_t kCountOffset = 1;
+		// The sorted draw's firstInstance is its rank: a forward bucket's plain draw finds its sequence by its instance (DCLF_PULLED).
+		static constexpr std::uint32_t kRankInstance = 2;
 	};
 	constexpr std::uint32_t kForwardSortConstantWords = sizeof(ForwardSortConstants) / 4;
 	constexpr std::uint32_t kForwardSortGroup = 64;  // ForwardSortCS.hlsl's
@@ -236,8 +238,12 @@ namespace DCLF::Draws
 				a_graph.RegisterResource(org::ResourceIdentifier(buffer->GetName()), buffer);
 		}
 
-		/** @brief The scan, which runs in every execution of its epoch, so the counts it clears stay zero whether or not a build ran. */
-		std::shared_ptr<org::RenderPass> ScanPass() const
+		/**
+		 * @brief The scan, which runs in every execution of its epoch it is active in (a_active; null: every one), so the counts it clears
+		 * stay zero whether or not a build ran. An inactive execution must follow one whose counts nothing raised since (the last scan
+		 * cleared them).
+		 */
+		std::shared_ptr<org::RenderPass> ScanPass(std::function<bool(const org::PassPrepareContext&)> a_active = {}) const
 		{
 			PrefixSum::Desc scan{};
 			scan.programs = prefixSum;
@@ -246,6 +252,7 @@ namespace DCLF::Draws
 			scan.blockSums = blockSums;
 			scan.elements = kKeys;
 			scan.clearCounts = true;
+			scan.active = std::move(a_active);
 			return PrefixSum::CreatePass(std::move(scan));
 		}
 

@@ -542,8 +542,31 @@ namespace DCLF
 		l.classParityMismatches.store(parity.mismatches, std::memory_order_relaxed);
 	}
 
+	void DrawPipelines::Impl::BuildPulledColour(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const std::vector<std::byte>& a_vertex,
+		const std::vector<std::byte>& a_pixel, const PipelineDesc& a_colour, std::string_view a_name, Built& a_built)
+	{
+		static std::atomic<std::uint32_t> loggedFailures{ 0 };
+		try {
+			auto [vertex, pixel] = Parse<2>({ &a_vertex, &a_pixel });
+			CheckPulledBindings(vertex, false);
+			CheckPulledBindings(pixel, true);
+			PipelineDesc plain(a_zLayout, a_vertex, a_pixel, DXGI_FORMAT_UNKNOWN);
+			plain.depthFormat = a_colour.depthFormat;
+			plain.raster = a_colour.raster;
+			plain.depth = a_colour.depth;
+			plain.blend = a_colour.blend;
+			plain.targets = a_colour.targets;
+			plain.Create(a_device, a_built.pulledColour, fmt::format("{} pulled color", a_name));
+		} catch (const std::exception& e) {
+			a_built.pulledColour = {};
+			if (loggedFailures.fetch_add(1) < 8)
+				logger::warn("[DCLF] {}: no plain colour pipeline (its forward draws stay device-generated): {}", a_name, e.what());
+		}
+	}
+
 	org::services::PipelinePayload DrawPipelines::Impl::BuildForwardOrDecal(const ProgramFamilySlot& a_slot, std::string_view a_keyName, rhi::Device a_device,
-		rhi::PipelineLayoutHandle a_layout, PipelineKey a_key, const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW)
+		rhi::PipelineLayoutHandle a_layout, rhi::PipelineLayoutHandle a_zLayout, PipelineKey a_key, const ShaderPrograms::Program* a_program, TargetFormats a_targets,
+		EngineState a_state, bool a_frontCCW)
 	{
 		auto [vertex, pixel] = Parse<2>({ &a_program->vertex, &a_program->pixel });
 		const std::uint32_t decalGroup = RasterDecalGroup(a_key.rasterFlags);
@@ -594,6 +617,8 @@ namespace DCLF
 			}
 			built->stateClass.variants[variant] = desc.State(pixel);
 			desc.Create(a_device, built->pipelines[variant], fmt::format("{} {}", a_keyName, depthOnly ? "depth" : "color"));
+			if (!depthOnly && RasterForward(a_key.rasterFlags))
+				BuildPulledColour(a_device, a_zLayout, a_program->pulledVertex, a_program->pulledPixel, desc, a_keyName, *built);
 		}
 		return built;
 	}
@@ -603,7 +628,7 @@ namespace DCLF
 	{
 		// A program family's key: its build rule (Api::ProgramBuild; ForwardOrDecal, the one there is).
 		if (const auto family = KeyFamily(a_key.rasterFlags); family != Api::ProgramFamily::Count)
-			return BuildForwardOrDecal(ProgramFamilySlotOf(family), Extensions::ProgramFamilyOf(family).keyName, a_device, a_layout, a_key, a_program, a_targets, a_state,
+			return BuildForwardOrDecal(ProgramFamilySlotOf(family), Extensions::ProgramFamilyOf(family).keyName, a_device, a_layout, a_zLayout, a_key, a_program, a_targets, a_state,
 				a_frontCCW);
 		auto [vertex, pixel, depthPixel, pulledVertex, pulledDepthPixel] =
 			Parse<5>({ &a_program->vertex, &a_program->pixel, &a_program->depthPixel, &a_program->pulledVertex, &a_program->pulledDepthPixel });
@@ -673,8 +698,14 @@ namespace DCLF
 			}
 			built->stateClass.variants[variant] = desc.State(depthOnly ? depthPixel : pixel);
 			desc.Create(a_device, built->pipelines[variant], depthOnly ? "depth" : "color");
-			if (!depthOnly)
+			if (!depthOnly) {
+				// The plain colour draws' pipeline: a forward key's (the forward buckets), a main key's (the main buckets: no decal group,
+				// no terrain group, whose ranges keep their device-generated calls).
+				if (forward || (RasterDecalGroup(a_key.rasterFlags) == 0 && terrainGroup == 0))
+					BuildPulledColour(a_device, a_zLayout, a_program->pulledVertex, a_program->pulledPixel, desc, forward ? "Lighting forward" : "Lighting main",
+						*built);
 				continue;
+			}
 			// The Z-prepass plain-draw pipeline: the depth variant's state, pulled stages, no vertex input, bound per call.
 			auto& zKey = built->zKey;
 			zKey.vertex = ModuleHash(a_program->pulledVertex);
@@ -745,6 +776,11 @@ namespace DCLF
 			// An effect pipeline's group has no Z-prepass pipeline, and no bucket names it (PlanZBuckets).
 			const auto& pulledDepth = static_cast<const DrawPipelines::Impl::Built*>(version->pipelines[first].get())->pulledDepth;
 			state.zPipelines.push_back(pulledDepth ? pulledDepth->GetHandle() : decltype(pulledDepth->GetHandle()){});
+		}
+		state.plainColour.reserve(version->pipelines.size());
+		for (const auto& payload : version->pipelines) {
+			const auto& pulledColour = static_cast<const DrawPipelines::Impl::Built*>(payload.get())->pulledColour;
+			state.plainColour.push_back(pulledColour ? pulledColour->GetHandle() : decltype(pulledColour->GetHandle()){});
 		}
 		state.zLayout = impl.zLayout->GetHandle();
 		state.zDrawSignature = impl.zDrawSignature->GetHandle();

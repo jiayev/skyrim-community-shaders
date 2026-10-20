@@ -90,6 +90,7 @@ namespace DCLF::Draws
 		std::uint64_t generation = 0;
 		std::shared_ptr<const ComputeProgram> program;
 		std::vector<Range> ranges;
+		std::uint32_t options = 0;  // added to every range's (ForwardSortConstants::kRankInstance)
 	};
 	/** @brief The sort of a forward range of a_sequences (the main one, a view's), its classes' counts read from a_counts. */
 	std::shared_ptr<org::RenderPass> MakeForwardSortPass(Versioned a_sequences, LatchedTarget a_counts, std::function<ForwardSortSource(const org::PassPrepareContext&)> a_source);

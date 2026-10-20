@@ -89,7 +89,14 @@ namespace DCLF::Draws
 		std::shared_ptr<org::RenderPass> SortScan(const Api::PassContext& a_context)
 		{
 			const auto& resources = a_context.Main();
-			return resources->sort ? resources->sort->ScanPass() : nullptr;
+			// Not while the colour shape draws its main buckets (CS_DCLF_MAIN_PLAIN): BuildDraws then raises no count, and the last scan
+			// (a shape without them) left them zero.
+			const auto segment = a_context.segment;
+			return resources->sort ? resources->sort->ScanPass([segment](const org::PassPrepareContext& a_preparation) {
+				const auto shape = CurrentFrame(a_preparation, segment);
+				return !(shape && shape->classPlan && !shape->classPlan->main.empty());
+			}) :
+			                         nullptr;
 		}
 
 		std::shared_ptr<org::RenderPass> SortScatter(const Api::PassContext& a_context)
@@ -108,8 +115,17 @@ namespace DCLF::Draws
 				const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
 				if (!frame || !BuildsDraws(a_preparation, *main, RenderGraphRuntime::Segment::MainOpaque))
 					return ForwardSortSource{ frame ? frame->generation : 0 };
-				// Each state class's forward pair (its staging half, then its sorted half), counted by its classCounts word.
 				ForwardSortSource source{ frame->generation, main->forwardSort };
+				// The forward buckets' pairs (CS_DCLF_FORWARD_PLAIN), each counted by its classCounts word past the classes', ranked into
+				// firstInstance for the plain draw.
+				if (frame->classPlan && !frame->classPlan->forward.empty()) {
+					const auto& plan = *frame->classPlan;
+					for (std::size_t b = 0; b < plan.forward.size(); ++b)
+						source.ranges.push_back({ plan.forward[b].first, plan.forward[b].capacity, plan.ForwardCountWord(b) * static_cast<std::uint32_t>(sizeof(std::uint32_t)) });
+					source.options = ForwardSortConstants::kRankInstance;
+					return source;
+				}
+				// Each state class's forward pair (its staging half, then its sorted half), counted by its classCounts word.
 				for (std::uint32_t c = 0; c < frame->classes.size(); ++c)
 					if (const auto& range = frame->classes[c].ranges[kClassRangeForward]; range.capacity)
 						source.ranges.push_back({ range.first, range.capacity, ClassCountWord(c, kClassRangeForward) * static_cast<std::uint32_t>(sizeof(std::uint32_t)) });

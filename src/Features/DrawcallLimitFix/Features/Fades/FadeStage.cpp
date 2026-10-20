@@ -49,7 +49,7 @@ namespace DCLF::Draws
 
 		FadeStateBindings Declare(org::PassBuilder& a_builder)
 		{
-			a_builder.PreferQueue(org::QueueKind::Compute);
+			a_builder.PreferQueue(AsyncComputeQueue());
 			const auto& scene = *fades;
 			FadeStateBindings bindings{};
 			if (queryStage)

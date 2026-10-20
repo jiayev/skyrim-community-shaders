@@ -152,6 +152,7 @@ Each compares a live path with a reference built from scratch and flags every mi
 | `CS_DCLF_WORKERS` | hardware threads - 2 | The preparation pool's threads (at least 1). |
 | `CS_DCLF_FANOUT` | `2` | The scene pass's evaluation: `0` interleaved on the scene lane (the reference), `1` every entry evaluated then merged on the lane, `2` evaluated on the preparation pool from 128 entries, merged in order. |
 | `CS_DCLF_ASYNC_PRIORITY` | unset | `normal`: the coordinator and scene threads keep normal priority instead of above normal; `noboost`: workers are not raised to a `ParallelFor` caller's priority. |
+| `CS_DCLF_ASYNC_COMPUTE` | on | `0`: the passes that prefer the compute queue (build-draws' queries, fades, portal batches, tree wind) run on the graphics queue, for timing them in the graphics queue's order. |
 | `CS_DCLF_PAYLOAD_APPEND` | off | `1`: a payload part whose changes all lie past the sealed mark appends into the last backing instead of catching up a pooled one. |
 
 ### Other switches DCLF runs depend on
