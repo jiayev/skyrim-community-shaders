@@ -136,7 +136,7 @@ namespace DCLF::Draws
 	void RecordDispatch(rhi::CommandList& a_commands, const ComputeProgram& a_program, const Constants& a_constants, std::uint32_t a_groups)
 	{
 		a_commands.BindLayout(a_program.layout->GetHandle());
-		a_commands.BindPipeline(a_program.pipeline->GetHandle());
+		a_commands.BindPipeline(a_program.Pipeline());
 		a_commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, static_cast<std::uint32_t>(sizeof(Constants) / 4), reinterpret_cast<const std::uint32_t*>(&a_constants));
 		a_commands.Dispatch(a_groups, 1, 1);
 	}

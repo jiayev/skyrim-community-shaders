@@ -69,8 +69,9 @@ namespace DCLF::Draws
 		auto desc = a_kind == PassKind::Copy ? Desc::Copy(std::move(a_name), std::move(a_pass)) :
 		            a_kind == PassKind::Compute ? Desc::Compute(std::move(a_name), std::move(a_pass)) :
 		                                          Desc::Render(std::move(a_name), std::move(a_pass));
+		// An external pass's queue is its description's (ORG reads no builder preference for it), so CS_DCLF_ASYNC_COMPUTE=0 is applied here.
 		if (a_queue == PassQueue::Compute)
-			desc.PreferQueue(org::QueueKind::Compute);
+			desc.PreferQueue(AsyncComputeQueue());
 		else if (a_queue == PassQueue::Default && a_kind != PassKind::Render)
 			desc.PreferQueue(org::QueueKind::Graphics);
 		a_out.push_back(std::move(desc.Epoch(a_epoch)));

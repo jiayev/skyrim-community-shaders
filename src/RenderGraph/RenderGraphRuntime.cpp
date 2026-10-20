@@ -11,12 +11,16 @@
 #include "Globals.h"
 #include "Profiler.h"
 #include "RenderGraph/DxvkOrgInterop.h"
+#include "Features/RemoteControl/GpuTimestamps.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/DrawcallLimitFix.h"
 #include "GpuIdleTrace.h"
 #include "State.h"
 
 #include <OpenRenderGraph/PersistentGraphHost.h>
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+#	include <ORGModuleServices/PipelineRegistry.h>
+#endif
 #if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
 #	include <ORGModuleServices/ShaderCompiler.h>
 #endif
@@ -29,6 +33,7 @@
 
 #include <tbb/concurrent_queue.h>
 #include <map>
+#include <mutex>
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -363,6 +368,8 @@ struct RenderGraphRuntime::Impl
 	// Written by the render thread when an epoch executes, read when its timestamps come back - on the host's
 	// own thread with async epochs.
 	std::array<std::atomic<Segment>, kSegmentRing> frameSegments{};
+	// The frame each host frame's epoch ran in, while a timestamp trace collects (NvPerf::Timestamps; 0: not collected).
+	std::array<std::atomic<std::uint64_t>, kSegmentRing> frameTimestampFrames{};
 	std::array<SegmentTime, kSegments> segmentTimes{};
 	std::uint32_t timedEpochs = 0;
 	std::uint32_t completedFrames = 0;  // callbacks, timed or not: tells "no readback" from "no timestamps"
@@ -382,14 +389,26 @@ struct RenderGraphRuntime::Impl
 		double spanMs = 0.0;
 		bool timed = false;
 		std::vector<CompletedPass> passes;
+		// Passes on the compute queue: their ticks are that queue's, so they stay out of the graphics queue's exclusive times.
+		std::vector<CompletedPass> otherQueuePasses;
+		// While a timestamp trace collects: the frame the epoch ran in, and every range it timed (passes and barrier batches).
+		std::uint64_t timestampFrame = 0;
+		std::vector<NvPerf::Timestamps::Range> ranges;
 	};
 	bool asyncEpochs = false;
 	std::vector<CompletedEpoch> hostPending;  // the host's thread only
 	std::atomic<std::shared_ptr<std::vector<CompletedEpoch>>> completedInbox;
 
-	void Aggregate(const CompletedEpoch& a_epoch)
+	void Aggregate(CompletedEpoch& a_epoch)
 	{
 		++completedFrames;
+		if (a_epoch.timestampFrame)
+			NvPerf::Timestamps::Completed(a_epoch.timestampFrame, std::move(a_epoch.ranges));
+		if (globals::profiler && a_epoch.segment < kSegments)
+			for (const auto& completed : a_epoch.otherQueuePasses)
+				if (completed.inclusiveMs >= kProfilerMinPassMs)
+					globals::profiler->AddExternalSample(ProfilerName(static_cast<Segment>(a_epoch.segment), completed.name + " [compute]"),
+						static_cast<float>(completed.inclusiveMs));
 		if (!a_epoch.timed || a_epoch.segment >= kSegments)
 			return;
 		auto& segmentTime = segmentTimes[a_epoch.segment];
@@ -412,7 +431,7 @@ struct RenderGraphRuntime::Impl
 	void TakeCompletedEpochs()
 	{
 		if (auto batch = completedInbox.exchange(nullptr, std::memory_order_acq_rel))
-			for (const auto& epoch : *batch)
+			for (auto& epoch : *batch)
 				Aggregate(epoch);
 	}
 
@@ -437,42 +456,60 @@ struct RenderGraphRuntime::Impl
 	{
 		const auto segmentIndex = static_cast<std::size_t>(frameSegments[a_frameNumber % kSegmentRing].load(std::memory_order_acquire));
 		a_out.segment = segmentIndex;
+		a_out.timestampFrame = frameTimestampFrames[a_frameNumber % kSegmentRing].exchange(0, std::memory_order_acq_rel);
 		if (segmentIndex >= kSegments)
 			return;
-		const auto& stats = a_stats.GetPassStats();
-		const auto& names = a_stats.GetPassNames();
+		// Every timestamp pair the frame slot's completion read: the graph's per-frame passes (the shared pool, graphics queue)
+		// and the recordings kept across frames (their own queries, every queue, and their barrier batches).
+		const auto& timestamps = a_stats.GetCompletedTimestamps();
 		const double toMs = a_stats.GetGpuTicksToMilliseconds();
-		const std::uint64_t serial = a_stats.GetFrameSerial();
 		static std::uint32_t described = 0;
-		if (described < 3) {
+		if (described < 3 || (a_out.timestampFrame && described < 6)) {
 			++described;
-			std::size_t matching = 0, zeroTicks = 0;
-			std::uint64_t newest = 0;
-			for (const auto& pass : stats) {
-				newest = (std::max)(newest, pass.gpuSampleSerial);
-				matching += pass.gpuSampleSerial == serial;
-				zeroTicks += pass.gpuSampleSerial == serial && !pass.gpuBeginTick;
+			std::size_t replayed = 0, otherQueue = 0, barriers = 0;
+			for (const auto& timestamp : timestamps) {
+				replayed += timestamp.replayed;
+				otherQueue += timestamp.queueKind != rhi::QueueKind::Graphics;
+				barriers += timestamp.kind == org::runtime::TimestampRangeKind::Barrier;
 			}
-			logger::info("[ORG] completed frame {}: {} passes registered, statistics serial {}, {} read back for it ({} without ticks), newest sample serial {}, {:.6f} ms per tick",
-				a_frameNumber, stats.size(), serial, matching, zeroTicks, newest, toMs);
+			logger::info("[ORG] completed frame {}: {} timestamp pairs read back ({} from kept recordings, {} on other queues, {} barrier batches), {:.6f} ms per tick",
+				a_frameNumber, timestamps.size(), replayed, otherQueue, barriers, toMs);
+		}
+		if (a_out.timestampFrame) {
+			a_out.ranges.reserve(timestamps.size());
+			for (const auto& timestamp : timestamps) {
+				NvPerf::Timestamps::Range range;
+				range.name = std::string(timestamp.name);
+				range.queue = timestamp.queueKind == rhi::QueueKind::Graphics ? NvPerf::Timestamps::Queue::Graphics :
+				              timestamp.queueKind == rhi::QueueKind::Compute  ? NvPerf::Timestamps::Queue::Compute :
+				                                                                NvPerf::Timestamps::Queue::Copy;
+				range.barrier = timestamp.kind == org::runtime::TimestampRangeKind::Barrier;
+				range.replayed = timestamp.replayed;
+				range.us = timestamp.milliseconds * 1000.0;
+				a_out.ranges.push_back(std::move(range));
+			}
 		}
 		struct Sample
 		{
-			std::size_t pass;
+			std::string_view name;
 			std::uint64_t begin;
 			std::uint64_t end;
 		};
 		std::vector<Sample> samples;
-		for (std::size_t i = 0; i < stats.size() && i < names.size(); ++i) {
-			if (stats[i].gpuSampleSerial == serial && stats[i].gpuEndTick >= stats[i].gpuBeginTick && stats[i].gpuBeginTick)
-				samples.push_back({ i, stats[i].gpuBeginTick, stats[i].gpuEndTick });
+		for (const auto& timestamp : timestamps) {
+			if (timestamp.kind != org::runtime::TimestampRangeKind::Pass || !timestamp.beginTick || timestamp.endTick < timestamp.beginTick)
+				continue;
+			if (timestamp.queueKind == rhi::QueueKind::Graphics)
+				samples.push_back({ timestamp.name, timestamp.beginTick, timestamp.endTick });
+			else
+				a_out.otherQueuePasses.push_back({ std::string(timestamp.name), timestamp.milliseconds, timestamp.milliseconds });
 		}
 		if (samples.empty() || toMs <= 0.0)
 			return;
 		std::sort(samples.begin(), samples.end(), [](const Sample& a, const Sample& b) { return a.begin < b.begin; });
 		std::uint64_t previousEnd = samples.front().begin;
 		for (const auto& sample : samples) {
-			CompletedPass pass{ names[sample.pass] };
+			CompletedPass pass{ std::string(sample.name) };
 			pass.inclusiveMs = double(sample.end - sample.begin) * toMs;
 			const std::uint64_t from = (std::max)(previousEnd, sample.begin);
 			pass.exclusiveMs = sample.end > from ? double(sample.end - from) * toMs : 0.0;
@@ -511,6 +548,16 @@ struct RenderGraphRuntime::Impl
 			return "DrawcallLimitFix::First person / " + a_pass;
 		}
 		return "RenderGraph::" + a_pass;
+	}
+
+	// Render thread, for the epoch a host frame runs: its segment, and while a timestamp trace collects, the frame it runs in.
+	void MarkEpoch(std::uint64_t a_hostFrame, Segment a_segment)
+	{
+		const std::uint64_t timestampFrame = NvPerf::Timestamps::Collecting() ? NvPerf::Timestamps::CurrentFrame() + 1 : 0;
+		frameTimestampFrames[a_hostFrame % kSegmentRing].store(timestampFrame, std::memory_order_release);
+		frameSegments[a_hostFrame % kSegmentRing].store(a_segment, std::memory_order_release);
+		if (timestampFrame)
+			NvPerf::Timestamps::Submitted(timestampFrame);
 	}
 
 	void RecordEpoch(Segment a_segment, std::chrono::steady_clock::duration a_elapsed)
@@ -1033,8 +1080,26 @@ bool RenderGraphRuntime::Initialize()
 	state->host->SetCompletedFrameCallback([self = state.get()](std::uint64_t a_frameNumber, const org::runtime::IStatisticsService& a_stats) {
 		self->OnCompletedFrame(a_frameNumber, a_stats);
 	});
-	// Every submission up to a_submissions is complete on the GPU: DCLF's pooled versions bound up to it may be reused.
-	state->host->SetRetiredCallback([](std::uint64_t a_submissions) { DrawcallLimitFix::OnGraphSubmissionsRetired(a_submissions); });
+	// Every submission up to a_submissions is complete on the GPU: DCLF's pooled versions bound up to it may be reused, and the pipelines
+	// a shader reload replaced up to it released (on this thread: the host's, with async epochs).
+	state->host->SetRetiredCallback([](std::uint64_t a_submissions) {
+		DrawcallLimitFix::OnGraphSubmissionsRetired(a_submissions);
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+		PipelineRegistry()->Retire(a_submissions);
+#endif
+	});
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+	// Shader hot reload's safe point (docs/development/dclf-hot-reload.md): every build of the graph publishes what the registry staged.
+	// There the host's thread is stopped and the old graph's work waited for, so no recording or preparation reads a slot while it
+	// changes, and every recording after it is of the new build (each epoch, revision-driven or live, records again). The extension
+	// itself adds nothing to the graph.
+	state->host->AddExtension("cs.org.pipeline-registry", [self = state.get()]() -> std::unique_ptr<org::RenderGraph::IRenderGraphExtension> {
+		if (const auto published = PipelineRegistry()->Publish(self->host->SubmissionsMade()))
+			logger::info("[ORG] shader reload: {} pipelines swapped in at graph build {} (registry generation {})", published, self->host->BuildGeneration() + 1,
+				PipelineRegistry()->Generation());
+		return {};
+	});
+#endif
 	if (state->asyncEpochs) {
 		try {
 			std::vector<std::uint32_t> epochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion),
@@ -1113,6 +1178,10 @@ void RenderGraphRuntime::Shutdown()
 	} catch (const std::exception& e) {
 		logger::error("[ORG] Render graph shutdown failed: {}", e.what());
 	}
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+	// The pipelines a shader reload replaced or staged, while the device is still there (its work is done).
+	PipelineRegistry()->DrainRetired();
+#endif
 	if (state->streamPoint) {
 		// Every point was waited for by a compute submission the graph's timelines have seen complete.
 		VkSemaphoreWaitInfo wait{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
@@ -1218,6 +1287,8 @@ std::uint32_t RenderGraphRuntime::TakeSubmittedSegments()
 
 void RenderGraphRuntime::SignalFramePace(bool a_active)
 {
+	// The frame's end on the render thread (the graph's owner), every frame: shader hot reload's owner point.
+	ServicePipelineReload();
 	if (!IsActive() || !impl->framePace || !a_active)
 		return;
 	auto& state = *impl;
@@ -1334,7 +1405,7 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 	lap(impl->flushUs);
 	const bool async = impl->asyncEpochs;
 	if (!async)
-		impl->frameSegments[impl->host->FramesExecuted() % Impl::kSegmentRing].store(a_segment, std::memory_order_release);
+		impl->MarkEpoch(impl->host->FramesExecuted(), a_segment);
 	impl->TakeCompletedEpochs();
 	lap(impl->completionsUs);
 	impl->epochHookCalls = 0;
@@ -1351,7 +1422,7 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 		}
 		if (async) {
 			impl->host->SubmitEpoch(EpochOf(a_segment), beforePrepare, a_resourceOwner);
-			impl->frameSegments[impl->host->LastHostFrame() % Impl::kSegmentRing].store(a_segment, std::memory_order_release);
+			impl->MarkEpoch(impl->host->LastHostFrame(), a_segment);
 		} else {
 			impl->host->ExecuteFrame(nullptr, beforePrepare, EpochOf(a_segment), a_resourceOwner);
 		}
@@ -1444,19 +1515,80 @@ org::services::ShaderCompiler* RenderGraphRuntime::ShaderCompiler()
 #endif
 }
 
+org::services::PipelineRegistry* RenderGraphRuntime::PipelineRegistry()
+{
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+	// Never destroyed: a rebuild may complete while the process tears down (Shutdown releases what it holds of the device's).
+	static auto* registry = new org::services::PipelineRegistry;
+	return registry;
+#else
+	return nullptr;
+#endif
+}
+
+void RenderGraphRuntime::RequestShaderReload(std::string_view a_changedFile, bool a_force)
+{
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+	logger::info("[ORG] shader reload asked: {}{}", a_changedFile.empty() ? std::string("every live pipeline") : fmt::format("the live pipelines built from {}", a_changedFile),
+		a_force ? ", each swapped even if unchanged" : "");
+	PipelineRegistry()->RequestReload(a_changedFile, a_force);
+#else
+	(void)a_changedFile;
+	(void)a_force;
+#endif
+}
+
+void RenderGraphRuntime::ServicePipelineReload()
+{
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+	auto& registry = *PipelineRegistry();
+	const auto result = registry.Service();
+	if (result.finished) {
+		const auto outcome = registry.LastReload();
+		logger::info("[ORG] shader reload: {} of {} pipelines rebuilt ({} failed, {} unchanged) in {:.2f} s", outcome.rebuilt, outcome.entries, outcome.failed,
+			outcome.unchanged, outcome.seconds);
+		for (const auto& error : outcome.errors)
+			logger::error("[ORG] shader reload: {} (it keeps its pipeline)", error.substr(0, 2000));
+	}
+	if (!result.staged)
+		return;
+	// Swapped in at the graph's next build (the "cs.org.pipeline-registry" extension's factory), where nothing records; with explicit
+	// builds that is the owner's build point (Drawcall Limit Fix's, at the next frame's start). With no graph nothing records: at once.
+	if (impl && impl->host) {
+		impl->host->RequestRebuild();
+	} else if (registry.Publish(0)) {
+		registry.Retire(~0ull);
+	}
+#endif
+}
+
 const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles()
 {
-	static const std::vector<std::filesystem::path> files = [] {
-		std::vector<std::filesystem::path> found;
+	// Scanned once, and again for each shader reload (PipelineRegistry's SourcesGeneration: a file added or removed since). The reference
+	// is to this thread's copy, valid until its next call: a rescan never pulls a list from under a caller iterating it.
+	static std::mutex mutex;
+	static std::shared_ptr<const std::vector<std::filesystem::path>> current;
+	static std::uint64_t scannedFor = ~0ull;
+	thread_local std::shared_ptr<const std::vector<std::filesystem::path>> held;
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+	const std::uint64_t generation = PipelineRegistry()->SourcesGeneration();
+#else
+	const std::uint64_t generation = 0;
+#endif
+	std::scoped_lock lock(mutex);
+	if (!current || scannedFor != generation) {
+		auto found = std::make_shared<std::vector<std::filesystem::path>>();
 		std::error_code ec;
 		for (auto it = std::filesystem::recursive_directory_iterator(kShaderDirectory, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
 			const auto extension = it->path().extension();
 			if (it->is_regular_file() && (extension == ".hlsl" || extension == ".hlsli"))
-				found.push_back(it->path());
+				found->push_back(it->path());
 		}
-		return found;
-	}();
-	return files;
+		current = std::move(found);
+		scannedFor = generation;
+	}
+	held = current;
+	return *held;
 }
 
 bool RenderGraphRuntime::DescribeResource(IUnknown* a_object, DxvkOrgInteropResourceInfo& a_info)
@@ -1544,4 +1676,7 @@ void RenderGraphRuntime::ReportGpuTimings(std::uint32_t, bool) {}
 std::uint32_t RenderGraphRuntime::TakeSubmittedSegments() { return 0; }
 void RenderGraphRuntime::SignalFramePace(bool) {}
 void RenderGraphRuntime::WaitFramePace() {}
+org::services::PipelineRegistry* RenderGraphRuntime::PipelineRegistry() { return nullptr; }
+void RenderGraphRuntime::RequestShaderReload(std::string_view, bool) {}
+void RenderGraphRuntime::ServicePipelineReload() {}
 #endif

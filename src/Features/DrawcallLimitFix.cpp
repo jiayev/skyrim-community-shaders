@@ -415,6 +415,12 @@ void DrawcallLimitFix::DrawSettings()
 		ImGui::TextUnformatted("Not installed (CS_DCLF=0).");
 		return;
 	}
+	if (ImGui::Button("Reload shaders"))
+		RenderGraphRuntime::RequestShaderReload();
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Builds every live render graph pipeline (DCLF's graphics pipelines, every compute program) again from Data/Shaders as it is now. The "
+							   "current pipelines draw until the new ones are swapped in at the graph's next build; one that fails to compile keeps its previous "
+							   "pipeline (the log names the error).");
 	if (!switchedOn) {
 		ImGui::TextWrapped("Switched off with the feature's toggle: the game renders natively and DCLF does no frame work. Switch it back on to resume; no restart needed.");
 		return;
@@ -470,6 +476,12 @@ void DrawcallLimitFix::DrawSettings()
 	}
 }
 
+void DrawcallLimitFix::ClearShaderCache()
+{
+	// Every live render graph pipeline (RenderGraphRuntime's registry: DCLF's, the compute programs), whether DCLF is installed or not.
+	RenderGraphRuntime::RequestShaderReload();
+}
+
 void DrawcallLimitFix::NoteMaterialWritten(const RE::BSShaderMaterial* a_material)
 {
 	// CS's PBR materials (src/TruePBR) reach Core through the material-write sink, as the features' write hooks do.
@@ -520,6 +532,8 @@ void DrawcallLimitFix::OnGraphSubmissionsRetired(std::uint64_t a_submissions)
 
 #else  // !CS_HAS_DCLF: built without the render graph or ORGModuleServices; nothing is installed and every entry point is inert.
 
+#	include "RenderGraph/RenderGraphRuntime.h"
+
 void DrawcallLimitFix::PostPostLoad()
 {
 	unavailableReason = "built without the render graph (CS_HAS_DCLF off)";
@@ -532,6 +546,11 @@ void DrawcallLimitFix::EarlyPrepass() {}
 void DrawcallLimitFix::DrawSettings()
 {
 	ImGui::TextWrapped("Unavailable: %s", unavailableReason.c_str());
+}
+void DrawcallLimitFix::ClearShaderCache()
+{
+	// The render graph's live pipelines (Light Limit Fix's compute programs), when there is a graph.
+	RenderGraphRuntime::RequestShaderReload();
 }
 void DrawcallLimitFix::BeforeOpaquePass() {}
 void DrawcallLimitFix::AfterOpaquePass() {}

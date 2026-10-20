@@ -60,18 +60,18 @@ namespace DCLF::Features::FirstPerson
 		{
 			// Where Core's were listed: after the reflections' (Features/Reflection's, registered earlier before the same Core switch).
 			const auto firstPersonSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_FIRST_PERSON", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "1: the player's first-person arms, weapons and magic hands drawn by DCLF as a view of the one scene (T7e: kSetFirstPerson members, the view bit kViewFirstPerson at the GPU cull, a depth epoch in RenderDepth and a colour epoch at Main::RenderFirstPersonView); 0 they stay native (live toggle's seed)",
+				.description = "1: the player's first-person arms, weapons and magic hands drawn by DCLF as a view of the one scene (T7e: kSetFirstPerson members, the view bit kViewFirstPerson at the GPU cull, a depth epoch in RenderDepth and a colour epoch at Main::RenderFirstPersonView); unset or 0 they stay native: a few dozen draws, cheaper as the engine's own than as two epochs of GPU-driven work (live toggle's seed)",
 				.before = "CS_DCLF_OPAQUE_EFFECTS" });
 			const auto decalsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_FIRST_PERSON_DECALS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::Zero,
 				.description = "default on (T7f item 7): a decal on a first-person entry (an effect's skinned blood decal on the arms, a weapon's BloodLighting) drawn by the first-person forward part as a forward object with its decal group's depth bias, test and blend (needs CS_DCLF_FIRST_PERSON and CS_DCLF_DECALS); 0 it stays the engine's",
 				.before = "CS_DCLF_OPAQUE_EFFECTS" });
 			// The player's first-person skeleton (arms, weapons, shield, magic hands) as a view of the one scene: its geometry tracked under the
-			// first-person root, members of kSetFirstPerson drawn by the first-person epochs (on by default: CS_DCLF_FIRST_PERSON=0 seeds it
-			// off). After the reflections (Features/Reflection's, registered earlier after the same Core toggle), last; it needs the skinned and
+			// first-person root, members of kSetFirstPerson drawn by the first-person epochs (off by default: CS_DCLF_FIRST_PERSON=1 seeds it
+			// on; the engine draws its few dozen draws for less than the two epochs' builds, barriers and indirect draws cost). After the reflections (Features/Reflection's, registered earlier after the same Core toggle), last; it needs the skinned and
 			// the actors (the player's skeleton).
 			const auto firstPerson = a_context.RegisterToggle({ .name = "first person", .label = "Draw the first-person arms and weapons (CS_DCLF_FIRST_PERSON)",
-				.tooltip = "T7e: DCLF draws the first-person skeleton's geometry (arms, weapons, shield, magic hands) as a view of its scene, with the first-person camera, in the engine's depth and first-person passes. On by default (validated fp6).",
-				.section = "First person", .seed = firstPersonSwitch, .entersClassification = true, .after = "exclude primary entries", .needs = { "skinned", "actors" } });
+				.tooltip = "T7e: DCLF draws the first-person skeleton's geometry (arms, weapons, shield, magic hands) as a view of its scene, with the first-person camera, in the engine's depth and first-person passes. Off by default: the engine draws the skeleton's few draws for less than DCLF's two epochs cost (hand-back sweep: 0.15 ms a frame).",
+				.section = "First person", .seed = firstPersonSwitch, .entersClassification = true, .offByDefault = true, .after = "exclude primary entries", .needs = { "skinned", "actors" } });
 			// The view (Core's view machinery: its epochs, revisions, frame requests, classification and set decisions read it as data), and
 			// with CS_DCLF_FIRST_PERSON_DECALS (read once, here) a decal on a first-person entry as a forward object of its forward part.
 			a_context.RegisterView(Contribution(firstPerson, SwitchValue(decalsSwitch) != "0"));

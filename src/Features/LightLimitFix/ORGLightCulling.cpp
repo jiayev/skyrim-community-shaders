@@ -116,7 +116,7 @@ namespace
 			return;
 		auto& commands = a_recording.Commands();
 		commands.BindLayout(a_frame.program->layout->GetHandle());
-		commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+		commands.BindPipeline(a_frame.program->Pipeline());
 		auto constants = a_frame.constants;
 		constants.latchOffset = (a_recording.FrameSlot() % a_frame.latchSlots) * a_frame.latchStride;
 		commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const uint32_t*>(&constants));

@@ -37,6 +37,7 @@
 #include <Tracy/Tracy.hpp>
 
 #include <OpenRenderGraph/PersistentGraphHost.h>
+#include <ORGModuleServices/PipelineRegistry.h>
 #include <ORGModuleServices/PipelineService.h>
 #include <rhi_helpers.h>
 
@@ -587,39 +588,98 @@ namespace DCLF
 		bool supported = false;
 		bool attempted = false;
 		org::services::PipelineService service;
+		/**
+		 * @brief A pipeline's hot reload registration (RenderGraphRuntime::PipelineRegistry; dclf-hot-reload.md), made with its request:
+		 * its source, how to build it again (its program from the files as they are now, then the same build with the same inputs), and
+		 * the program it is built from now. Registered once admitted; the lane keeps the slot where it keeps the payload.
+		 */
+		struct Live
+		{
+			org::services::LivePipelineDesc desc;
+			std::uint64_t fingerprint = 0;  // its program's (ShaderPrograms::Program::fingerprint)
+			std::uint64_t builtFor = 0;     // its program's sources generation
+		};
+		/**
+		 * @brief A_program's kind's registration: a rebuild takes the program from a_rebuildProgram (a ShaderPrograms::Rebuild* call, any
+		 * thread) and, when it differs from the one built with (or the reload is forced), runs a_build on DCLF's build pool, as the
+		 * service's build runs a_build on the lane's program.
+		 */
+		template <class P, class RebuildProgram, class BuildPayload>
+		static std::shared_ptr<const Live> MakeLive(std::string a_id, std::string a_source, const P& a_program, RebuildProgram a_rebuildProgram, BuildPayload a_build)
+		{
+			auto live = std::make_shared<Live>();
+			live->desc.id = std::move(a_id);
+			live->desc.sources = { std::move(a_source) };
+			live->desc.rebuild = [a_rebuildProgram, a_build](const org::services::LiveRebuildRequest& a_request, org::services::LiveRebuildDone a_done) {
+				a_rebuildProgram([a_request, a_build, a_done = std::move(a_done)](std::shared_ptr<const P> a_rebuilt, std::string a_error) {
+					if (!a_rebuilt)
+						return a_done({ .error = std::move(a_error) });
+					const std::uint64_t fingerprint = a_rebuilt->fingerprint;
+					if (fingerprint == a_request.fingerprint && !a_request.force)
+						return a_done({ .fingerprint = fingerprint });
+					// The pipeline on DCLF's build pool, as the service's builds (the program's last compile may have completed anywhere).
+					auto task = [a_rebuilt, a_build, a_done, fingerprint] {
+						try {
+							a_done({ .payload = a_build(*a_rebuilt), .fingerprint = fingerprint });
+						} catch (const std::exception& e) {
+							a_done({ .error = e.what() });
+						}
+					};
+					if (!BuildSubmitter()(task))
+						task();
+				});
+			};
+			live->fingerprint = a_program.fingerprint;
+			live->builtFor = a_program.sourcesGeneration;
+			return live;
+		}
+		/** @brief The lane, a pipeline admitted: its slot in the registry (null without a registration, or without the registry). */
+		static std::shared_ptr<org::services::LivePipelineSlot> RegisterLive(const std::shared_ptr<const Live>& a_live, const org::services::PipelinePayload& a_payload)
+		{
+			auto* registry = RenderGraphRuntime::PipelineRegistry();
+			if (!a_live || !registry)
+				return {};
+			return registry->Register(a_live->desc, a_payload, a_live->fingerprint, a_live->builtFor);
+		}
+
 		/*
 		 * Build completions: each callback pushes its artifact (on the building thread, or inline on the requesting thread for a cached
 		 * pipeline) and wakes the lane, which drains them. Each carries its request's generation; one from before a target or format
-		 * change is dropped.
+		 * change is dropped. And its registration (Live).
 		 */
 		struct MainDone
 		{
 			PipelineKey key;
 			std::uint32_t generation = 0;
 			org::services::PipelineArtifact artifact;
+			std::shared_ptr<const Live> live;
 		};
 		struct ShadowDone
 		{
 			ShadowPipelineKey key;
 			std::uint32_t generation = 0;
 			org::services::PipelineArtifact artifact;
+			std::shared_ptr<const Live> live;
 		};
 		struct FamilyDone
 		{
 			std::uint32_t generation = 0;
 			org::services::PipelineArtifact artifact;
+			std::shared_ptr<const Live> live;
 		};
 		struct ForwardDone
 		{
 			ForwardPipelineKey key;
 			std::uint32_t generation = 0;
 			org::services::PipelineArtifact artifact;
+			std::shared_ptr<const Live> live;
 		};
 		struct RefractionDone
 		{
 			std::uint32_t generation = 0;              // the main set's (the main depth's format)
 			DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  // the refraction normals' it was built for
 			org::services::PipelineArtifact artifact;
+			std::shared_ptr<const Live> live;
 		};
 		struct Completions
 		{
@@ -639,8 +699,14 @@ namespace DCLF
 		// Never freed: a build may complete while the process tears down.
 		Completions* completions = new Completions;
 
-		// The builds run on DCLF's preparation pool (BuildExecutor.h), not a thread each.
-		Impl() { service.Configure(BuildSubmitter()); }
+		// The builds run on DCLF's preparation pool (BuildExecutor.h), not a thread each. A shader reload's start and its swap wake the lane
+		// (FollowSources, AdoptLivePipelines).
+		Impl()
+		{
+			service.Configure(BuildSubmitter());
+			if (auto* registry = RenderGraphRuntime::PipelineRegistry())
+				registry->AddListener([] { WakePipelineLane(); });
+		}
 
 		// Render thread: the shadow view rasterizer states by id - 1; the lane reads the posted copy (FrameInput::shadowStates).
 		struct ShadowRasterState
@@ -771,6 +837,7 @@ namespace DCLF
 		struct ForwardEntry
 		{
 			org::services::PipelinePayload built;
+			std::shared_ptr<org::services::LivePipelineSlot> slot;  // built's (AdoptLivePipelines)
 			bool requested = false;
 			bool failed = false;
 		};
@@ -846,6 +913,9 @@ namespace DCLF
 			ShaderPrograms::Finished finishedPrograms;               // UpdateLane's, per pass (every kind's)
 			Versions<SetVersion> versions;
 			std::vector<org::services::PipelinePayload> setPipelines;  // index -> Built, admitted (not necessarily published)
+			// By index: setPipelines' registry slot (AdoptLivePipelines takes what a reload swapped into it).
+			std::vector<std::shared_ptr<org::services::LivePipelineSlot>> setSlots;
+			std::uint64_t registryGeneration = 0;  // PipelineRegistry::Generation as last adopted
 			// Z-prepass groups: each pipeline's (numbered as first admitted), and each group's first pipeline.
 			std::vector<std::uint32_t> zGroupOf, zGroupFirst;
 			ankerl::unordered_dense::map<ZPipelineKey, std::uint32_t, ZPipelineKeyHash> zGroups;
@@ -876,8 +946,9 @@ namespace DCLF
 			struct Shadow : PipelineFamily<ShadowPipelineKey, ShadowPipelineKeyHash, Entry, ankerl::unordered_dense::map<ShadowPipelineKey, ShadowRequest, ShadowPipelineKeyHash>>
 			{
 				Versions<ShadowSetVersion> versions;
-				// By index, admitted: the pipeline, its vertex layout and its class (kShadowDiscards).
+				// By index, admitted: the pipeline, its vertex layout and its class (kShadowDiscards), and the pipeline's registry slot.
 				std::vector<org::services::PipelinePayload> setPipelines;
+				std::vector<std::shared_ptr<org::services::LivePipelineSlot>> setSlots;
 				std::vector<std::uint64_t> layouts;
 				std::vector<std::uint8_t> discards;
 				std::string recreatedBy;  // the set's last recreation, for NearestShadowKey's warnings
@@ -891,7 +962,8 @@ namespace DCLF
 				bool failed = false;         // this generation's build failed, or the program did
 				bool programFailed = false;  // for good
 				org::services::PipelinePayload built;
-				// Earlier generations' builds, kept for the process: a recording may still draw with them.
+				std::shared_ptr<org::services::LivePipelineSlot> slot;  // built's (AdoptLivePipelines)
+				// Earlier generations' builds, and those a shader reload replaced, kept for the process: a recording may still draw with them.
 				std::vector<org::services::PipelinePayload> retired;
 				struct Counters
 				{
@@ -909,7 +981,8 @@ namespace DCLF
 				bool programFailed = false;  // for good
 				DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  // the format requested or built for
 				org::services::PipelinePayload built;
-				// Earlier builds, kept for the process: a recording may still draw with them.
+				std::shared_ptr<org::services::LivePipelineSlot> slot;  // built's (AdoptLivePipelines)
+				// Earlier builds, and those a shader reload replaced, kept for the process: a recording may still draw with them.
 				std::vector<org::services::PipelinePayload> retired;
 				struct Counters
 				{
@@ -930,6 +1003,7 @@ namespace DCLF
 				std::vector<org::services::PipelinePayload> retired;  // earlier targets' builds, kept for the process
 			};
 			Forward forward;
+			std::uint64_t servicePass = 0;  // PublishReady's fence value: the service's displaced payloads retire at once (DrainLane)
 		};
 		Lane lane;
 
@@ -967,8 +1041,33 @@ namespace DCLF
 		void DrainLane();
 		/** @brief The lane: requests a_key's program, then its pipeline, or parks it until what it lacks arrives. */
 		void TryRequest(const PipelineKey& a_key);
+		/** @brief TryRequest's warning for a build it requested (a_slot: the pipeline slot that asked), with its nearest requested relative. */
+		void LogOnDemandBuild(const PipelineKey& a_key, Api::ProgramFamily a_family, std::uint32_t a_slot) const;
 		/** @brief The lane: the main pass's targets changed; every key is built again into a new set. */
 		void RecreateMainSet(const TargetFormats& a_from, const TargetFormats& a_to);
+		/** @brief RecreateMainSet's: the main set, the draw families' and refraction started over (a_by: why, for the warnings). */
+		void ResetMainSet(std::string a_by);
+		/** @brief RecreateShadowSet's: the shadow set started over. */
+		void ResetShadowSet(std::string a_by);
+		/** @brief RecreateForward's: the forward pipelines started over, the built ones kept for the process. */
+		void ResetForward();
+		/**
+		 * @brief The lane, when a shader reload moved the sources (ShaderPrograms::FollowSources dropped its program entries): every key
+		 * parked on a program, and every key whose program or build failed, requested again with the inputs (DrainLane's RetryBlocked).
+		 */
+		void RetryAfterSourcesMoved();
+		/**
+		 * @brief The lane, each pass before admitting: once PipelineRegistry::Generation moved, every pipeline whose slot a reload swapped
+		 * takes the slot's payload where the lane keeps it (the sets' indices, the forward entries, the draw families, refraction). A set
+		 * that changed gets new versions (Versions::Retire; the next publication applies every index from the new payloads, its state
+		 * classes and Z-prepass groups taken again), the catalog is published again with them, and the scene lane's next revision binds
+		 * them. The one reload step for every kind.
+		 */
+		void AdoptLivePipelines();
+		/** @brief AdmitLane's and ReindexMainSet's: a_index's Z-prepass group and state class (AdmitToClass), in admission order. */
+		void IndexMainBuilt(std::uint32_t a_index, const Built& a_built);
+		/** @brief AdoptLivePipelines': the main set's groups and classes made again from its pipelines, in index order. */
+		void ReindexMainSet();
 		/** @brief The lane: admits completed builds, publishes a set version, hands out their indices. */
 		void AdmitLane();
 		/** @brief The lane: TryRequest for a shadow view key. */

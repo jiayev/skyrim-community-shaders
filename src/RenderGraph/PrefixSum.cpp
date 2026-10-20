@@ -96,7 +96,7 @@ namespace PrefixSum
 				auto& commands = a_recording.Commands();
 				const auto& scan = *a_frame.programs->blockScan;
 				commands.BindLayout(scan.layout->GetHandle());
-				commands.BindPipeline(scan.pipeline->GetHandle());
+				commands.BindPipeline(scan.Pipeline());
 				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
 				commands.Dispatch(a_frame.constants.blocks, 1, 1);
 				// The block sums and local offsets must be complete before the second dispatch reads them. One pass with a barrier
@@ -105,7 +105,7 @@ namespace PrefixSum
 				commands.Barriers(rhi::BarrierBatch{ {}, {}, { &global, 1 } });
 				const auto& offsets = *a_frame.programs->blockOffsets;
 				commands.BindLayout(offsets.layout->GetHandle());
-				commands.BindPipeline(offsets.pipeline->GetHandle());
+				commands.BindPipeline(offsets.Pipeline());
 				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
 				commands.Dispatch(1, 1, 1);
 			}

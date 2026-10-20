@@ -154,13 +154,13 @@ namespace DCLF
 		// As TryRequest: each build is logged with its casters and nearest relative.
 		std::uint8_t onDemand = 0;
 		bool programFailed = false;
-		const auto* program = ShaderPrograms::Get().FindShadow(a_key.technique, *input->utility, true, nullptr, &onDemand, &programFailed);
+		const auto program = ShaderPrograms::Get().FindShadow(a_key.technique, *input->utility, true, nullptr, &onDemand, &programFailed);
 		if (onDemand)
 			logger::warn("[DCLF] on-demand SPIR-V compile: Utility {} of technique {:08X} that no precompile requested ({}), {}", ShaderPrograms::OnDemandStages(onDemand),
 				a_key.technique, SIE::ShaderCache::Instance().IsCompiling() ? "Community Shaders' compile workers still busy" : "Community Shaders' compile workers idle",
 				casters);
 		if (programFailed) {
-			// Its casters stay native in this key's views.
+			// Its casters stay native in this key's views until a shader reload makes its program again (RetryAfterSourcesMoved).
 			s.FailForGood(a_key);
 			lane.dirty = true;
 			return;
@@ -177,17 +177,25 @@ namespace DCLF
 		const DXGI_FORMAT depthFormat = input->shadowFormat;
 		org::services::PipelineRecipe recipe;
 		recipe.id = fmt::format("dclf.shadow.{:08X}.{:X}.{:016X}.{}", a_key.technique, a_key.rasterFlags, a_key.vertexLayout, a_key.viewState);
-		recipe.shaderKey = ShadowPipelineKeyHash{}(a_key);
+		// Its program's binaries, as the main set's (TryRequest).
+		recipe.shaderKey = ShadowPipelineKeyHash{}(a_key) ^ (program->fingerprint * 0x9E3779B97F4A7C15ull);
 		// No vertex input: never an artifact built with an input layout (kPulledVerticesSalt).
 		recipe.fixedFunctionKey = static_cast<std::uint64_t>(depthFormat) ^ kPulledVerticesSalt;
-		recipe.build = [device = device, layout = ShadowLayout(), key = a_key, program, depthFormat, rasterState] {
-			return BuildShadow(device, layout, key, program, depthFormat, rasterState);
+		const auto build = [device = device, layout = ShadowLayout(), key = a_key, depthFormat, rasterState](const ShaderPrograms::ShadowProgram& a_program) {
+			return BuildShadow(device, layout, key, &a_program, depthFormat, rasterState);
 		};
+		recipe.build = [build, program] { return build(*program); };
+		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*input->utility), *program,
+			[technique = a_key.technique, utility = input->utility](ShaderPrograms::Rebuilt<ShaderPrograms::ShadowProgram> a_done) {
+				ShaderPrograms::Get().RebuildShadow(technique, *utility, std::move(a_done));
+			},
+			build);
 		s.entries.try_emplace(a_key);
-		(void)service.Request(std::move(recipe), [completions = completions, key = a_key, generation = s.generation](const org::services::PipelineArtifact& a_artifact) {
-			completions->shadow.Push({ key, generation, a_artifact });
-			WakePipelineLane();
-		});
+		(void)service.Request(std::move(recipe),
+			[completions = completions, key = a_key, generation = s.generation, live = std::move(live)](const org::services::PipelineArtifact& a_artifact) {
+				completions->shadow.Push({ key, generation, a_artifact, live });
+				WakePipelineLane();
+			});
 		s.counters.requested.fetch_add(1, std::memory_order_relaxed);
 		logger::warn("[DCLF] on-demand pipeline build: shadow technique {:08X}, raster {:X}, vertex layout {:016X}, view state {}, format {}, {}; {}", a_key.technique,
 			a_key.rasterFlags, a_key.vertexLayout, a_key.viewState, static_cast<int>(depthFormat), casters, NearestShadowKey(a_key));
@@ -199,12 +207,19 @@ namespace DCLF
 		// Every shadow pipeline depends on the format: start over (the new generation drops queued builds' completions).
 		logger::info("[DCLF] pipeline lane: shadow map format {} -> {}; rebuilding {} shadow pipelines", static_cast<int>(a_from), static_cast<int>(a_to),
 			s.setPipelines.size());
+		ResetShadowSet(fmt::format("shadow map format {} -> {}", static_cast<int>(a_from), static_cast<int>(a_to)));
+	}
+
+	void DrawPipelines::Impl::ResetShadowSet(std::string a_by)
+	{
+		auto& s = lane.shadow;
 		s.StartOver();
 		s.versions.Retire();
 		s.setPipelines.clear();
+		s.setSlots.clear();  // their registry entries go with them
 		s.layouts.clear();
 		s.discards.clear();
-		s.recreatedBy = fmt::format("shadow map format {} -> {}", static_cast<int>(a_from), static_cast<int>(a_to));
+		s.recreatedBy = std::move(a_by);
 		lane.dirty = true;
 	}
 
@@ -233,6 +248,7 @@ namespace DCLF
 			const auto* built = static_cast<const Built*>(artifact.payload.get());
 			entry.slot = static_cast<std::uint32_t>(s.setPipelines.size());
 			s.setPipelines.push_back(artifact.payload);
+			s.setSlots.push_back(RegisterLive(a_done.live, artifact.payload));
 			s.layouts.push_back(key.vertexLayout);
 			s.discards.push_back(built->discards ? 1 : 0);
 		});

@@ -180,17 +180,25 @@ static bool DCLFBillboard;
 #		else
 static const bool DCLFBillboard = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & kDCLFRecordEffectBillboard) != 0;
 #		endif
+// The billboard's turned world for this draw's camera (absolute).
+float3x4 DCLFEffectBillboardWorld() { return DCLFBillboardWorld(DCLFObjectIndex, ScreenProj[2].xyz, ScreenProj[1].xyz, ScreenProj[0].xyz, BonesPivot); }
+float3x4 DCLFEyeRelative(float3x4 a_world, float3 a_eye)
+{
+	return float3x4(a_world[0] - float4(0, 0, 0, a_eye.x), a_world[1] - float4(0, 0, 0, a_eye.y), a_world[2] - float4(0, 0, 0, a_eye.z));
+}
+// The placement's World or PreviousWorld (absolute).
+float3x4 DCLFPlacementWorld(bool a_previous)
+{
+	const DCLFPlacement placement = DCLFPlacements[DCLFObjectIndex];
+	return a_previous ? float3x4(placement.PreviousWorld[0], placement.PreviousWorld[1], placement.PreviousWorld[2]) :
+	                    float3x4(placement.World[0], placement.World[1], placement.World[2]);
+}
 float3x4 DCLFEffectWorld(bool a_previous)
 {
 	const float3 eye = a_previous ? PreviousBonesPivot : BonesPivot;
-	if (DCLFBillboard) {
-		const float3x4 world = DCLFBillboardWorld(DCLFObjectIndex, ScreenProj[2].xyz, ScreenProj[1].xyz, ScreenProj[0].xyz, BonesPivot);
-		return float3x4(world[0] - float4(0, 0, 0, eye.x), world[1] - float4(0, 0, 0, eye.y), world[2] - float4(0, 0, 0, eye.z));
-	}
-	const DCLFPlacement placement = DCLFPlacements[DCLFObjectIndex];
-	return a_previous ? float3x4(placement.PreviousWorld[0] - float4(0, 0, 0, eye.x), placement.PreviousWorld[1] - float4(0, 0, 0, eye.y),
-							placement.PreviousWorld[2] - float4(0, 0, 0, eye.z)) :
-	                    float3x4(placement.World[0] - float4(0, 0, 0, eye.x), placement.World[1] - float4(0, 0, 0, eye.y), placement.World[2] - float4(0, 0, 0, eye.z));
+	if (DCLFBillboard)
+		return DCLFEyeRelative(DCLFEffectBillboardWorld(), eye);
+	return DCLFEyeRelative(DCLFPlacementWorld(a_previous), eye);
 }
 #		if defined(DCLF_PULLED)
 static precise float3x4 World;
@@ -198,8 +206,15 @@ static precise float3x4 PreviousWorld;
 void DCLFVertexObjectStatics()
 {
 	DCLFBillboard = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & kDCLFRecordEffectBillboard) != 0;
-	World = DCLFEffectWorld(false);
-	PreviousWorld = DCLFEffectWorld(true);
+	if (DCLFBillboard) {
+		// One turn for both (DCLFEffectWorld's), made relative to each eye.
+		const float3x4 world = DCLFEffectBillboardWorld();
+		World = DCLFEyeRelative(world, BonesPivot);
+		PreviousWorld = DCLFEyeRelative(world, PreviousBonesPivot);
+	} else {
+		World = DCLFEyeRelative(DCLFPlacementWorld(false), BonesPivot);
+		PreviousWorld = DCLFEyeRelative(DCLFPlacementWorld(true), PreviousBonesPivot);
+	}
 }
 #		else
 static precise float3x4 World = DCLFEffectWorld(false);
@@ -521,28 +536,29 @@ VS_OUTPUT main(VS_PARTICLE_INPUT particleInput)
 // VertexAttributesOf: Effect's).
 VS_INPUT DCLFPulledInput(uint a_index, DCLFStream a_first, DCLFStream a_second)
 {
+	DCLFStreamsAt(a_index, a_first, a_second);
 	VS_INPUT input;
-	input.Position = DCLFPullFloat4(0, a_index, a_first, a_second);
+	input.Position = DCLFPullFloat4(0, a_first, a_second);
 #		if defined(TEXCOORD)
 #			if defined(STRIP_PARTICLES)
 	// R16G16_FLOAT read as three components: the input assembler fills z with 0.
-	input.TexCoord0 = float3(DCLFPullHalf2(1, a_index, a_first, a_second), 0);
+	input.TexCoord0 = float3(DCLFPullHalf2(1, a_first, a_second), 0);
 #			else
-	input.TexCoord0 = DCLFPullHalf2(1, a_index, a_first, a_second);
+	input.TexCoord0 = DCLFPullHalf2(1, a_first, a_second);
 #			endif
 #		endif
 #		if defined(NORMALS) || defined(MOTIONVECTORS_NORMALS)
-	input.Normal = DCLFPullUnorm4(3, 0, a_index, a_first, a_second);
+	input.Normal = DCLFPullUnorm4(3, 0, a_first, a_second);
 #		endif
 #		if defined(BINORMAL_TANGENT)
-	input.Bitangent = DCLFPullUnorm4(4, 0, a_index, a_first, a_second);
+	input.Bitangent = DCLFPullUnorm4(4, 0, a_first, a_second);
 #		endif
 #		if defined(VC)
-	input.Color = DCLFPullUnorm4(5, 0, a_index, a_first, a_second);
+	input.Color = DCLFPullUnorm4(5, 0, a_first, a_second);
 #		endif
 #		if defined(SKINNED)
-	input.BoneWeights = DCLFPullHalf4(6, a_index, a_first, a_second);
-	input.BoneIndices = DCLFPullUnorm4(6, 8, a_index, a_first, a_second);
+	input.BoneWeights = DCLFPullHalf4(6, a_first, a_second);
+	input.BoneIndices = DCLFPullUnorm4(6, 8, a_first, a_second);
 #		endif
 	return input;
 }
@@ -563,7 +579,7 @@ void DCLFPermutationStatics()
 // object word, rows and geometry (Lighting.hlsl's pulled main); a particle system pulls its quads from its object's block. The rows'
 // blocks the pulled source reads (ShaderPrograms.cpp, PulledLightingSource) are assigned first; Effect's PerTechnique is the frame's
 // (DCLFFrameFog).
-VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+VS_OUTPUT DCLFPulledVertex(uint index, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
@@ -588,6 +604,21 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	VS_OUTPUT vsout = DCLFShade(DCLFPulledInput(index, first, second));
 #			endif
 	vsout.DCLFDrawInstance = a_instance;
+	return vsout;
+}
+
+// The draw's lookups keyed on a wave-uniform instance (Lighting.hlsl's pulled main): its rows, statics, object and billboard turn are
+// the draw's (scalar), not each lane's.
+VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	VS_OUTPUT vsout;
+	[loop] for (;;) {
+		const uint drawInstance = WaveReadLaneFirst(a_instance);
+		[branch] if (drawInstance == a_instance) {
+			vsout = DCLFPulledVertex(index, drawInstance);
+			break;
+		}
+	}
 	return vsout;
 }
 #		else
@@ -1314,9 +1345,9 @@ void DCLFPermutationStatics()
 
 // Drawcall Limit Fix's plain draws (DCLF_PULLED): the draw's rows and object word are its vertex stage's (Lighting.hlsl's pulled pixel
 // main), and so the rows' blocks and the object's values, assigned before anything reads them.
-PS_OUTPUT main(PS_INPUT input)
+PS_OUTPUT DCLFPulledPixel(PS_INPUT input, uint a_instance)
 {
-	const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
+	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
 	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
 	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
@@ -1333,6 +1364,20 @@ PS_OUTPUT main(PS_INPUT input)
 	DCLFSuppressExternalEmittance = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & 0x8u) != 0;
 #		endif
 	return DCLFShadePS(input);
+}
+
+// Keyed on a wave-uniform instance (Lighting.hlsl's pulled pixel main): a quad's lanes are one draw's, so they take one pass together.
+PS_OUTPUT main(PS_INPUT input)
+{
+	PS_OUTPUT psout;
+	[loop] for (;;) {
+		const uint drawInstance = WaveReadLaneFirst(input.DCLFDrawInstance);
+		[branch] if (drawInstance == input.DCLFDrawInstance) {
+			psout = DCLFPulledPixel(input, drawInstance);
+			break;
+		}
+	}
+	return psout;
 }
 #	endif  // DCLF_PULLED
 #endif

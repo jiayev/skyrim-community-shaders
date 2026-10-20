@@ -465,26 +465,27 @@ VS_OUTPUT main(VS_INPUT input)
 // VertexAttributesOf: Lighting's), or a pipeline is built for a layout that lacks one and draws its defaults.
 VS_INPUT DCLFPulledInput(uint a_index, DCLFStream a_first, DCLFStream a_second)
 {
+	DCLFStreamsAt(a_index, a_first, a_second);
 	VS_INPUT input;
-	input.Position = DCLFPullFloat4(0, a_index, a_first, a_second);
-	input.TexCoord0 = DCLFPullHalf2(1, a_index, a_first, a_second);
+	input.Position = DCLFPullFloat4(0, a_first, a_second);
+	input.TexCoord0 = DCLFPullHalf2(1, a_first, a_second);
 #		if !defined(MODELSPACENORMALS)
-	input.Normal = DCLFPullUnorm4(3, 0, a_index, a_first, a_second);
-	input.Bitangent = DCLFPullUnorm4(4, 0, a_index, a_first, a_second);
+	input.Normal = DCLFPullUnorm4(3, 0, a_first, a_second);
+	input.Bitangent = DCLFPullUnorm4(4, 0, a_first, a_second);
 #		endif
 #		if defined(VC)
-	input.Color = DCLFPullUnorm4(5, 0, a_index, a_first, a_second);
+	input.Color = DCLFPullUnorm4(5, 0, a_first, a_second);
 #			if defined(LANDSCAPE)
-	input.LandBlendWeights1 = DCLFPullUnorm4(7, 0, a_index, a_first, a_second);
-	input.LandBlendWeights2 = DCLFPullUnorm4(7, 4, a_index, a_first, a_second);
+	input.LandBlendWeights1 = DCLFPullUnorm4(7, 0, a_first, a_second);
+	input.LandBlendWeights2 = DCLFPullUnorm4(7, 4, a_first, a_second);
 #			endif
 #		endif
 #		if defined(SKINNED)
-	input.BoneWeights = DCLFPullHalf4(6, a_index, a_first, a_second);
-	input.BoneIndices = DCLFPullUnorm4(6, 8, a_index, a_first, a_second);
+	input.BoneWeights = DCLFPullHalf4(6, a_first, a_second);
+	input.BoneIndices = DCLFPullUnorm4(6, 8, a_first, a_second);
 #		endif
 #		if defined(EYE)
-	input.EyeParameter = DCLFPullFloat(8, a_index, a_first, a_second);
+	input.EyeParameter = DCLFPullFloat(8, a_first, a_second);
 #		endif
 	return input;
 }
@@ -507,7 +508,7 @@ void DCLFRowStatics(uint4 a_rows)
 	DCLFPermutationStatics();
 }
 
-VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+VS_OUTPUT DCLFPulledVertex(uint index, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
@@ -529,6 +530,39 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	if (DCLFVertexLayout.x != 0)
 		vsout.Position.z += 10.0;
 	vsout.DCLFDrawInstance = a_instance;
+	return vsout;
+}
+
+#		if defined(DCLF_DEPTH_ONLY)
+// The Z-prepass's build for a depth pipeline without a pixel stage (DCLF_DEPTH_ONLY): the clip position alone. It is
+// DCLFPulledVertex's, the colour pass's expression to the bit (the colour pass tests EQUAL against it); everything else that
+// computes is compiled away, PreviousWorld, the previous palette, the TBN and the fog with it.
+struct DCLF_DEPTH_VS_OUTPUT
+{
+	float4 Position: SV_POSITION0;
+};
+#			define DCLF_PULLED_VS_OUTPUT DCLF_DEPTH_VS_OUTPUT
+#		else
+#			define DCLF_PULLED_VS_OUTPUT VS_OUTPUT
+#		endif
+
+// The draw's lookups (its sequence, rows, statics, object and geometry) keyed on a wave-uniform instance, as the shadow views' stage
+// (Utility.hlsl): each pass of the loop takes the first active lane's draw and that draw's lanes, so everything DCLFPulledVertex reads
+// per draw is the draw's (scalar), not each lane's. One pass unless a wave mixes draws.
+DCLF_PULLED_VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	DCLF_PULLED_VS_OUTPUT vsout;
+	[loop] for (;;) {
+		const uint drawInstance = WaveReadLaneFirst(a_instance);
+		[branch] if (drawInstance == a_instance) {
+#		if defined(DCLF_DEPTH_ONLY)
+			vsout.Position = DCLFPulledVertex(index, drawInstance).Position;
+#		else
+			vsout = DCLFPulledVertex(index, drawInstance);
+#		endif
+			break;
+		}
+	}
 	return vsout;
 }
 #	elif defined(DCLF_PULLED_VERTICES)
@@ -3909,13 +3943,24 @@ void DCLFPixelObjectStatics()
 }
 
 // Drawcall Limit Fix's plain draws (DCLF_PULLED): the draw's object word and rows are its sequence's, as its vertex stage read them.
+// Keyed on a wave-uniform instance as the vertex stage's main is, so the rows, the statics and every texture's and sampler's descriptor
+// index (the material row's, read where used) are the draw's. A quad's four lanes are one primitive's, so one draw's: they take the
+// same pass, helper lanes with them, and their derivatives hold.
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
-	const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
-	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
-	DCLFRowStatics(vk::RawBufferLoad<uint4>(sequence + 4));
-	DCLFPixelObjectStatics();
-	return DCLFShadePS(input, frontFace);
+	PS_OUTPUT psout;
+	[loop] for (;;) {
+		const uint drawInstance = WaveReadLaneFirst(input.DCLFDrawInstance);
+		[branch] if (drawInstance == input.DCLFDrawInstance) {
+			const uint64_t sequence = DCLFDrawSequence(drawInstance);
+			DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+			DCLFRowStatics(vk::RawBufferLoad<uint4>(sequence + 4));
+			DCLFPixelObjectStatics();
+			psout = DCLFShadePS(input, frontFace);
+			break;
+		}
+	}
+	return psout;
 }
 #	endif  // DCLF_PULLED
 #endif  // PSHADER

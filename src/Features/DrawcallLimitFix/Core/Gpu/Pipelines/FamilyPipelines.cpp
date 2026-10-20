@@ -111,7 +111,7 @@ namespace DCLF
 			return;
 		}
 		bool programFailed = false;
-		const auto* program = ShaderPrograms::Get().FindDrawFamily(a_family, *input->drawFamilySource[f], &programFailed);
+		const auto program = ShaderPrograms::Get().FindDrawFamily(a_family, *input->drawFamilySource[f], &programFailed);
 		if (programFailed) {
 			t.failed = t.programFailed = true;
 			t.counters.failed.fetch_add(1, std::memory_order_relaxed);
@@ -128,15 +128,22 @@ namespace DCLF
 		recipe.shaderKey = ModuleHash(program->vertex) ^ ModuleHash(program->pixel) * 0x9E3779B97F4A7C15ull ^ ModuleHash(program->depthPixel);
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&inputTargets, sizeof(inputTargets)) ^
 		                          ankerl::unordered_dense::detail::wyhash::hash(&blend, sizeof(blend)) * 0x9E3779B97F4A7C15ull;
-		recipe.build = [device = device, zLayout = zLayout->GetHandle(), program, formats = inputTargets, blend, frontCCW = *input->frontCCW,
-						   label = std::string_view(family.label)] {
-			return BuildDrawFamily(device, zLayout, program, formats, blend, frontCCW, label);
+		const auto build = [device = device, zLayout = zLayout->GetHandle(), formats = inputTargets, blend, frontCCW = *input->frontCCW,
+							   label = std::string_view(family.label)](const ShaderPrograms::DrawProgram& a_program) {
+			return BuildDrawFamily(device, zLayout, &a_program, formats, blend, frontCCW, label);
 		};
+		recipe.build = [build, program] { return build(*program); };
+		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*input->drawFamilySource[f]), *program,
+			[a_family, shader = input->drawFamilySource[f]](ShaderPrograms::Rebuilt<ShaderPrograms::DrawProgram> a_done) {
+				ShaderPrograms::Get().RebuildDrawFamily(a_family, *shader, std::move(a_done));
+			},
+			build);
 		t.requested = true;
-		(void)service.Request(std::move(recipe), [completions = completions, f, generation = lane.generation](const org::services::PipelineArtifact& a_artifact) {
-			completions->family[f].Push({ generation, a_artifact });
-			WakePipelineLane();
-		});
+		(void)service.Request(std::move(recipe),
+			[completions = completions, f, generation = lane.generation, live = std::move(live)](const org::services::PipelineArtifact& a_artifact) {
+				completions->family[f].Push({ generation, a_artifact, live });
+				WakePipelineLane();
+			});
 		t.counters.requested.fetch_add(1, std::memory_order_relaxed);
 	}
 
@@ -156,6 +163,7 @@ namespace DCLF
 					return;
 				}
 				t.built = a_done.artifact.payload;
+				t.slot = RegisterLive(a_done.live, t.built);
 				t.counters.ready.fetch_add(1, std::memory_order_relaxed);
 				logger::info("[DCLF] {} pipelines ready", family.label);
 			});
@@ -172,6 +180,7 @@ namespace DCLF
 				return;
 			}
 			r.built = a_done.artifact.payload;
+			r.slot = RegisterLive(a_done.live, r.built);
 			r.counters.ready.fetch_add(1, std::memory_order_relaxed);
 			logger::info("[DCLF] refraction pipeline ready (Utility {:08X}, refraction normals format {})", kRefractionTechnique, static_cast<int>(a_done.format));
 		});
@@ -193,6 +202,7 @@ namespace DCLF
 				return;
 			}
 			entry.built = a_done.artifact.payload;
+			entry.slot = RegisterLive(a_done.live, entry.built);
 			f.counters.ready.fetch_add(1, std::memory_order_relaxed);
 		});
 	}

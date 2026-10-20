@@ -276,7 +276,7 @@ namespace DCLF::Diagnostics
 				return;
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
-			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.BindPipeline(a_frame.program->Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kFoliageParityConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
 			commands.Dispatch(a_frame.groupsX, a_frame.groupsY, 1);
 		}

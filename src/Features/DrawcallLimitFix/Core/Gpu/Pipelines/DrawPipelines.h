@@ -351,7 +351,9 @@ namespace DCLF
 	 * execution set per class and variant, since a set's pipelines may differ in their shaders alone.
 	 *
 	 * One owner, the pipeline lane (BuildExecutor.h): it takes requests, programs and build completions, admits them, publishes set
-	 * versions and then the catalog. Render-thread state reaches it only as frame inputs (SetTargetFormats, CaptureEngineStates,
+	 * versions and then the catalog. Every pipeline it admits is registered for shader hot reload (RenderGraphRuntime::PipelineRegistry;
+	 * dclf-hot-reload.md); a reload's swapped payloads are adopted into the sets and the catalog (AdoptLivePipelines). Render-thread
+	 * state reaches it only as frame inputs (SetTargetFormats, CaptureEngineStates,
 	 * SetShadowInputs, ShadowRasterStateId, SetFamilyInputs, SetViewForwardTargets, ...). The render thread only posts and reads its
 	 * frame's catalog (FrameCatalog).
 	 */

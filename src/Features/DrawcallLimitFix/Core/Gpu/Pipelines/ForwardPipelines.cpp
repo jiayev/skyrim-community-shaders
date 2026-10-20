@@ -99,6 +99,7 @@ namespace DCLF
 		if (built)
 			retired.push_back(std::move(built));
 		built = {};
+		slot = {};
 		requested = false;
 		failed = programFailed;
 		format = DXGI_FORMAT_UNKNOWN;
@@ -115,7 +116,7 @@ namespace DCLF
 			!shadowLayout)
 			return;
 		bool programFailed = false;
-		const auto* program = ShaderPrograms::Get().FindShadow(kRefractionTechnique, *input->refractionUtility, true, nullptr, nullptr, &programFailed);
+		const auto program = ShaderPrograms::Get().FindShadow(kRefractionTechnique, *input->refractionUtility, true, nullptr, nullptr, &programFailed);
 		if (programFailed) {
 			r.failed = r.programFailed = true;
 			r.counters.failed.fetch_add(1, std::memory_order_relaxed);
@@ -133,15 +134,22 @@ namespace DCLF
 		recipe.shaderKey = ModuleHash(program->vertex) ^ ModuleHash(program->pixel) * 0x9E3779B97F4A7C15ull;
 		const std::uint64_t fixedFunction[] = { static_cast<std::uint64_t>(format), static_cast<std::uint64_t>(depthFormat), writeMask, frontCCW ? 1ull : 0ull };
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(fixedFunction, sizeof(fixedFunction));
-		recipe.build = [device = device, layout = ShadowLayout(), program, format, depthFormat, writeMask, frontCCW] {
-			return BuildRefraction(device, layout, program, format, depthFormat, writeMask, frontCCW);
+		const auto build = [device = device, layout = ShadowLayout(), format, depthFormat, writeMask, frontCCW](const ShaderPrograms::ShadowProgram& a_program) {
+			return BuildRefraction(device, layout, &a_program, format, depthFormat, writeMask, frontCCW);
 		};
+		recipe.build = [build, program] { return build(*program); };
+		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*input->refractionUtility), *program,
+			[utility = input->refractionUtility](ShaderPrograms::Rebuilt<ShaderPrograms::ShadowProgram> a_done) {
+				ShaderPrograms::Get().RebuildShadow(kRefractionTechnique, *utility, std::move(a_done));
+			},
+			build);
 		r.requested = true;
 		r.format = format;
-		(void)service.Request(std::move(recipe), [completions = completions, generation = lane.generation, format](const org::services::PipelineArtifact& a_artifact) {
-			completions->refraction.Push({ generation, format, a_artifact });
-			WakePipelineLane();
-		});
+		(void)service.Request(std::move(recipe),
+			[completions = completions, generation = lane.generation, format, live = std::move(live)](const org::services::PipelineArtifact& a_artifact) {
+				completions->refraction.Push({ generation, format, a_artifact, live });
+				WakePipelineLane();
+			});
 		r.counters.requested.fetch_add(1, std::memory_order_relaxed);
 	}
 
@@ -165,8 +173,8 @@ namespace DCLF
 			return;
 		}
 		bool programFailed = false;
-		const auto* program = familyKey ? ShaderPrograms::Get().FindDrawFamilyForward(family, *input->drawFamilySource[d], &programFailed) :
-		                                  ShaderPrograms::Get().FindForward(a_key.vertexDescriptor, a_key.pixelDescriptor, *input->lighting, &programFailed);
+		const auto program = familyKey ? ShaderPrograms::Get().FindDrawFamilyForward(family, *input->drawFamilySource[d], &programFailed) :
+		                                 ShaderPrograms::Get().FindForward(a_key.vertexDescriptor, a_key.pixelDescriptor, *input->lighting, &programFailed);
 		if (programFailed) {
 			// Its objects stay out of the reflection phase (the engine draws them).
 			f.FailForGood(a_key);
@@ -186,14 +194,26 @@ namespace DCLF
 		recipe.shaderKey = ModuleHash(program->vertex) ^ ModuleHash(program->pixel) * 0x9E3779B97F4A7C15ull;
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&forwardTargets, sizeof(forwardTargets)) ^
 		                          static_cast<std::uint64_t>(cull) * 0x9E3779B97F4A7C15ull;
-		recipe.build = [device = device, zLayout = zLayout->GetHandle(), program, forwardTargets, cull, frontCCW = *input->frontCCW] {
-			return BuildForward(device, zLayout, program, forwardTargets, cull, frontCCW);
+		const auto build = [device = device, zLayout = zLayout->GetHandle(), forwardTargets, cull, frontCCW = *input->frontCCW](const ShaderPrograms::ForwardProgram& a_program) {
+			return BuildForward(device, zLayout, &a_program, forwardTargets, cull, frontCCW);
 		};
+		recipe.build = [build, program] { return build(*program); };
+		// Its program as the lane made it: a draw family's forward descriptor's, or the Lighting pair's.
+		const RE::BSShader* shader = familyKey ? input->drawFamilySource[d] : input->lighting;
+		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*shader), *program,
+			[family, familyKey, shader, key = a_key](ShaderPrograms::Rebuilt<ShaderPrograms::ForwardProgram> a_done) {
+				if (familyKey)
+					ShaderPrograms::Get().RebuildDrawFamilyForward(family, *shader, std::move(a_done));
+				else
+					ShaderPrograms::Get().RebuildForward(key.vertexDescriptor, key.pixelDescriptor, *shader, std::move(a_done));
+			},
+			build);
 		f.entries.try_emplace(a_key).first->second.requested = true;
-		(void)service.Request(std::move(recipe), [completions = completions, key = a_key, generation = f.generation](const org::services::PipelineArtifact& a_artifact) {
-			completions->forward.Push({ key, generation, a_artifact });
-			WakePipelineLane();
-		});
+		(void)service.Request(std::move(recipe),
+			[completions = completions, key = a_key, generation = f.generation, live = std::move(live)](const org::services::PipelineArtifact& a_artifact) {
+				completions->forward.Push({ key, generation, a_artifact, live });
+				WakePipelineLane();
+			});
 		f.counters.requested.fetch_add(1, std::memory_order_relaxed);
 		lane.dirty = true;  // the catalog reports its program
 	}
@@ -205,6 +225,13 @@ namespace DCLF
 		// draw with them.
 		logger::info("[DCLF] pipeline lane: forward targets colour {} depth {} -> colour {} depth {}; rebuilding {} forward pipelines", static_cast<int>(a_from.colour),
 			static_cast<int>(a_from.depth), static_cast<int>(a_to.colour), static_cast<int>(a_to.depth), f.entries.size());
+		ResetForward();
+	}
+
+	void DrawPipelines::Impl::ResetForward()
+	{
+		auto& f = lane.forward;
+		// Their slots go with their entries (StartOver), and their registry entries with them.
 		for (auto& entry : f.entries)
 			if (entry.second.built)
 				f.retired.push_back(std::move(entry.second.built));

@@ -47,19 +47,16 @@ namespace DCLF::Schedule
 			{ .id = "fp.colour-render", .owner = "Features/FirstPerson", .where = "Main::RenderFirstPersonView's accumulator render (FirstPersonHooks.cpp)" },
 		};
 
-		// The depth (Z-prepass) epoch: the latched copies; the next frame's state (tree wind, on the compute queue beside the epoch's raster
-		// work, which nothing of this frame reads) and cull state (the fade roots' states, then their write-back copy); the texture
-		// transforms (the latch's stage word, before anything of the frame draws); phase 1 (build, index pool, tree LOD's cull, depth draw);
-		// the two-phase tail (only with the HZB: the pyramid, the retest build, tree LOD's retest, the rescues' depth draw); then what reads
-		// both phases (tree LOD's counts, the visibility events).
+		// The depth (Z-prepass) epoch: the latched copies; the texture transforms (the latch's stage word, before anything of the frame
+		// draws); the member portals' queries (on the compute queue: phase 1's build reads their results, so they come first and alone, the
+		// only compute work the graphics queue waits for); phase 1 (build, index pool, tree LOD's cull, depth draw); the next frame's state
+		// on the compute queue beside phase 1's depth draw and the two-phase tail (tree wind, then the fade roots' portal batch and states:
+		// nothing of this frame reads them); the two-phase tail (only with the HZB: the pyramid, the retest build, tree LOD's retest, the
+		// rescues' depth draw); then what reads both phases (tree LOD's counts, the visibility events) and the fade states' write-back copy,
+		// last, so the graphics queue reaches its wait on the compute queue only at the epoch's end. The compute queue runs in order: a
+		// pass of the next frame's state scheduled before the member portals would hold phase 1's build behind it.
 		constexpr std::string_view kMainDepth[] = {
 			"core.z.latched-copies",
-			"tree-wind.next-frame",
-			"fades.portal-queries",
-			"fades.portal-batch",
-			"fades.portal-evaluate",
-			"fades.state",
-			"fades.events",
 			"texture-transforms.apply",
 			"core.z.portal-queries",
 			"portals.member-batch",
@@ -67,6 +64,11 @@ namespace DCLF::Schedule
 			"core.z.build-draws",
 			"core.z.index-pool",
 			"tree-lod.cull",
+			"tree-wind.next-frame",
+			"fades.portal-queries",
+			"fades.portal-batch",
+			"fades.portal-evaluate",
+			"fades.state",
 			"main-view.z.depth",
 			"gpu-occlusion.hzb",
 			"core.build-draws-phase2",
@@ -75,6 +77,7 @@ namespace DCLF::Schedule
 			"tree-lod.counts",
 			"core.z.visibility-events",
 			"core.z.visibility-readback",
+			"fades.events",
 			"diag.after-depth",
 		};
 		// The colour epoch: the build, the sort by pipeline, the forward range's sort, the colour draws.

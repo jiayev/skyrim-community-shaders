@@ -137,7 +137,7 @@ namespace DCLF::Draws
 			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
-			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.BindPipeline(a_frame.program->Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kFadeStateConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.Dispatch(std::min(a_frame.groups, 65535u), (a_frame.groups + 65534u) / 65535u, 1);
 		}
@@ -195,6 +195,6 @@ namespace DCLF::Features::Fades
 		a_context.RegisterPass({ .key = "fades.portal-queries", .passName = "cs.dclf.z.fade-portal-queries", .queue = Api::PassQueue::Compute, .make = &MakeFadeQueryStage, .setup = &SetUpFadeState });
 		// Fade roots' state for the next frame's culling, beside the depth epoch's raster work; then its write-back events, to the host.
 		a_context.RegisterPass({ .key = "fades.state", .passName = "cs.dclf.z.fade-state", .queue = Api::PassQueue::Compute, .make = &MakeFadeStateStage, .setup = &SetUpFadeState });
-		a_context.RegisterPass({ .key = "fades.events", .passName = "cs.dclf.z.fade-events", .kind = Api::PassKind::Copy, .queue = Api::PassQueue::None, .make = &MakeFadeEventsStage, .setup = &SetUpFadeEvents });
+		a_context.RegisterPass({ .key = "fades.events", .passName = "cs.dclf.z.fade-events", .kind = Api::PassKind::Copy, .make = &MakeFadeEventsStage, .setup = &SetUpFadeEvents });
 	}
 }

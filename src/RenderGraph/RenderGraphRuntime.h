@@ -8,6 +8,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <winrt/base.h>
 
@@ -16,6 +17,7 @@ struct DxvkOrgInteropResourceInfo;
 namespace org::services
 {
 	class ShaderCompiler;
+	class PipelineRegistry;
 }
 
 namespace rhi
@@ -215,9 +217,25 @@ public:
 	 */
 	org::services::ShaderCompiler* ShaderCompiler();
 
-	/** @brief The directory the runtime builds compile from (Data/Shaders), and every .hlsl/.hlsli in it, listed once. */
+	/**
+	 * @brief The directory the runtime builds compile from (Data/Shaders), and every .hlsl/.hlsli in it: listed once, and again for each
+	 * shader reload (PipelineRegistry's SourcesGeneration: a file added or removed since).
+	 */
 	static constexpr const char* kShaderDirectory = "Data/Shaders";
 	static const std::vector<std::filesystem::path>& ShaderSourceFiles();
+
+	/**
+	 * @brief Shader hot reload (docs/development/dclf-hot-reload.md): every live pipeline a CS feature builds from Data/Shaders (the
+	 * render graph's compute programs, Drawcall Limit Fix's graphics pipelines) registers here once, with how to build it again, and
+	 * binds through the slot it gets. Process-lifetime (a rebuild may complete at teardown); null without ORGModuleServices.
+	 */
+	static org::services::PipelineRegistry* PipelineRegistry();
+	/**
+	 * @brief Any thread, lock-free for the caller's purposes: the live pipelines built from a_changedFile (empty: every one) built
+	 * again from the shader files as they are now; a_force: each is built and swapped even when unchanged. Served by the render thread
+	 * at the next present (ServicePipelineReload); the new pipelines are swapped in at the graph's next build.
+	 */
+	static void RequestShaderReload(std::string_view a_changedFile = {}, bool a_force = false);
 
 	/** @brief Wraps a materialized graph-owned buffer as a D3D11 buffer (DEFAULT usage, no CPU access). */
 	winrt::com_ptr<ID3D11Buffer> WrapBuffer(org::Resource& a_buffer, const D3D11_BUFFER_DESC& a_desc);
@@ -240,6 +258,8 @@ public:
 
 private:
 	RenderGraphRuntime() = default;
+	/** @brief The render thread, every frame (SignalFramePace): the registry's reload served, and its staged pipelines' build asked for. */
+	void ServicePipelineReload();
 
 	struct Impl;
 	std::unique_ptr<Impl> impl;

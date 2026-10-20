@@ -948,6 +948,13 @@ as the dispatch's `LatchOffset` does.
     (`tree-wind.next-frame`, `cs.dclf.z.tree-wind`), both in the Z-prepass epoch. Each writes one of two buffers by frame parity
     and the frame's draws read the other, the frame before's. Not in-epoch compute with its consumer right behind it, because
     that makes two cross-queue hops: fade state inside the Z-prepass chain raised the depth segment from 0.986 ms to 1.110 ms.
+-   **Order on the compute queue.** It runs in order, and a batch signals only when all of it completes. The Z-prepass epoch
+    therefore puts the member portals' queries (which phase 1's build reads) first, right after the latched copies and the
+    texture transforms. The next frame's state (tree wind, the fade roots' portal batch and states) goes after phase 1's build,
+    beside the depth draws. The fade events' copy is last. Scheduled before the member portals, the next frame's state held the
+    build behind tree wind and the whole fade chain. The epoch's copy passes (tree LOD's counts, the visibility and fade events'
+    readbacks, the shadow cull counters) prefer the graphics queue: the graph's copy slot is the same VkQueue, and a pass on its own
+    slot split the epoch into another batch with a timeline hop.
 -   **Every queue of DXVK's device is used under DXVK's submission lock** (`RenderGraphRuntime`'s `LockQueue`), the compute submitter
     included. The stream's wait at an epoch's end is on `computeExit`, a semaphore every compute submission signals that lives as
     long as the device (a graph rebuild destroys the graph's own timelines). Why: a compute submission of only semaphore operations

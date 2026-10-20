@@ -147,7 +147,7 @@ namespace DCLF::Draws
 				return;
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_prepared.program->layout->GetHandle());
-			commands.BindPipeline(a_prepared.program->pipeline->GetHandle());
+			commands.BindPipeline(a_prepared.program->Pipeline());
 			for (const auto& dispatch : a_prepared.dispatches)
 				RecordLatchedDispatch(dispatch.constants, *a_prepared.latch, a_prepared.signature, dispatch.latchOffset, a_recording);
 		}
@@ -395,7 +395,7 @@ namespace DCLF::Features::Shadows::Engine
 			{ .key = "shadows.index-pool", .passName = "cs.dclf.shadow.index-pool", .make = &IndexPoolCopies },
 			{ .key = "shadows.build-draws", .passName = "cs.dclf.shadow.build-draws", .make = &BuildDraws<false> },
 			{ .key = "shadows.view", .passName = "cs.dclf.shadow.view", .kind = PassKind::Render, .make = &ViewDraws<false> },
-			{ .key = "shadows.cull-counters", .passName = "cs.dclf.shadow.cull-counters", .kind = PassKind::Copy, .queue = PassQueue::None, .make = &CullCounters },
+			{ .key = "shadows.cull-counters", .passName = "cs.dclf.shadow.cull-counters", .kind = PassKind::Copy, .make = &CullCounters },
 			{ .key = "shadows.sky.latched-copies", .passName = "cs.dclf.sky.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies<true> },
 			{ .key = "shadows.sky.build-draws", .passName = "cs.dclf.sky.build-draws", .make = &BuildDraws<true> },
 			{ .key = "shadows.sky.view", .passName = "cs.dclf.sky.view", .kind = PassKind::Render, .make = &ViewDraws<true> },

@@ -205,7 +205,7 @@ namespace DCLF::Draws
 				auto constants = a_frame.constants;
 				constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
 				commands.BindLayout(a_frame.clearQueries->layout->GetHandle());
-				commands.BindPipeline(a_frame.clearQueries->pipeline->GetHandle());
+				commands.BindPipeline(a_frame.clearQueries->Pipeline());
 				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kBuildDrawsConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 				commands.Dispatch(std::min(a_frame.queryGroups, 65535u), (a_frame.queryGroups + 65534u) / 65535u, 1);
 				const auto barrier = rhi::FullMemoryBarrier();
@@ -213,7 +213,7 @@ namespace DCLF::Draws
 			}
 
 			commands.BindLayout(a_frame.program->layout->GetHandle());
-			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.BindPipeline(a_frame.program->Pipeline());
 			RecordLatchedDispatch(a_frame.constants, *a_frame.latch, a_frame.signature, 0, a_recording);
 		}
 
@@ -307,7 +307,7 @@ namespace DCLF::Draws
 				return;
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
-			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.BindPipeline(a_frame.program->Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kSortSequencesConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
 			commands.Dispatch(a_frame.groups, 1, 1);
 		}
