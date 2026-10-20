@@ -111,7 +111,7 @@ namespace DCLF::Draws
 			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
-			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.BindPipeline(a_frame.program->Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::TreeLod::kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.Dispatch(a_frame.groups, 1, 1);
 		}
@@ -230,7 +230,7 @@ namespace DCLF::Features::TreeLod
 		// phases are done.
 		a_context.RegisterPass({ .key = "tree-lod.cull", .passName = "cs.dclf.z.tree-lod-cull", .make = &MakeCullPhaseOne, .setup = &CullSetup });
 		a_context.RegisterPass({ .key = "tree-lod.cull-phase2", .passName = "cs.dclf.tree-lod-cull-phase2", .make = &MakeCullPhaseTwo, .setup = &CullSetup });
-		a_context.RegisterPass({ .key = "tree-lod.counts", .passName = "cs.dclf.z.tree-lod-counts", .kind = Api::PassKind::Copy, .queue = Api::PassQueue::None,
+		a_context.RegisterPass({ .key = "tree-lod.counts", .passName = "cs.dclf.z.tree-lod-counts", .kind = Api::PassKind::Copy,
 			.make = &MakeCounts, .setup = &CountsSetup });
 	}
 }

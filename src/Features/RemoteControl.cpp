@@ -496,9 +496,18 @@ void RemoteControl::DrawNvPerfTraces()
 		ImGui::Text(T(TKEY("trace_reload_tooltip"), "Reads the *.json templates in %s again."), NvPerf::Trace::TemplateDirectory().string().c_str());
 	if (selected) {
 		ImGui::TextWrapped("%s", selected->description.c_str());
-		const std::size_t captures = selected->metricGroups.size() * selected->repeats;
-		ImGui::TextDisabled(T(TKEY("trace_shape"), "%zu captures (%zu metric groups x %u repeats), %u samples each, %zu range filters"), captures,
-			selected->metricGroups.size(), selected->repeats, selected->samples, selected->ranges.size());
+		if (selected->timingSource == NvPerf::Trace::TimingSource::Timestamps) {
+			ImGui::TextDisabled(T(TKEY("trace_shape_timestamps"), "Pass timestamps: every frame a sample after %u settling frames, %u-%u samples, +/-%.1f%% at %.0f%% confidence, %zu range filters"),
+				selected->settlingFrames, selected->minSamples, selected->maxSamples, 100.0 * selected->relativeHalfWidth, 100.0 * selected->confidence,
+				selected->ranges.size());
+		} else {
+			const std::size_t captures = selected->metricGroups.size() * selected->repeats;
+			ImGui::TextDisabled(T(TKEY("trace_shape"), "%zu captures (%zu metric groups x %u repeats), %u samples each, %zu range filters"), captures,
+				selected->metricGroups.size(), selected->repeats, selected->samples, selected->ranges.size());
+			if (selected->maxRepeats > selected->repeats)
+				ImGui::TextDisabled(T(TKEY("trace_shape_convergence"), "More rounds, up to %u, until every row's time is within +/-%.1f%% at %.0f%% confidence"),
+					selected->maxRepeats, 100.0 * selected->relativeHalfWidth, 100.0 * selected->confidence);
+		}
 	}
 	ImGui::InputTextWithHint(T(TKEY("trace_label"), "Label"), panel.traceTemplate.c_str(), &panel.traceLabel);
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -519,8 +528,25 @@ void RemoteControl::DrawNvPerfTraces()
 		if (ImGui::Button(T(TKEY("trace_cancel"), "Cancel trace")))
 			NvPerf::Trace::Cancel();
 		ImGui::SameLine();
-		ImGui::TextColored(theme.InfoColor, T(TKEY("trace_running"), "Trace '%s': capture %u of %u (%s)"), status.label.c_str(), status.capture, status.captures,
-			status.phase.c_str());
+		if (status.captures)
+			ImGui::TextColored(theme.InfoColor, T(TKEY("trace_running"), "Trace '%s': capture %u of %u (%s)"), status.label.c_str(), status.capture, status.captures,
+				status.phase.c_str());
+		else
+			ImGui::TextColored(theme.InfoColor, T(TKEY("trace_running_timestamps"), "Trace '%s': %s"), status.label.c_str(), status.phase.c_str());
+		// Convergence, as of the trace's last check: samples, rows and groups converged, the one furthest from its target.
+		if (status.convergence) {
+			const float progress = status.series ? static_cast<float>(status.converged) / static_cast<float>(status.series) : 0.0f;
+			const std::string overlay = std::format("{} / {}", status.converged, status.series);
+			ImGui::ProgressBar(progress, ImVec2(ImGui::GetFontSize() * 10.0f, 0.0f), overlay.c_str());
+			ImGui::SameLine();
+			if (status.maxSamples)
+				ImGui::Text(T(TKEY("trace_convergence_samples"), "%u samples (%u-%u)"), status.samples, status.minSamples, status.maxSamples);
+			else
+				ImGui::Text(T(TKEY("trace_convergence_samples_min"), "%u samples (at least %u)"), status.samples, status.minSamples);
+			if (!status.worst.empty())
+				ImGui::TextDisabled(T(TKEY("trace_convergence_worst"), "Furthest: %s at +/-%.1f%% (target %.1f%%)"), status.worst.c_str(),
+					100.0 * status.worstRelativeHalfWidth, 100.0 * status.targetRelativeHalfWidth);
+		}
 	} else if (ImGui::Button(T(TKEY("trace_run"), "Run trace"))) {
 		panel.traceError.clear();
 		NvPerf::Trace::Start(panel.traceTemplate, panel.traceLabel, panel.traceBaseline, panel.traceError);
@@ -532,23 +558,45 @@ void RemoteControl::DrawNvPerfTraces()
 	if (!report)
 		return;
 	ImGui::Separator();
-	if (report->success)
+	if (report->success && report->timingSource == NvPerf::Trace::TimingSource::Timestamps)
+		ImGui::TextColored(theme.SuccessColor, T(TKEY("trace_result_timestamps"), "Trace '%s' (%s, timestamps): %u frames, total %.1f us"), report->label.c_str(),
+			report->templateName.c_str(), report->samples, report->totalUs);
+	else if (report->success)
 		ImGui::TextColored(theme.SuccessColor, T(TKEY("trace_result"), "Trace '%s' (%s): %u captures, %u samples, total %.1f us"), report->label.c_str(),
 			report->templateName.c_str(), report->captures, report->samples, report->totalUs);
 	else
 		ImGui::TextColored(theme.Error, T(TKEY("trace_failed"), "Trace '%s' failed: %s"), report->label.c_str(), report->error.c_str());
+	if (report->success && report->confidence > 0.0) {
+		if (report->converged)
+			ImGui::TextColored(theme.SuccessColor, T(TKEY("trace_converged"), "Converged: every mean within +/-%.1f%% at %.0f%% confidence"),
+				100.0 * report->relativeHalfWidth, 100.0 * report->confidence);
+		else
+			ImGui::TextColored(theme.Warning, T(TKEY("trace_not_converged"), "Not converged to +/-%.1f%% at %.0f%% confidence (see the conv column)"),
+				100.0 * report->relativeHalfWidth, 100.0 * report->confidence);
+	}
 	for (const auto& warning : report->warnings)
 		ImGui::TextColored(theme.Warning, "%s", warning.c_str());
 	const auto* baseline = report->baseline.get();
+	// A delta's colour: worse or better only when the means differ by more than their intervals combined.
+	const auto deltaColor = [&](double a_delta, const NvPerf::Trace::SeriesStats& a_stats, const NvPerf::Trace::SeriesStats* a_base) {
+		const bool significant = a_base && std::isfinite(a_stats.ciUs) && std::isfinite(a_base->ciUs) &&
+		                         std::abs(a_stats.meanUs - a_base->meanUs) > std::sqrt(a_stats.ciUs * a_stats.ciUs + a_base->ciUs * a_base->ciUs);
+		if (!significant && a_base && std::isfinite(a_stats.ciUs))
+			return ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+		return a_delta > 0.0 ? theme.Warning : theme.SuccessColor;
+	};
+	const auto ciText = [](const NvPerf::Trace::SeriesStats& a_stats) { return std::isfinite(a_stats.ciUs) ? std::format("{:.2f}", a_stats.ciUs) : std::string("-"); };
 	if (baseline)
 		ImGui::TextDisabled(T(TKEY("trace_compared"), "Compared with '%s': total %.1f us (%+.1f)"), baseline->label.c_str(), baseline->totalUs,
 			report->totalUs - baseline->totalUs);
 
 	const ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
 	const float groupsHeight = std::min(ImGui::GetTextLineHeightWithSpacing() * (static_cast<float>(report->groups.size()) + 2.0f), 260.0f);
-	if (!report->groups.empty() && ImGui::BeginTable("##NvPerfTraceGroups", baseline ? 4 : 2, flags, ImVec2(0.0f, groupsHeight))) {
+	if (!report->groups.empty() && ImGui::BeginTable("##NvPerfTraceGroups", baseline ? 6 : 4, flags, ImVec2(0.0f, groupsHeight))) {
 		ImGui::TableSetupColumn(T(TKEY("trace_group"), "Group"), ImGuiTableColumnFlags_WidthFixed, 200.0f);
 		ImGui::TableSetupColumn(T(TKEY("trace_time"), "GPU time (us)"), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn(T(TKEY("trace_ci"), "+/- (us)"), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn(T(TKEY("trace_converged_column"), "Conv"), ImGuiTableColumnFlags_WidthFixed);
 		if (baseline) {
 			ImGui::TableSetupColumn(T(TKEY("trace_baseline_time"), "Baseline (us)"), ImGuiTableColumnFlags_WidthFixed);
 			ImGui::TableSetupColumn(T(TKEY("trace_delta"), "Delta (us)"), ImGuiTableColumnFlags_WidthFixed);
@@ -560,20 +608,27 @@ void RemoteControl::DrawNvPerfTraces()
 			ImGui::TextUnformatted(group.name.c_str());
 			ImGui::TableNextColumn();
 			ImGui::Text("%.1f", group.timeUs);
+			ImGui::TableNextColumn();
+			ImGui::TextDisabled("%s", ciText(group.stats).c_str());
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text(T(TKEY("trace_stats_tooltip"), "mean %.2f us, median %.2f, p05-p95 %.2f-%.2f, n_eff %.0f, %u MAD flags"), group.stats.meanUs, group.stats.medianUs,
+					group.stats.p05Us, group.stats.p95Us, group.stats.effectiveSamples, group.stats.madOutliers);
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(group.stats.converged ? T(TKEY("trace_yes"), "yes") : T(TKEY("trace_no"), "no"));
 			if (baseline) {
 				const auto found = std::ranges::find_if(baseline->groups, [&](const auto& g) { return g.name == group.name; });
 				const double base = found == baseline->groups.end() ? 0.0 : found->timeUs;
 				ImGui::TableNextColumn();
 				ImGui::Text("%.1f", base);
 				ImGui::TableNextColumn();
-				ImGui::TextColored(group.timeUs > base ? theme.Warning : theme.SuccessColor, "%+.1f", group.timeUs - base);
+				ImGui::TextColored(deltaColor(group.timeUs - base, group.stats, found == baseline->groups.end() ? nullptr : &found->stats), "%+.1f", group.timeUs - base);
 			}
 		}
 		ImGui::EndTable();
 	}
 
 	ImGui::SliderInt(T(TKEY("trace_rows"), "Rows shown"), &panel.traceRows, 5, 400);
-	const int fixedColumns = baseline ? 5 : 4;
+	const int fixedColumns = baseline ? 9 : 8;
 	const int columns = fixedColumns + static_cast<int>(report->metricLabels.size());
 	const auto shown = std::min<std::size_t>(report->rows.size(), static_cast<std::size_t>(panel.traceRows));
 	const float rowsHeight = std::min(ImGui::GetTextLineHeightWithSpacing() * (static_cast<float>(shown) + 2.0f), 420.0f);
@@ -582,7 +637,11 @@ void RemoteControl::DrawNvPerfTraces()
 		ImGui::TableSetupColumn(T(TKEY("column_range"), "Range"), ImGuiTableColumnFlags_WidthFixed, 280.0f);
 		ImGui::TableSetupColumn(T(TKEY("trace_group"), "Group"), ImGuiTableColumnFlags_WidthFixed, 110.0f);
 		ImGui::TableSetupColumn(T(TKEY("trace_time"), "GPU time (us)"), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn(T(TKEY("trace_ci"), "+/- (us)"), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn(T(TKEY("trace_percentiles"), "p05-p95"), ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableSetupColumn(T(TKEY("trace_spread"), "Min-max"), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn(T(TKEY("trace_effective"), "n_eff"), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn(T(TKEY("trace_converged_column"), "Conv"), ImGuiTableColumnFlags_WidthFixed);
 		if (baseline)
 			ImGui::TableSetupColumn(T(TKEY("trace_delta"), "Delta (us)"), ImGuiTableColumnFlags_WidthFixed);
 		for (const auto& label : report->metricLabels)
@@ -594,18 +653,27 @@ void RemoteControl::DrawNvPerfTraces()
 			ImGui::TableNextColumn();
 			ImGui::TextUnformatted(row.name.c_str());
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(T(TKEY("trace_row_tooltip"), "%s: %.3g per frame, in %u samples"), row.name.c_str(), row.occurrencesPerFrame, row.samples);
+				ImGui::Text(T(TKEY("trace_row_tooltip_stats"), "%s%s%s: %.3g per frame, in %u samples; mean %.2f us, median %.2f, %u MAD flags"), row.name.c_str(),
+					row.queue.empty() ? "" : ", queue ", row.queue.c_str(), row.occurrencesPerFrame, row.samples, row.stats.meanUs, row.stats.medianUs, row.stats.madOutliers);
 			ImGui::TableNextColumn();
 			ImGui::TextUnformatted(row.group.c_str());
 			ImGui::TableNextColumn();
 			ImGui::Text("%.1f", row.timeUs);
 			ImGui::TableNextColumn();
+			ImGui::TextDisabled("%s", ciText(row.stats).c_str());
+			ImGui::TableNextColumn();
+			ImGui::TextDisabled("%.1f-%.1f", row.stats.p05Us, row.stats.p95Us);
+			ImGui::TableNextColumn();
 			ImGui::TextDisabled("%.1f-%.1f", row.timeMinUs, row.timeMaxUs);
+			ImGui::TableNextColumn();
+			ImGui::TextDisabled("%.0f", row.stats.effectiveSamples);
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(row.stats.converged ? T(TKEY("trace_yes"), "yes") : T(TKEY("trace_no"), "no"));
 			if (baseline) {
 				const auto found = std::ranges::find_if(baseline->rows, [&](const auto& r) { return r.name == row.name; });
 				const double base = found == baseline->rows.end() ? 0.0 : found->timeUs;
 				ImGui::TableNextColumn();
-				ImGui::TextColored(row.timeUs > base ? theme.Warning : theme.SuccessColor, "%+.1f", row.timeUs - base);
+				ImGui::TextColored(deltaColor(row.timeUs - base, row.stats, found == baseline->rows.end() ? nullptr : &found->stats), "%+.1f", row.timeUs - base);
 			}
 			for (const auto& label : report->metricLabels) {
 				ImGui::TableNextColumn();

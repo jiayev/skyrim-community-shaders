@@ -19,6 +19,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/RenderDoc.h"
 #include "Features/DrawcallLimitFix.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 
 #include "Plugin.h"
 
@@ -4507,6 +4508,20 @@ namespace SIE
 		std::string lowerExtension = extension;
 		std::transform(lowerExtension.begin(), lowerExtension.end(), lowerExtension.begin(),
 			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		// The render graph's live pipelines (its compute programs, Drawcall Limit Fix's graphics pipelines) build from the same tree
+		// (docs/development/dclf-hot-reload.md): an edited shader rebuilds those built from it, an include every one, at the next present.
+		// DCLF's own shaders (Data/Shaders/DrawcallLimitFix/) are no D3D11 shader's: an .hlsl there leaves this cache alone (an include there
+		// still invalidates the D3D11 shaders that include it, below).
+		if (lowerExtension == ".hlsl" || lowerExtension == ".hlsli") {
+			RenderGraphRuntime::RequestShaderReload(filePath.generic_string());
+			std::string lowerPath = filePath.generic_string();
+			std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			if (lowerExtension == ".hlsl" && lowerPath.find("/drawcalllimitfix/") != std::string::npos) {
+				logger::info("Shader watcher: {} is Drawcall Limit Fix's; its pipelines are rebuilt, the D3D11 cache kept", filePath.string());
+				fileDone = false;
+				return;
+			}
+		}
 		if (!std::filesystem::is_directory(filePath) && lowerExtension == ".hlsl") {
 			// Update cache with the modified shader
 			cache->InsertModifiedShaderMap(shaderTypeString, modifiedTime);

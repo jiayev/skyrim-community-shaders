@@ -9,6 +9,13 @@
 #if defined(RENDER_SHADOWMASK) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
 #	define RENDER_SHADOWMASK_ANY
 #endif
+// Drawcall Limit Fix's depth-only draws of a technique without an alpha test: the pixel stage is compiled empty (main, below), so
+// the vertex stage passes it nothing either. Both stages are built from one technique (ShaderPrograms::FindShadow), so both see this.
+#if defined(DCLF_BINDLESS) && (defined(RENDER_SHADOWMAP) || defined(RENDER_DEPTH)) && !defined(ALPHA_TEST) && !defined(ADDITIONAL_ALPHA_MASK) && \
+	!defined(RENDER_SHADOWMAP_PB) && !defined(RENDER_SHADOWMASK_ANY) && !defined(DEBUG_SHADOWSPLIT) && !defined(DEBUG_COLOR) && \
+	!defined(DEPTH_WRITE_DECALS) && !defined(STENCIL_ABOVE_WATER) && !(defined(DCLF_PULLED) && defined(RENDER_NORMAL))
+#	define DCLF_EMPTY_PIXEL
+#endif
 // Drawcall Limit Fix's refraction draw (T7d; DrawPipelines::RequestRefraction, kRefractionTechnique): the pulled RENDER_NORMAL build,
 // whose stages below replace the shadow views' pulled ones. One pipeline draws every refraction object: the technique's other variants
 // (VC, SKINNED, RENDER_NORMAL_FALLOFF, RENDER_NORMAL_CLAMP, model-space normals, two-sidedness) are each draw's, from its object record
@@ -367,27 +374,33 @@ VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 	first.stride = vertexBuffer.w;
 	second.address = DCLFAddress(streamBuffer.xy);
 	second.stride = streamBuffer.w;
+	DCLFStreamsAt(index, first, second);
 
 	VS_INPUT input;
-	input.PositionMS = asfloat(vk::RawBufferLoad<uint4>(DCLFAttribute(0, index, first, second)));
+#		if defined(STENCIL_ABOVE_WATER)
+	input.PositionMS = asfloat(vk::RawBufferLoad<uint4>(DCLFAttribute(0, first, second)));
+#		else
+	// Only xyz is read (DCLFShade makes w 1).
+	input.PositionMS = float4(asfloat(vk::RawBufferLoad<uint3>(DCLFAttribute(0, first, second))), 1);
+#		endif
 #		if defined(TEXTURE)
-	input.TexCoord = DCLFHalf2(vk::RawBufferLoad<uint>(DCLFAttribute(1, index, first, second)));
+	input.TexCoord = DCLFHalf2(vk::RawBufferLoad<uint>(DCLFAttribute(1, first, second)));
 #		endif
 #		if defined(NORMALS)
-	input.Normal = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(3, index, first, second)));
-	input.Bitangent = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(4, index, first, second)));
+	input.Normal = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(3, first, second)));
+	input.Bitangent = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(4, first, second)));
 #		endif
 #		if defined(VC)
 	// A draw without vertex colours: alpha 1, which the alpha test's multiply leaves as it is.
 	input.Color = float4(1, 1, 1, 1);
 	[branch] if (!known || (drawTechnique & 0x1u) != 0)
-		input.Color = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, index, first, second)));
+		input.Color = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, first, second)));
 #		endif
 #		if defined(SKINNED)
 	input.BoneWeights = 0;
 	input.BoneIndices = 0;
 	[branch] if (DCLFDrawSkinned) {
-		const uint64_t skinning = DCLFAttribute(6, index, first, second);
+		const uint64_t skinning = DCLFAttribute(6, first, second);
 		const uint2 weights = vk::RawBufferLoad<uint2>(skinning);
 		input.BoneWeights = float4(DCLFHalf2(weights.x), DCLFHalf2(weights.y));
 		input.BoneIndices = DCLFUnorm4(vk::RawBufferLoad<uint>(skinning + 8));
@@ -410,8 +423,13 @@ VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 	const float clipZ = vsout.PositionCS.z;
 	vsout.DCLFClip = float2(clipZ, vsout.PositionCS.w - clipZ);
 	vsout.PositionCS.z = DCLFDepthRange.x * vsout.PositionCS.w + clipZ * DCLFDepthRange.y;
-	// The pixel stage's: the diffuse's descriptor (the shadow material row's, kShadowRowDiffuseOffset) and the object word.
+	// The pixel stage's: the diffuse's descriptor (the shadow material row's, kShadowRowDiffuseOffset) and the object word; nothing for
+	// an empty one (DCLF_EMPTY_PIXEL).
+#		if defined(DCLF_EMPTY_PIXEL)
+	vsout.DCLFDraw = uint2(0, 0);
+#		else
 	vsout.DCLFDraw = uint2(vk::RawBufferLoad<uint>(materialRow + 16), DCLFObjectWord);
+#		endif
 	return vsout;
 }
 
@@ -443,7 +461,7 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 // constant multiplying TexCoord0.w, is folded into TexCoord0.w here.
 float DCLFRefractionFloat(uint64_t a_frame, uint a_float) { return asfloat(vk::RawBufferLoad<uint>(a_frame + 4u * a_float, 4)); }
 
-VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+VS_OUTPUT DCLFRefractionVertex(uint index, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
@@ -458,6 +476,7 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	first.stride = vertexBuffer.w;
 	second.address = DCLFAddress(streamBuffer.xy);
 	second.stride = streamBuffer.w;
+	DCLFStreamsAt(index, first, second);
 
 	const uint object = DCLFObjectIndex;
 	const uint flags = DCLFObjects[object].DCLFRecordFlags;
@@ -486,13 +505,13 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 		fade = metric <= start ? 1 : saturate((metric - end) / (start - end));
 	}
 
-	precise float4 positionMS = float4(asfloat(vk::RawBufferLoad<uint4>(DCLFAttribute(0, index, first, second))).xyz, 1.0);
-	const float2 texCoord = DCLFHalf2(vk::RawBufferLoad<uint>(DCLFAttribute(1, index, first, second)));
+	precise float4 positionMS = float4(asfloat(vk::RawBufferLoad<uint3>(DCLFAttribute(0, first, second))), 1.0);
+	const float2 texCoord = DCLFHalf2(vk::RawBufferLoad<uint>(DCLFAttribute(1, first, second)));
 	// Normals unless model-space normals (the technique's Normals | BinormalTangent), whose stage reads (1, 1, 1).
 	float3 normalMS = float3(1, 1, 1);
 	if ((flags & kDCLFRefractionNoNormals) == 0)
-		normalMS = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(3, index, first, second))).xyz * 2 - 1;
-	const float vertexAlpha = (flags & kDCLFRefractionVertexColors) != 0 ? DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, index, first, second))).w : 1;
+		normalMS = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(3, first, second))).xyz * 2 - 1;
+	const float vertexAlpha = (flags & kDCLFRefractionVertexColors) != 0 ? DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, first, second))).w : 1;
 
 	World = float4x4(
 		DCLFPlacements[object].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
@@ -508,7 +527,7 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	float3 normalVS;
 	float falloff = 1;
 	if (DCLFObjects[object].DCLFBoneRows != 0) {
-		const uint64_t skinning = DCLFAttribute(6, index, first, second);
+		const uint64_t skinning = DCLFAttribute(6, first, second);
 		const uint2 weightWords = vk::RawBufferLoad<uint2>(skinning);
 		const float4 boneWeights = float4(DCLFHalf2(weightWords.x), DCLFHalf2(weightWords.y));
 		precise int4 boneIndices = 765.01.xxxx * DCLFUnorm4(vk::RawBufferLoad<uint>(skinning + 8));
@@ -539,6 +558,20 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	// The pixel stage's: the diffuse's descriptor and sampler (the material row's t0, s0) and the object word.
 	vsout.DCLFDraw = uint2(DCLFMaterialTextureIndex(0), DCLFObjectWord);
 	vsout.DCLFRefractionSampler = DCLFMaterialSamplerIndex(0);
+	return vsout;
+}
+
+// Keyed on a wave-uniform instance, as the shadow views' main is.
+VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	VS_OUTPUT vsout;
+	[loop] for (;;) {
+		const uint drawInstance = WaveReadLaneFirst(a_instance);
+		[branch] if (drawInstance == a_instance) {
+			vsout = DCLFRefractionVertex(index, drawInstance);
+			break;
+		}
+	}
 	return vsout;
 }
 #	endif
@@ -722,9 +755,7 @@ PS_OUTPUT main(PS_INPUT input, bool a_frontFace : SV_IsFrontFace)
 	psout.Color.w = 1;
 	return psout;
 }
-#	elif defined(DCLF_BINDLESS) && (defined(RENDER_SHADOWMAP) || defined(RENDER_DEPTH)) && !defined(ALPHA_TEST) && \
-		!defined(ADDITIONAL_ALPHA_MASK) && !defined(RENDER_SHADOWMAP_PB) && !defined(RENDER_SHADOWMASK_ANY) && \
-		!defined(DEBUG_SHADOWSPLIT) && !defined(DEBUG_COLOR) && !defined(DEPTH_WRITE_DECALS) && !defined(STENCIL_ABOVE_WATER)
+#	elif defined(DCLF_EMPTY_PIXEL)
 void main(PS_INPUT input)
 {
 }

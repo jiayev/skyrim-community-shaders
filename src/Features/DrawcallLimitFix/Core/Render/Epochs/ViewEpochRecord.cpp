@@ -98,7 +98,7 @@ namespace DCLF
 						return;
 					auto& commands = a_recording.Commands();
 					commands.BindLayout(a_prepared.program->layout->GetHandle());
-					commands.BindPipeline(a_prepared.program->pipeline->GetHandle());
+					commands.BindPipeline(a_prepared.program->Pipeline());
 					for (std::uint32_t f = 0; f < a_prepared.faces; ++f) {
 						auto constants = a_prepared.constants;
 						constants.bucketCountsIndex = a_prepared.bucketCountsIndex[f];

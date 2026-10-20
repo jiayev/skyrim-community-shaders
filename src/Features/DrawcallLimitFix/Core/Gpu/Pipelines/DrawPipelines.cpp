@@ -362,6 +362,12 @@ namespace DCLF
 		TakeFamilyRequests();
 		if (completions->refractionRequest.exchange(false, std::memory_order_acq_rel))
 			l.refraction.asked = true;
+		// A shader reload began reading the files (dclf-hot-reload.md): the programs are made again as asked for, so the keys parked on one,
+		// and those that failed, are requested again (the pipelines built already are the registry's to rebuild).
+		if (ShaderPrograms::Get().FollowSources()) {
+			RetryAfterSourcesMoved();
+			inputsChanged = true;
+		}
 		if (inputsChanged) {
 			l.RetryBlocked([&](const auto& a_key) { TryRequest(a_key); });
 			s.RetryBlocked([&](const auto& a_key) { TryRequestShadow(a_key); });
@@ -391,13 +397,112 @@ namespace DCLF
 			if (!finished.shadow.empty())
 				TryRequestRefraction();
 		}
+		// What a shader reload swapped into the registry's slots, before this pass's admissions publish the sets.
+		AdoptLivePipelines();
 		AdmitLane();
 		AdmitShadow();
 		AdmitFamiliesAndForward();
+		// Completed builds become the service's active pipelines (a later request completes at once). The ones they displace retire at once:
+		// every payload a recording may use is held by the lane's own sets and the catalogs (Versions, the retired lists), not the service.
+		service.PublishReady(++l.servicePass);
+		service.Retire(l.servicePass);
 		if (l.dirty)
 			PublishCatalog();
-		// Completed builds become the service's active pipelines (a later request completes at once).
-		service.PublishReady(0);
+	}
+
+	void DrawPipelines::Impl::RetryAfterSourcesMoved()
+	{
+		auto& l = lane;
+		// A keyed family's keys parked on a program (its entry is gone), and its failed keys (a program or a build that failed may build from
+		// the files as they are now): blocked, so RetryBlocked requests each again.
+		const auto unpark = [](auto& a_family) {
+			std::size_t retried = 0;
+			for (auto& [id, keys] : std::exchange(a_family.programWaiters, {})) {
+				a_family.blocked.insert(a_family.blocked.end(), keys.begin(), keys.end());
+				retried += keys.size();
+			}
+			std::vector<std::remove_cvref_t<decltype(a_family.entries.begin()->first)>> failed;
+			for (const auto& [key, entry] : a_family.entries)
+				if (entry.failed)
+					failed.push_back(key);
+			for (const auto& key : failed)
+				a_family.entries.erase(key);
+			a_family.failedEntries = 0;
+			a_family.blocked.insert(a_family.blocked.end(), failed.begin(), failed.end());
+			return retried + failed.size();
+		};
+		const std::size_t main = unpark(l), shadow = unpark(l.shadow), forward = unpark(l.forward);
+		// The draw families and refraction are tried every pass: what failed for good is forgotten.
+		for (auto& t : l.families)
+			if (t.failed && !t.built)
+				t.failed = t.programFailed = t.requested = false;
+		if (l.refraction.failed && !l.refraction.built)
+			l.refraction.failed = l.refraction.programFailed = l.refraction.requested = false;
+		if (main || shadow || forward)
+			logger::info("[DCLF] pipeline lane: the shader sources moved; {} main, {} shadow and {} forward keys waiting on a program or failed are requested again",
+				main, shadow, forward);
+		l.dirty = true;
+	}
+
+	void DrawPipelines::Impl::AdoptLivePipelines()
+	{
+		auto& l = lane;
+		const auto* registry = RenderGraphRuntime::PipelineRegistry();
+		const std::uint64_t registryGeneration = registry ? registry->Generation() : 0;
+		if (registryGeneration == l.registryGeneration)
+			return;
+		l.registryGeneration = registryGeneration;
+		const auto swapped = [](const std::shared_ptr<org::services::LivePipelineSlot>& a_slot, const org::services::PipelinePayload& a_payload) {
+			return a_slot && a_slot->Peek() != a_payload.get();
+		};
+		// The main set: each index's payload, usage and constant tables (the catalog's entries, which the scene lane resolves again), then
+		// its Z-prepass groups and state classes taken again (a new pipeline may defer depth now, or share another's depth pipeline).
+		std::uint32_t main = 0, shadow = 0, others = 0;
+		for (std::size_t i = 0; i < l.setSlots.size(); ++i) {
+			if (!swapped(l.setSlots[i], l.setPipelines[i]))
+				continue;
+			l.setPipelines[i] = l.setSlots[i]->Load();
+			const auto* built = static_cast<const Built*>(l.setPipelines[i].get());
+			l.usage[i] = built->usage;
+			l.constantTables[i] = built->tables;
+			++main;
+		}
+		if (main) {
+			ReindexMainSet();
+			// Every version starts over: the next publication (AdmitLane) makes one from every index's pipeline as it is now, never writing
+			// an index a version held (the versions a recording holds keep their pipelines until it lets go).
+			l.versions.Retire();
+		}
+		auto& s = l.shadow;
+		for (std::size_t i = 0; i < s.setSlots.size(); ++i) {
+			if (!swapped(s.setSlots[i], s.setPipelines[i]))
+				continue;
+			s.setPipelines[i] = s.setSlots[i]->Load();
+			s.discards[i] = static_cast<const Built*>(s.setPipelines[i].get())->discards ? 1 : 0;
+			++shadow;
+		}
+		if (shadow)
+			s.versions.Retire();
+		// The pipelines in no set: the catalog names them; the ones replaced are kept for the process, as a target change's.
+		const auto adopt = [&](std::shared_ptr<org::services::LivePipelineSlot>& a_slot, org::services::PipelinePayload& a_built,
+							   std::vector<org::services::PipelinePayload>& a_retired) {
+			if (!swapped(a_slot, a_built))
+				return;
+			a_retired.push_back(std::move(a_built));
+			a_built = a_slot->Load();
+			++others;
+		};
+		for (auto& [key, entry] : l.forward.entries)
+			adopt(entry.slot, entry.built, l.forward.retired);
+		for (auto& t : l.families)
+			adopt(t.slot, t.built, t.retired);
+		adopt(l.refraction.slot, l.refraction.built, l.refraction.retired);
+		if (!main && !shadow && !others)
+			return;
+		l.dirty = true;
+		logger::info("[DCLF] pipeline lane: registry generation {}: {} main, {} shadow and {} forward, draw family and refraction pipelines swapped in; the "
+					 "catalog is published again with them",
+			registryGeneration, main, shadow, others);
 	}
 
 	void DrawPipelines::Impl::PublishCatalog()

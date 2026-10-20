@@ -151,7 +151,7 @@ namespace DCLF::Draws
 				return;
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
-			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.BindPipeline(a_frame.program->Pipeline());
 			for (std::size_t i = 0; i < a_frame.dispatches.size(); ++i) {
 				const auto& dispatch = a_frame.dispatches[i];
 				if (i != 0) {

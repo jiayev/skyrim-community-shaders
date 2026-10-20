@@ -146,15 +146,79 @@ A trace runs a named **template** as a sequence of captures and merges them into
 -   **Warnings.** Selected passes on another queue, filters that matched nothing, unavailable metrics,
     dropped samples and rows that vary by more than half their median.
 -   **Retries.** A failed capture is retried twice before the trace moves on.
+-   **Statistics.** Every row and group also carries the mean of its per-sample time with a confidence
+    interval, median, p05/p95, effective sample count (`n_eff`) and whether it converged
+    (`src/Features/RemoteControl/TraceStatistics.h`, BasicTelemetry's `StatisticalSampler`, as
+    BasicRenderer's sampler: Newey-West long-run variance for autocorrelated frames, Student t, MAD
+    flags counted). A series converges once its interval's half-width is within `relativeHalfWidth`
+    of its mean, or within `absoluteHalfWidthUs`, with at least `minSamples` samples and effective
+    samples.
+-   **Convergence (NvPerf).** With `maxRepeats` above `repeats`, `repeats` is a minimum: after the
+    planned captures, while a row's or group's `gpu__time_duration` has not converged, another round
+    (every metric group once) is captured, up to `maxRepeats` rounds.
 -   **Baselines.** Each report is written to `NvPerf/<label>.json` and `.txt` next to
     `CommunityShaders.log`, and logged. A trace compared with an earlier report shows each group's and
-    row's difference, e.g. DCLF on against a `CS_DCLF=0` run.
+    row's difference, e.g. DCLF on against a `CS_DCLF=0` run, marked `*` when the two means differ by
+    more than their confidence intervals combined (`sqrt(a^2 + b^2)` of the half-widths). The panel
+    greys a difference that is not.
+
+### Timestamp traces
+
+A template with `"source": "timestamps"` reads OpenRenderGraph's pass timestamps instead of
+capturing (`src/Features/RemoteControl/GpuTimestamps.h`): cheap and continuous, every frame is a
+sample of every graph pass and barrier batch (`cs.org.barrier.<where>.<pass>`), on every queue,
+including the async compute queue NvPerf cannot see. The NVIDIA SDK is not needed.
+
+-   **Recordings.** DCLF's epochs replay recordings kept across frames, which carry no shared-pool
+    queries. The trace turns on `PersistentGraphHost::SetRecordingTimestamps`, which rebuilds the
+    graph: each kept list is recorded again with queries of its own (a pool and readback buffer per
+    list), resolved by every submission and read when its frame slot completes
+    (`extern/OpenRenderGraph/docs/persistent-epochs.md`, "Timestamps of their own"). The trace turns
+    them off when it ends (another rebuild).
+-   **Phases.** Headless, the trace starts collecting when a game loads and waits for present
+    `startFrame` after it; it then waits for the rebuild, discards `settlingFrames` frames, and
+    samples every frame. Every 30 frames it checks: it ends once every row and group has converged,
+    after `maxSamples` frames, or `timeoutFrames` presents after sampling began.
+-   **Rows.** A row is a range's time per frame: every occurrence (every epoch that ran it) summed,
+    0 in a frame without it; its time is the mean. A range on the compute queue is a row of its own,
+    `<name> [compute]`, left out of the groups and the total (it overlaps the graphics queue's
+    work). Engine (D3D11) events are not timestamped: with DCLF off only the graph's own passes are
+    measured, so a DCLF on/off comparison of groups is NvPerf's to make.
+-   **Hitches and gaps.** A frame whose selected total is beyond 1.5x the median's is dropped and
+    counted, as is a frame whose epochs did not all come back within 64 frames.
+-   **Warnings** add: rows on another queue, no range from a kept recording (DCLF's epochs not timed;
+    expected with DCLF off), and the rows furthest from converging.
+
+Built-in templates:
+
+| Template | Measures |
+| --- | --- |
+| `frame-timing` | every timestamped range (passes and barrier batches, every queue) |
+| `dclf-timing` | `dclf-passes`'s ranges and groups, from timestamps |
+| `dclf-barrier-timing` | `dclf-timing` plus ORG's barrier batches (`cs.org.barrier.*`) |
+
+Template keys (both sources): `source` (`nvperf` or `timestamps`), `confidence` (0.95),
+`relativeHalfWidth` (0.02), `absoluteHalfWidthUs` (1.0), `minSamples` (30); NvPerf: `maxRepeats` (0:
+off); timestamps: `maxSamples` (3000), `settlingFrames` (120), `timeoutFrames` (6000).
+`metrics`, `samples` and `repeats` do not apply to timestamp traces. For example:
+
+```json
+{
+	"name": "dclf-shadow-timing",
+	"extends": "dclf-timing",
+	"ranges": ["cs.dclf.shadow.*", "cs.org.barrier.*"],
+	"relativeHalfWidth": 0.01,
+	"minSamples": 120,
+	"maxSamples": 6000
+}
+```
 
 Built-in templates:
 
 | Template | Measures |
 | --- | --- |
 | `frame` | every outermost range's GPU time |
+| `frame-timing`, `dclf-timing`, `dclf-barrier-timing` | timestamp traces (above) |
 | `dclf-passes` | DCLF's graph passes and the engine events holding the same work with DCLF off (`Depth`, `World`, `Directional Light Shadowmaps`, `First Person View`), grouped by epoch: GPU time, 3 repeats |
 | `dclf-barriers` | `dclf-passes` plus ORG's barrier batches (`cs.org.*`) |
 | `dclf-units` | `dclf-passes` with every unit's throughput |
@@ -241,10 +305,15 @@ A trace is requested the same way:
 | `CS_NVPERF_LABEL`       | the report's name (default: the template's)                                   |
 | `CS_NVPERF_BASELINE`    | a report (label or `.json` path) to compare it with                           |
 | `CS_NVPERF_START_FRAME`, `CS_NVPERF_SAMPLES`, `CS_NVPERF_REPEATS` | override the template's                |
+| `CS_NVPERF_MAX_REPEATS`, `CS_NVPERF_MIN_SAMPLES`, `CS_NVPERF_MAX_SAMPLES` | override the template's convergence bounds |
+| `CS_NVPERF_HALF_WIDTH`  | override the template's `relativeHalfWidth` (e.g. `0.01`)                    |
 
 For example, DCLF on against off, one launch each:
 `CS_NVPERF_TEMPLATE=dclf-passes CS_NVPERF_LABEL=dclf-off CS_DCLF=0`, then
 `CS_NVPERF_TEMPLATE=dclf-passes CS_NVPERF_LABEL=dclf-on CS_NVPERF_BASELINE=dclf-off`.
+A change to DCLF against the build before it, from timestamps:
+`CS_NVPERF_TEMPLATE=dclf-timing CS_NVPERF_LABEL=before`, then
+`CS_NVPERF_TEMPLATE=dclf-timing CS_NVPERF_LABEL=after CS_NVPERF_BASELINE=before`.
 
 `CS_NVPERF_RANGES` and `CS_NVPERF_TEMPLATE` also turn Frame Annotations on at startup, so the engine's passes are hooked.
 For example, DCLF's graph passes beside the engine's batches:
@@ -260,7 +329,14 @@ For example, DCLF's graph passes beside the engine's batches:
     (device, frame counter, annotations, log directory, build hint).
 - `src/Features/RemoteControl/NvPerfTrace.h` / `.cpp`: traces: the templates (built-in and
     `NvPerfTemplates/*.json`), the runner that queues a template's captures through `RequestCapture`
-    from `OnPresentEnd`, and the report (median, hitches, groups, warnings, baseline, JSON and text).
+    (or samples timestamps) from `OnPresentEnd`, and the report (median, statistics, convergence,
+    hitches, groups, warnings, baseline, JSON and text).
+- `src/Features/RemoteControl/TraceStatistics.h` / `.cpp`: a series' mean, confidence interval,
+    effective sample count and convergence (BasicTelemetry's `StatisticalSampler`).
+- `src/Features/RemoteControl/GpuTimestamps.h` / `.cpp`: a timestamp trace's frames: recording
+    timestamps on and off through the graph host, and each frame's ranges assembled from the epochs
+    `RenderGraphRuntime` hands over (`MarkEpoch` at submission, `Aggregate` at completion, from
+    `IStatisticsService::GetCompletedTimestamps`).
 - `src/Features/RemoteControl/NvPerfBackend.h`: the internal backend interface and the capture
     in flight.
 - `src/Features/RemoteControl/NvPerfD3D11.cpp`: the D3D11 backend. It configures the metrics

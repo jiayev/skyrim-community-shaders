@@ -34,6 +34,11 @@ struct DrawcallLimitFix : Feature
 	virtual void Prepass() override;
 	virtual void EarlyPrepass() override;
 	virtual void DrawSettings() override;
+	/**
+	 * @brief CS's "Clear shader cache" (the menu's, and the shader watcher's full clear; any thread): every live render graph pipeline built
+	 * again from the shader files as they are now (RenderGraphRuntime::RequestShaderReload; docs/development/dclf-hot-reload.md).
+	 */
+	virtual void ClearShaderCache() override;
 
 	/** @brief Where the main pass's opaque batches start: what it binds, for the colour epoch (IndirectDraws::CaptureMainPass). */
 	void BeforeOpaquePass();

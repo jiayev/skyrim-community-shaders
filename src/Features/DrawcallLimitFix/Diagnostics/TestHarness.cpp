@@ -94,6 +94,19 @@ namespace DCLF
 							logger::warn("[DCLF] test command: no render graph host to rebuild");
 						continue;
 					}
+					// Shader hot reload (dclf-hot-reload.md), served at the next present: "[ORG] shader reload: N of M pipelines rebuilt (K failed,
+					// U unchanged) in S s" marks the rebuilds done, "[ORG] shader reload: N pipelines swapped in at graph build B" the swap.
+					// "dclf:reload-shaders": every live pipeline, as the menu's button asks it (the unchanged ones stay). "=all": every one built
+					// and swapped even when unchanged (the swap exercised without an edit). "=<file>": those built from that shader file, as the
+					// shader watcher asks for an edit (an include: every one).
+					if (command == "dclf:reload-shaders" || command.rfind("dclf:reload-shaders=", 0) == 0) {
+						const std::string value = command.size() > 20 ? command.substr(20) : std::string{};
+						if (value == "all")
+							RenderGraphRuntime::RequestShaderReload({}, true);
+						else
+							RenderGraphRuntime::RequestShaderReload(value);
+						continue;
+					}
 					if (command.rfind("dclf:", 0) == 0) {
 						const auto equals = command.find('=');
 						const auto name = command.substr(5, equals == std::string::npos ? std::string::npos : equals - 5);

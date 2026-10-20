@@ -1,5 +1,6 @@
 #include "Features/RemoteControl/NvPerf.h"
 
+#include "Features/RemoteControl/GpuTimestamps.h"
 #include "Features/RemoteControl/NvPerfBackend.h"
 #include "Features/RemoteControl/NvPerfTrace.h"
 
@@ -713,12 +714,15 @@ namespace NvPerf
 
 	void OnPresentEnd()
 	{
-		if (!kBuilt)
-			return;
 		auto& profiler = Get();
 		++profiler.presents;
-		QueueEnvironmentCapture(profiler);
+		Timestamps::OnPresentEnd(profiler.presents);
+		if (kBuilt)
+			QueueEnvironmentCapture(profiler);
+		// Timestamp traces need no SDK: the trace runner runs either way, and its captures fail without one.
 		Trace::OnPresentEnd(profiler.presents);
+		if (!kBuilt)
+			return;
 		std::optional<std::pair<std::uint64_t, CaptureConfiguration>> pending;
 		bool cancel = false;
 		{

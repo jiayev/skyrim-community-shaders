@@ -151,7 +151,7 @@ namespace DCLF::Draws
 			{ .key = "core.z.index-pool", .passName = "cs.dclf.z.index-pool", .make = &IndexPoolCopies },
 			{ .key = "core.build-draws-phase2", .passName = "cs.dclf.build-draws-phase2", .make = &BuildDrawsPhaseTwo },
 			{ .key = "core.z.visibility-events", .passName = "cs.dclf.z.visibility-events", .make = &VisibilityEvents },
-			{ .key = "core.z.visibility-readback", .passName = "cs.dclf.z.visibility-readback", .kind = PassKind::Copy, .queue = PassQueue::None, .make = &VisibilityEventsCopy },
+			{ .key = "core.z.visibility-readback", .passName = "cs.dclf.z.visibility-readback", .kind = PassKind::Copy, .make = &VisibilityEventsCopy },
 			{ .key = "core.sort-scan", .passName = "cs.dclf.sort-scan", .make = &SortScan },
 			{ .key = "core.sort-scatter", .passName = "cs.dclf.sort-scatter", .make = &SortScatter },
 			{ .key = "core.forward-sort", .passName = "cs.dclf.forward-sort", .make = &ForwardSort },

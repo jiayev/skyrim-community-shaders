@@ -1,6 +1,8 @@
 #include "Features/RemoteControl/NvPerfTrace.h"
 
+#include "Features/RemoteControl/GpuTimestamps.h"
 #include "Features/RemoteControl/NvPerfBackend.h"
+#include "Features/RemoteControl/TraceStatistics.h"
 
 #include "Utils/FileSystem.h"
 
@@ -12,6 +14,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -19,8 +22,8 @@
 #include <type_traits>
 #include <utility>
 
-// NvPerf's traces (NvPerfTrace.h): templates, the runner that drives a template's captures through RequestCapture on the
-// render thread, and the report.
+// NvPerf's traces (NvPerfTrace.h): templates, the runner that drives a template's captures through RequestCapture (or, for a
+// timestamp trace, samples the render graph's pass timestamps) on the render thread, and the report.
 namespace NvPerf::Trace
 {
 	namespace
@@ -100,7 +103,117 @@ namespace NvPerf::Trace
 				{ { "memory", kMemoryMetrics } }, 1));
 			templates.push_back(dclf("dclf-full", "dclf-units, dclf-shader and dclf-memory in one trace: three captures merged into one table.",
 				{ { "units", kUnitMetrics }, { "shader", kShaderMetrics }, { "memory", kMemoryMetrics } }, 1));
+			// The timestamp traces: every frame a sample of the render graph's pass timestamps, until each mean is within 2%.
+			const auto timing = [](Template a_t, std::string a_name, std::string a_description) {
+				a_t.name = std::move(a_name);
+				a_t.description = std::move(a_description);
+				a_t.timingSource = TimingSource::Timestamps;
+				return a_t;
+			};
+			{
+				Template frame;
+				frame.metricGroups = { { "time", kTimeMetrics } };
+				templates.push_back(timing(std::move(frame), "frame-timing",
+					"Every render graph range's GPU time from ORG's pass timestamps (passes and barrier batches, every queue), each frame a sample, "
+					"until every mean is within 2% at 95% confidence. Engine work is not timestamped."));
+			}
+			templates.push_back(timing(dclf("", "", { { "time", kTimeMetrics } }, 1), "dclf-timing",
+				"dclf-passes from ORG's pass timestamps: every frame a sample until every row's and group's mean is within 2%, compute-queue passes "
+				"included as their own rows. The engine events are not timestamped: with DCLF off only the graph's passes are measured."));
+			{
+				auto barriers = timing(dclf("", "", { { "time", kTimeMetrics } }, 1), "dclf-barrier-timing",
+					"dclf-timing plus ORG's barrier batches around every graph pass (cs.org.barrier.*).");
+				barriers.ranges.push_back("cs.org.barrier.*");
+				templates.push_back(std::move(barriers));
+			}
 			return templates;
+		}
+
+		const char* SourceName(TimingSource a_source)
+		{
+			return a_source == TimingSource::Timestamps ? "timestamps" : "nvperf";
+		}
+
+		// The report group a range belongs to: the first with a filter matching it (empty: none).
+		std::string GroupOf(const Template& a_t, std::string_view a_name)
+		{
+			for (const auto& group : a_t.groups)
+				if (std::ranges::any_of(group.ranges, [&](const std::string& filter) { return detail::NameMatches(filter, a_name); }))
+					return group.name;
+			return {};
+		}
+
+		Statistics::Config StatisticsConfig(const Template& a_t)
+		{
+			return Statistics::ClampConfig({ a_t.confidence, a_t.relativeHalfWidth, a_t.absoluteHalfWidthUs, a_t.minSamples, a_t.maxSamples });
+		}
+
+		SeriesStats Summarize(const std::vector<double>& a_timesUs, const Template& a_t)
+		{
+			const auto summary = Statistics::Summarize(a_timesUs, StatisticsConfig(a_t));
+			SeriesStats stats;
+			stats.meanUs = summary.mean;
+			stats.ciUs = summary.halfWidth;
+			stats.medianUs = summary.median;
+			stats.p05Us = summary.p05;
+			stats.p95Us = summary.p95;
+			stats.effectiveSamples = summary.effectiveSamples;
+			stats.madOutliers = summary.madOutliers;
+			stats.converged = summary.converged;
+			return stats;
+		}
+
+		double RelativeHalfWidth(const SeriesStats& a_stats)
+		{
+			if (std::isnan(a_stats.ciUs))
+				return std::numeric_limits<double>::infinity();
+			return a_stats.meanUs != 0.0 ? a_stats.ciUs / std::abs(a_stats.meanUs) : (a_stats.ciUs == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
+		}
+
+		// Every row and group of a report: how many converged, and the one furthest from it (by relative half-width).
+		struct Convergence
+		{
+			std::uint32_t converged = 0, series = 0;
+			std::string worst;
+			double worstRelative = 0.0;
+			bool All() const { return series && converged == series; }
+		};
+
+		Convergence CheckConvergence(const Report& a_report)
+		{
+			Convergence out;
+			const auto note = [&](const std::string& a_name, const SeriesStats& a_stats) {
+				++out.series;
+				if (a_stats.converged) {
+					++out.converged;
+					return;
+				}
+				const double relative = RelativeHalfWidth(a_stats);
+				if (out.worst.empty() || relative > out.worstRelative) {
+					out.worst = a_name;
+					out.worstRelative = relative;
+				}
+			};
+			for (const auto& row : a_report.rows)
+				note(row.name, row.stats);
+			for (const auto& group : a_report.groups)
+				note("group " + group.name, group.stats);
+			return out;
+		}
+
+		// The rows furthest from converging, for a warning.
+		std::string Unconverged(const Report& a_report, std::size_t& a_count)
+		{
+			std::vector<std::pair<double, const Row*>> open;
+			for (const auto& row : a_report.rows)
+				if (!row.stats.converged)
+					open.emplace_back(RelativeHalfWidth(row.stats), &row);
+			std::ranges::sort(open, std::greater<>{}, &std::pair<double, const Row*>::first);
+			a_count = open.size();
+			std::string out;
+			for (std::size_t i = 0; i < open.size() && i < 6; ++i)
+				out += std::format("{}{} ({:.1f} +/- {:.1f} us)", out.empty() ? "" : ", ", open[i].second->name, open[i].second->stats.meanUs, open[i].second->stats.ciUs);
+			return out;
 		}
 
 		std::vector<std::string> Strings(const json& a_value, std::string_view a_key, std::string& a_error)
@@ -198,10 +311,43 @@ namespace NvPerf::Trace
 				auto added = Groups(a_value["addGroups"], "addGroups", a_error);
 				a_out.groups.insert(a_out.groups.begin(), added.begin(), added.end());
 			}
+			const auto real = [&](const char* a_key, double& a_field) {
+				if (a_value.contains(a_key)) {
+					if (!a_value[a_key].is_number())
+						a_error = std::format("'{}' must be a number", a_key);
+					else
+						a_field = a_value[a_key].get<double>();
+				}
+			};
+			if (a_value.contains("source")) {
+				const auto text = a_value["source"].is_string() ? a_value["source"].get<std::string>() : std::string{};
+				if (text == "nvperf")
+					a_out.timingSource = TimingSource::NvPerf;
+				else if (text == "timestamps")
+					a_out.timingSource = TimingSource::Timestamps;
+				else
+					a_error = "'source' must be \"nvperf\" or \"timestamps\"";
+			}
 			number("samples", a_out.samples);
 			number("repeats", a_out.repeats);
 			number("startFrame", a_out.startFrame);
-			if (a_error.empty() && a_out.metricGroups.empty())
+			real("confidence", a_out.confidence);
+			real("relativeHalfWidth", a_out.relativeHalfWidth);
+			real("absoluteHalfWidthUs", a_out.absoluteHalfWidthUs);
+			number("minSamples", a_out.minSamples);
+			number("maxSamples", a_out.maxSamples);
+			number("maxRepeats", a_out.maxRepeats);
+			number("settlingFrames", a_out.settlingFrames);
+			number("timeoutFrames", a_out.timeoutFrames);
+			if (a_error.empty() && !(a_out.confidence > 0.0 && a_out.confidence < 1.0))
+				a_error = "confidence must be between 0 and 1";
+			if (a_error.empty() && (a_out.relativeHalfWidth < 0.0 || a_out.absoluteHalfWidthUs < 0.0))
+				a_error = "half-widths cannot be negative";
+			if (a_error.empty() && (a_out.minSamples < 2 || a_out.maxSamples < a_out.minSamples))
+				a_error = "minSamples must be at least 2 and maxSamples at least minSamples";
+			if (a_error.empty() && a_out.maxRepeats > 64)
+				a_error = "maxRepeats must be at most 64";
+			if (a_error.empty() && a_out.timingSource == TimingSource::NvPerf && a_out.metricGroups.empty())
 				a_error = "no metrics";
 			for (const auto& group : a_out.metricGroups)
 				for (const auto& text : group.metrics) {
@@ -337,6 +483,38 @@ namespace NvPerf::Trace
 			return a_label;
 		}
 
+		json Number(double a_value)
+		{
+			return std::isfinite(a_value) ? json(a_value) : json(nullptr);
+		}
+
+		json StatsJson(const SeriesStats& a_stats)
+		{
+			return { { "meanUs", Number(a_stats.meanUs) }, { "ciUs", Number(a_stats.ciUs) }, { "medianUs", Number(a_stats.medianUs) }, { "p05Us", Number(a_stats.p05Us) },
+				{ "p95Us", Number(a_stats.p95Us) }, { "effectiveSamples", Number(a_stats.effectiveSamples) }, { "madOutliers", a_stats.madOutliers },
+				{ "converged", a_stats.converged } };
+		}
+
+		SeriesStats StatsFrom(const json& a_entry)
+		{
+			SeriesStats stats;
+			if (!a_entry.contains("stats") || !a_entry["stats"].is_object())
+				return stats;
+			const auto& value = a_entry["stats"];
+			const auto number = [&](const char* a_key, double a_default) {
+				return value.contains(a_key) && value[a_key].is_number() ? value[a_key].get<double>() : a_default;
+			};
+			stats.meanUs = number("meanUs", 0.0);
+			stats.ciUs = number("ciUs", std::nan(""));
+			stats.medianUs = number("medianUs", 0.0);
+			stats.p05Us = number("p05Us", 0.0);
+			stats.p95Us = number("p95Us", 0.0);
+			stats.effectiveSamples = number("effectiveSamples", 0.0);
+			stats.madOutliers = value.value("madOutliers", 0u);
+			stats.converged = value.value("converged", false);
+			return stats;
+		}
+
 		json ReportJson(const Report& a_report)
 		{
 			json rows = json::array();
@@ -344,17 +522,20 @@ namespace NvPerf::Trace
 				json metrics = json::object();
 				for (const auto& [label, value] : row.metrics)
 					metrics[label] = std::isnan(value) ? json(nullptr) : json(value);
-				rows.push_back({ { "name", row.name }, { "group", row.group }, { "timeUs", row.timeUs }, { "timeMinUs", row.timeMinUs }, { "timeMaxUs", row.timeMaxUs },
-					{ "occurrencesPerFrame", row.occurrencesPerFrame }, { "samples", row.samples }, { "metrics", std::move(metrics) } });
+				rows.push_back({ { "name", row.name }, { "group", row.group }, { "queue", row.queue }, { "timeUs", row.timeUs }, { "timeMinUs", row.timeMinUs },
+					{ "timeMaxUs", row.timeMaxUs }, { "occurrencesPerFrame", row.occurrencesPerFrame }, { "samples", row.samples }, { "stats", StatsJson(row.stats) },
+					{ "metrics", std::move(metrics) } });
 			}
 			json groups = json::array();
 			for (const auto& group : a_report.groups)
-				groups.push_back({ { "name", group.name }, { "timeUs", group.timeUs }, { "ranges", group.ranges } });
-			return { { "template", a_report.templateName }, { "label", a_report.label }, { "chip", a_report.chipName }, { "success", a_report.success },
-				{ "error", a_report.error }, { "startFrame", a_report.startFrame }, { "endFrame", a_report.endFrame }, { "captures", a_report.captures },
-				{ "failedCaptures", a_report.failedCaptures }, { "samples", a_report.samples }, { "outlierSamples", a_report.outlierSamples },
-				{ "metricLabels", a_report.metricLabels }, { "totalUs", a_report.totalUs }, { "warnings", a_report.warnings }, { "groups", std::move(groups) },
-				{ "rows", std::move(rows) }, { "baseline", a_report.baseline ? a_report.baseline->label : std::string{} } };
+				groups.push_back({ { "name", group.name }, { "timeUs", group.timeUs }, { "ranges", group.ranges }, { "stats", StatsJson(group.stats) } });
+			return { { "template", a_report.templateName }, { "label", a_report.label }, { "source", SourceName(a_report.timingSource) }, { "chip", a_report.chipName },
+				{ "success", a_report.success }, { "converged", a_report.converged }, { "confidence", a_report.confidence },
+				{ "relativeHalfWidth", a_report.relativeHalfWidth }, { "error", a_report.error }, { "startFrame", a_report.startFrame },
+				{ "endFrame", a_report.endFrame }, { "captures", a_report.captures }, { "failedCaptures", a_report.failedCaptures }, { "samples", a_report.samples },
+				{ "outlierSamples", a_report.outlierSamples }, { "droppedFrames", a_report.droppedFrames }, { "metricLabels", a_report.metricLabels },
+				{ "totalUs", a_report.totalUs }, { "warnings", a_report.warnings }, { "groups", std::move(groups) }, { "rows", std::move(rows) },
+				{ "baseline", a_report.baseline ? a_report.baseline->label : std::string{} } };
 		}
 
 		// The capture plan of a trace: its template's metric groups, each repeats times, in that order (a repeat of every group
@@ -397,6 +578,34 @@ namespace NvPerf::Trace
 			std::vector<std::pair<std::size_t, std::shared_ptr<const CaptureResult>>> results;  // with their metric group
 			std::uint32_t failed = 0;
 			std::vector<std::string> warnings;
+			std::uint32_t rounds = 0;  // NvPerf: rounds planned (repeats, then one per convergence check that fell short)
+
+			// A timestamp trace's samples: one series per range (and queue), a value per frame sampled.
+			struct Series
+			{
+				std::string name, queue, group;
+				bool graphics = true;
+				bool replayed = false;  // seen in a kept recording's own queries
+				std::vector<double> times;
+				std::vector<std::uint16_t> occurrences;
+			};
+			struct TimestampRun
+			{
+				enum class Phase
+				{
+					Waiting,  // for the game, the graph's rebuild with recording timestamps
+					Settling,
+					Sampling,
+				};
+				Phase phase = Phase::Waiting;
+				bool started = false;  // Timestamps::Start succeeded
+				std::uint32_t settled = 0;
+				std::uint64_t samplingStart = 0, lastPresent = 0;
+				std::map<std::string, std::size_t> index;
+				std::vector<Series> series;
+				std::vector<double> totals;  // per frame sampled: the graphics queue's selected ranges
+				std::uint32_t frames = 0, untimed = 0, dropped = 0, sinceCheck = 0;
+			} timestamps;
 		};
 
 		Runner& Get()
@@ -415,11 +624,37 @@ namespace NvPerf::Trace
 			status.captures = static_cast<std::uint32_t>(a_runner.plan.size());
 			status.capture = static_cast<std::uint32_t>(std::min(a_runner.next + 1, a_runner.plan.size()));
 			status.phase.clear();
-			if (a_runner.next < a_runner.plan.size()) {
+			const auto& t = a_runner.request.t;
+			if (t.timingSource == TimingSource::NvPerf && a_runner.next < a_runner.plan.size()) {
 				const auto& planned = a_runner.plan[a_runner.next];
-				status.phase = std::format("{}, repeat {} of {}", a_runner.request.t.metricGroups[planned.group].name, planned.repeat + 1, a_runner.request.t.repeats);
+				status.phase = t.maxRepeats > t.repeats ?
+				                   std::format("{}, repeat {} (at least {}, at most {})", t.metricGroups[planned.group].name, planned.repeat + 1, t.repeats, t.maxRepeats) :
+				                   std::format("{}, repeat {} of {}", t.metricGroups[planned.group].name, planned.repeat + 1, t.repeats);
 			}
 			status.error = std::move(a_error);
+		}
+
+		void SetPhase(Runner& a_runner, std::string a_phase)
+		{
+			SetStatus(a_runner, State::Running);
+			std::lock_guard lock(a_runner.mutex);
+			a_runner.status.phase = std::move(a_phase);
+		}
+
+		void SetConvergence(Runner& a_runner, const Convergence& a_convergence, std::uint32_t a_samples)
+		{
+			const auto& t = a_runner.request.t;
+			std::lock_guard lock(a_runner.mutex);
+			auto& status = a_runner.status;
+			status.convergence = true;
+			status.samples = a_samples;
+			status.minSamples = t.minSamples;
+			status.maxSamples = t.timingSource == TimingSource::Timestamps ? t.maxSamples : 0;
+			status.converged = a_convergence.converged;
+			status.series = a_convergence.series;
+			status.worst = a_convergence.worst;
+			status.worstRelativeHalfWidth = a_convergence.worstRelative;
+			status.targetRelativeHalfWidth = t.relativeHalfWidth;
 		}
 
 		/// The merged report of the trace's captures.
@@ -448,9 +683,11 @@ namespace NvPerf::Trace
 				std::uint32_t measured = 0;
 			};
 			std::map<std::string, Accumulated> byName;
+			// Each group's time per sample (its rows summed; "other" the ungrouped ones), for its own statistics.
+			std::map<std::string, std::vector<double>> groupTimes;
 			std::set<std::string> otherQueue, unsupported;
 			std::uint64_t droppedRanges = 0;
-			for (const auto& [group, result] : a_runner.results) {
+			for (const auto& [metricGroup, result] : a_runner.results) {
 				if (!report.startFrame || result->startFrame < report.startFrame)
 					report.startFrame = result->startFrame;
 				report.endFrame = std::max(report.endFrame, result->endFrame);
@@ -508,6 +745,18 @@ namespace NvPerf::Trace
 						continue;
 					}
 					++report.samples;
+					std::map<std::string, double> groupSums;
+					for (const auto& group : t.groups)
+						groupSums[group.name] = 0.0;
+					if (!t.groups.empty())
+						groupSums["other"] = 0.0;
+					for (const auto& [name, entry] : samples[s]) {
+						const auto group = GroupOf(t, name);
+						if (!group.empty() || !t.groups.empty())
+							groupSums[group.empty() ? std::string("other") : group] += entry.time / 1000.0;
+					}
+					for (const auto& [group, sum] : groupSums)
+						groupTimes[group].push_back(sum);
 					for (const auto& name : names) {
 						auto& accumulated = byName[name];
 						const auto found = samples[s].find(name);
@@ -539,11 +788,8 @@ namespace NvPerf::Trace
 				row.samples = accumulated.measured;
 				for (const auto& [label, values] : accumulated.metrics)
 					row.metrics[label] = Median(values);
-				for (const auto& group : t.groups)
-					if (std::ranges::any_of(group.ranges, [&](const std::string& filter) { return detail::NameMatches(filter, name); })) {
-						row.group = group.name;
-						break;
-					}
+				row.group = GroupOf(t, name);
+				row.stats = Summarize(accumulated.times, t);
 				report.totalUs += row.timeUs;
 				report.rows.push_back(std::move(row));
 			}
@@ -556,6 +802,7 @@ namespace NvPerf::Trace
 						entry.timeUs += row.timeUs;
 						++entry.ranges;
 					}
+				entry.stats = Summarize(groupTimes[group.name], t);
 				if (entry.ranges)
 					report.groups.push_back(std::move(entry));
 			}
@@ -566,9 +813,17 @@ namespace NvPerf::Trace
 						other.timeUs += row.timeUs;
 						++other.ranges;
 					}
+				other.stats = Summarize(groupTimes["other"], t);
 				if (other.ranges)
 					report.groups.push_back(std::move(other));
 			}
+			// The target is the report's only when the trace captured until it (maxRepeats); the intervals are there either way.
+			report.timingSource = TimingSource::NvPerf;
+			if (t.maxRepeats > t.repeats) {
+				report.confidence = t.confidence;
+				report.relativeHalfWidth = t.relativeHalfWidth;
+			}
+			report.converged = Statistics::Available() && CheckConvergence(report).All();
 
 			// What the captures could not see, or saw unreliably.
 			if (!otherQueue.empty()) {
@@ -595,15 +850,191 @@ namespace NvPerf::Trace
 					unstable += std::format("{}{} ({:.0f}-{:.0f} us)", unstable.empty() ? "" : ", ", row.name, row.timeMinUs, row.timeMaxUs);
 			if (unstableCount)
 				report.warnings.push_back(std::format("{} rows vary by more than half their median across samples: {}{}", unstableCount, unstable, unstableCount > 6 ? ", ..." : ""));
+			if (t.maxRepeats > t.repeats && !report.converged && Statistics::Available()) {
+				std::size_t open = 0;
+				const auto rows = Unconverged(report, open);
+				report.warnings.push_back(std::format("not converged after {} rounds ({} rows open, +/-{:.1f}% at {:.0f}% confidence asked): {}{}", a_runner.rounds, open,
+					100.0 * t.relativeHalfWidth, 100.0 * t.confidence, rows.empty() ? "only groups" : rows, open > 6 ? ", ..." : ""));
+			}
 			report.success = !report.rows.empty();
 			if (!report.success)
 				report.error = a_runner.results.empty() ? "every capture failed" : "no range was measured";
 			return report;
 		}
 
+		const char* QueueName(Timestamps::Queue a_queue)
+		{
+			return a_queue == Timestamps::Queue::Graphics ? "graphics" : a_queue == Timestamps::Queue::Compute ? "compute" : "copy";
+		}
+
+		/// One frame of a timestamp trace into its series: each selected range's time summed over its occurrences (0 without one).
+		void AddTimestampFrame(Runner& a_runner, const Timestamps::Frame& a_frame)
+		{
+			const auto& t = a_runner.request.t;
+			auto& run = a_runner.timestamps;
+			std::vector<std::pair<double, std::uint16_t>> current(run.series.size());
+			for (const auto& range : a_frame.ranges) {
+				if (!t.ranges.empty() && !detail::MatchingFilter(t.ranges, range.name))
+					continue;
+				const bool graphics = range.queue == Timestamps::Queue::Graphics;
+				const auto key = graphics ? range.name : std::format("{} [{}]", range.name, QueueName(range.queue));
+				const auto [found, inserted] = run.index.try_emplace(key, run.series.size());
+				if (inserted) {
+					Runner::Series series;
+					series.name = key;
+					series.queue = QueueName(range.queue);
+					series.graphics = graphics;
+					// Another queue's ticks overlap the graphics queue's work: its rows stay out of the groups and the total.
+					if (graphics)
+						series.group = GroupOf(t, range.name);
+					series.times.assign(run.frames, 0.0);
+					series.occurrences.assign(run.frames, 0);
+					run.series.push_back(std::move(series));
+					current.emplace_back();
+				}
+				auto& [time, occurrences] = current[found->second];
+				time += range.us;
+				occurrences = static_cast<std::uint16_t>(std::min<std::uint32_t>(occurrences + 1u, 0xffffu));
+				run.series[found->second].replayed |= range.replayed;
+			}
+			double total = 0.0;
+			for (std::size_t i = 0; i < run.series.size(); ++i) {
+				auto& series = run.series[i];
+				series.times.push_back(current[i].first);
+				series.occurrences.push_back(current[i].second);
+				if (series.graphics)
+					total += current[i].first;
+			}
+			run.totals.push_back(total);
+			++run.frames;
+		}
+
+		/// A timestamp trace's report: its series with hitch frames left out.
+		Report BuildTimestampReport(const Runner& a_runner)
+		{
+			const auto& t = a_runner.request.t;
+			const auto& run = a_runner.timestamps;
+			Report report;
+			report.templateName = t.name;
+			report.label = a_runner.request.label;
+			report.timingSource = TimingSource::Timestamps;
+			report.confidence = t.confidence;
+			report.relativeHalfWidth = t.relativeHalfWidth;
+			report.startFrame = run.samplingStart;
+			report.endFrame = run.lastPresent;
+			report.droppedFrames = run.dropped;
+			report.warnings = a_runner.warnings;
+
+			// A frame whose total is far from the median's is a hitch (a pipeline compile, a streaming spike), as in a capture.
+			const double median = Median(run.totals);
+			std::vector<std::uint8_t> kept(run.frames, 1);
+			for (std::uint32_t f = 0; f < run.frames; ++f)
+				if (median > 0.0 && (run.totals[f] > 1.5 * median || run.totals[f] < median / 1.5)) {
+					kept[f] = 0;
+					++report.outlierSamples;
+				}
+			report.samples = run.frames - report.outlierSamples;
+			const auto filtered = [&](const auto& a_values) {
+				std::vector<double> out;
+				out.reserve(report.samples);
+				for (std::uint32_t f = 0; f < run.frames && f < a_values.size(); ++f)
+					if (kept[f])
+						out.push_back(static_cast<double>(a_values[f]));
+				return out;
+			};
+
+			std::map<std::string, std::vector<double>> groupTimes;
+			const auto addToGroup = [&](const std::string& a_group, const std::vector<double>& a_times) {
+				auto& sums = groupTimes[a_group];
+				sums.resize(a_times.size(), 0.0);
+				for (std::size_t i = 0; i < a_times.size(); ++i)
+					sums[i] += a_times[i];
+			};
+			std::uint32_t replayed = 0, otherQueue = 0;
+			for (const auto& series : run.series) {
+				Row row;
+				row.name = series.name;
+				row.group = series.group;
+				row.queue = series.queue;
+				const auto times = filtered(series.times);
+				const auto occurrences = filtered(series.occurrences);
+				row.stats = Summarize(times, t);
+				row.timeUs = row.stats.meanUs;
+				if (!times.empty()) {
+					const auto [lo, hi] = std::ranges::minmax(times);
+					row.timeMinUs = lo;
+					row.timeMaxUs = hi;
+				}
+				row.occurrencesPerFrame = Median(occurrences);
+				if (std::isnan(row.occurrencesPerFrame))
+					row.occurrencesPerFrame = 0.0;
+				row.samples = static_cast<std::uint32_t>(std::ranges::count_if(occurrences, [](double a_count) { return a_count > 0.0; }));
+				replayed += series.replayed;
+				if (series.graphics) {
+					report.totalUs += row.timeUs;
+					if (!t.groups.empty())
+						addToGroup(row.group.empty() ? std::string("other") : row.group, times);
+				} else {
+					++otherQueue;
+				}
+				report.rows.push_back(std::move(row));
+			}
+			std::ranges::sort(report.rows, [](const Row& a, const Row& b) { return a.timeUs > b.timeUs; });
+
+			auto groupNames = std::vector<std::string>{};
+			for (const auto& group : t.groups)
+				groupNames.push_back(group.name);
+			if (!t.groups.empty())
+				groupNames.push_back("other");
+			for (const auto& name : groupNames) {
+				GroupRow entry{ name };
+				for (const auto& row : report.rows)
+					if (row.queue == "graphics" && (row.group == name || (name == "other" && row.group.empty()))) {
+						entry.timeUs += row.timeUs;
+						++entry.ranges;
+					}
+				if (!entry.ranges)
+					continue;
+				entry.stats = Summarize(groupTimes[name], t);
+				report.groups.push_back(std::move(entry));
+			}
+			const auto convergence = CheckConvergence(report);
+			report.converged = Statistics::Available() && convergence.All();
+
+			if (otherQueue)
+				report.warnings.push_back(std::format("{} ranges ran on the compute or copy queue: their own rows (\"[compute]\"), left out of the groups and the total",
+					otherQueue));
+			if (!replayed)
+				report.warnings.push_back("no range came from a recording kept across frames: DCLF's revision epochs were not timed (expected with DCLF off)");
+			for (const auto& filter : t.ranges)
+				if (!std::ranges::any_of(run.series, [&](const Runner::Series& series) { return detail::NameMatches(filter, series.name); }))
+					report.warnings.push_back(std::format("range filter '{}' matched no timestamped range", filter));
+			if (report.outlierSamples)
+				report.warnings.push_back(std::format("{} of {} frames dropped as hitches (selected total beyond 1.5x the median's)", report.outlierSamples, run.frames));
+			if (run.dropped)
+				report.warnings.push_back(std::format("{} frames dropped: their epochs did not all come back", run.dropped));
+			if (run.untimed)
+				report.warnings.push_back(std::format("{} frames carried no timestamps and were skipped", run.untimed));
+			if (!report.converged && Statistics::Available()) {
+				std::size_t open = 0;
+				const auto rows = Unconverged(report, open);
+				report.warnings.push_back(std::format("not converged after {} frames ({} rows open, +/-{:.1f}% at {:.0f}% confidence asked): {}{}", run.frames, open,
+					100.0 * t.relativeHalfWidth, 100.0 * t.confidence, rows.empty() ? "only groups" : rows, open > 6 ? ", ..." : ""));
+			}
+			if (!Statistics::Available())
+				report.warnings.push_back("built without BasicTelemetry: no confidence intervals, nothing converges (the trace ran to maxSamples)");
+			report.success = !report.rows.empty();
+			if (!report.success)
+				report.error = run.frames ? "no selected range was timestamped" : "no frame was sampled";
+			return report;
+		}
+
 		void Finish(Runner& a_runner, std::string a_error = {})
 		{
-			auto report = BuildReport(a_runner);
+			const bool timestamps = a_runner.request.t.timingSource == TimingSource::Timestamps;
+			if (timestamps)
+				Timestamps::Stop();
+			auto report = timestamps ? BuildTimestampReport(a_runner) : BuildReport(a_runner);
 			if (!a_error.empty()) {
 				report.success = false;
 				report.error = a_error;
@@ -670,10 +1101,13 @@ namespace NvPerf::Trace
 		void StartLocked(Runner& a_runner, Request a_request, std::uint64_t a_presents)
 		{
 			a_runner.request = std::move(a_request);
+			const auto& t = a_runner.request.t;
 			a_runner.plan.clear();
-			for (std::uint32_t r = 0; r < a_runner.request.t.repeats; ++r)
-				for (std::size_t g = 0; g < a_runner.request.t.metricGroups.size(); ++g)
-					a_runner.plan.push_back({ g, r });
+			if (t.timingSource == TimingSource::NvPerf)
+				for (std::uint32_t r = 0; r < t.repeats; ++r)
+					for (std::size_t g = 0; g < t.metricGroups.size(); ++g)
+						a_runner.plan.push_back({ g, r });
+			a_runner.rounds = t.repeats;
 			a_runner.next = 0;
 			a_runner.captureId = 0;
 			a_runner.retries = 0;
@@ -681,10 +1115,137 @@ namespace NvPerf::Trace
 			a_runner.results.clear();
 			a_runner.failed = 0;
 			a_runner.warnings.clear();
+			a_runner.timestamps = {};
 			a_runner.firstDelay = a_runner.request.headless ? 0 : a_presents;  // headless: set once a game loaded (OnPresentEnd)
 			a_runner.active = true;
-			logger::info("[NvPerf] trace '{}' (template {}): {} captures of {} samples, ranges {}", a_runner.request.label, a_runner.request.t.name,
-				a_runner.plan.size(), a_runner.request.t.samples, a_runner.request.t.ranges.empty() ? std::string("every outermost") : std::to_string(a_runner.request.t.ranges.size()));
+			const auto ranges = t.ranges.empty() ? std::string("every outermost") : std::to_string(t.ranges.size());
+			if (t.timingSource == TimingSource::Timestamps)
+				logger::info("[NvPerf] trace '{}' (template {}, timestamps): every frame a sample after {} settling frames, {}-{} samples, +/-{:.1f}% (or {:.1f} us) at {:.0f}% confidence, ranges {}",
+					a_runner.request.label, t.name, t.settlingFrames, t.minSamples, t.maxSamples, 100.0 * t.relativeHalfWidth, t.absoluteHalfWidthUs,
+					100.0 * t.confidence, ranges);
+			else
+				logger::info("[NvPerf] trace '{}' (template {}): {} captures of {} samples{}, ranges {}", a_runner.request.label, t.name, a_runner.plan.size(), t.samples,
+					t.maxRepeats > t.repeats ? std::format(", up to {} rounds until +/-{:.1f}% at {:.0f}% confidence", t.maxRepeats, 100.0 * t.relativeHalfWidth, 100.0 * t.confidence) : "",
+					ranges);
+		}
+
+		/// A headless trace starts startFrame presents after a game loaded (firstDelay): false while no game has.
+		bool WaitForGame(Runner& a_runner)
+		{
+			if (!a_runner.request.headless || a_runner.firstDelay)
+				return true;
+			if (!a_runner.gameLoadedAt) {
+				SetPhase(a_runner, "waiting for a game to load");
+				return false;
+			}
+			a_runner.firstDelay = a_runner.gameLoadedAt + a_runner.request.t.startFrame;
+			logger::info("[NvPerf] trace '{}': a game loaded at present {}; its first {} starts at present {}", a_runner.request.label, a_runner.gameLoadedAt,
+				a_runner.request.t.timingSource == TimingSource::Timestamps ? "sample" : "capture", a_runner.firstDelay);
+			return true;
+		}
+
+		/// NvPerf convergence (maxRepeats > repeats): once the planned captures are done, whether another round is planned, for a
+		/// row or group whose time has not converged.
+		bool PlanAnotherRound(Runner& a_runner)
+		{
+			const auto& t = a_runner.request.t;
+			if (t.timingSource != TimingSource::NvPerf || t.maxRepeats <= t.repeats || a_runner.results.empty())
+				return false;
+			if (!Statistics::Available()) {
+				a_runner.warnings.push_back("built without BasicTelemetry: no convergence, the trace captured its repeats only");
+				return false;
+			}
+			const auto report = BuildReport(a_runner);
+			const auto convergence = CheckConvergence(report);
+			SetConvergence(a_runner, convergence, report.samples);
+			if (convergence.All() || a_runner.rounds >= t.maxRepeats) {
+				logger::info("[NvPerf] trace '{}': {} of {} rows and groups converged after {} rounds ({} samples)", a_runner.request.label, convergence.converged,
+					convergence.series, a_runner.rounds, report.samples);
+				return false;
+			}
+			for (std::size_t g = 0; g < t.metricGroups.size(); ++g)
+				a_runner.plan.push_back({ g, a_runner.rounds });
+			++a_runner.rounds;
+			logger::info("[NvPerf] trace '{}': {} of {} rows and groups converged ({} samples; furthest {} at +/-{:.1f}%): round {} of at most {}",
+				a_runner.request.label, convergence.converged, convergence.series, report.samples, convergence.worst, 100.0 * convergence.worstRelative,
+				a_runner.rounds, t.maxRepeats);
+			return true;
+		}
+
+		/// A timestamp trace's step, each present: start collecting, wait for the game and the rebuild, settle, then sample every
+		/// frame until it converges (checked every kCheckFrames frames), maxSamples frames or timeoutFrames presents.
+		void AdvanceTimestamps(Runner& a_runner, std::uint64_t a_presents)
+		{
+			// A check summarizes every series (sorts included): every kCheckFrames frames, or every tenth of the frames so far.
+			static constexpr std::uint32_t kCheckFrames = 30;
+			static constexpr std::uint64_t kNoFramesLimit = 600;  // presents sampling may see no timed frame before the trace fails
+			const auto& t = a_runner.request.t;
+			auto& run = a_runner.timestamps;
+			run.lastPresent = a_presents;
+			if (!run.started) {
+				std::string error;
+				if (!Timestamps::Start(error)) {
+					Finish(a_runner, error);
+					return;
+				}
+				run.started = true;
+			}
+			std::uint32_t dropped = 0;
+			auto frames = Timestamps::TakeFrames(dropped);
+			if (run.phase == Runner::TimestampRun::Phase::Waiting) {
+				if (a_presents >= a_runner.firstDelay + t.timeoutFrames) {
+					Finish(a_runner, "the graph was not rebuilt with recording timestamps (no build point reached?)");
+					return;
+				}
+				if (a_presents < a_runner.firstDelay || !Timestamps::Ready()) {
+					SetPhase(a_runner, a_presents < a_runner.firstDelay ? std::format("waiting for present {} (now {})", a_runner.firstDelay, a_presents) :
+					                                                       std::string("waiting for the graph's rebuild with recording timestamps"));
+					return;
+				}
+				run.phase = Runner::TimestampRun::Phase::Settling;
+				logger::info("[NvPerf] trace '{}': recording timestamps are in the graph at present {}; settling {} frames", a_runner.request.label, a_presents,
+					t.settlingFrames);
+				return;
+			}
+			if (run.phase == Runner::TimestampRun::Phase::Settling) {
+				run.settled += static_cast<std::uint32_t>(frames.size());
+				if (run.settled < t.settlingFrames) {
+					SetPhase(a_runner, std::format("settling, {} of {} frames", run.settled, t.settlingFrames));
+					return;
+				}
+				run.phase = Runner::TimestampRun::Phase::Sampling;
+				run.samplingStart = a_presents;
+				logger::info("[NvPerf] trace '{}': sampling from present {}", a_runner.request.label, a_presents);
+				return;
+			}
+			run.dropped += dropped;
+			if (!run.frames && a_presents - run.samplingStart >= kNoFramesLimit) {
+				Finish(a_runner, std::format("no frame with timestamps came back in {} presents (is the render graph running epochs?)", kNoFramesLimit));
+				return;
+			}
+			for (const auto& frame : frames) {
+				if (!frame.timedEpochs) {
+					++run.untimed;
+					continue;
+				}
+				AddTimestampFrame(a_runner, frame);
+				++run.sinceCheck;
+			}
+			const bool full = run.frames >= t.maxSamples;
+			const bool timedOut = a_presents - run.samplingStart >= t.timeoutFrames;
+			if (full || timedOut || (run.sinceCheck >= std::max(kCheckFrames, run.frames / 10) && run.frames >= t.minSamples)) {
+				run.sinceCheck = 0;
+				const auto report = BuildTimestampReport(a_runner);
+				const auto convergence = CheckConvergence(report);
+				SetConvergence(a_runner, convergence, report.samples);
+				if (report.converged || full || timedOut) {
+					logger::info("[NvPerf] trace '{}': {} of {} rows and groups converged after {} frames ({} sampled){}", a_runner.request.label, convergence.converged,
+						convergence.series, a_presents - run.samplingStart, run.frames, full ? ", maxSamples reached" : timedOut ? ", timeoutFrames reached" : "");
+					Finish(a_runner);
+					return;
+				}
+			}
+			SetPhase(a_runner, std::format("sampling, {} frames", run.frames));
 		}
 
 		std::optional<Template> FindTemplate(std::string_view a_name)
@@ -700,7 +1261,10 @@ namespace NvPerf::Trace
 		{
 			if (a_runner.environmentHandled || !EnvironmentRequested())
 				return;
-			if (!Probe()) {
+			const auto name = Env("CS_NVPERF_TEMPLATE");
+			auto t = FindTemplate(name);
+			// A timestamp trace needs no profiler: only an NvPerf one waits for Probe (under DXVK, the graph's registration).
+			if (t && t->timingSource == TimingSource::NvPerf && !Probe()) {
 				const auto device = GetDeviceInfo();
 				if (device.probed || !device.built) {
 					a_runner.environmentHandled = true;
@@ -709,8 +1273,6 @@ namespace NvPerf::Trace
 				return;
 			}
 			a_runner.environmentHandled = true;
-			const auto name = Env("CS_NVPERF_TEMPLATE");
-			auto t = FindTemplate(name);
 			if (!t) {
 				logger::warn("[NvPerf] CS_NVPERF_TEMPLATE: no template '{}'", name);
 				return;
@@ -722,8 +1284,18 @@ namespace NvPerf::Trace
 			apply("CS_NVPERF_START_FRAME", t->startFrame);
 			apply("CS_NVPERF_SAMPLES", t->samples);
 			apply("CS_NVPERF_REPEATS", t->repeats);
+			apply("CS_NVPERF_MAX_REPEATS", t->maxRepeats);
+			apply("CS_NVPERF_MIN_SAMPLES", t->minSamples);
+			apply("CS_NVPERF_MAX_SAMPLES", t->maxSamples);
+			if (const auto text = Env("CS_NVPERF_HALF_WIDTH"); !text.empty())
+				t->relativeHalfWidth = std::strtod(text.c_str(), nullptr);
 			t->samples = std::clamp<std::uint32_t>(t->samples, 1, 64);
 			t->repeats = std::clamp<std::uint32_t>(t->repeats, 1, 16);
+			t->maxRepeats = std::min<std::uint32_t>(t->maxRepeats, 64);
+			const auto bounds = StatisticsConfig(*t);
+			t->relativeHalfWidth = bounds.relativeHalfWidth;
+			t->minSamples = bounds.minSamples;
+			t->maxSamples = bounds.maxSamples;
 			Request request;
 			request.t = std::move(*t);
 			request.label = Env("CS_NVPERF_LABEL");
@@ -801,8 +1373,12 @@ namespace NvPerf::Trace
 		auto report = std::make_shared<Report>();
 		report->templateName = document.value("template", "");
 		report->label = document.value("label", "");
+		report->timingSource = document.value("source", "") == "timestamps" ? TimingSource::Timestamps : TimingSource::NvPerf;
 		report->chipName = document.value("chip", "");
 		report->success = document.value("success", false);
+		report->converged = document.value("converged", false);
+		report->confidence = document.value("confidence", 0.0);
+		report->relativeHalfWidth = document.value("relativeHalfWidth", 0.0);
 		report->totalUs = document.value("totalUs", 0.0);
 		report->samples = document.value("samples", 0u);
 		report->jsonPath = path;
@@ -812,12 +1388,14 @@ namespace NvPerf::Trace
 					report->metricLabels.push_back(label.get<std::string>());
 		if (document.contains("groups") && document["groups"].is_array())
 			for (const auto& group : document["groups"])
-				report->groups.push_back({ group.value("name", ""), group.value("timeUs", 0.0), group.value("ranges", 0u) });
+				report->groups.push_back({ group.value("name", ""), group.value("timeUs", 0.0), group.value("ranges", 0u), StatsFrom(group) });
 		if (document.contains("rows") && document["rows"].is_array())
 			for (const auto& entry : document["rows"]) {
 				Row row;
 				row.name = entry.value("name", "");
 				row.group = entry.value("group", "");
+				row.queue = entry.value("queue", "");
+				row.stats = StatsFrom(entry);
 				row.timeUs = entry.value("timeUs", 0.0);
 				row.timeMinUs = entry.value("timeMinUs", 0.0);
 				row.timeMaxUs = entry.value("timeMaxUs", 0.0);
@@ -878,16 +1456,30 @@ namespace NvPerf::Trace
 	std::string FormatReport(const Report& a_report)
 	{
 		const Report* baseline = a_report.baseline.get();
-		std::string out = std::format("trace '{}' (template {}, chip {}): {} captures{}, {} samples{}, frames {}-{}\n", a_report.label, a_report.templateName,
-			a_report.chipName, a_report.captures, a_report.failedCaptures ? std::format(" ({} failed)", a_report.failedCaptures) : "", a_report.samples,
-			a_report.outlierSamples ? std::format(" ({} dropped as hitches)", a_report.outlierSamples) : "", a_report.startFrame, a_report.endFrame);
+		const bool timestamps = a_report.timingSource == TimingSource::Timestamps;
+		std::string out = timestamps ?
+		                      std::format("trace '{}' (template {}, timestamps): {} frames sampled{}{}, presents {}-{}\n", a_report.label, a_report.templateName,
+								  a_report.samples, a_report.outlierSamples ? std::format(" ({} dropped as hitches)", a_report.outlierSamples) : "",
+								  a_report.droppedFrames ? std::format(" ({} incomplete)", a_report.droppedFrames) : "", a_report.startFrame, a_report.endFrame) :
+		                      std::format("trace '{}' (template {}, chip {}): {} captures{}, {} samples{}, frames {}-{}\n", a_report.label, a_report.templateName,
+								  a_report.chipName, a_report.captures, a_report.failedCaptures ? std::format(" ({} failed)", a_report.failedCaptures) : "", a_report.samples,
+								  a_report.outlierSamples ? std::format(" ({} dropped as hitches)", a_report.outlierSamples) : "", a_report.startFrame, a_report.endFrame);
+		if (a_report.confidence > 0.0)
+			out += std::format("{}: every row's and group's mean within +/-{:.1f}% at {:.0f}% confidence{}\n", a_report.converged ? "converged" : "NOT converged",
+				100.0 * a_report.relativeHalfWidth, 100.0 * a_report.confidence, timestamps ? "" : " (gpu__time_duration per sample)");
 		if (!a_report.success)
 			out += std::format("FAILED: {}\n", a_report.error);
-		const auto delta = [](double a_value, double a_base) { return std::format("{:+9.1f}", a_value - a_base); };
+		const auto ci = [](const SeriesStats& a_stats) { return std::isfinite(a_stats.ciUs) ? std::format("{:.2f}", a_stats.ciUs) : std::string("-"); };
+		// A delta, with '*' when the two means differ by more than their intervals combined.
+		const auto delta = [](double a_value, double a_base, const SeriesStats* a_stats, const SeriesStats* a_baseStats) {
+			const bool significant = a_stats && a_baseStats && Statistics::Significant(a_stats->meanUs, a_stats->ciUs, a_baseStats->meanUs, a_baseStats->ciUs);
+			return std::format("{:+9.1f}{}", a_value - a_base, significant ? "*" : " ");
+		};
 		out += std::format("total {:.1f} us{}\n", a_report.totalUs,
 			baseline ? std::format(" (baseline '{}' {:.1f} us, {:+.1f})", baseline->label, baseline->totalUs, a_report.totalUs - baseline->totalUs) : "");
 		if (!a_report.groups.empty()) {
-			out += std::format("\n{:<28} {:>9}{}\n", "group", "time us", baseline ? std::format(" {:>9} {:>9}", "baseline", "delta") : "");
+			out += std::format("\n{:<28} {:>9} {:>7} {:>7} {:>4}{}\n", "group", "time us", "+/-", "n_eff", "conv",
+				baseline ? std::format(" {:>9} {:>10}", "baseline", "delta") : "");
 			std::set<std::string> listed;
 			for (const auto& group : a_report.groups) {
 				listed.insert(group.name);
@@ -895,16 +1487,18 @@ namespace NvPerf::Trace
 				if (baseline) {
 					const auto found = std::ranges::find_if(baseline->groups, [&](const GroupRow& g) { return g.name == group.name; });
 					const double base = found == baseline->groups.end() ? 0.0 : found->timeUs;
-					compared = std::format(" {:>9.1f} {}", base, delta(group.timeUs, base));
+					compared = std::format(" {:>9.1f} {}", base, delta(group.timeUs, base, &group.stats, found == baseline->groups.end() ? nullptr : &found->stats));
 				}
-				out += std::format("{:<28} {:>9.1f}{}\n", group.name, group.timeUs, compared);
+				out += std::format("{:<28} {:>9.1f} {:>7} {:>7.0f} {:>4}{}\n", group.name, group.timeUs, ci(group.stats), group.stats.effectiveSamples,
+					group.stats.converged ? "yes" : "no", compared);
 			}
 			if (baseline)
 				for (const auto& group : baseline->groups)
 					if (!listed.contains(group.name))
-						out += std::format("{:<28} {:>9.1f} {:>9.1f} {}\n", group.name, 0.0, group.timeUs, delta(0.0, group.timeUs));
+						out += std::format("{:<28} {:>9.1f} {:>7} {:>7} {:>4} {:>9.1f} {}\n", group.name, 0.0, "", "", "", group.timeUs, delta(0.0, group.timeUs, nullptr, nullptr));
 		}
-		out += std::format("\n{:<48} {:<16} {:>9} {:>17} {:>6}{}", "range", "group", "time us", "min-max", "/frame", baseline ? std::format(" {:>9}", "delta") : "");
+		out += std::format("\n{:<48} {:<16} {:>9} {:>7} {:>17} {:>17} {:>6} {:>6} {:>4}{}", "range", "group", "time us", "+/-", "p05-p95", "min-max", "/frame", "n_eff",
+			"conv", baseline ? std::format(" {:>10}", "delta") : "");
 		for (const auto& label : a_report.metricLabels)
 			out += std::format(" {:>14}", ShortLabel(label).substr(0, 14));
 		out += '\n';
@@ -914,10 +1508,12 @@ namespace NvPerf::Trace
 			std::string compared;
 			if (baseline) {
 				const auto found = std::ranges::find_if(baseline->rows, [&](const Row& r) { return r.name == row.name; });
-				compared = std::format(" {}", delta(row.timeUs, found == baseline->rows.end() ? 0.0 : found->timeUs));
+				compared = std::format(" {}", delta(row.timeUs, found == baseline->rows.end() ? 0.0 : found->timeUs, &row.stats,
+												  found == baseline->rows.end() ? nullptr : &found->stats));
 			}
-			out += std::format("{:<48} {:<16} {:>9.1f} {:>8.1f}-{:<8.1f} {:>6.3g}{}", row.name.substr(0, 48), row.group.substr(0, 16), row.timeUs, row.timeMinUs,
-				row.timeMaxUs, row.occurrencesPerFrame, compared);
+			out += std::format("{:<48} {:<16} {:>9.1f} {:>7} {:>8.1f}-{:<8.1f} {:>8.1f}-{:<8.1f} {:>6.3g} {:>6.0f} {:>4}{}", row.name.substr(0, 48),
+				row.group.substr(0, 16), row.timeUs, ci(row.stats), row.stats.p05Us, row.stats.p95Us, row.timeMinUs, row.timeMaxUs, row.occurrencesPerFrame,
+				row.stats.effectiveSamples, row.stats.converged ? "yes" : "no", compared);
 			for (const auto& label : a_report.metricLabels) {
 				const auto found = row.metrics.find(label);
 				out += found == row.metrics.end() || std::isnan(found->second) ? std::format(" {:>14}", "-") : std::format(" {:>14.4g}", found->second);
@@ -927,8 +1523,10 @@ namespace NvPerf::Trace
 		if (baseline)
 			for (const auto& row : baseline->rows)
 				if (!listed.contains(row.name))
-					out += std::format("{:<48} {:<16} {:>9.1f} {:>17} {:>6} {}\n", row.name.substr(0, 48), row.group.substr(0, 16), 0.0, "(baseline only)", "",
-						delta(0.0, row.timeUs));
+					out += std::format("{:<48} {:<16} {:>9.1f} {:>7} {:>35} {:>6} {:>6} {:>4} {}\n", row.name.substr(0, 48), row.group.substr(0, 16), 0.0, "",
+						"(baseline only)", "", "", "", delta(0.0, row.timeUs, nullptr, nullptr));
+		if (baseline)
+			out += "\n'*': the means differ by more than their confidence intervals combined\n";
 		if (!a_report.warnings.empty()) {
 			out += "\nwarnings:\n";
 			for (const auto& warning : a_report.warnings)
@@ -971,6 +1569,11 @@ namespace NvPerf::Trace
 			Finish(runner, "cancelled");
 			return;
 		}
+		if (runner.request.t.timingSource == TimingSource::Timestamps) {
+			if (WaitForGame(runner))
+				AdvanceTimestamps(runner, a_presents);
+			return;
+		}
 		if (runner.captureId) {
 			const auto status = NvPerf::GetStatus();
 			if (status.captureId != runner.captureId || (status.state != CaptureState::Done && status.state != CaptureState::Failed))
@@ -1000,25 +1603,15 @@ namespace NvPerf::Trace
 				++runner.next;
 			}
 		}
-		if (runner.next >= runner.plan.size()) {
+		if (runner.next >= runner.plan.size() && !PlanAnotherRound(runner)) {
 			Finish(runner);
 			return;
 		}
-		// A headless trace starts its captures startFrame presents after a game loaded: none before.
-		if (runner.request.headless && !runner.firstDelay) {
-			if (!runner.gameLoadedAt) {
-				SetStatus(runner, State::Running);
-				std::lock_guard lock(runner.mutex);
-				runner.status.phase = "waiting for a game to load";
-				return;
-			}
-			runner.firstDelay = runner.gameLoadedAt + runner.request.t.startFrame;
-			logger::info("[NvPerf] trace '{}': a game loaded at present {}; its first capture starts at present {}", runner.request.label, runner.gameLoadedAt,
-				runner.firstDelay);
-		}
+		if (!WaitForGame(runner))
+			return;
 		if (!runner.captureId && a_presents >= runner.holdUntil)
 			QueueNext(runner, a_presents);
-		if (runner.next >= runner.plan.size()) {
+		if (runner.next >= runner.plan.size() && !PlanAnotherRound(runner)) {
 			Finish(runner);
 			return;
 		}

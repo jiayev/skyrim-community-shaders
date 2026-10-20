@@ -77,7 +77,7 @@ namespace DCLF::Draws
 			auto& commands = a_recording.Commands();
 			const auto& program = *a_prepared.pool->program;
 			commands.BindLayout(program.layout->GetHandle());
-			commands.BindPipeline(program.pipeline->GetHandle());
+			commands.BindPipeline(program.Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kIndexPoolConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.ExecuteIndirect(a_prepared.pool->dispatchSignature->GetHandle(), layout->Resource()->GetAPIResource().GetHandle(), offset, {}, 0, 1);
 		}

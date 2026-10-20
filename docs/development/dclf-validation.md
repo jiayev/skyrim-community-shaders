@@ -78,7 +78,7 @@ only `0` turns it off. Parity, diagnostic and test switches are off unless set.
 | `CS_DCLF_SKYLIGHT` | on (unless 1) | `0`: Skylighting's occlusion map stays native. |
 | `CS_DCLF_PRECIPITATION` | on (unless 1) | `0`: the precipitation occlusion mask stays native. |
 | `CS_DCLF_REFLECTIONS` | on (unless 1) | `0`: the water reflection's faces stay native. |
-| `CS_DCLF_FIRST_PERSON` | on (unless 1) | `0`: the first-person arms, weapons and magic hands stay native. |
+| `CS_DCLF_FIRST_PERSON` | off | `1`: DCLF draws the first-person arms, weapons and magic hands; unset or `0` they stay native (cheaper: hand-back sweep 0.15 ms). |
 | `CS_DCLF_FIRST_PERSON_DECALS` | on (unless 0) | `0`: decals on first-person entries (an effect's blood on the arms, a weapon's `BloodLighting`) stay the engine's. Needs `CS_DCLF_FIRST_PERSON` and `CS_DCLF_DECALS`. |
 | `CS_DCLF_OPAQUE_EFFECTS` | on (unless 0) | `0`: opaque effect meshes (hint 0: forge coals, slag) stay the engine's. Needs decals. |
 | `CS_DCLF_PARTICLES` | on (unless 1) | `0`: effect-shaded particle systems stay native. Needs `CS_DCLF_EFFECTS`. |

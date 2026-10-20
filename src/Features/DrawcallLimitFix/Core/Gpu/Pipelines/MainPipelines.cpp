@@ -218,14 +218,15 @@ namespace DCLF
 		std::uint8_t onDemand = 0;
 		bool programFailed = false;
 		// A family key's program is its source's (Effect.hlsl for an effect key).
-		const auto* program = member ? ShaderPrograms::Get().FindFamily(family, a_key, *static_cast<const RE::BSShader*>(input->familySource[f]), &programFailed) :
-		                               ShaderPrograms::Get().Find(a_key, *input->lighting, &onDemand, &programFailed);
+		const auto* shader = member ? static_cast<const RE::BSShader*>(input->familySource[f]) : input->lighting;
+		const auto program = member ? ShaderPrograms::Get().FindFamily(family, a_key, *shader, &programFailed) :
+		                              ShaderPrograms::Get().Find(a_key, *input->lighting, &onDemand, &programFailed);
 		if (onDemand)
 			logger::warn("[DCLF] on-demand SPIR-V compile: Lighting {} that no precompile requested ({}), for pipeline slot {}: {}", ShaderPrograms::OnDemandStages(onDemand),
 				SIE::ShaderCache::Instance().IsCompiling() ? "Community Shaders' compile workers still busy" : "Community Shaders' compile workers idle", slot,
 				DescribeKey(a_key));
 		if (programFailed) {
-			// Its objects stay native (no set index ever comes).
+			// Its objects stay native (no set index ever comes) until a shader reload makes its program again (RetryAfterSourcesMoved).
 			l.FailForGood(a_key);
 			l.dirty = true;
 			if (member)
@@ -275,26 +276,43 @@ namespace DCLF
 		org::services::PipelineRecipe recipe;
 		recipe.id = fmt::format("dclf.{}.{:08X}.{:08X}.{:08X}.{:X}.{:016X}", member ? std::string_view(Extensions::ProgramFamilyOf(family).keyName) : std::string_view("lighting"),
 			a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.passDescriptor, a_key.rasterFlags, a_key.vertexLayout);
-		recipe.shaderKey = PipelineKeyHash{}(a_key);
+		// Its program's binaries (their fingerprint): a program made again from edited files is a new pipeline, never the service's active one.
+		recipe.shaderKey = PipelineKeyHash{}(a_key) ^ (program->fingerprint * 0x9E3779B97F4A7C15ull);
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&inputTargets, sizeof(inputTargets));
 		// The blend state too: its write masks are the engine's, so other masks are another pipeline.
 		recipe.fixedFunctionKey ^= ankerl::unordered_dense::detail::wyhash::hash(&state.blend, sizeof(state.blend)) * 0x9E3779B97F4A7C15ull;
 		// No vertex input: never an artifact built with an input layout (kPulledVerticesSalt).
 		recipe.fixedFunctionKey ^= kPulledVerticesSalt;
-		recipe.build = [device = device, layout = layout->GetHandle(), zLayout = zLayout->GetHandle(), key = a_key, program, formats = inputTargets, state,
-							frontCCW = *input->frontCCW] {
-			return Build(device, layout, zLayout, key, program, formats, state, frontCCW);
+		// The same build from the lane's program and from a hot reload's (PipelineRegistry: its rebuild makes the program from the files as
+		// they are now, Lighting's or its family source's).
+		const auto build = [device = device, layout = layout->GetHandle(), zLayout = zLayout->GetHandle(), key = a_key, formats = inputTargets, state,
+							   frontCCW = *input->frontCCW](const ShaderPrograms::Program& a_program) {
+			return Build(device, layout, zLayout, key, &a_program, formats, state, frontCCW);
 		};
+		recipe.build = [build, program] { return build(*program); };
+		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*shader), *program, [family, member, key = a_key, shader](ShaderPrograms::Rebuilt<ShaderPrograms::Program> a_done) {
+			if (member)
+				ShaderPrograms::Get().RebuildFamily(family, key, *shader, std::move(a_done));
+			else
+				ShaderPrograms::Get().RebuildLighting(key, *shader, std::move(a_done));
+		}, build);
 		l.entries.try_emplace(a_key);
-		(void)service.Request(std::move(recipe), [completions = completions, key = a_key, generation = l.generation](const org::services::PipelineArtifact& a_artifact) {
-			completions->main.Push({ key, generation, a_artifact });
-			WakePipelineLane();
-		});
+		(void)service.Request(std::move(recipe),
+			[completions = completions, key = a_key, generation = l.generation, live = std::move(live)](const org::services::PipelineArtifact& a_artifact) {
+				completions->main.Push({ key, generation, a_artifact, live });
+				WakePipelineLane();
+			});
 		l.counters.requested.fetch_add(1, std::memory_order_relaxed);
 		if (member)
 			l.programFamilyCounters[f].requested.fetch_add(1, std::memory_order_relaxed);
-		logger::warn("[DCLF] on-demand pipeline build: {} pipeline slot {}: {}; {}", member ? std::string_view(Extensions::ProgramFamilyOf(family).name) : std::string_view("Lighting"),
-			slot, DescribeKey(a_key), NearestKey(a_key));
+		LogOnDemandBuild(a_key, family, slot);
+	}
+
+	void DrawPipelines::Impl::LogOnDemandBuild(const PipelineKey& a_key, Api::ProgramFamily a_family, std::uint32_t a_slot) const
+	{
+		logger::warn("[DCLF] on-demand pipeline build: {} pipeline slot {}: {}; {}",
+			a_family != Api::ProgramFamily::Count ? std::string_view(Extensions::ProgramFamilyOf(a_family).name) : std::string_view("Lighting"), a_slot, DescribeKey(a_key),
+			NearestKey(a_key));
 	}
 
 	void DrawPipelines::Impl::RecreateMainSet(const TargetFormats& a_from, const TargetFormats& a_to)
@@ -308,9 +326,16 @@ namespace DCLF
 		};
 		// Every pipeline depends on the targets: start over (the new generation drops queued builds' completions).
 		logger::info("[DCLF] pipeline lane: main pass targets {} -> {}; rebuilding {} indirect pipelines", describe(a_from), describe(a_to), l.setPipelines.size());
+		ResetMainSet(fmt::format("main pass targets {} -> {}", describe(a_from), describe(a_to)));
+	}
+
+	void DrawPipelines::Impl::ResetMainSet(std::string a_by)
+	{
+		auto& l = lane;
 		l.StartOver();
 		l.versions.Retire();
 		l.setPipelines.clear();
+		l.setSlots.clear();  // their registry entries go with them
 		l.zGroupOf.clear();
 		l.zGroupFirst.clear();
 		l.zGroups.clear();
@@ -325,12 +350,13 @@ namespace DCLF
 		for (auto& programCounters : l.programFamilyCounters)
 			for (auto* counter : { &programCounters.requested, &programCounters.ready, &programCounters.failed })
 				counter->store(0, std::memory_order_relaxed);
-		l.recreatedBy = fmt::format("main pass targets {} -> {}", describe(a_from), describe(a_to));
+		l.recreatedBy = std::move(a_by);
 		// The draw families depend on the targets too: rebuilt (TryRequestFamily), the last kept for the process.
 		for (auto& t : l.families) {
 			if (t.built)
 				t.retired.push_back(std::move(t.built));
 			t.built = {};
+			t.slot = {};
 			t.requested = false;
 			t.failed = t.programFailed;
 			for (auto* counter : { &t.counters.requested, &t.counters.ready, &t.counters.failed })
@@ -368,16 +394,9 @@ namespace DCLF
 			}
 			const auto* built = static_cast<const Built*>(artifact.payload.get());
 			entry.slot = static_cast<std::uint32_t>(l.setPipelines.size());
-			const auto [group, added] = l.zGroups.try_emplace(built->zKey, static_cast<std::uint32_t>(l.zGroupFirst.size()));
-			if (added) {
-				l.zGroupFirst.push_back(entry.slot);
-				l.counters.zPipelines.fetch_add(1, std::memory_order_relaxed);
-				if (built->zKey.pixel == 0)
-					l.counters.zDepthOnly.fetch_add(1, std::memory_order_relaxed);
-			}
-			l.zGroupOf.push_back(group->second);
-			AdmitToClass(*built, entry.slot);
+			IndexMainBuilt(entry.slot, *built);
 			l.setPipelines.push_back(artifact.payload);
+			l.setSlots.push_back(RegisterLive(a_done.live, artifact.payload));
 			l.usage.push_back(built->usage);
 			l.constantTables.push_back(built->tables);
 		});
@@ -400,6 +419,38 @@ namespace DCLF
 		if (published == Versions<SetVersion>::PublishResult::Published && Diagnostics::Observe().claims)
 			if (const auto version = l.versions.published.load())
 				CheckClasses(*version);
+	}
+
+	void DrawPipelines::Impl::IndexMainBuilt(std::uint32_t a_index, const Built& a_built)
+	{
+		auto& l = lane;
+		// Its Z-prepass group: the first pipeline of an equal depth pipeline (ZPipelineKey) made one, in admission order.
+		const auto [group, added] = l.zGroups.try_emplace(a_built.zKey, static_cast<std::uint32_t>(l.zGroupFirst.size()));
+		if (added) {
+			l.zGroupFirst.push_back(a_index);
+			l.counters.zPipelines.fetch_add(1, std::memory_order_relaxed);
+			if (a_built.zKey.pixel == 0)
+				l.counters.zDepthOnly.fetch_add(1, std::memory_order_relaxed);
+		}
+		l.zGroupOf.push_back(group->second);
+		AdmitToClass(a_built, a_index);
+	}
+
+	void DrawPipelines::Impl::ReindexMainSet()
+	{
+		auto& l = lane;
+		l.zGroupOf.clear();
+		l.zGroupFirst.clear();
+		l.zGroups.clear();
+		l.classOf.clear();
+		l.classMembers.clear();
+		l.classIndex.clear();
+		l.stateClasses.store(0, std::memory_order_relaxed);
+		l.largestClass.store(0, std::memory_order_relaxed);
+		l.counters.zPipelines.store(0, std::memory_order_relaxed);
+		l.counters.zDepthOnly.store(0, std::memory_order_relaxed);
+		for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(l.setPipelines.size()); ++i)
+			IndexMainBuilt(i, *static_cast<const Built*>(l.setPipelines[i].get()));
 	}
 
 	void DrawPipelines::Impl::AdmitToClass(const Built& a_built, std::uint32_t a_index)
@@ -708,10 +759,15 @@ namespace DCLF
 					fmt::format("{} {}", forward ? "Lighting forward" : terrainGroup ? "Lighting terrain" : RasterDecalGroup(a_key.rasterFlags) ? "Lighting decal" : "Lighting main", keyName), *built);
 				continue;
 			}
-			// The Z-prepass plain-draw pipeline: the depth variant's state, pulled stages, no vertex input, bound per call.
+			// The Z-prepass plain-draw pipeline: the depth variant's state, pulled stages, no vertex input, bound per call. Without a pixel
+			// stage its vertex stage is the depth-only build (DCLF_DEPTH_ONLY: the clip position alone, the same expression); an alpha-tested
+			// one keeps the full stage, whose outputs its pixel stage reads.
+			const auto& zVertex = !pulledPixel && !a_program->pulledDepthVertex.empty() ? a_program->pulledDepthVertex : a_program->pulledVertex;
+			if (&zVertex != &a_program->pulledVertex)
+				CheckPulledBindings(Parse<1>({ &zVertex })[0], false);
 			auto& zKey = built->zKey;
-			zKey.vertex = ModuleHash(a_program->pulledVertex);
-			zKey.vertexBytes = static_cast<std::uint32_t>(a_program->pulledVertex.size());
+			zKey.vertex = ModuleHash(zVertex);
+			zKey.vertexBytes = static_cast<std::uint32_t>(zVertex.size());
 			zKey.pixel = pulledPixel ? ModuleHash(a_program->pulledDepthPixel) : 0;
 			zKey.pixelBytes = pulledPixel ? static_cast<std::uint32_t>(a_program->pulledDepthPixel.size()) : 0;
 			zKey.cull = static_cast<std::uint32_t>(raster.cull);
@@ -721,8 +777,7 @@ namespace DCLF
 			zKey.depthBiasClamp = std::bit_cast<std::uint32_t>(raster.depthBiasClamp);
 			zKey.slopeScaledDepthBias = std::bit_cast<std::uint32_t>(raster.slopeScaledDepthBias);
 			zKey.terrainNear = terrainGroup == 1 ? 1u : 0u;
-			PipelineDesc pulled(a_zLayout, a_program->pulledVertex, pulledPixel ? std::span<const std::byte>(a_program->pulledDepthPixel) : std::span<const std::byte>{},
-				a_targets.depth);
+			PipelineDesc pulled(a_zLayout, zVertex, pulledPixel ? std::span<const std::byte>(a_program->pulledDepthPixel) : std::span<const std::byte>{}, a_targets.depth);
 			pulled.raster = desc.raster;
 			pulled.depth = desc.depth;
 			pulled.blend = desc.blend;

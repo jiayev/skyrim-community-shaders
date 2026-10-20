@@ -78,17 +78,21 @@ namespace DCLF
 			std::array<E, kChunk> entries;
 			std::atomic<std::uint32_t> filled{ 0 };  // the entries appended: a copy whose end reaches it appends in place
 		};
-		/** @brief Entries [first, first + count) across the chunks (indices from the first chunk's start). */
+		/**
+		 * @brief Entries [first, first + count) across the chunks (indices from the first chunk's start). It reads the log's chunk list,
+		 * not its storage: a reader may append to the log it iterates (RevokeUndrawnClaims' NoteChange), and a Push that opens a chunk
+		 * reallocates the list. What it appends is past the range; a Trim or an Invalidate while iterating is not allowed.
+		 */
 		struct LogRange
 		{
-			const std::shared_ptr<Chunk>* chunks = nullptr;
+			const std::vector<std::shared_ptr<Chunk>>* chunks = nullptr;
 			std::size_t first = 0, count = 0;
 
 			struct iterator
 			{
-				const std::shared_ptr<Chunk>* chunks = nullptr;
+				const std::vector<std::shared_ptr<Chunk>>* chunks = nullptr;
 				std::size_t at = 0;
-				const E& operator*() const { return chunks[at / kChunk]->entries[at % kChunk]; }
+				const E& operator*() const { return (*chunks)[at / kChunk]->entries[at % kChunk]; }
 				iterator& operator++()
 				{
 					++at;
@@ -131,7 +135,7 @@ namespace DCLF
 		LogRange From(std::uint64_t a_position) const
 		{
 			const auto skip = static_cast<std::size_t>(a_position - base);
-			return { chunks.data(), head + skip, count - skip };
+			return { &chunks, head + skip, count - skip };
 		}
 		void Invalidate()
 		{
