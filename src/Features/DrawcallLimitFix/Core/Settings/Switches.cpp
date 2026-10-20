@@ -60,6 +60,8 @@ namespace DCLF
 				"0: the forward epoch draws its range device-generated, a call per state class, instead of a plain draw per pipeline" },
 			{ MainPlain, "CS_DCLF_MAIN_PLAIN", F, Reduced::Zero, false,
 				"0: the colour pass draws its main range device-generated, a call per state class, instead of a plain draw per pipeline" },
+			{ TerrainPlain, "CS_DCLF_TERRAIN_PLAIN", F, Reduced::Zero, false,
+				"0: the colour segment's second pass draws the terrain groups' ranges device-generated, a call per state class, instead of a plain draw per pipeline" },
 			{ Workers, "CS_DCLF_WORKERS", F, N, false, "the preparation pool's threads (default hardware threads - 2, at least 1)" },
 			{ Fanout, "CS_DCLF_FANOUT", F, N, false,
 				"the scene pass's evaluation rounds and joins (T6b3e): 0 interleaved on the scene lane (the reference), 1 every entry evaluated then merged, on the lane; 2 (default) evaluated on the preparation pool from 128 entries, merged in order" },

@@ -637,7 +637,7 @@ bool TakeClassSlot(uint a_class, uint a_range, out uint a_slot)
 // draw is dropped, counted). The forward section follows the class words, the main one the forward one; a bucket's count word follows the
 // classes' (SetClassPlan::ForwardCountWord, MainCountWord).
 static const uint kNoPlainBucket = 0xFFFFFFFFu;  // GpuLayouts.h, kNoBucket
-static const uint kForwardSection = 1, kMainSection = 2;  // their header words
+static const uint kForwardSection = 1, kMainSection = 2, kTerrainSection = 3;  // their header words
 uint PlainBuckets(uint a_section)
 {
 	if (ClassMapOffset == 0)
@@ -649,13 +649,18 @@ bool PlainBucketOf(uint a_section, uint a_set, out uint a_bucket, out uint2 a_ra
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
 	const uint sets = latch.Load(ClassMapOffset);
-	const uint forward = latch.Load(ClassMapOffset + 4 * kForwardSection);
+	// Past the earlier sections present (each a word per set index, then two per bucket) and their buckets' count words.
 	uint section = ClassMapOffset + kClassHeaderBytes + sets * 4;
-	if (a_section == kMainSection && forward != 0)
-		section += (sets + 2 * forward) * 4;
+	uint earlier = 0;
+	[loop] for (uint s = kForwardSection; s < a_section; ++s) {
+		const uint buckets = latch.Load(ClassMapOffset + 4 * s);
+		if (buckets != 0)
+			section += (sets + 2 * buckets) * 4;
+		earlier += buckets;
+	}
 	a_bucket = latch.Load(section + a_set * 4);
 	a_range = uint2(0, 0);
-	a_countWord = ClassCount() * kClassRanges + (a_section == kMainSection ? forward : 0) + a_bucket;
+	a_countWord = ClassCount() * kClassRanges + earlier + a_bucket;
 	if (a_bucket == kNoPlainBucket)
 		return false;
 	a_range = latch.Load2(section + (sets + 2 * a_bucket) * 4);
@@ -1327,9 +1332,30 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 				// Its class's sub-range of its terrain group's range (kTerrainGroups: range slot kDecalGroups + group - 1), unsorted; the
 				// group's draws tallied in its old count word.
 				count.InterlockedAdd(kCountTerrainGroup1 + (terrainGroup - 1) * 4, 1, scratch);
-				if (!TakeClassSlot(setClass, 3 + terrainGroup, slot))
-					return;
-				StoreSequence(sequences, slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				if (PlainBuckets(kTerrainSection) != 0) {
+					// Or its set index's terrain bucket's (CS_DCLF_TERRAIN_PLAIN: in its group's range), a pooled sequence its bucket slot the
+					// instance the plain draw finds it by.
+					uint bucket, countWord;
+					uint2 range;
+					if (!PlainBucketOf(kTerrainSection, drawKey, bucket, range, countWord)) {
+						count.InterlockedAdd(kCountClassUnplanned, 1, scratch);
+						return;
+					}
+					RWByteAddressBuffer classCounts = ResourceDescriptorHeap[ClassCountsIndex];
+					uint taken;
+					classCounts.InterlockedAdd(countWord * 4, 1, taken);
+					if (taken >= range.y) {
+						count.InterlockedAdd(kCountClassOverflow, 1, scratch);
+						return;
+					}
+					ByteAddressBuffer terrainFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
+					StoreShadowSequence(sequences, range.x + taken, taken, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex,
+						terrainFirsts.Load(geometryIndex * 4));
+				} else {
+					if (!TakeClassSlot(setClass, 3 + terrainGroup, slot))
+						return;
+					StoreSequence(sequences, slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				}
 			} else if (classed && PlainBuckets(kMainSection) != 0) {
 				// The colour draws' main buckets (CS_DCLF_MAIN_PLAIN): their set index's, a pooled sequence its bucket slot the instance the
 				// plain draw finds it by (as the Z-prepass's), unsorted; the draws tallied in kCountDrawn.

@@ -699,11 +699,11 @@ namespace DCLF
 			built->stateClass.variants[variant] = desc.State(depthOnly ? depthPixel : pixel);
 			desc.Create(a_device, built->pipelines[variant], depthOnly ? "depth" : "color");
 			if (!depthOnly) {
-				// The plain colour draws' pipeline: a forward key's (the forward buckets), a main key's (the main buckets: no decal group,
-				// no terrain group, whose ranges keep their device-generated calls).
-				if (forward || (RasterDecalGroup(a_key.rasterFlags) == 0 && terrainGroup == 0))
-					BuildPulledColour(a_device, a_zLayout, a_program->pulledVertex, a_program->pulledPixel, desc, forward ? "Lighting forward" : "Lighting main",
-						*built);
+				// The plain colour draws' pipeline: a forward key's (the forward buckets), a main key's (the main buckets) and a terrain group's
+				// (the terrain buckets); not a decal group's, whose ranges keep their device-generated calls (ordered).
+				if (forward || RasterDecalGroup(a_key.rasterFlags) == 0)
+					BuildPulledColour(a_device, a_zLayout, a_program->pulledVertex, a_program->pulledPixel, desc,
+						forward ? "Lighting forward" : (terrainGroup ? "Lighting terrain" : "Lighting main"), *built);
 				continue;
 			}
 			// The Z-prepass plain-draw pipeline: the depth variant's state, pulled stages, no vertex input, bound per call.

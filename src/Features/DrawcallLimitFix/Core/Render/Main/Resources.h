@@ -208,9 +208,9 @@ namespace DCLF::Draws
 	{
 		std::vector<SetClassRanges> classes;
 		std::vector<std::uint32_t> table;                                                                  // [classes, kClassRanges, 0, 0], then kClassWords per class
-		// [set indices, forward buckets, main buckets, 0], then IndirectState::classOf; with forward buckets, then each set index's forward
-		// bucket (kNoBucket: none) and each bucket's (staging first, capacity); with main buckets, then likewise each set index's main bucket
-		// and each bucket's (first, capacity).
+		// [set indices, forward buckets, main buckets, terrain buckets], then IndirectState::classOf; with forward buckets, then each set index's
+		// forward bucket (kNoBucket: none) and each bucket's (staging first, capacity); with main buckets, then likewise each set index's main
+		// bucket and each bucket's (first, capacity); with terrain buckets, likewise theirs.
 		std::vector<std::uint32_t> map;
 		std::uint32_t decalRanges = 0;  // the (group, class) decal sub-ranges present
 		/**
@@ -218,21 +218,32 @@ namespace DCLF::Draws
 		 * half then its sorted half (each of its slots' capacities), laid out over the forward range the classes' pairs would take. Empty
 		 * when off, or while a forward set index has no plain colour pipeline (IndirectState::plainColour): the classes' calls draw it.
 		 */
-		struct ForwardBucket
+		struct PlainBucket
 		{
 			std::uint32_t set = 0, first = 0, capacity = 0;
+			std::uint32_t group = 0;  // a terrain bucket's terrain group (1, 2: its range's), 0 for any other
 		};
-		std::vector<ForwardBucket> forward;
+		std::vector<PlainBucket> forward;
 		/**
 		 * The main range's plain draws (CS_DCLF_MAIN_PLAIN; the colour pass): a bucket per set index with main slots (its slots' capacities),
 		 * laid out over the main range the classes' sub-ranges would take, drawn in any order (EQUAL against the Z-prepass). Empty when off, or
 		 * while a main set index has no plain colour pipeline: the classes' calls draw it.
 		 */
-		std::vector<ForwardBucket> main;
-		// classCounts' words: a class's per range, then a forward bucket's, then a main bucket's.
+		std::vector<PlainBucket> main;
+		/**
+		 * The terrain groups' plain draws (CS_DCLF_TERRAIN_PLAIN; the colour segment's second pass): a bucket per set index with terrain
+		 * slots (a set index's key has one terrain group), laid out over its group's range, drawn in any order (each group appends
+		 * unsorted). Group 1's buckets first. Empty when off, or while a terrain set index has no plain colour pipeline.
+		 */
+		std::vector<PlainBucket> terrain;
+		// classCounts' words: a class's per range, then a forward bucket's, then a main bucket's, then a terrain bucket's.
 		std::uint32_t Words() const
 		{
-			return static_cast<std::uint32_t>(classes.size()) * kClassRanges + static_cast<std::uint32_t>(forward.size() + main.size());
+			return static_cast<std::uint32_t>(classes.size()) * kClassRanges + static_cast<std::uint32_t>(forward.size() + main.size() + terrain.size());
+		}
+		std::uint32_t TerrainCountWord(std::size_t a_bucket) const
+		{
+			return static_cast<std::uint32_t>(classes.size()) * kClassRanges + static_cast<std::uint32_t>(forward.size() + main.size() + a_bucket);
 		}
 		std::uint32_t ForwardCountWord(std::size_t a_bucket) const { return static_cast<std::uint32_t>(classes.size()) * kClassRanges + static_cast<std::uint32_t>(a_bucket); }
 		std::uint32_t MainCountWord(std::size_t a_bucket) const

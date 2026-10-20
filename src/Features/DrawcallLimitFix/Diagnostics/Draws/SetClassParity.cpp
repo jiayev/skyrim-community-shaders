@@ -214,10 +214,10 @@ namespace DCLF::Diagnostics
 					(decal ? decalDraws : forward ? forwardDraws : otherDraws) += draws - drawsBefore;
 				}
 			}
-			// The plain draws' buckets (CS_DCLF_FORWARD_PLAIN, CS_DCLF_MAIN_PLAIN): each bucket's count within its capacity, and each drawn
-			// sequence (a forward bucket's sorted half, a main bucket's range) its set index's (one of its object's inputs has it), its first
+			// The plain draws' buckets (CS_DCLF_FORWARD_PLAIN, CS_DCLF_MAIN_PLAIN, CS_DCLF_TERRAIN_PLAIN): each bucket's count within its capacity,
+			// and each drawn sequence (a forward bucket's sorted half, a main or terrain bucket's range) its set index's (one of its object's inputs has it), its first
 			// instance its slot (the plain draw finds it by its instance).
-			const auto checkBuckets = [&](const char* a_kind, std::span<const SetClassPlan::ForwardBucket> a_buckets, auto&& a_countWord, std::uint32_t a_halves,
+			const auto checkBuckets = [&](const char* a_kind, std::span<const SetClassPlan::PlainBucket> a_buckets, auto&& a_countWord, std::uint32_t a_halves,
 										   std::uint64_t& a_draws) {
 				for (std::size_t b = 0; b < a_buckets.size(); ++b) {
 					const auto& bucket = a_buckets[b];
@@ -247,6 +247,7 @@ namespace DCLF::Diagnostics
 			if (const auto* plan = a_readback.plan.get()) {
 				checkBuckets("forward", plan->forward, [&](std::size_t a_b) { return plan->ForwardCountWord(a_b); }, 2, forwardDraws);
 				checkBuckets("main", plan->main, [&](std::size_t a_b) { return plan->MainCountWord(a_b); }, 1, otherDraws);
+				checkBuckets("terrain", plan->terrain, [&](std::size_t a_b) { return plan->TerrainCountWord(a_b); }, 1, otherDraws);
 			}
 			const auto line = fmt::format("[DCLF] set classes (GPU, colour epoch {}): {} classes, {} sub-ranges, {} draws checked ({} main and terrain, {} decals, {} forward: both halves), "
 										  "{} without a class sub-range, {} over capacity; {} checks, {} failed (not the first-person forward range)",
