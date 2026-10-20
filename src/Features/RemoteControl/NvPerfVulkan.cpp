@@ -12,6 +12,9 @@
 #	include <Telemetry/NvPerfCapture.h>
 
 #	include <atomic>
+#	include <format>
+#	include <mutex>
+#	include <string>
 #	include <cstring>
 #	include <set>
 #	include <vector>
@@ -58,6 +61,15 @@ namespace NvPerf::detail
 		// so a pass ends its range only when it began one, even when arming changes in between.
 		thread_local std::uint64_t t_passRangeBits = 0;
 		thread_local std::uint32_t t_passRangeDepth = 0;
+
+		// The graph passes that began on another queue (the compute or copy queue) while armed: the profiler measures the
+		// graphics queue alone, so a capture reports them as selected but unmeasured (CaptureResult::otherQueueRanges).
+		std::mutex g_otherQueueMutex;
+		std::set<std::string> g_otherQueueRanges;
+
+		// Frames a capture waits after arming for the graph to record again with its ranges before it fails.
+		constexpr std::uint64_t kArmTimeoutFrames = 600;
+		constexpr std::uint64_t kNoPass = ~std::uint64_t(0);
 
 		Step Finished(std::string a_error)
 		{
@@ -118,8 +130,12 @@ namespace NvPerf::detail
 				// arms they only test g_recording.
 				a_host.SetGpuPassRangeCallbacks(
 					[](rhi::CommandList a_commandList, rhi::Queue, const char* a_queueName, const char* a_passName) {
-						const bool pushed = g_recording.load(std::memory_order_acquire) &&
-						                    nvperf::PushRange(g_backend->target, rhi::vulkan::get_cmd_list(a_commandList), a_queueName, a_passName);
+						const bool recording = g_recording.load(std::memory_order_acquire);
+						if (recording && a_queueName && a_passName && std::strcmp(a_queueName, kQueueName) != 0) {
+							std::lock_guard lock(g_otherQueueMutex);
+							g_otherQueueRanges.emplace(a_passName);
+						}
+						const bool pushed = recording && nvperf::PushRange(g_backend->target, rhi::vulkan::get_cmd_list(a_commandList), a_queueName, a_passName);
 						t_passRangeBits = (t_passRangeBits << 1) | (pushed ? 1u : 0u);
 						++t_passRangeDepth;
 					},
@@ -246,9 +262,26 @@ namespace NvPerf::detail
 					// made before arming would execute in the passes without their ranges: a rebuild records them all again,
 					// and the frame after it waits for the new ones, well within the lead.
 					host->RequestRebuild();
-					firstPassFrame = frame + lead;
+					// The first pass waits for facts, not a frame count: the rebuild done and ranges recorded into the new
+					// recordings (the graph's epochs record asynchronously, so a fixed lead can measure a frame whose lists
+					// predate the arming: no ranges, or a capture failing within the profiler's 8 frames), then the host's
+					// frame slots for every list recorded before it to have executed.
+					armGeneration = host->BuildGeneration();
+					armFrame = frame;
+					firstPassFrame = kNoPass;
 					misplacedPops.store(0, std::memory_order_relaxed);
 					a_capture.passesSubmitted = 0;
+				}
+				if (firstPassFrame == kNoPass) {
+					if ((frame - armFrame) % 120 == 60)
+						// The graph builds at its owner's build point (DCLF's frame start, in game): none runs on a loading screen or the main menu.
+						logger::info("[NvPerf] waiting for the graph's recordings with ranges: build generation {} (armed at {}), rebuild {}, {} ranges recorded",
+							host->BuildGeneration(), armGeneration, host->RebuildRequested() ? "requested" : "not requested", nvperf::RangesRecordedSinceArm());
+					if (host->BuildGeneration() > armGeneration && nvperf::RangesRecordedSinceArm() > 0)
+						firstPassFrame = frame + lead;
+					else if (frame - armFrame > kArmTimeoutFrames)
+						return Finished(std::format("no selected range was recorded within {} frames of arming (graph {}rebuilt); check the range names",
+							kArmTimeoutFrames, host->BuildGeneration() > armGeneration ? "" : "not "));
 				}
 				if (frame < firstPassFrame)
 					return Step{ .state = CaptureState::Waiting };
@@ -267,6 +300,14 @@ namespace NvPerf::detail
 					(void)nvperf::TakeCaptureResult();
 				else
 					draining = true;
+			}
+
+			std::vector<std::string> TakeOtherQueueRanges() override
+			{
+				std::lock_guard lock(g_otherQueueMutex);
+				std::vector<std::string> taken(g_otherQueueRanges.begin(), g_otherQueueRanges.end());
+				g_otherQueueRanges.clear();
+				return taken;
 			}
 
 			void PushRange(Capture& a_capture, std::string_view a_name) override
@@ -411,6 +452,8 @@ namespace NvPerf::detail
 			// Render thread.
 			std::uint64_t frame = 0;
 			std::uint64_t firstPassFrame = 0;
+			std::uint64_t armFrame = 0;
+			std::uint64_t armGeneration = 0;  // the host's BuildGeneration at arming
 			std::uint64_t nextArmFrame = 0;  // a capture's next sample arms from this frame
 			bool armed = false;     // ranges record while set
 			bool draining = false;  // a capture ended while the profiler was still armed

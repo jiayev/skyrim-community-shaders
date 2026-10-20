@@ -196,6 +196,7 @@ static float4 CullPlanes[6];
 // A shadow view's pipeline map row (latch bytes): its inputs name key slots, the row gives each slot's pipeline under the view's
 // rasterizer state. 0 when inputs name pipelines themselves (main camera).
 static uint PipelineMapOffset;
+static uint SlotLayoutsOffset;  // a shadow view's key slots' vertex layouts (BuildDrawsLatch::slotLayoutsOffset), 0: none
 // Main colour pass: kSunTestOn when the sun test applies, and the cascades' latch offset (a count, then per cascade two plane
 // masks and 12 planes: GpuLayouts.h, GpuCascade).
 static uint SunState;
@@ -275,6 +276,7 @@ void LoadLatch()
 	ViewProj = float4x4(asfloat(latch.Load4(LatchOffset + 32)), asfloat(latch.Load4(LatchOffset + 48)),
 		asfloat(latch.Load4(LatchOffset + 64)), asfloat(latch.Load4(LatchOffset + 80)));
 	PipelineMapOffset = latch.Load(LatchOffset + 192);
+	SlotLayoutsOffset = latch.Load(LatchOffset + 336);
 	SunState = latch.Load(LatchOffset + 196);
 	TreeHeight = asfloat(latch.Load2(LatchOffset + 200));
 	FadeEye = asfloat(latch.Load4(LatchOffset + 208));
@@ -570,7 +572,7 @@ static const uint kNoSetClass = 0xFFFFFFFFu;
 static const uint kClassRangeMain = 0;
 static const uint kClassRangeForward = 6;
 static const uint kClassRanges = 7;
-static const uint kClassHeaderBytes = 16;
+static const uint kClassHeaderBytes = 32;  // GpuLayouts.h, kClassHeaderWords
 static const uint kClassBytes = 64;  // kClassWords words
 
 // A set index's state class and index in it, from the latch's class map; false without a map or a word for it (a pipeline the
@@ -637,7 +639,7 @@ bool TakeClassSlot(uint a_class, uint a_range, out uint a_slot)
 // draw is dropped, counted). The forward section follows the class words, the main one the forward one; a bucket's count word follows the
 // classes' (SetClassPlan::ForwardCountWord, MainCountWord).
 static const uint kNoPlainBucket = 0xFFFFFFFFu;  // GpuLayouts.h, kNoBucket
-static const uint kForwardSection = 1, kMainSection = 2, kTerrainSection = 3;  // their header words
+static const uint kForwardSection = 1, kMainSection = 2, kTerrainSection = 3, kDecalSection = 4;  // their header words
 uint PlainBuckets(uint a_section)
 {
 	if (ClassMapOffset == 0)
@@ -1058,6 +1060,19 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		const uint decalSpan = decalChain                                                 ? (decalPartitions & kPartitionChainCount) :
 		                       (decalPartitions == 0 || decalPartitions == kNoPartitions) ? 1u :
 		                                                                                    firstbithigh(decalPartitions & (kNoPartitions - 1)) + 1;
+		// The decal buckets (CS_DCLF_DECAL_PLAIN; SetClassPlan::decals): a drawn partition appended to its set index's bucket's staging half,
+		// a pooled sequence keyed by its slot's ordinal (ForwardSortCS ranks the bucket by it into the sorted half, the plain draw's instance
+		// its rank), no fillers: the bucket's draws are its own.
+		const bool decalBuckets = PlainBuckets(kDecalSection) != 0;
+		uint decalBucket = 0, decalCountWord = 0;
+		uint2 decalBucketRange = uint2(0, 0);
+		if (decalBuckets && drawable) {
+			if (!PlainBucketOf(kDecalSection, input.x, decalBucket, decalBucketRange, decalCountWord)) {
+				if (decalPlanned)
+					count.InterlockedAdd(kCountClassUnplanned, 1, scratch);
+				decalBucketRange = uint2(0, 0);
+			}
+		}
 		uint decalGeometry = input.z;
 		[loop] for (uint k = 0; k < decalSpan; ++k)
 		{
@@ -1070,6 +1085,29 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			const uint firstIndex = geometries.Load(geometryOffset + 32);
 			const uint4 decalStream = decalStreamIndex != kNoStream ? geometries.Load4(decalStreamIndex * kGeometryStride) : vertexBuffer;
 			const uint indexCount = (culled || !partitionDrawn || decalGeometry == kNoPartition) ? 0 : indexBuffer.w;
+			if (decalBuckets) {
+				if (indexCount != 0 && decalBucketRange.y != 0) {
+					RWByteAddressBuffer classCounts = ResourceDescriptorHeap[ClassCountsIndex];
+					uint taken;
+					classCounts.InterlockedAdd(decalCountWord * 4, 1, taken);
+					if (taken >= decalBucketRange.y) {
+						count.InterlockedAdd(kCountClassOverflow, 1, scratch);
+					} else {
+						const uint staged = decalBucketRange.x + taken;
+						ByteAddressBuffer decalFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
+						StoreShadowSequence(sequences, staged, 0, rows, objectWord, vertexBuffer, decalStream, indexBuffer, indexCount, firstIndex,
+							decalFirsts.Load((decalGeometry != kNoPartition ? decalGeometry : input.z) * 4));
+						// The sort key (ForwardSortCS): a plain draw (group and ordinal 0) at "depth" minus its slot's ordinal, so the lower
+						// ordinal draws first; unique per slot.
+						sequences.Store(staged * kSequenceStride + 76, 0);
+						sequences.Store(staged * kSequenceStride + 84, 0);
+						sequences.Store(staged * kSequenceStride + 88, asuint(-float(decalOrdinal + k)));
+					}
+				}
+				if (decalGeometry != kNoPartition)
+					decalGeometry = geometries.Load(geometryOffset + 36);  // GeometryDraw::nextPartition
+				continue;
+			}
 			[loop] for (uint c = 0; c < classes; ++c)
 			{
 				const uint2 range = ClassRange(c, decalGroup);
@@ -1246,7 +1284,17 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	if (sorted && sortKey >= kSortKeys)
 		return;  // outside the sets, like kNoPipeline; before any slot is taken, so the sorted range has no hole
 
-	const uint4 rows = RowsOf(rowsWord);
+	uint4 rows = RowsOf(rowsWord);
+	// A shadow view's sequence carries its key slot's entry (ShadowSlotEntry): the vertex layout in the pipeline-row words and the
+	// caster technique in the pipeline word (it has neither): one bucket draws casters of every layout, skinned or not, with vertex
+	// colours or not (Utility.hlsl, DCLFShadowVertex).
+	uint slotTechnique = 0;
+	if (SlotLayoutsOffset != 0) {
+		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+		const uint4 entry = latch.Load4(SlotLayoutsOffset + drawKey * 16);
+		rows.xy = entry.xy;
+		slotTechnique = entry.z;
+	}
 
 	// One draw per partition the mask names (walking the GeometryDraw links); all are one object with one visibility word.
 	uint copyPartitions;
@@ -1290,6 +1338,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 					} else {
 						StoreShadowSequence(sequences, bucket.x + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 							firstIndex, poolFirsts.Load(geometryIndex * 4));
+						sequences.Store((bucket.x + slot) * kSequenceStride, slotTechnique);
 					}
 				}
 			} else if (refractionInput) {

@@ -197,6 +197,9 @@ namespace DCLF::Draws
 		++a_state.shadowResolved;
 		bool resolved = true;
 		auto& pipelines = DrawPipelines::Get();
+		// A view's pipeline: the canonical depth-only technique and no layout (the draws read theirs by key slot), so slots of one
+		// output share it and its bucket (CS_DCLF_SHADOW_MERGE=0: every technique bit and layout their own).
+		static const bool merge = SwitchOnUnlessZero(Switch::ShadowMerge);
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			if (!a_inputs.modes[m])
 				continue;
@@ -220,7 +223,8 @@ namespace DCLF::Draws
 				const std::uint32_t occlusion = IsOcclusionMode(m) ? OcclusionOfMode(m) : ~0u;
 				// The key under each rasterizer state its mode's views draw with.
 				for (const std::uint32_t state : modeStates[m]) {
-					const ShadowPipelineKey viewKey{ technique, slotKey.rasterFlags, slotKey.vertexLayout, state };
+					const ShadowPipelineKey viewKey = merge ? ShadowPipelineKey{ CanonicalShadowTechnique(technique), slotKey.rasterFlags, 0, state } :
+					                                          ShadowPipelineKey{ technique, slotKey.rasterFlags, slotKey.vertexLayout, state };
 					// Asked of the lane once per key (it keeps every key, and builds them all again after a format change). Everything it
 					// builds is built at runtime: it logs each build a request starts, with the casters named here.
 					if (a_state.shadowRequested.insert(viewKey).second)

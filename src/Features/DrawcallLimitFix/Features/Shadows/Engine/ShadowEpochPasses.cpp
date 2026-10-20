@@ -19,6 +19,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowFrame.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
+#include "Features/RemoteControl/NvPerf.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include <OpenRenderGraph/PersistentGraphHost.h>
 #include <Render/LatchBlock.h>
@@ -90,6 +91,7 @@ namespace DCLF::Draws
 		{
 			const auto frame = CurrentShadowFrame(a_preparation, sky);
 			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(frame ? frame->activeViews : 0);
 			a_out.push_back(FadeRows() ? 1u : 0u);
 			a_out.push_back(NamedSerial(a_preparation, resources->pool->firsts));
 			a_out.push_back(NamedSerial(a_preparation, Extensions::CullBindingBuffer(Api::CullBindingSlot::ObjectGates, *resources->scene)));
@@ -109,8 +111,12 @@ namespace DCLF::Draws
 			const bool fadeRows = FadeRows();
 			const auto fadeRootsIndex = fadeRows ? CaptureViewIndex(a_preparation, a_bindings.fadeRoots) : 0u;
 			const auto objectGatesIndex = a_bindings.objectGates.layout ? CaptureViewIndex(a_preparation, a_bindings.objectGates) : 0u;
-			for (const auto& view : frame->views) {
+			for (std::size_t i = 0; i < frame->views.size(); ++i) {
+				const auto& view = frame->views[i];
 				if (view.slot >= a_bindings.sequences.size() || view.modeIndex >= kShadowModeCount)
+					continue;
+				// A placement the variant's frames leave unused (ShadowFrame::activeViews): its latch is zero, nothing to cull.
+				if (i < 64 && !((frame->activeViews >> i) & 1))
 					continue;
 				ShadowBuildPrepared::Dispatch dispatch{};
 				dispatch.latchOffset = view.slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
@@ -212,6 +218,7 @@ namespace DCLF::Draws
 		{
 			const auto frame = CurrentShadowFrame(a_preparation, sky);
 			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(frame ? frame->activeViews : 0);
 			a_out.push_back(NamedSerial(a_preparation, resources->pool->indices));
 		}
 
@@ -223,6 +230,9 @@ namespace DCLF::Draws
 				return prepared;
 			for (std::uint32_t i = 0; i < frame->views.size(); ++i) {
 				const auto& view = frame->views[i];
+				// A placement the variant's frames leave unused: its slot's latch is zero, nothing to draw or load.
+				if (i < 64 && !((frame->activeViews >> i) & 1))
+					continue;
 				if (!view.capacity || view.slot >= a_bindings.sequences.size() || view.target >= kShadowDepthTargets || !resources->depth[view.target] ||
 					IsOcclusionTarget(view.target) != sky)
 					continue;
@@ -274,8 +284,14 @@ namespace DCLF::Draws
 				a_words[1] = static_cast<std::uint32_t>(a_value >> 32);
 			};
 			const rhi::IndexBufferView pool{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt };  // the whole buffer
+			// nvperf ranges around each view's pass, when a capture selects them.
+			void* const nvCommands = NvPerf::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
+			std::uint32_t recordedDraws = 0;
+			static constexpr const char* kViewRanges[] = { "cs.dclf.shadow.view-0", "cs.dclf.shadow.view-1", "cs.dclf.shadow.view-2", "cs.dclf.shadow.view-3",
+				"cs.dclf.shadow.view-4", "cs.dclf.shadow.view-5", "cs.dclf.shadow.view-6", "cs.dclf.shadow.view-7+" };
 			for (std::size_t i = 0; i < a_prepared.views.size(); ++i) {
 				const auto& view = frame.views[a_prepared.views[i].index];
+				const bool viewRange = nvCommands && NvPerf::PushCommandBufferRange(nvCommands, kViewRanges[std::min<std::size_t>(i, std::size(kViewRanges) - 1)]);
 				commands.BeginPass(begins[i]);
 				commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 				commands.BindLayout(frame.indirect.layout);
@@ -299,9 +315,18 @@ namespace DCLF::Draws
 					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
 					commands.ExecuteIndirect(frame.indirect.drawSignature, sequences, first + kSequenceDrawOffset, counts, std::uint64_t(b) * sizeof(std::uint32_t),
 						bucket.capacity);
+					++recordedDraws;
 				}
 				commands.EndPass();
+				if (nvCommands)
+					NvPerf::PopCommandBufferRange(nvCommands, viewRange);
 			}
+			// A recording is replayed until its shape changes: a few of them say how many indirect draws the views cost.
+			static std::atomic<std::uint32_t> logged{ 0 };
+			if (logged.fetch_add(1, std::memory_order_relaxed) < 200)
+				logger::info("[DCLF] shadow views recorded: {} views, {} indirect draws ({:.1f} a view), view slot {}", a_prepared.views.size(), recordedDraws,
+					a_prepared.views.empty() ? 0.0 : double(recordedDraws) / double(a_prepared.views.size()),
+					a_prepared.views.empty() ? 0u : frame.views[a_prepared.views[0].index].slot);
 		}
 
 	private:

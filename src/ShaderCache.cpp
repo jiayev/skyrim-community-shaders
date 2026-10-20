@@ -3350,6 +3350,43 @@ namespace SIE
 		return !modifiedShaderMap.empty() && modifiedShaderMap.contains(a_type) && modifiedShaderMap.at(a_type) > a_current;
 	}
 
+	namespace
+	{
+		// Names the next D3D11 shader this thread creates for capture tools (DXVK's dxvkSetNextShaderName, which Nsight Graphics then
+		// shows as the stage's entry point): type, stage, descriptor and the descriptor's own defines, without the features' global ones.
+		// Null clears it.
+		void SetNextDxvkShaderName(ShaderClass a_class, const RE::BSShader* a_shader, uint32_t a_descriptor)
+		{
+			using SetNextShaderName = void(__stdcall*)(const char*);
+			static const auto setName = []() -> SetNextShaderName {
+				const auto module = ::GetModuleHandleW(L"dxvk_d3d11.dll");
+				return module ? reinterpret_cast<SetNextShaderName>(::GetProcAddress(module, "dxvkSetNextShaderName")) : nullptr;
+			}();
+			if (!setName)
+				return;
+			if (!a_shader) {
+				setName(nullptr);
+				return;
+			}
+
+			const auto type = a_shader->shaderType.get();
+			std::array<D3D_SHADER_MACRO, 64> defines{};
+			SShaderCache::GetShaderDefines(*a_shader, a_descriptor, defines);
+			std::string name = std::format("{} {} {:08X}", magic_enum::enum_name(type),
+				a_class == ShaderClass::Vertex ? "vs" : a_class == ShaderClass::Pixel ? "ps" : "cs", a_descriptor);
+			for (const auto& define : defines) {
+				if (!define.Name)
+					break;
+				const bool global = std::ranges::any_of(Feature::GetFeatureList(), [&](Feature* feature) {
+					return feature->loaded && feature->HasShaderDefine(type) && feature->GetShaderDefineName() == define.Name;
+				});
+				if (!global)
+					name += std::format(" {}", define.Name);
+			}
+			setName(name.c_str());
+		}
+	}
+
 	RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
@@ -3360,8 +3397,10 @@ namespace SIE
 			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader,
 				descriptor);
 
+			SetNextDxvkShaderName(ShaderClass::Vertex, &shader, descriptor);
 			const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
 				newShader->byteCodeSize, nullptr, reinterpret_cast<ID3D11VertexShader**>(&newShader->shader));
+			SetNextDxvkShaderName(ShaderClass::Vertex, nullptr, 0);
 			if (FAILED(result)) {
 				logger::error("Failed to create vertex shader {}::{:X}",
 					magic_enum::enum_name(shader.shaderType.get()), descriptor);
@@ -3390,8 +3429,10 @@ namespace SIE
 			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader,
 				descriptor);
 
+			SetNextDxvkShaderName(ShaderClass::Pixel, &shader, descriptor);
 			const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
 				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11PixelShader**>(&newShader->shader));
+			SetNextDxvkShaderName(ShaderClass::Pixel, nullptr, 0);
 			if (FAILED(result)) {
 				logger::error("Failed to create pixel shader {}::{:X}",
 					magic_enum::enum_name(shader.shaderType.get()),
@@ -3421,8 +3462,10 @@ namespace SIE
 			auto newShader = SShaderCache::CreateComputeShader(*shaderBlob, shader,
 				descriptor);
 
+			SetNextDxvkShaderName(ShaderClass::Compute, &shader, descriptor);
 			const auto result = device->CreateComputeShader(shaderBlob->GetBufferPointer(),
 				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11ComputeShader**>(&newShader->shader));
+			SetNextDxvkShaderName(ShaderClass::Compute, nullptr, 0);
 			if (FAILED(result)) {
 				logger::error("Failed to create pixel shader {}::{:X}",
 					magic_enum::enum_name(shader.shaderType.get()),

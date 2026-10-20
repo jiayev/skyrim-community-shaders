@@ -14,6 +14,7 @@
 #include "Features/RemoteControl/DevBenchBridge.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/RemoteControl/NvPerfHost.h"
+#include "Features/RemoteControl/NvPerfTrace.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
@@ -333,6 +334,14 @@ void RemoteControl::DrawNvPerfPanel()
 	ImGui::TextColored(theme.SuccessColor, T(TKEY("device"), "%s (chip %s)"), device.deviceName.c_str(), device.chipName.c_str());
 	ImGui::TextDisabled(T(TKEY("backend"), "Backend: %s"), device.backend.c_str());
 
+	DrawNvPerfTraces();
+	if (!ImGui::TreeNode(T(TKEY("manual"), "Single capture")))
+		return;
+	struct TreeClose
+	{
+		~TreeClose() { ImGui::TreePop(); }
+	} treeClose;
+
 	const auto defaults = NvPerf::DefaultMetrics();
 	if (panel.defaultMetricEnabled.size() != defaults.size())
 		panel.defaultMetricEnabled.assign(defaults.size(), 1);
@@ -447,6 +456,172 @@ void RemoteControl::DrawNvPerfPanel()
 	ImGui::SameLine();
 	if (ImGui::SmallButton(T(TKEY("copy_path"), "Copy path")))
 		ImGui::SetClipboardText(Util::PathHelpers::ToUtf8(result->csvPath).c_str());
+}
+
+/**
+ * @brief The trace controls (NvPerfTrace.h): a template, a label and an optional baseline report; the running trace's
+ * progress; the latest report's groups, rows and warnings.
+ */
+void RemoteControl::DrawNvPerfTraces()
+{
+	const auto& theme = Menu::GetSingleton()->GetTheme().StatusPalette;
+	auto& panel = nvperfPanel;
+	if (!ImGui::TreeNodeEx(T(TKEY("traces"), "Traces"), ImGuiTreeNodeFlags_DefaultOpen))
+		return;
+	struct TreeClose
+	{
+		~TreeClose() { ImGui::TreePop(); }
+	} treeClose;
+
+	const auto templates = NvPerf::Trace::Templates();
+	const NvPerf::Trace::Template* selected = nullptr;
+	for (const auto& t : templates)
+		if (t.name == panel.traceTemplate)
+			selected = &t;
+	if (ImGui::BeginCombo(T(TKEY("trace_template"), "Template"), panel.traceTemplate.c_str())) {
+		for (const auto& t : templates) {
+			const std::string label = t.source.empty() ? t.name : std::format("{} ({})", t.name, t.source.filename().string());
+			if (ImGui::Selectable(label.c_str(), t.name == panel.traceTemplate))
+				panel.traceTemplate = t.name;
+			if (!t.description.empty())
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted(t.description.c_str());
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	if (ImGui::SmallButton(T(TKEY("trace_reload"), "Reload")))
+		panel.traceError = NvPerf::Trace::ReloadTemplates();
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T(TKEY("trace_reload_tooltip"), "Reads the *.json templates in %s again."), NvPerf::Trace::TemplateDirectory().string().c_str());
+	if (selected) {
+		ImGui::TextWrapped("%s", selected->description.c_str());
+		const std::size_t captures = selected->metricGroups.size() * selected->repeats;
+		ImGui::TextDisabled(T(TKEY("trace_shape"), "%zu captures (%zu metric groups x %u repeats), %u samples each, %zu range filters"), captures,
+			selected->metricGroups.size(), selected->repeats, selected->samples, selected->ranges.size());
+	}
+	ImGui::InputTextWithHint(T(TKEY("trace_label"), "Label"), panel.traceTemplate.c_str(), &panel.traceLabel);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T(TKEY("trace_label_tooltip"), "The report's name in %s (e.g. dclf-on, dclf-off)."), NvPerf::Trace::ReportDirectory().string().c_str());
+	const auto saved = NvPerf::Trace::SavedReports();
+	const char* none = T(TKEY("trace_no_baseline"), "(none)");
+	if (ImGui::BeginCombo(T(TKEY("trace_baseline"), "Compare with"), panel.traceBaseline.empty() ? none : panel.traceBaseline.c_str())) {
+		if (ImGui::Selectable(none, panel.traceBaseline.empty()))
+			panel.traceBaseline.clear();
+		for (const auto& label : saved)
+			if (ImGui::Selectable(label.c_str(), label == panel.traceBaseline))
+				panel.traceBaseline = label;
+		ImGui::EndCombo();
+	}
+
+	const auto status = NvPerf::Trace::GetStatus();
+	if (status.state == NvPerf::Trace::State::Running) {
+		if (ImGui::Button(T(TKEY("trace_cancel"), "Cancel trace")))
+			NvPerf::Trace::Cancel();
+		ImGui::SameLine();
+		ImGui::TextColored(theme.InfoColor, T(TKEY("trace_running"), "Trace '%s': capture %u of %u (%s)"), status.label.c_str(), status.capture, status.captures,
+			status.phase.c_str());
+	} else if (ImGui::Button(T(TKEY("trace_run"), "Run trace"))) {
+		panel.traceError.clear();
+		NvPerf::Trace::Start(panel.traceTemplate, panel.traceLabel, panel.traceBaseline, panel.traceError);
+	}
+	if (!panel.traceError.empty())
+		ImGui::TextColored(theme.Error, "%s", panel.traceError.c_str());
+
+	const auto report = NvPerf::Trace::Latest();
+	if (!report)
+		return;
+	ImGui::Separator();
+	if (report->success)
+		ImGui::TextColored(theme.SuccessColor, T(TKEY("trace_result"), "Trace '%s' (%s): %u captures, %u samples, total %.1f us"), report->label.c_str(),
+			report->templateName.c_str(), report->captures, report->samples, report->totalUs);
+	else
+		ImGui::TextColored(theme.Error, T(TKEY("trace_failed"), "Trace '%s' failed: %s"), report->label.c_str(), report->error.c_str());
+	for (const auto& warning : report->warnings)
+		ImGui::TextColored(theme.Warning, "%s", warning.c_str());
+	const auto* baseline = report->baseline.get();
+	if (baseline)
+		ImGui::TextDisabled(T(TKEY("trace_compared"), "Compared with '%s': total %.1f us (%+.1f)"), baseline->label.c_str(), baseline->totalUs,
+			report->totalUs - baseline->totalUs);
+
+	const ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+	const float groupsHeight = std::min(ImGui::GetTextLineHeightWithSpacing() * (static_cast<float>(report->groups.size()) + 2.0f), 260.0f);
+	if (!report->groups.empty() && ImGui::BeginTable("##NvPerfTraceGroups", baseline ? 4 : 2, flags, ImVec2(0.0f, groupsHeight))) {
+		ImGui::TableSetupColumn(T(TKEY("trace_group"), "Group"), ImGuiTableColumnFlags_WidthFixed, 200.0f);
+		ImGui::TableSetupColumn(T(TKEY("trace_time"), "GPU time (us)"), ImGuiTableColumnFlags_WidthFixed);
+		if (baseline) {
+			ImGui::TableSetupColumn(T(TKEY("trace_baseline_time"), "Baseline (us)"), ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn(T(TKEY("trace_delta"), "Delta (us)"), ImGuiTableColumnFlags_WidthFixed);
+		}
+		ImGui::TableHeadersRow();
+		for (const auto& group : report->groups) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(group.name.c_str());
+			ImGui::TableNextColumn();
+			ImGui::Text("%.1f", group.timeUs);
+			if (baseline) {
+				const auto found = std::ranges::find_if(baseline->groups, [&](const auto& g) { return g.name == group.name; });
+				const double base = found == baseline->groups.end() ? 0.0 : found->timeUs;
+				ImGui::TableNextColumn();
+				ImGui::Text("%.1f", base);
+				ImGui::TableNextColumn();
+				ImGui::TextColored(group.timeUs > base ? theme.Warning : theme.SuccessColor, "%+.1f", group.timeUs - base);
+			}
+		}
+		ImGui::EndTable();
+	}
+
+	ImGui::SliderInt(T(TKEY("trace_rows"), "Rows shown"), &panel.traceRows, 5, 400);
+	const int fixedColumns = baseline ? 5 : 4;
+	const int columns = fixedColumns + static_cast<int>(report->metricLabels.size());
+	const auto shown = std::min<std::size_t>(report->rows.size(), static_cast<std::size_t>(panel.traceRows));
+	const float rowsHeight = std::min(ImGui::GetTextLineHeightWithSpacing() * (static_cast<float>(shown) + 2.0f), 420.0f);
+	if (ImGui::BeginTable("##NvPerfTraceRows", columns, flags, ImVec2(0.0f, rowsHeight))) {
+		ImGui::TableSetupScrollFreeze(1, 1);
+		ImGui::TableSetupColumn(T(TKEY("column_range"), "Range"), ImGuiTableColumnFlags_WidthFixed, 280.0f);
+		ImGui::TableSetupColumn(T(TKEY("trace_group"), "Group"), ImGuiTableColumnFlags_WidthFixed, 110.0f);
+		ImGui::TableSetupColumn(T(TKEY("trace_time"), "GPU time (us)"), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn(T(TKEY("trace_spread"), "Min-max"), ImGuiTableColumnFlags_WidthFixed);
+		if (baseline)
+			ImGui::TableSetupColumn(T(TKEY("trace_delta"), "Delta (us)"), ImGuiTableColumnFlags_WidthFixed);
+		for (const auto& label : report->metricLabels)
+			ImGui::TableSetupColumn(label.c_str(), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableHeadersRow();
+		for (std::size_t i = 0; i < shown; ++i) {
+			const auto& row = report->rows[i];
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(row.name.c_str());
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text(T(TKEY("trace_row_tooltip"), "%s: %.3g per frame, in %u samples"), row.name.c_str(), row.occurrencesPerFrame, row.samples);
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(row.group.c_str());
+			ImGui::TableNextColumn();
+			ImGui::Text("%.1f", row.timeUs);
+			ImGui::TableNextColumn();
+			ImGui::TextDisabled("%.1f-%.1f", row.timeMinUs, row.timeMaxUs);
+			if (baseline) {
+				const auto found = std::ranges::find_if(baseline->rows, [&](const auto& r) { return r.name == row.name; });
+				const double base = found == baseline->rows.end() ? 0.0 : found->timeUs;
+				ImGui::TableNextColumn();
+				ImGui::TextColored(row.timeUs > base ? theme.Warning : theme.SuccessColor, "%+.1f", row.timeUs - base);
+			}
+			for (const auto& label : report->metricLabels) {
+				ImGui::TableNextColumn();
+				const auto found = row.metrics.find(label);
+				if (found == row.metrics.end() || std::isnan(found->second))
+					ImGui::TextDisabled("-");
+				else
+					ImGui::Text("%.4g", found->second);
+			}
+		}
+		ImGui::EndTable();
+	}
+	ImGui::TextDisabled(T(TKEY("trace_report_path"), "Report: %s"), report->textPath.string().c_str());
+	ImGui::SameLine();
+	if (ImGui::SmallButton(T(TKEY("trace_copy_report"), "Copy report")))
+		ImGui::SetClipboardText(NvPerf::Trace::FormatReport(*report).c_str());
 }
 
 #undef I18N_KEY_PREFIX

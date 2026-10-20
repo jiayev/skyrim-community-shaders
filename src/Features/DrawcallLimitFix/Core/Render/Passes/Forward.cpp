@@ -62,7 +62,7 @@ namespace DCLF::Draws
 					constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
 					// The class's count word (its classCounts word, a view's forward entry's bucket count).
 					constants.countOffset = range.countOffset;
-					constants.options = ForwardSortConstants::kCountOffset | sorted.options;
+					constants.options = ForwardSortConstants::kCountOffset | range.options;
 					prepared.constants.push_back(constants);
 					// Full capacity; threads past the count return.
 					prepared.groups.push_back((range.capacity + kForwardSortGroup - 1) / kForwardSortGroup);

@@ -307,7 +307,7 @@ namespace DCLF::Draws
 	inline constexpr std::uint32_t ClassRangeOfSlot(std::uint32_t a_slot) { return 1 + a_slot; }
 	constexpr std::uint32_t kClassRangeForward = 1 + kMainRangeSlotCount;
 	constexpr std::uint32_t kClassRanges = kClassRangeForward + 1;
-	constexpr std::uint32_t kClassHeaderWords = 4;
+	constexpr std::uint32_t kClassHeaderWords = 8;
 	constexpr std::uint32_t kClassWords = 16;
 	static_assert(2 + 2 * kClassRanges <= kClassWords);
 	/** @brief The classCounts word of class a_class's sub-range a_range. */
@@ -454,12 +454,17 @@ namespace DCLF::Draws
 		std::uint32_t lightContextsIndex;
 		std::uint32_t strictGatesIndex;
 		std::uint32_t strictContext;
+		// A shadow or occlusion view: each key slot's vertex layout (8 bytes a slot, ShadowLatchLayout::SlotLayoutsOffset), bytes into the
+		// latch block. BuildDraws stores the draw's into its sequence's pipeline-row words, which the pulled shadow vertex stage reads, so
+		// one bucket draws casters of every layout. 0 elsewhere.
+		std::uint32_t slotLayoutsOffset;
+		std::uint32_t reserved[3];
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
 	// BuildDrawsLatch::portalProgramsIndex's byte offset (BuildDrawsCS, FadeStateCS and PortalBatchCS read it as kLatchPortalPrograms).
 	constexpr std::uint32_t kLatchPortalProgramsOffset = 320;
-	static_assert(sizeof(BuildDrawsLatch) == 336 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
+	static_assert(sizeof(BuildDrawsLatch) == 352 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
 				  offsetof(BuildDrawsLatch, lightContextsIndex) == 324 && offsetof(BuildDrawsLatch, strictContext) == 332 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, classTableOffset) == 292 &&
 				  offsetof(BuildDrawsLatch, classMapOffset) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
 				  offsetof(BuildDrawsLatch, viewBits) == 264 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
@@ -543,6 +548,21 @@ namespace DCLF::Draws
 	 * rasterizer state (DrawPipelines::ShadowRasterStateId, 1 to rasterStates), then the sun's full-frustum processes. Each
 	 * dimension is grown before the epoch (ShadowEngine::ReserveShadowLatch).
 	 */
+	/**
+	 * @brief A shadow key slot's entry in the latch (ShadowLatchLayout::SlotLayoutsOffset): its vertex layout and its caster technique
+	 * with kShadowSlotTechniqueKnown, which BuildDrawsCS stores into each draw's sequence (the pipeline-row words and the pipeline word,
+	 * which a shadow sequence has no use for). The pulled shadow vertex stage reads them: the layout, and what a canonical build's
+	 * SKINNED and VC take per draw (CanonicalShadowTechnique).
+	 */
+	struct ShadowSlotEntry
+	{
+		std::uint64_t vertexLayout = 0;
+		std::uint32_t technique = 0;
+		std::uint32_t reserved = 0;
+	};
+	static_assert(sizeof(ShadowSlotEntry) == 16);
+	constexpr std::uint32_t kShadowSlotTechniqueKnown = 0x80000000u;
+
 	struct ShadowLatchLayout
 	{
 		std::uint32_t viewSlots = 0, keySlots = 0, rasterStates = 0, sunProcesses = 0;
@@ -551,7 +571,9 @@ namespace DCLF::Draws
 		std::uint32_t MapRows() const { return kShadowModeCount * rasterStates; }
 		/** @brief A view's map row: its mode's rows, then its state's (1 to rasterStates). */
 		std::uint32_t MapRowOf(std::uint32_t a_mode, std::uint32_t a_state) const { return a_mode * rasterStates + (a_state - 1); }
-		std::uint32_t SunEntryOffset() const { return MapOffset() + MapRows() * MapRowBytes(); }
+		// Each key slot's ShadowSlotEntry (BuildDrawsLatch::slotLayoutsOffset): shared by every view, written once per frame slot.
+		std::uint32_t SlotLayoutsOffset() const { return MapOffset() + MapRows() * MapRowBytes(); }
+		std::uint32_t SunEntryOffset() const { return SlotLayoutsOffset() + keySlots * static_cast<std::uint32_t>(sizeof(ShadowSlotEntry)); }
 		// A view slot's bucket table (BuildDrawsLatch::bucketTableOffset): (first, capacity) per bucket, at most one per key slot.
 		std::uint32_t BucketTableBytes() const { return keySlots * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		std::uint32_t BucketOffset(std::uint32_t a_slot) const

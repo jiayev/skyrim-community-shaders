@@ -174,6 +174,8 @@ namespace DCLF::Diagnostics
 			parity.Check(unplanned == 0, [&] { return fmt::format("{} colour draws had no class sub-range (kCountClassUnplannedWord)", unplanned); });
 			parity.Check(overflow == 0, [&] { return fmt::format("{} colour draws were past their class sub-range's capacity (kCountClassOverflowWord)", overflow); });
 			const std::span<const std::uint32_t> classOf = CheckPlan(a_readback, parity);
+			// With the decal buckets (CS_DCLF_DECAL_PLAIN) the classes' decal sub-ranges are never written: their buckets are checked below.
+			const bool plainDecals = a_readback.plan && !a_readback.plan->decals.empty();
 			for (std::uint32_t c = 0; c < classes.size(); ++c) {
 				const std::uint32_t pipelines = c < a_readback.pipelines.size() ? a_readback.pipelines[c] : 0;
 				parity.Check(classes[c].size == pipelines,
@@ -193,6 +195,8 @@ namespace DCLF::Diagnostics
 						continue;
 					}
 					++subRanges;
+					if (decal && plainDecals)
+						continue;
 					if (decal)
 						parity.Check(range.capacity == a_readback.sequenceDecals, [&] {
 							return fmt::format("class {} {} sub-range: capacity {}, the decal sub-ranges' {}", c, RangeName(r), range.capacity, a_readback.sequenceDecals);
@@ -248,6 +252,7 @@ namespace DCLF::Diagnostics
 				checkBuckets("forward", plan->forward, [&](std::size_t a_b) { return plan->ForwardCountWord(a_b); }, 2, forwardDraws);
 				checkBuckets("main", plan->main, [&](std::size_t a_b) { return plan->MainCountWord(a_b); }, 1, otherDraws);
 				checkBuckets("terrain", plan->terrain, [&](std::size_t a_b) { return plan->TerrainCountWord(a_b); }, 1, otherDraws);
+				checkBuckets("decal", plan->decals, [&](std::size_t a_b) { return plan->DecalCountWord(a_b); }, 2, decalDraws);
 			}
 			const auto line = fmt::format("[DCLF] set classes (GPU, colour epoch {}): {} classes, {} sub-ranges, {} draws checked ({} main and terrain, {} decals, {} forward: both halves), "
 										  "{} without a class sub-range, {} over capacity; {} checks, {} failed (not the first-person forward range)",

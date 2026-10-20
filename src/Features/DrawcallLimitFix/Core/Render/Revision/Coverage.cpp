@@ -71,7 +71,7 @@ namespace DCLF
 			       SameHandle(a_next.samplerHeap, a_previous.samplerHeap) && a_next.targetsGeneration == a_previous.targetsGeneration &&
 			       a_next.shadowFormat == a_previous.shadowFormat && a_next.shadowRasterStates == a_previous.shadowRasterStates && a_next.claims == a_previous.claims &&
 			       a_next.shadowCandidates == a_previous.shadowCandidates && a_next.occlusionLayouts == a_previous.occlusionLayouts &&
-			       a_next.shadowPlacements == a_previous.shadowPlacements && a_next.mainKnown == a_previous.mainKnown && a_next.viewport == a_previous.viewport &&
+			       a_next.shadowPlacements == a_previous.shadowPlacements && a_next.shadowActiveViews == a_previous.shadowActiveViews && a_next.mainKnown == a_previous.mainKnown && a_next.viewport == a_previous.viewport &&
 			       a_next.blockSizes == a_previous.blockSizes &&
 			       a_next.resourceInputs == a_previous.resourceInputs &&
 			       a_next.shadowSlots == a_previous.shadowSlots && a_next.asyncEpochs == a_previous.asyncEpochs &&

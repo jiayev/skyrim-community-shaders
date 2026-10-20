@@ -96,6 +96,21 @@ namespace DCLF
 				LatchWrite(a_latchBlock, "shadow map rows", a_latchSlot, mapRowOffset, std::as_bytes(std::span(row)));
 		}
 
+		/**
+		 * @brief Points a_latch at the key slots' vertex layouts, writing them when a_write (once per frame slot and shape). Slots past the
+		 * shape's table (or the latch's) stay zero: their draws take the bucket's pushed layout (Utility.hlsl, DCLFShadowVertex).
+		 */
+		void UseSlotLayouts(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, const ShadowFrame& a_frame, std::uint32_t a_latchSlot,
+			bool a_write, BuildDrawsLatch& a_latch)
+		{
+			a_latch.slotLayoutsOffset = static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + a_layout.SlotLayoutsOffset();
+			if (!a_write || !a_frame.slotLayouts || a_frame.slotLayouts->empty())
+				return;
+			const auto& layouts = *a_frame.slotLayouts;
+			const std::size_t count = std::min<std::size_t>(layouts.size(), a_layout.keySlots);
+			LatchWrite(a_latchBlock, "shadow slot layouts", a_latchSlot, a_layout.SlotLayoutsOffset(), std::as_bytes(std::span(layouts.data(), count)));
+		}
+
 		/** @brief Writes the sun's full-frustum processes into the frame slot's latch region; returns their offset into the block. */
 		std::uint32_t WriteSunEntryRegion(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, std::uint32_t a_latchSlot,
 			std::span<const SunEntryProcess> a_processes)
@@ -243,6 +258,7 @@ namespace DCLF
 				latch.fadeStatesIndex = statesIndex;
 				ShadowPayloadLatch(*impl->InstalledPayload(), latch);
 				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, mode, view.rasterState, true, latch);
+				UseSlotLayouts(latchBlock, latchLayout, target, latchSlot, true, latch);
 				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, true, latch);
 				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				shadowStats.occlusionInputs[v] = inputCount;
@@ -380,6 +396,7 @@ namespace DCLF
 					const std::uint32_t mapRow = view.rasterState ? latchLayout.MapRowOf(view.modeIndex, view.rasterState) : ~0u;
 					const bool rowHeld = mapRow < latchLayout.MapRows() && Draws::LatchRegionsHeld::Hold(held, std::size_t(mapRow) * 2 + 1);
 					UseShadowMapRow(latchBlock, latchLayout, (*target.rows)[index], latchSlot, view.modeIndex, view.rasterState, !rowHeld, latch);
+					UseSlotLayouts(latchBlock, latchLayout, target, latchSlot, !Draws::LatchRegionsHeld::Hold(held, std::size_t(latchLayout.MapRows()) * 2 + 1), latch);
 					WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, target.views[index].buckets, !Draws::LatchRegionsHeld::Hold(held, std::size_t(slot) * 2), latch);
 					LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 					Diagnostics::Notify(Diagnostics::ShadowViewLatched{ view, latch, frameNumber, payload, shadowStats });
@@ -605,7 +622,24 @@ namespace DCLF
 			Draws::LatchShadowViews(commit, latchSlot, revisionShape, layouts);
 			Draws::UploadShadowArena(commit);
 			impl->revisions.latchedMisses += Draws::LatchShadowCsBlocks(commit, latchSlot);
-			impl->SubmitRevisionRecording(epoch, *revision.recordings, 0);
+			// The narrowest variant whose views cover the frame's (the full one, 0, always does): the others' indirect draws would only
+			// fetch zero counts. The frame's set is posted for the revisions to record a variant of (ShadowFrame::activeViews).
+			std::uint64_t active = 0;
+			for (const auto& view : pending)
+				if (const auto index = view.slot - kFirstShadowViewSlot; view.slot >= kFirstShadowViewSlot && index < 64)
+					active |= 1ull << index;
+			engine.lastActiveViews = active;
+			std::size_t variant = 0;
+			int narrowest = 65;
+			const auto& variants = revision.shape->Value<ShadowVariants>()->shapes;
+			for (std::size_t v = 0; v < variants.size(); ++v)
+				if (const auto mask = variants[v]->activeViews; (active & ~mask) == 0 && std::popcount(mask) < narrowest) {
+					narrowest = std::popcount(mask);
+					variant = v;
+				}
+			if (variant != 0)
+				++shadowStats.narrowedEpochs;
+			impl->SubmitRevisionRecording(epoch, *revision.recordings, variant);
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			Draws::LogShadowEpoch(commit);
 			TracyCZoneEnd(shadowViewsZone);

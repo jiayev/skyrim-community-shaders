@@ -5,6 +5,10 @@
 #pragma once
 
 // The including units' block (each starts with it): volk must precede every Vulkan header in a translation unit.
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <rhi_interop_vulkan.h>
 
 #include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
@@ -681,6 +685,9 @@ namespace DCLF
 			// A forward or main key's plain colour draws' pipeline (the pulled stages, the colour variant's state; ForwardDrawPass, the colour
 			// pass): null for any other key, and for one whose pulled stages would not build (its range is then drawn device-generated).
 			rhi::PipelinePtr pulledColour;
+			// An effect decal key's plain depth draws' pipeline (the pulled stages, the depth variant's state; the decal depth pass's decal
+			// buckets): null for any other key (a Lighting key's are its pulledDepth).
+			rhi::PipelinePtr pulledDecalDepth;
 			ZPipelineKey zKey;
 			std::shared_ptr<const ConstantTables> tables;  // a main pipeline's stages' (ConstantTableOf)
 			// A main pipeline's both variants' state (PipelineDesc::State): the state class whose execution sets it goes in. Not the pulled
@@ -1071,7 +1078,21 @@ namespace DCLF
 					rhi::Make(layout), rhi::Make(vertex), rhi::Make(raster), rhi::Make(depth), rhi::Make(blend), rhi::Make(targets), rhi::Make(depthFormat),
 					rhi::Make(topology), rhi::Make(input), rhi::Make(flags), rhi::Make(pixel),
 				};
-				if (const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)) - (hasPixel ? 0u : 1u), a_out); result != rhi::Result::Ok)
+				// DXVK_PIPELINE_STATS: the pipeline's statistics are logged under its name.
+				const std::string label = fmt::format("DCLF {}", a_what);
+				rhi::vulkan::set_pipeline_statistics_label(label.c_str());
+				const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)) - (hasPixel ? 0u : 1u), a_out);
+				rhi::vulkan::set_pipeline_statistics_label(nullptr);
+				// DXVK_SHADER_DUMP_PATH: the pixel stage's SPIR-V beside DXVK's dumps, named by the label.
+				if (static const char* dump = std::getenv("DXVK_SHADER_DUMP_PATH"); dump && *dump && hasPixel && pixel.bytecode.data) {
+					std::string file = label;
+					for (auto& c : file)
+						if (!std::isalnum(static_cast<unsigned char>(c)))
+							c = '_';
+					std::ofstream(std::filesystem::path(dump) / (file + ".fs.spv"), std::ios::binary)
+						.write(static_cast<const char*>(pixel.bytecode.data), static_cast<std::streamsize>(pixel.bytecode.size));
+				}
+				if (result != rhi::Result::Ok)
 					throw std::runtime_error(fmt::format("CreatePipeline ({}) failed ({})", a_what, static_cast<int>(result)));
 			}
 		};
@@ -1123,7 +1144,7 @@ namespace DCLF
 		 * with a_colour's state. A pulled stage that would not build leaves it null, logged (a few): the key's other pipelines stand.
 		 */
 		static void BuildPulledColour(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const std::vector<std::byte>& a_vertex, const std::vector<std::byte>& a_pixel,
-			const PipelineDesc& a_colour, std::string_view a_name, Built& a_built);
+			const PipelineDesc& a_colour, std::string_view a_name, Built& a_built, rhi::PipelinePtr Built::* a_into = &Built::pulledColour);
 
 		static org::services::PipelinePayload Build(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, rhi::PipelineLayoutHandle a_zLayout, PipelineKey a_key,
 			const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW);

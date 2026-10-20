@@ -61,9 +61,12 @@ all users in the NVIDIA Control Panel ([ERR_NVGPUCTRPERM](https://developer.nvid
 - **Samples.** The chip collects only so many counters per pass, so one sample takes as many
     frames as its metrics need passes. A capture collects `samples` of them one after another.
 - **Delay.** `delayFrames` presents pass before the first pass. On Vulkan, ranges then record
-    from the capture's arming, and the first pass begins the graph host's frame slots + 1 frames
-    later, once every command buffer that can execute in it (the graph records its epochs ahead)
-    was recorded while armed.
+    from the capture's arming, which rebuilds the graph so that its kept recordings (a revision's
+    epochs) are recorded again with their ranges. The first pass waits for that to have happened,
+    not for a frame count: the host's build generation advanced and a selected range recorded
+    (`RangesRecordedSinceArm`), then the host's frame slots + 1 frames, so every command buffer
+    that executes in it was recorded while armed. A capture whose ranges never record fails after
+    600 frames, naming whether the graph rebuilt.
 - **Ranges.**
     - The ranges are the perf events whose names match the capture's filters. A trailing `*`
         matches a prefix. No filters means every range, except `State::Draw`'s per-shader-change
@@ -77,6 +80,13 @@ all users in the NVIDIA Control Panel ([ERR_NVGPUCTRPERM](https://developer.nvid
         a graph epoch) is measured in pieces, which the summary adds up.
     - With one nesting level only the outermost selected ranges are measured. On D3D11 each extra
         level also measures selected ranges nested one deeper, and multiplies the passes.
+    - On Vulkan, OpenRenderGraph's barrier batches around each graph pass are ranges too:
+        `cs.org.barrier.<entry|before|after|external-entry|external-exit>.<pass>`. A pass's own range
+        covers only its commands, so these are what an epoch costs between its passes.
+    - Only the graphics queue is measured. A selected graph pass that runs on the compute or copy
+        queue (DCLF's fades, portal batches, tree wind, cull counters under `CS_DCLF_ASYNC_COMPUTE`) is
+        never in the results; the capture lists them (`CaptureResult::otherQueueRanges`) and logs a
+        warning.
 - **Frame Annotations.**
     - A capture turns Frame Annotations on for its duration, since most perf events are only emitted
         with it on.
@@ -117,19 +127,79 @@ A metric the chip lacks is reported as unavailable, and the rest of the capture 
 | Cancel | immediate | ranges stop at once; a profiler sample already armed still runs out (within a few frames) before the next capture can start |
 
 On Vulkan, a graph pass's range is written into its command list when the pass is recorded. The persistent graph replays a
-revision's recordings for as long as the revision stands, so a pass recorded before the capture armed has no range and is not
-measured. In a stationary or turning run, DCLF's colour pass (`cs.dclf.main-opaque`) and its parts are not measured; the engine's
-perf events are. The fix would be to have arming force the graph to re-record its revisions; until then, measure DCLF's passes
-while the scene changes, e.g. under `CS_DCLF_TEST_MOVE`.
+revision's recordings for as long as the revision stands, so arming (and disarming) rebuilds the graph, and the first pass waits
+for the new recordings (see **Delay**).
+
+## Traces
+
+A trace runs a named **template** as a sequence of captures and merges them into one report
+(`src/Features/RemoteControl/NvPerfTrace.h`). It handles what a single capture leaves to the caller:
+
+-   **Metric groups.** Metrics that cannot share a capture are captured one group after another, each
+    with the template's ranges and `gpu__time_duration`, and merged into one table.
+-   **Repeats and hitches.** Every group is captured `repeats` times. A row's GPU time is the median
+    over every sample (a sample that lacks the range counts 0), with its min and max. A sample whose
+    frame total is beyond 1.5x its capture's median (a pipeline compile, a streaming spike) is dropped
+    and counted.
+-   **Rows by range.** One row per measured range, by its own name, not the filter that matched it;
+    report groups sum their rows (a row belongs to the first group with a matching filter).
+-   **Warnings.** Selected passes on another queue, filters that matched nothing, unavailable metrics,
+    dropped samples and rows that vary by more than half their median.
+-   **Retries.** A failed capture is retried twice before the trace moves on.
+-   **Baselines.** Each report is written to `NvPerf/<label>.json` and `.txt` next to
+    `CommunityShaders.log`, and logged. A trace compared with an earlier report shows each group's and
+    row's difference, e.g. DCLF on against a `CS_DCLF=0` run.
+
+Built-in templates:
+
+| Template | Measures |
+| --- | --- |
+| `frame` | every outermost range's GPU time |
+| `dclf-passes` | DCLF's graph passes and the engine events holding the same work with DCLF off (`Depth`, `World`, `Directional Light Shadowmaps`, `First Person View`), grouped by epoch: GPU time, 3 repeats |
+| `dclf-barriers` | `dclf-passes` plus ORG's barrier batches (`cs.org.*`) |
+| `dclf-units` | `dclf-passes` with every unit's throughput |
+| `dclf-shader` | `dclf-passes` with instructions, occupancy and warp stall reasons |
+| `dclf-memory` | `dclf-passes` with DRAM bytes, register spills, LSU and texture instructions, early-Z samples and input primitives |
+| `dclf-full` | the units, shader and memory groups in one trace |
+
+User templates are `*.json` files in `Data/SKSE/Plugins/CommunityShaders/NvPerfTemplates`, one template or an array of them,
+read at first use and by the panel's **Reload**; a file's template replaces a built-in one of the same name.
+`package/SKSE/Plugins/CommunityShaders/NvPerfTemplates/examples.json` ships two. A template may `extend` one defined before it:
+
+```json
+{
+	"name": "dclf-z-prepass",
+	"extends": "dclf-barriers",
+	"description": "The Z-prepass epoch alone.",
+	"ranges": ["Depth", "cs.dclf.z.*", "cs.dclf.hzb", "cs.org.barrier.*"],
+	"metricGroups": [
+		{ "name": "time", "metrics": ["gpu__time_duration:counter", "sm__throughput:throughput"] },
+		{ "name": "shader", "metrics": ["gpu__time_duration:counter", "sm__warps_active:active"] }
+	],
+	"samples": 4,
+	"repeats": 3,
+	"startFrame": 2000,
+	"groups": [{ "name": "Z-prepass", "ranges": ["cs.dclf.z.*"] }]
+}
+```
+
+`ranges`, `metricGroups` (or `metrics`, one group) and `groups` replace the base's; `addRanges` appends ranges and `addGroups`
+prepends groups. `startFrame` (default 2000) is how many presents after a game loaded (SKSE's `kPostLoadGame`) a headless trace's
+first capture starts: DCLF compiles its pipelines in the first ones, and on the main menu and loading screens the graph's owners
+do not build, so a capture armed there waits for re-recorded lists that never come.
 
 ## In game
 
 Open **Developer Tools → Nsight Perf**:
 
-1. Pick metrics and range filters, and set samples, nesting levels and delay. The device line shows
-   the backend.
-2. Press **Capture**. The status line shows the sample and pass while it runs.
-3. The latest result appears as a table, with the CSV path below it.
+-   **Traces:** pick a template (its description and shape are shown), name the report, optionally
+    pick a saved report to compare with, and press **Run trace**. The latest report shows its groups,
+    rows (with their spread and difference) and warnings; **Copy report** copies its text.
+-   **Single capture:**
+    1. Pick metrics and range filters, and set samples, nesting levels and delay. The device line shows
+       the backend.
+    2. Press **Capture**. The status line shows the sample and pass while it runs.
+    3. The latest result appears as a table, with the CSV path below it.
 
 ## Through devbench
 
@@ -163,7 +233,20 @@ is ready, as a `RequestCapture`, and its result is logged and written like any o
 | `CS_NVPERF_SAMPLES`     | samples (default 3), in one capture                                           |
 | `CS_NVPERF_CSV`         | the CSV path, for every capture (default `CommunityShaders-NvPerf.csv`)       |
 
-`CS_NVPERF_RANGES` also turns Frame Annotations on at startup, so the engine's passes are hooked.
+A trace is requested the same way:
+
+| Switch                  | Meaning                                                                       |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| `CS_NVPERF_TEMPLATE`    | the template to run as a trace                                               |
+| `CS_NVPERF_LABEL`       | the report's name (default: the template's)                                   |
+| `CS_NVPERF_BASELINE`    | a report (label or `.json` path) to compare it with                           |
+| `CS_NVPERF_START_FRAME`, `CS_NVPERF_SAMPLES`, `CS_NVPERF_REPEATS` | override the template's                |
+
+For example, DCLF on against off, one launch each:
+`CS_NVPERF_TEMPLATE=dclf-passes CS_NVPERF_LABEL=dclf-off CS_DCLF=0`, then
+`CS_NVPERF_TEMPLATE=dclf-passes CS_NVPERF_LABEL=dclf-on CS_NVPERF_BASELINE=dclf-off`.
+
+`CS_NVPERF_RANGES` and `CS_NVPERF_TEMPLATE` also turn Frame Annotations on at startup, so the engine's passes are hooked.
 For example, DCLF's graph passes beside the engine's batches:
 `CS_NVPERF_RANGES=cs.dclf.*,BSShaderAccumulator::RenderBatches*`.
 
@@ -175,6 +258,9 @@ For example, DCLF's graph passes beside the engine's batches:
     callback, the switches.
 - `src/Features/RemoteControl/NvPerfHost.{h,cpp}`: what the front end and the D3D11 backend need from the plugin
     (device, frame counter, annotations, log directory, build hint).
+- `src/Features/RemoteControl/NvPerfTrace.h` / `.cpp`: traces: the templates (built-in and
+    `NvPerfTemplates/*.json`), the runner that queues a template's captures through `RequestCapture`
+    from `OnPresentEnd`, and the report (median, hitches, groups, warnings, baseline, JSON and text).
 - `src/Features/RemoteControl/NvPerfBackend.h`: the internal backend interface and the capture
     in flight.
 - `src/Features/RemoteControl/NvPerfD3D11.cpp`: the D3D11 backend. It configures the metrics

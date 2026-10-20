@@ -54,6 +54,8 @@ namespace DCLF::Draws
 		std::uint32_t shadowCandidates = 0;
 		std::vector<ShadowViewLayout> occlusionLayouts;
 		std::vector<ShadowViewLayout> shadowPlacements;
+		// The placements the last shadow epoch drew (ShadowEngine::lastActiveViews).
+		std::uint64_t shadowActiveViews = 0;
 		// The main epochs' captures (Impl::MainEpochInputs: per segment, whether one has run, its viewport and its frame blocks' sizes).
 		std::array<bool, 2> mainKnown{};
 		std::array<MainViewport, 2> viewport{};

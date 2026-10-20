@@ -33,6 +33,8 @@ namespace DCLF
 			MadeShapes made;
 			// The occlusion maps' recent layouts (newest first, ShadowEngine::kRecentOcclusionLayouts): a revision makes a shape for each.
 			std::vector<std::vector<ShadowViewLayout>> recentOcclusionLayouts;
+			// The shadow epochs' recent sets of placements in use (newest first, ShadowEngine::kRecentActiveViews): a variant each.
+			std::vector<std::uint64_t> recentActiveViews;
 			// The scene's draw bound and the index pool's, kept from the tables' logs.
 			DrawBoundStore drawBound;
 			IndexPool::Bound poolBound;

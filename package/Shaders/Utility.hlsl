@@ -140,6 +140,9 @@ cbuffer PerGeometry : register(b2)
 // Set by main from the draw's object (DCLF_PULLED, below), as the DCLF_BINDLESS build's statics.
 static precise row_major float4x4 World;
 static float4 TreeParams;
+// A shadow view's draw: whether it is skinned, which a SKINNED build decides per draw (CanonicalShadowTechnique compiles every
+// shadow caster's with SKINNED, the draw's technique in its sequence: DCLFShadowVertex). True elsewhere: the build's define decides.
+static bool DCLFDrawSkinned = true;
 #elif defined(DCLF_BINDLESS)
 // Drawcall Limit Fix draws the shadow views indirectly: every object of a view shares one pipeline and
 // one PerGeometry block, so the values that differ between them come from the per-object record instead
@@ -199,7 +202,15 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 #		if defined(SKINNED)
+	precise float4 positionWS = 0;
 	precise int4 boneIndices = 765.01.xxxx * input.BoneIndices.xyzw;
+#			if defined(DCLF_PULLED)
+	[branch] if (!DCLFDrawSkinned) {
+		precise float4x4 modelViewProj = mul(FrameBuffer::CameraViewProj, World);
+		positionCS = mul(modelViewProj, positionMS);
+		positionWS = mul(World, positionMS);
+	} else {
+#			endif
 
 #			if defined(DCLF_BINDLESS)
 	// The rows are absolute: the pivot is this view's eye.
@@ -207,9 +218,12 @@ VS_OUTPUT main(VS_INPUT input)
 #			else
 	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
 #			endif
-	precise float4 positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
+	positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
 
 	positionCS = mul(FrameBuffer::CameraViewProj, positionWS);
+#			if defined(DCLF_PULLED)
+	}
+#			endif
 #		else
 	precise float4x4 modelViewProj = mul(FrameBuffer::CameraViewProj, World);
 	positionCS = mul(modelViewProj, positionMS);
@@ -333,10 +347,17 @@ VS_OUTPUT main(VS_INPUT input)
 
 VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 {
-	const uint64_t sequence = DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
-	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
+	const uint64_t sequence = DCLFDrawSequence(a_instance);
+	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the draw's key slot's vertex layout, the material row's address
 	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
-	DCLFDrawVertexLayout = DCLFVertexLayout;  // the call's pipeline's
+	// The draw's own (BuildDrawsCS: a shadow view's slot layouts), so a bucket draws casters of every layout; the call's pushed one
+	// for a slot the latch's table did not hold yet.
+	DCLFDrawVertexLayout = any(rows.xy != 0) ? rows.xy : DCLFVertexLayout;
+	// The draw's caster technique (bit 31: present; BuildDrawsCS's slot table), which decides what the canonical build's SKINNED and
+	// VC take per draw; absent, the build's defines.
+	const uint drawTechnique = vk::RawBufferLoad<uint>(sequence);
+	const bool known = (drawTechnique & 0x80000000u) != 0;
+	DCLFDrawSkinned = !known || (drawTechnique & 0x4u) != 0;
 	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
 	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
 	const uint64_t materialRow = DCLFAddress(rows.zw);
@@ -357,13 +378,20 @@ VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 	input.Bitangent = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(4, index, first, second)));
 #		endif
 #		if defined(VC)
-	input.Color = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, index, first, second)));
+	// A draw without vertex colours: alpha 1, which the alpha test's multiply leaves as it is.
+	input.Color = float4(1, 1, 1, 1);
+	[branch] if (!known || (drawTechnique & 0x1u) != 0)
+		input.Color = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, index, first, second)));
 #		endif
 #		if defined(SKINNED)
-	const uint64_t skinning = DCLFAttribute(6, index, first, second);
-	const uint2 weights = vk::RawBufferLoad<uint2>(skinning);
-	input.BoneWeights = float4(DCLFHalf2(weights.x), DCLFHalf2(weights.y));
-	input.BoneIndices = DCLFUnorm4(vk::RawBufferLoad<uint>(skinning + 8));
+	input.BoneWeights = 0;
+	input.BoneIndices = 0;
+	[branch] if (DCLFDrawSkinned) {
+		const uint64_t skinning = DCLFAttribute(6, index, first, second);
+		const uint2 weights = vk::RawBufferLoad<uint2>(skinning);
+		input.BoneWeights = float4(DCLFHalf2(weights.x), DCLFHalf2(weights.y));
+		input.BoneIndices = DCLFUnorm4(vk::RawBufferLoad<uint>(skinning + 8));
+	}
 #		endif
 
 	// What the DCLF_BINDLESS build's statics hold, from this draw's object and material row.
@@ -417,7 +445,7 @@ float DCLFRefractionFloat(uint64_t a_frame, uint a_float) { return asfloat(vk::R
 
 VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 {
-	const uint64_t sequence = DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
+	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
 	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
 	DCLFPipelineRowAddress = DCLFAddress(rows.xy);

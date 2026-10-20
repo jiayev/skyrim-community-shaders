@@ -180,6 +180,19 @@ public:
 	/** @brief Time the render thread spent waiting on a worker inside the current EpochBodyScope. */
 	static void AddEpochJoinWait(std::chrono::steady_clock::duration a_waited);
 
+	/**
+	 * @brief The render thread's pacing point. DXVK's own frame-latency wait is off (D3D11SwapChain::SyncFrameLatency, for the
+	 * frame-generation presenters), so without this nothing bounds how far the CPU runs ahead but the host's slot rings
+	 * (kGameFramesInFlight): their waits land mid-frame, inside whichever epoch needs a ticket, and released the render thread
+	 * in bursts (frames alternating ~4.5 and ~17.5 ms at a steady GPU rate). SignalFramePace, before the present, has DXVK's
+	 * stream signal the frame's number once the GPU has done every command of the frame; WaitFramePace, after it, waits
+	 * until the GPU has finished all but the last CS_FRAME_LATENCY - 1 frames (default 2: the GPU at most one frame behind,
+	 * inside the rings, so ticket preparation never waits). CS_FRAME_LATENCY=0 turns it off. Render thread; no-ops while
+	 * inactive or while frame generation paces the present (a_active false).
+	 */
+	void SignalFramePace(bool a_active);
+	void WaitFramePace();
+
 	/** @brief Render thread: the segments submitted since the last call, one bit per Segment. */
 	std::uint32_t TakeSubmittedSegments();
 

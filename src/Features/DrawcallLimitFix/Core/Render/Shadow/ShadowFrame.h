@@ -115,12 +115,19 @@ namespace DCLF::Draws
 		// Not compared (implied by the latch and the buckets): the latch layout and each view's map row a commit writes against.
 		ShadowLatchLayout latchLayout;
 		std::shared_ptr<const std::vector<RowBuckets>> rows;
+		// Each key slot's entry (Lookups::shadowSlotKeys), for the latch's slot table. Slots are append-only per lookups instance, so a
+		// shape's table only gains entries.
+		std::shared_ptr<const std::vector<ShadowSlotEntry>> slotLayouts;
+		// The views the recording draws, by index into views: a shadow epoch's variant for a set of placements the engine used (the
+		// others' draws, counted zero, would still cost their indirect draws' fetches). All of them in the first variant, which the
+		// commit writes the latch against, and every variant shares.
+		std::uint64_t activeViews = ~0ull;
 
 		bool SameShape(const ShadowFrame& o) const
 		{
 			// The version covers the pipelines the buckets bind.
 			return latch == o.latch && latched == o.latched && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && indirect.valid == o.indirect.valid &&
-			       SameHandle(indirect.layout, o.indirect.layout) && indirect.version == o.indirect.version && views == o.views;
+			       SameHandle(indirect.layout, o.indirect.layout) && indirect.version == o.indirect.version && views == o.views && activeViews == o.activeViews;
 		}
 	};
 

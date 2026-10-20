@@ -228,6 +228,13 @@ struct RenderGraphRuntime::Impl
 	ComputeSubmitter computeSubmitter;
 	PFN_vkDestroySemaphore destroySemaphore = nullptr;
 	PFN_vkWaitSemaphores waitSemaphores = nullptr;
+	// SignalFramePace / WaitFramePace: a timeline DXVK's stream signals with each paced frame's number. Lives as long as the
+	// device (its last signal may still sit in DXVK's stream at a teardown).
+	VkSemaphore framePace = VK_NULL_HANDLE;
+	uint64_t framePaceValue = 0;  // the last value enqueued
+	uint64_t framePaceWaits = 0, framePaceWaited = 0;  // waits that blocked, and their total time (us)
+	uint32_t frameLatency = 2;    // CS_FRAME_LATENCY
+	bool framePaceSignalled = false;  // this frame enqueued one
 	std::shared_ptr<rhi::DevicePtr> device = std::make_shared<rhi::DevicePtr>();
 	std::unique_ptr<org::PersistentGraphHost> host;
 	std::shared_ptr<rhi::TimelinePtr> frameWaitTimeline;  // FrameWaitTimeline
@@ -919,6 +926,23 @@ bool RenderGraphRuntime::Initialize()
 		} else {
 			state->enqueueSubmission = nullptr;
 		}
+		// The frame-pace timeline (SignalFramePace): signalled from DXVK's stream, so it needs the stream.
+		if (state->enqueueSubmission && getDeviceProcAddr) {
+			char latency[8] = {};
+			if (GetEnvironmentVariableA("CS_FRAME_LATENCY", latency, sizeof(latency)) && latency[0])
+				state->frameLatency = static_cast<uint32_t>(std::clamp(std::atoi(latency), 0, static_cast<int>(kGameFramesInFlight)));
+			const auto createSemaphore = reinterpret_cast<PFN_vkCreateSemaphore>(getDeviceProcAddr(info.device, "vkCreateSemaphore"));
+			state->destroySemaphore = reinterpret_cast<PFN_vkDestroySemaphore>(getDeviceProcAddr(info.device, "vkDestroySemaphore"));
+			state->waitSemaphores = reinterpret_cast<PFN_vkWaitSemaphores>(getDeviceProcAddr(info.device, "vkWaitSemaphores"));
+			VkSemaphoreTypeCreateInfo type{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+			type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+			VkSemaphoreCreateInfo create{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+			create.pNext = &type;
+			if (state->frameLatency && createSemaphore && state->destroySemaphore && state->waitSemaphores &&
+				createSemaphore(info.device, &create, nullptr, &state->framePace) == VK_SUCCESS)
+				state->vkDevice = info.device;
+			logger::info("[ORG] frame pacing: {}", state->framePace ? std::format("the GPU at most {} frames behind the render thread (CS_FRAME_LATENCY)", state->frameLatency - 1) : std::string("off"));
+		}
 		// DXVK's compute-only queue, ordered against the stream by the host (EnqueueStreamPoint, CloseComputeEpoch), which
 		// needs the stream. CS_ORG_COMPUTE_QUEUE=0 leaves BasicRHI's compute queue aliasing the graphics one.
 		if (state->enqueueSubmission && info.computeQueue && !EnvEquals("CS_ORG_COMPUTE_QUEUE", "0") && getDeviceProcAddr) {
@@ -1107,6 +1131,15 @@ void RenderGraphRuntime::Shutdown()
 		(void)state->waitSemaphores(state->vkDevice, &wait, UINT64_MAX);
 		state->destroySemaphore(state->vkDevice, state->computeExit, nullptr);
 	}
+	if (state->framePace) {
+		// Its last signal reaches the queue with DXVK's next flush; bounded, since a teardown may never flush again.
+		VkSemaphoreWaitInfo wait{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+		wait.semaphoreCount = 1;
+		wait.pSemaphores = &state->framePace;
+		wait.pValues = &state->framePaceValue;
+		if (state->waitSemaphores(state->vkDevice, &wait, 1'000'000'000ull) == VK_SUCCESS)
+			state->destroySemaphore(state->vkDevice, state->framePace, nullptr);
+	}
 	// Non-owning: BasicRHI never destroys the adopted VkDevice.
 	state->device.reset();
 	disabledReason = "shut down";
@@ -1181,6 +1214,57 @@ RenderGraphRuntime::EpochBodyScope::~EpochBodyScope()
 std::uint32_t RenderGraphRuntime::TakeSubmittedSegments()
 {
 	return impl ? std::exchange(impl->submittedSegments, 0u) : 0u;
+}
+
+void RenderGraphRuntime::SignalFramePace(bool a_active)
+{
+	if (!IsActive() || !impl->framePace || !a_active)
+		return;
+	auto& state = *impl;
+	// In D3D11 stream order, after every command of the frame: the GPU signals it once the frame's work is done.
+	const VkSemaphoreSubmitInfo signal{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, state.framePace, state.framePaceValue + 1,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0 };
+	DxvkOrgInteropSubmission submission{};
+	submission.version = DXVK_ORG_INTEROP_VERSION;
+	submission.signalCount = 1;
+	submission.signals = &signal;
+	submission.onSubmitted = &Impl::OnStreamSubmitted;
+	submission.user = impl.get();
+	submission.label = "CS ORG: frame pace";
+	state.streamEnqueued.fetch_add(1, std::memory_order_acq_rel);
+	if (FAILED(state.enqueueSubmission(globals::d3d::device, &submission))) {
+		state.streamEnqueued.fetch_sub(1, std::memory_order_acq_rel);
+		return;
+	}
+	++state.framePaceValue;
+	state.framePaceSignalled = true;
+}
+
+void RenderGraphRuntime::WaitFramePace()
+{
+	if (!impl || !std::exchange(impl->framePaceSignalled, false) || !IsActive())
+		return;
+	auto& state = *impl;
+	// Its signal was enqueued before the present, which flushed it to the queue.
+	const uint64_t lag = state.frameLatency - 1;
+	if (state.framePaceValue <= lag)
+		return;
+	const uint64_t target = state.framePaceValue - lag;
+	ZoneScopedN("CS.ORG.FramePace");
+	const auto start = std::chrono::steady_clock::now();
+	VkSemaphoreWaitInfo wait{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+	wait.semaphoreCount = 1;
+	wait.pSemaphores = &state.framePace;
+	wait.pValues = &target;
+	// Bounded: a lost signal must not hang the game; the next frame waits again.
+	if (state.waitSemaphores(state.vkDevice, &wait, 0) != VK_TIMEOUT)
+		return;
+	(void)state.waitSemaphores(state.vkDevice, &wait, 250'000'000ull);
+	++state.framePaceWaits;
+	state.framePaceWaited += static_cast<uint64_t>(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count());
+	if (state.framePaceWaits % 3000 == 0)
+		logger::info("[ORG] frame pacing: {} waits so far, {:.2f} ms average", state.framePaceWaits,
+			static_cast<double>(state.framePaceWaited) / 1000.0 / static_cast<double>(state.framePaceWaits));
 }
 
 void RenderGraphRuntime::AddEpochJoinWait(std::chrono::steady_clock::duration a_waited)
@@ -1458,4 +1542,6 @@ const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles(
 winrt::com_ptr<ID3D11Buffer> RenderGraphRuntime::WrapBuffer(org::Resource&, const D3D11_BUFFER_DESC&) { return nullptr; }
 void RenderGraphRuntime::ReportGpuTimings(std::uint32_t, bool) {}
 std::uint32_t RenderGraphRuntime::TakeSubmittedSegments() { return 0; }
+void RenderGraphRuntime::SignalFramePace(bool) {}
+void RenderGraphRuntime::WaitFramePace() {}
 #endif

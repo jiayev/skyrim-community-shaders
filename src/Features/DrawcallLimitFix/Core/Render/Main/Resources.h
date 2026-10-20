@@ -208,9 +208,9 @@ namespace DCLF::Draws
 	{
 		std::vector<SetClassRanges> classes;
 		std::vector<std::uint32_t> table;                                                                  // [classes, kClassRanges, 0, 0], then kClassWords per class
-		// [set indices, forward buckets, main buckets, terrain buckets], then IndirectState::classOf; with forward buckets, then each set index's
-		// forward bucket (kNoBucket: none) and each bucket's (staging first, capacity); with main buckets, then likewise each set index's main
-		// bucket and each bucket's (first, capacity); with terrain buckets, likewise theirs.
+		// [set indices, forward buckets, main buckets, terrain buckets, decal buckets, 0, 0, 0], then IndirectState::classOf; with forward
+		// buckets, then each set index's forward bucket (kNoBucket: none) and each bucket's (staging first, capacity); with main buckets, then
+		// likewise each set index's main bucket and each bucket's (first, capacity); with terrain buckets, and then decal buckets, likewise.
 		std::vector<std::uint32_t> map;
 		std::uint32_t decalRanges = 0;  // the (group, class) decal sub-ranges present
 		/**
@@ -236,10 +236,22 @@ namespace DCLF::Draws
 		 * unsorted). Group 1's buckets first. Empty when off, or while a terrain set index has no plain colour pipeline.
 		 */
 		std::vector<PlainBucket> terrain;
-		// classCounts' words: a class's per range, then a forward bucket's, then a main bucket's, then a terrain bucket's.
+		/**
+		 * The decal groups' plain draws (CS_DCLF_DECAL_PLAIN; the colour segment's decal depth and second passes): a bucket per set index
+		 * with decal slots (a set index's key has one decal group), its staging half then its sorted half (ForwardSortCS ranks its decals by
+		 * their engine ordinal: the same order every frame), each half a decal sub-range's size, past the classes' decal sub-ranges. Group by
+		 * group, set index by set index: drawn in that order. Empty when off, or while a decal set index has no plain colour pipeline (or,
+		 * in a group with a depth prepass, no Z-prepass one).
+		 */
+		std::vector<PlainBucket> decals;
+		// classCounts' words: a class's per range, then a forward bucket's, then a main bucket's, then a terrain bucket's, then a decal bucket's.
 		std::uint32_t Words() const
 		{
-			return static_cast<std::uint32_t>(classes.size()) * kClassRanges + static_cast<std::uint32_t>(forward.size() + main.size() + terrain.size());
+			return static_cast<std::uint32_t>(classes.size()) * kClassRanges + static_cast<std::uint32_t>(forward.size() + main.size() + terrain.size() + decals.size());
+		}
+		std::uint32_t DecalCountWord(std::size_t a_bucket) const
+		{
+			return static_cast<std::uint32_t>(classes.size()) * kClassRanges + static_cast<std::uint32_t>(forward.size() + main.size() + terrain.size() + a_bucket);
 		}
 		std::uint32_t TerrainCountWord(std::size_t a_bucket) const
 		{

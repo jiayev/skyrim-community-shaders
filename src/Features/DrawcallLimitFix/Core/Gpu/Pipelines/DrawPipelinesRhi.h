@@ -38,6 +38,9 @@ namespace DCLF
 		// By set index: a forward key's plain colour draws' pipeline (DrawPipelinesImpl.h, Built::pulledColour), under zLayout with
 		// zDrawSignature (ForwardDrawPass); null for any other key and for one whose pulled stages would not build.
 		std::vector<rhi::PipelineHandle> plainColour;
+		// By set index: its key's own plain depth draws' pipeline (a Lighting key's Built::pulledDepth, an effect decal key's
+		// pulledDecalDepth), for the decal depth pass's decal buckets; null for a key without one.
+		std::vector<rhi::PipelineHandle> plainDepth;
 		rhi::PipelineLayoutHandle zLayout{};
 		rhi::CommandSignatureHandle zDrawSignature{};
 		// The refraction draw (DrawPipelines::RequestRefraction; RefractionDrawPass): its pipeline, null while it waits or once it

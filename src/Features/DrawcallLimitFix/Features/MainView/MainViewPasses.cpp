@@ -153,6 +153,8 @@ namespace DCLF::Draws
 			bool plainMain = false;
 			// The terrain buckets' plain draws (CS_DCLF_TERRAIN_PLAIN; SetClassPlan::terrain), which replace the terrain groups' calls.
 			bool plainTerrain = false;
+			// The decal buckets' plain draws (CS_DCLF_DECAL_PLAIN; SetClassPlan::decals), which replace the decal groups' calls.
+			bool plainDecals = false;
 			bool anyDecals = false;  // any range of the second pass drawn
 			bool anyDecalDepth = false;  // any depth-prepass range drawn
 
@@ -192,26 +194,32 @@ namespace DCLF::Draws
 			}
 			// The second pass's calls in the ranges' order (Extensions::MainRanges: opaque decals and multi-index layers, Terrain
 			// Blending's terrain and the meshes it redraws - its replay follows the engine's opaque groups - then blended decals), each
-			// range's classes in order, with the range's nvperf name; a terrain group's range a_plain's (its group, 1 or 2) with the
-			// terrain buckets' plain draws.
-			template <class Each, class Plain>
-			void SecondPass(Each&& a_each, Plain&& a_plain) const
+			// range's classes in order, with the range's nvperf name; a range of plain draws (Plain: the terrain or decal buckets) a_plain's
+			// (its slot).
+			bool Plain(std::uint32_t a_slot) const { return a_slot >= kDecalGroups ? plainTerrain : plainDecals; }
+			template <class Each, class PlainDraws>
+			void SecondPass(Each&& a_each, PlainDraws&& a_plain) const
 			{
 				for (const auto& range : Extensions::MainRanges().drawn) {
-					if (plainTerrain && range.slot >= kDecalGroups) {
-						a_plain(range.slot - kDecalGroups + 1, range.colourRange.c_str());
+					if (Plain(range.slot)) {
+						a_plain(range.slot, range.colourRange.c_str());
 						continue;
 					}
 					RangeCalls(ClassRangeOfSlot(range.slot), kColorVariant, [&](const IndirectCall& a_call) { a_each(a_call, range.colourRange.c_str()); });
 				}
 			}
-			// The depth prepass's calls, in the same order: the ranges that draw one (opaque decals), with their classes' depth signatures.
-			template <class Each>
-			void DepthPrepass(Each&& a_each) const
+			// The depth prepass's calls, in the same order: the ranges that draw one (opaque decals), with their classes' depth signatures;
+			// a range of plain draws a_plain's (its slot).
+			template <class Each, class PlainDraws>
+			void DepthPrepass(Each&& a_each, PlainDraws&& a_plain) const
 			{
 				for (const auto& range : Extensions::MainRanges().drawn)
-					if (range.depthPrepass)
-						RangeCalls(ClassRangeOfSlot(range.slot), kDepthVariant, a_each);
+					if (range.depthPrepass) {
+						if (Plain(range.slot))
+							a_plain(range.slot);
+						else
+							RangeCalls(ClassRangeOfSlot(range.slot), kDepthVariant, a_each);
+					}
 			}
 		};
 
@@ -241,7 +249,7 @@ namespace DCLF::Draws
 			state.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
 			if (a_passes.anyDecalDepth) {
 				BeginDrawPass(state, a_passes.decalDepthBegin, frame, a_prepared);
-				a_passes.DepthPrepass([&](const IndirectCall& a_call) { PreprocessCall(commands, state, sequences, a_call); });
+				a_passes.DepthPrepass([&](const IndirectCall& a_call) { PreprocessCall(commands, state, sequences, a_call); }, [](std::uint32_t) {});
 				state.EndPass();
 			}
 			BeginDrawPass(state, a_passes.mainBegin, frame, a_prepared);
@@ -267,7 +275,7 @@ namespace DCLF::Draws
 			auto subRange = [&](const char* a_name) { return a_nvCommands && NvPerf::PushCommandBufferRange(a_nvCommands, a_name); };
 			auto endSubRange = [&](bool a_pushed) { if (a_nvCommands) NvPerf::PopCommandBufferRange(a_nvCommands, a_pushed); };
 			// Plain bucket draws (SetClassPlan's buckets): the Z-prepass's layout, frame push data and the index pool bound, then a_buckets
-			// calls a_draw(bucket, its count word) for each it draws.
+			// calls a_draw(its first sequence, pipeline, count word, capacity) for each bucket it draws.
 			auto plainDraws = [&](auto&& a_buckets) {
 				commands.BindLayout(frame.indirect.zLayout);
 				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
@@ -275,15 +283,34 @@ namespace DCLF::Draws
 				auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
 				const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
 				const auto counts = a_recording.Resolve(a_bindings.classCounts).GetHandle();
-				a_buckets([&](const SetClassPlan::PlainBucket& a_bucket, std::uint32_t a_countWord) {
-					RecordBucketDraw(commands, frame.indirect.zDrawSignature, sequences, sequencesAddress, a_bucket.first, frame.indirect.plainColour[a_bucket.set], counts,
-						a_countWord, a_bucket.capacity);
+				a_buckets([&](std::uint32_t a_first, rhi::PipelineHandle a_pipeline, std::uint32_t a_countWord, std::uint32_t a_capacity) {
+					RecordBucketDraw(commands, frame.indirect.zDrawSignature, sequences, sequencesAddress, a_first, a_pipeline, counts, a_countWord, a_capacity);
 				});
+			};
+			// After plain draws in a pass of device-generated calls: their layout and frame push data again.
+			auto restoreLayout = [&] {
+				commands.BindLayout(frame.indirect.layout);
+				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+			};
+			// A decal group's buckets (CS_DCLF_DECAL_PLAIN): each one's sorted half (the engine's order within the bucket), in the plan's
+			// order; a_depth with its Z-prepass pipeline (the decal depth pass), else its plain colour one.
+			auto decalDraws = [&](std::uint32_t a_slot, bool a_depth) {
+				plainDraws([&](const auto& a_draw) {
+					const auto& plan = *frame.classPlan;
+					for (std::size_t b = 0; b < plan.decals.size(); ++b) {
+						const auto& bucket = plan.decals[b];
+						if (bucket.group != a_slot + 1)
+							continue;
+						a_draw(bucket.first + bucket.capacity, a_depth ? frame.indirect.plainDepth[bucket.set] : frame.indirect.plainColour[bucket.set],
+							plan.DecalCountWord(b), bucket.capacity);
+					}
+				});
+				restoreLayout();
 			};
 			if (a_passes.anyDecalDepth) {
 				const bool part = subRange("cs.dclf.colour.decal-depth");
 				BeginDrawPass(commands, a_passes.decalDepthBegin, frame, a_prepared);
-				a_passes.DepthPrepass([&](const IndirectCall& a_call) { ExecuteCall(commands, sequences, a_call); });
+				a_passes.DepthPrepass([&](const IndirectCall& a_call) { ExecuteCall(commands, sequences, a_call); }, [&](std::uint32_t a_slot) { decalDraws(a_slot, true); });
 				commands.EndPass();
 				endSubRange(part);
 			}
@@ -300,8 +327,10 @@ namespace DCLF::Draws
 				// each draw's sequence found by its instance (as the Z-prepass's buckets; the same pulled vertex stage, so EQUAL holds).
 				if (a_passes.plainMain)
 					plainDraws([&](const auto& a_draw) {
-						for (std::size_t b = 0; b < frame.classPlan->main.size(); ++b)
-							a_draw(frame.classPlan->main[b], frame.classPlan->MainCountWord(b));
+						for (std::size_t b = 0; b < frame.classPlan->main.size(); ++b) {
+							const auto& bucket = frame.classPlan->main[b];
+							a_draw(bucket.first, frame.indirect.plainColour[bucket.set], frame.classPlan->MainCountWord(b), bucket.capacity);
+						}
 					});
 				endSubRange(drawPart);
 			}
@@ -338,18 +367,22 @@ namespace DCLF::Draws
 						ExecuteCall(commands, sequences, a_call);
 						endSubRange(groupPart);
 					},
-					// A terrain group's buckets (CS_DCLF_TERRAIN_PLAIN; each group unsorted, so in any order), then the device-generated
-					// calls' layout and frame push data again for the ranges after it.
-					[&](std::uint32_t a_group, const char* a_name) {
+					// A decal group's buckets (CS_DCLF_DECAL_PLAIN), or a terrain group's (CS_DCLF_TERRAIN_PLAIN; each group unsorted, so in
+					// any order).
+					[&](std::uint32_t a_slot, const char* a_name) {
 						const bool groupPart = subRange(a_name);
-						plainDraws([&](const auto& a_draw) {
-							const auto& plan = *frame.classPlan;
-							for (std::size_t b = 0; b < plan.terrain.size(); ++b)
-								if (plan.terrain[b].group == a_group)
-									a_draw(plan.terrain[b], plan.TerrainCountWord(b));
-						});
-						commands.BindLayout(frame.indirect.layout);
-						commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+						if (a_slot < kDecalGroups) {
+							decalDraws(a_slot, false);
+						} else {
+							const std::uint32_t group = a_slot - kDecalGroups + 1;
+							plainDraws([&](const auto& a_draw) {
+								const auto& plan = *frame.classPlan;
+								for (std::size_t b = 0; b < plan.terrain.size(); ++b)
+									if (plan.terrain[b].group == group)
+										a_draw(plan.terrain[b].first, frame.indirect.plainColour[plan.terrain[b].set], plan.TerrainCountWord(b), plan.terrain[b].capacity);
+							});
+							restoreLayout();
+						}
 						endSubRange(groupPart);
 					});
 				if (stats)
@@ -384,6 +417,7 @@ namespace DCLF::Draws
 			passes.decalDepthBegin.debugName = "DCLF decal depth";  // depth only
 			passes.plainMain = frame.classPlan && !frame.classPlan->main.empty() && a_bindings.pool.globalResourceID != 0;
 			passes.plainTerrain = frame.classPlan && !frame.classPlan->terrain.empty() && a_bindings.pool.globalResourceID != 0;
+			passes.plainDecals = frame.classPlan && !frame.classPlan->decals.empty() && a_bindings.pool.globalResourceID != 0;
 			// The second pass's ranges (Extensions::MainRanges) with any class's sub-range, and those of them with a depth prepass.
 			for (const auto& range : Extensions::MainRanges().drawn)
 				if (passes.RangeDrawn(range.slot)) {

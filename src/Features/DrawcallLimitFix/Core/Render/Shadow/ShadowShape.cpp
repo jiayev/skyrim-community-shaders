@@ -232,6 +232,7 @@ namespace DCLF
 		frame->indirect = a_in.indirect;
 		frame->latch = a_in.latch;
 		frame->latchLayout = a_in.latchLayout;
+		frame->slotLayouts = a_in.slotLayouts;
 		const ShadowCapacity& sizing = a_in.capacity;
 		// Each view's row within the bucket counts' words.
 		std::vector<RowBuckets> rows;

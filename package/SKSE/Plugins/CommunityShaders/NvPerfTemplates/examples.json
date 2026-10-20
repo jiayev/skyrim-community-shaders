@@ -1,0 +1,20 @@
+[
+	{
+		"name": "dclf-z-prepass",
+		"extends": "dclf-barriers",
+		"description": "The Z-prepass epoch alone: its passes, ORG's barriers around them and the engine's depth pass, with time, occupancy and stalls.",
+		"ranges": [ "Depth", "cs.dclf.z.*", "cs.dclf.hzb", "cs.dclf.depth-phase2", "cs.dclf.build-draws-phase2", "cs.dclf.tree-lod-cull-phase2", "cs.org.barrier.*" ],
+		"metricGroups": [
+			{ "name": "time", "metrics": [ "gpu__time_duration:counter", "sm__throughput:throughput" ] },
+			{ "name": "shader", "metrics": [ "gpu__time_duration:counter", "sm__warps_active:active", "smsp__warp_issue_stalled_long_scoreboard_per_warp_active:ratio", "smsp__warp_issue_stalled_barrier_per_warp_active:ratio" ] }
+		],
+		"repeats": 3
+	},
+	{
+		"name": "dclf-colour-parts",
+		"extends": "dclf-passes",
+		"description": "The colour pass's parts (the ranges DCLF pushes inside cs.dclf.main-opaque), which the profiler only measures when the pass itself is not selected.",
+		"ranges": [ "World", "cs.dclf.colour.*" ],
+		"addGroups": [ { "name": "colour parts", "ranges": [ "cs.dclf.colour.*" ] } ]
+	}
+]

@@ -543,7 +543,7 @@ namespace DCLF
 	}
 
 	void DrawPipelines::Impl::BuildPulledColour(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const std::vector<std::byte>& a_vertex,
-		const std::vector<std::byte>& a_pixel, const PipelineDesc& a_colour, std::string_view a_name, Built& a_built)
+		const std::vector<std::byte>& a_pixel, const PipelineDesc& a_colour, std::string_view a_name, Built& a_built, rhi::PipelinePtr Built::* a_into)
 	{
 		static std::atomic<std::uint32_t> loggedFailures{ 0 };
 		try {
@@ -556,9 +556,9 @@ namespace DCLF
 			plain.depth = a_colour.depth;
 			plain.blend = a_colour.blend;
 			plain.targets = a_colour.targets;
-			plain.Create(a_device, a_built.pulledColour, fmt::format("{} pulled color", a_name));
+			plain.Create(a_device, a_built.*a_into, fmt::format("{} pulled {}", a_name, a_into == &Built::pulledColour ? "color" : "depth"));
 		} catch (const std::exception& e) {
-			a_built.pulledColour = {};
+			a_built.*a_into = {};
 			if (loggedFailures.fetch_add(1) < 8)
 				logger::warn("[DCLF] {}: no plain colour pipeline (its forward draws stay device-generated): {}", a_name, e.what());
 		}
@@ -617,8 +617,10 @@ namespace DCLF
 			}
 			built->stateClass.variants[variant] = desc.State(pixel);
 			desc.Create(a_device, built->pipelines[variant], fmt::format("{} {}", a_keyName, depthOnly ? "depth" : "color"));
-			if (!depthOnly && RasterForward(a_key.rasterFlags))
+			if (!depthOnly)
 				BuildPulledColour(a_device, a_zLayout, a_program->pulledVertex, a_program->pulledPixel, desc, a_keyName, *built);
+			else if (decalGroup == 1)
+				BuildPulledColour(a_device, a_zLayout, a_program->pulledVertex, a_program->pulledPixel, desc, a_keyName, *built, &Built::pulledDecalDepth);
 		}
 		return built;
 	}
@@ -697,13 +699,13 @@ namespace DCLF
 					}
 			}
 			built->stateClass.variants[variant] = desc.State(depthOnly ? depthPixel : pixel);
-			desc.Create(a_device, built->pipelines[variant], depthOnly ? "depth" : "color");
+			const std::string keyName = fmt::format("vs {:08X} ps {:08X} flags {:08X}", a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.rasterFlags);
+			desc.Create(a_device, built->pipelines[variant], fmt::format("{} {}", keyName, depthOnly ? "depth" : "color"));
 			if (!depthOnly) {
-				// The plain colour draws' pipeline: a forward key's (the forward buckets), a main key's (the main buckets) and a terrain group's
-				// (the terrain buckets); not a decal group's, whose ranges keep their device-generated calls (ordered).
-				if (forward || RasterDecalGroup(a_key.rasterFlags) == 0)
-					BuildPulledColour(a_device, a_zLayout, a_program->pulledVertex, a_program->pulledPixel, desc,
-						forward ? "Lighting forward" : (terrainGroup ? "Lighting terrain" : "Lighting main"), *built);
+				// The plain colour draws' pipeline: a forward key's (the forward buckets), a main key's (the main buckets), a terrain group's
+				// (the terrain buckets) and a decal group's (the decal buckets).
+				BuildPulledColour(a_device, a_zLayout, a_program->pulledVertex, a_program->pulledPixel, desc,
+					fmt::format("{} {}", forward ? "Lighting forward" : terrainGroup ? "Lighting terrain" : RasterDecalGroup(a_key.rasterFlags) ? "Lighting decal" : "Lighting main", keyName), *built);
 				continue;
 			}
 			// The Z-prepass plain-draw pipeline: the depth variant's state, pulled stages, no vertex input, bound per call.
@@ -778,9 +780,13 @@ namespace DCLF
 			state.zPipelines.push_back(pulledDepth ? pulledDepth->GetHandle() : decltype(pulledDepth->GetHandle()){});
 		}
 		state.plainColour.reserve(version->pipelines.size());
+		state.plainDepth.reserve(version->pipelines.size());
 		for (const auto& payload : version->pipelines) {
-			const auto& pulledColour = static_cast<const DrawPipelines::Impl::Built*>(payload.get())->pulledColour;
+			const auto* built = static_cast<const DrawPipelines::Impl::Built*>(payload.get());
+			const auto& pulledColour = built->pulledColour;
 			state.plainColour.push_back(pulledColour ? pulledColour->GetHandle() : decltype(pulledColour->GetHandle()){});
+			const auto& pulledDepth = built->pulledDecalDepth ? built->pulledDecalDepth : built->pulledDepth;
+			state.plainDepth.push_back(pulledDepth ? pulledDepth->GetHandle() : decltype(pulledDepth->GetHandle()){});
 		}
 		state.zLayout = impl.zLayout->GetHandle();
 		state.zDrawSignature = impl.zDrawSignature->GetHandle();

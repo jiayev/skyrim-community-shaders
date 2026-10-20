@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
@@ -96,7 +97,7 @@ namespace DCLF
 			/** @brief a_plan's sub-ranges laid out from their capacities (PlanSetClasses), and its latch words. */
 			void LayOutSetClasses(const MainLayout& a_layout, const IndirectState& a_indirect, std::span<const std::array<bool, kDecalGroups>> a_decals,
 				std::span<const std::uint32_t> a_forwardSets, std::span<const std::uint32_t> a_mainSets, std::span<const std::uint32_t> a_terrainSets,
-				std::span<const std::uint32_t> a_terrainGroups, SetClassPlan& a_plan)
+				std::span<const std::uint32_t> a_terrainGroups, std::span<const std::uint32_t> a_decalGroups, SetClassPlan& a_plan)
 			{
 				auto& classes = a_plan.classes;
 				std::uint32_t keys = 0, main = 0, decals = 0;
@@ -178,6 +179,62 @@ namespace DCLF
 				plan(SwitchOnUnlessZero(Switch::ForwardPlain), a_forwardSets, {}, forwardFirst, 2, a_plan.forward, 1);
 				plan(SwitchOnUnlessZero(Switch::MainPlain), a_mainSets, {}, mainFirst, 1, a_plan.main, 2);
 				plan(SwitchOnUnlessZero(Switch::TerrainPlain), a_terrainSets, a_terrainGroups, terrainFirsts, 1, a_plan.terrain, 3);
+				// The decal buckets (CS_DCLF_DECAL_PLAIN): a pair of decal sub-ranges per decal set index (a_decalGroups: its group, 0 for none),
+				// past the classes' decal sub-ranges, group by group. Only while every one has a plain colour pipeline, and every one of a group
+				// with a depth prepass (Extensions::MainRanges: opaque decals) a Z-prepass pipeline.
+				a_plan.decals.clear();
+				std::array<bool, kDecalGroups> depthPrepass{};
+				for (const auto& range : Extensions::MainRanges().drawn)
+					if (range.slot < kDecalGroups && range.depthPrepass)
+						depthPrepass[range.slot] = true;
+				bool plainDecals = SwitchOnUnlessZero(Switch::DecalPlain) && std::ranges::any_of(a_decalGroups, [](std::uint32_t a_group) { return a_group != 0; });
+				// The first decal set index that keeps them off, and why (logged when the outcome changes).
+				std::uint32_t declinedSet = kNoBucket;
+				const char* declined = "";
+				for (std::uint32_t set = 0; plainDecals && set < a_decalGroups.size(); ++set) {
+					const std::uint32_t group = a_decalGroups[set];
+					if (!group)
+						continue;
+					plainDecals = set < a_indirect.plainColour.size() && a_indirect.plainColour[set].valid();
+					if (!plainDecals)
+						declined = "no plain colour pipeline";
+					if (plainDecals && depthPrepass[group - 1]) {
+						plainDecals = set < a_indirect.plainDepth.size() && a_indirect.plainDepth[set].valid();
+						if (!plainDecals)
+							declined = "no plain depth pipeline for its group's depth prepass";
+					}
+					if (!plainDecals)
+						declinedSet = set;
+				}
+				static std::atomic<std::uint64_t> lastOutcome{ ~0ull };
+				const std::uint64_t outcome = plainDecals ? std::uint64_t(std::ranges::count_if(a_decalGroups, [](std::uint32_t a_group) { return a_group != 0; })) :
+				                                            (1ull << 32) | declinedSet;
+				if (lastOutcome.exchange(outcome, std::memory_order_relaxed) != outcome) {
+					if (plainDecals)
+						logger::info("[DCLF] decal buckets (CS_DCLF_DECAL_PLAIN): {} decal set indices drawn plain", outcome);
+					else if (declinedSet != kNoBucket)
+						logger::info("[DCLF] decal buckets (CS_DCLF_DECAL_PLAIN): none, decal set index {} (group {}) has {}", declinedSet, a_decalGroups[declinedSet], declined);
+				}
+				if (plainDecals) {
+					std::vector<std::uint32_t> bucketOf(a_indirect.classOf.size(), kNoBucket);
+					std::uint32_t ranges = decals;
+					for (std::uint32_t g = 1; g <= kDecalGroups; ++g)
+						for (std::uint32_t set = 0; set < a_decalGroups.size(); ++set) {
+							if (a_decalGroups[set] != g)
+								continue;
+							bucketOf[set] = static_cast<std::uint32_t>(a_plan.decals.size());
+							a_plan.decals.push_back({ set, static_cast<std::uint32_t>(2ull * a_layout.sequenceDraws + std::uint64_t(ranges) * a_layout.sequenceDecals),
+								a_layout.sequenceDecals, g });
+							ranges += 2;
+						}
+					a_plan.decalRanges = ranges;
+					a_plan.map[4] = static_cast<std::uint32_t>(a_plan.decals.size());
+					a_plan.map.insert(a_plan.map.end(), bucketOf.begin(), bucketOf.end());
+					for (const auto& bucket : a_plan.decals) {
+						a_plan.map.push_back(bucket.first);
+						a_plan.map.push_back(bucket.capacity);
+					}
+				}
 			}
 		}
 
@@ -190,15 +247,16 @@ namespace DCLF
 			// And each set index's forward, main and terrain slots' capacities (its buckets', CS_DCLF_FORWARD_PLAIN, CS_DCLF_MAIN_PLAIN,
 			// CS_DCLF_TERRAIN_PLAIN), and a terrain set index's group.
 			std::vector<std::uint32_t> forwardSets(a_indirect.classOf.size(), 0u), mainSets(a_indirect.classOf.size(), 0u), terrainSets(a_indirect.classOf.size(), 0u),
-				terrainGroups(a_indirect.classOf.size(), 0u);
+				terrainGroups(a_indirect.classOf.size(), 0u), decalGroups(a_indirect.classOf.size(), 0u);
 			const auto slots = static_cast<std::uint32_t>(std::min(a_layout.slotCapacity.size(), a_tables.pipelines.size()));
 			for (std::uint32_t p = 0; p < slots; ++p) {
 				std::uint32_t c = 0, r = 0;
 				if (!SlotClassRange(a_lookups, a_tables, a_indirect, p, c, r))
 					continue;
-				if (r >= ClassRangeOfSlot(0) && r < ClassRangeOfSlot(kDecalGroups))
+				if (r >= ClassRangeOfSlot(0) && r < ClassRangeOfSlot(kDecalGroups)) {
 					decals[c][r - ClassRangeOfSlot(0)] = true;
-				else
+					decalGroups[a_lookups.pipelines[p].setIndex] = r - ClassRangeOfSlot(0) + 1;
+				} else
 					a_out.classes[c].ranges[r].capacity += a_layout.slotCapacity[p];
 				if (r == kClassRangeForward)
 					forwardSets[a_lookups.pipelines[p].setIndex] += a_layout.slotCapacity[p];
@@ -210,7 +268,7 @@ namespace DCLF
 					terrainGroups[set] = r - ClassRangeOfSlot(kDecalGroups) + 1;
 				}
 			}
-			LayOutSetClasses(a_layout, a_indirect, decals, forwardSets, mainSets, terrainSets, terrainGroups, a_out);
+			LayOutSetClasses(a_layout, a_indirect, decals, forwardSets, mainSets, terrainSets, terrainGroups, decalGroups, a_out);
 		}
 
 		std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets,
