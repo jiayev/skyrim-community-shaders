@@ -22,6 +22,7 @@ namespace DCLF
 		AsyncCompute,
 		ForwardPlain,
 		MainPlain,
+		TerrainPlain,
 		Workers,
 		Fanout,
 		PayloadAppend,

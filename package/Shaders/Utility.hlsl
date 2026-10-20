@@ -331,7 +331,7 @@ VS_OUTPUT main(VS_INPUT input)
 // and the stage loads the attributes at it, decoded as the engine's input layout for the pipeline's vertex layout has them
 // (VertexInput.cpp, BuildVertexElements), with Common/DCLFObjects.hlsli's DCLFAttribute.
 
-VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 {
 	const uint64_t sequence = DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
 	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
@@ -384,6 +384,21 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	vsout.PositionCS.z = DCLFDepthRange.x * vsout.PositionCS.w + clipZ * DCLFDepthRange.y;
 	// The pixel stage's: the diffuse's descriptor (the shadow material row's, kShadowRowDiffuseOffset) and the object word.
 	vsout.DCLFDraw = uint2(vk::RawBufferLoad<uint>(materialRow + 16), DCLFObjectWord);
+	return vsout;
+}
+
+// The draw's lookups (its sequence, rows, object, geometry) keyed on a wave-uniform instance: each pass of the loop takes the first
+// active lane's draw and the lanes of that draw, so the loads are the draw's, not each lane's (one pass unless a wave mixes draws).
+VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	VS_OUTPUT vsout;
+	[loop] for (;;) {
+		const uint drawInstance = WaveReadLaneFirst(a_instance);
+		[branch] if (drawInstance == a_instance) {
+			vsout = DCLFShadowVertex(index, drawInstance);
+			break;
+		}
+	}
 	return vsout;
 }
 #	elif defined(DCLF_REFRACTION)
