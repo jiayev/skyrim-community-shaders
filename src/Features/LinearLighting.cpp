@@ -133,8 +133,7 @@ bool LinearLighting::IsLinearLightingActive() const
 
 void LinearLighting::PostSetupResources()
 {
-	if (configuredLinearLighting && !globals::features::effects11.IsPresetEnabled() && !globals::features::postProcessing.loaded)
-		stl::report_and_fail("Linear Lighting requires Post Processing for its display transform."sv);
+	assert(!configuredLinearLighting || globals::features::postProcessing.loaded);
 	resourcesReady = true;
 }
 
@@ -169,8 +168,6 @@ void LinearLighting::ClearShaderCache()
 {
 	if (!globals::d3d::context || !globals::game::renderer)
 		return;
-	if (IsLinearLightingActive() && !globals::features::postProcessing.loaded)
-		stl::report_and_fail("Linear Lighting requires Post Processing for its display transform."sv);
 	globals::state->RequestHistoryReset();
 	workingSunlight = nullptr;
 	const float clear[4]{};
@@ -630,7 +627,8 @@ namespace ImageSpaceColorManagement
 void LinearLighting::Load()
 {
 	ApplyGameGamma();
-	configuredLinearLighting = loaded && settings.enableLinearLighting;
+	// Needs Post Processing's display transform, as in Reset(); without it the game renders in gamma space.
+	configuredLinearLighting = loaded && settings.enableLinearLighting && globals::features::postProcessing.loaded;
 	configuredACEScg = configuredLinearLighting && settings.enableACEScg;
 
 	// Installed regardless of the toggle so Reset() can enable Linear Lighting without a restart.

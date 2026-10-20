@@ -422,13 +422,16 @@ bool Effects11::IsPresetEnabled() const
 void Effects11::ToggleEnabled()
 {
 	using PostProcessingMode::Mode;
-	static Mode modeBeforeEffects11 = Mode::Vanilla;
-	if (IsUseEffectEnabled()) {
-		PostProcessingMode::Set(modeBeforeEffects11);
+	// Effects 11 running since startup has no prior mode, so it falls back to Post Processing when installed.
+	static Mode modeBeforeEffects11 = Mode::PostProcessing;
+	const Mode current = PostProcessingMode::Get();
+	if (current == Mode::Effects11) {
+		if (!PostProcessingMode::Set(modeBeforeEffects11))
+			PostProcessingMode::Set(Mode::Vanilla);
 		return;
 	}
-	modeBeforeEffects11 = PostProcessingMode::Get();
-	PostProcessingMode::Set(Mode::Effects11);
+	if (PostProcessingMode::Set(Mode::Effects11))
+		modeBeforeEffects11 = current;
 }
 
 void Effects11::SetUseEffect(bool enabled)

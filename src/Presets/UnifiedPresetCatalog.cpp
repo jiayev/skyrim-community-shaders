@@ -410,11 +410,14 @@ std::string UnifiedPresetCatalog::GetActiveEffects11PresetId() const
 	return activePackId.empty() ? std::string() : GetEffects11PresetId(activePackId);
 }
 
-void UnifiedPresetCatalog::UsePackPipeline(PostProcessingMode::Mode mode)
+bool UnifiedPresetCatalog::UsePackPipeline(PostProcessingMode::Mode mode)
 {
-	PostProcessingMode::Set(mode);
+	// Only a pipeline that took effect is recorded, so the next boot runs what this session does.
+	if (!PostProcessingMode::Set(mode))
+		return false;
 	activePipeline = mode;
 	++pipelineRevision;
+	return true;
 }
 
 UnifiedPresetCatalog::PackInfo* UnifiedPresetCatalog::FindPack(const std::string& id)
@@ -700,9 +703,11 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		activePackId = id;
 		globals::features::sceneManager.ReloadOverwrites();
 		CSEditor::ReloadFormEdits();
-		// Applying a pack, even again, re-selects the pipeline it was authored for.
+		// Applying a pack, even again, re-selects the pipeline it was authored for. An Effects 11 pack that cannot
+		// run falls back to Post Processing; without that either, the current pipeline stays.
 		using PostProcessingMode::Mode;
-		UsePackPipeline(pack->IsE11() && effects11Applied ? Mode::Effects11 : Mode::PostProcessing);
+		if (!(pack->IsE11() && effects11Applied && UsePackPipeline(Mode::Effects11)))
+			UsePackPipeline(Mode::PostProcessing);
 		SaveActiveState();
 	}
 

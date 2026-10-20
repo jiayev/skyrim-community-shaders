@@ -233,8 +233,9 @@ private:
 	/** @brief Adds the Effects 11 install at the game root or Data folder, when present, and the library presets
 	 *  no unified pack of the same name already covers. */
 	void DiscoverEffects11Presets();
-	/** @brief Switches to the pipeline a pack chose, recording it as the pack layer's choice; the caller persists. */
-	void UsePackPipeline(PostProcessingMode::Mode mode);
+	/** @brief Switches to the pipeline a pack chose, recording it as the pack layer's choice; the caller persists.
+	 *  @return False, recording nothing, when the pipeline cannot run. */
+	bool UsePackPipeline(PostProcessingMode::Mode mode);
 
 	/** @brief Decodes an image file into an SRV; false when missing or undecodable. */
 	static bool LoadTextureSRV(const std::filesystem::path& path, winrt::com_ptr<ID3D11ShaderResourceView>& outSRV);

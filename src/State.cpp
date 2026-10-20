@@ -602,6 +602,8 @@ void State::Load(bool a_allowReload)
 				logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
 			}
 		}
+		// After feature settings, so they cannot overwrite the Linear Lighting a pack's pipeline turns on.
+		PostProcessingMode::ApplyReloaded();
 
 		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
 			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());

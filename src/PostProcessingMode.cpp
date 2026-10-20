@@ -8,7 +8,6 @@
 #include "I18n/I18n.h"
 #include "Presets/UnifiedPresetCatalog.h"
 #include "State.h"
-#include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
 #include <array>
@@ -31,6 +30,10 @@ namespace PostProcessingMode
 		bool detectPreset = false;
 		/** @brief The pending mode is the one a pack applied after the last save, not the saved one. */
 		bool pendingFromPack = false;
+		/** @brief A loaded choice whose pipeline could not run, saved in place of the fallback so it returns with its pipeline. */
+		std::optional<Mode> heldMode;
+		/** @brief Startup applied a mode, so the pipeline flags reflect a choice and later loads apply right away. */
+		bool resolved = false;
 
 		/** @brief Effects 11 is initialized, so its UseEffect setting can be written. */
 		bool IsEffects11Ready()
@@ -52,6 +55,19 @@ namespace PostProcessingMode
 			return globals::features::postProcessing.loaded ? Mode::PostProcessing : Mode::Vanilla;
 		}
 
+		/** @brief Whether the mode's pipeline can run now; Vanilla always can. */
+		bool IsAvailable(Mode mode)
+		{
+			switch (mode) {
+			case Mode::PostProcessing:
+				return globals::features::postProcessing.loaded;
+			case Mode::Effects11:
+				return CanUseEffects11();
+			default:
+				return true;
+			}
+		}
+
 		/** @brief Switches the pipeline flags without the user-facing side effects of Set(). */
 		void Apply(Mode mode)
 		{
@@ -69,15 +85,18 @@ namespace PostProcessingMode
 		return postProcessing.loaded && !postProcessing.bypass ? Mode::PostProcessing : Mode::Vanilla;
 	}
 
-	void Set(Mode mode)
+	bool Set(Mode mode)
 	{
-		if (mode == Mode::Effects11 && !CanUseEffects11())
-			return;
+		if (!IsAvailable(mode))
+			return false;
 		pendingMode.reset();
+		heldMode.reset();
+		resolved = true;
 		Apply(mode);
 		// Switching to Post Processing always starts linear; running without it is a manual opt-out.
 		if (mode == Mode::PostProcessing)
 			globals::features::linearLighting.settings.enableLinearLighting = true;
+		return true;
 	}
 
 	void Load(const json& a_general)
@@ -86,14 +105,13 @@ namespace PostProcessingMode
 		const auto savedMode = saved != a_general.end() && saved->is_string() ?
 		                           magic_enum::enum_cast<Mode>(saved->get<std::string>()) :
 		                           std::nullopt;
-		// Without a user settings file, the merged value is the code default, not a user choice.
-		std::error_code ec;
-		detectPreset = !savedMode || !std::filesystem::exists(Util::PathHelpers::GetSettingsUserPath(), ec);
+		// Save() keeps the mode out of the code defaults, so a missing value means the user never saved one.
+		detectPreset = !savedMode;
 		pendingMode = savedMode.value_or(kDefaultMode);
 		pendingFromPack = false;
 
-		// A pack applied after these settings were saved chose the pipeline since, so its choice stands. Without
-		// a saved choice the revision merged in is the code default's, which always matches, so the pack wins too.
+		// A pack applied after these settings were saved chose the pipeline since, so its choice stands, as it
+		// does when there is no saved choice.
 		const auto& catalog = UnifiedPresetCatalog::GetSingleton();
 		const auto revision = a_general.find(kPackRevisionKey);
 		const auto savedRevision = revision != a_general.end() && revision->is_number_unsigned() ? revision->get<uint32_t>() : 0u;
@@ -108,13 +126,11 @@ namespace PostProcessingMode
 
 	void Save(json& a_general)
 	{
-		// Keep an unresolved default unsaved so preset detection still runs on the next boot.
-		if (pendingMode && detectPreset)
+		// Nothing is known until startup applies a mode, which keeps it out of the code defaults; a default still
+		// awaiting preset detection stays unsaved so detection runs again on the next boot.
+		if (pendingMode ? detectPreset : !resolved)
 			return;
-		// Before Effects 11 initializes, Get() cannot see its UseEffect choice yet.
-		const bool modeKnown = globals::features::postProcessing.loaded &&
-		                       (!globals::features::effects11.loaded || EffectManager::GetSingleton().IsInitialized());
-		a_general[kSettingKey] = magic_enum::enum_name(pendingMode.value_or(modeKnown ? Get() : kDefaultMode));
+		a_general[kSettingKey] = magic_enum::enum_name(pendingMode.value_or(heldMode.value_or(Get())));
 		a_general[kPackRevisionKey] = UnifiedPresetCatalog::GetSingleton().GetPipelineRevision();
 	}
 
@@ -122,12 +138,21 @@ namespace PostProcessingMode
 	{
 		if (!pendingMode)
 			return;
-		const Mode mode = detectPreset ? ResolveDefaultMode() : *pendingMode;
-		Apply(mode == Mode::Effects11 && !CanUseEffects11() ? Mode::Vanilla : mode);
+		const Mode chosen = detectPreset ? ResolveDefaultMode() : *pendingMode;
+		const Mode mode = IsAvailable(chosen) ? chosen : ResolveDefaultMode();
+		heldMode = mode != chosen ? std::optional(chosen) : std::nullopt;
+		Apply(mode);
 		// Set() turns Linear Lighting on with Post Processing; a pack's choice gets the same at startup.
-		if (std::exchange(pendingFromPack, false) && mode == Mode::PostProcessing)
+		if (std::exchange(pendingFromPack, false) && mode == Mode::PostProcessing && !heldMode)
 			globals::features::linearLighting.settings.enableLinearLighting = true;
 		pendingMode.reset();
+		resolved = true;
+	}
+
+	void ApplyReloaded()
+	{
+		if (resolved)
+			ApplyPending();
 	}
 
 	void DrawSelector()
