@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/RemoteControl/NvPerf.h"
 
 namespace DCLF::Draws
 {
@@ -143,11 +144,12 @@ namespace DCLF::Draws
 
 	void RecordPreprocessedDraws(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,
 		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::ResourceHandle a_arguments,
-		std::span<const IndirectCall> a_calls)
+		std::span<const IndirectCall> a_calls, const char* a_preprocessRange)
 	{
 		if (a_calls.empty())
 			return;
 		auto& commands = a_recording.Commands();
+		void* const nvCommands = NvPerf::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
 		auto beginDrawPass = [&](rhi::CommandList& a_list) {
 			a_list.SetDescriptorHeaps(a_resourceHeap, a_samplerHeap);
 			a_list.BeginPass(a_begin);
@@ -158,13 +160,24 @@ namespace DCLF::Draws
 		// Every call preprocessed before the pass, with the execution's exact state (as MainOpaquePass), then executed in order.
 		auto& state = a_preprocess.Begin(a_recording.FrameSlot());
 		beginDrawPass(state);
-		for (const auto& call : a_calls)
+		const bool preprocessRange = nvCommands && a_preprocessRange && NvPerf::PushCommandBufferRange(nvCommands, a_preprocessRange);
+		for (const auto& call : a_calls) {
+			const bool callRange = nvCommands && call.preprocessRange && NvPerf::PushCommandBufferRange(nvCommands, call.preprocessRange);
 			commands.PreprocessIndirect(state, call.signature, a_arguments, call.argumentsOffset, call.counts, call.countOffset, call.capacity);
+			if (nvCommands)
+				NvPerf::PopCommandBufferRange(nvCommands, callRange);
+		}
+		if (nvCommands)
+			NvPerf::PopCommandBufferRange(nvCommands, preprocessRange);
 		state.EndPass();
 		state.End();
 		beginDrawPass(commands);
-		for (const auto& call : a_calls)
+		for (const auto& call : a_calls) {
+			const bool range = nvCommands && call.range && NvPerf::PushCommandBufferRange(nvCommands, call.range);
 			commands.ExecuteIndirect(call.signature, a_arguments, call.argumentsOffset, call.counts, call.countOffset, call.capacity);
+			if (nvCommands)
+				NvPerf::PopCommandBufferRange(nvCommands, range);
+		}
 		commands.EndPass();
 	}
 

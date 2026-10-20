@@ -35,6 +35,9 @@ namespace DCLF
 		// layout and the signature of a DrawSequence's tail as a plain draw.
 		std::vector<std::uint32_t> zGroups;
 		std::vector<rhi::PipelineHandle> zPipelines;
+		// By set index: a forward key's plain colour draws' pipeline (DrawPipelinesImpl.h, Built::pulledColour), under zLayout with
+		// zDrawSignature (ForwardDrawPass); null for any other key and for one whose pulled stages would not build.
+		std::vector<rhi::PipelineHandle> plainColour;
 		rhi::PipelineLayoutHandle zLayout{};
 		rhi::CommandSignatureHandle zDrawSignature{};
 		// The refraction draw (DrawPipelines::RequestRefraction; RefractionDrawPass): its pipeline, null while it waits or once it

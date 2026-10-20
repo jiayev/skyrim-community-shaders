@@ -45,7 +45,7 @@ namespace DCLF::Draws
 
 		TreeWindBindings Declare(org::PassBuilder& a_builder)
 		{
-			a_builder.PreferQueue(org::QueueKind::Compute);
+			a_builder.PreferQueue(AsyncComputeQueue());
 			TreeWindBindings bindings{};
 			bindings.trees = a_builder.ShaderResource(*scene->trees).View();
 			bindings.frame = a_builder.ShaderResource(scene->treeFrameBuffer).View();

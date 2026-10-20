@@ -54,6 +54,12 @@ namespace DCLF
 		constexpr Entry kRegistry[] = {
 			{ Dclf, "CS_DCLF", F, Reduced::Zero, false, "0: DCLF does not install" },
 			{ AsyncPriority, "CS_DCLF_ASYNC_PRIORITY", F, N, false, "normal: the coordinator and scene threads keep normal priority instead of above normal; noboost: workers are not raised to a ParallelFor caller's priority while they hold its chunks" },
+			{ AsyncCompute, "CS_DCLF_ASYNC_COMPUTE", F, Reduced::Zero, false,
+				"0: the passes that prefer the compute queue (build-draws' queries, fades, portal batches, tree wind) run on the graphics queue" },
+			{ ForwardPlain, "CS_DCLF_FORWARD_PLAIN", F, Reduced::Zero, false,
+				"0: the forward epoch draws its range device-generated, a call per state class, instead of a plain draw per pipeline" },
+			{ MainPlain, "CS_DCLF_MAIN_PLAIN", F, Reduced::Zero, false,
+				"0: the colour pass draws its main range device-generated, a call per state class, instead of a plain draw per pipeline" },
 			{ Workers, "CS_DCLF_WORKERS", F, N, false, "the preparation pool's threads (default hardware threads - 2, at least 1)" },
 			{ Fanout, "CS_DCLF_FANOUT", F, N, false,
 				"the scene pass's evaluation rounds and joins (T6b3e): 0 interleaved on the scene lane (the reference), 1 every entry evaluated then merged, on the lane; 2 (default) evaluated on the preparation pool from 128 entries, merged in order" },

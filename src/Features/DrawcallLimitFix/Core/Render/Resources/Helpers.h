@@ -7,6 +7,7 @@
 #include <rhi_interop_vulkan.h>
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
 #include <Resources/Buffers/Buffer.h>
@@ -19,6 +20,9 @@
 
 namespace DCLF::Draws
 {
+	// The queue of a pass that prefers async compute: the compute queue, or the graphics queue under CS_DCLF_ASYNC_COMPUTE=0.
+	inline org::QueueKind AsyncComputeQueue() { return SwitchOnUnlessZero(Switch::AsyncCompute) ? org::QueueKind::Compute : org::QueueKind::Graphics; }
+
 	inline std::uint32_t CaptureViewIndex(const org::PassPrepareContext& a_preparation, const org::DeclaredViewToken& a_token)
 	{
 		(void)a_preparation.Capture(a_token);

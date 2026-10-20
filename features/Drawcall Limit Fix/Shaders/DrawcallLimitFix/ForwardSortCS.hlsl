@@ -32,11 +32,12 @@ cbuffer ForwardSortConstants : register(b0)
 	uint Capacity;        // each half's slots (the class's forward sub-range's capacity)
 	uint SequenceStride;  // bytes (sizeof(DrawSequence))
 	uint CountOffset;     // with kSortCountOffset, the byte offset of the count word in CountIndex (the first-person forward range's bucket count)
-	uint Options;         // kSortCountOffset
+	uint Options;         // kSortCountOffset, kSortRankInstance
 	uint Padding2;
 }
 
-static const uint kSortCountOffset = 1;  // ForwardSortConstants::kCountOffset
+static const uint kSortCountOffset = 1;   // ForwardSortConstants::kCountOffset
+static const uint kSortRankInstance = 2;  // ForwardSortConstants::kRankInstance: firstInstance is the rank (a forward bucket's plain draw)
 
 static const uint kCountForward = 128;     // GpuLayouts.h, kCountForwardWord
 static const uint kObjectWordOffset = 20;  // DrawSequence::objectIndex
@@ -134,8 +135,9 @@ groupshared uint sharedFirst[kTile];
 
 	const uint source = (StagingBase + index) * SequenceStride;
 	const uint target = (StagingBase + Capacity + rank) * SequenceStride;
+	const uint firstInstance = (Options & kSortRankInstance) != 0 ? rank : 0u;
 	[loop] for (uint word = 0; word + 4 <= SequenceStride; word += 4) {
-		const uint value = word == kInstanceCountOffset ? 1u : (word == kVertexOffsetOffset || word == kFirstInstanceOffset) ? 0u : sequences.Load(source + word);
+		const uint value = word == kInstanceCountOffset ? 1u : word == kVertexOffsetOffset ? 0u : word == kFirstInstanceOffset ? firstInstance : sequences.Load(source + word);
 		sequences.Store(target + word, value);
 	}
 }

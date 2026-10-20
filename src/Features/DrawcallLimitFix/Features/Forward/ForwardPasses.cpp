@@ -50,8 +50,13 @@ namespace DCLF::Draws
 				bindings.targets[i] = a_builder.RenderTarget(resources->native[i]).View();
 			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
 			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
-			// Each state class's forward sub-range's count (its classCounts word).
+			// Each state class's forward sub-range's count, and each forward bucket's (their classCounts words).
 			bindings.classCounts = a_builder.IndirectArguments(*resources->classCounts).Resource();
+			// The forward buckets' plain draws (CS_DCLF_FORWARD_PLAIN) read the sequences by address and index the pool.
+			if (resources->pool) {
+				a_builder.ShaderResource(*resources->sequences, noViews);
+				bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
+			}
 			// The face shapes' second vertex stream, pulled by address (DCLF_PULLED_VERTICES).
 			if (resources->scene->vertexStream)
 				a_builder.ShaderResource(*resources->scene->vertexStream, noViews);
@@ -101,15 +106,57 @@ namespace DCLF::Draws
 			begin.debugName = "DCLF forward";
 			const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
 			const auto classCounts = a_recording.Resolve(a_bindings.classCounts).GetHandle();
+			// The forward buckets (CS_DCLF_FORWARD_PLAIN): a plain draw per set index over its sorted half, its pipeline's pulled colour
+			// pipeline under the Z-prepass's layout (as MainOpaquePass's depth draws), each draw's sequence found by its instance.
+			if (frame.classPlan && !frame.classPlan->forward.empty() && a_bindings.pool.globalResourceID != 0) {
+				const auto& plan = *frame.classPlan;
+				auto& commands = a_recording.Commands();
+				static std::atomic<std::size_t> loggedBuckets{ 0 };
+				if (loggedBuckets.exchange(plan.forward.size()) != plan.forward.size())
+					logger::info("[DCLF] forward epoch recorded with {} plain draws (probe)", plan.forward.size());
+				commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
+				commands.BeginPass(begin);
+				commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+				commands.BindLayout(frame.indirect.zLayout);
+				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+				commands.SetIndexBuffer(rhi::IndexBufferView{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt });
+				auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+				const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
+				for (std::size_t b = 0; b < plan.forward.size(); ++b) {
+					const auto& bucket = plan.forward[b];
+					RecordBucketDraw(commands, frame.indirect.zDrawSignature, sequences, sequencesAddress, std::uint64_t(bucket.first) + bucket.capacity,
+						frame.indirect.plainColour[bucket.set], classCounts, plan.ForwardCountWord(b), bucket.capacity);
+				}
+				commands.EndPass();
+				return;
+			}
 			// Per state class with a forward sub-range, its sorted half (after its staging half), counted by its classCounts word, with its
 			// class's signature; the classes in creation order. A class's blended draws keep the engine's order among themselves.
+			// Each call under the nvperf range "cs.dclf.forward.class<c>".
+			static const auto kForwardClassRanges = [] {
+				std::array<std::string, 128> names;
+				for (std::size_t c = 0; c < 64; ++c) {
+					names[c] = fmt::format("cs.dclf.forward.class{}", c);
+					names[64 + c] = fmt::format("cs.dclf.forward.pre{}", c);
+				}
+				return names;
+			}();
+			static std::atomic<std::uint32_t> logged{ 0 };
+			if (logged.fetch_add(1) % 64 == 0) {
+				std::string text;
+				for (std::uint32_t c = 0; c < frame.classes.size(); ++c)
+					if (const auto& range = frame.classes[c].ranges[kClassRangeForward]; range.capacity)
+						text += fmt::format(" class {} capacity {} pipelines {};", c, range.capacity, c < frame.indirect.classes.size() ? frame.indirect.classes[c].pipelines : 0u);
+				logger::info("[DCLF] forward calls (probe):{}", text);
+			}
 			std::vector<IndirectCall> calls;
 			for (std::uint32_t c = 0; c < frame.classes.size() && c < frame.indirect.classes.size(); ++c)
 				if (const auto& range = frame.classes[c].ranges[kClassRangeForward]; range.capacity)
 					calls.push_back({ frame.indirect.classes[c].signatures[kColorVariant], (std::uint64_t(range.first) + range.capacity) * sizeof(DrawSequence), classCounts,
-						std::uint64_t(ClassCountWord(c, kClassRangeForward)) * sizeof(std::uint32_t), range.capacity });
+						std::uint64_t(ClassCountWord(c, kClassRangeForward)) * sizeof(std::uint32_t), range.capacity,
+						c < 64 ? kForwardClassRanges[c].c_str() : nullptr, c < 64 ? kForwardClassRanges[64 + c].c_str() : nullptr });
 			RecordPreprocessedDraws(a_recording, *a_prepared.preprocess, begin, frame.resourceHeap, frame.samplerHeap, frame.indirect.layout, a_prepared.framePushWords, sequences,
-				calls);
+				calls, "cs.dclf.forward.preprocess");
 		}
 
 	private:

@@ -61,17 +61,17 @@ namespace PrefixSum
 				return bindings;
 			}
 
-			void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+			void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 			{
-				a_out.push_back(!desc.active || desc.active() ? 1 : 0);
+				a_out.push_back(!desc.active || desc.active(a_preparation) ? 1 : 0);
 				if (desc.revision)
-					desc.revision(a_out);
+					desc.revision(a_preparation, a_out);
 			}
 
 			Frame Prepare(const Bindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 			{
 				Frame prepared{};
-				if (!desc.programs || !desc.elements || desc.elements > kMaxElements || (desc.active && !desc.active()))
+				if (!desc.programs || !desc.elements || desc.elements > kMaxElements || (desc.active && !desc.active(a_preparation)))
 					return prepared;
 				prepared.programs = desc.programs;
 				auto& constants = prepared.constants;

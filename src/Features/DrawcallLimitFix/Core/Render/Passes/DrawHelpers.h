@@ -68,6 +68,8 @@ namespace DCLF::Draws
 		rhi::ResourceHandle counts{};
 		std::uint64_t countOffset = 0;
 		std::uint32_t capacity = 0;
+		const char* range = nullptr;  // the nvperf range around its execution, when a capture selects it (none: none)
+		const char* preprocessRange = nullptr;  // and around its preprocess (none: none)
 	};
 	/**
 	 * @brief One explicitly preprocessed draw pass (the forward ranges'): the preprocess of every call on the frame slot's state list, set
@@ -76,7 +78,7 @@ namespace DCLF::Draws
 	 */
 	void RecordPreprocessedDraws(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,
 		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::ResourceHandle a_arguments,
-		std::span<const IndirectCall> a_calls);
+		std::span<const IndirectCall> a_calls, const char* a_preprocessRange = nullptr);
 	/** @brief RecordPreprocessedDraws of one call. */
 	void RecordPreprocessedDraw(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,
 		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::CommandSignatureHandle a_signature,

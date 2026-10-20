@@ -147,7 +147,9 @@ namespace DCLF::Diagnostics
 				a_parity.Check(false, [&] { return std::string("the shape has no class map"); });
 				return a_readback.classOf;
 			}
-			const auto words = std::span<const std::uint32_t>(plan->map).subspan(Draws::kClassHeaderWords);
+			// The set indices' class words (the forward buckets' words follow them: SetClassPlan::map).
+			const auto words = std::span<const std::uint32_t>(plan->map).subspan(Draws::kClassHeaderWords).first(
+				std::min<std::size_t>(plan->map[0], plan->map.size() - Draws::kClassHeaderWords));
 			a_parity.Check(std::ranges::equal(words, a_readback.classOf), [&] {
 				return fmt::format("the class plan's map ({} words) is not the indirect state's class words ({})", words.size(), a_readback.classOf.size());
 			});
@@ -211,6 +213,40 @@ namespace DCLF::Diagnostics
 						CheckSequences(a_readback, classOf, sequences + range.first + range.capacity, sub, " (sorted)", parity, draws);
 					(decal ? decalDraws : forward ? forwardDraws : otherDraws) += draws - drawsBefore;
 				}
+			}
+			// The plain draws' buckets (CS_DCLF_FORWARD_PLAIN, CS_DCLF_MAIN_PLAIN): each bucket's count within its capacity, and each drawn
+			// sequence (a forward bucket's sorted half, a main bucket's range) its set index's (one of its object's inputs has it), its first
+			// instance its slot (the plain draw finds it by its instance).
+			const auto checkBuckets = [&](const char* a_kind, std::span<const SetClassPlan::ForwardBucket> a_buckets, auto&& a_countWord, std::uint32_t a_halves,
+										   std::uint64_t& a_draws) {
+				for (std::size_t b = 0; b < a_buckets.size(); ++b) {
+					const auto& bucket = a_buckets[b];
+					const std::uint32_t countWord = a_countWord(b);
+					const std::uint32_t drawn = countWord < classCountWords ? classCounts[countWord] : 0;
+					parity.Check(countWord < classCountWords && drawn <= bucket.capacity, [&] {
+						return fmt::format("{} bucket {} (set {}): count {} over its capacity {}", a_kind, b, bucket.set, drawn, bucket.capacity);
+					});
+					if (std::uint64_t(bucket.first) + std::uint64_t(a_halves) * bucket.capacity > sequenceSlots)
+						continue;
+					const DrawSequence* drawnSequences = sequences + bucket.first + (a_halves - 1) * bucket.capacity;
+					for (std::uint32_t k = 0; k < std::min(drawn, bucket.capacity); ++k) {
+						if (drawnSequences[k].indexCount == 0)
+							continue;
+						++a_draws;
+						++draws;
+						const std::uint32_t object = drawnSequences[k].objectIndex & kObjectIndexMask;
+						const auto found = a_readback.setsOf.find(object);
+						const bool routed = found != a_readback.setsOf.end() && std::ranges::find(found->second, bucket.set) != found->second.end();
+						parity.Check(routed, [&] { return fmt::format("{} bucket {} (set {}) slot {}: object {} has no input of that set index", a_kind, b, bucket.set, k, object); });
+						parity.Check(drawnSequences[k].firstInstance == k, [&] {
+							return fmt::format("{} bucket {} (set {}) slot {}: first instance {}", a_kind, b, bucket.set, k, drawnSequences[k].firstInstance);
+						});
+					}
+				}
+			};
+			if (const auto* plan = a_readback.plan.get()) {
+				checkBuckets("forward", plan->forward, [&](std::size_t a_b) { return plan->ForwardCountWord(a_b); }, 2, forwardDraws);
+				checkBuckets("main", plan->main, [&](std::size_t a_b) { return plan->MainCountWord(a_b); }, 1, otherDraws);
 			}
 			const auto line = fmt::format("[DCLF] set classes (GPU, colour epoch {}): {} classes, {} sub-ranges, {} draws checked ({} main and terrain, {} decals, {} forward: both halves), "
 										  "{} without a class sub-range, {} over capacity; {} checks, {} failed (not the first-person forward range)",

@@ -40,7 +40,7 @@ namespace DCLF::Features::Portals
 
 			Bindings Declare(org::PassBuilder& a_builder)
 			{
-				a_builder.PreferQueue(org::QueueKind::Compute);
+				a_builder.PreferQueue(Draws::AsyncComputeQueue());
 				const auto& b = *batch;
 				Bindings bindings{};
 				bindings.queries = a_builder.ShaderResource(*b.queries).View();

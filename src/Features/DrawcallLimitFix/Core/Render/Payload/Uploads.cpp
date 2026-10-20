@@ -434,7 +434,9 @@ namespace DCLF
 			latched(epochResources->count, kZeroCounts, 4 * sizeof(std::uint32_t), kCountRefractionWord * sizeof(std::uint32_t));
 			// The draws dropped for want of a state class sub-range, and every class sub-range's count (the revision's class plan's).
 			latched(epochResources->count, kZeroCounts, 2 * sizeof(std::uint32_t), kCountClassUnplannedWord * sizeof(std::uint32_t));
-			if (const auto words = static_cast<std::uint32_t>(a_commit.shape.classes.size()) * kClassRanges; words && epochResources->classCounts) {
+			// (A forward bucket's count word follows the classes', SetClassPlan::Words.)
+			if (const auto words = a_commit.shape.classPlan ? a_commit.shape.classPlan->Words() : static_cast<std::uint32_t>(a_commit.shape.classes.size()) * kClassRanges;
+				words && epochResources->classCounts) {
 				classCountZeros.assign(words, 0u);
 				latched(epochResources->classCounts, classCountZeros.data(), std::size_t(words) * sizeof(std::uint32_t), 0);
 			}

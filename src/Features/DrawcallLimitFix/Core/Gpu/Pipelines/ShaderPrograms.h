@@ -69,6 +69,9 @@ namespace DCLF
 			// rows itself, and the depth pixel stage reading its material row's inputs itself (PulledMaterialSource).
 			std::vector<std::byte> pulledVertex;
 			std::vector<std::byte> pulledDepthPixel;
+			// The plain colour draws' pixel stage (DCLF_PULLED, not depth only; the forward epoch's ForwardDrawPass), reading its rows
+			// and object word from the pulled vertex stage. A program family's (Effect's) pulled pair is pulledVertex and this.
+			std::vector<std::byte> pulledPixel;
 			// The attributes (BSGraphics::Vertex::Attribute, a bit each) the vertex stages read, from their defines (ShaderPrograms.cpp,
 			// VertexAttributesOf): a key whose vertex layout lacks one fails (VertexLayoutAttributes), as the input assembler's layout
 			// did. Set once the stages are in (UpdateLane), not by FinishEntry's aggregate.
@@ -96,7 +99,7 @@ namespace DCLF
 		 * precompile missed, compiled on demand unless the disk cache has it. Logged when the program is ready (Update).
 		 */
 		static constexpr std::uint8_t kOnDemandVertex = 1, kOnDemandPixel = 2, kOnDemandDepthPixel = 4, kOnDemandPulledVertex = 8,
-									  kOnDemandPulledDepthPixel = 16;
+									  kOnDemandPulledDepthPixel = 16, kOnDemandPulledPixel = 32;
 		/** @brief "VS, PS, depth PS" for a set of kOnDemand bits. */
 		static std::string OnDemandStages(std::uint8_t a_stages);
 
@@ -245,11 +248,12 @@ namespace DCLF
 		// A program's entry (ShaderPrograms.cpp): its N stages, those not completed yet, and the program once they all are.
 		template <class P, std::size_t N>
 		struct ProgramEntry;
-		using Entry = ProgramEntry<Program, 5>;  // vertex, pixel, depth pixel, pulled vertex, pulled depth pixel
+		using Entry = ProgramEntry<Program, 6>;  // vertex, pixel, depth pixel, pulled vertex, pulled depth pixel, pulled pixel
 		using ShadowEntry = ProgramEntry<ShadowProgram, 2>;
 		using DrawFamilyEntry = ProgramEntry<DrawProgram, 4>;  // vertex, pixel, depth vertex, depth pixel
 		using ForwardEntry = ProgramEntry<ForwardProgram, 2>;
-		using FamilyEntry = ProgramEntry<Program, 2>;  // vertex and pixel alone (ProgramStages::VertexPixel)
+		// Vertex and pixel (ProgramStages::VertexPixel), then the pulled pair; Program's depth slots hold the pixel stages again (unread).
+		using FamilyEntry = ProgramEntry<Program, 6>;
 		struct StageCache;
 		std::unique_ptr<StageCache> stages;
 		bool LoadSources();
@@ -279,6 +283,7 @@ namespace DCLF
 		// not taken).
 		std::array<ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<FamilyEntry>>, Extensions::kProgramFamilies> familyEntries;
 		std::array<std::vector<std::byte>, Extensions::kProgramFamilies> familySources;
+		std::array<std::vector<std::byte>, Extensions::kProgramFamilies> familyPulledSources;  // PulledLightingSource of each (empty: none)
 		// By draw family: its source (Extensions::DrawFamilies' sourcePath: Data/Shaders/DistantTree.hlsl; empty when missing or not taken).
 		std::array<std::vector<std::byte>, kDrawFamilyLanes> drawFamilySources;
 		std::vector<std::byte> source;
@@ -288,7 +293,7 @@ namespace DCLF
 		// Each source's ShaderCompiler::FingerprintInputs with the dependencies, taken once when they load: every request's key
 		// starts from it instead of hashing the source and checking the dependency files again (thousands of keys a launch).
 		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0;
-		std::array<std::uint64_t, Extensions::kProgramFamilies> familyFingerprints{};
+		std::array<std::uint64_t, Extensions::kProgramFamilies> familyFingerprints{}, familyPulledFingerprints{};
 		std::array<std::uint64_t, kDrawFamilyLanes> drawFamilyFingerprints{};
 		bool sourcesLoaded = false;
 		std::atomic<bool> sourcesMissing{ false };

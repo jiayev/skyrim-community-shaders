@@ -13,6 +13,8 @@ namespace org
 {
 	class Buffer;
 	class RenderPass;
+	struct FramePreparationContext;
+	using PassPrepareContext = FramePreparationContext;
 }
 
 /**
@@ -53,10 +55,10 @@ namespace PrefixSum
 		// zero before the first accumulation, and every accumulation must be followed by this pass.
 		bool clearCounts = false;
 		// Whether an execution scans, when not every one does (null: every one). Called while the pass prepares, which can be
-		// on a worker, so it must read state published for that.
-		std::function<bool()> active;
+		// on a worker, so it must read state published for that (the preparation's, as a pass's Prepare would).
+		std::function<bool(const org::PassPrepareContext&)> active;
 		// Appended to the pass's invocation revision: what `active` depends on, when that is not simply its answer.
-		std::function<void(std::vector<std::uint64_t>&)> revision;
+		std::function<void(const org::PassPrepareContext&, std::vector<std::uint64_t>&)> revision;
 	};
 
 	std::shared_ptr<org::RenderPass> CreatePass(Desc a_desc);

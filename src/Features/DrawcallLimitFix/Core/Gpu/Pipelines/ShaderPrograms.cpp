@@ -192,7 +192,7 @@ namespace DCLF
 			if (!a_rewrite.opened && trimmed == "{") {
 				a_rewrite.opened = true;
 				out << "\n";
-			} else if (trimmed.rfind("};", 0) == 0) {
+			} else if (trimmed.rfind("};", 0) == 0 || trimmed == "}") {  // Effect.hlsl closes a block without the semicolon
 				// The block's members as statics, assigned from the row by the pulled entry points (Lighting.hlsl,
 				// DCLFRowStatics) once the row's address is known: a member's name is one other code reuses (a struct
 				// field), so not a macro.
@@ -340,7 +340,7 @@ namespace DCLF
 	{
 		std::string text;
 		for (const auto& [bit, name] : { std::pair{ kOnDemandVertex, "VS" }, std::pair{ kOnDemandPixel, "PS" }, std::pair{ kOnDemandDepthPixel, "depth PS" },
-				 std::pair{ kOnDemandPulledVertex, "pulled VS" }, std::pair{ kOnDemandPulledDepthPixel, "pulled depth PS" } })
+				 std::pair{ kOnDemandPulledVertex, "pulled VS" }, std::pair{ kOnDemandPulledDepthPixel, "pulled depth PS" }, std::pair{ kOnDemandPulledPixel, "pulled PS" } })
 			if (a_stages & bit)
 				text += fmt::format("{}{}", text.empty() ? "" : ", ", name);
 		return text;
@@ -403,15 +403,20 @@ namespace DCLF
 			std::ifstream familyFile(family.sourcePath, std::ios::binary);
 			std::vector<char> familyBytes((std::istreambuf_iterator<char>(familyFile)), std::istreambuf_iterator<char>());
 			familySources[f].resize(familyBytes.size());
-			if (!familyBytes.empty())
+			if (!familyBytes.empty()) {
 				std::memcpy(familySources[f].data(), familyBytes.data(), familyBytes.size());
-			else
+				// Its plain draws' builds (DCLF_PULLED: the forward epoch's), its rows' declarations read from the draw's rows as Lighting's are.
+				familyPulledSources[f] = PulledLightingSource(familySources[f]);
+			} else
 				logger::warn("[DCLF] {} is missing; {}", family.sourcePath, family.nativeNote);
 		}
 		if (auto* compiler = RenderGraphRuntime::Get().ShaderCompiler()) {
 			sourceFingerprint = compiler->FingerprintInputs(source, dependencies);
 			for (std::size_t f = 0; f < Extensions::kProgramFamilies; ++f)
+			{
 				familyFingerprints[f] = familySources[f].empty() ? 0 : compiler->FingerprintInputs(familySources[f], dependencies);
+				familyPulledFingerprints[f] = familyPulledSources[f].empty() ? 0 : compiler->FingerprintInputs(familyPulledSources[f], dependencies);
+			}
 			pulledFingerprint = pulledSource.empty() ? 0 : compiler->FingerprintInputs(pulledSource, dependencies);
 			utilityFingerprint = utilitySource.empty() ? 0 : compiler->FingerprintInputs(utilitySource, dependencies);
 			for (std::size_t f = 0; f < kDrawFamilyLanes; ++f)
@@ -532,7 +537,7 @@ namespace DCLF
 				request.defines.push_back({ L"DCLF_PULLED", L"1" });
 			// A pulled Lighting stage reads its pipeline row's permutation block itself (Permutation.hlsli), as it does the rows'
 			// other inputs (PulledLightingSource).
-			if (a_pulled && a_sourceName == kSourcePath)
+			if (a_pulled && (a_sourceName == kSourcePath || a_family))
 				request.defines.push_back({ L"DCLF_PULLED_ROWS", L"1" });
 			// The device-generated draws' vertex stages (Program::vertex, both variants'; a program family's) pull their attributes
 			// through the geometry's buffers in the draw's push data (Lighting.hlsl, Effect.hlsl): no DCLF pipeline has input assembly,
@@ -603,11 +608,12 @@ namespace DCLF
 			const auto drawFamily = Extensions::DrawFamilyOfShader(static_cast<std::uint8_t>(shader.shaderType.get()));
 			const bool drawBuild = drawFamily != Api::DrawFamily::Count;
 			const auto d = static_cast<std::size_t>(drawFamily);
-			// A program family's builds (its shader's: the Effect port's Effect.hlsl), never pulled (FindFamily), its slot's bit in the key.
+			// A program family's builds (its shader's: the Effect port's Effect.hlsl), pulled only when asked (FindFamily's plain draws' pair),
+			// its slot's bit in the key.
 			const auto family = Extensions::FamilyOfShader(static_cast<std::uint8_t>(shader.shaderType.get()));
 			const bool familyBuild = family != Api::ProgramFamily::Count;
 			const auto f = static_cast<std::size_t>(family);
-			pulled = !familyBuild && (pulled || utility || (drawBuild && DrawFamilyLaneSlotOf(drawFamily).pulled));
+			pulled = familyBuild ? pulled : (pulled || utility || (drawBuild && DrawFamilyLaneSlotOf(drawFamily).pulled));
 			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34) |
 			                          (std::uint64_t(pulled) << 35) | DrawStageKeyBitOf(drawFamily) | StageKeyBitOf(family);
 			{
@@ -623,7 +629,8 @@ namespace DCLF
 					return found->second;
 			}
 			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()) || (drawBuild && owner.drawFamilySources[d].empty()) ||
-				(familyBuild && owner.familySources[f].empty()) || (pulled && !utility && !drawBuild && owner.pulledSource.empty()))
+				(familyBuild && (pulled ? owner.familyPulledSources[f] : owner.familySources[f]).empty()) ||
+				(pulled && !utility && !drawBuild && !familyBuild && owner.pulledSource.empty()))
 				return {};
 			auto* compiler = RenderGraphRuntime::Get().ShaderCompiler();
 			if (configured != compiler) {
@@ -637,9 +644,11 @@ namespace DCLF
 			auto stage = std::make_shared<Stage>();
 			stage->key = key;
 			RequestStage(*compiler, stage,
-				utility ? owner.utilitySource : drawBuild ? owner.drawFamilySources[d] : familyBuild ? owner.familySources[f] : pulled ? owner.pulledSource : owner.source,
+				utility ? owner.utilitySource : drawBuild ? owner.drawFamilySources[d] : familyBuild ? (pulled ? owner.familyPulledSources[f] : owner.familySources[f]) :
+				pulled ? owner.pulledSource : owner.source,
 				owner.dependencies,
-				utility ? owner.utilityFingerprint : drawBuild ? owner.drawFamilyFingerprints[d] : familyBuild ? owner.familyFingerprints[f] : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
+				utility ? owner.utilityFingerprint : drawBuild ? owner.drawFamilyFingerprints[d] :
+				familyBuild ? (pulled ? owner.familyPulledFingerprints[f] : owner.familyFingerprints[f]) : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
 				shader, pixel, descriptor, depth, pulled, familyBuild,
 				utility ? kUtilitySourcePath : drawBuild ? Extensions::DrawFamilyOf(drawFamily).sourcePath.c_str() : familyBuild ? Extensions::ProgramFamilyOf(family).sourcePath.c_str() : kSourcePath);
 			{
@@ -697,11 +706,12 @@ namespace DCLF
 		auto stage = stages->Request(*this, a_shader, a_pixel, a_descriptor);
 		const bool lighting = type == RE::BSShader::Type::Lighting;
 		auto depth = a_pixel && lighting ? stages->Request(*this, a_shader, true, a_descriptor, true) : StagePtr{};
-		// The Z-prepass's pulled builds: the vertex stage, and the depth pixel stage.
+		// The Z-prepass's pulled builds: the vertex stage, and the depth pixel stage; and the plain colour draws' pixel stage.
 		auto pulled = lighting ? stages->Request(*this, a_shader, a_pixel, a_descriptor, a_pixel, nullptr, true) : StagePtr{};
+		auto pulledColour = lighting && a_pixel ? stages->Request(*this, a_shader, true, a_descriptor, false, nullptr, true) : StagePtr{};
 		// Stay inside CS's bounded compilation workers until this task is done, including cache hits. CS's workers, not
 		// DCLF's: the compiles run on DCLF's pool, which never waits on these.
-		for (const auto* requested : { &stage, &depth, &pulled }) {
+		for (const auto* requested : { &stage, &depth, &pulled, &pulledColour }) {
 			if (!*requested) continue;
 			(*requested)->done.wait(false, std::memory_order_acquire);
 			const auto& artifact = *(*requested)->artifact;
@@ -774,11 +784,12 @@ namespace DCLF
 		auto& slot = entries[id];
 		if (!slot) {
 			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Lighting), id, &laneStats.requested, laneStats.failed, [&]([[maybe_unused]] bool* a_created) {
-				return std::array<StagePtr, 5>{ stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &a_created[0]),
+				return std::array<StagePtr, 6>{ stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &a_created[0]),
 					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, false, &a_created[1]),
 					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &a_created[2]),
 					stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &a_created[3], true),
-					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &a_created[4], true) };
+					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &a_created[4], true),
+					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, false, &a_created[5], true) };
 			});
 			if (a_onDemand)
 				*a_onDemand = slot->onDemand;
@@ -794,7 +805,13 @@ namespace DCLF
 		auto& slot = familyEntries[static_cast<std::size_t>(a_family)][id];
 		if (!slot)
 			MakeEntry(slot, static_cast<std::uint8_t>(FamilyUser(a_family)), id, &laneStats.requested, laneStats.failed, [&](bool*) {
-				return std::array<StagePtr, 2>{ stages->Request(*this, a_shader, false, a_key.vertexDescriptor), stages->Request(*this, a_shader, true, a_key.pixelDescriptor) };
+				// Program's order: vertex, pixel, (depth pixel: the pixel again), pulled vertex, (pulled depth pixel: the pulled pixel again),
+				// pulled pixel. A stage listed twice is waited for once each (Await), harmlessly.
+				auto vertex = stages->Request(*this, a_shader, false, a_key.vertexDescriptor);
+				auto pixel = stages->Request(*this, a_shader, true, a_key.pixelDescriptor);
+				auto pulledVertex = stages->Request(*this, a_shader, false, a_key.vertexDescriptor, false, nullptr, true);
+				auto pulledPixel = stages->Request(*this, a_shader, true, a_key.pixelDescriptor, false, nullptr, true);
+				return std::array<StagePtr, 6>{ vertex, pixel, pixel, pulledVertex, pulledPixel, pulledPixel };
 			});
 		return Found(slot.get(), a_failed);
 	}
@@ -1015,7 +1032,8 @@ namespace DCLF
 					auto& entry = *familyEntries[f].find(id)->second;
 					FinishEntry(entry, &laneStats.ready, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
 						if (loggedFailures++ < kMaxLoggedFailures)
-							logger::warn("[DCLF] SPIR-V build of {} {} {:08X} failed; its {}:\n{}", family.name, a_stage ? "PS" : "VS", a_stage ? pixel : familyVertex,
+							logger::warn("[DCLF] SPIR-V build of {} {}{} {:08X} failed; its {}:\n{}", family.name, a_stage == 0 || a_stage == 3 ? "VS" : "PS",
+								a_stage >= 3 ? " (pulled)" : "", a_stage == 0 || a_stage == 3 ? familyVertex : pixel,
 								family.nativeNote, a_artifact.diagnostics.substr(0, 1500));
 					});
 					if (entry.program)
@@ -1028,9 +1046,10 @@ namespace DCLF
 			a_finished.lighting.push_back(id);
 			OnDemandOutcome(fmt::format("Lighting VS {:08X} PS {:08X}", vertex, pixel).c_str(), entry.onDemand, entry.requested,
 				{ { kOnDemandVertex, &ArtifactOf(entry.stages[0]) }, { kOnDemandPixel, &ArtifactOf(entry.stages[1]) }, { kOnDemandDepthPixel, &ArtifactOf(entry.stages[2]) },
-					{ kOnDemandPulledVertex, &ArtifactOf(entry.stages[3]) }, { kOnDemandPulledDepthPixel, &ArtifactOf(entry.stages[4]) } });
+					{ kOnDemandPulledVertex, &ArtifactOf(entry.stages[3]) }, { kOnDemandPulledDepthPixel, &ArtifactOf(entry.stages[4]) },
+					{ kOnDemandPulledPixel, &ArtifactOf(entry.stages[5]) } });
 			FinishEntry(entry, &laneStats.ready, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
-				static constexpr const char* kStages[] = { "VS", "PS", "PS (depth)", "VS (pulled)", "PS (pulled depth)" };
+				static constexpr const char* kStages[] = { "VS", "PS", "PS (depth)", "VS (pulled)", "PS (pulled depth)", "PS (pulled)" };
 				if (loggedFailures++ < kMaxLoggedFailures)
 					logger::warn("[DCLF] SPIR-V build of Lighting {} {:08X} failed:\n{}", kStages[a_stage], a_stage == 0 || a_stage == 3 ? vertex : pixel, a_artifact.diagnostics.substr(0, 1500));
 			});
