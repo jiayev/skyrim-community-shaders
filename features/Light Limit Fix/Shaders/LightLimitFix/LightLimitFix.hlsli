@@ -134,7 +134,7 @@ namespace LightLimitFix
 			float sum = 0.0;
 			[loop] for (uint i = 0; i < 8; i += stride)
 			{
-				float2 offset = mul(Random::SpiralSampleOffsets8[i], rotationMatrix) * radiusUV;
+				float2 offset = mul(Random::SpiralSampleOffset8(i), rotationMatrix) * radiusUV;
 				sum += SampleLocalShadowTap(shadowMaps, samp, slice, clamp(uv + offset, clampMin, clampMax), receiverDepth, texel);
 			}
 			shadow = sum * (stride == 1 ? 0.125 : 0.25);

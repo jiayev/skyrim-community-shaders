@@ -100,6 +100,8 @@ namespace NvPerf
 		std::vector<MetricRequest> unsupportedMetrics;
 		std::vector<RangeResult> rangeResults;
 		std::vector<RangeSummary> summary;
+		// Selected graph passes that ran on a queue the profiler does not measure (Vulkan: compute, copy): never in rangeResults.
+		std::vector<std::string> otherQueueRanges;
 		std::filesystem::path csvPath;
 	};
 
@@ -161,8 +163,9 @@ namespace NvPerf
 	 * Probe.
 	 */
 	void RegisterVulkanDevice(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::PersistentGraphHost& a_host);
-	/// Whether CS_NVPERF_RANGES requests a headless capture: read at startup, so the engine's perf events are turned on
-	/// before the capture (most engine passes are only hooked with Frame Annotations on at startup).
+	/// Whether CS_NVPERF_RANGES (a capture) or CS_NVPERF_TEMPLATE (a trace, NvPerfTrace.h) requests a headless run: read at
+	/// startup, so the engine's perf events are turned on before it (most engine passes are only hooked with Frame
+	/// Annotations on at startup).
 	bool EnvironmentRequested();
 
 	/// Queues a capture; it starts at the next Present. Fails while another is pending or running.

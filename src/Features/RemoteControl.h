@@ -61,6 +61,8 @@ public:
 	RemoteControl& operator=(RemoteControl&&) = delete;
 
 private:
+	void DrawNvPerfTraces();
+
 	// The Nsight Perf section's inputs. UI state only: nothing here is saved.
 	struct NvPerfPanel
 	{
@@ -80,6 +82,12 @@ private:
 		};
 		std::vector<RecentCapture> recent;  // newest first
 		std::uint64_t viewedCaptureId = 0;  // 0: the newest
+		// Traces (NvPerfTrace.h).
+		std::string traceTemplate = "dclf-passes";
+		std::string traceLabel;
+		std::string traceBaseline;  // a saved report's label, empty: none
+		std::string traceError;
+		int traceRows = 40;
 	} nvperfPanel;
 
 	static constexpr std::size_t kMaxRecentNvPerfCaptures = 8;

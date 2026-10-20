@@ -179,6 +179,7 @@ Read from the environment only.
 | `CS_GPU_EVENT_TIMERS` | `GpuEventTimers.cpp` | `<frames>`: GPU time per engine event, logged every that many frames. Works with DCLF off. |
 | `CS_GPU_IDLE_TRACE` | `GpuIdleTrace.cpp` | `<frames>`: GPU idle attribution, one summary per that many analysed frames. |
 | `CS_NVPERF_RANGES` | `Features/RemoteControl/NvPerf.cpp` | A headless Nsight Perf range capture (with `CS_NVPERF_START_FRAME`, `CS_NVPERF_SAMPLES`, `CS_NVPERF_METRICS`, `CS_NVPERF_CSV`). See [nsight-perf.md](./nsight-perf.md). |
+| `CS_NVPERF_TEMPLATE` | `Features/RemoteControl/NvPerfTrace.cpp` | A headless Nsight Perf trace of a template (with `CS_NVPERF_LABEL`, `CS_NVPERF_BASELINE`, `CS_NVPERF_START_FRAME`, `CS_NVPERF_SAMPLES`, `CS_NVPERF_REPEATS`). See [nsight-perf.md](./nsight-perf.md). |
 
 `CS_ORG_LLF_PARITY` (`LightLimitFix.cpp`) is Light Limit Fix's own parity and is not DCLF's. The tree wind report's text names
 a `CS_DCLF_TREE_LIST=0` mode, but no such switch exists: the animation list is always DCLF's.

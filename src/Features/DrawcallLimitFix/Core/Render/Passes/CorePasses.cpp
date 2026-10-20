@@ -116,19 +116,25 @@ namespace DCLF::Draws
 				if (!frame || !BuildsDraws(a_preparation, *main, RenderGraphRuntime::Segment::MainOpaque))
 					return ForwardSortSource{ frame ? frame->generation : 0 };
 				ForwardSortSource source{ frame->generation, main->forwardSort };
+				constexpr auto kWord = static_cast<std::uint32_t>(sizeof(std::uint32_t));
+				// The decal buckets' pairs (CS_DCLF_DECAL_PLAIN; keyed by their engine ordinal), ranked into firstInstance for the plain draw.
+				if (frame->classPlan)
+					for (std::size_t b = 0; b < frame->classPlan->decals.size(); ++b) {
+						const auto& bucket = frame->classPlan->decals[b];
+						source.ranges.push_back({ bucket.first, bucket.capacity, frame->classPlan->DecalCountWord(b) * kWord, ForwardSortConstants::kRankInstance });
+					}
 				// The forward buckets' pairs (CS_DCLF_FORWARD_PLAIN), each counted by its classCounts word past the classes', ranked into
 				// firstInstance for the plain draw.
 				if (frame->classPlan && !frame->classPlan->forward.empty()) {
 					const auto& plan = *frame->classPlan;
 					for (std::size_t b = 0; b < plan.forward.size(); ++b)
-						source.ranges.push_back({ plan.forward[b].first, plan.forward[b].capacity, plan.ForwardCountWord(b) * static_cast<std::uint32_t>(sizeof(std::uint32_t)) });
-					source.options = ForwardSortConstants::kRankInstance;
+						source.ranges.push_back({ plan.forward[b].first, plan.forward[b].capacity, plan.ForwardCountWord(b) * kWord, ForwardSortConstants::kRankInstance });
 					return source;
 				}
 				// Each state class's forward pair (its staging half, then its sorted half), counted by its classCounts word.
 				for (std::uint32_t c = 0; c < frame->classes.size(); ++c)
 					if (const auto& range = frame->classes[c].ranges[kClassRangeForward]; range.capacity)
-						source.ranges.push_back({ range.first, range.capacity, ClassCountWord(c, kClassRangeForward) * static_cast<std::uint32_t>(sizeof(std::uint32_t)) });
+						source.ranges.push_back({ range.first, range.capacity, ClassCountWord(c, kClassRangeForward) * kWord });
 				return source;
 			});
 		}

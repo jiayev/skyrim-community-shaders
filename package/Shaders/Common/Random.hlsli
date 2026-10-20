@@ -16,6 +16,23 @@ namespace Random
 		{ 0.1250, 0.0000 }
 	};
 
+	/**
+	 * SpiralSampleOffsets8[i] for a run-time i. FXC puts a dynamically indexed const array in an immediate constant buffer; DXC
+	 * builds it in local memory, written by every invocation at the shader's entry (64 bytes a pixel in Lighting, read or not),
+	 * so under DXC the same constants are selected instead.
+	 */
+	float2 SpiralSampleOffset8(uint i)
+	{
+#if defined(__hlsl_dx_compiler)
+		float2 offset = SpiralSampleOffsets8[7];
+		[unroll] for (uint k = 0; k < 7; ++k)
+			offset = i == k ? SpiralSampleOffsets8[k] : offset;
+		return offset;
+#else
+		return SpiralSampleOffsets8[i];
+#endif
+	}
+
 	const static float2 PoissonSampleOffsets16[] = {
 		{ -0.39721655431143005f, 0.8056832047758435f },
 		{ 0.5039282018939948f, 0.8175656806923035f },

@@ -102,10 +102,8 @@ struct VS_OUTPUT
 #	endif
 #endif
 #if defined(DCLF_PULLED)
-	// Drawcall Limit Fix's plain draws (DCLF_PULLED; Lighting.hlsl's): the draw's material and pipeline rows' addresses and its object
-	// word, which the pixel stage would otherwise have from the draw's push data.
-	nointerpolation uint4 DCLFDraw: TEXCOORD15;
-	nointerpolation uint DCLFDrawObject: TEXCOORD14;
+	// Drawcall Limit Fix's plain draws (DCLF_PULLED; Lighting.hlsl's): the draw's instance, by which the pixel stage reads its sequence.
+	nointerpolation uint DCLFDrawInstance: TEXCOORD15;
 #endif
 };
 
@@ -567,7 +565,7 @@ void DCLFPermutationStatics()
 // (DCLFFrameFog).
 VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 {
-	const uint64_t sequence = DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
+	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
 	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
 	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
@@ -589,8 +587,7 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	second.stride = streamBuffer.w;
 	VS_OUTPUT vsout = DCLFShade(DCLFPulledInput(index, first, second));
 #			endif
-	vsout.DCLFDraw = rows.zwxy;
-	vsout.DCLFDrawObject = DCLFObjectWord;
+	vsout.DCLFDrawInstance = a_instance;
 	return vsout;
 }
 #		else
@@ -1319,9 +1316,11 @@ void DCLFPermutationStatics()
 // main), and so the rows' blocks and the object's values, assigned before anything reads them.
 PS_OUTPUT main(PS_INPUT input)
 {
-	DCLFObjectWord = input.DCLFDrawObject;
-	DCLFPipelineRowAddress = DCLFAddress(input.DCLFDraw.zw);
-	DCLFMaterialRowAddress = DCLFAddress(input.DCLFDraw.xy);
+	const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
+	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
+	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
+	DCLFMaterialRowAddress = DCLFAddress(rows.zw);
 	DCLFPerMaterialStatics();
 	DCLFPerGeometryStatics();
 	DCLFPermutationStatics();

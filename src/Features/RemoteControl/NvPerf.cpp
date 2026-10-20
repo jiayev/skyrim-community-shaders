@@ -1,6 +1,7 @@
 #include "Features/RemoteControl/NvPerf.h"
 
 #include "Features/RemoteControl/NvPerfBackend.h"
+#include "Features/RemoteControl/NvPerfTrace.h"
 
 #include "DxvkLoader.h"
 #include "Features/RemoteControl/NvPerfHost.h"
@@ -276,6 +277,12 @@ namespace NvPerf
 			logger::info("[NvPerf] capture {} (frames {}-{}, {} samples x {} passes, chip {}): {} ranges{}", a_result.id, a_result.startFrame,
 				a_result.endFrame, a_result.samples, a_result.passesPerSample, a_result.chipName, a_result.rangeResults.size(),
 				a_result.success ? "" : std::format(" ({})", a_result.error));
+			if (!a_result.otherQueueRanges.empty()) {
+				std::string names;
+				for (const auto& name : a_result.otherQueueRanges)
+					names += std::format("{}{}", names.empty() ? "" : ", ", name);
+				logger::warn("[NvPerf]   {} selected passes ran on another queue and were not measured: {}", a_result.otherQueueRanges.size(), names);
+			}
 			for (const auto& entry : a_result.summary) {
 				std::string text;
 				for (std::size_t m = 0; m < a_result.metrics.size() && m < entry.values.size(); ++m)
@@ -469,8 +476,12 @@ namespace NvPerf
 		void Finish(Profiler& a_profiler, std::string a_error)
 		{
 			auto& capture = *a_profiler.capture;
-			if (auto* backend = g_backend.load(std::memory_order_acquire))
+			if (auto* backend = g_backend.load(std::memory_order_acquire)) {
 				backend->End(capture);
+				for (auto& name : backend->TakeOtherQueueRanges())
+					if (PerfEventSelected(capture.configuration.ranges, name))
+						capture.result.otherQueueRanges.push_back(std::move(name));
+			}
 			Host::SetFrameAnnotations(capture.previousFrameAnnotations);
 
 			auto& result = capture.result;
@@ -564,7 +575,9 @@ namespace NvPerf
 		// default DefaultMetrics()), CS_NVPERF_CSV overrides CsvPath().
 		void QueueEnvironmentCapture(Profiler& a_profiler)
 		{
-			if (a_profiler.environmentHandled || !EnvironmentRequested())
+			// CS_NVPERF_RANGES alone: EnvironmentRequested also answers for CS_NVPERF_TEMPLATE, whose trace queues its own captures.
+			static const bool requested = !Split(Env("CS_NVPERF_RANGES")).empty();
+			if (a_profiler.environmentHandled || !requested)
 				return;
 			{
 				std::lock_guard lock(a_profiler.mutex);
@@ -650,7 +663,7 @@ namespace NvPerf
 
 	bool EnvironmentRequested()
 	{
-		static const bool requested = !Split(Env("CS_NVPERF_RANGES")).empty();
+		static const bool requested = !Split(Env("CS_NVPERF_RANGES")).empty() || Trace::EnvironmentRequested();
 		return requested;
 	}
 
@@ -705,6 +718,7 @@ namespace NvPerf
 		auto& profiler = Get();
 		++profiler.presents;
 		QueueEnvironmentCapture(profiler);
+		Trace::OnPresentEnd(profiler.presents);
 		std::optional<std::pair<std::uint64_t, CaptureConfiguration>> pending;
 		bool cancel = false;
 		{

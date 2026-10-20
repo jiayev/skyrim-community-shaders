@@ -198,8 +198,8 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 				if (shadow.notReadyReasons[r])
 					notReadyReasons += fmt::format(" {}={}", DCLF::kShadowNotReadyNames[r], shadow.notReadyReasons[r]);
 			}
-			logger::info("[DCLF] shadow views: {} offered, {} drawn in {} epochs ({} slots kept with no work), {} not ready ({}), {} focus views and {} uncovered left native; last mode {} inputs ({} without a pipeline, {} without a texture), {} records; CPU {:.3f} ms per frame ({:.3f} capturing, {:.3f} preparing, {:.3f} inputs, {:.3f} blocks, {:.3f} graph)",
-				shadow.views, shadow.viewsDrawn, shadow.epochs, shadow.retainedViews, shadow.notReady, notReadyReasons.empty() ? "-" : notReadyReasons.c_str() + 1, shadow.focusSkipped, shadow.uncovered, shadow.inputs, shadow.skippedPipeline,
+			logger::info("[DCLF] shadow views: {} offered, {} drawn in {} epochs ({} slots kept with no work, {} epochs recording only those in use), {} not ready ({}), {} focus views and {} uncovered left native; last mode {} inputs ({} without a pipeline, {} without a texture), {} records; CPU {:.3f} ms per frame ({:.3f} capturing, {:.3f} preparing, {:.3f} inputs, {:.3f} blocks, {:.3f} graph)",
+				shadow.views, shadow.viewsDrawn, shadow.epochs, shadow.retainedViews, shadow.narrowedEpochs, shadow.notReady, notReadyReasons.empty() ? "-" : notReadyReasons.c_str() + 1, shadow.focusSkipped, shadow.uncovered, shadow.inputs, shadow.skippedPipeline,
 				shadow.skippedTexture, shadow.records, (shadow.cpuMs + shadow.captureMs) / frames, shadow.captureMs / frames, shadow.prepareMs / frames, shadow.inputsMs / frames, shadow.blocksMs / frames,
 				shadow.executeMs / frames);
 			if (shadow.views)

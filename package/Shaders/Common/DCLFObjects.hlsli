@@ -151,6 +151,11 @@ static uint2 DCLFDrawVertexLayout;
 
 uint64_t DCLFAddress(uint2 a_words) { return (uint64_t(a_words.y) << 32) | uint64_t(a_words.x); }
 
+#		if defined(DCLF_PULLED)
+// A pulled draw's sequence, by its instance: the vertex stage's SV_InstanceID, or the pixel stage's flat copy of it.
+uint64_t DCLFDrawSequence(uint a_instance) { return DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride; }
+#		endif
+
 #		if defined(DCLF_PULLED_VERTICES)
 // The draw's vertex layout, from its pipeline row (DrawPipelines.h, PipelineRowHeader::vertexLayout, at kPipelineRowHeader + 56;
 // DCLFPipelineVertexLayout's read in a pulled build), whose address is the draw's push data's.

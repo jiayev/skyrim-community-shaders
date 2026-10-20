@@ -125,10 +125,10 @@ struct VS_OUTPUT
 
 	float3 ModelPosition: TEXCOORD12;
 #if defined(DCLF_PULLED)
-	// Drawcall Limit Fix's pulled Z-prepass (DCLF_PULLED): the draw's material and pipeline rows' addresses and its object word,
-	// which the pixel stage would otherwise have from the draw's push data.
-	nointerpolation uint4 DCLFDraw: TEXCOORD15;
-	nointerpolation uint DCLFDrawObject: TEXCOORD14;
+	// Drawcall Limit Fix's plain draws (DCLF_PULLED): the draw's instance, by which the pixel stage reads its sequence as the vertex
+	// stage does (DCLFDrawSequence). One flat word: the five the stage reads (its rows and object word) cost a pixel shader 60 bytes of
+	// attribute storage a warp, which cost the terrain shader a warp of occupancy.
+	nointerpolation uint DCLFDrawInstance: TEXCOORD15;
 #endif
 };
 #ifdef VSHADER
@@ -509,10 +509,9 @@ void DCLFRowStatics(uint4 a_rows)
 
 VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 {
-	const uint64_t sequence = DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
-	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
+	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
-	DCLFRowStatics(rows);
+	DCLFRowStatics(vk::RawBufferLoad<uint4>(sequence + 4));  // the pipeline row's address, the material row's
 	DCLFDrawVertexLayout = DCLFPipelineVertexLayout();
 	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
 	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
@@ -529,8 +528,7 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	// call in the word a shadow view's vertex layout takes (DrawPipelines.h, kZDrawPushOffsetDepth): 0 for every other Z-prepass call.
 	if (DCLFVertexLayout.x != 0)
 		vsout.Position.z += 10.0;
-	vsout.DCLFDraw = rows.zwxy;
-	vsout.DCLFDrawObject = DCLFObjectWord;
+	vsout.DCLFDrawInstance = a_instance;
 	return vsout;
 }
 #	elif defined(DCLF_PULLED_VERTICES)
@@ -3910,11 +3908,12 @@ void DCLFPixelObjectStatics()
 #		endif
 }
 
-// Drawcall Limit Fix's pulled Z-prepass (DCLF_PULLED): the draw's object word and rows are its vertex stage's.
+// Drawcall Limit Fix's plain draws (DCLF_PULLED): the draw's object word and rows are its sequence's, as its vertex stage read them.
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
-	DCLFObjectWord = input.DCLFDrawObject;
-	DCLFRowStatics(input.DCLFDraw.zwxy);
+	const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
+	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+	DCLFRowStatics(vk::RawBufferLoad<uint4>(sequence + 4));
 	DCLFPixelObjectStatics();
 	return DCLFShadePS(input, frontFace);
 }

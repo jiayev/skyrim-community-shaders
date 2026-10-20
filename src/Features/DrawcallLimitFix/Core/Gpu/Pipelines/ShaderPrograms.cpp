@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <mutex>
@@ -13,6 +15,7 @@
 #include <span>
 #include <sstream>
 #include <string_view>
+#include <unordered_set>
 
 #include <Tracy/Tracy.hpp>
 
@@ -149,8 +152,54 @@ namespace DCLF
 			PulledBlock block{};
 			bool inBlock = false, opened = false;
 			std::ostringstream assignments;  // the block's DCLFPer<Block>Statics body, its #if lines with it
-			std::uint32_t textures = 0, samplers = 0, members = 0;
+			std::uint32_t textures = 0, samplers = 0, members = 0, lazy = 0;
+			const std::unordered_set<std::string>* eager = nullptr;  // members kept as statics (EagerRowNames); none when null
 		};
+
+		/**
+		 * @brief The names a block member may not be a macro of: every identifier the shader sources name as a field (".name") or
+		 * assign or declare ("name =", "name +=", "name[i] ="), so a macro would rewrite a struct member, a local or a write.
+		 * Read once from every shader file (RenderGraphRuntime::ShaderSourceFiles).
+		 */
+		const std::unordered_set<std::string>& EagerRowNames()
+		{
+			static const std::unordered_set<std::string> names = [] {
+				std::unordered_set<std::string> out;
+				const auto word = [](char a_c) { return std::isalnum(static_cast<unsigned char>(a_c)) || a_c == '_'; };
+				for (const auto& path : RenderGraphRuntime::ShaderSourceFiles()) {
+					std::ifstream file(path, std::ios::binary);
+					const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+					for (std::size_t i = 0; i < text.size(); ++i) {
+						if (text[i] == '.' && i + 1 < text.size() && (std::isalpha(static_cast<unsigned char>(text[i + 1])) || text[i + 1] == '_')) {
+							std::size_t end = i + 1;
+							while (end < text.size() && word(text[end]))
+								++end;
+							out.emplace(text.substr(i + 1, end - i - 1));
+						} else if (text[i] == '=' && (i + 1 >= text.size() || text[i + 1] != '=') && i > 0 && text[i - 1] != '=' && text[i - 1] != '!' &&
+								   text[i - 1] != '<' && text[i - 1] != '>') {
+							std::size_t end = i;
+							if (std::strchr("+-*/|&^%", text[end - 1]))
+								--end;
+							while (end > 0 && std::isspace(static_cast<unsigned char>(text[end - 1])))
+								--end;
+							if (end > 0 && text[end - 1] == ']') {  // an element's write
+								while (end > 0 && text[end - 1] != '[')
+									--end;
+								if (end > 0)
+									--end;
+							}
+							std::size_t begin = end;
+							while (begin > 0 && word(text[begin - 1]))
+								--begin;
+							if (begin < end)
+								out.emplace(text.substr(begin, end - begin));
+						}
+					}
+				}
+				return out;
+			}();
+			return names;
+		}
 
 		// A block member: a static, and its assignment from the row; false when it is not one the rows can hold.
 		bool PulledMember(const std::smatch& a_match, PulledRewrite& a_rewrite)
@@ -166,6 +215,14 @@ namespace DCLF
 			const std::uint32_t component = a_match[7].matched ? static_cast<std::uint32_t>(std::string("xyzw").find(a_match[7].str()[0])) : 0u;
 			const std::uint32_t offset = static_cast<std::uint32_t>(std::stoul(a_match[6].str())) * 16 + component * 4;
 			const auto source = [&](std::uint32_t a_offset) { return fmt::format("{}({}, {} + {})", PulledRowLoad(type), block.row, block.offset, a_offset); };
+			// A member nothing writes or names as a field: a load where it is read (CS_DCLF_LAZY_ROWS), so the stage holds no register for it
+			// between its entry and its use. Statics loaded at entry live through the whole stage; a large block (Landscape's) spills.
+			if (a_rewrite.eager && !a_match[5].matched && !a_rewrite.eager->contains(name)) {
+				out << a_match[1].str() << "#define " << name << " (" << source(offset) << ")" << a_match[8].str() << "\n";
+				++a_rewrite.members;
+				++a_rewrite.lazy;
+				return true;
+			}
 			out << a_match[1].str() << "static " << a_match[2].str() << type << " " << name << (a_match[5].matched ? "[" + a_match[5].str() + "]" : std::string{}) << ";" << a_match[8].str()
 				<< "\n";
 			if (a_match[5].matched) {
@@ -251,6 +308,9 @@ namespace DCLF
 			static const std::regex cbuffer(R"(^\s*cbuffer\s+(PerTechnique|PerMaterial|PerGeometry)\s*:\s*register\(\s*b([012])\s*\).*$)");
 			std::istringstream in(text);
 			PulledRewrite rewrite;
+			static const bool lazyRows = SwitchOnUnlessZero(Switch::LazyRows);
+			if (lazyRows)
+				rewrite.eager = &EagerRowNames();
 			auto& out = rewrite.out;
 			std::string line;
 			auto fail = [&](const std::string& a_line) {
@@ -283,8 +343,8 @@ namespace DCLF
 				}
 			}
 			const std::string result = out.str();
-			logger::info("[DCLF] Pulled Lighting source: {} texture, {} sampler and {} block member declarations read from the draw's rows", rewrite.textures,
-				rewrite.samplers, rewrite.members);
+			logger::info("[DCLF] Pulled Lighting source: {} texture, {} sampler and {} block member declarations read from the draw's rows ({} where used)",
+				rewrite.textures, rewrite.samplers, rewrite.members, rewrite.lazy);
 			std::vector<std::byte> bytes(result.size());
 			std::memcpy(bytes.data(), result.data(), result.size());
 			return bytes;
@@ -709,9 +769,13 @@ namespace DCLF
 		// The Z-prepass's pulled builds: the vertex stage, and the depth pixel stage; and the plain colour draws' pixel stage.
 		auto pulled = lighting ? stages->Request(*this, a_shader, a_pixel, a_descriptor, a_pixel, nullptr, true) : StagePtr{};
 		auto pulledColour = lighting && a_pixel ? stages->Request(*this, a_shader, true, a_descriptor, false, nullptr, true) : StagePtr{};
+		// A shadow technique's canonical form, which the shadow views' merged pipelines draw with (CanonicalShadowTechnique).
+		static const bool shadowMerge = SwitchOnUnlessZero(Switch::ShadowMerge);
+		const std::uint32_t canonical = !lighting && shadowMerge ? CanonicalShadowTechnique(a_descriptor) : a_descriptor;
+		auto merged = canonical != a_descriptor ? stages->Request(*this, a_shader, a_pixel, canonical) : StagePtr{};
 		// Stay inside CS's bounded compilation workers until this task is done, including cache hits. CS's workers, not
 		// DCLF's: the compiles run on DCLF's pool, which never waits on these.
-		for (const auto* requested : { &stage, &depth, &pulled, &pulledColour }) {
+		for (const auto* requested : { &stage, &depth, &pulled, &pulledColour, &merged }) {
 			if (!*requested) continue;
 			(*requested)->done.wait(false, std::memory_order_acquire);
 			const auto& artifact = *(*requested)->artifact;

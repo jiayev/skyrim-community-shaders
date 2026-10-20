@@ -77,6 +77,9 @@ namespace DCLF
 		std::uint32_t shadowLoggedTargets = 0;
 		void ReadShadowCullCounters(std::uint32_t a_frame, IndirectDraws::ShadowStats& a_stats);
 		std::vector<PendingView> pendingViews;
+		// The placements the last shadow epoch's views took (bit: slot - kFirstShadowViewSlot), posted as a revision input: the revisions
+		// make a recording for each recent set (ShadowFrame::activeViews), and an epoch takes the narrowest one covering its views.
+		std::uint64_t lastActiveViews = 0;
 		// Per occlusion view: its view, its pipelines' state and format, and the frame whose commit uploaded its occluders.
 		struct OcclusionState
 		{
@@ -152,6 +155,7 @@ namespace DCLF
 		 */
 		std::vector<ShadowViewLayout> PredictedOcclusion(const ToggleSet* a_toggles) const;
 		static constexpr std::size_t kRecentOcclusionLayouts = 4;
+		static constexpr std::size_t kRecentActiveViews = 4;
 		/** @brief A view rasterizer state's map row's buckets, from a_cache (the revision producer's). */
 		static const RowBuckets& ShadowRowBuckets(RowBucketsCache& a_cache, std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups,
 			const ShadowIndirectState& a_indirect);

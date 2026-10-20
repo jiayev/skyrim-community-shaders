@@ -219,6 +219,36 @@ namespace DCLF
 	};
 	static_assert(std::has_unique_object_representations_v<ShadowPipelineKey>);
 
+	/**
+	 * @brief A shadow view's Utility technique (mode bits included) reduced to the bits its depth-only output depends on
+	 * (package/Shaders/Utility.hlsl), so casters whose techniques differ only in the others share a pipeline and a bucket. The
+	 * position takes SKINNED, LOD_LANDSCAPE, the mode bits, and VC with NORMALS under TREE_ANIM (the wind); without ALPHA_TEST
+	 * nothing else reaches the output (the pixel stage is empty, or a paraboloid's discard by position). With it, the alpha takes
+	 * TEXTURE, VC unless TREE_ANIM or LOD_OBJECT: only NORMALS goes, unless the wind needs it. 0x10, 0x20 and 0x40 compile to no define.
+	 * SKINNED, and an alpha-tested caster's VC without TREE_ANIM, are taken per draw instead (Utility.hlsl, DCLFShadowVertex, from the
+	 * draw's caster technique: ShadowSlotEntry), so the build always has them. An occlusion map's (RENDER_DEPTH without RENDER_SHADOWMAP)
+	 * is kept whole.
+	 */
+	inline std::uint32_t CanonicalShadowTechnique(std::uint32_t a_technique)
+	{
+		constexpr std::uint32_t kVc = 1u << 0, kTexture = 1u << 1, kSkinned = 1u << 2, kNormals = 1u << 3, kNoDefine = 0x70u, kAlphaTest = 1u << 7,
+								kRenderDepth = 1u << 13, kRenderShadowmap = 1u << 14, kTreeAnim = 1u << 26, kLodObject = 1u << 27;
+		if ((a_technique & kRenderShadowmap) == 0 || (a_technique & kRenderDepth) != 0)
+			return a_technique;
+		std::uint32_t technique = a_technique & ~kNoDefine;
+		const bool vc = (technique & kVc) != 0, normals = (technique & kNormals) != 0, treeAnim = (technique & kTreeAnim) != 0;
+		if ((technique & kAlphaTest) == 0) {
+			technique &= ~(kTexture | kLodObject);
+			if (!(vc && normals && treeAnim))
+				technique &= ~(kVc | kNormals | kTreeAnim);
+		} else if (!(vc && treeAnim)) {
+			technique &= ~kNormals;
+			if (!treeAnim)
+				technique |= kVc;
+		}
+		return technique | kSkinned;
+	}
+
 	struct ShadowPipelineKeyHash
 	{
 		using is_avalanching = void;

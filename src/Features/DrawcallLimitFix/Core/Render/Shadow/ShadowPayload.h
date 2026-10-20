@@ -241,6 +241,7 @@ namespace DCLF::Draws
 		// parity names its revision's).
 		std::shared_ptr<const org::LatchBlock> latch, zeros;
 		ShadowLatchLayout latchLayout;
+		std::shared_ptr<const std::vector<ShadowSlotEntry>> slotLayouts;  // ShadowFrame::slotLayouts
 	};
 	std::shared_ptr<ShadowFrame> MakeShadowShape(const ShadowResources& a_resources, const ShadowShapeInputs& a_in);
 	/**

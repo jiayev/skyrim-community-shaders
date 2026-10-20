@@ -135,6 +135,7 @@ namespace DCLF
 		std::uint32_t views = 0;           // views offered (captured by the hook), per report interval
 		std::uint64_t sunEntryChecks = 0, sunEntryMismatches = 0;  // CS_DCLF_PERSISTENT_PARITY: the GPU sun-entry test on the latch against the CPU verdict
 		std::uint32_t viewsDrawn = 0;      // views drawn by an epoch
+		std::uint32_t narrowedEpochs = 0;  // epochs that drew a variant recording only the placements in use (ShadowFrame::activeViews)
 		std::uint32_t retainedViews = 0;   // view slots kept in an epoch's shape with no work (a view that comes and goes)
 		std::uint32_t epochs = 0;          // shadow epochs run (one per frame with views)
 		std::uint32_t notReady = 0;        // views skipped: resources, pipelines or the depth import not ready

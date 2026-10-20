@@ -85,6 +85,10 @@ namespace NvPerf::detail
 		virtual void PushRange(Capture& a_capture, std::string_view a_name) = 0;
 		virtual void PopRange() = 0;
 
+		/// The selected passes that ran on a queue the profiler does not measure since the last call (Vulkan: the compute and
+		/// copy queues), for the result's otherQueueRanges.
+		virtual std::vector<std::string> TakeOtherQueueRanges() { return {}; }
+
 		virtual bool CommandBufferRangesActive() const noexcept { return false; }
 		virtual bool PushCommandBufferRange(void*, const char*) { return false; }
 		virtual void PopCommandBufferRange(void*, bool) {}

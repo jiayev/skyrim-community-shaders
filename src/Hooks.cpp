@@ -40,6 +40,7 @@
 #include "Features/Upscaling/DXVKInterop.h"
 #include "Features/Upscaling/Streamline.h"
 #include "Features/VolumetricLighting.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 #include "Utils/ImportCallSites.h"
 
 #include <xmmintrin.h>
@@ -514,6 +515,11 @@ struct IDXGISwapChain_Present
 		streamline->SetPCLMarker(Streamline::PclMarker::TriggerFlash);
 		streamline->SetPCLMarker(Streamline::PclMarker::PresentStart);
 
+		// The render thread's pacing point (RenderGraphRuntime::SignalFramePace): the frame's end in DXVK's stream, unless frame
+		// generation paces the present itself.
+		const bool pacedByCS = !globals::features::upscaling.IsFrameGenerationActive();
+		RenderGraphRuntime::Get().SignalFramePace(pacedByCS);
+
 		HRESULT retval;
 		{
 		ZoneScopedN("CS.Present.Chain");
@@ -540,6 +546,11 @@ struct IDXGISwapChain_Present
 			if (presentSucceeded)
 				dxvk->RefreshPresenterSurfaceState();
 			streamline->CaptureDLSSGPresentState();
+		}
+
+		{
+			ZoneScopedN("CS.Present.FramePace");
+			RenderGraphRuntime::Get().WaitFramePace();
 		}
 
 		// Collect the overlay's frame metrics here rather than from its draw path, so hiding the

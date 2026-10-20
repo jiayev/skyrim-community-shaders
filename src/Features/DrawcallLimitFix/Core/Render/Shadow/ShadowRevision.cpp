@@ -55,6 +55,16 @@ namespace DCLF
 					recent.resize(kRecentOcclusionLayouts);
 			}
 		}
+		// The placements recent shadow epochs drew: a variant for each, which records their views alone.
+		if (const auto active = inputs.shadowActiveViews; active != 0) {
+			auto& recent = producer.recentActiveViews;
+			if (recent.empty() || recent.front() != active) {
+				std::erase(recent, active);
+				recent.insert(recent.begin(), active);
+				if (recent.size() > kRecentActiveViews)
+					recent.resize(kRecentActiveViews);
+			}
+		}
 		// The shadow buffers for what the revisions' shapes name, required at every make.
 		const auto& shadowState = inputs.shadow;
 		if (shadowState && scratch.indirect.valid) {
@@ -123,6 +133,9 @@ namespace DCLF
 			for (const auto& view : layouts)
 				raw(view);
 		}
+		mix(producer.recentActiveViews.size());
+		for (const auto active : producer.recentActiveViews)
+			mix(active);
 		group = ImplProducer::kKeyBound;
 		mix(owner.shadowBoundOutgrown);
 	}
@@ -170,6 +183,12 @@ namespace DCLF
 			}
 			producer.shadowBucketWords = capacity.bucketCountWords;
 			const std::uint64_t viewBlocks = a_sealed.Of(shadowState->viewBlocks.buffer).deviceAddress;
+			// Each key slot's vertex layout and caster technique: the draws find theirs by slot (BuildDrawsLatch::slotLayoutsOffset), not
+			// by bucket.
+			auto slotLayouts = std::make_shared<std::vector<ShadowSlotEntry>>();
+			slotLayouts->reserve(lookups.shadowSlotKeys.size());
+			for (const auto& key : lookups.shadowSlotKeys)
+				slotLayouts->push_back({ key.vertexLayout, key.technique | kShadowSlotTechniqueKnown, 0 });
 			for (std::size_t kind = 0; kind < 2; ++kind) {
 				const bool occlusionKind = kind == 1;
 				// The layouts the epoch may draw: the shadow views' placements (all of them: DecideShadowCoverage) and the occlusion maps'
@@ -196,6 +215,7 @@ namespace DCLF
 					in.viewBlocks = viewBlocks;
 					in.latch = a_sealed.Latch(handles.shadow);
 					in.latchLayout = latches.shadow;
+					in.slotLayouts = slotLayouts;
 					in.zeros = a_sealed.Latch(handles.shadowZeros);
 					// The last shape made for the layout: its slots' capacities only grow.
 					for (const auto& candidate : previousShadow[kind])
@@ -207,6 +227,18 @@ namespace DCLF
 							in.latched.latch = a_sealed.Latch(handles.shadowLatched);
 					}
 					made.shadow[kind].push_back(MakeShadowShape(*shadowState, in));
+					// The shadow epoch's variants for the placements recent frames drew: the same shape, recording those views alone.
+					if (!occlusionKind) {
+						const auto full = made.shadow[kind].back();
+						const std::uint64_t all = full->views.size() >= 64 ? ~0ull : ((1ull << full->views.size()) - 1);
+						for (const auto active : producer.recentActiveViews) {
+							if ((active & all) == all || (active & all) == 0)
+								continue;
+							auto variant = std::make_shared<ShadowFrame>(*full);
+							variant->activeViews = active & all;
+							made.shadow[kind].push_back(std::move(variant));
+						}
+					}
 					seen.push_back(std::move(layouts));
 				}
 			}
@@ -254,6 +286,7 @@ namespace DCLF
 		a_next.shadowRasterStates = drawPipelines.ShadowRasterStateCount();
 		a_next.occlusionLayouts = PredictedOcclusion(nullptr);
 		a_next.shadowPlacements = shadowPlacements;
+		a_next.shadowActiveViews = lastActiveViews;
 		if (shadow && (!postedShadowSlots || postedShadowSlots->sequences.size() != shadow->sequences.size()))
 			postedShadowSlots = std::make_shared<const ShadowSlotBuffers>(ShadowSlotBuffers{ shadow->sequences, shadow->bucketCounts });
 		a_next.shadowSlots = shadow ? postedShadowSlots : nullptr;
