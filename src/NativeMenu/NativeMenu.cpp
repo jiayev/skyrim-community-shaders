@@ -21,12 +21,6 @@ namespace NativeMenu
 		return !sceneSettingsManager || !sceneSettingsManager->IsFeatureSceneControlled(featureShortName);
 	}
 
-	bool IsFeatureEditable(const std::string& featureShortName)
-	{
-		auto* sceneSettingsManager = globals::sceneSettingsManager;
-		return !sceneSettingsManager || !sceneSettingsManager->IsFeatureSceneControlled(featureShortName);
-	}
-
 	void RegisterRows(const char* tab, const std::vector<Row>& rows)
 	{
 		for (const auto& row : rows) {
