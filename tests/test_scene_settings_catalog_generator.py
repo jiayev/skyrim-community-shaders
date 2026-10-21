@@ -97,9 +97,6 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         roots = [
             (f"cloudMap/procedural/parameters/{layer}/range", -16.0, 16.0, -16.0, 16.0)
             for layer in ("primary", "secondary", "coverageGain", "modeling", "modelingGain", "heightVariation")
-        ] + [
-            (f"cloudLayer/cirrus/weather/{index}/range", -1.0, 1.0, 0.0, 1.0)
-            for index in range(2)
         ]
         for path, input_min, input_max, output_min, output_max in roots:
             for component, key in enumerate("xyzw"):
@@ -152,7 +149,7 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
                 self.assertEqual(entry["sourceWidget"], "SliderFloat")
                 self.assertEqual(entry["numericTransform"], "Identity")
                 self.assertEqual(entry["displayNameKey"], f"feature.physical_sky.{label}")
-                self.assertIn("feature.physical_sky.cloud_weather_shape", entry["displayPathKeys"])
+                self.assertIn("feature.physical_sky.composition", entry["displayPathKeys"])
                 self.assertEqual((entry["minimum"], entry["maximum"]),
                                  (0.001 if key == "bottomSpreadHeight" else 0.0, 1.0))
         for key in ("coverageBottomPower", "coverageHeightRange", "bottomDensityPower",

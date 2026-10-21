@@ -3,7 +3,7 @@
     "features": {
         "CloudShadows": 1,
         "DynamicCubemaps": 2,
-        "ExponentialHeightFog": 58,
+        "ExponentialHeightFog": 46,
         "ExtendedMaterials": 6,
         "ExtendedTranslucency": 5,
         "GrassCollision": 1,
@@ -17,6 +17,7 @@
         "LightLimitFix": 3,
         "LinearLighting": 16,
         "PerformanceOverlay": 12,
+        "PhysicalSky": 163,
         "PostProcessing": 291,
         "ScreenSpaceGI": 23,
         "ScreenSpaceShadows": 5,
@@ -29,6 +30,7 @@
         "TerrainVariation": 2,
         "TruePBR": 3,
         "Upscaling": 15,
+        "ViewAtmosphere": 13,
         "VolumetricLighting": 4,
         "WetnessEffects": 27
     }

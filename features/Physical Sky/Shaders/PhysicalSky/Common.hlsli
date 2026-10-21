@@ -7,6 +7,7 @@
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/ViewAtmosphere.hlsli"
 #include "PhysicalSky/ShadowVolume.hlsli"
 
 #if defined(CLOUD_SHADOWS)
@@ -52,6 +53,7 @@ Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);
 Texture3D<float4> TexApLut : register(t63);
 Texture2D<unorm float> TexApShadow : register(t64);
+Texture2D<float4> TexSkyTail : register(t66);
 #endif
 
 	static const float RCP_PI = 1 / Math::PI;  // PI
@@ -369,6 +371,8 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 	float GetApShadow(uint2 pxCoord)
 	{
+		if (ViewAtmosphere::Enabled())
+			return 0.0;
 		return TexApShadow[pxCoord];
 	}
 
@@ -390,6 +394,15 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		return SampleSky(viewDir, GetApShadow(pxCoord), sampSv);
 	}
 
+	float3 SampleViewSky(float3 viewDir, float shadow, SamplerState samp)
+	{
+		if (!ViewAtmosphere::Enabled())
+			return SampleSky(viewDir, shadow, samp);
+		uint width, height;
+		TexSkyTail.GetDimensions(width, height);
+		return TexSkyTail.SampleLevel(samp, SkyViewLutUv(viewDir, height), 0).rgb;
+	}
+
 	float3 SampleTr(float3 lightDir, SamplerState sampSv)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
@@ -401,6 +414,15 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		tr = lerp(1, tr, data.trMix);
 
 		return tr;
+	}
+
+	float3 SampleViewCelestialTr(float3 direction, SamplerState samp)
+	{
+		if (!ViewAtmosphere::Enabled())
+			return SampleTr(direction, samp);
+		const SharedData::PhysSkyData data = SharedData::physSkyData;
+		const float3 origin = float3(0, 0, max(data.zCameraPlanet, data.rPlanet));
+		return lerp(1.0, SampleAtmosphereLightTr(TexTrLut, samp, origin + direction * AP_MAX_DIST, direction), data.trMix);
 	}
 
 #		if defined(CLOUD_SHADOWS) && defined(PS_SKY_SAMPLERS)
@@ -501,6 +523,8 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 	float4 SampleAp(float3 viewDir, float dist, float shadow, SamplerState sampSv)
 	{
+		if (ViewAtmosphere::Enabled())
+			return float4(0, 0, 0, 1);
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 
 		uint3 apDims;
@@ -518,6 +542,8 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 	float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
 	{
+		if (ViewAtmosphere::Enabled())
+			return float4(0, 0, 0, 1);
 		return SampleAp(viewDir, dist, GetApShadow(pxCoord), sampSv);
 	}
 
@@ -568,6 +594,8 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 	float3 CompositeAerialPerspective(float3 color, float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
 	{
+		if (ViewAtmosphere::Enabled())
+			return color;
 		const float4 apSample = SampleAp(viewDir, pxCoord, dist, sampSv);
 		color = color * apSample.w + apSample.xyz;
 
@@ -579,6 +607,8 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 	float3 CompositeAerialPerspective(float3 color, float3 viewDir, float2 screenPos, float2 screenUv, float dist, SamplerState sampSv)
 	{
+		if (ViewAtmosphere::Enabled())
+			return color;
 		const float4 apSample = SampleAp(viewDir, uint2(screenPos), dist, sampSv);
 		color = color * apSample.w + apSample.xyz;
 
@@ -615,7 +645,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 	}
 
 #if !defined(PS_DEFERRED_RSRCS) && (!defined(PS_PREPASS_RSRCS) || defined(PS_ENABLE_DIRLIGHT_TRANSMITTANCE))
-	float3 GetShadowVolumeUvw(float3 posRelative, float3 sunDir)
+	float4 GetShadowVolumeSample(float3 posRelative, float3 sunDir)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 		uint3 dimensions;
@@ -626,7 +656,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		float3 boundsMin = float3(center - 0.5 * data.shadowVolumeRange, data.volCloudLowBottom);
 		float3 boundsMax = float3(center + 0.5 * data.shadowVolumeRange, data.volCloudLowBottom + data.volCloudLowThickness);
 
-		return CloudShadowVolume::GetSampleUvw(posRelative, sunDir, boundsMin, boundsMax);
+		return CloudShadowVolume::GetSample(posRelative, sunDir, boundsMin, boundsMax, dimensions.xy);
 	}
 
 	float3 GetDirlightTransmittance(float3 worldPosAbs, SamplerState samp)
@@ -640,21 +670,43 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		float3 posRelative = worldPosAbs;
 		posRelative.z -= data.zBottom;
 
-		float3 uvw = GetShadowVolumeUvw(posRelative, GetCloudShadowLightDirection());
+		float4 shadowSample = GetShadowVolumeSample(posRelative, GetCloudShadowLightDirection());
 		// The shadow volume has finite support. A ray outside it has no known cloud
 		// occluder; treating the missing path as an average-density cloud shell
 		// creates false full extinction for long, low-angle light paths.
 #	ifdef PS_LINEAR_SHADOW_SAMPLER
-		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, samp, uvw);
+		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, samp, shadowSample);
 #	else
-		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, uvw);
+		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, shadowSample);
 #	endif
 
 		return cloudTransmittance.xxx;
 	}
 #endif
 
+	float3 GetMediumPlanetPosition(float3 position)
+	{
+		return position + float3(0, 0, max(SharedData::physSkyData.zCameraPlanet, SharedData::physSkyData.rPlanet));
+	}
+
+	void GetMediumCoefficients(float3 position, out float3 rayleigh, out float3 mie, out float3 extinction)
+	{
+		const SharedData::PhysSkyData data = SharedData::physSkyData;
+		const float radius = length(GetMediumPlanetPosition(position));
+		if (radius < data.rPlanet || radius > data.rAtmosphere) {
+			rayleigh = mie = extinction = 0.0;
+			return;
+		}
+		float r, m, o;
+		SampleAtmosphere(max(radius - data.rPlanet, 0.0), r, m, o);
+		// Per-kilometre coefficients preserve weak sources in half precision.
+		rayleigh = r * data.rayleighScatter * (1000.0 / GAME_UNIT_TO_M);
+		mie = m * data.aerosolScatter * (1000.0 / GAME_UNIT_TO_M);
+		extinction = rayleigh + mie + (m * data.aerosolAbsorption + o * data.ozoneAbsorption) * (1000.0 / GAME_UNIT_TO_M);
+	}
+
 #ifndef OMIT_PS_NAMESPACE
 }
 #endif
+
 #endif

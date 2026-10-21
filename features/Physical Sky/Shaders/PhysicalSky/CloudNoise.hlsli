@@ -1,6 +1,11 @@
 #ifndef PHYSICAL_SKY_CLOUD_NOISE_HLSLI
 #define PHYSICAL_SKY_CLOUD_NOISE_HLSLI
 
+float CloudDensityExponent(float height)
+{
+	return saturate((height - 0.25) * 4.0) * 0.29999998 + 0.35;
+}
+
 float ReconstructCloudNoiseDensity(float4 noise, float profile, float topType, float height, float distanceMeters)
 {
 	const float erosion = pow(noise.a, 0.45) * -0.3;

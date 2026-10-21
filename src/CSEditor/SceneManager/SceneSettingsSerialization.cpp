@@ -390,8 +390,7 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 	const bool requireNumeric = periodic || requireNumericValue;
 	WidenParsedIntegerToFloat(entry.featureShortName, entry.settingPath, entry.settingKey, entry.value);
 	WidenParsedIntegerToFloat(entry.featureShortName, entry.settingPath, entry.settingKey, entry.originalValue);
-	if (requireNumeric && (!SceneBlend::IsBlendable(entry.value) || !SceneBlend::IsBlendable(entry.originalValue) ||
-							  !std::isfinite(entry.value.get<float>()))) {
+	if (requireNumeric && (!SceneBlend::IsBlendable(entry.value) || !SceneBlend::IsBlendable(entry.originalValue))) {
 		logger::warn("[SceneSettings] {} entry {} is not a blendable setting - skipping",
 			typeName, GetSettingLogName(entry.featureShortName, entry.settingPath, entry.settingKey));
 		return false;

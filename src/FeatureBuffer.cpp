@@ -22,6 +22,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
+#include "Features/ViewAtmosphere.h"
 #include "Features/WetnessEffects.h"
 #include "TruePBR.h"
 
@@ -68,5 +69,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::skin.GetCommonBufferData(),
 		globals::features::horizonFix.GetCommonBufferData(),
 		globals::features::physicalSky.cbData,
-		globals::features::rainRefraction.GetCommonBufferData());
+		globals::features::rainRefraction.GetCommonBufferData(),
+		globals::features::viewAtmosphere.settings);
 }

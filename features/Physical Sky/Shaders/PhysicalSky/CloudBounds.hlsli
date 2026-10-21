@@ -30,7 +30,7 @@ void ReduceCloudHeightBounds(uint index, uint count)
 	{
 		[loop] for (uint x = origin.x + thread.x; x < end.x; x += 8u)
 		{
-			const float2 heights = saturate(TexCloudHeight.Load(int3(x, y, 0)));
+			const float2 heights = saturate(TexCloudHeight.Load(int3(x, y, 0)).rg);
 			bounds = float2(min(bounds.x, heights.x), max(bounds.y, heights.y));
 		}
 	}

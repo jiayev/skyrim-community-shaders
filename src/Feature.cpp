@@ -40,6 +40,7 @@
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
+#include "Features/ViewAtmosphere.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
@@ -261,6 +262,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::terrainBlending,
 		&globals::features::terrainHelper,
 		&globals::features::volumetricLighting,
+		&globals::features::viewAtmosphere,
 		&globals::features::lodBlending,
 		&globals::features::hairSpecular,
 		&globals::features::interiorSun,

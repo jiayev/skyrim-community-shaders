@@ -1,20 +1,6 @@
 #ifndef PHYSICAL_SKY_CLOUD_LIGHTING_HLSLI
 #define PHYSICAL_SKY_CLOUD_LIGHTING_HLSLI
 
-float CloudLightDensity(float extinction, float height)
-{
-	const float h2 = height * height;
-	return extinction * (1.0 + 3.0 * h2 * h2);
-}
-
-float SampleCloudLightDensity(float3 pos, float viewDistance, float minimumMip)
-{
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	CloudDensityContext context;
-	const float extinction = sampleCloudDensity(pos, GetCloudLayer(info), 2.0, viewDistance, minimumMip, context);
-	return CloudLightDensity(extinction, context.ndf.height_fraction);
-}
-
 float CloudLightProbeJitter(float2 positionMeters)
 {
 	const float2 seed = frac(positionMeters * 0.1031);
@@ -22,61 +8,49 @@ float CloudLightProbeJitter(float2 positionMeters)
 	return frac((seed.y + seed.x + scramble * 2.0) * (scramble + seed.x));
 }
 
-float CloudLocalSunOcclusion(float3 pos, float3 viewDir, float height, float viewDistance, float minimumMip)
+// Jendersie and d'Eon, An Approximate Mie Scattering Function (2023).
+float CloudLowPhase(float cosine)
 {
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const uint count = uint(10.0 - saturate((viewDistance - 512.0) * 0.00040192925) * 6.0);
-	const float extentMeters = 240.0 - saturate(height * 3.3333333) * 120.0;
-	const float spacingMeters = extentMeters / count;
-	const float cosine = dot(viewDir, info.dirlightDir);
-	const float forward = saturate(cosine);
-	const float angularOffset = -0.25 * cosine;
-	const float jitter = CloudLightProbeJitter(pos.xy * GAME_UNIT_TO_M);
-	float occlusion = 0.0;
-	[loop] for (uint i = 0u; i < count; ++i)
-	{
-		const float index = i + 0.5;
-		const float fraction = index / count;
-		const float angularScale = angularOffset + 0.5 + fraction * fraction * fraction * (0.5 - angularOffset);
-		const float distanceMeters = (fraction * extentMeters + jitter * spacingMeters) * angularScale;
-		const float3 samplePos = pos + info.dirlightDir * (distanceMeters * GAME_UNITS_PER_METER);
-		const float weightMeters = (forward + 1.0) * spacingMeters * 0.45 * (index * 0.4 * forward + 1.0);
-		occlusion += SampleCloudLightDensity(samplePos, viewDistance, minimumMip) * weightMeters;
-	}
-	return occlusion;
+	const float4 fit = VolumetricCloudBuffer[0].lowCloudPhase;
+	const float mu = clamp(cosine, -1.0, 1.0);
+	const float2 g = fit.xy;
+	const float2 oneMinusG = 1.0 - g;
+	const float2 denominator = oneMinusG * oneMinusG + 2.0 * g * (1.0 - mu);
+	const float2 hg = oneMinusG * (1.0 + g) / (denominator * sqrt(denominator));
+	const float draine = hg.y * (1.0 + fit.z * mu * mu) / (1.0 + fit.z * (1.0 + 2.0 * g.y * g.y) / 3.0);
+	return 0.25 * RCP_PI * lerp(hg.x, draine, fit.w);
 }
 
-float CloudScatteringPhase(float cosine)
+float CloudCirrusPhase(float cosine)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	return Phase::HG(cosine, info.phasePrimaryG) * info.phasePrimaryIntensity +
-	       Phase::HG(cosine, info.phaseSecondaryG) * info.phaseSecondaryIntensity;
+	return Phase::HGDualLobe(cosine, info.phaseForwardG, info.phaseBackwardG, 0.5);
 }
 
 struct CloudAmbient
 {
-	float3 skyRadiance;
+	sh2 skyR;
+	sh2 skyG;
+	sh2 skyB;
 	float3 groundRadiance;
-	float3 groundVerticalTransmittance;
+	float3 skyRadiance;
+	float3 lowerBoundaryTransmittance;
 };
 
 CloudAmbient MakeCloudAmbient()
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float3 groundPoint = float3(0.0, 0.0, info.planetRadius);
+	const float3 lowerBoundary = float3(0.0, 0.0, info.planetRadius + max(info.lowestCloudAltitude, GAME_UNITS_PER_METER));
 	CloudAmbient ambient;
-	const float layerRadius = info.planetRadius + 0.5 * (info.lowestCloudAltitude + info.highestCloudAltitude);
-	const float layerRatio = info.planetRadius / max(layerRadius, 1.0);
-	const float layerCos = sqrt(saturate(1.0 - layerRatio * layerRatio));
-	ambient.skyRadiance = SampleCloudAmbientRadiance() / max(0.5 * (1.0 + layerCos), 1e-4);
-	ambient.groundRadiance = SharedData::physSkyData.groundAlbedo * ambient.skyRadiance;
-	ambient.groundVerticalTransmittance = SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, groundPoint, float3(0.0, 0.0, 1.0));
+	ambient.skyR = TexCloudAmbientSH[int2(0, 0)];
+	ambient.skyG = TexCloudAmbientSH[int2(1, 0)];
+	ambient.skyB = TexCloudAmbientSH[int2(2, 0)];
+	ambient.groundRadiance = TexCloudAmbientSH[int2(3, 0)].rgb;
+	ambient.skyRadiance = SampleCloudAmbientRadiance();
+	ambient.lowerBoundaryTransmittance = SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, lowerBoundary, float3(0.0, 0.0, 1.0));
 	return ambient;
 }
 
-// The sky probe covers the sky hemisphere only, so the planet-facing half is
-// filled in from the ground's reflected skylight, attenuated by the air column
-// below the sample. Both halves are sphere averages, so their weights sum to one.
 float3 CloudAmbientRadiance(float3 planetPos, CloudAmbient ambient)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
@@ -84,52 +58,124 @@ float3 CloudAmbientRadiance(float3 planetPos, CloudAmbient ambient)
 	const float ratio = info.planetRadius / radius;
 	const float cosDisc = sqrt(saturate(1.0 - ratio * ratio));
 	const float3 sampleVerticalTransmittance = SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, planetPos, float3(0.0, 0.0, 1.0));
-	const float3 columnTransmittance = min(ambient.groundVerticalTransmittance / max(sampleVerticalTransmittance, 1e-4), 1.0);
-	const float3 groundRadiance = ambient.groundRadiance * columnTransmittance;
+	const float3 columnTransmittance = min(ambient.lowerBoundaryTransmittance / max(sampleVerticalTransmittance, 1e-4), 1.0);
+	const float3 groundRadiance = TexCloudAmbientSH[int2(4, 0)].rgb * columnTransmittance;
 	return 0.5 * (1.0 + cosDisc) * ambient.skyRadiance + 0.5 * (1.0 - cosDisc) * groundRadiance;
 }
 
-float2 CloudLightResponse(float cosine, float height, float profile, float lightDensity, float product, float occlusion)
+float CloudCirrusLightDistance(float lightCosine)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float opticalDepth = info.sunExtinction * occlusion;
-	const float threshold = (1.0 - saturate(cosine)) * 0.1;
-	const float erodedProfile = saturate((profile - 0.05) * 1.0526316);
-	const float potential = saturate((erodedProfile - threshold) / (1.0 - threshold));
-	const float potential6 = potential * 6.0;
-	const float density6 = saturate((lightDensity - 0.1) * 1.1111112) * 6.0;
-	const float productPower = pow(product, 0.8);
-	const float softTransmission = 1.0 - saturate(opticalDepth * 0.025);
-	const float bottomResponse = saturate(height * 10.0) * 0.5 + 0.5;
-	const float bottomSquared = bottomResponse * bottomResponse;
-	const float lowerFade = saturate((height - 0.1) * 10.0);
-	const float powderHeight = saturate((height - 0.1) * 3.3333333) * 2.0;
-	const float powderOffset = powderHeight - 2.0 + (-2.0 - powderHeight) * saturate(occlusion * 0.5);
-	const float powderBase = sqrt(saturate(1.0 - potential6)) * (density6 * density6 - potential6) + potential6;
-	const float powderDensity = pow(max(powderBase, 0.0), 3.0 - lowerFade);
-	const float broadTransmission = exp(-opticalDepth * 0.03);
-	const float ambientHeight = pow(lerp(info.ambientBase, 1.0, height), pow(product, 0.3) * 1.8 + 0.2);
-	float ambient = ambientHeight * 1.68 * (1.0 - sqrt(product));
-	ambient *= lerp(pow(height, 0.25), 1.0, broadTransmission);
-	ambient *= pow(saturate(1.0 - erodedProfile), info.ambientProfilePower);
-	ambient = max(info.ambientFloor, ambient) * info.ambientStrength;
-	const float volume = info.scatterVolumeStrength * 8.0 * pow(max(height, 1e-8), info.scatterVolumeHeightPower) * (1.0 - saturate((cosine - 0.5) * 2.0408163) * 0.75) * saturate(potential * 6.666667 - 0.11111112) * pow(product, 0.25) * exp(-opticalDepth * info.scatterVolumeDepthPower);
-	const float soft = info.softScatteringStrength * 42.375 * (potential + lightDensity) * ((pow(softTransmission, 8.0 - productPower * 7.0) + pow(softTransmission, 16.0 - productPower * 14.0)) * 0.3 + pow(softTransmission, 32.0 - productPower * 28.0)) * lerp(bottomSquared, 1.0, saturate((cosine - 0.25) * 4.0));
-	const float powder = saturate((saturate((powderDensity - powderOffset + saturate((cosine - 0.3) * 1.4306152) * (1.0 - powderDensity)) / (1.0 - powderOffset)) + 0.333) * 0.7501876);
-	return float2((volume + soft) * 1.5 * lerp(1.0, powder, info.powderStrength), ambient);
+	const float radius = (info.cloudCurvatureRadius + info.cirrusAltitude) * GAME_UNIT_TO_M;
+	const float halfThickness = 0.5 * info.cirrusLightThickness;
+	const float b = radius * lightCosine;
+	const float outerC = halfThickness * (2.0 * radius + halfThickness);
+	const float outerRoot = sqrt(b * b + outerC);
+	float distance = b >= 0.0 ? outerC / (outerRoot + b) : outerRoot - b;
+	const float innerC = halfThickness * (2.0 * radius - halfThickness);
+	const float innerDiscriminant = b * b - innerC;
+	if (b < 0.0 && innerDiscriminant >= 0.0)
+		distance = min(distance, innerC / (-b + sqrt(innerDiscriminant)));
+	return min(distance, 3000.0);
 }
 
-float3 CloudLighting(float3 pos, float3 viewDir, float height, float profile, float product, float extinction,
-	float viewDistance, float minimumMip, float phase, CloudAmbient ambient)
+float CloudMeanTransmission(float depth)
+{
+	return depth < 0.05 ? 1.0 - depth * (0.5 - depth * (1.0 / 6.0 - depth / 24.0)) :
+	                      (1.0 - exp(-depth)) / depth;
+}
+
+// Integrate the light source against view extinction across the unresolved layer.
+float CloudCirrusTransmission(float viewDepth, float lightDepth, float nearFraction)
+{
+	const float nearDepth = lightDepth * nearFraction;
+	const float farDepth = viewDepth + lightDepth * (1.0 - nearFraction);
+	const float integral = exp(-min(nearDepth, farDepth)) * CloudMeanTransmission(abs(farDepth - nearDepth));
+	return integral / CloudMeanTransmission(viewDepth);
+}
+
+float CloudOpacity(float depth)
+{
+	return depth < 0.001 ? depth * (1.0 - 0.5 * depth) : 1.0 - exp(-depth);
+}
+
+float TraceCloudLighting(float3 pos, float3 viewDir, NDFInfo ndf, float extinction, float viewDistance, float minimumMip)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float occlusion = CloudLocalSunOcclusion(pos, viewDir, height, viewDistance, minimumMip);
-	const float2 response = CloudLightResponse(dot(viewDir, info.dirlightDir), saturate(height), saturate(profile),
-		CloudLightDensity(extinction, height), saturate(product), occlusion);
-	const float3 planetPos = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
-	const float3 sunlight = SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, planetPos, info.dirlightDir) * GetCloudDirectionalLightColor();
-	const float3 ambientRadiance = CloudAmbientRadiance(planetPos, ambient);
-	return info.lowLightingScale * (response.x * phase * sunlight + response.y * ambientRadiance);
+	float localOpticalDepth = 0.0;
+	float previousDistance = 0.0;
+	float previousExtinction = extinction;
+	const uint count = uint(10.0 - saturate((viewDistance - 512.0) * 0.00040192925) * 6.0);
+	const float extentMeters = 240.0 - saturate(ndf.height_fraction * 3.3333333) * 120.0;
+	const float spacingMeters = extentMeters / count;
+	const float cosine = dot(viewDir, info.dirlightDir);
+	const float angularOffset = -0.25 * cosine;
+	const float jitter = CloudLightProbeJitter(pos.xy * GAME_UNIT_TO_M);
+	[loop] for (uint i = 0u; i < count; ++i)
+	{
+		const float index = i + 0.5;
+		const float fraction = index / count;
+		const float angularScale = angularOffset + 0.5 + fraction * fraction * fraction * (0.5 - angularOffset);
+		const float distanceMeters = (fraction * extentMeters + jitter * spacingMeters) * angularScale;
+		const float3 samplePos = pos + info.dirlightDir * (distanceMeters * GAME_UNITS_PER_METER);
+		CloudDensityContext context;
+		const float mipBias = 2.0 * fraction * fraction;
+		const float sigma = sampleCloudDensity(samplePos, GetCloudLayer(info), mipBias, viewDistance, minimumMip, context);
+		localOpticalDepth += 0.5 * (previousExtinction + sigma) * (distanceMeters - previousDistance);
+		previousExtinction = sigma;
+		previousDistance = distanceMeters;
+	}
+	return localOpticalDepth;
+}
+
+// Local isotropic closure: https://zhuanlan.zhihu.com/p/457997155
+float CloudScatteringSeries(float opticalDepth)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float transmission = exp(-opticalDepth);
+	const float opacity = opticalDepth < 0.001 ? opticalDepth * (1.0 - 0.5 * opticalDepth) : 1.0 - transmission;
+	const float recirculation = info.msAlbedo * opacity;
+	const float escapeAndAbsorption = (1.0 - info.msAlbedo) + info.msAlbedo * transmission;
+	return (0.25 * RCP_PI) * recirculation / escapeAndAbsorption;
+}
+
+float CloudMultipleScattering(float extinction, NDFInfo ndf)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float width = min(info.msBoundaryWidth, max(ndf.altitude.y - ndf.altitude.x, 0.0) * (0.25 * GAME_UNIT_TO_M));
+	const float referenceDepth = info.lowDensityScale * width;
+	if (referenceDepth <= 0.0 || extinction <= 0.0 || info.lowDensityScale <= 0.0)
+		return 0.0;
+	const float exponent = CloudDensityExponent(ndf.height_fraction);
+	const float coordinate = clamp((log2(referenceDepth) + 12.0) * 2.0, 0.0, 48.0);
+	const uint index = min((uint)coordinate, 47u);
+	const float4 coefficients = lerp(CloudMsCalibration[index], CloudMsCalibration[index + 1u], coordinate - float(index));
+	const float profile = clamp((exponent - 0.35) * 10.0, 0.0, 3.0);
+	const uint profileIndex = min((uint)profile, 2u);
+	float coefficient = lerp(coefficients[profileIndex], coefficients[profileIndex + 1u], profile - float(profileIndex));
+	if (referenceDepth > 4096.0)
+		coefficient *= pow(referenceDepth / 4096.0, exponent / (exponent + 1.0));
+	else if (referenceDepth < 0.000244140625)
+		coefficient *= referenceDepth * 4096.0;
+	return CloudScatteringSeries(coefficient * extinction / info.lowDensityScale);
+}
+
+float3 CloudLighting(float3 pos, float3 viewDir, NDFInfo ndf, float extinction, float viewDepth, float viewOpacity,
+	float viewDistance, float minimumMip, float phase)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float opticalDepth = TraceCloudLighting(pos, viewDir, ndf, extinction, viewDistance, minimumMip) * info.sunExtinction;
+	const float directional = info.msAlbedo * phase * exp(-opticalDepth);
+	const float3 planetPosition = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
+	const float3 sunlight = SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, planetPosition, info.dirlightDir) * GetCloudDirectionalLightColor();
+	float densityGate = saturate(extinction / info.scatterDensityThreshold);
+	[branch] if (info.scatterDensityPower != 1.0)
+		densityGate = pow(densityGate, info.scatterDensityPower);
+	const float scatterAmount = CloudOpacity(viewDepth * densityGate);
+	float multiple = 0.0;
+	[branch] if (info.msStrength > 0.0 && info.msAlbedo > 0.0)
+		multiple = info.msStrength * info.msAlbedo * CloudMultipleScattering(extinction, ndf) * exp(-opticalDepth * info.msTransportExtinction);
+	return info.cloudLightingScale * sunlight * (directional * scatterAmount + multiple * viewOpacity);
 }
 
 #endif

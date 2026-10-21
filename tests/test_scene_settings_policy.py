@@ -202,11 +202,13 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("cloudLayer/low", "topExpansionScale"), ("cloudLayer/low", "curvatureRadius"),
             ("cloudLayer/low", "ndfAltitudeScale"),
             ("cloudLayer/cirrus", "densityScale"), ("cloudLayer/cirrus", "altitude"),
-            ("cloudLayer/lighting", "brightness"), ("cloudLayer/lighting", "lowBrightness"),
-            ("cloudLayer/lighting", "cirrusBrightness"), ("cloudLayer/lighting", "sunExtinction"),
-            ("cloudLayer/lighting", "phasePrimaryG"), ("cloudLayer/lighting", "phaseSecondaryG"),
-            ("cloudLayer/lighting", "phasePrimaryIntensity"), ("cloudLayer/lighting", "phaseSecondaryIntensity"),
-            ("cloudLayer/lighting", "ambientStrength"), ("cloudLayer/lighting", "softScatteringStrength"),
+            ("cloudLayer/lighting", "brightness"), ("cloudLayer/lighting", "sunExtinction"),
+            ("cloudLayer/lighting", "viewExtinction"), ("cloudLayer/lighting", "dropletDiameter"),
+            ("cloudLayer/lighting", "phaseForwardG"), ("cloudLayer/lighting", "phaseBackwardG"),
+            ("cloudLayer/lighting", "msStrength"), ("cloudLayer/lighting", "msAlbedo"),
+            ("cloudLayer/lighting", "msBoundaryWidth"), ("cloudLayer/lighting", "ambientStrength"),
+            ("cloudLayer/lighting", "scatterDensityThreshold"), ("cloudLayer/lighting", "scatterDensityPower"),
+            ("cloudLayer/lighting", "cirrusLightThickness"),
             ("cloudLayer/wind/lowVelocity", "x"), ("cloudLayer/wind/lowVelocity", "y"),
             ("cloudLayer/wind/highVelocity", "x"), ("cloudLayer/wind/highVelocity", "y"),
             ("cloudLayer/wind", "development"), ("cloudLayer/wind", "disturbance"),
@@ -221,10 +223,6 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("cloudMap/procedural/parameters", "localModelingWeight"),
             ("cloudMap/procedural/parameters", "localHeightWeight"),
             ("cloudMap/procedural/parameters", "localWindScale"),
-            ("cloudLayer/cirrus/weather/0/range", "w"),
-            ("cloudLayer/cirrus/weather/1/range", "z"),
-            ("cloudLayer/cirrus/weather/1", "frequency"),
-            ("cloudLayer/cirrus/weather/1/offset", "y"),
         ]
         for identity in appearance:
             with self.subTest(setting=identity):
@@ -252,13 +250,7 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("cloudMap", "procedural", "localMaskPath"),
             ("cloudMap", "procedural", "parameters", "heightFromCoverage"),
             ("cloudMap", "procedural", "parameters", "localBlendMode"),
-            ("cloudLayer", "cirrus", "weatherPath"),
-            ("cloudLayer", "cirrus", "patternsPath"),
-            ("cloudLayer", "cirrus", "weather", "0", "noise"),
-            ("cloudLayer", "cirrus", "weather", "1", "noise"),
-            ("cloudLayer", "cirrus", "patternSeed"),
-            ("cloudLayer", "cirrus", "patternWarp"),
-            ("cloudLayer", "cirrus", "patternDetail"),
+            ("cloudLayer", "cirrus", "uvSize"),
         ]
         global_paths.extend(("cloudMap", "procedural", "parameters", layer, "noise")
                             for layer in ("primary", "secondary", "coverageGain", "modeling", "modelingGain", "heightVariation"))

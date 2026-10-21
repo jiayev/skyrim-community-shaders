@@ -11,16 +11,6 @@ namespace SceneSettingsPolicy
 
 	/// Settings that must never be scene-overridden, matched by catalog address prefix.
 	inline const std::vector<SettingPolicyPath> kSettingBlacklist = {
-		{ "ExponentialHeightFog", "volumetricGridPixelSize" },
-		{ "ExponentialHeightFog", "volumetricGridSizeZ" },
-		{ "ExponentialHeightFog", "volumetricFarGridPixelSize" },
-		{ "ExponentialHeightFog", "volumetricFarGridSizeZ" },
-		{ "ExponentialHeightFog", "volumetricShadowBias" },
-		{ "ExponentialHeightFog", "volumetricDepthDistributionScale" },
-		{ "ExponentialHeightFog", "volumetricHistoryWeight" },
-		{ "ExponentialHeightFog", "volumetricHistoryMissSampleCount" },
-		{ "ExponentialHeightFog", "volumetricSampleJitterMultiplier" },
-		{ "ExponentialHeightFog", "volumetricUpsampleJitterMultiplier" },
 		{ "GrassOptimizations" },
 		{ "TerrainVariation" },
 		{ "ImageBasedLighting", "DisableInWorldMap" },
@@ -75,6 +65,7 @@ namespace SceneSettingsPolicy
 		{ "ScreenSpaceGI", "EnableTemporalDenoiser" },
 		{ "ScreenSpaceGI", "EnableExperimentalSpecularGI" },
 		{ "VolumetricLighting" },
+		{ "ViewAtmosphere" },
 	};
 
 	inline const std::vector<SettingPolicyPath> kLocationFeatureWhitelist = {

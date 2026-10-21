@@ -15,6 +15,15 @@
 
 namespace
 {
+	RE::TESWorldSpace* GetTerrainWorldspace()
+	{
+		auto* tes = RE::TES::GetSingleton();
+		auto* worldspace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
+		while (worldspace && worldspace->parentWorld && worldspace->parentUseFlags.any(RE::TESWorldSpace::ParentUseFlag::kUseLandData))
+			worldspace = worldspace->parentWorld;
+		return worldspace;
+	}
+
 	void RequestTimeJumpSynchronization()
 	{
 		Util::RequestTimeJumpTransition();
@@ -131,16 +140,6 @@ namespace
 
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-
-	// Heightmaps are keyed by the worldspace that provides the land data.
-	RE::TESWorldSpace* GetLandWorldspace()
-	{
-		auto tes = globals::game::tes;
-		auto worldspace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
-		while (worldspace && worldspace->parentWorld && worldspace->parentUseFlags.any(RE::TESWorldSpace::ParentUseFlag::kUseLandData))
-			worldspace = worldspace->parentWorld;
-		return worldspace;
-	}
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -338,8 +337,14 @@ void TerrainShadows::CompileComputeShaders()
 
 bool TerrainShadows::IsHeightMapReady()
 {
-	auto worldspace = GetLandWorldspace();
-	return worldspace && cachedHeightmap && cachedHeightmap->worldspace == worldspace->GetFormEditorID();
+	if (auto* worldspace = GetTerrainWorldspace())
+		return texHeightMap && cachedHeightmap && cachedHeightmap->worldspace == worldspace->GetFormEditorID();
+	return false;
+}
+
+bool TerrainShadows::IsShadowMapReady()
+{
+	return loaded && settings.EnableTerrainShadow && IsHeightMapReady() && texShadowHeight && !needPrecompute;
 }
 
 TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
@@ -347,7 +352,7 @@ TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
 	bool isHeightmapReady = IsHeightMapReady();
 
 	PerFrame data = {
-		.EnableTerrainShadow = settings.EnableTerrainShadow && isHeightmapReady,
+		.EnableTerrainShadow = IsShadowMapReady(),
 	};
 
 	if (isHeightmapReady) {
@@ -368,7 +373,8 @@ TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
 
 void TerrainShadows::LoadHeightmap()
 {
-	auto worldspace = GetLandWorldspace();
+	auto* worldspace = GetTerrainWorldspace();
+
 	if (!worldspace)
 		return;
 
@@ -497,7 +503,12 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 	auto shadowSceneNode = globals::game::smState->shadowSceneNode[0];
 	if (!shadowSceneNode)
 		return false;
-	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
+
+	auto shadowSunLight = shadowSceneNode->GetRuntimeData().sunLight;
+	if (!shadowSunLight || !shadowSunLight->light)
+		return false;
+
+	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSunLight->light.get());
 	if (!sunLight)
 		return false;
 	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Occlusion - Update Shadows");

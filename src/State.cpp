@@ -32,6 +32,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
+#include "Features/ViewAtmosphere.h"
 #include "Features/VolumetricShadows.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
@@ -178,8 +179,7 @@ void State::Draw()
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
 					if (volumetricShadows.loaded)
 						volumetricShadows.CopyShadowLightData();
-					if (globals::features::exponentialHeightFog.loaded)
-						globals::features::exponentialHeightFog.CaptureDirectionalShadowMap();
+					globals::deferred->CaptureDirectionalShadowMap();
 					if (skylighting.loaded)
 						skylighting.CaptureShadowCascadeSRV();
 				}
@@ -1416,7 +1416,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 
 		data.WaterSystemHeight = -RE::NI_INFINITY;
-		data.PostWaterComposite = a_inWorld && globals::deferred->MediumCompositeEnabled() ? 1u : 0u;
+		data.PostWaterComposite = a_inWorld && globals::features::viewAtmosphere.CompositeEnabled() ? 1u : 0u;
 
 		data.InInterior = Util::IsInterior();
 		data.HasDirectionalShadows = HasDirectionalShadows();

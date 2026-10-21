@@ -315,8 +315,6 @@ bool LocalNdfManager::Update(const NdfSettings& settings, TextureManager& textur
 
 void LocalNdfManager::DrawSettings(NdfSettings& settings, const std::string& worldspace, float2 cameraMeters)
 {
-	if (!ImGui::TreeNode(T(TKEY("local_ndf"), "Local cloud")))
-		return;
 	if (!scanned)
 		RefreshAssets();
 	if (ImGui::Button(T(TKEY("local_ndf_scan"), "Scan asset folders")))
@@ -343,12 +341,10 @@ void LocalNdfManager::DrawSettings(NdfSettings& settings, const std::string& wor
 					manager->ClearContextTombstone(armed->contextId, identity.featureShortName, identity.settingPath, identity.settingKey);
 				manager->AddContextSetting(armed->contextId, identity.featureShortName, identity.settingPath, identity.settingKey);
 			}
-			ImGui::TreePop();
 			return;
 		}
 		if (active && ImGui::Button(T(TKEY("local_ndf_scene_inherit"), "Remove override / inherit"))) {
 			manager->RemoveContextSetting(armed->contextId, *entryIndex);
-			ImGui::TreePop();
 			return;
 		}
 	} else {
@@ -441,7 +437,6 @@ void LocalNdfManager::DrawSettings(NdfSettings& settings, const std::string& wor
 	}
 	for (const auto& asset : rejectedAssets)
 		ImGui::TextWrapped("%s: %s", T(TKEY("local_ndf_rejected"), "Rejected local cloud asset"), asset.c_str());
-	ImGui::TreePop();
 }
 
 void LocalNdfManager::DrawDebug(TextureManager& textures, float scale)

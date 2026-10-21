@@ -37,9 +37,10 @@ float CloudHistoryBlend(float2 motion)
 	return saturate((length(motion) - 0.0001) * 2500.0) * 0.5 + 0.5;
 }
 
-float3 CloudSampleDisplacement(float3 ray, float4 metadata, float opacity, out float uncertainty)
+float3 CloudSampleDisplacement(float3 ray, float4 metadata, float opacity, out float uncertainty, out float projectionDepth)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	projectionDepth = metadata.x;
 	const float cirrusFraction = saturate(metadata.z / max(opacity, 1e-6));
 	if (cirrusFraction == 1.0) {
 		uncertainty = 0.0;
@@ -47,12 +48,21 @@ float3 CloudSampleDisplacement(float3 ray, float4 metadata, float opacity, out f
 	}
 	const float height = saturate(metadata.w / max(opacity - metadata.z, 1e-6));
 	float lowDepth = DecodeCloudDepth(metadata.x);
+	float2 projectionWeights = float2(1.0 - cirrusFraction, cirrusFraction);
 	if (cirrusFraction > 0.0 && cirrusFraction < 0.99) {
 		const float3 planetEye = float3(0, 0, FrameBuffer::CameraPosAdjust.z - info.bottomZ + info.planetRadius);
 		const float2 shell = IntersectSpherePair(planetEye, ray, info.planetRadius + info.cirrusAltitude);
 		const float cirrusDepth = shell.x >= 0.0 ? shell.x : shell.y;
-		if (cirrusDepth >= 0.0)
+		if (cirrusDepth > 0.0) {
 			lowDepth = max((lowDepth - cirrusFraction * cirrusDepth) / (1.0 - cirrusFraction), 0.0);
+			if (lowDepth > 0.0) {
+				// Angular motion is proportional to inverse distance.
+				projectionWeights /= float2(lowDepth, cirrusDepth);
+				const float inverseDepth = projectionWeights.x + projectionWeights.y;
+				projectionDepth = EncodeCloudDepth(rcp(inverseDepth));
+				projectionWeights /= inverseDepth;
+			}
+		}
 	}
 	const float2 position = (FrameBuffer::CameraPosAdjust.xy + ray.xy * lowDepth - info.noiseWindOffset) * GAME_UNIT_TO_M;
 	const float2 shearChange = (info.cloudShapeShear - info.previousShapeShear) * smoothstep(0.0, 1.0, height);
@@ -71,7 +81,7 @@ float3 CloudSampleDisplacement(float3 ray, float4 metadata, float opacity, out f
 	const float transverseDisagreement = length(disagreement - ray * dot(disagreement, ray));
 	uncertainty = (1.0 - cirrusFraction) * (abs(info.cloudEvolutionDelta) + abs(curvatureDisplacement) + length(shearChange) * 60.0 + localMotionUncertainty) +
 	              cirrusFraction * (1.0 - cirrusFraction) * transverseDisagreement;
-	return lerp(lowDisplacement, highDisplacement, cirrusFraction);
+	return lowDisplacement * projectionWeights.x + highDisplacement * projectionWeights.y;
 }
 
 float CloudEvolutionBlend(float uncertainty, float depth, float pixelsPerRadian)
@@ -144,17 +154,20 @@ bool CloudFootprintHasCloud(Texture2D<float4> color, float2 position, int2 maxim
 	return opacity > 0.0;
 }
 
-bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTemporalSample result, out float opacity)
+bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTemporalSample result,
+	out float2 depthRange, out float2 transmittanceRange, out float motionDepth)
 {
 	const int2 base = int2(floor(position));
 	const float2 fraction = saturate(position - floor(position));
 	const int2 maximum = int2(VolumetricCloudBuffer[0].lowFrameDim) - 1;
 	result = (CloudTemporalSample)0;
-	opacity = 0.0;
 	CloudTemporalSample nearest = (CloudTemporalSample)0;
 	float nearestDistance = 4.0;
 	float weightSum = 0.0;
-	float2 transmittanceRange = float2(1, 0);
+	float motionDepthSum = 0.0;
+	float motionWeightSum = 0.0;
+	depthRange = float2(asfloat(0x7f7fffffu), 0);
+	transmittanceRange = float2(1, 0);
 	bool found = false;
 	[unroll] for (uint i = 0u; i < 4u; ++i)
 	{
@@ -164,6 +177,7 @@ bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTempora
 			continue;
 		const float4 color = TexVolLowLum[pixel];
 		const float transmittance = TexVolLowTr[pixel];
+		depthRange = float2(min(depthRange.x, metadata.x), max(depthRange.y, metadata.x));
 		transmittanceRange = float2(min(transmittanceRange.x, transmittance), max(transmittanceRange.y, transmittance));
 		const float weight = transmittance == 1.0 ? 0.01 :
 		                                            ((i & 1u) != 0u ? fraction.x : 1.0 - fraction.x) * (i >= 2u ? fraction.y : 1.0 - fraction.y);
@@ -171,7 +185,9 @@ bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTempora
 		result.color += color * weight;
 		result.metadata += metadata * weight;
 		weightSum += weight;
-		opacity = max(opacity, color.a);
+		const float motionWeight = color.a * weight;
+		motionDepthSum += metadata.x * motionWeight;
+		motionWeightSum += motionWeight;
 		const float2 offset = float2(pixel) - position;
 		const float distance = dot(offset, offset);
 		if (!found || distance < nearestDistance) {
@@ -189,7 +205,42 @@ bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTempora
 	} else {
 		result = nearest;
 	}
+	// Empty rays carry boundary distances rather than cloud motion.
+	motionDepth = motionWeightSum > 0.0 ? motionDepthSum / motionWeightSum : result.metadata.x;
 	return found;
+}
+
+float3 RebaseCloudHistoryDepth(inout CloudTemporalSample history, float3 direction, float3 previousPosition, float3 cameraDelta)
+{
+	// History stores a distance from its own camera.
+	const float3 position = previousPosition * (DecodeCloudDepth(history.metadata.x) / max(length(previousPosition), 1e-6)) - cameraDelta;
+	history.metadata.x = EncodeCloudDepth(max(dot(position, direction), 0.0));
+	return position;
+}
+
+void ResolveCloudHistoryVisibility(inout CloudTemporalSample history, CloudTemporalSample current,
+	float2 depthRange, float2 transmittanceRange, float3 historyPosition, float2 currentUv)
+{
+	const float depthTolerance = EncodeCloudDepth(CloudViewStep(DecodeCloudDepth(depthRange.y), 0.0));
+	if (history.metadata.x >= depthRange.x - depthTolerance && history.metadata.x <= depthRange.y + depthTolerance)
+		return;
+	const float transmission = clamp(history.transmittance, transmittanceRange.x, transmittanceRange.y);
+	const float correction = transmission - history.transmittance;
+	if (correction == 0.0)
+		return;
+	const float4 clip = mul(FrameBuffer::CameraViewProj, float4(historyPosition, 1));
+	float confidence = 1.0;
+	if (clip.w > 0.0) {
+		const float2 historyUv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
+		// Depth disagreement matters when parallax moves history across pixels within a checkerboard cycle.
+		const float cycleDisplacement = length((historyUv - currentUv) * VolumetricCloudBuffer[0].activeFrameDim) * 16.0;
+		confidence = smoothstep(0.0, 0.5, cycleDisplacement);
+	}
+	// Keep radiance and extinction on the same visibility mixture.
+	const float weight = confidence * saturate(correction / (current.transmittance - history.transmittance));
+	history.transmittance = BlendCloudTransmittance(history.transmittance, transmission, confidence);
+	history.color = lerp(history.color, current.color, weight);
+	history.metadata = lerp(history.metadata, current.metadata, weight);
 }
 
 float4 LoadCloudBoundary(uint2 pixel, float3 ray)
@@ -219,7 +270,7 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 	                                                        linearDepth / max(abs(mul(FrameBuffer::CameraView, float4(ray, 0)).z), 1e-6);
 	const float3 eye = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float2 jitter = float2(CloudTemporalMarchHash(pixel, info.cloudFrameIndex), CloudSpatialMarchHash(pixel));
-	const VolumetricCloudResult result = RenderVolumetricCloudRay(ray, eye, sceneDistance, jitter, SampleCloudApShadow(pixel), LoadCloudBoundary(tid, ray), 0.0);
+	const VolumetricCloudResult result = RenderVolumetricCloudRay(ray, eye, sceneDistance, jitter, 0.0, LoadCloudBoundary(tid, ray), 0.0);
 	RWTexTr[tid] = result.transmittance.x;
 	RWTexLum[tid] = float4(min(result.lum, 65504.0), 1.0 - result.transmittance.x);
 	RWTexAux[tid] = float4(EncodeCloudDepth(result.cloud_depth), EncodeCloudDepth(linearDepth), result.motionMetadata * (1.0 - result.transmittance.x));
@@ -234,28 +285,31 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 	const float sceneDepth = EncodeCloudDepth(SharedData::GetScreenDepth(CloudSceneDeviceDepth(pixel, 1u)));
 	const float2 currentPosition = (float2(pixel) - CloudPhaseOffset()) * 0.25;
 	CloudTemporalSample current;
-	float currentOpacity;
-	const bool currentValid = ReconstructCloudSurface(currentPosition, sceneDepth, current, currentOpacity);
-	uint2 traceDimensions;
-	TexVolLowAux.GetDimensions(traceDimensions.x, traceDimensions.y);
-	const float2 tracePixel = clamp((float2(pixel) - CloudPhaseOffset()) * 0.25 + 0.5, 0.5, info.lowFrameDim - 0.5);
-	float4 motionMetadata = TexVolLowAux.SampleLevel(TransmittanceSampler, tracePixel / traceDimensions, 0);
+	float2 currentDepthRange, currentTransmittanceRange;
+	float motionDepth;
+	const bool currentValid = ReconstructCloudSurface(currentPosition, sceneDepth, current,
+		currentDepthRange, currentTransmittanceRange, motionDepth);
+	float4 motionMetadata;
 	float motionOpacity;
 	if (currentValid) {
-		motionMetadata.zw = current.metadata.zw;
+		motionMetadata = current.metadata;
+		motionMetadata.x = motionDepth;
 		motionOpacity = current.color.a;
 	} else {
+		uint2 traceDimensions;
+		TexVolLowAux.GetDimensions(traceDimensions.x, traceDimensions.y);
+		const float2 tracePixel = clamp((float2(pixel) - CloudPhaseOffset()) * 0.25 + 0.5, 0.5, info.lowFrameDim - 0.5);
+		motionMetadata = TexVolLowAux.SampleLevel(TransmittanceSampler, tracePixel / traceDimensions, 0);
 		motionOpacity = TexVolLowLum.SampleLevel(TransmittanceSampler, tracePixel / traceDimensions, 0).a;
 	}
-	const float depth = motionMetadata.x;
 	const float3 ray = CloudScreenRay(pixel);
-	float uncertainty;
-	const float3 displacement = CloudSampleDisplacement(ray, motionMetadata, motionOpacity, uncertainty);
+	float uncertainty, depth;
+	const float3 displacement = CloudSampleDisplacement(ray, motionMetadata, motionOpacity, uncertainty, depth);
 	const float2 projectionScale = abs(float2(FrameBuffer::CameraProjUnjittered[0][0], FrameBuffer::CameraProjUnjittered[1][1])) * info.activeFrameDim * 0.5;
 	const float viewCosine = abs(mul(FrameBuffer::CameraView, float4(ray, 0)).z);
 	const float evolutionBlend = CloudEvolutionBlend(uncertainty, depth, max(projectionScale.x, projectionScale.y) / max(viewCosine * viewCosine, 1e-4));
-	const float3 previousPosition = ray * DecodeCloudDepth(depth) +
-	                                FrameBuffer::CameraPosAdjust.xyz - info.previousCamera - displacement;
+	const float3 cameraDelta = FrameBuffer::CameraPosAdjust.xyz - info.previousCamera - displacement;
+	const float3 previousPosition = ray * DecodeCloudDepth(depth) + cameraDelta;
 	const float4 clip = mul(info.previousViewProj, float4(previousPosition, 1));
 	const float2 previousUv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
 	CloudTemporalSample result;
@@ -263,7 +317,10 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 	if (useHistory) {
 		result = ReconstructCloud(TexVolHistoryTr, TexVolHistoryLum, TexVolHistoryAux,
 			previousUv * info.previousFrameDim - 0.5, int2(info.previousFrameDim) - 1, false);
+		const float3 historyPosition = RebaseCloudHistoryDepth(result, ray, previousPosition, cameraDelta);
 		useHistory = abs(sceneDepth - result.metadata.y) <= 0.064;
+		if (useHistory && currentValid && any(cameraDelta != 0.0))
+			ResolveCloudHistoryVisibility(result, current, currentDepthRange, currentTransmittanceRange, historyPosition, uv);
 		const bool traced = all((pixel & 3u) == CloudPhaseOffset());
 		if (useHistory && traced) {
 			const float4 metadata = TexVolLowAux[pixel / 4u];
@@ -280,9 +337,8 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 			result.color = lerp(result.color, current.color, evolutionBlend);
 			result.metadata = lerp(result.metadata, current.metadata, evolutionBlend);
 		}
-		if (useHistory && result.color.a > 0.0)
-			useHistory = currentValid ? currentOpacity > 0.0 :
-			                            CloudFootprintHasCloud(TexVolLowLum, currentPosition, int2(info.lowFrameDim) - 1);
+		if (useHistory && result.color.a > 0.0 && !currentValid)
+			useHistory = CloudFootprintHasCloud(TexVolLowLum, currentPosition, int2(info.lowFrameDim) - 1);
 	}
 	if (!useHistory) {
 		if (currentValid)
@@ -427,13 +483,12 @@ float2 CloudCubePosition(float3 direction, uint face)
 	const float2 tracePixel = clamp((float2(tid.xy) - CloudPhaseOffset()) * 0.25, 0.0, float(dims.x / 4u - 1u));
 	const float3 depthDirection = CloudCubeDirection(tracePixel, tid.z, dims.x / 4u);
 	const float4 motionMetadata = TexCubeTraceAux.SampleLevel(TransmittanceSampler, depthDirection, 0);
-	const float depth = motionMetadata.x;
-	float uncertainty;
-	const float3 displacement = CloudSampleDisplacement(direction, motionMetadata, TexCubeTraceLum.SampleLevel(TransmittanceSampler, depthDirection, 0).a, uncertainty);
+	float uncertainty, depth;
+	const float3 displacement = CloudSampleDisplacement(direction, motionMetadata, TexCubeTraceLum.SampleLevel(TransmittanceSampler, depthDirection, 0).a, uncertainty, depth);
 	const float cubeCosine = max(max(abs(direction.x), abs(direction.y)), abs(direction.z));
 	const float evolutionBlend = CloudEvolutionBlend(uncertainty, depth, 0.5 * dims.x / (cubeCosine * cubeCosine));
-	const float3 previousPosition = direction * DecodeCloudDepth(depth) + FrameBuffer::CameraPosAdjust.xyz -
-	                                info.previousCamera - displacement;
+	const float3 cameraDelta = FrameBuffer::CameraPosAdjust.xyz - info.previousCamera - displacement;
+	const float3 previousPosition = direction * DecodeCloudDepth(depth) + cameraDelta;
 	const float3 previousDirection = normalize(previousPosition);
 	const float3 absoluteDirection = abs(previousDirection);
 	const uint face = absoluteDirection.x >= max(absoluteDirection.y, absoluteDirection.z) ? (previousDirection.x > 0 ? 0u : 1u) :
@@ -444,6 +499,7 @@ float2 CloudCubePosition(float3 direction, uint face)
 	if (useHistory) {
 		result = ReconstructCloudCube(TexCubeHistoryTr, TexCubeHistoryLum, TexCubeHistoryAux,
 			historyUv * dims.x - 0.5, face, dims.x, false);
+		RebaseCloudHistoryDepth(result, direction, previousPosition, cameraDelta);
 		const bool traced = all((tid.xy & 3u) == CloudPhaseOffset());
 		if (traced) {
 			const float3 traceDirection = CloudCubeDirection(tid.xy / 4u, tid.z, dims.x / 4u);

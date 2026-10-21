@@ -2753,7 +2753,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 		if (!(SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection)) {
-			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -ambientNormal);
+			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -ambientNormal, input.WorldPosition.xyz);
 		}
 	}
 #	endif
@@ -2919,9 +2919,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(PHYSICAL_SKY) || defined(EXP_HEIGHT_FOG)
 	if (SharedData::PostWaterComposite && inWorld && !inReflection) {
-		const float4 medium = ViewMedium::SampleViewMedium(input.WorldPosition.xyz, screenUV, SampColorSampler);
+		const ViewAtmosphere::Medium medium = ViewMedium::SampleViewMedium(input.WorldPosition.xyz, screenUV, SampColorSampler);
 		const bool additive = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0;
-		color.xyz = ColorManagement::SceneColor::ScaleAndAddLinear(color.xyz, medium.a, additive ? 0.0.xxx : medium.rgb);
+		color.xyz = ColorManagement::SceneColor::ScaleAndAddLinear(color.xyz, medium.transmittance, additive ? 0.0.xxx : medium.luminance);
 	} else
 #		endif
 	{
