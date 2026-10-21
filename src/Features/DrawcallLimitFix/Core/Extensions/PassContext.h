@@ -53,7 +53,11 @@ namespace DCLF::Api
 		std::uint32_t epoch = 0;                                          // RenderGraphRuntime::EpochOf(segment)
 		const std::shared_ptr<Draws::Resources>* main = nullptr;          // Main shape; View shape: the view's main resources
 		const std::shared_ptr<Draws::ShadowResources>* shadow = nullptr;  // Shadow shape
-		const std::shared_ptr<Draws::ViewResources>* view = nullptr;      // View shape
+		const std::shared_ptr<Draws::ViewResources>* view = nullptr;      // View shape; a hosted epoch's pass in its Main host: its view's
+		// A Main epoch hosting a view's epoch (Api::EpochDef::hostedBy: the depth epoch, the reflection's): that view's resources while its
+		// passes are added (ScheduleExecutor's GatherScheduled), for the epoch's own passes (its latched copies take the view's lists too);
+		// null otherwise.
+		const std::shared_ptr<Draws::ViewResources>* hosted = nullptr;
 		std::shared_ptr<const void> state;                                // the state its setup made (PassDef::setup); null: none
 
 		const std::shared_ptr<Draws::Resources>& Main() const

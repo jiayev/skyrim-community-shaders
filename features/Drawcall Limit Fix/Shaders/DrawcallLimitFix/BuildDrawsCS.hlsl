@@ -7,12 +7,13 @@
 
 // Push constants: only what is fixed for a pass across executions. Everything per-execution is read from the pass's region of
 // the latch block (org::LatchBlock), written just before submission, so recorded commands can be reused or recorded ahead.
-// Must match BuildDrawsConstants and BuildDrawsLatch in Core/GpuLayouts.h.
+// Must match BuildDrawsConstants and BuildDrawsLatch in Core/GpuLayouts.h. The words a view's outputs and latch are (Push*) are copied
+// into the view's statics below (LoadLatch); ShadowViews takes each view's from its row of the views' table instead.
 cbuffer BuildDrawsConstants : register(b0)
 {
-	uint LatchIndex;      // ByteAddressBuffer: the latch block
-	uint SequencesIndex;  // RWByteAddressBuffer: DrawSequence[]
-	uint CountIndex;      // RWByteAddressBuffer: uint (zeroed before the dispatch)
+	uint LatchIndex;          // ByteAddressBuffer: the latch block
+	uint PushSequencesIndex;  // RWByteAddressBuffer: DrawSequence[]. ShadowViews: the views' table (StructuredBuffer<ShadowBuildView>)
+	uint PushCountIndex;      // RWByteAddressBuffer: uint (zeroed before the dispatch). ShadowViews: the views' table's rows
 	// The strides of the rows an input's y names (RowsOf): material row (low 20 bits), pipeline row (high 12; stride 0 for the
 	// shadow views). Their addresses are the payload's, in the latch.
 	uint MaterialRowStride;
@@ -21,7 +22,7 @@ cbuffer BuildDrawsConstants : register(b0)
 	// RWByteAddressBuffer: one uint per object, written by the depth segment's two phases and read by the colour segment, so the
 	// colour pass draws exactly what the depth passes drew (one decision, not two that can disagree).
 	uint VisibilityIndex;
-	uint LatchOffset;  // this dispatch's BuildDrawsLatch, in bytes into the latch block
+	uint PushLatchOffset;  // this dispatch's BuildDrawsLatch, in bytes into the latch block. ShadowViews: the frame slot's region
 	// RWByteAddressBuffer: per object, the stamp of the last frame its bound was in the main frustum. Depth segment phase 1 only
 	// (0 elsewhere), including the decal, forward and refraction inputs it otherwise skips: the visibility feedback
 	// (VisibilityEventsCS).
@@ -40,7 +41,7 @@ cbuffer BuildDrawsConstants : register(b0)
 	// its draw is recorded on the CPU, which cannot know phase 1's count. The decal sub-ranges follow (one per decal group and state
 	// class, where each starts the latch's class table says): DecalStride slots each, slot = the decal's ordinal in the engine's draw
 	// order.
-	uint PhaseTwoBase;
+	uint PushPhaseTwoBase;
 	uint DecalBase;
 	uint DecalStride;
 	uint PipelineRowStride;
@@ -52,7 +53,7 @@ cbuffer BuildDrawsConstants : register(b0)
 	// latch's StrictGatesIndex verdicts are of. 0 elsewhere.
 	uint ObjectGatesIndex;
 	// Shadow views and depth phases: RWByteAddressBuffer of bucket counts, a word per bucket (BucketTableOffset). 0 elsewhere.
-	uint BucketCountsIndex;
+	uint PushBucketCountsIndex;
 	// Shadow views and depth segment: ByteAddressBuffer of each geometry slot's first index in the index pool, ~0 without one.
 	uint PoolFirstsIndex;
 	// Main query preparation: StructuredBuffer<uint> of each root's program. Draw construction reads MemberResultsIndex instead.
@@ -69,7 +70,20 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint MemberQueriesIndex;
 	uint MemberResultsIndex;
 	uint MemberClaimsIndex;
+	// Depth phases: the retest list (phase 1: RWByteAddressBuffer it appends its OccludedRetest inputs to; phase 2: ByteAddressBuffer it
+	// runs over, kCountRetests long) and, phase 1, phase 2's dispatch arguments (RWByteAddressBuffer: groups x, 1, 1), which it grows a
+	// group per 64 entries. 0 elsewhere: phase 2 then runs over every input.
+	uint RetestsIndex;
+	uint RetestDispatchIndex;
 }
+
+// The view being built: its outputs and latch. The dispatch's push constants (LoadLatch), or under ShadowViews each view's row of the
+// views' table in turn (LoadShadowView).
+static uint SequencesIndex;
+static uint CountIndex;
+static uint LatchOffset;
+static uint PhaseTwoBase;
+static uint BucketCountsIndex;
 
 // StructuredBuffer<FadeNodeState>: FadeStateCS's states as the previous frame published them (latch fadeStatesIndex).
 static uint FadeStatesIndex;
@@ -235,6 +249,8 @@ static uint ClassMapOffset;
 static uint LightContextsIndex;
 static uint StrictGatesIndex;
 static uint StrictContext;
+// A sun view under kCullMinTexels: the least bound radius (world units) a caster keeps (BuildDrawsLatch::minCasterRadius).
+static float MinCasterRadius;
 
 // The placement rows the culling reads (BindlessPlacement): world bound, sun entry sphere, fade node centre, and the forward
 // sort's (nearest BSOrderedNode's centre, ordinal).
@@ -262,7 +278,8 @@ float4 ObjectRow(uint a_object, uint a_row)
 	return placements[a_object].rows[a_row];
 }
 
-void LoadLatch()
+// The loaded view's latch values (LatchOffset's BuildDrawsLatch).
+void LoadViewLatch()
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
 	const uint4 head = latch.Load4(LatchOffset + 12);  // after the dispatch arguments
@@ -277,6 +294,7 @@ void LoadLatch()
 		asfloat(latch.Load4(LatchOffset + 64)), asfloat(latch.Load4(LatchOffset + 80)));
 	PipelineMapOffset = latch.Load(LatchOffset + 192);
 	SlotLayoutsOffset = latch.Load(LatchOffset + 336);
+	MinCasterRadius = asfloat(latch.Load(LatchOffset + 340));
 	SunState = latch.Load(LatchOffset + 196);
 	TreeHeight = asfloat(latch.Load2(LatchOffset + 200));
 	FadeEye = asfloat(latch.Load4(LatchOffset + 208));
@@ -309,6 +327,17 @@ void LoadLatch()
 	MaterialRowsHi = rows.y;
 	PipelineRowsLo = rows.z;
 	PipelineRowsHi = rows.w;
+}
+
+// The dispatch's one view: its outputs and latch from the push constants.
+void LoadLatch()
+{
+	SequencesIndex = PushSequencesIndex;
+	CountIndex = PushCountIndex;
+	LatchOffset = PushLatchOffset;
+	PhaseTwoBase = PushPhaseTwoBase;
+	BucketCountsIndex = PushBucketCountsIndex;
+	LoadViewLatch();
 }
 
 // Light Limit Fix's shadow mask of an input, as the main pass's selection (LocalShadowLights): local shadow lights whose sphere
@@ -445,6 +474,8 @@ bool MinRadius() { return (CullFlags & 0x2000) != 0; }
 // The occlusion map view (kCullFadeOnVisible): fade roots tested as OnVisible without cameraRelatedUpdates (FadedOutOfOcclusion),
 // not RootFading.
 bool FadeOnVisible() { return (CullFlags & 0x4000) != 0; }
+// A sun view's contribution test (kCullMinTexels): a caster whose bound radius projects to fewer texels than the threshold draws nothing.
+bool MinTexels() { return (CullFlags & 0x8000) != 0; }
 // Object word bit 30: a LOD cross-fade copy draw (LodPartitions); the pixel stage uses the cross-fade factor as alpha (DCLFAlphaFade).
 static const uint kObjectCrossfadeCopy = 1u << 30;
 // The key word a view reads (kCullKeyShift): 0 the pipeline and rows words (main segments, reflection); otherwise a shadow view's
@@ -550,6 +581,9 @@ static const uint kCountRefractionOccluded = 156;
 // past its class sub-range's capacity. Never drawn with another class's state.
 static const uint kCountClassUnplanned = 160;
 static const uint kCountClassOverflow = 164;
+// Depth phase 1's retest list's length (RetestsIndex), and a sun view's casters below the size threshold (kCullMinTexels).
+static const uint kCountRetests = 168;
+static const uint kCountBelowTexels = 172;
 
 // The frustum stamp word: the stamp in the low 28 bits, and whether the fade test dropped the object that frame
 // (VisibilityEventsCS.hlsl compares the low bits).
@@ -937,12 +971,47 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	queries[objectIndex] = query;
 }
 
-[numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
-	LoadLatch();
-	const uint draw = dispatchID.x;
-	if (draw >= DrawCount)
-		return;
+// Phase 1: an input it leaves OccludedRetest goes on the retest list phase 2 runs over, a wave's at once: one add to the list's length
+// and, when the wave's entries reach into groups of 64 the list did not have, one add of those groups to phase 2's dispatch (so its
+// group count is always the list's, rounded up).
+void AppendRetest(uint a_input, RWByteAddressBuffer a_count)
+{
+	const uint entries = WaveActiveCountBits(true);
+	uint base = 0;
+	if (WaveIsFirstLane()) {
+		a_count.InterlockedAdd(kCountRetests, entries, base);
+		const uint groups = (base + entries + 63) / 64 - (base + 63) / 64;
+		if (groups != 0) {
+			RWByteAddressBuffer dispatch = ResourceDescriptorHeap[RetestDispatchIndex];
+			uint previous;
+			dispatch.InterlockedAdd(0, groups, previous);
+		}
+	}
+	base = WaveReadLaneFirst(base);
+	RWByteAddressBuffer retests = ResourceDescriptorHeap[RetestsIndex];
+	retests.Store((base + WavePrefixCountBits(true)) * 4, a_input);
+}
 
+// A draw input's 64 bytes (DrawInput), loaded at once: [0] pipeline index, record index, geometry index, flags;
+// [1] view mask, then the key words (KeyWord); [2] object index, decal ordinal, partitions, second stream; [3] fade root, shadow row,
+// LOD partitions, fade distance.
+struct DrawInputWords
+{
+	uint4 words[4];
+};
+
+DrawInputWords LoadInputWords(ByteAddressBuffer a_inputs, uint a_draw)
+{
+	DrawInputWords loaded;
+	[unroll] for (uint i = 0; i < 4; ++i)
+		loaded.words[i] = a_inputs.Load4(a_draw * kInputStride + i * 16);
+	return loaded;
+}
+
+// One input's culling and draws for the loaded view (its latch and outputs: LoadLatch, LoadShadowView), past the view-bits test: what
+// main and ShadowViews do with an input their view takes.
+void BuildInput(uint draw, DrawInputWords a_words)
+{
 	ByteAddressBuffer inputs = ResourceDescriptorHeap[InputsBuffer];
 	ByteAddressBuffer geometries = ResourceDescriptorHeap[GeometriesBuffer];
 	RWByteAddressBuffer sequences = ResourceDescriptorHeap[SequencesIndex];
@@ -950,25 +1019,15 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	RWByteAddressBuffer visibility = ResourceDescriptorHeap[VisibilityIndex];
 
 	const uint inputOffset = draw * kInputStride;
-	const uint4 input = inputs.Load4(inputOffset);  // pipeline index, record index, geometry index, flags
-	// This dispatch's view types against the input's view mask (one scene, a view is a mask), before reading anything else.
-	if (ViewBits != 0 && (inputs.Load(inputOffset + 16) & ViewBits) == 0) {
-		// kStampOnlyViews: phase 1 stamps the frustum verdict.
-		if (FrustumIndex != 0 && CullPhase() == kPhaseOne && (inputs.Load(inputOffset + 16) & kStampOnlyViews) != 0) {
-			const uint stampObject = inputs.Load(inputOffset + 32);
-			if (CullMode() == 0 || !MainFrustumRejected(stampObject))
-				StampFrustum(inputs, inputOffset, input.w, stampObject, false);
-		}
-		return;
-	}
+	const uint4 input = a_words.words[0];  // pipeline index, record index, geometry index, flags
 	// A focus view's casters: its target's members (the engine registers the target's subtree whole).
-	if (FocusRoot != 0 && inputs.Load(inputOffset + 48) != FocusRoot - 1)
+	if (FocusRoot != 0 && a_words.words[3].x != FocusRoot - 1)
 		return;
-	const uint objectIndex = inputs.Load(inputOffset + 32);
+	const uint objectIndex = a_words.words[2].x;
 	// The view's key and rows words (KeyWord): a shadow view's are its family's key and the shadow row.
 	const uint keyWord = KeyWord();
-	const uint drawKey = keyWord != 0 ? inputs.Load(inputOffset + 16 + keyWord * 4) : input.x;
-	const uint rowsWord = keyWord != 0 ? inputs.Load(inputOffset + 52) : input.y;
+	const uint drawKey = keyWord != 0 ? a_words.words[1][keyWord] : input.x;
+	const uint rowsWord = keyWord != 0 ? a_words.words[3].y : input.y;
 	if (drawKey == 0xFFFFFFFFu)
 		return;  // no key in the view's family: never an input its mask lets through
 	// The draw's object word: the object index, plus kObjectSunMiss when a sun-test pass meets no cascade. Counted for every such
@@ -1008,10 +1067,16 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		count.InterlockedAdd(kCountMinRadius, 1, scratch);
 		return;
 	}
+	// A sun view's contribution test: the bound's radius in texels (radius * |ViewProj row 0 or 1's xyz| * half the viewport's width or
+	// height, the larger: the CPU folds the scale into MinCasterRadius) below the threshold.
+	if (MinTexels() && ObjectRow(objectIndex, kObjectBoundRow).w < MinCasterRadius) {
+		count.InterlockedAdd(kCountBelowTexels, 1, scratch);
+		return;
+	}
 	// A caster under a fading or faded-out root (FadeStateCS's fade): the engine casts no fading caster (ShadowReject::Faded,
 	// fade * materialAlpha < 1; the CPU's verdict takes the material's alpha alone).
 	if (phase == kPhaseSingle && FadeRootsIndex != 0 &&
-		(FadeOnVisible() ? FadedOutOfOcclusion(inputs.Load(inputOffset + 48)) : RootFading(inputs.Load(inputOffset + 48)))) {
+		(FadeOnVisible() ? FadedOutOfOcclusion(a_words.words[3].x) : RootFading(a_words.words[3].x))) {
 		count.InterlockedAdd(kCountRootFading, 1, scratch);
 		return;
 	}
@@ -1031,7 +1096,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	if (decalGroup != 0) {
 		if (phase != kPhaseColour && phase != kPhaseSingle)
 			return;  // the depth segment never submits one; belt and braces
-		const uint decalOrdinal = inputs.Load(inputOffset + 36);
+		const uint decalOrdinal = a_words.words[2].y;
 		if (decalOrdinal >= DecalStride)
 			return;  // never: the range holds every ordinal of the group
 		bool culled = !drawable;
@@ -1052,10 +1117,10 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		if (drawable && !decalPlanned)
 			count.InterlockedAdd(kCountClassUnplanned, 1, scratch);
 		const uint4 rows = RowsOf(input.y);
-		const uint decalStreamIndex = inputs.Load(inputOffset + 44);
+		const uint decalStreamIndex = a_words.words[2].w;
 		// Blood decals: a multi-partition skinned decal (BSTempEffectGeometryDecal copies its actor's dismember skin) takes a slot per
 		// partition from its ordinal (OrderDecals, DecalSpanOf; encoding in word +40); a partition its mask leaves out writes a zero-count draw.
-		const uint decalPartitions = inputs.Load(inputOffset + 40);
+		const uint decalPartitions = a_words.words[2].z;
 		const bool decalChain = (decalPartitions & kPartitionChain) != 0;
 		const uint decalSpan = decalChain                                                 ? (decalPartitions & kPartitionChainCount) :
 		                       (decalPartitions == 0 || decalPartitions == kNoPartitions) ? 1u :
@@ -1128,7 +1193,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 
 	// A forward input is culled once, in the colour segment; its visibility word as a decal's.
 	const bool forwardInput = keyWord == 0 && (input.w & kObjectForward) != 0;
-	const bool refractionInput = forwardInput && (inputs.Load(inputOffset + 16) & kViewRefraction) != 0;
+	const bool refractionInput = forwardInput && (a_words.words[1].x & kViewRefraction) != 0;
 	// The first-person view's forward input is culled below with its other inputs.
 	const bool firstPersonForward = forwardInput && !refractionInput && phase == kPhaseSingle && (ViewBits & kViewFirstPerson) != 0;
 	if (forwardInput && !firstPersonForward) {
@@ -1150,7 +1215,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		// Refraction normals take no root fade (GetRenderPasses' refraction pass has no alpha): under a root whose OnVisible stopped
 		// (serviced, not drawn) nothing is drawn, as the engine registers nothing there.
 		if (refractionInput && !forwardCulled && FadeRootsIndex != 0 && FadeStatesIndex != 0) {
-			const uint refractionRoot = inputs.Load(inputOffset + 48);
+			const uint refractionRoot = a_words.words[3].x;
 			if (refractionRoot != 0xFFFFFFFFu) {
 				StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
 				StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
@@ -1216,6 +1281,8 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		visibility.Store(objectIndex * 4, (VisibilityStamp << kVisibilityStampShift) | decided | (draws ? kVisibilityDepthDrawn : 0));
 		if (phase == kPhaseTwo && !occlusionRejected)
 			count.InterlockedAdd(kCountRescuedByPhaseTwo, 1, scratch);
+		if (phase == kPhaseOne && decided == kVisibilityOccludedRetest && RetestsIndex != 0)
+			AppendRetest(draw, count);
 	}
 	if (phase == kPhaseColour && draws && !forwardInput) {
 		if (publishedThisFrame)
@@ -1298,13 +1365,13 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 
 	// One draw per partition the mask names (walking the GeometryDraw links); all are one object with one visibility word.
 	uint copyPartitions;
-	const uint basePartitions = LodPartitions(inputs.Load(inputOffset + 40), inputs.Load(inputOffset + 56), inputs.Load(inputOffset + 48), keyWord == 0, copyPartitions);
+	const uint basePartitions = LodPartitions(a_words.words[2].z, a_words.words[3].z, a_words.words[3].x, keyWord == 0, copyPartitions);
 	if (basePartitions == kNoPartitions)
 		return;
 	// Cross-fade copy partitions draw with the rest, marked kObjectCrossfadeCopy.
 	const uint partitions = basePartitions | copyPartitions;
 	// The second stream is the same for every partition (a face shape's positions are the whole shape's).
-	const uint streamIndex = inputs.Load(inputOffset + 44);
+	const uint streamIndex = a_words.words[2].w;
 	const uint4 stream = streamIndex != kNoStream ? geometries.Load4(streamIndex * kGeometryStride) : uint4(0, 0, 0, 0);
 	uint geometryIndex = input.z;
 	const bool chain = (partitions & kPartitionChain) != 0;
@@ -1463,4 +1530,78 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			break;
 		geometryIndex = geometries.Load(geometryOffset + 36);  // GeometryDraw::nextPartition
 	}
+}
+
+[numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
+	LoadLatch();
+	uint draw = dispatchID.x;
+	// Phase 2 runs over phase 1's retest list (its dispatch the list's groups), not every input. The list holds one entry per input
+	// phase 1 left OccludedRetest, an object having one input: the inputs the verdict test below lets through, no fewer.
+	if (CullPhase() == kPhaseTwo && RetestsIndex != 0) {
+		RWByteAddressBuffer retestCount = ResourceDescriptorHeap[CountIndex];
+		if (draw >= retestCount.Load(kCountRetests))
+			return;
+		ByteAddressBuffer retests = ResourceDescriptorHeap[RetestsIndex];
+		draw = retests.Load(draw * 4);
+	}
+	if (draw >= DrawCount)
+		return;
+
+	ByteAddressBuffer inputs = ResourceDescriptorHeap[InputsBuffer];
+	const uint inputOffset = draw * kInputStride;
+	// This dispatch's view types against the input's view mask (one scene, a view is a mask), before reading anything else.
+	const uint viewMask = inputs.Load(inputOffset + 16);
+	if (ViewBits != 0 && (viewMask & ViewBits) == 0) {
+		// kStampOnlyViews: phase 1 stamps the frustum verdict.
+		if (FrustumIndex != 0 && CullPhase() == kPhaseOne && (viewMask & kStampOnlyViews) != 0) {
+			const uint stampObject = inputs.Load(inputOffset + 32);
+			if (CullMode() == 0 || !MainFrustumRejected(stampObject))
+				StampFrustum(inputs, inputOffset, inputs.Load(inputOffset + 12), stampObject, false);
+		}
+		return;
+	}
+	BuildInput(draw, LoadInputWords(inputs, draw));
+}
+
+// A row of the views' table (ShadowEpochPasses.cpp, ShadowBuildView): a view's BuildDrawsLatch within the frame slot's latch region
+// and its outputs, as main's push constants name them for a dispatch per view.
+struct ShadowBuildView
+{
+	uint LatchAt;        // bytes into the frame slot's region (the view slot's latch)
+	uint Sequences;      // RWByteAddressBuffer: the slot's DrawSequence[]
+	uint Counts;         // RWByteAddressBuffer: the slot's counter words
+	uint BucketCounts;   // RWByteAddressBuffer: the slot's bucket counts
+	uint SequenceDraws;  // the slot's sequences, in draws (PhaseTwoBase)
+};
+
+void LoadShadowView(ShadowBuildView a_view)
+{
+	SequencesIndex = a_view.Sequences;
+	CountIndex = a_view.Counts;
+	LatchOffset = PushLatchOffset + a_view.LatchAt;
+	PhaseTwoBase = a_view.SequenceDraws;
+	BucketCountsIndex = a_view.BucketCounts;
+	LoadViewLatch();
+}
+
+// The shadow (or occlusion) epoch's views in one dispatch (ShadowBuildDrawsPass): a fixed cost per dispatch, not one per view. A thread
+// per (input, view): x over the epoch's list (64-wide groups, as main), y the row of the views' table, so a group shares its view (its
+// row and latch loads are uniform) and each thread builds one input for one view, as main does in a dispatch per view; the order a
+// view's sequences take their slots in is its atomics', as there. The views' table is PushSequencesIndex (PushCountIndex rows), the
+// frame slot's latch region PushLatchOffset. The groups are the epoch's (ShadowLatchLayout::BuildDispatchOffset): its list's inputs
+// over 64 by the views the commit counted (ShadowBuildRows), never fewer than the rows; a y past the rows does nothing.
+[numthreads(64, 1, 1)] void ShadowViews(uint3 dispatchID : SV_DispatchThreadID) {
+	if (dispatchID.y >= PushCountIndex)
+		return;
+	StructuredBuffer<ShadowBuildView> views = ResourceDescriptorHeap[PushSequencesIndex];
+	LoadShadowView(views[dispatchID.y]);
+	const uint draw = dispatchID.x;
+	// A zero latch (a placement without a view this frame) has no inputs.
+	if (draw >= DrawCount)
+		return;
+	ByteAddressBuffer inputs = ResourceDescriptorHeap[InputsBuffer];
+	// The view's types against the input's view mask, before reading the rest (a shadow view stamps nothing: single phase).
+	if (ViewBits != 0 && (inputs.Load(draw * kInputStride + 16) & ViewBits) == 0)
+		return;
+	BuildInput(draw, LoadInputWords(inputs, draw));
 }

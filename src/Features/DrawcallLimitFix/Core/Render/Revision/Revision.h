@@ -165,10 +165,17 @@ namespace DCLF::Draws
 	{
 		std::vector<std::shared_ptr<const ShadowFrame>> shapes;
 	};
-	/** @brief An epoch's recordings for a revision: one per shape (a shadow epoch's variants), by the shapes' order. */
+	/**
+	 * @brief An epoch's recordings for a revision: one per shape (a shadow epoch's variants), by the shapes' order. An epoch hosting
+	 * another's (EpochTraits::hosts) recorded with the hosted epoch's shape (hosted): its variants with the hosted passes' work first,
+	 * then the same without it (a frame the hosted epoch does not draw: its passes record nothing), as many each.
+	 */
 	struct RevisionRecordings
 	{
 		std::vector<std::shared_ptr<const org::PersistentGraphHost::EpochRecording>> recordings;
+		bool hosted = false;
+		/** @brief The variants of each half (all of them without a hosted shape). */
+		std::size_t Variants() const { return hosted ? recordings.size() / 2 : recordings.size(); }
 	};
 	/**
 	 * @brief An epoch's part of the selected revision (Impl::RevisionOf): its shape fragment and its recordings. A commit writes the

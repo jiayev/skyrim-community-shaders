@@ -334,12 +334,14 @@ namespace DCLF
 		width = target.Width;
 		height = target.Height;
 		// The views draw from the main resources: rebuilt at their next import, before the graph is built (on the render thread). A view with
-		// frame constants of its own copies the main frame buffers at their shape.
+		// frame constants of its own copies the main frame buffers at their shape. A main epoch hosting a view's epoch makes its passes from
+		// the main resources' view (Resources::views).
 		for (const auto& slot : kViewSlots)
 			if (const auto& view = View(slot.view).resources) {
 				view->main = state;
 				view->rebuildPending = true;
 				MatchViewFrameBuffers(*view, state->frameBuffers);
+				state->views[ViewIndex(slot.view)] = view;
 			}
 		PostRevisionInputs();
 		// The graph is rebuilt with the new resources on its next epoch.
@@ -365,6 +367,9 @@ namespace DCLF
 		const std::uint32_t objects = InitialObjectUnits();
 		a_state.visibility = MakeVersioned(CreateWords(objects, true, "cs.dclf.visibility"), { .extent = { 0, 4, 4 } });
 		a_state.frustum = MakeVersioned(CreateWords(objects, true, "cs.dclf.frustum"), { .extent = { 0, 4, 4 } });
+		// Phase 1's retest list (an object slot a word, grown with the others) and phase 2's dispatch from it.
+		a_state.retests = MakeVersioned(CreateWords(objects, true, "cs.dclf.retests"), { .extent = { 0, 4, 4 } });
+		a_state.retestDispatch = CreateWords(4, true, "cs.dclf.retest-dispatch");
 		if (PassStats::Enabled())
 			CreatePassStats(a_state, a_host, a_device);
 		a_state.preprocessMain = PreprocessStates::Create(a_device, a_host.FrameSlots(), "the main segment");
@@ -664,7 +669,8 @@ namespace DCLF
 		// At the scene's objects; they grow with them (RequireSceneTables).
 		const std::uint32_t objects = InitialObjectUnits();
 		state->visibility = MakeVersioned(CreateWords(objects, true, "cs.dclf.shadow.visibility"), { .extent = { 0, 4, 4 } });
-		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
+		// Every view of an epoch in one dispatch (BuildDrawsCS's ShadowViews: ShadowBuildDrawsPass).
+		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .entry = L"ShadowViews", .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws) {
 			shadowSetupFailed = true;
 			return ShadowNotReady(1, "the BuildDraws compute program could not be created");
@@ -778,6 +784,7 @@ namespace DCLF
 		// The forward part draws through the main set's state classes' colour signatures with an explicit preprocess, as ForwardDrawPass.
 		if (traits.forwardPart)
 			state->preprocessForward = PreprocessStates::Create(device, host->FrameSlots(), fmt::format("the {} forward part", traits.name).c_str());
+		resources->views[ViewIndex(a_kind)] = state;
 		v.resources = std::move(state);
 		logger::info("[DCLF] {} graph resources created", traits.name);
 		PostRevisionInputs();

@@ -98,7 +98,7 @@ namespace DCLF
 		UnitGroup objects;
 		objects.Add(s.visibilityObjectReported);
 		if (inputs.main)
-			objects.Add(inputs.main->visibility).Add(inputs.main->frustum);
+			objects.Add(inputs.main->visibility).Add(inputs.main->frustum).Add(inputs.main->retests);
 		if (inputs.shadow)
 			objects.Add(inputs.shadow->visibility);
 		objects.Require(a_build, a_tables.objects.size());

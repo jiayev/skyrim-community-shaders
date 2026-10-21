@@ -30,8 +30,12 @@ namespace DCLF::Draws
 	{
 		std::array<std::shared_ptr<const PassFrame>, 2> main;  // kDepthShape, kColourShape
 		std::shared_ptr<const ShadowFrame> shadow, occlusion;
-		// The views' (ViewKind; first person's two epochs record against its one shape).
+		// The views' (ViewKind; first person's two epochs record against its one shape). In a recording of an epoch hosting a view's
+		// (the depth epoch's, the reflection's: Revision/Assemble.cpp), the view's in the variants with its passes' work, none in the others.
 		std::array<std::shared_ptr<const ViewFrame>, kViews> views;
+		// The depth epoch's second recording (Revision/Assemble.cpp): its index pool pass records nothing. Submitted when the depth
+		// commit gave out no range (UpdateIndexPool: the shadow epoch's commit took the frame's, or none changed).
+		bool depthWithoutIndexPool = false;
 	};
 	inline const RevisionShapes* RevisionShapesOf(const org::PassPrepareContext& a_preparation)
 	{

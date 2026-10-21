@@ -309,6 +309,8 @@ namespace NvPerf::Trace
 				a_out.groups = Groups(a_value["groups"], "groups", a_error);
 			if (a_value.contains("spans"))
 				a_out.spans = Groups(a_value["spans"], "spans", a_error);
+			if (a_value.contains("seriesFile") && a_value["seriesFile"].is_string())
+				a_out.seriesFile = std::filesystem::path(a_value["seriesFile"].get<std::string>());
 			if (a_value.contains("addGroups")) {
 				auto added = Groups(a_value["addGroups"], "addGroups", a_error);
 				a_out.groups.insert(a_out.groups.begin(), added.begin(), added.end());
@@ -1006,6 +1008,22 @@ namespace NvPerf::Trace
 				report.rows.push_back(std::move(row));
 			}
 			std::ranges::sort(report.rows, [](const Row& a, const Row& b) { return a.timeUs > b.timeUs; });
+
+			if (!t.seriesFile.empty()) {
+				std::ofstream csv(t.seriesFile, std::ios::trunc);
+				if (!csv)
+					report.warnings.push_back(std::format("series file '{}' could not be written", t.seriesFile.string()));
+				csv << "frame,hitch";
+				for (const auto& series : run.series)
+					csv << ',' << series.name << (series.graphics ? std::string() : std::format("[{}]", series.queue));
+				csv << '\n';
+				for (std::uint32_t f = 0; f < run.frames; ++f) {
+					csv << f << ',' << (kept[f] ? 0 : 1);
+					for (const auto& series : run.series)
+						csv << std::format(",{:.2f}", f < series.times.size() ? static_cast<double>(series.times[f]) : 0.0);
+					csv << '\n';
+				}
+			}
 
 			auto groupNames = std::vector<std::string>{};
 			for (const auto& group : t.groups)

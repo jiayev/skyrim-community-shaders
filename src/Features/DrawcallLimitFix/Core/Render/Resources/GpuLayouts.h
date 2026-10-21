@@ -66,7 +66,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kNoRecord = ~0u;
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
-	// under a fading root, [16] of its caster class.
+	// under a fading root, [16] of its caster class, [43] below the size threshold (kCullMinTexels).
 	constexpr std::uint32_t kCountWords = 44;
 	/** @brief Zeros an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
@@ -103,6 +103,12 @@ namespace DCLF::Draws
 	// Neither is drawn with another class's state; both must stay 0. Must match BuildDrawsCS.hlsl.
 	constexpr std::uint32_t kCountClassUnplannedWord = 40;
 	constexpr std::uint32_t kCountClassOverflowWord = 41;
+	// Depth phase 1's retest list's length (Resources::retests: the inputs it left OccludedRetest), which phase 2's threads stop at; the
+	// sun views' casters below the size threshold (kCullMinTexels). Must match BuildDrawsCS.hlsl.
+	constexpr std::uint32_t kCountRetestsWord = 42;
+	constexpr std::uint32_t kCountBelowTexelsWord = 43;
+	// Phase 2's dispatch (Resources::retestDispatch) as the depth commit latches it: no groups (phase 1 adds one per 64 retests), 1, 1.
+	inline constexpr std::uint32_t kRetestDispatchReset[4] = { 0, 1, 1, 0 };
 	// Byte offsets of the count words the indirect draws read; must match BuildDrawsCS.hlsl.
 	constexpr std::uint64_t kCountDrawnPhaseTwoBytes = 68;
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
@@ -333,14 +339,14 @@ namespace DCLF::Draws
 	struct BuildDrawsConstants
 	{
 		std::uint32_t latchIndex;  // the latch block's SRV
-		std::uint32_t sequencesIndex;
-		std::uint32_t countIndex;
+		std::uint32_t sequencesIndex;  // BuildDrawsCS's ShadowViews: the views' table (ShadowBuildView rows) instead
+		std::uint32_t countIndex;      // ShadowViews: the table's rows instead
 		// The strides of the rows an input's y names (BuildDrawsCS.hlsl, RowsOf): the material rows (y's low 20 bits) and, below,
 		// the pipeline rows (its high 12; stride 0 for the shadow views). Their addresses are the payload's, in the latch.
 		std::uint32_t materialRowStride;
 		std::uint32_t phaseBits;        // the culling phase in bits 4-7 (CullFlags' phase field)
 		std::uint32_t visibilityIndex;  // RWByteAddressBuffer: one uint per object in the tables
-		std::uint32_t latchOffset;      // set at record time: the slot's region plus the dispatch's latch
+		std::uint32_t latchOffset;      // set at record time: the slot's region plus the dispatch's latch (ShadowViews: the region alone)
 		std::uint32_t frustumIndex;     // RWByteAddressBuffer: per object, the stamp of its last in-frustum frame (depth phase 1 only)
 		std::uint32_t hzbIndex;         // 0 when there is no HZB to test against
 		std::uint32_t hzbSizePacked;    // mip 0: width in the low 16 bits, height in the high 16
@@ -373,8 +379,12 @@ namespace DCLF::Draws
 		// Colour segment: the state class sub-ranges' counts (Resources::classCounts, ClassCountWord). 0 elsewhere.
 		std::uint32_t classCountsIndex;
 		std::uint32_t memberQueriesIndex = 0, memberResultsIndex = 0, memberClaimsIndex = 0;
+		// Depth phases: the retest list (Resources::retests), phase 1's to append its OccludedRetest inputs to, phase 2's to run over (its
+		// dispatch indirect from Resources::retestDispatch, which phase 1 grows a group per 64 entries through retestDispatchIndex). 0
+		// elsewhere (phase 2 then runs over every input, as phase 1).
+		std::uint32_t retestsIndex = 0, retestDispatchIndex = 0;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 120);
+	static_assert(sizeof(BuildDrawsConstants) == 128);  // Vulkan's least maxPushConstantsSize: no room for another word
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**
@@ -458,13 +468,16 @@ namespace DCLF::Draws
 		// latch block. BuildDraws stores the draw's into its sequence's pipeline-row words, which the pulled shadow vertex stage reads, so
 		// one bucket draws casters of every layout. 0 elsewhere.
 		std::uint32_t slotLayoutsOffset;
-		std::uint32_t reserved[3];
+		// A sun view under kCullMinTexels: the least bound radius (world units) a caster keeps, the size threshold in texels over the view's
+		// texels per world unit (ShadowEpochs.cpp, SunCasterMinRadius). 0 elsewhere.
+		float minCasterRadius;
+		std::uint32_t reserved[2];
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
 	// BuildDrawsLatch::portalProgramsIndex's byte offset (BuildDrawsCS, FadeStateCS and PortalBatchCS read it as kLatchPortalPrograms).
 	constexpr std::uint32_t kLatchPortalProgramsOffset = 320;
-	static_assert(sizeof(BuildDrawsLatch) == 352 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
+	static_assert(sizeof(BuildDrawsLatch) == 352 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, minCasterRadius) == 340 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
 				  offsetof(BuildDrawsLatch, lightContextsIndex) == 324 && offsetof(BuildDrawsLatch, strictContext) == 332 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, classTableOffset) == 292 &&
 				  offsetof(BuildDrawsLatch, classMapOffset) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
 				  offsetof(BuildDrawsLatch, viewBits) == 264 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
@@ -481,6 +494,20 @@ namespace DCLF::Draws
 	// A first-person forward slot's map word, its range's table entry in the low bits (BuildDrawsCS's kBucketForward).
 	constexpr std::uint32_t kFirstPersonForwardBucket = 0x40000000u;
 	constexpr std::uint32_t kSunTestOn = 1u << 31;
+
+	/**
+	 * @brief One view of BuildDrawsCS's ShadowViews dispatch (a shadow or occlusion epoch's views in one dispatch): a row of the table
+	 * ShadowBuildDrawsPass publishes at preparation, what a dispatch per view would push (BuildDrawsCS.hlsl's ShadowBuildView).
+	 */
+	struct ShadowBuildView
+	{
+		std::uint32_t latchAt = 0;          // the view slot's BuildDrawsLatch, bytes into the frame slot's region
+		std::uint32_t sequencesIndex = 0;   // the slot's sequences, count words and bucket counts (UAVs)
+		std::uint32_t countIndex = 0;
+		std::uint32_t bucketCountsIndex = 0;
+		std::uint32_t sequenceDraws = 0;    // the slot's sequences, in draws (BuildDrawsConstants::phaseTwoBase)
+	};
+	static_assert(sizeof(ShadowBuildView) == 20);
 
 	/**
 	 * @brief A sun plane set in a latch block (a SunRegion: a 16-byte count header, then records): the full-frustum processes here,
@@ -582,10 +609,13 @@ namespace DCLF::Draws
 		}
 		// The index pool's copies (IndexPool): their dispatch's groups, then their count.
 		std::uint32_t PoolOffset() const { return BucketOffset(viewSlots); }
+		// An epoch's culling dispatch (ShadowBuildDrawsPass: one for all its views), its groups (x, y, z, then a word unused): the shadow
+		// epoch's, then the occlusion epoch's (a_sky). The two epochs share the block, and each commit writes its own every frame.
+		std::uint32_t BuildDispatchOffset(bool a_sky) const { return PoolOffset() + (a_sky ? 8u : 4u) * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		// A view slot's blocks, copied to the view-blocks buffer by LatchedCopiesPass (the commit records no copy).
 		std::uint32_t ViewBlockOffset(std::uint32_t a_slot) const
 		{
-			const std::uint32_t first = (PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 255u) & ~255u;
+			const std::uint32_t first = (BuildDispatchOffset(true) + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 255u) & ~255u;
 			return first + a_slot * static_cast<std::uint32_t>(kShadowViewSlotBytes);
 		}
 		std::uint32_t Bytes() const { return ViewBlockOffset(viewSlots); }
@@ -680,6 +710,10 @@ namespace DCLF::Draws
 	// (Precipitation::SetupMask's cull; FadeStateCS's state) draws nothing, in place of the shadow views' fading test. Set while the
 	// engine's fades are on (0x142032dfd).
 	constexpr std::uint32_t kCullFadeOnVisible = 0x4000;
+	// cullFlags: a sun view's contribution test (shadowMinTexels on): a caster whose bound radius projects to fewer texels than the
+	// threshold draws nothing (BuildDrawsLatch::minCasterRadius). The sun's entry exclusion leaves DCLF the only source of those casters,
+	// so a culled one casts nothing at all.
+	constexpr std::uint32_t kCullMinTexels = 0x8000;
 	// The key word a view reads (BuildDrawsCS: KeyWord), bits 16-17: 0 pipeline word (main, reflection); 1 shadowKey; 2 and 3
 	// occlusionKey[0], [1].
 	constexpr std::uint32_t kCullKeyShift = 16;

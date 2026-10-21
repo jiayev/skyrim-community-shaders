@@ -11,6 +11,9 @@
 // - An epoch's row is its definition (Api::EpochDef): its trigger, its index in its shape, the epoch whose shape it shares, the
 //   class gating it and whether the frame's claims need it. The rows' order is the scene revisions' slot order and the reports'; the frame's order is
 //   kFrameOrder, the host's async order kAsyncOrder (the revision-driven epochs are those with revision; the foreign ones never are).
+// - A hosted epoch (hostedBy: the reflection's, in main.depth) is a shape and its passes without an epoch of its own: its keys are in its
+//   host's list, prefixed with its id ("reflection/view.faces"), made from its own shape's resources; the host's recordings carry them and
+//   its commit commits it. It is in neither order.
 // - A pass is a key (Api::PassDef), registered at install by its owner, whom the key's prefix names: core.* (the main view's culling and
 //   copies), view.* (Core's, through Core/Render/Passes/CorePasses.cpp), or a feature's (Features/<Name>/): main-view.* (the main view's
 //   draws: Features/MainView), shadows.* (the shadow and occlusion epochs': Features/Shadows/Engine), forward.*, tree-wind.*, fades.*,
@@ -47,14 +50,17 @@ namespace DCLF::Schedule
 			{ .id = "fp.colour-render", .owner = "Features/FirstPerson", .where = "Main::RenderFirstPersonView's accumulator render (FirstPersonHooks.cpp)" },
 		};
 
-		// The depth (Z-prepass) epoch: the latched copies; the texture transforms (the latch's stage word, before anything of the frame
-		// draws); the member portals' queries (on the graphics queue: phase 1's build reads their results at once, so on the compute queue
-		// they were a round trip with nothing to overlap); phase 1 (build, index pool, tree LOD's cull, depth draw); the next frame's state
-		// on the compute queue beside phase 1's depth draw and the two-phase tail (tree wind, then the fade roots' portal batch and states:
-		// nothing of this frame reads them); the two-phase tail (only with the HZB: the pyramid, the retest build, tree LOD's retest, the
-		// rescues' depth draw); then what reads both phases (tree LOD's counts, the visibility events) and the fade states' write-back copy,
-		// last: ORG starts a graphics batch at the visibility events, the first pass that needs the compute queue's state, so the graphics
-		// queue waits for it only there.
+		// The depth (Z-prepass) epoch: the latched copies (the reflection's faces' too); the texture transforms (the latch's stage word,
+		// before anything of the frame draws); the member portals' queries (on the graphics queue: phase 1's build reads their results at
+		// once, so on the compute queue they were a round trip with nothing to overlap); phase 1 (build, index pool, tree LOD's cull, depth
+		// draw); the next frame's state on the compute queue beside phase 1's depth draw and the two-phase tail (tree wind, then the fade
+		// roots' portal batch and states: nothing of this frame reads them); the reflection's faces' cull (its build and tree LOD's per
+		// face) once phase 1's depth is drawn, beside the depth pyramid (both read what phase 1 left; neither holds the depth draw back);
+		// the two-phase tail (only with the HZB: the pyramid, the retest build, tree LOD's retest, the rescues' depth draw); the faces'
+		// draws (the reflection's cube, from this commit's index pool) after the main view's depth; then what reads both phases (tree LOD's
+		// counts, the visibility events) and the fade states' write-back copy, last: ORG starts a graphics batch at the visibility events,
+		// the first pass that needs the compute queue's state, so the graphics queue waits for it only there. The reflection's passes are
+		// the reflection epoch's (hosted: below): a frame without faces submits the recording without their work.
 		constexpr std::string_view kMainDepth[] = {
 			"core.z.latched-copies",
 			"texture-transforms.apply",
@@ -70,10 +76,13 @@ namespace DCLF::Schedule
 			"fades.portal-evaluate",
 			"fades.state",
 			"main-view.z.depth",
+			"reflection/view.build-draws",
+			"reflection/tree-lod.faces-cull",
 			"gpu-occlusion.hzb",
 			"core.build-draws-phase2",
 			"tree-lod.cull-phase2",
 			"main-view.depth-phase2",
+			"reflection/view.faces",
 			"tree-lod.counts",
 			"core.z.visibility-events",
 			"core.z.visibility-readback",
@@ -109,13 +118,6 @@ namespace DCLF::Schedule
 			"shadows.sky.build-draws",
 			"shadows.sky.view",
 		};
-		// The reflection's faces: one epoch, the faces drawn with their draw families (tree LOD's) culled per face.
-		constexpr std::string_view kReflection[] = {
-			"view.latched-copies",
-			"view.build-draws",
-			"tree-lod.faces-cull",
-			"view.faces",
-		};
 		// First person: the depth epoch (and the forward range's sort), then the colour epoch.
 		constexpr std::string_view kFirstPersonDepth[] = {
 			"view.latched-copies",
@@ -137,7 +139,9 @@ namespace DCLF::Schedule
 			{ .id = "main.colour", .label = "colour", .trigger = "opaque.after", .segment = SegmentOf(Segment::MainOpaque), .shape = Api::EpochShape::Main, .shapeIndex = MainOf(Api::MainShape::Colour), .claims = true, .passes = kMainColour },
 			{ .id = "shadow", .label = "shadow", .trigger = "shadow-maps.after", .segment = SegmentOf(Segment::ShadowView), .shape = Api::EpochShape::Shadow, .shapeIndex = 0, .passes = kShadow },
 			{ .id = "occlusion", .label = "occlusion", .trigger = "occlusion.draw", .segment = SegmentOf(Segment::SkyOcclusion), .shape = Api::EpochShape::Shadow, .shapeIndex = 1, .passes = kOcclusion },
-			{ .id = "reflection", .label = "reflection", .trigger = "depth.committed", .segment = SegmentOf(Segment::Reflection), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::Reflection), .passes = kReflection },
+			// The reflection's faces, hosted by the depth epoch (its passes in kMainDepth: the faces' cull, tree LOD's per face, the faces'
+			// draws; its latched copies the depth epoch's): one epoch less a frame, its entry and exit barriers and latched copies with it.
+			{ .id = "reflection", .label = "reflection", .trigger = "depth.committed", .segment = SegmentOf(Segment::ZPrepass), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::Reflection), .hostedBy = "main.depth" },
 			{ .id = "forward", .label = "forward", .trigger = "blended.draw", .segment = SegmentOf(Segment::Forward), .shape = Api::EpochShape::Main, .shapeIndex = MainOf(Api::MainShape::Colour), .sharesWith = "main.colour", .gate = Api::ObjectClass::Forward, .claims = true, .passes = kForward },
 			{ .id = "fp.depth", .label = "first-person depth", .trigger = "fp.depth-draw", .segment = SegmentOf(Segment::FirstPersonDepth), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::FirstPerson), .passes = kFirstPersonDepth },
 			{ .id = "fp.colour", .label = "first-person colour", .trigger = "fp.colour-render", .segment = SegmentOf(Segment::FirstPerson), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::FirstPerson), .sharesWith = "fp.depth", .passes = kFirstPersonColour },
@@ -147,13 +151,13 @@ namespace DCLF::Schedule
 		constexpr Api::ForeignEpoch kForeign[] = {
 			{ "light-culling", SegmentOf(Segment::LightCulling) },
 		};
-		// The order a frame runs them: the shadow views at AfterShadowMaps, the Z-prepass at the depth pass, the water reflection's faces
-		// after it, first person's depth, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main pass's
-		// opaque batches end, the forward epoch at the engine's blended draw after the deferred composite, first person's colour.
+		// The order a frame runs them: the shadow views at AfterShadowMaps, the Z-prepass at the depth pass (the water reflection's faces
+		// in it), first person's depth, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main pass's
+		// opaque batches end, the forward epoch at the engine's blended draw after the deferred composite, first person's colour. A hosted
+		// epoch is in neither order.
 		constexpr std::string_view kFrameOrder[] = {
 			"shadow",
 			"main.depth",
-			"reflection",
 			"fp.depth",
 			"occlusion",
 			"light-culling",
@@ -163,7 +167,6 @@ namespace DCLF::Schedule
 		};
 		// The host's async epochs, in its ticket loop's order; the revision-driven ones are those with revision.
 		constexpr std::string_view kAsyncOrder[] = {
-			"reflection",
 			"shadow",
 			"main.depth",
 			"occlusion",

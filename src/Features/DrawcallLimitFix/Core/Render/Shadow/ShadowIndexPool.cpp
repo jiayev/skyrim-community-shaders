@@ -218,7 +218,7 @@ namespace DCLF
 
 				// A copy per range, every range a slot of the tables the revision required the copies for: past them is a defect of that
 				// requirement, never copies to drop.
-				void UploadCopies(const org::LatchBlock& a_latch, std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads)
+				std::uint32_t UploadCopies(const org::LatchBlock& a_latch, std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads)
 				{
 					const auto copyCount = static_cast<std::uint32_t>(copies.size());
 					if (copyCount > copiesCapacity)
@@ -228,6 +228,7 @@ namespace DCLF
 						a_uploads(p.copies, copies.data(), std::size_t(copyCount) * sizeof(copies[0]), 0);
 					const std::uint32_t dispatch[4] = { std::min(copyCount, kIndexPoolGroupsX), (copyCount + kIndexPoolGroupsX - 1) / kIndexPoolGroupsX, 1, copyCount };
 					LatchWrite(a_latch, "shadow index-pool dispatch", a_latchSlot, a_poolOffset, std::as_bytes(std::span(dispatch)));
+					return copyCount;
 				}
 			};
 		}
@@ -235,9 +236,9 @@ namespace DCLF
 		/**
 		 * @brief Brings the index pool up to the tables, in the versions a_sealed (the adopted set) names: slots the geometry log named
 		 * since the last read (every slot when it cannot read on) release their ranges and take new ones with a copy. Uploads the first
-		 * indices and copies and writes the copy dispatch into the latch; IndexPoolPass runs it before the views draw.
+		 * indices and copies and writes the copy dispatch into the latch; IndexPoolPass runs it before the views draw. Returns the copies.
 		 */
-		void UpdateIndexPool(const NamedVersions& a_sealed, IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
+		std::uint32_t UpdateIndexPool(const NamedVersions& a_sealed, IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
 			std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads)
 		{
 			auto& p = a_pool;
@@ -253,7 +254,7 @@ namespace DCLF
 			Diagnostics::Notify(Diagnostics::IndexPoolUpdated{ p, a_tables, count });
 
 			update.UploadFirsts(firsts, count, a_uploads);
-			update.UploadCopies(a_latch, a_latchSlot, a_poolOffset, a_uploads);
+			return update.UploadCopies(a_latch, a_latchSlot, a_poolOffset, a_uploads);
 		}
 	}
 

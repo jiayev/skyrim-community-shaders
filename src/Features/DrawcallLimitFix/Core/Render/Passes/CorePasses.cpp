@@ -23,14 +23,34 @@ namespace DCLF::Draws
 		}
 
 		// Each epoch's first pass copies the commit's latched values. It publishes its declared targets (Resources::latchedTargets),
-		// so a commit latches only what the pass will copy. A pass's segment is fixed, so each segment has its own instances.
+		// so a commit latches only what the pass will copy. A pass's segment is fixed, so each segment has its own instances. An epoch
+		// hosting a view's epoch (the depth epoch, the reflection's faces: PassContext::hosted) copies the view's lists too, from the view's
+		// shape its preparation names (none in its recordings without the view's work): the view has no latched copies of its own.
 		std::shared_ptr<org::RenderPass> LatchedCopies(const Api::PassContext& a_context)
 		{
 			const auto& resources = a_context.Main();
-			return MakeLatchedCopiesPass([resources = resources] { return MainLatchedTargets(*resources); },
-				[segment = a_context.segment](const org::PassPrepareContext& a_preparation) {
+			const auto hosted = a_context.hosted ? *a_context.hosted : nullptr;
+			return MakeLatchedCopiesPass(
+				[resources = resources, hosted] {
+					auto targets = MainLatchedTargets(*resources);
+					if (hosted) {
+						const auto view = ViewLatchedTargets(*hosted);
+						targets.insert(targets.end(), view.begin(), view.end());
+					}
+					return targets;
+				},
+				[segment = a_context.segment, view = hosted ? std::optional<ViewKind>(hosted->traits->kind) : std::nullopt](const org::PassPrepareContext& a_preparation) {
 					const auto frame = CurrentFrame(a_preparation, segment);
-					return frame ? LatchedSource{ frame->generation, frame, std::span(&frame->latched, 1) } : LatchedSource{};
+					if (!frame)
+						return LatchedSource{};
+					LatchedSource source{ frame->generation, frame, std::span(&frame->latched, 1) };
+					if (const auto* shapes = view ? RevisionShapesOf(a_preparation) : nullptr)
+						if (const auto& viewFrame = shapes->views[ViewIndex(*view)]) {
+							source.hostedGeneration = viewFrame->generation;
+							source.hostedShape = viewFrame;
+							source.hostedLists = viewFrame->latched;
+						}
+					return source;
 				},
 				&resources->latchedTargets);
 		}
@@ -45,11 +65,14 @@ namespace DCLF::Draws
 			return MakeBuildDrawsPass(a_context.Main(), a_context.segment, 1, true);
 		}
 
-		// The pool copies the depth commit gave out (when the shadow epoch has not), before the draws read them.
+		// The pool copies the depth commit gave out (when the shadow epoch has not), before the draws read them. The revision's second
+		// depth recording (RevisionShapes::depthWithoutIndexPool), submitted when the commit gave out none, records nothing here.
 		std::shared_ptr<org::RenderPass> IndexPoolCopies(const Api::PassContext& a_context)
 		{
 			const auto& resources = a_context.Main();
 			return std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [main = resources](const org::PassPrepareContext& a_preparation) {
+				if (const auto* shapes = RevisionShapesOf(a_preparation); shapes && shapes->depthWithoutIndexPool)
+					return IndexPoolPass::LatchOf{};
 				const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
 				return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
 			}));

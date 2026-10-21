@@ -43,9 +43,10 @@ namespace DCLF::Draws
 	/**
 	 * @brief Brings the index pool up to the tables in the versions a_sealed (the adopted set) names (ShadowIndexPool.cpp): whichever
 	 * commit draws from it first in a frame gives the ranges out and writes their copies' dispatch at a_poolOffset of its latch slot;
-	 * a later commit finds nothing to copy.
+	 * a later commit finds nothing to copy. Returns the copies (the dispatch's count): with none, the depth commit submits its
+	 * recording without the dispatch (RevisionShapes::depthWithoutIndexPool).
 	 */
-	void UpdateIndexPool(const NamedVersions& a_sealed, IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
+	std::uint32_t UpdateIndexPool(const NamedVersions& a_sealed, IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
 		std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads);
 
 	// The graph extensions that add DCLF's passes (Passes/MainExtension.cpp, Passes/Shadow.cpp).

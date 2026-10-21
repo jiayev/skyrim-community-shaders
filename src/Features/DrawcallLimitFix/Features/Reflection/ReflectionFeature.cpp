@@ -95,7 +95,7 @@ namespace DCLF::Features::Reflection
 			// The view (Core's view machinery: its epochs, revisions, set decisions and withholding read it as data).
 			a_context.RegisterView(Contribution(reflections));
 			// The faces' targets, the LOD slots' forward pipelines and tree LOD's, and the view's resources, after tree LOD's decision; the
-			// frame's faces' epoch right after the depth commit.
+			// frame's faces committed inside the depth commit (the depth epoch hosts their passes: Schedule/Frame.cpp).
 			a_context.RegisterViewWork({ .view = kView, .point = Api::ViewPoint::FrameStartAfterTreeLod, .run = &Prepare });
 			a_context.RegisterViewWork({ .view = kView, .point = Api::ViewPoint::DepthCommitted, .run = &Execute });
 			// The nodes the reflection's update hides around its faces, in the frame's cull-hidden list (whatever the toggle: the engine's

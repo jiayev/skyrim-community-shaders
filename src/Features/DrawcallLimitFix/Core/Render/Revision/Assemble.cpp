@@ -41,6 +41,7 @@ namespace DCLF
 			std::vector<std::shared_ptr<const org::PersistentGraphHost::EpochRecording>> recordings;
 			std::atomic<std::uint32_t> remaining = 0;
 			std::atomic<bool> failed = false;
+			bool hosted = false;  // recorded with the hosted epoch's shape (RevisionRecordings::hosted)
 			// The build the revision's versions are of (RevisionInputs::buildGeneration): a recording of another is none of its.
 			std::uint64_t buildGeneration = 0;
 			// The epoch's counters (SceneRevisions::EpochStats), the failures logged, and the recordings outstanding (Impl::recordingsOutstanding).
@@ -172,18 +173,20 @@ namespace DCLF
 				*work->shapes += work->recordings.size();
 				auto recordings = std::make_shared<RevisionRecordings>();
 				recordings->recordings = std::move(work->recordings);
+				recordings->hosted = work->hosted;
 				(void)work->fragment->Resolve(std::shared_ptr<const RevisionRecordings>(std::move(recordings)));
 			}
 			work->outstanding->fetch_sub(1, std::memory_order_acq_rel);
 		}
 
 		/**
-		 * @brief Epoch a_epoch's recordings of its shape a_shapeFragment and the versions, requested of ORG's host thread: the fragment
-		 * they resolve, or null when async epochs stopped under it.
+		 * @brief Epoch a_epoch's recordings of its shape a_shapeFragment and the versions (and of the shape a_hostedFragment of the epoch
+		 * it hosts: none while that has none), requested of ORG's host thread: the fragment they resolve, or null when async epochs
+		 * stopped under it.
 		 */
 		std::shared_ptr<RevisionFragment> RequestRecordings(org::PersistentGraphHost& a_host, Revisions& a_rv, std::atomic<std::uint32_t>& a_outstanding, std::uint32_t a_epoch,
 			const std::shared_ptr<const RevisionFragment>& a_versionsFragment, const std::shared_ptr<const NamedVersions>& a_versions,
-			const std::shared_ptr<const RevisionFragment>& a_shapeFragment, std::uint64_t a_builds)
+			const std::shared_ptr<const RevisionFragment>& a_shapeFragment, const std::shared_ptr<const RevisionFragment>& a_hostedFragment, std::uint64_t a_builds)
 		{
 			using R = Revisions;
 			const std::uint32_t e = a_epoch;
@@ -198,16 +201,42 @@ namespace DCLF
 			};
 			// The epoch's passes prepare against its shape (the forward epoch's, the colour shape: CurrentFrame's MainOpaque).
 			const auto& traits = EpochTraitsOf(e);
-			if (traits.shape == ShapeKind::Main)
-				request([&](RevisionShapes& a_shapes) { a_shapes.main[traits.index] = shapeFragment->Value<PassFrame>(); });
-			else if (traits.shape == ShapeKind::View)
+			const bool hosted = a_hostedFragment && traits.hosts != kNoEpoch;
+			if (traits.shape == ShapeKind::Main) {
+				// With the view epoch it hosts (the depth epoch, the reflection's faces), each variant twice (RevisionRecordings::hosted):
+				// with the view's shape (its passes' work: a frame's faces), then without it (its passes record nothing: a frame without
+				// faces, or the toggle off).
+				const auto hostedShape = hosted ? a_hostedFragment->Value<ViewFrame>() : nullptr;
+				const auto hostedView = hosted ? EpochTraitsOf(traits.hosts).index : 0u;
+				for (const bool withHosted : { true, false }) {
+					if (withHosted && !hostedShape)
+						continue;
+					request([&](RevisionShapes& a_shapes) {
+						a_shapes.main[traits.index] = shapeFragment->Value<PassFrame>();
+						if (withHosted)
+							a_shapes.views[hostedView] = hostedShape;
+					});
+					// The depth epoch's again, without the index pool's dispatch: the commit submits it when it gave out no range (its own
+					// UpdateIndexPool decides, whichever commit ran first), so such a frame records no copy of zero groups.
+					if (traits.index == kDepthShape && traits.sharesWith == kNoEpoch)
+						request([&](RevisionShapes& a_shapes) {
+							a_shapes.main[traits.index] = shapeFragment->Value<PassFrame>();
+							a_shapes.depthWithoutIndexPool = true;
+							if (withHosted)
+								a_shapes.views[hostedView] = hostedShape;
+						});
+				}
+			} else if (traits.shape == ShapeKind::View)
 				request([&](RevisionShapes& a_shapes) { a_shapes.views[traits.index] = shapeFragment->Value<ViewFrame>(); });
 			else
 				for (const auto& variant : shapeFragment->Value<ShadowVariants>()->shapes)
 					request([&](RevisionShapes& a_shapes) { (traits.index ? a_shapes.occlusion : a_shapes.shadow) = variant; });
 			auto work = std::make_shared<PendingRecordings>();
-			work->fragment = std::make_shared<RevisionFragment>(std::vector<RevisionFragment::Requirement>{ { R::kVersionsSlot, a_versionsFragment },
-				{ R::kShapeSlot + e, shapeFragment } });
+			std::vector<RevisionFragment::Requirement> requirements{ { R::kVersionsSlot, a_versionsFragment }, { R::kShapeSlot + e, shapeFragment } };
+			if (hosted)
+				requirements.push_back({ R::kShapeSlot + traits.hosts, a_hostedFragment });
+			work->fragment = std::make_shared<RevisionFragment>(std::move(requirements));
+			work->hosted = hosted && traits.shape == ShapeKind::Main;
 			work->recordings.resize(requests.size());
 			work->remaining.store(static_cast<std::uint32_t>(requests.size()), std::memory_order_relaxed);
 			work->buildGeneration = a_builds;
@@ -267,19 +296,24 @@ namespace DCLF
 		// Each epoch's shape (MakeRevision's): its fragment kept while the shape is the same.
 		AssembleShapes(rv, draft, producer.made, producer.toggles);
 
-		// Each epoch's recording: kept while it requires exactly the draft's shape and versions; else requested for them. A failed
-		// one is dropped (the epoch has none in the revision) and not asked for again until its shape or the versions change.
+		// Each epoch's recording: kept while it requires exactly the draft's shape and versions (and the shape of the epoch it hosts);
+		// else requested for them. A failed one is dropped (the epoch has none in the revision) and not asked for again until its inputs
+		// change. A hosted epoch has none of its own: its host's carry its passes.
 		auto* host = RenderGraphRuntime::Get().Host();
 		const bool recordable = host && producer.inputs.asyncEpochs;
 		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
 			const std::uint32_t slot = R::kRecordingSlot + e;
+			const auto& traits = EpochTraitsOf(e);
 			const auto& shapeFragment = draft.Get(R::kShapeSlot + e);
+			const auto hostedFragment = traits.hosts != kNoEpoch ? draft.Get(R::kShapeSlot + traits.hosts) : nullptr;
 			const auto current = draft.Get(slot);
+			const std::array<std::shared_ptr<const RevisionFragment>, 3> inputs{ versionsFragment, shapeFragment, hostedFragment };
 			auto requiresExactly = [&](const RevisionFragment& a_fragment) {
 				const auto& requirements = a_fragment.Requirements();
-				return requirements.size() == 2 && requirements[0].fragment == versionsFragment && requirements[1].fragment == shapeFragment;
+				return requirements.size() == (hostedFragment ? 3u : 2u) && requirements[0].fragment == versionsFragment && requirements[1].fragment == shapeFragment &&
+				       (!hostedFragment || requirements[2].fragment == hostedFragment);
 			};
-			if (!recordable || !shapeFragment) {
+			if (!recordable || !shapeFragment || traits.hostedBy != kNoEpoch) {
 				draft.Set(slot, nullptr);
 				continue;
 			}
@@ -288,14 +322,14 @@ namespace DCLF
 					continue;
 				// Failed for these exact inputs: none in this revision, and none asked for until they change.
 				draft.Set(slot, nullptr);
-				rv.failedFor[e] = { versionsFragment, shapeFragment };
+				rv.failedFor[e] = inputs;
 				continue;
 			}
-			if (rv.failedFor[e].first == versionsFragment && rv.failedFor[e].second == shapeFragment) {
+			if (rv.failedFor[e] == inputs) {
 				draft.Set(slot, nullptr);
 				continue;
 			}
-			auto fragment = RequestRecordings(*host, rv, recordingsOutstanding, e, versionsFragment, versions, shapeFragment, builds);
+			auto fragment = RequestRecordings(*host, rv, recordingsOutstanding, e, versionsFragment, versions, shapeFragment, hostedFragment, builds);
 			if (!fragment) {
 				// Async epochs stopped under it: what was asked settles the fragment, which this revision does not name.
 				++rv.epochs[e].refused;
@@ -346,6 +380,7 @@ namespace DCLF
 		if (auto* host = RenderGraphRuntime::Get().Host(); host && a_index < a_recordings.recordings.size()) {
 			host->UseEpochRecording(a_recordings.recordings[a_index]);
 			++revisions.submitted[a_epoch];
+			revisions.variants[a_epoch] += a_index != 0;
 		}
 	}
 

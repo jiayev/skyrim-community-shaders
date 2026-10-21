@@ -1,6 +1,7 @@
 // The shadow and occlusion epochs' passes (shadows.*, Schedule/Frame.cpp's kShadow and kOcclusion): the views' latched copies, the index
-// pool's copies (Core's IndexPoolPass), the culling (ShadowBuildDrawsPass), the views' draws (ShadowViewPass) and the culling counters'
-// readback (Core's), made from the shadow extension's resources (Api::PassContext::Shadow; Core registers them with the graph).
+// pool's copies (Core's IndexPoolPass), the culling (ShadowBuildDrawsPass: every view in one dispatch), the views' draws (ShadowViewPass)
+// and the culling counters' readback (Core's), made from the shadow extension's resources (Api::PassContext::Shadow; Core registers them
+// with the graph).
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
@@ -18,11 +19,13 @@
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowFrame.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include "Features/RemoteControl/NvPerf.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include <OpenRenderGraph/PersistentGraphHost.h>
 #include <Render/LatchBlock.h>
+#include <Render/PreparedTablePublisher.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
 #include <rhi.h>
 
@@ -51,26 +54,31 @@ namespace DCLF::Draws
 		std::shared_ptr<const ComputeProgram> program;
 		std::shared_ptr<const org::LatchBlock> latch;
 		rhi::CommandSignatureHandle signature{};
-		struct Dispatch
-		{
-			BuildDrawsConstants constants{};
-			std::uint32_t latchOffset = 0;  // the view's BuildDrawsLatch within the slot's region
-		};
-		std::vector<Dispatch> dispatches;  // one per captured view
+		// The one dispatch's: sequencesIndex names the views' table (ShadowBuildView rows) and countIndex its rows; latchOffset is set at
+		// record time (the frame slot's region).
+		BuildDrawsConstants constants{};
+		std::uint32_t dispatchOffset = 0;  // the epoch's groups in the frame slot's region (ShadowLatchLayout::BuildDispatchOffset)
+		std::uint32_t views = 0;           // the table's rows; 0: nothing to cull
 	};
 
-	/** @brief The shadow views' culling: BuildDrawsCS in its single phase, frustum only, one dispatch per view. */
+	/**
+	 * @brief The shadow views' culling: BuildDrawsCS in its single phase, frustum only, every view of the epoch in one dispatch
+	 * (ShadowViews): x over the shadow list's inputs, y over the views' table, a thread culling one input for one view with that view's
+	 * latch and writing that view's slot (sequences, bucket counts, counter words) as a dispatch per view did; every pass reading a slot
+	 * is unchanged.
+	 */
 	class ShadowBuildDrawsPass final : public org::TypedRenderGraphPass<ShadowBuildDrawsPass, ShadowBuildPrepared, ShadowBuildBindings>
 	{
 	public:
 		ShadowBuildDrawsPass(std::shared_ptr<ShadowResources> a_resources, bool a_sky) :
-			resources(std::move(a_resources)), sky(a_sky) {}
+			resources(std::move(a_resources)), sky(a_sky), viewTable(a_sky ? "cs.dclf.sky.build-views" : "cs.dclf.shadow.build-views") {}
 
 		ShadowBuildBindings Declare(org::PassBuilder& a_builder)
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			ShadowBuildBindings bindings{};
-			// The scene list, the geometry table and the shadow rows are the installed payload's (the latch names them).
+			// The scene list, the geometry table and the shadow rows are the installed payload's (the latch names them). Every slot's
+			// outputs, written by the one dispatch.
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
 				bindings.sequences.push_back(a_builder.UnorderedAccess(*resources->sequences[s]).View());
 				bindings.count.push_back(a_builder.UnorderedAccess(resources->count[s]).View());
@@ -103,53 +111,62 @@ namespace DCLF::Draws
 			const auto frame = CurrentShadowFrame(a_preparation, sky);
 			if (!frame || frame->views.empty() || !resources->buildDraws || !frame->latch || !resources->dispatchSignature)
 				return prepared;
+			// The views' table: what a dispatch per view pushed (its latch, its slot's outputs), in the views' order.
+			std::vector<ShadowBuildView> rows;
+			rows.reserve(frame->views.size());
+			for (std::size_t i = 0; i < frame->views.size(); ++i) {
+				const auto& view = frame->views[i];
+				// The views the commit counted for the dispatch's y (ShadowBuildRow: drawn modes, the variant's placements), less a slot past
+				// the bindings: the shader leaves a y past the rows idle.
+				if (!ShadowBuildRow(*frame, i) || view.slot >= a_bindings.sequences.size())
+					continue;
+				ShadowBuildView row{};
+				row.latchAt = view.slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
+				row.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
+				row.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
+				row.bucketCountsIndex = CaptureViewIndex(a_preparation, a_bindings.bucketCounts[view.slot]);
+				// Bucketed draws are bounded by their buckets; this bounds the rest.
+				row.sequenceDraws = view.sequenceDraws;
+				rows.push_back(row);
+			}
+			if (rows.empty())
+				return prepared;
 			prepared.program = resources->buildDraws;
 			prepared.latch = frame->latch;
 			prepared.signature = resources->dispatchSignature->GetHandle();
-			const auto visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
-			const auto poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
-			const bool fadeRows = FadeRows();
-			const auto fadeRootsIndex = fadeRows ? CaptureViewIndex(a_preparation, a_bindings.fadeRoots) : 0u;
-			const auto objectGatesIndex = a_bindings.objectGates.layout ? CaptureViewIndex(a_preparation, a_bindings.objectGates) : 0u;
-			for (std::size_t i = 0; i < frame->views.size(); ++i) {
-				const auto& view = frame->views[i];
-				if (view.slot >= a_bindings.sequences.size() || view.modeIndex >= kShadowModeCount)
-					continue;
-				// A placement the variant's frames leave unused (ShadowFrame::activeViews): its latch is zero, nothing to cull.
-				if (i < 64 && !((frame->activeViews >> i) & 1))
-					continue;
-				ShadowBuildPrepared::Dispatch dispatch{};
-				dispatch.latchOffset = view.slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
-				auto& constants = dispatch.constants;
-				constants.latchIndex = frame->latch->SrvIndex();
-				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
-				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
-				constants.bucketCountsIndex = CaptureViewIndex(a_preparation, a_bindings.bucketCounts[view.slot]);
-				constants.poolFirstsIndex = poolFirstsIndex;
-				// ShadowMaterialRow's stride, one constant block (ShadowPayload.h asserts it); no pipeline rows: their stride stays 0.
-				constants.materialRowStride = static_cast<std::uint32_t>(kConstantAlignment);
-				// Bucketed draws are bounded by their buckets; this bounds the rest.
-				constants.phaseTwoBase = view.sequenceDraws;
-				// The single phase: frustum only, no engine-visibility gate.
-				constants.phaseBits = 0;
-				// Every dispatch writes the visibility words; nothing reads them here.
-				constants.visibilityIndex = visibilityIndex;
-				constants.fadeRootsIndex = fadeRootsIndex;
-				constants.objectGatesIndex = objectGatesIndex;
-				prepared.dispatches.push_back(dispatch);
-			}
+			prepared.dispatchOffset = frame->latchLayout.BuildDispatchOffset(sky);
+			prepared.views = static_cast<std::uint32_t>(rows.size());
+			auto& constants = prepared.constants;
+			constants.latchIndex = frame->latch->SrvIndex();
+			// Published again only when its bytes change (another view set, or a slot's descriptors); the packet keeps the one it names.
+			constants.sequencesIndex = viewTable.Publish(a_preparation, std::span<const ShadowBuildView>(rows));
+			constants.countIndex = prepared.views;
+			constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
+			// ShadowMaterialRow's stride, one constant block (ShadowPayload.h asserts it); no pipeline rows: their stride stays 0.
+			constants.materialRowStride = static_cast<std::uint32_t>(kConstantAlignment);
+			// The single phase: frustum only, no engine-visibility gate.
+			constants.phaseBits = 0;
+			// Every view writes the visibility words; nothing reads them here.
+			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
+			constants.fadeRootsIndex = FadeRows() ? CaptureViewIndex(a_preparation, a_bindings.fadeRoots) : 0u;
+			constants.objectGatesIndex = a_bindings.objectGates.layout ? CaptureViewIndex(a_preparation, a_bindings.objectGates) : 0u;
 			return prepared;
 		}
 
 		static void Record(const ShadowBuildBindings&, const ShadowBuildPrepared& a_prepared, org::PassRecordContext& a_recording)
 		{
-			if (!a_prepared.program || !a_prepared.latch || a_prepared.dispatches.empty())
+			if (!a_prepared.program || !a_prepared.latch || !a_prepared.views)
 				return;
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_prepared.program->layout->GetHandle());
 			commands.BindPipeline(a_prepared.program->Pipeline());
-			for (const auto& dispatch : a_prepared.dispatches)
-				RecordLatchedDispatch(dispatch.constants, *a_prepared.latch, a_prepared.signature, dispatch.latchOffset, a_recording);
+			// The shader finds each view's latch from the frame slot's region; the groups are the epoch's in the same region (x the list's,
+			// y the views the commit counted: ShadowBuildRows), the shader bounding y by the table's rows.
+			const std::uint64_t region = a_prepared.latch->Offset(a_recording.FrameSlot());
+			auto constants = a_prepared.constants;
+			constants.latchOffset = static_cast<std::uint32_t>(region);
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kBuildDrawsConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+			commands.ExecuteIndirect(a_prepared.signature, a_prepared.latch->Resource()->GetAPIResource().GetHandle(), region + a_prepared.dispatchOffset, {}, 0, 1);
 		}
 
 	private:
@@ -158,6 +175,8 @@ namespace DCLF::Draws
 
 		std::shared_ptr<ShadowResources> resources;
 		bool sky = false;
+		// The views' table (ShadowBuildView rows): an upload-heap buffer per distinct content, each kept by the packets naming it.
+		org::PreparedTablePublisher viewTable;
 	};
 
 	struct ShadowPassBindings
@@ -380,10 +399,12 @@ namespace DCLF::Features::Shadows::Engine
 			return std::make_shared<Draws::ShadowViewPass>(a_context.Shadow(), Sky);
 		}
 
-		// The views' culling counters, to the host (ShadowEngine::ReadShadowCullCounters).
+		// The views' culling counters, to the host (ShadowEngine::ReadShadowCullCounters), for the report's shadow culling line: only while
+		// the report runs (CS_DCLF_STATS). Without it the pass is not added, so the epoch's recording copies nothing each frame and the
+		// host arms no sample (CullCounterReadback is null).
 		std::shared_ptr<org::RenderPass> CullCounters(const Api::PassContext& a_context)
 		{
-			return Draws::MakeShadowCullCounterPass(a_context.Shadow());
+			return Diagnostics::Observe().stats ? Draws::MakeShadowCullCounterPass(a_context.Shadow()) : nullptr;
 		}
 
 		using PassKind = Api::PassKind;

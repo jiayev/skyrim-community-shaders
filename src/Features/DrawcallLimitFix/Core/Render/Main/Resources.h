@@ -7,6 +7,7 @@
 // volk must precede every Vulkan header in this translation unit (FrameLayout.h first, in its own include block).
 #include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
 
+#include "Features/DrawcallLimitFix/Api/Views.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
@@ -43,6 +44,8 @@ namespace DCLF
 
 namespace DCLF::Draws
 {
+	struct ViewResources;  // Epochs/ViewEpoch.h
+
 	/**
 	 * @brief How the main epochs lay out the sequences and the Z-prepass buckets (the revision producer's, Impl::RequireMain): derived
 	 * from the scene's draw bound, grown only when exceeded (powers of two), so the recorded calls change only then. Every buffer it
@@ -133,6 +136,13 @@ namespace DCLF::Draws
 		// Per object, the last frame stamp at which main depth phase 1 found its bound inside the frustum, occlusion aside (the
 		// engine's OnVisible semantics). Never cleared: a stale stamp is simply not this frame's.
 		Versioned frustum;
+		// Depth phase 1's retest list: the inputs it left OccludedRetest (an input index a word, kCountRetestsWord long), which phase 2
+		// runs over. An object slot a word, with the per-object buffers (RequireSceneTables): an object has one input, so the list never
+		// holds more entries than the visibility words its inputs name.
+		Versioned retests;
+		// Phase 2's dispatch arguments (groups x, y, z, a pad word): the depth commit latches kRetestDispatchReset, phase 1 adds a group
+		// per 64 retest entries, phase 2's ExecuteIndirect reads them.
+		std::shared_ptr<org::Buffer> retestDispatch;
 		std::shared_ptr<PassStats> passStats;  // CS_DCLF_PASS_STATS
 		// Explicit DGC preprocess state lists (colour segment, forward epoch), and the forward range's sort.
 		std::shared_ptr<PreprocessStates> preprocessMain;
@@ -162,6 +172,10 @@ namespace DCLF::Draws
 			std::uint64_t adoptedSerial = 0;  // the adopted set's serial
 		};
 		Committed depthCommitted;
+		// The views drawing from these resources (ViewResources::main), by view slot: set by SetupView, and by Setup for the views made
+		// before. What a main epoch hosting a view's epoch (Api::EpochDef::hostedBy: the depth epoch, the reflection's) makes that epoch's
+		// passes with, at the graph's build (render thread, as the writes). Weak: a view holds its main resources.
+		std::array<std::weak_ptr<ViewResources>, static_cast<std::size_t>(Api::EngineView::Count)> views;
 	};
 
 	struct PassBindings

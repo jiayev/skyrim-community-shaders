@@ -6,13 +6,14 @@
 // main set), its key rule and shape (six faces with tree LOD), its life (the last shape kept while off), area (its imported target's),
 // withholding (in renderers of its own: the cube camera's accumulators, named by the face render's hook) and target (the engine's cube with
 // DCLF's own depth), and its coverage (Covered). Its work after tree LOD's decision (Prepare: the faces' targets, the LOD slots' forward
-// pipelines, its resources) and at the depth commit (Execute: one epoch drawing the frame's faces), its engine hooks (ReflectionFaces: the
+// pipelines, its resources) and at the depth commit (Execute: the frame's faces, drawn by the depth epoch, which hosts the faces' epoch's
+// passes, committed inside it), its engine hooks (ReflectionFaces: the
 // update, its LOD add-roots, the face render, its orientation and draws; the feature's early hooks), its state and report counters
 // (ReflectionFrame, Report: its lines at the views' async work) and the faces' camera parity (Diagnostics/FaceCameraParity.cpp) are the
 // feature's, on the view engine's calls (IndirectDraws.h, "The view engine").
 //
 // Core keeps what every bucketed view shares, keyed by the view's slot or its membership (Core/Render/Views/ViewSlots.h,
-// Core/Extensions/Views.h): the epoch's segment and passes (ViewEpoch*.cpp), its revisions, the slot's state (Epochs/ViewEpoch.h's
+// Core/Extensions/Views.h): the epoch's passes (ViewEpoch*.cpp; the schedule hosts them in the depth epoch), its revisions, the slot's state (Epochs/ViewEpoch.h's
 // ViewEpochState), a LodTechniques view's slot readiness and phase readiness, the colour target's import, and PassCapture's withholding in a
 // view's own renderers. It keeps a trees view's tree LOD per face, the view engine's under the tree LOD class (Api::ObjectClass::TreeLod,
 // Features/TreeLod's): its pipeline, ownership and row (IndirectDraws::ResolveViewFaces, DecideViewFaces and SubmitViewEpoch's rows);
@@ -55,7 +56,8 @@ namespace DCLF::Features::Reflection
 	void FaceOriented(const RE::NiCamera& a_camera, std::uint32_t a_face);
 	void FaceDrawn();
 
-	// ReflectionEpoch.cpp: the faces' epoch at the depth commit (ViewPoint::DepthCommitted), and the view's report lines, taking its counters.
+	// ReflectionEpoch.cpp: the faces' commit at the depth commit, inside it (ViewPoint::DepthCommitted: the depth epoch hosts the faces'
+	// passes), and the view's report lines, taking its counters.
 	void Execute(const Api::ViewPointContext& a_context);
 	std::string Report();
 

@@ -47,11 +47,12 @@ namespace DCLF
 	{
 		// A live epoch's recording waits for the slot its ready, unsubmitted ticket holds: an epoch outside a_submitted gives that ticket
 		// back while a revision waits for recordings, so none waits on it. Recordings outstanding: an atomic the completions count down
-		// (never the assembler's pending list, the builder's).
+		// (never the assembler's pending list, the builder's). A hosted epoch has no ticket of its own (its segment is its host's).
 		if (!revisions.explicitBuilds || !recordingsOutstanding.load(std::memory_order_acquire))
 			return;
 		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
-			if (const auto segment = EpochTraitsOf(e).segment; !(a_submitted & (1u << static_cast<std::uint32_t>(segment))))
+			if (const auto segment = EpochTraitsOf(e).segment;
+				EpochTraitsOf(e).hostedBy == kNoEpoch && !(a_submitted & (1u << static_cast<std::uint32_t>(segment))))
 				revisions.ticketsReleased += a_host.ReleaseEpochTicket(RenderGraphRuntime::EpochOf(segment)) ? 1 : 0;
 	}
 
@@ -211,10 +212,13 @@ namespace DCLF
 		}
 		if (current && snapshot)
 			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
-				// An epoch's recordings are all of the build its versions were made at (AssembleRevision asks for them again after one).
-				const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + e);
+				// An epoch's recordings are all of the build its versions were made at (AssembleRevision asks for them again after one). A
+				// hosted epoch's are its host's (an earlier row), recorded with its shape (RevisionRecordings::hosted): their first half
+				// carries its passes' work.
+				const auto hostedBy = EpochTraitsOf(e).hostedBy;
+				const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + (hostedBy != kNoEpoch ? hostedBy : e));
 				rv.covered[e] = recordings && !recordings->recordings.empty() && recordings->recordings.front() &&
-				                host->EpochRecordingCurrent(*recordings->recordings.front());
+				                (hostedBy == kNoEpoch ? host->EpochRecordingCurrent(*recordings->recordings.front()) : rv.covered[hostedBy] && recordings->hosted);
 			}
 		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
 			rv.uncovered[e] += rv.covered[e] ? 0 : 1;
@@ -227,7 +231,8 @@ namespace DCLF
 		// What a registered view's coverage is decided from (Api::ViewCoverage), every input read whatever the others: its feature's
 		// callback decides (the first person's: its members withheld from the engine, PassCapture, and drawn by its epochs on a frame the
 		// engine draws it, whose claims stand, both epochs' recordings in the revision and its target imported into the graph as built; the
-		// reflection's: on a frame whose claims stand, its recording in the revision and its cube imported into the graph as built).
+		// reflection's: on a frame whose claims stand, its host's recordings with its passes in the revision (the depth epoch's: a hosted
+		// epoch is covered with its host, DecideEpochCoverage) and its cube imported into the graph as built).
 		const auto& rv = revisions;
 		const auto& epochs = ViewEpochsOf(a_kind).epochs;
 		auto& view = View(a_kind);

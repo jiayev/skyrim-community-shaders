@@ -127,6 +127,11 @@ namespace DCLF
 							host->RequestRebuild();
 						return;
 					}
+					// "dclf:shadow-min-texels=<texels>": the sun cascades' size cull (0: off), from the next shadow commit.
+					if (command.rfind("dclf:shadow-min-texels=", 0) == 0) {
+						DCLF::Draws::shadowMinTexels.store(std::strtof(command.c_str() + 23, nullptr), std::memory_order_relaxed);
+						return;
+					}
 					if (command.rfind("dclf:", 0) == 0) {
 						const auto equals = command.find('=');
 						const auto name = command.substr(5, equals == std::string::npos ? std::string::npos : equals - 5);
@@ -301,8 +306,16 @@ namespace DCLF
 				std::lock_guard lock(queuedMutex);
 				queued.swap(queuedCommands);
 			}
-			for (auto& command : queued)
+			for (auto& command : queued) {
+				// "dclf:feature=0|1": the feature's menu toggle (as CS_DCLF_TEST_TOGGLE flips it), for in-session on/off A/Bs.
+				if (command.rfind("dclf:feature=", 0) == 0) {
+					const bool off = command.substr(13) == "0";
+					logger::info("[DCLF] test command: feature {}", off ? "off" : "on");
+					globals::state->SetFeatureDisabled(std::string(a_feature), off);
+					continue;
+				}
 				TestCommands::Run(std::move(command), 0);
+			}
 		}
 		// CS_DCLF_TEST_EXIT=<frame>: a startup loop's run ends here, loading screens not counted. The log is flushed, then the
 		// process ends without the engine's shutdown, which is slow and not what such a run tests.

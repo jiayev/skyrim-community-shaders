@@ -57,6 +57,14 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     destroyed a pool entry's object (keyed by a `BSLightingShaderProperty`) that was already freed. DCLF holds property and
     material references, but nothing ties the crash to them yet. **Next:** reproduce with `CS_DCLF_RELEASE_GUARD=1`, and with DCLF
     off.
+-   **A hang 27 s into a motion parity run, after the shadow epoch's builds became one dispatch.** It happened once, on 2026-10-21,
+    in the first run of the multi-view shadow build. That build is `ShadowViews` in `BuildDrawsCS.hlsl`: its view table is published
+    by `org::PreparedTablePublisher`, `cs.dclf.shadow.build-views`. The log stops with ordinary report lines, about a second after
+    the table was published at 4, then 8, then 28 rows. The game then stayed alive until the run's timeout. There was no device loss
+    and no Aftermath dump, so it was a wait that never completed: a CPU deadlock, or a submission waiting on a signal that never came.
+    The rerun did not hang: 87 s, with the 28-row table published 32 times. **Next:** if it recurs, the scratch folder's
+    `hangwatch.sh` writes a full dump when the log stalls for 15 s. Read the threads' stacks with cdb. Suspects are the publisher's
+    mutex during preparation, and a kept shadow recording whose table was republished.
 
 ### Crashes probably unrelated to DCLF
 
@@ -132,6 +140,11 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 
 ## Failing or flaky parity checks
 
+-   **`set commit parity` at startup (`<- COMMIT`).** This appeared once, on 2026-10-21, at frame 6 of a motion parity run (run
+    `stageB2-full`). One slot ('Land', slot 6729) differed from a full evaluation: the commit kept it as not waiting, while the full
+    evaluation had it waiting (causes 0x11; that frame's set line shows pipeline waits). It was not seen in the three runs before.
+    It looks like a readiness event racing the commit during startup's pipeline builds. **Next:** watch for it in later runs. If it
+    recurs, log the slot's readiness events around the commit.
 -   **Capture parity mismatches under `CS_DCLF_CAPTURE_PARITY` with `CS_DCLF_PARITY_BOTH`**, in every window. Typical counts are
     about 44k of 153k draws (29k material, about 300 per-geometry, 7k technique), and every LODObjects, LODObjectHD and LODLandNoise
     draw. The cause, by field:

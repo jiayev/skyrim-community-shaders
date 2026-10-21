@@ -33,17 +33,25 @@ namespace DCLF::Draws
 	void RecordLatchedDispatch(BuildDrawsConstants a_constants, const org::LatchBlock& a_latch,
 		rhi::CommandSignatureHandle a_signature, std::uint32_t a_latchOffset, org::PassRecordContext& a_recording);
 
-	/** @brief What a latched copies pass copies, as of the shape its preparation is for: the shape's generation, the shape (held), its lists. */
+	/**
+	 * @brief What a latched copies pass copies, as of the shape its preparation is for: the shape's generation, the shape (held), its lists;
+	 * and in an epoch hosting another's (Api::EpochDef::hostedBy: the depth epoch, the reflection's), the hosted shape's, when the
+	 * preparation names it (its recordings with the hosted passes' work), copied after the epoch's own.
+	 */
 	struct LatchedSource
 	{
 		std::uint64_t generation = 0;
 		std::shared_ptr<const void> shape;
 		std::span<const LatchedList> lists;
+		std::uint64_t hostedGeneration = 0;
+		std::shared_ptr<const void> hostedShape;
+		std::span<const LatchedList> hostedLists;
 	};
 	/**
 	 * @brief An epoch's first pass: its shape's latched copies (LatchedList) from their blocks to where its passes read them,
 	 * recorded with the epoch's ticket on ORG's host thread (its commit records no copy). It declares a_targets() as copy
 	 * destinations, published to a_declared when given (what a commit may latch: LatchedUploads); a copy of another target is skipped.
+	 * An epoch hosting another's copies the hosted shape's lists too (one pass: the hosted epoch has no latched copies of its own).
 	 */
 	std::shared_ptr<org::RenderPass> MakeLatchedCopiesPass(std::function<std::vector<LatchedTarget>()> a_targets,
 		std::function<LatchedSource(const org::PassPrepareContext&)> a_source, std::atomic<std::shared_ptr<const std::vector<const void*>>>* a_declared = nullptr);

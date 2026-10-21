@@ -14,7 +14,7 @@ namespace DCLF::Draws
 	std::vector<LatchedTarget> MainLatchedTargets(const Resources& a_resources)
 	{
 		std::vector<LatchedTarget> out;
-		for (const auto& buffer : { a_resources.frameConstants, a_resources.count })
+		for (const auto& buffer : { a_resources.frameConstants, a_resources.count, a_resources.retestDispatch })
 			if (buffer)
 				out.push_back({ buffer, nullptr });
 		for (const auto& counts : a_resources.zBucketCounts)
@@ -62,6 +62,8 @@ namespace DCLF::Draws
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility"), resources->visibility);
 			if (resources->frustum)
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.frustum"), resources->frustum);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.retests"), resources->retests);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.retest-dispatch"), resources->retestDispatch);
 			for (const auto& frameBuffer : resources->frameBuffers)
 				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.frame-buffer.t{}", frameBuffer.textureRegister)), frameBuffer.copy);
 			for (std::uint32_t i = 0; i < resources->targetCount; ++i)

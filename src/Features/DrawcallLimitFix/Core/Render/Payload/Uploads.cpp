@@ -412,6 +412,9 @@ namespace DCLF
 		// counters before anything read them.
 		const std::size_t zeroBytes = depthOnly ? sizeof(kZeroCounts) : sizeof(std::uint32_t);
 		latched(epochResources->count, kZeroCounts, zeroBytes, 0);
+		// Phase 2's dispatch from the retest list: no groups until phase 1 appends (the list's length is a count word, zeroed above).
+		if (depthOnly && epochResources->retestDispatch)
+			latched(epochResources->retestDispatch, kRetestDispatchReset, sizeof(kRetestDispatchReset), 0);
 		// The sort's counts start at zero; afterwards the scan clears them.
 		if (epochResources->sort)
 			epochResources->sort->ZeroCountsOnce(uploads);
@@ -444,15 +447,16 @@ namespace DCLF
 	}
 
 	// The depth segment's plain draws: the index pool brought up to the tables, the bucket map and each phase's table in the
-	// latch, their count words zeroed. A slot without a published pipeline maps to none: BuildDraws drops its draws.
-	void IndirectDraws::Impl::WriteDepthBuckets(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch)
+	// latch, their count words zeroed. A slot without a published pipeline maps to none: BuildDraws drops its draws. Returns the
+	// index pool's copies.
+	std::uint32_t IndirectDraws::Impl::WriteDepthBuckets(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch)
 	{
 		const auto& epochResources = a_commit.resources;
 		const auto& writePlan = a_commit.writePlan;
 		const auto& latchBlock = a_commit.latchBlock;
 		const auto& layout = a_commit.latchLayout;
-		UpdateIndexPool(a_commit.adopted, *epochResources->pool, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetTablesGeneration(), latchBlock, a_latchSlot,
-			layout.PoolOffset(), a_commit.uploads);
+		const std::uint32_t poolCopies = UpdateIndexPool(a_commit.adopted, *epochResources->pool, Scene::FrameView::Get().GetTables(),
+			Scene::FrameView::Get().GetTablesGeneration(), latchBlock, a_latchSlot, layout.PoolOffset(), a_commit.uploads);
 		// The plan's slots, and none for any other slot the installed members can use (new since the plan).
 		const auto planned = static_cast<std::uint32_t>(writePlan.map.size());
 		auto slots = std::max(planned, InstalledPipelineSlots());
@@ -479,6 +483,7 @@ namespace DCLF
 		a_latch.bucketTableOffset = region + layout.BucketTableOffset();
 		a_latch.phaseTwoBucketTableOffset = region + layout.PhaseTwoBucketTableOffset();
 		a_latch.bucketMapOffset = region + layout.BucketMapOffset();
+		return poolCopies;
 	}
 
 	// The colour segment's sun cascades and local shadow volumes in the latch, and the latch's sun test.
@@ -593,8 +598,9 @@ namespace DCLF
 		BuildDrawsLatch latch{};
 		FillCullLatch(commit, cull, latch);
 		const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
+		std::uint32_t poolCopies = 0;
 		if (depthOnly && a_resources->pool)
-			WriteDepthBuckets(commit, latchSlot, latch);
+			poolCopies = WriteDepthBuckets(commit, latchSlot, latch);
 		if (!depthOnly) {
 			WriteShadowLatch(commit, latchSlot, latch);
 			WriteClassRegion(commit, latchSlot, latch);
@@ -606,7 +612,24 @@ namespace DCLF
 
 		(void)latched.Finish();
 		revisions.latchedMisses += latched.Misses();
-		SubmitRevisionRecording(revisionEpoch, *a_revision.recordings, 0);
+		// The view epoch this one hosts (the depth epoch, the reflection's faces: Schedule/Frame.cpp), committed into this commit by its
+		// feature's work (ViewPoint::DepthCommitted, run here: IndirectDraws::CaptureDepthPass), inside this execution: its latch in this
+		// frame slot, its owners held with this execution's (CommitHostedView).
+		bool hostedDrawn = false;
+		if (const auto hosts = EpochTraitsOf(revisionEpoch).hosts; hosts != kNoEpoch && hostedWork && *hostedWork) {
+			hostedCommit = { revisionEpoch, &a_bindingOwners, &a_payload, 0 };
+			(*hostedWork)();
+			hostedDrawn = std::exchange(hostedCommit, {}).drawn != 0;
+			revisions.submitted[hosts] += hostedDrawn ? 1 : 0;
+		}
+		// The depth epoch's recording without the index pool's dispatch when this commit gave out no range (the shadow epoch's took
+		// the frame's, or none changed): its dispatch would be of zero groups. With a hosted epoch, the recording with its passes' work
+		// when it committed, else the same without it (its passes record nothing: RevisionRecordings::hosted).
+		const auto& recordings = *a_revision.recordings;
+		std::size_t recording = depthOnly && !poolCopies && recordings.Variants() > 1 ? 1 : 0;
+		if (recordings.hosted && !hostedDrawn)
+			recording += recordings.Variants();
+		SubmitRevisionRecording(revisionEpoch, recordings, recording);
 		lap(6);
 		return true;
 	}

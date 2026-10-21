@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuResources.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
@@ -71,9 +72,9 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 				draws.cullDrawn, rejected, draws.cullTested,
 				draws.cullTested ? 100.0 * rejected / draws.cullTested : 0.0,
 				draws.cullRejected, draws.cullOccluded);
-			if (draws.cullRescuedByPhaseTwo || draws.cullDrawnPhaseTwo)
-				logger::info("[DCLF] two-phase culling: phase 2 brought back {} objects the stale HZB had rejected, and drew depth for {} of them",
-					draws.cullRescuedByPhaseTwo, draws.cullDrawnPhaseTwo);
+			if (draws.cullRescuedByPhaseTwo || draws.cullDrawnPhaseTwo || draws.cullRetests)
+				logger::info("[DCLF] two-phase culling: phase 2 ran over the {} inputs phase 1 left to retest, brought back {} objects the stale HZB had rejected, and drew depth for {} of them",
+					draws.cullRetests, draws.cullRescuedByPhaseTwo, draws.cullDrawnPhaseTwo);
 			if (draws.hzbSampled)
 				logger::info("[DCLF] HZB: {} footprints sampled, {} came back all-near (~0), {} all-far (~1)",
 					draws.hzbSampled, draws.hzbNear, draws.hzbFar);
@@ -205,10 +206,10 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 			if (shadow.views)
 				logger::info("{}", DCLF::IndirectDraws::Get().ShadowCapabilityReport());
 			if (shadow.cullTested || shadow.cullClass)
-				logger::info("[DCLF] shadow culling (view {} mode {:#x}, sampled): {} of the caster class, {} outside the sun's entry, {} small, {} under a fading root; "
-							 "{} tested, {} drawn, {} rejected by the frustum",
+				logger::info("[DCLF] shadow culling (view {} mode {:#x}, sampled): {} of the caster class, {} outside the sun's entry, {} small, {} under a fading root, "
+							 "{} below the size threshold ({} texels); {} tested, {} drawn, {} rejected by the frustum",
 					shadow.cullSampledView, shadow.cullSampledMode, shadow.cullClass, shadow.cullSunEntryOut, shadow.cullMinRadius, shadow.cullRootFading,
-					shadow.cullTested, shadow.cullDrawn, shadow.cullRejected);
+					shadow.cullBelowTexels, DCLF::Draws::shadowMinTexels.load(std::memory_order_relaxed), shadow.cullTested, shadow.cullDrawn, shadow.cullRejected);
 			if (shadow.sunEntryChecks)
 				logger::info("[DCLF] sun entry on the GPU: {} inputs checked against the CPU's verdict (sampled frames), {} differ{}", shadow.sunEntryChecks,
 					shadow.sunEntryMismatches, shadow.sunEntryMismatches ? " <- DIFFER" : " <- OK");

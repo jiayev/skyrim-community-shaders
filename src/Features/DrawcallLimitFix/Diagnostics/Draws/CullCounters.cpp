@@ -207,6 +207,7 @@ namespace DCLF::Diagnostics
 				}
 				a_stats.cullDrawnPhaseTwo = words[17];
 				a_stats.cullRescuedByPhaseTwo = words[18];
+				a_stats.cullRetests = words[kCountRetestsWord];
 				a_stats.decalsCulled = words[kCountDecalsCulledWord];
 				a_stats.decalsTested = words[kCountDecalsTestedWord];
 				a_stats.sunTested = words[kCountSunTestedWord];

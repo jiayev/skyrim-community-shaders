@@ -32,9 +32,12 @@ namespace DCLF::Draws
 	 * EpochTraitsOf, EpochOfShape, EpochById, ViewEpochsOf) and the frame's orders (Extensions::ScheduledFrameOrders), then each epoch's
 	 * keys to their passes, grouped by shape (and view). Fails the install for an epoch id unknown or duplicated, a segment used twice, more
 	 * epochs than kMaxEpochs, a shape Core has not or one of Core's with no epoch, a sharesWith naming no earlier epoch recording that shape
-	 * itself, an order not naming every epoch and foreign epoch once; a trigger id missing or duplicated, an epoch's trigger the schedule
-	 * has not, a trigger no epoch names, one of Core's (CoreTrigger) missing; a key nobody registered, naming it and its epoch; a pass with a setup
-	 * in a Shadow epoch; a second pass with a latch word, or one the schedule names anywhere but in main.depth before core.z.build-draws.
+	 * itself, an order not naming every epoch and foreign epoch once (a hosted one never); a hosted epoch (Api::EpochDef::hostedBy) whose
+	 * host is not an earlier Main epoch of its trigger and segment hosting no other, which is no View epoch of its own, has passes of its
+	 * own or whose shape another shares; a host's key of an epoch it does not host; a trigger id missing or duplicated, an epoch's trigger
+	 * the schedule has not, a trigger no epoch names, one of Core's (CoreTrigger) missing; a key nobody registered, naming it and its epoch;
+	 * a pass with a setup in a Shadow epoch; a second pass with a latch word, or one the schedule names anywhere but in main.depth before
+	 * core.z.build-draws.
 	 */
 	void ResolveSchedule(const Api::FrameSchedule& a_schedule);
 	/**
@@ -69,7 +72,9 @@ namespace DCLF::Draws
 	/**
 	 * @brief Render thread, at the graph's build (an extension's GatherStructuralPasses; never per frame): a_shape's epochs (a_view's, for
 	 * the View shape), in the schedule's order, each its passes in order, made from a_base with the epoch's fields set: a make's non-null
-	 * pass added to a_out, an anchor's emit called.
+	 * pass added to a_out, an anchor's emit called. A Main epoch hosting a view's epoch makes that epoch's passes, in its list's order,
+	 * with the view's resources (Resources::views) as their view, while they can be added (ViewPassesReady); its own passes see them
+	 * (PassContext::hosted).
 	 */
 	void GatherScheduled(Api::EpochShape a_shape, Api::EngineView a_view, const Api::PassContext& a_base, std::vector<org::RenderGraph::ExternalPassDesc>& a_out);
 }

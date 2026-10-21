@@ -67,8 +67,16 @@ namespace DCLF::Api
 		ObjectClass gate = ObjectClass::Count;
 		bool claims = false;    // the frame's claims need the epoch's recordings (while its gate is on)
 		bool revision = true;   // revision-driven: each submission carries the scene revision's recording, no live ticket is prepared
+		// The id of an earlier Main epoch that runs this one's passes (the reflection's faces, in the depth epoch): its passes are keys of
+		// the host's list, prefixed with this epoch's id and kHostedKey ("reflection/view.faces"), made from this epoch's own shape's
+		// resources (a View epoch's: its view's); its own passes list is empty. It has a revision shape slot as any epoch, but no segment
+		// (its host's), recording, order or submission of its own: the host's recordings carry its passes, and the host's commit commits
+		// it. Empty: its own epoch.
+		std::string_view hostedBy;
 		std::span<const std::string_view> passes;  // pass keys, in order
 	};
+	/** @brief Between a hosted epoch's id and its pass key, in its host's list (EpochDef::hostedBy). */
+	inline constexpr char kHostedKey = '/';
 
 	/** @brief An epoch outside DCLF (another feature's segment): only in the frame and async orders, never revision-driven. */
 	struct ForeignEpoch
@@ -79,7 +87,8 @@ namespace DCLF::Api
 
 	/**
 	 * @brief The frame's triggers (each named by an epoch); its epochs, in the revisions' slot order (within an epoch, its passes' order
-	 * is the graph's; across epochs ORG orders them by frameOrder); the foreign ones; the frame's order and the host's async order, by id, every epoch and foreign epoch once.
+	 * is the graph's; across epochs ORG orders them by frameOrder); the foreign ones; the frame's order and the host's async order, by id,
+	 * every epoch and foreign epoch once but a hosted epoch (EpochDef::hostedBy), which runs as its host.
 	 */
 	struct FrameSchedule
 	{

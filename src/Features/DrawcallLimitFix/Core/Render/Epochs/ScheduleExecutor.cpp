@@ -28,13 +28,23 @@ namespace DCLF::Draws
 			bool viewName = false;  // passName names "{view}"
 		};
 
-		/** @brief An epoch of the schedule, its keys resolved to the passes (indices into Executor::passes), in order. */
+		/**
+		 * @brief An epoch of the schedule, its keys resolved to the passes, in order: each its index into Executor::passes, and for a
+		 * hosted epoch's pass in its host's list (Api::EpochDef::hostedBy) that epoch's row (kNoEpoch: the epoch's own). hostedView: the
+		 * view of the epoch it hosts (a View epoch's: its passes are made from that view's resources).
+		 */
+		struct ResolvedPass
+		{
+			std::uint32_t pass = 0;
+			std::uint32_t hosted = kNoEpoch;
+		};
 		struct ResolvedEpoch
 		{
 			std::string id;
 			RenderGraphRuntime::Segment segment{};
 			Api::EngineView view{};
-			std::vector<std::uint32_t> passes;
+			std::vector<ResolvedPass> passes;
+			Api::EngineView hostedView{};
 		};
 
 		constexpr std::string_view kViewToken = "{view}";
@@ -104,7 +114,16 @@ namespace DCLF::Draws
 			return ~0u;
 		}
 
-		/** @brief Fails the install unless every epoch's and foreign epoch's id is set and its own, and every segment is one and used once. */
+		/** @brief Whether a_schedule's epoch row a_row is hosted (Api::EpochDef::hostedBy): in neither order, its segment its host's. */
+		bool Hosted(const Api::FrameSchedule& a_schedule, std::uint32_t a_row)
+		{
+			return a_row < a_schedule.epochs.size() && !a_schedule.epochs[a_row].hostedBy.empty();
+		}
+
+		/**
+		 * @brief Fails the install unless every epoch's and foreign epoch's id is set and its own, and every segment is one and used once
+		 * (a hosted epoch's is its host's: ResolveEpochTraits checks it).
+		 */
 		void CheckEpochIds(const Api::FrameSchedule& a_schedule)
 		{
 			const auto rows = static_cast<std::uint32_t>(a_schedule.epochs.size() + a_schedule.foreign.size());
@@ -120,21 +139,28 @@ namespace DCLF::Draws
 				if (segmentOf(row) >= static_cast<std::uint32_t>(RenderGraphRuntime::Segment::Count))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} has no segment", idOf(row)));
 				for (std::uint32_t other = 0; other < row; ++other)
-					if (segmentOf(other) == segmentOf(row))
+					if (segmentOf(other) == segmentOf(row) && !Hosted(a_schedule, row) && !Hosted(a_schedule, other))
 						stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epochs {} and {} share segment {}", idOf(other), idOf(row), segmentOf(row)));
 			}
 		}
 
-		/** @brief Fails the install unless a_order (a_what) names every epoch and foreign epoch once; its segments, in order. */
+		/**
+		 * @brief Fails the install unless a_order (a_what) names every epoch and foreign epoch once, a hosted one never (it runs as its
+		 * host); its segments, in order.
+		 */
 		std::vector<std::uint32_t> ResolveOrder(const Api::FrameSchedule& a_schedule, std::span<const std::string_view> a_order, std::string_view a_what)
 		{
-			const auto rows = a_schedule.epochs.size() + a_schedule.foreign.size();
+			std::size_t rows = a_schedule.epochs.size() + a_schedule.foreign.size();
 			std::vector<std::uint32_t> segments;
 			std::vector<bool> listed(rows, false);
+			for (std::uint32_t row = 0; row < a_schedule.epochs.size(); ++row)
+				rows -= Hosted(a_schedule, row) ? 1 : 0;
 			for (const auto id : a_order) {
 				const auto row = RowOf(a_schedule, id);
 				if (row == ~0u || listed[row])
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's {} names epoch {}, which is unknown or named twice", a_what, id));
+				if (Hosted(a_schedule, row))
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's {} names epoch {}, which its host runs (hostedBy)", a_what, id));
 				listed[row] = true;
 				segments.push_back(row < a_schedule.epochs.size() ? a_schedule.epochs[row].segment : a_schedule.foreign[row - a_schedule.epochs.size()].segment);
 			}
@@ -159,10 +185,25 @@ namespace DCLF::Draws
 			a_state.names[a_row] = std::string(epoch.label);
 			auto& traits = a_state.traits[a_row];
 			traits = { static_cast<RenderGraphRuntime::Segment>(epoch.segment), a_state.names[a_row], shape, epoch.shapeIndex, kNoEpoch, epoch.gate, epoch.claims };
+			if (!epoch.hostedBy.empty()) {
+				// Its host's recordings carry its passes (the assembly requests them with its shape, the host's commit commits it): an
+				// earlier Main epoch hosting no other, at the same trigger and segment; a View shape of its own, its passes in the host's list.
+				const auto host = RowOf(a_schedule, epoch.hostedBy);
+				if (host >= a_row || a_state.traits[host].shape != ShapeKind::Main || a_state.traits[host].sharesWith != kNoEpoch || a_state.traits[host].hostedBy != kNoEpoch ||
+					a_state.traits[host].hosts != kNoEpoch || shape != ShapeKind::View || !epoch.sharesWith.empty() || !epoch.passes.empty() ||
+					a_schedule.epochs[host].trigger != epoch.trigger || a_schedule.epochs[host].segment != epoch.segment)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} is hosted by {}, which is not an earlier Main epoch of its trigger and segment "
+													 "hosting no other, or it is no View epoch of its own with its passes in the host's list",
+						epoch.id, epoch.hostedBy));
+				traits.hostedBy = host;
+				a_state.traits[host].hosts = a_row;
+			}
 			if (!epoch.sharesWith.empty()) {
-				// The assembly takes a shared shape from its source's slot of the same draft: the source comes first.
+				// The assembly takes a shared shape from its source's slot of the same draft: the source comes first. A hosted epoch's is
+				// not shared (its host's recordings alone carry its passes).
 				const auto source = RowOf(a_schedule, epoch.sharesWith);
-				if (source >= a_row || a_state.traits[source].shape != shape || a_state.traits[source].index != epoch.shapeIndex || a_state.traits[source].sharesWith != kNoEpoch)
+				if (source >= a_row || a_state.traits[source].shape != shape || a_state.traits[source].index != epoch.shapeIndex || a_state.traits[source].sharesWith != kNoEpoch ||
+					a_state.traits[source].hostedBy != kNoEpoch)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} shares {}'s shape, which is not an earlier epoch recording that shape itself",
 						epoch.id, epoch.sharesWith));
 				traits.sharesWith = source;
@@ -277,13 +318,27 @@ namespace DCLF::Draws
 			latchPass = i;
 		}
 		bool latchScheduled = false;
-		for (const auto& epoch : a_schedule.epochs) {
+		for (std::uint32_t row = 0; row < a_schedule.epochs.size(); ++row) {
+			const auto& epoch = a_schedule.epochs[row];
 			const auto shape = static_cast<std::size_t>(epoch.shape);
 			if (shape >= state.epochs.size() || epoch.segment >= static_cast<std::uint32_t>(RenderGraphRuntime::Segment::Count))
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} has no shape or segment", epoch.id));
+			// A hosted epoch's passes are its host's (their keys in the host's list).
+			if (state.traits[row].hostedBy != kNoEpoch)
+				continue;
 			ResolvedEpoch resolved{ std::string(epoch.id), static_cast<RenderGraphRuntime::Segment>(epoch.segment), static_cast<Api::EngineView>(epoch.shapeIndex), {} };
+			if (const auto hosts = state.traits[row].hosts; hosts != kNoEpoch)
+				resolved.hostedView = static_cast<Api::EngineView>(state.traits[hosts].index);
 			for (std::size_t k = 0; k < epoch.passes.size(); ++k) {
-				const auto key = epoch.passes[k];
+				auto key = epoch.passes[k];
+				// A hosted epoch's pass: "{its id}/{key}", in the list of the epoch hosting it.
+				std::uint32_t hosted = kNoEpoch;
+				if (const auto at = key.find(Api::kHostedKey); at != std::string_view::npos) {
+					hosted = EpochById(key.substr(0, at));
+					if (hosted == kNoEpoch || state.traits[hosted].hostedBy != row)
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} names pass {} of an epoch it does not host", epoch.id, key));
+					key = key.substr(at + 1);
+				}
 				std::uint32_t found = ~0u;
 				for (std::uint32_t i = 0; i < state.passes.size() && found == ~0u; ++i)
 					if (state.passes[i].key == key)
@@ -303,7 +358,7 @@ namespace DCLF::Draws
 							epoch.id, key, kDepthBuild));
 					latchScheduled = true;
 				}
-				resolved.passes.push_back(found);
+				resolved.passes.push_back({ found, hosted });
 			}
 			state.epochs[shape].push_back(std::move(resolved));
 		}
@@ -394,9 +449,25 @@ namespace DCLF::Draws
 			context.epochId = epoch.id;
 			context.segment = epoch.segment;
 			context.epoch = RenderGraphRuntime::EpochOf(epoch.segment);
+			// The view epoch it hosts (a Main epoch's: the main resources' view), while that view's passes can be added (ViewPassesReady:
+			// its target imported, drawing from these main resources): its passes are made with it as their view, and the epoch's own
+			// passes see it (PassContext::hosted: the latched copies take its lists too). Without it, its passes are not added.
+			std::shared_ptr<ViewResources> hosted;
+			if (a_shape == Api::EpochShape::Main && std::ranges::any_of(epoch.passes, [](const ResolvedPass& a_pass) { return a_pass.hosted != kNoEpoch; })) {
+				hosted = context.Main()->views[ViewIndex(epoch.hostedView)].lock();
+				if (hosted && !ViewPassesReady(*hosted, *context.Main()))
+					hosted.reset();
+			}
+			context.hosted = hosted ? &hosted : nullptr;
 			Api::PassOut out(a_out, context.epoch);
-			for (const auto index : epoch.passes) {
+			for (const auto& [index, hostedEpoch] : epoch.passes) {
 				const auto& entry = state.passes[index];
+				context.view = a_base.view;
+				if (hostedEpoch != kNoEpoch) {
+					if (!hosted)
+						continue;
+					context.view = &hosted;
+				}
 				if (entry.emit) {
 					entry.emit(context, out);
 					continue;

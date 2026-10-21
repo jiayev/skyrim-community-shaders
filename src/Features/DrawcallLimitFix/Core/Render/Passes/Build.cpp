@@ -15,6 +15,8 @@ namespace DCLF::Draws
 		org::DeclaredViewToken rootPrograms;  // the main member queries: each root's program (the programs are the latch's)
 		org::DeclaredViewToken classCounts;                 // the colour segment's state class sub-ranges' counts (Resources::classCounts)
 		org::DeclaredViewToken objectGates;                 // the colour segment: the objects' strict-light gates (the cull binding ObjectGates)
+		org::DeclaredViewToken retests, retestDispatch;     // the depth phases: the retest list (phase 1 appends, phase 2 reads), phase 2's dispatch
+		org::ResourceBindingToken retestArguments;          // phase 2: that dispatch, as its ExecuteIndirect's arguments
 	};
 
 	struct BuildDrawsFrame
@@ -24,6 +26,9 @@ namespace DCLF::Draws
 		BuildDrawsConstants constants{};
 		std::shared_ptr<const org::LatchBlock> latch;
 		rhi::CommandSignatureHandle signature{};
+		// Phase 2 over the retest list: dispatched from retestArguments (phase 1's groups), not the latch's.
+		org::PreparedResourceReference retestArguments;
+		bool retestIndirect = false;
 	};
 
 	void RecordLatchedDispatch(BuildDrawsConstants a_constants, const org::LatchBlock& a_latch,
@@ -77,6 +82,17 @@ namespace DCLF::Draws
 			if (segment == RenderGraphRuntime::Segment::ZPrepass && resources->pool) {
 				bindings.bucketCounts = a_builder.UnorderedAccess(*resources->zBucketCounts[fixedPhase == 2 ? 1 : 0]).View();
 				bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
+			}
+			// Phase 1 appends its OccludedRetest inputs to the retest list and grows phase 2's dispatch; phase 2 runs over the list, dispatched
+			// from it.
+			if (segment == RenderGraphRuntime::Segment::ZPrepass && resources->retests && resources->retestDispatch) {
+				if (fixedPhase == 2) {
+					bindings.retests = a_builder.ShaderResource(*resources->retests).View();
+					bindings.retestArguments = a_builder.IndirectArguments(resources->retestDispatch);
+				} else {
+					bindings.retests = a_builder.UnorderedAccess(*resources->retests).View();
+					bindings.retestDispatch = a_builder.UnorderedAccess(resources->retestDispatch).View();
+				}
 			}
 			// The colour segment's refraction draws are pooled too; its other draws append through their state class sub-ranges' counts.
 			if (segment == RenderGraphRuntime::Segment::MainOpaque && resources->pool)
@@ -160,6 +176,20 @@ namespace DCLF::Draws
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 				constants.hzbMips = resources->hzbMips;
 			}
+			// The retest list, with the HZB test (only it leaves an input OccludedRetest): phase 1 appends, phase 2 runs over the list,
+			// dispatched indirect from phase 1's groups. Both phases decide this from the same shape, so phase 2 never waits on a list
+			// phase 1 did not fill; without it phase 2 runs over every input from the latch's dispatch.
+			if (constants.hzbIndex && now == RenderGraphRuntime::Segment::ZPrepass && a_bindings.retests.layout) {
+				constants.retestsIndex = CaptureViewIndex(a_preparation, a_bindings.retests);
+				if (phase == 2) {
+					prepared.retestArguments = a_preparation.CaptureResource(a_bindings.retestArguments);
+					prepared.retestIndirect = true;
+				} else if (a_bindings.retestDispatch.layout) {
+					constants.retestDispatchIndex = CaptureViewIndex(a_preparation, a_bindings.retestDispatch);
+				} else {
+					constants.retestsIndex = 0;
+				}
+			}
 			if (now == RenderGraphRuntime::Segment::ZPrepass && resources->pool) {
 				constants.bucketCountsIndex = CaptureViewIndex(a_preparation, a_bindings.bucketCounts);
 				constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
@@ -213,6 +243,14 @@ namespace DCLF::Draws
 
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
+			if (a_frame.retestIndirect) {
+				// Phase 2: the latch's values, the retest list's groups.
+				auto constants = a_frame.constants;
+				constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
+				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kBuildDrawsConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+				commands.ExecuteIndirect(a_frame.signature, a_recording.Resolve(a_frame.retestArguments).GetHandle(), 0, {}, 0, 1);
+				return;
+			}
 			RecordLatchedDispatch(a_frame.constants, *a_frame.latch, a_frame.signature, 0, a_recording);
 		}
 

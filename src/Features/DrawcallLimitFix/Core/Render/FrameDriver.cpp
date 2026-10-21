@@ -191,15 +191,22 @@ namespace DCLF
 
 	void FrameDriver::DepthCommitted()
 	{
-		// The Z-prepass and the views' work here (the reflection's epoch) are submitted under depth.committed.
+		// The Z-prepass and the views' work here (the reflection's faces, which the depth epoch hosts) are submitted under depth.committed.
 		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::DepthCommitted));
-		IndirectDraws::Get().CaptureDepthPass();
 		// The views' work at the depth commit (Features/Reflection's: the frame's reflection faces, every TESWaterReflections::Update of the
-		// frame having run, two a frame, a face each, drawn by DCLF in one epoch before the water reads the cube; dclf-architecture.md, "Water
-		// reflections"). It must follow the depth commit, which brings
-		// the index pool and the scene's buffers to the frame's publication whose scene list the faces draw: against the frame before's
-		// pool, a slot the publication gave another geometry would draw its old indices against its new vertices (a device fault).
-		RunViewWork(Api::ViewPoint::DepthCommitted);
+		// frame having run, two a frame, a face each, drawn by DCLF before the water reads the cube; dclf-architecture.md, "Water
+		// reflections"), run by the depth commit inside its epoch's execution: the depth epoch hosts the faces' passes (Schedule/Frame.cpp),
+		// which follow its index pool copies, so they draw the frame's publication whose scene list they cull (against the frame before's
+		// pool, a slot the publication gave another geometry would draw its old indices against its new vertices: a device fault). A frame
+		// whose depth epoch did not commit runs it after (its inputs are then stale: nothing drawn, the feature's frame kept).
+		bool ran = false;
+		const std::function<void()> work = [&] {
+			ran = true;
+			RunViewWork(Api::ViewPoint::DepthCommitted);
+		};
+		IndirectDraws::Get().CaptureDepthPass(work);
+		if (!ran)
+			RunViewWork(Api::ViewPoint::DepthCommitted);
 	}
 
 	void FrameDriver::RunViewWork(Api::ViewPoint a_point)

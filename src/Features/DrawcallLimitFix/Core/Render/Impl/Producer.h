@@ -94,8 +94,10 @@ namespace DCLF
 			// The frame's from here on. The adopted snapshot's revision, for the frame's epochs.
 			org::async::RevisionAssembler::Lease active;
 			std::uint64_t latchedMisses = 0;  // values a commit staged because the revision's latched copies lacked them
-			// Per epoch since the last report: commits with no shape or recording, values past the latch (dropped), submissions.
-			std::array<std::uint64_t, kMaxEpochs> unrevised{}, latchClamped{}, submitted{};
+			// Per epoch since the last report: commits with no shape or recording, values past the latch (dropped), submissions (a hosted
+			// epoch's: its host's submissions with its work), and those of a recording other than the first (a shadow epoch's narrower
+			// variant, the depth epoch's without the index pool or without the hosted reflection's work).
+			std::array<std::uint64_t, kMaxEpochs> unrevised{}, latchClamped{}, submitted{}, variants{};
 			// Per epoch, whether the selected revision has its recordings of the graph as built now (DecideCoverage).
 			std::array<bool, kMaxEpochs> covered{};
 			bool explicitBuilds = false;
@@ -103,8 +105,9 @@ namespace DCLF
 			// (DCLF not drawing yet, or a load screen up: the only uncovered frames), tickets given back for recordings.
 			std::uint64_t builds = 0, uncoveredFrames = 0, ticketsReleased = 0;
 			std::array<std::uint64_t, kMaxEpochs> uncovered{};
-			// Per epoch, the inputs (versions, shape) whose recording failed: not asked again until they change.
-			std::array<std::pair<std::shared_ptr<const org::async::RevisionFragment>, std::shared_ptr<const org::async::RevisionFragment>>, kMaxEpochs> failedFor;
+			// Per epoch, the inputs (versions, shape, the hosted epoch's shape: EpochTraits::hosts) whose recording failed: not asked again
+			// until they change.
+			std::array<std::array<std::shared_ptr<const org::async::RevisionFragment>, 3>, kMaxEpochs> failedFor;
 		} revisions;
 		/** @brief Recording requests not yet completed: what the build point releases unsubmitted tickets for. */
 		std::atomic<std::uint32_t> recordingsOutstanding{ 0 };
