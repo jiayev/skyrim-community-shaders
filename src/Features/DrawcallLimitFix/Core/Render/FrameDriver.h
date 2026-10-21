@@ -76,8 +76,9 @@ namespace DCLF
 		void BeforeShadowMaps();
 		void AfterShadowMaps();
 		/**
-		 * @brief Main::RenderDepth's world-drawn point, while DCLF runs: the depth commit (IndirectDraws::CaptureDepthPass), then the views'
-		 * work there (ViewPoint::DepthCommitted: the frame's reflection faces).
+		 * @brief Main::RenderDepth's world-drawn point, while DCLF runs: the depth commit (IndirectDraws::CaptureDepthPass), running the
+		 * views' work there inside its epoch's execution (ViewPoint::DepthCommitted: the frame's reflection faces, which the depth epoch
+		 * hosts); after it when the depth epoch did not commit.
 		 */
 		void DepthCommitted();
 		void EarlyPrepass();

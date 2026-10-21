@@ -16,7 +16,7 @@ namespace DCLF::Api
 	{
 		FrameStartBeforeCoverage,  // FrameDriver::BeginFrame, after SyncFrameTables, before the shadow exclusion's frame start, Extensions::ShadowExclusionFrameStart and DecideCoverage
 		FrameStartAfterTreeLod,    // FrameDriver::BeginFrame, after DecideDrawFamilies (tree LOD's), before PublishListFilter and FrameValues::Kick
-		DepthCommitted,            // Main::RenderDepth's world-drawn point, right after the depth commit (FrameDriver::DepthCommitted)
+		DepthCommitted,            // Main::RenderDepth's world-drawn point, inside the depth commit, before its epoch's submission (FrameDriver::DepthCommitted: a view epoch the depth epoch hosts commits there); after the depth epoch when it did not commit
 		Count,
 	};
 

@@ -35,6 +35,30 @@ namespace DCLF
 			return latch;
 		}
 
+		namespace
+		{
+			/**
+			 * @brief A sun view's least caster radius in world units for a_minTexels (kCullMinTexels; 0: no test). A cascade's projection is
+			 * orthographic (row 3 is (0, 0, 0, 1): clip w 1), so a sphere of radius r spans r * |row 0's xyz| of NDC either side of its centre,
+			 * and NDC's 2 units span the viewport's width: r * |row 0's xyz| * width / 2 texels, row 1 and the height likewise. The radius is
+			 * the threshold over the larger axis' texels per world unit (a caster either axis resolves is kept). The eye fold moves only the
+			 * rows' w. A projection that is not orthographic has no one texel size: not tested.
+			 */
+			float SunCasterMinRadius(const float (&a_viewProj)[16], std::uint32_t a_width, std::uint32_t a_height, float a_minTexels)
+			{
+				if (!(a_minTexels > 0.0f) || !a_width || !a_height)
+					return 0.0f;
+				const auto rowLength = [&](std::uint32_t a_row) {
+					const float* row = a_viewProj + a_row * 4;
+					return std::sqrt(row[0] * row[0] + row[1] * row[1] + row[2] * row[2]);
+				};
+				if (rowLength(3) > 1e-6f)
+					return 0.0f;
+				const float texelsPerUnit = std::max(rowLength(0) * 0.5f * static_cast<float>(a_width), rowLength(1) * 0.5f * static_cast<float>(a_height));
+				return texelsPerUnit > 0.0f ? a_minTexels / texelsPerUnit : 0.0f;
+			}
+		}
+
 		/**
 		 * @brief Points a_latch at a view's bucket table in its slot's latch region, writing the table when a_write (the region does not
 		 * hold this revision's yet: LatchRegionsHeld).
@@ -137,6 +161,18 @@ namespace DCLF
 			const float depthRange[4] = { a_view.minDepth, a_view.maxDepth - a_view.minDepth, 0.0f, 0.0f };
 			LatchWrite(a_latchBlock, "shadow view blocks", a_latchSlot, offset + static_cast<std::uint32_t>(sizeof(a_view.viewBlock)), std::as_bytes(std::span(depthRange)));
 			LatchWrite(a_latchBlock, "shadow per-frame view data", a_latchSlot, offset + static_cast<std::uint32_t>(kShadowPerFrameOffset), std::span(a_view.perFrame.data(), a_view.perFrameBytes));
+		}
+
+		/**
+		 * @brief Writes the epoch's one culling dispatch (ShadowBuildDrawsPass: every view in one, BuildDrawsCS's ShadowViews) into the frame
+		 * slot's latch region: x the groups of a_inputs, the whole list every view culls (ShadowViewLatch's; a view's own drawCount bounds
+		 * it), y a group row per view of a_shape, the variant submitted (ShadowBuildRows: its table's rows, or more, which the shader idles).
+		 */
+		void WriteBuildDispatch(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, std::uint32_t a_latchSlot, bool a_sky, std::uint32_t a_inputs,
+			const ShadowFrame& a_shape)
+		{
+			const std::uint32_t dispatch[4] = { (a_inputs + 63) / 64, ShadowBuildRows(a_shape), 1, 0 };
+			LatchWrite(a_latchBlock, "shadow culling dispatch", a_latchSlot, a_layout.BuildDispatchOffset(a_sky), std::as_bytes(std::span(dispatch)));
 		}
 	}
 
@@ -264,6 +300,8 @@ namespace DCLF
 				shadowStats.occlusionInputs[v] = inputCount;
 				++shadowStats.occlusionDrawn[v];
 			}
+			// The epoch's one culling dispatch, over the whole shadow list (each map's latch above bounds its own).
+			WriteBuildDispatch(latchBlock, latchLayout, latchSlot, true, static_cast<std::uint32_t>(payload.Inputs()), target);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, revisionVariant);
 		}, engine.shadowExecutionOwner);
 		shadowStats.occlusionMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -359,6 +397,8 @@ namespace DCLF
 				// A portal-strict point light's casters pass its strict gates (the frame's atlas and gates; 0: none, nothing gated).
 				const std::uint32_t contextsIndex = CullBindingIndex(Api::CullBindingSlot::LightContexts, scene, frameNumber, adopted);
 				const std::uint32_t gatesIndex = CullBindingIndex(Api::CullBindingSlot::StrictGates, scene, frameNumber, adopted);
+				// The sun views' contribution cull's threshold (live: a latch value, read once a commit).
+				const float minTexels = shadowMinTexels.load(std::memory_order_relaxed);
 				for (const auto& view : a_commit.pending) {
 					ZoneScopedN("CS.DCLF.ShadowInputs.View");
 					const std::uint32_t slot = view.slot;
@@ -372,6 +412,13 @@ namespace DCLF
 					const std::uint32_t classFlags = view.casterClass ? kCullVolumetricOnly : view.modeIndex == kParabolicShadowMode ? 0u : kCullCastersOnly;
 					latch.cullFlags = (view.hasViewProj ? (1u | (view.renderMode == 0xE ? kCullNoNearPlane : 0u)) : 0u) | classFlags |
 					                  (view.sunView ? kCullSunEntry : 0u) | KeyWordOf(view.modeIndex);
+					// A sun view's casters below the size threshold (cascades and their volumetric copies; local lights and the occlusion
+					// maps never: the maps keep their minRadius).
+					if (view.sunView && view.hasViewProj)
+						if (const float radius = SunCasterMinRadius(latch.viewProj, view.width, view.height, minTexels); radius > 0.0f) {
+							latch.cullFlags |= kCullMinTexels;
+							latch.minCasterRadius = radius;
+						}
 					latch.viewBits = ShadowViewBits(view.modeIndex, view.sunView);
 					// A focus view draws its target's members alone (root slot + 1; an unlisted target draws nothing).
 					if (view.focus) {
@@ -639,6 +686,9 @@ namespace DCLF
 				}
 			if (variant != 0)
 				++shadowStats.narrowedEpochs;
+			// The epoch's one culling dispatch, over the whole shadow list (each view's latch bounds its own), a group row per view of the
+			// variant submitted.
+			WriteBuildDispatch(*target.latch, target.latchLayout, latchSlot, false, static_cast<std::uint32_t>(payload.Inputs()), *variants[variant]);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, variant);
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			Draws::LogShadowEpoch(commit);
@@ -806,6 +856,7 @@ namespace DCLF
 					a_stats.cullMinRadius = a_words[4];
 					a_stats.cullRootFading = a_words[5];
 					a_stats.cullClass = a_words[16];
+					a_stats.cullBelowTexels = a_words[Draws::kCountBelowTexelsWord];
 					a_stats.cullSampledView = armed.view;
 					a_stats.cullSampledMode = armed.mode;
 				});

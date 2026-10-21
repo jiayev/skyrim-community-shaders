@@ -1,6 +1,6 @@
-// The water reflection's epoch (its passes are Core's, ViewEpochRecord.cpp's): the frame's faces drawn in one epoch right after the depth
-// commit, on the view engine's inputs and submission; and the view's report lines. Render thread (the report: wherever the draws' async work
-// is composed).
+// The water reflection's epoch (its passes are Core's, ViewEpochRecord.cpp's, and tree LOD's): the frame's faces committed into the depth
+// commit, inside the depth epoch, which hosts the faces' passes (Schedule/Frame.cpp: no epoch of their own), on the view engine's inputs and
+// submission; and the view's report lines. Render thread (the report: wherever the draws' async work is composed).
 
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
@@ -82,8 +82,9 @@ namespace DCLF::Features::Reflection
 		for (std::uint32_t f = 0; f < kFaces; ++f)
 			if (faces[f].captured)
 				views[f] = { true, std::span(faces[f].perFrame.data(), faces[f].perFrameBytes), faces[f].viewProj, faces[f].eye };
-		// The selected revision's shape and recording (DecideCoverage covered the faces), with tree LOD's row as the last depth commit
-		// uploaded it when the faces' tree LOD is DCLF's (Core's, IndirectDraws::SubmitViewEpoch).
+		// The selected revision's shape (DecideCoverage covered the faces with the depth epoch's recordings, which carry their passes), with
+		// tree LOD's row as this depth commit uploaded it when the faces' tree LOD is DCLF's (Core's, IndirectDraws::SubmitViewEpoch): committed
+		// into the depth commit (this work runs inside it), which then submits its recording with the faces' work.
 		std::uint32_t drawn = 0;
 		std::array<std::uint64_t, 2> nullTextures{};
 		switch (draws.SubmitViewEpoch(kView, 0, listed, views, &drawn, &nullTextures)) {

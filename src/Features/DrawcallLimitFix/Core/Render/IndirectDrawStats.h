@@ -58,6 +58,7 @@ namespace DCLF
 		// The second phase, which re-tests what the first rejected against the rebuilt HZB.
 		std::uint32_t cullDrawnPhaseTwo = 0;      // depth draws it added
 		std::uint32_t cullRescuedByPhaseTwo = 0;  // objects it brought back
+		std::uint32_t cullRetests = 0;            // the retest list it ran over: the inputs phase 1 left OccludedRetest
 		// Decals (CS_DCLF_DECALS): submitted to the second colour pass by the CPU, and what its
 		// single-phase culling did with them (GPU counters, sampled like the others).
 		std::uint32_t decalsDrawn = 0;
@@ -148,8 +149,8 @@ namespace DCLF
 		// its epoch): what says the frustum test is doing something, and against which view.
 		std::uint32_t cullDrawn = 0, cullRejected = 0, cullTested = 0;
 		// Before the culling: the sampled view's inputs of its caster class, and those dropped outside the sun's entry processes, at
-		// most the minimum radius, under a stood-in root fading.
-		std::uint32_t cullClass = 0, cullSunEntryOut = 0, cullMinRadius = 0, cullRootFading = 0;
+		// most the minimum radius, under a stood-in root fading, below the size threshold (a sun view's kCullMinTexels).
+		std::uint32_t cullClass = 0, cullSunEntryOut = 0, cullMinRadius = 0, cullRootFading = 0, cullBelowTexels = 0;
 		std::uint32_t cullSampledView = ~0u, cullSampledMode = 0;
 		// The set's casters each render mode's inputs held at the last epoch, and set members a mode's build could not draw (a
 		// pipeline or a texture its readiness did not cover: a defect, the engine having withheld them), per report interval.

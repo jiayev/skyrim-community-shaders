@@ -95,6 +95,9 @@ namespace NvPerf::Trace
 		// the last one's end (passes and barrier batches overlap: a range begins when the queue reaches it, before the work ahead of it
 		// has drained, so their sum counts some work twice; a span counts the queue's time once). Out of the total and the groups.
 		std::vector<ReportGroup> spans;
+		// Timestamps: a CSV written at the end, a line per frame sampled (hitches included, flagged) and a column per series and span,
+		// for what a mean and its percentiles hide (a bimodal range, a period). Empty: none.
+		std::filesystem::path seriesFile;
 		std::uint32_t samples = 4;
 		std::uint32_t repeats = 1;
 		std::uint64_t startFrame = 2000;  // a headless trace's first capture starts this many presents after a game loaded (DCLF compiles in the first ones)

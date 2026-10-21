@@ -48,6 +48,8 @@ namespace DCLF::Draws
 	 * @brief An epoch's traits: its segment and name, the shape it records against (its kind and its index there: the main segment,
 	 * shadow 0 or occlusion 1, the ViewKind), the epoch whose shape it shares (kNoEpoch: none; always an earlier one), the class whose
 	 * toggle gates the shared shape and the epoch's part in the claims (Count: none), and whether the frame's claims need its recordings.
+	 * A hosted epoch (Api::EpochDef::hostedBy: the reflection's) names its host (hostedBy, an earlier Main epoch, whose segment it has), and
+	 * the host it (hosts): the host's recordings carry the hosted epoch's passes, the hosted one has none of its own.
 	 */
 	struct EpochTraits
 	{
@@ -58,6 +60,7 @@ namespace DCLF::Draws
 		std::uint32_t sharesWith = kNoEpoch;
 		Api::ObjectClass gate = Api::ObjectClass::Count;
 		bool claims = false;
+		std::uint32_t hostedBy = kNoEpoch, hosts = kNoEpoch;
 	};
 	/** @brief Any thread, after InstallFeatures (0 before): the schedule's epochs. */
 	std::uint32_t EpochCount();
@@ -69,7 +72,7 @@ namespace DCLF::Draws
 	std::uint32_t EpochById(std::string_view a_id);
 	/**
 	 * @brief A view's epochs, from the schedule: the one recording its shape, then the one sharing it (kNoEpoch: none), and their segments
-	 * (none: the first's again).
+	 * (none: the first's again; a hosted epoch's, its host's).
 	 */
 	struct ViewEpochs
 	{

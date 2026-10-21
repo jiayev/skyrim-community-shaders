@@ -96,24 +96,31 @@ namespace DCLF::Draws
 				return bindings;
 			}
 
-			void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const { a_out.push_back(source(a_preparation).generation); }
+			void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+			{
+				const auto latched = source(a_preparation);
+				a_out.push_back(latched.generation);
+				a_out.push_back(latched.hostedGeneration);
+			}
 
 			LatchedSource Prepare(const LatchedCopiesBindings&, const org::PassPrepareContext& a_preparation) const { return source(a_preparation); }
 
 			static void Record(const LatchedCopiesBindings& a_bindings, const LatchedSource& a_prepared, org::PassRecordContext& a_recording)
 			{
 				auto& commands = a_recording.Commands();
-				for (const auto& list : a_prepared.lists) {
-					if (!list.latch)
-						continue;
-					const auto latch = list.latch->Resource()->GetAPIResource().GetHandle();
-					const std::uint64_t region = list.fixed ? 0 : list.latch->Offset(a_recording.FrameSlot());
-					for (const auto& copy : list.copies) {
-						const auto target = std::find_if(a_bindings.targets.begin(), a_bindings.targets.end(), [&](const auto& a_target) { return a_target.first == copy.target; });
-						if (target != a_bindings.targets.end())
-							commands.CopyBufferRegion(a_recording.Resolve(target->second).GetHandle(), copy.dstOffset, latch, region + copy.latchOffset, copy.bytes);
+				// The epoch's own lists, then a hosted shape's (none in the recording without its work).
+				for (const auto lists : { a_prepared.lists, a_prepared.hostedLists })
+					for (const auto& list : lists) {
+						if (!list.latch)
+							continue;
+						const auto latch = list.latch->Resource()->GetAPIResource().GetHandle();
+						const std::uint64_t region = list.fixed ? 0 : list.latch->Offset(a_recording.FrameSlot());
+						for (const auto& copy : list.copies) {
+							const auto target = std::find_if(a_bindings.targets.begin(), a_bindings.targets.end(), [&](const auto& a_target) { return a_target.first == copy.target; });
+							if (target != a_bindings.targets.end())
+								commands.CopyBufferRegion(a_recording.Resolve(target->second).GetHandle(), copy.dstOffset, latch, region + copy.latchOffset, copy.bytes);
+						}
 					}
-				}
 			}
 
 		private:

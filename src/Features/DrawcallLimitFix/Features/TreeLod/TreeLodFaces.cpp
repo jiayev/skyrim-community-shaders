@@ -146,7 +146,8 @@ namespace DCLF::Features::TreeLod
 {
 	namespace
 	{
-		// Phase 1 per face into the face's list (its cull pass, in the view's depth epoch): only a trees view's, with the faces' lists.
+		// Phase 1 per face into the face's list (its cull pass, in the view's depth or only epoch: the reflection's, hosted by the depth
+		// epoch): only a trees view's, with the faces' lists.
 		std::shared_ptr<org::RenderPass> FacesCull(const Api::PassContext& a_context)
 		{
 			const auto& resources = a_context.View();

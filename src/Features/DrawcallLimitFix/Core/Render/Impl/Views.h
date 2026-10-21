@@ -32,6 +32,20 @@ namespace DCLF
 			const float range = View(a_kind).depthRange;
 			return range > 0.0f ? range : Extensions::ViewEntryOf(a_kind).shape.depthRange;
 		}
+		// The view epochs a main epoch hosts (Api::EpochDef::hostedBy: the depth epoch, the reflection's faces), committed into the host's
+		// commit (render thread). hostedWork: the views' work the depth commit runs inside its epoch's execution, before its recording is
+		// submitted (IndirectDraws::CaptureDepthPass's: FrameDriver's ViewPoint::DepthCommitted work), set around its RunEpoch.
+		// hostedCommit: the host's commit while it runs that work - its epoch, the owners its execution holds, its payload (held already),
+		// and the hosted epochs committed into it (a bit each), which pick its recording with their passes' work (Impl::CommitHostedView).
+		const std::function<void()>* hostedWork = nullptr;
+		struct HostedCommit
+		{
+			std::uint32_t host = kNoEpoch;
+			std::vector<std::shared_ptr<const void>>* owners = nullptr;
+			const MainPayload* payload = nullptr;
+			std::uint32_t drawn = 0;
+		};
+		HostedCommit hostedCommit;
 		// Revision code, per view: each pipeline slot's forward pipeline from its request's catalog, the trees view's draw families'
 		// pipelines (by family), the forward part's forward slots.
 		std::array<std::vector<rhi::PipelineHandle>, kViews> viewRevisionPipelines;

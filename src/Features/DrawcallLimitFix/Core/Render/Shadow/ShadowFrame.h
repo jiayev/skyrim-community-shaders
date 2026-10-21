@@ -163,6 +163,8 @@ namespace DCLF::Draws
 		// The view slots' blocks (kShadowViewSlotBytes a row: b0, b12), written by each epoch's commit.
 		GrowableRows viewBlocks;
 		std::uint64_t constantsAddress = 0;
+		// BuildDrawsCS's ShadowViews entry: every view of an epoch in one dispatch (ShadowBuildDrawsPass), dispatched through
+		// dispatchSignature.
 		std::shared_ptr<const ComputeProgram> buildDraws;
 		// The engine's shadow map arrays, imported once each (again when the engine recreates them), a DSV per slice.
 		std::array<std::shared_ptr<org::ExternalTextureResource>, kShadowDepthTargets> depth;
@@ -185,5 +187,24 @@ namespace DCLF::Draws
 		if (const auto* shapes = RevisionShapesOf(a_preparation))
 			return a_sky ? shapes->occlusion : shapes->shadow;
 		return nullptr;
+	}
+
+	/**
+	 * @brief Whether the culling dispatch builds a_frame's view a_index, a row of ShadowBuildDrawsPass's views' table: a view of a shadow
+	 * mode that the variant draws (ShadowFrame::activeViews; an unused placement's latch is zero). The pass also drops a view whose slot
+	 * its bindings lack, so its rows are never more than ShadowBuildRows.
+	 */
+	inline bool ShadowBuildRow(const ShadowFrame& a_frame, std::size_t a_index)
+	{
+		return a_frame.views[a_index].modeIndex < kShadowModeCount && (a_index >= 64 || ((a_frame.activeViews >> a_index) & 1));
+	}
+
+	/** @brief The culling dispatch's y (one group row per view): a_frame's ShadowBuildRow views, which the commit writes with the groups. */
+	inline std::uint32_t ShadowBuildRows(const ShadowFrame& a_frame)
+	{
+		std::uint32_t rows = 0;
+		for (std::size_t i = 0; i < a_frame.views.size(); ++i)
+			rows += ShadowBuildRow(a_frame, i) ? 1u : 0u;
+		return rows;
 	}
 }

@@ -445,53 +445,23 @@ namespace DCLF
 
 				void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 				{
-					const auto& traits = *resources->traits;
-					const auto& main = resources->main;
-					if (!main || !main->scene || !main->scene->pool || !resources->target || (traits.depthPass && (!main->nativeDepth || !main->native[0] || !main->native[1])))
+					if (!resources->main || !ViewPassesReady(*resources, *resources->main))
 						return;
-					// The view's epochs' passes (Schedule/Frame.cpp).
+					// The view's epochs' passes (Schedule/Frame.cpp; none for a hosted epoch: its host's extension adds them).
 					Api::PassContext context{};
 					context.main = &resources->main;
 					context.view = &resources;
-					GatherScheduled(Api::EpochShape::View, traits.kind, context, a_out);
+					GatherScheduled(Api::EpochShape::View, resources->traits->kind, context, a_out);
 				}
 
 			private:
 				std::shared_ptr<ViewResources> resources;
 			};
 
-			/**
-			 * @brief The targets the view's latched copies write: the draw count, the blocks, a view's own frame constants and frame buffers'
-			 * copies, each face's bucket counts and draw families' rows and lists.
-			 */
-			std::function<std::vector<LatchedTarget>()> LatchedTargets(std::shared_ptr<ViewResources> a_resources)
-			{
-				return [resources = std::move(a_resources)] {
-					std::vector<LatchedTarget> out{ { resources->count, nullptr }, { resources->blocks, nullptr } };
-					if (resources->frameConstants)
-						out.push_back({ resources->frameConstants, nullptr });
-					if (const auto frameBuffers = resources->frameBuffers.load(std::memory_order_acquire))
-						for (const auto& frameBuffer : *frameBuffers)
-							out.push_back({ frameBuffer.copy, nullptr });
-					std::array<bool, Extensions::kDrawFamilies> families{};
-					for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
-						families[d] = FamilySetUp(*resources->main->scene, static_cast<Api::DrawFamily>(d)) && resources->faceLists[d][0];
-					for (std::uint32_t f = 0; f < resources->traits->faces; ++f) {
-						out.push_back({ nullptr, resources->bucketCounts[f] });
-						for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
-							if (families[d]) {
-								out.push_back({ resources->faceRows[d][f], nullptr });
-								out.push_back({ nullptr, resources->faceLists[d][f] });
-							}
-					}
-					return out;
-				};
-			}
-
 			std::shared_ptr<org::RenderPass> LatchedCopies(const Api::PassContext& a_context)
 			{
 				const auto& resources = a_context.View();
-				return MakeLatchedCopiesPass(LatchedTargets(resources), [kind = resources->traits->kind](const org::PassPrepareContext& a_preparation) {
+				return MakeLatchedCopiesPass([resources] { return ViewLatchedTargets(*resources); }, [kind = resources->traits->kind](const org::PassPrepareContext& a_preparation) {
 					const auto frame = CurrentViewFrame(a_preparation, kind);
 					return frame ? LatchedSource{ frame->generation, frame, frame->latched } : LatchedSource{};
 				});
@@ -502,8 +472,8 @@ namespace DCLF
 				return std::make_shared<BuildDrawsPass>(a_context.View());
 			}
 
-			// A view without a depth pass draws its faces in its one epoch; one with a depth pass its depth, then its colour in the
-			// colour epoch.
+			// A view without a depth pass draws its faces in its one epoch (the reflection's: hosted by the depth epoch); one with a depth
+			// pass its depth, then its colour in the colour epoch.
 			std::shared_ptr<org::RenderPass> FacesDraw(const Api::PassContext& a_context)
 			{
 				const auto& resources = a_context.View();
@@ -564,6 +534,34 @@ namespace DCLF
 		std::span<const Api::PassDef> ViewPassDefs()
 		{
 			return kViewPasses;
+		}
+
+		bool ViewPassesReady(const ViewResources& a_view, const Resources& a_main)
+		{
+			return a_view.main.get() == &a_main && a_main.scene && a_main.scene->pool && a_view.target &&
+			       (!a_view.traits->depthPass || (a_main.nativeDepth && a_main.native[0] && a_main.native[1]));
+		}
+
+		std::vector<LatchedTarget> ViewLatchedTargets(const ViewResources& a_view)
+		{
+			std::vector<LatchedTarget> out{ { a_view.count, nullptr }, { a_view.blocks, nullptr } };
+			if (a_view.frameConstants)
+				out.push_back({ a_view.frameConstants, nullptr });
+			if (const auto frameBuffers = a_view.frameBuffers.load(std::memory_order_acquire))
+				for (const auto& frameBuffer : *frameBuffers)
+					out.push_back({ frameBuffer.copy, nullptr });
+			std::array<bool, Extensions::kDrawFamilies> families{};
+			for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
+				families[d] = FamilySetUp(*a_view.main->scene, static_cast<Api::DrawFamily>(d)) && a_view.faceLists[d][0];
+			for (std::uint32_t f = 0; f < a_view.traits->faces; ++f) {
+				out.push_back({ nullptr, a_view.bucketCounts[f] });
+				for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
+					if (families[d]) {
+						out.push_back({ a_view.faceRows[d][f], nullptr });
+						out.push_back({ nullptr, a_view.faceLists[d][f] });
+					}
+			}
+			return out;
 		}
 
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeViewExtension(std::shared_ptr<ViewResources> a_resources)

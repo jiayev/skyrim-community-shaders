@@ -183,11 +183,63 @@ namespace DCLF
 		}
 	}
 
+	IndirectDraws::ViewSubmit IndirectDraws::Impl::CommitHostedView(ViewKind a_view, std::uint32_t a_epoch, const IndirectDraws::ViewListed& a_listed,
+		std::span<const ViewFace> a_faces, std::uint32_t* a_drawn, std::array<std::uint64_t, 2>* a_nullTextures)
+	{
+		using R = SceneRevisions;
+		auto& commit = hostedCommit;
+		// Only inside its host's commit, before the host's recording is submitted (the depth commit runs the view's work there).
+		if (commit.host == kNoEpoch || commit.host != EpochTraitsOf(a_epoch).hostedBy || !commit.owners)
+			return ViewSubmit::NoRevision;
+		// The selected revision's shape of the epoch, which the host's recordings carry (DecideEpochCoverage covers a hosted epoch with
+		// them): trusted, its map, buckets and latch are what the values go into.
+		const auto fragment = revisions.active ? revisions.active->Fragment(R::kShapeSlot + a_epoch) : nullptr;
+		if (!EpochCovered(a_epoch) || !fragment)
+			return ViewSubmit::NoRevision;
+		if (a_faces.empty())
+			return ViewSubmit::Submitted;  // nothing committed: the host's recording without the epoch's work
+		const auto shape = fragment->Value<ViewFrame>();
+		// Held until the host's execution retires, with its own owners (its payload's bindings, the adopted snapshot): the other payloads
+		// the view draws, its frame textures (a view with frame constants of its own) and its draw families' rows' textures.
+		auto& owners = *commit.owners;
+		for (std::uint32_t i = 0; i < a_listed.ownerCount; ++i)
+			if (const auto* payload = a_listed.owners[i]; payload && payload != commit.payload)
+				owners.insert(owners.end(), payload->body->bindingOwners.begin(), payload->body->bindingOwners.end());
+		auto& state = View(a_view);
+		const bool ownFrame = state.resources && state.resources->frameConstants;
+		if (ownFrame)
+			ResolveViewFrameTextures(state, owners);
+		ViewFamilyRows rows{};
+		const bool trees = TraitsOf(a_view).trees;
+		if (trees)
+			rows = ViewFaceRows(a_view, *shape, owners);
+		// Its latch in the host's frame slot (the host's execution's, CurrentFrameSlot), which the host's latched copies and its passes read.
+		const std::uint32_t drawn = CommitView(*shape, a_faces, a_listed.inputs, trees ? &rows : nullptr);
+		commit.drawn |= 1u << a_epoch;
+		if (a_drawn)
+			*a_drawn = drawn;
+		if (a_nullTextures && ownFrame)
+			*a_nullTextures = state.nullTextures;
+		return ViewSubmit::Submitted;
+	}
+
 	IndirectDraws::ViewSubmit IndirectDraws::SubmitViewEpoch(Api::EngineView a_view, std::uint32_t a_epoch, const ViewListed& a_listed,
 		std::span<const ViewFace> a_faces, std::uint32_t* a_drawn, std::array<std::uint64_t, 2>* a_nullTextures)
 	{
 		const auto& epochs = ViewEpochsOf(a_view);
 		const std::uint32_t epoch = epochs.epochs[a_epoch];
+		// A hosted epoch (the reflection's: the depth epoch runs its passes) commits into its host's commit, from inside it; the host's
+		// recording, submitted after, carries its passes.
+		if (EpochTraitsOf(epoch).hostedBy != kNoEpoch)
+			return impl->CommitHostedView(a_view, epoch, a_listed, a_faces, a_drawn, a_nullTextures);
+		// An epoch of its own is never submitted from inside another's commit (the view work a host's commit runs is its hosted epochs').
+		if (impl->hostedCommit.host != kNoEpoch) {
+			static bool logged = false;
+			if (!std::exchange(logged, true))
+				logger::error("[DCLF] the {} epoch was submitted inside the {} epoch's commit, which only its hosted epochs commit into", EpochTraitsOf(epoch).name,
+					EpochTraitsOf(impl->hostedCommit.host).name);
+			return ViewSubmit::Failed;
+		}
 		// The selected revision's shape and recording (DecideCoverage covered the view): trusted, its map, buckets and latch are what the
 		// values go into.
 		const auto revision = impl->RevisionOf(epoch);

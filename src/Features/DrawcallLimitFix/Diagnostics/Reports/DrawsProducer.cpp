@@ -72,6 +72,12 @@ namespace DCLF
 		for (std::uint32_t e = 0, count = EpochCount(); e < count; ++e) {
 			auto& s = rv.epochs[e];
 			const auto recorded = s.recorded.exchange(0), failedCount = s.failed.exchange(0), dropped = s.dropped.exchange(0), shapes = s.shapes.exchange(0);
+			// A hosted epoch (the reflection's): its shape's changes alone; its host's recordings carry its passes.
+			if (const auto hostedBy = EpochTraitsOf(e).hostedBy; hostedBy != kNoEpoch) {
+				epochs += fmt::format("{}{} {} changed (recorded in the {} epoch's)", epochs.empty() ? "" : "; ", EpochTraitsOf(e).name, s.changed, EpochTraitsOf(hostedBy).name);
+				s.changed = s.requested = s.refused = 0;
+				continue;
+			}
 			epochs += fmt::format("{}{} {} changed, {} requested, {} recorded ({} shapes), {} failed{}{}", epochs.empty() ? "" : "; ", EpochTraitsOf(e).name, s.changed,
 				s.requested, recorded, shapes, failedCount, dropped ? fmt::format(", {} dropped by a graph build", dropped) : std::string(),
 				s.refused ? fmt::format(", {} refused", s.refused) : std::string());
@@ -143,8 +149,12 @@ namespace DCLF
 		auto& rv = revisions;
 		std::string covered;
 		for (std::uint32_t e = 0, count = EpochCount(); e < count; ++e) {
-			const auto unrevised = std::exchange(rv.unrevised[e], 0), clamped = std::exchange(rv.latchClamped[e], 0);
-			covered += fmt::format("{}{} {}{}{}", covered.empty() ? "" : "; ", EpochTraitsOf(e).name, std::exchange(rv.submitted[e], 0),
+			// A hosted epoch's (the reflection's): its host's submissions with its passes' work.
+			const auto unrevised = std::exchange(rv.unrevised[e], 0), clamped = std::exchange(rv.latchClamped[e], 0), variants = std::exchange(rv.variants[e], 0);
+			const auto hostedBy = EpochTraitsOf(e).hostedBy;
+			covered += fmt::format("{}{} {}{}{}{}{}", covered.empty() ? "" : "; ", EpochTraitsOf(e).name, std::exchange(rv.submitted[e], 0),
+				hostedBy != kNoEpoch ? fmt::format(" (in the {} epoch)", EpochTraitsOf(hostedBy).name) : std::string(),
+				variants ? fmt::format(" ({} of a later recording)", variants) : std::string(),
 				unrevised ? fmt::format(", {} without the revision's shape <- UNREVISED", unrevised) : std::string(),
 				clamped ? fmt::format(", {} with values past its latch <- LATCH", clamped) : std::string());
 		}

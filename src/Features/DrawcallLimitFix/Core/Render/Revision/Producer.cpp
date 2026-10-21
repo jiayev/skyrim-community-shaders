@@ -310,6 +310,8 @@ namespace DCLF
 					},
 					&add);
 			add(a_resources.count.get(), a_depthOnly ? sizeof(kZeroCounts) : sizeof(std::uint32_t), 0);
+			if (a_depthOnly)
+				add(a_resources.retestDispatch.get(), sizeof(kRetestDispatchReset), 0);
 			if (!a_depthOnly) {
 				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));

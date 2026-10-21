@@ -36,7 +36,7 @@ def main():
     entries = {
         "PortalBatchCS.hlsl": ["Clear", "Count", "TaskCounts", "Scan", "AddOffsets", "Scatter", "MakeTasks", "Evaluate", "Inline"],
         "Features/Fades/FadeStateCS.hlsl": ["PreparePortalQueries", "main"],
-        "BuildDrawsCS.hlsl": ["ClearPortalQueries", "PreparePortalQueries", "main"],
+        "BuildDrawsCS.hlsl": ["ClearPortalQueries", "PreparePortalQueries", "main", "ShadowViews"],
         "ParabolicQueriesCS.hlsl": ["main"],
         "ParabolicStateCS.hlsl": ["Seed", "Scan", "AddOffsets", "Resolve"],
     }

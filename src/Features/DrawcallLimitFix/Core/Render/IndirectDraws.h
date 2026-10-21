@@ -165,8 +165,12 @@ namespace DCLF
 		 * It runs here, not with the colour pass, because everything later that uses depth (the native draws' depth test, the sky,
 		 * Terrain Blending's blended depth, every effect reading it) derives from the depth buffer at this point. Only the vertex
 		 * stage's bindings are needed, which the depth pass has bound; the pixel stage is the DCLF_DEPTH_ONLY build.
+		 *
+		 * a_hostedWork: the work of the view epochs the depth epoch hosts (Api::EpochDef::hostedBy: the reflection's faces, their feature's
+		 * ViewPoint::DepthCommitted work), run by the depth commit inside its epoch's execution, after its own latch writes and before its
+		 * recording's submission: a hosted epoch's SubmitViewEpoch there commits into it. Not run when the depth epoch does not commit.
 		 */
-		void CaptureDepthPass();
+		void CaptureDepthPass(const std::function<void()>& a_hostedWork = {});
 
 		/** @brief Where the main pass's opaque batches end: the colour epoch, against the depth above. */
 		void ExecuteColour();
@@ -396,7 +400,9 @@ namespace DCLF
 		/**
 		 * @brief The view's epoch a_epoch (0 the depth or only one, 1 the colour one) submitted: its recording from the adopted revision,
 		 * with a commit of a_faces (its cameras: none commits nothing) into its shape, holding a_listed's payloads; a_drawn: the faces the
-		 * commit drew. A trees view's commit takes each draw family's row (tree LOD's as the last depth commit uploaded it) while the faces'
+		 * commit drew. A hosted epoch (Api::EpochDef::hostedBy: the reflection's, the depth epoch's passes) is committed into its host's
+		 * commit instead, only from inside it (the view's work the depth commit runs: CaptureDepthPass), and its host submits its recording
+		 * with the epoch's work; NoRevision anywhere else. A trees view's commit takes each draw family's row (tree LOD's as the last depth commit uploaded it) while the faces'
 		 * family is DCLF's (DecideViewFaces) and the shape draws it, its texture bound again for the execution. A view with frame constants
 		 * of its own (Draws::OwnsFrameConstants: the reflection's) commits them too, from this frame's sources, its frame textures held for
 		 * the execution; a_nullTextures: the frame texture registers (t16 and up) its frame record left null, a bit each (none committed: untouched).

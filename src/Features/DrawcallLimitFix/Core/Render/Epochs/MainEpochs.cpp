@@ -32,7 +32,7 @@ namespace DCLF
 		impl->mainMaxDepth = impl->pending->maxDepth;
 	}
 
-	void IndirectDraws::CaptureDepthPass()
+	void IndirectDraws::CaptureDepthPass(const std::function<void()>& a_hostedWork)
 	{
 		// Main::RenderDepth sets the world depth target and viewport in the engine's shadow state,
 		// but only a native draw flushes that state to D3D11. When ownership withheld all such draws,
@@ -65,7 +65,10 @@ namespace DCLF
 			impl->pending->Release();
 		impl->pending = std::move(capture);
 		ProbeTargets("before z-prepass");
+		// The hosted epochs' work (the reflection's faces), run by the depth commit inside its epoch's execution (CommitMainPayload).
+		impl->hostedWork = a_hostedWork ? &a_hostedWork : nullptr;
 		RunEpoch(true);
+		impl->hostedWork = nullptr;
 		ProbeTargets("after z-prepass");
 	}
 

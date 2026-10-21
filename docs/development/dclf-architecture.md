@@ -104,7 +104,7 @@ lane and pool, and every frame draws the newest complete snapshot of it.
 | Each shadow view's `FinishAccumulating` | `CaptureShadowView`: where the engine draws and with which constants | | The engine's remaining shadow draws |
 | `AfterShadowMaps` | The **shadow epoch** (trigger `shadow-maps.after`) | | Every view's casters, culled per view |
 | `EarlyPrepass` | Posts the accumulate inputs for the next scene pass; answers the last pass's captures | | |
-| `Main::RenderDepth`, world drawn | `FrameDriver::DepthCommitted`: the **Z-prepass epoch**, then the **reflection epoch** (trigger `depth.committed`) | | Tree wind and fade state (compute queue), texture transforms, phase 1, HZB, phase 2, visibility events; the reflection's faces |
+| `Main::RenderDepth`, world drawn | `FrameDriver::DepthCommitted`: the **Z-prepass epoch** (trigger `depth.committed`), the reflection's faces committed inside its commit (it hosts their passes) | | Tree wind and fade state (compute queue), texture transforms, phase 1, the reflection's faces' cull, HZB, phase 2, the faces' draws, visibility events |
 | RenderDepth's first-person draw | The **first-person depth epoch** | | |
 | Skylighting's `RenderOcclusion` | The **occlusion epoch** | | The occlusion maps |
 | `Prepass` | Latches the accumulator; refreshes the camera-dependent frame constants; Light Limit Fix's light culling epoch | | |
@@ -124,9 +124,9 @@ owners and rules are [dclf-layout.md](./dclf-layout.md), "The schedule".
 
 | Epoch | Trigger | Segment | Passes |
 | --- | --- | --- | --- |
-| `shadow` | `shadow-maps.after` | `ShadowView` | latched copies, index pool, build draws, the views' draws, cull counters |
-| `main.depth` | `depth.committed` | `ZPrepass` | latched copies; tree wind (next frame); fade state, fade events; texture transforms; phase 1 build, index pool, tree LOD cull, depth draw; HZB, phase 2 build, tree LOD retest, rescues' depth; tree LOD counts; visibility events and readback |
-| `reflection` | `depth.committed` | `Reflection` | latched copies, build draws, tree LOD's face cull, the faces |
+| `shadow` | `shadow-maps.after` | `ShadowView` | latched copies, index pool, build draws, the views' draws, cull counters (with `CS_DCLF_STATS`) |
+| `main.depth` | `depth.committed` | `ZPrepass` | latched copies (the reflection's too); tree wind (next frame); fade state, fade events; texture transforms; phase 1 build, index pool, tree LOD cull, depth draw; the reflection's build draws and tree LOD face cull; HZB, phase 2 build, tree LOD retest, rescues' depth; the reflection's faces; tree LOD counts; visibility events and readback |
+| `reflection` | `depth.committed` | (hosted by `main.depth`) | its passes are the depth epoch's (`reflection/view.build-draws`, `reflection/tree-lod.faces-cull`, `reflection/view.faces`): a shape, no segment, recording or submission of its own |
 | `fp.depth` | `fp.depth-draw` | `FirstPersonDepth` | latched copies, build draws, tree LOD face cull, depth, forward sort |
 | `occlusion` | `occlusion.draw` | `SkyOcclusion` | latched copies, build draws, the maps' draws |
 | `light-culling` | (Light Limit Fix's, live) | `LightCulling` | Light Limit Fix's clusters; not a revision's |
@@ -136,6 +136,18 @@ owners and rules are [dclf-layout.md](./dclf-layout.md), "The schedule".
 
 `main.depth`, `main.colour` and, while its class is on, `forward` decide the frame's claims (`EpochDef::claims`): a frame whose
 claims withhold an object must run the epoch that draws it.
+
+**A hosted epoch** (`EpochDef::hostedBy`: `reflection`, in `main.depth`) is a shape and its passes without an ORG epoch of its own.
+Its keys sit in its host's list, prefixed with its id (`reflection/view.faces`), where the host's extension makes them from the view's
+resources (`Resources::views`, while the view's target is imported: `ViewPassesReady`), so its passes keep the table's order among the
+host's. The host's latched copies copy its lists too (one pass). Its shape is a revision slot like any epoch's; the host's recordings are
+requested with it (`RevisionRecordings::hosted`): each of the host's variants with the hosted passes' work, then the same without it (its
+passes prepare nothing, record nothing). The host's commit runs the hosted view's work inside its own epoch's execution
+(`IndirectDraws::CaptureDepthPass`'s hosted work: `ViewPoint::DepthCommitted`), whose `SubmitViewEpoch` commits into the host's commit
+(`Impl::CommitHostedView`: its latch in the host's frame slot, its owners held with the host's execution); the host then submits the
+variant with the hosted work when the view committed, else the one without. A hosted epoch is covered with its host's recordings
+(`DecideEpochCoverage`). It is in neither order. Why: the reflection's own epoch cost its external entry and exit barriers (about
+3-4 us each), its latched copies (about 4 us) and their barriers, every frame it drew.
 
 ### The frame start and the wait
 
@@ -934,6 +946,17 @@ shadow view slot the shape holds with no view this frame gets a zero latch (no d
 work` (`ShadowEpochs.cpp`). A shadow view's pipeline-map offset carries its latch slot's base (`LatchBlock::Offset(slot) + row`),
 as the dispatch's `LatchOffset` does.
 
+The culling is one dispatch for all of an epoch's views (`ShadowBuildDrawsPass`, BuildDrawsCS's `ShadowViews`; the occlusion
+epoch's too): a compute pass costs 12-25 us almost whatever its work. The dispatch is two-dimensional, x over the inputs and y over the
+views, a thread building one input for one view with the view's own latch and outputs, which a per-epoch table names (`ShadowBuildView`:
+the view's latch within the frame slot's region, its slot's sequences, count words and bucket counts; published at preparation by
+`org::PreparedTablePublisher`, its SRV and rows in the push constants' `sequencesIndex` and `countIndex`). Not a loop over the views in
+each thread: BuildDraws is latency-bound, and the loop took the four views from 20.9 to 36.1 us. Each view's slot is written as a
+dispatch of its own wrote it, so the views' draws, counters and readbacks are unchanged. The groups are the epoch's
+(`ShadowLatchLayout::BuildDispatchOffset`, the shadow epoch's then the occlusion epoch's), written by each commit for the variant it
+submits: x the list's inputs over 64, y its views (`ShadowBuildRows`, the rows the pass's table holds unless a slot is past its bindings;
+a y past the rows does nothing). A zero latch's `drawCount` of 0 skips its view.
+
 ### Queues and submission
 
 -   **Async compute.** DXVK creates a compute-only queue and never submits to it; the interop exports it
@@ -1104,7 +1127,8 @@ BuildDrawsCS and TreeLodCullCS):
     `UpdateIndexPool` follows the geometry log with its own cursor, and the frame's first drawing commit reassigns the logged
     slots' ranges before its draws. Ranges are per slot, never shared by buffer address (DXVK reuses a freed address at once:
     sharing drew another mesh's indices after cell loads), and every logged slot gives back its range before any new range is
-    handed out.
+    handed out. A revision records the Z-prepass twice, the second without the pool's dispatch (`RevisionShapes::depthWithoutIndexPool`):
+    the depth commit submits that one when its own update gave out no range (the shadow epoch's took the frame's, or none changed).
 -   **Depth range.** DCLF draws both main epochs with the main pass's viewport depth range (`[0, 0.999998]`,
     `Core/Render/Main/FrameLayout.h`), not the engine's depth pass's (`[0, 0.999968]`), so their depths agree.
 -   **Winding.** BasicRHI's `frontCCW` has D3D's meaning on both backends; DCLF passes the engine's own winding
@@ -2281,11 +2305,18 @@ with set phase `kSetReflection` and view bit `kViewReflection`.
 -   **Members**: objects with a LOD technique (`LodLightingTechnique`: 9, 13, 15, 18), joined once their pipeline slot's forward
     pipeline is built (`PhaseReady`), and the faces' tree LOD. Only plain face renders (mode 0) are DCLF's
     (`ReflectionFaces::Plain`); modes `0x19` and `0x1B` stay the engine's.
--   **One epoch a frame at the depth commit** (`Segment::Reflection`, `Features/Reflection/ReflectionEpoch.cpp`). `TESWaterReflections::Update`
-    renders one face per call, twice a frame, before the depth pass, and nothing between a face render and the water's read of the
-    cube touches it, so drawing after the depth commit is still before the water reads it. An epoch's draws must never read two
-    publications: the faces must follow the depth commit, which brings the index pool and the scene's buffers to the publication whose
-    scene list they draw (against the frame before's pool, a reassigned slot drew old indices against new vertices: a device fault).
+-   **In the depth epoch, at the depth commit** (`Features/Reflection/ReflectionEpoch.cpp`; the `reflection` epoch is hosted by `main.depth`:
+    "The schedule"). `TESWaterReflections::Update` renders one face per call, twice a frame, before the depth pass, and nothing between a
+    face render and the water's read of the cube touches it, so drawing in the depth epoch is still before the water reads it; the depth
+    epoch's exit makes the faces visible to the engine's work after it, as the reflection epoch's own exit did. An epoch's draws must never
+    read two publications: the faces must follow the depth commit's index pool copies, which bring the index pool and the scene's buffers to
+    the publication whose scene list they draw (against the frame before's pool, a reassigned slot drew old indices against new vertices: a
+    device fault). In the depth epoch: the latched copies take the faces' lists; the faces' cull (BuildDraws, tree LOD's per face) runs once
+    phase 1's depth is drawn, beside the depth pyramid, so neither holds the depth draw back; the faces' draws after the rescues' depth.
+    The faces' commit (`Execute`, `ViewPoint::DepthCommitted`) runs inside the depth commit, before its recording is submitted: the
+    recording with the faces' work when it committed faces, else the same without it (no water in view, the toggle off: the faces'
+    passes record nothing; their barriers stay). Measured before the merge: the reflection epoch's entry and exit barriers about 3-4 us
+    each, its latched copies about 4 us; its build 21-23 us, tree LOD's face cull 13-14 us, the faces 86 us.
     The view work that depends on tree LOD's decision runs at `ViewPoint::FrameStartAfterTreeLod` (`Reflection::Prepare`: the targets,
     the LOD slots' forward pipelines).
 -   **The shape always has six faces**, so recordings hold across frames; a face the frame does not render culls and draws nothing.

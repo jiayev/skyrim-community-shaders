@@ -380,7 +380,12 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
     `fp.colour`: `fp.depth`);
   - `gate`, an `Api::ObjectClass` (none: `Count`): while it is off the shared shape is not taken and the frame's claims don't need the
     epoch; `claims`, whether the frame's claims need its recordings (`main.depth`, `main.colour`, and `forward` under its gate);
-  - `revision`, whether it is revision-driven (every DCLF epoch is); and its pass keys in order, Core's and the features' side by side.
+  - `revision`, whether it is revision-driven (every DCLF epoch is); and its pass keys in order, Core's and the features' side by side;
+  - `hostedBy`, the id of an earlier Main epoch of its trigger and segment that runs its passes (`reflection`: `main.depth`): a View epoch
+    whose own list is empty and whose keys sit in its host's list, prefixed with its id and `Api::kHostedKey` (`reflection/view.faces`),
+    made from its view's resources (`Resources::views`, `PassContext::view`; the host's own passes see them as `PassContext::hosted`). It
+    is a revision shape with no segment, recording or submission of its own: the host's recordings carry its passes, the host's commit
+    commits it (dclf-architecture.md, "The schedule"). It is in neither order, and no epoch shares its shape.
 - **The orders.** The rows' order is the scene revisions' slot order and the reports' order: an epoch is its row's index in Core
   (`Core/Render/Revision/Epochs.h`: `EpochCount`, `EpochTraitsOf`, `EpochOfShape`, `EpochById`, `ViewEpochsOf`; the fixed arrays hold
   `kMaxEpochs`). The order a frame runs them is `frameOrder`, the host's async ticket loop's `asyncOrder` (its revision-driven epochs
@@ -391,7 +396,7 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
   `owner` names whose hook it is (`Core`, `Features/Forward`, ...), `where` the engine point and the hook. The table's, in the frame's
   order: `shadow-maps.after` (Features/Shadows/Engine: Deferred's `Main_RenderShadowMaps` returned, its shadow epochs handler called
   from FrameDriver; `shadow`), `depth.committed` (Core: the shell's
-  `Main_RenderDepth_WorldDrawn`; `main.depth`, and `reflection` from the views' work there), `fp.depth-draw` (Features/FirstPerson:
+  `Main_RenderDepth_WorldDrawn`; `main.depth`, and `reflection` committed inside its commit by the views' work there), `fp.depth-draw` (Features/FirstPerson:
   RenderDepth's first-person draw; `fp.depth`), `occlusion.draw` (Features/Shadows/Engine: Skylighting's `DrawOcclusion`, its handler called from FrameDriver; `occlusion`), `opaque.after`
   (Features/MainView: the opaque batches done, `Main_RenderWorld_BlendedDecals`, its primary view handler called from FrameDriver;
   `main.colour`), `blended.draw` (Features/Forward: the main pass's
@@ -413,8 +418,9 @@ Every pass DCLF adds to the graph is an `Api::PassDef` (`Api/Passes.h`): a key, 
 - **The executor** (`Core/Render/Epochs/ScheduleExecutor`) keeps every registered PassDef (a missing or duplicate key, neither or both
   of make and emit, or an anchor with a setup or latch word fails the install), resolves the table once at the end of
   `InstallFeatures` (a key nobody registered fails it, naming the epoch; so do the setup and latch word rules above, an epoch id unknown
-  or duplicated, a segment used twice, a `sharesWith` naming no earlier epoch recording that shape itself, a shape of Core's no epoch
-  records, an order not naming every epoch once, more epochs than `kMaxEpochs`, and the trigger rules above), resolves the trigger ids
+  or duplicated, a segment used twice (but by a hosted epoch and its host), a `sharesWith` naming no earlier epoch recording that shape
+  itself, a `hostedBy` breaking its rules above, a host's key of an epoch it does not host, a shape of Core's no epoch records, an order not
+  naming every epoch but the hosted ones once, more epochs than `kMaxEpochs`, and the trigger rules above), resolves the trigger ids
   to their rows (`EpochTrigger`, `TriggerName`, `CoreTriggerOf`), runs the setups
   (`SetUpPassStates`, from `EnsureSceneBuffers`), gives the depth commit its latch word (`PassLatchWord`), and adds an extension's
   epochs' passes when its `GatherStructuralPasses` asks (`GatherScheduled`), epoch by epoch in table order. ORG orders the epochs;
