@@ -59,6 +59,10 @@ struct SceneBlend
 	static nlohmann::json Interpolate(const nlohmann::json& from, const nlohmann::json& to, float weight)
 	{
 		weight = std::clamp(weight, 0.f, 1.f);
+		if (weight == 0.f || from == to)
+			return from;
+		if (weight == 1.f)
+			return to;
 		if (from.is_number())
 			return from.get<float>() + (to.get<float>() - from.get<float>()) * weight;
 		auto result = EmptyLike(from);

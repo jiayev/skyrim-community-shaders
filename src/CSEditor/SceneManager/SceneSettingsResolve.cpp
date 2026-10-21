@@ -14,6 +14,32 @@
 
 using namespace SceneSettingsInternal;
 
+template <class Resolve>
+static json BlendScenePeriods(const json& baseline,
+	const std::array<float, SceneSettingsManager::kPeriodCount>& factors, Resolve&& resolve)
+{
+	std::array<json, SceneSettingsManager::kPeriodCount> values;
+	const json* constant = nullptr;
+	bool uniform = true;
+	for (int index = 0; index < SceneSettingsManager::kPeriodCount; ++index) {
+		if (factors[index] <= 0.f)
+			continue;
+		values[index] = resolve(index);
+		if (constant)
+			uniform &= values[index] == *constant;
+		else
+			constant = &values[index];
+	}
+	// Constant settings must stay bit-exact to avoid invalidating render histories and generated maps.
+	if (constant && uniform)
+		return *constant;
+	json result = SceneBlend::EmptyLike(baseline);
+	for (int index = 0; index < SceneSettingsManager::kPeriodCount; ++index)
+		if (factors[index] > 0.f)
+			SceneBlend::Accumulate(result, values[index], factors[index]);
+	return result;
+}
+
 void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransitions)
 {
 	if (resolverSuspended || sceneLayerSuspendDepth > 0)
@@ -779,10 +805,9 @@ void SceneSettingsManager::ResolveTimeOfDaySettings(
 		if (baselineIt == baselineSettings.end() || !SceneBlend::IsBlendable(baselineIt->second))
 			continue;
 		const auto baseline = baselineIt->second;
-		json result = SceneBlend::EmptyLike(baseline);
-		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
-			SceneBlend::Accumulate(result, periodValues[periodIndex].value_or(baseline), factors[periodIndex]);
-		resolved[address] = result;
+		resolved[address] = BlendScenePeriods(baseline, factors, [&](int periodIndex) {
+			return periodValues[periodIndex].value_or(baseline);
+		});
 	}
 }
 
@@ -803,13 +828,12 @@ void SceneSettingsManager::ResolveWeatherSettings(
 		if (weatherIt == weatherValues.end())
 			return std::nullopt;
 		auto timeOfDayIt = timeOfDayValues.find(address);
-		json result = SceneBlend::EmptyLike(baseline);
-		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex) {
+		json result = BlendScenePeriods(baseline, factors, [&](int periodIndex) {
 			const auto lower = timeOfDayIt != timeOfDayValues.end() ?
 			                       timeOfDayIt->second[periodIndex].value_or(baseline) :
 			                       baseline;
-			SceneBlend::Accumulate(result, weatherIt->second[periodIndex].value_or(lower), factors[periodIndex]);
-		}
+			return weatherIt->second[periodIndex].value_or(lower);
+		});
 		return std::optional<json>{ std::in_place, std::move(result) };
 	};
 
@@ -894,10 +918,9 @@ void SceneSettingsManager::BlendLocationPeriodValues(ResolvedSettingMap& resolve
 		if (auto resolvedIt = resolved.find(address);
 			resolvedIt != resolved.end() && SceneBlend::IsBlendable(resolvedIt->second))
 			lowerValue = resolvedIt->second;
-		json result = SceneBlend::EmptyLike(lowerValue);
-		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
-			SceneBlend::Accumulate(result, values[periodIndex].value_or(lowerValue), factors[periodIndex]);
-		resolved[address] = result;
+		resolved[address] = BlendScenePeriods(lowerValue, factors, [&](int periodIndex) {
+			return values[periodIndex].value_or(lowerValue);
+		});
 	}
 }
 

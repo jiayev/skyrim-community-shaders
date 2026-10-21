@@ -131,6 +131,16 @@ CloudTemporalSample ReconstructCloudSamples(float transmittances[4], float4 colo
 CloudTemporalSample ReconstructCloud(Texture2D<float> transmittance, Texture2D<float4> color, Texture2D<float4> depth,
 	float2 position, int2 maximum, bool reweightEmpty)
 {
+	if (!reweightEmpty) {
+		uint2 dimensions;
+		transmittance.GetDimensions(dimensions.x, dimensions.y);
+		const float2 uv = (clamp(position, 0.0, float2(maximum)) + 0.5) / float2(dimensions);
+		CloudTemporalSample result;
+		result.transmittance = transmittance.SampleLevel(TransmittanceSampler, uv, 0);
+		result.color = color.SampleLevel(TransmittanceSampler, uv, 0);
+		result.metadata = depth.SampleLevel(TransmittanceSampler, uv, 0);
+		return result;
+	}
 	const int2 base = int2(floor(position));
 	float transmittances[4];
 	float4 colors[4];
@@ -452,13 +462,15 @@ float2 CloudCubePosition(float3 direction, uint face)
 	return position * float2(0.5, -0.5) + 0.5;
 }
 
-[numthreads(8, 4, 1)] void renderCubemap(uint3 tid : SV_DispatchThreadID) {
+[numthreads(16, 2, 1)] void renderCubemap(uint3 tid : SV_DispatchThreadID) {
 	uint3 dims;
 	RWTexCubeTr.GetDimensions(dims.x, dims.y, dims.z);
 	if (any(tid >= dims))
 		return;
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const uint2 pixel = tid.xy * 4u + CloudPhaseOffset();
+	// Side-face groups follow the horizon to limit march-length divergence.
+	const uint2 tracePixel = tid.z < 2u ? tid.yx : tid.xy;
+	const uint2 pixel = tracePixel * 4u + CloudPhaseOffset();
 	const float3 eye = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const uint2 seed = pixel + uint2(tid.z * dims.x * 4u, 0);
 	const float2 jitter = float2(CloudTemporalMarchHash(seed, info.cloudFrameIndex), CloudSpatialMarchHash(seed));
@@ -467,9 +479,9 @@ float2 CloudCubePosition(float3 direction, uint face)
 	const float angularFootprint = 2.0 * cubeCosine / (dims.x * 4u);
 	const VolumetricCloudResult result = RenderVolumetricCloudRay(direction,
 		eye, 0.0, jitter, 0.0, 0.0, angularFootprint);
-	RWTexCubeTr[tid] = result.transmittance.x;
-	RWTexCubeLum[tid] = float4(min(result.lum, 65504.0), 1.0 - result.transmittance.x);
-	RWTexCubeAux[tid] = float4(EncodeCloudDepth(result.cloud_depth), 0.0, result.motionMetadata * (1.0 - result.transmittance.x));
+	RWTexCubeTr[uint3(tracePixel, tid.z)] = result.transmittance.x;
+	RWTexCubeLum[uint3(tracePixel, tid.z)] = float4(min(result.lum, 65504.0), 1.0 - result.transmittance.x);
+	RWTexCubeAux[uint3(tracePixel, tid.z)] = float4(EncodeCloudDepth(result.cloud_depth), 0.0, result.motionMetadata * (1.0 - result.transmittance.x));
 }
 
 	[numthreads(8, 8, 1)] void reprojectCubemap(uint3 tid : SV_DispatchThreadID)
