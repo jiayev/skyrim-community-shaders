@@ -904,7 +904,8 @@ namespace Util
 
 		float percentageData = (*data) * kPercentageScale;
 		bool retval = ImGui::SliderFloat(label, &percentageData, lb, ub, format, flags);
-		if (!SceneWidgetInterceptor::IsArmed())
+		// Only on an edit: the scaled round trip is not exact in float, so an idle write-back drifts the member.
+		if (retval && !SceneWidgetInterceptor::IsArmed())
 			(*data) = percentageData / kPercentageScale;
 		return retval;
 	}
