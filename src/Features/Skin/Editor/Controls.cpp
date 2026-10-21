@@ -1,7 +1,7 @@
 #include "Features/Skin.h"
 
 #include "CSEditor/Browser/BrowserWidgets.h"
-#include "IconsFontAwesome5.h"
+#include "IconsTabler.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "Utils/UI.h"
 
@@ -266,17 +266,17 @@ void Skin::DrawTextureInputs(SkinMaterials::Changes& a_changes, const SkinMateri
 				}
 				Util::AddTooltip(path.empty() ? none : path.c_str());
 				ImGui::SameLine();
-				if (BrowserUI::IconButton("##pick", Icons::FA(ICON_FA_FOLDER_OPEN), T("feature.skin.choose_dds_tooltip", "Choose a DDS from the game's Data folder")))
+				if (BrowserUI::IconButton("##pick", Icons::TI(ICON_TI_FOLDER_OPEN), T("feature.skin.choose_dds_tooltip", "Choose a DDS from the game's Data folder")))
 					OpenResourceBrowser(editor.browser, path.empty() ? editor.key : path);
 				if (const auto chosen = ResourceBrowserPopup(editor.browser, ".dds")) {
 					edit = { TextureMode::Resource, NormalizeTexturePath(*chosen) };
 					Invalidate(true);
 				}
 				ImGui::SameLine();
-				if (BrowserUI::IconButton("##none", Icons::FA(ICON_FA_TIMES), i == 2 ? T("feature.skin.use_global_detail", "Use global detail") : T("feature.skin.use_neutral", "Use neutral")))
+				if (BrowserUI::IconButton("##none", Icons::TI(ICON_TI_X), i == 2 ? T("feature.skin.use_global_detail", "Use global detail") : T("feature.skin.use_neutral", "Use neutral")))
 					edit = material ? TextureEdit{} : TextureEdit{ TextureMode::Default, {} };
 				ImGui::SameLine();
-				if (i != 1 && BrowserUI::IconButton("##build", Icons::FA(ICON_FA_TOOLS), T("feature.skin.open_texture_tools", "Build a packed texture..."))) {
+				if (i != 1 && BrowserUI::IconButton("##build", Icons::TI(ICON_TI_TOOLS), T("feature.skin.open_texture_tools", "Build a packed texture..."))) {
 					editor.tools.detail = i == 2;
 					editor.toolsOutput.clear();
 					editor.toolsWindow = true;

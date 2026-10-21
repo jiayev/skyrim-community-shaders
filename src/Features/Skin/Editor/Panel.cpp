@@ -2,7 +2,7 @@
 
 #include "CSEditor/Browser/BrowserWidgets.h"
 #include "CSEditor/EditorWindow.h"
-#include "IconsFontAwesome5.h"
+#include "IconsTabler.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "Utils/UI.h"
@@ -113,17 +113,17 @@ void Skin::DrawTextureHeader()
 
 	if (entry->definition.status == Status::Invalid) {
 		const auto message = std::format("{} {}", T("feature.skin.material_file_invalid_detail", "The existing file is ignored and the common settings apply. Saving replaces it:"), entry->definition.diagnostic);
-		Util::StatusBanner(ICON_FA_EXCLAMATION_TRIANGLE, message.c_str(), Util::Colors::GetError());
+		Util::StatusBanner(ICON_TI_ALERT_TRIANGLE, message.c_str(), Util::Colors::GetError());
 	}
 	if (!editor.fingerprintWarning.empty())
-		Util::StatusBanner(ICON_FA_EXCLAMATION_TRIANGLE, editor.fingerprintWarning.c_str(), Util::Colors::GetWarning());
+		Util::StatusBanner(ICON_TI_ALERT_TRIANGLE, editor.fingerprintWarning.c_str(), Util::Colors::GetWarning());
 }
 
 void Skin::DrawLayerStack()
 {
 	const auto& style = ImGui::GetStyle();
 	const ImVec4 accent = Util::Colors::GetAccent();
-	const Icons::GlyphRef separator = Icons::FA(ICON_FA_ANGLE_RIGHT);
+	const Icons::GlyphRef separator = Icons::TI(ICON_TI_CHEVRON_RIGHT);
 	const auto name = editor.actorName.empty() ? std::string(T("feature.skin.unnamed_character", "Unnamed character")) : editor.actorName;
 	const auto describe = [&](std::optional<Layer> a_layer) -> std::string {
 		if (!a_layer)
@@ -190,12 +190,12 @@ void Skin::DrawLayerToolbar()
 	const bool dirty = LayerDirty(editor.layer);
 
 	ImGui::BeginDisabled(editor.undo.empty());
-	if (BrowserUI::IconButton("##undo", Icons::FA(ICON_FA_UNDO), T("feature.skin.undo", "Undo")))
+	if (BrowserUI::IconButton("##undo", Icons::TI(ICON_TI_ARROW_BACK_UP), T("feature.skin.undo", "Undo")))
 		Undo();
 	ImGui::EndDisabled();
 	ImGui::SameLine();
 	ImGui::BeginDisabled(editor.redo.empty());
-	if (BrowserUI::IconButton("##redo", Icons::FA(ICON_FA_REDO), T("feature.skin.redo", "Redo")))
+	if (BrowserUI::IconButton("##redo", Icons::TI(ICON_TI_ARROW_FORWARD_UP), T("feature.skin.redo", "Redo")))
 		Redo();
 	ImGui::EndDisabled();
 
@@ -207,7 +207,7 @@ void Skin::DrawLayerToolbar()
 	if (BrowserUI::IconButton("##save", SceneActionIcons::kSave, saveTooltip.c_str(), dirty, dirty ? ImGui::GetColorU32(Util::Colors::GetWarning()) : 0))
 		SaveLayer();
 	ImGui::SameLine();
-	if (BrowserUI::IconButton("##revert", Icons::FA(ICON_FA_HISTORY), Action(T("feature.skin.revert_layer", "Revert"), T("feature.skin.revert_layer_tooltip", "Return this layer to its saved values.")).c_str()))
+	if (BrowserUI::IconButton("##revert", Icons::TI(ICON_TI_RESTORE), Action(T("feature.skin.revert_layer", "Revert"), T("feature.skin.revert_layer_tooltip", "Return this layer to its saved values.")).c_str()))
 		RevertLayer();
 	ImGui::EndDisabled();
 
@@ -224,7 +224,7 @@ void Skin::DrawLayerToolbar()
 		editor.clearRequested = true;
 	ImGui::EndDisabled();
 	ImGui::SameLine();
-	if (BrowserUI::IconButton("##wetness", Icons::FA(ICON_FA_TINT), Action(T("feature.skin.preview_override_wetness", "Test a specific wetness level"), T("feature.skin.preview_wetness_tooltip", "Previews the drafts at a fixed wetness while the editor is open.")).c_str(),
+	if (BrowserUI::IconButton("##wetness", Icons::TI(ICON_TI_DROPLET), Action(T("feature.skin.preview_override_wetness", "Test a specific wetness level"), T("feature.skin.preview_wetness_tooltip", "Previews the drafts at a fixed wetness while the editor is open.")).c_str(),
 			editor.previewWetness >= 0))
 		ImGui::OpenPopup("##skin_wetness");
 	if (editor.layer == Layer::CharacterMaterial && editor.character.materials.contains(editor.key) && editor.character.materials.at(editor.key).Empty())

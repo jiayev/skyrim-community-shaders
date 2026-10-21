@@ -2,7 +2,7 @@
 
 #include "CSEditor/Browser/BrowserWidgets.h"
 #include "Globals.h"
-#include "IconsFontAwesome5.h"
+#include "IconsTabler.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "State.h"
 #include "Utils/UI.h"
@@ -107,12 +107,12 @@ void Skin::DrawEditorPageActions()
 	BrowserUI::RightAlign(button * 2.0f + ImGui::GetStyle().ItemSpacing.x);
 	const auto tools = std::format("{}\n{}", T("feature.skin.workspace_textures", "Texture tools"),
 		T("feature.skin.texture_tools_tooltip", "Pack grayscale maps into a Skin controls texture, or a detail normal with its region mask."));
-	if (BrowserUI::IconButton("##skin_tools", Icons::FA(ICON_FA_TOOLS), tools.c_str(), editor.toolsWindow))
+	if (BrowserUI::IconButton("##skin_tools", Icons::TI(ICON_TI_TOOLS), tools.c_str(), editor.toolsWindow))
 		editor.toolsWindow = !editor.toolsWindow;
 	ImGui::SameLine();
 	const auto reload = std::format("{}\n{}", T("feature.skin.reload_skin_resources", "Reload skin resources"),
 		T("feature.skin.reload_skin_resources_help_v2", "Re-reads material files, character files and DDS inputs changed outside the game."));
-	if (BrowserUI::IconButton("##skin_reload", Icons::FA(ICON_FA_SYNC_ALT), reload.c_str()))
+	if (BrowserUI::IconButton("##skin_reload", Icons::TI(ICON_TI_REFRESH), reload.c_str()))
 		ReloadResources();
 }
 
@@ -121,11 +121,11 @@ void Skin::DrawTargetBar()
 	const ImVec4 accent = Util::Colors::GetAccent();
 	const ImVec4 iconColor = Util::Colors::GetSecondary();
 	using Source = Editor::Source;
-	if (BrowserUI::Chip("##skin_player", T("feature.skin.player", "Player"), Icons::FA(ICON_FA_USER), &iconColor, editor.source == Source::Player ? &accent : nullptr))
+	if (BrowserUI::Chip("##skin_player", T("feature.skin.player", "Player"), Icons::TI(ICON_TI_USER), &iconColor, editor.source == Source::Player ? &accent : nullptr))
 		SelectActor(RE::PlayerCharacter::GetSingleton(), Source::Player);
 	Util::AddTooltip(T("feature.skin.player_tooltip", "Edit the skin textures your character shows."));
 	ImGui::SameLine();
-	if (BrowserUI::Chip("##skin_console", T("feature.skin.console_selection", "Console selection"), Icons::FA(ICON_FA_CROSSHAIRS), &iconColor, editor.source == Source::Console ? &accent : nullptr)) {
+	if (BrowserUI::Chip("##skin_console", T("feature.skin.console_selection", "Console selection"), Icons::TI(ICON_TI_CROSSHAIR), &iconColor, editor.source == Source::Console ? &accent : nullptr)) {
 		const auto reference = RE::Console::GetSelectedRef();
 		auto* actor = reference ? reference->As<RE::Actor>() : nullptr;
 		if (!actor)
@@ -155,7 +155,7 @@ void Skin::DrawProblems()
 		return;
 	const auto message = I18n::GetSingleton()->Format("feature.skin.character_problems", { { "count", std::to_string(state->problems.size()) } },
 		"{count} character files are ignored. Click for details.");
-	if (Util::StatusBanner(ICON_FA_EXCLAMATION_TRIANGLE, message.c_str(), Util::Colors::GetWarning()))
+	if (Util::StatusBanner(ICON_TI_ALERT_TRIANGLE, message.c_str(), Util::Colors::GetWarning()))
 		editor.showProblems = !editor.showProblems;
 	if (!editor.showProblems)
 		return;
