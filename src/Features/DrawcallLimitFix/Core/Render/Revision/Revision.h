@@ -99,7 +99,7 @@ namespace DCLF::Draws
 		// (kDepthShape, kColourShape) the latched copies' block.
 		LatchHandle main;
 		std::array<LatchHandle, 2> mainLatched;
-		// The shadow and occlusion epochs': the latch, the counters' zeros and the shadow commit's latched values' block.
+		// The shadow epoch's (the occlusion maps' views too): the latch, the counters' zeros and the shadow commit's latched values' block.
 		LatchHandle shadow, shadowZeros, shadowLatched;
 		// The views' (ViewKind): the latch and the zeros its latched copies take.
 		std::array<LatchHandle, kViews> views, viewZeros;
@@ -126,7 +126,8 @@ namespace DCLF::Draws
 	struct MadeShapes
 	{
 		std::array<std::shared_ptr<const PassFrame>, 2> main;  // per segment
-		std::array<std::vector<std::shared_ptr<const ShadowFrame>>, 2> shadow;  // per epoch (shadow, occlusion), a shape per layout
+		// The shadow epoch's: its shape (the placements, then the occlusion maps' views), then its variants (ShadowFrame::activeViews).
+		std::vector<std::shared_ptr<const ShadowFrame>> shadow;
 		std::array<std::shared_ptr<const ViewFrame>, kViews> views;
 	};
 
@@ -160,22 +161,42 @@ namespace DCLF::Draws
 		}
 	};
 
-	/** @brief A shadow or occlusion epoch's shapes in a revision: one per view layout it has seen (ShadowViewLayout). */
+	/**
+	 * @brief The shadow epoch's shapes in a revision: its views' (the placements, then the occlusion maps'), then a variant per set of
+	 * those views recent frames drew (ShadowFrame::activeViews), a recording each.
+	 */
 	struct ShadowVariants
 	{
 		std::vector<std::shared_ptr<const ShadowFrame>> shapes;
 	};
 	/**
 	 * @brief An epoch's recordings for a revision: one per shape (a shadow epoch's variants), by the shapes' order. An epoch hosting
-	 * another's (EpochTraits::hosts) recorded with the hosted epoch's shape (hosted): its variants with the hosted passes' work first,
-	 * then the same without it (a frame the hosted epoch does not draw: its passes record nothing), as many each.
+	 * others' (EpochTraits::hostsMask) is recorded with the shapes of those that had one (hosted: a bit each, by row), each such hosted
+	 * epoch a dimension: for every subset of them absent (a bit each, in row order; none absent first), the host's own variants with the
+	 * present ones' shapes (their passes' work) and none of the absent ones' (a frame that hosted epoch does not draw: its passes record
+	 * nothing). The depth epoch, with the reflection's and first person's shapes: its 2 index pool variants times 4, 8 recordings; with
+	 * one hosted shape (first person off: its shape is dropped) 4; with none 2. The first carries every hosted epoch's work.
 	 */
 	struct RevisionRecordings
 	{
 		std::vector<std::shared_ptr<const org::PersistentGraphHost::EpochRecording>> recordings;
-		bool hosted = false;
-		/** @brief The variants of each half (all of them without a hosted shape). */
-		std::size_t Variants() const { return hosted ? recordings.size() / 2 : recordings.size(); }
+		std::uint32_t hosted = 0;
+		/** @brief The host's own variants (each subset's; all of them without a hosted shape). */
+		std::size_t Variants() const { return recordings.size() >> std::popcount(hosted); }
+		/** @brief Whether the recordings carry hosted epoch a_epoch's passes (their subsets with it present). */
+		bool Carries(std::uint32_t a_epoch) const { return a_epoch < 32 && ((hosted >> a_epoch) & 1); }
+		/**
+		 * @brief The recording of the host's own variant a_variant with the work of the hosted epochs in a_drawn (a bit each, by row) and
+		 * none of the others it carries: every carried epoch outside a_drawn records nothing in it.
+		 */
+		std::size_t IndexOf(std::size_t a_variant, std::uint32_t a_drawn) const
+		{
+			std::size_t absent = 0, dimension = 0;
+			for (std::uint32_t rest = hosted; rest; rest &= rest - 1, ++dimension)
+				if (!(a_drawn & rest & (0u - rest)))
+					absent |= std::size_t(1) << dimension;
+			return a_variant + Variants() * absent;
+		}
 	};
 	/**
 	 * @brief An epoch's part of the selected revision (Impl::RevisionOf): its shape fragment and its recordings. A commit writes the

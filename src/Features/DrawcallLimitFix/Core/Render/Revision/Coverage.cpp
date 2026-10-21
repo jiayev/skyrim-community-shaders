@@ -213,12 +213,12 @@ namespace DCLF
 		if (current && snapshot)
 			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
 				// An epoch's recordings are all of the build its versions were made at (AssembleRevision asks for them again after one). A
-				// hosted epoch's are its host's (an earlier row), recorded with its shape (RevisionRecordings::hosted): their first half
-				// carries its passes' work.
+				// hosted epoch's are its host's (an earlier row), covered while they were recorded with its shape (RevisionRecordings::
+				// Carries: their subsets with it present carry its passes' work).
 				const auto hostedBy = EpochTraitsOf(e).hostedBy;
 				const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + (hostedBy != kNoEpoch ? hostedBy : e));
 				rv.covered[e] = recordings && !recordings->recordings.empty() && recordings->recordings.front() &&
-				                (hostedBy == kNoEpoch ? host->EpochRecordingCurrent(*recordings->recordings.front()) : rv.covered[hostedBy] && recordings->hosted);
+				                (hostedBy == kNoEpoch ? host->EpochRecordingCurrent(*recordings->recordings.front()) : rv.covered[hostedBy] && recordings->Carries(e));
 			}
 		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
 			rv.uncovered[e] += rv.covered[e] ? 0 : 1;
@@ -230,9 +230,10 @@ namespace DCLF
 	{
 		// What a registered view's coverage is decided from (Api::ViewCoverage), every input read whatever the others: its feature's
 		// callback decides (the first person's: its members withheld from the engine, PassCapture, and drawn by its epochs on a frame the
-		// engine draws it, whose claims stand, both epochs' recordings in the revision and its target imported into the graph as built; the
-		// reflection's: on a frame whose claims stand, its host's recordings with its passes in the revision (the depth epoch's: a hosted
-		// epoch is covered with its host, DecideEpochCoverage) and its cube imported into the graph as built).
+		// engine draws it, whose claims stand, both epochs covered - its depth epoch's passes in the depth epoch's recordings, its colour
+		// epoch's own recording - and its target imported into the graph as built; the reflection's: on a frame whose claims stand, its
+		// host's recordings with its passes in the revision (the depth epoch's: a hosted epoch is covered with its host,
+		// DecideEpochCoverage) and its cube imported into the graph as built).
 		const auto& rv = revisions;
 		const auto& epochs = ViewEpochsOf(a_kind).epochs;
 		auto& view = View(a_kind);

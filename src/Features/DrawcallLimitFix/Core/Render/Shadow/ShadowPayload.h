@@ -1,7 +1,7 @@
 #pragma once
 
-// The shadow payload the shadow build (DCLF's pool) makes for the shadow and occlusion epochs, which their commits read on the
-// render thread, and the inputs their shapes are made from. Included by Internal.h, in its order.
+// The shadow payload the shadow build (DCLF's pool) makes for the shadow epoch (its shadow views and occlusion maps), which its commit
+// reads on the render thread, and the inputs its shapes are made from. Included by Internal.h, in its order.
 
 namespace DCLF::Draws
 {
@@ -220,8 +220,9 @@ namespace DCLF::Draws
 	ShadowBounds ShadowBoundsOf(const DrawBoundStore& a_bound, const Lookups& a_lookups);
 
 	/**
-	 * @brief What a shadow or occlusion epoch's shape is made from (MakeShadowShape): the views' layout, each view's map row's
-	 * buckets, and the revision's payload (its modes' and key slots' draws, the arena's blocks), with the slots' resources.
+	 * @brief What the shadow epoch's shape is made from (MakeShadowShape): the views' layout (the occlusion maps' after the placements),
+	 * each view's map row's buckets, and the revision's payload (its modes' and key slots' draws, the arena's blocks), with the slots'
+	 * resources.
 	 */
 	struct ShadowShapeInputs
 	{

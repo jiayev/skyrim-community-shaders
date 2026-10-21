@@ -20,7 +20,8 @@ namespace DCLF
 			const auto family = static_cast<Api::DrawFamily>(d);
 			auto& faces = state.faces[d];
 			faces.pipeline = {};
-			if (a_on && Extensions::DrawFamilyOn(ActiveToggles(), family)) {
+			// A family without faces (grass) has no forward pipeline: its slot's key flags are none (a Lighting key's).
+			if (a_on && Extensions::DrawFamilyHasFaces(family) && Extensions::DrawFamilyOn(ActiveToggles(), family)) {
 				// Its program is built of the family's program source its decision posts (DrawFamilyFrame::Pipelines: tree LOD's DistantTree
 				// shader).
 				auto& drawPipelines = DrawPipelines::Get();
@@ -67,7 +68,7 @@ namespace DCLF
 		auto& state = View(a_kind);
 		for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d) {
 			const auto family = static_cast<Api::DrawFamily>(d);
-			if (!FamilyHasFaces(family))
+			if (!Extensions::DrawFamilyHasFaces(family))
 				continue;
 			const auto& faces = Extensions::DrawFamilyOf(family).contribution.faces;
 			auto& own = state.faces[d];

@@ -20,15 +20,17 @@ namespace DCLF
 	struct DrawFamilyLaneSlot
 	{
 		Api::DrawFamily family;
-		std::uint32_t forwardFlags;       // a trees view's forward key flags for it (ForwardPipelineKey::kForwardTreeLod)
-		std::uint64_t stageKeyBit;        // its stages' bit in the stage cache's key
+		std::uint32_t forwardFlags;       // a trees view's forward key flags for it (ForwardPipelineKey::kForwardTreeLod; 0: no faces)
+		std::uint64_t stageKeyBit;        // its stages' bit in the stage cache's key (36 up; 37 is the Effect program family's)
 		bool pulled;                      // its stages are pulled builds (DCLF_PULLED)
 		std::uint64_t forwardProgramId;   // its forward program's id (DrawPipelines' forward program waiters): ~0 - family
 	};
 	inline constexpr std::array<DrawFamilyLaneSlot, kDrawFamilyLanes> kDrawFamilyLaneSlots = { {
 		{ Api::DrawFamily::TreeInstances, 2u, 1ull << 36, true, ~0ull - 0 },
+		{ Api::DrawFamily::Grass, 0u, 1ull << 38, true, ~0ull - 1 },
 	} };
-	static_assert(kDrawFamilyLaneSlots[static_cast<std::size_t>(Api::DrawFamily::TreeInstances)].family == Api::DrawFamily::TreeInstances,
+	static_assert(kDrawFamilyLaneSlots[static_cast<std::size_t>(Api::DrawFamily::TreeInstances)].family == Api::DrawFamily::TreeInstances &&
+	                  kDrawFamilyLaneSlots[static_cast<std::size_t>(Api::DrawFamily::Grass)].family == Api::DrawFamily::Grass,
 		"kDrawFamilyLaneSlots is by family");
 
 	constexpr const DrawFamilyLaneSlot& DrawFamilyLaneSlotOf(Api::DrawFamily a_family) { return kDrawFamilyLaneSlots[static_cast<std::size_t>(a_family)]; }

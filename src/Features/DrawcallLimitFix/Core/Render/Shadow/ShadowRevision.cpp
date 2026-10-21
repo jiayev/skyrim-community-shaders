@@ -1,7 +1,7 @@
 // The shadow engine as the shadow shape kind's revision participant (Revision/Participant.h): on the snapshot builder, its
-// requirements of the set (the occlusion layouts lately drawn, the slots' sequences, the latch), its latched copies, the casting bound
-// its shapes outgrew, its parts of the shapes key and its shapes, and the build ahead's shadow payload with its exclusions; on the
-// render thread, its revision inputs and its part of the ahead context.
+// requirements of the set (the occlusion maps' layouts last set up, the slots' sequences, the latch), its latched copies, the casting
+// bound its shapes outgrew, its parts of the shapes key and its shapes (the shadow epoch's: the placements and the occlusion maps' views),
+// and the build ahead's shadow payload with its exclusions; on the render thread, its revision inputs and its part of the ahead context.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowExclusionBuild.h"
@@ -40,22 +40,18 @@ namespace DCLF
 		auto& scratch = revisionScratch;
 		scratch.latched.clear();
 		scratch.indirect = a_make.catalog ? GetShadowIndirectState(*a_make.catalog, inputs.shadowFormat) : ShadowIndirectState{};
-		// The occlusion maps' layout as last captured: one the revisions make a shape for (OcclusionReady asks for it). The inputs carry
-		// every captured map's; the maps on under the publication's toggles are the revision's (the frame's once it is installed).
+		// The occlusion maps' layouts as last set up: the shadow shape's views after the placements (OcclusionReady asks for a map's). The
+		// inputs carry every set-up map's; the maps on under the publication's toggles are the revision's (the frame's once it is
+		// installed), so a toggled-off map has no view and its toggle back on makes the shape again. A map's layout is its target's size
+		// and its state: the same every frame.
 		{
-			auto layouts = inputs.occlusionLayouts;
+			auto& layouts = producer.occlusionLayouts;
+			layouts = inputs.occlusionLayouts;
 			std::erase_if(layouts, [&producer](const ShadowViewLayout& a_layout) {
 				return !Extensions::OcclusionOn(producer.toggles, OcclusionOfMode(a_layout.modeIndex));
 			});
-			auto& recent = producer.recentOcclusionLayouts;
-			if (!layouts.empty() && (recent.empty() || recent.front() != layouts)) {
-				std::erase(recent, layouts);
-				recent.insert(recent.begin(), std::move(layouts));
-				if (recent.size() > kRecentOcclusionLayouts)
-					recent.resize(kRecentOcclusionLayouts);
-			}
 		}
-		// The placements recent shadow epochs drew: a variant for each, which records their views alone.
+		// The views recent shadow epochs drew (their placements, the occlusion maps): a variant for each, which records them alone.
 		if (const auto active = inputs.shadowActiveViews; active != 0) {
 			auto& recent = producer.recentActiveViews;
 			if (recent.empty() || recent.front() != active) {
@@ -118,7 +114,7 @@ namespace DCLF
 		group = ImplProducer::kKeyPipelines;
 		ptr(revisionScratch.indirect.version.get());
 		mix(revisionScratch.indirect.valid);
-		// The shadow and occlusion epochs': the placements, the occlusion maps' layouts, the scene's casting bound, their latch's layout.
+		// The shadow epoch's: the placements, the occlusion maps' layouts, the scene's casting bound, its latch's layout.
 		group = ImplProducer::kKeyShadow;
 		if (const auto& s = inputs.shadow) {
 			ptr(s.get());
@@ -128,11 +124,9 @@ namespace DCLF
 		}
 		for (const auto& view : inputs.shadowPlacements)
 			raw(view);
-		for (const auto& layouts : producer.recentOcclusionLayouts) {
-			mix(layouts.size());
-			for (const auto& view : layouts)
-				raw(view);
-		}
+		mix(producer.occlusionLayouts.size());
+		for (const auto& view : producer.occlusionLayouts)
+			raw(view);
 		mix(producer.recentActiveViews.size());
 		for (const auto active : producer.recentActiveViews)
 			mix(active);
@@ -157,91 +151,77 @@ namespace DCLF
 		const auto& shadowIndirect = a_indirect;
 		const auto& lookups = a_lookups;
 		const rhi::DescriptorHeapHandle resourceHeap = inputs.resourceHeap, samplerHeap = inputs.samplerHeap;
-		// The shadow and occlusion epochs': a shape for the placements and for each occlusion layout drawn lately. The last make's
+		// The shadow epoch's: a shape for the placements and the occlusion maps' views after them, then its variants. The last make's
 		// shapes are what a layout's capacities grow from.
-		std::array<std::vector<std::shared_ptr<const ShadowFrame>>, 2> previousShadow;
-		for (std::size_t kind = 0; kind < 2; ++kind)
-			previousShadow[kind] = std::exchange(made.shadow[kind], {});
+		auto previousShadow = std::exchange(made.shadow, {});
 		// The slots the frame made (as posted): a layout past them waits for them.
 		const std::size_t shadowSlotCount = inputs.shadowSlots ? inputs.shadowSlots->sequences.size() : 0;
-		if ((!inputs.shadowPlacements.empty() || !producer.recentOcclusionLayouts.empty()) && shadowState && shadowIndirect.valid) {
-			// Sized from the scene's casting bound alone (ShadowBounds), not a payload: the shapes move with the scene's objects, not
-			// with the frame's casters or publications. Indexed by what the named versions of the slots' buffers hold, the least slot's.
-			const auto bounds = std::make_shared<const ShadowBounds>(ShadowBoundsOf(producer.drawBound, lookups));
-			ShadowCapacity capacity;
-			{
-				UnitGroup sequences, counts;
-				if (const auto& slotBuffers = inputs.shadowSlots) {
-					for (const auto& buffer : slotBuffers->sequences)
-						sequences.Add(buffer);
-					for (const auto& buffer : slotBuffers->bucketCounts)
-						counts.Add(buffer);
-				}
-				capacity.sequenceDraws = static_cast<std::uint32_t>(std::min<std::uint64_t>(sequences.Units(a_sealed), UINT32_MAX));
-				capacity.bucketCountWords = static_cast<std::uint32_t>(std::min<std::uint64_t>(counts.Units(a_sealed), UINT32_MAX));
-				capacity.viewSlots = static_cast<std::uint32_t>(std::min<std::uint64_t>(a_sealed.Of(shadowState->viewBlocks.buffer).units, UINT32_MAX));
+		if ((inputs.shadowPlacements.empty() && producer.occlusionLayouts.empty()) || !shadowState || !shadowIndirect.valid)
+			return;
+		// Sized from the scene's casting bound alone (ShadowBounds), not a payload: the shapes move with the scene's objects, not with the
+		// frame's casters or publications. Indexed by what the named versions of the slots' buffers hold, the least slot's.
+		const auto bounds = std::make_shared<const ShadowBounds>(ShadowBoundsOf(producer.drawBound, lookups));
+		ShadowCapacity capacity;
+		{
+			UnitGroup sequences, counts;
+			if (const auto& slotBuffers = inputs.shadowSlots) {
+				for (const auto& buffer : slotBuffers->sequences)
+					sequences.Add(buffer);
+				for (const auto& buffer : slotBuffers->bucketCounts)
+					counts.Add(buffer);
 			}
-			producer.shadowBucketWords = capacity.bucketCountWords;
-			const std::uint64_t viewBlocks = a_sealed.Of(shadowState->viewBlocks.buffer).deviceAddress;
-			// Each key slot's vertex layout and caster technique: the draws find theirs by slot (BuildDrawsLatch::slotLayoutsOffset), not
-			// by bucket.
-			auto slotLayouts = std::make_shared<std::vector<ShadowSlotEntry>>();
-			slotLayouts->reserve(lookups.shadowSlotKeys.size());
-			for (const auto& key : lookups.shadowSlotKeys)
-				slotLayouts->push_back({ key.vertexLayout, key.technique | kShadowSlotTechniqueKnown, 0 });
-			for (std::size_t kind = 0; kind < 2; ++kind) {
-				const bool occlusionKind = kind == 1;
-				// The layouts the epoch may draw: the shadow views' placements (all of them: DecideShadowCoverage) and the occlusion maps'
-				// last.
-				std::vector<std::vector<ShadowViewLayout>> sources;
-				if (occlusionKind)
-					sources = producer.recentOcclusionLayouts;
-				else if (!inputs.shadowPlacements.empty())
-					sources.push_back(inputs.shadowPlacements);
-				std::vector<std::vector<ShadowViewLayout>> seen;
-				for (auto& layouts : sources) {
-					if (std::find(seen.begin(), seen.end(), layouts) != seen.end() ||
-						std::any_of(layouts.begin(), layouts.end(), [&](const auto& a_view) { return a_view.slot >= shadowSlotCount || a_view.slot >= capacity.viewSlots; }))
-						continue;
-					ShadowShapeInputs in;
-					in.resourceHeap = resourceHeap;
-					in.samplerHeap = samplerHeap;
-					in.indirect = shadowIndirect;
-					for (const auto& layout : layouts)
-						in.rows.push_back(ShadowRowBuckets(producer.rowBuckets, layout.modeIndex, layout.rasterState, lookups, shadowIndirect));
-					in.views = layouts;
-					in.bounds = bounds.get();
-					in.capacity = capacity;
-					in.viewBlocks = viewBlocks;
-					in.latch = a_sealed.Latch(handles.shadow);
-					in.latchLayout = latches.shadow;
-					in.slotLayouts = slotLayouts;
-					in.zeros = a_sealed.Latch(handles.shadowZeros);
-					// The last shape made for the layout: its slots' capacities only grow.
-					for (const auto& candidate : previousShadow[kind])
-						if (candidate && LayoutOf(*candidate) == layouts)
-							in.previous = candidate;
-					if (!occlusionKind) {
-						in.latched.copies = a_latched;
-						if (!in.latched.copies.empty())
-							in.latched.latch = a_sealed.Latch(handles.shadowLatched);
-					}
-					made.shadow[kind].push_back(MakeShadowShape(*shadowState, in));
-					// The shadow epoch's variants for the placements recent frames drew: the same shape, recording those views alone.
-					if (!occlusionKind) {
-						const auto full = made.shadow[kind].back();
-						const std::uint64_t all = full->views.size() >= 64 ? ~0ull : ((1ull << full->views.size()) - 1);
-						for (const auto active : producer.recentActiveViews) {
-							if ((active & all) == all || (active & all) == 0)
-								continue;
-							auto variant = std::make_shared<ShadowFrame>(*full);
-							variant->activeViews = active & all;
-							made.shadow[kind].push_back(std::move(variant));
-						}
-					}
-					seen.push_back(std::move(layouts));
-				}
-			}
+			capacity.sequenceDraws = static_cast<std::uint32_t>(std::min<std::uint64_t>(sequences.Units(a_sealed), UINT32_MAX));
+			capacity.bucketCountWords = static_cast<std::uint32_t>(std::min<std::uint64_t>(counts.Units(a_sealed), UINT32_MAX));
+			capacity.viewSlots = static_cast<std::uint32_t>(std::min<std::uint64_t>(a_sealed.Of(shadowState->viewBlocks.buffer).units, UINT32_MAX));
+		}
+		producer.shadowBucketWords = capacity.bucketCountWords;
+		const std::uint64_t viewBlocks = a_sealed.Of(shadowState->viewBlocks.buffer).deviceAddress;
+		// Each key slot's vertex layout and caster technique: the draws find theirs by slot (BuildDrawsLatch::slotLayoutsOffset), not by
+		// bucket.
+		auto slotLayouts = std::make_shared<std::vector<ShadowSlotEntry>>();
+		slotLayouts->reserve(lookups.shadowSlotKeys.size());
+		for (const auto& key : lookups.shadowSlotKeys)
+			slotLayouts->push_back({ key.vertexLayout, key.technique | kShadowSlotTechniqueKnown, 0 });
+		// The views the epoch may draw: the shadow views' placements (all of them: DecideShadowCoverage), then the occlusion maps' as last
+		// set up (a map whose slot is past the slots made waits for them: its frames are the engine's).
+		std::vector<ShadowViewLayout> layouts = inputs.shadowPlacements;
+		if (std::any_of(layouts.begin(), layouts.end(), [&](const auto& a_view) { return a_view.slot >= shadowSlotCount || a_view.slot >= capacity.viewSlots; }))
+			return;
+		for (const auto& map : producer.occlusionLayouts)
+			if (map.slot < shadowSlotCount && map.slot < capacity.viewSlots)
+				layouts.push_back(map);
+		ShadowShapeInputs in;
+		in.resourceHeap = resourceHeap;
+		in.samplerHeap = samplerHeap;
+		in.indirect = shadowIndirect;
+		for (const auto& layout : layouts)
+			in.rows.push_back(ShadowRowBuckets(producer.rowBuckets, layout.modeIndex, layout.rasterState, lookups, shadowIndirect));
+		in.views = layouts;
+		in.bounds = bounds.get();
+		in.capacity = capacity;
+		in.viewBlocks = viewBlocks;
+		in.latch = a_sealed.Latch(handles.shadow);
+		in.latchLayout = latches.shadow;
+		in.slotLayouts = slotLayouts;
+		in.zeros = a_sealed.Latch(handles.shadowZeros);
+		// The last shape made for the layout: its slots' capacities only grow.
+		for (const auto& candidate : previousShadow)
+			if (candidate && LayoutOf(*candidate) == layouts)
+				in.previous = candidate;
+		in.latched.copies = a_latched;
+		if (!in.latched.copies.empty())
+			in.latched.latch = a_sealed.Latch(handles.shadowLatched);
+		made.shadow.push_back(MakeShadowShape(*shadowState, in));
+		// The variants for the views recent frames drew: the same shape, recording those views alone (an exterior frame's casters and
+		// maps, an interior's casters without the maps, a frame without a map's toggle).
+		const auto full = made.shadow.back();
+		const std::uint64_t all = full->views.size() >= 64 ? ~0ull : ((1ull << full->views.size()) - 1);
+		for (const auto active : producer.recentActiveViews) {
+			if ((active & all) == all || (active & all) == 0)
+				continue;
+			auto variant = std::make_shared<ShadowFrame>(*full);
+			variant->activeViews = active & all;
+			made.shadow.push_back(std::move(variant));
 		}
 	}
 
@@ -254,32 +234,31 @@ namespace DCLF
 			return true;
 		const std::uint32_t words = producer.shadowBucketWords;
 		std::vector<std::uint64_t> need;
-		for (std::size_t kind = 0; kind < 2; ++kind)
-			for (const auto& shape : producer.made.shadow[kind]) {
-				if (!shape || !shape->rows)
-					continue;
-				for (std::size_t v = 0; v < shape->views.size() && v < shape->rows->size(); ++v) {
-					const auto& view = shape->views[v];
-					const auto& row = (*shape->rows)[v];
-					if (row.pipelines.size() >= words || view.modeIndex >= kShadowModeCount || a_bounds.modeDraws[view.modeIndex] > view.capacity)
+		for (const auto& shape : producer.made.shadow) {
+			if (!shape || !shape->rows)
+				continue;
+			for (std::size_t v = 0; v < shape->views.size() && v < shape->rows->size(); ++v) {
+				const auto& view = shape->views[v];
+				const auto& row = (*shape->rows)[v];
+				if (row.pipelines.size() >= words || view.modeIndex >= kShadowModeCount || a_bounds.modeDraws[view.modeIndex] > view.capacity)
+					return false;
+				const auto& draws = a_bounds.keySlotDraws[view.modeIndex];
+				need.assign(view.buckets.size(), 0);
+				for (std::size_t k = 0; k < row.bucketOfSlot.size() && k < draws.size(); ++k)
+					if (const auto bucket = row.bucketOfSlot[k]; bucket != Lookups::kNone && bucket < need.size())
+						need[bucket] += draws[k];
+				for (std::size_t b = 0; b < need.size(); ++b)
+					if (need[b] > view.buckets[b].capacity)
 						return false;
-					const auto& draws = a_bounds.keySlotDraws[view.modeIndex];
-					need.assign(view.buckets.size(), 0);
-					for (std::size_t k = 0; k < row.bucketOfSlot.size() && k < draws.size(); ++k)
-						if (const auto bucket = row.bucketOfSlot[k]; bucket != Lookups::kNone && bucket < need.size())
-							need[bucket] += draws[k];
-					for (std::size_t b = 0; b < need.size(); ++b)
-						if (need[b] > view.buckets[b].capacity)
-							return false;
-				}
 			}
+		}
 		return true;
 	}
 
 	void ShadowEngine::PostInputs(RevisionInputs& a_next)
 	{
-		// The shadow resources, the pipelines' shadow format and rasterizer states, the occlusion maps' layouts as last captured, the
-		// placements and the slots' buffers.
+		// The shadow resources, the pipelines' shadow format and rasterizer states, the occlusion maps' layouts as last set up, the
+		// placements, the views the last shadow epoch drew and the slots' buffers.
 		a_next.shadow = shadow;
 		auto& drawPipelines = DrawPipelines::Get();
 		a_next.shadowFormat = drawPipelines.ShadowFormat();

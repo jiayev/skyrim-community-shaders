@@ -153,7 +153,8 @@ namespace DCLF::Features::FirstPerson
 	bool Covered(const Api::ViewCoverage& a_coverage)
 	{
 		// The first-person members are withheld from the engine (PassCapture) and drawn by the first-person epochs on a frame the engine
-		// draws first person (the latch), whose claims stand, both epochs' recordings in the revision and the depth copy imported into the
+		// draws first person (the latch), whose claims stand, both epochs covered (its depth epoch's passes in the depth epoch's recordings,
+		// its colour epoch's own) and the depth copy imported into the
 		// graph as built. Its members need no frame before's inputs: both epochs draw this frame's scene list with this frame's camera.
 		const auto& f = FrameState();
 		const auto& c = a_coverage;

@@ -1,6 +1,6 @@
-// The shadow (and sky occlusion) views' graph extension: their resources registered, and the shadow and occlusion epochs' passes gathered
-// from the schedule (shadows.*: Features/Shadows/Engine's); and the shadow epoch's index pool copies (Core's IndexPoolPass, as the depth
-// epoch's), which that feature's shadows.index-pool makes.
+// The shadow views' and occlusion maps' graph extension: their resources registered, and the shadow epoch's passes gathered from the
+// schedule (shadows.*: Features/Shadows/Engine's); and the shadow epoch's index pool copies (Core's IndexPoolPass, as the depth epoch's),
+// which that feature's shadows.index-pool makes.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/IndexPoolPass.h"
@@ -34,7 +34,7 @@ namespace DCLF::Draws
 
 		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 		{
-			// The shadow and occlusion epochs' passes (Schedule/Frame.cpp).
+			// The shadow epoch's passes (Schedule/Frame.cpp).
 			Api::PassContext context{};
 			context.shadow = &resources;
 			GatherScheduled(Api::EpochShape::Shadow, {}, context, a_out);
@@ -47,7 +47,7 @@ namespace DCLF::Draws
 	std::shared_ptr<org::RenderPass> MakeShadowIndexPoolPass(const std::shared_ptr<ShadowResources>& a_resources)
 	{
 		return std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(a_resources->pool, [shadow = a_resources](const org::PassPrepareContext& a_preparation) {
-			const auto frame = CurrentShadowFrame(a_preparation, false);
+			const auto frame = CurrentShadowFrame(a_preparation);
 			return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
 		}));
 	}

@@ -38,8 +38,11 @@ namespace DCLF::Draws
 	};
 	inline constexpr std::array<FamilySlot, Extensions::kDrawFamilies> kFamilySlots = { {
 		{ Api::DrawFamily::TreeInstances, DrawFamilyLaneSlotOf(Api::DrawFamily::TreeInstances).forwardFlags },
+		{ Api::DrawFamily::Grass, DrawFamilyLaneSlotOf(Api::DrawFamily::Grass).forwardFlags },
 	} };
-	static_assert(kFamilySlots[static_cast<std::size_t>(Api::DrawFamily::TreeInstances)].family == Api::DrawFamily::TreeInstances, "kFamilySlots is by family");
+	static_assert(kFamilySlots[static_cast<std::size_t>(Api::DrawFamily::TreeInstances)].family == Api::DrawFamily::TreeInstances &&
+	                  kFamilySlots[static_cast<std::size_t>(Api::DrawFamily::Grass)].family == Api::DrawFamily::Grass,
+		"kFamilySlots is by family");
 
 	inline const FamilySlot& FamilySlotOf(Api::DrawFamily a_family) { return kFamilySlots[static_cast<std::size_t>(a_family)]; }
 

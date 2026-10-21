@@ -3,7 +3,7 @@
 // The frame's DCLF work at each engine point, render thread: the scene frame's start (the publication installed, its claims, the
 // coordinator's requests served, the frame values kicked), the shadow views, the depth commit, EarlyPrepass and Prepass, the occlusion
 // maps (the shadow views listed through Core's Shadow/ShadowPoints.h, from the engine's shadow-light selection, which Features/Shadows/Engine's
-// hooks reach; the views' coverage, the shadow epoch, the maps' readiness and their epoch through the shadow epochs' handlers there:
+// hooks reach; the views' coverage, the maps' readiness and the shadow epoch with the maps taken through the shadow epochs' handlers there:
 // Api/ShadowEpochs.h, Features/Shadows/Engine's), the main pass's points (their bookkeeping, and the main view's handlers there: Api/PrimaryView.h, Features/MainView's capture and
 // colour epoch), the views' work at their points (Api::ViewPoint), and Present's end of frame. The feature file's hooks call it; it reads the scene through
 // Scene::FrameView and drives IndirectDraws.
@@ -77,15 +77,19 @@ namespace DCLF
 		void AfterShadowMaps();
 		/**
 		 * @brief Main::RenderDepth's world-drawn point, while DCLF runs: the depth commit (IndirectDraws::CaptureDepthPass), running the
-		 * views' work there inside its epoch's execution (ViewPoint::DepthCommitted: the frame's reflection faces, which the depth epoch
-		 * hosts); after it when the depth epoch did not commit.
+		 * views' work there inside its epoch's execution (ViewPoint::DepthCommitted: the frame's reflection faces and first-person depth,
+		 * which the depth epoch hosts); after it when the depth epoch did not commit.
 		 */
 		void DepthCommitted();
 		void EarlyPrepass();
 		void Prepass();
+		/**
+		 * @brief The occlusion maps (DrawcallLimitFix::OcclusionReady and OcclusionNeedsEngine): at the shadow maps, before the engine draws
+		 * them, whether DCLF draws a map in the frame's shadow epoch (taken: AfterShadowMaps hands the shadow epoch the maps taken); at the
+		 * engine's occlusion point, whether the engine renders it whole (the shadow epoch did not draw it).
+		 */
 		bool OcclusionReady(std::uint32_t a_map, bool a_running);
 		bool OcclusionNeedsEngine(std::uint32_t a_map, bool a_running);
-		void DrawOcclusion();
 		/** @brief Where the main pass's opaque batches start: the engine's pending state applied, then the main view's capture (Api::PrimaryViewContribution). */
 		void BeforeOpaquePass();
 		/** @brief Where they end: the main view's colour epoch (Api::PrimaryViewContribution::afterOpaque). */
@@ -104,7 +108,8 @@ namespace DCLF
 		double shadowViewsMs = 0.0;       // the shadow views' points this frame, until BeforeShadowMaps counts them
 		OcclusionFrames occlusionFrames;  // native and engine only: the rest is read at the take
 		bool frameRan = false;            // a scene frame ran since the last Present
-		std::uint32_t occlusionWanted = 0;  // the maps OcclusionReady said DCLF draws this frame
+		std::uint32_t occlusionWanted = 0;  // the maps OcclusionReady took for the frame's shadow epoch, until AfterShadowMaps
+		std::uint32_t occlusionDrawn = 0;   // the maps the frame's shadow epoch drew (OcclusionNeedsEngine's answer)
 		std::uint32_t captureFrame = ~0u;   // the frame whose main-pass bindings have been captured (Api::PrimaryViewContribution::beforeOpaque)
 	};
 }

@@ -53,12 +53,12 @@ namespace DCLF::Api
 	 */
 	struct EpochDef
 	{
-		std::string_view id;                       // "main.depth", "main.colour", "shadow", "occlusion", "reflection", "forward", "fp.depth", "fp.colour"
+		std::string_view id;                       // "main.depth", "main.colour", "shadow", "reflection", "forward", "fp.depth", "fp.colour"
 		std::string_view label;                    // the reports' name
 		std::string_view trigger;                  // the TriggerDef id of the engine point it is submitted at
 		std::uint32_t segment = 0;                 // RenderGraphRuntime::Segment, as its value
 		EpochShape shape = EpochShape::Main;
-		// Its index in its shape: Main, MainShape; Shadow, 0 the shadow views, 1 the occlusion maps; View, its Api::EngineView. As its value.
+		// Its index in its shape: Main, MainShape; Shadow, 0 the shadow views' and occlusion maps'; View, its Api::EngineView. As its value.
 		std::uint32_t shapeIndex = 0;
 		// The id of the epoch whose shape this one records against (the forward epoch, the colour shape's forward passes; first person's
 		// colour epoch, its depth epoch's shape). Empty: its own shape.
@@ -67,11 +67,12 @@ namespace DCLF::Api
 		ObjectClass gate = ObjectClass::Count;
 		bool claims = false;    // the frame's claims need the epoch's recordings (while its gate is on)
 		bool revision = true;   // revision-driven: each submission carries the scene revision's recording, no live ticket is prepared
-		// The id of an earlier Main epoch that runs this one's passes (the reflection's faces, in the depth epoch): its passes are keys of
-		// the host's list, prefixed with this epoch's id and kHostedKey ("reflection/view.faces"), made from this epoch's own shape's
-		// resources (a View epoch's: its view's); its own passes list is empty. It has a revision shape slot as any epoch, but no segment
-		// (its host's), recording, order or submission of its own: the host's recordings carry its passes, and the host's commit commits
-		// it. Empty: its own epoch.
+		// The id of an earlier Main epoch that runs this one's passes (the reflection's faces and first person's depth, in the depth
+		// epoch): its passes are keys of the host's list, prefixed with this epoch's id and kHostedKey ("reflection/view.faces"), made
+		// from this epoch's own shape's resources (a View epoch's: its view's); its own passes list is empty. It has a revision shape slot
+		// as any epoch (another epoch may share it: first person's colour epoch), but no segment (its host's), recording, order or
+		// submission of its own: the host's recordings carry its passes, and the host's commit commits it. A host may host several.
+		// Empty: its own epoch.
 		std::string_view hostedBy;
 		std::span<const std::string_view> passes;  // pass keys, in order
 	};

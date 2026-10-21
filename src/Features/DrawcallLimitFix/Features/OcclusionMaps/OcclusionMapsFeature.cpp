@@ -24,11 +24,20 @@ namespace DCLF::Features::OcclusionMaps
 			}
 		}
 		bool SkyReferenceDue() { return ReferenceDue(kSky); }
-		// Skylighting::OcclusionTechnique's probe grid test: an occluder whose bound top is below the grid's bottom less the margin.
+		/**
+		 * @brief Skylighting::OcclusionTechnique's probe grid test: an occluder whose bound top is below the grid's bottom less the margin.
+		 * The shadow epoch latches it at the shadow maps, before this frame's grid update (State::UpdateSharedData at EarlyPrepasses): the
+		 * lower of the last update's bottom and the one this frame's camera takes (the main camera as the frame's culls placed it), so a
+		 * camera that moved a grid cell down since draws no fewer occluders than the grid it reads (a cell up: a few more). -FLT_MAX
+		 * after a reset (ResetSkylighting): no floor, as Skylighting's own test.
+		 */
 		float SkyFloorHeight()
 		{
 			const auto& skylighting = globals::features::skylighting;
-			return skylighting.probeGridBottomZ - Skylighting::OCCLUSION_BELOW_GRID_MARGIN;
+			float bottom = skylighting.probeGridBottomZ;
+			if (const auto* camera = RE::Main::WorldRootCamera(); camera && bottom > -FLT_MAX)
+				bottom = std::min(bottom, skylighting.ProbeGridBottomZ(camera->world.translate.z));
+			return bottom - Skylighting::OCCLUSION_BELOW_GRID_MARGIN;
 		}
 		bool PrecipitationReferenceDue() { return ReferenceDue(kPrecipitation); }
 
@@ -82,7 +91,7 @@ namespace DCLF::Features::OcclusionMaps
 			const auto precipitation = a_context.RegisterToggle({ .name = "precipitation occlusion", .label = "Draw the precipitation occlusion mask (CS_DCLF_PRECIPITATION)",
 				.tooltip = "With Skylighting loaded, DCLF draws the precipitation occlusion mask (where rain and snow stop) from its own tables on the GPU, and the engine no longer culls or registers the scene for it.",
 				.seed = precipitationSwitch, .entersClassification = true, .after = "exclude primary entries", .needs = { "shadows" } });
-			// The maps (Core's shadow engine: the occlusion epoch, the set decisions and the reports read them as data; the classification
+			// The maps (Core's shadow engine: the shadow epoch, the set decisions and the reports read them as data; the classification
 			// calls their rules per walked entry).
 			RegisterMaps(a_context, sky, precipitation);
 			// Their report lines, and CS_DCLF_SKYLIGHT_PARITY's switches and compare.

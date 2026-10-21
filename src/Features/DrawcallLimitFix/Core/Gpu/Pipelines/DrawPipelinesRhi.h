@@ -105,11 +105,12 @@ namespace DCLF
 
 	/**
 	 * @brief A draw family's pipelines and its draws' signature (DrawPipelines::RequestFamily; the slot's signature,
-	 * Api::DrawFamilySignature::DrawInstanced).
+	 * Api::DrawFamilySignature::DrawInstanced): its depth pipeline, its colour one, and its second colour one with two colour programs
+	 * (Api::DrawFamilyProgram::colours; null with one).
 	 */
 	struct FamilyPipelines
 	{
-		rhi::PipelineHandle depth{}, colour{};
+		rhi::PipelineHandle depth{}, colour{}, colour2{};
 		rhi::CommandSignatureHandle drawSignature{};  // one non-indexed DrawInstanced's arguments (16 bytes)
 	};
 

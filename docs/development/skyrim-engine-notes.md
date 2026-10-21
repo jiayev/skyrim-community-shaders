@@ -1164,8 +1164,10 @@ Measured at Riverwood (clear weather, so Skylighting's alone), render thread per
 -   **The cull mode is per pass:** the Utility shader sets it for each draw (0 for a two-sided property, 1 otherwise),
     so the renderer's state at the view's `FinishAccumulating` is the last pass's, and with nothing registered, whatever
     came before. DCLF's variant of the map takes back-face culling as the view's state.
--   **DCLF's variant** draws Skylighting's map itself when both run, and `SetupMask` is skipped
-    (`drawcall-limit-fix.md`, "Skylighting's occlusion map, drawn by DCLF").
+-   **DCLF's variant** draws Skylighting's map (and the precipitation mask) itself when both run, and `SetupMask` is skipped:
+    Skylighting sets the views up and `RenderMask` clears them before the engine's shadow maps (+0x2EC), and DCLF's shadow epoch
+    draws them when those return; the call at +0x3A1 then renders only a map DCLF did not draw (`dclf-architecture.md`, "The
+    occlusion maps, drawn by DCLF").
 
 ## The primary's cull: the scene lists
 

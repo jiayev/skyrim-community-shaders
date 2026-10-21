@@ -1,7 +1,8 @@
 #pragma once
 
-// The shadow and occlusion epochs' types: captured views (render thread hooks), shapes (revision producer), the index pool and
-// the graph resources (render thread). Self-contained (Features/Shadows/Engine's passes include it); Internal.h includes it in its order.
+// The shadow epoch's types (its views: the shadow maps' and the occlusion maps'): captured views (render thread hooks), shapes (revision
+// producer), the index pool and the graph resources (render thread). Self-contained (Features/Shadows/Engine's passes include it);
+// Internal.h includes it in its order.
 
 // volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
@@ -98,7 +99,8 @@ namespace DCLF::Draws
 	struct RowBuckets;
 	/**
 	 * @brief The frame's shadow epoch shape. All captured views draw in one graph execution at AfterShadowMaps (each execution has
-	 * a fixed CPU cost). Per-view matrices live in the latch; the shape changes only with the view layout or the pipelines.
+	 * a fixed CPU cost): the placements (views[i] at slot kFirstShadowViewSlot + i), then the occlusion maps' views as last set up (their
+	 * slots, OcclusionSlot). Per-view matrices live in the latch; the shape changes only with the view layout or the pipelines.
 	 */
 	struct ShadowFrame
 	{
@@ -118,9 +120,9 @@ namespace DCLF::Draws
 		// Each key slot's entry (Lookups::shadowSlotKeys), for the latch's slot table. Slots are append-only per lookups instance, so a
 		// shape's table only gains entries.
 		std::shared_ptr<const std::vector<ShadowSlotEntry>> slotLayouts;
-		// The views the recording draws, by index into views: a shadow epoch's variant for a set of placements the engine used (the
-		// others' draws, counted zero, would still cost their indirect draws' fetches). All of them in the first variant, which the
-		// commit writes the latch against, and every variant shares.
+		// The views the recording draws, by index into views: a shadow epoch's variant for a set of placements the engine used and of
+		// occlusion maps drawn (the others' draws, counted zero, would still cost their indirect draws' fetches, and an unused map its
+		// target's load and store). All of them in the first variant, which the commit writes the latch against, and every variant shares.
 		std::uint64_t activeViews = ~0ull;
 
 		bool SameShape(const ShadowFrame& o) const
@@ -181,11 +183,11 @@ namespace DCLF::Draws
 		std::vector<ViewLabel> labels;
 	};
 
-	/** @brief The revision's shadow (or, a_sky, occlusion) shape a pass's preparation is for; null without one. */
-	inline std::shared_ptr<const ShadowFrame> CurrentShadowFrame(const org::PassPrepareContext& a_preparation, bool a_sky)
+	/** @brief The revision's shadow shape (its variant) a pass's preparation is for; null without one. */
+	inline std::shared_ptr<const ShadowFrame> CurrentShadowFrame(const org::PassPrepareContext& a_preparation)
 	{
 		if (const auto* shapes = RevisionShapesOf(a_preparation))
-			return a_sky ? shapes->occlusion : shapes->shadow;
+			return shapes->shadow;
 		return nullptr;
 	}
 

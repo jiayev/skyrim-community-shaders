@@ -215,36 +215,35 @@ namespace DCLF::Diagnostics
 					finding(fmt::format("the terrain, forward and refraction ranges reach {} past phase 2's end {}", phaseTwo, 2ull * frame->sequenceDraws));
 			}
 		}
-		// The shadow and occlusion shapes: each view's slot within the slots made, its classes' ranges within the slot's sequences, its
-		// buckets within the ranges and the slot's count words, its slot within the view blocks.
+		// The shadow shapes (the occlusion maps' views among theirs): each view's slot within the slots made, its classes' ranges within
+		// the slot's sequences, its buckets within the ranges and the slot's count words, its slot within the view blocks.
 		if (const auto& shadow = inputs.shadow) {
 			const auto& slots = inputs.shadowSlots;
-			for (const auto& kind : a_made.made.shadow)
-				for (const auto& frame : kind) {
-					if (!frame)
+			for (const auto& frame : a_made.made.shadow) {
+				if (!frame)
+					continue;
+				++c.shapes;
+				for (const auto& view : frame->views) {
+					if (!slots || view.slot >= slots->sequences.size() || view.slot >= slots->bucketCounts.size()) {
+						finding(fmt::format("a shadow view at slot {} past the slots made", view.slot));
 						continue;
-					++c.shapes;
-					for (const auto& view : frame->views) {
-						if (!slots || view.slot >= slots->sequences.size() || view.slot >= slots->bucketCounts.size()) {
-							finding(fmt::format("a shadow view at slot {} past the slots made", view.slot));
-							continue;
-						}
-						const std::uint64_t range = std::uint64_t(kShadowClasses) * view.sequenceDraws;
-						if (range * kSequence > bytes(slots->sequences[view.slot]))
-							finding(fmt::format("shadow slot {}'s {} draws a class past its sequences' {} bytes", view.slot, view.sequenceDraws, bytes(slots->sequences[view.slot])));
-						if (view.capacity > view.sequenceDraws)
-							finding(fmt::format("shadow slot {}'s max count {} past its {} draws", view.slot, view.capacity, view.sequenceDraws));
-						std::uint64_t end = 0;
-						for (const auto& bucket : view.buckets)
-							end = std::max<std::uint64_t>(end, std::uint64_t(bucket.first) + bucket.capacity);
-						if (end > range)
-							finding(fmt::format("shadow slot {}'s buckets reach {} past its {} sequences", view.slot, end, range));
-						if (view.buckets.size() > units(slots->bucketCounts[view.slot]))
-							finding(fmt::format("shadow slot {}'s {} buckets past its count words' {}", view.slot, view.buckets.size(), units(slots->bucketCounts[view.slot])));
-						if (view.slot >= units(shadow->viewBlocks.buffer))
-							finding(fmt::format("shadow slot {} past the view blocks' {} slots", view.slot, units(shadow->viewBlocks.buffer)));
 					}
+					const std::uint64_t range = std::uint64_t(kShadowClasses) * view.sequenceDraws;
+					if (range * kSequence > bytes(slots->sequences[view.slot]))
+						finding(fmt::format("shadow slot {}'s {} draws a class past its sequences' {} bytes", view.slot, view.sequenceDraws, bytes(slots->sequences[view.slot])));
+					if (view.capacity > view.sequenceDraws)
+						finding(fmt::format("shadow slot {}'s max count {} past its {} draws", view.slot, view.capacity, view.sequenceDraws));
+					std::uint64_t end = 0;
+					for (const auto& bucket : view.buckets)
+						end = std::max<std::uint64_t>(end, std::uint64_t(bucket.first) + bucket.capacity);
+					if (end > range)
+						finding(fmt::format("shadow slot {}'s buckets reach {} past its {} sequences", view.slot, end, range));
+					if (view.buckets.size() > units(slots->bucketCounts[view.slot]))
+						finding(fmt::format("shadow slot {}'s {} buckets past its count words' {}", view.slot, view.buckets.size(), units(slots->bucketCounts[view.slot])));
+					if (view.slot >= units(shadow->viewBlocks.buffer))
+						finding(fmt::format("shadow slot {} past the view blocks' {} slots", view.slot, units(shadow->viewBlocks.buffer)));
 				}
+			}
 		}
 		// The index pool: a first index and a copy for every geometry slot of the tables.
 		if (const auto& scene = inputs.scene; scene && scene->pool) {

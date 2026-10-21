@@ -41,7 +41,7 @@ namespace DCLF
 			std::vector<std::shared_ptr<const org::PersistentGraphHost::EpochRecording>> recordings;
 			std::atomic<std::uint32_t> remaining = 0;
 			std::atomic<bool> failed = false;
-			bool hosted = false;  // recorded with the hosted epoch's shape (RevisionRecordings::hosted)
+			std::uint32_t hosted = 0;  // the hosted epochs recorded with their shapes, a bit each (RevisionRecordings::hosted)
 			// The build the revision's versions are of (RevisionInputs::buildGeneration): a recording of another is none of its.
 			std::uint64_t buildGeneration = 0;
 			// The epoch's counters (SceneRevisions::EpochStats), the failures logged, and the recordings outstanding (Impl::recordingsOutstanding).
@@ -97,7 +97,7 @@ namespace DCLF
 							setShape(e, std::move(kept));
 					}
 				} else if (traits.shape == ShapeKind::Shadow) {
-					const auto& made = shapes.shadow[traits.index];
+					const auto& made = shapes.shadow;
 					if (made.empty())
 						continue;
 					const auto old = current ? current->Value<ShadowVariants>() : nullptr;
@@ -180,17 +180,17 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Epoch a_epoch's recordings of its shape a_shapeFragment and the versions (and of the shape a_hostedFragment of the epoch
-		 * it hosts: none while that has none), requested of ORG's host thread: the fragment they resolve, or null when async epochs
-		 * stopped under it.
+		 * @brief Epoch a_epoch's recordings of its inputs a_inputs - the versions, its shape, then the shapes of the epochs it hosts in
+		 * a_hosted (a bit each, by row: those that have one) - requested of ORG's host thread: the fragment they resolve, or null when
+		 * async epochs stopped under it.
 		 */
 		std::shared_ptr<RevisionFragment> RequestRecordings(org::PersistentGraphHost& a_host, Revisions& a_rv, std::atomic<std::uint32_t>& a_outstanding, std::uint32_t a_epoch,
-			const std::shared_ptr<const RevisionFragment>& a_versionsFragment, const std::shared_ptr<const NamedVersions>& a_versions,
-			const std::shared_ptr<const RevisionFragment>& a_shapeFragment, const std::shared_ptr<const RevisionFragment>& a_hostedFragment, std::uint64_t a_builds)
+			const std::shared_ptr<const NamedVersions>& a_versions, std::span<const std::shared_ptr<const RevisionFragment>> a_inputs, std::uint32_t a_hosted,
+			std::uint64_t a_builds)
 		{
 			using R = Revisions;
 			const std::uint32_t e = a_epoch;
-			const auto& shapeFragment = a_shapeFragment;
+			const auto& shapeFragment = a_inputs[1];
 			// The host data of each of the epoch's shapes (a shadow epoch's variants).
 			std::vector<std::shared_ptr<const EpochRevisionData>> requests;
 			auto request = [&](auto&& a_fill) {
@@ -201,42 +201,42 @@ namespace DCLF
 			};
 			// The epoch's passes prepare against its shape (the forward epoch's, the colour shape: CurrentFrame's MainOpaque).
 			const auto& traits = EpochTraitsOf(e);
-			const bool hosted = a_hostedFragment && traits.hosts != kNoEpoch;
 			if (traits.shape == ShapeKind::Main) {
-				// With the view epoch it hosts (the depth epoch, the reflection's faces), each variant twice (RevisionRecordings::hosted):
-				// with the view's shape (its passes' work: a frame's faces), then without it (its passes record nothing: a frame without
-				// faces, or the toggle off).
-				const auto hostedShape = hosted ? a_hostedFragment->Value<ViewFrame>() : nullptr;
-				const auto hostedView = hosted ? EpochTraitsOf(traits.hosts).index : 0u;
-				for (const bool withHosted : { true, false }) {
-					if (withHosted && !hostedShape)
-						continue;
-					request([&](RevisionShapes& a_shapes) {
+				// With the view epochs it hosts that have a shape (the depth epoch: the reflection's faces, first person's depth), each a
+				// dimension (RevisionRecordings::hosted): for every subset of them absent, none absent first, its variants with the present
+				// ones' shapes (their passes' work) and none of the absent ones' (their passes record nothing: a frame without faces, a
+				// frame not in first person). A hosted epoch without a shape (its view's toggle off) is no dimension.
+				std::array<std::pair<std::size_t, std::shared_ptr<const ViewFrame>>, kMaxEpochs> hosted{};
+				std::uint32_t dimensions = 0;
+				for (std::uint32_t h = 0, input = 2; h < kMaxEpochs; ++h)
+					if ((a_hosted >> h) & 1)
+						hosted[dimensions++] = { EpochTraitsOf(h).index, a_inputs[input++]->Value<ViewFrame>() };  // its view (a View shape's index)
+				for (std::uint32_t absent = 0; absent < (1u << dimensions); ++absent) {
+					auto fill = [&](RevisionShapes& a_shapes, bool a_withoutIndexPool) {
 						a_shapes.main[traits.index] = shapeFragment->Value<PassFrame>();
-						if (withHosted)
-							a_shapes.views[hostedView] = hostedShape;
-					});
+						a_shapes.depthWithoutIndexPool = a_withoutIndexPool;
+						for (std::uint32_t d = 0; d < dimensions; ++d)
+							if (!((absent >> d) & 1))
+								a_shapes.views[hosted[d].first] = hosted[d].second;
+					};
+					request([&](RevisionShapes& a_shapes) { fill(a_shapes, false); });
 					// The depth epoch's again, without the index pool's dispatch: the commit submits it when it gave out no range (its own
 					// UpdateIndexPool decides, whichever commit ran first), so such a frame records no copy of zero groups.
 					if (traits.index == kDepthShape && traits.sharesWith == kNoEpoch)
-						request([&](RevisionShapes& a_shapes) {
-							a_shapes.main[traits.index] = shapeFragment->Value<PassFrame>();
-							a_shapes.depthWithoutIndexPool = true;
-							if (withHosted)
-								a_shapes.views[hostedView] = hostedShape;
-						});
+						request([&](RevisionShapes& a_shapes) { fill(a_shapes, true); });
 				}
 			} else if (traits.shape == ShapeKind::View)
 				request([&](RevisionShapes& a_shapes) { a_shapes.views[traits.index] = shapeFragment->Value<ViewFrame>(); });
 			else
 				for (const auto& variant : shapeFragment->Value<ShadowVariants>()->shapes)
-					request([&](RevisionShapes& a_shapes) { (traits.index ? a_shapes.occlusion : a_shapes.shadow) = variant; });
+					request([&](RevisionShapes& a_shapes) { a_shapes.shadow = variant; });
 			auto work = std::make_shared<PendingRecordings>();
-			std::vector<RevisionFragment::Requirement> requirements{ { R::kVersionsSlot, a_versionsFragment }, { R::kShapeSlot + e, shapeFragment } };
-			if (hosted)
-				requirements.push_back({ R::kShapeSlot + traits.hosts, a_hostedFragment });
+			std::vector<RevisionFragment::Requirement> requirements{ { R::kVersionsSlot, a_inputs[0] }, { R::kShapeSlot + e, shapeFragment } };
+			for (std::uint32_t h = 0, input = 2; h < kMaxEpochs; ++h)
+				if ((a_hosted >> h) & 1)
+					requirements.push_back({ R::kShapeSlot + h, a_inputs[input++] });
 			work->fragment = std::make_shared<RevisionFragment>(std::move(requirements));
-			work->hosted = hosted && traits.shape == ShapeKind::Main;
+			work->hosted = traits.shape == ShapeKind::Main ? a_hosted : 0u;
 			work->recordings.resize(requests.size());
 			work->remaining.store(static_cast<std::uint32_t>(requests.size()), std::memory_order_relaxed);
 			work->buildGeneration = a_builds;
@@ -296,22 +296,34 @@ namespace DCLF
 		// Each epoch's shape (MakeRevision's): its fragment kept while the shape is the same.
 		AssembleShapes(rv, draft, producer.made, producer.toggles);
 
-		// Each epoch's recording: kept while it requires exactly the draft's shape and versions (and the shape of the epoch it hosts);
-		// else requested for them. A failed one is dropped (the epoch has none in the revision) and not asked for again until its inputs
-		// change. A hosted epoch has none of its own: its host's carry its passes.
+		// Each epoch's recording: kept while it requires exactly the draft's shape and versions (and the shapes of the epochs it hosts
+		// that have one); else requested for them. A failed one is dropped (the epoch has none in the revision) and not asked for again
+		// until its inputs change. A hosted epoch has none of its own: its host's carry its passes.
 		auto* host = RenderGraphRuntime::Get().Host();
 		const bool recordable = host && producer.inputs.asyncEpochs;
+		std::vector<std::shared_ptr<const RevisionFragment>> inputs;
 		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
 			const std::uint32_t slot = R::kRecordingSlot + e;
 			const auto& traits = EpochTraitsOf(e);
 			const auto& shapeFragment = draft.Get(R::kShapeSlot + e);
-			const auto hostedFragment = traits.hosts != kNoEpoch ? draft.Get(R::kShapeSlot + traits.hosts) : nullptr;
 			const auto current = draft.Get(slot);
-			const std::array<std::shared_ptr<const RevisionFragment>, 3> inputs{ versionsFragment, shapeFragment, hostedFragment };
+			// Its inputs: the versions, its shape, then the shapes of the epochs it hosts that have one (by row; hosted, a bit each).
+			inputs.assign({ versionsFragment, shapeFragment });
+			std::uint32_t hosted = 0;
+			for (std::uint32_t h = 0; h < epochs; ++h)
+				if ((traits.hostsMask >> h) & 1)
+					if (const auto& hostedFragment = draft.Get(R::kShapeSlot + h)) {
+						inputs.push_back(hostedFragment);
+						hosted |= 1u << h;
+					}
 			auto requiresExactly = [&](const RevisionFragment& a_fragment) {
 				const auto& requirements = a_fragment.Requirements();
-				return requirements.size() == (hostedFragment ? 3u : 2u) && requirements[0].fragment == versionsFragment && requirements[1].fragment == shapeFragment &&
-				       (!hostedFragment || requirements[2].fragment == hostedFragment);
+				if (requirements.size() != inputs.size())
+					return false;
+				for (std::size_t i = 0; i < inputs.size(); ++i)
+					if (requirements[i].fragment != inputs[i])
+						return false;
+				return true;
 			};
 			if (!recordable || !shapeFragment || traits.hostedBy != kNoEpoch) {
 				draft.Set(slot, nullptr);
@@ -329,7 +341,7 @@ namespace DCLF
 				draft.Set(slot, nullptr);
 				continue;
 			}
-			auto fragment = RequestRecordings(*host, rv, recordingsOutstanding, e, versionsFragment, versions, shapeFragment, hostedFragment, builds);
+			auto fragment = RequestRecordings(*host, rv, recordingsOutstanding, e, versions, inputs, hosted, builds);
 			if (!fragment) {
 				// Async epochs stopped under it: what was asked settles the fragment, which this revision does not name.
 				++rv.epochs[e].refused;

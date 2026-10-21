@@ -38,6 +38,12 @@
 #include <cstring>
 #include <thread>
 #include <vector>
+
+namespace
+{
+	// RequestTimestampDump's: the completed epochs still to dump.
+	std::atomic<int> timestampDumps{ 0 };
+}
 #include <fmt/ranges.h>
 
 namespace
@@ -474,6 +480,20 @@ struct RenderGraphRuntime::Impl
 			}
 			logger::info("[ORG] completed frame {}: {} timestamp pairs read back ({} from kept recordings, {} on other queues, {} barrier batches), {:.6f} ms per tick",
 				a_frameNumber, timestamps.size(), replayed, otherQueue, barriers, toMs);
+		}
+		// RequestTimestampDump's: each graphics range of the epoch, in GPU order.
+		if (!timestamps.empty() && timestampDumps.load(std::memory_order_relaxed) > 0 && timestampDumps.fetch_sub(1, std::memory_order_relaxed) > 0) {
+			std::vector<const org::runtime::CompletedTimestamp*> sorted;
+			for (const auto& timestamp : timestamps)
+				if (timestamp.queueKind == rhi::QueueKind::Graphics && timestamp.beginTick)
+					sorted.push_back(&timestamp);
+			std::ranges::sort(sorted, [](auto* a, auto* b) { return a->beginTick < b->beginTick || (a->beginTick == b->beginTick && a->endTick < b->endTick); });
+			const std::uint64_t origin = sorted.empty() ? 0 : sorted.front()->beginTick;
+			logger::info("[TSDUMP] frame {}: {} graphics ranges", a_frameNumber, sorted.size());
+			for (const auto* t : sorted)
+				logger::info("[TSDUMP] {:10.2f} {:10.2f} {:8.2f} k{} r{} o{} {}", double(t->beginTick - origin) * toMs * 1000.0,
+					double(t->endTick - origin) * toMs * 1000.0, double(t->endTick - t->beginTick) * toMs * 1000.0, static_cast<int>(t->kind),
+					t->replayed ? 1 : 0, t->occurrence, t->name);
 		}
 		if (a_out.timestampFrame) {
 			a_out.ranges.reserve(timestamps.size());
@@ -1536,6 +1556,11 @@ org::services::PipelineRegistry* RenderGraphRuntime::PipelineRegistry()
 #endif
 }
 
+void RenderGraphRuntime::RequestTimestampDump(std::uint32_t a_epochs)
+{
+	timestampDumps.store(static_cast<int>(a_epochs), std::memory_order_relaxed);
+}
+
 void RenderGraphRuntime::RequestShaderReload(std::string_view a_changedFile, bool a_force)
 {
 #if defined(CS_HAS_ORG_MODULE_SERVICES)
@@ -1688,5 +1713,6 @@ void RenderGraphRuntime::SignalFramePace(bool) {}
 void RenderGraphRuntime::WaitFramePace() {}
 org::services::PipelineRegistry* RenderGraphRuntime::PipelineRegistry() { return nullptr; }
 void RenderGraphRuntime::RequestShaderReload(std::string_view, bool) {}
+void RenderGraphRuntime::RequestTimestampDump(std::uint32_t) {}
 void RenderGraphRuntime::ServicePipelineReload() {}
 #endif

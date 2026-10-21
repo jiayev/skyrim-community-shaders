@@ -22,7 +22,8 @@ namespace DCLF::Api
 		if (owned) {
 			auto& published = scene->familyPipelines[static_cast<std::size_t>(family)];
 			const auto current = published.load(std::memory_order_acquire);
-			if (!current || !Draws::SameHandle(current->depth, pipelines.depth) || !Draws::SameHandle(current->colour, pipelines.colour))
+			if (!current || !Draws::SameHandle(current->depth, pipelines.depth) || !Draws::SameHandle(current->colour, pipelines.colour) ||
+				!Draws::SameHandle(current->colour2, pipelines.colour2))
 				published.store(std::make_shared<const FamilyPipelines>(pipelines), std::memory_order_release);
 		}
 		drawPipelines.NoteFamilyWait(family, !built && !(catalog && catalog->families[static_cast<std::size_t>(family)].failed));

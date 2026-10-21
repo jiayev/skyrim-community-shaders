@@ -1058,8 +1058,11 @@ namespace DCLF::Extensions
 				// program and its engine shapes always, its faces' all or none.
 				const auto& main = a_family.main;
 				const auto& program = a_family.program;
+				// One or two colour programs (the second named), an engine write mode (0-12), and a view's forward program only with faces.
 				const bool programValid = program.shaderType != RE::BSShader::Type::Lighting && program.shaderType < RE::BSShader::Type::Total && !program.name.empty() &&
-				                          !program.label.empty() && !program.keyName.empty() && !program.sourcePath.empty() && a_family.engineShapes.propertyVtable;
+				                          !program.label.empty() && !program.keyName.empty() && !program.sourcePath.empty() && a_family.engineShapes.propertyVtable &&
+				                          (program.colours == 1 || (program.colours == 2 && program.descriptors.colour2)) && program.writeMode < 13 &&
+				                          (a_family.faces.face || !program.descriptors.forward);
 				if (a_family.family >= Api::DrawFamily::Count || a_family.objectClass >= Api::ObjectClass::Count ||
 					!lists.objectClasses[static_cast<std::size_t>(a_family.objectClass)] || a_family.resources.index >= lists.sceneResources.size() ||
 					!a_family.frame.decide || !a_family.frame.programSource || !main.declare || !main.revision || !main.record || !programValid ||
@@ -1173,10 +1176,9 @@ namespace DCLF::Extensions
 
 			void RegisterShadowEpochs(const Api::ShadowEpochsContribution& a_epochs) override
 			{
-				if (!a_epochs.beforeShadowCasters || !a_epochs.beforeShadowMaps || !a_epochs.afterShadowMaps || !a_epochs.occlusionReady ||
-					!a_epochs.drawOcclusion)
+				if (!a_epochs.beforeShadowCasters || !a_epochs.beforeShadowMaps || !a_epochs.afterShadowMaps || !a_epochs.occlusionReady)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete shadow epochs", feature));
-				// FrameDriver's shadow and occlusion points call one shadow engine's epochs.
+				// FrameDriver's shadow and occlusion points call one shadow engine's epoch.
 				if (lists.shadowEpochs.afterShadowMaps)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes the shadow epochs, which {} has", feature, lists.shadowEpochsFeature));
 				lists.shadowEpochs = a_epochs;

@@ -666,6 +666,9 @@ void Deferred::Hooks::Main_RenderShadowMaps::thunk()
 	// DCLF's pre-hook: the scene graph and the main culling are final here, the shadow views are drawn
 	// inside the call, and the main accumulator's passes are complete only once it returns.
 	globals::features::drawcallLimitFix.BeforeShadowMaps();
+	// The occlusion maps DCLF draws this frame, set up and cleared before the engine's shadow maps (whose state
+	// setup follows): DCLF's shadow epoch below draws them with the shadow views.
+	globals::features::skylighting.RenderOcclusionAtShadowMaps();
 	func();
 	globals::features::drawcallLimitFix.AfterShadowMaps();
 	globals::deferred->EarlyPrepasses();

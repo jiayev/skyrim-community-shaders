@@ -236,6 +236,8 @@ public:
 	 * at the next present (ServicePipelineReload); the new pipelines are swapped in at the graph's next build.
 	 */
 	static void RequestShaderReload(std::string_view a_changedFile = {}, bool a_force = false);
+	/** @brief Any thread: the next a_epochs completed epochs log each graphics timestamp range in GPU order ("[TSDUMP]"). */
+	static void RequestTimestampDump(std::uint32_t a_epochs);
 
 	/** @brief Wraps a materialized graph-owned buffer as a D3D11 buffer (DEFAULT usage, no CPU access). */
 	winrt::com_ptr<ID3D11Buffer> WrapBuffer(org::Resource& a_buffer, const D3D11_BUFFER_DESC& a_desc);

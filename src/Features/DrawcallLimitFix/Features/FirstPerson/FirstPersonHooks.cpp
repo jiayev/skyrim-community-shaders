@@ -1,5 +1,6 @@
-// The first-person view's engine hooks: the accumulator render (FUN_1414a90f0) at RenderDepth's first-person draw and at
-// Main::RenderFirstPersonView's (FUN_1414cb6d0), where its two epochs run. Installed from the feature's install; they read the shell's
+// The first-person view's engine hooks: the accumulator render (FUN_1414a90f0) at RenderDepth's first-person draw, where the frame's
+// first-person culled bits are taken (the depth epoch is committed earlier, into the depth commit: the depth epoch hosts its passes), and at
+// Main::RenderFirstPersonView's (FUN_1414cb6d0), where the colour epoch runs. Installed from the feature's install; they read the shell's
 // state (ShellState: whether DCLF runs, RenderDepth's control-driven argument).
 
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPersonView.h"
@@ -25,13 +26,14 @@ namespace DCLF::Features::FirstPerson
 			inline constexpr std::uintptr_t kAccumulatorRender = 0x14a90f0;      // the accumulator render (FUN_1414a90f0)
 		}
 
-		// The epochs' triggers (fp.depth-draw, fp.colour-render), found at install, before any frame.
-		Api::TriggerId depthDraw, colourRender;
+		// The colour epoch's trigger (fp.colour-render), found at install, before any frame.
+		Api::TriggerId colourRender;
 
 		/**
 		 * @brief RenderDepth's first-person draw (AE 0x1414cd47e, RenderDepth +0x94E: FUN_1414a90f0(first-person camera, the Z-prepass's
-		 * accumulator, 3), after the root's cull with the first-person camera and before kPOST_ZPREPASS_COPY): DCLF's first-person depth
-		 * epoch first (ExecuteDepth), then the engine's draw of what it still registers.
+		 * accumulator, 3), after the root's cull with the first-person camera and before kPOST_ZPREPASS_COPY): the frame's first-person
+		 * culled bits and depth range, then the engine's draw of what it still registers. DCLF's first-person depth was drawn by the depth epoch already
+		 * (ExecuteDepth, at the depth commit), into the same depth: nothing of the world draws depth between them.
 		 */
 		struct RenderDepth_FirstPersonDraw
 		{
@@ -44,12 +46,8 @@ namespace DCLF::Features::FirstPerson
 					if (Extensions::ViewOn(SceneToggles(), kView))
 						if (auto* player = RE::PlayerCharacter::GetSingleton())
 							FrameGlobals::NoteFirstPersonCulled(player->Get3D(true));
-					{
-						Extensions::TriggerScope trigger(depthDraw);
-						ExecuteDepth(ShellState::Passes().depthControlDriven);
-					}
-					// DCLF's epoch leaves the context's bindings to the engine's state tracking.
-					globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+					// The depth range this draw uses (RenderDepth's second argument), the shapes' viewport from the next revision on.
+					TakeDepthRange(ShellState::Passes().depthControlDriven);
 				}
 				func(a_camera, a_accumulator, a_flags);
 			}
@@ -84,7 +82,6 @@ namespace DCLF::Features::FirstPerson
 
 	void InstallHooks(Api::InstallContext& a_context)
 	{
-		depthDraw = a_context.FindTrigger("fp.depth-draw");
 		colourRender = a_context.FindTrigger("fp.colour-render");
 		// The first-person view's two points (FUN_1414a90f0, the accumulator render, at RenderDepth's first-person draw and at
 		// FUN_1414cb6d0's), always installed: one compare a frame each while CS_DCLF_FIRST_PERSON is off.

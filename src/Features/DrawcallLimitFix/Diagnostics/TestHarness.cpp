@@ -118,6 +118,11 @@ namespace DCLF
 							RenderGraphRuntime::RequestShaderReload(value);
 						return;
 					}
+					// "dclf:ts-dump=<epochs>": the next <epochs> completed epochs log their graphics timestamp ranges in GPU order ("[TSDUMP]").
+					if (command.rfind("dclf:ts-dump=", 0) == 0) {
+						RenderGraphRuntime::RequestTimestampDump(static_cast<std::uint32_t>(std::max(0, std::atoi(command.c_str() + 13))));
+						return;
+					}
 					// "dclf:async-compute=0|1|default": the passes preferring async compute on the graphics queue (0), the compute queue (1)
 					// or as CS_DCLF_ASYNC_COMPUTE says, from a graph rebuild on (dclf:rebuild's), so one run compares the queues.
 					if (command.rfind("dclf:async-compute=", 0) == 0) {
@@ -130,6 +135,11 @@ namespace DCLF
 					// "dclf:shadow-min-texels=<texels>": the sun cascades' size cull (0: off), from the next shadow commit.
 					if (command.rfind("dclf:shadow-min-texels=", 0) == 0) {
 						DCLF::Draws::shadowMinTexels.store(std::strtof(command.c_str() + 23, nullptr), std::memory_order_relaxed);
+						return;
+					}
+					// "dclf:shadow-probe=<label>": the sun views' size probe, the readback pinned to that shadow view label; -1 off.
+					if (command.rfind("dclf:shadow-probe=", 0) == 0) {
+						DCLF::Draws::shadowSizeProbe.store(std::atoi(command.c_str() + 18), std::memory_order_relaxed);
 						return;
 					}
 					if (command.rfind("dclf:", 0) == 0) {

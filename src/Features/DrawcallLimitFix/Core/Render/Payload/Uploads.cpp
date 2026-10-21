@@ -612,24 +612,23 @@ namespace DCLF
 
 		(void)latched.Finish();
 		revisions.latchedMisses += latched.Misses();
-		// The view epoch this one hosts (the depth epoch, the reflection's faces: Schedule/Frame.cpp), committed into this commit by its
-		// feature's work (ViewPoint::DepthCommitted, run here: IndirectDraws::CaptureDepthPass), inside this execution: its latch in this
-		// frame slot, its owners held with this execution's (CommitHostedView).
-		bool hostedDrawn = false;
-		if (const auto hosts = EpochTraitsOf(revisionEpoch).hosts; hosts != kNoEpoch && hostedWork && *hostedWork) {
+		// The view epochs this one hosts (the depth epoch: the reflection's faces, first person's depth: Schedule/Frame.cpp), each
+		// committed into this commit by its feature's work (ViewPoint::DepthCommitted, run here: IndirectDraws::CaptureDepthPass), inside
+		// this execution: its latch in this frame slot, its owners held with this execution's (CommitHostedView).
+		std::uint32_t hostedDrawn = 0;
+		if (const auto hosts = EpochTraitsOf(revisionEpoch).hostsMask; hosts && hostedWork && *hostedWork) {
 			hostedCommit = { revisionEpoch, &a_bindingOwners, &a_payload, 0 };
 			(*hostedWork)();
-			hostedDrawn = std::exchange(hostedCommit, {}).drawn != 0;
-			revisions.submitted[hosts] += hostedDrawn ? 1 : 0;
+			hostedDrawn = std::exchange(hostedCommit, {}).drawn & hosts;
+			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
+				revisions.submitted[e] += (hostedDrawn >> e) & 1;
 		}
 		// The depth epoch's recording without the index pool's dispatch when this commit gave out no range (the shadow epoch's took
-		// the frame's, or none changed): its dispatch would be of zero groups. With a hosted epoch, the recording with its passes' work
-		// when it committed, else the same without it (its passes record nothing: RevisionRecordings::hosted).
+		// the frame's, or none changed): its dispatch would be of zero groups. With hosted epochs, the recording with the passes' work of
+		// those that committed and none of the others' (their passes record nothing: RevisionRecordings::hosted, IndexOf).
 		const auto& recordings = *a_revision.recordings;
-		std::size_t recording = depthOnly && !poolCopies && recordings.Variants() > 1 ? 1 : 0;
-		if (recordings.hosted && !hostedDrawn)
-			recording += recordings.Variants();
-		SubmitRevisionRecording(revisionEpoch, recordings, recording);
+		const std::size_t variant = depthOnly && !poolCopies && recordings.Variants() > 1 ? 1 : 0;
+		SubmitRevisionRecording(revisionEpoch, recordings, recordings.IndexOf(variant, hostedDrawn));
 		lap(6);
 		return true;
 	}

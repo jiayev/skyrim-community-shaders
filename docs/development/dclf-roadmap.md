@@ -400,7 +400,7 @@ dclf-open-defects.md). These items cut DCLF's fixed GPU cost.
 ### 4.6 The precipitation mask without Skylighting
 
 -   **Goal.** DCLF draws the precipitation mask whether or not Skylighting is loaded.
--   **State.** Not started. The mask is DCLF's only through Skylighting's `RenderOcclusion` hook
+-   **State.** Not started. The mask is DCLF's only through Skylighting's occlusion hooks (`RenderOcclusionAtShadowMaps`, `RenderOcclusion`)
     (`Features/OcclusionMaps/OcclusionMapsFeature.cpp`, `CS_DCLF_PRECIPITATION`); without Skylighting the engine draws it.
 -   **Design.** DCLF hooks the engine's precipitation mask itself when Skylighting is absent.
 

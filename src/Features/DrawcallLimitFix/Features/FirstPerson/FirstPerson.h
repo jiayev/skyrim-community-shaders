@@ -7,8 +7,8 @@
 // first-person root, CaptureRoot), its key rule and shape (one face, a forward part, a depth pass), its life (dropped while off), area
 // (the main colour viewport), withholding (in the main accumulators: Accumulators) and target (kPOST_ZPREPASS_COPY), and its coverage
 // (Covered). Its work at the frame's start (BeginFrame: the latch, the targets, the skeleton's walk, the pipelines and resources), its
-// two epochs (ExecuteDepth, ExecuteColour) and their engine hooks (InstallHooks: RenderDepth's first-person draw, Main::RenderFirstPersonView's
-// accumulator render), its state and report counters (FirstPersonFrame, Report: its lines at the views' async work) and the skeleton's
+// two epochs (ExecuteDepth, at the depth commit: the depth epoch hosts its passes; ExecuteColour) and its engine hooks (InstallHooks:
+// RenderDepth's first-person draw, the culled bits and depth range; Main::RenderFirstPersonView's accumulator render), its state and report counters (FirstPersonFrame, Report: its lines at the views' async work) and the skeleton's
 // parity (Diagnostics/SkeletonParity.cpp) and its scene diagnostics (Diagnostics/RootViewChecks.cpp) are the feature's, on the view
 // engine's calls (IndirectDraws.h, "The view engine").
 //
@@ -53,14 +53,16 @@ namespace DCLF::Features::FirstPerson
 	// The skeleton's cull hidden source (Api::CullHiddenSource, listed hidden): the first-person 3D, while it is not the third-person one.
 	void CullHiddenSkeleton(Api::CullHiddenNodes& a_nodes);
 
-	// FirstPersonEpochs.cpp: the depth epoch (RenderDepth's first-person draw), the colour epoch (Main::RenderFirstPersonView's accumulator
-	// render), and the view's report lines, taking its counters.
-	void ExecuteDepth(bool a_controlDriven);
+	// FirstPersonEpochs.cpp: the frame's depth range (RenderDepth's first-person draw), the depth epoch's commit (ViewPoint::DepthCommitted:
+	// inside the depth commit, which hosts its passes), the colour epoch (Main::RenderFirstPersonView's accumulator render), and the view's
+	// report lines, taking its counters.
+	void TakeDepthRange(bool a_controlDriven);
+	void ExecuteDepth(const Api::ViewPointContext& a_context);
 	void ExecuteColour();
 	std::string Report();
 
-	// FirstPersonHooks.cpp: the two engine hooks that run the epochs (their triggers, fp.depth-draw and fp.colour-render), from the
-	// feature's install.
+	// FirstPersonHooks.cpp: the two engine hooks, from the feature's install: RenderDepth's first-person draw (the frame's culled bits and
+	// depth range) and Main::RenderFirstPersonView's accumulator render (the colour epoch, under its trigger fp.colour-render).
 	void InstallHooks(Api::InstallContext& a_context);
 
 	// Diagnostics/SkeletonParity.cpp: CS_DCLF_SET_PARITY's log of the skeleton's slots and claimed phases, when they change.

@@ -5,8 +5,8 @@
 // builds' kept state - and the functions over it. It is the shadow shape kind's revision participant (Revision/
 // Participant.h: its requirements, shapes, revision inputs and payload, Shadow/ShadowRevision.cpp). What it needs of the rest of the
 // implementation it reaches through ShadowHost (the revision inputs' post, the scene buffers) or takes as parameters (the revision
-// producer's state, RevisionMake::producer); it holds no reference to the whole Impl. The shadow and occlusion epochs' frame half
-// (IndirectDraws' shadow functions, Shadow/*.cpp) reads it through Impl. Each member says whose it is.
+// producer's state, RevisionMake::producer); it holds no reference to the whole Impl. The shadow epoch's frame half, the occlusion maps'
+// with it (IndirectDraws' shadow functions, Shadow/*.cpp), reads it through Impl. Each member says whose it is.
 // Part of IndirectDraws' implementation: included by Impl.h, before the struct.
 
 namespace DCLF
@@ -80,17 +80,25 @@ namespace DCLF
 		// The placements the last shadow epoch's views took (bit: slot - kFirstShadowViewSlot), posted as a revision input: the revisions
 		// make a recording for each recent set (ShadowFrame::activeViews), and an epoch takes the narrowest one covering its views.
 		std::uint64_t lastActiveViews = 0;
-		// Per occlusion view: its view, its pipelines' state and format, and the frame whose commit uploaded its occluders.
+		// Per occlusion view: its view, the frame it was set up for (OcclusionView), its pipelines' state and format, and its occluders
+		// the last shadow commit uploaded.
 		struct OcclusionState
 		{
 			PendingView view;
 			std::uint32_t capturedFrame = ~0u;
 			std::uint32_t rasterState = 0;
 			DXGI_FORMAT dsvFormat = DXGI_FORMAT_UNKNOWN;
-			std::uint32_t committedFrame = ~0u;
 			std::uint32_t inputs = 0, skipped = 0;
 		};
 		std::array<OcclusionState, kOcclusionViews> occlusion;
+		/** @brief Of the maps in a_maps (a bit each), those whose view was set up for frame a_frame (OcclusionView). */
+		std::uint32_t OcclusionSetUp(std::uint32_t a_maps, std::uint32_t a_frame) const
+		{
+			std::uint32_t out = 0;
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				out |= ((a_maps >> v) & 1) && occlusion[v].capturedFrame == a_frame ? 1u << v : 0u;
+			return out;
+		}
 		/** @brief The occlusion views' formats, for the scene lane's shadow pipelines (PostLookupInputs). */
 		std::array<DXGI_FORMAT, kOcclusionViews> OcclusionFormats() const
 		{
@@ -121,11 +129,11 @@ namespace DCLF
 			std::uint32_t defects = 0;  // of them, a view the capability did not foresee
 			std::string lastCause;
 		} capabilityStats;
-		/** @brief The shadow payload the frame's epoch committed, read by the occlusion epoch until the next commit. */
+		/** @brief The shadow payload the frame's epoch committed (its occlusion maps' views too), held until the next commit. */
 		std::shared_ptr<ShadowPayload> committedShadow;
 		std::vector<std::shared_ptr<ShadowPayload>> shadowPayloadPool;  // the snapshot builder's
 		std::shared_ptr<ShadowPayload> AcquireShadowPayload();
-		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
+		std::shared_ptr<const void> shadowExecutionOwner;  // the last shadow execution's owners, held until the next
 		/** @brief The capability's modes and states and the shadow targets' format that the builds ahead and shadow lookups are for. */
 		struct LastShadow
 		{
@@ -149,12 +157,12 @@ namespace DCLF
 		std::size_t PlacementOf(const PendingView& a_view) const;
 		std::uint32_t placementDefectsLogged = 0;
 		/**
-		 * @brief The occlusion maps' layouts as last captured, each map's while on in a_toggles: what OcclusionReady checks (the frame's
-		 * toggles); null, every captured map's: the revision input, which each revision narrows to its publication's toggles
-		 * (RequireSequences).
+		 * @brief The occlusion maps' layouts as last set up (OcclusionView), each map's while on in a_toggles: what OcclusionReady checks
+		 * (the frame's toggles); null, every set-up map's: the revision input, which each revision narrows to its publication's toggles
+		 * (RequireSequences) and appends to the placements as the shadow shape's occlusion views.
 		 */
 		std::vector<ShadowViewLayout> PredictedOcclusion(const ToggleSet* a_toggles) const;
-		static constexpr std::size_t kRecentOcclusionLayouts = 4;
+		// The recent sets of views the shadow epochs drew (placements and occlusion maps), a variant each.
 		static constexpr std::size_t kRecentActiveViews = 4;
 		/** @brief A view rasterizer state's map row's buckets, from a_cache (the revision producer's). */
 		static const RowBuckets& ShadowRowBuckets(RowBucketsCache& a_cache, std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups,
@@ -169,13 +177,13 @@ namespace DCLF
 		static void ReserveShadowLatch(ImplProducer& a_producer, GrowthBuild& a_build, ShadowResources& a_shadow, std::uint32_t a_views, std::uint32_t a_keys,
 			std::uint32_t a_rasterStates, std::uint32_t a_sunProcesses);
 		/**
-		 * @brief Revision code: the shadow and occlusion epochs' shapes, from a_sealed, the make's shadow pipelines and lookups and the
-		 * shadow commit's latched copies (a_latched).
+		 * @brief Revision code: the shadow epoch's shape (the placements, then the occlusion maps' views) and its variants, from a_sealed,
+		 * the make's shadow pipelines and lookups and the shadow commit's latched copies (a_latched).
 		 */
 		static void MakeShadowShapes(ImplProducer& a_producer, const NamedVersions& a_sealed, const ShadowIndirectState& a_indirect, const Lookups& a_lookups,
 			const std::vector<LatchedCopy>& a_latched);
 		/**
-		 * @brief Whether the last shadow and occlusion shapes hold a_bounds (capacities and buckets enough, no row at the bucket words
+		 * @brief Whether the last shadow shapes hold a_bounds (capacities and buckets enough, no row at the bucket words
 		 * they were made for). Capacities only grow, so a shape remade from a bound they hold is the same shape.
 		 */
 		static bool ShadowShapesHold(const ImplProducer& a_producer, const ShadowBounds& a_bounds);
@@ -185,7 +193,7 @@ namespace DCLF
 		// a submitted epoch's results.
 		void NoteShadowViewModes(std::array<bool, kShadowModeCount>& a_modeUsed, std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates);
 		void NoteShadowEpochDrawn(const ShadowPayload& a_payload, const std::array<bool, kShadowModeCount>& a_modeUsed, std::uint32_t a_frame,
-			IndirectDraws::ShadowStats& a_stats);
+			std::uint32_t a_mapsDrawn, double a_occlusionMs, IndirectDraws::ShadowStats& a_stats);
 		std::uint32_t shadowLoggedReasons = 0;
 		bool ShadowNotReady(std::uint32_t a_reason, const char* a_what)
 		{

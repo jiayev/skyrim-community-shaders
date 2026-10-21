@@ -17,6 +17,7 @@
 #include <cassert>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -54,10 +55,10 @@ namespace DCLF::Api
 		const std::shared_ptr<Draws::Resources>* main = nullptr;          // Main shape; View shape: the view's main resources
 		const std::shared_ptr<Draws::ShadowResources>* shadow = nullptr;  // Shadow shape
 		const std::shared_ptr<Draws::ViewResources>* view = nullptr;      // View shape; a hosted epoch's pass in its Main host: its view's
-		// A Main epoch hosting a view's epoch (Api::EpochDef::hostedBy: the depth epoch, the reflection's): that view's resources while its
-		// passes are added (ScheduleExecutor's GatherScheduled), for the epoch's own passes (its latched copies take the view's lists too);
-		// null otherwise.
-		const std::shared_ptr<Draws::ViewResources>* hosted = nullptr;
+		// A Main epoch hosting views' epochs (Api::EpochDef::hostedBy: the depth epoch, the reflection's and first person's depth): the
+		// resources of each view whose passes are added (ScheduleExecutor's GatherScheduled), in the epochs' row order, for the epoch's own
+		// passes (its latched copies take the views' lists too); empty otherwise.
+		std::span<const std::shared_ptr<Draws::ViewResources>> hosted;
 		std::shared_ptr<const void> state;                                // the state its setup made (PassDef::setup); null: none
 
 		const std::shared_ptr<Draws::Resources>& Main() const

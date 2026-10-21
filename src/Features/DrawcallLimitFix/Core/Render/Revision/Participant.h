@@ -1,8 +1,8 @@
 #pragma once
 
-// The scene revisions' participants: each shape kind's owner (ShapeKind: the main segments and the views, Impl's; the shadow and
-// occlusion epochs, the shadow engine's), with the steps the revision producer (MakeRevision), the revision inputs (PostRevisionInputs)
-// and the builds ahead (PostAheadContext, RunAhead) take of each. Registered at Impl's construction, one per ShapeKind in its order
+// The scene revisions' participants: each shape kind's owner (ShapeKind: the main segments and the views, Impl's; the shadow epoch, the
+// occlusion maps' views in it, the shadow engine's), with the steps the revision producer (MakeRevision), the revision inputs
+// (PostRevisionInputs) and the builds ahead (PostAheadContext, RunAhead) take of each. Registered at Impl's construction, one per ShapeKind in its order
 // (Impl::participants), the order every loop calls them in, which is the order these steps ran in when the producer named each kind.
 // Called per make, post and build ahead, never per object.
 // Part of IndirectDraws' implementation: included by Impl.h, before the struct.

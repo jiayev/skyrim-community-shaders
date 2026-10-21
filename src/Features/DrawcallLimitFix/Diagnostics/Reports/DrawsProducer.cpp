@@ -158,6 +158,9 @@ namespace DCLF
 				unrevised ? fmt::format(", {} without the revision's shape <- UNREVISED", unrevised) : std::string(),
 				clamped ? fmt::format(", {} with values past its latch <- LATCH", clamped) : std::string());
 		}
+		// The occlusion maps', drawn in the shadow epoch: its submissions with a map's view latched.
+		if (const auto shadow = EpochOfShape(ShapeKind::Shadow, kShadowShape); shadow != kNoEpoch)
+			covered += fmt::format("{}occlusion {} (in the {} epoch)", covered.empty() ? "" : "; ", std::exchange(rv.occlusionSubmitted, 0), EpochTraitsOf(shadow).name);
 		std::string text;
 		if (!covered.empty())
 			text += fmt::format("[DCLF] epochs submitted by the revision: {}; {} values staged that a revision's latched copies lacked\n", covered,

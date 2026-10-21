@@ -476,6 +476,8 @@ bool MinRadius() { return (CullFlags & 0x2000) != 0; }
 bool FadeOnVisible() { return (CullFlags & 0x4000) != 0; }
 // A sun view's contribution test (kCullMinTexels): a caster whose bound radius projects to fewer texels than the threshold draws nothing.
 bool MinTexels() { return (CullFlags & 0x8000) != 0; }
+// A sun view's size probe (kCullSizeProbe, dclf:shadow-probe): its drawn casters and their triangles by bound radius.
+bool SizeProbe() { return (CullFlags & 0x40000) != 0; }
 // Object word bit 30: a LOD cross-fade copy draw (LodPartitions); the pixel stage uses the cross-fade factor as alpha (DCLFAlphaFade).
 static const uint kObjectCrossfadeCopy = 1u << 30;
 // The key word a view reads (kCullKeyShift): 0 the pipeline and rows words (main segments, reflection); otherwise a shadow view's
@@ -584,6 +586,10 @@ static const uint kCountClassOverflow = 164;
 // Depth phase 1's retest list's length (RetestsIndex), and a sun view's casters below the size threshold (kCullMinTexels).
 static const uint kCountRetests = 168;
 static const uint kCountBelowTexels = 172;
+// The size probe (kCountProbeCastersWord, kCountProbeTrianglesWord): drawn casters and their triangles, by bound radius below 256, 1024,
+// 4096 and the rest.
+static const uint kCountProbeCasters = 176;
+static const uint kCountProbeTriangles = 192;
 
 // The frustum stamp word: the stamp in the low 28 bits, and whether the fade test dropped the object that frame
 // (VisibilityEventsCS.hlsl compares the low bits).
@@ -1306,6 +1312,13 @@ void BuildInput(uint draw, DrawInputWords a_words)
 	}
 	if (pipeline == kNoPipeline || bucketKey == kNoPipeline)
 		return;
+	if (SizeProbe()) {
+		const float radius = ObjectRow(objectIndex, kObjectBoundRow).w;
+		const uint sizeClass = radius < 256.0 ? 0u : radius < 1024.0 ? 1u : radius < 4096.0 ? 2u : 3u;
+		const uint probeIndexCount = geometries.Load(input.z * kGeometryStride + 28);  // the index buffer's count (GeometryDraw +16, .w)
+		count.InterlockedAdd(kCountProbeCasters + sizeClass * 4, 1, scratch);
+		count.InterlockedAdd(kCountProbeTriangles + sizeClass * 4, probeIndexCount / 3, scratch);
+	}
 	// kBucketForward entries take forward inputs only, and forward inputs only those.
 	const bool forwardBucket = BucketMapOffset != 0 && (bucketKey & kBucketForward) != 0;
 	bucketKey &= ~kBucketForward;
@@ -1584,12 +1597,13 @@ void LoadShadowView(ShadowBuildView a_view)
 	LoadViewLatch();
 }
 
-// The shadow (or occlusion) epoch's views in one dispatch (ShadowBuildDrawsPass): a fixed cost per dispatch, not one per view. A thread
-// per (input, view): x over the epoch's list (64-wide groups, as main), y the row of the views' table, so a group shares its view (its
-// row and latch loads are uniform) and each thread builds one input for one view, as main does in a dispatch per view; the order a
-// view's sequences take their slots in is its atomics', as there. The views' table is PushSequencesIndex (PushCountIndex rows), the
-// frame slot's latch region PushLatchOffset. The groups are the epoch's (ShadowLatchLayout::BuildDispatchOffset): its list's inputs
-// over 64 by the views the commit counted (ShadowBuildRows), never fewer than the rows; a y past the rows does nothing.
+// The shadow epoch's views (the occlusion maps' among them) in one dispatch (ShadowBuildDrawsPass): a fixed cost per dispatch, not one
+// per view. A thread per (input, view): x over the epoch's list (64-wide groups, as main), y the row of the views' table, so a group
+// shares its view (its row and latch loads are uniform) and each thread builds one input for one view, as main does in a dispatch per
+// view; the order a view's sequences take their slots in is its atomics', as there. The views' table is PushSequencesIndex
+// (PushCountIndex rows), the frame slot's latch region PushLatchOffset. The groups are the epoch's (ShadowLatchLayout::
+// BuildDispatchOffset): its list's inputs over 64 by the views the commit counted (ShadowBuildRows), never fewer than the rows; a y past
+// the rows does nothing.
 [numthreads(64, 1, 1)] void ShadowViews(uint3 dispatchID : SV_DispatchThreadID) {
 	if (dispatchID.y >= PushCountIndex)
 		return;

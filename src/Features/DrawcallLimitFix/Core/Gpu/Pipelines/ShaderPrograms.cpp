@@ -738,11 +738,23 @@ namespace DCLF
 			// as the Lighting shader's is.
 			return { ShaderStageSpec{ false, a_technique }, ShaderStageSpec{ true, a_technique } };
 		}
-		std::array<ShaderStageSpec, 4> DrawFamilyStages(Api::DrawFamily a_family)
+		std::array<ShaderStageSpec, 6> DrawFamilyStages(Api::DrawFamily a_family)
 		{
-			const auto& descriptors = Extensions::DrawFamilyOf(a_family).contribution.program.descriptors;
+			// DrawProgram's order: colour, depth, then the second colour program's pair - with one colour program the first's again (waited
+			// for once each, harmlessly; KeepColourPrograms empties it).
+			const auto& program = Extensions::DrawFamilyOf(a_family).contribution.program;
+			const auto& descriptors = program.descriptors;
+			const std::uint32_t colour2 = program.colours == 2 ? descriptors.colour2 : descriptors.colour;
 			return { ShaderStageSpec{ false, descriptors.colour }, ShaderStageSpec{ true, descriptors.colour }, ShaderStageSpec{ false, descriptors.depth },
-				ShaderStageSpec{ true, descriptors.depth } };
+				ShaderStageSpec{ true, descriptors.depth }, ShaderStageSpec{ false, colour2 }, ShaderStageSpec{ true, colour2 } };
+		}
+		/** @brief A family's program as completed: the second colour pair kept only with two colour programs (DrawFamilyStages). */
+		void KeepColourPrograms(Api::DrawFamily a_family, ShaderPrograms::DrawProgram& a_program)
+		{
+			if (Extensions::DrawFamilyOf(a_family).contribution.program.colours == 2)
+				return;
+			a_program.vertex2 = {};
+			a_program.pixel2 = {};
 		}
 		std::array<ShaderStageSpec, 2> ForwardStages(std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor)
 		{
@@ -1216,14 +1228,16 @@ namespace DCLF
 			a_finished.drawFamilyForward[f] = true;
 			return;
 		}
-		// The family's programs: its four stages (tree LOD's: DistantTree's).
+		// The family's programs: its colour and depth stages and its second colour program's (tree LOD's: DistantTree's).
 		auto& entry = *drawFamilyEntries[f];
 		FinishEntry(entry, nullptr, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
-			static constexpr const char* kStages[] = { "VS", "PS", "VS (depth)", "PS (depth)" };
+			static constexpr const char* kStages[] = { "VS", "PS", "VS (depth)", "PS (depth)", "VS (colour 2)", "PS (colour 2)" };
 			logger::warn("[DCLF] SPIR-V build of {} {} failed; {}:\n{}", family.name, kStages[a_stage], family.nativeNote, a_artifact.diagnostics.substr(0, 1500));
 		});
-		if (entry.program)
+		if (entry.program) {
+			KeepColourPrograms(static_cast<Api::DrawFamily>(f), *entry.program);
 			logger::info("[DCLF] {} programs ready ({}, pulled)", family.label, family.name);
+		}
 		a_finished.drawFamily[f] = true;
 	}
 
@@ -1395,7 +1409,12 @@ namespace DCLF
 
 	void ShaderPrograms::RebuildDrawFamily(Api::DrawFamily a_family, const RE::BSShader& a_shader, Rebuilt<DrawProgram> a_done)
 	{
-		CompileProgram<DrawProgram>(a_shader, DrawFamilyStages(a_family), std::move(a_done));
+		CompileProgram<DrawProgram>(a_shader, DrawFamilyStages(a_family), [a_family, done = std::move(a_done)](std::shared_ptr<const DrawProgram> a_program, std::string a_error) {
+			// CompileProgram made it for this rebuild alone: nothing shares it yet.
+			if (a_program)
+				KeepColourPrograms(a_family, *std::const_pointer_cast<DrawProgram>(a_program));
+			done(std::move(a_program), std::move(a_error));
+		});
 	}
 
 	void ShaderPrograms::RebuildForward(std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor, const RE::BSShader& a_lighting, Rebuilt<ForwardProgram> a_done)
