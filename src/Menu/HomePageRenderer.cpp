@@ -7,6 +7,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/IconLoader.h"
 #include "Plugin.h"
 #include "State.h"
 
@@ -97,14 +98,14 @@ void HomePageRenderer::RenderWelcomeSection()
 	bool discordIconAvailable = false;
 
 	// Check if menu exists, has icons, and Discord icon is loaded
-	if (menu && menu->uiIcons.discord.texture != nullptr &&
-		menu->uiIcons.discord.size.x > 0 && menu->uiIcons.discord.size.y > 0) {
+	if (menu && Util::IconLoader::GetIcons().discord.texture != nullptr &&
+		Util::IconLoader::GetIcons().discord.size.x > 0 && Util::IconLoader::GetIcons().discord.size.y > 0) {
 		discordIconAvailable = true;
 	}
 
 	if (discordIconAvailable) {
 		// Calculate scaled icon size based on window width, with min/max constraints
-		ImVec2 originalSize = ImVec2(menu->uiIcons.discord.size.x, menu->uiIcons.discord.size.y);
+		ImVec2 originalSize = ImVec2(Util::IconLoader::GetIcons().discord.size.x, Util::IconLoader::GetIcons().discord.size.y);
 
 		// Compute width based on window size with constraints and padding (handles very small windows)
 		float ratioWidth = windowSize.x * DISCORD_BANNER_TARGET_WIDTH_RATIO;
@@ -123,7 +124,7 @@ void HomePageRenderer::RenderWelcomeSection()
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.1f, 0.1f, 0.1f, 0.3f));  // Subtle hover
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));   // Subtle click
 
-		if (ImGui::ImageButton("##DiscordButton", menu->uiIcons.discord.texture, iconSize)) {
+		if (ImGui::ImageButton("##DiscordButton", Util::IconLoader::GetIcons().discord.texture, iconSize)) {
 			ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
 		}
 
@@ -403,12 +404,12 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	auto menu = Menu::GetSingleton();
 
 	// Render CS logo as background watermark with proper aspect ratio
-	if (menu && menu->uiIcons.logo.texture) {
+	if (menu && Util::IconLoader::GetIcons().logo.texture) {
 		ImVec2 windowPos = ImGui::GetWindowPos();
 		ImVec2 windowSize = ImGui::GetWindowSize();
 
 		// Get the original texture size to maintain aspect ratio
-		ImVec2 textureSize = menu->uiIcons.logo.size;
+		ImVec2 textureSize = Util::IconLoader::GetIcons().logo.size;
 		float aspectRatio = textureSize.x / textureSize.y;
 
 		// Set desired height and calculate width to maintain aspect ratio
@@ -430,7 +431,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		}
 
 		// Render as subtle watermark background
-		ImGui::GetWindowDrawList()->AddImage(menu->uiIcons.logo.texture, logoMin, logoMax,
+		ImGui::GetWindowDrawList()->AddImage(Util::IconLoader::GetIcons().logo.texture, logoMin, logoMax,
 			ImVec2(0, 0), ImVec2(1, 1), watermarkColor);
 	}
 

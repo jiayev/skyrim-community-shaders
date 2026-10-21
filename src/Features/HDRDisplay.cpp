@@ -8,6 +8,8 @@
 #include "I18n/I18n.h"
 #include "LinearLighting.h"
 #include "Menu.h"
+#include "PostProcessing.h"
+#include "ScreenshotFeature.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -408,11 +410,9 @@ void HDRDisplay::DrawSettings()
 		};
 		const char* forceEnableLabel = T(TKEY("force_enable_hdr"), "Force Enable HDR");
 		const char* cancelLabel = T(TKEY("cancel"), "Cancel");
-		const float buttonWidth = std::max({
-			ThemeManager::Constants::POPUP_BUTTON_WIDTH * Util::GetUIScale(),
+		const float buttonWidth = std::max({ ThemeManager::Constants::POPUP_BUTTON_WIDTH * Util::GetUIScale(),
 			buttonWidthForLabel(forceEnableLabel),
-			buttonWidthForLabel(cancelLabel)
-		});
+			buttonWidthForLabel(cancelLabel) });
 
 		if (ImGui::Button(forceEnableLabel, ImVec2(buttonWidth, 0))) {
 			{
@@ -935,6 +935,9 @@ namespace
 			if (globals::features::hdrDisplay.IsPresentSuppressed())
 				return S_OK;
 
+			if (!globals::features::upscaling.d3d12SwapChainActive)
+				globals::features::screenshotFeature.ProcessCaptureRequest();
+
 			return func(This, SyncInterval, Flags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -970,7 +973,10 @@ ID3D11BlendState* HDRDisplay::GetPatchedAlphaBlendState(ID3D11BlendState* origin
 {
 	auto it = patchedBlendStateCache.find(original);
 	if (it != patchedBlendStateCache.end())
-		return it->second ? it->second.get() : original;
+		return it->second.patched ? it->second.patched.get() : original;
+
+	auto& entry = patchedBlendStateCache[original];
+	entry.original.copy_from(original);
 
 	D3D11_BLEND_DESC desc{};
 	original->GetDesc(&desc);
@@ -989,7 +995,6 @@ ID3D11BlendState* HDRDisplay::GetPatchedAlphaBlendState(ID3D11BlendState* origin
 	}
 
 	if (!needsPatch) {
-		patchedBlendStateCache[original] = nullptr;
 		return original;
 	}
 
@@ -1008,17 +1013,17 @@ ID3D11BlendState* HDRDisplay::GetPatchedAlphaBlendState(ID3D11BlendState* origin
 
 	winrt::com_ptr<ID3D11BlendState> patched;
 	if (FAILED(globals::d3d::device->CreateBlendState(&desc, patched.put()))) {
-		patchedBlendStateCache[original] = nullptr;
 		return original;
 	}
 
 	auto* raw = patched.get();
-	patchedBlendStateCache[original] = std::move(patched);
+	entry.patched = std::move(patched);
 	return raw;
 }
 
 HRESULT HDRDisplay::PresentToSwapChain(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
+	globals::features::screenshotFeature.ProcessCaptureRequest();
 	return SwapChainPresentBottom::func(swapChain, syncInterval, flags);
 }
 
@@ -1619,13 +1624,10 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 	bool skipUIComposite = IsFGCompositingThisFrame();
 
 	// Linear Lighting keeps the pipeline linear throughout.
-	// Without it, ISHDR gamma-encodes its output even in HDR mode. Linear Lighting stands down on the flat world map
-	// and whenever Effects11 is on (LinearLighting::GetCommonBufferData).
-	auto& effects11 = globals::features::effects11;
-	bool isSceneLinear = globals::features::linearLighting.settings.enableLinearLighting && !globals::state->IsFlatWorldMapOpen() &&
-	                     !(effects11.loaded && effects11.enableEffect);
+	// Without it, ISHDR gamma-encodes its output even in HDR mode.
+	bool isSceneLinear = globals::features::linearLighting.IsLinearLightingActive() && !isMainOrLoadingMenu && !globals::state->IsFlatWorldMapOpen();
 
-	const bool applyAutoHDR = effects11.ReplacedTonemapperThisFrame();
+	const bool applyAutoHDR = globals::features::effects11.ReplacedTonemapperThisFrame();
 	float effectivePeakNits = static_cast<float>(applyAutoHDR ? std::min(settings.hdrPeakNits, kAutoHDRMaxNits) : settings.hdrPeakNits);
 
 	HDRDataCB data{};
@@ -1639,7 +1641,8 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 	// TweenMenu = pause UI. ScaleUIBrightnessForFG skips while GameIsPaused(), so HDROutputCS applies the same mid-alpha boost when compositing gamma UI.
 	data.fgTweenMenuMidAlphaBoost = (ui && ui->IsMenuOpen(RE::TweenMenu::MENU_NAME)) ? 1.f : 0.f;
 	data.previewSDR = 0.f;
-	data.applyAutoHDR = applyAutoHDR ? 1.f : 0.f;
+	// Effects11 ENB presets are SDR; Jiaye SDR-only tonemappers opt in via Color Grading AutoHDR.
+	data.applyAutoHDR = (applyAutoHDR || globals::features::postProcessing.WantsAutoHDR()) ? 1.f : 0.f;
 	return data;
 }
 

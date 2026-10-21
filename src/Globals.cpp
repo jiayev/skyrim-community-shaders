@@ -1,5 +1,7 @@
 #include "Globals.h"
 
+#include "CSEditor/SceneManager/SceneManager.h"
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "Deferred.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
@@ -20,6 +22,8 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PostProcessing.h"
+#include "Features/RainRefraction.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -40,12 +44,10 @@
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
-#include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/Game.h"
-#include "WeatherManager.h"
 
 namespace globals
 {
@@ -72,6 +74,7 @@ namespace globals
 		HairSpecular hairSpecular{};
 		HorizonFix horizonFix{};
 		InteriorSun interiorSun{};
+		RainRefraction rainRefraction{};
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpaceShadows screenSpaceShadows{};
 		Skylighting skylighting{};
@@ -97,6 +100,8 @@ namespace globals
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
 		Skin skin{};
+		SceneManager sceneManager{};
+		PostProcessing postProcessing{};
 
 		namespace llf
 		{
@@ -165,7 +170,6 @@ namespace globals
 	Deferred* deferred = nullptr;
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
-	WeatherManager* weatherManager = nullptr;
 	SceneSettingsManager* sceneSettingsManager = nullptr;
 
 	static Profiler profilerInstance;
@@ -177,7 +181,6 @@ namespace globals
 		state = State::GetSingleton();
 		menu = Menu::GetSingleton();
 		deferred = Deferred::GetSingleton();
-		weatherManager = WeatherManager::GetSingleton();
 		sceneSettingsManager = SceneSettingsManager::GetSingleton();
 	}
 
