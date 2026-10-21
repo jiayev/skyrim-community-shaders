@@ -66,19 +66,19 @@ namespace Icons
 
 	[[nodiscard]] inline ImFont* GetFont(GlyphRef glyph) { return GetFont(glyph.family); }
 
-	/** @brief Push the glyph's standalone icon font for the enclosing scope. */
+	/** @brief Push the glyph's standalone icon font for the enclosing scope, optionally scaled from its loaded size. */
 	class FontGuard
 	{
 	public:
-		explicit FontGuard(Family family)
+		explicit FontGuard(Family family, float scale = 1.0f)
 		{
 			if (ImFont* font = GetFont(family)) {
-				ImGui::PushFont(font, font->LegacySize);
+				ImGui::PushFont(font, font->LegacySize * scale);
 				pushed_ = true;
 			}
 		}
-		explicit FontGuard(GlyphRef glyph) :
-			FontGuard(glyph.family)
+		explicit FontGuard(GlyphRef glyph, float scale = 1.0f) :
+			FontGuard(glyph.family, scale)
 		{}
 		~FontGuard()
 		{
@@ -158,6 +158,19 @@ namespace Icons
 		return ImGui::Button(std::format("{}{}", glyph.utf8, id).c_str(), size);
 	}
 
+	/** @brief Gap LabeledButton leaves between its glyph and label. */
+	inline float LabeledButtonGap(GlyphRef glyph, const char* label)
+	{
+		return (glyph && label && label[0]) ? ImGui::GetStyle().ItemInnerSpacing.x : 0.0f;
+	}
+
+	/** @brief Width LabeledButton takes at its natural size, for right-aligning it. */
+	inline float MeasureLabeledButton(GlyphRef glyph, const char* label)
+	{
+		const float labelWidth = label ? ImGui::CalcTextSize(label).x : 0.0f;
+		return CalcGlyphSize(glyph).x + LabeledButtonGap(glyph, label) + labelWidth + ImGui::GetStyle().FramePadding.x * 2.0f;
+	}
+
 	/**
 	 * @brief Button with a leading icon glyph and body-font label.
 	 * Icon fonts have no Latin glyphs, so the two faces are drawn separately.
@@ -168,11 +181,11 @@ namespace Icons
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const ImVec2 iconSize = CalcGlyphSize(glyph);
 		const ImVec2 labelSize = label ? ImGui::CalcTextSize(label) : ImVec2(0, 0);
-		const float gap = (glyph && label && label[0]) ? style.ItemInnerSpacing.x : 0.0f;
+		const float gap = LabeledButtonGap(glyph, label);
 
 		ImVec2 btnSize = size;
 		if (btnSize.x <= 0.0f)
-			btnSize.x = iconSize.x + gap + labelSize.x + style.FramePadding.x * 2.0f;
+			btnSize.x = MeasureLabeledButton(glyph, label);
 		if (btnSize.y <= 0.0f)
 			btnSize.y = ImGui::GetFrameHeight();
 

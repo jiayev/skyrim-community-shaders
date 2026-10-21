@@ -5,15 +5,8 @@
 #include "SettingManager.h"
 #include "Utils/FileSystem.h"
 
-#include <Windows.h>
 #include <algorithm>
 #include <format>
-
-namespace
-{
-	// ShellExecute returns values > 32 on success (Win32).
-	constexpr intptr_t kShellExecuteSuccessThreshold = 32;
-}
 
 PresetManager& PresetManager::GetSingleton()
 {
@@ -29,23 +22,6 @@ std::string PresetManager::FormatPresetIdForLog(const std::string& id)
 std::string PresetManager::MakeUnifiedPackPresetId(const std::string& packId)
 {
 	return std::string(kUnifiedPackIdPrefix) + packId;
-}
-
-std::filesystem::path PresetManager::GetPresetsRoot() const
-{
-	return Util::PathHelpers::GetEffects11PresetsPath();
-}
-
-std::filesystem::path PresetManager::GetPresetsRealPath() const
-{
-	if (!Util::PathHelpers::GetRootRealPath().empty())
-		return Util::PathHelpers::GetEffects11PresetsRealPath();
-	return GetPresetsRoot();
-}
-
-void PresetManager::EnsurePresetsFolderExists() const
-{
-	Util::FileHelpers::EnsureDirectoryExists(GetPresetsRealPath());
 }
 
 bool PresetManager::UseDataFolder() const
@@ -129,10 +105,10 @@ void PresetManager::SelectDefaultPreset()
 	activePresetId = kLegacyPresetId;
 }
 
-void PresetManager::ScanLibraryDirectory(const std::filesystem::path& relativePath, bool unifiedPacks)
+void PresetManager::ScanLibraryDirectory(const std::filesystem::path& relativePath, bool unifiedPacks, std::vector<PresetInfo>& out)
 {
 	for (const auto& folder : Util::PathHelpers::ListCommunityShaderEntries(relativePath, true)) {
-		const auto packName = folder.filename().string();
+		const auto packName = Util::PathHelpers::ToUtf8(folder.filename());
 		auto libraryRoot = folder;
 		auto displayName = packName;
 
@@ -141,7 +117,7 @@ void PresetManager::ScanLibraryDirectory(const std::filesystem::path& relativePa
 			libraryRoot = UnifiedPresetCatalog::ResolveEffects11Root(folder, manifest);
 			if (libraryRoot.empty())
 				continue;
-			if (const auto name = manifest.find("name"); name != manifest.end() && name->is_string())
+			if (const auto name = manifest.find(PackManifest::kNameKey); name != manifest.end() && name->is_string())
 				displayName = name->get<std::string>();
 		}
 
@@ -152,15 +128,25 @@ void PresetManager::ScanLibraryDirectory(const std::filesystem::path& relativePa
 		info.isLegacy = false;
 		info.isUnifiedPack = unifiedPacks;
 		info.valid = ValidateLibraryPreset(libraryRoot, info.invalidReason);
-		presets.push_back(std::move(info));
+		out.push_back(std::move(info));
 	}
 }
 
 void PresetManager::DiscoverPresets()
 {
-	EnsurePresetsFolderExists();
+	presets = ScanPresets(true);
+	discovered = true;
+	EnsureDefaultSelection();
+
+	logger::info("[Effects11] Discovered {} preset(s); active='{}'",
+		presets.size(), FormatPresetIdForLog(activePresetId));
+}
+
+std::vector<PresetManager::PresetInfo> PresetManager::ScanPresets(bool includeUnifiedPacks) const
+{
+	Util::FileHelpers::EnsureDirectoryExists(Util::PathHelpers::GetEffects11PresetsRealPath());
 	Util::FileHelpers::EnsureDirectoryExists(Util::PathHelpers::GetUnifiedPresetsRealPath());
-	presets.clear();
+	std::vector<PresetInfo> found;
 
 	PresetInfo legacy;
 	legacy.id = kLegacyPresetId;
@@ -171,23 +157,17 @@ void PresetManager::DiscoverPresets()
 		legacy.invalidReason = std::format("No {} + {} folder at game root or Data", kEnbSeriesIniName, kEnbSeriesDirName);
 	else
 		legacy.rootPath = GetLegacyENBSeriesIniPath().parent_path();
-	presets.push_back(std::move(legacy));
+	found.push_back(std::move(legacy));
 
-	ScanLibraryDirectory(Util::PathHelpers::kEffects11PresetsSubdir, false);
-	ScanLibraryDirectory(Util::PathHelpers::kUnifiedPresetsSubdir, true);
+	ScanLibraryDirectory(Util::PathHelpers::kEffects11PresetsSubdir, false, found);
+	if (includeUnifiedPacks)
+		ScanLibraryDirectory(Util::PathHelpers::kUnifiedPresetsSubdir, true, found);
 
 	// Keep Legacy first; sort library entries by display name.
-	if (presets.size() > 1) {
-		std::sort(presets.begin() + 1, presets.end(), [](const PresetInfo& a, const PresetInfo& b) {
-			return a.displayName < b.displayName;
-		});
-	}
-
-	discovered = true;
-	EnsureDefaultSelection();
-
-	logger::info("[Effects11] Discovered {} preset(s); active='{}'",
-		presets.size(), FormatPresetIdForLog(activePresetId));
+	std::sort(found.begin() + 1, found.end(), [](const PresetInfo& a, const PresetInfo& b) {
+		return a.displayName < b.displayName;
+	});
+	return found;
 }
 
 std::filesystem::path PresetManager::GetActiveLibraryRoot() const
@@ -274,15 +254,6 @@ bool PresetManager::SwitchPreset(const std::string& id, bool saveCurrent)
 	return true;
 }
 
-bool PresetManager::OpenPresetsFolder() const
-{
-	EnsurePresetsFolderExists();
-	const auto realPath = GetPresetsRealPath();
-
-	const auto result = ShellExecuteW(nullptr, L"open", realPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-	return reinterpret_cast<intptr_t>(result) > kShellExecuteSuccessThreshold;
-}
-
 std::filesystem::path PresetManager::GetActivePresetRoot() const
 {
 	return GetENBSeriesIniPath().parent_path();
@@ -320,13 +291,13 @@ bool PresetManager::ExportActivePresetTo(const std::filesystem::path& destRoot, 
 	std::string sourceReason;
 	if (!ValidateLibraryPreset(sourceRoot, sourceReason)) {
 		logger::error("[Effects11] Export failed: active preset root '{}' is invalid ({})",
-			sourceRoot.string(), sourceReason);
+			Util::PathHelpers::ToUtf8(sourceRoot), sourceReason);
 		return false;
 	}
 
 	std::error_code ec;
 	if (std::filesystem::equivalent(sourceRoot, destRoot, ec)) {
-		logger::info("[Effects11] Export skipped copy; '{}' is already the active preset root", destRoot.string());
+		logger::info("[Effects11] Export skipped copy; '{}' is already the active preset root", Util::PathHelpers::ToUtf8(destRoot));
 		return true;
 	}
 
@@ -342,14 +313,14 @@ bool PresetManager::ExportActivePresetTo(const std::filesystem::path& destRoot, 
 
 	std::filesystem::copy_file(srcIni, destIni, std::filesystem::copy_options::overwrite_existing, ec);
 	if (ec) {
-		logger::error("[Effects11] Export failed copying '{}': {}", srcIni.string(), ec.message());
+		logger::error("[Effects11] Export failed copying '{}': {}", Util::PathHelpers::ToUtf8(srcIni), ec.message());
 		return false;
 	}
 
 	std::filesystem::copy(srcSeries, destSeries,
 		std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
 	if (ec) {
-		logger::error("[Effects11] Export failed copying '{}': {}", srcSeries.string(), ec.message());
+		logger::error("[Effects11] Export failed copying '{}': {}", Util::PathHelpers::ToUtf8(srcSeries), ec.message());
 		return false;
 	}
 
@@ -364,11 +335,11 @@ bool PresetManager::ExportActivePresetTo(const std::filesystem::path& destRoot, 
 
 	std::string destReason;
 	if (!ValidateLibraryPreset(destRoot, destReason)) {
-		logger::error("[Effects11] Export wrote an invalid layout at '{}': {}", destRoot.string(), destReason);
+		logger::error("[Effects11] Export wrote an invalid layout at '{}': {}", Util::PathHelpers::ToUtf8(destRoot), destReason);
 		return false;
 	}
 
 	logger::info("[Effects11] Exported active preset '{}' to '{}'",
-		FormatPresetIdForLog(activePresetId), destRoot.string());
+		FormatPresetIdForLog(activePresetId), Util::PathHelpers::ToUtf8(destRoot));
 	return true;
 }

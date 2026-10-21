@@ -1,13 +1,11 @@
 #include "SceneSettingsManager.h"
 
 #include "SceneSettingsInternal.h"
-#include "SceneSettingsOverwrites.h"
 
 #include <algorithm>
 #include <cmath>
 
 using namespace SceneSettingsInternal;
-using namespace SceneSettingsOverwrites;
 
 RE::FormID SceneSettingsManager::GetEffectivePreviousWeatherId(const RE::Sky* sky, float weatherLerp) const
 {
@@ -46,28 +44,12 @@ void SceneSettingsManager::PrepareWeatherUserSettingsMutation(RE::FormID weather
 	// Pinning the mode keeps a later preset from flipping which set the user's edits land in.
 	if (auto configIt = weatherSceneConfigs.find(weatherId); configIt != weatherSceneConfigs.end())
 		configIt->second.userTimeOfDayEnabled = configIt->second.timeOfDayEnabled;
-	if (!unresolvedWeatherUserSettings.is_object())
-		unresolvedWeatherUserSettings = json::object();
 	const auto canonicalSpid = Util::FormIdToSpid(weatherId);
 	const auto normalizedSpid = NormalizeLocationFormKey(canonicalSpid);
-	if (replaceMalformedEntries) {
-		for (auto& [rawSpid, rawWeather] : unresolvedWeatherUserSettings.items()) {
-			if (!rawWeather.is_object() || NormalizeLocationFormKey(rawSpid) != normalizedSpid)
-				continue;
-			auto entriesIt = rawWeather.find("entries");
-			if (entriesIt != rawWeather.end() && !entriesIt->is_array())
-				*entriesIt = json::array();
-		}
-	}
-
-	auto& rawWeather = unresolvedWeatherUserSettings[canonicalSpid];
-	if (!rawWeather.is_object())
-		rawWeather = json::object();
-	if (replaceMalformedEntries) {
-		auto entriesIt = rawWeather.find("entries");
-		if (entriesIt != rawWeather.end() && !entriesIt->is_array())
-			*entriesIt = json::array();
-	}
+	PrepareRawUserTarget(
+		unresolvedWeatherUserSettings, canonicalSpid,
+		[&](const std::string& rawSpid) { return NormalizeLocationFormKey(rawSpid) == normalizedSpid; },
+		replaceMalformedEntries);
 }
 
 std::optional<json> SceneSettingsManager::ResolveWeatherLowerValue(RE::FormID weatherId,
@@ -109,27 +91,20 @@ void SceneSettingsManager::RemoveWeatherSetting(RE::FormID weatherId, size_t ind
 	if (!TryEnsureWeatherDataLoaded())
 		return;
 
-	auto it = weatherSceneConfigs.find(weatherId);
-	if (it == weatherSceneConfigs.end() || index >= it->second.entries.size())
+	if (auto it = weatherSceneConfigs.find(weatherId); it != weatherSceneConfigs.end())
+		RemovePeriodicEntry(it->second, index, [this, weatherId] { PrepareWeatherUserSettingsMutation(weatherId, false); });
+}
+
+void SceneSettingsManager::RemovePeriodicEntry(PeriodicSceneConfig& config, size_t index,
+	const std::function<void()>& prepareUserEdit)
+{
+	if (index >= config.entries.size())
 		return;
-	const auto previousSize = it->second.entries.size();
-	const auto entry = it->second.entries[index];
-	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty()) {
-		const auto backingPath = GetWeatherOverwritePath(weatherId, entry);
-		if (!RemoveSettingFromOverwriteFile(backingPath, entry.settingPath, entry.settingKey))
-			return;
-		std::erase_if(it->second.entries, [&](const auto& candidate) {
-			return candidate.source == EntrySource::Overwrite &&
-			       GetWeatherOverwritePath(weatherId, candidate) == backingPath &&
-			       IsSameSetting(candidate, entry.featureShortName, entry.settingPath, entry.settingKey);
-		});
-	} else {
-		it->second.entries.erase(it->second.entries.begin() + static_cast<ptrdiff_t>(index));
-		PrepareWeatherUserSettingsMutation(weatherId, false);
-		SaveAllUserSettings();
-	}
-	if (it->second.entries.size() != previousSize)
-		BumpEntryPresentationRevision();
+	assert(config.entries[index].source == EntrySource::User && "a mod's entry is suppressed with a tombstone, never removed");
+	config.entries.erase(config.entries.begin() + static_cast<ptrdiff_t>(index));
+	prepareUserEdit();
+	SaveAllUserSettings();
+	BumpEntryPresentationRevision();
 	ReapplyIfActive();
 }
 
@@ -140,13 +115,8 @@ bool SceneSettingsManager::HasWeatherEntryForPeriod(RE::FormID weatherId, const 
 		return false;
 
 	auto it = weatherSceneConfigs.find(weatherId);
-	if (it == weatherSceneConfigs.end())
-		return false;
-	for (const auto& e : it->second.entries)
-		if (IsSameSetting(e, featureShortName, settingPath, settingKey) && e.period == period &&
-			(!source || e.source == *source))
-			return true;
-	return false;
+	return it != weatherSceneConfigs.end() &&
+	       HasEntryForPeriod(it->second.entries, featureShortName, settingPath, settingKey, period, source);
 }
 
 // --- Time of Day Mode ---

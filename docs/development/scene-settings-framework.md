@@ -69,6 +69,10 @@ when, and only when, a second TU needs it.
 `--min-entries 645 --min-controllable 538 --min-controllable-features 30` as a regression gate. The two
 controllable floors are the ones that matter: a parser change that stops binding a control does not
 remove the entry, it silently drops its `SceneControllable` flag. Keep them just under the real numbers.
+`--feature-floors cmake/scene_settings_catalog_floors.json` adds a floor per feature, which the totals
+cannot give: one feature losing part of its bindings hides behind another's growth. Lower a feature's
+floor only when it really lost those settings. The custom command's output is a stamp file and the
+generated sources are byproducts, since the generator leaves an unchanged file's timestamp alone.
 It statically parses feature sources and derives, for every persisted setting:
 
 -   the serialized address (`serializedPath` / `serializedKey` / `serializedComponent`) used to reach the
@@ -189,6 +193,11 @@ address always wins. `SettingsUser.json` remains the baseline beneath all of thi
     blended across periods.
 -   Writes smaller than `kBlendEpsilon` (1e-3) are skipped so blending does not spam `LoadSettings`.
 
+**Tombstones.** A user entry with `deleted` set removes a mod's value from the one context it sits in, as
+if that entry were absent: the layers beneath it (a broader location link, weather, time of day, the
+baseline) show through. It never suppresses anything below its own context, and the resolver, the
+winning-context search and the editor's lower/upper layer hints all read it that way.
+
 **Divergence from upstream, deliberate:** upstream overlays `User` first and `Overwrite` second, so a
 mod-shipped overwrite wins over the user's own entry for the same address. This fork inverts the order
 everywhere (`OverlayAllEntries`, `CollectPeriodValueGroups`, `BuildEffectiveContextEntries`) so the user
@@ -286,9 +295,10 @@ skipped until the pending values actually change.
 `SceneSettingsManager::SceneLayerGuard` is an RAII suspend of the scene layer. Anything that reads or writes
 a feature's _base_ settings must hold one, otherwise it captures an overridden value as if it were the user's
 choice. It is default-constructed (`SceneLayerGuard guard;`) and no-ops when the manager singleton does not
-exist yet. Current holders: `State::Load`, `State::SaveToJson` and `State::LoadFromJson`, one internal manager
-path (`GetFeatureSettingValue`), the two settings reads in the `FeatureOverwritesPanel` export dialog, and six
-DevBench bridge endpoints. Add one to any new code path that serializes feature settings.
+exist yet. Current holders include `State::Load`, `State::SaveToJson` and `State::LoadFromJson`, the
+settings reads in the `FeatureOverwritesPanel` export dialog, and the DevBench bridge endpoints. Add one to
+any new code path that serializes feature settings. The manager's own captures read `baselineSettings`
+instead: a guard restores and reapplies every scene-driven feature, which a capture per click cannot afford.
 `SceneFeatureReplica` deliberately holds none: a scene page must show the live, scene-applied values.
 
 In `State::SaveToJson` / `State::LoadFromJson` the guard is declared **before** `m_mutex` is taken, so the
@@ -379,6 +389,7 @@ are **blocked** rather than clobbering it, and unknown fields on an entry are pr
         `LUT` (`LUT::LoadSettings` rereads its texture from disk), DoF `HighlightShape`, Motion Blur
         `VelocityScale`, and the Color Grading tonemapper selection (`enableTonemap`, `useOpenDrt`,
         `currentTonemapper`, `tonemapParams`), which recompiles shaders.
+    -   `ScreenSpaceGI`'s `EnableGI`, which recompiles its compute shaders.
 -   `kLocationFeatureWhitelist` (7) and `kTimeOfDayFeatureWhitelist` (11): which features those scene types
     may target.
 
@@ -520,7 +531,9 @@ rather than an authoring panel.
 -   **Bounds are enforced on apply, not on input.** [Numeric bounds](#numeric-bounds) clamps a value on its
     way into a feature, so nothing out of range reaches a shader constant. A value typed past the range in a
     widget that does not clamp (`clampNumericInput` records which ones) is still stored as typed; only the
-    scene layer's own writes are bounded.
+    scene layer's own writes are bounded. The apply verification compares against the clamped value.
+-   **OpenDRT is not scene-controllable.** Color Grading persists its OpenDRT parameters through the
+    `ODRT1`/`ODRT2` split structs, which the generator does not catalog, so no scene can hold them.
 -   Presentation metadata that survives into the generated C++ (`sourceWidget`, `hdrColor`,
     `clampNumericInput`) is emitted but unread: the interceptor replays the feature's own widget instead of
     rebuilding one. It stays because `validate_entries` uses it, `sourceWidget` against
@@ -547,14 +560,16 @@ justifies the second rendering path.
 python -m unittest tests.test_scene_settings_catalog_generator tests.test_scene_settings_policy
 ```
 
-81 tests. Both suites run in CI via `.github/workflows/pr-python-tests.yaml`, on any PR touching `src/**`,
-the generator, or `tests/**`. Run them locally after touching the generator or the policy lists.
+91 tests. Both suites run in CI via `.github/workflows/pr-python-tests.yaml`, on any PR touching `src/**`,
+the generator, its floors file, `CMakeLists.txt`, or `tests/**`. Run them locally after touching the
+generator or the policy lists. The generator needs Python 3.10 or newer.
 
 The generator can be run standalone to inspect its output:
 
 ```bash
 python cmake/generate_scene_settings_catalog.py --source-dir . --out-dir /tmp/catalog --min-entries 645 \
-    --min-controllable 538 --min-controllable-features 30
+    --min-controllable 538 --min-controllable-features 30 \
+    --feature-floors cmake/scene_settings_catalog_floors.json
 ```
 
 The generator test file is upstream's with the open-shaders-coupled assertions removed (`CSUtility`,

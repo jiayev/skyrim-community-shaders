@@ -47,23 +47,23 @@ namespace
 	constexpr const char* kPopupId = "###SceneCopyModal";
 
 	/// Sizes in font heights, so the modal scales with the UI font.
-	constexpr float kModalWidthEm = 44.0f;
-	constexpr float kListHeightEm = 14.0f;
-	constexpr float kDetailsHeightEm = 10.0f;
+	constexpr float kModalWidthEm = 50.0f;
+	constexpr float kPaneHeightEm = 17.0f;
 	constexpr float kSearchWidthEm = 10.0f;
 	constexpr float kPeriodDotPitchEm = 0.5f;
 	constexpr float kPeriodDotRadiusEm = 0.16f;
+	/// Large fonts would otherwise push the modal past the screen edge.
+	constexpr float kMaxViewportWidthShare = 0.9f;
+	/// The pick pane's share of the width; the review pane takes the rest.
+	constexpr float kPickPaneShare = 0.56f;
+	/// Route card fill and border alphas, matching the tinted chips.
+	constexpr float kCardFillAlpha = 0.14f;
+	constexpr float kCardBorderAlpha = 0.5f;
 
 	constexpr size_t kSearchBufferSize = 256;
 
-	constexpr ImGuiTableFlags kListTableFlags =
-		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
 	constexpr ImGuiTableFlags kDetailsTableFlags =
 		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY;
-	/// Rows keep the modal open, span the table, and let the tick box drawn over them take its own clicks.
-	constexpr ImGuiSelectableFlags kRowFlags = ImGuiSelectableFlags_NoAutoClosePopups |
-	                                           ImGuiSelectableFlags_SpanAllColumns |
-	                                           ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick;
 
 	constexpr std::array kContextTypes{ SceneContextType::TimeOfDay, SceneContextType::Weather,
 		SceneContextType::Location, SceneContextType::Interior };
@@ -191,14 +191,13 @@ namespace
 		bool scrollToCursor = false;
 		bool showUnauthored = false;
 		bool focusSearch = false;
-		bool active = false;
-		bool pendingOpen = false;
+		Util::DeferredModal modal;
+		/// The swap button sits above the list, so it applies next frame rather than under rows already fetched.
+		bool swapPending = false;
 		/// Enter commits only from the search box or a row, never from a chip or button it would also press.
 		bool enterCommits = false;
 		/// The outcome chip narrowing the details table, if any.
 		std::optional<CopyOutcome> detailsFilter;
-		/// Set when a chip turns its filter on, so the rows it picks out are not left collapsed.
-		bool openDetails = false;
 		SceneSettingsManager::RevisionCache<std::vector<SceneRow>> rows;
 		SceneSettingsManager::RevisionCache<CopySummary> summary;
 		CopyPlan summaryPlan;
@@ -466,35 +465,35 @@ namespace
 		return Util::StringMatchesSearch(row.name, query);
 	}
 
-	/** @brief The lines the list draws: current scenes pinned first, the rest after, then the way to reveal hidden ones. */
+	/** @brief The lines the list draws: current scenes pinned first, then one section per type in chip order, then
+	 *  the way to reveal hidden ones. The headings stand in for a type column. */
 	VisibleList BuildVisibleList(const std::vector<SceneRow>& rows, const std::string& query)
 	{
 		VisibleList list;
 		const bool authoredOnly = filters.direction == CopyDirection::To && !session.showUnauthored;
-		std::vector<const SceneRow*> currentRows;
-		std::vector<const SceneRow*> otherRows;
+		std::array<std::vector<const SceneRow*>, kContextTypes.size() + 1> sections;
 		for (const auto& row : rows) {
 			if (!MatchesFilters(row, query))
 				continue;
 			// A current scene stays listed with nothing authored: it is the likeliest target.
 			if (row.current)
-				currentRows.push_back(&row);
+				sections.front().push_back(&row);
 			else if (authoredOnly && !row.authored)
 				++list.hiddenUnauthored;
 			else
-				otherRows.push_back(&row);
+				sections[1 + static_cast<size_t>(std::ranges::find(kContextTypes, row.scene.type) - kContextTypes.begin())]
+					.push_back(&row);
 		}
 
-		const auto addSection = [&](const char* heading, const std::vector<const SceneRow*>& sectionRows) {
-			if (heading && !sectionRows.empty())
-				list.lines.push_back({ .kind = ListLine::Kind::Header, .text = heading });
-			for (const auto* row : sectionRows)
+		// Headings only earn their space once there are sections to tell apart.
+		const bool headed = std::ranges::count_if(sections, [](const auto& section) { return !section.empty(); }) > 1;
+		for (size_t index = 0; index < sections.size(); ++index) {
+			if (headed && !sections[index].empty())
+				list.lines.push_back({ .kind = ListLine::Kind::Header,
+					.text = index == 0 ? T(TKEY("scene_copy_current"), "Current") : GetContextTypeLabel(kContextTypes[index - 1]) });
+			for (const auto* row : sections[index])
 				list.lines.push_back({ .kind = ListLine::Kind::Scene, .row = row });
-		};
-		// Headings only earn their space once there is a pinned section to tell apart.
-		const bool pinned = !currentRows.empty();
-		addSection(pinned ? T(TKEY("scene_copy_current"), "Current") : nullptr, currentRows);
-		addSection(pinned ? T(TKEY("filter_all"), "All") : nullptr, otherRows);
+		}
 		if (list.hiddenUnauthored != 0)
 			list.lines.push_back({ .kind = ListLine::Kind::ShowUnauthored });
 		return list;
@@ -664,35 +663,12 @@ namespace
 			result.Changed() ? Util::Colors::GetSuccess() : Util::Colors::GetWarning());
 	}
 
-	/** @brief The From / To switch. Switching refetches the list and starts the picks over. */
-	void DrawDirectionChips()
+	/** @brief Flips which side the page is on. The list is refetched and the picks start over. */
+	void SwapDirection()
 	{
-		const auto drawChip = [](const char* id, const ChipFace& face, const char* tooltip, CopyDirection direction) {
-			if (FilterChip(id, face, filters.direction == direction) && filters.direction != direction) {
-				filters.direction = direction;
-				session.rows = {};
-				ResetSelection();
-			}
-			Util::AddTooltip(tooltip);
-		};
-		drawChip("##from", { T(TKEY("scene_page_copy_from"), "From"), Icons::FA(ICON_FA_ANGLE_LEFT) },
-			T(TKEY("scene_page_copy_from_tooltip"), "Copies another context's settings into this page."),
-			CopyDirection::From);
-		ImGui::SameLine();
-		drawChip("##to", { T(TKEY("scene_page_copy_to"), "To"), Icons::FA(ICON_FA_ANGLE_RIGHT) },
-			T(TKEY("scene_page_copy_to_tooltip"), "Copies this page's settings into another context."),
-			CopyDirection::To);
-		BrowserUI::HelpMarkerRight(T(TKEY("scene_copy_guide"),
-			"Copies scene settings between this page and other contexts: times of day, interiors, weathers and "
-			"locations.\n\n"
-			"From: pulls one context's settings into this page.\n"
-			"To: pushes this page's settings into every context you tick.\n"
-			"Search and type chips: narrow the list. Authored only hides contexts that hold no settings yet.\n"
-			"Periods: in To, the periods that receive the settings; in From, the period they are read from.\n"
-			"Preview and Details: what happens to each setting before anything is written.\n"
-			"Copy fills only settings not set yet; Overwrite also replaces values already set.\n\n"
-			"Use it to start a new weather or location from one you already tuned. It changes only your own scene "
-			"settings; export a preset to share them."));
+		filters.direction = filters.direction == CopyDirection::To ? CopyDirection::From : CopyDirection::To;
+		session.rows = {};
+		ResetSelection();
 	}
 
 	/** @brief Search and the type chips. */
@@ -787,7 +763,7 @@ namespace
 	{
 		if (row.current)
 			BrowserUI::RowStripe(ImGui::GetColorU32(Util::Colors::GetSuccess()), BrowserUI::RowHeight());
-		const bool pressed = Util::TableRowSelectable("##row", isCursor, kRowFlags);
+		const bool pressed = Util::TableRowSelectable("##row", isCursor, BrowserUI::kTickRowFlags | ImGuiSelectableFlags_AllowDoubleClick);
 		session.enterCommits |= ImGui::IsItemFocused();
 		const bool doubleClicked = pressed && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 		if (pressed)
@@ -815,40 +791,28 @@ namespace
 			BrowserUI::InlineBadge(live, Util::Colors::GetSuccess());
 
 		ImGui::TableNextColumn();
-		ImGui::AlignTextToFramePadding();
-		Util::Text::Secondary("%s", GetContextTypeLabel(row.scene.type));
-
-		ImGui::TableNextColumn();
 		DrawPeriodDots(row);
 
 		ImGui::TableNextColumn();
 		ImGui::AlignTextToFramePadding();
-		ImGui::Text("%zu", row.settingCount);
+		Util::Text::Secondary("%zu", row.settingCount);
+		Util::AddTooltip(T(TKEY("scene_copy_count_tooltip"), "Settings this context holds."));
 		return doubleClicked;
 	}
 
-	/** @brief Draws the list and takes its clicks. @return Whether a double-click asked to commit. */
-	bool DrawList(const VisibleList& list, int cursorLine)
+	/** @brief Draws the list and takes its clicks.
+	 *  @param reservedHeight Height left below the list for the rows that follow it in the pane.
+	 *  @return Whether a double-click asked to commit. */
+	bool DrawList(const VisibleList& list, int cursorLine, float reservedHeight)
 	{
 		const bool to = filters.direction == CopyDirection::To;
-		BrowserUI::RowShadeScope shade;
-		// An empty list takes one column, so its hint centres across the whole table.
-		const int columnCount = list.lines.empty() ? 1 : (to ? 5 : 4);
-		if (!ImGui::BeginTable("##rows", columnCount, kListTableFlags,
-				ImVec2(0.0f, ImGui::GetFontSize() * kListHeightEm)))
+		if (!BrowserUI::BeginListTable("##rows", to ? 4 : 3, ImVec2(0.0f, -reservedHeight), list.lines.empty(),
+				T(TKEY("scene_copy_empty"), "Nothing matches.")))
 			return false;
-		if (list.lines.empty()) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			BrowserUI::EmptyState(T(TKEY("scene_copy_empty"), "Nothing matches."));
-			ImGui::EndTable();
-			return false;
-		}
 
 		if (to)
 			ImGui::TableSetupColumn("##tick", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableSetupColumn("##name", ImGuiTableColumnFlags_WidthStretch);
-		ImGui::TableSetupColumn("##type", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableSetupColumn("##periods", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableSetupColumn("##count", ImGuiTableColumnFlags_WidthFixed);
 
@@ -887,7 +851,7 @@ namespace
 				ImGui::PopID();
 			}
 		}
-		ImGui::EndTable();
+		BrowserUI::EndListTable();
 		return commitRequested;
 	}
 
@@ -915,10 +879,12 @@ namespace
 		const auto sourcePeriod = from && cursorRow && !cursorRow->flat ?
 		                              std::optional{ GetSourcePeriod(*cursorRow) } :
 		                              std::nullopt;
-		BrowserUI::SectionLabel(T(TKEY("scene_copy_periods"), "Periods"));
+		ImGui::AlignTextToFramePadding();
+		Util::Text::Secondary("%s", T(TKEY("scene_copy_periods"), "Periods"));
 		Util::AddTooltip(from ? T(TKEY("scene_copy_periods_from_tooltip"),
 									"The period the settings are read from. A source with one set for every period has nothing to pick.") :
 								T(TKEY("scene_copy_periods_to_tooltip"), "The periods that receive the settings."));
+		ImGui::SameLine();
 		ImGui::PushID("periods");
 		{
 			// A flat source has one set for every period, so there is nothing to pick.
@@ -977,41 +943,71 @@ namespace
 		Util::Text::Disabled("%s", arrow.utf8);
 	}
 
-	/** @brief Source chip, an arrow, then the destination chip; a hint stands in for the side not yet picked. */
-	void DrawPreview(const CopyPlan& plan, const std::vector<SceneRow>& rows, const SceneRow* cursorRow)
+	/** @brief One end of the route: a caption over the side's glyph and name, or a hint while it is unpicked.
+	 *  The page's own end is tinted in the accent, so it reads as the fixed side of the copy. */
+	void DrawRouteCard(const char* caption, const std::optional<PreviewSide>& side, bool page, float width)
 	{
-		const PreviewSide page{ session.pageName, session.pageIcon };
-		const bool picked = !plan.destinations.empty();
-		std::optional<PreviewSide> source;
-		std::optional<PreviewSide> destination;
-		if (filters.direction == CopyDirection::From) {
-			assert(!picked || cursorRow);
-			if (picked)
-				source = PreviewSide{ plan.sourceName, cursorRow->icon };
-			destination = page;
+		const auto& style = ImGui::GetStyle();
+		const ImVec2 pad(style.FramePadding.x * 2.0f, style.FramePadding.y);
+		const float height = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetTextLineHeight() + pad.y * 2.0f;
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		const ImVec2 max(min.x + width, min.y + height);
+		const ImVec4 tint = page ? Util::Colors::GetAccent() : ImGui::GetStyleColorVec4(ImGuiCol_Border);
+		auto* drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(min, max,
+			page ? ImGui::GetColorU32(ImVec4(tint.x, tint.y, tint.z, kCardFillAlpha)) : ImGui::GetColorU32(ImGuiCol_FrameBg),
+			style.FrameRounding);
+		drawList->AddRect(min, max, ImGui::GetColorU32(ImVec4(tint.x, tint.y, tint.z, kCardBorderAlpha)), style.FrameRounding);
+
+		ImGui::SetCursorScreenPos(ImVec2(min.x + pad.x, min.y + pad.y));
+		Util::TextUnformattedDisabled(caption);
+		ImGui::SetCursorScreenPos(ImVec2(min.x + pad.x, ImGui::GetCursorScreenPos().y));
+		if (side) {
+			DrawTintedGlyph(side->icon, ImGui::GetTextLineHeight());
+			BrowserUI::EllipsizedText(side->label.c_str(), max.x - pad.x - ImGui::GetCursorScreenPos().x,
+				ImGui::GetStyleColorVec4(ImGuiCol_Text));
 		} else {
-			source = page;
-			if (picked)
-				destination = DescribeDestinations(plan, rows);
+			Util::TextUnformattedDisabled(T(TKEY("scene_copy_pick_from_list"), "Pick from the list"));
+		}
+		// The card itself is the item, so the next widget lays out after it rather than after its text.
+		ImGui::SetCursorScreenPos(min);
+		ImGui::Dummy(ImVec2(width, height));
+	}
+
+	/** @brief From card, swap button, To card. The page fills its own end; the other end names what the list
+	 *  picks. Shows the picks as of the frame's start: a click in the list below lands here next frame. */
+	void DrawRoute(const CopyPlan& plan, const std::vector<SceneRow>& rows)
+	{
+		const bool from = filters.direction == CopyDirection::From;
+		const std::optional<PreviewSide> page = PreviewSide{ session.pageName, session.pageIcon };
+		std::optional<PreviewSide> other;
+		if (!plan.destinations.empty() && from) {
+			const auto* sourceRow = FindRow(rows, GetSceneOf(plan.source));
+			assert(sourceRow);
+			other = PreviewSide{ plan.sourceName, sourceRow->icon };
+		} else if (!plan.destinations.empty()) {
+			other = DescribeDestinations(plan, rows);
 		}
 
-		const auto drawSide = [](const char* id, const std::optional<PreviewSide>& side, const ImVec4* tint) {
-			if (side) {
-				BrowserUI::Chip(id, side->label.c_str(), side->icon.glyph, &side->icon.color, tint);
-				return;
-			}
-			ImGui::AlignTextToFramePadding();
-			Util::TextUnformattedDisabled(T(TKEY("scene_copy_pick"), "Pick a context to copy."));
-		};
-		BrowserUI::SectionLabel(T(TKEY("scene_copy_preview"), "Preview"));
-		Util::AddTooltip(T(TKEY("scene_copy_preview_tooltip"), "Where the copy reads from, and where it writes."));
-		drawSide("##source", source, nullptr);
+		const float swapSize = BrowserUI::IconButtonSize();
+		const float cardWidth = (ImGui::GetContentRegionAvail().x - swapSize - ImGui::GetStyle().ItemSpacing.x * 2.0f) * 0.5f;
+		const float top = ImGui::GetCursorPosY();
+		DrawRouteCard(from ? T(TKEY("scene_copy_from"), "From") : T(TKEY("scene_copy_from_page"), "From this page"),
+			from ? other : page, !from, cardWidth);
+		const float cardHeight = ImGui::GetItemRectSize().y;
+
 		ImGui::SameLine();
-		ImGui::AlignTextToFramePadding();
-		DrawArrow();
+		ImGui::SetCursorPosY(top + (cardHeight - swapSize) * 0.5f);
+		const auto tooltip = std::format("{}\n{}", T(TKEY("scene_copy_swap"), "Swap direction"),
+			T(TKEY("scene_copy_swap_tooltip"), "Switches between copying out of this page and copying into it. Starts the picks over."));
+		if (BrowserUI::IconButton("##swap", Icons::FA(ICON_FA_EXCHANGE_ALT), tooltip.c_str(), false,
+				ImGui::GetColorU32(ImGuiCol_Text)))
+			session.swapPending = true;
+
 		ImGui::SameLine();
-		const ImVec4 accent = Util::Colors::GetAccent();
-		drawSide("##destination", destination, &accent);
+		ImGui::SetCursorPosY(top);
+		DrawRouteCard(from ? T(TKEY("scene_copy_to_page"), "To this page") : T(TKEY("scene_copy_to"), "To"),
+			from ? page : other, from, cardWidth);
 	}
 
 	/** @brief One outcome's count as a chip that narrows the details to its rows; Dropped's tooltip lists why. */
@@ -1024,10 +1020,8 @@ namespace
 		{
 			const Util::DisableGuard empty(count == 0);
 			if (BrowserUI::Chip("##outcome", FormatCount(GetOutcomeCountFormat(outcome), count).c_str(), icon.glyph,
-					&icon.color, active ? &icon.color : nullptr)) {
+					&icon.color, active ? &icon.color : nullptr))
 				session.detailsFilter = active ? std::nullopt : std::optional{ outcome };
-				session.openDetails = !active;
-			}
 		}
 		ImGui::PopID();
 
@@ -1079,44 +1073,35 @@ namespace
 		}
 	}
 
-	/** @brief The collapsible table: the chip-filtered rows under a heading per feature, as tall as they need up to a cap. */
+	/** @brief The chip-filtered rows under a heading per feature, filling the rest of the review pane. */
 	void DrawDetails(const CopySummary& summary, size_t destinationCount)
 	{
-		// Disabled rather than hidden, so picking a context does not shift the buttons.
-		const Util::DisableGuard unpicked(destinationCount == 0);
-		if (std::exchange(session.openDetails, false))
-			ImGui::SetNextItemOpen(true);
-		if (!ImGui::TreeNode("##details", "%s", T(TKEY("scene_copy_details"), "Details")))
+		if (destinationCount == 0) {
+			BrowserUI::EmptyState(T(TKEY("scene_copy_pick"), "Pick a context to copy."),
+				T(TKEY("scene_copy_pick_hint"), "Every setting it would write shows here first."));
 			return;
+		}
+		if (!ImGui::BeginTable("##changes", 2, kDetailsTableFlags))
+			return;
+		ImGui::TableSetupColumn(T(TKEY("scene_page_copy_column_setting"), "Setting"));
+		ImGui::TableSetupColumn(T(TKEY("scene_page_copy_column_change"), "Change"));
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableHeadersRow();
 
 		std::vector<const DetailRow*> rows;
 		for (const auto& row : summary.details)
 			if (!session.detailsFilter || row.outcome == *session.detailsFilter)
 				rows.push_back(&row);
-		auto sections = rows | std::views::chunk_by([](const DetailRow* lhs, const DetailRow* rhs) {
-			return lhs->feature == rhs->feature;
-		});
-		// Each feature heading and the column headers take a row as well.
-		const auto lineCount = rows.size() + static_cast<size_t>(std::ranges::distance(sections)) + 1;
-		const float lineHeight = ImGui::GetTextLineHeight() + ImGui::GetStyle().CellPadding.y * 2.0f;
-		const float maxHeight = ImGui::GetFontSize() * kDetailsHeightEm;
-		const bool scrolls = lineHeight * static_cast<float>(lineCount) > maxHeight;
-		if (ImGui::BeginTable("##changes", 2, scrolls ? kDetailsTableFlags : kDetailsTableFlags & ~ImGuiTableFlags_ScrollY,
-				ImVec2(0.0f, scrolls ? maxHeight : 0.0f))) {
-			ImGui::TableSetupColumn(T(TKEY("scene_page_copy_column_setting"), "Setting"));
-			ImGui::TableSetupColumn(T(TKEY("scene_page_copy_column_change"), "Change"));
-			ImGui::TableSetupScrollFreeze(0, 1);
-			ImGui::TableHeadersRow();
-			for (const auto section : sections) {
-				ImGui::TableNextRow();
-				ImGui::TableNextColumn();
-				BrowserUI::SectionLabel(section.front()->feature.c_str());
-				for (const auto* row : section)
-					DrawDetailRow(*row, destinationCount > 1);
-			}
-			ImGui::EndTable();
+		for (const auto section : rows | std::views::chunk_by([](const DetailRow* lhs, const DetailRow* rhs) {
+				 return lhs->feature == rhs->feature;
+			 })) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			BrowserUI::SectionLabel(section.front()->feature.c_str());
+			for (const auto* row : section)
+				DrawDetailRow(*row, destinationCount > 1);
 		}
-		ImGui::TreePop();
+		ImGui::EndTable();
 	}
 
 	/** @brief A chip per outcome count, then the details table they filter. */
@@ -1136,16 +1121,40 @@ namespace
 		DrawDetails(summary, destinationCount);
 	}
 
-	/** @brief Copy and Overwrite, each with the count it would write, then Cancel.
+	/** @brief The guide at the left; Copy and Overwrite, each with the count it would write, then Cancel at the right.
 	 *  @return The policy to run, if the user chose one. */
-	std::optional<CopyConflictPolicy> DrawButtons(const CopySummary& summary, bool commitRequested)
+	std::optional<CopyConflictPolicy> DrawFooter(const CopySummary& summary, bool commitRequested)
 	{
+		ImGui::AlignTextToFramePadding();
+		Util::HelpMarker(T(TKEY("scene_copy_guide"),
+			"Copies scene settings between this page and other contexts: times of day, interiors, weathers and "
+			"locations.\n\n"
+			"The arrows between From and To swap the direction: out of this page into the contexts you tick, or "
+			"into this page from the one you pick.\n"
+			"Search and type chips narrow the list. Authored only hides contexts that hold no settings yet.\n"
+			"Periods: when copying out, the periods that receive the settings; when copying in, the period they are "
+			"read from.\n"
+			"The right side lists what happens to each setting before anything is written.\n"
+			"Copy fills only settings not set yet; Overwrite also replaces values already set.\n\n"
+			"Use it to start a new weather or location from one you already tuned. It changes only your own scene "
+			"settings; export a preset to share them."));
+
 		std::optional<CopyConflictPolicy> decision;
 		const auto copyCount = summary.Count(CopyOutcome::Copy);
 		const auto alreadySetCount = summary.Count(CopyOutcome::AlreadySet);
 		const bool canCopy = copyCount != 0;
+		const auto copyLabel = FormatCount(T(TKEY("scene_copy_copy_count"), "Copy {}"), copyCount) + "###copy";
+		const auto overwriteLabel =
+			FormatCount(T(TKEY("scene_copy_overwrite_count"), "Overwrite {}"), alreadySetCount) + "###overwrite";
+		const char* cancelLabel = T(TKEY("cancel"), "Cancel");
+		const auto& style = ImGui::GetStyle();
+		float width = style.ItemSpacing.x * 2.0f;
+		for (const char* label : { copyLabel.c_str(), overwriteLabel.c_str(), cancelLabel })
+			width += ImGui::CalcTextSize(label, nullptr, true).x + style.FramePadding.x * 2.0f;
+		BrowserUI::RightAlign(width);
+
 		ImGui::BeginDisabled(!canCopy);
-		if (ImGui::Button((FormatCount(T(TKEY("scene_copy_copy_count"), "Copy {}"), copyCount) + "###copy").c_str()))
+		if (Util::SuccessButton(copyLabel.c_str()))
 			decision = CopyConflictPolicy::SkipExisting;
 		ImGui::EndDisabled();
 		Util::AddTooltip(T(TKEY("scene_copy_copy_tooltip"),
@@ -1154,9 +1163,7 @@ namespace
 
 		ImGui::SameLine();
 		ImGui::BeginDisabled(alreadySetCount == 0);
-		if (Util::WarningButton(
-				(FormatCount(T(TKEY("scene_copy_overwrite_count"), "Overwrite {}"), alreadySetCount) + "###overwrite")
-					.c_str()))
+		if (Util::WarningButton(overwriteLabel.c_str()))
 			decision = CopyConflictPolicy::OverwriteExisting;
 		ImGui::EndDisabled();
 		Util::AddTooltip(T(TKEY("scene_copy_overwrite_tooltip"),
@@ -1164,7 +1171,7 @@ namespace
 			Util::kTooltipWhenDisabled);
 
 		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("cancel"), "Cancel"))) {
+		if (ImGui::Button(cancelLabel)) {
 			ImGui::CloseCurrentPopup();
 			return std::nullopt;
 		}
@@ -1177,32 +1184,42 @@ namespace
 		return decision;
 	}
 
-	/** @brief The modal's body for one frame, from the direction switch down to the buttons. */
+	/** @brief The modal's body for one frame: the route and filters across the top, the pick pane beside the
+	 *  review pane, then the footer. */
 	void DrawContents()
 	{
 		if (EditorWindow::ClosePopupOnEscape())
 			return;
+		if (std::exchange(session.swapPending, false))
+			SwapDirection();
 
-		DrawDirectionChips();
 		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto revision = manager->GetEntryPresentationRevision();
-		// Fetched after the direction chips, which drop the cached rows on a switch.
+		// Fetched after the swap, which drops the cached rows.
 		const auto& rows = session.rows.Get(revision, [&] {
 			return BuildRows(filters.direction == CopyDirection::From ? manager->GetCopySources(session.page) :
 																		manager->GetCopyDestinations(session.page));
 		});
-		DrawFilterRow();
+		// Built from the search as it stood before this frame's typing, which lands next frame.
 		const std::string query = session.search;
-		DrawContextRow(rows, query);
-
 		const auto list = BuildVisibleList(rows, query);
-		const bool commitRequested = DrawList(list, UpdateCursor(list));
-		if (filters.direction == CopyDirection::To)
-			DrawSelectionFooter(list);
+		const int cursorLine = UpdateCursor(list);
+		DrawRoute(BuildPlan(rows), rows);
+		DrawFilterRow();
 
-		const auto* cursorRow = session.cursor ? FindRow(rows, *session.cursor) : nullptr;
-		ImGui::Spacing();
-		DrawPeriodChips(cursorRow);
+		const bool to = filters.direction == CopyDirection::To;
+		const float paneHeight = ImGui::GetFontSize() * kPaneHeightEm;
+		bool commitRequested = false;
+		if (ImGui::BeginChild("##pick", ImVec2(ImGui::GetContentRegionAvail().x * kPickPaneShare, paneHeight),
+				ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar)) {
+			DrawContextRow(rows, query);
+			// The list leaves room for the selection footer (To only) and the period row.
+			commitRequested = DrawList(list, cursorLine, ImGui::GetFrameHeightWithSpacing() * (to ? 2.0f : 1.0f));
+			if (to)
+				DrawSelectionFooter(list);
+			DrawPeriodChips(session.cursor ? FindRow(rows, *session.cursor) : nullptr);
+		}
+		ImGui::EndChild();
 
 		// A double-click commits alongside whatever is ticked, so its row joins this plan without staying ticked.
 		assert(!commitRequested || session.cursor);
@@ -1218,12 +1235,14 @@ namespace
 				return BuildSummary(plan);
 			},
 			plan != session.summaryPlan);
-		ImGui::Spacing();
-		DrawPreview(plan, rows, cursorRow);
-		DrawSummary(summary, plan.destinations.size());
-		ImGui::Spacing();
 
-		if (const auto decision = DrawButtons(summary, commitRequested)) {
+		Util::ToolbarDivider();
+		if (ImGui::BeginChild("##review", ImVec2(0.0f, paneHeight), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar))
+			DrawSummary(summary, plan.destinations.size());
+		ImGui::EndChild();
+
+		ImGui::Separator();
+		if (const auto decision = DrawFooter(summary, commitRequested)) {
 			RunCopy(plan, *decision);
 			ImGui::CloseCurrentPopup();
 		}
@@ -1235,28 +1254,19 @@ void SceneCopyModal::Open(const SceneContextId& page)
 	session = { .page = page,
 		.pageName = SceneSettingsManager::GetSingleton()->GetSceneContextDisplayName(page),
 		.pageIcon = GetSceneIcon(page),
-		.focusSearch = true,
-		.active = true,
-		.pendingOpen = true };
+		.focusSearch = true };
+	session.modal.Request();
 	ResetSelection();
 }
 
 void SceneCopyModal::Draw(const SceneContextId& page)
 {
-	if (!session.active || session.page != page)
+	if (!session.modal.IsActive() || session.page != page)
 		return;
-
 	const auto title = std::format("{}{}", T(TKEY("scene_page_copy_title"), "Copy settings"), kPopupId);
-	if (std::exchange(session.pendingOpen, false))
-		ImGui::OpenPopup(title.c_str());
-
-	const float width = ImGui::GetFontSize() * kModalWidthEm;
-	ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, FLT_MAX));
-	bool open = true;
-	if (auto popup = Util::CenteredPopupModal(title.c_str(), &open))
-		DrawContents();
-	if (!ImGui::IsPopupOpen(title.c_str()))
-		session.active = false;
+	session.modal.Draw(title.c_str(),
+		std::min(ImGui::GetFontSize() * kModalWidthEm, ImGui::GetMainViewport()->WorkSize.x * kMaxViewportWidthShare),
+		DrawContents);
 }
 
 bool SceneCopyModal::HasSources(const SceneContextId& page)

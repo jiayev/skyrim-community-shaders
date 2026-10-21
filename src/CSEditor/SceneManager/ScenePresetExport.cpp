@@ -23,6 +23,7 @@
 #include "../Browser/BrowserWidgets.h"
 #include "../EditorWindow.h"
 #include "../FormEditSources.h"
+#include "BaselineManager.h"
 #include "Feature.h"
 #include "FeatureOverwritesPanel.h"
 #include "Features/CSEditor.h"
@@ -33,7 +34,6 @@
 #include "Presets/PostProcessingPresets.h"
 #include "Presets/PresetCompatibility.h"
 #include "Presets/UnifiedPresetCatalog.h"
-#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsCatalog.h"
@@ -46,7 +46,8 @@ namespace
 	using PresetExportInfo = SceneSettingsManager::PresetExportInfo;
 	using PresetType = SceneSettingsManager::PresetType;
 
-	constexpr const char* kExportPopupId = "##ScenePresetExport";
+	/// Fixed ID behind the translated title, so the popup survives a language switch.
+	constexpr const char* kExportPopupId = "###ScenePresetExport";
 	constexpr const char* kPickerPopupId = "##ScenePresetExportPicker";
 
 	/// The list scrolls rather than growing past the screen, like the copy preview does.
@@ -69,23 +70,18 @@ namespace
 			[manager] { return manager->GetOverwriteModNames(); });
 	}
 
-	/// The name is kept as typed; tags and plugins stay unparsed until export.
+	/// The name is kept as typed; tags and plugins stay unparsed until export. Its artwork paths are the ones
+	/// a prior export of this name wrote, shown when nothing new is picked.
 	PresetExportInfo form;
 	std::string presetTags;
 	std::string requiredPlugins;
-	/// Existing relative paths from a prior export of this name (shown when no new pick).
-	std::string existingLogo;
-	std::string existingCover;
-	std::vector<std::string> existingScreenshots;
 	std::vector<std::filesystem::path> collidingFiles;
 	/// Form edits a CS or E11 export carries, read once when the dialog opens.
 	FormEditSources::FormKeySet formEditKeys;
 	std::string formEditSummary;
 	std::string pickerSearch;
 
-	bool dialogActive = false;
-	bool pendingOpen = false;
-	bool exportRequested = false;
+	Util::DeferredModal dialog;
 	/// Also write the base Post Processing settings as the pack's Baseline file: how Post Processing presets are made.
 	bool includePostProcessing = false;
 	/// Opened from Base Settings: a Baseline export with the form cut down to what a Baseline needs.
@@ -303,9 +299,6 @@ namespace
 		baselineFeatures.clear();
 		presetTags.clear();
 		requiredPlugins.clear();
-		existingLogo.clear();
-		existingCover.clear();
-		existingScreenshots.clear();
 		collidingFiles.clear();
 	}
 
@@ -335,9 +328,9 @@ namespace
 			if (!shortName.empty() && !Feature::FindFeatureByShortName(shortName) && !IsFeatureRequired(shortName))
 				form.requiredFeatures.push_back(shortName);
 		}
-		existingLogo = meta.logo;
-		existingCover = meta.cover;
-		existingScreenshots = meta.screenshots;
+		form.logo = meta.logo;
+		form.cover = meta.cover;
+		form.screenshots = meta.screenshots;
 		form.clearLogo = false;
 		form.clearCover = false;
 		form.clearScreenshots = false;
@@ -523,11 +516,7 @@ namespace
 
 	std::string DisplayPath(const std::filesystem::path& path)
 	{
-		if (path.empty())
-			return {};
-		// u8string: string() throws on names outside the ANSI code page, and ImGui expects UTF-8.
-		const auto name = path.filename().u8string();
-		return { reinterpret_cast<const char*>(name.data()), name.size() };
+		return Util::PathHelpers::ToUtf8(path.filename());
 	}
 
 	/** @brief Opens the Windows image picker. @return Whether any file was chosen. */
@@ -587,9 +576,9 @@ namespace
 			if (!form.screenshotSources.empty())
 				status = I18n::GetSingleton()->Format("cs_editor.scene_export_artwork_selected",
 					{ { "count", std::to_string(form.screenshotSources.size()) } }, "{count} file(s) selected");
-			else if (!cleared && !existingScreenshots.empty())
+			else if (!cleared && !form.screenshots.empty())
 				status = I18n::GetSingleton()->Format("cs_editor.scene_export_artwork_existing",
-					{ { "count", std::to_string(existingScreenshots.size()) } }, "{count} existing");
+					{ { "count", std::to_string(form.screenshots.size()) } }, "{count} existing");
 			else
 				status = T(TKEY("scene_export_artwork_none"), "None");
 		} else if (singleSource && !singleSource->empty()) {
@@ -838,9 +827,9 @@ namespace
 			return;
 		ImGui::TableNextRow();
 		ImGui::TableNextColumn();
-		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, existingLogo);
+		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, form.logo);
 		DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &form.coverSource, form.clearCover,
-			existingCover);
+			form.cover);
 		DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, form.clearScreenshots, {});
 
 		ImGui::TableNextColumn();
@@ -877,7 +866,6 @@ namespace
 			                                      T(TKEY("scene_export_confirm"), "Export") :
 			                                      T(TKEY("scene_export_replace_confirm"), "Delete and replace");
 			exportConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
-			exportRequested = true;
 			exportConfirmation.Request();
 			ImGui::CloseCurrentPopup();
 		}
@@ -956,8 +944,7 @@ const char* ScenePresetExport::GetSummary()
 
 void ScenePresetExport::Open()
 {
-	dialogActive = true;
-	pendingOpen = true;
+	dialog.Request();
 	ResetFormFields();
 	// The Presets page may never have scanned this session, and packs may have changed since.
 	UnifiedPresetCatalog::GetSingleton().Discover();
@@ -980,28 +967,18 @@ void ScenePresetExport::OpenBaseline(const std::string& featureShortName)
 
 void ScenePresetExport::Draw()
 {
-	if (!dialogActive)
-		return;
-
 	auto* manager = SceneSettingsManager::GetSingleton();
-	if (!manager) {
-		dialogActive = false;
+	if (!manager)
 		return;
-	}
 
-	if (pendingOpen) {
-		ImGui::OpenPopup(kExportPopupId);
-		pendingOpen = false;
-	}
-
-	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(ImVec2(kModalWidth * Util::GetUIScale(), 0.0f), ImGuiCond_Always);
-	if (ImGui::BeginPopupModal(kExportPopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-		// The name picker is a popup of its own and takes the first Escape.
-		const bool closing = !ImGui::IsPopupOpen(kPickerPopupId) && EditorWindow::ClosePopupOnEscape();
-		if (!closing)
-			DrawForm(*manager);
-		ImGui::EndPopup();
+	if (dialog.IsActive()) {
+		const auto title = std::format("{}{}", T(TKEY("scene_export_title"), "Export preset"), kExportPopupId);
+		dialog.Draw(title.c_str(), kModalWidth * Util::GetUIScale(), [manager] {
+			// The name picker is a popup of its own and takes the first Escape.
+			const bool closing = !ImGui::IsPopupOpen(kPickerPopupId) && EditorWindow::ClosePopupOnEscape();
+			if (!closing)
+				DrawForm(*manager);
+		});
 	}
 
 	if (exportConfirmation.Draw()) {
@@ -1011,7 +988,8 @@ void ScenePresetExport::Draw()
 		ReportExportResult(sanitizedName, exported);
 		if (exported) {
 			UnifiedPresetCatalog::GetSingleton().Discover();
-			SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+			BaselineManager::GetSingleton()->Refresh();
+			globals::state->ReapplySettingsLayers();
 			auto& catalog = UnifiedPresetCatalog::GetSingleton();
 			if (info.type != PresetType::Baseline) {
 				// The export baked the user entries into the pack, so apply it and drop them from SceneManager.json.
@@ -1021,13 +999,7 @@ void ScenePresetExport::Draw()
 				catalog.ReapplyIfInUse(sanitizedName);
 			}
 		}
-		exportRequested = false;
-	} else if (!exportConfirmation.IsOpen()) {
-		exportRequested = false;
 	}
-
-	if (!ImGui::IsPopupOpen(kExportPopupId) && !exportRequested)
-		dialogActive = false;
 }
 
 #undef I18N_KEY_PREFIX

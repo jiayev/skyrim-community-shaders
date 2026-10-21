@@ -24,6 +24,8 @@ def _cmake_catalog_floors():
 
 
 CMAKE_CATALOG_FLOORS = _cmake_catalog_floors()
+FEATURE_FLOORS = GENERATOR.load_feature_floors(REPO_ROOT / "cmake" / "scene_settings_catalog_floors.json")
+CONTROLLABLE_FLAG = "SceneSettingsCatalog::SettingFlag::SceneControllable"
 
 
 def make_control_binding(owner, path, label, control_kind):
@@ -225,6 +227,46 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             features = GENERATOR.collect_features([path])
         self.assertEqual(features["Example"]["short"], "Example")
         self.assertEqual(features["Example"]["name"], "Example Feature")
+
+    def test_doc_comment_naming_a_class_does_not_hide_the_feature(self):
+        source = """
+        /** @brief Feature class for the demo effect. */
+        struct Demo : Feature {
+            std::string GetShortName() override { return "Demo"; }
+        };
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Demo.h"
+            path.write_text(source, encoding="utf-8")
+            features = GENERATOR.collect_features([path])
+        self.assertEqual(list(features), ["Demo"])
+
+    def test_masking_skips_digit_separators_and_raw_strings(self):
+        source = 'int a = 1\'000; auto s = R"x(a "quoted" \\ value)x"; bool b = true;'
+        masked = GENERATOR.mask_cpp_source(source)
+        self.assertEqual(len(masked), len(source))
+        self.assertIn("int a = 1'000;", masked)
+        self.assertIn("bool b = true;", masked)
+        self.assertNotIn("quoted", masked)
+
+    def test_split_args_ignores_comparison_and_arrow_angles(self):
+        self.assertEqual(
+            GENERATOR.split_args("a < b, c->d, std::map<int, float> e"),
+            ["a < b", "c->d", "std::map<int, float> e"])
+
+    def test_save_root_is_the_json_parameter_assignment(self):
+        source = """
+        void Demo::SaveSettings(json& o_json)
+        {
+            const bool wasEnabled = enabled;
+            o_json = settings;
+        }
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Demo.cpp"
+            path.write_text(source, encoding="utf-8")
+            roots = GENERATOR.collect_save_roots([path])
+        self.assertEqual(roots["Demo"], "settings")
 
     def test_catalog_validation_rejects_too_few_entries(self):
         with self.assertRaises(ValueError):
@@ -1385,7 +1427,19 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertEqual((binding.minimum, binding.maximum), (0.0625, 16.0))
 
     def test_catalog_satisfies_the_build_time_minimum(self):
-        GENERATOR.validate_entries(self.entries, *CMAKE_CATALOG_FLOORS)
+        GENERATOR.validate_entries(self.entries, *CMAKE_CATALOG_FLOORS, FEATURE_FLOORS)
+
+    def test_catalog_validation_rejects_a_feature_losing_part_of_its_bindings(self):
+        # The totals hold when one binding goes, so only the per-feature floor sees it.
+        # A scalar, so the aggregate completeness check cannot be what rejects it.
+        dropped = next(
+            entry for entry in self.entries
+            if entry["feature"] == "PostProcessing" and CONTROLLABLE_FLAG in entry.get("flags", "") and
+            int(entry.get("aggregateCount", 0)) <= 1)
+        survivors = [entry for entry in self.entries if entry is not dropped]
+        GENERATOR.validate_entries(survivors, *CMAKE_CATALOG_FLOORS)
+        with self.assertRaises(ValueError):
+            GENERATOR.validate_entries(survivors, *CMAKE_CATALOG_FLOORS, FEATURE_FLOORS)
 
     def test_catalog_validation_rejects_lost_scene_bindings(self):
         # Persisted-but-hidden entries alone must not satisfy the gate.

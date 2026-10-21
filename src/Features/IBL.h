@@ -97,7 +97,7 @@ public:
 
 	/** @brief Builds the GPU constant-buffer data, forcing EnableIBL off when IsDisabledForCurrentScene(). */
 	PerFrame GetCommonBufferData() const;
-	/** @brief Returns true when IBL should be suppressed in the current scene per the DisableIn* toggles (loading screens, world map, interiors). */
+	/** @brief Returns true when IBL should be suppressed in the current scene per the DisableIn* toggles (loading screens, world map). */
 	bool IsDisabledForCurrentScene() const;
 	/** @brief Returns true when Effects 11 owns IBL (not handed off to CS) with its own image based lighting enabled, overriding these settings. */
 	bool IsManagedByENB() const;

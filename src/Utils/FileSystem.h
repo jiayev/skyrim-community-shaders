@@ -87,64 +87,16 @@ namespace Util
 		std::filesystem::path GetSettingsUserPath();
 
 		/**
-		 * Gets the SettingsTest.json file path
-		 * @return CommunityShaderPath / "SettingsTest.json"
-		 */
-		std::filesystem::path GetSettingsTestPath();
-
-		/**
-		 * Gets the SettingsDefault.json file path
-		 * @return CommunityShaderPath / "SettingsDefault.json"
-		 */
-		std::filesystem::path GetSettingsDefaultPath();
-
-		/**
-		 * Gets the SettingsTheme.json file path
-		 * @return CommunityShaderPath / "SettingsTheme.json"
-		 */
-		std::filesystem::path GetSettingsThemePath();
-
-		/**
 		 * Gets the Themes directory path
 		 * @return CommunityShaderPath / "Themes"
 		 */
 		std::filesystem::path GetThemesPath();
 
 		/**
-		 * Gets the Effects11 presets library path (VFS / in-game Data path).
-		 * @return CommunityShaderPath / "Effects11" / "Presets"
-		 */
-		std::filesystem::path GetEffects11PresetsPath();
-
-		/**
-		 * Gets the unified shader presets library path (VFS).
-		 * @return CommunityShaderPath / "Presets"
-		 */
-		std::filesystem::path GetUnifiedPresetsPath();
-
-		/**
 		 * Gets the Translations directory path for i18n locale files
 		 * @return CommunityShaderPath / "Translations"
 		 */
 		std::filesystem::path GetTranslationsPath();
-
-		/**
-		 * Gets the Overrides directory path
-		 * @return CommunityShaderPath / "Overrides"
-		 */
-		std::filesystem::path GetOverridesPath();
-
-		/**
-		 * Gets the User Overrides directory path (for user modifications to overrides)
-		 * @return CommunityShaderPath / "Overrides" / "User"
-		 */
-		std::filesystem::path GetUserOverridesPath();
-
-		/**
-		 * Gets the AppliedOverrides.json file path
-		 * @return CommunityShaderPath / "AppliedOverrides.json"
-		 */
-		std::filesystem::path GetAppliedOverridesPath();
 
 		/**
 		 * Gets the SceneSettings directory path
@@ -216,13 +168,15 @@ namespace Util
 
 		/**
 		 * Returns the real path to the Effects11 presets library (for Explorer / create_directories).
-		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Effects11" / "Presets"
+		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Effects11" / "Presets", or the in-game
+		 *          path when the mod root is unknown
 		 */
 		std::filesystem::path GetEffects11PresetsRealPath();
 
 		/**
 		 * Returns the real path to the unified presets library.
-		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Presets"
+		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Presets", or the in-game path when
+		 *          the mod root is unknown
 		 */
 		std::filesystem::path GetUnifiedPresetsRealPath();
 
@@ -232,6 +186,14 @@ namespace Util
 		 * @param relativePath Path under CommunityShaders, e.g. "Presets".
 		 */
 		std::vector<std::filesystem::path> GetCommunityShaderScanRoots(const std::filesystem::path& relativePath);
+
+		/** @brief A path as UTF-8. path::string() converts through the ANSI code page, which mangles or throws
+		 *  on names outside it, while pack ids, JSON and ImGui all carry UTF-8. */
+		std::string ToUtf8(const std::filesystem::path& path);
+		/** @brief ToUtf8 with '/' separators, for paths stored in JSON. */
+		std::string ToGenericUtf8(const std::filesystem::path& path);
+		/** @brief A path from UTF-8 text; a path built from std::string reads it in the ANSI code page. */
+		std::filesystem::path FromUtf8(std::string_view text);
 
 		/** @brief Whether a library folder or file is hidden from preset scans ('_' or '.' prefix). */
 		bool IsHiddenLibraryEntry(std::string_view name);
@@ -305,6 +267,9 @@ namespace Util
 		 */
 		void EnsureDirectoryExists(const std::filesystem::path& path);
 
+		/** @brief Opens a file, folder or URL with its default handler, Explorer for folders. @return Whether the shell accepted it. */
+		bool OpenWithShell(const std::filesystem::path& path);
+
 		/**
 		 * Replaces Windows-invalid filename characters with underscore.
 		 * @param name Filename or path component to sanitize
@@ -371,13 +336,5 @@ namespace Util
 		 */
 		std::vector<SettingsDiffEntry> DiffJson(const nlohmann::json& userJson, const nlohmann::json& testJson, float epsilon = 0.0001f);
 
-		/**
-		 * Loads and compares two JSON files, returning a list of differences
-		 * @param userPath Path to the first JSON file (USER variant)
-		 * @param testPath Path to the second JSON file (TEST variant)
-		 * @param epsilon Tolerance for floating-point comparisons (default: 0.0001f)
-		 * @return Vector of differences between the two JSON files
-		 */
-		std::vector<SettingsDiffEntry> LoadJsonDiff(const std::filesystem::path& userPath, const std::filesystem::path& testPath, float epsilon = 0.0001f);
 	}
 }

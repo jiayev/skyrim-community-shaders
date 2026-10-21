@@ -886,6 +886,27 @@ namespace
 	}
 }
 
+UndoHistory::Target SceneSettingsUI::MakeUndoTarget()
+{
+	using Snapshot = SceneSettingsManager::UserSettingsSnapshot;
+	UndoHistory::Target target{ .key = "scene", .label = T(TKEY("scene_undo_label"), "Scene Manager") };
+	target.capture = []() -> UndoHistory::SnapshotPtr {
+		auto* manager = SceneSettingsManager::GetSingleton();
+		return manager ? UndoHistory::Capture(manager->CaptureUserSettings()) : nullptr;
+	};
+	target.restore = [](const UndoHistory::Snapshot& snapshot) {
+		if (auto* manager = SceneSettingsManager::GetSingleton())
+			manager->RestoreUserSettings(UndoHistory::Get<Snapshot>(snapshot));
+	};
+	return target;
+}
+
+/** @brief Registers the scene settings with the editor's undo for a frame that draws scene UI. */
+static void WatchSceneSettingsForUndo()
+{
+	EditorWindow::GetSingleton()->undoHistory.Watch(SceneSettingsUI::MakeUndoTarget());
+}
+
 void SceneSettingsUI::DrawWeatherSceneTab(RE::FormID weatherId)
 {
 	if (weatherId == 0) {
@@ -898,6 +919,7 @@ void SceneSettingsUI::DrawWeatherSceneTab(RE::FormID weatherId)
 		.type = SceneSettingsManager::SceneContextType::Weather,
 		.weatherId = weatherId,
 	};
+	WatchSceneSettingsForUndo();
 	DrawFeatureLayout(weatherSelectedFeature, weatherFeatureSearch, true, true, context);
 }
 
@@ -908,6 +930,7 @@ void SceneSettingsUI::DrawSceneManagerPanel()
 
 	// The interior layer takes the panel over indoors, and it has no periods.
 	SyncSceneToggles();
+	WatchSceneSettingsForUndo();
 	DrawPanel(panelSelectedFeature, GetSceneManagerPanelContext(), true, true);
 }
 
@@ -924,6 +947,7 @@ void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
 
 void SceneSettingsUI::DrawLocationBrowser()
 {
+	WatchSceneSettingsForUndo();
 	EditorWindow::GetSingleton()->DrawActiveWeatherIndicator(false);
 
 	Util::Explainer(T(TKEY("location_browser_intro_label"), "How locations resolve"),
@@ -976,6 +1000,7 @@ void SceneSettingsUI::DrawLocationWindows()
 				std::function<void(ImVec2, float)>{});
 		UpdateWidgetTypeSize(kLocationWidgetType);
 		if (visible) {
+			WatchSceneSettingsForUndo();
 			EditorWindow::GetSingleton()->ClaimTimePeriodSet(EditorWindow::TimePeriodSet::Scene);
 			const SceneSettingsManager::SceneContextId context{
 				.type = SceneSettingsManager::SceneContextType::Location,

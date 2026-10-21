@@ -5,15 +5,20 @@
 #include "Utils/ExternalEmittance.h"
 #include "Utils/VersionedRelocation.h"
 
+#include "EngineFix.h"
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Menu/BackgroundBlur.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 #include "Util.h"
+#include "Utils/ShaderDescriptor.h"
 
+#include "CSEditor/SceneManager/WeatherTransition.h"
 #include "Features/Effects11.h"
+#include "Features/GrassOptimizations.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -112,6 +117,7 @@ struct BSShader_LoadShaders
 				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
 					feature->GenerateShaderPermutations(shader);
 				});
+				EngineFix::GenerateAllShaderPermutations(shader);
 			}
 
 			for (const auto& entry : shader->vertexShaders) {
@@ -194,7 +200,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->ModifyShaderLookup(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
 
 	// Only check against non-shader bits
-	state->permutationData.PixelShaderDescriptor &= ~state->modifiedPixelDescriptor;
+	state->permutationData.PixelShaderDescriptor = Util::ShaderDescriptor::UploadedPixelDescriptor(state->permutationData.PixelShaderDescriptor, state->modifiedPixelDescriptor, State::GetRuntimePixelBits(*shader));
 
 	state->customVertexShader = nullptr;
 	state->customPixelShader = nullptr;
@@ -300,8 +306,11 @@ namespace GrassExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
-			func(shader, pass, renderFlags);
-			LegacyGraphicsCompatibility::BindLegacyGrassPerGeometryToPixelShader();
+			// Replace vanilla setup and pixel constants for passes handled by Grass Optimizations.
+			if (!globals::features::grassOptimizations.SetupGrassPass(shader, pass)) {
+				func(shader, pass, renderFlags);
+				LegacyGraphicsCompatibility::BindLegacyGrassPerGeometryToPixelShader();
+			}
 
 			auto state = globals::state;
 
@@ -380,6 +389,17 @@ namespace WeatherExtensions
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct Sky_UpdateWeather
+	{
+		static void thunk(RE::Sky* sky)
+		{
+			WeatherTransition::BeforeUpdate(sky);
+			func(sky);
+			WeatherTransition::AfterUpdate(sky);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct Sky_SetDirectionalAmbientColors
 	{
 		static void thunk(Effects11::DirectionalAmbientColors& DirectionalAmbientColors, RE::NiColor* AmbientSpecularTint, float AmbientSpecularFresnel)
@@ -439,6 +459,27 @@ namespace PostProcessingExtensions
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 }
+
+// DXGI rejects ResizeBuffers while any view of the back buffer is alive, leaving the old buffers in place.
+struct IDXGISwapChain_ResizeBuffers
+{
+	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags)
+	{
+		BackgroundBlur::ReleaseSourceCache();
+
+		const HRESULT hr = func(This, BufferCount, Width, Height, NewFormat, SwapChainFlags);
+		if (FAILED(hr)) {
+			logger::warn("IDXGISwapChain::ResizeBuffers({}x{}) failed (HRESULT: 0x{:08X})", Width, Height, static_cast<uint32_t>(hr));
+		} else {
+			DXGI_SWAP_CHAIN_DESC desc{};
+			This->GetDesc(&desc);
+			logger::info("Swap chain resized to {}x{}", desc.BufferDesc.Width, desc.BufferDesc.Height);
+		}
+
+		return hr;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
 struct IDXGISwapChain_Present
 {
@@ -661,6 +702,7 @@ namespace Hooks
 			globals::ReInit();
 
 			logger::info("Detouring virtual function tables");
+			stl::detour_vfunc<13, IDXGISwapChain_ResizeBuffers>(globals::d3d::swapChain);
 			// InstallSwapChainPresentHooks installs SwapChainPresentBottom (suppression) and OMSetBlendState first.
 			// IDXGISwapChain_Present is installed last so it sits at the top of the Detours chain and fires first.
 			HDRDisplay::InstallSwapChainPresentHooks(globals::d3d::swapChain);
@@ -1150,6 +1192,7 @@ namespace Hooks
 		logger::info("Hooking weather extensions");
 		stl::detour_thunk<WeatherExtensions::Precipitation_Restore>(REL::RelocationID(25640, 26181));
 		stl::detour_thunk<WeatherExtensions::Sky_UpdateColors>(REL::RelocationID(25686, 26233));
+		stl::detour_thunk<WeatherExtensions::Sky_UpdateWeather>(REL::RelocationID(25684, 26231));
 		stl::detour_thunk<WeatherExtensions::Sky_SetDirectionalAmbientColors>(REL::RelocationID(98989, 105643));
 
 		logger::info("Hooking MenuManager::DrawInterfaceStart for menu TAA");

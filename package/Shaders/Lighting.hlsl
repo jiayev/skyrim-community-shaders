@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT AND (LicenseRef-GPL-3.0-with-Modding-Exception WITH GPL-3.0-linking-source-exception)
+// Original code Copyright (c) 2022 Ilya Perapechka (MIT), modifications GPL-3.0 with Modding Exception (see EXCEPTIONS.md)
+
 #define LIGHTING
 
 #include "Common/BRDF.hlsli"
@@ -30,30 +33,32 @@
 #	define LOD
 #endif
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
 	float2 TexCoord0: TEXCOORD0;
-#if !defined(MODELSPACENORMALS)
+#	if !defined(MODELSPACENORMALS)
 	float4 Normal: NORMAL0;
 	float4 Bitangent: BINORMAL0;
-#endif  // !MODELSPACENORMALS
+#	endif  // !MODELSPACENORMALS
 
-#if defined(VC)
+#	if defined(VC)
 	float4 Color: COLOR0;
-#	if defined(LANDSCAPE)
+#		if defined(LANDSCAPE)
 	float4 LandBlendWeights1: TEXCOORD2;
 	float4 LandBlendWeights2: TEXCOORD3;
-#	endif  // LANDSCAPE
-#endif      // VC
-#if defined(SKINNED)
+#		endif  // LANDSCAPE
+#	endif      // VC
+#	if defined(SKINNED)
 	float4 BoneWeights: BLENDWEIGHT0;
 	float4 BoneIndices: BLENDINDICES0;
-#endif  // SKINNED
-#if defined(EYE)
+#	endif  // SKINNED
+#	if defined(EYE)
 	float EyeParameter: TEXCOORD2;
-#endif  // EYE
+#	endif  // EYE
 };
+#endif
 
 struct VS_OUTPUT
 {

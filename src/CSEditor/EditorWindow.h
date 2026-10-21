@@ -40,6 +40,8 @@ public:
 
 	bool open = false;
 	bool showWeatherDebug = false;  // optional Weather Debug window, off by default (not persisted)
+	bool widgetsHidden = false;     // action bar toggle: hides every window except the bar (not persisted)
+	float widgetsFade = 1.0f;       // 1 = widgets shown, 0 = hidden; eased toward widgetsHidden each frame
 	PreviewMode previewMode = PreviewMode::None;
 	const static int maxRecordMarkers = 10;
 
@@ -63,6 +65,27 @@ public:
 			&volumetricLightingWidgets, &precipitationWidgets, &lensFlareWidgets,
 			&referenceEffectWidgets };
 	}
+
+	/** @brief Calls fn on every editable widget, the cell lighting widget included. */
+	template <typename Fn>
+	void ForEachWidget(Fn&& fn)
+	{
+		for (auto* collection : GetWidgetCollections())
+			for (auto& widget : *collection)
+				fn(*widget);
+		if (currentCellLightingWidget)
+			fn(*currentCellLightingWidget);
+	}
+
+	/** @brief Saves every widget with unsaved changes; clean widgets are left untouched. */
+	void SaveUnsavedWidgets();
+
+	/**
+	 * @brief Returns true if any widget, or Scene Manager, has unsaved changes.
+	 * @details Open widgets are checked every call since they are the ones being edited; the full
+	 *          pass, which catches closed widgets changed by Load or Undo, runs on a short interval.
+	 */
+	bool HasUnsavedChanges();
 	std::vector<std::unique_ptr<Widget>> artObjectWidgets;
 	std::vector<std::unique_ptr<Widget>> effectShaderWidgets;
 
@@ -70,6 +93,22 @@ public:
 	std::unique_ptr<CellLightingWidget> currentCellLightingWidget;
 
 	LightEditor lightEditor;
+
+	/** @brief Tools that write into other mods' files; the editor's save never writes them. */
+	std::array<ExternalTool*, 1> GetExternalTools() { return { &lightEditor }; }
+
+	/** @brief Why a tool's unwritten changes need an answer. */
+	enum class ToolPromptReason
+	{
+		Close,   ///< The editor is closing.
+		Switch,  ///< The tool is moving on to something else, such as another light.
+	};
+
+	/**
+	 * @brief Asks whether to write or discard a tool's unwritten changes before an action that would lose them.
+	 * @param proceed The action; runs once the changes are written or discarded, and not on Cancel.
+	 */
+	void RequestToolPrompt(ExternalTool& tool, ToolPromptReason reason, std::function<void()> proceed);
 
 	/** @brief When true, resets all window positions/sizes on next frame (auto-cleared). */
 	bool resetLayout = false;
@@ -159,6 +198,9 @@ public:
 	/** @brief Draw all currently open widget editing windows. */
 	void ShowWidgetWindow();
 
+	/** @brief Lays out and draws every editor window below the action bar; skipped once the hide fade finishes. */
+	void DrawEditorWindows(float scale, float actionBarBottom);
+
 	/** @brief Render the full editor UI including menu bar, windows, and overlays. */
 	void RenderUI();
 
@@ -185,6 +227,21 @@ public:
 
 	/** @brief Returns the currently locked weather form, or nullptr if none. */
 	RE::TESWeather* GetLockedWeather() const;
+
+	/**
+	 * @brief Returns true if the user explicitly locked the weather.
+	 * @details The editor silently locks weather while open; that implicit lock does not count.
+	 */
+	bool IsWeatherLockedByUser() const;
+
+	/**
+	 * @brief Lock a weather on the user's behalf; unlike the editor's implicit lock it survives closing the editor.
+	 * @param weather The weather form to lock.
+	 */
+	void LockWeatherForUser(RE::TESWeather* weather);
+
+	/** @brief Release the user's lock: while the editor is open it falls back to the implicit lock, otherwise it unlocks. */
+	void ReleaseUserWeatherLock();
 
 	/** @brief Redirect the engine's weather-change call sites to the locked weather. Call once during plugin init. */
 	static void InstallWeatherLockHooks();
@@ -308,27 +365,29 @@ public:
 	/** @brief Call every frame from the overlay renderer to track open/close transitions. */
 	void UpdateOpenState();
 
-	// Undo system
-	struct UndoState
-	{
-		Widget* widget;
-		json settings;
-		std::string widgetId;
-	};
-	std::vector<UndoState> undoStack;
-	static const size_t maxUndoStates = 50;
+	/// Undo and redo for everything edited in the editor.
+	UndoHistory undoHistory;
 
-	/**
-	 * @brief Capture the current settings of a widget and push them onto the undo stack.
-	 * @param widget The widget whose settings to snapshot.
-	 */
-	void PushUndoState(Widget* widget);
+	/** @brief An undo target for a widget, found again by form key so its entries outlive the widget object. */
+	UndoHistory::Target MakeUndoTarget(const Widget& widget);
 
-	/** @brief Pop the most recent undo state and restore its widget settings. */
+	/** @brief The widget editing this form, the cell lighting widget included, or null. */
+	Widget* FindWidget(const FormEditSources::FormKey& key);
+
+	/** @brief Steps the newest change back and says what it undid. */
 	void PerformUndo();
 
-	/** @brief Returns true if the undo stack contains at least one entry. */
-	bool CanUndo() const { return !undoStack.empty(); }
+	/** @brief Reapplies the newest undone change and says what it redid. */
+	void PerformRedo();
+
+	/**
+	 * @brief Discards a widget's unsaved changes by reloading its saved file (vanilla values when it
+	 *        has none). Undoable.
+	 */
+	void DiscardWidgetChanges(Widget& widget);
+
+	/** @brief Discards every widget's unsaved changes. Undoable, one step per widget. */
+	void DiscardAllWidgetChanges();
 
 	// Notification system
 	struct Notification
@@ -436,7 +495,12 @@ public:
 private:
 	friend class Widget;
 
-	void SaveAll();
+	/// Seconds between full unsaved-change passes over every widget.
+	static constexpr double kUnsavedScanInterval = 0.5;
+	/// ImGui time of the last full pass; reset after a save so the indicator clears at once.
+	double lastUnsavedScan = -kUnsavedScanInterval;
+	bool anyWidgetUnsaved = false;
+
 	void SaveSettings();
 	void LoadSettings();
 	void ShowSettingsWindow();
@@ -456,6 +520,16 @@ private:
 	bool weatherLockedByOverlay = false;
 	/** @brief The main menu was open when the editor opened, so closing the editor reopens it. */
 	bool returnToMenu = false;
+
+	/// Asks what to do with a tool's unwritten changes before an action that would lose them.
+	Util::ConfirmationPopup toolPrompt;
+	ExternalTool* promptedTool = nullptr;
+	/// What the prompted action does once the changes are written or discarded.
+	std::function<void()> toolPromptProceed;
+	/// The next close goes ahead without asking: the prompt was just answered.
+	bool skipToolPrompt = false;
+	/** @brief Acts on the answer to toolPrompt. */
+	void DrawToolPrompt();
 
 	/// True from overlay open until its weather lock engages or the overlay closes.
 	bool overlayWeatherLockPending = false;

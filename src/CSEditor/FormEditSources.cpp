@@ -43,7 +43,7 @@ namespace FormEditSources
 	{
 		FormKeySet keys;
 		ForEachFormFile(formsRoot, [&](std::string_view folder, const std::filesystem::path& file) {
-			keys.emplace(std::string(folder), file.stem().string());
+			keys.emplace(std::string(folder), Util::PathHelpers::ToUtf8(file.stem()));
 		});
 		return keys;
 	}

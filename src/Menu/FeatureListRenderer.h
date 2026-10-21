@@ -103,7 +103,10 @@ private:
 		// Helper methods for Feature rendering
 		void RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded);
 		void RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage);
+		/** @brief Drops the feature's edits to settings its Baseline packs set. */
+		static void RenderUseBaselinesButton(Feature* feat);
 		static void RenderRestoreDefaultsButton(Feature* feat);
+		static void RenderFavoriteButton(Feature* feat);
 	};
 
 	static std::vector<MenuFuncInfo> BuildMenuList(

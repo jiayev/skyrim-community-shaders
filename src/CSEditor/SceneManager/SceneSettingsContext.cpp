@@ -269,9 +269,9 @@ std::optional<json> SceneSettingsManager::CaptureContextValue(const SceneContext
 			kCaptureSourceLayer);
 	default:
 		{
-			// The entry lists sit directly on the feature's own value.
-			auto value = GetFeatureSettingValue(address.featureShortName, address.settingPath,
-				address.settingKey);
+			// The entry lists sit directly on the feature's own value. Read from the baselines, since
+			// suspending the layer to read it would restore and reapply every scene-driven feature.
+			auto value = GetBaselineValue(address);
 			return value.is_null() ? std::nullopt : std::optional{ std::move(value) };
 		}
 	}
@@ -359,24 +359,19 @@ bool SceneSettingsManager::HasAnyUserEntries() const
 void SceneSettingsManager::ClearAllUserEntries()
 {
 	// Unresolved raw entries stay in the document: they belong to features this session cannot judge.
-	const auto clear = [](std::vector<SettingEntry>& sourceEntries) {
-		return std::erase_if(sourceEntries,
-				   [](const SettingEntry& entry) { return entry.source == EntrySource::User; }) != 0;
-	};
-
 	bool changed = false;
 	for (auto& [type, sourceEntries] : entries)
-		if (IsEntryListSceneType(type) && clear(sourceEntries)) {
+		if (IsEntryListSceneType(type) && EraseUserEntries(sourceEntries) != 0) {
 			MarkEntryListUserSettingsModified(type);
 			changed = true;
 		}
 	for (auto& [weatherId, config] : weatherSceneConfigs)
-		if (clear(config.entries)) {
+		if (EraseUserEntries(config.entries) != 0) {
 			PrepareWeatherUserSettingsMutation(weatherId, false);
 			changed = true;
 		}
 	for (auto& [configKey, config] : locationSceneConfigs)
-		if (clear(config.entries)) {
+		if (EraseUserEntries(config.entries) != 0) {
 			locationUserSettingsModified = true;
 			changed = true;
 		}
@@ -465,8 +460,7 @@ void SceneSettingsManager::RemoveContextSetting(const SceneContextId& context, s
 	if (!IsValidSceneContext(context))
 		return;
 
-	// A mod's file is never edited from here. Suppressing a mod value goes through
-	// TombstoneContextSetting; the implementations below would strip the key from the mod's own file.
+	// A mod's file is never edited from here. Suppressing a mod value goes through TombstoneContextSetting.
 	const auto contextEntries = GetContextEntries(context);
 	if (index >= contextEntries.size())
 		return;
@@ -520,7 +514,7 @@ bool SceneSettingsManager::TombstoneContextSetting(const SceneContextId& context
 		return false;
 	// The base is kept for the round trip and for revert; resolution ignores it while deleted. A null
 	// one would not survive a reload, so the address stays as it is rather than losing the tombstone.
-	auto value = GetFeatureSettingValue(featureShortName, settingPath, settingKey);
+	auto value = GetBaselineValue({ featureShortName, settingPath, settingKey });
 	if (value.is_null())
 		return false;
 

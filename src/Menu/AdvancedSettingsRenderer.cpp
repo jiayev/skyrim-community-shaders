@@ -154,13 +154,14 @@ void AdvancedSettingsRenderer::RenderLoggingSection()
 	}
 
 	// Shader Defines input
-	auto& shaderDefines = globals::state->shaderDefinesString;
-	if (ImGui::InputText(T("menu.advanced.shader_defines", "Shader Defines"), &shaderDefines)) {
-		globals::state->SetDefines(shaderDefines);
-	}
-	if (ImGui::IsItemDeactivatedAfterEdit() || (ImGui::IsItemActive() &&
-												   (ImGui::IsKeyPressed(ImGuiKey_Enter) ||
-													   ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))) {
+	// SetDefines normalizes the string, so the buffer is only reloaded while the input is idle.
+	static std::string shaderDefines;
+	static bool editingDefines = false;
+	if (!editingDefines)
+		shaderDefines = globals::state->GetDefinesString();
+	ImGui::InputText(T("menu.advanced.shader_defines", "Shader Defines"), &shaderDefines);
+	editingDefines = ImGui::IsItemActive();
+	if (ImGui::IsItemDeactivatedAfterEdit()) {
 		globals::state->SetDefines(shaderDefines);
 		shaderCache->Clear();
 	}
@@ -601,6 +602,16 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 		ImGui::Text("%s", T("menu.advanced.enable_file_watcher_tooltip",
 							  "Automatically recompile shaders on file change. "
 							  "Intended for developing."));
+	}
+
+	if (ImGui::Button(T("menu.advanced.dump_feature_defaults", "Dump All Feature Defaults to JSON"), { -1, 0 })) {
+		if (const auto path = state->DumpFeatureDefaults(); !path.empty())
+			Util::FileHelpers::OpenWithShell(path);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("menu.advanced.dump_feature_defaults_tooltip",
+							  "Writes every feature's built-in default settings to FeatureDefaults.json and opens it. "
+							  "Defaults come from the running build; Baseline packs and your edits are not included."));
 	}
 
 	// Debug addresses section (moved from Advanced/Logging)

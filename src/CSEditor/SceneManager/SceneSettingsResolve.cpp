@@ -86,15 +86,15 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	                           (!interior && (lastResolvedHour < 0.0f ||
 												 std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold));
 	// Continuous blends reload every blended feature per resolve, so they share the transition tick rate.
-	const auto sinceLastBlendResolve = transitionTime - lastBlendResolveTime;
+	// The wall clock paces it: the editor moves the hour while the game, and the game timer, is paused.
+	const auto now = std::chrono::steady_clock::now();
 	const bool blendResolveDue = blendAdvanced &&
-	                             (sinceLastBlendResolve < 0.0f || sinceLastBlendResolve >= kLocationTransitionTickInterval);
+	                             now - lastBlendResolveTime >= std::chrono::duration<float>(kLocationTransitionTickInterval);
 	const bool contextChanged = interior != lastResolvedInterior ||
 	                            locationContextChanged ||
 	                            weather.currentWeatherId != lastResolvedCurrentWeatherId ||
 	                            weather.previousWeatherId != lastResolvedPreviousWeatherId ||
 	                            blendResolveDue;
-	const auto now = std::chrono::steady_clock::now();
 	const bool applyRetryDue = std::any_of(applyFailures.begin(), applyFailures.end(),
 		[&](const auto& item) { return now >= item.second.retryAfter; });
 	if (!force && !resolverDirty && !contextChanged && !applyRetryDue) {
@@ -128,7 +128,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	lastResolvedCurrentWeatherId = weather.currentWeatherId;
 	lastResolvedPreviousWeatherId = weather.previousWeatherId;
 	lastResolvedWeatherLerp = weather.lerp;
-	lastBlendResolveTime = transitionTime;
+	lastBlendResolveTime = now;
 }
 
 float SceneSettingsManager::GetPauseAwareTime() const
@@ -136,13 +136,15 @@ float SceneSettingsManager::GetPauseAwareTime() const
 	return globals::state ? globals::state->timer : 0.0f;
 }
 
-float SceneSettingsManager::EaseLocationTransition(const LocationTransition& transition, float now)
+float SceneSettingsManager::EaseLocationTransition(const LocationTransition& transition, float now) const
 {
 	const auto linear = transition.duration > 0.0f ?
 	                        std::clamp((now - transition.startTime) / transition.duration, 0.0f, 1.0f) :
 	                        1.0f;
-	const auto smooth = linear * linear * (3.0f - 2.0f * linear);
-	return transition.startValue + (transition.targetValue - transition.startValue) * smooth;
+	// start + (target - start) can miss target by an ulp, which would leave the setting reading as edited.
+	if (linear >= 1.0f)
+		return transition.targetValue;
+	return transition.startValue + (transition.targetValue - transition.startValue) * EaseTransition(linear);
 }
 
 bool SceneSettingsManager::IsLocationTransitionFinished(const LocationTransition& transition, float now)
@@ -179,7 +181,7 @@ void SceneSettingsManager::StartLocationTransitions(
 		auto nextDurationIt = pendingLocationTransitionDurations.find(address);
 		const float duration = nextDurationIt != pendingLocationTransitionDurations.end() ?
 		                           nextDurationIt->second :
-		                           locationTransitionSeconds;
+		                           GetTransitionControl(TransitionControl::LocationSeconds);
 		const bool durationChanged = previousDurationIt != lastLocationTransitionDurations.end() &&
 		                             nextDurationIt != pendingLocationTransitionDurations.end() &&
 		                             std::abs(previousDurationIt->second - nextDurationIt->second) >= kBlendEpsilon;
@@ -267,10 +269,15 @@ bool SceneSettingsManager::AdvanceLocationTransitions(float now)
 		// applies, so the target value still lands exactly.
 		bool valuesMoved = false;
 		for (size_t index = 0; index < batch.transitions.size(); ++index) {
-			const auto eased = EaseLocationTransition(*batch.transitions[index], now);
-			valuesMoved = valuesMoved || IsLocationTransitionFinished(*batch.transitions[index], now) ||
+			const auto& transition = *batch.transitions[index];
+			const auto eased = EaseLocationTransition(transition, now);
+			const bool finished = IsLocationTransitionFinished(transition, now);
+			valuesMoved = valuesMoved || finished ||
 			              std::abs(eased - batch.updates[index].value.get<float>()) >= kBlendEpsilon;
-			batch.updates[index].value = eased;
+			// A restore lands on the baseline itself, which a float round trip of it need not equal.
+			const auto baselineIt = finished && transition.restoreAtEnd ? baselineSettings.find(batch.addresses[index]) :
+			                                                              baselineSettings.end();
+			batch.updates[index].value = baselineIt != baselineSettings.end() ? baselineIt->second : json(eased);
 		}
 		if (!valuesMoved)
 			continue;
@@ -309,8 +316,10 @@ bool SceneSettingsManager::AdvanceLocationTransitions(float now)
 			const auto& transition = *batch.transitions[index];
 			const bool finished = IsLocationTransitionFinished(transition, now);
 			if (finished && transition.restoreAtEnd) {
+				// As in ApplyResolvedSettings, a queued verification keeps the baseline until it confirms the restore.
+				if (!pendingApplyVerifications.contains(featureShortName))
+					baselineSettings.erase(address);
 				appliedSettings.erase(address);
-				baselineSettings.erase(address);
 				restoredSetting = true;
 			} else {
 				appliedSettings[address] = batch.updates[index].value;
@@ -428,8 +437,8 @@ bool SceneSettingsManager::IsResolvableEntry(const SettingEntry& entry, SceneTyp
 {
 	// A per-period entry blends across periods, so it has to be a transitionable float whatever its layer.
 	const bool floatsOnly = type == SceneType::TimeOfDay || entry.period != TimeOfDayPeriod::Count;
-	// A tombstone is resolvable on purpose: suppressing an address means restoring its baseline,
-	// and this gate is what gets that baseline collected.
+	// A tombstone is resolvable on purpose: the mod value it hides may already be applied, and
+	// restoring that address needs its baseline collected.
 	return IsEntryActive(entry) &&
 	       IsSettingAllowedForType(type, entry.featureShortName, entry.settingPath, entry.settingKey, floatsOnly) &&
 	       (!floatsOnly || SceneBlend::IsBlendable(entry.value));
@@ -610,8 +619,10 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 		bool appliedSetting = false;
 		for (const auto& update : pending) {
 			if (update.restore) {
+				// A queued verification keeps the baseline until it confirms the restore, so a rejected one can retry.
+				if (!pendingApplyVerifications.contains(featureShortName))
+					baselineSettings.erase(*update.address);
 				// Erase the applied entry last: the address points at its key.
-				baselineSettings.erase(*update.address);
 				appliedSettings.erase(*update.address);
 				restoredSetting = true;
 			} else {
@@ -854,7 +865,7 @@ void SceneSettingsManager::ResolveLocationLink(const std::vector<SettingEntry>& 
 		if (entry.period == TimeOfDayPeriod::Count || !IsResolvableEntry(entry, SceneType::Location))
 			continue;
 		auto address = GetEntryAddress(entry);
-		// A broader flat value is what this link's unset periods keep; a flat tombstone keeps the baseline.
+		// A broader flat value is what this link's unset periods keep.
 		if (auto flatIt = resolved.find(address); flatIt != resolved.end()) {
 			auto baselineIt = baselineSettings.find(address);
 			const auto* seed = SceneBlend::IsBlendable(flatIt->second) ? &flatIt->second :
@@ -899,8 +910,9 @@ void SceneSettingsManager::RecordLocationTransitionDuration(const SettingEntry& 
 	}
 	if (!IsNumericValue(entry.value))
 		return;
-	const auto duration = entry.transitionSeconds.value_or(locationTransitionSeconds);
-	transitionDurations[address] = std::clamp(std::isfinite(duration) ? duration : locationTransitionSeconds,
+	const auto globalSeconds = GetTransitionControl(TransitionControl::LocationSeconds);
+	const auto duration = entry.transitionSeconds.value_or(globalSeconds);
+	transitionDurations[address] = std::clamp(std::isfinite(duration) ? duration : globalSeconds,
 		0.0f, kMaxLocationTransitionSeconds);
 }
 
@@ -917,9 +929,11 @@ void SceneSettingsManager::OverlayEntries(ResolvedSettingMap& resolved, const st
 			continue;
 		if (transitionDurations)
 			RecordLocationTransitionDuration(entry, address, *transitionDurations);
-		// A tombstone supplies nothing. Nulling the slot is how this map already marks an address the
-		// resolve did not fill, so BuildResolvedSettings prunes it and the baseline is restored.
-		resolved[std::move(address)] = entry.deleted ? json(nullptr) : entry.value;
+		// A tombstone empties the address in this layer, so whatever resolved beneath it shows through.
+		if (entry.deleted)
+			resolved.erase(address);
+		else
+			resolved[std::move(address)] = entry.value;
 	}
 }
 
@@ -988,6 +1002,7 @@ void SceneSettingsManager::InvalidateFeatureSnapshot(std::string_view featureSho
 	if (featureShortName.empty()) {
 		featureBaseSnapshots.clear();
 		pendingApplyVerifications.clear();
+		verifiedApplySignatures.clear();
 		std::erase_if(baselineSettings,
 			[&](const auto& item) { return !appliedSettings.contains(item.first); });
 		return;
@@ -995,6 +1010,7 @@ void SceneSettingsManager::InvalidateFeatureSnapshot(std::string_view featureSho
 	const auto featureName = std::string(featureShortName);
 	featureBaseSnapshots.erase(featureName);
 	pendingApplyVerifications.erase(featureName);
+	verifiedApplySignatures.erase(featureName);
 	std::erase_if(baselineSettings, [&](const auto& item) {
 		return item.first.featureShortName == featureName && !appliedSettings.contains(item.first);
 	});
@@ -1053,7 +1069,11 @@ bool SceneSettingsManager::FeatureRetainedUpdates(Feature& feature, std::string_
 	for (const auto& update : updates) {
 		auto* setting = FindAllowedCatalogSetting(featureShortName, update.settingPath, update.key);
 		const auto* actual = setting ? GetCatalogSerializedValue(actualSettings, *setting) : nullptr;
-		retained = retained && actual && AppliedValuesEqual(*actual, update.value);
+		// The apply handed the feature the clamped value, so that is what it should hold.
+		auto expected = update.value;
+		if (setting && update.clampToControlRange)
+			ClampCatalogNumericValue(*setting, expected);
+		retained = retained && actual && AppliedValuesEqual(*actual, expected);
 		if (observed)
 			observed->push_back(actual ? *actual : json{});
 	}

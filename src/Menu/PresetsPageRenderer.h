@@ -31,9 +31,14 @@ public:
 	/** @brief Width DrawOpenButton takes, for right-aligning it beside other controls. */
 	static float MeasureOpenButton();
 
+	/** @brief Labelled button that opens the CS Editor, right-aligned on the current line. */
+	static void DrawOpenCSEditorButton(const char* id);
+
 private:
 	/** @brief Search box and backend filter chips. */
 	static void RenderToolbar();
+	/** @brief The enabled Baseline packs, highest priority first, with arrows to reorder them. Hidden below two packs. */
+	static void RenderBaselineOrder();
 	/** @brief The filtered pack list. */
 	static void RenderList(float width);
 	/** @brief The selected pack's artwork, metadata and actions. */
@@ -42,8 +47,6 @@ private:
 	static void RenderScreenshotLightbox();
 	/** @brief Width DrawBackendBadges will take, for right-aligning it. */
 	static float MeasureBackendBadgesWidth(bool hasE11, bool hasCSPresets, bool hasBaseline, bool compact);
-	/** @brief Rounded toggle button, filled when selected. @return Whether it was clicked. */
-	static bool FilterChip(const char* label, bool selected);
 
 	/** @brief The one type shown; null shows all. */
 	static std::optional<UnifiedPresetCatalog::PresetType> typeFilter;

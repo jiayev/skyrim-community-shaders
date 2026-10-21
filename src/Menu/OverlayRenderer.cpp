@@ -21,6 +21,7 @@
 #include "Menu.h"
 #include "Menu/CursorLoader.h"
 #include "Menu/FontAtlasState.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -184,6 +185,7 @@ void OverlayRenderer::RenderOverlay(
 		io.ClearInputKeys();
 		io.ClearEventsQueue();
 		s_windowOverlapAlpha.clear();
+		EditorWindow::GetSingleton()->UpdateOpenState();
 		return;
 	}
 
@@ -210,11 +212,20 @@ void OverlayRenderer::RenderOverlay(
 	} else if (menu.IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup()) {
 		ImGui::GetIO().MouseDrawCursor = true;
 		if (menu.IsEnabled) {
+			const auto& context = *ImGui::GetCurrentContext();
+			const bool editedBefore = context.ActiveIdHasBeenEditedThisFrame;
 			drawSettings();
+			// Only frames that edited something pay for the check; search boxes edit too, so it compares.
+			if (!editedBefore && context.ActiveIdHasBeenEditedThisFrame)
+				globals::state->CheckCoreSettingsChanged();
 		}
 	} else {
 		ImGui::GetIO().MouseDrawCursor = false;
 	}
+
+	// Enabling a Baseline pack can happen from either the menu or the CS editor, and the answer outlives the page.
+	if (editorWindow->open || menu.IsEnabled)
+		UnifiedPresetCatalog::GetSingleton().DrawBaselineOverlapPrompt();
 
 	// The editor draws its own notifications; while it is closed they still need a host, e.g. the
 	// "cannot open in a loading screen" warning raised by the toggle hotkey.

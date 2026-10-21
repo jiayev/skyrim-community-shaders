@@ -430,18 +430,50 @@ namespace BrowserUI
 		ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + width, y1), color, width * 0.5f);
 	}
 
+	namespace
+	{
+		void PushRowShade()
+		{
+			ImVec4 shade = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBgAlt);
+			if (shade.w < kMinRowShadeAlpha) {
+				shade = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+				shade.w = kMinRowShadeAlpha;
+			}
+			ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, shade);
+		}
+	}
+
 	RowShadeScope::RowShadeScope()
 	{
-		ImVec4 shade = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBgAlt);
-		if (shade.w < kMinRowShadeAlpha) {
-			shade = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-			shade.w = kMinRowShadeAlpha;
-		}
-		ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, shade);
+		PushRowShade();
 	}
 
 	RowShadeScope::~RowShadeScope()
 	{
+		ImGui::PopStyleColor();
+	}
+
+	bool BeginListTable(const char* id, int columns, const ImVec2& size, bool empty, const char* emptyHint)
+	{
+		constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
+		PushRowShade();
+		// The hint takes a single column so it centres across the whole table.
+		if (!ImGui::BeginTable(id, empty ? 1 : columns, kFlags, size)) {
+			ImGui::PopStyleColor();
+			return false;
+		}
+		if (!empty)
+			return true;
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		EmptyState(emptyHint);
+		EndListTable();
+		return false;
+	}
+
+	void EndListTable()
+	{
+		ImGui::EndTable();
 		ImGui::PopStyleColor();
 	}
 
@@ -506,6 +538,56 @@ namespace BrowserUI
 	float RowHeight()
 	{
 		return ImGui::GetFrameHeight() + ImGui::GetStyle().CellPadding.y * 2.0f;
+	}
+
+	void SplitPane(const SplitPaneSpec& spec, float& stackedRatio, const PaneDrawer& drawList, const PaneDrawer& drawDetail)
+	{
+		constexpr float kSplitterThickness = 6.0f;
+		constexpr float kMinPaneHeight = 80.0f;
+
+		const float scale = Util::GetUIScale();
+		const bool resetLayout = EditorWindow::GetSingleton()->resetLayout;
+		const ImVec2 avail = ImGui::GetContentRegionAvail();
+
+		if (avail.x < spec.besideMinWidth * scale) {
+			if (resetLayout)
+				stackedRatio = spec.defaultStackedRatio;
+			const float thickness = kSplitterThickness * scale;
+			const float minPaneHeight = kMinPaneHeight * scale;
+			float listHeight = std::clamp(avail.y * stackedRatio, minPaneHeight, std::max(minPaneHeight, avail.y - minPaneHeight - thickness));
+			drawList(ImVec2(avail.x, listHeight));
+
+			const ImVec2 splitterPos = ImGui::GetCursorScreenPos();
+			float detailHeight = ImGui::GetContentRegionAvail().y - thickness;
+			const ImRect splitterBounds(splitterPos, ImVec2(splitterPos.x + avail.x, splitterPos.y + thickness));
+			ImGui::PushID(spec.id);
+			if (ImGui::SplitterBehavior(splitterBounds, ImGui::GetID("##StackedSplit"), ImGuiAxis_Y, &listHeight, &detailHeight,
+					minPaneHeight, minPaneHeight, 0.0f, 0.0f, ImGui::GetColorU32(ImGuiCol_Separator)))
+				stackedRatio = listHeight / avail.y;
+			ImGui::PopID();
+			ImGui::Dummy(ImVec2(avail.x, thickness));
+			drawDetail(ImVec2(avail.x, 0.0f));
+			return;
+		}
+
+		// The split is a two-column table so the divider is a native, remembered resize handle.
+		const auto& style = ImGui::GetStyle();
+		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x, 0.0f));
+		const bool split = ImGui::BeginTable(spec.id, 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV, avail);
+		ImGui::PopStyleVar();
+		if (!split)
+			return;
+		ImGui::TableSetupColumn("##List", ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn("##Detail", ImGuiTableColumnFlags_WidthFixed, spec.detailWidth * scale);
+		// Must precede TableNextRow: the first row locks the layout, after which widths are ignored.
+		if (resetLayout)
+			ImGui::TableSetColumnWidth(1, spec.detailWidth * scale);
+		ImGui::TableNextRow();
+		ImGui::TableSetColumnIndex(0);
+		drawList(ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
+		ImGui::TableSetColumnIndex(1);
+		drawDetail(ImVec2(0.0f, 0.0f));
+		ImGui::EndTable();
 	}
 }
 

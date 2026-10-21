@@ -119,9 +119,11 @@ void WeatherPickerWindow::DrawContents()
 				}
 
 				const bool isSelected = (selectedWeatherIdx == i);
+				ImGui::PushID(static_cast<int>(weather->GetFormID()));  // Editor IDs can repeat across plugins
 				ImGui::PushStyleColor(ImGuiCol_Text, CSEditor::GetWeatherTypeColor(weather));
 				const bool didSelect = ImGui::Selectable(weatherShortName(weather).c_str(), isSelected);
 				ImGui::PopStyleColor();
+				ImGui::PopID();
 
 				if (didSelect) {
 					CSEditor::SelectWeather(sky, i);

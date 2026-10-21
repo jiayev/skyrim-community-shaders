@@ -100,6 +100,28 @@ namespace Util::Settings
 		return displayName;
 	}
 
+	void EraseMetadataKeys(nlohmann::json& settings)
+	{
+		if (!settings.is_object())
+			return;
+		for (auto it = settings.begin(); it != settings.end();)
+			it = IsMetadataKey(it.key()) ? settings.erase(it) : std::next(it);
+	}
+
+	void MergeSettings(nlohmann::json& target, const nlohmann::json& overlay)
+	{
+		if (!target.is_object() || !overlay.is_object()) {
+			target = overlay;
+			return;
+		}
+		for (const auto& [key, value] : overlay.items()) {
+			if (const auto found = target.find(key); found != target.end())
+				MergeSettings(*found, value);
+			else
+				target[key] = value;
+		}
+	}
+
 	std::vector<ExportSetting> GetExportSettings(std::string_view featureShortName, const nlohmann::json& settings)
 	{
 		using json = nlohmann::json;
@@ -119,7 +141,7 @@ namespace Util::Settings
 		std::vector<ExportSetting> result;
 		const auto visit = [&](auto&& self, const json& node, const json::json_pointer& parent, const std::string& context) -> void {
 			for (const auto& [key, value] : node.items()) {
-				if (key.starts_with('_'))
+				if (IsMetadataKey(key))
 					continue;
 				auto path = parent / key;
 				auto label = JoinLabelParts({ context, NormalizeDisplayPart(key) });
@@ -149,7 +171,7 @@ namespace Util::Settings
 			if (!node.is_object())
 				return result;
 			for (const auto& [key, value] : node.items()) {
-				if (key.starts_with('_'))
+				if (IsMetadataKey(key))
 					continue;
 				const auto path = parent / key;
 				if (value.is_object() && !SceneBlend::IsValid(value)) {
@@ -165,19 +187,58 @@ namespace Util::Settings
 		return visit(visit, values, json::json_pointer{});
 	}
 
+	bool IsCompatibleSettingValue(const nlohmann::json& known, const nlohmann::json& value)
+	{
+		// A boolean loads into a numeric field (features store toggles as uint), but a number never into a bool.
+		return known.is_null() || known.type() == value.type() ||
+		       (known.is_number() && (value.is_number() || value.is_boolean()));
+	}
+
+	/** @brief Dotted path of key under prefix. */
+	static std::string JoinSettingPath(const std::string& prefix, const std::string& key)
+	{
+		return prefix.empty() ? key : prefix + "." + key;
+	}
+
 	void CollectUnknownSettingKeys(const nlohmann::json& incoming, const nlohmann::json& known,
 		const std::string& prefix, std::vector<std::string>& unknownKeys)
 	{
 		if (!incoming.is_object())
 			return;
 		for (const auto& [key, value] : incoming.items()) {
-			if (key.starts_with('_'))
+			if (IsMetadataKey(key))
 				continue;
-			const auto path = prefix.empty() ? key : prefix + "." + key;
-			if (!known.is_object() || !known.contains(key))
+			const auto path = JoinSettingPath(prefix, key);
+			const auto found = known.is_object() ? known.find(key) : known.end();
+			if (!known.is_object() || found == known.end())
 				unknownKeys.push_back(path);
+			else if (!IsCompatibleSettingValue(*found, value))
+				unknownKeys.push_back(path + " (wrong type)");
 			else if (value.is_object() && !SceneBlend::IsValid(value))
-				CollectUnknownSettingKeys(value, known[key], path, unknownKeys);
+				CollectUnknownSettingKeys(value, *found, path, unknownKeys);
+		}
+	}
+
+	void EraseMismatchedSettings(nlohmann::json& incoming, const nlohmann::json& known,
+		const std::string& prefix, std::vector<std::string>& erasedKeys)
+	{
+		if (!incoming.is_object() || !known.is_object())
+			return;
+		for (auto it = incoming.begin(); it != incoming.end();) {
+			const auto found = known.find(it.key());
+			if (found == known.end()) {
+				++it;
+				continue;
+			}
+			const auto path = JoinSettingPath(prefix, it.key());
+			if (!IsCompatibleSettingValue(*found, it.value())) {
+				erasedKeys.push_back(path);
+				it = incoming.erase(it);
+				continue;
+			}
+			if (!SceneBlend::IsValid(it.value()))
+				EraseMismatchedSettings(it.value(), *found, path, erasedKeys);
+			++it;
 		}
 	}
 

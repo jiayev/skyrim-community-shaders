@@ -541,7 +541,7 @@ float LightLimitFix::CalculateRadius(const float intensity, const bool shadowCas
 	float cutoff = shadowCaster ? DefaultShadowCasterCutoff : DefaultCutoff;
 	cutoff = cutoffOverride == 1.f ? cutoff : cutoffOverride;
 	const float radius = std::sqrt(ScaledUnitsSq * ((2 * intensity - cutoff * size * size) / (2 * cutoff)));
-	return isnan(radius) ? 1.f : radius;
+	return radius > 0.f ? radius : 1.f;
 }
 
 inline float LightLimitFix::SmoothStep(const float edge0, const float edge1, const float x)
@@ -1493,6 +1493,10 @@ bool LightLimitFix::FilterLocalShadowCaster(RE::BSShadowLight* a_light, const RE
 
 void LightLimitFix::ReleaseLocalShadowResources()
 {
+	if (localShadowCache || localShadowBuffer) {
+		ID3D11ShaderResourceView* nullViews[2] = {};
+		globals::d3d::context->PSSetShaderResources(102, ARRAYSIZE(nullViews), nullViews);
+	}
 	localShadowCache = nullptr;
 	localShadowBuffer = nullptr;
 	localShadowCacheSlots = 0;

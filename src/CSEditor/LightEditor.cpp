@@ -464,8 +464,6 @@ namespace
 	/// Below this content width (1080p baseline) the inspector moves under the light table.
 	constexpr float kLightInspectorBesideMinWidth = 640.0f;
 	constexpr float kLightInspectorWidth = 380.0f;
-	/// Share of the page height the table keeps when the inspector sits under it.
-	constexpr float kLightTableHeightRatio = 0.45f;
 	constexpr float kLightSearchWidth = 220.0f;
 	constexpr float kInspectorBgAlpha = 0.5f;
 	constexpr int kFlagGridColumns = 3;
@@ -491,12 +489,6 @@ namespace
 	{
 		return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label, nullptr, true).x;
 	}
-
-	float LabeledButtonWidth(Icons::GlyphRef glyph, const char* label)
-	{
-		const auto& style = ImGui::GetStyle();
-		return Icons::CalcGlyphSize(glyph).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
-	}
 }
 
 void LightEditor::DrawSettings()
@@ -512,33 +504,13 @@ void LightEditor::DrawSettings()
 		ImGui::BeginDisabled();
 	}
 
+	if (selected.isSelected)
+		EditorWindow::GetSingleton()->undoHistory.Watch(MakeUndoTarget());
+
 	DrawToolbar();
 	ImGui::Spacing();
 
-	const auto& style = ImGui::GetStyle();
-	const float scale = Util::GetUIScale();
-	const ImVec2 avail = ImGui::GetContentRegionAvail();
-	if (avail.x < kLightInspectorBesideMinWidth * scale) {
-		DrawLightTable(ImVec2(avail.x, std::floor(avail.y * kLightTableHeightRatio)));
-		DrawInspector(ImVec2(avail.x, 0.0f));
-	} else {
-		// The split is a two-column table so the divider is a native, remembered resize handle.
-		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x, 0.0f));
-		const bool split = ImGui::BeginTable("##LightSplit", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV, avail);
-		ImGui::PopStyleVar();
-		if (split) {
-			ImGui::TableSetupColumn("##Lights", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableSetupColumn("##Inspector", ImGuiTableColumnFlags_WidthFixed, kLightInspectorWidth * scale);
-			ImGui::TableNextRow();
-			if (EditorWindow::GetSingleton()->resetLayout)
-				ImGui::TableSetColumnWidth(1, kLightInspectorWidth * scale);
-			ImGui::TableSetColumnIndex(0);
-			DrawLightTable(ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
-			ImGui::TableSetColumnIndex(1);
-			DrawInspector(ImVec2(0.0f, 0.0f));
-			ImGui::EndTable();
-		}
-	}
+	BrowserUI::SplitPane({ "##LightSplit", kLightInspectorBesideMinWidth, kLightInspectorWidth, kDefaultStackedTableRatio }, stackedTableRatio, [this](const ImVec2& size) { DrawLightTable(size); }, [this](const ImVec2& size) { DrawInspector(size); });
 
 	if (isAttaching)
 		ImGui::EndDisabled();
@@ -561,7 +533,7 @@ void LightEditor::DrawToolbar()
 	}
 
 	const char* markersLabel = T(TKEY("toggle_lp_markers"), "Toggle LP Markers");
-	SameLineIfFits(LabeledButtonWidth(Icons::FA(ICON_FA_EYE), markersLabel));
+	SameLineIfFits(Icons::MeasureLabeledButton(Icons::FA(ICON_FA_EYE), markersLabel));
 	if (Icons::LabeledButton("##ToggleMarkers", Icons::FA(ICON_FA_EYE), markersLabel)) {
 		ScheduleConsoleCommand("tlp 1");
 	}
@@ -570,7 +542,7 @@ void LightEditor::DrawToolbar()
 	}
 
 	const char* reloadLabel = T(TKEY("reload_lp"), "Reload LP");
-	SameLineIfFits(LabeledButtonWidth(Icons::FA(ICON_FA_SYNC), reloadLabel));
+	SameLineIfFits(Icons::MeasureLabeledButton(Icons::FA(ICON_FA_SYNC), reloadLabel));
 	if (Icons::LabeledButton("##ReloadLP", Icons::FA(ICON_FA_SYNC), reloadLabel)) {
 		QueueReselectCurrentLP();  // capture before RestoreOriginal clears lpInfo/activeRefr
 		RestoreOriginal();
@@ -696,7 +668,7 @@ void LightEditor::DrawLightTable(const ImVec2& size)
 					const bool isSelected = light == selected;
 					if (Util::TableRowSelectable("##light", isSelected,
 							ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SelectOnNav))
-						selected = light;
+						RequestSelect(light);
 					// Flash only a flashable target: a ref/attached light (id != 0) other than the selected one
 					// (whose fade ApplyOverrides drives). Selected/Other hover leaves thisFrameHovered empty, clearing it.
 					if (ImGui::IsItemHovered()) {
@@ -869,15 +841,8 @@ void LightEditor::DrawInspector(const ImVec2& size)
 	if (lpInfo.isLPLight && Section(T(TKEY("section_light_placer"), "Light Placer"))) {
 		{
 			auto _style = Util::StatusButtonStyle(lpMatchFound ? Util::Colors::GetSuccess() : Util::Colors::GetError());
-			if (ImGui::Button(T(TKEY("save_to_light_placer"), "Save to Light Placer"))) {
-				const bool ok = SaveToLightPlacer(saveColorToLP);
-				if (ok) {
-					ReloadLPAndReselect();
-					lpMatchFound = true;
-				}
-				const std::string okMsg = I18n::GetSingleton()->Format(TKEY("saved_to_config"), { { "path", lpInfo.configPath } }, "Saved to {path}");
-				NotifyResult(ok, okMsg.c_str(), T(TKEY("save_failed"), "Save failed \xe2\x80\x94 see log"));
-			}
+			if (ImGui::Button(T(TKEY("write_to_light_placer"), "Write to Light Placer")))
+				WriteChanges();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			if (lpMatchFound)
@@ -1239,6 +1204,98 @@ bool LightEditor::BeginSearchableCombo(const char* label, const char* preview, c
 	ImGui::Separator();
 	filterOut = searchBuf;
 	return true;
+}
+
+bool LightEditor::LightSettings::operator==(const LightSettings& other) const
+{
+	const auto& lhs = data;
+	const auto& rhs = other.data;
+	// Under InverseSquare the radius is derived from fade/size/cutoff every frame, so those already cover it.
+	const bool radiusDerived = lhs.flags.any(LightLimitFix::LightFlags::InverseSquare);
+	return lhs.flags.underlying() == rhs.flags.underlying() && lhs.cutoffOverride == rhs.cutoffOverride &&
+	       lhs.lighFormId == rhs.lighFormId && lhs.diffuse.red == rhs.diffuse.red && lhs.diffuse.green == rhs.diffuse.green &&
+	       lhs.diffuse.blue == rhs.diffuse.blue && (radiusDerived || lhs.radius == rhs.radius) && lhs.size == rhs.size && lhs.fade == rhs.fade &&
+	       pos.x == other.pos.x && pos.y == other.pos.y && pos.z == other.pos.z && tesFlags.underlying() == other.tesFlags.underlying();
+}
+
+bool LightEditor::LightEdits::operator==(const LightEdits& other) const
+{
+	return settings == other.settings && (!isLPLight || lpFlags == other.lpFlags) && shadowDepthBias == other.shadowDepthBias &&
+	       emittanceSource == other.emittanceSource && emittanceEdid == other.emittanceEdid &&
+	       useExternalEmittance == other.useExternalEmittance;
+}
+
+LightEditor::LightEdits LightEditor::GetEdits() const
+{
+	return { current, lpFlagSet, shadowDepthBias, activeEmittanceSource, externalEmittanceEdid, useExternalEmittance, lpInfo.isLPLight };
+}
+
+LightEditor::LightEdits LightEditor::GetOriginalEdits() const
+{
+	return { original, originalLpFlagSet, originalShadowDepthBias, originalEmittanceSource, originalExternalEmittanceEdid,
+		originalUseExternalEmittance, lpInfo.isLPLight };
+}
+
+void LightEditor::SetEdits(const LightEdits& edits)
+{
+	current = edits.settings;
+	lpFlagSet = edits.lpFlags;
+	shadowDepthBias = edits.shadowDepthBias;
+	ApplyShadowDepthBias();
+	activeEmittanceSource = edits.emittanceSource;
+	externalEmittanceEdid = edits.emittanceEdid;
+	useExternalEmittance = edits.useExternalEmittance;
+}
+
+bool LightEditor::HasUnwrittenChanges() const
+{
+	return selected.isSelected && !(GetEdits() == GetOriginalEdits());
+}
+
+UndoHistory::Target LightEditor::MakeUndoTarget()
+{
+	// Valid only once the per-frame update has taken this light on (previous == selected), and only
+	// while it stays selected.
+	const LightInfo light = selected;
+	const auto isCurrent = [this, light] { return selected.isSelected && selected == light && previous == light; };
+	UndoHistory::Target target{ .key = std::format("light:{:X}:{}", light.id, light.index), .label = selected.name };
+	target.capture = [this, isCurrent]() -> UndoHistory::SnapshotPtr {
+		return isCurrent() ? UndoHistory::Capture(GetEdits()) : nullptr;
+	};
+	target.restore = [this, isCurrent](const UndoHistory::Snapshot& snapshot) {
+		if (isCurrent())
+			SetEdits(UndoHistory::Get<LightEdits>(snapshot));
+	};
+	return target;
+}
+
+void LightEditor::RequestSelect(const LightInfo& light)
+{
+	if (light == selected)
+		return;
+	const auto select = [this, light] {
+		// Neither the write's reselect nor the discard's saved selection should take it back.
+		pendingAutoSelect = false;
+		savedSelection = {};
+		selected = light;
+		selected.isSelected = true;  // list entries predate the selection; avoids one frame of the inspector's empty state
+	};
+	if (HasUnwrittenChanges())
+		EditorWindow::GetSingleton()->RequestToolPrompt(*this, EditorWindow::ToolPromptReason::Switch, select);
+	else
+		select();
+}
+
+bool LightEditor::WriteChanges()
+{
+	const bool ok = SaveToLightPlacer(saveColorToLP);
+	if (ok) {
+		ReloadLPAndReselect();
+		lpMatchFound = true;
+	}
+	const std::string okMsg = I18n::GetSingleton()->Format(TKEY("saved_to_config"), { { "path", lpInfo.configPath } }, "Saved to {path}");
+	NotifyResult(ok, okMsg.c_str(), T(TKEY("save_failed"), "Save failed \xe2\x80\x94 see log"));
+	return ok;
 }
 
 void LightEditor::NotifyResult(bool ok, const char* okMsg, const char* failMsg)
@@ -2190,6 +2247,8 @@ void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH
 	// and runs a dry-run save to determine whether a matching LP JSON entry exists.
 	if (previous != selected) {
 		RestoreOriginal();
+		// The last light's undo steps belong to edits RestoreOriginal just took back.
+		EditorWindow::GetSingleton()->undoHistory.Forget("light:");
 
 		original.tesFlags = tesFlags ? static_cast<LLFCommon::TES_LIGHT_FLAGS_EXT>(tesFlags->underlying()) : static_cast<LLFCommon::TES_LIGHT_FLAGS_EXT>(0);
 		original.data = *runtimeData;
@@ -2972,6 +3031,8 @@ void LightEditor::RefreshLPJsonState()
 	// SyncLPFlagsToRuntime only updates `current`; apply the JSON InverseSquare/Linear state to `original`
 	// too, so RestoreOriginal can't re-assert a stale IS bit (which makes ProcessLight re-inflate the radius).
 	ApplyLPFalloffFlags(original.data, lpFlagSet);
+	// LP TES bits mirror the JSON flags, not the shared LIGH form; keep the baseline in step so the untouched light reads clean.
+	original.tesFlags = current.tesFlags;
 }
 
 void LightEditor::ApplyLPFalloffFlags(LLFCommon::RuntimeLightDataExt& data, const std::set<std::string>& lpFlagSet)

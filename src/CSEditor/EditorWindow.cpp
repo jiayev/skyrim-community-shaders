@@ -21,6 +21,7 @@
 #include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "Menu/Icons/helpers/WeatherTypeIcons.h"
 #include "PaletteWindow.h"
+#include "SaveManager.h"
 #include "SceneManager/ScenePresetExport.h"
 #include "SceneManager/SceneSettingsManager.h"
 #include "SceneManager/SceneSettingsUI.h"
@@ -55,6 +56,36 @@ namespace
 	constexpr float kHelpNoteWrapFontScale = 30.0f;
 	/// Slack when matching dock node edges, which are sums of split sizes and drift by float error.
 	constexpr float kDockEdgeTolerance = 1.0f;
+	/// Time for the hide/show widgets fade to run end to end.
+	constexpr float kWidgetsFadeSeconds = 0.15f;
+
+	/** @brief Scales ImGui alpha by fade while alive; below 1 it also hides the mouse from windows drawn in scope. */
+	class WidgetFadeScope
+	{
+	public:
+		explicit WidgetFadeScope(float fade) :
+			context(*ImGui::GetCurrentContext()),
+			hoveredWindow(context.HoveredWindow),
+			hoveredWindowUnderMoving(context.HoveredWindowUnderMovingWindow)
+		{
+			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * fade);
+			if (fade < 1.0f)
+				context.HoveredWindow = context.HoveredWindowUnderMovingWindow = nullptr;
+		}
+		~WidgetFadeScope()
+		{
+			context.HoveredWindow = hoveredWindow;
+			context.HoveredWindowUnderMovingWindow = hoveredWindowUnderMoving;
+			ImGui::PopStyleVar();
+		}
+		WidgetFadeScope(const WidgetFadeScope&) = delete;
+		WidgetFadeScope& operator=(const WidgetFadeScope&) = delete;
+
+	private:
+		ImGuiContext& context;
+		ImGuiWindow* hoveredWindow;
+		ImGuiWindow* hoveredWindowUnderMoving;
+	};
 
 	Util::ConfirmationPopup deleteSceneChangesConfirmation;
 
@@ -778,13 +809,21 @@ void EditorWindow::ShowViewportWindow()
 
 void EditorWindow::ShowWidgetWindow()
 {
-	// Global shortcut for closing focused widget (Ctrl+W)
-	if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_W, false)) {
-		if (lastFocusedWidget && lastFocusedWidget->IsOpen()) {
+	const auto& io = ImGui::GetIO();
+	if (io.KeyCtrl && !io.WantTextInput && lastFocusedWidget && lastFocusedWidget->IsOpen()) {
+		// Ctrl+W closes the focused widget; Ctrl+R discards its unsaved changes.
+		if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
 			lastFocusedWidget->SetOpen(false);
 			lastFocusedWidget = nullptr;
+		} else if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+			DiscardWidgetChanges(*lastFocusedWidget);
 		}
 	}
+
+	ForEachWidget([this](Widget& widget) {
+		if (widget.IsOpen())
+			undoHistory.Watch(MakeUndoTarget(widget));
+	});
 
 	// Draw all open widgets using WidgetFactory template
 	for (auto* collection : GetWidgetCollections())
@@ -798,6 +837,68 @@ void EditorWindow::ShowWidgetWindow()
 	}
 }
 
+void EditorWindow::DrawEditorWindows(float scale, float actionBarBottom)
+{
+	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	auto width = ImGui::GetIO().DisplaySize.x;
+	auto height = ImGui::GetIO().DisplaySize.y;
+	const float availableWidth = width - pad * 3.0f;  // left pad + gap + right pad
+	const float availableHeight = (height - actionBarBottom - pad * 2.0f) * 0.85f;
+	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+	// Browser gets up to half the available width, capped so ultrawide gives extra to viewport
+	const float maxBrowserWidth = 960.0f * scale;
+	const float browserWidth = std::min(availableWidth * 0.5f, maxBrowserWidth);
+	const float viewportWidth = availableWidth - browserWidth;
+	ImGui::SetNextWindowSize(ImVec2(browserWidth, availableHeight), layoutCond);
+	ImGui::SetNextWindowPos(ImVec2(pad, actionBarBottom + pad), layoutCond);
+	ShowObjectsWindow();
+
+	if (IsViewportActive()) {
+		// Size viewport height to match game aspect ratio so the preview fits snugly
+		const float aspectRatio = width / height;
+		const ImVec2 borderInsets = GetViewportBorderInsets();
+		const float imageHeight = (viewportWidth - borderInsets.x * 2.0f) / aspectRatio;
+		const float chromeHeight = ImGui::GetFrameHeight() + borderInsets.x + borderInsets.y;
+		const float viewportHeight = imageHeight + chromeHeight;
+		ImGui::SetNextWindowSize(ImVec2(viewportWidth, viewportHeight), layoutCond);
+		ImGui::SetNextWindowPos(ImVec2(pad + browserWidth + pad, actionBarBottom + pad), layoutCond);
+		viewportBottomY = actionBarBottom + pad + viewportHeight;
+		ShowViewportWindow();
+	} else {
+		viewportBottomY = actionBarBottom + pad;
+	}
+
+	auto settingsWindowHeight = height * 0.25f;
+	auto settingsWindowWidth = width * 0.25f;
+	if (showSettingsWindow) {
+		ImGui::SetNextWindowSize(ImVec2(settingsWindowWidth, settingsWindowHeight), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowPos({ (width / 2.0f) - (settingsWindowWidth / 2.0f), (height / 2.0f) - (settingsWindowHeight / 2.0f) }, ImGuiCond_Appearing);
+		ShowSettingsWindow();
+	}
+
+	ShowWidgetWindow();
+
+	// Locations are not form widgets, so their windows are drawn alongside the widget pass.
+	SceneSettingsUI::DrawLocationWindows();
+
+	// Show palette window
+	PaletteWindow::GetSingleton()->Draw();
+
+	// Show weather picker window
+	WeatherPickerWindow::GetSingleton()->Draw();
+
+	// Optional weather debug window
+	CSEditor::DrawWeatherDebugWindow(&showWeatherDebug);
+
+	// OverlayRenderer draws Effects11Editor only while the CS Editor is closed, so the editor hosts it.
+	Effects11Editor::GetSingleton().Draw();
+
+	const bool featuresWasOpen = settings.showFeaturesWindow;
+	FeatureSettingsWindow::Draw(settings.showFeaturesWindow);
+	if (featuresWasOpen != settings.showFeaturesWindow)
+		Save();
+}
+
 void EditorWindow::RenderUI()
 {
 	// Apply editor UI scale
@@ -806,29 +907,33 @@ void EditorWindow::RenderUI()
 	ImGui::GetStyle().FontScaleMain = settings.editorUIScale;
 	const EditorChromeScope chrome;
 
-	if (IsViewportActive()) {
+	const float fadeStep = io.DeltaTime / kWidgetsFadeSeconds;
+	widgetsFade = std::clamp(widgetsFade + (widgetsHidden ? -fadeStep : fadeStep), 0.0f, 1.0f);
+
+	if (IsViewportActive() && widgetsFade > 0.0f) {
+		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * widgetsFade);
 		auto* backgroundDrawList = ImGui::GetBackgroundDrawList();
 		backgroundDrawList->AddRectFilled({ 0, 0 }, io.DisplaySize, ImGui::GetColorU32(ImGuiCol_ModalWindowDimBg));
 		backgroundDrawList->AddRectFilled(
 			{ 0, 0 }, io.DisplaySize,
 			ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, ThemeManager::Constants::EDITOR_VIEWPORT_BACKGROUND_DIM_ALPHA)));
+		ImGui::PopStyleVar();
 	}
 
 	// Global shortcuts yield to a focused text field so typing isn't hijacked.
 	if (!io.WantTextInput) {
-		// Check for Ctrl+Z to undo
-		if ((ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-			if (CanUndo()) {
-				PerformUndo();
-			}
-		}
+		// Ctrl+Z undoes; Ctrl+Y and Ctrl+Shift+Z redo.
+		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+			io.KeyShift ? PerformRedo() : PerformUndo();
+		else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false))
+			PerformRedo();
 
 		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
 			if (io.KeyShift) {
 				if (ScenePresetExport::CanExport())
 					ScenePresetExport::Open();
 			} else {
-				SaveAll();
+				SaveManager::SaveEditor(SaveManager::Trigger::User);
 			}
 		}
 	}
@@ -896,27 +1001,14 @@ void EditorWindow::RenderUI()
 
 			if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
 				if (MenuItemWithShortcutSubtext(T(TKEY("save"), "Save"), "Ctrl+S"))
-					SaveAll();
+					SaveManager::SaveEditor(SaveManager::Trigger::User);
 				Util::AddTooltip(T(TKEY("save_tooltip"),
 					"Saves your edited widgets and scene settings on this PC. To share them, use Export Preset."));
-
-				// Save individual widgets submenu
-				if (ImGui::BeginMenu(T(TKEY("save_open_widget"), "Save Widget"))) {
-					bool hasOpen = false;
-					for (auto* collection : GetWidgetCollections())
-						hasOpen = WidgetFactory::DrawSaveWidgetMenuItems(*collection, hasOpen);
-
-					if (currentCellLightingWidget && currentCellLightingWidget->IsOpen()) {
-						hasOpen = true;
-						if (ImGui::MenuItem(currentCellLightingWidget->GetEditorID().c_str()))
-							currentCellLightingWidget->Save();
-					}
-
-					if (!hasOpen)
-						ImGui::TextDisabled("%s", T(TKEY("no_open_widgets"), "No open widgets"));
-
-					ImGui::EndMenu();
-				}
+				if (ImGui::MenuItem(T(TKEY("discard_unsaved"), "Discard Unsaved Widget Changes"), nullptr, false, HasUnsavedChanges()))
+					DiscardAllWidgetChanges();
+				Util::AddTooltip(T(TKEY("discard_unsaved_tooltip"),
+									 "Puts every widget with unsaved changes back to its saved file. Undo (Ctrl+Z) brings the changes back."),
+					Util::kTooltipWhenDisabled);
 
 				ImGui::Separator();
 
@@ -1044,10 +1136,12 @@ void EditorWindow::RenderUI()
 			if (ImGui::BeginMenu(T(TKEY("help"), "Help"))) {
 				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("keyboard_shortcuts"), "Keyboard Shortcuts:"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_f"), "Ctrl+F: Focus search"));
-				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save local WIP"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save every CS editor change"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_shift_s"), "Ctrl+Shift+S: Export preset"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_w"), "Ctrl+W: Close focused widget"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_r"), "Ctrl+R: Discard the focused widget's unsaved changes"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_z"), "Ctrl+Z: Undo"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_y"), "Ctrl+Y or Ctrl+Shift+Z: Redo"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_enter"), "Enter: Open selected widget"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_esc"), "Esc: Close editor"));
 				ImGui::Separator();
@@ -1082,26 +1176,37 @@ void EditorWindow::RenderUI()
 
 			ImGui::SameLine();
 
-			// Undo: FA glyph (not theme PNG)
-			{
-				const bool canUndo = CanUndo();
+			// Undo and redo: FA glyphs (not theme PNGs)
+			const auto drawHistoryButton = [&](const char* id, const char* glyph, bool enabled, const std::string& tooltip, auto&& action) {
 				ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
 				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 				{
 					auto _style = Util::TransparentIconButtonStyle();
-					ImGui::InvisibleButton("##GlobalUndo", iconButtonSize);
+					ImGui::InvisibleButton(id, iconButtonSize);
 					const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-					if (ImGui::IsItemClicked() && canUndo)
-						PerformUndo();
-					ImVec4 undoCol = canUndo ? textColor : statusPalette.Disable;
-					if (!canUndo)
-						undoCol.w = 0.5f;
-					Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
-						Icons::FA(ICON_FA_UNDO), ImGui::GetColorU32(undoCol));
+					if (ImGui::IsItemClicked() && enabled)
+						action();
+					ImVec4 color = enabled ? textColor : statusPalette.Disable;
+					if (!enabled)
+						color.w = 0.5f;
+					Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(), Icons::FA(glyph), ImGui::GetColorU32(color));
 				}
 				ImGui::PopStyleVar(2);
-				Util::AddTooltip(canUndo ? I18n::GetSingleton()->Format(TKEY("undo_states"), { { "count", std::to_string(undoStack.size()) } }, "Undo (Ctrl+Z) - {count} states").c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
+				Util::AddTooltip(tooltip.c_str());
+			};
+			{
+				const bool canUndo = undoHistory.CanUndo();
+				drawHistoryButton("##GlobalUndo", ICON_FA_UNDO, canUndo,
+					canUndo ? I18n::GetSingleton()->Format(TKEY("undo_states"), { { "count", std::to_string(undoHistory.GetUndoCount()) } }, "Undo (Ctrl+Z) - {count} states") :
+							  T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"),
+					[this] { PerformUndo(); });
+				ImGui::SameLine(0.0f, style.ItemSpacing.x);
+				const bool canRedo = undoHistory.CanRedo();
+				drawHistoryButton("##GlobalRedo", ICON_FA_REDO, canRedo,
+					canRedo ? I18n::GetSingleton()->Format(TKEY("redo_states"), { { "count", std::to_string(undoHistory.GetRedoCount()) } }, "Redo (Ctrl+Y) - {count} states") :
+							  T(TKEY("redo_no_changes"), "Redo (Ctrl+Y) - Nothing to redo"),
+					[this] { PerformRedo(); });
 			}
 
 			// Export preset: the one on-screen entry to the universal export dialog. It covers every
@@ -1181,6 +1286,9 @@ void EditorWindow::RenderUI()
 			rightCursor -= iconSize;
 			const float xButtonX = rightCursor;
 
+			rightCursor -= itemSpacing + iconSize;
+			const float saveButtonX = rightCursor;
+
 			constexpr float kDividerThickness = 1.0f;
 			std::array<float, 2> dividerX{};
 			int dividerCount = 0;
@@ -1223,7 +1331,7 @@ void EditorWindow::RenderUI()
 			}
 
 			// Weather lock + name, and period title, centered in the header
-			const bool weatherLocked = IsWeatherLocked();
+			const bool weatherLocked = IsWeatherLockedByUser();
 			RE::TESWeather* statusWeather = GetLockedWeather();
 			if (!statusWeather) {
 				if (auto* sky = RE::Sky::GetSingleton())
@@ -1266,9 +1374,9 @@ void EditorWindow::RenderUI()
 				if (Util::LockStatusBadgeButton("##ActionBarWeatherLock", weatherLocked,
 						weatherLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"))) {
 					if (weatherLocked)
-						UnlockWeather();
+						ReleaseUserWeatherLock();
 					else if (statusWeather)
-						LockWeather(statusWeather);
+						LockWeatherForUser(statusWeather);
 				}
 				centerX += lockBadgeSize + weatherStatusGap;
 				if (ImGuiWindow* window = ImGui::GetCurrentWindow())
@@ -1288,6 +1396,12 @@ void EditorWindow::RenderUI()
 				ImGui::SetCursorScreenPos(ImVec2(posX, iconY));
 				return DrawToggleIconButton(id, glyph, isActive, activeColor, iconButtonSize, ImGui::GetColorU32(textColor));
 			};
+
+			// Sits right of the centered cluster so toggling never shifts the status text.
+			if (PlaceToggleIconButton("##ToggleWidgets", Icons::FA(widgetsHidden ? ICON_FA_ANGLE_DOWN : ICON_FA_ANGLE_UP), false,
+					centerClusterX + centerClusterW + itemSpacing, enabledColor))
+				widgetsHidden = !widgetsHidden;
+			Util::AddTooltip(widgetsHidden ? T(TKEY("show_widgets"), "Show Widgets") : T(TKEY("hide_widgets"), "Hide Widgets"));
 
 			{
 				bool isActive = previewMode == PreviewMode::FreeCamera || previewMode == PreviewMode::FreeCameraLocked;
@@ -1331,6 +1445,16 @@ void EditorWindow::RenderUI()
 				DrawTimeScaleSlider("##MenuBarTimeScaleSlider", calendar);
 			}
 
+			// Save: the editor's own save, red while any widget has unsaved changes.
+			{
+				const bool unsaved = HasUnsavedChanges();
+				ImGui::SetCursorScreenPos(ImVec2(saveButtonX, iconY));
+				if (DrawToggleIconButton("##ActionBarSave", Icons::FA(ICON_FA_SAVE), false, enabledColor, iconButtonSize,
+						ImGui::GetColorU32(unsaved ? Util::Colors::GetUnsaved() : textColor)))
+					SaveManager::SaveEditor(SaveManager::Trigger::User);
+				Util::AddTooltip(SaveManager::GetEditorSaveTooltip(unsaved));
+			}
+
 			// Close: white cross, no red fill
 			ImGui::SetCursorScreenPos(ImVec2(xButtonX, iconY));
 			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
@@ -1359,78 +1483,29 @@ void EditorWindow::RenderUI()
 	// Establish a viewport-wide DockSpace so all editor windows are snappable and dockable
 	dockSpaceId = ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
 
-	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
-	auto width = ImGui::GetIO().DisplaySize.x;
-	auto height = ImGui::GetIO().DisplaySize.y;
-	const float availableWidth = width - pad * 3.0f;  // left pad + gap + right pad
-	const float availableHeight = (height - actionBarBottom - pad * 2.0f) * 0.85f;
-	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-	// Browser gets up to half the available width, capped so ultrawide gives extra to viewport
-	const float maxBrowserWidth = 960.0f * scale;
-	const float browserWidth = std::min(availableWidth * 0.5f, maxBrowserWidth);
-	const float viewportWidth = availableWidth - browserWidth;
-	ImGui::SetNextWindowSize(ImVec2(browserWidth, availableHeight), layoutCond);
-	ImGui::SetNextWindowPos(ImVec2(pad, actionBarBottom + pad), layoutCond);
-	ShowObjectsWindow();
-
-	if (IsViewportActive()) {
-		// Size viewport height to match game aspect ratio so the preview fits snugly
-		const float aspectRatio = width / height;
-		const ImVec2 borderInsets = GetViewportBorderInsets();
-		const float imageHeight = (viewportWidth - borderInsets.x * 2.0f) / aspectRatio;
-		const float chromeHeight = ImGui::GetFrameHeight() + borderInsets.x + borderInsets.y;
-		const float viewportHeight = imageHeight + chromeHeight;
-		ImGui::SetNextWindowSize(ImVec2(viewportWidth, viewportHeight), layoutCond);
-		ImGui::SetNextWindowPos(ImVec2(pad + browserWidth + pad, actionBarBottom + pad), layoutCond);
-		viewportBottomY = actionBarBottom + pad + viewportHeight;
-		ShowViewportWindow();
-	} else {
-		viewportBottomY = actionBarBottom + pad;
+	if (widgetsFade > 0.0f) {
+		const WidgetFadeScope fadeScope(widgetsFade);
+		DrawEditorWindows(scale, actionBarBottom);
 	}
-
-	auto settingsWindowHeight = height * 0.25f;
-	auto settingsWindowWidth = width * 0.25f;
-	if (showSettingsWindow) {
-		ImGui::SetNextWindowSize(ImVec2(settingsWindowWidth, settingsWindowHeight), ImGuiCond_FirstUseEver);
-		ImGui::SetNextWindowPos({ (width / 2.0f) - (settingsWindowWidth / 2.0f), (height / 2.0f) - (settingsWindowHeight / 2.0f) }, ImGuiCond_Appearing);
-		ShowSettingsWindow();
-	}
-
-	ShowWidgetWindow();
-
-	// Locations are not form widgets, so their windows are drawn alongside the widget pass.
-	SceneSettingsUI::DrawLocationWindows();
-
-	// Show palette window
-	PaletteWindow::GetSingleton()->Draw();
-
-	// Show weather picker window
-	WeatherPickerWindow::GetSingleton()->Draw();
-
-	// Optional weather debug window
-	CSEditor::DrawWeatherDebugWindow(&showWeatherDebug);
 
 	ScenePresetExport::Draw();
 
-	// OverlayRenderer draws Effects11Editor only while the CS Editor is closed, so the editor hosts it.
-	Effects11Editor::GetSingleton().Draw();
-
-	const bool featuresWasOpen = settings.showFeaturesWindow;
-	FeatureSettingsWindow::Draw(settings.showFeaturesWindow);
-	if (featuresWasOpen != settings.showFeaturesWindow)
-		Save();
+	DrawToolPrompt();
 
 	if (deleteSceneChangesConfirmation.Draw()) {
 		if (auto* sceneManager = globals::sceneSettingsManager) {
 			// An export earlier this session left the mod layer holding what was on disk before it.
 			sceneManager->ReloadOverwrites();
-			sceneManager->ClearAllUserEntries();
+			undoHistory.Change(SceneSettingsUI::MakeUndoTarget(), [sceneManager] { sceneManager->ClearAllUserEntries(); });
 		}
 	}
 
 	if (resetLayout)
 		ResetWidgetTypeSizes();
 	resetLayout = false;
+
+	// Every target is drawn by now, so an interaction that ended this frame can be judged.
+	undoHistory.EndFrame();
 
 	// Render notifications on top of everything
 	RenderNotifications();
@@ -1457,31 +1532,26 @@ void EditorWindow::SetupResources()
 	WeatherPickerWindow::GetSingleton()->Load();
 	InvalidateJsonAttachmentCache();
 
-	// Populate all widget collections using WidgetFactory templates
-	WidgetFactory::PopulateWidgets<WeatherWidget, RE::TESWeather>(weatherWidgets);
-	WidgetFactory::PopulateWidgets<LightingTemplateWidget, RE::BGSLightingTemplate>(lightingTemplateWidgets);
-	WidgetFactory::PopulateWidgets<ImageSpaceWidget, RE::TESImageSpace>(imageSpaceWidgets);
-	WidgetFactory::PopulateWidgets<VolumetricLightingWidget, RE::BGSVolumetricLighting>(volumetricLightingWidgets);
-	WidgetFactory::PopulateWidgets<PrecipitationWidget, RE::BGSShaderParticleGeometryData>(precipitationWidgets);
-	WidgetFactory::PopulateWidgets<LensFlareWidget, RE::BGSLensFlare>(lensFlareWidgets);
-	WidgetFactory::PopulateWidgets<ReferenceEffectWidget, RE::BGSReferenceEffect>(referenceEffectWidgets);
-
-	// Cache simple form widgets for form picker performance
-	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets);
-	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets);
+	// Widgets load their saves as they are made, and saved form references resolve through the
+	// collections of the forms they name, so those are populated first.
+	Util::FormEditorIDIndex editorIDs;
+	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets, editorIDs);
+	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<ImageSpaceWidget, RE::TESImageSpace>(imageSpaceWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<VolumetricLightingWidget, RE::BGSVolumetricLighting>(volumetricLightingWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<PrecipitationWidget, RE::BGSShaderParticleGeometryData>(precipitationWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<LensFlareWidget, RE::BGSLensFlare>(lensFlareWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<ReferenceEffectWidget, RE::BGSReferenceEffect>(referenceEffectWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<LightingTemplateWidget, RE::BGSLightingTemplate>(lightingTemplateWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<WeatherWidget, RE::TESWeather>(weatherWidgets, editorIDs);
 }
 
 void EditorWindow::ReloadFormEdits(const FormEditSources::FormKeySet& keys)
 {
-	const auto reload = [&](Widget& widget) {
+	ForEachWidget([&](Widget& widget) {
 		if (keys.contains(widget.GetFormKey()))
 			widget.Load(false);
-	};
-	for (auto* collection : GetWidgetCollections())
-		for (auto& widget : *collection)
-			reload(*widget);
-	if (currentCellLightingWidget)
-		reload(*currentCellLightingWidget);
+	});
 	InvalidateJsonAttachmentCache();
 }
 
@@ -1501,7 +1571,29 @@ void EditorWindow::UpdateOpenState()
 	if (weatherLockedByOverlay && !IsWeatherLocked())
 		weatherLockedByOverlay = false;
 
+	// Closing would discard a tool's unwritten changes, so a user's close waits for an answer. A forced
+	// close (a loading screen) cannot wait, so it discards and says so.
+	if (!open && wasOpen && !std::exchange(skipToolPrompt, false)) {
+		const auto tools = GetExternalTools();
+		if (const auto found = std::ranges::find_if(tools, [](ExternalTool* tool) { return tool->HasUnwrittenChanges(); }); found != tools.end()) {
+			if (CanBeOpen()) {
+				open = true;
+				RequestToolPrompt(**found, ToolPromptReason::Close, [this] {
+					skipToolPrompt = true;
+					open = false;
+				});
+			} else {
+				const auto what = (*found)->DescribeChanges();
+				const std::string target = (*found)->GetTargetName();
+				ShowNotification(std::vformat(T(TKEY("tool_changes_discarded"), "{}: changes discarded, not written to {}"), std::make_format_args(what, target)),
+					Util::Colors::GetWarning(), kLongNotificationDuration);
+			}
+		}
+	}
+
 	if (open && !wasOpen) {
+		widgetsHidden = false;
+		widgetsFade = 1.0f;
 		HideGameMenus();
 		BackgroundBlur::SetCSEditorActive(IsViewportActive());
 		overlayWeatherLockPending = true;
@@ -1520,7 +1612,18 @@ void EditorWindow::UpdateOpenState()
 		if (weatherLockedByOverlay) {
 			UnlockWeather();
 			weatherLockedByOverlay = false;
+		} else if (auto* locked = GetLockedWeather(); locked && IsWeatherLocked()) {
+			const char* name = locked->GetFormEditorID();
+			const std::string weatherName = name && *name ? name : T(TKEY("unknown"), "Unknown");
+			ShowNotification(
+				std::vformat(T(TKEY("weather_still_locked"), "Weather is still locked: {}"), std::make_format_args(weatherName)),
+				Util::Colors::GetWarning(), kLongNotificationDuration);
 		}
+		delete tempTexture;
+		tempTexture = nullptr;
+		for (auto& widget : weatherWidgets)
+			if (auto* weatherWidget = dynamic_cast<WeatherWidget*>(widget.get()))
+				weatherWidget->cloudTextureCache.clear();
 	}
 
 	if (overlayWeatherLockPending)
@@ -1575,7 +1678,7 @@ void EditorWindow::Draw()
 						D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 						framebuffer.SRV->GetDesc(&srvDesc);
 
-						tempTexture = new Texture2D(texDesc);
+						tempTexture = new Texture2D(texDesc, "CSEditor::ViewportCopy");
 						tempTexture->CreateSRV(srvDesc);
 					}
 
@@ -1592,22 +1695,35 @@ void EditorWindow::Draw()
 	RenderUI();
 }
 
-void EditorWindow::SaveAll()
+void EditorWindow::SaveUnsavedWidgets()
 {
-	auto saveDirtyOrOpen = [](auto& widgets) {
-		for (auto& w : widgets)
-			if (w->IsOpen() || w->HasUnsavedChanges())
-				w->Save();
-	};
-	for (auto* collection : GetWidgetCollections())
-		saveDirtyOrOpen(*collection);
-	if (currentCellLightingWidget && (currentCellLightingWidget->IsOpen() || currentCellLightingWidget->HasUnsavedChanges()))
-		currentCellLightingWidget->Save();
+	ForEachWidget([](Widget& widget) {
+		if (widget.HasUnsavedChanges())
+			widget.Save();
+	});
+	anyWidgetUnsaved = false;
+	lastUnsavedScan = -kUnsavedScanInterval;
+}
 
-	if (auto* sceneManager = SceneSettingsManager::GetSingleton())
-		sceneManager->SaveAllUserSettings();
+bool EditorWindow::HasUnsavedChanges()
+{
+	// Scene Manager saves itself as it goes; it is unsaved only while an edit waits on that save.
+	if (auto* sceneManager = SceneSettingsManager::GetSingleton(); sceneManager && sceneManager->HasUnsavedChanges())
+		return true;
 
-	Save();
+	const double now = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0.0;
+	const bool fullPass = now - lastUnsavedScan >= kUnsavedScanInterval;
+	if (fullPass)
+		lastUnsavedScan = now;
+
+	bool found = false;
+	ForEachWidget([&](Widget& widget) {
+		if (!found && (fullPass || widget.IsOpen()))
+			found = widget.HasUnsavedChanges();
+	});
+	if (fullPass)
+		anyWidgetUnsaved = found;
+	return anyWidgetUnsaved || found;
 }
 
 void EditorWindow::SaveSettings()
@@ -1904,8 +2020,16 @@ namespace
 	/** @brief Forces the sky onto the locked weather, claiming the override slot so nothing lerps away from it. */
 	void ReapplyLock(RE::Sky* sky, RE::TESWeather* weather)
 	{
-		if (sky && weather)
-			Util::ForceWeather(sky, weather, true);
+		if (!sky || !weather)
+			return;
+
+		// ForceWeather resets the sky (sounds, region, flags); when the weather is already showing, only the override slot is missing.
+		if (sky->currentWeather == weather && !sky->lastWeather) {
+			sky->overrideWeather = weather;
+			sky->lastWeatherUpdate = sky->currentGameHour;  // Renews the override's expiry, as ForceWeather does.
+			return;
+		}
+		Util::ForceWeather(sky, weather, true);
 	}
 
 	void SetWeatherThunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride, bool accelerate)
@@ -2066,6 +2190,29 @@ void EditorWindow::LockWeather(RE::TESWeather* weather)
 	MaintainWeatherLock();
 
 	logger::info("Weather locked: {}", weather->GetFormEditorID() ? weather->GetFormEditorID() : "Unknown");
+}
+
+bool EditorWindow::IsWeatherLockedByUser() const
+{
+	return IsWeatherLocked() && !weatherLockedByOverlay;
+}
+
+void EditorWindow::LockWeatherForUser(RE::TESWeather* weather)
+{
+	LockWeather(weather);
+	if (IsWeatherLocked()) {
+		weatherLockedByOverlay = false;
+		overlayWeatherLockPending = false;
+	}
+}
+
+void EditorWindow::ReleaseUserWeatherLock()
+{
+	// The editor keeps weather locked while open, so hand the lock back to it rather than letting the sky drift.
+	if (open && IsWeatherLocked())
+		weatherLockedByOverlay = true;
+	else
+		UnlockWeather();
 }
 
 void EditorWindow::LockWeatherForOverlay()
@@ -2290,8 +2437,11 @@ namespace
 		// The first and last spans run to the frame edges rather than the grab travel limits.
 		auto stripX = [&](float hour) { return hour <= 0.0f ? frameMin.x : hour >= hourMax ? frameMax.x :
 			                                                                                 hourToX(hour); };
+		// Clip the full rounded frame to the strip so the bottom corners match the frame rounding.
 		auto fillSpan = [&](float startHour, float endHour, ImU32 color) {
-			drawList->AddRectFilled(ImVec2(stripX(startHour), frameMax.y - kPeriodStripHeight), ImVec2(stripX(endHour), frameMax.y), color);
+			drawList->PushClipRect(ImVec2(stripX(startHour), frameMax.y - kPeriodStripHeight), ImVec2(stripX(endHour), frameMax.y), true);
+			drawList->AddRectFilled(frameMin, frameMax, color, ImGui::GetStyle().FrameRounding);
+			drawList->PopClipRect();
 		};
 
 		for (std::size_t index = 0; index < segments.count; ++index) {
@@ -2383,7 +2533,11 @@ void EditorWindow::DrawTimeScaleSlider(const char* id, RE::Calendar* calendar)
 	if (ImGui::SliderFloat(id, &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
 			timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla Speed") : "%.1fx", ImGuiSliderFlags_Logarithmic))
 		calendar->timeScale->value = timeScaleSlider;
+	if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+		ResetTimeScale();
 	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T(TKEY("time_scale_tooltip"), "Adjust how fast time passes (vanilla: %.1fx). Right-click to reset."), kVanillaTimeScale);
 }
 
 void EditorWindow::DrawTimeControls()
@@ -2414,8 +2568,6 @@ void EditorWindow::DrawTimeControls()
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(sliderWidth);
 	DrawTimeScaleSlider("##TimeScale", calendar);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T(TKEY("time_scale_tooltip"), "Adjust how fast time passes (vanilla: %.1fx)"), kVanillaTimeScale);
 
 	ImGui::SameLine();
 	{
@@ -2588,53 +2740,57 @@ bool EditorWindow::ClosePopupOnEscape()
 	return true;
 }
 
-void EditorWindow::PushUndoState(Widget* widget)
+Widget* EditorWindow::FindWidget(const FormEditSources::FormKey& key)
 {
-	if (!widget)
-		return;
+	Widget* found = nullptr;
+	ForEachWidget([&](Widget& widget) {
+		if (!found && widget.GetFormKey() == key)
+			found = &widget;
+	});
+	return found;
+}
 
-	UndoState state;
-	state.widget = widget;
-	state.widgetId = widget->GetEditorID();
-	state.settings = widget->js;
-
-	undoStack.push_back(state);
-
-	if (undoStack.size() > maxUndoStates) {
-		undoStack.erase(undoStack.begin());
-	}
+UndoHistory::Target EditorWindow::MakeUndoTarget(const Widget& widget)
+{
+	const auto key = widget.GetFormKey();
+	UndoHistory::Target target{ .key = std::format("widget:{}/{}", key.first, key.second), .label = widget.GetEditorID() };
+	target.capture = [this, key]() -> UndoHistory::SnapshotPtr {
+		auto* found = FindWidget(key);
+		return found ? found->CaptureEdits() : nullptr;
+	};
+	target.restore = [this, key](const UndoHistory::Snapshot& snapshot) {
+		if (auto* found = FindWidget(key))
+			found->RestoreEdits(snapshot);
+	};
+	return target;
 }
 
 void EditorWindow::PerformUndo()
 {
-	if (undoStack.empty())
+	if (const auto label = undoHistory.Undo())
+		ShowNotification(std::vformat(T(TKEY("undone_changes_to"), "Undone changes to {}"), std::make_format_args(*label)),
+			Util::Colors::GetInfo(), 2.0f);
+}
+
+void EditorWindow::PerformRedo()
+{
+	if (const auto label = undoHistory.Redo())
+		ShowNotification(std::vformat(T(TKEY("redone_changes_to"), "Redone changes to {}"), std::make_format_args(*label)),
+			Util::Colors::GetInfo(), 2.0f);
+}
+
+void EditorWindow::DiscardWidgetChanges(Widget& widget)
+{
+	if (!widget.HasUnsavedChanges())
 		return;
+	undoHistory.Change(MakeUndoTarget(widget), [&] { widget.Load(false); });
+}
 
-	UndoState state = undoStack.back();
-	undoStack.pop_back();
-
-	if (!state.widget) {
-		for (auto* collection : GetWidgetCollections()) {
-			for (auto& w : *collection) {
-				if (w->GetEditorID() == state.widgetId) {
-					state.widget = w.get();
-					break;
-				}
-			}
-			if (state.widget)
-				break;
-		}
-	}
-
-	if (state.widget) {
-		state.widget->js = state.settings;
-		state.widget->LoadSettings();
-		state.widget->ApplyChanges();
-		ShowNotification(
-			std::vformat(T(TKEY("undone_changes_to"), "Undone changes to {}"), std::make_format_args(state.widgetId)),
-			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.InfoColor,
-			2.0f);
-	}
+void EditorWindow::DiscardAllWidgetChanges()
+{
+	ForEachWidget([this](Widget& widget) { DiscardWidgetChanges(widget); });
+	anyWidgetUnsaved = false;
+	lastUnsavedScan = -kUnsavedScanInterval;
 }
 
 void EditorWindow::ShowNotification(const std::string& message, const ImVec4& color, float duration)
@@ -2651,6 +2807,57 @@ void EditorWindow::ShowNotification(const std::string& message, const ImVec4& co
 	notif.startTime = static_cast<float>(ImGui::GetTime());
 	notif.duration = duration;
 	notifications.push_back(notif);
+}
+
+void EditorWindow::RequestToolPrompt(ExternalTool& tool, ToolPromptReason reason, std::function<void()> proceed)
+{
+	promptedTool = &tool;
+	toolPromptProceed = std::move(proceed);
+	const bool closing = reason == ToolPromptReason::Close;
+	const auto what = tool.DescribeChanges();
+	const std::string target = tool.GetTargetName();
+	toolPrompt.title = T(TKEY("tool_close_title"), "Unwritten Changes");
+	if (tool.CanWriteChanges()) {
+		toolPrompt.message = std::vformat(closing ? T(TKEY("tool_close_message"), "{}: changes not written to {}. Write them before closing?") :
+													T(TKEY("tool_switch_message"), "{}: changes not written to {}. Write them before switching?"),
+			std::make_format_args(what, target));
+		toolPrompt.confirmLabel = std::vformat(T(TKEY("tool_close_write"), "Write to {}"), std::make_format_args(target));
+		toolPrompt.primaryConfirm = true;
+		toolPrompt.focus = Util::ConfirmationPopup::Focus::Confirm;
+	} else {
+		toolPrompt.message = std::vformat(closing ? T(TKEY("tool_close_preview_message"), "{}: these edits are a preview and cannot be written to {}. Closing discards them.") :
+													T(TKEY("tool_switch_preview_message"), "{}: these edits are a preview and cannot be written to {}. Switching discards them."),
+			std::make_format_args(what, target));
+		toolPrompt.confirmLabel.clear();
+		toolPrompt.primaryConfirm = false;
+		toolPrompt.focus = Util::ConfirmationPopup::Focus::Cancel;
+	}
+	toolPrompt.alternateLabel = T(TKEY("tool_close_discard"), "Discard");
+	toolPrompt.cancelLabel = T(TKEY("cancel"), "Cancel");
+	toolPrompt.Request();
+}
+
+void EditorWindow::DrawToolPrompt()
+{
+	using Choice = Util::ConfirmationPopup::Choice;
+	switch (toolPrompt.DrawChoice()) {
+	case Choice::Confirm:
+		// A failed write leaves things as they were; the tool has already said why.
+		if (!promptedTool || !promptedTool->WriteChanges())
+			return;
+		break;
+	case Choice::Alternate:
+		if (promptedTool)
+			promptedTool->DiscardChanges();
+		break;
+	case Choice::Cancel:
+		toolPromptProceed = nullptr;
+		return;
+	default:
+		return;
+	}
+	if (auto proceed = std::exchange(toolPromptProceed, nullptr))
+		proceed();
 }
 
 void EditorWindow::RenderNotifications()

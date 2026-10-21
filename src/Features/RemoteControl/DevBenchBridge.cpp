@@ -731,7 +731,7 @@ namespace
 		if (action == "save") {
 			task->AddTask([state]() {
 				try {
-					state->Save(State::ConfigMode::USER);
+					state->Save();
 					logger::info("DevBenchBridge: settings(save) applied");
 				} catch (const std::exception& e) {
 					logger::error("DevBenchBridge: settings(save) failed: {}", e.what());
@@ -744,7 +744,7 @@ namespace
 		if (action == "load") {
 			task->AddTask([state]() {
 				try {
-					state->Load(State::ConfigMode::USER, /*allowReload=*/true);
+					state->Load(/*allowReload=*/true);
 					logger::info("DevBenchBridge: settings(load) applied");
 				} catch (const std::exception& e) {
 					logger::error("DevBenchBridge: settings(load) failed: {}", e.what());
@@ -769,7 +769,7 @@ namespace
 					}
 				}
 				try {
-					state->Save(State::ConfigMode::USER);
+					state->Save();
 					logger::info("DevBenchBridge: settings(reset) applied");
 				} catch (const std::exception& e) {
 					logger::error("DevBenchBridge: settings(reset) save failed: {}", e.what());

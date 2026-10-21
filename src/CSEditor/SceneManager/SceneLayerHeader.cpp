@@ -370,7 +370,7 @@ namespace
 		}
 	}
 
-	/** @brief Lets a preset author hand a feature Effects 11 replaces back to CS, saved to the active pack's manifest. */
+	/** @brief Lets the user hand a feature Effects 11 replaces back to CS, remembered for the active pack. */
 	void DrawE11Handoff(const std::string& featureShortName)
 	{
 		const auto& effects11 = globals::features::effects11;
@@ -383,7 +383,7 @@ namespace
 			UnifiedPresetCatalog::GetSingleton().SetSceneControl(*feature, handedOff);
 		Util::AddTooltip(T(TKEY("e11_handoff_tooltip"),
 			"Effects 11 replaces this feature. Turn on to drive it from its Community Shaders settings and scene layers instead. "
-			"Saved to the active preset, and written by Effects 11 exports."));
+			"Remembered for the active preset, and written by Effects 11 exports."));
 	}
 }
 

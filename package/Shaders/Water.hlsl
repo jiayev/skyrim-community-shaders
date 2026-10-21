@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT AND (LicenseRef-GPL-3.0-with-Modding-Exception WITH GPL-3.0-linking-source-exception)
+// Original code Copyright (c) 2022 Ilya Perapechka (MIT), modifications GPL-3.0 with Modding Exception (see EXCEPTIONS.md)
+
 #if defined(HORIZON_FIX)
 namespace HorizonFix
 {
@@ -16,10 +19,12 @@ namespace HorizonFix
 
 #if defined(UNDERWATERMASK)
 
+#	if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
 };
+#	endif
 
 struct VS_OUTPUT
 {
@@ -70,27 +75,37 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	define WATER
 
+#	if defined(SPECULAR) || defined(UNDERWATER)
+// WADING is undefined in pixel builds (read from the descriptor): `defined(WADING)` there is always false.
+#		define WADING_RT
+#		if defined(PSHADER)
+#			undef WADING
+#		endif
+#	endif
+
 #	include "Common/SharedData.hlsli"
 
+#	if defined(VSHADER)
 struct VS_INPUT
 {
-#	if defined(SPECULAR) || defined(UNDERWATER) || defined(STENCIL) || defined(SIMPLE)
+#		if defined(SPECULAR) || defined(UNDERWATER) || defined(STENCIL) || defined(SIMPLE)
 	float4 Position: POSITION0;
-#		if defined(NORMAL_TEXCOORD)
+#			if defined(NORMAL_TEXCOORD)
 	float2 TexCoord0: TEXCOORD0;
-#		endif
-#		if defined(VC)
+#			endif
+#			if defined(VC)
 	float4 Color: COLOR0;
+#			endif
 #		endif
-#	endif
 
-#	if defined(LOD)
+#		if defined(LOD)
 	float4 Position: POSITION0;
-#		if defined(VC)
+#			if defined(VC)
 	float4 Color: COLOR0;
+#			endif
 #		endif
-#	endif
 };
+#	endif
 
 struct VS_OUTPUT
 {
@@ -102,7 +117,7 @@ struct VS_OUTPUT
 	float4 WPosition: TEXCOORD0;
 	float4 TexCoord1: TEXCOORD1;
 	float4 TexCoord2: TEXCOORD2;
-#		if defined(WADING) || (defined(FLOWMAP) && (defined(REFRACTIONS) || defined(BLEND_NORMALS))) || (defined(VERTEX_ALPHA_DEPTH) && defined(VC)) || ((defined(SPECULAR) && NUM_SPECULAR_LIGHTS == 0) && defined(FLOWMAP) /*!defined(NORMAL_TEXCOORD) && !defined(BLEND_NORMALS) && !defined(VC)*/)
+#		if defined(WADING_RT) || defined(WADING) || (defined(FLOWMAP) && (defined(REFRACTIONS) || defined(BLEND_NORMALS))) || (defined(VERTEX_ALPHA_DEPTH) && defined(VC)) || ((defined(SPECULAR) && NUM_SPECULAR_LIGHTS == 0) && defined(FLOWMAP) /*!defined(NORMAL_TEXCOORD) && !defined(BLEND_NORMALS) && !defined(VC)*/)
 	float4 TexCoord3: TEXCOORD3;
 #		endif
 #		if defined(FLOWMAP)
@@ -238,6 +253,9 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.TexCoord1 = 0.0;
 	vsout.TexCoord2 = 0.0;
+#				if defined(WADING_RT)
+	vsout.TexCoord3 = 0.0;
+#				endif
 #				if defined(FLOWMAP)
 #					if !(((defined(SPECULAR) || NUM_SPECULAR_LIGHTS == 0) || (defined(UNDERWATER) && defined(REFRACTIONS))) && !defined(NORMAL_TEXCOORD))
 #						if defined(BLEND_NORMALS)
@@ -792,15 +810,22 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 		normalize(float3(0, 0, 1) + normalsAmplitude.xxx * normals1);
 #			endif
 
-#			if defined(WADING)
-#				if defined(FLOWMAP)
-	float2 displacementUv = input.TexCoord3.zw;
+#			if defined(WADING_RT) || defined(WADING)
+#				if defined(WADING_RT)
+	const bool isWading = Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Wading;
 #				else
-	float2 displacementUv = input.TexCoord3.xy;
+	const bool isWading = true;
 #				endif
-	float3 displacement = normalize(float3(normalsAmplitude.w * (-0.5 + DisplacementTex.Sample(DisplacementSampler, displacementUv).zw),
-		0.04));
-	finalNormal = lerp(displacement, finalNormal, displacement.z);
+	if (isWading) {
+#				if defined(FLOWMAP)
+		float2 displacementUv = input.TexCoord3.zw;
+#				else
+		float2 displacementUv = input.TexCoord3.xy;
+#				endif
+		float3 displacement = normalize(float3(normalsAmplitude.w * (-0.5 + DisplacementTex.Sample(DisplacementSampler, displacementUv).zw),
+			0.04));
+		finalNormal = lerp(displacement, finalNormal, displacement.z);
+	}
 #			endif
 
 #			if defined(WETNESS_EFFECTS)

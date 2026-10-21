@@ -13,8 +13,6 @@
 #define I18N_KEY_PREFIX "cs_editor."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Atmosphere, colorTimes)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::DirectionalColor, max, min)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::DALC, specular, fresnelPower, directional)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Cloud, cloudLayerSpeedY, cloudLayerSpeedX, color, cloudAlpha, enabled, texturePath)
 
 namespace
@@ -121,6 +119,12 @@ namespace
 		constexpr const char* kFogPower = "Fog_Power";
 		constexpr const char* kFogMax = "Fog_Max";
 	}
+
+	/** @brief The tooltip DrawInherited shows on a control taken from the parent weather; null when it is not. */
+	const char* ParentInheritedTooltip(bool inherited)
+	{
+		return inherited ? T(TKEY("inherited_from_parent_weather"), "Inherited from parent weather") : nullptr;
+	}
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Settings,
@@ -132,16 +136,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Settings,
 	atmosphereColors,
 	dalc,
 	clouds)
-
-WeatherWidget::~WeatherWidget()
-{
-	for (auto& [layerIndex, srv] : cloudTextureCache) {
-		if (srv) {
-			srv->Release();
-		}
-	}
-	cloudTextureCache.clear();
-}
 
 void WeatherWidget::DrawWidget()
 {
@@ -273,7 +267,7 @@ void WeatherWidget::DrawWidget()
 			ImGui::Separator();
 			auto* editorWindow = EditorWindow::GetSingleton();
 
-			bool hasParent = editorWindow->settings.enableInheritFromParent && HasParent();
+			const bool hasParent = InheritsFromParent();
 			WeatherWidget* parentWidget = hasParent ? GetParent() : nullptr;
 			const float todLabelOffset = (hasParent ? 120.0f : 100.0f) * scale;
 			const float formLabelOffset = (hasParent ? 170.0f : 150.0f) * scale;
@@ -319,11 +313,7 @@ void WeatherWidget::DrawWidget()
 				return inheritFlag;
 			};
 			auto drawTimeRecordSection = [&](const char* sectionLabel, int idOffset, const char* inheritPrefix, auto& recordRefs, auto& parentRefs, auto& widgets, const char* pickerId, const char* openTooltip) {
-				if (!anyTimeRecordMatches(sectionLabel))
-					return;
-				if (ShouldOpenSearchSection())
-					ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-				if (!ImGui::CollapsingHeader(sectionLabel, ImGuiTreeNodeFlags_DefaultOpen))
+				if (!anyTimeRecordMatches(sectionLabel) || !SearchHeader(sectionLabel))
 					return;
 				for (int i = 0; i < ColorTimes::kTotal; i++) {
 					std::string rowId = makeTimeRecordLabel(sectionLabel, i);
@@ -338,16 +328,12 @@ void WeatherWidget::DrawWidget()
 					const bool isInherited = drawInheritCheckbox(inheritKey, recordRefs[i], parentRefs[i]);
 					ImGui::Text("%s:", label.c_str());
 					ImGui::SameLine(todLabelOffset);
-					if (isInherited)
-						PushInheritedStyle();
-					if (WeatherUtils::DrawFormPickerCached(pickerId, recordRefs[i], widgets, false, true, pickerWidth)) {
+					if (DrawInherited(ParentInheritedTooltip(isInherited), [&] {
+							return WeatherUtils::DrawFormPickerCached(pickerId, recordRefs[i], widgets, false, true, pickerWidth);
+						})) {
 						pendingReinit = true;
 						if (isInherited)
 							settings.inheritFlags[inheritKey] = false;
-					}
-					if (isInherited) {
-						Util::AddTooltip(T(TKEY("inherited_from_parent_weather"), "Inherited from parent weather"));
-						PopInheritedStyle();
 					}
 					drawOpenButton(recordRefs[i], widgets, std::format("{}##{}", T(TKEY("open"), "Open"), i), openTooltip);
 
@@ -357,27 +343,19 @@ void WeatherWidget::DrawWidget()
 				}
 			};
 			auto drawSingleRecordSection = [&](const char* sectionLabel, const char* recordId, const char* inheritKey, const char* valueLabel, const char* pickerId, auto& recordRef, auto& parentRef, auto& widgets, const std::string& buttonId, const char* openTooltip) {
-				if (!MatchesSearch(recordId))
-					return;
-				if (ShouldOpenSearchSection())
-					ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-				if (!ImGui::CollapsingHeader(sectionLabel, ImGuiTreeNodeFlags_DefaultOpen))
+				if (!MatchesSearch(recordId) || !SearchHeader(sectionLabel))
 					return;
 				const bool recordHighlighted = pushRecordHighlight(recordId);
 
 				const bool isInherited = drawInheritCheckbox(inheritKey, recordRef, parentRef);
 				ImGui::Text("%s:", valueLabel);
 				ImGui::SameLine(formLabelOffset);
-				if (isInherited)
-					PushInheritedStyle();
-				if (WeatherUtils::DrawFormPickerCached(pickerId, recordRef, widgets, false, true, pickerWidth)) {
+				if (DrawInherited(ParentInheritedTooltip(isInherited), [&] {
+						return WeatherUtils::DrawFormPickerCached(pickerId, recordRef, widgets, false, true, pickerWidth);
+					})) {
 					pendingReinit = true;
 					if (isInherited)
 						settings.inheritFlags[inheritKey] = false;
-				}
-				if (isInherited) {
-					Util::AddTooltip(T(TKEY("inherited_from_parent_weather"), "Inherited from parent weather"));
-					PopInheritedStyle();
 				}
 				drawOpenButton(recordRef, widgets, buttonId, openTooltip);
 
@@ -458,17 +436,9 @@ void WeatherWidget::LoadSettings()
 					settings.fogProperties.size());
 			}
 
-			// Record form references (resolved by matching widget EditorID)
-			// Three cases: key missing -> vanilla, key present with "" -> explicit None (nullptr), key present with id -> lookup form
 			auto* editorWindow = EditorWindow::GetSingleton();
-			auto loadRef = [&]<typename T>(const std::string& key, const std::vector<std::unique_ptr<Widget>>& widgets, T* vanillaValue) -> T* {
-				if (!js.contains(key) || !js[key].is_string())
-					return vanillaValue;
-				const std::string id = js[key].get<std::string>();
-				if (id.empty())
-					return nullptr;
-				auto* f = WeatherUtils::FindFormByEditorID(id, widgets);
-				return f ? static_cast<T*>(f) : vanillaValue;
+			const auto loadRef = [&](const std::string& key, const auto& widgets, auto* vanillaValue) {
+				return WeatherUtils::ReadFormRef(js, key, widgets, vanillaValue);
 			};
 			for (size_t i = 0; i < ColorTimes::kTotal; i++) {
 				settings.imageSpaceRefs[i] = loadRef(std::format("imageSpaceRef_{}", i), editorWindow->imageSpaceWidgets, vanillaSettings.imageSpaceRefs[i]);
@@ -544,6 +514,11 @@ bool WeatherWidget::HasParent() const
 	return settings.parent != "None";
 }
 
+bool WeatherWidget::InheritsFromParent() const
+{
+	return EditorWindow::GetSingleton()->settings.enableInheritFromParent && HasParent();
+}
+
 void WeatherWidget::SetWeatherValues()
 {
 	std::map<std::string, int>& weatherProps = settings.weatherProperties;
@@ -599,23 +574,8 @@ void WeatherWidget::SetWeatherValues()
 		}
 	}
 
-	//DALC
-	for (size_t i = 0; i < ColorTimes::kTotal; i++) {
-		auto& dalc = weather->directionalAmbientLightingColors[i];
-		auto& settingsDalc = settings.dalc[i];
-		dalc.fresnelPower = settingsDalc.fresnelPower;
-
-		Float3ToColor(settingsDalc.specular, dalc.specular);
-
-		Float3ToColor(settingsDalc.directional[0].max, dalc.directional.x.max);
-		Float3ToColor(settingsDalc.directional[0].min, dalc.directional.x.min);
-
-		Float3ToColor(settingsDalc.directional[1].max, dalc.directional.y.max);
-		Float3ToColor(settingsDalc.directional[1].min, dalc.directional.y.min);
-
-		Float3ToColor(settingsDalc.directional[2].max, dalc.directional.z.max);
-		Float3ToColor(settingsDalc.directional[2].min, dalc.directional.z.min);
-	}
+	for (size_t i = 0; i < ColorTimes::kTotal; i++)
+		settings.dalc[i].Write(weather->directionalAmbientLightingColors[i]);
 
 	// Clouds
 	uint32_t disabledBits = 0;
@@ -756,23 +716,8 @@ void WeatherWidget::LoadWeatherValues()
 		}
 	}
 
-	// DALC
-	for (size_t i = 0; i < ColorTimes::kTotal; i++) {
-		auto& dalc = weather->directionalAmbientLightingColors[i];
-		auto& settingsDalc = settings.dalc[i];
-		settingsDalc.fresnelPower = dalc.fresnelPower;
-
-		ColorToFloat3(dalc.specular, settingsDalc.specular);
-
-		ColorToFloat3(dalc.directional.x.max, settingsDalc.directional[0].max);
-		ColorToFloat3(dalc.directional.x.min, settingsDalc.directional[0].min);
-
-		ColorToFloat3(dalc.directional.y.max, settingsDalc.directional[1].max);
-		ColorToFloat3(dalc.directional.y.min, settingsDalc.directional[1].min);
-
-		ColorToFloat3(dalc.directional.z.max, settingsDalc.directional[2].max);
-		ColorToFloat3(dalc.directional.z.min, settingsDalc.directional[2].min);
-	}
+	for (size_t i = 0; i < ColorTimes::kTotal; i++)
+		settings.dalc[i].Read(weather->directionalAmbientLightingColors[i]);
 
 	// Clouds
 	for (size_t i = 0; i < TESWeather::kTotalLayers; i++) {
@@ -803,8 +748,7 @@ void WeatherWidget::LoadWeatherValues()
 
 void WeatherWidget::DrawDALCSettings()
 {
-	auto editorWindow = EditorWindow::GetSingleton();
-	bool hasParent = editorWindow->settings.enableInheritFromParent && HasParent();
+	const bool hasParent = InheritsFromParent();
 	WeatherWidget* parentWidget = hasParent ? GetParent() : nullptr;
 
 	bool changed = false;
@@ -974,15 +918,12 @@ void WeatherWidget::DrawDALCSettings()
 
 		TOD::EndTODTable();
 	}
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(changed);
 }
 
 void WeatherWidget::DrawWeatherColorSettings()
 {
-	auto editorWindow = EditorWindow::GetSingleton();
-	bool hasParent = editorWindow->settings.enableInheritFromParent && HasParent();
+	const bool hasParent = InheritsFromParent();
 	WeatherWidget* parentWidget = hasParent ? GetParent() : nullptr;
 
 	bool changed = false;
@@ -1037,15 +978,12 @@ void WeatherWidget::DrawWeatherColorSettings()
 		TOD::EndTODTable();
 	}
 
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(changed);
 }
 
 void WeatherWidget::DrawCloudSettings()
 {
-	auto editorWindow = EditorWindow::GetSingleton();
-	bool hasParent = editorWindow->settings.enableInheritFromParent && HasParent();
+	const bool hasParent = InheritsFromParent();
 	WeatherWidget* parentWidget = hasParent ? GetParent() : nullptr;
 
 	bool changed = false;
@@ -1195,19 +1133,16 @@ void WeatherWidget::DrawCloudSettings()
 	}
 	if (enableChanged) {
 		// Apply enable/disable immediately for instant feedback, regardless of autoApplyChanges.
-		editorWindow->PushUndoState(this);
 		pendingReinit = true;
 		ApplyChanges();
-	} else if (changed && editorWindow->settings.autoApplyChanges) {
-		editorWindow->PushUndoState(this);
-		ApplyChanges();
+	} else {
+		AutoApply(changed);
 	}
 }
 
 void WeatherWidget::DrawFogSettings()
 {
-	auto editorWindow = EditorWindow::GetSingleton();
-	bool hasParent = editorWindow->settings.enableInheritFromParent && HasParent();
+	const bool hasParent = InheritsFromParent();
 	WeatherWidget* parentWidget = hasParent ? GetParent() : nullptr;
 
 	bool changed = false;
@@ -1251,23 +1186,15 @@ void WeatherWidget::DrawFogSettings()
 		ImGui::EndTable();
 	}
 
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(changed);
 }
 
 void WeatherWidget::DrawFogSlider(const char* id, float& prop, float min, float max, const char* fmt, bool& inheritRef, bool isInherited, bool& changed)
 {
 	ImGui::SetNextItemWidth(-1);
-	if (isInherited)
-		PushInheritedStyle();
-	if (WeatherUtils::DrawSliderFloat(id, prop, min, max, nullptr, fmt)) {
+	if (DrawInherited(ParentInheritedTooltip(isInherited), [&] { return WeatherUtils::DrawSliderFloat(id, prop, min, max, nullptr, fmt); })) {
 		changed = true;
 		inheritRef = false;
-	}
-	if (isInherited) {
-		Util::AddTooltip(T(TKEY("inherited_from_parent_weather"), "Inherited from parent weather"));
-		PopInheritedStyle();
 	}
 }
 
@@ -1328,8 +1255,7 @@ void WeatherWidget::DrawProperties(std::string category, std::map<std::string, i
 	ImGui::TextColored(WidgetUI::kCategoryHeaderColor, "%s", category.c_str());
 
 	bool changed = false;
-	auto* editorWindow = EditorWindow::GetSingleton();
-	bool hasParent = editorWindow->settings.enableInheritFromParent && HasParent();
+	const bool hasParent = InheritsFromParent();
 
 	ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * WidgetDefaults::kSliderWidthRatio);
 
@@ -1351,42 +1277,31 @@ void WeatherWidget::DrawProperties(std::string category, std::map<std::string, i
 				ImGui::SameLine();
 			}
 
-			if (isInherited)
-				PushInheritedStyle();
-			bool controlChanged = false;
-			switch (p.second) {
-			case 0:
-				controlChanged = WeatherUtils::DrawSliderInt8(controlLabel, settings.weatherProperties[p.first]);
-				break;
-			case 1:
-				controlChanged = WeatherUtils::DrawColorEdit(controlLabel, settings.weatherColors[p.first]);
-				break;
-			case 2:
-				controlChanged = WeatherUtils::DrawSliderUint8(controlLabel, settings.weatherProperties[p.first]);
-				break;
-			case 3:
-				controlChanged = WeatherUtils::DrawSliderFloat(controlLabel, settings.fogProperties[p.first]);
-				break;
-			default:
-				break;
-			}
+			const bool controlChanged = DrawInherited(ParentInheritedTooltip(isInherited), [&] {
+				switch (p.second) {
+				case 0:
+					return WeatherUtils::DrawSliderInt8(controlLabel, settings.weatherProperties[p.first]);
+				case 1:
+					return WeatherUtils::DrawColorEdit(controlLabel, settings.weatherColors[p.first]);
+				case 2:
+					return WeatherUtils::DrawSliderUint8(controlLabel, settings.weatherProperties[p.first]);
+				case 3:
+					return WeatherUtils::DrawSliderFloat(controlLabel, settings.fogProperties[p.first]);
+				default:
+					return false;
+				}
+			});
 			if (controlChanged) {
 				changed = true;
 				if (isInherited)
 					settings.inheritFlags[p.first] = false;
-			}
-			if (isInherited) {
-				Util::AddTooltip(T(TKEY("inherited_from_parent_weather"), "Inherited from parent weather"));
-				PopInheritedStyle();
 			}
 		});
 	}
 
 	ImGui::PopItemWidth();
 
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(changed);
 
 	ImGui::Separator();
 }
@@ -1582,8 +1497,7 @@ void WeatherWidget::InheritAllFromParent()
 
 	// Form references require a weather reinit to propagate
 	pendingReinit = true;
-	if (EditorWindow::GetSingleton()->settings.autoApplyChanges)
-		ApplyChanges();
+	AutoApply(true);
 
 	EditorWindow::GetSingleton()->ShowNotification(
 		std::format("Inherited all settings from {}", parentWidget->GetEditorID()),
@@ -1601,19 +1515,12 @@ void WeatherWidget::ApplyChanges()
 	PropagateToChildren();
 }
 
-void WeatherWidget::RevertChanges()
-{
-	settings = vanillaSettings;
-	pendingReinit = true;
-	ApplyChanges();
-}
-
 void WeatherWidget::Delete()
 {
 	Widget::Delete();
 }
 
-bool WeatherWidget::Settings::operator==(const Settings& o) const
+bool WeatherSettings::operator==(const WeatherSettings& o) const
 {
 	return parent == o.parent &&
 	       inheritFlags == o.inheritFlags &&
@@ -1627,11 +1534,6 @@ bool WeatherWidget::Settings::operator==(const Settings& o) const
 	       std::equal(std::begin(volumetricLightingRefs), std::end(volumetricLightingRefs), std::begin(o.volumetricLightingRefs)) &&
 	       precipitationData == o.precipitationData &&
 	       referenceEffect == o.referenceEffect;
-}
-
-bool WeatherWidget::HasUnsavedChanges() const
-{
-	return !(settings == originalSettings);
 }
 
 std::vector<Widget::SearchResult> WeatherWidget::CollectSearchableSettings() const
@@ -1721,8 +1623,8 @@ void WeatherWidget::NavigateToSearchResult(const SearchResult& result)
 
 ID3D11ShaderResourceView* WeatherWidget::GetCloudTexture(int layerIndex)
 {
-	if (cloudTextureCache.contains(layerIndex)) {
-		return cloudTextureCache[layerIndex];
+	if (auto it = cloudTextureCache.find(layerIndex); it != cloudTextureCache.end()) {
+		return it->second.get();
 	}
 
 	const auto& texturePath = settings.clouds[layerIndex].texturePath;
@@ -1738,7 +1640,7 @@ ID3D11ShaderResourceView* WeatherWidget::GetCloudTexture(int layerIndex)
 	ImVec2 textureSize;
 
 	if (Util::LoadDDSTextureFromFile(globals::d3d::device, resourcePath.c_str(), &srv, textureSize)) {
-		cloudTextureCache[layerIndex] = srv;
+		cloudTextureCache[layerIndex].attach(srv);
 		return srv;
 	}
 

@@ -78,6 +78,9 @@ struct PostProcessing : Feature
 	/// Settings initializers, so this and RestoreDefaultSettings need no defaults file.
 	void ApplyDefaultEnabledStates();
 
+	/** @brief Creates every sub-feature at its shipped defaults, without GPU resources. */
+	void BuildPipeline();
+
 	enum class FeaturePipelineIndex : size_t
 	{
 		DoF,

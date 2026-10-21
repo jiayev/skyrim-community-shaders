@@ -34,15 +34,6 @@ public:
 
 	static PresetManager& GetSingleton();
 
-	/** @return In-game / VFS path to the Effects11 presets library. */
-	std::filesystem::path GetPresetsRoot() const;
-
-	/** @return On-disk path under the CS mod root (for Explorer and create_directories). */
-	std::filesystem::path GetPresetsRealPath() const;
-
-	/** @brief Creates the on-disk presets library folder if missing. */
-	void EnsurePresetsFolderExists() const;
-
 	/** @brief Active preset's enbseries directory (library or Legacy). */
 	std::filesystem::path GetENBSeriesPath() const;
 	/** @brief Active preset's enbseries.ini path (library or Legacy). */
@@ -50,6 +41,11 @@ public:
 
 	/** @brief Rescans Legacy, library and unified pack folders and repairs an invalid active selection. */
 	void DiscoverPresets();
+	/**
+	 * @brief Lists Legacy first (invalid when not installed), then library presets and, when includeUnifiedPacks,
+	 *        unified packs' effects11 folders, sorted by name. Leaves the discovered list and the selection alone.
+	 */
+	std::vector<PresetInfo> ScanPresets(bool includeUnifiedPacks) const;
 	/** @brief Every preset found by the last DiscoverPresets. */
 	const std::vector<PresetInfo>& GetPresets() const { return presets; }
 
@@ -76,9 +72,6 @@ public:
 
 	/** @brief Reloads settings and weather and recompiles ENB FX for the active preset. */
 	void ReloadActive();
-
-	/** @brief Creates the presets root if needed and opens its real path in Explorer. */
-	bool OpenPresetsFolder() const;
 
 	/** @brief Library id for a unified pack's effects11 folder. */
 	static std::string MakeUnifiedPackPresetId(const std::string& packId);
@@ -117,7 +110,7 @@ private:
 	/** @brief Keeps a valid selection, else applies SelectDefaultPreset. */
 	void EnsureDefaultSelection();
 	/** @brief Adds each preset folder under a CommunityShaders subfolder, across the VFS and real mod roots. */
-	void ScanLibraryDirectory(const std::filesystem::path& relativePath, bool unifiedPacks);
+	static void ScanLibraryDirectory(const std::filesystem::path& relativePath, bool unifiedPacks, std::vector<PresetInfo>& out);
 
 	std::vector<PresetInfo> presets;
 	std::string activePresetId = kLegacyPresetId;

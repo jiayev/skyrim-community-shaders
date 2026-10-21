@@ -120,14 +120,12 @@ namespace
 		ImGui::TextUnformatted(TransitionLabel());
 		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 
-		// The global has no layer above it, so it is always set: emptying restores the default
-		// rather than clearing to nullopt, which the resolver could not use.
-		std::optional<float> seconds = a_manager.GetLocationTransitionSeconds();
+		// Emptying the field drops the user's value, handing it back to the preset or the default.
+		using TransitionControl = SceneSettingsManager::TransitionControl;
+		auto seconds = a_manager.GetUserTransitionControl(TransitionControl::LocationSeconds);
 		if (SceneTransitionField::Draw("##ScenePageTransition", seconds,
-				SceneSettingsManager::kDefaultLocationTransitionSeconds, true)) {
-			a_manager.SetLocationTransitionSeconds(
-				seconds.value_or(SceneSettingsManager::kDefaultLocationTransitionSeconds));
-		}
+				a_manager.GetTransitionControl(TransitionControl::LocationSeconds), true))
+			a_manager.SetTransitionControl(TransitionControl::LocationSeconds, seconds);
 		Util::AddTooltip(T(TKEY("scene_page_transition_tooltip"),
 			"Seconds every value on this page takes to ease in and out when the location changes.\n"
 			"A single setting can override this from its own transition field."));

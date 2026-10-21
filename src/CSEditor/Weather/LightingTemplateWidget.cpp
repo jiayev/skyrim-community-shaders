@@ -32,19 +32,9 @@ namespace
 		constexpr const char* kFogFar = "Fog Far";
 		constexpr const char* kFogPower = "Fog Power";
 		constexpr const char* kFogClamp = "Fog Clamp";
-		constexpr const char* kSpecular = "Specular";
-		constexpr const char* kFresnelPower = "Fresnel Power";
-		constexpr const char* kXPlus = "X+ (Right)";
-		constexpr const char* kXMinus = "X- (Left)";
-		constexpr const char* kYPlus = "Y+ (Front)";
-		constexpr const char* kYMinus = "Y- (Back)";
-		constexpr const char* kZPlus = "Z+ (Up)";
-		constexpr const char* kZMinus = "Z- (Down)";
 	}
 }
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LightingTemplateWidget::DirectionalColor, max, min)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LightingTemplateWidget::DALC, specular, fresnelPower, directional)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LightingTemplateWidget::Settings,
 	ambient,
 	directional,
@@ -108,13 +98,8 @@ void LightingTemplateWidget::DrawBasicSettings()
 {
 	bool changed = false;
 	auto drawMatchedHeader = [&](bool matches, const char* label, auto draw) {
-		if (!matches)
-			return;
-		if (ShouldOpenSearchSection())
-			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-		if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (matches && SearchHeader(label))
 			draw();
-		}
 	};
 
 	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kAmbientColor, LightingTemplateSetting::kDirectionalColor }), T(TKEY("ambient_directional"), "Ambient & Directional"), [&]() {
@@ -137,9 +122,7 @@ void LightingTemplateWidget::DrawBasicSettings()
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kClipDistance, settings.clipDist, 0.0f, 163840.0f);
 	});
 
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(changed);
 }
 
 void LightingTemplateWidget::DrawFogSettings()
@@ -170,35 +153,12 @@ void LightingTemplateWidget::DrawFogSettings()
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kFogClamp, settings.fogClamp, 0.0f, 1.0f);
 	});
 
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(changed);
 }
 
 void LightingTemplateWidget::DrawDALCSettings()
 {
-	bool changed = false;
-
-	if (MatchesAnySearch({ LightingTemplateSetting::kSpecular, LightingTemplateSetting::kFresnelPower })) {
-		ImGui::SeparatorText(T(TKEY("dalc_header"), "Directional Ambient Lighting (DALC)"));
-		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kSpecular, settings.dalc.specular);
-		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kFresnelPower, settings.dalc.fresnelPower, 0.0f, 10.0f);
-	}
-
-	if (MatchesAnySearch({ LightingTemplateSetting::kXPlus, LightingTemplateSetting::kXMinus, LightingTemplateSetting::kYPlus,
-			LightingTemplateSetting::kYMinus, LightingTemplateSetting::kZPlus, LightingTemplateSetting::kZMinus })) {
-		ImGui::SeparatorText(T(TKEY("directional_colors"), "Directional Colors"));
-		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kXPlus, settings.dalc.directional[0].max);
-		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kXMinus, settings.dalc.directional[0].min);
-		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kYPlus, settings.dalc.directional[1].max);
-		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kYMinus, settings.dalc.directional[1].min);
-		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kZPlus, settings.dalc.directional[2].max);
-		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kZMinus, settings.dalc.directional[2].min);
-	}
-
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(DrawDALCControls(*this, settings.dalc));
 }
 
 #undef I18N_KEY_PREFIX
@@ -208,16 +168,9 @@ void LightingTemplateWidget::ApplyChanges()
 	SetLightingTemplateValues();
 }
 
-void LightingTemplateWidget::RevertChanges()
-{
-	settings = vanillaSettings;
-	ApplyChanges();
-}
-
 void LightingTemplateWidget::SetLightingTemplateValues()
 {
 	auto& data = lightingTemplate->data;
-	auto& dalc = lightingTemplate->directionalAmbientLightingColors;
 
 	Float3ToColor(settings.ambient, data.ambient);
 	Float3ToColor(settings.directional, data.directional);
@@ -235,17 +188,7 @@ void LightingTemplateWidget::SetLightingTemplateValues()
 	data.lightFadeStart = settings.lightFadeStart;
 	data.lightFadeEnd = settings.lightFadeEnd;
 
-	dalc.fresnelPower = settings.dalc.fresnelPower;
-	Float3ToColor(settings.dalc.specular, dalc.specular);
-
-	Float3ToColor(settings.dalc.directional[0].max, dalc.directional.x.max);
-	Float3ToColor(settings.dalc.directional[0].min, dalc.directional.x.min);
-
-	Float3ToColor(settings.dalc.directional[1].max, dalc.directional.y.max);
-	Float3ToColor(settings.dalc.directional[1].min, dalc.directional.y.min);
-
-	Float3ToColor(settings.dalc.directional[2].max, dalc.directional.z.max);
-	Float3ToColor(settings.dalc.directional[2].min, dalc.directional.z.min);
+	settings.dalc.Write(lightingTemplate->directionalAmbientLightingColors);
 }
 
 void LightingTemplateWidget::LoadLightingTemplateValues()
@@ -254,7 +197,6 @@ void LightingTemplateWidget::LoadLightingTemplateValues()
 		return;
 
 	auto& data = lightingTemplate->data;
-	auto& dalc = lightingTemplate->directionalAmbientLightingColors;
 
 	ColorToFloat3(data.ambient, settings.ambient);
 	ColorToFloat3(data.directional, settings.directional);
@@ -272,17 +214,7 @@ void LightingTemplateWidget::LoadLightingTemplateValues()
 	settings.lightFadeStart = data.lightFadeStart;
 	settings.lightFadeEnd = data.lightFadeEnd;
 
-	settings.dalc.fresnelPower = dalc.fresnelPower;
-	ColorToFloat3(dalc.specular, settings.dalc.specular);
-
-	ColorToFloat3(dalc.directional.x.max, settings.dalc.directional[0].max);
-	ColorToFloat3(dalc.directional.x.min, settings.dalc.directional[0].min);
-
-	ColorToFloat3(dalc.directional.y.max, settings.dalc.directional[1].max);
-	ColorToFloat3(dalc.directional.y.min, settings.dalc.directional[1].min);
-
-	ColorToFloat3(dalc.directional.z.max, settings.dalc.directional[2].max);
-	ColorToFloat3(dalc.directional.z.min, settings.dalc.directional[2].min);
+	settings.dalc.Read(lightingTemplate->directionalAmbientLightingColors);
 }
 
 void LightingTemplateWidget::LoadFromGameSettings()
@@ -292,44 +224,22 @@ void LightingTemplateWidget::LoadFromGameSettings()
 
 void LightingTemplateWidget::LoadSettings()
 {
-	if (!js.empty()) {
-		settings = js;
-	} else {
-		settings = vanillaSettings;
-	}
-	originalSettings = settings;
-	ApplyChanges();
+	LoadSavedSettings();
 }
 
 void LightingTemplateWidget::SaveSettings()
 {
-	js = settings;
-	originalSettings = settings;
-}
-
-bool LightingTemplateWidget::HasUnsavedChanges() const
-{
-	return !(settings == originalSettings);
+	SaveSettingsToJson();
 }
 
 std::vector<Widget::SearchResult> LightingTemplateWidget::CollectSearchableSettings() const
 {
-	const std::vector<std::pair<std::string, std::vector<std::string>>> entries = {
+	return WeatherUtils::LabelSearchResults({
 		{ LightingTemplateTab::kBasic, { LightingTemplateSetting::kAmbientColor, LightingTemplateSetting::kDirectionalColor,
 										   LightingTemplateSetting::kDirectionalXY, LightingTemplateSetting::kDirectionalZ, LightingTemplateSetting::kDirectionalFade,
 										   LightingTemplateSetting::kLightFadeStart, LightingTemplateSetting::kLightFadeEnd, LightingTemplateSetting::kClipDistance } },
 		{ LightingTemplateTab::kFog, { LightingTemplateSetting::kFogColorNear, LightingTemplateSetting::kFogColorFar,
 										 LightingTemplateSetting::kFogNear, LightingTemplateSetting::kFogFar, LightingTemplateSetting::kFogPower, LightingTemplateSetting::kFogClamp } },
-		{ LightingTemplateTab::kDalc, { LightingTemplateSetting::kSpecular, LightingTemplateSetting::kFresnelPower,
-										  LightingTemplateSetting::kXPlus, LightingTemplateSetting::kXMinus, LightingTemplateSetting::kYPlus, LightingTemplateSetting::kYMinus,
-										  LightingTemplateSetting::kZPlus, LightingTemplateSetting::kZMinus } },
-	};
-
-	std::vector<SearchResult> results;
-	for (const auto& [tab, names] : entries) {
-		for (const auto& name : names) {
-			results.push_back({ WeatherUtils::TranslateControlLabel(name), tab, name });
-		}
-	}
-	return results;
+		{ LightingTemplateTab::kDalc, { DALCSetting::kAll.begin(), DALCSetting::kAll.end() } },
+	});
 }

@@ -15,6 +15,7 @@
 #define ICON_FA_TIMES "\xef\x80\x8d"	// U+f00d
 #define ICON_FA_HOME "\xef\x80\x95"	// U+f015
 #define ICON_FA_CLOCK "\xef\x80\x97"	// U+f017
+#define ICON_FA_REDO "\xef\x80\x9e"	// U+f01e
 #define ICON_FA_SYNC "\xef\x80\xa1"	// U+f021
 #define ICON_FA_LOCK "\xef\x80\xa3"	// U+f023
 #define ICON_FA_FLAG "\xef\x80\xa4"	// U+f024
@@ -38,6 +39,8 @@
 #define ICON_FA_LIGHTBULB "\xef\x83\xab"	// U+f0eb
 #define ICON_FA_ANGLE_LEFT "\xef\x84\x84"	// U+f104
 #define ICON_FA_ANGLE_RIGHT "\xef\x84\x85"	// U+f105
+#define ICON_FA_ANGLE_UP "\xef\x84\x86"	// U+f106
+#define ICON_FA_ANGLE_DOWN "\xef\x84\x87"	// U+f107
 #define ICON_FA_UNIVERSITY "\xef\x86\x9c"	// U+f19c
 #define ICON_FA_PAW "\xef\x86\xb0"	// U+f1b0
 #define ICON_FA_TREE "\xef\x86\xbb"	// U+f1bb
@@ -48,6 +51,7 @@
 #define ICON_FA_SYNC_ALT "\xef\x8b\xb1"	// U+f2f1
 #define ICON_FA_PEN "\xef\x8c\x84"	// U+f304
 #define ICON_FA_EXTERNAL_LINK_ALT "\xef\x8d\x9d"	// U+f35d
+#define ICON_FA_EXCHANGE_ALT "\xef\x8d\xa2"	// U+f362
 #define ICON_FA_MAP_MARKER_ALT "\xef\x8f\x85"	// U+f3c5
 #define ICON_FA_SHIELD_ALT "\xef\x8f\xad"	// U+f3ed
 #define ICON_FA_CHESS_ROOK "\xef\x91\x87"	// U+f447
@@ -118,6 +122,8 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf0eb, 0xf0eb,
 	0xf104, 0xf104,
 	0xf105, 0xf105,
+	0xf106, 0xf106,
+	0xf107, 0xf107,
 	0xf19c, 0xf19c,
 	0xf1b0, 0xf1b0,
 	0xf1bb, 0xf1bb,
@@ -129,6 +135,7 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf2f1, 0xf2f1,
 	0xf304, 0xf304,
 	0xf35d, 0xf35d,
+	0xf362, 0xf362,
 	0xf3c5, 0xf3c5,
 	0xf3ed, 0xf3ed,
 	0xf447, 0xf447,

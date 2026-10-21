@@ -5,6 +5,7 @@
 #include <cmath>
 #include <format>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <ranges>
 #include <unordered_map>
 #include <unordered_set>
@@ -20,6 +21,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "IconsFontAwesome5.h"
+#include "IconsLucide.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
 #include "Menu/IconLoader.h"
@@ -27,7 +29,6 @@
 #include "Menu/PresetsPageRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
-#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
@@ -61,6 +62,18 @@ namespace
 		rowMin = ImGui::GetItemRectMin();
 		rowMax = ImGui::GetItemRectMax();
 		return clicked;
+	}
+
+	/** @brief Glyph shown on the sort button for the given feature list sort mode. */
+	Icons::GlyphRef GetSortModeIcon(Menu::FeatureSortMode mode)
+	{
+		switch (mode) {
+		case Menu::FeatureSortMode::Alphabetical:
+			return Icons::LC(ICON_LC_ARROW_DOWN_A_Z);
+		case Menu::FeatureSortMode::Category:
+		default:  // unknown values from a hand-edited config fall back to categories
+			return Icons::LC(ICON_LC_LIST_SORT_ASCENDING);
+		}
 	}
 
 	const char* GetCoreMenuDisplayName(const char* canonicalName)
@@ -381,9 +394,12 @@ void FeatureListRenderer::RenderFeatureList(
 {
 	ImGui::BeginChild("Menus Table", ImVec2(0, -footerHeight));
 
-	// A search filter could hide the feature being navigated to
-	if (!pendingFeatureSelection.empty())
+	// A search filter or a collapsed category could hide the feature being navigated to
+	if (!pendingFeatureSelection.empty()) {
 		featureSearch.clear();
+		if (const auto* feature = Feature::FindFeatureByShortName(pendingFeatureSelection))
+			categoryExpansionStates[std::string(feature->GetCategory())] = true;
+	}
 
 	auto menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
 
@@ -398,7 +414,16 @@ void FeatureListRenderer::RenderFeatureList(
 		if (leftPanelVisible) {
 			ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
 			ImGui::TableSetupColumn("##MenuConfig", 0, 8);
+			const auto previousSort = globals::menu->GetSettings().FeatureListSort;
 			RenderLeftColumn(menuList, selectedMenu, featureSearch, categoryExpansionStates);
+			if (globals::menu->GetSettings().FeatureListSort != previousSort) {
+				// Sort order changed: rebuild now and re-select the same feature
+				std::string reselect;
+				if (const auto* feat = selectedMenu < menuList.size() ? std::get_if<Feature*>(&menuList[selectedMenu]) : nullptr)
+					reselect = (*feat)->GetShortName();
+				menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
+				HandlePendingFeatureSelection(reselect, menuList, selectedMenu);
+			}
 			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		} else {
 			// When left panel is hidden, right column takes full width
@@ -443,12 +468,34 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
 
-	// Group features by category
+	const auto isFavorite = [](Feature* feat) {
+		return feat->IsInMenu() && feat->loaded && globals::state->IsFeatureFavorite(feat->GetShortName());
+	};
+
+	// Favorites leave their category's count; recounted here since they change at runtime
+	Menu::categoryCounts.clear();
+	for (Feature* feat : featureList) {
+		if (feat->IsInMenu() && feat->loaded && !isFavorite(feat))
+			Menu::categoryCounts[std::string(feat->GetCategory())]++;
+	}
+
+	// Favorites are pinned above the rest, outside any category
+	std::ranges::copy(sortedFeatureList | std::ranges::views::filter(isFavorite), std::back_inserter(menuList));
+
+	// Group features by category, or list them flat when sorting alphabetically
+	const auto sortMode = globals::menu->GetSettings().FeatureListSort;
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
 	for (Feature* feat : sortedFeatureList) {
-		if (feat->IsInMenu() && feat->loaded) {
-			std::string category(feat->GetCategory());
-			categorizedFeatures[category].push_back(feat);
+		if (feat->IsInMenu() && feat->loaded && !isFavorite(feat)) {
+			switch (sortMode) {
+			case Menu::FeatureSortMode::Alphabetical:
+				menuList.push_back(feat);  // already in display-name order
+				break;
+			case Menu::FeatureSortMode::Category:
+			default:  // unknown values from a hand-edited config fall back to categories
+				categorizedFeatures[std::string(feat->GetCategory())].push_back(feat);
+				break;
+			}
 		}
 	}
 
@@ -572,9 +619,31 @@ void FeatureListRenderer::RenderLeftColumn(
 			}
 		}
 
-		// Add Features header and search bar after built-in settings
 		Util::DrawSectionHeader(T("menu.features.features", "Features"), true);
-		Util::DrawFeatureSearchBar(featureSearch);
+		const float sortButtonWidth = ImGui::GetFrameHeight();
+		Util::DrawFeatureSearchBar(featureSearch, ImGui::GetContentRegionAvail().x - sortButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+		const float searchBarHeight = ImGui::GetItemRectSize().y;
+		ImGui::SameLine();
+
+		{
+			auto style = Util::TransparentIconButtonStyle();
+			const auto sortIcon = GetSortModeIcon(globals::menu->GetSettings().FeatureListSort);
+			if (Icons::Button("###FeatureSort", sortIcon, ImVec2(sortButtonWidth, searchBarHeight)))
+				ImGui::OpenPopup("##FeatureSortPopup");
+		}
+
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T("menu.features.sort_tooltip", "Sort features"));
+
+		if (ImGui::BeginPopup("##FeatureSortPopup")) {
+			using enum Menu::FeatureSortMode;
+			auto& sort = globals::menu->GetSettings().FeatureListSort;
+			if (ImGui::MenuItem(T("menu.features.sort_by_category", "By Category"), nullptr, sort == Category))
+				sort = Category;
+			if (ImGui::MenuItem(T("menu.features.sort_alphabetically", "Alphabetical"), nullptr, sort == Alphabetical))
+				sort = Alphabetical;
+			ImGui::EndPopup();
+		}
 
 		// Then render the rest (features and categories, but skip already rendered core menus)
 		for (size_t i = 0; i < menuList.size(); i++) {
@@ -698,6 +767,19 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	}
 	ImGui::PopStyleColor();
 
+	// Favorites are pinned at the top of the list, marked by a pin attached to the name (its label ends in a space)
+	if (isLoaded && globals::state->IsFeatureFavorite(featureName)) {
+		ImGui::SameLine(0.0f, 0.0f);
+		const Icons::GlyphRef pin = Icons::LC(ICON_LC_PIN);
+		const float lineHeight = ImGui::GetTextLineHeight();
+		const ImVec2 origin = ImGui::GetCursorScreenPos();
+		Icons::FontGuard pinFont(pin, 0.75f);
+		const ImVec2 pinBox(ImGui::CalcTextSize(pin.utf8).x, lineHeight);
+		ImGui::Dummy(pinBox);
+		ImGui::GetWindowDrawList()->AddText(Icons::GetCenteredGlyphPos(origin, pinBox, pin.utf8),
+			ImGui::GetColorU32(Util::Colors::GetAccent()), pin.utf8);
+	}
+
 	// Display the stage marker behind the name, regardless of loaded state
 	if (const auto stage = feat->GetReleaseStage(); stage != Feature::ReleaseStage::Release) {
 		ImGui::SameLine();
@@ -783,31 +865,32 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	const auto featureName = feat->GetShortName();
 
 	// Calculate action button widths
-	float buttonPadding = ThemeManager::Constants::BUTTON_PADDING;
 	float buttonSpacing = ThemeManager::Constants::BUTTON_SPACING;
 
-	const char* overrideButtonText = T("menu.features.apply_override", "Apply Override");
 	float bootToggleWidth = ImGui::GetFrameHeight() * 1.6f;
-	float overrideButtonWidth = ImGui::CalcTextSize(overrideButtonText).x + buttonPadding;
+	float bootToggleHeight = ImGui::GetFrameHeight() * 0.8f;
 	const float exportIconSize = ImGui::GetFrameHeight();
-
-	// Check if override is available for this feature
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
 
 	const bool canExport = !isDisabled && isLoaded && FeatureOverwritesPanel::HasExportableSettings(feat);
 
-	const bool canRestore = !isDisabled && isLoaded;
+	// Restore clears the user's edits in the user config, which a feature with its own store does not use.
+	const bool canRestore = !isDisabled && isLoaded && feat->UsesMainSettings();
+
+	// Offered while the user's edits hide values one of their Baseline packs sets.
+	const bool canUseBaselines = canRestore && globals::state->HasEditsUnderBaselines(feat);
 
 	float totalButtonWidth = bootToggleWidth;
+	if (isLoaded) {
+		totalButtonWidth += exportIconSize + buttonSpacing;
+	}
 	if (canRestore) {
+		totalButtonWidth += exportIconSize + buttonSpacing;
+	}
+	if (canUseBaselines) {
 		totalButtonWidth += exportIconSize + buttonSpacing;
 	}
 	if (canExport) {
 		totalButtonWidth += exportIconSize + buttonSpacing;
-	}
-	if (!isDisabled && isLoaded && hasOverrides) {
-		totalButtonWidth += overrideButtonWidth + buttonSpacing;
 	}
 
 	// Get available content width for positioning
@@ -843,8 +926,18 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 		ImGui::SameLine();
 	}
 
+	if (canUseBaselines) {
+		RenderUseBaselinesButton(feat);
+		ImGui::SameLine();
+	}
+
 	if (canRestore) {
 		RenderRestoreDefaultsButton(feat);
+		ImGui::SameLine();
+	}
+
+	if (isLoaded) {
+		RenderFavoriteButton(feat);
 		ImGui::SameLine();
 	}
 
@@ -856,6 +949,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
 	}
 
+	// The toggle is shorter than the icon buttons; centre it on them instead of aligning the tops
+	ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (buttonHeight - bootToggleHeight) * 0.5f);
 	if (Util::FeatureToggle("##BootToggle", &bootEnabled)) {
 		bool newState = feat->ToggleAtBootSetting();
 		logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
@@ -875,29 +970,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 			bootEnabled ? T("menu.features.enabled", "Enabled") : T("menu.features.disabled", "Disabled"));
 	}
 
-	// Apply Override button (when feature has available overrides)
-	if (!isDisabled && isLoaded && hasOverrides) {
-		ImGui::SameLine();
-		if (ImGui::Button(overrideButtonText, { overrideButtonWidth, 0 })) {
-			// The override replaces the base settings, not the values the scene is applying over them.
-			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
-			if (feat->ReapplyOverrideSettings()) {
-				logger::info("Successfully reapplied override settings for {}", featureName);
-			} else {
-				logger::warn("Failed to reapply override settings for {}", featureName);
-			}
-		}
-
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"%s",
-				T("menu.features.restore_override_tooltip",
-					"Restores original override settings from mod files.\n"
-					"This will discard your customizations and revert to\n"
-					"the mod author's recommended settings."));
-		}
-	}
-
 	// Drawn after all header items so the modal cannot clobber their hover state.
 	if (canExport)
 		FeatureOverwritesPanel::DrawExport();
@@ -915,7 +987,25 @@ void FeatureListRenderer::DrawFeatureBody(Feature* feat)
 		// Sketches live only while their feature is on screen; the next Update drops any other.
 		globals::sceneSettingsManager->RetainSketches(feat->GetShortName());
 		SceneWidgetInterceptor::Scope baselineScope({ .feature = feat, .baseline = true });
+		// ImGui raises this flag for any value edit; set only inside the call, it means this feature changed.
+		// Buttons that rewrite settings (a reset, a preset) raise no flag, so a finished click is checked instead.
+		const auto& context = *ImGui::GetCurrentContext();
+		const bool editedBefore = context.ActiveIdHasBeenEditedThisFrame;
 		feat->DrawSettings();
+		if (feat->UsesMainSettings()) {
+			auto* state = globals::state;
+			const bool edited = !editedBefore && context.ActiveIdHasBeenEditedThisFrame;
+			if (edited)
+				state->MarkSettingsChanged();
+			if (Util::InteractionEndedThisFrame()) {
+				// Those buttons also bypass the interceptor, so the scene layer's cached apply document must
+				// take their values before anything replays it.
+				globals::sceneSettingsManager->CaptureExternalFeatureChanges(feat, true);
+				if (!edited)
+					state->CheckFeatureSettingsChanged(feat);
+				state->InvalidateEditsUnderBaselines(feat);
+			}
+		}
 	}
 	const ImVec2 cursorPosAfter = ImGui::GetCursorPos();
 
@@ -975,21 +1065,55 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	}
 }
 
+void FeatureListRenderer::DrawMenuVisitor::RenderUseBaselinesButton(Feature* feat)
+{
+	const float size = ImGui::GetFrameHeight();
+	{
+		auto style = Util::TransparentIconButtonStyle();
+		if (Icons::Button("##UseBaselines", Icons::FA(ICON_FA_LAYER_GROUP), ImVec2(size, size)))
+			globals::state->ClearFeatureEditsUnderBaselines(feat);
+	}
+
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("menu.features.use_baselines_tooltip",
+							  "Use Baseline preset values: your changes override settings your Baseline presets set. "
+							  "Click to drop those changes and use the presets' values. Your other changes stay."));
+	}
+}
+
 void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* feat)
 {
 	const float size = ImGui::GetFrameHeight();
 	{
 		auto style = Util::TransparentIconButtonStyle();
 		if (Icons::Button("##RestoreDefaults", Icons::FA(ICON_FA_UNDO), ImVec2(size, size))) {
-			feat->RestoreDefaultSettings();
-			// Rewrites the base values behind a live scene layer, so the resolver has to re-baseline or
-			// the next resolve restores the pre-default values.
-			globals::sceneSettingsManager->CaptureExternalFeatureChanges(feat);
+			// Clears the user's edits, so the feature shows what defaults and Baseline packs set.
+			globals::state->RestoreFeatureLayers(feat);
 		}
 	}
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T("menu.features.restore_defaults_tooltip", "Restore default settings for this feature"));
+		ImGui::Text("%s", T("menu.features.restore_defaults_tooltip", "Restore defaults: clears your edits to this feature, back to what defaults and your Baseline presets set"));
+	}
+}
+
+void FeatureListRenderer::DrawMenuVisitor::RenderFavoriteButton(Feature* feat)
+{
+	const auto featureName = feat->GetShortName();
+	const bool isFavorite = globals::state->IsFeatureFavorite(featureName);
+	const float size = ImGui::GetFrameHeight();
+	{
+		auto style = Util::TransparentIconButtonStyle();
+		if (Icons::Button("###Favorite", Icons::LC(isFavorite ? ICON_LC_PIN_OFF : ICON_LC_PIN), ImVec2(size, size))) {
+			globals::state->SetFeatureFavorite(featureName, !isFavorite);
+			globals::state->CheckCoreSettingsChanged();
+			// The favorites list shifts the menu; keep this feature selected
+			globals::menu->SelectFeatureMenu(featureName);
+		}
+	}
+
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", isFavorite ? T("menu.features.remove_from_favorites_tooltip", "Remove from favorites: moves this feature back into the main list") : T("menu.features.add_to_favorites_tooltip", "Add to favorites: lists this feature at the top of the feature list"));
 	}
 }
 

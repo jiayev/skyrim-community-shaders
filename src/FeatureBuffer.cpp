@@ -32,17 +32,17 @@
 template <class... Ts>
 std::pair<unsigned char*, size_t> _GetFeatureBufferData(Ts... feat_datas)
 {
-	size_t totalSize = (... + sizeof(Ts));
-	auto data = new unsigned char[totalSize];
+	constexpr size_t totalSize = (... + sizeof(Ts));
+	alignas(16) static thread_local std::array<unsigned char, totalSize> storage;
 	size_t offset = 0;
 
 	([&] {
-		*((decltype(feat_datas)*)(data + offset)) = feat_datas;
+		*reinterpret_cast<decltype(feat_datas)*>(storage.data() + offset) = feat_datas;
 		offset += sizeof(decltype(feat_datas));
 	}(),
 		...);
 
-	return std::make_pair(data, totalSize);
+	return std::make_pair(storage.data(), storage.size());
 }
 
 std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)

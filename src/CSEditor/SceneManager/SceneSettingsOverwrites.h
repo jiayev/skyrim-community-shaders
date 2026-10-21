@@ -39,24 +39,9 @@ namespace SceneSettingsOverwrites
 			visit(sceneDir, SceneSettingsManager::TimeOfDayPeriod::Count);
 	}
 
-	/// Discovered entries keep the exact file they came from; authored ones derive it from their period.
-	std::filesystem::path GetOverwriteFilePath(const std::filesystem::path& baseDir,
-		const SceneSettingsManager::SettingEntry& entry);
-
 	/** @brief "Label - Period" for a per-period overwrite, else just the label. */
 	std::string GetOverwriteTypeDescription(std::string_view sceneLabel,
 		SceneSettingsManager::TimeOfDayPeriod period);
-
-	/** @brief Overwrite file an interior or time-of-day entry belongs in. */
-	std::filesystem::path GetSceneOverwritePath(SceneSettingsManager::SceneType type,
-		const SceneSettingsManager::SettingEntry& entry);
-
-	/** @brief Overwrite file a weather entry belongs in, under the weather's SPID folder. */
-	std::filesystem::path GetWeatherOverwritePath(RE::FormID weatherId, const SceneSettingsManager::SettingEntry& entry);
-
-	/** @brief Overwrite file a location entry belongs in, under its form key folder. */
-	std::filesystem::path GetLocationOverwritePath(std::string_view formKey,
-		const SceneSettingsManager::SettingEntry& entry);
 
 	/** @brief Merges entries into a grouped overwrite file.
 	 *  @param allowedRoot Scene overwrite root the file must sit strictly inside; anything else is refused. */
@@ -64,11 +49,6 @@ namespace SceneSettingsOverwrites
 		const std::string& featureShortName, const std::string& overwriteType,
 		const std::vector<const SceneSettingsManager::SettingEntry*>& entries,
 		const json& extraMetadata = json::object());
-
-	/** @brief Removes a setting and its transition from an overwrite file, deleting the file once empty.
-	 *  @return True when nothing is left to remove, including a missing file. */
-	bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path,
-		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
 	/** @param timeOfDayEnabled Receives the file's `timeOfDayEnabled` metadata, if it has any. */
 	bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,

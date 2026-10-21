@@ -394,6 +394,13 @@ public:
 	/** @brief Deserializes cursor settings from named-key or legacy sparse-array format */
 	static void CursorFromJson(const json& cursorJson, ThemeSettings::CursorSettings& cursor);
 
+	/** @brief Order of the feature list in the left menu column. */
+	enum class FeatureSortMode : std::uint8_t
+	{
+		Category = 0,  // Grouped under collapsible category headers
+		Alphabetical   // Flat A-Z list
+	};
+
 	struct Settings
 	{
 		std::vector<InputCombo> ToggleKey = { InputCombo::Keyboard(VK_END) };
@@ -410,6 +417,7 @@ public:
 		bool FirstTimeSetupCompleted = false;                                                                                // Track if first-time setup has been completed
 		bool SkipClearCacheConfirmation = false;                                                                             // Skip confirmation dialog when clearing shader cache
 		bool AutoHideFeatureList = false;                                                                                    // Auto-hide left feature list panel, show on hover
+		FeatureSortMode FeatureListSort = FeatureSortMode::Category;                                                         // Feature list order in the left menu column
 		bool SkipConstraintWarning = false;                                                                                  // Skip popup when a setting change creates new constraints
 		bool RequireShiftToDock = true;                                                                                      // Require holding Shift to dock windows
 		bool UseResolutionFont = true;                                                                                       // When true, runtime font size scales with screen resolution; when persisted to theme files, FontSize is zeroed for backward compatibility
@@ -520,7 +528,6 @@ private:
 	void DrawAdvancedSettings();
 	void DrawDisableAtBootSettings();
 	void DrawFooter();
-	void BuildCategoryCounts();
 
 	void addToEventQueue(KeyEvent e);
 	void ProcessInputEventQueue();

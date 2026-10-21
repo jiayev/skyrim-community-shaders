@@ -55,16 +55,17 @@ namespace SceneSettingsInternal
 		       type == SceneSettingsManager::SceneType::TimeOfDay;
 	}
 
-	std::optional<float> ReadTimeOfDayTransitionHours(const json& object, std::string_view context)
+	std::optional<float> ReadTransitionControl(const json& object, const char* key,
+		SceneSettingsManager::TransitionControl control, std::string_view context)
 	{
-		const auto transitionIt = object.find(kTimeOfDayTransitionHoursKey);
+		const auto transitionIt = object.find(key);
 		if (transitionIt == object.end())
 			return std::nullopt;
-		if (const auto hours = transitionIt->is_number() ? transitionIt->get<float>() : -1.0f;
-			std::isfinite(hours) && hours >= 0.0f && hours <= SceneSettingsManager::kMaxTimeOfDayTransitionHours)
-			return hours;
-		logger::warn("[SceneSettings] {} in {} must be a number in 0..{}; ignoring it",
-			kTimeOfDayTransitionHoursKey, context, SceneSettingsManager::kMaxTimeOfDayTransitionHours);
+		const auto& spec = SceneSettingsManager::GetTransitionControlSpec(control);
+		if (const auto value = transitionIt->is_number() ? transitionIt->get<float>() : NAN;
+			std::isfinite(value) && value >= spec.min && value <= spec.max)
+			return value;
+		logger::warn("[SceneSettings] {} in {} must be a number in {}..{}; ignoring it", key, context, spec.min, spec.max);
 		return std::nullopt;
 	}
 
@@ -154,11 +155,6 @@ namespace SceneSettingsInternal
 		return true;
 	}
 
-	bool IsSceneMetadataKey(std::string_view key)
-	{
-		return !key.empty() && key.front() == '_';
-	}
-
 	bool ReadBoundedSceneJson(const std::filesystem::path& path, json& data)
 	{
 		auto document = Util::FileHelpers::ReadJsonObject(path, "scene settings", kMaxSceneOverwriteFileSize);
@@ -166,6 +162,34 @@ namespace SceneSettingsInternal
 			return false;
 		data = std::move(*document);
 		return true;
+	}
+
+	json& PrepareRawUserTarget(json& section, const std::string& canonicalKey,
+		const std::function<bool(const std::string&)>& namesTarget, bool replaceMalformedEntries,
+		const std::function<void(json&)>& dropAliasMetadata)
+	{
+		const auto resetMalformedEntries = [replaceMalformedEntries](json& rawConfig) {
+			if (!replaceMalformedEntries)
+				return;
+			if (auto entriesIt = rawConfig.find("entries"); entriesIt != rawConfig.end() && !entriesIt->is_array())
+				*entriesIt = json::array();
+		};
+		if (!section.is_object())
+			section = json::object();
+		if (replaceMalformedEntries) {
+			for (auto& [rawKey, rawConfig] : section.items()) {
+				if (!rawConfig.is_object() || !namesTarget(rawKey))
+					continue;
+				resetMalformedEntries(rawConfig);
+				if (dropAliasMetadata && rawKey != canonicalKey)
+					dropAliasMetadata(rawConfig);
+			}
+		}
+		auto& rawConfig = section[canonicalKey];
+		if (!rawConfig.is_object())
+			rawConfig = json::object();
+		resetMalformedEntries(rawConfig);
+		return rawConfig;
 	}
 
 	bool IsNumericValue(const json& value)
@@ -238,17 +262,6 @@ namespace SceneSettingsInternal
 	{
 		auto address = GetSceneSettingAddress(featureShortName, settingPath, settingKey);
 		return MatchesSceneSettingPolicy(address, SceneSettingsPolicy::kSettingBlacklist);
-	}
-
-	bool HasSceneOverwriteContent(const json& data)
-	{
-		if (!data.is_object())
-			return false;
-
-		for (const auto& [key, _] : data.items())
-			if (!IsSceneMetadataKey(key))
-				return true;
-		return false;
 	}
 
 	bool IsCompatibleSceneSettingValue(const json& featureValue, const json& value)
@@ -602,6 +615,16 @@ namespace SceneSettingsInternal
 		       entry.settingKey == settingKey;
 	}
 
+	bool HasEntryForPeriod(const std::vector<SceneSettingsManager::SettingEntry>& entries, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, SceneSettingsManager::TimeOfDayPeriod period,
+		std::optional<SceneSettingsManager::EntrySource> source)
+	{
+		return std::ranges::any_of(entries, [&](const SceneSettingsManager::SettingEntry& entry) {
+			return (!source || entry.source == *source) && entry.period == period &&
+			       IsSameSetting(entry, featureShortName, settingPath, settingKey);
+		});
+	}
+
 	std::string GetSettingLogName(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey)
 	{
@@ -659,11 +682,13 @@ namespace SceneSettingsInternal
 	void CollectOverwriteEntries(const json& data, const std::vector<std::string>& settingPath,
 		const std::function<void(const std::vector<std::string>&, const std::string&, const json&)>& callback)
 	{
-		if (!data.is_object())
+		// Far deeper than any catalog path, and a pack file nested past it would exhaust the stack.
+		constexpr size_t kMaxOverwriteNesting = 32;
+		if (!data.is_object() || settingPath.size() >= kMaxOverwriteNesting)
 			return;
 
 		for (const auto& [key, value] : data.items()) {
-			if (IsSceneMetadataKey(key))
+			if (Util::Settings::IsMetadataKey(key))
 				continue;
 			if (IsSceneSettingPrimitive(value)) {
 				callback(settingPath, key, value);

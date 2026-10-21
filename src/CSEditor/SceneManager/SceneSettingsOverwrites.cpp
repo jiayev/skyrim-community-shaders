@@ -55,14 +55,6 @@ namespace SceneSettingsOverwrites
 		           baseDir;
 	}
 
-	std::filesystem::path GetOverwriteFilePath(const std::filesystem::path& baseDir,
-		const SceneSettingsManager::SettingEntry& entry)
-	{
-		if (!entry.sourcePath.empty())
-			return entry.sourcePath;
-		return GetOverwriteDir(baseDir, entry.period) / entry.sourceFilename;
-	}
-
 	std::string GetOverwriteTypeDescription(std::string_view sceneLabel,
 		SceneSettingsManager::TimeOfDayPeriod period)
 	{
@@ -71,55 +63,37 @@ namespace SceneSettingsOverwrites
 		           std::string(sceneLabel);
 	}
 
-	std::filesystem::path GetSceneOverwritePath(SceneSettingsManager::SceneType type,
-		const SceneSettingsManager::SettingEntry& entry)
-	{
-		return GetOverwriteFilePath(SceneSettingsManager::GetOverwritesPath(type), entry);
-	}
-
-	std::filesystem::path GetWeatherOverwritePath(RE::FormID weatherId, const SceneSettingsManager::SettingEntry& entry)
-	{
-		return GetOverwriteFilePath(
-			SceneSettingsManager::GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId), entry);
-	}
-
-	std::filesystem::path GetLocationOverwritePath(std::string_view formKey,
-		const SceneSettingsManager::SettingEntry& entry)
-	{
-		return GetOverwriteFilePath(SceneSettingsManager::GetLocationOverwritesDir() / formKey, entry);
-	}
-
 	bool WriteGroupedOverwriteFile(const std::filesystem::path& allowedRoot, const std::filesystem::path& path,
 		const std::string& featureShortName, const std::string& overwriteType,
 		const std::vector<const SceneSettingsManager::SettingEntry*>& entries, const json& extraMetadata)
 	{
 		if (path.lexically_normal() == allowedRoot.lexically_normal() || !Util::IsPathWithinDirectory(allowedRoot, path)) {
-			logger::error("[SceneSettings] Refusing to write overwrite outside '{}': {}", allowedRoot.string(), path.string());
+			logger::error("[SceneSettings] Refusing to write overwrite outside '{}': {}", Util::PathHelpers::ToUtf8(allowedRoot), Util::PathHelpers::ToUtf8(path));
 			return false;
 		}
 
 		std::error_code ec;
 		const auto pathExists = std::filesystem::exists(path, ec);
 		if (ec) {
-			logger::error("[SceneSettings] WriteGroupedOverwriteFile: could not inspect '{}': {}", path.string(), ec.message());
+			logger::error("[SceneSettings] WriteGroupedOverwriteFile: could not inspect '{}': {}", Util::PathHelpers::ToUtf8(path), ec.message());
 			return false;
 		}
 
 		json data = json::object();
 		if (pathExists && !ReadBoundedSceneJson(path, data)) {
-			logger::error("[SceneSettings] Refusing to replace invalid overwrite file '{}'", path.string());
+			logger::error("[SceneSettings] Refusing to replace invalid overwrite file '{}'", Util::PathHelpers::ToUtf8(path));
 			return false;
 		}
 
 		if (auto featureIt = data.find(kFeatureKey); featureIt != data.end() &&
 													 (!featureIt->is_string() || featureIt->get<std::string>() != featureShortName)) {
-			logger::error("[SceneSettings] Refusing to relabel overwrite file '{}' from another feature", path.string());
+			logger::error("[SceneSettings] Refusing to relabel overwrite file '{}' from another feature", Util::PathHelpers::ToUtf8(path));
 			return false;
 		}
 		data[kFeatureKey] = featureShortName;
 		auto& metadata = data[kMetadataKey];
 		if (!metadata.is_null() && !metadata.is_object()) {
-			logger::error("[SceneSettings] Refusing to replace invalid metadata in overwrite file '{}'", path.string());
+			logger::error("[SceneSettings] Refusing to replace invalid metadata in overwrite file '{}'", Util::PathHelpers::ToUtf8(path));
 			return false;
 		}
 		if (metadata.is_null())
@@ -132,7 +106,7 @@ namespace SceneSettingsOverwrites
 		auto& entryTransitions = metadata[kMetadataEntryTransitionsKey];
 		if (!entryTransitions.is_null() && !entryTransitions.is_object()) {
 			logger::error("[SceneSettings] Refusing to replace invalid entry transition metadata in overwrite file '{}'",
-				path.string());
+				Util::PathHelpers::ToUtf8(path));
 			return false;
 		}
 		if (entryTransitions.is_null())
@@ -146,7 +120,7 @@ namespace SceneSettingsOverwrites
 			auto* node = GetOrCreateObjectAtPath(data, entry->settingPath);
 			if (!node) {
 				logger::error("[SceneSettings] Refusing to replace a non-object path in overwrite file '{}'",
-					path.string());
+					Util::PathHelpers::ToUtf8(path));
 				return false;
 			}
 			(*node)[entry->settingKey] = entry->value;
@@ -165,7 +139,7 @@ namespace SceneSettingsOverwrites
 			auto* transitionNode = GetOrCreateObjectAtPath(entryTransitions, entry->settingPath);
 			if (!transitionNode) {
 				logger::error("[SceneSettings] Refusing to replace a non-object transition path in overwrite file '{}'",
-					path.string());
+					Util::PathHelpers::ToUtf8(path));
 				return false;
 			}
 			(*transitionNode)[entry->settingKey] = *entry->transitionSeconds;
@@ -178,49 +152,6 @@ namespace SceneSettingsOverwrites
 		return Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "overwrite file");
 	}
 
-	bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path,
-		const std::vector<std::string>& settingPath, const std::string& settingKey)
-	{
-		if (path.empty())
-			return true;
-
-		std::error_code ec;
-		if (!std::filesystem::exists(path, ec))
-			return !ec;
-
-		// The read handle has to be closed before the rewrite below: Windows refuses to replace or
-		// delete a file that still has one open.
-		json data;
-		if (!ReadBoundedSceneJson(path, data)) {
-			logger::error("[SceneSettings] Could not read overwrite file '{}' for editing", path.string());
-			return false;
-		}
-
-		if (!RemoveObjectValueAtPath(data, settingPath, 0, settingKey)) {
-			logger::error("[SceneSettings] Overwrite setting '{}' was not found in '{}'",
-				settingKey, path.string());
-			return false;
-		}
-		if (auto metadataIt = data.find(kMetadataKey); metadataIt != data.end() && metadataIt->is_object()) {
-			for (const auto* key : { kMetadataEntryTransitionsKey, kMetadataEntryDeletionsKey }) {
-				if (auto field = metadataIt->find(key); field != metadataIt->end() && field->is_object()) {
-					RemoveObjectValueAtPath(*field, settingPath, 0, settingKey);
-					if (field->empty())
-						metadataIt->erase(field);
-				}
-			}
-		}
-		if (!HasSceneOverwriteContent(data)) {
-			auto removed = std::filesystem::remove(path, ec);
-			if (removed || !ec)
-				return true;
-			logger::error("[SceneSettings] Failed to delete overwrite file '{}': {}", path.string(), ec.message());
-			return false;
-		}
-
-		return Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "overwrite file");
-	}
-
 	bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,
 		SceneSettingsManager::SceneType allowedType, bool requireNumeric,
 		std::vector<SceneSettingsManager::SettingEntry>& outEntries, FeatureSettingsCache* featureSettingsCache,
@@ -228,7 +159,7 @@ namespace SceneSettingsOverwrites
 	{
 		json data;
 		if (!ReadBoundedSceneJson(filePath, data)) {
-			logger::warn("[SceneSettings] Overwrite '{}' is invalid or exceeds {} bytes", filePath.string(),
+			logger::warn("[SceneSettings] Overwrite '{}' is invalid or exceeds {} bytes", Util::PathHelpers::ToUtf8(filePath),
 				kMaxSceneOverwriteFileSize);
 			return false;
 		}
@@ -255,7 +186,7 @@ namespace SceneSettingsOverwrites
 				if (modeIt->is_boolean())
 					*timeOfDayEnabled = modeIt->get<bool>();
 				else
-					logger::warn("[SceneSettings] Overwrite '{}' {} metadata must be boolean", filePath.string(),
+					logger::warn("[SceneSettings] Overwrite '{}' {} metadata must be boolean", Util::PathHelpers::ToUtf8(filePath),
 						kTimeOfDayEnabledKey);
 			}
 			// Only the location layer transitions, so any other scene ignores the field.
@@ -264,14 +195,14 @@ namespace SceneSettingsOverwrites
 				if (transitionsIt->is_object())
 					entryTransitions = &*transitionsIt;
 				else
-					logger::warn("[SceneSettings] Overwrite '{}' has invalid {} metadata", filePath.string(),
+					logger::warn("[SceneSettings] Overwrite '{}' has invalid {} metadata", Util::PathHelpers::ToUtf8(filePath),
 						kMetadataEntryTransitionsKey);
 			}
 		}
 
 		std::string featureShortName = data.value(kFeatureKey, "");
 		if (featureShortName.empty()) {
-			auto stem = filePath.stem().string();
+			auto stem = Util::PathHelpers::ToUtf8(filePath.stem());
 			auto lastUnderscore = stem.rfind('_');
 			if (lastUnderscore != std::string::npos)
 				featureShortName = stem.substr(lastUnderscore + 1);
@@ -279,12 +210,12 @@ namespace SceneSettingsOverwrites
 
 		if (!Feature::FindFeatureByShortName(featureShortName)) {
 			logger::warn("[SceneSettings] Overwrite '{}' targets feature '{}', which is not loaded - skipping",
-				filePath.string(), featureShortName);
+				Util::PathHelpers::ToUtf8(filePath), featureShortName);
 			return false;
 		}
 		if (!SSM::IsFeatureAllowedForType(allowedType, featureShortName)) {
 			logger::warn("[SceneSettings] Overwrite '{}' feature '{}' is not allowed for {} - skipping",
-				filePath.string(), featureShortName, SSM::GetSceneTypeName(allowedType));
+				Util::PathHelpers::ToUtf8(filePath), featureShortName, SSM::GetSceneTypeName(allowedType));
 			return false;
 		}
 
@@ -310,7 +241,7 @@ namespace SceneSettingsOverwrites
 						entry.transitionSeconds = seconds;
 					else
 						logger::warn("[SceneSettings] Overwrite '{}' transition for {} must be a number in 0..{}",
-							filePath.string(), GetSettingLogName(featureShortName, settingPath, key),
+							Util::PathHelpers::ToUtf8(filePath), GetSettingLogName(featureShortName, settingPath, key),
 							SSM::kMaxLocationTransitionSeconds);
 				}
 			entry.featureShortName = featureShortName;
@@ -322,7 +253,7 @@ namespace SceneSettingsOverwrites
 			entry.value = std::move(parsedValue);
 			entry.originalValue = entry.value;
 			entry.source = SSM::EntrySource::Overwrite;
-			entry.sourceFilename = filePath.filename().string();
+			entry.sourceFilename = Util::PathHelpers::ToUtf8(filePath.filename());
 			entry.sourcePath = filePath;
 			outEntries.push_back(std::move(entry));
 			foundAny = true;

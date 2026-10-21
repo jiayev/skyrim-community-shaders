@@ -4,7 +4,7 @@
 
 struct Feature;
 
-/// Scene Manager section listing mod-provided feature overwrites and exporting settings as new ones.
+/// Scene Manager section listing the Baseline preset files in use and exporting settings into a pack.
 namespace FeatureOverwritesPanel
 {
 	/** @brief Draws the overwrite table, the export button, and their popups. */
@@ -14,10 +14,10 @@ namespace FeatureOverwritesPanel
 	void BeginExport(Feature* feature = nullptr);
 
 	/**
-	 * @brief Opens the export popup on an existing file, its settings ticked, so it can be edited.
-	 * @param name Mod name of an Overrides/ file, or the pack id when toPresetPack.
+	 * @brief Opens the export popup on an existing Baseline file, its settings ticked, so it can be edited.
+	 * @param packId The pack the file belongs to.
 	 */
-	void BeginExportInto(Feature* feature, const std::string& name, bool toPresetPack);
+	void BeginExportInto(Feature* feature, const std::string& packId);
 
 	/** @brief Draws the export popup while open; only the caller that opened it draws it. */
 	void DrawExport();

@@ -26,7 +26,10 @@ namespace Util::Climate
 {
 	DayHours GetDayHours(const RE::TESClimate& climate)
 	{
-		static RE::Setting* const daytimeColorExtension = FindSetting("fDaytimeColorExtension");
+		// Retried until found: a call before the game settings exist would otherwise pin the vanilla value.
+		static RE::Setting* daytimeColorExtension = nullptr;
+		if (!daytimeColorExtension)
+			daytimeColorExtension = FindSetting("fDaytimeColorExtension");
 
 		const auto& timing = climate.timing;
 		const float colorExtension = GetSettingFloat(daytimeColorExtension, VanillaDaytimeColorExtension);

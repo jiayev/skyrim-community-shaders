@@ -60,6 +60,7 @@ namespace SceneSettingsPolicy
 		{ "PostProcessing", "Color Grading and Tone Mapping", "currentTonemapper" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "tonemapParams" },
 		{ "PostProcessing", "Motion Blur", "VelocityScale" },
+		{ "ScreenSpaceGI", "EnableGI" },
 		{ "VolumetricLighting" },
 		{ "ViewAtmosphere" },
 	};

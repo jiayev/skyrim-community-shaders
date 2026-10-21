@@ -19,6 +19,7 @@ public:
 		ID3D11ShaderResourceView* texture; /**< @brief GPU texture for the icon image. */
 		const char* tooltip;               /**< @brief Tooltip text shown on hover. */
 		std::function<void()> callback;    /**< @brief Action invoked when the icon is clicked. */
+		bool unsaved = false;              /**< @brief Tints the icon as a save with unsaved changes. */
 	};
 
 	/**

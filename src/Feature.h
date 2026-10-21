@@ -248,12 +248,6 @@ public:
 	virtual bool ToggleAtBootSetting();
 
 	/**
-	 * @brief Reapplies override settings for this feature if available
-	 * @return True if overrides were found and applied, false otherwise
-	 */
-	virtual bool ReapplyOverrideSettings();
-
-	/**
 	 * Weather analysis configuration for features that want to provide weather analysis.
 	 * If sectionName is empty, the feature will not appear in weather analysis UI.
 	 * Features should populate this struct to opt-in to weather analysis display.

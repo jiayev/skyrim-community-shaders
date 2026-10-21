@@ -153,7 +153,7 @@ SceneSettingsManager::DebugSnapshot SceneSettingsManager::GetDebugSnapshot() con
 
 	snapshot.transitionTime = GetPauseAwareTime();
 	snapshot.lastTransitionTick = lastLocationTransitionTick;
-	snapshot.globalTransitionSeconds = locationTransitionSeconds;
+	snapshot.globalTransitionSeconds = GetTransitionControl(TransitionControl::LocationSeconds);
 	snapshot.transitionBatchesDirty = locationTransitionBatchesDirty;
 	snapshot.transitionBatchCount = locationTransitionBatches.size();
 	for (const auto& [address, transition] : activeLocationTransitions) {

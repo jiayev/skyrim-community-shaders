@@ -202,19 +202,6 @@ namespace
 		return ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 	}
 
-	/** @brief Draws text on one line, ellipsised past maxWidth; advances the cursor like ImGui::Text. */
-	void TextEllipsized(const char* text, float maxWidth)
-	{
-		const ImVec2 size = ImGui::CalcTextSize(text);
-		if (size.x <= maxWidth) {
-			ImGui::TextUnformatted(text);
-			return;
-		}
-		const ImVec2 pos = ImGui::GetCursorScreenPos();
-		ImGui::Dummy(ImVec2(maxWidth, size.y));
-		ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), pos, ImVec2(pos.x + maxWidth, pos.y + size.y), pos.x + maxWidth, text, nullptr, &size);
-	}
-
 	/** @brief Apply, open-folder, remove-baseline and disable buttons, then a line saying how the pack is active. */
 	void DrawPackActions(UnifiedPresetCatalog& catalog, const UnifiedPresetCatalog::PackInfo& pack)
 	{
@@ -254,7 +241,7 @@ namespace
 			if (ImGui::Button(removeLabel))
 				catalog.RemoveBaseline(pack.id);
 			Util::AddTooltip(T("menu.presets.remove_baseline_tooltip",
-				"Stops applying this pack's baseline settings on the next load. Values already in use are kept until you reset them."));
+				"Stops applying this pack's baseline settings. Its features go back to what defaults and your other Baseline packs set; your own edits are kept."));
 		}
 
 		if (packActive) {
@@ -274,24 +261,6 @@ namespace
 			ImGui::PopStyleColor();
 		}
 	}
-}
-
-bool PresetsPageRenderer::FilterChip(const char* label, bool selected)
-{
-	const auto& theme = globals::menu->GetTheme();
-	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
-	if (selected) {
-		ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.InfoColor);
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme.StatusPalette.InfoColor);
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
-	}
-
-	const bool clicked = ImGui::Button(label);
-	if (selected)
-		ImGui::PopStyleColor(4);
-	ImGui::PopStyleVar();
-	return clicked;
 }
 
 float PresetsPageRenderer::MeasureBackendBadgesWidth(bool hasE11, bool hasCSPresets, bool hasBaseline, bool compact)
@@ -333,14 +302,16 @@ void PresetsPageRenderer::RenderToolbar()
 	auto& catalog = UnifiedPresetCatalog::GetSingleton();
 	const float scale = Util::GetUIScale();
 
-	ImGui::SetNextItemWidth(220.0f * scale);
-	ImGui::InputTextWithHint("##PresetSearch", T("menu.presets.search", "Search presets..."), searchBuffer, IM_ARRAYSIZE(searchBuffer));
+	BrowserUI::SearchField("##PresetSearch", searchBuffer, IM_ARRAYSIZE(searchBuffer),
+		T("menu.presets.search", "Search presets..."), 220.0f * scale, true);
 
 	ImGui::SameLine();
 	using PresetType = UnifiedPresetCatalog::PresetType;
 	const auto typeChip = [](const char* label, std::optional<PresetType> type) {
-		if (FilterChip(label, typeFilter == type))
+		ImGui::PushID(type ? static_cast<int>(*type) : -1);
+		if (BrowserUI::FilterChip("##type", { label }, typeFilter == type))
 			typeFilter = type;
+		ImGui::PopID();
 	};
 	typeChip(T("menu.presets.filter_all", "All"), std::nullopt);
 	ImGui::SameLine();
@@ -369,20 +340,70 @@ void PresetsPageRenderer::RenderToolbar()
 			ImGui::SetTooltip("%s", T("menu.presets.open_folder_tooltip", "Open the unified Presets library folder in Explorer."));
 	}
 
-	// CS Editor: same toolbar row, pinned to the right edge.
-	{
-		const ImGuiStyle& style = ImGui::GetStyle();
-		const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
-		const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
-		const float buttonWidth = Icons::CalcGlyphSize(brush).x + style.ItemInnerSpacing.x +
-		                          ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
+	DrawOpenCSEditorButton("##PresetsOpenCSEditor");
+}
+
+void PresetsPageRenderer::DrawOpenCSEditorButton(const char* id)
+{
+	const char* title = T("menu.presets.open_cs_editor", "CS Editor");
+	const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
+	BrowserUI::RightAlign(Icons::MeasureLabeledButton(brush, title));
+	if (Icons::LabeledButton(id, brush, title))
+		CSEditor::OpenEditorWindow();
+	Util::AddTooltip(T("menu.presets.open_cs_editor_tooltip", "Open the CS Editor for weather, lighting, and scene editing."));
+}
+
+void PresetsPageRenderer::RenderBaselineOrder()
+{
+	auto& catalog = UnifiedPresetCatalog::GetSingleton();
+	const auto& ids = catalog.GetBaselinePackIds();
+	if (ids.size() < 2)
+		return;
+
+	const bool open = ImGui::CollapsingHeader(T("menu.presets.baseline_order", "Baseline Load Order"), ImGuiTreeNodeFlags_DefaultOpen);
+	Util::AddTooltip(T("menu.presets.baseline_order_tooltip",
+		"Enabled Baseline packs, highest priority first. A pack wins any setting it shares with the packs below it; your own edits still win over all of them."));
+	if (!open)
+		return;
+
+	// Highest priority first, like a datapack list. Moves apply after the loop so the list is not edited mid-draw.
+	std::string moveId;
+	bool moveRaise = false;
+	for (size_t row = 0; row < ids.size(); ++row) {
+		const auto& id = ids[ids.size() - 1 - row];
+		ImGui::PushID(id.c_str());
+
+		ImGui::BeginDisabled(row == 0);
+		if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
+			moveId = id;
+			moveRaise = true;
+		}
+		ImGui::EndDisabled();
+		ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+		ImGui::BeginDisabled(row + 1 == ids.size());
+		if (ImGui::ArrowButton("##down", ImGuiDir_Down)) {
+			moveId = id;
+			moveRaise = false;
+		}
+		ImGui::EndDisabled();
+
 		ImGui::SameLine();
-		if (const float avail = ImGui::GetContentRegionAvail().x; avail > buttonWidth)
-			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
-		if (Icons::LabeledButton("##PresetsOpenCSEditor", brush, csEditorTitle))
-			CSEditor::OpenEditorWindow();
-		Util::AddTooltip(T("menu.presets.open_cs_editor_tooltip", "Open the CS Editor for weather, lighting, and scene editing."));
+		const auto* pack = catalog.FindPack(id);
+		const std::string label = std::format("{}. {}", row + 1, pack && !pack->name.empty() ? pack->name : id);
+		if (ImGui::Selectable(label.c_str(), selectedPackId == id)) {
+			selectedPackId = id;
+			lightboxPackId.clear();
+			lightboxImageIndex = -1;
+			lightboxSuppressClose = false;
+		}
+
+		ImGui::PopID();
 	}
+	if (!moveId.empty())
+		catalog.MoveBaseline(moveId, moveRaise);
+
+	ImGui::Spacing();
+	ImGui::Separator();
 }
 
 void PresetsPageRenderer::RenderList(float width)
@@ -394,6 +415,7 @@ void PresetsPageRenderer::RenderList(float width)
 	const auto indices = catalog.Query(typeFilter, searchBuffer);
 
 	ImGui::BeginChild("##PresetList", ImVec2(width, 0), true);
+	RenderBaselineOrder();
 	{
 		MenuFonts::FontRoleGuard heading(Menu::FontRole::Subheading);
 		ImGui::TextUnformatted(T("menu.presets.installed", "Installed"));
@@ -470,7 +492,8 @@ void PresetsPageRenderer::RenderList(float width)
 				trailingWidth += statusGap + ImGui::CalcTextSize(activeLabel).x;
 			if (!pack.valid)
 				trailingWidth += statusGap + ImGui::CalcTextSize(invalidLabel).x;
-			TextEllipsized(pack.name.c_str(), std::max(textWidth - trailingWidth, ImGui::GetFontSize() * kMinRowNameFontSizes));
+			BrowserUI::EllipsizedText(pack.name.c_str(), std::max(textWidth - trailingWidth, ImGui::GetFontSize() * kMinRowNameFontSizes),
+				ImGui::GetStyleColorVec4(ImGuiCol_Text));
 
 			ImGui::SameLine(0.0f, rowInset);
 			DrawBackendBadges(pack.IsE11(), pack.IsCS(), pack.IsBaseline(), true);
@@ -500,11 +523,8 @@ void PresetsPageRenderer::RenderList(float width)
 				meta = T("menu.presets.source_cs", "CS Presets");
 			else if (pack.IsBaseline())
 				meta = T("menu.presets.source_baseline", "Baseline feature settings");
-			if (!meta.empty()) {
-				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-				TextEllipsized(meta.c_str(), textWidth);
-				ImGui::PopStyleColor();
-			}
+			if (!meta.empty())
+				BrowserUI::EllipsizedText(meta.c_str(), textWidth, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 			PresetCompatibility::DrawWarnings(compat, true);
 		}
 		ImGui::EndGroup();
@@ -616,7 +636,7 @@ void PresetsPageRenderer::RenderDetail()
 				if (!pack->nexusUrl.empty()) {
 					ImGui::SameLine(0.0f, style.ItemSpacing.x);
 					if (Icons::Button("##NexusLink", Icons::FA(ICON_FA_EXTERNAL_LINK_ALT)))
-						ShellExecuteA(NULL, "open", pack->nexusUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+						Util::FileHelpers::OpenWithShell(pack->nexusUrl);
 					Util::AddTooltip(T("menu.presets.nexus_link_tooltip", "Open this preset's Nexus Mods page."));
 				}
 				PresetCompatibility::DrawWarnings(pack->compat, false);
@@ -720,9 +740,7 @@ void PresetsPageRenderer::Open()
 
 float PresetsPageRenderer::MeasureOpenButton()
 {
-	const ImGuiStyle& style = ImGui::GetStyle();
-	return Icons::CalcGlyphSize(Icons::FA(ICON_FA_LAYER_GROUP)).x + style.ItemInnerSpacing.x +
-	       ImGui::CalcTextSize(T("menu.presets.open_presets", "Presets")).x + style.FramePadding.x * 2.0f;
+	return Icons::MeasureLabeledButton(Icons::FA(ICON_FA_LAYER_GROUP), T("menu.presets.open_presets", "Presets"));
 }
 
 void PresetsPageRenderer::DrawOpenButton(const char* id, const char* tooltip)

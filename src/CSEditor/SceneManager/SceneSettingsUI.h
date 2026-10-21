@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 
+#include "../UndoHistory.h"
 #include "RE/B/BSCoreTypes.h"  // RE::FormID
 #include "SceneSettingsManager.h"
 
@@ -78,4 +79,7 @@ namespace SceneSettingsUI
 	 * Call once per frame, including while the editor is closed, so the pause is always released.
 	 */
 	void SyncTimePause();
+
+	/** @brief The undo target for the user's scene settings, every context at once. */
+	UndoHistory::Target MakeUndoTarget();
 }

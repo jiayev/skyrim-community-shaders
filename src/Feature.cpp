@@ -52,7 +52,6 @@
 #include "Features/WetnessEffects.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
-#include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
 
 #include "State.h"
@@ -172,8 +171,18 @@ void Feature::Load(json& o_json)
 			try {
 				LoadSettings(o_json[GetName()]);
 			} catch (...) {
-				logger::warn("Invalid settings for {}, using default.", GetName());
+				// Plain defaults would be saved back as the user's edits, so the layered base is tried first.
+				logger::warn("Invalid settings for {}, using its defaults and Baseline packs.", GetName());
 				RestoreDefaultSettings();
+				if (const auto* base = globals::state->GetFeatureBase(GetName())) {
+					try {
+						auto baseSettings = *base;
+						LoadSettings(baseSettings);
+					} catch (...) {
+						logger::warn("Invalid Baseline settings for {}, using default.", GetName());
+						RestoreDefaultSettings();
+					}
+				}
 			}
 		} else {
 			logger::info("Loading default settings for {}", GetName());
@@ -324,49 +333,9 @@ bool Feature::ToggleAtBootSetting()
 	const std::string featureName = GetShortName();
 	auto disabled = state->IsFeatureDisabled(featureName);
 	state->SetFeatureDisabled(featureName, !disabled);
+	state->CheckCoreSettingsChanged();
 
 	return state->IsFeatureDisabled(featureName);  // Return the new state
-}
-
-bool Feature::ReapplyOverrideSettings()
-{
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	std::string featureName = GetShortName();
-
-	if (!overrideManager || !overrideManager->HasFeatureOverrides(featureName)) {
-		return false;
-	}
-
-	// Delete user override file to restore original override behavior
-	overrideManager->DeleteUserOverride(featureName);
-
-	// Get base settings and apply overrides fresh
-	json featureJson;
-	SaveSettings(featureJson);
-	json previousJson = featureJson;  // LoadSettings takes a non-const reference
-
-	// Apply overrides to the settings (without user customizations)
-	size_t appliedCount = overrideManager->ReapplyFeatureOverrides(featureName, featureJson);
-
-	if (appliedCount > 0) {
-		// Load the override settings back into the feature. A malformed override throws from
-		// LoadSettings, possibly after some fields were already applied, so restore the previous values.
-		try {
-			LoadSettings(featureJson);
-			return true;
-		} catch (const std::exception& e) {
-			logger::warn("Failed to reapply override settings for {}, keeping previous settings. Error: {}", featureName, e.what());
-			try {
-				LoadSettings(previousJson);
-			} catch (...) {
-				logger::warn("Failed to restore previous settings for {}, using default.", featureName);
-				RestoreDefaultSettings();
-			}
-			return false;
-		}
-	}
-
-	return false;
 }
 
 std::string Feature::GetDisplayCategory() const

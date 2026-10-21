@@ -13,6 +13,8 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
+#include "BaselineManager.h"
+#include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/Icons/helpers/IconFonts.h"
@@ -22,7 +24,7 @@
 #include "SceneSettingsUI.h"
 #include "SceneTransitionField.h"
 #include "SceneWidgetInterceptor.h"
-#include "SettingsOverrideManager.h"
+#include "State.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
@@ -429,24 +431,35 @@ namespace
 		return supplier;
 	}
 
-	/** @brief The value the last enabled feature override applying to a setting gives it, or null.
-	 *  Later overrides merge over earlier ones, so the last to hold the key is the one in effect. */
-	const json* FindFeatureOverrideValue(const SettingMetadata& a_setting)
+	/** @brief The value the last Baseline pack applying to a setting gives it, or null.
+	 *  Later packs merge over earlier ones, so the last to hold the key is the one in effect.
+	 *  @param a_packId Receives the pack supplying the value. */
+	const json* FindBaselineValue(const SettingMetadata& a_setting, std::string& a_packId)
 	{
-		auto* overrides = SettingsOverrideManager::GetSingleton();
+		auto* baselines = BaselineManager::GetSingleton();
 		const std::string featureShortName{ a_setting.featureShortName };
-		if (!overrides->IsEnabled() || !overrides->HasFeatureOverrides(featureShortName))
+		if (!baselines->HasFeatureFiles(featureShortName))
 			return nullptr;
 
-		const auto featureOverrides = overrides->GetFeatureOverrides(featureShortName);
-		for (auto info = featureOverrides.rbegin(); info != featureOverrides.rend(); ++info) {
-			// An override naming keys the feature lacks is never applied.
-			if (!(*info)->enabled || !(*info)->unknownKeys.empty())
+		const auto featureFiles = baselines->GetFeatureFiles(featureShortName);
+		for (auto info = featureFiles.rbegin(); info != featureFiles.rend(); ++info) {
+			// A file naming keys the feature lacks is never applied.
+			if (!(*info)->unknownKeys.empty())
 				continue;
-			if (const auto* value = SceneSettingsInternal::GetCatalogSerializedValue((*info)->overrideData, a_setting))
+			if (const auto* value = SceneSettingsInternal::GetCatalogSerializedValue((*info)->values, a_setting)) {
+				a_packId = (*info)->packId;
 				return value;
+			}
 		}
 		return nullptr;
+	}
+
+	/** @brief The setting's value in the layers beneath the user's edits: defaults with Baseline packs applied. */
+	const json* FindLayeredBaseValue(const SettingMetadata& a_setting)
+	{
+		auto* feature = Feature::FindFeatureByShortName(std::string{ a_setting.featureShortName });
+		const auto* base = feature ? globals::state->GetFeatureBase(feature->GetName()) : nullptr;
+		return base ? SceneSettingsInternal::GetCatalogSerializedValue(*base, a_setting) : nullptr;
 	}
 }
 
@@ -628,7 +641,7 @@ void SceneWidgetBinding::Guard::BindBaseline()
 		return;
 	}
 
-	baselineLayer = ResolveBaselineLayer();
+	baselineLayer = ResolveBaselineLayer(baselinePackId);
 	if ((baselineLayer == BaselineLayer::Scene || baselineLayer == BaselineLayer::Sketch) &&
 		(policy == GutterPolicy::Owner || ClaimGutter(value.data))) {
 		CaptureNextItemWidth();
@@ -642,8 +655,9 @@ void SceneWidgetBinding::Guard::BindBaseline()
 	}
 }
 
-SceneWidgetBinding::BaselineLayer SceneWidgetBinding::Guard::ResolveBaselineLayer() const
+SceneWidgetBinding::BaselineLayer SceneWidgetBinding::Guard::ResolveBaselineLayer(std::string& a_packId) const
 {
+	a_packId.clear();
 	auto* manager = SceneSettingsManager::GetSingleton();
 	const auto anyComponent = [&](auto&& a_predicate) { return std::ranges::any_of(components, a_predicate); };
 
@@ -654,24 +668,28 @@ SceneWidgetBinding::BaselineLayer SceneWidgetBinding::Guard::ResolveBaselineLaye
 		}))
 		return BaselineLayer::Scene;
 
-	bool overridden = false;
+	bool fromPack = false;
 	for (const auto& component : components) {
-		const auto* overrideValue = FindFeatureOverrideValue(*component.setting);
-		if (!overrideValue)
+		std::string packId;
+		const auto* packValue = FindBaselineValue(*component.setting, packId);
+		const auto* beneath = packValue ? packValue : FindLayeredBaseValue(*component.setting);
+		if (packValue && a_packId.empty())
+			a_packId = std::move(packId);
+		if (!beneath)
 			continue;
-		if (!SceneSettingsManager::AppliedValuesEqual(*overrideValue, ReadEditedValue(component)))
-			return BaselineLayer::OverrideEdited;
-		overridden = true;
+		if (!SceneSettingsManager::AppliedValuesEqual(*beneath, ReadEditedValue(component)))
+			return BaselineLayer::Edited;
+		fromPack |= packValue != nullptr;
 	}
-	return overridden ? BaselineLayer::Override : BaselineLayer::Base;
+	return fromPack ? BaselineLayer::Pack : BaselineLayer::Base;
 }
 
 std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveBaselineColor() const
 {
 	switch (baselineLayer) {
-	case BaselineLayer::Override:
+	case BaselineLayer::Pack:
 		return Util::Colors::GetWarning();
-	case BaselineLayer::OverrideEdited:
+	case BaselineLayer::Edited:
 	case BaselineLayer::Sketch:
 		return Util::Colors::GetSuccess();
 	case BaselineLayer::Scene:
@@ -681,14 +699,18 @@ std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveBaselineColor() const
 	}
 }
 
-const char* SceneWidgetBinding::Guard::ResolveBaselineTooltip() const
+std::string SceneWidgetBinding::Guard::ResolveBaselineTooltip() const
 {
 	switch (baselineLayer) {
-	case BaselineLayer::Override:
-		return T(TKEY("baseline_from_override"), "A feature override supplies this value.");
-	case BaselineLayer::OverrideEdited:
-		return T(TKEY("baseline_override_edited"),
-			"Edited away from the feature override's value. Save or export an override to keep it.");
+	case BaselineLayer::Pack:
+		return std::vformat(T(TKEY("baseline_from_named_pack"), "Baseline: {}. This preset supplies the value."),
+			std::make_format_args(baselinePackId));
+	case BaselineLayer::Edited:
+		if (baselinePackId.empty())
+			return T(TKEY("baseline_edited"), "Edited: your change from the default. Save Settings keeps it; Restore Defaults clears it.");
+		return std::vformat(T(TKEY("baseline_edited_over_pack"),
+								"Edited: your change over Baseline {}. Save Settings keeps it; Restore Defaults goes back to the preset."),
+			std::make_format_args(baselinePackId));
 	case BaselineLayer::Scene:
 		return T(TKEY("baseline_from_scene"),
 			"A Scene Manager preset supplies this value here. Editing sketches over it until you leave "
@@ -698,7 +720,7 @@ const char* SceneWidgetBinding::Guard::ResolveBaselineTooltip() const
 			"Sketched over the Scene Manager's value. It is kept as your base setting, but the scene's "
 			"value returns once you leave this feature or close the menu.");
 	default:
-		return nullptr;
+		return {};
 	}
 }
 
@@ -799,7 +821,7 @@ void SceneWidgetBinding::Guard::ResolveState()
 	if (!anyActive && !anyPaused) {
 		state = winningLayer == SceneSettingsManager::SettingLayer::Overwrite ? State::Overwritten : State::Absent;
 		// Nothing in this context holds the address, so a layer under this page may be driving it and
-		// the page has to say so. A tombstone here already suppressed everything below.
+		// the page has to say so.
 		if (winningLayer == SceneSettingsManager::SettingLayer::None)
 			lowerLayer = ResolveLowerLayer();
 	} else {
@@ -842,12 +864,9 @@ SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveLowerLayer(
 		switch (FoldContextLayer(lower, identity.featureShortName, identity, periods)) {
 		case SettingLayer::User:
 			return SettingLayer::User;
-		// A tombstone suppresses the layers under it and then supplies nothing itself, so this page
-		// is left free to author here.
-		case SettingLayer::Deleted:
-			return SettingLayer::None;
 		case SettingLayer::Overwrite:
 			return SettingLayer::Overwrite;
+		// A tombstone only takes the mod's value out of its own context, so the walk goes on beneath it.
 		default:
 			break;
 		}
@@ -859,12 +878,12 @@ SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveUpperLayer(
 {
 	const auto periods = CoveredPeriodMask();
 
-	// Highest first: the topmost supplier is the one that reaches the scene, and a tombstone up there
-	// suppresses everything beneath it, this page included.
+	// Highest first: the topmost supplier is the one that reaches the scene. A tombstone up there only
+	// empties its own context, so it outranks nothing.
 	const auto& upper = GetUpperContexts(contextId);
 	for (auto context = upper.rbegin(); context != upper.rend(); ++context)
 		if (const auto layer = FoldContextLayer(*context, identity.featureShortName, identity, periods);
-			layer != SettingLayer::None)
+			SuppliesValue(layer))
 			return layer;
 	return SettingLayer::None;
 }
@@ -937,11 +956,13 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 {
 	auto* manager = SceneSettingsManager::GetSingleton();
 
-	// AddContextSetting snapshots the feature member, so what the control showed before the call has
-	// to be in it, or the entry's original would be the value the scene resolved rather than its own.
+	// AddContextSetting may snapshot the feature as its base, so an edit an unbound widget already wrote
+	// into the member is undone for the call. A holding-bound widget never touched it.
 	ValueStorage live;
-	std::memcpy(live.bytes, value.data, valueSize);
-	std::memcpy(value.data, preCall.bytes, valueSize);
+	if (!boundToHolding) {
+		std::memcpy(live.bytes, value.data, valueSize);
+		std::memcpy(value.data, preCall.bytes, valueSize);
+	}
 
 	bool added = false;
 	ForEachCoveredSlot([&](const Component& a_component, int a_slot, const SceneContextId& a_slotContext) {
@@ -952,7 +973,8 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 		added = added || created.has_value();
 	});
 
-	std::memcpy(value.data, live.bytes, valueSize);
+	if (!boundToHolding)
+		std::memcpy(value.data, live.bytes, valueSize);
 
 	// Insertion renumbers the entries behind it, so nothing may reuse the indices resolved earlier.
 	if (added)
@@ -966,10 +988,6 @@ void SceneWidgetBinding::Guard::BindDisplayValue()
 	// write into it would be snapshotted as the feature's base. Edits reach the scene via the resolver.
 	boundToHolding = true;
 	StoreHoldingValue();
-	// Entry creation snapshots the member, so its baseline has to be what the control showed. A paused
-	// entry never creates one, and its preCall is still the value the scene is running.
-	if (state != State::Paused)
-		std::memcpy(preCall.bytes, holding.bytes, valueSize);
 }
 
 void SceneWidgetBinding::Guard::StoreHoldingValue()
@@ -994,13 +1012,10 @@ const json* SceneWidgetBinding::Guard::ResolveFallbackValue(const Component& a_c
 
 	const auto periods = CoveredPeriodMask();
 	for (const auto& lower : GetLowerContexts(contextId)) {
+		// A tombstone below only empties its own context, so the layers under it still supply.
 		const auto* supplier = FindSupplyingEntry(lower, setting, periods);
-		if (!supplier)
-			continue;
-		// A tombstone below suppresses everything under it, leaving the feature's base.
-		if (!supplier->deleted)
+		if (supplier && !supplier->deleted)
 			return &supplier->value;
-		break;
 	}
 	return manager->FindAppliedBaseline(setting);
 }
@@ -1387,7 +1402,7 @@ void SceneWidgetBinding::Guard::DrawTransitionSlot()
 	}
 
 	if (SceneTransitionField::Draw("##SceneTransition", seconds,
-			manager->GetLocationTransitionSeconds(), editable)) {
+			manager->GetTransitionControl(SceneSettingsManager::TransitionControl::LocationSeconds), editable)) {
 		// One call for every entry the control owns, so an aggregate lands as a single atomic edit.
 		manager->SetLocationEntryTransitionSeconds(
 			contextId.locationType, contextId.locationFormKey, owned, seconds);
@@ -1539,8 +1554,8 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 			for (const auto& component : components)
 				manager->RecordBaselineEdit(ComponentIdentity(component), ReadEditedValue(component));
 		}
-		if (const char* tooltip = ResolveBaselineTooltip())
-			Util::AddTooltip(tooltip, Util::kTooltipWhenDisabled);
+		if (const auto tooltip = ResolveBaselineTooltip(); !tooltip.empty())
+			Util::AddTooltip(tooltip.c_str(), Util::kTooltipWhenDisabled);
 		return a_changed;
 	}
 	// Both were greyed, so neither took input: no gutter to own and nothing to commit. Words are all a

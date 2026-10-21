@@ -72,54 +72,14 @@ namespace Util
 			return GetCommunityShaderPath() / "SettingsUser.json";
 		}
 
-		std::filesystem::path GetSettingsTestPath()
-		{
-			return GetCommunityShaderPath() / "SettingsTest.json";
-		}
-
-		std::filesystem::path GetSettingsDefaultPath()
-		{
-			return GetCommunityShaderPath() / "SettingsDefault.json";
-		}
-
-		std::filesystem::path GetSettingsThemePath()
-		{
-			return GetCommunityShaderPath() / "SettingsTheme.json";
-		}
-
 		std::filesystem::path GetThemesPath()
 		{
 			return GetCommunityShaderPath() / "Themes";
 		}
 
-		std::filesystem::path GetEffects11PresetsPath()
-		{
-			return GetCommunityShaderPath() / kEffects11PresetsSubdir;
-		}
-
-		std::filesystem::path GetUnifiedPresetsPath()
-		{
-			return GetCommunityShaderPath() / kUnifiedPresetsSubdir;
-		}
-
 		std::filesystem::path GetTranslationsPath()
 		{
 			return GetCommunityShaderPath() / "Translations";
-		}
-
-		std::filesystem::path GetOverridesPath()
-		{
-			return GetCommunityShaderPath() / "Overrides";
-		}
-
-		std::filesystem::path GetUserOverridesPath()
-		{
-			return GetOverridesPath() / "User";
-		}
-
-		std::filesystem::path GetAppliedOverridesPath()
-		{
-			return GetCommunityShaderPath() / "AppliedOverrides.json";
 		}
 
 		std::filesystem::path GetSceneSettingsPath()
@@ -185,14 +145,25 @@ namespace Util
 			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / "Themes";
 		}
 
+		namespace
+		{
+			/** @brief A CommunityShaders subfolder under the real mod root, or its in-game path when the root is unknown. */
+			std::filesystem::path GetCommunityShaderRealPath(const std::filesystem::path& relativePath)
+			{
+				const auto realRoot = GetRootRealPath();
+				return realRoot.empty() ? GetCommunityShaderPath() / relativePath :
+				                          realRoot / "SKSE" / "Plugins" / "CommunityShaders" / relativePath;
+			}
+		}
+
 		std::filesystem::path GetEffects11PresetsRealPath()
 		{
-			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / kEffects11PresetsSubdir;
+			return GetCommunityShaderRealPath(kEffects11PresetsSubdir);
 		}
 
 		std::filesystem::path GetUnifiedPresetsRealPath()
 		{
-			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / kUnifiedPresetsSubdir;
+			return GetCommunityShaderRealPath(kUnifiedPresetsSubdir);
 		}
 
 		std::vector<std::filesystem::path> GetCommunityShaderScanRoots(const std::filesystem::path& relativePath)
@@ -205,6 +176,23 @@ namespace Util
 					roots.push_back(std::move(realPath));
 			}
 			return roots;
+		}
+
+		std::string ToUtf8(const std::filesystem::path& path)
+		{
+			const auto text = path.u8string();
+			return { reinterpret_cast<const char*>(text.data()), text.size() };
+		}
+
+		std::string ToGenericUtf8(const std::filesystem::path& path)
+		{
+			const auto text = path.generic_u8string();
+			return { reinterpret_cast<const char*>(text.data()), text.size() };
+		}
+
+		std::filesystem::path FromUtf8(std::string_view text)
+		{
+			return std::u8string_view(reinterpret_cast<const char8_t*>(text.data()), text.size());
 		}
 
 		namespace
@@ -250,10 +238,11 @@ namespace Util
 		std::vector<std::filesystem::path> GetUnifiedPackPaths(const std::string& packId)
 		{
 			std::vector<std::filesystem::path> packPaths;
+			const auto packFolder = FromUtf8(packId);
 			for (const auto& root : GetCommunityShaderScanRoots(kUnifiedPresetsSubdir)) {
 				std::error_code ec;
-				if (std::filesystem::is_directory(root / packId, ec))
-					packPaths.push_back(root / packId);
+				if (std::filesystem::is_directory(root / packFolder, ec))
+					packPaths.push_back(root / packFolder);
 			}
 			return packPaths;
 		}
@@ -261,7 +250,7 @@ namespace Util
 		std::filesystem::path GetUnifiedPackPath(const std::string& packId)
 		{
 			const auto packPaths = GetUnifiedPackPaths(packId);
-			return packPaths.empty() ? GetCommunityShaderScanRoots(kUnifiedPresetsSubdir).front() / packId : packPaths.front();
+			return packPaths.empty() ? GetCommunityShaderScanRoots(kUnifiedPresetsSubdir).front() / FromUtf8(packId) : packPaths.front();
 		}
 
 		std::filesystem::path GetFeaturesRealPath()
@@ -339,8 +328,16 @@ namespace Util
 			std::error_code ec;
 			std::filesystem::create_directories(path, ec);
 			if (ec) {
-				logger::warn("Failed to create directory '{}': {}", path.string(), ec.message());
+				logger::warn("Failed to create directory '{}': {}", Util::PathHelpers::ToUtf8(path), ec.message());
 			}
+		}
+
+		bool OpenWithShell(const std::filesystem::path& path)
+		{
+			// ShellExecute returns a value above 32 on success.
+			constexpr intptr_t kShellExecuteSuccessThreshold = 32;
+			const auto result = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			return reinterpret_cast<intptr_t>(result) > kShellExecuteSuccessThreshold;
 		}
 
 		std::string SanitizeFileName(std::string name)
@@ -351,9 +348,10 @@ namespace Util
 			if (first == std::string::npos)
 				return "";
 			constexpr std::string_view trimTrailingChars = " \t\r\n\v\f.";
-			auto last = name.find_last_not_of(trimTrailingChars);
-			if (last == std::string::npos)
-				last = first;
+			// Nothing but dots and spaces would leave "." or "..", which name a directory rather than a file.
+			const auto last = name.find_last_not_of(trimTrailingChars);
+			if (last == std::string::npos || last < first)
+				return "";
 			name = name.substr(first, last - first + 1);
 
 			// Replace invalid characters
@@ -381,9 +379,14 @@ namespace Util
 				}
 			}
 
-			// Limit length
-			if (name.length() > 255u) {
-				name = name.substr(0, 255u);
+			// Limit length, backing off to a UTF-8 lead byte so no character is cut in half.
+			constexpr size_t kMaxFileNameBytes = 255;
+			if (name.length() > kMaxFileNameBytes) {
+				constexpr unsigned char kContinuationMask = 0xC0, kContinuationBits = 0x80;
+				size_t length = kMaxFileNameBytes;
+				while (length > 0 && (static_cast<unsigned char>(name[length]) & kContinuationMask) == kContinuationBits)
+					--length;
+				name.resize(length);
 			}
 
 			return name;
@@ -409,7 +412,7 @@ namespace Util
 			if (!path.parent_path().empty()) {
 				std::filesystem::create_directories(path.parent_path(), ec);
 				if (ec) {
-					logger::error("Could not create directory for {} '{}': {}", context, path.string(), ec.message());
+					logger::error("Could not create directory for {} '{}': {}", context, Util::PathHelpers::ToUtf8(path), ec.message());
 					return false;
 				}
 			}
@@ -418,7 +421,7 @@ namespace Util
 			auto temporaryPath = path;
 			temporaryPath += std::format(".{}.{}.tmp", ::GetCurrentProcessId(), ::GetCurrentThreadId());
 			if (!WriteRawContent(temporaryPath, content)) {
-				logger::error("Could not write temporary {} file '{}'", context, temporaryPath.string());
+				logger::error("Could not write temporary {} file '{}'", context, Util::PathHelpers::ToUtf8(temporaryPath));
 				std::filesystem::remove(temporaryPath, ec);
 				return false;
 			}
@@ -432,10 +435,10 @@ namespace Util
 			const bool wroteDirectly = WriteRawContent(path, content);
 			std::filesystem::remove(temporaryPath, ec);
 			if (wroteDirectly) {
-				logger::warn("Replaced {} '{}' by direct write (Win32 error {})", context, path.string(), moveError);
+				logger::warn("Replaced {} '{}' by direct write (Win32 error {})", context, Util::PathHelpers::ToUtf8(path), moveError);
 				return true;
 			}
-			logger::error("Could not replace {} '{}' (Win32 error {})", context, path.string(), moveError);
+			logger::error("Could not replace {} '{}' (Win32 error {})", context, Util::PathHelpers::ToUtf8(path), moveError);
 			return false;
 		}
 
@@ -445,7 +448,7 @@ namespace Util
 			try {
 				serialized = data.dump(indent);
 			} catch (const std::exception& e) {
-				logger::error("Could not serialize {} '{}': {}", context, path.string(), e.what());
+				logger::error("Could not serialize {} '{}': {}", context, Util::PathHelpers::ToUtf8(path), e.what());
 				return false;
 			}
 			return WriteFileAtomically(path, serialized, context);
@@ -456,7 +459,7 @@ namespace Util
 			/** @brief Logs why a JSON file was rejected and hands the reason to the caller when requested. */
 			void ReportReadFailure(const std::filesystem::path& path, std::string_view context, std::string reason, std::string* error)
 			{
-				logger::warn("Could not read {} '{}': {}", context, path.string(), reason);
+				logger::warn("Could not read {} '{}': {}", context, Util::PathHelpers::ToUtf8(path), reason);
 				if (error)
 					*error = std::move(reason);
 			}
@@ -549,15 +552,4 @@ std::vector<SettingsDiffEntry> Util::FileSystem::DiffJson(const nlohmann::json& 
 	}
 
 	return diffEntries;
-}
-
-std::vector<SettingsDiffEntry> Util::FileSystem::LoadJsonDiff(const std::filesystem::path& userPath, const std::filesystem::path& testPath, float epsilon)
-{
-	const auto userJson = FileHelpers::ReadJsonFile(userPath, "user config");
-	const auto testJson = FileHelpers::ReadJsonFile(testPath, "test config");
-	if (!userJson || !testJson) {
-		logger::warn("Could not load JSON diff from '{}' and '{}'", userPath.string(), testPath.string());
-		return {};
-	}
-	return DiffJson(*userJson, *testJson, epsilon);
 }

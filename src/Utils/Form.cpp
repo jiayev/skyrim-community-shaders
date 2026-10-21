@@ -100,13 +100,36 @@ std::string Util::GetFormDisplayName(RE::FormID formId)
 	return GetFormFileKey(form);
 }
 
-std::string Util::GetFormEditorID(const RE::TESForm* form)
+std::string Util::FormEditorIDIndex::Find(const RE::TESForm* form)
+{
+	if (!form)
+		return "";
+
+	if (!initialized) {
+		auto [map, lock] = RE::TESForm::GetAllFormsByEditorID();
+		if (map) {
+			RE::BSReadLockGuard locker(lock);
+			editorIDs.reserve(map->size());
+			for (const auto& [name, entry] : *map) {
+				editorIDs.try_emplace(entry, name.c_str());
+			}
+		}
+		initialized = true;
+	}
+
+	const auto entry = editorIDs.find(form);
+	return entry != editorIDs.end() ? entry->second : "";
+}
+
+std::string Util::GetFormEditorID(const RE::TESForm* form, FormEditorIDIndex* index)
 {
 	if (!form)
 		return "";
 	const char* editorId = form->GetFormEditorID();
 	if (editorId && editorId[0] != '\0')
 		return std::string(editorId);
+	if (index)
+		return index->Find(form);
 
 	// The global map is keyed by name, so it is inverted once and rebuilt only when its size changes.
 	static std::mutex reverseIndexMutex;
@@ -117,17 +140,24 @@ std::string Util::GetFormEditorID(const RE::TESForm* form)
 	if (!map)
 		return "";
 	std::scoped_lock indexLock(reverseIndexMutex);
-	{
-		RE::BSReadLockGuard locker(lock);
-		if (map->size() != indexedMapSize) {
-			reverseIndex.clear();
-			reverseIndex.reserve(map->size());
-			for (const auto& [name, mappedForm] : *map)
-				reverseIndex.emplace(mappedForm, name);
-			indexedMapSize = map->size();
+	RE::BSReadLockGuard locker(lock);
+	const auto rebuild = [](const auto& forms) {
+		reverseIndex.clear();
+		reverseIndex.reserve(forms.size());
+		for (const auto& [name, mappedForm] : forms)
+			reverseIndex.emplace(mappedForm, name);
+		indexedMapSize = forms.size();
+	};
+	if (map->size() != indexedMapSize)
+		rebuild(*map);
+	auto entry = reverseIndex.find(form);
+	// A freed form's address can come back as another form without the map changing size.
+	if (entry != reverseIndex.end()) {
+		if (const auto mapped = map->find(entry->second); mapped == map->end() || mapped->second != form) {
+			rebuild(*map);
+			entry = reverseIndex.find(form);
 		}
 	}
-	const auto entry = reverseIndex.find(form);
 	return entry != reverseIndex.end() ? std::string(entry->second.c_str()) : "";
 }
 

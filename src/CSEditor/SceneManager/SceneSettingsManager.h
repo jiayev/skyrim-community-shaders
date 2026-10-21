@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -76,6 +77,47 @@ public:
 	static constexpr float kDefaultTimeOfDayTransitionHours = 1.0f;
 	/// Upper bound for the setting; the applied blend is also capped so every period fits it.
 	static constexpr float kMaxTimeOfDayTransitionHours = 2.0f;
+	/// Default duration used by location float transitions.
+	static constexpr float kDefaultLocationTransitionSeconds = 5.0f;
+	/// Largest accepted typed location transition duration.
+	static constexpr float kMaxLocationTransitionSeconds = 300.0f;
+	/// Weather transition length relative to each weather's own, applied through fWeatherTransMin/Max.
+	static constexpr float kDefaultWeatherTransitionScale = 1.0f;
+	static constexpr float kMinWeatherTransitionScale = 0.1f;
+	static constexpr float kMaxWeatherTransitionScale = 10.0f;
+	/// Weight of smootherstep over a linear blend; 0 is linear.
+	static constexpr float kDefaultTransitionEase = 1.0f;
+
+	/// Global transition controls a preset ships and the user can override.
+	enum class TransitionControl
+	{
+		TimeOfDayHours,
+		LocationSeconds,
+		WeatherScale,
+		Ease,
+		Count
+	};
+	static constexpr size_t kTransitionControlCount = static_cast<size_t>(TransitionControl::Count);
+	using TransitionControlValues = std::array<std::optional<float>, kTransitionControlCount>;
+
+	/// Manifest key, accepted range and default of one transition control.
+	struct TransitionControlSpec
+	{
+		const char* key;
+		float min;
+		float max;
+		float defaultValue;
+	};
+	static constexpr std::array<TransitionControlSpec, kTransitionControlCount> kTransitionControlSpecs = { {
+		{ "periodTransitionHours", 0.0f, kMaxTimeOfDayTransitionHours, kDefaultTimeOfDayTransitionHours },
+		{ "locationTransitionSeconds", 0.0f, kMaxLocationTransitionSeconds, kDefaultLocationTransitionSeconds },
+		{ "weatherTransitionScale", kMinWeatherTransitionScale, kMaxWeatherTransitionScale, kDefaultWeatherTransitionScale },
+		{ "transitionEase", 0.0f, 1.0f, kDefaultTransitionEase },
+	} };
+	static constexpr const TransitionControlSpec& GetTransitionControlSpec(TransitionControl control)
+	{
+		return kTransitionControlSpecs[static_cast<size_t>(control)];
+	}
 
 	/// Listens for LoadingMenu close to detect cell transitions, deferring reset work until then.
 	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -130,8 +172,9 @@ public:
 		json originalValue;                        // Value at time of creation, for revert
 		json serializedTemplate = json::object();  // Preserved forward-compatible fields
 		bool paused = false;                       // Temporarily disabled
-		/// Suppresses every lower layer at this address instead of supplying a value. An explicit
-		/// state, not an empty `value`: the resolve, copy and export paths all read `value` unguarded.
+		/// Removes this context's mod value at the address instead of supplying one, so the layers beneath
+		/// show through. An explicit state, not an empty `value`: the resolve, copy and export paths all
+		/// read `value` unguarded.
 		bool deleted = false;
 		EntrySource source = EntrySource::User;
 		std::string sourceFilename;                       // For overwrites: the filename it came from
@@ -142,6 +185,12 @@ public:
 		// so a document authored by another implementation round-trips with its field intact.
 		bool retainSerializedTransition = false;
 	};
+
+	/** @brief Removes the user's entries, leaving the overwrites. @return How many were removed. */
+	static size_t EraseUserEntries(std::vector<SettingEntry>& entries)
+	{
+		return std::erase_if(entries, [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+	}
 
 	/// One indexed value in an atomic scene-setting update.
 	struct EntryValueUpdate
@@ -184,26 +233,15 @@ public:
 	/// Every scene file the pack of this name currently owns, across every scene directory in Presets/<Name>/.
 	static std::vector<std::filesystem::path> FindPresetFiles(const std::string& packId);
 
-	static constexpr const char* kDefaultPresetVersion = "1.0.0";
-
 	using PresetType = UnifiedPresetCatalog::PresetType;
 
-	/** @brief Display + artwork inputs for ExportPreset. Artwork sources are absolute paths to copy
-	 *  into Presets/<Name>/; empty source with clear* = drop that field on re-export. */
-	struct PresetExportInfo
+	/** @brief Manifest + artwork inputs for ExportPreset. The inherited artwork paths are the pack's existing ones;
+	 *  sources are absolute paths to copy into Presets/<Name>/; empty source with clear* = drop that field on re-export. */
+	struct PresetExportInfo : PackManifest
 	{
+		PresetExportInfo() { version = kDefaultVersion; }
+
 		PresetType type = PresetType::CS;
-		std::string name;
-		std::string version = kDefaultPresetVersion;
-		std::string author;
-		std::string description;
-		std::vector<std::string> tags;
-		/// Community Shaders version this export was authored on (MAJOR.MINOR.PATCH).
-		std::string csVersion;
-		/// Feature short names the pack expects loaded.
-		std::vector<std::string> requiredFeatures;
-		/// Plugin file names (.esp/.esm/.esl) the pack was made with.
-		std::vector<std::string> requiredPlugins;
 		std::filesystem::path logoSource;
 		std::filesystem::path coverSource;
 		std::vector<std::filesystem::path> screenshotSources;
@@ -220,22 +258,11 @@ public:
 	 *  @return Whether every file was written. */
 	bool ExportPreset(const PresetExportInfo& info);
 
-	/// Scene-relevant fields of a unified pack manifest. Artwork paths are relative to the pack folder.
-	struct PresetMetadata
+	/// A unified pack manifest as the Scene Manager reads it.
+	struct PresetMetadata : PackManifest
 	{
-		std::string name;
-		std::string version;
-		std::string author;
-		std::string description;
-		std::vector<std::string> tags;
-		std::string csVersion;
-		std::vector<std::string> requiredFeatures;
-		std::vector<std::string> requiredPlugins;
-		std::string logo;
-		std::string cover;
-		std::vector<std::string> screenshots;
 		std::filesystem::path path;
-		std::optional<float> transitionHours;  // Period transition the preset ships, if any
+		TransitionControlValues transitionControls;  // Transition controls the preset ships, if any
 	};
 
 	/// Whether a preset version is a semantic MAJOR.MINOR.PATCH triple.
@@ -293,8 +320,13 @@ public:
 
 	// --- Persistence ---
 
-	/// Save all user data (interior, TOD, weather) to unified SceneManager.json.
+	/// Commits a user edit: runs the CS editor's automatic save, which writes SceneManager.json.
 	void SaveAllUserSettings();
+
+	/// Writes all user data (interior, TOD, weather, location) to unified SceneManager.json, unless it
+	/// matches what was last written. Only SaveManager calls this; everything else goes through
+	/// SaveAllUserSettings.
+	void WriteUserSettings();
 
 	/** @brief Replaces one scene type's overwrite entries with those found in the active pack. */
 	void DiscoverOverwrites(SceneType type);
@@ -346,15 +378,19 @@ public:
 	/// Per-period blend weights for the current game hour. Weights sum to 1.
 	std::array<float, kPeriodCount> GetTimeOfDayFactors() const;
 
-	/// Hours at the end of each period spent blending into the next, after presets and the user's value.
-	float GetTimeOfDayTransitionHours() const { return timeOfDayTransitionHours; }
-	/// Whether the user's own value overrides whatever the presets supply.
-	bool HasUserTimeOfDayTransitionHours() const { return userTimeOfDayTransitionHours.has_value(); }
-	/// Set and persist the user's period blend zone, clamped to 0..kMaxTimeOfDayTransitionHours.
-	/// nullopt drops it, handing the value back to the presets.
-	void SetTimeOfDayTransitionHours(std::optional<float> hours, bool deferSave = false);
+	/** @brief The control's value: the user's, else the active preset's, else the default. */
+	float GetTransitionControl(TransitionControl control) const { return transitionControls[static_cast<size_t>(control)]; }
+	/** @brief The user's own value, or nullopt while the preset or default supplies it. */
+	std::optional<float> GetUserTransitionControl(TransitionControl control) const
+	{
+		return userTransitionControls[static_cast<size_t>(control)];
+	}
+	/** @brief Set and persist the user's value, clamped to the control's range; nullopt hands it back to the preset. */
+	void SetTransitionControl(TransitionControl control, std::optional<float> value, bool deferSave = false);
+	/** @brief Linear progress in 0..1 eased toward smootherstep by the Ease control. */
+	float EaseTransition(float linear) const;
 
-	/// Returns the period whose hour range contains the current game hour.
+	/// Returns the period the time-of-day blend is in: mid-blend, the outgoing one.
 	static TimeOfDayPeriod GetCurrentPeriod();
 
 	// --- Feature Metadata ---
@@ -408,10 +444,6 @@ public:
 	/// Get a UI-friendly display label for a setting key.
 	static std::string GetSettingDisplayName(const std::string& settingKey);
 
-	/// Get current value of a specific setting from a feature
-	static json GetFeatureSettingValue(const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey);
-
 	// --- Per-Weather Scene Settings ---
 
 	/// Entries split into two saved sets: flat (period Count) and per-period. The time-of-day mode
@@ -436,6 +468,13 @@ public:
 		bool IsPeriodActive(TimeOfDayPeriod period) const
 		{
 			return timeOfDayEnabled ? period != TimeOfDayPeriod::Count : period == TimeOfDayPeriod::Count;
+		}
+
+		/** @brief Drops the user's entries and time-of-day choice, before the user document is read again. */
+		void ClearUserLayer()
+		{
+			EraseUserEntries(entries);
+			userTimeOfDayEnabled.reset();
 		}
 	};
 
@@ -514,15 +553,6 @@ public:
 	/// Every target kind shares one directory; each target's type comes from its form, not its path.
 	static std::filesystem::path GetLocationOverwritesDir(const std::filesystem::path& packRoot = GetActiveScenePackRoot());
 
-	/// Default duration used by location float transitions.
-	static constexpr float kDefaultLocationTransitionSeconds = 5.0f;
-	/// Largest accepted typed location transition duration.
-	static constexpr float kMaxLocationTransitionSeconds = 300.0f;
-
-	/// Return the global location float transition duration in seconds.
-	float GetLocationTransitionSeconds() const { return locationTransitionSeconds; }
-	/// Set and persist the global location float transition duration.
-	void SetLocationTransitionSeconds(float seconds, bool deferSave = false);
 	/// Return an entry-specific location transition duration, or null for the global duration.
 	std::optional<float> GetLocationEntryTransitionSeconds(
 		LocationTargetType type, std::string_view formKey, size_t index) const;
@@ -671,8 +701,8 @@ public:
 	/// Remove one entry from a context.
 	void RemoveContextSetting(const SceneContextId& context, size_t index);
 
-	/** @brief Suppresses every lower layer at an address by persisting a user tombstone.
-	 *  Never touches a mod's file; an existing user entry becomes the tombstone in place.
+	/** @brief Removes the mod's value at an address in one context by persisting a user tombstone; the
+	 *  layers beneath show through. Never touches a mod's file; an existing user entry becomes the tombstone.
 	 *  @return Whether a tombstone now covers the address. */
 	bool TombstoneContextSetting(const SceneContextId& context, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
@@ -698,7 +728,7 @@ public:
 		None,       // nothing supplies it: the feature's base applies
 		Overwrite,  // a discovered overwrite file wins
 		User,       // a user entry wins
-		Deleted,    // a user tombstone suppresses every lower layer
+		Deleted,    // a user tombstone removes this context's mod value
 	};
 
 	/** @brief Where the winning value at an address comes from. */
@@ -901,6 +931,28 @@ public:
 	/// Sample the full resolver state. Built on demand, only for the debug UI.
 	DebugSnapshot GetDebugSnapshot() const;
 
+	/// The user's scene settings at one moment, for undo. Two snapshots are equal when they would save
+	/// the same SceneManager.json.
+	struct UserSettingsSnapshot
+	{
+		std::map<SceneType, std::vector<SettingEntry>> entries;
+		std::map<RE::FormID, WeatherSceneConfig> weatherSceneConfigs;
+		std::map<std::string, LocationSceneConfig> locationSceneConfigs;
+		TransitionControlValues userTransitionControls;
+		json document;
+
+		bool operator==(const UserSettingsSnapshot& other) const { return document == other.document; }
+	};
+
+	/** @brief Copies the user's scene settings, for undo. */
+	UserSettingsSnapshot CaptureUserSettings();
+
+	/** @brief Puts back scene settings CaptureUserSettings copied, then saves and reapplies them. */
+	void RestoreUserSettings(const UserSettingsSnapshot& snapshot);
+
+	/** @brief Whether an edit is waiting on the deferred save, or a failed save is being retried. */
+	bool HasUnsavedChanges() const { return deferredSceneChangesPending; }
+
 protected:
 	SceneSettingsManager();
 	~SceneSettingsManager();
@@ -923,8 +975,8 @@ private:
 	bool locationUserSettingsModified = false;
 	bool locationTransitionModified = false;
 	std::optional<PresetMetadata> activePresetMetadata;
-	float timeOfDayTransitionHours = kDefaultTimeOfDayTransitionHours;
-	std::optional<float> userTimeOfDayTransitionHours;
+	TransitionControlValues userTransitionControls;
+	std::array<float, kTransitionControlCount> transitionControls = GetDefaultTransitionControls();
 	bool dataLoaded = false;
 	bool deferredSceneChangesPending = false;
 	std::chrono::steady_clock::time_point deferredSceneChangesDeadline{};
@@ -960,7 +1012,6 @@ private:
 	json unresolvedLocationUserSettings = json::object();
 	bool locationDataLoaded = false;
 	bool gameDataReady = false;
-	float locationTransitionSeconds = kDefaultLocationTransitionSeconds;
 
 	using SettingAddress = SettingIdentity;
 	/** @brief One value pushed into a feature through its catalog-backed settings document. */
@@ -1015,6 +1066,8 @@ private:
 		bool transition = false;
 	};
 	std::map<std::string, PendingApplyVerification> pendingApplyVerifications;
+	/// Signature each feature last kept, verified once: later values of that update set are trusted.
+	std::map<std::string, size_t> verifiedApplySignatures;
 	bool resolverDirty = true;
 	bool resolverSuspended = false;
 	bool activeEntryCacheDirty = true;
@@ -1063,7 +1116,7 @@ private:
 	std::map<std::string, LocationTransitionBatch> locationTransitionBatches;
 	bool locationTransitionBatchesDirty = true;
 	float lastLocationTransitionTick = -1.0f;
-	float lastBlendResolveTime = -1.0f;
+	std::chrono::steady_clock::time_point lastBlendResolveTime{};
 	ResolvedSettingMap lastLocationOverrideValues;
 	std::map<SettingAddress, float> lastLocationTransitionDurations;
 	std::map<SettingAddress, float> pendingLocationTransitionDurations;
@@ -1096,6 +1149,8 @@ private:
 	};
 	/** @brief Starts shifted by the applied blend length, which is capped so every shifted period fits it. */
 	BlendedPeriods GetBlendedPeriods() const;
+	/** @brief The shifted period the current hour is in, the one whose blend out the weights describe. */
+	static PeriodLookup FindBlendPeriod(const BlendedPeriods& blended);
 
 	/// FindWinningContext's search against one period and weather (0 for none).
 	std::optional<SceneContextId> FindSupplyingContext(const SettingIdentity& setting, TimeOfDayPeriod period,
@@ -1106,12 +1161,18 @@ private:
 	bool TryEnsureWeatherDataLoaded();
 	/** @brief Loads location overwrites and user settings once game data is ready; false until then. */
 	bool TryEnsureLocationDataLoaded();
+	/** @brief The SceneManager.json document the user's settings amount to, over the preserved one.
+	 *  @param weatherLoaded, locationLoaded Whether those sections' data is loaded, and so can be written. */
+	json BuildUserSettingsDocument(bool weatherLoaded, bool locationLoaded);
 	/** @brief Discovers weather overwrites and loads the weather user settings. */
 	void LoadWeatherData();
 	/** @brief The weather's config, created empty when it has none. */
 	WeatherSceneConfig& GetWeatherConfigMut(RE::FormID weatherId);
-	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
+	/** @brief Removes one user entry. */
 	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
+	/** @brief Removes one user entry of a weather or location config.
+	 *  @param prepareUserEdit Readies the config's raw user settings before the removal is saved. */
+	void RemovePeriodicEntry(PeriodicSceneConfig& config, size_t index, const std::function<void()>& prepareUserEdit);
 	/** @brief Whether the weather holds an entry for this setting and period, optionally of one source. */
 	bool HasWeatherEntryForPeriod(RE::FormID weatherId, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
@@ -1187,7 +1248,8 @@ private:
 	/** @brief Records the entry's transition duration, or the global one, for its address. */
 	void RecordLocationTransitionDuration(const SettingEntry& entry, const SettingAddress& address,
 		std::map<SettingAddress, float>& transitionDurations) const;
-	/** @brief Writes one source's resolvable entries over resolved; a tombstone erases its address instead. */
+	/** @brief Writes one source's resolvable entries over resolved; a tombstone erases its address, so the
+	 *  layers beneath show through. */
 	void OverlayEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
 		SceneType type, EntrySource source,
 		std::map<SettingAddress, float>* transitionDurations = nullptr) const;
@@ -1278,8 +1340,8 @@ private:
 	// --- Location float transitions ---
 	/// Seconds on the game clock, so transitions freeze with the game rather than the wall clock.
 	float GetPauseAwareTime() const;
-	/// Smoothstep position of a transition at the given time.
-	static float EaseLocationTransition(const LocationTransition& transition, float now);
+	/// Eased position of a transition at the given time.
+	float EaseLocationTransition(const LocationTransition& transition, float now) const;
 	/** @brief Whether the transition has run its full duration. */
 	static bool IsLocationTransitionFinished(const LocationTransition& transition, float now);
 	/** @brief Starts a transition for each location-driven address whose value or membership changed. */
@@ -1302,7 +1364,7 @@ private:
 	/** @brief The target's config, or null when it has none. */
 	const LocationSceneConfig* FindLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	LocationSceneConfig* FindLocationConfig(LocationTargetType type, std::string_view formKey);
-	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
+	/** @brief Removes one user entry. */
 	void RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index);
 	/** @brief Whether the target holds an entry for this setting and period, optionally of one source. */
 	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
@@ -1335,7 +1397,7 @@ private:
 	/** @brief The entry list of an interior or time-of-day scene type, empty for any other. */
 	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
-	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
+	/** @brief Removes one user entry. */
 	void RemoveSetting(SceneType type, size_t index);
 	/** @brief Saves the user document and re-resolves. */
 	void CommitSceneSettingChanges();
@@ -1380,8 +1442,17 @@ private:
 	/// Re-reads the active pack's manifest.
 	void DiscoverPresetMetadata();
 
-	/** @brief Re-derives the period transition: the user's value, else the active pack's, else the default. */
-	void RefreshTimeOfDayTransitionHours();
+	/** @brief Re-derives every transition control: the user's value, else the active pack's, else the default. */
+	void RefreshTransitionControls();
+
+	/** @brief Every transition control at its default, for initialization. */
+	static constexpr std::array<float, kTransitionControlCount> GetDefaultTransitionControls()
+	{
+		std::array<float, kTransitionControlCount> values{};
+		for (size_t index = 0; index < kTransitionControlCount; ++index)
+			values[index] = kTransitionControlSpecs[index].defaultValue;
+		return values;
+	}
 
 	/// Discover overwrite files for a single weather SPID folder.
 	void DiscoverWeatherOverwritesForSpid(RE::FormID weatherId, const std::filesystem::path& weatherDir);

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "FormEditSources.h"
+#include "UndoHistory.h"
 #include "Util.h"
 #include "Utils/Form.h"
 #include <array>
@@ -135,7 +136,7 @@ public:
 	}
 
 	/** @brief Cache the editor ID and save key from the form for fast subsequent lookups. */
-	void CacheFormData()
+	void CacheFormData(Util::FormEditorIDIndex* editorIDs = nullptr)
 	{
 		if (!form) {
 			cachedEditorID = "Invalid";
@@ -148,7 +149,7 @@ public:
 		cachedSaveKey = Util::GetFormFileKey(form);
 
 		// Try to resolve EditorID via shared utility
-		std::string editorId = Util::GetFormEditorID(form);
+		std::string editorId = Util::GetFormEditorID(form, editorIDs);
 		if (!editorId.empty()) {
 			cachedEditorID = editorId;
 			isFallbackEditorID = false;
@@ -212,10 +213,10 @@ public:
 		open = state;
 	}
 
-	/** @brief Returns a window title with unique ImGui ID: "EditorID###FormID". */
+	/** @brief Returns a window title with unique ImGui ID: "EditorID###FormID", marked with a dot while unsaved. */
 	std::string GetWindowTitle() const
 	{
-		return std::format("{}###{}", GetEditorID(), GetFormID());
+		return std::format("{}{}###{}", HasUnsavedChanges() ? "\xE2\x80\xA2 " : "", GetEditorID(), GetFormID());
 	}
 
 	/** @brief Save the widget's current settings to its JSON file on disk. */
@@ -258,6 +259,12 @@ public:
 
 	/** @brief Returns true if the widget has unsaved modifications relative to its saved file. */
 	virtual bool HasUnsavedChanges() const { return false; }
+
+	/** @brief The settings being edited, for undo; null for a widget with nothing to undo. */
+	virtual UndoHistory::SnapshotPtr CaptureEdits() const { return nullptr; }
+
+	/** @brief Puts back settings CaptureEdits returned, and applies them to the form. */
+	virtual void RestoreEdits(const UndoHistory::Snapshot&) {}
 
 	/**
 	 * @brief Reinitialize a weather form to apply form references that are only read at load time.
@@ -381,6 +388,17 @@ public:
 	/** @brief Returns true if a search is active or the user navigated from search, indicating sections should be expanded. */
 	bool ShouldOpenSearchSection() const { return searchBuffer[0] != '\0' || navigatedFromSearch; }
 
+	/** @brief Applies the edits at once when they changed and the editor is set to apply changes as they are made. */
+	void AutoApply(bool changed);
+
+	/** @brief Default-open collapsing header, forced open while a search drives the view. @return Whether it is open. */
+	bool SearchHeader(const char* label) const
+	{
+		if (ShouldOpenSearchSection())
+			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+		return ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+	}
+
 	/**
 	 * @brief Check if the given setting is currently highlighted by search navigation.
 	 * @param settingId The setting identifier to check.
@@ -486,6 +504,88 @@ protected:
 
 	void ClearSearchState(bool clearBuffer);
 	virtual void NavigateToSearchResult(const SearchResult& result);
+};
+
+/**
+ * @brief A widget that edits a copy of its form's fields: compared against the last saved copy for unsaved
+ *        changes, handed to the undo history, and reverted to the form's vanilla values.
+ * @tparam TSettings The edited fields; needs operator==.
+ */
+template <class TSettings>
+class SettingsWidget : public Widget
+{
+public:
+	using Settings = TSettings;
+
+	/** @brief Puts the vanilla values back and applies them to the form. */
+	void RevertChanges() override
+	{
+		settings = vanillaSettings;
+		ApplyChanges();
+	}
+	bool HasUnsavedChanges() const override { return !(settings == originalSettings); }
+	UndoHistory::SnapshotPtr CaptureEdits() const override { return UndoHistory::Capture(settings); }
+	void RestoreEdits(const UndoHistory::Snapshot& snapshot) override
+	{
+		settings = UndoHistory::Get<Settings>(snapshot);
+		ApplyChanges();
+	}
+
+protected:
+	/** @brief Records the form's current settings as both its vanilla and its saved state. Call once the
+	 *  constructor has read them from the game. */
+	void CaptureVanillaSettings() { vanillaSettings = originalSettings = settings; }
+
+	/**
+	 * @brief Resets settings to vanilla, lets readSaved overlay the saved js on them, records the result as saved
+	 * and applies it. A save that makes readSaved throw is dropped for vanilla.
+	 */
+	template <class ReadSaved>
+	void LoadSavedSettings(ReadSaved&& readSaved)
+	{
+		settings = vanillaSettings;
+		if (!js.empty()) {
+			try {
+				readSaved();
+			} catch (const std::exception& e) {
+				logger::error("{} {}: Failed to load from JSON: {}", GetWidgetTypeName(), GetEditorID(), e.what());
+				settings = vanillaSettings;
+			}
+		}
+		originalSettings = settings;
+		ApplyChanges();
+	}
+
+	/** @brief LoadSavedSettings for Settings with JSON serializers: saved keys override vanilla, missing ones keep it. */
+	void LoadSavedSettings()
+	{
+		LoadSavedSettings([this] {
+			json merged = vanillaSettings;
+			merged.update(js, true);
+			settings = merged.template get<Settings>();
+		});
+	}
+
+	/** @brief Reads js[key] into field when the save has that key, for LoadSavedSettings callbacks. */
+	template <class T>
+	void ReadSaved(const char* key, T& field) const
+	{
+		if (const auto it = js.find(key); it != js.end())
+			it->get_to(field);
+	}
+
+	/** @brief Stores settings in js through their JSON serializers and records them as saved. */
+	void SaveSettingsToJson()
+	{
+		js = settings;
+		originalSettings = settings;
+	}
+
+	Settings settings;
+	/// The last loaded or saved state.
+	Settings originalSettings;
+	/// The form's values before any edit was applied.
+	Settings vanillaSettings;
 };
 
 /** @brief Lightweight widget for caching form data without full editing functionality. */

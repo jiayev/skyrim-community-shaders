@@ -10,6 +10,11 @@
 
 #include "I18n/I18n.h"
 
+namespace
+{
+	constexpr float RaceMenuFocalLengthMM = 18.0f;
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DoF::Settings,
 	AutoFocus,
@@ -611,6 +616,17 @@ void DoF::Draw(TextureInfo& inout_tex)
 		}
 		debugFocusPlane = manualFocus;
 	}
+	// RaceMenu always autofocuses the player, regardless of the configured mode.
+	auto* player = globals::game::player;
+	if (resolver && player && globals::game::ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME)) {
+		focusLen = RaceMenuFocalLengthMM;
+		autoFocus = resolver->GetReferenceFocusCoord(player, focusCoord);
+		if (!autoFocus) {
+			manualFocus = Util::Units::GameUnitsToMeters(resolver->GetDistanceToReference(player)) * 0.001f;
+		}
+		debugFocusPlane = manualFocus;
+	}
+
 	// No-op the whole frame until the core kernels are ready -- a partial
 	// sequential pipeline would write garbage into the scene target.
 	const bool needPostSmoothing = renderSettings.PostBlurSmoothing >= 0.01f;

@@ -1,5 +1,6 @@
 #include "SceneSettingsManager.h"
 
+#include "BaselineManager.h"
 #include "CSEditor/FormEditSources.h"
 #include "Features/CSEditor.h"
 #include "Features/Effects11.h"
@@ -9,7 +10,6 @@
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsLocationTargets.h"
 #include "SceneSettingsOverwrites.h"
-#include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 
@@ -53,7 +53,7 @@ void SceneSettingsManager::DiscoverOverwritesInDir(SceneType type, const std::fi
 	if (!std::filesystem::exists(dir, ec))
 		return;
 
-	logger::info("[SceneSettings] Discovering {} overwrites in: {}", typeName, dir.string());
+	logger::info("[SceneSettings] Discovering {} overwrites in: {}", typeName, Util::PathHelpers::ToUtf8(dir));
 
 	bool requireNumeric = (type == SceneType::TimeOfDay);
 	auto& vec = GetEntriesMut(type);
@@ -72,7 +72,7 @@ void SceneSettingsManager::DiscoverOverwritesInDir(SceneType type, const std::fi
 					overwritesLoaded++;
 			}
 		} catch (const std::exception& e) {
-			logger::error("[SceneSettings] Failed to load {} overwrite '{}': {}", typeName, filePath.filename().string(), e.what());
+			logger::error("[SceneSettings] Failed to load {} overwrite '{}': {}", typeName, Util::PathHelpers::ToUtf8(filePath.filename()), e.what());
 		}
 	}
 
@@ -120,7 +120,7 @@ std::vector<std::filesystem::path> SceneSettingsManager::FindPresetFiles(const s
 		if (!std::filesystem::exists(directory, ec))
 			return;
 		for (const auto& path : GetSortedJsonFiles(directory, "preset files"))
-			if (path.filename().string().starts_with(prefix))
+			if (Util::PathHelpers::ToUtf8(path.filename()).starts_with(prefix))
 				found.push_back(path);
 	};
 	const auto childDirectories = [](const std::filesystem::path& root, std::string_view context) {
@@ -210,7 +210,7 @@ try {
 		std::filesystem::copy_file(source, dest, std::filesystem::copy_options::overwrite_existing, ec);
 		if (ec) {
 			logger::error("[SceneSettings] Preset '{}' failed to copy '{}' -> '{}': {}",
-				safeModName, source.string(), dest.string(), ec.message());
+				safeModName, Util::PathHelpers::ToUtf8(source), Util::PathHelpers::ToUtf8(dest), ec.message());
 			return std::nullopt;
 		}
 		return relativeDest.generic_string();
@@ -242,7 +242,7 @@ try {
 			                            path;
 			std::filesystem::remove(stagedPath, ec);
 			if (ec) {
-				logger::error("[SceneSettings] Could not remove stale preset file '{}': {}", path.string(), ec.message());
+				logger::error("[SceneSettings] Could not remove stale preset file '{}': {}", Util::PathHelpers::ToUtf8(path), ec.message());
 				wroteAll = false;
 			}
 		}
@@ -372,7 +372,7 @@ try {
 			const auto path = directory / std::format("{}_{}.json", safeModName, featureShortName);
 			if (!WriteGroupedOverwriteFile(file.allowedRoot, path, featureShortName, file.typeDescription, file.entries,
 					file.extraMetadata)) {
-				logger::error("[SceneSettings] Preset '{}' failed to write '{}'", safeModName, path.string());
+				logger::error("[SceneSettings] Preset '{}' failed to write '{}'", safeModName, Util::PathHelpers::ToUtf8(path));
 				wroteAll = false;
 			}
 		}
@@ -388,7 +388,7 @@ try {
 			const auto path = FormEditSources::GetFilePath(formsRoot, edit.key);
 			Util::FileHelpers::EnsureDirectoryExists(path.parent_path());
 			if (!Util::FileHelpers::WriteJsonAtomically(path, edit.content, kOverwriteJsonIndent, "preset form edit")) {
-				logger::error("[SceneSettings] Preset '{}' failed to write '{}'", safeModName, path.string());
+				logger::error("[SceneSettings] Preset '{}' failed to write '{}'", safeModName, Util::PathHelpers::ToUtf8(path));
 				wroteAll = false;
 			}
 		}
@@ -400,7 +400,7 @@ try {
 			transaction.TrackExternalWrites();
 		if (!PresetManager::GetSingleton().ExportActivePresetTo(effects11Root, true)) {
 			logger::error("[SceneSettings] Preset '{}' failed to export Effects 11 files into '{}'",
-				safeModName, effects11Root.string());
+				safeModName, Util::PathHelpers::ToUtf8(effects11Root));
 			wroteAll = false;
 		} else {
 			if (!manifest.contains("backends") || !manifest["backends"].is_object())
@@ -410,33 +410,26 @@ try {
 		}
 	}
 
-	if (!manifest.contains(kPresetMetadataNameKey))
-		manifest[kPresetMetadataNameKey] = safeModName;
-	manifest[kPresetMetadataVersionKey] = info.version;
+	if (!manifest.contains(PackManifest::kNameKey))
+		manifest[PackManifest::kNameKey] = safeModName;
+	info.WriteDetails(manifest);
 	// Base settings added to a CS or E11 pack do not turn it into a Baseline pack.
 	if (info.type != PresetType::Baseline || !manifest.contains(UnifiedPresetCatalog::kPresetTypeKey))
 		manifest[UnifiedPresetCatalog::kPresetTypeKey] = UnifiedPresetCatalog::GetPresetTypeName(info.type);
 	if (info.type != PresetType::Baseline)
-		manifest[kTimeOfDayTransitionHoursKey] = timeOfDayTransitionHours;
-	const auto setOrErase = [&](const char* key, const auto& value) {
-		if (value.empty())
-			manifest.erase(key);
+		for (size_t index = 0; index < kTransitionControlCount; ++index)
+			manifest[kTransitionControlSpecs[index].key] = transitionControls[index];
+	if (exportEffects11) {
+		if (auto sceneControl = E11Handoff::ToManifest(); sceneControl.empty())
+			manifest.erase(UnifiedPresetCatalog::kSceneControlKey);
 		else
-			manifest[key] = value;
-	};
-	setOrErase(kPresetMetadataAuthorKey, info.author);
-	setOrErase(kPresetMetadataDescriptionKey, info.description);
-	setOrErase(kPresetMetadataTagsKey, info.tags);
-	setOrErase(kPresetMetadataCsVersionKey, info.csVersion);
-	setOrErase(kPresetMetadataRequiredFeaturesKey, info.requiredFeatures);
-	setOrErase(kPresetMetadataRequiredPluginsKey, info.requiredPlugins);
-	if (exportEffects11)
-		setOrErase(UnifiedPresetCatalog::kSceneControlKey, E11Handoff::ToManifest());
+			manifest[UnifiedPresetCatalog::kSceneControlKey] = std::move(sceneControl);
+	}
 
 	// Artwork: newly picked files win; otherwise keep the manifest's paths unless the user cleared them.
 	const auto exportArtwork = [&](const char* key, const std::filesystem::path& source, bool clear, std::string_view stem) {
 		if (!source.empty()) {
-			if (auto rel = copyPackFile(source, std::format("{}{}", stem, source.extension().string())))
+			if (auto rel = copyPackFile(source, std::format("{}{}", stem, Util::PathHelpers::ToUtf8(source.extension()))))
 				manifest[key] = *rel;
 			else
 				wroteAll = false;
@@ -444,8 +437,8 @@ try {
 			manifest.erase(key);
 		}
 	};
-	exportArtwork(kPresetMetadataLogoKey, info.logoSource, info.clearLogo, "logo");
-	exportArtwork(kPresetMetadataCoverKey, info.coverSource, info.clearCover, "cover");
+	exportArtwork(PackManifest::kLogoKey, info.logoSource, info.clearLogo, "logo");
+	exportArtwork(PackManifest::kCoverKey, info.coverSource, info.clearCover, "cover");
 
 	if (!info.screenshotSources.empty() || info.clearScreenshots) {
 		const std::filesystem::path galleryDir = "gallery";
@@ -453,32 +446,32 @@ try {
 		std::filesystem::remove_all(packRoot / galleryDir, galleryEc);
 		if (galleryEc)
 			return false;
-		manifest.erase(kPresetMetadataScreenshotsKey);
+		manifest.erase(PackManifest::kScreenshotsKey);
 		json shots = json::array();
 		for (size_t i = 0; i < info.screenshotSources.size(); ++i) {
 			const auto& source = info.screenshotSources[i];
-			if (auto written = copyPackFile(source, galleryDir / std::format("{:02}{}", i + 1, source.extension().string())))
+			if (auto written = copyPackFile(source, galleryDir / std::format("{:02}{}", i + 1, Util::PathHelpers::ToUtf8(source.extension()))))
 				shots.push_back(*written);
 			else
 				wroteAll = false;
 		}
 		if (!shots.empty())
-			manifest[kPresetMetadataScreenshotsKey] = std::move(shots);
+			manifest[PackManifest::kScreenshotsKey] = std::move(shots);
 	}
 
 	for (const auto& [featureName, settings] : info.baselines) {
 		const auto path = packRoot / UnifiedPresetCatalog::kBaselineSubdir / (featureName + ".json");
 		if (Util::FileHelpers::SanitizeFileName(featureName) != featureName ||
-			!SettingsOverrideManager::GetSingleton()->IsValidOverrideDocument(settings, path))
+			!BaselineManager::GetSingleton()->IsValidDocument(settings, path))
 			return false;
-		auto document = SettingsOverrideManager::ReadExportTarget(path);
+		auto document = BaselineManager::ReadExportTarget(path);
 		if (!document)
 			return false;
 		if (info.replaceBaselines.contains(featureName))
 			*document = settings;
 		else
 			document->update(settings, true);
-		if (!SettingsOverrideManager::GetSingleton()->IsValidOverrideDocument(*document, path) ||
+		if (!BaselineManager::GetSingleton()->IsValidDocument(*document, path) ||
 			!Util::FileHelpers::WriteJsonAtomically(path, *document, kOverwriteJsonIndent, "preset baseline"))
 			return false;
 	}
@@ -493,22 +486,27 @@ try {
 	if (!wroteAll || !transaction.Commit())
 		return false;
 
-	std::error_code activeEc;
-	const bool exportedIntoActivePack = std::filesystem::equivalent(targetRoot, GetActiveScenePackRoot(), activeEc);
-	if (exportScene && exportedIntoActivePack)
-		ReloadOverwrites();
-	if (exportForms && exportedIntoActivePack) {
-		// The pack now supplies these values; loose copies would shadow it.
-		for (const auto& edit : formEdits) {
-			std::error_code removeEc;
-			std::filesystem::remove(FormEditSources::GetFilePath(Util::PathHelpers::GetCommunityShaderPath(), edit.key), removeEc);
+	// The files have landed, so a reload that throws past here must not report the export as failed.
+	try {
+		std::error_code activeEc;
+		const bool exportedIntoActivePack = std::filesystem::equivalent(targetRoot, GetActiveScenePackRoot(), activeEc);
+		if (exportScene && exportedIntoActivePack)
+			ReloadOverwrites();
+		if (exportForms && exportedIntoActivePack) {
+			// The pack now supplies these values; loose copies would shadow it.
+			for (const auto& edit : formEdits) {
+				std::error_code removeEc;
+				std::filesystem::remove(FormEditSources::GetFilePath(Util::PathHelpers::GetCommunityShaderPath(), edit.key), removeEc);
+			}
+			CSEditor::ReloadFormEdits();
 		}
-		CSEditor::ReloadFormEdits();
+	} catch (const std::exception& e) {
+		logger::error("[SceneSettings] Preset '{}' was exported, but reloading it failed: {}", safeModName, e.what());
 	}
 
 	logger::info("[SceneSettings] Exported preset '{}' ({} scene file(s), {} form edit(s){}, type {}) to '{}'",
 		safeModName, sceneFileCount, formEdits.size(), exportEffects11 ? ", Effects 11" : "",
-		UnifiedPresetCatalog::GetPresetTypeName(info.type), targetRoot.string());
+		UnifiedPresetCatalog::GetPresetTypeName(info.type), Util::PathHelpers::ToUtf8(targetRoot));
 	return true;
 } catch (const std::exception& e) {
 	logger::error("[SceneSettings] Preset export failed: {}", e.what());
@@ -523,36 +521,11 @@ std::optional<SceneSettingsManager::PresetMetadata> SceneSettingsManager::ReadPr
 		return std::nullopt;
 
 	const auto manifest = UnifiedPresetCatalog::ReadPackManifest(packRoot);
-	const auto readString = [&](const char* key) {
-		const auto it = manifest.find(key);
-		return it != manifest.end() && it->is_string() ? it->get<std::string>() : std::string{};
-	};
-	const auto readStrings = [&](const char* key) {
-		std::vector<std::string> values;
-		if (const auto it = manifest.find(key); it != manifest.end() && it->is_array()) {
-			for (const auto& value : *it) {
-				if (value.is_string())
-					values.push_back(value.get<std::string>());
-			}
-		}
-		return values;
-	};
-
-	PresetMetadata metadata{ .name = readString(kPresetMetadataNameKey),
-		.version = readString(kPresetMetadataVersionKey),
-		.author = readString(kPresetMetadataAuthorKey),
-		.description = readString(kPresetMetadataDescriptionKey),
-		.tags = readStrings(kPresetMetadataTagsKey),
-		.csVersion = readString(kPresetMetadataCsVersionKey),
-		.requiredFeatures = readStrings(kPresetMetadataRequiredFeaturesKey),
-		.requiredPlugins = readStrings(kPresetMetadataRequiredPluginsKey),
-		.logo = readString(kPresetMetadataLogoKey),
-		.cover = readString(kPresetMetadataCoverKey),
-		.screenshots = readStrings(kPresetMetadataScreenshotsKey),
-		.path = manifestPath,
-		.transitionHours = ReadTimeOfDayTransitionHours(manifest, manifestPath.string()) };
-	if (metadata.name.empty())
-		metadata.name = packRoot.filename().string();
+	PresetMetadata metadata{ PackManifest::Read(manifest, Util::PathHelpers::ToUtf8(packRoot.filename())), manifestPath };
+	const auto context = Util::PathHelpers::ToUtf8(manifestPath);
+	for (size_t index = 0; index < kTransitionControlCount; ++index)
+		metadata.transitionControls[index] = ReadTransitionControl(manifest, kTransitionControlSpecs[index].key,
+			static_cast<TransitionControl>(index), context);
 	return metadata;
 }
 
@@ -561,7 +534,7 @@ void SceneSettingsManager::DiscoverPresetMetadata()
 	activePresetMetadata = ReadPresetMetadata(GetActiveScenePackRoot());
 	if (activePresetMetadata)
 		logger::info("[SceneSettings] Active scene preset: '{}'", activePresetMetadata->name);
-	RefreshTimeOfDayTransitionHours();
+	RefreshTransitionControls();
 	// Features the pack hands back from Effects 11 are driven by this layer, so they follow the same pack
 	UnifiedPresetCatalog::GetSingleton().LoadSceneControl();
 }
@@ -578,7 +551,7 @@ void SceneSettingsManager::DiscoverLocationOverwrites()
 
 void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesystem::path& targetDir)
 {
-	const auto formKey = targetDir.filename().string();
+	const auto formKey = Util::PathHelpers::ToUtf8(targetDir.filename());
 	if (formKey.empty())
 		return;
 
@@ -617,7 +590,7 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 				json data;
 				if (!ReadBoundedSceneJson(filePath, data)) {
 					logger::warn("[SceneSettings] Location overwrite '{}' is invalid or exceeds {} bytes",
-						filePath.string(), kMaxSceneOverwriteFileSize);
+						Util::PathHelpers::ToUtf8(filePath), kMaxSceneOverwriteFileSize);
 					continue;
 				}
 
@@ -627,10 +600,10 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 				if (auto metadataIt = data.find(kMetadataKey); metadataIt != data.end()) {
 					if (!metadataIt->is_object()) {
 						logger::warn("[SceneSettings] Location overwrite '{}' metadata must be an object",
-							filePath.string());
+							Util::PathHelpers::ToUtf8(filePath));
 						continue;
 					}
-					const auto metadataContext = std::format("Location overwrite '{}' metadata", filePath.string());
+					const auto metadataContext = std::format("Location overwrite '{}' metadata", Util::PathHelpers::ToUtf8(filePath));
 					std::string targetType;
 					if (!ReadOptionalStringField(*metadataIt, "targetType", targetType, metadataContext) ||
 						!ReadOptionalStringField(*metadataIt, "targetName", metadataName, metadataContext) ||
@@ -648,13 +621,13 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 				}
 				if (resolvedType && metadataType && *resolvedType != *metadataType) {
 					logger::warn("[SceneSettings] Location overwrite '{}' targetType does not match resolved form '{}'",
-						filePath.string(), formKey);
+						Util::PathHelpers::ToUtf8(filePath), formKey);
 					continue;
 				}
 				const auto targetType = resolvedType ? resolvedType : metadataType;
 				if (!targetType) {
 					logger::warn("[SceneSettings] Location overwrite '{}' has no resolvable target type",
-						filePath.string());
+						Util::PathHelpers::ToUtf8(filePath));
 					continue;
 				}
 
@@ -674,7 +647,7 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 				MergeOverwriteFileEntries(config, std::move(parsedEntries), timeOfDayEnabled, period, "location");
 			} catch (const std::exception& e) {
 				logger::error("[SceneSettings] Failed to load location overwrite '{}': {}",
-					filePath.filename().string(), e.what());
+					Util::PathHelpers::ToUtf8(filePath.filename()), e.what());
 			}
 		}
 	});
@@ -693,10 +666,10 @@ void SceneSettingsManager::DiscoverWeatherOverwrites()
 	if (!std::filesystem::exists(baseDir, ec))
 		return;
 
-	logger::info("[SceneSettings] Discovering weather overwrites in: {}", baseDir.string());
+	logger::info("[SceneSettings] Discovering weather overwrites in: {}", Util::PathHelpers::ToUtf8(baseDir));
 
 	for (const auto& weatherDirectory : GetSortedDirectoryPaths(baseDir, true, "weather overwrite directories")) {
-		auto folderName = weatherDirectory.filename().string();
+		auto folderName = Util::PathHelpers::ToUtf8(weatherDirectory.filename());
 		RE::FormID weatherId = Util::SpidToFormId(folderName);
 		if (weatherId == 0) {
 			logger::warn("[SceneSettings] Weather overwrite folder '{}' could not be resolved - skipping", folderName);
@@ -726,7 +699,7 @@ void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId
 				MergeOverwriteFileEntries(GetWeatherConfigMut(weatherId), std::move(parsedEntries), timeOfDayEnabled,
 					period, "weather");
 			} catch (const std::exception& e) {
-				logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", filePath.filename().string(), e.what());
+				logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", Util::PathHelpers::ToUtf8(filePath.filename()), e.what());
 			}
 		}
 	});

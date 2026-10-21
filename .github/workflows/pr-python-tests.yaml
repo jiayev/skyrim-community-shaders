@@ -10,6 +10,9 @@ on:
         paths:
             - "src/**"
             - "cmake/generate_scene_settings_catalog.py"
+            - "cmake/scene_settings_catalog_floors.json"
+            # The tests read the catalog floors from it.
+            - "CMakeLists.txt"
             - "tests/**"
             - ".github/workflows/pr-python-tests.yaml"
 

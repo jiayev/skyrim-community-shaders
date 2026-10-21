@@ -485,36 +485,50 @@ void SceneManager::DrawSettings()
 	DrawApplyingNow();
 
 	Util::DrawSectionHeader(T("feature.scene_manager.transitions", "Transitions"), false, false);
-	auto transitionHours = GetTimeOfDayTransitionHours();
-	if (ImGui::SliderFloat(T("feature.scene_manager.time_of_day_transition", "Time of Day Transition"), &transitionHours,
-			0.0f, kMaxTimeOfDayTransitionHours, "%.2f h", ImGuiSliderFlags_AlwaysClamp))
-		SetTimeOfDayTransitionHours(transitionHours, true);
-	// A drag held still would otherwise outlive the debounce and write the file mid-gesture.
-	if (ImGui::IsItemActive())
-		HoldDeferredSceneChanges();
-	Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_tooltip",
-		"Hours spent blending between time of day periods, kept inside the sky's own colour transitions.\n"
-		"0 switches between periods instantly.\n"
-		"The active preset supplies this until you set your own."));
-	if (HasUserTimeOfDayTransitionHours() &&
-		DrawResetButton(T("feature.scene_manager.time_of_day_transition_reset", "Reset##TimeOfDayTransition"),
-			T("feature.scene_manager.time_of_day_transition_reset_tooltip",
-				"Drop your value and use the active preset's, or the default when it sets none.")))
-		SetTimeOfDayTransitionHours(std::nullopt);
+	const auto drawTransitionControl = [this](TransitionControl control, const char* label, const char* format,
+										   ImGuiSliderFlags flags, const char* tooltip, const char* resetLabel) {
+		const auto& spec = GetTransitionControlSpec(control);
+		auto value = GetTransitionControl(control);
+		if (ImGui::SliderFloat(label, &value, spec.min, spec.max, format, ImGuiSliderFlags_AlwaysClamp | flags))
+			SetTransitionControl(control, value, true);
+		// A drag held still would otherwise outlive the debounce and write the file mid-gesture.
+		if (ImGui::IsItemActive())
+			HoldDeferredSceneChanges();
+		Util::AddTooltip(tooltip);
+		if (GetUserTransitionControl(control) &&
+			DrawResetButton(resetLabel, T("feature.scene_manager.transition_reset_tooltip",
+											"Drop your value and use the active preset's, or the default when it sets none.")))
+			SetTransitionControl(control, std::nullopt);
+	};
 
-	auto locationSeconds = GetLocationTransitionSeconds();
-	if (ImGui::SliderFloat(T("feature.scene_manager.location_transition", "Location Transition"), &locationSeconds,
-			0.0f, kMaxLocationTransitionSeconds, "%.1f s", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic))
-		SetLocationTransitionSeconds(locationSeconds, true);
-	if (ImGui::IsItemActive())
-		HoldDeferredSceneChanges();
-	Util::AddTooltip(T("feature.scene_manager.location_transition_tooltip",
-		"Seconds location overrides take to ease in and out when you move between places.\n"
-		"A single setting can override this from its own transition field in the CS Editor."));
-	if (locationSeconds != kDefaultLocationTransitionSeconds &&
-		DrawResetButton(T("feature.scene_manager.location_transition_reset", "Reset##LocationTransition"),
-			T("feature.scene_manager.location_transition_reset_tooltip", "Return to the default duration.")))
-		SetLocationTransitionSeconds(kDefaultLocationTransitionSeconds);
+	drawTransitionControl(TransitionControl::TimeOfDayHours,
+		T("feature.scene_manager.time_of_day_transition", "Time of Day Transition"), "%.2f h", ImGuiSliderFlags_None,
+		T("feature.scene_manager.time_of_day_transition_tooltip",
+			"Hours spent blending between time of day periods, kept inside the sky's own colour transitions.\n"
+			"0 switches between periods instantly.\n"
+			"The active preset supplies this until you set your own."),
+		T("feature.scene_manager.time_of_day_transition_reset", "Reset##TimeOfDayTransition"));
+	drawTransitionControl(TransitionControl::LocationSeconds,
+		T("feature.scene_manager.location_transition", "Location Transition"), "%.1f s", ImGuiSliderFlags_Logarithmic,
+		T("feature.scene_manager.location_transition_tooltip",
+			"Seconds location overrides take to ease in and out when you move between places.\n"
+			"A single setting can override this from its own transition field in the CS Editor.\n"
+			"The active preset supplies this until you set your own."),
+		T("feature.scene_manager.location_transition_reset", "Reset##LocationTransition"));
+	drawTransitionControl(TransitionControl::WeatherScale,
+		T("feature.scene_manager.weather_transition_length", "Weather Transition Length"), "%.2fx", ImGuiSliderFlags_Logarithmic,
+		T("feature.scene_manager.weather_transition_length_tooltip",
+			"Multiplies how long every weather takes to blend into the next, keeping each weather's own pacing.\n"
+			"A longer transition also delays a queued weather change, which waits for the running one to finish.\n"
+			"The active preset supplies this until you set your own."),
+		T("feature.scene_manager.weather_transition_length_reset", "Reset##WeatherTransitionLength"));
+	drawTransitionControl(TransitionControl::Ease,
+		T("feature.scene_manager.transition_ease", "Transition Easing"), "%.2f", ImGuiSliderFlags_None,
+		T("feature.scene_manager.transition_ease_tooltip",
+			"Softens the start and end of time of day, location and weather transitions, sky included.\n"
+			"0 keeps a constant-speed blend.\n"
+			"The active preset supplies this until you set your own."),
+		T("feature.scene_manager.transition_ease_reset", "Reset##TransitionEase"));
 
 	const bool overwritesOpen = ImGui::CollapsingHeader(T("feature.scene_manager.overwrites.title", "Feature Overwrites"), ImGuiTreeNodeFlags_DefaultOpen);
 	Util::AddTooltip(T("feature.scene_manager.overwrites.title_tooltip",

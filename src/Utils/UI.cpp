@@ -148,6 +148,13 @@ namespace Util
 			ImGui::EndDisabled();
 	}
 
+	bool InteractionEndedThisFrame()
+	{
+		// NewFrame copies ActiveId into ActiveIdPreviousFrame, so a change since then is an item letting go.
+		const auto& context = *ImGui::GetCurrentContext();
+		return context.ActiveIdPreviousFrame != 0 && context.ActiveId != context.ActiveIdPreviousFrame;
+	}
+
 	namespace
 	{
 		bool debugSectionsHidden = false;
@@ -822,16 +829,21 @@ namespace Util
 
 	bool ConfirmationPopup::Draw()
 	{
+		return DrawChoice() == Choice::Confirm;
+	}
+
+	ConfirmationPopup::Choice ConfirmationPopup::DrawChoice()
+	{
 		if (confirmed) {
 			confirmed = false;
-			return true;
+			return Choice::Confirm;
 		}
 		if (!show)
-			return false;
+			return Choice::None;
 
 		ImGui::OpenPopup(title.c_str());
 
-		bool result = false;
+		Choice result = Choice::None;
 		if (auto popup = CenteredPopupModal(title.c_str(), &show)) {
 			ImGui::TextWrapped("%s", message.c_str());
 			ImGui::Spacing();
@@ -841,28 +853,45 @@ namespace Util
 			if (showDontAskAgain)
 				ImGui::Checkbox(T("ui.dont_ask_again", "Don't ask me again"), &dontAskCheckbox);
 
-			constexpr float buttonWidth = ThemeManager::Constants::POPUP_BUTTON_WIDTH;
+			const ImVec2 buttonSize(ThemeManager::Constants::POPUP_BUTTON_WIDTH, 0.0f);
+			const int buttonCount = 1 + !confirmLabel.empty() + !alternateLabel.empty();
 			const float spacing = ImGui::GetStyle().ItemSpacing.x;
-			const float totalWidth = buttonWidth * 2 + spacing;
+			const float totalWidth = buttonSize.x * buttonCount + spacing * (buttonCount - 1);
 			const float offset = (ImGui::GetWindowWidth() - totalWidth) * 0.5f;
 			if (offset > 0)
 				ImGui::SetCursorPosX(offset);
 
-			if (ImGui::Button(confirmLabel.c_str(), ImVec2(buttonWidth, 0))) {
-				if (showDontAskAgain && dontAskCheckbox && dontAskAgainPersist)
-					*dontAskAgainPersist = true;
-				result = true;
+			const auto pick = [&](Choice choice) {
+				result = choice;
 				show = false;
 				ImGui::CloseCurrentPopup();
+			};
+
+			if (!confirmLabel.empty()) {
+				if (primaryConfirm ? SuccessButton(confirmLabel.c_str(), buttonSize) : ImGui::Button(confirmLabel.c_str(), buttonSize)) {
+					if (showDontAskAgain && dontAskCheckbox && dontAskAgainPersist)
+						*dontAskAgainPersist = true;
+					pick(Choice::Confirm);
+				}
+				if (focus == Focus::Confirm)
+					ImGui::SetItemDefaultFocus();
+				ImGui::SameLine();
 			}
 
-			ImGui::SameLine();
-
-			if (ImGui::Button(cancelLabel.c_str(), ImVec2(buttonWidth, 0))) {
-				show = false;
-				ImGui::CloseCurrentPopup();
+			if (!alternateLabel.empty()) {
+				if (ErrorButton(alternateLabel.c_str(), buttonSize))
+					pick(Choice::Alternate);
+				ImGui::SameLine();
 			}
+
+			if (ImGui::Button(cancelLabel.c_str(), buttonSize))
+				pick(Choice::Cancel);
+			if (focus == Focus::Cancel)
+				ImGui::SetItemDefaultFocus();
 		}
+		// Closed from its title bar.
+		if (result == Choice::None && !show)
+			result = Choice::Cancel;
 		return result;
 	}
 
@@ -2185,6 +2214,13 @@ namespace Util
 		ImVec4 GetError()
 		{
 			return globals::menu->GetTheme().StatusPalette.Error;
+		}
+
+		ImVec4 GetUnsaved()
+		{
+			auto color = GetError();
+			color.w = 0.75f;  // muted: a dirty save affordance without a separate label
+			return color;
 		}
 
 		ImVec4 GetInfo()

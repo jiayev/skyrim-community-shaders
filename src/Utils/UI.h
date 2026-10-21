@@ -147,6 +147,13 @@ namespace Util
 		~DisableGuard();
 	};
 
+	/**
+	 * @brief Whether a mouse or keyboard interaction finished this frame: a click, drag or text entry was
+	 *        released, or focus moved on from it. Buttons, sliders and pickers all end this way, so it is
+	 *        the moment to check whether what they edit changed.
+	 */
+	bool InteractionEndedThisFrame();
+
 	/** @brief Hides feature Debug sections while alive (CS Editor Features window); restores the previous state. */
 	class HideDebugSectionsGuard
 	{
@@ -320,10 +327,33 @@ namespace Util
 	 */
 	struct ConfirmationPopup
 	{
+		/** @brief The button pressed on a frame; Cancel also covers closing the popup. */
+		enum class Choice
+		{
+			None,
+			Confirm,
+			Alternate,
+			Cancel
+		};
+
+		/** @brief Which button keyboard navigation starts on, so Enter picks it. */
+		enum class Focus
+		{
+			None,
+			Confirm,
+			Cancel
+		};
+
 		std::string title;
 		std::string message;
+		/// Empty hides the button.
 		std::string confirmLabel = "Confirm";
 		std::string cancelLabel = "Cancel";
+		/// Optional destructive button between Confirm and Cancel; empty hides it.
+		std::string alternateLabel;
+		/// Styles Confirm as the primary action rather than a plain button.
+		bool primaryConfirm = false;
+		Focus focus = Focus::None;
 		bool showDontAskAgain = false;
 		bool* dontAskAgainPersist = nullptr;  // Optional external bool to persist preference
 
@@ -333,6 +363,8 @@ namespace Util
 
 		void Request();
 		bool Draw();  // Returns true on confirm frame
+		/** @brief Draws the popup while requested. @return The button pressed this frame, else Choice::None. */
+		Choice DrawChoice();
 
 		bool IsOpen() const { return show; }
 
@@ -340,6 +372,50 @@ namespace Util
 		bool show = false;
 		bool confirmed = false;
 		bool dontAskCheckbox = false;
+	};
+
+	/**
+	 * @brief A fixed-width modal with a close button, asked for with Request() from anywhere and drawn each
+	 * frame with Draw() until it closes.
+	 */
+	class DeferredModal
+	{
+	public:
+		/** @brief Opens the modal on the next Draw. */
+		void Request() { active = pendingOpen = true; }
+
+		/** @brief Whether the modal is open or about to open. */
+		bool IsActive() const { return active; }
+
+		/**
+		 * @brief Opens the modal when requested, then calls drawContents inside it while it stays open.
+		 * @param title Visible title; give it a ### id so it survives a language switch.
+		 */
+		template <class DrawContents>
+		void Draw(const char* title, float width, DrawContents&& drawContents)
+		{
+			if (!active)
+				return;
+			const ImGuiID id = ImGui::GetID(title);
+			if (std::exchange(pendingOpen, false)) {
+				openedId = id;
+				ImGui::OpenPopup(title);
+			}
+			// Callers under another ID stack would see it as closed, so only the one that opened it draws it.
+			if (id != openedId)
+				return;
+			ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, FLT_MAX));
+			bool open = true;
+			if (auto popup = CenteredPopupModal(title, &open))
+				drawContents();
+			if (!ImGui::IsPopupOpen(title))
+				active = false;
+		}
+
+	private:
+		ImGuiID openedId = 0;
+		bool active = false;
+		bool pendingOpen = false;
 	};
 
 	/**
@@ -1119,6 +1195,8 @@ namespace Util
 		ImVec4 GetSecondary();
 		/** @brief The shared "active/selected" colour for rows, segments, and tabs. */
 		ImVec4 GetAccent();
+		/** @brief Muted error colour for a save button whose target has unsaved changes. */
+		ImVec4 GetUnsaved();
 
 	}
 

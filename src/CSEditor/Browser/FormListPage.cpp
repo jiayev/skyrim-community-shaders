@@ -45,8 +45,6 @@ namespace
 	/// Below this content width (at the 1080p baseline) the inspector moves under the list.
 	constexpr float kInspectorBesideMinWidth = 620.0f;
 	constexpr float kInspectorWidth = 340.0f;
-	/// Share of the page height the list keeps when the inspector sits under it.
-	constexpr float kStackedListHeightRatio = 0.55f;
 	/// Recent chips are capped so one long editor ID cannot push the rest off the row.
 	constexpr float kRecentChipMaxWidth = 220.0f;
 	constexpr float kMinSearchWidth = 160.0f;
@@ -709,7 +707,8 @@ namespace
 		const bool open = row.widget->IsOpen();
 		slot(open, BrowserUI::GlyphIcon(Icons::FA(ICON_FA_EXTERNAL_LINK_ALT)), ImGui::GetColorU32(Util::Colors::GetAccent()),
 			T(TKEY("state_open_tooltip"), "Its editor window is open"));
-		slot(row.unsaved, BrowserUI::DotIcon(), ImGui::GetColorU32(Util::Colors::GetWarning()),
+		// Checked live rather than from the cached row, so the dot follows edits, saves and undo at once.
+		slot(row.widget->HasUnsavedChanges(), BrowserUI::DotIcon(), ImGui::GetColorU32(Util::Colors::GetUnsaved()),
 			T(TKEY("state_unsaved_tooltip"), "Edited since it was last saved"));
 		slot(row.hasSavedFile, BrowserUI::GlyphIcon(Icons::FA(ICON_FA_SAVE)), ImGui::GetColorU32(Util::Colors::GetSecondary()),
 			T(TKEY("state_saved_tooltip"), "Has a JSON override on disk"));
@@ -1170,15 +1169,15 @@ namespace
 		if (!canLock)
 			return;
 		ImGui::SameLine();
-		const bool locked = editor.IsWeatherLocked() && editor.GetLockedWeather() == weatherWidget->weather;
+		const bool locked = editor.IsWeatherLockedByUser() && editor.GetLockedWeather() == weatherWidget->weather;
 		const char* tooltip = !EditorWindow::AreWeatherLockHooksInstalled() ?
 		                          T(TKEY("weather_lock_hooks_unavailable"), "Weather-lock hooks failed to install; the lock still works but weather may briefly flash before correcting") :
 		                          (locked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"));
 		if (Util::LockStatusBadgeButton("##InspectorLock", locked, tooltip)) {
 			if (locked)
-				editor.UnlockWeather();
+				editor.ReleaseUserWeatherLock();
 			else
-				editor.LockWeather(weatherWidget->weather);
+				editor.LockWeatherForUser(weatherWidget->weather);
 		}
 	}
 
@@ -1308,7 +1307,6 @@ void FormListPage::Draw(Browser::FormListState& state, const Context& context)
 {
 	EditorWindow& editor = *context.editor;
 	const bool hasList = context.widgets != nullptr;
-	const float scale = Util::GetUIScale();
 	if (hasList)
 		RebuildViewIfNeeded(state, context);
 
@@ -1351,35 +1349,11 @@ void FormListPage::Draw(Browser::FormListState& state, const Context& context)
 	DrawRecentRow(state, context);
 	ImGui::Spacing();
 
-	const ImVec2 avail = ImGui::GetContentRegionAvail();
 	if (!editor.settings.browserShowInspector) {
-		DrawList(state, context, avail, active);
+		DrawList(state, context, ImGui::GetContentRegionAvail(), active);
 		return;
 	}
-	if (avail.x < kInspectorBesideMinWidth * scale) {
-		DrawList(state, context, ImVec2(avail.x, std::floor(avail.y * kStackedListHeightRatio)), active);
-		DrawInspector(state, context, ImVec2(avail.x, 0.0f), active);
-		return;
-	}
-
-	// The split is a two-column table so the divider is a native, remembered resize handle.
-	const auto& style = ImGui::GetStyle();
-	ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x, 0.0f));
-	const bool split = ImGui::BeginTable("##FormListSplit", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV, avail);
-	ImGui::PopStyleVar();
-	if (split) {
-		ImGui::TableSetupColumn("##List", ImGuiTableColumnFlags_WidthStretch);
-		ImGui::TableSetupColumn("##Inspector", ImGuiTableColumnFlags_WidthFixed, kInspectorWidth * scale);
-		// Must precede TableNextRow: the first row locks the layout, after which widths are ignored.
-		if (editor.resetLayout)
-			ImGui::TableSetColumnWidth(1, kInspectorWidth * scale);
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		DrawList(state, context, ImVec2(0.0f, ImGui::GetContentRegionAvail().y), active);
-		ImGui::TableSetColumnIndex(1);
-		DrawInspector(state, context, ImVec2(0.0f, 0.0f), active);
-		ImGui::EndTable();
-	}
+	BrowserUI::SplitPane({ "##FormListSplit", kInspectorBesideMinWidth, kInspectorWidth, Browser::FormListState::kDefaultStackedRatio }, state.stackedRatio, [&](const ImVec2& size) { DrawList(state, context, size, active); }, [&](const ImVec2& size) { DrawInspector(state, context, size, active); });
 }
 
 #undef I18N_KEY_PREFIX

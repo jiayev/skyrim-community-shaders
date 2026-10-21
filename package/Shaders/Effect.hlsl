@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT AND (LicenseRef-GPL-3.0-with-Modding-Exception WITH GPL-3.0-linking-source-exception)
+// Original code Copyright (c) 2022 Ilya Perapechka (MIT), modifications GPL-3.0 with Modding Exception (see EXCEPTIONS.md)
+
 #include "Common/ColorManagement.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -20,31 +23,33 @@
 #	undef IBL
 #endif
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
-#if defined(TEXCOORD)
-#	if defined(STRIP_PARTICLES)
+#	if defined(TEXCOORD)
+#		if defined(STRIP_PARTICLES)
 	float3
-#	else
+#		else
 	float2
-#	endif
+#		endif
 		TexCoord0: TEXCOORD0;
-#endif
-#if defined(NORMALS) || defined(MOTIONVECTORS_NORMALS)
+#	endif
+#	if defined(NORMALS) || defined(MOTIONVECTORS_NORMALS)
 	float4 Normal: NORMAL0;
-#endif
-#if defined(BINORMAL_TANGENT)
+#	endif
+#	if defined(BINORMAL_TANGENT)
 	float4 Bitangent: BINORMAL0;
-#endif
-#if defined(VC)
+#	endif
+#	if defined(VC)
 	float4 Color: COLOR0;
-#endif
-#if defined(SKINNED)
+#	endif
+#	if defined(SKINNED)
 	float4 BoneWeights: BLENDWEIGHT0;
 	float4 BoneIndices: BLENDINDICES0;
-#endif
+#	endif
 };
+#endif
 
 struct VS_OUTPUT
 {
@@ -571,20 +576,13 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	return color;
 }
 #	else
-float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPosition, float depth, inout float shadowVariance)
+/** @brief Average sun shadow along the view ray through the particle, 1 outside the world or in interiors. */
+float GetViewRayShadow(float3 worldPosition, float2 screenPosition, float depth)
 {
-	float3 dirColor;
-	float3 ambientColor;
-	ShadowSampling::ExtractLighting(color, worldPosition, dirColor, ambientColor);
-
 	static const uint sampleCount = 8;
 	static const float rcpSampleCount = 1.0 / float(sampleCount);
 
 	float noise = Random::InterleavedGradientNoise(screenPosition, SharedData::FrameCount);
-	float noiseTransform = noise * 2.0 - 1.0;
-	float2 rotation;
-	sincos(Math::TAU * noise, rotation.y, rotation.x);
-	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 
 	// Enough for sky statics
 	float maxDistance = max(0, SharedData::GetScreenDepth(depth));
@@ -611,6 +609,17 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 		}
 		shadow *= rcpSampleCount;
 	}
+
+	return shadow;
+}
+
+float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPosition, float depth, inout float shadowVariance)
+{
+	float3 dirColor;
+	float3 ambientColor;
+	ShadowSampling::ExtractLighting(color, worldPosition, dirColor, ambientColor);
+
+	float shadow = GetViewRayShadow(worldPosition, screenPosition, depth);
 
 	shadowVariance = 1.0 - sqrt(saturate(fwidth(shadow)));
 
@@ -694,6 +703,11 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(PARTICLES) && defined(TEXCOORD_INDEX) && defined(INDEXED_TEXTURE)
 	isFire = true;
 #		endif
+#	endif
+
+#	if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
+	const bool isEnbVolumetricFog = SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) &&
+	                                (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && !(Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor);
 #	endif
 
 #	if defined(LIGHTING)
@@ -826,6 +840,31 @@ PS_OUTPUT main(PS_INPUT input)
 		baseColor.xyz = baseColorScale * ColorManagement::TextureToWorking(TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz);
 	}
 
+#	if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
+	[branch] if (isEnbVolumetricFog)
+	{
+		alpha = saturate(alpha * SharedData::enbSettings.VolumetricFogOpacity);
+		float volumetricFogShadow = 1.0;
+		[branch] if (SharedData::enbSettings.VolumetricFogEnableShadows)
+			volumetricFogShadow = GetViewRayShadow(input.WorldPosition.xyz, input.Position.xy, depth);
+		float3 volumetricFogScale = SharedData::enbSettings.VolumetricFogIntensity * SharedData::enbSettings.VolumetricFogColorFilter;
+		[branch] if (SharedData::enbSettings.VolumetricFogEnableLighting)
+		{
+			// The vertex tint only colours the fog here; brightness comes from the scene lighting
+			float3 volumetricFogTint = BaseColor.xyz;
+			volumetricFogTint /= max(max(max(volumetricFogTint.x, volumetricFogTint.y), volumetricFogTint.z), 1.0);
+			float3 volumetricFogLight = ShadowSampling::GetDirectionalLighting() * volumetricFogShadow + ShadowSampling::GetAmbientLighting(input.WorldPosition.xyz);
+			baseColor.xyz = pow(max(volumetricFogTint * baseTexColor.xyz, 0.0), SharedData::enbSettings.VolumetricFogCurve) * volumetricFogLight * volumetricFogScale * 0.5;
+			lightingInfluence = 0.0;
+		}
+		else
+		{
+			float volumetricFogShade = lerp(1.0 - SharedData::enbSettings.VolumetricFogShadowAmount, 1.0, volumetricFogShadow);
+			baseColor.xyz = pow(max(baseColor.xyz, 0.0), SharedData::enbSettings.VolumetricFogCurve) * volumetricFogShade * volumetricFogScale;
+		}
+	}
+#	endif
+
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence);
 
 	float effectNormalization = 1.0;
@@ -864,7 +903,11 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
-	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0) {
+	bool applyViewRayShadow = Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0;
+#		if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
+	applyViewRayShadow = applyViewRayShadow && !isEnbVolumetricFog;
+#		endif
+	if (applyViewRayShadow) {
 #		if defined(PHYSICAL_SKY)
 		if (SharedData::physSkyData.enabled && SharedData::physSkyData.lightSkyStatics) {
 			float3 sceneLighting = ShadowSampling::GetSceneLightingColor(input.WorldPosition.xyz);

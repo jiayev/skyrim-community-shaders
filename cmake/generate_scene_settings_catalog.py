@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 
 """Generates the scene settings catalog from the feature sources at build time.
@@ -20,7 +19,9 @@ Two invariants the parsing rests on:
 
 import argparse
 import ast
+import collections
 import functools
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -313,6 +314,8 @@ STRUCT_DECL_RE = r"\bstruct\s+(?:alignas\s*\([^)]*\)\s+)?(\w+)([^;{]*)\{"
 
 # A const SaveSettings persists exactly like a mutable one, so missing it drops a whole feature.
 SAVE_SETTINGS_DEFINITION_RE = r"\bvoid\s+(\w+)::SaveSettings\s*\([^)]*\)\s*(?:const\s*)?\{"
+# A class or struct definition with a base list: group 1 the name, group 2 the bases.
+FEATURE_CLASS_DECL_RE = re.compile(r"\b(?:struct|class)\s+(\w+)\s*(?:final\s*)?:\s*([^{;]*)\{")
 
 # Features reach for eastl as readily as std, and either smart pointer owns a child the same way, so
 # recognising only one spelling would silently drop that child's whole set of bindings.
@@ -413,9 +416,14 @@ def split_args(arg_text: str) -> list[str]:
     args = []
     current = []
     depth = 0
+    # Kept apart from depth: only a `<` glued to a name opens template arguments, so `a < b`,
+    # `->` and `>=` never merge two arguments.
+    angle_depth = 0
     in_string = False
     escaped = False
-    for ch in arg_text:
+    for index, ch in enumerate(arg_text):
+        previous = arg_text[index - 1] if index > 0 else ""
+        following = arg_text[index + 1] if index + 1 < len(arg_text) else ""
         if in_string:
             current.append(ch)
             if escaped:
@@ -428,13 +436,19 @@ def split_args(arg_text: str) -> list[str]:
         if ch == '"':
             in_string = True
             current.append(ch)
-        elif ch in "([{<":
+        elif ch in "([{":
             depth += 1
             current.append(ch)
-        elif ch in ")]}>":
+        elif ch in ")]}":
             depth = max(0, depth - 1)
             current.append(ch)
-        elif ch == "," and depth == 0:
+        elif ch == "<" and (_is_identifier_char(previous) or previous == ">") and following not in "<=":
+            angle_depth += 1
+            current.append(ch)
+        elif ch == ">" and angle_depth > 0 and previous != "-" and following != "=":
+            angle_depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0 and angle_depth == 0:
             args.append("".join(current).strip())
             current = []
         else:
@@ -581,8 +595,9 @@ def collect_json_initializer_fields(paths: list[Path]) -> dict[str, list[str]]:
     return schemas
 
 
-def collect_struct_bodies(paths: list[Path]) -> dict[str, str]:
-    bodies: dict[str, str] = {}
+def collect_struct_bodies(paths: list[Path]) -> dict[str, list[str]]:
+    """Every definition's body per struct name, in scan order."""
+    bodies: dict[str, list[str]] = {}
     for path in paths:
         text = read_text(path)
         for match in re.finditer(STRUCT_DECL_RE, text):
@@ -608,7 +623,7 @@ def collect_struct_bodies(paths: list[Path]) -> dict[str, str]:
                 elif ch == "}":
                     depth -= 1
                     if depth == 0:
-                        bodies.setdefault(name, text[body_start:i])
+                        bodies.setdefault(name, []).append(text[body_start:i])
                         break
                 i += 1
     return bodies
@@ -776,7 +791,10 @@ def collect_save_roots(paths: list[Path]) -> dict[str, str]:
             if body_end < 0:
                 continue
             body = text[match.end():body_end]
-            assignment = re.search(r"\b(?:\w+|this->\w+)\s*=\s*(?:this->)?([A-Za-z_]\w*)\s*;", body)
+            # Only an assignment to the JSON parameter names the root: a local `x = y;` ahead of it is not one.
+            parameter = re.search(r"&\s*(\w+)\s*\)\s*(?:const\s*)?\{$", match.group(0))
+            target = re.escape(parameter.group(1)) if parameter else r"\w+"
+            assignment = re.search(rf"\b{target}\s*=\s*(?:this->)?([A-Za-z_]\w*)\s*;", body)
             if assignment:
                 roots[feature_class] = assignment.group(1)
     return roots
@@ -874,10 +892,13 @@ def collect_features(paths: list[Path]) -> dict[str, dict[str, str]]:
     features: dict[str, dict[str, str]] = {}
     for path in paths:
         text = read_text(path)
-        class_match = re.search(r"\b(?:struct|class)\s+(\w+)[^{:;]*(?::[^{]+Feature)", text)
-        if not class_match:
+        # Masked, so a doc comment such as "Feature class for ..." cannot pose as the declaration.
+        class_name = next((
+            match.group(1) for match in FEATURE_CLASS_DECL_RE.finditer(masked_text(path))
+            if re.search(r"\b\w*Feature\b", match.group(2))
+        ), None)
+        if not class_name:
             continue
-        class_name = class_match.group(1)
         constants = collect_string_constants(text)
         short_expression = get_function_return_expression(text, "GetShortName")
         short_name = resolve_string_expression(short_expression, text, constants) if short_expression else None
@@ -1218,6 +1239,39 @@ def _blank_keeping_newlines(segment: str) -> str:
     return _MASK_NON_NEWLINE.sub(" ", segment)
 
 
+def _is_identifier_char(ch: str) -> bool:
+    return ch.isalnum() or ch == "_"
+
+
+def _is_digit_separator(text: str, quote: int) -> bool:
+    """Whether the ' at `quote` splits a numeric literal (1'000) rather than opening a char literal."""
+    if quote + 1 >= len(text) or not text[quote + 1].isalnum():
+        return False
+    begin = quote
+    while begin > 0 and (text[begin - 1].isalnum() or text[begin - 1] in "'."):
+        begin -= 1
+    return begin < quote and text[begin].isdigit()
+
+
+def _raw_string_end(text: str, quote: int) -> int:
+    """Index of the closing quote of R"delim(...)delim" opened at `quote`, or -1 when it opens none."""
+    if quote < 1 or text[quote - 1] != "R":
+        return -1
+
+    def opens_token(prefix: str) -> bool:
+        # The R, with its encoding prefix, has to start a token: `fooR"` is an identifier then a string.
+        begin = quote - 1 - len(prefix)
+        return begin >= 0 and text[begin:quote - 1] == prefix and (
+            begin == 0 or not _is_identifier_char(text[begin - 1]))
+
+    open_paren = text.find("(", quote + 1)
+    if open_paren < 0 or not any(opens_token(prefix) for prefix in ("u8", "u", "U", "L", "")):
+        return -1
+    delimiter = text[quote + 1:open_paren]
+    close = text.find(f"){delimiter}\"", open_paren)
+    return close + len(delimiter) + 1 if close >= 0 else -1
+
+
 @functools.lru_cache(maxsize=None)
 def mask_cpp_source(text: str) -> str:
     length = len(text)
@@ -1249,8 +1303,19 @@ def mask_cpp_source(text: str) -> str:
             copied = i = end
             continue
 
-        # The quotes themselves survive; only the body is blanked.
         quote = text[i]
+        if quote == "'" and _is_digit_separator(text, i):
+            i += 1
+            continue
+        # A raw string has no escapes and may hold quotes, so it ends only at its delimiter.
+        if quote == '"' and (raw_end := _raw_string_end(text, i)) >= 0:
+            chunks.append(text[copied:i + 1])
+            chunks.append(_blank_keeping_newlines(text[i + 1:raw_end]))
+            copied = raw_end
+            i = raw_end + 1
+            continue
+
+        # The quotes themselves survive; only the body is blanked.
         chunks.append(text[copied:i + 1])
         i += 1
         body: list[str] = []
@@ -4240,8 +4305,14 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
         if type_name in macros and macros[type_name] != fields:
             raise SystemExit(f"conflicting serialized fields for {type_name}")
         macros[type_name] = fields
-    struct_bodies = collect_struct_bodies(src_paths)
-    struct_fields = {name: parse_struct_fields(body) for name, body in struct_bodies.items()}
+    parsed_struct_fields = {
+        name: [parse_struct_fields(body) for body in bodies]
+        for name, bodies in collect_struct_bodies(src_paths).items()}
+    struct_fields = {name: definitions[0] for name, definitions in parsed_struct_fields.items()}
+    # A name defined with different fields in two places cannot be resolved by the name alone.
+    ambiguous_structs = {
+        name for name, definitions in parsed_struct_fields.items()
+        if any(definition != definitions[0] for definition in definitions[1:])}
     enum_types = collect_enum_types(src_paths)
     class_numeric_constants = collect_class_numeric_constants(
         [path for path in src_paths if path.suffix == ".h"])
@@ -4493,8 +4564,12 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             if owner not in {context.field_class, "Settings"})
         declared_type = catalog_class_aliases.get(context.field_class, {}).get(simple_type, simple_type)
         declared_type = declared_type.split("::")[-1]
-        declared_fields = catalog_class_fields.get(context.field_class, {}).get(
-            simple_type, struct_fields.get(declared_type, {}))
+        class_fields = catalog_class_fields.get(context.field_class, {})
+        if simple_type not in class_fields and declared_type in ambiguous_structs:
+            discovery_errors.append(
+                f"{full_type} resolves by name to {declared_type}, which several structs define differently")
+            return
+        declared_fields = class_fields.get(simple_type, struct_fields.get(declared_type, {}))
         for field in fields:
             field_type = declared_fields.get(field, "")
             if not field_type:
@@ -4657,6 +4732,11 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                     f"{feature_class}.{root_member} has no discovered settings type")
             continue
         root_full_type = f"{feature_class}::{root_type.split('::')[-1]}"
+        # emit_type skips a type without a macro, which would drop the feature's whole catalog in silence.
+        if root_full_type not in macros and f"{feature_class}::Settings" in macros:
+            discovery_errors.append(
+                f"{feature_class}::SaveSettings root '{root_member}' is not its persisted Settings type")
+            continue
         emit_type(CatalogContext(feature_class, feature_class), root_full_type, [], root_member)
 
     for feature_class, children in settings_components.items():
@@ -5118,16 +5198,26 @@ def required_entry_points(entries: list[dict[str, object]]) -> list[str]:
     return sorted(points)
 
 
+def load_feature_floors(path: Path) -> dict[str, int]:
+    """Per-feature scene-controllable floors from a checked-in JSON file's "features" object."""
+    floors = json.loads(path.read_text(encoding="utf-8")).get("features", {})
+    if not isinstance(floors, dict) or not all(
+            isinstance(name, str) and isinstance(floor, int) for name, floor in floors.items()):
+        raise ValueError(f"{path} must map feature short names to integer floors under 'features'")
+    return floors
+
+
 def validate_entries(
         entries: list[dict[str, object]],
         min_entries: int,
         min_controllable: int = 1,
-        min_controllable_features: int = 1) -> None:
+        min_controllable_features: int = 1,
+        feature_floors: dict[str, int] | None = None) -> None:
     """Fails the build when the catalog shrinks past the floors, then checks each entry.
 
-    The three floors are not redundant. Persisted-but-hidden entries keep the total up even
-    if every scene binding is lost, and a healthy total hides one feature's bindings vanishing
-    behind another's growth, so the feature count is the only signal for a single broken parse.
+    The floors are not redundant. Persisted-but-hidden entries keep the total up even if every
+    scene binding is lost, a healthy total hides one feature's bindings vanishing behind another's
+    growth, and the per-feature floors catch a feature losing only part of its bindings.
     """
     controllable = [
         entry for entry in entries
@@ -5140,6 +5230,13 @@ def validate_entries(
         if found < floor:
             raise ValueError(
                 f"scene settings catalog found {found} {label}, expected at least {floor}")
+    per_feature = collections.Counter(entry["feature"] for entry in controllable)
+    shortfalls = [
+        f"{feature} has {per_feature[feature]}, expected at least {floor}"
+        for feature, floor in sorted((feature_floors or {}).items()) if per_feature[feature] < floor]
+    if shortfalls:
+        raise ValueError(
+            "scene settings catalog lost scene-controllable entries: " + "; ".join(shortfalls))
 
     errors = []
     identities = set()
@@ -5214,17 +5311,24 @@ def main() -> int:
     parser.add_argument("--min-entries", type=int, default=1)
     parser.add_argument("--min-controllable", type=int, default=1)
     parser.add_argument("--min-controllable-features", type=int, default=1)
+    parser.add_argument("--feature-floors", type=Path,
+                        help="JSON file of per-feature scene-controllable floors")
+    parser.add_argument("--stamp", type=Path,
+                        help="File touched after every run, for build systems that compare timestamps")
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
     out_dir = Path(args.out_dir)
     entries = build_entries(source_dir)
     try:
+        feature_floors = load_feature_floors(args.feature_floors) if args.feature_floors else None
         validate_entries(
-            entries, args.min_entries, args.min_controllable, args.min_controllable_features)
+            entries, args.min_entries, args.min_controllable, args.min_controllable_features, feature_floors)
     except ValueError as error:
         parser.error(str(error))
     write_catalog(entries, out_dir)
+    if args.stamp:
+        args.stamp.touch()
     print(f"Generated {len(entries)} scene setting catalog entries")
     return 0
 

@@ -1,5 +1,6 @@
 #include "FeatureOverwritesPanel.h"
 
+#include "BaselineManager.h"
 #include "CSEditor/Browser/BrowserWidgets.h"
 #include "CSEditor/EditorWindow.h"
 #include "Feature.h"
@@ -7,7 +8,6 @@
 #include "IconsFontAwesome5.h"
 #include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsManager.h"
-#include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsCatalog.h"
 #include "Utils/UI.h"
@@ -15,9 +15,11 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <optional>
-#include <set>
 #include <span>
 #include <string>
 #include <tuple>
@@ -45,18 +47,11 @@ namespace
 	constexpr size_t kSearchBufferSize = 256;
 	constexpr std::string_view kGroupSeparator = " / ";
 
-	constexpr ImGuiTableFlags kListTableFlags =
-		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
-	/// Rows keep the modal open, span the table, and let the tick box drawn over them take its own clicks.
-	constexpr ImGuiSelectableFlags kRowFlags = ImGuiSelectableFlags_NoAutoClosePopups |
-	                                           ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap;
-
 	/// CheckboxFlags states: every bit set reads as ticked, some as mixed.
 	constexpr int kTickNone = 0;
 	constexpr int kTickSome = 1;
 	constexpr int kTickAll = 3;
 
-	using BrowserUI::ChipFace;
 	using BrowserUI::FilterChip;
 	using Util::Settings::FormatValue;
 
@@ -99,11 +94,10 @@ namespace
 		size_t fileCount = 0;
 	};
 
-	/** @brief Where the export writes; outlives the modal, so the next export lands in the same place. */
+	/** @brief The pack the export writes to; outlives the modal, so the next export lands in the same place. */
 	struct Target
 	{
 		char name[kNameBufferSize]{};
-		bool toPresetPack = false;
 	};
 	Target target;
 
@@ -118,11 +112,7 @@ namespace
 		bool removeUnticked = false;
 		bool featureLocked = false;
 		bool failed = false;
-		bool active = false;
-		bool pendingOpen = false;
-		/// The ID the popup opened under; other DrawExport callers have a different ID stack and stay out.
-		ImGuiID popupId = 0;
-		std::vector<std::string> overrideNames;
+		Util::DeferredModal modal;
 		std::vector<std::string> packNames;
 	};
 	Session session;
@@ -198,12 +188,12 @@ namespace
 	/** @brief Compares the feature with its destination file whenever the target changes. */
 	void RefreshTarget(FeatureExport& entry)
 	{
-		auto key = std::format("{}|{}", target.toPresetPack, target.name);
+		std::string key = target.name;
 		if (entry.targetKey == key)
 			return;
 		entry.targetKey = std::move(key);
-		entry.destination = SettingsOverrideManager::GetSingleton()->GetExportDestination(target.name, entry.shortName, target.toPresetPack);
-		entry.existing = entry.destination.empty() ? std::optional<json>(json::object()) : SettingsOverrideManager::ReadExportTarget(entry.destination);
+		entry.destination = BaselineManager::GetSingleton()->GetExportDestination(target.name, entry.shortName);
+		entry.existing = entry.destination.empty() ? std::optional<json>(json::object()) : BaselineManager::ReadExportTarget(entry.destination);
 		entry.fileCount = 0;
 		for (auto& row : entry.rows) {
 			row.fileState = FileState::Absent;
@@ -220,11 +210,6 @@ namespace
 
 	void CollectExistingNames()
 	{
-		std::set<std::string> overrideNames;
-		for (const auto& info : SettingsOverrideManager::GetSingleton()->GetOverrides())
-			if (info.packId.empty() && !info.isGlobal)
-				overrideNames.insert(info.modName);
-		session.overrideNames.assign(overrideNames.begin(), overrideNames.end());
 		for (const auto& pack : UnifiedPresetCatalog::GetSingleton().GetPacks())
 			if (pack.source == UnifiedPresetCatalog::SourceKind::UnifiedPack)
 				session.packNames.push_back(pack.id);
@@ -259,44 +244,15 @@ namespace
 		return counts;
 	}
 
-	void DrawTargetChips()
-	{
-		BrowserUI::SectionLabel(T(TKEY("export.save_to"), "Save to"));
-		const auto drawChip = [](const char* id, const ChipFace& face, const char* tooltip, bool toPresetPack) {
-			if (FilterChip(id, face, target.toPresetPack == toPresetPack))
-				target.toPresetPack = toPresetPack;
-			Util::AddTooltip(tooltip);
-		};
-		drawChip("##overrides", { T(TKEY("export.to_overrides"), "Overrides file"), Icons::FA(ICON_FA_FILE_EXPORT) },
-			T(TKEY("export.to_overrides_tooltip"), "Writes Overrides/<Name>_<Feature>.json, loaded at every game start."), false);
-		ImGui::SameLine();
-		drawChip("##pack", { T(TKEY("export.to_pack"), "Baseline preset pack"), Icons::FA(ICON_FA_LAYER_GROUP) },
-			T(TKEY("export.to_pack_tooltip"),
-				"Writes Presets/<Mod Name>/Baseline/<Feature>.json with a starter manifest instead of an Overrides file.\n"
-				"It then appears on the Presets page under Baseline, with author, version and description you can edit in the manifest."),
-			true);
-		BrowserUI::HelpMarkerRight(T(TKEY("export.guide"),
-			"Writes feature settings to files of their own, without any scene layer values.\n\n"
-			"Save to: an Overrides file is loaded at every game start, so a mod can ship it as its defaults. A Baseline "
-			"preset pack only applies when picked on the Presets page.\n"
-			"Name and its dropdown arrow: one file per feature is written under this name; the arrow adds to a file "
-			"exported before.\n"
-			"Settings: tick what to write. With several features, pick each one on the left. In file shows what the "
-			"destination already holds.\n"
-			"Remove unticked settings: deletes the settings you left unticked from the file instead of keeping them.\n\n"
-			"Workflow: tune a feature in Base Settings, then export the settings a mod should ship. For a full look "
-			"with scene layers, use Export Preset in the CS Editor (Ctrl+Shift+S)."));
-	}
-
-	/** @brief Name field and the picker of names already in use for the current target. */
+	/** @brief Name field, the picker of packs already exported to, and the guide. */
 	void DrawNameRow()
 	{
 		ImGui::AlignTextToFramePadding();
-		ImGui::TextUnformatted(target.toPresetPack ? T(TKEY("export.pack_name"), "Pack Name") : T(TKEY("export.mod_name"), "Mod Name"));
+		ImGui::TextUnformatted(T(TKEY("export.pack_name"), "Pack Name"));
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(ImGui::GetFontSize() * kNameWidthEm);
 		ImGui::InputText("##name", target.name, sizeof(target.name));
-		const auto& names = target.toPresetPack ? session.packNames : session.overrideNames;
+		const auto& names = session.packNames;
 		Util::DropdownArrowButton(kPickerId, T(TKEY("export.existing_tooltip"), "Pick a name already in use to add to its file."),
 			names.empty(), T(TKEY("export.existing_none_tooltip"), "Nothing exported under a name yet."));
 		if (ImGui::BeginPopup(kPickerId)) {
@@ -305,6 +261,16 @@ namespace
 					strncpy_s(target.name, sizeof(target.name), name.c_str(), _TRUNCATE);
 			ImGui::EndPopup();
 		}
+		BrowserUI::HelpMarkerRight(T(TKEY("export.guide_baseline"),
+			"Writes feature settings into a Baseline preset pack, without any scene layer values. The pack applies when "
+			"picked on the Presets page.\n\n"
+			"Pack Name and its dropdown arrow: one file per feature is written into this pack; the arrow adds to a pack "
+			"exported before.\n"
+			"Settings: tick what to write. With several features, pick each one on the left. In file shows what the "
+			"destination already holds.\n"
+			"Remove unticked settings: deletes the settings you left unticked from the file instead of keeping them.\n\n"
+			"Workflow: tune a feature in Base Settings, then export the settings the pack should ship. For a full look "
+			"with scene layers, use Export Preset in the CS Editor (Ctrl+Shift+S)."));
 	}
 
 	/** @brief Where the viewed feature's file goes, and whether it is new. */
@@ -323,9 +289,8 @@ namespace
 													T(TKEY("export.file_new_tooltip"), "Export creates this file.") } :
 		                                        std::tuple{ T(TKEY("export.file_existing"), "Existing file"), Util::Colors::GetInfo(),
 													T(TKEY("export.file_existing_tooltip"), "Export updates the ticked settings. Other settings and metadata in the file are kept.") };
-		// A pack file is <presets>/<pack>/Baseline/<feature>.json; an override sits in the Overrides folder.
-		const auto root = target.toPresetPack ? entry.destination.parent_path().parent_path().parent_path() :
-		                                        SettingsOverrideManager::GetSingleton()->GetOverridesDirectory();
+		// A pack file is <presets>/<pack>/Baseline/<feature>.json.
+		const auto root = entry.destination.parent_path().parent_path().parent_path();
 		const auto shown = entry.destination.lexically_relative(root.parent_path()).generic_string();
 		const float badgeWidth = Util::MeasureBadgeWidth(label) + ImGui::GetStyle().ItemSpacing.x;
 		BrowserUI::MetaText(shown.c_str(), std::max(1.0f, ImGui::GetContentRegionAvail().x - badgeWidth));
@@ -337,7 +302,7 @@ namespace
 	void DrawFeatureList()
 	{
 		const float em = ImGui::GetFontSize();
-		if (!ImGui::BeginTable("##features", 1, kListTableFlags, ImVec2(em * kFeatureListWidthEm, em * kListHeightEm)))
+		if (!BrowserUI::BeginListTable("##features", 1, ImVec2(em * kFeatureListWidthEm, em * kListHeightEm), false, nullptr))
 			return;
 		// An auto-resizing modal fits columns to content, which the ellipsized label measures against.
 		ImGui::TableSetupColumn("##feature", ImGuiTableColumnFlags_WidthStretch);
@@ -346,7 +311,7 @@ namespace
 			ImGui::PushID(entry.shortName.c_str());
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
-			if (Util::TableRowSelectable("##row", index == session.viewed, kRowFlags) && session.viewed != index) {
+			if (Util::TableRowSelectable("##row", index == session.viewed, BrowserUI::kTickRowFlags) && session.viewed != index) {
 				session.viewed = index;
 				session.group.reset();
 			}
@@ -360,7 +325,7 @@ namespace
 			BrowserUI::EllipsizedText(entry.label.c_str(), 0.0f, ImGui::GetStyleColorVec4(ImGuiCol_Text));
 			ImGui::PopID();
 		}
-		ImGui::EndTable();
+		BrowserUI::EndListTable();
 	}
 
 	/** @brief Search, a chip per group, and the in-file toggle. */
@@ -445,7 +410,7 @@ namespace
 	void DrawSettingRow(FeatureExport& entry, size_t index)
 	{
 		const auto& row = entry.rows[index];
-		if (Util::TableRowSelectable("##row", false, kRowFlags))
+		if (Util::TableRowSelectable("##row", false, BrowserUI::kTickRowFlags))
 			entry.ticked[index] ^= 1;
 		ImGui::SameLine(0.0f, 0.0f);
 		bool ticked = entry.ticked[index] != 0;
@@ -480,18 +445,10 @@ namespace
 
 	void DrawSettingTable(FeatureExport& entry, const std::vector<Line>& lines)
 	{
-		BrowserUI::RowShadeScope shade;
 		const float em = ImGui::GetFontSize();
-		const int columnCount = lines.empty() ? 1 : 4;
-		if (!ImGui::BeginTable("##settings", columnCount, kListTableFlags, ImVec2(0.0f, em * kListHeightEm)))
+		if (!BrowserUI::BeginListTable("##settings", 4, ImVec2(0.0f, em * kListHeightEm), lines.empty(),
+				T("cs_editor.scene_copy_empty", "Nothing matches.")))
 			return;
-		if (lines.empty()) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			BrowserUI::EmptyState(T("cs_editor.scene_copy_empty", "Nothing matches."));
-			ImGui::EndTable();
-			return;
-		}
 
 		ImGui::TableSetupColumn("##tick", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableSetupColumn(T(TKEY("export.column_setting"), "Setting"), ImGuiTableColumnFlags_WidthStretch);
@@ -517,7 +474,7 @@ namespace
 				ImGui::PopID();
 			}
 		}
-		ImGui::EndTable();
+		BrowserUI::EndListTable();
 	}
 
 	/** @brief Ticks every listed setting, and a count of the ticks, including hidden ones, that clears them. */
@@ -562,7 +519,18 @@ namespace
 	/** @brief Writes one file per feature with a tick. @return False when any write failed. */
 	bool RunExport()
 	{
-		auto* manager = SettingsOverrideManager::GetSingleton();
+		auto* manager = BaselineManager::GetSingleton();
+		// One file per feature, so a failure puts the ones already written back as they were.
+		std::vector<std::pair<std::filesystem::path, std::optional<std::string>>> written;
+		const auto rollBack = [&] {
+			for (const auto& [path, previous] : written) {
+				std::error_code ec;
+				if (previous)
+					Util::FileHelpers::WriteFileAtomically(path, *previous, "Baseline rollback");
+				else
+					std::filesystem::remove(path, ec);
+			}
+		};
 		for (auto& entry : session.features) {
 			if (CountTicked(entry) == 0)
 				continue;
@@ -574,18 +542,23 @@ namespace
 				else if (IsRemoved(entry, index))
 					removePaths.push_back(entry.rows[index].path);
 			}
-			// A failed write may follow successful ones, so every file is compared afresh.
+			const auto destination = manager->GetExportDestination(target.name, entry.shortName);
+			std::optional<std::string> previous;
+			if (std::ifstream file(destination, std::ios::binary); file)
+				previous.emplace(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+			// Every file is compared afresh, the restored ones included.
 			entry.targetKey.clear();
-			if (!manager->ExportSettings(target.name, entry.shortName, paths, entry.values, target.toPresetPack, removePaths))
+			if (!manager->ExportSettings(target.name, entry.shortName, paths, entry.values, removePaths)) {
+				rollBack();
 				return false;
+			}
+			written.emplace_back(destination, std::move(previous));
 			// The exported value is now the baseline's, so the scene resolves over it as it will after a reopen.
 			SceneSettingsManager::GetSingleton()->ReleaseSketches(entry.shortName);
 		}
-		if (target.toPresetPack) {
-			auto& catalog = UnifiedPresetCatalog::GetSingleton();
-			catalog.Discover();
-			catalog.ReapplyIfInUse(Util::FileHelpers::SanitizeFileName(target.name));
-		}
+		auto& catalog = UnifiedPresetCatalog::GetSingleton();
+		catalog.Discover();
+		catalog.ReapplyIfInUse(Util::FileHelpers::SanitizeFileName(target.name));
 		return true;
 	}
 
@@ -627,7 +600,6 @@ namespace
 		if (EditorWindow::ClosePopupOnEscape())
 			return;
 
-		DrawTargetChips();
 		DrawNameRow();
 		if (session.features.empty()) {
 			BrowserUI::EmptyState(T(TKEY("export.no_features"), "No loaded feature has settings to export."));
@@ -677,16 +649,14 @@ void FeatureOverwritesPanel::BeginExport(Feature* feature)
 				session.features.push_back({ .shortName = candidate->GetShortName(), .label = candidate->GetDisplayName() });
 	}
 	CollectExistingNames();
-	session.active = true;
-	session.pendingOpen = true;
+	session.modal.Request();
 }
 
-void FeatureOverwritesPanel::BeginExportInto(Feature* feature, const std::string& name, bool toPresetPack)
+void FeatureOverwritesPanel::BeginExportInto(Feature* feature, const std::string& packId)
 {
 	assert(feature);
 	BeginExport(feature);
-	strncpy_s(target.name, sizeof(target.name), name.c_str(), _TRUNCATE);
-	target.toPresetPack = toPresetPack;
+	strncpy_s(target.name, sizeof(target.name), packId.c_str(), _TRUNCATE);
 	auto& entry = session.features.front();
 	RefreshTarget(entry);
 	for (size_t index = 0; index < entry.rows.size(); ++index)
@@ -695,25 +665,11 @@ void FeatureOverwritesPanel::BeginExportInto(Feature* feature, const std::string
 
 void FeatureOverwritesPanel::DrawExport()
 {
-	if (!session.active)
+	if (!session.modal.IsActive())
 		return;
-
 	const auto title = std::format("{}{}", T(TKEY("export.title"), "Export Feature Settings"), kPopupId);
-	const ImGuiID popupId = ImGui::GetID(title.c_str());
-	if (std::exchange(session.pendingOpen, false)) {
-		session.popupId = popupId;
-		ImGui::OpenPopup(title.c_str());
-	}
-	if (popupId != session.popupId)
-		return;
-
-	const float width = ImGui::GetFontSize() * (session.featureLocked ? kLockedModalWidthEm : kModalWidthEm);
-	ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, FLT_MAX));
-	bool open = true;
-	if (auto popup = Util::CenteredPopupModal(title.c_str(), &open))
-		DrawContents();
-	if (!ImGui::IsPopupOpen(title.c_str()))
-		session.active = false;
+	session.modal.Draw(title.c_str(), ImGui::GetFontSize() * (session.featureLocked ? kLockedModalWidthEm : kModalWidthEm),
+		DrawContents);
 }
 
 void FeatureOverwritesPanel::DrawExportButton(Feature* feature, const char* id)
@@ -726,8 +682,8 @@ void FeatureOverwritesPanel::DrawExportButton(Feature* feature, const char* id)
 	}
 	const auto tooltip = std::format("{}\n{}", T(TKEY("export.button_title"), "Export Feature Overwrite..."),
 		T(TKEY("export.button_tooltip"),
-			"Writes this feature's settings to a file of their own: an Overrides file loaded at every game start, or a "
-			"Baseline preset pack. Scene layers are left out.\n"
+			"Writes this feature's settings into a Baseline preset pack, applied from the Presets page. "
+			"Scene layers are left out.\n"
 			"For a full preset with scene layers, use Export Preset in the CS Editor (Ctrl+Shift+S)."));
 	Util::AddTooltip(tooltip.c_str());
 }

@@ -5,7 +5,6 @@
 #include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsCatalog.generated.h"
 #include "SceneSettingsInternal.h"
-#include "SceneSettingsOverwrites.h"
 #include "State.h"
 #include "Utils/Climate.h"
 #include "Utils/FileSystem.h"
@@ -22,7 +21,6 @@
 #include <regex>
 
 using namespace SceneSettingsInternal;
-using namespace SceneSettingsOverwrites;
 
 namespace
 {
@@ -125,7 +123,12 @@ bool SceneSettingsManager::ApplyCatalogSceneSettings(
 void SceneSettingsManager::ScheduleApplyVerification(std::string_view featureShortName,
 	const std::vector<CatalogSceneSettingUpdate>& updates, size_t signature, bool transition)
 {
-	pendingApplyVerifications[std::string(featureShortName)] = {
+	const auto featureName = std::string(featureShortName);
+	// A blend re-applies the same set every tick, and each read-back is a full SaveSettings.
+	if (const auto verified = verifiedApplySignatures.find(featureName);
+		verified != verifiedApplySignatures.end() && verified->second == signature)
+		return;
+	pendingApplyVerifications[featureName] = {
 		.appliedFrame = lastUpdateFrame,
 		.updates = updates,
 		.signature = signature,
@@ -152,23 +155,37 @@ void SceneSettingsManager::VerifyPendingApplies()
 		auto& failures = verification.transition ? transitionApplyFailures : applyFailures;
 		if (retained) {
 			failures.erase(featureShortName);
+			verifiedApplySignatures[featureShortName] = verification.signature;
+			// A restore carries no clamp, and once it is confirmed its baseline has nothing left to retry.
+			for (const auto& update : verification.updates) {
+				const SettingAddress address{ featureShortName, update.settingPath, update.key };
+				if (!update.clampToControlRange && !appliedSettings.contains(address))
+					baselineSettings.erase(address);
+			}
 		} else {
 			if (failures[featureShortName].Record(verification.signature, std::chrono::steady_clock::now()))
 				logger::warn("[SceneSettings] {} did not retain settings after reporting a successful apply",
 					featureShortName);
+			verifiedApplySignatures.erase(featureShortName);
 			// Record what the feature reports instead of dropping the address: the scene layer still owes it
 			// the baseline, and the mismatch against the resolved value drives the retry.
+			bool keptAny = false;
 			for (size_t index = 0; index < verification.updates.size(); ++index) {
 				const auto& update = verification.updates[index];
 				const SettingAddress address{ featureShortName, update.settingPath, update.key };
-				const bool hasObserved = update.clampToControlRange && index < observed.size() &&
-				                         !observed[index].is_null();
+				const bool hasObserved = index < observed.size() && !observed[index].is_null() &&
+				                         baselineSettings.contains(address);
 				if (hasObserved)
 					appliedSettings[address] = observed[index];
 				else
 					appliedSettings.erase(address);
+				keptAny = keptAny || hasObserved;
 			}
-			PruneAppliedFeatureName(featureShortName);
+			// A rejected restore is applied again, so its feature is scene-driven once more.
+			if (keptAny)
+				appliedFeatureNames.insert(featureShortName);
+			else
+				PruneAppliedFeatureName(featureShortName);
 			resolverDirty = true;
 		}
 		verificationIt = pendingApplyVerifications.erase(verificationIt);
@@ -341,7 +358,7 @@ SceneSettingsManager::BlendedPeriods SceneSettingsManager::GetBlendedPeriods() c
 {
 	const auto boundaries = GetPeriodStartHours();
 	// A shifted period must still fit a whole blend; periods that grow with the blend never limit it.
-	float blendHours = timeOfDayTransitionHours;
+	float blendHours = GetTransitionControl(TransitionControl::TimeOfDayHours);
 	for (int index = 0; index < kPeriodCount; ++index) {
 		const float blendLengthsNeeded = 1.0f + kBlendOffsets[index] - kBlendOffsets[(index + 1) % kPeriodCount];
 		if (blendLengthsNeeded > 0.0f)
@@ -357,13 +374,9 @@ SceneSettingsManager::BlendedPeriods SceneSettingsManager::GetBlendedPeriods() c
 std::array<float, SceneSettingsManager::kPeriodCount> SceneSettingsManager::GetTimeOfDayFactors() const
 {
 	std::array<float, kPeriodCount> factors{};
-	const auto [starts, blendHours] = GetBlendedPeriods();
-
-	// Blends are centred on the shifted starts.
-	float hour = GetCurrentGameHour() - blendHours * 0.5f;
-	if (hour < 0.0f)
-		hour += 24.0f;
-	const auto lookup = FindPeriodForHour(starts, hour);
+	const auto blended = GetBlendedPeriods();
+	const auto& [starts, blendHours] = blended;
+	const auto lookup = FindBlendPeriod(blended);
 	if (lookup.index < 0) {
 		factors[static_cast<int>(TimeOfDayPeriod::Day)] = 1.0f;
 		return factors;
@@ -376,37 +389,66 @@ std::array<float, SceneSettingsManager::kPeriodCount> SceneSettingsManager::GetT
 		return factors;
 	}
 
-	// Inside the blend-out zone: cross-fade into the next period.
-	const float weight = hoursToEnd / blendHours;
+	// Inside the blend-out zone: cross-fade into the next period. The ease is symmetric, so either side can be eased.
+	const float weight = EaseTransition(hoursToEnd / blendHours);
 	factors[lookup.index] = weight;
 	factors[(lookup.index + 1) % kPeriodCount] = 1.0f - weight;
 	return factors;
 }
 
-void SceneSettingsManager::SetTimeOfDayTransitionHours(std::optional<float> hours, bool deferSave)
+void SceneSettingsManager::SetTransitionControl(TransitionControl control, std::optional<float> value, bool deferSave)
 {
-	if (hours) {
-		if (!std::isfinite(*hours))
+	const auto& spec = GetTransitionControlSpec(control);
+	if (value) {
+		if (!std::isfinite(*value))
 			return;
-		*hours = std::clamp(*hours, 0.0f, kMaxTimeOfDayTransitionHours);
+		*value = std::clamp(*value, spec.min, spec.max);
 	}
-	if (hours.has_value() == userTimeOfDayTransitionHours.has_value() &&
-		(!hours || std::abs(*userTimeOfDayTransitionHours - *hours) < kBlendEpsilon))
+	auto& user = userTransitionControls[static_cast<size_t>(control)];
+	if (value.has_value() == user.has_value() && (!value || std::abs(*user - *value) < kBlendEpsilon))
 		return;
-	userTimeOfDayTransitionHours = hours;
-	RefreshTimeOfDayTransitionHours();
+	// The location duration is saved inside the location section, which only exists once it has loaded.
+	if (control == TransitionControl::LocationSeconds) {
+		if (!TryEnsureLocationDataLoaded())
+			return;
+		locationTransitionModified = true;
+		locationUserSettingsModified = true;
+	}
+	user = value;
+	RefreshTransitionControls();
 	ReapplyAndSaveOrDefer(deferSave);
 }
 
-void SceneSettingsManager::RefreshTimeOfDayTransitionHours()
+void SceneSettingsManager::RefreshTransitionControls()
 {
-	const auto presetHours = activePresetMetadata ? activePresetMetadata->transitionHours : std::nullopt;
-	timeOfDayTransitionHours = userTimeOfDayTransitionHours.value_or(presetHours.value_or(kDefaultTimeOfDayTransitionHours));
+	for (size_t index = 0; index < kTransitionControlCount; ++index) {
+		const auto preset = activePresetMetadata ? activePresetMetadata->transitionControls[index] : std::nullopt;
+		transitionControls[index] = userTransitionControls[index].value_or(preset.value_or(kTransitionControlSpecs[index].defaultValue));
+	}
+}
+
+float SceneSettingsManager::EaseTransition(float linear) const
+{
+	const float progress = std::clamp(linear, 0.0f, 1.0f);
+	const float smoother = progress * progress * progress * (progress * (progress * 6.0f - 15.0f) + 10.0f);
+	return std::lerp(progress, smoother, GetTransitionControl(TransitionControl::Ease));
+}
+
+SceneSettingsManager::PeriodLookup SceneSettingsManager::FindBlendPeriod(const BlendedPeriods& blended)
+{
+	// Blends are centred on the shifted starts.
+	float hour = GetCurrentGameHour() - blended.blendHours * 0.5f;
+	if (hour < 0.0f)
+		hour += 24.0f;
+	return FindPeriodForHour(blended.starts, hour);
 }
 
 SceneSettingsManager::TimeOfDayPeriod SceneSettingsManager::GetCurrentPeriod()
 {
-	const auto lookup = FindPeriodForHour(GetPeriodStartHours(), GetCurrentGameHour());
+	// Read as the blend weights are, so mid-blend the period is the outgoing one and the next is incoming.
+	const auto* manager = GetSingleton();
+	const auto lookup = manager ? FindBlendPeriod(manager->GetBlendedPeriods()) :
+	                              FindPeriodForHour(GetPeriodStartHours(), GetCurrentGameHour());
 	return lookup.index < 0 ? TimeOfDayPeriod::Day : static_cast<TimeOfDayPeriod>(lookup.index);
 }
 
@@ -479,23 +521,6 @@ std::string SceneSettingsManager::GetSettingDisplayName(const std::string& setti
 	return StripImGuiId(Util::PrettifyIdentifier(settingKey));
 }
 
-json SceneSettingsManager::GetFeatureSettingValue(const std::string& featureShortName,
-	const std::vector<std::string>& settingPath, const std::string& settingKey)
-{
-	auto* setting = FindAllowedCatalogSetting(featureShortName, settingPath, settingKey);
-	if (!setting)
-		return {};
-	auto* feature = Feature::FindFeatureByShortName(featureShortName);
-	if (!feature)
-		return {};
-
-	SceneLayerGuard guard;
-	json value;
-	if (GetCatalogSettingValue(*feature, *setting, value))
-		return value;
-	return {};
-}
-
 // --- Generic Entry Management ---
 
 std::vector<SceneSettingsManager::SettingEntry>& SceneSettingsManager::GetEntriesMut(SceneType type)
@@ -566,20 +591,15 @@ void SceneSettingsManager::RemoveSetting(SceneType type, size_t index)
 		return;
 
 	const auto entry = vec[index];
-	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty() &&
-		!RemoveSettingFromOverwriteFile(GetSceneOverwritePath(type, entry), entry.settingPath, entry.settingKey))
-		return;
+	assert(entry.source == EntrySource::User && "a mod's entry is suppressed with a tombstone, never removed");
 
-	logger::info("[SceneSettings] Removed {} entry: {} (source={})", GetSceneTypeName(type),
-		GetSettingLogName(entry.featureShortName, entry.settingPath, entry.settingKey),
-		entry.source == EntrySource::Overwrite ? "overwrite" : "user");
+	logger::info("[SceneSettings] Removed {} entry: {}", GetSceneTypeName(type),
+		GetSettingLogName(entry.featureShortName, entry.settingPath, entry.settingKey));
 
 	vec.erase(vec.begin() + static_cast<ptrdiff_t>(index));
 	BumpEntryPresentationRevision();
-	if (entry.source == EntrySource::User) {
-		MarkEntryListUserSettingsModified(type);
-		SaveAllUserSettings();
-	}
+	MarkEntryListUserSettingsModified(type);
+	SaveAllUserSettings();
 	ReapplyIfActive();
 }
 
@@ -902,12 +922,11 @@ std::optional<SceneSettingsManager::SceneContextId> SceneSettingsManager::FindSu
 	}
 
 	for (const auto& context : candidates) {
+		// A tombstone only empties its own context, so the search goes on beneath it.
 		switch (GetSettingProvenance(context, setting.featureShortName, setting.settingPath, setting.settingKey).layer) {
 		case SettingLayer::User:
 		case SettingLayer::Overwrite:
 			return context;
-		case SettingLayer::Deleted:
-			return std::nullopt;
 		default:
 			break;
 		}
@@ -981,6 +1000,8 @@ void SceneSettingsManager::SuspendSceneLayer()
 		return;
 
 	resolverSuspended = true;
+	// The caller reads or writes the base, so a feature backing off its restore must still be tried now.
+	restoreRetryAfter.clear();
 	RestoreAppliedSettings();
 }
 
@@ -1005,6 +1026,14 @@ void SceneSettingsManager::LoadAll()
 {
 	if (!dataLoaded) {
 		dataLoaded = true;
+		// Older builds kept one file per scene type; nothing reads them now.
+		for (const auto type : { SceneType::InteriorOnly, SceneType::TimeOfDay }) {
+			std::error_code ec;
+			if (const auto legacy = Util::PathHelpers::GetSceneSettingsPath() / (GetSceneTypeName(type) + ".json");
+				std::filesystem::exists(legacy, ec))
+				logger::warn("[SceneSettings] {} is no longer read; its settings now live in {}",
+					Util::PathHelpers::ToUtf8(legacy), Util::PathHelpers::ToUtf8(GetUserSettingsFilePath()));
+		}
 		DiscoverOverwrites(SceneType::InteriorOnly);
 		DiscoverOverwrites(SceneType::TimeOfDay);
 		DiscoverPresetMetadata();

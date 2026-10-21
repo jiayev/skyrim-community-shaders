@@ -33,22 +33,6 @@ namespace SceneSettingsInternal
 	/// Earlier open-shaders name for the locationTypes section and its "Category" type; read and migrated.
 	constexpr const char* kLegacyLocationTypeSectionName = "categories";
 	constexpr const char* kLegacyLocationTypeName = "Category";
-	/// Unified pack manifest keys the Scene Manager reads and writes; artwork paths are relative to the pack folder.
-	constexpr const char* kPresetMetadataNameKey = "name";
-	constexpr const char* kPresetMetadataVersionKey = "version";
-	constexpr const char* kPresetMetadataAuthorKey = "author";
-	constexpr const char* kPresetMetadataDescriptionKey = "description";
-	constexpr const char* kPresetMetadataTagsKey = "tags";
-	constexpr const char* kPresetMetadataLogoKey = "logo";
-	constexpr const char* kPresetMetadataCoverKey = "cover";
-	constexpr const char* kPresetMetadataScreenshotsKey = "screenshots";
-	/// Community Shaders MAJOR.MINOR.PATCH the preset was authored against.
-	constexpr const char* kPresetMetadataCsVersionKey = "csVersion";
-	/// Feature short names the preset expects to be loaded.
-	constexpr const char* kPresetMetadataRequiredFeaturesKey = "requiredFeatures";
-	/// Plugin file names the preset was made with; missing ones only warn.
-	constexpr const char* kPresetMetadataRequiredPluginsKey = "requiredPlugins";
-	constexpr const char* kTimeOfDayTransitionHoursKey = "periodTransitionHours";
 
 	using namespace Util::Settings;
 
@@ -67,8 +51,9 @@ namespace SceneSettingsInternal
 	/** @brief Whether a scene type keeps its entries in a flat list: interior or time of day. */
 	bool IsEntryListSceneType(SceneSettingsManager::SceneType type);
 
-	/** @brief The period transition an object carries, or nullopt when absent or out of range. */
-	std::optional<float> ReadTimeOfDayTransitionHours(const json& object, std::string_view context);
+	/** @brief The transition control an object carries under key, or nullopt when absent or out of range. */
+	std::optional<float> ReadTransitionControl(const json& object, const char* key,
+		SceneSettingsManager::TransitionControl control, std::string_view context);
 
 	/** @brief A directory's subdirectories or regular files in stable path order; errors are logged. */
 	std::vector<std::filesystem::path> GetSortedDirectoryPaths(
@@ -91,11 +76,19 @@ namespace SceneSettingsInternal
 	bool ReadOptionalStringField(const json& object, std::string_view field, std::string& value,
 		std::string_view context);
 
-	/** @brief Whether a key is scene metadata (underscore-prefixed) rather than a setting. */
-	bool IsSceneMetadataKey(std::string_view key);
-
 	/** @brief Parses a JSON object file, refusing files over kMaxSceneOverwriteFileSize. */
 	bool ReadBoundedSceneJson(const std::filesystem::path& path, json& data);
+
+	/**
+	 * @brief Readies one weather or location's raw user settings in section for an edit and returns them.
+	 * @param canonicalKey The target's key as it is written back.
+	 * @param namesTarget Whether a raw key, possibly spelled differently, names the same target.
+	 * @param replaceMalformedEntries Empty a non-array "entries" in every raw object naming the target.
+	 * @param dropAliasMetadata Called on those objects other than canonicalKey's, whose metadata it duplicates.
+	 */
+	json& PrepareRawUserTarget(json& section, const std::string& canonicalKey,
+		const std::function<bool(const std::string&)>& namesTarget, bool replaceMalformedEntries,
+		const std::function<void(json&)>& dropAliasMetadata = {});
 
 	/** @brief Whether a value is a floating-point scalar. */
 	bool IsNumericValue(const json& value);
@@ -129,9 +122,6 @@ namespace SceneSettingsInternal
 	/** @brief Whether the setting falls under the global scene blacklist. */
 	bool IsBlacklistedSceneSetting(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
-
-	/** @brief Whether an overwrite document holds any non-metadata key. */
-	bool HasSceneOverwriteContent(const json& data);
 
 	/** @brief Whether value can replace featureValue: same JSON type, or both numbers. */
 	bool IsCompatibleSceneSettingValue(const json& featureValue, const json& value);
@@ -191,6 +181,11 @@ namespace SceneSettingsInternal
 	/** @brief Whether the entry addresses this exact setting. */
 	bool IsSameSetting(const SceneSettingsManager::SettingEntry& entry, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
+
+	/** @brief Whether entries hold this setting at this period, from any source or only the given one. */
+	bool HasEntryForPeriod(const std::vector<SceneSettingsManager::SettingEntry>& entries, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, SceneSettingsManager::TimeOfDayPeriod period,
+		std::optional<SceneSettingsManager::EntrySource> source);
 
 	/** @brief "path / Feature.key" name for log lines. */
 	std::string GetSettingLogName(const std::string& featureShortName,

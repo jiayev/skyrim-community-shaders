@@ -76,6 +76,10 @@ namespace Browser
 		SortKey sortKey = SortKey::None;
 		bool sortAscending = true;
 
+		/// Share of the page height the list keeps when the inspector sits under it.
+		static constexpr float kDefaultStackedRatio = 0.55f;
+		float stackedRatio = kDefaultStackedRatio;
+
 		/// Filtered and sorted rows for the current category.
 		std::vector<FormRow> rows;
 		/// Fingerprint of the inputs `rows` was built from; a mismatch triggers a rebuild.

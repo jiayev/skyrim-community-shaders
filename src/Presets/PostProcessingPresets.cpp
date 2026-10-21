@@ -5,12 +5,14 @@
 #include <string>
 #include <utility>
 
+#include "BaselineManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "Presets/UnifiedPresetCatalog.h"
-#include "SettingsOverrideManager.h"
+#include "State.h"
 #include "Utils/FileSystem.h"
+#include "Utils/SettingsCatalog.h"
 
 namespace
 {
@@ -34,20 +36,15 @@ namespace
 		if (!settings.is_object())
 			return json::object();
 		settings.erase("preset_name");
-		for (auto it = settings.begin(); it != settings.end();) {
-			if (it.key().starts_with('_'))
-				it = settings.erase(it);
-			else
-				++it;
-		}
+		Util::Settings::EraseMetadataKeys(settings);
 		return settings;
 	}
 
 	/// The same checks a Baseline file meets when the catalog loads it, so nothing is written that would be rejected.
 	bool IsValidBaseline(const json& document, const std::filesystem::path& path)
 	{
-		auto* overrides = SettingsOverrideManager::GetSingleton();
-		return overrides && overrides->IsValidOverrideDocument(document, path);
+		auto* baselines = BaselineManager::GetSingleton();
+		return baselines && baselines->IsValidDocument(document, path);
 	}
 
 	bool WriteDocument(const std::filesystem::path& packRoot, const json& document)
@@ -74,10 +71,10 @@ void PostProcessingPresets::MigrateLegacyPresets()
 	for (const auto& entry : std::filesystem::directory_iterator(legacyDir, ec)) {
 		const auto& source = entry.path();
 		if (!entry.is_regular_file(ec) || source.extension() != ".json" ||
-			_stricmp(source.stem().string().c_str(), kLegacyDefaultName) == 0)
+			_stricmp(Util::PathHelpers::ToUtf8(source.stem()).c_str(), kLegacyDefaultName) == 0)
 			continue;
 
-		const auto name = source.stem().string();
+		const auto name = Util::PathHelpers::ToUtf8(source.stem());
 		const auto packId = Util::FileHelpers::SanitizeFileName(name);
 		if (packId.empty())
 			continue;
@@ -120,6 +117,7 @@ bool PostProcessingPresets::WriteBaseline(const std::filesystem::path& packRoot)
 	if (!WriteDocument(packRoot, ToBaselineDocument(std::move(settings))))
 		return false;
 
-	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+	BaselineManager::GetSingleton()->Refresh();
+	globals::state->ReapplySettingsLayers();
 	return true;
 }

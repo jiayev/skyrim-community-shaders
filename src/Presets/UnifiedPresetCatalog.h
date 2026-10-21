@@ -10,7 +10,12 @@
 #include <winrt/base.h>
 
 #include "Features/Effects11/SceneHandoff.h"
+#include "PackManifest.h"
+#include "PostProcessingMode.h"
 #include "PresetCompatibility.h"
+#include "Utils/UI.h"
+
+struct Feature;
 
 /** @brief Discovers unified preset packs (Effects 11 and CS Presets payloads) plus orphan Effects 11 presets. */
 class UnifiedPresetCatalog
@@ -46,21 +51,9 @@ public:
 	static const char* GetPresetTypeName(PresetType type);
 
 	/** @brief A discovered pack's manifest data, backend payloads and lazily loaded artwork. */
-	struct PackInfo
+	struct PackInfo : PackManifest
 	{
 		std::string id;
-		std::string name;
-		std::string author;
-		std::string version;
-		std::string description;
-		std::string nexusUrl;  ///< Optional "nexusUrl" manifest field; shown as a link when non-empty.
-		std::vector<std::string> tags;
-		/// Community Shaders version the pack was made for (MAJOR.MINOR.PATCH); empty = unspecified.
-		std::string csVersion;
-		/// Feature short names the pack expects loaded; missing ones surface as warnings in the browser.
-		std::vector<std::string> requiredFeatures;
-		/// Plugin file names the pack was made with; missing ones surface as soft warnings in the browser.
-		std::vector<std::string> requiredPlugins;
 		/// csVersion, requiredFeatures and requiredPlugins checked against this session, refreshed by each Discover.
 		PresetCompatibility::Warning compat;
 
@@ -131,6 +124,15 @@ public:
 	/** @brief Sets and persists the active pack id. */
 	void SetActivePackId(const std::string& id);
 
+	/** @brief The Effects 11 preset the active pack selects, or empty when no pack is active. */
+	std::string GetActiveEffects11PresetId() const;
+
+	/** @brief The pipeline the last applied or disabled pack chose, if any. */
+	std::optional<PostProcessingMode::Mode> GetActivePipeline() const { return activePipeline; }
+	/** @brief Bumped each time a pack chooses the pipeline. The user config records the revision it was
+	 *  saved against, so a pack applied after the last save decides the pipeline at the next start. */
+	uint32_t GetPipelineRevision() const { return pipelineRevision; }
+
 	/** @brief Folder of the active unified pack; empty when none is active or the active preset is an orphan. */
 	std::filesystem::path GetActivePackRoot() const;
 
@@ -162,24 +164,34 @@ public:
 	const std::vector<std::string>& GetBaselinePackIds() const { return baselinePackIds; }
 	/** @brief Whether a pack's Baseline overwrites are enabled. */
 	bool IsBaselineEnabled(const std::string& id) const;
-	/** @brief Re-applies a pack that is active or has its Baseline enabled, so freshly exported files take effect. */
+	/** @brief Reloads the layers a pack that is active or has its Baseline enabled supplies, so freshly exported
+	 *  files take effect. The pipeline and the Baseline order stay as they are. */
 	void ReapplyIfInUse(const std::string& id);
-	/** @brief Stops applying a pack's Baseline overwrites from the next load; values already in use are kept.
+	/** @brief Asks, once for every pack enabled since the last answer, whether Baseline packs that set settings
+	 *  the user changed should replace those edits. Call every frame the menu or the CS editor is open. */
+	void DrawBaselineOverlapPrompt();
+
+	/** @brief Stops applying a pack's Baseline overwrites; its features fall back to the layers beneath,
+	 *  with the user's edits kept on top.
 	 *  @return False when the pack was not enabled. */
 	bool RemoveBaseline(const std::string& id);
 
-	/**
-	 * @brief Sets whether a feature is disabled at boot in a pack's manifest disableAtBoot object.
-	 * Creating or clearing the last entry refreshes hasBaseline. Writes the manifest atomically.
-	 * @return False when the pack is missing or the manifest could not be written.
-	 */
-	bool SetPackFeatureDisabledAtBoot(const std::string& packId, const std::string& featureShortName, bool disabled);
+	/** @brief Moves an enabled Baseline pack one step in the layering order and reapplies the layers.
+	 *  @param raise True moves it later, so it wins conflicts against the pack it passes; false moves it earlier.
+	 *  @return False when the pack is not enabled, is already at that end, or the new order could not be saved. */
+	bool MoveBaseline(const std::string& id, bool raise);
 
-	/** @brief Sets the Effects 11 handoff flags from the active pack's manifest sceneControl; no active pack hands nothing off. */
+	/** @brief Sets the Effects 11 handoff flags from the active pack's manifest sceneControl, overlaid with the
+	 *  user's choices for that pack; no active pack hands nothing off. */
 	void LoadSceneControl() const;
-	/** @brief Sets a feature's Effects 11 handoff flag and writes it to the active pack's manifest, when there is one.
-	 *  @return False when the active pack's manifest could not be updated; the runtime flag is set either way. */
-	bool SetSceneControl(E11Handoff::Feature feature, bool handedOff);
+	/** @brief Sets a feature's Effects 11 handoff flag and, with a pack active, keeps it as the user's choice for
+	 *  that pack. The pack's manifest is never written. */
+	void SetSceneControl(E11Handoff::Feature feature, bool handedOff);
+
+	/** @brief SettingsUser.json section holding the active pack state, written whenever it changes. */
+	static constexpr const char* kUserSettingsKey = "Presets";
+	/** @brief The active pack state as stored under kUserSettingsKey; State::Save writes it with the rest. */
+	nlohmann::json SerializeActiveState() const;
 
 	/** @brief Writes a starter manifest for a pack folder that has none, so an exported Baseline shows up as a preset.
 	 *  @return True when a manifest exists afterwards. */
@@ -189,11 +201,6 @@ public:
 	bool OpenPresetsFolder() const;
 	/** @brief Opens a pack's folder in Explorer, preferring its physical copy over the MO2 VFS path. */
 	bool OpenPackFolder(const std::string& id) const;
-
-	/** @brief In-game / VFS path to the unified presets root. */
-	std::filesystem::path GetPresetsRoot() const;
-	/** @brief On-disk presets root under the CS mod root, else GetPresetsRoot. */
-	std::filesystem::path GetPresetsRealPath() const;
 
 	/** @brief A pack's manifest file: `<PackId>.json`, else the legacy `preset.json` when only that exists. */
 	static std::filesystem::path GetPackManifestPath(const std::filesystem::path& packRoot);
@@ -210,22 +217,25 @@ public:
 private:
 	UnifiedPresetCatalog() { LoadActiveState(); }
 
-	/** @brief Reads the persisted active pack id and Baseline pack ids, clearing them when the state file is missing or bad. */
+	/** @brief Reads the persisted active pack state from SettingsUser.json, clearing it when missing or bad. */
 	void LoadActiveState();
-	/** @brief Writes the active pack id and Baseline pack ids next to the presets. */
-	void SaveActiveState() const;
+	/** @brief Writes the active pack state into its SettingsUser.json section, leaving the rest of the file alone.
+	 *  @return False when the user config could not be read or written. */
+	bool SaveActiveState() const;
 
 	/** @brief Enables a pack's Baseline overwrites as the last layer and reapplies them to the loaded features. */
 	void EnableBaseline(const PackInfo& pack);
+	/** @brief Adds a pack whose Baseline sets settings the user changed to the pending overlap prompt. */
+	void QueueBaselineOverlap(const std::string& packId, const std::vector<Feature*>& features);
 
 	/** @brief Adds each folder under Presets as a pack, read from its manifest. */
 	void DiscoverUnifiedPacks();
-	/** @brief Adds Effects 11 library presets that no unified pack of the same name already covers. */
-	void DiscoverEffects11Orphans();
-	/** @brief Adds the Effects 11 install at the game root or Data folder, when present. */
-	void DiscoverEffects11Legacy();
-	/** @brief With no pack applied, marks the Legacy or orphan pack Effects 11 is already running as active. */
-	void AdoptEffects11ActivePack();
+	/** @brief Adds the Effects 11 install at the game root or Data folder, when present, and the library presets
+	 *  no unified pack of the same name already covers. */
+	void DiscoverEffects11Presets();
+	/** @brief Switches to the pipeline a pack chose, recording it as the pack layer's choice; the caller persists.
+	 *  @return False, recording nothing, when the pipeline cannot run. */
+	bool UsePackPipeline(PostProcessingMode::Mode mode);
 
 	/** @brief Decodes an image file into an SRV; false when missing or undecodable. */
 	static bool LoadTextureSRV(const std::filesystem::path& path, winrt::com_ptr<ID3D11ShaderResourceView>& outSRV);
@@ -233,4 +243,13 @@ private:
 	std::vector<PackInfo> packs;
 	std::string activePackId;
 	std::vector<std::string> baselinePackIds;
+	std::optional<PostProcessingMode::Mode> activePipeline;
+	uint32_t pipelineRevision = 0;
+	/// Pack id → the user's Effects 11 handoff choices for it, over the pack's own sceneControl.
+	nlohmann::json sceneControlOverrides = nlohmann::json::object();
+
+	/// Packs, and the feature names they overlap, waiting on the overlap prompt.
+	std::vector<std::string> overlapPackIds;
+	std::vector<std::string> overlapFeatureNames;
+	Util::ConfirmationPopup overlapPrompt;
 };

@@ -17,11 +17,14 @@
 #include "FeatureListPicker.h"
 #include "Features/PostProcessing.h"
 #include "Globals.h"
+#include "IconsFontAwesome5.h"
 #include "Menu.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
+#include "Menu/IconLoader.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "Menu/Icons/helpers/SceneActionIcons.h"
+#include "SaveManager.h"
 #include "SceneManager/FeatureOverwritesPanel.h"
 #include "SceneManager/SceneLayerHeader.h"
 #include "SceneManager/ScenePresetExport.h"
@@ -65,6 +68,28 @@ namespace
 				return feature;
 		}
 		return nullptr;
+	}
+
+	/** @brief An undo target for a feature's own settings, read and written with the scene layer suspended. */
+	UndoHistory::Target MakeFeatureUndoTarget(Feature* feature)
+	{
+		UndoHistory::Target target{ .key = "feature:" + feature->GetShortName(), .label = feature->GetName() };
+		target.capture = [feature]() -> UndoHistory::SnapshotPtr {
+			if (!feature->loaded)
+				return nullptr;
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+			nlohmann::json values;
+			feature->SaveSettings(values);
+			return UndoHistory::Capture(std::move(values));
+		};
+		target.restore = [feature](const UndoHistory::Snapshot& snapshot) {
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+			nlohmann::json values = UndoHistory::Get<nlohmann::json>(snapshot);
+			feature->LoadSettings(values);
+			globals::state->MarkSettingsChanged();
+			globals::state->InvalidateEditsUnderBaselines(feature);
+		};
+		return target;
 	}
 
 	/** @brief Boot enable pill only (label lives in the tooltip). Returns false when not drawn. */
@@ -126,7 +151,10 @@ namespace
 
 		ImGui::Spacing();
 		if (ImGui::BeginChild("##FeatureSettingsBody")) {
-			Util::HideDebugSectionsGuard hideDebug(!EditorWindow::GetSingleton()->settings.showFeatureDebug);
+			auto* editor = EditorWindow::GetSingleton();
+			Util::HideDebugSectionsGuard hideDebug(!editor->settings.showFeatureDebug);
+			if (feature->UsesMainSettings())
+				editor->undoHistory.Watch(MakeFeatureUndoTarget(feature));
 			FeatureListRenderer::DrawFeatureBody(feature);
 		}
 		ImGui::EndChild();
@@ -194,6 +222,27 @@ namespace
 			ScenePresetExport::OpenBaseline(selectedFeature);
 	}
 
+	/** @brief The main menu's Save Settings, drawn with its icon so it reads apart from the editor's own save. */
+	void DrawSaveSettingsButton()
+	{
+		ImGui::SameLine();
+		const char* tooltip = T(TKEY("features_save_settings_tooltip"),
+			"Save Settings: saves feature settings and everything in the CS editor.");
+		bool clicked = false;
+		if (auto* texture = Util::IconLoader::GetIcons().saveSettings.texture) {
+			const auto paint = [texture](ImDrawList* drawList, ImVec2 center, float size, ImU32 color) {
+				const float half = size * 0.5f;
+				drawList->AddImage(texture, ImVec2(center.x - half, center.y - half), ImVec2(center.x + half, center.y + half),
+					ImVec2(0, 0), ImVec2(1, 1), color);
+			};
+			clicked = BrowserUI::PaintedIconButton("##FeatureSaveSettings", paint, ImGui::GetColorU32(Util::GetIconTint()), tooltip);
+		} else {
+			clicked = BrowserUI::IconButton("##FeatureSaveSettings", Icons::FA(ICON_FA_SAVE), tooltip);
+		}
+		if (clicked)
+			SaveManager::SaveAll();
+	}
+
 	/** @brief Feature list beside the selected feature's settings. */
 	void DrawFeaturesWindow(bool& open)
 	{
@@ -204,11 +253,14 @@ namespace
 		const bool visible = Util::BeginWithCustomHeader(title.c_str(), &open, [] {
 			// Follows the title, so the previous item is the title text and gives the row's centre.
 			DrawBaselineExportButton((ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f);
+			DrawSaveSettingsButton();
 		});
 		if (visible) {
 			// Docked windows keep the native tab, which has no room for the button, so it leads the body.
-			if (ImGui::IsWindowDocked())
+			if (ImGui::IsWindowDocked()) {
 				DrawBaselineExportButton(-1.0f);
+				DrawSaveSettingsButton();
+			}
 
 			if (ImGui::BeginTable("##FeaturesLayout", 2, FeatureListPicker::kLayoutFlags)) {
 				ImGui::TableSetupColumn("##FeatureList", ImGuiTableColumnFlags_WidthFixed, FeatureListPicker::kColumnWidth * Util::GetUIScale());

@@ -20,6 +20,8 @@
 #include <directx/d3dx12.h>
 #include <format>
 
+#include "Features/PostProcessing.h"
+
 #define I18N_KEY_PREFIX "feature.upscaling."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -627,13 +629,13 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		uavDesc.Format = texDesc.Format;
 
 		if (!reactiveMaskTexture) {
-			reactiveMaskTexture = new Texture2D(texDesc);
+			reactiveMaskTexture = new Texture2D(texDesc, "Upscaling::ReactiveMask");
 			reactiveMaskTexture->CreateSRV(srvDesc);
 			reactiveMaskTexture->CreateUAV(uavDesc);
 		}
 
 		if (!transparencyCompositionMaskTexture) {
-			transparencyCompositionMaskTexture = new Texture2D(texDesc);
+			transparencyCompositionMaskTexture = new Texture2D(texDesc, "Upscaling::TransparencyCompositionMask");
 			transparencyCompositionMaskTexture->CreateSRV(srvDesc);
 			transparencyCompositionMaskTexture->CreateUAV(uavDesc);
 		}
@@ -651,7 +653,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			srvDesc.Format = texDesc.Format;
 			uavDesc.Format = texDesc.Format;
 
-			motionVectorCopyTexture = new Texture2D(motionTexDesc);
+			motionVectorCopyTexture = new Texture2D(motionTexDesc, "Upscaling::MotionVectorCopy");
 			motionVectorCopyTexture->CreateSRV(srvDesc);
 			motionVectorCopyTexture->CreateUAV(uavDesc);
 		}
@@ -672,7 +674,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 			uavDesc.Texture2D.MipSlice = 0;
 
-			sharpenerTexture = new Texture2D(texDesc);
+			sharpenerTexture = new Texture2D(texDesc, "Upscaling::Sharpener");
 			sharpenerTexture->CreateSRV(srvDesc);
 			sharpenerTexture->CreateUAV(uavDesc);
 		}
@@ -1701,8 +1703,12 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
-	auto& upscaling = globals::features::upscaling;
 	auto& postProcessing = globals::features::postProcessing;
+	if (postProcessing.loaded) {
+		postProcessing.DrawBeforeUpscaling();
+	}
+
+	auto& upscaling = globals::features::upscaling;
 	auto upscaleMethod = upscaling.GetUpscaleMethod();
 
 	const bool prepareFrameGeneration = upscaling.ShouldPrepareFrameGeneration();

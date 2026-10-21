@@ -1,5 +1,6 @@
 #include "SceneSettingsManager.h"
 
+#include "SaveManager.h"
 #include "SceneSettingsInternal.h"
 #include "Utils/FileSystem.h"
 
@@ -104,28 +105,35 @@ static bool ShouldSerializeUserSection(const json& data, std::string_view key, b
 	return modified || it == data.end() || (expectObject ? it->is_object() : it->is_array());
 }
 
+/** @brief Writes an optional value under key, erasing the key when unset. */
+static void WriteOptionalValue(json& object, const char* key, const std::optional<float>& value)
+{
+	if (value)
+		object[key] = *value;
+	else
+		object.erase(key);
+}
+
+/// The user's location duration lives in the location section; the other controls sit at the document root.
+static constexpr const char* kLocationTransitionSecondsKey = "transitionSeconds";
+
+/** @brief Whether a transition control is stored at the user document's root. */
+static bool IsRootTransitionControl(size_t index)
+{
+	return static_cast<SceneSettingsManager::TransitionControl>(index) != SceneSettingsManager::TransitionControl::LocationSeconds;
+}
+
 void SceneSettingsManager::SaveAllUserSettings()
 {
-	if (!userSettingsDocumentLoaded)
-		LoadAllUserSettings();
-	const bool weatherLoaded = TryEnsureWeatherDataLoaded();
-	const bool locationLoaded = TryEnsureLocationDataLoaded();
-	if (!userSettingsDocumentWritable || !preservedUserSettingsRoot.is_object()) {
-		if (!userSettingsWriteBlockedWarning) {
-			logger::error("[SceneSettings] Refusing to overwrite SceneManager.json because its existing document is invalid");
-			userSettingsWriteBlockedWarning = true;
-		}
-		deferredSceneChangesPending = ++deferredSaveFailures < kMaxDeferredSaveRetries;
-		deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
-		return;
-	}
+	SaveManager::SaveEditor(SaveManager::Trigger::Auto);
+}
 
-	auto path = GetUserSettingsFilePath();
+json SceneSettingsManager::BuildUserSettingsDocument(bool weatherLoaded, bool locationLoaded)
+{
 	json data = preservedUserSettingsRoot;
-	if (userTimeOfDayTransitionHours)
-		data[kTimeOfDayTransitionHoursKey] = *userTimeOfDayTransitionHours;
-	else
-		data.erase(kTimeOfDayTransitionHoursKey);
+	for (size_t index = 0; index < kTransitionControlCount; ++index)
+		if (IsRootTransitionControl(index))
+			WriteOptionalValue(data, kTransitionControlSpecs[index].key, userTransitionControls[index]);
 	if (ShouldSerializeUserSection(data, "interiorOnly", false, interiorUserSettingsModified)) {
 		data["interiorOnly"] = UserEntriesToArray(GetEntries(SceneType::InteriorOnly));
 		AppendRawEntries(data["interiorOnly"], unresolvedUserEntries[SceneType::InteriorOnly]);
@@ -172,7 +180,7 @@ void SceneSettingsManager::SaveAllUserSettings()
 		                       unresolvedLocationUserSettings :
 		                       json::object();
 		if (locationTransitionModified)
-			locationObj["transitionSeconds"] = locationTransitionSeconds;
+			WriteOptionalValue(locationObj, kLocationTransitionSecondsKey, GetUserTransitionControl(TransitionControl::LocationSeconds));
 		for (const auto& [_, config] : locationSceneConfigs) {
 			auto userEntries = UserEntriesToArray(config.entries);
 			// A target the user took on is worth remembering even before it has a single setting.
@@ -195,13 +203,37 @@ void SceneSettingsManager::SaveAllUserSettings()
 		data["location"] = std::move(locationObj);
 	}
 
-	const bool saved = Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "SceneManager.json");
+	return data;
+}
+
+void SceneSettingsManager::WriteUserSettings()
+{
+	if (!userSettingsDocumentLoaded)
+		LoadAllUserSettings();
+	const bool weatherLoaded = TryEnsureWeatherDataLoaded();
+	const bool locationLoaded = TryEnsureLocationDataLoaded();
+	if (!userSettingsDocumentWritable || !preservedUserSettingsRoot.is_object()) {
+		if (!userSettingsWriteBlockedWarning) {
+			logger::error("[SceneSettings] Refusing to overwrite SceneManager.json because its existing document is invalid");
+			userSettingsWriteBlockedWarning = true;
+		}
+		deferredSceneChangesPending = ++deferredSaveFailures < kMaxDeferredSaveRetries;
+		deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
+		return;
+	}
+
+	auto path = GetUserSettingsFilePath();
+	json data = BuildUserSettingsDocument(weatherLoaded, locationLoaded);
+	// Unchanged since the last write (or load): nothing to put on disk.
+	const bool unchanged = data == preservedUserSettingsRoot;
+	const bool saved = unchanged || Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "SceneManager.json");
 	if (saved) {
 		preservedUserSettingsRoot = data;
 		if (locationLoaded && locationTransitionModified) {
 			if (!unresolvedLocationUserSettings.is_object())
 				unresolvedLocationUserSettings = json::object();
-			unresolvedLocationUserSettings["transitionSeconds"] = locationTransitionSeconds;
+			WriteOptionalValue(unresolvedLocationUserSettings, kLocationTransitionSecondsKey,
+				GetUserTransitionControl(TransitionControl::LocationSeconds));
 		}
 		interiorUserSettingsModified = false;
 		timeOfDayUserSettingsModified = false;
@@ -210,7 +242,8 @@ void SceneSettingsManager::SaveAllUserSettings()
 		locationTransitionModified = false;
 		userSettingsWriteBlockedWarning = false;
 		deferredSaveFailures = 0;
-		logger::info("[SceneSettings] Saved SceneManager.json");
+		if (!unchanged)
+			logger::info("[SceneSettings] Saved SceneManager.json");
 		deferredSceneChangesPending = false;
 		return;
 	}
@@ -223,6 +256,38 @@ void SceneSettingsManager::SaveAllUserSettings()
 	}
 	deferredSceneChangesPending = true;
 	deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
+}
+
+SceneSettingsManager::UserSettingsSnapshot SceneSettingsManager::CaptureUserSettings()
+{
+	if (!userSettingsDocumentLoaded)
+		LoadAllUserSettings();
+	const bool weatherLoaded = TryEnsureWeatherDataLoaded();
+	const bool locationLoaded = TryEnsureLocationDataLoaded();
+	return {
+		.entries = entries,
+		.weatherSceneConfigs = weatherSceneConfigs,
+		.locationSceneConfigs = locationSceneConfigs,
+		.userTransitionControls = userTransitionControls,
+		.document = BuildUserSettingsDocument(weatherLoaded, locationLoaded),
+	};
+}
+
+void SceneSettingsManager::RestoreUserSettings(const UserSettingsSnapshot& snapshot)
+{
+	entries = snapshot.entries;
+	weatherSceneConfigs = snapshot.weatherSceneConfigs;
+	locationSceneConfigs = snapshot.locationSceneConfigs;
+	userTransitionControls = snapshot.userTransitionControls;
+	RefreshTransitionControls();
+	// Every section may differ from the document now, so each is written over rather than kept.
+	interiorUserSettingsModified = true;
+	timeOfDayUserSettingsModified = true;
+	weatherUserSettingsModified = true;
+	locationUserSettingsModified = true;
+	locationTransitionModified = true;
+	BumpEntryPresentationRevision();
+	CommitSceneSettingChanges();
 }
 
 /** @brief How an entry section treats the `period` field. */
@@ -354,14 +419,16 @@ void SceneSettingsManager::LoadAllUserSettings()
 	auto path = GetUserSettingsFilePath();
 	logger::info("[SceneSettings] Loading user settings from: {}", path.string());
 	for (auto type : { SceneType::InteriorOnly, SceneType::TimeOfDay })
-		std::erase_if(entries[type], [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+		EraseUserEntries(entries[type]);
 	unresolvedUserEntries[SceneType::InteriorOnly].clear();
 	unresolvedUserEntries[SceneType::TimeOfDay].clear();
 	BumpEntryPresentationRevision();
 	interiorUserSettingsModified = false;
 	timeOfDayUserSettingsModified = false;
-	userTimeOfDayTransitionHours.reset();
-	RefreshTimeOfDayTransitionHours();
+	for (size_t index = 0; index < kTransitionControlCount; ++index)
+		if (IsRootTransitionControl(index))
+			userTransitionControls[index].reset();
+	RefreshTransitionControls();
 	std::error_code ec;
 	if (!std::filesystem::exists(path, ec)) {
 		userSettingsDocumentLoaded = true;
@@ -386,8 +453,11 @@ void SceneSettingsManager::LoadAllUserSettings()
 		const json& data = *document;
 		FeatureSettingsCache featureSettingsCache;
 
-		userTimeOfDayTransitionHours = ReadTimeOfDayTransitionHours(data, "SceneManager.json");
-		RefreshTimeOfDayTransitionHours();
+		for (size_t index = 0; index < kTransitionControlCount; ++index)
+			if (IsRootTransitionControl(index))
+				userTransitionControls[index] = ReadTransitionControl(data, kTransitionControlSpecs[index].key,
+					static_cast<TransitionControl>(index), "SceneManager.json");
+		RefreshTransitionControls();
 
 		struct EntryListSection
 		{
@@ -439,13 +509,13 @@ void SceneSettingsManager::LoadAllUserSettings()
 
 void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 {
-	for (auto& [_, config] : locationSceneConfigs) {
-		std::erase_if(config.entries, [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
-		config.userTimeOfDayEnabled.reset();
-	}
+	for (auto& [_, config] : locationSceneConfigs)
+		config.ClearUserLayer();
 	unresolvedLocationUserSettings = json::object();
 	locationUserSettingsModified = false;
-	locationTransitionSeconds = kDefaultLocationTransitionSeconds;
+	auto& userSeconds = userTransitionControls[static_cast<size_t>(TransitionControl::LocationSeconds)];
+	userSeconds.reset();
+	RefreshTransitionControls();
 	locationTransitionModified = false;
 	auto locationIt = data.find("location");
 	if (locationIt == data.end())
@@ -455,16 +525,10 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 		return;
 	}
 	unresolvedLocationUserSettings = *locationIt;
-	if (auto transitionIt = locationIt->find("transitionSeconds"); transitionIt != locationIt->end()) {
-		if (!transitionIt->is_number())
-			logger::warn("[SceneSettings] Location transitionSeconds must be numeric; preserving it");
-		else if (const auto seconds = transitionIt->get<float>();
-			std::isfinite(seconds) && seconds >= 0.0f && seconds <= kMaxLocationTransitionSeconds)
-			locationTransitionSeconds = seconds;
-		else
-			logger::warn("[SceneSettings] Location transitionSeconds is outside 0..{}; preserving it",
-				kMaxLocationTransitionSeconds);
-	}
+	// An unusable value stays in the preserved section until the user sets their own.
+	userSeconds = ReadTransitionControl(*locationIt, kLocationTransitionSecondsKey, TransitionControl::LocationSeconds,
+		"SceneManager.json location section");
+	RefreshTransitionControls();
 	FeatureSettingsCache featureSettingsCache;
 
 	// A legacy section only feeds the canonical one: whatever loads moves there on the next save.
@@ -569,10 +633,8 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 
 void SceneSettingsManager::LoadWeatherUserSettings()
 {
-	for (auto& [_, config] : weatherSceneConfigs) {
-		std::erase_if(config.entries, [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
-		config.userTimeOfDayEnabled.reset();
-	}
+	for (auto& [_, config] : weatherSceneConfigs)
+		config.ClearUserLayer();
 	unresolvedWeatherUserSettings = json::object();
 	weatherUserSettingsModified = false;
 	if (!userSettingsDocumentLoaded || !userSettingsDocumentWritable || !preservedUserSettingsRoot.is_object())

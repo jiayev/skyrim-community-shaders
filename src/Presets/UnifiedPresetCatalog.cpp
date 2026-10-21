@@ -1,6 +1,7 @@
 #include "UnifiedPresetCatalog.h"
 #include "PCH.h"
 
+#include "BaselineManager.h"
 #include "CSEditor/FormEditSources.h"
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
@@ -14,14 +15,12 @@
 #include "PostProcessingMode.h"
 #include "Presets/PostProcessingPresets.h"
 #include "Presets/PresetCompatibility.h"
-#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/UI.h"
 
-#include <Windows.h>
 #include <algorithm>
 #include <array>
 #include <format>
@@ -36,8 +35,10 @@ using json = nlohmann::json;
 
 namespace
 {
-	constexpr intptr_t kShellExecuteSuccessThreshold = 32;
-	constexpr const char* kActiveStateFileName = "_active.json";
+	/// Where older builds kept the active pack state, read once if SettingsUser.json has none yet.
+	constexpr const char* kLegacyActiveStateFileName = "_active.json";
+	/// Matches State::Save, so a state write leaves the file formatted as the user config always is.
+	constexpr int kUserSettingsIndent = 1;
 	constexpr const char* kBaselinePackIdsKey = "baselinePackIds";
 	constexpr const char* kLegacyMetaFileName = "preset.json";
 	constexpr const char* kEffects11PackSubdir = UnifiedPresetCatalog::kEffects11PackSubdir;
@@ -51,33 +52,24 @@ namespace
 
 	using Util::ToLower;
 
-	/** @brief The Effects 11 preset id a pack switches to. */
-	std::string GetEffects11PresetId(const UnifiedPresetCatalog::PackInfo& pack)
-	{
-		using SourceKind = UnifiedPresetCatalog::SourceKind;
-		if (pack.source == SourceKind::UnifiedPack)
-			return PresetManager::MakeUnifiedPackPresetId(pack.id);
-		if (pack.source == SourceKind::Effects11Orphan && pack.id.starts_with(kEffects11OrphanPrefix))
-			return pack.id.substr(kEffects11OrphanPrefix.size());
-		if (pack.source == SourceKind::Effects11Legacy)
-			return PresetManager::kLegacyPresetId;
-		return pack.id;
-	}
+	constexpr const char* kPipelineKey = "pipeline";
+	constexpr const char* kPipelineRevisionKey = "pipelineRevision";
 
-	/** @brief Sets manifest[objectKey][entryKey], creating the object when missing, and writes the manifest atomically. */
-	bool WriteManifestFlag(const std::filesystem::path& manifestPath, json& manifest, const char* objectKey, const std::string& entryKey, bool value)
+	/** @brief The Effects 11 preset id a pack switches to, read off the form of its id. */
+	std::string GetEffects11PresetId(const std::string& packId)
 	{
-		if (!manifest.contains(objectKey) || !manifest[objectKey].is_object())
-			manifest[objectKey] = json::object();
-		manifest[objectKey][entryKey] = value;
-		return Util::FileHelpers::WriteJsonAtomically(manifestPath, manifest, 4, "preset pack manifest");
+		if (packId == kEffects11LegacyPackId)
+			return PresetManager::kLegacyPresetId;
+		if (packId.starts_with(kEffects11OrphanPrefix))
+			return packId.substr(kEffects11OrphanPrefix.size());
+		return PresetManager::MakeUnifiedPackPresetId(packId);
 	}
 
 	std::filesystem::path ResolveRelative(const std::filesystem::path& root, const std::string& rel)
 	{
 		if (rel.empty())
 			return {};
-		auto path = root / rel;
+		auto path = root / Util::PathHelpers::FromUtf8(rel);
 		return std::filesystem::exists(path) ? path : std::filesystem::path{};
 	}
 
@@ -113,6 +105,13 @@ namespace
 		return !id.empty() && id != "." && id != ".." && id.find_first_of("/\\:") == std::string::npos;
 	}
 
+	/** @brief A pack folder, the Legacy Effects 11 install, or an orphan Effects 11 preset. */
+	bool IsActivePackId(const std::string& id)
+	{
+		return IsPackFolderId(id) || id == kEffects11LegacyPackId ||
+		       (id.starts_with(kEffects11OrphanPrefix) && IsPackFolderId(id.substr(kEffects11OrphanPrefix.size())));
+	}
+
 	/** @brief Feature short names set by a pack's Baseline folder, sorted and de-duplicated. */
 	std::vector<std::string> ListBaselineFeatures(const std::string& packId)
 	{
@@ -123,7 +122,7 @@ namespace
 				std::error_code typeEc;
 				if (!entry.is_regular_file(typeEc))
 					continue;
-				auto name = SettingsOverrideManager::ParseBaselineFeatureName(entry.path());
+				auto name = BaselineManager::ParseBaselineFeatureName(entry.path());
 				if (!name.empty())
 					features.push_back(std::move(name));
 			}
@@ -136,7 +135,7 @@ namespace
 	bool IsImageExtension(const std::filesystem::path& path)
 	{
 		static constexpr std::array<std::string_view, 6> kImageExtensions = { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".dds" };
-		return std::ranges::contains(kImageExtensions, ToLower(path.extension().string()));
+		return std::ranges::contains(kImageExtensions, ToLower(Util::PathHelpers::ToUtf8(path.extension())));
 	}
 
 	std::string InferDescriptionFromReadme(const std::filesystem::path& packRoot)
@@ -235,18 +234,6 @@ UnifiedPresetCatalog& UnifiedPresetCatalog::GetSingleton()
 	return instance;
 }
 
-std::filesystem::path UnifiedPresetCatalog::GetPresetsRoot() const
-{
-	return Util::PathHelpers::GetUnifiedPresetsPath();
-}
-
-std::filesystem::path UnifiedPresetCatalog::GetPresetsRealPath() const
-{
-	if (!Util::PathHelpers::GetRootRealPath().empty())
-		return Util::PathHelpers::GetUnifiedPresetsRealPath();
-	return GetPresetsRoot();
-}
-
 std::filesystem::path UnifiedPresetCatalog::GetPackManifestPath(const std::filesystem::path& packRoot)
 {
 	auto manifestPath = packRoot / packRoot.filename();
@@ -280,7 +267,7 @@ json UnifiedPresetCatalog::ReadPackManifest(const std::filesystem::path& packRoo
 	}
 	if (outError && !error.empty())
 		*outError = I18n::GetSingleton()->Format("menu.presets.invalid_manifest",
-			{ { "file", manifestPath.filename().string() }, { "error", error } }, "Invalid {file}: {error}");
+			{ { "file", Util::PathHelpers::ToUtf8(manifestPath.filename()) }, { "error", error } }, "Invalid {file}: {error}");
 	return json::object();
 }
 
@@ -296,7 +283,7 @@ std::filesystem::path UnifiedPresetCatalog::ResolveEffects11Root(const std::file
 	std::filesystem::path preferredRoot;
 	if (const auto effects11 = manifest.find("effects11"); effects11 != manifest.end() && effects11->is_object()) {
 		if (const auto path = effects11->find("path"); path != effects11->end() && path->is_string())
-			preferredRoot = packRoot / path->get<std::string>();
+			preferredRoot = packRoot / Util::PathHelpers::FromUtf8(path->get_ref<const std::string&>());
 	}
 
 	// Classic ENB drops (NAT.ENB-style) put enbseries at the pack root instead of effects11/.
@@ -331,13 +318,32 @@ void UnifiedPresetCatalog::LoadActiveState()
 {
 	activePackId.clear();
 	baselinePackIds.clear();
-	const auto state = Util::FileHelpers::ReadJsonObject(GetPresetsRealPath() / kActiveStateFileName, "active pack state");
+	activePipeline.reset();
+	pipelineRevision = 0;
+	sceneControlOverrides = json::object();
+	// Older builds kept the state beside the presets, where updating the mod deleted it.
+	std::optional<json> state;
+	if (const auto userSettings = Util::FileHelpers::ReadJsonObject(Util::PathHelpers::GetSettingsUserPath(), "user config")) {
+		if (const auto section = userSettings->find(kUserSettingsKey); section != userSettings->end() && section->is_object())
+			state = *section;
+	}
+	if (!state)
+		state = Util::FileHelpers::ReadJsonObject(Util::PathHelpers::GetUnifiedPresetsRealPath() / kLegacyActiveStateFileName, "active pack state");
 	if (!state)
 		return;
 	try {
+		if (const auto overrides = state->find(kSceneControlKey); overrides != state->end() && overrides->is_object()) {
+			for (const auto& [packId, choices] : overrides->items())
+				if (IsActivePackId(packId) && choices.is_object())
+					sceneControlOverrides[packId] = choices;
+		}
 		activePackId = state->value("activePackId", "");
-		if (!IsPackFolderId(activePackId))
+		if (!IsActivePackId(activePackId))
 			activePackId.clear();
+		if (const auto pipeline = state->find(kPipelineKey); pipeline != state->end() && pipeline->is_string())
+			activePipeline = magic_enum::enum_cast<PostProcessingMode::Mode>(pipeline->get<std::string>());
+		if (const auto revision = state->find(kPipelineRevisionKey); revision != state->end() && revision->is_number_unsigned())
+			pipelineRevision = revision->get<uint32_t>();
 		if (const auto ids = state->find(kBaselinePackIdsKey); ids != state->end() && ids->is_array()) {
 			for (const auto& id : *ids) {
 				if (id.is_string() && IsPackFolderId(id.get_ref<const std::string&>()) && !IsBaselineEnabled(id.get<std::string>()))
@@ -347,27 +353,71 @@ void UnifiedPresetCatalog::LoadActiveState()
 	} catch (...) {
 		activePackId.clear();
 		baselinePackIds.clear();
+		activePipeline.reset();
+		pipelineRevision = 0;
+		sceneControlOverrides = json::object();
 	}
 }
 
-void UnifiedPresetCatalog::SaveActiveState() const
+json UnifiedPresetCatalog::SerializeActiveState() const
 {
-	const auto path = GetPresetsRealPath() / kActiveStateFileName;
+	json state;
+	state["activePackId"] = activePackId;
+	state[kBaselinePackIdsKey] = baselinePackIds;
+	if (activePipeline) {
+		state[kPipelineKey] = magic_enum::enum_name(*activePipeline);
+		state[kPipelineRevisionKey] = pipelineRevision;
+	}
+	if (!sceneControlOverrides.empty())
+		state[kSceneControlKey] = sceneControlOverrides;
+	return state;
+}
+
+bool UnifiedPresetCatalog::SaveActiveState() const
+{
+	// Only this section is written now; the rest of the user config waits for Save Settings.
+	const auto path = Util::PathHelpers::GetSettingsUserPath();
+	std::error_code ec;
+	auto document = std::filesystem::exists(path, ec) ? Util::FileHelpers::ReadJsonObject(path, "user config") :
+	                                                    std::optional<json>(json::object());
+	if (!document) {
+		logger::warn("[Presets] Active pack state not saved: {} could not be read", Util::PathHelpers::ToUtf8(path));
+		return false;
+	}
 	try {
-		json j;
-		j["activePackId"] = activePackId;
-		j[kBaselinePackIdsKey] = baselinePackIds;
-		if (!Util::FileHelpers::WriteJsonAtomically(path, j, 4, "active pack state"))
-			logger::warn("[Presets] Failed to save active pack state to {}", path.string());
+		(*document)[kUserSettingsKey] = SerializeActiveState();
+		if (!Util::FileHelpers::WriteJsonAtomically(path, *document, kUserSettingsIndent, "user config")) {
+			logger::warn("[Presets] Failed to save active pack state to {}", Util::PathHelpers::ToUtf8(path));
+			return false;
+		}
 	} catch (const std::exception& e) {
 		logger::warn("[Presets] Failed to save active pack state: {}", e.what());
+		return false;
 	}
+	// Left behind, the old file would come back as the state the next time the user config goes missing.
+	std::filesystem::remove(Util::PathHelpers::GetUnifiedPresetsRealPath() / kLegacyActiveStateFileName, ec);
+	return true;
 }
 
 void UnifiedPresetCatalog::SetActivePackId(const std::string& id)
 {
 	activePackId = id;
 	SaveActiveState();
+}
+
+std::string UnifiedPresetCatalog::GetActiveEffects11PresetId() const
+{
+	return activePackId.empty() ? std::string() : GetEffects11PresetId(activePackId);
+}
+
+bool UnifiedPresetCatalog::UsePackPipeline(PostProcessingMode::Mode mode)
+{
+	// Only a pipeline that took effect is recorded, so the next boot runs what this session does.
+	if (!PostProcessingMode::Set(mode))
+		return false;
+	activePipeline = mode;
+	++pipelineRevision;
+	return true;
 }
 
 UnifiedPresetCatalog::PackInfo* UnifiedPresetCatalog::FindPack(const std::string& id)
@@ -387,59 +437,29 @@ const UnifiedPresetCatalog::PackInfo* UnifiedPresetCatalog::FindPack(const std::
 void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 {
 	for (const auto& packRoot : Util::PathHelpers::ListCommunityShaderEntries(Util::PathHelpers::kUnifiedPresetsSubdir, true)) {
-		const auto packId = packRoot.filename().string();
+		const auto packId = Util::PathHelpers::ToUtf8(packRoot.filename());
 
-		PackInfo pack;
+		std::string manifestError;
+		const auto meta = ReadPackManifest(packRoot, &manifestError);
+		PackInfo pack{ PackManifest::Read(meta, packId) };
 		pack.id = packId;
-		pack.name = packId;
 		pack.source = SourceKind::UnifiedPack;
 		pack.rootPath = packRoot;
-
-		const auto meta = ReadPackManifest(packRoot, &pack.invalidReason);
-		pack.valid = pack.invalidReason.empty();
-		try {
-			pack.name = meta.value("name", packId);
-			pack.author = meta.value("author", "");
-			pack.version = meta.value("version", "");
-			pack.description = meta.value("description", "");
-			pack.nexusUrl = meta.value("nexusUrl", "");
-			pack.csVersion = meta.value("csVersion", "");
-			pack.type = ReadPresetType(meta, packId);
-			const auto readStrings = [&](const char* key, std::vector<std::string>& out) {
-				if (const auto it = meta.find(key); it != meta.end() && it->is_array()) {
-					for (const auto& value : *it) {
-						if (value.is_string())
-							out.push_back(value.get<std::string>());
-					}
-				}
-			};
-			readStrings("tags", pack.tags);
-			readStrings("requiredFeatures", pack.requiredFeatures);
-			readStrings("requiredPlugins", pack.requiredPlugins);
-			if (const auto disableAtBoot = meta.find(kDisableAtBootKey); disableAtBoot != meta.end() && disableAtBoot->is_object()) {
-				for (auto it = disableAtBoot->begin(); it != disableAtBoot->end(); ++it) {
-					if (it.value().is_boolean())
-						pack.disableAtBoot[it.key()] = it.value().get<bool>();
-				}
+		pack.valid = manifestError.empty();
+		pack.invalidReason = std::move(manifestError);
+		pack.type = ReadPresetType(meta, packId);
+		if (const auto disableAtBoot = meta.find(kDisableAtBootKey); disableAtBoot != meta.end() && disableAtBoot->is_object()) {
+			for (auto it = disableAtBoot->begin(); it != disableAtBoot->end(); ++it) {
+				if (it.value().is_boolean())
+					pack.disableAtBoot[it.key()] = it.value().get<bool>();
 			}
+		}
 
-			if (meta.contains("logo") && meta["logo"].is_string())
-				pack.logoPath = ResolveRelative(packRoot, meta["logo"].get<std::string>());
-			if (meta.contains("cover") && meta["cover"].is_string())
-				pack.coverPath = ResolveRelative(packRoot, meta["cover"].get<std::string>());
-			if (meta.contains("screenshots") && meta["screenshots"].is_array()) {
-				for (const auto& shot : meta["screenshots"]) {
-					if (!shot.is_string())
-						continue;
-					auto path = ResolveRelative(packRoot, shot.get<std::string>());
-					if (!path.empty())
-						pack.screenshotPaths.push_back(std::move(path));
-				}
-			}
-		} catch (const std::exception& e) {
-			pack.valid = false;
-			pack.invalidReason = I18n::GetSingleton()->Format("menu.presets.invalid_manifest",
-				{ { "file", GetPackManifestPath(packRoot).filename().string() }, { "error", e.what() } }, "Invalid {file}: {error}");
+		pack.logoPath = ResolveRelative(packRoot, pack.logo);
+		pack.coverPath = ResolveRelative(packRoot, pack.cover);
+		for (const auto& shot : pack.screenshots) {
+			if (auto path = ResolveRelative(packRoot, shot); !path.empty())
+				pack.screenshotPaths.push_back(std::move(path));
 		}
 		pack.compat = PresetCompatibility::Evaluate(pack.csVersion, pack.requiredFeatures, pack.requiredPlugins);
 
@@ -465,74 +485,50 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 	}
 }
 
-void UnifiedPresetCatalog::DiscoverEffects11Orphans()
+void UnifiedPresetCatalog::DiscoverEffects11Presets()
 {
-	for (const auto& presetRoot : Util::PathHelpers::ListCommunityShaderEntries(Util::PathHelpers::kEffects11PresetsSubdir, true)) {
-		const auto name = presetRoot.filename().string();
-
-		// Skip if already covered by a unified pack with the same folder name
-		if (FindPack(name))
+	// Unified packs list their own effects11 folder, so only Legacy and the library are scanned here.
+	for (const auto& preset : PresetManager::GetSingleton().ScanPresets(false)) {
+		if (preset.isLegacy ? !preset.valid : FindPack(preset.id) != nullptr)
 			continue;
 
 		PackInfo pack;
-		pack.id = std::string(kEffects11OrphanPrefix) + name;
-		pack.name = name;
-		pack.source = SourceKind::Effects11Orphan;
-		pack.rootPath = presetRoot;
-		pack.effects11Root = presetRoot;
-		pack.hasEffects11 = std::filesystem::exists(presetRoot / PresetManager::kEnbSeriesIniName) &&
-		                    std::filesystem::is_directory(presetRoot / PresetManager::kEnbSeriesDirName);
-		if (!pack.hasEffects11) {
-			pack.valid = false;
-			pack.invalidReason = T("menu.presets.missing_effects11_files", "Missing enbseries.ini / enbseries");
+		pack.rootPath = preset.rootPath;
+		pack.effects11Root = preset.rootPath;
+		pack.hasEffects11 = pack.valid = preset.valid;
+		if (preset.isLegacy) {
+			pack.id = kEffects11LegacyPackId;
+			pack.name = T("menu.presets.legacy_name", "Effects 11 Preset (Legacy)");
+			pack.source = SourceKind::Effects11Legacy;
+			pack.description = T("menu.presets.legacy_description", "Effects 11 preset installed in the game root or Data folder.");
+		} else {
+			pack.id = std::string(kEffects11OrphanPrefix) + preset.id;
+			pack.name = preset.id;
+			pack.source = SourceKind::Effects11Orphan;
+			pack.description = T("menu.presets.effects11_library_description", "Effects11 library preset");
+			if (!preset.valid)
+				pack.invalidReason = T("menu.presets.missing_effects11_files", "Missing enbseries.ini, enbseries or enbseries/enbeffect.fx");
 		}
-		pack.description = T("menu.presets.effects11_library_description", "Effects11 library preset");
 		packs.push_back(std::move(pack));
 	}
-}
-
-void UnifiedPresetCatalog::DiscoverEffects11Legacy()
-{
-	const auto& presetManager = PresetManager::GetSingleton();
-	if (!presetManager.HasLegacyInstall())
-		return;
-
-	PackInfo pack;
-	pack.id = kEffects11LegacyPackId;
-	pack.name = T("menu.presets.legacy_name", "Effects 11 Preset (Legacy)");
-	pack.source = SourceKind::Effects11Legacy;
-	pack.rootPath = presetManager.GetLegacyENBSeriesIniPath().parent_path();
-	pack.effects11Root = pack.rootPath;
-	pack.hasEffects11 = true;
-	pack.description = T("menu.presets.legacy_description", "Effects 11 preset installed in the game root or Data folder.");
-	packs.push_back(std::move(pack));
-}
-
-void UnifiedPresetCatalog::AdoptEffects11ActivePack()
-{
-	if (!activePackId.empty() || !globals::features::effects11.loaded || PostProcessingMode::Get() != PostProcessingMode::Mode::Effects11)
-		return;
-	const auto& e11Id = PresetManager::GetSingleton().GetActivePresetId();
-	const auto match = std::ranges::find_if(packs, [&](const PackInfo& pack) {
-		return pack.source != SourceKind::UnifiedPack && pack.valid && GetEffects11PresetId(pack) == e11Id;
-	});
-	if (match != packs.end())
-		activePackId = match->id;
 }
 
 void UnifiedPresetCatalog::Discover()
 {
 	ReleaseAllArtwork();
 	packs.clear();
-	Util::FileHelpers::EnsureDirectoryExists(GetPresetsRealPath());
+	Util::FileHelpers::EnsureDirectoryExists(Util::PathHelpers::GetUnifiedPresetsRealPath());
 	LoadActiveState();
 
 	// Before the scan, so the packs it creates are listed by it.
 	PostProcessingPresets::MigrateLegacyPresets();
 	DiscoverUnifiedPacks();
-	DiscoverEffects11Orphans();
-	DiscoverEffects11Legacy();
-	AdoptEffects11ActivePack();
+	DiscoverEffects11Presets();
+
+	// With nothing saved, the Legacy install still runs by default; show it as the active pack without persisting.
+	if (activePackId.empty() && !activePipeline && PresetManager::GetSingleton().IsLegacyActive() &&
+		globals::features::effects11.IsActive() && FindPack(kEffects11LegacyPackId))
+		activePackId = kEffects11LegacyPackId;
 
 	std::sort(packs.begin(), packs.end(), [](const PackInfo& a, const PackInfo& b) {
 		return ToLower(a.name) < ToLower(b.name);
@@ -573,32 +569,32 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 	// Read via filesystem::path so MO2 / Unicode paths work; stbi_load(char*) uses fopen and can fail.
 	std::ifstream file(path, std::ios::binary | std::ios::ate);
 	if (!file) {
-		logger::warn("[Presets] Failed to open artwork '{}'", path.string());
+		logger::warn("[Presets] Failed to open artwork '{}'", Util::PathHelpers::ToUtf8(path));
 		return false;
 	}
 	const auto fileSize = file.tellg();
 	if (fileSize <= 0) {
-		logger::warn("[Presets] Empty artwork '{}'", path.string());
+		logger::warn("[Presets] Empty artwork '{}'", Util::PathHelpers::ToUtf8(path));
 		return false;
 	}
 	file.seekg(0, std::ios::beg);
 	std::vector<unsigned char> bytes(static_cast<size_t>(fileSize));
 	if (!file.read(reinterpret_cast<char*>(bytes.data()), fileSize)) {
-		logger::warn("[Presets] Failed to read artwork '{}'", path.string());
+		logger::warn("[Presets] Failed to read artwork '{}'", Util::PathHelpers::ToUtf8(path));
 		return false;
 	}
 
 	ID3D11ShaderResourceView* srv = nullptr;
 	ImVec2 size{};
-	const auto ext = ToLower(path.extension().string());
+	const auto ext = ToLower(Util::PathHelpers::ToUtf8(path.extension()));
 	bool ok = false;
 	if (ext == ".dds") {
-		ok = Util::LoadDDSTextureFromFile(globals::d3d::device, path.string().c_str(), &srv, size);
+		ok = Util::LoadDDSTextureFromFile(globals::d3d::device, Util::PathHelpers::ToUtf8(path).c_str(), &srv, size);
 	} else {
 		int width = 0, height = 0;
 		unsigned char* pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, nullptr, kRgbaChannels);
 		if (!pixels) {
-			logger::warn("[Presets] stbi failed for '{}': {}", path.string(), stbi_failure_reason() ? stbi_failure_reason() : "unknown");
+			logger::warn("[Presets] stbi failed for '{}': {}", Util::PathHelpers::ToUtf8(path), stbi_failure_reason() ? stbi_failure_reason() : "unknown");
 			return false;
 		}
 
@@ -620,7 +616,7 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 		const HRESULT hrTex = globals::d3d::device->CreateTexture2D(&desc, &init, texture.put());
 		stbi_image_free(pixels);
 		if (FAILED(hrTex) || !texture) {
-			logger::warn("[Presets] CreateTexture2D failed for '{}' ({:x})", path.string(), static_cast<unsigned>(hrTex));
+			logger::warn("[Presets] CreateTexture2D failed for '{}' ({:x})", Util::PathHelpers::ToUtf8(path), static_cast<unsigned>(hrTex));
 			return false;
 		}
 		Util::SetResourceName(texture.get(), "UnifiedPresetCatalog::Artwork");
@@ -631,7 +627,7 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 		srvDesc.Texture2D.MipLevels = 1;
 		const HRESULT hrSrv = globals::d3d::device->CreateShaderResourceView(texture.get(), &srvDesc, &srv);
 		if (FAILED(hrSrv) || !srv) {
-			logger::warn("[Presets] CreateSRV failed for '{}' ({:x})", path.string(), static_cast<unsigned>(hrSrv));
+			logger::warn("[Presets] CreateSRV failed for '{}' ({:x})", Util::PathHelpers::ToUtf8(path), static_cast<unsigned>(hrSrv));
 			return false;
 		}
 		Util::SetResourceName(srv, "UnifiedPresetCatalog::Artwork SRV");
@@ -690,9 +686,8 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		auto& presetManager = PresetManager::GetSingleton();
 		presetManager.DiscoverPresets();
 
-		const auto e11Id = GetEffects11PresetId(*pack);
+		const auto e11Id = GetEffects11PresetId(pack->id);
 		if (presetManager.SwitchPreset(e11Id, saveEffects11Current)) {
-			globals::features::effects11.PersistActivePreset();
 			appliedAny = effects11Applied = true;
 		} else {
 			logger::warn("[Presets] Failed to switch Effects11 preset '{}'", e11Id);
@@ -704,13 +699,16 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 
 	// A Baseline-only pack is its own layer, so it must not displace the active Effects 11 / CS pack.
 	if (appliedAny) {
-		SetActivePackId(id);
 		// The scene layer always follows the active pack, so a pack without scene files clears it.
+		activePackId = id;
 		globals::features::sceneManager.ReloadOverwrites();
 		CSEditor::ReloadFormEdits();
-		// Applying a pack, even again, re-selects the pipeline it was authored for.
+		// Applying a pack, even again, re-selects the pipeline it was authored for. An Effects 11 pack that cannot
+		// run falls back to Post Processing; without that either, the current pipeline stays.
 		using PostProcessingMode::Mode;
-		PostProcessingMode::Set(pack->IsE11() && effects11Applied ? Mode::Effects11 : Mode::PostProcessing);
+		if (!(pack->IsE11() && effects11Applied && UsePackPipeline(Mode::Effects11)))
+			UsePackPipeline(Mode::PostProcessing);
+		SaveActiveState();
 	}
 
 	if (pack->hasBaseline) {
@@ -725,7 +723,7 @@ void UnifiedPresetCatalog::DisableActivePack()
 {
 	assert(!activePackId.empty());
 	if (const auto* pack = FindPack(activePackId); pack && pack->hasEffects11)
-		PostProcessingMode::Set(PostProcessingMode::Mode::Vanilla);
+		UsePackPipeline(PostProcessingMode::Mode::Vanilla);
 	SetActivePackId("");
 	globals::features::sceneManager.ReloadOverwrites();
 	CSEditor::ReloadFormEdits();
@@ -738,8 +736,15 @@ bool UnifiedPresetCatalog::IsBaselineEnabled(const std::string& id) const
 
 void UnifiedPresetCatalog::ReapplyIfInUse(const std::string& id)
 {
-	if (activePackId == id || IsBaselineEnabled(id))
-		ApplyPack(id);
+	// A refresh, not ApplyPack: that would also re-pick the pipeline and move the pack to the top of the Baseline order.
+	if (activePackId == id) {
+		globals::features::sceneManager.ReloadOverwrites();
+		CSEditor::ReloadFormEdits();
+	}
+	if (IsBaselineEnabled(id)) {
+		BaselineManager::GetSingleton()->Refresh();
+		globals::state->ReapplySettingsLayers();
+	}
 }
 
 void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
@@ -749,21 +754,14 @@ void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
 	baselinePackIds.push_back(pack.id);
 	SaveActiveState();
 
-	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+	BaselineManager::GetSingleton()->Refresh();
+	// The user's edits stay on top; features that are not loaded pick the pack up when they load.
+	globals::state->ReapplySettingsLayers();
+	if (const auto edited = globals::state->FindEditsUnderPack(pack.id); !edited.empty())
+		QueueBaselineOverlap(pack.id, edited);
 
-	// The baseline is the layer beneath the scene, so reapply it without the scene's values in play.
-	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
-	for (const auto& featureName : pack.baselineFeatures) {
-		auto* feature = Feature::FindFeatureByShortName(featureName);
-		if (!feature || !feature->loaded) {
-			logger::info("[Presets] Baseline '{}': feature '{}' is not loaded; it applies once the feature loads", pack.id, featureName);
-			continue;
-		}
-		if (!feature->ReapplyOverrideSettings())
-			logger::warn("[Presets] Baseline '{}': nothing applied to '{}' (see Feature Issues for rejected files)", pack.id, featureName);
-	}
-
-	// Disable-at-boot entries take effect on the next game start; persist them with the rest of Settings.
+	// Disable-at-boot entries take effect on the next game start. Like a boot toggle they are saved with the
+	// rest of Settings, so enabling a pack never writes the user's unsaved edits.
 	if (!pack.disableAtBoot.empty()) {
 		auto* state = globals::state;
 		bool changed = false;
@@ -775,72 +773,74 @@ void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
 			logger::info("[Presets] Baseline '{}': {} '{}' at boot", pack.id, disabled ? "disable" : "enable", featureName);
 		}
 		if (changed)
-			state->Save();
+			state->CheckCoreSettingsChanged();
 	}
-}
-
-bool UnifiedPresetCatalog::SetPackFeatureDisabledAtBoot(const std::string& packId, const std::string& featureShortName, bool disabled)
-{
-	auto* pack = FindPack(packId);
-	if (!pack || featureShortName.empty())
-		return false;
-
-	const auto manifestPath = GetPackManifestPath(pack->rootPath);
-	std::string readError;
-	json manifest = ReadPackManifest(pack->rootPath, &readError);
-	if (!readError.empty() && !std::filesystem::exists(manifestPath)) {
-		if (!EnsureBaselineManifest(pack->rootPath, pack->name.empty() ? packId : pack->name))
-			return false;
-		manifest = ReadPackManifest(pack->rootPath, &readError);
-	}
-	if (!readError.empty()) {
-		logger::warn("[Presets] Cannot update disableAtBoot for '{}': {}", packId, readError);
-		return false;
-	}
-
-	if (!WriteManifestFlag(manifestPath, manifest, kDisableAtBootKey, featureShortName, disabled))
-		return false;
-
-	pack->disableAtBoot[featureShortName] = disabled;
-	pack->hasBaseline = !pack->baselineFeatures.empty() || !pack->disableAtBoot.empty() ||
-	                    (pack->type && *pack->type == PresetType::Baseline);
-	if (!pack->type)
-		pack->type = PresetType::Baseline;
-
-	logger::info("[Presets] Pack '{}': {} '{}' at boot in manifest", packId, disabled ? "disable" : "enable", featureShortName);
-	return true;
 }
 
 void UnifiedPresetCatalog::LoadSceneControl() const
 {
 	const auto packRoot = GetActivePackRoot();
 	const auto manifest = packRoot.empty() ? json::object() : ReadPackManifest(packRoot);
-	const auto sceneControl = manifest.find(kSceneControlKey);
-	E11Handoff::ApplyManifest(sceneControl != manifest.end() ? *sceneControl : json::object());
+	auto sceneControl = manifest.value(kSceneControlKey, json::object());
+	if (!sceneControl.is_object())
+		sceneControl = json::object();
+	// The pack's choices are its defaults; the user's own win.
+	if (const auto overrides = sceneControlOverrides.find(activePackId); overrides != sceneControlOverrides.end())
+		sceneControl.update(*overrides);
+	E11Handoff::ApplyManifest(sceneControl);
 }
 
-bool UnifiedPresetCatalog::SetSceneControl(E11Handoff::Feature feature, bool handedOff)
+void UnifiedPresetCatalog::SetSceneControl(E11Handoff::Feature feature, bool handedOff)
 {
 	globals::features::effects11.SetHandedOff(feature, handedOff);
+	if (activePackId.empty())
+		return;
 
-	const auto packRoot = GetActivePackRoot();
-	const auto manifestPath = GetPackManifestPath(packRoot);
-	std::error_code ec;
-	if (packRoot.empty() || !std::filesystem::exists(manifestPath, ec))
-		return true;
-
-	std::string readError;
-	json manifest = ReadPackManifest(packRoot, &readError);
-	if (!readError.empty()) {
-		logger::warn("[Presets] Cannot update sceneControl for '{}': {}", activePackId, readError);
-		return false;
-	}
+	// The pack's manifest stays its author's; the user's choice is kept per pack in the active pack state.
 	const std::string shortName(E11Handoff::GetShortName(feature));
-	if (!WriteManifestFlag(manifestPath, manifest, kSceneControlKey, shortName, handedOff))
-		return false;
+	sceneControlOverrides[activePackId][shortName] = handedOff;
+	SaveActiveState();
+	logger::info("[Presets] Pack '{}': sceneControl '{}' = {}", activePackId, shortName, handedOff);
+}
 
-	logger::info("[Presets] Pack '{}': sceneControl '{}' = {} in manifest", activePackId, shortName, handedOff);
-	return true;
+void UnifiedPresetCatalog::QueueBaselineOverlap(const std::string& packId, const std::vector<Feature*>& features)
+{
+	if (std::ranges::find(overlapPackIds, packId) == overlapPackIds.end())
+		overlapPackIds.push_back(packId);
+	for (auto* feature : features)
+		if (auto name = feature->GetDisplayName(); std::ranges::find(overlapFeatureNames, name) == overlapFeatureNames.end())
+			overlapFeatureNames.push_back(std::move(name));
+
+	std::string packNames;
+	for (const auto& id : overlapPackIds) {
+		const auto* pack = FindPack(id);
+		packNames += (packNames.empty() ? "" : ", ") + (pack && !pack->name.empty() ? pack->name : id);
+	}
+	std::string names;
+	for (const auto& name : overlapFeatureNames)
+		names += (names.empty() ? "" : ", ") + name;
+	const auto count = overlapFeatureNames.size();
+
+	overlapPrompt.title = T("menu.presets.overlap_title", "Baseline Preset Over Your Changes");
+	overlapPrompt.message = std::vformat(T("menu.presets.overlap_message",
+											 "{} sets {} features you have changed: {}.\n\n"
+											 "Your changes are kept and still win. Use the preset's values to drop them for the settings it sets."),
+		std::make_format_args(packNames, count, names));
+	overlapPrompt.confirmLabel = T("menu.presets.overlap_use_preset", "Use Preset Values");
+	overlapPrompt.cancelLabel = T("menu.presets.overlap_keep", "Keep My Changes");
+	overlapPrompt.focus = Util::ConfirmationPopup::Focus::Cancel;
+	overlapPrompt.Request();
+}
+
+void UnifiedPresetCatalog::DrawBaselineOverlapPrompt()
+{
+	if (overlapPrompt.Draw())
+		for (const auto& packId : overlapPackIds)
+			globals::state->ClearEditsUnderPack(packId);
+	if (!overlapPrompt.IsOpen()) {
+		overlapPackIds.clear();
+		overlapFeatureNames.clear();
+	}
 }
 
 bool UnifiedPresetCatalog::RemoveBaseline(const std::string& id)
@@ -849,11 +849,31 @@ bool UnifiedPresetCatalog::RemoveBaseline(const std::string& id)
 		return false;
 	SaveActiveState();
 
-	auto* overrides = SettingsOverrideManager::GetSingleton();
-	overrides->RefreshOverrides();
-	// Drops the .user deltas of features that no longer have any override behind them.
-	overrides->CleanupStaleUserOverrides();
+	BaselineManager::GetSingleton()->Refresh();
+	globals::state->ReapplySettingsLayers();
 	logger::info("[Presets] Removed Baseline pack '{}'", id);
+	return true;
+}
+
+bool UnifiedPresetCatalog::MoveBaseline(const std::string& id, bool raise)
+{
+	const auto found = std::ranges::find(baselinePackIds, id);
+	if (found == baselinePackIds.end())
+		return false;
+	const auto index = static_cast<size_t>(found - baselinePackIds.begin());
+	if (raise ? index + 1 >= baselinePackIds.size() : index == 0)
+		return false;
+	const size_t target = raise ? index + 1 : index - 1;
+	std::swap(baselinePackIds[index], baselinePackIds[target]);
+	// An order that is not saved would revert at the next start, so keep showing the one on disk.
+	if (!SaveActiveState()) {
+		std::swap(baselinePackIds[index], baselinePackIds[target]);
+		return false;
+	}
+
+	BaselineManager::GetSingleton()->Refresh();
+	globals::state->ReapplySettingsLayers();
+	logger::info("[Presets] Moved Baseline pack '{}' {}", id, raise ? "up" : "down");
 	return true;
 }
 
@@ -864,21 +884,16 @@ bool UnifiedPresetCatalog::EnsureBaselineManifest(const std::filesystem::path& p
 	if (std::filesystem::exists(manifestPath, ec))
 		return true;
 
-	json manifest;
-	manifest["name"] = displayName;
-	manifest["author"] = "";
-	manifest["version"] = "1.0.0";
-	manifest["description"] = "";
-	manifest[kPresetTypeKey] = GetPresetTypeName(PresetType::Baseline);
-	manifest["csVersion"] = PresetCompatibility::CurrentCsVersionString();
+	json manifest{ { PackManifest::kNameKey, displayName }, { kPresetTypeKey, GetPresetTypeName(PresetType::Baseline) } };
+	PackManifest{ .version = PackManifest::kDefaultVersion, .csVersion = PresetCompatibility::CurrentCsVersionString() }.WriteDetails(manifest);
 	return Util::FileHelpers::WriteJsonAtomically(manifestPath, manifest, 4, "preset pack manifest");
 }
 
 bool UnifiedPresetCatalog::OpenPresetsFolder() const
 {
-	Util::FileHelpers::EnsureDirectoryExists(GetPresetsRealPath());
-	const auto result = ShellExecuteW(nullptr, L"open", GetPresetsRealPath().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-	return reinterpret_cast<intptr_t>(result) > kShellExecuteSuccessThreshold;
+	const auto path = Util::PathHelpers::GetUnifiedPresetsRealPath();
+	Util::FileHelpers::EnsureDirectoryExists(path);
+	return Util::FileHelpers::OpenWithShell(path);
 }
 
 bool UnifiedPresetCatalog::OpenPackFolder(const std::string& id) const
@@ -897,6 +912,5 @@ bool UnifiedPresetCatalog::OpenPackFolder(const std::string& id) const
 			path = std::move(realPath);
 	}
 
-	const auto result = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-	return reinterpret_cast<intptr_t>(result) > kShellExecuteSuccessThreshold;
+	return Util::FileHelpers::OpenWithShell(path);
 }

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT AND (LicenseRef-GPL-3.0-with-Modding-Exception WITH GPL-3.0-linking-source-exception)
+// Original code Copyright (c) 2022 Ilya Perapechka (MIT), modifications GPL-3.0 with Modding Exception (see EXCEPTIONS.md)
+
 #include "Common/ColorManagement.hlsli"
 #include "Common/FastMath.hlsli"
 #include "Common/FlareOcclusion.hlsli"
@@ -7,16 +10,18 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
 
-#if defined(TEX) || defined(HORIZFADE)
+#	if defined(TEX) || defined(HORIZFADE)
 	float2 TexCoord: TEXCOORD0;
-#endif
+#	endif
 
 	float4 Color: COLOR0;
 };
+#endif
 
 struct VS_OUTPUT
 {

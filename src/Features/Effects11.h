@@ -33,23 +33,8 @@ public:
 		};
 	}
 
-	/** @brief Persisted Effects11 settings. */
-	struct Settings
-	{
-		std::string ActivePreset;  ///< Empty = Legacy (PresetManager::kLegacyPresetId)
-	};
-
-	Settings settings;
-
-	/** @brief Discovers presets and applies settings.ActivePreset, repairing the id if needed. */
-	void SyncActivePresetFromSettings();
-
-	/** @brief Copies the manager's active id into ActivePreset and saves it through State::Save(). */
-	void PersistActivePreset();
-
-	virtual void LoadSettings(json& o_json) override;
-	virtual void SaveSettings(json& o_json) override;
-	virtual void RestoreDefaultSettings() override;
+	/** @brief The active preset belongs to the active preset pack, so nothing goes in the user config. */
+	virtual bool UsesMainSettings() const override { return false; }
 
 	struct alignas(16) PerFrame
 	{
@@ -86,7 +71,7 @@ public:
 
 		uint EnableVolumetricRays;
 		float VolumetricRaysIntensity;
-		float VolumetricRaysExtinction;
+		float VolumetricRaysDensity;
 		float VolumetricRaysSkyColorAmount;
 
 		float VolumetricRaysDesaturation;
@@ -166,8 +151,34 @@ public:
 		float AuroraCurve;
 		uint FixBlackCrush;
 		float2 NightSkyPad0;
+
+		float3 VolumetricFogColorFilter;
+		float VolumetricFogIntensity;
+
+		float VolumetricFogCurve;
+		float VolumetricFogOpacity;
+		float VolumetricFogShadowAmount;
+		uint VolumetricFogEnableLighting;
+
+		float3 VolumetricRaysSkyColor;  ///< The weather's horizon colour
+		uint VolumetricFogEnableShadows;
+
+		uint VolumetricRaysSampleCount;
+		uint GameVolumetricRaysDisableDithering;
+		float2 GameVolumetricRaysPad0;
+
+		float3 GameVolumetricRaysLightScale;  ///< Ungraded over graded sunlight, so game VL stays lit by the weather's own sunlight
+		float GameVolumetricRaysCustomContribution;
+
+		float3 GameVolumetricRaysCustomColor;
+		float GameVolumetricRaysPad1;
 	};
 	static_assert(sizeof(PerFrame) % 16 == 0);
+	static_assert(offsetof(PerFrame, VolumetricFogColorFilter) % 16 == 0);
+	static_assert(offsetof(PerFrame, VolumetricRaysSkyColor) % 16 == 0);
+	static_assert(offsetof(PerFrame, VolumetricRaysSampleCount) % 16 == 0);
+	static_assert(offsetof(PerFrame, GameVolumetricRaysLightScale) % 16 == 0);
+	static_assert(offsetof(PerFrame, GameVolumetricRaysCustomColor) % 16 == 0);
 	static_assert(offsetof(PerFrame, EnableCloudsScattering) % 16 == 0);
 	static_assert(offsetof(PerFrame, SkyScatteringColor) % 16 == 0);
 	static_assert(offsetof(PerFrame, SkyScatteringDustTint) % 16 == 0);
@@ -198,10 +209,19 @@ public:
 	std::unique_ptr<Texture2D> vlDepthHalf;
 	std::unique_ptr<ConstantBuffer> vlBlurCB;
 
+	ID3D11PixelShader* sunRaysMaskPS = nullptr;
+	ID3D11PixelShader* sunRaysBlurPS = nullptr;
+	ID3D11PixelShader* sunRaysCompositePS = nullptr;
+	std::unique_ptr<Texture2D> sunRaysTexA;
+	std::unique_ptr<Texture2D> sunRaysTexB;
+	std::unique_ptr<ConstantBuffer> sunRaysCB;
+
 	/** @brief Sun color after the preset's sun desaturation and filter, normalized to a peak of 1; tints the sky scattering. */
 	float3 scatteringSunColor = { 1.0f, 1.0f, 1.0f };
 	/** @brief Sun direction used for sky scattering; mirrored below the horizon while the sun disc is hidden. */
 	float3 scatteringSunDirection = { 0.0f, 0.0f, 1.0f };
+	/** @brief Per-channel sunlight before over after the [ENVIRONMENT] direct lighting grade, from the last OverrideWeather. */
+	float3 directLightingUngradeScale = { 1.0f, 1.0f, 1.0f };
 
 	PerFrame GetCommonBufferData();
 	/** @brief Fills the [SKYSCATTERING] and cloud lighting fields of the per-frame buffer. */
@@ -214,7 +234,7 @@ public:
 	virtual void Prepass() override;
 	virtual void ClearShaderCache() override;
 
-	/** @brief Switches between Effects 11 and Vanilla; bound to the Effects 11 toggle hotkey. */
+	/** @brief Switches between Effects 11 and the pipeline that ran before it; bound to the Effects 11 toggle hotkey. */
 	void ToggleEnabled();
 	/** @brief Writes the "UseEffect" GLOBAL setting; go through PostProcessingMode::Set to keep the pipelines exclusive. */
 	void SetUseEffect(bool enabled);
@@ -225,6 +245,9 @@ public:
 	bool IsActive() const { return presetActive; }
 
 	void DrawVolumetricRays();
+
+	/** @brief Draws the ENB [RAYS] screen-space shafts from the sun, or from a moon at night, additively onto the main target. */
+	void DrawSunRays();
 
 	void OnSkyUpdateColors(RE::Sky* a_sky);
 	void OverrideWeather(RE::Sky* a_sky);
@@ -255,12 +278,17 @@ public:
 	 */
 	bool RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
 
-	/** @brief True when the effect chain replaced ISHDR this frame, leaving an SDR scene for HDR Display to expand. */
+	/** @brief True when the effect chain replaced ISHDR for the frame being presented, leaving an SDR scene for HDR Display to expand. */
 	bool ReplacedTonemapperThisFrame() const;
 
 private:
 	bool presetActive = false;
 	bool resourcesReady = false;
+	/** @brief Creates the additive blend state shared by the ray passes on first use; false if creation failed. */
+	bool EnsureAdditiveBlendState();
+	/** @brief Compiles the sun ray shaders and (re)creates their half-res targets; false if anything failed. */
+	bool EnsureSunRaysResources(uint32_t a_width, uint32_t a_height);
+
 	uint tonemapReplacedFrame = UINT32_MAX;  ///< frameCount when the effect chain last wrote the tonemap output
 	std::array<bool, static_cast<size_t>(E11Handoff::Feature::Count)> handedOff{};
 
@@ -275,8 +303,6 @@ private:
 	// The feature buffer is rebuilt several times per frame, so GetCommonBufferData's lookups are replayed from here
 	PerFrame perFrameCache{};
 	Util::FrameChecker perFrameCacheChecker;
-	/** Set when Sync repairs ActivePreset during load; flushed in SetupResources. */
-	bool activePresetNeedsPersist = false;
 };
 
 #pragma warning(pop)

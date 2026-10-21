@@ -83,10 +83,8 @@ namespace
 
 void RainRefraction::DrawSettings()
 {
-	if (IsManagedByENB()) {
-		ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
-		return;
-	}
+	const Util::LockedSection enbLock(IsManagedByENB(),
+		T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
 
 	if (!defaultRaindrops.status.empty())
 		Util::Text::WrappedWarning("%s", defaultRaindrops.status.c_str());
