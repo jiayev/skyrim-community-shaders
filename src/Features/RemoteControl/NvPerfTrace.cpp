@@ -307,6 +307,8 @@ namespace NvPerf::Trace
 			}
 			if (a_value.contains("groups"))
 				a_out.groups = Groups(a_value["groups"], "groups", a_error);
+			if (a_value.contains("spans"))
+				a_out.spans = Groups(a_value["spans"], "spans", a_error);
 			if (a_value.contains("addGroups")) {
 				auto added = Groups(a_value["addGroups"], "addGroups", a_error);
 				a_out.groups.insert(a_out.groups.begin(), added.begin(), added.end());
@@ -585,6 +587,7 @@ namespace NvPerf::Trace
 			{
 				std::string name, queue, group;
 				bool graphics = true;
+				bool nested = false;    // a part of a pass (inside its range): out of the frame total, which its pass already counts
 				bool replayed = false;  // seen in a kept recording's own queries
 				std::vector<double> times;
 				std::vector<std::uint16_t> occurrences;
@@ -873,36 +876,58 @@ namespace NvPerf::Trace
 			const auto& t = a_runner.request.t;
 			auto& run = a_runner.timestamps;
 			std::vector<std::pair<double, std::uint16_t>> current(run.series.size());
-			for (const auto& range : a_frame.ranges) {
-				if (!t.ranges.empty() && !detail::MatchingFilter(t.ranges, range.name))
-					continue;
-				const bool graphics = range.queue == Timestamps::Queue::Graphics;
-				const auto key = graphics ? range.name : std::format("{} [{}]", range.name, QueueName(range.queue));
-				const auto [found, inserted] = run.index.try_emplace(key, run.series.size());
+			const auto addSeries = [&](const std::string& a_key, Timestamps::Queue a_queue, bool a_nested, std::string a_group) -> std::size_t {
+				const auto [found, inserted] = run.index.try_emplace(a_key, run.series.size());
 				if (inserted) {
 					Runner::Series series;
-					series.name = key;
-					series.queue = QueueName(range.queue);
-					series.graphics = graphics;
-					// Another queue's ticks overlap the graphics queue's work: its rows stay out of the groups and the total.
-					if (graphics)
-						series.group = GroupOf(t, range.name);
+					series.name = a_key;
+					series.queue = QueueName(a_queue);
+					series.graphics = a_queue == Timestamps::Queue::Graphics;
+					series.nested = a_nested;
+					series.group = std::move(a_group);
 					series.times.assign(run.frames, 0.0);
 					series.occurrences.assign(run.frames, 0);
 					run.series.push_back(std::move(series));
 					current.emplace_back();
 				}
-				auto& [time, occurrences] = current[found->second];
+				return found->second;
+			};
+			// The spans, over every range of the frame (the template's filter does not apply to them).
+			for (const auto& span : t.spans) {
+				std::uint64_t first = UINT64_MAX, last = 0;
+				double usPerTick = 0.0;
+				for (const auto& range : a_frame.ranges)
+					if (range.queue == Timestamps::Queue::Graphics && range.endTick >= range.beginTick && range.beginTick &&
+						std::ranges::any_of(span.ranges, [&](const std::string& a_filter) { return detail::NameMatches(a_filter, range.name); })) {
+						first = std::min(first, range.beginTick);
+						last = std::max(last, range.endTick);
+						usPerTick = range.usPerTick;
+					}
+				// A group name no group has: out of every group's sum and "other".
+				const auto at = addSeries("span:" + span.name, Timestamps::Queue::Graphics, true, "(span)");
+				if (first <= last) {
+					current[at].first = static_cast<double>(last - first) * usPerTick;
+					current[at].second = 1;
+				}
+			}
+			for (const auto& range : a_frame.ranges) {
+				if (!t.ranges.empty() && !detail::MatchingFilter(t.ranges, range.name))
+					continue;
+				const bool graphics = range.queue == Timestamps::Queue::Graphics;
+				const auto key = graphics ? range.name : std::format("{} [{}]", range.name, QueueName(range.queue));
+				// Another queue's ticks overlap the graphics queue's work: its rows stay out of the groups and the total.
+				const auto at = addSeries(key, range.queue, range.nested, graphics ? GroupOf(t, range.name) : std::string{});
+				auto& [time, occurrences] = current[at];
 				time += range.us;
 				occurrences = static_cast<std::uint16_t>(std::min<std::uint32_t>(occurrences + 1u, 0xffffu));
-				run.series[found->second].replayed |= range.replayed;
+				run.series[at].replayed |= range.replayed;
 			}
 			double total = 0.0;
 			for (std::size_t i = 0; i < run.series.size(); ++i) {
 				auto& series = run.series[i];
 				series.times.push_back(current[i].first);
 				series.occurrences.push_back(current[i].second);
-				if (series.graphics)
+				if (series.graphics && !series.nested)
 					total += current[i].first;
 			}
 			run.totals.push_back(total);
@@ -971,7 +996,8 @@ namespace NvPerf::Trace
 				row.samples = static_cast<std::uint32_t>(std::ranges::count_if(occurrences, [](double a_count) { return a_count > 0.0; }));
 				replayed += series.replayed;
 				if (series.graphics) {
-					report.totalUs += row.timeUs;
+					if (!series.nested)
+						report.totalUs += row.timeUs;
 					if (!t.groups.empty())
 						addToGroup(row.group.empty() ? std::string("other") : row.group, times);
 				} else {
@@ -1409,6 +1435,11 @@ namespace NvPerf::Trace
 		return report;
 	}
 
+	namespace
+	{
+		bool StartRequest(Template a_template, std::string_view a_label, std::string_view a_baseline, std::string& a_error);
+	}
+
 	bool Start(std::string_view a_templateName, std::string_view a_label, std::string_view a_baseline, std::string& a_error)
 	{
 		auto t = FindTemplate(a_templateName);
@@ -1416,6 +1447,31 @@ namespace NvPerf::Trace
 			a_error = std::format("no template '{}'", a_templateName);
 			return false;
 		}
+		return StartRequest(std::move(*t), a_label, a_baseline, a_error);
+	}
+
+	bool StartInline(std::string_view a_templateJson, std::string_view a_label, std::string_view a_baseline, std::string& a_error)
+	{
+		const auto value = json::parse(a_templateJson, nullptr, false);
+		if (value.is_discarded()) {
+			a_error = "the template is not valid JSON";
+			return false;
+		}
+		Template t;
+		if (!ParseTemplate(value, Templates(), t, a_error))
+			return false;
+		return StartRequest(std::move(t), a_label, a_baseline, a_error);
+	}
+
+	std::string ReportToJson(const Report& a_report)
+	{
+		return ReportJson(a_report).dump();
+	}
+
+	namespace
+	{
+	bool StartRequest(Template a_template, std::string_view a_label, std::string_view a_baseline, std::string& a_error)
+	{
 		auto& runner = Get();
 		std::lock_guard lock(runner.mutex);
 		if (runner.pending || runner.status.state == State::Running) {
@@ -1423,13 +1479,14 @@ namespace NvPerf::Trace
 			return false;
 		}
 		Request request;
-		request.t = std::move(*t);
+		request.t = std::move(a_template);
 		request.label = a_label.empty() ? request.t.name : std::string(a_label);
 		request.baseline = std::string(a_baseline);
 		runner.pending = std::move(request);
 		runner.cancel = false;
 		runner.status = Status{ State::Running, runner.pending->t.name, runner.pending->label };
 		return true;
+	}
 	}
 
 	void Cancel()

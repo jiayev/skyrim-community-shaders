@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "TestHarness.h"
 
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Globals.h"
@@ -10,6 +11,10 @@
 #include "State.h"
 
 #include <OpenRenderGraph/PersistentGraphHost.h>
+
+#include <mutex>
+#include <string>
+#include <vector>
 
 namespace DCLF
 {
@@ -56,8 +61,14 @@ namespace DCLF
 				if (DCLF::Scene::FrameView::IsLoadingScreenUp())
 					return;
 				const std::uint32_t a_frame = ++frame;
-				while (next < commands.size() && a_frame >= commands[next].frame) {
-					auto command = commands[next++].command;
+				while (next < commands.size() && a_frame >= commands[next].frame)
+					Run(commands[next++].command, a_frame);
+			}
+
+			/** @brief Runs one command: a "dclf:" command here, any other the console's, on the main thread. */
+			static void Run(std::string command, std::uint32_t a_frame)
+			{
+				{
 					logger::info("[DCLF] test command at frame {}: {}", a_frame, command);
 					// "dclf:<toggle name>=<0|1>": a live toggle (Toggles.h, ToggleInfo::name), as the menu sets it, so one run can
 					// compare a class drawn by DCLF and by the engine from the same camera.
@@ -72,7 +83,7 @@ namespace DCLF
 								else if (camera)
 									camera->ForceThirdPerson();
 							});
-						continue;
+						return;
 					}
 					// "dclf:draw=1" / "dclf:draw=0": the player's weapons or magic hands drawn or sheathed (Actor::DrawWeaponMagicHands, on
 					// the main thread), so a scripted first-person run shows the arms (they are drawn only with a weapon or spell out).
@@ -82,7 +93,7 @@ namespace DCLF
 								if (auto* player = RE::PlayerCharacter::GetSingleton())
 									player->DrawWeaponMagicHands(draw);
 							});
-						continue;
+						return;
 					}
 					// "dclf:rebuild": a graph rebuild requested (PersistentGraphHost::RequestRebuild, here at Present on the graph's owner
 					// thread), which the next frame's build point performs: every recording invalidated, so that frame waits at its start for
@@ -92,7 +103,7 @@ namespace DCLF
 							host->RequestRebuild();
 						else
 							logger::warn("[DCLF] test command: no render graph host to rebuild");
-						continue;
+						return;
 					}
 					// Shader hot reload (dclf-hot-reload.md), served at the next present: "[ORG] shader reload: N of M pipelines rebuilt (K failed,
 					// U unchanged) in S s" marks the rebuilds done, "[ORG] shader reload: N pipelines swapped in at graph build B" the swap.
@@ -105,7 +116,16 @@ namespace DCLF
 							RenderGraphRuntime::RequestShaderReload({}, true);
 						else
 							RenderGraphRuntime::RequestShaderReload(value);
-						continue;
+						return;
+					}
+					// "dclf:async-compute=0|1|default": the passes preferring async compute on the graphics queue (0), the compute queue (1)
+					// or as CS_DCLF_ASYNC_COMPUTE says, from a graph rebuild on (dclf:rebuild's), so one run compares the queues.
+					if (command.rfind("dclf:async-compute=", 0) == 0) {
+						const std::string value = command.substr(19);
+						DCLF::Draws::asyncComputeOverride.store(value == "default" ? -1 : value != "0", std::memory_order_relaxed);
+						if (auto* host = RenderGraphRuntime::Get().Host())
+							host->RequestRebuild();
+						return;
 					}
 					if (command.rfind("dclf:", 0) == 0) {
 						const auto equals = command.find('=');
@@ -119,7 +139,7 @@ namespace DCLF
 							}
 						if (!found)
 							logger::warn("[DCLF] test command: no toggle named '{}'", name);
-						continue;
+						return;
 					}
 					if (auto* tasks = SKSE::GetTaskInterface()) {
 						tasks->AddTask([command] {
@@ -261,8 +281,29 @@ namespace DCLF
 		};
 	}
 
+	namespace
+	{
+		std::mutex queuedMutex;
+		std::vector<std::string> queuedCommands;
+	}
+
+	void QueueTestCommand(std::string a_command)
+	{
+		std::lock_guard lock(queuedMutex);
+		queuedCommands.push_back(std::move(a_command));
+	}
+
 	void RunTestHarness(std::string_view a_feature)
 	{
+		{
+			std::vector<std::string> queued;
+			{
+				std::lock_guard lock(queuedMutex);
+				queued.swap(queuedCommands);
+			}
+			for (auto& command : queued)
+				TestCommands::Run(std::move(command), 0);
+		}
 		// CS_DCLF_TEST_EXIT=<frame>: a startup loop's run ends here, loading screens not counted. The log is flushed, then the
 		// process ends without the engine's shutdown, which is slow and not what such a run tests.
 		static const std::uint32_t exitFrame = static_cast<std::uint32_t>(std::strtoul(DCLF::SwitchValue(DCLF::Switch::TestExit).c_str(), nullptr, 10));

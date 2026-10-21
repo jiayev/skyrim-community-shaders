@@ -190,12 +190,14 @@ namespace NvPerf
 	void PushRange(std::string_view name);
 	void PopRange();
 
-	/// Whether graph-recorded work should push its own ranges (a capture is armed on the Vulkan backend). Cheap.
+	/// Whether graph-recorded work should push its own ranges (a capture is armed on the Vulkan backend, or the pass being
+	/// recorded on this thread is timed by a timestamp trace). Cheap.
 	bool CommandBufferRangesActive() noexcept;
 	/**
 	 * @brief A range inside a graph pass's own recording (e.g. the parts of DCLF's colour pass), in its native command
 	 * buffer (VkCommandBuffer), when a capture is armed and selects a_name. The profiler measures one nesting level, so
-	 * select these names without the enclosing pass's. No-op (false) on the D3D11 backend.
+	 * select these names without the enclosing pass's. While a timestamp trace times the pass's recording, it is also a
+	 * timestamp sub-range (Timestamps::Range::nested). No-op (false) on the D3D11 backend without a trace.
 	 * @return Whether it was pushed: pass it to PopCommandBufferRange in the same command buffer.
 	 */
 	bool PushCommandBufferRange(void* a_nativeCommandBuffer, const char* a_name);

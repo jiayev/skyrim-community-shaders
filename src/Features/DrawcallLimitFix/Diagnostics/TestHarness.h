@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <string_view>
 
 namespace DCLF
@@ -10,4 +11,10 @@ namespace DCLF
 	 * toggle switches.
 	 */
 	void RunTestHarness(std::string_view a_feature);
+
+	/**
+	 * @brief Any thread: a_command run at the next Present as a CS_DCLF_TEST_COMMANDS command is (a "dclf:" command or a console
+	 * command), for a remote client (DevBench's communityshaders.dclf).
+	 */
+	void QueueTestCommand(std::string a_command);
 }

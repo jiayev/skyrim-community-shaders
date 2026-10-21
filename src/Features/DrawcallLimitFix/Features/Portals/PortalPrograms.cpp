@@ -212,8 +212,8 @@ namespace DCLF::Features::Portals
 		a_context.RegisterCullBinding({ .slot = Api::CullBindingSlot::MemberQueries, .name = "member-portal-queries", .select = &SelectMembers<Api::CullBindingSlot::MemberQueries> });
 		a_context.RegisterCullBinding({ .slot = Api::CullBindingSlot::MemberResults, .name = "member-portal-results", .select = &SelectMembers<Api::CullBindingSlot::MemberResults> });
 		a_context.RegisterCullBinding({ .slot = Api::CullBindingSlot::MemberClaims, .name = "member-portal-claims", .select = &SelectMembers<Api::CullBindingSlot::MemberClaims> });
-		a_context.RegisterPass({ .key = "portals.member-batch", .passName = "cs.dclf.z.member-portal-batch", .queue = Api::PassQueue::Compute, .make = &MemberBatch<false>, .setup = &BatchSetup });
-		a_context.RegisterPass({ .key = "portals.member-evaluate", .passName = "cs.dclf.z.member-portal-evaluate", .queue = Api::PassQueue::Compute, .make = &MemberBatch<true>, .setup = &BatchSetup });
+		a_context.RegisterPass({ .key = "portals.member-batch", .passName = "cs.dclf.z.member-portal-batch", .make = &MemberBatch<false>, .setup = &BatchSetup });
+		a_context.RegisterPass({ .key = "portals.member-evaluate", .passName = "cs.dclf.z.member-portal-evaluate", .make = &MemberBatch<true>, .setup = &BatchSetup });
 
 		a_context.RegisterCommitHook({ .name = "portal-programs", .commit = &Commit });
 		a_context.RegisterCullBinding({ .slot = Api::CullBindingSlot::Programs, .name = kProgramsName, .select = &SelectPrograms });

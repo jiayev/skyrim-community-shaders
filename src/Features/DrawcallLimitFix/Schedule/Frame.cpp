@@ -48,13 +48,13 @@ namespace DCLF::Schedule
 		};
 
 		// The depth (Z-prepass) epoch: the latched copies; the texture transforms (the latch's stage word, before anything of the frame
-		// draws); the member portals' queries (on the compute queue: phase 1's build reads their results, so they come first and alone, the
-		// only compute work the graphics queue waits for); phase 1 (build, index pool, tree LOD's cull, depth draw); the next frame's state
+		// draws); the member portals' queries (on the graphics queue: phase 1's build reads their results at once, so on the compute queue
+		// they were a round trip with nothing to overlap); phase 1 (build, index pool, tree LOD's cull, depth draw); the next frame's state
 		// on the compute queue beside phase 1's depth draw and the two-phase tail (tree wind, then the fade roots' portal batch and states:
 		// nothing of this frame reads them); the two-phase tail (only with the HZB: the pyramid, the retest build, tree LOD's retest, the
 		// rescues' depth draw); then what reads both phases (tree LOD's counts, the visibility events) and the fade states' write-back copy,
-		// last, so the graphics queue reaches its wait on the compute queue only at the epoch's end. The compute queue runs in order: a
-		// pass of the next frame's state scheduled before the member portals would hold phase 1's build behind it.
+		// last: ORG starts a graphics batch at the visibility events, the first pass that needs the compute queue's state, so the graphics
+		// queue waits for it only there.
 		constexpr std::string_view kMainDepth[] = {
 			"core.z.latched-copies",
 			"texture-transforms.apply",

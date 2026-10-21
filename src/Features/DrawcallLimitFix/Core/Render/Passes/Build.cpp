@@ -48,7 +48,6 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			BuildDrawsBindings bindings{};
 			if (queries) {
-				a_builder.PreferQueue(AsyncComputeQueue());
 				const auto bind = [&](Api::CullBindingSlot slot, bool writable) {
 					const auto& buffer = Extensions::CullBindingBuffer(slot, *resources->scene);
 					return buffer ? (writable ? a_builder.UnorderedAccess(*buffer).View() : a_builder.ShaderResource(*buffer).View()) : org::DeclaredViewToken{};

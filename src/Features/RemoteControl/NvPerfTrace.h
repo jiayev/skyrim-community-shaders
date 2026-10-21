@@ -91,6 +91,10 @@ namespace NvPerf::Trace
 		std::vector<std::string> ranges;  // empty: every outermost range (timestamps: every range)
 		std::vector<MetricGroup> metricGroups;
 		std::vector<ReportGroup> groups;
+		// Timestamps: a row "span:<name>" per span, each frame the graphics queue's time from the first of its ranges' beginnings to
+		// the last one's end (passes and barrier batches overlap: a range begins when the queue reaches it, before the work ahead of it
+		// has drained, so their sum counts some work twice; a span counts the queue's time once). Out of the total and the groups.
+		std::vector<ReportGroup> spans;
 		std::uint32_t samples = 4;
 		std::uint32_t repeats = 1;
 		std::uint64_t startFrame = 2000;  // a headless trace's first capture starts this many presents after a game loaded (DCLF compiles in the first ones)
@@ -196,6 +200,11 @@ namespace NvPerf::Trace
 	/// Starts a trace (any thread). a_label names its report (empty: the template's name); a_baseline is a report to compare
 	/// it with (empty: none). Fails while a trace or a capture is in progress.
 	bool Start(std::string_view templateName, std::string_view label, std::string_view baseline, std::string& error);
+	/// Start with a template given as JSON text, in a template file's form ("extends" a known one; e.g. a timing template with
+	/// its own ranges, groups and confidence for one A/B), not added to Templates().
+	bool StartInline(std::string_view templateJson, std::string_view label, std::string_view baseline, std::string& error);
+	/// A report as the JSON its .json file holds.
+	std::string ReportToJson(const Report& report);
 	void Cancel();
 	Status GetStatus();
 	std::shared_ptr<const Report> Latest();

@@ -174,6 +174,11 @@ Where the timings come from now:
     operation's time appears in no timer. The copy of the upscaler's output into `kMAIN`, the first
     operation after the interop flush, is one (estimated from bandwidth at about 0.1 ms at 4K, not measured), so it has no timer.
 
+## The schedule inspector
+
+To see what the persistent graph executes (batches per queue, the barriers before each pass, and every cross-queue wait with its cause), use the menu's
+"Render graph schedule" window or the `communityshaders.schedule` DevBench tool. See [render-graph-schedule.md](./render-graph-schedule.md).
+
 ## Switches
 
 | Variable | Effect |
