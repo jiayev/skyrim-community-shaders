@@ -17,6 +17,7 @@ struct LinearLighting;
 struct LODBlending;
 struct InteriorSun;
 struct PhysicalSky;
+struct RainRefraction;
 struct ScreenSpaceGI;
 struct ScreenSpaceShadows;
 struct Skylighting;
@@ -38,8 +39,10 @@ struct CSEditor;
 struct Effects11;
 struct ExponentialHeightFog;
 struct HDRDisplay;
+struct PostProcessing;
 struct ScreenshotFeature;
 struct Skin;
+struct SceneManager;
 
 class State;
 class Deferred;
@@ -47,7 +50,6 @@ struct TruePBR;
 class RenderDoc;
 class RemoteControl;
 class Menu;
-class WeatherManager;
 class SceneSettingsManager;
 
 namespace SIE
@@ -107,6 +109,7 @@ namespace globals
 		extern LODBlending lodBlending;
 		extern InteriorSun interiorSun;
 		extern PhysicalSky physicalSky;
+		extern RainRefraction rainRefraction;
 		extern ScreenSpaceGI screenSpaceGI;
 		extern ScreenSpaceShadows screenSpaceShadows;
 		extern Skylighting skylighting;
@@ -132,6 +135,8 @@ namespace globals
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
 		extern Skin skin;
+		extern SceneManager sceneManager;
+		extern PostProcessing postProcessing;
 
 	}
 
@@ -248,7 +253,6 @@ namespace globals
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
 	extern Profiler* profiler;
-	extern WeatherManager* weatherManager;
 	extern SceneSettingsManager* sceneSettingsManager;
 
 	/** @brief Initializes core singletons (ShaderCache, State, Menu, Deferred). Called once at plugin load. */

@@ -2,6 +2,7 @@
 #define __SHADOW_SAMPLING_DEPENDENCY_HLSL__
 
 #include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
@@ -39,7 +40,6 @@ StructuredBuffer<DirectionalShadowLightData> DirectionalShadowLights : register(
 
 namespace ShadowSampling
 {
-	static const float MinDirectionalLightMultiplier = 1e-5;
 	static const float3 LightingSampleNormal = float3(0, 0, 1);
 	static const float3 ImageBasedLightingNormal = float3(0, 0, -1);
 
@@ -139,13 +139,13 @@ namespace ShadowSampling
 		return Color::Ambient(max(0, SharedData::GetAmbient(LightingSampleNormal)));
 	}
 
-	float3 GetAmbientLighting()
+	float3 GetAmbientLighting(float3 positionMS)
 	{
 		float3 ambientColor = GetRawAmbientLighting();
 
 #if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
-			ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, ImageBasedLightingNormal);
+			ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, ImageBasedLightingNormal, positionMS);
 		}
 #endif
 
@@ -154,18 +154,17 @@ namespace ShadowSampling
 
 	float3 GetDirectionalLighting()
 	{
-		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-		return Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, MinDirectionalLightMultiplier), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+		return Color::DirectionalLight(SharedData::DirLightColor.xyz);
 	}
 
-	float3 GetSceneLightingColor()
+	float3 GetSceneLightingColor(float3 positionMS)
 	{
-		return GetAmbientLighting() + GetDirectionalLighting();
+		return GetAmbientLighting(positionMS) + GetDirectionalLighting();
 	}
 
-	void ExtractLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor)
+	void ExtractLighting(float3 inputColor, float3 positionMS, out float3 dirColor, out float3 ambientColor)
 	{
-		float3 ambientColorAmb = GetAmbientLighting();
+		float3 ambientColorAmb = GetAmbientLighting(positionMS);
 		float3 dirLightColorDir = GetDirectionalLighting();
 
 		float inputLuma = Color::RGBToLuminance(inputColor);

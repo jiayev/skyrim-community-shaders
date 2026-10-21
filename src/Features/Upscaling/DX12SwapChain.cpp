@@ -4,6 +4,7 @@
 #include <dxgi1_6.h>
 
 #include "../HDRDisplay.h"
+#include "../ScreenshotFeature.h"
 #include "../Upscaling.h"
 #include "FidelityFX.h"
 #include "Streamline.h"
@@ -31,8 +32,8 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 {
 	CreateD3D12Device(adapter);
 
-	IDXGIFactory4* dxgiFactory;
-	DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory)));
+	winrt::com_ptr<IDXGIFactory4> dxgiFactory;
+	DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(dxgiFactory.put())));
 
 	// Runtime format negotiation for swap chain
 	DXGI_FORMAT attemptedFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
@@ -71,7 +72,7 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 	ffx::CreateContextDescFrameGenerationSwapChainForHwndDX12 ffxSwapChainDesc{};
 
 	ffxSwapChainDesc.desc = &swapChainDesc;
-	ffxSwapChainDesc.dxgiFactory = dxgiFactory;
+	ffxSwapChainDesc.dxgiFactory = dxgiFactory.get();
 	ffxSwapChainDesc.fullscreenDesc = nullptr;
 	ffxSwapChainDesc.gameQueue = commandQueue.get();
 	ffxSwapChainDesc.hwnd = a_swapChainDesc.OutputWindow;
@@ -225,6 +226,8 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	auto* hdr = globals::features::hdrDisplay.loaded ? &globals::features::hdrDisplay : nullptr;
 	if (hdr)
 		hdr->ScaleUIBrightnessForFG();
+
+	globals::features::screenshotFeature.ProcessCaptureRequest();
 
 	bool isHDR = hdr && hdr->settings.enableHDR;
 

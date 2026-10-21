@@ -19,6 +19,7 @@
 #	include "Features/ScreenshotFeature.h"
 #	include "Globals.h"
 #	include "Profiler.h"
+#	include "CSEditor/SceneManager/SceneSettingsManager.h"
 #	include "ShaderCache.h"
 #	include "State.h"
 
@@ -143,8 +144,8 @@ namespace
 	/**
 	 * @brief Constructs a JSON object describing a feature's state and any pending restart-required changes.
 	 *
-	 * Includes feature metadata (name, version, category, load state, etc.) and, if the feature 
-	 * has restart-required fields, an array of those fields with their pending status determined 
+	 * Includes feature metadata (name, version, category, load state, etc.) and, if the feature
+	 * has restart-required fields, an array of those fields with their pending status determined
 	 * by comparing boot values against current live settings.
 	 *
 	 * @return json Feature entry with metadata and optional restart fields array.
@@ -189,10 +190,10 @@ namespace
 
 	/**
 	 * @brief Dispatches feature management operations (list, get, set, reset, toggle).
-	 * 
+	 *
 	 * Validates parameters and executes the requested feature operation, returning
 	 * success or error details in JSON format.
-	 * 
+	 *
 	 * @param a_args JSON object specifying the action and operation parameters.
 	 * @return JSON object containing the operation result or error information.
 	 */
@@ -204,6 +205,9 @@ namespace
 			// Marshal: FeatureEntry reads Feature::loaded and restart-gated settings bytes that
 			// main-thread toggles / settings-loads mutate.
 			return RunOnMainThread([]() {
+				// One guard for the whole listing: FeatureEntry diffs live settings bytes against
+				// boot values, which a scene override would otherwise report as a pending restart.
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 				json out = json::array();
 				for (auto* f : Feature::GetFeatureList())
 					out.push_back(FeatureEntry(f));
@@ -228,6 +232,8 @@ namespace
 			}
 			if (!target)
 				return json{ { "error", "unknown or missing shortName" }, { "shortName", shortName } };
+			if (target->IsAlwaysEnabled())
+				return json{ { "error", "feature is always enabled" }, { "shortName", shortName } };
 			auto* task = SKSE::GetTaskInterface();
 			if (!task)
 				return json{ { "error", "SKSE task interface unavailable" }, { "shortName", shortName } };
@@ -247,6 +253,7 @@ namespace
 				const bool applied = hasExplicit ? explicitVal : !target->loaded;
 				if (applied && !g_bootLoadedFeatures.contains(target))
 					return;
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 				target->loaded = applied;
 				if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 					const std::string payload = json{ { "shortName", shortName }, { "enabled", applied } }.dump();
@@ -271,6 +278,7 @@ namespace
 				auto* feature = Feature::FindFeatureByShortName(shortName);
 				if (!feature)
 					return json{ { "error", "feature not found or not loaded" }, { "shortName", shortName } };
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 				json blob;
 				feature->SaveSettings(blob);
 				return blob;
@@ -288,6 +296,7 @@ namespace
 				auto* feature = Feature::FindFeatureByShortName(shortName);
 				if (!feature)
 					return json{ { "error", "feature not found or not loaded" }, { "shortName", shortName } };
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 				try {
 					feature->LoadSettings(blob);
 					logger::info("DevBenchBridge: feature(set, {}) applied", shortName);
@@ -303,6 +312,7 @@ namespace
 				auto* feature = Feature::FindFeatureByShortName(shortName);
 				if (!feature)
 					return json{ { "error", "feature not found or not loaded" }, { "shortName", shortName } };
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 				try {
 					feature->RestoreDefaultSettings();
 					logger::info("DevBenchBridge: feature(reset, {}) applied", shortName);
@@ -721,7 +731,7 @@ namespace
 		if (action == "save") {
 			task->AddTask([state]() {
 				try {
-					state->Save(State::ConfigMode::USER);
+					state->Save();
 					logger::info("DevBenchBridge: settings(save) applied");
 				} catch (const std::exception& e) {
 					logger::error("DevBenchBridge: settings(save) failed: {}", e.what());
@@ -734,7 +744,7 @@ namespace
 		if (action == "load") {
 			task->AddTask([state]() {
 				try {
-					state->Load(State::ConfigMode::USER, /*allowReload=*/true);
+					state->Load(/*allowReload=*/true);
 					logger::info("DevBenchBridge: settings(load) applied");
 				} catch (const std::exception& e) {
 					logger::error("DevBenchBridge: settings(load) failed: {}", e.what());
@@ -748,6 +758,7 @@ namespace
 			// Restore every feature to its defaults, then persist. Mirrors what the UI's
 			// global reset does: per-feature RestoreDefaultSettings followed by a Save.
 			task->AddTask([state]() {
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 				for (auto* f : Feature::GetFeatureList()) {
 					try {
 						f->RestoreDefaultSettings();
@@ -758,7 +769,7 @@ namespace
 					}
 				}
 				try {
-					state->Save(State::ConfigMode::USER);
+					state->Save();
 					logger::info("DevBenchBridge: settings(reset) applied");
 				} catch (const std::exception& e) {
 					logger::error("DevBenchBridge: settings(reset) save failed: {}", e.what());

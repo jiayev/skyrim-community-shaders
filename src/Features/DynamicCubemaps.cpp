@@ -4,11 +4,20 @@
 #include <DirectXTex.h>
 #include <cassert>
 
+#include "Deferred.h"
 #include "I18n/I18n.h"
+#include "LinearLighting.h"
 #include "PhysicalSky.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
+
+DynamicCubemaps::Settings DynamicCubemaps::GetCommonBufferData() const
+{
+	auto data = settings;
+	globals::features::linearLighting.SRGBToWorking(&data.CubemapColor.x);
+	return data;
+}
 
 #define I18N_KEY_PREFIX "feature.dynamic_cubemaps."
 
@@ -305,7 +314,7 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 	auto context = globals::d3d::context;
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	auto& main = renderer->GetRuntimeData().renderTargets[globals::deferred->forwardRenderTargets[0]];
 
 	ID3D11ShaderResourceView* srvs[2] = { depth.depthSRV, main.SRV };
 	context->CSSetShaderResources(0, 2, srvs);
@@ -551,6 +560,7 @@ void DynamicCubemaps::CompressToBC6H(bool a_reflections)
 		context->CSSetConstantBuffers(0, 1, &nullBuffer);
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
+
 	globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::PublishReflections" : "DynamicCubemaps::Publish");
 	auto dst = a_reflections ? envReflectionsTextureBC6H : envTextureBC6H;
 	for (std::uint32_t level = 0; level < bc6hMipLevels; ++level) {

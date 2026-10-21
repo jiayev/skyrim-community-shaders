@@ -36,11 +36,12 @@ the internal and boundary variation of that mass.
 | Cube history / traces            | `t23`–`t25` / `t26`–`t28` | transmittance, radiance, metadata |
 | Composed local height / modeling |             `t32` / `t33` | premultiplied RGBA16_FLOAT arrays |
 | Local modeling maximum floor     |                     `t34` | RGB floor, RGBA16_FLOAT array     |
-| Local endpoint weights / mode    |                     `t35` | StructuredBuffer float4           |
+
+| Local endpoint weights / mode | `t35` | StructuredBuffer float4 |
 
 Main reconstruction output is read at t29–t31 by the foreground refinement pass.
 See [local NDF assets](local-ndf.md) for finite world-space placement, alpha masks,
-endpoint composition and standalone settings persistence. See
+endpoint composition, persistence and Scene Manager transitions. See
 [cloud sampling](cloud-sampling.md) for temporal scheduling.
 
 The three optional packed assets are loaded from `Data/Textures/PhysicalSky/` and live in
@@ -104,8 +105,8 @@ The separate R8 top/bottom assets feed runtime packing when packed LUTs are abse
 
 Cirrus uses a spherical sheet with a configurable physical altitude (default
 8000 m) and the shared cloud curvature radius. `cloudLayer.cirrus.uvSize` is a
-size multiplier, default 1 and limited to 0.1–32.
-The coverage/type field repeats every `16384 * uvSize` metres,
+global size multiplier, default 1 and limited to 0.1–32; Scene Manager cannot
+override it. The coverage/type field repeats every `16384 * uvSize` metres,
 independently of the low-cloud NDF scale. Pattern frequency is
 `0.0002331 / uvSize` per metre. Larger values enlarge both inputs without
 changing their relative scale. Pattern coordinates subtract the high-cloud
@@ -134,14 +135,13 @@ The local map has an independent multiplier for the generator's wind offset.
 Storm modulation is not implemented.
 
 `cloudLayer.cirrus.weather` is a SceneBlend value containing complete weather
-states saved with Physical Sky settings. Multiple stored states blend their
-generated RG maps by weight, including separate noise slots, local DDS paths
-and blend modes. Editing captures the strongest endpoint as one weather state.
-A single active state needs one 512-square generation dispatch; additional
-states use alternating RG16_FLOAT targets. Unchanged inputs reuse the result.
-Only the final map receives mip generation. Altitude and density are saved under
-`cloudLayer.cirrus`; shared and per-layer brightness live under
-`cloudLayer.lighting`.
+states. Scene Manager blends the resulting RG maps, so changing noise slots,
+local DDS paths or blend modes does not switch an input halfway through a
+transition. A single active state needs one 512-square generation dispatch;
+additional transition endpoints use alternating RG16_FLOAT targets. Unchanged
+inputs reuse the result. Only the final map receives mip generation. Altitude,
+density remains a numeric scene control. Shared and per-layer brightness live
+under `cloudLayer.lighting` and also support numeric scene transitions.
 
 Debug shows the active weather, the fixed pattern DDS, and active local inputs.
 

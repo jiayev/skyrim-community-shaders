@@ -4,6 +4,7 @@
 #include "Deferred.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
+#include "RenderDoc.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -17,6 +18,8 @@
 #include <cmath>
 #include <directx/d3dx12.h>
 #include <format>
+
+#include "Features/PostProcessing.h"
 
 #define I18N_KEY_PREFIX "feature.upscaling."
 
@@ -217,6 +220,9 @@ void Upscaling::DrawSettings()
 
 	// Check the current upscale method
 	auto upscaleMethod = GetUpscaleMethod();
+
+	if (*currentUpscaleMode == (uint)UpscaleMethod::kFSR && upscaleMethod == UpscaleMethod::kTAA)
+		Util::Text::Warning("%s", T(TKEY("fsr_renderdoc_fallback"), "AMD FSR is unavailable while RenderDoc is loaded, using TAA."));
 
 	// Display warning for DLSS resolution limits
 	if (upscaleMethod == UpscaleMethod::kDLSS) {
@@ -595,9 +601,9 @@ void Upscaling::PostPostLoad()
 
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
-	if (streamline.featureDLSS)
-		return (UpscaleMethod)settings.upscaleMethod;
-	return (UpscaleMethod)settings.upscaleMethodNoDLSS;
+	const auto method = (UpscaleMethod)(streamline.featureDLSS ? settings.upscaleMethod : settings.upscaleMethodNoDLSS);
+	// FSR3 does not work under RenderDoc
+	return method == UpscaleMethod::kFSR && RenderDoc::IsLoaded() ? UpscaleMethod::kTAA : method;
 }
 
 void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
@@ -622,13 +628,13 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		uavDesc.Format = texDesc.Format;
 
 		if (!reactiveMaskTexture) {
-			reactiveMaskTexture = new Texture2D(texDesc);
+			reactiveMaskTexture = new Texture2D(texDesc, "Upscaling::ReactiveMask");
 			reactiveMaskTexture->CreateSRV(srvDesc);
 			reactiveMaskTexture->CreateUAV(uavDesc);
 		}
 
 		if (!transparencyCompositionMaskTexture) {
-			transparencyCompositionMaskTexture = new Texture2D(texDesc);
+			transparencyCompositionMaskTexture = new Texture2D(texDesc, "Upscaling::TransparencyCompositionMask");
 			transparencyCompositionMaskTexture->CreateSRV(srvDesc);
 			transparencyCompositionMaskTexture->CreateUAV(uavDesc);
 		}
@@ -646,7 +652,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			srvDesc.Format = texDesc.Format;
 			uavDesc.Format = texDesc.Format;
 
-			motionVectorCopyTexture = new Texture2D(motionTexDesc);
+			motionVectorCopyTexture = new Texture2D(motionTexDesc, "Upscaling::MotionVectorCopy");
 			motionVectorCopyTexture->CreateSRV(srvDesc);
 			motionVectorCopyTexture->CreateUAV(uavDesc);
 		}
@@ -667,7 +673,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 			uavDesc.Texture2D.MipSlice = 0;
 
-			sharpenerTexture = new Texture2D(texDesc);
+			sharpenerTexture = new Texture2D(texDesc, "Upscaling::Sharpener");
 			sharpenerTexture->CreateSRV(srvDesc);
 			sharpenerTexture->CreateUAV(uavDesc);
 		}
@@ -1696,13 +1702,18 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
+	auto& postProcessing = globals::features::postProcessing;
+	if (postProcessing.loaded) {
+		postProcessing.DrawBeforeUpscaling();
+	}
+
 	auto& upscaling = globals::features::upscaling;
 	auto upscaleMethod = upscaling.GetUpscaleMethod();
 
-	// Decide frame generation once per frame, here, and hold that decision through Present.
-	// Re-evaluating at Present let loading transitions flip the answer in between, so Present
-	// interpolated with inputs that were never copied and flashed a stale frame.
-	upscaling.frameGenerationPrepared = upscaling.ShouldPrepareFrameGeneration() && upscaling.CopySharedD3D12Resources();
+	const bool prepareFrameGeneration = upscaling.ShouldPrepareFrameGeneration();
+	if (prepareFrameGeneration && postProcessing.loaded)
+		postProcessing.ClearBorderMotionVectorsForFrameGen();
+	upscaling.frameGenerationPrepared = prepareFrameGeneration && upscaling.CopySharedD3D12Resources();
 
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
 		upscaling.PerformUpscaling();

@@ -427,8 +427,10 @@ void Deferred::DeferredPasses()
 	if (dynamicCubemaps.loaded)
 		dynamicCubemaps.PostDeferred();
 
-	if (globals::features::effects11.loaded)
+	if (globals::features::effects11.loaded) {
 		globals::features::effects11.DrawVolumetricRays();
+		globals::features::effects11.DrawSunRays();
+	}
 }
 
 void Deferred::EndDeferred()

@@ -1,30 +1,41 @@
-# Local cloud weighted states
+# Local cloud scene transitions
 
 ## Authored state
 
-Physical Sky stores one local-cloud envelope at `cloudMap.localCloud`.
+A scene stores one atomic local-cloud state at `PhysicalSky/cloudMap/localCloud`.
 Asset identity, worldspace, placement, altitude decoding and composition options
-belong to each complete state. The menu edits one state with an enable control.
-There is no instance list, priority stack or external manifest.
+belong to that state. They cannot be interpolated as unrelated scalar entries.
+The menu has one state editor, with explicit override/inherit and enable controls.
+There is no instance list, priority stack, asset-slot limit or external manifest.
 
-## Standalone persistence
+## Scene Manager
 
-`SceneBlend` is a JSON data helper with no Scene Manager dependency. A serialized
-value has a `states` array, each element containing a complete `value` object
-and a nonnegative finite `weight`; total weight is at most one (within
-floating-point tolerance). An empty array is the identity state.
+The catalog supports a `Blend` value and editor semantic backed by `SceneBlend`.
+It is a persisted, transitionable atomic value. A serialized value has a `states`
+array, each element containing a complete `value` object and a nonnegative finite
+`weight`; total weight is at most one (within floating-point tolerance).
+An empty array is the identity state.
 
-The menu and `PhysicalSky::SetLocalCloudState` write a single endpoint at weight
-one. Physical Sky saves and loads the envelope with its normal settings. Cloud
-DDS files remain ordinary texture-mod dependencies under
-`Textures/PhysicalSky/LocalNdf`.
+The ordinary baseline, time-of-day, weather, location and user-overwrite ordering
+is retained. Period resolution accumulates endpoint weights using the same time
+factors as numeric settings. Weather resolution then blends those distributions
+using the weather factor. Equal state objects merge instead of becoming duplicate
+render endpoints. Thus overlapping weather and period transitions retain all
+contributing resources, not merely whichever two entries were resolved last.
+The feature-independent resolver does not interpret cloud resource names or
+placement data. Numeric weather interpolation keeps its existing formula.
 
-Local clouds have no Scene Manager integration, override/inherit controls or
-automatic weather/time transitions. The renderer supports weighted endpoints loaded
-from settings. Editing a multi-endpoint envelope captures the strongest endpoint
-as a single state. `SceneBlend::Interpolate` can blend complete envelopes without
-interpolating resource IDs or placement fields individually, but no scheduler
-invokes it here.
+Scene saving, loading, copying, overwrite traversal, baseline restoration and
+export treat the blend envelope as one value. Cloud DDS files remain ordinary
+texture-mod dependencies under `Textures/PhysicalSky/LocalNdf`; the scene pack
+exports settings, not those asset directories.
+
+Flat location changes apply this resource state immediately; the existing
+location movement easing remains for scalar settings. Weather and time-of-day
+transitions blend it continuously. A new weather uses the endpoints and weights
+provided by Scene Manager; no independent cloud weather clock or scheduler is
+introduced. The implementation does not add an interruption policy beyond the
+existing weather resolver.
 
 ## Rendering
 
@@ -37,7 +48,7 @@ neither reload DDS files nor dispatch the local map generator.
 All slices share the union footprint and altitude envelope. Encoded heights are
 converted into that common physical interval. Each endpoint first applies its
 Interpolate or Maximum operator to the current global NDF, then the resulting
-control fields are blended by endpoint weights. Mixing maximum floors before
+control fields are blended by scene weights. Mixing maximum floors before
 applying the operator would produce incorrect intermediate cloud shapes.
 
 Different transforms crossfade their stationary world-space fields. This avoids
@@ -49,16 +60,16 @@ cloud morphing.
 
 A structured weight buffer changes during blending; cached slice content changes
 only with endpoint identity/content, source revision or atlas settings. Local
-states remain in the whole-cloud history-reset key, and resource rebuilds also
-reset history. Debug exposes endpoint weights, cached slices and the source
-textures. Multiple endpoints cost more than a single state because each
-contributing operator must be evaluated.
+weights are excluded from the whole-cloud history-reset key. Explicit authoring
+edits still reset history. Debug exposes endpoint weights, cached slices and the
+source textures. Simultaneous weather/time blends can cost more than a stable
+single state because each contributing operator must be evaluated.
 
 ## Shared weather shape
 
 `bottomSpreadScale`, `bottomSpreadHeight`, `bottomSoftness`,
 `bottomSoftnessHeight`, `topExpansionScale` and `densityScale` remain independent
-Physical Sky settings. They are converted to GPU coefficients alongside
-curvature, global NDF controls, wind and cirrus state. Local endpoint objects
+Scene Manager scalar controls. They resolve with curvature, global NDF controls,
+wind and cirrus state before GPU coefficient conversion. Local endpoint objects
 carry NDF placement/composition only; they do not define independently lit or
 independently shaped weather volumes.

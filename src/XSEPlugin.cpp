@@ -7,10 +7,8 @@
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
 #include "NativeMenu/NativeMenu.h"
-#include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
-
 
 #define DLLEXPORT __declspec(dllexport)
 
@@ -95,9 +93,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// Run feature PostPostLoad() first so features can disable themselves if needed
 				Feature::ForEachLoadedFeature("PostPostLoad", [](Feature* feature) { feature->PostPostLoad(); });
 
-				// Register scene settings event handler (Interior Only transitions)
-				SceneSettingsManager::MenuOpenCloseEventHandler::Register();
-
 				// Now validate disk cache after features have had a chance to modify their state
 				shaderCache->ValidateDiskCache();
 
@@ -170,7 +165,7 @@ bool Load()
 	I18n::GetSingleton()->Init();
 
 	state->Load();
-	state->LoadTheme();  // Load theme settings from SettingsTheme.json
+	state->LoadTheme();  // Load the active theme preset
 
 	// Initialize theme system - create default themes and discover existing ones
 	globals::menu->CreateDefaultThemes();  // Creates JSON files if they don't exist
@@ -191,7 +186,8 @@ bool Load()
 		L"Data/SKSE/Plugins/NVIDIA_Reflex.dll",
 		L"Data/SKSE/Plugins/MARA.dll",
 		L"Data/SKSE/Plugins/NativeWaterLightStabilizer.dll",
-	    L"Data/SKSE/Plugins/DynamicWetness.dll"
+		L"Data/SKSE/Plugins/DynamicWetness.dll",
+		L"Data/SKSE/Plugins/NMN_DeformableTerrain.dll"
 	};
 
 	for (const auto dll : incompatibleDLLs) {

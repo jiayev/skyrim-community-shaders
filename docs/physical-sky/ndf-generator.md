@@ -61,7 +61,7 @@ unchanged coverage. These are project weather defaults, not a restriction on
 authored types or the height interval. Higher types remain available for weather
 authoring and imported maps. **Restore default response** in **Top type / shared
 type noise** resets only the remap and exponent, retaining noise selection,
-frequency, offset, coverage, height and the local cloud state.
+frequency, offset, coverage, height and local instances.
 
 Local maps are sampled at `uv - wind * localWindScale`:
 
@@ -193,10 +193,9 @@ final output clamp. Defaults select slots 1 and 2. Weather offset uses 0.0001
 for cirrus and 0.00005 for the main map. Cirrus weather is sampled in world UV
 without a second runtime wind displacement; its pattern DDS uses high-cloud wind.
 Cirrus generation parameters occupy 96 bytes, including local RGB map blending
-and a stored weather-state weight. Shared input changes refresh dependent maps.
+and a Scene Manager endpoint weight. Shared input changes refresh dependent maps.
 Patterns are loaded from `Data/Textures/PhysicalSky/cirrus.dds`; no pattern generator
-is used. Complete cirrus weather states are saved with Physical Sky settings;
-multiple stored states blend their generated maps by weight.
+is used. Complete cirrus weather states crossfade through Scene Manager.
 
 ## Optional resources and previews
 

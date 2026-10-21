@@ -1,5 +1,6 @@
 #include "Features/PhysicalSky.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "I18n/I18n.h"
 #include "Util.h"
 
@@ -237,7 +238,6 @@ bool LocalNdfManager::Update(const NdfSettings& settings, TextureManager& textur
 			for (uint32_t map = 0; map < maps.size(); ++map) {
 				D3D11_UNORDERED_ACCESS_VIEW_DESC uav{ .Format = maps[map]->desc.Format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY, .Texture2DArray = { .FirstArraySlice = slice, .ArraySize = 1 } };
 				DX::ThrowIfFailed(globals::d3d::device->CreateUnorderedAccessView(maps[map]->resource.get(), &uav, targets[slice][map].put()));
-				Util::SetResourceName(targets[slice][map].get(), "PhysicalSky::LocalNdfSlice%uMap%u UAV", slice, map);
 			}
 		}
 	}
@@ -322,11 +322,38 @@ void LocalNdfManager::DrawSettings(NdfSettings& settings, const std::string& wor
 	if (ImGui::Button(T(TKEY("local_ndf_scan"), "Scan asset folders")))
 		RefreshAssets();
 	ImGui::TextUnformatted(kAssetRoot);
-	if (!program)
-		ImGui::TextWrapped("%s", T(TKEY("local_ndf_shader_missing"), "Local NDF shader unavailable; global clouds remain active."));
-	ImGui::TextWrapped("%s", T(TKEY("local_ndf_saved"), "The local cloud is saved with Physical Sky settings. Positions use world metres; altitude is relative to the world's atmosphere ground."));
-	ImGui::DragFloat(T(TKEY("local_ndf_texel"), "Requested texel size (m)"), &settings.localTexelSize, 1.f, 1.f, 512.f);
-	const nlohmann::json value = settings.localCloud;
+	ImGui::TextWrapped("%s", T(TKEY("local_ndf_scene_hint"), "Each scene stores one complete local cloud. Weather and time transitions crossfade the endpoint cloud maps; an empty state fades back to global clouds."));
+	const auto* armed = SceneWidgetInterceptor::GetArmedContext();
+	const bool scene = armed && !armed->baseline;
+	auto* manager = SceneSettingsManager::GetSingleton();
+	const SceneSettingsManager::SettingIdentity identity{ "PhysicalSky", { "cloudMap" }, "localCloud" };
+	std::optional<size_t> entryIndex;
+	nlohmann::json value = settings.localCloud;
+	bool editable = true;
+	if (scene) {
+		entryIndex = manager->FindContextUserEntry(armed->contextId, identity.featureShortName, identity.settingPath, identity.settingKey);
+		const auto entries = manager->GetContextEntries(armed->contextId);
+		const bool active = entryIndex && *entryIndex < entries.size() && !entries[*entryIndex].deleted;
+		if (active) {
+			value = entries[*entryIndex].value;
+			editable = !entries[*entryIndex].paused;
+		} else {
+			if (ImGui::Button(T(TKEY("local_ndf_scene_override"), "Override local cloud in this scene"))) {
+				if (entryIndex)
+					manager->ClearContextTombstone(armed->contextId, identity.featureShortName, identity.settingPath, identity.settingKey);
+				manager->AddContextSetting(armed->contextId, identity.featureShortName, identity.settingPath, identity.settingKey);
+			}
+			ImGui::TreePop();
+			return;
+		}
+		if (active && ImGui::Button(T(TKEY("local_ndf_scene_inherit"), "Remove override / inherit"))) {
+			manager->RemoveContextSetting(armed->contextId, *entryIndex);
+			ImGui::TreePop();
+			return;
+		}
+	} else {
+		ImGui::DragFloat(T(TKEY("local_ndf_texel"), "Requested texel size (m)"), &settings.localTexelSize, 1.f, 1.f, 512.f);
+	}
 	LocalNdfState state;
 	state.enabled = false;
 	state.worldspace = worldspace;
@@ -342,8 +369,9 @@ void LocalNdfManager::DrawSettings(NdfSettings& settings, const std::string& wor
 		} catch (const nlohmann::json::exception&) {
 		}
 		if (value["states"].size() > 1)
-			ImGui::TextWrapped("%s", T(TKEY("local_ndf_edit_mixed"), "Multiple cloud states are stored. Editing captures the strongest endpoint as a single cloud state."));
+			ImGui::TextWrapped("%s", T(TKEY("local_ndf_edit_mixed"), "A transition is active. Editing captures the strongest endpoint as a single cloud state."));
 	}
+	ImGui::BeginDisabled(!editable);
 	bool changed = false;
 	changed |= ImGui::Checkbox(T(TKEY("local_ndf_enabled"), "Enable local cloud"), &state.enabled);
 	changed |= ImGui::InputText(T(TKEY("local_ndf_asset"), "Asset folder ID"), &state.asset);
@@ -398,9 +426,18 @@ void LocalNdfManager::DrawSettings(NdfSettings& settings, const std::string& wor
 		ImGui::TextWrapped("%s", T(TKEY("local_ndf_interpolate_hint"), "Alpha zero preserves the background weather, including its height when height influence is enabled. Disable alpha to replace the field at full influence; zero source coverage then clears background clouds."));
 	if (state.modelingBlend == LocalNdfBlendMode::Maximum)
 		ImGui::TextWrapped("%s", T(TKEY("local_ndf_maximum_hint"), "Maximum combines coverage and profile types independently, so they may come from different maps. It never clears background clouds and ignores modeling alpha for RGB. Height blending still uses alpha when enabled."));
-	if (changed) {
+	ImGui::EndDisabled();
+	if (changed && editable) {
 		PhysicalSky::GetSingleton()->volMainHistoryValid = false;
-		settings.localCloud.states = nlohmann::json::array({ { { "value", state }, { "weight", 1.f } } });
+		SceneBlend selection;
+		selection.states.push_back({ { "value", state }, { "weight", 1.f } });
+		if (scene && entryIndex) {
+			const SceneSettingsManager::EntryValueUpdate update{ *entryIndex, selection };
+			manager->UpdateContextEntryValues(armed->contextId, { &update, 1 }, true);
+		} else {
+			settings.localCloud = selection;
+			manager->RecordBaselineEdit(identity, selection);
+		}
 	}
 	for (const auto& asset : rejectedAssets)
 		ImGui::TextWrapped("%s: %s", T(TKEY("local_ndf_rejected"), "Rejected local cloud asset"), asset.c_str());
@@ -411,7 +448,7 @@ void LocalNdfManager::DrawDebug(TextureManager& textures, float scale)
 {
 	if (!ImGui::TreeNode(T(TKEY("local_ndf_debug"), "Local NDF resources")))
 		return;
-	ImGui::Text("%s: %zu", T(TKEY("local_ndf_active"), "Active cloud states"), activeAssets.size());
+	ImGui::Text("%s: %zu", T(TKEY("local_ndf_active"), "Active transition endpoints"), activeAssets.size());
 	ImGui::Text("%s: %.2f", T(TKEY("local_ndf_effective_texel"), "Effective texel size (m), atlas limited to 2048"), effectiveTexelSize);
 	ImGui::Text("XY: %.2f, %.2f; Z: %.2f .. %.2f", rect.x, rect.y, altitude.x, altitude.x + altitude.y);
 	auto* sky = PhysicalSky::GetSingleton();

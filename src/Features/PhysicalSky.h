@@ -18,7 +18,7 @@ struct PhysicalSky final : public Feature
 	inline std::string GetName() override { return "Physical Sky"; }
 	std::string GetDisplayName() override { return T("feature.physical_sky.name", "Physical Sky"); }
 	inline std::string GetShortName() override { return "PhysicalSky"; }
-	inline std::string_view GetCategory() const override { return "Sky"; }
+	inline std::string_view GetCategory() const override { return FeatureCategories::kSky; }
 	inline std::string GetFeatureModLink() override { return MakeNexusModURL("999999"); }
 	inline std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
@@ -122,8 +122,9 @@ struct PhysicalSky final : public Feature
 		float planetRadius = 6.36e3f;      // in km
 		float atmosphereRadius = 6.42e3f;  // in km
 
-		float rayleighFalloff = 1 / 8.69645f;                    // in km^-1
-		float3 rayleighScatter = { 6.6049f, 12.345f, 29.413f };  // in megameter^-1
+		float rayleighFalloff = 1 / 8.69645f;                         // in km^-1
+		float3 rayleighScatter = { 6.6049f, 12.345f, 29.413f };       // in megameter^-1 (sRGB band-averaged)
+		float3 rayleighScatterAP1 = { 6.9344f, 12.0203f, 28.9100f };  // in megameter^-1 (AP1 band-averaged via CIE 1931 spectral integration)
 		Aerosol::Type aerosolType = Aerosol::Type::Custom;
 		float aerosolLoading = 1.f;
 		float aerosolHumidity = 50.f;
@@ -133,7 +134,8 @@ struct PhysicalSky final : public Feature
 		float3 aerosolAbsorption = { 4.44f, 4.44f, 4.44f };
 		float ozoneAltitude = 22.3499f + 35.66071f * .5f;  // in km
 		float ozoneThickness = 35.66071f;
-		float3 ozoneAbsorption = { 2.2911f, 1.5404f, 0 };
+		float3 ozoneAbsorption = { 2.2911f, 1.5404f, 0 };        // sRGB band-averaged
+		float3 ozoneAbsorptionAP1 = { 2.2499f, 1.6602f, 0.0f };  // AP1 band-averaged via CIE 1931 spectral integration
 
 		// VANILLA CLOUDS
 		bool enableVanillaClouds = true;
@@ -152,6 +154,7 @@ struct PhysicalSky final : public Feature
 		CloudNoiseSettings cloudNoise = {};
 
 		Aerosol::Optics GetAerosolOptics() const;
+		void ApplyAerosolOptics();
 	} settings;
 
 	struct CbData

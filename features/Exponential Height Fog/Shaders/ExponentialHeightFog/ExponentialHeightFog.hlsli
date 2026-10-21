@@ -2,6 +2,7 @@
 #define __EXPONENTIAL_HEIGHT_FOG_HLSLI__
 
 #include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "ExponentialHeightFog/VolumetricFogCommon.hlsli"
@@ -10,12 +11,12 @@
 #	include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #endif
 
-#if defined(PHYSICAL_SKY)
-#	include "PhysicalSky/Common.hlsli"
-#endif
-
 #if defined(IBL)
 #	include "IBL/IBL.hlsli"
+#endif
+
+#if defined(PHYSICAL_SKY)
+#	include "PhysicalSky/Common.hlsli"
 #endif
 
 Texture3D<float4> ExponentialHeightFogIntegratedLightScattering : register(t19);
@@ -285,8 +286,7 @@ namespace ExponentialHeightFog
 
 		// Calculate directional light inscattering using Henyey-Greenstein phase function
 		if (SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier > 0) {
-			float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-			float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+			float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
 #if defined(PHYSICAL_SKY) && defined(COMMON_HLSLI)
 			if (SharedData::physSkyData.enabled) {
 				float3 physSkyTransmittance = PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampColorSampler);
@@ -302,7 +302,7 @@ namespace ExponentialHeightFog
 
 		fogColor += directionalInscattering;
 		const float opacity = 1.0f - expFogFactor;
-		float4 analyticalFog = float4(opacity > 1e-6f ? fogColor / opacity : 0.0f.xxx, opacity);
+		float4 analyticalFog = float4(fogColor, opacity);
 		if (!applyVolumetricFog) {
 			return analyticalFog;
 		}

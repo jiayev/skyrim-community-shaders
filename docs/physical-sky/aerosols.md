@@ -78,8 +78,26 @@ with a bounded bisection. Matching the first moment at 550 nm preserves the
 shader's single, wavelength-independent phase approximation; it does not
 reproduce the full OPAC phase function.
 
-For future weather transitions, evaluate each endpoint with
-`Settings::GetAerosolOptics()` and pass those results to `Aerosol::Lerp`:
+Weather and time-of-day transitions blend numeric settings addresses, so the
+aerosol appearance travels across a transition as the three coefficients, not
+as the mixture: a mixture is a discrete choice and has no midpoint to
+interpolate to. The scene layer therefore stores the coefficients, and the
+mixture, the loading and the relative humidity are authoring inputs that derive
+them. `Settings::ApplyAerosolOptics()` writes that derivation into
+`aerosolScatter`, `aerosolAbsorption` and `aerosolPhaseG` whenever an input
+moves, and `SceneSettingsPolicy` bars the three inputs from the scene layer so
+nothing can store a mixture as if it blended.
+
+`PhysicalSky::GenerateLuts()` reads the three coefficients. A scene page draws
+its own aerosol picker, which evaluates the chosen mixture and writes the
+resulting coefficients into that context's own entries, so one page can hold a
+different mixture from the next and a transition interpolates between them. The
+loading and humidity a page was authored with are not stored with it; the
+picker opens on the feature's own inputs and the coefficients below it are the
+scene's stored state.
+
+`Aerosol::Lerp` is the exact moment-preserving blend of two evaluated
+endpoints, for a caller that holds both:
 
 ```text
 scatter = lerp(scatterA, scatterB, t)
@@ -89,14 +107,13 @@ moment = lerp(scatterA.green * meanCosineA,
 meanCosine = moment / scatter.green
 ```
 
-The phase is irrelevant when green scattering is zero. Endpoint values are
-returned unchanged at t=0 and t=1. The two endpoint types and humidities are
-resolved before interpolation; type enum values are never interpolated.
-This models an external optical mixture at a common altitude profile, with a
-single phase fitted to its first moment. Interpolating different exponential
-profiles would be an additional approximation: their mixture is generally
-not another single exponential. The helper intentionally blends optical
-coefficients only. No weather registration or transition scheduling is added.
+The phase is irrelevant when green scattering is zero, and endpoint values are
+returned unchanged at t=0 and t=1. This models an external optical mixture at a
+common altitude profile, with a single phase fitted to its first moment; the
+helper blends optical coefficients only. The framework's per-address blend is
+component-wise and agrees with it for scattering and absorption, but
+interpolates the phase parameter linearly rather than through the first moment,
+which differs only by the nonlinearity of the inversion above.
 
 ## Configuration compatibility
 
@@ -105,8 +122,16 @@ and 4 for Desert. `aerosolLoading` defaults to 1 and `aerosolHumidity` to 50.
 The default type remains Custom, so existing presets and restored defaults
 retain their previous coefficients and appearance. Missing or unknown type
 values use the custom coefficients. Selecting a physical type activates the
-three controls. Switching back to Custom copies its resolved optical values,
-preserving the appearance at that point.
+three controls and writes the coefficients it resolves to; switching back to
+Custom keeps them, because a physical type had already written them, so the
+appearance is continuous at that point.
+
+A settings document that moves the type, the loading or the humidity re-derives
+the coefficients as it loads, which is what keeps a preset or a feature
+override authored in those terms meaningful. A document that moves only the
+coefficients - the scene layer's own output - is taken as written. Hand-editing
+the coefficients while a physical type is selected is therefore overwritten by
+that type; select Custom first.
 
 The physical evaluator clamps loading and RH and replaces nonfinite values
 with their defaults. Its output feeds the existing per-game-unit conversion.

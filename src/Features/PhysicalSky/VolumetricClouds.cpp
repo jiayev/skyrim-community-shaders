@@ -1,7 +1,7 @@
 #include "Features/PhysicalSky.h"
 
 #include "Deferred.h"
-#include "Features/Effects11/D3D11StateBackup.h"
+#include "Features/PostProcessing/RasterPass.h"
 #include "State.h"
 #include "Util.h"
 
@@ -266,7 +266,7 @@ void PhysicalSky::SetupVolumetricResources()
 
 	// Volumetric cloud constants
 	{
-		volCloudCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VolumetricCloudCB>(), "PhysicalSky::VolumetricCloudConstants");
+		volCloudCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VolumetricCloudCB>());
 	}
 
 	{
@@ -551,14 +551,7 @@ void PhysicalSky::RenderCloudBoundary(const CloudBoundaryCB& a_data, NdfTextureS
 	const float clear[4] = { std::numeric_limits<float>::max(), 0.f, std::numeric_limits<float>::max(), 0.f };
 	context->ClearRenderTargetView(texCloudBoundary->rtv.get(), clear);
 
-	Effects11Util::D3D11ScopedPostFxBackup savedState;
-	savedState.Save(context);
-	winrt::com_ptr<ID3D11HullShader> savedHS;
-	winrt::com_ptr<ID3D11DomainShader> savedDS;
-	winrt::com_ptr<ID3D11GeometryShader> savedGS;
-	context->HSGetShader(savedHS.put(), nullptr, nullptr);
-	context->DSGetShader(savedDS.put(), nullptr, nullptr);
-	context->GSGetShader(savedGS.put(), nullptr, nullptr);
+	PostProcessingRaster::RasterPass pass(context);
 	winrt::com_ptr<ID3D11Buffer> savedIndex, savedCB, savedFrame;
 	winrt::com_ptr<ID3D11SamplerState> savedSampler;
 	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 2> savedResources;
@@ -571,17 +564,8 @@ void PhysicalSky::RenderCloudBoundary(const CloudBoundaryCB& a_data, NdfTextureS
 	for (UINT i = 0; i < savedResources.size(); ++i)
 		context->VSGetShaderResources(i, 1, savedResources[i].put());
 
-	auto* target = texCloudBoundary->rtv.get();
-	context->OMSetRenderTargets(1, &target, nullptr);
-	const D3D11_VIEWPORT viewport = { 0.f, 0.f, a_data.frameDimensions.z, a_data.frameDimensions.w, 0.f, 1.f };
-	context->RSSetViewports(1, &viewport);
-	context->IASetInputLayout(nullptr);
-	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	context->VSSetShader(vsCloudBoundary.get(), nullptr, 0);
-	context->PSSetShader(psCloudBoundary.get(), nullptr, 0);
-	context->HSSetShader(nullptr, nullptr, 0);
-	context->DSSetShader(nullptr, nullptr, 0);
-	context->GSSetShader(nullptr, nullptr, 0);
+	pass.SetTargets({ texCloudBoundary->rtv.get() }, a_data.frameDimensions.z, a_data.frameDimensions.w);
+	pass.SetShaders(vsCloudBoundary.get(), psCloudBoundary.get());
 	context->RSSetState(cloudBoundaryRasterizer.get());
 	context->OMSetBlendState(cloudBoundaryBlend.get(), nullptr, 0xFFFFFFFFu);
 	context->OMSetDepthStencilState(cloudBoundaryDepth.get(), 0);
@@ -609,11 +593,6 @@ void PhysicalSky::RenderCloudBoundary(const CloudBoundaryCB& a_data, NdfTextureS
 		auto* srv = savedResources[i].get();
 		context->VSSetShaderResources(i, 1, &srv);
 	}
-	savedState.Restore(context);
-	savedState.Release();
-	context->HSSetShader(savedHS.get(), nullptr, 0);
-	context->DSSetShader(savedDS.get(), nullptr, 0);
-	context->GSSetShader(savedGS.get(), nullptr, 0);
 }
 
 void PhysicalSky::UpdateCloudWind()

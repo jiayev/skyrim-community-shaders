@@ -2,6 +2,8 @@
 #include "../I18n/I18n.h"
 #include "RE/B/BSVolumetricLightingRenderData.h"
 
+#include "LinearLighting.h"
+#include "Utils/Climate.h"
 #include "Utils/Game.h"
 
 #define I18N_KEY_PREFIX "feature.sky_sync."
@@ -156,7 +158,7 @@ void SkySync::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_None)) {
+	if (Util::ShowDebugSections() && ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_None)) {
 		static constexpr const char* CasterNames[] = { "Sun", "Masser", "Secunda", "Zenith" };
 		static constexpr const char* PhaseNames[] = { "Full", "Waning Gibbous", "Waning Quarter", "Waning Crescent", "New", "Waxing Crescent", "Waxing Quarter", "Waxing Gibbous" };
 
@@ -392,10 +394,12 @@ RE::BSVolumetricLightingRenderData SkySync::BlendNightVolumetricLighting(const R
 	return result;
 }
 
-void SkySync::Sky_Update::thunk(RE::Sky* sky)
+void SkySync::Sky_Update::thunk(RE::Sky* sky, float deltaTime)
 {
-	func(sky);
+	func(sky, deltaTime);
 	auto& skySync = globals::features::skySync;
+	if (sky && sky->sun)
+		globals::features::linearLighting.ClearSunlightColor(sky->sun->light.get());
 	skySync.PreparePendingTransitions();
 	if (skySync.Update(sky))
 		Util::CompleteCelestialTransition();
@@ -495,7 +499,7 @@ bool SkySync::Update(const RE::Sky* sky)
 	lastGameHour = hour;
 
 	const bool transitionCompleted = std::exchange(immediateTransitionReady, false);
-	shadowFader.Update(sky, directions, intensities, lightColors, settings.ShadowTransitionDuration, fadeAdvance, transitionCompleted || resetTransition);
+	shadowFader.Update(sky, directions, intensities, workingLightColors, settings.ShadowTransitionDuration, fadeAdvance, transitionCompleted || resetTransition);
 
 	twilightCap = GetTwilightCap(climate->timing, hour, sunHeight);
 	UpdateMoonlightFade(fadeAdvance / SecondsPerGameHour, transitionCompleted);
@@ -653,17 +657,12 @@ bool SkySync::IsWorldspaceDisabled(const RE::TESWorldSpace* worldspace) const
 	return editorID && std::ranges::any_of(settings.DisabledWorldspaces, [editorID](const std::string& listed) { return !_stricmp(listed.c_str(), editorID); });
 }
 
-float SkySync::MiddleHour(const RE::TESClimate::Timing::Interval& interval)
-{
-	return (interval.end * HoursPerTimingUnit + interval.begin * HoursPerTimingUnit) * 0.5f;
-}
-
 std::pair<float, float> SkySync::GetSunHorizonHours(const RE::TESClimate::Timing& timing) const
 {
 	// Vanilla's sun touches the horizon where its alpha fade ends: the interval midpoint +- half fSunAlphaTransTime
 	const float halfTransition = settings.UseAlternateSunPath ? AlternateSunHorizonOffsetHours :
 	                                                            (gSunAlphaTransTime ? gSunAlphaTransTime->GetFloat() : DefaultSunAlphaTransTime) * 0.5f;
-	return { MiddleHour(timing.sunrise) - halfTransition, MiddleHour(timing.sunset) + halfTransition };
+	return { Util::Climate::GetMiddleHour(timing.sunrise) - halfTransition, Util::Climate::GetMiddleHour(timing.sunset) + halfTransition };
 }
 
 void SkySync::ProcessSun(const RE::Sky* sky, const RE::NiPoint3& sunDir, float sunHeight, RE::NiPoint3 dirs[], float intensities[])
@@ -706,8 +705,8 @@ void SkySync::ProcessMoon(const RE::Sky* sky, const Caster type, RE::NiPoint3 di
 
 	dirs[idx] = Util::Moon::GetFacingAxis(moon->root->local.rotate);
 
-	const float4& baseColor = type == Caster::Masser ? Util::Moon::MasserBaseColor : Util::Moon::SecundaBaseColor;
-	float4 color = Util::Moon::GetBlendColor(moon, baseColor, settings.NewMoonIntensity, settings.CrescentMoonIntensity, settings.FullMoonIntensity);
+	const auto& baseColor = type == Caster::Masser ? Util::Moon::MasserBaseColor : Util::Moon::SecundaBaseColor;
+	float4 color = Util::Moon::GetLightColor(moon, baseColor, settings.NewMoonIntensity, settings.CrescentMoonIntensity, settings.FullMoonIntensity).GetColor();
 	colors[idx] = color;
 
 	const auto src = static_cast<MoonLightSource>(settings.MoonLightSource);
@@ -737,6 +736,33 @@ RE::NiPoint3 SkySync::GetCelestialDirection(const RE::Sky* sky, const Caster cas
 	if (dir.Unitize() <= FLT_EPSILON)
 		return ZenithDirection;
 	return dir;
+}
+
+SkySync::Caster SkySync::GetMoonLightCaster(const RE::Sky* sky) const
+{
+	if (!sky)
+		return Caster::Zenith;
+
+	auto visibility = [](const RE::Moon* moon) {
+		if (!moon || !moon->root || !moon->moonMesh || moon->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+			return 0.0f;
+		const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(moon->moonMesh->GetGeometryRuntimeData().shaderProperty.get());
+		return prop ? prop->kBlendColor.alpha : 0.0f;
+	};
+
+	const float masser = visibility(sky->masser);
+	const float secunda = visibility(sky->secunda);
+
+	switch (static_cast<MoonLightSource>(settings.MoonLightSource)) {
+	case MoonLightSource::Masser:
+		return masser > 0.0f ? Caster::Masser : Caster::Zenith;
+	case MoonLightSource::Secunda:
+		return secunda > 0.0f ? Caster::Secunda : Caster::Zenith;
+	default:
+		if (masser <= 0.0f && secunda <= 0.0f)
+			return Caster::Zenith;
+		return secunda > masser ? Caster::Secunda : Caster::Masser;
+	}
 }
 
 inline void SkySync::SetSunPosition(const RE::Sun* sun, const RE::NiPoint3& dir, const float distance)
@@ -860,8 +886,12 @@ void SkySync::ShadowFader::SetLighting(const RE::Sky* sky, RE::NiPoint3 dir, flo
 	m.entry[1][0] = -dir.y;
 	m.entry[2][0] = -dir.z;
 
-	if (color.has_value())
-		sky->sun->light->GetLightRuntimeData().diffuse = *color * intensity;
+	if (color.has_value()) {
+		*color *= intensity;
+		globals::features::linearLighting.SetSunlightColor(sky->sun->light.get(), *color);
+	} else {
+		globals::features::linearLighting.ClearSunlightColor(sky->sun->light.get());
+	}
 
 	RE::NiUpdateData updateData;
 	sky->sun->light->Update(updateData);

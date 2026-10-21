@@ -16,7 +16,7 @@ Data/Textures/PhysicalSky/
 
 An asset ID is one folder name using ASCII letters, digits, `_` or `-`. It is not
 a filesystem path. There is no per-asset manifest. Use distinct IDs ignoring case.
-Assets can be reused by different saved cloud states, and can be installed as ordinary
+Assets can be reused by different scene states, and can be installed as ordinary
 texture mods. Scan Asset Folders discovers directories; Reload Cloud Textures
 reloads selected inputs, retries failed loads, and rescans directories. Loading
 failures show the path and HRESULT in Texture Inputs. A bad local pair skips that
@@ -57,14 +57,14 @@ cloud than the same source with full height replacement. Maximum does not mean
 a union of independently rendered clouds. An authored overlay needs its
 background weather's heights and shape controls as well as its texture and blend
 mode. The [weather shape controls](noise-contract.md#weather-shape-controls) apply
-to every endpoint; they are not inferred from alpha or supplied per endpoint.
+to every instance; they are not inferred from alpha or supplied per instance.
 
 No vertical flip is performed on NDF input. UV (0,0) is the negative local X/Y
 corner, and positive rotation turns local +X toward world +Y.
 
 ## Placement and persistence
 
-The Physical Sky menu edits one complete local cloud state: asset ID, worldspace, enabled,
+Each scene edits one complete local cloud state: asset ID, worldspace, enabled,
 centre, size, rotation, altitude/span, strength, modeling/height influence,
 modeling alpha, blend mode and edge feather. There are no instance IDs, names,
 priorities or ordered layout lists. The Global Generator Overlay remains a
@@ -76,21 +76,22 @@ anchored independently of global weather advection. Move to Camera also assigns
 the current worldspace. The stationary Maximum preset retains its existing
 world-origin, 16384 m, zero-height-influence behavior.
 
-Physical Sky stores the state under `cloudMap.localCloud`. Its serialized
+Physical Sky stores the state under `cloudMap.localCloud`. Its atomic scene
 value is a `SceneBlend` envelope containing weighted endpoint objects. The
 editor writes one endpoint with weight 1. An empty envelope, or a disabled
 endpoint, supplies no local contribution. Disabled states retain their placement
 for later editing. An old `instances` list is no longer read; existing global
 map settings are retained when loading version 2. The new map schema is version 3.
 
-Open Physical Sky's Clouds tab and expand Local Cloud to edit the resource and
-placement directly. Disabling the cloud preserves its settings while restoring
-global clouds. The state uses the ordinary Physical Sky save/load path; no
-per-asset JSON or Scene Manager is required.
+In Scene Manager, open Physical Sky's Clouds tab, expand Local Cloud, and choose
+Override Local Cloud in This Scene. Edit the resource and placement there.
+Remove Override restores inheritance; disabling the cloud instead explicitly
+selects a state without local clouds. Settings use the existing scene save,
+copy, overwrite and weather/time-of-day paths; no per-asset JSON is introduced.
 
-`PhysicalSky::SetLocalCloudState(const LocalNdfState&)` sets a single state
-immediately. This branch does not schedule weather/time transitions for local
-clouds. The weighted envelope remains supported by the renderer and serializer.
+`PhysicalSky::SetLocalCloudState(const LocalNdfState&)` sets a single baseline
+state immediately. Weather/time interpolation belongs to Scene Manager; callers
+must not repeatedly invoke this API with partially interpolated resource IDs.
 
 ## Composition and renderer contract
 
@@ -103,7 +104,7 @@ Maximum:     F(X) = max(X, source.rgb * m*s*wm)
 Height:      H(Z) = Z * (1 - m*a*s*wh) + sourceAbsoluteHeight * m*a*s*wh
 ```
 
-Endpoint weights are independent of these authoring influences. For endpoint
+Scene weights are independent of these authoring influences. For endpoint
 weights `ti`, rendering evaluates `X + sum(ti * (Fi(X) - X))`. Any missing
 weight retains the global field. In particular Maximum is applied before the
 endpoint blend. Blending maximum floors before applying `max` is not equivalent.
@@ -129,8 +130,8 @@ Main view, cubemap, shadows and height bounds use the same endpoint weights and
 union altitude envelope. Rays outside the local footprint skip local samples.
 Zero height influence skips Height.dds and does not expand altitude bounds.
 Local model sampling retains the common shear and upstream density conventions.
-Temporal motion weights local anchoring by each endpoint's influence. Local state
-changes and resource rebuilds invalidate cloud history in this standalone branch.
+Temporal motion weights local anchoring by each endpoint's influence. Automatic
+local-state weight changes do not invalidate cloud history; direct menu edits do.
 
 This blends NDF control fields, not separately rendered cloud radiance. Different
 positions crossfade in world space instead of making a patch travel between
@@ -159,7 +160,8 @@ python tools/test-local-ndf-composition.py --modeling ModelingInput.dds --output
 
 These CPU checks cover endpoint weights, identity/empty states, Maximum versus
 Interpolate, independent height decoding, endpoint order and FP16 storage error.
+The source catalog/policy tests cover atomic persistence and permission to blend.
 They do not execute GPU shaders or establish frame time. Game validation should
-cover different placements and altitude ranges, missing assets, worldspace
-changes, saved settings reload, and main/cubemap/shadow agreement. See
-[weighted local states](local-ndf-transitions.md).
+cover simultaneous weather/time transitions, different placements and altitude
+ranges, missing assets, worldspace changes, saved scene reload, and main/cubemap/
+shadow agreement. See [scene transitions](local-ndf-transitions.md).

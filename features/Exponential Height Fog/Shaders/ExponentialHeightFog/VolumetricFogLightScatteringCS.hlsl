@@ -18,6 +18,12 @@ RWTexture3D<float4> LightScattering : register(u0);
 #endif
 #if defined(LIGHT_LIMIT_FIX)
 #	include "LightLimitFix/LightLimitFix.hlsli"
+
+Texture2DArray<float> EngineLocalShadowMaps : register(t5);
+cbuffer EngineLocalShadowCB : register(b1)
+{
+	LightLimitFix::LocalShadowData EngineLocalShadows[4];
+};
 #endif
 #if defined(PHYSICAL_SKY)
 #	include "PhysicalSky/Common.hlsli"
@@ -232,7 +238,7 @@ float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 		SharedData::exponentialHeightFogSettings.fogInscatteringColor.a *
 		skyVisibility;
 	[branch] if (VolumetricFogHasIBL)
-		skyLighting = ImageBasedLighting::GetIBLColorOccluded(skyDirection, skyVisibility);
+		skyLighting = ImageBasedLighting::GetIBLColorOccluded(skyDirection, skyVisibility, positionWS);
 
 	return skyLighting *
 	       SharedData::exponentialHeightFogSettings.volumetricSkyLightingIntensity;
@@ -240,8 +246,7 @@ float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 
 float3 ComputeDirectionalLightColor()
 {
-	float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5f), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
 #if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
 		float3 physSkyTransmittance = PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), LinearSampler);
@@ -252,6 +257,24 @@ float3 ComputeDirectionalLightColor()
 }
 
 #if defined(LIGHT_LIMIT_FIX)
+float SampleLocalLightShadow(LightLimitFix::Light light, float3 positionWS, float3 towardLight, float noise)
+{
+	if (light.lightFlags & LightLimitFix::LightFlags::LocalShadow) {
+		if (!VolumetricFogHasLocalShadowCache)
+			return 0.0f;
+		return LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, positionWS, FrameBuffer::CameraPosAdjust.xyz, towardLight, false, noise);
+	}
+	if (light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+		if (!VolumetricFogHasEngineLocalShadows || light.shadowLightIndex >= 4u)
+			return 0.0f;
+		LightLimitFix::LocalShadowData data = EngineLocalShadows[light.shadowLightIndex];
+		if (data.Params.y <= 0.0f)
+			return 0.0f;
+		return LightLimitFix::GetLocalShadow(EngineLocalShadowMaps, LinearSampler, data, (uint)data.Params2.z, positionWS, FrameBuffer::CameraPosAdjust.xyz, towardLight, false, noise, data.Params2.w, 1u, 0.0f);
+	}
+	return (light.lightFlags & LightLimitFix::LightFlags::ShadowCaster) ? 0.0f : 1.0f;
+}
+
 float ComputeLocalLightAttenuation(float distanceSqr, float cellRadius, LightLimitFix::Light light)
 {
 	float distance = sqrt(max(distanceSqr, 1e-6f));
@@ -291,6 +314,7 @@ float3 AccumulateLocalLightScattering(
 
 	float phaseG = SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution;
 	float3 localScattering = 0.0f.xxx;
+	float shadowNoise = float(Rand4DPCG32(int4(coord, VolumetricFogStateFrameIndexMod8)).w) / float(uint(0xffffffff));
 	[loop] for (uint lightIndex = 0; lightIndex < lightCount; lightIndex++)
 	{
 		uint clusteredLightIndex = LightLimitFix::lightList[grid.offset + lightIndex];
@@ -309,10 +333,12 @@ float3 AccumulateLocalLightScattering(
 			continue;
 
 		float3 L = toLight * rsqrt(distanceSqr);
+		attenuation *= SampleLocalLightShadow(light, positionWS, L, shadowNoise);
+		if (attenuation < 1e-5f)
+			continue;
 		float phase = ExponentialHeightFog::HenyeyGreenstein(dot(L, -viewDirection), phaseG);
 
-		const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-		float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * attenuation * light.fade;
+		float3 lightColor = Color::PointLight(light.color.xyz) * attenuation * light.fade;
 		localScattering += lightColor * phase;
 	}
 

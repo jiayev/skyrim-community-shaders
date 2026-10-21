@@ -41,8 +41,6 @@ public:
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
-	/** @brief Registers all fog parameters as weather-interpolatable variables. */
-	void RegisterWeatherVariables() override;
 	/** @brief Captures the current directional shadow map SRV for use in volumetric fog light scattering. */
 	void CaptureDirectionalShadowMap();
 
@@ -108,7 +106,7 @@ private:
 		float4x4 clipToWorld = {};
 		float4 frameJitterOffsets[16] = {};
 		float4 historyParameters = {};  // x = near weight, y = miss sample count, z = far weight, w = unused
-		float4 jitterParameters = {};  // x = LightScatteringSampleJitterMultiplier, y = StateFrameIndexMod8, zw = unused
+		float4 jitterParameters = {};   // x = LightScatteringSampleJitterMultiplier, y = StateFrameIndexMod8, zw = unused
 		// Far volume grid (starts where the near volume ends, runs to volumetricFogDistance).
 		DirectX::XMUINT4 farGridSizeAndFlags = {};
 		float4 farInvGridSizeAndNearFade = {};
@@ -117,11 +115,12 @@ private:
 	};
 	STATIC_ASSERT_ALIGNAS_16(VolumetricFogCB);
 
-	/** @brief Shaders see height fog as disabled: an ENB preset replaces it, or the flat world map is open. */
+	/** @brief Shaders see height fog as disabled: an ENB preset replaces it without handing it back to CS, or the flat world map is open. */
 	bool IsSuppressed() const;
 	void EnsureVolumetricResources();
 	void ReleaseVolumetricResources();
 	void BindIntegratedLightScattering();
+	ID3D11ShaderResourceView* UpdateEngineLocalShadowData();
 	ID3D11ComputeShader* GetMaterialSetupCS();
 	ID3D11ComputeShader* GetFarMaterialSetupCS();
 	ID3D11ComputeShader* GetConservativeDepthCS();
@@ -144,6 +143,7 @@ private:
 	std::unique_ptr<Texture3D> integratedLightScattering;
 	std::unique_ptr<Texture3D> integratedLightScatteringFar;
 	std::unique_ptr<ConstantBuffer> volumetricFogCB;
+	std::unique_ptr<ConstantBuffer> engineLocalShadowCB;
 	winrt::com_ptr<ID3D11SamplerState> linearSampler;
 	winrt::com_ptr<ID3D11SamplerState> shadowSampler;
 	winrt::com_ptr<ID3D11ShaderResourceView> directionalShadowMap;

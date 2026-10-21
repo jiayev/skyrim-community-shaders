@@ -7,14 +7,18 @@
 #include <imgui_stdlib.h>
 #include <set>
 
+#include "CSEditor/SceneManager/SceneSettingsContextRules.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "CloudShadows.h"
 #include "Deferred.h"
 #include "I18n/I18n.h"
 #include "LinearLighting.h"
+#include "PostProcessing/ColorSpace.h"
 #include "SkySync.h"
 #include "TerrainShadows.h"
 #include "VolumetricShadows.h"
 
+#include "I18n/I18n.h"
 #include "State.h"
 
 #define I18N_KEY_PREFIX "feature.physical_sky."
@@ -162,6 +166,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	atmosphereRadius,
 	rayleighFalloff,
 	rayleighScatter,
+	rayleighScatterAP1,
 	aerosolType,
 	aerosolLoading,
 	aerosolHumidity,
@@ -172,6 +177,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ozoneAltitude,
 	ozoneThickness,
 	ozoneAbsorption,
+	ozoneAbsorptionAP1,
 	fallbackZBottom,
 	enableVanillaClouds,
 	cloudRelightMix,
@@ -240,6 +246,215 @@ namespace
 			ImGui::EndTable();
 		}
 	}
+
+	// Transform a float3 color/coefficient by a 3x3 color space matrix stored in a 4x4 Matrix
+	float3 TransformColor(const float3& v, const DirectX::SimpleMath::Matrix& m)
+	{
+		return {
+			v.x * m._11 + v.y * m._12 + v.z * m._13,
+			v.x * m._21 + v.y * m._22 + v.z * m._23,
+			v.x * m._31 + v.y * m._32 + v.z * m._33
+		};
+	}
+
+	////////////////////////////////////////////////////////////////////////////////////////////////
+	// Scene-scoped aerosol authoring.
+	//
+	// The scene layer blends numeric addresses, so a scene can only carry the aerosol appearance as
+	// the coefficient triple the shader reads: the mixture, loading and humidity are authoring
+	// inputs that derive that triple, and a discrete mixture cannot be interpolated at all. In a
+	// scene page the feature therefore draws the picker below, which writes the derived coefficients
+	// into the armed context's own entries, and leaves the authoring knobs to the main menu.
+
+	constexpr std::string_view kSceneFeatureShortName = "PhysicalSky";
+
+	/// Session UI state of the scene picker: the mixture a scene page is about to write, and the
+	/// context it was seeded for. Not persisted, and deliberately outside `settings`.
+	struct SceneAerosolPicker
+	{
+		Aerosol::Type type = Aerosol::Type::Custom;
+		float loading = 1.f;
+		float humidity = 50.f;
+		SceneSettingsManager::SceneContextId context;
+		bool seeded = false;
+	};
+
+	SceneAerosolPicker sceneAerosolPicker;
+
+	/// One scene entry behind the aerosol optics the shader reads.
+	struct AerosolOpticsAddress
+	{
+		std::string_view settingPath;  // a vector member carries its own path; the scalar has none
+		std::string_view settingKey;
+		const float* value;
+	};
+
+	/// The seven addresses a mixture resolves to. A vector's components are separate entries, keyed
+	/// by component, which is how the catalog describes them.
+	std::array<AerosolOpticsAddress, 7> GetAerosolOpticsAddresses(const Aerosol::Optics& a_optics)
+	{
+		return { { { "aerosolScatter", "x", &a_optics.scatter.x },
+			{ "aerosolScatter", "y", &a_optics.scatter.y },
+			{ "aerosolScatter", "z", &a_optics.scatter.z },
+			{ "aerosolAbsorption", "x", &a_optics.absorption.x },
+			{ "aerosolAbsorption", "y", &a_optics.absorption.y },
+			{ "aerosolAbsorption", "z", &a_optics.absorption.z },
+			{ "", "aerosolPhaseG", &a_optics.phaseG } } };
+	}
+
+	std::vector<std::string> GetAerosolOpticsSettingPath(const AerosolOpticsAddress& a_address)
+	{
+		std::vector<std::string> path;
+		if (!a_address.settingPath.empty())
+			path.emplace_back(a_address.settingPath);
+		return path;
+	}
+
+	/// Whether an entry this context owns holds a value, rather than being a tombstone.
+	bool IsAuthoredAerosolEntry(std::span<const SceneSettingsManager::SettingEntry> a_entries,
+		std::optional<size_t> a_index)
+	{
+		return a_index && *a_index < a_entries.size() && !a_entries[*a_index].deleted;
+	}
+
+	/// Writes the coefficients a mixture resolves to into the armed context's own entries, so a
+	/// weather or time-of-day transition interpolates the optics rather than switching the mixture.
+	/// @return How many addresses the context now authors.
+	size_t WriteSceneAerosolOptics(const SceneSettingsManager::SceneContextId& a_context,
+		const Aerosol::Optics& a_optics)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto rules = SceneSettingsContextRules::GetSceneContextRules(a_context);
+		const auto featureName = std::string(kSceneFeatureShortName);
+		const auto addresses = GetAerosolOpticsAddresses(a_optics);
+
+		// Structure first: clearing a tombstone or adding an entry renumbers the entries behind it,
+		// so no index may be carried across this pass (the interceptor's guard resolves the same way).
+		for (const auto& address : addresses) {
+			const auto path = GetAerosolOpticsSettingPath(address);
+			const auto key = std::string(address.settingKey);
+			if (!SceneSettingsManager::IsSettingAllowedForType(rules.sceneType, featureName, path, key,
+					rules.requireNumeric))
+				continue;
+			auto index = manager->FindContextUserEntry(a_context, featureName, path, key);
+			if (index && !IsAuthoredAerosolEntry(manager->GetContextEntries(a_context), index)) {
+				// A tombstone holds no value, so it goes before the new one lands.
+				manager->ClearContextTombstone(a_context, featureName, path, key);
+				index = std::nullopt;
+			}
+			if (!index)
+				manager->AddContextSetting(a_context, featureName, path, key, true);
+		}
+
+		// Value pass: every address the context can hold now resolves to a live entry.
+		std::array<SceneSettingsManager::EntryValueUpdate, 7> updates{};
+		size_t count = 0;
+		for (const auto& address : addresses) {
+			const auto path = GetAerosolOpticsSettingPath(address);
+			const auto key = std::string(address.settingKey);
+			const auto index = manager->FindContextUserEntry(a_context, featureName, path, key);
+			if (!index)
+				continue;
+			updates[count++] = { *index, json(*address.value) };
+		}
+		if (count == 0)
+			return 0;
+
+		// One atomic update, saved and reapplied once: the adds above only deferred their own save.
+		manager->UpdateContextEntryValues(a_context, std::span(updates.data(), count));
+		return count;
+	}
+
+	/// How many of the coefficients in a context come from the context's own entries.
+	size_t CountSceneAerosolOptics(const SceneSettingsManager::SceneContextId& a_context)
+	{
+		const Aerosol::Optics none{};
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto featureName = std::string(kSceneFeatureShortName);
+		const auto entries = manager->GetContextEntries(a_context);
+		size_t authored = 0;
+		for (const auto& address : GetAerosolOpticsAddresses(none)) {
+			if (IsAuthoredAerosolEntry(entries,
+					manager->FindContextUserEntry(a_context, featureName,
+						GetAerosolOpticsSettingPath(address), std::string(address.settingKey))))
+				++authored;
+		}
+		return authored;
+	}
+
+	/// Drops every coefficient this context authored, restoring inheritance from the layers below.
+	void ClearSceneAerosolOptics(const SceneSettingsManager::SceneContextId& a_context)
+	{
+		const Aerosol::Optics none{};
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto featureName = std::string(kSceneFeatureShortName);
+		for (const auto& address : GetAerosolOpticsAddresses(none)) {
+			const auto path = GetAerosolOpticsSettingPath(address);
+			const auto key = std::string(address.settingKey);
+			const auto index = manager->FindContextUserEntry(a_context, featureName, path, key);
+			if (index && IsAuthoredAerosolEntry(manager->GetContextEntries(a_context), index))
+				manager->RemoveContextSetting(a_context, *index);
+		}
+	}
+
+	/// The scene page's substitute for the authoring knobs: pick a mixture, and its coefficients
+	/// become this context's own. The knobs themselves hold no scene value, which is why the scene
+	/// policy bars them.
+	void DrawSceneAerosolPicker(const SceneSettingsManager::SceneContextId& a_context,
+		const char* const a_typeNames[], int a_typeCount)
+	{
+		const auto rules = SceneSettingsContextRules::GetSceneContextRules(a_context);
+		// Judged on the scalar coefficient, which every context that can hold the aerosol look accepts.
+		const bool allowed = SceneSettingsManager::IsSettingAllowedForType(rules.sceneType,
+			std::string(kSceneFeatureShortName), {}, "aerosolPhaseG", rules.requireNumeric);
+
+		ImGui::TextWrapped("%s", T(TKEY("aerosol_scene_desc"),
+									 "Scenes blend the optical coefficients below, so a mixture is written as the coefficients it resolves to. Particle loading and relative humidity are authoring inputs and are not stored per scene."));
+
+		ImGui::BeginDisabled(!allowed);
+
+		bool changed = false;
+		int type = static_cast<int>(sceneAerosolPicker.type);
+		if (ImGui::Combo(T(TKEY("aerosol_type"), "Aerosol Type"), &type, a_typeNames, a_typeCount)) {
+			sceneAerosolPicker.type = type > 0 && type < static_cast<int>(Aerosol::Type::Count) ?
+			                              static_cast<Aerosol::Type>(type) :
+			                              Aerosol::Type::Custom;
+			changed = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("aerosol_type_desc"), "OPAC mixtures: continental clean, maritime clean, urban, and desert. Marine particles respond strongly to humidity; urban pollution includes absorbing soot. Dust also contains a water-soluble fraction."));
+
+		if (sceneAerosolPicker.type != Aerosol::Type::Custom) {
+			changed |= ImGui::SliderFloat(T(TKEY("aerosol_loading"), "Particle Loading"), &sceneAerosolPicker.loading, 0.f, 10.f, "%.2f x", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("aerosol_loading_desc"), "Multiplier of the selected type's reference dry particle number densities. 1x uses the OPAC reference mixture; 0 removes aerosols. Humidity changes particle size, not this loading. This is not AQI or PM2.5."));
+			changed |= ImGui::SliderFloat(T(TKEY("aerosol_humidity"), "Relative Humidity"), &sceneAerosolPicker.humidity, 0.f, 99.f, "%.1f %%", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("aerosol_humidity_desc"), "Effective relative humidity throughout the aerosol layer. Uses OPAC hygroscopic growth data from 0 to 99% RH. Higher humidity usually increases scattering; absorption and forward scattering follow the selected mixture. Does not simulate condensation or fog droplets."));
+		}
+
+		if (changed && sceneAerosolPicker.type != Aerosol::Type::Custom) {
+			WriteSceneAerosolOptics(a_context,
+				Aerosol::Evaluate(sceneAerosolPicker.type, sceneAerosolPicker.loading, sceneAerosolPicker.humidity));
+		}
+
+		const auto authored = CountSceneAerosolOptics(a_context);
+		if (authored > 0) {
+			ImGui::Text(T(TKEY("aerosol_scene_authored"), "Aerosol coefficients stored for this scene: %zu of 7."), authored);
+			ImGui::SameLine();
+			if (ImGui::Button(T(TKEY("aerosol_scene_clear"), "Clear"))) {
+				ClearSceneAerosolOptics(a_context);
+				changed = true;
+			}
+		} else {
+			ImGui::TextDisabled("%s", T(TKEY("aerosol_scene_inherited"), "Aerosol coefficients: inherited from the settings below the scene."));
+		}
+
+		ImGui::EndDisabled();
+
+		if (!allowed)
+			Util::AddTooltip(T(TKEY("aerosol_scene_unsupported"), "This place cannot hold the aerosol coefficients."), Util::kTooltipWhenDisabled);
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -247,7 +462,7 @@ namespace
 void PhysicalSky::DataLoaded()
 {
 	if (!globals::features::skySync.loaded) {
-		failedLoadedMessage = "Sky Sync is required for Physical Sky to function.";
+		failedLoadedMessage = T("feature.physical_sky.sky_sync_required", "Sky Sync is required for Physical Sky to function.");
 		loaded = false;
 	}
 }
@@ -255,11 +470,25 @@ void PhysicalSky::DataLoaded()
 void PhysicalSky::RestoreDefaultSettings()
 {
 	settings = {};
+	// The scene picker mirrors the inputs it seeds from, so it goes back with them.
+	sceneAerosolPicker = {};
 }
 
 void PhysicalSky::LoadSettings(json& o_json)
 {
+	// The aerosol mixture, loading and humidity are authoring inputs: the value the shader reads and
+	// the scene layer blends is the coefficient triple they resolve to. A document that moves one of
+	// the three (a config, a preset, a feature override) therefore has to re-derive that triple,
+	// while a document carrying only the scene layer's own values leaves the inputs alone - which is
+	// what keeps a blend of the inputs from overwriting the blend of the coefficients.
+	const auto loadedType = settings.aerosolType;
+	const auto loadedLoading = settings.aerosolLoading;
+	const auto loadedHumidity = settings.aerosolHumidity;
 	settings = o_json;
+	if (settings.aerosolType != loadedType ||
+		settings.aerosolLoading != loadedLoading ||
+		settings.aerosolHumidity != loadedHumidity)
+		settings.ApplyAerosolOptics();
 }
 
 void PhysicalSky::SaveSettings(json& o_json)
@@ -274,8 +503,20 @@ Aerosol::Optics PhysicalSky::Settings::GetAerosolOptics() const
 	return { aerosolScatter, aerosolAbsorption, aerosolPhaseG };
 }
 
+void PhysicalSky::Settings::ApplyAerosolOptics()
+{
+	// Custom already answers with the members, so this leaves an authored coefficient set untouched.
+	const auto optics = GetAerosolOptics();
+	aerosolScatter = optics.scatter;
+	aerosolAbsorption = optics.absorption;
+	aerosolPhaseG = optics.phaseG;
+}
+
 void PhysicalSky::DrawSettings()
 {
+	if (SceneWidgetInterceptor::IsArmed())
+		ImGui::TextWrapped("%s", T(TKEY("scene_settings_hint"), "Scene settings control sunlight, atmosphere, cloud motion, shape, density, distribution and the local cloud state. Cloud lighting response, global noise and texture sources, worldspace setup and rendering quality remain global. Interior settings require Physical Sky to be enabled for interiors."));
+
 	if (ImGui::BeginTabBar("##PHYSSKY")) {
 		if (ImGui::BeginTabItem(T(TKEY("general"), "General"))) {
 			SettingsGeneral();
@@ -293,7 +534,7 @@ void PhysicalSky::DrawSettings()
 			SettingsClouds();
 			ImGui::EndTabItem();
 		}
-		if (ImGui::BeginTabItem(T(TKEY("debug"), "Debug"))) {
+		if (!SceneWidgetInterceptor::IsArmed() && ImGui::BeginTabItem(T(TKEY("debug"), "Debug"))) {
 			SettingsDebug();
 			ImGui::EndTabItem();
 		}
@@ -311,9 +552,9 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::Text("%s", T(TKEY("shader_status"), "Shader Status: "));
 		ImGui::TableNextColumn();
 		if (ShadersOK())
-			ImGui::TextColored({ 0, 1, 0, 1 }, "OK");
+			ImGui::TextColored({ 0, 1, 0, 1 }, T("feature.physical_sky.ok", "OK"));
 		else
-			ImGui::TextColored({ 1, 0, 0, 1 }, "ERROR");
+			ImGui::TextColored({ 1, 0, 0, 1 }, T("feature.physical_sky.error", "ERROR"));
 
 		ImGui::TableNextColumn();
 		ImGui::Text("%s", T(TKEY("worldspace"), "Worldspace: "));
@@ -350,8 +591,8 @@ void PhysicalSky::SettingsGeneral()
 			ImGui::Text("%s", T(TKEY("used_when_current_worldspace_is_not_in_whitelist"), "Used when current worldspace is not in whitelist (or worldspace data is unavailable), including forced interiors."));
 	}
 
-	ImGui::SeparatorText(T(TKEY("worldspace_whitelist"), "Worldspace Whitelist"));
-	{
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		ImGui::SeparatorText(T(TKEY("worldspace_whitelist"), "Worldspace Whitelist"));
 		static std::string newWorldspaceEditorID;
 		static float newWorldspaceZBottom = -14500.f;
 
@@ -506,7 +747,10 @@ void PhysicalSky::SettingsAtmosphere()
 									 "Particles much smaller than the wavelength of light. They have almost complete symmetry in forward and backward scattering. "
 									 "On earth, they are what makes the sky blue and, at sunset, red. Usually needs no extra change."));
 
-		ImGui::ColorEdit3(T(TKEY("scatter"), "Scatter"), &settings.rayleighScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("scatter_srgb"), "Scatter (sRGB)"), &settings.rayleighScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("scatter_ap1"), "Scatter (AP1)"), &settings.rayleighScatterAP1.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("band_averaged_coefficients_for_acescg_ap1_primaries_computed"), "Band-averaged coefficients for ACEScg (AP1) primaries, computed via CIE 1931 spectral integration."));
 		ImGui::SliderFloat(T(TKEY("falloff"), "Falloff"), &settings.rayleighFalloff, 0.f, 2.f, "%.2f km^-1");
 		ImGui::PopID();
 	}
@@ -522,27 +766,56 @@ void PhysicalSky::SettingsAtmosphere()
 			T(TKEY("aerosol_urban"), "Urban pollution"),
 			T(TKEY("aerosol_desert"), "Desert dust")
 		};
-		int type = settings.aerosolType < Aerosol::Type::Count ? static_cast<int>(settings.aerosolType) : 0;
-		if (ImGui::Combo(T(TKEY("aerosol_type"), "Aerosol Type"), &type, types, IM_ARRAYSIZE(types))) {
-			if (type == 0) {
-				const auto optics = settings.GetAerosolOptics();
-				settings.aerosolScatter = optics.scatter;
-				settings.aerosolAbsorption = optics.absorption;
-				settings.aerosolPhaseG = optics.phaseG;
-			}
-			settings.aerosolType = static_cast<Aerosol::Type>(type);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("aerosol_type_desc"), "OPAC mixtures: continental clean, maritime clean, urban, and desert. Marine particles respond strongly to humidity; urban pollution includes absorbing soot. Dust also contains a water-soluble fraction."));
+		// The proxy stays a plain cast of the stored enum: the scene settings catalog
+		// resolves a combo's backing setting through exactly this shape, and a ternary
+		// here would leave the setting out of the catalog.
+		int type = static_cast<int>(settings.aerosolType);
 
-		if (type != 0) {
-			ImGui::SliderFloat(T(TKEY("aerosol_loading"), "Particle Loading"), &settings.aerosolLoading, 0.f, 10.f, "%.2f x", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("aerosol_loading_desc"), "Multiplier of the selected type's reference dry particle number densities. 1x uses the OPAC reference mixture; 0 removes aerosols. Humidity changes particle size, not this loading. This is not AQI or PM2.5."));
-			ImGui::SliderFloat(T(TKEY("aerosol_humidity"), "Relative Humidity"), &settings.aerosolHumidity, 0.f, 99.f, "%.1f %%", ImGuiSliderFlags_AlwaysClamp);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("aerosol_humidity_desc"), "Effective relative humidity throughout the aerosol layer. Uses OPAC hygroscopic growth data from 0 to 99% RH. Higher humidity usually increases scattering; absorption and forward scattering follow the selected mixture. Does not simulate condensation or fog droplets."));
+		// A scene page authors the coefficients the shader reads, because that is the only part of
+		// the aerosol look a transition can interpolate; the main menu authors the mixture those
+		// coefficients come from. Both end up at the same three addresses, so the widgets below are
+		// drawn once and the mixture never has to be an interpolated value.
+		const auto* scene = SceneWidgetInterceptor::GetArmedContext();
+		const bool sceneScoped = scene && !scene->baseline;
+		if (sceneScoped) {
+			// Seed once per context: a scene page opens on the look the author already sees.
+			if (!sceneAerosolPicker.seeded || sceneAerosolPicker.context != scene->contextId) {
+				sceneAerosolPicker.type = settings.aerosolType < Aerosol::Type::Count ?
+				                              settings.aerosolType :
+				                              Aerosol::Type::Custom;
+				sceneAerosolPicker.loading = settings.aerosolLoading;
+				sceneAerosolPicker.humidity = settings.aerosolHumidity;
+				sceneAerosolPicker.context = scene->contextId;
+				sceneAerosolPicker.seeded = true;
+			}
+			DrawSceneAerosolPicker(scene->contextId, types, IM_ARRAYSIZE(types));
 		} else {
+			if (type < 0 || type >= static_cast<int>(Aerosol::Type::Count))
+				type = 0;
+			if (ImGui::Combo(T(TKEY("aerosol_type"), "Aerosol Type"), &type, types, IM_ARRAYSIZE(types))) {
+				// Selecting a mixture re-derives the coefficients; switching back to Custom keeps
+				// them, because a physical mixture had already written them, so the look is
+				// continuous either way.
+				settings.aerosolType = static_cast<Aerosol::Type>(type);
+				settings.ApplyAerosolOptics();
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("aerosol_type_desc"), "OPAC mixtures: continental clean, maritime clean, urban, and desert. Marine particles respond strongly to humidity; urban pollution includes absorbing soot. Dust also contains a water-soluble fraction."));
+
+			if (type != 0) {
+				if (ImGui::SliderFloat(T(TKEY("aerosol_loading"), "Particle Loading"), &settings.aerosolLoading, 0.f, 10.f, "%.2f x", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp))
+					settings.ApplyAerosolOptics();
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("aerosol_loading_desc"), "Multiplier of the selected type's reference dry particle number densities. 1x uses the OPAC reference mixture; 0 removes aerosols. Humidity changes particle size, not this loading. This is not AQI or PM2.5."));
+				if (ImGui::SliderFloat(T(TKEY("aerosol_humidity"), "Relative Humidity"), &settings.aerosolHumidity, 0.f, 99.f, "%.1f %%", ImGuiSliderFlags_AlwaysClamp))
+					settings.ApplyAerosolOptics();
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("aerosol_humidity_desc"), "Effective relative humidity throughout the aerosol layer. Uses OPAC hygroscopic growth data from 0 to 99% RH. Higher humidity usually increases scattering; absorption and forward scattering follow the selected mixture. Does not simulate condensation or fog droplets."));
+			}
+		}
+		// A scene page shows the coefficients whatever mixture they came from: they are what that
+		// page stores, and the picker above is only a shortcut for writing them.
+		if (sceneScoped || type == 0) {
 			ImGui::SliderFloat(T(TKEY("anisotropy"), "Anisotropy"), &settings.aerosolPhaseG, -0.999f, 0.999f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 			ImGui::ColorEdit3(T(TKEY("scatter"), "Scatter"), &settings.aerosolScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 			ImGui::ColorEdit3(T(TKEY("absorption"), "Absorption"), &settings.aerosolAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
@@ -561,7 +834,10 @@ void PhysicalSky::SettingsAtmosphere()
 									 "The ozone layer high up in the sky that mainly absorbs light of certain wavelength. "
 									 "It keeps the zenith sky blue, especially at sunrise or sunset."));
 
-		ImGui::ColorEdit3(T(TKEY("absorption"), "Absorption"), &settings.ozoneAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("absorption_srgb"), "Absorption (sRGB)"), &settings.ozoneAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("absorption_ap1"), "Absorption (AP1)"), &settings.ozoneAbsorptionAP1.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("band_averaged_coefficients_for_acescg_ap1_primaries_computed_2"), "Band-averaged coefficients for ACEScg (AP1) primaries, computed via CIE 1931 spectral integration."));
 		ImGui::DragFloat(T(TKEY("mean_altitude"), "Mean Altitude"), &settings.ozoneAltitude, .1f, 0.f, 100.f, "%.3f km");
 		ImGui::DragFloat(T(TKEY("layer_thickness"), "Layer Thickness"), &settings.ozoneThickness, .1f, 0.f, 50.f, "%.3f km");
 		ImGui::PopID();
@@ -646,27 +922,10 @@ void PhysicalSky::SettingsVolumetricClouds()
 	ImGui::SeparatorText(T(TKEY("cloud_motion"), "Cloud Motion"));
 	{
 		auto& wind = settings.cloudLayer.wind;
-		static float lowAngle = 0.f;
-		static float highAngle = 0.f;
-		auto drawWind = [](const char* speedLabel, const char* directionLabel, float2& velocity, float& angle) {
-			float speed = std::hypot(velocity.x, velocity.y);
-			if (!std::isfinite(speed)) {
-				velocity = {};
-				speed = 0.f;
-			}
-			if (speed > 1e-4f)
-				angle = std::fmod(std::atan2(velocity.y, velocity.x) * (180.f / 3.14159265f) + 360.f, 360.f);
-			bool changed = ImGui::SliderFloat(speedLabel, &speed, 0.f, 80.f, "%.1f m/s");
-			changed |= ImGui::SliderFloat(directionLabel, &angle, 0.f, 360.f, "%.0f deg");
-			if (changed) {
-				const float radians = angle * (3.14159265f / 180.f);
-				velocity = { std::cos(radians) * speed, std::sin(radians) * speed };
-			}
-		};
-		drawWind(T(TKEY("cloud_low_wind_speed"), "Low Cloud Speed"), T(TKEY("cloud_low_wind_direction"), "Low Cloud Travel Direction"), wind.lowVelocity, lowAngle);
-		drawWind(T(TKEY("cloud_high_wind_speed"), "High Cloud Speed"), T(TKEY("cloud_high_wind_direction"), "High Cloud Travel Direction"), wind.highVelocity, highAngle);
+		ImGui::SliderFloat2(T(TKEY("cloud_low_wind_velocity"), "Low Cloud Velocity (X/Y)"), &wind.lowVelocity.x, -80.f, 80.f, "%.1f m/s", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat2(T(TKEY("cloud_high_wind_velocity"), "High Cloud Velocity (X/Y)"), &wind.highVelocity.x, -80.f, 80.f, "%.1f m/s", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cloud_wind_direction_desc"), "Travel direction: 0 degrees = +X, 90 degrees = +Y. Weather transitions blend velocity vectors."));
+			ImGui::Text("%s", T(TKEY("cloud_wind_velocity_desc"), "Horizontal velocity in world X/Y axes. Scene transitions blend the components, including across direction changes. The resulting travel speed is capped at 80 m/s."));
 		ImGui::SliderFloat(T(TKEY("cloud_development"), "Development Speed"), &wind.development, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("cloud_development_desc"), "Controls internal low-cloud evolution. Zero freezes development while wind continues to carry the clouds."));
@@ -679,7 +938,7 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 	ImGui::SeparatorText(T(TKEY("cloud_lighting"), "Cloud Lighting"));
 	{
-		if (ImGui::Button(T(TKEY("cloud_lighting_reset"), "Reset Cloud Lighting"))) {
+		if (!SceneWidgetInterceptor::IsArmed() && ImGui::Button(T(TKEY("cloud_lighting_reset"), "Reset Cloud Lighting"))) {
 			lighting = {};
 			volMainHistoryValid = false;
 		}
@@ -718,11 +977,11 @@ void PhysicalSky::SettingsVolumetricClouds()
 	}
 
 	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
-	{
-		ndfManager.DrawNdfSettings(settings.cloudMap, ndfTexManager);
-		const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
-		localNdfManager.DrawSettings(settings.cloudMap, GetCurrentWorldspaceEditorID(),
-			{ camera.x * Util::Units::GAME_UNIT_TO_M, camera.y * Util::Units::GAME_UNIT_TO_M });
+	ndfManager.DrawNdfSettings(settings.cloudMap, ndfTexManager);
+	const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
+	localNdfManager.DrawSettings(settings.cloudMap, GetCurrentWorldspaceEditorID(),
+		{ camera.x * Util::Units::GAME_UNIT_TO_M, camera.y * Util::Units::GAME_UNIT_TO_M });
+	if (!SceneWidgetInterceptor::IsArmed()) {
 		cloudNoiseGenerator.DrawSettings(settings.cloudNoise);
 		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 })) {
 			ndfTexManager.Reload();
@@ -1013,6 +1272,7 @@ void PhysicalSky::CompileShaders()
 	};
 
 	for (auto& info : shaderInfos) {
+		*info.csPtr = nullptr;
 		auto path = std::filesystem::path("Data\\Shaders\\PhysicalSky") / info.filename;
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.data())))
 			info.csPtr->attach(rawPtr);
@@ -1053,8 +1313,8 @@ bool PhysicalSky::SetLocalCloudState(const LocalNdfState& state)
 void PhysicalSky::Reset()
 {
 	UpdateCloudWind();
-	if (settings.enabled && settings.enableVolumetricClouds && localNdfManager.Update(settings.cloudMap, ndfTexManager, GetCurrentWorldspaceEditorID()))
-		volMainHistoryValid = false;
+	if (settings.enabled && settings.enableVolumetricClouds)
+		localNdfManager.Update(settings.cloudMap, ndfTexManager, GetCurrentWorldspaceEditorID());
 	const float2 lowAltitudeRange = settings.cloudLayer.low.GetNdfAltitudeRangeKm();
 	const auto localAltitude = localNdfManager.GetAltitude();
 	const float lowCloudBaseKm = localAltitude.y > 0.f ? std::min(lowAltitudeRange.x, localAltitude.x * 0.001f) : lowAltitudeRange.x;
@@ -1064,7 +1324,7 @@ void PhysicalSky::Reset()
 	const float shadowBottomKm = settings.cloudLayer.low.GetShadowBottomKm(lowCloudBaseKm, settings.shadowVolumeRange, kShadowVolW);
 	const float lowCloudThicknessKm = lowCloudTopKm - shadowBottomKm;
 	auto& skySync = globals::features::skySync;
-	skySync.lightColors = std::nullopt;
+	skySync.workingLightColors = std::nullopt;
 
 	auto& linearLighting = globals::features::linearLighting;
 
@@ -1098,8 +1358,9 @@ void PhysicalSky::Reset()
 	allGood &= (worldspaceEnabled || settings.enableAllExteriorCells || allowForcedInterior) && (!inInterior || allowForcedInterior) && !inMainLoadingMenu;
 
 	if (!allGood) {
+		if (skySync.loaded && skySync.settings.Enabled)
+			skySync.workingLightColors = std::nullopt;
 		cbData.enabled = allGood;
-		linearLighting.isDirLightLinear = false;
 		volMainHistoryValid = false;
 		return;
 	}
@@ -1112,7 +1373,20 @@ void PhysicalSky::Reset()
 	auto sunDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Sun)];
 	auto masserDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Masser)];
 	auto secundaDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
-	const auto aerosol = settings.GetAerosolOptics();
+
+	// Wide gamut support: when ACEScg is active, transform color parameters
+	// from sRGB gamut to AP1 gamut so that the LUTs are natively generated in AP1 space.
+	// Spectral scattering/absorption coefficients use pre-computed AP1 band-averaged
+	// values (from CIE 1931 spectral integration) rather than color-space matrix
+	// transforms, since they represent wavelength-dependent physical quantities,
+	// not tristimulus colors.
+	bool wideGamut = linearLighting.IsACEScgActive();
+	auto sRGBToWorkingGamut = [wideGamut](float3 v) -> float3 {
+		if (!wideGamut)
+			return v;
+		static auto mat = getWhiteAdaptedRGBMatrix("sRGB", "ACEScg");
+		return TransformColor(v, mat);
+	};
 
 	cbData = {
 		.texDim = res,
@@ -1120,32 +1394,34 @@ void PhysicalSky::Reset()
 		.frameDim = dynres,
 		.rcpFrameDim = float2(1.0f) / dynres,
 		.sunDir = { sunDir.x, sunDir.y, sunDir.z },
-		.sunlightColor = settings.sunlightColor,
+		.sunlightColor = sRGBToWorkingGamut(settings.sunlightColor),
 		.trMix = settings.trMix,
 		.masserDir = { masserDir.x, masserDir.y, masserDir.z },
 		.apLumMix = settings.apLumMix,
-		.masserColor = settings.masserColor,
+		.masserColor = sRGBToWorkingGamut(settings.masserColor),
 		.apTrMix = settings.apTrMix,
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
 		.sunDiskCos = cos(settings.sunDiskRad) * (settings.proceduralSun ? 1.f : 0.f),
-		.secundaColor = settings.secundaColor,
+		.secundaColor = sRGBToWorkingGamut(settings.secundaColor),
 		.enabled = allGood,
 		.vanillaMix = settings.vanillaMix,
 		.zBottom = zBottom,
 		.rPlanet = settings.planetRadius / Util::Units::GAME_UNIT_TO_KM,
 		.rAtmosphere = settings.atmosphereRadius / Util::Units::GAME_UNIT_TO_KM,
-		.groundAlbedo = settings.groundAlbedo,
+		.groundAlbedo = sRGBToWorkingGamut(settings.groundAlbedo),
 		.cloudShadowRemapRange = settings.cloudShadowRemapRange,
 		.aerosolFalloff = settings.aerosolFalloff * Util::Units::GAME_UNIT_TO_KM,
-		.aerosolPhaseG = aerosol.phaseG,
-		.aerosolScatter = aerosol.scatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		// The coefficient members are what the scene layer blends: a weather or time-of-day
+		// transition interpolates the optics a mixture resolved to, never the discrete mixture.
+		.aerosolPhaseG = settings.aerosolPhaseG,
+		.aerosolScatter = settings.aerosolScatter * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.halfResApShadow = settings.halfResApShadow ? 1u : 0u,
-		.aerosolAbsorption = aerosol.absorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.aerosolAbsorption = settings.aerosolAbsorption * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.rayleighFalloff = settings.rayleighFalloff * Util::Units::GAME_UNIT_TO_KM,
-		.rayleighScatter = settings.rayleighScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.rayleighScatter = (wideGamut ? settings.rayleighScatterAP1 : settings.rayleighScatter) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAltitude = settings.ozoneAltitude / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
-		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.ozoneAbsorption = (wideGamut ? settings.ozoneAbsorptionAP1 : settings.ozoneAbsorption) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.enableVanillaClouds = settings.enableVanillaClouds ? 1u : 0u,
 		.cloudRelightMix = settings.cloudRelightMix,
 		.cloudOriginalMix = settings.cloudOriginalMix,
@@ -1165,15 +1441,16 @@ void PhysicalSky::Reset()
 	};
 
 	if (settings.overrideDirLight) {
-		linearLighting.isDirLightLinear = true;
-		const float pbrCompensationMult = linearLighting.settings.enableLinearLighting ? 1.0f : RE::NI_PI;  // Colors should match PBR values when not using linear lighting
+		const float pbrCompensationMult = linearLighting.IsLinearLightingActive() ? 1.0f : RE::NI_PI;  // Colors should match PBR values when not using linear lighting
 		auto LightConvFn = [pbrCompensationMult](float3 color) {
 			color /= pbrCompensationMult;
 			return RE::NiColor(color.x, color.y, color.z);
 		};
-		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
-	} else {
-		linearLighting.isDirLightLinear = false;
+		skySync.workingLightColors = std::array{
+			LightConvFn(cbData.sunlightColor),
+			LightConvFn(cbData.masserColor),
+			LightConvFn(cbData.secundaColor)
+		};
 	}
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };
@@ -1237,8 +1514,10 @@ void PhysicalSky::Prepass()
 		const bool renderVolumetricClouds = settings.enableVolumetricClouds && ShadersOK();
 
 		if (renderVolumetricClouds) {
+			auto historyCloudMap = nlohmann::json(settings.cloudMap);
+			historyCloudMap.erase("localCloud");
 			const auto cloudSettingsKey = nlohmann::json{
-				{ "map", settings.cloudMap },
+				{ "map", historyCloudMap },
 				{ "low", settings.cloudLayer.low },
 				{ "cirrus", settings.cloudLayer.cirrus },
 				{ "lighting", settings.cloudLayer.lighting },
@@ -1467,17 +1746,17 @@ void PhysicalSky::RestoreSamplers()
 void PhysicalSky::ModifyGrass()
 {
 	auto context = globals::d3d::context;
-	context->PSGetSamplers(2, 1, originalPSGrassSampler.put());
+	context->PSGetSamplers(5, 1, originalPSGrassSampler.put());
 
 	auto sampler = sampTileable.get();
-	context->PSSetSamplers(2, 1, &sampler);
+	context->PSSetSamplers(5, 1, &sampler);
 }
 
 void PhysicalSky::RestoreGrassSampler()
 {
 	auto context = globals::d3d::context;
 	auto sampler = originalPSGrassSampler.get();
-	context->PSSetSamplers(2, 1, &sampler);
+	context->PSSetSamplers(5, 1, &sampler);
 	originalPSGrassSampler = nullptr;
 }
 

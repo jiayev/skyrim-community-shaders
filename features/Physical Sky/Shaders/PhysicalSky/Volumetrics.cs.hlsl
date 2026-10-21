@@ -281,16 +281,7 @@ float3 GetCloudDirectionalLightColor()
 	// Top-of-atmosphere irradiance, before ground sunset dimming or attenuation.
 	if (SharedData::physSkyData.volCloudUseSun != 0)
 		return SharedData::physSkyData.sunlightColor;
-	const float linearLightingMultiplier =
-		SharedData::linearLightingSettings.enableLinearLighting &&
-				!SharedData::linearLightingSettings.isDirLightLinear &&
-				!SharedData::InInterior ?
-			SharedData::linearLightingSettings.dirLightMult :
-			1.0;
-	return Color::Light(
-			   SharedData::DirLightColor.xyz / max(linearLightingMultiplier, 1e-5),
-			   SharedData::linearLightingSettings.isDirLightLinear) *
-	       linearLightingMultiplier;
+	return Color::Light(SharedData::DirLightColor.xyz);
 }
 
 RWTexture2D<float> RWTexTr : register(u0);

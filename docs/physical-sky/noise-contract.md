@@ -100,7 +100,7 @@ opacity, sunlight occlusion and ground shadows share the same reconstruction.
 
 The editable `cloudLayer.low` values describe the current weather's cloud
 shape. They apply to both global and local NDF samples. They are distinct from
-renderer quality, texture encoding and per-endpoint influence weights. A DDS
+renderer quality, texture encoding and per-instance influence weights. A DDS
 pair does not specify these values and cannot reproduce a weather by itself.
 
 | Authoring field        | Shader coefficient    | Conversion                     | Initial authoring value |
@@ -120,14 +120,16 @@ The serialized authoring keys replace the old shader-coefficient keys; there
 is no legacy-key migration. The shader constant buffer retains coefficient
 names and layout.
 
-All six controls are stored under `cloudLayer.low` in Physical Sky settings
-and edited directly in the Clouds tab. Authoring values are converted to shader
-coefficients when preparing cloud constants.
+Scene Manager discovers all six controls through the settings serializer and
+menu bindings. Scene overrides store the authoring fields under
+`PhysicalSky/cloudLayer/low`; location, interior and time-of-day policies allow
+them, and they support weather interpolation. Resolved authoring values are
+converted to shader coefficients when preparing cloud constants.
 
-Local NDF resources and placement use the complete states described in
-[weighted local states](local-ndf-transitions.md). Endpoint Interpolate and
-Maximum combine NDF controls before endpoint weights blend their results; they
-do not interpolate independent density models.
+Local NDF resource and placement transitions use the atomic state described in
+[scene transitions](local-ndf-transitions.md). Endpoint Interpolate and Maximum
+combine NDF controls before scene weights blend their results; they do not
+interpolate independent density models.
 
 ## Verification
 

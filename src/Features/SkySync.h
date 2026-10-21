@@ -87,7 +87,7 @@ public:
 
 	struct Sky_Update
 	{
-		static void thunk(RE::Sky* sky);
+		static void thunk(RE::Sky* sky, float deltaTime);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -106,6 +106,12 @@ public:
 	 * @return The unit direction, or straight up (0,0,1) if none is available.
 	 */
 	RE::NiPoint3 GetCelestialDirection(const RE::Sky* sky, Caster caster) const;
+
+	/**
+	 * @brief Moon selected by the "Moon light source" setting, when it is currently visible.
+	 * @return Caster::Masser or Caster::Secunda, or Caster::Zenith when the chosen moon is hidden or faded out.
+	 */
+	Caster GetMoonLightCaster(const RE::Sky* sky) const;
 
 private:
 	enum class CellFlagExt : uint16_t
@@ -164,7 +170,6 @@ private:
 	static constexpr float AlignmentFadeStartAngle = 2.0f;
 	static constexpr float AlignmentFadeEndAngle = 15.0f;
 	static constexpr float MaxHorizonFadeHours = 1.5f;
-	static constexpr float HoursPerTimingUnit = 1.0f / 6.0f;
 	static constexpr float DefaultSunAlphaTransTime = 2.0f;
 	static constexpr float AlternateSunHorizonOffsetHours = 0.25f;
 	static constexpr float MaxHorizonFadeElevation = 45.0f;
@@ -196,7 +201,7 @@ private:
 	float4 colors[BodyCount] = {};
 	RE::NiPoint3 rawDirections[BodyCount] = {};  // sky-local, before shadow elevation locking; zero when not computed this frame
 	float currentDim = 1.0f;
-	std::optional<std::array<RE::NiColor, 3>> lightColors = {};
+	std::optional<std::array<RE::NiColor, 3>> workingLightColors = {};
 	float moonlightFade = 0.0f;
 	float twilightCap = 0.0f;
 	float moonNightWeight = 0.0f;
@@ -244,9 +249,6 @@ private:
 
 	/** @brief Re-evaluates worldspaceDisabled; call whenever the current worldspace or the disabled list changes. */
 	void UpdateWorldspaceDisabled() { worldspaceDisabled = IsWorldspaceDisabled(currentCellWorldspace); }
-
-	/** @brief Midpoint hour of a climate sunrise or sunset interval, using the same float ops as Sun::Update. */
-	static float MiddleHour(const RE::TESClimate::Timing::Interval& interval);
 
 	/** @brief Hours at which the active sun path crosses the horizon, as { sunrise, sunset }. */
 	std::pair<float, float> GetSunHorizonHours(const RE::TESClimate::Timing& timing) const;

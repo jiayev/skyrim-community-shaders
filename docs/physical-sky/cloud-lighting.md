@@ -62,8 +62,9 @@ profile potential, light density and occlusion. Their full expressions are in
 
 ## Brightness controls and defaults
 
-All lighting controls are saved under `cloudLayer.lighting` in Physical Sky
-settings. The UI separates shared lighting from low-cloud profile scattering. `brightness` scales both layers; `lowBrightness` and
+All lighting controls live under `cloudLayer.lighting` and are numeric Scene
+Manager controls. The UI separates shared lighting from low-cloud profile
+scattering. `brightness` scales both layers; `lowBrightness` and
 `cirrusBrightness` are independent relative gains. Cirrus retains a fixed 0.5
 conversion before its sheet response. Exposure is applied by the existing
 rendering pipeline, not by these controls. Changing brightness does not alter
@@ -88,7 +89,7 @@ The controls have distinct contracts:
 -   Brightness corrections multiply the evaluated response. One preserves that
     response; it does not prove that an empirical response conserves energy.
 -   Phase intensities, phase G, attenuation and height powers, and ambient shaping
-    define the approximation. They remain editable in Physical Sky settings.
+    define the approximation. They remain editable and Scene Manager controlled.
 -   Fixed coefficients belonging to the response formula stay with that formula.
     They must not absorb weather settings or arbitrary exposure compensation.
 
@@ -200,7 +201,7 @@ quality. The local probes and empirical scattering approximation cannot provide
 a unique physically exact preset for every geometry and optical thickness.
 
 Existing configurations are not overwritten. **Reset Cloud Lighting** applies
-the full preset. Removed settings keys
+the full preset; scene overrides are edited separately. Removed settings keys
 are ignored. Density reconstruction is independent of lighting gains.
 
 ### Ambient and solar sources
@@ -289,7 +290,7 @@ changing UV size does not add view-ray steps or light samples. The
 sheet intersection is not clipped by the low-cloud march range, and cloud depth
 is stored in kilometres. Scene geometry and the planet can still occlude it;
 aerial perspective can reduce distant contrast. Height and the lighting controls are
-saved with Physical Sky settings.
+numeric Scene Manager controls.
 The old weather/cell/warp/wisp volume and its view-step budget are absent.
 Old `cloudLayer.high` saved settings are ignored; `cloudLayer.cirrus` loads its
 own defaults. See [cirrus inputs](volumetric-cloud-texture-resources.md#cirrus-inputs).
