@@ -181,7 +181,19 @@ struct NdfManager
 	void CompileShaders();
 	static const char* GetSettingsTypeName(const NdfSettings& settings);
 	static const char* GetSettingsHint(const NdfSettings& settings);
-	static void DrawNdfSettings(NdfSettings& settings, TextureManager& textures);
+
+	/// Global map source: procedural versus texture pair, plus the texture pair slots.
+	static void DrawNdfSource(NdfSettings& settings, TextureManager& textures);
+
+	/// Scene-authorable weather shape: coverage, types, heights and remap intervals.
+	static void DrawNdfShape(NdfGenerationParameters& parameters);
+
+	/// The repeating global overlay and the scene-authorable local influence weights.
+	static void DrawNdfOverlay(NdfSettings& settings, TextureManager& textures);
+
+	/// Global noise slots that feed the weather shape.
+	static void DrawNdfNoise(NdfSettings& settings, TextureManager& textures);
+
 	bool UpdateNdf(const NdfSettings& settings, TextureManager& textures);
 	NdfTextureSet GetNdf(const NdfSettings& settings, TextureManager& textures);
 
@@ -189,7 +201,8 @@ struct NdfManager
 	uint64_t GetRevision() const { return generatedRevision; }
 	float2 GetWeatherOffset() const { return generatedData.windOffset; }
 	float4 GetHeightAuxiliaryRange() const { return generatedData.heightAuxiliaryRange; }
-	void DrawPreview();
+	/// Channel picker plus a preview of the generated weather map. Debug and the Clouds page share it.
+	void DrawPreview(float a_size = 384.0f);
 
 	static bool IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels);
 	static bool IsLinearFormat(DXGI_FORMAT format, uint32_t channels);
@@ -226,7 +239,7 @@ struct LowCloudSettings
 	float bottomSoftness = 1.f;
 	float bottomSoftnessHeight = 0.68f;
 	float topExpansionScale = 1.f;
-	float densityScale = 0.125f;
+	float densityScale = 0.75f;
 
 	float2 GetNdfAltitudeRangeKm() const;
 	float GetCurvatureRadiusKm() const;
@@ -275,22 +288,18 @@ struct CirrusSettings
 struct CloudLightingSettings
 {
 	float brightness = 1.f;
-	float lowBrightness = 1.f;
-	float cirrusBrightness = 1.f;
 	float sunExtinction = 1.f;
-	float phasePrimaryG = 0.2f;
-	float phaseSecondaryG = 0.9f;
-	float phasePrimaryIntensity = 0.142f;
-	float phaseSecondaryIntensity = 0.125f;
-	float scatterVolumeStrength = 0.5f;
-	float scatterVolumeDepthPower = 0.05f;
-	float scatterVolumeHeightPower = 0.5f;
-	float softScatteringStrength = 1.f;
-	float powderStrength = 0.5f;
+	float viewExtinction = 1.f;
+	float dropletDiameter = 20.f;
+	float phaseForwardG = 0.85f;
+	float phaseBackwardG = -0.3f;
+	float msStrength = 1.f;
+	float msAlbedo = 0.999f;
+	float msBoundaryWidth = 100.f;
 	float ambientStrength = 1.f;
-	float ambientFloor = 0.1f;
-	float ambientProfilePower = 4.1f;
-	float ambientBase = 1.f;
+	float scatterDensityThreshold = 0.001f;
+	float scatterDensityPower = 1.f;
+	float cirrusLightThickness = 200.f;
 };
 
 struct CloudWindSettings
@@ -323,7 +332,7 @@ struct CirrusMapManager
 	void SetupResources();
 	void CompileShaders();
 	bool ShadersReady(const CirrusSettings& settings) const;
-	static void DrawSettings(CirrusSettings& settings, TextureManager& textures);
+	static void DrawSettings(CirrusSettings& settings, CloudLightingSettings& lighting, TextureManager& textures);
 	bool Update(const CirrusSettings& settings, TextureManager& textures, const NdfManager& ndf);
 	CirrusTextureSet GetTextures() const;
 

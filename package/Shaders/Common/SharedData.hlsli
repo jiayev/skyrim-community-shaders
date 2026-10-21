@@ -406,6 +406,26 @@ namespace SharedData
 		uint pad0;
 	};
 
+	struct ViewAtmosphereSettings
+	{
+		uint enabled;
+		uint nearPixelSize;
+		uint nearSlices;
+		uint middlePixelSize;
+		uint middleSlices;
+		uint distantPixelSize;
+		uint distantSlices;
+		uint historyMissSamples;
+		float nearRange;
+		float localRange;
+		float historyWeight;
+		float sampleJitter;
+		float shadowBias;
+		float depthDistribution;
+		float lookupJitter;
+		float padding;
+	};
+
 	struct ExponentialHeightFogSettings
 	{
 		uint enabled;
@@ -428,26 +448,14 @@ namespace SharedData
 		float4 fogInscatteringColor;
 		float originalFogColorAmount;
 		uint volumetricFogEnabled;
-		uint volumetricGridPixelSize;
-		uint volumetricGridSizeZ;
-		float volumetricFogDistance;
 		float volumetricFogStartDistance;
 		float volumetricFogNearFadeInDistance;
-		float volumetricFogExtinctionScale;
 		float4 volumetricFogAlbedo;
 		float4 volumetricFogEmissive;
 		float volumetricDirectionalScatteringIntensity;
-		float volumetricShadowBias;
-		float volumetricDepthDistributionScale;
 		float volumetricSkyLightingIntensity;
 		float volumetricFogScatteringDistribution;
-		float volumetricHistoryWeight;
-		uint volumetricHistoryMissSampleCount;
-		float volumetricSampleJitterMultiplier;
-		float volumetricUpsampleJitterMultiplier;
-		float volumetricNearGridDistance;
-		uint volumetricFarGridPixelSize;
-		uint volumetricFarGridSizeZ;
+		float volumetricFogExtinctionScale;
 		float volumetricLocalLightScatteringIntensity;
 		float volumetricFogNoiseScale;
 		float volumetricFogNoiseThreshold;
@@ -624,6 +632,7 @@ namespace SharedData
 		PhysSkyData physSkyData;
 		PseudoSunBounceSettings pseudoSunBounceSettings;
 		RainRefractionSettings rainRefractionSettings;
+		ViewAtmosphereSettings viewAtmosphereSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

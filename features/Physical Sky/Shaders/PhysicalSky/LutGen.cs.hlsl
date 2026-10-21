@@ -8,6 +8,11 @@
 #define PS_PREPASS_SAMPLERS
 #define PS_PREPASS_RSRCS
 #define OMIT_PS_NAMESPACE
+#ifdef SKY_TAIL
+#	define PS_ENABLE_DIRLIGHT_TRANSMITTANCE
+#	define PS_LINEAR_SHADOW_SAMPLER
+Texture3D<float> TexShadowVolume : register(t112);
+#endif
 #include "PhysicalSky/Common.hlsli"
 
 #if LUTGEN == 3
@@ -83,6 +88,12 @@ void rayMarch(
 	float tMax = hitGround ? tGround : tAtmos;
 #endif
 #if LUTGEN != 3 && LUTGEN != 0
+#	ifdef SKY_TAIL
+	if (tMax <= AP_MAX_DIST)
+		return;
+	pos += rayDir * AP_MAX_DIST;
+	tMax -= AP_MAX_DIST;
+#	endif
 	float dt = tMax / float(nsteps);
 	float3 stride = dt * rayDir;
 #endif
@@ -174,6 +185,11 @@ void rayMarch(
 		inscatter += scatterNoPhase * psiMs;
 #	endif
 
+#	ifdef SKY_TAIL
+		const float3 cloudPosition = curr_pos - float3(0, 0, max(data.zCameraPlanet, data.rPlanet)) +
+		                             FrameBuffer::CameraPosAdjust.xyz;
+		inscatter *= GetDirlightTransmittance(cloudPosition, SampTr);
+#	endif
 		float3 scatterIntegeral = inscatter * scatterFactor;
 
 		lum += scatterIntegeral * tr;

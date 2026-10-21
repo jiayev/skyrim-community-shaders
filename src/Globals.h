@@ -33,6 +33,7 @@ struct TerrainShadows;
 struct UnifiedWater;
 struct VanillaFresnel;
 struct VolumetricLighting;
+class ViewAtmosphere;
 struct WaterEffects;
 struct PerformanceOverlay;
 struct WetnessEffects;
@@ -130,6 +131,7 @@ namespace globals
 		extern UnifiedWater unifiedWater;
 		extern VanillaFresnel vanillaFresnel;
 		extern VolumetricLighting volumetricLighting;
+		extern ViewAtmosphere viewAtmosphere;
 		extern WaterEffects waterEffects;
 		extern PerformanceOverlay performanceOverlay;
 		extern WetnessEffects wetnessEffects;

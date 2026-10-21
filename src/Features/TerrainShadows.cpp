@@ -15,6 +15,15 @@
 
 namespace
 {
+	RE::TESWorldSpace* GetTerrainWorldspace()
+	{
+		auto* tes = RE::TES::GetSingleton();
+		auto* worldspace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
+		while (worldspace && worldspace->parentWorld && worldspace->parentUseFlags.any(RE::TESWorldSpace::ParentUseFlag::kUseLandData))
+			worldspace = worldspace->parentWorld;
+		return worldspace;
+	}
+
 	void RequestTimeJumpSynchronization()
 	{
 		Util::RequestTimeJumpTransition();
@@ -331,10 +340,14 @@ void TerrainShadows::CompileComputeShaders()
 
 bool TerrainShadows::IsHeightMapReady()
 {
-	if (auto tes = RE::TES::GetSingleton())
-		if (auto worldspace = tes->GetRuntimeData2().worldSpace)
-			return cachedHeightmap && cachedHeightmap->worldspace == worldspace->GetFormEditorID();
+	if (auto* worldspace = GetTerrainWorldspace())
+		return texHeightMap && cachedHeightmap && cachedHeightmap->worldspace == worldspace->GetFormEditorID();
 	return false;
+}
+
+bool TerrainShadows::IsShadowMapReady()
+{
+	return loaded && settings.EnableTerrainShadow && IsHeightMapReady() && texShadowHeight && !needPrecompute;
 }
 
 TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
@@ -342,7 +355,7 @@ TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
 	bool isHeightmapReady = IsHeightMapReady();
 
 	PerFrame data = {
-		.EnableTerrainShadow = settings.EnableTerrainShadow && isHeightmapReady,
+		.EnableTerrainShadow = IsShadowMapReady(),
 	};
 
 	if (isHeightmapReady) {
@@ -363,13 +376,7 @@ TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
 
 void TerrainShadows::LoadHeightmap()
 {
-	auto tes = globals::game::tes;
-	if (!tes)
-		return;
-
-	auto worldspace = tes->GetRuntimeData2().worldSpace;
-	while (worldspace && worldspace->parentWorld && worldspace->parentUseFlags.any(RE::TESWorldSpace::ParentUseFlag::kUseLandData))
-		worldspace = worldspace->parentWorld;
+	auto* worldspace = GetTerrainWorldspace();
 
 	if (!worldspace)
 		return;

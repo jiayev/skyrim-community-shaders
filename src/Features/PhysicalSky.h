@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/TexturePreview.h"
+
 #include "PhysicalSky/Aerosol.h"
 #include "PhysicalSky/CloudNoiseGenerator.h"
 #include "PhysicalSky/LocalNdf.h"
@@ -49,6 +51,15 @@ struct PhysicalSky final : public Feature
 	void SettingsAtmosphere();
 	void SettingsClouds();
 	void SettingsVolumetricClouds();
+	void DrawCloudStatus();
+	void DrawCloudLayerProfile();
+	void DrawWeatherMapSection();
+	void DrawLowCloudSection();
+	void DrawCloudMotionSection();
+	void DrawCloudLightingSection();
+	void DrawCirrusSection();
+	void DrawCloudQualitySection();
+	void DrawVanillaCloudSection();
 	void SettingsDebug();
 
 	// Resources
@@ -231,6 +242,7 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texTrLut = nullptr;  // transmittance
 	eastl::unique_ptr<Texture2D> texMsLut = nullptr;  // multiscattering
 	eastl::unique_ptr<Texture2D> texSvLut = nullptr;  // sky view
+	eastl::unique_ptr<Texture2D> texSkyTail = nullptr;
 	eastl::unique_ptr<Texture3D> texApLut = nullptr;
 	eastl::unique_ptr<Texture2D> texApShadow = nullptr;
 
@@ -295,25 +307,7 @@ struct PhysicalSky final : public Feature
 	ankerl::unordered_dense::map<ID3D11Resource*, winrt::com_ptr<ID3D11ShaderResourceView>> debugCubeFaceSrvs;
 	int32_t debugCubeFace = 0;
 	eastl::unique_ptr<Texture2D> debugApSlice = nullptr;
-	eastl::unique_ptr<Texture2D> debugShadowVolumeSlice = nullptr;
-	struct CloudDebugView
-	{
-		eastl::unique_ptr<Texture2D> texture;
-		int mip = 0;
-		int slice = 0;
-		int channel = 0;
-		float2 range = { 0.f, 1.f };
-	};
-	struct CloudDebugParameters
-	{
-		uint32_t mip, slice, channel, volume;
-		float2 range;
-		float2 padding = {};
-	};
-	static_assert(sizeof(CloudDebugParameters) == 32);
-	ankerl::unordered_dense::map<std::string, CloudDebugView> cloudDebugViews;
-	eastl::unique_ptr<ConstantBuffer> cloudDebugCb;
-	winrt::com_ptr<ID3D11ComputeShader> csCloudDebug;
+	TexturePreview texturePreview;
 	void DrawDebugCloudTexture(ID3D11ShaderResourceView* srv, const char* id, const char* label, float scale, bool scalar = false);
 	ID3D11ShaderResourceView* GetDebugCubeFaceSrv(Texture2D* a_texture);
 	ID3D11ShaderResourceView* GetDebugVolumeSliceSrv(ID3D11ShaderResourceView* a_srv, eastl::unique_ptr<Texture2D>& a_target);
@@ -334,6 +328,8 @@ struct PhysicalSky final : public Feature
 	LocalNdfManager localNdfManager;
 	CirrusMapManager cirrusMapManager;
 
+	static constexpr uint32_t kCloudMsCalibrationSize = 49;
+
 	// Volumetric cloud constants (compute-only)
 	struct VolumetricCloudCB
 	{
@@ -341,85 +337,119 @@ struct PhysicalSky final : public Feature
 		float shadowVolumeRange;
 		float marchStepScale;
 		uint cloudFrameIndex;
+
 		float2 rcpFrameDim;
-		uint pad0[2] = {};
+		float2 activeFrameDim;
+		float2 lowFrameDim;
+		float2 previousFrameDim;
+
 		float3 dirlightDir;
 		float bottomZ;
+		float3 previousCamera;
 		float planetRadius;
-		float2 activeFrameDim;
 
 		float lowestCloudAltitude;
 		float highestCloudAltitude;
 		float lowCloudBaseAltitude;
 		float lowCloudTopAltitude;
+
+		float lowCloudTraceBottomAltitude;
 		float lowCloudTraceTopAltitude;
+		float cloudCurvatureRadius;
+		float cloudEvolutionDelta;
+
+		float shadowVolumeBottom;
+		float shadowVolumeTop;
+		uint historyValid;
+		uint cirrusEnabled;
 
 		float2 lowNdfFrequency;
 		float2 noiseWindOffset;
+		float2 cloudWindDelta;
+		float2 cloudShapeShear;
+		float2 previousShapeShear;
+		float2 cirrusWindOffset;
+
+		float2 cirrusWindDelta;
+		float cirrusAltitude;
+		float cirrusUvInvSize;
+
+		float cirrusDensityScale;
+		float cirrusLightThickness;
+		float phaseForwardG;
+		float phaseBackwardG;
+
 		float lowDensityScale;
 		float coverageBottomPower;
 		float coverageHeightRange;
 		float bottomDensityPower;
+
 		float bottomDensityWidth;
 		float topExpansion;
-		uint cirrusEnabled;
-		float cirrusAltitude;
-		float cirrusUvInvSize;
-		float cirrusDensityScale;
-		float cirrusLightingScale;
-		float lowLightingScale;
-		float sunExtinction;
-		float phasePrimaryG;
-		float phaseSecondaryG;
-		float phasePrimaryIntensity;
-		float phaseSecondaryIntensity;
-		float scatterVolumeStrength;
-		float scatterVolumeDepthPower;
-		float scatterVolumeHeightPower;
-		float softScatteringStrength;
-		float powderStrength;
-		float ambientStrength;
-		float ambientFloor;
-		float ambientProfilePower;
-		float ambientBase;
+		float scatterDensityThreshold;
+		float scatterDensityPower;
 
-		float2 lowFrameDim;
-		uint historyValid;
-		float shadowVolumeBottom;
-		float shadowVolumeTop;
-		uint pad1 = 0;
-		float2 cloudWindDelta;
-		float2 cloudShapeShear;
-		float4x4 previousViewProj;
-		float3 previousCamera;
-		uint pad2 = 0;
-		float2 previousFrameDim;
-		uint pad3[2] = {};
-		float4 ndfBoundaryRect;
-		float2 cirrusWindOffset;
-		float2 cirrusWindDelta;
-		float2 previousShapeShear;
-		uint pad4[2] = {};
+		float cloudLightingScale;
+		float sunExtinction;
+		float viewExtinction;
+		float ambientStrength;
+
+		float msAlbedo;
+		float msStrength;
+		float msBoundaryWidth;
+		float msTransportExtinction;
+
 		float4 cloudEvolution;
-		float cloudEvolutionDelta;
-		uint pad5[3] = {};
+		float4x4 previousViewProj;
+
+		float4 ndfBoundaryRect;
 		float4 localNdfRect;
 		float4 localNdfAltitude;
 		float4 localNdfAuxiliary;
-		float cloudCurvatureRadius;
-		float lowCloudTraceBottomAltitude;
-		uint pad6[2] = {};
+		float4 lowCloudPhase;
+		std::array<float4, kCloudMsCalibrationSize> msCalibration;
 	};
-	static_assert(sizeof(VolumetricCloudCB) == 480);
-	static_assert(offsetof(VolumetricCloudCB, dirlightDir) == 32);
-	static_assert(offsetof(VolumetricCloudCB, previousViewProj) == 240);
-	static_assert(offsetof(VolumetricCloudCB, localNdfRect) == 416);
-	static_assert(offsetof(VolumetricCloudCB, cloudCurvatureRadius) == 464);
+	static_assert(sizeof(VolumetricCloudCB) == 1216);
+	static_assert(offsetof(VolumetricCloudCB, dirlightDir) == 48);
+	static_assert(offsetof(VolumetricCloudCB, previousCamera) == 64);
+	static_assert(offsetof(VolumetricCloudCB, lowNdfFrequency) == 128);
+	static_assert(offsetof(VolumetricCloudCB, cirrusWindDelta) == 176);
+	static_assert(offsetof(VolumetricCloudCB, cloudLightingScale) == 240);
+	static_assert(offsetof(VolumetricCloudCB, cloudEvolution) == 272);
+	static_assert(offsetof(VolumetricCloudCB, previousViewProj) == 288);
+	static_assert(offsetof(VolumetricCloudCB, localNdfRect) == 368);
+	static_assert(offsetof(VolumetricCloudCB, lowCloudPhase) == 416);
+	static_assert(offsetof(VolumetricCloudCB, msCalibration) == 432);
 	eastl::unique_ptr<ConstantBuffer> volCloudCb = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
+	eastl::unique_ptr<Texture2D> texCloudAmbientLighting = nullptr;
+	static constexpr uint32_t kCloudAmbientVolumeWidth = 32;
+	static constexpr uint32_t kCloudAmbientVolumeDepth = 16;
+	static constexpr uint32_t kCloudAmbientCascadeCount = 4;
+	eastl::unique_ptr<Texture3D> texCloudAmbientDensity;
+	std::array<std::array<eastl::unique_ptr<Texture3D>, 2>, kCloudAmbientCascadeCount> texCloudAmbientSource;
+	std::array<eastl::unique_ptr<Texture3D>, kCloudAmbientCascadeCount> texCloudAmbientView;
+	eastl::unique_ptr<Texture3D> texCloudAmbientSweep;
+	std::array<eastl::unique_ptr<Texture2D>, 2> texCloudAmbientLayout;
+	eastl::unique_ptr<Texture2D> texCloudAmbientBoundary;
+	std::array<uint32_t, kCloudAmbientCascadeCount> cloudAmbientIterations = {};
+	bool cloudAmbientValid = false;
+	std::string cloudAmbientWorldspace;
+	uint32_t cloudAmbientUpdateIndex = 0;
+	struct CloudAmbientVolumeCB
+	{
+		float4 phase;
+		uint32_t cascade;
+		uint32_t width;
+		uint32_t reset;
+		uint32_t iterations;
+	};
+	static_assert(sizeof(CloudAmbientVolumeCB) == 32);
+	eastl::unique_ptr<ConstantBuffer> cloudAmbientVolumeCB = nullptr;
 	uint32_t volFrameIndex = 0;
 	bool volMainHistoryValid = false;
+	bool volHistoryUnifiedMedium = false;
 	float2 volHistoryFrameDim = {};
 	float volHistoryCurvatureRadius = 0.f;
 	struct CloudWindState
@@ -436,6 +466,24 @@ struct PhysicalSky final : public Feature
 	float3 volHistoryCamera = {};
 	std::string volCloudSettingsKey;
 
+	// Static low-cloud cross-section shown on the Clouds page.
+	static constexpr uint32_t kCloudCrossSectionW = 512;
+	static constexpr uint32_t kCloudCrossSectionH = 160;
+	eastl::unique_ptr<Texture2D> texCloudCrossSection = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudCrossSection = nullptr;
+	eastl::unique_ptr<ConstantBuffer> cloudCrossSectionCB = nullptr;
+	bool cloudCrossSectionDirty = true;
+	bool cloudCrossSectionReady = false;
+	float2 cloudCrossSectionCamera = {};
+	struct alignas(16) CloudCrossSectionCB
+	{
+		float4 field;       // frequency X/Y, base altitude (m), top altitude (m)
+		float4 cameraSpan;  // camera X/Y (m), NDF span X/Y (m)
+		float4 shape;       // bottom spread, spread height, softness, softness height
+		float4 shape2;      // top expansion, density scale, unused, unused
+	};
+	static_assert(sizeof(CloudCrossSectionCB) == 64);
+
 	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolFilter = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
@@ -444,6 +492,14 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowResample = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientLighting = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientDensity = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientBoundary = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientSweep = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientSweepFar = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientProject = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientLayout = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientView = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csCloudHeightBounds = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csCloudHeightBoundsReduce = nullptr;
 
@@ -461,6 +517,9 @@ struct PhysicalSky final : public Feature
 	void LoadCloudTextures();
 	void UpdateCloudWind();
 	void RenderVolumetricClouds(VolumetricCloudPass a_pass);
+	/// Rebuilds the low-cloud slab preview used by DrawCloudLayerProfile().
+	void RenderCloudCrossSection();
+	void GenerateSkyTail();
 
 	winrt::com_ptr<ID3D11SamplerState> sampTr = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> sampSv = nullptr;
@@ -469,6 +528,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csTrLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csMsLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csSvLutGen = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csSkyTailGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csApLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csShadowAccum = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csShadowAccumHalfRes = nullptr;

@@ -38,7 +38,7 @@ namespace ExponentialHeightFog
 	{
 		return SharedData::exponentialHeightFogSettings.enabled != 0 &&
 		       SharedData::exponentialHeightFogSettings.volumetricFogEnabled != 0 &&
-		       SharedData::exponentialHeightFogSettings.volumetricFogDistance > SharedData::exponentialHeightFogSettings.volumetricFogStartDistance + 1.0f;
+		       SharedData::viewAtmosphereSettings.localRange > SharedData::exponentialHeightFogSettings.volumetricFogStartDistance + 1.0f;
 	}
 
 	float GetSceneDepthFromClip(float4 clipPosition)
@@ -157,13 +157,13 @@ namespace ExponentialHeightFog
 		// scaling. Normalize by the full buffer so this matches the UV space used to build
 		// the froxel volume and its conservative depth.
 		float2 volumeUV = screenPosition.xy * SharedData::BufferDim.zw;
-		[branch] if (SharedData::exponentialHeightFogSettings.volumetricUpsampleJitterMultiplier > 0.0f)
+		[branch] if (SharedData::viewAtmosphereSettings.lookupJitter > 0.0f)
 		{
 			float2 noise = float2(
 				Random::InterleavedGradientNoise(screenPosition.xy, SharedData::FrameCount),
 				Random::InterleavedGradientNoise(screenPosition.yx + 19.19f, SharedData::FrameCount));
 			volumeUV += (noise * 2.0f - 1.0f) *
-			            SharedData::exponentialHeightFogSettings.volumetricUpsampleJitterMultiplier / volumeSize;
+			            SharedData::viewAtmosphereSettings.lookupJitter / volumeSize;
 		}
 
 		float4 volumetricFog = SampleVolumetricFogPair(volumeUV, sceneDepth);

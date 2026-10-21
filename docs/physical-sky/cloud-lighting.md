@@ -204,43 +204,182 @@ Existing configurations are not overwritten. **Reset Cloud Lighting** applies
 the full preset; scene overrides are edited separately. Removed settings keys
 are ignored. Density reconstruction is independent of lighting gains.
 
-### Ambient and solar sources
+### Directional ambient transport
 
-Ambient response uses height, coverage/type product, broad solar transmission
-`exp(-0.03*q)`, and empty-profile fraction `(1-e)`. Its controls are
-`ambientBase`, `ambientProfilePower`, `ambientFloor` and `ambientStrength`.
+Low-cloud ambient illumination solves a directional radiance field. Solar single
+scattering and local multiple scattering remain separate. `ambientStrength`
+scales the ambient result once; albedo and droplet size define its medium response.
+Cirrus retains its thin-layer lighting.
 
-It multiplies a per-sample ambient radiance. The atmospheric probe holds the sky
-hemisphere's average radiance, reconstructed at the layer centre altitude; the
-planet-facing half is filled in from the ground's reflected skylight,
-`groundAlbedo * skyRadiance`, attenuated by the vertical air column between the
-ground and the sample. The two halves are weighted by the planet's angular
-radius at the sample, so their weights sum to one and the ground term fades with
-altitude. Sampling is per view step, so a base under a low deck and a high sheet
-see different ambient. Neither the ground's direct solar reflection nor its own
-shadowing is modelled; the profile-density and occlusion shaping above
-suppresses the ambient in dense regions instead. The ground column costs one
-extra transmittance lookup per lit step. Atmospheric solar transmission
-multiplies the solar source; aerial perspective is applied after view integration.
+The phase function is decomposed as `p = f delta + (1-f) p_r`. Using the first two
+Legendre moments of the water-droplet phase, the positive second-order residual is
 
-Solar colour uses the top-of-atmosphere irradiance and per-position atmospheric
-transmittance. Planet visibility is evaluated against each position's local
-horizon and a finite solar disc, so elevated clouds can remain sunlit after
-lower clouds enter the planet shadow. Sun/moon source selection retains the
-astronomical sun while any part of the visible cloud region can receive it.
-Ground-level sunset fading is not applied to the solar source. Spatial RGB
-variation therefore comes from the atmosphere and geometry, not a uniform
-sunset colour multiplier.
+```text
+f = beta1^2
+K = 1 - albedo f
+sigma_t' = K sigma_t
+albedo' = albedo (1-f) / K
+4 pi p_r(mu) = 1 + 3 a mu + 5 b P2(mu)
+a = (beta1-f)/(1-f)
+b = (beta2-f)/(1-f)
+```
 
-The low-cloud density query uses the regular profile shape volume, dimensional
-profile mip selection, and base density response described in the
-[noise contract](noise-contract.md). The voxel threshold reducer is not used.
+The host computes the two moments analytically from the HG/Draine mixture. A
+positive first-order residual is used if the quadratic fails its positivity
+check. Absorption remains `sigma_t (1-albedo)`. Source moments use an orthonormal
+real basis for `dOmega/(4 pi)` and store `Q_k = sqrt(beta_k,r) <Y_k I>`.
+The directional source is `sum sqrt(beta_k,r) Y_k(d) Q_k`.
 
-Old top/bottom ambient multipliers, upward AO, separate high-cloud phase/MS
-controls, high sky blending, tinted extinction, and secondary-phase scaling are
-absent from settings, serialization and shaders. Obsolete saved keys are ignored;
-new response controls load their defaults. Cloud-ground shadow shared-buffer
-fields retain their existing ABI but carry the scalar solar extinction scale.
+The boundary environment samples Physical Sky at five altitudes and 512 angular
+positions. Ground radiance uses the reflection bottom-face average transported
+through the atmosphere, with the existing DALC fallback. Sky and ground enter
+the same transport equation. The dominant sky bright band is estimated after
+subtracting each elevation ring's azimuthal mean luminance. A 26-point Lebedev
+quadrature rotates to this axis. Its weights remain unchanged. Each environment
+sample is mapped into the quadrature's cube frame and distributed over a
+face-center, edge, and corner triangle. Nonnegative barycentric weights sum to
+one and agree across triangle and cube-face boundaries. Directional averages
+use these weights with the sample solid angle; RGB normalization preserves the
+full-sphere mean. The lighting and boundary tables use FP32 to retain smooth
+changes in the bright-band axis and boundary radiance.
+
+### Grid transport and iteration
+
+Four grids cover widths of 4, 16, 64, and 256 km. The near grid is 32x32x16; the
+others are 16x16x8. Height follows the NDF height bounds with a 64 m total halo;
+XY and Z origins snap to cell boundaries. Density generation uses four fixed,
+vertically clipped cell quadrature points. It stores extinction in inverse metres,
+including view extinction and `K`. Density is not blurred for light propagation.
+
+For each selected direction, a group sweeps one sheared lattice ray. Every cell
+provides an affine radiance interval `(emission, transmission)`. Parallel prefix
+composition carries these intervals across the whole grid in five stages or
+fewer. The result at each cell centre uses a half-cell interval. All 26 directions run in one dispatch, using separate depth slabs in the interval
+atlas. A second pass interpolates their results at regular cell centres and
+accumulates nine RGB moments in registers before writing each moment once. The
+26 directions form one complete source iteration.
+
+One cascade updates per rendered frame, following `0,1,0,2,0,3`. Each update uses
+all 26 directions; it does not select spatial blocks or random directions. All
+four view-source grids resolve every frame. Each field retains its lattice,
+curvature anchor, wind offset, and phase parameters. Reads reproject translation
+by the accumulated wind offset and rescale the stored basis when phase moments
+change. Cloud evolution and spatially varying wind are followed through subsequent
+density updates rather than an exact deformation map.
+
+The solver uses source iteration with a persistent initial guess, not the offline
+per-voxel 9x9 inverse. Reset and uncovered regions use the external environment's
+phase-convolved source. Resource or shader reloads, worldspace or altitude-origin
+changes, and disabling ambient lighting invalidate the layouts. Screen-space
+history resets and weather-map updates retain the transport field as the initial
+guess for the updated density and illumination. Initial iterations and rapidly
+changing weather have a transient response. Convergence under motion must be
+checked in the game; the offline 32-iteration results are not runtime acceptance
+measurements.
+
+Cascade reads blend source values over the outer three XY cells. Vertical reads
+retain the source through the entire stored layer. Missing coverage falls back
+to the same boundary source, preserving a constant, non-absorbing illumination
+field. At long distances the field is a coarse representation of cloud geometry;
+profile-altitude transport also approximates curvature within a grid.
+
+### View integration
+
+The main view and cloud cubemap share an observation point. A resolve pass
+contracts each grid's nine moments against the direction from that point to the
+voxel. The primary march then usually performs one trilinear RGB source lookup;
+cascade overlaps use two. The observation-dependent cache is rebuilt each frame,
+so turning the camera does not reuse an old directional convolution.
+
+Ambient radiance integrates against its own delta-scaled transmittance `T'`, using
+`albedo' (1-exp(-K sigma_t ds)) S_r`. The difference `(T'-T) L_boundary` accounts
+for the collapsed forward peak while output opacity uses the original medium.
+The original density function, step selection and solar-light sampling remain in
+use. A ray continues while either solar/view or ambient transmittance exceeds the
+termination threshold; dense clouds can consequently need more density steps.
+Cirrus sheet transmission attenuates both paths. Aerial perspective is applied
+to their combined cloud radiance.
+
+A sheet behind low clouds is part of the incident background. Its premultiplied
+radiance `C` contributes `T C + g (T' - T) C`, where
+`g = ambientStrength * cloudLightingScale` is the forward-boundary gain. The sheet
+then multiplies both transmittances by its own transmission. The sheet remains
+eligible for integration while either active path exceeds the termination
+threshold. With unit gain, the result is `T' (C + T_sheet L_boundary)` plus
+the low-cloud scattering source, preserving the order of the two layers.
+
+The termination remap `T_out = saturate((T - 0.1) / 0.9)` keeps radiance
+premultiplied by the same output opacity. Before aerial perspective, cloud radiance
+is multiplied by `(1 - T_out) / (1 - T)`, evaluated as
+`1 / (1 - min(T, 0.1))` to retain a finite empty-ray limit. A constant source
+matching the background therefore remains constant through the silhouette.
+
+### Resources and cost
+
+| Resource                                          | Format / storage   |           Size |
+| ------------------------------------------------- | ------------------ | -------------: |
+| Four source fields, double buffered, nine moments | RGBA16F 3D atlases |       3.09 MiB |
+| Four view-source fields                           | RGBA16F            |       0.17 MiB |
+| Batched sheared intervals, 26 directions          | 64x64x832 RGBA16F  |      26.00 MiB |
+| Shared extinction scratch                         | 32x32x16 R16F      |       0.03 MiB |
+| Boundary environment and grid metadata            | RGBA32F 2D tables  | about 0.06 MiB |
+
+The ambient resources total about **29.3 MiB**. Each direction occupies 32 slices
+of the interval atlas. Integer major-axis coordinates keep interpolation within
+that direction's slab. Moment atlases clamp trilinear Z coordinates to each
+moment's own slices. Projection uses local RGB accumulators; it does not require
+an intermediate structured moment buffer or typed UAV loads.
+
+Per frame: one environment pass, one boundary projection, one density pass,
+one batched sweep, one fused projection, one layout update, and one batched view resolve:
+7 compute dispatches, in addition to the existing ground/sky input preparation.
+The boundary pass computes three continuous direction weights for each of 512
+samples once per altitude, then reduces bin colors and projects the moments.
+Far-grid updates process one eighth of the near-grid cells. Rays whose sheared
+footprint misses the volume skip the prefix scan.
+
+Runtime feedback on 2026-10-21 reported approximately **7 ms** for the preceding
+96x96x48 sequential-direction transport. Its near-grid accumulator issued about
+2.42 GB of logical reads/writes, with another 0.74 GB of interval writes. The
+current near-grid batched interval writes and fused projection total about
+31.9 MB. These are shader-level traffic counts, not measured DRAM traffic or
+predicted GPU milliseconds; they exclude source texture sampling and input
+preparation.
+
+The initial target was **under 0.1 ms per frame** for the added ambient path.
+On 2026-10-21, the user reported **0.139 ms** and accepted the optimized version.
+The subsequent continuous boundary-weight correction retains seven dispatches
+and the same volume dimensions; its timing still requires runtime measurement.
+Input preparation, transport, view resolves, and additional primary-march work
+must all be accounted for. `PhysicalSky::CloudAmbientTransport` identifies the
+transport section. Ambient Response Strength zero skips transport and view
+resolves. No weather parameters or CB padding fields are added; the transport
+CB is two 16-byte registers.
+
+The smaller-grid version has passed the user's performance acceptance.
+Offline checks distinguish filtering a converged high-resolution field from
+solving directly on the coarse grid. CPU reproduction of the sheared coordinates,
+half-cell integration, and inverse-shear interpolation preserves constant colored
+illumination to 1.2e-7 for both grid widths and all six major-axis orientations.
+Under two concentrated sunset environments, the converged coarse solver has
+8.7% aggregate RGB L1 error for the upper cloud view and 16.2% for the thick
+underside view against the accepted high-resolution field. The underside mean
+is 8–16% brighter by channel. The comparison retains the reflected surface
+variation and silver edges, with smoother small-scale response. These are
+floating-point CPU comparisons; they exclude FP16 storage and cascade motion.
+Reflection, silver edges, thin clouds,
+concentrated sunset illumination, wind, cascade crossings, and cold-start
+convergence remain part of visual acceptance. GPU timing and in-game visual
+acceptance are performed by the user.
+
+A moving concentrated-sunset CPU check advances the light by 0.005 degrees per
+frame. The nearest-bin boundary has a maximum directional RGB step of 0.02255,
+which remains 0.02255 when the angular increment is halved. Continuous weights
+reduce it to 0.00005956 and 0.00002978 respectively. The largest moment step falls
+from 0.002151 to 0.00001060. These absolute values use the synthetic environment's
+radiance units. Constant RGB illumination and full-sphere RGB mean are preserved
+to floating-point precision. This isolates angular reassignment; it does not
+measure in-game flicker or GPU time.
 
 ## Height contract
 

@@ -1,4 +1,5 @@
 #include "Deferred.h"
+#include "Features/ViewAtmosphere.h"
 
 #include <DDSTextureLoader.h>
 
@@ -206,6 +207,7 @@ void Deferred::ReflectionsPrepasses()
 	auto state = globals::state;
 
 	state->activeReflections = true;
+	globals::features::viewAtmosphere.Unbind();
 	state->UpdateSharedData(false, false);
 
 	auto context = globals::d3d::context;
@@ -254,7 +256,9 @@ void Deferred::PrepassPasses()
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
+	globals::features::viewAtmosphere.Prepare();
 	Feature::ForEachLoadedFeature("Prepass", [](Feature* feature) { feature->Prepass(); }, true);
+	globals::features::viewAtmosphere.Render();
 }
 
 void Deferred::StartDeferred()
@@ -409,6 +413,7 @@ void Deferred::DeferredPasses()
 		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+		globals::features::viewAtmosphere.Bind(true);
 
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -603,6 +608,7 @@ void Deferred::CopyShadowLightData()
 {
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "CopyShadowLightData");
+	directionalShadowDataFrame = UINT32_MAX;
 
 	auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0];
 	if (!shadowSceneNode)
@@ -625,15 +631,43 @@ void Deferred::CopyShadowLightData()
 	DX::ThrowIfFailed(context->Map(directionalShadowLights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 	memcpy(mapped.pData, &dd, sizeof(DirectionalShadowLightData));
 	context->Unmap(directionalShadowLights->resource.get(), 0);
+	directionalShadowDataFrame = globals::state->frameCount;
 
 	ID3D11ShaderResourceView* srv = directionalShadowLights->srv.get();
 	context->PSSetShaderResources(98, 1, &srv);
 }
 
+void Deferred::CaptureDirectionalShadowMap()
+{
+	directionalShadowMap = nullptr;
+	directionalShadowMapFrame = UINT32_MAX;
+	if (!globals::state->HasDirectionalShadows())
+		return;
+
+	winrt::com_ptr<ID3D11ShaderResourceView> shadowMap;
+	globals::d3d::context->PSGetShaderResources(4, 1, shadowMap.put());
+	if (!shadowMap)
+		return;
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+	shadowMap->GetDesc(&desc);
+	if (desc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2DARRAY || desc.Texture2DArray.ArraySize < 2)
+		return;
+
+	directionalShadowMap = std::move(shadowMap);
+	directionalShadowMapFrame = globals::state->frameCount;
+}
+
+ID3D11ShaderResourceView* Deferred::GetDirectionalShadowMap() const
+{
+	const auto frame = globals::state->frameCount;
+	return globals::state->HasDirectionalShadows() && directionalShadowMapFrame == frame && directionalShadowDataFrame == frame ?
+	           directionalShadowMap.get() :
+	           nullptr;
+}
+
 void Deferred::ClearShaderCache()
 {
-	mediumCompositeCS = nullptr;
-	mediumShaderRequested = false;
 	if (mainCompositeCS) {
 		mainCompositeCS->Release();
 		mainCompositeCS = nullptr;
@@ -644,110 +678,10 @@ void Deferred::ClearShaderCache()
 	}
 }
 
-bool Deferred::MediumCompositeEnabled()
-{
-	if (!postWaterHookInstalled || !globals::shaderCache->IsEnabled() ||
-		!globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].UAV)
-		return false;
-	const auto& sky = globals::features::physicalSky;
-	const auto& fog = globals::features::exponentialHeightFog;
-	if (!(sky.loaded && sky.cbData.enabled && sky.cbData.enableVolumetricClouds) && !(fog.loaded && fog.settings.enabled))
-		return false;
-	if (!mediumShaderRequested) {
-		mediumShaderRequested = true;
-		std::vector<std::pair<const char*, const char*>> defines;
-		if (sky.loaded)
-			defines.emplace_back("PHYSICAL_SKY", "");
-		if (fog.loaded)
-			defines.emplace_back("EXP_HEIGHT_FOG", "");
-		if (globals::features::ibl.loaded)
-			defines.emplace_back("IBL", "");
-		if (globals::features::dynamicCubemaps.loaded)
-			defines.emplace_back("DYNAMIC_CUBEMAPS", "");
-		if (auto* shader = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\MediumCompositeCS.hlsl", defines, "cs_5_0")))
-			mediumCompositeCS.attach(shader);
-	}
-	return mediumCompositeCS != nullptr;
-}
-
-void Deferred::CompositeAfterWater()
-{
-	if (!MediumCompositeEnabled() ||
-		!globals::state->inWorld ||
-		(globals::state->permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections)) != 0 ||
-		mediumCompositeFrame == globals::state->frameCount)
-		return;
-	auto* context = globals::d3d::context;
-	auto* renderer = globals::game::renderer;
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	if (!main.UAV)
-		return;
-	context->OMSetRenderTargets(0, nullptr, nullptr);
-	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-	ID3D11Buffer* perFrame = *globals::game::perFrame;
-	context->CSSetConstantBuffers(12, 1, &perFrame);
-	ID3D11Buffer* sharedBuffers[] = { globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
-	context->CSSetConstantBuffers(5, 2, sharedBuffers);
-	auto& sky = globals::features::physicalSky;
-	if (sky.loaded && sky.cbData.enabled && sky.cbData.enableVolumetricClouds)
-		sky.RenderVolumetricClouds(PhysicalSky::VolumetricCloudPass::kMainViewAndCubemap);
-
-	const std::array<uint32_t, 7> inheritedSlots = { 19, 22, 31, 76, 77, 78, 79 };
-	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 7> inherited;
-	for (size_t i = 0; i < inheritedSlots.size(); ++i) {
-		context->PSGetShaderResources(inheritedSlots[i], 1, inherited[i].put());
-		auto* srv = inherited[i].get();
-		context->CSSetShaderResources(inheritedSlots[i], 1, &srv);
-	}
-	std::array<ID3D11ShaderResourceView*, 4> atmosphere = {
-		sky.texTrLut ? sky.texTrLut->srv.get() : nullptr, sky.texSvLut ? sky.texSvLut->srv.get() : nullptr, sky.texApLut ? sky.texApLut->srv.get() : nullptr, sky.texApShadow ? sky.texApShadow->srv.get() : nullptr
-	};
-	context->CSSetShaderResources(61, 4, atmosphere.data());
-	std::array<ID3D11ShaderResourceView*, 3> clouds = {
-		sky.texVolFilteredTr ? sky.texVolFilteredTr->srv.get() : nullptr,
-		sky.texVolFilteredLum ? sky.texVolFilteredLum->srv.get() : nullptr,
-		sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr
-	};
-	context->CSSetShaderResources(110, 3, clouds.data());
-	std::array<ID3D11ShaderResourceView*, 2> depths = {
-		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV,
-		sky.texVolFilteredAux ? sky.texVolFilteredAux->srv.get() : nullptr
-	};
-	context->CSSetShaderResources(40, 2, depths.data());
-	std::array<ID3D11SamplerState*, 5> samplers = { linearSampler, nullptr, nullptr, linearSampler, linearSampler };
-	context->CSSetSamplers(0, 5, samplers.data());
-	context->CSSetUnorderedAccessViews(0, 1, &main.UAV, nullptr);
-	context->CSSetShader(mediumCompositeCS.get(), nullptr, 0);
-	D3D11_TEXTURE2D_DESC desc;
-	main.texture->GetDesc(&desc);
-	const auto scale = globals::game::frameBufferCached.GetDynamicResolutionParams1();
-	const uint32_t width = static_cast<uint32_t>(std::clamp(desc.Width * scale.x, 1.f, float(desc.Width)));
-	const uint32_t height = static_cast<uint32_t>(std::clamp(desc.Height * scale.y, 1.f, float(desc.Height)));
-	globals::state->BeginPerfEvent("Medium Composite");
-	globals::profiler->BeginPass("Deferred::MediumComposite");
-	context->Dispatch((width + 7u) / 8u, (height + 7u) / 8u, 1);
-	globals::profiler->EndPass();
-	globals::state->EndPerfEvent();
-	ID3D11UnorderedAccessView* nullUav = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-	std::array<ID3D11ShaderResourceView*, 128> nullSrvs = {};
-	context->CSSetShaderResources(0, static_cast<uint32_t>(nullSrvs.size()), nullSrvs.data());
-	context->CSSetShader(nullptr, nullptr, 0);
-	ID3D11Buffer* nullBuffer = nullptr;
-	context->CSSetConstantBuffers(12, 1, &nullBuffer);
-	std::array<ID3D11SamplerState*, 5> nullSamplers = {};
-	context->CSSetSamplers(0, static_cast<uint32_t>(nullSamplers.size()), nullSamplers.data());
-	if (sky.texVolFilteredAux) {
-		auto* aux = sky.texVolFilteredAux->srv.get();
-		context->PSSetShaderResources(116, 1, &aux);
-	}
-	mediumCompositeFrame = globals::state->frameCount;
-}
-
 void Deferred::Hooks::PostWater_SetCamera::thunk(void* graphicsState, RE::NiCamera* camera, uint32_t flags)
 {
 	func(graphicsState, camera, flags);
-	globals::deferred->CompositeAfterWater();
+	globals::features::viewAtmosphere.CompositeAfterWater();
 }
 
 void Deferred::Hooks::InstallPostWaterHook()

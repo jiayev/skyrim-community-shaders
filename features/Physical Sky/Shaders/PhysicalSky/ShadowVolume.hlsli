@@ -17,11 +17,8 @@ namespace CloudShadowVolume
 
 	// The volume stores transmittance toward the light. Outside
 	// receivers must sample the ray's entry into the box, never its exit.
-	float3 GetSampleUvw(float3 pos, float3 lightDir, float3 boundsMin, float3 boundsMax)
+	float4 GetSample(float3 pos, float3 lightDir, float3 boundsMin, float3 boundsMax, uint2 dimensions)
 	{
-		if (all(pos > boundsMin) && all(pos < boundsMax))
-			return (pos - boundsMin) / (boundsMax - boundsMin);
-
 		float tNear = 0.0;
 		float tFar = 3.402823466e+38;
 		[unroll] for (uint axis = 0; axis < 3; ++axis)
@@ -38,22 +35,25 @@ namespace CloudShadowVolume
 		}
 		if (tFar <= tNear)
 			return -1.0;
-		return saturate((pos + tNear * lightDir - boundsMin) / (boundsMax - boundsMin));
+		const float3 entry = saturate((pos + tNear * lightDir - boundsMin) / (boundsMax - boundsMin));
+		const float3 middle = saturate((pos + (0.5 * tNear + 0.5 * tFar) * lightDir - boundsMin) / (boundsMax - boundsMin));
+		// Fade grazing paths at the projected footprint, including side-face entries.
+		return float4(entry, max(EdgeWeight(entry, dimensions), EdgeWeight(middle, dimensions)));
 	}
 
 	// Only use this overload with a known linear-clamp sampler. Compute passes
 	// own their samplers, unlike the material/depth/shadow-mask pixel shaders.
-	float SampleTransmittance(Texture3D<float> volume, SamplerState linearClamp, float3 uvw)
+	float SampleTransmittance(Texture3D<float> volume, SamplerState linearClamp, float4 shadowSample)
 	{
+		const float3 uvw = shadowSample.xyz;
 		if (any(uvw < 0.0) || any(uvw > 1.0))
 			return 1.0;
-		uint3 dims;
-		volume.GetDimensions(dims.x, dims.y, dims.z);
-		return lerp(1.0, volume.SampleLevel(linearClamp, uvw, 0), EdgeWeight(uvw, dims.xy));
+		return lerp(1.0, volume.SampleLevel(linearClamp, uvw, 0), shadowSample.w);
 	}
 
-	float SampleTransmittance(Texture3D<float> volume, float3 uvw)
+	float SampleTransmittance(Texture3D<float> volume, float4 shadowSample)
 	{
+		const float3 uvw = shadowSample.xyz;
 		if (any(uvw < 0.0) || any(uvw > 1.0))
 			return 1.0;
 		uint3 dims;
@@ -75,7 +75,7 @@ namespace CloudShadowVolume
 		const float z1 = lerp(
 			lerp(volume.Load(int4(lo.x, lo.y, hi.z, 0)), volume.Load(int4(hi.x, lo.y, hi.z, 0)), w.x),
 			lerp(volume.Load(int4(lo.x, hi.y, hi.z, 0)), volume.Load(int4(hi.x, hi.y, hi.z, 0)), w.x), w.y);
-		return lerp(1.0, lerp(z0, z1, w.z), EdgeWeight(uvw, dims.xy));
+		return lerp(1.0, lerp(z0, z1, w.z), shadowSample.w);
 	}
 }
 #endif

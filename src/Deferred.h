@@ -52,8 +52,6 @@ public:
 
 	/** @brief Dispatches the deferred composite compute shader and post-deferred feature passes. */
 	void DeferredPasses();
-	bool MediumCompositeEnabled();
-	void CompositeAfterWater();
 
 	/** @brief Debug view modes for the deferred composite (developer only). */
 	enum class DebugView : uint
@@ -104,6 +102,12 @@ public:
 	 */
 	void CopyShadowLightData();
 
+	/** @brief Retains the engine's directional shadow array for later medium passes. */
+	void CaptureDirectionalShadowMap();
+
+	/** @brief Returns the directional shadow array only with current-frame cascade data. */
+	ID3D11ShaderResourceView* GetDirectionalShadowMap() const;
+
 	ID3D11BlendState* deferredBlendStates[7][2][13][2];
 	ID3D11BlendState* forwardBlendStates[7][2][13][2];
 
@@ -111,10 +115,7 @@ public:
 
 	ID3D11ComputeShader* mainCompositeCS = nullptr;
 	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> mediumCompositeCS;
 	bool postWaterHookInstalled = false;
-	uint32_t mediumCompositeFrame = UINT32_MAX;
-	bool mediumShaderRequested = false;
 
 	// Directional shadow structured buffer (t98): cascade splits and projections.
 	Buffer* directionalShadowLights = nullptr;
@@ -141,6 +142,10 @@ public:
 	ID3D11SamplerState* pointSampler = nullptr;
 
 private:
+	winrt::com_ptr<ID3D11ShaderResourceView> directionalShadowMap;
+	uint32_t directionalShadowMapFrame = UINT32_MAX;
+	uint32_t directionalShadowDataFrame = UINT32_MAX;
+
 	template <typename T>
 	void SetShadowCascadeParameters(T& lightData, DirectionalShadowLightData& dd);
 

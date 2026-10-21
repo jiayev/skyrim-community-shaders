@@ -902,14 +902,14 @@ PS_OUTPUT main(PS_INPUT input)
 	                (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) != 0 &&
 	                (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) == 0;
 	if (composeMedium) {
-		const float4 medium = ViewMedium::SampleViewMedium(input.WorldPosition.xyz, screenUV, SampBaseSampler);
+		const ViewAtmosphere::Medium medium = ViewMedium::SampleViewMedium(input.WorldPosition.xyz, screenUV, SampBaseSampler);
 #		if defined(ADDBLEND)
 		blendedColor = Color::AdditiveEffect(blendedColor, isFire);
-		blendedColor = ColorManagement::SceneColor::ScaleByLinear(blendedColor, medium.a);
+		blendedColor = ColorManagement::SceneColor::ScaleByLinear(blendedColor, medium.transmittance);
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
-		blendedColor = lerp(1.0.xxx, lightColor, medium.a);
+		blendedColor = lerp(1.0.xxx, lightColor, medium.transmittance);
 #		else
-		blendedColor = ColorManagement::SceneColor::ScaleAndAddLinear(lightColor, medium.a, medium.rgb);
+		blendedColor = ColorManagement::SceneColor::ScaleAndAddLinear(lightColor, medium.transmittance, medium.luminance);
 #		endif
 	} else
 #	endif

@@ -45,6 +45,7 @@
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VanillaFresnel.h"
+#include "Features/ViewAtmosphere.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
@@ -98,6 +99,7 @@ namespace globals
 		UnifiedWater unifiedWater{};
 		VanillaFresnel vanillaFresnel{};
 		VolumetricLighting volumetricLighting{};
+		ViewAtmosphere viewAtmosphere{};
 		WaterEffects waterEffects{};
 		PerformanceOverlay performanceOverlay{};
 		WetnessEffects wetnessEffects{};

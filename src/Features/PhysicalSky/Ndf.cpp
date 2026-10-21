@@ -249,69 +249,86 @@ static void DrawNdfParameters(NdfGenerationParameters& parameters)
 	ImGui::DragFloat2(T(TKEY("ndf_weather_offset"), "Weather offset (m)"), &parameters.windOffset.x, 1.f);
 }
 
-void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures)
+namespace
 {
-	if (!SceneWidgetInterceptor::IsArmed()) {
-		const char* generatorNames[] = {
-			T(TKEY("ndf_type_texture_pair"), "Texture Pair"),
-			T(TKEY("ndf_type_procedural"), "Procedural")
-		};
-		int source = settings.type == NdfType::Texture ? 0 : 1;
-		if (ImGui::Combo(T(TKEY("cloud_map_generator"), "Cloud Map Generator"), &source, generatorNames, IM_ARRAYSIZE(generatorNames)))
-			settings.type = source == 0 ? NdfType::Texture : NdfType::Procedural;
-		ImGui::TextWrapped("%s", GetSettingsHint(settings));
-		if (ImGui::TreeNode(T(TKEY("ndf_texture_inputs"), "Texture inputs"))) {
-			textures.DrawUI();
-			ImGui::TreePop();
-		}
-	}
-	const auto textureChoice = [&](const char* label, std::string& path, uint32_t channels, const char* emptyLabel = T(TKEY("ndf_none"), "None")) {
-		if (ImGui::BeginCombo(label, path.empty() ? emptyLabel : path.c_str())) {
-			if (ImGui::Selectable(emptyLabel, path.empty()))
-				path.clear();
+	/// One texture slot of the weather map: a combo over the loaded textures, plus a validity line.
+	void DrawNdfTextureChoice(TextureManager& textures, const char* a_label, std::string& a_path, uint32_t a_channels,
+		const char* a_emptyLabel = nullptr)
+	{
+		if (!a_emptyLabel)
+			a_emptyLabel = T(TKEY("ndf_none"), "None");
+		if (ImGui::BeginCombo(a_label, a_path.empty() ? a_emptyLabel : a_path.c_str())) {
+			if (ImGui::Selectable(a_emptyLabel, a_path.empty()))
+				a_path.clear();
 			for (const auto& choice : textures.ListPaths())
-				if (ImGui::Selectable(choice.c_str(), path == choice))
-					path = choice;
+				if (ImGui::Selectable(choice.c_str(), a_path == choice))
+					a_path = choice;
 			ImGui::EndCombo();
 		}
-		if (!path.empty() && !IsTextureNdf(textures.Query(path), channels))
+		if (!a_path.empty() && !NdfManager::IsTextureNdf(textures.Query(a_path), a_channels))
 			ImGui::TextColored({ 1, 0.3f, 0.2f, 1 }, "%s", T(TKEY("ndf_incompatible_texture"), "Missing or incompatible texture; using generated input (local influences are skipped)."));
+	}
+}
+
+void NdfManager::DrawNdfSource(NdfSettings& settings, TextureManager& textures)
+{
+	if (SceneWidgetInterceptor::IsArmed())
+		return;
+	const char* generatorNames[] = {
+		T(TKEY("ndf_type_texture_pair"), "Texture Pair"),
+		T(TKEY("ndf_type_procedural"), "Procedural")
 	};
-	if (!SceneWidgetInterceptor::IsArmed() && settings.type == NdfType::Texture) {
-		textureChoice(T(TKEY("ndf_height_rg"), "Height RG"), settings.texture.heightPath, 2);
-		textureChoice(T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), settings.texture.modelingPath, 3);
+	int source = settings.type == NdfType::Texture ? 0 : 1;
+	if (ImGui::Combo(T(TKEY("cloud_map_generator"), "Cloud Map Generator"), &source, generatorNames, IM_ARRAYSIZE(generatorNames)))
+		settings.type = source == 0 ? NdfType::Texture : NdfType::Procedural;
+	ImGui::TextWrapped("%s", GetSettingsHint(settings));
+	if (ImGui::TreeNode(T(TKEY("ndf_texture_inputs"), "Texture inputs"))) {
+		textures.DrawUI();
+		ImGui::TreePop();
+	}
+	if (settings.type == NdfType::Texture) {
+		DrawNdfTextureChoice(textures, T(TKEY("ndf_height_rg"), "Height RG"), settings.texture.heightPath, 2);
+		DrawNdfTextureChoice(textures, T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), settings.texture.modelingPath, 3);
 		if (!IsTexturePair({ textures.Query(settings.texture.heightPath), textures.Query(settings.texture.modelingPath) }))
 			ImGui::TextWrapped("%s", T(TKEY("ndf_select_both_textures"), "Select matching linear 2D Height RG and Modeling RGB textures; invalid pairs use the procedural cloud map."));
 	}
-	auto& procedural = settings.procedural;
-	auto& parameters = procedural.parameters;
-	DrawNdfParameters(settings.procedural.parameters);
-	if (ImGui::TreeNode(T(TKEY("ndf_local_influence"), "Global generator overlay"))) {
-		ImGui::TextWrapped("%s", T(TKEY("ndf_overlay_hint"), "This overlay repeats with the generated global field. Use Local Cloud Instances for world placement."));
-		if (!SceneWidgetInterceptor::IsArmed()) {
-			textureChoice(T(TKEY("ndf_height_rg"), "Height RG"), procedural.local.heightPath, 2);
-			textureChoice(T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), procedural.local.modelingPath, 3);
-			textureChoice(T(TKEY("ndf_influence_mask"), "Influence mask R (optional)"), procedural.localMaskPath, 1);
-			const char* blendModes[] = {
-				T(TKEY("ndf_blend_interpolate"), "Interpolate"),
-				T(TKEY("ndf_blend_maximum"), "Maximum")
-			};
-			int mode = parameters.localBlendMode == 0u ? 0 : 1;
-			if (ImGui::Combo(T(TKEY("ndf_modeling_blend"), "Modeling blend"), &mode, blendModes, IM_ARRAYSIZE(blendModes)))
-				parameters.localBlendMode = static_cast<uint32_t>(mode);
-		}
-		ImGui::SliderFloat(T(TKEY("ndf_modeling_weight"), "Modeling weight"), &settings.procedural.parameters.localModelingWeight, 0.f, 1.f);
-		ImGui::SliderFloat(T(TKEY("ndf_height_weight"), "Height weight"), &settings.procedural.parameters.localHeightWeight, 0.f, 1.f);
-		ImGui::DragFloat(T(TKEY("ndf_local_offset_multiplier"), "Local offset multiplier"), &settings.procedural.parameters.localWindScale, 0.01f, -4.f, 4.f);
-		ImGui::TreePop();
+}
+
+void NdfManager::DrawNdfShape(NdfGenerationParameters& parameters)
+{
+	DrawNdfParameters(parameters);
+}
+
+void NdfManager::DrawNdfOverlay(NdfSettings& settings, TextureManager& textures)
+{
+	ImGui::TextWrapped("%s", T(TKEY("ndf_overlay_hint"), "This overlay repeats with the generated global field; Local Cloud Instances handle world placement."));
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		DrawNdfTextureChoice(textures, T(TKEY("ndf_height_rg"), "Height RG"), settings.procedural.local.heightPath, 2);
+		DrawNdfTextureChoice(textures, T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), settings.procedural.local.modelingPath, 3);
+		DrawNdfTextureChoice(textures, T(TKEY("ndf_influence_mask"), "Influence mask R (optional)"), settings.procedural.localMaskPath, 1);
+		const char* blendModes[] = {
+			T(TKEY("ndf_blend_interpolate"), "Interpolate"),
+			T(TKEY("ndf_blend_maximum"), "Maximum")
+		};
+		int mode = settings.procedural.parameters.localBlendMode == 0u ? 0 : 1;
+		if (ImGui::Combo(T(TKEY("ndf_modeling_blend"), "Modeling blend"), &mode, blendModes, IM_ARRAYSIZE(blendModes)))
+			settings.procedural.parameters.localBlendMode = static_cast<uint32_t>(mode);
 	}
+	ImGui::SliderFloat(T(TKEY("ndf_modeling_weight"), "Modeling weight"), &settings.procedural.parameters.localModelingWeight, 0.f, 1.f);
+	ImGui::SliderFloat(T(TKEY("ndf_height_weight"), "Height weight"), &settings.procedural.parameters.localHeightWeight, 0.f, 1.f);
+	ImGui::DragFloat(T(TKEY("ndf_local_offset_multiplier"), "Local offset multiplier"), &settings.procedural.parameters.localWindScale, 0.01f, -4.f, 4.f);
+}
+
+void NdfManager::DrawNdfNoise(NdfSettings& settings, TextureManager& textures)
+{
 	if (SceneWidgetInterceptor::IsArmed())
 		return;
+	auto& procedural = settings.procedural;
 	for (uint32_t index = 0; index < 4; ++index) {
 		ImGui::PushID(static_cast<int>(index));
 		if (ImGui::TreeNode("Noise", T(TKEY("ndf_noise_input"), "Noise input %u"), index)) {
 			auto& input = procedural.noise[index];
-			textureChoice(T(TKEY("ndf_dds_override"), "DDS override"), input.texturePath, 1, T(TKEY("ndf_generated"), "Generated"));
+			DrawNdfTextureChoice(textures, T(TKEY("ndf_dds_override"), "DDS override"), input.texturePath, 1, T(TKEY("ndf_generated"), "Generated"));
 			auto& noise = input.parameters;
 			if (ImGui::Button(T(TKEY("ndf_reset_noise_parameters"), "Reset noise parameters")))
 				noise = ProceduralNdfSettings{}.noise[index].parameters;
@@ -340,7 +357,7 @@ void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures
 	}
 }
 
-void NdfManager::DrawPreview()
+void NdfManager::DrawPreview(float a_size)
 {
 	const char* channels[] = {
 		T(TKEY("ndf_preview_off"), "Off"),
@@ -358,7 +375,7 @@ void NdfManager::DrawPreview()
 	};
 	ImGui::Combo(T(TKEY("ndf_preview"), "NDF component"), &preview, channels, IM_ARRAYSIZE(channels));
 	if (preview && texPreview && generatedValid && generatedData.preview == static_cast<uint32_t>(preview))
-		ImGui::Image(texPreview->srv.get(), { 384.f, 384.f * texPreview->desc.Height / texPreview->desc.Width });
+		ImGui::Image(texPreview->srv.get(), { a_size, a_size * texPreview->desc.Height / texPreview->desc.Width });
 }
 
 #undef I18N_KEY_PREFIX
@@ -853,9 +870,8 @@ static void DrawCirrusWeatherState(CirrusSettings& settings, TextureManager& tex
 	ImGui::TreePop();
 }
 
-void CirrusMapManager::DrawSettings(CirrusSettings& cirrus, TextureManager& textures)
+void CirrusMapManager::DrawSettings(CirrusSettings& cirrus, CloudLightingSettings& lighting, TextureManager& textures)
 {
-	ImGui::SeparatorText(T(TKEY("cirrus"), "Cirrus"));
 	ImGui::Checkbox(T(TKEY("enable_cirrus"), "Enable Cirrus"), &cirrus.enabled);
 	ImGui::SliderFloat(T(TKEY("cirrus_altitude"), "Cirrus Altitude"), &cirrus.altitude, 1.f, 24000.f, "%.0f m");
 	ImGui::SliderFloat(T(TKEY("cirrus_density_scale"), "Cirrus Density Scale"), &cirrus.densityScale, 0.f, 4.f, "%.3f");
@@ -873,6 +889,15 @@ void CirrusMapManager::DrawSettings(CirrusSettings& cirrus, TextureManager& text
 		}
 	}
 	DrawCirrusWeatherState(cirrus, textures);
+	if (ImGui::TreeNode(T(TKEY("cloud_cirrus_phase"), "Cirrus Phase and Scattering"))) {
+		ImGui::TextWrapped("%s", T(TKEY("cloud_cirrus_phase_desc"), "Cirrus uses an equally weighted, normalized dual-HG phase approximation. Positive G favors forward scattering; negative G favors backward scattering. These parameters affect only cirrus."));
+		ImGui::SliderFloat(T(TKEY("cloud_phase_forward"), "Cirrus Forward Phase G"), &lighting.phaseForwardG, 0.f, 0.95f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_backward"), "Cirrus Backward Phase G"), &lighting.phaseBackwardG, -0.95f, 0.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_cirrus_light_thickness"), "Cirrus Lighting Thickness (m)"), &lighting.cirrusLightThickness, 1.f, 1000.f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextWrapped("%s", T(TKEY("cloud_cirrus_thickness_desc"), "Effective geometric thickness used to estimate the sunlight path through cirrus and its attenuation, especially at grazing angles."));
+		ImGui::TreePop();
+	}
 }
 
 #undef I18N_KEY_PREFIX
