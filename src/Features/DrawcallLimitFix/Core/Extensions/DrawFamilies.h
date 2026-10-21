@@ -108,7 +108,10 @@ namespace DCLF::Api
 		rhi::PipelineHandle pipeline;
 		rhi::CommandSignatureHandle signature;
 
-		/** @brief The slot's pipelines (main), as the lane's type (FamilyPipelines). */
+		/**
+		 * @brief The slot's pipelines (main), as the lane's type (FamilyPipelines: depth, colour and, with two colour programs, colour2;
+		 * the feature binds the colour pipeline of each draw it executes in the colour pass).
+		 */
 		template <class T>
 		const T& Drawn() const
 		{
@@ -206,6 +209,15 @@ namespace DCLF::Extensions
 	std::uint32_t DrawFamilyFaceBytes();
 	/** @brief Whether a_family is DCLF's under a_toggles: taken, its class's toggle on. */
 	bool DrawFamilyOn(const ToggleSet& a_toggles, Api::DrawFamily a_family);
+	/**
+	 * @brief Whether a_family draws in a trees view's faces: taken, with faces (Api::DrawFamilyContribution::faces). A family without
+	 * them (grass) has no forward pipeline, rows, lists or faces' draws.
+	 */
+	inline bool DrawFamilyHasFaces(Api::DrawFamily a_family)
+	{
+		const auto& entry = DrawFamilyOf(a_family);
+		return entry.taken && entry.contribution.faces.face;
+	}
 
 	/**
 	 * @brief Render thread, FrameView's frame requests (running or not): every taken family's serve, in family order. (Their decide is

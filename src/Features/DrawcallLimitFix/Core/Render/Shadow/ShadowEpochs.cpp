@@ -1,6 +1,6 @@
-// The shadow and occlusion epochs (render thread): their commits (the installed payload, the index pool, the views' latches,
-// the arena and the latched CS blocks), the epochs' inputs and the culling counters' readback. Submitted where Features/Shadows/Engine's
-// handlers call them (ExecuteShadowFrame, ExecuteOcclusion: Api/ShadowEpochs.h), each in its epoch's segment (its traits).
+// The shadow epoch (render thread): its commit (the installed payload, the index pool, the views' latches, the occlusion maps' among them,
+// the arena and the latched CS blocks), its inputs, the occlusion maps' readiness and the culling counters' readback. Submitted where
+// Features/Shadows/Engine's handler calls it (ExecuteShadowFrame: Api/ShadowEpochs.h), in its epoch's segment (its traits).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
@@ -83,7 +83,7 @@ namespace DCLF
 		}
 
 		// The shadow latch's regions the shadow commits wrote their revision's bucket tables and map rows into (render thread).
-		// Parts: 2 * view slot (its bucket table), 2 * map row + 1 (the row). The occlusion epoch's slots and modes are its own.
+		// Parts: 2 * view slot (its bucket table), 2 * map row + 1 (the row). The occlusion maps' views have slots and modes of their own.
 		LatchRegionsHeld shadowLatchRegions;
 		// What the shadow constants buffer holds of the arena past the frame record, as staged (render thread): the build it was last
 		// brought up to, and its bytes. Only these commits write that part of the buffer.
@@ -164,157 +164,52 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Writes the epoch's one culling dispatch (ShadowBuildDrawsPass: every view in one, BuildDrawsCS's ShadowViews) into the frame
-		 * slot's latch region: x the groups of a_inputs, the whole list every view culls (ShadowViewLatch's; a view's own drawCount bounds
-		 * it), y a group row per view of a_shape, the variant submitted (ShadowBuildRows: its table's rows, or more, which the shader idles).
+		 * @brief Writes the epoch's one culling dispatch (ShadowBuildDrawsPass: every view in one, the occlusion maps' among them,
+		 * BuildDrawsCS's ShadowViews) into the frame slot's latch region: x the groups of a_inputs, the whole list every view culls
+		 * (ShadowViewLatch's; a view's own drawCount bounds it), y a group row per view of a_shape, the variant submitted (ShadowBuildRows:
+		 * its table's rows, or more, which the shader idles).
 		 */
-		void WriteBuildDispatch(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, std::uint32_t a_latchSlot, bool a_sky, std::uint32_t a_inputs,
+		void WriteBuildDispatch(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, std::uint32_t a_latchSlot, std::uint32_t a_inputs,
 			const ShadowFrame& a_shape)
 		{
 			const std::uint32_t dispatch[4] = { (a_inputs + 63) / 64, ShadowBuildRows(a_shape), 1, 0 };
-			LatchWrite(a_latchBlock, "shadow culling dispatch", a_latchSlot, a_layout.BuildDispatchOffset(a_sky), std::as_bytes(std::span(dispatch)));
+			LatchWrite(a_latchBlock, "shadow culling dispatch", a_latchSlot, a_layout.BuildDispatchOffset(), std::as_bytes(std::span(dispatch)));
 		}
 	}
 
 	bool IndirectDraws::OcclusionReady(std::uint32_t a_view) const
 	{
-		// Ready when this frame's shadow commit uploaded the occluders and the map's target is imported.
+		// At the shadow maps, before the engine draws them: ready when the frame's shadow epoch can draw the map, its target imported and
+		// the selected revision's shadow shape holding its view at the layout last set up (OcclusionView, the last frame's: this frame's
+		// comes right after this, the same but for a resize or a toggle), the epoch covered with the installed publication's shadow payload,
+		// which carries the occluders (NoteShadowViewModes). The epoch's commit trusts it, but for a layout set up otherwise this frame
+		// (LatchOcclusionViews); a map it does not draw the engine renders whole at its own point.
 		const auto& engine = *impl->shadowEngine;
 		const auto toggles = ActiveToggles();
-		if (a_view >= kOcclusionViews || failed || !toggles.shadows || !Extensions::OcclusionOn(toggles, a_view) || !engine.shadow)
+		if (a_view >= kOcclusionViews || failed || !toggles.shadows || !Extensions::OcclusionOn(toggles, a_view) || !engine.shadow ||
+			!engine.shadow->depth[OcclusionDepthTarget(a_view)])
 			return false;
-		const auto& occlusion = engine.occlusion[a_view];
-		// Not while the built graph lacks the map's import, nor without the selected revision's recorded shape for the maps' layout
-		// (the engine draws the map meanwhile).
+		// Not while the built graph lacks the map's import.
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!host || host->RebuildRequested())
 			return false;
-		const auto layouts = engine.PredictedOcclusion(&toggles);
+		std::optional<ShadowViewLayout> predicted;
+		for (const auto& layout : engine.PredictedOcclusion(&toggles))
+			if (layout.slot == OcclusionSlot(a_view))
+				predicted = layout;
 		bool shaped = false;
-		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kOcclusionShape);
-		if (impl->EpochCovered(epoch))
+		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kShadowShape);
+		if (predicted && impl->EpochCovered(epoch) && impl->installedDraws && impl->installedDraws->shadow)
 			if (const auto& active = impl->revisions.active)
 				if (const auto& fragment = active->Fragment(Impl::SceneRevisions::kShapeSlot + epoch))
-					if (const auto variants = fragment->Value<ShadowVariants>())
-						for (const auto& shape : variants->shapes)
-							shaped = shaped || (shape && LayoutOf(*shape) == layouts);
+					if (const auto variants = fragment->Value<ShadowVariants>(); variants && !variants->shapes.empty() && variants->shapes.front())
+						for (const auto& layout : LayoutOf(*variants->shapes.front()))
+							shaped = shaped || layout == *predicted;
 		if (!shaped) {
 			++impl->occlusionUnrecorded;
 			return false;
 		}
-		return occlusion.rasterState && occlusion.committedFrame == Scene::FrameView::Get().GetFrame() && engine.shadow->depth[OcclusionDepthTarget(a_view)];
-	}
-
-	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t a_views)
-	{
-		ZoneScopedN("CS.DCLF.ExecuteOcclusion");
-		const auto start = std::chrono::steady_clock::now();
-		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
-		auto& engine = *impl->shadowEngine;
-		// The requested views that are ready and captured this frame; a map the engine did not draw draws nothing.
-		std::uint32_t drawable = 0;
-		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
-			if (!(a_views & (1u << v)))
-				continue;
-			if (OcclusionReady(v) && engine.occlusion[v].capturedFrame == frameNumber)
-				drawable |= 1u << v;
-			else
-				++shadowStats.occlusionNotReady[v];
-		}
-		const auto indirect = FrameShadowIndirectState();
-		if (!drawable || !indirect.valid) {
-			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-				shadowStats.occlusionNotReady[v] += (drawable & (1u << v)) ? 1 : 0;
-			return 0;
-		}
-		ScopedPerfEvent event("CS DCLF: occlusion maps (CPU)");
-		auto resources = engine.shadow;
-		// The revision's variant for the drawable maps and the payload the shadow commit read: trusted, nothing is checked here.
-		std::vector<ShadowViewLayout> layouts;
-		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-			if (drawable & (1u << v))
-				layouts.push_back(LayoutOf(engine.occlusion[v].view, OcclusionSlot(v), OcclusionModeOf(v), OcclusionDepthTarget(v)));
-		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kOcclusionShape);
-		const auto revision = impl->RevisionOf(epoch);
-		std::shared_ptr<const ShadowFrame> revisionShape;
-		std::size_t revisionVariant = 0;
-		if (revision)
-			if (const auto variants = revision.shape->Value<ShadowVariants>())
-				for (std::size_t v = 0; v < variants->shapes.size() && !revisionShape; ++v)
-					if (variants->shapes[v] && LayoutOf(*variants->shapes[v]) == layouts) {
-						revisionShape = variants->shapes[v];
-						revisionVariant = v;
-					}
-		const auto committed = engine.committedShadow;
-		if (!revisionShape || !committed) {
-			// A layout the revision lacks (one map drawn without the other): the engine draws them.
-			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-				shadowStats.occlusionNotReady[v] += (drawable & (1u << v)) ? 1 : 0;
-			return 0;
-		}
-		const auto& payload = *committed;
-		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(EpochTraitsOf(epoch).segment, [&](org::RenderGraph&) {
-			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
-			const ShadowFrame& target = *revisionShape;
-			const auto& latchBlock = *target.latch;
-			const auto& latchLayout = target.latchLayout;
-			auto& scene = *resources->scene;
-			// The root states' seeds and the states the frame's cull reads (the cull bindings RootSeeds, RootStates), once for every map.
-			const std::uint32_t seedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, scene, frameNumber, impl->Adopted());
-			const std::uint32_t statesIndex = CullBindingIndex(Api::CullBindingSlot::RootStates, scene, frameNumber, impl->Adopted());
-			std::size_t index = 0;
-			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
-				if (!(drawable & (1u << v)))
-					continue;
-				const auto& view = engine.occlusion[v].view;
-				const auto& shapeView = target.views[index];
-				const auto& buckets = (*target.rows)[index++];
-				const std::uint32_t slot = OcclusionSlot(v), mode = OcclusionModeOf(v);
-				const auto inputCount = static_cast<std::uint32_t>(payload.Inputs());  // the whole shadow list
-				// Occluders, material rows, frame record, objects and geometries are the installed payload's, which the shadow commit read
-				// this frame (OcclusionReady).
-				WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
-				// Frustum culling (near plane included), the map's size test while its entry asks (minRadius: Skylighting::
-				// OcclusionTechnique's, bound radius above 32; both maps' do), and fade roots as the engine's cull leaves them
-				// (kCullFadeOnVisible): never a root the main camera faded out or has not seen yet.
-				auto latch = ShadowViewLatch(view, inputCount, frameNumber, seedsIndex);
-				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(Engine::Address::kFadesOn) };
-				const auto& map = Extensions::OcclusionMapOf(v);
-				latch.cullFlags = 1u | (map.minRadius ? kCullMinRadius : 0u) | (*fadesOn.get() ? kCullFadeOnVisible : 0u) | KeyWordOf(mode);
-				// The map's floor (Skylighting's probe grid test): a cull plane facing up, this frame's height. An occlusion view
-				// leaves its cull planes otherwise unused (its frustum is the view-projection's).
-				if (map.floorHeight) {
-					latch.cullPlanes[0][0] = 0.0f;
-					latch.cullPlanes[0][1] = 0.0f;
-					latch.cullPlanes[0][2] = 1.0f;
-					latch.cullPlanes[0][3] = map.floorHeight();
-					latch.cullPlaneMask = 1u;
-				}
-				latch.viewBits = ShadowViewBits(mode, false);
-				latch.fadeStatesIndex = statesIndex;
-				ShadowPayloadLatch(*impl->InstalledPayload(), latch);
-				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, mode, view.rasterState, true, latch);
-				UseSlotLayouts(latchBlock, latchLayout, target, latchSlot, true, latch);
-				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, true, latch);
-				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
-				shadowStats.occlusionInputs[v] = inputCount;
-				++shadowStats.occlusionDrawn[v];
-			}
-			// The epoch's one culling dispatch, over the whole shadow list (each map's latch above bounds its own).
-			WriteBuildDispatch(latchBlock, latchLayout, latchSlot, true, static_cast<std::uint32_t>(payload.Inputs()), target);
-			impl->SubmitRevisionRecording(epoch, *revision.recordings, revisionVariant);
-		}, engine.shadowExecutionOwner);
-		shadowStats.occlusionMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-		++shadowStats.occlusionEpochs;
-		if (!ok) {
-			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-				if (drawable & (1u << v)) {
-					--shadowStats.occlusionDrawn[v];
-					++shadowStats.occlusionNotReady[v];
-				}
-			return 0;
-		}
-		return drawable;
+		return true;
 	}
 
 	namespace Draws
@@ -362,9 +257,10 @@ namespace DCLF
 
 			/**
 			 * @brief The index pool, then every pending view's blocks and culling latch (with the revision's bucket tables and map rows
-			 * where the frame slot's region does not hold them yet), and a zero latch for each placement without a view.
+			 * where the frame slot's region does not hold them yet), and a zero latch for each placement without a view. Returns the
+			 * placements drawn (ShadowFrame::activeViews' bits: a placement's view is its index in the shape's views).
 			 */
-			void LatchShadowViews(const ShadowCommit& a_commit, std::uint32_t a_latchSlot, const std::shared_ptr<const ShadowFrame>& a_revisionShape,
+			std::uint64_t LatchShadowViews(const ShadowCommit& a_commit, std::uint32_t a_latchSlot, const std::shared_ptr<const ShadowFrame>& a_revisionShape,
 				const std::vector<ShadowViewLayout>& a_layouts)
 			{
 				auto& resources = a_commit.resources;
@@ -379,7 +275,7 @@ namespace DCLF
 				resources.labels.clear();
 				const auto& latchBlock = *target.latch;
 				const auto& latchLayout = target.latchLayout;
-				// The index pool both this epoch and the occlusion epoch draw from.
+				// The index pool the shadow views and the occlusion maps draw from.
 				{
 					ZoneScopedN("CS.DCLF.ShadowInputs.IndexPool");
 					UpdateIndexPool(adopted, *resources.pool, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetTablesGeneration(), latchBlock, latchSlot,
@@ -389,6 +285,7 @@ namespace DCLF
 				auto& held = Draws::shadowLatchRegions.Of(latchSlot, target.latch, a_revisionShape, 0);
 				std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
 				std::vector<bool> slotDrawn(layouts.size());
+				std::uint64_t active = 0;
 				// The root states' seeds, the states the frame's cull reads (the cull bindings RootSeeds, RootStates) and the listed roots (a
 				// focus view's target), once for every view.
 				const std::uint32_t seedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, scene, frameNumber, adopted);
@@ -404,6 +301,7 @@ namespace DCLF
 					const std::uint32_t slot = view.slot;
 					const std::uint32_t index = slot - kFirstShadowViewSlot;
 					slotDrawn[index] = true;
+					active |= index < 64 ? 1ull << index : 0ull;
 					WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
 					// The whole shadow list: the view bits select the mode's inputs.
 					const auto inputCount = static_cast<std::uint32_t>(payload.Inputs());
@@ -419,6 +317,8 @@ namespace DCLF
 							latch.cullFlags |= kCullMinTexels;
 							latch.minCasterRadius = radius;
 						}
+					if (view.sunView && shadowSizeProbe.load(std::memory_order_relaxed) >= 0)
+						latch.cullFlags |= kCullSizeProbe;
 					latch.viewBits = ShadowViewBits(view.modeIndex, view.sunView);
 					// A focus view draws its target's members alone (root slot + 1; an unlisted target draws nothing).
 					if (view.focus) {
@@ -456,6 +356,75 @@ namespace DCLF
 					LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, layouts[index].slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
 					++shadowStats.retainedViews;
 				}
+				return active;
+			}
+
+			/**
+			 * @brief The occlusion maps in a_maps (taken at the shadow maps, their views set up since: OcclusionView) into their views of the
+			 * shape (after the placements): each map's blocks and culling latch where the shape has its view at the layout set up, with the
+			 * revision's bucket table and map row where the frame slot's region does not hold them yet, and a zero latch for every other
+			 * map view of the shape (no work: a map not drawn this frame, interiors' and a toggled-off map's frames included). Returns the
+			 * maps latched; their views' bits (by index into the shape's views) into a_active.
+			 */
+			std::uint32_t LatchOcclusionViews(const ShadowCommit& a_commit, std::uint32_t a_latchSlot, const std::shared_ptr<const ShadowFrame>& a_revisionShape,
+				const std::array<ShadowEngine::OcclusionState, kOcclusionViews>& a_occlusion, std::uint32_t a_maps, std::uint64_t& a_active)
+			{
+				const auto& target = a_commit.target;
+				const std::uint32_t frameNumber = a_commit.frameNumber;
+				const std::uint32_t latchSlot = a_latchSlot;
+				const auto& latchBlock = *target.latch;
+				const auto& latchLayout = target.latchLayout;
+				auto& scene = *a_commit.resources.scene;
+				auto& held = Draws::shadowLatchRegions.Of(latchSlot, target.latch, a_revisionShape, 0);
+				// The root states' seeds and the states the frame's cull reads (the cull bindings RootSeeds, RootStates), once for every map.
+				const std::uint32_t seedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, scene, frameNumber, a_commit.adopted);
+				const std::uint32_t statesIndex = CullBindingIndex(Api::CullBindingSlot::RootStates, scene, frameNumber, a_commit.adopted);
+				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(Engine::Address::kFadesOn) };
+				// The whole shadow list: the view bits select the map's occluders (the installed payload's, as the shadow views').
+				const auto inputCount = static_cast<std::uint32_t>(a_commit.payload.Inputs());
+				const auto layouts = LayoutOf(target);
+				std::uint32_t latched = 0;
+				for (std::size_t index = 0; index < target.views.size(); ++index) {
+					const auto& shapeView = target.views[index];
+					if (!IsOcclusionMode(shapeView.modeIndex))
+						continue;
+					const std::uint32_t v = OcclusionOfMode(shapeView.modeIndex), slot = shapeView.slot, mode = shapeView.modeIndex;
+					const auto& view = a_occlusion[v].view;
+					if (!((a_maps >> v) & 1) || layouts[index] != LayoutOf(view, OcclusionSlot(v), mode, OcclusionDepthTarget(v))) {
+						LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
+						continue;
+					}
+					WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
+					// Frustum culling (near plane included), the map's size test while its entry asks (minRadius: Skylighting::
+					// OcclusionTechnique's, bound radius above 32; both maps' do), and fade roots as the engine's cull leaves them
+					// (kCullFadeOnVisible): never a root the main camera faded out or has not seen yet.
+					auto latch = ShadowViewLatch(view, inputCount, frameNumber, seedsIndex);
+					const auto& map = Extensions::OcclusionMapOf(v);
+					latch.cullFlags = 1u | (map.minRadius ? kCullMinRadius : 0u) | (*fadesOn.get() ? kCullFadeOnVisible : 0u) | KeyWordOf(mode);
+					// The map's floor (Skylighting's probe grid test): a cull plane facing up, its height as of this commit. An occlusion
+					// view leaves its cull planes otherwise unused (its frustum is the view-projection's).
+					if (map.floorHeight) {
+						latch.cullPlanes[0][0] = 0.0f;
+						latch.cullPlanes[0][1] = 0.0f;
+						latch.cullPlanes[0][2] = 1.0f;
+						latch.cullPlanes[0][3] = map.floorHeight();
+						latch.cullPlaneMask = 1u;
+					}
+					latch.viewBits = ShadowViewBits(mode, false);
+					latch.fadeStatesIndex = statesIndex;
+					ShadowPayloadLatch(a_commit.parts, latch);
+					const std::uint32_t mapRow = latchLayout.MapRowOf(mode, view.rasterState);
+					const bool rowHeld = mapRow < latchLayout.MapRows() && Draws::LatchRegionsHeld::Hold(held, std::size_t(mapRow) * 2 + 1);
+					UseShadowMapRow(latchBlock, latchLayout, (*target.rows)[index], latchSlot, mode, view.rasterState, !rowHeld, latch);
+					UseSlotLayouts(latchBlock, latchLayout, target, latchSlot, !Draws::LatchRegionsHeld::Hold(held, std::size_t(latchLayout.MapRows()) * 2 + 1), latch);
+					WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, !Draws::LatchRegionsHeld::Hold(held, std::size_t(slot) * 2), latch);
+					LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+					a_commit.stats.occlusionInputs[v] = inputCount;
+					latched |= 1u << v;
+					if (index < 64)
+						a_active |= 1ull << index;
+				}
+				return latched;
 			}
 
 			/**
@@ -538,6 +507,37 @@ namespace DCLF
 				return latched.Misses();
 			}
 
+			/**
+			 * @brief What the frame's execution holds of its commit (a_owners, retired with it): the payload's binding owners (copied: a
+			 * frame that keeps the publication commits the payload again), the adopted snapshot and the cleared geometry slots' buffers.
+			 */
+			void HoldShadowCommit(const ShadowPayload& a_payload, const std::shared_ptr<const void>& a_snapshot, std::vector<std::shared_ptr<const void>>& a_owners)
+			{
+				a_owners = a_payload.bindingOwners;
+				if (a_snapshot)
+					a_owners.push_back(a_snapshot);
+				for (auto& owner : Scene::FrameView::Get().TakeRetiredImports())
+					a_owners.push_back(std::move(owner));
+			}
+
+			/**
+			 * @brief The narrowest of a_variants whose views cover a_active, the frame's (the full one, 0, always does): the others' indirect
+			 * draws would only fetch zero counts, and an unused occlusion map's target its load and store.
+			 */
+			std::size_t NarrowestShadowVariant(const std::vector<std::shared_ptr<const ShadowFrame>>& a_variants, std::uint64_t a_active,
+				IndirectDraws::ShadowStats& a_stats)
+			{
+				std::size_t variant = 0;
+				int narrowest = 65;
+				for (std::size_t v = 0; v < a_variants.size(); ++v)
+					if (const auto mask = a_variants[v]->activeViews; (a_active & ~mask) == 0 && std::popcount(mask) < narrowest) {
+						narrowest = std::popcount(mask);
+						variant = v;
+					}
+				a_stats.narrowedEpochs += variant != 0;
+				return variant;
+			}
+
 			/** @brief The shadow epoch's periodic log line (one in 600). */
 			void LogShadowEpoch(const ShadowCommit& a_commit)
 			{
@@ -559,14 +559,23 @@ namespace DCLF
 		}
 	}
 
-	void IndirectDraws::ExecuteShadowFrame()
+	std::uint32_t IndirectDraws::ExecuteShadowFrame(std::uint32_t a_maps)
 	{
 		ZoneScopedN("CS.DCLF.ExecuteShadowFrame");
 		auto& engine = *impl->shadowEngine;
 		auto& pending = engine.pendingViews;
-		if (!ActiveToggles().shadows || failed || pending.empty()) {
+		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
+		// The occlusion maps taken at the shadow maps whose views were set up this frame (OcclusionView); one the epoch does not draw the
+		// engine renders whole at its own point, counted here.
+		const std::uint32_t maps = engine.OcclusionSetUp(a_maps, frameNumber);
+		auto mapsNotDrawn = [&](std::uint32_t a_drawn) {
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				shadowStats.occlusionNotReady[v] += ((a_maps & ~a_drawn) >> v) & 1;
+			return a_drawn;
+		};
+		if (!ActiveToggles().shadows || failed || (pending.empty() && !maps)) {
 			pending.clear();
-			return;
+			return mapsNotDrawn(0);
 		}
 		ScopedPerfEvent event("CS DCLF: shadow views (CPU)");
 		const auto start = std::chrono::steady_clock::now();
@@ -576,6 +585,7 @@ namespace DCLF
 			if (!pending.empty())
 				engine.ShadowsNotDrawn(shadowStats);
 			pending.clear();
+			return mapsNotDrawn(0);
 		};
 		auto& pipelines = DrawPipelines::Get();
 		auto* utility = globals::game::utilityShader;
@@ -589,16 +599,17 @@ namespace DCLF
 		const auto& tables = Scene::FrameView::Get().GetTables();
 		if (tables.objects.empty() || tables.shadowTechnique.size() != tables.objects.size())
 			return notReady(ShadowNotReady::Tables);
-		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
 		auto resources = engine.shadow;
 		std::array<bool, kShadowModeCount> modeUsed{};
 		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
 		engine.NoteShadowViewModes(modeUsed, modeRasterStates);
-		double prepareMs = 0.0, inputsMs = 0.0, blocksMs = 0.0, bodyMs = 0.0;
+		double prepareMs = 0.0, inputsMs = 0.0, blocksMs = 0.0, bodyMs = 0.0, occlusionMs = 0.0;
+		std::uint32_t mapsDrawn = 0;
 
 		ShadowInputs in = engine.PrepareShadowInputs(*resources, modeUsed, modeRasterStates);
 		// The revision's shape and recording and the installed payload: trusted, nothing is checked here. The epoch covers every
-		// placement; a slot without a view does no work (zero latch, counters zeroed, its render pass loads and stores the engine's).
+		// placement and the occlusion maps last set up; a slot without a view does no work (zero latch, counters zeroed, its render pass
+		// loads and stores the engine's).
 		const std::vector<ShadowViewLayout>& layouts = engine.shadowPlacements;
 		const std::uint32_t epoch = EpochOfShape(ShapeKind::Shadow, kShadowShape);
 		const auto revision = impl->RevisionOf(epoch);
@@ -615,40 +626,24 @@ namespace DCLF
 			++impl->revisions.latchClamped[epoch];
 			in.sunEntryProcesses.resize(target.latchLayout.sunProcesses);
 		}
-		ShadowPayload* committed = ahead.get();
-		auto& async = stats.async[kAsyncShadow];
 		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
 		if (!cleanup)
-			return;
+			return mapsNotDrawn(0);
 		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(EpochTraitsOf(epoch).segment, [&](org::RenderGraph&) {
 			ZoneScopedN("CS.DCLF.ShadowInputs");
-			struct BodyTimer
-			{
-				std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-				double& out;
-				~BodyTimer() { out = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
-			} bodyTimer{ {}, bodyMs };
-			bodyTimer.start = std::chrono::steady_clock::now();
-
+			const auto bodyStart = std::chrono::steady_clock::now();
 			TracyCZoneN(shadowPrepareZone, "CS.DCLF.ShadowInputs.Prepare", true);
 			const auto prepareStart = std::chrono::steady_clock::now();
-			++async.used;
+			++stats.async[kAsyncShadow].used;
 			// The publication was built before the frame's full-frustum cull.
 			ahead->inputs.sunEntryProcesses = in.sunEntryProcesses;
 			engine.committedShadow = ahead;
 			ShadowPayload& payload = *ahead;
 			// The payload's buffers are the installed publication's (a covered frame has a ready one, with its shadow parts); only the
-			// arena is uploaded here. The occlusion epoch reads the same payload.
+			// arena is uploaded here. The occlusion maps' views draw from it too.
 			const PayloadVersions& parts = *impl->InstalledPayload();
-			// Copied: a frame that keeps the publication commits the payload again.
-			*frameOwners = payload.bindingOwners;
-			// The adopted snapshot lives until this execution (and the occlusion epoch's, which shares these owners) retires.
-			if (impl->adoptedSnapshot)
-				frameOwners->push_back(impl->adoptedSnapshot);
-			// Cleared geometry slots' buffers, held until this execution retires.
-			for (auto& owner : Scene::FrameView::Get().TakeRetiredImports())
-				frameOwners->push_back(std::move(owner));
+			Draws::HoldShadowCommit(payload, impl->adoptedSnapshot, *frameOwners);
 			engine.shadowExecutionOwner = frameOwners;
 			prepareMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
 			TracyCZoneEnd(shadowPrepareZone);
@@ -666,47 +661,40 @@ namespace DCLF
 			TracyCZoneN(shadowViewsZone, "CS.DCLF.ShadowInputs.BuildViews", true);
 			const auto blocksStart = std::chrono::steady_clock::now();
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
-			Draws::LatchShadowViews(commit, latchSlot, revisionShape, layouts);
+			// The views the frame draws (its placements' views, then the occlusion maps': ShadowFrame::activeViews), posted for the
+			// revisions to record a variant of, and the narrowest variant covering them submitted.
+			std::uint64_t active = Draws::LatchShadowViews(commit, latchSlot, revisionShape, layouts);
+			const auto occlusionStart = std::chrono::steady_clock::now();
+			mapsDrawn = Draws::LatchOcclusionViews(commit, latchSlot, revisionShape, engine.occlusion, maps, active);
+			occlusionMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - occlusionStart).count();
 			Draws::UploadShadowArena(commit);
 			impl->revisions.latchedMisses += Draws::LatchShadowCsBlocks(commit, latchSlot);
-			// The narrowest variant whose views cover the frame's (the full one, 0, always does): the others' indirect draws would only
-			// fetch zero counts. The frame's set is posted for the revisions to record a variant of (ShadowFrame::activeViews).
-			std::uint64_t active = 0;
-			for (const auto& view : pending)
-				if (const auto index = view.slot - kFirstShadowViewSlot; view.slot >= kFirstShadowViewSlot && index < 64)
-					active |= 1ull << index;
 			engine.lastActiveViews = active;
-			std::size_t variant = 0;
-			int narrowest = 65;
 			const auto& variants = revision.shape->Value<ShadowVariants>()->shapes;
-			for (std::size_t v = 0; v < variants.size(); ++v)
-				if (const auto mask = variants[v]->activeViews; (active & ~mask) == 0 && std::popcount(mask) < narrowest) {
-					narrowest = std::popcount(mask);
-					variant = v;
-				}
-			if (variant != 0)
-				++shadowStats.narrowedEpochs;
+			const std::size_t variant = Draws::NarrowestShadowVariant(variants, active, shadowStats);
 			// The epoch's one culling dispatch, over the whole shadow list (each view's latch bounds its own), a group row per view of the
 			// variant submitted.
-			WriteBuildDispatch(*target.latch, target.latchLayout, latchSlot, false, static_cast<std::uint32_t>(payload.Inputs()), *variants[variant]);
+			WriteBuildDispatch(*target.latch, target.latchLayout, latchSlot, static_cast<std::uint32_t>(payload.Inputs()), *variants[variant]);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, variant);
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			Draws::LogShadowEpoch(commit);
 			TracyCZoneEnd(shadowViewsZone);
+			bodyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bodyStart).count();
 		}, frameOwners);
-		auto& payload = *committed;
 		const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		shadowStats.prepareMs += prepareMs;
 		shadowStats.inputsMs += inputsMs;
 		shadowStats.blocksMs += blocksMs;
 		shadowStats.executeMs += totalMs - bodyMs;  // the graph's own compile, prepare and record
-		if (ok) {
-			engine.NoteShadowEpochDrawn(payload, modeUsed, frameNumber, shadowStats);
-		} else {
-			logger::error("[DCLF] the shadow epoch failed; the render graph is disabled");
-			notReady(ShadowNotReady::Epoch);
-		}
 		shadowStats.cpuMs += totalMs;
+		if (!ok) {
+			logger::error("[DCLF] the shadow epoch failed; the render graph is disabled");
+			return notReady(ShadowNotReady::Epoch);
+		}
+		engine.NoteShadowEpochDrawn(*ahead, modeUsed, frameNumber, mapsDrawn, occlusionMs, shadowStats);
+		// The revision report's "occlusion ... (in the shadow epoch)".
+		impl->revisions.occlusionSubmitted += mapsDrawn != 0;
+		return mapsNotDrawn(mapsDrawn);
 	}
 
 	void ShadowEngine::NoteShadowViewModes(std::array<bool, kShadowModeCount>& a_modeUsed, std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates)
@@ -726,15 +714,15 @@ namespace DCLF
 				NoteCapability(shadowCatalogBuilt, fmt::format("view {} (mode {:#x}) draws with rasterizer state {}, not in the catalog", view.viewId, view.renderMode, view.rasterState));
 			}
 		}
-		// The occlusion epoch draws later from this build, whether or not the engine draws the map this frame.
+		// The occlusion maps' views draw from this build too, whether or not the frame took the map: its occluders stay in the payload.
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 			if (Extensions::OcclusionOn(ActiveToggles(), v) && readyModes[OcclusionModeOf(v)] && occlusion[v].dsvFormat != DXGI_FORMAT_UNKNOWN)
 				modeUsed[OcclusionModeOf(v)] = true;
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 			if (modeUsed[m])
 				a_modeRasterStates[m] = readyStates[m];
-		// One pipeline set per shadow map format: every engine target is D16.
-		const DXGI_FORMAT dsvFormat = pendingViews.front().dsvFormat;
+		// One pipeline set per shadow map format: every engine target is D16 (an epoch of occlusion maps alone keeps the last one's).
+		const DXGI_FORMAT dsvFormat = pendingViews.empty() ? shadowTargetFormat : pendingViews.front().dsvFormat;
 		if (dsvFormat != shadowTargetFormat) {
 			shadowTargetFormat = dsvFormat;
 			NoteCapability(shadowCatalogBuilt, fmt::format("a view draws into format {}", static_cast<int>(dsvFormat)));
@@ -742,20 +730,22 @@ namespace DCLF
 	}
 
 	void ShadowEngine::NoteShadowEpochDrawn(const ShadowPayload& a_payload, const std::array<bool, kShadowModeCount>& a_modeUsed, std::uint32_t a_frame,
-		IndirectDraws::ShadowStats& a_stats)
+		std::uint32_t a_mapsDrawn, double a_occlusionMs, IndirectDraws::ShadowStats& a_stats)
 	{
 		const auto& payload = a_payload;
 		const auto& modeUsed = a_modeUsed;
 		auto& epochStats = a_stats;
 		++epochStats.epochs;
 		epochStats.viewsDrawn += static_cast<std::uint32_t>(pendingViews.size());
-		// The occlusion maps' occluders are uploaded: each map can be DCLF's this frame.
+		// The occlusion maps' occluders this commit uploaded, and the maps it drew (the maps' report line).
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
-			if (!modeUsed[OcclusionModeOf(v)])
-				continue;
-			auto& state = occlusion[v];
-			state.committedFrame = a_frame;
-			state.inputs = static_cast<std::uint32_t>(payload.ModeInputs(OcclusionModeOf(v)));
+			if (modeUsed[OcclusionModeOf(v)])
+				occlusion[v].inputs = static_cast<std::uint32_t>(payload.ModeInputs(OcclusionModeOf(v)));
+			epochStats.occlusionDrawn[v] += (a_mapsDrawn >> v) & 1;
+		}
+		if (a_mapsDrawn) {
+			++epochStats.occlusionEpochs;
+			epochStats.occlusionMs += a_occlusionMs;
 		}
 		ReadShadowCullCounters(a_frame, epochStats);
 		for (std::uint32_t m = 0; m < kFirstOcclusionMode && m < epochStats.casters.size(); ++m)
@@ -857,6 +847,10 @@ namespace DCLF
 					a_stats.cullRootFading = a_words[5];
 					a_stats.cullClass = a_words[16];
 					a_stats.cullBelowTexels = a_words[Draws::kCountBelowTexelsWord];
+					for (std::uint32_t c = 0; c < 4; ++c) {
+						a_stats.probeCasters[c] = a_words[Draws::kCountProbeCastersWord + c];
+						a_stats.probeTriangles[c] = a_words[Draws::kCountProbeTrianglesWord + c];
+					}
 					a_stats.cullSampledView = armed.view;
 					a_stats.cullSampledMode = armed.mode;
 				});
@@ -865,9 +859,10 @@ namespace DCLF
 			}
 		}
 		// One epoch in 127 (or the one after a lost sample), cycling through the views.
-		if (((epoch % 127) != 0 && !lost) || !shadow || shadow->labels.empty())
+		const int probe = shadowSizeProbe.load(std::memory_order_relaxed);
+		if (((epoch % 127) != 0 && !lost && probe < 0) || !shadow || shadow->labels.empty())
 			return;
-		const auto& view = shadow->labels[(epoch / 127) % shadow->labels.size()];
+		const auto& view = shadow->labels[probe >= 0 ? static_cast<std::uint32_t>(probe) % shadow->labels.size() : (epoch / 127) % shadow->labels.size()];
 		if (view.slot >= readback->sources)
 			return;
 		armed = { true, frameSlot, view.slot, CounterReadback::StampOf(a_frame), view.viewId, view.renderMode, host->SubmittedPoint() };

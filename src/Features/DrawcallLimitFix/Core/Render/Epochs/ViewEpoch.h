@@ -331,12 +331,6 @@ namespace DCLF::Draws
 	 * faces.
 	 */
 	using ViewFamilyRows = std::array<std::span<const std::byte>, Extensions::kDrawFamilies>;
-	/** @brief Whether a_family draws in a trees view's faces: taken, with faces (Api::DrawFamilyContribution::faces). */
-	inline bool FamilyHasFaces(Api::DrawFamily a_family)
-	{
-		const auto& entry = Extensions::DrawFamilyOf(a_family);
-		return entry.taken && entry.contribution.faces.face;
-	}
 
 	/** @brief A face's values a view's commit writes (WriteViewLatch). */
 	struct ViewFace

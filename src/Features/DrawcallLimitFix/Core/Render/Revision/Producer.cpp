@@ -453,11 +453,10 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief The map rows of every (mode, rasterizer state) the shadow layouts draw (a_placements, the occlusion maps' a_recent):
+		 * @brief The map rows of every (mode, rasterizer state) the shadow layouts draw (a_placements, the occlusion maps' a_occlusion):
 		 * what the shadow shapes' row buckets are made of (ShadowRowBuckets), by content. Each pair once while few are seen.
 		 */
-		template <class Recent>
-		std::uint64_t ShadowRowsWitness(const Lookups& a_lookups, const std::vector<ShadowViewLayout>& a_placements, const Recent& a_recent)
+		std::uint64_t ShadowRowsWitness(const Lookups& a_lookups, const std::vector<ShadowViewLayout>& a_placements, const std::vector<ShadowViewLayout>& a_occlusion)
 		{
 			std::uint64_t hash = 0xcbf29ce484222325ull;
 			std::array<std::uint64_t, 16> seen{};
@@ -477,8 +476,7 @@ namespace DCLF
 				}
 			};
 			rows(a_placements);
-			for (const auto& layouts : a_recent)
-				rows(layouts);
+			rows(a_occlusion);
 			return hash;
 		}
 
@@ -589,7 +587,7 @@ namespace DCLF
 			const auto& inputs = producer.inputs;
 			a_producer.UpdateDrawBound(tables, a_publication.tablesGeneration);
 			a_key = { TablesWitness(tables, producer.drawBound), a_publication.catalog, a_publication.tablesGeneration, a_publication.revision, inputs.generation,
-				a_publication.toggles, LookupsWitness(a_lookups, tables), ShadowRowsWitness(a_lookups, inputs.shadowPlacements, producer.recentOcclusionLayouts),
+				a_publication.toggles, LookupsWitness(a_lookups, tables), ShadowRowsWitness(a_lookups, inputs.shadowPlacements, producer.occlusionLayouts),
 				VolatileWitness(inputs) };
 			return a_reuse.valid ? MovedRequirements(a_reuse.key, a_key) : ~0u;
 		}
@@ -604,13 +602,11 @@ namespace DCLF
 			for (std::size_t v = 0; v < a_kept.views.size(); ++v)
 				if (!same(a_kept.views[v], a_made.views[v]))
 					return false;
-			for (std::size_t kind = 0; kind < a_kept.shadow.size(); ++kind) {
-				if (a_kept.shadow[kind].size() != a_made.shadow[kind].size())
+			if (a_kept.shadow.size() != a_made.shadow.size())
+				return false;
+			for (std::size_t i = 0; i < a_kept.shadow.size(); ++i)
+				if (!same(a_kept.shadow[i], a_made.shadow[i]))
 					return false;
-				for (std::size_t i = 0; i < a_kept.shadow[kind].size(); ++i)
-					if (!same(a_kept.shadow[kind][i], a_made.shadow[kind][i]))
-						return false;
-			}
 			return true;
 		}
 
@@ -795,7 +791,7 @@ namespace DCLF
 
 		/**
 		 * @brief CS_DCLF_PERSISTENT_PARITY's report: which participant's shape made again differs from a_kept's (the main segment, the
-		 * shadow or occlusion epoch's layout, the view) and the first field it differs in. Called only when SameMadeShapes found one.
+		 * shadow epoch's shape or variant, the view) and the first field it differs in. Called only when SameMadeShapes found one.
 		 */
 		std::string MadeShapesDifference(const MadeShapes& a_kept, const MadeShapes& a_made)
 		{
@@ -810,15 +806,10 @@ namespace DCLF
 			std::string out;
 			for (std::size_t s = 0; s < a_kept.main.size() && out.empty(); ++s)
 				out = shape(s == kDepthShape ? "main depth" : "main colour", a_kept.main[s], a_made.main[s]);
-			for (std::size_t kind = 0; kind < a_kept.shadow.size() && out.empty(); ++kind) {
-				const char* epoch = kind == 0 ? "shadow" : "occlusion";
-				if (a_kept.shadow[kind].size() != a_made.shadow[kind].size()) {
-					out = fmt::format("{}: layouts {} -> {}", epoch, a_kept.shadow[kind].size(), a_made.shadow[kind].size());
-					break;
-				}
-				for (std::size_t i = 0; i < a_kept.shadow[kind].size() && out.empty(); ++i)
-					out = shape(fmt::format("{} layout {}", epoch, i), a_kept.shadow[kind][i], a_made.shadow[kind][i]);
-			}
+			if (out.empty() && a_kept.shadow.size() != a_made.shadow.size())
+				out = fmt::format("shadow: variants {} -> {}", a_kept.shadow.size(), a_made.shadow.size());
+			for (std::size_t i = 0; i < a_kept.shadow.size() && i < a_made.shadow.size() && out.empty(); ++i)
+				out = shape(fmt::format("shadow variant {}", i), a_kept.shadow[i], a_made.shadow[i]);
 			for (std::size_t v = 0; v < a_kept.views.size() && out.empty(); ++v)
 				out = shape(ImplProducer::kKeyGroupNames[kViewSlots[v].keyGroup], a_kept.views[v], a_made.views[v]);
 			return "a shape differs from the kept one: " + (out.empty() ? std::string("(no field found)") : out);
@@ -1061,7 +1052,7 @@ namespace DCLF
 				ViewForwardSlotsOf(tables, viewOn[v], viewForwardSlots);
 			for (std::size_t d = 0; traits.trees && d < Extensions::kDrawFamilies; ++d) {
 				const auto family = static_cast<Api::DrawFamily>(d);
-				viewRevisionFaces[d] = viewOn[v] && Extensions::DrawFamilyOn(producer.toggles, family) ?
+				viewRevisionFaces[d] = viewOn[v] && Extensions::DrawFamilyHasFaces(family) && Extensions::DrawFamilyOn(producer.toggles, family) ?
 				                           ForwardPipelineOf(a_make.catalog, ForwardPipelineKey{ 0, 0, FamilySlotOf(family).forwardFlags }, view.targets) :
 				                           rhi::PipelineHandle{};
 			}
@@ -1239,7 +1230,7 @@ namespace DCLF
 		// lookup's write moves those alone).
 		group = kKeyLookups;
 		mix(a_make.lookupsWitness);
-		mix(ShadowRowsWitness(lookups, inputs.shadowPlacements, producer.recentOcclusionLayouts));
+		mix(ShadowRowsWitness(lookups, inputs.shadowPlacements, producer.occlusionLayouts));
 		mix(a_pipelines);  // the request's pipeline slots (the publication's tables, not the coordinator's)
 		// CS's SharedData and FeatureData sizes the shadow shapes' arena blocks take (ShadowArenaBlocksOf: the views' push data, the
 		// commit's latched copies), which no shadow input carries.
@@ -1338,6 +1329,8 @@ namespace DCLF
 			a_mixer.group = slot.keyGroup;
 			if (const auto& sceneState = inputs.scene)
 				for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d) {
+					if (!Extensions::DrawFamilyHasFaces(static_cast<Api::DrawFamily>(d)))
+						continue;  // no faces: nothing of the family's in a trees view's shape
 					if (const auto* family = a_families[d]) {
 						a_mixer.Mix(family->drawSignature.index);
 						a_mixer.Mix(family->drawSignature.generation);

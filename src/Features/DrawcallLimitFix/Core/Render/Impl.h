@@ -187,7 +187,7 @@ namespace DCLF
 		/** @brief A view's commit (render thread): its map, faces and draw families' face rows into the shape's latch; returns faces drawn. */
 		std::uint32_t CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const ViewFamilyRows* a_rows);
 		/**
-		 * @brief A hosted view epoch a_epoch's commit (IndirectDraws::SubmitViewEpoch of the reflection's faces), into its host's commit
+		 * @brief A hosted view epoch a_epoch's commit (IndirectDraws::SubmitViewEpoch of the reflection's faces, first person's depth), into its host's commit
 		 * (hostedCommit: only from inside it, the depth commit running the view's work), against the selected revision's shape of the epoch,
 		 * which the host's recordings carry: a_listed's payloads, its frame textures and its draw families' rows held with the host's
 		 * execution, its latch written in the host's frame slot, and the epoch marked committed (the host submits its recording with its

@@ -279,8 +279,11 @@ namespace DCLF
 			const auto renderers = std::atomic_load(&view.renderers);
 			if (!renderers || !renderers->contains(a_batch))
 				continue;
-			// A draw family's engine shape (tree LOD's), withheld while the view's faces draw the family.
+			// A draw family's engine shape (tree LOD's), withheld while the view's faces draw the family. One of a family without faces
+			// (grass) is never a view's: the view's own renderers draw it, and it is no residue of the view's roots.
 			const std::size_t family = EngineShapeFamily(a_pass->geometry);
+			if (family < Extensions::kDrawFamilies && !Extensions::DrawFamilyHasFaces(static_cast<Api::DrawFamily>(family)))
+				return false;
 			const bool treeLod = family < Extensions::kDrawFamilies;
 			if (treeLod && (view.familyOwned.load(std::memory_order_acquire) & (1u << family))) {
 				view.ownFamilyWithheld[family].fetch_add(1, std::memory_order_relaxed);
@@ -561,7 +564,7 @@ namespace DCLF
 	/**
 	 * @brief The occlusion maps' registration (FUN_1414b2c20, render mode 0x1C: Precipitation::SetupMask's accumulator) inserting a
 	 * pass into geometry group 14 (FUN_1414f5090(batch, pass, 14), its one insertion): a member of the map's occluder phase is
-	 * withheld, DCLF drawing it into the map (DrawcallLimitFix::DrawOcclusion); the engine draws every other occluder.
+	 * withheld, DCLF drawing it into the map (its shadow epoch, FrameDriver::AfterShadowMaps); the engine draws every other occluder.
 	 */
 	struct PassCapture::OcclusionGroupHook
 	{

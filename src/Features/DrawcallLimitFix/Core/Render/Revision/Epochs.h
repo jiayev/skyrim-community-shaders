@@ -34,10 +34,11 @@ namespace DCLF::Draws
 
 	// Index of a drawing segment's shape (Resources::frames): the main epochs' (Api::MainShape).
 	constexpr std::size_t kDepthShape = static_cast<std::size_t>(Api::MainShape::Depth), kColourShape = static_cast<std::size_t>(Api::MainShape::Colour);
-	// Index of a shadow epoch's shape (Api::EpochDef::shapeIndex): the shadow views', the occlusion maps'.
-	constexpr std::uint32_t kShadowShape = 0, kOcclusionShape = 1;
+	// Index of the shadow epoch's shape (Api::EpochDef::shapeIndex): the shadow views' and the occlusion maps', its one; kShadowShapes, how
+	// many there are.
+	constexpr std::uint32_t kShadowShape = 0, kShadowShapes = 1;
 
-	/** @brief What a revision's shape slot of an epoch holds: a main segment's shape, the shadow or occlusion variants, a view's. */
+	/** @brief What a revision's shape slot of an epoch holds: a main segment's shape, the shadow epoch's variants, a view's. */
 	enum class ShapeKind : std::uint8_t
 	{
 		Main,
@@ -46,10 +47,11 @@ namespace DCLF::Draws
 	};
 	/**
 	 * @brief An epoch's traits: its segment and name, the shape it records against (its kind and its index there: the main segment,
-	 * shadow 0 or occlusion 1, the ViewKind), the epoch whose shape it shares (kNoEpoch: none; always an earlier one), the class whose
+	 * the shadow epoch's 0, the ViewKind), the epoch whose shape it shares (kNoEpoch: none; always an earlier one), the class whose
 	 * toggle gates the shared shape and the epoch's part in the claims (Count: none), and whether the frame's claims need its recordings.
-	 * A hosted epoch (Api::EpochDef::hostedBy: the reflection's) names its host (hostedBy, an earlier Main epoch, whose segment it has), and
-	 * the host it (hosts): the host's recordings carry the hosted epoch's passes, the hosted one has none of its own.
+	 * A hosted epoch (Api::EpochDef::hostedBy: the reflection's, first person's depth) names its host (hostedBy, an earlier Main epoch,
+	 * whose segment it has), and the host them (hostsMask: a bit each, by row; 0: none): the host's recordings carry the hosted epochs'
+	 * passes, a hosted one has none of its own.
 	 */
 	struct EpochTraits
 	{
@@ -60,8 +62,10 @@ namespace DCLF::Draws
 		std::uint32_t sharesWith = kNoEpoch;
 		Api::ObjectClass gate = Api::ObjectClass::Count;
 		bool claims = false;
-		std::uint32_t hostedBy = kNoEpoch, hosts = kNoEpoch;
+		std::uint32_t hostedBy = kNoEpoch;
+		std::uint32_t hostsMask = 0;
 	};
+	static_assert(kMaxEpochs <= 32, "EpochTraits::hostsMask (and a host commit's drawn bits) hold an epoch a bit");
 	/** @brief Any thread, after InstallFeatures (0 before): the schedule's epochs. */
 	std::uint32_t EpochCount();
 	/** @brief Any thread, after InstallFeatures: epoch a_epoch's traits (a_epoch < EpochCount()). */

@@ -173,8 +173,8 @@ namespace DCLF::Draws
 		};
 		Committed depthCommitted;
 		// The views drawing from these resources (ViewResources::main), by view slot: set by SetupView, and by Setup for the views made
-		// before. What a main epoch hosting a view's epoch (Api::EpochDef::hostedBy: the depth epoch, the reflection's) makes that epoch's
-		// passes with, at the graph's build (render thread, as the writes). Weak: a view holds its main resources.
+		// before. What a main epoch hosting views' epochs (Api::EpochDef::hostedBy: the depth epoch, the reflection's and first person's
+		// depth) makes each epoch's passes with, at the graph's build (render thread, as the writes). Weak: a view holds its main resources.
 		std::array<std::weak_ptr<ViewResources>, static_cast<std::size_t>(Api::EngineView::Count)> views;
 	};
 

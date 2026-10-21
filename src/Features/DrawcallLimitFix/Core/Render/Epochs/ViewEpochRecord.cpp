@@ -193,7 +193,7 @@ namespace DCLF
 						DeclareFrameBuffers(a_builder, main);
 					// The faces' draw families (tree LOD's tables, the faces' rows and lists).
 					for (std::size_t d = 0; d < Extensions::kDrawFamilies && mode == DrawMode::Faces; ++d)
-						if (const auto& family = Extensions::DrawFamilies()[d].contribution.faces; family.declare) {
+						if (const auto& family = Extensions::DrawFamilies()[d].contribution.faces; Extensions::DrawFamilyHasFaces(static_cast<Api::DrawFamily>(d))) {
 							Api::DrawFamilyDeclare declare{ a_builder, scene, resources.get(), std::span(bindings.faceLists[d]) };
 							family.declare(declare);
 						}
@@ -220,8 +220,9 @@ namespace DCLF
 					for (std::uint32_t i = 0; i < colours; ++i)
 						prepared.colours[i] = a_preparation.Capture(a_bindings.colours[i]);
 					for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
-						for (std::uint32_t f = 0; f < prepared.faces; ++f)
-							prepared.faceRows[d][f] = resources->faceRowsAddress[d][f];
+						if (Extensions::DrawFamilyHasFaces(static_cast<Api::DrawFamily>(d)))
+							for (std::uint32_t f = 0; f < prepared.faces; ++f)
+								prepared.faceRows[d][f] = resources->faceRowsAddress[d][f];
 					prepared.depth = a_preparation.Capture(a_bindings.depth);
 					prepared.frame = std::move(frame);
 					prepared.mode = mode;
@@ -294,7 +295,7 @@ namespace DCLF
 						for (std::size_t d = 0; d < Extensions::kDrawFamilies && mode == DrawMode::Faces; ++d) {
 							const auto& faces = families[d].contribution.faces;
 							const auto& drawn = frame.faces[d];
-							if (drawn.pipeline.valid() && drawn.groups && faces.record) {
+							if (Extensions::DrawFamilyHasFaces(static_cast<Api::DrawFamily>(d)) && drawn.pipeline.valid() && drawn.groups) {
 								faces.record({ commands, Api::DrawFamilyPass::Face, kNothing, a_prepared.faceRows[d][f], a_recording.Resolve(a_bindings.faceLists[d][f]).GetHandle(),
 									drawn.pipeline, drawn.signature });
 							}
@@ -438,7 +439,7 @@ namespace DCLF
 						Register(a_graph, id("depth"), resources->depth);
 					Register(a_graph, id(traits.target), resources->target);
 					for (std::size_t d = 0; d < Extensions::kDrawFamilies && traits.trees; ++d)
-						if (FamilyHasFaces(static_cast<Api::DrawFamily>(d)))
+						if (Extensions::DrawFamilyHasFaces(static_cast<Api::DrawFamily>(d)))
 							for (std::uint32_t f = 0; f < traits.faces; ++f)
 								Register(a_graph, id(fmt::format("{}{}", Extensions::DrawFamilies()[d].rowName, f)), resources->faceRows[d][f]);
 				}
@@ -473,7 +474,8 @@ namespace DCLF
 			}
 
 			// A view without a depth pass draws its faces in its one epoch (the reflection's: hosted by the depth epoch); one with a depth
-			// pass its depth, then its colour in the colour epoch.
+			// pass its depth (first person's: hosted by the depth epoch, after the HZB and both phases' depth), then its colour in the
+			// colour epoch.
 			std::shared_ptr<org::RenderPass> FacesDraw(const Api::PassContext& a_context)
 			{
 				const auto& resources = a_context.View();

@@ -143,8 +143,8 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 -   **`set commit parity` at startup (`<- COMMIT`).** This appeared once, on 2026-10-21, at frame 6 of a motion parity run (run
     `stageB2-full`). One slot ('Land', slot 6729) differed from a full evaluation: the commit kept it as not waiting, while the full
     evaluation had it waiting (causes 0x11; that frame's set line shows pipeline waits). It was not seen in the three runs before.
-    It looks like a readiness event racing the commit during startup's pipeline builds. **Next:** watch for it in later runs. If it
-    recurs, log the slot's readiness events around the commit.
+    It recurred in `stageB5-full` at frame 4, again on a 'Land' slot with causes 0x11. It looks like a terrain slot's pipeline
+    readiness event racing the commit during startup's pipeline builds. **Next:** log the slot's readiness events around the commit.
 -   **Capture parity mismatches under `CS_DCLF_CAPTURE_PARITY` with `CS_DCLF_PARITY_BOTH`**, in every window. Typical counts are
     about 44k of 153k draws (29k material, about 300 per-geometry, 7k technique), and every LODObjects, LODObjectHD and LODLandNoise
     draw. The cause, by field:

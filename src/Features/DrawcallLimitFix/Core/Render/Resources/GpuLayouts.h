@@ -67,7 +67,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
 	// under a fading root, [16] of its caster class, [43] below the size threshold (kCullMinTexels).
-	constexpr std::uint32_t kCountWords = 44;
+	constexpr std::uint32_t kCountWords = 52;
 	/** @brief Zeros an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
 	// The sun test (kObjectSunTest): the colour dispatch's tested inputs, and those that missed every cascade.
@@ -107,6 +107,10 @@ namespace DCLF::Draws
 	// sun views' casters below the size threshold (kCullMinTexels). Must match BuildDrawsCS.hlsl.
 	constexpr std::uint32_t kCountRetestsWord = 42;
 	constexpr std::uint32_t kCountBelowTexelsWord = 43;
+	// The sun views' size probe (kCullSizeProbe): drawn casters, then their triangles (the first partition's), by bound radius below
+	// 256, 1024, 4096 and the rest. Must match BuildDrawsCS.hlsl.
+	constexpr std::uint32_t kCountProbeCastersWord = 44;
+	constexpr std::uint32_t kCountProbeTrianglesWord = 48;
 	// Phase 2's dispatch (Resources::retestDispatch) as the depth commit latches it: no groups (phase 1 adds one per 64 retests), 1, 1.
 	inline constexpr std::uint32_t kRetestDispatchReset[4] = { 0, 1, 1, 0 };
 	// Byte offsets of the count words the indirect draws read; must match BuildDrawsCS.hlsl.
@@ -496,8 +500,8 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kSunTestOn = 1u << 31;
 
 	/**
-	 * @brief One view of BuildDrawsCS's ShadowViews dispatch (a shadow or occlusion epoch's views in one dispatch): a row of the table
-	 * ShadowBuildDrawsPass publishes at preparation, what a dispatch per view would push (BuildDrawsCS.hlsl's ShadowBuildView).
+	 * @brief One view of BuildDrawsCS's ShadowViews dispatch (the shadow epoch's views, the occlusion maps' among them, in one
+	 * dispatch): a row of the table ShadowBuildDrawsPass publishes at preparation, what a dispatch per view would push (BuildDrawsCS.hlsl's ShadowBuildView).
 	 */
 	struct ShadowBuildView
 	{
@@ -609,13 +613,13 @@ namespace DCLF::Draws
 		}
 		// The index pool's copies (IndexPool): their dispatch's groups, then their count.
 		std::uint32_t PoolOffset() const { return BucketOffset(viewSlots); }
-		// An epoch's culling dispatch (ShadowBuildDrawsPass: one for all its views), its groups (x, y, z, then a word unused): the shadow
-		// epoch's, then the occlusion epoch's (a_sky). The two epochs share the block, and each commit writes its own every frame.
-		std::uint32_t BuildDispatchOffset(bool a_sky) const { return PoolOffset() + (a_sky ? 8u : 4u) * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		// The epoch's culling dispatch (ShadowBuildDrawsPass: one for all its views, the occlusion maps' among them), its groups (x, y, z,
+		// then a word unused), written by each commit.
+		std::uint32_t BuildDispatchOffset() const { return PoolOffset() + 4u * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		// A view slot's blocks, copied to the view-blocks buffer by LatchedCopiesPass (the commit records no copy).
 		std::uint32_t ViewBlockOffset(std::uint32_t a_slot) const
 		{
-			const std::uint32_t first = (BuildDispatchOffset(true) + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 255u) & ~255u;
+			const std::uint32_t first = (BuildDispatchOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 255u) & ~255u;
 			return first + a_slot * static_cast<std::uint32_t>(kShadowViewSlotBytes);
 		}
 		std::uint32_t Bytes() const { return ViewBlockOffset(viewSlots); }
@@ -714,6 +718,9 @@ namespace DCLF::Draws
 	// threshold draws nothing (BuildDrawsLatch::minCasterRadius). The sun's entry exclusion leaves DCLF the only source of those casters,
 	// so a culled one casts nothing at all.
 	constexpr std::uint32_t kCullMinTexels = 0x8000;
+	// cullFlags: a sun view's size probe (shadowSizeProbe on): counts its drawn casters and triangles by bound radius
+	// (kCountProbeCastersWord). Diagnostic only.
+	constexpr std::uint32_t kCullSizeProbe = 0x40000;
 	// The key word a view reads (BuildDrawsCS: KeyWord), bits 16-17: 0 pipeline word (main, reflection); 1 shadowKey; 2 and 3
 	// occlusionKey[0], [1].
 	constexpr std::uint32_t kCullKeyShift = 16;

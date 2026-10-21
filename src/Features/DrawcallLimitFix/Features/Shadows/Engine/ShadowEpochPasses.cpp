@@ -1,7 +1,7 @@
-// The shadow and occlusion epochs' passes (shadows.*, Schedule/Frame.cpp's kShadow and kOcclusion): the views' latched copies, the index
-// pool's copies (Core's IndexPoolPass), the culling (ShadowBuildDrawsPass: every view in one dispatch), the views' draws (ShadowViewPass)
-// and the culling counters' readback (Core's), made from the shadow extension's resources (Api::PassContext::Shadow; Core registers them
-// with the graph).
+// The shadow epoch's passes (shadows.*, Schedule/Frame.cpp's kShadow): the views' latched copies, the index pool's copies (Core's
+// IndexPoolPass), the culling (ShadowBuildDrawsPass: every view in one dispatch, the occlusion maps' with the shadow views'), the views'
+// draws (ShadowViewPass: the shadow views' and the occlusion maps') and the culling counters' readback (Core's), made from the shadow
+// extension's resources (Api::PassContext::Shadow; Core registers them with the graph).
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
@@ -63,15 +63,15 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief The shadow views' culling: BuildDrawsCS in its single phase, frustum only, every view of the epoch in one dispatch
-	 * (ShadowViews): x over the shadow list's inputs, y over the views' table, a thread culling one input for one view with that view's
-	 * latch and writing that view's slot (sequences, bucket counts, counter words) as a dispatch per view did; every pass reading a slot
-	 * is unchanged.
+	 * (ShadowViews), the occlusion maps' among them: x over the shadow list's inputs, y over the views' table, a thread culling one input
+	 * for one view with that view's latch and writing that view's slot (sequences, bucket counts, counter words) as a dispatch per view
+	 * did; every pass reading a slot is unchanged.
 	 */
 	class ShadowBuildDrawsPass final : public org::TypedRenderGraphPass<ShadowBuildDrawsPass, ShadowBuildPrepared, ShadowBuildBindings>
 	{
 	public:
-		ShadowBuildDrawsPass(std::shared_ptr<ShadowResources> a_resources, bool a_sky) :
-			resources(std::move(a_resources)), sky(a_sky), viewTable(a_sky ? "cs.dclf.sky.build-views" : "cs.dclf.shadow.build-views") {}
+		explicit ShadowBuildDrawsPass(std::shared_ptr<ShadowResources> a_resources) :
+			resources(std::move(a_resources)), viewTable("cs.dclf.shadow.build-views") {}
 
 		ShadowBuildBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -97,7 +97,7 @@ namespace DCLF::Draws
 
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentShadowFrame(a_preparation, sky);
+			const auto frame = CurrentShadowFrame(a_preparation);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(frame ? frame->activeViews : 0);
 			a_out.push_back(FadeRows() ? 1u : 0u);
@@ -108,7 +108,7 @@ namespace DCLF::Draws
 		ShadowBuildPrepared Prepare(const ShadowBuildBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ShadowBuildPrepared prepared{};
-			const auto frame = CurrentShadowFrame(a_preparation, sky);
+			const auto frame = CurrentShadowFrame(a_preparation);
 			if (!frame || frame->views.empty() || !resources->buildDraws || !frame->latch || !resources->dispatchSignature)
 				return prepared;
 			// The views' table: what a dispatch per view pushed (its latch, its slot's outputs), in the views' order.
@@ -134,7 +134,7 @@ namespace DCLF::Draws
 			prepared.program = resources->buildDraws;
 			prepared.latch = frame->latch;
 			prepared.signature = resources->dispatchSignature->GetHandle();
-			prepared.dispatchOffset = frame->latchLayout.BuildDispatchOffset(sky);
+			prepared.dispatchOffset = frame->latchLayout.BuildDispatchOffset();
 			prepared.views = static_cast<std::uint32_t>(rows.size());
 			auto& constants = prepared.constants;
 			constants.latchIndex = frame->latch->SrvIndex();
@@ -174,7 +174,6 @@ namespace DCLF::Draws
 		bool FadeRows() const { return RootRowsCurrent(*resources->scene); }
 
 		std::shared_ptr<ShadowResources> resources;
-		bool sky = false;
 		// The views' table (ShadowBuildView rows): an upload-heap buffer per distinct content, each kept by the packets naming it.
 		org::PreparedTablePublisher viewTable;
 	};
@@ -190,7 +189,6 @@ namespace DCLF::Draws
 	struct ShadowPrepared
 	{
 		std::shared_ptr<const ShadowFrame> frame;
-		bool sky = false;
 		struct View
 		{
 			std::uint32_t index = 0;  // into frame->views
@@ -199,12 +197,15 @@ namespace DCLF::Draws
 		std::vector<View> views;
 	};
 
-	/** @brief The shadow views' draws: each view's culled sequences into its slice and viewport. */
+	/**
+	 * @brief The shadow views' draws: each view's culled sequences into its slice and viewport, the shadow maps' and the occlusion maps'
+	 * (their targets cleared by the engine's RenderMask before the shadow maps were drawn).
+	 */
 	class ShadowViewPass final : public org::TypedRenderGraphPass<ShadowViewPass, ShadowPrepared, ShadowPassBindings>
 	{
 	public:
-		ShadowViewPass(std::shared_ptr<ShadowResources> a_resources, bool a_sky) :
-			resources(std::move(a_resources)), sky(a_sky) {}
+		explicit ShadowViewPass(std::shared_ptr<ShadowResources> a_resources) :
+			resources(std::move(a_resources)) {}
 
 		ShadowPassBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -212,7 +213,7 @@ namespace DCLF::Draws
 			const std::span<const org::SrvView> noViews{};
 			ShadowPassBindings bindings{};
 			for (std::uint32_t i = 0; i < kShadowDepthTargets; ++i) {
-				if (resources->depth[i] && IsOcclusionTarget(i) == sky) {
+				if (resources->depth[i]) {
 					bindings.depthViews[i].reserve(resources->depthLayers[i]);
 					for (std::uint32_t slice = 0; slice < resources->depthLayers[i]; ++slice)
 						bindings.depthViews[i].push_back(a_builder.DepthReadWrite(resources->depth[i], org::DsvView{ UINT32_MAX, 0, slice }).View());
@@ -235,7 +236,7 @@ namespace DCLF::Draws
 
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentShadowFrame(a_preparation, sky);
+			const auto frame = CurrentShadowFrame(a_preparation);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(frame ? frame->activeViews : 0);
 			a_out.push_back(NamedSerial(a_preparation, resources->pool->indices));
@@ -244,16 +245,15 @@ namespace DCLF::Draws
 		ShadowPrepared Prepare(const ShadowPassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ShadowPrepared prepared{};
-			auto frame = CurrentShadowFrame(a_preparation, sky);
+			auto frame = CurrentShadowFrame(a_preparation);
 			if (!frame || frame->views.empty() || !frame->indirect.valid)
 				return prepared;
 			for (std::uint32_t i = 0; i < frame->views.size(); ++i) {
 				const auto& view = frame->views[i];
-				// A placement the variant's frames leave unused: its slot's latch is zero, nothing to draw or load.
+				// A placement or occlusion map the variant's frames leave unused: its slot's latch is zero, nothing to draw or load.
 				if (i < 64 && !((frame->activeViews >> i) & 1))
 					continue;
-				if (!view.capacity || view.slot >= a_bindings.sequences.size() || view.target >= kShadowDepthTargets || !resources->depth[view.target] ||
-					IsOcclusionTarget(view.target) != sky)
+				if (!view.capacity || view.slot >= a_bindings.sequences.size() || view.target >= kShadowDepthTargets || !resources->depth[view.target])
 					continue;
 				// The declared slices, not the live target's: a target grown since has slices these bindings cannot name.
 				if (view.slice >= resources->depthLayers[view.target] || view.slice >= a_bindings.depthViews[view.target].size())
@@ -262,7 +262,6 @@ namespace DCLF::Draws
 			}
 			if (!prepared.views.empty())
 				prepared.frame = std::move(frame);
-			prepared.sky = sky;
 			return prepared;
 		}
 
@@ -293,7 +292,7 @@ namespace DCLF::Draws
 				depth.stencilLoad = rhi::LoadOp::Load;
 				depth.stencilStore = rhi::StoreOp::Store;
 				begin.depth = &depth;
-				begin.debugName = a_prepared.sky ? "DCLF occlusion map" : "DCLF shadow view";
+				begin.debugName = IsOcclusionTarget(view.target) ? "DCLF occlusion map" : "DCLF shadow view";
 			}
 			// Per view: a plain indexed indirect draw per bucket over its range of the slot's sequences, counted by its count word.
 			// A plain draw cannot bind its own vertex buffer, so the vertex stage fetches through the sequence (Utility.hlsl, DCLF_PULLED).
@@ -310,7 +309,8 @@ namespace DCLF::Draws
 				"cs.dclf.shadow.view-4", "cs.dclf.shadow.view-5", "cs.dclf.shadow.view-6", "cs.dclf.shadow.view-7+" };
 			for (std::size_t i = 0; i < a_prepared.views.size(); ++i) {
 				const auto& view = frame.views[a_prepared.views[i].index];
-				const bool viewRange = nvCommands && NvPerf::PushCommandBufferRange(nvCommands, kViewRanges[std::min<std::size_t>(i, std::size(kViewRanges) - 1)]);
+				const char* range = IsOcclusionTarget(view.target) ? "cs.dclf.shadow.occlusion-map" : kViewRanges[std::min<std::size_t>(i, std::size(kViewRanges) - 1)];
+				const bool viewRange = nvCommands && NvPerf::PushCommandBufferRange(nvCommands, range);
 				commands.BeginPass(begins[i]);
 				commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 				commands.BindLayout(frame.indirect.layout);
@@ -350,7 +350,6 @@ namespace DCLF::Draws
 
 	private:
 		std::shared_ptr<ShadowResources> resources;
-		bool sky = false;
 	};
 }
 
@@ -358,10 +357,10 @@ namespace DCLF::Features::Shadows::Engine
 {
 	namespace
 	{
-		/** @brief The views' latched copies: blocks, counters, and the commit's values in the constants. */
-		std::shared_ptr<org::RenderPass> ShadowLatchedCopies(const std::shared_ptr<Draws::ShadowResources>& a_resources, bool a_sky)
+		/** @brief The views' latched copies (the occlusion maps' too): blocks, counters, and the commit's values in the constants. */
+		std::shared_ptr<org::RenderPass> LatchedCopies(const Api::PassContext& a_context)
 		{
-			auto targets = [shadow = a_resources] {
+			auto targets = [shadow = a_context.Shadow()] {
 				std::vector<Draws::LatchedTarget> out{ { nullptr, shadow->viewBlocks.buffer }, { shadow->constants, nullptr } };
 				for (std::size_t s = 0; s < shadow->count.size(); ++s) {
 					out.push_back({ shadow->count[s], nullptr });
@@ -369,16 +368,10 @@ namespace DCLF::Features::Shadows::Engine
 				}
 				return out;
 			};
-			return Draws::MakeLatchedCopiesPass(std::move(targets), [a_sky](const org::PassPrepareContext& a_preparation) {
-				const auto frame = Draws::CurrentShadowFrame(a_preparation, a_sky);
+			return Draws::MakeLatchedCopiesPass(std::move(targets), [](const org::PassPrepareContext& a_preparation) {
+				const auto frame = Draws::CurrentShadowFrame(a_preparation);
 				return frame ? Draws::LatchedSource{ frame->generation, frame, frame->latched } : Draws::LatchedSource{};
 			});
-		}
-
-		template <bool Sky>
-		std::shared_ptr<org::RenderPass> LatchedCopies(const Api::PassContext& a_context)
-		{
-			return ShadowLatchedCopies(a_context.Shadow(), Sky);
 		}
 
 		// Core's IndexPoolPass (the depth epoch's too), from the shadow shape's latch.
@@ -387,16 +380,14 @@ namespace DCLF::Features::Shadows::Engine
 			return Draws::MakeShadowIndexPoolPass(a_context.Shadow());
 		}
 
-		template <bool Sky>
 		std::shared_ptr<org::RenderPass> BuildDraws(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::ShadowBuildDrawsPass>(a_context.Shadow(), Sky);
+			return std::make_shared<Draws::ShadowBuildDrawsPass>(a_context.Shadow());
 		}
 
-		template <bool Sky>
 		std::shared_ptr<org::RenderPass> ViewDraws(const Api::PassContext& a_context)
 		{
-			return std::make_shared<Draws::ShadowViewPass>(a_context.Shadow(), Sky);
+			return std::make_shared<Draws::ShadowViewPass>(a_context.Shadow());
 		}
 
 		// The views' culling counters, to the host (ShadowEngine::ReadShadowCullCounters), for the report's shadow culling line: only while
@@ -410,16 +401,13 @@ namespace DCLF::Features::Shadows::Engine
 		using PassKind = Api::PassKind;
 		using PassQueue = Api::PassQueue;
 
-		// The shadow epoch's, then Skylighting's occlusion map: the same passes in its own epoch after RenderMask.
+		// The shadow epoch's: the shadow views' and the occlusion maps' (Skylighting's sky map, the precipitation mask), in one epoch.
 		constexpr Api::PassDef kShadowPasses[] = {
-			{ .key = "shadows.latched-copies", .passName = "cs.dclf.shadow.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies<false> },
+			{ .key = "shadows.latched-copies", .passName = "cs.dclf.shadow.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
 			{ .key = "shadows.index-pool", .passName = "cs.dclf.shadow.index-pool", .make = &IndexPoolCopies },
-			{ .key = "shadows.build-draws", .passName = "cs.dclf.shadow.build-draws", .make = &BuildDraws<false> },
-			{ .key = "shadows.view", .passName = "cs.dclf.shadow.view", .kind = PassKind::Render, .make = &ViewDraws<false> },
+			{ .key = "shadows.build-draws", .passName = "cs.dclf.shadow.build-draws", .make = &BuildDraws },
+			{ .key = "shadows.view", .passName = "cs.dclf.shadow.view", .kind = PassKind::Render, .make = &ViewDraws },
 			{ .key = "shadows.cull-counters", .passName = "cs.dclf.shadow.cull-counters", .kind = PassKind::Copy, .make = &CullCounters },
-			{ .key = "shadows.sky.latched-copies", .passName = "cs.dclf.sky.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies<true> },
-			{ .key = "shadows.sky.build-draws", .passName = "cs.dclf.sky.build-draws", .make = &BuildDraws<true> },
-			{ .key = "shadows.sky.view", .passName = "cs.dclf.sky.view", .kind = PassKind::Render, .make = &ViewDraws<true> },
 		};
 	}
 

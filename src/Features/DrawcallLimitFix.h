@@ -61,30 +61,38 @@ struct DrawcallLimitFix : Feature
 	 * concurrently with the shadow draws). The shadow views are drawn between this and EarlyPrepass.
 	 */
 	void BeforeShadowMaps();
-	/** @brief Main_RenderShadowMaps, after the call returned (before EarlyPrepasses). */
+	/**
+	 * @brief Main_RenderShadowMaps, after the call returned (before EarlyPrepasses): the shadow epoch, with the occlusion maps
+	 * OcclusionReady took before the call.
+	 */
 	void AfterShadowMaps();
 
 	/** @brief Called after the Lighting shader's SetupGeometry for every native lighting draw. */
 	void OnNativeLightingDraw(RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags);
 
 	/**
-	 * @brief The occlusion maps, drawn by DCLF (Skylighting::RenderOcclusion's variant while DCLF runs;
-	 * docs/development/dclf-architecture.md, "The occlusion maps, drawn by DCLF"): Skylighting's sky map, and the
-	 * precipitation mask its hook renders first. Render thread. OcclusionReady: DCLF draws this frame's map, so the engine's
-	 * SetupMask is skipped for it. DrawOcclusion: after both maps' RenderMask, which set each view up and cleared its map,
-	 * DCLF's occluders into every map whose OcclusionReady said so, in one epoch.
+	 * @brief The occlusion maps, drawn by DCLF in its shadow epoch (docs/development/dclf-architecture.md, "The occlusion maps, drawn by
+	 * DCLF"): Skylighting's sky map, and the precipitation mask it renders first. Render thread. OcclusionReady, at the shadow maps
+	 * (Skylighting::RenderOcclusionAtShadowMaps, before the engine draws them): whether DCLF draws the map this frame, in the shadow epoch
+	 * at the shadow maps' end (AfterShadowMaps); Skylighting then sets its view up there, without the engine's SetupMask, and RenderMask
+	 * clears it. OcclusionNeedsEngine, at the engine's occlusion point (Skylighting::RenderOcclusion): whether the engine renders the map
+	 * there, whole.
 	 */
 	enum OcclusionMap : std::uint32_t
 	{
 		kSkyOcclusion = 0,            // DCLF::Api::OcclusionMap::Sky
 		kPrecipitationOcclusion = 1,  // DCLF::Api::OcclusionMap::Precipitation
 	};
+	/**
+	 * @brief At the shadow maps, before the engine draws them: whether DCLF draws the map in this frame's shadow epoch (the selected
+	 * revision's shadow shape has its view, and the frame's set draws its phase). An occluder not yet a member of the map's phase
+	 * (joining: FrameView::SetLacking) is left out of the map until it joins, never handed to the engine's cull.
+	 */
 	bool OcclusionReady(OcclusionMap a_map);
 	/**
-	 * @brief After OcclusionReady: whether the engine must still cull and register the map's scene (Precipitation::SetupMask): DCLF
-	 * does not draw the map this frame (not ready, or the set does not draw its phase yet); the scene lists the frame's filter left
-	 * out are put back first. An occluder not yet a member of the map's phase (joining: FrameView::SetLacking) is left out of the
-	 * map until it joins, never handed to the engine's cull.
+	 * @brief At the engine's occlusion point: whether the engine must render the map there, culling and registering its scene
+	 * (Precipitation::SetupMask): DCLF's shadow epoch did not draw it this frame (not taken at the shadow maps, or the epoch could not
+	 * draw it); the scene lists the frame's filter left out are put back first.
 	 */
 	bool OcclusionNeedsEngine(OcclusionMap a_map);
 	/**
@@ -92,7 +100,6 @@ struct DrawcallLimitFix : Feature
 	 * projection alone), before its RenderMask, on every frame the map renders: DCLF's view of it, computed from that camera.
 	 */
 	void OcclusionView(OcclusionMap a_map);
-	void DrawOcclusion();
 	/**
 	 * @brief After OcclusionReady (DCLF draws the map): whether the engine renders the map first this frame, whole, as a reference
 	 * (the map's referenceDue: Features/OcclusionMaps' CS_DCLF_SKYLIGHT_PARITY); its render is announced with OcclusionReferenceRendered

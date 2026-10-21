@@ -164,13 +164,15 @@ namespace DCLF
 		 * @brief A draw family's programs (Api::DrawFamilyProgram; tree LOD's: dclf-architecture.md, "Tree LOD: the draws"): its source's
 		 * (Extensions::DrawFamilies' sourcePath: `Data/Shaders/DistantTree.hlsl`) pulled builds (DCLF_PULLED: its lane slot's pulled) of
 		 * its colour descriptor (DistantTree's deferred technique) and its depth descriptor (the depth technique), each a vertex and a
-		 * pixel stage, a_shader's (its programSource). Requested on the first call; null until all four are compiled. Never freed. The
-		 * pipeline lane's, as the other Find* below; a_failed as Find's.
+		 * pixel stage, and with two colour programs (Api::DrawFamilyProgram::colours) its second colour descriptor's (grass's PBR
+		 * technique), a_shader's (its programSource). Requested on the first call; null until all its stages are compiled. Never freed.
+		 * The pipeline lane's, as the other Find* below; a_failed as Find's.
 		 */
 		struct DrawProgram
 		{
 			std::vector<std::byte> vertex, pixel;            // colour (DistantTreeBlock, deferred)
 			std::vector<std::byte> depthVertex, depthPixel;  // depth (RENDER_DEPTH)
+			std::vector<std::byte> vertex2, pixel2;          // the second colour program's (colour2); empty with one
 			std::uint64_t fingerprint = 0, sourcesGeneration = 0;  // as Program's
 		};
 		std::shared_ptr<const DrawProgram> FindDrawFamily(Api::DrawFamily a_family, RE::BSShader& a_shader, bool* a_failed = nullptr);
@@ -302,7 +304,9 @@ namespace DCLF
 		// vertex, pixel, depth pixel, pulled vertex, pulled depth pixel, pulled pixel, pulled depth vertex
 		using Entry = ProgramEntry<Program, 7>;
 		using ShadowEntry = ProgramEntry<ShadowProgram, 2>;
-		using DrawFamilyEntry = ProgramEntry<DrawProgram, 4>;  // vertex, pixel, depth vertex, depth pixel
+		// Vertex, pixel, depth vertex, depth pixel, then the second colour program's pair (with one colour program the first's again,
+		// emptied at completion).
+		using DrawFamilyEntry = ProgramEntry<DrawProgram, 6>;
 		using ForwardEntry = ProgramEntry<ForwardProgram, 2>;
 		// Vertex and pixel (ProgramStages::VertexPixel), then the pulled pair; Program's depth slots hold the pixel stages again (unread).
 		using FamilyEntry = ProgramEntry<Program, 6>;

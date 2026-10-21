@@ -258,6 +258,10 @@ namespace DCLF::Api
 		// A refraction object (kRefraction, kTempRefraction): its Utility RENDER_NORMAL pass, drawn into the refraction normals by the forward
 		// epoch's refraction range (needs Forward's toggle: Features/Forward).
 		Refraction,
+		// Grass: the BSGrassShaderProperty instance shapes, drawn from the mirrored instance records as the Grass draw family
+		// (Api/DrawFamilies.h: its tables, its cull and draws in the depth segment and the colour pass; its decision) instead of the
+		// engine's passes (Features/Grass): the class gates the family.
+		Grass,
 		Count,
 	};
 

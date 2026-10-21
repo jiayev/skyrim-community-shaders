@@ -1,7 +1,7 @@
 #pragma once
 
 // The shadow epochs contract's Core side (Api/ShadowEpochs.h): its entry, resolved once at InstallFeatures (none registered: FrameDriver's
-// shadow and occlusion points do only Core's bookkeeping, and the engine draws every shadow view and occlusion map; the shadow casters'
+// shadow points do only Core's bookkeeping, and the engine draws every shadow view and occlusion map; the shadow casters'
 // points are reached only from the registering feature's hooks), which FrameDriver calls at those points.
 
 #include "Features/DrawcallLimitFix/Api/ShadowEpochs.h"

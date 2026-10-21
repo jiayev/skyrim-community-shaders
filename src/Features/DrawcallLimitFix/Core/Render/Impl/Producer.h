@@ -31,9 +31,10 @@ namespace DCLF
 			RevisionLatchLayouts latches;
 			RevisionLatchHandles latchHandles;
 			MadeShapes made;
-			// The occlusion maps' recent layouts (newest first, ShadowEngine::kRecentOcclusionLayouts): a revision makes a shape for each.
-			std::vector<std::vector<ShadowViewLayout>> recentOcclusionLayouts;
-			// The shadow epochs' recent sets of placements in use (newest first, ShadowEngine::kRecentActiveViews): a variant each.
+			// The occlusion maps' layouts as last set up, the make's toggles' maps: the shadow shape's views after the placements.
+			std::vector<ShadowViewLayout> occlusionLayouts;
+			// The shadow epochs' recent sets of views in use (placements, occlusion maps; newest first, ShadowEngine::kRecentActiveViews): a
+			// variant each.
 			std::vector<std::uint64_t> recentActiveViews;
 			// The scene's draw bound and the index pool's, kept from the tables' logs.
 			DrawBoundStore drawBound;
@@ -96,8 +97,11 @@ namespace DCLF
 			std::uint64_t latchedMisses = 0;  // values a commit staged because the revision's latched copies lacked them
 			// Per epoch since the last report: commits with no shape or recording, values past the latch (dropped), submissions (a hosted
 			// epoch's: its host's submissions with its work), and those of a recording other than the first (a shadow epoch's narrower
-			// variant, the depth epoch's without the index pool or without the hosted reflection's work).
+			// variant, the depth epoch's without the index pool or without a hosted epoch's work: the reflection's, first person's depth).
 			std::array<std::uint64_t, kMaxEpochs> unrevised{}, latchClamped{}, submitted{}, variants{};
+			// The shadow epoch's submissions that drew occlusion maps (their views latched: the report's "occlusion ... (in the shadow
+			// epoch)").
+			std::uint64_t occlusionSubmitted = 0;
 			// Per epoch, whether the selected revision has its recordings of the graph as built now (DecideCoverage).
 			std::array<bool, kMaxEpochs> covered{};
 			bool explicitBuilds = false;
@@ -105,9 +109,9 @@ namespace DCLF
 			// (DCLF not drawing yet, or a load screen up: the only uncovered frames), tickets given back for recordings.
 			std::uint64_t builds = 0, uncoveredFrames = 0, ticketsReleased = 0;
 			std::array<std::uint64_t, kMaxEpochs> uncovered{};
-			// Per epoch, the inputs (versions, shape, the hosted epoch's shape: EpochTraits::hosts) whose recording failed: not asked again
-			// until they change.
-			std::array<std::array<std::shared_ptr<const org::async::RevisionFragment>, 3>, kMaxEpochs> failedFor;
+			// Per epoch, the inputs (versions, shape, then the shapes of the hosted epochs that have one, by row: EpochTraits::hostsMask)
+			// whose recording failed: not asked again until they change.
+			std::array<std::vector<std::shared_ptr<const org::async::RevisionFragment>>, kMaxEpochs> failedFor;
 		} revisions;
 		/** @brief Recording requests not yet completed: what the build point releases unsubmitted tickets for. */
 		std::atomic<std::uint32_t> recordingsOutstanding{ 0 };

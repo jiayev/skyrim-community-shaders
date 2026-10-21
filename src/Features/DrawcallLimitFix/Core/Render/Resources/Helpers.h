@@ -26,6 +26,9 @@ namespace DCLF::Draws
 	// The sun views' contribution cull (kCullMinTexels): the least a caster's bound radius may project to, in texels; 0 off. Read by
 	// each shadow commit into its sun views' latches (data only: no recording changes), so it is live for an in-session A/B.
 	inline std::atomic<float> shadowMinTexels{ 0.0f };
+	// The sun views' size probe (kCullSizeProbe, dclf:shadow-probe): -1 off; else the shadow view label whose counters every readback
+	// samples (in place of the rotation), the sun views counting their drawn casters by size.
+	inline std::atomic<int> shadowSizeProbe{ -1 };
 	// The queue of a pass that prefers async compute: the compute queue, or the graphics queue under CS_DCLF_ASYNC_COMPUTE=0. Read at
 	// the graph's build.
 	inline org::QueueKind AsyncComputeQueue()

@@ -100,7 +100,8 @@ namespace DCLF::Draws
 			{
 				const auto latched = source(a_preparation);
 				a_out.push_back(latched.generation);
-				a_out.push_back(latched.hostedGeneration);
+				for (const auto& hosted : latched.hosted)
+					a_out.push_back(hosted.generation);
 			}
 
 			LatchedSource Prepare(const LatchedCopiesBindings&, const org::PassPrepareContext& a_preparation) const { return source(a_preparation); }
@@ -108,9 +109,8 @@ namespace DCLF::Draws
 			static void Record(const LatchedCopiesBindings& a_bindings, const LatchedSource& a_prepared, org::PassRecordContext& a_recording)
 			{
 				auto& commands = a_recording.Commands();
-				// The epoch's own lists, then a hosted shape's (none in the recording without its work).
-				for (const auto lists : { a_prepared.lists, a_prepared.hostedLists })
-					for (const auto& list : lists) {
+				auto copyLists = [&](std::span<const LatchedList> a_lists) {
+					for (const auto& list : a_lists) {
 						if (!list.latch)
 							continue;
 						const auto latch = list.latch->Resource()->GetAPIResource().GetHandle();
@@ -121,6 +121,11 @@ namespace DCLF::Draws
 								commands.CopyBufferRegion(a_recording.Resolve(target->second).GetHandle(), copy.dstOffset, latch, region + copy.latchOffset, copy.bytes);
 						}
 					}
+				};
+				// The epoch's own lists, then each hosted shape's (none in a recording without that view's work).
+				copyLists(a_prepared.lists);
+				for (const auto& hosted : a_prepared.hosted)
+					copyLists(hosted.lists);
 			}
 
 		private:

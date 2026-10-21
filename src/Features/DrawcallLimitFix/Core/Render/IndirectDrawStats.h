@@ -152,6 +152,8 @@ namespace DCLF
 		// most the minimum radius, under a stood-in root fading, below the size threshold (a sun view's kCullMinTexels).
 		std::uint32_t cullClass = 0, cullSunEntryOut = 0, cullMinRadius = 0, cullRootFading = 0, cullBelowTexels = 0;
 		std::uint32_t cullSampledView = ~0u, cullSampledMode = 0;
+		// The size probe's (shadowSizeProbe) drawn casters and triangles of the sampled view, by bound radius class.
+		std::array<std::uint32_t, 4> probeCasters{}, probeTriangles{};
 		// The set's casters each render mode's inputs held at the last epoch, and set members a mode's build could not draw (a
 		// pipeline or a texture its readiness did not cover: a defect, the engine having withheld them), per report interval.
 		std::array<std::uint32_t, 3> casters{};
@@ -169,12 +171,12 @@ namespace DCLF
 		double inputsMs = 0.0;             // of which building (per mode) and uploading the inputs
 		double blocksMs = 0.0;             // of which the view's constant blocks and their uploads
 		double executeMs = 0.0;            // of which the graph's own execution (compile, prepare, record)
-		// The occlusion maps (ExecuteOcclusion), per occlusion view and report interval.
+		// The occlusion maps (drawn in the shadow epoch: ExecuteShadowFrame), per occlusion view and report interval.
 		std::array<std::uint32_t, kOcclusionViews> occlusionDrawn{};     // maps DCLF drew
-		std::array<std::uint32_t, kOcclusionViews> occlusionNotReady{};  // draws asked for that it could not make
+		std::array<std::uint32_t, kOcclusionViews> occlusionNotReady{};  // maps taken at the shadow maps that the epoch could not draw
 		std::array<std::uint32_t, kOcclusionViews> occlusionInputs{};    // occluders, last map
-		double occlusionMs = 0.0;                                          // render thread, their epochs
-		std::uint32_t occlusionEpochs = 0;
+		double occlusionMs = 0.0;                                          // render thread, their latches in the shadow commits
+		std::uint32_t occlusionEpochs = 0;                                 // shadow epochs that drew a map
 	};
 
 	inline constexpr std::array<const char*, 8> kEpochPartNames{

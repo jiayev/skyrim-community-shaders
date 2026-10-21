@@ -2,8 +2,8 @@
 
 // The shadow-view contract (Api::InstallContext::RegisterOcclusionMap, RegisterShadowSource, RegisterShadowExclusion), the view
 // contract's sibling (Api/Views.h): the occlusion maps and the shadow sources that Core's one shadow engine draws (one payload, one set
-// of resources, one latch block and one key group; the occlusion epoch shares the shadow commit), taken by features as data and event
-// callbacks, and the entry exclusions its payload carries (the contribution's own type, held by Core opaquely). Casters are keyed by the
+// of resources, one latch block, one key group and one epoch, the occlusion maps' views among the shadow views'), taken by features as
+// data and event callbacks, and the entry exclusions its payload carries (the contribution's own type, held by Core opaquely). Casters are keyed by the
 // engine's render mode, not by source: the sources own no set phase or view bit.
 
 #include "Features/DrawcallLimitFix/Api/Settings.h"

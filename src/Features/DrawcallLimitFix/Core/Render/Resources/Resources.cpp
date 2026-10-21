@@ -749,7 +749,7 @@ namespace DCLF
 		// family's units (its faces.lists: tree LOD's shape slots): the lists grow with its tables (RequireSceneTables).
 		for (std::size_t d = 0; d < Extensions::kDrawFamilies && traits.trees; ++d) {
 			const auto family = static_cast<Api::DrawFamily>(d);
-			if (!FamilyHasFaces(family))
+			if (!Extensions::DrawFamilyHasFaces(family))
 				continue;
 			const auto& entry = Extensions::DrawFamilyOf(family);
 			const auto& faces = entry.contribution.faces;

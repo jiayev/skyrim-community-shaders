@@ -245,6 +245,7 @@ namespace DCLF
 	static_assert(std::has_unique_object_representations_v<ForwardPipelineKey>);
 	static_assert(DrawFamilyLaneSlotOf(Api::DrawFamily::TreeInstances).forwardFlags == ForwardPipelineKey::kForwardTreeLod,
 		"the TreeInstances family's lane slot is not ForwardPipelineKey::kForwardTreeLod");
+	static_assert(DrawFamilyLaneSlotOf(Api::DrawFamily::Grass).forwardFlags == 0, "the Grass family has no faces, so no forward key flags");
 	struct ForwardPipelineKeyHash
 	{
 		using is_avalanching = void;
@@ -296,8 +297,8 @@ namespace DCLF
 		DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;     // the shadow map format the set is built for
 		std::shared_ptr<const void> shadowSetVersion;       // holds every setIndex of shadowEntries
 
-		// By draw family: its two pipelines for targetsGeneration: built (FamilyBuilt) or failed (program: for good; build: until the next
-		// target change). Neither while waiting.
+		// By draw family: its pipelines (depth and colour ones) for targetsGeneration: built (FamilyBuilt) or failed (program: for good;
+		// build: until the next target change). Neither while waiting.
 		struct FamilyEntry
 		{
 			std::shared_ptr<const void> pipelines;

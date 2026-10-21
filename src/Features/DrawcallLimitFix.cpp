@@ -250,12 +250,6 @@ void DrawcallLimitFix::OcclusionView(OcclusionMap a_map)
 	DCLF::IndirectDraws::Get().OcclusionView(a_map, *camera.camera);
 }
 
-void DrawcallLimitFix::DrawOcclusion()
-{
-	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
-	DCLF::FrameDriver::Get().DrawOcclusion();
-}
-
 bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap a_map)
 {
 	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
@@ -306,8 +300,9 @@ void DrawcallLimitFix::Hooks::Main_RenderDepth_WorldDrawn::thunk(void* a_accumul
 	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ZPrepass);
 	// The world's depth draws are done and its camera is still current. The engine's own copy of the depth
 	// (kPOST_ZPREPASS_COPY), at the end of the pass, now includes DCLF's objects, and the first-person model's
-	// depth goes in after the world's, as it does natively, so there is nothing to refresh. Then the views' work at the depth commit
-	// (the frame's reflection faces).
+	// depth goes in after the world's, as it does natively (DCLF's in this epoch, after the world's depth; the engine's residue at
+	// its first-person draw), so there is nothing to refresh. The views' work at the depth commit runs inside it (the frame's
+	// reflection faces and first-person depth, which the depth epoch hosts).
 	DCLF::FrameDriver::Get().DepthCommitted();
 	if (DCLF::Scene::FrameView::Get().GetTables().objects.size() >= 400)
 		globals::BeginDCLFDepthTrace(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture);
@@ -568,7 +563,6 @@ void DrawcallLimitFix::OnNativeLightingDraw(RE::BSRenderPass*, std::uint32_t) {}
 bool DrawcallLimitFix::OcclusionReady(OcclusionMap) { return false; }
 bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap) { return true; }
 void DrawcallLimitFix::OcclusionView(OcclusionMap) {}
-void DrawcallLimitFix::DrawOcclusion() {}
 bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap) { return false; }
 void DrawcallLimitFix::OcclusionReferenceRendered(OcclusionMap) {}
 void DrawcallLimitFix::NoteMaterialWritten(const RE::BSShaderMaterial*) {}

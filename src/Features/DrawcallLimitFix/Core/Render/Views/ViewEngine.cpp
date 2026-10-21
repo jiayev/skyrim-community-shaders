@@ -228,8 +228,8 @@ namespace DCLF
 	{
 		const auto& epochs = ViewEpochsOf(a_view);
 		const std::uint32_t epoch = epochs.epochs[a_epoch];
-		// A hosted epoch (the reflection's: the depth epoch runs its passes) commits into its host's commit, from inside it; the host's
-		// recording, submitted after, carries its passes.
+		// A hosted epoch (the reflection's, first person's depth: the depth epoch runs their passes) commits into its host's commit, from
+		// inside it; the host's recording, submitted after, carries its passes.
 		if (EpochTraitsOf(epoch).hostedBy != kNoEpoch)
 			return impl->CommitHostedView(a_view, epoch, a_listed, a_faces, a_drawn, a_nullTextures);
 		// An epoch of its own is never submitted from inside another's commit (the view work a host's commit runs is its hosted epochs').

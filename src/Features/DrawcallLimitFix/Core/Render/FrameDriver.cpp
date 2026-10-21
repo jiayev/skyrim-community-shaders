@@ -55,6 +55,8 @@ namespace DCLF
 	bool FrameDriver::BeginFrame(bool a_running, bool a_installed)
 	{
 		Diagnostics::Notify(Diagnostics::FrameBegin{ a_running });
+		// The occlusion maps the last frame took and drew are its own.
+		occlusionWanted = occlusionDrawn = 0;
 		// The graph's build point, every frame (loaded or not): an extension added or removed during the last frame is built here, before
 		// anything decides what the frame's recordings cover.
 		IndirectDraws::Get().BuildPoint();
@@ -191,14 +193,17 @@ namespace DCLF
 
 	void FrameDriver::DepthCommitted()
 	{
-		// The Z-prepass and the views' work here (the reflection's faces, which the depth epoch hosts) are submitted under depth.committed.
+		// The Z-prepass and the views' work here (the reflection's faces and first person's depth, which the depth epoch hosts) are submitted
+		// under depth.committed.
 		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::DepthCommitted));
 		// The views' work at the depth commit (Features/Reflection's: the frame's reflection faces, every TESWaterReflections::Update of the
 		// frame having run, two a frame, a face each, drawn by DCLF before the water reads the cube; dclf-architecture.md, "Water
-		// reflections"), run by the depth commit inside its epoch's execution: the depth epoch hosts the faces' passes (Schedule/Frame.cpp),
-		// which follow its index pool copies, so they draw the frame's publication whose scene list they cull (against the frame before's
-		// pool, a slot the publication gave another geometry would draw its old indices against its new vertices: a device fault). A frame
-		// whose depth epoch did not commit runs it after (its inputs are then stale: nothing drawn, the feature's frame kept).
+		// reflections"; then Features/FirstPerson's: the frame's first-person depth, its camera set by Main::Draw before RenderDepth, drawn
+		// into the main depth before the engine's first-person draw and kPOST_ZPREPASS_COPY), run by the depth commit inside its epoch's
+		// execution: the depth epoch hosts the views' passes (Schedule/Frame.cpp), which follow its index pool copies, so they draw the
+		// frame's publication whose scene list they cull (against the frame before's pool, a slot the publication gave another geometry
+		// would draw its old indices against its new vertices: a device fault). A frame whose depth epoch did not commit runs it after (its
+		// inputs are then stale: nothing drawn, the features' frame kept).
 		bool ran = false;
 		const std::function<void()> work = [&] {
 			ran = true;
@@ -299,9 +304,13 @@ namespace DCLF
 
 	void FrameDriver::AfterShadowMaps()
 	{
-		// The frame's shadow epoch (Features/Shadows/Engine, under its shadow-maps.after trigger).
-		if (const auto* epochs = Extensions::ShadowEpochs())
-			epochs->afterShadowMaps();
+		// The frame's shadow epoch (Features/Shadows/Engine, under its shadow-maps.after trigger), with the occlusion maps OcclusionReady
+		// took before the engine drew the shadow maps (Skylighting set their views up and cleared them there): one epoch for both.
+		const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
+		PassCapture::Get().SetOcclusionPhase(0);
+		const auto* epochs = Extensions::ShadowEpochs();
+		occlusionDrawn = epochs ? epochs->afterShadowMaps(wanted) : 0u;
+		Diagnostics::Notify(Diagnostics::OcclusionMapsDrawn{ occlusionDrawn });
 	}
 
 	void FrameDriver::EarlyPrepass()
@@ -333,33 +342,36 @@ namespace DCLF
 	{
 		auto& capture = PassCapture::Get();
 		capture.SetOcclusionPhase(0);
-		if (!a_running || !Extensions::OcclusionOn(ActiveToggles(), a_map))
+		if (!a_running || a_map >= Extensions::kOcclusionMaps || !Extensions::OcclusionOn(ActiveToggles(), a_map))
 			return false;
-		// DCLF draws the map's members of the set this frame (none until its phase is drawn: a frame after the first that drew it).
+		// At the shadow maps, before the engine draws them: DCLF draws the map's members of the set in this frame's shadow epoch when the
+		// selected revision's shadow shape has the map's view, and the frame's set draws its phase (none until then: a frame after the first
+		// that drew it). Else the engine renders the map whole at its own point (OcclusionNeedsEngine).
 		const auto* epochs = Extensions::ShadowEpochs();
 		const bool ready = epochs && epochs->occlusionReady(a_map);
-		occlusionFrames.native[a_map] += ready ? 0 : 1;
-		occlusionWanted |= ready ? 1u << a_map : 0u;
 		const std::uint8_t phase = Extensions::OcclusionMapOf(a_map).phase;
-		const auto set = capture.CurrentSet();
-		if (ready && set && (set->drawn & phase))
-			capture.SetOcclusionPhase(phase);
-		return ready;
-	}
-
-	bool FrameDriver::OcclusionNeedsEngine(std::uint32_t a_map, bool a_running)
-	{
-		const std::uint8_t phase = a_map < Extensions::kOcclusionMaps ? Extensions::OcclusionMapOf(a_map).phase : std::uint8_t{ 0 };
 		auto& view = Scene::FrameView::Get();
 		const auto set = view.FrameClaims();
 		// Occluders not yet members of the map's phase (joining) are left out of DCLF's map until they join: the engine's cull is no
 		// fallback for them (it would cull the whole scene for a few objects).
-		const bool needed = !a_running || !Extensions::OcclusionOn(ActiveToggles(), a_map) || !(occlusionWanted & (1u << a_map)) || !set || !(set->drawn & phase);
+		const bool taken = ready && set && (set->drawn & phase);
+		occlusionFrames.native[a_map] += ready ? 0 : 1;
+		occlusionFrames.joining[a_map] += taken && view.SetLacking(phase) > 0 ? 1 : 0;
+		occlusionWanted |= taken ? 1u << a_map : 0u;
+		if (const auto current = capture.CurrentSet(); taken && current && (current->drawn & phase))
+			capture.SetOcclusionPhase(phase);
+		return taken;
+	}
+
+	bool FrameDriver::OcclusionNeedsEngine(std::uint32_t a_map, bool a_running)
+	{
+		// At the engine's occlusion point: the engine renders the map whole unless this frame's shadow epoch drew it (AfterShadowMaps).
+		const bool needed = !a_running || a_map >= Extensions::kOcclusionMaps || !(occlusionDrawn & (1u << a_map));
 		// The engine's cull of the map reads the scene lists: whole again.
 		if (needed)
 			PrimaryCull::Get().RestoreSceneLists();
-		occlusionFrames.engine[a_map] += needed ? 1 : 0;
-		occlusionFrames.joining[a_map] += !needed && view.SetLacking(phase) > 0 ? 1 : 0;
+		if (a_map < Extensions::kOcclusionMaps)
+			occlusionFrames.engine[a_map] += needed ? 1 : 0;
 		return needed;
 	}
 
@@ -370,17 +382,6 @@ namespace DCLF
 			frames.lacking[map] = Scene::FrameView::Get().SetLacking(Extensions::OcclusionMapOf(map).phase);
 		frames.withheld = PassCapture::Get().GetStats().occlusionWithheld;
 		return frames;
-	}
-
-	void FrameDriver::DrawOcclusion()
-	{
-		// Every occlusion map whose Ready said DCLF draws it this frame, in one epoch.
-		const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
-		PassCapture::Get().SetOcclusionPhase(0);
-		// The maps' epoch (Features/Shadows/Engine, under its occlusion.draw trigger).
-		const auto* epochs = Extensions::ShadowEpochs();
-		const std::uint32_t drawn = wanted && epochs ? epochs->drawOcclusion(wanted) : 0u;
-		Diagnostics::Notify(Diagnostics::OcclusionMapsDrawn{ drawn });
 	}
 
 	void FrameDriver::BeforeOpaquePass()

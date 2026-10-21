@@ -62,6 +62,8 @@ public:
 	Settings settings;
 
 	ConstantBuffer* perFrame = nullptr;
+	// The constants of the latest Update, published to GrassShared on frames DCLF owns grass.
+	PerFrame lastPerFrame{};
 
 	eastl::unique_ptr<Buffer> collisionBoundingBoxes = nullptr;
 	eastl::unique_ptr<Buffer> collisionInstances = nullptr;
@@ -97,11 +99,15 @@ public:
 	 */
 	void Update();
 
+	/** @brief GrassShared stood-down callback, on frames DCLF owns grass and no grass SetupGeometry runs: updates the
+	    collision texture and publishes it with its constants for DCLF's grass draws. */
+	static void StoodDownUpdate();
+
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 
-	/** @brief Installs the BSGrassShader and main update hooks after all plugins have loaded. */
+	/** @brief Installs the BSGrassShader and main update hooks after all plugins have loaded, and registers the stood-down update. */
 	virtual void PostPostLoad() override;
 
 	struct Hooks

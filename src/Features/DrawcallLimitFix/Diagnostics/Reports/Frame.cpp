@@ -210,6 +210,10 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 							 "{} below the size threshold ({} texels); {} tested, {} drawn, {} rejected by the frustum",
 					shadow.cullSampledView, shadow.cullSampledMode, shadow.cullClass, shadow.cullSunEntryOut, shadow.cullMinRadius, shadow.cullRootFading,
 					shadow.cullBelowTexels, DCLF::Draws::shadowMinTexels.load(std::memory_order_relaxed), shadow.cullTested, shadow.cullDrawn, shadow.cullRejected);
+			if (DCLF::Draws::shadowSizeProbe.load(std::memory_order_relaxed) >= 0)
+				logger::info("[DCLF] shadow size probe (view {} mode {:#x}): drawn casters / triangles by bound radius <256 {} / {}, <1024 {} / {}, <4096 {} / {}, larger {} / {}",
+					shadow.cullSampledView, shadow.cullSampledMode, shadow.probeCasters[0], shadow.probeTriangles[0], shadow.probeCasters[1], shadow.probeTriangles[1],
+					shadow.probeCasters[2], shadow.probeTriangles[2], shadow.probeCasters[3], shadow.probeTriangles[3]);
 			if (shadow.sunEntryChecks)
 				logger::info("[DCLF] sun entry on the GPU: {} inputs checked against the CPU's verdict (sampled frames), {} differ{}", shadow.sunEntryChecks,
 					shadow.sunEntryMismatches, shadow.sunEntryMismatches ? " <- DIFFER" : " <- OK");

@@ -33,6 +33,9 @@ namespace DCLF::Api
 	{
 		// The tree LOD instances (the BSDistantTreeShaderProperty groups under the LOD trees root), one instanced draw of a culled list.
 		TreeInstances,
+		// Grass (the BSGrassShaderProperty instance shapes, BSMultiStreamInstanceTriShape), drawn from the mirrored instance records as
+		// arrays of instanced draws with a GPU count (one per bucket and LOD tier), without faces.
+		Grass,
 		Count,
 	};
 
@@ -40,13 +43,16 @@ namespace DCLF::Api
 	enum class DrawFamilyBuild : std::uint8_t
 	{
 		// A depth pipeline (depth write, LESS) of the program's depth stages, then a colour one (no depth write, EQUAL against it) of its
-		// colour stages, both with culling off; the colour pipeline blends as the engine's opaque write mode.
+		// colour stages - and with two colour programs a second, alike, of its second colour stages - all with culling off; the colour
+		// pipelines blend as the engine's write mode the program names (DrawFamilyProgram::writeMode).
 		DepthThenEqualColour,
 	};
 	/** @brief The draw signature a family's draws execute with (Core's, created per slot). */
 	enum class DrawFamilySignature : std::uint8_t
 	{
-		DrawInstanced,  // one non-indexed draw's arguments (vertices, instances, first vertex, first instance)
+		// One non-indexed draw's arguments (vertices, instances, first vertex, first instance). A family's record may execute one, or an
+		// array of them with a GPU count (ExecuteIndirect with a count buffer: the array's capacity, the count read from the buffer).
+		DrawInstanced,
 	};
 
 	/**
@@ -58,7 +64,11 @@ namespace DCLF::Api
 	 * - name: the logs' ("DistantTree": "SPIR-V build of DistantTree ..."); label: the reports' and pipelines' ("tree LOD": "tree LOD
 	 *   colour"); keyName: its recipes' ("tree-lod": "dclf.tree-lod", "dclf.forward.tree-lod"); sourcePath: its HLSL, loaded with Core's
 	 *   sources; nativeNote: what stays native without it ("tree LOD stays native").
-	 * - descriptors: the engine descriptors of its colour and depth programs and of a view's forward program.
+	 * - descriptors: the engine descriptors of its colour and depth programs, of a view's forward program (0 without faces) and of its
+	 *   second colour program (colour2, with colours 2: grass's PBR technique).
+	 * - colours: its colour programs, 1 or 2 (the second's pipeline is FamilyPipelines::colour2; the feature picks per draw).
+	 * - writeMode: the engine write mode (alphaBlendWriteMode, 0-12) whose blend state its colour pipelines take (the engine's opaque 1
+	 *   by default: tree LOD's).
 	 * - build, signature: its pipelines' rule and its draws' signature.
 	 */
 	struct DrawFamilyProgram
@@ -67,8 +77,10 @@ namespace DCLF::Api
 		std::string_view name, label, keyName, sourcePath, nativeNote;
 		struct Descriptors
 		{
-			std::uint32_t colour = 0, depth = 0, forward = 0;
+			std::uint32_t colour = 0, depth = 0, forward = 0, colour2 = 0;
 		} descriptors;
+		std::uint8_t colours = 1;
+		std::uint8_t writeMode = 1;
 		DrawFamilyBuild build = DrawFamilyBuild::DepthThenEqualColour;
 		DrawFamilySignature signature = DrawFamilySignature::DrawInstanced;
 	};

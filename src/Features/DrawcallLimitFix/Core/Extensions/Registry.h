@@ -69,7 +69,7 @@ namespace DCLF::Extensions
 	 * @brief The words the scene resources' postInputs post with the revision's inputs, all of them (each its inputWords, in registration
 	 * order: SceneResourcesEntry::firstInput; RevisionInputs' SceneResourceInputs): grow it before more are registered.
 	 */
-	inline constexpr std::uint32_t kSceneResourceInputWords = 8;
+	inline constexpr std::uint32_t kSceneResourceInputWords = 12;
 	/** @brief Registered scene resources: its posted inputs at [firstInput, firstInput + inputWords) of the kSceneResourceInputWords. */
 	struct SceneResourcesEntry
 	{

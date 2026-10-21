@@ -1,6 +1,7 @@
-// The first-person view's two epochs (their passes are Core's, ViewEpochRecord.cpp's): the depth epoch at RenderDepth's first-person draw
-// and the colour epoch at Main::RenderFirstPersonView's accumulator render, on the view engine's inputs and submission; and the view's
-// report lines. Render thread (the report: wherever the draws' async work is composed).
+// The first-person view's two epochs (their passes are Core's, ViewEpochRecord.cpp's): the depth epoch committed into the depth commit,
+// inside the depth epoch, which hosts its passes (Schedule/Frame.cpp: no epoch of their own), and the colour epoch at
+// Main::RenderFirstPersonView's accumulator render, on the view engine's inputs and submission; and the view's report lines. Render thread
+// (the report: wherever the draws' async work is composed).
 
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPersonView.h"
 
@@ -62,7 +63,16 @@ namespace DCLF::Features::FirstPerson
 		}
 	}
 
-	void ExecuteDepth(bool a_controlDriven)
+	void TakeDepthRange(bool a_controlDriven)
+	{
+		// The engine's depth range for the frame (a revision input: the shapes' viewport; a change posts the revision inputs, outside any
+		// epoch's execution), by RenderDepth's second argument.
+		auto& draws = IndirectDraws::Get();
+		if (draws.ViewState(kView))
+			draws.SetViewDepthRange(kView, *REL::Relocation<float*>{ REL::Offset(a_controlDriven ? kFarDepthRangeControlDriven : kFarDepthRange) });
+	}
+
+	void ExecuteDepth(const Api::ViewPointContext&)
 	{
 		ZoneScopedN("CS.DCLF.ExecuteFirstPersonDepth");
 		auto& draws = IndirectDraws::Get();
@@ -71,8 +81,7 @@ namespace DCLF::Features::FirstPerson
 		auto& f = FrameState();
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
 		auto skip = [&](std::uint32_t a_cause) { ++f.skipped[a_cause]; };
-		// The engine's depth range for the frame (a revision input: the shapes' viewport).
-		draws.SetViewDepthRange(kView, *REL::Relocation<float*>{ REL::Offset(a_controlDriven ? kFarDepthRangeControlDriven : kFarDepthRange) });
+		// The shape's depth range is the revision's (TakeDepthRange, at RenderDepth's first-person draw: a change reaches a later revision).
 		if (!Extensions::ViewOn(ActiveToggles(), kView) || !f.latch || f.latchFrame != frameNumber)
 			return skip(0);
 		const auto set = Scene::FrameView::Get().FrameClaims();
@@ -80,10 +89,13 @@ namespace DCLF::Features::FirstPerson
 			return skip(0);
 		if (!draws.ViewCovered(kView))
 			return skip(1);
+		// The first-person camera as Main::Draw set it up for the frame, before RenderDepth: already this frame's at the depth commit.
 		if (!CaptureCamera(f))
 			return skip(2);
 		// What the epoch draws from: the frame's scene list (the installed payload) with this frame's depth commit's index pool, inputs, object
-		// records and geometry rows - the frame's publication whole.
+		// records and geometry rows - the frame's publication whole - committed into that commit (the depth epoch hosts the epoch's
+		// passes: its cull, its depth draw after the HZB and both phases' depth, its forward range's sort). Outside it (the depth epoch
+		// did not commit) nothing is drawn: NoRevision.
 		IndirectDraws::ViewListed listed;
 		switch (draws.TakeViewInputs(kView, IndirectDraws::ViewInputsFrom::DepthThisFrame, listed)) {
 		case IndirectDraws::ViewInputsTaken::Stale:
@@ -100,7 +112,7 @@ namespace DCLF::Features::FirstPerson
 		case ViewSubmit::NoOwners:
 			return skip(4);
 		case ViewSubmit::Failed:
-			logger::error("[DCLF] the first-person depth epoch failed");
+			logger::error("[DCLF] the first-person depth epoch's commit failed");
 			return skip(5);
 		case ViewSubmit::Submitted:
 			break;
@@ -153,7 +165,7 @@ namespace DCLF::Features::FirstPerson
 		if (!f.frames && !on && !counts.registered)
 			return {};
 		const auto& s = f.skipped;
-		std::string text = fmt::format("[DCLF] first person (T7e, CS_DCLF_FIRST_PERSON {}): {} frames, {} the engine drew first person (latch); epochs: {} depth, {} colour; not drawn: "
+		std::string text = fmt::format("[DCLF] first person (T7e, CS_DCLF_FIRST_PERSON {}): {} frames, {} the engine drew first person (latch); epochs: {} depth (in the Z-prepass epoch), {} colour; not drawn: "
 									   "{} not the view's frame, {} not covered, {} without the camera, {} stale inputs, {} without resources, {} failed{}, {} colour without the "
 									   "frame's depth epoch{}; targets colour {} motion {} depth {}, {} first-person pipeline slots, {} pipelines ready, depth range {:.4f}\n",
 			on ? "on" : "off", f.frames, f.latched, f.depthEpochs, f.colourEpochs, s[0], s[1], s[2], s[3], s[4], s[5], s[5] ? " <- EPOCH FAILED" : "", s[6],

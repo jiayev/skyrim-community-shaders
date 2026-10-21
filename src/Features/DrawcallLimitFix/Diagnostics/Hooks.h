@@ -141,7 +141,7 @@ namespace DCLF::Diagnostics
 		std::uint32_t map;
 	};
 
-	/** @brief DCLF's occlusion epoch drew the maps in a_drawn (bit per map), or none. */
+	/** @brief DCLF's shadow epoch drew the occlusion maps in a_drawn (bit per map), or none: every frame it runs, after it. */
 	struct OcclusionMapsDrawn
 	{
 		std::uint32_t drawn;

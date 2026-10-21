@@ -1,7 +1,7 @@
 // Core's passes (Api::PassDef), which the schedule (Schedule/Frame.cpp) names by key: the main view's culling and copies (core.*), the
 // diagnostics' anchors (diag.*), and through ViewEpochRecord.cpp the views' (view.*). Each make is its pass's condition and factory; the
 // executor adds the pass. The features register their own passes (the main view's draws, main-view.*: Features/MainView; the forward
-// epoch's forward.*: Features/Forward; the shadow and occlusion epochs' shadows.*: Features/Shadows/Engine).
+// epoch's forward.*: Features/Forward; the shadow epoch's shadows.*, the occlusion maps' with it: Features/Shadows/Engine).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
@@ -24,31 +24,35 @@ namespace DCLF::Draws
 
 		// Each epoch's first pass copies the commit's latched values. It publishes its declared targets (Resources::latchedTargets),
 		// so a commit latches only what the pass will copy. A pass's segment is fixed, so each segment has its own instances. An epoch
-		// hosting a view's epoch (the depth epoch, the reflection's faces: PassContext::hosted) copies the view's lists too, from the view's
-		// shape its preparation names (none in its recordings without the view's work): the view has no latched copies of its own.
+		// hosting views' epochs (the depth epoch: the reflection's faces, first person's depth: PassContext::hosted) copies each view's
+		// lists too, from the view's shape its preparation names (none in its recordings without that view's work): a hosted view has no
+		// latched copies of its own.
 		std::shared_ptr<org::RenderPass> LatchedCopies(const Api::PassContext& a_context)
 		{
 			const auto& resources = a_context.Main();
-			const auto hosted = a_context.hosted ? *a_context.hosted : nullptr;
+			std::vector<std::shared_ptr<ViewResources>> hosted(a_context.hosted.begin(), a_context.hosted.end());
+			std::vector<ViewKind> views;
+			for (const auto& view : hosted)
+				views.push_back(view->traits->kind);
 			return MakeLatchedCopiesPass(
-				[resources = resources, hosted] {
+				[resources = resources, hosted = std::move(hosted)] {
 					auto targets = MainLatchedTargets(*resources);
-					if (hosted) {
-						const auto view = ViewLatchedTargets(*hosted);
-						targets.insert(targets.end(), view.begin(), view.end());
+					for (const auto& view : hosted) {
+						const auto viewTargets = ViewLatchedTargets(*view);
+						targets.insert(targets.end(), viewTargets.begin(), viewTargets.end());
 					}
 					return targets;
 				},
-				[segment = a_context.segment, view = hosted ? std::optional<ViewKind>(hosted->traits->kind) : std::nullopt](const org::PassPrepareContext& a_preparation) {
+				[segment = a_context.segment, views = std::move(views)](const org::PassPrepareContext& a_preparation) {
 					const auto frame = CurrentFrame(a_preparation, segment);
 					if (!frame)
 						return LatchedSource{};
 					LatchedSource source{ frame->generation, frame, std::span(&frame->latched, 1) };
-					if (const auto* shapes = view ? RevisionShapesOf(a_preparation) : nullptr)
-						if (const auto& viewFrame = shapes->views[ViewIndex(*view)]) {
-							source.hostedGeneration = viewFrame->generation;
-							source.hostedShape = viewFrame;
-							source.hostedLists = viewFrame->latched;
+					if (const auto* shapes = views.empty() ? nullptr : RevisionShapesOf(a_preparation))
+						for (const auto view : views) {
+							auto& out = source.hosted.emplace_back();
+							if (const auto& viewFrame = shapes->views[ViewIndex(view)])
+								out = { viewFrame->generation, viewFrame, viewFrame->latched };
 						}
 					return source;
 				},

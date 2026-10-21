@@ -576,7 +576,8 @@ namespace DCLF
 		std::array<rhi::CommandSignaturePtr, kDrawFamilyLanes> familySignatures;
 		struct FamilyBuilt
 		{
-			rhi::PipelinePtr depth, colour;
+			rhi::PipelinePtr depth;
+			std::array<rhi::PipelinePtr, 2> colours;  // by colour program (Api::DrawFamilyProgram::colours; the second null with one)
 		};
 		// Render thread: what it has asked of the lane already, so it asks each once.
 		std::array<bool, kDrawFamilyLanes> familyAsked{};  // by draw family (RequestFamily)
@@ -1211,11 +1212,12 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief A draw family's pipelines (TryRequestFamily), as Api::DrawFamilyBuild::DepthThenEqualColour builds them; named with its
-		 * label ("tree LOD colour", "tree LOD depth").
+		 * @brief A draw family's pipelines (TryRequestFamily), as Api::DrawFamilyBuild::DepthThenEqualColour builds them, one colour pipeline
+		 * per colour program (a_colours: Api::DrawFamilyProgram::colours; the program's stages must match it); named with its label
+		 * ("tree LOD depth", "tree LOD colour", and a second colour program's "<label> colour 2").
 		 */
 		static org::services::PipelinePayload BuildDrawFamily(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::DrawProgram* a_program,
-			TargetFormats a_targets, rhi::BlendState a_blend, bool a_frontCCW, std::string_view a_label);
+			std::uint8_t a_colours, TargetFormats a_targets, rhi::BlendState a_blend, bool a_frontCCW, std::string_view a_label);
 
 		/**
 		 * @brief The refraction pipeline: one attachment (FUN_1414b4860 binds kREFRACTION_NORMALS alone as RT0), main depth LESS_EQUAL

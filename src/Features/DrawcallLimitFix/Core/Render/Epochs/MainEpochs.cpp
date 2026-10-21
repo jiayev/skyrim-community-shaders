@@ -65,7 +65,8 @@ namespace DCLF
 			impl->pending->Release();
 		impl->pending = std::move(capture);
 		ProbeTargets("before z-prepass");
-		// The hosted epochs' work (the reflection's faces), run by the depth commit inside its epoch's execution (CommitMainPayload).
+		// The hosted epochs' work (the reflection's faces, first person's depth), run by the depth commit inside its epoch's execution
+		// (CommitMainPayload).
 		impl->hostedWork = a_hostedWork ? &a_hostedWork : nullptr;
 		RunEpoch(true);
 		impl->hostedWork = nullptr;

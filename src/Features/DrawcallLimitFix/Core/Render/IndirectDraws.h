@@ -133,8 +133,8 @@ namespace DCLF
 		 * @brief Before the engine keeps its first shadow light (the shadow epochs' beforeShadowCasters): whether the frame's views are
 		 * DCLF's with the selected revision's shape; until a revision has recorded it (startup, a growth), every one is the engine's this
 		 * frame (ShadowViews::SetDrawable(false)). Called by
-		 * Features/Shadows/Engine's shadow epochs handler (Api/ShadowEpochs.h), as are BeginShadowFrame, ExecuteShadowFrame, OcclusionReady
-		 * and ExecuteOcclusion.
+		 * Features/Shadows/Engine's shadow epochs handler (Api/ShadowEpochs.h), as are BeginShadowFrame, OcclusionReady and
+		 * ExecuteShadowFrame.
 		 */
 		void DecideShadowCoverage();
 		/**
@@ -166,9 +166,10 @@ namespace DCLF
 		 * Terrain Blending's blended depth, every effect reading it) derives from the depth buffer at this point. Only the vertex
 		 * stage's bindings are needed, which the depth pass has bound; the pixel stage is the DCLF_DEPTH_ONLY build.
 		 *
-		 * a_hostedWork: the work of the view epochs the depth epoch hosts (Api::EpochDef::hostedBy: the reflection's faces, their feature's
-		 * ViewPoint::DepthCommitted work), run by the depth commit inside its epoch's execution, after its own latch writes and before its
-		 * recording's submission: a hosted epoch's SubmitViewEpoch there commits into it. Not run when the depth epoch does not commit.
+		 * a_hostedWork: the work of the view epochs the depth epoch hosts (Api::EpochDef::hostedBy: the reflection's faces and first
+		 * person's depth, their features' ViewPoint::DepthCommitted work), run by the depth commit inside its epoch's execution, after its
+		 * own latch writes and before its recording's submission: a hosted epoch's SubmitViewEpoch there commits into it. Not run when the
+		 * depth epoch does not commit.
 		 */
 		void CaptureDepthPass(const std::function<void()>& a_hostedWork = {});
 
@@ -400,7 +401,7 @@ namespace DCLF
 		/**
 		 * @brief The view's epoch a_epoch (0 the depth or only one, 1 the colour one) submitted: its recording from the adopted revision,
 		 * with a commit of a_faces (its cameras: none commits nothing) into its shape, holding a_listed's payloads; a_drawn: the faces the
-		 * commit drew. A hosted epoch (Api::EpochDef::hostedBy: the reflection's, the depth epoch's passes) is committed into its host's
+		 * commit drew. A hosted epoch (Api::EpochDef::hostedBy: the reflection's and first person's depth, the depth epoch's passes) is committed into its host's
 		 * commit instead, only from inside it (the view's work the depth commit runs: CaptureDepthPass), and its host submits its recording
 		 * with the epoch's work; NoRevision anywhere else. A trees view's commit takes each draw family's row (tree LOD's as the last depth commit uploaded it) while the faces'
 		 * family is DCLF's (DecideViewFaces) and the shape draws it, its texture bound again for the execution. A view with frame constants
@@ -472,22 +473,23 @@ namespace DCLF
 		void CaptureShadowView(std::uint32_t a_viewId, std::uint32_t a_renderMode);
 
 		/**
-		 * @brief AfterShadowMaps: one epoch culling the casters against every captured view into the views' slices. One epoch, not one
-		 * per view (each graph execution costs CPU); the slices are consumed only after Main_RenderShadowMaps returns, so it is
-		 * equivalent.
+		 * @brief AfterShadowMaps: one epoch culling the casters against every captured view into the views' slices, and the shadow build's
+		 * occluders into the occlusion maps in a_maps (taken at the shadow maps: OcclusionReady; their views set up since: OcclusionView);
+		 * returns the maps drawn. One epoch, not one per view (each graph execution costs CPU); the slices are consumed only after
+		 * Main_RenderShadowMaps returns, and the maps not before the Prepass, so it is equivalent.
 		 */
-		void ExecuteShadowFrame();
+		std::uint32_t ExecuteShadowFrame(std::uint32_t a_maps);
 
 		/**
 		 * @brief The occlusion maps (kOcclusionViews: Skylighting's sky map, the precipitation mask), render thread. CaptureOcclusion,
-		 * at FinishAccumulating (render mode 0x1C): the map's layout. ExecuteOcclusion: the shadow build's occluders into the views in
-		 * a_views, in one epoch; returns those drawn. When OcclusionReady is false the engine's SetupMask registers them.
+		 * at FinishAccumulating (render mode 0x1C): the observers'. OcclusionView, once the map's camera is set up, before its RenderMask:
+		 * the view as DCLF computes it (its layout predicts the shadow shape's view of the map). OcclusionReady, at the shadow maps before
+		 * the engine draws them: whether the frame's shadow epoch can draw the map. When it does not, the engine's SetupMask registers the
+		 * map's scene at its own occlusion point.
 		 */
 		void CaptureOcclusion(std::uint32_t a_view);
-		/** @brief Render thread, once the map's camera is set up, before its RenderMask: the view as DCLF computes it. */
 		void OcclusionView(std::uint32_t a_view, const RE::NiCamera& a_camera);
 		bool OcclusionReady(std::uint32_t a_view) const;
-		std::uint32_t ExecuteOcclusion(std::uint32_t a_views);
 
 		const ShadowStats& GetShadowStats() const { return shadowStats; }
 		void ResetShadowStats() { shadowStats = {}; }

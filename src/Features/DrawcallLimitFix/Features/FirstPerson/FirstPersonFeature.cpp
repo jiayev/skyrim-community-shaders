@@ -60,7 +60,7 @@ namespace DCLF::Features::FirstPerson
 		{
 			// Where Core's were listed: after the reflections' (Features/Reflection's, registered earlier before the same Core switch).
 			const auto firstPersonSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_FIRST_PERSON", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "1: the player's first-person arms, weapons and magic hands drawn by DCLF as a view of the one scene (T7e: kSetFirstPerson members, the view bit kViewFirstPerson at the GPU cull, a depth epoch in RenderDepth and a colour epoch at Main::RenderFirstPersonView); unset or 0 they stay native: a few dozen draws, cheaper as the engine's own than as two epochs of GPU-driven work (live toggle's seed)",
+				.description = "1: the player's first-person arms, weapons and magic hands drawn by DCLF as a view of the one scene (T7e: kSetFirstPerson members, the view bit kViewFirstPerson at the GPU cull, its depth in the Z-prepass epoch and a colour epoch at Main::RenderFirstPersonView); unset or 0 they stay native: a few dozen draws, cheaper as the engine's own than as two epochs of GPU-driven work (live toggle's seed)",
 				.before = "CS_DCLF_OPAQUE_EFFECTS" });
 			const auto decalsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_FIRST_PERSON_DECALS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::Zero,
 				.description = "default on (T7f item 7): a decal on a first-person entry (an effect's skinned blood decal on the arms, a weapon's BloodLighting) drawn by the first-person forward part as a forward object with its decal group's depth bias, test and blend (needs CS_DCLF_FIRST_PERSON and CS_DCLF_DECALS); 0 it stays the engine's",
@@ -77,6 +77,9 @@ namespace DCLF::Features::FirstPerson
 			a_context.RegisterView(Contribution(firstPerson, SwitchValue(decalsSwitch) != "0"));
 			// The view's latch, targets, pipelines and resources, before the coverage that decides whether its members are withheld.
 			a_context.RegisterViewWork({ .view = Api::EngineView::FirstPerson, .point = Api::ViewPoint::FrameStartBeforeCoverage, .run = &BeginFrame });
+			// The depth epoch's commit, inside the depth commit (the depth epoch hosts its passes: Schedule/Frame.cpp's fp.depth), after the
+			// reflection's faces' (view order).
+			a_context.RegisterViewWork({ .view = Api::EngineView::FirstPerson, .point = Api::ViewPoint::DepthCommitted, .run = &ExecuteDepth });
 			// The skeleton, hidden for every view the scene serves, in the frame's cull-hidden list (whatever the toggle, as Core listed it).
 			a_context.RegisterCullHiddenSource({ .bit = Api::CullHiddenBit::Hidden, .nodes = &CullHiddenSkeleton });
 			// After Features/Particles' and Features/Billboards' lines, where Core printed the view's.
@@ -88,7 +91,7 @@ namespace DCLF::Features::FirstPerson
 			// printed them.
 			SubscribeRootViewChecks();
 			a_context.RegisterReportLines({ .name = "first person filing", .point = Api::ReportPoint::SceneCoordinatorSet, .lines = &SetLines });
-			// RenderDepth's first-person draw and Main::RenderFirstPersonView's accumulator render, where the epochs run.
+			// RenderDepth's first-person draw (the frame's culled bits and depth range) and Main::RenderFirstPersonView's accumulator render (the colour epoch).
 			InstallHooks(a_context);
 		}
 	}

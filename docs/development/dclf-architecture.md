@@ -100,13 +100,13 @@ lane and pool, and every frame draws the newest complete snapshot of it.
 | `Main::Draw`, before the main cull (`FrameDriver::BeginFrame`, the shell's `Main_Draw_Early` thunk) | The graph's build point (`IndirectDraws::BuildPoint`); opens the engine-read window; applies the toggles; captures the frame globals and posts the frame inputs; the camera cut; adopts the newest complete snapshot (`AdoptCurrentSnapshot`, installed by `FrameView::HandOverAtFrameStart`), waiting for one only after a graph build or new resources; installs the claims; serves the scene lane's requests (switch catch-ups, the category capture, mirror capture requests); decides the draw families (tree LOD); publishes the scene-list filter; kicks the frame values (`FrameValues::Kick`) | **Scene pass** (`Coordinator::RunSceneWork`, whenever its producers wake the pump): events applied, walk, joins, `CommitSet`; then, at the snapshot builder's pace, `PublishScene`. **Snapshot builder** (`IndirectDraws::PostSnapshotWork`): payloads built, revision made and sealed, payload published as pooled versions. **FrameValues' producer**: placements, palettes, shading | The frame values' uploads on the upload queue; the payload's catch-up |
 | The engine's list jobs | The engine registers the passes it keeps. `PassCapture` withholds DCLF's objects; `PrimaryCull` stands in for DCLF's entries inside the list jobs; whole entries are out of the scene lists | | |
 | Inside `CalculateAndDrawShadowCasterLights` | The frame's shadow views begun and their coverage decided (`BeforeShadowCasters`), each kept light noted (`ShadowCasterKept`), the views listed from DCLF's selection (`ShadowCastersSelected`) | | |
-| `BeforeShadowMaps` | The shadow views' revision inputs and frame | | |
+| `BeforeShadowMaps` | The shadow views' revision inputs and frame; then, before the engine draws the shadow maps, the occlusion maps DCLF draws this frame taken and set up (Skylighting's `RenderOcclusionAtShadowMaps`: `OcclusionReady`, the camera, `OcclusionView`, `RenderMask`'s clear) | | The maps' clears |
 | Each shadow view's `FinishAccumulating` | `CaptureShadowView`: where the engine draws and with which constants | | The engine's remaining shadow draws |
-| `AfterShadowMaps` | The **shadow epoch** (trigger `shadow-maps.after`) | | Every view's casters, culled per view |
+| `AfterShadowMaps` | The **shadow epoch** (trigger `shadow-maps.after`), the occlusion maps taken with it | | Every view's casters, culled per view; the occlusion maps' occluders |
 | `EarlyPrepass` | Posts the accumulate inputs for the next scene pass; answers the last pass's captures | | |
-| `Main::RenderDepth`, world drawn | `FrameDriver::DepthCommitted`: the **Z-prepass epoch** (trigger `depth.committed`), the reflection's faces committed inside its commit (it hosts their passes) | | Tree wind and fade state (compute queue), texture transforms, phase 1, the reflection's faces' cull, HZB, phase 2, the faces' draws, visibility events |
-| RenderDepth's first-person draw | The **first-person depth epoch** | | |
-| Skylighting's `RenderOcclusion` | The **occlusion epoch** | | The occlusion maps |
+| `Main::RenderDepth`, world drawn | `FrameDriver::DepthCommitted`: the **Z-prepass epoch** (trigger `depth.committed`), the reflection's faces and the first-person depth committed inside its commit (it hosts their passes) | | Tree wind and fade state (compute queue), texture transforms, phase 1, the reflection's faces' cull, HZB, phase 2, the first-person cull, the faces' draws, the first-person depth and forward sort, visibility events |
+| RenderDepth's first-person draw | The first-person subtree's culled bits (`NoteFirstPersonCulled`); the engine's residue | | |
+| Skylighting's `RenderOcclusion` (the engine's occlusion point) | A map the shadow epoch did not draw, rendered whole by the engine (`OcclusionNeedsEngine`) | | |
 | `Prepass` | Latches the accumulator; refreshes the camera-dependent frame constants; Light Limit Fix's light culling epoch | | |
 | The main pass's opaque batches | `BeforeOpaquePass`: `CaptureMainPass`. `AfterOpaquePass`: the **colour epoch** (trigger `opaque.after`) | | The drawn set into the G-buffer, depth EQUAL; decals; Terrain Blending's terrain |
 | The engine's blended draw | The **forward epoch** (trigger `blended.draw`) | | Blended objects back to front; refraction normals |
@@ -124,11 +124,10 @@ owners and rules are [dclf-layout.md](./dclf-layout.md), "The schedule".
 
 | Epoch | Trigger | Segment | Passes |
 | --- | --- | --- | --- |
-| `shadow` | `shadow-maps.after` | `ShadowView` | latched copies, index pool, build draws, the views' draws, cull counters (with `CS_DCLF_STATS`) |
-| `main.depth` | `depth.committed` | `ZPrepass` | latched copies (the reflection's too); tree wind (next frame); fade state, fade events; texture transforms; phase 1 build, index pool, tree LOD cull, depth draw; the reflection's build draws and tree LOD face cull; HZB, phase 2 build, tree LOD retest, rescues' depth; the reflection's faces; tree LOD counts; visibility events and readback |
+| `shadow` | `shadow-maps.after` | `ShadowView` | latched copies, index pool, build draws, the views' draws, cull counters (with `CS_DCLF_STATS`); the shadow views' and the occlusion maps' (their views after the placements) |
+| `main.depth` | `depth.committed` | `ZPrepass` | latched copies (the reflection's and first person's too); tree wind (next frame); fade state, fade events; texture transforms; phase 1 build, index pool, tree LOD cull, depth draw; the reflection's build draws and tree LOD face cull; HZB, phase 2 build, tree LOD retest, rescues' depth; first person's build draws; the reflection's faces; first person's depth and forward sort; tree LOD counts; visibility events and readback |
 | `reflection` | `depth.committed` | (hosted by `main.depth`) | its passes are the depth epoch's (`reflection/view.build-draws`, `reflection/tree-lod.faces-cull`, `reflection/view.faces`): a shape, no segment, recording or submission of its own |
-| `fp.depth` | `fp.depth-draw` | `FirstPersonDepth` | latched copies, build draws, tree LOD face cull, depth, forward sort |
-| `occlusion` | `occlusion.draw` | `SkyOcclusion` | latched copies, build draws, the maps' draws |
+| `fp.depth` | `depth.committed` | (hosted by `main.depth`) | its passes are the depth epoch's (`fp.depth/view.build-draws`, `fp.depth/tree-lod.faces-cull`, `fp.depth/view.depth`, `fp.depth/view.forward-sort`), after the HZB and both phases' depth: a shape (`fp.colour` shares it), no segment, recording or submission of its own |
 | `light-culling` | (Light Limit Fix's, live) | `LightCulling` | Light Limit Fix's clusters; not a revision's |
 | `main.colour` | `opaque.after` | `MainOpaque` | latched copies, build draws, sort scan and scatter, forward sort, colour draws |
 | `forward` | `blended.draw` | `Forward` | blended draws, refraction normals (shares `main.colour`'s shape, gated by the forward class) |
@@ -137,17 +136,23 @@ owners and rules are [dclf-layout.md](./dclf-layout.md), "The schedule".
 `main.depth`, `main.colour` and, while its class is on, `forward` decide the frame's claims (`EpochDef::claims`): a frame whose
 claims withhold an object must run the epoch that draws it.
 
-**A hosted epoch** (`EpochDef::hostedBy`: `reflection`, in `main.depth`) is a shape and its passes without an ORG epoch of its own.
-Its keys sit in its host's list, prefixed with its id (`reflection/view.faces`), where the host's extension makes them from the view's
-resources (`Resources::views`, while the view's target is imported: `ViewPassesReady`), so its passes keep the table's order among the
-host's. The host's latched copies copy its lists too (one pass). Its shape is a revision slot like any epoch's; the host's recordings are
-requested with it (`RevisionRecordings::hosted`): each of the host's variants with the hosted passes' work, then the same without it (its
-passes prepare nothing, record nothing). The host's commit runs the hosted view's work inside its own epoch's execution
-(`IndirectDraws::CaptureDepthPass`'s hosted work: `ViewPoint::DepthCommitted`), whose `SubmitViewEpoch` commits into the host's commit
-(`Impl::CommitHostedView`: its latch in the host's frame slot, its owners held with the host's execution); the host then submits the
-variant with the hosted work when the view committed, else the one without. A hosted epoch is covered with its host's recordings
-(`DecideEpochCoverage`). It is in neither order. Why: the reflection's own epoch cost its external entry and exit barriers (about
-3-4 us each), its latched copies (about 4 us) and their barriers, every frame it drew.
+**A hosted epoch** (`EpochDef::hostedBy`: `reflection` and `fp.depth`, in `main.depth`) is a shape and its passes without an ORG epoch
+of its own. Its keys sit in its host's list, prefixed with its id (`reflection/view.faces`), where the host's extension makes them from
+the view's resources (`Resources::views`, each view while its target is imported: `ViewPassesReady`), so its passes keep the table's
+order among the host's. The host's latched copies copy every hosted view's lists too (one pass). Its shape is a revision slot like any
+epoch's, which a later epoch may share (`fp.colour` records against `fp.depth`'s). The host's recordings are requested with the shapes
+of its hosted epochs that have one (`RevisionRecordings::hosted`), each such epoch a dimension: for every subset of them absent (none
+absent first), each of the host's own variants with the present ones' work and none of the absent ones' (their passes prepare nothing,
+record nothing). The depth epoch has 2 own variants (with and without the index pool's dispatch), so 8 recordings with both hosted
+shapes, 4 with one (first person's is dropped while its toggle is off; the reflection's stays once made), 2 with none; a hosted epoch
+never committed in a frame records nothing in the recording submitted, whichever others did. The host's commit runs the views' work
+inside its own epoch's execution (`IndirectDraws::CaptureDepthPass`'s hosted work: `ViewPoint::DepthCommitted`, in view order), whose
+`SubmitViewEpoch` commits into the host's commit (`Impl::CommitHostedView`: its latch in the host's frame slot, its owners held with the
+host's execution, a bit each); the host then submits the recording with exactly the committed ones' work
+(`RevisionRecordings::IndexOf`). A frame whose depth epoch did not commit runs the work after it: nothing is committed (`NoRevision`).
+A hosted epoch is covered with its host's recordings while they carry its shape (`DecideEpochCoverage`, `RevisionRecordings::Carries`).
+It is in neither order. Why: the reflection's own epoch cost its external entry and exit barriers (about 3-4 us each), its latched
+copies (about 4 us) and their barriers, every frame it drew; first person's depth epoch the same, every frame in first person.
 
 ### The frame start and the wait
 
@@ -198,7 +203,7 @@ about 0.3 ms itself).
 Every byte a commit writes for the GPU is counted where it goes (`Core/Gpu/FrameData.h`), at the three ways it can:
 -   a latched copy (`LatchedUploads`, `latched: <target>`): the commit stores into the epoch's latch block and the epoch's first
     pass copies it to the buffers the draws read (`MakeLatchedCopiesPass`, `Core/Render/Passes/Common.cpp`; used by the main
-    epochs, the views and the shadow and occlusion epochs). A counter is zeroed from a never-written zero block. The copies are
+    epochs, the views and the shadow epoch). A counter is zeroed from a never-written zero block. The copies are
     recorded with the revision's recording, so the commit records no copy commands;
 -   a staged upload (`CommitUploads`, `staged: <target>`);
 -   a latch-block write (`LatchWrite`, `latch: <what>`).
@@ -920,9 +925,10 @@ payload's parts by value. A commit builds nothing, prepares nothing and compares
     request and this post.
 -   **Shapes from revision inputs** (`Core/Render/Main/Resources.h`): a segment's shape (`PassFrame`) is a function of what the
     revision names (versions, draw bound, pipeline set, lookups) and engine setup (viewport, frame block sizes), never of a frame's
-    values. Max counts come from the scene's draw bound, never a frame's draws; shadow capacities from `ShadowBoundsOf`. Shadow and
-    occlusion shapes are made per predicted view layout (`ShadowViewLayout`: slot, mode, target, slice, rectangle, raster state),
-    which `DecideShadowCoverage` predicts before the engine draws.
+    values. Max counts come from the scene's draw bound, never a frame's draws; shadow capacities from `ShadowBoundsOf`. The shadow
+    shape is made from predicted view layouts (`ShadowViewLayout`: slot, mode, target, slice, rectangle, raster state): every
+    placement, which `DecideShadowCoverage` predicts before the engine draws, then the occlusion maps' as last set up
+    (`PredictedOcclusion`).
 -   **The revision assembler** (`AssembleRevision`, ORG's `RevisionAssembler`): one fragment per slot (the versions, a shape per
     epoch and shadow or occlusion variant, a recording per epoch). An unchanged fragment is inherited, so an unchanged revision is
     cheap. A failed or dropped recording (dropped by a graph build) makes the revision again.
@@ -946,16 +952,16 @@ shadow view slot the shape holds with no view this frame gets a zero latch (no d
 work` (`ShadowEpochs.cpp`). A shadow view's pipeline-map offset carries its latch slot's base (`LatchBlock::Offset(slot) + row`),
 as the dispatch's `LatchOffset` does.
 
-The culling is one dispatch for all of an epoch's views (`ShadowBuildDrawsPass`, BuildDrawsCS's `ShadowViews`; the occlusion
-epoch's too): a compute pass costs 12-25 us almost whatever its work. The dispatch is two-dimensional, x over the inputs and y over the
-views, a thread building one input for one view with the view's own latch and outputs, which a per-epoch table names (`ShadowBuildView`:
-the view's latch within the frame slot's region, its slot's sequences, count words and bucket counts; published at preparation by
-`org::PreparedTablePublisher`, its SRV and rows in the push constants' `sequencesIndex` and `countIndex`). Not a loop over the views in
-each thread: BuildDraws is latency-bound, and the loop took the four views from 20.9 to 36.1 us. Each view's slot is written as a
-dispatch of its own wrote it, so the views' draws, counters and readbacks are unchanged. The groups are the epoch's
-(`ShadowLatchLayout::BuildDispatchOffset`, the shadow epoch's then the occlusion epoch's), written by each commit for the variant it
-submits: x the list's inputs over 64, y its views (`ShadowBuildRows`, the rows the pass's table holds unless a slot is past its bindings;
-a y past the rows does nothing). A zero latch's `drawCount` of 0 skips its view.
+The culling is one dispatch for all of the epoch's views (`ShadowBuildDrawsPass`, BuildDrawsCS's `ShadowViews`; the occlusion maps'
+views are rows of it): a compute pass costs 12-25 us almost whatever its work. The dispatch is two-dimensional, x over the inputs and
+y over the views, a thread building one input for one view with the view's own latch and outputs, which a per-epoch table names
+(`ShadowBuildView`: the view's latch within the frame slot's region, its slot's sequences, count words and bucket counts; published at
+preparation by `org::PreparedTablePublisher`, its SRV and rows in the push constants' `sequencesIndex` and `countIndex`). Not a loop
+over the views in each thread: BuildDraws is latency-bound, and the loop took the four views from 20.9 to 36.1 us. Each view's slot is
+written as a dispatch of its own wrote it, so the views' draws, counters and readbacks are unchanged. The groups are the epoch's
+(`ShadowLatchLayout::BuildDispatchOffset`), written by each commit for the variant it submits: x the list's inputs over 64, y its
+views (`ShadowBuildRows`, the rows the pass's table holds unless a slot is past its bindings; a y past the rows does nothing). A zero
+latch's `drawCount` of 0 skips its view.
 
 ### Queues and submission
 
@@ -2267,7 +2273,7 @@ the layout grows (`ReserveMainLatch`). A frame where the sun did not accumulate 
 
 ### The occlusion maps, drawn by DCLF
 
-The precipitation accumulator's two views (render mode 0x1C) are both drawn by DCLF's occlusion epoch while Skylighting is loaded
+The precipitation accumulator's two views (render mode 0x1C) are both drawn by DCLF's shadow epoch while Skylighting is loaded
 (`Features/OcclusionMaps/OcclusionMaps.h`): Skylighting's sky occlusion map (`CS_DCLF_SKYLIGHT`) and the engine's precipitation
 occlusion mask (`CS_DCLF_PRECIPITATION`). Without Skylighting the engine draws both.
 -   Each map has its set phase and view bit (`kSetOccluderSky` / `kViewSkyOccluder`, `kSetOccluderPrecipitation` /
@@ -2279,11 +2285,31 @@ occlusion mask (`CS_DCLF_PRECIPITATION`). Without Skylighting the engine draws b
     (`src/Features/Skylighting.cpp`); its hook and DCLF's walk call the same function. The precipitation mask takes no skinned object,
     no multi-texture landscape, and none of the sky map's BSX filter. The sky view rejects a bound radius of 32 or less on the GPU
     (`kCullMinRadius`). An occluder whose bound lies wholly below Skylighting's probe grid's bottom less the margin draws nothing (a
-    cull plane latched each frame, `OcclusionMapContribution::floorHeight`).
--   **The shell's calls** (`src/Features/DrawcallLimitFix.h`: `OcclusionReady`, `OcclusionNeedsEngine`, `OcclusionView`,
-    `DrawOcclusion`): when a map is ready, `SetupMask` is skipped and `RenderMask` only sets the camera and clears; `DrawOcclusion`
-    draws every ready map in one epoch after the sky map's `RenderMask`. A map is DCLF's only when the selected revision has a shape
-    for it; occlusion layouts are predicted from the maps' last captures (`PredictedOcclusion`).
+    cull plane latched each frame, `OcclusionMapContribution::floorHeight`). The shadow epoch latches it before the frame's grid
+    update (`UpdateSharedData` at `EarlyPrepasses`), so the floor is the lower of the last update's bottom and the one this frame's
+    main camera takes, less the margin (`SkyFloorHeight`): never fewer occluders than the grid the probes read; a few more on a frame
+    whose camera moved a grid cell up. After a reset it is none, as Skylighting's own test.
+-   **In the shadow epoch** (`Schedule/Frame.cpp`: no epoch of its own). The maps' views are the shadow shape's after the placements
+    (their slots, `OcclusionSlot`; layouts as last set up, `PredictedOcclusion`, the publication's toggles' maps), culled in the same
+    dispatch and drawn by the same passes; a frame's set of drawn views (placements and maps) is a variant of the recordings
+    (`ShadowFrame::activeViews`), so a frame without a map (interiors, a toggle off, Skylighting not drawing) records no map work, and
+    a map not drawn gets a zero latch. Why: the maps' own epoch cost its external entry and exit barriers, its latched copies and its
+    culling dispatch (about 7-12 us and 15 us) every frame they drew.
+-   **The shell's calls** (`src/Features/DrawcallLimitFix.h`). At the shadow maps, before the engine draws them (Deferred's
+    `Main_RenderShadowMaps` hook, Skylighting's `RenderOcclusionAtShadowMaps`): `OcclusionReady`, whether DCLF draws the map in the
+    frame's shadow epoch (the selected revision's shadow shape has its view at the layout set up, and the set draws its phase); if so
+    `SetupMask` is skipped, the camera is set up (`OcclusionView`, DCLF's view) and `RenderMask` only clears; `AfterShadowMaps` draws
+    the maps taken with the shadow views. At the engine's occlusion point (`Skylighting::RenderOcclusion`), `OcclusionNeedsEngine`: a
+    map the shadow epoch did not draw (not taken, or not drawn) is rendered there whole, as before DCLF. The sky direction and the
+    reset are chosen once a frame, wherever the frame's first map is set up (`BeginOcclusionFrame`).
+-   **Why the shadow maps' point is safe.** Main::Draw runs `RenderShadowMaps` (+0x2EC), `RenderDepth` (+0x395), the precipitation
+    occlusion (+0x3A1), then `RenderWorld` (+0x831). The occluders and their views are the shadow epoch's payload, index pool and latch
+    block, and the camera is the frame's (the main cull is done; nothing between moves the precipitation camera or the sky direction).
+    No reader of either map runs before the `Prepass` (Skylighting's probe update, Wetness Effects' t70, the precipitation's blended
+    draw); `OcclusionTransform` and the emitter's `occlusionProjection`, which those read with the maps, are set where the map is.
+    The setup runs before the engine's shadow maps, so whatever `RenderMask` leaves of the renderer's state the shadow maps set again,
+    and the camera the shadow maps begin with is put back (`EarlyPrepasses` reads the eye after them). The dynamic resolution lock is
+    taken around it, as Upscaling's hook of the occlusion point does.
 -   **The view** (`OcclusionView(map)`, once the map's camera is set up): DCLF computes the matrices, eye and viewport, with depth range
     0-1, slice 0, back-face culling at the renderer's fill, no bias and no scissor; a two-sided occluder draws without culling.
     Skylighting's `SetViewFrustum` hook narrows the camera to one quarter a frame, and the captured projection is that quarter's, so
@@ -2296,7 +2322,8 @@ occlusion mask (`CS_DCLF_PRECIPITATION`). Without Skylighting the engine draws b
 -   **The depth pass's alpha reference.** Under `RENDER_DEPTH` with `ALPHA_TEST`, `Utility.hlsl` also discards below `PerGeometry
     AlphaTestRef.x`: the engine writes `0x3F7EFEFF` while the object blends, else `threshold/255` plus just under one step
     (`BSUtilityShader::SetupGeometry`); DCLF computes it from the object record (`DCLFDepthAlphaTestRef`).
--   Measured at Riverwood: `SetupMask` 0.43 ms and `RenderMask` 0.34 ms down to 0.022 ms, plus a 0.03 ms epoch.
+-   Measured at Riverwood: `SetupMask` 0.43 ms and `RenderMask` 0.34 ms down to 0.022 ms, plus a 0.03 ms epoch (the maps' own, before
+    they were drawn in the shadow epoch).
 
 ### Water reflections
 
@@ -2359,7 +2386,8 @@ alpha test on; the sky tests without writing.
 
 ### First person as a view bit
 
-The player's first-person skeleton is a category root of the one scene, drawn by two view epochs (Features/FirstPerson; Core's view
+The player's first-person skeleton is a category root of the one scene, drawn by two view epochs, the depth one hosted by the depth
+epoch (Features/FirstPerson; Core's view
 engine, `Core/Render/Epochs/ViewEpoch*.cpp`, `Core/Render/Views/ViewSlots.h`, shared with the reflection faces;
 `CS_DCLF_FIRST_PERSON`, needs skinned and actors; `CS_DCLF_FIRST_PERSON_DECALS`).
 -   **Membership**: the first-person root (`CaptureRoot`), its geometry tracked like an actor's. Set phase `kSetFirstPerson`, view bit
@@ -2373,12 +2401,17 @@ engine, `Core/Render/Epochs/ViewEpoch*.cpp`, `Core/Render/Views/ViewSlots.h`, sh
     space. The first-person epochs' `CameraPosAdjust` is the world eye, not the first-person camera's translate: the rows are world
     space (`Features/FirstPerson/FirstPersonEpochs.cpp`, `CaptureCamera`). DCLF never reads the skeleton while the engine has it
     shifted: FrameValues takes the members' rows and palettes at the frame start, and the producer never samples a first-person item.
--   **Depth epoch** (`fp.depth`, at RenderDepth's first-person draw): draws every member untested (`ViewShape::frustumCull` false:
-    a handful of objects, always before the camera; the frustum test against the members' bounds dropped the weapon in some places
-    and orientations) and draws the
-    buckets' Z-prepass depth pipelines into the main depth, after the HZB build (the HZB leaves the arms out) and before
-    `kPOST_ZPREPASS_COPY` is taken; it sorts the forward range back to front (`view.forward-sort`).
--   **Colour epoch** (`fp.colour`, `Main::RenderFirstPersonView`'s accumulator render): the same sequences with each bucket's
+-   **Depth epoch** (`fp.depth`, hosted by the depth epoch: "The schedule"; committed at the depth commit, `ExecuteDepth` at
+    `ViewPoint::DepthCommitted`): draws every member untested (`ViewShape::frustumCull` false: a handful of objects, always before the
+    camera; the frustum test against the members' bounds dropped the weapon in some places and orientations) and draws the
+    buckets' Z-prepass depth pipelines into the main depth, after the HZB build (the HZB leaves the arms out) and both phases' depth,
+    and before `kPOST_ZPREPASS_COPY` is taken; it sorts the forward range back to front (`view.forward-sort`). Its inputs are this
+    frame's at the depth commit: the first-person camera is set up in `Main::Draw` before `RenderDepth`, the depth range is the
+    shape's (a revision input, taken at RenderDepth's first-person draw by `RenderDepth`'s second argument: `TakeDepthRange`), and
+    nothing of the world draws depth between the world-drawn point and RenderDepth's first-person draw, where the engine draws only
+    its residue. Its cull runs after phase 2 (the visibility verdicts the
+    frame's own epoch at that draw read). A frame not in first person submits the depth epoch's recording without its work.
+-   **Colour epoch** (`fp.colour`, `Main::RenderFirstPersonView`'s accumulator render; an epoch of its own, sharing `fp.depth`'s shape): the same sequences with each bucket's
     first-person forward pipeline into kMAIN and the motion vectors, tested against `kPOST_ZPREPASS_COPY`, then its forward range.
     Both epochs use the viewport depth range [0, `f1stPersonFarDepthRange`]. First-person forward keys carry
     `kForwardKeyFirstPerson`: two attachments, every channel written.

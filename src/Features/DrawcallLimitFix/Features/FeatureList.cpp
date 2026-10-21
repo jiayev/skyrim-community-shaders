@@ -12,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/Forward/Forward.h"
 #include "Features/DrawcallLimitFix/Features/GpuOcclusion/GpuOcclusion.h"
+#include "Features/DrawcallLimitFix/Features/Grass/Grass.h"
 #include "Features/DrawcallLimitFix/Features/HiddenNodes/HiddenNodes.h"
 #include "Features/DrawcallLimitFix/Features/Landscape/Landscape.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/LocalLights.h"
@@ -84,7 +85,9 @@ namespace DCLF::Features
 		// the gates'), before the decals' and faces'; the gates' engine channel is the first (the segments' follows), their adoption guard and
 		// reserved hidden site the only ones, their report lines alone at their points, their switch before the shadows'; tree LOD's scene resources and commit hook
 		// after tree wind's (its tables' uploads after the trees'), its passes the schedule's; no pool or product.
-		// GPU occlusion right after tree LOD: the depth pyramid (the HZB) the shared cull's occlusion mode tests, tree LOD's cull among them.
+		// Grass right after tree LOD: its switch and toggle follow tree LOD's, its scene resources, commit hook and report lines after
+		// its, its early hooks (the shared grass capture's sink) after its (no shared site).
+		// GPU occlusion right after grass: the depth pyramid (the HZB) the shared cull's occlusion mode tests, tree LOD's cull among them.
 		// Hidden nodes' early hooks after billboards' and tree LOD's (no order between them). Decals' early hooks (the decal array edits)
 		// after hidden nodes' (no order between them: no shared site); its node capture is the only one. Decals
 		// after tree wind: its switches and toggles are listed after the trees' (after the actors' and the skinned), and its candidates'
@@ -120,6 +123,7 @@ namespace DCLF::Features
 			SwitchNodes::Feature(),
 			Lod::Feature(),
 			TreeLod::Feature(),
+			Grass::Feature(),
 			GpuOcclusion::Feature(),
 			HiddenNodes::Feature(),
 			Decals::Feature(),

@@ -1,6 +1,7 @@
 #include "GrassCollision.h"
 
 #include "Globals.h"
+#include "GrassShared/GrassFrame.h"
 #include "I18n/I18n.h"
 #include "State.h"
 #include "Utils/ActorUtils.h"
@@ -216,6 +217,7 @@ void GrassCollision::Update()
 		queuedCollisions.clear();
 
 		perFrame->Update(perFrameData);
+		lastPerFrame = perFrameData;
 
 		UpdateCollisionTexture();
 
@@ -249,6 +251,23 @@ void GrassCollision::RestoreDefaultSettings()
 void GrassCollision::PostPostLoad()
 {
 	Hooks::Install();
+	GrassShared::OnStoodDownFrame(&GrassCollision::StoodDownUpdate);
+}
+
+void GrassCollision::StoodDownUpdate()
+{
+	auto& self = globals::features::grassCollision;
+	if (!self.collisionTexture || !self.perFrame)
+		return;
+
+	self.Update();
+
+	static_assert(sizeof(PerFrame) <= sizeof(GrassShared::Collision::perFrame));
+	GrassShared::Collision published;
+	published.texture = self.collisionTexture->srv.get();
+	std::memcpy(published.perFrame.data(), &self.lastPerFrame, sizeof(PerFrame));
+	published.frame = globals::game::graphicsState->frameCount;
+	GrassShared::PublishCollision(published);
 }
 
 void GrassCollision::SetupResources()
