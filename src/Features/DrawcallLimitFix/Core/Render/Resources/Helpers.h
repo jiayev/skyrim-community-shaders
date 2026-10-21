@@ -14,14 +14,22 @@
 #include <rhi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <memory>
 
 namespace DCLF::Draws
 {
-	// The queue of a pass that prefers async compute: the compute queue, or the graphics queue under CS_DCLF_ASYNC_COMPUTE=0.
-	inline org::QueueKind AsyncComputeQueue() { return SwitchOnUnlessZero(Switch::AsyncCompute) ? org::QueueKind::Compute : org::QueueKind::Graphics; }
+	// A live override of CS_DCLF_ASYNC_COMPUTE (the test harness's dclf:async-compute, then a graph rebuild): -1 none, 0 graphics, 1 compute.
+	inline std::atomic<int> asyncComputeOverride{ -1 };
+	// The queue of a pass that prefers async compute: the compute queue, or the graphics queue under CS_DCLF_ASYNC_COMPUTE=0. Read at
+	// the graph's build.
+	inline org::QueueKind AsyncComputeQueue()
+	{
+		const int forced = asyncComputeOverride.load(std::memory_order_relaxed);
+		return (forced < 0 ? SwitchOnUnlessZero(Switch::AsyncCompute) : forced != 0) ? org::QueueKind::Compute : org::QueueKind::Graphics;
+	}
 
 	inline std::uint32_t CaptureViewIndex(const org::PassPrepareContext& a_preparation, const org::DeclaredViewToken& a_token)
 	{

@@ -145,7 +145,7 @@ namespace DCLF::Draws
 			// The main view's culling and copies (the main extension's resources).
 			{ .key = "core.z.latched-copies", .passName = "cs.dclf.z.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
 			{ .key = "core.latched-copies", .passName = "cs.dclf.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
-			{ .key = "core.z.portal-queries", .passName = "cs.dclf.z.member-portal-queries", .queue = Api::PassQueue::Compute, .make = &MemberQueries },
+			{ .key = "core.z.portal-queries", .passName = "cs.dclf.z.member-portal-queries", .make = &MemberQueries },
 			{ .key = "core.z.build-draws", .passName = "cs.dclf.z.build-draws", .make = &BuildDraws },
 			{ .key = "core.build-draws", .passName = "cs.dclf.build-draws", .make = &BuildDraws },
 			{ .key = "core.z.index-pool", .passName = "cs.dclf.z.index-pool", .make = &IndexPoolCopies },

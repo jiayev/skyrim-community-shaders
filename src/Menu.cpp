@@ -60,6 +60,9 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
+#if defined(CS_HAS_RENDER_GRAPH)
+#	include "RenderGraph/ScheduleWindow.h"
+#endif
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -905,6 +908,8 @@ void Menu::DrawSettings()
 	}
 	ImGui::End();
 
+	DrawRenderGraphScheduleWindow();
+
 	// After every watched feature has drawn; records the change an interaction that ended this frame made
 	undoHistory.EndFrame();
 	// The overlay also hosts the toasts; Draw() only draws once per frame
@@ -1522,4 +1527,16 @@ void Menu::DrawWeatherDetailsWindow()
 	if (!csEditor.WeatherDetailsWindow.Enabled || !csEditor.loaded)
 		return;
 	csEditor.RenderWeatherDetailsWindow(&csEditor.WeatherDetailsWindow.Enabled, !globals::features::performanceOverlay.settings.ShowWeatherPicker);
+}
+
+/**
+ * @brief Renders the render graph's schedule window while it is open
+ *
+ * Opened from Drawcall Limit Fix's settings; drawn with the menu. The window owns its tracing switch (RenderGraph/ScheduleWindow.h).
+ */
+void Menu::DrawRenderGraphScheduleWindow()
+{
+#if defined(CS_HAS_RENDER_GRAPH)
+	RenderGraphSchedule::DrawWindow();
+#endif
 }

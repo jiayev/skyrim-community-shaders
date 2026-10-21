@@ -38,6 +38,7 @@
 #	include "DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
 #	include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#	include "RenderGraph/ScheduleWindow.h"
 #	include "RenderGraph/RenderGraphRuntime.h"
 #	include "State.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/ConstantMirror.h"
@@ -421,6 +422,12 @@ void DrawcallLimitFix::DrawSettings()
 		ImGui::TextUnformatted("Builds every live render graph pipeline (DCLF's graphics pipelines, every compute program) again from Data/Shaders as it is now. The "
 							   "current pipelines draw until the new ones are swapped in at the graph's next build; one that fails to compile keeps its previous "
 							   "pipeline (the log names the error).");
+	ImGui::SameLine();
+	if (ImGui::Button("Render graph schedule"))
+		RenderGraphSchedule::OpenWindow();
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Opens the persistent schedule inspector: each executable's batches per queue, their passes, the barriers before each pass and "
+							   "every cross-queue wait with its cause. The graph traces its schedule while the window is open.");
 	if (!switchedOn) {
 		ImGui::TextWrapped("Switched off with the feature's toggle: the game renders natively and DCLF does no frame work. Switch it back on to resume; no restart needed.");
 		return;

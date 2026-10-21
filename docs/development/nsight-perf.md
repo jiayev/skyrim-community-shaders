@@ -184,6 +184,13 @@ including the async compute queue NvPerf cannot see. The NVIDIA SDK is not neede
     `<name> [compute]`, left out of the groups and the total (it overlaps the graphics queue's
     work). Engine (D3D11) events are not timestamped: with DCLF off only the graph's own passes are
     measured, so a DCLF on/off comparison of groups is NvPerf's to make.
+-   **Ranges overlap; spans don't.** A range begins (top of pipe) when the queue reaches it and ends
+    (bottom of pipe) when its work is done, so a barrier batch's range holds the tail of the pass
+    before it, and a sum of ranges counts that work twice. A template's `spans` (each `{ "name",
+    "ranges" }`, matched against every range of the frame, not filtered by `ranges`) add a row
+    `span:<name>` per frame: the graphics queue's time from the first matching range's beginning to
+    the last one's end. Compare an epoch or a stretch of passes by its span; a span's rows stay out
+    of the total and the groups.
 -   **Hitches and gaps.** A frame whose selected total is beyond 1.5x the median's is dropped and
     counted, as is a frame whose epochs did not all come back within 64 frames.
 -   **Warnings** add: rows on another queue, no range from a kept recording (DCLF's epochs not timed;

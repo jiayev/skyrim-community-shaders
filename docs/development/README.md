@@ -6,6 +6,7 @@
 - **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 - **[Nsight Perf](./nsight-perf.md)** - GPU hardware counters per render pass, D3D11 and DXVK/Vulkan backends (Developer Tools, `NVPERF_SUPPORT`, `CS_NVPERF_*`)
 - **[OpenRenderGraph on DXVK](./render-graph.md)** - How features run render-graph work on DXVK's Vulkan device
+- **[Render graph schedule](./render-graph-schedule.md)** - The persistent schedule inspector window and the `communityshaders.schedule` DevBench tool: batches per queue, barriers, cross-queue waits and their causes
 - **[DCLF architecture](./dclf-architecture.md)** - Drawcall Limit Fix's design: the frame by thread, the scene from engine events to GPU draws, ownership and withholding, shading, fades, object classes and views
 - **[DCLF layout](./dclf-layout.md)** - DCLF's code layout: the folders, the extension points, the view and schedule contracts, and the rules `tools/dclf-layout-check.py` enforces
 - **[DCLF validation](./dclf-validation.md)** - DCLF's switches, parity checks, diagnostics and probes, how to validate a change, crash triage, and the bugs parity found

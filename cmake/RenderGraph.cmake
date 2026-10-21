@@ -50,6 +50,8 @@ if(CS_RENDER_GRAPH)
         set(OPENRENDERGRAPH_ENABLE_SUBMODULE_FALLBACK ON CACHE BOOL "" FORCE)
         set(OPENRENDERGRAPH_FORWARD_BASICRHI_DEP_OPTIONS OFF CACHE BOOL "" FORCE)
         set(OPENRENDERGRAPH_ENABLE_DEBUG_UI OFF CACHE BOOL "" FORCE)
+        # The persistent schedule inspector (the menu's "Render graph schedule" window): Dear ImGui only, CS's imgui::imgui.
+        set(OPENRENDERGRAPH_ENABLE_SCHEDULE_UI ON CACHE BOOL "" FORCE)
         set(OPENRENDERGRAPH_ENABLE_D3D11_INTEROP OFF CACHE BOOL "" FORCE)
         set(OPENRENDERGRAPH_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
@@ -80,7 +82,7 @@ if(CS_RENDER_GRAPH)
 
         # The render-graph compute passes compile their HLSL at runtime through ORGModuleServices (src/RenderGraph/
         # ComputeProgram.cpp), like Drawcall Limit Fix's Lighting builds; the sources ship with the other shaders.
-        target_link_libraries(${PROJECT_NAME} PRIVATE OpenRenderGraph::OpenRenderGraph BasicRHI::BasicRHI)
+        target_link_libraries(${PROJECT_NAME} PRIVATE OpenRenderGraph::OpenRenderGraph OpenRenderGraph::ScheduleUI BasicRHI::BasicRHI)
         # Unbounded lock-free queues (tbb::concurrent_queue): the render graph's compute submitter. Static, as DCLF's executor's.
         if(NOT TARGET TBB::tbb)
             find_package(TBB CONFIG REQUIRED)

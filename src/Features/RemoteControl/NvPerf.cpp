@@ -20,6 +20,11 @@
 #include <optional>
 #include <sstream>
 #include <utility>
+#include <vector>
+
+#if defined(CS_HAS_RENDER_GRAPH)
+#	include <Render/Runtime/IStatisticsService.h>
+#endif
 
 // NvPerf's front end: requests, status, results, the CS_NVPERF_* switches, and the choice of backend
 // (NvPerfBackend.h). Every profiler call is the backend's.
@@ -761,23 +766,60 @@ namespace NvPerf
 		g_backend.load(std::memory_order_relaxed)->PopRange();
 	}
 
+	namespace
+	{
+		// The command buffer ranges pushed on this thread (a pass records on one thread), innermost last: whether each pushed the
+		// profiler's range and the recording's timestamp sub-range, so PopCommandBufferRange ends what its push began.
+		struct PushedRange
+		{
+			bool profiler = false;
+			bool timestamps = false;
+		};
+		thread_local std::vector<PushedRange> t_pushedRanges;
+
+		bool TimestampSubRangesActive() noexcept
+		{
+#if defined(CS_HAS_RENDER_GRAPH)
+			return org::runtime::RecordingSubRangesActive();
+#else
+			return false;
+#endif
+		}
+	}
+
 	bool CommandBufferRangesActive() noexcept
 	{
 		const auto* backend = g_backend.load(std::memory_order_relaxed);
-		return backend && backend->CommandBufferRangesActive();
+		return (backend && backend->CommandBufferRangesActive()) || TimestampSubRangesActive();
 	}
 
 	bool PushCommandBufferRange(void* a_nativeCommandBuffer, const char* a_name)
 	{
+		PushedRange pushed;
 		auto* backend = g_backend.load(std::memory_order_relaxed);
-		return backend && backend->PushCommandBufferRange(a_nativeCommandBuffer, a_name);
+		pushed.profiler = backend && a_nativeCommandBuffer && backend->PushCommandBufferRange(a_nativeCommandBuffer, a_name);
+#if defined(CS_HAS_RENDER_GRAPH)
+		// A kept recording's own timestamps (a timestamp trace): the same range, nested in the pass's.
+		pushed.timestamps = org::runtime::BeginRecordingSubRange(a_name);
+#endif
+		if (!pushed.profiler && !pushed.timestamps)
+			return false;
+		t_pushedRanges.push_back(pushed);
+		return true;
 	}
 
 	void PopCommandBufferRange(void* a_nativeCommandBuffer, bool a_pushed)
 	{
-		if (!a_pushed)
+		if (!a_pushed || t_pushedRanges.empty())
 			return;
-		if (auto* backend = g_backend.load(std::memory_order_relaxed))
-			backend->PopCommandBufferRange(a_nativeCommandBuffer, a_pushed);
+		const auto pushed = t_pushedRanges.back();
+		t_pushedRanges.pop_back();
+		if (pushed.profiler)
+			if (auto* backend = g_backend.load(std::memory_order_relaxed))
+				backend->PopCommandBufferRange(a_nativeCommandBuffer, true);
+#if defined(CS_HAS_RENDER_GRAPH)
+		if (pushed.timestamps)
+			org::runtime::EndRecordingSubRange();
+#endif
 	}
 }

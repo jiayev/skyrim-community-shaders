@@ -552,17 +552,11 @@ struct DCLF_DEPTH_VS_OUTPUT
 DCLF_PULLED_VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 {
 	DCLF_PULLED_VS_OUTPUT vsout;
-	[loop] for (;;) {
-		const uint drawInstance = WaveReadLaneFirst(a_instance);
-		[branch] if (drawInstance == a_instance) {
 #		if defined(DCLF_DEPTH_ONLY)
-			vsout.Position = DCLFPulledVertex(index, drawInstance).Position;
+	vsout.Position = DCLFPulledVertex(index, a_instance).Position;
 #		else
-			vsout = DCLFPulledVertex(index, drawInstance);
+	vsout = DCLFPulledVertex(index, a_instance);
 #		endif
-			break;
-		}
-	}
 	return vsout;
 }
 #	elif defined(DCLF_PULLED_VERTICES)
@@ -3948,19 +3942,11 @@ void DCLFPixelObjectStatics()
 // same pass, helper lanes with them, and their derivatives hold.
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
-	PS_OUTPUT psout;
-	[loop] for (;;) {
-		const uint drawInstance = WaveReadLaneFirst(input.DCLFDrawInstance);
-		[branch] if (drawInstance == input.DCLFDrawInstance) {
-			const uint64_t sequence = DCLFDrawSequence(drawInstance);
-			DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
-			DCLFRowStatics(vk::RawBufferLoad<uint4>(sequence + 4));
-			DCLFPixelObjectStatics();
-			psout = DCLFShadePS(input, frontFace);
-			break;
-		}
-	}
-	return psout;
+	const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
+	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+	DCLFRowStatics(vk::RawBufferLoad<uint4>(sequence + 4));
+	DCLFPixelObjectStatics();
+	return DCLFShadePS(input, frontFace);
 }
 #	endif  // DCLF_PULLED
 #endif  // PSHADER

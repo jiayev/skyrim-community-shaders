@@ -34,8 +34,12 @@ namespace NvPerf::Timestamps
 		std::string name;
 		Queue queue = Queue::Graphics;
 		bool barrier = false;   // a barrier batch around a pass (cs.org.barrier.<where>.<pass>)
+		bool nested = false;    // a part of a pass, inside its range (NvPerf::PushCommandBufferRange: a shadow view, a draw group)
 		bool replayed = false;  // from a recording kept across frames (its own queries)
 		double us = 0.0;        // end - begin
+		// The queue's ticks (comparable within one queue, across its epochs) and their length: a trace's spans (NvPerfTrace.h).
+		std::uint64_t beginTick = 0, endTick = 0;
+		double usPerTick = 0.0;
 	};
 
 	struct Frame
