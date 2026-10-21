@@ -160,6 +160,7 @@ TextureCube<float4> TexCloudGroundReflection : register(t39);
 
 Texture2D<float4> TexCloudBoundary : register(t15);
 Texture2D<float2> TexCloudHeightBounds : register(t16);
+Texture2D<float2> TexCloudHeightBoundsTiles : register(t54);
 Texture2D<float> TexVolHistoryTr : register(t17);
 Texture2D<float4> TexVolHistoryLum : register(t18);
 Texture2D<float4> TexVolHistoryAux : register(t19);
@@ -558,7 +559,8 @@ float2 LowNdfUV(float2 worldXY, VolumetricCloudData info)
 float CloudViewStep(float distance, float angularFootprint)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float viewStep = (3.0 + distance * GAME_UNIT_TO_M * (60.0 / 16384.0)) * info.marchStepScale * GAME_UNITS_PER_METER;
+	const float stepScale = angularFootprint > 0.0 ? 2.0 : info.marchStepScale;
+	const float viewStep = (3.0 + distance * GAME_UNIT_TO_M * (60.0 / 16384.0)) * stepScale * GAME_UNITS_PER_METER;
 	if (angularFootprint <= 0.0)
 		return viewStep;
 	// Resolve the final reflection texel, independently of the checkerboard spacing.
@@ -601,7 +603,9 @@ float CloudNdfProfile(inout NDFInfo ndf)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float top = TexCloudProfileLUT.SampleLevel(TransmittanceSampler, float2(ndf.top_type, ndf.height_fraction), 0).g;
-	const float expandedTop = TexCloudAdjustmentLUT.SampleLevel(TransmittanceSampler, float2(ndf.top_type, ndf.height_fraction), 0).r;
+	float expandedTop = top;
+	[branch] if (info.topExpansion > 0.0)
+		expandedTop = TexCloudAdjustmentLUT.SampleLevel(TransmittanceSampler, float2(ndf.top_type, ndf.height_fraction), 0).r;
 	const float bottom = TexCloudProfileLUT.SampleLevel(TransmittanceSampler, float2(ndf.bottom_type, ndf.height_fraction), 0).r;
 	const float verticalProfile = max(lerp(top, max(top, expandedTop), info.topExpansion) * bottom, 0.0);
 	const float heightFade = saturate(ndf.height_fraction / info.coverageHeightRange);
@@ -633,15 +637,18 @@ NDFInfo sampleNDF(float2 worldXY, float2 anchoredXY, float profileAltitude)
 		}
 	}
 	ndf.height_fraction = saturate((profileAltitude - minAltitude) / (maxAltitude - minAltitude));
+	const float shearBlend = smoothstep(0.0, 1.0, saturate((ndf.height_fraction - 0.1) * 1.5384616));
+	const bool sampleUpstream = shearBlend > 0.0 && any(info.cloudShapeShear != 0.0);
 	const float2 modelingXY = worldXY - info.cloudShapeShear * smoothstep(0.0, 1.0, ndf.height_fraction);
 	float3 model = saturate(TexCloudModeling.SampleLevel(TileableSampler, LowNdfUV(modelingXY, info), 0));
 	float3 upstream = model;
-	if (any(info.cloudShapeShear != 0.0))
+	[branch] if (sampleUpstream)
 		upstream = saturate(TexCloudModeling.SampleLevel(TileableSampler, LowNdfUV(modelingXY - info.cloudShapeShear * 60.0, info), 0));
 	const float2 anchoredModelXY = anchoredXY - info.cloudShapeShear * smoothstep(0.0, 1.0, ndf.height_fraction);
 	model = ApplyLocalNdfModel(model, SampleLocalNdfModel(anchoredModelXY, info));
-	upstream = any(info.cloudShapeShear != 0.0) ? ApplyLocalNdfModel(upstream, SampleLocalNdfModel(anchoredModelXY - info.cloudShapeShear * 60.0, info)) : model;
-	const float shearBlend = smoothstep(0.0, 1.0, saturate((ndf.height_fraction - 0.1) * 1.5384616));
+	[branch] if (sampleUpstream)
+		upstream = ApplyLocalNdfModel(upstream, SampleLocalNdfModel(anchoredModelXY - info.cloudShapeShear * 60.0, info));
+	else upstream = model;
 	ndf.coverage = lerp(model.r, max(model.r, upstream.r), shearBlend);
 	if (ndf.coverage < 1e-8)
 		return ndf;
@@ -795,6 +802,50 @@ bool CloudIntervalContains(CloudRaySegments segments, float distance)
 	       (distance >= segments.farSegment.x && distance < segments.farSegment.y);
 }
 
+float2 CloudReflectionInterval(float3 eye, float3 direction, float begin, float end)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	uint2 size, tiles;
+	TexCloudHeight.GetDimensions(size.x, size.y);
+	TexCloudHeightBoundsTiles.GetDimensions(tiles.x, tiles.y);
+	if (any(size % tiles != 0u))
+		return float2(begin, end);
+	const float2 position = (eye.xy + direction.xy * begin - info.noiseWindOffset) * GAME_UNIT_TO_M;
+	const float2 uv = LowNdfUV(CloudFieldPosition(position, info.cloudEvolution.xy) * GAME_UNITS_PER_METER, info);
+	const int2 cell = int2(floor(uv * tiles));
+	const float2 margin = 0.5 / float2(size);
+	const float2 lower = (float2(cell) - 1.0) / tiles + margin;
+	const float2 upper = (float2(cell) + 2.0) / tiles - margin;
+	// Bound the warp derivative along the ray, including changing wave phases.
+	const float2 waveRate = abs(float2(dot(direction.xy, float2(0.0007, 0.0004)), dot(direction.xy, float2(-0.0003, 0.0009))));
+	const float2 warpRate = abs(info.cloudEvolution.y) * float2(dot(waveRate, float2(80, 40)), dot(waveRate, float2(30, 60)));
+	const float2 uvRate = (abs(direction.xy) + warpRate) * abs(info.lowNdfFrequency);
+	const float2 clearance = max(min(uv - lower, upper - uv), 0.0);
+	const float2 travel = clearance / max(uvRate, 1e-20);
+	const float blockEnd = min(end, begin + min(travel.x, travel.y));
+	if (blockEnd <= begin)
+		return float2(begin, end);
+	float2 heights = float2(1, 0);
+	[unroll] for (int y = -1; y <= 1; ++y)
+	{
+		[unroll] for (int x = -1; x <= 1; ++x)
+		{
+			const int2 address = ((cell + int2(x, y)) % int2(tiles) + int2(tiles)) % int2(tiles);
+			const float2 tile = TexCloudHeightBoundsTiles.Load(int3(address, 0));
+			heights = float2(min(heights.x, tile.x), max(heights.y, tile.y));
+		}
+	}
+	const float2 altitude = lerp(info.lowCloudBaseAltitude, info.lowCloudTopAltitude, heights);
+	const float3 relativeEye = eye - float3(FrameBuffer::CameraPosAdjust.xy, 0);
+	const CloudRaySegments segments = GetCloudRaySegments(relativeEye, direction,
+		altitude.x - GAME_UNITS_PER_METER, altitude.y + GAME_UNITS_PER_METER, info);
+	const float2 nearInterval = float2(max(begin, segments.nearSegment.x), min(blockEnd, segments.nearSegment.y));
+	if (nearInterval.y > nearInterval.x)
+		return nearInterval;
+	const float2 farInterval = float2(max(begin, segments.farSegment.x), min(blockEnd, segments.farSegment.y));
+	return farInterval.y > farInterval.x ? farInterval : float2(blockEnd, blockEnd);
+}
+
 float2 ClipCloudBoundary(float2 segment, float4 boundary)
 {
 	if (boundary.w <= 0.0 || segment.y <= segment.x)
@@ -915,9 +966,18 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 		if (end <= begin || !CloudIntervalContains(low, 0.5 * (begin + end)))
 			continue;
 		float distance = begin;
+		float reflectionEnd = begin;
 		[loop] while (distance < end && max(transmittance, ambientEnabled ? ambientTransmittance : 0.0) > 0.1)
 		{
-			const float step = min(CloudViewStep(distance, angularFootprint), end - distance);
+			if (angularFootprint > 0.0 && !localRay && distance >= reflectionEnd) {
+				const float2 reflectionInterval = CloudReflectionInterval(eye, direction, distance, end);
+				distance = reflectionInterval.x;
+				reflectionEnd = reflectionInterval.y;
+				if (reflectionEnd <= distance)
+					continue;
+			}
+			const float marchEnd = angularFootprint > 0.0 && !localRay ? reflectionEnd : end;
+			const float step = min(CloudViewStep(distance, angularFootprint), marchEnd - distance);
 			const float sampleDistance = distance + (distance * GAME_UNIT_TO_M < 250.0 ? jitter.x : jitter.y) * step;
 			const float3 pos = eye + direction * sampleDistance;
 			CloudDensityContext densityContext = (CloudDensityContext)0;
@@ -926,6 +986,8 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 			const float extinction = sampleCloudDensity(pos, layer, 0.0, viewDistance, minimumMip, densityContext);
 			const float depthDistance = distance;
 			distance += step * (densityContext.ndf.dimension_profile > 0.05 ? 1.0 : 2.0);
+			if (angularFootprint > 0.0 && !localRay)
+				distance = min(distance, marchEnd);
 			if (extinction <= 0.0)
 				continue;
 			const float viewDepth = extinction * info.viewExtinction * step * GAME_UNIT_TO_M;

@@ -1359,7 +1359,10 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			}
 			context->CSSetUnorderedAccessViews(0, kCloudAmbientCascadeCount, viewOutputs, nullptr);
 			context->CSSetShader(csCloudAmbientView.get(), nullptr, 0);
-			context->Dispatch(kCloudAmbientVolumeWidth / 4, kCloudAmbientVolumeWidth / 4, kCloudAmbientVolumeDepth * kCloudAmbientCascadeCount / 4);
+			static_assert(kCloudAmbientVolumeWidth == 32 && kCloudAmbientVolumeDepth == 16 && kCloudAmbientCascadeCount == 4);
+			constexpr uint32_t nearViewGroups = (kCloudAmbientVolumeWidth / 4) * (kCloudAmbientVolumeWidth / 4) * (kCloudAmbientVolumeDepth / 4);
+			constexpr uint32_t farViewGroups = nearViewGroups / 8;
+			context->Dispatch(nearViewGroups + (kCloudAmbientCascadeCount - 1) * farViewGroups, 1, 1);
 			context->CSSetUnorderedAccessViews(0, kCloudAmbientCascadeCount, nullViewOutputs, nullptr);
 			context->CSSetShaderResources(50, kCloudAmbientCascadeCount, viewInputs);
 			globals::profiler->EndPass();
@@ -1473,11 +1476,14 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		outputSrvs[1] = texVolFilteredLum->srv.get();
 
 		uavs = { texVolCubeTraceTr->uav.get(), texVolCubeTraceLum->uav.get(), texVolCubeTraceAux->uav.get() };
+		auto* reflectionBounds = texCloudHeightBoundsTiles->srv.get();
+		context->CSSetShaderResources(54, 1, &reflectionBounds);
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(csVolCubemap.get(), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::VolumetricCubemap");
-		context->Dispatch((kVolCubeSize / 4u + 7u) >> 3, (kVolCubeSize / 4u + 3u) >> 2, 6);
+		context->Dispatch((kVolCubeSize / 4u + 15u) >> 4, (kVolCubeSize / 4u + 1u) >> 1, 6);
 		globals::profiler->EndPass();
+		context->CSSetShaderResources(54, 1, nullTemporalSrvs);
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		std::array<ID3D11ShaderResourceView*, 6> cubeSrvs = {
 			texVolCubeHistoryTr->srv.get(), texVolCubeHistoryLum->srv.get(), texVolCubeHistoryAux->srv.get(),

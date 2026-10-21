@@ -323,10 +323,12 @@ namespace CloudAmbientTransport
 	}
 }
 
-[numthreads(4, 4, 4)] void resolveCloudAmbientView(uint3 index : SV_DispatchThreadID) {
-	const uint cascade = index.z / 16u;
-	index.z %= 16u;
+[numthreads(4, 4, 4)] void resolveCloudAmbientView(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID) {
+	const uint cascade = group.x < 256u ? 0u : 1u + (group.x - 256u) / 32u;
+	const uint block = cascade == 0u ? group.x : (group.x - 256u) % 32u;
 	const uint width = cascade == 0u ? 32u : 16u;
+	const uint row = width / 4u;
+	const uint3 index = uint3(block % row, (block / row) % row, block / (row * row)) * 4u + thread;
 	if (cascade >= 4u || any(index >= uint3(width, width, width / 2u)))
 		return;
 	float3 value = 0.0;
@@ -341,9 +343,23 @@ namespace CloudAmbientTransport
 		const float3 eye = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 		const float3 displacement = pos - eye;
 		const float3 ray = displacement * rsqrt(max(dot(displacement, displacement), 1e-8));
+		const float2 previousPhase = TexCloudAmbientLayout[uint2(4, cascade)].zw;
+		const float2 phaseScale = CloudAmbientPhase.zw / max(previousPhase, 1e-6);
 		[unroll] for (uint moment = 0u; moment < 9u; ++moment)
-			value += CloudAmbientTransport::MomentBasis(moment, ray) * CloudAmbientTransport::SampleMoment(cascade, grid,
-																		   (float3(index) + 0.5) / float3(grid.size), moment, false);
+		{
+			const int4 address = int4(index.xy, index.z + moment * grid.size.z, 0);
+			float3 coefficient;
+			if (cascade == 0u)
+				coefficient = TexCloudAmbientSource0.Load(address).rgb;
+			else if (cascade == 1u)
+				coefficient = TexCloudAmbientSource1.Load(address).rgb;
+			else if (cascade == 2u)
+				coefficient = TexCloudAmbientSource2.Load(address).rgb;
+			else
+				coefficient = TexCloudAmbientSource3.Load(address).rgb;
+			const float rescale = moment == 0u ? 1.0 : (moment < 4u ? phaseScale.x : phaseScale.y);
+			value += CloudAmbientTransport::MomentBasis(moment, ray) * (rescale * coefficient);
+		}
 	}
 	const float4 source = float4(max(value, 0.0), 0.0);
 	if (cascade == 0u)
@@ -464,6 +480,7 @@ groupshared float3 gAmbientColors[512];
 groupshared float3 gAmbientReduction[512];
 groupshared uint3 gAmbientBins[512];
 groupshared float3 gAmbientWeights[512];
+groupshared float gAmbientBinWeight[512];
 [numthreads(512, 1, 1)] void buildCloudAmbientBoundary(uint lane : SV_GroupIndex, uint3 group : SV_GroupID) {
 	float weight = 0.0;
 	float3 selected = 0.0;
@@ -489,16 +506,34 @@ groupshared float3 gAmbientWeights[512];
 			gAmbientReduction[lane] += gAmbientReduction[lane + stride];
 		GroupMemoryBarrierWithGroupSync();
 	}
+	if (lane == 0u)
+		gAmbientDirections[30] = gAmbientReduction[0];
+	GroupMemoryBarrierWithGroupSync();
+	const uint bin = lane / 16u;
+	const uint binLane = lane % 16u;
 	float3 boundary = 0.0;
-	if (lane < 26u) {
-		float solidAngle = 0.0;
-		[loop] for (uint sampleIndex = 0u; sampleIndex < 512u; ++sampleIndex)
+	float solidAngle = 0.0;
+	if (bin < 26u) {
+		[loop] for (uint sampleIndex = binLane; sampleIndex < 512u; sampleIndex += 16u)
 		{
-			const float binWeight = dot(float3(gAmbientBins[sampleIndex] == lane), gAmbientWeights[sampleIndex]);
+			const float binWeight = dot(float3(gAmbientBins[sampleIndex] == bin), gAmbientWeights[sampleIndex]);
 			boundary += binWeight * gAmbientColors[sampleIndex];
 			solidAngle += binWeight;
 		}
-		boundary /= max(solidAngle, 1e-8);
+	}
+	gAmbientReduction[lane] = boundary;
+	gAmbientBinWeight[lane] = solidAngle;
+	GroupMemoryBarrierWithGroupSync();
+	[unroll] for (uint binStride = 8u; binStride > 0u; binStride >>= 1u)
+	{
+		if (binLane < binStride) {
+			gAmbientReduction[lane] += gAmbientReduction[lane + binStride];
+			gAmbientBinWeight[lane] += gAmbientBinWeight[lane + binStride];
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (lane < 26u) {
+		boundary = gAmbientReduction[lane * 16u] / max(gAmbientBinWeight[lane * 16u], 1e-8);
 		gAmbientBoundary[lane] = weight * boundary;
 	}
 	GroupMemoryBarrierWithGroupSync();
@@ -506,7 +541,7 @@ groupshared float3 gAmbientWeights[512];
 		float3 average = 0.0;
 		[unroll] for (uint averageDirection = 0u; averageDirection < 26u; ++averageDirection)
 			average += gAmbientBoundary[averageDirection];
-		gAmbientDirections[31] = gAmbientReduction[0] / max(average, 1e-8);
+		gAmbientDirections[31] = gAmbientDirections[30] / max(average, 1e-8);
 	}
 	GroupMemoryBarrierWithGroupSync();
 	if (lane < 26u) {
