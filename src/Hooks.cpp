@@ -15,6 +15,7 @@
 #include "TruePBR.h"
 #include "Util.h"
 #include "Utils/ShaderDescriptor.h"
+#include "VanillaBinding.h"
 
 #include "CSEditor/SceneManager/WeatherTransition.h"
 #include "Features/Effects11.h"
@@ -272,6 +273,7 @@ namespace SkyExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			globals::state->UpdateSkyShaderPermutation(pass);
+			VanillaBinding::BindSkyResources(pass);
 			if (globals::features::effects11.loaded)
 				globals::features::effects11.ModifySky(pass);
 			func(shader, pass, renderFlags);
@@ -569,6 +571,8 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	func(isCompute);
 	globals::state->Draw();
+	if (!isCompute)
+		VanillaBinding::BindDrawResources();
 }
 
 struct ID3D11Device_CreateVertexShader
