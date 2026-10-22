@@ -46,6 +46,9 @@ namespace DCLF::Features::TreeLod
 		std::vector<std::shared_ptr<org::Buffer>> readback;
 		std::vector<std::uint8_t> filled;
 		std::atomic<std::uint64_t> frames{ 0 }, phaseOne{ 0 }, retests{ 0 }, phaseTwo{ 0 };
+		// CS_DCLF_TREE_LOD_STAGES: the newest frame judged, frames judged and those a stage missed.
+		std::uint32_t stagesJudged = 0;
+		std::uint64_t stageFrames = 0, stageMisses = 0, stageLogged = 0, clipDiffers = 0, clipLogged = 0;
 	};
 
 	/**
@@ -65,6 +68,9 @@ namespace DCLF::Features::TreeLod
 		std::atomic<bool> ready{ false };
 		std::uint64_t uploads = 0, slotsSent = 0;  // since the last report
 		std::shared_ptr<TreeLodCounts> counts;
+		// CS_DCLF_TREE_LOD_STAGES' stamps (null without it) and their device address.
+		std::shared_ptr<org::Buffer> stages;
+		std::uint64_t stagesAddress = 0;
 		// The last depth commit's draw row; a trees view's faces reuse the tables with their own lists.
 		TreeInstances::DrawRow row{};
 	};

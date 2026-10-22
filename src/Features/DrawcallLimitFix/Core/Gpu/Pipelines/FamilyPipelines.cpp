@@ -249,7 +249,9 @@ namespace DCLF
 			desc.raster.rs.frontCCW = a_frontCCW;
 			desc.depth.ds.depthEnable = true;
 			desc.depth.ds.depthWrite = !colour;
-			desc.depth.ds.depthFunc = colour ? rhi::CompareOp::Equal : rhi::CompareOp::Less;
+			// TEMP (tree LOD flicker): CS_DCLF_FAMILY_COLOUR_LEQUAL=1 draws the families' colour with LESS_EQUAL instead of EQUAL.
+			static const bool colourLessEqual = [] { const char* v = std::getenv("CS_DCLF_FAMILY_COLOUR_LEQUAL"); return v && v[0] == '1'; }();
+			desc.depth.ds.depthFunc = colour ? (colourLessEqual ? rhi::CompareOp::LessEqual : rhi::CompareOp::Equal) : rhi::CompareOp::Less;
 			if (colour) {
 				desc.blend.bs = a_blend;
 				desc.Colours(a_targets);

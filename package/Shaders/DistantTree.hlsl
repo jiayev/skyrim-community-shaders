@@ -27,7 +27,7 @@ cbuffer DCLFTreePush : register(b190)
 {
 	uint2 DCLFTreeDrawAddress : packoffset(c0.x);
 	uint DCLFTreePhaseTwo : packoffset(c0.z);
-	uint DCLFTreePushUnused0 : packoffset(c0.w);
+	uint DCLFTreeDebugTint : packoffset(c0.w);  // CS_DCLF_TREE_LOD_TINT: the colour draw writes solid magenta
 	uint2 DCLFTreePushUnused1 : packoffset(c1.x);
 };
 uint64_t DCLFTreeAddress(uint2 a_words) { return (uint64_t(a_words.y) << 32) | uint64_t(a_words.x); }
@@ -39,6 +39,24 @@ static const uint kDCLFTreeTexture = 32, kDCLFTreeSampler = 36, kDCLFTreeAlphaRe
 static const uint kDCLFTreeGroupInstances = 75;
 // TreeLod::VisibleHeader, before the visible list: phase 1's instance count, where phase 2's instances start.
 static const uint kDCLFTreeHeaderBytes = 64, kDCLFTreePhaseOneInstances = 4;
+// CS_DCLF_TREE_LOD_STAGES (TreeInstancesLayout.h, kStageSlots): the draw row's stamps buffer (0: none) and frame; a stage stores the
+// frame in its word of the frame's slot (every invocation the same value: no atomics).
+static const uint kDCLFTreeStats = 52, kDCLFTreeFrame = 60;
+static const uint kDCLFStageDepthVS = 0, kDCLFStagePhaseTwoVS = 1, kDCLFStageDepthPS = 2, kDCLFStageColourVS = 3, kDCLFStageColourPS = 4,
+				  kDCLFStageColourSaw = 5, kDCLFStageDepthClip = 8, kDCLFStageColourClip = 12;
+uint64_t DCLFTreeStageWord(uint a_word)
+{
+	const uint64_t stats = DCLFTreeAddress(vk::RawBufferLoad<uint2>(DCLFTreeDraw() + kDCLFTreeStats, 4));
+	if (stats == 0)
+		return 0;
+	return stats + 4 * uint64_t((vk::RawBufferLoad<uint>(DCLFTreeDraw() + kDCLFTreeFrame, 4) & 7u) * 16u + a_word);
+}
+void DCLFTreeStamp(uint a_stage)
+{
+	const uint64_t word = DCLFTreeStageWord(a_stage);
+	if (word != 0)
+		vk::RawBufferStore<uint>(word, vk::RawBufferLoad<uint>(DCLFTreeDraw() + kDCLFTreeFrame, 4), 4);
+}
 #endif
 
 #if defined(VSHADER)
@@ -77,6 +95,19 @@ VS_OUTPUT main(uint a_vertex : SV_VertexID, uint a_instance : SV_InstanceID)
 	VS_OUTPUT vsout = (VS_OUTPUT)0;
 	const uint64_t visible = DCLFTreeTable(kDCLFTreeVisible);
 	const uint first = DCLFTreePhaseTwo != 0 ? vk::RawBufferLoad<uint>(visible - kDCLFTreeHeaderBytes + kDCLFTreePhaseOneInstances, 4) : 0;
+#		if defined(RENDER_DEPTH)
+	DCLFTreeStamp(DCLFTreePhaseTwo != 0 ? kDCLFStagePhaseTwoVS : kDCLFStageDepthVS);
+#		else
+	DCLFTreeStamp(kDCLFStageColourVS);
+	if (a_instance == 0 && a_vertex == 0) {
+		const uint64_t saw = DCLFTreeStageWord(kDCLFStageColourSaw);
+		if (saw != 0) {
+			// The list header's phase 1, phase 2 and colour instance counts as this draw read them.
+			const uint64_t header = visible - kDCLFTreeHeaderBytes;
+			vk::RawBufferStore<uint3>(saw, uint3(vk::RawBufferLoad<uint>(header + 4, 4), vk::RawBufferLoad<uint>(header + 20, 4), vk::RawBufferLoad<uint>(header + 36, 4)), 4);
+		}
+	}
+#		endif
 	const uint index = vk::RawBufferLoad<uint>(visible + 4 * uint64_t(first + a_instance), 4);
 	const uint64_t shape = DCLFTreeTable(kDCLFTreeShapes) + 32 * uint64_t(index / kDCLFTreeGroupInstances);
 	const float3 translate = asfloat(vk::RawBufferLoad<uint3>(shape, 4));
@@ -120,6 +151,16 @@ VS_OUTPUT main(uint a_vertex : SV_VertexID, uint a_instance : SV_InstanceID)
 #		endif  // RENDER_DEPTH
 
 	vsout.Position = viewPosition;
+	// CS_DCLF_TREE_LOD_STAGES: the clip position of the list's first instance's first vertex, depth's (phase 1) and colour's.
+	if (DCLFTreePhaseTwo == 0 && a_instance == 0 && a_vertex == 0) {
+#		ifdef RENDER_DEPTH
+		const uint64_t clip = DCLFTreeStageWord(kDCLFStageDepthClip);
+#		else
+		const uint64_t clip = DCLFTreeStageWord(kDCLFStageColourClip);
+#		endif
+		if (clip != 0)
+			vk::RawBufferStore<uint4>(clip, asuint(viewPosition), 4);
+	}
 	vsout.TexCoord = float3(input.TexCoord0.xy, 0.0);
 
 	return vsout;
@@ -286,6 +327,7 @@ void main(PS_INPUT input)
 	if ((alpha - AlphaTestRefRS) < 0) {
 		discard;
 	}
+	DCLFTreeStamp(kDCLFStageDepthPS);
 }
 #	else
 PS_OUTPUT main(PS_INPUT input)
@@ -395,6 +437,15 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 	psout.Diffuse = float4(color, 1.0);
 #		endif  // DEFERRED
+#		if defined(DCLF_PULLED)
+	DCLFTreeStamp(kDCLFStageColourPS);
+	if (DCLFTreeDebugTint != 0) {
+		psout.Diffuse.xyz = float3(4, 0, 4);
+#			if defined(DEFERRED)
+		psout.Albedo = float4(1, 0, 1, 1);
+#			endif
+	}
+#		endif
 #	endif      // RENDER_DEPTH
 
 	return psout;

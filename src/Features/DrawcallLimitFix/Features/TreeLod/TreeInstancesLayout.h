@@ -70,7 +70,8 @@ namespace DCLF::TreeInstances
 		float alphaRef = 0.0f;
 		std::uint32_t shapeSlots = 0;
 		std::uint32_t maxIndices = 0;
-		std::uint32_t pad[3]{};
+		// CS_DCLF_TREE_LOD_STAGES: the stage stamps' buffer (0: none; DistantTree.hlsl's DCLFTreeStamp) and the depth commit's frame.
+		std::uint32_t statsLow = 0, statsHigh = 0, frame = 0;
 	};
 	static_assert(sizeof(DrawRow) == 64);
 	/**
@@ -85,6 +86,22 @@ namespace DCLF::TreeInstances
 	};
 	static_assert(sizeof(VisibleHeader) == 64);
 	inline constexpr std::uint32_t kVisibleHeaderWords = sizeof(VisibleHeader) / 4;
+	/**
+	 * @brief CS_DCLF_TREE_LOD_STAGES' stamps: kStageSlots rings of kStageWords words, slot frame % kStageSlots; each stage of the main draws
+	 * stores the draw row's frame in its word (DistantTree.hlsl), the colour vertex stage also the list header's counts it saw.
+	 */
+	inline constexpr std::uint32_t kStageSlots = 8, kStageWords = 16;
+	enum StageWord : std::uint32_t
+	{
+		kStageDepthVS = 0,
+		kStagePhaseTwoVS = 1,
+		kStageDepthPS = 2,
+		kStageColourVS = 3,
+		kStageColourPS = 4,
+		kStageColourSawPhaseOne = 5,
+		kStageColourSawPhaseTwo = 6,
+		kStageColourSawColour = 7,
+	};
 
 	/**
 	 * @brief Whether a geometry is one of the family's engine shapes: its shader property is a BSDistantTreeShaderProperty. Any thread

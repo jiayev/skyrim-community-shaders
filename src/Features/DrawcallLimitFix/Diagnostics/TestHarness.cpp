@@ -142,6 +142,12 @@ namespace DCLF
 						DCLF::Draws::shadowSizeProbe.store(std::atoi(command.c_str() + 18), std::memory_order_relaxed);
 						return;
 					}
+					// "dclf:cull=off|frustum|occlusion": the GPU culling's mode (CS_DCLF_CULL's live value).
+					if (command.rfind("dclf:cull=", 0) == 0) {
+						const std::string value = command.substr(10);
+						DCLF::Toggles::Get().Requested().cullMode = value == "occlusion" ? 2 : value == "frustum" ? 1 : 0;
+						return;
+					}
 					if (command.rfind("dclf:", 0) == 0) {
 						const auto equals = command.find('=');
 						const auto name = command.substr(5, equals == std::string::npos ? std::string::npos : equals - 5);

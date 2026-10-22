@@ -232,6 +232,7 @@ namespace DCLF::Features::TreeLod
 			TreeInstances::DrawRow row = commitRow;
 			row.visible = a_face.listAddress + TreeInstances::kVisibleHeaderWords * sizeof(std::uint32_t);
 			row.shapeSlots = a_face.drawn ? commitRow.shapeSlots : 0u;
+			row.statsLow = row.statsHigh = 0;  // the main draws' stage stamps only
 			std::memcpy(a_face.row.data(), &row, sizeof(row));
 			TreeInstances::VisibleHeader header{};
 			header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = std::max(row.maxIndices, 1u);
