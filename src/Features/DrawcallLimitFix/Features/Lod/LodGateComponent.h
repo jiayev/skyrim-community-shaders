@@ -126,7 +126,7 @@ namespace DCLF::Features::Lod::Gates
 	{
 		ankerl::unordered_dense::map<std::uint64_t, LodGate> lodGates;
 		// The gates' roots are the coordinator's marks (the component's, token and side kGateIncoming/kGateOutgoing; the incoming own their
-		// hide). The tracked geometries' tags (erased with the entry: the component's forgot, forgotAll). The incoming of an open gate are
+		// hide). The tracked geometries' tags (erased with the entry: the component's forgot). The incoming of an open gate are
 		// observed and the flipped gates' outgoing held (the coordinator's vetoes, observed slots and requeued slots).
 		ankerl::unordered_dense::map<const RE::BSGeometry*, GateTag> gateTags;
 		std::vector<const void*> gateEntries;       // a root's tracked entries (SubtreeEntries), reused by each walk
@@ -182,8 +182,6 @@ namespace DCLF::Features::Lod::Gates
 	void ApplyGateEvent(const Api::CoordinatorComponentContext& a_context, Api::EngineChannelId a_channel, const Api::Stacked& a_event);
 	/** @brief Events::detached: a_key (its mark erased: the coordinator's UnmarkDetached) leaves its gate. */
 	void RootDetached(const Api::CoordinatorComponentContext& a_context, const void* a_key, const Api::Mark& a_mark);
-	/** @brief Events::rescan: the gates' tags dropped with the tracked set (its adds tag again). */
-	void Rescan(const Api::CoordinatorComponentContext& a_context);
 	/** @brief Events::underMark: a newly tracked a_geometry under a root of theirs (the prepare's mark walk found it) tagged. */
 	void UnderMark(const Api::CoordinatorComponentContext& a_context, const void* a_geometry, const Api::Mark& a_mark);
 	/**
@@ -200,8 +198,6 @@ namespace DCLF::Features::Lod::Gates
 	void ApplyOutcomes(const Api::CoordinatorComponentContext& a_context, Api::EngineChannelId a_channel, std::span<const void* const> a_keys);
 	/** @brief Retirement::forgot: a tracked entry erased, off its gate's tag (its veto is the coordinator's, erased with it). */
 	void Forgot(const Api::CoordinatorComponentContext& a_context, const void* a_entry);
-	/** @brief Retirement::forgotAll: the tracked set cleared (the rescan), every tag with it. */
-	void ForgotAll(const Api::CoordinatorComponentContext& a_context);
 
 	// LodGateAdoption.cpp: the publication and the adoption.
 	/** @brief Commit::published: the GateFlipsPublished observers, against the publication's claims. */

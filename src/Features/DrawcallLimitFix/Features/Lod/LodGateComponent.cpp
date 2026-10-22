@@ -248,15 +248,6 @@ namespace DCLF::Features::Lod::Gates
 		++state.gateStats.rootsDetached;
 	}
 
-	void Rescan(const Api::CoordinatorComponentContext& a_context)
-	{
-		for (auto& [token, gate] : a_context.State<GateState>().lodGates) {
-			gate.incomingGeometries.clear();
-			gate.outgoingGeometries.clear();
-			gate.pending = 0;
-		}
-	}
-
 	void UnderMark(const Api::CoordinatorComponentContext& a_context, const void* a_geometry, const Api::Mark& a_mark)
 	{
 		if (a_context.TrackedStateOf(a_geometry).tracked)
@@ -353,8 +344,7 @@ namespace DCLF::Features::Lod::Gates
 	{
 		if (a_channel != channel)
 			return;
-		// Only by a pass that applies a batch (the channel's AfterBatch keys): a load screen's pass carried its events for the mirror (its gate
-		// events among them), and the outcomes wait for the pass that applies them.
+		// After the pass's batch (the channel's AfterBatch keys): its gate events are applied before their outcomes.
 		auto& state = a_context.State<GateState>();
 		if (state.gateOutcomesHeld.empty())
 			return;
@@ -376,10 +366,5 @@ namespace DCLF::Features::Lod::Gates
 	void Forgot(const Api::CoordinatorComponentContext& a_context, const void* a_entry)
 	{
 		UntagGate(a_context.State<GateState>(), static_cast<const RE::BSGeometry*>(a_entry));
-	}
-
-	void ForgotAll(const Api::CoordinatorComponentContext& a_context)
-	{
-		a_context.State<GateState>().gateTags.clear();
 	}
 }

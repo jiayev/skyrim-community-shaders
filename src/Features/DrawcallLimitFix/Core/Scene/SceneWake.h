@@ -33,7 +33,6 @@ namespace DCLF
 		MaterialAnswer,  // a requested material captured and answered (ServeMaterialRequests)
 		TextureReply,    // a binding's texture answered (GpuTextures)
 		Catalog,         // the pipeline lane's new catalog
-		LoadMarker,      // a load screen's marker
 		LoadDrain,       // a Present or frame start under a load screen (the queues drained once a call)
 		Capture,         // the render thread's captures for the pass (the category capture, the mirror probe)
 		Channel,         // an engine channel's wake (Api::WakeSource::Pass: Extensions::WakeChannel, its SceneStack events; the LOD gates')
@@ -41,7 +40,7 @@ namespace DCLF
 	};
 	inline constexpr std::array<const char*, static_cast<std::size_t>(SceneWake::Count)> kSceneWakeNames{ "frame input", "attach", "detach",
 		"hidden", "leaf swap", "property values", "alpha values", "property event", "switch", "material answer", "texture reply",
-		"catalog", "load marker", "load drain", "captures", "LOD gate" };
+		"catalog", "load drain", "captures", "LOD gate" };
 
 	/**
 	 * @brief A producer's wake (any thread, after the push it announces). Lock-free and cheap when its source is already pending (one
@@ -55,7 +54,6 @@ namespace DCLF
 	inline void WakeSceneSwitchEvent() { WakeScenePass(SceneWake::SwitchEvent); }
 	inline void WakeSceneMaterialAnswer() { WakeScenePass(SceneWake::MaterialAnswer); }
 	inline void WakeSceneTextureReply() { WakeScenePass(SceneWake::TextureReply); }
-	inline void WakeSceneLoadMarker() { WakeScenePass(SceneWake::LoadMarker); }
 	/** @brief Render thread (FrameView::NoteLoadingScreen): a load screen is up (the engine events' wakes held), or not. */
 	void SetScenePassLoading(bool a_loading);
 	/** @brief Since the last call: the pushes each source made inside the frame's render (no wake: the frame's next pass took them). */

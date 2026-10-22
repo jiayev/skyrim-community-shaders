@@ -154,22 +154,20 @@ namespace DCLF::Diagnostics
 		std::uint32_t fields;
 	};
 
-	/** @brief The coordinator, first in its drains (CollectEvents): `loading`, a load screen's pass (no batch is applied). */
+	/** @brief The coordinator, first in its drains (CollectEvents). */
 	struct EventsCollecting
 	{
 		Scene::Coordinator& store;
-		bool loading;
 	};
 
 	/**
 	 * @brief The coordinator: a batch applied to the mirror; the objects its events without values named (the engine channels' keys, by
-	 * channel: those whose channel names its keys, Api::EngineChannel::namesKeys; a load screen's named keys).
+	 * channel: those whose channel names its keys, Api::EngineChannel::namesKeys).
 	 */
 	struct MirrorEventsApplied
 	{
 		Scene::Coordinator& store;
 		std::span<const std::vector<const void*>> channelKeys;
-		std::span<const void* const> named;
 	};
 
 	/** @brief LocalShadowLights::Sample: a local shadow descriptor's volume as the Lights board has it, and its culling process after the cull. */

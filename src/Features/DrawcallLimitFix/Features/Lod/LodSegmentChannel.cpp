@@ -67,12 +67,11 @@ namespace DCLF::Features::Lod
 
 	void RegisterSegmentChannel(Api::InstallContext& a_context)
 	{
-		// Applied where Core applied the segment events: after the switch events (drained last), the keys a load screen drains kept for the
-		// mirror's parity, which counts them named (the writers' events carry the ranges in the mirror's update, not here).
+		// Applied where Core applied the segment events: after the switch events (drained last); the mirror's parity counts the keys named
+		// (the writers' events carry the ranges in the mirror's update, not here).
 		segmentChannel = a_context.RegisterEngineChannel({ .name = "object LOD segments",
 			.kind = Api::ChannelKind::Keys,
 			.apply = Api::ChannelApply::AfterSwitches,
-			.loading = Api::ChannelLoading::KeepKeys,
 			.namesKeys = true,
 			.drain = &DrainSegmentEvents });
 		const auto component = a_context.RegisterCoordinatorComponent({ .name = "object LOD segments",

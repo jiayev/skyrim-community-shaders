@@ -343,14 +343,6 @@ namespace DCLF::Features::Faces
 		}
 	}
 
-	void FaceSnapshots::ReleaseAll()
-	{
-		auto& d = *impl;
-		for (auto* record : d.live)
-			d.Retire(record);
-		d.live.clear();
-	}
-
 	FaceSnapshots::ShapeView FaceSnapshots::Shape(const RE::BSGeometry* a_shape, RE::BSFaceGenNiNode* a_head, const std::function<void(std::vector<ShapeInput>&)>& a_shapes)
 	{
 		auto& d = *impl;

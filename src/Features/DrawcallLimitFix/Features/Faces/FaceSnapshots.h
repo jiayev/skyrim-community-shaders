@@ -123,8 +123,6 @@ namespace DCLF::Features::Faces
 		HeadView HeadSnapshot(const RE::BSFaceGenNiNode& a_head);
 		/** @brief The head's last face shape left the scene: its record is retired. */
 		void Release(const RE::BSFaceGenNiNode* a_head);
-		/** @brief Every record is retired (the coordinator forgot its entries). */
-		void ReleaseAll();
 		/** @brief The walk's periodic statistics. */
 		void EndWalk();
 

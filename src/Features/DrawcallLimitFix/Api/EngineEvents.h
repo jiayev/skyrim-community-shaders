@@ -80,20 +80,6 @@ namespace DCLF::Api
 		Pass,
 	};
 
-	/**
-	 * @brief A load screen's passes apply no batch (CollectEvents, loading): every channel is drained there, in registration order, after
-	 * Core's fade amounts and before its switch events, and its keys:
-	 *
-	 * - KeepKeys: are kept for the mirror's parity (EventBatch::mirrorNamed, carried to the first pass after the load: the writers have
-	 *   hooks), never applied;
-	 * - Discard: are dropped.
-	 */
-	enum class ChannelLoading : std::uint8_t
-	{
-		KeepKeys,
-		Discard,
-	};
-
 	/** @brief A registered engine channel (RegisterEngineChannel's result, FindEngineChannel's): the keys hook names its channel by it. */
 	struct EngineChannelId
 	{
@@ -109,7 +95,7 @@ namespace DCLF::Api
 	 * batch, the keys possibly none).
 	 *
 	 * - name: the channel's (FindEngineChannel; the install's failures).
-	 * - kind, apply, loading, wake: above.
+	 * - kind, apply, wake: above.
 	 * - namesKeys: the keys a pass applies are objects whose writers' events carry no value of their own, which the mirror's parity counts
 	 *   named (a field its probe finds different on one has a hook).
 	 * - drain: the scene lane, the queue's one consumer (CollectEvents, once a pass): every key pushed before the call into a_sink, oldest
@@ -124,7 +110,6 @@ namespace DCLF::Api
 		std::string_view name;
 		ChannelKind kind = ChannelKind::Keys;
 		ChannelApply apply = ChannelApply::AfterSwitches;
-		ChannelLoading loading = ChannelLoading::KeepKeys;
 		WakeSource wake = WakeSource::None;
 		bool namesKeys = false;
 		std::size_t (*drain)(KeySink& a_sink) = nullptr;

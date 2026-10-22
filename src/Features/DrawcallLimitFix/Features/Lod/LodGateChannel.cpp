@@ -35,14 +35,14 @@ namespace DCLF::Features::Lod::Gates
 		// No adoption guard: a forced release's stores (the pending blocks shown, the held ones released and detached) reach the scene as
 		// the hidden-node source's and the tracker's events, and its outcome wakes a pass (Extensions::WakeChannel), so the next publication
 		// follows it as any scene change does; the frames keep their claims until then (DCLF never withdraws them).
-		// The gates' component: gate events applied in stack order, their roots marked (detached, rescanned, entries tagged under them, the
+		// The gates' component: gate events applied in stack order, their roots marked (detached, entries tagged under them, the
 		// tags forgotten with their entries), their incoming observed and their flipped outgoing held by the commit's vetoes, flips made by
 		// the commit's settle and published by its publication, outcomes taken before the batch and applied after it, released by the frame
 		// adopting them.
 		component = a_context.RegisterCoordinatorComponent({ .name = "LOD gates",
 			.make = &MakeState,
-			.retirement = { .forgot = &Forgot, .forgotAll = &ForgotAll },
-			.events = { .keys = &ApplyOutcomes, .stacked = &ApplyGateEvent, .detached = &RootDetached, .rescan = &Rescan, .underMark = &UnderMark },
+			.retirement = { .forgot = &Forgot },
+			.events = { .keys = &ApplyOutcomes, .stacked = &ApplyGateEvent, .detached = &RootDetached, .underMark = &UnderMark },
 			.commit = { .settle = &Settle, .take = &Take, .published = &Published },
 			.adoption = { .adopt = &Adopt } });
 		// Their lines: the gates' at the coordinator's report (opened, flipped, retired; the open ones' age and what they wait for), first

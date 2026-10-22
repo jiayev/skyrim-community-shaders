@@ -30,8 +30,6 @@ namespace DCLF::Scene
 		ankerl::unordered_dense::map<const RE::NiNode*, std::pair<std::uint32_t, std::uint8_t>> categoryFound;
 		CoordinatorTracked::TrackSource addSource = CoordinatorTracked::TrackSource::AttachEvent;
 		std::size_t validationCursor = 0;
-		// Set by a load screen's marker: the next batch rebuilds the tracked set from scratch.
-		bool rescanPending = false;
 		// The last copy of the category nodes, and whether the set changed since (copied again at the next publication).
 		std::shared_ptr<const ankerl::unordered_dense::set<RE::NiNode*>> publishedCategoryNodes;
 		bool nodeSetsDirty = true;  // the category nodes changed

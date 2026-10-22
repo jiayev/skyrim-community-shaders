@@ -244,7 +244,7 @@ namespace DCLF
 			if (const std::uint32_t frame = Scene::FrameView::Get().GetFrame(); std::exchange(reportedFrame, frame) != frame)
 				Reports::RenderThread(frame);
 		}
-		// A load screen (in menus too): its marker posted once and the set withdrawn; the coordinator's passes drain the queues meanwhile.
+		// A load screen (in menus too): noted once and the set withdrawn; the coordinator's passes apply the queues meanwhile.
 		Scene::FrameView::Get().NoteLoadingScreen();
 		// Under the parities the passes run inline at the frame's start alone: with no frame since the last Present (menus, load screens),
 		// one applying the events alone runs here, so the queues do not wait for a frame.

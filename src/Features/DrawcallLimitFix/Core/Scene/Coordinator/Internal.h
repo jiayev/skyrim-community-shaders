@@ -271,8 +271,7 @@ namespace DCLF
 	/**
 	 * @brief One scene pass's events (Coordinator::CollectEvents, on the coordinator, each queue drained up to where it stood at
 	 * the pass's start), oldest first per queue, applied by the same pass (ApplyEvents). Applied, it is handed back whole: its tracker
-	 * events hold attached subtrees, released at Present. A batch made only to carry references to Present (a load screen's discarded
-	 * node and switch events) goes straight to EngineReleases::PushOwner.
+	 * events hold attached subtrees, released at Present.
 	 */
 	struct Scene::Coordinator::EventBatch
 	{
@@ -283,11 +282,6 @@ namespace DCLF
 		std::vector<SwitchEvent> switches;
 		// The features' engine channels' keys, by channel (Extensions::RegisteredEngineChannels' order).
 		std::array<std::vector<const void*>, Extensions::kEngineChannelSlots> channelKeys;
-		// The attach and detach events a load screen's passes carried, for the mirror alone (oldest first, applied before the batch's own).
-		SceneTracker::Event* mirrorHead = nullptr;
-		SceneTracker::Event* mirrorTail = nullptr;
-		// The objects a load screen's discarded events named (the mirror's observers count them named: their writers have hooks).
-		std::vector<const void*> mirrorNamed;
 		// The oldest stamp of its tracker events (SceneTracker::Event::stampNs, stampFrame; 0: none), for the latencies.
 		std::uint64_t oldestNs = 0;
 		std::uint32_t oldestFrame = 0;
@@ -298,16 +292,6 @@ namespace DCLF
 		~EventBatch()
 		{
 			SceneTracker::FreeEvents(head);
-			SceneTracker::FreeEvents(mirrorHead);
-		}
-
-		void AppendMirror(SceneTracker::Event* a_events)
-		{
-			if (!a_events)
-				return;
-			(mirrorTail ? mirrorTail->next : mirrorHead) = a_events;
-			for (mirrorTail = a_events; mirrorTail->next;)
-				mirrorTail = mirrorTail->next;
 		}
 
 		void Append(SceneTracker::Event* a_events)

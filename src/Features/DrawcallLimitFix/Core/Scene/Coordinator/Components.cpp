@@ -456,17 +456,6 @@ namespace DCLF::Scene
 				registered[c].retirement.forgot({ tables, ComponentState(c), *this, c }, a_geometry);
 	}
 
-	void Coordinator::ComponentsForgotAll()
-	{
-		// The tracked set cleared: its entries' vetoes went with them.
-		vetoHeld = 0;
-		vetoObserved = 0;
-		const auto registered = Extensions::RegisteredCoordinatorComponents();
-		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].retirement.forgotAll)
-				registered[c].retirement.forgotAll({ tables, ComponentState(c), *this, c });
-	}
-
 	void Coordinator::ComponentRecycled(std::uint32_t a_component, std::uint32_t a_first, std::uint32_t a_count)
 	{
 		const auto registered = Extensions::RegisteredCoordinatorComponents();
@@ -610,14 +599,6 @@ namespace DCLF::Scene
 		leave(a_root);
 		for (const void* node : a_nodes)
 			leave(node);
-	}
-
-	void Coordinator::ComponentsRescan()
-	{
-		const auto registered = Extensions::RegisteredCoordinatorComponents();
-		for (std::uint32_t c = 0; c < registered.size(); ++c)
-			if (registered[c].events.rescan)
-				registered[c].events.rescan({ tables, ComponentState(c), *this, c });
 	}
 
 	void Coordinator::ComponentsUnderMark(const RE::BSGeometry* a_geometry, const Api::Mark& a_mark)

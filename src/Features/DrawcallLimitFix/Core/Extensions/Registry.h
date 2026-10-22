@@ -127,7 +127,6 @@ namespace DCLF::Extensions
 		std::string name;
 		Api::ChannelKind kind = Api::ChannelKind::Keys;
 		Api::ChannelApply apply = Api::ChannelApply::AfterSwitches;
-		Api::ChannelLoading loading = Api::ChannelLoading::KeepKeys;
 		Api::WakeSource wake = Api::WakeSource::None;
 		bool namesKeys = false;
 		decltype(Api::EngineChannel::drain) drain = nullptr;

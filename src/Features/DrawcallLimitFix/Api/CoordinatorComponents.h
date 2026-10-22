@@ -233,7 +233,6 @@ namespace DCLF::Api
 		 * - reset: the slot tables reset (ResetSlotTables), before the tables are cleared: the component's references are handed back
 		 *   (through the retirement chain, with everything else the tables named).
 		 * - forgot: a tracked entry is erased (EraseTracked, after its slot is released): what the component keeps of it goes.
-		 * - forgotAll: every tracked entry is gone (the rescan, after the tracked set is cleared).
 		 * - recycled: a range the component retired (CoordinatorComponentContext::RetireRange) is free: no publication names it any more
 		 *   (RecycleRetired). The retiring component's alone.
 		 */
@@ -241,7 +240,6 @@ namespace DCLF::Api
 		{
 			void (*reset)(const CoordinatorComponentContext& a_context) = nullptr;
 			void (*forgot)(const CoordinatorComponentContext& a_context, const void* a_entry) = nullptr;
-			void (*forgotAll)(const CoordinatorComponentContext& a_context) = nullptr;
 			void (*recycled)(const CoordinatorComponentContext& a_context, std::uint32_t a_first, std::uint32_t a_count) = nullptr;
 		};
 
@@ -271,12 +269,10 @@ namespace DCLF::Api
 		 * @brief The engine channels' events (ApplyEvents.cpp, ApplyBatch's structural events; Api::EngineChannel).
 		 *
 		 * - keys: a pass applies a_channel's keys at the channel's point (ChannelApply), the channels at a point in registration order:
-		 *   the keys its queue held at the pass's drain, oldest first (possibly none: called every pass that applies a batch, a load
-		 *   screen's empty one too). The keys are never dereferenced: an entry the coordinator tracks is the only one known alive.
+		 *   the keys its queue held at the pass's drain, oldest first (possibly none: called every pass). The keys are never dereferenced: an entry the coordinator tracks is the only one known alive.
 		 * - stacked: a pass applies a SceneStack channel's event (Api::Stacked) in stack order, among the attaches and detaches.
 		 * - detached: a root the component marked (or a node under a detached root) is detached: its mark is erased (a_mark, as it was)
 		 *   before the call. The marking component's alone.
-		 * - rescan: the rescan after a load: the tracked set is walked again from nothing.
 		 * - underMark: a newly tracked entry (a_geometry) is under a root marked a_mark (the nearest on its chain). The marking
 		 *   component's alone; per added entry, never per frame.
 		 * - switched: a pass applies a switch event (ApplyEvents' switch loop, per applied event, right after it is noted applied and
@@ -291,7 +287,6 @@ namespace DCLF::Api
 			void (*keys)(const CoordinatorComponentContext& a_context, EngineChannelId a_channel, std::span<const void* const> a_keys) = nullptr;
 			void (*stacked)(const CoordinatorComponentContext& a_context, EngineChannelId a_channel, const Stacked& a_event) = nullptr;
 			void (*detached)(const CoordinatorComponentContext& a_context, const void* a_key, const Mark& a_mark) = nullptr;
-			void (*rescan)(const CoordinatorComponentContext& a_context) = nullptr;
 			void (*underMark)(const CoordinatorComponentContext& a_context, const void* a_geometry, const Mark& a_mark) = nullptr;
 			void (*switched)(const CoordinatorComponentContext& a_context, const void* a_switch) = nullptr;
 			void (*admitted)(const CoordinatorComponentContext& a_context, std::span<const StandInRoot> a_roots) = nullptr;

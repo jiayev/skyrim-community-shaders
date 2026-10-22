@@ -228,9 +228,11 @@ processes running.
 
 ### Load screens
 
-The render thread posts a load marker (`Scene::Channels::loadMarkers`). While a load holds, a pass drains the engine's queues
-into the mirror's carry (`Coordinator::loadingCarry`), and the coordinator drops what the load invalidates (`ApplyLoading`). The
-category capture is rebuilt when a load ends. A load screen's frames are claims-less whatever their snapshot.
+A load is scene events like any other. While it holds (`Scene::Channels::loadingSeen`), the coordinator's passes run once a
+Present and frame start and apply their batches as usual: the unloading world's detaches erase what it tracked, and the loading
+world's attaches track what comes. There is no rescan. The tables are not written while the load is up (`BuildScenePhase`), and
+the first category capture after it is forced: the cells that came are walked from it, the ones that went are dropped. A load
+screen's frames are claims-less whatever their snapshot.
 
 ## Threads
 
@@ -523,7 +525,7 @@ missing events before.
     interior, alpha below one, technique, sub-pass, hint, decal bias, the slot tables' generation). A slot is checked against its
     key before it is served. `Tracked::StaticVerdict` caches negative verdicts against the same witnesses (rendererData included:
     a stale negative would leave an object native for good). A classification stands until an event takes it again; a full
-    evaluation (`BuildFullOrder`) runs only after a reset, a load, a rescan or a live toggle that enters the classification.
+    evaluation (`BuildFullOrder`) runs only after a reset, a load or a live toggle that enters the classification.
 -   **Two phases.** The scene phase (`BuildFrame(Phase::Scene)`) writes the records; the accumulate phase
     (`BuildFrame(Phase::Accumulate)`) joins them to their membership passes. The scene phase decides nothing that needs the pass:
     `Eligibility::DeferredToAccumulate` defers `Ineligible::Decal` to the join (rejecting decals early dropped 452 accumulated
@@ -611,7 +613,7 @@ neither kicks nor joins it.
 **Wakes by source** (`Core/Scene/SceneWake.h`, `WakeScenePass`): `FrameInput` once a frame (the frame start folds its posts into
 one wake, `ScenePassWakeBatch`); otherwise only inputs wanted before the frame's own pass: an attach in the world, a detach, a
 hidden bit, a leaf's property or alpha swap, property and alpha values, a property event, a switch, a material answer, a texture
-reply, a new catalog, load markers and drains, the render thread's captures, an engine channel (the LOD gates). Per-frame queues,
+reply, a new catalog, load drains, the render thread's captures, an engine channel (the LOD gates). Per-frame queues,
 LOD segment writes, value updates, attaches out of the world and material writers' captures never wake. The hidden, leaf, value
 and property sources wake only outside the engine-read window, because inside it the engine sets and undoes them for its own
 views; the event is still pushed, only the wake waits.

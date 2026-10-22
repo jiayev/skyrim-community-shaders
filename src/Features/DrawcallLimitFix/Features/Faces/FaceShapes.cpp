@@ -295,17 +295,6 @@ namespace DCLF::Features::Faces
 			UnlistFaceShape(a_context.State<FaceShapes>(), static_cast<const RE::BSGeometry*>(a_entry));
 		}
 
-		void ForgotAll(const Api::CoordinatorComponentContext& a_context)
-		{
-			auto& state = a_context.State<FaceShapes>();
-			state.faceHeads.clear();
-			state.facePublished.clear();
-			state.faceStale.clear();
-			state.listedHeads.clear();
-			if (FaceSnapshots::Enabled())
-				FaceSnapshots::Get().ReleaseAll();
-		}
-
 		// A retired region no publication names any more.
 		void Recycled(const Api::CoordinatorComponentContext& a_context, std::uint32_t a_first, std::uint32_t a_count)
 		{
@@ -393,7 +382,7 @@ namespace DCLF::Features::Faces
 			.make = &Make,
 			.walk = { .begun = &WalkBegun, .scheduling = &Scheduling, .ended = &WalkEnded },
 			.dense = { .begun = &DenseBegun, .ended = &DenseEnded },
-			.retirement = { .reset = &Reset, .forgot = &Forgot, .forgotAll = &ForgotAll, .recycled = &Recycled },
+			.retirement = { .reset = &Reset, .forgot = &Forgot, .recycled = &Recycled },
 			.entryClass = { .follows = Api::EntryClass::FaceShape, .takes = a_taken, .listed = &Listed, .resolve = &Resolve, .streamed = &Streamed } });
 		// The heads' publications, in the coordinator's scene delta line.
 		a_context.RegisterReportLines({ .name = "face publications", .point = Api::ReportPoint::SceneCoordinatorDelta, .component = component, .componentText = &DeltaLine });
