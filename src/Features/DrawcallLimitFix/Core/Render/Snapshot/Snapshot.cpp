@@ -179,7 +179,7 @@ namespace DCLF
 			std::uint64_t objects = a_sealed.Of(a_resources.visibility).units;
 			if constexpr (requires { a_resources.frustum; })
 				objects = std::min(objects, a_sealed.Of(a_resources.frustum).units);
-			Extensions::FrameBindingValuesOf(a_sealed, scene, a_frame, a_out.frameBindings);
+			Extensions::FrameBindingValuesOf(a_sealed, scene, a_frame, a_out.frameBindings, false);
 			// The vertex stream's buffer while its entry class's objects are DCLF's (Features/Faces' face positions: it takes the face shapes
 			// once its engine side is in).
 			a_out.streamBuffer = Extensions::VertexStreamTaken() ? a_sealed.Of(scene.vertexStream).deviceAddress : 0;

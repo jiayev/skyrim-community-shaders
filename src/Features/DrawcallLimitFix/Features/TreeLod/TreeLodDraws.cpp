@@ -32,17 +32,9 @@ namespace DCLF::Features::TreeLod
 		// DistantTree shader as input; until the frame's catalog has them the engine draws tree LOD), the atlas it draws with.
 		bool Decide(const Api::DrawFamilyFrame& a_frame)
 		{
-			const bool tables = a_frame.scene && TablesOf(*a_frame.scene);
-			const bool shapes = RenderMirror().Size() != 0;
-			const bool atlas = TreeLodAtlasReady();
-			const bool pipelines = tables && shapes && a_frame.Pipelines(atlas);
-			// TEMP (tree LOD flicker): every change of the decision, with what decided it.
-			static int lastDecision = -1;
-			if ((pipelines ? 1 : 0) != lastDecision) {
-				lastDecision = pipelines ? 1 : 0;
-				logger::info("[DCLF] tree LOD decision at frame {}: {} (tables {}, shapes {}, atlas {})", a_frame.frame, pipelines ? "DCLF's" : "the engine's", tables, shapes, atlas);
-			}
-			return pipelines;
+			if (!a_frame.scene || !TablesOf(*a_frame.scene) || !RenderMirror().Size())
+				return false;
+			return a_frame.Pipelines(TreeLodAtlasReady());
 		}
 
 		const void* ProgramSource()

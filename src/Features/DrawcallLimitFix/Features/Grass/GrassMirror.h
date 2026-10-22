@@ -131,7 +131,8 @@ namespace DCLF::Features::Grass
 
 	/**
 	 * @brief A bucket: its slot, its shapes and their instances (its tiers' capacity), its meshes per tier, its material, and the
-	 * texture and sampler bindings its row names (the depth commit resolves them: bound, it holds their owners until it goes).
+	 * texture and sampler bindings its row names (the depth commit resolves them into the row: an OwnedRow, whose owners each upload of
+	 * it makes the bucket table's content owners for its slot).
 	 */
 	struct Bucket
 	{
@@ -141,8 +142,7 @@ namespace DCLF::Features::Grass
 		std::uint32_t shapes = 0;
 		std::uint32_t total = 0;
 		std::array<const void*, GrassInstances::kTiers> meshes{};
-		GrassInstances::BucketRow row;
-		std::vector<std::shared_ptr<const void>> owners;  // the row's bindings
+		OwnedRow<GrassInstances::BucketRow> row;
 		std::uint32_t bindingGeneration = ~0u;           // GpuTextures::Generation the bindings were resolved in
 		bool bound = false;
 		bool live = false;  // a free slot's is not

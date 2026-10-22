@@ -42,7 +42,10 @@ namespace DCLF::Api
 		Draws::SceneBuffers& scene;                   // the scene's tables (a feature's scene resources: Extensions::SceneResourcesOf)
 		Draws::CommitUploads& uploads;                // the commit's staged uploads (into a versioned buffer: the version adopted names)
 		Draws::LatchedUploads* latched;               // the main commits' latched uploads (a value no copy is laid out for is staged); null: the shadow's
-		std::vector<std::shared_ptr<const void>>& bindingOwners;  // held until the commit's execution retires (a texture a row binds)
+		// Held until this commit's execution retires, for what only its own GPU work reads (a retired lease, a publication it binds). A
+		// descriptor a row names goes with the row instead (OwnedRow: the uploads make its owners the content's, ContentOwners), since
+		// later executions read the row too.
+		std::vector<std::shared_ptr<const void>>& executionOwners;
 	};
 }
 

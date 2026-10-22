@@ -6,6 +6,7 @@
 // it byte for byte (little-endian), so it stays compile-time. Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/OwnedRows.h"
 
 #include <array>
 #include <cstddef>
@@ -74,7 +75,7 @@ namespace DCLF::GrassInstances
 		std::uint32_t flags = 0;
 		std::uint32_t visibleBase[kTiers]{};  // the tiers' first entries in the visible list
 		std::uint32_t instanceCount = 0;      // each tier's capacity in the visible list; 0: a free slot (or not drawable yet)
-		std::uint32_t diffuseIndex = 0, depthSampler = 0, colourSampler = 0;
+		DescriptorIndex diffuseIndex, depthSampler, colourSampler;  // OwnedRow's (GrassTables.cpp, BindBucket)
 		float alphaRef = 0.0f;
 		float boundCenter[3]{};
 		float modelRadius = 0.0f;
@@ -83,7 +84,7 @@ namespace DCLF::GrassInstances
 		std::uint32_t pbrFlags = 0;
 		float scaleMask[3]{};
 		std::uint32_t pad = 0;
-		std::uint32_t normalIndex = 0, rmaosIndex = 0, featuresIndex = 0, pbrSampler = 0;
+		DescriptorIndex normalIndex, rmaosIndex, featuresIndex, pbrSampler;
 		float pbrParams1[4]{};  // roughness scale, specular level, 0, 0
 		float pbrParams2[4]{};  // subsurface colour rgb, opacity
 		std::uint32_t reserved[4]{};
@@ -143,8 +144,8 @@ namespace DCLF::GrassInstances
 		float dirLightDirection[4]{};  // w: ShadowClampValue
 		float dirLightColor[4]{};      // w: FogNearColor.w
 		float ambientColor[4]{};
-		std::uint32_t shadowMaskIndex = 0;
-		std::uint32_t collisionIndex = ~0u;  // ~0u: no collision displacement
+		DescriptorIndex shadowMaskIndex;  // OwnedRow's (GrassTables.cpp, BindFrameTextures)
+		DescriptorIndex collisionIndex = DescriptorIndex::Sentinel(~0u);  // ~0u: no collision displacement
 		std::uint32_t bucketSlots = 0;
 		std::uint32_t flags = 0;
 		std::array<std::byte, 64> collision{};  // GrassCollision::PerFrame (GrassShared::Collision::perFrame)

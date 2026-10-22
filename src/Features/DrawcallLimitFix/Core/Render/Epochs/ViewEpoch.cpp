@@ -458,24 +458,20 @@ namespace DCLF
 		return drawn;
 	}
 
-	std::shared_ptr<std::vector<std::shared_ptr<const void>>> IndirectDraws::Impl::EpochOwners(std::span<const MainPayload* const> a_payloads)
+	ExecutionOwners IndirectDraws::Impl::EpochOwners(std::span<const MainPayload* const> a_payloads)
 	{
-		auto* host = RenderGraphRuntime::Get().Host();
-		const auto cleanup = host ? host->ResourceCleanup() : nullptr;
-		if (!cleanup)
-			return nullptr;
-		auto owners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
+		auto owners = ExecutionOwners::Make();
+		if (!owners)
+			return owners;
 		for (const auto* payload : a_payloads)
 			if (payload)
-				owners->insert(owners->end(), payload->body->bindingOwners.begin(), payload->body->bindingOwners.end());
+				owners.AddPayload(*payload);
 		// The colour segment's frame record names the frame textures it resolved, held by their bindings since (frameTextureBindings): what
 		// the shared epochs and a view drawing with the main frame constants (first person's) read. A view with its own holds its commit's
 		// (SubmitViewEpoch).
 		for (const auto& held : frameTextureBindings)
-			if (held.binding.owner)
-				owners->push_back(held.binding.owner);
-		if (adoptedSnapshot)
-			owners->push_back(adoptedSnapshot);
+			owners.Add(held.binding.owner);
+		owners.Add(adoptedSnapshot);
 		return owners;
 	}
 }

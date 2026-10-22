@@ -157,70 +157,50 @@ namespace DCLF::Features::Grass
 			return ViewOf(a_normal ? data.defaultTextureNormalMap.get() : data.defaultTextureWhite.get());
 		}
 
-		/**
-		 * @brief The texture a bound row names: its binding's index into a_index, its owner into a_owners; false when there is no view
-		 * or it cannot be bound.
-		 */
-		bool Bind(ID3D11ShaderResourceView* a_view, std::uint32_t& a_index, std::vector<std::shared_ptr<const void>>& a_owners)
+		/** @brief a_view's binding into a_row's a_field (its owner the row's); false when there is no view or it cannot be bound. */
+		template <class Row>
+		bool Bind(OwnedRow<Row>& a_row, DescriptorIndex Row::*a_field, ID3D11ShaderResourceView* a_view)
 		{
-			if (!a_view)
-				return false;
-			auto binding = GpuTextures::Get().ResolveBinding(a_view, 0);
-			if (binding.index == GpuTextures::kInvalid)
-				return false;
-			a_index = binding.index;
-			a_owners.push_back(std::move(binding.owner));
-			return true;
+			return a_view && a_row.Bind(a_field, GpuTextures::Get().ResolveBinding(a_view, 0));
 		}
 
-		bool BindSampler(std::uint32_t a_address, std::uint32_t a_filter, std::uint32_t& a_index, std::vector<std::shared_ptr<const void>>& a_owners)
+		template <class Row>
+		bool BindSampler(OwnedRow<Row>& a_row, DescriptorIndex Row::*a_field, std::uint32_t a_address, std::uint32_t a_filter)
 		{
-			auto binding = GpuTextures::Get().SamplerBinding(a_address, a_filter);
-			if (binding.index == GpuTextures::kInvalid)
-				return false;
-			a_index = binding.index;
-			a_owners.push_back(std::move(binding.owner));
-			return true;
+			return a_row.Bind(a_field, GpuTextures::Get().SamplerBinding(a_address, a_filter));
 		}
 
 		/**
-		 * @brief A bucket's texture and sampler bindings into its row, held by the bucket until it goes or the bindings' generation
-		 * moves (the bindings it held then go to the commit's execution: a_retired). The diffuse texture with the material's address
-		 * mode, trilinear for the depth draws and anisotropic for the colour draws (BSGrassShader's); with TruePBR its maps (the
-		 * engine's defaults where it has none) and their sampler. False while the diffuse texture has no view.
+		 * @brief A bucket's texture and sampler bindings into its row (an OwnedRow: its uploads make them the bucket table's content
+		 * owners), bound again when the bindings' generation moves. The diffuse texture with the material's address mode, trilinear for
+		 * the depth draws and anisotropic for the colour draws (BSGrassShader's); with TruePBR its maps (the engine's defaults where it
+		 * has none) and their sampler. False while the diffuse texture has no view (the row keeps its last bindings).
 		 */
-		bool BindBucket(Bucket& a_bucket, std::uint32_t a_generation, std::vector<std::shared_ptr<const void>>& a_retired)
+		bool BindBucket(Bucket& a_bucket, std::uint32_t a_generation)
 		{
 			if (a_bucket.bound && a_bucket.bindingGeneration == a_generation)
 				return true;
-			for (auto& owner : a_bucket.owners)
-				a_retired.push_back(std::move(owner));
-			a_bucket.owners.clear();
 			a_bucket.bound = false;
-			auto& row = a_bucket.row;
+			OwnedRow<BucketRow> row(a_bucket.row.Plain());
 			auto& source = a_bucket.source;
-			std::vector<std::shared_ptr<const void>> owners;
 			const std::uint32_t address = std::min(a_bucket.key.clampMode, 3u);
 			// The diffuse is sampled clamped whatever the material's mode, as the engine's grass technique sets sampler 0 (address mode 0,
 			// BSGrassShader::SetupTechnique; Grass Optimizations forces it too): a card's UVs reach the texture's edge, and wrapping filters
 			// the opposite edge's opaque stems into its corners, which then pass the alpha test.
 			constexpr std::uint32_t kDiffuseAddress = 0;
-			bool bound = Bind(ViewOf(source.diffuse.get()), row.diffuseIndex, owners) && BindSampler(kDiffuseAddress, 2, row.depthSampler, owners) &&
-			             BindSampler(kDiffuseAddress, 3, row.colourSampler, owners);
+			bool bound = Bind(row, &BucketRow::diffuseIndex, ViewOf(source.diffuse.get())) && BindSampler(row, &BucketRow::depthSampler, kDiffuseAddress, 2) &&
+			             BindSampler(row, &BucketRow::colourSampler, kDiffuseAddress, 3);
 			if (bound && a_bucket.key.pbr) {
 				auto viewOr = [](const RE::NiPointer<RE::NiSourceTexture>& a_texture, bool a_normal) {
 					auto* view = ViewOf(a_texture.get());
 					return view ? view : DefaultView(a_normal);
 				};
-				bound = Bind(viewOr(source.normal, true), row.normalIndex, owners) && Bind(viewOr(source.rmaos, false), row.rmaosIndex, owners) &&
-				        Bind(viewOr(source.features0, false), row.featuresIndex, owners) && BindSampler(address, 3, row.pbrSampler, owners);
+				bound = Bind(row, &BucketRow::normalIndex, viewOr(source.normal, true)) && Bind(row, &BucketRow::rmaosIndex, viewOr(source.rmaos, false)) &&
+				        Bind(row, &BucketRow::featuresIndex, viewOr(source.features0, false)) && BindSampler(row, &BucketRow::pbrSampler, address, 3);
 			}
-			if (!bound) {
-				for (auto& owner : owners)
-					a_retired.push_back(std::move(owner));
+			if (!bound)
 				return false;
-			}
-			a_bucket.owners = std::move(owners);
+			a_bucket.row = std::move(row);
 			a_bucket.bindingGeneration = a_generation;
 			a_bucket.bound = true;
 			return true;
@@ -330,8 +310,7 @@ namespace DCLF::Features::Grass
 		 * slot's row, records and owners, each changed mesh's row and each changed bucket's row with its bindings (a bucket whose texture
 		 * has no view yet is sent with no instances and asked again at the next commit).
 		 */
-		void SendChanges(const Draws::NamedVersions& a_sealed, Mirror& a_mirror, GrassTables& a_tables, Draws::LatchedUploads& a_uploads,
-			std::vector<std::shared_ptr<const void>>& a_owners)
+		void SendChanges(const Draws::NamedVersions& a_sealed, Mirror& a_mirror, GrassTables& a_tables, Draws::LatchedUploads& a_uploads)
 		{
 			auto& filled = a_tables.filled;
 			const auto& instances = a_sealed.Of(*a_tables.instances);
@@ -367,17 +346,22 @@ namespace DCLF::Features::Grass
 				a_uploads(a_tables.meshes, &row, sizeof(row), std::uint64_t(mesh) * sizeof(MeshRow));
 			}
 			for (const std::uint32_t slot : changes.buckets) {
-				BucketRow row{};
-				if (auto* bucket = a_mirror.SlotBucket(slot)) {
-					if (!BindBucket(*bucket, generation, a_owners)) {
-						a_tables.unbound.push_back(slot);
-						++a_tables.unboundBuckets;
-					}
-					row = bucket->row;
-					if (!bucket->bound)
-						row.instanceCount = 0;
+				const std::uint64_t offset = std::uint64_t(slot) * sizeof(BucketRow);
+				auto* bucket = a_mirror.SlotBucket(slot);
+				if (!bucket) {
+					// A free slot: zero, its last bucket's bindings released with the content.
+					const BucketRow none{};
+					a_uploads(a_tables.buckets, &none, sizeof(none), offset);
+					continue;
 				}
-				a_uploads(a_tables.buckets, &row, sizeof(row), std::uint64_t(slot) * sizeof(BucketRow));
+				if (!BindBucket(*bucket, generation)) {
+					a_tables.unbound.push_back(slot);
+					++a_tables.unboundBuckets;
+				}
+				OwnedRow<BucketRow> row = bucket->row;
+				if (!bucket->bound)
+					row.Plain().instanceCount = 0;
+				a_uploads(a_tables.buckets, row, offset);
 			}
 			for (std::size_t i = 0; const auto* named : { &instances, &owners, &shapes, &buckets, &meshes })
 				filled[i++].Filled(*named);
@@ -386,20 +370,20 @@ namespace DCLF::Features::Grass
 		}
 
 		/** @brief The frame's shadow mask (bShadowsOnGrass: the engine's, else its white default) and Grass Collision's published state. */
-		bool BindFrameTextures(DrawRow& a_row, std::vector<std::shared_ptr<const void>>& a_owners)
+		bool BindFrameTextures(OwnedRow<DrawRow>& a_row)
 		{
 			static auto* shadowsOnGrass = RE::GetINISetting("bShadowsOnGrass:Display");
 			ID3D11ShaderResourceView* mask = DefaultView(false);
 			if ((!shadowsOnGrass || shadowsOnGrass->GetBool()) && globals::game::renderer)
 				mask = reinterpret_cast<ID3D11ShaderResourceView*>(globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSHADOW_MASK].SRV);
-			if (!Bind(mask, a_row.shadowMaskIndex, a_owners))
+			if (!Bind(a_row, &DrawRow::shadowMaskIndex, mask))
 				return false;
 			// The collision of the frames DCLF owns grass (its stood-down update, from the decision): none without Grass Collision.
 			GrassShared::Collision collision;
-			if (GrassShared::LatestCollision(collision) && Bind(collision.texture, a_row.collisionIndex, a_owners))
-				a_row.collision = collision.perFrame;
+			if (GrassShared::LatestCollision(collision) && Bind(a_row, &DrawRow::collisionIndex, collision.texture))
+				a_row.Plain().collision = collision.perFrame;
 			else
-				a_row.collisionIndex = ~0u;
+				a_row.Unbind(&DrawRow::collisionIndex, DescriptorIndex::Sentinel(~0u));
 			return true;
 		}
 
@@ -408,10 +392,10 @@ namespace DCLF::Features::Grass
 		 * zero header (and, once after the tables were made or grass became DCLF's, its zero counts: grass.args-colour zeroes them every
 		 * frame after). The cull walks the slots only while a_draw and the frame's textures are bound.
 		 */
-		void WriteDrawRow(const Draws::NamedVersions& a_sealed, const Mirror& a_mirror, GrassTables& a_tables, Draws::LatchedUploads& a_uploads,
-			std::vector<std::shared_ptr<const void>>& a_owners, bool a_draw)
+		void WriteDrawRow(const Draws::NamedVersions& a_sealed, const Mirror& a_mirror, GrassTables& a_tables, Draws::LatchedUploads& a_uploads, bool a_draw)
 		{
-			DrawRow row{};
+			OwnedRow<DrawRow> owned;
+			auto& row = owned.Plain();
 			row.instances = a_sealed.Of(*a_tables.instances).deviceAddress;
 			row.shapes = a_sealed.Of(*a_tables.shapes).deviceAddress;
 			row.buckets = a_sealed.Of(*a_tables.buckets).deviceAddress;
@@ -426,13 +410,13 @@ namespace DCLF::Features::Grass
 			static const float fadeIn = IniFloat("fGrassFadeInTime:Grass", 0.0f);
 			row.fadeInTimeRcp = fadeIn > 0.0f ? 1.0f / fadeIn : 1e6f;
 			SampleLight(row);
-			const bool sampled = SampleCull(row) && BindFrameTextures(row, a_owners);
+			const bool sampled = SampleCull(row) && BindFrameTextures(owned);
 			if (a_draw && sampled && a_mirror.InstanceSlots()) {
 				row.instanceSlots = a_mirror.InstanceSlots();
 				row.shapeSlots = a_mirror.ShapeSlots();
 				row.bucketSlots = a_mirror.BucketSlots();
 			}
-			a_uploads(a_tables.draw, &row, sizeof(row), 0);
+			a_uploads(a_tables.draw, owned, 0);
 			a_tables.row = row;
 			const DrawsHeader header{};
 			a_uploads(a_tables.draws, &header, sizeof(header), 0);
@@ -447,7 +431,7 @@ namespace DCLF::Features::Grass
 
 		/**
 		 * @brief The depth commit's grass uploads, into the versions a_sealed (the adopted set) names: their capacities and the draw row's
-		 * addresses are theirs. Retired mesh leases and bindings go to the execution (a_owners).
+		 * addresses are theirs. Retired mesh leases go to the execution (a_owners); the rows' descriptors go with the rows (OwnedRow).
 		 */
 		void UploadGrass(const Draws::NamedVersions& a_sealed, Mirror& a_mirror, GrassTables& a_tables, Draws::LatchedUploads& a_uploads,
 			std::vector<std::shared_ptr<const void>>& a_owners, bool a_owned)
@@ -463,11 +447,11 @@ namespace DCLF::Features::Grass
 			// Capacities are reserved before the epoch; a mirror past them keeps its changes and draws nothing this commit.
 			const bool fits = Fits(a_sealed, a_mirror, a_tables);
 			if (fits)
-				SendChanges(a_sealed, a_mirror, a_tables, a_uploads, a_owners);
+				SendChanges(a_sealed, a_mirror, a_tables, a_uploads);
 			else if (a_mirror.BucketSlots() > kMaxBuckets)
 				++a_tables.overBuckets;
 			++a_tables.uploads;
-			WriteDrawRow(a_sealed, a_mirror, a_tables, a_uploads, a_owners, a_owned && fits);
+			WriteDrawRow(a_sealed, a_mirror, a_tables, a_uploads, a_owned && fits);
 		}
 
 		// Grass (dclf-architecture.md, "Grass: the draws"): the mirror's changes and the draw row, for the depth cull, the arguments and the
@@ -481,7 +465,7 @@ namespace DCLF::Features::Grass
 				return;
 			auto& mirror = RenderMirror();
 			const bool owned = IndirectDraws::Get().DrawFamilyOwned(Api::DrawFamily::Grass);
-			UploadGrass(a_commit.adopted, mirror, *tables, *a_commit.latched, a_commit.bindingOwners, owned);
+			UploadGrass(a_commit.adopted, mirror, *tables, *a_commit.latched, a_commit.executionOwners, owned);
 			// The engine's passes were withheld: a commit that cannot draw leaves a hole.
 			if (owned && !tables->ready.load(std::memory_order_acquire))
 				Diagnostics::Notify(GrassMissed{ a_commit.frame, mirror.InstanceSlots(), a_commit.adopted.Of(*tables->instances).units, mirror.BucketSlots(),

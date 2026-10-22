@@ -48,6 +48,7 @@ namespace DCLF::Features::TreeLod
 		std::atomic<std::uint64_t> frames{ 0 }, phaseOne{ 0 }, retests{ 0 }, phaseTwo{ 0 };
 		// CS_DCLF_TREE_LOD_STAGES: the newest frame judged, frames judged and those a stage missed.
 		std::uint32_t stagesJudged = 0;
+		std::uint32_t probeLogged = 0;
 		std::uint64_t stageFrames = 0, stageMisses = 0, stageLogged = 0, clipDiffers = 0, clipLogged = 0;
 	};
 
@@ -88,10 +89,10 @@ namespace DCLF::Features::TreeLod
 
 	/**
 	 * @brief Tree LOD's texture and sampler into a_row: the engine's tree LOD atlas (BSDistantTreeShader::SetupTechnique's static at
-	 * 0x1433dcd18) and slot 0's sampler as its draws leave it (address mode 0, filter 2). Binding owners go to the execution.
-	 * False when there is no texture.
+	 * 0x1433dcd18) and slot 0's sampler as its draws leave it (address mode 0, filter 2), bound into a_row (their owners its, which the
+	 * upload makes the row's content owners: the import stays the same while they hold it). False when there is no texture.
 	 */
-	bool TreeLodTextureBinding(TreeInstances::DrawRow& a_row, std::vector<std::shared_ptr<const void>>& a_owners);
+	bool TreeLodTextureBinding(OwnedRow<TreeInstances::DrawRow>& a_row);
 
 	/** @brief Whether the engine's tree LOD atlas is there to draw with (the frame's decision; the depth commit binds it). */
 	bool TreeLodAtlasReady();

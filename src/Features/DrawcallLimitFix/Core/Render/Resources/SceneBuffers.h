@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Render/Payload/ContentOwners.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 #include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
@@ -56,6 +57,9 @@ namespace DCLF::Draws
 		// The draw families' pipelines on their lane (Api::DrawFamily, by family), published by the frame's decision once built
 		// (DrawFamilyFrame::Pipelines); read on the graph host's thread (FamilyPipelinesOf).
 		std::array<std::atomic<std::shared_ptr<const FamilyPipelines>>, Extensions::kDrawFamilies> familyPipelines;
+		// The owners of the descriptors the commits' rows in these tables name, by range (render thread): every execution holds them while
+		// the bytes are current (dclf-architecture.md, "Descriptor ownership").
+		ContentOwners content;
 	};
 
 	/**

@@ -167,18 +167,15 @@ namespace DCLF
 		}
 
 		/** @brief What a view with frame constants of its own holds for its execution: its payloads' bindings and the adopted snapshot (its frame textures: ResolveViewFrameTextures). */
-		std::shared_ptr<std::vector<std::shared_ptr<const void>>> OwnFrameOwners(std::span<const MainPayload* const> a_payloads, const std::shared_ptr<const void>& a_snapshot)
+		ExecutionOwners OwnFrameOwners(std::span<const MainPayload* const> a_payloads, const std::shared_ptr<const void>& a_snapshot)
 		{
-			auto* host = RenderGraphRuntime::Get().Host();
-			const auto cleanup = host ? host->ResourceCleanup() : nullptr;
-			if (!cleanup)
-				return nullptr;
-			auto owners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
+			auto owners = ExecutionOwners::Make();
+			if (!owners)
+				return owners;
 			for (const auto* payload : a_payloads)
 				if (payload)
-					owners->insert(owners->end(), payload->body->bindingOwners.begin(), payload->body->bindingOwners.end());
-			if (a_snapshot)
-				owners->push_back(a_snapshot);
+					owners.AddPayload(*payload);
+			owners.Add(a_snapshot);
 			return owners;
 		}
 	}
@@ -252,22 +249,23 @@ namespace DCLF
 		auto& state = impl->View(a_view);
 		const bool ownFrame = !a_faces.empty() && state.resources && state.resources->frameConstants;
 		const std::span<const MainPayload* const> payloads(a_listed.owners.data(), a_listed.ownerCount);
-		const auto owners = ownFrame ? OwnFrameOwners(payloads, impl->adoptedSnapshot) : impl->EpochOwners(payloads);
+		auto owners = ownFrame ? OwnFrameOwners(payloads, impl->adoptedSnapshot) : impl->EpochOwners(payloads);
 		if (!owners)
 			return ViewSubmit::NoOwners;
 		if (ownFrame)
-			ResolveViewFrameTextures(state, *owners);
+			ResolveViewFrameTextures(state, owners.List());
 		// A trees view's draw families' rows (ViewFaces.cpp), their textures held with the owners.
 		ViewFamilyRows rows{};
 		const bool trees = !a_faces.empty() && TraitsOf(a_view).trees;
 		if (trees)
-			rows = impl->ViewFaceRows(a_view, *shape, *owners);
+			rows = impl->ViewFaceRows(a_view, *shape, owners.List());
 		std::uint32_t drawn = 0;
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(epochs.segments[a_epoch], [&](org::RenderGraph&) {
 			if (!a_faces.empty())
 				drawn = impl->CommitView(*shape, a_faces, a_listed.inputs, trees ? &rows : nullptr);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, 0);
-		}, owners);
+			owners.Seal(impl->scene.get());
+		}, owners.Handle());
 		if (!ok)
 			return ViewSubmit::Failed;
 		if (a_drawn)

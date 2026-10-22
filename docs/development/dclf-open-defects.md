@@ -8,6 +8,23 @@ and report lines named here are described in [dclf-validation.md](./dclf-validat
 
 The fixes below are in the code. No recorded run has yet shown the check that confirms each one.
 
+-   **Tree LOD flickering under camera motion.** The forest alternated per frame between DCLF's colour and depth-only silhouettes
+    (fog over albedo never written). The cause: the atlas's binding was owned only by the depth commit's execution, so its import
+    and descriptor slot were released when the Z-prepass retired, and a streamed texture reused the slot before the colour epoch
+    sampled it. Then the colour pass's alpha test discarded everything. The fix is structural (dclf-architecture.md, "Descriptor
+    ownership"): rows name descriptors through `OwnedRow`, the uploads make the owners the written range's content owners, and every
+    execution holds the content owners current at its submission. It also closes the same gap in grass's draw row (the shadow mask's
+    and collision texture's indices were the depth execution's alone). **Check:** `CS_DCLF_TREE_LOD_STAGES=1` with motion: no
+    `<- PROBE DIFFERS`, and no `<- MISSED` frame whose colour PS entry is stamped but kept is not (run `ow1`: 0 and 0, the texture
+    index one value for the whole run; the `content owners` line steady at the live grass buckets plus the two draw rows). On screen:
+    no pale flicker in the LOD forest while moving.
+-   **Newly loaded objects drawn opaque, then vanishing, then fading in.** `DCLFAlphaFade` fell back to the root row's `Initial` (the
+    mirror's fade at listing) until FadeStateCS's state reached t120. The seed (the node at the frame's start) was used only by
+    BuildDraws. The pairing of listings with seeds counted 144 generations listed at 1 but seeded at 0 (opaque, then gone, then fading
+    in), and 511 listed at 0 but seeded at 1 (a visible object missing for a frame). The fix: the seeds are a frame binding at t117
+    (`kFadeSeedsRegister`, answered with the pool's descriptor on the render thread: `FrameBindingSelect::index`), and the pixel stage
+    falls back to the seed as `SeedState` does. **Check:** walk into a forest with DCLF; new full trees should fade in like the
+    engine's, with no opaque first frame.
 -   **The indirect execution sets split by state class.** Every pipeline in a set now shares its initial pipeline's fixed-function
     state and fragment interface (dclf-architecture.md, "One execution set per state class"), so core validation's
     `VUID-vkUpdateIndirectExecutionSetPipelineEXT-None-11040`, `-11147`, `-11098` and `-11086` should be gone. **Check:** a run
@@ -65,6 +82,13 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     The rerun did not hang: 87 s, with the 28-row table published 32 times. **Next:** if it recurs, the scratch folder's
     `hangwatch.sh` writes a full dump when the log stalls for 15 s. Read the threads' stacks with cdb. Suspects are the publisher's
     mutex during preparation, and a kept shadow recording whose table was republished.
+-   **A null read in the cell loader, `SkyrimSE+0x804396`.** It happened twice on 2026-10-21, both under `CS_DCLF_TEST_MOVE` on
+    the tree-forest route (`fw 81a`, the player walking off a mountaintop into a forest): once in a tinted tree LOD run, and once
+    about 60 s into a motion parity run (`vp1`). It is an access violation reading null in the landscape block loading path. The
+    stack has Community Shaders frames, but they may be the crash handler's hooks. **Next:** read the dump's full stack with cdb and
+    check whether DCLF's frames are callers or handlers.
+-   **Device loss at load with `CS_DCLF_PERSISTENT_PARITY=1` and `CS_DCLF_TREE_LOD_AUDIT=1` together.** All three attempts lost the
+    device at load (Aftermath dump `gpu-crash-2026-10-21-20-00-42.nv-gpudmp`). Persistent parity alone loads fine. Not investigated.
 
 ### Crashes probably unrelated to DCLF
 
@@ -164,6 +188,15 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
         facegen tint parts (PS 7) and TextureProj (VS 6), character light t11 on NPC armour (DCLF's frame view against the draw's,
         which the engine alternates), and draw parity's 0-15 differing draws a window.
     -   **Expected:** face capture parity differs on every reflection face draw, because face draws do not match the main rows.
+-   **Persistent extras rows: payload backings parity differs under motion (`<- DIFFER`).** It appeared in three motion parity
+    runs on 2026-10-21 on the tree-forest route (`fw 81a`). In one run it was a single report; in the other two, nearly every
+    catch-up differed for 20 s once three backings were mirrored, for example
+    `extras backing 3: row 22467 of 22533 (version 41): uploaded (0 0 0 0), tables (0.29341206 0 0.00066666666 0.41317594)`. The
+    same values recur across runs. Earlier parity runs on other routes were clean. It is not caused by the colour epoch holding the
+    depth commit's owners: it still differs with that change reverted. It has not been checked against a build without the tree
+    LOD and fade-seed changes. `GRASS HOLE` lines (`commits that could not draw a withheld frame`) appeared in the same run.
+-   **Frame values' moved-only sampling: rows differ (`<- DIFFER`).** It was seen once, in run `vp1`: 9 of 1,257 rows, first
+    `row of slot 12678 ('leftarm:0', not due): sunEntry, lodFadeNode`.
 -   **Portal parity: an unbound-space occluder mismatch under motion.** It appears now and then in moving persistent-parity and full parity runs, in
     two variants: `<- PORTAL VIEW; first: unbound space: 4 ops 1 sets, the engine's 0 ops 0 sets` (one engine plane, state 2,
     flags `0x1000001`, that DCLF has in state 0), and `unbound space: set 0 mask 0x3d, the engine's 0x39`, where DCLF keeps one

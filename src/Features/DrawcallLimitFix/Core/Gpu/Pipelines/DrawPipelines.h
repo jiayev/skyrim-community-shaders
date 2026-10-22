@@ -156,6 +156,12 @@ namespace DCLF
 	 */
 	inline constexpr std::uint32_t kFadeStatesRegister = kTextureRegisters - 8;
 	inline constexpr std::uint32_t kFadeRootsRegister = kTextureRegisters - 9;
+	/**
+	 * @brief t117: the fade roots' seeds the frame reads (Features/Fades' "fade-seeds" pool, two rows a root slot: FadeSeedRow), pixel stage
+	 * (DCLFAlphaFade): a root's state until FadeStateCS's first update of its generation reaches t120, as BuildDrawsCS's SeedState. A frame
+	 * binding answered with the pool's descriptor; unbound reads none, the row's own.
+	 */
+	inline constexpr std::uint32_t kFadeSeedsRegister = kTextureRegisters - 11;
 
 	/**
 	 * @brief A binding record in GPU memory, one entry per Lighting register, mapped by the layout (VK_EXT_descriptor_heap indirect

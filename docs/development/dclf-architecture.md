@@ -861,6 +861,42 @@ snapshot is the only source of them (no rings, no duplicate copies).
 -   **The readback staging is not pooled**: it is GPU-to-host and rewritten whole every frame, one host buffer per frame slot for
     each list capacity a sealed set names (`HostEventRing::AddSet`).
 
+### Descriptor ownership
+
+A bindless descriptor slot is freed as soon as its last owner goes. ORG's `DescriptorHeap::ReleaseDescriptor` waits on nothing on
+the GPU; a slot outlives GPU work only while something holds its owner (`GpuTextures::Binding::owner`). So the rule:
+
+> **A descriptor index written into GPU-visible bytes is owned by those bytes' content.** It lives until that content is
+> overwritten, and every execution submitted while the content is current holds it.
+
+ORG states the same contract for `OwnedDescriptorBinding::Index()`. DCLF makes it structural:
+-   **Rows name descriptors only through `OwnedRow`** (`Core/Gpu/OwnedRows.h`). A row's descriptor fields are `DescriptorIndex`,
+    which only `OwnedRow::Bind` sets, and it keeps the binding's owner with the row. A field the reader takes as "none" is
+    `DescriptorIndex::Sentinel`.
+-   **The uploads record content owners.** `CommitUploads` and `LatchedUploads` (`Core/Render/Payload/Uploads.h`) take an `OwnedRow`
+    and make its owners the content owners of the range it writes (`ContentOwners`, `SceneBuffers::content`). A write of plain bytes
+    replaces a range's owners with none, so a freed row (sent zero) releases its bindings.
+    -   Ranges are keyed as the uploads match their targets: a versioned buffer by its `Key()`, so a catch-up or growth copy keeps them.
+    -   The registry snapshots its owners (one sealed owner, made again only after a change).
+-   **Every execution's owners are made one way** (`ExecutionOwners`, `Core/Render/Epochs/ExecutionOwners.h`): its payloads' bindings,
+    the adopted snapshot, its frame textures, and what only it reads (`CommitContext::executionOwners`: retired leases, publications
+    it binds). It is sealed at the end of the record step, after the commit wrote its content: `Seal` adds the content snapshot.
+    The main, forward, view and shadow epochs all submit with one.
+
+So a row one commit writes and later executions read keeps its descriptors with no per-site reasoning. Examples: a draw family's
+latched draw row, written by the depth commit and drawn by the colour epoch, even on a frame whose depth epoch did not run; grass's
+bucket rows, read until rewritten. The tree LOD flicker was the counter-example: its atlas's owner went to the depth execution
+alone, and the colour epoch sampled a reused slot.
+
+Not on it yet, each with its own holder:
+-   the frame records' textures (`HoldFrameTexture`);
+-   the views' frame textures;
+-   LocalLights' and the portals' publications (pushed into every commit);
+-   FrameValues' pool indices (bound to the frame's retirement point);
+-   the payload's material rows (their owners travel with the immutable payload).
+
+The `content owners` report line gives the registry's size: steady while the scene's bindings are.
+
 ### The scene's set: requirement, batch, sealed set
 
 No GPU table DCLF keeps has a compile-time capacity: every one grows, and nothing past a capacity is dropped or falls back. Every

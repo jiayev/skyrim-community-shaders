@@ -396,10 +396,14 @@ struct DCLFFadeRootStatic
 };
 StructuredBuffer<DCLFFadeNodeState> DCLFFadeStates : register(t120);
 StructuredBuffer<DCLFFadeRootStatic> DCLFFadeRoots : register(t119);
+// The fade roots' seeds (Features/Fades' "fade-seeds" pool, two rows a root slot: FadeSeedRow): a root's state, the node as the frame's
+// start had it, until FadeStateCS's first update of its generation reaches t120 (BuildDrawsCS's SeedState). Unbound: none.
+StructuredBuffer<DCLFFadeRootStatic> DCLFFadeSeeds : register(t117);
 // What GetRenderPasses and SetupGeometry put on a pass's alpha (MaterialData.z): the property's alpha times its fade node's
 // currentFade, and for a LOD cross-fade's copy (the draw's object word bit 30: BuildDrawsCS, kObjectCrossfadeCopy) the
 // cross-fade factor (+0x14C) instead. T1c: from the object's fade root (DCLFRecordFlags bits 9-31, its slot + 1) in
-// FadeStateCS's state; 1 without a root, or with a row the frame does not hold (generation 0: none bound, or freed).
+// FadeStateCS's state, else (a generation it has not updated yet) its seed, else its row's; 1 without a root, or with a row the frame
+// does not hold (generation 0: none bound, or freed).
 float DCLFAlphaFade(uint a_object, bool a_copy)
 {
 	const uint root = DCLFObjects[a_object].DCLFRecordFlags >> 9;
@@ -409,8 +413,14 @@ float DCLFAlphaFade(uint a_object, bool a_copy)
 	if (row.Generation == 0)
 		return 1;
 	DCLFFadeNodeState state = DCLFFadeStates[root - 1];
-	if (state.Generation != row.Generation)
+	if (state.Generation != row.Generation) {
 		state = row.Initial;
+		uint seeds, stride;
+		DCLFFadeSeeds.GetDimensions(seeds, stride);
+		const uint at = 2u * (root - 1) + ((row.Bits & (1u << 23)) != 0u ? 1u : 0u);  // FadeSeedRow (kFadeRootSeedOdd)
+		if (at < seeds && DCLFFadeSeeds[at].Generation == row.Generation)
+			state = DCLFFadeSeeds[at].Initial;
+	}
 	return a_copy ? state.Blend : state.CurrentFade;
 }
 #	endif  // PSHADER

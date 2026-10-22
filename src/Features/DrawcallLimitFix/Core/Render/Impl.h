@@ -13,6 +13,7 @@ namespace DCLF
 	using namespace Draws;
 }
 
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
 #include "Features/DrawcallLimitFix/Core/Render/Impl/SnapshotBuilder.h"
 #include "Features/DrawcallLimitFix/Core/Render/Impl/Views.h"
 #include "Features/DrawcallLimitFix/Core/Render/Impl/Producer.h"
@@ -195,8 +196,11 @@ namespace DCLF
 		 */
 		IndirectDraws::ViewSubmit CommitHostedView(ViewKind a_view, std::uint32_t a_epoch, const IndirectDraws::ViewListed& a_listed, std::span<const ViewFace> a_faces,
 			std::uint32_t* a_drawn, std::array<std::uint64_t, 2>* a_nullTextures);
-		/** @brief What an epoch's execution holds besides its shape (binding owners, the adopted snapshot). */
-		std::shared_ptr<std::vector<std::shared_ptr<const void>>> EpochOwners(std::span<const MainPayload* const> a_payloads);
+		/**
+		 * @brief What an epoch drawing a_payloads with the main frame record holds (their bindings, the colour segment's frame textures, the
+		 * adopted snapshot); sealed by its record step (ExecutionOwners::Seal). False without a cleanup lane.
+		 */
+		ExecutionOwners EpochOwners(std::span<const MainPayload* const> a_payloads);
 		/** @brief The scene buffers, created once (render thread). False when they have no device address. */
 		bool EnsureSceneBuffers(rhi::Device a_device);
 		/** @brief ShadowHost: the scene buffers for the shadow resources (SetupShadow). */

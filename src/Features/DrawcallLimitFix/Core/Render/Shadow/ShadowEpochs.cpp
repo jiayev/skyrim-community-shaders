@@ -3,6 +3,7 @@
 // Features/Shadows/Engine's handler calls it (ExecuteShadowFrame: Api/ShadowEpochs.h), in its epoch's segment (its traits).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SunVolume.h"
@@ -626,10 +627,9 @@ namespace DCLF
 			++impl->revisions.latchClamped[epoch];
 			in.sunEntryProcesses.resize(target.latchLayout.sunProcesses);
 		}
-		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
-		if (!cleanup)
+		auto owners = ExecutionOwners::Make();
+		if (!owners)
 			return mapsNotDrawn(0);
-		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(EpochTraitsOf(epoch).segment, [&](org::RenderGraph&) {
 			ZoneScopedN("CS.DCLF.ShadowInputs");
 			const auto bodyStart = std::chrono::steady_clock::now();
@@ -643,18 +643,18 @@ namespace DCLF
 			// The payload's buffers are the installed publication's (a covered frame has a ready one, with its shadow parts); only the
 			// arena is uploaded here. The occlusion maps' views draw from it too.
 			const PayloadVersions& parts = *impl->InstalledPayload();
-			Draws::HoldShadowCommit(payload, impl->adoptedSnapshot, *frameOwners);
-			engine.shadowExecutionOwner = frameOwners;
+			Draws::HoldShadowCommit(payload, impl->adoptedSnapshot, owners.List());
+			engine.shadowExecutionOwner = owners.Handle();
 			prepareMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
 			TracyCZoneEnd(shadowPrepareZone);
 
 			// The adopted set: the versions the commit writes into, and the SRV indices it writes.
 			const auto& adopted = impl->Adopted();
-			CommitUploads uploads(impl->commitStagedPool, adopted);
+			CommitUploads uploads(impl->commitStagedPool, adopted, impl->scene ? &impl->scene->content : nullptr);
 			const Draws::ShadowCommit commit{ *resources, payload, parts, adopted, uploads, target, in, pending, frameNumber, shadowStats };
 			TracyCZoneN(shadowCommitZone, "CS.DCLF.ShadowInputs.CommitShared", true);
 			const auto inputsStart = std::chrono::steady_clock::now();
-			Draws::CommitShadowShared(commit, modeUsed, *frameOwners);
+			Draws::CommitShadowShared(commit, modeUsed, owners.List());
 			inputsMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inputsStart).count();
 			TracyCZoneEnd(shadowCommitZone);
 
@@ -676,11 +676,12 @@ namespace DCLF
 			// variant submitted.
 			WriteBuildDispatch(*target.latch, target.latchLayout, latchSlot, static_cast<std::uint32_t>(payload.Inputs()), *variants[variant]);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, variant);
+			owners.Seal(impl->scene.get());
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			Draws::LogShadowEpoch(commit);
 			TracyCZoneEnd(shadowViewsZone);
 			bodyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bodyStart).count();
-		}, frameOwners);
+		}, owners.Handle());
 		const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		shadowStats.prepareMs += prepareMs;
 		shadowStats.inputsMs += inputsMs;

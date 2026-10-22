@@ -77,6 +77,9 @@ namespace DCLF::Diagnostics
 				const auto* even = Extensions::FrameBindingBuffer(i, scene, 1);
 				const auto* odd = Extensions::FrameBindingBuffer(i, scene, 0);
 				const std::uint64_t value = a_embedded.frameBindings[i];
+				// A binding answered on the render thread alone (an index: Fades' seeds) is the frame record's commit's, embedded as none.
+				if (!even && !odd && value == Extensions::kNoFrameBinding)
+					continue;
 				const std::uint64_t evenIndex = even ? entry(*even).srvIndex : 0, oddIndex = odd ? entry(*odd).srvIndex : 0;
 				check(bindings[i].name.c_str(), even ? *even : kNone, value, value == oddIndex ? oddIndex : evenIndex);
 			}

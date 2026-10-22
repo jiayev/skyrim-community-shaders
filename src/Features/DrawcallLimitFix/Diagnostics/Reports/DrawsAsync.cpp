@@ -30,6 +30,12 @@ namespace DCLF
 			text += line + "\n";
 		if (auto line = Reports::FrameDataLine(); !line.empty())
 			text += line + "\n";
+		// The rows naming descriptors (ContentOwners): steady while the scene's bindings are (a growing count is a range never replaced).
+		if (impl->scene) {
+			const auto content = impl->scene->content.TakeCounts();
+			text += fmt::format("[DCLF] content owners: {} ranges naming descriptors, {} owners; {} snapshots made since the last report\n", content.ranges,
+				content.owners, content.snapshotsMade);
+		}
 		{
 			text += impl->RevisionReport();
 			// The snapshots (the frame's counters, the builder's times) and the builder's own lines (the revisions, the growths,

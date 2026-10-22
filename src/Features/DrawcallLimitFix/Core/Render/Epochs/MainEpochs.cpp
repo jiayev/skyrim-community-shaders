@@ -3,6 +3,7 @@
 // the frame blocks taken from the capture.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
@@ -117,7 +118,7 @@ namespace DCLF
 		// Held until this execution retires (its draws read what the shared commit bound): the shared payload's bindings, the frame
 		// textures its frame record names, the adopted snapshot whole.
 		const std::array<const MainPayload*, 1> payloads{ shared };
-		const auto owners = impl->EpochOwners(payloads);
+		auto owners = impl->EpochOwners(payloads);
 		if (!owners) {
 			++f.failed;
 			return {};
@@ -130,7 +131,8 @@ namespace DCLF
 		}
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(traits.segment, [&](org::RenderGraph&) {
 			impl->SubmitRevisionRecording(a_epoch, *revision.recordings, 0);
-		}, owners);
+			owners.Seal(impl->scene.get());
+		}, owners.Handle());
 		if (!ok) {
 			++f.failed;
 			return {};
@@ -271,14 +273,13 @@ namespace DCLF
 		auto& async = stats.async[jobIndex];
 		const MainPayload* committed = nullptr;
 
-		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
-		if (!cleanup) {
+		auto owners = ExecutionOwners::Make();
+		if (!owners) {
 			outcome("no cleanup lane, not submitted");
 			capture.Release();
 			++stats.notReady;
 			return;
 		}
-		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(segment, [&](org::RenderGraph&) {
 			// The lookups hold still for the whole frame: the installed publication's, which its payloads were built with.
 			const auto& lookups = Scene::FrameView::Get().GetLookups();
@@ -287,15 +288,17 @@ namespace DCLF
 			++async.used;
 			committed = payload;
 			// Copied: a frame that keeps the publication commits the payload again.
-			*frameOwners = payload->body->bindingOwners;
-			frameOwners->push_back(ahead);
+			owners.AddPayload(*payload);
+			owners.Add(ahead);
 			// The adopted snapshot whole (its versions, its draws, what they embed), until this execution retires: released on ORG's
 			// host thread through the cleanup queue, never before the GPU is done with the frame (the builder's drop of a replaced one is a
 			// CPU drop alone).
-			if (impl->adoptedSnapshot)
-				frameOwners->push_back(impl->adoptedSnapshot);
-			impl->CommitMainPayload(capture, blocks, in, *payload, resources, stats, *frameOwners, revision);
-		}, frameOwners);
+			owners.Add(impl->adoptedSnapshot);
+			impl->CommitMainPayload(capture, blocks, in, *payload, resources, stats, owners.List(), revision);
+			// The rows this execution draws, whichever commit latched them (the depth commit's draw families' rows, which this frame's
+			// colour epoch draws too, or a frame before's when this frame's depth epoch did not run).
+			owners.Seal(impl->scene.get());
+		}, owners.Handle());
 		impl->committedPayload[jobIndex] = committed;
 		impl->committedFrame[jobIndex] = Scene::FrameView::Get().GetFrame();
 		capture.Release();

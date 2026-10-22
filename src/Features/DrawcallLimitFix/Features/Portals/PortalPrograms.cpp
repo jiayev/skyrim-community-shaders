@@ -185,7 +185,7 @@ namespace DCLF::Features::Portals
 			}
 			// Each execution reading the latch's descriptor retains the backing until GPU retirement.
 			if (scene->current)
-				a_commit.bindingOwners.push_back(scene->current);
+				a_commit.executionOwners.push_back(scene->current);
 		}
 
 		// The frame's publication's descriptor (the depth commit's latch; 0: none this frame).
