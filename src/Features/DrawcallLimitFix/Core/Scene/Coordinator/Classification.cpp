@@ -125,7 +125,7 @@ namespace DCLF::Scene
 
 	void Coordinator::RefreshCategoryNodes(bool a_force)
 	{
-		// Diffed when new, or forced (the rescan after a load).
+		// Diffed when new, or forced (a batch saw a detach).
 		const auto* capture = categoryTaken.get();
 		if (!capture || (!a_force && capture->generation == channels.categoryAppliedGeneration.load(std::memory_order_relaxed)))
 			return;
@@ -253,9 +253,8 @@ namespace DCLF::Scene
 		const std::vector<RE::NiAVObject*>& a_addedRoots, std::uint8_t a_cause)
 	{
 		const TrackSource previousSource = addSource;
-		if (addSource != TrackSource::Rescan)
-			addSource = TrackSource::CategoryAppeared;
-		// Roots listed in walk order, then tracked together (AddSubtrees prepares on the pool for a rescan and merges in this order).
+		addSource = TrackSource::CategoryAppeared;
+		// Roots listed in walk order, then tracked together (AddSubtrees prepares on the pool and merges in this order).
 		std::vector<std::pair<RE::NiAVObject*, SubtreeSource>> walked;
 		for (auto* node : a_added) {
 			categoryFound[node] = { sceneFrame, a_cause };

@@ -752,7 +752,7 @@ namespace DCLF::Extensions
 				// A batch holds each channel's keys in a slot of its own (Coordinator::EventBatch::channelKeys).
 				if (lists.engineChannels.size() >= kEngineChannelSlots)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s engine channel {} is one past kEngineChannelSlots: grow it first", feature, a_channel.name));
-				lists.engineChannels.push_back({ std::string(a_channel.name), a_channel.kind, a_channel.apply, a_channel.loading, a_channel.wake, a_channel.namesKeys,
+				lists.engineChannels.push_back({ std::string(a_channel.name), a_channel.kind, a_channel.apply, a_channel.wake, a_channel.namesKeys,
 					a_channel.drain, a_channel.push });
 				return { static_cast<std::uint32_t>(lists.engineChannels.size() - 1) };
 			}

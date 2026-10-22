@@ -75,7 +75,7 @@ namespace DCLF::Scene
 			RE::NiNode* category = nullptr;
 		};
 		ankerl::unordered_dense::map<const RE::NiAVObject*, Root> roots;
-		// The category nodes new to the coordinator's set (all of them before a rescan): their children's keys.
+		// The category nodes new to the coordinator's set: their children's keys.
 		ankerl::unordered_dense::map<const RE::NiNode*, std::vector<const RE::NiAVObject*>> children;
 		// Every node and geometry under its new category nodes and new roots, held for the coordinator's references (copies of these) until
 		// it has applied a newer capture. "New" is against the capture the coordinator applied last, so each capture pins all it names.
@@ -181,9 +181,7 @@ namespace DCLF::Scene
 		// journaled families' sent epochs are the table families' own posts (Extensions::TableFamilySent).
 		LatestSlot<std::vector<Api::StandInRoot>> standInRootsPosted;
 		EventQueue<std::unique_ptr<PipelineConstantsPost>, 256> pipelineConstantsPosted;
-		// A load screen's marker, posted once a load after loadingSeen is raised: the coordinator drops what the load invalidates
-		// (ApplyLoading); while loadingSeen holds, a pass drains the engine's queues into the mirror's carry.
-		EventQueue<bool, 64> loadMarkers{ &WakeSceneLoadMarker };
+		// A load screen is up (FrameView::NoteLoadingScreen): the passes drain once a Present and frame start, and run no live check.
 		std::atomic<bool> loadingSeen{ false };
 		// The answers to the coordinator's requests.
 		EventQueue<MaterialAnswer> materialRequestsAnswered{ &WakeSceneMaterialAnswer };

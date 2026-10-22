@@ -78,7 +78,7 @@ namespace DCLF
 	{
 		static_assert(static_cast<std::uint32_t>(SceneWake::Count) <= 32, "a bit per source");
 		// While a load screen is up the engine's events are drained once a Present (NoteLoadingScreen's LoadDrain wake), not once a push:
-		// a load pushes thousands a frame, every one for the mirror's carry alone.
+		// a load pushes thousands a frame.
 		const bool engineEvent = a_source >= SceneWake::Attach && a_source <= SceneWake::SwitchEvent;
 		if (engineEvent && scenePassesLoading.load(std::memory_order_relaxed))
 			return;

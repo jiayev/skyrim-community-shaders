@@ -67,9 +67,9 @@ namespace DCLF::Scene
 			std::uint64_t installed = 0, kept = 0, skipped = 0;
 		};
 		/**
-		 * @brief Render thread, at Present and frame start (menus too): whether a load screen is up. On the first sighting posts a
-		 * marker (ApplyLoading) and withdraws the set (PassCapture::PublishSet(nullptr)); the first frame after catches up every
-		 * switch and captures every category node. Also records the switch events' thread (PushSwitch).
+		 * @brief Render thread, at Present and frame start (menus too): whether a load screen is up. On the first sighting raises
+		 * Channels::loadingSeen and withdraws the set (PassCapture::PublishSet(nullptr)); the first frame after catches up every
+		 * switch and captures the category nodes. Also records the switch events' thread (PushSwitch).
 		 */
 		bool NoteLoadingScreen();
 		/**
@@ -375,7 +375,7 @@ namespace DCLF::Scene
 		std::shared_ptr<const Tables> acceptedTables;
 		ProjectedTextures projectedTextures;
 		bool loadingPosted = false;  // render thread: the load's marker is posted
-		bool rescanCaptureAll = false;  // render thread: a load's marker posted, so the next category capture pins every category node
+		bool loadSinceCapture = false;  // render thread: a load came since the last category capture (the job before it is dropped)
 		// Render thread: by coordinator component, the deltas of the publications installed since the last adoption (AdoptedDeltas).
 		std::vector<std::vector<std::shared_ptr<const void>>> frameComponentDeltas;
 		// The installed publication (the adopted snapshot's, HandOverAtFrameStart).

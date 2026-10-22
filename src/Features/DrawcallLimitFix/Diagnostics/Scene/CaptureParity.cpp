@@ -958,7 +958,7 @@ namespace DCLF
 	void CaptureParity::ResolveUntracked(std::uint32_t a_frame)
 	{
 		constexpr std::uint32_t kStuckFrames = 60;
-		static constexpr const char* kSources[] = { "attach event", "category appeared", "rescan" };
+		static constexpr const char* kSources[] = { "attach event", "category appeared" };
 		auto& store = Scene::Coordinator::Get();
 		std::erase_if(untracked, [&](auto& a_entry) {
 			auto& [geometry, entry] = a_entry;

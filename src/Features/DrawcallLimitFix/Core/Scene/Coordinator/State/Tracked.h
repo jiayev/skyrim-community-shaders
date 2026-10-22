@@ -16,7 +16,6 @@ namespace DCLF::Scene
 		{
 			AttachEvent,       // an attach event's subtree walk
 			CategoryAppeared,  // the walk of a category node RefreshCategoryNodes found new
-			Rescan,            // the full rescan after a load
 		};
 		struct Tracked
 		{

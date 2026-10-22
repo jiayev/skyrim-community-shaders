@@ -260,37 +260,27 @@ namespace DCLF::Scene
 	{
 		// Switch events are taken on the render thread only (PushSwitch): this is it (Present and the frame's start).
 		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
-		// Nothing may walk the scene graph while a load screen is up. A load tears down and rebuilds
-		// TES::objRoot and the cell 3D under it, and the attach events queued across it name subtrees that
-		// are still being assembled; walking either gives a pointer that is stale or garbage.
+		// Nothing may walk the scene graph while a load screen is up. A load tears down and rebuilds TES::objRoot and the cell 3D
+		// under it; a live walk gives a pointer that is stale or garbage.
 		//
-		// The queues are still drained (by the coordinator's passes, their one consumer), because they hold references to
-		// attached subtrees and must not grow while the world is not rendered - but the events are discarded for the tracking rather
-		// than applied (the mirror keeps them: loadingCarry), and the first frame after the load rebuilds the tracked set from scratch.
-		// A load invalidates all of it anyway, so nothing is lost by not trying to track across it.
+		// The coordinator's passes apply the load's events as any others: the unloading world's detaches erase what it tracked, the
+		// loading world's attaches (captured at their hooks: the mirror's records, no walk) track what comes, under the category nodes
+		// the first capture after the load names. No table is written while the load is up (BuildScenePhase).
 		if (!IsLoadingScreenUp()) {
 			if (std::exchange(loadingPosted, false)) {
 				channels.loadingSeen.store(false, std::memory_order_release);
-				// The engine's events wake the passes again, and one takes the load's carry now.
+				// The engine's events wake the passes again.
 				SetScenePassLoading(false);
 				WakeScenePass(SceneWake::LoadDrain);
 			}
 			return false;
 		}
-		// Only the walking stops. The tracked set is deliberately left alone until the load is over:
-		// dropping it here would release the game buffers the tables reference while the previous frame's
-		// epoch is still in flight, and a draw would read a freed device address (device lost). The entries
-		// hold NiPointers, so holding them across the load is safe, and the rescan replaces them on a normal frame.
-		// What the load invalidates of the coordinator's (the rescan, the drained events not yet applied, the move events) is
-		// dropped by the coordinator, told by a marker batch posted once a load (ApplyLoading): nothing of its state is written here.
-		// LoadingSeen first, then the marker: a pass that takes the marker sees the load, and drains into the mirror's carry.
 		if (!std::exchange(loadingPosted, true)) {
 			channels.loadingSeen.store(true, std::memory_order_release);
-			channels.loadMarkers.Push(true);
-			// The first category capture after the load pins every category node (the coordinator rescans them all), and is made
-			// whatever the signature says; the switches are brought up to date at the first frame's start after it (CatchUpSwitches),
-			// and PrimaryCull reads them all again from the next frame's start.
-			rescanCaptureAll = true;
+			// The first category capture after the load is made whatever the signature says, and the frame start's job of before it is
+			// not resumed (its capture and requests name the world it tore down); the switches are brought up to date at the first
+			// frame's start after it (CatchUpSwitches), and PrimaryCull reads them all again from the next frame's start.
+			loadSinceCapture = true;
 			categoryCapturePending = true;
 			worldCatchUpPending = true;
 			switchResyncNext = true;
@@ -298,8 +288,8 @@ namespace DCLF::Scene
 		// The set does not survive a load: it names geometry from the cell being torn down, and withholds its passes from the
 		// engine. Nothing is withheld until the next commit publishes the set again.
 		PublishFrameClaims(nullptr);
-		// While it is up the engine's events wake no pass (a load pushes thousands a frame, each for the mirror's carry alone): one
-		// pass drains them here, once a Present and frame start.
+		// While it is up the engine's events wake no pass (a load pushes thousands a frame): one pass applies them here, once a Present
+		// and frame start.
 		SetScenePassLoading(true);
 		WakeScenePass(SceneWake::LoadDrain);
 		return true;

@@ -208,14 +208,12 @@ namespace DCLF::Diagnostics
 				SceneDiagnostics().mirror.eventFields[SceneMirror::Key(a_event.key, a_event.type)] |= a_event.fields;
 		}
 
-		void OnEventsCollecting(const EventsCollecting& a_event)
+		void OnEventsCollecting(const EventsCollecting&)
 		{
 			// The probe the render thread posted, taken before the drains (so every event older than its capture is in this batch or an
-			// earlier one); a load screen's pass applies no batch, and drops it.
+			// earlier one).
 			auto& m = SceneDiagnostics().mirror;
 			m.batchProbe = m.probePosted.Take();
-			if (a_event.loading)
-				m.batchProbe.reset();
 		}
 
 		void OnEventsApplied(const MirrorEventsApplied& a_event)
@@ -228,8 +226,6 @@ namespace DCLF::Diagnostics
 				if (engineChannels[k].namesKeys)
 					for (const void* key : a_event.channelKeys[k])
 						m.eventKeys.insert(key);
-			for (const void* key : a_event.named)
-				m.eventKeys.insert(key);
 			if (m.batchProbe)
 				m.probe = std::move(m.batchProbe);
 		}

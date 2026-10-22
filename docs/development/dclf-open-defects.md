@@ -257,6 +257,13 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     controller write the retake missed.
 -   **`<- UNPINNED FADE NODE`** fires for requests still in flight at the report. It should fire only for a request left
     unanswered across reports.
+-   **Light candidates parity: a dependent with no geometry row (`<- CANDIDATES`).** Seen once (run coc1, 2026-10-22, turn-only
+    with `coc WhiterunBanneredMare` at frame 600 and `coc WhiterunDragonsreach` at 1500), in the first run after loads stopped
+    rescanning the tracked set. About 30 s after the return to Dragonsreach, one root's light entry (`0x1f862fff100`) listed a
+    dependent that the light table holds no geometry row for. It stayed so at every check until the run ended (1 then 5 of 10
+    checks a window). The table rewrites an entry only when its verdict or signature changes (`UpdateLightCandidates`). Before
+    the change, every load rebuilt the tables from nothing. The run before the change was not repeated. Nothing else failed in
+    that run, and the death-reload run (die3) showed no such failure.
 -   **Long-standing flags**, each seen in some runs: `<- CUT`, the PS25 `<- MATERIAL PORT` race and `<- FADE`. (NO CASCADES fired in
     every interior window, where the sun does not accumulate: it now counts exterior frames only. Not seen on the tree-forest route.)
 -   **Seen once, watch for a repeat:** capture parity's "2 tracked but excluded" while NPCs crowded the view (the report now breaks

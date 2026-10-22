@@ -438,17 +438,16 @@ namespace DCLF::Scene
 
 		/**
 		 * @brief What the job pins (RunFrameStartItem): category nodes new to the scene work's set (children's keys, subtrees) and new roots'
-		 * subtrees. Its set is the capture it applied last (a_applied), read from the render thread's own copy; none applied, or a rescan, makes
-		 * all new.
+		 * subtrees. Its set is the capture it applied last (a_applied), read from the render thread's own copy; none applied makes all new.
 		 */
 		void PlanCategoryPins(FrameStartJob& a_job, const CategoryCapture& a_capture, const std::deque<std::shared_ptr<const CategoryCapture>>& a_held,
-			std::uint64_t a_applied, bool a_rescanAll)
+			std::uint64_t a_applied)
 		{
 			const CategoryCapture* base = nullptr;
 			for (const auto& held : a_held)
 				if (held->generation == a_applied)
 					base = held.get();
-			const bool all = a_rescanAll || !base;
+			const bool all = !base;
 			for (auto* node : a_capture.nodes)
 				if (all || !base->nodes.contains(node))
 					a_job.pinNodes.push_back(node);
@@ -517,11 +516,11 @@ namespace DCLF::Scene
 		if (a_running) {
 			// The last frame's job: dropped once done (its references already handed to EngineReleases), resumed in this window when a
 			// refused lease left items, and dropped unfinished when a load came between (its capture and requests name the old world; the
-			// next capture is forced and whole).
+			// next capture is forced).
 			if (frameStartJob && !frameStartJob->running.load(std::memory_order_acquire)) {
 				if (frameStartJob->next >= frameStartJob->Items())
 					frameStartJob.reset();
-				else if (rescanCaptureAll)
+				else if (loadSinceCapture)
 					frameStartJob.reset();  // an unposted capture's roots were pushed by the render thread; the forced capture follows them
 			}
 			if (frameStartJob) {
@@ -667,12 +666,12 @@ namespace DCLF::Scene
 			capture->held.emplace_back(node);
 		auto& job = *frameStartJob;
 		job.capture = capture;
-		PlanCategoryPins(job, *capture, categoryCapturesHeld, applied, rescanCaptureAll);
+		PlanCategoryPins(job, *capture, categoryCapturesHeld, applied);
 		PushCategoryRoots(*capture, categoryCapture.get(), categoryMirrorRecords, categoryMirrorCaptures);
 		// Held until superseded by an applied one; posted by the job after its pins.
 		categoryCapturesHeld.push_back(capture);
 		categoryCapture = std::move(capture);
-		rescanCaptureAll = false;
+		loadSinceCapture = false;
 		timed();
 	}
 

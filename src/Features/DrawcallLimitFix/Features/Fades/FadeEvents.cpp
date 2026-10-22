@@ -77,17 +77,14 @@ namespace DCLF::Features::Fades
 	void RegisterEngine(Api::InstallContext& a_context, Api::EngineChannelId& a_snaps, Api::EngineChannelId& a_amounts)
 	{
 		// Drained and applied where Core's were: snaps, then amounts, before the property events (the other BeforeStructural channels
-		// after them: none today). A load screen keeps both named for the mirror's parity; a normal pass's keys are not named (their
-		// writers push the mirror's value). No wake: a snap comes with its cell's attach, an amount every frame of a fade.
+		// after them: none today). Their keys are not named for the mirror's parity (their writers push the mirror's value). No wake: a snap comes with its cell's attach, an amount every frame of a fade.
 		a_snaps = a_context.RegisterEngineChannel({ .name = "fade snaps",
 			.kind = Api::ChannelKind::Keys,
 			.apply = Api::ChannelApply::BeforeStructural,
-			.loading = Api::ChannelLoading::KeepKeys,
 			.drain = &DrainFadeSnaps });
 		a_amounts = a_context.RegisterEngineChannel({ .name = "fade amounts",
 			.kind = Api::ChannelKind::Keys,
 			.apply = Api::ChannelApply::BeforeStructural,
-			.loading = Api::ChannelLoading::KeepKeys,
 			.drain = &DrainFadeAmounts,
 			.push = &PushFadeAmount });
 	}

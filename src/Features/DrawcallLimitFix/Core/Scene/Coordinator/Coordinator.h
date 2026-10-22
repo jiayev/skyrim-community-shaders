@@ -437,7 +437,7 @@ namespace DCLF
 		/** @brief The category node an object hangs under, or null (diagnostics). */
 		RE::NiNode* CategoryNodeOf(RE::NiAVObject* a_object) const { return FindCategoryNodeLive(a_object, nullptr); }
 		/**
-		 * @brief The frame a category node was found and the refresh's cause (0 signature change, 1 forced by a detach or rescan); false
+		 * @brief The frame a category node was found and the refresh's cause (0 signature change, 1 forced by a detach); false
 		 * when unknown (diagnostics).
 		 */
 		bool GetCategoryInfo(const RE::NiNode* a_node, std::uint32_t& a_frame, std::uint8_t& a_cause) const;
@@ -480,8 +480,6 @@ namespace DCLF
 		ResidentStats residentStats;
 		SetStats setStats;
 		Stats stats;
-		// A load screen's attach and detach events for the mirror (taken by the first pass after the load).
-		std::shared_ptr<EventBatch> loadingCarry;
 		/**
 		 * @brief A BSShaderMaterial reference taken and dropped the engine's way (AE): the material database (manager 0x143187758) shares
 		 * one material among equal properties, and its release (FUN_1414f7a40, used by BSShaderProperty::SetMaterial) decrements under the
@@ -623,7 +621,7 @@ namespace DCLF
 		RE::NiPointer<RE::NiAVObject> OwnedRoot(const RE::NiAVObject* a_root);
 
 		// The category nodes and the CategoryRoot views' roots: State/Categories.h (CoordinatorCategories).
-		/** @brief Diffs the category nodes and portal roots against the taken capture when it is new or a_force (the post-load rescan). */
+		/** @brief Diffs the category nodes and portal roots against the taken capture when it is new or a_force (a batch saw a detach). */
 		void RefreshCategoryNodes(bool a_force = false);
 		// RefreshCategoryNodes' stages: the entries of the cells and portal roots that went away erased; the new ones' subtrees tracked.
 		void DropRemovedCategories(const CategoryCapture& a_capture, bool a_removedRoot);
@@ -847,21 +845,14 @@ namespace DCLF
 		void ApplySwitchEvents(bool a_full);
 		/**
 		 * @brief Drains each engine queue up to where it stood (tracker stack, fades, property, node and switch events, the features' engine
-		 * channels) into the pass's batch (under a load screen: the carry), with the mirror probe; posts the switch catch-ups.
+		 * channels) into the pass's batch (a load screen's too), with the mirror probe; posts the switch catch-ups.
 		 */
 		std::shared_ptr<EventBatch> CollectEvents();
-		/**
-		 * @brief Applies the load markers (ApplyLoading), then a_batch: category refresh, attaches, detaches, validation slice, structural
-		 * events.
-		 */
+		/** @brief Applies a_batch: category refresh, attaches, detaches, validation slice, structural events. */
 		void ApplyEvents(std::shared_ptr<EventBatch> a_batch);
-		/** @brief Drops what a load screen invalidated (NoteLoadingScreen's marker). */
-		void ApplyLoading();
-		void ApplyBatch(std::shared_ptr<EventBatch> a_batch);
-		// ApplyBatch's stages: the post-load rescan's clear, the category refresh and retries, the attach/detach merge (its detaches
-		// erased last), the leaf updates' property holds.
-		void ClearForRescan();
-		void RefreshBatchCategories(const BatchIndex& a_index, bool a_rescanned);
+		// ApplyEvents' stages: the category refresh and retries, the attach/detach merge (its detaches erased last), the leaf updates'
+		// property holds.
+		void RefreshBatchCategories(const BatchIndex& a_index);
 		void ApplyAttachDetach(const BatchIndex& a_index);
 		void ApplyDetaches(const std::vector<RE::BSGeometry*>& a_detached);
 		void HoldLeafProperties(const BatchIndex& a_index);
@@ -911,8 +902,8 @@ namespace DCLF
 		/** @brief After a walk: frees every slot it did not write and sorts the per-frame index lists. */
 		void SweepObjectSlots();
 		/**
-		 * @brief Frees an entry's slot as it leaves the tracked set (outside the walk), so a rescan's entries reuse slots instead of
-		 * growing the arrays.
+		 * @brief Frees an entry's slot as it leaves the tracked set (outside the walk), so the entries tracked after it reuse slots instead
+		 * of growing the arrays.
 		 */
 		void ReleaseObjectSlot(Tracked& a_entry);
 		/** @brief The entry's layer slot for base slot a_base: its own or a new one. */
@@ -1324,8 +1315,6 @@ namespace DCLF
 		void ComponentsDense(bool a_begun);
 		/** @brief EraseTracked, after the entry's slot is released. */
 		void ComponentsForgot(const RE::BSGeometry* a_geometry);
-		/** @brief The rescan, after the tracked set is cleared. */
-		void ComponentsForgotAll();
 		/** @brief RecycleRetired: a range component a_component retired (Tables::kRetiredComponentRange) is free. */
 		void ComponentRecycled(std::uint32_t a_component, std::uint32_t a_first, std::uint32_t a_count);
 		/**
@@ -1372,8 +1361,6 @@ namespace DCLF
 		 * hides ungated), each marking component told (ComponentsDetached).
 		 */
 		void UnmarkDetached(const void* a_root, std::span<const void* const> a_nodes);
-		/** @brief The rescan: every component's rescan hook. */
-		void ComponentsRescan();
 		/** @brief A newly tracked entry under a marked root (the nearest on its chain): the marking component's underMark hook. */
 		void ComponentsUnderMark(const RE::BSGeometry* a_geometry, const Api::Mark& a_mark);
 		/** @brief The commit's settle (a_live: the scene built), the pass's take before CollectEvents, the deltas taken (published). */
