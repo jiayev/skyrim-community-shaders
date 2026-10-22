@@ -34,6 +34,11 @@ namespace DCLF::Features::TreeLod
 	// one owner: Features/Manifest.cpp lists it).
 	inline constexpr Api::ViewRoot kFacesRoot = Api::ViewRoot::LodTrees;
 
+	// CS_DCLF_TREE_LOD_TINT, set at install: the main colour draw's push word 3 (DistantTree.hlsl's DCLFTreeDebugTint).
+	inline bool debugTint = false;
+	// CS_DCLF_TREE_LOD_STAGES, set at install: the main draws' stage stamps (TreeInstancesLayout.h, kStageSlots), read back with the counts.
+	inline bool debugStages = false;
+
 	// TreeLodFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
 

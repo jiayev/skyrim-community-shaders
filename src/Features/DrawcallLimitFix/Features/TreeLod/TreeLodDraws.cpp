@@ -3,6 +3,7 @@
 
 // volk must precede every Vulkan header of the translation unit (DrawPipelinesRhi.h's FamilyPipelines).
 #include <rhi_interop_vulkan.h>
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
@@ -31,9 +32,17 @@ namespace DCLF::Features::TreeLod
 		// DistantTree shader as input; until the frame's catalog has them the engine draws tree LOD), the atlas it draws with.
 		bool Decide(const Api::DrawFamilyFrame& a_frame)
 		{
-			if (!a_frame.scene || !TablesOf(*a_frame.scene) || !RenderMirror().Size())
-				return false;
-			return a_frame.Pipelines(TreeLodAtlasReady());
+			const bool tables = a_frame.scene && TablesOf(*a_frame.scene);
+			const bool shapes = RenderMirror().Size() != 0;
+			const bool atlas = TreeLodAtlasReady();
+			const bool pipelines = tables && shapes && a_frame.Pipelines(atlas);
+			// TEMP (tree LOD flicker): every change of the decision, with what decided it.
+			static int lastDecision = -1;
+			if ((pipelines ? 1 : 0) != lastDecision) {
+				lastDecision = pipelines ? 1 : 0;
+				logger::info("[DCLF] tree LOD decision at frame {}: {} (tables {}, shapes {}, atlas {})", a_frame.frame, pipelines ? "DCLF's" : "the engine's", tables, shapes, atlas);
+			}
+			return pipelines;
 		}
 
 		const void* ProgramSource()
@@ -75,7 +84,8 @@ namespace DCLF::Features::TreeLod
 			rhi::ResourceHandle a_visible)
 		{
 			using TreeInstances::VisibleHeader;
-			std::uint32_t words[kDrawPushWords]{ static_cast<std::uint32_t>(a_draw), static_cast<std::uint32_t>(a_draw >> 32), a_phaseTwo ? 1u : 0u };
+			std::uint32_t words[kDrawPushWords]{ static_cast<std::uint32_t>(a_draw), static_cast<std::uint32_t>(a_draw >> 32), a_phaseTwo ? 1u : 0u,
+				a_colour && debugTint ? 1u : 0u };
 			const std::uint64_t arguments = a_colour ? offsetof(VisibleHeader, colour) : a_phaseTwo ? offsetof(VisibleHeader, phaseTwo) : offsetof(VisibleHeader, phaseOne);
 			a_commands.BindPipeline(a_colour ? a_pipelines.colour : a_pipelines.depth);
 			a_commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);

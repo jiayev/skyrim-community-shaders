@@ -15,6 +15,8 @@
 #include <rhi.h>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -131,7 +133,55 @@ namespace DCLF::Draws
 	struct TreeLodReadbackPrepared
 	{
 		std::shared_ptr<Features::TreeLod::TreeLodCounts> counts;
+		std::shared_ptr<org::Buffer> stages;  // CS_DCLF_TREE_LOD_STAGES
 	};
+
+	/**
+	 * @brief CS_DCLF_TREE_LOD_STAGES: the stamp ring as copied (TreeInstancesLayout.h): every frame the depth vertex stage stamped, older than
+	 * the newest (whose colour pass may not have run at the copy), judged once - each stage that did not stamp it logged.
+	 */
+	void JudgeTreeLodStages(Features::TreeLod::TreeLodCounts& a_counts, const std::uint32_t* a_words)
+	{
+		using namespace TreeInstances;
+		std::uint32_t newest = 0;
+		for (std::uint32_t s = 0; s < kStageSlots; ++s)
+			newest = std::max(newest, a_words[s * kStageWords + kStageDepthVS]);
+		std::array<std::uint32_t, kStageSlots> order{};
+		for (std::uint32_t s = 0; s < kStageSlots; ++s)
+			order[s] = s;
+		std::sort(order.begin(), order.end(), [&](std::uint32_t a, std::uint32_t b) { return a_words[a * kStageWords] < a_words[b * kStageWords]; });
+		for (const std::uint32_t s : order) {
+			const std::uint32_t* w = a_words + s * kStageWords;
+			const std::uint32_t frame = w[kStageDepthVS];
+			if (!frame || frame >= newest || frame <= a_counts.stagesJudged)
+				continue;
+			a_counts.stagesJudged = frame;
+			++a_counts.stageFrames;
+			const bool missed = w[kStageDepthPS] != frame || w[kStageColourVS] != frame || w[kStageColourPS] != frame;
+			const auto clip = [&](std::uint32_t a_word) {
+				return fmt::format("({} {} {} {})", std::bit_cast<float>(w[a_word]), std::bit_cast<float>(w[a_word + 1]), std::bit_cast<float>(w[a_word + 2]),
+					std::bit_cast<float>(w[a_word + 3]));
+			};
+			// The first vertex's clip position, depth's against colour's (both drawn: the colour pass tests EQUAL against it).
+			const bool clipDiffers = w[kStageColourVS] == frame && std::memcmp(w + 8, w + 12, 16) != 0;
+			a_counts.clipDiffers += clipDiffers ? 1 : 0;
+			if (clipDiffers && ++a_counts.clipLogged <= 100)
+				logger::info("[DCLF] tree LOD stages, frame {}: the first vertex's clip position differs: depth {}, colour {}{} <- CLIP DIFFERS", frame, clip(8), clip(12),
+					missed ? " (a stage missed)" : "");
+			if (!missed && (frame % 120) == 0)
+				logger::info("[DCLF] tree LOD stages, frame {}: all stages; clip depth {}, colour {}", frame, clip(8), clip(12));
+			if (!missed)
+				continue;
+			++a_counts.stageMisses;
+			if (++a_counts.stageLogged <= 400)
+				logger::info("[DCLF] tree LOD stages, frame {}: depth VS {}, phase 2 VS {}, depth PS {}, colour VS {}, colour PS {}; the colour VS saw phase 1 {}, phase 2 {}, colour {}; clip depth {}, colour {} <- MISSED",
+					frame, w[kStageDepthVS], w[kStagePhaseTwoVS], w[kStageDepthPS], w[kStageColourVS], w[kStageColourPS], w[kStageColourSawPhaseOne],
+					w[kStageColourSawPhaseTwo], w[kStageColourSawColour], clip(8), clip(12));
+		}
+		if (a_counts.stageFrames && a_counts.stageFrames % 600 == 0)
+			logger::info("[DCLF] tree LOD stages: {} frames judged, {} with a stage missing, {} with the clip positions differing", a_counts.stageFrames,
+				a_counts.stageMisses, a_counts.clipDiffers);
+	}
 
 	/** @brief Copies tree LOD's list header to the frame slot's host buffer after phase 2, first summing what the slot held. */
 	class TreeLodReadbackPass final : public org::TypedRenderGraphPass<TreeLodReadbackPass, TreeLodReadbackPrepared, TreeLodReadbackBindings>
@@ -152,7 +202,7 @@ namespace DCLF::Draws
 
 		TreeLodReadbackPrepared Prepare(const TreeLodReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
-			return { tables->counts };
+			return { tables->counts, tables->stages };
 		}
 
 		static void Record(const TreeLodReadbackBindings& a_bindings, const TreeLodReadbackPrepared& a_frame, org::PassRecordContext& a_recording)
@@ -174,11 +224,16 @@ namespace DCLF::Draws
 					counts.phaseOne.fetch_add(header.phaseOne[1], std::memory_order_relaxed);
 					counts.retests.fetch_add(header.retests, std::memory_order_relaxed);
 					counts.phaseTwo.fetch_add(header.phaseTwo[1], std::memory_order_relaxed);
+					if (a_frame.stages)
+						JudgeTreeLodStages(counts, reinterpret_cast<const std::uint32_t*>(static_cast<const std::byte*>(mapped) + sizeof(header)));
 					resource.Unmap(0, 0);
 				}
 			}
 			a_recording.Commands().CopyBufferRegion(counts.readback[slot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.visible).GetHandle(), 0,
 				sizeof(TreeInstances::VisibleHeader));
+			if (a_frame.stages)
+				a_recording.Commands().CopyBufferRegion(counts.readback[slot]->GetAPIResource().GetHandle(), sizeof(TreeInstances::VisibleHeader),
+					a_frame.stages->GetAPIResource().GetHandle(), 0, TreeInstances::kStageSlots * TreeInstances::kStageWords * 4);
 			counts.filled[slot] = 1;
 		}
 

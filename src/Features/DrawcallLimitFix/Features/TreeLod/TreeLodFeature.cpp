@@ -19,6 +19,14 @@ namespace DCLF::Features::TreeLod
 			const auto audit = a_context.RegisterSwitch({ .name = "CS_DCLF_TREE_LOD_AUDIT", .kind = Api::SwitchKind::Diagnostic, .reduced = Api::SwitchReduced::Never,
 				.description = "1: tree LOD instances the engine leaves shown over a loaded, visible full tree (and hidden ones without one), every 60 frames",
 				.after = "CS_DCLF_TRACE_TEXTURE_PATHS" });
+			const auto tint = a_context.RegisterSwitch({ .name = "CS_DCLF_TREE_LOD_TINT", .kind = Api::SwitchKind::Diagnostic, .reduced = Api::SwitchReduced::Never,
+				.description = "1: DCLF's tree LOD colour draws write solid magenta, so screen captures find its pixels (tools/dclf-corrupt-frames.py --key magenta)",
+				.after = "CS_DCLF_TREE_LOD_AUDIT" });
+			debugTint = SwitchEnabled(tint);
+			const auto stages = a_context.RegisterSwitch({ .name = "CS_DCLF_TREE_LOD_STAGES", .kind = Api::SwitchKind::Diagnostic, .reduced = Api::SwitchReduced::Never,
+				.description = "1: each stage of the main tree LOD draws (depth and colour vertex and pixel stages) stamps the frame; frames a stage missed are logged",
+				.after = "CS_DCLF_TREE_LOD_TINT" });
+			debugStages = SwitchEnabled(stages);
 			// Where Core's was: after the refraction's, behind Features/Particles', Features/Billboards', Features/SwitchNodes' and
 			// Features/Lod's (which register before this feature). Its change drops no classification cache: tree LOD is drawn from the
 			// mirror, not classified.

@@ -3,6 +3,7 @@
 
 // Helpers.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodTables.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
@@ -35,6 +36,8 @@ namespace DCLF::Features::TreeLod
 		using TreeInstances::DrawRow;
 		using TreeInstances::Instance;
 		using TreeInstances::kMaxGroupInstances;
+		using TreeInstances::kStageSlots;
+		using TreeInstances::kStageWords;
 		using TreeInstances::kVisibleHeaderWords;
 		using TreeInstances::MeshRow;
 		using TreeInstances::ShapeRow;
@@ -84,10 +87,14 @@ namespace DCLF::Features::TreeLod
 				logger::warn("[DCLF] Tree LOD's tables have no device address; tree LOD stays native");
 				return nullptr;
 			}
+			if (debugStages) {
+				tables->stages = Draws::CreateWords(kStageSlots * kStageWords, false, "cs.dclf.tree-lod-stages");
+				tables->stagesAddress = AddressOf(device, *tables->stages);
+			}
 			if (auto* host = RenderGraphRuntime::Get().Host()) {
 				auto counts = std::make_shared<TreeLodCounts>();
 				for (std::uint32_t i = 0; i < host->FrameSlots(); ++i)
-					counts->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, sizeof(VisibleHeader)));
+					counts->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, sizeof(VisibleHeader) + kStageSlots * kStageWords * 4));
 				counts->filled.assign(host->FrameSlots(), 0u);
 				tables->counts = std::move(counts);
 			}
@@ -135,7 +142,7 @@ namespace DCLF::Features::TreeLod
 		 * row's addresses are theirs. Retired mesh leases and bindings go to the execution (a_owners).
 		 */
 		void UploadTreeLod(const Draws::NamedVersions& a_sealed, Mirror& a_mirror, TreeLodTables& a_tables, Draws::LatchedUploads& a_uploads,
-			std::vector<std::shared_ptr<const void>>& a_owners, bool a_draw)
+			std::vector<std::shared_ptr<const void>>& a_owners, bool a_draw, std::uint32_t a_frame)
 		{
 			a_tables.ready.store(false, std::memory_order_release);
 			if (!a_tables.cull || !a_tables.shapes)
@@ -184,6 +191,9 @@ namespace DCLF::Features::TreeLod
 			row.visible = visible.deviceAddress + kVisibleHeaderWords * sizeof(std::uint32_t);
 			row.alphaRef = 128.0f / 255.0f;
 			row.maxIndices = std::max(a_mirror.MaxIndices(), 1u);
+			row.statsLow = static_cast<std::uint32_t>(a_tables.stagesAddress);
+			row.statsHigh = static_cast<std::uint32_t>(a_tables.stagesAddress >> 32);
+			row.frame = a_frame;
 			// The engine's tree LOD draws use the worldspace's atlas and alpha reference 128/255 (dclf-architecture.md, "Tree LOD: the draws").
 			if (a_draw && a_mirror.MaxIndices() && TreeLodTextureBinding(row, a_owners))
 				row.shapeSlots = shapeSlots;
@@ -207,7 +217,7 @@ namespace DCLF::Features::TreeLod
 				return;
 			auto& mirror = RenderMirror();
 			const bool owned = IndirectDraws::Get().DrawFamilyOwned(Api::DrawFamily::TreeInstances);
-			UploadTreeLod(a_commit.adopted, mirror, *tables, *a_commit.latched, a_commit.bindingOwners, owned);
+			UploadTreeLod(a_commit.adopted, mirror, *tables, *a_commit.latched, a_commit.bindingOwners, owned, a_commit.frame);
 			// The engine's passes were withheld: a commit that cannot draw leaves a hole.
 			if (owned && !tables->ready.load(std::memory_order_acquire))
 				Diagnostics::Notify(TreeLodMissed{ a_commit.frame, mirror.ShapeSlots(), a_commit.adopted.Of(tables->shapes).units });
