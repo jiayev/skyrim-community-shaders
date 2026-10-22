@@ -52,12 +52,13 @@ namespace DCLF::Features::Grass
 			const auto& adopted = impl->Adopted();
 			const auto missed = missedCommits;
 			a_text += fmt::format("[DCLF] grass draws: {} ({} depth commits, {} shape slots and {} buckets sent; tables {} instance, {} shape, {} bucket and {} mesh "
-								  "slots; {} buckets waiting for a texture, {} commits past {} buckets; {} commits that could not draw a withheld frame){}\n",
+								  "slots; {} buckets waiting for a texture, {} commits past {} buckets, {} drawing the tables' last changes while they grow; {} commits "
+								  "that could not draw a withheld frame){}\n",
 				IndirectDraws::Get().DrawFamilyOwned(Api::DrawFamily::Grass) ? "DCLF's" : "the engine's", tables->uploads, tables->shapesSent, tables->bucketsSent,
 				Draws::NamedUnits(adopted, tables->instances), Draws::NamedUnits(adopted, tables->shapes), Draws::NamedUnits(adopted, tables->buckets),
-				Draws::NamedUnits(adopted, tables->meshes), tables->unboundBuckets, tables->overBuckets, GrassInstances::kMaxBuckets, missed,
+				Draws::NamedUnits(adopted, tables->meshes), tables->unboundBuckets, tables->overBuckets, GrassInstances::kMaxBuckets, tables->outgrown, missed,
 				missed ? " <- GRASS HOLES" : "");
-			tables->uploads = tables->shapesSent = tables->bucketsSent = tables->unboundBuckets = tables->overBuckets = 0;
+			tables->uploads = tables->shapesSent = tables->bucketsSent = tables->unboundBuckets = tables->overBuckets = tables->outgrown = 0;
 			if (auto& counts = tables->counts)
 				CullLine(*counts, a_text);
 		}

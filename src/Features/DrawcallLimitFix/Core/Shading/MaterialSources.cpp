@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialPort.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
@@ -52,7 +53,6 @@ namespace DCLF::MaterialSources
 			{ 24, 0x4 },  // LODTexParams.z (MTLand, LODLand): 0x142032fda
 			{ 31, 0xC },  // LandscapeTexture5to6IsSnow.zw (MTLand with Snow): 0x142035548, 1 / 0x1420355f0
 		} };
-		constexpr std::uint32_t kVSTexcoordOffset = 11;
 		constexpr std::uint32_t kCharacterLightSlot = 11;
 
 		std::vector<std::uint32_t> BuildPSPositions()
@@ -187,7 +187,6 @@ namespace DCLF::MaterialSources
 	{
 		if (a_from.kind != kMaterialKindLighting || a_to.kind != kMaterialKindLighting)
 			return;  // IBLParams is Lighting's
-		constexpr std::uint32_t kPSIBLParams = 29;
 		const auto& layout = LightingPSLayout();
 		for (std::uint32_t c = 0; c < layout.size[kPSIBLParams]; ++c)
 			a_to.ps.floats[layout.offset[kPSIBLParams] + c] = a_from.ps.floats[layout.offset[kPSIBLParams] + c];

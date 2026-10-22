@@ -153,6 +153,12 @@ namespace DCLF::Diagnostics
 			std::vector<const RE::BSGeometry*> geometry;
 			// Held, the snapshot's tables keep every named geometry alive (retirement chain) until the readback.
 			std::shared_ptr<const SceneTables> tables;
+			// The tables the colour payload was built from (its stream views'; TEMP: the samples say whether they are the snapshot's).
+			std::shared_ptr<const SceneTables> payloadTables;
+			// TEMP: per object, the lists naming it (bit 0 the colour payload's resident region, 1 its body's input list, 2 and 3 the
+			// depth payload's), and the input flags of the first.
+			std::vector<std::uint8_t> listedBy;
+			std::vector<std::uint32_t> listedFlags;
 			// Frustum stamps (fade test drops), and per member whether its live bound (kept) is inside the depth build's frustum:
 			// culling must not reject one inside.
 			winrt::com_ptr<ID3D11Buffer> frustumStaging;
@@ -227,6 +233,8 @@ namespace DCLF::Diagnostics
 			};
 			ankerl::unordered_dense::map<std::uint64_t, ExtrasMirror> extrasMirrors;
 			ParityCounter extras;
+			// Rows that differed in blocks no live object owns (never read; not compared).
+			std::uint64_t extrasFreedRows = 0;
 		} kept;
 		// The main commits' log (CommitLog.cpp): unfilled frame buffers by register, fade inputs varied, the culling setup logged, the epoch
 		// lines' periods.

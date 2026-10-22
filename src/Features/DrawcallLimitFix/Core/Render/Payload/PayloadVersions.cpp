@@ -90,13 +90,13 @@ namespace DCLF::Draws
 		}
 
 		/** @brief CS_DCLF_PERSISTENT_PARITY: the extras backing a_lease, caught up from a_caughtUpFrom to a_rows, against its mirror. */
-		void CheckExtras(const ExtrasOut& a_rows, const org::services::BackingLease& a_lease, std::uint64_t a_caughtUpFrom)
+		void CheckExtras(const ExtrasOut& a_rows, const org::services::BackingLease& a_lease, std::uint64_t a_caughtUpFrom, const SceneTables* a_tables)
 		{
 			std::vector<float>* mirror = nullptr;
 			Diagnostics::Notify(Diagnostics::ExtrasSending{ a_lease, mirror });
 			if (mirror)
 				EmitExtras(a_rows, a_caughtUpFrom, mirror, [](const void*, std::size_t, std::size_t) {});
-			Diagnostics::Notify(Diagnostics::ExtrasSent{ a_lease, a_rows });
+			Diagnostics::Notify(Diagnostics::ExtrasSent{ a_lease, a_rows, a_tables });
 		}
 	}
 
@@ -270,7 +270,7 @@ namespace DCLF::Draws
 		const auto shared = ShareUnchanged(requests, previous.get(), geometries.streamRows, mainList, shadowList);
 		JudgeAppends(requests, shared, previous.get(), { a_views, geometries, a_main, a_shadow, region, mainList, shadowList, out->mainInputsAt, out->shadowInputsAt });
 		auto publication = set->Publish(requests, a_uploads);
-		CheckExtrasBacking(a_views.extras, publication, shared, previous.get());
+		CheckExtrasBacking(a_views.extras, a_views.tables.get(), publication, shared, previous.get());
 		for (std::size_t k = 0; k < kPayloadParts; ++k) {
 			if (shared[k]) {
 				out->parts[k] = { previous->parts[k].srvIndex, previous->parts[k].address, units[k] };
@@ -375,16 +375,16 @@ namespace DCLF::Draws
 		}
 	}
 
-	void PayloadBuilder::CheckExtrasBacking(const ExtrasOut& a_rows, const org::services::JournaledPublication& a_publication, const std::array<bool, kPayloadParts>& a_shared,
-		const PayloadVersions* a_previous) const
+	void PayloadBuilder::CheckExtrasBacking(const ExtrasOut& a_rows, const SceneTables* a_tables, const org::services::JournaledPublication& a_publication,
+		const std::array<bool, kPayloadParts>& a_shared, const PayloadVersions* a_previous) const
 	{
 		// CS_DCLF_PERSISTENT_PARITY: the extras rows are checked by the backing that holds them, as they are caught up into it (the
 		// observer's mirror of that backing, replayed from what it held before; null without the observer). A shared backing is
 		// caught up from where it is (nothing to replay) and checked again; an appended one from where it was.
 		if (const auto& extras = a_publication.parts[Part(PayloadPart::Extras)]; a_shared[Part(PayloadPart::Extras)])
-			CheckExtras(a_rows, a_previous->leases[Part(PayloadPart::Extras)], kept[Part(PayloadPart::Extras)].contentEpoch);
+			CheckExtras(a_rows, a_previous->leases[Part(PayloadPart::Extras)], kept[Part(PayloadPart::Extras)].contentEpoch, a_tables);
 		else if (extras.lease)
-			CheckExtras(a_rows, extras.lease, extras.caughtUpFrom);
+			CheckExtras(a_rows, extras.lease, extras.caughtUpFrom, a_tables);
 	}
 
 	void PayloadBuilder::CheckAppends(const PayloadVersions& a_payload, const org::services::JournaledPublication& a_publication)

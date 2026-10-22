@@ -259,11 +259,15 @@ namespace DCLF::Diagnostics
 		std::vector<float>*& mirror;
 	};
 
-	/** @brief The payload's extras backing `backing` was caught up to `rows` (it now holds every row of them). */
+	/**
+	 * @brief The payload's extras backing `backing` was caught up to `rows` (it now holds every row of them), from `tables` (whose
+	 * extraOffset names the blocks a live object owns: a freed block's rows are never read, nor journalled once its owner is gone).
+	 */
 	struct ExtrasSent
 	{
 		const org::services::BackingLease& backing;
 		const Draws::ExtrasOut& rows;
+		const SceneTables* tables = nullptr;
 	};
 
 	/**

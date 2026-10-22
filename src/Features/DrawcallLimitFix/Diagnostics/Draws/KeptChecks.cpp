@@ -10,7 +10,8 @@ namespace DCLF::Diagnostics
 	namespace
 	{
 		/** @brief One buffer's rows as uploaded (a_mirror) against the view it was sent from. A mirror shorter than the view's rows differs (rows the buffer was never sent). a_first, when given, gets the first difference. */
-		bool CompareExtras(const std::vector<float>& a_mirror, const ExtrasOut& a_out, std::string* a_first)
+		bool CompareExtras(const std::vector<float>& a_mirror, const ExtrasOut& a_out, const SceneTables* a_tables, std::uint64_t& a_freedRows,
+			std::string* a_first)
 		{
 			const std::uint32_t rows = a_out.Rows();
 			if (a_mirror.size() < std::size_t(rows) * 4) {
@@ -18,11 +19,24 @@ namespace DCLF::Diagnostics
 					*a_first = fmt::format("{} rows (version {}), the mirror holds {}: rows never sent", rows, a_out.ContentEpoch(), a_mirror.size() / 4);
 				return false;
 			}
+			// The blocks a live object owns: a freed block's rows are neither read nor journalled (its owner's change is skipped once
+			// the block is gone), so they are not compared.
+			std::vector<std::uint8_t> owned;
+			if (a_tables) {
+				owned.assign((std::size_t(rows) + kExtraRows - 1) / kExtraRows, 0);
+				for (const std::uint32_t offset : a_tables->extraOffset)
+					if (offset != kNoExtraRows && offset / kExtraRows < owned.size())
+						owned[offset / kExtraRows] = 1;
+			}
 			for (std::uint32_t row = 0; row < rows; ++row) {
 				const float* u = &a_mirror[std::size_t(row) * 4];
 				const float* t = a_out.Row(row);
 				if (std::memcmp(u, t, 16) == 0)
 					continue;
+				if (!owned.empty() && !owned[row / kExtraRows]) {
+					++a_freedRows;
+					continue;
+				}
 				if (a_first)
 					*a_first = fmt::format("row {} of {} (version {}): uploaded ({} {} {} {}), tables ({} {} {} {})", row, rows, a_out.ContentEpoch(), u[0], u[1], u[2], u[3],
 						t[0], t[1], t[2], t[3]);
@@ -51,7 +65,8 @@ namespace DCLF::Diagnostics
 		const auto it = kept.extrasMirrors.find(a_sent.backing->generation);
 		static const std::vector<float> none;
 		std::string first;
-		const bool same = CompareExtras(it != kept.extrasMirrors.end() ? it->second.rows : none, a_sent.rows, kept.extras.mismatches ? nullptr : &first);
+		const bool same = CompareExtras(it != kept.extrasMirrors.end() ? it->second.rows : none, a_sent.rows, a_sent.tables, kept.extrasFreedRows,
+			kept.extras.mismatches ? nullptr : &first);
 		kept.extras.Check(same, [&] { return fmt::format("extras backing {}: {}", a_sent.backing->generation, first); });
 	}
 

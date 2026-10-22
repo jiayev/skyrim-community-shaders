@@ -282,12 +282,14 @@ namespace DCLF
 		auto* vs = *globals::game::currentVertexShader;
 		auto* ps = *globals::game::currentPixelShader;
 		bool ok = true;
+		// Not compared: TexcoordOffset, which the GPU patches into the rows (frame values' texture transforms; the record keeps its
+		// capture's), and IBLParams, which no Lighting stage reads (the record keeps its first: KeepUnreadFloats).
 		if (vs)
-			ok &= CompareBlock(a_geometry, "VS PerMaterial", record.vs, LightingVSLayout(), vs->constantTable.data(),
-				vs->constantTable.size(), Slot(0, kPerMaterial), reinterpret_cast<ID3D11Resource*>(vs->constantBuffers[kPerMaterial].buffer), kVSLeftEyeCenter, kVSGroups[kPerMaterial], 0);
+			ok &= CompareBlock(a_geometry, "VS PerMaterial", record.vs, LightingVSLayout(), vs->constantTable.data(), vs->constantTable.size(), Slot(0, kPerMaterial),
+				reinterpret_cast<ID3D11Resource*>(vs->constantBuffers[kPerMaterial].buffer), kVSLeftEyeCenter, kVSGroups[kPerMaterial] & ~(1ull << kVSTexcoordOffset), 0);
 		if (ps)
 			ok &= CompareBlock(a_geometry, "PS PerMaterial", record.ps, LightingPSLayout(), ps->constantTable.data(), ps->constantTable.size(), Slot(1, kPerMaterial),
-				reinterpret_cast<ID3D11Resource*>(ps->constantBuffers[kPerMaterial].buffer), kPSLODTexParams, kPSGroups[kPerMaterial], 0);
+				reinterpret_cast<ID3D11Resource*>(ps->constantBuffers[kPerMaterial].buffer), kPSLODTexParams, kPSGroups[kPerMaterial] & ~(1ull << kPSIBLParams), 0);
 
 		const auto& state = globals::game::shadowState->GetRuntimeData();
 		for (std::uint32_t slot = 0; slot < kPixelTextureSlots; ++slot) {
@@ -398,12 +400,17 @@ namespace DCLF
 			range[0] -= eye.x;
 			range[1] -= eye.y;
 		}
+		// Not compared: the fog, which a technique row keeps from its making (KeepTechniqueFog); the vertex stage reads the frame's
+		// (DCLFFrameFog) and no Lighting stage reads FogColor.
+		std::uint64_t vsFog = 0;
+		for (const std::uint32_t variable : kVSFrameFog)
+			vsFog |= 1ull << variable;
 		if (vs)
 			ok &= CompareBlock(a_geometry, "VS PerTechnique", techniqueVS, LightingVSLayout(), vs->constantTable.data(), vs->constantTable.size(),
-				Slot(0, kPerTechnique), reinterpret_cast<ID3D11Resource*>(vs->constantBuffers[kPerTechnique].buffer), kVSHighDetailRange, kVSGroups[kPerTechnique], 0);
+				Slot(0, kPerTechnique), reinterpret_cast<ID3D11Resource*>(vs->constantBuffers[kPerTechnique].buffer), kVSHighDetailRange, kVSGroups[kPerTechnique] & ~vsFog, 0);
 		if (ps)
 			ok &= CompareBlock(a_geometry, "PS PerTechnique", technique.ps, LightingPSLayout(), ps->constantTable.data(), ps->constantTable.size(),
-				Slot(1, kPerTechnique), reinterpret_cast<ID3D11Resource*>(ps->constantBuffers[kPerTechnique].buffer), kPSFogColor, kPSGroups[kPerTechnique], 0);
+				Slot(1, kPerTechnique), reinterpret_cast<ID3D11Resource*>(ps->constantBuffers[kPerTechnique].buffer), kPSFogColor, kPSGroups[kPerTechnique] & ~(1ull << kPSFogColor), 0);
 
 		// Filter modes: SetupMaterial's, else the technique's.
 		const auto& material = tables.materials[object.materialIndex];

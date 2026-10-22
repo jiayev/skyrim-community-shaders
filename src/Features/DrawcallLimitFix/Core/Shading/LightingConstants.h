@@ -31,6 +31,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kVSWindTimers = 5;
 	inline constexpr std::uint32_t kVSTextureProj = 6;      // ProjectedUV, per object
 	inline constexpr std::uint32_t kVSLeftEyeCenter = 9;     // first PerMaterial VS variable
+	inline constexpr std::uint32_t kVSTexcoordOffset = 11;   // the frame's (texture transforms patch the rows)
 	inline constexpr std::uint32_t kVSHighDetailRange = 12;  // first PerTechnique VS variable
 	inline constexpr std::uint32_t kPSNumLights = 0;
 	inline constexpr std::uint32_t kPSPointLightPosition = 1;
@@ -43,6 +44,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kPSSSRParams = 16;
 	inline constexpr std::uint32_t kPSFogColor = 19;      // first PerTechnique PS variable
 	inline constexpr std::uint32_t kPSLODTexParams = 24;  // first PerMaterial PS variable
+	inline constexpr std::uint32_t kPSIBLParams = 29;     // read by no Lighting stage: a record keeps its first (KeepUnreadFloats)
 
 	constexpr std::uint64_t VariableBits(std::uint32_t a_first, std::uint32_t a_last)
 	{

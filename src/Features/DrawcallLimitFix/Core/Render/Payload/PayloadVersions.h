@@ -159,7 +159,8 @@ namespace DCLF::Draws
 		void JudgeAppends(std::span<org::services::JournaledPartRequest> a_requests, const std::array<bool, kPayloadParts>& a_shared,
 			const PayloadVersions* a_previous, const PartRuns& a_runs);
 		/** @brief Publish: the extras backing a_publication (or a_previous, a_shared) holds a_rows in, to the parity observer. */
-		void CheckExtrasBacking(const ExtrasOut& a_rows, const org::services::JournaledPublication& a_publication, const std::array<bool, kPayloadParts>& a_shared,
+		void CheckExtrasBacking(const ExtrasOut& a_rows, const SceneTables* a_tables, const org::services::JournaledPublication& a_publication,
+			const std::array<bool, kPayloadParts>& a_shared,
 			const PayloadVersions* a_previous) const;
 		/**
 		 * @brief Publish, CS_DCLF_PERSISTENT_PARITY: each of a_payload's appends (a_publication's versions) begins at or past the most the
