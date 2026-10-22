@@ -282,8 +282,10 @@ namespace DCLF
 		}
 		if (auto* store = &extrasStore; store->updates || kept.extras.checks) {
 			// The payload's extras backings, each against its own mirror (KeptChecks.cpp, every publication).
-			text += fmt::format("[DCLF] persistent extras rows: {} updates, {} resyncs; payload backings parity {} catch-ups checked ({} backings mirrored), {} differ{}\n",
-				store->updates, store->resyncs, kept.extras.checks, kept.extrasMirrors.size(), kept.extras.mismatches, kept.extras.Verdict(true));
+			text += fmt::format("[DCLF] persistent extras rows: {} updates, {} resyncs; payload backings parity {} catch-ups checked ({} backings mirrored), {} differ "
+								"({} rows of freed blocks not compared){}\n",
+				store->updates, store->resyncs, kept.extras.checks, kept.extrasMirrors.size(), kept.extras.mismatches,
+				std::exchange(kept.extrasFreedRows, 0), kept.extras.Verdict(true));
 			store->updates = store->resyncs = 0;
 			kept.extras.Reset();
 		}

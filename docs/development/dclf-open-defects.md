@@ -25,17 +25,13 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     (`kFadeSeedsRegister`, answered with the pool's descriptor on the render thread: `FrameBindingSelect::index`), and the pixel stage
     falls back to the seed as `SeedState` does. **Check:** walk into a forest with DCLF; new full trees should fade in like the
     engine's, with no opaque first frame.
--   **The indirect execution sets split by state class.** Every pipeline in a set now shares its initial pipeline's fixed-function
-    state and fragment interface (dclf-architecture.md, "One execution set per state class"), so core validation's
-    `VUID-vkUpdateIndirectExecutionSetPipelineEXT-None-11040`, `-11147`, `-11098` and `-11086` should be gone. **Check:** a run
-    with the validation layer (`validation-layer-through-mo2`) shows none of them, and `CS_DCLF_SET_PARITY=1`'s `set classes (CPU)`
-    and `set classes (GPU)` lines read `<- OK`, as they did at Fort Greymoor.
 -   **Stood-in animated references that never fade freeze.** `SyncRootOwnership` (`Core/Handoff/PrimaryCull.cpp`) clears
     kAccumulated (bit 26) on stood-in roots. The engine's animation gate (`FUN_1402cff60`, which `UpdateAnimationJob` and the
     managed-node update call on `ref->Get3D()`) then stops updating roots that never fade: windmill sails, water wheels, flags,
     Dwemer machinery. The fix: DCLF writes kAccumulated from its GPU visibility at `Main::Update`'s entry, and the gate skips the
     roots whose fade DCLF writes. **Check:** `CS_DCLF_ACCUMULATED_PARITY=1`. `<- ANIM RATE` should show 0 differ, and never-fading
-    stood-in calls should be rejected only when written out of view.
+    stood-in calls should be rejected only when written out of view. Run vp10 (tree-forest route) showed 0 differ, but no never-fading
+    stood-in root there (0 calls): it needs a route with windmills or water wheels (Riverwood).
 -   **Stood-in BSTreeNode trees on the tree manager's tree list.** The tree list's loop (`FUN_140437e50`, list `+0x20`) visits
     a tree by its first child's multibound cull result, which no cull refreshes for a stood-in root. A stale "in" animates the
     tree every frame, and a stale "out" freezes it (`skyrim-engine-notes.md`, "Tree manager list (T7b5)"). The fix:
@@ -48,13 +44,8 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     events now use a fixed per-frame-slot copy, harvested when the slot is armed again (`MakeEventReadbackPass`,
     `Core/Render/Passes/Readbacks.cpp`). **Check:** in the `fade write-back` line, "frames read" should be near the window's frame
     count (about 300), in motion and in an interior. "arms missed" should be 0, or only frames whose depth epoch did not run.
--   **The third-person body drawn in first person after a camera switch.** The fix: an actor entry's hidden event stays owed until
-    a walk evaluates the entry (`Tracked::hiddenEventOwed`), and an event newer than the pass's capture is announced again at the
-    first newer capture (`hiddenAhead`). It shows only in runs without the walk, persistent or capture parities, because those run
-    the scene pass inline. **Check:** `CS_DCLF_SET_PARITY=1` alone, with
-    `CS_DCLF_TEST_COMMANDS='600:dclf:pov=third;900:dclf:pov=first;1200:dclf:pov=third;1500:dclf:pov=first'` from a save in first
-    person. The `player 3D against the claims (set parity)` line should read `<- OK`, and the screenshots should show no body in
-    first person.
+    **Confirmed in motion** (runs vp4-vp6 on the tree-forest route: 290-300 frames read a window, 0 arms missed); an interior run
+    is still owed.
 
 ## Open crashes
 
@@ -65,10 +56,15 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     build do not crash. Two dumps are kept in the scratch folder (`refactor2/v3-motion.dmp`, `refactor2/fdt2-motion.dmp`). **Next:**
     check whether DCLF releases a reference to a child that the engine detaches later (engine references are released only through
     `EngineReleases` at Present), and whether the thunk reads the child after the original call.
--   **Vertex-stage page faults at load.** Two device losses happened a few seconds after a load, both Aftermath `vertex_01`: one at
-    the main menu with DCLF idle ("Shader Instruction Error"), and one 5 s into gameplay (an MMU fault reading VA 0). They did
-    not reproduce, and no shader debug info was written. One loss with this signature was the index pool's unfilled grown
-    `pool-firsts`, now fixed. A longer motion soak is needed to close the rest.
+-   **Vertex-stage faults at load.** Device losses a few seconds after a load (or at the main menu, DCLF idle), each Aftermath
+    "Shader Instruction Error" at PC 0 of `vertex_01`, a 5 KB vertex shader with hash `0xfb2df49047e00dfa`, 84 warps active. The
+    same hash appears in every dump since 2026-10-20 (02:58, 19:58, 20:00 and 21:50 on 10-21), across builds, so it is one
+    shader. They are not tied to a switch: the three at 19:58-20:00 had `CS_DCLF_PERSISTENT_PARITY` with `CS_DCLF_TREE_LOD_AUDIT`
+    (the audit is CPU-only), the 21:50 one persistent parity alone. The runner retries a launch that never reaches gameplay, which
+    hid them: 7 of about 250 launches retried, not all with a dump. No shader debug info was written, so the shader is unnamed.
+    One loss with this signature was the index pool's unfilled grown `pool-firsts`, now fixed. **Next:** a soak of launches with
+    `DXVK_AFTERMATH_SHADER_DEBUG_INFO=1` (the decoder then maps the shader; `extern/dxvk`'s adapter warns that the heavier
+    diagnostics configuration itself produced load-time faults on this driver, so add the flags one at a time).
 -   **Use-after-free in actor teardown on a save load.** It happened when a save was loaded after going through a door. A job
     thread in `Actor::Predestroy` -> `FUN_140720830` (middle-high process data, `+0x278`) -> `FUN_14021ca60`/`FUN_14021d140`
     destroyed a pool entry's object (keyed by a `BSLightingShaderProperty`) that was already freed. DCLF holds property and
@@ -82,13 +78,6 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     The rerun did not hang: 87 s, with the 28-row table published 32 times. **Next:** if it recurs, the scratch folder's
     `hangwatch.sh` writes a full dump when the log stalls for 15 s. Read the threads' stacks with cdb. Suspects are the publisher's
     mutex during preparation, and a kept shadow recording whose table was republished.
--   **A null read in the cell loader, `SkyrimSE+0x804396`.** It happened twice on 2026-10-21, both under `CS_DCLF_TEST_MOVE` on
-    the tree-forest route (`fw 81a`, the player walking off a mountaintop into a forest): once in a tinted tree LOD run, and once
-    about 60 s into a motion parity run (`vp1`). It is an access violation reading null in the landscape block loading path. The
-    stack has Community Shaders frames, but they may be the crash handler's hooks. **Next:** read the dump's full stack with cdb and
-    check whether DCLF's frames are callers or handlers.
--   **Device loss at load with `CS_DCLF_PERSISTENT_PARITY=1` and `CS_DCLF_TREE_LOD_AUDIT=1` together.** All three attempts lost the
-    device at load (Aftermath dump `gpu-crash-2026-10-21-20-00-42.nv-gpudmp`). Persistent parity alone loads fine. Not investigated.
 
 ### Crashes probably unrelated to DCLF
 
@@ -98,6 +87,10 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 -   **tbbmalloc read in an NPC's behaviour graph update** (uGridsToLoad 5, moving near Riverwood): `EXCEPTION_ACCESS_VIOLATION` in
     `rml::internal::MemoryPool::getFromLLOCache` (EngineFixes' tbbmalloc) under `BSSpeedSamplerModifier` / `hkbBehaviorGraph`
     "0_Master.hkb". This is a known engine bug.
+-   **A null read in the cell loader, `SkyrimSE+0x804396`** (twice on 2026-10-21, both under `CS_DCLF_TEST_MOVE` on the tree-forest
+    route, one about 60 s into run `vp1`). `cmp dword ptr [r8+rcx*4], ebx` with r8 = 0 (a form ID looked up in a null array), on an
+    engine job thread: `SkyrimSE+0x55864c`, `+0x6b7228`, `+0x63b293`, `+0x2bfc51` down to the thread's start. cdb shows no
+    Community Shaders or DCLF frame on the stack (the dump `vp1-804396.dmp` is kept in the session scratch folder).
 -   **Havok null write in `FUN_140b660c0` at uGridsToLoad 21** (the Whiterun stress save under `CS_DCLF_TEST_MOVE`). Radius 21 is
     unstable on its own, so runs there are judged by the report lines written before the crash.
 
@@ -119,20 +112,12 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 
 ## Payload and table defects
 
--   **Extras rows changed without a journal entry.** The persistent parity's payload backings check (`CheckExtras`,
-    `Diagnostics/Draws/KeptChecks.cpp`) reports `<- DIFFER` in one or two windows of a moving full parity run (`CS_DCLF_TEST_MOVE` with `CS_DCLF_PERSISTENT_PARITY` and `CS_DCLF_SET_PARITY`). Example:
-    `extras backing 4: row 1523 ... uploaded (0.5 0 0.02 0.49999997), tables (0.29341206 0 0.00066666666 0.41317594)`. The extras
-    journal (`UpdateExtras`, `Core/Render/Payload/KeptStores.cpp`) never marked those rows, so the GPU draws the object with stale
-    projected-UV or land-blend parameters. The tables' value is the same on every row reported, which points at one writer that
-    sets rows without a `kChangeExtras` note, or at a block freed or moved without a change on a live owner. The frames' withdrawals
-    after a LOD gate's forced release masked it (fbcfab4f7). **Where to look:** `WriteObjectExtras` after `Accumulate`
-    (`AccumulatePhase.cpp`), the shading resample (`FrameConstants.cpp`), `FreeExtras`/`AllocateExtras`, and the table diff's
-    `kChangeExtras` (`Tables.cpp`).
 -   **An entry write the incremental visibility pass skips.** Under motion, `CS_DCLF_PERSISTENT_PARITY` reports
     `<- WRITES DIFFER; first: root N set wide (reference's alone)` in some windows. It reproduces every time with
     `CS_DCLF_TEST_MOVE` and `CS_DCLF_PERSISTENT_PARITY` set. The suspect is `JudgeEntry`'s skip (`Core/Render/Readback/Visibility.cpp`).
     It skips when `entryWritten` already holds the wanted value and `entryWrittenVersion` is unchanged, so a write made while the
     entry was in another state can hide a later one.
+    **No longer verifiable:** 0 in ten moving full parity runs on the tree-forest route (vp1-vp10, 2026-10-21), with the check active.
 -   **A material row is keyed per material but packed per pair (latent).** `MainRows::materials[m]` is one row per material slot,
     packed against the pair's pipeline. Two shader permutations of one pass, or a `ModifyShaderLookup` that changed between them,
     could differ in their `PerMaterial` offsets. The row would then keep the last pair's packing, and `ResolvePair`'s
@@ -158,7 +143,12 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 -   **A flipped incoming geometry missing from its flip's publication.** In one of four runs with `CS_DCLF_TEST_MOVE`
     and `CS_DCLF_SET_PARITY` set, `TakeDeltas`' check reported
     `1 flipped incoming geometries not claimed by the flip's own publication ... <- GATE HOLE (publication)`. If real, the incoming
-    block is not drawn while the outgoing one is already hidden, for the frames that install that publication.
+    block is not drawn while the outgoing one is already hidden, for the frames that install that publication. Run vl1 (the validation
+    layer on, so about 300 slow frames of gameplay after the load) reported 85 in its one window, right after the load: 96 releases
+    there came before DCLF drew at all and 14 flips were deferred for an incoming record not yet published. The release-side check
+    (the claims the releasing frame installed, the one that shows on screen) read 0 incoming not claimed of the 19 releases it
+    checked. So the publication-side count includes flips whose incoming records a later publication claims before the release.
+    **Next:** count publication holes apart for flips that were deferred, and judge by the release check.
 -   **A hold's known effects.** During a hold, both terrain levels' LOD water registers, and a held block's segments are not
     updated. The map's hide-all is handled by flushing. These effects have not been measured visually.
 
@@ -169,18 +159,32 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     evaluation had it waiting (causes 0x11; that frame's set line shows pipeline waits). It was not seen in the three runs before.
     It recurred in `stageB5-full` at frame 4, again on a 'Land' slot with causes 0x11. It looks like a terrain slot's pipeline
     readiness event racing the commit during startup's pipeline builds. **Next:** log the slot's readiness events around the commit.
--   **Capture parity mismatches under `CS_DCLF_CAPTURE_PARITY` with `CS_DCLF_PARITY_BOTH`**, in every window. Typical counts are
-    about 44k of 153k draws (29k material, about 300 per-geometry, 7k technique), and every LODObjects, LODObjectHD and LODLandNoise
-    draw. The cause, by field:
-    -   **Material: PS PerMaterial 29 (IBLParams.y).** The record keeps IBLParams from its first evaluation on purpose
-        (`MaterialSources::KeepUnreadFloats`), and no Lighting stage reads it. `CaptureParity::CompareMaterial`'s mask
-        (`kPSGroups[kPerMaterial]`) still includes variable 29. **Fix the observer.**
-    -   **Material: VS variable 11 (`TexcoordOffset`).** A record keeps its capture-time value because the GPU patches the rows, so
-        every scrolling material mismatches. The same holds for a port's declared frame variables (`MaterialSpace::declaredVSFloats`,
-        `declaredPSFloats`). **Fix the observer:** leave them out of `CompareBlock`, or compare with FrameValues' entry
-        (`TextureTransformList`).
-    -   **Technique: PS 19 (FogColor) and VS 13-15 (fog).** The technique rows keep their first fog (`KeepTechniqueFog`). The draw
-        reads the frame fog (`DCLFFrameFog`), and no Lighting stage reads FogColor. **Fix the observer.**
+    **No longer verifiable:** 0 in ten moving full parity runs on the tree-forest route (vp1-vp10, 2026-10-21), with the check active.
+-   **Set parity: freed object slots stamped drawn by the GPU (`<- SET PARITY`).** In 3 of 8 moving full parity runs on the
+    tree-forest route (vp3, vp6, vp7), always in two consecutive windows around frames 3360-3700 while cells stream in front of
+    the player: 5-18 "depth without colour", 8-23 "colour without depth" and 14-62 "drawn outside the set" a window. Every sample
+    is a slot with no geometry in the snapshot's tables (`'?'`, not bound, both builds `absent`), and the slots come in pairs
+    (14988/14989, 15052/15053, 15116/15117). BuildDraws writes a visibility word only from an input's `objectIndex`, so the GPU's
+    input list named slots the CPU's builds did not. The payload's tables are the snapshot's own (checked in vp7), so it is not a
+    payload built from newer tables. If the GPU's inputs are stale (a region upload or journal gap), it draws freed objects'
+    records for those frames. **Diagnostic in place (TEMP, `SetParity.cpp`):** each sample now says which CPU lists name the slot
+    (`listed by`: the colour and depth payloads' resident regions and input lists). It has not reproduced in the three runs
+    since (vp8-vp10). **Next:** when it recurs, `listed by 0` means the GPU list is stale (read back the region's backing at that
+    frame); a non-zero value means objectState misses region inputs and the check is wrong.
+-   **Accumulated parity on terrain and object LOD geometry (`<- ACCUMULATED DIFFER`).** In run vp10 (`CS_DCLF_ACCUMULATED_PARITY`
+    with motion on the tree-forest route), every window: about 60-110 of 29,000 engine-culled-root geometries set by DCLF alone and
+    80-180 by the engine alone, all `Land`, `obj`, `obj-LargeRef`, `objsnow` and `objsnowHD-LargeRef` (terrain blocks and object
+    LOD), in runs of consecutive frames. Stood-in roots and the animation gate agree (`anim rate`: 0 differ). These geometries are
+    not animated, so the bit only matters to whatever else reads `kAccumulated` on them. Not investigated.
+-   **Capture parity mismatches under `CS_DCLF_CAPTURE_PARITY` with `CS_DCLF_PARITY_BOTH`**, in every window. Since the observer fix
+    (run cp1, tree-forest route) 7-10k of about 340k draws a window (0 material, 3-4k per-geometry, 0 technique); before it about 44k
+    of 153k (29k material, about 300 per-geometry, 7k technique), and every LODObjects, LODObjectHD and LODLandNoise draw. The cause, by field:
+    -   **Observer fixed (run cp1: 0 material and 0 technique mismatches in every window, of about 340k draws checked):** `CompareMaterial` no longer compares PS PerMaterial 29 (IBLParams, kept from
+        the first evaluation by `KeepUnreadFloats` and read by no Lighting stage) or VS 11 (`TexcoordOffset`, which the GPU patches
+        into the rows), and the technique compare leaves out the fog (VS 13-15 and PS 19 FogColor, kept by `KeepTechniqueFog`).
+        A port's declared frame variables (`MaterialSpace::declaredVSFloats`, `declaredPSFloats`) are not compared by
+        `CompareMaterial` (Lighting's layout only), so nothing was changed for them. What remains is 7-10k mismatched draws a
+        window: about 3.5k per-geometry and the rest below.
     -   **Loaded terrain blocks drawn with another technique.** `Block (x, 0)` draws with DCLF's MTLandLODBlend (19) pipeline where
         the engine's pass is MTLand (8). This is permutation parity's `vertex 1B000000`, about 900 a window. It is a real
         normal-path difference, not yet chased.
@@ -188,16 +192,16 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
         facegen tint parts (PS 7) and TextureProj (VS 6), character light t11 on NPC armour (DCLF's frame view against the draw's,
         which the engine alternates), and draw parity's 0-15 differing draws a window.
     -   **Expected:** face capture parity differs on every reflection face draw, because face draws do not match the main rows.
--   **Persistent extras rows: payload backings parity differs under motion (`<- DIFFER`).** It appeared in three motion parity
-    runs on 2026-10-21 on the tree-forest route (`fw 81a`). In one run it was a single report; in the other two, nearly every
-    catch-up differed for 20 s once three backings were mirrored, for example
-    `extras backing 3: row 22467 of 22533 (version 41): uploaded (0 0 0 0), tables (0.29341206 0 0.00066666666 0.41317594)`. The
-    same values recur across runs. Earlier parity runs on other routes were clean. It is not caused by the colour epoch holding the
-    depth commit's owners: it still differs with that change reverted. It has not been checked against a build without the tree
-    LOD and fade-seed changes. `GRASS HOLE` lines (`commits that could not draw a withheld frame`) appeared in the same run.
--   **Frame values' moved-only sampling: rows differ (`<- DIFFER`).** It was seen once, in run `vp1`: 9 of 1,257 rows, first
-    `row of slot 12678 ('leftarm:0', not due): sunEntry, lodFadeNode`.
--   **Portal parity: an unbound-space occluder mismatch under motion.** It appears now and then in moving persistent-parity and full parity runs, in
+-   **Frame values' texture transforms (parity): frame variables drift (`<- DIFFER`).** Seen in vp5 and vp6 (not vp1-vp4), 1-62 of
+    about 14,000 entries in a window, all `frame variable` entries (an Effect material's FalloffData or BaseColor), by small amounts:
+    `sent (1, 0.4443106, 0.81752133, 0)`, `now (1, 0.44422826, 0.8172912, 0)`. The check reads the buffer again at the producer's end,
+    so a controller that writes a declared frame variable inside the window shows here: the same race as `<- MATERIAL PORT`'s
+    FalloffData below. A frame's lag on an animated effect; not visible.
+-   **Frame values' moved-only sampling: rows differ (`<- DIFFER`).** In vp1 9 of 1,257 rows (first `row of slot 12678
+    ('leftarm:0', not due): sunEntry, lodFadeNode`); in vp2 and vp6 one row a window, always a small loose clutter item not due
+    (`'CoinBagMid:1'`, `'Basket04:0'`) with `sunEntry, lodFadeNode` differing: likely an item moved (Havok) without a move event, whose
+    sun entry and fade node the sampling kept. The sun entry only selects its shadow cull, so a frame's stale entry is not visible.
+-   **Portal parity: an unbound-space occluder mismatch under motion.** It appears in every moving full parity run on the tree-forest route (3-5 windows in each of vp1-vp10), in
     two variants: `<- PORTAL VIEW; first: unbound space: 4 ops 1 sets, the engine's 0 ops 0 sets` (one engine plane, state 2,
     flags `0x1000001`, that DCLF has in state 0), and `unbound space: set 0 mask 0x3d, the engine's 0x39`, where DCLF keeps one
     more of the set's planes than the engine.
@@ -205,6 +209,7 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     window only, `3 geometries handed to the registration from entries the stand-in would not walk <- STAND-IN WALK`, always at
     `[frame 868]` of the fixed `CS_DCLF_TEST_MOVE` path, and always 'objHD-LargeRef', 'objsnow' and 'objsnowHD-LargeRef'. It is
     likely a cell crossing where the walk decided before the snow members joined. Normal play would drop these for that frame.
+    **No longer verifiable:** 0 in ten moving full parity runs on the tree-forest route (vp1-vp10, 2026-10-21), with the check active.
 -   **Walk parity: the cooking spit's sun entry moves without an event.** `CS_DCLF_WALK_PARITY` reports 5 of about 113,900
     objects differing per interval, all of them the sun entry on `FireSptiCookingBase:17`, whose bounds drift by about 0.06
     units. A writer DCLF does not watch animates the node, so the delta walk keeps the old bound. The same gap on a larger animated

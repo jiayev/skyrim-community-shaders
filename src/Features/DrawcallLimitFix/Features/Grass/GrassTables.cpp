@@ -390,7 +390,7 @@ namespace DCLF::Features::Grass
 		/**
 		 * @brief The depth commit's draw row (the adopted versions' addresses, the engine's frame values, the cull's), the draws buffer's
 		 * zero header (and, once after the tables were made or grass became DCLF's, its zero counts: grass.args-colour zeroes them every
-		 * frame after). The cull walks the slots only while a_draw and the frame's textures are bound.
+		 * frame after). The cull walks the slots the tables hold (sent*Slots) only while a_draw and the frame's textures are bound.
 		 */
 		void WriteDrawRow(const Draws::NamedVersions& a_sealed, const Mirror& a_mirror, GrassTables& a_tables, Draws::LatchedUploads& a_uploads, bool a_draw)
 		{
@@ -411,10 +411,10 @@ namespace DCLF::Features::Grass
 			row.fadeInTimeRcp = fadeIn > 0.0f ? 1.0f / fadeIn : 1e6f;
 			SampleLight(row);
 			const bool sampled = SampleCull(row) && BindFrameTextures(owned);
-			if (a_draw && sampled && a_mirror.InstanceSlots()) {
-				row.instanceSlots = a_mirror.InstanceSlots();
-				row.shapeSlots = a_mirror.ShapeSlots();
-				row.bucketSlots = a_mirror.BucketSlots();
+			if (a_draw && sampled && a_tables.sentInstanceSlots) {
+				row.instanceSlots = a_tables.sentInstanceSlots;
+				row.shapeSlots = a_tables.sentShapeSlots;
+				row.bucketSlots = a_tables.sentBucketSlots;
 			}
 			a_uploads(a_tables.draw, owned, 0);
 			a_tables.row = row;
@@ -432,6 +432,8 @@ namespace DCLF::Features::Grass
 		/**
 		 * @brief The depth commit's grass uploads, into the versions a_sealed (the adopted set) names: their capacities and the draw row's
 		 * addresses are theirs. Retired mesh leases go to the execution (a_owners); the rows' descriptors go with the rows (OwnedRow).
+		 * A mirror past the capacities keeps its changes and its retired leases, and the commit draws what the tables hold (the last sent
+		 * changes: a growth copy keeps them), so grass outgrowing its tables appears when the growth is adopted, with no frame undrawn.
 		 */
 		void UploadGrass(const Draws::NamedVersions& a_sealed, Mirror& a_mirror, GrassTables& a_tables, Draws::LatchedUploads& a_uploads,
 			std::vector<std::shared_ptr<const void>>& a_owners, bool a_owned)
@@ -439,19 +441,25 @@ namespace DCLF::Features::Grass
 			a_tables.ready.store(false, std::memory_order_release);
 			if (!a_tables.cull || !a_tables.instances)
 				return;
-			for (auto& owner : a_mirror.TakeRetired())
-				a_owners.push_back(std::move(owner));
 			if (a_owned && !a_tables.owned)
 				a_tables.countsZeroed = false;
 			a_tables.owned = a_owned;
-			// Capacities are reserved before the epoch; a mirror past them keeps its changes and draws nothing this commit.
+			// Capacities are reserved before the epoch; a mirror past them keeps its changes (and the leases the tables' rows still
+			// name) until a commit they fit.
 			const bool fits = Fits(a_sealed, a_mirror, a_tables);
-			if (fits)
+			if (fits) {
+				for (auto& owner : a_mirror.TakeRetired())
+					a_owners.push_back(std::move(owner));
 				SendChanges(a_sealed, a_mirror, a_tables, a_uploads);
-			else if (a_mirror.BucketSlots() > kMaxBuckets)
+				a_tables.sentInstanceSlots = a_mirror.InstanceSlots();
+				a_tables.sentShapeSlots = a_mirror.ShapeSlots();
+				a_tables.sentBucketSlots = a_mirror.BucketSlots();
+			} else if (a_mirror.BucketSlots() > kMaxBuckets)
 				++a_tables.overBuckets;
+			else
+				++a_tables.outgrown;
 			++a_tables.uploads;
-			WriteDrawRow(a_sealed, a_mirror, a_tables, a_uploads, a_owned && fits);
+			WriteDrawRow(a_sealed, a_mirror, a_tables, a_uploads, a_owned && a_mirror.BucketSlots() <= kMaxBuckets);
 		}
 
 		// Grass (dclf-architecture.md, "Grass: the draws"): the mirror's changes and the draw row, for the depth cull, the arguments and the

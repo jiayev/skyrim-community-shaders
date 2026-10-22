@@ -87,8 +87,11 @@ namespace DCLF::Features::Grass
 		bool countsZeroed = false, owned = false;
 		std::uint32_t bindingGeneration = ~0u;
 		std::vector<std::uint32_t> unbound;
+		// The mirror's slots as the tables hold them (the last commit that sent its changes): what a commit the mirror has outgrown
+		// draws until the growth is adopted.
+		std::uint32_t sentInstanceSlots = 0, sentShapeSlots = 0, sentBucketSlots = 0;
 		// Since the last report.
-		std::uint64_t uploads = 0, shapesSent = 0, bucketsSent = 0, unboundBuckets = 0, overBuckets = 0;
+		std::uint64_t uploads = 0, shapesSent = 0, bucketsSent = 0, unboundBuckets = 0, overBuckets = 0, outgrown = 0;
 		// The last depth commit's draw row.
 		GrassInstances::DrawRow row{};
 	};

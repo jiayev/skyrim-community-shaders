@@ -265,6 +265,14 @@ namespace DCLF::Diagnostics
 					const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
 					const bool alive = geometry != nullptr;  // held by snapshot.tables
 					static constexpr const char* kVerdicts[] = { "occluded (retest)", "visible", "rejected", "no verdict" };
+					// TEMP: the payload's tables against the snapshot's (a payload built from newer tables names objects these lack).
+					const auto* payloadGeometry = snapshot.payloadTables && o < snapshot.payloadTables->objectGeometry.size() ? snapshot.payloadTables->objectGeometry[o] : nullptr;
+					logger::info("[DCLF] set parity, frame {}: listed by {:#x} (input flags {:#x})", snapshot.frame, o < snapshot.listedBy.size() ? snapshot.listedBy[o] : 0,
+						o < snapshot.listedFlags.size() ? snapshot.listedFlags[o] : 0);
+					logger::info("[DCLF] set parity, frame {}: payload tables {} ({} objects against {}), there '{}'", snapshot.frame,
+						!snapshot.payloadTables ? "none" : snapshot.payloadTables == snapshot.tables ? "the snapshot's" : "other",
+						snapshot.payloadTables ? snapshot.payloadTables->objects.size() : 0, snapshot.flags.size(),
+						payloadGeometry && payloadGeometry->name.c_str() ? payloadGeometry->name.c_str() : "?");
 					logger::info("[DCLF] set parity, frame {}: {} - object {} '{}'{}: verdict {}, depth build {}, colour build {}, {}{}{}", snapshot.frame, kind, o,
 						alive ? geometry->name.c_str() : "?", alpha ? " (alpha tested)" : "", current ? kVerdicts[verdict] : "not this frame's",
 						stateName(o < snapshot.depthState.size() ? snapshot.depthState[o] : kObjectStateAbsent),
@@ -363,6 +371,27 @@ namespace DCLF::Diagnostics
 		snapshot.colourState = a_colour.body->objectState;
 		// Only a publication's tables: the coordinator's own (none accepted yet) are not the render thread's to hold.
 		snapshot.tables = Scene::FrameView::Get().AcceptedTables();
+		snapshot.payloadTables = a_colour.body->streams ? a_colour.body->streams->tables : nullptr;
+		{
+			const std::size_t count = Scene::FrameView::Get().GetTables().objects.size();
+			snapshot.listedBy.assign(count, 0);
+			snapshot.listedFlags.assign(count, 0);
+			const auto note = [&](const DrawInput& a_input, std::uint8_t a_bit) {
+				if (a_input.objectIndex >= count)
+					return;
+				if (!snapshot.listedBy[a_input.objectIndex])
+					snapshot.listedFlags[a_input.objectIndex] = a_input.flags;
+				snapshot.listedBy[a_input.objectIndex] |= a_bit;
+			};
+			for (std::size_t i = 0; i < a_colour.resident.Count(); ++i)
+				note(*a_colour.resident.At(i), 1);
+			for (const auto& input : a_colour.body->inputList)
+				note(input, 2);
+			for (std::size_t i = 0; i < a_depth.resident.Count(); ++i)
+				note(*a_depth.resident.At(i), 4);
+			for (const auto& input : a_depth.body->inputList)
+				note(input, 8);
+		}
 		if (!snapshot.tables) {
 			setParityStaging.push_back(std::move(snapshot.staging));
 			if (snapshot.frustumStaging)

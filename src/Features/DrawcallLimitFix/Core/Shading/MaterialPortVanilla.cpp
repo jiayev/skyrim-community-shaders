@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
 #include <array>
 #include <bit>
@@ -30,7 +31,6 @@ namespace DCLF::MaterialPort
 		// Lighting variable indices (ShaderCache.cpp GetVariableIndices). VS through 0x14202aeb8 +0x50 +i, PS through 0x14202aec0 +0x40 +i.
 		constexpr std::uint32_t kVSLeftEyeCenter = 9;
 		constexpr std::uint32_t kVSRightEyeCenter = 10;
-		constexpr std::uint32_t kVSTexcoordOffset = 11;
 		constexpr std::uint32_t kPSAmbientSpecular = 6;
 		constexpr std::uint32_t kPSEnvmapData = 21;
 		constexpr std::uint32_t kPSParallaxOccData = 22;
@@ -40,7 +40,6 @@ namespace DCLF::MaterialPort
 		constexpr std::uint32_t kPSSparkleParams = 26;
 		constexpr std::uint32_t kPSMultiLayerParallaxData = 27;
 		constexpr std::uint32_t kPSLightingEffectParams = 28;
-		constexpr std::uint32_t kPSIBLParams = 29;
 		constexpr std::uint32_t kPSLandscape1to4IsSnow = 30;
 		constexpr std::uint32_t kPSLandscape5to6IsSnow = 31;
 		constexpr std::uint32_t kPSLandscape1to4IsSpecPower = 32;
