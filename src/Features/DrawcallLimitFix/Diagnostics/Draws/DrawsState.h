@@ -159,6 +159,10 @@ namespace DCLF::Diagnostics
 			// depth payload's), and the input flags of the first.
 			std::vector<std::uint8_t> listedBy;
 			std::vector<std::uint32_t> listedFlags;
+			// TEMP: the installed publication's inputs backing as the colour epoch left it, and the inputs the epochs dispatched.
+			winrt::com_ptr<ID3D11Buffer> inputsStaging;
+			std::uint32_t inputCount = 0, depthInputCount = 0;
+			std::uint64_t inputsGeneration = 0;
 			// Frustum stamps (fade test drops), and per member whether its live bound (kept) is inside the depth build's frustum:
 			// culling must not reject one inside.
 			winrt::com_ptr<ID3D11Buffer> frustumStaging;

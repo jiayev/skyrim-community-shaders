@@ -98,6 +98,65 @@ namespace DCLF::Draws
 				EmitExtras(a_rows, a_caughtUpFrom, mirror, [](const void*, std::size_t, std::size_t) {});
 			Diagnostics::Notify(Diagnostics::ExtrasSent{ a_lease, a_rows, a_tables });
 		}
+
+		/**
+		 * @brief TEMP (CS_DCLF_SET_PARITY): the inputs backing a_lease as caught up from a_caughtUpFrom (the region's runs since then, the
+		 * tails whole), mirrored per backing, against the whole scene list. A difference is an input the GPU reads that the list lacks.
+		 */
+		void CheckInputs(const KeptView<DrawInput>& a_region, const std::vector<DrawInput>* a_main, std::uint64_t a_mainAt, const std::vector<DrawInput>* a_shadow,
+			std::uint64_t a_shadowAt, const org::services::BackingLease& a_lease, std::uint64_t a_caughtUpFrom)
+		{
+			struct Mirror
+			{
+				std::weak_ptr<org::services::Backing> backing;
+				std::vector<DrawInput> inputs;
+			};
+			static ankerl::unordered_dense::map<std::uint64_t, Mirror> mirrors;
+			static std::uint64_t checks = 0, differ = 0;
+			static std::string first;
+			for (auto it = mirrors.begin(); it != mirrors.end();)
+				it = it->second.backing.expired() ? mirrors.erase(it) : std::next(it);
+			auto& mirror = mirrors[a_lease->generation];
+			mirror.backing = a_lease.Get();
+			const std::size_t units = a_shadowAt + (a_shadow ? a_shadow->size() : 0);
+			if (mirror.inputs.size() < units)
+				mirror.inputs.resize(units, DrawInput{});
+			const auto write = [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+				if (a_offset + a_bytes <= mirror.inputs.size() * sizeof(DrawInput))
+					std::memcpy(reinterpret_cast<std::byte*>(mirror.inputs.data()) + a_offset, a_data, a_bytes);
+			};
+			a_region.Emit(a_caughtUpFrom, write);
+			if (a_main && !a_main->empty())
+				write(a_main->data(), a_main->size() * sizeof(DrawInput), a_mainAt * sizeof(DrawInput));
+			if (a_shadow && !a_shadow->empty())
+				write(a_shadow->data(), a_shadow->size() * sizeof(DrawInput), a_shadowAt * sizeof(DrawInput));
+			++checks;
+			const auto expected = [&](std::size_t a_i) -> const DrawInput* {
+				if (a_i < a_region.Count())
+					return a_region.At(a_i);
+				if (a_main && a_i >= a_mainAt && a_i < a_mainAt + a_main->size())
+					return &(*a_main)[a_i - a_mainAt];
+				if (a_shadow && a_i >= a_shadowAt && a_i < a_shadowAt + a_shadow->size())
+					return &(*a_shadow)[a_i - a_shadowAt];
+				return nullptr;
+			};
+			for (std::size_t i = 0; i < units; ++i) {
+				const auto* want = expected(i);
+				if (!want || std::memcmp(want, &mirror.inputs[i], sizeof(DrawInput)) == 0)
+					continue;
+				++differ;
+				if (first.empty())
+					first = fmt::format("backing {}: input {} of {} (region {}, caught up from {}): object {} sent, {} listed", a_lease->generation, i, units,
+						a_region.Count(), a_caughtUpFrom, mirror.inputs[i].objectIndex, want->objectIndex);
+				break;
+			}
+			if (checks >= 300) {
+				logger::info("[DCLF] payload inputs backings (set parity): {} catch-ups checked ({} backings mirrored), {} differ{}{}", checks, mirrors.size(), differ,
+					differ ? " <- INPUTS DIFFER; first: " : " <- OK", first);
+				checks = differ = 0;
+				first.clear();
+			}
+		}
 	}
 
 	/**
@@ -184,6 +243,7 @@ namespace DCLF::Draws
 		std::array<org::services::JournaledPartRequest, kPayloadParts> requests{};
 		auto out = std::make_shared<PayloadVersions>();
 		out->main = a_main != nullptr;
+		out->mainBody = a_main ? a_main->body.get() : nullptr;
 		if (a_main) {
 			out->products = a_main->body->products;
 			Extensions::CarryPayloadProducts(out->products);
@@ -271,6 +331,13 @@ namespace DCLF::Draws
 		JudgeAppends(requests, shared, previous.get(), { a_views, geometries, a_main, a_shadow, region, mainList, shadowList, out->mainInputsAt, out->shadowInputsAt });
 		auto publication = set->Publish(requests, a_uploads);
 		CheckExtrasBacking(a_views.extras, a_views.tables.get(), publication, shared, previous.get());
+		if (Diagnostics::Observe().claims) {
+			constexpr auto k = static_cast<std::size_t>(PayloadPart::Inputs);
+			if (shared[k])
+				CheckInputs(region, mainList, out->mainInputsAt, shadowList, out->shadowInputsAt, previous->leases[k], kept[k].contentEpoch);
+			else if (publication.parts[k].lease)
+				CheckInputs(region, mainList, out->mainInputsAt, shadowList, out->shadowInputsAt, publication.parts[k].lease, publication.parts[k].caughtUpFrom);
+		}
 		for (std::size_t k = 0; k < kPayloadParts; ++k) {
 			if (shared[k]) {
 				out->parts[k] = { previous->parts[k].srvIndex, previous->parts[k].address, units[k] };

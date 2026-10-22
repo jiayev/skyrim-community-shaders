@@ -256,6 +256,11 @@ namespace DCLF
 		void AddOccluderRoom(Program& a_program, const void* a_occluder, const Program* a_parent);
 		bool AddBox(Program& a_program, const void* a_box);
 		void AddPlane(Program& a_program, const void* a_plane);
+		/**
+		 * @brief The portal parity's (PortalViewsView): unbound space's top program built again with every graph occluder's state as the
+		 * engine holds it (+0x40) instead of DCLF's (and a judged plane's edge flags, +0xF0), DCLF's shape scratch kept as it was. Only for a walk that started in unbound space.
+		 */
+		Program UnboundWithEngineStates(const void* a_graph);
 
 		// The shapes' tests.
 		static Quad Corners(const void* a_quad);

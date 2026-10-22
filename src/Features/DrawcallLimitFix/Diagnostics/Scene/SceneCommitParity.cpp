@@ -26,9 +26,13 @@ namespace DCLF::Diagnostics
 			const auto& setWaitWhy = V::setWaitWhy(store);
 			const std::size_t objects = tables.objects.size();
 			// A decision of the check's, a slot it leaves out of a root view announced with the waiting reason the commit left.
+			std::string whys;  // the full evaluation's waiting reasons for the slot last decided (SetStats::waitingBy's indices)
 			auto wanted = [&](std::uint32_t a_slot, bool& a_wait) {
 				const auto decision = V::DecideSlot(store, a_slot, a_event.live, a_event.drawn);
 				a_wait = decision.wait;
+				whys.clear();
+				for (std::uint32_t w = 0; w < decision.whyCount; ++w)
+					whys += fmt::format("{}{}", w ? "," : "", decision.whys[w]);
 				if (decision.rootViewExcluded || decision.rootViewHeld)
 					Notify(SetSlotRedecided{ store, a_slot, decision, a_slot < setWaitWhy.size() ? setWaitWhy[a_slot] : std::uint8_t{ 0 } });
 				return decision.phases;
@@ -38,6 +42,7 @@ namespace DCLF::Diagnostics
 			for (std::uint32_t slot = 0; slot < objects; ++slot) {
 				bool wait = false;
 				std::uint8_t phases = wanted(slot, wait);
+				const std::string slotWhys = whys;
 				const std::uint32_t partner = tables.IsLayer(slot) ? tables.layerBase[slot] : slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot;
 				if (partner != kNoObjectSlot && partner < objects) {
 					bool partnerWait = false;
@@ -51,8 +56,9 @@ namespace DCLF::Diagnostics
 					continue;
 				if (!differ++) {
 					const auto* geometry = tables.objectGeometry[slot];
-					first = fmt::format("'{}' (slot {}): phases {:#x} kept, {:#x} now; waiting {} kept, {} now (its causes {:#x})", geometry && geometry->name.c_str() ? geometry->name.c_str() : "?",
-						slot, setPhases[slot], phases, setWaitingMark[slot] != 0, wait, setWaitCause[slot]);
+					first = fmt::format("'{}' (slot {}): phases {:#x} kept, {:#x} now; waiting {} kept, {} now (its causes {:#x}; the evaluation's reasons {})",
+						geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", slot, setPhases[slot], phases, setWaitingMark[slot] != 0, wait, setWaitCause[slot],
+						slotWhys.empty() ? "none" : slotWhys);
 				}
 			}
 			auto& c = SceneDiagnostics().commit;

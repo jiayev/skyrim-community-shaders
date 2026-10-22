@@ -50,6 +50,8 @@ namespace DCLF::Draws
 		// what the frames that read it bound.
 		std::array<org::services::BackingLease, kPayloadParts> leases;
 		std::uint64_t serial = 0;  // process-unique per payload made (a kept publication keeps its payload, and its serial)
+		// TEMP (set parity): the main body the publication was made from, for identity only (CommitMainPayload's pairing check).
+		const void* mainBody = nullptr;
 		// The main payload's products (MainBody::products, by registration): installed with the payload (Extensions::
 		// InstallPayloadProducts). Empty without main parts.
 		Extensions::PayloadProducts products;

@@ -52,6 +52,25 @@ namespace DCLF::Diagnostics
 			}
 			const auto* words = static_cast<const std::uint32_t*>(mapped.pData);
 			const std::uint32_t stamp = snapshot.frame & 0x0FFFFFFFu;
+			// TEMP: where the GPU's scene list (the inputs backing copied with the words) names an object.
+			const auto gpuInputs = [&](std::size_t a_object) -> std::string {
+				if (!snapshot.inputsStaging)
+					return "; GPU inputs not copied";
+				D3D11_MAPPED_SUBRESOURCE inputsMapped{};
+				if (FAILED(context->Map(snapshot.inputsStaging.get(), 0, D3D11_MAP_READ, 0, &inputsMapped)))
+					return "; GPU inputs not mapped";
+				D3D11_BUFFER_DESC inputsDesc{};
+				snapshot.inputsStaging->GetDesc(&inputsDesc);
+				const auto* gpu = static_cast<const DrawInput*>(inputsMapped.pData);
+				const std::size_t held = inputsDesc.ByteWidth / sizeof(DrawInput);
+				std::string at;
+				for (std::size_t i = 0; i < held && at.size() < 120; ++i)
+					if (gpu[i].objectIndex == a_object)
+						at += fmt::format(" {}", i);
+				context->Unmap(snapshot.inputsStaging.get(), 0);
+				return fmt::format("; the GPU's inputs (backing {}, {} held; colour dispatched {}, depth {}) name it at:{}", snapshot.inputsGeneration, held,
+					snapshot.inputCount, snapshot.depthInputCount, at.empty() ? " none" : at);
+			};
 			D3D11_MAPPED_SUBRESOURCE frustumMapped{};
 			const std::uint32_t* frustum = nullptr;
 			std::size_t frustumWords = 0;
@@ -89,8 +108,9 @@ namespace DCLF::Diagnostics
 					++counts.outsideDrawn;
 					if (counts.samples++ < 40) {
 						const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
-						logger::info("[DCLF] set parity, frame {}: drawn outside the set - object {} '{}' ({}{})", snapshot.frame, o,
-							geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", depthDrawn ? "depth" : "", colourDrawn ? " colour" : "");
+						logger::info("[DCLF] set parity, frame {}: drawn outside the set - object {} '{}' ({}{}); listed by {:#x} (input flags {:#x}){}", snapshot.frame, o,
+							geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", depthDrawn ? "depth" : "", colourDrawn ? " colour" : "",
+							o < snapshot.listedBy.size() ? snapshot.listedBy[o] : 0, o < snapshot.listedFlags.size() ? snapshot.listedFlags[o] : 0, gpuInputs(o));
 					}
 				}
 				// A decal is drawn by the colour segment's decal pass only (the depth segment never draws one), so it
@@ -458,6 +478,38 @@ namespace DCLF::Diagnostics
 				for (std::size_t o = 0; o < objects; ++o)
 					if (snapshot.geometry[o])
 						snapshot.claims[o] = set->PhasesOf(snapshot.geometry[o]);
+			}
+		}
+		// TEMP: the GPU's scene list (the installed publication's inputs backing), copied after the colour epoch like the words.
+		if (const auto* versions = a_epoch.payloadVersions) {
+			if (const auto& lease = versions->leases[static_cast<std::size_t>(Draws::PayloadPart::Inputs)]; lease && lease->buffer) {
+				static std::uint64_t wrappedGeneration = 0;
+				static winrt::com_ptr<ID3D11Buffer> wrapped;
+				if (!wrapped || wrappedGeneration != lease->generation) {
+					D3D11_BUFFER_DESC wrap{};
+					wrap.ByteWidth = static_cast<UINT>(lease->buffer->GetSize());
+					wrap.Usage = D3D11_USAGE_DEFAULT;
+					wrap.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+					wrap.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+					wrap.StructureByteStride = sizeof(std::uint32_t);
+					wrapped = RenderGraphRuntime::Get().WrapBuffer(*lease->buffer, wrap);
+					wrappedGeneration = lease->generation;
+				}
+				if (wrapped) {
+					D3D11_BUFFER_DESC staging{};
+					wrapped->GetDesc(&staging);
+					staging.Usage = D3D11_USAGE_STAGING;
+					staging.BindFlags = 0;
+					staging.MiscFlags = 0;
+					staging.StructureByteStride = 0;
+					staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+					if (SUCCEEDED(globals::d3d::device->CreateBuffer(&staging, nullptr, snapshot.inputsStaging.put()))) {
+						context->CopyResource(snapshot.inputsStaging.get(), wrapped.get());
+						snapshot.inputsGeneration = lease->generation;
+						snapshot.inputCount = static_cast<std::uint32_t>(a_colour.body->inputList.size() + a_colour.resident.Count());
+						snapshot.depthInputCount = static_cast<std::uint32_t>(a_depth.body->inputList.size() + a_depth.resident.Count());
+					}
+				}
 			}
 		}
 		setParityFrames.push_back(std::move(snapshot));

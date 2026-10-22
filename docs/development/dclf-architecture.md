@@ -564,7 +564,9 @@ phase (`Core/Scene/Model/SceneSet.h`, `Core/Scene/Coordinator/SceneSet.cpp`).
 -   **A claim is the whole object**: it joins the set in every phase it takes part in once everything every one of them draws it
     with is ready (`MainReady`, `PhaseReady`), and leaves all of them together.
 -   **Readiness is judged by events and readiness sources, never a scan.** A member being rebound leaves first (`LeaveSet`,
-    `MarkSetApply`) and keeps its claim until the publication that carries its new record.
+    `MarkSetApply`) and keeps its claim until the publication that carries its new record. A moved source requeues the slots
+    waiting on it; the scene buffers' fit also requeues the members past it, since the fit can shrink (a newly adopted set naming
+    smaller buffers, as at startup) and a member past it has no build input (`CommitReadinessSources`).
 -   **`ApplySet`** applies the commits inside `PublishScene` into `Tables::setPhases`, the record's `kObjectMember` and the lacking
     counts; a slot freed or reassigned since takes no phase. Records and `setPhases` change only there.
 -   **Structural changes.** `kChangeStructure` is noted when what a revision's shapes are made from changes (the record's or draw's

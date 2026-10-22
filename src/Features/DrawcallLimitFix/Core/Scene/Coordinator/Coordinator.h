@@ -411,6 +411,7 @@ namespace DCLF
 			std::array<std::uint64_t, 5> leftBy{};
 			std::array<std::uint64_t, 14> leftWaiting{};
 			std::uint64_t waitingRequeued = 0;  // waiting slots taken again for a readiness source they wait on
+			std::uint64_t fitRequeued = 0;      // members taken again because the scene buffers' fit moved below them
 			std::string firstWaiting;
 		};
 		SetStats TakeSetStats() { return std::exchange(setStats, {}); }
