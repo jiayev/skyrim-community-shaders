@@ -238,6 +238,42 @@ public:
 	static void RequestShaderReload(std::string_view a_changedFile = {}, bool a_force = false);
 	/** @brief Any thread: the next a_epochs completed epochs log each graphics timestamp range in GPU order ("[TSDUMP]"). */
 	static void RequestTimestampDump(std::uint32_t a_epochs);
+	/**
+	 * @brief Any thread (diagnostics): Drawcall Limit Fix's epochs of the segments a_segments names (a bit by Segment) report submitted
+	 * without submitting (ExecuteEpoch returns at once). a_boundary, what each still does at its point, so a run separates the boundary's
+	 * pieces from the epoch's own work: 0 nothing, 1 the D3D11 Flush (DXVK's command list closed), 2 that and an empty enqueued
+	 * submission (one vkQueueSubmit2 of nothing), 3 that with a timeline signal instead (the compute entry's stream point).
+	 */
+	static void SkipDclfEpochs(std::uint32_t a_segments, std::uint32_t a_boundary = 0);
+	/**
+	 * @brief Any thread (diagnostics): the epochs of a_segments (a bit by Segment) submit nothing at their end; the next epoch's single
+	 * enqueue takes their submissions with its own (a submission-level merge: their GPU work runs at that later point). Timing only.
+	 */
+	static void HoldDclfSubmissions(std::uint32_t a_segments);
+	/**
+	 * @brief Any thread (diagnostics): each skipped epoch (SkipDclfEpochs) busy-waits a_microseconds on the render thread: an epoch's CPU cost
+	 * alone; a_submitted: each submitted DCLF epoch instead, after its enqueue.
+	 */
+	static void SetSkippedEpochSpin(std::uint32_t a_microseconds, bool a_submitted = false);
+	/** @brief Any thread (diagnostics): the next a_epochs epochs log their enqueued submissions' waits (with each semaphore's value then) and signals. */
+	static void RequestSubmissionDump(std::uint32_t a_epochs);
+	/**
+	 * @brief Any thread (diagnostics): each epoch's batched submissions go to DXVK as one VkSubmitInfo2 (every list; the waits on semaphores
+	 * it does not signal; each semaphore's highest value signalled once). Unsafe with cross-queue work inside the epoch: timing only.
+	 */
+	static void CoalesceEpochSubmits(bool a_coalesce, bool a_split = false);
+	/**
+	 * @brief Any thread (diagnostics): DCLF's epochs run whole on the CPU (inputs, preparation, recording, uploads queued) but their
+	 * submissions reach the queue as their signals alone: no list runs. Unsafe beyond empty epochs: timing only.
+	 */
+	static void DropDclfLists(bool a_drop);
+	/**
+	 * @brief Any thread (diagnostics): each skipped epoch (SkipDclfEpochs) has DXVK's worker busy-wait a_microseconds at its point in the
+	 * stream (dxvkEmitCommandBufferCallback), and with a_sync the render thread waits for the worker to get there (one synchronization).
+	 */
+	static void SetSkippedEpochWorkerLoad(std::uint32_t a_microseconds, bool a_sync);
+	/** @brief Any thread (diagnostics): the D3D11 flush before each epoch on (1), off (0) or as CS_ORG_EARLY_FLUSH says (-1). */
+	static void SetEarlyFlush(int a_flush);
 
 	/** @brief Wraps a materialized graph-owned buffer as a D3D11 buffer (DEFAULT usage, no CPU access). */
 	winrt::com_ptr<ID3D11Buffer> WrapBuffer(org::Resource& a_buffer, const D3D11_BUFFER_DESC& a_desc);

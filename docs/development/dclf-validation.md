@@ -165,7 +165,7 @@ Read from the environment only.
 | `CS_ORG_ASYNC_EPOCHS` | registry | `0`: epochs are recorded on the render thread. A reduced featureset. |
 | `CS_ORG_CLOSED` | registry | `0`: epochs do not return their resources to their home states. |
 | `CS_ORG_BATCH_SUBMIT` | registry | `0`: an epoch's submissions go to DXVK one at a time. |
-| `CS_ORG_EARLY_FLUSH` | registry | `0`: DXVK's pending work is not flushed when an epoch starts. |
+| `CS_ORG_EARLY_FLUSH` | registry | `1`: DXVK's pending work is flushed when an epoch starts (a second DXVK list per epoch). |
 | `CS_ORG_COMPUTE_QUEUE` | `RenderGraphRuntime.cpp` | `0`: BasicRHI's compute queue aliases the graphics one. |
 | `CS_ORG_UPLOAD_QUEUE` | `RenderGraphRuntime.cpp` | `0`: no spare transfer queue for uploads. |
 | `CS_ORG_SUBMIT` | `RenderGraphRuntime.cpp` | `flush`: each epoch flushes and waits for DXVK's command stream instead of enqueuing its submission. |
@@ -295,6 +295,7 @@ tags are counters of the normal path.
 | Tag | Line | Means |
 | --- | --- | --- |
 | `<- MIRROR APPLY`, `<- MIRROR USES`, `<- CATEGORY INDEX` | classification line | Mirror batches applied wrong, property or alpha records no geometry uses, and the category index against a rebuild. |
+| `<- ANCESTOR KEY` | attach burst line (`ancestor key parity`) | Every tracked object's kept ancestor key (Light Limit Fix's room node) against the mirror's chain now, and its value, kept and in its resident slots, against the room map's for that key (`Coordinator::CheckAncestorKeys`). |
 | `<- MIRROR EVICTED` | `[DCLF] scene mirror evictions (T6b1b): ...` | Records that left the world by no detach a hook saw. |
 | `<- UNPINNED FADE NODE` | `[DCLF] fade node references (T6b3e): ...` | Fade nodes asked for and not answered. It also fires for requests still in flight at the report. |
 | `<- UNPINNED PROPERTY`, `<- MASK UNHELD`, `<- SET PATCHED`, `<- STALE`, `<- SLOT VIOLATION`, `<- DETACH` | coordinator lines | A property refused for want of a pin, a shadow mask not held, a member patched after its commit, a cached verdict that differs from one computed again, a slot rule broken, and validation drops of detaches. |
@@ -327,8 +328,10 @@ Under set parity or persistent parity. Each compares DCLF's view, made from the 
 | `<- LIGHT VIEW` | `[DCLF] light views (T3a: ...)` |
 | `<- LIGHT SELECTION` | `[DCLF] light selection (T3b, T3c: ...)`: DCLF's choice of shadow lights and focus hosts against `CalculateActiveShadowCasterLights`' |
 | `<- LIGHT ROOMS` | the light rooms line: `PortalViews::WalkLight`'s rooms against the engine's walk |
-| `<- LOCAL SHADOW VOLUME` | `[DCLF] local shadow volumes (T3b: ...)` |
+| `<- LOCAL SHADOW VOLUME`, `<- PARABOLIC CULL` | `[DCLF] local shadow volumes (T3b: ...)`; then each point light's paraboloid cull (`kCullParabolic`: sphere, plane, back accumulator) against the static process `FUN_141519d20` set up, when its camera is the light's (AE) |
+| `<- SHADOW MASK RESOLVE` | `[DCLF] target dump: Present N: local shadow mask agreement ...` (`CS_DCLF_TARGET_DUMP` only): texels of a local shadow light's `kSHADOW_MASK` channel the engine lit at opaque-end that DCLF's resolve left dark, past 10% (see "The target dump") |
 | `<- FOCUS VIEW`, `<- FOCUS MEMBERS` | `[DCLF] focus views (T3c: ...)`, `[DCLF] focus members (T3c: ...)` |
+| `<- MASK CHANNEL` | `[DCLF] local shadow masks: ...`: colour commits with a local shadow mask record whose channel (DCLF's selection's mask index) is not the one the engine holds the light in (BSShadowLight +0x520), which Light Limit Fix's light data reads; each record prints its `engine channel` |
 | `<- SHADOW TARGET` | `[DCLF] shadow targets (T3d: ...)`: the predicted depth target and slice against the renderer's at the draw |
 | `<- OCCLUSION VIEW` | `[DCLF] occlusion views (T4: ...)` |
 | `<- PORTAL VIEW` | the portal line: DCLF's occluder states and sets against the engine's |
@@ -398,7 +401,7 @@ the end of the prepass.
 | `[DCLF] feature binding parity OK\|MISMATCH: ...` | Feature bindings that differ within a frame's eligible draws. |
 | `[DCLF] bone palette parity OK\|MISMATCH: ...` | Skinned draws' palettes. |
 | `[DCLF] skin parity OK\|MISMATCH: ...` | Advanced Skin's t71/t74 and wetness. |
-| `[DCLF] light data parity ...`, `[DCLF] TruePBR texture parity ...` | The integrations' checks (`Integrations/LightLimitFix/Diagnostics`, `Integrations/TruePBR/Diagnostics`). `light data parity, shadow lights` (`<- SHADOW MASK`) compares each draw's local shadow lights (BuildDrawsCS's mask, from the build parity readback: run with `CS_DCLF_BUILD_PARITY`) with the native pass's `ShadowBitMask`; without the build parity it checks nothing. |
+| `[DCLF] light data parity ...`, `[DCLF] TruePBR texture parity ...` | The integrations' checks (`Integrations/LightLimitFix/Diagnostics`, `Integrations/TruePBR/Diagnostics`). `light data parity, shadow lights` (`<- SHADOW MASK`) compares each draw's local shadow lights (BuildDrawsCS's mask, from the build parity readback: run with `CS_DCLF_BUILD_PARITY`) with the native pass's `ShadowBitMask`; without the build parity it checks nothing. The readback is three main epochs old, so a receiver whose bound moved since it was armed is counted apart (`of a receiver that moved since the readback`) and flags nothing, and so is one whose mask channels were reassigned since (`of one whose channels were reassigned since`: the engine's channel of each active shadow light, BSShadowLight +0x520, at the arming against now, `Diagnostics::ChannelLights`). Turning reassigns them all the time as lights enter and leave the view, and the readback's bits then name other lights: that was every `<- SHADOW MASK` of the Dragonsreach runs (DCLF 1, native 2 and the like on static walls). `first still` is the first of one that neither moved nor was reassigned. A room mismatch prints up to four `light data room` lines: the live parent chain to the native room node, and the node DCLF's index names. |
 | `[DCLF] face capture parity: ...` | Reflection face Lighting draws against their objects' main rows (`CaptureParity::OnFaceLightingDraw`). |
 | `[DCLF] constant block coverage: ...`, `[DCLF] variables the native shaders have that DCLF leaves unwritten: ...` | What was compared, and what DCLF leaves unwritten. |
 | `[DCLF] render state ... (VARIES)` | Render states seen, flagged when they vary. |
@@ -568,12 +571,76 @@ wrong, the difference is inside the shader:
     probe on a 64 x 64 block at a still view and DCLF toggled off and on three times, DCLF's and native's readings of
     `dirSoftShadow` interleave on the same curve as the sun moves (0.62 to 0.76 over the run), with no offset between them.
 
+### Cost attribution: cutting pieces out
+
+Live `CS_DCLF_TEST_COMMANDS` that remove one piece of DCLF's frame, so frame-time phases in one launch price each piece. Freeze
+the camera, time and AI first (`tfc 1`, `tai`, `set timescale to 0`), and use `CS_DCLF_TEST_TOGGLE` for the native phase. The
+scratchpad script `timing/cuts*.py` times 300-frame phases from marker timestamps.
+-   `dclf:cut=<prefixes>`: the graph leaves out the pass keys with those prefixes (`*`: every one), from a rebuild
+    (`Draws::GraphConditions::cuts`). An epoch the cuts would empty keeps its first pass, since a revision-driven epoch without
+    passes cannot be recorded. A rebuild gives the draws fresh backings, so cutting the builds leaves the draws drawing nothing;
+    cut the draws instead to price them.
+-   `dclf:epochs=0|1|flush|enqueue|signal|cmd|cmd3`: DCLF's epochs submitted, or not (`RenderGraphRuntime::SkipDclfEpochs`;
+    nothing they claim is drawn), each skipped one still doing at its point: nothing (`0`), the D3D11 flush an enqueue makes
+    (`flush`), that and an empty enqueued submission (`enqueue`), one signalling a timeline (`signal`), one empty command buffer
+    (`cmd`) or three in three submissions (`cmd3`). A skipped colour epoch commits nothing, so the forward epoch it shares is not
+    reached at all. `dclf:skip-epochs=shadow,z,colour,forward,fp` skips the named ones alone. In a skipped epoch,
+    `dclf:epoch-spin=<us>` busy-waits the render thread, and `dclf:worker-spin=<us>` / `dclf:worker-sync=1` load DXVK's worker
+    thread there or wait for it (`SetSkippedEpochWorkerLoad`); `dclf:submitted-spin=<us>` busy-waits after each submitted epoch.
+-   `dclf:cut=*,~latched-record`: the empty epochs' kept latched-copies passes record no copy (`Draws::LatchedRecordCut`).
+-   `dclf:early-flush=0|1|default`, `dclf:queue-boundary=0|1`, `dclf:list-heaps=0|1`: the D3D11 flush before each epoch, the
+    graph's external entry and exit barriers, and the descriptor heap bind at the start of a copies-only list. The last two are
+    unsafe off and for timing only. So are `dclf:list-barriers=external|all` (the lists' full barriers, the closed execution's
+    included, or every barrier: `org::experimental::DiagnosticSkipListBarriers`), `dclf:rhi-globals=0` (BasicRHI records no
+    global barrier, the upload lists' included), `dclf:pass-queries=0` (no pass timestamp queries, resolves or Tracy GPU zones),
+    `dclf:coalesce=1` (each epoch's submissions as one), `dclf:drop-lists=1` (DCLF's epochs run whole on the CPU but submit only
+    their signals) and `dclf:hold=shadow` (the shadow epoch's submissions go out with the depth epoch's enqueue). Safe:
+    `dclf:heap-dedupe=1` (BasicRHI emits no heap bind of the heaps a list already bound), `dclf:split-enqueue=1` (one enqueue per
+    submission, so DXVK's submission trace times each) and `dclf:submit-dump=<epochs>` (each submission's waits, with the
+    semaphore's value at the enqueue, and its signals; and the resource descriptions made since the last dump).
+-   `CS_GPU_IDLE_TRACE=15` with `CS_GPU_IDLE_MIN_GAP_US=2`: the GPU's idle gaps below the default 50 us, and every sampled frame's
+    submissions in GPU order (`timing/gpuorder.py` averages them by phase). An interop span starts at a top-of-pipe timestamp, so
+    it includes the tail of the DXVK work before it: compare frames, not spans.
+-   Dragonsreach, 2026-10-22: DCLF's 0.69 ms over native broke down as
+    -   DCLF's draws, net of the engine's: +0.10 ms
+    -   its compute passes: 0.21 ms
+    -   the epochs' submission with almost nothing in them: 0.24-0.35 ms. The kept copy passes are about 0.08 ms of that and
+        the list heap binds about 0.03-0.08 ms; the barriers, the early flush and async compute are each within noise, and idle
+        gaps are 0.04 ms. The shadow epoch is the costliest (about 0.18 ms).
+    -   DXVK's command-list breaks at the four epoch points: 0.10-0.13 ms
+-   The empty epochs, priced again the same day (`timing/ladder.py`), cost 0.20-0.22 ms over skipped epochs that make an empty
+    enqueue each:
+    -   none of it is the submission mechanics. A flush, an empty enqueue, a timeline signal, an empty command buffer or three
+        each cost nothing measurable; nor does merging an epoch's submissions into one, or holding the shadow epoch's for the
+        depth epoch's enqueue (in the full state too)
+    -   nor the lists' barriers (all of them, the upload lists' included), their copies, heap binds, pass queries, the upload
+        queue, the frame latency, render-thread time (up to 200 us a skipped epoch or 100 us after a submitted one) or DXVK's
+        worker thread (60 us of load, or a sync, a skipped epoch)
+    -   running the epochs whole with their lists dropped (`dclf:drop-lists=1`) recovers 0.085 ms: the lists' own GPU work, with
+        the upload lists' copies and the empty forward epoch's draw pass. The other 0.13 ms is the epochs running at all: the
+        second DXVK list each makes (the early flush closes one, the enqueue another around the work issued during the epoch;
+        `dclf:early-flush=0` recovered 0.05 ms empty, 0.04 ms full in one launch, but nothing within 0.02 ms in a later ABAB
+        launch, `flush3`: the flush is off by default since) and the forward epoch's own boundary, which skipped epochs never
+        reach.
+    -   deduplicating the passes' repeated heap binds changes nothing: a repeated bind of the same heaps is free.
+
 ### The target dump
 
 `CS_DCLF_TARGET_DUMP=f1,f2,...` (`Diagnostics/Feature/TargetDump.cpp`): at those Present counts, every target bound at each dump
 point of the frame (and `kMAIN`'s depth) is read back asynchronously and written as half-size PNGs, NaN and Inf marked, with
 their statistics in `stats.txt`, under `SKSE/dclf-dump/<count>/`. The log says `[DCLF] target dump: Present N, N points, N targets
 written to ...`. Use it to compare a good frame with a corrupt one; Streamline also logs its constants on those frames.
+-   Every point also stages `kSHADOW_MASK`, and the `present` point every slice of `kSHADOWMAPS` and `kSHADOWMAPS_ESRAM` (at most 16):
+    their PNGs on every frame listed and their raw texels (`.raw`, full size, the target's own format: the maps are 16-bit depth, which
+    the PNG writer does not decode). With `CS_DCLF_TEST_TOGGLE`, a dump on each side compares DCLF's local shadow maps and masks with
+    the engine's: that is how the paraboloid views' missing casters were found (the raw maps differed by 20% of their texels).
+-   A frame with both an `opaque-end` and an `after-DCLF-colour` copy of `kSHADOW_MASK` also gets the mask's agreement, in
+    `stats.txt` and the log (`[DCLF] target dump: Present N: local shadow mask agreement ...`). The engine draws each light's channel for
+    its registered receivers before the colour segment, and DCLF's resolve then rewrites every texel of the channels it has a record
+    for. Per channel it counts the texels the engine lit (> 0.5) and how many of them DCLF's resolve left dark (< 0.5), and flags
+    `<- SHADOW MASK RESOLVE` past 10%. That caught the resolve reading slice 0 alone: every channel but the one whose light drew into
+    slice 0 came out 0, so those lights went dark wherever the camera's position put them past slice 0. On a DCLF-off frame it
+    compares the engine's mask with itself.
 
 ### The schedule dump and `tools/dclf-schedule-diff.py`
 

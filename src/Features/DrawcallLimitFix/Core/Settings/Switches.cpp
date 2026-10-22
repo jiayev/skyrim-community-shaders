@@ -93,7 +93,7 @@ namespace DCLF
 			{ OrgAsyncEpochs, "CS_ORG_ASYNC_EPOCHS", F, Reduced::Zero, true, "0: epochs are recorded on the render thread" },
 			{ OrgClosed, "CS_ORG_CLOSED", F, Reduced::Zero, true, "0: epochs do not return their resources to their home states" },
 			{ OrgBatchSubmit, "CS_ORG_BATCH_SUBMIT", F, Reduced::Zero, true, "0: an epoch's submissions go to DXVK one at a time" },
-			{ OrgEarlyFlush, "CS_ORG_EARLY_FLUSH", F, Reduced::Zero, true, "0: DXVK's pending work is not flushed when an epoch starts" },
+			{ OrgEarlyFlush, "CS_ORG_EARLY_FLUSH", F, N, true, "1: DXVK's pending work is flushed when an epoch starts (a second DXVK list per epoch)" },
 
 			{ PersistentParity, "CS_DCLF_PERSISTENT_PARITY", P, N, false, "1: every kept store (records, bindings, slots, shading, geometry) against a rebuild, every 60 frames" },
 			{ WalkParity, "CS_DCLF_WALK_PARITY", P, N, false, "1: the delta walk against a dense walk, every 60 frames" },

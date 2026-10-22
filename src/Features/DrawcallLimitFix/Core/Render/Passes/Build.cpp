@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 
 namespace DCLF::Draws
 {
@@ -177,7 +178,7 @@ namespace DCLF::Draws
 			if (rootRows) {
 				constants.fadeRootsIndex = CaptureViewIndex(a_preparation, a_bindings.fadeRoots);
 			}
-			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {
+			if (Draws::OcclusionTested(*resources, *frame)) {
 				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 				constants.hzbMips = resources->hzbMips;

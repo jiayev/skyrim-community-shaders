@@ -1026,9 +1026,11 @@ latch's `drawCount` of 0 skips its view.
     included. The stream's wait at an epoch's end is on `computeExit`, a semaphore every compute submission signals that lives as
     long as the device (a graph rebuild destroys the graph's own timelines). Why: a compute submission of only semaphore operations
     overlapping DXVK's submission thread faulted the GPU at VA 0; under the lock, 0 losses in 40 startups.
--   **`CS_ORG_EARLY_FLUSH`** (on): `ExecuteEpoch` flushes DXVK's immediate context before the epoch's first submission, so the
-    D3D11 work issued just before an epoch does not wait on the CPU for ORG's preparation. DCLF-attributed GPU idle fell from
-    1.23-2.17 to 0.56-1.08 ms a frame.
+-   **`CS_ORG_EARLY_FLUSH`** (off; `1` on): `ExecuteEpoch` flushes DXVK's immediate context before the epoch's first submission, so
+    the D3D11 work issued just before an epoch does not wait on the CPU for ORG's preparation. With synchronous epochs it cut
+    DCLF-attributed GPU idle from 1.23-2.17 to 0.56-1.08 ms a frame. Async epochs prepare ahead, so the wait it saves is short, and
+    the flush splits DXVK's list in two around each epoch. In Dragonsreach (GPU-bound) on and off give the same frame time within
+    0.02 ms, full and empty (`timing/ladder.py flush3`); off by default, for the one DXVK list an epoch.
 -   ORG's resource tracking world (flecs) has one owner at a time (`ECSManager`): every change is posted to a wait-free queue and
     applied by whoever drains it.
 
@@ -1131,8 +1133,20 @@ Occlusion is two-phase, in the depth segment's tail (`Core/Render/Passes/CorePas
     HZB;
 5.  `main-view.depth-phase2` draws the rescues.
 
-Phase 2 runs only while the HZB exists (`PassContext::PhaseTwo`). The colour segment draws exactly the set the Z-prepass decided
-(the per-object visibility words), depth-tested EQUAL.
+Phase 2 runs only while the HZB exists and the cull mode tests occlusion (`PassContext::PhaseTwo`). The colour segment draws exactly
+the set the Z-prepass decided (the per-object visibility words), depth-tested EQUAL.
+
+**The graph's conditions** (`Core/Render/Epochs/GraphConditions.h`): what a frame needs decides which passes exist, since every pass
+costs its dispatch and barriers with or without work. `IndirectDraws::BuildPoint` refreshes them before it builds, and a change
+rebuilds the graph there, so a frame's passes always match its conditions.
+-   **Interior** (`PassContext::Interior`): the current cell is an interior. Grass's and tree LOD's passes are left out (their culls,
+    arguments, counts and the views' face culls). Their draw families already decide nothing to draw without content.
+-   **Two-pass occlusion**: the cull mode is occlusion (`dclf:cull=`, `CS_DCLF_CULL`). Without it, the HZB and the whole phase 2 block
+    are left out, and the depth epoch is portal and frustum culling, the prepass, then colour. Every phase 1 HZB test asks
+    `Draws::OcclusionTested`, which also requires the graph built with the HZB pass, so no cull reads a stale pyramid.
+-   Measured in Dragonsreach (2026-10-22, 55 s launch, alternating 300-frame phases): the interior skip and no occlusion remove 25
+    ranges, about 140 us of serialised NvPerf time, but only 0.03-0.04 ms of frame time (6.47 to 6.44 ms; DCLF off 5.74 ms). Phase 2
+    rescued nothing there.
 
 **The HZB** (Features/GpuOcclusion: `HzbPass.cpp`, `Features/GpuOcclusion/HzbCS.hlsl`; the test is Core's `HzbTest.hlsli`, shared by
 BuildDrawsCS and TreeLodCullCS):
@@ -2160,7 +2174,9 @@ the parities.
     (`SunViews::CullPlanes`: the cascade process's `customCullPlanes` when `doCustomCullPlanes`), which feed the shadow epoch,
     `SunAccumulation` and the entry rule.
 -   **Local light views** (`Features/Shadows/Local/LightViews`): the same arithmetic per descriptor. A point light's
-    `BSParabolicCullingProcess` culls without planes.
+    `BSParabolicCullingProcess` culls without planes: by the light's sphere and descriptor 0's equatorial plane, which
+    `FUN_141519d20` takes from that camera (its position and forward, the NiLight's `radius.x`). Each view carries them
+    (`ShadowCameras::Camera::parabolic*`).
 -   **Light selection** (`Features/LocalLights/LightSelection`) ports `CalculateActiveShadowCasterLights` (`0x1414cc570`): it walks
     `activeShadowLights` in order and keeps up to 4 lights (the sun counts when it draws), with DCLF's visibility verdict in the
     engine's operation order and DCLF's room test ([PortalViews::WalkLight](#portalviewswalklight)). It assigns slots and mask
@@ -2202,7 +2218,9 @@ DCLF resolves those channels itself:
     after the latched copies: one dispatch over `kSHADOW_MASK` (imported with a UAV: Community Shaders' `CreateRenderTarget_ShadowMask`
     hook gives the target UAV access). Each texel's position comes from the main depth through the frame block's inverse view-projection,
     as the Utility shader's `RENDER_DEPTH` variants reconstruct it. The map lookup is Light Limit Fix's (`LocalShadowProjection.hlsli`,
-    shared with its local shadow cache), sampled with the engine's eight-tap PCF, times the mask's distance fade. A channel without a
+    shared with its local shadow cache), sampled with the engine's eight-tap PCF, times the mask's distance fade. The dispatch covers the rendered area alone (the engine's
+dynamic resolution ratio: under an upscaler the frame is the mask's top-left part). Sky texels are skipped, and so is a paraboloid
+light's filter past its radius, where the receiver depth saturates. In Dragonsreach that took the pass from 269 to 126 us. The maps are bound by their full-array views (`org::SRVViewType::Texture2DArrayFull`): an array's default view is one slice's, and a record's slice past it loads 0, which reads as shadowed everywhere. A channel without a
     record keeps what the engine drew. The colour draws declare the mask, so the graph orders their reads after the resolve.
 -   **Receivers' bits.** A draw applies a shadow light only where its object word carries the light's bit (`BuildDrawsCS`'s
     `LocalShadowMask`, Light Limit Fix's `ShadowBitMask`). In a plain draw (`DCLF_PULLED`) the object word is loaded by the stage's main,
@@ -2252,7 +2270,10 @@ DCLF resolves those channels itself:
     with it.
 -   **Cull volumes.** A sun cascade view culls against the engine's caster volume (the latch holds `customCullPlanes`). Clamped views
     (mode 0xE) cull with no near plane (`kCullNoNearPlane`), and `Utility.hlsl` pancakes such casters to z = 0
-    (`RENDER_SHADOWMAP_CLAMPED`).
+    (`RENDER_SHADOWMAP_CLAMPED`). A point light's hemisphere culls as its process does (`kCullParabolic`, the sphere and plane in
+    the latch's first two plane slots): `FUN_14151a1e0`'s codes through `ParabolicSphereMask`, the front hemisphere every caster
+    meeting the sphere, the back one (`kCullParabolicBack`, while the light has both maps) those not wholly in front of the plane. Its
+    camera's view-projection bounds nothing the paraboloid draws, so it is not tested.
 -   **Arena blocks** sit at fixed offsets from resources (`ShadowArenaBlocksOf`: zero block, SharedData, FeatureData), so the first
     revision's shapes match the first commit's.
 -   **The sun's full-frustum processes** (the engine culls the scene once per `fullFrustumCullingProcessArray` entry before the

@@ -131,21 +131,24 @@ namespace DCLF::Scene
 
 	void Coordinator::RefreshAncestorValues()
 	{
-		const std::int32_t none = Extensions::AncestorValue()->none;
-		for (auto& [geometry, entry] : tracked) {
-			std::int32_t value = none;
-			if (ancestorMap && entry.ancestorKey)
-				if (const auto found = ancestorMap->find(entry.ancestorKey); found != ancestorMap->end())
-					value = found->second;
-			entry.ancestorValue = value;
-			entry.ancestorMapGeneration = ancestorMapGeneration;
-			for (const std::uint32_t slot : { entry.slot, entry.layerSlot }) {
-				if (slot == kNoObjectSlot || slot >= tables.ancestorValue.size() || !tables.residentSlot[slot] || tables.ancestorValue[slot].value == value)
-					continue;
-				tables.ancestorValue[slot].value = value;
-				tables.NoteChange(slot, kChangeAncestorValue);
-				channels.accumulateInputs.ancestorValuesMoved.fetch_add(1, std::memory_order_relaxed);
-			}
+		for (auto& [geometry, entry] : tracked)
+			RefreshAncestorValue(entry);
+	}
+
+	void Coordinator::RefreshAncestorValue(Tracked& a_entry)
+	{
+		std::int32_t value = Extensions::AncestorValue()->none;
+		if (ancestorMap && a_entry.ancestorKey)
+			if (const auto found = ancestorMap->find(a_entry.ancestorKey); found != ancestorMap->end())
+				value = found->second;
+		a_entry.ancestorValue = value;
+		a_entry.ancestorMapGeneration = ancestorMapGeneration;
+		for (const std::uint32_t slot : { a_entry.slot, a_entry.layerSlot }) {
+			if (slot == kNoObjectSlot || slot >= tables.ancestorValue.size() || !tables.residentSlot[slot] || tables.ancestorValue[slot].value == value)
+				continue;
+			tables.ancestorValue[slot].value = value;
+			tables.NoteChange(slot, kChangeAncestorValue);
+			channels.accumulateInputs.ancestorValuesMoved.fetch_add(1, std::memory_order_relaxed);
 		}
 	}
 

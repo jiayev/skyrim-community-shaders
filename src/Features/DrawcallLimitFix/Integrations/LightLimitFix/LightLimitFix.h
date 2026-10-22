@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace RE
 {
@@ -45,7 +46,15 @@ namespace DCLF::Integrations::LightLimitFix
 		// The local shadow lights: DCLF's draw's (BuildDrawsCS, CS_DCLF_BUILD_PARITY's readback) against the native pass's ShadowBitMask, and
 		// those differing in a portal-strict light's bit (StrictGateRejects).
 		std::uint64_t shadowChecks = 0, shadowMismatches = 0, gatedMismatches = 0;
+		std::uint64_t shadowRoomMismatches = 0;  // shadow mismatches of a draw whose room differs too
+		std::uint64_t shadowReassignedChecks = 0;  // shadow checks of a receiver whose mask channels were reassigned since the readback
+		std::uint64_t shadowReassignedMismatches = 0;  // of a receiver whose mask channels were reassigned since the readback, not moved
+		std::uint64_t shadowMovedMismatches = 0;  // shadow mismatches of a receiver that moved since the readback (its lights then, the pass's now)
+		std::string shadowFirstStill;             // the first of one that did not move
 		std::string shadowFirst;
+		// The first room mismatches' geometries (distinct), with the live parent chain to the native room and the node DCLF's index names.
+		std::vector<std::string> roomDetails;
+		std::vector<const RE::BSGeometry*> roomDetailed;
 
 		/** @brief A mismatch's note (a_message follows the draw's description). */
 		using NoteFn = void (*)(void* a_owner, const RE::BSGeometry* a_geometry, std::string a_message);
@@ -53,17 +62,20 @@ namespace DCLF::Integrations::LightLimitFix
 		/**
 		 * @brief A native draw of a_objectIndex (Light Limit Fix loaded): StrictLightData as its SetupGeometry hook left it against the
 		 * tables' room; and its ShadowBitMask against a_drawn, DCLF's draw's local shadow lights and the gated bits among them (BuildDrawsCS;
-		 * null: none known).
+		 * null: none known), a_moved when its bound changed since that readback was armed.
 		 */
-		void Compare(const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex, const SceneTables& a_tables, const std::uint32_t (*a_drawn)[2], NoteFn a_note,
-			void* a_owner);
+		void Compare(const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex, const SceneTables& a_tables, const std::uint32_t (*a_drawn)[2], bool a_moved,
+			bool a_reassigned, NoteFn a_note, void* a_owner);
 		bool Ok() const { return mismatches == 0 && shadowMismatches == 0; }
 		/** @brief The report's line ("light data parity ..."). */
 		void Report() const;
 		void Reset()
 		{
-			checks = mismatches = shadowChecks = shadowMismatches = gatedMismatches = 0;
+			checks = mismatches = shadowChecks = shadowMismatches = gatedMismatches = shadowRoomMismatches = shadowMovedMismatches = shadowReassignedMismatches = shadowReassignedChecks = 0;
 			shadowFirst.clear();
+			shadowFirstStill.clear();
+			roomDetails.clear();
+			roomDetailed.clear();
 		}
 	};
 

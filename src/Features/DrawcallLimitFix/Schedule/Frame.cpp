@@ -19,8 +19,8 @@
 //   copies), view.* (Core's, through Core/Render/Passes/CorePasses.cpp), or a feature's (Features/<Name>/): main-view.* (the main view's
 //   draws: Features/MainView), shadows.* (the shadow epoch's, the occlusion maps' with it: Features/Shadows/Engine), forward.*,
 //   tree-wind.*, fades.*, texture-transforms.*, tree-lod.*, grass.*, gpu-occlusion.* (the depth pyramid's producer).
-// - A pass's own conditions decide whether it is added (no sort, no forward range, no HZB, no state from its setup: the pass is skipped,
-//   not the key).
+// - A pass's own conditions decide whether it is added (no sort, no forward range, no HZB, no state from its setup, the graph's
+//   conditions: an interior leaves grass and tree LOD out, a cull mode without occlusion the phase 2 block; the pass is skipped, not the key).
 // - Anchors exist only for diagnostics (diag.*): each adds the diagnostics' observers' passes at that point, any number of them.
 // A key nobody registered fails the install (Extensions::InstallFeatures).
 

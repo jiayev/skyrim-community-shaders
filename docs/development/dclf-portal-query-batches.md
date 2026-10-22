@@ -190,8 +190,11 @@ admitted rootless objects under unreached rooms (1-9 a window), which the object
 **The hemisphere code is not needed** (the ordered prefix stage, `ParabolicStateCS`, stays a replay kernel). A tested append's
 code is never 0 or back-only: `FUN_14151a1e0` returns 1 for a bound wholly in front of the plane and 3 for any other bound inside the
 sphere. So the engine registers every tested append and draws it in both hemispheres unless it is wholly in front. DCLF's paraboloid
-views cull each hemisphere with its own camera, as for every other point light: they drop only a hemisphere's draws its camera cannot
-rasterize, and the receivers' bits take the light wherever the gate admits, which is the engine's registration. The code differs
+views cull by the same rule (`kCullParabolic`, BuildDrawsCS's `ParabolicRejected` over `ParabolicSphereMask`): the front hemisphere
+draws every caster meeting the light's sphere, the back one every such caster not wholly in front of descriptor 0's plane, and the
+receivers' bits take the light wherever the gate admits, which is the engine's registration. (They first culled each hemisphere by
+its camera's view-projection, which bounds nothing a paraboloid draws: it dropped whole casters, such as Dragonsreach's pillars under
+the chandeliers, from the maps.) The code differs
 only for an untested append (mode 1 under `kAllPass`, `kAlwaysDraw`), which takes the last state written in traversal order: 1 or
 3 from an earlier sibling, or 0 after a sibling's sphere rejection, so the engine leaves it out of one hemisphere or casts and
 registers it nowhere, by sibling order alone. DCLF gives such an object the sphere test and its true hemispheres instead (outside

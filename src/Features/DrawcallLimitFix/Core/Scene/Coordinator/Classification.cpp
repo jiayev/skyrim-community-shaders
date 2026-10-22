@@ -314,6 +314,41 @@ namespace DCLF::Scene
 			a.categoryFirst = fmt::format("at {}: {} tracked entries unlisted, {} listed entries stray, {} misplaced; first: {}", a_where, missing, stray, misplaced, first);
 	}
 
+	void Coordinator::CheckAncestorKeys()
+	{
+		if (!Extensions::AncestorValueOn())
+			return;
+		auto& a = attachStats;
+		++a.ancestorChecks;
+		const std::int32_t none = Extensions::AncestorValue()->none;
+		for (const auto& [geometry, entry] : tracked) {
+			++a.ancestorEntries;
+			const void* key = AncestorKeyOf(geometry);
+			std::int32_t value = none;
+			if (ancestorMap && entry.ancestorKey)
+				if (const auto found = ancestorMap->find(entry.ancestorKey); found != ancestorMap->end())
+					value = found->second;
+			// The value the GPU reads: the resident slots' (the map's for the kept key).
+			bool slotStale = false;
+			for (const std::uint32_t slot : { entry.slot, entry.layerSlot })
+				slotStale |= slot != kNoObjectSlot && slot < tables.ancestorValue.size() && tables.residentSlot[slot] && tables.ancestorValue[slot].value != value;
+			const bool staleKey = key != entry.ancestorKey, staleValue = slotStale || (entry.ancestorMapGeneration == ancestorMapGeneration && value != entry.ancestorValue);
+			a.ancestorStaleKeys += staleKey ? 1 : 0;
+			a.ancestorStaleValues += staleValue ? 1 : 0;
+			if ((staleKey || staleValue) && a.ancestorFirst.empty()) {
+				a.ancestorFirst = fmt::format("geometry {} '{}' (tracked frame {}, by {}): kept key {} value {} (map's {}, slot's {}), the mirror's chain's key {} (value {})",
+					static_cast<const void*>(geometry), geometry->name.c_str() ? geometry->name.c_str() : "?", entry.trackedFrame, static_cast<int>(entry.trackedBy), entry.ancestorKey,
+					entry.ancestorValue, value, entry.slot != kNoObjectSlot && entry.slot < tables.ancestorValue.size() ? tables.ancestorValue[entry.slot].value : none, key,
+					[&] {
+						if (ancestorMap && key)
+							if (const auto found = ancestorMap->find(key); found != ancestorMap->end())
+								return found->second;
+						return none;
+					}());
+			}
+		}
+	}
+
 	std::string Coordinator::TakeAttachLine()
 	{
 		auto& a = attachStats;
@@ -341,6 +376,9 @@ namespace DCLF::Scene
 		if (a.categoryChecks)
 			line += fmt::format("; category index parity {} checks, {} differ{}{}", a.categoryChecks, a.categoryDiffer, a.categoryDiffer ? " <- CATEGORY INDEX" : " <- OK",
 				a.categoryFirst.empty() ? "" : "; first: " + a.categoryFirst);
+		if (a.ancestorChecks)
+			line += fmt::format("; ancestor key parity {} checks, {} entries, {} kept keys stale, {} values stale (kept or resident slots'){}{}", a.ancestorChecks, a.ancestorEntries, a.ancestorStaleKeys,
+				a.ancestorStaleValues, a.ancestorStaleKeys || a.ancestorStaleValues ? " <- ANCESTOR KEY" : " <- OK", a.ancestorFirst.empty() ? "" : "; first: " + a.ancestorFirst);
 		a = {};
 		return line;
 	}
@@ -581,8 +619,15 @@ namespace DCLF::Scene
 		entry.identity = identity.member;
 		entry.groupIdentity = identity.group;
 		entry.ownerReference = ownerReference;
-		entry.ancestorKey = a_prep.ancestorKey;
-		entry.ancestorMapGeneration = 0;
+		// A changed key (the engine moved the object to another room) is looked up now: its resident slots keep the old value otherwise,
+		// since the joins write it only when they evaluate the object again.
+		if (entry.ancestorKey != a_prep.ancestorKey) {
+			entry.ancestorKey = a_prep.ancestorKey;
+			if (Extensions::AncestorValueOn())
+				RefreshAncestorValue(entry);
+			else
+				entry.ancestorMapGeneration = 0;
+		}
 		entry.geometry = std::move(reference);
 		HoldProperties(entry, a_prep.held);
 		// Its entry class's held parent (a face shape's head), held from the batch's pins.

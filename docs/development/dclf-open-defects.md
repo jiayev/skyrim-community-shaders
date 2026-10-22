@@ -43,17 +43,11 @@ The fixes below are in the code. No recorded run has yet shown the check that co
 
 ## Visible lighting defects
 
--   **A moving actor keeps its old room (`light data parity MISMATCH`, about 4% of draws).** After the fix of 2026-10-22 (the room map's
-    refresh, and the plain draws' room read where used), run dm18 in Dragonsreach still shows 5,400 of 147,941 draws differing, all
-    of one walking NPC (`HairFemaleNord02`, ref `000D16E1`): DCLF room 10, the engine's room 2. The ancestor key (`Tracked::ancestorKey`)
-    is refreshed only on structural attachment, so an actor the portal system moves between rooms keeps the key it joined with. With
-    the wrong room, portal-strict lights apply by the old room's flags. **Next:** refresh the key when an actor's 3D is re-parented
-    to another room, or key moving roots by their room at the frame.
--   **Portal-strict lights' receiver bits differ from the engine's for under 1% of draws (`<- SHADOW MASK`).** The shadow mask parity
-    (capture parity with `CS_DCLF_BUILD_PARITY`) reports 790-1,050 of 130,000-143,000 draws per window in Dragonsreach, every one in a
-    gated light's bit (`StrictGateRejects`), in both directions (DCLF 0 / native 1 and DCLF 2 / native 0). The build parity readback
-    is three main epochs older than the native draw it is compared with, so moving objects account for some of it. **Next:** sample
-    the differing objects and check whether they move.
+-   **Statics have no room for the first report after a load (`light data parity MISMATCH`, `DCLF room -1`).** Every run's first
+    window (up to frame 300) has 80-920 draws of statics with DCLF room -1 against the engine's room (`WRIntCastleFreePillar01:4`,
+    `WRCastleRugBEndL:1`): Light Limit Fix's first room map is posted after those objects joined. With room -1 a portal-strict light
+    is not gated for them, so it can light them through walls for those frames. **Next:** check whether the first map's post
+    (`FrameView::PostAncestorMap`) can precede the first joins, or whether `RefreshAncestorValues` misses objects joined before it.
 
 ## Open crashes
 

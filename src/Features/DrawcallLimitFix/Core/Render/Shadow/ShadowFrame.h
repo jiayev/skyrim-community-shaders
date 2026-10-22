@@ -58,6 +58,9 @@ namespace DCLF::Draws
 		bool focus = false;    // a focus shadow's: its casters are focusTarget's members (BuildDrawsLatch::focusRoot)
 		const void* focusTarget = nullptr;
 		std::uint32_t portalContext = 0;  // its source camera's (ShadowCameras::Camera::portalContext: BuildDrawsLatch::strictContext)
+		// A point light's hemisphere: its source camera's paraboloid cull (ShadowCameras::Camera::parabolic*, kCullParabolic).
+		bool parabolic = false, parabolicBack = false, parabolicBothSides = false;
+		std::array<float, 4> parabolicSphere{}, parabolicPlane{};
 		float viewBlock[12] = {};  // PerTechnique: HighDetailRange, ParabolaParam, EyeDelta
 		std::array<std::byte, 1024> perFrame{};
 		std::uint32_t perFrameBytes = 0;

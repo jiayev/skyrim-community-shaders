@@ -50,6 +50,12 @@ namespace DCLF::ShadowCameras
 		// A portal-strict point light's view: its light's entry in the frame's light context atlas + 1 (BuildDrawsLatch::strictContext), whose
 		// strict gates its casters must pass. 0: not gated.
 		std::uint32_t portalContext = 0;
+		// A point light's view: BSParabolicCullingProcess culls by the light's sphere and descriptor 0's camera's equatorial plane
+		// (FUN_141519d20: the camera's position and forward, the NiLight's radius), not by a frustum: a caster meeting the sphere is drawn
+		// in the front hemisphere (descriptor 0), and in the back one (descriptor 1, while the light has two maps) unless it lies wholly
+		// in front of the plane (FUN_14151a1e0's codes 1 and 3). False for every other view.
+		bool parabolic = false, parabolicBack = false, parabolicBothSides = false;
+		std::array<float, 4> parabolicSphere{}, parabolicPlane{};  // centre and radius; normal and constant (dot(normal, p) - w)
 		bool valid = false;
 	};
 

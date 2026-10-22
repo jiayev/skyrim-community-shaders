@@ -510,6 +510,8 @@ namespace DCLF::Scene
 		// Parity: the category members' index against the tracked entries, on a schedule.
 		if (Policy::CheckCategoryMembers(false, passSerial))
 			CheckCategoryMembers("the attach/detach merge");
+		if (Policy::CheckAncestorKeys(passSerial))
+			CheckAncestorKeys();
 	}
 
 	void Coordinator::ApplyDetaches(const std::vector<RE::BSGeometry*>& a_detached)

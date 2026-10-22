@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/RemoteControl/NvPerf.h"
 
 namespace DCLF::Draws
@@ -108,6 +109,8 @@ namespace DCLF::Draws
 
 			static void Record(const LatchedCopiesBindings& a_bindings, const LatchedSource& a_prepared, org::PassRecordContext& a_recording)
 			{
+				if (LatchedRecordCut())
+					return;
 				auto& commands = a_recording.Commands();
 				auto copyLists = [&](std::span<const LatchedList> a_lists) {
 					for (const auto& list : a_lists) {

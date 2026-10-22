@@ -87,6 +87,8 @@ float ShadowPCF(Texture2DArray<float> a_map, uint2 a_size, uint a_slice, LocalSh
 	uint2 depthSize;
 	depthTexture.GetDimensions(depthSize.x, depthSize.y);
 	const float depth = depthTexture.Load(int3(min(uint2(uv * float2(depthSize)), depthSize - 1), 0));
+	if (depth >= 1.0)
+		return;  // the sky: no receiver, every channel left as it was
 	const float2 clipUv = uv * FrameRegister(44).xy;
 	const float4 positionCS = float4(2.0 * float2(clipUv.x, 1.0 - clipUv.y) - 1.0, depth, 1.0);
 	float4 positionMS = float4(dot(FrameRegister(32), positionCS), dot(FrameRegister(33), positionCS), dot(FrameRegister(34), positionCS),
@@ -115,7 +117,10 @@ float ShadowPCF(Texture2DArray<float> a_map, uint2 a_size, uint a_slice, LocalSh
 		uint3 mapSize;
 		map.GetDimensions(mapSize.x, mapSize.y, mapSize.z);
 		const LocalShadow::LocalShadowLookup lookup = LocalShadow::GetLocalShadowLookup(data, positionMS.xyz, 1.0 / float(mapSize.x));
-		const float visibility = lookup.sampled ? ShadowPCF(map, mapSize.xy, head.z, lookup, params2.w, noise) * lookup.scale : lookup.unsampled;
+		// Past a paraboloid light's radius the receiver depth saturates: the light does not reach it, so its filter is skipped (lit).
+		const bool beyondRadius = data.Params.x != LocalShadow::LOCAL_SHADOW_TYPE_SPOT && lookup.receiverDepth >= 1.0 - data.Params.z;
+		const float visibility = !lookup.sampled || beyondRadius ? (beyondRadius ? 1.0 : lookup.unsampled) :
+		                                                           ShadowPCF(map, mapSize.xy, head.z, lookup, params2.w, noise) * lookup.scale;
 		// The mask's distance fade (ShadowLightParam.z: the fade distance squared).
 		const float fade = params2.z > 0.0 ? 1.0 - pow(saturate(dot(positionMS.xyz, positionMS.xyz) / params2.z), 8) : 1.0;
 		channels[c] = fade * visibility;

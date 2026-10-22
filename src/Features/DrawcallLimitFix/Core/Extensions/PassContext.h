@@ -85,10 +85,17 @@ namespace DCLF::Api
 		}
 
 		/**
-		 * @brief Whether the main resources have the depth pyramid (Resources::hzb; ScheduleExecutor.cpp): the depth epoch's phase 2 block
-		 * (its retest build, the features' phase 2 passes, its depth draw) is added only then.
+		 * @brief Whether the main resources have the depth pyramid (Resources::hzb; ScheduleExecutor.cpp) and the cull mode tests occlusion
+		 * (Draws::GraphConditions::twoPassOcclusion): the depth epoch's phase 2 block (the pyramid, its retest build, the features' phase 2
+		 * passes, its depth draw) is added only then.
 		 */
 		bool PhaseTwo() const;
+
+		/**
+		 * @brief Whether the graph is built for an interior cell (Draws::GraphConditions::interior): exterior-only content's passes (grass,
+		 * tree LOD) are left out. Their draws stand down on their own there: their families decide nothing to draw without content.
+		 */
+		bool Interior() const;
 
 		/**
 		 * @brief The segment of the epoch whose shape the pass records against: its epoch's own, or the epoch it shares the shape of

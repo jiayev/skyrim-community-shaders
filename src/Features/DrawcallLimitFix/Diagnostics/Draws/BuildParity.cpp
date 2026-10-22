@@ -150,7 +150,11 @@ namespace DCLF::Diagnostics
 				const auto it = parity->expectedLocalShadows.find(object);
 				const std::uint32_t cpu = it != parity->expectedLocalShadows.end() ? it->second : 0u;
 				++localChecked;
-				drawnLocalShadows[object] = { gpu, parity->gatedLocalShadows };
+				auto& drawn = drawnLocalShadows[object];
+				drawn = { gpu, parity->gatedLocalShadows };
+				drawn.channels = parity->armedChannels;
+				if (const auto bound = parity->armedBounds.find(object); bound != parity->armedBounds.end())
+					std::memcpy(drawn.bound, bound->second.data(), sizeof(drawn.bound));
 				if ((gpu & ~parity->gatedLocalShadows) != (cpu & ~parity->gatedLocalShadows) && localDiffering++ == 0)
 					localFirst = fmt::format("object {}: GPU {:X}, CPU {:X}", object, gpu, cpu);
 			};
@@ -341,6 +345,7 @@ namespace DCLF::Diagnostics
 			const auto& tables = Scene::FrameView::Get().GetTables();
 			const std::uint64_t landscapeFlags = Extensions::LightVolumes().landscapeFlags;
 			readback.gatedLocalShadows = 0;
+			readback.armedChannels = ChannelLights();
 			for (const auto& volume : shadowVolumes)
 				if (volume.portalContext)
 					readback.gatedLocalShadows |= volume.maskBit & 0xFu;
@@ -354,6 +359,7 @@ namespace DCLF::Diagnostics
 				const float center[3]{ geometry->worldBound.center.x, geometry->worldBound.center.y, geometry->worldBound.center.z };
 				const bool landscape = property && (property->flags.underlying() & landscapeFlags);
 				readback.expectedLocalShadows[input.objectIndex] = ShadowVolumeMaskOf(shadowVolumes, landscape, center, geometry->worldBound.radius) & 0xFu;
+				readback.armedBounds[input.objectIndex] = { center[0], center[1], center[2], geometry->worldBound.radius };
 			}
 		}
 		readback.sequencesNamed = sequencesNamed;
@@ -362,6 +368,18 @@ namespace DCLF::Diagnostics
 		readback.framesLeft = 3;
 		if (readback.sequences && readback.count && readback.classCounts)
 			parity = std::move(readback);
+	}
+
+	std::array<const void*, 4> ChannelLights()
+	{
+		std::array<const void*, 4> out{};
+		const auto* node = Engine::Global<RE::ShadowSceneNode*>(Engine::Address::kShadowSceneNode);
+		if (!node)
+			return out;
+		for (const auto& pointer : node->GetRuntimeData().activeShadowLights)
+			if (const auto* light = pointer.get(); light && Engine::At<std::uint32_t>(light, 0x520) < out.size())
+				out[Engine::At<std::uint32_t>(light, 0x520)] = light;
+		return out;
 	}
 
 	bool DrawnLocalShadowsOf(std::uint32_t a_object, DrawnLocalShadows& a_out)
