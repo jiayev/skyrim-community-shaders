@@ -14,15 +14,34 @@ namespace DCLF::Features::TreeLod
 	{
 		Api::SwitchId auditSwitch;  // install
 
-		// Reference form ID -> the frame it was first seen stuck (AuditTreeLod's; main thread).
-		ankerl::unordered_dense::map<RE::FormID, std::uint32_t> stuckSince;
+		// Reference form ID -> the frame it was first seen stuck (AuditTreeLod's; main thread); and first seen faded out in view.
+		ankerl::unordered_dense::map<RE::FormID, std::uint32_t> stuckSince, fadedOutSince;
+
+		/** @brief Whether a_object's world bound is roughly in the world camera's view (a cone of 60 degrees half angle, its radius added). */
+		bool InView(const RE::NiAVObject& a_object)
+		{
+			const auto* camera = RE::Main::WorldRootCamera();
+			if (!camera)
+				return true;
+			const auto& eye = camera->world.translate;
+			const auto& r = camera->world.rotate;
+			const RE::NiPoint3 forward{ r.entry[0][0], r.entry[1][0], r.entry[2][0] };  // NiCamera looks down its +X
+			const RE::NiPoint3 to = a_object.worldBound.center - eye;
+			const float distance = to.Length();
+			const float radius = a_object.worldBound.radius;
+			if (distance <= radius)
+				return true;
+			const float along = to.Dot(forward);
+			return along + radius > 0.0f && along >= distance * 0.5f - radius;
+		}
 
 		/** @brief One audit's counts, the references stuck in it and its first samples. */
 		struct Audit
 		{
 			std::uint32_t frame = 0;
-			std::uint32_t fadedOut = 0;
+			std::uint32_t fadedOut = 0, fadedOutInView = 0, fadedOutInViewUnlisted = 0, fadedOutInViewLong = 0;
 			std::string fadedOutSamples;
+			ankerl::unordered_dense::set<RE::FormID> fadedOutNow;
 			std::uint32_t exact = 0, overlapped = 0, blocks = 0, mismatched = 0, loading = 0, instances = 0, hidden = 0, noRef = 0, loaded = 0, stuck = 0, holes = 0;
 			ankerl::unordered_dense::set<RE::FormID> stuckNow;
 			std::string samples;
@@ -70,11 +89,23 @@ namespace DCLF::Features::TreeLod
 			++a_audit.stuck;
 			const auto* fadeNode = full->AsFadeNode();
 			const float fullFade = fadeNode ? *reinterpret_cast<const float*>(reinterpret_cast<const std::byte*>(fadeNode) + 0x130) : 1.0f;
-			if (!(fullFade > 0.0f)) {
-				// The full tree is faded out on its node: the LOD stands in for it, unless DCLF draws the tree from its own fade state.
-				if (++a_audit.fadedOut <= 6)
-					a_audit.fadedOutSamples += fmt::format("; {:08X} fade {} hidden {} ({})", ref->GetFormID(), fullFade, full->GetFlags().any(RE::NiAVObject::Flag::kHidden),
-						RootOf(full));
+			if (!(fullFade > 0.0f) || fullFade < 0.05f) {
+				// The full tree is faded out (or stuck at a first step) on its node: the LOD stands in for it, unless DCLF draws the tree from
+				// its own fade state. Only one in view can show both; how long it has been so.
+				++a_audit.fadedOut;
+				if (!InView(*full))
+					return;
+				++a_audit.fadedOutInView;
+				a_audit.fadedOutNow.insert(ref->GetFormID());
+				const auto [since, first] = fadedOutSince.try_emplace(ref->GetFormID(), a_audit.frame);
+				const std::uint32_t frames = a_audit.frame - since->second;
+				a_audit.fadedOutInViewLong += frames >= 120 ? 1 : 0;
+				const std::string root = RootOf(full);
+				a_audit.fadedOutInViewUnlisted += root == "not a listed root" ? 1 : 0;
+				if (frames >= 120 && a_audit.fadedOutInViewLong <= 6)
+					a_audit.fadedOutSamples += fmt::format("; {:08X} '{}' fade {} for {} frames, {:.0f} units away ({})", ref->GetFormID(),
+						ref->GetBaseObject() ? ref->GetBaseObject()->GetName() : "?", fullFade, frames,
+						RE::Main::WorldRootCamera() ? full->worldBound.center.GetDistance(RE::Main::WorldRootCamera()->world.translate) : 0.0f, root);
 				return;
 			}
 			++a_audit.overlapped;
@@ -178,6 +209,7 @@ namespace DCLF::Features::TreeLod
 			Audit audit{ .frame = frame };
 			AuditBlocks(audit, manager->rootNode);
 			std::erase_if(stuckSince, [&](const auto& a_entry) { return !audit.stuckNow.contains(a_entry.first); });
+			std::erase_if(fadedOutSince, [&](const auto& a_entry) { return !audit.fadedOutNow.contains(a_entry.first); });
 			if (audit.overlapped == reported && audit.overlapped == 0)
 				return;
 			reported = audit.overlapped;
@@ -186,7 +218,8 @@ namespace DCLF::Features::TreeLod
 				audit.samples);
 			logger::info("[DCLF] tree LOD audit: {}", AuditShapesHidden());
 			if (audit.fadedOut)
-				logger::info("[DCLF] tree LOD audit: {} shown over a full tree faded out on its node{}", audit.fadedOut, audit.fadedOutSamples);
+				logger::info("[DCLF] tree LOD audit: {} shown over a full tree faded out on its node (fade below 0.05); in view {} ({} not a listed root), {} of them for 120+ frames{}",
+					audit.fadedOut, audit.fadedOutInView, audit.fadedOutInViewUnlisted, audit.fadedOutInViewLong, audit.fadedOutSamples);
 		}
 	}
 

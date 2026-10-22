@@ -43,13 +43,14 @@ static const uint kDCLFTreeHeaderBytes = 64, kDCLFTreePhaseOneInstances = 4;
 // frame in its word of the frame's slot (every invocation the same value: no atomics).
 static const uint kDCLFTreeStats = 52, kDCLFTreeFrame = 60;
 static const uint kDCLFStageDepthVS = 0, kDCLFStagePhaseTwoVS = 1, kDCLFStageDepthPS = 2, kDCLFStageColourVS = 3, kDCLFStageColourPS = 4,
-				  kDCLFStageColourSaw = 5, kDCLFStageDepthClip = 8, kDCLFStageColourClip = 12;
+				  kDCLFStageColourSaw = 5, kDCLFStageDepthClip = 8, kDCLFStageColourClip = 12, kDCLFStageColourEntry = 16, kDCLFStageDepthEntry = 17,
+				  kDCLFStageColourProbe = 18, kDCLFStageDepthProbe = 25, kDCLFStageWords = 32;
 uint64_t DCLFTreeStageWord(uint a_word)
 {
 	const uint64_t stats = DCLFTreeAddress(vk::RawBufferLoad<uint2>(DCLFTreeDraw() + kDCLFTreeStats, 4));
 	if (stats == 0)
 		return 0;
-	return stats + 4 * uint64_t((vk::RawBufferLoad<uint>(DCLFTreeDraw() + kDCLFTreeFrame, 4) & 7u) * 16u + a_word);
+	return stats + 4 * uint64_t((vk::RawBufferLoad<uint>(DCLFTreeDraw() + kDCLFTreeFrame, 4) & 7u) * kDCLFStageWords + a_word);
 }
 void DCLFTreeStamp(uint a_stage)
 {
@@ -238,6 +239,19 @@ Texture2D<float4> DCLFTreeTexture()
 #		define SampDiffuse DCLFTreeSampler()
 #		define TexDiffuse DCLFTreeTexture()
 #		define AlphaTestRefRS asfloat(vk::RawBufferLoad<uint>(DCLFTreeDraw() + kDCLFTreeAlphaRef, 4))
+// CS_DCLF_TREE_LOD_STAGES: the stage's entry stamp and what its texture resolves to (TreeInstancesLayout.h, kStageProbeWords).
+void DCLFTreeProbe(uint a_entry, uint a_probe, float2 a_texCoord)
+{
+	DCLFTreeStamp(a_entry);
+	const uint64_t probe = DCLFTreeStageWord(a_probe);
+	if (probe == 0)
+		return;
+	uint width, height, mips;
+	DCLFTreeTexture().GetDimensions(0, width, height, mips);
+	const float alpha = DCLFTreeTexture().SampleBias(DCLFTreeSampler(), a_texCoord, SharedData::MipBias).w;
+	vk::RawBufferStore<uint4>(probe, uint4(vk::RawBufferLoad<uint>(DCLFTreeDraw() + kDCLFTreeTexture, 4), vk::RawBufferLoad<uint>(DCLFTreeDraw() + kDCLFTreeSampler, 4), width, height), 4);
+	vk::RawBufferStore<uint3>(probe + 16, uint3(mips, vk::RawBufferLoad<uint>(DCLFTreeDraw() + kDCLFTreeAlphaRef, 4), asuint(alpha)), 4);
+}
 static const float4 DiffuseColor = 0.0;
 static const float4 AmbientColor = 0.0;
 #	else
@@ -312,6 +326,7 @@ void ApplyReflectionExponentialHeightFog(inout float3 color, float3 positionWS, 
 #	if defined(DCLF_PULLED) && defined(RENDER_DEPTH)
 void main(PS_INPUT input)
 {
+	DCLFTreeProbe(kDCLFStageDepthEntry, kDCLFStageDepthProbe, input.TexCoord.xy);
 	uint2 temp = uint2(input.Position.xy);
 	uint index = ((temp.x << 2) & 12) | (temp.y & 3);
 
@@ -330,9 +345,16 @@ void main(PS_INPUT input)
 	DCLFTreeStamp(kDCLFStageDepthPS);
 }
 #	else
+#		if defined(DCLF_PULLED) && defined(DEFERRED)
+// CS_DCLF_TREE_LOD_STAGES' entry stamp counts fragments that passed EQUAL (no depth writes: early depth changes nothing drawn).
+[earlydepthstencil]
+#		endif
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
+#		if defined(DCLF_PULLED)
+	DCLFTreeProbe(kDCLFStageColourEntry, kDCLFStageColourProbe, input.TexCoord.xy);
+#		endif
 
 #	if defined(EXP_HEIGHT_FOG)
 	const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;

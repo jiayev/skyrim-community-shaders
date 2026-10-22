@@ -196,15 +196,18 @@ namespace DCLF::Features::TreeLod
 			const auto& scene = a_row.scene;
 			const auto* tables = TablesOf(scene);
 			const auto treeLod = Draws::FamilyPipelinesOf(scene, Api::DrawFamily::TreeInstances);
-			TreeInstances::DrawRow row = tables ? tables->row : TreeInstances::DrawRow{};
+			OwnedRow<TreeInstances::DrawRow> owned(tables ? tables->row : TreeInstances::DrawRow{});
+			auto& row = owned.Plain();
 			const bool trees = a_row.viewDraws && treeLod && tables;
 			if (!a_row.owners) {
 				std::memcpy(a_row.row.data(), &row, sizeof(row));
 				return trees && row.shapeSlots;
 			}
-			if (!(trees && row.shapeSlots && TreeLodTextureBinding(row, *a_row.owners)))
+			// The view latches its own copy, which only its execution reads: the row's owners are the execution's.
+			if (!(trees && row.shapeSlots && TreeLodTextureBinding(owned)))
 				row.shapeSlots = 0;
-			std::memcpy(a_row.row.data(), &row, sizeof(row));
+			a_row.owners->insert(a_row.owners->end(), owned.Owners().begin(), owned.Owners().end());
+			std::memcpy(a_row.row.data(), owned.Bytes(), sizeof(row));
 			return row.shapeSlots != 0;
 		}
 

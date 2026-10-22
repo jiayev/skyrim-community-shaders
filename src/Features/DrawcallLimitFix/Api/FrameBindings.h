@@ -25,7 +25,8 @@ namespace DCLF::Api
 	 * - select: the render thread (the main and shadow commits' frame records) or the snapshot builder (the addresses a build embeds),
 	 *   for a frame: the versioned buffer whose named version's descriptor the frame's draws read at the register (null: the register
 	 *   keeps what the record gave it). It reads only handles made at the scene's setup, and the frame: the binding may alternate by
-	 *   frame (the named-address parity takes either of two consecutive frames' as right).
+	 *   frame (the named-address parity takes either of two consecutive frames' as right). On the render thread (a frame record's
+	 *   commit) it may answer with a descriptor index instead (a frame value pool's backing), which the builder leaves to the commit.
 	 */
 	struct FrameBinding
 	{

@@ -21,10 +21,10 @@ namespace DCLF
 	static_assert(Draws::FrameConstantRowOffset(Extensions::kFrameConstantRowFirst) == Draws::kExtrasPixelFrameOffset + sizeof(ExtrasFrame::projectedGlobals),
 		"Core's first frame constant row is not right after the extras' pixel row");
 
-	void Draws::CommitUploads::operator()(const Versioned& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset)
+	void Draws::CommitUploads::Stage(const Versioned& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset)
 	{
 		Diagnostics::Notify(Diagnostics::CommitTargetStaged{ adopted, a_target });
-		(*this)(TargetOf(a_target), a_data, a_bytes, a_offset);
+		Stage(TargetOf(a_target), a_data, a_bytes, a_offset);
 	}
 
 	/** @brief Brings the stores up to the tables from what the buffers hold, as StreamViews. */
@@ -547,7 +547,7 @@ namespace DCLF
 		const bool replayVertexInputs = !depthOnly && prepassInputs;
 		// The adopted set: every versioned buffer's address, SRV index and capacity the commit writes, and the version it writes into.
 		const auto& adopted = Adopted();
-		CommitUploads uploads(commitStagedPool, adopted);
+		CommitUploads uploads(commitStagedPool, adopted, &a_resources->scene->content);
 		const std::size_t latchedShape = depthOnly ? kDepthShape : kColourShape;
 		// The selected revision's shape is trusted: the commit writes the frame's values into its latch, bucket plan and latched
 		// copies, and submits its recording. Nothing is checked against it.

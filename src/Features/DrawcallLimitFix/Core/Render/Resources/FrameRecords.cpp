@@ -18,7 +18,7 @@ namespace DCLF::Draws
 		a_record.textures[kPaletteBufferRegister] = a_values.palettes;
 		a_record.textures[kShadingBufferRegister] = a_values.shading;
 		Extensions::FrameBindingValues bindings;
-		Extensions::FrameBindingValuesOf(a_adopted, a_scene, a_frame, bindings);
+		Extensions::FrameBindingValuesOf(a_adopted, a_scene, a_frame, bindings, true);
 		// The root states and rows every draw's alpha reads are among them (t120/t119: Features/Fades').
 		Extensions::WriteFrameBindings(bindings, a_record.textures);
 	}

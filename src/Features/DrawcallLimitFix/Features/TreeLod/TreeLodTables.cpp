@@ -139,7 +139,7 @@ namespace DCLF::Features::TreeLod
 
 		/**
 		 * @brief The depth commit's tree LOD uploads, into the versions a_sealed (the adopted set) names: their capacities and the draw
-		 * row's addresses are theirs. Retired mesh leases and bindings go to the execution (a_owners).
+		 * row's addresses are theirs. Retired mesh leases go to the execution (a_owners); the row's descriptors go with the row (OwnedRow).
 		 */
 		void UploadTreeLod(const Draws::NamedVersions& a_sealed, Mirror& a_mirror, TreeLodTables& a_tables, Draws::LatchedUploads& a_uploads,
 			std::vector<std::shared_ptr<const void>>& a_owners, bool a_draw, std::uint32_t a_frame)
@@ -184,7 +184,8 @@ namespace DCLF::Features::TreeLod
 			a_tables.slotsSent += slots.size();
 			++a_tables.uploads;
 			// The cull appends only while the row names shape slots, so both passes skip tree LOD together.
-			DrawRow row{};
+			OwnedRow<DrawRow> owned;
+			auto& row = owned.Plain();
 			row.instances = records.deviceAddress;
 			row.shapes = shapes.deviceAddress;
 			row.meshes = meshRows.deviceAddress;
@@ -195,9 +196,9 @@ namespace DCLF::Features::TreeLod
 			row.statsHigh = static_cast<std::uint32_t>(a_tables.stagesAddress >> 32);
 			row.frame = a_frame;
 			// The engine's tree LOD draws use the worldspace's atlas and alpha reference 128/255 (dclf-architecture.md, "Tree LOD: the draws").
-			if (a_draw && a_mirror.MaxIndices() && TreeLodTextureBinding(row, a_owners))
+			if (a_draw && a_mirror.MaxIndices() && TreeLodTextureBinding(owned))
 				row.shapeSlots = shapeSlots;
-			a_uploads(a_tables.draw, &row, sizeof(row), 0);
+			a_uploads(a_tables.draw, owned, 0);
 			a_tables.row = row;
 			VisibleHeader header{};
 			header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = row.maxIndices;
@@ -217,7 +218,7 @@ namespace DCLF::Features::TreeLod
 				return;
 			auto& mirror = RenderMirror();
 			const bool owned = IndirectDraws::Get().DrawFamilyOwned(Api::DrawFamily::TreeInstances);
-			UploadTreeLod(a_commit.adopted, mirror, *tables, *a_commit.latched, a_commit.bindingOwners, owned, a_commit.frame);
+			UploadTreeLod(a_commit.adopted, mirror, *tables, *a_commit.latched, a_commit.executionOwners, owned, a_commit.frame);
 			// The engine's passes were withheld: a commit that cannot draw leaves a hole.
 			if (owned && !tables->ready.load(std::memory_order_acquire))
 				Diagnostics::Notify(TreeLodMissed{ a_commit.frame, mirror.ShapeSlots(), a_commit.adopted.Of(tables->shapes).units });
@@ -239,22 +240,15 @@ namespace DCLF::Features::TreeLod
 		return tablesId;
 	}
 
-	bool TreeLodTextureBinding(TreeInstances::DrawRow& a_row, std::vector<std::shared_ptr<const void>>& a_owners)
+	bool TreeLodTextureBinding(OwnedRow<TreeInstances::DrawRow>& a_row)
 	{
+		using TreeInstances::DrawRow;
 		const auto* texture = Engine::Global<RE::NiSourceTexture*>(Address::kTreeLodAtlas);
 		auto* view = texture && texture->rendererTexture ? texture->rendererTexture->resourceView : nullptr;
 		if (!view)
 			return false;
 		auto& textures = GpuTextures::Get();
-		auto textureBinding = textures.ResolveBinding(view, 0);
-		auto samplerBinding = textures.SamplerBinding(0, 2);
-		if (textureBinding.index == GpuTextures::kInvalid || samplerBinding.index == GpuTextures::kInvalid)
-			return false;
-		a_owners.push_back(std::move(textureBinding.owner));
-		a_owners.push_back(std::move(samplerBinding.owner));
-		a_row.textureIndex = textureBinding.index;
-		a_row.samplerIndex = samplerBinding.index;
-		return true;
+		return a_row.Bind(&DrawRow::textureIndex, textures.ResolveBinding(view, 0)) && a_row.Bind(&DrawRow::samplerIndex, textures.SamplerBinding(0, 2));
 	}
 
 	bool TreeLodAtlasReady()

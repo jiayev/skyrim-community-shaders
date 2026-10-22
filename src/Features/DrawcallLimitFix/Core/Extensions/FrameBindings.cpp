@@ -17,12 +17,16 @@ namespace DCLF::Extensions
 		return select.buffer;
 	}
 
-	void FrameBindingValuesOf(const org::services::NamedVersions& a_sealed, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame, FrameBindingValues& a_out)
+	void FrameBindingValuesOf(const org::services::NamedVersions& a_sealed, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame, FrameBindingValues& a_out,
+		bool a_renderThread)
 	{
 		const auto bindings = RegisteredFrameBindings();
 		for (std::size_t i = 0; i < bindings.size(); ++i) {
-			const auto* buffer = FrameBindingBuffer(i, a_scene, a_frame);
-			a_out[i] = buffer && *buffer ? a_sealed.Of(**buffer).srvIndex : kNoFrameBinding;
+			Api::FrameBindingSelect select{ a_scene, a_frame, a_renderThread };
+			bindings[i].select(select);
+			a_out[i] = select.buffer && *select.buffer ? a_sealed.Of(**select.buffer).srvIndex :
+			           a_renderThread && select.index != 0 ? select.index :
+			                                                 kNoFrameBinding;
 		}
 	}
 

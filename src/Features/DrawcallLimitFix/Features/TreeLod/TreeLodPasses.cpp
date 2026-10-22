@@ -158,6 +158,16 @@ namespace DCLF::Draws
 			a_counts.stagesJudged = frame;
 			++a_counts.stageFrames;
 			const bool missed = w[kStageDepthPS] != frame || w[kStageColourVS] != frame || w[kStageColourPS] != frame;
+			const auto probe = [&](std::uint32_t a_word) {
+				const std::uint32_t* p = w + a_word;
+				return fmt::format("texture {} sampler {} {}x{} mips {} ref {} alpha {}", p[0], p[1], p[2], p[3], p[4], std::bit_cast<float>(p[5]),
+					std::bit_cast<float>(p[6]));
+			};
+			const bool probesDiffer = w[kStageColourEntry] == frame && w[kStageDepthEntry] == frame &&
+			                          std::memcmp(w + kStageColourProbe, w + kStageDepthProbe, 4 * (kStageProbeWords - 1)) != 0;
+			if (probesDiffer && ++a_counts.probeLogged <= 100)
+				logger::info("[DCLF] tree LOD stages, frame {}: the textures differ: depth {}, colour {} <- PROBE DIFFERS", frame, probe(kStageDepthProbe),
+					probe(kStageColourProbe));
 			const auto clip = [&](std::uint32_t a_word) {
 				return fmt::format("({} {} {} {})", std::bit_cast<float>(w[a_word]), std::bit_cast<float>(w[a_word + 1]), std::bit_cast<float>(w[a_word + 2]),
 					std::bit_cast<float>(w[a_word + 3]));
@@ -169,14 +179,15 @@ namespace DCLF::Draws
 				logger::info("[DCLF] tree LOD stages, frame {}: the first vertex's clip position differs: depth {}, colour {}{} <- CLIP DIFFERS", frame, clip(8), clip(12),
 					missed ? " (a stage missed)" : "");
 			if (!missed && (frame % 120) == 0)
-				logger::info("[DCLF] tree LOD stages, frame {}: all stages; clip depth {}, colour {}", frame, clip(8), clip(12));
+				logger::info("[DCLF] tree LOD stages, frame {}: all stages; clip depth {}, colour {}; depth {}; colour {}", frame, clip(8), clip(12),
+					probe(kStageDepthProbe), probe(kStageColourProbe));
 			if (!missed)
 				continue;
 			++a_counts.stageMisses;
 			if (++a_counts.stageLogged <= 400)
-				logger::info("[DCLF] tree LOD stages, frame {}: depth VS {}, phase 2 VS {}, depth PS {}, colour VS {}, colour PS {}; the colour VS saw phase 1 {}, phase 2 {}, colour {}; clip depth {}, colour {} <- MISSED",
-					frame, w[kStageDepthVS], w[kStagePhaseTwoVS], w[kStageDepthPS], w[kStageColourVS], w[kStageColourPS], w[kStageColourSawPhaseOne],
-					w[kStageColourSawPhaseTwo], w[kStageColourSawColour], clip(8), clip(12));
+				logger::info("[DCLF] tree LOD stages, frame {}: depth VS {}, phase 2 VS {}, depth PS entry {} kept {}, colour VS {}, colour PS entry {} kept {}; the colour VS saw phase 1 {}, phase 2 {}, colour {}; clip depth {}, colour {}; depth {}; colour {} <- MISSED",
+					frame, w[kStageDepthVS], w[kStagePhaseTwoVS], w[kStageDepthEntry], w[kStageDepthPS], w[kStageColourVS], w[kStageColourEntry], w[kStageColourPS],
+					w[kStageColourSawPhaseOne], w[kStageColourSawPhaseTwo], w[kStageColourSawColour], clip(8), clip(12), probe(kStageDepthProbe), probe(kStageColourProbe));
 		}
 		if (a_counts.stageFrames && a_counts.stageFrames % 600 == 0)
 			logger::info("[DCLF] tree LOD stages: {} frames judged, {} with a stage missing, {} with the clip positions differing", a_counts.stageFrames,

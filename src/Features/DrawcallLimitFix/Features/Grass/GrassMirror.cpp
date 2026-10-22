@@ -245,7 +245,7 @@ namespace DCLF::Features::Grass
 			bucketIndex.emplace(a_event.key, slot);
 			auto& bucket = buckets[slot];
 			bucket = Bucket{ .key = a_event.key, .source = std::move(a_event.source), .slot = slot, .live = true };
-			FillBucketRow(bucket.row, bucket.key, bucket.source);
+			FillBucketRow(bucket.row.Plain(), bucket.key, bucket.source);
 			ResolveTiers(bucket, a_event.shape, std::move(a_event.mesh));
 		}
 		auto& bucket = buckets[slot];
@@ -264,11 +264,9 @@ namespace DCLF::Features::Grass
 		MarkBucket(a_slot);
 		if (--bucket.shapes)
 			return;
-		// Its meshes' users and its bindings go (the bindings to the next execution, as the meshes' leases); its slot's row is zero.
+		// Its meshes' users go; its slot's row is sent zero, which releases its bindings (the bucket table's content owners).
 		for (const void* mesh : bucket.meshes)
 			RemoveMeshUser(mesh);
-		for (auto& owner : bucket.owners)
-			retired.push_back(std::move(owner));
 		bucketIndex.erase(bucket.key);
 		bucket = Bucket{ .slot = a_slot };
 		freeBuckets.push_back(a_slot);
@@ -341,7 +339,7 @@ namespace DCLF::Features::Grass
 		for (auto& bucket : buckets) {
 			if (!bucket.live)
 				continue;
-			auto& row = bucket.row;
+			auto& row = bucket.row.Plain();
 			row.flags &= ~(GrassInstances::kBucketTierOne | GrassInstances::kBucketTierTwo);
 			for (std::uint32_t tier = 0; tier < kTiers; ++tier) {
 				const auto it = bucket.meshes[tier] ? meshes.find(bucket.meshes[tier]) : meshes.end();
@@ -469,7 +467,7 @@ namespace DCLF::Features::Grass
 		for (const auto& [key, mesh] : meshes)
 			++(mesh.resolved ? readiness.meshesResolved : mesh.failed ? readiness.meshesFailed : readiness.meshesPending);
 		for (const auto& bucket : buckets)
-			readiness.bucketsDrawable += bucket.live && bucket.row.instanceCount ? 1u : 0u;
+			readiness.bucketsDrawable += bucket.live && bucket.row.Plain().instanceCount ? 1u : 0u;
 		return readiness;
 	}
 }

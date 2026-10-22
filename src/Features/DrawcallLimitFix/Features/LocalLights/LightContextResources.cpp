@@ -275,7 +275,7 @@ namespace DCLF::Features::LocalLights
 			} else if (scene->current->gatesDescriptor)
 				UploadColumn(*scene, a_commit);  // a later commit's adopted version (the column is versioned): kept filled
 			// Each execution retains the lease until GPU retirement, including executions sharing this frame's atlas.
-			a_commit.bindingOwners.push_back(scene->current);
+			a_commit.executionOwners.push_back(scene->current);
 		}
 
 		template <bool Gates>

@@ -32,13 +32,18 @@ namespace DCLF::Draws
 
 namespace DCLF::Api
 {
-	/** @brief A binding's select (render thread or snapshot builder): the scene's tables and the frame; select answers with buffer. */
+	/**
+	 * @brief A binding's select (render thread or snapshot builder): the scene's tables and the frame; select answers with buffer, or on the
+	 * render thread (a frame record's commit) with index instead.
+	 */
 	class FrameBindingSelect
 	{
 	public:
 		const Draws::SceneBuffers& scene;
 		std::uint32_t frame;                                            // the frame whose draws read it
+		bool renderThread = false;                                      // a frame record's commit: index may answer
 		const std::shared_ptr<org::VersionedBuffer>* buffer = nullptr;  // the answer: a buffer of the scene's set (null: none)
+		std::uint32_t index = ~0u;  // or the descriptor the frame's draws read (a frame value pool's backing), render thread only
 	};
 }
 
@@ -68,8 +73,12 @@ namespace DCLF::Extensions
 		       a_register == kShadingBufferRegister;
 	}
 
-	/** @brief The descriptor of every binding's buffer for a_frame, as a_sealed names it, into a_out (render thread or snapshot builder). */
-	void FrameBindingValuesOf(const org::services::NamedVersions& a_sealed, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame, FrameBindingValues& a_out);
+	/**
+	 * @brief The descriptor of every binding's buffer for a_frame, as a_sealed names it, into a_out (render thread or snapshot builder); on
+	 * the render thread (a_renderThread: a frame record's commit) a binding's index answer too, which the builder leaves to the commit.
+	 */
+	void FrameBindingValuesOf(const org::services::NamedVersions& a_sealed, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame, FrameBindingValues& a_out,
+		bool a_renderThread);
 	/** @brief a_values (FrameBindingValuesOf) into a frame record's texture registers (DrawBindings::textures). */
 	void WriteFrameBindings(const FrameBindingValues& a_values, std::span<std::uint32_t> a_textures);
 	/** @brief Whether a_register is a binding's (a build counts it among the buffers, not the captured frame textures). */

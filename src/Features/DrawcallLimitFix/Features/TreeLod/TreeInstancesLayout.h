@@ -6,6 +6,7 @@
 // mirror it, so it stays compile-time. Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/OwnedRows.h"
 
 #include <array>
 #include <cstdint>
@@ -66,7 +67,7 @@ namespace DCLF::TreeInstances
 	struct DrawRow
 	{
 		std::uint64_t instances = 0, shapes = 0, meshes = 0, visible = 0;  // visible: the list's indices (past the arguments)
-		std::uint32_t textureIndex = 0, samplerIndex = 0;
+		DescriptorIndex textureIndex, samplerIndex;  // OwnedRow's (TreeLodTextureBinding)
 		float alphaRef = 0.0f;
 		std::uint32_t shapeSlots = 0;
 		std::uint32_t maxIndices = 0;
@@ -90,7 +91,7 @@ namespace DCLF::TreeInstances
 	 * @brief CS_DCLF_TREE_LOD_STAGES' stamps: kStageSlots rings of kStageWords words, slot frame % kStageSlots; each stage of the main draws
 	 * stores the draw row's frame in its word (DistantTree.hlsl), the colour vertex stage also the list header's counts it saw.
 	 */
-	inline constexpr std::uint32_t kStageSlots = 8, kStageWords = 16;
+	inline constexpr std::uint32_t kStageSlots = 8, kStageWords = 32;
 	enum StageWord : std::uint32_t
 	{
 		kStageDepthVS = 0,
@@ -101,6 +102,15 @@ namespace DCLF::TreeInstances
 		kStageColourSawPhaseOne = 5,
 		kStageColourSawPhaseTwo = 6,
 		kStageColourSawColour = 7,
+		kStageDepthClip = 8,
+		kStageColourClip = 12,
+		// The pixel stages' entries (the colour stage's early depth: a fragment that passed EQUAL) and their texture probes: the heap's
+		// texture and sampler indices, the texture's width, height and mips, the alpha reference, and one fragment's sampled alpha.
+		kStageColourEntry = 16,
+		kStageDepthEntry = 17,
+		kStageColourProbe = 18,
+		kStageDepthProbe = 25,
+		kStageProbeWords = 7,
 	};
 
 	/**
