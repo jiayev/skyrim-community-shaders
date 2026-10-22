@@ -364,6 +364,37 @@ namespace DCLF
 		AddPlane(a_program, a_occluder);
 	}
 
+	PortalViews::Program PortalViews::UnboundWithEngineStates(const void* a_graph)
+	{
+		const auto savedStates = states;
+		const auto savedBoxes = boxes;
+		const auto savedFlags = edgeFlags;
+		const auto savedCounts = programCounts;
+		ForList(a_graph, kGraphOccluders, [&](const void* a_occluder) {
+			if (!a_occluder)
+				return;
+			states[a_occluder] = At<std::uint32_t>(a_occluder, 0x40);
+			// A plane the engine's other tests judged keeps the edge flags their test wrote (+0xF0): the walk takes it untested.
+			if (IsPlane(a_occluder) && states[a_occluder] != 0)
+				std::memcpy(edgeFlags[a_occluder].data(), reinterpret_cast<const std::byte*>(a_occluder) + 0xF0, 4);
+		});
+		Program program;
+		Reset(program);
+		bool needOpen = true;
+		ForList(a_graph, kGraphOccluders, [&](const void* a_occluder) {
+			if (a_occluder)
+				AddOccluderTop(program, a_occluder, needOpen);
+		});
+		if (!needOpen)
+			Emit(program, kClose);
+		Finalize(program);
+		states = savedStates;
+		boxes = savedBoxes;
+		edgeFlags = savedFlags;
+		programCounts = savedCounts;
+		return program;
+	}
+
 	void PortalViews::AddOccluderRoom(Program& a_program, const void* a_occluder, const Program* a_parent)
 	{
 		// FUN_140e32860: an occluder of a room reached through a portal. A plane only once accepted this frame: the engine resets

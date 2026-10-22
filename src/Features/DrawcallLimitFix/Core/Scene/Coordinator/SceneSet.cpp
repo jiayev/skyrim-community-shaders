@@ -479,6 +479,19 @@ namespace DCLF::Scene
 					++setStats.waitingRequeued;
 				}
 		}
+		// The fit can shrink too (a newly adopted set naming smaller buffers): a member past it has no build input, so it is decided
+		// again (the waiting ones above only gain from a growth).
+		if (moved & kWaitFit) {
+			auto& draws = IndirectDraws::Get();
+			const std::size_t objects = std::min(setPhasesNext.size(), tables.objects.size());
+			for (std::uint32_t slot = 0; slot < objects; ++slot) {
+				const std::uint8_t phases = setPhasesNext[slot];
+				if (((phases & kSetMain) && !draws.FitsScene(&tables, slot, false)) || ((phases & ~kSetMain) && !draws.FitsScene(&tables, slot, true))) {
+					QueueSet(slot);
+					++setStats.fitRequeued;
+				}
+			}
+		}
 	}
 
 	void Coordinator::CommitShadowModeRequeues(std::size_t a_objects)

@@ -17,6 +17,8 @@ namespace DCLF::Diagnostics
 		/** @brief DCLF's copies of the boxes' silhouette sets (BoxScratch: set[2], hullCount). */
 		static const auto& Boxes() { return Self().boxes; }
 		static auto Corners(const void* a_quad) { return PortalViews::Corners(a_quad); }
+		/** @brief Unbound space's top program again with the engine's occluder states (PortalViews::UnboundWithEngineStates). */
+		static PortalViews::Program UnboundWithEngineStates(const void* a_graph) { return PortalViews::Get().UnboundWithEngineStates(a_graph); }
 		template <class Quad, class Flags>
 		static bool QuadVsSet(const PortalViews::PlaneSet& a_set, const Quad& a_quad, Flags& a_flags)
 		{

@@ -474,8 +474,8 @@ namespace DCLF::Features::Grass
 			auto& mirror = RenderMirror();
 			const bool owned = IndirectDraws::Get().DrawFamilyOwned(Api::DrawFamily::Grass);
 			UploadGrass(a_commit.adopted, mirror, *tables, *a_commit.latched, a_commit.executionOwners, owned);
-			// The engine's passes were withheld: a commit that cannot draw leaves a hole.
-			if (owned && !tables->ready.load(std::memory_order_acquire))
+			// The engine's passes were withheld: a commit that cannot draw the grass the mirror holds leaves a hole (none held: nothing to draw).
+			if (owned && mirror.InstanceSlots() && !tables->ready.load(std::memory_order_acquire))
 				Diagnostics::Notify(GrassMissed{ a_commit.frame, mirror.InstanceSlots(), a_commit.adopted.Of(*tables->instances).units, mirror.BucketSlots(),
 					a_commit.adopted.Of(*tables->buckets).units });
 		}

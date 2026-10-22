@@ -319,8 +319,9 @@ namespace DCLF
 			sunCascades.clear();
 			Api::SunCascadeSink cascadeSink(sunCascades);
 			Extensions::SampleSunCascades(cascadeSink);
-			// Frames with no cascades draw sun-lit passes unshadowed (right only when the sun did not accumulate).
-			sunTestEmpty += sunCascades.empty() ? 1 : 0;
+			// Frames with no cascades draw sun-lit passes unshadowed (right only when the sun did not accumulate: an interior has none).
+			const auto* tes = RE::TES::GetSingleton();
+			sunTestEmpty += sunCascades.empty() && !(tes && tes->interiorCell) ? 1 : 0;
 			if (sunTestWindow.Tick())
 				Reports::ColourSunTestLine(std::exchange(sunTestEmpty, 0));
 			// The local shadow lights accumulated this frame, a volume per shadowmap descriptor (Api::LightVolumesContribution: Features/
@@ -542,6 +543,20 @@ namespace DCLF
 		// ready one), which the snapshot builder filled. Nothing of it is uploaded here.
 		const PayloadVersions& parts = *InstalledPayload();
 		const std::uint32_t frameNumber = in.frameNumber;
+		// TEMP (set parity): a segment committed twice with one frame number stamps two frames' visibility words alike.
+		if (Diagnostics::Observe().claims) {
+			static std::array<std::uint32_t, 2> lastFrame{ ~0u, ~0u };
+			static std::uint32_t repeats = 0;
+			if (std::exchange(lastFrame[depthOnly ? 1 : 0], frameNumber) == frameNumber && repeats++ < 40)
+				logger::warn("[DCLF] {} commit: frame number {} committed again (the visibility stamp repeats)", depthOnly ? "depth" : "colour", frameNumber);
+		}
+		// TEMP (set parity): the installed publication must be the one made from this payload's body (its inputs' layout is that body's).
+		if (Diagnostics::Observe().claims && parts.main && (parts.mainBody != a_payload.body.get() || parts.regionCount != a_payload.resident.Count())) {
+			static std::uint32_t logged = 0;
+			if (logged++ < 40)
+				logger::warn("[DCLF] {} commit at frame {}: the installed payload (serial {}, region {}, main inputs at {}) is not this payload's (region {}, {} frame inputs)",
+					depthOnly ? "depth" : "colour", frameNumber, parts.serial, parts.regionCount, parts.mainInputsAt, a_payload.resident.Count(), a_payload.body->inputList.size());
+		}
 		auto& textures = GpuTextures::Get();
 		auto& mirror = ConstantMirror::Get();
 		const bool replayVertexInputs = !depthOnly && prepassInputs;

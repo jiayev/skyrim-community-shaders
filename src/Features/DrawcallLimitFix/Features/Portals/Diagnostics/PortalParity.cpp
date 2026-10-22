@@ -148,13 +148,9 @@ namespace DCLF::Diagnostics::PortalParity
 			return why;
 		}
 
-		/** @brief One program against an engine BSCompoundFrustum: the structure exactly, the planes of the active sets within rounding. */
-		void CompareProgram(Walk& a_walk, const Program& a_ours, const std::byte* a_engine, const void* a_room, bool a_tokensOnly)
+		/** @brief A program against an engine BSCompoundFrustum: the structure exactly, the planes of the active sets within rounding. */
+		std::string ProgramDifference(Tally& p, const Program& a_ours, const std::byte* a_engine, bool a_tokensOnly)
 		{
-			auto& p = a_walk.p;
-			++p.programs;
-			p.ops += a_ours.freeOp;
-			p.sets += a_ours.freePlane;
 			const std::uint32_t freeOp = At<std::uint32_t>(a_engine, kFrustumFreeOp), freePlane = At<std::uint32_t>(a_engine, kFrustumFreePlane);
 			const auto* ops = At<const Op*>(a_engine, kFrustumOps);
 			const auto* sets = At<const PlaneSet*>(a_engine, kFrustumSets);
@@ -167,7 +163,29 @@ namespace DCLF::Diagnostics::PortalParity
 				why = CompareOps(a_ours, a_engine, freeOp, a_tokensOnly);
 			if (why.empty() && freePlane && sets)
 				why = CompareSets(p, a_ours, sets, freePlane);
+			return why;
+		}
+
+		/**
+		 * @brief One program against an engine BSCompoundFrustum. Unbound space's of a walk from unbound space that differs is built again with
+		 * the engine's occluder states: DCLF's walk tests every graph plane, while the engine's takes a state-1 plane untested and skips a
+		 * state-2 one, and its other occluder tests (FUN_1414a8ba0 and its siblings: HighActorCuller::Operate, FUN_140524a30) write plane
+		 * states lazily after Main::Update's reset (FUN_1401a4a00). The walk itself never writes a plane's. Matching then, the difference
+		 * is the order of the engine's jobs, not DCLF's port.
+		 */
+		void CompareProgram(Walk& a_walk, const Program& a_ours, const std::byte* a_engine, const void* a_room, bool a_tokensOnly)
+		{
+			auto& p = a_walk.p;
+			++p.programs;
+			p.ops += a_ours.freeOp;
+			p.sets += a_ours.freePlane;
+			const std::string why = ProgramDifference(p, a_ours, a_engine, a_tokensOnly);
 			if (!why.empty()) {
+				if (!a_room && !a_walk.frame.cameraRoom && a_walk.frame.graph &&
+					ProgramDifference(p, View::UnboundWithEngineStates(a_walk.frame.graph), a_engine, a_tokensOnly).empty()) {
+					p.unboundEngineStates += a_walk.eyeMoved ? 0 : 1;
+					return;
+				}
 				if (!a_walk.eyeMoved)
 					++(a_room ? p.programsDiffer : p.unboundDiffer);
 				Note(a_walk, fmt::format("{}: {}", Name(a_room), why));
@@ -223,8 +241,9 @@ namespace DCLF::Diagnostics::PortalParity
 			const auto& states = View::States();
 			const auto* entry = a_walk.entry;
 			const auto* graph = frame.graph;
+			const std::uint64_t differed = p.unboundDiffer;
 			CompareProgram(a_walk, frame.unbound, entry + kEntryUnbound, nullptr, true);
-			if (!a_walk.eyeMoved && graph && frame.unbound.freeOp != At<std::uint32_t>(entry + kEntryUnbound, kFrustumFreeOp) && p.occluderFirst.empty()) {
+			if (p.unboundDiffer != differed && graph && frame.unbound.freeOp != At<std::uint32_t>(entry + kEntryUnbound, kFrustumFreeOp) && p.occluderFirst.empty()) {
 				ForList(graph, kGraphOccluders, [&](const void* a_occluder) {
 					if (!a_occluder || !IsPlane(a_occluder))
 						return;

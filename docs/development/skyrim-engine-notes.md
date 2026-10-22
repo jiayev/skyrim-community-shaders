@@ -1453,6 +1453,14 @@ Reverse engineered 2026-10-09 (Ghidra, AE); DCLF's port is `Engine/PortalViews` 
     (`+0xF0..+0xF3`: whichever test ran last, across frames), the per-frame state, a box's silhouette sets. Frustums
     from the static pool (`0x143284d00`, 32 slots) are not reset when taken: a portal's shared-node entry can hold stale
     operators.
+-   **Plane states written outside the walk** (2026-10-22). The walk never writes a plane's state: `FUN_140e32920` writes only a
+    box's, and `FUN_140e32860` only a box's too. The graph's other occluder tests do, lazily, after `Main::Update`'s reset:
+    `FUN_1414a8ba0` (and its siblings `FUN_1414a8d30`, `FUN_1414a8ec0`), called from `HighActorCuller::Operate` and
+    `FUN_140524a30`, judge each graph occluder still at state 0 with their own tests (a plane: `FUN_140e23920` with the camera's
+    position and `FUN_140e242d0`; a box: `FUN_140e21750` then `FUN_140e21090`), write `(ok ^ 1) + 1`, and leave a judged plane's
+    edge flags from their own test (`FUN_140e233b0`). A walk that runs after them takes a state-1 plane untested (with those
+    flags) and skips a state-2 one, so unbound space's compound frustum depends on the order of the frame's jobs. DCLF's port
+    tests every plane (its portal parity rebuilds the program with the engine's states and flags before counting a difference).
 -   **A shadow light's rooms** (`FUN_1414a2530` -> `FUN_1414a6400`; `CalculateActiveShadowCasterLights` walks a light only
     once kept, after testing its entry: the test reads the light's last walk). Nothing with no graph rooms, the NiLight
     hidden or its fade (`+0x134`) under 0.05, or the light on an object node (`BSLight +0x130`): the entry keeps what it had
