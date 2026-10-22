@@ -571,6 +571,42 @@ struct BSImageSpace_Init_FXAA
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
+
+struct FaceGen_CopyRenderTarget
+{
+	static RE::NiTexture::RendererData* thunk(RE::BSGraphics::Renderer* a_renderer, RE::RENDER_TARGET a_target, D3D11_USAGE a_usage)
+	{
+		auto source = a_renderer->GetRuntimeData().renderTargets[a_target].texture;
+		if (!source) {
+			logger::error("[Upscaling] FaceGen texture copy skipped: missing source render target");
+			return nullptr;
+		}
+
+		const auto& properties = RE::BSGraphics::RenderTargetManager::GetSingleton()->renderTargetData[a_target];
+		using CreateTexture = RE::NiTexture::RendererData*(RE::BSGraphics::Renderer*, uint32_t, uint32_t, const void*, D3D11_USAGE, DXGI_FORMAT, bool);
+		static REL::Relocation<CreateTexture> createTexture{ REL::RelocationID(75511, 77303) };
+		auto texture = createTexture(a_renderer, properties.width, properties.height, nullptr, a_usage, DXGI_FORMAT_R8G8B8A8_UNORM, false);
+		if (!texture) {
+			logger::error("[Upscaling] FaceGen texture allocation failed ({}x{}, usage {})", properties.width, properties.height, static_cast<uint32_t>(a_usage));
+			return nullptr;
+		}
+
+		if (!texture->texture || (a_usage != D3D11_USAGE_STAGING && !texture->resourceView)) {
+			logger::error("[Upscaling] FaceGen texture allocation returned incomplete resources ({}x{})", properties.width, properties.height);
+			if (texture->resourceView)
+				texture->resourceView->Release();
+			if (texture->texture)
+				texture->texture->Release();
+			delete texture;
+			return nullptr;
+		}
+
+		globals::d3d::context->CopyResource(texture->texture, source);
+		return texture;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 void Upscaling::PostPostLoad()
 {
 	bool isGOG = !GetModuleHandle(L"steam_api64.dll");
@@ -586,7 +622,14 @@ void Upscaling::PostPostLoad()
 	stl::write_thunk_call<Main_PostProcessing>(REL::RelocationID(100430, 107148).address() + REL::Relocate(0x1F0, 0x1E7));
 
 	// Patches facegen texture generation to not use dynamic resolution
-	stl::detour_thunk<BSFaceGenManager_UpdatePendingCustomizationTextures>(REL::RelocationID(26455, 27041));
+	const auto faceGenUpdate = REL::RelocationID(26455, 27041).address();
+	const auto faceGenCopy = faceGenUpdate + Util::VersionedRelocation::Select(0x119, 0x187, 0x19E);
+	if (Util::VersionedRelocation::IsCallTo(faceGenCopy, REL::RelocationID(75524, 77318).address())) {
+		stl::write_thunk_call<FaceGen_CopyRenderTarget>(faceGenCopy);
+	} else {
+		logger::warn("[Upscaling] FaceGen texture allocation guard not installed: unexpected copy call");
+	}
+	stl::detour_thunk<BSFaceGenManager_UpdatePendingCustomizationTextures>(faceGenUpdate);
 
 	// Patches precipitation camera to not use dynamic resolution
 	stl::write_thunk_call<Main_RenderPrecipitation>(REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x3A1, 0x3A1, 0x3BF));
