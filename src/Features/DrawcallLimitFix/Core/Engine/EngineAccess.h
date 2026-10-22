@@ -91,6 +91,13 @@ namespace DCLF::Engine
 		inline constexpr std::uintptr_t kMetricScale = 0x1aa6300;  // float: the fade metric scale
 		inline constexpr std::uintptr_t kScreenDoorFades = 0x2033468;  // byte: screen-door fades are on
 		inline constexpr std::uintptr_t kNoSunShadowDir = 0x20330a4;  // byte: GetRenderPasses gives no pass ShadowDir
+		// A local shadow light's mask constants (BSUtilityShader: FUN_1414fbd30, SetupGeometry, SetupTechnique for the mask techniques).
+		inline constexpr std::uintptr_t kShadowBiasFactor = 0x1ac1d48;  // float: AlphaTestRef.y = shadowBiasScale * this * kShadowBiasScale
+		inline constexpr std::uintptr_t kShadowBiasScale = 0x33dcfb0;  // float
+		inline constexpr std::uintptr_t kShadowFadeDistance = 0x18af8b0;  // float: ShadowLightParam.z (the mask's fade distance squared)
+		inline constexpr std::uintptr_t kShadowFadeDistanceLod = 0x33dcfac;  // float: ShadowLightParam.z for a light with lodFade (+0x63)
+		inline constexpr std::uintptr_t kShadowFilterRadius = 0x20358f0;  // float: ShadowSampleParam.z = this / kShadowMapResolution
+		inline constexpr std::uintptr_t kShadowMapResolution = 0x33dcfc0;  // uint
 		inline constexpr std::uintptr_t kTreeOnVisible = 0x147d3c0;  // BSTreeNode::OnVisible (the height test, BSLeafAnimNode's, the LOD fix-up)
 		inline constexpr std::uintptr_t kFadeUpdate = 0x147a160;  // FUN_14147a160(node, fadeAmount, camera): BSFadeNode's fade state machine
 		inline constexpr std::uintptr_t kLodLevelUpdate = 0x147a430;  // FUN_14147a430(node, level): the leaf and tree LOD transition (+0x152)

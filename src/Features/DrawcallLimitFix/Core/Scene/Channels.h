@@ -157,6 +157,9 @@ namespace DCLF::Scene
 	struct AccumulateInputCounters
 	{
 		std::atomic<std::uint64_t> ancestorMapsPosted{ 0 }, ancestorMapsTaken{ 0 }, pipelineFramesPosted{ 0 }, pipelineFramesTaken{ 0 };
+		std::atomic<std::uint64_t> ancestorValuesMoved{ 0 };  // object slots a taken map moved (Coordinator::RefreshAncestorValues)
+		// The joins' lookups (EvaluateJoin): found, no key (no room or portal ancestor in the mirror), a key the map does not name.
+		std::atomic<std::uint64_t> ancestorFound{ 0 }, ancestorNoKey{ 0 }, ancestorNotMapped{ 0 };
 		std::atomic<std::uint64_t> pipelineBlocksMade{ 0 }, pipelineBlocksWaited{ 0 };
 	};
 

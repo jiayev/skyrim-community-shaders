@@ -42,20 +42,29 @@ namespace DCLF::Integrations::LightLimitFix
 	{
 		std::uint64_t checks = 0;
 		std::uint64_t mismatches = 0;  // StrictLightData (LLF, PS b3) differs
+		// The local shadow lights: DCLF's draw's (BuildDrawsCS, CS_DCLF_BUILD_PARITY's readback) against the native pass's ShadowBitMask, and
+		// those differing in a portal-strict light's bit (StrictGateRejects).
+		std::uint64_t shadowChecks = 0, shadowMismatches = 0, gatedMismatches = 0;
+		std::string shadowFirst;
 
 		/** @brief A mismatch's note (a_message follows the draw's description). */
 		using NoteFn = void (*)(void* a_owner, const RE::BSGeometry* a_geometry, std::string a_message);
 
 		/**
 		 * @brief A native draw of a_objectIndex (Light Limit Fix loaded): StrictLightData as its SetupGeometry hook left it against the
-		 * tables' room. Not ShadowBitMask: DCLF's comes from BuildDrawsCS's local shadow selection, which draw parity checks
-		 * (expectedLocalShadows).
+		 * tables' room; and its ShadowBitMask against a_drawn, DCLF's draw's local shadow lights and the gated bits among them (BuildDrawsCS;
+		 * null: none known).
 		 */
-		void Compare(const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex, const SceneTables& a_tables, NoteFn a_note, void* a_owner);
-		bool Ok() const { return mismatches == 0; }
+		void Compare(const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex, const SceneTables& a_tables, const std::uint32_t (*a_drawn)[2], NoteFn a_note,
+			void* a_owner);
+		bool Ok() const { return mismatches == 0 && shadowMismatches == 0; }
 		/** @brief The report's line ("light data parity ..."). */
 		void Report() const;
-		void Reset() { checks = mismatches = 0; }
+		void Reset()
+		{
+			checks = mismatches = shadowChecks = shadowMismatches = gatedMismatches = 0;
+			shadowFirst.clear();
+		}
 	};
 
 	// LightLimitFixIntegration.cpp: the integration's entry (Integrations/IntegrationList.cpp).

@@ -99,6 +99,8 @@ namespace DCLF
 		objects.Add(s.visibilityObjectReported);
 		if (inputs.main)
 			objects.Add(inputs.main->visibility).Add(inputs.main->frustum).Add(inputs.main->retests);
+		if (inputs.main && inputs.main->writers)
+			objects.Add(inputs.main->writers);
 		if (inputs.shadow)
 			objects.Add(inputs.shadow->visibility);
 		objects.Require(a_build, a_tables.objects.size());

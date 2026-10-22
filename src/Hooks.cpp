@@ -1038,6 +1038,19 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// kSHADOW_MASK needs UAV bind: Drawcall Limit Fix resolves the local shadow lights' channels into it for the receivers it draws
+	// (LocalShadowMaskCS), whose masks the engine never draws (it draws a local light's mask per registered receiver).
+	struct CreateRenderTarget_ShadowMask
+	{
+		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
+		{
+			const auto saved = *a_properties;
+			globals::state->ModifyRenderTarget(a_target, *a_properties);
+			func(This, a_target, a_properties);
+			*a_properties = saved;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 	struct CreateRenderTarget_UnderwaterMask
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
@@ -1353,6 +1366,16 @@ namespace Hooks
 		stl::write_thunk_call<CreateRenderTarget_MotionVectors>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x4F0, 0x4EF));
 
 		stl::write_thunk_call<CreateRenderTarget_RefractionNormals>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x503, 0x502));
+		{
+			// The call creating kSHADOW_MASK: `lea edx, [rdi + 0x12]`, `lea rcx, [the manager]`, then the call (verified on AE; SE's offset assumed one past, as the
+			// refraction normals' call is). Skipped, logged, when the bytes are not that.
+			const std::uintptr_t call = REL::RelocationID(100458, 107175).address() + REL::Relocate(0x555, 0x554);
+			const auto* bytes = reinterpret_cast<const std::uint8_t*>(call);
+			if (bytes[-10] == 0x8D && bytes[-9] == 0x57 && bytes[-8] == 0x12 && bytes[0] == 0xE8)
+				stl::write_thunk_call<CreateRenderTarget_ShadowMask>(call);
+			else
+				logger::warn("BSShaderRenderTargets::Create: the kSHADOW_MASK call is not where expected; the shadow mask stays without UAV access");
+		}
 		stl::write_thunk_call<CreateRenderTarget_UnderwaterMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xB19, 0xB19));
 
 		stl::write_thunk_call<CreateDepthStencil_PrecipitationMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x1245, 0x123B));

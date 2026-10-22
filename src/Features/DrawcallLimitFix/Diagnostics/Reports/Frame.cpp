@@ -294,9 +294,9 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 			timing.eventsMs / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs);
 		// The joins' frame inputs: render thread (EarlyPrepass) -> the next scene pass, latest wins.
 		if (const auto inputs = store.TakeAccumulateInputStats(); inputs.ancestorMapsPosted || inputs.pipelineFramesPosted || inputs.pipelineBlocksMade || inputs.pipelineBlocksWaited)
-			logger::info("[DCLF] accumulate frame inputs (T6b2c step 8): room map {} posted, {} taken; pipeline frame {} posted, {} taken; {} new pipelines' blocks made by "
+			logger::info("[DCLF] accumulate frame inputs (T6b2c step 8): room map {} posted, {} taken ({} objects' values moved; the joins' lookups: {} found, {} without a room or portal ancestor in the mirror, {} of a room the map does not name); pipeline frame {} posted, {} taken; {} new pipelines' blocks made by "
 						 "the coordinator, {} waited for a pipeline frame",
-				inputs.ancestorMapsPosted, inputs.ancestorMapsTaken, inputs.pipelineFramesPosted, inputs.pipelineFramesTaken, inputs.pipelineBlocksMade, inputs.pipelineBlocksWaited);
+				inputs.ancestorMapsPosted, inputs.ancestorMapsTaken, inputs.ancestorValuesMoved, inputs.ancestorFound, inputs.ancestorNoKey, inputs.ancestorNotMapped, inputs.pipelineFramesPosted, inputs.pipelineFramesTaken, inputs.pipelineBlocksMade, inputs.pipelineBlocksWaited);
 		{
 			const auto installs = DCLF::Scene::FrameView::Get().TakePublicationStats();
 			// A publication is installed with the snapshot that carries it (the snapshots' own counters: IndirectDraws' report).

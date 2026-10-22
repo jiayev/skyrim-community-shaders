@@ -3,6 +3,7 @@
 // the row tables; the epoch's payload (PayloadVersions) places them, recorded when the check is armed.
 
 #include "DrawsState.h"
+#include "DrawnLocalShadows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "DrawsView.h"
@@ -13,9 +14,12 @@ namespace DCLF::Diagnostics
 {
 	namespace
 	{
+		// The newest readback's local shadow lights by object (DrawnLocalShadowsOf).
+		ankerl::unordered_dense::map<std::uint32_t, DrawnLocalShadows> drawnLocalShadows;
 		/**
-		 * @brief The colour draws BuildDraws wrote: each state class's main and terrain sub-ranges (PassFrame::classes), as far as its
-		 * count reaches (its classCounts words; past the capacity: dropped, kCountClassOverflowWord). Not the forward ones (sorted there).
+		 * @brief The colour draws BuildDraws wrote: each state class's main and terrain sub-ranges (PassFrame::classes), and the class plan's
+		 * main and terrain plain buckets, as far as each count reaches (its classCounts word; past the capacity: dropped,
+		 * kCountClassOverflowWord). Not the forward ones (sorted there).
 		 */
 		std::vector<DrawSequence> ClassSequences(const DrawsState::ParityReadback& a_parity, const DrawSequence* a_gpu, const std::uint32_t* a_classCounts)
 		{
@@ -26,6 +30,16 @@ namespace DCLF::Diagnostics
 					const std::uint32_t drawn = std::min(a_classCounts[Draws::ClassCountWord(c, r)], range.capacity);
 					built.insert(built.end(), a_gpu + range.first, a_gpu + range.first + drawn);
 				}
+			if (const auto& plan = a_parity.classPlan) {
+				const auto take = [&](const SetClassPlan::PlainBucket& a_bucket, std::uint32_t a_word) {
+					const std::uint32_t drawn = std::min(a_classCounts[a_word], a_bucket.capacity);
+					built.insert(built.end(), a_gpu + a_bucket.first, a_gpu + a_bucket.first + drawn);
+				};
+				for (std::size_t b = 0; b < plan->main.size(); ++b)
+					take(plan->main[b], plan->MainCountWord(b));
+				for (std::size_t b = 0; b < plan->terrain.size(); ++b)
+					take(plan->terrain[b], plan->TerrainCountWord(b));
+			}
 			return built;
 		}
 
@@ -128,6 +142,7 @@ namespace DCLF::Diagnostics
 			// which the CPU's templates do not carry.
 			std::size_t localChecked = 0, localDiffering = 0;
 			std::string localFirst;
+			drawnLocalShadows.clear();
 			auto takeLocalShadows = [&](DrawSequence& a_sequence) {
 				const std::uint32_t gpu = (a_sequence.objectIndex & kObjectLocalShadowMask) >> kObjectLocalShadowShift;
 				a_sequence.objectIndex &= ~kObjectLocalShadowMask;
@@ -135,6 +150,7 @@ namespace DCLF::Diagnostics
 				const auto it = parity->expectedLocalShadows.find(object);
 				const std::uint32_t cpu = it != parity->expectedLocalShadows.end() ? it->second : 0u;
 				++localChecked;
+				drawnLocalShadows[object] = { gpu, parity->gatedLocalShadows };
 				if ((gpu & ~parity->gatedLocalShadows) != (cpu & ~parity->gatedLocalShadows) && localDiffering++ == 0)
 					localFirst = fmt::format("object {}: GPU {:X}, CPU {:X}", object, gpu, cpu);
 			};
@@ -171,10 +187,25 @@ namespace DCLF::Diagnostics
 			// A draw that missed every sun cascade carries kObjectSunMiss in its object word; the CPU's template does not.
 			for (auto& sequence : built)
 				sequence.objectIndex &= ~kObjectSunMiss;
+			// The plain draws (CS_DCLF_MAIN_PLAIN, CS_DCLF_TERRAIN_PLAIN) are pooled: no pipeline index, the first index the index pool's, the
+			// count 0 without pool indices, the bucket slot as first instance. With any, those fields are left out on both sides.
+			auto& expected = parity->expected;
+			if (const auto& plan = parity->classPlan; plan && (!plan->main.empty() || !plan->terrain.empty())) {
+				const auto plainFields = [](DrawSequence& a_sequence) {
+					a_sequence.pipelineIndex = 0;
+					a_sequence.indexCount = 0;
+					a_sequence.firstIndex = 0;
+					a_sequence.vertexOffset = 0;
+					a_sequence.firstInstance = 0;
+				};
+				for (auto& sequence : built)
+					plainFields(sequence);
+				for (auto& sequence : expected)
+					plainFields(sequence);
+			}
 			auto keyOf = [](const DrawSequence& a) { return std::tuple(a.objectIndex, a.indexBufferAddress, a.firstIndex); };
 			auto byObject = [&](const DrawSequence& a, const DrawSequence& b) { return keyOf(a) < keyOf(b); };
 			std::sort(built.begin(), built.end(), byObject);
-			auto& expected = parity->expected;
 			std::sort(expected.begin(), expected.end(), byObject);
 			// What the GPU writes is a subset of the CPU's templates whenever the culling rejects anything, so this is a
 			// subsequence check: every sequence BuildDraws wrote must appear in the CPU list under the same object index, byte for byte.
@@ -260,6 +291,7 @@ namespace DCLF::Diagnostics
 		readback.sequenceDraws = shape->sequenceDraws;
 		readback.sequenceDecals = shape->sequenceDecals;
 		readback.classes = shape->classes;
+		readback.classPlan = shape->classPlan;
 		// The state class sub-ranges' counts, the version the adopted set names (as the sequences').
 		auto* const classCountsView = state.parityClassCounts.Of(DrawsView::Get().Adopted().Find(*a_resources->classCounts));
 		if (!classCountsView)
@@ -330,5 +362,14 @@ namespace DCLF::Diagnostics
 		readback.framesLeft = 3;
 		if (readback.sequences && readback.count && readback.classCounts)
 			parity = std::move(readback);
+	}
+
+	bool DrawnLocalShadowsOf(std::uint32_t a_object, DrawnLocalShadows& a_out)
+	{
+		const auto it = drawnLocalShadows.find(a_object);
+		if (it == drawnLocalShadows.end())
+			return false;
+		a_out = it->second;
+		return true;
 	}
 }

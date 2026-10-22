@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Features/DrawcallLimitFix/Api/LightVolumes.h"
+
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -42,6 +44,16 @@ namespace DCLF
 			// A portal-strict point light's entry in the frame's light context atlas + 1 (LightSelection::Selected::portalContextIndex): its
 			// receivers pass its strict gates (Portals/StrictGates.h). 0: not gated.
 			std::uint32_t portalContext = 0;
+			// Its screen-space mask (Api::LightShadowMask): the light, its channel and kind, its first descriptor's transform, its
+			// cone exponent, bias scale and lodFade. hasMask false: none (not a frustum or parabolic light, or no descriptor).
+			const void* light = nullptr;
+			std::uint32_t maskIndex = 0;
+			bool hasMask = false;
+			Api::LightShadowKind kind = Api::LightShadowKind::Spot;
+			float lightTransform[16]{};
+			float spotFalloff = 2.0f;
+			float biasScale = 0.0f;
+			bool lodFade = false;
 		};
 		std::vector<Light> lights;
 

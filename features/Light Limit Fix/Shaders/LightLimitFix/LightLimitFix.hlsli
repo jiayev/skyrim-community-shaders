@@ -29,12 +29,16 @@ namespace LightLimitFix
 	// with NumStrictLights at 0 the StrictLights tail is never read. The cbuffer above keeps its
 	// declaration and its layout: only the names change source, and NSCB_ALIAS is already exactly this
 	// shape of static under DXC. Every other includer of this header compiles the aliases unchanged.
-	static const int RoomIndex = DCLFObjects[DCLFObjectIndex].RoomIndex;
+	// Read where used, not as statics: a plain draw's object word (DCLF_PULLED) is its sequence's, which its main loads after the
+	// statics are initialised.
+	int RoomIndexOf() { return DCLFObjects[DCLFObjectIndex].RoomIndex; }
 	// The shadow lights are the draw's, selected by BuildDrawsCS this frame (the object word), not the record's.
-	static const uint ShadowBitMask = DCLFLocalShadowMask;
+	uint ShadowBitMaskOf() { return DCLFLocalShadowMask; }
 #else
 	NSCB_ALIAS(LightLimitFix, int, RoomIndex)
 	NSCB_ALIAS(LightLimitFix, uint, ShadowBitMask)
+	int RoomIndexOf() { return RoomIndex; }
+	uint ShadowBitMaskOf() { return ShadowBitMask; }
 #endif  // DCLF_BINDLESS_DRAW
 	NSCB_ALIAS(LightLimitFix, uint, FirstPerson)
 	NSCB_ALIAS(LightLimitFix, float4, WorldEyePosition)
@@ -44,20 +48,10 @@ namespace LightLimitFix
 	StructuredBuffer<uint> lightList : register(t36);       //MAX_CLUSTER_LIGHTS * 16^3
 	StructuredBuffer<LightGrid> lightGrid : register(t37);  //16^3
 
-	struct LocalShadowData
-	{
-		column_major float4x4 ShadowProj;
-		float4 Params;   // x: 0 spot / 1 hemisphere / 2 omni, y: radius (<= 0 = no data), z: depth bias, w: fade-in
-		float4 Params2;  // x: spot cone falloff exponent, y: skinned receiver offset toward the light
-		float4 Origin;
-	};
+#include "LightLimitFix/LocalShadowProjection.hlsli"
 
 	StructuredBuffer<LocalShadowData> LocalShadows : register(t102);
 	Texture2DArray<float> LocalShadowMaps : register(t103);
-
-	static const uint LOCAL_SHADOW_TYPE_SPOT = 0;
-	static const uint LOCAL_SHADOW_TYPE_HEMISPHERE = 1;
-	static const uint LOCAL_SHADOW_TYPE_OMNI = 2;
 
 	bool GetClusterIndex(in float2 uv, in float z, inout uint clusterIndex)
 	{
@@ -82,13 +76,14 @@ namespace LightLimitFix
 	bool IsLightIgnored(Light light)
 	{
 		if (light.lightFlags & LightLimitFix::LightFlags::Shadow) {
-			return !(ShadowBitMask & (1 << light.shadowLightIndex));
+			return !(ShadowBitMaskOf() & (1 << light.shadowLightIndex));
 		}
 
 		bool lightIgnored = false;
-		if ((light.lightFlags & LightFlags::PortalStrict) && RoomIndex >= 0) {
+		const int roomIndexOfObject = RoomIndexOf();
+		if ((light.lightFlags & LightFlags::PortalStrict) && roomIndexOfObject >= 0) {
 			lightIgnored = true;
-			int roomIndex = RoomIndex;
+			int roomIndex = roomIndexOfObject;
 			[unroll] for (int flagsIndex = 0; flagsIndex < 4; ++flagsIndex)
 			{
 				if (roomIndex < 32) {
@@ -151,51 +146,11 @@ namespace LightLimitFix
 		[branch] if (data.Params.y > 0.0)
 		{
 			fade = data.Params.w;
-			const uint shadowType = (uint)data.Params.x;
 			float3 shadowPosition = position + (eyePosition - data.Origin.xyz) + towardLight * (skinnedReceiver ? data.Params2.y : 0.0);
-			float4 positionLS = mul(data.ShadowProj, float4(shadowPosition, 1.0));
-
-			[branch] if (shadowType == LOCAL_SHADOW_TYPE_SPOT)
-			{
-				// The vanilla mask only draws the frustum volume: behind the light and outside the cone is dark.
-				rawShadow = 0.0;
-				[branch] if (positionLS.w > 1e-4)
-				{
-					positionLS.xyz /= positionLS.w;
-					[branch] if (all(abs(positionLS.xy) < 1.0) && positionLS.z >= 0.0)
-					{
-						float2 uv = positionLS.xy * 0.5 + 0.5;
-						float receiverDepth = positionLS.z - data.Params.z;
-						float spotFalloff = saturate(1.0 - pow(length(positionLS.xy), data.Params2.x));
-						rawShadow = SampleLocalShadowPCF(shadowMaps, samp, slice, uv, receiverDepth, noise, texel, 1.0 - texel, texel, sampleCount, radiusUV) * spotFalloff;
-					}
-				}
-			}
-			else
-			{
-				const bool omni = shadowType == LOCAL_SHADOW_TYPE_OMNI;
-				const bool lowerHalf = positionLS.z < -1.0;
-				[branch] if (omni || !lowerHalf)
-				{
-					float3 lightDirection = normalize(normalize(positionLS.xyz) + float3(0.0, 0.0, lowerHalf ? -1.0 : 1.0));
-					// Must keep the sign: the lower paraboloid half has a negative axis term, and the
-					// flip it produces is what maps that hemisphere. Clamping to a positive epsilon
-					// collapses the whole lower half onto one edge texel. Matches vanilla Utility.hlsl.
-					float axialTerm = lightDirection.z;
-					axialTerm = abs(axialTerm) < 1e-4 ? (axialTerm < 0.0 ? -1e-4 : 1e-4) : axialTerm;
-					float2 uv = lightDirection.xy / axialTerm * 0.5 + 0.5;
-					float2 clampMin = texel;
-					float2 clampMax = 1.0 - texel;
-					if (omni) {
-						uv.y = lowerHalf ? 1.0 - 0.5 * uv.y : 0.5 * uv.y;
-						clampMin.y = lowerHalf ? 0.5 + texel : texel;
-						clampMax.y = lowerHalf ? 1.0 - texel : 0.5 - texel;
-					}
-
-					float receiverDepth = saturate(length(positionLS.xyz) / data.Params.y) - data.Params.z;
-					rawShadow = SampleLocalShadowPCF(shadowMaps, samp, slice, uv, receiverDepth, noise, clampMin, clampMax, texel, sampleCount, radiusUV);
-				}
-			}
+			const LocalShadowLookup lookup = GetLocalShadowLookup(data, shadowPosition, texel);
+			rawShadow = lookup.sampled ? SampleLocalShadowPCF(shadowMaps, samp, slice, lookup.uv, lookup.receiverDepth, noise, lookup.clampMin, lookup.clampMax, texel,
+											 sampleCount, radiusUV) * lookup.scale :
+			                             lookup.unsampled;
 		}
 
 		return lerp(1.0, rawShadow, fade);

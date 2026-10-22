@@ -2185,6 +2185,30 @@ the parities.
 -   **Still the engine's**: the scissor rectangle, `UpdateCamera` and its focus counterpart themselves, and a view whose rasterizer
     state no pipeline can express (wireframe, no depth clip).
 
+#### Local shadow masks
+
+The engine draws a local shadow light's screen-space mask per **receiver**: render modes `0x10`/`0x11`
+(`GetRenderPasses_ShadowMapOrMask`, `0x1414af030`) give each property with ReceiveShadows a Utility mask pass (`0x400000` spot,
+`0x800000` paraboloid, `0x1000000` dual paraboloid) for each shadow light in its `activeLightMask`. DCLF's receivers are not
+registered, so the engine writes no mask for them. (The sun's mask is one full-screen pass from depth, so exteriors never showed this.)
+DCLF resolves those channels itself:
+-   **Records.** The light volumes contribution (`Api::LightVolumesContribution`, Features/LocalLights) puts a mask per selected light
+    (`LightVolumeSink::PutMask`): its channel (`maskIndex`), kind (frustum, omni, parabolic, the engine's order), its first descriptor's
+    `lightTransform`, radius, cone falloff, `shadowBiasScale` and `lodFade`. `WriteShadowLatch` latches a `GpuLocalShadowMask` per
+    channel at `BuildDrawsLatch::localShadowMaskOffset`: the target and slice are the light's first view's as DCLF drew it
+    (`ShadowViews::View::drawTarget`, `drawSlice`), the frame's eye is folded into the transform, and the bias, fade distance and PCF
+    radius are the engine's mask constants (`Engine::Address::kShadowBias*`, `kShadowFadeDistance*`, `kShadowFilterRadius`).
+-   **The pass.** `core.local-shadow-masks` (`Passes/LocalShadowMasks.cpp`, `LocalShadowMaskCS.hlsl`) runs first in the colour epoch,
+    after the latched copies: one dispatch over `kSHADOW_MASK` (imported with a UAV: Community Shaders' `CreateRenderTarget_ShadowMask`
+    hook gives the target UAV access). Each texel's position comes from the main depth through the frame block's inverse view-projection,
+    as the Utility shader's `RENDER_DEPTH` variants reconstruct it. The map lookup is Light Limit Fix's (`LocalShadowProjection.hlsli`,
+    shared with its local shadow cache), sampled with the engine's eight-tap PCF, times the mask's distance fade. A channel without a
+    record keeps what the engine drew. The colour draws declare the mask, so the graph orders their reads after the resolve.
+-   **Receivers' bits.** A draw applies a shadow light only where its object word carries the light's bit (`BuildDrawsCS`'s
+    `LocalShadowMask`, Light Limit Fix's `ShadowBitMask`). In a plain draw (`DCLF_PULLED`) the object word is loaded by the stage's main,
+    so anything derived from it is read where used, never initialised as a static (`LightLimitFix.hlsli`: `ShadowBitMaskOf`,
+    `RoomIndexOf`; `emissiveMult`, `skinPerGeometry`): a static's initialiser runs before main and sees object 0.
+
 #### The caster rule
 
 `ShadowCasterReject` / `ShadowReject` (`Core/Handoff/ShadowViews.h`): `None`, `NotLighting`, `DeclZero`, `Faded`, `Refraction`,

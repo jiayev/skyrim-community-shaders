@@ -104,9 +104,10 @@ namespace DCLF::Schedule
 			"fades.events",
 			"diag.after-depth",
 		};
-		// The colour epoch: the build, the sort by pipeline, the forward range's sort, the colour draws.
+		// The colour epoch: the local shadow masks, the build, the sort by pipeline, the forward range's sort, the colour draws.
 		constexpr std::string_view kMainColour[] = {
 			"core.latched-copies",
+			"core.local-shadow-masks",
 			"core.build-draws",
 			"core.sort-scan",
 			"core.sort-scatter",

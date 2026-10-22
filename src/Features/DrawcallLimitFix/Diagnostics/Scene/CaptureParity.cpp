@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawnLocalShadows.h"
 
 #include <algorithm>
 #include <cstring>
@@ -658,7 +659,10 @@ namespace DCLF
 		}
 
 		// PS b3: Integrations/LightLimitFix's.
-		lightData.Compare(geometry, static_cast<std::uint32_t>(index), tables,
+		Diagnostics::DrawnLocalShadows drawn;
+		const bool drawnKnown = Diagnostics::DrawnLocalShadowsOf(static_cast<std::uint32_t>(index), drawn);
+		const std::uint32_t drawnWords[2]{ drawn.mask, drawn.gated };
+		lightData.Compare(geometry, static_cast<std::uint32_t>(index), tables, drawnKnown ? &drawnWords : nullptr,
 			[](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) {
 				static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message));
 			},

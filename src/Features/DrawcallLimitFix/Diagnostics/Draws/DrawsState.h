@@ -85,6 +85,9 @@ namespace DCLF::Diagnostics
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the buffer's ranges when copied
 			// The shape's state class sub-ranges (PassFrame::classes) whose sequences are compared, by class.
 			std::vector<SetClassRanges> classes;
+			// The shape's class plan: with the plain draws on (CS_DCLF_MAIN_PLAIN, CS_DCLF_TERRAIN_PLAIN), its buckets take the colour and
+			// terrain draws instead of the classes' sub-ranges.
+			std::shared_ptr<const SetClassPlan> classPlan;
 			std::uint32_t framesLeft = 0;
 			// The row tables of the payload the epoch committed with (PayloadVersions' PipelineRows and MaterialRows): the bases the
 			// CPU's table-relative row offsets were placed at.
@@ -163,6 +166,9 @@ namespace DCLF::Diagnostics
 			winrt::com_ptr<ID3D11Buffer> inputsStaging;
 			std::uint32_t inputCount = 0, depthInputCount = 0;
 			std::uint64_t inputsGeneration = 0;
+			// TEMP: the writer records (Resources::writers) as the colour epoch left them, and the installed scene list's descriptor.
+			winrt::com_ptr<ID3D11Buffer> writersStaging;
+			std::uint32_t inputsSrv = 0;
 			// Frustum stamps (fade test drops), and per member whether its live bound (kept) is inside the depth build's frustum:
 			// culling must not reject one inside.
 			winrt::com_ptr<ID3D11Buffer> frustumStaging;
@@ -174,7 +180,7 @@ namespace DCLF::Diagnostics
 		};
 		std::deque<SetParityFrame> setParityFrames;
 		std::vector<winrt::com_ptr<ID3D11Buffer>> setParityStaging;  // released stagings, reused
-		WrappedVersion setParityVisibility, setParityFrustum;
+		WrappedVersion setParityVisibility, setParityFrustum, setParityWriters;
 		struct SetParityCounts
 		{
 			std::uint32_t frames = 0, framesWithDamage = 0, skipped = 0;

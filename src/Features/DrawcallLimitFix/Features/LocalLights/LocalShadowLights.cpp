@@ -42,6 +42,28 @@ namespace DCLF
 				sampled.center[2] = niLight->world.translate.z;
 				sampled.radius = niLight->GetLightRuntimeData().radius.x;
 			}
+			// The mask's (Api::LightShadowMask), as the engine picks a mask technique (GetRenderPasses_ShadowMapOrMask): frustum, omni,
+			// parabolic, in that order.
+			sampled.light = selected.light;
+			sampled.maskIndex = selected.maskIndex;
+			sampled.biasScale = data.shadowBiasScale;
+			sampled.lodFade = shadowLight->lodFade;
+			if (!data.shadowmapDescriptors.empty()) {
+				std::memcpy(sampled.lightTransform, &data.shadowmapDescriptors[0].lightTransform, sizeof(sampled.lightTransform));
+				if (shadowLight->GetIsFrustumLight()) {
+					sampled.hasMask = true;
+					sampled.kind = Api::LightShadowKind::Spot;
+					const float falloff = static_cast<RE::BSShadowFrustumLight*>(shadowLight)->GetShadowFrustumLightRuntimeData().falloff;
+					if (std::isfinite(falloff) && falloff > 0.0f)
+						sampled.spotFalloff = falloff;
+				} else if (shadowLight->GetIsOmniLight()) {
+					sampled.hasMask = true;
+					sampled.kind = Api::LightShadowKind::Omni;
+				} else if (shadowLight->GetIsParabolicLight()) {
+					sampled.hasMask = true;
+					sampled.kind = Api::LightShadowKind::Hemisphere;
+				}
+			}
 			const auto source = shadowLight->GetIsParabolicLight() ? Api::ShadowSource::Point : Api::ShadowSource::Spot;
 			for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d) {
 				const auto& descriptor = data.shadowmapDescriptors[d];

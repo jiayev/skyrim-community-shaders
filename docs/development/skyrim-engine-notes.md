@@ -116,6 +116,19 @@ What SetupTechnique writes (ported in `ConstantEvaluator.cpp` `EvaluateTechnique
     `(1 / width, 1 / height, 0, 0)` of the globals at AE `0x14328be9c` (the shadow mask size).
     **The VPOSOffset write happens after the buffer is unmapped.** On DXVK the dynamic buffer stays mapped,
     so the draw still sees it.
+-   **Who writes a local shadow light's mask channel: its receivers.** Render modes `0x10`/`0x11`
+    (`BSLightingShaderProperty::GetRenderPasses_ShadowMapOrMask`, `0x1414af030`) give a property with ReceiveShadows (flag bit 8)
+    one Utility pass per shadow light in its `activeLightMask` (`0x11` also takes `firstPersonShadowMask`), kept in
+    `shadowMapOrMaskPasses`: `0x400000` for a frustum light (vfunc 5), `0x1000000` for an omni light (vfunc 8), `0x800000` for a
+    parabolic one (vfunc 7), `0x200000` for the directional light. Each draws the receiver's own geometry into the light's channel.
+    Their constants (`BSUtilityShader::SetupGeometry` `0x1414fae40`, `FUN_1414fbab0` textures, `FUN_1414fbd30` matrices): the light
+    is `pass->sceneLights[0]`; `ShadowMapProj[0]` its first descriptor's `lightTransform` with the eye folded into the translation;
+    `AlphaTestRef.y` = `shadowBiasScale` (+0x540) × float `0x141ac1d48` × float `0x1433dcfb0`; `ShadowLightParam.x` the light's radius
+    (paraboloids) or the frustum light's falloff; `ShadowLightParam.z` the fade distance squared, float `0x1418af8b0`, or `0x1433dcfac`
+    for a light with `lodFade` (+0x63); `EndSplitDistances.x` (the slice) from the global `0x1433dcfb4`; `ShadowSampleParam.z` (PCF
+    radius) = float `0x1420358f0` / uint `0x1433dcfc0` for filters 2 and 3. The shadow map is the light's descriptor's depth target.
+-   **The shadow mask target is created** in `BSShaderRenderTargets::Create` (AE `0x1414cf210`): `lea edx, [rdi + 0x12]`,
+    `lea rcx, [RenderTargetManager]`, then the create call at `+0x554` (the refraction normals' at `+0x502`, target `0xD`).
 
 ### `BSLightingShader::SetupGeometry` (vtable slot 6, AE `0x1414dd040`)
 

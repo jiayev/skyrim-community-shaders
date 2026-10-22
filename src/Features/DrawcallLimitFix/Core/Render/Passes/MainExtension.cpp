@@ -59,10 +59,14 @@ namespace DCLF::Draws
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.foliage-results"), foliage->results);
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.foliage-owners"), foliage->owners);
 			}
+			if (resources->shadowMask)
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow-mask"), resources->shadowMask);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility"), resources->visibility);
 			if (resources->frustum)
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.frustum"), resources->frustum);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.retests"), resources->retests);
+			if (resources->writers)
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.writers"), resources->writers);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.retest-dispatch"), resources->retestDispatch);
 			for (const auto& frameBuffer : resources->frameBuffers)
 				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.frame-buffer.t{}", frameBuffer.textureRegister)), frameBuffer.copy);

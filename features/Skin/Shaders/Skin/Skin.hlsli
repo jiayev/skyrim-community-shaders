@@ -24,7 +24,8 @@ namespace Skin
 #	if defined(DCLF_BINDLESS_DRAW)
 	// Drawcall Limit Fix: per object, from its shading row rather than a buffer of its own, so that b7 is not part
 	// of what makes a draw's binding record unique.
-	static const float4 skinPerGeometry = DCLFShading[DCLFObjectIndex].SkinPerGeometry;
+	// Read where used: a plain draw's object index (DCLF_PULLED) is set by its main, after statics are initialised.
+#		define skinPerGeometry (DCLFShading[DCLFObjectIndex].SkinPerGeometry)
 #	else
 	cbuffer SkinPerGeometry : register(b7)
 	{

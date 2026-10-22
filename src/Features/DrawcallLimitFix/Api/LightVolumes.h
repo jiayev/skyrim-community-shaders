@@ -36,14 +36,44 @@ namespace DCLF::Api
 		std::uint32_t portalContext = 0;
 	};
 
+	/** @brief A local shadow light's shadow kind, as its mask samples its map (the Utility shader's mask variants). */
+	enum class LightShadowKind : std::uint32_t
+	{
+		Spot,        // a frustum light (RENDER_SHADOWMASKSPOT)
+		Hemisphere,  // a parabolic light of one paraboloid (RENDER_SHADOWMASKPB)
+		Omni,        // a dual paraboloid in one slice (RENDER_SHADOWMASKDPB)
+	};
+
+	/**
+	 * @brief One local shadow light's screen-space mask, which Core resolves for DCLF's receivers into its channel of kSHADOW_MASK (the
+	 * engine draws it per registered receiver, and DCLF's are not registered). Its map is the one DCLF drew for the light's first
+	 * descriptor: Core finds the target and slice among the frame's shadow views.
+	 *
+	 * - light: the BSShadowLight. maskIndex: its channel (BSShadowLight +0x520).
+	 * - lightTransform: the first descriptor's (row-major, row vectors), absolute world.
+	 * - radius: the light's (a paraboloid's depth range); spotFalloff: a frustum light's cone exponent; biasScale: shadowBiasScale (+0x540);
+	 *   lodFade: the light's +0x63, which picks the mask's fade distance.
+	 */
+	struct LightShadowMask
+	{
+		const void* light = nullptr;
+		std::uint32_t maskIndex = 0;
+		LightShadowKind kind = LightShadowKind::Spot;
+		float lightTransform[16]{};
+		float radius = 0.0f;
+		float spotFalloff = 2.0f;
+		float biasScale = 0.0f;
+		bool lodFade = false;
+	};
+
 	/**
 	 * @brief The light volumes contribution.
 	 *
 	 * - name: the contribution's (the install's failures).
 	 * - landscapeFlags: the property flags whose objects take only affectsLand volumes (kObjectLandscapeLights), read as data per join.
 	 * - sample: render thread, once per colour commit (CommitShadowInputs), after the lights accumulated: every volume of the frame's
-	 *   lights into a_sink, in the order their mask bits combine. Core keeps the list unclamped (the build parity's reference) and latches
-	 *   at most the revision's layout's volumes.
+	 *   lights into a_sink, in the order their mask bits combine, and each light's mask (LightVolumeSink::PutMask). Core keeps the list
+	 *   unclamped (the build parity's reference) and latches at most the revision's layout's volumes.
 	 */
 	struct LightVolumesContribution
 	{

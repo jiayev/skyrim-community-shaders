@@ -254,6 +254,49 @@ namespace DCLF::Draws
 		}
 
 		/**
+		 * @brief The engine's screen-space shadow mask (kSHADOW_MASK), as LocalShadowMaskCS writes the local shadow lights' channels into
+		 * it: an RGBA8 image with a UAV (Community Shaders' CreateRenderTarget_ShadowMask). Without either, DCLF's receivers keep what the
+		 * engine drew there (nothing for them: their local shadow lights are dark).
+		 */
+		void ImportShadowMask(Resources& a_state, rhi::Device a_device)
+		{
+			auto* renderer = globals::game::renderer;
+			if (!renderer)
+				return;
+			const auto& mask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
+			DxvkOrgInteropResourceInfo info{};
+			D3D11_TEXTURE2D_DESC textureDesc{};
+			if (mask.texture)
+				mask.texture->GetDesc(&textureDesc);
+			if (!mask.texture || !(textureDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) || textureDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM ||
+				!RenderGraphRuntime::Get().DescribeResource(mask.texture, info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE) {
+				logger::warn("[DCLF] the shadow mask (kSHADOW_MASK) is not an RGBA8 image with UAV access (format {}, bind flags {:#x}); DCLF's receivers get no "
+							 "local shadow light",
+					static_cast<int>(textureDesc.Format), textureDesc.BindFlags);
+				return;
+			}
+			org::TextureDescription maskDesc{};
+			maskDesc.imageDimensions.push_back({ textureDesc.Width, textureDesc.Height, 0, 0 });
+			maskDesc.format = rhi::Format::R8G8B8A8_UNorm;
+			maskDesc.channels = 4;
+			maskDesc.hasUAV = true;
+			maskDesc.uavFormat = maskDesc.format;
+			// The colour draws read it through the engine's view (their rows' t14); declared for the barrier after the resolve.
+			maskDesc.hasSRV = true;
+			maskDesc.srvFormat = maskDesc.format;
+			a_state.shadowMask = ImportImage(a_device, info.image, maskDesc, "DCLF shadow mask");
+			if (!a_state.shadowMask)
+				return;
+			a_state.shadowMaskWidth = textureDesc.Width;
+			a_state.shadowMaskHeight = textureDesc.Height;
+			a_state.localShadowMasks = ComputeProgram::Load(a_device, { .source = kLocalShadowMaskShader, .constantWords = kLocalShadowMaskConstantWords });
+			if (!a_state.localShadowMasks) {
+				logger::warn("[DCLF] the local shadow mask program could not be created; DCLF's receivers get no local shadow light");
+				a_state.shadowMask.reset();
+			}
+		}
+
+		/**
 		 * @brief The HZB, from the depth pyramid's producer (Api/DepthPyramid.h: its setup's texture, extent, levels and scratch, and its
 		 * state). Without one, or without its texture, none: culling stays frustum-only, with no phase 2 passes.
 		 */
@@ -318,6 +361,8 @@ namespace DCLF
 		if (!ImportMainTargets(*state, a_capture, device, target, targets))
 			return false;
 		ImportRefractionNormals(*state, device);
+		ImportShadowMask(*state, device);
+		state->shadow = shadowEngine->shadow;
 
 		SetUpHzb(*state, device);
 
@@ -369,6 +414,8 @@ namespace DCLF
 		a_state.frustum = MakeVersioned(CreateWords(objects, true, "cs.dclf.frustum"), { .extent = { 0, 4, 4 } });
 		// Phase 1's retest list (an object slot a word, grown with the others) and phase 2's dispatch from it.
 		a_state.retests = MakeVersioned(CreateWords(objects, true, "cs.dclf.retests"), { .extent = { 0, 4, 4 } });
+		if (SwitchEnabled(Switch::SetParity))
+			a_state.writers = MakeVersioned(CreateWords(objects * 8, true, "cs.dclf.writers"), { .extent = { 0, 32, 4 } });
 		a_state.retestDispatch = CreateWords(4, true, "cs.dclf.retest-dispatch");
 		if (PassStats::Enabled())
 			CreatePassStats(a_state, a_host, a_device);
@@ -691,6 +738,7 @@ namespace DCLF
 			return ShadowNotReady(2, "no device address for the shadow buffers");
 		}
 		shadow = state;
+		shadowHost.ShadowResourcesMade(state);
 		host->AddExtension(kShadowExtensionId, [state] { return Diagnostics::ScheduleDumped(kShadowExtensionId, MakeShadowExtension(state)); });
 		logger::info("[DCLF] shadow view graph resources created");
 		shadowHost.PostRevisionInputs();
@@ -912,6 +960,9 @@ namespace DCLF
 		desc.channels = 1;
 		desc.hasDSV = true;
 		desc.dsvFormat = desc.format;
+		// Readable too: the main resources' local shadow masks sample the shadow maps (LocalShadowMaskCS).
+		desc.hasSRV = true;
+		desc.srvFormat = DepthReadFormat(desc.format);
 		// The shadow maps', then each occlusion map's (its entry's target label).
 		static constexpr const char* kNames[kFirstOcclusionTarget] = { "DCLF shadow maps (ESRAM)", "DCLF shadow maps", "DCLF volumetric shadow maps (ESRAM)" };
 		const char* name = IsOcclusionTarget(a_index) ? Extensions::OcclusionMapOf(a_index - kFirstOcclusionTarget).targetName.c_str() : kNames[a_index];

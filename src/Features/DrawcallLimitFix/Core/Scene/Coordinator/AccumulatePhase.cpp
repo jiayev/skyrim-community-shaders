@@ -129,6 +129,26 @@ namespace DCLF::Scene
 		ComponentsAccumulated(objectId, a_patch.decalKey);
 	}
 
+	void Coordinator::RefreshAncestorValues()
+	{
+		const std::int32_t none = Extensions::AncestorValue()->none;
+		for (auto& [geometry, entry] : tracked) {
+			std::int32_t value = none;
+			if (ancestorMap && entry.ancestorKey)
+				if (const auto found = ancestorMap->find(entry.ancestorKey); found != ancestorMap->end())
+					value = found->second;
+			entry.ancestorValue = value;
+			entry.ancestorMapGeneration = ancestorMapGeneration;
+			for (const std::uint32_t slot : { entry.slot, entry.layerSlot }) {
+				if (slot == kNoObjectSlot || slot >= tables.ancestorValue.size() || !tables.residentSlot[slot] || tables.ancestorValue[slot].value == value)
+					continue;
+				tables.ancestorValue[slot].value = value;
+				tables.NoteChange(slot, kChangeAncestorValue);
+				channels.accumulateInputs.ancestorValuesMoved.fetch_add(1, std::memory_order_relaxed);
+			}
+		}
+	}
+
 	void Coordinator::TakeAccumulateInputs()
 	{
 		// Latest wins (a replaced post is dropped on the render thread; neither holds engine references).
@@ -136,6 +156,8 @@ namespace DCLF::Scene
 			ancestorMap = posted->map;
 			ancestorMapGeneration = posted->generation;
 			channels.accumulateInputs.ancestorMapsTaken.fetch_add(1, std::memory_order_relaxed);
+			if (Extensions::AncestorValueOn())
+				RefreshAncestorValues();
 		}
 		if (auto posted = channels.pipelineFramePosted.exchange(nullptr, std::memory_order_acq_rel)) {
 			scenePipelineFrame = std::move(posted);
@@ -187,6 +209,10 @@ namespace DCLF::Scene
 		s.pipelineFramesTaken = c.pipelineFramesTaken.exchange(0, std::memory_order_relaxed);
 		s.pipelineBlocksMade = c.pipelineBlocksMade.exchange(0, std::memory_order_relaxed);
 		s.pipelineBlocksWaited = c.pipelineBlocksWaited.exchange(0, std::memory_order_relaxed);
+		s.ancestorValuesMoved = c.ancestorValuesMoved.exchange(0, std::memory_order_relaxed);
+		s.ancestorFound = c.ancestorFound.exchange(0, std::memory_order_relaxed);
+		s.ancestorNoKey = c.ancestorNoKey.exchange(0, std::memory_order_relaxed);
+		s.ancestorNotMapped = c.ancestorNotMapped.exchange(0, std::memory_order_relaxed);
 		return s;
 	}
 
@@ -923,9 +949,14 @@ namespace DCLF::Scene
 		if (Extensions::AncestorValueOn() && entry.ancestorMapGeneration != ancestorMapGeneration) {
 			r.ancestorSet = true;
 			r.ancestorValue = Extensions::AncestorValue()->none;
+			auto& counters = channels.accumulateInputs;
+			bool found = false;
 			if (ancestorMap && entry.ancestorKey)
-				if (const auto found = ancestorMap->find(entry.ancestorKey); found != ancestorMap->end())
-					r.ancestorValue = found->second;
+				if (const auto it = ancestorMap->find(entry.ancestorKey); it != ancestorMap->end()) {
+					r.ancestorValue = it->second;
+					found = true;
+				}
+			(found ? counters.ancestorFound : entry.ancestorKey ? counters.ancestorNotMapped : counters.ancestorNoKey).fetch_add(1, std::memory_order_relaxed);
 		}
 	}
 
