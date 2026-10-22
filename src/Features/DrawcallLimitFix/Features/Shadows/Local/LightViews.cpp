@@ -74,5 +74,22 @@ namespace DCLF::Features::Shadows::Local
 			view.portalContext = portalContext;
 			view.valid = true;
 		}
+		// A point light's cull (FUN_141519d20, from Accumulate's request): descriptor 0's camera and the light's radius for every view.
+		if (const_cast<RE::BSShadowLight*>(a_light)->GetIsParabolicLight() && !light.views.empty() && light.views[0].valid)
+			if (const auto* camera = data.shadowmapDescriptors[0].camera.get()) {
+				const auto& r = camera->world.rotate.entry;
+				const auto& t = camera->world.translate;
+				const std::array<float, 4> sphere{ t.x, t.y, t.z, light.sphere[3] };
+				const std::array<float, 4> plane{ r[0][0], r[1][0], r[2][0], (t.y * r[1][0] + r[0][0] * t.x) + t.z * r[2][0] };
+				const bool bothSides = a_light->shadowMapCount == 2;
+				for (std::uint32_t d = 0; d < light.views.size(); ++d) {
+					auto& view = light.views[d];
+					view.parabolic = true;
+					view.parabolicBack = d == 1;
+					view.parabolicBothSides = bothSides;
+					view.parabolicSphere = sphere;
+					view.parabolicPlane = plane;
+				}
+			}
 	}
 }

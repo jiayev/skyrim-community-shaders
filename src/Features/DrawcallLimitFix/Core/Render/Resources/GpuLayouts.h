@@ -765,6 +765,12 @@ namespace DCLF::Draws
 	// cullFlags: a sun view's size probe (shadowSizeProbe on): counts its drawn casters and triangles by bound radius
 	// (kCountProbeCastersWord). Diagnostic only.
 	constexpr std::uint32_t kCullSizeProbe = 0x40000;
+	// cullFlags: a point light's hemisphere (BSParabolicCullingProcess): a caster is one whose bound meets the light's sphere (cullPlanes[0]:
+	// centre, radius), in the back hemisphere (kCullParabolicBack) only if not wholly in front of the plane (cullPlanes[1]) while the light
+	// has both (kCullParabolicBothSides): FUN_14151a1e0's codes, ParabolicSphereMask. In place of the view-projection's corners.
+	constexpr std::uint32_t kCullParabolic = 0x80000;
+	constexpr std::uint32_t kCullParabolicBack = 0x100000;
+	constexpr std::uint32_t kCullParabolicBothSides = 0x200000;
 	// The key word a view reads (BuildDrawsCS: KeyWord), bits 16-17: 0 pipeline word (main, reflection); 1 shadowKey; 2 and 3
 	// occlusionKey[0], [1].
 	constexpr std::uint32_t kCullKeyShift = 16;

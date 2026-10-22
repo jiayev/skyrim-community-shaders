@@ -85,6 +85,33 @@ namespace DCLF::TargetDump
 			a_frame.copies.push_back(std::move(copy));
 		}
 
+		/** @brief Each slice of a texture array (at most 16), as Stage copies slice 0: a whole subresource, as a depth array requires. */
+		void StageSlices(ID3D11Texture2D* a_texture, const std::string& a_name, Frame& a_frame)
+		{
+			if (!a_texture)
+				return;
+			D3D11_TEXTURE2D_DESC desc{};
+			a_texture->GetDesc(&desc);
+			if (desc.SampleDesc.Count != 1)
+				return;
+			D3D11_TEXTURE2D_DESC staging = desc;
+			staging.MipLevels = staging.ArraySize = 1;
+			staging.Usage = D3D11_USAGE_STAGING;
+			staging.BindFlags = staging.MiscFlags = 0;
+			staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			for (std::uint32_t slice = 0; slice < std::min(desc.ArraySize, 16u); ++slice) {
+				Copy copy;
+				if (FAILED(globals::d3d::device->CreateTexture2D(&staging, nullptr, copy.staging.put())))
+					return;
+				globals::d3d::context->CopySubresourceRegion(copy.staging.get(), 0, 0, 0, 0, a_texture, D3D11CalcSubresource(0, slice, desc.MipLevels), nullptr);
+				copy.format = desc.Format;
+				copy.width = desc.Width;
+				copy.height = desc.Height;
+				copy.name = fmt::format("{}-s{}", a_name, slice);
+				a_frame.copies.push_back(std::move(copy));
+			}
+		}
+
 		ID3D11Texture2D* TextureOf(ID3D11View* a_view)
 		{
 			if (!a_view)
@@ -204,6 +231,49 @@ namespace DCLF::TargetDump
 			default:
 				return false;
 			}
+		}
+
+		/**
+		 * @brief The local shadow mask's agreement on a DCLF frame: the engine draws each light's channel for its registered receivers
+		 * before the colour segment (opaque-end), and DCLF's resolve (LocalShadowMaskCS) rewrites every texel of the channels it has a
+		 * record for at the segment's start (after-DCLF-colour). Where the engine lit a receiver (> 0.5), DCLF's should not be dark (< 0.5):
+		 * those texels per channel, and how many DCLF left dark. Empty without both copies; a DCLF-off frame compares the engine's with itself.
+		 */
+		std::string MaskAgreement(const Frame& a_frame, const std::vector<D3D11_MAPPED_SUBRESOURCE>& a_mapped, std::size_t a_done)
+		{
+			std::size_t engine = a_done, dclf = a_done;
+			for (std::size_t i = 0; i < a_done; ++i) {
+				if (a_frame.copies[i].name.ends_with("-opaque-end-kSHADOWMASK"))
+					engine = i;
+				else if (a_frame.copies[i].name.ends_with("-after-DCLF-colour-kSHADOWMASK"))
+					dclf = i;
+			}
+			if (engine == a_done || dclf == a_done)
+				return {};
+			const auto& copy = a_frame.copies[engine];
+			std::array<std::uint64_t, 4> lit{}, dark{};
+			for (std::uint32_t y = 0; y < copy.height; ++y) {
+				const auto* engineRow = static_cast<const std::uint8_t*>(a_mapped[engine].pData) + std::size_t(y) * a_mapped[engine].RowPitch;
+				const auto* dclfRow = static_cast<const std::uint8_t*>(a_mapped[dclf].pData) + std::size_t(y) * a_mapped[dclf].RowPitch;
+				for (std::uint32_t x = 0; x < copy.width; ++x) {
+					float before[4]{}, after[4]{};
+					std::uint32_t channels = 0;
+					if (!Decode(copy.format, engineRow, x, before, channels) || !Decode(copy.format, dclfRow, x, after, channels))
+						return "local shadow mask agreement: the mask's format does not decode";
+					for (std::uint32_t c = 0; c < std::min(channels, 4u); ++c)
+						if (before[c] > 0.5f) {
+							++lit[c];
+							dark[c] += after[c] < 0.5f ? 1 : 0;
+						}
+				}
+			}
+			std::string out = "local shadow mask agreement (texels the engine lit at opaque-end, of them dark after DCLF's resolve):";
+			bool differs = false;
+			for (std::uint32_t c = 0; c < 4; ++c) {
+				out += fmt::format(" channel {} {} lit, {} dark;", c, lit[c], dark[c]);
+				differs = differs || (lit[c] && dark[c] * 10 > lit[c]);
+			}
+			return out + (differs ? " <- SHADOW MASK RESOLVE" : " <- OK");
 		}
 
 		std::uint8_t Shade(float a_value)
@@ -331,6 +401,14 @@ namespace DCLF::TargetDump
 			Stage(reinterpret_cast<ID3D11Texture2D*>(renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture), order + "-kMAIN", frame);
 			Stage(reinterpret_cast<ID3D11Texture2D*>(renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture), order + "-kMAINdepth",
 				frame);
+			// The local shadow lights' screen-space masks (the engine's per-receiver passes, DCLF's resolve at the colour epoch's start).
+			Stage(reinterpret_cast<ID3D11Texture2D*>(renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSHADOW_MASK].texture), order + "-kSHADOWMASK", frame);
+			// The shadow maps, every slice, once a frame (at its Present: the frame's views are drawn, by the engine or DCLF).
+			if (label == "present") {
+				const auto& depths = renderer->GetDepthStencilData().depthStencils;
+				StageSlices(reinterpret_cast<ID3D11Texture2D*>(depths[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM].texture), order + "-kSHADOWMAPS_ESRAM", frame);
+				StageSlices(reinterpret_cast<ID3D11Texture2D*>(depths[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS].texture), order + "-kSHADOWMAPS", frame);
+			}
 		}
 	}
 
@@ -379,16 +457,22 @@ namespace DCLF::TargetDump
 		for (const auto& point : frame.points)
 			stats << " " << point;
 		stats << "\n";
+		if (const auto agreement = MaskAgreement(frame, mapped, done); !agreement.empty()) {
+			stats << agreement << "\n";
+			logger::info("[DCLF] target dump: Present {}: {}", frame.count, agreement);
+		}
 		for (std::size_t i = 0; i < done; ++i) {
 			// Every point's images on the first frame listed; on the others the presented image alone (the statistics of all), so a run of
 			// consecutive frames stays small.
-			const bool image = frame.count == wanted.front() || frame.copies[i].name.find("-present-rt0") != std::string::npos;
+			const bool mask = frame.copies[i].name.ends_with("-kSHADOWMASK") || frame.copies[i].name.find("-kSHADOWMAPS") != std::string::npos;
+			const bool image = frame.count == wanted.front() || mask || frame.copies[i].name.find("-present-rt0") != std::string::npos;
 			stats << Write(frame.copies[i], mapped[i], dir, image) << "\n";
 			// The extra target's raw texels (the upscaler's output), row by row, for a byte-level look at what overwrote it.
-			if (frame.copies[i].name.ends_with("-extra") && (frame.copies[i].name.find("before-upscale") != std::string::npos || frame.copies[i].name.find("after-evaluate") != std::string::npos)) {
+			// The shadow mask's too, every channel at full size (the PNG drops the fourth and halves it).
+			if (mask || (frame.copies[i].name.ends_with("-extra") && (frame.copies[i].name.find("before-upscale") != std::string::npos || frame.copies[i].name.find("after-evaluate") != std::string::npos))) {
 				std::ofstream raw(dir / (frame.copies[i].name + ".raw"), std::ios::binary);
 				const auto& c = frame.copies[i];
-				const std::size_t rowBytes = std::size_t(c.width) * (c.format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4);
+				const std::size_t rowBytes = std::size_t(c.width) * (DirectX::BitsPerPixel(c.format) / 8);
 				for (std::uint32_t y = 0; y < c.height; ++y)
 					raw.write(static_cast<const char*>(mapped[i].pData) + std::size_t(y) * mapped[i].RowPitch, static_cast<std::streamsize>(rowBytes));
 			}

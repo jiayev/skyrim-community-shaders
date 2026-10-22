@@ -662,7 +662,12 @@ namespace DCLF
 		Diagnostics::DrawnLocalShadows drawn;
 		const bool drawnKnown = Diagnostics::DrawnLocalShadowsOf(static_cast<std::uint32_t>(index), drawn);
 		const std::uint32_t drawnWords[2]{ drawn.mask, drawn.gated };
-		lightData.Compare(geometry, static_cast<std::uint32_t>(index), tables, drawnKnown ? &drawnWords : nullptr,
+		// Moved since the readback was armed (three main epochs before): its lights then and the native pass's now may differ.
+		const auto& bound = geometry->worldBound;
+		const bool moved = drawnKnown && (bound.center.x != drawn.bound[0] || bound.center.y != drawn.bound[1] || bound.center.z != drawn.bound[2] || bound.radius != drawn.bound[3]);
+		// Its channels reassigned since (the lights in view changed): the readback's bits name other lights than the native pass's.
+		const bool reassigned = drawnKnown && drawn.channels != Diagnostics::ChannelLights();
+		lightData.Compare(geometry, static_cast<std::uint32_t>(index), tables, drawnKnown ? &drawnWords : nullptr, moved, reassigned,
 			[](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) {
 				static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message));
 			},

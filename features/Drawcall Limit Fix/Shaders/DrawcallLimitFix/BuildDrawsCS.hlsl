@@ -2,6 +2,7 @@
 // inputs and the geometry table. Compiled to SPIR-V at runtime (ComputeProgram) with BasicRHI's descriptor-heap ABI.
 
 #include "DrawcallLimitFix/HzbTest.hlsli"
+#include "DrawcallLimitFix/ParabolicPrograms.hlsli"
 #include "DrawcallLimitFix/PortalPrograms.hlsli"
 #include "DrawcallLimitFix/PortalQueries.hlsli"
 
@@ -478,6 +479,10 @@ bool FadeOnVisible() { return (CullFlags & 0x4000) != 0; }
 bool MinTexels() { return (CullFlags & 0x8000) != 0; }
 // A sun view's size probe (kCullSizeProbe, dclf:shadow-probe): its drawn casters and their triangles by bound radius.
 bool SizeProbe() { return (CullFlags & 0x40000) != 0; }
+// A point light's hemisphere (kCullParabolic): culled as its BSParabolicCullingProcess culls, by the light's sphere (CullPlanes[0]) and
+// equatorial plane (CullPlanes[1]), not by the view-projection, which bounds nothing the paraboloid draws. The front hemisphere takes
+// FUN_14151a1e0's codes 1 and 3, the back one (kCullParabolicBack) 2 and 3 (kCullParabolicBothSides: the light has both).
+bool Parabolic() { return (CullFlags & 0x80000) != 0; }
 // Object word bit 30: a LOD cross-fade copy draw (LodPartitions); the pixel stage uses the cross-fade factor as alpha (DCLFAlphaFade).
 static const uint kObjectCrossfadeCopy = 1u << 30;
 // The key word a view reads (kCullKeyShift): 0 the pipeline and rows words (main segments, reflection); otherwise a shadow view's
@@ -813,6 +818,12 @@ bool Culled(float3 boundCentre, float boundRadius)
 		depthPlanes.y *= (clip.z > clip.w) ? 1 : 0;
 	}
 	return any(planes != 0) || any(depthPlanes != 0);
+}
+
+bool ParabolicRejected(float3 a_centre, float a_radius)
+{
+	const uint code = ParabolicSphereMask(float4(a_centre, a_radius), CullPlanes[0], CullPlanes[1], (CullFlags & 0x200000) != 0);
+	return (CullFlags & 0x100000) != 0 ? (code & 2u) == 0 : (code & 1u) == 0;
 }
 
 // Occlusion against the HZB (HzbTest.hlsli), with diagnostic counters.
@@ -1268,7 +1279,8 @@ void BuildInput(uint draw, DrawInputWords a_words)
 		count.InterlockedAdd(kCountTested, 1, scratch);
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);  // centre (world), radius
 		// Phase 2 only revisits occlusion.
-		frustumRejected = phase == kPhaseOne ? MainFrustumRejected(objectIndex) : (phase != kPhaseTwo && Culled(bound.xyz, bound.w));
+		frustumRejected = phase == kPhaseOne ? MainFrustumRejected(objectIndex) :
+			(phase != kPhaseTwo && (Parabolic() ? ParabolicRejected(bound.xyz, bound.w) : Culled(bound.xyz, bound.w)));
 		// A portal-strict point light's view: its cull's rooms, shared nodes and room frusta (StrictGateRejects), by the caster's gate.
 		if (!frustumRejected && phase == kPhaseSingle && StrictContext != 0)
 			frustumRejected = StrictGateRejects(StrictGatesIndex, LightContextsIndex, ObjectGatesIndex, StrictContext - 1, objectIndex, bound.xyz, bound.w);

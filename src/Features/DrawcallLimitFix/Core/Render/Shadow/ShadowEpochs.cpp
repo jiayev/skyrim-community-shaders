@@ -328,6 +328,14 @@ namespace DCLF
 					}
 					latch.cullPlaneMask = view.cullPlaneMask;
 					std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));
+					// A point light's hemisphere culls as its process does (the light's sphere and plane, in the first two plane slots), not by
+					// its camera's frustum, which bounds nothing the paraboloid draws.
+					if (view.parabolic) {
+						latch.cullFlags |= kCullParabolic | (view.parabolicBack ? kCullParabolicBack : 0u) | (view.parabolicBothSides ? kCullParabolicBothSides : 0u);
+						latch.cullPlaneMask = 0;
+						std::memcpy(latch.cullPlanes[0], view.parabolicSphere.data(), sizeof(latch.cullPlanes[0]));
+						std::memcpy(latch.cullPlanes[1], view.parabolicPlane.data(), sizeof(latch.cullPlanes[1]));
+					}
 					latch.fadeStatesIndex = statesIndex;
 					if (view.portalContext && contextsIndex && gatesIndex) {
 						latch.lightContextsIndex = contextsIndex;
@@ -429,10 +437,11 @@ namespace DCLF
 			}
 
 			/**
-			 * @brief The arena, with the frame record patched to this frame's per-frame buffers (the build ahead has another frame's).
-			 * Uploaded around the record, not over it: copies within one batch are unordered.
+			 * @brief The arena around the frame record, staged only when the buffer does not hold this build's; returns the record, patched
+			 * to this frame's per-frame buffers (the build ahead has another frame's), which LatchShadowCsBlocks latches (none: no arena).
+			 * Staged around the record, not over it: the latched copies run after the staged ones, in the epoch's own list.
 			 */
-			void UploadShadowArena(const ShadowCommit& a_commit)
+			std::optional<DrawBindings> UploadShadowArena(const ShadowCommit& a_commit)
 			{
 				auto& resources = a_commit.resources;
 				auto& payload = a_commit.payload;
@@ -456,7 +465,6 @@ namespace DCLF
 					const bool arenaHeld = sameTarget && staged.serial == payload.arenaSerial;
 					if (kShadowFrameRecordOffset && !arenaHeld)
 						uploads(resources.constants, bytes.data(), kShadowFrameRecordOffset, 0);
-					uploads(resources.constants, &record, sizeof(record), kShadowFrameRecordOffset);
 					if (!arenaHeld) {
 						const auto tail = std::span<const std::byte>(bytes).subspan(recordEnd);
 						if (!sameTarget)
@@ -481,18 +489,23 @@ namespace DCLF
 						staged.target = arenaTarget;
 						staged.serial = payload.arenaSerial;
 					}
+					return record;
 				}
+				return std::nullopt;
 			}
 
 			/**
 			 * @brief CS's SharedData and FeatureData as of now (the water reflection prepasses refreshed them after the build), latched:
-			 * the epoch's first pass copies them after the arena. Returns the latched values' misses.
+			 * the epoch's first pass copies them after the arena, with the frame record (a_record: UploadShadowArena's). Returns the
+			 * latched values' misses.
 			 */
-			std::uint32_t LatchShadowCsBlocks(const ShadowCommit& a_commit, std::uint32_t a_latchSlot)
+			std::uint32_t LatchShadowCsBlocks(const ShadowCommit& a_commit, std::uint32_t a_latchSlot, const std::optional<DrawBindings>& a_record)
 			{
 				auto& resources = a_commit.resources;
 				const auto& in = a_commit.in;
 				auto latched = LatchedUploads(a_commit.target.latched[ShadowFrame::kCommitList], a_commit.uploads, a_latchSlot);
+				if (a_record)
+					latched(resources.constants, &*a_record, sizeof(DrawBindings), kShadowFrameRecordOffset);
 				// At their fixed places (ShadowArenaBlocksOf); a size mismatch with CS's block is a contract violation.
 				const auto blocks = ShadowArenaBlocksOf();
 				const auto writeBlock = [&](std::uint64_t a_offset, std::uint32_t a_size, const std::vector<std::byte>& a_bytes) {
@@ -667,8 +680,8 @@ namespace DCLF
 			const auto occlusionStart = std::chrono::steady_clock::now();
 			mapsDrawn = Draws::LatchOcclusionViews(commit, latchSlot, revisionShape, engine.occlusion, maps, active);
 			occlusionMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - occlusionStart).count();
-			Draws::UploadShadowArena(commit);
-			impl->revisions.latchedMisses += Draws::LatchShadowCsBlocks(commit, latchSlot);
+			const auto record = Draws::UploadShadowArena(commit);
+			impl->revisions.latchedMisses += Draws::LatchShadowCsBlocks(commit, latchSlot, record);
 			engine.lastActiveViews = active;
 			const auto& variants = revision.shape->Value<ShadowVariants>()->shapes;
 			const std::size_t variant = Draws::NarrowestShadowVariant(variants, active, shadowStats);

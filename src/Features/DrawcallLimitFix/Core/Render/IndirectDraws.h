@@ -60,7 +60,7 @@ namespace DCLF
 	 */
 	struct SharedEpochStats
 	{
-		std::uint64_t reached = 0, epochs = 0, noSharedPayload = 0, noRecording = 0, failed = 0;
+		std::uint64_t reached = 0, epochs = 0, noSharedPayload = 0, noRecording = 0, empty = 0, failed = 0;
 		std::uint32_t submittedFrame = ~0u;
 	};
 	/**
@@ -72,6 +72,9 @@ namespace DCLF
 	{
 		bool (*prepare)(void* a_context, const Draws::Resources* a_resources, const Draws::PassFrame* a_shape) = nullptr;
 		void* context = nullptr;
+		// Whether the selected revision's shape gives the epoch nothing to draw (Features/Forward: no forward or refraction slot): the
+		// epoch is not submitted at all, its boundary included.
+		bool (*empty)(const Draws::PassFrame& a_shape) = nullptr;
 	};
 	/** @brief A shared epoch's submission: whether it was submitted, and whether its optional part draws (what prepare said). */
 	struct SharedEpochResult

@@ -132,6 +132,13 @@ namespace DCLF
 			Api::ShadowSourceCamera request{ a_view.light, a_view.descriptor, a_sceneFrame };
 			a_own = Extensions::SourceCamera(source, request);
 			a_pending.portalContext = a_own && a_own->valid ? a_own->portalContext : 0u;
+			a_pending.parabolic = a_own && a_own->valid && a_own->parabolic;
+			if (a_pending.parabolic) {
+				a_pending.parabolicBack = a_own->parabolicBack;
+				a_pending.parabolicBothSides = a_own->parabolicBothSides;
+				a_pending.parabolicSphere = a_own->parabolicSphere;
+				a_pending.parabolicPlane = a_own->parabolicPlane;
+			}
 			switch (source) {
 			case Api::ShadowSource::Spot:
 			case Api::ShadowSource::Point:

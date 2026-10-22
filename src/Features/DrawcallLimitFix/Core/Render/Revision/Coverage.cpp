@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
@@ -27,6 +28,8 @@ namespace DCLF
 			rv.explicitBuilds = explicitBuilds;
 			host->SetExplicitBuilds(explicitBuilds);
 		}
+		// The passes this frame needs (an interior's, the cull mode's): a change rebuilds the graph here, before anything records on it.
+		Draws::RefreshGraphConditions(*host);
 		impl->BuildIfAsked(*host);
 		// The epochs the last frame did not submit (no water in view) give their tickets back while a revision waits for recordings.
 		impl->ReleaseTicketsForRecordings(*host, RenderGraphRuntime::Get().TakeSubmittedSegments());

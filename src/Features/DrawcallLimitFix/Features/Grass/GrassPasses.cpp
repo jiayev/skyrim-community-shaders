@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 
 #include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -102,7 +103,7 @@ namespace DCLF::Draws
 			constants.phase = phase;
 			// The retest list past the visible entries (GrassLayout.h): 12 bytes per unit the visible version holds.
 			constants.retestOffset = static_cast<std::uint32_t>(NamedUnitsOf(a_preparation, tables->visible) * GrassInstances::kRetestOffsetPerUnit);
-			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {
+			if (Draws::OcclusionTested(*resources, *frame)) {
 				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 				constants.hzbMips = resources->hzbMips;
@@ -308,17 +309,23 @@ namespace DCLF::Features::Grass
 
 		std::shared_ptr<org::RenderPass> MakeCullPhaseOne(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())  // no grass in an interior: its passes are left out
+				return nullptr;
 			return std::make_shared<Draws::GrassCullPass>(a_context.Main(), a_context.State<GrassTables>(), 1, a_context.segment);
 		}
 
 		std::shared_ptr<org::RenderPass> MakeArgsPhaseOne(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())
+				return nullptr;
 			return std::make_shared<Draws::GrassArgsPass>(a_context.State<GrassTables>(), kArgsPhaseOne);
 		}
 
 		// Phase 2's retest and its draws' arguments only with the HZB rebuilt this frame (the depth epoch's phase 2 block).
 		std::shared_ptr<org::RenderPass> MakeCullPhaseTwo(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())
+				return nullptr;
 			if (!a_context.PhaseTwo())
 				return nullptr;
 			return std::make_shared<Draws::GrassCullPass>(a_context.Main(), a_context.State<GrassTables>(), 2, a_context.segment);
@@ -326,6 +333,8 @@ namespace DCLF::Features::Grass
 
 		std::shared_ptr<org::RenderPass> MakeArgsPhaseTwo(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())
+				return nullptr;
 			if (!a_context.PhaseTwo())
 				return nullptr;
 			return std::make_shared<Draws::GrassArgsPass>(a_context.State<GrassTables>(), kArgsPhaseTwo);
@@ -334,11 +343,15 @@ namespace DCLF::Features::Grass
 		// The colour draws' arguments, always (they zero the counts the next frame's cull appends with).
 		std::shared_ptr<org::RenderPass> MakeArgsColour(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())
+				return nullptr;
 			return std::make_shared<Draws::GrassArgsPass>(a_context.State<GrassTables>(), kArgsColour);
 		}
 
 		std::shared_ptr<org::RenderPass> MakeCounts(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())
+				return nullptr;
 			return std::make_shared<Draws::GrassReadbackPass>(a_context.State<GrassTables>());
 		}
 	}

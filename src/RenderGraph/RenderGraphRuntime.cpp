@@ -43,6 +43,21 @@ namespace
 {
 	// RequestTimestampDump's: the completed epochs still to dump.
 	std::atomic<int> timestampDumps{ 0 };
+	// SkipDclfEpochs' and SetEarlyFlush's (diagnostics: dclf:epochs=, dclf:early-flush=); the flush override -1 keeps CS_ORG_EARLY_FLUSH's.
+	std::atomic<std::uint32_t> dclfEpochsSkipped{ 0 };  // by Segment bit
+	std::atomic<int> earlyFlushOverride{ -1 };
+	std::atomic<std::uint32_t> skippedEpochsBoundary{ 0 };  // SkipDclfEpochs' a_boundary: what a skipped epoch still does at its point
+	std::atomic<std::uint32_t> heldSegments{ 0 };           // HoldDclfSubmissions': by Segment bit
+	std::atomic<std::uint32_t> skippedEpochSpinUs{ 0 };     // SetSkippedEpochSpin's: the render thread's busy wait in each skipped epoch
+	std::atomic<std::uint32_t> submittedEpochSpinUs{ 0 };   // and in each submitted one, after its enqueue (a_submitted)
+	std::atomic<bool> coalesceSubmits{ false };             // CoalesceEpochSubmits'
+	std::atomic<bool> splitSubmits{ false };                // CoalesceEpochSubmits' a_split
+	std::atomic<bool> dropLists{ false };                   // DropDclfLists'
+	std::atomic<std::uint32_t> submissionDumps{ 0 };        // RequestSubmissionDump's: epochs left to log their enqueued submissions
+	std::atomic<std::uint32_t> workerSpinUs{ 0 };           // SetSkippedEpochWorkerLoad's: DXVK's worker busy-waits in each skipped epoch
+	std::atomic<bool> workerSync{ false };                  // and the render thread waits for the worker to reach the epoch
+	// Diagnostics (the submission dump): DescribeResource(s) since the last dump, their objects and time.
+	std::atomic<std::uint64_t> describeCalls{ 0 }, describeObjects{ 0 }, describeNs{ 0 };
 }
 #include <fmt/ranges.h>
 
@@ -119,6 +134,39 @@ struct RenderGraphRuntime::Impl
 	std::unique_ptr<org::services::ShaderCompiler> shaderCompiler;
 #endif
 	PFN_vkQueueSubmit2 queueSubmit2 = nullptr;
+	PFN_dxvkEmitCommandBufferCallback emitCommandBufferCallback = nullptr;  // diagnostics: SetSkippedEpochWorkerLoad
+	// Diagnostics (SkipDclfEpochs' boundaries 4 and 5): an empty primary command buffer of the graphics family, made on first use.
+	PFN_vkGetDeviceProcAddr deviceProcAddr = nullptr;
+	VkDevice adoptedDevice = VK_NULL_HANDLE;
+	uint32_t graphicsFamily = 0;
+	VkCommandBuffer emptyCommands = VK_NULL_HANDLE;
+
+	VkCommandBuffer EmptyCommandBuffer()
+	{
+		if (emptyCommands || !deviceProcAddr)
+			return emptyCommands;
+		const auto createPool = reinterpret_cast<PFN_vkCreateCommandPool>(deviceProcAddr(adoptedDevice, "vkCreateCommandPool"));
+		const auto allocate = reinterpret_cast<PFN_vkAllocateCommandBuffers>(deviceProcAddr(adoptedDevice, "vkAllocateCommandBuffers"));
+		const auto begin = reinterpret_cast<PFN_vkBeginCommandBuffer>(deviceProcAddr(adoptedDevice, "vkBeginCommandBuffer"));
+		const auto end = reinterpret_cast<PFN_vkEndCommandBuffer>(deviceProcAddr(adoptedDevice, "vkEndCommandBuffer"));
+		VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
+		poolInfo.queueFamilyIndex = graphicsFamily;
+		VkCommandPool pool = VK_NULL_HANDLE;
+		if (!createPool || !allocate || !begin || !end || createPool(adoptedDevice, &poolInfo, nullptr, &pool) != VK_SUCCESS)
+			return VK_NULL_HANDLE;
+		VkCommandBufferAllocateInfo allocateInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+		allocateInfo.commandPool = pool;
+		allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocateInfo.commandBufferCount = 1;
+		VkCommandBuffer commands = VK_NULL_HANDLE;
+		if (allocate(adoptedDevice, &allocateInfo, &commands) != VK_SUCCESS)
+			return VK_NULL_HANDLE;
+		VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+		if (begin(commands, &beginInfo) != VK_SUCCESS || end(commands) != VK_SUCCESS)
+			return VK_NULL_HANDLE;
+		return emptyCommands = commands;
+	}
 	// DXVK's compute-only queue (DxvkOrgInteropDeviceInfo::computeQueue), adopted as BasicRHI's compute queue. DXVK never
 	// touches it: the graph submits to it directly. Still under DXVK's submission lock, as every queue is (LockQueue): a
 	// compute submission made at the same time as one of DXVK's lost the device within a few startups (a page fault at
@@ -263,7 +311,7 @@ struct RenderGraphRuntime::Impl
 	static constexpr uint32_t kEpochStatsWindow = 600;
 	bool epochStats = false;
 	// CS_ORG_EARLY_FLUSH (default on, =0 off): hand DXVK's pending D3D11 work to the GPU when an epoch starts.
-	bool earlyFlush = true;
+	bool earlyFlush = false;
 	uint32_t epochCount = 0;
 	// Queue submissions the graph hands to the hook during the current epoch (each is one DXVK enqueue).
 	uint32_t epochHookCalls = 0;
@@ -281,10 +329,42 @@ struct RenderGraphRuntime::Impl
 		std::vector<VkSemaphoreSubmitInfo> signals;
 	};
 	bool batching = false;
+	bool holding = false;  // the last epoch's submissions are still pending (HoldDclfSubmissions): the next epoch's enqueue takes them
 	std::atomic<uint64_t> offThreadSubmits = 0;
 	std::vector<PendingSubmit> pendingSubmits;  // [0, pendingCount) in use; capacity kept across epochs
 	std::size_t pendingCount = 0;
 	std::vector<VkSubmitInfo2> pendingInfos;
+
+	// Diagnostics (RequestSubmissionDump): each submission's waits, with the semaphore's value as the enqueue finds it, its lists and signals.
+	void DumpPendingSubmits(const char* a_label)
+	{
+		if (!deviceProcAddr)
+			return;
+		static const auto counterValue = reinterpret_cast<PFN_vkGetSemaphoreCounterValue>(deviceProcAddr(adoptedDevice, "vkGetSemaphoreCounterValue"));
+		const auto name = [&](VkSemaphore a_semaphore) -> std::string {
+			if (a_semaphore == streamPoint)
+				return "streamPoint";
+			if (a_semaphore == computeExit)
+				return "computeExit";
+			return fmt::format("{:x}", reinterpret_cast<std::uintptr_t>(a_semaphore));
+		};
+		std::string text;
+		for (std::size_t i = 0; i < pendingCount; ++i) {
+			const auto& pending = pendingSubmits[i];
+			text += fmt::format("\n    [{}] {} lists; waits:", i, pending.commandBuffers.size());
+			for (const auto& wait : pending.waits) {
+				std::uint64_t now = 0;
+				if (counterValue)
+					(void)counterValue(adoptedDevice, wait.semaphore, &now);
+				text += fmt::format(" {}>={} (now {}{})", name(wait.semaphore), wait.value, now, now >= wait.value ? "" : ", PENDING");
+			}
+			text += "; signals:";
+			for (const auto& signal : pending.signals)
+				text += fmt::format(" {}={}", name(signal.semaphore), signal.value);
+		}
+		logger::info("[ORG] submission dump {}: {} submissions; resource descriptions since the last: {} calls, {} objects, {:.1f} us{}", a_label,
+			pendingCount, describeCalls.exchange(0), describeObjects.exchange(0), describeNs.exchange(0) / 1000.0, text);
+	}
 
 	// Hands the epoch's collected submissions to DXVK as one enqueue. False when DXVK rejected them.
 	bool FlushPendingSubmits(const char* a_label)
@@ -292,6 +372,77 @@ struct RenderGraphRuntime::Impl
 		batching = false;
 		if (!pendingCount)
 			return true;
+		if (submissionDumps.load(std::memory_order_relaxed)) {
+			submissionDumps.fetch_sub(1, std::memory_order_relaxed);
+			DumpPendingSubmits(a_label);
+		}
+		if (dropLists.load(std::memory_order_relaxed) && RenderGraphRuntime::Get().CurrentSegment() != RenderGraphRuntime::Segment::LightCulling) {
+			// Diagnostics (DropDclfLists): the signals alone, so the graph's tracking advances while the GPU runs none of its work.
+			for (std::size_t i = 0; i < pendingCount; ++i) {
+				pendingSubmits[i].commandBuffers.clear();
+				pendingSubmits[i].waits.clear();
+			}
+		}
+		if (pendingCount > 1 && coalesceSubmits.load(std::memory_order_relaxed)) {
+			// Diagnostics (CoalesceEpochSubmits): one submission of every list, waiting for every wait on a semaphore the epoch does not
+			// signal itself, and signalling each semaphore's highest value once.
+			auto& first = pendingSubmits[0];
+			std::vector<VkSemaphoreSubmitInfo> waits, signals;
+			for (std::size_t i = 0; i < pendingCount; ++i) {
+				for (const auto& signal : pendingSubmits[i].signals) {
+					auto found = std::find_if(signals.begin(), signals.end(), [&](const auto& s) { return s.semaphore == signal.semaphore; });
+					if (found == signals.end())
+						signals.push_back(signal);
+					else
+						found->value = (std::max)(found->value, signal.value);
+				}
+			}
+			for (std::size_t i = 0; i < pendingCount; ++i) {
+				for (const auto& wait : pendingSubmits[i].waits) {
+					if (std::any_of(signals.begin(), signals.end(), [&](const auto& s) { return s.semaphore == wait.semaphore; }))
+						continue;
+					auto found = std::find_if(waits.begin(), waits.end(), [&](const auto& w) { return w.semaphore == wait.semaphore; });
+					if (found == waits.end())
+						waits.push_back(wait);
+					else
+						found->value = (std::max)(found->value, wait.value);
+				}
+				if (i)
+					first.commandBuffers.insert(first.commandBuffers.end(), pendingSubmits[i].commandBuffers.begin(), pendingSubmits[i].commandBuffers.end());
+			}
+			first.waits = std::move(waits);
+			first.signals = std::move(signals);
+			pendingCount = 1;
+		}
+		if (pendingCount > 1 && splitSubmits.load(std::memory_order_relaxed)) {
+			// Diagnostics: one enqueue per submission, so DXVK's submission trace times each ("<epoch> #<i>").
+			static std::array<std::string, 16> labels;
+			for (std::size_t i = 0; i < pendingCount; ++i) {
+				const auto& pending = pendingSubmits[i];
+				auto& label = labels[(std::min)(i, labels.size() - 1)];
+				label = fmt::format("{} #{}", a_label, i);
+				DxvkOrgInteropSubmission submission{};
+				submission.version = DXVK_ORG_INTEROP_VERSION;
+				submission.waitCount = static_cast<uint32_t>(pending.waits.size());
+				submission.waits = pending.waits.data();
+				submission.commandBufferCount = static_cast<uint32_t>(pending.commandBuffers.size());
+				submission.commandBuffers = pending.commandBuffers.data();
+				submission.signalCount = static_cast<uint32_t>(pending.signals.size());
+				submission.signals = pending.signals.data();
+				submission.onSubmitted = &Impl::OnStreamSubmitted;
+				submission.user = this;
+				submission.label = label.c_str();
+				++epochEnqueues;
+				streamEnqueued.fetch_add(1, std::memory_order_acq_rel);
+				if (FAILED(enqueueSubmission(globals::d3d::device, &submission))) {
+					streamEnqueued.fetch_sub(1, std::memory_order_acq_rel);
+					pendingCount = 0;
+					return false;
+				}
+			}
+			pendingCount = 0;
+			return true;
+		}
 		pendingInfos.assign(pendingCount, VkSubmitInfo2{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2 });
 		for (std::size_t i = 0; i < pendingCount; ++i) {
 			const auto& pending = pendingSubmits[i];
@@ -949,6 +1100,7 @@ bool RenderGraphRuntime::Initialize()
 	// Optional: game resources for the graph (Drawcall Limit Fix).
 	state->getResourceInfo = ResolveExport<PFN_dxvkGetInteropResourceInfo>(d3d11, "dxvkGetInteropResourceInfo");
 	state->getResourceInfos = ResolveExport<PFN_dxvkGetInteropResourceInfos>(d3d11, "dxvkGetInteropResourceInfos");
+	state->emitCommandBufferCallback = ResolveExport<PFN_dxvkEmitCommandBufferCallback>(d3d11, "dxvkEmitCommandBufferCallback");
 	// Optional: without it, each epoch flushes and waits for DXVK's command stream instead.
 	state->enqueueSubmission = ResolveExport<PFN_dxvkEnqueueInteropSubmission>(d3d11, "dxvkEnqueueInteropSubmission");
 	if (EnvEquals("CS_ORG_SUBMIT", "flush"))
@@ -956,7 +1108,7 @@ bool RenderGraphRuntime::Initialize()
 	if (state->enqueueSubmission && !EnvEquals("CS_ORG_BATCH_SUBMIT", "0"))
 		state->enqueueSubmissions = ResolveExport<PFN_dxvkEnqueueInteropSubmissions>(d3d11, "dxvkEnqueueInteropSubmissions");
 	state->epochStats = EnvEquals("CS_ORG_EPOCH_STATS", "1");
-	state->earlyFlush = !EnvEquals("CS_ORG_EARLY_FLUSH", "0");
+	state->earlyFlush = EnvEquals("CS_ORG_EARLY_FLUSH", "1");
 
 	auto d3dDevice = globals::d3d::device;
 	if (!d3dDevice || FAILED(d3dDevice->QueryInterface(__uuidof(IDXGIVkInteropDevice), state->interop.put_void())))
@@ -993,6 +1145,9 @@ bool RenderGraphRuntime::Initialize()
 	if (state->enqueueSubmission) {
 		auto getDeviceProcAddr = reinterpret_cast<PFN_vkGetDeviceProcAddr>(info.getInstanceProcAddr(info.instance, "vkGetDeviceProcAddr"));
 		state->queueSubmit2 = getDeviceProcAddr ? reinterpret_cast<PFN_vkQueueSubmit2>(getDeviceProcAddr(info.device, "vkQueueSubmit2")) : nullptr;
+		state->deviceProcAddr = getDeviceProcAddr;
+		state->adoptedDevice = info.device;
+		state->graphicsFamily = info.graphicsQueueFamily;
 		if (state->queueSubmit2) {
 			adopt.submissionHooks.submit = &Impl::Submit;
 			state->streamThread = ::GetCurrentThreadId();
@@ -1399,6 +1554,83 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 	ZoneScopedN("CS.ORG.ExecuteEpoch");
 	if (!IsActive())
 		return false;
+	// Diagnostics (dclf:epochs=0): Drawcall Limit Fix's epochs report submitted without submitting anything, so a run times the frame
+	// without their boundaries (the flush, the queue barriers, the split render passes). Their objects are then drawn by nobody.
+	if (a_segment != Segment::LightCulling && (dclfEpochsSkipped.load(std::memory_order_relaxed) >> static_cast<std::uint32_t>(a_segment) & 1u)) {
+		if (const std::uint32_t spinUs = skippedEpochSpinUs.load(std::memory_order_relaxed)) {
+			const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(spinUs);
+			while (std::chrono::steady_clock::now() < until) {
+			}
+		}
+		const std::uint32_t boundary = skippedEpochsBoundary.load(std::memory_order_relaxed);
+		if (boundary >= 1)
+			globals::d3d::context->Flush();
+		if (boundary == 2 && impl->enqueueSubmission) {
+			// An empty submission in DXVK's stream: its command list closed and one vkQueueSubmit2 with nothing in it.
+			DxvkOrgInteropSubmission submission{};
+			submission.version = DXVK_ORG_INTEROP_VERSION;
+			submission.onSubmitted = &Impl::OnStreamSubmitted;
+			submission.user = impl.get();
+			submission.label = Impl::SegmentLabel(a_segment);
+			impl->streamEnqueued.fetch_add(1, std::memory_order_acq_rel);
+			if (FAILED(impl->enqueueSubmission(globals::d3d::device, &submission)))
+				impl->streamEnqueued.fetch_sub(1, std::memory_order_acq_rel);
+		}
+		if (boundary == 3)
+			(void)impl->EnqueueStreamPoint();  // the same with a timeline signal (ALL_COMMANDS)
+		// DXVK's worker: a busy wait there, and/or the render thread waiting for the worker to reach this point.
+		const std::uint32_t workerUs = workerSpinUs.load(std::memory_order_relaxed);
+		const bool sync = workerSync.load(std::memory_order_relaxed);
+		if ((workerUs || sync) && impl->emitCommandBufferCallback) {
+			struct Load
+			{
+				std::uint32_t us;
+				std::atomic<bool> reached{ false };
+			};
+			static Load load;
+			load.us = workerUs;
+			load.reached.store(false, std::memory_order_relaxed);
+			(void)impl->emitCommandBufferCallback(globals::d3d::device, [](void* a_user, VkCommandBuffer) {
+				auto& l = *static_cast<Load*>(a_user);
+				const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(l.us);
+				while (std::chrono::steady_clock::now() < until) {
+				}
+				l.reached.store(true, std::memory_order_release);
+			}, &load);
+			if (sync) {
+				globals::d3d::context->Flush();
+				while (!load.reached.load(std::memory_order_acquire))
+					std::this_thread::yield();
+			}
+		}
+		if ((boundary == 4 || boundary == 5) && impl->enqueueSubmissions && impl->EmptyCommandBuffer()) {
+			// One submission of an empty command buffer (4), or three such (5), each signalling the stream point as the graph's batches do.
+			const std::uint32_t count = boundary == 4 ? 1u : 3u;
+			std::array<VkCommandBufferSubmitInfo, 3> commands{};
+			std::array<VkSemaphoreSubmitInfo, 3> signals{};
+			std::array<VkSubmitInfo2, 3> infos{};
+			for (std::uint32_t i = 0; i < count; ++i) {
+				commands[i] = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, nullptr, impl->emptyCommands, 0 };
+				signals[i] = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, impl->streamPoint, ++impl->streamPointValue, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0 };
+				infos[i] = { VK_STRUCTURE_TYPE_SUBMIT_INFO_2 };
+				infos[i].commandBufferInfoCount = 1;
+				infos[i].pCommandBufferInfos = &commands[i];
+				infos[i].signalSemaphoreInfoCount = impl->streamPoint ? 1u : 0u;
+				infos[i].pSignalSemaphoreInfos = &signals[i];
+			}
+			DxvkOrgInteropSubmissionBatch batch{};
+			batch.version = DXVK_ORG_INTEROP_VERSION;
+			batch.submitCount = count;
+			batch.submits = infos.data();
+			batch.onSubmitted = &Impl::OnStreamSubmitted;
+			batch.user = impl.get();
+			batch.label = Impl::SegmentLabel(a_segment);
+			impl->streamEnqueued.fetch_add(1, std::memory_order_acq_rel);
+			if (FAILED(impl->enqueueSubmissions(globals::d3d::device, &batch)))
+				impl->streamEnqueued.fetch_sub(1, std::memory_order_acq_rel);
+		}
+		return true;
+	}
 	// An epoch must not be the last GPU work before a third-party Vulkan consumer (Streamline's upscalers, frame generation): their
 	// evaluate then reads the wrong descriptors. docs/development/render-graph.md, "Hazard: external Vulkan work directly after a graph epoch".
 	// Read by passes while the frame prepares and records, all before ExecuteFrame returns.
@@ -1420,10 +1652,11 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 		// the D3D11 work issued before and after; the entry/exit barriers order the memory.
 		impl->streamThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		// DXVK closes its current command list only when the epoch's first submission is enqueued, after the
-		// graph has prepared and recorded: the D3D11 work issued just before the epoch would sit on the CPU for
-		// that whole time while the GPU runs dry. Flushing here (asynchronous under DXVK) submits it now; the
-		// enqueue then finds nothing pending, so the number of submissions does not change.
-		if (impl->earlyFlush) {
+		// graph has prepared and recorded. With async epochs that is only the latches and the submission, so the
+		// D3D11 work issued just before the epoch waits briefly; CS_ORG_EARLY_FLUSH=1 flushes it here (asynchronous
+		// under DXVK) instead, at the price of a second DXVK list around the work issued during the epoch. In
+		// Dragonsreach (GPU-bound) either costs the same frame time, within 0.02 ms.
+		if (const int flush = earlyFlushOverride.load(std::memory_order_relaxed); flush < 0 ? impl->earlyFlush : flush != 0) {
 			ZoneScopedN("CS.ORG.FlushNativeProducer");
 			globals::d3d::context->Flush();
 		}
@@ -1441,7 +1674,8 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 	impl->epochHookCalls = 0;
 	impl->epochEnqueues = 0;
 	impl->batching = impl->enqueueSubmission && impl->enqueueSubmissions;
-	impl->pendingCount = 0;
+	if (!std::exchange(impl->holding, false))
+		impl->pendingCount = 0;
 	try {
 		std::function<void(org::RenderGraph&)> beforePrepare;
 		if (a_beforePrepare) {
@@ -1458,8 +1692,16 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 		}
 		if (!impl->CloseComputeEpoch(Impl::SegmentLabel(a_segment)))
 			throw std::runtime_error("DXVK rejected the compute queue's exit wait");
-		if (impl->batching && !impl->FlushPendingSubmits(Impl::SegmentLabel(a_segment)))
+		if (impl->batching && (heldSegments.load(std::memory_order_relaxed) >> static_cast<std::uint32_t>(a_segment) & 1u)) {
+			impl->batching = false;
+			impl->holding = true;
+		} else if (impl->batching && !impl->FlushPendingSubmits(Impl::SegmentLabel(a_segment)))
 			throw std::runtime_error("DXVK rejected the epoch's submissions");
+		if (const std::uint32_t spinUs = submittedEpochSpinUs.load(std::memory_order_relaxed); spinUs && a_segment != Segment::LightCulling) {
+			const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(spinUs);
+			while (std::chrono::steady_clock::now() < until) {
+			}
+		}
 		const auto elapsed = std::chrono::steady_clock::now() - start;
 		{
 			// Since ExecuteEpoch's last lap (the completions): the host's call and the stream's close.
@@ -1561,6 +1803,49 @@ void RenderGraphRuntime::RequestTimestampDump(std::uint32_t a_epochs)
 	timestampDumps.store(static_cast<int>(a_epochs), std::memory_order_relaxed);
 }
 
+void RenderGraphRuntime::SetSkippedEpochWorkerLoad(std::uint32_t a_microseconds, bool a_sync)
+{
+	workerSpinUs.store(a_microseconds, std::memory_order_relaxed);
+	workerSync.store(a_sync, std::memory_order_relaxed);
+}
+
+void RenderGraphRuntime::DropDclfLists(bool a_drop)
+{
+	dropLists.store(a_drop, std::memory_order_relaxed);
+}
+
+void RenderGraphRuntime::CoalesceEpochSubmits(bool a_coalesce, bool a_split)
+{
+	coalesceSubmits.store(a_coalesce, std::memory_order_relaxed);
+	splitSubmits.store(a_split, std::memory_order_relaxed);
+}
+
+void RenderGraphRuntime::RequestSubmissionDump(std::uint32_t a_epochs)
+{
+	submissionDumps.store(a_epochs, std::memory_order_relaxed);
+}
+
+void RenderGraphRuntime::SetSkippedEpochSpin(std::uint32_t a_microseconds, bool a_submitted)
+{
+	(a_submitted ? submittedEpochSpinUs : skippedEpochSpinUs).store(a_microseconds, std::memory_order_relaxed);
+}
+
+void RenderGraphRuntime::HoldDclfSubmissions(std::uint32_t a_segments)
+{
+	heldSegments.store(a_segments, std::memory_order_relaxed);
+}
+
+void RenderGraphRuntime::SkipDclfEpochs(std::uint32_t a_segments, std::uint32_t a_boundary)
+{
+	skippedEpochsBoundary.store(a_boundary, std::memory_order_relaxed);
+	dclfEpochsSkipped.store(a_segments, std::memory_order_relaxed);
+}
+
+void RenderGraphRuntime::SetEarlyFlush(int a_flush)
+{
+	earlyFlushOverride.store(a_flush, std::memory_order_relaxed);
+}
+
 void RenderGraphRuntime::RequestShaderReload(std::string_view a_changedFile, bool a_force)
 {
 #if defined(CS_HAS_ORG_MODULE_SERVICES)
@@ -1632,7 +1917,12 @@ bool RenderGraphRuntime::DescribeResource(IUnknown* a_object, DxvkOrgInteropReso
 		return false;
 	a_info = {};
 	a_info.version = DXVK_ORG_INTEROP_VERSION;
-	return SUCCEEDED(impl->getResourceInfo(globals::d3d::device, a_object, &a_info));
+	const auto start = std::chrono::steady_clock::now();
+	const bool described = SUCCEEDED(impl->getResourceInfo(globals::d3d::device, a_object, &a_info));
+	describeCalls.fetch_add(1, std::memory_order_relaxed);
+	describeObjects.fetch_add(1, std::memory_order_relaxed);
+	describeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count(), std::memory_order_relaxed);
+	return described;
 }
 
 bool RenderGraphRuntime::DescribeResources(std::span<IUnknown* const> a_objects, std::span<DxvkOrgInteropResourceInfo> a_infos, std::span<HRESULT> a_results)
@@ -1643,7 +1933,12 @@ bool RenderGraphRuntime::DescribeResources(std::span<IUnknown* const> a_objects,
 		info = {};
 		info.version = DXVK_ORG_INTEROP_VERSION;
 	}
-	return SUCCEEDED(impl->getResourceInfos(globals::d3d::device, static_cast<UINT>(a_objects.size()), a_objects.data(), a_infos.data(), a_results.data()));
+	const auto start = std::chrono::steady_clock::now();
+	const bool described = SUCCEEDED(impl->getResourceInfos(globals::d3d::device, static_cast<UINT>(a_objects.size()), a_objects.data(), a_infos.data(), a_results.data()));
+	describeCalls.fetch_add(1, std::memory_order_relaxed);
+	describeObjects.fetch_add(a_objects.size(), std::memory_order_relaxed);
+	describeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count(), std::memory_order_relaxed);
+	return described;
 }
 
 winrt::com_ptr<ID3D11Buffer> RenderGraphRuntime::WrapBuffer(org::Resource& a_buffer, const D3D11_BUFFER_DESC& a_desc)
@@ -1714,5 +2009,13 @@ void RenderGraphRuntime::WaitFramePace() {}
 org::services::PipelineRegistry* RenderGraphRuntime::PipelineRegistry() { return nullptr; }
 void RenderGraphRuntime::RequestShaderReload(std::string_view, bool) {}
 void RenderGraphRuntime::RequestTimestampDump(std::uint32_t) {}
+void RenderGraphRuntime::SkipDclfEpochs(std::uint32_t, std::uint32_t) {}
+void RenderGraphRuntime::HoldDclfSubmissions(std::uint32_t) {}
+void RenderGraphRuntime::SetSkippedEpochSpin(std::uint32_t, bool) {}
+void RenderGraphRuntime::RequestSubmissionDump(std::uint32_t) {}
+void RenderGraphRuntime::CoalesceEpochSubmits(bool, bool) {}
+void RenderGraphRuntime::DropDclfLists(bool) {}
+void RenderGraphRuntime::SetSkippedEpochWorkerLoad(std::uint32_t, bool) {}
+void RenderGraphRuntime::SetEarlyFlush(int) {}
 void RenderGraphRuntime::ServicePipelineReload() {}
 #endif

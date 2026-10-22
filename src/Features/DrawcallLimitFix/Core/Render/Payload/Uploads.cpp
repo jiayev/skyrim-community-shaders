@@ -510,6 +510,7 @@ namespace DCLF
 		{
 			std::array<GpuLocalShadowMask, kLocalShadowMaskChannels> masks{};
 			std::uint32_t written = 0;
+			std::array<std::uint32_t, kLocalShadowMaskChannels> engineChannels{};
 			const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 			const float biasFactor = Engine::Global<float>(Engine::Address::kShadowBiasFactor) * Engine::Global<float>(Engine::Address::kShadowBiasScale);
 			const std::uint32_t resolution = Engine::Global<std::uint32_t>(Engine::Address::kShadowMapResolution);
@@ -541,18 +542,28 @@ namespace DCLF
 				mask.enabled = 1;
 				mask.depthTarget = view->drawTarget == static_cast<std::uint32_t>(Target::kSHADOWMAPS_ESRAM) ? 0u : 1u;
 				mask.slice = view->drawSlice;
+				// The report's: the light's channel as the engine holds it now (BSShadowLight +0x520), which Light Limit Fix's light data reads.
+				engineChannels[light.maskIndex] = Engine::At<std::uint32_t>(light.light, 0x520);
 				++written;
 			}
 			// The report's (every 300 colour commits): what the sample put and what the latch took.
 			{
-				static std::uint32_t commits = 0;
+				static std::uint32_t commits = 0, differing = 0;
+				for (std::uint32_t c = 0; c < kLocalShadowMaskChannels; ++c)
+					if (masks[c].enabled && engineChannels[c] != c) {
+						++differing;
+						break;
+					}
 				if (++commits % 300 == 0) {
 					std::string records;
 					for (std::uint32_t c = 0; c < kLocalShadowMaskChannels; ++c)
 						if (masks[c].enabled)
-							records += fmt::format(" [channel {}: kind {}, target {}, slice {}, bias {:.6f}, radius {:.0f}, fade {:.0f}, filter {:.5f}]", c, masks[c].params[0],
-								masks[c].depthTarget, masks[c].slice, masks[c].params[2], masks[c].params[1], std::sqrt(masks[c].params2[2]), masks[c].params2[3]);
-					logger::info("[DCLF] local shadow masks: {} lights' masks sampled, {} latched{}", shadowMaskLights.size(), written, records);
+							records += fmt::format(" [channel {}: kind {}, target {}, slice {}, bias {:.6f}, radius {:.0f}, fade {:.0f}, filter {:.5f}, engine channel {}]", c,
+								masks[c].params[0], masks[c].depthTarget, masks[c].slice, masks[c].params[2], masks[c].params[1], std::sqrt(masks[c].params2[2]),
+								masks[c].params2[3], engineChannels[c]);
+					logger::info("[DCLF] local shadow masks: {} lights' masks sampled, {} latched; {} of {} commits with a record whose light the engine holds in "
+								 "another channel{}{}",
+						shadowMaskLights.size(), written, differing, commits, records, differing ? " <- MASK CHANNEL" : "");
 				}
 			}
 			const std::uint32_t maskHeader[4] = { written, 0, 0, 0 };

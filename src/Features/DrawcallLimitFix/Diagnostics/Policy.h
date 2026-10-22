@@ -98,6 +98,8 @@ namespace DCLF::Policy
 
 	/** @brief The category members' index is checked against the tracked entries: on every refresh that drops a cell or portal root (a_removal; the dropped set against the whole scan too) and on pass a_pass. Normal path: false. */
 	bool CheckCategoryMembers(bool a_removal, std::uint64_t a_pass);
+	/** @brief The persistent parity's: the tracked entries' ancestor keys against the mirror's chains (Coordinator::CheckAncestorKeys). */
+	bool CheckAncestorKeys(std::uint64_t a_pass);
 
 	/** @brief The mirror checks its own apply every batch: skipped replays walked anyway, prepared captures against their records, the update log against its chains. Normal path: false. */
 	bool CheckMirrorApply();

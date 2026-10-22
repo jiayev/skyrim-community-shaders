@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 
 #include <algorithm>
 #include <array>
@@ -466,8 +467,13 @@ namespace DCLF::Draws
 			}
 			context.hosted = hosted;
 			Api::PassOut out(a_out, context.epoch);
+			// The cuts (diagnostics) keep the epoch's first pass when they would leave it none: an epoch without passes records nothing,
+			// which a revision-driven epoch cannot replay.
+			const bool cutsEmptyIt = std::all_of(epoch.passes.begin(), epoch.passes.end(), [&](const auto& a_pass) { return Draws::PassCut(state.passes[a_pass.pass].key); });
 			for (const auto& [index, hostedEpoch] : epoch.passes) {
 				const auto& entry = state.passes[index];
+				if (Draws::PassCut(entry.key) && !(cutsEmptyIt && index == epoch.passes.front().pass))
+					continue;
 				context.view = a_base.view;
 				if (hostedEpoch != kNoEpoch) {
 					const auto& view = hostedViews[state.traits[hostedEpoch].index];
@@ -506,7 +512,12 @@ namespace DCLF::Api
 {
 	bool PassContext::PhaseTwo() const
 	{
-		return static_cast<bool>(Main()->hzb);
+		return Main()->hzb && Draws::CurrentGraphConditions().twoPassOcclusion;
+	}
+
+	bool PassContext::Interior() const
+	{
+		return Draws::CurrentGraphConditions().interior;
 	}
 
 	void PassOut::Add(std::string a_name, PassKind a_kind, std::shared_ptr<org::RenderPass> a_pass, PassQueue a_queue)

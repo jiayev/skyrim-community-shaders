@@ -150,6 +150,8 @@ namespace DCLF::Features::TreeLod
 		// epoch): only a trees view's, with the faces' lists.
 		std::shared_ptr<org::RenderPass> FacesCull(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())  // no tree LOD in an interior: its passes are left out
+				return nullptr;
 			const auto& resources = a_context.View();
 			constexpr std::size_t family = static_cast<std::size_t>(Api::DrawFamily::TreeInstances);
 			if (!resources->traits->trees || !resources->faceLists[family][0])

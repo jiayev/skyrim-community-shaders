@@ -323,10 +323,11 @@ namespace DCLF
 		const void* key = a_resources.constants.get();
 		if (!targets || std::find(targets->begin(), targets->end(), key) == targets->end())
 			return out;
-		// As the commit's writeBlock: SharedData, then FeatureData when CS has it.
+		// As LatchShadowCsBlocks: the frame record (it follows FrameValues' per-frame buffers), SharedData, then FeatureData when CS has it.
 		const auto blocks = ShadowArenaBlocksOf();
 		std::size_t used = 0;
-		for (const auto& [offset, bytes] : { std::pair{ blocks.sharedData, blocks.sharedBytes }, std::pair{ blocks.featureData, blocks.featureBytes } }) {
+		for (const auto& [offset, bytes] : { std::pair{ kShadowFrameRecordOffset, static_cast<std::uint32_t>(sizeof(DrawBindings)) },
+				 std::pair{ blocks.sharedData, blocks.sharedBytes }, std::pair{ blocks.featureData, blocks.featureBytes } }) {
 			if (!bytes)
 				continue;
 			const std::size_t at = (used + 15) & ~std::size_t(15);

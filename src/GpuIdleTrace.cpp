@@ -15,8 +15,16 @@ namespace GpuIdleTrace
 {
 	namespace
 	{
-		// Gaps shorter than this are queue scheduling noise.
-		constexpr double kMinGapMs = 0.05;
+		// Gaps shorter than this are queue scheduling noise (CS_GPU_IDLE_MIN_GAP_US overrides it: short gaps a frame repeats add up).
+		double MinGapMs()
+		{
+			static const double gap = [] {
+				char value[32] = {};
+				const DWORD length = GetEnvironmentVariableA("CS_GPU_IDLE_MIN_GAP_US", value, sizeof(value));
+				return length && length < sizeof(value) ? std::strtod(value, nullptr) / 1000.0 : 0.05;
+			}();
+			return gap;
+		}
 		// Gaps logged per analysed frame, longest first.
 		constexpr std::size_t kMaxGapsLogged = 8;
 		// Innermost CPU markers listed per gap.
@@ -285,7 +293,7 @@ namespace GpuIdleTrace
 			double busyMs = tickToMs(spans.front().gpuEnd - spans.front().gpuBegin);
 			for (std::size_t i = 1; i < spans.size(); ++i) {
 				const auto& s = spans[i];
-				if (s.gpuBegin > busyEnd && tickToMs(s.gpuBegin - busyEnd) >= kMinGapMs)
+				if (s.gpuBegin > busyEnd && tickToMs(s.gpuBegin - busyEnd) >= MinGapMs())
 					gaps.push_back({ busyIdx, i, busyEnd, s.gpuBegin });
 				if (s.gpuEnd > busyEnd) {
 					busyMs += tickToMs(s.gpuEnd - (std::max)(busyEnd, s.gpuBegin));
@@ -300,7 +308,7 @@ namespace GpuIdleTrace
 			for (const auto& g : gaps)
 				idleMs += tickToMs(g.end - g.begin);
 			logger::info("[GpuIdle] frame: {} submissions over {:.2f} ms of GPU time, {:.2f} ms busy, {} gaps >= {:.2f} ms totalling {:.2f} ms",
-				spans.size(), frameMs, busyMs, gaps.size(), kMinGapMs, idleMs);
+				spans.size(), frameMs, busyMs, gaps.size(), MinGapMs(), idleMs);
 
 			// Chronological list of every submission, so the gaps can be matched against a capture.
 			std::string order;

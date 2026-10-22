@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 
 #include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -94,7 +95,7 @@ namespace DCLF::Draws
 			constants.phase = phase;
 			const std::uint64_t records = shapes * TreeInstances::kMaxGroupInstances;
 			constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader) + records * sizeof(std::uint32_t));
-			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {
+			if (Draws::OcclusionTested(*resources, *frame)) {
 				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 				constants.hzbMips = resources->hzbMips;
@@ -273,12 +274,16 @@ namespace DCLF::Features::TreeLod
 
 		std::shared_ptr<org::RenderPass> MakeCullPhaseOne(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())  // no tree LOD in an interior: its passes are left out
+				return nullptr;
 			return std::make_shared<Draws::TreeLodCullPass>(a_context.Main(), a_context.State<TreeLodTables>(), 1, a_context.segment);
 		}
 
 		// Phase 2's retest only with the HZB rebuilt this frame (the depth epoch's phase 2 block).
 		std::shared_ptr<org::RenderPass> MakeCullPhaseTwo(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())
+				return nullptr;
 			if (!a_context.PhaseTwo())
 				return nullptr;
 			return std::make_shared<Draws::TreeLodCullPass>(a_context.Main(), a_context.State<TreeLodTables>(), 2, a_context.segment);
@@ -286,6 +291,8 @@ namespace DCLF::Features::TreeLod
 
 		std::shared_ptr<org::RenderPass> MakeCounts(const Api::PassContext& a_context)
 		{
+			if (a_context.Interior())
+				return nullptr;
 			return std::make_shared<Draws::TreeLodReadbackPass>(a_context.State<TreeLodTables>());
 		}
 	}

@@ -93,6 +93,9 @@ namespace DCLF::Scene
 			std::uint64_t categoriesLeft = 0, categoryMembersDropped = 0, rootsLeftScanned = 0;
 			std::uint64_t categoryChecks = 0, categoryDiffer = 0;  // CheckCategoryMembers' checks, and those that differed
 			std::string categoryFirst;
+			// CheckAncestorKeys: entries compared, kept keys other than the mirror's chain gives now, values other than the map gives the key.
+			std::uint64_t ancestorChecks = 0, ancestorEntries = 0, ancestorStaleKeys = 0, ancestorStaleValues = 0;
+			std::string ancestorFirst;
 			// The mirror's apply by event kind (capture, fill, eviction, detach, gate, update): events and ms (timed where the kind changes).
 			static constexpr std::size_t kMirrorKinds = 6;
 			std::array<std::uint64_t, kMirrorKinds> mirrorKindEvents{};

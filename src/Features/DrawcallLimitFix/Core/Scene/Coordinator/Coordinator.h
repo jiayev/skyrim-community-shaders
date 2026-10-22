@@ -610,6 +610,11 @@ namespace DCLF
 		void UnlistCategoryMember(RE::BSGeometry* a_geometry, Tracked& a_tracked);
 		/** @brief Parity (CheckCategoryMembers): the index against the tracked entries, every member each way; logs the first difference. */
 		void CheckCategoryMembers(const char* a_where);
+		/**
+		 * @brief Parity (Policy::CheckAncestorKeys): every tracked entry's kept ancestor key against AncestorKeyOf from the mirror's chain
+		 * now, and its value against the map's for the key; counts and the first difference in the attach line.
+		 */
+		void CheckAncestorKeys();
 		/** @brief Owns a_root from the batch's pin (a_live: a live walk's pointer) while a dependents list names it. */
 		bool OwnRoot(const RE::NiAVObject* a_root, bool a_live);
 		void ReleaseRootOwner(const RE::NiAVObject* a_root);
@@ -881,6 +886,12 @@ namespace DCLF
 		 * reach them) would keep the none value.
 		 */
 		void RefreshAncestorValues();
+		/**
+		 * @brief One tracked object's ancestor value from the taken map, written into its resident slots where it moved: every entry when a
+		 * map is taken, and an entry whose key a (re)attach changed (AddGeometry: an actor the engine moves to another room keeps its
+		 * resident slots, which no join writes again).
+		 */
+		void RefreshAncestorValue(Tracked& a_entry);
 		/** @brief The scene pass, after the joins: a used pipeline without a current PerGeometry block made from the pipeline frame. */
 		void MakeNewPipelineConstants();
 		/** @brief First in each pass: the newest frame inputs taken (sceneInputs, sceneFrame); the verdicts dropped when asked. */

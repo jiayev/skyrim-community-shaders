@@ -115,6 +115,11 @@ namespace DCLF
 			++f.noRecording;
 			return {};
 		}
+		const auto shape = revision.shape ? revision.shape->Value<PassFrame>() : nullptr;
+		if (a_submit.empty && shape && a_submit.empty(*shape)) {
+			++f.empty;
+			return {};
+		}
 		// Held until this execution retires (its draws read what the shared commit bound): the shared payload's bindings, the frame
 		// textures its frame record names, the adopted snapshot whole.
 		const std::array<const MainPayload*, 1> payloads{ shared };
@@ -126,7 +131,6 @@ namespace DCLF
 		// The owner's optional part (Features/Forward: refraction), prepared against the selected revision's shape.
 		SharedEpochResult result{};
 		if (a_submit.prepare) {
-			const auto shape = revision.shape ? revision.shape->Value<PassFrame>() : nullptr;
 			result.optional = a_submit.prepare(a_submit.context, impl->resources.get(), shape.get());
 		}
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(traits.segment, [&](org::RenderGraph&) {

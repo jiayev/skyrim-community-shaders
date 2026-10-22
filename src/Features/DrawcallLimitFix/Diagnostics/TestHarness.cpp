@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "TestHarness.h"
 
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -11,6 +12,7 @@
 #include "State.h"
 
 #include <OpenRenderGraph/PersistentGraphHost.h>
+#include <Render/RenderGraph/ExperimentalRhiExecution.h>
 
 #include <mutex>
 #include <string>
@@ -130,6 +132,140 @@ namespace DCLF
 						DCLF::Draws::asyncComputeOverride.store(value == "default" ? -1 : value != "0", std::memory_order_relaxed);
 						if (auto* host = RenderGraphRuntime::Get().Host())
 							host->RequestRebuild();
+						return;
+					}
+					// Cost attribution (diagnostics; a frozen camera, since a cut build leaves the draws reading an older frame's outputs):
+					// "dclf:cut=<prefixes>": the pass key prefixes the graph leaves out, comma-separated ("*" every pass, empty none), from a
+					// rebuild at the next build point (Draws::GraphConditions); "dclf:epochs=0|1": DCLF's epochs submitted or not (nothing they
+					// claim is drawn while not); "dclf:early-flush=0|1|default": the D3D11 flush before each epoch.
+					if (command.rfind("dclf:cut=", 0) == 0) {
+						DCLF::Draws::SetPassCuts(command.substr(9));
+						return;
+					}
+					if (command.rfind("dclf:epochs=", 0) == 0) {
+						// "dclf:epochs=flush|enqueue|signal": not submitted, each still closing DXVK's command list at its point, then
+						// enqueuing an empty submission, or one signalling a timeline (RenderGraphRuntime::SkipDclfEpochs).
+						const std::string value = command.substr(12);
+						const std::uint32_t boundary = value == "flush" ? 1u : value == "enqueue" ? 2u : value == "signal" ? 3u : value == "cmd" ? 4u :
+													   value == "cmd3" ? 5u : 0u;
+						RenderGraphRuntime::SkipDclfEpochs(value == "1" ? 0u : ~0u, boundary);
+						return;
+					}
+					// "dclf:submit-dump=<epochs>": the next epochs log their enqueued submissions' waits and signals ("[ORG] submission dump").
+					if (command.rfind("dclf:submit-dump=", 0) == 0) {
+						RenderGraphRuntime::RequestSubmissionDump(static_cast<std::uint32_t>(std::strtoul(command.c_str() + 17, nullptr, 10)));
+						return;
+					}
+					// "dclf:worker-spin=<us>" / "dclf:worker-sync=0|1": each skipped epoch loads DXVK's worker thread that long, and/or
+					// waits for it there (RenderGraphRuntime::SetSkippedEpochWorkerLoad).
+					if (command.rfind("dclf:worker-spin=", 0) == 0 || command.rfind("dclf:worker-sync=", 0) == 0) {
+						static std::uint32_t spinUs = 0;
+						static bool sync = false;
+						if (command[13] == 'p')
+							spinUs = static_cast<std::uint32_t>(std::strtoul(command.c_str() + 17, nullptr, 10));
+						else
+							sync = command.substr(17) == "1";
+						RenderGraphRuntime::SetSkippedEpochWorkerLoad(spinUs, sync);
+						return;
+					}
+					// "dclf:epoch-spin=<us>": each skipped epoch busy-waits that long on the render thread (0: none).
+					if (command.rfind("dclf:epoch-spin=", 0) == 0) {
+						RenderGraphRuntime::SetSkippedEpochSpin(static_cast<std::uint32_t>(std::strtoul(command.c_str() + 16, nullptr, 10)));
+						return;
+					}
+					// "dclf:pass-queries=0|1": the graph's lists recorded with their pass timestamp queries and Tracy GPU zones, or without.
+					if (command.rfind("dclf:pass-queries=", 0) == 0) {
+						org::experimental::DiagnosticSkipPassQueries().store(command.substr(18) == "0", std::memory_order_relaxed);
+						if (auto* host = RenderGraphRuntime::Get().Host())
+							host->RequestRebuild();
+						return;
+					}
+					// "dclf:drop-lists=0|1": DCLF's epochs submit their signals alone (RenderGraphRuntime::DropDclfLists).
+					if (command.rfind("dclf:drop-lists=", 0) == 0) {
+						RenderGraphRuntime::DropDclfLists(command.substr(16) == "1");
+						return;
+					}
+					// "dclf:coalesce=0|1": each epoch's submissions as one (RenderGraphRuntime::CoalesceEpochSubmits; unsafe: empty epochs only).
+					if (command.rfind("dclf:coalesce=", 0) == 0) {
+						RenderGraphRuntime::CoalesceEpochSubmits(command.substr(14) == "1");
+						return;
+					}
+					// "dclf:split-enqueue=0|1": each epoch submission its own enqueue (DXVK's submission trace times each).
+					if (command.rfind("dclf:split-enqueue=", 0) == 0) {
+						RenderGraphRuntime::CoalesceEpochSubmits(false, command.substr(19) == "1");
+						return;
+					}
+					// "dclf:submitted-spin=<us>": each submitted DCLF epoch busy-waits that long on the render thread after its enqueue.
+					if (command.rfind("dclf:submitted-spin=", 0) == 0) {
+						RenderGraphRuntime::SetSkippedEpochSpin(static_cast<std::uint32_t>(std::strtoul(command.c_str() + 20, nullptr, 10)), true);
+						return;
+					}
+					// "dclf:hold=<shadow,z,colour,forward,fp>": those epochs' submissions go with the next epoch's enqueue (empty: none held).
+					if (command.rfind("dclf:hold=", 0) == 0) {
+						using Segment = RenderGraphRuntime::Segment;
+						const std::string list = "," + command.substr(10) + ",";
+						std::uint32_t mask = 0;
+						for (const auto& [name, segment] : { std::pair{ "shadow", Segment::ShadowView }, std::pair{ "z", Segment::ZPrepass },
+								 std::pair{ "colour", Segment::MainOpaque }, std::pair{ "forward", Segment::Forward }, std::pair{ "fp", Segment::FirstPerson } })
+							if (list.find(std::string(",") + name + ",") != std::string::npos)
+								mask |= 1u << static_cast<std::uint32_t>(segment);
+						RenderGraphRuntime::HoldDclfSubmissions(mask);
+						return;
+					}
+					// "dclf:heap-dedupe=0|1": BasicRHI's descriptor heap binds of the heaps a list already bound emit nothing, from a rebuild.
+					if (command.rfind("dclf:heap-dedupe=", 0) == 0) {
+						rhi::DiagnosticDedupeHeapBinds().store(command.substr(17) == "1", std::memory_order_relaxed);
+						if (auto* host = RenderGraphRuntime::Get().Host())
+							host->RequestRebuild();
+						return;
+					}
+					// "dclf:skip-epochs=<shadow,z,colour,forward,fp>": those epochs alone not submitted (empty: every one submitted).
+					if (command.rfind("dclf:skip-epochs=", 0) == 0) {
+						using Segment = RenderGraphRuntime::Segment;
+						const std::string list = "," + command.substr(17) + ",";
+						std::uint32_t mask = 0;
+						for (const auto& [name, segment] : { std::pair{ "shadow", Segment::ShadowView }, std::pair{ "z", Segment::ZPrepass },
+								 std::pair{ "colour", Segment::MainOpaque }, std::pair{ "forward", Segment::Forward }, std::pair{ "fp", Segment::FirstPerson } })
+							if (list.find(std::string(",") + name + ",") != std::string::npos)
+								mask |= 1u << static_cast<std::uint32_t>(segment);
+						RenderGraphRuntime::SkipDclfEpochs(mask);
+						return;
+					}
+					// "dclf:list-heaps=0|1": recordings bind the descriptor heaps at each command list's start, or not (unsafe off: only
+					// passes binding their own heaps then work; timing an empty-epoch run only), from a rebuild.
+					if (command.rfind("dclf:list-heaps=", 0) == 0) {
+						org::experimental::DiagnosticSkipListHeapBinds().store(command.substr(16) == "0", std::memory_order_relaxed);
+						if (auto* host = RenderGraphRuntime::Get().Host())
+							host->RequestRebuild();
+						return;
+					}
+					// "dclf:list-barriers=external|all|default": recordings leave out their full entry and exit barriers (the closed
+					// execution's too) or every barrier (unsafe: empty-epoch timing only), from a rebuild.
+					if (command.rfind("dclf:list-barriers=", 0) == 0) {
+						const std::string value = command.substr(19);
+						org::experimental::DiagnosticSkipListBarriers().store(value == "external" ? 1 : value == "all" ? 2 : 0, std::memory_order_relaxed);
+						if (auto* host = RenderGraphRuntime::Get().Host())
+							host->RequestRebuild();
+						return;
+					}
+					// "dclf:rhi-globals=0|1": BasicRHI records global barriers or none (the upload lists' too; unsafe off: empty-epoch
+					// timing only), recordings from a rebuild.
+					if (command.rfind("dclf:rhi-globals=", 0) == 0) {
+						rhi::DiagnosticSkipGlobalBarriers().store(command.substr(17) == "0", std::memory_order_relaxed);
+						if (auto* host = RenderGraphRuntime::Get().Host())
+							host->RequestRebuild();
+						return;
+					}
+					// "dclf:queue-boundary=0|1": the graph's external entry and exit barriers (unsafe off: timing only), from a rebuild.
+					if (command.rfind("dclf:queue-boundary=", 0) == 0) {
+						const bool on = command.substr(20) != "0";
+						if (auto* host = RenderGraphRuntime::Get().Host())
+							host->SetQueueBoundary({ .entry = on, .exit = on });
+						return;
+					}
+					if (command.rfind("dclf:early-flush=", 0) == 0) {
+						const std::string value = command.substr(17);
+						RenderGraphRuntime::SetEarlyFlush(value == "default" ? -1 : value != "0");
 						return;
 					}
 					// "dclf:shadow-min-texels=<texels>": the sun cascades' size cull (0: off), from the next shadow commit.

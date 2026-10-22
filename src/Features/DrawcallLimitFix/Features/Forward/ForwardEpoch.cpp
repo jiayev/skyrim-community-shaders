@@ -82,9 +82,9 @@ namespace DCLF::Features::Forward
 		{
 			const auto f = IndirectDraws::Get().TakeSharedEpochStats(ForwardEpoch());
 			a_text += fmt::format("[DCLF] forward epoch (T7d, CS_DCLF_FORWARD {}): reached {} frames, {} epochs; not submitted: {} without this frame's colour epoch, "
-								  "{} without a forward recording{}, {} failed{}\n",
+								  "{} without a forward recording{}, {} with nothing to draw (no forward or refraction slot), {} failed{}\n",
 				Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) ? "on" : "off", f.reached, f.epochs, f.noSharedPayload, f.noRecording,
-				f.noRecording ? " <- NO FORWARD RECORDING" : "", f.failed,
+				f.noRecording ? " <- NO FORWARD RECORDING" : "", f.empty, f.failed,
 				f.failed ? " <- EPOCH FAILED" : "");
 			if (refraction.drawn || refraction.notReady || Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction))
 				a_text += fmt::format("[DCLF] refraction (T7d, CS_DCLF_REFRACTION {}): {} forward epochs drew the refraction normals, {} with refraction slots could not "
@@ -102,7 +102,9 @@ namespace DCLF::Features::Forward
 		const std::uint32_t epoch = ForwardEpoch();
 		if (!Extensions::ObjectClassOn(toggles, Api::ObjectClass::Forward) || epoch == Draws::kNoEpoch)
 			return false;
-		const auto result = IndirectDraws::Get().SubmitSharedEpoch(epoch, { .prepare = &PrepareRefraction, .context = &toggles });
+		// A shape without forward and refraction slots records no draw (ForwardDrawPass, RefractionDrawPass): no epoch.
+		const auto result = IndirectDraws::Get().SubmitSharedEpoch(epoch, { .prepare = &PrepareRefraction, .context = &toggles,
+			.empty = [](const Draws::PassFrame& a_shape) { return !a_shape.forwardCapacity && !a_shape.refractionCapacity; } });
 		// Refraction: the epoch cleared and drew the refraction normals, ahead of Main::Draw's own group 5 (FUN_1414b4860). The caller
 		// (the blended-draw point) marks them begun and drawn, as that function does, before the engine's blended draws.
 		if (!result.submitted || !result.optional)

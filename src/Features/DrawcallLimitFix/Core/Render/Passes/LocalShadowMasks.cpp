@@ -4,6 +4,11 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
 
+#include <Resources/GloballyIndexedResource.h>
+
+#include <algorithm>
+#include <cmath>
+
 namespace DCLF::Draws
 {
 	struct LocalShadowMaskBindings
@@ -39,8 +44,11 @@ namespace DCLF::Draws
 			LocalShadowMaskBindings bindings{};
 			bindings.mask = a_builder.UnorderedAccess(resources->shadowMask).View();
 			bindings.depth = a_builder.ShaderResource(resources->nativeDepth).View();
-			for (std::uint32_t i = 0; i < 2; ++i)
-				bindings.maps[i] = a_builder.ShaderResource(resources->shadow->depth[i]).View();
+			// Every slice: an array's default view is one slice's (a record's slice past it loads 0, which reads as shadowed).
+			for (std::uint32_t i = 0; i < 2; ++i) {
+				const org::SrvView maps{ resources->shadow->depthLayers[i] > 1 ? static_cast<std::uint32_t>(org::SRVViewType::Texture2DArrayFull) : UINT32_MAX };
+				bindings.maps[i] = a_builder.ShaderResource(resources->shadow->depth[i], maps).View();
+			}
 			// The frame constants (PS b12, read by address) as the latched copies left them.
 			a_builder.ShaderResource(resources->frameConstants, noViews);
 			return bindings;
@@ -71,8 +79,18 @@ namespace DCLF::Draws
 			constants.frameBlock[1] = static_cast<std::uint32_t>(frameBlock >> 32);
 			constants.width = resources->shadowMaskWidth;
 			constants.height = resources->shadowMaskHeight;
-			prepared.groupsX = (constants.width + 7) / 8;
-			prepared.groupsY = (constants.height + 7) / 8;
+			// The rendered area alone: under dynamic resolution (an upscaler) the frame covers the mask's top-left ratio of each axis,
+			// as the shader's clip position takes it (FrameBuffer c44: 1 / ratio).
+			float widthRatio = 1.0f, heightRatio = 1.0f;
+			if (const auto* state = RE::BSGraphics::State::GetSingleton()) {
+				const auto& data = state->GetRuntimeData();
+				widthRatio = std::clamp(data.dynamicResolutionWidthRatio, 0.0f, 1.0f);
+				heightRatio = std::clamp(data.dynamicResolutionHeightRatio, 0.0f, 1.0f);
+			}
+			const auto width = std::min(constants.width, static_cast<std::uint32_t>(std::ceil(constants.width * widthRatio)));
+			const auto height = std::min(constants.height, static_cast<std::uint32_t>(std::ceil(constants.height * heightRatio)));
+			prepared.groupsX = (width + 7) / 8;
+			prepared.groupsY = (height + 7) / 8;
 			return prepared;
 		}
 

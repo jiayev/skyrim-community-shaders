@@ -163,6 +163,11 @@ namespace DCLF::Policy
 		return Diagnostics::Observe().scene && (a_removal || Diagnostics::ParityDue(a_pass, 43));
 	}
 
+	bool CheckAncestorKeys(std::uint64_t a_pass)
+	{
+		return Diagnostics::Observe().scene && Diagnostics::ParityDue(a_pass, 47);
+	}
+
 	bool CheckMirrorApply()
 	{
 		// The mirror or persistent parity's: every batch (a skipped replay or a dropped update is a one-time loss).
