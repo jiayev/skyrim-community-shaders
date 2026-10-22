@@ -41,6 +41,20 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     exist. **Blocked:** no `BSTreeNode` was found at Riverwood, Falkreath, Riften, Raven Rock or Morthal in the test load
     order. `CS_DCLF_TREE_LIST_ALL` stays off until a load order with such trees shows the comparison clean.
 
+## Visible lighting defects
+
+-   **A moving actor keeps its old room (`light data parity MISMATCH`, about 4% of draws).** After the fix of 2026-10-22 (the room map's
+    refresh, and the plain draws' room read where used), run dm18 in Dragonsreach still shows 5,400 of 147,941 draws differing, all
+    of one walking NPC (`HairFemaleNord02`, ref `000D16E1`): DCLF room 10, the engine's room 2. The ancestor key (`Tracked::ancestorKey`)
+    is refreshed only on structural attachment, so an actor the portal system moves between rooms keeps the key it joined with. With
+    the wrong room, portal-strict lights apply by the old room's flags. **Next:** refresh the key when an actor's 3D is re-parented
+    to another room, or key moving roots by their room at the frame.
+-   **Portal-strict lights' receiver bits differ from the engine's for under 1% of draws (`<- SHADOW MASK`).** The shadow mask parity
+    (capture parity with `CS_DCLF_BUILD_PARITY`) reports 790-1,050 of 130,000-143,000 draws per window in Dragonsreach, every one in a
+    gated light's bit (`StrictGateRejects`), in both directions (DCLF 0 / native 1 and DCLF 2 / native 0). The build parity readback
+    is three main epochs older than the native draw it is compared with, so moving objects account for some of it. **Next:** sample
+    the differing objects and check whether they move.
+
 ## Open crashes
 
 -   **A freed child detached during cell streaming.** It happens intermittently, 70-100 s into motion runs (`CS_DCLF_TEST_MOVE`,
@@ -66,6 +80,12 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     destroyed a pool entry's object (keyed by a `BSLightingShaderProperty`) that was already freed. DCLF holds property and
     material references, but nothing ties the crash to them yet. **Next:** reproduce with `CS_DCLF_RELEASE_GUARD=1`, and with DCLF
     off.
+    **A second form, 2026-10-22 (run ex1, 75 s into a motion parity run out of Riverwood):** an actor's skin destroyed on the main
+    thread under `Main::Update`: `BSDismemberSkinInstance::~NiRefObject` (`0x140d32470`) -> `NiSkinPartition::~NiRefObject`
+    (`0x140d44640`) -> `FUN_140e46810` (its buffers' release) -> Engine Fixes' allocator, an atomic write through a null pointer
+    (`xchg [rsi+10h]`, rsi 0). Run wr4's corrupt-heap crash (below, "probably unrelated") was also under an actor's geometry
+    (a face morph blend). If DCLF keeps a skin partition's buffers or the partition past the engine's release (Features/Skins), this is
+    where it would show. Dump: `ex1-skin-teardown.dmp` (session scratch folder).
 -   **A hang 27 s into a motion parity run, after the shadow epoch's builds became one dispatch.** It happened once, on 2026-10-21,
     in the first run of the multi-view shadow build. That build is `ShadowViews` in `BuildDrawsCS.hlsl`: its view table is published
     by `org::PreparedTablePublisher`, `cs.dclf.shadow.build-views`. The log stops with ordinary report lines, about a second after
@@ -96,6 +116,12 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     no Community Shaders or DCLF frame; the route's wildlife enters combat as the player walks into the forest. Dumps:
     `vp1-804396.dmp`, `vp19-804396.dmp` (session scratch folder). Not chased; a run with DCLF off (`CS_DCLF_TEST_TOGGLE`) would
     settle it if it ever matters.
+-   **A corrupt heap in Engine Fixes' allocator under a face morph blend** (once, 2026-10-22, run wr4 at frame 12400, walking out
+    of Riverwood under `CS_DCLF_TEST_MOVE`): a write through a bad pointer (`rcx = 0xb5410000`) inside EngineFixes' allocator, from
+    `MemoryManager::Allocate` in `FUN_140e47ef0` <- `FUN_140e24ef0` (it blends two geometries' morph data, `+0x130`) <-
+    `Actor::sub` (`0x1402e8510`), an engine thread. No Community Shaders or DCLF frame, but the heap was already corrupt, so
+    whoever corrupted it is unknown. Dump: `wr4-enginefixes-heap.dmp` (session scratch folder). **Next:** if it recurs, a run with
+    page heap or DCLF off would separate the two.
 -   **Havok null write in `FUN_140b660c0` at uGridsToLoad 21** (the Whiterun stress save under `CS_DCLF_TEST_MOVE`). Radius 21 is
     unstable on its own, so runs there are judged by the report lines written before the crash.
 
@@ -175,8 +201,16 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
         backings' catch-ups match the whole list (`payload inputs backings`: 0 differ), and no segment commits a frame number
         twice (0 repeats in vp18).
     So the word was written with this frame's stamp from an input list that is not the installed publication's as copied.
-    **Next:** stamp each BuildDraws dispatch's latch serial (and the inputs SRV index it read) into a debug buffer beside the
-    visibility words, and on a hit read which dispatch wrote the slot.
+    **Diagnostic in place (TEMP, CS_DCLF_SET_PARITY only):** each visibility word's writer is recorded per segment
+    (`Resources::writers`, BuildDrawsCS's `RecordWriter`, bound through the main dispatches' unused `memberClaimsIndex`): the
+    stamp, the scene list's SRV index, the input's position and the write site. An "outside the set" sample prints both segments'
+    writers next to the installed inputs SRV. It did not reproduce in run wr4 (2026-10-22, about 12,400 frames walking out of
+    Riverwood). **Next:** on a hit, a writer whose inputs SRV is not the installed one means a dispatch read another backing; the
+    same SRV with no input naming the slot means the backing changed after the dispatch.
+-   **Build parity's decal check reads only the classes' decal sub-ranges.** With the plain decal buckets on
+    (`CS_DCLF_DECAL_PLAIN`) the decals go to the class plan's decal buckets, which `DrawnDecal` does not read, so the check reports
+    every slot culled ("87 slots, 87 culled"). The colour and terrain draws' plain buckets were added to the comparison on 2026-10-22
+    (it had compared nothing since the plain buckets came in). **Next:** read the decal buckets the same way.
 -   **Accumulated parity on terrain and object LOD geometry (`<- ACCUMULATED DIFFER`).** In run vp10 (`CS_DCLF_ACCUMULATED_PARITY`
     with motion on the tree-forest route), every window: about 60-110 of 29,000 engine-culled-root geometries set by DCLF alone and
     80-180 by the engine alone, all `Land`, `obj`, `obj-LargeRef`, `objsnow` and `objsnowHD-LargeRef` (terrain blocks and object

@@ -46,6 +46,18 @@ namespace DCLF::Features::LocalLights
 					out.portalContext = light.portalContext;
 					a_sink.Put(out);
 				}
+				if (light.hasMask) {
+					Api::LightShadowMask mask;
+					mask.light = light.light;
+					mask.maskIndex = light.maskIndex;
+					mask.kind = light.kind;
+					std::memcpy(mask.lightTransform, light.lightTransform, sizeof(mask.lightTransform));
+					mask.radius = light.radius;
+					mask.spotFalloff = light.spotFalloff;
+					mask.biasScale = light.biasScale;
+					mask.lodFade = light.lodFade;
+					a_sink.PutMask(mask);
+				}
 			}
 		}
 

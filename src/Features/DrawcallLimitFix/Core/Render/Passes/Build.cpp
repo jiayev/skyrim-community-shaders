@@ -8,6 +8,7 @@ namespace DCLF::Draws
 	struct BuildDrawsBindings
 	{
 		org::DeclaredViewToken sequences, count, hzb, visibility, frustum;
+		org::DeclaredViewToken writers;  // TEMP (CS_DCLF_SET_PARITY): Resources::writers
 		org::DeclaredViewToken memberQueries, memberResults, memberClaims;
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
 		org::DeclaredViewToken fadeRoots;
@@ -69,6 +70,8 @@ namespace DCLF::Draws
 			bindings.sequences = a_builder.UnorderedAccess(*resources->sequences).View();
 			bindings.count = a_builder.UnorderedAccess(resources->count).View();
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
+			if (resources->writers)
+				bindings.writers = a_builder.UnorderedAccess(*resources->writers).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(*resources->frustum).View();
 			// Every phase reads the fade roots' static rows (the cull binding RootRows: phase 1's fade verdicts, LOD skin partitions). The
@@ -164,6 +167,9 @@ namespace DCLF::Draws
 			SetRowStrides(constants);
 			constants.phaseBits = (phase & 0xFu) << 4;
 			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
+			// TEMP (CS_DCLF_SET_PARITY): the writer records, through the claims word only the query preparation uses.
+			if (a_bindings.writers.layout)
+				constants.memberClaimsIndex = CaptureViewIndex(a_preparation, a_bindings.writers);
 			// Frustum stamps: only depth phase 1 tests every candidate's frustum.
 			if (resources->frustum && phase == 1)
 				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);

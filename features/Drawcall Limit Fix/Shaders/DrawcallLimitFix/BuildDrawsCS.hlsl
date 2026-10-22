@@ -1014,6 +1014,17 @@ DrawInputWords LoadInputWords(ByteAddressBuffer a_inputs, uint a_draw)
 	return loaded;
 }
 
+// TEMP (CS_DCLF_SET_PARITY): who wrote an object's visibility word, a record per segment (depth, colour; 16 bytes each): the stamp,
+// the scene list's descriptor, the input's position in it, and the write site | phase << 4 | the dispatch's inputs << 8. The main
+// dispatches' MemberClaimsIndex names the buffer (Resources::writers); only the query preparation uses it otherwise.
+void RecordWriter(uint a_objectIndex, uint a_draw, uint a_site)
+{
+	if (MemberClaimsIndex == 0)
+		return;
+	RWByteAddressBuffer writers = ResourceDescriptorHeap[MemberClaimsIndex];
+	writers.Store4(a_objectIndex * 32 + (CullPhase() == kPhaseColour ? 16 : 0), uint4(VisibilityStamp, InputsBuffer, a_draw, a_site | (CullPhase() << 4) | (DrawCount << 8)));
+}
+
 // One input's culling and draws for the loaded view (its latch and outputs: LoadLatch, LoadShadowView), past the view-bits test: what
 // main and ShadowViews do with an input their view takes.
 void BuildInput(uint draw, DrawInputWords a_words)
@@ -1192,8 +1203,10 @@ void BuildInput(uint draw, DrawInputWords a_words)
 				decalGeometry = geometries.Load(geometryOffset + 36);  // GeometryDraw::nextPartition
 		}
 		// A decal's word: never drawn in depth, drawn in colour unless culled.
-		if (phase == kPhaseColour)
+		if (phase == kPhaseColour) {
 			visibility.Store(objectIndex * 4, (VisibilityStamp << kVisibilityStampShift) | (culled ? kVisibilityRejectedFinal : (kVisibilityVisible | kVisibilityColourDrawn)));
+			RecordWriter(objectIndex, draw, 1);
+		}
 		return;
 	}
 
@@ -1234,6 +1247,7 @@ void BuildInput(uint draw, DrawInputWords a_words)
 			}
 		}
 		visibility.Store(objectIndex * 4, (VisibilityStamp << kVisibilityStampShift) | (forwardCulled ? kVisibilityRejectedFinal : (kVisibilityVisible | kVisibilityColourDrawn)));
+		RecordWriter(objectIndex, draw, 2);
 		if (forwardCulled)
 			return;
 	}
@@ -1285,6 +1299,7 @@ void BuildInput(uint draw, DrawInputWords a_words)
 		const uint decided = (frustumRejected || fadeHidden) ? kVisibilityRejectedFinal :
 			(occlusionRejected ? (phase == kPhaseOne ? kVisibilityOccludedRetest : kVisibilityRejectedFinal) : kVisibilityVisible);
 		visibility.Store(objectIndex * 4, (VisibilityStamp << kVisibilityStampShift) | decided | (draws ? kVisibilityDepthDrawn : 0));
+		RecordWriter(objectIndex, draw, 3);
 		if (phase == kPhaseTwo && !occlusionRejected)
 			count.InterlockedAdd(kCountRescuedByPhaseTwo, 1, scratch);
 		if (phase == kPhaseOne && decided == kVisibilityOccludedRetest && RetestsIndex != 0)
@@ -1295,6 +1310,7 @@ void BuildInput(uint draw, DrawInputWords a_words)
 			visibility.InterlockedOr(objectIndex * 4, kVisibilityColourDrawn, scratch);
 		else
 			visibility.Store(objectIndex * 4, (VisibilityStamp << kVisibilityStampShift) | kVisibilityColourDrawn | kVisibilityUnpublished);
+		RecordWriter(objectIndex, draw, publishedThisFrame ? 4 : 5);
 	}
 
 	if (cullRejected)

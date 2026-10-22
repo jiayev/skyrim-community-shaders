@@ -5,6 +5,8 @@
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
@@ -328,7 +330,8 @@ namespace DCLF
 			// LocalLights'), for the objects' shadow mask (Light Limit Fix's ShadowBitMask). The list stays whole (the build parity's
 			// reference); the latch takes the clamped count.
 			shadowVolumes.clear();
-			Api::LightVolumeSink sink(shadowVolumes);
+			shadowMaskLights.clear();
+			Api::LightVolumeSink sink(shadowVolumes, shadowMaskLights);
 			Extensions::SampleLightVolumes(sink);
 			shadowVolumesLatched = static_cast<std::uint32_t>(shadowVolumes.size());
 		}
@@ -501,6 +504,62 @@ namespace DCLF
 		if (shadowVolumesLatched)
 			LatchWrite(latchBlock, "main shadow volumes", a_latchSlot, layout.ShadowVolumeOffset() + kSunRegionHeader,
 				std::as_bytes(std::span(shadowVolumes).first(shadowVolumesLatched)));
+		// The local shadow lights' masks (LocalShadowMaskCS): a record per channel, in the Utility shader's terms, the frame's eye
+		// (the one the frame constants' CameraPosAdjust holds, which the shader reconstructs positions relative to) folded into each
+		// light's transform. A light whose first view DCLF did not draw into a shadow map target keeps the engine's channel.
+		{
+			std::array<GpuLocalShadowMask, kLocalShadowMaskChannels> masks{};
+			std::uint32_t written = 0;
+			const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+			const float biasFactor = Engine::Global<float>(Engine::Address::kShadowBiasFactor) * Engine::Global<float>(Engine::Address::kShadowBiasScale);
+			const std::uint32_t resolution = Engine::Global<std::uint32_t>(Engine::Address::kShadowMapResolution);
+			const float filterRadius = resolution ? Engine::Global<float>(Engine::Address::kShadowFilterRadius) / static_cast<float>(resolution) : 0.0f;
+			const auto views = ShadowViews::Get().All();
+			for (const auto& light : shadowMaskLights) {
+				if (light.maskIndex >= kLocalShadowMaskChannels || masks[light.maskIndex].enabled)
+					continue;
+				const auto view = std::find_if(views.begin(), views.end(), [&](const ShadowViews::View& a_view) {
+					return a_view.light == light.light && a_view.descriptor == 0 && !a_view.focus;
+				});
+				using Target = RE::RENDER_TARGETS_DEPTHSTENCIL;
+				if (view == views.end() || (view->drawTarget != static_cast<std::uint32_t>(Target::kSHADOWMAPS_ESRAM) &&
+											   view->drawTarget != static_cast<std::uint32_t>(Target::kSHADOWMAPS)))
+					continue;
+				auto& mask = masks[light.maskIndex];
+				std::memcpy(mask.shadowProj, light.lightTransform, sizeof(mask.shadowProj));
+				for (std::uint32_t column = 0; column < 4; ++column)
+					mask.shadowProj[12 + column] = static_cast<float>(static_cast<double>(eye.x) * light.lightTransform[column] +
+																	  static_cast<double>(eye.y) * light.lightTransform[4 + column] +
+																	  static_cast<double>(eye.z) * light.lightTransform[8 + column] + static_cast<double>(light.lightTransform[12 + column]));
+				mask.params[0] = static_cast<float>(light.kind);
+				mask.params[1] = light.radius;
+				mask.params[2] = light.biasScale * biasFactor;
+				mask.params[3] = 1.0f;
+				mask.params2[0] = light.spotFalloff;
+				mask.params2[2] = Engine::Global<float>(light.lodFade ? Engine::Address::kShadowFadeDistanceLod : Engine::Address::kShadowFadeDistance);
+				mask.params2[3] = filterRadius;
+				mask.enabled = 1;
+				mask.depthTarget = view->drawTarget == static_cast<std::uint32_t>(Target::kSHADOWMAPS_ESRAM) ? 0u : 1u;
+				mask.slice = view->drawSlice;
+				++written;
+			}
+			// The report's (every 300 colour commits): what the sample put and what the latch took.
+			{
+				static std::uint32_t commits = 0;
+				if (++commits % 300 == 0) {
+					std::string records;
+					for (std::uint32_t c = 0; c < kLocalShadowMaskChannels; ++c)
+						if (masks[c].enabled)
+							records += fmt::format(" [channel {}: kind {}, target {}, slice {}, bias {:.6f}, radius {:.0f}, fade {:.0f}, filter {:.5f}]", c, masks[c].params[0],
+								masks[c].depthTarget, masks[c].slice, masks[c].params[2], masks[c].params[1], std::sqrt(masks[c].params2[2]), masks[c].params2[3]);
+					logger::info("[DCLF] local shadow masks: {} lights' masks sampled, {} latched{}", shadowMaskLights.size(), written, records);
+				}
+			}
+			const std::uint32_t maskHeader[4] = { written, 0, 0, 0 };
+			LatchWrite(latchBlock, "main local shadow masks", a_latchSlot, layout.LocalShadowMaskOffset(), std::as_bytes(std::span(maskHeader)));
+			LatchWrite(latchBlock, "main local shadow masks", a_latchSlot, layout.LocalShadowMaskOffset() + 16, std::as_bytes(std::span(masks)));
+			a_latch.localShadowMaskOffset = static_cast<std::uint32_t>(latchBlock.Offset(a_latchSlot)) + layout.LocalShadowMaskOffset();
+		}
 		a_latch.sunState = kSunTestOn;
 		a_latch.sunCascadeOffset = static_cast<std::uint32_t>(latchBlock.Offset(a_latchSlot)) + MainLatchLayout::CascadeOffset();
 		a_latch.localShadowOffset = static_cast<std::uint32_t>(latchBlock.Offset(a_latchSlot)) + layout.ShadowVolumeOffset();

@@ -45,6 +45,7 @@ namespace DCLF
 namespace DCLF::Draws
 {
 	struct ViewResources;  // Epochs/ViewEpoch.h
+	struct ShadowResources;  // Shadow/ShadowFrame.h
 
 	/**
 	 * @brief How the main epochs lay out the sequences and the Z-prepass buckets (the revision producer's, Impl::RequireMain): derived
@@ -132,6 +133,13 @@ namespace DCLF::Draws
 		// The engine's refraction normals (kREFRACTION_NORMALS), for RefractionDrawPass. Null without the target.
 		std::shared_ptr<org::ExternalTextureResource> refractionNormals;
 		DXGI_FORMAT refractionFormat = DXGI_FORMAT_UNKNOWN;
+		// The engine's screen-space shadow mask (kSHADOW_MASK, made UAV-capable by Community Shaders' creation hook), into which
+		// LocalShadowMaskCS resolves the local shadow lights' channels for DCLF's receivers, and that program. Null without either.
+		std::shared_ptr<org::ExternalTextureResource> shadowMask;
+		std::uint32_t shadowMaskWidth = 0, shadowMaskHeight = 0;
+		std::shared_ptr<const ComputeProgram> localShadowMasks;
+		// The shadow engine's resources (their shadow map imports, which the masks sample), once both exist (Impl::ShadowResourcesMade).
+		std::shared_ptr<ShadowResources> shadow;
 		Versioned visibility;  // per-object verdict, published by the depth segment
 		// Per object, the last frame stamp at which main depth phase 1 found its bound inside the frustum, occlusion aside (the
 		// engine's OnVisible semantics). Never cleared: a stale stamp is simply not this frame's.
@@ -140,6 +148,8 @@ namespace DCLF::Draws
 		// runs over. An object slot a word, with the per-object buffers (RequireSceneTables): an object has one input, so the list never
 		// holds more entries than the visibility words its inputs name.
 		Versioned retests;
+		// TEMP (CS_DCLF_SET_PARITY): per object, who wrote its visibility word (BuildDrawsCS.hlsl, RecordWriter; 32 bytes). Null otherwise.
+		Versioned writers;
 		// Phase 2's dispatch arguments (groups x, y, z, a pad word): the depth commit latches kRetestDispatchReset, phase 1 adds a group
 		// per 64 retest entries, phase 2's ExecuteIndirect reads them.
 		std::shared_ptr<org::Buffer> retestDispatch;

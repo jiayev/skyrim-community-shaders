@@ -398,7 +398,7 @@ the end of the prepass.
 | `[DCLF] feature binding parity OK\|MISMATCH: ...` | Feature bindings that differ within a frame's eligible draws. |
 | `[DCLF] bone palette parity OK\|MISMATCH: ...` | Skinned draws' palettes. |
 | `[DCLF] skin parity OK\|MISMATCH: ...` | Advanced Skin's t71/t74 and wetness. |
-| `[DCLF] light data parity ...`, `[DCLF] TruePBR texture parity ...` | The integrations' checks (`Integrations/LightLimitFix/Diagnostics`, `Integrations/TruePBR/Diagnostics`). |
+| `[DCLF] light data parity ...`, `[DCLF] TruePBR texture parity ...` | The integrations' checks (`Integrations/LightLimitFix/Diagnostics`, `Integrations/TruePBR/Diagnostics`). `light data parity, shadow lights` (`<- SHADOW MASK`) compares each draw's local shadow lights (BuildDrawsCS's mask, from the build parity readback: run with `CS_DCLF_BUILD_PARITY`) with the native pass's `ShadowBitMask`; without the build parity it checks nothing. |
 | `[DCLF] face capture parity: ...` | Reflection face Lighting draws against their objects' main rows (`CaptureParity::OnFaceLightingDraw`). |
 | `[DCLF] constant block coverage: ...`, `[DCLF] variables the native shaders have that DCLF leaves unwritten: ...` | What was compared, and what DCLF leaves unwritten. |
 | `[DCLF] render state ... (VARIES)` | Render states seen, flagged when they vary. |

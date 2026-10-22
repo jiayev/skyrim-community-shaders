@@ -18,6 +18,8 @@ namespace DCLF
 		virtual void PostRevisionInputs() = 0;
 		/** @brief Render thread: the scene buffers, created once (Impl::EnsureSceneBuffers). Null when they have no device address. */
 		virtual std::shared_ptr<SceneBuffers> ShadowSceneBuffers(rhi::Device a_device) = 0;
+		/** @brief Render thread: the shadow resources were made (the main resources' local shadow masks sample their maps). */
+		virtual void ShadowResourcesMade(const std::shared_ptr<ShadowResources>& a_shadow) = 0;
 
 	protected:
 		~ShadowHost() = default;

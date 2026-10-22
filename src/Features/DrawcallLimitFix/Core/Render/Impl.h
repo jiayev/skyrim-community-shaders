@@ -20,6 +20,7 @@ namespace DCLF
 #include "Features/DrawcallLimitFix/Core/Render/Impl/Stats.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Participant.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEngine.h"
+#include "Features/DrawcallLimitFix/Api/LightVolumes.h"
 
 namespace DCLF
 {
@@ -205,6 +206,11 @@ namespace DCLF
 		bool EnsureSceneBuffers(rhi::Device a_device);
 		/** @brief ShadowHost: the scene buffers for the shadow resources (SetupShadow). */
 		std::shared_ptr<SceneBuffers> ShadowSceneBuffers(rhi::Device a_device) override { return EnsureSceneBuffers(a_device) ? scene : nullptr; }
+		void ShadowResourcesMade(const std::shared_ptr<ShadowResources>& a_shadow) override
+		{
+			if (resources)
+				resources->shadow = a_shadow;
+		}
 		/**
 		 * @brief Revision code: the scene's tables required to hold a_tables (and the frame's posted counts), with the per-object
 		 * buffers (the objects and the input demand) and the faces' draw family lists.
@@ -289,6 +295,8 @@ namespace DCLF
 		// reference), and how many of them the latch takes (clamped to the revision's layout: CommitShadowInputs).
 		std::vector<GpuShadowVolume> shadowVolumes;
 		std::uint32_t shadowVolumesLatched = 0;
+		// The same sample's lights' masks (LightVolumeSink::PutMask), which WriteShadowLatch latches for LocalShadowMaskCS.
+		std::vector<Api::LightShadowMask> shadowMaskLights;
 		// The depth commit's scratch: its buckets (PlanZBuckets) and the zeros their count words take.
 		ZBucketPlan zBucketPlan;
 		std::vector<std::uint32_t> zBucketZeros;

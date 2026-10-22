@@ -609,6 +609,11 @@ namespace DCLF
 			if (logged++ < 4)
 				logger::error("[DCLF] the snapshot builder's pass failed: {}; it makes the snapshot again when woken", e.what());
 			b.stage = b.work ? Stage::Waiting : Stage::Idle;
+			// The wake it waits for may have come already: inputs posted for a graph build (whose uploader replaced the one a sealed
+			// revision's payload goes through) moved the inputs and woke this pass, which then failed on the old ones. Woken again, the next
+			// pass makes the revision from the posted inputs; it clears the flag first, so a failure there does not wake it once more.
+			if (b.work && snapshotInputsMoved.load(std::memory_order_acquire))
+				WakeSnapshotBuilder();
 		}
 	}
 
@@ -847,6 +852,7 @@ namespace DCLF
 			const auto waited = Clock::now() - start;
 			if (waited > kTimeout) {
 				const auto& adopted = s.adoptedSnapshot;
+				const auto pumpStats = s.SnapshotPump().GetStats();
 				std::string stale;
 				for (std::size_t k = 0; k < Impl::kStaleKinds; ++k)
 					stale += fmt::format("{}{}", k ? "/" : "", s.snapshotsStale[k] - staleBefore[k]);
@@ -855,13 +861,17 @@ namespace DCLF
 					"not hand drawing back to the engine. Waiting for: build generation {} (rebuild requested: {}), main resources generation {}, targets "
 					"generation {}. Stale snapshots taken meanwhile (build/targets/shadow format/main): {}; snapshots posted {}, recordings outstanding {}, "
 					"inputs moved {}, publication gated {}, build ahead running {}. Adopted snapshot: serial {}, revision {}, draws complete {}, build "
-					"generation {}, main generation {}, payload {}",
+					"generation {}, main generation {}, payload {}. The builder (read racily, for this message): stage {}, passes {} ({} idle), work {}, draws {}, "
+					"payload {}; its pump: runner active {}, requested epoch {}, drained {}, notifications {}, passes {}, rejected {}",
 					frame, std::chrono::duration_cast<std::chrono::seconds>(kTimeout).count(), host->BuildGeneration(), host->RebuildRequested(),
 					s.postedInputs.mainGeneration, DrawPipelines::Get().Generation(), stale, seen, s.recordingsOutstanding.load(std::memory_order_acquire),
 					s.snapshotInputsMoved.load(std::memory_order_acquire), s.publicationGated.load(std::memory_order_acquire),
 					s.aheadRunning.load(std::memory_order_acquire), adopted ? adopted->serial : 0, adopted && adopted->revision, adopted && adopted->drawsComplete,
 					adopted ? adopted->buildGeneration : 0, adopted ? adopted->mainGeneration : 0,
-					!s.installedPayload ? "none" : s.installedPayload->Ready() ? "ready" : "NOT READY"));
+					!s.installedPayload ? "none" : s.installedPayload->Ready() ? "ready" : "NOT READY", static_cast<int>(s.snapshotBuilder.stage),
+					s.snapshotBuilder.passes, s.snapshotBuilder.idlePasses, s.snapshotBuilder.work != nullptr, s.snapshotBuilder.draws != nullptr,
+					s.snapshotBuilder.payload != nullptr, pumpStats.runnerActive, pumpStats.requestedEpoch, pumpStats.drainedEpoch, pumpStats.notifications,
+					pumpStats.drainPasses, pumpStats.rejected));
 			}
 			if (waited < kSpin)
 				std::this_thread::yield();

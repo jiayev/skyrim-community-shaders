@@ -285,6 +285,8 @@ namespace DCLF
 		{
 			std::uint64_t ancestorMapsPosted = 0, ancestorMapsTaken = 0, pipelineFramesPosted = 0, pipelineFramesTaken = 0;
 			std::uint64_t pipelineBlocksMade = 0, pipelineBlocksWaited = 0;
+			std::uint64_t ancestorValuesMoved = 0;
+			std::uint64_t ancestorFound = 0, ancestorNoKey = 0, ancestorNotMapped = 0;
 		};
 		AccumulateInputStats TakeAccumulateInputStats();
 
@@ -873,6 +875,12 @@ namespace DCLF
 		// The frame inputs and the technique rows: State/Frame.h (CoordinatorFrame).
 		/** @brief The scene pass, before the walk: the frame inputs posted since its last pass (ancestor map, pipeline frame). */
 		void TakeAccumulateInputs();
+		/**
+		 * @brief A new ancestor map taken: every tracked object's ancestor value looked up again and written where it moved. The joins look
+		 * it up only when they evaluate an object, so one bound before the map named its key (Light Limit Fix's rooms fill as lights
+		 * reach them) would keep the none value.
+		 */
+		void RefreshAncestorValues();
 		/** @brief The scene pass, after the joins: a used pipeline without a current PerGeometry block made from the pipeline frame. */
 		void MakeNewPipelineConstants();
 		/** @brief First in each pass: the newest frame inputs taken (sceneInputs, sceneFrame); the verdicts dropped when asked. */

@@ -116,6 +116,19 @@ namespace DCLF::Draws
 	// Byte offsets of the count words the indirect draws read; must match BuildDrawsCS.hlsl.
 	constexpr std::uint64_t kCountDrawnPhaseTwoBytes = 68;
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
+	// The local shadow lights' masks (LocalShadowMaskCS.hlsl): one dispatch over kSHADOW_MASK in the colour segment.
+	constexpr const char* kLocalShadowMaskShader = "DrawcallLimitFix/LocalShadowMaskCS.hlsl";
+	struct LocalShadowMaskConstants
+	{
+		std::uint32_t latchIndex;
+		std::uint32_t latchRegion;  // set at record time: the frame slot's region (the colour segment's BuildDrawsLatch)
+		std::uint32_t maskIndex;
+		std::uint32_t depthIndex;
+		std::uint32_t shadowMapsIndex[2];  // kSHADOWMAPS_ESRAM, kSHADOWMAPS (GpuLocalShadowMask::depthTarget)
+		std::uint32_t frameBlock[2];      // the frame constants' PS b12, by address
+		std::uint32_t width, height;
+	};
+	constexpr std::uint32_t kLocalShadowMaskConstantWords = sizeof(LocalShadowMaskConstants) / 4;
 	constexpr const char* kSortSequencesShader = "DrawcallLimitFix/SortSequencesCS.hlsl";
 	// The foliage record (Policy::RecordFoliagePixels, CS_DCLF_FOLIAGE_PARITY; Diagnostics/Draws/Foliage.cpp): alpha-tested colour
 	// draws write each shaded pixel's object (index + 1, low 24 bits; the frame's low 8 above) and albedo and diffuse. The compare
@@ -475,13 +488,16 @@ namespace DCLF::Draws
 		// A sun view under kCullMinTexels: the least bound radius (world units) a caster keeps, the size threshold in texels over the view's
 		// texels per world unit (ShadowEpochs.cpp, SunCasterMinRadius). 0 elsewhere.
 		float minCasterRadius;
-		std::uint32_t reserved[2];
+		// The colour segment: the local shadow lights' mask records (a LocalShadowMaskRegion), bytes into the latch block, which
+		// LocalShadowMaskCS resolves into kSHADOW_MASK. 0 elsewhere.
+		std::uint32_t localShadowMaskOffset;
+		std::uint32_t reserved;
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
 	// BuildDrawsLatch::portalProgramsIndex's byte offset (BuildDrawsCS, FadeStateCS and PortalBatchCS read it as kLatchPortalPrograms).
 	constexpr std::uint32_t kLatchPortalProgramsOffset = 320;
-	static_assert(sizeof(BuildDrawsLatch) == 352 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, minCasterRadius) == 340 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
+	static_assert(sizeof(BuildDrawsLatch) == 352 && offsetof(BuildDrawsLatch, localShadowMaskOffset) == 344 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, minCasterRadius) == 340 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
 				  offsetof(BuildDrawsLatch, lightContextsIndex) == 324 && offsetof(BuildDrawsLatch, strictContext) == 332 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, classTableOffset) == 292 &&
 				  offsetof(BuildDrawsLatch, classMapOffset) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
 				  offsetof(BuildDrawsLatch, viewBits) == 264 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
@@ -643,6 +659,29 @@ namespace DCLF::Draws
 		std::uint32_t padding[3];
 	};
 	static_assert(sizeof(GpuShadowVolume) == 240);
+
+	/**
+	 * @brief A local shadow light's screen-space mask, as LocalShadowMaskCS resolves it into its channel of kSHADOW_MASK for DCLF's
+	 * receivers (the engine draws a light's mask per registered receiver, which DCLF's are not: render modes 0x10/0x11,
+	 * GetRenderPasses_ShadowMapOrMask). One per mask channel; the parameters are the Utility shader's mask variants' (spot, hemisphere,
+	 * dual paraboloid), shaped as LightLimitFix's LocalShadowData (LocalShadowProjection.hlsli). Must match LocalShadowMaskCS.hlsl.
+	 */
+	struct GpuLocalShadowMask
+	{
+		// Row-major (the descriptor's lightTransform, row vectors), the frame's eye folded in: it takes a position relative to the eye.
+		float shadowProj[16];
+		float params[4];   // type (kLocalShadowMask*), radius, depth bias, 1
+		float params2[4];  // spot falloff exponent, 0, the fade distance squared (ShadowLightParam.z), the PCF radius in UV
+		std::uint32_t enabled;  // 0: the channel is the engine's
+		std::uint32_t depthTarget;  // 0 kSHADOWMAPS_ESRAM, 1 kSHADOWMAPS (the shadow depth imports' order)
+		std::uint32_t slice;
+		std::uint32_t padding;
+	};
+	static_assert(sizeof(GpuLocalShadowMask) == 112);
+	constexpr std::uint32_t kLocalShadowMaskSpot = 0, kLocalShadowMaskHemisphere = 1, kLocalShadowMaskOmni = 2;
+	// The region: a 16-byte header (the channels with a record), then one record per mask channel.
+	constexpr std::uint32_t kLocalShadowMaskChannels = 4;
+	constexpr std::uint32_t kLocalShadowMaskRegionBytes = 16 + kLocalShadowMaskChannels * static_cast<std::uint32_t>(sizeof(GpuLocalShadowMask));
 	/**
 	 * @brief The shadow mask BuildDraws gives an object of this world bound from a_volumes, on the CPU (the build parity's reference):
 	 * the OR of the mask bits of the volumes whose sphere and active planes the bound reaches. a_landscape: the object's property has
@@ -696,7 +735,12 @@ namespace DCLF::Draws
 		// headers' Load4.
 		std::uint32_t ClassTableOffset() const { return (PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 15u) & ~15u; }
 		std::uint32_t ClassMapOffset() const { return ClassTableOffset() + (kClassHeaderWords + classes * kClassWords) * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
-		std::uint32_t Bytes() const { return ClassMapOffset() + (kClassHeaderWords + classMapWords) * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		// The colour pass's local shadow masks (BuildDrawsLatch::localShadowMaskOffset), 16-byte aligned.
+		std::uint32_t LocalShadowMaskOffset() const
+		{
+			return (ClassMapOffset() + (kClassHeaderWords + classMapWords) * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 15u) & ~15u;
+		}
+		std::uint32_t Bytes() const { return LocalShadowMaskOffset() + kLocalShadowMaskRegionBytes; }
 	};
 	// cullFlags: a clamped shadow view (0xE) pancakes casters in front of its near plane onto it (Utility.hlsl:
 	// RENDER_SHADOWMAP_CLAMPED), so the near plane rejects nothing.

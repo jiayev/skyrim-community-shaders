@@ -52,6 +52,25 @@ namespace DCLF::Diagnostics
 			}
 			const auto* words = static_cast<const std::uint32_t*>(mapped.pData);
 			const std::uint32_t stamp = snapshot.frame & 0x0FFFFFFFu;
+			// TEMP: the word's writers (BuildDrawsCS.hlsl, RecordWriter): per segment the stamp, scene list descriptor, input position, site.
+			const auto writersOf = [&](std::size_t a_object) -> std::string {
+				if (!snapshot.writersStaging)
+					return "; writers not copied";
+				D3D11_MAPPED_SUBRESOURCE writersMapped{};
+				if (FAILED(context->Map(snapshot.writersStaging.get(), 0, D3D11_MAP_READ, 0, &writersMapped)))
+					return "; writers not mapped";
+				D3D11_BUFFER_DESC writersDesc{};
+				snapshot.writersStaging->GetDesc(&writersDesc);
+				std::string text = fmt::format("; installed inputs SRV {}", snapshot.inputsSrv);
+				if ((a_object + 1) * 32 <= writersDesc.ByteWidth) {
+					const auto* w = static_cast<const std::uint32_t*>(writersMapped.pData) + a_object * 8;
+					for (std::uint32_t s = 0; s < 2; ++s, w += 4)
+						text += fmt::format("; {} writer: stamp {}{}, inputs SRV {}, input {}, site {}, phase {}, dispatch inputs {}", s ? "colour" : "depth", w[0],
+							w[0] == stamp ? " (this frame)" : "", w[1], w[2], w[3] & 0xF, (w[3] >> 4) & 0xF, w[3] >> 8);
+				}
+				context->Unmap(snapshot.writersStaging.get(), 0);
+				return text;
+			};
 			// TEMP: where the GPU's scene list (the inputs backing copied with the words) names an object.
 			const auto gpuInputs = [&](std::size_t a_object) -> std::string {
 				if (!snapshot.inputsStaging)
@@ -69,7 +88,7 @@ namespace DCLF::Diagnostics
 						at += fmt::format(" {}", i);
 				context->Unmap(snapshot.inputsStaging.get(), 0);
 				return fmt::format("; the GPU's inputs (backing {}, {} held; colour dispatched {}, depth {}) name it at:{}", snapshot.inputsGeneration, held,
-					snapshot.inputCount, snapshot.depthInputCount, at.empty() ? " none" : at);
+					snapshot.inputCount, snapshot.depthInputCount, at.empty() ? " none" : at) + writersOf(a_object);
 			};
 			D3D11_MAPPED_SUBRESOURCE frustumMapped{};
 			const std::uint32_t* frustum = nullptr;
@@ -480,8 +499,23 @@ namespace DCLF::Diagnostics
 						snapshot.claims[o] = set->PhasesOf(snapshot.geometry[o]);
 			}
 		}
+		// TEMP: who wrote each word (BuildDrawsCS.hlsl, RecordWriter).
+		if (a_resources->writers) {
+			if (auto* const writersView = diagnostics.setParityWriters.Of(a_resources->writers)) {
+				D3D11_BUFFER_DESC staging{};
+				writersView->GetDesc(&staging);
+				staging.Usage = D3D11_USAGE_STAGING;
+				staging.BindFlags = 0;
+				staging.MiscFlags = 0;
+				staging.StructureByteStride = 0;
+				staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+				if (SUCCEEDED(globals::d3d::device->CreateBuffer(&staging, nullptr, snapshot.writersStaging.put())))
+					context->CopyResource(snapshot.writersStaging.get(), writersView);
+			}
+		}
 		// TEMP: the GPU's scene list (the installed publication's inputs backing), copied after the colour epoch like the words.
 		if (const auto* versions = a_epoch.payloadVersions) {
+			snapshot.inputsSrv = (*versions)[Draws::PayloadPart::Inputs].srvIndex;
 			if (const auto& lease = versions->leases[static_cast<std::size_t>(Draws::PayloadPart::Inputs)]; lease && lease->buffer) {
 				static std::uint64_t wrappedGeneration = 0;
 				static winrt::com_ptr<ID3D11Buffer> wrapped;

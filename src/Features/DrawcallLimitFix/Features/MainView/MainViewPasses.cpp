@@ -451,6 +451,9 @@ namespace DCLF::Draws
 			for (std::uint32_t i = 0; i < resources->targetCount; ++i)
 				bindings.targets[i] = a_builder.RenderTarget(resources->native[i]).View();
 			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
+			// The shadow mask (their rows' t14), after the local shadow masks' resolve (Core's core.local-shadow-masks).
+			if (!depth && resources->shadowMask)
+				a_builder.ShaderResource(resources->shadowMask, noViews);
 			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
 			bindings.count = a_builder.IndirectArguments(resources->count);
 			if (depth) {
