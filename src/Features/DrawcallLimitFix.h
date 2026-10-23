@@ -30,6 +30,8 @@ struct DrawcallLimitFix : Feature
 	/** @brief SKSE kPostLoad (CS's message handler): SceneWriterFramework's provider election, when PostPostLoad will install DCLF. */
 	void PostLoad();
 	virtual void PostPostLoad() override;
+	/** @brief SKSE kDataLoaded: SceneWriterFramework's integrity check, once every plugin has installed its hooks. */
+	virtual void DataLoaded() override;
 	virtual void SetupResources() override;
 	virtual bool AppliesBootToggleLive() const override { return true; }
 	virtual void Reset() override;

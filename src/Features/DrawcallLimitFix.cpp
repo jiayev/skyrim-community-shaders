@@ -67,6 +67,38 @@ void DrawcallLimitFix::PostLoad()
 		DCLF::SceneWriter::Elect();
 }
 
+void DrawcallLimitFix::DataLoaded()
+{
+	// The patches another plugin rewrote after SWF's install, each logged with its module (SWF's lines), kept for the menu.
+	DCLF::SceneWriter::CheckIntegrity();
+}
+
+namespace
+{
+	// The scene writer framework's provider, its families and the integrity check's findings (the menu).
+	void DrawSceneWriterPanel()
+	{
+		if (!ImGui::TreeNodeEx("Scene writer framework"))
+			return;
+		ImGui::TextWrapped("Provider: %s", DCLF::SceneWriter::ProviderLine().c_str());
+		ImGui::TextWrapped("Hook families: %s", DCLF::SceneWriter::CapsLine().c_str());
+		const auto& changes = DCLF::SceneWriter::IntegrityChanges();
+		if (!DCLF::SceneWriter::IntegrityChecked())
+			ImGui::TextUnformatted("Integrity: not checked yet (it runs once the game's data has loaded).");
+		else if (changes.empty())
+			ImGui::TextUnformatted("Integrity: every patch is as installed.");
+		else {
+			ImGui::TextWrapped(
+				"Integrity: %zu patch(es) rewritten by another plugin after install. A later hook that calls on still reaches SWF's; "
+				"one that does not hides those writes from DCLF.",
+				changes.size());
+			for (const auto& change : changes)
+				ImGui::BulletText("%s +0x%x: now leads to %s", change.family.c_str(), change.offset, change.module.empty() ? "no module" : change.module.c_str());
+		}
+		ImGui::TreePop();
+	}
+}
+
 void DrawcallLimitFix::PostPostLoad()
 {
 	if (!SupportedGame()) {
@@ -481,6 +513,7 @@ void DrawcallLimitFix::DrawSettings()
 		ImGui::TextUnformatted("Unavailable this session: everything renders natively.");
 		ImGui::PopStyleColor();
 		ImGui::TextWrapped("Reason: %s", unavailableReason.c_str());
+		DrawSceneWriterPanel();
 		return;
 	}
 	if (!installed) {
@@ -492,15 +525,17 @@ void DrawcallLimitFix::DrawSettings()
 		if (ImGui::Button("Reload shaders"))
 			RenderGraphRuntime::RequestShaderReload();
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Builds every live render graph pipeline (DCLF's graphics pipelines, every compute program) again from Data/Shaders as it is now. The "
-								   "current pipelines draw until the new ones are swapped in at the graph's next build; one that fails to compile keeps its previous "
-								   "pipeline (the log names the error).");
+			ImGui::TextUnformatted(
+				"Builds every live render graph pipeline (DCLF's graphics pipelines, every compute program) again from Data/Shaders as it is now. The "
+				"current pipelines draw until the new ones are swapped in at the graph's next build; one that fails to compile keeps its previous "
+				"pipeline (the log names the error).");
 		ImGui::SameLine();
 		if (ImGui::Button("Render graph schedule"))
 			RenderGraphSchedule::OpenWindow();
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Opens the persistent schedule inspector: each executable's batches per queue, their passes, the barriers before each pass and "
-								   "every cross-queue wait with its cause. The graph traces its schedule while the window is open.");
+			ImGui::TextUnformatted(
+				"Opens the persistent schedule inspector: each executable's batches per queue, their passes, the barriers before each pass and "
+				"every cross-queue wait with its cause. The graph traces its schedule while the window is open.");
 	};
 	if (!switchedOn) {
 		ImGui::TextWrapped("Switched off with the feature's toggle: the game renders natively and DCLF does no frame work. Switch it back on to resume; no restart needed.");
@@ -511,6 +546,7 @@ void DrawcallLimitFix::DrawSettings()
 		return;
 	}
 	DCLF::Diagnostics::PlayerParity::DrawPanel();
+	DrawSceneWriterPanel();
 	// The live toggles, for A/B comparisons without a restart. They are the REQUESTED set; the render thread applies them at the start of the next frame (Toggles.h).
 	auto& toggles = DCLF::Toggles::Get().Requested();
 	const auto active = DCLF::ActiveToggles();
@@ -611,7 +647,7 @@ void DrawcallLimitFix::ApplySavedSettings()
 			applied += fmt::format("{}{} {}", applied.empty() ? "" : ", ", toggle.name, saved->get<bool>() ? 1 : 0);
 		}
 	if (const auto cull = savedSettings.find("CullMode"); cull != savedSettings.end() && cull->is_number_unsigned() && DCLF::SwitchValue(DCLF::Switch::Cull).empty() &&
-														   cull->get<std::uint32_t>() <= 2 && cull->get<std::uint8_t>() != requested.cullMode) {
+														  cull->get<std::uint32_t>() <= 2 && cull->get<std::uint8_t>() != requested.cullMode) {
 		requested.cullMode = cull->get<std::uint8_t>();
 		applied += fmt::format("{}cull {}", applied.empty() ? "" : ", ", requested.cullMode);
 	}
@@ -683,6 +719,7 @@ void DrawcallLimitFix::OnGraphSubmissionsRetired(std::uint64_t a_submissions)
 #	include "RenderGraph/RenderGraphRuntime.h"
 
 void DrawcallLimitFix::PostLoad() {}
+void DrawcallLimitFix::DataLoaded() {}
 void DrawcallLimitFix::PostPostLoad()
 {
 	unavailableReason = "built without the render graph (CS_HAS_DCLF off)";

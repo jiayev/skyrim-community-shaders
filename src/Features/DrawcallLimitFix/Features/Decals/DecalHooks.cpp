@@ -4,26 +4,21 @@
 
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/NodeCaptures.h"
 
 namespace DCLF::Features::Decals
 {
 	namespace
 	{
-		// A BGSDecalNode's decal array edits (AE 1.6.1170): append (FUN_1401fdfb0, from BSTempEffectGeometryDecal::Attach and simple
-		// decals' attach); erases: a decal's or reference's decals (FUN_1401fdc80 via FUN_1401fe020, from the decal manager), the
-		// geometry decal's update (FUN_1401fdcb0), erase-and-detach (FUN_1401fdd50, FUN_1401fde40). Node first, other arguments passed
-		// through; the node's decals after the call.
-		template <int N>
-		struct DecalArrayEdit
+		// A BGSDecalNode's decal array edits (SWF_HOOK_DECAL_ARRAY_EDIT, AE 1.6.1170): append (FUN_1401fdfb0, from
+		// BSTempEffectGeometryDecal::Attach and simple decals' attach); erases: a decal's or reference's decals (FUN_1401fdc80 via
+		// FUN_1401fe020, from the decal manager), the geometry decal's update (FUN_1401fdcb0), erase-and-detach (FUN_1401fdd50,
+		// FUN_1401fde40). The node is the first argument; its decals after the call.
+		void OnDecalArrayEdit(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
-			static void thunk(RE::NiAVObject* a_node, void* a_1, void* a_2, void* a_3)
-			{
-				func(a_node, a_1, a_2, a_3);
-				Extensions::PushNodeUpdate(a_node, Api::kNodeFieldCaptured);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+			Extensions::PushNodeUpdate(SceneWriter::Arg<RE::NiAVObject*>(a_event, 0), Api::kNodeFieldCaptured);
+		}
 
 		// A decal node's decals' 3D (BSTempEffect::Get3D, null for none) in array order; OnVisible culls them last to first, not its
 		// children.
@@ -42,12 +37,9 @@ namespace DCLF::Features::Decals
 
 	void InstallDecalHooks()
 	{
-		// A decal node's array edits: DecalArrayEdit.
-		stl::detour_thunk<DecalArrayEdit<0>>(REL::Offset(0x1fdfb0).address());
-		stl::detour_thunk<DecalArrayEdit<1>>(REL::Offset(0x1fdc80).address());
-		stl::detour_thunk<DecalArrayEdit<2>>(REL::Offset(0x1fdcb0).address());
-		stl::detour_thunk<DecalArrayEdit<3>>(REL::Offset(0x1fdd50).address());
-		stl::detour_thunk<DecalArrayEdit<4>>(REL::Offset(0x1fde40).address());
+		// A decal node's array edits: SceneWriterFramework's decal calls, which DrawcallLimitFix::PostPostLoad required.
+		if (!SceneWriter::SubscribeCall(SWF_HOOK_DECAL_ARRAY_EDIT, &OnDecalArrayEdit, SWF_PHASE_POST))
+			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused the decal array edits after reporting them installed");
 	}
 
 	void RegisterDecalCapture(Api::InstallContext& a_context)

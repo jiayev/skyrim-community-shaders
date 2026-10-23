@@ -1,21 +1,19 @@
 // Fades' engine events: the fade snaps and fade amounts engine channels (their queues), and the feature's early hook, the placement
-// snap (FadeSnap), which feeds the first.
+// snap (SceneWriterFramework's SWF_HOOK_FADE_SNAP), which feeds the first.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"  // the fade node's fields (kFadeStatics, kFadeState)
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/NodeCaptures.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"  // the fade node's fields (kFadeStatics, kFadeState)
 
 namespace DCLF::Features::Fades
 {
 	namespace
 	{
-		// AE 1.6.1170 (module offsets).
-		constexpr std::uintptr_t kFadeSnap = 0x147aa20;  // FUN_14147aa20: a fade node's placement snap
-
 		/**
 		 * @brief Placement snaps: FUN_14147aa20 (node, camera), from the cell attach (FUN_1402d1280, FUN_1402d5090), sets a fade
 		 * node's fade, faded-in flag, snap radius (+0x134) and last visible frame. A root listed before its snap is reseeded from
@@ -38,20 +36,14 @@ namespace DCLF::Features::Fades
 		// FUN_14147aa20: a fade node's placement snap. The cell attaches (FUN_1402d1280, FUN_1402d5090) call it after writing the
 		// fade statics (LOD type `and`/`or` at +0x153, range through FUN_14021f200), so its update carries them. Its key goes to the
 		// fade snaps channel's queue (fadeSnapEvents, drained by the channel).
-		struct FadeSnap
+		void OnFadeSnap(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
-			static std::uint64_t thunk(RE::NiAVObject* a_node, void* a_camera)
-			{
-				const auto result = func(a_node, a_camera);
-				if (a_node) {
-					fadeSnapEvents.Push(a_node);
-					if (netimmerse_cast<RE::BSFadeNode*>(a_node))
-						Extensions::PushNodeUpdate(a_node, Scene::kFadeStatics | Scene::kFadeState);
-				}
-				return result;
+			if (auto* node = SceneWriter::Arg<RE::NiAVObject*>(a_event, 0)) {
+				fadeSnapEvents.Push(node);
+				if (netimmerse_cast<RE::BSFadeNode*>(node))
+					Extensions::PushNodeUpdate(node, Scene::kFadeStatics | Scene::kFadeState);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+		}
 
 		std::size_t DrainFadeSnaps(Api::KeySink& a_sink)
 		{
@@ -91,9 +83,10 @@ namespace DCLF::Features::Fades
 
 	void InstallEarlyHooks()
 	{
-		// The snap's detour, where Core's scene events installed it (no other hook shares its site), and the note the primary cull's
+		// The snap (SceneWriterFramework's fade calls, which DrawcallLimitFix::PostPostLoad required), and the note the primary cull's
 		// install requires (Extensions::RootStatesInstalled): without Fades it stays off with its warning.
-		stl::detour_thunk<FadeSnap>(REL::Offset(kFadeSnap).address());
+		if (!SceneWriter::SubscribeCall(SWF_HOOK_FADE_SNAP, &OnFadeSnap, SWF_PHASE_POST))
+			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused the fade snap after reporting it installed");
 		Extensions::NoteRootStatesInstalled();
 	}
 }

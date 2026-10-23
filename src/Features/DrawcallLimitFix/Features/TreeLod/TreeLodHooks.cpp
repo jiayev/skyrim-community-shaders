@@ -1,8 +1,10 @@
-// Tree LOD's engine side: the hooks on the refill, block update, AddGroup and RemoveGroup (any thread), the source of the feature's tree
-// LOD channel (events onto events through Push, which the render thread's mirror drains: TreeLodMirror.h).
+// Tree LOD's engine side: the refill, AddGroup and RemoveGroup (SceneWriterFramework's tree LOD calls) and the block update's call (any
+// thread), the source of the feature's tree LOD channel (events onto events through Push, which the render thread's mirror drains:
+// TreeLodMirror.h).
 
-#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
 
 #include <algorithm>
@@ -17,14 +19,10 @@ namespace DCLF::Features::TreeLod
 		// The family's records (its layout: TreeInstancesLayout.h) and engine shapes.
 		namespace Layout = ::DCLF::TreeInstances;
 
-		constexpr std::uintptr_t kRefill = 0x504a40;            // FUN_140504a40(block, group)
-		constexpr std::uintptr_t kRefillSites[] = { 0x5037f6,   // the block's attach (FUN_140503630)
-			0x503fbf };                                         // its visibility update (FUN_140503f70)
-		constexpr std::uintptr_t kBlockUpdate = 0x503f70;       // FUN_140503f70(block): refills the groups not up to date
-		constexpr std::uintptr_t kBlockUpdateSite = 0x5108ff;   // its one call, in the node update (FUN_140510730)
-		constexpr std::uintptr_t kAddGroup = 0xe1d7d0;          // BSMultiStreamInstanceTriShape::AddGroup, vfunc 0x1E0
-		constexpr std::uintptr_t kRemoveGroup = 0xe1e2e0;       // RemoveGroup, vfunc 0x1E8
-		constexpr std::size_t kAddGroupSlot = 0x1E0 / 8, kRemoveGroupSlot = 0x1E8 / 8;
+		// The refill (FUN_140504a40(block, group), at the block's attach and its visibility update) and the instance shape's AddGroup and
+		// RemoveGroup (vfuncs 0x1E0, 0x1E8) are SceneWriterFramework's tree LOD calls.
+		constexpr std::uintptr_t kBlockUpdate = 0x503f70;      // FUN_140503f70(block): refills the groups not up to date
+		constexpr std::uintptr_t kBlockUpdateSite = 0x5108ff;  // its one call, in the node update (FUN_140510730)
 		// The tree types (the attach's and the refill's): an array of 0x28-byte entries (width +4, height +8, base shape +0x20)
 		// and their count; a group's type past the count takes the first entry.
 		constexpr std::uintptr_t kTreeTypes = 0x314d170, kTreeTypeCount = 0x314d180;
@@ -38,60 +36,56 @@ namespace DCLF::Features::TreeLod
 		};
 		thread_local Refilling refilling;
 
-		struct Refill
+		// The refill: PRE saves the outer refill's block and group (scratch[0], [1]) and sets this one's; POST restores them.
+		void OnRefill(const SWF_EventHeader* a_event, std::uintptr_t* a_scratch, void*)
 		{
-			static void thunk(void* a_block, void* a_group)
-			{
-				const auto saved = std::exchange(refilling, Refilling{ a_block, a_group });
-				func(a_block, a_group);
-				refilling = saved;
+			if (SceneWriter::IsPre(a_event)) {
+				a_scratch[0] = reinterpret_cast<std::uintptr_t>(refilling.block);
+				a_scratch[1] = reinterpret_cast<std::uintptr_t>(refilling.group);
+				refilling = { SceneWriter::Arg<const void*>(a_event, 0), SceneWriter::Arg<const void*>(a_event, 1) };
+				return;
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+			refilling = { reinterpret_cast<const void*>(a_scratch[0]), reinterpret_cast<const void*>(a_scratch[1]) };
+		}
 
-		struct AddGroup
+		// AddGroup, after the call (its data is the caller's, alive until it returns).
+		void OnAddGroup(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
-			static std::uint32_t thunk(RE::BSMultiStreamInstanceTriShape* a_shape, std::uint32_t a_count, const std::uint16_t* a_data, std::uint32_t a_shorts, float a_radius)
-			{
-				const auto index = func(a_shape, a_count, a_data, a_shorts, a_radius);
-				if (refilling.group && a_shorts == Layout::kInstanceShorts) {
-					Event event{ a_shape, refilling.block, refilling.group, std::vector<Layout::Instance>(a_count), Event::Kind::Add };
-					if (a_count)
-						std::memcpy(event.instances.data(), a_data, a_count * sizeof(Layout::Instance));
-					// The shape's placement (AddGroup's bound uses its local translation), its type's extent, and its mesh, whose
-					// buffers are held until the render thread leases them.
-					const auto& translate = a_shape->local.translate;
-					event.translate = { translate.x, translate.y, translate.z };
-					const auto* types = Engine::Global<const std::byte*>(kTreeTypes);
-					const auto type = static_cast<std::uint8_t>(static_cast<const RE::BGSDistantTreeBlock::TreeGroup*>(refilling.group)->treeType);
-					if (types) {
-						const auto* entry = types + (type < Engine::Global<std::uint32_t>(kTreeTypeCount) ? type * kTreeTypeBytes : 0);
-						event.extent = std::max(*reinterpret_cast<const float*>(entry + 4), *reinterpret_cast<const float*>(entry + 8));
-					}
-					if (const auto* data = a_shape->GetGeometryRuntimeData().rendererData) {
-						event.mesh.key = data;
-						event.mesh.vertexBuffer.copy_from(reinterpret_cast<ID3D11Buffer*>(data->vertexBuffer));
-						event.mesh.indexBuffer.copy_from(reinterpret_cast<ID3D11Buffer*>(data->indexBuffer));
-						event.mesh.vertexDesc = std::bit_cast<std::uint64_t>(data->vertexDesc);
-						event.mesh.indexCount = static_cast<std::uint32_t>(static_cast<RE::BSTriShape*>(a_shape)->GetTrishapeRuntimeData().triangleCount) * 3;
-					}
-					Push(std::move(event));
+			auto* shape = SceneWriter::Arg<RE::BSMultiStreamInstanceTriShape*>(a_event, 0);
+			const auto count = SceneWriter::Arg<std::uint32_t>(a_event, 1);
+			const auto* data = SceneWriter::Arg<const std::uint16_t*>(a_event, 2);
+			const auto shorts = SceneWriter::Arg<std::uint32_t>(a_event, 3);
+			if (refilling.group && shorts == Layout::kInstanceShorts) {
+				Event event{ shape, refilling.block, refilling.group, std::vector<Layout::Instance>(count), Event::Kind::Add };
+				if (count)
+					std::memcpy(event.instances.data(), data, count * sizeof(Layout::Instance));
+				// The shape's placement (AddGroup's bound uses its local translation), its type's extent, and its mesh, whose
+				// buffers are held until the render thread leases them.
+				const auto& translate = shape->local.translate;
+				event.translate = { translate.x, translate.y, translate.z };
+				const auto* types = Engine::Global<const std::byte*>(kTreeTypes);
+				const auto type = static_cast<std::uint8_t>(static_cast<const RE::BGSDistantTreeBlock::TreeGroup*>(refilling.group)->treeType);
+				if (types) {
+					const auto* entry = types + (type < Engine::Global<std::uint32_t>(kTreeTypeCount) ? type * kTreeTypeBytes : 0);
+					event.extent = std::max(*reinterpret_cast<const float*>(entry + 4), *reinterpret_cast<const float*>(entry + 8));
 				}
-				return index;
+				if (const auto* renderer = shape->GetGeometryRuntimeData().rendererData) {
+					event.mesh.key = renderer;
+					event.mesh.vertexBuffer.copy_from(reinterpret_cast<ID3D11Buffer*>(renderer->vertexBuffer));
+					event.mesh.indexBuffer.copy_from(reinterpret_cast<ID3D11Buffer*>(renderer->indexBuffer));
+					event.mesh.vertexDesc = std::bit_cast<std::uint64_t>(renderer->vertexDesc);
+					event.mesh.indexCount = static_cast<std::uint32_t>(static_cast<RE::BSTriShape*>(shape)->GetTrishapeRuntimeData().triangleCount) * 3;
+				}
+				Push(std::move(event));
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+		}
 
-		struct RemoveGroup
+		void OnRemoveGroup(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
-			static void thunk(RE::BSMultiStreamInstanceTriShape* a_shape, std::uint32_t a_index)
-			{
-				func(a_shape, a_index);
-				if (Layout::IsEngineShape(a_shape))
-					Push(Event{ a_shape, nullptr, nullptr, {}, Event::Kind::Remove });
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+			auto* shape = SceneWriter::Arg<RE::BSMultiStreamInstanceTriShape*>(a_event, 0);
+			if (Layout::IsEngineShape(shape))
+				Push(Event{ shape, nullptr, nullptr, {}, Event::Kind::Remove });
+		}
 
 		/*
 		 * The block's update, at its one call (dclf-open-defects.md, "Tree LOD instances the engine leaves hidden after
@@ -128,21 +122,16 @@ namespace DCLF::Features::TreeLod
 	void InstallHooks()
 	{
 		auto at = [](std::uintptr_t a_offset) { return REL::Offset(a_offset).address(); };
-		bool ok = true;
-		for (const auto site : kRefillSites)
-			ok = ok && Engine::CallsTo(at(site), at(kRefill));
-		ok = ok && Engine::CallsTo(at(kBlockUpdateSite), at(kBlockUpdate));
-		const auto* vtable = reinterpret_cast<const std::uintptr_t*>(RE::VTABLE_BSMultiStreamInstanceTriShape[0].address());
-		ok = ok && vtable[kAddGroupSlot] == at(kAddGroup) && vtable[kRemoveGroupSlot] == at(kRemoveGroup);
-		if (!ok) {
-			logger::warn("[DCLF] tree LOD: the refill's or the block update's calls, or the instance shape's group slots differ; tree LOD is not mirrored");
+		if (!SceneWriter::Has(SWF_CAP_TREE_LOD_CALLS) || !Engine::CallsTo(at(kBlockUpdateSite), at(kBlockUpdate))) {
+			logger::warn("[DCLF] tree LOD: the scene writer framework has no tree LOD calls, or the block update's call differs; tree LOD is not mirrored");
 			return;
 		}
-		for (const auto site : kRefillSites)
-			stl::write_thunk_call<Refill>(at(site));
+		const bool subscribed = SceneWriter::SubscribeCall(SWF_HOOK_TREE_LOD_REFILL, &OnRefill) &&
+		                        SceneWriter::SubscribeCall(SWF_HOOK_INSTANCE_ADD_GROUP, &OnAddGroup, SWF_PHASE_POST) &&
+		                        SceneWriter::SubscribeCall(SWF_HOOK_INSTANCE_REMOVE_GROUP, &OnRemoveGroup, SWF_PHASE_POST);
+		if (!subscribed)
+			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused the tree LOD calls after reporting them installed");
 		stl::write_thunk_call<BlockUpdate>(at(kBlockUpdateSite));
-		stl::write_vfunc<kAddGroupSlot, AddGroup>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
-		stl::write_vfunc<kRemoveGroupSlot, RemoveGroup>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 		installed = true;
 	}
 }
