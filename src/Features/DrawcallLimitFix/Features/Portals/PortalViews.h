@@ -257,8 +257,9 @@ namespace DCLF
 		bool AddBox(Program& a_program, const void* a_box);
 		void AddPlane(Program& a_program, const void* a_plane);
 		/**
-		 * @brief The portal parity's (PortalViewsView): unbound space's top program built again with every graph occluder's state as the
-		 * engine holds it (+0x40) instead of DCLF's (and a judged plane's edge flags, +0xF0), DCLF's shape scratch kept as it was. Only for a walk that started in unbound space.
+		 * @brief The portal parity's (PortalViewsView): unbound space's top program built again as the engine's walk builds it, with every
+		 * graph occluder's state as the engine holds it (+0x40) instead of DCLF's (and a judged plane's edge flags, +0xF0) and an untested
+		 * plane judged by the walk's WithinFrustumDistFirst, DCLF's shape scratch kept as it was. Only for a walk that started in unbound space.
 		 */
 		Program UnboundWithEngineStates(const void* a_graph);
 
@@ -272,6 +273,7 @@ namespace DCLF
 		static bool AllCornersInside(const Quad& a_quad, const PlaneSet& a_set);
 		bool PortalVsSetEdges(const void* a_portal, const PlaneSet& a_set);
 		bool WithinFrustumDistFirst(const void* a_quad, const PlaneSet& a_planes, const Vec3& a_eye);
+		bool PlaneJudged(const void* a_plane);
 		bool BoxInView(const void* a_box) const;
 		bool BoxSilhouette(const void* a_box, BoxScratch& a_scratch);
 		bool BoxRefine(const void* a_box, BoxScratch& a_scratch) const;
@@ -287,6 +289,7 @@ namespace DCLF
 		ankerl::unordered_dense::map<const void*, Flags> edgeFlags;
 		ankerl::unordered_dense::map<const void*, std::uint32_t> states;
 		ankerl::unordered_dense::map<const void*, BoxScratch> boxes;
+		bool engineWalkTest = false;  // UnboundWithEngineStates: an untested plane judged by the engine's walk (WithinFrustumDistFirst)
 		ankerl::unordered_dense::set<const void*> crossed;                   // portals keyed this frame
 		Program temp;                                                        // the engine's temp frustum (0x14332a710)
 		const void* edgeGraph = nullptr;                                     // the graph edgeFlags are for
