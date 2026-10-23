@@ -153,9 +153,6 @@ namespace DCLF
 		std::uint32_t slot = kNoObjectSlot;
 		std::uint32_t pass = 0;   // its pipeline's pass descriptor
 		bool member = false;      // a resident record's (SampleShading's a_member)
-		// The shading fields it owns (SceneTables::ShadingFieldsOwned, a bit by Api::ShadingRowField: a member of the field's class, its
-		// value the field's capture's); every other field zero.
-		std::uint8_t fieldsOwned = 0;
 	};
 
 	/**

@@ -291,8 +291,10 @@ namespace DCLF::Diagnostics
 						held.emissiveMult);
 				}
 			}
-			// The wetness, as the frame's start captured it: Integrations/AdvancedSkin's.
-			Integrations::AdvancedSkin::CheckRowWetness(tables, *rows, named);
+			// The wetness, as the frame's start captured it: Integrations/AdvancedSkin's. Against the frame's tables (the installed
+			// publication's), whose membership writes are the ones the capture has: the coordinator's may hold a member a newer
+			// publication brings.
+			Integrations::AdvancedSkin::CheckRowWetness(Scene::FrameView::Get().GetTables(), *rows, named);
 		}
 
 		void OnPrepassBegin(const On<ScenePoint::PrepassConstantsBegin>&)

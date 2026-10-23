@@ -268,8 +268,6 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     checks a window). The table rewrites an entry only when its verdict or signature changes (`UpdateLightCandidates`). Before
     the change, every load rebuilt the tables from nothing. The run before the change was not repeated. Nothing else failed in
     that run, and the death-reload run (die3) showed no such failure.
--   **SE 1.5.97 route: skin wetness rows (`shading ... wetness <- DIFFER`).** Two windows a run, 1-2 of about 500 actor meshes. Not
-    investigated; the route's weather moves the wetness.
 -   **Tree wind parity: TreeParams of zeros (`<- TREE WIND`).** One window in most SE runs (4-18 of 64 members; TreeParams (0, 0, 0, 0),
     once a reused slot's other values). The check reads the buffer the frame before wrote (the one this frame's draws read) for the
     current members: likely members whose entry that dispatch did not write yet (a tree joined or its slot reused this frame), drawn
