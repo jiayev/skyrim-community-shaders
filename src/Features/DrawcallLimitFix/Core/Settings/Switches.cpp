@@ -80,6 +80,8 @@ namespace DCLF
 			// Integrations/TerrainBlending's CS_DCLF_TB_TERRAIN, before Features/Forward's CS_DCLF_FORWARD; then Features/Effects'
 			// CS_DCLF_EFFECTS after it, and Features/Forward's CS_DCLF_REFRACTION, before CS_DCLF_PROJECTED_UV.)
 			{ ProjectedUv, "CS_DCLF_PROJECTED_UV", F, Reduced::UnlessOne, false, "0: projected-UV objects stay native (live toggle's seed)" },
+			{ PlainSnowSparkle, "CS_DCLF_PLAIN_SNOW_SPARKLE", F, Reduced::UnlessOne, false,
+				"0: a snow layer whose material is the plain class draws without sparkle instead of the Snow class's default (live toggle's seed)" },
 			// (Features/Lod's CS_DCLF_LOD_OBJECTS and CS_DCLF_LOD_TERRAIN, then Features/TreeLod's CS_DCLF_LOD_TREES, then Features/Lod's
 			// CS_DCLF_LOD_GATES, are listed here, before CS_DCLF_SHADOWS.)
 			{ Shadows, "CS_DCLF_SHADOWS", F, Reduced::UnlessOne, false, "0: DCLF does not draw the shadow views (live toggle's seed)" },

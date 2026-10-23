@@ -564,17 +564,6 @@ namespace DCLF::Scene
 					return false;
 				}
 				++ms.uncovered;
-				{
-					// TEMP (SE 1.5.97 MATERIAL PORT): each distinct uncovered class and pass named once.
-					static ankerl::unordered_dense::set<std::uint64_t> named;
-					const auto& snapshot = held->second.held->snapshot;
-					const std::uint64_t key = (reinterpret_cast<std::uintptr_t>(snapshot.vtable) << 16) ^ (std::uint64_t(snapshot.feature) << 40) ^ descriptors.pass ^
-					                          (std::uint64_t(snapshot.materialClass) << 56) ^ (std::uint64_t(snapshot.port) << 60);
-					if (named.size() < 32 && named.insert(key).second)
-						logger::info("[DCLF] uncovered material (TEMP): vtable image+{:#x} feature {} class {} port {} size {}, pass descriptor {:#x}",
-							reinterpret_cast<std::uintptr_t>(snapshot.vtable) - REL::Module::get().base(), snapshot.feature, snapshot.materialClass, snapshot.port,
-							snapshot.size, descriptors.pass);
-				}
 				return false;
 			}
 			++ms.made;

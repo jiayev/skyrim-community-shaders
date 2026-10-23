@@ -28,6 +28,9 @@ namespace DCLF::MaterialPort
 		std::uint8_t techniqueByte12 = 0;
 		std::uint8_t techniqueByte7 = 0;
 
+		// D: SparkleParams for a plain material at MultiIndexSparkle (ToggleSet::plainSnowSparkle): the Snow class's default, else zeros.
+		bool plainSnowSparkle = true;
+
 		// G: the texture-transform buffer the frame reads (0x142033180, a dword, flipped by Main::Update): VS 11's pair.
 		std::uint32_t textureTransformBuffer = 0;
 

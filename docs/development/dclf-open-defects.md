@@ -268,11 +268,6 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     checks a window). The table rewrites an entry only when its verdict or signature changes (`UpdateLightCandidates`). Before
     the change, every load rebuilt the tables from nothing. The run before the change was not repeated. Nothing else failed in
     that run, and the death-reload run (die3) showed no such failure.
--   **SE 1.5.97 route: Lighting materials the port leaves native (`<- MATERIAL PORT`).** Three consecutive windows at the same point
-    of the snow route (45, 122 and 11 uncovered, identical in two runs): plain `BSLightingShaderMaterial` (160 bytes) drawn with the
-    MultiIndexSparkle technique (pass descriptor 0xe008201). SetupMaterial (AE 0x1414dc310, case 0xe) reads SparkleParams at
-    +0xa0..+0xac unconditionally, past the plain material's end; the port refuses that read, so those objects stay the engine's.
-    Content of the route (snow), not shown to be SE's.
 -   **SE 1.5.97 route: skin wetness rows (`shading ... wetness <- DIFFER`).** Two windows a run, 1-2 of about 500 actor meshes. Not
     investigated; the route's weather moves the wetness.
 -   **Tree wind parity: TreeParams of zeros (`<- TREE WIND`).** One window in most SE runs (4-18 of 64 members; TreeParams (0, 0, 0, 0),

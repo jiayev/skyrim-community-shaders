@@ -32,6 +32,7 @@ namespace DCLF
 		Precompile,
 		Cull,
 		ProjectedUv,
+		PlainSnowSparkle,
 		Shadows,
 		PrimaryExclude,
 		OrgEpochs,

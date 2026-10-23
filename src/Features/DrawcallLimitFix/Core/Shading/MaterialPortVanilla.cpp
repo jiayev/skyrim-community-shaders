@@ -6,6 +6,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
@@ -378,6 +379,16 @@ namespace DCLF::MaterialPort
 				p.PSCopy(kPSEnvmapData, 0, 0xc8);
 				break;
 			case 0xe:  // MultiIndexSparkle: SparkleParams = +0xa0..+0xac
+				// The engine reads them on any class. A plain material (NIF shader type 0 under kMultiIndexSnow | kProjectedUV: vanilla
+				// glaciers and ice; the loader makes the Snow class only for types 10 and 0xe) ends at 0xa0, so the engine reads the
+				// next heap object there, and its sparkle is all but always off by accident (dclf-validation.md, "In the engine"). DCLF
+				// gives it the Snow class's constructor default (1, 1, 1, 1; FUN_1412d38f0) or, with the toggle off, zeros.
+				if (p.c.size < 0xb0) {
+					const float sparkle = a_frame.plainSnowSparkle ? 1.0f : 0.0f;
+					for (std::uint32_t i = 0; i < 4; ++i)
+						p.PSFloat(kPSSparkleParams, i, sparkle);
+					break;
+				}
 				p.PSCopy(kPSSparkleParams, 2, 0xa8);
 				p.PSCopy(kPSSparkleParams, 3, 0xac);
 				p.PSCopy(kPSSparkleParams, 1, 0xa4);
@@ -478,6 +489,7 @@ namespace DCLF::MaterialPort
 
 		frame.techniqueByte12 = readByte(kTechniqueByte12);
 		frame.techniqueByte7 = readByte(kTechniqueByte7);
+		frame.plainSnowSparkle = ActiveToggles().plainSnowSparkle;
 		readBytes(&frame.textureTransformBuffer, kTextureTransformBuffer, sizeof(std::uint32_t));
 		frame.lodTexParamsZ = readByte(kLodTexParamsZ);
 		frame.landSnowZ = readByte(kLandSnowZ);
