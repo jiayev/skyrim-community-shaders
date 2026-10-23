@@ -1772,7 +1772,6 @@ namespace DCLF
 		std::vector<std::vector<std::uint32_t>> changed((items.size() + kGrain - 1) / kGrain);
 		std::vector<std::vector<std::size_t>> refusedItems(changed.size());
 		std::atomic<std::uint64_t> refusedHere{ 0 };
-		const auto fields = Extensions::ShadingFields();
 		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.Shading", items.size(), kGrain, [&](std::size_t a_begin, std::size_t a_end) {
 			ZoneScopedN("CS.DCLF.FrameValues.Shading");
 			FrameGlobals::Scope scope(a_job.globals);  // the features' globals (SampleShading: the shading contributions)
@@ -1788,12 +1787,8 @@ namespace DCLF
 				}
 				BindlessShading row = out[item.slot];
 				SampleShading(*item.property.get(), item.pass, item.member, row);
-				// A shading field is its owner's (from the capture, below): zero for a slot it names no member (only actors have wetness).
-				for (const auto& field : fields) {
-					const auto which = static_cast<std::uint32_t>(field.contribution.field);
-					if (!(item.fieldsOwned & (1u << which)))
-						std::memset(reinterpret_cast<std::byte*>(&row) + kShadingFieldRanges[which].offset, 0, kShadingFieldRanges[which].bytes);
-				}
+				// The shading fields (SampleShading leaves them) are the captures' alone (below): their values, and Core's zeros for a slot that
+				// left its class (Extensions::CaptureShadingFields), in membership order.
 				if (std::memcmp(&row, &out[item.slot], sizeof(row)) != 0) {
 					out[item.slot] = row;
 					mine.push_back(item.slot);

@@ -158,15 +158,6 @@ namespace DCLF
 					return true;
 			return false;
 		}
-		/** @brief The shading fields a_slot owns (a bit by Api::ShadingRowField): each whose members' class has it as a member. */
-		std::uint8_t ShadingFieldsOwned(std::uint32_t a_slot) const
-		{
-			std::uint8_t owned = 0;
-			for (const auto& entry : Extensions::ShadingFields())
-				if (classMembers[static_cast<std::size_t>(entry.contribution.members)].Grouped(a_slot))
-					owned |= static_cast<std::uint8_t>(1u << static_cast<std::uint32_t>(entry.contribution.field));
-			return owned;
-		}
 		// Multi-partition skins (CS_DCLF_SKIN_PARTITIONS): bit i draws partition i along nextPartition from geometryIndex; 0 for
 		// one geometry. A LOD skin's (kMeshLOD under a fade node) is the cumulative superset (row 3), narrowed by the draw.
 		std::vector<std::uint16_t> skinPartitions;            // parallel to objects

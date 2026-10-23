@@ -412,7 +412,6 @@ namespace DCLF::Scene
 		item.slot = a_slot;
 		item.pass = tables.pipelines[tables.objects[a_slot].pipelineIndex].passDescriptor;
 		item.member = a_member;
-		item.fieldsOwned = tables.ShadingFieldsOwned(a_slot);
 	}
 
 	void Coordinator::NameShadingKeys(const std::vector<const void*>& a_keys, std::vector<std::uint32_t>* a_slots)
@@ -426,7 +425,6 @@ namespace DCLF::Scene
 			RE::BSShaderProperty* property = nullptr;  // none: NameShading names nothing (free, unbound or propertyless)
 			std::uint32_t pass = 0;
 			bool member = false;
-			std::uint8_t fieldsOwned = 0;
 		};
 		constexpr std::size_t kGrain = 64;
 		std::vector<std::vector<Named>> prepared((a_keys.size() + kGrain - 1) / kGrain);
@@ -450,7 +448,6 @@ namespace DCLF::Scene
 						if ((named.property = SlotProperty(slot))) {
 							named.pass = tables.pipelines[tables.objects[slot].pipelineIndex].passDescriptor;
 							named.member = IsResidentSlot(slot);
-							named.fieldsOwned = tables.ShadingFieldsOwned(slot);
 						}
 					}
 				}
@@ -475,7 +472,6 @@ namespace DCLF::Scene
 					item.slot = slot;
 					item.pass = named.pass;
 					item.member = named.member;
-					item.fieldsOwned = named.fieldsOwned;
 				}
 				// The extras' static rows read the same property fields (ProjectedUV's parameters and colour).
 				if ((tables.objects[slot].flags & (kObjectProjectedUV | kObjectLandBlend)) && WriteObjectExtras(slot))

@@ -68,12 +68,12 @@ namespace DCLF::Api
 	 *
 	 * - name: what the registration's failures call it.
 	 * - field: the row's field (one contribution's).
-	 * - members: the entry class (not None) whose members are the field's slots (Core's ShadingItem::fieldsOwned names them).
+	 * - members: the entry class (not None) whose members are the field's slots (Core zeroes a slot's value when it leaves the class).
 	 * - membership: render thread, at the frame's start as it takes each publication's deltas (FrameView::HandOverAtFrameStart), in the
 	 *   publications' order: the class's membership writes, for the feature's own index of owners (none: a publication without writes).
 	 * - capture: render thread, at the frame's start (FrameDriver, before FrameValues::Kick), in registration order: the members' values
 	 *   (ShadingFieldCapture::Put), what changed since the last capture and every member that joined. A value put is the slot's until the
-	 *   next put, or until a sample of the slot's shading named it no member (zero).
+	 *   next put, or until the slot leaves the class (Core puts zero then, before the capture's values, in membership order).
 	 */
 	struct ShadingFieldContribution
 	{
