@@ -386,7 +386,7 @@ times in 1,200 steady frames.
     geometry's dismember or skin, reclassifies its dependents (`ApplyMotionUpdate`). A sun entry node's membership change takes its
     other dependents (`rootDependents`).
 -   **Fade resets**: 11 inline stores of `currentFade` outside any hooked function (cell and sky placement among them) are patched
-    (`InstallFadeResetStores`), so the mirror's `currentFade` misses none. A placement snap (`FUN_14147aa20`) is an event
+    by SceneWriterFramework (`SWF_EVENT_FADE_RESET`, `OnFadeReset`), so the mirror's `currentFade` misses none. A placement snap (`FUN_14147aa20`) is an event
     (`fadeSnapEvents`).
 -   **Materials**: a write captures the material ([Material writes](#material-writes)).
 -   Moves, hidden bits and switch selections, below.
@@ -441,11 +441,12 @@ moves is actor-owned, controller-animated or Havok-simulated: the movable set (`
 
 ### Hidden bits by event
 
-Every store that can change `kHidden` (bit 0 of `NiAVObject::flags`, `+0xF4`) is an event (`Features/HiddenNodes/HiddenStores.cpp`).
+Every store that can change `kHidden` (bit 0 of `NiAVObject::flags`, `+0xF4`) is an event: SceneWriterFramework's
+`SWF_EVENT_HIDDEN`, which `Features/HiddenNodes/HiddenStores.cpp` subscribes to (see [Scene writer framework](#scene-writer-framework)).
 -   About 464 sites are patched with a call to a stub: every `or` that may set bit 0, every `and` that may clear it, every `mov` to
-    `[reg+0xf4]` (two RSP-based sites left out). The stub reads the dword, runs the store, pushes the base register as a key when
-    bit 0 changed, and re-runs an idempotent `or`/`and`; a `mov` is never re-run. The stubs live just past the module image (a
-    `call rel32` must reach them). A false positive is a key no entry lists, never dereferenced. There is no off switch.
+    `[reg+0xf4]` (two RSP-based sites left out). The stub reads the dword, runs the store, fires the event with the base register as
+    the key when bit 0 changed, and re-runs an idempotent `or`/`and`; a `mov` is never re-run. The stubs live just past the module
+    image (a `call rel32` must reach them). A false positive is a key no entry lists, never dereferenced. There is no off switch.
 -   Every entry lists its node chain once, at classification, from the leaf up to (not including) its category node
     (`ListHiddenChain`, `hiddenDependents`). A hidden-bit event on a listed node reclassifies the entries under it
     (`DrainHiddenEvents`); an event on a category node takes every entry under it. Measured in Whiterun: actor frame verdicts taken
@@ -462,10 +463,23 @@ Every store that can change `kHidden` (bit 0 of `NiAVObject::flags`, `+0xF4`) is
 -   A hidden actor part, and a fading non-member, blocks its light and sun entry's exclusion (`Eligibility.h`): the behaviour graph
     shows and hides an actor's parts during `Main::Draw`. A hidden static's geometry is left out of its entry
     (`Eligibility::PrimaryVerdict`), and its unhiding is an event that reclassifies it.
--   The same stubs carry the LOD gates' show veto (`Api::ShowVeto`, [LOD gates](#lod-gates-the-scene-side)).
+-   The same stubs carry the LOD gates' show veto (`Api::ShowVeto`, [LOD gates](#lod-gates-the-scene-side)), registered as SWF's
+    show filter (`SWF_FILTER_SHOW`).
 -   Not hidden members keeping their records with a per-object hidden bit: the bit would travel in the same publication as
     membership, so it could not be faster, and a hidden member keeping its claim would leave a shown object undrawn until the
     publication.
+
+### Scene writer framework
+
+The engine's patched stores (hidden bits, switch indices, fade resets) belong to SceneWriterFramework (`extern/SceneWriterFramework`,
+`Core/Engine/Capture/SceneWriter.h`), not to DCLF. Every plugin that embeds it, or installs its standalone DLL, sees the same writes.
+-   Each copy of SWF in the process is a candidate. At SKSE `kPostLoad`, CS runs the election if DCLF will install
+    (`DrawcallLimitFix::PostLoad`). The newest copy that supports the game patches the stores and serves the API to everyone.
+-   The provider checks every site's bytes before it writes any of them. A family whose sites another plugin changed is not
+    installed, and its capability bit stays clear.
+-   `PostPostLoad` requires `SceneWriter::kRequiredCaps` (switch index and fade reset). Without them DCLF stays off and the game
+    renders natively. Hidden events are optional, as before (`Scene::hiddenEventsInstalled`).
+-   SWF dispatches events synchronously on the storing thread, so DCLF's handlers push the same mirror updates its own stubs pushed.
 
 ### Switch nodes
 

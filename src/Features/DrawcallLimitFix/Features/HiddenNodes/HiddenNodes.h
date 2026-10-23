@@ -1,16 +1,17 @@
 #pragma once
 
 // Hidden nodes (dclf-architecture.md, "Hidden bits by event"): the source of the hidden events - every engine store that can change
-// NiAVObject::flags' kHidden bit patched to push the node's mirror update with its site (HiddenStores.cpp, at the feature's early hooks:
-// in right after Core's scene events, before Core's engine side reads HiddenStoresLive) - and CS_DCLF_HIDDEN_WATCH, the hardware watch
-// that names a store the source misses (Diagnostics/HiddenWatch.cpp: its switch, its observer and its report lines).
+// NiAVObject::flags' kHidden bit, patched by SceneWriterFramework, pushing the node's mirror update with its site (HiddenStores.cpp, at
+// the feature's early hooks: in right after Core's scene events, before Core's engine side reads HiddenStoresLive) - and
+// CS_DCLF_HIDDEN_WATCH, the hardware watch that names a store the source misses (Diagnostics/HiddenWatch.cpp: its switch, its observer
+// and its report lines).
 //
 // Core keeps the hidden-bit vocabulary every object is judged by: the channel (Core/Engine/Capture/SceneEvents.h: Scene::PushHiddenUpdate,
 // hiddenEventsInstalled, the reserved sites' Extensions::PushReservedHidden; the mirror update's hiddenSite), the coordinator's chains and
 // their drain (hiddenDependents, DrainHiddenEvents: the walk's dependency tracking for the Hidden verdict, as propertyDependents is for the
 // property events), the frame's capture of the culls' bits (FrameGlobals::cullHidden), the Hidden verdict itself (Coordinator::ClassifyFrame,
-// HiddenForWalk), and the show veto the source's show stubs call through Core's cells (Api::ShowVeto, Extensions::RegisteredShowVeto: the
-// LOD gates'). Without the source the walk retakes every frame verdict, and neither the LOD gates nor the kept scene lists engage. Included
+// HiddenForWalk), and the show veto SWF's show stores ask through the source's filter (SWF_FILTER_SHOW; Api::ShowVeto,
+// Extensions::RegisteredShowVeto: the LOD gates'). Without the source the walk retakes every frame verdict, and neither the LOD gates nor the kept scene lists engage. Included
 // by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
@@ -31,12 +32,12 @@ namespace DCLF::Features::HiddenNodes
 
 	// HiddenStores.cpp: the source.
 	/**
-	 * @brief Patches the stores (after checking every site's bytes; none is patched when one differs) and, patched, marks Core's channel
-	 * installed (Scene::hiddenEventsInstalled), with its sites noted (Extensions::NoteHiddenSourceSites: the reserved sites follow them).
-	 * The render (main) thread at PostPostLoad, the feature's early hooks.
+	 * @brief Subscribes to SceneWriterFramework's hidden stores and registers the show filter and, subscribed, marks Core's channel
+	 * installed (Scene::hiddenEventsInstalled), with SWF's sites noted (Extensions::NoteHiddenSourceSites: the reserved sites follow
+	 * them). The render (main) thread at PostPostLoad, the feature's early hooks.
 	 */
 	void InstallStores();
-	/** @brief The patched store (its address in the image) whose stub holds a_address, or 0 (the watch's report). */
+	/** @brief The patched store (its address in the image) whose SWF stub holds a_address, or 0 (the watch's report). */
 	std::uintptr_t StoreSiteOf(std::uintptr_t a_address);
 
 	// Diagnostics/HiddenWatch.cpp: CS_DCLF_HIDDEN_WATCH.

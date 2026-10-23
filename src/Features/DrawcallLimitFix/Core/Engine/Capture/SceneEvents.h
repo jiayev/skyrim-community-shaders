@@ -217,8 +217,9 @@ namespace DCLF::Scene
 	 *   NiSwitchNode::OnVisible to update in the cull.
 	 * - Harvesting (FUN_1401e8ef0, from TESObjectTREE::Activate and the flora's) and a harvestable's 3D setup (FUN_1401e9450),
 	 *   on the switch under the reference's root; both update the switch right after.
-	 * Each store calls a stub (SwitchStoreStubs) that stores and pushes the previous index on change. The tree manager can store
-	 * twice in a pass (a level, then the far level), so events are judged by net change.
+	 * Each store is SceneWriterFramework's (SWF_EVENT_SWITCH_INDEX): SWF's stub stores, and on a change the event pushes the previous
+	 * index (OnSwitchIndex). The tree manager can store twice in a pass (a level, then the far level), so events are judged by net
+	 * change.
 	 *
 	 * AttachChild, DetachChild and SetAt reset revID to 1 (selected child stale without an index store), and DetachChild clears
 	 * the index when the selected slot empties: those push a structural event.
@@ -248,19 +249,6 @@ namespace DCLF::Scene
 			switchEvents.Push(SwitchEvent{ RE::NiPointer<RE::NiAVObject>(a_switch), a_before, a_structural });
 	}
 
-	/** @brief The patched stores' handler (SwitchStoreStubs): the store, and an event when it changed the index. */
-	inline void SwitchIndexStore(RE::NiAVObject* a_switch, std::int32_t a_index)
-	{
-		auto& index = SwitchIndexOf(a_switch);
-		const std::int32_t before = index;
-		index = a_index;
-		if (before != a_index) {
-			// The mirror's value on any thread (no reference taken); the tracking's event on the render thread alone.
-			PushNodeUpdate(a_switch, SceneCapture::NodeRecord::kSwitch);
-			PushSwitch(a_switch, before, false);
-		}
-	}
-
 	/** @brief After one of NiSwitchNode's own child edits (its vtable's implementations). */
 	inline void PushSwitchStructural(RE::NiNode* a_switch)
 	{
@@ -272,9 +260,6 @@ namespace DCLF::Scene
 	// Core's move writers (InstallMoveEvents); the reserved writers not installed yet (Extensions::ReserveMoveWriter, MoveWriterInstalled).
 	inline bool moveEventsInstalled = false;
 	inline std::uint32_t moveWritersPending = 0;
-
-	/** @brief Patches the stores (after checking every site's bytes; none is patched when one differs). */
-	bool InstallSwitchStores();
 
 	/** @brief The move writers are hooked (MoveEvents): Core's and every reserved one. */
 	inline bool MoveEventsLive() { return moveEventsInstalled && moveWritersPending == 0; }

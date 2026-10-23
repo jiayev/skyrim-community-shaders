@@ -90,7 +90,8 @@ namespace DCLF
 
 		// The shader tree as the game sees it through MO2's virtual file system, copied to a real
 		// directory a debugger outside the VFS can use as a source search path. The debug info names
-		// files relative to the game directory (Data/Shaders/...), so the copy keeps that layout.
+		// files relative to the game directory (Data/Shaders/...), so the copy keeps that layout. Only
+		// files newer than their copy are written, so a start with unchanged shaders copies nothing.
 		void SnapshotSources(const std::vector<std::filesystem::path>& a_files)
 		{
 			auto root = std::filesystem::path(SwitchValue(Switch::ShaderSourceDir));
@@ -100,15 +101,27 @@ namespace DCLF
 					return;
 				root /= L"CommunityShaders-ShaderSource";
 			}
-			std::size_t copied = 0;
+			std::size_t copied = 0, current = 0;
+			std::string firstError;
 			for (const auto& file : a_files) {
 				std::error_code ec;
 				const auto destination = root / file.lexically_normal();
+				// Current: the copy is as large and no older (copy_options::update_existing fails every file through the VFS).
+				std::error_code sizeError, timeError;
+				const auto size = std::filesystem::file_size(destination, sizeError);
+				const auto written = std::filesystem::last_write_time(destination, timeError);
+				if (!sizeError && !timeError && size == std::filesystem::file_size(file, ec) && !ec && written >= std::filesystem::last_write_time(file, ec) && !ec) {
+					++current;
+					continue;
+				}
+				ec.clear();
 				std::filesystem::create_directories(destination.parent_path(), ec);
 				if (!ec && std::filesystem::copy_file(file, destination, std::filesystem::copy_options::overwrite_existing, ec))
 					++copied;
+				else if (firstError.empty())
+					firstError = fmt::format("; first failure {}: {}", file.string(), ec.message());
 			}
-			logger::info("[DCLF] Shader debug info on; {} of {} shader files copied to {}", copied, a_files.size(), root.string());
+			logger::info("[DCLF] Shader debug info on; {} of {} shader files copied to {} ({} already current){}", copied, a_files.size(), root.string(), current, firstError);
 		}
 	}
 

@@ -23,7 +23,8 @@ namespace DCLF::Diagnostics
 		if (o.mirror) {
 			InstallMirrorReads();
 			InstallMirrorParity();
-		}
+		} else
+			InstallMirrorParity(true);  // the compatibility monitor's, while the player has it on (PlayerParity.h)
 		// Prepass, the render thread: the used sets, the technique rows, the extras rows, the shading.
 		if (o.scene) {
 			InstallFrameParity();

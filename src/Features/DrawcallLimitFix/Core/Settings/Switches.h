@@ -48,6 +48,7 @@ namespace DCLF
 		BuildParity,
 		SetParity,
 		MirrorParity,
+		PlayerParity,
 		CaptureParity,
 		ParityBoth,
 		CapturePointParity,

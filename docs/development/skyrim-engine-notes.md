@@ -2153,8 +2153,8 @@ AE 1.6.1170. These are the choke points `SceneStore::InstallSceneEvents` detours
     -   two branches of `FUN_1402d1280` that skip the snap;
     -   `Explosion::Load3D`, `FUN_1401ce010`, `FUN_14028b9d0`, `FUN_1402c8420`, `FUN_1407d4440` and `FUN_1407ee3e0`.
 
-    A scan of the image for that pattern finds exactly these eleven (2026-10-09; DCLF patches them,
-    `InstallFadeResetStores`).
+    A scan of the image for that pattern finds exactly these eleven (2026-10-09; SceneWriterFramework patches them,
+    `SWF_EVENT_FADE_RESET`).
 -   **`BGSDecalNode::decals`** (`+0x128`, `BSTArray<NiPointer<BSTempEffect>>`) has one append and four erases, all of
     them BGSDecalNode's own:
     -   append: `FUN_1401fdfb0`. `BSTempEffectGeometryDecal::Attach` calls it after attaching the decal's 3D to its node.

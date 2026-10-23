@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #include "Globals.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
@@ -94,6 +95,46 @@ namespace DCLF
 							tasks->AddTask([draw = command == "dclf:draw=1"] {
 								if (auto* player = RE::PlayerCharacter::GetSingleton())
 									player->DrawWeaponMagicHands(draw);
+							});
+						return;
+					}
+					// "dclf:compat=0|1": the compatibility monitor off or on, as its menu checkbox; "dclf:compat-report": its report written.
+					if (command == "dclf:compat=0" || command == "dclf:compat=1") {
+						Diagnostics::PlayerParity::Request(command == "dclf:compat=1");
+						return;
+					}
+					if (command == "dclf:compat-report") {
+						logger::info("[DCLF] test command: compatibility report {}", Diagnostics::PlayerParity::WriteReport());
+						return;
+					}
+					// "dclf:foreign-write=<n>": a foreign plugin's write, for the monitor to find: on the main thread, the alpha threshold of
+					// the first alpha-tested geometry of up to n references near the player, stored straight into the property (no hook sees it).
+					if (command.rfind("dclf:foreign-write=", 0) == 0) {
+						const auto wanted = static_cast<std::uint32_t>(std::strtoul(command.c_str() + 19, nullptr, 10));
+						if (auto* tasks = SKSE::GetTaskInterface())
+							tasks->AddTask([wanted] {
+								auto* tes = RE::TES::GetSingleton();
+								auto* player = RE::PlayerCharacter::GetSingleton();
+								if (!tes || !player)
+									return;
+								std::uint32_t written = 0;
+								tes->ForEachReferenceInRange(player, 4096.0f, [&](RE::TESObjectREFR* a_reference) {
+									auto* root = a_reference && a_reference != player ? a_reference->Get3D() : nullptr;
+									if (!root)
+										return RE::BSContainer::ForEachResult::kContinue;
+									RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) {
+										auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
+										if (!alpha)
+											return RE::BSVisit::BSVisitControl::kContinue;
+										alpha->alphaThreshold = static_cast<std::uint8_t>(alpha->alphaThreshold ^ 1);
+										const auto* file = a_reference->GetFile(0);
+										logger::info("[DCLF] test command: foreign write, alpha threshold of '{}' under reference {:08X} ({}) now {}", a_geometry->name.c_str(),
+											a_reference->GetFormID(), file ? file->GetFilename() : "created in game", alpha->alphaThreshold);
+										++written;
+										return RE::BSVisit::BSVisitControl::kStop;
+									});
+									return written < wanted ? RE::BSContainer::ForEachResult::kContinue : RE::BSContainer::ForEachResult::kStop;
+								});
 							});
 						return;
 					}

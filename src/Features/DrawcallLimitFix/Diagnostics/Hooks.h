@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -22,29 +23,43 @@ namespace DCLF::Diagnostics
 	 * register at Install (before the first frame, before DCLF's threads start), and the registry is read-only from then on, so
 	 * Notify takes no lock. An observer runs on the thread and at the point of its Notify, and must not change what the main path
 	 * does: a change is a Policy question (Policy.h). Area events are declared beside their observers (Diagnostics/<Area>/Events.h).
+	 *
+	 * Switchable observers (SubscribeSwitchable: the compatibility monitor's, PlayerParity.h) are registered at Install too, but run
+	 * only while SetSwitchableArmed has them on: the render thread flips them at the frame's start, and an event with none on and no
+	 * other observer costs its one flag test again.
 	 */
 	namespace Detail
 	{
 		template <class Event>
-		inline bool armed = false;
+		inline std::atomic<bool> armed{ false };
 		template <class Event>
 		inline std::vector<void (*)(const Event&)> observers;
+		template <class Event>
+		inline std::atomic<bool> switchableArmed{ false };
+		template <class Event>
+		inline std::vector<void (*)(const Event&)> switchableObservers;
+		// Per event type with switchable observers: sets its switchable flag and its armed one.
+		inline std::vector<void (*)(bool)> switchableArms;
 	}
 
 	/** @brief Whether anything observes Event: a hook point whose payload costs something to make tests this first. */
 	template <class Event>
 	inline bool Armed()
 	{
-		return Detail::armed<Event>;
+		return Detail::armed<Event>.load(std::memory_order_relaxed);
 	}
 
 	/** @brief A hook point: a_event to every observer of its type, or nothing. */
 	template <class Event>
 	inline void Notify(const Event& a_event)
 	{
-		if (Detail::armed<Event>) [[unlikely]]
+		if (Detail::armed<Event>.load(std::memory_order_relaxed)) [[unlikely]] {
 			for (auto* observer : Detail::observers<Event>)
 				observer(a_event);
+			if (Detail::switchableArmed<Event>.load(std::memory_order_relaxed))
+				for (auto* observer : Detail::switchableObservers<Event>)
+					observer(a_event);
+		}
 	}
 
 	/**
@@ -69,7 +84,33 @@ namespace DCLF::Diagnostics
 	void Subscribe(void (*a_observer)(const Event&))
 	{
 		Detail::observers<Event>.push_back(a_observer);
-		Detail::armed<Event> = true;
+		Detail::armed<Event>.store(true, std::memory_order_relaxed);
+	}
+
+	/** @brief Install only: a_observer runs at every hook point of Event while SetSwitchableArmed has the switchable observers on. */
+	template <class Event>
+	void SubscribeSwitchable(void (*a_observer)(const Event&))
+	{
+		if (Detail::switchableObservers<Event>.empty())
+			Detail::switchableArms.push_back([](bool a_on) {
+				Detail::switchableArmed<Event>.store(a_on, std::memory_order_relaxed);
+				Detail::armed<Event>.store(a_on || !Detail::observers<Event>.empty(), std::memory_order_relaxed);
+			});
+		Detail::switchableObservers<Event>.push_back(a_observer);
+	}
+
+	/** @brief Install only: a_observer runs at every On<Point> hook point while the switchable observers are on. */
+	template <auto Point>
+	void SubscribeSwitchable(void (*a_observer)(const On<Point>&))
+	{
+		SubscribeSwitchable<On<Point>>(a_observer);
+	}
+
+	/** @brief Render thread, the frame's start: every switchable observer on or off (PlayerParity::BeginFrame). */
+	inline void SetSwitchableArmed(bool a_on)
+	{
+		for (auto* arm : Detail::switchableArms)
+			arm(a_on);
 	}
 
 	/** @brief Install only: a_observer runs at every On<Point> hook point. */

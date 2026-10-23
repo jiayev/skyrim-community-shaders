@@ -17,6 +17,7 @@
 #	include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
 #	include "DrawcallLimitFix/Diagnostics/Hooks.h"
+#	include "DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #	include "DrawcallLimitFix/Diagnostics/Policy.h"
 #	include "DrawcallLimitFix/Core/Shading/MaterialWrites.h"
 #	include "DrawcallLimitFix/Core/Shading/MaterialSources.h"
@@ -47,13 +48,29 @@
 #	include "DrawcallLimitFix/Diagnostics/Feature/TargetDump.h"
 #	include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 
+#	include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
+
 #	include <ORGModuleServices/BackingPool.h>
 
-void DrawcallLimitFix::PostPostLoad()
+namespace
 {
 	// Every engine hook and offset DCLF uses is AE 1.6.1170's (most are raw module offsets, not Address Library IDs), so any other
 	// build, AE included, would patch the wrong code.
-	if (const auto game = REL::Module::get().version(); game != REL::Version{ 1, 6, 1170, 0 }) {
+	bool SupportedGame() { return REL::Module::get().version() == REL::Version{ 1, 6, 1170, 0 }; }
+}
+
+void DrawcallLimitFix::PostLoad()
+{
+	// SceneWriterFramework's election, only when PostPostLoad will install: without CS's, the engine's stores stay unpatched unless
+	// another plugin's copy of SWF elects.
+	if (SupportedGame() && DCLF::SwitchValue(DCLF::Switch::Dclf) != "0")
+		DCLF::SceneWriter::Elect();
+}
+
+void DrawcallLimitFix::PostPostLoad()
+{
+	if (!SupportedGame()) {
+		const auto game = REL::Module::get().version();
 		unavailableReason = fmt::format("DCLF supports Skyrim AE 1.6.1170 only (this game is {})", game.string("."));
 		logger::info("[DCLF] {}; the game renders natively", unavailableReason);
 		return;
@@ -63,6 +80,20 @@ void DrawcallLimitFix::PostPostLoad()
 		logger::info("[DCLF] CS_DCLF=0; the feature stays off and the game renders natively");
 		return;
 	}
+	// The patch sites DCLF cannot run without, checked before any hook is written: another plugin's patch at one leaves the game
+	// native rather than half hooked. (Optional sites warn and skip at their own install.) The engine's stores are SceneWriterFramework's,
+	// verified by the provider at its election: the families DCLF requires must be installed.
+	if (const auto missing = DCLF::SceneWriter::MissingReason(); !missing.empty()) {
+		unavailableReason = missing;
+		logger::warn("[DCLF] {}; the game renders natively", unavailableReason);
+		return;
+	}
+	for (auto missing : { DCLF::PassCapture::SitesMissing() })
+		if (!missing.empty()) {
+			unavailableReason = fmt::format("{} DCLF hooks are not the engine's code (another plugin patched them first)", missing);
+			logger::warn("[DCLF] {}; the game renders natively", unavailableReason);
+			return;
+		}
 	DCLF::SceneTracker::Get().Install();
 	DCLF::Scene::InstallSceneEvents();
 	// Capture at registration: where the set's members' passes are withheld from the views DCLF draws.
@@ -439,6 +470,7 @@ void DrawcallLimitFix::DrawSettings()
 		ImGui::TextWrapped("Switched off with the feature's toggle: the game renders natively and DCLF does no frame work. Switch it back on to resume; no restart needed.");
 		return;
 	}
+	DCLF::Diagnostics::PlayerParity::DrawPanel();
 	// The live toggles, for A/B comparisons without a restart. They are the REQUESTED set; the render thread applies them at the start of the next frame (Toggles.h).
 	auto& toggles = DCLF::Toggles::Get().Requested();
 	const auto active = DCLF::ActiveToggles();
@@ -548,6 +580,7 @@ void DrawcallLimitFix::OnGraphSubmissionsRetired(std::uint64_t a_submissions)
 
 #	include "RenderGraph/RenderGraphRuntime.h"
 
+void DrawcallLimitFix::PostLoad() {}
 void DrawcallLimitFix::PostPostLoad()
 {
 	unavailableReason = "built without the render graph (CS_HAS_DCLF off)";

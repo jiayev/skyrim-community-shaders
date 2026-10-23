@@ -123,19 +123,26 @@ namespace DCLF::Diagnostics
 		std::vector<RE::NiPointer<RE::BSGeometry>> geometries;
 	};
 
-	/** @brief CS_DCLF_MIRROR_PARITY, the records (SceneMirrorParity.cpp). */
+	/** @brief CS_DCLF_MIRROR_PARITY, the records: a slice captured live, and each record's owning reference (form ID; 0 above any reference's root). */
+	struct MirrorProbe
+	{
+		SceneCapture::Records records;
+		ankerl::unordered_dense::map<const void*, std::uint32_t> owners;
+	};
+
+	/** @brief CS_DCLF_MIRROR_PARITY and the compatibility monitor (PlayerParity.h), the records (SceneMirrorParity.cpp). */
 	struct MirrorParityState
 	{
 		// The coordinator's: the next slice's position, the frame the last was asked in; the applied batch's probe, and the objects and
 		// fields the batch's events named.
 		std::size_t probeCursor = 0;
 		std::uint32_t probeFrame = ~0u;
-		std::unique_ptr<SceneCapture::Records> batchProbe, probe;
+		std::unique_ptr<MirrorProbe> batchProbe, probe;
 		SceneMirror::KeySet eventKeys;
 		SceneMirror::FieldMap eventFields;
 		// The coordinator -> the render thread: the slices asked (one at a time: probeAsked), and the records back.
 		EventQueue<std::shared_ptr<MirrorProbeRequest>, 16> probeRequests;
-		LatestSlot<SceneCapture::Records> probePosted;
+		LatestSlot<MirrorProbe> probePosted;
 		std::atomic<bool> probeAsked{ false };
 		// What a check found stale, for the render thread's watch (CS_DCLF_MIRROR_WATCH=parity): a property, an alpha, a fade node.
 		std::atomic<const void*> watchProperty{ nullptr }, watchAlpha{ nullptr }, watchNode{ nullptr };
@@ -149,6 +156,7 @@ namespace DCLF::Diagnostics
 			std::uint32_t fields = 0;
 			std::string what;
 			std::uint32_t flagBits = 0;  // a node's: the flag bits that differ
+			std::uint32_t owner = 0;     // the probe's owning reference (MirrorProbe::owners)
 		};
 		// By object and record type (a geometry's node and geometry records share its key).
 		ankerl::unordered_dense::map<std::uintptr_t, Pending> pending;
