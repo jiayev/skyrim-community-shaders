@@ -1,4 +1,5 @@
 #include "Deferred.h"
+#include "Features/DrawcallLimitFix.h"
 #include "Features/RenderDoc.h"
 #include "Features/Upscaling.h"
 #include "Features/RemoteControl/NvPerfTrace.h"
@@ -223,7 +224,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	InitializeLog();
 	StartCrashDumpHelper();
 	AddVectoredExceptionHandler(1, &CommunityShadersCrashDump);
-	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION.string());
+	logger::info("Loaded {} {} (build {})", Plugin::NAME, Plugin::VERSION.string(), Plugin::BUILD_DESCRIBE);
 	ApplyDevEnvironmentFile();
 	SKSE::Init(a_skse);
 	logger::info("Community Shaders {} | branch: {} | describe: {} | hash: {}{}",
@@ -258,6 +259,13 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, 
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
 	switch (message->type) {
+	case SKSE::MessagingInterface::kPostLoad:
+		{
+			// Every plugin is loaded: SceneWriterFramework's copies elect the one that patches the engine's scene writers.
+			if (errors.empty() && globals::features::drawcallLimitFix.loaded)
+				globals::features::drawcallLimitFix.PostLoad();
+			break;
+		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {

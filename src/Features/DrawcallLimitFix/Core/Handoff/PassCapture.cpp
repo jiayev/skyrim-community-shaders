@@ -587,14 +587,30 @@ namespace DCLF
 
 	namespace
 	{
-		template <std::uint32_t Group, class Hook>
-		bool InstallMainGroup(std::uintptr_t a_site, std::uintptr_t a_callee)
+		// The main modes' registration's (FUN_1414b2330) group insertions and its hint 1 list insertion, by call site.
+		constexpr std::uintptr_t kInsertGroup = 0x14f5090, kInsertList = 0x14f50b0;
+		constexpr std::array<std::pair<std::uintptr_t, std::uintptr_t>, 16> kMainGroupSites{ {
+			{ 0x14b24a2, kInsertGroup }, { 0x14b24bd, kInsertGroup }, { 0x14b24d8, kInsertGroup }, { 0x14b24f3, kInsertGroup },
+			{ 0x14b250d, kInsertGroup }, { 0x14b2528, kInsertGroup }, { 0x14b2543, kInsertGroup }, { 0x14b255e, kInsertGroup },
+			{ 0x14b2579, kInsertGroup }, { 0x14b2591, kInsertGroup }, { 0x14b25a9, kInsertGroup }, { 0x14b25c1, kInsertGroup },
+			{ 0x14b25db, kInsertGroup }, { 0x14b2667, kInsertGroup }, { 0x14b2478, kInsertList }, { 0x14b2c71, kInsertGroup },
+		} };
+
+		template <class Hook>
+		void InstallMainGroup(std::size_t a_site)
 		{
-			if (!Engine::CallsTo(REL::Offset(a_site).address(), REL::Offset(a_callee).address()))
-				return false;
-			stl::write_thunk_call<Hook>(REL::Offset(a_site).address());
-			return true;
+			stl::write_thunk_call<Hook>(REL::Offset(kMainGroupSites[a_site].first).address());
 		}
+	}
+
+	std::string PassCapture::SitesMissing()
+	{
+		for (const auto& [site, callee] : kMainGroupSites)
+			if (!Engine::CallsTo(REL::Offset(site).address(), REL::Offset(callee).address())) {
+				logger::warn("[DCLF] pass capture: the call at {:#x} is not the engine's group insertion", 0x140000000 + site);
+				return "the main registration's group insertions";
+			}
+		return {};
 	}
 
 	void PassCapture::Install()
@@ -609,19 +625,26 @@ namespace DCLF
 		stl::write_thunk_call<DirectGroupHook<11>>(REL::Offset(kDirectGroupCalls[0]).address());
 		stl::write_thunk_call<DirectGroupHook<7>>(REL::Offset(kDirectGroupCalls[1]).address());
 		stl::write_thunk_call<DirectGroupHook<3>>(REL::Offset(kDirectGroupCalls[2]).address());
-		// The main modes' registration's (FUN_1414b2330) group insertions, by the group each inserts into, and its hint 1 list
-		// insertion. Each call site is checked against its callee before it is patched.
-		constexpr std::uintptr_t kInsertGroup = 0x14f5090, kInsertList = 0x14f50b0;
-		const bool all = InstallMainGroup<3, MainGroupHook<3>>(0x14b24a2, kInsertGroup) & InstallMainGroup<4, MainGroupHook<4>>(0x14b24bd, kInsertGroup) &
-		                 InstallMainGroup<5, MainGroupHook<5>>(0x14b24d8, kInsertGroup) & InstallMainGroup<6, MainGroupHook<6>>(0x14b24f3, kInsertGroup) &
-		                 InstallMainGroup<0, MainGroupHook<0>>(0x14b250d, kInsertGroup) & InstallMainGroup<1, MainGroupHook<1>>(0x14b2528, kInsertGroup) &
-		                 InstallMainGroup<7, MainGroupHook<7>>(0x14b2543, kInsertGroup) & InstallMainGroup<9, MainGroupHook<9>>(0x14b255e, kInsertGroup) &
-		                 InstallMainGroup<10, MainGroupHook<10>>(0x14b2579, kInsertGroup) & InstallMainGroup<11, MainGroupHook<11>>(0x14b2591, kInsertGroup) &
-		                 InstallMainGroup<8, MainGroupHook<8>>(0x14b25a9, kInsertGroup) & InstallMainGroup<12, MainGroupHook<12>>(0x14b25c1, kInsertGroup) &
-		                 InstallMainGroup<13, MainGroupHook<13>>(0x14b25db, kInsertGroup) & InstallMainGroup<2, MainGroupHook<2>>(0x14b2667, kInsertGroup) &
-		                 InstallMainGroup<1, MainListHook>(0x14b2478, kInsertList) & InstallMainGroup<14, OcclusionGroupHook>(0x14b2c71, kInsertGroup);
-		if (!all)
-			stl::report_and_fail("Drawcall Limit Fix: the main registration's group insertions are not where expected (AE 1.6.1170 only)");
+		// The main modes' group insertions (kMainGroupSites, in order), by the group each inserts into, and the hint 1 list insertion.
+		// PostPostLoad checked every site against its callee (SitesMissing) before any hook was written.
+		if (!SitesMissing().empty())
+			stl::report_and_fail("Drawcall Limit Fix: the main registration's group insertions changed after their sites were checked");
+		InstallMainGroup<MainGroupHook<3>>(0);
+		InstallMainGroup<MainGroupHook<4>>(1);
+		InstallMainGroup<MainGroupHook<5>>(2);
+		InstallMainGroup<MainGroupHook<6>>(3);
+		InstallMainGroup<MainGroupHook<0>>(4);
+		InstallMainGroup<MainGroupHook<1>>(5);
+		InstallMainGroup<MainGroupHook<7>>(6);
+		InstallMainGroup<MainGroupHook<9>>(7);
+		InstallMainGroup<MainGroupHook<10>>(8);
+		InstallMainGroup<MainGroupHook<11>>(9);
+		InstallMainGroup<MainGroupHook<8>>(10);
+		InstallMainGroup<MainGroupHook<12>>(11);
+		InstallMainGroup<MainGroupHook<13>>(12);
+		InstallMainGroup<MainGroupHook<2>>(13);
+		InstallMainGroup<MainListHook>(14);
+		InstallMainGroup<OcclusionGroupHook>(15);
 		installed = true;
 		logger::info("[DCLF] pass capture installed on BSBatchRenderer::RegisterPass");
 	}

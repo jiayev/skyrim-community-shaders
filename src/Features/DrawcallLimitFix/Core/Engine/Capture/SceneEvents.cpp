@@ -1,7 +1,9 @@
-// The scene's event hooks (installed on the render thread at PostPostLoad): detours and patched stores on engine writers, each
-// pushing the mirror's update and the scene pass's event on the writer's thread (SceneEvents.h).
+// The scene's event hooks (installed on the render thread at PostPostLoad): detours on engine writers, and the subscriptions to
+// SceneWriterFramework's patched stores (SceneWriter.h), each pushing the mirror's update and the scene pass's event on the writer's
+// thread (SceneEvents.h).
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
@@ -11,7 +13,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/FadeProbe.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
-#include <xbyak/xbyak.h>
 
 namespace DCLF::Scene
 {
@@ -628,153 +629,25 @@ namespace DCLF::Scene
 	}
 
 	/**
-	 * @brief The fade resets' handler: currentFade (+0x130) stored inline as 0 or 1.0, then flag bit 14 (a frame bit, not
-	 * mirrored) set or cleared: cell placements (FUN_1402bc1f0, grid controller, main thread; FUN_1402bb690, a job, after
-	 * FUN_1402d5090), the sky cell (FUN_1402b9da0), FUN_1402d1280's no-snap branches, Explosion::Load3D and every other
-	 * store-then-bit-14 site in the image.
+	 * @brief The fade resets (SceneWriterFramework's SWF_EVENT_FADE_RESET, after SWF made the store): currentFade (+0x130) stored inline
+	 * as 0 or 1.0, then flag bit 14 (a frame bit, not mirrored) set or cleared: cell placements (FUN_1402bc1f0, grid controller, main
+	 * thread; FUN_1402bb690, a job, after FUN_1402d5090), the sky cell (FUN_1402b9da0), FUN_1402d1280's no-snap branches,
+	 * Explosion::Load3D and every other store-then-bit-14 site in the image.
 	 */
-	void FadeResetStore(RE::NiAVObject* a_node, std::int32_t a_value)
+	void OnFadeReset(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 	{
-		*reinterpret_cast<std::int32_t*>(reinterpret_cast<std::byte*>(a_node) + 0x130) = a_value;
-		PushNodeUpdate(a_node, SceneCapture::NodeRecord::kFadeCurrent);
+		const auto& event = *reinterpret_cast<const SWF_FadeResetEvent*>(a_event);
+		PushNodeUpdate(static_cast<RE::NiAVObject*>(event.node), SceneCapture::NodeRecord::kFadeCurrent);
 	}
 
-	/** @brief One patched store `mov dword ptr [base + offset], value`, as the bytes verified before patching. */
-	struct SwitchStoreSite
+	/** @brief An engine store changed an NiSwitchNode's index (SWF_EVENT_SWITCH_INDEX, after SWF made the store). */
+	void OnSwitchIndex(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 	{
-		std::uintptr_t offset;  // from the image base
-		std::array<std::uint8_t, 10> bytes;
-		std::uint8_t length;
-		int base;  // Xbyak::Operand register index
-		int value;               // kImmediate: the instruction's immediate, imm
-		std::uint32_t imm = 0;
-		static constexpr int kImmediate = -1;
-	};
-
-	/**
-	 * @brief The stubs: each loads (base, value) into the first two argument registers and joins a common body that saves the
-	 * volatile registers, the flags (a store sets none, so later code may test earlier flags) and xmm0-5, and calls the handler.
-	 */
-	struct SwitchStoreStubs : Xbyak::CodeGenerator
-	{
-		SwitchStoreStubs(const std::vector<SwitchStoreSite>& a_sites, std::vector<std::size_t>& a_entries, std::uintptr_t a_handler) :
-			Xbyak::CodeGenerator(4096)
-		{
-			using namespace Xbyak::util;
-			Xbyak::Label common;
-			// After the three pushes: rdx at [rsp], rcx at [rsp + 8], rax at [rsp + 0x10].
-			auto slotOf = [](int a_index) -> int {
-				return a_index == Xbyak::Operand::RAX ? 0x10 : a_index == Xbyak::Operand::RCX ? 0x8 : a_index == Xbyak::Operand::RDX ? 0x0 : -1;
-			};
-			for (const auto& site : a_sites) {
-				a_entries.push_back(getSize());
-				push(rax);
-				push(rcx);
-				push(rdx);
-				if (const int slot = slotOf(site.base); slot >= 0)
-					mov(rcx, qword[rsp + slot]);
-				else
-					mov(rcx, Xbyak::Reg64(site.base));
-				if (site.value == SwitchStoreSite::kImmediate)
-					mov(edx, site.imm);
-				else if (const int slot = slotOf(site.value); slot >= 0)
-					mov(edx, dword[rsp + slot]);
-				else
-					mov(edx, Xbyak::Reg32(site.value));
-				jmp(common, T_NEAR);
-			}
-			L(common);
-			push(r8);
-			push(r9);
-			push(r10);
-			push(r11);
-			push(rbx);
-			pushf();
-			mov(rbx, rsp);
-			and_(rsp, ~std::uint32_t(0xF));
-			sub(rsp, 0x80);
-			for (int i = 0; i < 6; ++i)
-				movdqu(ptr[rsp + 0x20 + 0x10 * i], Xbyak::Xmm(i));
-			mov(rax, a_handler);
-			call(rax);
-			for (int i = 0; i < 6; ++i)
-				movdqu(Xbyak::Xmm(i), ptr[rsp + 0x20 + 0x10 * i]);
-			mov(rsp, rbx);
-			popf();
-			pop(rbx);
-			pop(r11);
-			pop(r10);
-			pop(r9);
-			pop(r8);
-			pop(rdx);
-			pop(rcx);
-			pop(rax);
-			ret();
-		}
-	};
-
-	/** @brief Patches a_sites to call a_handler(base, value) instead; none is patched if any site's bytes differ. */
-	bool PatchStores(const std::vector<SwitchStoreSite>& a_sites, std::uintptr_t a_handler, const char* a_what)
-	{
-		const auto base = REL::Module::get().base();
-		for (const auto& site : a_sites) {
-			if (std::memcmp(reinterpret_cast<const void*>(base + site.offset), site.bytes.data(), site.length) != 0) {
-				logger::warn("[DCLF] {} not installed: the store at {:#x} is not the expected instruction", a_what, 0x140000000 + site.offset);
-				return false;
-			}
-		}
-		std::vector<std::size_t> entries;
-		SwitchStoreStubs stubs(a_sites, entries, a_handler);
-		auto* code = static_cast<std::uint8_t*>(SKSE::GetTrampoline().allocate(stubs.getSize()));
-		std::memcpy(code, stubs.getCode(), stubs.getSize());
-		for (std::size_t i = 0; i < a_sites.size(); ++i) {
-			const std::uintptr_t at = base + a_sites[i].offset;
-			std::array<std::uint8_t, 10> patch{ 0xE8, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90 };
-			const auto displacement = static_cast<std::int32_t>(reinterpret_cast<std::intptr_t>(code + entries[i]) - static_cast<std::intptr_t>(at + 5));
-			std::memcpy(patch.data() + 1, &displacement, sizeof(displacement));
-			REL::safe_write(at, patch.data(), a_sites[i].length);
-		}
-		logger::info("[DCLF] {}: {} stores patched ({} bytes of stubs)", a_what, a_sites.size(), stubs.getSize());
-		return true;
-	}
-
-	bool InstallFadeResetStores()
-	{
-		using Xbyak::Operand;
-		constexpr int kImm = SwitchStoreSite::kImmediate;
-		constexpr std::uint32_t kOne = 0x3f800000;
-		const std::vector<SwitchStoreSite> sites{
-			{ 0x2bc344, { 0x44, 0x89, 0xa0, 0x30, 0x01, 0x00, 0x00 }, 7, Operand::RAX, Operand::R12 },  // FUN_1402bc1f0
-			{ 0x2bb8f5, { 0x44, 0x89, 0xa0, 0x30, 0x01, 0x00, 0x00 }, 7, Operand::RAX, Operand::R12 },  // FUN_1402bb690
-			{ 0x2c859f, { 0x44, 0x89, 0xb8, 0x30, 0x01, 0x00, 0x00 }, 7, Operand::RAX, Operand::R15 },  // FUN_1402c8420
-			{ 0x1ce552, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1401ce010
-			{ 0x28bbd0, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 10, Operand::RAX, kImm, 0 },     // FUN_14028b9d0
-			{ 0x2b9e89, { 0xc7, 0x87, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RDI, kImm, kOne },  // FUN_1402b9da0 (sky cell)
-			{ 0x2d1f2c, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1402d1280
-			{ 0x2d20dd, { 0xc7, 0x83, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RBX, kImm, kOne },  // FUN_1402d1280
-			{ 0x2e3c27, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // Explosion::Load3D
-			{ 0x7d4791, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1407d4440
-			{ 0x7ee6ec, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1407ee3e0
-		};
-		return PatchStores(sites, reinterpret_cast<std::uintptr_t>(&FadeResetStore), "fade resets");
-	}
-
-	bool InstallSwitchStores()
-	{
-		using Xbyak::Operand;
-		const std::vector<SwitchStoreSite> sites{
-			{ 0x438004, { 0x89, 0x91, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RDX },  // BSTreeManager (FUN_140437e50)
-			{ 0x43805e, { 0x89, 0x91, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RDX },
-			{ 0x438077, { 0x89, 0x81, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RAX },
-			{ 0x43812d, { 0x89, 0x91, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RDX },
-			{ 0x438146, { 0x89, 0x81, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RAX },
-			{ 0x4385cd, { 0x44, 0x89, 0x82, 0x2c, 0x01, 0x00, 0x00 }, 7, Operand::RDX, Operand::R8 },  // local map (FUN_140438580)
-			{ 0x4388cc, { 0x89, 0x91, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RDX },  // BSTreeManager (FUN_140438840)
-			{ 0x4388e5, { 0x89, 0x81, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RAX },
-			{ 0x1e937c, { 0x89, 0x8f, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RDI, Operand::RCX },  // harvest (FUN_1401e8ef0)
-			{ 0x1e94ef, { 0x89, 0x8b, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RBX, Operand::RCX },  // harvestable 3D (FUN_1401e9450)
-		};
-		return PatchStores(sites, reinterpret_cast<std::uintptr_t>(&SwitchIndexStore), "switch events");
+		const auto& event = *reinterpret_cast<const SWF_SwitchIndexEvent*>(a_event);
+		auto* node = static_cast<RE::NiAVObject*>(event.node);
+		// The mirror's value on any thread (no reference taken); the tracking's event on the render thread alone.
+		PushNodeUpdate(node, SceneCapture::NodeRecord::kSwitch);
+		PushSwitch(node, event.before, false);
 	}
 
 	void PushHiddenUpdate(const void* a_object, std::uint32_t a_site)
@@ -883,12 +756,11 @@ namespace DCLF::Scene
 		stl::detour_thunk<SetExternalEmittance>(REL::Offset(kSetExternalEmittance).address());
 		stl::write_vfunc<0x31, PropertySetMaterialAlpha>(RE::VTABLE_BSLightingShaderProperty[0]);
 		lodFadeEventsInstalled = true;
-		// Switch selections are followed by event alone (memberLive, ApplySwitchEvents): without these hooks DCLF cannot run.
-		if (!InstallSwitchStores())
-			stl::report_and_fail("Drawcall Limit Fix: the switch nodes' hooks could not be installed (an unsupported game build)");
-		// The mirror's currentFade: the cells' inline resets.
-		if (!InstallFadeResetStores())
-			stl::report_and_fail("Drawcall Limit Fix: the fade resets' hooks could not be installed (an unsupported game build)");
+		// Switch selections are followed by event alone (memberLive, ApplySwitchEvents), and the mirror's currentFade takes the cells'
+		// inline resets: SceneWriterFramework's stores, whose families PostPostLoad required (SceneWriter::MissingReason) before any
+		// hook was written.
+		if (!SceneWriter::Subscribe(SWF_EVENT_SWITCH_INDEX, &OnSwitchIndex) || !SceneWriter::Subscribe(SWF_EVENT_FADE_RESET, &OnFadeReset))
+			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused the switch or fade-reset subscription after reporting them installed");
 		{
 			// NiSwitchNode's own child edits (NiNode vtable slots 0x35, 0x37-0x3C, as SceneTracker's).
 			DetourSwitchSlot<SwitchAttachChild>(0x35);

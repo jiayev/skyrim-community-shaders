@@ -103,6 +103,7 @@ namespace DCLF
 			{ BuildParity, "CS_DCLF_BUILD_PARITY", P, N, false, "1: the build cache against a fresh build" },
 			{ SetParity, "CS_DCLF_SET_PARITY", P, N, false, "1: the per-object visibility words read back after the colour epoch against the CPU's decisions" },
 			{ MirrorParity, "CS_DCLF_MIRROR_PARITY", P, N, false, "1: the scene mirror against the live objects, a slice of the tracked set a frame (step 6e F3)" },
+			{ PlayerParity, "CS_DCLF_PLAYER_PARITY", P, N, false, "1: the compatibility monitor starts on (the menu switches it live): engine state other plugins change with no hook DCLF sees, by reference and plugin" },
 			{ CaptureParity, "CS_DCLF_CAPTURE_PARITY", P, N, false, "1: the tables against the engine's own lighting draws (run with CS_DCLF_PARITY_BOTH=1, so the engine draws what DCLF draws)" },
 			{ ParityBoth, "CS_DCLF_PARITY_BOTH", P, N, false, "1: nothing is withheld from the engine, which draws everything while DCLF draws its set as well (capture parity compares the two; it double-draws)" },
 			{ CapturePointParity, "CS_DCLF_CAPTURE_POINT_PARITY", P, N, false, "1: the colour epoch's captured bindings against the frame's first native lighting draw" },

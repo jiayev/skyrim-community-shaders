@@ -158,6 +158,8 @@ namespace DCLF
 		static PassCapture& Get();
 
 		void Install();
+		/** @brief The patch sites Install requires that another plugin changed, or empty; writes nothing. */
+		static std::string SitesMissing();
 		bool Installed() const { return installed; }
 		/** @brief The hook is a plain pass-through while set (DCLF off). */
 		void SetBypassed(bool a_bypassed) { bypassed.store(a_bypassed, std::memory_order_release); }

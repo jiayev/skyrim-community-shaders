@@ -28,3 +28,6 @@
 [submodule "extern/ORGModuleServices"]
 	path = extern/ORGModuleServices
 	url = https://github.com/panthuncia/ORGModuleServices.git
+[submodule "extern/SceneWriterFramework"]
+	path = extern/SceneWriterFramework
+	url = https://github.com/panthuncia/SSESceneWriterFramework

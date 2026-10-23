@@ -109,6 +109,10 @@ if(CS_HAS_RENDER_GRAPH AND CS_HAS_ORG_MODULE_SERVICES)
     # without a live frame switch.
     include(${CMAKE_CURRENT_LIST_DIR}/DclfSceneGraph.cmake)
     target_link_libraries(${PROJECT_NAME} PRIVATE DclfSceneGraph)
+    # The engine's scene writer hooks are SceneWriterFramework's (extern/SceneWriterFramework), shared with every plugin that
+    # embeds it or installs its standalone DLL. CS's copy is one candidate in its provider election (DCLF::SceneWriter).
+    include(${CMAKE_SOURCE_DIR}/extern/SceneWriterFramework/cmake/SWFEmbed.cmake)
+    target_link_libraries(${PROJECT_NAME} PRIVATE swf::embedded)
     # The plugin's source glob also finds these two; they are compiled only in their independently testable libraries, without
     # the game's PCH.
     list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/(SceneExecutor|SceneGraph)\.cpp$")

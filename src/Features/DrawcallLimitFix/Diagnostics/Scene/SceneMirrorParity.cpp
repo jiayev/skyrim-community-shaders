@@ -9,6 +9,7 @@
 #include "SceneObservers.h"
 #include "SceneState.h"
 
+#include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
@@ -25,7 +26,7 @@ namespace DCLF::Diagnostics
 		 * @brief The last probe's pending differences resolved by this batch's event keys (late or missed), then this probe against the mirror (a
 		 * difference whose object an event of the probe's batch named is evented, else pending).
 		 */
-		void Check(const SceneMirror& a_mirror, const SceneCapture::Records& a_probe, const SceneMirror::KeySet& a_eventKeys, const SceneMirror::FieldMap& a_eventFields)
+		void Check(const SceneMirror& a_mirror, const MirrorProbe& a_probe, const SceneMirror::KeySet& a_eventKeys, const SceneMirror::FieldMap& a_eventFields)
 		{
 			auto& m = SceneDiagnostics().mirror;
 			auto& t = m.tally;
@@ -60,6 +61,9 @@ namespace DCLF::Diagnostics
 					m.missedProperty = key;
 				if (!late && p.type == 3)
 					m.missedAlpha = key;
+				// The compatibility monitor's offenders: a writer no hook sees, by the object's owning reference.
+				if (!late)
+					PlayerParity::NoteMissed(key, p.owner, p.type, p.fields, p.what);
 				if (!late && t.firstMissed.empty())
 					t.firstMissed = std::move(p.what);
 			}
@@ -137,20 +141,22 @@ namespace DCLF::Diagnostics
 				p.type = a_type;
 				p.fields |= differ;
 				p.flagBits |= a_flagBits;
+				if (const auto owner = a_probe.owners.find(a_live.key); owner != a_probe.owners.end())
+					p.owner = owner->second;
 				if (p.what.empty())
 					p.what = what;
 			};
-			for (const auto& n : a_probe.nodes) {
+			for (const auto& n : a_probe.records.nodes) {
 				const auto* mirrored = a_mirror.Node(n.key);
 				compare(0, n, mirrored, SceneMirror::Fields<SceneCapture::NodeRecord>, n.name, mirrored ? (mirrored->flags ^ n.flags) : 0u);
 			}
-			for (const auto& g : a_probe.geometries) {
+			for (const auto& g : a_probe.records.geometries) {
 				const auto* node = a_mirror.Node(g.key);
 				compare(1, g, a_mirror.Geometry(g.key), SceneMirror::Fields<SceneCapture::GeometryRecord>, node ? node->name : nullptr, 0u);
 			}
-			for (const auto& p : a_probe.properties)
+			for (const auto& p : a_probe.records.properties)
 				compare(2, p, a_mirror.Property(p.key), SceneMirror::Fields<SceneCapture::PropertyRecord>, nullptr, 0u);
-			for (const auto& a : a_probe.alphas)
+			for (const auto& a : a_probe.records.alphas)
 				compare(3, a, a_mirror.Alpha(a.key), SceneMirror::Fields<SceneCapture::AlphaRecord>, nullptr, 0u);
 		}
 
@@ -260,6 +266,18 @@ namespace DCLF::Diagnostics
 		{
 			// With the pass's events all drained: the applied batch's probe against the mirror; the next probe asked of the render thread.
 			auto& m = SceneDiagnostics().mirror;
+			// The compatibility monitor just turned on: what its observers kept while they were off is stale (the events since were not seen).
+			if (PlayerParity::TakeReset()) {
+				m.pending.clear();
+				m.named.clear();
+				m.probe.reset();
+				m.batchProbe.reset();
+				(void)m.probePosted.Take();
+				m.probeAsked.store(false, std::memory_order_release);
+				m.eventKeys.clear();
+				m.eventFields.clear();
+				return;
+			}
 			if (m.probe) {
 				ZoneScopedN("CS.DCLF.Scene.MirrorParity");
 				Check(V::mirror(Scene::Coordinator::Get()), *m.probe, m.eventKeys, m.eventFields);
@@ -270,6 +288,7 @@ namespace DCLF::Diagnostics
 				if (const void* node = std::exchange(m.missedNode, nullptr))
 					m.watchNode.store(node, std::memory_order_release);
 				m.probe.reset();
+				PlayerParity::NoteCheck();
 			}
 			m.eventKeys.clear();
 			m.eventFields.clear();
@@ -294,15 +313,38 @@ namespace DCLF::Diagnostics
 			ZoneScopedN("CS.DCLF.Ingest.ProbeMirror");
 			// Live (the update done, before the culls): each geometry's records and its ancestors' up to the world's root, each object once.
 			// Each geometry is held by the request.
-			auto probe = std::make_unique<SceneCapture::Records>();
+			// Each record's owning reference too (the nearest with user data, the geometry's own or an ancestor's), for the compatibility
+			// monitor's offenders: a geometry's records, and each ancestor below that reference's root.
+			auto probe = std::make_unique<MirrorProbe>();
+			auto& records = probe->records;
 			ankerl::unordered_dense::set<const void*> taken;
 			for (const auto& held : request->geometries) {
 				const auto* geometry = held.get();
 				if (!geometry || !SceneCapture::InWorld(geometry) || !taken.insert(geometry).second)
 					continue;
-				SceneCapture::CaptureLeaf(*geometry, *probe);
-				for (const auto* ancestor = geometry->parent; ancestor && taken.insert(ancestor).second; ancestor = ancestor->parent)
-					probe->nodes.push_back(SceneCapture::CaptureNode(*ancestor));
+				std::uint32_t owner = 0;
+				const RE::NiAVObject* root = nullptr;
+				for (const RE::NiAVObject* at = geometry; at && !owner; at = at->parent)
+					if (const auto* reference = at->GetUserData()) {
+						owner = reference->GetFormID();
+						root = at;
+					}
+				const auto properties = records.properties.size(), alphas = records.alphas.size();
+				SceneCapture::CaptureLeaf(*geometry, records);
+				if (owner) {
+					probe->owners.emplace(geometry, owner);
+					for (auto i = properties; i < records.properties.size(); ++i)
+						probe->owners.emplace(records.properties[i].key, owner);
+					for (auto i = alphas; i < records.alphas.size(); ++i)
+						probe->owners.emplace(records.alphas[i].key, owner);
+				}
+				bool owned = owner != 0 && root != geometry;
+				for (const auto* ancestor = geometry->parent; ancestor && taken.insert(ancestor).second; ancestor = ancestor->parent) {
+					records.nodes.push_back(SceneCapture::CaptureNode(*ancestor));
+					if (owned)
+						probe->owners.emplace(ancestor, owner);
+					owned = owned && ancestor != root;
+				}
 			}
 			// To the next pass, which takes it before its drains; the next request may follow.
 			m.probePosted.Post(std::move(probe));
@@ -354,15 +396,22 @@ namespace DCLF::Diagnostics
 		Subscribe<FadeStaticsPlaced>(OnFadeStaticsPlaced);
 	}
 
-	void InstallMirrorParity()
+	void InstallMirrorParity(bool a_switchable)
 	{
-		Subscribe<MirrorCaptureApplied>(OnCaptureApplied);
-		Subscribe<MirrorDetached>(OnDetached);
-		Subscribe<MirrorCleared>(OnCleared);
-		Subscribe<MirrorUpdateApplied>(OnUpdateApplied);
-		Subscribe<EventsCollecting>(OnEventsCollecting);
-		Subscribe<MirrorEventsApplied>(OnEventsApplied);
-		Subscribe<ScenePoint::MirrorCheckPoint>(OnCheckPoint);
-		Subscribe<ScenePoint::MirrorProbePoint>(OnProbePoint);
+		// Switchable: the compatibility monitor's (PlayerParity.h), on only while the player has it on.
+		const auto subscribe = [a_switchable]<class Event>(void (*a_observer)(const Event&)) {
+			if (a_switchable)
+				SubscribeSwitchable<Event>(a_observer);
+			else
+				Subscribe<Event>(a_observer);
+		};
+		subscribe(OnCaptureApplied);
+		subscribe(OnDetached);
+		subscribe(OnCleared);
+		subscribe(OnUpdateApplied);
+		subscribe(OnEventsCollecting);
+		subscribe(OnEventsApplied);
+		subscribe(OnCheckPoint);
+		subscribe(OnProbePoint);
 	}
 }

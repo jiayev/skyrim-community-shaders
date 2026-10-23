@@ -2,6 +2,7 @@
 #include "Install.h"
 
 #include "Hooks.h"
+#include "PlayerParity.h"
 
 namespace DCLF::Diagnostics
 {
@@ -15,5 +16,6 @@ namespace DCLF::Diagnostics
 		InstallEngine();
 		InstallScene();
 		InstallDraws();
+		PlayerParity::Install();
 	}
 }

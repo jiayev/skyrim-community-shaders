@@ -22,7 +22,7 @@ namespace DCLF::Diagnostics
 	void InstallShadowSetParity();
 	void InstallReplayParity();
 	void InstallMirrorReads();
-	void InstallMirrorParity();
+	void InstallMirrorParity(bool a_switchable = false);
 	void InstallCommitParity();
 	void InstallMirrorWatchPlacement();
 

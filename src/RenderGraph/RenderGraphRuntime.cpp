@@ -1118,6 +1118,18 @@ bool RenderGraphRuntime::Initialize()
 	info.version = DXVK_ORG_INTEROP_VERSION;
 	if (FAILED(getInfo(d3dDevice, &info)))
 		return disable("DXVK could not describe its Vulkan device");
+	// The device, once, ahead of any reason the graph is disabled: a report from another machine is read against it.
+	if (const auto getProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(info.getInstanceProcAddr(info.instance, "vkGetPhysicalDeviceProperties"))) {
+		VkPhysicalDeviceProperties properties{};
+		getProperties(info.physicalDevice, &properties);
+		const auto driver = properties.driverVersion;
+		// NVIDIA packs its driver version 10.8.8.6; the others use Vulkan's packing.
+		const auto driverText = properties.vendorID == 0x10DE ? fmt::format("{}.{:02}", driver >> 22, (driver >> 14) & 0xFF) :
+		                                                        std::format("{}.{}.{}", VK_API_VERSION_MAJOR(driver), VK_API_VERSION_MINOR(driver), VK_API_VERSION_PATCH(driver));
+		logger::info("[RenderGraph] Vulkan device: {} (vendor {:#06x}, device {:#06x}), driver {}, Vulkan {}.{}.{}, {} extensions enabled", properties.deviceName,
+			properties.vendorID, properties.deviceID, driverText, VK_API_VERSION_MAJOR(properties.apiVersion), VK_API_VERSION_MINOR(properties.apiVersion),
+			VK_API_VERSION_PATCH(properties.apiVersion), info.enabledExtensionCount);
+	}
 	if (!HasExtension(info, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME)) {
 		// The one cause seen in practice, named so the menu does not leave it to be guessed.
 		if (::GetModuleHandleW(L"renderdoc.dll"))

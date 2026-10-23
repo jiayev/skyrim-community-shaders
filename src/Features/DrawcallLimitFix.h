@@ -27,6 +27,8 @@ struct DrawcallLimitFix : Feature
 				"Builds per-object draw tables for indirect execution" } };
 	}
 
+	/** @brief SKSE kPostLoad (CS's message handler): SceneWriterFramework's provider election, when PostPostLoad will install DCLF. */
+	void PostLoad();
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual bool AppliesBootToggleLive() const override { return true; }
