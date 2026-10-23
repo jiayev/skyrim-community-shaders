@@ -23,6 +23,7 @@
 
 #include "CSEditor/SceneManager/WeatherTransition.h"
 #include "Features/DrawcallLimitFix.h"
+#include "Features/DrawcallLimitFix/Diagnostics/FadeProbe.h"
 #include "Features/Effects11.h"
 #include "Features/GrassOptimizations.h"
 #include "Features/HDRDisplay.h"
@@ -183,6 +184,23 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 {
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
+
+	// TEMP (fade-in investigation): CS_FADE_PROBE=1.
+	if (static const bool probe = [] { const char* v = std::getenv("CS_FADE_PROBE"); return v && v[0] == '1'; }(); probe) {
+		namespace P = DCLF::Diagnostics::FadeProbe;
+		static uint lastLogged = 0;
+		if (shader->shaderType.get() == RE::BSShader::Type::Lighting) {
+			P::counters.lightingTechniques.fetch_add(1, std::memory_order_relaxed);
+			if (pixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask))
+				P::counters.stippleTechniques.fetch_add(1, std::memory_order_relaxed);
+		}
+		if (state->frameCount >= lastLogged + 300) {
+			lastLogged = state->frameCount;
+			logger::info("[FadeProbe] frame {}: {} lighting techniques, {} with the stipple fade; fades stepped {} ({} with no screen door), snapped in {}",
+				state->frameCount, P::counters.lightingTechniques.exchange(0), P::counters.stippleTechniques.exchange(0), P::counters.stepped.exchange(0),
+				P::counters.steppedNoDoor.exchange(0), P::counters.snappedIn.exchange(0));
+		}
+	}
 
 	// Landscape Seams: draw the vanilla terrain permutation while the seams one is compiling or failed.
 	constexpr auto landscapeSeamsFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);

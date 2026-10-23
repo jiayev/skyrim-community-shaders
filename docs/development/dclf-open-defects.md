@@ -8,16 +8,6 @@ and report lines named here are described in [dclf-validation.md](./dclf-validat
 
 The fixes below are in the code. No recorded run has yet shown the check that confirms each one.
 
--   **Tree LOD flickering under camera motion.** The forest alternated per frame between DCLF's colour and depth-only silhouettes
-    (fog over albedo never written). The cause: the atlas's binding was owned only by the depth commit's execution, so its import
-    and descriptor slot were released when the Z-prepass retired, and a streamed texture reused the slot before the colour epoch
-    sampled it. Then the colour pass's alpha test discarded everything. The fix is structural (dclf-architecture.md, "Descriptor
-    ownership"): rows name descriptors through `OwnedRow`, the uploads make the owners the written range's content owners, and every
-    execution holds the content owners current at its submission. It also closes the same gap in grass's draw row (the shadow mask's
-    and collision texture's indices were the depth execution's alone). **Check:** `CS_DCLF_TREE_LOD_STAGES=1` with motion: no
-    `<- PROBE DIFFERS`, and no `<- MISSED` frame whose colour PS entry is stamped but kept is not (run `ow1`: 0 and 0, the texture
-    index one value for the whole run; the `content owners` line steady at the live grass buckets plus the two draw rows). On screen:
-    no pale flicker in the LOD forest while moving.
 -   **Newly loaded objects drawn opaque, then vanishing, then fading in.** `DCLFAlphaFade` fell back to the root row's `Initial` (the
     mirror's fade at listing) until FadeStateCS's state reached t120. The seed (the node at the frame's start) was used only by
     BuildDraws. The pairing of listings with seeds counted 144 generations listed at 1 but seeded at 0 (opaque, then gone, then fading

@@ -156,6 +156,7 @@ namespace DCLF::Scene
 
 	void EntrySpaceTable::Reset(std::uint32_t& a_versions)
 	{
+		released.clear();
 		for (std::uint32_t e = 0; e < nodes.size(); ++e)
 			version[e] = ++a_versions;
 		index.clear();

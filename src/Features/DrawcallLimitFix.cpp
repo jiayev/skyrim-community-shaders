@@ -40,6 +40,7 @@
 #	include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #	include "RenderGraph/ScheduleWindow.h"
 #	include "RenderGraph/RenderGraphRuntime.h"
+#	include <OpenRenderGraph/PersistentGraphHost.h>
 #	include "State.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/ConstantMirror.h"
 #	include "DrawcallLimitFix/Diagnostics/Scene/CaptureParity.h"
@@ -50,9 +51,10 @@
 
 void DrawcallLimitFix::PostPostLoad()
 {
-	// Every engine hook and offset DCLF uses is AE's (1.6.1170).
-	if (!REL::Module::IsAE()) {
-		unavailableReason = "DCLF supports Skyrim AE only";
+	// Every engine hook and offset DCLF uses is AE 1.6.1170's (most are raw module offsets, not Address Library IDs), so any other
+	// build, AE included, would patch the wrong code.
+	if (const auto game = REL::Module::get().version(); game != REL::Version{ 1, 6, 1170, 0 }) {
+		unavailableReason = fmt::format("DCLF supports Skyrim AE 1.6.1170 only (this game is {})", game.string("."));
 		logger::info("[DCLF] {}; the game renders natively", unavailableReason);
 		return;
 	}
@@ -123,18 +125,28 @@ void DrawcallLimitFix::SetupResources()
 	if (installed && RenderGraphRuntime::Get().IsActive() && RenderGraphRuntime::EpochsEnabled())
 		DCLF::ShaderPrograms::Get().StartPrecompile();
 	// Runs right after the render graph tried to adopt DXVK's device (State::SetupResources). The hooks went in at PostPostLoad,
-	// before any device existed; without the graph (or its epochs: CS_ORG_EPOCHS) there is nothing to draw with, so DCLF is forced
-	// off here, with the reason in the log and the menu.
-	if (!installed || (RenderGraphRuntime::Get().IsActive() && RenderGraphRuntime::EpochsEnabled()))
+	// before any device existed; without the graph (or its epochs: CS_ORG_EPOCHS, async: CS_ORG_ASYNC_EPOCHS) or the device's
+	// indirect pipelines there is nothing to draw with, while the claims would stand and withhold the engine's passes. So DCLF is
+	// forced off here, with the reason in the log and the menu.
+	if (!installed)
 		return;
-	unavailableReason = RenderGraphRuntime::Get().IsActive() ? std::string("the render graph runs without epochs (CS_ORG_EPOCHS=0)") :
-	                                                           RenderGraphRuntime::Get().GetDisabledReason();
+	auto& graph = RenderGraphRuntime::Get();
+	if (!graph.IsActive())
+		unavailableReason = graph.GetDisabledReason();
+	else if (!RenderGraphRuntime::EpochsEnabled())
+		unavailableReason = "the render graph runs without epochs (CS_ORG_EPOCHS=0)";
+	else if (!graph.Host() || !graph.Host()->AsyncEpochs())
+		unavailableReason = "the render graph runs without async epochs (CS_ORG_ASYNC_EPOCHS=0)";
+	else if (!DCLF::DrawPipelines::Get().Enabled())
+		unavailableReason = "the GPU or driver lacks the indirect pipelines DCLF draws with (see the [DCLF] Indirect pipelines line)";
+	else
+		return;
 	installed = false;
 	DCLF::SceneTracker::Get().Stop();
 	// The scene passes apply what the hooks still push (the scene queues: kept bounded), and nothing else.
 	DCLF::Scene::Coordinator::Get().SetScenePassMode(false, false);
 	DCLF::PassCapture::Get().SetBypassed(true);
-	logger::warn("[DCLF] Forced off: the render graph is unavailable ({}); the game renders natively", unavailableReason);
+	logger::warn("[DCLF] Forced off: {}; the game renders natively", unavailableReason);
 }
 
 void DrawcallLimitFix::Reset()

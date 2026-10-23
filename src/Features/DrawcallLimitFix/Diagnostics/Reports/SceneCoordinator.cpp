@@ -304,10 +304,11 @@ namespace DCLF::Reports
 				t.switchCatchUps = Scene::Channels::Get().catchUpsBySwitch.exchange(0, std::memory_order_relaxed);
 				t.attachCatchUps = Scene::Channels::Get().catchUpsByAttach.exchange(0, std::memory_order_relaxed);
 				const double catchUpUs = static_cast<double>(Scene::Channels::Get().catchUpNs.exchange(0, std::memory_order_relaxed)) / 1000.0 / n;
-				text += fmt::format("[DCLF] candidates: sun {} entries ({} indices, {} geometry rows), {} written in {} snapshots; light {} entries ({} indices), "
-									"{} written in {} snapshots; parity {} checks, {} differ{}\n",
+				text += fmt::format("[DCLF] candidates: sun {} entries ({} indices, {} geometry rows), {} written in {} snapshots ({} again for a geometry moved "
+									"from another entry); light {} entries ({} indices), {} written in {} snapshots ({} again); parity {} checks, {} differ{}\n",
 					V::sunTable(s).index.size(), V::sunTable(s).nodes.size(), V::sunTable(s).geometryIndex.size(), std::exchange(V::sunTable(s).entriesWritten, 0), std::exchange(V::sunTable(s).snapshots, 0),
-					V::lightTable(s).index.size(), V::lightTable(s).nodes.size(), std::exchange(V::lightTable(s).entriesWritten, 0), std::exchange(V::lightTable(s).snapshots, 0),
+					std::exchange(V::sunTable(s).rowsTakenBack, 0), V::lightTable(s).index.size(), V::lightTable(s).nodes.size(), std::exchange(V::lightTable(s).entriesWritten, 0),
+					std::exchange(V::lightTable(s).snapshots, 0), std::exchange(V::lightTable(s).rowsTakenBack, 0),
 					Diagnostics::SceneDiagnostics().candidates.checks, Diagnostics::SceneDiagnostics().candidates.mismatches, Diagnostics::SceneDiagnostics().candidates.checks ? (Diagnostics::SceneDiagnostics().candidates.mismatches ? " <- CANDIDATES" : " <- OK") : "");
 				Diagnostics::SceneDiagnostics().candidates = {};
 				text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up by the render thread at ingestion ({:.2f} under attached subtrees or the world after a load; {:.2f} us/frame), {:.1f} entries classified again",
