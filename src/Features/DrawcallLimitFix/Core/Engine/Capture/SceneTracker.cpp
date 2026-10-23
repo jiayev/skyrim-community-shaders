@@ -1,6 +1,8 @@
-// SceneTracker: the NiNode child-edit detours (on the editing thread) and the event stack they and the hooks push onto.
+// SceneTracker: the NiNode child edits (SceneWriterFramework's events, on the editing thread) and the event stack they and the hooks push
+// onto.
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
@@ -13,163 +15,26 @@ namespace DCLF
 {
 	namespace
 	{
-		// NiNode vtable slots (SE/AE; VR shifts them, and the feature does not install there).
-		constexpr std::size_t kAttachChild = 0x35;
-		constexpr std::size_t kDetachChild1 = 0x37;
-		constexpr std::size_t kDetachChild2 = 0x38;
-		constexpr std::size_t kDetachChildAt1 = 0x39;
-		constexpr std::size_t kDetachChildAt2 = 0x3A;
-		constexpr std::size_t kSetAt1 = 0x3B;
-		constexpr std::size_t kSetAt2 = 0x3C;
-
-		RE::NiAVObject* ChildAt(RE::NiNode* a_node, std::uint32_t a_index)
+		// NiNode's child edits are SceneWriterFramework's (SWF_EVENT_CHILD_ATTACHED / SWF_EVENT_CHILD_DETACHING): NiNode's implementations,
+		// the classes overriding them (BSParticleSystemManager's world-space particle systems, BGSDecalNode's detaches and sets,
+		// BSFaceGenNiNode's attach) and the remove-all (FUN_140d1d630: Actor::DetachArrow, Actor::RemoveWeapon, BSTaskPool's queued
+		// removal). A detach before the engine's (the child still attached), an attach after.
+		void OnChildAttached(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
-			auto& children = a_node->GetChildren();
-			return a_index < children.free_idx() ? children[static_cast<std::uint16_t>(a_index)].get() : nullptr;
+			const auto& event = *reinterpret_cast<const SWF_ChildEvent*>(a_event);
+			auto* child = static_cast<RE::NiAVObject*>(event.child);
+			// A SetAt of the child the slot already held is no structure change for the kept lists.
+			if (!event.unchanged)
+				PrimaryCull::Get().NoteListStructure(static_cast<const RE::NiNode*>(event.parent), child, true);
+			SceneTracker::Get().PushAttached(child);
 		}
 
-		template <int N>
-		struct AttachChildAt
+		void OnChildDetaching(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
-			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, bool a_firstAvail)
-			{
-				func(a_this, a_child, a_firstAvail);
-				PrimaryCull::Get().NoteListStructure(a_this, a_child, true);
-				SceneTracker::Get().PushAttached(a_child);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		template <int N>
-		struct DetachChild1At
-		{
-			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
-			{
-				PrimaryCull::Get().NoteListStructure(a_this, a_child, false);
-				SceneTracker::Get().PushDetached(a_child);
-				func(a_this, a_child, a_out);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		template <int N>
-		struct DetachChild2At
-		{
-			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child)
-			{
-				PrimaryCull::Get().NoteListStructure(a_this, a_child, false);
-				SceneTracker::Get().PushDetached(a_child);
-				func(a_this, a_child);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		template <int N>
-		struct DetachChildAt1At
-		{
-			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiPointer<RE::NiAVObject>& a_out)
-			{
-				PrimaryCull::Get().NoteListStructure(a_this, ChildAt(a_this, a_index), false);
-				SceneTracker::Get().PushDetached(ChildAt(a_this, a_index));
-				func(a_this, a_index, a_out);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		template <int N>
-		struct DetachChildAt2At
-		{
-			static void thunk(RE::NiNode* a_this, std::uint32_t a_index)
-			{
-				PrimaryCull::Get().NoteListStructure(a_this, ChildAt(a_this, a_index), false);
-				SceneTracker::Get().PushDetached(ChildAt(a_this, a_index));
-				func(a_this, a_index);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		template <int N>
-		struct SetAt1At
-		{
-			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
-			{
-				auto* previous = ChildAt(a_this, a_index);
-				if (previous != a_child) {
-					PrimaryCull::Get().NoteListStructure(a_this, previous, false);
-					SceneTracker::Get().PushDetached(previous);
-				}
-				func(a_this, a_index, a_child, a_out);
-				if (previous != a_child)
-					PrimaryCull::Get().NoteListStructure(a_this, a_child, true);
-				SceneTracker::Get().PushAttached(a_child);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		template <int N>
-		struct SetAt2At
-		{
-			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child)
-			{
-				auto* previous = ChildAt(a_this, a_index);
-				if (previous != a_child) {
-					PrimaryCull::Get().NoteListStructure(a_this, previous, false);
-					SceneTracker::Get().PushDetached(previous);
-				}
-				func(a_this, a_index, a_child);
-				if (previous != a_child)
-					PrimaryCull::Get().NoteListStructure(a_this, a_child, true);
-				SceneTracker::Get().PushAttached(a_child);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		/**
-		 * @brief FUN_140d1d630 (AE): every child of a node let go at once, not through the DetachChild slots (each child's parent and
-		 * index cleared, its reference released, the count zeroed). Callers: Actor::DetachArrow (the nocked arrow at the release),
-		 * Actor::RemoveWeapon, BSTaskPool's queued removal (task 0x3e) and others. Each child's detach before the engine's.
-		 */
-		struct RemoveAllChildren
-		{
-			static void thunk(RE::NiNode* a_this)
-			{
-				if (a_this) {
-					const std::uint32_t count = a_this->GetChildren().free_idx();
-					for (std::uint32_t i = 0; i < count; ++i)
-						if (auto* child = ChildAt(a_this, i)) {
-							PrimaryCull::Get().NoteListStructure(a_this, child, false);
-							SceneTracker::Get().PushDetached(child);
-						}
-				}
-				func(a_this);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-		constexpr std::uintptr_t kRemoveAllChildren = 0xd1d630;
-
-		template <class T>
-		void DetourNiNodeSlot(std::size_t a_slot)
-		{
-			REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE_NiNode[0] };
-			const auto target = reinterpret_cast<const std::uintptr_t*>(vtable.address())[a_slot];
-			stl::detour_thunk<T>(target);
-		}
-
-		/**
-		 * @brief A node class's own implementation of a slot: detoured when it is not NiNode's (BSParticleSystemManager's child
-		 * edits, which move world-space particle systems; BGSDecalNode's detaches and sets; BSFaceGenNiNode's attach), and not detoured
-		 * already. One that calls NiNode's reports the edit twice: an attach tracked again, a detach whose records are gone.
-		 */
-		template <class T>
-		void DetourOverride(const REL::VariantID& a_vtable, std::size_t a_slot, std::vector<std::uintptr_t>& a_done)
-		{
-			REL::Relocation<std::uintptr_t> base{ RE::VTABLE_NiNode[0] };
-			REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-			const auto target = reinterpret_cast<const std::uintptr_t*>(vtable.address())[a_slot];
-			if (target == reinterpret_cast<const std::uintptr_t*>(base.address())[a_slot] || std::ranges::find(a_done, target) != a_done.end())
-				return;
-			a_done.push_back(target);
-			stl::detour_thunk<T>(target);
+			const auto& event = *reinterpret_cast<const SWF_ChildEvent*>(a_event);
+			auto* child = static_cast<RE::NiAVObject*>(event.child);
+			PrimaryCull::Get().NoteListStructure(static_cast<const RE::NiNode*>(event.parent), child, false);
+			SceneTracker::Get().PushDetached(child);
 		}
 
 		// The watched subtree's root (WatchSubtree): compared by the hooks, never dereferenced but for its descendants' parent chains.
@@ -192,25 +57,13 @@ namespace DCLF
 		std::atomic<const std::vector<const void*>*> subtreeMembers{ nullptr };
 		std::unique_ptr<const std::vector<const void*>> subtreeCurrent;
 		std::atomic<std::uint64_t> categoryEdits{ 0 };
-		std::unique_ptr<const std::vector<const void*>> categoryCurrent;                // render thread: the published set's owner
+		std::unique_ptr<const std::vector<const void*>> categoryCurrent;               // render thread: the published set's owner
 		std::vector<std::unique_ptr<const std::vector<const void*>>> categoryRetired;  // render thread: replaced, maybe still read
 		std::atomic<std::uint32_t> renderThread{ 0 };
 
 		// The window premise's counters (TakeWindowEdits).
 		std::atomic<std::uint64_t> windowEditsRender{ 0 }, windowEditsOther{ 0 };
 		std::atomic<std::uint32_t> windowEditFirst{ 0 };
-
-		template <int N>
-		void DetourOverrides(const REL::VariantID& a_vtable, std::vector<std::uintptr_t>& a_done)
-		{
-			DetourOverride<AttachChildAt<N>>(a_vtable, kAttachChild, a_done);
-			DetourOverride<DetachChild1At<N>>(a_vtable, kDetachChild1, a_done);
-			DetourOverride<DetachChild2At<N>>(a_vtable, kDetachChild2, a_done);
-			DetourOverride<DetachChildAt1At<N>>(a_vtable, kDetachChildAt1, a_done);
-			DetourOverride<DetachChildAt2At<N>>(a_vtable, kDetachChildAt2, a_done);
-			DetourOverride<SetAt1At<N>>(a_vtable, kSetAt1, a_done);
-			DetourOverride<SetAt2At<N>>(a_vtable, kSetAt2, a_done);
-		}
 	}
 
 	SceneTracker& SceneTracker::Get()
@@ -223,29 +76,11 @@ namespace DCLF
 	{
 		if (installed)
 			return;
-
-		// Detour the NiNode implementations rather than the NiNode vtable, so every node class
-		// that inherits them (BSFadeNode, BSMultiBoundNode, BSLeafAnimNode, ...) is covered.
-		DetourNiNodeSlot<AttachChildAt<0>>(kAttachChild);
-		DetourNiNodeSlot<DetachChild1At<0>>(kDetachChild1);
-		DetourNiNodeSlot<DetachChild2At<0>>(kDetachChild2);
-		DetourNiNodeSlot<DetachChildAt1At<0>>(kDetachChildAt1);
-		DetourNiNodeSlot<DetachChildAt2At<0>>(kDetachChildAt2);
-		DetourNiNodeSlot<SetAt1At<0>>(kSetAt1);
-		DetourNiNodeSlot<SetAt2At<0>>(kSetAt2);
-		// The engine's remove-all, which bypasses the slots.
-		stl::detour_thunk<RemoveAllChildren>(REL::Offset(kRemoveAllChildren).address());
-		// The node classes that override them (without these, a particle system the manager moves is missed).
-		{
-			std::vector<std::uintptr_t> done;
-			DetourOverrides<1>(RE::VTABLE_BSParticleSystemManager[0], done);
-			DetourOverrides<2>(RE::VTABLE_BGSDecalNode[0], done);
-			DetourOverrides<3>(RE::VTABLE_BSFaceGenNiNode[0], done);
-			logger::info("[DCLF] scene tracking: {} node classes' own child edits detoured", done.size());
-		}
-
+		// DrawcallLimitFix::PostPostLoad required SWF's structure family (SceneWriter::kRequiredCaps) before any hook was written.
+		if (!SceneWriter::Subscribe(SWF_EVENT_CHILD_ATTACHED, &OnChildAttached) || !SceneWriter::Subscribe(SWF_EVENT_CHILD_DETACHING, &OnChildDetaching))
+			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused the child-edit subscriptions after reporting them installed");
 		installed = true;
-		logger::info("[DCLF] Scene tracking hooks installed");
+		logger::info("[DCLF] Scene tracking subscribed to SceneWriterFramework's child edits");
 	}
 
 	void SceneTracker::Push(Event* a_event)

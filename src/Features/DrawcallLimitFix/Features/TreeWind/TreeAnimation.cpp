@@ -1,9 +1,10 @@
-// TreeAnimation: the tree manager's animation list without DCLF's trees (render thread syncs, the engine's add/remove/clear detours
-// on any thread), and the tree list's multibound results around its loop (main thread). TreeAnimation.h describes it.
+// TreeAnimation: the tree manager's animation list without DCLF's trees (render thread syncs; the engine's add, remove and clear,
+// SceneWriterFramework's tree animation calls, on any thread), and the tree list's multibound results around its loop (main thread). TreeAnimation.h describes it.
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeAnimation.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeList.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
@@ -22,18 +23,17 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 	{
 		using namespace Engine;
 
-		// AE 1.6.1170 (module offsets).
-		constexpr std::uintptr_t kAdd = 0x4376f0;       // FUN_1404376f0(manager, node): a BSLeafAnimNode onto the animation list
-		constexpr std::uintptr_t kRemove = 0x437840;    // FUN_140437840(manager, node): off the animation list (a BSTreeNode: off the tree list)
-		constexpr std::uintptr_t kClear = 0x437ae0;     // FUN_140437ae0(manager): both lists emptied (TES, the manager's teardown)
-		constexpr std::size_t kAnimationList = 0x50;    // BSTArray<NiAVObject*> (a reference each, taken by hand)
-		constexpr std::size_t kLock = 0x18;             // BSSpinLock (owner, count), the animation list's
+		// AE 1.6.1170. The animation list's writers are SWF_HOOK_TREE_ANIM_*: the add (FUN_1404376f0(manager, node): a BSLeafAnimNode
+		// onto the animation list), the remove (FUN_140437840(manager, node): off the animation list, a BSTreeNode off the tree list) and
+		// the clear (FUN_140437ae0(manager): both lists emptied, by TES and the manager's teardown).
+		constexpr std::size_t kAnimationList = 0x50;  // BSTArray<NiAVObject*> (a reference each, taken by hand)
+		constexpr std::size_t kLock = 0x18;           // BSSpinLock (owner, count), the animation list's
 		// The tree list (skyrim-engine-notes.md, "Tree manager list").
-		constexpr std::size_t kTreeList = 0x20;          // BSTArray<BSTreeNode*>
-		constexpr std::size_t kTreeLock = 0x10;          // BSSpinLock of the tree list
-		constexpr std::size_t kMultiBound = 0x128;       // BSMultiBoundNode's BSMultiBound
-		constexpr std::size_t kMultiBoundShape = 0x18;   // BSMultiBound's BSMultiBoundShape
-		constexpr std::size_t kShapeResult = 0x10;       // the cull result FUN_140437e50 reads: 0 stale, 1 in, 2 out
+		constexpr std::size_t kTreeList = 0x20;         // BSTArray<BSTreeNode*>
+		constexpr std::size_t kTreeLock = 0x10;         // BSSpinLock of the tree list
+		constexpr std::size_t kMultiBound = 0x128;      // BSMultiBoundNode's BSMultiBound
+		constexpr std::size_t kMultiBoundShape = 0x18;  // BSMultiBound's BSMultiBoundShape
+		constexpr std::size_t kShapeResult = 0x10;      // the cull result FUN_140437e50 reads: 0 stale, 1 in, 2 out
 
 		using List = RE::BSTArray<RE::NiAVObject*>;
 
@@ -109,67 +109,57 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 
 		struct Hooks
 		{
-			struct Add
+			static void Add(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 			{
-				static void thunk(std::byte* a_manager, RE::NiAVObject* a_node, std::uint64_t a_3, std::uint64_t a_4)
-				{
-					func(a_manager, a_node, a_3, a_4);
-					if (a_node && enabled) {
-						added.Push(a_node);
-						stats.engineAdds.fetch_add(1, std::memory_order_relaxed);
-					}
+				auto* node = SceneWriter::Arg<RE::NiAVObject*>(a_event, 1);
+				if (node && enabled) {
+					added.Push(node);
+					stats.engineAdds.fetch_add(1, std::memory_order_relaxed);
 				}
-				static inline REL::Relocation<decltype(thunk)> func;
-			};
+			}
 
-			struct Remove
+			// The remove's filter: a node DCLF holds off the list is the engine's to drop, forgotten with the list's reference, and the
+			// engine's remove vetoed (it would find nothing; the caller gets 0, as from the engine).
+			static std::int32_t Remove(const SWF_EventHeader* a_event, void*)
 			{
-				static std::uint64_t thunk(std::byte* a_manager, RE::NiAVObject* a_node)
-				{
-					// A node DCLF holds off the list is the engine's to drop: forgotten, with the list's reference.
-					RE::NiAVObject* release = nullptr;
-					if (a_node && a_manager) {
-						auto& lock = Lock(a_manager);
-						lock.Lock();
-						if (const auto it = detached.find(a_node); it != detached.end()) {
-							release = it->second;
-							detached.erase(it);
-							held.store(static_cast<std::uint32_t>(detached.size()), std::memory_order_relaxed);
-						}
-						lock.Unlock();
+				auto* manager = SceneWriter::Arg<std::byte*>(a_event, 0);
+				auto* node = SceneWriter::Arg<RE::NiAVObject*>(a_event, 1);
+				RE::NiAVObject* release = nullptr;
+				if (node && manager) {
+					auto& lock = Lock(manager);
+					lock.Lock();
+					if (const auto it = detached.find(node); it != detached.end()) {
+						release = it->second;
+						detached.erase(it);
+						held.store(static_cast<std::uint32_t>(detached.size()), std::memory_order_relaxed);
 					}
-					if (release) {
-						stats.engineRemoves.fetch_add(1, std::memory_order_relaxed);
-						release->DecRefCount();
-						return 0;
-					}
-					return func(a_manager, a_node);
+					lock.Unlock();
 				}
-				static inline REL::Relocation<decltype(thunk)> func;
-			};
+				if (!release)
+					return 0;
+				stats.engineRemoves.fetch_add(1, std::memory_order_relaxed);
+				release->DecRefCount();
+				return 1;
+			}
 
-			struct Clear
+			// After the clear: the nodes held off the list let go with it.
+			static void Clear(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 			{
-				static std::uint64_t thunk(std::byte* a_manager, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
-				{
-					const auto result = func(a_manager, a_2, a_3, a_4);
-					std::vector<RE::NiAVObject*> release;
-					if (a_manager) {
-						auto& lock = Lock(a_manager);
-						lock.Lock();
-						for (const auto& [node, reference] : detached)
-							release.push_back(reference);
-						detached.clear();
-						held.store(0, std::memory_order_relaxed);
-						lock.Unlock();
-					}
-					for (auto* node : release)
-						node->DecRefCount();
-					stats.clears.fetch_add(1, std::memory_order_relaxed);
-					return result;
+				auto* manager = SceneWriter::Arg<std::byte*>(a_event, 0);
+				std::vector<RE::NiAVObject*> release;
+				if (manager) {
+					auto& lock = Lock(manager);
+					lock.Lock();
+					for (const auto& [node, reference] : detached)
+						release.push_back(reference);
+					detached.clear();
+					held.store(0, std::memory_order_relaxed);
+					lock.Unlock();
 				}
-				static inline REL::Relocation<decltype(thunk)> func;
-			};
+				for (auto* node : release)
+					node->DecRefCount();
+				stats.clears.fetch_add(1, std::memory_order_relaxed);
+			}
 		};
 
 		// The engine's adds since the last call, taken off again where owned.
@@ -193,11 +183,16 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 	{
 		if (installed)
 			return;
-		const auto base = REL::Module::get().base();
 		// The animation list's lock and array, as the add takes them: `lea rcx, [rdi + 0x18]` before the lock, the array at +0x50.
-		stl::detour_thunk<Hooks::Add>(base + kAdd);
-		stl::detour_thunk<Hooks::Remove>(base + kRemove);
-		stl::detour_thunk<Hooks::Clear>(base + kClear);
+		if (!SceneWriter::Has(SWF_CAP_TREE_ANIM_CALLS)) {
+			logger::warn("[DCLF] tree animation list: the scene writer framework has no tree animation calls; owned trees stay on the list");
+			return;
+		}
+		const bool subscribed = SceneWriter::SubscribeCall(SWF_HOOK_TREE_ANIM_ADD, &Hooks::Add, SWF_PHASE_POST) &&
+		                        SceneWriter::AddFilter(SWF_FILTER_CALL(SWF_HOOK_TREE_ANIM_REMOVE), &Hooks::Remove) &&
+		                        SceneWriter::SubscribeCall(SWF_HOOK_TREE_ANIM_CLEAR, &Hooks::Clear, SWF_PHASE_POST);
+		if (!subscribed)
+			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused the tree animation calls after reporting them installed");
 		installed = enabled = true;
 		logger::info("[DCLF] tree animation list: owned trees are taken off the tree manager's animation list");
 	}
@@ -326,7 +321,9 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 				// The comparison before the write: the engine's result is the last scene frame's cull, DCLF's the conservative rule's (a
 				// frame or more behind it).
 				const std::int32_t engine = *result;
-				++(engine == 0 ? stats.dryStale : (engine == 1) == visible ? stats.drySame : visible ? stats.dryInOut : stats.dryOutIn);
+				++(engine == 0 ? stats.dryStale : (engine == 1) == visible ? stats.drySame :
+											  visible                      ? stats.dryInOut :
+																			 stats.dryOutIn);
 			}
 			written.push_back({ RE::NiPointer<RE::NiAVObject>(a_tree), result, *result });
 			++(a_stoodIn ? stats.replaced : stats.wideReplaced)[std::clamp<std::int32_t>(*result, 0, 2)];

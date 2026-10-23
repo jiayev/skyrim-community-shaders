@@ -471,15 +471,45 @@ Every store that can change `kHidden` (bit 0 of `NiAVObject::flags`, `+0xF4`) is
 
 ### Scene writer framework
 
-The engine's patched stores (hidden bits, switch indices, fade resets) belong to SceneWriterFramework (`extern/SceneWriterFramework`,
-`Core/Engine/Capture/SceneWriter.h`), not to DCLF. Every plugin that embeds it, or installs its standalone DLL, sees the same writes.
+The engine's scene writers belong to SceneWriterFramework (`extern/SceneWriterFramework`, `Core/Engine/Capture/SceneWriter.h`), not
+to DCLF. Every plugin that embeds it, or installs its standalone DLL, sees the same writes. SWF owns:
+-   the patched stores: hidden bits, switch indices, fade resets;
+-   NiNode's child edits (`SWF_EVENT_CHILD_ATTACHED` / `SWF_EVENT_CHILD_DETACHING`, `SceneTracker`) and NiSwitchNode's own
+    (`SWF_EVENT_SWITCH_STRUCTURAL`);
+-   the movers (`SWF_EVENT_MOVED`);
+-   the engine writers DCLF compares around: fades, node fields, shader properties, geometry and the materials' controllers and
+    rewrites. Each fires `SWF_EVENT_CALL(SWF_HOOK_*)` before and after the call with its arguments. `SceneEvents.cpp` and
+    `MaterialWrites.cpp` subscribe one handler each, keeping the values they compare in the call's scratch;
+-   the features' writers: the placement snap (`Fades/FadeEvents.cpp`), the actors' alpha and move writers (`Actors/ActorEvents.cpp`),
+    the decal arrays (`Decals/DecalHooks.cpp`), object LOD's segment writers (`Lod/LodSegmentHooks.cpp`), tree LOD's refill and
+    instance groups (`TreeLod/TreeLodHooks.cpp`), the tree manager's animation list (`TreeWind/TreeAnimation.cpp`) and the effect
+    controllers and material (`Effects/EffectWrites.cpp`). The effect controllers' handler keeps its before-image on a per-thread
+    stack, since it outgrows the scratch. The animation list's remove is a filter (`SWF_FILTER_CALL(SWF_HOOK_TREE_ANIM_REMOVE)`):
+    for a node DCLF holds off the list, the filter lets it go and vetoes the engine's remove.
+
+How it runs:
 -   Each copy of SWF in the process is a candidate. At SKSE `kPostLoad`, CS runs the election if DCLF will install
-    (`DrawcallLimitFix::PostLoad`). The newest copy that supports the game patches the stores and serves the API to everyone.
--   The provider checks every site's bytes before it writes any of them. A family whose sites another plugin changed is not
-    installed, and its capability bit stays clear.
--   `PostPostLoad` requires `SceneWriter::kRequiredCaps` (switch index and fade reset). Without them DCLF stays off and the game
-    renders natively. Hidden events are optional, as before (`Scene::hiddenEventsInstalled`).
--   SWF dispatches events synchronously on the storing thread, so DCLF's handlers push the same mirror updates its own stubs pushed.
+    (`DrawcallLimitFix::PostLoad`). The newest copy that supports the game hooks the engine and serves the API to everyone.
+-   The provider checks every site before it writes any of them: store bytes, call-site bytes, and each vtable's RTTI name. A family
+    whose sites another plugin changed is not installed, and its capability bit stays clear.
+-   `PostPostLoad` requires `SceneWriter::kRequiredCaps`: every family except the movers, the hidden stores, the LOD segment calls,
+    the tree LOD calls and the tree animation calls. Without them DCLF stays off and the game renders natively. The optional ones
+    degrade as before: without moves every mover is placed (`moveEventsInstalled`); without hidden events every verdict is taken
+    (`Scene::hiddenEventsInstalled`); object LOD and tree LOD stay native; owned trees stay on the animation list.
+-   SWF dispatches events synchronously on the writing thread, so DCLF's handlers push the same mirror updates its own hooks pushed.
+-   At `kDataLoaded` (`DrawcallLimitFix::DataLoaded`), once every plugin has installed, SWF's integrity check reads every patch back.
+    It logs each one another plugin rewrote, with the module the new bytes lead into. The DCLF menu's "Scene writer framework" node
+    lists them, along with the provider and its families. A later hook that calls on still reaches SWF; one that replaces the call
+    without calling on hides those writes from DCLF, and this report is where that shows up.
+-   The hooks that take over engine behaviour, rather than observe a write, stay DCLF's. These are:
+    -   the render and pass takeovers: PassCapture, PrimaryCull, LodGates, the shadow, reflection, forward and first-person passes,
+        and the scene lists;
+    -   the fade writers' OnVisible stand-ins and the animated-fade gate (`Fades/FadeWriters.cpp`);
+    -   tree LOD's block-update repack, and the tree list's loop;
+    -   the particle and face snapshot producers.
+
+    They chain with SWF's hooks on shared targets. SWF installs at `kPostLoad` and DCLF at `kPostPostLoad`, so DCLF's hook is the
+    outer one.
 
 ### Switch nodes
 

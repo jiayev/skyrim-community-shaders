@@ -1,13 +1,15 @@
-// MaterialWrites: the controller and material vtable hooks (on whichever thread runs the engine's update) and their lock-free queues, which
+// MaterialWrites: the controller and material writes (SceneWriterFramework's call hooks, on whichever thread runs the engine's update) and their lock-free queues, which
 // the features' hooks reach through the material-write sink (Api/MaterialWrites.h, defined here).
 
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialWrites.h"
 
-#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
+
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialPort.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include <array>
 #include <cstddef>
@@ -75,156 +77,160 @@ namespace DCLF::MaterialWrites
 			return reinterpret_cast<const std::uint32_t*>(REL::Offset(Engine::Address::kColorControllerTargets).address());
 		}
 
+		// The controllers' and materials' writes are SceneWriterFramework's call hooks (SWF_EVENT_CALL): each controller handler records
+		// on PRE which of its cases the update is and the values it compares (scratch[0] the case, [6] the type, [7] the property), and
+		// finishes that case on POST.
+		enum ControllerCase : std::uintptr_t
+		{
+			kEmissive = 1,  // the property's emissive multiplier or colour (per-object shading)
+			kTransforms,    // the texture transforms (float controller types above 0x13)
+			kDestination,   // a material member the AE destination tables name
+			kOther,         // anything else: the conservative notification
+		};
+
 		// BSLightingShaderPropertyFloatController::Update (AE 14150dde0, vtable slot 0x27). Type 0xb writes the
 		// property's emissive multiplier (per-object shading, resampled every frame at Prepass) and types above
 		// 0x13 the texture-transform buffers; every other type a material field.
 		// While a feature patches the frame VS variable (InstallContext::RegisterFrameVSVariablePatch), the texture transforms are no
 		// record's: the GPU patches every material row's TexcoordOffset from the buffer the frame reads, so a write that moved only them
 		// captures nothing; the kept shadow build still hears of it (TransformMoves: its rows read the transform themselves).
-		struct FloatControllerUpdate
+		void OnFloatController(const SWF_EventHeader* a_event, std::uintptr_t* a_scratch, void*)
 		{
-			static void thunk(RE::NiTimeController* a_this, void* a_data)
-			{
-				const auto type = ControllerType(a_this);
-				auto* property = static_cast<RE::BSLightingShaderProperty*>(a_this->target);
+			auto* controller = SceneWriter::Arg<RE::NiTimeController*>(a_event, 0);
+			if (SceneWriter::IsPre(a_event)) {
+				const auto type = ControllerType(controller);
+				auto* property = static_cast<RE::BSLightingShaderProperty*>(controller->target);
+				a_scratch[6] = type;
+				a_scratch[7] = reinterpret_cast<std::uintptr_t>(property);
 				if (type == 0xb && property) {
-					const auto before = property->emissiveMult;
-					func(a_this, a_data);
-					if (std::memcmp(&before, &property->emissiveMult, sizeof(before)) != 0)
-						ShadingQueue().Push(property);
+					a_scratch[0] = kEmissive;
+					std::memcpy(&a_scratch[1], &property->emissiveMult, sizeof(property->emissiveMult));
 				} else if (type > 0x13 && property && property->material) {
 					auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(property->material);
-					const auto offset0 = material->texCoordOffset[0], offset1 = material->texCoordOffset[1];
-					const auto scale0 = material->texCoordScale[0], scale1 = material->texCoordScale[1];
-					func(a_this, a_data);
+					a_scratch[0] = kTransforms;
+					a_scratch[1] = reinterpret_cast<std::uintptr_t>(material);
+					static_assert(sizeof(material->texCoordOffset) + sizeof(material->texCoordScale) <= 4 * sizeof(std::uintptr_t));
+					std::memcpy(&a_scratch[2], material->texCoordOffset, sizeof(material->texCoordOffset));
+					std::memcpy(&a_scratch[4], material->texCoordScale, sizeof(material->texCoordScale));
+				} else if (type <= 0x13 && type != 0xb && property && property->material && ControllerDestinationTablesKnown()) {
+					auto* material = property->material;
+					const auto offset = std::size_t(FloatDestinations()[type]) * sizeof(float);
+					a_scratch[0] = kDestination;
+					a_scratch[1] = reinterpret_cast<std::uintptr_t>(material);
+					std::memcpy(&a_scratch[2], reinterpret_cast<const std::byte*>(material) + offset, sizeof(std::uint32_t));
+				} else
+					a_scratch[0] = kOther;
+				return;
+			}
+			const auto type = static_cast<std::uint32_t>(a_scratch[6]);
+			auto* property = reinterpret_cast<RE::BSLightingShaderProperty*>(a_scratch[7]);
+			switch (a_scratch[0]) {
+			case kEmissive:
+				if (std::memcmp(&a_scratch[1], &property->emissiveMult, sizeof(property->emissiveMult)) != 0)
+					ShadingQueue().Push(property);
+				break;
+			case kTransforms:
+				{
+					auto* material = reinterpret_cast<RE::BSLightingShaderMaterialBase*>(a_scratch[1]);
 					// A swap during the update is the property's: its current material (alive, the property holding it) is captured.
 					if (property->material != material && property->material)
 						MaterialPort::PushCapture(property->material);
-					const bool moved = property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
-					                   scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1];
+					const bool moved = property->material != material ||
+					                   std::memcmp(&a_scratch[2], material->texCoordOffset, sizeof(material->texCoordOffset)) != 0 ||
+					                   std::memcmp(&a_scratch[4], material->texCoordScale, sizeof(material->texCoordScale)) != 0;
 					// Unless a feature patches the frame's (InstallContext::RegisterFrameVSVariablePatch), the transforms are the records': captured.
 					if (moved && property->material == material && !Extensions::FrameVSVariablePatched())
 						NoteWritten(material);
 					if (moved)
 						TransformMoves().Push(material);
-				} else if (type <= 0x13 && type != 0xb && property && property->material && ControllerDestinationTablesKnown()) {
-					auto* material = property->material;
+					break;
+				}
+			case kDestination:
+				{
+					auto* material = reinterpret_cast<RE::BSShaderMaterial*>(a_scratch[1]);
 					const auto offset = std::size_t(FloatDestinations()[type]) * sizeof(float);
-					std::uint32_t before = 0;
-					std::memcpy(&before, reinterpret_cast<const std::byte*>(material) + offset, sizeof(before));
-					func(a_this, a_data);
 					// A member's shading takes the material's alpha (MakeShading): its dependents are resampled too.
 					if (property->material != material ||
-						std::memcmp(&before, reinterpret_cast<const std::byte*>(material) + offset, sizeof(before)) != 0) {
+						std::memcmp(&a_scratch[2], reinterpret_cast<const std::byte*>(material) + offset, sizeof(std::uint32_t)) != 0) {
 						NoteWritten(material);
 						ShadingQueue().Push(property);
 					}
-				} else {
-					func(a_this, a_data);
-					if (type != 0xb && type <= 0x13) {
-						NoteTarget(a_this);
-						if (property)
-							ShadingQueue().Push(property);
-					}
+					break;
 				}
+			default:
+				if (type != 0xb && type <= 0x13) {
+					NoteTarget(controller);
+					if (property)
+						ShadingQueue().Push(property);
+				}
+				break;
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+		}
 
 		// BSLightingShaderPropertyColorController::Update (AE 14150ea50, slot 0x27). Type 1 writes the property's
 		// emissive colour (per-object shading); every other type a material colour.
-		struct ColorControllerUpdate
+		void OnColorController(const SWF_EventHeader* a_event, std::uintptr_t* a_scratch, void*)
 		{
-			static void thunk(RE::NiTimeController* a_this, void* a_data)
-			{
-				const auto type = ControllerType(a_this);
-				auto* property = static_cast<RE::BSLightingShaderProperty*>(a_this->target);
+			constexpr std::size_t kColour = 12;
+			auto* controller = SceneWriter::Arg<RE::NiTimeController*>(a_event, 0);
+			if (SceneWriter::IsPre(a_event)) {
+				const auto type = ControllerType(controller);
+				auto* property = static_cast<RE::BSLightingShaderProperty*>(controller->target);
+				a_scratch[6] = type;
+				a_scratch[7] = reinterpret_cast<std::uintptr_t>(property);
 				if (type == 1 && property && property->emissiveColor) {
-					const auto before = *property->emissiveColor;
-					func(a_this, a_data);
-					if (!property->emissiveColor || std::memcmp(&before, property->emissiveColor, sizeof(before)) != 0)
-						ShadingQueue().Push(property);
+					a_scratch[0] = kEmissive;
+					std::memcpy(&a_scratch[1], property->emissiveColor, kColour);
 				} else if (type != 1 && property && property->material && ControllerDestinationTablesKnown()) {
 					auto* material = property->material;
-					const auto offset = std::size_t(ColourDestinations()[type]);
-					std::array<std::byte, 12> before{};
-					std::memcpy(before.data(), reinterpret_cast<const std::byte*>(material) + offset, before.size());
-					func(a_this, a_data);
+					a_scratch[0] = kDestination;
+					a_scratch[1] = reinterpret_cast<std::uintptr_t>(material);
+					std::memcpy(&a_scratch[2], reinterpret_cast<const std::byte*>(material) + ColourDestinations()[type], kColour);
+				} else
+					a_scratch[0] = kOther;
+				return;
+			}
+			const auto type = static_cast<std::uint32_t>(a_scratch[6]);
+			auto* property = reinterpret_cast<RE::BSLightingShaderProperty*>(a_scratch[7]);
+			switch (a_scratch[0]) {
+			case kEmissive:
+				if (!property->emissiveColor || std::memcmp(&a_scratch[1], property->emissiveColor, kColour) != 0)
+					ShadingQueue().Push(property);
+				break;
+			case kDestination:
+				{
+					auto* material = reinterpret_cast<RE::BSShaderMaterial*>(a_scratch[1]);
 					if (property->material != material ||
-						std::memcmp(before.data(), reinterpret_cast<const std::byte*>(material) + offset, before.size()) != 0)
+						std::memcmp(&a_scratch[2], reinterpret_cast<const std::byte*>(material) + ColourDestinations()[type], kColour) != 0)
 						NoteWritten(material);
-				} else {
-					func(a_this, a_data);
-					if (type != 1)
-						NoteTarget(a_this);
+					break;
 				}
+			default:
+				if (type != 1)
+					NoteTarget(controller);
+				break;
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+		}
 
-		// The material's in-place rewrites (BSShaderMaterial 02, BSLightingShaderMaterialBase 08-0A), per vtable.
-		template <std::size_t V>
-		struct MaterialHooks
+		// The material's in-place rewrites (BSShaderMaterial 02, BSLightingShaderMaterialBase 08-0A) on the 14 Lighting material classes.
+		void OnMaterialRewrite(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
-			struct CopyMembers
-			{
-				static void thunk(RE::BSShaderMaterial* a_this, RE::BSShaderMaterial* a_that)
-				{
-					func(a_this, a_that);
-					NoteWritten(a_this);
-				}
-				static inline REL::Relocation<decltype(thunk)> func;
-			};
-			struct OnLoadTextureSet
-			{
-				static void thunk(RE::BSShaderMaterial* a_this, std::uint64_t a_arg, RE::BSTextureSet* a_set)
-				{
-					func(a_this, a_arg, a_set);
-					NoteWritten(a_this);
-				}
-				static inline REL::Relocation<decltype(thunk)> func;
-			};
-			struct ClearTextures
-			{
-				static void thunk(RE::BSShaderMaterial* a_this)
-				{
-					func(a_this);
-					NoteWritten(a_this);
-				}
-				static inline REL::Relocation<decltype(thunk)> func;
-			};
-			struct ReceiveValues
-			{
-				static void thunk(RE::BSShaderMaterial* a_this, bool a_1, bool a_2, bool a_3, bool a_4, bool a_5)
-				{
-					func(a_this, a_1, a_2, a_3, a_4, a_5);
-					NoteWritten(a_this);
-				}
-				static inline REL::Relocation<decltype(thunk)> func;
-			};
-			static void Install(const REL::VariantID& a_vtable)
-			{
-				stl::write_vfunc<0x02, CopyMembers>(a_vtable);
-				stl::write_vfunc<0x08, OnLoadTextureSet>(a_vtable);
-				stl::write_vfunc<0x09, ClearTextures>(a_vtable);
-				stl::write_vfunc<0x0A, ReceiveValues>(a_vtable);
-			}
-		};
-
-		template <std::size_t... I>
-		void InstallMaterialHooks(const std::array<REL::VariantID, sizeof...(I)>& a_vtables, std::index_sequence<I...>)
-		{
-			(MaterialHooks<I>::Install(a_vtables[I]), ...);
+			NoteWritten(SceneWriter::Arg<RE::BSShaderMaterial*>(a_event, 0));
 		}
 	}
 
 	void Install()
 	{
-		stl::write_vfunc<0x27, FloatControllerUpdate>(RE::VTABLE_BSLightingShaderPropertyFloatController[0]);
-		stl::write_vfunc<0x27, ColorControllerUpdate>(RE::VTABLE_BSLightingShaderPropertyColorController[0]);
-		InstallMaterialHooks(Engine::LightingMaterialVtables(), std::make_index_sequence<14>{});
+		// SceneWriterFramework's material call family, which DrawcallLimitFix::PostPostLoad required (SceneWriter::kRequiredCaps).
+		bool subscribed = SceneWriter::SubscribeCall(SWF_HOOK_FLOAT_CONTROLLER_UPDATE, &OnFloatController) &&
+		                  SceneWriter::SubscribeCall(SWF_HOOK_COLOR_CONTROLLER_UPDATE, &OnColorController);
+		for (const std::uint32_t hook : { SWF_HOOK_MATERIAL_COPY_MEMBERS, SWF_HOOK_MATERIAL_LOAD_TEXTURE_SET, SWF_HOOK_MATERIAL_CLEAR_TEXTURES,
+				 SWF_HOOK_MATERIAL_RECEIVE_VALUES })
+			subscribed = subscribed && SceneWriter::SubscribeCall(hook, &OnMaterialRewrite, SWF_PHASE_POST);
+		if (!subscribed)
+			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused the material write hooks after reporting them installed");
 		// The Effect port's controllers and material rewrite are Features/Effects' (EffectWrites.cpp, at its install), through Api/MaterialWrites.h.
-		logger::info("[DCLF] material write hooks installed: float and colour controllers, 14 material vtables");
+		logger::info("[DCLF] material write hooks subscribed: float and colour controllers, 14 material classes");
 	}
 
 	void NoteWritten(const RE::BSShaderMaterial* a_material)
