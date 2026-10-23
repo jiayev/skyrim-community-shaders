@@ -99,7 +99,7 @@ void PostProcessing::DrawSettings()
 
 	{
 		auto& cam = cinematicCamera;
-		ImGui::Checkbox(T("feature.post_processing.cinematic_camera.name", "Cinematic Camera"), &cam.settings.Enabled);
+		ImGui::Checkbox(T("feature.post_processing.cinematic_camera.name", "Cinematic Camera"), &cinematicCamera.settings.Enabled);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T("feature.post_processing.cinematic_camera.description",
 								  "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));

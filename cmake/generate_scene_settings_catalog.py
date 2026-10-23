@@ -3488,7 +3488,8 @@ def resolve_record_array_radio_choices(
 
 
 def _project_standard_controls(
-        paths: list[Path], provider_paths: list[Path]) -> dict[
+        paths: list[Path], provider_paths: list[Path],
+        component_containers: dict[str, dict[str, str]] | None = None) -> dict[
             tuple[str, tuple[str, ...]], ControlBinding]:
     functions = collect_source_functions(paths, include_qualifiers=True)
     definitions: dict[str, list[SourceFunction]] = {}
@@ -3661,6 +3662,19 @@ def _project_standard_controls(
                 if function in draw_control_functions else None)
             if setting_path:
                 identity = function.owner, setting_path
+                add_metadata(identity, make_binding(
+                    function, control.start(), *identity, kind, args, choices=choices), 3)
+                add_choices(identity, choices)
+
+            # A feature may draw an owned component's setting itself, e.g. `&component.settings.Enabled`.
+            container = re.search(
+                r"&\s*([A-Za-z_]\w*)\s*\.\s*settings\s*\.\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*$",
+                args[storage_index])
+            component_owner = (
+                (component_containers or {}).get(function.owner, {}).get(container.group(1))
+                if container and function in draw_control_functions else None)
+            if component_owner:
+                identity = component_owner, normalize_setting_path(container.group(2))
                 add_metadata(identity, make_binding(
                     function, control.start(), *identity, kind, args, choices=choices), 3)
                 add_choices(identity, choices)
@@ -4109,9 +4123,10 @@ def _collect_reversible_numeric_bindings(
 
 
 def collect_control_index(
-        paths: list[Path], provider_paths: list[Path] | None = None) -> ControlIndex:
+        paths: list[Path], provider_paths: list[Path] | None = None,
+        component_containers: dict[str, dict[str, str]] | None = None) -> ControlIndex:
     provider_paths = provider_paths or paths
-    bindings = _project_standard_controls(paths, provider_paths)
+    bindings = _project_standard_controls(paths, provider_paths, component_containers)
     conflicts = set()
 
     def merge_unique(target, additions):
@@ -4301,7 +4316,10 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
     direct_persisted_fields = collect_direct_persisted_fields(
         [p for p in src_paths if p.suffix == ".cpp"], feature_members)
     cpp_paths = [p for p in src_paths if p.suffix == ".cpp"]
-    control_index = collect_control_index(cpp_paths, src_paths)
+    component_containers: dict[str, dict[str, str]] = {}
+    for owner, member, child_type, _ in owned_components:
+        component_containers.setdefault(owner, {})[member] = child_type.split("::")[-1]
+    control_index = collect_control_index(cpp_paths, src_paths, component_containers)
 
     entries: list[dict[str, object]] = []
     seen: dict[tuple[str, tuple[str, ...], str], tuple[object, ...]] = {}
