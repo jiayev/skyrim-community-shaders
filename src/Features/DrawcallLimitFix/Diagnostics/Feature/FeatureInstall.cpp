@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/CaptureParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Deferred.h"
@@ -45,6 +46,15 @@ namespace DCLF::Diagnostics
 			if (!set || !(set->PhasesOf(pass->geometry) & kSetMain))
 				return;
 			++(a_offered.inDepthPass ? leaks.leakedInDepth : leaks.leakedInOpaque);
+			// The compatibility monitor's: by the geometry's reference (another plugin's registration is the likely cause).
+			if (PlayerParity::Active()) {
+				std::uint32_t form = 0;
+				for (const RE::NiAVObject* at = pass->geometry; at && !form; at = at->parent)
+					if (const auto* reference = at->GetUserData())
+						form = reference->GetFormID();
+				PlayerParity::NoteLeak(form, fmt::format("'{}' ({} pass, technique {:08X})", pass->geometry->name.c_str() ? pass->geometry->name.c_str() : "?",
+												 a_offered.inDepthPass ? "depth" : "opaque", a_offered.technique));
+			}
 			if (leaks.samples.size() < 8)
 				leaks.samples.push_back(fmt::format("'{}' ({}, hint {}, technique {:08X})", pass->geometry->name.c_str() ? pass->geometry->name.c_str() : "?",
 					a_offered.inDepthPass ? "depth" : "opaque", static_cast<std::uint32_t>(pass->accumulationHint), a_offered.technique));

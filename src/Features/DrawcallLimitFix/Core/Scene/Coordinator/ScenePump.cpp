@@ -44,6 +44,8 @@ namespace DCLF
 		std::array<DeferredCount, static_cast<std::size_t>(SceneWake::Count)> scenePassDeferred{};
 		// The executor refused the pump's task: the pump is closed for good (logged once).
 		std::atomic<bool> scenePumpFailed{ false };
+		// The test harness's dclf:kill-scene-pump: the next pass throws past its handler, as a pass that dies for good would.
+		std::atomic<bool> throwNextPass{ false };
 		// This thread's ScenePassWakeBatch depth and the sources folded into it.
 		thread_local std::uint32_t wakeBatchDepth = 0;
 		thread_local std::uint32_t wakeBatched = 0;
@@ -138,7 +140,7 @@ namespace DCLF::Scene
 			[this] { ScenePass(passInline); },
 			[] {
 				if (!scenePumpFailed.exchange(true, std::memory_order_acq_rel))
-					logger::error("[DCLF] the scene pump was refused by the scene lane; no scene pass runs from here on");
+					logger::error("[DCLF] the scene pump stopped (its task refused by the scene lane, or a pass threw past its handler); no scene pass runs from here on");
 			});
 		// No wake on a retirement returned (a return would wake a pass whose publication's drop returns the next): the next pass
 		// with an input recycles it.
@@ -151,6 +153,17 @@ namespace DCLF::Scene
 	{
 		passesFull.store(a_full, std::memory_order_release);
 		scenePassesInline.store(a_inline, std::memory_order_relaxed);
+	}
+
+	void Coordinator::ThrowNextScenePass()
+	{
+		throwNextPass.store(true, std::memory_order_release);
+		WakeScenePass(SceneWake::FrameInput);
+	}
+
+	bool Coordinator::ScenePumpFailed() const
+	{
+		return scenePumpFailed.load(std::memory_order_acquire);
 	}
 
 	bool Coordinator::SceneTaskInFlight() const
@@ -186,6 +199,8 @@ namespace DCLF::Scene
 	void Coordinator::ScenePass(bool a_inline)
 	{
 		ZoneScopedN("CS.DCLF.ScenePass");
+		if (throwNextPass.exchange(false, std::memory_order_acq_rel)) [[unlikely]]
+			throw 0;  // not a std::exception: past the pass's handler, into the pump's (SerializedTaskPump::RunOwned), which stops it
 		// A wake from here on is the next pass's: the sources taken before anything is (WakeScenePassBits' fence pairs with this one).
 		const std::uint32_t sources = scenePassReasons.exchange(0, std::memory_order_acq_rel);
 		std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -268,7 +283,7 @@ namespace DCLF::Scene
 	void Coordinator::ReportPublicationPacing()
 	{
 		// Once the pass's frame is in a later report window, as the mover gate's.
-		const std::uint32_t window = sceneFrame / Reports::kInterval;
+		const std::uint32_t window = sceneFrame / Reports::Interval();
 		if (window == paceWindow)
 			return;
 		paceWindow = window;
@@ -345,7 +360,7 @@ namespace DCLF::Scene
 	void Coordinator::ReportMoverGate()
 	{
 		// Once the pass's frame is in a later report window (the coordinator's clock may skip frame numbers).
-		const std::uint32_t window = sceneFrame / Reports::kInterval;
+		const std::uint32_t window = sceneFrame / Reports::Interval();
 		if (window == moverGateWindow)
 			return;
 		moverGateWindow = window;

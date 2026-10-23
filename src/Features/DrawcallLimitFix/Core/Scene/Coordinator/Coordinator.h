@@ -261,6 +261,10 @@ namespace DCLF
 		void ApplyEventsInline();
 		/** @brief Whether a scene pass runs now: frame-side fallbacks that read what a pass writes refuse then. */
 		bool SceneTaskInFlight() const;
+		/** @brief Any thread: the pump stopped for good (refused, or a pass threw past its handler); no scene pass runs again. */
+		bool ScenePumpFailed() const;
+		/** @brief The test harness's (dclf:kill-scene-pump): the next scene pass throws past its handler, so the pump stops for good. */
+		void ThrowNextScenePass();
 
 		// Scene members (dclf-architecture.md, "Eligibility and classification"): a member's accumulated half is patched once from its membership pass and kept across
 		// frames until a rewrite breaks its binding, a release or a failed patch.

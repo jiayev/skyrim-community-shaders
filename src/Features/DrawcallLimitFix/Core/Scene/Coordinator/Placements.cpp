@@ -546,7 +546,7 @@ namespace DCLF::Scene
 	void Coordinator::ReportPlacementDeltas()
 	{
 		// Once the pass's frame is in a later report window (the coordinator's clock may skip frame numbers).
-		const std::uint32_t window = sceneFrame / Reports::kInterval;
+		const std::uint32_t window = sceneFrame / Reports::Interval();
 		if (window == placementDeltaWindow)
 			return;
 		placementDeltaWindow = window;

@@ -69,7 +69,7 @@ namespace DCLF::Features::FirstPerson
 			// first-person root, members of kSetFirstPerson drawn by the first-person epochs (off by default: CS_DCLF_FIRST_PERSON=1 seeds it
 			// on; the engine draws its few dozen draws for less than the two epochs' builds, barriers and indirect draws cost). After the reflections (Features/Reflection's, registered earlier after the same Core toggle), last; it needs the skinned and
 			// the actors (the player's skeleton).
-			const auto firstPerson = a_context.RegisterToggle({ .name = "first person", .label = "Draw the first-person arms and weapons (CS_DCLF_FIRST_PERSON)",
+			const auto firstPerson = a_context.RegisterToggle({ .name = "first person", .label = "Draw the first-person arms and weapons",
 				.tooltip = "T7e: DCLF draws the first-person skeleton's geometry (arms, weapons, shield, magic hands) as a view of its scene, with the first-person camera, in the engine's depth and first-person passes. Off by default: the engine draws the skeleton's few draws for less than DCLF's two epochs cost (hand-back sweep: 0.15 ms a frame).",
 				.section = "First person", .seed = firstPersonSwitch, .entersClassification = true, .offByDefault = true, .after = "exclude primary entries", .needs = { "skinned", "actors" } });
 			// The view (Core's view machinery: its epochs, revisions, frame requests, classification and set decisions read it as data), and

@@ -215,6 +215,8 @@ namespace DCLF
 		 * frame will adopt: not before the pass of the frame that took the last one has ended (its publication supersedes a held one).
 		 */
 		void NoteScenePassDone(std::uint32_t a_frame);
+		/** @brief Any thread: the frame of the newest scene pass that ended (NoteScenePassDone), 0 before the first. */
+		std::uint32_t ScenePassDoneFrame() const;
 		/**
 		 * @brief Any thread: the sequence of the newest publication the snapshot builder has taken from its work slot (0: none; ~0 without a
 		 * builder). The coordinator publishes again only once the last is taken, or for the frame's pass (publication pacing): one posted

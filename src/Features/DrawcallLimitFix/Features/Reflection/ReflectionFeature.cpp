@@ -89,7 +89,7 @@ namespace DCLF::Features::Reflection
 			// The water reflection's cube map faces' LOD drawn by DCLF from its own tables (dclf-architecture.md, "Water reflections"). Where Core's was
 			// listed, after the precipitation occlusion's (Features/OcclusionMaps', registered earlier after the same Core toggle), opening its
 			// section; the first feature toggle registered after the maps', so its bit in the packed word is where Core's was.
-			const auto reflections = a_context.RegisterToggle({ .name = "reflections", .label = "Draw the water reflection's distant land, objects and trees (CS_DCLF_REFLECTIONS)",
+			const auto reflections = a_context.RegisterToggle({ .name = "reflections", .label = "Draw the water reflection's distant land, objects and trees",
 				.tooltip = "DCLF draws the LOD the water's cube map reflects from its own tables on the GPU; the engine draws the sky, and any LOD DCLF cannot draw yet.",
 				.section = "Reflections", .seed = reflectionsSwitch, .after = "exclude primary entries" });
 			// The view (Core's view machinery: its epochs, revisions, set decisions and withholding read it as data).

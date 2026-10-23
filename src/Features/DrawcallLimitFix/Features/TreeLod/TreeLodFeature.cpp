@@ -30,7 +30,7 @@ namespace DCLF::Features::TreeLod
 			// Where Core's was: after the refraction's, behind Features/Particles', Features/Billboards', Features/SwitchNodes' and
 			// Features/Lod's (which register before this feature). Its change drops no classification cache: tree LOD is drawn from the
 			// mirror, not classified.
-			const auto toggle = a_context.RegisterToggle({ .name = "tree LOD", .label = "Tree LOD: distant trees (CS_DCLF_LOD_TREES)", .seed = trees, .after = "refraction" });
+			const auto toggle = a_context.RegisterToggle({ .name = "tree LOD", .label = "Tree LOD: distant trees", .seed = trees, .after = "refraction" });
 			// The tree LOD instances, the TreeInstances draw family's while the toggle is on (its decision; the revisions' trees pipelines; a
 			// trees view's tree LOD per face).
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::TreeLod, .toggle = toggle });

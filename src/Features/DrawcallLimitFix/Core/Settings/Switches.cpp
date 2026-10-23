@@ -326,6 +326,28 @@ namespace DCLF
 		}
 	}
 
+	bool AnyObserverSwitch()
+	{
+		// Set to anything but 0; the shader build's switches are not observers (CS_DCLF_SHADER_DEBUG is on by default).
+		bool any = false;
+		ForEachRow([&](std::string_view a_name, Kind a_kind, Reduced, const std::string& a_value) {
+			const bool observer = (a_kind == Kind::Parity || a_kind == Kind::Diagnostic) && a_name != "CS_DCLF_SHADER_DEBUG" && a_name != "CS_DCLF_SHADER_SOURCE_DIR";
+			any = any || (observer && !a_value.empty() && a_value != "0");
+		});
+		return any;
+	}
+
+	std::string_view SwitchName(Switch a_switch)
+	{
+		return static_cast<std::size_t>(a_switch) < std::size(kRegistry) ? kRegistry[static_cast<std::size_t>(a_switch)].name : std::string_view{};
+	}
+
+	std::string_view SwitchName(Api::SwitchId a_switch)
+	{
+		const auto& registered = RegisteredSwitches();
+		return a_switch.index < registered.size() ? std::string_view(registered[a_switch.index].name) : std::string_view{};
+	}
+
 	const std::string& SwitchValue(Api::SwitchId a_switch)
 	{
 		static const std::string kUnset;

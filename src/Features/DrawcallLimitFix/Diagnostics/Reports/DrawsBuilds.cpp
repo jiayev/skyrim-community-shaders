@@ -34,6 +34,6 @@ namespace DCLF::Reports
 
 	void ColourSunTestLine(std::uint32_t a_empty)
 	{
-		logger::info("[DCLF] colour sun test: {} of {} frames without the sun's cascades{}", a_empty, kInterval, a_empty ? " <- NO CASCADES" : " <- OK");
+		logger::info("[DCLF] colour sun test: {} of {} frames without the sun's cascades{}", a_empty, Interval(), a_empty ? " <- NO CASCADES" : " <- OK");
 	}
 }

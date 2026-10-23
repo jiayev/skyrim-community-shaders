@@ -26,7 +26,7 @@ namespace DCLF::Features::Effects
 			// Static blended BSEffectShaderProperty meshes, drawn by the forward epoch in the same GPU sort (needs forward; on by default:
 			// CS_DCLF_EFFECTS=0 seeds it off): an object class. Right after the forward epoch's, where Core's was (before Features/Particles'
 			// and Features/Billboards', which need it and register after this feature).
-			effectsToggle = a_context.RegisterToggle({ .name = "effects", .label = "Effect meshes: clouds, glows, mist (CS_DCLF_EFFECTS)",
+			effectsToggle = a_context.RegisterToggle({ .name = "effects", .label = "Effect meshes: clouds, glows, mist",
 				.tooltip = "T7d: DCLF draws blended effect-shader meshes in the forward epoch, sorted with the blended Lighting objects, and (with Decals) effect decals in its decal groups, skinned ones (with Skinned) through the skin palette. On by default (validated w174/w175; decals and skinned effects not yet).",
 				.seed = effects, .entersClassification = true, .after = "forward", .needs = { "forward" } });
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Effect, .toggle = effectsToggle });

@@ -21,7 +21,7 @@ namespace DCLF::Features::Particles
 			// NiParticleSystem geometry with a BSEffectShaderProperty, its quads built by DCLF from snapshots taken at the engine's particle
 			// update (ParticleSnapshots) and drawn in the forward epoch's sort (needs effects; on by default: CS_DCLF_PARTICLES=0 seeds it
 			// off): an object class.
-			particlesToggle = a_context.RegisterToggle({ .name = "particles", .label = "Particle systems: smoke, flames, glows (CS_DCLF_PARTICLES)",
+			particlesToggle = a_context.RegisterToggle({ .name = "particles", .label = "Particle systems: smoke, flames, glows",
 				.tooltip = "T7e: DCLF draws effect-shader particle systems in the forward epoch, sorted with the other blended objects, their quads built from snapshots taken at the engine's particle update. On by default (validated fp6).",
 				.seed = particles, .entersClassification = true, .after = "refraction", .needs = { "effects" } });
 			// The particle geometry types (ParticleGeometryType): DCLF's while the toggle is on. A particle system (kParticles) without a skin

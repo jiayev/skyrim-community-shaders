@@ -676,7 +676,13 @@ namespace DCLF
 		// The generations it was built for (its last make's inputs), which the adoption compares.
 		snapshot->buildGeneration = inputs.buildGeneration;
 		snapshot->mainGeneration = inputs.mainGeneration;
-		snapshot->targetsGeneration = inputs.targetsGeneration;
+		// The targets' generation its pipeline sets are actually for: its publication's catalog's. A make for new targets before the pipeline
+		// lane built their catalog has no indirect state (RequireRevisionSet) and draws nothing, so it stays stale for them, and the frame
+		// waits for the new catalog's snapshot rather than adopting one that cannot draw (open defect: frames with no epoch after a target
+		// format change).
+		// (~0: no generation, so stale for every one.)
+		const auto* catalog = snapshot->publication ? snapshot->publication->catalog.get() : nullptr;
+		snapshot->targetsGeneration = catalog && catalog->setVersion && catalog->targetsGeneration == inputs.targetsGeneration ? inputs.targetsGeneration : ~0u;
 		snapshot->shadowFormat = inputs.shadowFormat;
 		// What a publication changing only deltas passes through to (PassesThrough): a snapshot with a revision, complete draws and
 		// their payload, and what it was built from (a context of its publication's toggles: BuildSnapshotDraws).
@@ -816,8 +822,11 @@ namespace DCLF
 		auto& s = *impl;
 		using Clock = std::chrono::steady_clock;
 		// Generous: a snapshot made again for a build (its recordings, its draws for new main resources and their payload) takes
-		// milliseconds; five seconds without one is a builder that cannot make it, never a slow one.
+		// milliseconds; five seconds without one is a builder that cannot make it, never a slow one. New targets wait for the pipeline lane's
+		// catalog for them instead, which compiles every pipeline of the set for the new formats: up to kCatalogTimeout, logged as it goes.
 		constexpr auto kTimeout = std::chrono::seconds(5);
+		constexpr auto kCatalogTimeout = std::chrono::seconds(120);
+		auto progressAt = std::chrono::seconds(5);
 		constexpr auto kSpin = std::chrono::milliseconds(2);
 		constexpr auto kTicketPeriod = std::chrono::milliseconds(16);
 		const auto start = Clock::now();
@@ -850,7 +859,13 @@ namespace DCLF
 					break;
 			}
 			const auto waited = Clock::now() - start;
-			if (waited > kTimeout) {
+			const bool catalogWait = s.adoptedSnapshot && s.StaleKindOf(*s.adoptedSnapshot) == Impl::kStaleTargets;
+			if (catalogWait && waited > progressAt && waited <= kCatalogTimeout) {
+				logger::info("[DCLF] frame {} has waited {} s at its start for the pipelines of the new target formats (generation {})", frame,
+					std::chrono::duration_cast<std::chrono::seconds>(waited).count(), DrawPipelines::Get().Generation());
+				progressAt += std::chrono::seconds(5);
+			}
+			if (waited > (catalogWait ? kCatalogTimeout : kTimeout)) {
 				const auto& adopted = s.adoptedSnapshot;
 				const auto pumpStats = s.SnapshotPump().GetStats();
 				std::string stale;
@@ -863,7 +878,7 @@ namespace DCLF
 					"inputs moved {}, publication gated {}, build ahead running {}. Adopted snapshot: serial {}, revision {}, draws complete {}, build "
 					"generation {}, main generation {}, payload {}. The builder (read racily, for this message): stage {}, passes {} ({} idle), work {}, draws {}, "
 					"payload {}; its pump: runner active {}, requested epoch {}, drained {}, notifications {}, passes {}, rejected {}",
-					frame, std::chrono::duration_cast<std::chrono::seconds>(kTimeout).count(), host->BuildGeneration(), host->RebuildRequested(),
+					frame, std::chrono::duration_cast<std::chrono::seconds>(waited).count(), host->BuildGeneration(), host->RebuildRequested(),
 					s.postedInputs.mainGeneration, DrawPipelines::Get().Generation(), stale, seen, s.recordingsOutstanding.load(std::memory_order_acquire),
 					s.snapshotInputsMoved.load(std::memory_order_acquire), s.publicationGated.load(std::memory_order_acquire),
 					s.aheadRunning.load(std::memory_order_acquire), adopted ? adopted->serial : 0, adopted && adopted->revision, adopted && adopted->drawsComplete,
@@ -900,6 +915,11 @@ namespace DCLF
 			WakeSnapshotBuilder();
 		else
 			impl->passDoneWakesSkipped.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	std::uint32_t IndirectDraws::ScenePassDoneFrame() const
+	{
+		return impl ? impl->scenePassDoneFrame.load(std::memory_order_acquire) : 0;
 	}
 
 	std::uint64_t IndirectDraws::SnapshotWorkTaken() const

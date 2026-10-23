@@ -112,7 +112,7 @@ namespace DCLF::Scene
 			std::uint64_t evaluationsPooled = 0, poolRounds = 0, joinPrepared = 0, joinInline = 0, watchesSkipped = 0, watchesDropped = 0,
 						  appliedPooled = 0;
 		} materialRecordStats;
-		std::uint32_t materialReportWindow = ~0u;  // the report window (sceneFrame / Reports::kInterval) the material lines last printed in
+		std::uint32_t materialReportWindow = ~0u;  // the report window (sceneFrame / Reports::Interval()) the material lines last printed in
 		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> materialRequested;  // asked, not answered yet
 	};
 }

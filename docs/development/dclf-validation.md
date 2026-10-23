@@ -97,6 +97,7 @@ Each compares a live path with a reference built from scratch and flags every mi
 | `CS_DCLF_PERSISTENT_PARITY` | `1`: every kept store (records, bindings, slots, shading, geometry, kept builds) against a rebuild, every 60 frames, and many structure checks. |
 | `CS_DCLF_WALK_PARITY` | `1`: the delta walk against a dense walk, every 60 frames. |
 | `CS_DCLF_MIRROR_PARITY` | `1`: the scene mirror against the live objects, a slice of the tracked set a frame. |
+| `CS_DCLF_PLAYER_PARITY` | `1`: the [compatibility monitor](#the-compatibility-monitor) starts on. The menu switches it live. |
 | `CS_DCLF_CHANGE_LOG_PARITY` | `1`: the change log against a diff of the tables. |
 | `CS_DCLF_RESIDENT_PARITY` | `1`: resident records against their passes built again. |
 | `CS_DCLF_BUILD_PARITY` | `1`: BuildDraws' GPU output against the CPU's templates, and the index pool. Turns the resident region off. |
@@ -139,7 +140,7 @@ Each compares a live path with a reference built from scratch and flags every mi
 
 | Switch | Format | Effect |
 | --- | --- | --- |
-| `CS_DCLF_TEST_COMMANDS` | `<frame>:<command>;...` | A console command at a frame. Also `dclf:<toggle name>=0\|1` (a live toggle), `dclf:pov=first\|third`, `dclf:draw=1\|0` (weapons or magic hands drawn or sheathed) and `dclf:rebuild` (a graph rebuild). |
+| `CS_DCLF_TEST_COMMANDS` | `<frame>:<command>;...` | A console command at a frame. Also `dclf:<toggle name>=0\|1` (a live toggle), `dclf:pov=first\|third`, `dclf:draw=1\|0` (weapons or magic hands drawn or sheathed), `dclf:rebuild` (a graph rebuild), `dclf:compat=0\|1` and `dclf:compat-report` (the compatibility monitor and its report), `dclf:foreign-write=<n>` (an unhooked alpha threshold write on up to n references near the player) and `dclf:kill-scene-pump` (the scene pump stopped for good, for its watchdog). |
 | `CS_DCLF_TEST_MOVE` | `<start>:<end>:<units per frame>;...` | Carries the player forward. |
 | `CS_DCLF_TEST_TURN` | `<start>:<end>:<degrees per frame>;...` | Turns the player. |
 | `CS_DCLF_TEST_TOGGLE` | `<off frame>:<on frame>...` | Switches DCLF off and on. |
@@ -359,6 +360,23 @@ witnesses: a changed one is a missed event. Clean: 0 differ, 0 missing, 0 extra.
 absent from the mirror or a field the events missed; `[DCLF] mirror reads (T6b1b): ...` flags `<- MIRROR READ`. Fields are
 classed evented, late or missed. `CS_DCLF_MIRROR_WATCH` names the writer behind a missed field.
 
+### The compatibility monitor
+
+The player-facing parity mode (`Diagnostics/PlayerParity.cpp`): the menu's "Watch for changes other plugins make",
+`CS_DCLF_PLAYER_PARITY=1` at the start, or `dclf:compat=0|1`. It runs only checks that leave the main path as it is. It uses
+mirror parity's probe and check without the mirror reads, so the fan-out stays parallel. It also takes the leak observer's set
+members drawn natively, and the mirror's evictions (a subtree that left the world by no hooked detach). Its observers are
+switchable (`Diagnostics/Hooks.h`, `SubscribeSwitchable`). The render thread switches them at `FrameBegin`. While the monitor is
+off, each of their events costs its one flag test.
+
+Each missed difference, leak or eviction is an offender. A node or geometry offender is keyed by its owning reference: the
+probe tags every record with the form ID of the nearest ancestor with user data. A property or alpha offender is keyed by the
+shared object, since one write shows on every instance of the mesh, and lists the references it was found under. Each new
+offender logs one `<- OFFENDER` line. The menu lists them, and "Write report" (or `dclf:compat-report`) writes
+`CommunityShaders-DCLF-Compat-<time>.txt` beside the log. The report holds the build, the game version, the offenders with
+reference, base object and plugin, the load order and the SKSE DLLs. Turning the monitor on starts a fresh list.
+`dclf:foreign-write=<n>` makes offenders to check it with.
+
 ### Change log parity
 
 `CS_DCLF_CHANGE_LOG_PARITY=1`: `[DCLF] change log parity: N checks (N skipped), N slots compared, N changed, N changed with no
@@ -528,7 +546,9 @@ the measurement and what would remove each; this list says how each shows in the
 
 ### The periodic report
 
-`CS_DCLF_STATS=1` logs DCLF's report every 300 frames into `CommunityShaders.log`. Lines start `[DCLF]`; the render graph's start
+`CS_DCLF_STATS=1` logs DCLF's full report every 300 frames into `CommunityShaders.log`. Its always-on lines (the culling, the leaks,
+the scene pump and others) are logged every 300 frames while any parity or diagnostic switch is set, and every 18,000 frames in
+normal play (`Reports::Interval`). Each window's averages cover that window's own frames. Lines start `[DCLF]`; the render graph's start
 `[ORG]`. The [lines in every report](#lines-in-every-report) say which ones show that DCLF draws at all. The report also covers
 the scene pump, the set and its leaves by cause, the tables, the pooled payload, the frame values, the shadow views and each
 feature's own lines (`Api::ReportPoint`, registered by `RegisterReportLines`). `CS_DCLF_PASS_STATS` and `CS_DCLF_PROFILE` add

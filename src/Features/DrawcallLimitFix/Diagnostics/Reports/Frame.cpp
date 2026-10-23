@@ -115,7 +115,7 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 	}
 	// What the GPU spent on each segment, measured by the graph itself; the menu shows the latest window.
 	if (due)
-		RenderGraphRuntime::Get().ReportGpuTimings(kInterval, DCLF::Diagnostics::Observe().stats);
+		RenderGraphRuntime::Get().ReportGpuTimings(Interval(), DCLF::Diagnostics::Observe().stats);
 	if (due && !DCLF::Diagnostics::Observe().stats)
 		timing = {};
 	if (DCLF::Diagnostics::Observe().stats && due) {

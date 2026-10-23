@@ -6,8 +6,10 @@
 #include "Plugin.h"
 #include "Utils/UI.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/SceneMirror.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorEvents.h"
 
 #include <imgui.h>
 
@@ -39,6 +41,14 @@ namespace DCLF::Diagnostics::PlayerParity
 		} table;
 		std::atomic<std::shared_ptr<const Offenders>> published{ std::make_shared<const Offenders>() };
 
+		// The render thread's leaks, to the coordinator's table (NoteCheck drains them).
+		struct LeakNote
+		{
+			std::uint32_t form = 0;
+			std::string example;
+		};
+		EventQueue<LeakNote, 64> leakNotes;
+
 		// The longest example kept: a mirror parity line can run to several hundred characters.
 		constexpr std::size_t kExampleChars = 400;
 		// The offenders kept at most; past it a new one only counts (one noisy writer must not grow the table without bound).
@@ -53,7 +63,7 @@ namespace DCLF::Diagnostics::PlayerParity
 
 		const char* TypeName(std::uint8_t a_type)
 		{
-			return a_type < SceneMirror::kTypeNames.size() ? SceneMirror::kTypeNames[a_type] : "?";
+			return a_type < SceneMirror::kTypeNames.size() ? SceneMirror::kTypeNames[a_type] : a_type == kLeak ? "geometry" : a_type == kEvicted ? "subtree" : "?";
 		}
 
 		std::string FieldNames(std::uint8_t a_type, std::uint32_t a_fields)
@@ -67,6 +77,10 @@ namespace DCLF::Diagnostics::PlayerParity
 				return SceneMirror::Fields<SceneCapture::PropertyRecord>(a_fields);
 			case 3:
 				return SceneMirror::Fields<SceneCapture::AlphaRecord>(a_fields);
+			case kLeak:
+				return "drawn by the engine as well as by DCLF";
+			case kEvicted:
+				return "left the world with no detach DCLF sees";
 			default:
 				return fmt::format("{:#x}", a_fields);
 			}
@@ -131,6 +145,10 @@ namespace DCLF::Diagnostics::PlayerParity
 	void Install()
 	{
 		Subscribe<FrameBegin>(OnFrameBegin);
+		// A subtree another plugin detached by a path no hook sees (the coordinator's; one offender per class of its root).
+		SubscribeSwitchable<MirrorEvicted>([](const MirrorEvicted& a_event) {
+			NoteMissed(a_event.rtti, 0, kEvicted, 0, fmt::format("a {} with {} records under it, {}", a_event.rtti ? a_event.rtti : "?", a_event.records, a_event.what));
+		});
 		if (SwitchEnabled(Switch::PlayerParity))
 			requested.store(true, std::memory_order_relaxed);
 	}
@@ -144,14 +162,16 @@ namespace DCLF::Diagnostics::PlayerParity
 		if (!resetPending.exchange(false, std::memory_order_acq_rel))
 			return false;
 		Restart();
+		leakNotes.Discard();  // from before the session (the queue's one consumer is this thread)
 		return true;
 	}
 
 	void NoteMissed(const void* a_object, std::uint32_t a_form, std::uint8_t a_type, std::uint32_t a_fields, std::string_view a_example)
 	{
 		const auto frame = SceneCapture::Frame();
-		// A property's or an alpha's write shows on every reference whose mesh shares it: one offender, by the object.
-		const bool shared = a_type == 2 || a_type == 3;
+		// A property's or an alpha's write shows on every reference whose mesh shares it: one offender, by the object (an eviction's: by
+		// its root's class).
+		const bool shared = a_type == 2 || a_type == 3 || a_type == kEvicted;
 		const auto key = std::make_tuple(shared ? reinterpret_cast<std::uintptr_t>(a_object) : a_form, a_type, a_fields);
 		if (const auto found = table.index.find(key); found != table.index.end()) {
 			auto& offender = table.offenders.entries[found->second];
@@ -175,14 +195,24 @@ namespace DCLF::Diagnostics::PlayerParity
 		table.offenders.entries.push_back({ a_form, 1, a_type, a_fields, 1, frame, frame, std::string(a_example.substr(0, kExampleChars)) });
 		table.dirty = true;
 		// One line per new offender (not per check): the plugin by the form ID's load order index, the rest in the menu and the report.
-		logger::warn("[DCLF] compatibility monitor: {} {} changed with no hook on an object of reference {:08X} ({}) <- OFFENDER", TypeName(a_type),
-			FieldNames(a_type, a_fields), a_form, a_form ? PluginOfId(a_form) : "no reference");
+		if (a_type == kLeak || a_type == kEvicted)
+			logger::warn("[DCLF] compatibility monitor: a {} {}: {}{} <- OFFENDER", TypeName(a_type), FieldNames(a_type, a_fields), a_example,
+				a_form ? fmt::format(", reference {:08X} ({})", a_form, PluginOfId(a_form)) : "");
+		else
+			logger::warn("[DCLF] compatibility monitor: {} {} changed with no hook on an object of reference {:08X} ({}) <- OFFENDER", TypeName(a_type),
+				FieldNames(a_type, a_fields), a_form, a_form ? PluginOfId(a_form) : "no reference");
+	}
+
+	void NoteLeak(std::uint32_t a_form, std::string a_example)
+	{
+		leakNotes.Push({ a_form, std::move(a_example) });
 	}
 
 	void NoteCheck()
 	{
 		if (clearPending.exchange(false, std::memory_order_acq_rel))
 			Restart();
+		leakNotes.Drain([](LeakNote&& a_note) { NoteMissed(nullptr, a_note.form, kLeak, 0, a_note.example); });
 		++table.offenders.probes;
 		// Each check counts, so the menu's numbers move; a copy every 30 checks while only counts change, at once for a new offender.
 		if (!table.dirty && table.offenders.probes % 30 != 0)

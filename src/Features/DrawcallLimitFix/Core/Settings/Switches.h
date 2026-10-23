@@ -120,6 +120,14 @@ namespace DCLF
 	 * whose after or before names no switch, Core's or a feature's, or whose anchors loop back to it (it would be listed nowhere).
 	 */
 	void CheckSwitchAnchors();
+	/**
+	 * @brief Whether any parity or diagnostic switch is set to anything but 0, Core's or a feature's (every feature registered), the shader
+	 * build's aside: the reports' pace (Reports::Interval).
+	 */
+	bool AnyObserverSwitch();
+	/** @brief A switch's name (CS_DCLF_...), Core's or a feature's (empty for none); the menu's tooltips name a toggle's seed by it. */
+	std::string_view SwitchName(Switch a_switch);
+	std::string_view SwitchName(Api::SwitchId a_switch);
 	/** @brief A feature's switch's value (empty: unset, or no such switch); any thread after its registration. */
 	const std::string& SwitchValue(Api::SwitchId a_switch);
 	/** @brief Whether a feature's switch is set to "1". */

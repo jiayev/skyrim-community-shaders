@@ -22,7 +22,7 @@ namespace DCLF::Features::Billboards
 				.after = "CS_DCLF_OPAQUE_EFFECTS" });
 			// BSEffectShaderProperty meshes under one NiBillboardNode, turned to the drawing camera by the vertex stage from the node's base
 			// transform (Core/Gpu/PlacementRows/BillboardRow.h; needs effects; on by default: CS_DCLF_BILLBOARDS=0 seeds it off): an object class.
-			billboardsToggle = a_context.RegisterToggle({ .name = "billboards", .label = "Billboards: fire cards, spray jets (CS_DCLF_BILLBOARDS)",
+			billboardsToggle = a_context.RegisterToggle({ .name = "billboards", .label = "Billboards: fire cards, spray jets",
 				.tooltip = "DCLF draws effect-shader meshes under a billboard node, turning each to the drawing camera on the GPU as the engine's cull turns the node. On by default.",
 				.seed = billboards, .entersClassification = true, .after = "refraction", .needs = { "effects" } });
 			// The leaves under a billboard node DCLF takes while the toggle is on (Coordinator::ClassifyFrame, BillboardModeOf): an effect

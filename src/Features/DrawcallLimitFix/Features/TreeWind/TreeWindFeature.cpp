@@ -23,7 +23,7 @@ namespace DCLF::Features::TreeWind
 				.after = "CS_DCLF_PRIMARY_EXCLUDE" });
 			// The TreeAnim technique, whose vertex animation reads TreeParams and WindTimers per object (extras rows): an object class
 			// (its technique contribution's toggle: RegisterObjects).
-			return a_context.RegisterToggle({ .name = "trees", .label = "Trees (CS_DCLF_TREES)", .seed = trees, .entersClassification = true, .after = "skinned" });
+			return a_context.RegisterToggle({ .name = "trees", .label = "Trees", .seed = trees, .entersClassification = true, .after = "skinned" });
 		}
 
 		void Install(Api::InstallContext& a_context)

@@ -61,7 +61,7 @@ namespace DCLF::Integrations::TerrainBlending
 			const auto terrainSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_TB_TERRAIN", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
 				.description = "0: terrain under Terrain Blending, and the meshes that feature redraws after it, stay native (T7c1; live toggle's seed)",
 				.after = "CS_DCLF_MTLAND" });
-			const auto terrain = a_context.RegisterToggle({ .name = "terrain under TB", .label = "Terrain under Terrain Blending (CS_DCLF_TB_TERRAIN)",
+			const auto terrain = a_context.RegisterToggle({ .name = "terrain under TB", .label = "Terrain under Terrain Blending",
 				.tooltip = "With Terrain Blending on, DCLF draws the terrain as that feature does: its near blocks' depth into its terrain depth and, offset, into the main depth, and its colour blended after the opaque and decal draws, then the meshes it redraws after the terrain.",
 				.seed = terrainSwitch, .entersClassification = true, .after = "terrain", .needs = { "terrain" } });
 			// MTLand and MTLandLODBlend (Features/Landscape's): while Terrain Blending holds the terrain (it redraws every terrain pass blended

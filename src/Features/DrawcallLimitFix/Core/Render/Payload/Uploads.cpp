@@ -546,7 +546,7 @@ namespace DCLF
 				engineChannels[light.maskIndex] = Engine::At<std::uint32_t>(light.light, 0x520);
 				++written;
 			}
-			// The report's (every 300 colour commits): what the sample put and what the latch took.
+			// The report's (every report window's worth of colour commits): what the sample put and what the latch took.
 			{
 				static std::uint32_t commits = 0, differing = 0;
 				for (std::uint32_t c = 0; c < kLocalShadowMaskChannels; ++c)
@@ -554,7 +554,7 @@ namespace DCLF
 						++differing;
 						break;
 					}
-				if (++commits % 300 == 0) {
+				if (++commits % Reports::Interval() == 0) {
 					std::string records;
 					for (std::uint32_t c = 0; c < kLocalShadowMaskChannels; ++c)
 						if (masks[c].enabled)

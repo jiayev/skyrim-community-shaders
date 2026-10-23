@@ -275,6 +275,7 @@ namespace DCLF
 		}
 		++evictions;
 		evictedRecords += geometriesBelow.size() + nodesBelow.size();
+		Diagnostics::Notify(Diagnostics::MirrorEvicted{ a_key, rtti ? rtti->name : nullptr, geometriesBelow.size() + nodesBelow.size(), a_what });
 		if (firstEviction.empty()) {
 			std::size_t depth = 0;
 			for (const void* at = root->parent; at && depth < 64; at = Node(at) ? Node(at)->parent : nullptr)

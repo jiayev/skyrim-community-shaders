@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -13,11 +15,23 @@ namespace DCLF::Reports
 	 * The modules count (their Counters, taken by the report); the report files here (Diagnostics/Reports/<Module>.cpp) format the
 	 * lines. Two threads report: the render thread at Present, once per frame number (Due), and the coordinator from its pass, which may
 	 * skip frame numbers (Crossing). A module with no frame number of its own counts its calls (Window).
+	 *
+	 * The window is kInterval frames while the run observes anything (a parity or diagnostic switch set: validation runs set CS_DCLF_STATS),
+	 * and kQuietInterval in normal play, where the always-on lines would otherwise grow a player's log by about 100 MB an hour. Every
+	 * window's lines cover its own frames, so their averages hold either way.
 	 */
 	constexpr std::uint32_t kInterval = 300;
+	constexpr std::uint32_t kQuietInterval = 18000;
+
+	/** @brief The report window in frames (read once, after the features registered their switches). */
+	inline std::uint32_t Interval()
+	{
+		static const std::uint32_t interval = AnyObserverSwitch() ? kInterval : kQuietInterval;
+		return interval;
+	}
 
 	/** @brief The render thread's clock: frame a_frame (each number once) ends a window. */
-	constexpr bool Due(std::uint32_t a_frame) { return a_frame % kInterval == 0; }
+	inline bool Due(std::uint32_t a_frame) { return a_frame % Interval() == 0; }
 
 	/** @brief A clock that may skip frame numbers: due when a_frame is in a later window than the last call's. */
 	struct Crossing
@@ -26,7 +40,7 @@ namespace DCLF::Reports
 
 		bool Due(std::uint32_t a_frame)
 		{
-			const std::uint32_t now = a_frame / kInterval;
+			const std::uint32_t now = a_frame / Interval();
 			if (now == window)
 				return false;
 			window = now;
@@ -41,7 +55,7 @@ namespace DCLF::Reports
 
 		bool Tick()
 		{
-			if (++count < kInterval)
+			if (++count < Interval())
 				return false;
 			count = 0;
 			return true;
