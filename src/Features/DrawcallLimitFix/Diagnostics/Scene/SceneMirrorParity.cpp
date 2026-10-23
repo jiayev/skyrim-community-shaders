@@ -44,10 +44,10 @@ namespace DCLF::Diagnostics
 						++into[f];
 						if (!late && t.firstMissedBy[p.type][f].empty()) {
 							t.firstMissedBy[p.type][f] = p.what;
-							// A property has no name: a geometry naming it (once per field and report).
-							if (p.type == 2)
+							// A property or an alpha has no name: a geometry naming it (once per field and report).
+							if (p.type == 2 || p.type == 3)
 								for (const auto& [geometryKey, geometry] : geometries)
-									if (geometry.property == key || geometry.layerProperty == key) {
+									if (p.type == 2 ? (geometry.property == key || geometry.layerProperty == key) : geometry.alpha == key) {
 										const auto* node = a_mirror.Node(geometryKey);
 										t.firstMissedBy[p.type][f] += fmt::format(" (geometry {} '{}')", geometryKey, node && node->name ? node->name : "");
 										break;
@@ -61,6 +61,12 @@ namespace DCLF::Diagnostics
 					m.missedProperty = key;
 				if (!late && p.type == 3)
 					m.missedAlpha = key;
+				if (!late && !m.missedWatched && p.type != 2 && (p.fields & MirrorWatch::MissedFields(p.type)) && !MirrorWatch::Armed()) {
+					m.missedWatched = key;
+					m.missedWatchedType = p.type;
+					m.missedWatchedFields = p.fields;
+					logger::info("[DCLF] mirror watch: missed {} on {}, armed at the next frame", p.what, key);
+				}
 				// The compatibility monitor's offenders: a writer no hook sees, by the object's owning reference.
 				if (!late)
 					PlayerParity::NoteMissed(key, p.owner, p.type, p.fields, p.what);
@@ -287,6 +293,10 @@ namespace DCLF::Diagnostics
 					m.watchAlpha.store(alpha, std::memory_order_release);
 				if (const void* node = std::exchange(m.missedNode, nullptr))
 					m.watchNode.store(node, std::memory_order_release);
+				if (const void* missed = std::exchange(m.missedWatched, nullptr)) {
+					m.watchMissedTypeFields.store((std::uint32_t(m.missedWatchedType) << 24) | (m.missedWatchedFields & 0xFFFFFFu), std::memory_order_relaxed);
+					m.watchMissed.store(missed, std::memory_order_release);
+				}
 				m.probe.reset();
 				PlayerParity::NoteCheck();
 			}
@@ -305,6 +315,10 @@ namespace DCLF::Diagnostics
 				MirrorWatch::ArmAlpha(alpha);
 			if (const void* node = m.watchNode.exchange(nullptr, std::memory_order_acq_rel))
 				MirrorWatch::ArmCurrent(node);
+			if (const void* missed = m.watchMissed.exchange(nullptr, std::memory_order_acq_rel)) {
+				const auto typeFields = m.watchMissedTypeFields.load(std::memory_order_relaxed);
+				MirrorWatch::ArmMissed(missed, static_cast<std::uint8_t>(typeFields >> 24), typeFields & 0xFFFFFFu);
+			}
 			// The slice the coordinator asked for (the newest: an older one is dropped here, with its references).
 			std::shared_ptr<MirrorProbeRequest> request;
 			m.probeRequests.Drain([&request](std::shared_ptr<MirrorProbeRequest>&& a_request) { request = std::move(a_request); });

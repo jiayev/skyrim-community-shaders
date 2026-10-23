@@ -16,6 +16,8 @@ namespace DCLF::Features::HiddenNodes
 		// The show veto's cells (Extensions::RegisteredShowVeto: Core's, at a fixed address for the session), set at InstallStores before
 		// any event arrives.
 		const Api::ShowVeto* showVeto = nullptr;
+		// The hidden site of the plugins' writes through SWF (SWF_WRITE_HIDDEN): the first after SWF's stores.
+		std::uint32_t writeSite = 0;
 
 		void OnHidden(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
@@ -25,6 +27,14 @@ namespace DCLF::Features::HiddenNodes
 			if (event.hidden && showVeto->engineHid && std::ranges::find(showVeto->hideSites, event.siteOffset) != showVeto->hideSites.end())
 				showVeto->engineHid(event.object, event.siteOffset);
 			Scene::PushHiddenUpdate(event.object, event.site);
+		}
+
+		// A plugin's hidden write through SWF's Write (CS's features': DrawcallLimitFix::WriteHidden), after its store.
+		void OnSceneWrite(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
+		{
+			const auto& write = *reinterpret_cast<const SWF_SceneWriteEvent*>(a_event);
+			if (write.kind == SWF_WRITE_HIDDEN)
+				Scene::PushHiddenUpdate(write.object, writeSite);
 		}
 
 		// SWF's show stubs call the filter while one is registered; the veto's open word keeps a closed gate to one load. A vetoed store
@@ -51,6 +61,8 @@ namespace DCLF::Features::HiddenNodes
 				api->RemoveFilter(filter);
 				return false;
 			}
+			if (api->abiMinor >= 2 && !SceneWriter::Subscribe(SWF_EVENT_SCENE_WRITE, &OnSceneWrite))
+				stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused its scene write events at ABI minor 2");
 			logger::info("[DCLF] hidden events: {} SceneWriterFramework stores", api->SiteCount(SWF_EVENT_HIDDEN));
 			return true;
 		}
@@ -62,7 +74,9 @@ namespace DCLF::Features::HiddenNodes
 		// verdicts on the events once installed. The show veto's cells before the first event (the filter loads them).
 		showVeto = &Extensions::RegisteredShowVeto();
 		const auto* api = SceneWriter::Api();
-		Extensions::NoteHiddenSourceSites(api ? api->SiteCount(SWF_EVENT_HIDDEN) : 0);
+		// SWF's stores, then the plugins' writes through SWF as one more site.
+		writeSite = api ? api->SiteCount(SWF_EVENT_HIDDEN) : 0;
+		Extensions::NoteHiddenSourceSites(writeSite + 1);
 		Scene::hiddenEventsInstalled = Subscribe();
 	}
 

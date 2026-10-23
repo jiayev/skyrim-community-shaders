@@ -149,6 +149,12 @@ namespace DCLF::Diagnostics
 		const void* missedProperty = nullptr;
 		const void* missedAlpha = nullptr;
 		const void* missedNode = nullptr;  // a fade node stale in its currentFade (missed or evented), for CS_DCLF_MIRROR_WATCH=parity:current
+		// CS_DCLF_MIRROR_WATCH=missed:<field>: the first node or geometry found missed in a watched field, its type and fields.
+		const void* missedWatched = nullptr;
+		std::uint8_t missedWatchedType = 0;
+		std::uint32_t missedWatchedFields = 0;
+		std::atomic<const void*> watchMissed{ nullptr };
+		std::atomic<std::uint32_t> watchMissedTypeFields{ 0 };  // the type in the top byte, the fields below
 		// The check, by record type (node, geometry, property, alpha) and field.
 		struct Pending
 		{

@@ -16,6 +16,7 @@
 #	include "Features/DrawcallLimitFix/Schedule/Schedule.h"
 #	include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
+#	include "DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #	include "DrawcallLimitFix/Diagnostics/Hooks.h"
 #	include "DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #	include "DrawcallLimitFix/Diagnostics/Policy.h"
@@ -672,6 +673,34 @@ void DrawcallLimitFix::NoteMaterialWritten(const RE::BSShaderMaterial* a_materia
 	DCLF::Api::NoteMaterialWritten(a_material);
 }
 
+namespace
+{
+	/** @brief SceneWriterFramework's Write, when the provider serves it (ABI minor 2); false: the caller stores. */
+	bool SceneWrite(std::uint32_t a_kind, void* a_object, std::uint64_t a_value)
+	{
+		const auto* api = DCLF::SceneWriter::Api();
+		return api && api->abiMinor >= 2 && api->size > offsetof(SWF_Api, Write) && api->Write && api->Write(a_kind, a_object, a_value) == SWF_OK;
+	}
+}
+
+void DrawcallLimitFix::WriteHidden(RE::NiAVObject* a_object, bool a_hidden)
+{
+	if (a_object && !SceneWrite(SWF_WRITE_HIDDEN, a_object, a_hidden ? 1 : 0))
+		a_object->SetAppCulled(a_hidden);
+}
+
+void DrawcallLimitFix::WriteShaderProperty(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property)
+{
+	if (a_geometry && !SceneWrite(SWF_WRITE_SHADER_PROPERTY, a_geometry, reinterpret_cast<std::uintptr_t>(a_property)))
+		a_geometry->GetGeometryRuntimeData().shaderProperty = RE::NiPointer(a_property);
+}
+
+void DrawcallLimitFix::WriteAlphaFlags(RE::NiAlphaProperty* a_alpha, std::uint16_t a_flags)
+{
+	if (a_alpha && !SceneWrite(SWF_WRITE_ALPHA_FLAGS, a_alpha, a_flags))
+		a_alpha->alphaFlags = a_flags;
+}
+
 void DrawcallLimitFix::PrecompileShader(const RE::BSShader& a_shader, bool a_pixel, std::uint32_t a_descriptor)
 {
 	DCLF::ShaderPrograms::Get().Precompile(a_shader, a_pixel, a_descriptor);
@@ -753,6 +782,21 @@ void DrawcallLimitFix::OcclusionView(OcclusionMap) {}
 bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap) { return false; }
 void DrawcallLimitFix::OcclusionReferenceRendered(OcclusionMap) {}
 void DrawcallLimitFix::NoteMaterialWritten(const RE::BSShaderMaterial*) {}
+void DrawcallLimitFix::WriteHidden(RE::NiAVObject* a_object, bool a_hidden)
+{
+	if (a_object)
+		a_object->SetAppCulled(a_hidden);
+}
+void DrawcallLimitFix::WriteShaderProperty(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property)
+{
+	if (a_geometry)
+		a_geometry->GetGeometryRuntimeData().shaderProperty = RE::NiPointer(a_property);
+}
+void DrawcallLimitFix::WriteAlphaFlags(RE::NiAlphaProperty* a_alpha, std::uint16_t a_flags)
+{
+	if (a_alpha)
+		a_alpha->alphaFlags = a_flags;
+}
 void DrawcallLimitFix::PrecompileShader(const RE::BSShader&, bool, std::uint32_t) {}
 void DrawcallLimitFix::OnMap(ID3D11Resource*, void*) {}
 void DrawcallLimitFix::OnUnmap(ID3D11Resource*) {}

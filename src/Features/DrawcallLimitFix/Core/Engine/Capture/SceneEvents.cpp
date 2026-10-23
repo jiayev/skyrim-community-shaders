@@ -281,6 +281,33 @@ namespace DCLF::Scene
 				PushNodeUpdate(reinterpret_cast<RE::NiAVObject*>(a_scratch[0]), SceneCapture::NodeRecord::kBody);
 		}
 
+		// bhkWorld::InitHavok (0x140e86ad0: world, from, to): moves a collision object from `from` to `to`, SetCollisionObject on `to`
+		// and `from`'s +0x40 cleared inline (0x140e86fb7, 0x140e870c6; Hazard::InitHavok's, a projectile's or a quiver's). Both bodies
+		// after the call.
+		void OnHavokInit(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
+		{
+			PushNodeUpdate(Arg<RE::NiAVObject*>(a_event, 1), SceneCapture::NodeRecord::kBody);
+			PushNodeUpdate(Arg<RE::NiAVObject*>(a_event, 2), SceneCapture::NodeRecord::kBody);
+		}
+
+		// The reference's 3D's LOD type (+0x153 & 0xF) after one of its inline writers: Papyrus Disable with a fade (FUN_140a3db90: type 9,
+		// the fade out before the disable; a critter's despawn) and the script command Enable (0x14034c9f0: a type of 9 reset to the
+		// model's).
+		void PushReferenceFadeType(RE::TESObjectREFR* a_reference)
+		{
+			auto* root = a_reference ? a_reference->Get3D() : nullptr;
+			if (auto* fade = root ? root->AsFadeNode() : nullptr)
+				PushNodeUpdate(fade, SceneCapture::NodeRecord::kFadeType);
+		}
+		void OnReferenceDisable(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
+		{
+			PushReferenceFadeType(Arg<RE::TESObjectREFR*>(a_event, 0));
+		}
+		void OnEnableCommand(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
+		{
+			PushReferenceFadeType(Arg<RE::TESObjectREFR*>(a_event, 2));
+		}
+
 		// FUN_140e8bd40 (node, collision object): NiAVObject::SetCollisionObject (+0x40), from bhkWorld::InitHavok and FUN_140e8c600
 		// after the world attach (a loader's clutter gets its body after the capture). The body after the call.
 		void OnSetCollisionObject(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
@@ -398,6 +425,19 @@ namespace DCLF::Scene
 				CountMove(kSlots[event.writer]);
 		}
 
+		// SceneWriterFramework's Write (SWF_EVENT_SCENE_WRITE, a plugin's scene write made through SWF): a property swapped on a geometry,
+		// its leaf again (the record and the new property, with pins); an alpha property's flags, its record. The hidden bit is
+		// Features/HiddenNodes' (a hidden event on its reserved site).
+		void OnSceneWrite(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
+		{
+			const auto& write = *reinterpret_cast<const SWF_SceneWriteEvent*>(a_event);
+			if (write.kind == SWF_WRITE_SHADER_PROPERTY || write.kind == SWF_WRITE_ALPHA_PROPERTY) {
+				if (auto* geometry = static_cast<RE::NiAVObject*>(write.object)->AsGeometry())
+					PushLeafUpdate(*geometry);
+			} else if (write.kind == SWF_WRITE_ALPHA_FLAGS)
+				PushAlphaUpdate(static_cast<const RE::NiAlphaProperty*>(write.object), SceneCapture::AlphaRecord::kFlags);
+		}
+
 		// NiSwitchNode's own child edits (its vtable's implementations of NiNode slots 0x35, 0x37-0x3C).
 		void OnSwitchStructural(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
@@ -423,6 +463,9 @@ namespace DCLF::Scene
 			{ SWF_HOOK_RIGID_BODY_MOTION_TYPE, &OnRigidBodyMotionType, kPost },
 			{ SWF_HOOK_RELEASE_COLLISION_OBJECT, &OnReleaseCollisionObject, kBoth },
 			{ SWF_HOOK_SET_COLLISION_OBJECT, &OnSetCollisionObject, kPost },
+			{ SWF_HOOK_HAVOK_INIT, &OnHavokInit, kPost },
+			{ SWF_HOOK_REFERENCE_DISABLE, &OnReferenceDisable, kPost },
+			{ SWF_HOOK_ENABLE_COMMAND, &OnEnableCommand, kPost },
 			{ SWF_HOOK_PREPEND_CONTROLLER, &OnPrependController, kPost },
 			{ SWF_HOOK_REMOVE_CONTROLLER, &OnRemoveController, kPost },
 			{ SWF_HOOK_HAVOK_NODE_TRANSFORM, &OnHavokNodeTransform, kPost },
@@ -525,6 +568,10 @@ namespace DCLF::Scene
 			!SceneWriter::Subscribe(SWF_EVENT_SWITCH_STRUCTURAL, &OnSwitchStructural))
 			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused the switch or fade-reset subscriptions after reporting them installed");
 		switchEventsInstalled = true;
+		// A plugin's scene writes through SWF (CS's own among them: DrawcallLimitFix::WriteShaderProperty): a provider before ABI minor 2
+		// has none, and every writer then stores itself.
+		if (const auto* api = SceneWriter::Api(); api && api->abiMinor >= 2 && !SceneWriter::Subscribe(SWF_EVENT_SCENE_WRITE, &OnSceneWrite))
+			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused its scene write events at ABI minor 2");
 		logger::info("[DCLF] scene events subscribed to SceneWriterFramework ({} engine calls: fades, property flags, materials and material alpha, LOD fades, emittance, Havok node transforms, controllers)",
 			std::size(kCalls));
 		InstallMoveEvents();
