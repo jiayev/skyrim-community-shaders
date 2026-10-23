@@ -331,7 +331,7 @@ PERSISTENT_CATEGORY_CONTROL_NAMES = {
     "SeparatorText",
 }
 
-# Scalar InputFloat is deliberately unmatched: the interceptor has no detour for it, so it stays hidden.
+# Scalar InputFloat is deliberately unmatched, so the settings it edits stay hidden from scenes.
 DIRECT_UI_CONTROL_RE = re.compile(
     r"(?:ImGui|Util)::(Checkbox|InvertedCheckbox|CheckboxFlags|RadioButton|Combo|BeginCombo|"
     r"Drag(?:Float[234]?|Int[234]?|ScalarN?)|"
@@ -5120,9 +5120,13 @@ SOURCE_WIDGET_ENTRY_POINTS = {
     "ColorEdit3": ("ColorEdit3",),
     "ColorEdit4": ("ColorEdit4",),
     "Combo": ("Combo", "RadioButton"),
+    "DragFloat": ("DragFloat",),
+    "DragFloat2": ("DragFloat2",),
+    "DragFloat3": ("DragFloat3",),
     "DragFloat4": ("DragFloat4",),
     "InputFloat2": ("InputFloat2",),
     "InputFloat3": ("InputFloat3",),
+    "InputInt": ("InputInt",),
     "PercentageSlider": ("SliderFloat",),
     "SliderAngle": ("SliderAngle",),
     "SliderFloat": ("SliderFloat",),

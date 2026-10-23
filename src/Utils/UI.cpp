@@ -439,7 +439,8 @@ namespace Util
 		labels.reserve(static_cast<size_t>(a_count));
 		for (int i = 0; i < a_count; ++i)
 			labels.emplace_back(a_labels[i] ? a_labels[i] : "");
-		return DrawGlassPillStrip(a_id, labels, a_selected, a_marked, a_muted);
+		return SceneWidgetInterceptor::InterceptInt(a_id, a_selected,
+			[&](int& a_bound) { return DrawGlassPillStrip(a_id, labels, a_bound, a_marked, a_muted); });
 	}
 
 	bool IsInsidePillTabBar()

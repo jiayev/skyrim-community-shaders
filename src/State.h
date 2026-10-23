@@ -201,6 +201,17 @@ public:
 		return found != featureBases.end() ? &found->second : nullptr;
 	}
 
+	/**
+	 * @brief A feature's code defaults, captured on the first load before any settings layer applies.
+	 * @param featureName The feature's GetName().
+	 * @return Null before the first load or when the feature has no settings.
+	 */
+	const nlohmann::json* GetFeatureDefaults(const std::string& featureName) const
+	{
+		const auto found = defaultSettings.find(featureName);
+		return found != defaultSettings.end() && found->is_object() ? &*found : nullptr;
+	}
+
 	/** @brief True when the user config has changes not yet saved. */
 	bool HasUnsavedChanges() const { return settingsChanged || coreSettingsChanged; }
 
