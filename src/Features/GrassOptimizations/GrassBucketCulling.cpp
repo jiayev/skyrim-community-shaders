@@ -63,6 +63,7 @@ void GrassOptimizations::CullGrass(const RE::NiCamera* camera)
 		params.collisionDistSq = collisionDistance * collisionDistance;
 		params.midLODPixelSize = settings.MidLODPixelSize;
 		params.farLODPixelSize = settings.EnableMidLOD ? std::min(settings.FarLODPixelSize, settings.MidLODPixelSize) : settings.FarLODPixelSize;
+		params.densityDistanceRcp = 1.0f / std::max(vanillaMaxDistance, 1e-4f);
 
 		params.meshLODBandPx = std::max(0.0f, settings.MeshLODBandPixels);
 		params.hiZEnabled = hiZ.IsValid() ? 1.0f : 0.0f;
