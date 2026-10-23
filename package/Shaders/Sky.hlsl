@@ -261,7 +261,11 @@ float ComputeProceduralSun(float2 uv)
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
+#	if defined(EFFECTS11)
+	float3 skyScale = ColorManagement::SRGBToWorking(PParams.yyy * SharedData::enbSettings.SkyScaleMultiplier);
+#	else
 	float3 skyScale = ColorManagement::SRGBToWorking(PParams.yyy);
+#	endif
 	float alphaTransmittance = 1.0;
 
 #	ifndef OCCLUSION

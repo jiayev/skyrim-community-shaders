@@ -121,7 +121,8 @@ public:
 
 		float MasserBillboardTan;
 		float SecundaBillboardTan;
-		float2 SkyScatteringPad0;
+		float SkyScaleMultiplier = 1.0f;
+		float SkyScatteringPad0;
 
 		uint EnableWater;
 		float WaterWavesAmplitude;
@@ -231,7 +232,6 @@ public:
 	virtual void SetupResources() override;
 	virtual void PostSetupResources() override;
 	virtual void Reset() override;
-	virtual void Prepass() override;
 	virtual void ClearShaderCache() override;
 
 	/** @brief Switches between Effects 11 and the pipeline that ran before it; bound to the Effects 11 toggle hotkey. */
