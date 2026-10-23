@@ -1472,8 +1472,22 @@ Reverse engineered 2026-10-09 (Ghidra, AE); DCLF's port is `Engine/PortalViews` 
     `FUN_140524a30`, judge each graph occluder still at state 0 with their own tests (a plane: `FUN_140e23920` with the camera's
     position and `FUN_140e242d0`; a box: `FUN_140e21750` then `FUN_140e21090`), write `(ok ^ 1) + 1`, and leave a judged plane's
     edge flags from their own test (`FUN_140e233b0`). A walk that runs after them takes a state-1 plane untested (with those
-    flags) and skips a state-2 one, so unbound space's compound frustum depends on the order of the frame's jobs. DCLF's port
-    tests every plane (its portal parity rebuilds the program with the engine's states and flags before counting a difference).
+    flags) and skips a state-2 one, so unbound space's compound frustum depends on the order of the frame's jobs. The actor
+    culler's test has no rectangle rescue: `FUN_140e23920` is `FUN_140e164e0` on the corners relative to the camera
+    (`camera +0xA0`) against the camera-relative frustum (`0x1432846e0`), and `FUN_140e242d0` passes a plane with `+0xF4` set,
+    else only with the camera on the negative side of the plane through corners 0, 1, 2 (the disassembly: true only when
+    `dot(n, eye) - d < 0`; the decompiler shows otherwise). DCLF judges every graph plane that way at the start of its walk
+    (`PortalViews::PlaneJudged`), and a start room's untested planes too; its portal parity rebuilds the program as the engine's
+    walk built it (the engine's states and flags, `WithinFrustumDistFirst` for the rest) before counting a difference.
+-   **`WithinFrustumDistFirst`'s rectangle test uses the wrong axes** (`0x140e23e10`, 2026-10-23). The corners (`BSPortal::sub`,
+    `0x140e230c0`) are `centre +- hx * column 0 +- hy * column 2` of the rotation at `+0x1C` (row-major); the test of the camera's
+    foot point on the plane against the rectangle projects onto rows 1 and 2 (`+0x28..+0x30` against `hx`, `+0x34..+0x3C` against
+    `hy`). For a plane turned only about the vertical by θ, the horizontal coordinate is `offset * sin 2θ`: an axis-aligned plane's
+    rectangle is an infinite horizontal band at its height. Both uses are affected: the 5-unit test (a portal kept, an occlusion
+    plane dropped: only conservative) and the rescue after a failed frustum test, which accepts a plane wholly outside the view
+    whose foot point is ahead of the camera (along view plane 0's normal) and in the band. A plane so accepted failed
+    `FUN_140e164e0` by its early exit, which writes no edge flags, so it keeps the last test's: with all four clipped, its occluder
+    set is the quad's plane alone, and everything behind that infinite plane is culled.
 -   **A shadow light's rooms** (`FUN_1414a2530` -> `FUN_1414a6400`; `CalculateActiveShadowCasterLights` walks a light only
     once kept, after testing its entry: the test reads the light's last walk). Nothing with no graph rooms, the NiLight
     hidden or its fade (`+0x134`) under 0.05, or the light on an object node (`BSLight +0x130`): the entry keeps what it had

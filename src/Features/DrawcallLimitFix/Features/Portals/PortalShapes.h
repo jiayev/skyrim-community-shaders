@@ -23,6 +23,7 @@ namespace DCLF::PortalShapes
 	constexpr std::size_t kShapeHalfY = 0x4C;
 	constexpr std::size_t kBoxBound = 0x198;      // BSMultiBoundShape*
 	constexpr std::array<std::size_t, 4> kPlaneLinks{ 0xF8, 0x100, 0x108, 0x110 };
+	constexpr std::size_t kPlaneTwoSided = 0xF4;  // a plane's byte: nonzero, FUN_140e242d0 passes it whichever side the eye is on
 	constexpr std::size_t kPortalRoomA = 0x118, kPortalRoomB = 0x120, kPortalShared = 0x128;
 	// BSMultiBoundRoom: the portal and occluder lists (head; count at +0x10); BSPortalGraph: its occluders, portals, rooms.
 	constexpr std::size_t kRoomPortals = 0x138, kRoomOccluders = 0x150;

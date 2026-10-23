@@ -167,11 +167,11 @@ namespace DCLF::Diagnostics::PortalParity
 		}
 
 		/**
-		 * @brief One program against an engine BSCompoundFrustum. Unbound space's of a walk from unbound space that differs is built again with
-		 * the engine's occluder states: DCLF's walk tests every graph plane, while the engine's takes a state-1 plane untested and skips a
-		 * state-2 one, and its other occluder tests (FUN_1414a8ba0 and its siblings: HighActorCuller::Operate, FUN_140524a30) write plane
-		 * states lazily after Main::Update's reset (FUN_1401a4a00). The walk itself never writes a plane's. Matching then, the difference
-		 * is the order of the engine's jobs, not DCLF's port.
+		 * @brief One program against an engine BSCompoundFrustum. Unbound space's of a walk from unbound space that differs is built again as
+		 * the engine's walk built it: DCLF judges every graph plane before the walk as the actor culler does (PlaneJudged), while the
+		 * engine's other occluder tests (FUN_1414a8ba0 and its siblings: HighActorCuller::Operate, FUN_140524a30) judge them lazily after
+		 * Main::Update's reset (FUN_1401a4a00), and its walk tests a plane they left untested with WithinFrustumDistFirst, whose rectangle
+		 * bug takes planes wholly outside the view. Matching then, the difference is the engine's job order and that bug, not DCLF's port.
 		 */
 		void CompareProgram(Walk& a_walk, const Program& a_ours, const std::byte* a_engine, const void* a_room, bool a_tokensOnly)
 		{

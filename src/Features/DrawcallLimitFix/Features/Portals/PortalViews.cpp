@@ -355,7 +355,9 @@ namespace DCLF
 		}
 		if (state == 2)
 			return;
-		if (state == 0 && !WithinFrustumDistFirst(a_occluder, camera.view, camera.eye))
+		// A graph plane is judged at Build (PlaneJudged); an untested one here is the start room's, judged the same way rather than by
+		// the walk's WithinFrustumDistFirst, whose rectangle bug takes planes wholly outside the view (skyrim-engine-notes.md).
+		if (state == 0 && !(engineWalkTest ? WithinFrustumDistFirst(a_occluder, camera.view, camera.eye) : PlaneJudged(a_occluder)))
 			return;
 		if (a_needOpen) {
 			Emit(a_program, kAnd);
@@ -381,10 +383,12 @@ namespace DCLF
 		Program program;
 		Reset(program);
 		bool needOpen = true;
+		engineWalkTest = true;
 		ForList(a_graph, kGraphOccluders, [&](const void* a_occluder) {
 			if (a_occluder)
 				AddOccluderTop(program, a_occluder, needOpen);
 		});
+		engineWalkTest = false;
 		if (!needOpen)
 			Emit(program, kClose);
 		Finalize(program);
@@ -398,7 +402,8 @@ namespace DCLF
 	void PortalViews::AddOccluderRoom(Program& a_program, const void* a_occluder, const Program* a_parent)
 	{
 		// FUN_140e32860: an occluder of a room reached through a portal. A plane only once accepted this frame: the engine resets
-		// every state before its walk and nothing in it accepts a plane, so the room's planes take no part (as the engine's).
+		// every state before its walk and nothing in the walk accepts a plane, so a room's own planes take no part; the graph's take
+		// part where Build's judgment (the actor culler's) accepted them, for unbound space reached through a portal.
 		if (!IsPlane(a_occluder)) {
 			bool ok = false;
 			if (!a_parent || TestShapeProgram(*a_parent, a_occluder))
@@ -573,6 +578,23 @@ namespace DCLF
 		if (!visible && dN < ((n0[0] * px + n0[1] * py) + n0[2] * pz) - n0[3])
 			visible = inRect();
 		return visible;
+	}
+
+	bool PortalViews::PlaneJudged(const void* a_plane)
+	{
+		// FUN_1414a8ba0 (HighActorCuller::Operate's occluder test, which judges every untested graph occluder before Main::Update's walk
+		// takes them): FUN_140e23920, the corners relative to the eye against the camera-relative frustum (its edge flags written), and
+		// FUN_140e242d0, a one-sided plane only with the eye on its negative side.
+		const auto c = Corners(a_plane);
+		const auto& e = camera.eye;
+		Quad relative;
+		for (std::size_t i = 0; i < 4; ++i)
+			relative[i] = { c[i].x - e.x, c[i].y - e.y, c[i].z - e.z };
+		const bool inView = QuadVsSet(camera.relative, relative, edgeFlags[a_plane]);
+		if (At<std::uint8_t>(a_plane, kPlaneTwoSided) != 0)
+			return inView;
+		const auto p = PlaneFromPoints(c[0].x, c[0].y, c[0].z, c[1].x, c[1].y, c[1].z, c[2].x, c[2].y, c[2].z);
+		return inView && Dist(p, e.x, e.y, e.z) < 0.0f;
 	}
 
 	bool PortalViews::TestQuadProgram(const Program& a_program, const void* a_quad)
@@ -1048,6 +1070,13 @@ namespace DCLF
 			}
 		for (std::uint32_t p = 2; p < 6; ++p)
 			camera.relative.plane[p][3] = 0.0f;
+		// The graph's planes judged before the walk, as the frame's actor culler judges them (FUN_1414a8ba0, PlaneJudged): the walk takes
+		// an accepted one untested and skips a rejected one, and a linked pair needs its neighbour accepted.
+		if (graph)
+			ForList(graph, kGraphOccluders, [&](const void* a_occluder) {
+				if (a_occluder && IsPlane(a_occluder))
+					states[a_occluder] = PlaneJudged(a_occluder) ? 1 : 2;
+			});
 		const auto& r = world.rotate.entry;
 		const RE::NiPoint3 nearPoint{ frustum.fNear * r[0][0] + e.x, frustum.fNear * r[1][0] + e.y, frustum.fNear * r[2][0] + e.z };
 		const auto* rooms = At<const void* const*>(graph, kGraphRooms);

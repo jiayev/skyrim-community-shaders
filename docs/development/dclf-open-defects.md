@@ -245,6 +245,9 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     toward 0.995.
 -   **`<- MATERIAL PORT`:** one difference a window remains on an effect's FalloffData (VS variable 7) after the retake, from a
     controller write the retake missed.
+-   **`<- UNPINNED PROPERTY`:** once (run v1, 2026-10-23, the Whiterun save under `CS_DCLF_TEST_MOVE` with persistent and set
+    parity), one references window: 100 of 22,720 tracked geometries' properties held anew with no pin, and 10 references refused
+    (first: property `0x22f2828ac80` of geometry `0x22f2828b580`).
 -   **`<- UNPINNED FADE NODE`** fires for requests still in flight at the report. It should fire only for a request left
     unanswered across reports.
 -   **Light candidates parity: a dependent with no geometry row (`<- CANDIDATES`).** Seen once (run coc1, 2026-10-22, turn-only
