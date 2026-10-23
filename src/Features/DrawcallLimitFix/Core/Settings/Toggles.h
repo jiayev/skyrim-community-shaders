@@ -28,6 +28,9 @@ namespace DCLF
 		// The object classes (LightingDescriptors):
 		// kProjectedUV objects (snow and moss projection);
 		bool projectedUv = false;
+		// A multi-index snow layer whose material is the plain class (vanilla glaciers: SetupMaterial reads its SparkleParams past the
+		// material's end) sparkles with the Snow class's default; off, it draws without sparkle (MaterialPortVanilla, technique 0xe).
+		bool plainSnowSparkle = false;
 		// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's in the table;
 		// then Features/Forward's "forward", Features/Effects' "effects" and Features/Forward's "refraction".)
 

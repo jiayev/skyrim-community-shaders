@@ -106,7 +106,7 @@ namespace DCLF::MaterialPort
 		auto targetClass = [](std::int32_t a_target, std::uint32_t a_count) { return a_target < 0 ? 0u : static_cast<std::uint32_t>(a_target) < a_count ? 1u : 2u; };
 		const auto& v = a_vanilla;
 		put(std::uint32_t(v.sampled) | std::uint32_t(v.shaderKnown) << 1 | std::uint32_t(v.lodTexParamsZ != 0) << 2 | std::uint32_t(v.landSnowZ != 0) << 3 |
-			std::uint32_t(v.ambientSpecularWritten) << 4 | std::uint32_t(v.snowRimW != 0) << 5 | std::uint32_t(v.fullBright != 0) << 6 |
+			std::uint32_t(v.ambientSpecularWritten) << 4 | std::uint32_t(v.snowRimW != 0) << 5 | std::uint32_t(v.fullBright != 0) << 6 | std::uint32_t(v.plainSnowSparkle) << 7 |
 			targetClass(v.characterLightTarget, VanillaRenderTargets()) << 8 | std::uint32_t(v.techniqueByte12) << 16 | std::uint32_t(v.techniqueByte7) << 24);
 		put(static_cast<std::uint32_t>(v.landSnowDivisor));
 		for (const float c : v.ambientSpecular)

@@ -17,6 +17,9 @@ namespace DCLF
 			// (Features/Skins' "skinned", which opens the "Object classes" heading, is listed here, before the projected's, with
 			// Features/TreeWind's "trees" and Features/Decals' toggles after it.)
 			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV", nullptr, true, {} },
+			{ &S::plainSnowSparkle, Switch::PlainSnowSparkle, kOn, "plain snow sparkle", {}, "Sparkle on plain snow layers",
+				"Glacier and ice snow layers carry a material without sparkle values, so the engine reads whatever memory follows it (in practice no "
+				"sparkle). On: DCLF gives them the snow material's default sparkle. Off: no sparkle.", false, {} },
 			// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's here; then
 			// Features/Forward's "forward", Features/Effects' "effects" after it, and Features/Forward's "refraction" after that.)
 			// (Features/Particles', Features/Billboards' and Features/SwitchNodes' toggles follow the refraction's here, then Features/Lod's
