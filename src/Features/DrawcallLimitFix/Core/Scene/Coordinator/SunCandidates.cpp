@@ -33,6 +33,27 @@ namespace DCLF::Scene
 			else
 				run(0, a_count);
 		}
+
+		/**
+		 * @brief After an update's writes: each geometry a_table let go of that no entry holds a row for, while its root (a_rootOf) is an
+		 * entry of the table, gives that entry a row: the entry is written again (a_write). Again until none is left: a rewrite lets go
+		 * only of the rows it no longer lists.
+		 */
+		template <class RootOf, class Write>
+		void WriteReleasedRoots(EntrySpaceTable& a_table, RootOf&& a_rootOf, Write&& a_write)
+		{
+			for (auto released = a_table.TakeReleased(); !released.empty(); released = a_table.TakeReleased()) {
+				std::vector<const RE::NiAVObject*> roots;
+				for (const auto* geometry : released)
+					if (const auto* root = a_rootOf(geometry); root && a_table.index.contains(root))
+						roots.push_back(root);
+				std::sort(roots.begin(), roots.end());
+				roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
+				a_table.rowsTakenBack += roots.size();
+				for (const auto* root : roots)
+					a_write(root);
+			}
+		}
 	}
 
 	void Coordinator::DropSunCandidates()
@@ -123,6 +144,15 @@ namespace DCLF::Scene
 			}
 			lightEntriesDirty.clear();
 		}
+		// A geometry moved between entries in this update, its new entry written before its old one let go of it: the new one again.
+		WriteReleasedRoots(
+			lightTable, [this](const RE::BSGeometry* a_geometry) {
+				const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
+				return it != tracked.end() ? it->second.lightRoot : nullptr;
+			},
+			[this](const RE::NiAVObject* a_root) {
+				lightTable.Set(a_root, LightDependentsOf(a_root), candidateVersions, [&](RE::BSGeometry* a_geometry) { return std::pair{ FindObject(a_geometry), std::uint8_t{ 0 } }; });
+			});
 		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
 		if (lightTable.changed || !lightCandidates)
 			lightCandidates = lightTable.Publish(lightCandidatesGeneration, [this](const RE::NiAVObject* a_root) { return OwnedRoot(a_root); });
@@ -208,6 +238,16 @@ namespace DCLF::Scene
 			sunEntriesDirty.clear();
 			sunEntriesForced.clear();
 		}
+		// As the light table's.
+		WriteReleasedRoots(
+			sunTable, [this](const RE::BSGeometry* a_geometry) {
+				const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
+				return it != tracked.end() ? it->second.listedRoot : nullptr;
+			},
+			[this](const RE::NiAVObject* a_root) {
+				const auto dependents = rootDependents.find(a_root);
+				sunTable.Set(a_root, dependents != rootDependents.end() ? &dependents->second : nullptr, candidateVersions, [&](RE::BSGeometry* a_geometry) { return std::pair{ FindObject(a_geometry), PrimaryVerdictOf(a_geometry) }; });
+			});
 		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
 		if (sunTable.changed || !sunCandidates)
 			sunCandidates = sunTable.Publish(sunCandidatesGeneration, [this](const RE::NiAVObject* a_root) { return OwnedRoot(a_root); });

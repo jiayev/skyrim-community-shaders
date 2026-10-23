@@ -602,7 +602,7 @@ void Skylighting::RenderPrecipitationMask(RE::Precipitation* a_precip, RE::BSGeo
 
 void Skylighting::RenderSkyOcclusionMap(RE::Precipitation* a_precip, bool a_dclf)
 {
-	auto state = globals::state;
+	[[maybe_unused]] auto state = globals::state;  // Tracy only
 	auto renderer = globals::game::renderer;
 
 	auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];

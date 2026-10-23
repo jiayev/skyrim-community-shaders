@@ -74,6 +74,7 @@ namespace DCLF::Scene
 		std::vector<std::uint8_t> marks;  // per index, Publish's scratch
 		bool changed = true;                              // an index moved since the last snapshot
 		std::uint64_t entriesWritten = 0, snapshots = 0;  // since the last report
+		std::uint64_t rowsTakenBack = 0;  // since the last report: entries written again for a geometry another let go of (released)
 		std::uint64_t entriesCaughtUp = 0, wholeCatchUps = 0;  // since the last report: indices a snapshot was brought up at; snapshots brought up index by index
 		// Since the last report, of entriesCaughtUp: indices rewritten under the same root (map entries and held root kept); spares
 		// dispatched, the indices they brought up, those the lane found unstarted (and ran) or running (and waited for); the snapshots
@@ -81,11 +82,22 @@ namespace DCLF::Scene
 		std::uint64_t entriesKept = 0, spareCatchUps = 0, spareEntries = 0, sparesRunByLane = 0, sparesWaited = 0, poolGrowths = 0;
 		std::vector<std::uint8_t> setKept;        // per position, Set's scratch
 		std::vector<std::uint32_t> setPrevious;  // Set's scratch: the entry's geometries before
+		// The geometries Set let go of since the caller last took them (TakeReleased). One another entry lists has no row there when
+		// that entry was written first (a geometry moved between entries in one update: the new entry's Set skipped it, still indexed
+		// by the old): the caller writes that entry again.
+		std::vector<const RE::BSGeometry*> released;
 
 		static std::uint64_t NextLogId();
 
 		/** @brief Every index freed under a new version: the pooled snapshots drop their entries when brought up to it. */
 		void Reset(std::uint32_t& a_versions);
+		/** @brief The geometries Set let go of since the last call that no entry holds a row for now. */
+		std::vector<const RE::BSGeometry*> TakeReleased()
+		{
+			auto taken = std::exchange(released, {});
+			std::erase_if(taken, [this](const RE::BSGeometry* a_geometry) { return geometryIndex.contains(a_geometry); });
+			return taken;
+		}
 		/**
 		 * @brief a_root's entry as its dependents are (a_dependents; null: not a candidate): written again, its geometries with it,
 		 * under a new version. a_geometry(geometry) gives a new geometry's object slot and primary verdict.
@@ -140,8 +152,10 @@ namespace DCLF::Scene
 			if (setKept[k])
 				continue;
 			const std::uint32_t g = list[k];
-			if (const auto it = geometryIndex.find(geometryNodes[g]); it != geometryIndex.end() && it->second == g)
+			if (const auto it = geometryIndex.find(geometryNodes[g]); it != geometryIndex.end() && it->second == g) {
 				geometryIndex.erase(it);
+				released.push_back(geometryNodes[g]);
+			}
 			geometryNodes[g] = nullptr;
 			geometryEntry[g] = EntrySpace::kNone;
 			geometryFree.push_back(g);

@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialWrites.h"
+#include "Features/DrawcallLimitFix/Diagnostics/FadeProbe.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 #include <xbyak/xbyak.h>
@@ -35,6 +36,7 @@ namespace DCLF::Scene
 			const float before = CurrentFade(a_this);
 			const std::uint8_t door = a_this->GetRuntimeData().unk154;
 			const auto result = func(a_this, a_fadeAmount, a_camera);
+			Diagnostics::FadeProbe::NoteFade(before, CurrentFade(a_this), a_this->GetRuntimeData().unk154);  // TEMP
 			if (CurrentFade(a_this) != before || a_this->GetRuntimeData().unk154 != door)
 				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
 			return result;
