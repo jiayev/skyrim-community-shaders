@@ -564,6 +564,17 @@ namespace DCLF::Scene
 					return false;
 				}
 				++ms.uncovered;
+				{
+					// TEMP (SE 1.5.97 MATERIAL PORT): each distinct uncovered class and pass named once.
+					static ankerl::unordered_dense::set<std::uint64_t> named;
+					const auto& snapshot = held->second.held->snapshot;
+					const std::uint64_t key = (reinterpret_cast<std::uintptr_t>(snapshot.vtable) << 16) ^ (std::uint64_t(snapshot.feature) << 40) ^ descriptors.pass ^
+					                          (std::uint64_t(snapshot.materialClass) << 56) ^ (std::uint64_t(snapshot.port) << 60);
+					if (named.size() < 32 && named.insert(key).second)
+						logger::info("[DCLF] uncovered material (TEMP): vtable image+{:#x} feature {} class {} port {} size {}, pass descriptor {:#x}",
+							reinterpret_cast<std::uintptr_t>(snapshot.vtable) - REL::Module::get().base(), snapshot.feature, snapshot.materialClass, snapshot.port,
+							snapshot.size, descriptors.pass);
+				}
 				return false;
 			}
 			++ms.made;
@@ -620,6 +631,7 @@ namespace DCLF::Scene
 		derived.fadeState = a_result.fadeState;
 		derived.interior = a_frame.interior;
 		derived.alphaBelowOne = a_result.alphaBelowOne;
+		derived.alphaState = a_result.alphaState;
 		derived.technique = accumulated->technique;
 		derived.subPass = accumulated->subPass;
 		derived.hint = accumulated->hint;
@@ -920,6 +932,8 @@ namespace DCLF::Scene
 		r.material = static_cast<const RE::BSShaderMaterial*>(propertyRecord->material);
 		r.fadeState = FadeStateOf(propertyRecord);
 		r.alphaBelowOne = propertyRecord->materialAlpha < 1.0f;  // 1 without a material, or for any but a Lighting property
+		// The alpha test and threshold KeyJoin puts in the static flags (a flora's harvest raises the threshold in place).
+		r.alphaState = layer ? 0u : r.leaf.AlphaState();
 		const bool interior = frameInterior;
 		const auto& decalBiasMode = frameDecalBias;
 		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8) | (decalBiasMode[3] << 16);
@@ -928,7 +942,7 @@ namespace DCLF::Scene
 		r.derivedWitness = derived.valid && derived.generation == tablesGeneration && derived.geometrySlot == r.geometrySlot && derived.property == r.property &&
 		                   derived.material == r.material && derived.fadeState == r.fadeState && derived.technique == accumulated->technique &&
 		                   derived.subPass == accumulated->subPass && derived.hint == accumulated->hint && derived.interior == interior &&
-		                   derived.alphaBelowOne == r.alphaBelowOne && derived.biasWitness == biasWitness;
+		                   derived.alphaBelowOne == r.alphaBelowOne && derived.alphaState == r.alphaState && derived.biasWitness == biasWitness;
 		const bool derivedProbe = Policy::RecomputeCachedVerdicts(Policy::Verdicts::Derivation, passSerial);
 		r.classified = a_classify || !r.derivedWitness || derivedProbe;
 		Ineligible reason = Ineligible::None;
@@ -1035,7 +1049,8 @@ namespace DCLF::Scene
 		const auto* property = record ? static_cast<const RE::BSShaderProperty*>(record->key) : nullptr;
 		const auto* material = record ? static_cast<const RE::BSShaderMaterial*>(record->material) : nullptr;
 		const bool alphaBelowOne = record && record->materialAlpha < 1.0f;
-		return derived.valid && derived.generation == tablesGeneration && derived.geometrySlot == tables.objects[a_slot].geometryIndex &&
+		const std::uint32_t alphaState = layer ? 0u : leaf.AlphaState();
+		return derived.valid && derived.alphaState == alphaState && derived.generation == tablesGeneration && derived.geometrySlot == tables.objects[a_slot].geometryIndex &&
 		       derived.property == property && derived.material == material && derived.fadeState == FadeStateOf(record) &&
 		       derived.alphaBelowOne == alphaBelowOne && derived.interior == frameInterior && derived.pipelineSlot == tables.objects[a_slot].pipelineIndex &&
 		       derived.materialSlot == tables.objects[a_slot].materialIndex;

@@ -19,6 +19,16 @@ namespace DCLF
 {
 	namespace
 	{
+		// The land blend's globals (SampleExtrasFrame): BSShaderManager::State's (AE 0x142033060, SE 0x141e0ded0) and AE's 0.2.
+		constexpr Engine::Offset kStateTimer{ 0x2033080, 0x1e0def0 };             // State+0x20: timerValues[0]
+		constexpr Engine::Offset kStateLandFadeSeconds{ 0x20330f8, 0x1e0df68 };   // State+0x98: landLOFadeSeconds
+		constexpr Engine::Offset kStateOldGridCenterX{ 0x2033108, 0x1e0df78 };    // State+0xa8: oldGridArrayCenter
+		constexpr Engine::Offset kStateOldGridCenterY{ 0x203310c, 0x1e0df7c };
+		constexpr Engine::Offset kStateGridCenterX{ 0x2033110, 0x1e0df80 };       // State+0xb0: gridArrayCenter
+		constexpr Engine::Offset kStateGridCenterY{ 0x2033114, 0x1e0df84 };
+		constexpr Engine::Offset kStateGridLerpStart{ 0x2033118, 0x1e0df88 };     // State+0xb8: gridArrayLerpStart
+		constexpr Engine::Offset kLandFadeFraction{ 0x1ad2840, 0 };               // float 0.2, AE only (SE's code divides by 5)
+
 		void StoreRelative(float* a_out, const float (&a_world)[12], const RE::NiPoint3& a_posAdjust)
 		{
 			std::memcpy(a_out, a_world, sizeof(a_world));
@@ -132,11 +142,13 @@ namespace DCLF
 		ExtrasFrame frame;
 		auto at = [](std::uintptr_t a_offset) { return *reinterpret_cast<const float*>(REL::Offset(a_offset).address()); };
 		// BSLightingShader::SetupGeometry, techniques 8 and 19 (engine notes: per-object constants): a blend between two
-		// BSShaderManager::State positions by a clock the same state holds.
-		float t = (at(0x2033080) - at(0x2033118)) * (at(0x1ad2840) / at(0x20330f8));
+		// BSShaderManager::State positions by a clock the same state holds. Each runtime's own arithmetic, for its bits: AE multiplies
+		// by 0.2 (the constant at 0x141ad2840) over the fade seconds, SE (FUN_1412f4e20) divides by the fade seconds times 5.
+		const float elapsed = at(kStateTimer) - at(kStateGridLerpStart);
+		float t = REL::Module::IsSE() ? elapsed / (at(kStateLandFadeSeconds) * 5.0f) : elapsed * (at(kLandFadeFraction) / at(kStateLandFadeSeconds));
 		t = t <= 0.0f ? 0.0f : 1.0f <= t ? 1.0f : t;
-		frame.landBlend[0] = (at(0x2033110) - at(0x2033108)) * t + at(0x2033108);
-		frame.landBlend[1] = (at(0x2033114) - at(0x203310c)) * t + at(0x203310c);
+		frame.landBlend[0] = (at(kStateGridCenterX) - at(kStateOldGridCenterX)) * t + at(kStateOldGridCenterX);
+		frame.landBlend[1] = (at(kStateGridCenterY) - at(kStateOldGridCenterY)) * t + at(kStateOldGridCenterY);
 		// The ProjectedUV projection (SetupGeometry's ProjectedUV block): a fixed rotation about Z at posAdjust, through the engine's
 		// own NiTransform-to-matrix routine (which subtracts posAdjust).
 		using ToMatrix = void (*)(float*, const RE::NiTransform*);

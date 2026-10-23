@@ -33,21 +33,44 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 	{
 		using Engine::At;
 
-		// AE offsets (from the image base). The process is Accumulate's static BSParabolicCullingProcess.
-		constexpr std::uintptr_t kProcess = 0x335bfa0;
-		constexpr std::uintptr_t kAppendNonAccum = 0x1519e60;  // vtable slot 0x19
-		constexpr std::uintptr_t kRoomFrustum = 0xe14460;      // FUN_140e14460(entry, room): the entry's visibility map's frustum
-		// OnVisible implementations (NiAVObject vtable slot 0x34).
+		// Offsets from the image base (AE 1.6.1170, SE 1.5.97). The process is Accumulate's static BSParabolicCullingProcess.
+		constexpr DCLF::Engine::Offset kProcess{ 0x335bfa0, 0x3202ae0 };
+		constexpr DCLF::Engine::Offset kAppendNonAccum{ 0x1519e60, 0x132c690 };  // vtable slot 0x19
+		constexpr DCLF::Engine::Offset kRoomFrustum{ 0xe14460, 0xd3deb0 };       // FUN_140e14460(entry, room): the entry's visibility map's frustum
+		// OnVisible implementations (NiAVObject vtable slot 0x34), as kinds: a kind is the AE function's offset (the switches' labels),
+		// and kOnVisibleOffsets gives each kind's function on the running runtime.
 		constexpr std::uintptr_t kNodeOnVisible = 0xd1e2c0, kFadeOnVisible = 0x1479f50, kLeafOnVisible = 0x147c9c0, kTreeOnVisible = 0x147d3c0;
 		constexpr std::uintptr_t kMultiBoundOnVisible = 0xe2d710, kRoomOnVisible = 0xe089f0, kSwitchOnVisible = 0xd29700;
 		constexpr std::uintptr_t kSharedOnVisible = 0xe24740, kGeometryOnVisible = 0xd37f30, kSubIndexOnVisible = 0xe312c0;
 		constexpr std::uintptr_t kSegmentedOnVisible = 0xd59740, kNoOnVisible = 0xd1c5a0;
 		constexpr std::uintptr_t kBillboardOnVisible = 0xd3f720;  // NiNode's without cameraRelatedUpdates
+		struct OnVisibleOffset
+		{
+			std::uintptr_t kind;
+			DCLF::Engine::Offset function;
+		};
+		constexpr std::array<OnVisibleOffset, 13> kOnVisibleOffsets{ {
+			{ kNodeOnVisible, { kNodeOnVisible, 0xc58c70 } },
+			{ kFadeOnVisible, { kFadeOnVisible, 0x128fe30 } },
+			{ kLeafOnVisible, { kLeafOnVisible, 0x1292760 } },
+			{ kTreeOnVisible, { kTreeOnVisible, 0x1293170 } },
+			{ kMultiBoundOnVisible, { kMultiBoundOnVisible, 0xd56260 } },
+			{ kRoomOnVisible, { kRoomOnVisible, 0xd33c70 } },
+			{ kSwitchOnVisible, { kSwitchOnVisible, 0xc63ae0 } },
+			{ kSharedOnVisible, { kSharedOnVisible, 0xd4cfe0 } },
+			{ kGeometryOnVisible, { kGeometryOnVisible, 0xc71820 } },
+			{ kSubIndexOnVisible, { kSubIndexOnVisible, 0xd59580 } },
+			{ kSegmentedOnVisible, { kSegmentedOnVisible, 0xc90620 } },
+			{ kNoOnVisible, { kNoOnVisible, 0xc57170 } },
+			{ kBillboardOnVisible, { kBillboardOnVisible, 0xc78d90 } },
+		} };
+		// A function no kind names: its own offset, marked so that it never equals a kind (an SE function may sit at an AE kind's offset).
+		constexpr std::uintptr_t kUnnamedOnVisible = std::uintptr_t(1) << 63;
 		// Globals the node types read.
-		constexpr std::uintptr_t kFadeGate = 0x2032dfd;   // byte: BSFadeNode::OnVisible's fades on
-		constexpr std::uintptr_t kTreeGate = 0x2032fb8;   // byte: BSTreeNode::OnVisible's height test on
-		constexpr std::uintptr_t kTreeBase = 0x332a2f0;   // float: the height test's base
-		constexpr std::uintptr_t kTreeLimit = 0x2032fa0;  // float: and its limit
+		constexpr DCLF::Engine::Offset kFadeGate{ 0x2032dfd, 0x1e0dc5d };   // byte: BSFadeNode::OnVisible's fades on
+		constexpr DCLF::Engine::Offset kTreeGate{ 0x2032fb8, 0x1e0de18 };   // byte: BSTreeNode::OnVisible's height test on
+		constexpr DCLF::Engine::Offset kTreeBase{ 0x332a2f0, 0x31d0df8 };   // float: the height test's base
+		constexpr DCLF::Engine::Offset kTreeLimit{ 0x2032fa0, 0x1e0de00 };  // float: and its limit
 		// The process's fields (BSCullingProcess / BSParabolicCullingProcess).
 		constexpr std::size_t kIgnorePreprocess = 0x11e, kTreeTest = 0x121;
 		constexpr std::size_t kGraphEntry = 0x30190, kCullMode = 0x30198, kCompound = 0x301a0;
@@ -58,8 +81,7 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 		constexpr std::uint32_t kAlwaysDraw = 1u << 11, kPreprocessed = 1u << 12, kSettled = 1u << 15, kPreprocessHidden = 1u << 20;
 
 		std::uintptr_t Base() { return REL::Module::get().base(); }
-		template <class T>
-		T Global(std::uintptr_t a_offset) { return *reinterpret_cast<const T*>(Base() + a_offset); }
+		using DCLF::Engine::Global;  // the module globals (an Engine::Offset argument finds it by ADL too)
 		// CommonLib's casts are not const; the model reads only.
 		const RE::NiNode* NodeOf(const RE::NiAVObject* a_object) { return const_cast<RE::NiAVObject*>(a_object)->AsNode(); }
 		const RE::BSGeometry* GeometryOf(const RE::NiAVObject* a_object) { return const_cast<RE::NiAVObject*>(a_object)->AsGeometry(); }
@@ -93,8 +115,24 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 				return map;
 			}();
 			const auto vtable = *reinterpret_cast<const std::uintptr_t*>(a_object);
-			const auto it = kinds.find(vtable);
-			return it != kinds.end() ? it->second : OnVisibleOf(a_object);
+			if (const auto it = kinds.find(vtable); it != kinds.end())
+				return it->second;
+			const auto function = OnVisibleOf(a_object);
+			for (const auto& entry : kOnVisibleOffsets)
+				if (entry.function.Get() == function)
+					return entry.kind;
+			return function | kUnnamedOnVisible;
+		}
+
+		/** @brief A kind's function, as an address in the image's own numbering (0x140000000 based), for the logs. */
+		std::uintptr_t KindAddress(std::uintptr_t a_kind)
+		{
+			if (a_kind & kUnnamedOnVisible)
+				return (a_kind & ~kUnnamedOnVisible) + 0x140000000;
+			for (const auto& entry : kOnVisibleOffsets)
+				if (entry.kind == a_kind)
+					return entry.function.Get() + 0x140000000;
+			return a_kind + 0x140000000;
 		}
 
 		bool on = false;
@@ -556,7 +594,7 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 			for (const auto* node = a_geometry; node; node = node->parent, ++depth) {
 				if (const auto it = a_model.rejected.find(node); it != a_model.rejected.end())
 					return fmt::format("{} at {} ({} up, {:#x}, radius {:.2f}, flags {:#x})", it->second, node->name.empty() ? "?" : node->name.c_str(), depth,
-						OnVisibleKind(node) + 0x140000000, node->worldBound.radius, Engine::FlagsOf(node));
+						KindAddress(OnVisibleKind(node)), node->worldBound.radius, Engine::FlagsOf(node));
 				if (a_model.visited.contains(node)) {
 					std::string children;
 					if (OnVisibleKind(node) == kSwitchOnVisible)
@@ -570,7 +608,7 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 										a_model.visited.contains(child) ? " visited" : "");
 						}
 					return fmt::format("{} {} visited ({:#x}, radius {:.2f}, flags {:#x}) but its OnVisible did not reach the child{}", depth ? "ancestor" : "geometry",
-						node->name.empty() ? "?" : node->name.c_str(), OnVisibleKind(node) + 0x140000000, node->worldBound.radius, Engine::FlagsOf(node), children);
+						node->name.empty() ? "?" : node->name.c_str(), KindAddress(OnVisibleKind(node)), node->worldBound.radius, Engine::FlagsOf(node), children);
 				}
 			}
 			return "no ancestor of it was visited (not under the request's roots)";
@@ -775,7 +813,7 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 
 	void Configure(bool a_on)
 	{
-		enabled = a_on && REL::Module::IsAE();
+		enabled = a_on;
 		if (enabled)
 			Diagnostics::Subscribe<Diagnostics::EnginePoint::LightSelectionMade>([](const Diagnostics::On<Diagnostics::EnginePoint::LightSelectionMade>&) {
 				for (const auto& pending : pendings)

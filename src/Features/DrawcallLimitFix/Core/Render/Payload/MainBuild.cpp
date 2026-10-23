@@ -202,12 +202,16 @@ namespace DCLF::Draws
 		{
 			if (!a_cache)
 				return std::make_shared<MainBody>();
+			// Every idle body is reset, not only the one taken, as AcquirePayload does: one left idle past the first free would hold its
+			// stream views (their tables) and binding owners, and keep the retirement chain from that publication on.
+			std::shared_ptr<MainBody> free;
 			for (auto& held : a_cache->bodies)
 				if (held.use_count() == 1) {
 					held->Reset();
-					return held;
+					if (!free)
+						free = held;
 				}
-			return a_cache->bodies.emplace_back(std::make_shared<MainBody>());
+			return free ? free : a_cache->bodies.emplace_back(std::make_shared<MainBody>());
 		}
 
 		/**

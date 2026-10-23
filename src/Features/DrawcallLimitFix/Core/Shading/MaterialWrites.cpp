@@ -60,16 +60,18 @@ namespace DCLF::MaterialWrites
 				NoteWritten(property->material);
 		}
 
-		// AE 1.6.1170 controller destination tables (Ghidra: float Update 0x14150DDE0,
-		// colour Update 0x14150EA50). The float table contains float indices; the colour
-		// table contains byte offsets. Other runtimes retain the conservative notification.
+		// The controller destination tables of AE 1.6.1170 and SE 1.5.97 (Ghidra: float Update 0x14150DDE0,
+		// colour Update 0x14150EA50; SE 0x141321310, 0x141321d90, the same tables). The float table contains float
+		// indices; the colour table contains byte offsets. Other runtimes retain the conservative notification.
 		const std::uint32_t* FloatDestinations()
 		{
 			return reinterpret_cast<const std::uint32_t*>(REL::Offset(Engine::Address::kFloatControllerTargets).address());
 		}
 		bool ControllerDestinationTablesKnown()
 		{
-			static const bool known = REL::Module::get().version() == REL::Version{ 1, 6, 1170, 0 };
+			const auto version = REL::Module::get().version();
+			static const bool known = (version == REL::Version{ 1, 6, 1170, 0 } || version == REL::Version{ 1, 5, 97, 0 }) &&
+			                          Engine::Address::kFloatControllerTargets.Known() && Engine::Address::kColorControllerTargets.Known();
 			return known;
 		}
 		const std::uint32_t* ColourDestinations()

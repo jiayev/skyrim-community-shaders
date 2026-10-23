@@ -6,6 +6,8 @@
 
 #	include "Deferred.h"
 #	include "Features/DrawcallLimitFix/Api/MaterialWrites.h"
+#	include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#	include "Features/DrawcallLimitFix/Core/Engine/WindowWriters.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #	include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
@@ -55,9 +57,13 @@
 
 namespace
 {
-	// Every engine hook and offset DCLF uses is AE 1.6.1170's (most are raw module offsets, not Address Library IDs), so any other
-	// build, AE included, would patch the wrong code.
-	bool SupportedGame() { return REL::Module::get().version() == REL::Version{ 1, 6, 1170, 0 }; }
+	// Every engine hook and offset DCLF uses is an Engine::Offset with AE 1.6.1170's and SE 1.5.97's values (most are raw module offsets,
+	// not Address Library IDs), so any other build would patch the wrong code. SceneWriterFramework has tables for the same two.
+	bool SupportedGame()
+	{
+		const auto game = REL::Module::get().version();
+		return game == REL::Version{ 1, 6, 1170, 0 } || game == REL::Version{ 1, 5, 97, 0 };
+	}
 }
 
 void DrawcallLimitFix::PostLoad()
@@ -104,7 +110,7 @@ void DrawcallLimitFix::PostPostLoad()
 {
 	if (!SupportedGame()) {
 		const auto game = REL::Module::get().version();
-		unavailableReason = fmt::format("DCLF supports Skyrim AE 1.6.1170 only (this game is {})", game.string("."));
+		unavailableReason = fmt::format("DCLF supports Skyrim AE 1.6.1170 and SE 1.5.97 only (this game is {})", game.string("."));
 		logger::info("[DCLF] {}; the game renders natively", unavailableReason);
 		return;
 	}
@@ -462,25 +468,46 @@ void DrawcallLimitFix::Hooks::Install()
 	// accumulator finish when they are off.
 	stl::write_vfunc<0x2A, BSShaderAccumulator_FinishAccumulating>(RE::VTABLE_BSShaderAccumulator[0]);
 	logger::info("[DCLF] shadow view hook installed on BSShaderAccumulator::FinishAccumulatingPreResolveDepth");
+	// The sites below are calls another plugin may already have redirected (Terrain Blending shares the first), so only the instruction
+	// form is checked: a CALL rel32, as write_thunk_call needs.
+	const auto isCall = [](std::uintptr_t a_site) { return *reinterpret_cast<const std::uint8_t*>(a_site) == 0xE8; };
 	// The main camera's depth pass, hooked where Terrain Blending hooks it.
-	stl::write_thunk_call<Main_RenderDepth>(REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x395, 0x395, 0x3B3));
-	stl::write_thunk_call<Main_RenderDepth_WorldDrawn>(REL::RelocationID(100421, 107139).address() + 0x1AA);
-	logger::info("[DCLF] Z-prepass hook installed inside Main::RenderDepth, after the world's depth draws");
-	stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<1>>(REL::RelocationID(100877, 107667).address() + REL::Relocate(0x1E5, 0xED));
-	stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<2>>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
-	// A geometry group's pass list (FUN_1414f19d0, AE 1.6.1170): the main pass's groups 9, 8, 1, 0 and 13 when they hold a
-	// plain list, which is where terrain LOD's colour passes are drawn (dclf-architecture.md, "Terrain LOD").
-	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kGeometryGroupDraw).address(), REL::Offset(DCLF::Engine::Address::kRenderPassImmediately).address()))
-		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<3>>(REL::Offset(DCLF::Engine::Address::kGeometryGroupDraw).address());
+	if (const auto site = REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x395, 0x395, 0x3B3); isCall(site))
+		stl::write_thunk_call<Main_RenderDepth>(site);
 	else
-		logger::warn("[DCLF] the geometry groups' pass draw is not where expected; their passes stay native (terrain LOD among them)");
-	stl::write_thunk_call<Main_Draw_Early>(REL::RelocationID(35560, 36559).address() + 0xD3);
-	logger::info("[DCLF] scene phase hook installed on Main::Draw");
+		logger::warn("[DCLF] Main::Draw's depth pass call is not where expected; the depth pass is not marked");
+	// Main::RenderDepth's call of BSShaderAccumulator::RenderFirstPersonView_End (SE +0x18E, AE +0x1AA).
+	if (const auto site = REL::RelocationID(100421, 107139).address() + REL::Relocate(0x18E, 0x1AA); isCall(site)) {
+		stl::write_thunk_call<Main_RenderDepth_WorldDrawn>(site);
+		logger::info("[DCLF] Z-prepass hook installed inside Main::RenderDepth, after the world's depth draws");
+	} else
+		logger::warn("[DCLF] Main::RenderDepth's world-drawn call is not where expected; the depth commit point is not installed");
+	// Light Limit Fix's RenderPass3 site: the plain pass list loop (SE FUN_1413090c0, AE FUN_1414f4f20).
+	if (const auto site = REL::RelocationID(100871, 107667).address() + REL::Relocate(0xEE, 0xED); isCall(site))
+		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<1>>(site);
+	if (const auto site = REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F); isCall(site))
+		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<2>>(site);
+	// A geometry group's pass list (AE FUN_1414f19d0): the main pass's groups 9, 8, 1, 0 and 13 when they hold a plain list, which is where
+	// terrain LOD's colour passes are drawn (dclf-architecture.md, "Terrain LOD"). AE inlines the plain-list loop there; SE's
+	// RenderPersistentPassList calls FUN_1413090c0 for it, whose call RenderPassImmediately<1> already hooks (no SE address here).
+	if (DCLF::Engine::Address::kGeometryGroupDraw.Known()) {
+		if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kGeometryGroupDraw).address(), REL::Offset(DCLF::Engine::Address::kRenderPassImmediately).address()))
+			stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<3>>(REL::Offset(DCLF::Engine::Address::kGeometryGroupDraw).address());
+		else
+			logger::warn("[DCLF] the geometry groups' pass draw is not where expected; their passes stay native (terrain LOD among them)");
+	}
+	if (const auto site = REL::RelocationID(35560, 36559).address() + 0xD3; isCall(site)) {
+		stl::write_thunk_call<Main_Draw_Early>(site);
+		logger::info("[DCLF] scene phase hook installed on Main::Draw");
+	} else
+		logger::warn("[DCLF] Main::Draw's first call is not where expected; the scene phase hook is not installed");
 	// The stood-in roots' kAccumulated, written at Main::Update's entry.
 	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address(), REL::Offset(DCLF::Engine::Address::kStagesReset).address()))
 		stl::write_thunk_call<Main_Update_Entry>(REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address());
 	else
 		logger::warn("[DCLF] Main::Update's first call is not where expected; the stood-in roots' kAccumulated is not written (T7b2)");
+	// The engine's writers inside the engine-read window, kept out of DCLF's reads there.
+	DCLF::WindowWriters::Install();
 	// (The main pass's blended draw and Main::Draw's refraction point are Features/Forward's, the first-person view's two points
 	// Features/FirstPerson's, installed with the features.)
 	logger::info("[DCLF] Native pass hooks installed");

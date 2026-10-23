@@ -17,8 +17,9 @@ namespace DCLF::Features::Shadows::Local
 {
 	namespace
 	{
-		constexpr std::uintptr_t kFocusCameras = 0x14f0480;  // BSShadowDirectionalLight::sub: the focus cameras, any host
-		constexpr std::uintptr_t kFocusTargets = 0x332a488;  // the focus targets: {float distance; NiAVObject* node} x count
+		// Module offsets, AE 1.6.1170 and SE 1.5.97.
+		constexpr DCLF::Engine::Offset kFocusCameras{ 0x14f0480, 0x1304da0 };  // BSShadowDirectionalLight::sub: the focus cameras, any host
+		constexpr DCLF::Engine::Offset kFocusTargets{ 0x332a488, 0x31d0fa8 };  // the focus targets: {float distance; NiAVObject* node} x count
 	}
 
 	std::uint32_t EngineFocusTargetCount()
@@ -108,7 +109,11 @@ namespace DCLF::Features::Shadows::Local
 	{
 		if (installed)
 			return;
-		stl::detour_thunk<Hooks::Cameras>(REL::Offset(kFocusCameras).address());
+		if (!kFocusCameras.Known()) {
+			logger::warn("[DCLF] focus views: BSShadowDirectionalLight::sub is not known for this runtime; no focus views");
+			return;
+		}
+		stl::detour_thunk<Hooks::Cameras>(REL::Offset(kFocusCameras.Get()).address());
 		installed = true;
 		logger::info("[DCLF] focus views: BSShadowDirectionalLight::sub detoured (T3c)");
 	}

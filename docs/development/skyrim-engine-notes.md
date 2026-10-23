@@ -1479,6 +1479,12 @@ Reverse engineered 2026-10-09 (Ghidra, AE); DCLF's port is `Engine/PortalViews` 
     `dot(n, eye) - d < 0`; the decompiler shows otherwise). DCLF judges every graph plane that way at the start of its walk
     (`PortalViews::PlaneJudged`), and a start room's untested planes too; its portal parity rebuilds the program as the engine's
     walk built it (the engine's states and flags, `WithinFrustumDistFirst` for the rest) before counting a difference.
+-   **Flora harvesting changes alpha thresholds, not geometry** (2026-10-23). The harvest (`FUN_1401e8ef0`: `SetHarvestedFlag`, then
+    the 3D) shows a harvested flora by one of two means. Where the 3D's first child is a two-child `NiSwitchNode`, its index is set to
+    the harvested bit inline (`+0x12C`, SWF's switch-index store). Otherwise `FUN_1401e95a0(object, &harvested)` walks the geometries
+    and swaps each alpha's threshold (`+0x32`) between two runtime globals (`0x141fd604f`, `0x141fd6067`: 128 and 160 here), so the
+    flower heads' low vertex alpha fails the test. `FUN_1401e9450` (the harvestable 3D's setup) makes the same calls for a reference
+    loaded harvested.
 -   **Writers of a node's collision object and LOD type outside the hooked functions** (2026-10-23, `CS_DCLF_MIRROR_WATCH` with
     callers). `bhkWorld::InitHavok` (`0x140e86ad0`, a virtual at `+0x1B0`; `Hazard::InitHavok` calls it) moves a collision object
     from its second argument to its third: `SetCollisionObject` on the third, then the second's `+0x40` released and cleared inline
@@ -2339,6 +2345,13 @@ never the main thread, in motion).
     hide scoped to the faces, every frame the faces update.
 -   **LOD shows:** `FUN_1405103e0` (store at 0x140510697) shows object LOD blocks and `FUN_140509b50` (0x140509b59) terrain
     blocks, outside the attach.
+-   **"Cell animations"** (AE `0x1406d29d0`, SE `0x140640300`; the "Main render scene" job list, right after "Wait For Shadow Culling",
+    which waits for the main thread's stage 5, set on SE by `FUN_1412e2660` once the shadow cull is done inside Main::Draw):
+    TES's animated references' update (AE `FUN_14019c0f0(TES, time)`, SE `FUN_140152c90`; the call at AE `0x1406d2a72`, SE `0x1406403aa`)
+    on job threads beside Main::Draw's render, so their controllers write transforms and effect falloff/base colour inside the
+    engine-read window. It signals stage 0xe at its end, which no direct stage wait reads. DCLF's `WindowWriters` hook makes the
+    update wait for the frame values' sampling and suspends the window around it (job tables: AE `0x142011a70..`, SE `0x141dee210..`,
+    `{function, name}` pairs per list, `JobListEnd` closing each).
 -   **Moving the rest off the main thread** meets Havok world edits, unsynchronised `ProcessLists`/`GarbageCollector`
     inserts, the per-reference owner lock (`+0x88`) and the grid controller's ordering; the main thread mostly waits on
     these jobs already.

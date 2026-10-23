@@ -27,72 +27,88 @@ namespace DCLF::Features::Lod::LodGates
 	namespace
 	{
 		/**
-		 * AE 1.6.1170, from the image base (skyrim-engine-notes.md, "LOD swaps and their gates"); call site bytes are checked before
-		 * patching. Quadtree node (0x50 bytes): +0x08 terrain handle, +0x10 object handle, +0x18 tree handle, +0x20/+0x28 the map's
+		 * AE 1.6.1170 and SE 1.5.97, from the image base (skyrim-engine-notes.md, "LOD swaps and their gates"); call sites are checked
+		 * before patching. Quadtree node (0x50 bytes): +0x08 terrain handle, +0x10 object handle, +0x18 tree handle, +0x20/+0x28 the map's
 		 * fixed-level terrain/object handles, +0x30 children (4 contiguous), +0x40 flags. Handle: +0x0C state (bits 0x70000000) and
 		 * references, +0x28 the block. Object block: +0x08 its NiNode (under the LOD root), +0x11 attached. Terrain block: +0x08 land
 		 * and +0x10 water node (what show/hide store to), +0x18 the container attached to a level node, +0x21 attached, +0x22 water
-		 * registered.
+		 * registered. The layouts are the same on SE.
 		 */
-		enum Offset : std::uintptr_t
-		{
-			// The Func2s' call sites: attaches (pre-hide) and the retirement that follows (steal, then the gate).
-			kObjectUpgradeAttach = 0x51339a,     // BGSQueuedObjectUpgrade::Func2: FUN_1404fda90(child block), once per ready child
-			kObjectUpgradeRetire = 0x51340c,     // ...: FUN_140510a10(parent, 2)
-			kTerrainUpgradeAttach = 0x512ceb,    // FUN_140512c90 (terrain upgrade Func2): FUN_140509550(child block)
-			kTerrainUpgradeRetire = 0x512d57,    // ...: FUN_140510a10(parent, 1)
-			kObjectDowngradeAttach = 0x513615,   // BGSQueuedObjectDowngrade::Func2: FUN_1404fda90(parent block)
-			kObjectDowngradeRetire = 0x513671,   // ...: FUN_140510c20(child, 2), once per child
-			kTerrainDowngradeAttach = 0x512f55,  // BGSQueuedTerrainDowngrade::Func2: FUN_140509550(parent block)
-			kTerrainDowngradeRetire = 0x512fb1,  // ...: FUN_140510c20(child, 1), once per child
-			// The InitialLoad Func2s (vtables 0x1418690d8 objects, 0x141869030 terrain; queued by FUN_140513ea0 / FUN_1405139b0 for an
-			// unloaded node with no loaded block above it): attach only, nothing retired.
-			kObjectInitialAttach = 0x513789,   // BGSQueuedObjectInitialLoad::Func2 (0x140513740): FUN_1404fda90(node's block)
-			kTerrainInitialAttach = 0x513091,  // BGSQueuedTerrainInitialLoad::Func2 (0x140513080): FUN_140509550(item's block)
-			// Forced releases: FUN_14050e430's early return with the LOD roots hidden (tail `jmp` to FUN_140509950) and its full rebuild.
-			kRootsHiddenReturn = 0x50e4e4,
-			kFullRebuild = 0x50e7ae,
-			// Detoured.
-			kLodDrain = 0x513840,           // FUN_140513840: the swaps' drain (Func2s), from FUN_14050e430 under the manager's lock
-			kRetire = 0x510a10,             // FUN_140510a10(node, bits): a node's blocks detached and released (1 terrain, 2 objects)
-			kDeactivate = 0x50ed60,         // FUN_14050ed60: manager deactivated (FUN_14050e250, a worldspace unload, calls it first)
-			kMapHideAll = 0x511b40,         // FUN_140511b40(node, show): the map's show or hide of every block
-			kMapEnter = 0x511680,           // FUN_140511680: to the map's fixed levels
-			kMapExit = 0x511860,            // FUN_140511860: back from them (also FUN_14050e430's LOD-off branch)
-			kTerrainCacheFlush = 0x5099a0,  // FUN_1405099a0(0): the terrain block cache flushed (LOD off, the map)
-			kObjectCacheFlush = 0x4fdca0,   // FUN_1404fdca0(0): the object block cache flushed
-			// The engine's own retirement, as FUN_140510a10 runs it.
-			kDetachObject = 0x4fd970,   // FUN_1404fd970(block)
-			kDetachTerrain = 0x509770,  // FUN_140509770(block): unregisters its LOD water too
-			kReleaseObject = 0x501d00,  // FUN_140501d00(handle): one reference
-			kReleaseTerrain = 0x50d170,  // FUN_14050d170(handle)
-			kLodVisibleTest = 0x512160,  // FUN_140512160(node, cell, objects): the update's show test
-			// Data.
-			kManagerLock = 0x315b8c8,  // DAT_14315b8c8: the terrain manager's recursive BSSpinLock, held around the drain
-			kLoadScreen = 0x315b6a0,   // DAT_14315b6a0: load screen up (FUN_1401a1150 sets it; its close runs the LOD full update, then clears it)
-			kTlsIndex = 0x35f0878,     // TLS index: +0x768 in its block is the memory context id FUN_140510a10 sets to 0x55
-		};
+		using Engine::Offset;
+		// The Func2s' call sites: attaches (pre-hide) and the retirement that follows (steal, then the gate).
+		inline constexpr Offset kObjectUpgradeAttach{ 0x51339a, 0x4b6fc9 };     // BGSQueuedObjectUpgrade::Func2: FUN_1404fda90(child block), once per ready child
+		inline constexpr Offset kObjectUpgradeRetire{ 0x51340c, 0x4b701f };     // ...: FUN_140510a10(parent, 2)
+		inline constexpr Offset kTerrainUpgradeAttach{ 0x512ceb, 0x4b6972 };    // FUN_140512c90 (terrain upgrade Func2): FUN_140509550(child block)
+		inline constexpr Offset kTerrainUpgradeRetire{ 0x512d57, 0x4b69be };    // ...: FUN_140510a10(parent, 1)
+		inline constexpr Offset kObjectDowngradeAttach{ 0x513615, 0x4b71d5 };   // BGSQueuedObjectDowngrade::Func2: FUN_1404fda90(parent block)
+		inline constexpr Offset kObjectDowngradeRetire{ 0x513671, 0x4b7244 };   // ...: FUN_140510c20(child, 2), once per child
+		inline constexpr Offset kTerrainDowngradeAttach{ 0x512f55, 0x4b6b65 };  // BGSQueuedTerrainDowngrade::Func2: FUN_140509550(parent block)
+		inline constexpr Offset kTerrainDowngradeRetire{ 0x512fb1, 0x4b6bd1 };  // ...: FUN_140510c20(child, 1), once per child
+		// The InitialLoad Func2s (vtables 0x1418690d8 objects, 0x141869030 terrain; queued by FUN_140513ea0 / FUN_1405139b0 for an
+		// unloaded node with no loaded block above it): attach only, nothing retired.
+		inline constexpr Offset kObjectInitialAttach{ 0x513789, 0x4b739c };   // BGSQueuedObjectInitialLoad::Func2 (0x140513740): FUN_1404fda90(node's block)
+		inline constexpr Offset kTerrainInitialAttach{ 0x513091, 0x4b6cd1 };  // BGSQueuedTerrainInitialLoad::Func2 (0x140513080): FUN_140509550(item's block)
+		// Forced releases: FUN_14050e430's early return with the LOD roots hidden (tail `jmp` to FUN_140509950) and its full rebuild.
+		inline constexpr Offset kRootsHiddenReturn{ 0x50e4e4, 0x4b2a14 };
+		// AE: the call of FUN_14050f790(manager, root, .., .., 1). SE inlines that function into its caller: the site is the inlined
+		// body's first call, FUN_1404b3f60(root, pos, player cell, 0x27) (AE's FUN_14050fe10), the caches' updates after it (FullRebuildSE).
+		inline constexpr Offset kFullRebuild{ 0x50e7ae, 0x4b2ce1 };
+		// The call sites' callees.
+		inline constexpr Offset kObjectAttach{ 0x4fda90, 0x4a18d0 };       // FUN_1404fda90(block)
+		inline constexpr Offset kTerrainAttach{ 0x509550, 0x4ad940 };      // FUN_140509550(block)
+		inline constexpr Offset kRetireRecurse{ 0x510c20, 0x4b4c20 };      // FUN_140510c20(node, bits): FUN_140510a10 on the node and its subtree
+		inline constexpr Offset kRootsHiddenTail{ 0x509950, 0x4add70 };    // FUN_140509950(0)
+		inline constexpr Offset kFullRebuildCallee{ 0x50f790, 0x4b3f60 };  // FUN_14050f790 (SE: FUN_1404b3f60, see kFullRebuild)
+		// Detoured.
+		inline constexpr Offset kLodDrain{ 0x513840, 0x4b7450 };           // FUN_140513840: the swaps' drain (Func2s), from FUN_14050e430 under the manager's lock
+		inline constexpr Offset kRetire{ 0x510a10, 0x4b49b0 };             // FUN_140510a10(node, bits): a node's blocks detached and released (1 terrain, 2 objects)
+		inline constexpr Offset kDeactivate{ 0x50ed60, 0x4b3190 };         // FUN_14050ed60: manager deactivated (FUN_14050e250, a worldspace unload, calls it first)
+		inline constexpr Offset kMapHideAll{ 0x511b40, 0x4b5a30 };         // FUN_140511b40(node, show): the map's show or hide of every block
+		inline constexpr Offset kMapEnter{ 0x511680, 0x4b5560 };           // FUN_140511680: to the map's fixed levels
+		inline constexpr Offset kMapExit{ 0x511860, 0x4b5750 };            // FUN_140511860: back from them (also FUN_14050e430's LOD-off branch)
+		inline constexpr Offset kTerrainCacheFlush{ 0x5099a0, 0x4addf0 };  // FUN_1405099a0(0): the terrain block cache flushed (LOD off, the map)
+		inline constexpr Offset kObjectCacheFlush{ 0x4fdca0, 0x4a1b10 };   // FUN_1404fdca0(0): the object block cache flushed
+		// The engine's own retirement, as FUN_140510a10 runs it.
+		inline constexpr Offset kDetachObject{ 0x4fd970, 0x4a17c0 };    // FUN_1404fd970(block)
+		inline constexpr Offset kDetachTerrain{ 0x509770, 0x4adb60 };   // FUN_140509770(block): unregisters its LOD water too
+		inline constexpr Offset kReleaseObject{ 0x501d00, 0x4a5f10 };   // FUN_140501d00(handle): one reference (SE: (cache, handle), Release)
+		inline constexpr Offset kReleaseTerrain{ 0x50d170, 0x4b1730 };  // FUN_14050d170(handle) (SE: (cache, handle))
+		inline constexpr Offset kLodVisibleTest{ 0x512160, 0x4b60b0 };  // FUN_140512160(node, cell, objects): the update's show test
+		// Data.
+		inline constexpr Offset kManagerLock{ 0x315b8c8, 0x2f23ed8 };  // DAT_14315b8c8: the terrain manager's recursive BSSpinLock, held around the drain
+		inline constexpr Offset kLoadScreen{ 0x315b6a0, 0x2f23cb0 };   // DAT_14315b6a0: load screen up (FUN_1401a1150 sets it; its close runs the LOD full update, then clears it)
+		inline constexpr Offset kTlsIndex{ 0x35f0878, 0x3497408 };     // TLS index: +0x768 in its block is the memory context id FUN_140510a10 sets to 0x55
+		// The object and terrain block caches (pointers): SE's release is the cache's, (cache + 0xD0, handle) (Release). AE's reads
+		// its own (DAT_143146ee0, DAT_143155448); only SE reads these.
+		inline constexpr Offset kObjectCache{ 0x3146ee0, 0x2f0f508 };
+		inline constexpr Offset kTerrainCache{ 0x3155448, 0x2f1da58 };
 
 		struct CallSite
 		{
-			std::uintptr_t offset;
-			std::array<std::uint8_t, 5> bytes;
+			Offset offset;
+			std::uint8_t opcode;  // 0xE8 call, 0xE9 jmp
+			Offset target;
 		};
-		// Each a rel32 `call` (`jmp` for the early return) to the function named above (AE 1.6.1170).
+		// Each a rel32 `call` (`jmp` for the early return) to the function named above: the bytes checked are computed from the resolved
+		// addresses.
 		constexpr std::array<CallSite, 12> kCallSites{ {
-			{ kObjectUpgradeAttach, { 0xE8, 0xF1, 0xA6, 0xFE, 0xFF } },
-			{ kObjectUpgradeRetire, { 0xE8, 0xFF, 0xD5, 0xFF, 0xFF } },
-			{ kTerrainUpgradeAttach, { 0xE8, 0x60, 0x68, 0xFF, 0xFF } },
-			{ kTerrainUpgradeRetire, { 0xE8, 0xB4, 0xDC, 0xFF, 0xFF } },
-			{ kObjectDowngradeAttach, { 0xE8, 0x76, 0xA4, 0xFE, 0xFF } },
-			{ kObjectDowngradeRetire, { 0xE8, 0xAA, 0xD5, 0xFF, 0xFF } },
-			{ kTerrainDowngradeAttach, { 0xE8, 0xF6, 0x65, 0xFF, 0xFF } },
-			{ kTerrainDowngradeRetire, { 0xE8, 0x6A, 0xDC, 0xFF, 0xFF } },
-			{ kObjectInitialAttach, { 0xE8, 0x02, 0xA3, 0xFE, 0xFF } },
-			{ kTerrainInitialAttach, { 0xE8, 0xBA, 0x64, 0xFF, 0xFF } },
-			{ kRootsHiddenReturn, { 0xE9, 0x67, 0xB4, 0xFF, 0xFF } },
-			{ kFullRebuild, { 0xE8, 0xDD, 0x0F, 0x00, 0x00 } },
+			{ kObjectUpgradeAttach, 0xE8, kObjectAttach },
+			{ kObjectUpgradeRetire, 0xE8, kRetire },
+			{ kTerrainUpgradeAttach, 0xE8, kTerrainAttach },
+			{ kTerrainUpgradeRetire, 0xE8, kRetire },
+			{ kObjectDowngradeAttach, 0xE8, kObjectAttach },
+			{ kObjectDowngradeRetire, 0xE8, kRetireRecurse },
+			{ kTerrainDowngradeAttach, 0xE8, kTerrainAttach },
+			{ kTerrainDowngradeRetire, 0xE8, kRetireRecurse },
+			{ kObjectInitialAttach, 0xE8, kObjectAttach },
+			{ kTerrainInitialAttach, 0xE8, kTerrainAttach },
+			{ kRootsHiddenReturn, 0xE9, kRootsHiddenTail },
+			{ kFullRebuild, 0xE8, kFullRebuildCallee },
 		} };
+		// The detoured functions and the engine state and calls the gates use: each must be known on the running runtime.
+		constexpr std::array<Offset, 18> kFunctions{ { kLodDrain, kRetire, kDeactivate, kMapHideAll, kMapEnter, kMapExit, kTerrainCacheFlush,
+			kObjectCacheFlush, kDetachObject, kDetachTerrain, kReleaseObject, kReleaseTerrain, kLodVisibleTest, kManagerLock, kLoadScreen, kTlsIndex,
+			kObjectCache, kTerrainCache } };
 
 		std::uintptr_t Base()
 		{
@@ -104,6 +120,21 @@ namespace DCLF::Features::Lod::LodGates
 		EngineFn EngineCall(std::uintptr_t a_offset)
 		{
 			return reinterpret_cast<EngineFn>(Base() + a_offset);
+		}
+
+		/**
+		 * @brief One reference of a block handle released, as FUN_140510a10 does. AE's release takes the handle alone; SE's has no such
+		 * form (every caller passes the block cache's +0xD0 with the handle), so it is called that way there.
+		 */
+		void Release(bool a_object, std::uintptr_t a_handle)
+		{
+			const Offset release = a_object ? kReleaseObject : kReleaseTerrain;
+			if (!REL::Module::IsSE()) {
+				EngineCall(release)(a_handle);
+				return;
+			}
+			const auto cache = *reinterpret_cast<const std::uintptr_t*>(Base() + (a_object ? kObjectCache : kTerrainCache)) + 0xD0;
+			reinterpret_cast<void (*)(std::uintptr_t, std::uintptr_t)>(Base() + release)(cache, a_handle);
 		}
 
 		/**
@@ -624,7 +655,7 @@ namespace DCLF::Features::Lod::LodGates
 				else if (TerrainLevelDetaches(a_block.node))
 					EngineCall(kDetachTerrain)(a_block.block);
 			}
-			EngineCall(a_block.kind == Kind::Object ? kReleaseObject : kReleaseTerrain)(a_block.handle);
+			Release(a_block.kind == Kind::Object, a_block.handle);
 			counters.released.fetch_add(1, std::memory_order_relaxed);
 		}
 
@@ -1199,6 +1230,26 @@ namespace DCLF::Features::Lod::LodGates
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
+		// SE: FUN_14050f790 is inlined at the full rebuild; its first call (FUN_1404b3f60(root, pos, player cell, 0x27), AE's
+		// FUN_14050fe10) is the site, so the flush still comes before the rebuild's work, as FullRebuild's does on AE.
+		struct FullRebuildSE
+		{
+			static void thunk(std::uintptr_t a_root, std::uintptr_t a_position, std::uintptr_t a_player, std::uint32_t a_flags)
+			{
+				FlushAll(Flush::Rebuild);
+				func(a_root, a_position, a_player, a_flags);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		// The instruction at a_site is the rel32 call or jmp (a_opcode) to a_target.
+		bool BranchesTo(std::uintptr_t a_site, std::uint8_t a_opcode, std::uintptr_t a_target)
+		{
+			const auto* bytes = reinterpret_cast<const std::uint8_t*>(a_site);
+			std::int32_t displacement = 0;
+			std::memcpy(&displacement, bytes + 1, sizeof(displacement));
+			return bytes[0] == a_opcode && a_site + 5 + static_cast<std::intptr_t>(displacement) == a_target;
+		}
 
 		void AbsorbOpened()
 		{
@@ -1220,7 +1271,7 @@ namespace DCLF::Features::Lod::LodGates
 
 	void InstallDetours()
 	{
-		if (detoursInstalled)
+		if (detoursInstalled || !kLodDrain.Known() || !kRetire.Known())
 			return;
 		stl::detour_thunk<LodDrain>(Base() + kLodDrain);
 		stl::detour_thunk<LodRetire>(Base() + kRetire);
@@ -1236,9 +1287,14 @@ namespace DCLF::Features::Lod::LodGates
 			logger::info("[DCLF] LOD gates (T6b5) off (CS_DCLF_LOD_GATES=0): the engine's LOD swaps ungated");
 			return;
 		}
+		for (const auto& function : kFunctions)
+			if (!function.Known()) {
+				logger::warn("[DCLF] LOD gates (T6b5) not installed: an engine address is unknown on this runtime");
+				return;
+			}
 		for (const auto& site : kCallSites)
-			if (std::memcmp(reinterpret_cast<const void*>(Base() + site.offset), site.bytes.data(), site.bytes.size()) != 0) {
-				logger::warn("[DCLF] LOD gates (T6b5) not installed: the instruction at {:#x} is not the expected one", 0x140000000 + site.offset);
+			if (!site.offset.Known() || !site.target.Known() || !BranchesTo(Base() + site.offset, site.opcode, Base() + site.target)) {
+				logger::warn("[DCLF] LOD gates (T6b5) not installed: the instruction at {:#x} is not the expected one", 0x140000000 + site.offset.Get());
 				return;
 			}
 		InstallDetours();
@@ -1253,7 +1309,10 @@ namespace DCLF::Features::Lod::LodGates
 		stl::write_thunk_call<SwapRetire<2>>(Base() + kObjectDowngradeRetire);
 		stl::write_thunk_call<SwapRetire<3>>(Base() + kTerrainDowngradeRetire);
 		stl::write_thunk_jmp<RootsHidden>(Base() + kRootsHiddenReturn);
-		stl::write_thunk_call<FullRebuild>(Base() + kFullRebuild);
+		if (REL::Module::IsSE())
+			stl::write_thunk_call<FullRebuildSE>(Base() + kFullRebuild);
+		else
+			stl::write_thunk_call<FullRebuild>(Base() + kFullRebuild);
 		stl::detour_thunk<Deactivate>(Base() + kDeactivate);
 		stl::detour_thunk<MapHideAll>(Base() + kMapHideAll);
 		stl::detour_thunk<MapEnter>(Base() + kMapEnter);

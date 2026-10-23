@@ -32,6 +32,9 @@ namespace DCLF
 		using namespace Engine;
 		using namespace PortalShapes;
 
+		// BSParabolicCullingProcess::TestBaseVisibility2: a shadow light room process's portal test (vfunc 0xD8).
+		constexpr Engine::Offset kParabolicPortalTest{ 0x151a120, 0x132c890 };
+
 		/** @brief The ceiling as the box silhouette takes it: cvttss2si, then up by one unless exact or negative (INT_MIN saturates). */
 		std::int32_t Ceil(float a_value)
 		{
@@ -1260,7 +1263,7 @@ namespace DCLF
 					   At<float>(a_roomProcess, 0x40), At<float>(a_roomProcess, 0x44), At<float>(a_roomProcess, 0x48)),
 			       false;
 		// Its portal test (vfunc 0xD8) BSParabolicCullingProcess's TestBaseVisibility2 (the process has no RTTI name to read).
-		if (const std::uintptr_t test = (*reinterpret_cast<const std::uintptr_t* const*>(a_roomProcess))[0xD8 / 8]; test != REL::Offset(0x151a120).address())
+		if (const std::uintptr_t test = (*reinterpret_cast<const std::uintptr_t* const*>(a_roomProcess))[0xD8 / 8]; test != REL::Offset(kParabolicPortalTest).address())
 			return a_why = fmt::format("its vfunc 0xD8 at {:#x}", test - REL::Module::get().base() + 0x140000000), false;
 		return true;
 	}

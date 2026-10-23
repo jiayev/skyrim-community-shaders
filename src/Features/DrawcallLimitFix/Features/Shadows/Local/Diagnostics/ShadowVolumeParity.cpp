@@ -34,13 +34,13 @@ namespace DCLF::Features::Shadows::Local
 		VolumeParity volumeParity;
 
 		/**
-		 * @brief A point light's paraboloid cull (ShadowCameras::Camera::parabolic*) against the process FUN_141519d20 set up for it (AE:
-		 * Accumulate's static BSParabolicCullingProcess, 0x14335bfa0), once per light (descriptor 0's sample): its sphere, plane and back
+		 * @brief A point light's paraboloid cull (ShadowCameras::Camera::parabolic*) against the process FUN_141519d20 set up for it
+		 * (Accumulate's static BSParabolicCullingProcess, AE 0x14335bfa0, SE 0x143202ae0), once per light (descriptor 0's sample): its sphere, plane and back
 		 * accumulator. Only while the process's camera (+0x18) is at the light's sphere centre: the process holds the last light culled.
 		 */
 		void CheckParabolic(const ShadowCameras::Camera& a_view, VolumeParity& a_parity)
 		{
-			constexpr std::uintptr_t kProcess = 0x335bfa0;
+			constexpr DCLF::Engine::Offset kProcess{ 0x335bfa0, 0x3202ae0 };
 			constexpr std::size_t kCamera = 0x18, kBackAccumulator = 0x30200, kPlane = 0x30208, kCentre = 0x30218;
 			const auto* process = reinterpret_cast<const std::byte*>(REL::Module::get().base() + kProcess);
 			const auto* camera = DCLF::Engine::At<const RE::NiAVObject*>(process, kCamera);
@@ -86,7 +86,7 @@ namespace DCLF::Features::Shadows::Local
 			                  (!process.doCustomCullPlanes || ShadowCameras::SamePlanes(mine, active(ToPlanes(process.customCullPlanes))));
 			if (!same && p.differ++ == 0)
 				p.first = ShadowCameras::DescribePlanes(mine, planes);
-			if (a_view.parabolic && !a_view.parabolicBack && REL::Module::IsAE())
+			if (a_view.parabolic && !a_view.parabolicBack)
 				CheckParabolic(a_view, p);
 			if ((p.volumes % 3000) == 0) {
 				logger::info("[DCLF] local shadow volumes (T3b: LightViews' cull planes against the culling processes' after the cull): {} volumes, {} differ{}{}; point lights' "

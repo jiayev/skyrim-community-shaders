@@ -19,15 +19,17 @@
 // Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include <cstdint>
 
 namespace DCLF::Features::TreeLod
 {
-	// AE 1.6.1170 (module offsets) of the engine state this feature alone reads.
+	// AE 1.6.1170 and SE 1.5.97 (module offsets) of the engine state this feature alone reads.
 	namespace Address
 	{
-		inline constexpr std::uintptr_t kTreeLodAtlas = 0x33dcd18;  // NiSourceTexture*: tree LOD's atlas
+		inline constexpr Engine::Offset kTreeLodAtlas{ 0x33dcd18, 0x32838e8 };  // NiSourceTexture*: tree LOD's atlas
+		inline constexpr Engine::Offset kDistantTreeShader{ 0x33dcd10, 0x32838e0 };  // BSDistantTreeShader*: the singleton
 	}
 
 	// The engine root a trees view's faces draw in the engine's place while they draw the family (Api::DrawFamilyContribution::faces.root;

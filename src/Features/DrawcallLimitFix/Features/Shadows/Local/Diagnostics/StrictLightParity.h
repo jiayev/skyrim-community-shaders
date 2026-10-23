@@ -11,7 +11,7 @@ namespace RE
 namespace DCLF::Features::Shadows::Local::StrictLightParity
 {
 	/**
-	 * @brief CS_DCLF_STRICT_LIGHT_PARITY=1 (AE only): a portal-strict point light's native cull against DCLF's model of it, on the
+	 * @brief CS_DCLF_STRICT_LIGHT_PARITY=1 (AE and SE): a portal-strict point light's native cull against DCLF's model of it, on the
 	 * parity frames (Diagnostics::ParityDue) whose light culls skip and filter nothing (Policy::FilterLightCulls).
 	 *
 	 * The engine's side: every geometry BSParabolicCullingProcess::AppendNonAccum (vtable slot 0x19) receives during the light's

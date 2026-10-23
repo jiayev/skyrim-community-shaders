@@ -2,6 +2,7 @@
 // SceneWriterFramework's tree animation calls, on any thread), and the tree list's multibound results around its loop (main thread). TreeAnimation.h describes it.
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeAnimation.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeList.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeWalk.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
@@ -427,5 +428,7 @@ namespace DCLF::Features::TreeWind
 			TreeAnimation::Install();
 		// The tree manager's list loop: the stood-in trees' multibound results from DCLF's verdicts (TreeAnimation).
 		TreeList::Install();
+		// SE 1.5.97: the animation walk's update pass as a move writer (the walked trees' sun entries; nothing on AE: TreeWalk.h).
+		TreeWalk::Install(a_context);
 	}
 }

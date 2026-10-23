@@ -5,7 +5,7 @@
 namespace DCLF::Features::TreeWind::TreeList
 {
 	/**
-	 * @brief The engine's tree manager list loop (skyrim-engine-notes.md, "Tree manager list"). AE only.
+	 * @brief The engine's tree manager list loop (skyrim-engine-notes.md, "Tree manager list").
 	 *
 	 * BSTreeManager's update (FUN_140437d40, Main::Update 0x140646176, main thread) runs FUN_140437e50 over its tree list (+0x20:
 	 * BSTreeNodes, exact RTTI): a tree is visited only when its first child's multibound has the cull result 1 (or the process's cull

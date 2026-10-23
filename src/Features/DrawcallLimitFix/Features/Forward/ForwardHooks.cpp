@@ -15,18 +15,18 @@ namespace DCLF::Features::Forward
 {
 	namespace
 	{
-		// AE 1.6.1170 (module offsets) of the engine code and state the epoch's hooks take and mark; the hook sites are each checked with
-		// CallsTo before they are patched.
+		// AE 1.6.1170 and SE 1.5.97 (module offsets) of the engine code and state the epoch's hooks take and mark; the hook sites are each
+		// checked with CallsTo before they are patched.
 		namespace Address
 		{
-			inline constexpr std::uintptr_t kBlendedDraw = 0x14b39d0;            // the main pass's blended draw (FUN_1414b39d0)
-			inline constexpr std::uintptr_t kBlendedUnderWater = 0x14b33e1;      // its call sites in FUN_1414b3390
-			inline constexpr std::uintptr_t kBlendedAfterWater = 0x14b38d3;
-			inline constexpr std::uintptr_t kRefractionCheck = 0x644d20;         // Main::Draw's refraction point
-			inline constexpr std::uintptr_t kGroupFiveCount = 0x14b4840;         // what it calls: the accumulator's group 5 count (FUN_1414b4840)
-			inline constexpr std::uintptr_t kRefractionNormalsBegun = 0x35ef130;  // byte: the refraction normals were cleared this frame
-			inline constexpr std::uintptr_t kRefractionNormalsDrawn = 0x35ef131;  // byte: drawn (ISRefraction's IsActive reads it)
-			inline constexpr std::uintptr_t kClearGroup = 0x14b4ae0;      // FUN_1414b4ae0(accumulator, group): a group's pass list cleared, undrawn
+			inline constexpr Engine::Offset kBlendedDraw{ 0x14b39d0, 0x12cb930 };             // the main pass's blended draw (FUN_1414b39d0)
+			inline constexpr Engine::Offset kBlendedUnderWater{ 0x14b33e1, 0x12cb334 };       // its call sites in FUN_1414b3390 (SE FUN_1412cb2e0)
+			inline constexpr Engine::Offset kBlendedAfterWater{ 0x14b38d3, 0x12cb831 };
+			inline constexpr Engine::Offset kRefractionCheck{ 0x644d20, 0x5b20c0 };           // Main::Draw's refraction point
+			inline constexpr Engine::Offset kGroupFiveCount{ 0x14b4840, 0x12cc710 };          // what it calls: the accumulator's group 5 count (FUN_1414b4840)
+			inline constexpr Engine::Offset kRefractionNormalsBegun{ 0x35ef130, 0x3495d20 };  // byte: the refraction normals were cleared this frame
+			inline constexpr Engine::Offset kRefractionNormalsDrawn{ 0x35ef131, 0x3495d21 };  // byte: drawn (ISRefraction's IsActive reads it)
+			inline constexpr Engine::Offset kClearGroup{ 0x14b4ae0, 0x12cca10 };              // FUN_1414b4ae0(accumulator, group): a group's pass list cleared, undrawn
 		}
 
 		// The forward epoch's trigger (blended.draw), found at install, before any frame.

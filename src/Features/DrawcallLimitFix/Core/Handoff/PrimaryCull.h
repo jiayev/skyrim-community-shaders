@@ -37,7 +37,7 @@ namespace DCLF
 	struct FrameGlobals;
 
 	/**
-	 * @brief The main camera's cull, and taking DCLF's objects out of it (dclf-architecture.md, "The main camera's stand-in"). AE only. Owns the scene
+	 * @brief The main camera's cull, and taking DCLF's objects out of it (dclf-architecture.md, "The main camera's stand-in"). Owns the scene
 	 * lists' build (SceneLists.cpp), the list jobs' stand-in and the camera values BuildDraws reads.
 	 *
 	 * The scene lists (`DAT_14338c870`, `DAT_14338c868` of them) are BSTArray<NiPointer<NiAVObject>> that

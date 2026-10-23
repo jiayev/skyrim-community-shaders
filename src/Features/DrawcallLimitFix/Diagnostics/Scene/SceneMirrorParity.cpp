@@ -12,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
 
 #include <fmt/ranges.h>
@@ -86,7 +87,10 @@ namespace DCLF::Diagnostics
 						t.firstAbsent = fmt::format("{} {} '{}'", SceneMirror::kTypeNames[a_type], a_live.key, a_name ? a_name : "");
 					return;
 				}
-				const std::uint32_t differ = a_mirror->Differ(a_live);
+				std::uint32_t differ = a_mirror->Differ(a_live);
+				// A frame-local hide (MirrorProbe::frameLocalHidden): the engine's, between its hide and show.
+				if (a_type == 0 && std::ranges::binary_search(a_probe.frameLocalHidden, a_live.key))
+					differ &= ~SceneCapture::NodeRecord::kHidden;
 				if (!differ)
 					return;
 				std::string what = fmt::format("{} {} '{}': {}", SceneMirror::kTypeNames[a_type], a_live.key, a_name ? a_name : "", a_fields(differ));
@@ -331,6 +335,13 @@ namespace DCLF::Diagnostics
 			// monitor's offenders: a geometry's records, and each ancestor below that reference's root.
 			auto probe = std::make_unique<MirrorProbe>();
 			auto& records = probe->records;
+			{
+				std::vector<std::pair<const RE::NiAVObject*, bool>> cullHidden;
+				Extensions::CollectCullHidden(cullHidden);
+				for (const auto& [node, bit] : cullHidden)
+					probe->frameLocalHidden.push_back(node);
+				std::ranges::sort(probe->frameLocalHidden);
+			}
 			ankerl::unordered_dense::set<const void*> taken;
 			for (const auto& held : request->geometries) {
 				const auto* geometry = held.get();

@@ -9,6 +9,7 @@
 // feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"  // the texture registers, the record flags
 
 #include <cstddef>
@@ -17,15 +18,15 @@
 
 namespace DCLF::Features::TreeWind
 {
-	// AE 1.6.1170 (module offsets) of the engine's tree manager and globals this feature alone reads.
+	// AE 1.6.1170 and SE 1.5.97 (module offsets) of the engine's tree manager and globals this feature alone reads.
 	namespace Address
 	{
-		inline constexpr std::uintptr_t kTreeManager = 0x20f6a18;  // BSTreeManager*
-		inline constexpr std::uintptr_t kTreeFirstMultiBound = 0x147d640;  // FUN_14147d640(tree node): its object (+0x118), its first child's AsMultiBoundNode (vfunc 0x30), or null
-		inline constexpr std::uintptr_t kTreeWindFadeStart = 0x2033100;  // float: the tree wind fade start
-		inline constexpr std::uintptr_t kTreeWindFadeEnd = 0x2033104;  // float: the tree wind fade end
-		inline constexpr std::uintptr_t kTreeWindTimerScale = 0x1ad28bc;  // float: the tree wind timer scale
-		inline constexpr std::uintptr_t kFrameSeconds = 0x31cc288;  // float: the frame's seconds (GetSecondsPassed)
+		inline constexpr Engine::Offset kTreeManager{ 0x20f6a18, 0x1ebeb38 };  // BSTreeManager*
+		inline constexpr Engine::Offset kTreeFirstMultiBound{ 0x147d640, 0x1293440 };  // FUN_14147d640(tree node): its object (+0x118), its first child's AsMultiBoundNode (vfunc 0x30), or null
+		inline constexpr Engine::Offset kTreeWindFadeStart{ 0x2033100, 0x1e0df70 };  // float: the tree wind fade start
+		inline constexpr Engine::Offset kTreeWindFadeEnd{ 0x2033104, 0x1e0df74 };  // float: the tree wind fade end
+		inline constexpr Engine::Offset kTreeWindTimerScale{ 0x1ad28bc, 0x164dd68 };  // float: the tree wind timer scale
+		inline constexpr Engine::Offset kFrameSeconds{ 0x31cc288, 0x2f6b948 };  // float: the frame's seconds (GetSecondsPassed)
 	}
 
 	// The Lighting technique the feature ports (SIE::ShaderCache::LightingShaderTechniques::TreeAnim), and the record flag its objects

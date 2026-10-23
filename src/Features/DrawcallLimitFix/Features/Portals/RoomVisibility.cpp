@@ -13,10 +13,10 @@ namespace DCLF::RoomVisibility
 	{
 		using Set = PortalViews::VisibleSet;
 
-		constexpr std::uintptr_t kIsRoomVisible = 0x649f20;  // Main::IsRoomVisible(main, node)
-		// Its calls (Ghidra, AE 1.6.1170; the other references are its unwind entries): the managed-nodes update FUN_1402b41a0,
-		// Actor::UpdateRefLight and the actor update FUN_140771520, each with the node at +0x30 of the reference's 3D.
-		constexpr std::array<std::uintptr_t, 3> kCallSites{ 0x2b4268, 0x2e1282, 0x771687 };
+		constexpr Engine::Offset kIsRoomVisible{ 0x649f20, 0x5b6470 };  // Main::IsRoomVisible(main, node)
+		// Its calls (Ghidra, AE 1.6.1170 and SE 1.5.97; the other references are its unwind entries): the managed-nodes update
+		// FUN_1402b41a0, Actor::UpdateRefLight and the actor update FUN_140771520, each with the node at +0x30 of the reference's 3D.
+		constexpr std::array<Engine::Offset, 3> kCallSites{ { { 0x2b4268, 0x261158 }, { 0x2e1282, 0x28d512 }, { 0x771687, 0x6dca84 } } };
 
 		bool installed = false;
 		// Whether DCLF runs this frame (Main::Update's entry, the main thread; read by the job threads' calls during the frame).
@@ -47,7 +47,7 @@ namespace DCLF::RoomVisibility
 		const auto base = REL::Module::get().base();
 		for (const auto site : kCallSites)
 			if (!Engine::CallsTo(base + site, base + kIsRoomVisible)) {
-				logger::warn("[DCLF] room visibility (T7b3) not installed: the instruction at {:#x} is not a call of Main::IsRoomVisible", 0x140000000 + site);
+				logger::warn("[DCLF] room visibility (T7b3) not installed: the instruction at {:#x} is not a call of Main::IsRoomVisible", 0x140000000 + site.Get());
 				return;
 			}
 		PortalViews::Get().PublishVisibleSets();

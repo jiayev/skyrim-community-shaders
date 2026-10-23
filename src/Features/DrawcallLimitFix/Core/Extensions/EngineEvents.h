@@ -102,14 +102,14 @@ namespace DCLF::Extensions
 	 */
 	void PushRangesUpdate(const RE::BSGeometry* a_geometry);
 	/** @brief The move writers the report counts (Core's and the reserved ones; Scene::moveWriterCalls): grow it before more are reserved. */
-	inline constexpr std::uint32_t kMoveWriterSlots = 8;
+	inline constexpr std::uint32_t kMoveWriterSlots = 9;
 	/**
 	 * @brief Main thread at PostPostLoad, before DCLF's threads start (a feature's early hooks or install), before the writer's hooks go in:
 	 * a move writer of the feature's own named a_name (copied; the report's move writers' calls name it). Core's writers keep their slots
 	 * (animation 0, reference 3D position 1, graph animation 5, update pass 6) and the reserved ones take the free slots in reservation
 	 * order, so the report's order is the writers' as it was (Features/Actors' three at its early hooks: 2-4; Features/Particles' at its
-	 * install, through InstallContext::ReserveMoveWriter: 7). Scene::MoveEventsLive is false until the writer is installed
-	 * (MoveWriterInstalled). Fails for no name or past kMoveWriterSlots.
+	 * install, through InstallContext::ReserveMoveWriter: 7; Features/TreeWind's tree animation walk at its install, SE 1.5.97 only: 8).
+	 * Scene::MoveEventsLive is false until the writer is installed (MoveWriterInstalled). Fails for no name or past kMoveWriterSlots.
 	 */
 	Api::MoveWriterId ReserveMoveWriter(std::string_view a_name);
 	/** @brief Main thread at PostPostLoad: a_writer's hooks are in. */

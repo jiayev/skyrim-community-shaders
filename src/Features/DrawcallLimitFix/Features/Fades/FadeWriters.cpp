@@ -28,16 +28,16 @@ namespace DCLF::Features::Fades
 	{
 		using namespace Engine;
 
-		// AE 1.6.1170 (module offsets).
+		// Module offsets, AE 1.6.1170 and SE 1.5.97; field offsets the same on both.
 		// NiAVObject / BSFadeNode fields BSFadeNode::OnVisible (AE 0x141479f50) reads before its fade update.
 		constexpr std::uint32_t kFlagFadeSettled = 1u << 15;
 		constexpr std::size_t kFadeAmount = 0x100;
 		constexpr std::size_t kCurrentFade = 0x130;
 		constexpr std::size_t kLastVisibleFrame = 0x13C;
 		constexpr std::uint32_t kFlagFadeTargetReached = 1u << 14;
-		constexpr std::uintptr_t kAnimatedFadeCallSite = 0x2d0044;  // FUN_1402cff60 (UpdateAnimationJob) -> FUN_14147a160
+		constexpr DCLF::Engine::Offset kAnimatedFadeCallSite{ 0x2d0044, 0x27cba4 };  // FUN_1402cff60 (UpdateAnimationJob) -> FUN_14147a160
 		// The NiNode OnVisible BSFadeNode's ends in (its children's cull), and fields the fade OnVisible detours read.
-		constexpr std::uintptr_t kNodeOnVisible = 0xd1e2c0;       // NiNode::OnVisible
+		constexpr DCLF::Engine::Offset kNodeOnVisible{ 0xd1e2c0, 0xc58c70 };  // NiNode::OnVisible
 		constexpr std::size_t kNodeWorldZ = 0xEC;                 // NiAVObject::world.translate.z
 		constexpr std::size_t kProcessCameraUpdates = 0x11C;      // byte: NiCullingProcess::cameraRelatedUpdates
 		constexpr std::size_t kFadeLodType = 0x153;               // byte: the LOD type in its low nibble
@@ -229,6 +229,10 @@ namespace DCLF::Features::Fades
 				logger::warn("[DCLF] primary cull: the animation job's fade update is not where expected");
 			// Fade OnVisibles leave DCLF-written roots alone (detours, not vtable slots, so subclass tables and FadeState::PlanOf keep
 			// the engine's addresses).
+			if (!Address::kFadeOnVisible.Known() || !Address::kLeafOnVisible.Known() || !Engine::Address::kTreeOnVisible.Known()) {
+				logger::warn("[DCLF] primary cull: the fade OnVisibles are not known for this runtime; they keep their own fade stores");
+				return;
+			}
 			stl::detour_thunk<FadeOnVisible>(base + Address::kFadeOnVisible);
 			stl::detour_thunk<LeafOnVisible>(base + Address::kLeafOnVisible);
 			stl::detour_thunk<TreeOnVisible>(base + Engine::Address::kTreeOnVisible);

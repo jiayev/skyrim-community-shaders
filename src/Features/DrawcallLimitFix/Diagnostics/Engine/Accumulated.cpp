@@ -30,9 +30,9 @@ namespace DCLF::Diagnostics::Accumulated
 		std::uint32_t Flags(const void* a_node) { return Engine::FlagsOf(a_node); }
 		bool AccumulatedBit(const void* a_node) { return (Flags(a_node) & kFlagAccumulated) != 0; }
 
-		// AE 1.6.1170: FUN_1402cff60 and its three calls (skyrim-engine-notes.md, "who sets kAccumulated").
-		constexpr std::uintptr_t kAnimGate = 0x2cff60;
-		constexpr std::array<std::uintptr_t, 3> kAnimGateCallSites{ 0x2c73f6, 0x2b4230, 0x2b5382 };  // UpdateAnimationJob, FUN_1402b41a0, FUN_1402b52e0
+		// AE 1.6.1170 and SE 1.5.97: FUN_1402cff60 (SE FUN_14027cac0) and its three calls (skyrim-engine-notes.md, "who sets kAccumulated").
+		constexpr Engine::Offset kAnimGate{ 0x2cff60, 0x27cac0 };
+		constexpr std::array<Engine::Offset, 3> kAnimGateCallSites{ { { 0x2c73f6, 0x271ec6 }, { 0x2b4230, 0x261120 }, { 0x2b5382, 0x262112 } } };  // UpdateAnimationJob, FUN_1402b41a0, FUN_1402b52e0
 
 		/** @brief Main::Update's entry's: the stood-in roots and whether DCLF left their kAccumulated set. Immutable once published. */
 		struct AnimPrediction

@@ -4,6 +4,7 @@
 // Features/Shadows/Sun/Diagnostics.)
 
 #include "DrawsState.h"
+#include <ankerl/unordered_dense.h>
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Events.h"
@@ -147,8 +148,54 @@ namespace DCLF::Diagnostics
 			if (input.objectIndex >= placements.size())
 				continue;
 			const bool cpu = OutsideSunEntry(payload.inputs, tablesNow, input.objectIndex);
+			const float* row = placements[input.objectIndex].sunEntry;
+			const bool differ = cpu != OutsideSunEntryProcesses(payload.inputs.sunEntryProcesses, row);
 			++a_latched.stats.sunEntryChecks;
-			a_latched.stats.sunEntryMismatches += cpu != OutsideSunEntryProcesses(payload.inputs.sunEntryProcesses, placements[input.objectIndex].sunEntry) ? 1 : 0;
+			a_latched.stats.sunEntryMismatches += differ ? 1 : 0;
+			// The first ones named: the entry root, its reference, and the placement row's sphere against the node's bound now.
+			static std::uint32_t named = 0;
+			if (differ && named < 40) {
+				++named;
+				const auto* node = input.objectIndex < tablesNow.listedRoot.size() ? tablesNow.listedRoot[input.objectIndex] : nullptr;
+				if (!node) {
+					logger::info("[DCLF] sun entry differs, frame {}: object {} has no entry root (the row's entry ({:.1f} {:.1f} {:.1f}) r {:.1f} is outside)",
+						a_latched.frame, input.objectIndex, row[0], row[1], row[2], row[3]);
+					continue;
+				}
+				// Each root once (its other objects and later frames repeat it).
+				static ankerl::unordered_dense::set<const void*> seen;
+				if (!seen.insert(node).second) {
+					--named;
+					continue;
+				}
+				const RE::TESObjectREFR* owner = nullptr;
+				for (const RE::NiAVObject* at = node; at && !owner; at = at->parent)
+					owner = at->GetUserData();
+				const auto* base = owner ? owner->GetBaseObject() : nullptr;
+				const auto& now = node->worldBound;
+				logger::info("[DCLF] sun entry differs, frame {}: object {} entry root '{}' of {} {:08X} '{}': the row's entry ({:.1f} {:.1f} {:.1f}) r {:.1f}, the node's "
+							 "now ({:.1f} {:.1f} {:.1f}) r {:.1f} (moved {:.1f}); the CPU says {}",
+					a_latched.frame, input.objectIndex, node->name.c_str() ? node->name.c_str() : "", base ? RE::FormTypeToString(base->GetFormType()) : "no ref",
+					owner ? owner->GetFormID() : 0u, base && base->GetName() ? base->GetName() : "", row[0], row[1], row[2], row[3], now.center.x, now.center.y,
+					now.center.z, now.radius, std::sqrt((now.center.x - row[0]) * (now.center.x - row[0]) + (now.center.y - row[1]) * (now.center.y - row[1]) +
+					                                        (now.center.z - row[2]) * (now.center.z - row[2])),
+					cpu ? "outside" : "inside");
+				// The object's own bound as the row has it against now, and the root's children now (the union its bound is).
+				const auto* geometry = input.objectIndex < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[input.objectIndex] : nullptr;
+				const float* sampled = placements[input.objectIndex].bound;
+				std::string children;
+				if (auto* asNode = const_cast<RE::NiAVObject*>(node)->AsNode())
+					for (const auto& child : asNode->GetChildren())
+						if (child && children.size() < 600)
+							children += fmt::format(" '{}' {} ({:.1f} {:.1f} {:.1f}) r {:.1f}{};", child->name.c_str() ? child->name.c_str() : "", child->GetRTTI() ? child->GetRTTI()->name : "?",
+								child->worldBound.center.x, child->worldBound.center.y, child->worldBound.center.z, child->worldBound.radius,
+								child->GetFlags().any(RE::NiAVObject::Flag::kHidden) ? " hidden" : "");
+				logger::info("[DCLF] sun entry differs:   its geometry '{}': the row's bound ({:.1f} {:.1f} {:.1f}) r {:.1f}, now ({:.1f} {:.1f} {:.1f}) r {:.1f}; the root's "
+							 "children now:{}",
+					geometry && geometry->name.c_str() ? geometry->name.c_str() : "", sampled[0], sampled[1], sampled[2], sampled[3], geometry ? geometry->worldBound.center.x : 0.0f,
+					geometry ? geometry->worldBound.center.y : 0.0f, geometry ? geometry->worldBound.center.z : 0.0f, geometry ? geometry->worldBound.radius : 0.0f,
+					children);
+			}
 		}
 	}
 }

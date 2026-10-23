@@ -128,6 +128,9 @@ namespace DCLF::Diagnostics
 	{
 		SceneCapture::Records records;
 		ankerl::unordered_dense::map<const void*, std::uint32_t> owners;
+		// The frame's cull hidden nodes (Api::CullHiddenSource): the engine hides and shows them around the views within the frame, each
+		// store with its event, so a slice can catch one between the two. Their hidden bit is not compared. Sorted.
+		std::vector<const void*> frameLocalHidden;
 	};
 
 	/** @brief CS_DCLF_MIRROR_PARITY and the compatibility monitor (PlayerParity.h), the records (SceneMirrorParity.cpp). */

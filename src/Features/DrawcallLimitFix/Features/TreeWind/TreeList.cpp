@@ -8,9 +8,10 @@ namespace DCLF::Features::TreeWind::TreeList
 {
 	namespace
 	{
-		// AE 1.6.1170 (module offsets; Ghidra).
-		constexpr std::uintptr_t kListLoop = 0x437e50;      // FUN_140437e50(manager, process): the tree list's loop
-		constexpr std::uintptr_t kListLoopCall = 0x437df1;  // its call in FUN_140437d40 (the manager's update, Main::Update 0x140646176)
+		// AE 1.6.1170 and SE 1.5.97 (module offsets; Ghidra). SE's update calls the loop without AE's test of the process's camera (+0x18);
+		// the thunk reads neither, and the loop dereferences it on both.
+		constexpr Engine::Offset kListLoop{ 0x437e50, 0x3ddd40 };      // FUN_140437e50(manager, process): the tree list's loop
+		constexpr Engine::Offset kListLoopCall{ 0x437df1, 0x3ddce6 };  // its call in FUN_140437d40 (the manager's update, Main::Update 0x140646176)
 
 		bool installed = false;
 
@@ -33,7 +34,7 @@ namespace DCLF::Features::TreeWind::TreeList
 			return;
 		const auto base = REL::Module::get().base();
 		if (!Engine::CallsTo(base + kListLoopCall, base + kListLoop)) {
-			logger::warn("[DCLF] tree manager (T7b5) not installed: the instruction at {:#x} is not a call of FUN_140437e50; stood-in trees keep the stale multibound result", 0x140000000 + kListLoopCall);
+			logger::warn("[DCLF] tree manager (T7b5) not installed: the instruction at {:#x} is not a call of FUN_140437e50; stood-in trees keep the stale multibound result", 0x140000000 + kListLoopCall.Get());
 			return;
 		}
 		stl::write_thunk_call<ListLoop>(base + kListLoopCall);

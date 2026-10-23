@@ -34,18 +34,31 @@ namespace DCLF::Features::Shadows::Sun
 	{
 		using namespace Engine;
 
-		// AE 1.6.1170 (module offsets).
-		constexpr std::uintptr_t kFullFrustumCallSite = 0x14cbcb6;  // CalculateAndDrawShadowCasterLights -> FUN_141511f30
-		constexpr std::uintptr_t kFullFrustumCull = 0x1511f30;
-		constexpr std::uintptr_t kRegisterCallSites[2] = { 0xe28bc3, 0xe28c89 };  // FUN_140e28af0 -> FUN_1414b2140
-		constexpr std::uintptr_t kRegister = 0x14b2140;
-		constexpr std::uintptr_t kCascadeCallSite = 0x1511d28;  // Accumulate -> FUN_1414f0920, once per cascade
-		constexpr std::uintptr_t kCascade = 0x14f0920;
-		constexpr std::uintptr_t kCascadeCullCallSite = 0x14bf41e;  // FUN_1414bf320 (mode 2) -> FUN_140e305c0, once per full-frustum process
-		constexpr std::uintptr_t kCascadeCull = 0xe305c0;
-		constexpr std::uintptr_t kMaskClearCallSite = 0x644d7e;  // Main::Draw -> FUN_1414cb640, the activeLightMask clear
-		constexpr std::uintptr_t kMaskClear = 0x14cb640;
-		constexpr std::uintptr_t kAppendNonAccum = 0xe30520;  // BSGeometryListCullingProcess::AppendNonAccum, vtable slot 0x19
+		// Module offsets, AE 1.6.1170 and SE 1.5.97.
+		// CalculateAndDrawShadowCasterLights -> FUN_141511f30. AE: a CALL. SE: a tail JMP (SE 0x1412e2f32), at the end of the sun part SE
+		// keeps out of line (FUN_1412e2e10, which CalculateAndDrawShadowCasterLights calls first).
+		constexpr DCLF::Engine::Offset kFullFrustumCallSite{ 0x14cbcb6, 0x12e2f32 };
+		constexpr DCLF::Engine::Offset kFullFrustumCull{ 0x1511f30, 0x1324e00 };
+		constexpr DCLF::Engine::Offset kRegisterCallSites[2] = { { 0xe28bc3, 0xd512f3 }, { 0xe28c89, 0xd513d9 } };  // FUN_140e28af0 -> FUN_1414b2140
+		constexpr DCLF::Engine::Offset kRegister{ 0x14b2140, 0x12ca110 };
+		constexpr DCLF::Engine::Offset kCascadeCallSite{ 0x1511d28, 0x1324bf2 };  // Accumulate -> FUN_1414f0920, once per cascade
+		constexpr DCLF::Engine::Offset kCascade{ 0x14f0920, 0x1305240 };
+		constexpr DCLF::Engine::Offset kCascadeCullCallSite{ 0x14bf41e, 0x12d6d16 };  // FUN_1414bf320 (mode 2) -> FUN_140e305c0, once per full-frustum process
+		constexpr DCLF::Engine::Offset kCascadeCull{ 0xe305c0, 0xd588a0 };
+		constexpr DCLF::Engine::Offset kMaskClearCallSite{ 0x644d7e, 0x5b211e };  // Main::Draw -> FUN_1414cb640, the activeLightMask clear
+		constexpr DCLF::Engine::Offset kMaskClear{ 0x14cb640, 0x12e2110 };
+		constexpr DCLF::Engine::Offset kAppendNonAccum{ 0xe30520, 0xd58850 };  // BSGeometryListCullingProcess::AppendNonAccum, vtable slot 0x19
+
+		/** @brief Whether the instruction at a_address is a JMP rel32 to a_target (CallsTo's check for a tail-call site). */
+		bool JumpsTo(std::uintptr_t a_address, std::uintptr_t a_target)
+		{
+			const auto* bytes = reinterpret_cast<const std::uint8_t*>(a_address);
+			if (bytes[0] != 0xE9)
+				return false;
+			std::int32_t displacement = 0;
+			std::memcpy(&displacement, bytes + 1, sizeof(displacement));
+			return a_address + 5 + static_cast<std::intptr_t>(displacement) == a_target;
+		}
 		// The engine's AppendNonAccum (Hooks::AppendNonAccum's original), for an entry the veto gives back.
 		void (*appendNonAccum)(void*, RE::NiAVObject*, std::uint64_t, std::uint64_t) = nullptr;
 		constexpr std::size_t kDescriptorAccumulator = 0x48;  // ShadowmapDescriptor::shaderAccumulator
@@ -732,7 +745,10 @@ namespace DCLF::Features::Shadows::Sun
 		const auto cascadeCull = base + kCascadeCullCallSite;
 		const auto maskClear = base + kMaskClearCallSite;
 		REL::Relocation<std::uintptr_t> listVtable{ RE::VTABLE_BSGeometryListCullingProcess[0] };
-		if (!CallsTo(fullFrustum, base + kFullFrustumCull) || !CallsTo(registerA, base + kRegister) || !CallsTo(registerB, base + kRegister) ||
+		// SE's full-frustum site is a tail JMP: patched as one (the thunk's return goes to the sun part's caller, as the engine's would).
+		const bool fullFrustumJumps = REL::Module::IsSE();
+		const bool fullFrustumFound = fullFrustumJumps ? JumpsTo(fullFrustum, base + kFullFrustumCull) : CallsTo(fullFrustum, base + kFullFrustumCull);
+		if (!fullFrustumFound || !CallsTo(registerA, base + kRegister) || !CallsTo(registerB, base + kRegister) ||
 			!CallsTo(cascadeCall, base + kCascade) || !CallsTo(cascadeCull, base + kCascadeCull) || !CallsTo(maskClear, base + kMaskClear) ||
 			reinterpret_cast<const std::uintptr_t*>(listVtable.address())[0x19] != base + kAppendNonAccum) {
 			logger::warn("[DCLF] sun accumulation: the calls are not where expected; the engine keeps the sun's accumulation");
@@ -744,7 +760,10 @@ namespace DCLF::Features::Shadows::Sun
 		stl::write_vfunc<0x9, Hooks::Accumulate>(RE::VTABLE_BSShadowDirectionalLight[0]);
 		stl::write_thunk_call<Hooks::Register<0>>(registerA);
 		stl::write_thunk_call<Hooks::Register<1>>(registerB);
-		stl::write_thunk_call<Hooks::FullFrustum>(fullFrustum);
+		if (fullFrustumJumps)
+			stl::write_thunk_jmp<Hooks::FullFrustum>(fullFrustum);
+		else
+			stl::write_thunk_call<Hooks::FullFrustum>(fullFrustum);
 		stl::write_thunk_call<Hooks::Cascade>(cascadeCall);
 		stl::write_thunk_call<Hooks::CascadeCull>(cascadeCull);
 		stl::write_thunk_call<Hooks::MaskClear>(maskClear);

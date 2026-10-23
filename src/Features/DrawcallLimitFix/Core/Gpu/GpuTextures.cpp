@@ -5,6 +5,7 @@
 #include <rhi_interop_vulkan.h>
 
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 #include "RenderGraph/DxvkOrgInterop.h"
@@ -30,10 +31,11 @@ namespace DCLF
 	namespace
 	{
 		// The renderer's sampler states, [address mode][filter mode], selected by the shadow state's
-		// PSTextureAddressMode / PSTextureFilterMode (engine notes: samplers). AE 1.6.1170 only.
+		// PSTextureAddressMode / PSTextureFilterMode (engine notes: samplers). The engine's table is [6][5] on AE 1.6.1170 and
+		// SE 1.5.97 alike (the renderer's release loops); DCLF takes the first four address modes.
 		constexpr std::uint32_t kAddressModes = 4;
 		constexpr std::uint32_t kFilterModes = 5;
-		constexpr std::uintptr_t kSamplerTableAE = 0x3288210;
+		constexpr Engine::Offset kSamplerTable{ 0x3288210, 0x3027910 };
 
 		// VkComponentMapping as D3D12's shader 4-component mapping (0: identity).
 		rhi::ComponentMapping MappingOf(const VkComponentMapping& a_components)
@@ -685,7 +687,7 @@ namespace DCLF
 			return index;
 		std::shared_ptr<org::runtime::IDescriptorService> retained;
 		auto* service = Impl::ServiceNow(retained);
-		const auto* table = reinterpret_cast<ID3D11SamplerState* const*>(REL::Offset(kSamplerTableAE).address());
+		const auto* table = reinterpret_cast<ID3D11SamplerState* const*>(REL::Offset(kSamplerTable).address());
 		auto* state = table[a_addressMode * kFilterModes + a_filterMode];
 		if (!service || !state)
 			return kInvalid;

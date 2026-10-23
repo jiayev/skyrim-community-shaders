@@ -253,11 +253,25 @@ namespace DCLF::Scene
 		}
 
 		// FUN_1414ab770 (object, visitor {predicate, threshold}): the alpha test threshold (+0x32) of admitted geometries under the
-		// object, inline: an actor's or effect's fade (job threads, every frame of it). Per geometry after the call.
-		void OnAlphasSetThreshold(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
+		// object, inline: an actor's or effect's fade (job threads, every frame of it). Per geometry after the call. Also FUN_1401e95a0
+		// (object, harvested), the same walk: a flora's harvested look, each alpha's threshold swapped between the unharvested and
+		// harvested values (the harvest; the harvestable 3D's setup, after the 3D's capture).
+		// A changed threshold is a structural event too: the alpha's dependents are joined again (their static flags carry it; a static
+		// flora is never rewritten otherwise). An actor's fade writes the same value most frames: no event then.
+		void OnAlphasSetThreshold(const SWF_EventHeader* a_event, std::uintptr_t* a_scratch, void*)
 		{
-			if (auto* geometry = GeometryArg(a_event, 0))
-				PushAlphaUpdate(geometry->GetGeometryRuntimeData().alphaProperty.get(), SceneCapture::AlphaRecord::kThreshold);
+			auto* geometry = GeometryArg(a_event, 0);
+			const auto* alpha = geometry ? static_cast<const RE::NiAlphaProperty*>(geometry->GetGeometryRuntimeData().alphaProperty.get()) : nullptr;
+			if (!alpha)
+				return;
+			if (IsPre(a_event)) {
+				a_scratch[0] = alpha->alphaThreshold;
+				return;
+			}
+			if (alpha->alphaThreshold == a_scratch[0])
+				return;
+			PushProperty(alpha);
+			PushAlphaUpdate(alpha, SceneCapture::AlphaRecord::kThreshold);
 		}
 
 		// FUN_1414ab580 (object, visitor {flag, hide}): weapon blood on flagged geometries under the object: hidden bit, kWeaponBlood
@@ -265,7 +279,10 @@ namespace DCLF::Scene
 		void OnWeaponBloodGeometry(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
 			if (auto* geometry = GeometryArg(a_event, 0)) {
-				PushAlphaUpdate(geometry->GetGeometryRuntimeData().alphaProperty.get(), SceneCapture::AlphaRecord::kFlags);
+				if (const auto* alpha = geometry->GetGeometryRuntimeData().alphaProperty.get()) {
+					PushProperty(alpha);
+					PushAlphaUpdate(alpha, SceneCapture::AlphaRecord::kFlags);
+				}
 				PushNodeUpdate(geometry, SceneCapture::NodeRecord::kHidden);
 			}
 		}
@@ -434,8 +451,10 @@ namespace DCLF::Scene
 			if (write.kind == SWF_WRITE_SHADER_PROPERTY || write.kind == SWF_WRITE_ALPHA_PROPERTY) {
 				if (auto* geometry = static_cast<RE::NiAVObject*>(write.object)->AsGeometry())
 					PushLeafUpdate(*geometry);
-			} else if (write.kind == SWF_WRITE_ALPHA_FLAGS)
+			} else if (write.kind == SWF_WRITE_ALPHA_FLAGS) {
+				PushProperty(write.object);
 				PushAlphaUpdate(static_cast<const RE::NiAlphaProperty*>(write.object), SceneCapture::AlphaRecord::kFlags);
+			}
 		}
 
 		// NiSwitchNode's own child edits (its vtable's implementations of NiNode slots 0x35, 0x37-0x3C).
@@ -481,7 +500,8 @@ namespace DCLF::Scene
 			{ SWF_HOOK_SET_EXTERNAL_EMITTANCE, &OnSetExternalEmittance, kBoth },
 			{ SWF_HOOK_SKY_SET_COLOR, &OnSkySetColor, kBoth },
 			{ SWF_HOOK_GEOMETRY_ATTACH_ALPHA, &OnGeometryAttachAlpha, kPost },
-			{ SWF_HOOK_ALPHAS_SET_THRESHOLD, &OnAlphasSetThreshold, kPost },
+			{ SWF_HOOK_ALPHAS_SET_THRESHOLD, &OnAlphasSetThreshold, kBoth },
+			{ SWF_HOOK_FLORA_HARVEST_ALPHAS, &OnAlphasSetThreshold, kBoth },
 			{ SWF_HOOK_WEAPON_BLOOD_GEOMETRY, &OnWeaponBloodGeometry, kPost },
 			{ SWF_HOOK_LAND_SETUP_PROPERTIES, &OnLandSetupProperties, kPost },
 			{ SWF_HOOK_LAND_BLEND_PARAMS, &OnLandBlendParams, kPost },

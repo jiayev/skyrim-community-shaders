@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix.h"
 #include "GpuIdleTrace.h"
 #include "State.h"
+#include "Utils/FileRename.h"
 
 #include <OpenRenderGraph/PersistentGraphHost.h>
 #if defined(CS_HAS_ORG_MODULE_SERVICES)
@@ -1333,7 +1334,8 @@ bool RenderGraphRuntime::Initialize()
 		std::filesystem::path compilerDirectory;
 		if (::GetModuleFileNameW(d3d11, dxvkPath, MAX_PATH))
 			compilerDirectory = std::filesystem::path(dxvkPath).parent_path();
-		impl->shaderCompiler = std::make_unique<org::services::ShaderCompiler>(std::filesystem::path(L"Data/ShaderCache/ORG"), compilerDirectory);
+		impl->shaderCompiler = std::make_unique<org::services::ShaderCompiler>(std::filesystem::path(L"Data/ShaderCache/ORG"), compilerDirectory,
+			Util::RenameSerialized);  // serialized with the plugin's other renames (Utils/FileRename.h)
 		logger::info("[ORG] Runtime SPIR-V compilation {}", impl->shaderCompiler->Available() ? "available" : "unavailable (no dxcompiler.dll beside the DXVK DLLs)");
 		if (!impl->shaderCompiler->Available())
 			impl->shaderCompiler.reset();

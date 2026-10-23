@@ -15,9 +15,9 @@ namespace DCLF
 	{
 		if (installed || !Diagnostics::Observe().releaseGuard)
 			return;
-		// NiRefObject::DeleteThis (AE 1.6.1170, RELOCATION_ID(69177, 70538)): if (this) this->vtable[0](this, 1). Replaced whole by an
+		// NiRefObject::DeleteThis (RELOCATION_ID(69177, 70538): the same 16 bytes on SE 1.5.97 and AE 1.6.1170): if (this) this->vtable[0](this, 1). Replaced whole by an
 		// absolute jump (14 of its 16 bytes) to the same call with a count.
-		const std::uintptr_t at = REL::Offset(0xd27520).address();
+		const std::uintptr_t at = REL::RelocationID(69177, 70538).address();
 		constexpr std::array<std::uint8_t, 16> kExpected{ 0x48, 0x85, 0xC9, 0x74, 0x0B, 0x48, 0x8B, 0x01, 0xBA, 0x01, 0x00, 0x00, 0x00, 0x48, 0xFF, 0x20 };
 		if (std::memcmp(reinterpret_cast<const void*>(at), kExpected.data(), kExpected.size()) != 0) {
 			logger::error("[DCLF] release guard (CS_DCLF_RELEASE_GUARD): NiRefObject::DeleteThis is not the expected code; not installed");

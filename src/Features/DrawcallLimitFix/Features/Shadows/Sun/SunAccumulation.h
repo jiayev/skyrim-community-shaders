@@ -19,7 +19,7 @@ namespace DCLF::Features::Shadows::Sun
 
 	/**
 	 * @brief The engine's work for the sun's cascades, removed where DCLF already draws the result (skyrim-engine-notes.md, "The
-	 * sun's accumulation"). AE only. Render thread, plus the registration thunks on job threads.
+	 * sun's accumulation"). AE and SE. Render thread, plus the registration thunks on job threads.
 	 *
 	 * Registration-free accumulation (toggle "skip sun accumulation", CS_DCLF_SUN_SKIP): BSShadowDirectionalLight::Accumulate culls each
 	 * cascade and hands each geometry to the accumulator's registration (FUN_1414b2140, from FUN_140e28af0), which builds shadow

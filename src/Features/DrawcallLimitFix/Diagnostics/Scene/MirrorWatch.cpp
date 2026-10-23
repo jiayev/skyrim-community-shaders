@@ -312,6 +312,62 @@ namespace DCLF::MirrorWatch
 									  Slot{ n > 2 ? partitions + 8 : nullptr, "partition 2" } });
 			return;
 		}
+		// alphas:<form ID>|...: the alpha flags and threshold of a geometry under each of up to four references (hex form IDs, the
+		// first geometry with an alpha under each), from the world attach's capture on, armed together once all have been captured.
+		constexpr std::string_view kAlphasPrefix = "alphas:";
+		if (Value().starts_with(kAlphasPrefix)) {
+			const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
+			std::uint32_t owner = 0;
+			for (const RE::NiAVObject* at = a_geometry; at && !owner; at = at->parent)
+				if (const auto* reference = at->GetUserData())
+					owner = reference->GetFormID();
+			if (!alpha || !owner)
+				return;
+			struct Candidate
+			{
+				std::uint32_t owner = 0;
+				const void* alpha = nullptr;
+				std::string name;
+			};
+			static std::mutex lock;
+			static std::array<Candidate, kSlots> candidates;
+			static const auto wanted = [] {
+				std::vector<std::uint32_t> ids;
+				for (std::string_view rest = std::string_view(Value()).substr(kAlphasPrefix.size()); !rest.empty();) {
+					const auto bar = rest.find('|');
+					const auto id = rest.substr(0, bar);
+					ids.push_back(static_cast<std::uint32_t>(std::strtoul(std::string(id).c_str(), nullptr, 16)));
+					rest = bar == std::string_view::npos ? std::string_view() : rest.substr(bar + 1);
+				}
+				ids.resize(std::min<std::size_t>(ids.size(), kSlots));
+				return ids;
+			}();
+			const auto at = std::ranges::find(wanted, owner);
+			if (at == wanted.end())
+				return;
+			std::array<Candidate, kSlots> ready;
+			{
+				std::scoped_lock guard(lock);
+				auto& candidate = candidates[at - wanted.begin()];
+				if (candidate.owner)
+					return;
+				candidate = { owner, alpha, fmt::format("alpha {} of '{}' {} (reference {:08X})", static_cast<const void*>(alpha), a_geometry->name.c_str() ? a_geometry->name.c_str() : "",
+												static_cast<const void*>(a_geometry), owner) };
+				logger::info("[DCLF] mirror watch: {} captured", candidate.name);
+				if (std::ranges::count_if(candidates, [](const auto& a_candidate) { return a_candidate.owner != 0; }) < static_cast<std::ptrdiff_t>(wanted.size()))
+					return;
+				ready = candidates;
+			}
+			std::array<Slot, kSlots> slots{};
+			std::string all;
+			for (std::uint32_t s = 0; s < kSlots; ++s)
+				if (ready[s].alpha) {
+					slots[s] = Slot{ static_cast<const std::byte*>(ready[s].alpha) + 0x30, ready[s].name.c_str() };
+					all += fmt::format("{}{:08X}", all.empty() ? "references " : ", ", ready[s].owner);
+				}
+			ArmSlots(all, slots);
+			return;
+		}
 		// alpha:<name>: its alpha property's flags and threshold (one dword at +0x30), from the world attach's capture on.
 		constexpr std::string_view kAlphaPrefix = "alpha:";
 		if (Value().starts_with(kAlphaPrefix)) {
@@ -486,7 +542,8 @@ namespace DCLF::MirrorWatch
 		if (!armedFrame)
 			armedFrame = a_frame;
 		const std::uint32_t count = std::min(hitCount.load(std::memory_order_relaxed), kMaxHits);
-		const bool done = count >= kMaxHits || a_frame - armedFrame >= 600;
+		// alphas: the references' alphas until the run ends (a write made once, at some point after the capture).
+		const bool done = count >= kMaxHits || (a_frame - armedFrame >= 600 && !Value().starts_with("alphas:"));
 		std::string text;
 		if (count) {
 			text = fmt::format("[DCLF] mirror watch (arming {} on {}, armed on thread {}): {} changes recorded\n", armings, name, armThread,

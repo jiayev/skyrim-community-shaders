@@ -32,8 +32,8 @@ namespace DCLF::Features::Actors
 {
 	namespace
 	{
-		// AE 1.6.1170: the actors' animation rate (UpdateActorRate).
-		constexpr std::uintptr_t kFrameCounter = 0x328cc6c;     // gFrameCounter: Renderer::End (0x140e4482b) increments it
+		// AE 1.6.1170 and SE 1.5.97: the actors' animation rate (UpdateActorRate). The field offsets are the same on both.
+		constexpr Engine::Offset kFrameCounter{ 0x328cc6c, 0x302c8dc };  // gFrameCounter: Renderer::End (0x140e4482b) increments it
 		constexpr std::size_t kMiddleHighSkinProperty = 0x178;  // MiddleHighProcessData: the property Actor::ModifyAnimationUpdateData reads
 		constexpr std::size_t kPropertyStamp = 0x80;            // BSShaderProperty::lastAccumulatedFrameCount
 

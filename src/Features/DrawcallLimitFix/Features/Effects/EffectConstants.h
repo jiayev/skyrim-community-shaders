@@ -3,6 +3,8 @@
 // The Effect port's constants: BSEffectShader's variable space, the pass descriptor's bits, its frame constant rows and soft-depth
 // register (Features/Manifest.cpp lists them), its record bits and BSEffectShader's engine addresses. Included by the feature's sources and the manifest only.
 
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+
 #include <array>
 #include <cstdint>
 #include <string_view>
@@ -138,11 +140,11 @@ namespace DCLF::Features::Effects
 	inline constexpr std::uint32_t kEffectHasSourcePath = 1u << 0;
 	inline constexpr std::uint32_t kEffectHasGreyscalePath = 1u << 1;
 
-	// AE 1.6.1170 (module offsets) of BSEffectShader's state the port reads (EffectPrograms.cpp, EffectFrame.cpp).
+	// AE 1.6.1170 and SE 1.5.97 (module offsets) of BSEffectShader's state the port reads (EffectPrograms.cpp, EffectFrame.cpp).
 	namespace Address
 	{
-		inline constexpr std::uintptr_t kEffectShader = 0x33dcce8;    // BSEffectShader*: the instance GetRenderPasses makes passes of
-		inline constexpr std::uintptr_t kEffectCamera = 0x332a328;  // NiCamera*: BSEffectShader's camera (its near and far at +0x160, +0x164)
-		inline constexpr std::uintptr_t kEffectBlood = 0x33dccf0;  // float[2]: BSEffectShader's blood globals
+		inline constexpr Engine::Offset kEffectShader{ 0x33dcce8, 0x32838b8 };  // BSEffectShader*: the instance GetRenderPasses makes passes of
+		inline constexpr Engine::Offset kEffectCamera{ 0x332a328, 0x31d0e68 };  // NiCamera*: BSEffectShader's camera (its near and far at +0x160, +0x164)
+		inline constexpr Engine::Offset kEffectBlood{ 0x33dccf0, 0x32838c0 };   // float[2]: BSEffectShader's blood globals
 	}
 }

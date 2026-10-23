@@ -20,7 +20,7 @@ namespace DCLF::Features::Shadows::Local
 
 	/**
 	 * @brief The point lights' shadow culls without the entries DCLF draws (dclf-architecture.md, "Point lights' shadow culls
-	 * without DCLF's entries"). AE only. The point lights' culls run on the render thread; the detours and registration hook on any.
+	 * without DCLF's entries"). AE and SE. The point lights' culls run on the render thread; the detours and registration hook on any.
 	 *
 	 * BSShadowParabolicLight::Accumulate (0x14151b960) culls through BSCullingProcess::Process (FUN_1414bf320) with the static
 	 * BSParabolicCullingProcess (0x14335bfa0); without a light's own root list (sceneAccumArray) it walks the scene's whole object

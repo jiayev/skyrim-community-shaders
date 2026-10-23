@@ -29,14 +29,14 @@ namespace DCLF
 	{
 		using Engine::Global;
 
-		// AE 1.6.1170, module offsets (the readers' notes name each).
-		constexpr std::uintptr_t kTechniqueByte12 = 0x2032fdb;
-		constexpr std::uintptr_t kTechniqueByte7 = 0x2035500;
-		constexpr std::uintptr_t kShadowGlobal = 0x2033498;
+		// Module offsets, AE 1.6.1170 and SE 1.5.97 (the readers' notes name each).
+		constexpr Engine::Offset kTechniqueByte12{ 0x2032fdb, 0x1e0de39 };
+		constexpr Engine::Offset kTechniqueByte7{ 0x2035500, 0x1e102a0 };
+		constexpr Engine::Offset kShadowGlobal{ 0x2033498, 0x1e0e2e8 };
 		constexpr std::size_t kAccumulatorDeferredShadow = 0x178;
-		constexpr std::uintptr_t kLodRadiusBase = 0x2032e40;
-		constexpr std::uintptr_t kLodExponentScale = 0x2032e54;
-		constexpr std::uintptr_t kLodPowBase = 0x2032e44;
+		constexpr Engine::Offset kLodRadiusBase{ 0x2032e40, 0x1e0dca0 };
+		constexpr Engine::Offset kLodExponentScale{ 0x2032e54, 0x1e0dcb4 };
+		constexpr Engine::Offset kLodPowBase{ 0x2032e44, 0x1e0dca4 };
 
 		// A setting's value: the setting itself looked up once (GetINISetting walks the collection by name), its value every frame.
 		struct CachedSetting

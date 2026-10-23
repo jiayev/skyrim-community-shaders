@@ -19,6 +19,11 @@ namespace DCLF
 {
 	namespace
 	{
+		// PredictTargets' engine state (module offsets, AE 1.6.1170 and SE 1.5.97).
+		constexpr Engine::Offset kShadowFreeMask{ 0x2035798, 0x1e10538 };   // std::uint32_t: RenderShadowmap's free target slices
+		constexpr Engine::Offset kVolumetricCopy{ 0x2033498, 0x1e0e2e8 };   // std::uint32_t: 2 when the cascades take a volumetric lighting copy
+		constexpr Engine::Offset kFocusTargetBase{ 0x1ac07b0, 0x1867188 };  // std::uint32_t: the focus views' first slice in target 4
+
 		constexpr std::uint64_t Bit(std::uint32_t a_bit)
 		{
 			return std::uint64_t(1) << a_bit;
@@ -337,9 +342,9 @@ namespace DCLF
 		// where the last draw bound - a point light's hemisphere 1 into hemisphere 0's slice.
 		using T = RE::RENDER_TARGETS_DEPTHSTENCIL;
 		const auto base = REL::Module::get().base();
-		std::uint32_t freeMask = *reinterpret_cast<const std::uint32_t*>(base + 0x2035798);
-		const bool volumetric = *reinterpret_cast<const std::uint32_t*>(base + 0x2033498) == 2;
-		const std::uint32_t focusBase = *reinterpret_cast<const std::uint32_t*>(base + 0x1ac07b0);
+		std::uint32_t freeMask = *reinterpret_cast<const std::uint32_t*>(base + kShadowFreeMask);
+		const bool volumetric = *reinterpret_cast<const std::uint32_t*>(base + kVolumetricCopy) == 2;
+		const std::uint32_t focusBase = *reinterpret_cast<const std::uint32_t*>(base + kFocusTargetBase);
 		// Hemisphere 0's target, by light, for hemisphere 1; and the descriptors given a slice this frame (a light's views may repeat).
 		ankerl::unordered_dense::map<const RE::BSShadowLight*, std::uint32_t> firstTarget;
 		ankerl::unordered_dense::map<const void*, std::pair<std::uint32_t, std::uint32_t>> given;

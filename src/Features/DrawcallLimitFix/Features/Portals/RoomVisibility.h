@@ -6,7 +6,7 @@ namespace DCLF::RoomVisibility
 {
 	/**
 	 * @brief Main::IsRoomVisible (0x140649f20) answered from DCLF's PortalViews::VisibleSet (skyrim-engine-notes.md,
-	 * "Main::IsRoomVisible and its callers"). AE only.
+	 * "Main::IsRoomVisible and its callers").
 	 *
 	 * The engine answers whether a node (the parent, +0x30, of a reference's 3D) is in a room or portal the main camera sees, from
 	 * the portal-graph entry of the scene lists' first process (+0x30190): the managed-nodes update (FUN_1402b41a0, from
