@@ -106,6 +106,11 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     `Actor::sub` (`0x1402e8510`), an engine thread. No Community Shaders or DCLF frame, but the heap was already corrupt, so
     whoever corrupted it is unknown. Dump: `wr4-enginefixes-heap.dmp` (session scratch folder). **Next:** if it recurs, a run with
     page heap or DCLF off would separate the two.
+-   **A null shape in a phantom's collision agent, `SkyrimSE+0xa8497f`** (once, 2026-10-23, run xalphathreshold, the Whiterun save
+    turning in place, 40 s in): `call [r10+8]` with r10 0 in `FUN_140a847a0` <- `hkpSimpleShapePhantom` <- `hkpConvexListAgent` <-
+    `MagicCaster::UpdateImpl`, a job thread. It came in the first runs with `SWF_HOOK_HAVOK_INIT`, whose handler only reads both
+    nodes' bodies; four other runs with the hook did not crash. Log: `crash-2026-10-23-02-36-05.log` (session scratch folder).
+    **Next:** on a repeat, a run without the hook's subscription.
 -   **Havok null write in `FUN_140b660c0` at uGridsToLoad 21** (the Whiterun stress save under `CS_DCLF_TEST_MOVE`). Radius 21 is
     unstable on its own, so runs there are judged by the report lines written before the crash.
 
@@ -235,8 +240,23 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     units. A writer DCLF does not watch animates the node, so the delta walk keeps the old bound. The same gap on a larger animated
     object would cull it wrongly. **Next:** find the writer (a controller, or Havok) and add it to the events.
 -   **Mirror parity under lane mode flags late or missed node fields with movement.** This is likely asynchronous timing rather than
-    a missed writer, but it is not attributed. Separately, `<- MIRROR` reports a missed collision-body writer ('SoulGemPetty01',
-    body true -> false without an event).
+    a missed writer, but it is not attributed. (The collision-body misses were `bhkWorld::InitHavok`'s, now hooked: see the
+    validation doc's engine bugs.)
+-   **Mirror parity: hidden bits the engine flips within a frame (`node hidden` missed, 1-3 a window).** `Water`,
+    `DefaultProceduralWater` and the player's `Skeleton.nif`: `CS_DCLF_MIRROR_WATCH=missed:hidden` caught each write in SWF's own store
+    stubs (so events fire), in pairs, from `Main::Draw` (`0x140644638`, the first-person skeleton) and `TESWaterReflections::Update`
+    (`0x140520a91`, around its cube faces). The probe samples between the hide and the show. Not a missed writer; the check needs
+    those frame-local hides left out (`FrameGlobals::cullHidden` names them).
+-   **Mirror parity: alpha thresholds that change with no event (`alpha threshold` missed, 35-60 a window).** On flora LOD-level
+    meshes (`L1_FloraLavender01:0 - L2_FloraLavender01:0`, `FloraDragonsTongue02`), flags `0x92ec`, the mirror's threshold 128 and
+    the live 160. Not a Community Shaders writer. `CS_DCLF_MIRROR_WATCH=alpha:<name>` armed at capture on three of them saw no write
+    in 600 frames each, and `missed:alpha threshold` saw no later write either, so the change is made once, on instances the
+    by-name arming did not pick. **Next:** arm on geometries whose alpha has flags `0x92ec` and threshold 128, or trace the
+    executable's byte stores to `[reg+0x32]` near an `NiAlphaProperty` flags access (31 sites; `FUN_1414a9ff0`, `FUN_1414a96c0`,
+    `FUN_1404fdcf0` among them).
+-   **Not reproduced on the Whiterun save:** walk parity's cooking spit, the frame values' moved-only clutter rows and
+    `<- FADE INPUT` were 0 there (walk, moved-only and fade parity clean); they need the tree-forest route's save, where
+    `transform:` and `fade:` watches can name their writers.
 -   **`<- FADE STATE`:** 1-3 roots in some interior logs, one fade step apart (`currentFade` 0.982-0.989 against the port's
     0.990-1). It appeared with the actor pre-cull change (FadeStateCS's frustum test for preprocessed roots). **Next:** check the
     port's key and the preprocessed roots' last visible frame.
@@ -245,9 +265,6 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     toward 0.995.
 -   **`<- MATERIAL PORT`:** one difference a window remains on an effect's FalloffData (VS variable 7) after the retake, from a
     controller write the retake missed.
--   **`<- UNPINNED PROPERTY`:** once (run v1, 2026-10-23, the Whiterun save under `CS_DCLF_TEST_MOVE` with persistent and set
-    parity), one references window: 100 of 22,720 tracked geometries' properties held anew with no pin, and 10 references refused
-    (first: property `0x22f2828ac80` of geometry `0x22f2828b580`).
 -   **`<- UNPINNED FADE NODE`** fires for requests still in flight at the report. It should fire only for a request left
     unanswered across reports.
 -   **Light candidates parity: a dependent with no geometry row (`<- CANDIDATES`).** Seen once (run coc1, 2026-10-22, turn-only

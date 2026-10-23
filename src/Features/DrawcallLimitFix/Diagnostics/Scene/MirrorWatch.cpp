@@ -14,6 +14,7 @@ namespace DCLF::MirrorWatch
 	{
 		constexpr std::uint32_t kSlots = 4;
 		constexpr std::uint32_t kMaxHits = 16;
+		constexpr std::uint32_t kFrames = 10;  // the writer's callers recorded with each change
 
 		struct Hit
 		{
@@ -21,7 +22,29 @@ namespace DCLF::MirrorWatch
 			std::uint32_t slot = 0;
 			std::uint32_t before = 0, value = 0;
 			std::uint32_t thread = 0;
+			std::array<std::uintptr_t, kFrames> callers{};
 		};
+
+		/** @brief The return addresses above a_context (its unwind data; a leaf's return address at its stack pointer). No allocation. */
+		void Unwind(const CONTEXT& a_context, std::array<std::uintptr_t, kFrames>& a_out)
+		{
+			CONTEXT context = a_context;
+			for (std::uint32_t i = 0; i < kFrames; ++i) {
+				DWORD64 imageBase = 0;
+				auto* function = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+				if (function) {
+					void* handlerData = nullptr;
+					DWORD64 establisher = 0;
+					RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, function, &context, &handlerData, &establisher, nullptr);
+				} else {
+					context.Rip = *reinterpret_cast<const DWORD64*>(context.Rsp);
+					context.Rsp += 8;
+				}
+				if (!context.Rip)
+					break;
+				a_out[i] = static_cast<std::uintptr_t>(context.Rip);
+			}
+		}
 
 		std::array<std::atomic<std::uintptr_t>, kSlots> watched{};
 		std::array<std::atomic<std::uint32_t>, kSlots> lastValue{};
@@ -63,8 +86,10 @@ namespace DCLF::MirrorWatch
 				if (((value ^ before) & ~ignored[s]) == 0)
 					continue;
 				const auto at = hitCount.fetch_add(1, std::memory_order_relaxed);
-				if (at < kMaxHits)
+				if (at < kMaxHits) {
 					hits[at] = { static_cast<std::uintptr_t>(context->Rip), s, before, value, GetCurrentThreadId() };
+					Unwind(*context, hits[at].callers);
+				}
 			}
 			context->Dr6 = 0;
 			return EXCEPTION_CONTINUE_EXECUTION;
@@ -218,6 +243,24 @@ namespace DCLF::MirrorWatch
 			}
 			return;
 		}
+		// transform:<name>: an object at its world attach's capture, its local rotation's first entry (+0x48) and translation (+0x6C).
+		// fade:<name>: a node at its world attach's capture, its fadeAmount (+0x100, Actor::SetAlpha's), +0x109 and currentFade (+0x130).
+		// fadetype:<name>: a fade node at its world attach's capture, its LOD type (+0x153 & 0xF; the dword at +0x150, other bits ignored).
+		for (const auto& [prefix, kind] : { std::pair{ std::string_view("transform:"), 0 }, std::pair{ std::string_view("fade:"), 1 }, std::pair{ std::string_view("fadetype:"), 2 } }) {
+			if (!a_node || !Enabled() || armed.load(std::memory_order_acquire) || !Value().starts_with(prefix))
+				continue;
+			if (!Matches(*a_node, std::string_view(Value()).substr(prefix.size())))
+				return;
+			const auto* base = reinterpret_cast<const std::byte*>(a_node);
+			auto* fadeNode = const_cast<RE::NiAVObject*>(a_node)->AsFadeNode();
+			if (kind == 0)
+				ArmSlots(*a_node, { Slot{ base + 0x48, "local rotate[0][0]" }, Slot{ base + 0x6C, "local x" }, Slot{ base + 0x70, "local y" }, Slot{ base + 0x74, "local z" } });
+			else if (kind == 1)
+				ArmSlots(*a_node, { Slot{ base + 0x100, "fade amount" }, Slot{ base + 0x108, "+0x109", ~0xFF00u | 0x4000u }, Slot{ fadeNode ? base + 0x130 : nullptr, "current fade" }, Slot{} });
+			else if (fadeNode)
+				ArmSlots(*a_node, { Slot{ base + 0x150, "LOD type", ~0x0F000000u }, Slot{}, Slot{}, Slot{} });
+			return;
+		}
 		if (!a_node || !Enabled() || armed.load(std::memory_order_acquire) || !Value().starts_with(kNodePrefix))
 			return;
 		if (!Matches(*a_node, std::string_view(Value()).substr(kNodePrefix.size())))
@@ -235,8 +278,8 @@ namespace DCLF::MirrorWatch
 
 	void Arm(const RE::NiAVObject* a_node)
 	{
-		if (!a_node || !Enabled() || armed.load(std::memory_order_acquire) || Value().starts_with(kGeometryPrefix) || Value().starts_with(kSkinPrefix) ||
-			Value().starts_with(kNodePrefix))
+		// "1" or a name: every prefixed mode (a name holds no ':') arms elsewhere.
+		if (!a_node || !Enabled() || armed.load(std::memory_order_acquire) || Value().find(':') != std::string::npos)
 			return;
 		if (!Matches(*a_node, Value() == "1" ? std::string_view() : std::string_view(Value())))
 			return;
@@ -249,8 +292,8 @@ namespace DCLF::MirrorWatch
 	{
 		if (!a_geometry || !Enabled() || armed.load(std::memory_order_acquire))
 			return;
-		// parent:<name> watches geometries too (a particle system is one).
-		if (Value().starts_with("parent:")) {
+		// parent:<name> and the node modes watch geometries too (a particle system is one).
+		if (Value().starts_with("parent:") || Value().starts_with("transform:") || Value().starts_with("fade:")) {
 			ArmNode(a_geometry);
 			return;
 		}
@@ -267,6 +310,14 @@ namespace DCLF::MirrorWatch
 			const std::int32_t n = data.numPartitions;
 			ArmSlots(*a_geometry, { Slot{ base + 0x130, "skin" }, Slot{ partitions, "partition 0" }, Slot{ n > 1 ? partitions + 4 : nullptr, "partition 1" },
 									  Slot{ n > 2 ? partitions + 8 : nullptr, "partition 2" } });
+			return;
+		}
+		// alpha:<name>: its alpha property's flags and threshold (one dword at +0x30), from the world attach's capture on.
+		constexpr std::string_view kAlphaPrefix = "alpha:";
+		if (Value().starts_with(kAlphaPrefix)) {
+			const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
+			if (alpha && Matches(*a_geometry, std::string_view(Value()).substr(kAlphaPrefix.size())))
+				ArmSlots(*a_geometry, { Slot{ reinterpret_cast<const std::byte*>(alpha) + 0x30, "alpha flags and threshold" }, Slot{}, Slot{}, Slot{} });
 			return;
 		}
 		// projected:<name>, land:<name>: the property's projected UV parameters, or its landscape material's land blend, from the
@@ -336,6 +387,76 @@ namespace DCLF::MirrorWatch
 		}
 	}
 
+	std::uint32_t MissedFields(std::uint8_t a_type)
+	{
+		// missed:<field>|<field>...: the node or geometry record fields (SceneCapture's kFieldNames) whose missed difference arms.
+		static const auto fields = [] {
+			std::array<std::uint32_t, 4> out{};
+			constexpr std::string_view kMissedPrefix = "missed:";
+			if (!Enabled() || !Value().starts_with(kMissedPrefix))
+				return out;
+			std::string_view names = std::string_view(Value()).substr(kMissedPrefix.size());
+			while (!names.empty()) {
+				const auto bar = names.find('|');
+				const auto field = names.substr(0, bar);
+				for (std::uint32_t f = 0; f < SceneCapture::NodeRecord::kFieldCount; ++f)
+					out[0] |= field == SceneCapture::NodeRecord::kFieldNames[f] ? 1u << f : 0u;
+				for (std::uint32_t f = 0; f < SceneCapture::GeometryRecord::kFieldCount; ++f)
+					out[1] |= field == SceneCapture::GeometryRecord::kFieldNames[f] ? 1u << f : 0u;
+				// An alpha's by "alpha <field>" (its names are shared with the node's).
+				for (std::uint32_t f = 0; f < SceneCapture::AlphaRecord::kFieldCount; ++f)
+					out[3] |= field.starts_with("alpha ") && field.substr(6) == SceneCapture::AlphaRecord::kFieldNames[f] ? 1u << f : 0u;
+				names = bar == std::string_view::npos ? std::string_view() : names.substr(bar + 1);
+			}
+			return out;
+		}();
+		return a_type < 4 ? fields[a_type] : 0u;
+	}
+
+	void ArmMissed(const void* a_object, std::uint8_t a_type, std::uint32_t a_fields)
+	{
+		using N = SceneCapture::NodeRecord;
+		using G = SceneCapture::GeometryRecord;
+		if (!a_object || armed.load(std::memory_order_acquire))
+			return;
+		const auto& object = *static_cast<const RE::NiAVObject*>(a_object);
+		const auto* base = static_cast<const std::byte*>(a_object);
+		const std::uint32_t fields = a_fields & MissedFields(a_type);
+		if (a_type == 3) {
+			// NiAlphaProperty: its flags (+0x30, 16 bits) and threshold (+0x32, 8 bits) in one dword.
+			ArmSlots(fmt::format("alpha {}", a_object), { Slot{ base + 0x30, "alpha flags and threshold" }, Slot{}, Slot{}, Slot{} });
+			return;
+		}
+		if (a_type == 1) {
+			if (fields & G::kProperty)
+				ArmSlots(object, { Slot{ base + 0x128, "property (low)" }, Slot{ base + 0x12C, "property (high)" }, Slot{ base + 0x120, "alpha (low)" }, Slot{} });
+			else if (fields & G::kAlpha)
+				ArmSlots(object, { Slot{ base + 0x120, "alpha (low)" }, Slot{ base + 0x124, "alpha (high)" }, Slot{}, Slot{} });
+			return;
+		}
+		if (fields & N::kBody) {
+			const auto* collision = object.collisionObject.get();
+			const auto* ni = collision ? const_cast<RE::NiCollisionObject*>(collision)->AsBhkNiCollisionObject() : nullptr;
+			const auto* body = ni ? ni->body.get() : nullptr;
+			const auto* entity = body ? reinterpret_cast<const std::byte*>(body->referencedObject.get()) : nullptr;
+			ArmSlots(object, { Slot{ base + 0x40, "collision object (low)" }, Slot{ base + 0x44, "collision object (high)" },
+								 Slot{ ni ? reinterpret_cast<const std::byte*>(ni) + 0x20 : nullptr, "body" }, Slot{ entity ? entity + 0x160 : nullptr, "motion type" } });
+		} else if (fields & (N::kFadeType | N::kFadeLevel)) {
+			ArmSlots(object, { Slot{ base + 0x150, "LOD type and level", ~0x0F0F0000u }, Slot{}, Slot{}, Slot{} });
+		} else if (fields & N::kFadeAmount) {
+			ArmSlots(object, { Slot{ base + 0x100, "fade amount" }, Slot{}, Slot{}, Slot{} });
+		} else if (fields & (N::kFadeNear | N::kFadeFar | N::kFade109)) {
+			ArmSlots(object, { Slot{ base + 0x128, "near" }, Slot{ base + 0x12C, "far" }, Slot{ base + 0x108, "+0x109", ~0xFF00u | 0x4000u }, Slot{} });
+		} else if (fields & (N::kHidden | N::kFlags)) {
+			ArmSlots(object, { Slot{ base + 0xF4, "flags", (fields & N::kFlags) ? 0x0C404000u : ~1u }, Slot{}, Slot{}, Slot{} });
+		}
+	}
+
+	bool Armed()
+	{
+		return armed.load(std::memory_order_acquire);
+	}
+
 	bool CurrentFromParity()
 	{
 		return Enabled() && Value() == "parity:current";
@@ -372,7 +493,11 @@ namespace DCLF::MirrorWatch
 				hitCount.load(std::memory_order_relaxed));
 			for (std::uint32_t i = 0; i < count; ++i) {
 				const auto& hit = hits[i];
-				text += fmt::format("[DCLF]   {} {:08X} -> {:08X} (thread {}) after {}\n", slotNames[hit.slot], hit.before, hit.value, hit.thread, Where(hit.rip));
+				std::string callers;
+				for (const auto caller : hit.callers)
+					if (caller)
+						callers += " <- " + Where(caller);
+				text += fmt::format("[DCLF]   {} {:08X} -> {:08X} (thread {}) after {}{}\n", slotNames[hit.slot], hit.before, hit.value, hit.thread, Where(hit.rip), callers);
 			}
 		}
 		if (done) {

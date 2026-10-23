@@ -1479,6 +1479,13 @@ Reverse engineered 2026-10-09 (Ghidra, AE); DCLF's port is `Engine/PortalViews` 
     `dot(n, eye) - d < 0`; the decompiler shows otherwise). DCLF judges every graph plane that way at the start of its walk
     (`PortalViews::PlaneJudged`), and a start room's untested planes too; its portal parity rebuilds the program as the engine's
     walk built it (the engine's states and flags, `WithinFrustumDistFirst` for the rest) before counting a difference.
+-   **Writers of a node's collision object and LOD type outside the hooked functions** (2026-10-23, `CS_DCLF_MIRROR_WATCH` with
+    callers). `bhkWorld::InitHavok` (`0x140e86ad0`, a virtual at `+0x1B0`; `Hazard::InitHavok` calls it) moves a collision object
+    from its second argument to its third: `SetCollisionObject` on the third, then the second's `+0x40` released and cleared inline
+    (`0x140e86fb7`, `0x140e870c6`). The LOD type (`+0x153 & 0xF`) has 36 byte stores in the executable; outside the hooked
+    `SetLodType`, LOD level and cell placements, and the constructors and `CreateClone`: Papyrus `Disable` with a fade
+    (`FUN_140a3db90`, from `papyrus::ObjectReference::Disable` and `DisableNoWait`) sets 9 (`& 0xF9 | 9`) before queueing its
+    `DisableFunctor`, and the script command `Enable` (`0x14034c9f0`) resets a 9 to the model type (`TESForm::GetModelType`).
 -   **`WithinFrustumDistFirst`'s rectangle test uses the wrong axes** (`0x140e23e10`, 2026-10-23). The corners (`BSPortal::sub`,
     `0x140e230c0`) are `centre +- hx * column 0 +- hy * column 2` of the rotation at `+0x1C` (row-major); the test of the camera's
     foot point on the plane against the rectangle projects onto rows 1 and 2 (`+0x28..+0x30` against `hx`, `+0x34..+0x3C` against

@@ -128,6 +128,14 @@ struct DrawcallLimitFix : Feature
 		const RE::BSShaderMaterial* material;
 		~MaterialWriteScope() { NoteMaterialWritten(material); }
 	};
+	/**
+	 * @brief CS's own writes to scene objects already in the scene (a feature's hidden bits, TruePBR's property swaps): made through
+	 * SceneWriterFramework's Write, so every subscriber (DCLF's mirror among them) sees them as it sees the engine's writers; a plain
+	 * store where no provider serves it. On the thread the engine allows the write on.
+	 */
+	static void WriteHidden(RE::NiAVObject* a_object, bool a_hidden);
+	static void WriteShaderProperty(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property);
+	static void WriteAlphaFlags(RE::NiAlphaProperty* a_alpha, std::uint16_t a_flags);
 	/** @brief ShaderCache's precompile of a Lighting/Effect/DistantTree permutation: DCLF's SPIR-V build of the same one. */
 	static void PrecompileShader(const RE::BSShader& a_shader, bool a_pixel, std::uint32_t a_descriptor);
 	/** @brief The D3D11 context's Map/Unmap/UpdateSubresource (Globals' hooks): DCLF's constant buffer mirror and capture parity. */

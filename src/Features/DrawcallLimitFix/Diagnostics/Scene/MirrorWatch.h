@@ -14,7 +14,12 @@ namespace DCLF::MirrorWatch
 	 */
 	void Arm(const RE::NiAVObject* a_node);
 	void ArmGeometry(const RE::BSGeometry* a_geometry);
-	/** @brief node:<name>: a node at its world attach's capture, its collision object (+0x40) and flags (+0xF4, the frame's bits ignored). */
+	/**
+	 * @brief node:<name>: a node at its world attach's capture, its collision object (+0x40), body, motion type and flags (+0xF4, the
+	 * frame's bits ignored). transform:<name>: its local rotation's first entry and translation. fade:<name>: its fadeAmount, +0x109 and
+	 * currentFade. fadetype:<name>: a fade node's LOD type. alpha:<name>: a geometry's alpha flags and threshold. Every recorded change
+	 * carries its writer's callers.
+	 */
 	void ArmNode(const RE::NiAVObject* a_node);
 	/**
 	 * @brief parity: a shader property the mirror parity found stale (its flags, both dwords, and its fade node). Render thread.
@@ -24,6 +29,17 @@ namespace DCLF::MirrorWatch
 	void ArmProperty(const void* a_property);
 	/** @brief The property record fields (PropertyRecord::Field) whose staleness arms the watch: kFlags for parity, 0 when off. */
 	std::uint32_t PropertyFields();
+	/**
+	 * @brief missed:<field>|...: the node (a_type 0) or geometry (1) record fields, by SceneCapture's names, whose difference the
+	 * mirror parity finds missed (no event) arm the watch on that object's words for the field: body (the collision object, its
+	 * body, the motion type), fade type and LOD level, fade amount, fade near/far/+0x109, hidden and flags; a geometry's property
+	 * and alpha; an alpha property's (3) by "alpha flags" or "alpha threshold". The next write is caught (the missed one has happened).
+	 * 0 when off.
+	 */
+	std::uint32_t MissedFields(std::uint8_t a_type);
+	void ArmMissed(const void* a_object, std::uint8_t a_type, std::uint32_t a_fields);
+	/** @brief Whether a watch is armed now (one object at a time). */
+	bool Armed();
 	/** @brief parity:current: a fade node the mirror parity found stale in its currentFade (+0x130, and +0x154). Render thread. */
 	void ArmCurrent(const void* a_node);
 	bool CurrentFromParity();

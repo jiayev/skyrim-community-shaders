@@ -1424,7 +1424,8 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 
 			auto geometry = static_cast<RE::BSGeometry*>(quadMesh->GetChildren()[0].get());
 			shaderProperty->SetupGeometry(geometry);
-			geometry->GetGeometryRuntimeData().shaderProperty = RE::NiPointer(shaderProperty);
+			// The quad is in the scene already (the land's attach ran before this hook's call returned): a scene write.
+			DrawcallLimitFix::WriteShaderProperty(geometry, shaderProperty);
 
 			globals::game::smState->shadowSceneNode[0]->AttachObject(geometry);
 		}
@@ -1657,11 +1658,11 @@ struct BSTempEffectGeometryDecal_Initialize
 			}
 
 			if (auto* alphaProperty = static_cast<RE::NiAlphaProperty*>(decal->decal->GetGeometryRuntimeData().alphaProperty.get())) {
-				alphaProperty->alphaFlags = (alphaProperty->alphaFlags & ~0x1FE) | 0xED;
+				DrawcallLimitFix::WriteAlphaFlags(alphaProperty, static_cast<std::uint16_t>((alphaProperty->alphaFlags & ~0x1FE) | 0xED));
 			}
 
 			shaderProperty->SetupGeometry(decal->decal.get());
-			decal->decal->GetGeometryRuntimeData().shaderProperty = RE::NiPointer(shaderProperty);
+			DrawcallLimitFix::WriteShaderProperty(decal->decal.get(), shaderProperty);
 		}
 	}
 	static inline REL::Relocation<decltype(thunk)> func;

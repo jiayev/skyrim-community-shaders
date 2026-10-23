@@ -127,7 +127,7 @@ Each compares a live path with a reference built from scratch and flags every mi
 | `CS_DCLF_FRAME_TRACE` | `1`: every frame's adoption, epoch coverage, main epoch outcomes, colour culling counts and retirement point, and F10 as a marker. |
 | `CS_DCLF_TREE_LOD_AUDIT` | `1`: tree LOD instances the engine leaves shown over a loaded, visible full tree (and hidden ones without one), every 60 frames. |
 | `CS_DCLF_HIDDEN_WATCH` | `1`: hardware watchpoints name the store behind a hidden change no event announced (with walk parity). |
-| `CS_DCLF_MIRROR_WATCH` | `1`: hardware watchpoints on a fade node's statics after its placement name the writers the mirror misses. |
+| `CS_DCLF_MIRROR_WATCH` | A mode (see [Watches](#watches)): hardware watchpoints, with each writer's callers, name the writers the mirror misses. |
 | `CS_DCLF_RELEASE_GUARD` | `1`: the engine objects' last releases on DCLF's threads (the scene lane, the pool), counted and named by class (`NiRefObject::DeleteThis` patched). |
 | `CS_DCLF_DRAW_TRACE` | `1`: the callers of the D3D11 draws. |
 | `CS_DCLF_DEPTH_TRACE` | `1`: the D3D11 calls that touch the main depth buffer, for five frames. |
@@ -706,8 +706,19 @@ In the steady state every epoch is covered and both main epochs are `submitted`.
 
 -   `CS_DCLF_HIDDEN_WATCH` (`Features/HiddenNodes/Diagnostics/HiddenWatch.cpp`): once walk parity sees a hidden change no event
     announced, hardware watchpoints on that chain's flags name the store behind it.
--   `CS_DCLF_MIRROR_WATCH` (`Diagnostics/Scene/MirrorWatch.cpp`): watchpoints on a fade node's statics after its placement name the
-    writers the mirror misses.
+-   `CS_DCLF_MIRROR_WATCH` (`Diagnostics/Scene/MirrorWatch.cpp`): hardware watchpoints (four dwords, every thread, one object at a time,
+    600 frames or 16 changes) on an object's mirrored fields. Each change is logged with the instruction after the write and ten callers
+    (`mirror watch (arming N on ...)`), so a writer behind a generic store (a world-transform update, a smart pointer's assignment) is
+    named by its caller. The modes:
+    -   armed at the world attach's capture, by name (`|` between names, a trailing `*` a prefix): `1` or `<name>` a fade node's
+        statics at its placement; `node:` its collision object, body, motion type and flags; `transform:` its local rotation and
+        translation; `fade:` its fadeAmount, +0x109 and currentFade; `fadetype:` its LOD type; `parent:` its parent; `current:` its
+        currentFade; `geometry:` a geometry's alpha and shader property pointers; `alpha:` its alpha's flags and threshold; `skin:`,
+        `projected:`, `land:`;
+    -   armed by mirror parity (`CS_DCLF_MIRROR_PARITY`) on the first object it finds missed: `missed:<field>|...` by the record fields'
+        names (`body`, `fade type`, `hidden`, `property`, `alpha threshold`...); `parity`, `parity:alpha`, `parity:projected`,
+        `parity:land`, `parity:current` on a stale property, alpha or fade node. These catch the next write: arm at capture for a
+        write made once.
 -   `CS_DCLF_RELEASE_GUARD` (`Diagnostics/Engine/ReleaseGuard.cpp`): engine objects' last releases on DCLF's threads, by class. An
     engine destructor run off the main thread can run Havok teardown and crash.
 
@@ -915,6 +926,17 @@ Bugs DCLF's parity checks found in other Community Shaders features, in the engi
 **Terrain Blending leaks write mode 1 into the blended decals that follow its hook.** The difference is on RT0 alpha only, which
 the composite never reads. DCLF's rule: derive write mode 11 for those decals; the difference is accepted.
 
+**TruePBR swaps a land quad's shader property after the land's setup returns.** Fixed.
+-   Where: `PBR_TESObjectLAND_SetupMaterial` (`src/TruePBR.cpp`) hooks the call of `TESObjectLAND::SetupMaterial` (`0x1402ad800`),
+    outside SceneWriterFramework's detour of the function, and after it replaces each PBR quad's property with a
+    `BSLightingShaderMaterialPBRLandscape` one. SWF's event had fired inside, so the mirror kept the engine's property.
+-   Evidence: mirror parity missed 144-324 `geometry property` changes a window on `Block (3, 0)` terrain quads, with as many
+    properties absent from the mirror and 100 `<- UNPINNED PROPERTY` a window; `CS_DCLF_MIRROR_WATCH=geometry:Block (3, 0)` named
+    `TruePBR::TESObjectLAND_SetupMaterial`. The decal setup's property and alpha flags writes are the same kind.
+-   Fix: CS's own writes to objects in the scene go through SWF's `Write` (`DrawcallLimitFix::WriteShaderProperty`, `WriteAlphaFlags`,
+    `WriteHidden`: `SWF_EVENT_SCENE_WRITE` around the store), as do Unified Water's and Wetness Effects' `SetAppCulled` (inline
+    hidden stores no SWF site covers). Afterwards: 0 property misses, 0 absent, 0 unpinned.
+
 **Community Shaders swaps the blend table** for its deferred variants between `StartDeferred` and `ResetBlendStates`. Not a bug,
 but a trap: DCLF captures the engine's state objects inside the deferred pass (`CaptureEngineStates`), and opaque pipelines take
 their write masks from the engine's state for their write mode (`kOpaqueWriteMode`), never a default blend state.
@@ -925,6 +947,8 @@ their write masks from the engine's state for their write mode (`kOpaqueWriteMod
 | --- | --- |
 | Hair with ProjectedUV shades another object's snow: `BSLightingShader::SetupGeometry` (`0x1414dd040`) writes `TextureProj` (VS PerGeometry 6) and `ProjectedUVParams` 1-3 (PS PerGeometry 12-14) for every technique but Hair (6), while hair passes can carry bit 15. The draw reads the previous projected draw's constants. | Hair draws without the projection: `DrawnPassDescriptor` drops bit 15 from a Hair pass (`HairProjection`, `Core/Shading/LightingDescriptors.h`). Capture parity leaves that bit out for such passes. |
 | `BSOcclusionPlane::WithinFrustumDistFirst` (`0x140e23e10`) tests the camera's foot point against the plane's rectangle along rows 1 and 2 of its rotation, while the corners (`BSPortal::sub`) lie along columns 0 and 2: an axis-aligned plane's rectangle is an infinite horizontal band. After a failed frustum test the walk then takes a plane wholly outside the view, with the stale edge flags of an earlier test; with all four clipped, its occluder is the infinite plane, and everything behind it is culled. The engine's frames rarely show it: the actor culler (`FUN_1414a8ba0`) judges the graph's planes first, with no rescue, and the walk skips those it rejected. Found 2026-10-23 in Whiterun (SurWR): two planes 8 and 26 units beside the camera hid the wall, the floor and about 5,000 objects a frame; set parity's in-view rejections and portal parity's "matching with the engine's occluder states" counted it without flagging it. | Judge every graph plane at the walk's start as the actor culler does (`PortalViews::PlaneJudged`: the corners against the camera-relative frustum, a one-sided plane only from behind), and a start room's untested planes the same way. Portal parity rebuilds the engine's program with its states and its walk's test before counting a difference. |
+| `bhkWorld::InitHavok` (`0x140e86ad0`, `Hazard::InitHavok`'s: a projectile or a quiver) moves a collision object between nodes: `SetCollisionObject` on the new one, the old one's `+0x40` cleared inline (`0x140e86fb7`, `0x140e870c6`). | SWF's `SWF_HOOK_HAVOK_INIT`; both nodes' bodies after the call. Mirror parity's 7-12 missed `node body` a window (`ArrowQuiver`, the soul gem) went to 0. |
+| Papyrus `Disable` with a fade (`FUN_140a3db90`) sets the 3D's LOD type to 9 inline before queueing the disable; the script command `Enable` (`0x14034c9f0`) resets a type of 9 to the model's. Critter scripts disable themselves with a fade. | SWF's `SWF_HOOK_REFERENCE_DISABLE` and `SWF_HOOK_ENABLE_COMMAND`; the fade node's LOD type after each. Missed `node fade type` (critters, 1 -> 9) went to 0. |
 | The main registration reads `activeLightMask` and then clears it (`+0x160 == 0xFFFF`). | Write sun and point-light bits only until a geometry's first clearing registration of the frame (`FrameAddressSet`); keep owned members' masks 0. |
 | `SetupMask` culls without `cameraRelatedUpdates`, so faded-out roots and new cells' roots are missing from the engine's occlusion maps. | Apply the same rule (`kCullFadeOnVisible`). |
 | Utility's cull mode is per pass (0 for two-sided), so the state left at `FinishAccumulating` is the last pass's. | A shadow or occlusion view's raster state is its table entry with back-face culling; two-sided casters draw unculled by key. |
