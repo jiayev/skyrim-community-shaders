@@ -334,6 +334,8 @@ namespace DCLF::SceneCapture
 		// NiAlphaProperty::GetAlphaBlending, GetAlphaTesting.
 		bool AlphaBlending() const { return alpha && (alpha->flags & 1u); }
 		bool AlphaTesting() const { return alpha && (alpha->flags & (1u << 9)); }
+		/** @brief The alpha's flags and threshold in one word (0 without one): what a join's static flags take from it. */
+		std::uint32_t AlphaState() const { return alpha ? (static_cast<std::uint32_t>(alpha->flags) << 8) | alpha->threshold : 0u; }
 		/** @brief a_property if a BSLightingShaderProperty (netimmerse_cast), else null. */
 		static const PropertyRecord* Lighting(const PropertyRecord* a_property) { return a_property && a_property->lighting ? a_property : nullptr; }
 		/** @brief a_property if a material port's (PropertyRecord::port: the Effect port's BSEffectShaderProperty), else null. */

@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Api/Settings.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include <array>
 #include <atomic>
@@ -85,7 +86,18 @@ namespace DCLF::Features::Lod::LodGates
 	 */
 	void NoteEngineHide(const void* a_object, std::uint32_t a_siteOffset);
 	/** @brief The engine's LOD hide stores NoteEngineHide is told of (the show veto's hideSites): object update, a terrain block's two nodes. */
-	inline constexpr std::array<std::uint32_t, 3> kEngineHideSites{ 0x5106a4, 0x509b29, 0x509b39 };
+	inline constexpr std::array<Engine::Offset, 3> kEngineHideSites{ { { 0x5106a4, 0x4b4597 }, { 0x509b29, 0x4adec9 }, { 0x509b39, 0x4aded9 } } };
+	/** @brief kEngineHideSites as the running runtime's offsets (what the show veto's hideSites take). */
+	inline std::span<const std::uint32_t> EngineHideSites()
+	{
+		static const auto sites = [] {
+			std::array<std::uint32_t, kEngineHideSites.size()> offsets{};
+			for (std::size_t i = 0; i < offsets.size(); ++i)
+				offsets[i] = static_cast<std::uint32_t>(kEngineHideSites[i].Get());
+			return offsets;
+		}();
+		return sites;
+	}
 
 	/**
 	 * @brief The render thread, adopting a publication that carries a gate's flip: shows the incoming blocks and hides the outgoing

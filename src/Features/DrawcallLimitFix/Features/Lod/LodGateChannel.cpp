@@ -29,7 +29,7 @@ namespace DCLF::Features::Lod::Gates
 		a_context.RegisterShowVeto({ .open = &LodGates::OpenGates(),
 			.vetoes = &LodGates::Vetoes,
 			.engineHid = &LodGates::NoteEngineHide,
-			.hideSites = LodGates::kEngineHideSites });
+			.hideSites = LodGates::EngineHideSites() });
 		// Their own stores (a flip, a forced release's unhide) carry a hidden site past the source's.
 		LodGates::NoteRegistered(channel, a_context.ReserveHiddenSite());
 		// No adoption guard: a forced release's stores (the pending blocks shown, the held ones released and detached) reach the scene as

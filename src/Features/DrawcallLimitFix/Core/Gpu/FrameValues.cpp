@@ -443,6 +443,12 @@ namespace DCLF
 			std::string first;
 		} movedParity;
 		std::atomic<std::uint64_t> done{ 0 };
+		std::atomic<std::uint64_t> sampledSeq{ 0 };  // the newest producer whose sampling is done (WaitSampled), before its done
+		void MarkSampled(std::uint64_t a_seq)
+		{
+			sampledSeq.store(a_seq, std::memory_order_release);
+			sampledSeq.notify_all();
+		}
 
 		// Since the last report.
 		std::atomic<std::uint64_t> frames{ 0 }, sampled{ 0 }, rowsChanged{ 0 }, skins{ 0 }, paletteRowsChanged{ 0 }, shadingSampled{ 0 }, shadingChanged{ 0 },
@@ -639,8 +645,11 @@ namespace DCLF
 		for (auto finished = done.load(std::memory_order_acquire); finished + 1 < a_job.seq; finished = done.load(std::memory_order_acquire))
 			done.wait(finished, std::memory_order_acquire);
 		const auto start = std::chrono::steady_clock::now();
+		bool marked = false;
 		try {
 			Sample(a_job);
+			MarkSampled(a_job.seq);
+			marked = true;
 			const auto sampledAt = std::chrono::steady_clock::now();
 			sampleUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(sampledAt - start).count());
 			Upload(a_job);
@@ -649,6 +658,8 @@ namespace DCLF
 			if (failures++ == 0)
 				logger::error("[DCLF] frame values {} failed: {}; the frame draws the rows its buffers held", a_job.seq, e.what());
 		}
+		if (!marked)
+			MarkSampled(a_job.seq);
 		// Always signal: every batch of the frame waits for it.
 		if (!a_job.uploads || !a_job.uploads->QueueStreamingSignal(a_job.timeline, a_job.seq))
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: frame values {} could not signal the frame's wait; the GPU would wait for it forever", a_job.seq));
@@ -2229,6 +2240,14 @@ namespace DCLF
 			for (auto finished = s.done.load(std::memory_order_acquire); finished < s.seq; finished = s.done.load(std::memory_order_acquire))
 				s.done.wait(finished, std::memory_order_acquire);
 		return s.done.load(std::memory_order_acquire) >= s.seq;
+	}
+
+	void FrameValues::WaitSampled() const
+	{
+		auto& s = *impl;
+		const auto kicked = s.kickedSeq.load(std::memory_order_acquire);
+		for (auto sampled = s.sampledSeq.load(std::memory_order_acquire); sampled < kicked; sampled = s.sampledSeq.load(std::memory_order_acquire))
+			s.sampledSeq.wait(sampled, std::memory_order_acquire);
 	}
 
 	void FrameValues::NoteRefused()

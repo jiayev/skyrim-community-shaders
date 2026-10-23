@@ -56,7 +56,7 @@ namespace DCLF::Features::Faces
 		/** @brief Whether the writer's thunks are installed (Install checked the engine's code first). */
 		static bool Enabled();
 
-		/** @brief Installs the two thunks in the engine's face morphing (AE only). Main thread, at the feature's install. */
+		/** @brief Installs the two thunks in the engine's face morphing. Main thread, at the feature's install. */
 		void Install();
 
 		/** @brief A face shape's positions in the snapshot the walk holds: float4 per vertex. */

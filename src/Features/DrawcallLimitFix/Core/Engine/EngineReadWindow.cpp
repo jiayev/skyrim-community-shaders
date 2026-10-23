@@ -23,26 +23,48 @@ namespace DCLF
 		if (!(before & kOpen))
 			return;
 		++closes;
-		if (!(before & ~kOpen))
+		if (!(before & kLeases))
 			return;
-		// Items in flight: each finishes the one item it holds a lease for (no new lease can be taken now).
 		++closesWaited;
+		const double us = DrainLeases();
+		waitedUs += us;
+		waitedMaxUs = (std::max)(waitedMaxUs, us);
+	}
+
+	void EngineReadWindow::Suspend()
+	{
+		const std::uint32_t before = state.fetch_or(kSuspended, std::memory_order_acq_rel);
+		suspends.fetch_add(1, std::memory_order_relaxed);
+		if (!(before & kLeases))
+			return;
+		suspendsWaited.fetch_add(1, std::memory_order_relaxed);
+		const auto us = static_cast<std::uint64_t>(DrainLeases());
+		suspendWaitedUs.fetch_add(us, std::memory_order_relaxed);
+		for (auto max = suspendWaitedMaxUs.load(std::memory_order_relaxed); us > max && !suspendWaitedMaxUs.compare_exchange_weak(max, us, std::memory_order_relaxed);) {}
+	}
+
+	void EngineReadWindow::Resume()
+	{
+		state.fetch_and(~kSuspended, std::memory_order_release);
+	}
+
+	double EngineReadWindow::DrainLeases()
+	{
+		// Items in flight: each finishes the one item it holds a lease for (no new lease can be taken now).
 		const auto start = std::chrono::steady_clock::now();
-		for (std::uint32_t spins = 0; state.load(std::memory_order_acquire) & ~kOpen; ++spins) {
+		for (std::uint32_t spins = 0; state.load(std::memory_order_acquire) & kLeases; ++spins) {
 			if (spins < 64)
 				_mm_pause();
 			else
 				std::this_thread::yield();
 		}
-		const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
-		waitedUs += us;
-		waitedMaxUs = (std::max)(waitedMaxUs, us);
+		return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
 	}
 
 	EngineReadWindow::Lease::Lease()
 	{
-		// One word: the lease is counted and the window seen open in the same step, so Close cannot miss it.
-		if (state.fetch_add(1, std::memory_order_acq_rel) & kOpen) {
+		// One word: the lease is counted and the window seen open (not suspended) in the same step, so Close and Suspend cannot miss it.
+		if ((state.fetch_add(1, std::memory_order_acq_rel) & (kOpen | kSuspended)) == kOpen) {
 			held = true;
 			++heldHere;
 			return;
@@ -70,7 +92,11 @@ namespace DCLF
 		Counters c;
 		c.unleased = unleased.exchange(0, std::memory_order_relaxed);
 		c.unleasedFirst = unleasedFirst.exchange(nullptr, std::memory_order_relaxed);
-		if (!closes && !c.unleased)
+		c.suspends = suspends.exchange(0, std::memory_order_relaxed);
+		c.suspendsWaited = suspendsWaited.exchange(0, std::memory_order_relaxed);
+		c.suspendWaitedUs = static_cast<double>(suspendWaitedUs.exchange(0, std::memory_order_relaxed));
+		c.suspendWaitedMaxUs = static_cast<double>(suspendWaitedMaxUs.exchange(0, std::memory_order_relaxed));
+		if (!closes && !c.unleased && !c.suspends)
 			return c;
 		c.any = true;
 		c.closes = closes;

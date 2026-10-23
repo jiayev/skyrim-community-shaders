@@ -11,7 +11,7 @@ namespace DCLF
 	 * @brief When a worker may touch the engine's scene graph (dclf-architecture.md, "The engine-read window").
 	 *
 	 * From Main::Draw to Present the engine reads its scene graph but does not write it (the writes that do happen there:
-	 * currentFade, billboards, texture transforms). The window is open over exactly that span: Open at FrameDriver::BeginFrame, Close at Present, both on the render thread. A worker touching engine memory takes a Lease per item, or per bounded chunk of items (a parallel loop's grain), and
+	 * currentFade, billboards, texture transforms, and the cell animations job, which Suspend keeps out of the window: WindowWriters.h). The window is open over exactly that span: Open at FrameDriver::BeginFrame, Close at Present, both on the render thread. A worker touching engine memory takes a Lease per item, or per bounded chunk of items (a parallel loop's grain), and
 	 * does the item only while it holds one; a refused lease means the window has closed, and the worker leaves the rest, by index, for
 	 * the next window.
 	 *
@@ -30,7 +30,14 @@ namespace DCLF
 		static void Open();
 		/** @brief Render thread, Present: no new lease from here; returns once the leases in flight are released. */
 		static void Close();
+		/** @brief Whether the frame's render is between Main::Draw and Present (true while suspended too). */
 		static bool IsOpen() { return (state.load(std::memory_order_acquire) & kOpen) != 0; }
+		/**
+		 * @brief An engine writer's thread, inside the window (WindowWriters): no new lease until Resume; returns once the leases in flight
+		 * are released. One writer at a time. A Close meanwhile closes the window as usual: Resume leaves it closed.
+		 */
+		static void Suspend();
+		static void Resume();
 
 		/** @brief One item's access to engine memory. False: the window is closed and the item must not be done. */
 		class Lease
@@ -58,11 +65,14 @@ namespace DCLF
 				NoteUnleased(a_site);
 		}
 
-		/** @brief What the report reads since the last Take: closes, closes that found leases in flight and how long they waited, refused leases, the scene work's accesses without a lease. */
+		/**
+		 * @brief What the report reads since the last Take: closes, closes that found leases in flight and how long they waited, the
+		 * suspensions likewise, refused leases, the scene work's accesses without a lease.
+		 */
 		struct Counters
 		{
-			std::uint64_t closes = 0, closesWaited = 0, refused = 0, unleased = 0;
-			double waitedUs = 0.0, waitedMaxUs = 0.0;
+			std::uint64_t closes = 0, closesWaited = 0, suspends = 0, suspendsWaited = 0, refused = 0, unleased = 0;
+			double waitedUs = 0.0, waitedMaxUs = 0.0, suspendWaitedUs = 0.0, suspendWaitedMaxUs = 0.0;
 			const char* unleasedFirst = nullptr;
 			bool any = false;  // a close or an unleased access since the last Take (else nothing else was taken)
 		};
@@ -71,8 +81,13 @@ namespace DCLF
 
 	private:
 		static void NoteUnleased(const char* a_site);
+		/** @brief Spins until no lease is in flight (no new one can be taken); the microseconds it waited, 0 for none. */
+		static double DrainLeases();
 
+		// The word: the open bit, the suspended bit and the leases in flight below them. A lease is taken only while open and not suspended.
 		static constexpr std::uint32_t kOpen = 1u << 31;
+		static constexpr std::uint32_t kSuspended = 1u << 30;
+		static constexpr std::uint32_t kLeases = kSuspended - 1;
 		static inline thread_local std::uint32_t heldHere = 0;  // the leases this thread holds
 		static inline std::atomic<std::uint64_t> unleased{ 0 };
 		static inline std::atomic<const char*> unleasedFirst{ nullptr };
@@ -81,6 +96,8 @@ namespace DCLF
 		// Render thread.
 		static inline std::uint64_t closes = 0, closesWaited = 0;
 		static inline double waitedUs = 0.0, waitedMaxUs = 0.0;
+		// The writer's thread: the suspensions since the last Take, and their waits in whole microseconds.
+		static inline std::atomic<std::uint64_t> suspends{ 0 }, suspendsWaited{ 0 }, suspendWaitedUs{ 0 }, suspendWaitedMaxUs{ 0 };
 	};
 }
 

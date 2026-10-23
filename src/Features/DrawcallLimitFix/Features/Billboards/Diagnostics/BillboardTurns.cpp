@@ -2,6 +2,7 @@
 // thread runs the cull; the report takes its counts on the render thread.
 
 #include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PlacementRows/BillboardRow.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
@@ -18,9 +19,9 @@ namespace DCLF::Features::Billboards
 		using DCLF::PlacementRows::BillboardFaceMode;
 		using DCLF::PlacementRows::SampleBillboardRow;
 
-		// NiBillboardNode's vtable slot OnVisible and what it holds (AE 0x140d3f720).
+		// NiBillboardNode's vtable slot OnVisible and what it holds (AE 0x140d3f720, SE 0x140c78d90).
 		constexpr std::size_t kOnVisibleSlot = 0x34;
-		constexpr std::uintptr_t kOnVisible = 0xd3f720;
+		constexpr DCLF::Engine::Offset kOnVisible{ 0xd3f720, 0xc78d90 };
 		// The observer's tolerance: a leaf whose world differs from the engine's by more than this (a rotation entry over its scale, a
 		// translation in units) is counted as differing. The port multiplies in a different order (R0 * M * relative against the
 		// engine's (R0 * M) then each child's local), so a few ulps are expected.
@@ -162,7 +163,7 @@ namespace DCLF::Features::Billboards
 			return;
 		REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE_NiBillboardNode[0] };
 		const auto* slots = reinterpret_cast<const std::uintptr_t*>(vtable.address());
-		if (slots[kOnVisibleSlot] != REL::Offset(kOnVisible).address()) {
+		if (!kOnVisible.Known() || slots[kOnVisibleSlot] != REL::Offset(kOnVisible.Get()).address()) {
 			logger::warn("[DCLF] billboards' observer: NiBillboardNode's OnVisible slot is not the expected function; not installed");
 			return;
 		}

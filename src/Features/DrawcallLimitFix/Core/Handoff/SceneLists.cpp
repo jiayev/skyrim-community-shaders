@@ -27,14 +27,15 @@ namespace DCLF
 	{
 		using namespace Engine;
 
-		// AE 1.6.1170 (module offsets).
-		constexpr std::uintptr_t kBuildSceneLists = 0x64bc20;  // DrawWorld_BuildSceneLists, a job of Main::Draw's
-		constexpr std::uintptr_t kClearList = 0x64cf20;        // FUN_14064cf20(list): Main::Draw's ClearLists job, one list
-		constexpr std::uintptr_t kCullList = 0xe28f70;         // FUN_140e28f70(process, list, camera, skipHidden, jobs): every list cull
+		// AE 1.6.1170 and SE 1.5.97 (module offsets).
+		constexpr Engine::Offset kBuildSceneLists{ 0x64bc20, 0x5b7c80 };  // DrawWorld_BuildSceneLists, a job of Main::Draw's
+		constexpr Engine::Offset kClearList{ 0x64cf20, 0x5b8e80 };  // FUN_14064cf20(list): Main::Draw's ClearLists job, one list
+		constexpr Engine::Offset kCullList{ 0xe28f70, 0xd51650 };  // FUN_140e28f70(process, list, camera, skipHidden, jobs): every list cull
 		// In DrawWorld_BuildSceneLists: `mov rax, [rcx]; call [rax + 0x18]`, the object root's AsNode (ShadowSceneNode child 3).
-		constexpr std::uintptr_t kObjectRootAsNode = 0x64be5a;
+		constexpr Engine::Offset kObjectRootAsNode{ 0x64be5a, 0x5b7eb9 };
 		constexpr std::array<std::uint8_t, 6> kObjectRootAsNodeBytes{ 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x18 };
-		constexpr std::size_t kTesWorldSpace = 0x148;         // TES: the current worldspace (FUN_14019d200)
+		// TES: the current worldspace (AE FUN_14019d200 reads +0x148, SE FUN_140153cf0 +0x140: TES is 8 bytes shorter before it on SE).
+		inline std::size_t TesWorldSpace() { return REL::Module::IsSE() ? 0x140 : 0x148; }
 		constexpr std::size_t kWorldSpaceFlags = 0xa0;        // byte; 0x40: the build skips category node 2
 
 		using SceneList = RE::BSTArray<RE::NiPointer<RE::NiAVObject>>;
@@ -131,7 +132,7 @@ namespace DCLF
 		const auto& scene = sceneNode->GetChildren();
 		if (scene.free_idx() < 4 || !scene[3])
 			return fail(4);
-		const auto* worldSpace = At<const std::byte*>(tes, kTesWorldSpace);
+		const auto* worldSpace = At<const std::byte*>(tes, TesWorldSpace());
 		const bool skipCategory2 = worldSpace && (At<std::uint8_t>(worldSpace, kWorldSpaceFlags) & 0x40);
 		a_witness = (std::uint64_t(count) << 1) ^ (skipCategory2 ? 1u : 0u) ^ (reinterpret_cast<std::uintptr_t>(scene[3].get()) << 8) ^
 		            (std::uint64_t(scene.free_idx()) << 56);
@@ -429,7 +430,7 @@ namespace DCLF
 				list.push_back(RE::NiPointer<RE::NiAVObject>(listSentinels[l].get()));
 		}
 		const auto* objectRoot = ObjectRoot(*sceneNode);
-		const auto* worldSpace = At<const std::byte*>(tes, kTesWorldSpace);
+		const auto* worldSpace = At<const std::byte*>(tes, TesWorldSpace());
 		const bool skipCategory2 = worldSpace && (At<std::uint8_t>(worldSpace, kWorldSpaceFlags) & 0x40);
 		DropListEvents();
 		listStructural.clear();
@@ -617,7 +618,7 @@ namespace DCLF
 		if (!sceneNode || !tes)
 			return false;
 		a_objectRoot = ObjectRoot(*sceneNode);
-		const auto* worldSpace = At<const std::byte*>(tes, kTesWorldSpace);
+		const auto* worldSpace = At<const std::byte*>(tes, TesWorldSpace());
 		const bool skipCategory2 = worldSpace && (At<std::uint8_t>(worldSpace, kWorldSpaceFlags) & 0x40);
 		EnumerateSceneLists(a_objectRoot, skipCategory2, [&](const RE::NiAVObject* a_root, bool) { a_roots.push_back(a_root); }, [](const RE::NiAVObject*) {});
 		return true;
@@ -799,6 +800,10 @@ namespace DCLF
 		} else {
 			SKSE::GetTrampoline().write_call<6>(base + kObjectRootAsNode, ListHooks::ObjectRootAsNode::thunk);
 			listsKeepInstalled = true;
+		}
+		if (!kBuildSceneLists.Known() || !kClearList.Known() || !kCullList.Known()) {
+			logger::warn("[DCLF] scene lists: the build, clear and cull functions are not known for this runtime; the lists stay the engine's");
+			return;
 		}
 		stl::detour_thunk<ListHooks::BuildSceneLists>(base + kBuildSceneLists);
 		stl::detour_thunk<ListHooks::ClearList>(base + kClearList);

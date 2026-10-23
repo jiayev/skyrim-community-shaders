@@ -588,12 +588,17 @@ namespace DCLF
 	namespace
 	{
 		// The main modes' registration's (FUN_1414b2330) group insertions and its hint 1 list insertion, by call site.
-		constexpr std::uintptr_t kInsertGroup = 0x14f5090, kInsertList = 0x14f50b0;
-		constexpr std::array<std::pair<std::uintptr_t, std::uintptr_t>, 16> kMainGroupSites{ {
-			{ 0x14b24a2, kInsertGroup }, { 0x14b24bd, kInsertGroup }, { 0x14b24d8, kInsertGroup }, { 0x14b24f3, kInsertGroup },
-			{ 0x14b250d, kInsertGroup }, { 0x14b2528, kInsertGroup }, { 0x14b2543, kInsertGroup }, { 0x14b255e, kInsertGroup },
-			{ 0x14b2579, kInsertGroup }, { 0x14b2591, kInsertGroup }, { 0x14b25a9, kInsertGroup }, { 0x14b25c1, kInsertGroup },
-			{ 0x14b25db, kInsertGroup }, { 0x14b2667, kInsertGroup }, { 0x14b2478, kInsertList }, { 0x14b2c71, kInsertGroup },
+		// (SE FUN_1412ca300, the same code; the occlusion maps' FUN_1414b2c20 is SE FUN_1412cab70.)
+		constexpr Engine::Offset kInsertGroup{ 0x14f5090, 0x1309230 }, kInsertList{ 0x14f50b0, 0x1309250 };
+		constexpr std::array<std::pair<Engine::Offset, Engine::Offset>, 16> kMainGroupSites{ {
+			{ Engine::Offset{ 0x14b24a2, 0x12ca472 }, kInsertGroup }, { Engine::Offset{ 0x14b24bd, 0x12ca48d }, kInsertGroup },
+			{ Engine::Offset{ 0x14b24d8, 0x12ca4a8 }, kInsertGroup }, { Engine::Offset{ 0x14b24f3, 0x12ca4c3 }, kInsertGroup },
+			{ Engine::Offset{ 0x14b250d, 0x12ca4dd }, kInsertGroup }, { Engine::Offset{ 0x14b2528, 0x12ca4f8 }, kInsertGroup },
+			{ Engine::Offset{ 0x14b2543, 0x12ca513 }, kInsertGroup }, { Engine::Offset{ 0x14b255e, 0x12ca52e }, kInsertGroup },
+			{ Engine::Offset{ 0x14b2579, 0x12ca549 }, kInsertGroup }, { Engine::Offset{ 0x14b2591, 0x12ca561 }, kInsertGroup },
+			{ Engine::Offset{ 0x14b25a9, 0x12ca579 }, kInsertGroup }, { Engine::Offset{ 0x14b25c1, 0x12ca591 }, kInsertGroup },
+			{ Engine::Offset{ 0x14b25db, 0x12ca5ab }, kInsertGroup }, { Engine::Offset{ 0x14b2667, 0x12ca637 }, kInsertGroup },
+			{ Engine::Offset{ 0x14b2478, 0x12ca448 }, kInsertList }, { Engine::Offset{ 0x14b2c71, 0x12cabb4 }, kInsertGroup },
 		} };
 
 		template <class Hook>
@@ -619,12 +624,17 @@ namespace DCLF
 			return;
 		stl::write_vfunc<0x2, Hook>(RE::VTABLE_BSBatchRenderer[0]);
 		// The registration's (FUN_1414b2a60) group insertions: the volumetric copy's, and the direct hints 11, 7 and 3.
-		constexpr std::uintptr_t kVolumetricGroupCall = 0x14b2b5f;
-		constexpr std::uintptr_t kDirectGroupCalls[3] = { 0x14b2b29, 0x14b2b3b, 0x14b2b4d };
-		stl::write_thunk_call<VolumetricGroupHook>(REL::Offset(kVolumetricGroupCall).address());
-		stl::write_thunk_call<DirectGroupHook<11>>(REL::Offset(kDirectGroupCalls[0]).address());
-		stl::write_thunk_call<DirectGroupHook<7>>(REL::Offset(kDirectGroupCalls[1]).address());
-		stl::write_thunk_call<DirectGroupHook<3>>(REL::Offset(kDirectGroupCalls[2]).address());
+		// (SE FUN_1412ca9c0, the same code.)
+		constexpr Engine::Offset kVolumetricGroupCall{ 0x14b2b5f, 0x12caabf };
+		constexpr Engine::Offset kDirectGroupCalls[3] = { { 0x14b2b29, 0x12caa89 }, { 0x14b2b3b, 0x12caa9b }, { 0x14b2b4d, 0x12caaad } };
+		const auto insertsGroup = [](std::uintptr_t a_site) { return Engine::CallsTo(REL::Offset(a_site).address(), REL::Offset(kInsertGroup).address()); };
+		if (insertsGroup(kVolumetricGroupCall) && insertsGroup(kDirectGroupCalls[0]) && insertsGroup(kDirectGroupCalls[1]) && insertsGroup(kDirectGroupCalls[2])) {
+			stl::write_thunk_call<VolumetricGroupHook>(REL::Offset(kVolumetricGroupCall).address());
+			stl::write_thunk_call<DirectGroupHook<11>>(REL::Offset(kDirectGroupCalls[0]).address());
+			stl::write_thunk_call<DirectGroupHook<7>>(REL::Offset(kDirectGroupCalls[1]).address());
+			stl::write_thunk_call<DirectGroupHook<3>>(REL::Offset(kDirectGroupCalls[2]).address());
+		} else
+			logger::warn("[DCLF] pass capture: the shadow registration's group insertions are not where expected; their passes stay the engine's");
 		// The main modes' group insertions (kMainGroupSites, in order), by the group each inserts into, and the hint 1 list insertion.
 		// PostPostLoad checked every site against its callee (SitesMissing) before any hook was written.
 		if (!SitesMissing().empty())

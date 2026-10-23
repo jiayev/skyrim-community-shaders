@@ -117,6 +117,11 @@ namespace DCLF
 		 * first. A registered pool's rows are then as it left them, until the next Kick.
 		 */
 		bool ProducerDone(bool a_wait = false) const;
+		/**
+		 * @brief Any thread (an engine writer inside the window: WindowWriters): returns once the newest kicked producer's sampling is done,
+		 * its reads of engine memory (its sends may still run); at once without one.
+		 */
+		void WaitSampled() const;
 		/** @brief The producer (a pool's sample): an engine-read lease refused, counted with the built-in parts' (Counters::refused). */
 		void NoteRefused();
 		bool Available() const;

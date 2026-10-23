@@ -61,6 +61,7 @@ namespace DCLF::Scene
 			const RE::BSShaderMaterial* material = nullptr;  // the witness, the material slot's key
 			std::uint8_t fadeState = 0;
 			bool alphaBelowOne = false;
+			std::uint32_t alphaState = 0;  // LeafView::AlphaState (0 for a layer: its draws apply no alpha property)
 			std::uint32_t geometrySlot = 0;
 			bool derivedWitness = false;  // the derivation cache's witnesses hold
 			bool classified = false;      // descriptors, key and static flags are this join's

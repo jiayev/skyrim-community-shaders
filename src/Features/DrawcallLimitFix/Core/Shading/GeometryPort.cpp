@@ -24,23 +24,23 @@ namespace DCLF::GeometryPort
 
 		static_assert(std::is_same_v<FrameLighting, std::array<float, 24>>);
 
-		// AE 1.6.1170, module offsets (SetupGeometry 0x1414dd040 reads each).
-		constexpr std::uintptr_t kVec3NormalizeImport = 0x17502e0;  // D3DXVec3Normalize's IAT slot (the thunk at 0x14153d3da)
+		// Module offsets, AE 1.6.1170 and SE 1.5.97 (SetupGeometry, AE 0x1414dd040, reads each).
+		constexpr Engine::Offset kVec3NormalizeImport{ 0x17502e0, 0x150a0f0 };  // D3DXVec3Normalize's IAT slot (the thunk at 0x14153d3da)
 		constexpr std::size_t kImageSpaceHdr = 0xe0;
 		constexpr std::size_t kBSLightNiLight = 0x48;     // BSLight -> NiLight*
 		constexpr std::size_t kNiLightDiffuse = 0x11c;    // NiColor
 		constexpr std::size_t kNiLightFade = 0x134;
 		constexpr std::size_t kNiLightDirection = 0x140;  // NiDirectionalLight's world direction
-		constexpr std::uintptr_t kDirectionalAmbient = 0x2033128;  // BSShaderManager::State+0xc8
-		constexpr std::uintptr_t kCurrentAccumulator = 0x332a3a8;  // FUN_141480b20's
+		constexpr Engine::Offset kDirectionalAmbient{ 0x2033128, 0x1e0df98 };  // BSShaderManager::State+0xc8
+		constexpr Engine::Offset kCurrentAccumulator{ 0x332a3a8, 0x31d0e20 };  // FUN_141480b20's
 		constexpr std::size_t kAccumulatorEye = 0x16c;
-		constexpr std::uintptr_t kPosAdjust = 0x202aecc;  // RendererShadowState (0x14202ab70) +0x35c
-		constexpr std::uintptr_t kSsrX = 0x2034e80;       // Setting values (ConfigureR)
-		constexpr std::uintptr_t kSsrY = 0x2034e98;
-		constexpr std::uintptr_t kSsrAuxiliary = 0x338ca08;
-		constexpr std::uintptr_t kWorldMapVS = 0x332a4f0;
-		constexpr std::uintptr_t kWorldMapPS = 0x332a500;
-		constexpr std::uintptr_t kAmbientSpecularGlobal = 0x203315c;  // BSShaderManager::State+0xfc: tint xyz, Fresnel power w
+		constexpr Engine::Offset kPosAdjust{ 0x202aecc, 0x302820c };  // RendererShadowState (0x14202ab70) +0x35c
+		constexpr Engine::Offset kSsrX{ 0x2034e80, 0x1e0fc20 };       // Setting values (ConfigureR)
+		constexpr Engine::Offset kSsrY{ 0x2034e98, 0x1e0fc38 };
+		constexpr Engine::Offset kSsrAuxiliary{ 0x338ca08, 0x32335d0 };
+		constexpr Engine::Offset kWorldMapVS{ 0x332a4f0, 0x31d0ed0 };
+		constexpr Engine::Offset kWorldMapPS{ 0x332a500, 0x31d0ee0 };
+		constexpr Engine::Offset kAmbientSpecularGlobal{ 0x203315c, 0x1e0dfcc };  // BSShaderManager::State+0xfc: tint xyz, Fresnel power w
 
 		/**
 		 * @brief Whether SSE Engine Fixes' BSLightingAmbientSpecular fix is in SetupGeometry (EngineFixesSkyrim64,
@@ -54,7 +54,7 @@ namespace DCLF::GeometryPort
 		{
 			static const bool installed = [] {
 				constexpr std::uint8_t kTest[] = { 0x41, 0xf7, 0x85, 0x94, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00 };
-				constexpr std::size_t kScan = 0x1600;  // SetupGeometry's length
+				const std::size_t kScan = REL::Module::IsSE() ? 0xc66 : 0x1600;  // SetupGeometry's length (SE's outlines much of it)
 				const auto* code = reinterpret_cast<const std::uint8_t*>(REL::RelocationID(100565, 107300).address());
 				int vanilla = 0, patched = 0;
 				for (std::size_t i = 0; i + sizeof(kTest) <= kScan; ++i) {
@@ -158,7 +158,7 @@ namespace DCLF::GeometryPort
 			const float scale = At<const float>(light, kNiLightFade) * At<const float>(imageSpace, kImageSpaceHdr);
 			for (std::uint32_t c = 0; c < 3; ++c)
 				frame.dirLightColor[c] = scale * At<const float>(light, kNiLightDiffuse + c * sizeof(float));
-			// DirLightDirection (0x1414dd622): the direction negated (a sign flip, xorps 0x141ad3130), through the engine's own
+			// DirLightDirection (0x1414dd622): the direction negated (a sign flip, xorps 0x141ad3130; SE multiplies by -1.0, the same bits), through the engine's own
 			// D3DXVec3Normalize import, so the result is the same bits on this machine.
 			const float negated[3] = { -At<const float>(light, kNiLightDirection), -At<const float>(light, kNiLightDirection + 4),
 				-At<const float>(light, kNiLightDirection + 8) };

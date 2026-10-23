@@ -30,7 +30,7 @@ namespace DCLF
 	std::uint32_t DecalDepthBiasMode(std::uint32_t a_decalGroup)
 	{
 		// The byte the ToggleDepthBias console command flips (Ghidra: read by FUN_1414b3bb0 at
-		// 1414b3c0a and 1414b3c7a, written by ConsoleFunc::handler::ToggleDepthBias). AE 1.6.1170.
+		// 1414b3c0a and 1414b3c7a, written by ConsoleFunc::handler::ToggleDepthBias). The same logic on SE 1.5.97.
 		static const REL::Relocation<std::uint8_t*> depthBiasEnabled{ REL::Offset(Engine::Address::kDepthBiasEnabled) };
 		const std::uint32_t variant = RE::DrawWorld::GetSingleton().disableSunShadows ? 1u : 0u;
 		switch (a_decalGroup) {

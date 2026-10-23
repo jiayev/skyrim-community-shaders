@@ -19,10 +19,10 @@ namespace DCLF::FadeState
 		using Engine::At;
 		using Engine::Global;
 
-		// AE 1.6.1170 module offsets (skyrim-engine-notes.md, "Fade state").
-		constexpr std::uintptr_t kTreeRtti = 0x332a2d8;           // NiRTTI of BSTreeNode
-		constexpr std::uintptr_t kLogf = 0x153d086;               // the engine's CRT logf
-		constexpr std::uintptr_t kPowf = 0x153d014;               // ... and powf
+		// Module offsets, AE 1.6.1170 and SE 1.5.97 (skyrim-engine-notes.md, "Fade state").
+		constexpr Engine::Offset kTreeRtti{ 0x332a2d8, 0x31d0de0 };  // NiRTTI of BSTreeNode
+		constexpr Engine::Offset kLogf{ 0x153d086, 0x134bf12 };      // the engine's CRT logf (its jmp [IAT] thunk)
+		constexpr Engine::Offset kPowf{ 0x153d014, 0x134beac };      // ... and powf
 		using Engine::kOnVisibleSlot;
 		// The main camera: the world scene graph's (+0x128), carried by the list processes; FUN_1406452c0 (Main::Draw's camera
 		// setup, before BeginSceneFrame) sets the tree height base from it.

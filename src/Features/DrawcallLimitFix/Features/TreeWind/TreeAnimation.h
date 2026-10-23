@@ -17,7 +17,7 @@ namespace DCLF::Features::TreeWind::TreeAnimation
 {
 	/**
 	 * @brief The tree manager's animation list without DCLF's trees (dclf-architecture.md, "Owned trees off the tree
-	 * manager's animation list"). AE only.
+	 * manager's animation list").
 	 *
 	 * BSTreeManager (0x1420F6A18) keeps every BSLeafAnimNode the cells load on a list (+0x50, count +0x60), which its
 	 * update in Main::Update (FUN_1404381e0) walks every frame: for a node whose kAccumulated bit is set, the wind clock

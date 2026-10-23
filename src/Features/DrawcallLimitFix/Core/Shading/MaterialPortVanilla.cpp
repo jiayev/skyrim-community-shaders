@@ -55,6 +55,24 @@ namespace DCLF::MaterialPort
 		constexpr std::uint16_t kSpecularBackLighting = 0x68;
 		constexpr std::uint16_t kTextureClampMode = 0x70;
 
+		// The module globals SampleVanillaFrame reads (AE 1.6.1170, SE 1.5.97); VanillaFrame's comments name each by its AE address.
+		constexpr Engine::Offset kTechniqueByte12{ 0x2032fdb, 0x1e0de39 };
+		constexpr Engine::Offset kTechniqueByte7{ 0x2035500, 0x1e102a0 };
+		constexpr Engine::Offset kTextureTransformBuffer{ 0x2033180, 0x1e0dff0 };  // BSShaderManager::State+0x120
+		constexpr Engine::Offset kLodTexParamsZ{ 0x2032fda, 0x1e0de38 };
+		constexpr Engine::Offset kLandSnowZ{ 0x2035548, 0x1e102e8 };
+		constexpr Engine::Offset kLandSnowDivisor{ 0x20355f0, 0x1e10390 };
+		constexpr Engine::Offset kAmbientSpecularGlobal{ 0x203315c, 0x1e0dfcc };  // BSShaderManager::State+0xfc
+		constexpr Engine::Offset kSnowRim0{ 0x2035590, 0x1e10330 };
+		constexpr Engine::Offset kSnowRim1{ 0x20355a8, 0x1e10348 };
+		constexpr Engine::Offset kSnowRim2{ 0x20355c0, 0x1e10360 };
+		constexpr Engine::Offset kSnowRimW{ 0x20355d8, 0x1e10378 };
+		constexpr Engine::Offset kCharacterLightGlobal{ 0x203316c, 0x1e0dfdc };  // BSShaderManager::State+0x10c
+		constexpr Engine::Offset kFullBright{ 0x20330a6, 0x1e0df16 };  // BSShaderManager::State+0x46
+		constexpr Engine::Offset kCharacterLightTarget{ 0x2033db0, 0x1e0eb50 };  // the character light's ImageSpaceTexture (ID 513464) +8
+		constexpr Engine::Offset kEnvMaskDefault{ 0x328ccb8, 0x302c920 };
+		constexpr Engine::Offset kRenderTargetViews{ 0x3289230, 0x3028f00 };  // the renderer's render targets' SRVs, 0x30 apart
+
 		constexpr std::uint32_t kOneBits = 0x3f800000u;  // gFloatOne, 0x141ad2870
 		constexpr std::uint32_t kZeroBits = 0u;
 
@@ -206,7 +224,7 @@ namespace DCLF::MaterialPort
 			/** @brief A render target's SRV (0x143289230 + 0x30 * index); an index outside the array fails. */
 			ID3D11ShaderResourceView* RenderTarget(std::int32_t a_index)
 			{
-				if (a_index < 0 || static_cast<std::uint32_t>(a_index) >= kVanillaRenderTargets) {
+				if (a_index < 0 || static_cast<std::uint32_t>(a_index) >= VanillaRenderTargets()) {
 					failed = true;
 					return nullptr;
 				}
@@ -458,26 +476,26 @@ namespace DCLF::MaterialPort
 		auto readByte = [&](std::uintptr_t a_offset) { return *reinterpret_cast<const std::uint8_t*>(raw(a_offset)); };
 		auto readBytes = [&](void* a_out, std::uintptr_t a_offset, std::size_t a_bytes) { std::memcpy(a_out, raw(a_offset), a_bytes); };
 
-		frame.techniqueByte12 = readByte(0x2032fdb);
-		frame.techniqueByte7 = readByte(0x2035500);
-		readBytes(&frame.textureTransformBuffer, 0x2033180, sizeof(std::uint32_t));
-		frame.lodTexParamsZ = readByte(0x2032fda);
-		frame.landSnowZ = readByte(0x2035548);
-		readBytes(&frame.landSnowDivisor, 0x20355f0, sizeof(std::int32_t));
-		readBytes(frame.ambientSpecular.data(), 0x203315c, sizeof(float) * 4);
+		frame.techniqueByte12 = readByte(kTechniqueByte12);
+		frame.techniqueByte7 = readByte(kTechniqueByte7);
+		readBytes(&frame.textureTransformBuffer, kTextureTransformBuffer, sizeof(std::uint32_t));
+		frame.lodTexParamsZ = readByte(kLodTexParamsZ);
+		frame.landSnowZ = readByte(kLandSnowZ);
+		readBytes(&frame.landSnowDivisor, kLandSnowDivisor, sizeof(std::int32_t));
+		readBytes(frame.ambientSpecular.data(), kAmbientSpecularGlobal, sizeof(float) * 4);
 		static const bool ambientSpecularRemoved = [] {
-			// The site as the fix computes it (its ID and offset).
-			const auto* code = reinterpret_cast<const std::uint8_t*>(REL::RelocationID(100563, 107298).address() + 0x8cf);
+			// The site as the fix computes it (its ID and offset: +0x8cf in AE, +0x713 in SE, the same 0x20-byte AmbientSpecular write).
+			const auto* code = reinterpret_cast<const std::uint8_t*>(REL::RelocationID(100563, 107298).address() + (REL::Module::IsSE() ? 0x713 : 0x8cf));
 			return std::all_of(code, code + 0x20, [](std::uint8_t a_byte) { return a_byte == 0x90; });
 		}();
 		frame.ambientSpecularWritten = !ambientSpecularRemoved;
-		readBytes(&frame.snowRim[0], 0x2035590, sizeof(float));
-		readBytes(&frame.snowRim[1], 0x20355a8, sizeof(float));
-		readBytes(&frame.snowRim[2], 0x20355c0, sizeof(float));
-		frame.snowRimW = readByte(0x20355d8);
-		readBytes(frame.characterLight.data(), 0x203316c, sizeof(float) * 4);
-		frame.fullBright = readByte(0x20330a6);
-		readBytes(&frame.characterLightTarget, 0x2033db0, sizeof(std::int32_t));
+		readBytes(&frame.snowRim[0], kSnowRim0, sizeof(float));
+		readBytes(&frame.snowRim[1], kSnowRim1, sizeof(float));
+		readBytes(&frame.snowRim[2], kSnowRim2, sizeof(float));
+		frame.snowRimW = readByte(kSnowRimW);
+		readBytes(frame.characterLight.data(), kCharacterLightGlobal, sizeof(float) * 4);
+		frame.fullBright = readByte(kFullBright);
+		readBytes(&frame.characterLightTarget, kCharacterLightTarget, sizeof(std::int32_t));
 
 		// The shader object's IBL colour: x at +0xcc, then +0xd0.. or +0xe0.. by the byte at +0xf0 (SetupMaterial reads 16 bytes and
 		// writes the first three).
@@ -487,10 +505,10 @@ namespace DCLF::MaterialPort
 			std::memcpy(&frame.ibl[1], shader + (*reinterpret_cast<const std::uint8_t*>(shader + 0xf0) ? 0xd0 : 0xe0), sizeof(float) * 3);
 		}
 
-		frame.envMaskDefaultView = ViewOf(*reinterpret_cast<const void* const*>(raw(0x328ccb8)));
+		frame.envMaskDefaultView = ViewOf(*reinterpret_cast<const void* const*>(raw(kEnvMaskDefault)));
 		// The renderer's render targets: SetupMaterial reads the SRV at 0x143289230 + 0x30 * index (1414dcdc9, 1414dcee8).
-		for (std::uint32_t i = 0; i < kVanillaRenderTargets; ++i)
-			frame.renderTargetViews[i] = *reinterpret_cast<ID3D11ShaderResourceView* const*>(raw(0x3289230 + 0x30 * i));
+		for (std::uint32_t i = 0, count = VanillaRenderTargets(); i < count; ++i)
+			frame.renderTargetViews[i] = *reinterpret_cast<ID3D11ShaderResourceView* const*>(raw(kRenderTargetViews + 0x30 * i));
 		frame.sampled = true;
 		return frame;
 	}

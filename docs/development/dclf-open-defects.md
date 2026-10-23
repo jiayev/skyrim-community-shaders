@@ -242,18 +242,12 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 -   **Mirror parity under lane mode flags late or missed node fields with movement.** This is likely asynchronous timing rather than
     a missed writer, but it is not attributed. (The collision-body misses were `bhkWorld::InitHavok`'s, now hooked: see the
     validation doc's engine bugs.)
--   **Mirror parity: hidden bits the engine flips within a frame (`node hidden` missed, 1-3 a window).** `Water`,
-    `DefaultProceduralWater` and the player's `Skeleton.nif`: `CS_DCLF_MIRROR_WATCH=missed:hidden` caught each write in SWF's own store
-    stubs (so events fire), in pairs, from `Main::Draw` (`0x140644638`, the first-person skeleton) and `TESWaterReflections::Update`
-    (`0x140520a91`, around its cube faces). The probe samples between the hide and the show. Not a missed writer; the check needs
-    those frame-local hides left out (`FrameGlobals::cullHidden` names them).
--   **Mirror parity: alpha thresholds that change with no event (`alpha threshold` missed, 35-60 a window).** On flora LOD-level
-    meshes (`L1_FloraLavender01:0 - L2_FloraLavender01:0`, `FloraDragonsTongue02`), flags `0x92ec`, the mirror's threshold 128 and
-    the live 160. Not a Community Shaders writer. `CS_DCLF_MIRROR_WATCH=alpha:<name>` armed at capture on three of them saw no write
-    in 600 frames each, and `missed:alpha threshold` saw no later write either, so the change is made once, on instances the
-    by-name arming did not pick. **Next:** arm on geometries whose alpha has flags `0x92ec` and threshold 128, or trace the
-    executable's byte stores to `[reg+0x32]` near an `NiAlphaProperty` flags access (31 sites; `FUN_1414a9ff0`, `FUN_1414a96c0`,
-    `FUN_1404fdcf0` among them).
+-   **Mirror parity: a node's current fade missed (`node current fade`, 0-2 a window).** Run h1 (2026-10-23, the Whiterun save,
+    turning): animation objects an NPC holds (`AnimObjectSellPotion`, `AnimObjectBucket`, `Weapon  (00013986)`), currentFade a
+    fade step apart (0.9876 against 0.988), captured on a loader thread. Likely the cull's per-frame fade step between the probe
+    and the fade update's event; `CS_DCLF_MIRROR_WATCH=parity:current` can name the writer.
+-   **Mirror parity: single hidden bits missed (`node hidden`, 0-1 a window).** Run h1: `SHIELD` once, and once a node with no
+    reference (which the compatibility monitor counted as an offender). Not attributed: `missed:hidden` names the next writer.
 -   **Not reproduced on the Whiterun save:** walk parity's cooking spit, the frame values' moved-only clutter rows and
     `<- FADE INPUT` were 0 there (walk, moved-only and fade parity clean); they need the tree-forest route's save, where
     `transform:` and `fade:` watches can name their writers.
@@ -274,6 +268,17 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     checks a window). The table rewrites an entry only when its verdict or signature changes (`UpdateLightCandidates`). Before
     the change, every load rebuilt the tables from nothing. The run before the change was not repeated. Nothing else failed in
     that run, and the death-reload run (die3) showed no such failure.
+-   **SE 1.5.97 route: Lighting materials the port leaves native (`<- MATERIAL PORT`).** Three consecutive windows at the same point
+    of the snow route (45, 122 and 11 uncovered, identical in two runs): plain `BSLightingShaderMaterial` (160 bytes) drawn with the
+    MultiIndexSparkle technique (pass descriptor 0xe008201). SetupMaterial (AE 0x1414dc310, case 0xe) reads SparkleParams at
+    +0xa0..+0xac unconditionally, past the plain material's end; the port refuses that read, so those objects stay the engine's.
+    Content of the route (snow), not shown to be SE's.
+-   **SE 1.5.97 route: skin wetness rows (`shading ... wetness <- DIFFER`).** Two windows a run, 1-2 of about 500 actor meshes. Not
+    investigated; the route's weather moves the wetness.
+-   **Tree wind parity: TreeParams of zeros (`<- TREE WIND`).** One window in most SE runs (4-18 of 64 members; TreeParams (0, 0, 0, 0),
+    once a reused slot's other values). The check reads the buffer the frame before wrote (the one this frame's draws read) for the
+    current members: likely members whose entry that dispatch did not write yet (a tree joined or its slot reused this frame), drawn
+    with no sway for a frame. Not confirmed.
 -   **Long-standing flags**, each seen in some runs: `<- CUT`, the PS25 `<- MATERIAL PORT` race and `<- FADE`. (NO CASCADES fired in
     every interior window, where the sun does not accumulate: it now counts exterior frames only. Not seen on the tree-forest route.)
 -   **Seen once, watch for a repeat:** capture parity's "2 tracked but excluded" while NPCs crowded the view (the report now breaks
@@ -311,6 +316,10 @@ The cache's per-light `LocalShadow` flag, its `FirstPerson` / `WorldEyePosition`
 `LocalShadowData` buffer are untested under DCLF. DCLF's own StrictLightData supplies only `RoomIndex` and `ShadowBitMask`.
 
 ## Outside DCLF
+
+-   **SE 1.5.97: legacy FullScreenBlur adapters are not installed.** Every SE 1.5.97 run logs "Legacy FullScreenBlur stage-count
+    opcode contexts do not match the verified 1.5.97/1.6.1170 sequences" and installs no blur adapters, with or without DCLF.
+    **Next:** compare the opcode contexts against the SE executable.
 
 -   **Frame generation is not separated from graph epochs.** `Streamline::EvaluateFSRFrameGen` and the DLSS-G path do not call
     `Upscaling::SeparateFromGraphEpochs()` (`render-graph.md`, "Hazard: external Vulkan work directly after a graph epoch"). Frame

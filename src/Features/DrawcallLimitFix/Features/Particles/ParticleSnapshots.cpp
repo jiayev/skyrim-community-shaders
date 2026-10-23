@@ -29,13 +29,13 @@ namespace DCLF::Features::Particles
 		constexpr std::size_t kSceneGraphCamera = 0x128;
 		// The renderer's particle quads (FUN_140e4d280, at its initialisation): the quad index list (R16, 0x800 quads of 0,1,2 0,2,3) and
 		// the texture-coordinate stream (half2, the corners (0,1) (1,1) (1,0) (0,0) of each quad), both immutable from then on.
-		constexpr std::uintptr_t kQuadIndices = 0x3286a40;
-		constexpr std::uintptr_t kQuadTexcoords = 0x3286a48;
+		constexpr Engine::Offset kQuadIndices{ 0x3286a40, 0x3025f38 };
+		constexpr Engine::Offset kQuadTexcoords{ 0x3286a48, 0x3025f40 };
 		// NiParticleSystem's vtable slots UpdateDownwardPass and UpdateSelectedDownwardPass, and what they hold (AE 0x140dd48a0, 0x140dd4910).
 		constexpr std::size_t kUpdateDownwardSlot = 0x2C;
 		constexpr std::size_t kUpdateSelectedSlot = 0x2D;
-		constexpr std::uintptr_t kUpdateDownward = 0xdd48a0;
-		constexpr std::uintptr_t kUpdateSelected = 0xdd4910;
+		constexpr Engine::Offset kUpdateDownward{ 0xdd48a0, 0xd034a0 };
+		constexpr Engine::Offset kUpdateSelected{ 0xdd4910, 0xd03510 };
 		// NiParticles +0x160: four distances (ushort) of the draw's per-particle fade by the camera's distance (FUN_140d40ba0).
 		constexpr std::size_t kParticlesFadeDistances = 0x160;
 		// FUN_140e51320's constants: a rotated particle whose faded alpha is at most this is drawn with no size (DAT_1417743ec); the colour

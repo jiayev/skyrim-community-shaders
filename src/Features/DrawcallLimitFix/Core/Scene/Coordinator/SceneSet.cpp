@@ -2060,6 +2060,7 @@ namespace DCLF::Scene
 		{
 			ZoneScopedN("CS.DCLF.Scene.PublishTables.Retirement");
 			snapshot.retirementHold = retirement.Publish();
+			snapshot.publishedSequence = publicationSequence;
 		}
 		publishedTables = target;
 		++publication.published;

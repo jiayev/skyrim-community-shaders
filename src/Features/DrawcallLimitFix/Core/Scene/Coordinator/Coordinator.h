@@ -343,8 +343,21 @@ namespace DCLF
 		std::string TakeRetirementReport()
 		{
 			const auto s = std::exchange(retirementStats, RetirementStats{});
-			return fmt::format("{} retired, {} recycled in {} batches, {} dropped by a clear; {} object slots retiring", s.retired, s.recycled, s.batches, s.dropped,
-				tables.objectsRetiring);
+			// The snapshots held past the pool (the oldest holds every node after its own): by publication, with their holders' count.
+			std::vector<std::tuple<std::uint64_t, long, const void*>> held;
+			for (const auto& pooled : tablesPool)
+				if (pooled.use_count() > 1 && pooled != publishedTables)
+					held.emplace_back(pooled->publishedSequence, pooled.use_count() - 1, pooled.get());
+			std::sort(held.begin(), held.end());
+			std::string heldText;
+			for (std::size_t i = 0; i < held.size() && i < 8; ++i)
+				heldText += fmt::format(" {}:{}", std::get<0>(held[i]), std::get<1>(held[i]));
+			if (!held.empty())
+				heldText += fmt::format(" (oldest at {})", std::get<2>(held.front()));
+			return fmt::format("{} retired, {} recycled in {} batches, {} dropped by a clear; {} object slots retiring; {} snapshots held past the pool "
+							   "(publication:holders){}, published {}",
+				s.retired, s.recycled, s.batches, s.dropped, tables.objectsRetiring, held.size(), heldText,
+				publishedTables ? publishedTables->publishedSequence : 0);
 		}
 		TablesPublication TakeTablesPublication() { return std::exchange(tablesPublication, TablesPublication{ .pool = tablesPool.size() }); }
 		const Stats& GetStats() const { return stats; }

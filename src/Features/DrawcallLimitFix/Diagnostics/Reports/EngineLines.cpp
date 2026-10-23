@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/ReleaseGuard.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Engine/WindowWriters.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
@@ -20,9 +21,17 @@ namespace DCLF::Reports
 		const auto c = EngineReadWindow::Take();
 		if (!c.any)
 			return {};
-		return fmt::format("[DCLF] engine-read window: {} closes, {} of them waited for items in flight ({:.1f} us in all, max {:.1f} us); {} leases refused (work left for the next window); "
-						   "scene work engine accesses without a lease {}{}{}",
-			c.closes, c.closesWaited, c.waitedUs, c.waitedMaxUs, c.refused, c.unleased, c.unleased ? " <- LANE ENGINE ACCESS; first: " : " <- OK",
+		// The cell animations job's update inside the window (WindowWriters.h): its waits for the frame's sampling, its suspensions'.
+		std::string writers;
+		if (WindowWriters::Installed()) {
+			const auto w = WindowWriters::Take();
+			writers = fmt::format("; cell animations {} updates, {} waited for the frame values' sampling ({} us in all, max {} us), {} suspensions, {} of them waited for "
+								  "items in flight ({:.0f} us in all, max {:.0f} us)",
+				w.runs, w.waited, w.waitedUs, w.waitedMaxUs, c.suspends, c.suspendsWaited, c.suspendWaitedUs, c.suspendWaitedMaxUs);
+		}
+		return fmt::format("[DCLF] engine-read window: {} closes, {} of them waited for items in flight ({:.1f} us in all, max {:.1f} us){}; {} leases refused (work left for the "
+						   "next window); scene work engine accesses without a lease {}{}{}",
+			c.closes, c.closesWaited, c.waitedUs, c.waitedMaxUs, writers, c.refused, c.unleased, c.unleased ? " <- LANE ENGINE ACCESS; first: " : " <- OK",
 			c.unleasedFirst ? c.unleasedFirst : "");
 	}
 

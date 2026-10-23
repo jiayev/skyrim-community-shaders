@@ -544,6 +544,7 @@ namespace DCLF
 		std::uint32_t CountLive() const { return static_cast<std::uint32_t>(objects.size() - objectFree.size() - objectsRetiring); }
 		// What the publication made from these tables holds of the retirement chain (published snapshots only).
 		std::shared_ptr<const void> retirementHold;
+		std::uint64_t publishedSequence = 0;  // the scene publication it was published with (the retirement report's held snapshots)
 		/** @brief Grows every per-object array to a_count, the new slots free. */
 		void GrowObjects(std::size_t a_count);
 		/** @brief Returns a slot to the free state (not to the free list). */

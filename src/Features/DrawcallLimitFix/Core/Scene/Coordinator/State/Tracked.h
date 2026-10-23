@@ -68,6 +68,7 @@ namespace DCLF::Scene
 				std::uint8_t fadeState = 0;
 				bool interior = false;
 				bool alphaBelowOne = false;
+				std::uint32_t alphaState = 0;  // the alpha's flags and threshold (LeafView::AlphaState): the static flags' alpha test bits
 				std::uint32_t technique = 0;
 				std::uint32_t subPass = 0;
 				std::uint32_t hint = 0;

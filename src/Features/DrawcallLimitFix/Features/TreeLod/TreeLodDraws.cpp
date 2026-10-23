@@ -39,7 +39,7 @@ namespace DCLF::Features::TreeLod
 
 		const void* ProgramSource()
 		{
-			return Engine::Global<RE::BSShader*>(0x33dcd10);  // the BSDistantTreeShader
+			return Engine::Global<RE::BSShader*>(Address::kDistantTreeShader);
 		}
 
 		// The engine's tree LOD shapes: their shader property is a BSDistantTreeShaderProperty.

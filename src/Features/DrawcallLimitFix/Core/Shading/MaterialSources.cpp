@@ -197,7 +197,7 @@ namespace DCLF::MaterialSources
 		// What SetupMaterial binds at t11 (MaterialPortVanilla: the render target at 0x142033db0 while not negative; TruePBR's hook:
 		// the character light image space texture's), from the frame's sample: no engine read.
 		const auto& vanilla = a_frame.vanilla;
-		if (vanilla.characterLightTarget >= 0 && static_cast<std::uint32_t>(vanilla.characterLightTarget) < MaterialPort::kVanillaRenderTargets)
+		if (vanilla.characterLightTarget >= 0 && static_cast<std::uint32_t>(vanilla.characterLightTarget) < MaterialPort::VanillaRenderTargets())
 			if (auto* view = vanilla.renderTargetViews[static_cast<std::size_t>(vanilla.characterLightTarget)])
 				return view;
 		const auto& hook = a_frame.hook;

@@ -17,7 +17,8 @@ namespace DCLF::MirrorWatch
 	/**
 	 * @brief node:<name>: a node at its world attach's capture, its collision object (+0x40), body, motion type and flags (+0xF4, the
 	 * frame's bits ignored). transform:<name>: its local rotation's first entry and translation. fade:<name>: its fadeAmount, +0x109 and
-	 * currentFade. fadetype:<name>: a fade node's LOD type. alpha:<name>: a geometry's alpha flags and threshold. Every recorded change
+	 * currentFade. fadetype:<name>: a fade node's LOD type. alpha:<name>: a geometry's alpha flags and threshold. alphas:<form ID>|...:
+	 * the alpha flags and threshold under up to four references at once (their first geometries with one), until the run ends. Every recorded change
 	 * carries its writer's callers.
 	 */
 	void ArmNode(const RE::NiAVObject* a_node);

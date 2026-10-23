@@ -8,10 +8,12 @@ struct ID3D11ShaderResourceView;
 namespace DCLF::MaterialPort
 {
 	/**
-	 * @brief Render target slots SetupMaterial can index (the renderer's array, SRVs at 0x143289230 + 0x30 * index): 116 in AE
-	 * (CommonLib's RENDER_TARGETS::kTOTAL comment). t0 takes a material's own index (+0x50), t11 the character light's.
+	 * @brief Render target slots SetupMaterial can index (the renderer's array, SRVs at 0x143289230 + 0x30 * index): 116 in AE,
+	 * 114 in SE (CommonLib's RENDER_TARGETS::kTOTAL comment). t0 takes a material's own index (+0x50), t11 the character light's.
+	 * kVanillaRenderTargetCapacity sizes the arrays; VanillaRenderTargets() is the running runtime's count.
 	 */
-	inline constexpr std::uint32_t kVanillaRenderTargets = 116;
+	inline constexpr std::uint32_t kVanillaRenderTargetCapacity = 116;
+	inline std::uint32_t VanillaRenderTargets() { return REL::Module::IsSE() ? 114u : 116u; }
 
 	/**
 	 * @brief The per-frame sources vanilla SetupMaterial reads (the S, G and R rows of the engine notes' table), sampled by the render
@@ -36,7 +38,7 @@ namespace DCLF::MaterialPort
 		std::int32_t landSnowDivisor = 0;
 
 		// G: AmbientSpecularTintAndFresnelPower (PS 6, AmbientSpecular): 16 bytes at 0x14203315c. Not written when SSE Engine Fixes'
-		// BSLightingAmbientSpecular fix NOPs the write out (SetupMaterial +0x8CF, 0x20 bytes; it writes PS 6 in SetupGeometry instead).
+		// BSLightingAmbientSpecular fix NOPs the write out (SetupMaterial +0x8CF in AE, +0x713 in SE, 0x20 bytes; it writes PS 6 in SetupGeometry instead).
 		std::array<float, 4> ambientSpecular{};
 		bool ambientSpecularWritten = true;
 		// G: SnowRimLightParameters (PS 34, Snow): 0x142035590, 0x1420355a8, 0x1420355c0; .w 1 when the byte at 0x1420355d8 is set.
@@ -61,7 +63,7 @@ namespace DCLF::MaterialPort
 		ID3D11ShaderResourceView* envMaskDefaultView = nullptr;
 
 		// R: every render target's SRV (0x143289230 + 0x30 * index), for t0 (a material's +0x50) and t11.
-		std::array<ID3D11ShaderResourceView*, kVanillaRenderTargets> renderTargetViews{};
+		std::array<ID3D11ShaderResourceView*, kVanillaRenderTargetCapacity> renderTargetViews{};
 	};
 
 	/** @brief Render thread, the frame's start. */
