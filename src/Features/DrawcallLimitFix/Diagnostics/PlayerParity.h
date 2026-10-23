@@ -20,12 +20,15 @@ namespace DCLF::Diagnostics::PlayerParity
 	{
 		std::uint32_t form = 0;    // the (first) owning reference's form ID (0: an object above any reference's root, a cell's or the world's)
 		std::uint32_t references = 1;  // the references it was found under: a property or an alpha is shared by every instance of its mesh
-		std::uint8_t type = 0;     // the record type (SceneMirror::kTypeNames: node, geometry, property, alpha)
+		std::uint8_t type = 0;     // the record type (SceneMirror::kTypeNames: node, geometry, property, alpha), or kLeak, kEvicted
 		std::uint32_t fields = 0;  // the fields' bits that differed (the record type's kFieldNames)
 		std::uint64_t count = 0;   // the probes that found them missed
 		std::uint32_t firstFrame = 0, lastFrame = 0;
 		std::string example;       // the first difference, as the mirror parity logs it
 	};
+
+	/** @brief The offender kinds besides the mirror's record types: a geometry drawn by the engine too, a subtree gone with no detach. */
+	inline constexpr std::uint8_t kLeak = 4, kEvicted = 5;
 
 	/** @brief The offenders since the monitor last started or was cleared, oldest first; any thread. */
 	struct Offenders
@@ -51,6 +54,9 @@ namespace DCLF::Diagnostics::PlayerParity
 
 	/** @brief The coordinator, the mirror check: a missed difference on an object of reference a_form. */
 	void NoteMissed(const void* a_object, std::uint32_t a_form, std::uint8_t a_type, std::uint32_t a_fields, std::string_view a_example);
+
+	/** @brief Render thread, while Active: a native pass of a geometry DCLF draws (a leak), of reference a_form; taken at the next check. */
+	void NoteLeak(std::uint32_t a_form, std::string a_example);
 
 	/** @brief The coordinator, after each mirror check: the offenders published when they changed (a clear the menu asked for applied). */
 	void NoteCheck();

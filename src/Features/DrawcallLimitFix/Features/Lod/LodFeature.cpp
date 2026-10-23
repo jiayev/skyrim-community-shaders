@@ -77,9 +77,9 @@ namespace DCLF::Features::Lod
 			const auto gatesSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LOD_GATES", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::Zero,
 				.description = "0: the engine's LOD swaps ungated (T6b5: by default an object or terrain LOD swap keeps the outgoing level shown, and the incoming hidden, until DCLF's claims cover the incoming)",
 				.before = "CS_DCLF_SHADOWS" });
-			const auto objects = a_context.RegisterToggle({ .name = "object LOD", .label = "Object LOD: distant objects (CS_DCLF_LOD_OBJECTS)", .seed = objectsSwitch,
+			const auto objects = a_context.RegisterToggle({ .name = "object LOD", .label = "Object LOD: distant objects", .seed = objectsSwitch,
 				.entersClassification = true, .after = "refraction" });
-			const auto terrain = a_context.RegisterToggle({ .name = "terrain LOD", .label = "Terrain LOD: distant land (CS_DCLF_LOD_TERRAIN)", .seed = terrainSwitch,
+			const auto terrain = a_context.RegisterToggle({ .name = "terrain LOD", .label = "Terrain LOD: distant land", .seed = terrainSwitch,
 				.entersClassification = true, .after = "refraction" });
 			// Object LOD (the sub-index shapes' eligibility, the LOD object techniques and flags) and terrain LOD (the LOD land techniques and
 			// flags), each an object class; either lists the LOD root as a category node, and both (with the swaps gated) let a view's faces

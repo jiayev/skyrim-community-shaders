@@ -15,7 +15,7 @@ namespace DCLF::Features::Grass
 			const auto grass = a_context.RegisterSwitch({ .name = "CS_DCLF_GRASS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
 				.description = "0: grass stays native (Grass Optimizations' or the engine's) (live toggle's seed)", .after = "CS_DCLF_LOD_TREES" });
 			// Right after tree LOD's. Its change drops no classification cache: grass is drawn from the mirror, not classified.
-			const auto toggle = a_context.RegisterToggle({ .name = "grass", .label = "Grass (CS_DCLF_GRASS)", .seed = grass, .after = "tree LOD" });
+			const auto toggle = a_context.RegisterToggle({ .name = "grass", .label = "Grass", .seed = grass, .after = "tree LOD" });
 			// The grass shapes, the Grass draw family's while the toggle is on (its decision; the revisions' grass pipelines).
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Grass, .toggle = toggle });
 			// Its tables and their uploads, its passes, the family over them, its report lines.

@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
@@ -96,6 +97,12 @@ namespace DCLF
 								if (auto* player = RE::PlayerCharacter::GetSingleton())
 									player->DrawWeaponMagicHands(draw);
 							});
+						return;
+					}
+					// "dclf:kill-scene-pump": the scene pump stopped for good, as a pass throwing past its handler stops it, for the watchdog
+					// (DrawcallLimitFix::WatchScenePump) to hand the game back.
+					if (command == "dclf:kill-scene-pump") {
+						Scene::Coordinator::Get().ThrowNextScenePass();
 						return;
 					}
 					// "dclf:compat=0|1": the compatibility monitor off or on, as its menu checkbox; "dclf:compat-report": its report written.

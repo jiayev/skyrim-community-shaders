@@ -20,7 +20,7 @@ namespace DCLF::Features::Landscape
 			const auto terrainSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_MTLAND", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
 				.description = "0: terrain stays native (live toggle's seed)", .before = "CS_DCLF_FORWARD" });
 			// Where Core's was: right after the projected's (Integrations/TerrainBlending's "terrain under TB", which needs it, after it).
-			const auto terrain = a_context.RegisterToggle({ .name = "terrain", .label = "Terrain (CS_DCLF_MTLAND)", .seed = terrainSwitch,
+			const auto terrain = a_context.RegisterToggle({ .name = "terrain", .label = "Terrain", .seed = terrainSwitch,
 				.entersClassification = true, .after = "projected" });
 			// MTLand and MTLandLODBlend: eligible while the toggle is on (and, while Terrain Blending holds the terrain, its toggle too:
 			// Integrations/TerrainBlending's gate); their objects take the land-blend extras (LandBlendParams, Core's per-object VS rows).

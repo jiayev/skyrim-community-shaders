@@ -16,16 +16,16 @@ namespace DCLF
 		constexpr ToggleInfo kToggles[] = {
 			// (Features/Skins' "skinned", which opens the "Object classes" heading, is listed here, before the projected's, with
 			// Features/TreeWind's "trees" and Features/Decals' toggles after it.)
-			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV (CS_DCLF_PROJECTED_UV)", nullptr, true, {} },
+			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV", nullptr, true, {} },
 			// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's here; then
 			// Features/Forward's "forward", Features/Effects' "effects" after it, and Features/Forward's "refraction" after that.)
 			// (Features/Particles', Features/Billboards' and Features/SwitchNodes' toggles follow the refraction's here, then Features/Lod's
 			// "object LOD" and "terrain LOD" and Features/TreeLod's "tree LOD"; then Features/Skins' "skin partitions" after the tree LOD's,
 			// and Features/Actors' "actors" after it.)
-			{ &S::shadows, Switch::Shadows, kOn, "shadows", "Shadow views", "Draw the shadow views (CS_DCLF_SHADOWS)", nullptr, false, {} },
+			{ &S::shadows, Switch::Shadows, kOn, "shadows", "Shadow views", "Draw the shadow views", nullptr, false, {} },
 			// (Features/Shadows/Sun's "skip sun accumulation", then its "exclude sun entries", follow the shadows' here.)
 			// It needs the sun's entry exclusion by name (SeedRegistered resolves it): without Features/Shadows/Sun it never takes effect.
-			{ &S::excludePrimaryEntries, Switch::PrimaryExclude, kOn, "exclude primary entries", {}, "Take DCLF's objects out of the engine's main camera cull (CS_DCLF_PRIMARY_EXCLUDE)",
+			{ &S::excludePrimaryEntries, Switch::PrimaryExclude, kOn, "exclude primary entries", {}, "Take DCLF's objects out of the engine's main camera cull",
 				"The main camera's cull and registration skip every reference DCLF draws entirely; DCLF builds their main passes itself and runs their fade updates.", false,
 				{}, false, {}, {}, {}, { "exclude sun entries" } },
 			// (Features/OcclusionMaps' "sky occlusion" and "precipitation occlusion" follow here: the first feature toggles registered, their

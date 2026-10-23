@@ -136,7 +136,7 @@ namespace DCLF::Features::Lod::Gates
 				observed.holes ? " <- GATE HOLE" : "", observed.refusedHoles, observed.coverage, observed.firstCoverage.empty() ? "" : ", first ", observed.firstCoverage,
 				observed.coverage ? " <- GATE COVERAGE" : "");
 		if (LodGates::Enabled())
-			if (const auto engine = EngineLine(Reports::kInterval); !engine.empty())
+			if (const auto engine = EngineLine(Reports::Interval()); !engine.empty())
 				logger::info("{}", engine);
 		// The releases and their checks taken (the observers' with them).
 		rs = {};

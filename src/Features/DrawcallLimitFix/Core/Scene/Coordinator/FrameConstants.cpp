@@ -102,7 +102,7 @@ namespace DCLF::Scene
 		// pass's frame in a later one; the coordinator's clock may skip frame numbers), whatever the passes a frame.
 		auto& r = materialRecordStats;
 		auto& s = materialSnapshotStats;
-		const std::uint32_t window = sceneFrame / Reports::kInterval;
+		const std::uint32_t window = sceneFrame / Reports::Interval();
 		const bool parityRan = materialDedupParity.checks || sharedBindings.work.parity.checks || lookupsResolve.pipelineParity.checks;
 		if (window != materialReportWindow && (Diagnostics::Observe().stats || parityRan)) {
 			materialReportWindow = window;

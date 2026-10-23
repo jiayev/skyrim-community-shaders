@@ -37,6 +37,12 @@ struct DrawcallLimitFix : Feature
 	virtual void EarlyPrepass() override;
 	virtual void DrawSettings() override;
 	/**
+	 * @brief The menu's live toggles by name, the culling mode and the compatibility monitor. A saved value seeds a toggle only where its
+	 * CS_DCLF_* switch is unset, so a switch (a validation run's) always wins.
+	 */
+	virtual void SaveSettings(json& o_json) override;
+	virtual void LoadSettings(json& o_json) override;
+	/**
 	 * @brief CS's "Clear shader cache" (the menu's, and the shader watcher's full clear; any thread): every live render graph pipeline built
 	 * again from the shader files as they are now (RenderGraphRuntime::RequestShaderReload; docs/development/dclf-hot-reload.md).
 	 */
@@ -215,6 +221,15 @@ private:
 	// flips): either way nothing may keep drawing, skipping or withholding.
 	void UpdateActive();
 	void SetActive(bool a_active);
+	// The scene pump's watchdog (BeginSceneFrame, while running): a pump that stopped turns DCLF off for the session (faulted: UpdateActive
+	// leaves it off) with the reason in the menu, rather than every frame keeping the last snapshot.
+	void WatchScenePump();
+	bool faulted = false;
+	bool pumpLagging = false;
+	std::chrono::steady_clock::time_point pumpLagSince;
 	// Why DCLF is off for the session (not AE, or the render graph could not come up); shown in the menu.
 	std::string unavailableReason;
+	// The settings LoadSettings read, applied to the requested toggles once they are seeded (PostPostLoad), and again at each load after.
+	json savedSettings;
+	void ApplySavedSettings();
 };

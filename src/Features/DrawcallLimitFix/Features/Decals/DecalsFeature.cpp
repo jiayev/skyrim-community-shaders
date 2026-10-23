@@ -19,10 +19,10 @@ namespace DCLF::Features::Decals
 				.description = "0: multi-index shapes' main passes stay native (live toggle's seed)", .after = "CS_DCLF_SKIN_PARTITIONS" });
 			// Decals (accumulation hints 2 and 3), drawn by the second pass: an object class. After the skinned (and the trees, registered
 			// before), the layers after it.
-			const auto decals = a_context.RegisterToggle({ .name = "decals", .label = "Decals (CS_DCLF_DECALS)", .seed = decalsSwitch,
+			const auto decals = a_context.RegisterToggle({ .name = "decals", .label = "Decals", .seed = decalsSwitch,
 				.entersClassification = true, .after = "skinned" });
 			// Multi-index shapes' main passes: the shape, and its layer (the additional property's passes, hint 12) as decal group 3.
-			const auto layers = a_context.RegisterToggle({ .name = "multi-index layers", .label = "Multi-index shapes: cave walls with an ice or snow layer (CS_DCLF_LAYERS)",
+			const auto layers = a_context.RegisterToggle({ .name = "multi-index layers", .label = "Multi-index shapes: cave walls with an ice or snow layer",
 				.seed = layersSwitch, .entersClassification = true, .after = "skinned", .needs = { "decals" } });
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Decal, .toggle = decals });
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Layer, .toggle = layers });

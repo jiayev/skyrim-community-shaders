@@ -22,14 +22,14 @@ namespace DCLF::Features::Forward
 			// visible set, back to front, before the engine's own blended draws (on by default: CS_DCLF_FORWARD=0 seeds it off). Where Core's
 			// was: before the shadows', after the projected's (Features/Landscape's "terrain" and Integrations/TerrainBlending's "terrain
 			// under TB" after it); Features/Effects' "effects" after it.
-			const auto forward = a_context.RegisterToggle({ .name = "forward", .label = "Blended objects: the forward epoch (CS_DCLF_FORWARD)",
+			const auto forward = a_context.RegisterToggle({ .name = "forward", .label = "Blended objects: the forward epoch",
 				.tooltip = "T7d: DCLF draws blended Lighting geometry itself, sorted back to front on the GPU, just before the engine's own blended draws (effects, particles). On by default (validated w174/w175).",
 				.seed = forwardSwitch, .entersClassification = true, .before = "shadows" });
 			// Refraction: Lighting geometry with kRefraction or kTempRefraction, whose one main pass is a Utility RENDER_NORMAL pass into the
 			// refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward; on by
 			// default: CS_DCLF_REFRACTION=0 seeds it off). After the effects' (Features/Particles', Features/Billboards', Features/SwitchNodes',
 			// Features/Lod's and Features/TreeLod's toggles after it).
-			const auto refraction = a_context.RegisterToggle({ .name = "refraction", .label = "Refraction: heat haze, invisibility (CS_DCLF_REFRACTION)",
+			const auto refraction = a_context.RegisterToggle({ .name = "refraction", .label = "Refraction: heat haze, invisibility",
 				.tooltip = "T7d: DCLF draws refraction geometry's normals into the refraction normals the engine's refraction effect warps the frame by, in the forward epoch. On by default (validated w174/w175).",
 				.seed = refractionSwitch, .entersClassification = true, .after = "effects", .needs = { "forward" } });
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::Forward, .toggle = forward });

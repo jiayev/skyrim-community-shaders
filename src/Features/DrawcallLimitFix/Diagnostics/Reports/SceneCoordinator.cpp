@@ -62,7 +62,7 @@ namespace DCLF::Reports
 				if (now.calls != before.calls)
 					line += fmt::format("{}{}: {} calls, {} chunks ({} by helpers), {} blocked {:.3f} ms/frame (peak {:.0f} us), {} boosts, {} idle helpers",
 						line.empty() ? "" : "; ", now.name, now.calls - before.calls, now.chunks - before.chunks, now.helperChunks - before.helperChunks,
-						now.blocked - before.blocked, double(now.blockedNanoseconds - before.blockedNanoseconds) / 1e6 / kInterval,
+						now.blocked - before.blocked, double(now.blockedNanoseconds - before.blockedNanoseconds) / 1e6 / Interval(),
 						double(now.maxBlockedNanoseconds) / 1e3, now.boosts - before.boosts, now.idleHelpers - before.idleHelpers);
 				before = now;
 			}

@@ -17,9 +17,9 @@ namespace DCLF::Features::Skins
 				.description = "0: skins of several partitions stay native (live toggle's seed)", .after = "CS_DCLF_SKINNED" });
 			// Where Core's were: the skinned first, opening the object classes (Features/TreeWind's and Features/Decals' after it), the skins of
 			// several partitions after the tree LOD's (Features/Actors' after it). Features/FirstPerson's toggle needs the skinned.
-			const auto skinned = a_context.RegisterToggle({ .name = "skinned", .label = "Skinned (CS_DCLF_SKINNED)", .section = "Object classes", .seed = skinnedSwitch,
+			const auto skinned = a_context.RegisterToggle({ .name = "skinned", .label = "Skinned", .section = "Object classes", .seed = skinnedSwitch,
 				.entersClassification = true, .before = "projected" });
-			const auto partitions = a_context.RegisterToggle({ .name = "skin partitions", .label = "Skins of several partitions: LOD trees, actor bodies (CS_DCLF_SKIN_PARTITIONS)",
+			const auto partitions = a_context.RegisterToggle({ .name = "skin partitions", .label = "Skins of several partitions: LOD trees, actor bodies",
 				.seed = partitionsSwitch, .entersClassification = true, .after = "tree LOD", .needs = { "skinned" } });
 			// Single-partition NiSkinInstance shapes, palettes from the engine; skins of several partitions (and BSDismemberSkinInstance), one
 			// draw per partition the engine would draw.

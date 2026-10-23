@@ -138,6 +138,8 @@ void DrawcallLimitFix::PostPostLoad()
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();
 	installed = true;
+	// The menu's saved toggles, now that every toggle is seeded (their switches win where set).
+	ApplySavedSettings();
 	// The coordinator's pump, from here woken by its producers (the hooks above push from now on); its passes apply the events
 	// alone until the first frame runs DCLF (SetScenePassMode).
 	DCLF::Scene::Coordinator::Get().SetScenePassMode(false, DCLF::Policy::ScenePassInline());
@@ -203,7 +205,7 @@ void DrawcallLimitFix::Reset()
 
 void DrawcallLimitFix::UpdateActive()
 {
-	if (!installed)
+	if (!installed || faulted)
 		return;
 	if (const bool wanted = loaded && !globals::state->IsFeatureDisabled(GetShortName()); wanted != switchedOn)
 		SetActive(wanted);
@@ -244,9 +246,40 @@ std::int64_t DrawcallLimitFix::Hooks::Main_Draw_Early::thunk(void* a_main)
 bool DrawcallLimitFix::BeginSceneFrame()
 {
 	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::SceneFrame);
+	if (Running())
+		WatchScenePump();
 	// Called every frame, loaded or not: the one place an unload (which stops Reset from being called) is noticed.
 	UpdateActive();
 	return DCLF::FrameDriver::Get().BeginFrame(Running(), installed);
+}
+
+void DrawcallLimitFix::WatchScenePump()
+{
+	// Every running frame's inputs wake a scene pass (FrameView::BeginFrame), and a pass ends a frame or two behind, so a frame far ahead of
+	// the last pass for long means the pump stopped (a pass threw past its handler, or hangs). The builder would never publish again and
+	// every frame keep drawing the last snapshot while the scene changes; the game is handed back for the session instead. The bounds
+	// leave room for a slow pass at a load (the frames that wait for a snapshot give up at 5 s on their own, Snapshot.cpp).
+	constexpr std::uint32_t kLagFrames = 600;
+	constexpr auto kLagTime = std::chrono::seconds(30);
+	const auto frame = DCLF::Scene::FrameView::Get().GetFrame();
+	const auto done = DCLF::IndirectDraws::Get().ScenePassDoneFrame();
+	std::string reason;
+	if (DCLF::Scene::Coordinator::Get().ScenePumpFailed())
+		reason = "the scene pump stopped (see the [DCLF] error above)";
+	else if (frame > done + kLagFrames) {
+		const auto now = std::chrono::steady_clock::now();
+		if (!std::exchange(pumpLagging, true))
+			pumpLagSince = now;
+		else if (now - pumpLagSince > kLagTime)
+			reason = fmt::format("no scene pass has ended for {} frames (the last for frame {}, now {})", frame - done, done, frame);
+	} else
+		pumpLagging = false;
+	if (reason.empty())
+		return;
+	unavailableReason = reason + "; DCLF is off for the rest of the session";
+	logger::error("[DCLF] {}", unavailableReason);
+	faulted = true;
+	SetActive(false);
 }
 
 void DrawcallLimitFix::BeforeShadowMaps()
@@ -454,30 +487,37 @@ void DrawcallLimitFix::DrawSettings()
 		ImGui::TextUnformatted("Not installed (CS_DCLF=0).");
 		return;
 	}
-	if (ImGui::Button("Reload shaders"))
-		RenderGraphRuntime::RequestShaderReload();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Builds every live render graph pipeline (DCLF's graphics pipelines, every compute program) again from Data/Shaders as it is now. The "
-							   "current pipelines draw until the new ones are swapped in at the graph's next build; one that fails to compile keeps its previous "
-							   "pipeline (the log names the error).");
-	ImGui::SameLine();
-	if (ImGui::Button("Render graph schedule"))
-		RenderGraphSchedule::OpenWindow();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Opens the persistent schedule inspector: each executable's batches per queue, their passes, the barriers before each pass and "
-							   "every cross-queue wait with its cause. The graph traces its schedule while the window is open.");
+	// The developer's tools, under a header a player can leave closed.
+	const auto drawTools = [] {
+		if (ImGui::Button("Reload shaders"))
+			RenderGraphRuntime::RequestShaderReload();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Builds every live render graph pipeline (DCLF's graphics pipelines, every compute program) again from Data/Shaders as it is now. The "
+								   "current pipelines draw until the new ones are swapped in at the graph's next build; one that fails to compile keeps its previous "
+								   "pipeline (the log names the error).");
+		ImGui::SameLine();
+		if (ImGui::Button("Render graph schedule"))
+			RenderGraphSchedule::OpenWindow();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Opens the persistent schedule inspector: each executable's batches per queue, their passes, the barriers before each pass and "
+								   "every cross-queue wait with its cause. The graph traces its schedule while the window is open.");
+	};
 	if (!switchedOn) {
 		ImGui::TextWrapped("Switched off with the feature's toggle: the game renders natively and DCLF does no frame work. Switch it back on to resume; no restart needed.");
+		if (ImGui::TreeNodeEx("Advanced")) {
+			drawTools();
+			ImGui::TreePop();
+		}
 		return;
 	}
 	DCLF::Diagnostics::PlayerParity::DrawPanel();
 	// The live toggles, for A/B comparisons without a restart. They are the REQUESTED set; the render thread applies them at the start of the next frame (Toggles.h).
 	auto& toggles = DCLF::Toggles::Get().Requested();
 	const auto active = DCLF::ActiveToggles();
-	if (ImGui::TreeNodeEx("Live toggles (A/B)", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped("Each is seeded from its CS_DCLF_* switch and applied at the next frame. A change to an object class drops the classification caches, so the frame after it re-classifies everything.");
+	if (ImGui::TreeNodeEx("What DCLF draws", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::TextWrapped("Each takes effect at the next frame, and Save Settings keeps it. What DCLF does not draw, the game draws as it would without DCLF.");
 		int cull = toggles.cullMode;
-		if (ImGui::Combo("GPU culling (CS_DCLF_CULL)", &cull, "off\0frustum\0frustum + occlusion\0"))
+		if (ImGui::Combo("GPU culling", &cull, "off\0frustum\0frustum + occlusion\0"))
 			toggles.cullMode = static_cast<std::uint8_t>(cull);
 		for (const auto& toggle : DCLF::ToggleTable()) {
 			if (!toggle.section.empty())
@@ -485,13 +525,21 @@ void DrawcallLimitFix::DrawSettings()
 			ImGui::BeginDisabled(!DCLF::Toggles::Get().Editable(toggle));
 			if (bool value = DCLF::ToggleValue(toggles, toggle); ImGui::Checkbox(toggle.label, &value))
 				DCLF::SetToggleValue(toggles, toggle, value);
-			if (toggle.tooltip)
-				if (auto _tt = Util::HoverTooltipWrapper())
+			// The tooltip names the toggle's switch, which overrides the saved setting at startup when set (validation runs).
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				if (toggle.tooltip)
 					ImGui::TextUnformatted(toggle.tooltip);
+				const auto name = toggle.member ? DCLF::SwitchName(toggle.seed) : DCLF::SwitchName(toggle.registeredSeed);
+				const auto& seed = toggle.member ? DCLF::SwitchValue(toggle.seed) : DCLF::SwitchValue(toggle.registeredSeed);
+				ImGui::TextDisabled("%.*s%s", static_cast<int>(name.size()), name.data(), seed.empty() ? "" : fmt::format(" = {} (set: it seeds this toggle, not the saved setting)", seed).c_str());
+			}
 			ImGui::EndDisabled();
 		}
 		ImGui::TreePop();
 	}
+	if (!ImGui::TreeNodeEx("Advanced"))
+		return;
+	drawTools();
 	if (ImGui::TreeNodeEx("This frame", ImGuiTreeNodeFlags_DefaultOpen)) {
 		std::string flags = fmt::format("Active: cull {}", active.cullMode);
 		for (const auto& toggle : DCLF::ToggleTable())
@@ -520,6 +568,60 @@ void DrawcallLimitFix::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
+	ImGui::TreePop();
+}
+
+void DrawcallLimitFix::SaveSettings(json& o_json)
+{
+	// Not installed: nothing was seeded, so what was loaded is kept as it was.
+	if (!installed) {
+		o_json = savedSettings;
+		return;
+	}
+	const auto& requested = DCLF::Toggles::Get().Requested();
+	json toggles = json::object();
+	for (const auto& toggle : DCLF::ToggleTable())
+		toggles[std::string(toggle.name)] = DCLF::ToggleValue(requested, toggle);
+	o_json["Toggles"] = std::move(toggles);
+	o_json["CullMode"] = requested.cullMode;
+	o_json["CompatibilityMonitor"] = DCLF::Diagnostics::PlayerParity::Requested();
+	savedSettings = o_json;
+}
+
+void DrawcallLimitFix::LoadSettings(json& o_json)
+{
+	savedSettings = o_json;
+	if (installed)
+		ApplySavedSettings();
+}
+
+void DrawcallLimitFix::ApplySavedSettings()
+{
+	if (!savedSettings.is_object())
+		return;
+	auto& requested = DCLF::Toggles::Get().Requested();
+	std::string applied;
+	if (const auto toggles = savedSettings.find("Toggles"); toggles != savedSettings.end() && toggles->is_object())
+		for (const auto& toggle : DCLF::ToggleTable()) {
+			const auto& seed = toggle.member ? DCLF::SwitchValue(toggle.seed) : DCLF::SwitchValue(toggle.registeredSeed);
+			const auto saved = toggles->find(std::string(toggle.name));
+			if (!seed.empty() || saved == toggles->end() || !saved->is_boolean() || saved->get<bool>() == DCLF::ToggleValue(requested, toggle))
+				continue;
+			DCLF::SetToggleValue(requested, toggle, saved->get<bool>());
+			applied += fmt::format("{}{} {}", applied.empty() ? "" : ", ", toggle.name, saved->get<bool>() ? 1 : 0);
+		}
+	if (const auto cull = savedSettings.find("CullMode"); cull != savedSettings.end() && cull->is_number_unsigned() && DCLF::SwitchValue(DCLF::Switch::Cull).empty() &&
+														   cull->get<std::uint32_t>() <= 2 && cull->get<std::uint8_t>() != requested.cullMode) {
+		requested.cullMode = cull->get<std::uint8_t>();
+		applied += fmt::format("{}cull {}", applied.empty() ? "" : ", ", requested.cullMode);
+	}
+	if (const auto monitor = savedSettings.find("CompatibilityMonitor"); monitor != savedSettings.end() && monitor->is_boolean() &&
+																		 DCLF::SwitchValue(DCLF::Switch::PlayerParity).empty() && monitor->get<bool>() != DCLF::Diagnostics::PlayerParity::Requested()) {
+		DCLF::Diagnostics::PlayerParity::Request(monitor->get<bool>());
+		applied += fmt::format("{}compatibility monitor {}", applied.empty() ? "" : ", ", monitor->get<bool>() ? 1 : 0);
+	}
+	if (!applied.empty())
+		logger::info("[DCLF] from the saved settings (where no switch is set): {}", applied);
 }
 
 void DrawcallLimitFix::ClearShaderCache()
@@ -594,6 +696,9 @@ void DrawcallLimitFix::DrawSettings()
 {
 	ImGui::TextWrapped("Unavailable: %s", unavailableReason.c_str());
 }
+void DrawcallLimitFix::SaveSettings(json& o_json) { o_json = savedSettings; }
+void DrawcallLimitFix::LoadSettings(json& o_json) { savedSettings = o_json; }
+void DrawcallLimitFix::ApplySavedSettings() {}
 void DrawcallLimitFix::ClearShaderCache()
 {
 	// The render graph's live pipelines (Light Limit Fix's compute programs), when there is a graph.

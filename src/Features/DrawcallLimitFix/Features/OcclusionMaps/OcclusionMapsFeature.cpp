@@ -85,10 +85,10 @@ namespace DCLF::Features::OcclusionMaps
 				.description = "0: the precipitation occlusion mask stays native (live toggle's seed)", .before = "CS_DCLF_OPAQUE_EFFECTS" });
 			// Where Core's were listed, after the primary exclusion's, last in the shadow views' section; the first feature toggles
 			// registered, so their bits in the packed word are where Core's were. They need the shadows (the maps draw on the shadow commit).
-			const auto sky = a_context.RegisterToggle({ .name = "sky occlusion", .label = "Draw Skylighting's occlusion map (CS_DCLF_SKYLIGHT)",
+			const auto sky = a_context.RegisterToggle({ .name = "sky occlusion", .label = "Draw Skylighting's occlusion map",
 				.tooltip = "With Skylighting loaded, DCLF draws its sky occlusion height map from its own tables on the GPU, and the engine no longer culls or registers the scene for it.",
 				.seed = skySwitch, .entersClassification = true, .after = "exclude primary entries", .needs = { "shadows" } });
-			const auto precipitation = a_context.RegisterToggle({ .name = "precipitation occlusion", .label = "Draw the precipitation occlusion mask (CS_DCLF_PRECIPITATION)",
+			const auto precipitation = a_context.RegisterToggle({ .name = "precipitation occlusion", .label = "Draw the precipitation occlusion mask",
 				.tooltip = "With Skylighting loaded, DCLF draws the precipitation occlusion mask (where rain and snow stop) from its own tables on the GPU, and the engine no longer culls or registers the scene for it.",
 				.seed = precipitationSwitch, .entersClassification = true, .after = "exclude primary entries", .needs = { "shadows" } });
 			// The maps (Core's shadow engine: the shadow epoch, the set decisions and the reports read them as data; the classification

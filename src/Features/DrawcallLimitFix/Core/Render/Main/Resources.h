@@ -380,7 +380,7 @@ namespace DCLF::Draws
 					resource.Unmap(0, 0);
 				}
 			}
-			if (a_kind == kColour && samples[kColour] >= Reports::kInterval) {
+			if (a_kind == kColour && samples[kColour] >= Reports::Interval()) {
 				Reports::PassStatsLine(totals, samples);
 				totals = {};
 				samples = {};

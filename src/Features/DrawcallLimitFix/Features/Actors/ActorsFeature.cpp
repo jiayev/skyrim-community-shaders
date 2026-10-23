@@ -22,7 +22,7 @@ namespace DCLF::Features::Actors
 				.description = "0: actors stay native (live toggle's seed)", .after = "CS_DCLF_SKIN_PARTITIONS" });
 			// Geometry under an actor's 3D, and the actor techniques: an object class. Features/FirstPerson's toggle needs it (the player's
 			// skeleton).
-			const auto actors = a_context.RegisterToggle({ .name = "actors", .label = "Actors (CS_DCLF_ACTORS)", .seed = actorsSwitch, .entersClassification = true,
+			const auto actors = a_context.RegisterToggle({ .name = "actors", .label = "Actors", .seed = actorsSwitch, .entersClassification = true,
 				.after = "skin partitions" });
 			// Every leaf under an actor's 3D (Coordinator::ClassifyFrame's chain test: Ineligible::Actor while the toggle is off).
 			a_context.RegisterParent({ .parent = Api::EngineParent::Actor, .leaves = Api::ParentLeaves::AllLeaves, .toggle = actors });
