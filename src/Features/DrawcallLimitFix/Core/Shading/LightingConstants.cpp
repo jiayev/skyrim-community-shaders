@@ -429,16 +429,13 @@ namespace DCLF
 		shading.materialData[2] = a_member && material ? material->materialAlpha : a_property.alpha;
 		shading.materialData[3] = refraction && material ? material->refractionPower : 0.0f;
 		a_out.written = (envmap ? 1u : 0u) | (specular ? 2u : 0u) | 4u | (a_property.emissiveColor ? 0x70u : 0u) | 0x80u;
-		// The same sample the emissive colour folds in: the shader divides it out again, so the two must never come from different
-		// reads of an animated value.
 		const float mult = a_property.emissiveMult;
-		a_out.emissiveMult = mult;
 		const auto* emissive = a_property.emissiveColor;
 		shading.emitColor[0] = emissive ? emissive->red * mult : 0.0f;
 		shading.emitColor[1] = emissive ? emissive->green * mult : 0.0f;
 		shading.emitColor[2] = emissive ? emissive->blue * mult : 0.0f;
 		shading.ssrSpecular = ((GeometryPort::kMainPassRenderFlags & 2) ? 0.0f : 1.0f) * (specular ? a_property.specularLODFade : 0.0f);
-		a_out.padding[0] = a_out.padding[1] = 0u;
+		a_out.padding[0] = a_out.padding[1] = a_out.padding[2] = 0u;
 		// The feature block as its contribution derives it now (Extensions::ShadingBlockRule: Features/TreeWind's tree wind, as
 		// SetupGeometry's case 0xc makes it for a TreeAnim property): its blockWords, the rest zero.
 		float block[Api::kShadingBlockWords]{};

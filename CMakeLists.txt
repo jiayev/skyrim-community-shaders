@@ -251,9 +251,12 @@ target_compile_definitions(
 )
 
 if(MSVC)
-    # ORGModuleServices uses /GL in this configuration. Select LTCG up front so
-    # MSVC does not emit LNK4075 (the plugin treats linker warnings as errors).
-    target_link_options(${PROJECT_NAME} PRIVATE "$<$<CONFIG:RelWithDebInfo>:/LTCG>" "$<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO>")
+    # With IPO on, the libraries (ORGModuleServices among them) carry /GL objects in this configuration: select LTCG up front
+    # so MSVC does not emit LNK4075 (the plugin treats linker warnings as errors). With IPO off nothing carries /GL.
+    if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+        target_link_options(${PROJECT_NAME} PRIVATE "$<$<CONFIG:RelWithDebInfo>:/LTCG>")
+    endif()
+    target_link_options(${PROJECT_NAME} PRIVATE "$<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO>")
 endif()
 
 file(
@@ -1157,7 +1160,8 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${_prepare_aio_cmds}
         DEPENDS
             ${_AIO_PACKAGE_FILES}
-            ${PROJECT_NAME}
+            ${CS_DXC_RUNTIME_DLLS}
+            ${CS_NVPERF_DLL}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
     )
 
@@ -1176,6 +1180,9 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         ALL
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
     )
+    # Ordered after the plugin, but not rerun by its link: the staging copies none of its outputs (its POST_BUILD below
+    # copies the DLL and PDB), so a file dependency on it reran the staging, the AIO shader copy and the deploys every link.
+    add_dependencies(PREPARE_AIO ${PROJECT_NAME})
 
     # Copy DLL and PDB using POST_BUILD to avoid race conditions with file locking
     # This ensures the linker has fully released the files before we attempt to copy them
@@ -1474,7 +1481,7 @@ if(AUTO_PLUGIN_DEPLOYMENT)
 
         # The plugin's build deploys the changed shaders too, so building the plugin alone (--target CommunityShaders) leaves
         # the deploy targets' DLL and shaders matching. Every other writer of the deployed Shaders runs after the plugin (their
-        # rules reach prepare_aio.stamp, which depends on it), so none copies beside this one.
+        # rules reach prepare_aio.stamp, whose PREPARE_AIO is ordered after it), so none copies beside this one.
         add_custom_target(
             DEPLOY_SHADERS
             DEPENDS ${SHADER_DIRECT_HASHES}
@@ -1740,6 +1747,7 @@ if(TARGET PREPARE_AIO)
         "AIO"
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp copy_shaders.stamp
     )
+    add_dependencies("AIO" PREPARE_AIO)
 else()
     add_custom_command(
         OUTPUT ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll

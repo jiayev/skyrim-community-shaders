@@ -47,10 +47,8 @@ struct DCLFShadingRow
 	// Advanced Skin's SkinPerGeometry (b7): the owning actor's wetness, zero for everything else. Only read when
 	// DCLF_BINDLESS_DRAW is also defined (Skin.hlsli).
 	float4 SkinPerGeometry;
-	// Linear Lighting's emissive multiplier (b8), the sample EmitColor folds in (Color.hlsli).
-	float EmissiveMult;
 	uint DCLFShadingWritten;  // the CPU's (which components the pass writes)
-	uint2 DCLFShadingPadding;
+	uint3 DCLFShadingPadding;
 	// T6b1a: TreeParams and WindTimers (xy) for a TreeAnim property, from its tree node as the frame has it: what a member draws with
 	// until TreeWindCS's entry of its tree's listing (DCLFTreeParamsOf).
 	float4 DCLFShadingTreeParams;

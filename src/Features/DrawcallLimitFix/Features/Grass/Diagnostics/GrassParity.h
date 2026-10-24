@@ -13,6 +13,10 @@ namespace DCLF::Features::Grass
 	{
 		std::uint64_t checks = 0, shapes = 0, missing = 0, stale = 0, differ = 0, late = 0;
 		std::uint64_t liveInstances = 0, mirroredInstances = 0;  // the last check's totals
+		// The last check's mirrored records placed as the cull places them (the shape row's origin plus the record's position) against
+		// the cull's eye and distance (the last draw row's): within the distance, and the nearest (-1: no draw row yet).
+		std::uint64_t withinDistance = 0;
+		float nearest = -1.0f, maxDistance = 0.0f;
 		std::string first;
 		ankerl::unordered_dense::map<const void*, std::string> suspects;  // differed at the last check, with what
 		std::uint32_t frame = ~0u;                                       // the frame the last check ran in

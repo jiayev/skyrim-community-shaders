@@ -56,12 +56,12 @@ namespace DCLF::Features::Grass
 			return Engine::Global<float>(Address::kWindTimer) * (1.0f / 600.0f) * 6.28318f;
 		}
 
-		// stage 0: WindVector: the shape's model +Y in world space (grass shapes are unrotated: (0, 1)), its strength the grass wind's
-		// (clamped to 60) times fWindGrassMultiplier:Display.
+		// stage 0: WindVector's strength: the grass wind's (clamped to 60) times fWindGrassMultiplier:Display. Its direction, the shape's
+		// model +Y in world space, is the bucket's (BucketRow::windDirection).
 		void SampleWind(float (&a_wind)[4])
 		{
 			a_wind[0] = 0.0f;
-			a_wind[1] = 1.0f;
+			a_wind[1] = 0.0f;
 			a_wind[2] = std::min(Engine::Global<float>(Address::kWindSpeed), 60.0f) * Engine::Global<float>(Address::kWindGrassMultiplier);
 			a_wind[3] = 0.0f;
 		}
@@ -137,6 +137,8 @@ namespace DCLF::Features::Grass
 			cull.midLodPx = settings.MidLODPixelSize;
 			cull.farLodPx = settings.EnableMidLOD ? std::min(settings.FarLODPixelSize, settings.MidLODPixelSize) : settings.FarLODPixelSize;
 			cull.lodBandPx = std::max(0.0f, settings.MeshLODBandPixels);
+			// The thinning's distance ramp spans the INI distance whatever the override (Grass Optimizations' densityDistanceRcp).
+			cull.densityDistanceRcp = 1.0f / std::max(vanillaMax, 1e-4f);
 			cull.flags = (settings.EnableMeshLOD && settings.EnableMidLOD ? kCullMidLod : 0u) | (settings.EnableMeshLOD && settings.EnableFarLOD ? kCullFarLod : 0u) |
 			             (settings.EnableOcclusionCulling ? kCullOcclusion : 0u);
 			return true;
@@ -480,6 +482,7 @@ namespace DCLF::Features::Grass
 					a_commit.adopted.Of(*tables->buckets).units });
 		}
 	}
+
 
 	GrassTables* TablesOf(const Draws::SceneBuffers& a_scene)
 	{

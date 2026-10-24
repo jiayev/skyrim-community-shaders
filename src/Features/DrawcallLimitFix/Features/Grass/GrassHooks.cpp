@@ -51,7 +51,7 @@ namespace DCLF::Features::Grass
 				std::memcpy(event.instances.data(), a_add.records, a_add.count * sizeof(GrassInstances::Instance));
 			event.origin = { a_add.origin.x, a_add.origin.y, a_add.origin.z };
 			event.key = { .mesh = a_add.meshKey, .material = a_add.material, .diffuse = a_add.diffuse, .vertexDesc = a_add.vertexDesc, .clampMode = a_add.clampMode,
-				.alphaRef = a_add.alphaRef, .pbr = a_add.pbr, .sphereNormal = a_add.sphereNormal, .uniformScale = a_add.uniformScale };
+				.alphaRef = a_add.alphaRef, .windDirection = { a_add.windDirection[0], a_add.windDirection[1] }, .pbr = a_add.pbr, .sphereNormal = a_add.sphereNormal, .uniformScale = a_add.uniformScale };
 			event.source = SourceOf(a_add);
 			// The shape's mesh record as LoadGrassType named it, while the shape is alive (the drain's may not be).
 			event.lodMesh = GrassShared::MeshOf(a_add.shape);

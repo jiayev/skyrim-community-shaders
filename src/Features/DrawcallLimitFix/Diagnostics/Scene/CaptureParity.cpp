@@ -33,8 +33,7 @@ namespace DCLF
 
 		// Constant buffers that change per draw by design, from b3 (Extensions::PerDrawMask): the permutation (b4, checked separately),
 		// bone palettes (VS b9, b10; SKINNED) and the alpha-test reference (PS b11), Core's; and the integrations' declared per-draw
-		// buffers: LLF's StrictLightData (PS b3, Integrations/LightLimitFix's parity), Skin's SkinPerGeometry (PS b7; SKIN) and Linear
-		// Lighting's LLPerGeometry (PS b8).
+		// buffers: LLF's StrictLightData (PS b3, Integrations/LightLimitFix's parity) and Skin's SkinPerGeometry (PS b7; SKIN).
 		std::uint32_t PerDrawVSBuffers() { return Extensions::PerDrawMask(Api::ShaderStage::Vertex) & ~0x7u; }
 		std::uint32_t PerDrawPSBuffers() { return Extensions::PerDrawMask(Api::ShaderStage::Pixel) & ~0x7u; }
 

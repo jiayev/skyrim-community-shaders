@@ -172,6 +172,16 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 -   **A hold's known effects.** During a hold, both terrain levels' LOD water registers, and a held block's segments are not
     updated. The map's hide-all is handled by flushing. These effects have not been measured visually.
 
+## Grass drawn by the engine on the first takeover after a load
+
+The `grass draws` line counts the engine's grass draws (Grass Optimizations' draw hook) made while DCLF owns grass, and flags them
+`<- GRASS DRAWN TWICE`. In every turn-only run on 1.7.104 (2026-10-24, runs grass2-grass7) the count is 0 in every window except
+the first after the save loads: 180-360 engine grass draws (about 8 frames' worth, against 44 a frame while the engine owns grass)
+between DCLF's first two frame starts with grass owned, while DCLF made one ready depth commit. They come from passes registered
+before the decision (none reached the withholding unwithheld), so they look like renders DCLF's frame driver does not see during
+the load's first frames. At most that one frame is drawn twice; mid-run takeovers and releases (`dclf:grass=0` / `=1`) are clean
+both ways (no overlap, no hole). **Check:** a turn-only run's first `grass draws` line.
+
 ## Failing or flaky parity checks
 
 -   **Set parity: freed object slots stamped drawn by the GPU (`<- SET PARITY`).** In 3 of 8 moving full parity runs on the

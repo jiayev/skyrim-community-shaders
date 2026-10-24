@@ -10,6 +10,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsView.h"
 
+#include "GrassShared/GrassFrame.h"
+
 #include <string>
 
 namespace DCLF::Features::Grass
@@ -33,13 +35,13 @@ namespace DCLF::Features::Grass
 			if (!frames)
 				return;
 			auto per = [&](std::atomic<std::uint64_t>& a_sum) { return double(a_sum.exchange(0, std::memory_order_relaxed)) / frames; };
-			const double live = per(a_counts.live), outside = per(a_counts.outside), thinned = per(a_counts.thinned), faded = per(a_counts.faded);
+			const double live = per(a_counts.live), beyond = per(a_counts.beyond), outside = per(a_counts.outside), thinned = per(a_counts.thinned), faded = per(a_counts.faded);
 			const double tested = per(a_counts.tested), phaseOne = per(a_counts.phaseOne), retests = per(a_counts.retests), phaseTwo = per(a_counts.phaseTwo);
 			const double drawsOne = per(a_counts.phaseOneDraws), drawsTwo = per(a_counts.phaseTwoDraws), colour = per(a_counts.colourDraws), pbr = per(a_counts.pbrDraws);
-			a_text += fmt::format("[DCLF] grass cull over {} frames: per frame {:.0f} live instances, {:.0f} outside, {:.0f} thinned, {:.0f} faded, {:.0f} tested, "
+			a_text += fmt::format("[DCLF] grass cull over {} frames: per frame {:.0f} live instances, {:.0f} beyond the distance, {:.0f} outside the frustum, {:.0f} thinned, {:.0f} faded, {:.0f} tested, "
 								  "{:.0f} drawn by phase 1, {:.0f} occluded by the last frame's HZB, {:.0f} of them brought back by phase 2; draws per frame "
 								  "{:.1f} phase 1, {:.1f} phase 2, {:.1f} colour ({:.1f} base, {:.1f} pbr)\n",
-				frames, live, outside, thinned, faded, tested, phaseOne, retests, phaseTwo, drawsOne, drawsTwo, colour + pbr, colour, pbr);
+				frames, live, beyond, outside, thinned, faded, tested, phaseOne, retests, phaseTwo, drawsOne, drawsTwo, colour + pbr, colour, pbr);
 		}
 
 		// The draws' async work: the depth commits' uploads since the last report, and its two-phase cull.
@@ -51,13 +53,15 @@ namespace DCLF::Features::Grass
 				return;
 			const auto& adopted = impl->Adopted();
 			const auto missed = missedCommits;
+			// The engine's grass draws on frames DCLF owned grass (Grass Optimizations' draw hook; none without it): drawn twice.
+			const auto doubled = GrassShared::TakeNativeDrawsWhileOwned();
 			a_text += fmt::format("[DCLF] grass draws: {} ({} depth commits, {} shape slots and {} buckets sent; tables {} instance, {} shape, {} bucket and {} mesh "
 								  "slots; {} buckets waiting for a texture, {} commits past {} buckets, {} drawing the tables' last changes while they grow; {} commits "
-								  "that could not draw a withheld frame){}\n",
+								  "that could not draw a withheld frame; {} engine grass draws while DCLF's){}{}\n",
 				IndirectDraws::Get().DrawFamilyOwned(Api::DrawFamily::Grass) ? "DCLF's" : "the engine's", tables->uploads, tables->shapesSent, tables->bucketsSent,
 				Draws::NamedUnits(adopted, tables->instances), Draws::NamedUnits(adopted, tables->shapes), Draws::NamedUnits(adopted, tables->buckets),
 				Draws::NamedUnits(adopted, tables->meshes), tables->unboundBuckets, tables->overBuckets, GrassInstances::kMaxBuckets, tables->outgrown, missed,
-				missed ? " <- GRASS HOLES" : "");
+				doubled, missed ? " <- GRASS HOLES" : "", doubled ? " <- GRASS DRAWN TWICE" : "");
 			tables->uploads = tables->shapesSent = tables->bucketsSent = tables->unboundBuckets = tables->overBuckets = tables->outgrown = 0;
 			if (auto& counts = tables->counts)
 				CullLine(*counts, a_text);
@@ -71,11 +75,12 @@ namespace DCLF::Features::Grass
 			const bool failed = p.missing || p.stale || p.differ;
 			const auto ready = a_mirror.ReadinessOf();
 			auto text = fmt::format("[DCLF] grass mirror: {} shapes, {} instances, {} buckets ({} drawable), {} meshes ({} leased, {} failed, {} pending){}; {} adds, {} shape removes, {} group removes, {} stale-seq drops, {} rejected ({} live); "
-									"parity {} checks, {} shapes compared ({} captured instances, {} mirrored), {} missing, {} stale, {} late, {} differ{}{}\n",
+									"parity {} checks, {} shapes compared ({} captured instances, {} mirrored), {} missing, {} stale, {} late, {} differ{}{}; "
+									"placed: {} mirrored instances within {:.0f} of the eye, the nearest at {:.0f}\n",
 				a_mirror.Size(), a_mirror.InstanceCount(), a_mirror.BucketCount(), ready.bucketsDrawable, a_mirror.MeshCount(), ready.meshesResolved, ready.meshesFailed,
 				ready.meshesPending, installed ? "" : ", sink not installed", s.adds, s.removes, s.groupRemoves,
 				s.stale, s.rejected, a_mirror.RejectedLive(), p.checks, p.shapes, p.liveInstances, p.mirroredInstances, p.missing, p.stale, p.late, p.differ,
-				p.checks ? (failed ? " <- GRASS MIRROR; first: " : " <- OK") : "", p.first);
+				p.checks ? (failed ? " <- GRASS MIRROR; first: " : " <- OK") : "", p.first, p.withinDistance, p.maxDistance, p.nearest);
 			p = { .suspects = std::move(p.suspects), .frame = p.frame };
 			return text;
 		}

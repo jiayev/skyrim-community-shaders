@@ -2274,7 +2274,7 @@ light's filter past its radius, where the receiver depth saturates. In Dragonsre
 -   **Receivers' bits.** A draw applies a shadow light only where its object word carries the light's bit (`BuildDrawsCS`'s
     `LocalShadowMask`, Light Limit Fix's `ShadowBitMask`). In a plain draw (`DCLF_PULLED`) the object word is loaded by the stage's main,
     so anything derived from it is read where used, never initialised as a static (`LightLimitFix.hlsli`: `ShadowBitMaskOf`,
-    `RoomIndexOf`; `emissiveMult`, `skinPerGeometry`): a static's initialiser runs before main and sees object 0.
+    `RoomIndexOf`; `skinPerGeometry`): a static's initialiser runs before main and sees object 0.
 
 #### The caster rule
 

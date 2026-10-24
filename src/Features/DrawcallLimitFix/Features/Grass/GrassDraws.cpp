@@ -52,19 +52,27 @@ namespace DCLF::Features::Grass
 		 * @brief DCLF's while there is something to draw that it draws whole: tables, the mirror's buckets within the draws buffer's slots,
 		 * no live group the capture could not read (the engine draws it: withholding grass by its property would hide it), and the engine
 		 * showing grass; then once the pipeline lane has built its pipelines (the grass shader as input; until the frame's catalog has
-		 * them the engine draws grass). GrassShared hears the result, and on a frame DCLF owns grass the features inside the engine's grass
-		 * passes do their frame's work from here (Grass Collision's update and publish), before the depth commit reads what they publish.
+		 * them the engine draws grass).
 		 */
 		bool Decide(const Api::DrawFamilyFrame& a_frame)
 		{
 			const auto& mirror = RenderMirror();
 			if (!a_frame.scene || !TablesOf(*a_frame.scene) || !mirror.BucketSlots())
 				return false;
-			const bool owned = a_frame.Pipelines(mirror.BucketSlots() <= GrassInstances::kMaxBuckets && !mirror.RejectedLive() && EngineGrassShown());
-			GrassShared::SetDclfOwned(owned);
-			if (owned)
+			return a_frame.Pipelines(mirror.BucketSlots() <= GrassInstances::kMaxBuckets && !mirror.RejectedLive() && EngineGrassShown());
+		}
+
+		/**
+		 * @brief The frame's published ownership (every frame, as PassCapture withholds by it): GrassShared hears it, so Grass
+		 * Optimizations and Grass Collision stand down exactly on the frames whose grass passes are withheld; on those the features
+		 * inside the engine's grass passes do their frame's work from here (Grass Collision's update and publish), before the depth
+		 * commit reads what they publish.
+		 */
+		void Owned(bool a_owned)
+		{
+			GrassShared::SetDclfOwned(a_owned);
+			if (a_owned)
 				GrassShared::RunStoodDownFrame();
-			return owned;
 		}
 
 		// stage 0: the BSGrassShader singleton; before it is known, the first grass pass's shader GrassShared saw.
@@ -165,7 +173,7 @@ namespace DCLF::Features::Grass
 			.objectClass = Api::ObjectClass::Grass,
 			.resources = TablesId(),
 			.colourRange = "cs.dclf.colour.grass",
-			.frame = { .serve = &Serve, .decide = &Decide, .programSource = &ProgramSource },
+			.frame = { .serve = &Serve, .decide = &Decide, .owned = &Owned, .programSource = &ProgramSource },
 			.main = { .declare = &MainDeclare, .revision = &MainRevision, .record = &MainRecord },
 			.program = kProgram,
 			.engineShapes = { .propertyVtable = &EngineShapeVtable } });

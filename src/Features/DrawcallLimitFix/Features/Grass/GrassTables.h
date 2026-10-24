@@ -59,7 +59,7 @@ namespace DCLF::Features::Grass
 	{
 		std::vector<std::shared_ptr<org::Buffer>> readback;
 		std::vector<std::uint8_t> filled;
-		std::atomic<std::uint64_t> frames{ 0 }, live{ 0 }, outside{ 0 }, thinned{ 0 }, faded{ 0 }, tested{ 0 }, phaseOne{ 0 }, retests{ 0 }, phaseTwo{ 0 };
+		std::atomic<std::uint64_t> frames{ 0 }, live{ 0 }, beyond{ 0 }, outside{ 0 }, thinned{ 0 }, faded{ 0 }, tested{ 0 }, phaseOne{ 0 }, retests{ 0 }, phaseTwo{ 0 };
 		std::atomic<std::uint64_t> phaseOneDraws{ 0 }, phaseTwoDraws{ 0 }, colourDraws{ 0 }, pbrDraws{ 0 };
 	};
 

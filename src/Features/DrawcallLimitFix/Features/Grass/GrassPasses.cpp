@@ -247,6 +247,7 @@ namespace DCLF::Draws
 			auto add = [](std::atomic<std::uint64_t>& a_sum, std::uint32_t a_value) { a_sum.fetch_add(a_value, std::memory_order_relaxed); };
 			add(a_counts.frames, 1);
 			add(a_counts.live, a_header.stats[GrassInstances::kStatLive]);
+			add(a_counts.beyond, a_header.stats[GrassInstances::kStatFar]);
 			add(a_counts.outside, a_header.stats[GrassInstances::kStatOutside]);
 			add(a_counts.thinned, a_header.stats[GrassInstances::kStatThinned]);
 			add(a_counts.faded, a_header.stats[GrassInstances::kStatFaded]);

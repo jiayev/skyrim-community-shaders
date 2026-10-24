@@ -81,14 +81,15 @@ namespace DCLF::GrassInstances
 		float boundCenter[3]{};
 		float modelRadius = 0.0f;
 		float wavePeriod = 0.0f;
-		float distScale = 1.0f, minPixelScale = 1.0f;  // Grass Optimizations' mesh cost bias: 1/sqrt(cost), sqrt(cost)
+		float distScale = 1.0f, minPixelScale = 1.0f;  // Grass Optimizations' mesh cost bias, tier 0's: 1/sqrt(cost), sqrt(cost)
 		std::uint32_t pbrFlags = 0;
 		float scaleMask[3]{};
 		std::uint32_t pad = 0;
 		DescriptorIndex normalIndex, rmaosIndex, featuresIndex, pbrSampler;
 		float pbrParams1[4]{};  // roughness scale, specular level, 0, 0
 		float pbrParams2[4]{};  // subsurface colour rgb, opacity
-		std::uint32_t reserved[4]{};
+		float windDirection[2]{ 0.0f, 1.0f };  // the vertex stage's WindVector.xy: the shapes' model Y axis in world space
+		float lodMeshCost[2]{ 1.0f, 1.0f };    // tiers 1 and 2's sqrt(cost) (tier 0's minPixelScale where the tier has no mesh)
 	};
 	static_assert(sizeof(BucketRow) == 160);
 	static_assert(offsetof(BucketRow, flags) == 12 && offsetof(BucketRow, visibleBase) == 16 && offsetof(BucketRow, instanceCount) == 28 &&
@@ -96,7 +97,8 @@ namespace DCLF::GrassInstances
 				  offsetof(BucketRow, modelRadius) == 60 && offsetof(BucketRow, wavePeriod) == 64 && offsetof(BucketRow, distScale) == 68 &&
 				  offsetof(BucketRow, minPixelScale) == 72 && offsetof(BucketRow, pbrFlags) == 76 && offsetof(BucketRow, scaleMask) == 80 &&
 				  offsetof(BucketRow, normalIndex) == 96 && offsetof(BucketRow, pbrSampler) == 108 && offsetof(BucketRow, pbrParams1) == 112 &&
-				  offsetof(BucketRow, pbrParams2) == 128 && offsetof(BucketRow, reserved) == 144);
+				  offsetof(BucketRow, pbrParams2) == 128 && offsetof(BucketRow, windDirection) == 144 &&
+				  offsetof(BucketRow, lodMeshCost) == 152);
 
 	// InstanceFrame::flags: the tier, whether the instance is in the collision's range, whether it is shaded simply (far).
 	inline constexpr std::uint32_t kFrameTierMask = 3u;
@@ -126,9 +128,11 @@ namespace DCLF::GrassInstances
 		float simpleShadingPx = 0.0f, collisionDistSq = 0.0f, midLodPx = 0.0f, farLodPx = 0.0f;
 		float lodBandPx = 0.0f;
 		std::uint32_t flags = 0;
-		std::uint32_t pad[14]{};
+		float densityDistanceRcp = 0.0f;  // 1 / the INI grass distance: the density thinning ramps in over it
+		std::uint32_t pad[13]{};
 	};
-	static_assert(sizeof(CullRow) == 128 && offsetof(CullRow, alphaParam1) == 36 && offsetof(CullRow, alphaParam2) == 40 && offsetof(CullRow, flags) == 68);
+	static_assert(sizeof(CullRow) == 128 && offsetof(CullRow, alphaParam1) == 36 && offsetof(CullRow, alphaParam2) == 40 && offsetof(CullRow, flags) == 68 &&
+				  offsetof(CullRow, densityDistanceRcp) == 72);
 
 	/**
 	 * @brief The draw row: one, written by every depth commit (and latched by it), read by the cull, the arguments' pass and the
@@ -140,7 +144,7 @@ namespace DCLF::GrassInstances
 	{
 		std::uint64_t instances = 0, shapes = 0, buckets = 0, meshes = 0, owners = 0, frame = 0, visible = 0;
 		std::uint32_t instanceSlots = 0, shapeSlots = 0;
-		float windVector[4]{};
+		float windVector[4]{};  // z the strength (xy are the bucket's windDirection)
 		float timeBase = 0.0f, prevTimeBase = 0.0f, fadeNow = 0.0f, fadeInTimeRcp = 0.0f;
 		float dirLightDirection[4]{};  // w: ShadowClampValue
 		float dirLightColor[4]{};      // w: FogNearColor.w
@@ -180,8 +184,9 @@ namespace DCLF::GrassInstances
 	};
 	static_assert(sizeof(DrawsHeader) == 64 && offsetof(DrawsHeader, retests) == 16 && offsetof(DrawsHeader, phaseOneInstances) == 24 &&
 				  offsetof(DrawsHeader, stats) == 32);
-	// DrawsHeader::stats: the live instances the cull walked, those culled by distance or the frustum, by size or thinning, by fade.
-	inline constexpr std::uint32_t kStatLive = 0, kStatOutside = 1, kStatThinned = 2, kStatFaded = 3;
+	// DrawsHeader::stats: the live instances the cull walked, those culled by the frustum, by size or thinning, by fade, by distance
+	// (the cull's, or the tier's cost-biased one).
+	inline constexpr std::uint32_t kStatLive = 0, kStatOutside = 1, kStatThinned = 2, kStatFaded = 3, kStatFar = 4;
 
 	/** @brief One non-indexed DrawInstanced's arguments (the family's signature). */
 	struct DrawArgs

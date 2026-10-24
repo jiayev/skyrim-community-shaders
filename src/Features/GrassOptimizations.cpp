@@ -555,6 +555,7 @@ void GrassOptimizations::Hooks::DrawVanilla(RE::BSMultiStreamInstanceTriShape* g
 
 void GrassOptimizations::Hooks::DrawInstanceTriShape::thunk(RE::BSRenderPass*, RE::BSMultiStreamInstanceTriShape* geometry)
 {
+	GrassShared::CountNativeDraw();
 	auto& self = globals::features::grassOptimizations;
 	if (auto* bucket = self.loaded ? self.bucketStore.FindBucket(geometry) : nullptr) {
 		if (self.HasCurrentCull() && bucket->optimizedReady && bucket->sliceTableCount)

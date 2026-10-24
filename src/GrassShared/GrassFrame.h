@@ -17,6 +17,13 @@ namespace GrassShared
 	bool DclfOwned();
 	void SetDclfOwned(bool owned);
 
+	/**
+	 * @brief The engine's grass draws (its instanced grass draw, as Grass Optimizations' hook sees it) made while DclfOwned() was
+	 * set: a double draw, since DCLF draws that grass too. CountNativeDraw is the hook's; TakeNativeDrawsWhileOwned returns and clears.
+	 */
+	void CountNativeDraw();
+	uint64_t TakeNativeDrawsWhileOwned();
+
 	/** @brief Registers a callback for frames DCLF owns grass. Holds at most four; register during PostPostLoad. */
 	void OnStoodDownFrame(void (*callback)());
 

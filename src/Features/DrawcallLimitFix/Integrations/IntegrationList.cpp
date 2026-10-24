@@ -10,7 +10,6 @@
 #include "Features/DrawcallLimitFix/Integrations/ExtendedTranslucency/ExtendedTranslucency.h"
 #include "Features/DrawcallLimitFix/Integrations/IBL/IBL.h"
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
-#include "Features/DrawcallLimitFix/Integrations/LinearLighting/LinearLighting.h"
 #include "Features/DrawcallLimitFix/Integrations/Skylighting/Skylighting.h"
 #include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
 #include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
@@ -35,7 +34,6 @@ namespace DCLF::Integrations
 		// or source hook.
 		// Subsurface Scattering: its "beast race" reference fact and its Lighting object flag; no early or source hook.
 		// Extended Translucency: its geometry extra and the Lighting key's spare bits; no early or source hook.
-		// Linear Lighting: its per-draw LLPerGeometry (PS b8); no early or source hook.
 		// The CS features whose views every colour draw reads, each a frame texture (with capturedWhenNull) so the views with frame
 		// constants of their own (the reflection's faces) read them too: Volumetric Shadows' shadow map (t18), Cloud Shadows' occlusion
 		// (t25), Dynamic Cubemaps' reflections and environment (t30, t31), Exponential Height Fog's light scattering (t19), Skylighting's probes and shadow visibility (t50, t53), Terrain Shadows' height map
@@ -47,7 +45,6 @@ namespace DCLF::Integrations
 			TruePBR::Integration(),
 			SubsurfaceScattering::Integration(),
 			ExtendedTranslucency::Integration(),
-			LinearLighting::Integration(),
 			VolumetricShadows::Integration(),
 			ExponentialHeightFog::Integration(),
 			CloudShadows::Integration(),
