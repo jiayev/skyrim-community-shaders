@@ -4273,7 +4273,10 @@ def nested_type_candidates(owner: str, field_type: str) -> list[str]:
 def build_entries(source_dir: Path) -> list[dict[str, object]]:
     src_paths = list((source_dir / "src").rglob("*.cpp")) + list((source_dir / "src").rglob("*.h"))
     src_paths += [source_dir / "src" / "TruePBR.cpp", source_dir / "src" / "TruePBR.h"]
-    src_paths = sorted({p for p in src_paths if p.exists()})
+    # Drawcall Limit Fix's tree has no scene settings (its switches are its own), and its namespaced helper structs reuse
+    # names a feature's settings components use (Camera): resolved by name, they would make those components ambiguous.
+    dclf_tree = source_dir / "src" / "Features" / "DrawcallLimitFix"
+    src_paths = sorted({p for p in src_paths if p.exists() and dclf_tree not in p.parents})
 
     macros = collect_nlohmann_macros(src_paths)
     parsed_struct_fields = {
