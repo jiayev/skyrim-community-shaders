@@ -108,6 +108,9 @@ namespace DCLF::Api
 	 *   frame with the scene's tables: whether the family's draws are DCLF's this frame, which Core publishes (IndirectDraws::DrawFamilyOwned; then
 	 *   PassCapture withholds the engine's passes they replace); else they are not. Its pipelines are Core's lane's
 	 *   (DrawFamilyFrame::Pipelines).
+	 * - frame.owned (optional): render thread, every frame right after the decision, decide called or not: the ownership Core
+	 *   published (what PassCapture withholds by). What else hears the frame's ownership hears it here, never from decide, which a
+	 *   frame the family is not set up, off or not drawn skips.
 	 * - frame.programSource: render thread, from DrawFamilyFrame::Pipelines: the engine shader its slot's pipelines are built from (null:
 	 *   none yet), posted to the pipeline lane.
 	 * - main.declare, main.revision, main.record: the main pass's executions (z.depth, depth-phase2, main-opaque), in the graph's build
@@ -138,6 +141,7 @@ namespace DCLF::Api
 		{
 			void (*serve)(const DrawFamilyFrame& a_frame) = nullptr;
 			bool (*decide)(const DrawFamilyFrame& a_frame) = nullptr;
+			void (*owned)(bool a_owned) = nullptr;
 			const void* (*programSource)() = nullptr;
 		} frame;
 		struct Main

@@ -46,7 +46,6 @@
 #include "Features/DrawcallLimitFix/Integrations/ExponentialHeightFog/ExponentialHeightFog.h"
 #include "Features/DrawcallLimitFix/Integrations/IBL/IBL.h"
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
-#include "Features/DrawcallLimitFix/Integrations/LinearLighting/LinearLighting.h"
 #include "Features/DrawcallLimitFix/Integrations/Skylighting/Skylighting.h"
 #include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
 #include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
@@ -280,12 +279,11 @@ namespace DCLF::Features
 		                                           (~0u << kRecordFadeRootShift);
 
 		// Every per-draw buffer's register (Api::PerDrawBuffer, all of the pixel stage; its HLSL declares the same: Integrations/LightLimitFix's
-		// StrictLightData b3, Integrations/AdvancedSkin's SkinPerGeometry b7, Integrations/LinearLighting's LLPerGeometry b8, Color.hlsli):
+		// StrictLightData b3, Integrations/AdvancedSkin's SkinPerGeometry b7):
 		// below b14, none Core's (Extensions::kCorePerDrawPS) or another's.
 		constexpr std::uint32_t kPerDrawPSRegisters[] = {
 			3,  // Integrations/LightLimitFix's StrictLightData (LightLimitFixIntegration.cpp's kStrictLightDataRegister)
 			Integrations::AdvancedSkin::kSkinPerGeometryRegister,
-			Integrations::LinearLighting::kLLPerGeometryRegister,
 		};
 
 		constexpr bool PerDrawRegistersValid(const std::uint32_t* a_registers, std::size_t a_count, std::uint32_t a_core)
@@ -421,9 +419,8 @@ namespace DCLF::Features
 	static_assert(Integrations::SubsurfaceScattering::kRecordBeastRace == 1u << 0, "Subsurface Scattering's record bit is not Lighting.hlsl's DCLFRecordFlags bit 0");
 	static_assert(PerDrawRegistersValid(kPerDrawPSRegisters, std::size(kPerDrawPSRegisters), Extensions::kCorePerDrawPS),
 		"a per-draw buffer's register is past b13, Core's or another per-draw buffer's");
-	// The per-draw buffers' HLSL: SkinPerGeometry (Advanced Skin's, b7) and LLPerGeometry (Color.hlsli, b8).
-	static_assert(Integrations::AdvancedSkin::kSkinPerGeometryRegister == 7 && Integrations::LinearLighting::kLLPerGeometryRegister == 8,
-		"a per-draw buffer's register is not its HLSL's");
+	// The per-draw buffer's HLSL: SkinPerGeometry (Advanced Skin's, b7).
+	static_assert(Integrations::AdvancedSkin::kSkinPerGeometryRegister == 7, "a per-draw buffer's register is not its HLSL's");
 	static_assert(RecordWordsValid(),"a family's record words are past the object record or another family's");
 	static_assert(AncestorRecordWordsValid(), "an ancestor value's record word is past the object record, a family's or another ancestor value's");
 	// Integrations/LightLimitFix's room index: DCLFObjectRecord's RoomIndex (DCLFObjects.hlsli), the record's first word.

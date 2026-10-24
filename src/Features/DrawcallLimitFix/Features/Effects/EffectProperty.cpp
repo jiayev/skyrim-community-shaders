@@ -46,9 +46,8 @@ namespace DCLF::Features::Effects
 		shading.emitColor[1] = emittance ? emittance->green : 1.0f;
 		shading.emitColor[2] = emittance ? emittance->blue : 1.0f;
 		shading.ssrSpecular = 0.0f;
-		row.emissiveMult = 1.0f;
 		row.written = 4u | 0x70u;
-		row.padding[0] = row.padding[1] = 0u;
+		row.padding[0] = row.padding[1] = row.padding[2] = 0u;
 		std::fill(std::begin(row.featureBlock), std::end(row.featureBlock), 0.0f);
 	}
 }

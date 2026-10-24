@@ -39,10 +39,11 @@ static const uint kDCLFGrassWindVector = 64, kDCLFGrassTimeBase = 80, kDCLFGrass
 // CullRow (at 256): AlphaParam1 and AlphaParam2 are its alphaParam1, alphaParam2 (words 9 and 10).
 static const uint kDCLFGrassAlphaParams = 256 + 36;
 // GrassInstances::BucketRow (160 bytes): mesh[3] by tier, flags, ..., diffuse, depth sampler, colour sampler, alpha reference at 32;
-// wavePeriod at 64, pbrFlags at 76, scaleMask at 80, normal, RMAOS, features textures and the PBR sampler at 96, pbrParams1 and 2.
+// wavePeriod at 64, pbrFlags at 76, scaleMask at 80, normal, RMAOS, features textures and the PBR sampler at 96, pbrParams1 and 2,
+// windDirection at 144.
 static const uint kDCLFGrassBucketStride = 160, kDCLFGrassBucketFlags = 12, kDCLFGrassBucketTextures = 32, kDCLFGrassBucketWavePeriod = 64,
 				  kDCLFGrassBucketPbrFlags = 76, kDCLFGrassBucketScaleMask = 80, kDCLFGrassBucketPbrTextures = 96, kDCLFGrassBucketPbrParams1 = 112,
-				  kDCLFGrassBucketPbrParams2 = 128;
+				  kDCLFGrassBucketPbrParams2 = 128, kDCLFGrassBucketWindDirection = 144;
 static const uint kDCLFGrassBucketTruePbr = 1u << 0, kDCLFGrassBucketSphereNormal = 1u << 1;
 // GrassInstances::InstanceFrame (16 bytes): windCur, windPrev, fade, flags (bits 0-1 the tier, 2 in collision range, 3 simple shading).
 static const uint kDCLFGrassFrameStride = 16, kDCLFGrassTierMask = 3u, kDCLFGrassInCollisionRange = 1u << 2, kDCLFGrassSimpleShading = 1u << 3;
@@ -132,9 +133,9 @@ struct VS_OUTPUT
 
 #if defined(DCLF_PULLED)
 // PerGeometry's values that DCLF's draws read (none of its transforms: an instance's position is its shape's origin plus its own),
-// from the draw row (one for the frame: what SetupGeometry writes per pass) and ScaleMask from the bucket's row, set by
-// DCLFGrassStatics first in both stages' main. [UNVERIFIED] which of SetupGeometry's b2 values are per frame (GrassLayout.h,
-// DrawRow): read as laid out. WindTimer and PreviousWindTimer are what the cull's InstanceFrame wind was made from (the vertex
+// from the draw row (one for the frame: what SetupGeometry writes per pass) and ScaleMask and WindVector.xy (the shapes' rotation)
+// from the bucket's row, set by DCLFGrassStatics first in both stages' main. [UNVERIFIED] which of SetupGeometry's b2 values are per
+// frame (GrassLayout.h, DrawRow): read as laid out. WindTimer and PreviousWindTimer are what the cull's InstanceFrame wind was made from (the vertex
 // stage reads that, not them).
 static float4 FogNearColor;  // only w: the row's dirLightColor.w
 static float3 WindVector;
@@ -154,7 +155,7 @@ static uint64_t DCLFGrassBucketRow;
 void DCLFGrassStatics(uint a_bucket)
 {
 	DCLFGrassBucketRow = DCLFGrassTable(kDCLFGrassBuckets) + uint64_t(a_bucket) * kDCLFGrassBucketStride;
-	WindVector = DCLFGrassDrawFloat4(kDCLFGrassWindVector).xyz;
+	WindVector = float3(asfloat(vk::RawBufferLoad<uint2>(DCLFGrassBucketRow + kDCLFGrassBucketWindDirection, 4)), DCLFGrassDrawFloat4(kDCLFGrassWindVector).z);
 	const float2 timeBase = asfloat(vk::RawBufferLoad<uint2>(DCLFGrassDraw() + kDCLFGrassTimeBase, 4));  // timeBase, prevTimeBase
 	const float wavePeriod = asfloat(vk::RawBufferLoad<uint>(DCLFGrassBucketRow + kDCLFGrassBucketWavePeriod, 4));
 	WindTimer = timeBase.x * wavePeriod;

@@ -226,11 +226,9 @@ namespace DCLF
 		ObjectShading shading;
 		// Advanced Skin's SkinPerGeometry (PS b7): the owning actor's wetness (Skin::GetWetness), zero for everything else.
 		float skinPerGeometry[4];
-		// Linear Lighting's emissive multiplier (PS b8): the same sample emitColor folds in (the shader divides it out again).
-		float emissiveMult;
 		// A bit per ObjectShading float SetupGeometry writes (kShadingWritten*), for CPU comparisons; the shader reads none.
 		std::uint32_t written;
-		std::uint32_t padding[2];
+		std::uint32_t padding[3];
 		// The feature block (DCLFShadingTreeParams, DCLFShadingWindTimers): the shading contribution claiming it derives its first blockWords
 		// (Extensions::ShadingBlockRule: Features/TreeWind's SetupGeometry TreeParams and WindTimers.xy for a TreeAnim property, what a
 		// member draws with until TreeWindCS has an entry for its tree: DCLFTreeParamsOf); the rest zero.
@@ -239,9 +237,8 @@ namespace DCLF
 	static_assert(sizeof(BindlessShading) == 96);
 
 	/**
-	 * @brief An object's shading from its property now (SetupGeometry's MaterialData, EmitColor, SSRParams.w for a_pass, and Linear
-	 * Lighting's multiplier); wetness left as is. a_member: fades are DCLF's (FadeStateCS), so not in its alpha. Any thread inside the
-	 * engine-read window. A material port's property (Extensions::PortOfRtti) is its port's (SamplePortShading).
+	 * @brief An object's shading from its property now (SetupGeometry's MaterialData, EmitColor, SSRParams.w for a_pass); wetness left
+	 * as is. a_member: fades are DCLF's (FadeStateCS), so not in its alpha. Any thread inside the engine-read window. A material port's property (Extensions::PortOfRtti) is its port's (SamplePortShading).
 	 */
 	void SampleShading(const RE::BSShaderProperty& a_property, std::uint32_t a_pass, bool a_member, BindlessShading& a_out);
 	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): bit 0 a Lighting object flag's record bit

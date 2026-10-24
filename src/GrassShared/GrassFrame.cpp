@@ -7,6 +7,7 @@ namespace GrassShared
 		constexpr uint32_t kMaxStoodDownCallbacks = 4;
 
 		std::atomic<bool> dclfOwned{ false };
+		std::atomic<uint64_t> nativeDrawsWhileOwned{ 0 };
 
 		// Filled during PostPostLoad, then only read; the count publishes each entry.
 		std::array<void (*)(), kMaxStoodDownCallbacks> stoodDownCallbacks{};
@@ -25,6 +26,17 @@ namespace GrassShared
 	void SetDclfOwned(bool owned)
 	{
 		dclfOwned.store(owned, std::memory_order_release);
+	}
+
+	void CountNativeDraw()
+	{
+		if (dclfOwned.load(std::memory_order_relaxed))
+			nativeDrawsWhileOwned.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	uint64_t TakeNativeDrawsWhileOwned()
+	{
+		return nativeDrawsWhileOwned.exchange(0, std::memory_order_relaxed);
 	}
 
 	void OnStoodDownFrame(void (*callback)())

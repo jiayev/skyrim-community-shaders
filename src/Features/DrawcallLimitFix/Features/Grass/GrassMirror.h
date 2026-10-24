@@ -32,7 +32,7 @@ namespace DCLF::Features::Grass
 
 	/**
 	 * @brief What makes shapes draw alike (one bucket): the mesh, the material and texture, the vertex layout, the descriptors' bits,
-	 * the sampler's address mode and the alpha reference.
+	 * the sampler's address mode, the alpha reference and the wind's direction (the shape's rotation, as Grass Optimizations' draw key).
 	 */
 	struct BucketKey
 	{
@@ -42,6 +42,7 @@ namespace DCLF::Features::Grass
 		std::uint64_t vertexDesc = 0;
 		std::uint32_t clampMode = 0;
 		float alphaRef = 0.0f;
+		std::array<float, 2> windDirection{ 0.0f, 1.0f };
 		bool pbr = false, sphereNormal = false, uniformScale = false;
 		bool operator==(const BucketKey&) const = default;
 	};

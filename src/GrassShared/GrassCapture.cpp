@@ -135,6 +135,10 @@ namespace GrassShared
 			e.count = count;
 			e.vertexDesc = descVal;
 			e.origin = shape->world.translate;
+			RE::NiPoint3 windDirection{ shape->world.rotate.entry[1][0], shape->world.rotate.entry[1][1], shape->world.rotate.entry[1][2] };
+			windDirection.Unitize();
+			e.windDirection[0] = windDirection.x;
+			e.windDirection[1] = windDirection.y;
 			e.property = prop;
 			e.material = material;
 			e.diffuse = tex;

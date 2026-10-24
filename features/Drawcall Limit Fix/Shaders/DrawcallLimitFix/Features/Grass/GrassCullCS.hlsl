@@ -3,9 +3,10 @@
 //
 // Phase 1 (before the Z-prepass's draw): one thread per instance slot. A slot no shape owns (owners ~0u), or past the draw row's
 // instance slots (0: grass does not draw this frame), draws nothing. The rest take Grass Optimizations' tests
-// (GrassOptimizations/GrassCullingCS.hlsl): the cost-biased distance, the frustum (on the instance's bound), the pixel size, the
-// density thinning, the edge, distance, spawn and invisible fades; then the LOD tier, and the instance's frame values for the vertex
-// stage (its wind scalars, fade and flags) before the occlusion verdict. Then the HZB the previous frame left (HzbTest.hlsli): one
+// (GrassOptimizations/GrassCullingCS.hlsl): the distance, the frustum (on the instance's bound), the pixel size (by camera depth),
+// the LOD tier, whose mesh cost biases the distance and the pixel sizes, the density thinning (ramped in with distance), the edge,
+// distance, spawn and invisible fades; then the instance's frame values for the vertex stage (its wind scalars, fade and flags) before
+// the occlusion verdict. Then the HZB the previous frame left (HzbTest.hlsli): one
 // occluded goes on the retest list; one in view is appended to its bucket tier's visible range (draw slot bucket * 3 + tier).
 //
 // Phase 2 (after the HZB is rebuilt from this frame's depth): one thread per retest entry, tested again against the rebuilt HZB. One it
@@ -57,6 +58,7 @@ static const uint kStatLive = 32;
 static const uint kStatOutside = 36;
 static const uint kStatThinned = 40;
 static const uint kStatFaded = 44;
+static const uint kStatFar = 48;
 static const uint kCountsOffset = 64;
 // DrawRow.
 static const uint kRowInstanceSlots = 56;
@@ -155,6 +157,7 @@ struct Cull
 	float SimpleShadingPx, CollisionDistSq, MidLodPx, FarLodPx;
 	float LodBandPx;
 	uint Flags;
+	float DensityDistanceRcp;
 };
 
 Cull LoadCull(ByteAddressBuffer a_draw)
@@ -163,7 +166,7 @@ Cull LoadCull(ByteAddressBuffer a_draw)
 	const float4 b = asfloat(a_draw.Load4(kRowCull + 16));
 	const float4 c = asfloat(a_draw.Load4(kRowCull + 32));
 	const float4 d = asfloat(a_draw.Load4(kRowCull + 48));
-	const uint2 e = a_draw.Load2(kRowCull + 64);
+	const uint3 e = a_draw.Load3(kRowCull + 64);
 	Cull cull;
 	cull.MinPixelSize = a.x;
 	cull.FullDetailPx = a.y;
@@ -183,6 +186,7 @@ Cull LoadCull(ByteAddressBuffer a_draw)
 	cull.FarLodPx = d.w;
 	cull.LodBandPx = asfloat(e.x);
 	cull.Flags = e.y;
+	cull.DensityDistanceRcp = asfloat(e.z);
 	return cull;
 }
 
@@ -308,32 +312,48 @@ uint Tier(Cull a_cull, float a_projPx, float a_dither, uint a_bucketFlags)
 	const float distSq = dot(dv, dv);
 	const float dist = sqrt(distSq);
 
-	// The mesh-cost bias, ramped in past its start distance: a costlier mesh is drawn less far and must be larger.
-	const float costRamp = saturate((dist - cull.CostBiasStart) / max(cull.CostBiasStart, 1e-4));
-	const float effCostBias = cull.CostBias * costRamp;
-	const float dScale = lerp(1.0, asfloat(buckets.Load(bucketBase + 68)), effCostBias);
-	const float effMaxDistSq = cull.MaxDistSq * dScale * dScale;
 	float3 centre;
 	float radius;
 	Bound(raw0, raw1, world, asfloat(buckets.Load3(bucketBase + 48)), asfloat(buckets.Load(bucketBase + 60)), centre, radius);
 	const float4x4 viewProj = LatchViewProj();
-	if (distSq > effMaxDistSq || !InView(viewProj, centre, radius)) {
+	if (distSq > cull.MaxDistSq) {
+		draws.InterlockedAdd(kStatFar, 1u, scratch);
+		return;
+	}
+	if (!InView(viewProj, centre, radius)) {
 		draws.InterlockedAdd(kStatOutside, 1u, scratch);
 		return;
 	}
 
-	// The pixel size and the density thinning (by the global slot: stable while the shape lives).
+	// The pixel size by camera depth (clip w over the projection's w row), so it stays consistent across the view.
 	const float sizeVariance = f16tof32(raw1.z >> 16);
 	const float instanceRadius = asfloat(buckets.Load(bucketBase + 60)) * (1.0 + max(sizeVariance, 0.0));
-	const float projPx = (instanceRadius / max(dist, 1e-4)) * cull.ProjScale;
-	const float pxScale = lerp(1.0, asfloat(buckets.Load(bucketBase + 72)), effCostBias);
-	const float effMinPx = cull.MinPixelSize * pxScale;
+	const float4 clip = mul(viewProj, float4(world, 1.0));
+	const float projPx = (instanceRadius * length(viewProj[3].xyz) / max(clip.w, 1e-4)) * cull.ProjScale;
+
+	// The tier first (dithered by the global slot: stable while the shape lives), then its mesh's cost bias, ramped in past its start
+	// distance: a costlier mesh is drawn less far and must be larger.
 	const uint2 rand = Pcg2d(uint2(index, 0u));
+	const uint tier = Tier(cull, projPx, RandFloat(rand.y), buckets.Load(bucketBase + 12));
+	const float meshCost = asfloat(buckets.Load(bucketBase + (tier == 0 ? 72 : 152 + (tier - 1) * 4)));
+	const float costRamp = saturate((dist - cull.CostBiasStart) / max(cull.CostBiasStart, 1e-4));
+	const float effCostBias = cull.CostBias * costRamp;
+	const float dScale = lerp(1.0, tier == 0 ? asfloat(buckets.Load(bucketBase + 68)) : rcp(meshCost), effCostBias);
+	const float effMaxDistSq = cull.MaxDistSq * dScale * dScale;
+	if (distSq > effMaxDistSq) {
+		draws.InterlockedAdd(kStatFar, 1u, scratch);
+		return;
+	}
+
+	// The density thinning, ramped in over the INI grass distance.
+	const float pxScale = lerp(1.0, meshCost, effCostBias);
+	const float effMinPx = cull.MinPixelSize * pxScale;
 	float lodFade = 1.0;
 	const float effFullPx = cull.FullDetailPx * pxScale;
 	bool thinned = projPx < effMinPx;
 	if (!thinned && projPx < effFullPx) {
-		const float t = saturate((effFullPx - projPx) / max(effFullPx - effMinPx, 1e-4));
+		const float distanceRamp = saturate(dist * cull.DensityDistanceRcp);
+		const float t = saturate((effFullPx - projPx) / max(effFullPx - effMinPx, 1e-4)) * distanceRamp;
 		const float keep = lerp(1.0, cull.MinKeep, t);
 		const float h = RandFloat(rand.x);
 		thinned = h > keep + cull.FadeBand;
@@ -348,7 +368,6 @@ uint Tier(Cull a_cull, float a_projPx, float a_dither, uint a_bucketFlags)
 	const float maxDist = sqrt(effMaxDistSq);
 	const float edgeStart = maxDist * cull.EdgeFadeStart;
 	const float edgeFade = saturate((maxDist - dist) / max(maxDist - edgeStart, 1e-4));
-	const float4 clip = mul(viewProj, float4(world, 1.0));
 	const float distFade = 1.0 - saturate((length(clip.xyz) - cull.AlphaParam1) / cull.AlphaParam2);
 	const float4 times = asfloat(draw.Load4(kRowTimeBase));  // timeBase, prevTimeBase, fadeNow, fadeInTimeRcp
 	const float spawnFade = saturate((times.z - spawnStart) * times.w);
@@ -359,7 +378,6 @@ uint Tier(Cull a_cull, float a_projPx, float a_dither, uint a_bucketFlags)
 	}
 
 	// The instance's frame values, for the vertex stage, whatever the occlusion says (phase 2 reads its tier).
-	const uint tier = Tier(cull, projPx, RandFloat(rand.y), buckets.Load(bucketBase + 12));
 	const float wavePeriod = asfloat(buckets.Load(bucketBase + 64));
 	const float basis = (localXY.x + localXY.y) * -0.0078125;
 	uint flags = tier;

@@ -42,6 +42,7 @@ namespace DCLF::Features::Grass
 			a_row.distScale = 1.0f / weight;
 			a_row.minPixelScale = weight;
 			a_row.pbrFlags = a_source.pbrFlags;
+			std::copy_n(a_key.windDirection.data(), 2, a_row.windDirection);
 			// The vertex stage's ScaleMask (BSGrassShader::SetupGeometry): every axis with kUniformScale, else the height alone.
 			const float uniform = a_key.uniformScale ? 1.0f : 0.0f;
 			a_row.scaleMask[0] = uniform;
@@ -60,7 +61,8 @@ namespace DCLF::Features::Grass
 		hash = Mix(hash, reinterpret_cast<std::uintptr_t>(a_key.diffuse));
 		hash = Mix(hash, a_key.vertexDesc);
 		const std::uint64_t bits = (std::uint64_t(a_key.clampMode) << 3) | (a_key.pbr ? 1u : 0u) | (a_key.sphereNormal ? 2u : 0u) | (a_key.uniformScale ? 4u : 0u);
-		return Mix(hash, bits | (std::uint64_t(std::bit_cast<std::uint32_t>(a_key.alphaRef)) << 32));
+		hash = Mix(hash, bits | (std::uint64_t(std::bit_cast<std::uint32_t>(a_key.alphaRef)) << 32));
+		return Mix(hash, std::uint64_t(std::bit_cast<std::uint32_t>(a_key.windDirection[0])) | (std::uint64_t(std::bit_cast<std::uint32_t>(a_key.windDirection[1])) << 32));
 	}
 
 	std::uint64_t GroupKeyHash::operator()(const GroupKey& a_key) const noexcept
@@ -428,6 +430,9 @@ namespace DCLF::Features::Grass
 					base += bucket.total;
 					row.flags |= tier == 1 ? GrassInstances::kBucketTierOne : tier == 2 ? GrassInstances::kBucketTierTwo : 0u;
 				}
+				// A LOD tier's own mesh cost (Grass Optimizations' UploadCullBucketConstants: sqrt(triangles / 8)), tier 0's without a mesh.
+				if (tier > 0)
+					row.lodMeshCost[tier - 1] = drawn ? std::sqrt(std::max(1.0f, static_cast<float>(it->second.source.indexCount) / 24.0f)) : row.minPixelScale;
 			}
 			row.instanceCount = row.mesh[0] != kNoMesh ? bucket.total : 0;
 			MarkBucket(bucket.slot);

@@ -92,10 +92,9 @@ namespace DCLF::Api
 
 	/**
 	 * @brief A per-draw buffer (Api::InstallContext::DeclarePerDrawBuffer): a constant buffer another CS feature binds per draw at a declared
-	 * register of a stage (Integrations/LinearLighting's LLPerGeometry, PS b8; Integrations/AdvancedSkin's SkinPerGeometry, PS b7;
-	 * Integrations/LightLimitFix's, PS b3): what the main pass has bound there is the last drawn object's, never the frame's, so the main
-	 * pass's frame blocks do not mirror it (DCLF's draws take such values per object, from their records and rows), and the capture checks
-	 * leave it out (Extensions::PerDrawMask). Declared only: nothing is called.
+	 * register of a stage (Integrations/AdvancedSkin's SkinPerGeometry, PS b7; Integrations/LightLimitFix's, PS b3): what the main pass
+	 * has bound there is the last drawn object's, never the frame's, so the main pass's frame blocks do not mirror it (DCLF's draws take
+	 * such values per object, from their records and rows), and the capture checks leave it out (Extensions::PerDrawMask). Declared only: nothing is called.
 	 *
 	 * The register is the feature's compile-time constant, with its HLSL declaration; Features/Manifest.cpp checks it against Core's and the
 	 * others', the install against those (Extensions::CorePerDrawMask) and the other declarations.

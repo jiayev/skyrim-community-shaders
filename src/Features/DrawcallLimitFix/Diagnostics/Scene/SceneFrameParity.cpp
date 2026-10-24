@@ -284,11 +284,10 @@ namespace DCLF::Diagnostics
 					BindlessShading now = held;
 					SampleShading(*a_store.SlotPropertyOf(o), tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor,
 						V::IsResidentSlot(a_store, o), now);
-					sp.first = fmt::format("slot {} '{}' (flags {:#x}): material data ({} {} {}) against ({} {} {}), emit ({} {} {}) against ({} {} {}), mult {} against {}",
+					sp.first = fmt::format("slot {} '{}' (flags {:#x}): material data ({} {} {}) against ({} {} {}), emit ({} {} {}) against ({} {} {})",
 						o, geometry->name.c_str() ? geometry->name.c_str() : "", tables.objects[o].flags, now.shading.materialData[0], now.shading.materialData[1],
 						now.shading.materialData[2], held.shading.materialData[0], held.shading.materialData[1], held.shading.materialData[2], now.shading.emitColor[0],
-						now.shading.emitColor[1], now.shading.emitColor[2], held.shading.emitColor[0], held.shading.emitColor[1], held.shading.emitColor[2], now.emissiveMult,
-						held.emissiveMult);
+						now.shading.emitColor[1], now.shading.emitColor[2], held.shading.emitColor[0], held.shading.emitColor[1], held.shading.emitColor[2]);
 				}
 			}
 			// The wetness, as the frame's start captured it: Integrations/AdvancedSkin's. Against the frame's tables (the installed

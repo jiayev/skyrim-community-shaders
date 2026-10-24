@@ -48,6 +48,8 @@ namespace DCLF
 				owned = entry.contribution.frame.decide({ a_frame, scene, family });
 			impl->familyOwned[f] = owned;
 			PassCapture::Get().SetFamilyOwned(family, owned);
+			if (entry.contribution.frame.owned)
+				entry.contribution.frame.owned(owned);
 		}
 	}
 

@@ -30,6 +30,8 @@ namespace GrassShared
 
 		uint64_t vertexDesc = 0;
 		RE::NiPoint3 origin;  // shape->world.translate at capture
+		// The wind's world direction in xy: the shape's model Y axis at capture, unitized (Grass Optimizations' GrassBucketStore).
+		float windDirection[2]{ 0.0f, 1.0f };
 
 		RE::BSGrassShaderProperty* property = nullptr;
 		RE::BSShaderMaterial* material = nullptr;
