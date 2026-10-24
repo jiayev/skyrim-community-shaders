@@ -29,7 +29,7 @@
         "TerrainShadows": 1,
         "TerrainVariation": 2,
         "TruePBR": 3,
-        "Upscaling": 15,
+        "Upscaling": 1,
         "VolumetricLighting": 4,
         "WetnessEffects": 27
     }
