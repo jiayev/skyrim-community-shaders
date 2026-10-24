@@ -50,11 +50,10 @@ namespace DCLF::Features::Grass
 
 		/**
 		 * @brief DCLF's while there is something to draw that it draws whole: tables, the mirror's buckets within the draws buffer's slots,
-		 * no live shape the capture could not read (the engine draws it: withholding grass by its property would hide it), and the engine
+		 * no live group the capture could not read (the engine draws it: withholding grass by its property would hide it), and the engine
 		 * showing grass; then once the pipeline lane has built its pipelines (the grass shader as input; until the frame's catalog has
 		 * them the engine draws grass). GrassShared hears the result, and on a frame DCLF owns grass the features inside the engine's grass
-		 * passes do their frame's work from here (Grass Optimizations' pending captures, Grass Collision's update and publish), before
-		 * the depth commit reads what they publish.
+		 * passes do their frame's work from here (Grass Collision's update and publish), before the depth commit reads what they publish.
 		 */
 		bool Decide(const Api::DrawFamilyFrame& a_frame)
 		{

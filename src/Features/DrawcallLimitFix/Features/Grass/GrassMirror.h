@@ -66,21 +66,25 @@ namespace DCLF::Features::Grass
 	};
 
 	/**
-	 * @brief A grass shape's records as the capture took them (kind Add, replacing what the mirror holds of the shape), its removal
-	 * (Remove: every BSMultiStreamInstanceTriShape's destruction, grass or not), or a capture GrassShared could not read (Rejected: the
-	 * engine still draws the shape, so the family must not be DCLF's while it lives).
+	 * @brief A grass shape's group's records as the capture took them (kind Add, replacing what the mirror holds of the group), the
+	 * group's removal (RemoveGroup: a cell's unload, from any shape), the shape's (Remove: every BSMultiStreamInstanceTriShape's
+	 * destruction, grass or not), or a group GrassShared could not read (Rejected: the engine still draws it, so the family must not be
+	 * DCLF's while it lives).
 	 */
 	struct Event
 	{
 		enum class Kind : std::uint8_t
 		{
 			Add,
+			RemoveGroup,
 			Remove,
 			Rejected
 		};
 		Kind kind = Kind::Add;
 		std::uint64_t seq = 0;        // GrassShared's: orders a shape's events across the capture's threads
 		const void* shape = nullptr;  // a key: never dereferenced by the drain (the shape may be dead)
+		std::uint32_t group = 0;      // the engine's group index in the shape (not Remove's)
+		void* lodMesh = nullptr;      // Add: the shape's GrassMeshLibrary::MeshRecord at capture (GrassShared::MeshOf), null before LoadGrassType named it
 		std::vector<GrassInstances::Instance> instances;
 		std::array<float, 3> origin{};
 		BucketKey key;
@@ -99,8 +103,8 @@ namespace DCLF::Features::Grass
 	void Push(Event&& a_event);
 
 	/**
-	 * @brief One capture of a shape (a shape slot): its records, bucket, instance range and row. The engine adds a shape's instances in
-	 * groups (DoneAddingInstances, the GID buffers and files), each one more capture of the same shape, as Grass Optimizations' slices.
+	 * @brief One group of a shape (a shape slot): its records, bucket, instance range and row. The engine adds a shape's instances in
+	 * groups, a cell's each (AddGroup, the GID buffers and files), and removes them as the cells unload, as Grass Optimizations' chunks.
 	 */
 	struct Group
 	{
@@ -110,12 +114,31 @@ namespace DCLF::Features::Grass
 		GrassInstances::ShapeRow row;
 	};
 
-	/** @brief A mirrored shape: its groups' slots, their records' total, and the last event's seq it applied. */
+	/** @brief A mirrored shape: its groups by the engine's index (each one's shape slot, kRejected for one the capture could not read, and the seq that put it there), and their records' total. */
 	struct Shape
 	{
-		std::vector<std::uint32_t> slots;
+		static constexpr std::uint32_t kRejected = ~0u;
+		struct GroupSlot
+		{
+			std::uint32_t slot = kRejected;
+			std::uint64_t seq = 0;
+		};
+		ankerl::unordered_dense::map<std::uint32_t, GroupSlot> slots;
 		std::uint32_t records = 0;
-		std::uint64_t seq = 0;
+	};
+
+	/** @brief A shape's group, as the removed groups' tombstones key it. */
+	struct GroupKey
+	{
+		const void* shape = nullptr;
+		std::uint32_t group = 0;
+		bool operator==(const GroupKey&) const = default;
+	};
+
+	struct GroupKeyHash
+	{
+		using is_avalanching = void;
+		std::uint64_t operator()(const GroupKey& a_key) const noexcept;
 	};
 
 	/** @brief A mesh shared by buckets: its slot, its users, and its buffers' leases once resolved. */
@@ -139,9 +162,13 @@ namespace DCLF::Features::Grass
 		BucketKey key;
 		BucketSource source;
 		std::uint32_t slot = 0;
-		std::uint32_t shapes = 0;
+		std::uint32_t shapes = 0;  // its users: the shapes' groups drawn in it
 		std::uint32_t total = 0;
 		std::array<const void*, GrassInstances::kTiers> meshes{};
+		// Its shapes' source mesh (a GrassMeshLibrary::MeshRecord, shared with Grass Optimizations), whose activeBuckets it holds while
+		// it lives, and whether its LOD tiers wait for the library's loads (resolved once both tiers' loads settle).
+		void* lodMesh = nullptr;
+		bool lodPending = false;
 		OwnedRow<GrassInstances::BucketRow> row;
 		std::uint32_t bindingGeneration = ~0u;           // GpuTextures::Generation the bindings were resolved in
 		bool bound = false;
@@ -150,16 +177,17 @@ namespace DCLF::Features::Grass
 
 	struct Stats
 	{
-		std::uint64_t adds = 0, removes = 0, stale = 0, rejected = 0;
+		std::uint64_t adds = 0, removes = 0, groupRemoves = 0, stale = 0, rejected = 0;
 	};
 
 	/**
 	 * @brief The grass mirror: every grass shape the capture handed the sink, with its records, in slots for the GPU's tables. Render
 	 * thread.
 	 *
-	 * Drain applies the events in seq order per shape: the queue drains its ring before its spill, so an event older than the one a
-	 * shape last applied (or than its removal, kept a while: kTombstoneDrains) is dropped (stale). A remove of an unknown shape is
-	 * nothing; an add of a known shape replaces it.
+	 * Drain applies the events in seq order per group: the queue drains its ring before its spill, so an event older than the one a
+	 * group last applied (or than the group's or its shape's removal, kept a while: kTombstoneDrains) is dropped (stale). A remove of an
+	 * unknown shape or group is nothing; an add of a known group replaces it. A shape's removal takes its groups older than it (a later
+	 * one is a new shape's at the same address).
 	 *
 	 * The instance ranges come from a flat table by first fit (the free ranges coalesced); a freed range's owners are sent ~0u. When a
 	 * bucket's instance total changes, every bucket's visible bases are laid out again (a prefix over the buckets, a range per tier
@@ -178,8 +206,8 @@ namespace DCLF::Features::Grass
 		std::uint64_t InstanceCount() const { return instanceCount; }
 		std::size_t BucketCount() const { return bucketIndex.size(); }
 		std::size_t MeshCount() const { return meshes.size(); }
-		/** @brief Live shapes whose capture was rejected: the engine draws them, so the family stays the engine's. */
-		std::size_t RejectedLive() const { return rejected.size(); }
+		/** @brief Live groups whose capture was rejected: the engine draws them, so the family stays the engine's. */
+		std::size_t RejectedLive() const { return rejectedGroups; }
 		/** @brief The fade clock (the engine's frame time summed, as Grass Optimizations' timeAccum): the spawn fade's. */
 		float FadeClock() const { return fadeClock; }
 		/** @brief The adds, removes, stale drops and rejections since the last call (the report's). */
@@ -225,9 +253,10 @@ namespace DCLF::Features::Grass
 		std::vector<std::shared_ptr<const void>> TakeRetired() { return std::exchange(retired, {}); }
 
 	private:
-		bool Stale(const void* a_shape, std::uint64_t a_seq);
+		bool Stale(const Event& a_event) const;
 		void Apply(Event&& a_event);
-		void Remove(const void* a_shape);
+		void RemoveShape(const void* a_shape, std::uint64_t a_seq);
+		void RemoveGroup(Shape& a_shape, std::uint32_t a_group);
 		void ReleaseGroup(Group& a_group);
 		std::uint32_t AcquireSlot();
 		std::uint32_t AllocateRange(std::uint32_t a_count);
@@ -235,7 +264,8 @@ namespace DCLF::Features::Grass
 		void MarkSlot(std::uint32_t a_slot);
 		Bucket& AddBucketUser(Event& a_event);
 		void RemoveBucketUser(std::uint32_t a_slot, std::uint32_t a_instances);
-		void ResolveTiers(Bucket& a_bucket, const void* a_shape, MeshSource&& a_mesh);
+		void AdoptLodMesh(Bucket& a_bucket, void* a_lodMesh);
+		void ResolveLods();
 		const void* AddMeshUser(MeshSource&& a_source);
 		void RemoveMeshUser(const void* a_key);
 		void LayOutVisible();
@@ -262,9 +292,12 @@ namespace DCLF::Features::Grass
 		std::uint64_t instanceCount = 0;
 		std::map<std::uint32_t, std::uint32_t> freeRanges;
 		std::vector<std::pair<std::uint32_t, std::uint32_t>> freedRanges;
-		// Removed shapes' seqs (a stale add after its removal is dropped), with the drain they were removed in.
+		// Removed shapes' and groups' seqs (a stale event after the removal is dropped), with the drain they were removed in.
 		ankerl::unordered_dense::map<const void*, std::pair<std::uint64_t, std::uint32_t>> tombstones;
-		ankerl::unordered_dense::set<const void*> rejected;
+		ankerl::unordered_dense::map<GroupKey, std::pair<std::uint64_t, std::uint32_t>, GroupKeyHash> groupTombstones;
+		std::size_t rejectedGroups = 0;
+		// Buckets whose LOD tiers wait for the library's loads.
+		std::uint32_t lodPending = 0;
 		std::vector<std::shared_ptr<const void>> retired;
 		std::uint32_t drains = 0;
 		float fadeClock = 0.0f;

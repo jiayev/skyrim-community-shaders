@@ -10,16 +10,18 @@ namespace DCLF::Features::Grass
 {
 	class Mirror;
 
-	/** @brief Any thread, the capture's sink: `shape`'s records (count of them), removal or rejection pushed, with its seq. */
+	/** @brief Any thread, the capture's sink: `shape`'s group's records (count of them), the group's removal or rejection, or the shape's removal, pushed with its seq. */
 	struct GrassCaptured
 	{
 		enum class Kind : std::uint8_t
 		{
 			Add,
+			RemoveGroup,
 			Remove,
 			Rejected
 		};
 		const void* shape;
+		std::uint32_t group;
 		std::uint32_t count;
 		std::uint64_t seq;
 		Kind kind;

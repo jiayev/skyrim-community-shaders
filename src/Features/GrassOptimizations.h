@@ -68,8 +68,11 @@ public:
 	/** @brief Processes lifecycle events and completed LOD loads at Present. */
 	virtual void Reset() override;
 
-	/** @brief Installs the grass capture, culling and draw hooks after all plugins have loaded. */
+	/** @brief Registers the bucket store with GrassShared's capture, then installs the culling and draw hooks after all plugins have loaded. */
 	virtual void PostPostLoad() override;
+
+	/** @brief Publishes the cull settings to GrassShared, where Drawcall Limit Fix's grass reads them. */
+	void PublishSettings();
 
 	/** @brief Identifies who sets up a grass pass: the engine, an optimized bucket, or nobody because optimized buckets cover it. */
 	enum class GrassPassSetup
@@ -355,15 +358,16 @@ private:
 	float maxGrassDistance = 0.0f;
 	float maxDistSq = 0.0f;
 
+	// GrassShared's capture hands the bucket store the shapes' lifecycle (the hooks are GrassShared's, shared with Drawcall Limit Fix).
+	static void OnModel(RE::BSMultiStreamInstanceTriShape* shape, const char* modelPath);
+	static void OnGroup(RE::BSMultiStreamInstanceTriShape* shape, uint32_t group);
+	static void OnAttached();
+	static void OnRemoveGroup(RE::BSMultiStreamInstanceTriShape* shape, uint32_t group, uint64_t seq);
+	static void OnRemove(RE::BSMultiStreamInstanceTriShape* shape, uint64_t seq);
+
 	struct Hooks
 	{
 		static void DrawVanilla(RE::BSMultiStreamInstanceTriShape* geometry);
-
-		struct BSMultiStreamInstanceTriShape_dtor
-		{
-			static void thunk(RE::BSMultiStreamInstanceTriShape* This);
-			inline static REL::Relocation<decltype(thunk)> func;
-		};
 
 		// The engine parents every grass shape directly under one node, so culling visits each shape every pass.
 		struct NiNode_OnVisible
@@ -372,25 +376,6 @@ private:
 			inline static REL::Relocation<decltype(thunk)> func;
 			inline static std::atomic<RE::NiNode*> grassRoot{ nullptr };
 			inline static std::atomic<uint32_t> mainViewVisitFrame{ 0 };
-		};
-
-		// Vanilla grass shapes are shared by every cell in a 12x12 block, so a cell unload removes its groups here.
-		struct RemoveGroup
-		{
-			static void thunk(RE::BSMultiStreamInstanceTriShape* shape, std::uint32_t index);
-			inline static REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct AddGroup
-		{
-			static std::uint32_t thunk(RE::BSMultiStreamInstanceTriShape* shape, std::uint32_t count, std::uint16_t* instanceData, std::uint32_t instanceShorts, float boundPadding);
-			inline static REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct DoneAddingInstances
-		{
-			static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSTArray<std::uint32_t>& groupIndices);
-			inline static REL::Relocation<decltype(thunk)> func;
 		};
 
 		struct BSGrassShader_SetupGeometry
@@ -405,46 +390,9 @@ private:
 			inline static REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct AddGroupGIDBuffer
-		{
-			static std::uint32_t thunk(RE::BSMultiStreamInstanceTriShape* a1, RE::BSMultiStreamInstanceTriShape::GroupHeader* a2, std::uint16_t* a3);
-			inline static REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct AddQueuedGroupGIDBuffer
-		{
-			static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSMultiStreamInstanceTriShape::GroupHeader* header, std::uint16_t* instanceData, RE::BSTArray<std::uint32_t>& groupIndices);
-			inline static REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct AddQueuedGroupGIDFile
-		{
-			static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSStream* stream, RE::BSTArray<std::uint32_t>& groupIndices);
-			inline static REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct AttachQueuedGroups
-		{
-			static void thunk();
-			inline static REL::Relocation<decltype(thunk)> func;
-			inline static std::atomic<bool> pendingCapture{ false };
-		};
-
-		struct AddGroupGIDFile
-		{
-			static void thunk(RE::BSMultiStreamInstanceTriShape* a1, RE::BSStream* a2);
-			inline static REL::Relocation<decltype(thunk)> func;
-		};
-
 		struct DrawInstanceTriShape
 		{
 			static void thunk(RE::BSRenderPass* curPass, RE::BSMultiStreamInstanceTriShape* geometry);
-			inline static REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct LoadGrassType
-		{
-			static RE::BSMultiStreamInstanceTriShape* thunk(RE::BGSGrassManager* grassManager, RE::GrassParam* a_param, uint32_t CellXDivided, uint32_t CellYDivided, uint64_t* typeKey, RE::BSFixedString* modelPath);
 			inline static REL::Relocation<decltype(thunk)> func;
 		};
 

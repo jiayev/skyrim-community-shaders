@@ -1,4 +1,4 @@
-// Grass's engine side: the sink on GrassShared's capture (any thread: the cell loaders, the shapes' destructors' callers), the source of
+// Grass's engine side: the sink on GrassShared's capture (any thread: the cell loaders, the cells' unloads, the shapes' destructors' callers), the source of
 // the feature's grass channel (events onto events through Push, which the render thread's mirror drains: GrassMirror.h). The capture's
 // hooks are GrassShared's, shared with Grass Optimizations (src/GrassShared/GrassCapture.h): either registers its sink and installs
 // them, and they are installed once.
@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
 #include "GrassShared/GrassCapture.h"
+#include "GrassShared/GrassMeshLibrary.h"
 
 #include <cstring>
 #include <utility>
@@ -45,34 +46,44 @@ namespace DCLF::Features::Grass
 		// A shape's records: copied, with its bucket's key and material and its mesh's buffers (held until the render thread leases them).
 		void OnAdd(const GrassShared::AddEvent& a_add)
 		{
-			Event event{ .kind = Event::Kind::Add, .seq = a_add.seq, .shape = a_add.shape, .instances = std::vector<GrassInstances::Instance>(a_add.count) };
+			Event event{ .kind = Event::Kind::Add, .seq = a_add.seq, .shape = a_add.shape, .group = a_add.group, .instances = std::vector<GrassInstances::Instance>(a_add.count) };
 			if (a_add.count)
 				std::memcpy(event.instances.data(), a_add.records, a_add.count * sizeof(GrassInstances::Instance));
 			event.origin = { a_add.origin.x, a_add.origin.y, a_add.origin.z };
 			event.key = { .mesh = a_add.meshKey, .material = a_add.material, .diffuse = a_add.diffuse, .vertexDesc = a_add.vertexDesc, .clampMode = a_add.clampMode,
 				.alphaRef = a_add.alphaRef, .pbr = a_add.pbr, .sphereNormal = a_add.sphereNormal, .uniformScale = a_add.uniformScale };
 			event.source = SourceOf(a_add);
+			// The shape's mesh record as LoadGrassType named it, while the shape is alive (the drain's may not be).
+			event.lodMesh = GrassShared::MeshOf(a_add.shape);
 			event.mesh.key = a_add.meshKey;
 			event.mesh.vertexBuffer.copy_from(a_add.vertexBuffer);
 			event.mesh.indexBuffer.copy_from(a_add.indexBuffer);
 			event.mesh.vertexDesc = a_add.vertexDesc;
 			event.mesh.indexCount = a_add.triangleCount * 3;
-			Diagnostics::Notify(GrassCaptured{ a_add.shape, a_add.count, a_add.seq, GrassCaptured::Kind::Add });
+			Diagnostics::Notify(GrassCaptured{ a_add.shape, a_add.group, a_add.count, a_add.seq, GrassCaptured::Kind::Add });
 			Push(std::move(event));
+		}
+
+		// A group the engine removed (a cell's unload), from any shape: the drain ignores one it does not hold.
+		void OnRemoveGroup(RE::BSMultiStreamInstanceTriShape* a_shape, std::uint32_t a_group, std::uint64_t a_seq)
+		{
+			Diagnostics::Notify(GrassCaptured{ a_shape, a_group, 0, a_seq, GrassCaptured::Kind::RemoveGroup });
+			Push(Event{ .kind = Event::Kind::RemoveGroup, .seq = a_seq, .shape = a_shape, .group = a_group });
 		}
 
 		// Every BSMultiStreamInstanceTriShape's destruction: the drain ignores a shape it does not hold.
 		void OnRemove(RE::BSMultiStreamInstanceTriShape* a_shape, std::uint64_t a_seq)
 		{
-			Diagnostics::Notify(GrassCaptured{ a_shape, 0, a_seq, GrassCaptured::Kind::Remove });
+			Diagnostics::Notify(GrassCaptured{ a_shape, 0, 0, a_seq, GrassCaptured::Kind::Remove });
 			Push(Event{ .kind = Event::Kind::Remove, .seq = a_seq, .shape = a_shape });
 		}
 
-		// A grass shape whose records the capture could not read: the engine draws it, so the family must not withhold grass while it lives.
-		void OnRejected(RE::BSMultiStreamInstanceTriShape* a_shape, std::uint64_t a_seq)
+		// A grass shape's group whose records the capture could not read: the engine draws it, so the family must not withhold grass
+		// while it lives.
+		void OnRejected(RE::BSMultiStreamInstanceTriShape* a_shape, std::uint32_t a_group, std::uint64_t a_seq)
 		{
-			Diagnostics::Notify(GrassCaptured{ a_shape, 0, a_seq, GrassCaptured::Kind::Rejected });
-			Push(Event{ .kind = Event::Kind::Rejected, .seq = a_seq, .shape = a_shape });
+			Diagnostics::Notify(GrassCaptured{ a_shape, a_group, 0, a_seq, GrassCaptured::Kind::Rejected });
+			Push(Event{ .kind = Event::Kind::Rejected, .seq = a_seq, .shape = a_shape, .group = a_group });
 		}
 	}
 
@@ -84,7 +95,7 @@ namespace DCLF::Features::Grass
 	void InstallHooks()
 	{
 		// GrassShared holds two sinks (Grass Optimizations' and this), added before its hooks install; installing them again is nothing.
-		GrassShared::AddSink({ .add = &OnAdd, .remove = &OnRemove, .rejected = &OnRejected });
+		GrassShared::AddSink({ .add = &OnAdd, .removeGroup = &OnRemoveGroup, .remove = &OnRemove, .rejected = &OnRejected });
 		GrassShared::InstallCapture();
 		installed = true;
 	}

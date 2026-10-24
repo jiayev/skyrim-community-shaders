@@ -1,5 +1,5 @@
 // CS_DCLF_PERSISTENT_PARITY: grass's mirror against the capture's live set on parity frames. The sink's observer keeps every captured
-// shape the capture still holds (any thread, under a lock: parity only), with its record count and seq; a check compares it with the
+// group the capture still holds (any thread, under a lock: parity only), with its record count and seq, by shape; a check compares it with the
 // mirror's shapes - a live shape the mirror lacks or holds with another count, a mirrored shape no longer live. An event pushed but not
 // drained yet makes a shape differ at the check: a shape that differs counts as late when its event arrives at the next drain, and as
 // differing only when it does not.
@@ -17,13 +17,20 @@ namespace DCLF::Features::Grass
 {
 	namespace
 	{
-		struct Live
+		struct LiveGroup
 		{
 			std::uint32_t count = 0;
 			std::uint64_t seq = 0;
 		};
 
-		// The capture's live grass shapes (the sink's threads write, the render thread's check reads).
+		struct Live
+		{
+			ankerl::unordered_dense::map<std::uint32_t, LiveGroup> groups;
+			std::uint32_t count = 0;
+		};
+
+		// The capture's live grass groups by shape (the sink's threads write, under the capture's lock, so in seq order; the render
+		// thread's check reads).
 		std::mutex liveLock;
 		ankerl::unordered_dense::map<const void*, Live> live;
 
@@ -31,15 +38,25 @@ namespace DCLF::Features::Grass
 		{
 			std::scoped_lock lock(liveLock);
 			const auto it = live.find(a_event.shape);
-			if (it != live.end() && a_event.seq < it->second.seq)
+			if (a_event.kind == GrassCaptured::Kind::Remove) {
+				if (it != live.end())
+					live.erase(it);
 				return;
-			// Each add is one more group of the shape (the mirror's too); its removal takes them all.
-			if (a_event.kind == GrassCaptured::Kind::Add) {
-				auto& entry = live[a_event.shape];
-				entry = { entry.count + a_event.count, a_event.seq };
 			}
-			else if (it != live.end())
-				live.erase(it);
+			if (it == live.end() && a_event.kind != GrassCaptured::Kind::Add)
+				return;
+			// A group's add replaces what it held; its removal or a rejection (no records mirrored) takes it.
+			auto& entry = it != live.end() ? it->second : live[a_event.shape];
+			if (const auto group = entry.groups.find(a_event.group); group != entry.groups.end()) {
+				entry.count -= group->second.count;
+				entry.groups.erase(group);
+			}
+			if (a_event.kind == GrassCaptured::Kind::Add) {
+				entry.groups[a_event.group] = { a_event.count, a_event.seq };
+				entry.count += a_event.count;
+			}
+			if (entry.groups.empty())
+				live.erase(a_event.shape);
 		}
 
 		void CheckParity(const Mirror& a_mirror)
@@ -59,9 +76,9 @@ namespace DCLF::Features::Grass
 				else if (it->second.records != entry.count)
 					suspects[shape] = fmt::format("a shape mirrored with {} records, captured with {}", it->second.records, entry.count);
 			}
-			// A mirrored shape the capture no longer holds: its removal was missed.
+			// A mirrored shape with records the capture no longer holds: its removal was missed (one with only rejected groups mirrors none).
 			for (const auto& [shape, mirrored] : shapes)
-				if (!live.contains(shape))
+				if (mirrored.records && !live.contains(shape))
 					suspects[shape] = fmt::format("a mirrored shape ({} records) no longer captured", mirrored.records);
 			stats.liveInstances = liveInstances;
 			stats.mirroredInstances = a_mirror.InstanceCount();
