@@ -1992,11 +1992,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	// Post Processing's letterbox: its band's motion vectors are zeroed before frame generation reads them (upstream #2354; the
 	// generation is DXVK's on Vulkan, which tags them after this point).
-	if (windowUsable && upscaling.IsFrameGenerationActive()) {
-		auto& postProcessing = globals::features::postProcessing;
-		if (postProcessing.loaded)
-			postProcessing.ClearBorderMotionVectorsForFrameGen();
-	}
+	if (windowUsable && upscaling.IsFrameGenerationActive() && postProcessing.loaded)
+		postProcessing.ClearBorderMotionVectorsForFrameGen();
 
 	auto* streamline = Streamline::GetSingleton();
 	if (windowUsable && upscaling.GetEffectiveReflex()) {
