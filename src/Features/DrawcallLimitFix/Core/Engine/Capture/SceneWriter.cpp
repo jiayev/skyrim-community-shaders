@@ -1,6 +1,6 @@
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 
-#include <swf/swf_client.h>
+#include <swf/swf.hpp>
 #include <swf/swf_embed.h>
 
 namespace DCLF::SceneWriter
@@ -57,7 +57,7 @@ namespace DCLF::SceneWriter
 	{
 		// Another host's election may have run without CS's (CS's ran only if DCLF will install).
 		if (!api)
-			api = swf::client::Connect();
+			api = SWF_Connect(SWF_ABI_MINOR);
 		return api;
 	}
 
@@ -80,7 +80,7 @@ namespace DCLF::SceneWriter
 		info.size = sizeof(info);
 		provider->GetProviderInfo(&info);
 		return fmt::format("SceneWriterFramework ({} {}) could not install the hooks DCLF needs: {} (another plugin patched them first; see the [SWF] log lines)",
-			info.hostName ? info.hostName : "?", swf::client::VersionString(info.implVersion), names);
+			info.hostName ? info.hostName : "?", swf::VersionString(info.implVersion), names);
 	}
 
 	bool Subscribe(std::uint32_t a_event, SWF_EventFn a_fn, std::uint32_t a_phases, std::int32_t a_priority)
@@ -118,7 +118,7 @@ namespace DCLF::SceneWriter
 		SWF_ProviderInfo info{};
 		info.size = sizeof(info);
 		provider->GetProviderInfo(&info);
-		return fmt::format("{} {} (ABI {}.{}, {} candidate(s))", info.hostName ? info.hostName : "?", swf::client::VersionString(info.implVersion), info.abiMajor,
+		return fmt::format("{} {} (ABI {}.{}, {} candidate(s))", info.hostName ? info.hostName : "?", swf::VersionString(info.implVersion), info.abiMajor,
 			info.abiMinor, info.candidateCount);
 	}
 
