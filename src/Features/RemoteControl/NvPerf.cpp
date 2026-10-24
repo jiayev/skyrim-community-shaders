@@ -622,7 +622,7 @@ namespace NvPerf
 				return;
 			}
 			logger::info("[NvPerf] CS_NVPERF_RANGES: capture {} of {} range filters from frame {}, {} samples, rows to {}", captureId, configuration.ranges.size(),
-				startFrame, configuration.samples, CsvPath().string());
+				startFrame, configuration.samples, Util::PathHelpers::ToUtf8(CsvPath()));
 		}
 	}
 

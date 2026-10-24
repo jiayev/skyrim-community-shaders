@@ -60,6 +60,7 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 			}
 		}
 		frame.activeCount = 0;
+		frame.inFlight = false;
 	}
 
 	// DXVK's timestamp queries are written at ALL_COMMANDS, so a pair inside one submission measures just
@@ -88,6 +89,7 @@ void Profiler::Release()
 		frame.disjoint = nullptr;
 		frame.timers.clear();
 		frame.activeCount = 0;
+		frame.inFlight = false;
 	}
 	results.clear();
 	knownTimers.clear();
@@ -102,7 +104,7 @@ void Profiler::Release()
 
 void Profiler::BeginFrame()
 {
-	if (!initialized || !context || frameActive || frameSkipped || !IsActive())
+	if (!initialized || !context || frameActive || !IsActive())
 		return;
 
 	CollectResults();
