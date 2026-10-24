@@ -96,7 +96,7 @@ public:
 		Sun,
 		Masser,
 		Secunda,
-		Zenith  // fallback when no moon is up: lights as a pseudo skylight, without VL
+		Zenith  // fallback when no moon is up: lights as a pseudo skylight, without direct light or VL
 	};
 
 	/**
@@ -140,14 +140,16 @@ private:
 	{
 		RE::NiPoint3 currentDir = { 0.0f, 0.0f, 1.0f };
 		RE::NiPoint3 startDir = { 0.0f, 0.0f, 1.0f };
+		RE::NiPoint3 dimDir = { 0.0f, 0.0f, 1.0f };  // direction whose elevation drives the horizon dim
 		Caster target = Caster::Sun;
+		Caster source = Caster::Sun;  // target before the current transition
 		float fadeTimer = 0.0f;
 		float immediateTransitionRemaining = 0.0f;
 		bool transitioning = false;
 		float intensityFactor = 1.0f;  // scales directional light and VL while the caster changes
 		float startIntensityFactor = 1.0f;
-		float vlFade = 1.0f;  // additionally scales VL, fading it out towards the zenith fallback
-		float startVlFade = 1.0f;
+		float casterFade = 1.0f;  // additionally scales directional light and VL, fading them out towards the zenith fallback
+		float startCasterFade = 1.0f;
 
 		/** @brief Fraction of the current transition completed, 0 to 1. */
 		float Progress(float fadeDuration) const { return fadeDuration > 0.0f ? fadeTimer / fadeDuration : 1.0f; }
